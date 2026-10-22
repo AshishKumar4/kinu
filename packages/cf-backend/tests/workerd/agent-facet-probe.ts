@@ -109,7 +109,7 @@ export class OrchestratorAgent extends ProductionOrchestrator {
     const record = directory.describe(child);
     const homeName = hostedActorPlacement(record).homeName;
 
-    if (homeName === null) throw new Error('a subordinate has a home');
+    if (homeName === null) throw new Error('a subagent has a home');
     const home = agentHome(homeName);
     const facet = await this.agentFacetOf<AgentFacet>(child.actorId);
     await facet.write(`${home}/a`, 'written by the agent');
@@ -152,7 +152,7 @@ export class OrchestratorAgent extends ProductionOrchestrator {
   /** Tasks admitted to `actorId`'s log: a hired agent's queue, which a swarm node has no drain for. */
   async taskEvents(actorId: string): Promise<number> {
     return this.ctx.storage.sql.exec<{ n: number }>(
-      `SELECT COUNT(*) AS n FROM agent_log WHERE actor_id = ? AND variant = 'subordinate_task'`, actorId).one().n;
+      `SELECT COUNT(*) AS n FROM agent_log WHERE actor_id = ? AND variant = 'subagent_task'`, actorId).one().n;
   }
 
   /** A node on the builtin loop whose brief starts a command that outruns its window; streams once the node's run ends. */

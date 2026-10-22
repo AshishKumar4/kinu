@@ -2,7 +2,7 @@
 
 Last updated: 20 October 2026
 
-I'm Ashish Kumar Singh, and I run Kinu at kinu.run. This page says what Kinu keeps about you, why, and how to remove it. Questions go to ashishkmr472@gmail.com.
+I'm Ashish Kumar Singh, and I run Kinu at kinu.run. This page says what Kinu keeps about you, why, and how to remove it. Questions go to privacy@kinu.run.
 
 ## What Kinu keeps
 

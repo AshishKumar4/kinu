@@ -2,7 +2,7 @@
 
 import { Data } from 'effect';
 import type { WorkMode } from '../../types/turn';
-import type { SubordinateInheritedContext } from '../../types/subordinates';
+import type { SubagentInheritedContext } from '../../types/subagents';
 import type { JsonObject, JsonValue } from '../../utils/json';
 import type { MailWoke } from '../../mail/mailbox-api';
 
@@ -36,7 +36,7 @@ export type IngressKind =
   | 'peer_async'
   | 'mcp_streamable'
   | 'email_inbound'   // inbound mail via Cloudflare Email Routing → Worker email()
-  | 'subordinate'     // same-workspace facet spine: parent↔subordinate task/report
+  | 'subagent'     // same-workspace facet spine: parent↔subagent task/report
   | 'self_emit'
   | 'reply_request';
 
@@ -47,8 +47,8 @@ export const EVENT_VARIANTS = [
   'process_done',
   'timer',
   'peer_agent',
-  'subordinate_task',    // parent → subordinate assignment / conversational injection
-  'subordinate_report',
+  'subagent_task',    // parent → subagent assignment / conversational injection
+  'subagent_report',
   'file_changed',
   'email',
   'internal',
@@ -148,12 +148,12 @@ export interface FileChangedPayload {
 }
 
 /** `task` starts or replaces an assignment; `message` is injected into the next turn. */
-export interface SubordinateTaskPayload {
+export interface SubagentTaskPayload {
   from_workspace: string;
   kind: 'task' | 'message';
   body: string;
   deliverable?: string;
-  inherited_context?: SubordinateInheritedContext;
+  inherited_context?: SubagentInheritedContext;
   kinu_mode: WorkMode;
   creation_id?: string;
   message_id?: string;
@@ -161,29 +161,29 @@ export interface SubordinateTaskPayload {
 }
 
 /** One declaration read by the event schema, `report` tool, codemode and dispatcher. */
-export const SUBORDINATE_REPORT_STATUSES = ['progress', 'completed', 'blocked'] as const;
+export const SUBAGENT_REPORT_STATUSES = ['progress', 'completed', 'blocked'] as const;
 
-export type SubordinateReportStatus = (typeof SUBORDINATE_REPORT_STATUSES)[number];
+export type SubagentReportStatus = (typeof SUBAGENT_REPORT_STATUSES)[number];
 
 /** Fields a parent acts on; single tuple so what the model is offered is what the parent sees. All
  *  optional. */
-export const SUBORDINATE_REPORT_HANDOFF_FIELDS = [
+export const SUBAGENT_REPORT_HANDOFF_FIELDS = [
   'concerns', 'deviations', 'findings', 'open_work',
 ] as const;
 
-export type SubordinateReportHandoffField = (typeof SUBORDINATE_REPORT_HANDOFF_FIELDS)[number];
+export type SubagentReportHandoffField = (typeof SUBAGENT_REPORT_HANDOFF_FIELDS)[number];
 
-export type SubordinateReportHandoff = {
-  readonly [Field in SubordinateReportHandoffField]?: readonly string[];
+export type SubagentReportHandoff = {
+  readonly [Field in SubagentReportHandoffField]?: readonly string[];
 };
 
 /** Enforced at the tool call (actionable), never at render: the brief renders the handoff whole.
  *  Matches {@link EVENT_BRIEF_MAX_CHARS}. */
-export const SUBORDINATE_REPORT_HANDOFF_MAX_CHARS = 600;
+export const SUBAGENT_REPORT_HANDOFF_MAX_CHARS = 600;
 
-export interface SubordinateReportPayload extends SubordinateReportHandoff {
-  from_subordinate: string;
-  status: SubordinateReportStatus;
+export interface SubagentReportPayload extends SubagentReportHandoff {
+  from_subagent: string;
+  status: SubagentReportStatus;
   content: string;
   /** Durable identity on both sides; stated by the sender, since a receiver-minted key would be new
    *  on every replay. */
@@ -264,8 +264,8 @@ export type ReadableKinuEvent =
   | (ReadableEventBase & { variant: 'process_done'; payload: ProcessDonePayload })
   | (ReadableEventBase & { variant: 'timer'; payload: TimerPayload })
   | (ReadableEventBase & { variant: 'peer_agent'; payload: PeerAgentPayload })
-  | (ReadableEventBase & { variant: 'subordinate_task'; payload: SubordinateTaskPayload })
-  | (ReadableEventBase & { variant: 'subordinate_report'; payload: SubordinateReportPayload })
+  | (ReadableEventBase & { variant: 'subagent_task'; payload: SubagentTaskPayload })
+  | (ReadableEventBase & { variant: 'subagent_report'; payload: SubagentReportPayload })
   | (ReadableEventBase & { variant: 'file_changed'; payload: FileChangedPayload })
   | (ReadableEventBase & { variant: 'email'; payload: EmailPayload })
   | (ReadableEventBase & { variant: 'internal'; payload: InternalPayload })
@@ -323,14 +323,14 @@ export type IngressDescriptor =
     }
   | {
       // One trust domain: possession of the worker-side stub is the authorization.
-      ingress: 'subordinate';
-      variant: 'subordinate_task';
-      payload: SubordinateTaskPayload;
+      ingress: 'subagent';
+      variant: 'subagent_task';
+      payload: SubagentTaskPayload;
     }
   | {
-      ingress: 'subordinate';
-      variant: 'subordinate_report';
-      payload: SubordinateReportPayload;
+      ingress: 'subagent';
+      variant: 'subagent_report';
+      payload: SubagentReportPayload;
     }
   | {
       ingress: 'mcp_streamable';

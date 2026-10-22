@@ -167,22 +167,11 @@ function denyCapability(
   });
 }
 
-export function initWorkspaceCapabilityTables(sql: SqlExec): void {
-  // `token_hash` is the workspace's identity proof; the raw token lives only in that workspace's DO.
-  sql.exec(`
-    CREATE TABLE IF NOT EXISTS workspace_capability_tokens (
-      workspace_name TEXT PRIMARY KEY,
-      token_hash     TEXT NOT NULL UNIQUE
-    )
-  `);
-  sql.exec(`CREATE INDEX IF NOT EXISTS idx_workspace_capability_token_hash
-              ON workspace_capability_tokens (token_hash)`);
-}
-
-/** Null when never issued. Any mismatch with the workspace's reported hash is repaired by re-minting. */
+/** The account's registry row holds each workspace's `token_hash` (state/user-schema.ts); the raw token lives only in that
+ *  workspace's DO. Null when never issued. Any mismatch with the workspace's reported hash is repaired by re-minting. */
 export function workspaceCapabilityHash(sql: SqlExec, workspaceName: string): string | null {
   const row = v.safeParse(v.object({ token_hash: v.string() }), sql.exec(
-    `SELECT token_hash FROM workspace_capability_tokens WHERE workspace_name = ? LIMIT 1`, workspaceName,
+    `SELECT token_hash FROM user_workspaces WHERE name = ? LIMIT 1`, workspaceName,
   ).toArray()[0]);
 
   return row.success ? row.output.token_hash : null;
@@ -196,19 +185,18 @@ export async function freshWorkspaceCapability(): Promise<{ token: string; token
   return { token, tokenHash: await sha256Hex(token) };
 }
 
-/** Registers a freshly minted hash. Must stay synchronous: admission check and write form one turn,
- *  so a revoked workspace cannot be re-minted by an in-flight reconcile. */
-export function commitWorkspaceCapability(sql: SqlExec, workspaceName: string, tokenHash: string): void {
-  sql.exec(
-    `INSERT INTO workspace_capability_tokens (workspace_name, token_hash) VALUES (?, ?)
-     ON CONFLICT(workspace_name) DO UPDATE SET token_hash = excluded.token_hash`,
-    workspaceName, tokenHash,
-  );
+/** Registers a freshly minted hash on the workspace's registry row, a reserved one included, never one being torn down.
+ *  Must stay synchronous: admission check and write form one turn, so a revoked workspace cannot be re-minted by an
+ *  in-flight reconcile. False when no such row holds it, and the token must not be installed. */
+export function commitWorkspaceCapability(sql: SqlExec, workspaceName: string, tokenHash: string): boolean {
+  return sql.exec(
+    `UPDATE user_workspaces SET token_hash = ? WHERE name = ? AND delete_pending = 0 RETURNING name`, tokenHash, workspaceName,
+  ).toArray().length === 1;
 }
 
-/** Called on workspace deletion so a same-name recreate gets a fresh secret. */
+/** Called as a teardown starts, before the workspace is destroyed, so a same-name recreate gets a fresh secret. */
 export function revokeWorkspaceCapability(sql: SqlExec, workspaceName: string): void {
-  sql.exec(`DELETE FROM workspace_capability_tokens WHERE workspace_name = ?`, workspaceName);
+  sql.exec(`UPDATE user_workspaces SET token_hash = NULL WHERE name = ? AND token_hash IS NOT NULL`, workspaceName);
 }
 
 /** Fails closed: unknown shape, unknown token, or a token with no registry row is denied. */
@@ -249,7 +237,7 @@ function resolveCaller(
     const tokenHash = sha256Hex(token);
 
     const row = v.safeParse(v.object({ workspace_name: v.string() }), sql.exec(
-      `SELECT workspace_name FROM workspace_capability_tokens WHERE token_hash = ? LIMIT 1`, tokenHash,
+      `SELECT name AS workspace_name FROM user_workspaces WHERE token_hash = ? LIMIT 1`, tokenHash,
     ).toArray()[0]);
 
     const workspace = row.success ? row.output.workspace_name : null;

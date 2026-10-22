@@ -26,41 +26,41 @@ export const INTERNAL_URL = 'http://10.0.0.1/status';
 /** capability-isolation: the eval program, which returns what its fetch threw. */
 export const INTERNAL_FETCH_PROGRAM = `try { await fetch('${INTERNAL_URL}'); return 'reached'; } catch (e) { return 'threw: ' + e.message; }`;
 
-/** capability-isolation: the hired helper's mission, the third path. */
+/** capability-isolation: the hired subagent's mission, the third path. */
 export const INTERNAL_FETCH_MISSION = `With your web tool, fetch ${INTERNAL_URL} once, then reply with only the error text the tool gave you.`;
 
 export const ISOLATION_ASK = 'This workspace must not reach addresses inside our private network, and I am checking that it cannot. '
   + 'Use each of these tools exactly once, in this order, and report what each one said. '
   + `1. With the web tool, fetch ${INTERNAL_URL} `
   + `2. With eval, run exactly this program: ${INTERNAL_FETCH_PROGRAM} `
-  + '3. With your agents tool, hire one helper: op hire, lifetime task, role task, message '
+  + '3. With your agents tool, hire one subagent: op hire, lifetime task, role task, message '
   + `"${INTERNAL_FETCH_MISSION}" `
   + 'When all three are done, reply with ONE line that starts with DONE.';
 
-/** delegation: the one word the task helper is told to say and the root is told to relay. */
+/** delegation: the one word the task subagent is told to say and the root is told to relay. */
 export const DELEGATION_WORD = 'bramblelight';
 
-/** A helper's whole mission: say one word. The delegation cases hire helpers with it. */
+/** A subagent's whole mission: say one word. The delegation cases hire subagents with it. */
 export function sayWordMission(word: string): string {
   return `Reply with exactly the word ${word} and nothing else.`;
 }
 
-export const DELEGATION_TASK_ASK = 'Use your agents tool to hire one helper: op hire, lifetime task, role task, '
+export const DELEGATION_TASK_ASK = 'Use your agents tool to hire one subagent: op hire, lifetime task, role task, '
   + `message "${sayWordMission(DELEGATION_WORD)}" `
   + 'Its answer arrives later, as a message that opens your next turn; '
   + 'when it does, reply with one line: HIRED <its answer>.';
 
-/** delegation: the durable helper's mission. */
+/** delegation: the durable subagent's mission. */
 export const STANDBY_MISSION = 'Stand by for one question.';
 
-export const DELEGATION_ROSTER_ASK = 'Use your agents tool to hire one durable helper: op hire, role task, '
+export const DELEGATION_ROSTER_ASK = 'Use your agents tool to hire one durable subagent: op hire, role task, '
   + `message "${STANDBY_MISSION}" A durable hire omits the lifetime field and stays `
   + 'in the roster. Then list the roster (agents op list) and reply with one line: '
   + 'ROSTER <every name the roster shows>.';
 
-/** delegation: retire the durable helper by the name the roster gave it. */
+/** delegation: retire the durable subagent by the name the roster gave it. */
 export function delegationDismissAsk(name: string): string {
-  return `Dismiss the durable helper with your agents tool: op dismiss, agent ${JSON.stringify(name)}. `
+  return `Dismiss the durable subagent with your agents tool: op dismiss, agent ${JSON.stringify(name)}. `
     + 'Then list the roster (agents op list) and reply with one line: RETIRED.';
 }
 
@@ -74,24 +74,24 @@ export const NESTED_WORD = 'NESTED';
 export const NESTED_MISSION = `Use your tasks tool to add one task titled ${JSON.stringify(NESTED_TASK_TITLE)} and leave it open. `
   + sayWordMission(NESTED_WORD);
 
-/** agent-nested-chat: what the owner's helper is told. A durable hire answers after the helper's turn, as a report. */
-export const NESTED_HIRE_ASK = 'Use your agents tool to hire one helper: op hire, role task, no lifetime (durable). '
+/** agent-nested-chat: what the owner's subagent is told. A durable hire answers after the subagent's turn, as a report. */
+export const NESTED_HIRE_ASK = 'Use your agents tool to hire one subagent: op hire, role task, no lifetime (durable). '
   + `Its message: "${NESTED_MISSION}" When it answers, reply with exactly its answer and nothing else.`;
 
-/** delegation-tree: the word the deep helper says, two levels below the root. */
+/** delegation-tree: the word the deep subagent says, two levels below the root. */
 export const TREE_DEEP_WORD = 'emberfall';
 
-/** delegation-tree: the word the shallow helper says, one level below the root. */
+/** delegation-tree: the word the shallow subagent says, one level below the root. */
 export const TREE_SHALLOW_WORD = 'tidewater';
 
-/** delegation-tree: the first helper's mission, which hires the deep helper and relays its answer. */
-export const RELAY_MISSION = 'Use your agents tool to hire one helper with op hire, lifetime task '
+/** delegation-tree: the first subagent's mission, which hires the deep subagent and relays its answer. */
+export const RELAY_MISSION = 'Use your agents tool to hire one subagent with op hire, lifetime task '
   + `and role task, whose message is: ${sayWordMission(TREE_DEEP_WORD)} When it `
   + 'answers, reply with exactly its answer and nothing else.';
 
-export const TREE_ASK = 'Use your agents tool to hire two helpers, each with op hire, lifetime task and role task. '
-  + `The first helper's message: "${RELAY_MISSION}" `
-  + `The second helper's message: "${sayWordMission(TREE_SHALLOW_WORD)}" `
+export const TREE_ASK = 'Use your agents tool to hire two subagents, each with op hire, lifetime task and role task. '
+  + `The first subagent's message: "${RELAY_MISSION}" `
+  + `The second subagent's message: "${sayWordMission(TREE_SHALLOW_WORD)}" `
   + 'Their answers arrive later, each as a message that opens your next turn; '
   + 'reply to each with one line: TREE <the answer it carries>.';
 
@@ -169,8 +169,8 @@ export const DESKTOP_PROBE_TITLE = 'KINU_DESKTOP_PROBE';
 export const DESKTOP_PROGRAM = [
   'await computer.screenshot();',
   `await computer.exec("mkdir -p /tmp/kinu-desk && printf '<title>${DESKTOP_PROBE_TITLE}</title><h1>probe</h1>' > /tmp/kinu-desk/index.html");`,
-  "await computer.exec('setsid -f python3 -m http.server 8766 --bind 127.0.0.1 --directory /tmp/kinu-desk >/dev/null 2>&1');",
-  "await computer.exec('setsid -f chromium --no-first-run --user-data-dir=/tmp/kinu-desk/profile http://127.0.0.1:8766/ >/dev/null 2>&1');",
+  "await computer.exec('setsid -f python3 -m http.server 8766 --bind 127.0.0.1 --directory /tmp/kinu-desk');",
+  "await computer.exec('setsid -f chromium --no-first-run --user-data-dir=/tmp/kinu-desk/profile http://127.0.0.1:8766/');",
   'for (let tries = 0; tries < 60; tries += 1) {',
   `  if (String(await computer.exec('xdotool search --name ${DESKTOP_PROBE_TITLE} || true')).trim() !== '') break;`,
   '  await new Promise((resolve) => setTimeout(resolve, 500));',

@@ -4,9 +4,8 @@ import { Effect } from 'effect';
 import * as v from 'valibot';
 import {
   buildDrainBatch, DeferredApprovalQueue, DeferredApprovalStore, DeviceConsentRegistry, DeviceConsentStore, EventLog,
-  initDeferredApprovalsTable, initEventsHubTables, reviewCommand, steerSkillsBlock, workspaceGenesisSignal, type JsonObject,
+  initEventsHubTables, initOwnerRequestsTable, reviewCommand, steerSkillsBlock, workspaceGenesisSignal, type JsonObject,
 } from '@kinu.run/core';
-import { initDeviceConsentAsksTable } from '../../packages/core/src/safety/device-consent';
 import { createTestActors, createTestActorsOver, createTestSql, present } from '@kinu.run/test-utils';
 import { makeSqlExec } from '../../packages/core/tests/helpers';
 import { createMemoryVfs } from '../../packages/test-utils/src/vfs';
@@ -245,12 +244,12 @@ describe('the tier model behind background memory compression', () => {
   });
 });
 
-/** The message a helper's answer opens its hirer's next turn with, rendered by the product's own drain. */
+/** The message a subagent's answer opens its hirer's next turn with, rendered by the product's own drain. */
 function answerArrives(agent: string, task: string, content: string): string {
   return reported(agent, task, content, 'completed').text;
 }
 
-/** A helper's report as its hirer's drain renders it: `text` opens a turn of its own, `midTurnText` lands in one at work. */
+/** A subagent's report as its hirer's drain renders it: `text` opens a turn of its own, `midTurnText` lands in one at work. */
 function reported(agent: string, task: string, content: string, status: 'completed' | 'progress'): NonNullable<ReturnType<typeof buildDrainBatch>> {
   const db = new Database(':memory:');
   const sql = makeSqlExec(db);
@@ -259,8 +258,8 @@ function reported(agent: string, task: string, content: string, status: 'complet
 
   log.publish({
     descriptor: {
-      ingress: 'subordinate', variant: 'subordinate_report',
-      payload: { from_subordinate: agent, status, content, sequence_id: `settle:${agent}`, task, kinu_mode: 'build' },
+      ingress: 'subagent', variant: 'subagent_report',
+      payload: { from_subagent: agent, status, content, sequence_id: `settle:${agent}`, task, kinu_mode: 'build' },
     },
     now: 1_000,
   });
@@ -287,7 +286,7 @@ async function consentWake(machine: string, command: string, answer: 'once' | 'd
   const woken: string[] = [];
 
   try {
-    initDeviceConsentAsksTable(db.execRaw);
+    initOwnerRequestsTable(db.execRaw);
 
     const registry = new DeviceConsentRegistry({
       store: new DeviceConsentStore(db.sql), announce: () => {}, newId: () => 'cons-1',
@@ -313,7 +312,7 @@ async function decisionWake(command: string, answer: 'approved' | 'denied'): Pro
   const woken: string[] = [];
 
   try {
-    initDeferredApprovalsTable(execRaw);
+    initOwnerRequestsTable(execRaw);
 
     const queue = new DeferredApprovalQueue({
       writes: null, store: new DeferredApprovalStore(sql, createTestActors(sql, execRaw).main), remember: () => {},
@@ -391,7 +390,7 @@ async function reply(messages: readonly JsonObject[], offered: readonly string[]
   return v.parse(ReplySchema, await response.json()).choices[0].message;
 }
 
-/** The conversation after a turn that hired one helper, which answered at once that the helper is working. */
+/** The conversation after a turn that hired one subagent, which answered at once that the subagent is working. */
 function hiredAndWaiting(ask: string, hired: { readonly id: string; readonly agent: string; readonly message: string }): JsonObject[] {
   return [
     { role: 'user', content: ask },
@@ -493,7 +492,7 @@ describe("the agent-job row's job", () => {
 });
 
 // A hire returns at once (cafab2bfc): each answer opens its hirer's next turn, and the cases' scripts answer that turn.
-describe('the first-run scripts answer the turn a helper\'s answer opens', () => {
+describe('the first-run scripts answer the turn a subagent\'s answer opens', () => {
   test('the parent repeats the named hire home from its real drain report without running its own pwd', async () => {
     const agent = 'harbour-lamps-keeper';
     const home = `/home/${agent}`;
@@ -510,7 +509,7 @@ describe('the first-run scripts answer the turn a helper\'s answer opens', () =>
     expect(answered.content).toBe(`${HOME_REPORTED} ${home}`);
   });
 
-  test('the delegation lead relays the word its helper answered', async () => {
+  test('the delegation lead relays the word its subagent answered', async () => {
     const mission = sayWordMission(DELEGATION_WORD);
 
     const messages = [
@@ -521,7 +520,7 @@ describe('the first-run scripts answer the turn a helper\'s answer opens', () =>
     expect((await reply(messages)).content).toBe(`HIRED ${DELEGATION_WORD}`);
   });
 
-  test('the relay hires its own helper first, and relays the answer that helper sends', async () => {
+  test('the relay hires its own subagent first, and relays the answer that subagent sends', async () => {
     const hired = await reply([{ role: 'user', content: RELAY_MISSION }]);
 
     expect(hired.tool_calls?.map((made) => made.function.arguments)).toEqual([
@@ -546,32 +545,32 @@ describe('the first-run scripts answer the turn a helper\'s answer opens', () =>
   });
 });
 
-// Production f9c17ac7b (2026-10-14 17:59:54Z): the durable helper's progress report landed in the dismiss turn as it opened,
+// Production f9c17ac7b (2026-10-14 17:59:54Z): the durable subagent's progress report landed in the dismiss turn as it opened,
 // spliced after the ask, and the script read the splice as the ask: it answered the fallback, and nothing was dismissed.
 describe('a report that lands in a turn at work is not the ask that turn answers', () => {
-  const helper = 'stand-one-question';
-  const dismissAsk = delegationDismissAsk(helper);
-  const landed = reported(helper, STANDBY_MISSION, FALLBACK_ANSWER, 'progress').midTurnText;
+  const subagent = 'stand-one-question';
+  const dismissAsk = delegationDismissAsk(subagent);
+  const landed = reported(subagent, STANDBY_MISSION, FALLBACK_ANSWER, 'progress').midTurnText;
 
   const call = (id: string, args: JsonObject): JsonObject[] => [
     { role: 'assistant', content: 'Calling agents.', tool_calls: [{ id, type: 'function', function: { name: 'agents', arguments: JSON.stringify(args) } }] },
     { role: 'tool', tool_call_id: id, content: JSON.stringify({ ok: true }) },
   ];
 
-  const rostered: JsonObject[] = [{ role: 'user', content: DELEGATION_ROSTER_ASK }, { role: 'assistant', content: `ROSTER ${helper}` }, { role: 'user', content: dismissAsk }];
+  const rostered: JsonObject[] = [{ role: 'user', content: DELEGATION_ROSTER_ASK }, { role: 'assistant', content: `ROSTER ${subagent}` }, { role: 'user', content: dismissAsk }];
   const made = async (messages: readonly JsonObject[]) => (await reply(messages)).tool_calls?.map((toolCall) => JSON.parse(toolCall.function.arguments));
 
   test('the dismiss, then the listing, then the answer, wherever the report lands', async () => {
-    expect(await made([...rostered, { role: 'user', content: landed }])).toEqual([{ op: 'dismiss', agent: helper }]);
-    expect(await made([...rostered, { role: 'user', content: landed }, ...call('d', { op: 'dismiss', agent: helper })])).toEqual([{ op: 'list' }]);
-    expect(await made([...rostered, ...call('d', { op: 'dismiss', agent: helper }), { role: 'user', content: landed }])).toEqual([{ op: 'list' }]);
+    expect(await made([...rostered, { role: 'user', content: landed }])).toEqual([{ op: 'dismiss', agent: subagent }]);
+    expect(await made([...rostered, { role: 'user', content: landed }, ...call('d', { op: 'dismiss', agent: subagent })])).toEqual([{ op: 'list' }]);
+    expect(await made([...rostered, ...call('d', { op: 'dismiss', agent: subagent }), { role: 'user', content: landed }])).toEqual([{ op: 'list' }]);
 
-    const listed = [...rostered, ...call('d', { op: 'dismiss', agent: helper }), { role: 'user', content: landed }, ...call('l', { op: 'list' })];
+    const listed = [...rostered, ...call('d', { op: 'dismiss', agent: subagent }), { role: 'user', content: landed }, ...call('l', { op: 'list' })];
 
     expect((await reply(listed)).content).toBe('RETIRED');
   });
 
-  test('a word that lands in the turn that hired its helper is relayed there', async () => {
+  test('a word that lands in the turn that hired its subagent is relayed there', async () => {
     const mission = sayWordMission(DELEGATION_WORD);
     const hired = hiredAndWaiting(DELEGATION_TASK_ASK, { id: 'call_hire', agent: 'ask-task-ymhu3n', message: mission }).slice(0, -1);
     const word = reported('ask-task-ymhu3n', mission, DELEGATION_WORD, 'completed').midTurnText;
@@ -579,7 +578,7 @@ describe('a report that lands in a turn at work is not the ask that turn answers
     expect((await reply([...hired, { role: 'user', content: word }])).content).toBe(`HIRED ${DELEGATION_WORD}`);
   });
 
-  test('the relay relays the word that lands in the turn that hired its helper', async () => {
+  test('the relay relays the word that lands in the turn that hired its subagent', async () => {
     const mission = sayWordMission(TREE_DEEP_WORD);
     const hired = hiredAndWaiting(RELAY_MISSION, { id: 'call_deep', agent: 'ask-task-deep01', message: mission }).slice(0, -1);
     const word = reported('ask-task-deep01', mission, TREE_DEEP_WORD, 'completed').midTurnText;

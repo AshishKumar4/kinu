@@ -180,7 +180,11 @@ export function retryMiddleware(policy: RetryPolicy): LanguageModelMiddleware {
         if (opened.kind !== 'answer') return opened;
         const [collected] = await Promise.allSettled([generateFromStream(opened.value)]);
 
-        return collected.status === 'fulfilled' ? { kind: 'answer', value: collected.value } : { kind: 'failed', error: collected.reason };
+        if (collected.status === 'fulfilled') return { kind: 'answer', value: collected.value };
+
+        // Until it is collected whole, nothing of a generate has reached its caller: a stream that fails part way is judged
+        // as one cut before its first part is, final when its failure is, and over when its caller let go.
+        return params.abortSignal?.aborted === true ? { kind: 'failed', error: collected.reason } : cutBeforeOutput(collected.reason);
       }
       : async (_last, clock) => {
         const value = await doGenerate();

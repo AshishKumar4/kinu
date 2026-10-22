@@ -78,14 +78,14 @@ export function SlateDashboard(): ReactElement {
       <div className="grid grid-cols-3 gap-2">
         {KPIS.map(({ label, value }) => (
           <div key={label} className="rounded-lg border p-border p-surface px-3 py-2.5">
-            <div className="text-[10px] uppercase tracking-[.12em] p-text-4">{label}</div>
+            <div className="text-[10px] uppercase tracking-[.12em] p-text-3">{label}</div>
             <div className="mt-1 text-[22px] font-semibold tracking-[-.02em] p-num">{value}</div>
           </div>
         ))}
       </div>
       <div className="mt-3 grid gap-3">
         <div className="rounded-lg border p-border p-surface px-3 py-2.5">
-          <div className="mb-2 text-[10px] uppercase tracking-[.12em] p-text-4">Open by label</div>
+          <div className="mb-2 text-[10px] uppercase tracking-[.12em] p-text-3">Open by label</div>
           <div className="flex h-[88px] items-end gap-3">
             {LABELS.map(([label, count], index) => (
               <div key={label} className="flex min-w-0 flex-1 flex-col items-center gap-1">
@@ -101,7 +101,7 @@ export function SlateDashboard(): ReactElement {
           </div>
         </div>
         <div className="rounded-lg border p-border p-surface px-3 py-2.5">
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[10px] uppercase tracking-[.12em] p-text-4">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[10px] uppercase tracking-[.12em] p-text-3">
             <span>Opened vs closed · weekly</span>
             <span className="flex items-center gap-2 normal-case tracking-normal"><span className="inline-flex items-center gap-1"><span className="h-0.5 w-3 bg-[var(--c-accent)]" />opened</span><span className="inline-flex items-center gap-1"><span className="h-0.5 w-3 bg-[var(--c-success)]" />closed</span></span>
           </div>
@@ -112,14 +112,14 @@ export function SlateDashboard(): ReactElement {
             <polyline points={polyline(OPENED)} fill="none" stroke="var(--c-accent)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" className="landing-draw" pathLength={1} />
             <polyline points={polyline(CLOSED)} fill="none" stroke="var(--c-success)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" className="landing-draw" pathLength={1} style={{ animationDelay: '220ms' }} />
           </svg>
-          <div className="mt-1 flex justify-between text-[9.5px] p-text-4">{WEEKS.map((week) => <span key={week}>{week}</span>)}</div>
+          <div className="mt-1 flex justify-between text-[9.5px] p-text-3">{WEEKS.map((week) => <span key={week}>{week}</span>)}</div>
         </div>
       </div>
       <div className="mt-3 rounded-lg border p-border p-surface">
-        <div className="border-b p-border px-3 py-2 text-[10px] uppercase tracking-[.12em] p-text-4">Oldest waiting</div>
+        <div className="border-b p-border px-3 py-2 text-[10px] uppercase tracking-[.12em] p-text-3">Oldest waiting</div>
         {OLDEST.map(([id, title, age], index) => (
           <div key={id} className={`flex items-center gap-3 px-3 py-2 text-[12px] ${index > 0 ? 'border-t border-dashed border-[var(--c-dash)]' : ''}`}>
-            <code className="shrink-0 text-[10.5px] p-text-4">{id}</code>
+            <code className="shrink-0 text-[10.5px] p-text-3">{id}</code>
             <span className="min-w-0 flex-1 truncate p-text-2">{title}</span>
             <span className="shrink-0 text-[10.5px] p-warning">{age}</span>
           </div>

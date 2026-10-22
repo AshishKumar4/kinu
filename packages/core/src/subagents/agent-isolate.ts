@@ -1,0 +1,286 @@
+import type { AgentFigures } from '../read-models/agent-figures';
+import type { ContextMeasures } from '../events/recorder';
+import type { JSONSchema7, UIMessage } from 'ai';
+import type { CompletedTurn } from '../evolution/types';
+import type { TurnFacts } from '../orchestrator/turn-facts';
+import type { ContextFill } from '../read-models/context-fill';
+import type { InlineSteer } from '../read-models/transcript';
+import type { PlanStanding } from '../plans/review';
+import type { RunEvent } from '../events/types';
+import type { OpenWork } from '../orchestrator/chat-session';
+import type { ModelCallReport } from '../events/model-call';
+import type { DynamicContext } from '../prompting/volatile-context';
+import type { HeadCapture } from '../heads/head-inference';
+import type { CraftCall } from '../craft/in-episode';
+import type { HeadInput, HeadReport, HeadStep } from '../heads/types';
+import type { HeadStreamKind } from '../heads/head-stream';
+import type { JsonObject, JsonValue } from '../utils/json';
+import { renderThrownChain, type ErrorCode, type KinuError } from '../obs/error';
+import type { ModelPricing } from '../providers/types';
+import type { WorkMode } from '../types/turn';
+import type { TurnSourcesBundle } from '../orchestrator/turn-assembly';
+import type { SubagentReportLedger } from './ingress';
+import type { DeliveryAnswer } from './deliveries';
+import type { TurnReach } from '../delegation/turn-reach';
+
+export type StoredRow = Readonly<Record<string, string | number | ArrayBuffer | null>>;
+
+/**
+ * The tables an {@link AgentSnapshot} copies from its workspace into its agent's own isolate. A statement that writes one
+ * moves every copy of them held on either side.
+ */
+const SNAPSHOT_SOURCE_WRITE = /\b(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|REPLACE\s+INTO|UPDATE|DELETE\s+FROM)\s+(?:workspace_actors|workspace_identity|actor_config|scaffold_versions)\b/iu;
+
+const WRITES = new WeakMap<TemplateStringsArray, boolean>();
+
+/** Whether the statement writes a table a snapshot copies; decided once per statement text. */
+export function writesSnapshotRows(strings: TemplateStringsArray): boolean {
+  const known = WRITES.get(strings);
+
+  if (known !== undefined) return known;
+  const writes = SNAPSHOT_SOURCE_WRITE.test(strings.join('?'));
+
+  WRITES.set(strings, writes);
+
+  return writes;
+}
+
+/** Where a snapshot falls among those its workspace sent: calls reach an isolate in no promised order, so one read earlier
+ *  in the same activation is older than any it already adopted. */
+interface SnapshotOrder {
+  readonly activation: string;
+  readonly seq: number;
+}
+
+export interface AgentSnapshot {
+  readonly identity: StoredRow;
+  readonly lineage: readonly StoredRow[];
+  readonly config: readonly StoredRow[];
+  readonly scaffold: readonly StoredRow[];
+  readonly workspaceName: string;
+  readonly installedBuild: string | null;
+  readonly artifactDirectory: string;
+  readonly order: SnapshotOrder;
+}
+
+export interface AgentTurnTask {
+  readonly sequenceId: string;
+  /** The run its workspace started: its first round is claimed under it before it is prepared. */
+  readonly runId: string;
+  readonly body: string;
+  readonly mode: WorkMode;
+}
+
+export interface AgentToolDescriptor {
+  readonly name: string;
+  readonly description: string;
+  readonly inputSchema: JSONSchema7;
+  readonly planAllowed: boolean;
+}
+
+export interface PreparedAgentTurn {
+  readonly input: HeadInput;
+  readonly runId: string;
+  /** In the session codec's durable form: a ModelMessage's type is too deep for an RPC signature. */
+  readonly birthContext?: readonly JsonValue[];
+  readonly sources: TurnSourcesBundle;
+  readonly pricing: ModelPricing | null;
+  readonly accounts: Readonly<Record<string, string>>;
+  /** The account's credentials revision the turn opened under: credentials the isolate holds from another are read again.
+   *  Null for a preparation that opens no turn, which reads none. */
+  readonly credentialsRevision: number | null;
+  readonly scaffold: StoredRow;
+  readonly languages: readonly [string, ...string[]];
+  /** A run's framing; absent for a chat turn. */
+  readonly brief?: string;
+  readonly opening: readonly JsonValue[];
+  readonly tools: readonly AgentToolDescriptor[];
+  /** The tools the turn reaches whose effects commit in the agent's own store, which its isolate builds and runs under
+   *  its own receipts: no workspace receipt is kept around them (design v2 §4). */
+  readonly ownerLane: Pick<TurnReach, 'askOwner' | 'submitPlan' | 'replyToComment'>;
+  readonly dynamic: DynamicContext;
+  readonly reviewsTurns: boolean;
+  readonly missionLabels?: readonly string[];
+  /** What the workspace decided as the turn opened; the agent keeps the first it is told for a turn. */
+  readonly facts: TurnFacts;
+  readonly trace: boolean;
+  readonly resume: boolean;
+  readonly reportMessages: boolean;
+  /** A chat turn's request, noted on the workspace's warming lane as it was prepared: until when the lane kept the cache
+   *  warm for the last one (`TurnOpeningAsk`). Null for a preparation that noted none. */
+  readonly cacheKeptAliveUntil: number | null;
+  /** A chat turn's open work as it was prepared (`OpenWork`); each tool answer carries it again, and the turn's task
+   *  reminder reads the newest, so nothing of it crosses before the turn commits (#75). None for a run. */
+  readonly openWork?: OpenWork;
+}
+
+export interface AgentTurnActivity {
+  readonly event: string;
+  readonly detail?: string;
+}
+
+export interface AgentToolCall {
+  readonly activity: readonly AgentTurnActivity[];
+  readonly turnId: string;
+  /** The run the call is part of: its receipt keys on the execution, as the agent's pointer to it does. */
+  readonly runId: string;
+  /** Its execution's capability (design v2 §3): the epoch its claim was minted with as it opened, which the workspace's
+   *  fence holds while it is the agent's current execution; a run's every round carries its first round's. Null for a
+   *  measure between turns, which runs nothing. */
+  readonly epoch: number | null;
+  readonly mode: WorkMode;
+  /** The turn's lane and its author-stamped metadata, as the agent admitted it: a workspace that restarted rebuilds
+   *  the turn from these, not from its id. */
+  readonly parentDriven: boolean;
+  readonly driving?: JsonObject;
+  readonly callId: string;
+  readonly name: string;
+  readonly input: JsonValue;
+}
+
+/** A completed round of a delivered run, for its caller's advisor: carried by the run's end, and reviewed by the
+ *  workspace as it takes that end, so nothing of it crosses before the run's end commits. */
+export interface AgentReview {
+  readonly turn: CompletedTurn;
+  readonly reachable: readonly string[];
+  readonly mode: WorkMode;
+}
+
+interface AgentCaptureDelta {
+  readonly evidence: HeadCapture['evidence'];
+  readonly decisions: HeadCapture['decisions'];
+  readonly artifacts: HeadCapture['artifacts'];
+  readonly toolCalls: HeadCapture['toolCalls'];
+  readonly childHeadIds: HeadCapture['childHeadIds'];
+}
+
+export interface AgentToolAnswer {
+  readonly output: unknown;
+  /** What the call recorded into a run's capture, which its inference reads; none for a chat turn, which has none. */
+  readonly captured?: AgentCaptureDelta;
+  readonly dynamic: DynamicContext;
+  /** What the turn has told its hirer by now; the agent keeps it, so a reset of the workspace forgets none of it. */
+  readonly reports: SubagentReportLedger;
+  /** The agent's open work once the tool ran: its tasks and whether a job of its still runs. */
+  readonly openWork: OpenWork;
+  /** What its `eval` created and called of the workspace's crafted tools, as scored where it ran; its turn's record keeps
+   *  it. Null for any other tool, or a turn that does not record evolution. */
+  readonly crafted: CraftCall | null;
+}
+
+export interface AgentTrace {
+  readonly kind: 'step';
+  readonly sequence: number;
+  readonly step: HeadStep;
+}
+
+export interface AgentHeadDelta {
+  readonly kind: HeadStreamKind;
+  readonly delta: string;
+}
+
+export interface AgentTurnEnd extends Omit<HeadReport, 'errorMessage'> {
+  readonly activity: readonly AgentTurnActivity[];
+  readonly figures: AgentFigures;
+  readonly errorMessage: string | null;
+  readonly produced?: readonly JsonValue[];
+  /** Its completed rounds, for its caller's advisor, in order. */
+  readonly reviews?: readonly AgentReview[];
+  /** Its model calls beside its rounds' own (compaction, its loop's calls), charged to the workspace as it takes the end:
+   *  kept with the end, so an end a restart tells was charged, once. */
+  readonly charges?: readonly ModelCallReport[];
+}
+
+export interface TurnRequestAt {
+  readonly turnId: string;
+  readonly epoch: number;
+  readonly revision: number;
+  readonly from?: number;
+}
+
+export interface AgentRecovery {
+  readonly stalled: readonly { readonly turnId: string; readonly workMode: WorkMode }[];
+}
+
+/** One answer of an agent's, as its `<slate-ui>` blocks are read from it: its text parts, and the mode the agent last
+ *  ran in, which its pages run in. */
+export interface AgentAnswerTexts {
+  readonly texts: readonly string[];
+  readonly workMode: WorkMode;
+}
+
+/** Where an agent's chat stands between turns, as its window and its workspace's tile read it. */
+export interface AgentStanding {
+  readonly messageCount: number;
+  readonly context: ContextFill | null;
+  /** `run`: its id; null on a run about to start, or on a standing stored before runs were named. */
+  readonly latestRun: { readonly status: string | null; readonly userMessage: string | null; readonly run: string | null } | null;
+  /** Words sent into a running turn and not yet read by it. */
+  readonly pendingSteers: readonly InlineSteer[];
+  readonly plans: PlanStanding;
+  /** Its questions to the owner, counted as they are asked and closed. */
+  readonly questions: number;
+}
+
+/** How a run delivered to an agent ended (design v2 §1, D2): its end, or the refusal that kept it from running (a Stop
+ *  before it ran, or its failure before its first round). */
+export type RunEndOutcome = { readonly ended: AgentTurnEnd } | { readonly refused: { readonly code: ErrorCode; readonly message: string } };
+
+/** Why a delivered run did not run to its end, in its own words. */
+export function refusedRun(failure: KinuError): RunEndOutcome {
+  return { refused: { code: failure.code, message: renderThrownChain({ cause: failure }) } };
+}
+
+/** A run's end as its agent holds it, kept on the run's held input in the commit that ended it and carried by each report
+ *  it makes until one has reached the workspace: its held input retires only then, and an agent that dies first tells
+ *  it from there, never running the run again. */
+export interface RunEndReport {
+  readonly id: string;
+  /** The generation that ended: a caller its workspace re-drove after a reset awaits its own, under the same id. */
+  readonly runId: string;
+  readonly outcome: RunEndOutcome;
+}
+
+/** An agent's standing as it reports it with what it owes (design v2 §8): its context's raw measures, which the workspace
+ *  reads against the window it knows, in place of its fill. */
+export interface AgentStandingReport extends Omit<AgentStanding, 'context'> {
+  readonly measures: ContextMeasures;
+}
+
+/** What each report of an agent tells beside what it owes: its standing, which the workspace reads in place of asking,
+ *  its delivered runs' ends not yet told (D2), each owed its workspace's caller, and whether its chat holds a turn owed
+ *  or running: from the input it took to its rest it is working, what it owes no leftover. */
+export interface AgentReport {
+  readonly standing: AgentStandingReport;
+  readonly runEnds: readonly RunEndReport[];
+  readonly working: boolean;
+}
+
+/** One report of an agent's (design v3 B), numbered in its own sequence: when it next needs waking, if at all, whether it
+ *  holds owed work at all, and what it tells. */
+export interface AgentOwes {
+  readonly seq: number;
+  readonly next: number | null;
+  readonly holds: boolean;
+  readonly report: AgentReport;
+}
+
+/** A delivery's answer, with the report its admission makes: its input taken rides the answer, never a crossing of its own.
+ *  Null where that report was told on its own: a delivery from the agent's own isolate has no answer crossing. */
+export interface AdmittedDelivery {
+  readonly answer: DeliveryAnswer;
+  readonly owes: AgentOwes | null;
+}
+
+/** An agent's recent model steps, for the activity its window reads. */
+export interface AgentSteps {
+  readonly steps: readonly Extract<RunEvent, { type: 'step_finish' }>[];
+  /** The newest step whose usage the provider reported. */
+  readonly newestMeasured: Extract<RunEvent, { type: 'step_finish' }> | null;
+}
+
+/** One answer of an agent's whole: the message its transcript holds, and its content as a lane reads it. */
+export interface AgentAnswer {
+  readonly message: UIMessage;
+  readonly content: string;
+}

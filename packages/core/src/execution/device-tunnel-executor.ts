@@ -388,7 +388,7 @@ class DevicePlane {
             () => settle(terminateDeviceExec(this.rpc, requestId, deviceId)),
           );
 
-          return commandAnswer(call.settle(v.parse(DeviceExecResultSchema, result)), v.is(ExecPartsSchema, args[1]), reportCwd);
+          return commandAnswer(call.settle(v.parse(DeviceExecResultSchema, result)), v.is(ExecPartsSchema, args[1]), reportCwd, { machine: 'device', command });
         }, refusalOf), (message) => refusalOf(new KinuError('unavailable', message))),
         catch: (cause) => ({ cause }),
       }).pipe(Effect.catch((failed) => {
@@ -530,7 +530,8 @@ function resolveForCall(
       `the device list is not known here yet, so "${named}" cannot be matched: retry, or call without a device`));
   }
 
-  const entry = deviceByName(fleet, named);
+  // By name, or by its directory under /pc, which is its id where its name cannot be one (`deviceMountSegment`).
+  const entry = deviceByName(fleet, named) ?? live.find((device) => deviceMountSegment(device, fleet) === named);
 
   if (entry) return { kind: 'target', deviceId: entry.id, name: entry.name };
 

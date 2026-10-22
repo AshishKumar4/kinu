@@ -3,9 +3,9 @@
  * Each read is its own resource and fails visibly: a swallowed rejection shows a connected account as disconnected.
  */
 import { Effect } from 'effect';
+import { Button } from "@/components/ui/Button";
 import { useState, type ReactNode } from "react";
-import { Combobox } from "@cloudflare/kumo";
-import { CheckIcon, PlugIcon } from "@phosphor-icons/react";
+import { CheckIcon } from "@phosphor-icons/react";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
 import {
   listCredentials, setCredential, deleteCredential,
@@ -18,24 +18,28 @@ import {
   type CloudflareGatewayStatus, type CloudflareAccountStatus,
 } from "@/lib/user-api";
 import type { ProfileCatalogEnvelope } from '@kinu.run/core';
-import { Card, Choice, Field, inputCls } from "@/components/ui/form";
+import { Notice } from '@/components/ui/Notice';
+import { Card, Choice, Field } from "@/components/ui/form";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { CardSlot } from "@/components/ui/CardSlot";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { BrandMark, providerBrand } from "@/components/ui/BrandMark";
 import { ChatGptConnect, ChatGptPlanUsage, ChatGptWelcome } from "@/components/account/ChatGptConnect";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import { useProviderWindow } from "@/hooks/use-provider-window";
 import { Status } from '@/components/ui/Status';
 import { showing, detach } from '@kinu.run/core/obs';
 import {
   CHATGPT_CRED_KEY, CLAUDE_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, CODEX_CRED_KEY, MAIN_ACCOUNT, accountCredentialKey, accountOf, baseCredentialKey, catalogProviderOfKey, isAccountName, revokingProviderOf, storedAccounts, type CredentialSummary, type ProviderCatalogEntry,
 } from '@kinu.run/core';
+import { Group } from "@/components/ui/Group";
+import { TextInput } from "@/components/ui/Field";
+import { Combobox } from "@/components/ui/Select";
 
 function ConnectedBadge({ detail }: { detail?: ReactNode }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Status tone="success">Connected</Status>
-      {detail && <span className="p-meta p-text-3">{detail}</span>}
+      {detail && <span className="t-meta p-text-3">{detail}</span>}
     </div>
   );
 }
@@ -47,14 +51,12 @@ function loginEnds(credentials: readonly CredentialSummary[], key: string): Reac
   return ends === undefined ? null : <>until {new Date(ends).toLocaleString()}, then sign in again</>;
 }
 
-const dangerQuietCls = "p-btn-quiet inline-flex h-6.5 shrink-0 items-center gap-1 px-2 text-xs p-danger";
-
 /** The panel in its own titled card; `framed` false where its host already says "Connect a provider". */
 function Framed({ framed, children }: { framed: boolean; children: ReactNode }) {
-  return framed ? <Card title="Connect a provider" icon={PlugIcon}>{children}</Card> : <>{children}</>;
+  return framed ? <Card title="Connect a provider">{children}</Card> : <>{children}</>;
 }
 
-export function ProvidersPanel({ returnTo, framed = true }: { returnTo: string; framed?: boolean }) {
+export function ProvidersPanel({ framed = true }: { framed?: boolean }) {
   const creds = useAsyncResource(listCredentials);
   const codex = useAsyncResource(codexStatus);
   const chatgpt = useAsyncResource(chatgptPlan);
@@ -76,9 +78,9 @@ export function ProvidersPanel({ returnTo, framed = true }: { returnTo: string; 
     <>
       {chatgptWelcome && <ChatGptWelcome onClose={() => setChatgptWelcome(false)} />}
       {unrevoked !== null && (
-        <p role="status" className="rounded-md px-3 py-2 text-xs p-notice-warning">
+        <Notice tone="warning">
           {unrevoked.name} is disconnected from Kinu but not revoked. {unrevoked.words}
-        </p>
+        </Notice>
       )}
       <Framed framed={framed}>
         <CardSlot resource={creds.resource} what="your API keys" onRetry={reloadAll}>
@@ -87,7 +89,7 @@ export function ProvidersPanel({ returnTo, framed = true }: { returnTo: string; 
 
             return (
               <div className="space-y-5">
-                <div className="p-group">
+                <Group>
                   {models.resource.status === "error" && (
                     <CardSlot resource={models.resource} what="your connected models" onRetry={models.reload}>{() => null}</CardSlot>
                   )}
@@ -98,13 +100,13 @@ export function ProvidersPanel({ returnTo, framed = true }: { returnTo: string; 
                       : undefined}
                     revokesAt={revokingProviderOf(CLOUDFLARE_OAUTH_CRED_KEY)}
                     onChanged={reloadAll}
-                    connect={<CloudflareAIConnectNotice returnTo={returnTo} message="Connect Cloudflare to use your Workers AI quota and AI Gateway." />}>
+                    connect={<CloudflareAIConnectNotice onConnected={reloadAll} message="Connect Cloudflare to use your Workers AI quota and AI Gateway." />}>
                     {/* Asked first: the account decides which gateway is reachable. */}
                     <CardSlot resource={accounts.resource} what="your Cloudflare accounts" onRetry={reloadAll}>
                       {(status) => <CloudflareAccountSection status={status} onChanged={reloadAll} />}
                     </CardSlot>
                     <CardSlot resource={gateways.resource} what="your AI gateways" onRetry={reloadAll}>
-                      {(status) => <CloudflareGatewaySection status={status} returnTo={returnTo} onChanged={reloadAll} />}
+                      {(status) => <CloudflareGatewaySection status={status} onChanged={reloadAll} />}
                     </CardSlot>
                   </ProviderEntry>
                   <CardSlot resource={codex.resource} what="your ChatGPT connection" onRetry={reloadAll}>
@@ -141,7 +143,7 @@ export function ProvidersPanel({ returnTo, framed = true }: { returnTo: string; 
                   <CardSlot resource={catalog.resource} what="the provider catalog" onRetry={reloadAll}>
                     {(providers) => storedEntries(credentials, providers).map((entry) => (
                       <ProviderEntry key={entry.key} provider={entry.provider} name={entry.name} method={entry.method}
-                        detail={<><span className="p-annotation">{entry.key}</span> {loginEnds(credentials, entry.key)}</>}
+                        detail={<><span className="t-meta t-mono">{entry.key}</span> {loginEnds(credentials, entry.key)}</>}
                         connected
                         disconnect={async (revoke) => {
                           answered(entry.name, await deleteCredential(entry.key, revoke));
@@ -151,7 +153,7 @@ export function ProvidersPanel({ returnTo, framed = true }: { returnTo: string; 
                         onChanged={reloadAll} />
                     ))}
                   </CardSlot>
-                </div>
+                </Group>
                 <CardSlot resource={catalog.resource} what="the provider catalog" onRetry={reloadAll}>
                   {(providers) => (
                     <>
@@ -230,14 +232,14 @@ function ProviderEntry({ provider, name, method, connected, detail, disconnect, 
 
   return (
     <div className="space-y-3 px-4 py-3" data-provider={name}>
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+      <div className="t-meta flex flex-wrap items-center gap-x-2 gap-y-1">
         {brand !== undefined && <BrandMark brand={brand} size={13} bare />}
-        <span className="p-row-text font-medium p-text">{name}</span>
-        <span className="p-meta p-text-3">{method}</span>
+        <span className="t-item p-text">{name}</span>
+        <span className="t-meta p-text-3">{method}</span>
         <span className="ml-auto flex items-center gap-2">
-          {connected ? <ConnectedBadge detail={detail} /> : <span className="p-meta p-text-3">Not connected</span>}
+          {connected ? <ConnectedBadge detail={detail} /> : <span className="t-meta p-text-3">Not connected</span>}
           {connected && disconnect !== undefined && (
-            <button type="button" onClick={leave} className={dangerQuietCls} aria-label={`Disconnect ${name}`}>Disconnect</button>
+            <Button variant="danger" size="sm" onClick={leave} aria-label={`Disconnect ${name}`}>Disconnect</Button>
           )}
         </span>
       </div>
@@ -276,14 +278,13 @@ function CloudflareAccountSection({ status, onChanged }: {
           ...status.accounts.map((account) => ({ value: account.id, label: account.name })),
         ]}
         onChange={(id) => detach(choose(id))} />
-      {error && <p className="text-xs p-danger">{error}</p>}
+      {error && <p className="t-meta p-danger">{error}</p>}
     </Field>
   );
 }
 
-function CloudflareGatewaySection({ status, returnTo, onChanged }: {
+function CloudflareGatewaySection({ status, onChanged }: {
   status: CloudflareGatewayStatus | null;
-  returnTo: string;
   onChanged: () => void;
 }) {
   const [saving, setSaving] = useState(false);
@@ -301,7 +302,7 @@ function CloudflareGatewaySection({ status, returnTo, onChanged }: {
   if (status.error) {
     return (
       <CloudflareAIConnectNotice
-        returnTo={returnTo}
+        onConnected={onChanged}
         message={`Could not list your AI Gateways: ${status.error}`}
       />
     );
@@ -309,14 +310,14 @@ function CloudflareGatewaySection({ status, returnTo, onChanged }: {
 
   if (status.gateways.length === 0) {
     return (
-      <span className="p-meta p-text-3">No AI Gateway</span>
+      <span className="t-meta p-text-3">No AI Gateway</span>
     );
   }
 
   return (
     <Field label="AI Gateway">
       {status.gateways.length === 1 && status.selectedId === status.gateways[0].id ? (
-        <div className="flex items-center gap-2 text-xs">
+        <div className="t-meta flex items-center gap-2">
           <CheckIcon size={13} className="p-success" />
           <span className="font-mono p-text">{status.selectedId}</span>
         </div>
@@ -328,7 +329,7 @@ function CloudflareGatewaySection({ status, returnTo, onChanged }: {
           options={[{ value: '', label: '(no gateway selected)' }, ...status.gateways.map((gw) => ({ value: gw.id, label: gw.id }))]}
           onChange={(id) => detach(choose(id))} />
       )}
-      {error && <p className="text-xs p-danger">{error}</p>}
+      {error && <p className="t-meta p-danger">{error}</p>}
     </Field>
   );
 }
@@ -340,6 +341,7 @@ function CloudflareGatewaySection({ status, returnTo, onChanged }: {
 function ClaudeConnect({ onChanged }: { onChanged: () => void }) {
   const [authorizeUrl, setAuthorizeUrl] = useState<string | null>(null);
   const [code, setCode] = useState('');
+  const signInWindow = useProviderWindow('claude-sign-in');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -358,37 +360,30 @@ function ClaudeConnect({ onChanged }: { onChanged: () => void }) {
   const finish = () => run(Effect.gen(function* () {
     const result = yield* Effect.promise(() => finishClaudeSignIn(code.trim()));
 
-    if (result.connected) onChanged();
-    else setError(result.error ?? 'Claude did not connect.');
+    if (result.connected) {
+      signInWindow.close();
+      onChanged();
+    } else setError(result.error ?? 'Claude did not connect.');
   }));
 
   return (
     <div className="space-y-3">
-      <p className="rounded-md px-3 py-2 text-xs p-notice-warning">
+      <Notice tone="warning">
         Signing in with a Claude subscription runs Kinu on your own Claude plan. Anthropic&apos;s terms limit subscription use to its own apps, so you connect at your own risk.
-      </p>
+      </Notice>
       {authorizeUrl === null ? (
-        <FilledButton onClick={() => detach(start())} disabled={busy}>Sign in with Claude</FilledButton>
+        <Button variant="primary" size="sm" onClick={() => detach(start())} disabled={busy}>Sign in with Claude</Button>
       ) : (
-        <Field label={<>Open <a href={authorizeUrl} target="_blank" rel="noopener noreferrer" className="p-accent underline underline-offset-2">claude.ai</a>, approve Kinu, and paste what Claude shows you</>}
+        <Field label={<>Open <a href={authorizeUrl} target="_blank" rel="noopener noreferrer" onClick={signInWindow.open} className="p-accent-fg underline underline-offset-2">claude.ai</a>, approve Kinu, and paste what Claude shows you</>}
           hint="The code Claude shows, or the address your browser ended on if the page did not load.">
           <form className="flex flex-wrap gap-2" onSubmit={(event) => { event.preventDefault(); detach(finish()); }}>
-            <input
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              placeholder="Code or address"
-              aria-label="Claude sign-in code"
-              autoComplete="off"
-              className={`${inputCls} min-w-0 flex-1`}
-            />
-            <button type="submit" disabled={busy || code.trim() === ''}
-              className="p-btn-quiet inline-flex h-9 shrink-0 items-center px-3 text-xs">{busy ? '...' : 'Connect'}</button>
-            <button type="button" onClick={(...args: Parameters<typeof start>) => detach(Effect.promise(async () => start(...args)))} disabled={busy}
-              className="p-btn-quiet inline-flex h-9 shrink-0 items-center px-3 text-xs">Start again</button>
+            <TextInput className="min-w-0 flex-1" value={code} onChange={(e) => setCode(e.target.value)} placeholder="Code or address" aria-label="Claude sign-in code" autoComplete="off" />
+            <Button type="submit" disabled={busy || code.trim() === ''}>{busy ? '...' : 'Connect'}</Button>
+            <Button onClick={(...args: Parameters<typeof start>) => detach(Effect.promise(async () => start(...args)))} disabled={busy}>Start again</Button>
           </form>
         </Field>
       )}
-      {error && <p className="text-xs p-danger">{error}</p>}
+      {error && <p className="t-meta p-danger">{error}</p>}
     </div>
   );
 }
@@ -475,38 +470,22 @@ function ApiKeyConnect({ creds, catalog, onChanged }: {
         }}>
           {compat ? (
             <>
-              <input value={compatName} onChange={(e) => setCompatName(e.target.value)} placeholder="name (e.g. groq)"
-                aria-label="Endpoint name" className={`${inputCls} max-w-44`} />
-              <input value={compatBaseURL} onChange={(e) => setCompatBaseURL(e.target.value)} placeholder="https://api.example.com/v1"
-                aria-label="Base URL" className={`${inputCls} min-w-0 flex-1`} />
+              <TextInput className="max-w-44" value={compatName} onChange={(e) => setCompatName(e.target.value)} placeholder="name (e.g. groq)" aria-label="Endpoint name" />
+              <TextInput className="min-w-0 flex-1" value={compatBaseURL} onChange={(e) => setCompatBaseURL(e.target.value)} placeholder="https://api.example.com/v1" aria-label="Base URL" />
               <span className="basis-full" aria-hidden />
-              <label data-invalid={windowValid ? undefined : ""}
-                className="flex h-9 w-full max-w-72 cursor-text items-center gap-2 rounded-md border border-[var(--c-input-border)] bg-[var(--c-surface)] px-3 text-sm p-text transition-all focus-within:border-[var(--c-accent)] focus-within:ring-1 focus-within:ring-[var(--c-accent-subtle)] data-[invalid]:border-[var(--c-danger)]">
-                <span className="shrink-0 p-text-3">Context window</span>
-                <input value={compatWindow} onChange={(e) => setCompatWindow(e.target.value)} inputMode="numeric" placeholder="optional"
-                  aria-label="Context window in tokens" aria-invalid={windowValid ? undefined : true}
-                  className="min-w-0 flex-1 bg-transparent text-right outline-none focus-visible:!outline-none placeholder:p-text-3" />
-                <span className="shrink-0 p-text-3">tokens</span>
-              </label>
+              <TextInput before="Context window" after="tokens" className="max-w-72 text-right" invalid={!windowValid}
+                value={compatWindow} onChange={(e) => setCompatWindow(e.target.value)} inputMode="numeric" placeholder="optional"
+                aria-label="Context window in tokens" />
             </>
           ) : (
-            <input value={accountName} onChange={(e) => setAccountName(e.target.value)} placeholder="account (blank: main)"
-              aria-label="Account name" className={`${inputCls} max-w-44`} />
+            <TextInput className="max-w-44" value={accountName} onChange={(e) => setAccountName(e.target.value)} placeholder="account (blank: main)" aria-label="Account name" />
           )}
-          <input
-            type="password"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            placeholder={saveWord === 'Replace' ? '••••••• (stored, paste to replace)' : `${selected.name} API key`}
-            aria-label="API key"
-            className={`${inputCls} min-w-0 flex-1`}
-          />
-          <button type="submit" disabled={saving || !ready}
-            className="p-btn-quiet inline-flex h-9 shrink-0 items-center px-3 text-xs">{saving ? '...' : saveWord}</button>
+          <TextInput className="min-w-0 flex-1" type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder={saveWord === 'Replace' ? '••••••• (stored, paste to replace)' : `${selected.name} API key`} aria-label="API key" />
+          <Button type="submit" disabled={saving || !ready}>{saving ? '...' : saveWord}</Button>
         </form>
       )}
-      {compat && !windowValid && <p className="mb-1 text-xs p-danger">The context window is a whole number of tokens, or blank.</p>}
-      {error && <p className="text-xs p-danger">{error}</p>}
+      {compat && !windowValid && <p className="t-meta mb-1 p-danger">The context window is a whole number of tokens, or blank.</p>}
+      {error && <p className="t-meta p-danger">{error}</p>}
     </Field>
   );
 }
@@ -559,7 +538,7 @@ function DefaultAccounts({ keys, catalog }: { keys: readonly string[]; catalog: 
           <div className="space-y-2">
             {held.map(({ name, provider, accounts }) => (
               <div key={provider} className="flex items-center gap-3">
-                <span className="p-row-text p-text w-32 shrink-0 truncate">{name}</span>
+                <span className="t-body p-text w-32 shrink-0 truncate">{name}</span>
                 <Choice
                   label={`${name} default account`}
                   value={envelope.catalog.accounts?.[provider] ?? (accounts.includes(MAIN_ACCOUNT) ? MAIN_ACCOUNT : '')}

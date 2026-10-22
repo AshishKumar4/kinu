@@ -118,10 +118,14 @@ export function libraryTiles(sql: SqlExec): Array<{ workspace: string; overview:
   });
 }
 
+/** Home is the assistant's chat, never a workspace waiting for its first report: counts leave it out until it has one. */
+const HOME_UNREPORTED = `(${BUCKET}) = 'unreported' AND w.name IS (SELECT value FROM user_config WHERE key = '${ASSISTANT_CONFIG_KEY}')`;
+
 export function rosterCounts(sql: SqlExec): RosterCounts {
   const counts: RosterCounts = { all: 0, needs: 0, working: 0, idle: 0, unreported: 0, decisions: 0 };
 
-  for (const raw of sql.exec(`SELECT ${BUCKET} AS bucket, COUNT(*) AS n, SUM(${DECISIONS}) AS decisions ${FROM} WHERE ${ACTIVE} GROUP BY bucket`).toArray()) {
+  for (const raw of sql.exec(`SELECT ${BUCKET} AS bucket, COUNT(*) AS n, SUM(${DECISIONS}) AS decisions ${FROM}
+    WHERE ${ACTIVE} AND NOT (${HOME_UNREPORTED}) GROUP BY bucket`).toArray()) {
     const row = v.parse(CountRowSchema, raw);
     counts[row.bucket] = row.n;
     counts.all += row.n;
@@ -198,8 +202,8 @@ const ROSTER_NUDGE_ATTEMPTS = 6;
 
 export function unreportedWorkspaces(sql: SqlExec, now: number): string[] {
   return sql.exec(`SELECT w.name FROM user_workspaces w
-    LEFT JOIN workspace_overviews o ON o.name = w.name LEFT JOIN workspace_overview_nudges n ON n.name = w.name
-    WHERE ${ACTIVE} AND o.name IS NULL AND (n.name IS NULL OR (n.attempts < ? AND n.next_at <= ?))`, ROSTER_NUDGE_ATTEMPTS, now)
+    LEFT JOIN workspace_overviews o ON o.name = w.name
+    WHERE ${ACTIVE} AND o.name IS NULL AND w.nudge_attempts < ? AND w.nudge_next_at <= ?`, ROSTER_NUDGE_ATTEMPTS, now)
     .toArray().map((row) => v.parse(NameRowSchema, row).name);
 }
 

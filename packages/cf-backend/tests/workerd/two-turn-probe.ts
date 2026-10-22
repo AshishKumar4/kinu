@@ -916,7 +916,7 @@ const NOTED: NotedChanges = { source: 'workspace', label: 'Workspace', mode: 'vf
 
 type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'setModel' | 'setSoul' | 'setEvolutionConfig' | 'setDisplayName' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp' | 'evalAbortActivation' | 'workspaceTitle'
-  | 'createSubordinateAgent' | 'readWorkspaceFile'>
+  | 'createSubagentAgent' | 'readWorkspaceFile'>
   & Pick<ProductionOrchestrator, 'getChangeNotes' | 'saveChangeNotes' | 'sendChangeNotes'>
   & Pick<ObservedOrchestrator, 'refuseReservations' | 'owedSends' | 'latestClaimOutcome' | 'recoveryPass'
   | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'strandedWork' | 'answerSlates' | 'answerPageModes' | 'cutTerminal' | 'liveTerminal' | 'mainQuiet' | 'terminalState' | 'alienEffect' | 'inspectWork' | 'chatHistoryPage' | 'seedScreenshotChat' | 'chatPagesWalk' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
@@ -1673,7 +1673,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
   async strandedWork(): Promise<StrandedWork> {
     const { target } = await this.claimQueueWorkspace('stranded');
-    const hired = v.parse(v.object({ name: v.string() }), await target.createSubordinateAgent());
+    const hired = v.parse(v.object({ name: v.string() }), await target.createSubagentAgent());
 
     return await target.strandedWork(hired.name);
   }
@@ -1681,14 +1681,14 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
   /** A hired agent's own turn, held at the model in its isolate: the workspace's work read asks the agent, whose wake is armed. */
   async agentHeldWork(): Promise<AgentHeldWork> {
     const { target, workspace } = await this.claimQueueWorkspace('agent-work');
-    const created = v.parse(v.object({ name: v.string(), subordinate: v.object({ actorId: v.string() }) }), await target.createSubordinateAgent());
+    const created = v.parse(v.object({ name: v.string(), subagent: v.object({ actorId: v.string() }) }), await target.createSubagentAgent());
 
     await awaitSettled(target);
     await fetch('http://probe-control.invalid/queue/hold', { method: 'POST', body: JSON.stringify({ from: 1 }) });
 
     // The edge names the addressed agent on its path's upgrade; the chat it sends lands in that agent's own isolate.
     const response = await target.fetch(new Request(`https://probe/agents/orchestrator-agent/${workspace}/${hostedActorSocketPath(created.name)}`, {
-      headers: { Upgrade: 'websocket', [HOSTED_ACTOR_ID_HEADER]: created.subordinate.actorId },
+      headers: { Upgrade: 'websocket', [HOSTED_ACTOR_ID_HEADER]: created.subagent.actorId },
     }));
 
     const socket = response.webSocket;
@@ -1769,12 +1769,12 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
   /** A hired agent answers with a `<slate-ui>` block (the queue model echoes the ask); the workspace resolves its id. */
   async agentSlateUi(): Promise<AgentSlateUi> {
     const { target, workspace } = await this.claimQueueWorkspace('agent-slate');
-    const created = v.parse(v.object({ name: v.string(), subordinate: v.object({ actorId: v.string() }) }), await target.createSubordinateAgent());
+    const created = v.parse(v.object({ name: v.string(), subagent: v.object({ actorId: v.string() }) }), await target.createSubagentAgent());
 
     await awaitSettled(target);
 
     const response = await target.fetch(new Request(`https://probe/agents/orchestrator-agent/${workspace}/${hostedActorSocketPath(created.name)}`, {
-      headers: { Upgrade: 'websocket', [HOSTED_ACTOR_ID_HEADER]: created.subordinate.actorId },
+      headers: { Upgrade: 'websocket', [HOSTED_ACTOR_ID_HEADER]: created.subagent.actorId },
     }));
 
     const socket = response.webSocket;
@@ -1794,7 +1794,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       socket.send(JSON.stringify({ type: 'rpc', id: 'agent-send', method: 'send', args: [AGENT_SLATE_ASK, 'agent-slate-1'] }));
       await awaitWithLimit(ended.promise, 20000, 'agent slate probe: the agent never finished its answer');
 
-      return await target.answerSlates(created.subordinate.actorId);
+      return await target.answerSlates(created.subagent.actorId);
     } finally {
       socket.close(1000, 'agent slate probe complete');
     }
@@ -2397,7 +2397,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
    */
   async hostedActorTab(): Promise<{ name: string; snapshot: string; jobs: string; frames: number }> {
     const { target, workspace } = await this.claimQueueWorkspace('twin');
-    const created = v.parse(v.object({ name: v.string() }), await target.createSubordinateAgent());
+    const created = v.parse(v.object({ name: v.string() }), await target.createSubagentAgent());
     const path = `https://probe/agents/orchestrator-agent/${workspace}/${hostedActorSocketPath(created.name)}`;
     const response = await target.fetch(new Request(path, { headers: { Upgrade: 'websocket' } }));
     const socket = response.webSocket;

@@ -12,9 +12,12 @@ import { boundedInt } from '../utils/bounds';
 import { initGalleryTables } from '../slates/gallery';
 import type { ControlPlaneSql, ControlPlaneSqlValue } from './sql';
 import {
-  FEEDBACK_MAX_NOTE_CHARS, FEEDBACK_MAX_ROUTE_CHARS,
+  type ControlFeedbackRow, FEEDBACK_KINDS, FEEDBACK_MAX_NOTE_CHARS, FEEDBACK_MAX_ROUTE_CHARS,
   type FeedbackRecord,
 } from '../feedback/contract';
+import { sqlCheckList } from '../utils/sql';
+import { sha256Hex } from '../safety/argument-digest';
+import { galleryPagePath } from '../slates/gallery-api';
 
 export type { ControlPlaneSql } from './sql';
 
@@ -48,6 +51,7 @@ const DDL = [
      ON cp_workspaces (last_seen_at DESC, user_id, name)`,
   `CREATE TABLE IF NOT EXISTS cp_feedback (
      id            TEXT PRIMARY KEY,
+     kind          TEXT    NOT NULL CHECK (kind IN (${sqlCheckList(FEEDBACK_KINDS)})),
      created_at    INTEGER NOT NULL,
      user_id       TEXT    NOT NULL,
      email         TEXT    NOT NULL,
@@ -304,6 +308,68 @@ export function forgetWorkspace(
     target.at ?? now, target.userId, target.name);
 }
 
+
+/** What forgetting an account deleted that the caller has more to do for: its feedback's screenshots. */
+export interface ForgottenUser {
+  readonly feedback: number;
+}
+
+/**
+ * A deleted account, as the index knew it: its user and workspace rows and its feedback are deleted. The operators'
+ * audit keeps its rows, each naming the account replaced by `pseudonym`: an actor that was it, a target under it
+ * (`<userId>/<workspace>/…`, each workspace one of the pseudonym's own), and in the detail its email and id, and the
+ * names of its workspaces in a row about it, each as a whole token, so no other account's text changes. Answers how
+ * many feedback rows went; their screenshots are the caller's to delete (R2, `feedback/<userId>/`).
+ */
+export function forgetUser(sql: ControlPlaneSql, person: { readonly userId: string; readonly email: string }, pseudonym: string): ForgottenUser {
+  const { userId, email } = person;
+  const feedback = select(sql, v.object({ n: v.number() }), 'SELECT COUNT(*) AS n FROM cp_feedback WHERE user_id = ?', userId)[0]?.n ?? 0;
+  const aliases = new Map<string, string>();
+
+  const alias = (workspace: string): string => {
+    const known = aliases.get(workspace) ?? `workspace-${String(aliases.size + 1)}`;
+
+    aliases.set(workspace, known);
+
+    return known;
+  };
+
+  for (const { name } of select(sql, v.object({ name: v.string() }), 'SELECT name FROM cp_workspaces WHERE user_id = ? ORDER BY name', userId)) alias(name);
+  const audit = select(sql, AuditNamesRow, 'SELECT id, actor_user, actor_email, target, detail FROM cp_audit');
+  const owned = `${userId}/`;
+  const theirs = (text: string): boolean => [email, userId].some((name) => name !== '' && tokenPattern(name).test(text));
+
+  for (const row of audit) {
+    const about = row.target.startsWith(owned);
+    const by = row.actor_user === userId || (email !== '' && row.actor_email.toLowerCase() === email);
+
+    if (!about && !by && !theirs(row.detail)) continue;
+    const [workspace = '', ...rest] = row.target.slice(owned.length).split('/');
+    const target = about ? [pseudonym, alias(workspace), ...rest].join('/') : row.target;
+    let detail = [email, userId].filter((name) => name !== '').reduce((text, name) => text.replace(tokenPattern(name), pseudonym), row.detail);
+
+    // A workspace's name alone names it only in a row about the account; longest first, so none cuts a longer one.
+    if (about || by) {
+      for (const [name, aliased] of [...aliases].sort(([a], [b]) => b.length - a.length)) detail = detail.replace(tokenPattern(name), aliased);
+    }
+
+    sql.exec('UPDATE cp_audit SET actor_user = ?, actor_email = ?, target = ?, detail = ? WHERE id = ?',
+      row.actor_user === userId ? pseudonym : row.actor_user, by && row.actor_email.toLowerCase() === email ? pseudonym : row.actor_email, target, detail, row.id);
+  }
+
+  sql.exec('DELETE FROM cp_feedback WHERE user_id = ?', userId);
+  sql.exec('DELETE FROM cp_workspaces WHERE user_id = ?', userId);
+  sql.exec('DELETE FROM cp_users WHERE user_id = ?', userId);
+
+  return { feedback };
+}
+
+const AuditNamesRow = v.object({ id: v.string(), actor_user: v.string(), actor_email: v.string(), target: v.string(), detail: v.string() });
+
+/** `name` as a whole token: not part of a longer email, id or workspace name on either side. */
+function tokenPattern(name: string): RegExp {
+  return new RegExp(`(?<![A-Za-z0-9._%+-])${name.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}(?![A-Za-z0-9._%+-])`, 'giu');
+}
 
 /** `userId`'s workspaces the index holds as removed, whose name no live workspace holds now. */
 export function removedWorkspaceNames(sql: ControlPlaneSql, userId: string): string[] {
@@ -579,10 +645,11 @@ function projectAudit(row: AuditSqlRow): ControlAuditRow {
   };
 }
 
-export type ControlFeedbackRow = FeedbackRecord;
+export type { ControlFeedbackRow };
 
 const FeedbackSqlRowSchema = v.object({
   id: v.string(),
+  kind: v.picklist(FEEDBACK_KINDS),
   created_at: v.number(),
   user_id: v.string(),
   email: v.string(),
@@ -599,8 +666,8 @@ export interface FeedbackWritten { id: string }
 /** Screenshot bytes live elsewhere; the row carries only their size. */
 export function recordFeedback(sql: ControlPlaneSql, row: FeedbackRecord): FeedbackWritten {
   sql.exec(`INSERT INTO cp_feedback
-       (id, created_at, user_id, email, note, route, workspace, bytes)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       (id, kind, created_at, user_id, email, note, route, workspace, bytes)
+     VALUES (?, 'feedback', ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO NOTHING`,
     row.id, row.createdAt, row.userId, row.email,
     clampText(row.note, FEEDBACK_MAX_NOTE_CHARS),
@@ -610,10 +677,35 @@ export function recordFeedback(sql: ControlPlaneSql, row: FeedbackRecord): Feedb
   return { id: row.id };
 }
 
+/** A person's report of a listed Gallery slate, filed against the slate's page: reporting it again replaces the
+ *  reason and its time, and it is kept past an unlist, for the operators. Its id is the person and the listing whole,
+ *  never the route, which is clamped for display, so two listings sharing a long prefix are two reports. No workspace
+ *  of theirs is attributed. */
+export function recordGalleryReport(
+  sql: ControlPlaneSql,
+  report: { readonly userId: string; readonly email: string; readonly workspace: string; readonly slate: string; readonly reason: string },
+  now: number,
+): void {
+  const id = `gallery-report:${sha256Hex(JSON.stringify([report.email, report.workspace, report.slate]))}`;
+
+  // A feedback row that took this id is left as it is: only a report is replaced.
+  sql.exec(`INSERT INTO cp_feedback
+       (id, kind, created_at, user_id, email, note, route, workspace, bytes)
+     VALUES (?, 'gallery_report', ?, ?, ?, ?, ?, NULL, NULL)
+     ON CONFLICT(id) DO UPDATE SET note = excluded.note, created_at = excluded.created_at WHERE kind = 'gallery_report'`,
+    id, now, report.userId, report.email,
+    clampText(report.reason, FEEDBACK_MAX_NOTE_CHARS), clampText(galleryPagePath(report.workspace, report.slate), FEEDBACK_MAX_ROUTE_CHARS));
+}
+
+/** A deleted account's Gallery reports; the feedback it filed stays, as it always has. */
+export function forgetGalleryReports(sql: ControlPlaneSql, email: string): void {
+  sql.exec(`DELETE FROM cp_feedback WHERE kind = 'gallery_report' AND email = ?`, email);
+}
+
 export function listFeedback(sql: ControlPlaneSql, request: PageRequest = {}): Page<ControlFeedbackRow> {
   return settleSync(seekNewest(sql, request, {
     schema: FeedbackSqlRowSchema,
-    columns: 'id, created_at, user_id, email, note, route, workspace, bytes',
+    columns: 'id, kind, created_at, user_id, email, note, route, workspace, bytes',
     from: 'cp_feedback',
     at: 'created_at',
     id: 'id',
@@ -625,6 +717,7 @@ export function listFeedback(sql: ControlPlaneSql, request: PageRequest = {}): P
 function projectFeedback(row: FeedbackSqlRow): ControlFeedbackRow {
   return {
     id: row.id,
+    kind: row.kind,
     createdAt: row.created_at,
     userId: row.user_id,
     email: row.email,

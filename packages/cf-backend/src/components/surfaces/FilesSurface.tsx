@@ -5,9 +5,9 @@ import {
   type KeyboardEvent as ReactKeyboardEvent, type ReactNode,
 } from "react";
 import { useParams } from "react-router-dom";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import {
-  ArrowsClockwiseIcon, ArrowUpIcon, CaretDownIcon, CaretRightIcon,
+  ArrowsClockwiseIcon, ArrowUpIcon, CaretDownIcon,
   DownloadSimpleIcon, EyeIcon, FileIcon, FolderIcon, FolderOpenIcon, HouseIcon, ListIcon,
   MagnifyingGlassIcon, PencilSimpleIcon, PlugIcon, SquaresFourIcon, TrashIcon, UploadSimpleIcon,
   WarningIcon, XIcon,
@@ -19,7 +19,7 @@ import {
 import { renderThrownChain, showing, settle, detach } from "@kinu.run/core/obs";
 import { executorLabel, type ExecutorInfo } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { TileMenu, type MenuItem } from "@/components/drive/DriveTiles";
+import { Menu, type MenuItem } from "@/components/ui/Menu";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { useMounts } from "@/hooks/use-mounts";
 import { useToggledSet } from "@/hooks/use-toggled-set";
@@ -33,6 +33,12 @@ import type { VfsRevision } from "@nimbus-sh/core/vfs/vfs.js";
 import { composing } from "@/components/ui/form";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { getFilesView, setFilesView } from "@/lib/user-api";
+import { Button } from "@/components/ui/Button";
+import { FilePicker } from "@/components/ui/FilePicker";
+import { EntriesHead, EntryButton, TreeRow, entryProps, type EntryState } from "@/components/ui/Entries";
+import { InlineAction } from "@/components/ui/InlineAction";
+import { DropHint } from "@/components/ui/FilePicker";
+import { TextInput } from "@/components/ui/Field";
 
 /** An upload over a file already there: replaced only on the owner's word. */
 function ReplacePrompt({ name, onReplace, onKeep }: { name: string; onReplace: () => void; onKeep: () => void }) {
@@ -42,10 +48,8 @@ function ReplacePrompt({ name, onReplace, onKeep }: { name: string; onReplace: (
       <span className="p-text-2 truncate">Replace <span className="p-text">{name}</span>?</span>
       <span className="p-text-3 hidden @[30rem]:inline truncate">A file with this name is already here.</span>
       <span className="ml-auto flex shrink-0 gap-1">
-        <button type="button" data-upload-keep onClick={onKeep}
-          className="rounded px-2 py-0.5 p-text-2 hover:p-text p-row-hover focus-visible:ring-1 focus-visible:ring-[var(--c-accent)] outline-hidden">Cancel</button>
-        <button type="button" data-upload-confirm onClick={onReplace} autoFocus
-          className="rounded px-2 py-0.5 p-accent hover:underline focus-visible:ring-1 focus-visible:ring-[var(--c-accent)] outline-hidden">Replace</button>
+        <Button variant="ghost" size="sm" data-upload-keep onClick={onKeep}>Cancel</Button>
+        <Button variant="ghost" size="sm" data-upload-confirm onClick={onReplace} autoFocus>Replace</Button>
       </span>
     </div>
   );
@@ -57,10 +61,10 @@ const MOUNT_EXECUTOR: Record<string, string> = Object.fromEntries(
 
 /** The list's columns at every width: icon, name, then size and age, one cell below 26rem and a column each from it. A
  *  touch screen keeps a gutter for the row's menu, which a pointer finds on hover over the age. */
-const COLUMNS = "grid-cols-[1rem_minmax(0,1fr)_auto] @[26rem]:grid-cols-[1rem_minmax(0,1fr)_4.5rem_4rem] items-center gap-x-2.5 px-3 pointer-coarse:pr-11";
+const COLUMNS = "grid-cols-[var(--layout-files-row)] @[26rem]:grid-cols-[var(--layout-files-row-wide)] items-center gap-x-3 px-3 pointer-coarse:pr-12";
 
 /** Tiles fill the column's width, as many as fit at their least. */
-const TILE_GRID = "grid grid-cols-[repeat(auto-fill,minmax(6.5rem,1fr))] gap-1 px-2 py-1.5";
+const TILE_GRID = "grid grid-cols-[var(--layout-files-tiles)] gap-1 px-2 py-1";
 
 /** What the menu covers under a pointer while it shows. */
 const UNDER_MENU = "pointer-fine:group-hover:invisible pointer-fine:group-has-[[data-drive-menu]:focus-visible]:invisible pointer-fine:group-has-[[aria-expanded=true]]:invisible";
@@ -185,10 +189,9 @@ function useFilesView(): readonly [FilesView, (view: FilesView) => void] {
 /** How the folder is drawn, and whether its hidden items are among the rest: the account's, wherever it opens Files. */
 function ViewMenu({ view, onChange }: { view: FilesView; onChange: (view: FilesView) => void }) {
   return (
-    <TileMenu name="View" className="relative" trigger={{
+    <Menu name="View" trigger={{
       label: "View options",
-      icon: view.layout === "tiles" ? <SquaresFourIcon size={12} /> : <ListIcon size={12} />,
-      className: "p-1 rounded-sm hover:bg-[var(--c-elevated)]",
+      icon: view.layout === "tiles" ? <SquaresFourIcon size={14} /> : <ListIcon size={14} />,
     }} items={[
       { label: "List", icon: <ListIcon size={16} />, radio: true, checked: view.layout === "list", marker: "data-files-view-list", onSelect: () => onChange({ ...view, layout: "list" }) },
       { label: "Tiles", icon: <SquaresFourIcon size={16} />, radio: true, checked: view.layout === "tiles", marker: "data-files-view-tiles", onSelect: () => onChange({ ...view, layout: "tiles" }) },
@@ -276,9 +279,9 @@ function MoreRow({ next, more }: { next: number | undefined; more: () => Promise
   if (next === undefined) return null;
 
   return (
-    <button type="button" data-files-more onClick={() => detach(Effect.promise(more))}
-      className={`grid ${COLUMNS} ${ROW_HEIGHT} w-full text-left p-text-3 hover:p-text p-row-hover`}
-    ><CaretDownIcon size={16} /><span className="p-row-text">Load more</span></button>
+    <EntryButton data-files-more onClick={() => detach(Effect.promise(more))} className={`grid ${COLUMNS} ${ROW_HEIGHT}`}>
+      <CaretDownIcon size={16} /><span className="t-body">Load more</span>
+    </EntryButton>
   );
 }
 
@@ -487,63 +490,43 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
 
       <div className="flex-1 min-w-0 flex flex-col relative">
         {/* Only the crumbs scroll: a scrolling row would clip the view menu that opens under it. */}
-        <div className="px-3 py-2 border-b p-border flex items-center gap-1 text-xs font-mono shrink-0">
+        <div className="t-meta t-mono px-3 py-2 border-b p-border flex items-center gap-1 shrink-0">
           <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
-            <button data-files-crumb onClick={() => setPath("/")}
-              className="p-text-3 hover:p-text shrink-0" title="Workspace root">/</button>
+            <InlineAction data-files-crumb onClick={() => setPath("/")} className="shrink-0 p-text-3" title="Workspace root">/</InlineAction>
             {segments.map((seg, i) => (
               <span key={i} className="flex items-center gap-1 min-w-0">
-                <button
-                  data-files-crumb
-                  onClick={() => setPath(`/${segments.slice(0, i + 1).join("/")}`)}
-                  className={`truncate ${i === segments.length - 1 ? "p-text" : "p-text-3 hover:p-text"}`}
-                >{seg}</button>
+                <InlineAction data-files-crumb onClick={() => setPath(`/${segments.slice(0, i + 1).join("/")}`)}
+                  className={`truncate ${i === segments.length - 1 ? "p-text" : "p-text-3"}`}>{seg}</InlineAction>
                 {i < segments.length - 1 && <span className="p-text-3 shrink-0">/</span>}
               </span>
             ))}
           </div>
-          <input ref={uploadInputRef} type="file" multiple className="hidden"
-            onChange={(e) => detach(Effect.promise(async () => {
+          <FilePicker ref={uploadInputRef} multiple onChange={(e) => detach(Effect.promise(async () => {
               const picked = [...(e.currentTarget.files ?? [])];
               e.currentTarget.value = "";
 
               return run(Effect.promise(() => uploadFiles(picked)));
             }))} />
-          <div className="ml-auto flex items-center gap-0.5 shrink-0">
-            <button onClick={() => setPath(parentDir(path))} disabled={atRoot}
-              className="p-text-3 hover:p-text p-1 disabled:opacity-30 disabled:hover:p-text-3"
-              title="Parent directory" aria-label="Parent directory"><ArrowUpIcon size={12} /></button>
-            <button onClick={() => setPath("/")} disabled={atRoot}
-              className="p-text-3 hover:p-text p-1 disabled:opacity-30 disabled:hover:p-text-3"
-              title="Workspace root" aria-label="Workspace root"><HouseIcon size={12} /></button>
-            <button onClick={() => uploadInputRef.current?.click()}
-              className="flex items-center gap-1 p-text-3 hover:p-text p-1"
-              title={`Upload files to ${path}`}><UploadSimpleIcon size={11} />Upload</button>
+          <div className="ml-auto flex items-center gap-px shrink-0">
+            <Button variant="ghost" size="sm" icon={<ArrowUpIcon size={14} />} onClick={() => setPath(parentDir(path))} disabled={atRoot} title="Parent directory" aria-label="Parent directory" />
+            <Button variant="ghost" size="sm" icon={<HouseIcon size={14} />} onClick={() => setPath("/")} disabled={atRoot} title="Workspace root" aria-label="Workspace root" />
+            <Button variant="ghost" size="sm" icon={<UploadSimpleIcon size={14} />} onClick={() => uploadInputRef.current?.click()} title={`Upload files to ${path}`}>Upload</Button>
             <ViewMenu view={view} onChange={chooseView} />
             {/* Drops every cached listing: a plane without mtime gives `nextTreeCache` nothing to compare. */}
-            <button onClick={() => detach(Effect.promise(() => run(Effect.sync(() => {
+            <Button variant="ghost" size="sm" icon={<ArrowsClockwiseIcon size={14} />} onClick={() => detach(Effect.promise(() => run(Effect.sync(() => {
               setTreeCache(new Map());
               reloadListing();
               reloadMounts();
-            }))))}
-              className="p-text-3 hover:p-text p-1"
-              title="Refresh" aria-label="Refresh"><ArrowsClockwiseIcon size={11} /></button>
+            }))))} title="Refresh" aria-label="Refresh" />
           </div>
         </div>
 
-        <div className="px-3 py-1.5 border-b p-border flex items-center gap-1.5 shrink-0">
+        <div className="px-3 py-1 border-b p-border flex items-center gap-2 shrink-0">
           <MagnifyingGlassIcon size={12} className="p-text-3 shrink-0" />
-          <input
-            data-files-filter
-            value={filter}
-            onChange={(e) => { setFilter(e.currentTarget.value); setSelected(0); }}
-            placeholder="Filter this folder…"
-            className="flex-1 bg-transparent text-xs p-text outline-hidden placeholder:p-text-4"
-          />
+          <TextInput bare data-files-filter className="t-meta flex-1" value={filter}
+            onChange={(e) => { setFilter(e.currentTarget.value); setSelected(0); }} placeholder="Filter this folder…" />
           {filter && (
-            <button onClick={() => setFilter("")} className="p-text-3 hover:p-text" aria-label="Clear filter">
-              <XIcon size={12} />
-            </button>
+            <Button variant="ghost" size="sm" icon={<XIcon size={14} />} onClick={() => setFilter("")} aria-label="Clear filter" />
           )}
         </div>
 
@@ -551,12 +534,10 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
           <LoadFailure what="the environments" message={mountsResource.message} onRetry={reloadMounts} className="px-3 py-2" />
         )}
         {notice && (
-          <div data-files-notice className="px-3 py-1.5 text-xs p-danger border-b p-border flex items-start gap-1.5">
+          <div data-files-notice className="t-meta px-3 py-1 p-danger border-b p-border flex items-start gap-2">
             <WarningIcon size={13} className="shrink-0 mt-px" />
             <span className="break-words min-w-0">{notice}</span>
-            <button onClick={() => setNotice(null)} className="ml-auto p-text-3 hover:p-text shrink-0" aria-label="Dismiss">
-              <XIcon size={12} />
-            </button>
+            <Button variant="ghost" size="sm" icon={<XIcon size={14} />} className="ml-auto shrink-0" onClick={() => setNotice(null)} aria-label="Dismiss" />
           </div>
         )}
 
@@ -567,32 +548,31 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
             data-files-list
             tabIndex={0}
             onKeyDown={onKeyDown}
-            className={`group/list flex-1 min-w-0 overflow-y-auto pb-1 text-xs outline-hidden focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--c-accent)] ${dragOver ? "outline-dashed outline-2 -outline-offset-2 outline-[var(--c-accent)]" : ""}`}
+            className="t-meta group/list relative flex-1 min-w-0 overflow-y-auto pb-1"
             {...listDrop}
           >
+            {dragOver && <DropHint><UploadSimpleIcon size={16} weight="bold" /> Drop to upload to {path}</DropHint>}
             {columns}
-            {err && <div className="p-danger px-3 py-1.5 break-words">{err}</div>}
+            {err && <div className="p-danger px-3 py-1 break-words">{err}</div>}
             {uploads.map((u) => {
               // Named by its folder too once the owner has browsed away from it.
               const name = parentDir(u.target) === path ? u.target.slice(u.target.lastIndexOf("/") + 1) : u.target;
 
               return (
-                <div key={u.target} className={`flex items-center gap-2.5 px-3 ${ROW_HEIGHT} p-row-text`} data-upload={u.status} data-upload-target={u.target}>
-                  {u.status === "uploading" && <><Loader size="sm" /><span className="p-text-2 truncate">{name}</span><span className="ml-auto p-meta p-text-3 shrink-0">uploading…</span></>}
-                  {u.status === "error" && <><WarningIcon size={16} className="p-danger shrink-0" /><span className="p-text-2 truncate">{name}</span><span className="p-meta p-danger truncate">{u.error}</span></>}
+                <div key={u.target} className={`flex items-center gap-3 px-3  ${ROW_HEIGHT} t-body`} data-upload={u.status} data-upload-target={u.target}>
+                  {u.status === "uploading" && <><Loader size="sm" /><span className="p-text-2 truncate">{name}</span><span className="t-meta ml-auto p-text-3 shrink-0">uploading…</span></>}
+                  {u.status === "error" && <><WarningIcon size={16} className="p-danger shrink-0" /><span className="p-text-2 truncate">{name}</span><span className="t-meta p-danger truncate">{u.error}</span></>}
                   {u.status === "exists" && (
                     <ReplacePrompt name={name} onReplace={() => detach(Effect.promise(() => replaceUpload(u)))} onKeep={() => keepExisting(u.target)} />
                   )}
                 </div>
               );
             })}
-            {loading && <div className="p-text-3 px-3 py-1.5">Loading…</div>}
+            {loading && <div className="p-text-3 px-3 py-1">Loading…</div>}
             {!loading && !atRoot && (
-              <button
-                data-files-up-row
-                onClick={() => setPath(parentDir(path))}
-                className={`grid ${COLUMNS} ${ROW_HEIGHT} w-full text-left p-text-3 hover:p-text p-row-hover`}
-              ><ArrowUpIcon size={16} /><span className="p-row-text">..</span></button>
+              <EntryButton data-files-up-row onClick={() => setPath(parentDir(path))} className={`grid ${COLUMNS} ${ROW_HEIGHT}`}>
+                <ArrowUpIcon size={16} /><span className="t-body">..</span>
+              </EntryButton>
             )}
             {!loading && (
               <div data-files-layout={view.layout} className={grid}>
@@ -626,15 +606,15 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
             )}
             {!loading && <MoreRow next={folder.next} more={() => run(Effect.promise(folder.more))} />}
             {!loading && filtered.length === 0 && offline.length === 0 && entries.length > 0 && (
-              <div className="p-text-3 italic px-3 py-1.5">Nothing here matches "{filter}".</div>
+              <div className="p-text-3 italic px-3 py-1">Nothing here matches "{filter}".</div>
             )}
             {!loading && entries.length === 0 && offline.length === 0 && !err && (
-              <div className="p-text-3 italic px-3 py-1.5">This folder is empty. Drop files here to upload.</div>
+              <div className="p-text-3 italic px-3 py-1">This folder is empty. Drop files here to upload.</div>
             )}
             {!loading && filtered.length > 0 && (
-              <div className="px-3 pt-1.5 pb-1 p-text-3 p-meta border-t p-border mt-1">
+              <div className="t-meta px-3 pt-1 pb-1 p-text-3 border-t p-border mt-1">
                 {filter ? `${String(filtered.length)} of ${String(entries.length)} match` : folderCount(dirCount, filtered.length - dirCount, folder.next !== undefined)}
-                <span className="ml-2 hidden @[44rem]:inline p-text-4">{LAYOUTS[view.layout].moves} move · Enter open · Backspace up · F2 rename · Del delete</span>
+                <span className="ml-2 hidden @[44rem]:inline p-text-3">{LAYOUTS[view.layout].moves} move · Enter open · Backspace up · F2 rename · Del delete</span>
               </div>
             )}
           </div>
@@ -679,33 +659,16 @@ function TreeNode({ dir, label, hidden = false, depth, path, previewPath, expand
 
   return (
     <div>
-      <div
-        data-files-tree-node={dir}
-        className={`flex items-center gap-1 pr-2 py-0.5 text-xs cursor-pointer p-row-hover ${active ? "p-fill p-text font-medium" : "p-text-2"} ${hidden ? HIDDEN_FACE : ""}`}
-        style={{ paddingLeft: `${8 + depth * 12}px` }}
-        onClick={() => onNavigate(dir)}
-      >
-        <button
-          onClick={(e) => detach(Effect.promise(async () => {
-            e.stopPropagation();
-
-            return onToggle(dir);
-          }))}
-          className="p-text-3 hover:p-text shrink-0"
-          aria-label={isOpen ? `Collapse ${label}` : `Expand ${label}`}
-        >
-          {isOpen ? <CaretDownIcon size={10} /> : <CaretRightIcon size={10} />}
-        </button>
-        {isOpen ? <FolderOpenIcon data-entry-face size={13} className="p-info shrink-0" weight="fill" />
-          : <FolderIcon data-entry-face size={13} className="p-info shrink-0" weight="fill" />}
+      <TreeRow depth={depth} open={active} hidden={hidden} data-files-tree-node={dir} onOpen={() => onNavigate(dir)}
+        fold={{ open: isOpen, label: isOpen ? `Collapse ${label}` : `Expand ${label}` }} onFold={() => detach(Effect.promise(() => onToggle(dir)))}>
+        {isOpen ? <FolderOpenIcon data-entry-face size={14} className="p-info shrink-0" weight="fill" />
+          : <FolderIcon data-entry-face size={14} className="p-info shrink-0" weight="fill" />}
         <span data-entry-face className="truncate">{label}</span>
         {depth === 1 && badgeFor(label) && (
-          <span data-mount-badge className="truncate p-meta p-text-3">{badgeFor(label)}</span>
+          <span data-mount-badge className="t-meta truncate p-text-3">{badgeFor(label)}</span>
         )}
-      </div>
-      {isOpen && children === undefined && (
-        <div className="p-text-4 p-meta" style={{ paddingLeft: `${28 + depth * 12}px` }}>loading…</div>
-      )}
+      </TreeRow>
+      {isOpen && children === undefined && <TreeRow depth={depth + 1} inert>loading…</TreeRow>}
       {isOpen && children?.map((row) => {
         if (!("entry" in row)) return <OfflineTreeRow key={`offline-${row.name}`} row={row} depth={depth + 1} />;
         const child = row.entry;
@@ -719,18 +682,11 @@ function TreeNode({ dir, label, hidden = false, depth, path, previewPath, expand
             onNavigate={onNavigate} onOpenFile={onOpenFile} onToggle={onToggle}
           />
         ) : (
-          <div
-            key={child.name}
-            data-files-tree-file={full}
-            title={child.name}
-            className={`flex items-center gap-1 pr-2 py-0.5 text-xs cursor-pointer p-row-hover ${
-              previewPath === full ? "p-fill p-text font-medium" : "p-text-2"} ${child.hidden === true ? HIDDEN_FACE : ""}`}
-            style={{ paddingLeft: `${20 + (depth + 1) * 12}px` }}
-            onClick={() => onOpenFile(full)}
-          >
-            <FileIcon data-entry-face size={12} className="p-text-3 shrink-0" />
+          <TreeRow key={child.name} depth={depth + 1} open={previewPath === full} hidden={child.hidden === true} title={child.name}
+            data-files-tree-file={full} onOpen={() => onOpenFile(full)}>
+            <FileIcon data-entry-face size={14} className="p-text-3 shrink-0" />
             <span data-entry-face className="truncate">{child.name}</span>
-          </div>
+          </TreeRow>
         );
       })}
     </div>
@@ -740,20 +696,16 @@ function TreeNode({ dir, label, hidden = false, depth, path, previewPath, expand
 /** The tree's row for a machine that is not there: as the list says it, with no way in until it connects. */
 function OfflineTreeRow({ row, depth }: { row: OfflineRow; depth: number }) {
   return (
-    <div data-files-tree-offline={row.name} title={`${row.label ?? row.name}: ${row.reason}`}
-      className="group flex items-center gap-1 pr-2 py-0.5 text-xs p-text-4"
-      style={{ paddingLeft: `${22 + depth * 12}px` }}>
-      {/* Where a folder's icon stands beside its caret. */}
-      <PlugIcon size={13} className="shrink-0" />
+    <TreeRow depth={depth} inert className="group" data-files-tree-offline={row.name} title={`${row.label ?? row.name}: ${row.reason}`}>
+      <PlugIcon size={14} className="shrink-0" />
       <span className="truncate">{row.name}</span>
-      <span className="ml-1 truncate p-meta">offline</span>
+      <span className="t-meta ml-1 truncate">offline</span>
       {row.onConnect && (
-        <button type="button" data-files-tree-connect onClick={row.onConnect}
-          className="ml-auto shrink-0 p-meta font-medium p-accent hover:underline opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100">
+        <Button variant="ghost" size="sm" className="ml-auto shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100" data-files-tree-connect onClick={row.onConnect}>
           Connect
-        </button>
+        </Button>
       )}
-    </div>
+    </TreeRow>
   );
 }
 
@@ -761,17 +713,16 @@ function OfflineTreeRow({ row, depth }: { row: OfflineRow; depth: number }) {
 function OfflineMountRow({ row }: { row: OfflineRow }) {
   return (
     <div data-files-offline-mount title={row.reason} className={`grid ${COLUMNS} ${ROW_HEIGHT}`}>
-      <PlugIcon size={16} className="p-text-4" />
+      <PlugIcon size={16} className="p-text-3" />
       <span className="flex min-w-0 items-baseline gap-2">
-        <span className="truncate p-row-text p-text-3">{row.name}</span>
-        <span data-mount-badge className="truncate p-meta p-text-4">
+        <span className="t-body truncate p-text-3">{row.name}</span>
+        <span data-mount-badge className="t-meta truncate p-text-3">
           {row.label === null ? "offline" : `${row.label} · offline`}
         </span>
       </span>
       <span className="text-right @[26rem]:col-span-2">
         {row.onConnect && (
-          <button type="button" data-files-connect onClick={row.onConnect}
-            className="p-meta font-medium p-accent hover:underline">Connect</button>
+          <Button variant="ghost" size="sm" data-files-connect onClick={row.onConnect}>Connect</Button>
         )}
       </span>
     </div>
@@ -819,14 +770,9 @@ function entryMenu({ entry, downloadHref, onRenameDraft, onAskDelete }: EntryPro
   ];
 }
 
-/** A hidden item's face, dimmed wherever it is drawn: the list, its tiles, the tree. */
-const HIDDEN_FACE = "[&_[data-entry-face]]:opacity-55";
-
 /** The cursor shows only while the keys drive it; what is open in the viewer stays marked. A hidden item is dimmed. */
-function entryTone({ entry, previewing, selected }: EntryProps): string {
-  const marked = previewing ? "p-fill p-text" : `p-text ${selected ? "group-focus-visible/list:p-fill" : ""}`;
-
-  return entry.hidden === true ? `${marked} ${HIDDEN_FACE}` : marked;
+function entryState({ entry, previewing, selected }: EntryProps): EntryState {
+  return { open: previewing, cursor: selected, hidden: entry.hidden === true };
 }
 
 function EntryIcon({ entry, size }: { entry: DirEntry; size: number }) {
@@ -843,7 +789,7 @@ function RenameField({ draft, onRenameDraft, onRenameCommit, onRenameCancel, cla
   className: string;
 }) {
   return (
-    <input
+    <TextInput size="sm"
       data-files-rename-input
       autoFocus
       value={draft}
@@ -859,7 +805,7 @@ function RenameField({ draft, onRenameDraft, onRenameCommit, onRenameCancel, cla
         if (e.key === "Escape") onRenameCancel();
       }))}
       onBlur={onRenameCancel}
-      className={`min-w-0 bg-transparent border p-border rounded-xs px-1.5 py-0 p-row-text p-text ${className}`}
+      className={`min-w-0 ${className}`}
     />
   );
 }
@@ -871,10 +817,9 @@ function DeleteChoice({ name, onDelete, onCancelDelete, className }: {
   className: string;
 }) {
   return (
-    <span className={`flex items-center gap-2.5 p-meta ${className}`} onClick={(e) => e.stopPropagation()}>
-      <button data-files-delete-confirm onClick={() => detach(Effect.promise(onDelete))}
-        className="font-medium p-danger hover:underline" aria-label={`Delete ${name}`}>Delete</button>
-      <button onClick={onCancelDelete} className="p-text-3 hover:p-text" aria-label="Keep it">Keep</button>
+    <span className={`t-meta flex items-center gap-3 ${className}`} onClick={(e) => e.stopPropagation()}>
+      <Button variant="danger" size="sm" data-files-delete-confirm onClick={() => detach(Effect.promise(onDelete))} aria-label={`Delete ${name}`}>Delete</Button>
+      <Button variant="ghost" size="sm" onClick={onCancelDelete} aria-label="Keep it">Keep</Button>
     </span>
   );
 }
@@ -885,14 +830,14 @@ function EntryMenu({ props, className }: { props: EntryProps; className: string 
     <span className={`opacity-0 group-hover:opacity-100 focus-within:opacity-100 has-[[aria-expanded=true]]:opacity-100 pointer-coarse:opacity-100 ${className}`}
       onClick={(e) => e.stopPropagation()}>
       <span className="relative block size-7">
-        <TileMenu name={props.entry.name} items={entryMenu(props)} className="absolute inset-0" />
+        <Menu name={props.entry.name} items={entryMenu(props)} className="absolute inset-0" />
       </span>
     </span>
   );
 }
 
 function EntryRow(props: EntryProps) {
-  const { entry, badge, previewing, renaming, confirming, onSelect, onOpen } = props;
+  const { entry, badge, renaming, confirming, onSelect, onOpen } = props;
   const { size, age, changed } = entryFacts(entry);
 
   return (
@@ -900,36 +845,36 @@ function EntryRow(props: EntryProps) {
       data-files-entry
       aria-selected={props.selected || undefined}
       title={entry.name}
-      className={`group relative grid ${COLUMNS} ${ROW_HEIGHT} cursor-pointer p-row-hover ${entryTone(props)}`}
+      {...entryProps(entryState(props), `group relative grid ${COLUMNS} ${ROW_HEIGHT}`)}
       onClick={() => { onSelect(); onOpen(); }}
     >
       <EntryIcon entry={entry} size={16} />
       <span data-entry-face className="flex min-w-0 items-baseline gap-2">
         {renaming !== null
           ? <RenameField draft={renaming} {...props} className="w-full" />
-          : <span className={`truncate p-row-text ${previewing ? "font-medium" : ""}`}>{entry.name}</span>}
-        {badge && <span data-mount-badge className="truncate p-meta p-text-3">{badge}</span>}
+          : <span className="t-body truncate">{entry.name}</span>}
+        {badge && <span data-mount-badge className="t-meta truncate p-text-3">{badge}</span>}
       </span>
       {confirming ? (
         <DeleteChoice name={entry.name} {...props} className="justify-end @[26rem]:col-span-2" />
       ) : (
         <>
-          <span className="hidden truncate text-right p-meta p-text-3 @[26rem]:block">{size}</span>
-          <span className={`hidden text-right p-meta p-text-3 @[26rem]:block ${UNDER_MENU}`} title={changed}>{age}</span>
-          <span className={`whitespace-nowrap text-right p-meta p-text-3 @[26rem]:hidden ${UNDER_MENU}`} title={changed}>
+          <span className="t-meta hidden truncate text-right p-text-3 @[26rem]:block">{size}</span>
+          <span className={`t-meta hidden text-right p-text-3 @[26rem]:block ${UNDER_MENU}`} title={changed}>{age}</span>
+          <span className={`t-meta whitespace-nowrap text-right p-text-3 @[26rem]:hidden ${UNDER_MENU}`} title={changed}>
             {[size, age].filter((part) => part !== null).join(" · ")}
           </span>
         </>
       )}
       {/* No transform on the way: the menu is a fixed sheet on a phone. */}
-      <EntryMenu props={props} className="absolute inset-y-0 right-1.5 flex items-center" />
+      <EntryMenu props={props} className="absolute inset-y-0 right-2 flex items-center" />
     </div>
   );
 }
 
 /** An entry as a tile: its icon large, its name on up to two lines, and what it holds under them. */
 function EntryTile(props: EntryProps) {
-  const { entry, badge, previewing, renaming, confirming, onSelect, onOpen } = props;
+  const { entry, badge, renaming, confirming, onSelect, onOpen } = props;
   const { size, age, changed } = entryFacts(entry);
 
   return (
@@ -937,17 +882,17 @@ function EntryTile(props: EntryProps) {
       data-files-entry
       aria-selected={props.selected || undefined}
       title={entry.name}
-      className={`group relative flex min-w-0 cursor-pointer flex-col items-center gap-1 rounded-lg px-2 pb-2 pt-3 p-row-hover ${entryTone(props)}`}
+      {...entryProps({ ...entryState(props), tile: true }, "group relative flex min-w-0 flex-col items-center gap-1 px-2 pb-2 pt-3")}
       onClick={() => { onSelect(); onOpen(); }}
     >
       <EntryIcon entry={entry} size={32} />
       {renaming !== null
         ? <RenameField draft={renaming} {...props} className="w-full text-center" />
-        : <span data-entry-face className={`line-clamp-2 w-full break-words text-center p-row-text ${previewing ? "font-medium" : ""}`}>{entry.name}</span>}
-      {badge && <span data-mount-badge className="max-w-full truncate p-meta p-text-3">{badge}</span>}
+        : <span data-entry-face className="t-body line-clamp-2 w-full break-words text-center">{entry.name}</span>}
+      {badge && <span data-mount-badge className="t-meta max-w-full truncate p-text-3">{badge}</span>}
       {confirming
         ? <DeleteChoice name={entry.name} {...props} className="justify-center" />
-        : <span className="max-w-full truncate p-meta p-text-3" title={changed}>{[size, age].filter((part) => part !== null).join(" · ")}</span>}
+        : <span className="t-meta max-w-full truncate p-text-3" title={changed}>{[size, age].filter((part) => part !== null).join(" · ")}</span>}
       <EntryMenu props={props} className="absolute right-1 top-1" />
     </div>
   );
@@ -956,14 +901,14 @@ function EntryTile(props: EntryProps) {
 /** A machine that is not there, as a tile where its folder's would be: its name, that it is away, and the way to bring it. */
 function OfflineMountTile({ row }: { row: OfflineRow }) {
   return (
-    <div data-files-offline-mount title={row.reason} className="flex min-w-0 flex-col items-center gap-1 rounded-lg px-2 pb-2 pt-3">
-      <PlugIcon size={32} className="p-text-4" />
-      <span className="max-w-full truncate p-row-text p-text-3">{row.name}</span>
-      {row.label !== null && <span data-mount-badge className="max-w-full truncate p-meta p-text-4">{row.label}</span>}
-      <span className="flex items-baseline gap-1.5 p-meta">
-        <span className="p-text-4">offline</span>
+    <div data-files-offline-mount title={row.reason} {...entryProps({ tile: true, inert: true }, "flex min-w-0 flex-col items-center gap-1 px-2 pb-2 pt-3")}>
+      <PlugIcon size={32} className="p-text-3" />
+      <span className="t-body max-w-full truncate p-text-3">{row.name}</span>
+      {row.label !== null && <span data-mount-badge className="t-meta max-w-full truncate p-text-3">{row.label}</span>}
+      <span className="t-meta flex items-baseline gap-2">
+        <span className="p-text-3">offline</span>
         {row.onConnect && (
-          <button type="button" data-files-connect onClick={row.onConnect} className="font-medium p-accent hover:underline">Connect</button>
+          <Button variant="ghost" size="sm" data-files-connect onClick={row.onConnect}>Connect</Button>
         )}
       </span>
     </div>
@@ -972,9 +917,9 @@ function OfflineMountTile({ row }: { row: OfflineRow }) {
 
 /** The list's column heads, from 26rem where it has columns. */
 const COLUMN_HEADS = (
-  <div aria-hidden="true" className={`sticky top-0 z-[1] hidden @[26rem]:grid ${COLUMNS} h-7 border-b p-border p-sidebar p-meta p-text-3`}>
+  <EntriesHead className={`hidden @[26rem]:grid ${COLUMNS} t-meta h-7`}>
     <span /><span>Name</span><span className="text-right">Size</span><span className="text-right">Modified</span>
-  </div>
+  </EntriesHead>
 );
 
 /** What a way of drawing a folder draws it with: a list's rows sit in the list itself, tiles in their grid. */

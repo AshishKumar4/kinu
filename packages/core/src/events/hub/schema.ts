@@ -4,7 +4,7 @@
  */
 
 import type { SqlExec } from '../../types/primitives';
-import { initEvolutionHelperTable } from '../../identity/evolution-helpers';
+import { initEvolutionSubagentTable } from '../../identity/evolution-subagents';
 
 const AGENT_LOG_DDL = `
 CREATE TABLE IF NOT EXISTS agent_log (
@@ -126,5 +126,5 @@ export function initEventsHubTables(sql: SqlExec): void {
   sql.exec(TRIGGERS_DDL);
 
   for (const ix of TRIGGERS_INDEXES) sql.exec(ix);
-  initEvolutionHelperTable(sql);
+  initEvolutionSubagentTable(sql);
 }

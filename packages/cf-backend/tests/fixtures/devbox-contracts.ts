@@ -273,7 +273,7 @@ export class ContractBox extends Devbox<Env> {
     if (stop !== undefined) this.#programs.set(stop, program);
 
     try {
-      const ran = await withCodemodeProgram(async () => ({ result: await tool.execute(...args) }), program.signal);
+      const ran = await withCodemodeProgram(async () => ({ result: await tool.execute(...args) }), { call: 'call-test', signal: program.signal });
 
       return projectJsonValue({ value: ran.result });
     } finally {

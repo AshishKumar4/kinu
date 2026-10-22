@@ -24,7 +24,9 @@ export const McpServerSummarySchema = v.object({
   status: v.picklist(MCP_CONNECTION_STATUSES),
   error: v.nullable(v.string()),
   toolsCount: v.number(),
-  authUrl: v.nullable(v.string()),
+  /** It signs in with OAuth and is not connected: a sign-in is begun for a run of the page's own
+   *  (`POST /api/user/mcp/servers/:id/connect`), which mints its address. */
+  signIn: v.boolean(),
   allowedTools: v.nullable(v.array(v.string())),
   presetId: v.nullable(v.string()),
 });

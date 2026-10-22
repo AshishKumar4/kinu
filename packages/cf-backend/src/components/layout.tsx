@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { Link, Outlet, useLocation, useMatch } from "react-router-dom";
-import { GithubLogoIcon, ListIcon } from "@phosphor-icons/react";
+import { ListIcon } from "@phosphor-icons/react";
 import Sidebar from "./Sidebar";
 import { SidebarRail } from "./SidebarRail";
 import { FeedbackButton } from "./FeedbackButton";
@@ -12,6 +12,8 @@ import { OwnerAlerts } from "@/hooks/use-owner-alerts";
 import { AgentsNavProvider, useAgentsNav } from "@/hooks/use-agents-nav";
 import { DESKTOP_QUERY } from "@/hooks/use-media-query";
 import { AppBackground } from "./AppBackground";
+import { Button } from "@/components/ui/Button";
+import { Surface } from "@/components/ui/Surface";
 
 /** The root isolates its stacking so the negative-z canvas paints above its ground and under in-flow children. */
 
@@ -68,39 +70,29 @@ function Shell() {
   return (
     <WorkspaceRosterProvider>
     <OwnerAlerts />
-    <div className="isolate flex h-screen w-screen flex-col p-bg p-text overflow-hidden md:flex-row">
+    <Surface look="page" className="isolate flex h-screen w-screen flex-col p-text overflow-hidden md:flex-row">
       <AppBackground />
-      <header className={`h-14 shrink-0 items-center justify-between border-b p-border p-sidebar px-3 md:hidden ${ownBar ? "hidden" : "flex"}`}>
+      <Surface look="chrome" as="header" className={`h-14 shrink-0 items-center justify-between border-b p-border px-3 md:hidden ${ownBar ? "hidden" : "flex"}`}>
         <div className="flex items-center gap-1">
-          <button
-            type="button"
-            aria-label="Open menu"
-            onClick={() => setDrawerOpen(true)}
-            className="flex size-9 items-center justify-center rounded-md p-text-2 p-card-hover hover:p-text"
-          >
-            <ListIcon size={18} />
-          </button>
-          <Link to="/" aria-label="Kinu home" className="flex items-center rounded-md px-2 py-1.5">
+          <Button variant="ghost" size="sm" icon={<ListIcon size={14} />} aria-label="Open menu" onClick={() => setDrawerOpen(true)} />
+          <Link to="/" aria-label="Kinu home" className="flex items-center px-2 py-1">
             <KinuLogo compact />
           </Link>
         </div>
         <div className="flex items-center gap-1">
           <FeedbackButton compact />
-          <a href="https://github.com/AshishKumar4/kinu" target="_blank" rel="noopener noreferrer" aria-label="GitHub repository" className="flex size-9 items-center justify-center rounded-md p-text-2 p-card-hover hover:p-text">
-            <GithubLogoIcon size={17} />
-          </a>
-          <NewWorkspaceIconButton className="size-9 rounded-full" />
+          <NewWorkspaceIconButton className="size-9" />
         </div>
-      </header>
+      </Surface>
 
       <SidebarRail folded={filling} />
 
       {drawerOpen && (
         <div className="fixed inset-0 z-50 animate-fade-in md:hidden">
           <div className="p-scrim absolute inset-0" onClick={() => setDrawerOpen(false)} aria-hidden="true" />
-          <aside data-drawer role="dialog" aria-modal="true" aria-label="Menu" className="absolute inset-y-0 left-0 w-72 max-w-[85vw] p-sidebar border-r p-border p-shadow-overlay">
+          <Surface look="chrome" as="aside" className="absolute inset-y-0 left-0 w-72 max-w-[var(--layout-nav-drawer)] border-r p-border p-shadow-overlay" data-drawer role="dialog" aria-modal="true" aria-label="Menu">
             <Sidebar />
-          </aside>
+          </Surface>
         </div>
       )}
 
@@ -112,7 +104,7 @@ function Shell() {
         </DrawerContext.Provider>
       </main>
 
-    </div>
+    </Surface>
     </WorkspaceRosterProvider>
   );
 }

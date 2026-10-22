@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 import { KinuError, settleSync } from '@kinu.run/core/obs';
-import type { JsonValue, RoutedLLM, TemporaryAgentPort, TemporaryRunRequest } from '@kinu.run/core';
+import { renderIssuesUnquoted, type JsonValue, type RoutedLLM, type TemporaryAgentPort, type TemporaryRunRequest } from '@kinu.run/core';
 import type { ToolExecutionOptions } from 'ai';
 import * as v from 'valibot';
 
@@ -45,11 +45,11 @@ export function createScriptedLLM(responses: string[]): ScriptedLLM {
  * it refused as wrong (`bad_input`).
  */
 export function answeredAs<S extends v.GenericSchema>(schema: S, text: string): v.InferOutput<S> {
-  const parsed = v.safeParse(v.pipe(v.string(), v.parseJson(), schema), text);
+  const parsed = v.safeParse(v.pipe(v.string(), v.parseJson(), schema), text, { abortEarly: true });
 
   return settleSync(parsed.success
     ? Effect.succeed(parsed.output)
-    : Effect.fail(new KinuError('bad_input', 'the scripted model answered off its schema', { cause: new v.ValiError(parsed.issues) })));
+    : Effect.fail(new KinuError('bad_input', 'the scripted model answered off its schema', { cause: new KinuError('bad_input', renderIssuesUnquoted(parsed.issues)) })));
 }
 
 /** An LLM that returns canned JSON. */
@@ -90,7 +90,7 @@ export function toolExecute<Args, Result>(
   }));
 }
 
-/** A hire port whose advisors answer when the test says so, as the ingress stores a helper's answer. */
+/** A hire port whose advisors answer when the test says so, as the ingress stores a subagent's answer. */
 export interface ScriptedAdvisorPort extends TemporaryAgentPort {
   /** Every brief an advisor was hired on, in order. */
   readonly tasks: readonly TemporaryRunRequest[];

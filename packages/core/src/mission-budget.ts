@@ -111,6 +111,11 @@ const DDL = `CREATE TABLE IF NOT EXISTS mission_budget (
   PRIMARY KEY (actor_id, label)
 )`;
 
+/** Made when an actor's ledger first opens; a repair's trial reads its shape from here too. */
+export function initMissionBudgetTable(execRaw: RawSqlExec): void {
+  execRaw(DDL);
+}
+
 export class MissionBudgetLedger {
   private readonly actorId: string;
 
@@ -121,7 +126,7 @@ export class MissionBudgetLedger {
     execRaw: RawSqlExec,
   ) {
     this.actorId = actor.actorId;
-    execRaw(DDL);
+    initMissionBudgetTable(execRaw);
   }
 
   /** Idempotent: a repeat cron fire continues the cumulative row rather than resetting it. */

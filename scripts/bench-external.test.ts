@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import * as v from 'valibot';
 import { git, initRepo, runToExit, scratchDir } from '@kinu.run/test-utils';
 import {
-  admissibility, armSpend, flipAccounting, pairArms, readHarborJob,
+  admissibility, armSpend, flipAccounting, pairArms, readHarborJob, readReviewTrials, reviewTable,
 } from './bench-external';
 import type { Admissibility, AdmissibilityCondition } from './bench-external';
 import { REPO_ROOT } from './repo-root';
@@ -529,5 +529,35 @@ describe('the Terminal-Bench arm before it spends anything', () => {
     expect(drawn.exitCode, drawn.stderr).toBe(0);
 
     expect(v.parse(DrawnSample, JSON.parse(drawn.stdout)).tasks).toEqual(tasks);
+  });
+});
+
+describe('review: kinu-envs review trials as a table', () => {
+  interface ReviewTrial { name: string; task: string; rewards: Record<string, number>; failed?: boolean }
+
+  function reviewTrial(root: string, { name, task, rewards, failed = false }: ReviewTrial): void {
+    const dir = join(root, 'job', name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'result.json'), JSON.stringify({
+      task_name: task, config: { agent: { model_name: 'sol' } }, agent_result: { cost_usd: 1.5 },
+      agent_execution: { started_at: '2026-10-21T07:00:00Z', finished_at: '2026-10-21T07:12:00Z' },
+      verifier_result: { rewards }, exception_info: failed ? { exception_type: 'NonZeroAgentExitCodeError' } : null,
+    }));
+  }
+
+  test("a harness's failure is reported as one, and stays out of the model's mean", () => {
+    const root = scratchDir('bench-external-review');
+    const scored = { recall: 0.4, precision: 0.8, f1: 0.53, reward: 0.32, false_positives: 1 };
+    reviewTrial(root, { name: 't1', task: 'consolidate', rewards: scored });
+    reviewTrial(root, { name: 't2', task: 'connect', rewards: { recall: 0, precision: 0, f1: 0, reward: 0, false_positives: 0 }, failed: true });
+    writeFileSync(join(root, 'job', 'result.json'), JSON.stringify({ n_total_trials: 2 }));
+
+    const rows = readReviewTrials(root);
+
+    expect(rows.map((row) => [row.task, row.failure, row.rewards?.reward ?? null, row.wallSeconds])).toEqual([
+      ['connect', 'NonZeroAgentExitCodeError', null, 720],
+      ['consolidate', null, 0.32, 720],
+    ]);
+    expect(reviewTable(rows).split('\n').at(-1)).toBe('| sol | mean of 1 | 0.40 | 0.80 | 0.53 | 0.32 | | | |');
   });
 });

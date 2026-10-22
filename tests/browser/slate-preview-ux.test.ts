@@ -4,7 +4,7 @@ import { detach } from '@kinu.run/core/obs';
 import { executorLabel } from '@kinu.run/core';
 import * as v from 'valibot';
 import { withGallery } from '../../scripts/gallery-harness';
-import { inspectorPageListed, openInspectorPage } from '../../scripts/browser-page';
+import { inspectorPageListed, MARK_REVIEWED, openInspectorPage, PAGES_NAV } from '../../scripts/browser-page';
 import type { Frame, Page } from 'puppeteer';
 
 async function serveSlate(page: Page): Promise<void> {
@@ -149,6 +149,31 @@ describe('the Slate preview frame', () => {
       }
     });
   });
+
+  test('a render around the work surface that brings no new transport keeps the open Slate\'s frame', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      try {
+        await serveSlate(page);
+        await page.setViewport({ width: 1100, height: 850 });
+        await page.goto(`${origin}/gallery.html?frame=previewtabs`, { waitUntil: 'networkidle0' });
+        await openInspectorPage(page, 'Dashboard');
+        const iframe = await page.waitForSelector('iframe[src*="gallery.preview"]');
+
+        // The sandbox-starting line comes and goes through two renders of the frame around WorkSurface; the second
+        // commits after the first one's effects, so a frame the first dropped is gone by then.
+        await page.click('[data-sandbox-starting]');
+        await page.waitForSelector('[data-preview-starting]');
+        await page.click('[data-sandbox-starting]');
+        await page.waitForFunction(() => document.querySelector('[data-preview-starting]') === null);
+
+        expect(await iframe?.evaluate((element) => element.isConnected)).toBe(true);
+      } finally {
+        await page.close();
+      }
+    });
+  });
 });
 
 test('preview tabs lead the fixed surfaces and their URL can be copied and opened', async () => {
@@ -224,7 +249,7 @@ test('preview tabs deduplicate live slates, fill the surface, and give each open
       for (const width of [1100, 390]) {
         await page.setViewport({ width, height: 850 });
         await page.goto(`${origin}/gallery.html?frame=previewtabs`, { waitUntil: 'networkidle0' });
-        await page.waitForSelector('nav[aria-label="Pages"]');
+        await page.waitForSelector(PAGES_NAV);
         expect(await page.$('[aria-label="Output"]')).toBeNull();
         expect(await page.$('[aria-label="Duplicate dashboard port"]')).toBeNull();
         // The workspace-wide read lands once and lists the whole roster —
@@ -277,7 +302,7 @@ test('preview tabs deduplicate live slates, fill the surface, and give each open
         await page.waitForSelector('[data-preview-ready]');
         expect(await currentPage(page)).not.toBe('Report');
         await page.click('[data-preview-ready]');
-        await page.waitForSelector('nav[aria-label="Pages"] [aria-label="Report"][aria-current="true"]');
+        await page.waitForSelector(`${PAGES_NAV} [aria-label="Report"][aria-current="true"]`);
         await page.click('[aria-label="Work"]');
         await page.click('[data-refresh-preview]');
         expect(await page.$eval('[aria-label="Work"]', el => el.getAttribute('aria-current'))).toBe('true');
@@ -538,7 +563,7 @@ test('after Mark reviewed, the source menu still reaches a machine\'s changes', 
     try {
       await page.waitForSelector('[data-file-row="src/device.ts"]');
       await pickSource(page, '[data-changes]', 'Workspace');
-      await page.click('[data-mark-reviewed]');
+      await page.click(MARK_REVIEWED);
       await page.waitForSelector('[data-changes="reviewed"]');
       await pickSource(page, '[data-changes="reviewed"]', 'Your PC');
       await page.waitForSelector('[data-file-row="src/device.ts"]');
@@ -597,7 +622,7 @@ test('a note on a changed line stands in for Mark reviewed, leaves the diff when
 
       // While a note is unsent, Send feedback is the one action: marking reviewed would move the side it quotes.
       expect(await text('[data-notes-bar]')).toContain('1 note for the agent');
-      expect(await page.$('[data-mark-reviewed]')).toBeNull();
+      expect(await page.$(MARK_REVIEWED)).toBeNull();
       expect(await page.$$eval('[data-note-mark]', (marks) => marks.length)).toBeGreaterThan(0);
 
       // Two lines, pressed then Shift-pressed, quote as the diff reads them, so the note keeps its mark.
@@ -646,7 +671,7 @@ test('a note on a changed line stands in for Mark reviewed, leaves the diff when
       await page.click('[data-notes-bar] [data-send-feedback]');
       await page.waitForFunction(() => document.querySelectorAll('[data-send-feedback], [data-notes-page]').length === 0);
       await page.click('[data-changes] [aria-label="All files"]');
-      await page.waitForSelector('[data-changes="list"] [data-mark-reviewed]');
+      await page.waitForSelector(`[data-changes="list"] ${MARK_REVIEWED}`);
     } finally { await page.close(); }
   });
 });
@@ -659,14 +684,14 @@ test('a page with no room in the inspector bar is reachable from the bar, and op
       // The column at its opening width, with three slates' pages in the pages' share of the bar.
       await page.setViewport({ width: 1100, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage&slates=3`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('nav[aria-label="Pages"]');
+      await page.waitForSelector(PAGES_NAV);
 
-      const shown = (): Promise<string[]> => page.$$eval('nav[aria-label="Pages"] button[aria-label]',
+      const shown = (): Promise<string[]> => page.$$eval(`${PAGES_NAV} button[aria-label]`,
         (buttons) => buttons.map((button) => button.getAttribute('aria-label') ?? ''));
 
       // Not every page fits beside the tools: the rest wait behind the bar's own opener.
       expect(await shown()).not.toContain('Tally');
-      await page.click('nav[aria-label="Pages"] button[aria-haspopup="menu"]');
+      await page.click(`${PAGES_NAV} button[aria-haspopup="menu"]`);
 
       const tally = await page.waitForFunction(() => [...document.querySelectorAll('nav[aria-label="Pages"] [role="menuitem"]')]
         .find((item) => item.textContent?.includes('Tally') === true) ?? null);
@@ -719,7 +744,7 @@ describe('inline slate previews in the chat', () => {
         await page.waitForSelector('[data-inspector-expand]');
         await openFromChat(page, 'board');
         expect(await page.$('[data-inspector-collapse]')).not.toBeNull();
-        expect(await page.$('nav[aria-label="Pages"] button[aria-label="Board"][aria-current="true"]')).not.toBeNull();
+        expect(await page.$(`${PAGES_NAV} button[aria-label="Board"][aria-current="true"]`)).not.toBeNull();
 
         // Shown beside the chat, the board's preview folds; moved off it, the preview comes back.
         expect(await inlinePreviews(page)).toEqual([['board', false], ['notes', true], ['board', false]]);
@@ -825,7 +850,7 @@ describe('inline slate previews in the chat', () => {
         expect(await shown()).toBe('Chat');
         await openFromChat(page, 'board');
         expect(await shown()).toBe('Workspace');
-        expect(await page.$('nav[aria-label="Pages"] button[aria-label="Board"][aria-current="true"]')).not.toBeNull();
+        expect(await page.$(`${PAGES_NAV} button[aria-label="Board"][aria-current="true"]`)).not.toBeNull();
 
         // The two panes never share the screen, so back in the chat the board's preview is still unfolded.
         await page.click('.p-bar [data-inspector-toggle]');

@@ -6,7 +6,7 @@
  * the command, every closure file's working-tree
  * bytes, the value of every environment name the gate is given, and the
  * toolchain (bun, node, typescript, oxlint, wrangler, vitest, the platform).
- * A recorded entry lives outside the tree at `~/.cache/kinu-ladder/<sha256>`
+ * A recorded entry lives outside the tree at `<cache>/kinu-ladder/<sha256>` (`ladderCacheDirectory`)
  * and names the gate, the revision it was proved on, its wall seconds, the
  * closure size and the tool versions. Nothing expires by time: an entry is
  * either the hash of the tree you have or it is not consulted. On armada,
@@ -32,7 +32,6 @@
 
 import { createHash } from 'node:crypto';
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { delimiter, join, resolve, sep } from 'node:path';
 import * as v from 'valibot';
 import { CHILD_ENV_NAMES } from '../packages/test-utils/src/ambient-env';
@@ -124,14 +123,6 @@ export interface Store {
   readonly directory: string;
   lookup(key: string): Lookup;
   record(key: string, entry: Entry): void;
-}
-
-/** The default store location: `$XDG_CACHE_HOME/kinu-ladder` or
- *  `~/.cache/kinu-ladder`. Outside the tree, so no gate can read it as corpus
- *  and no checkout carries another's proofs. */
-export function defaultStoreDirectory(base = process.env.XDG_CACHE_HOME): string {
-
-  return join(base === undefined || base.length === 0 ? join(homedir(), '.cache') : base, 'kinu-ladder');
 }
 
 /** `path`'s bytes on the disk before this returns, not in the page cache. */

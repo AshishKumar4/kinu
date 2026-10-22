@@ -1,23 +1,16 @@
 import type { MouseEvent } from "react";
-import { Link } from "react-router-dom";
-import { NotePencilIcon, PlusIcon } from "@phosphor-icons/react";
+import { NotePencilIcon } from "@phosphor-icons/react";
 import { APP_ROUTES } from "@kinu.run/core";
+import { buttonClass } from "@/components/ui/Button";
+import { Link } from "react-router-dom";
+import { NavRow } from "@/components/ui/NavRow";
 
 /** The mission prompt, where a new workspace is described: on its own page, and on Home until Home is the assistant. */
 export const WORKSPACE_MISSION_ID = "workspace-mission";
 
-/** The way to a new workspace is its mission's page, whose card holds the brass action; so this one stays quiet. */
-export function NewWorkspaceButton({ className }: { className: string }) {
-  return (
-    <Link to={APP_ROUTES.newWorkspace} className={`p-btn-quiet flex items-center justify-center gap-2 whitespace-nowrap font-semibold ${className}`}>
-      <PlusIcon size={14} weight="bold" className="p-accent-mark" />
-      New workspace
-    </Link>
-  );
-}
-
-/** New workspace as a round, quiet compose icon: the mission's page, or where a mission prompt shows, that prompt. */
-export function NewWorkspaceIconButton({ className = "size-8 rounded-full pointer-coarse:size-10" }: { className?: string }) {
+/** New workspace as a quiet compose icon: the mission's page, or where a mission prompt shows, that prompt. `rail` is the
+ *  folded rail's place among its others; else `className` sizes it where it stands, the sidebar's 32 by default. */
+export function NewWorkspaceIconButton({ rail = false, className = "size-8 pointer-coarse:size-10" }: { rail?: boolean; className?: string }) {
   const onClick = (event: MouseEvent<HTMLAnchorElement>) => {
     const prompt = document.getElementById(WORKSPACE_MISSION_ID);
 
@@ -26,14 +19,17 @@ export function NewWorkspaceIconButton({ className = "size-8 rounded-full pointe
     prompt.focus();
   };
 
+  if (rail) {
+    return (
+      <NavRow size="icon" quiet to={APP_ROUTES.newWorkspace} onClick={onClick} aria-label="New workspace" title="New workspace">
+        <NotePencilIcon size={17} />
+      </NavRow>
+    );
+  }
+
   return (
-    <Link
-      to={APP_ROUTES.newWorkspace}
-      onClick={onClick}
-      aria-label="New workspace"
-      title="New workspace"
-      className={`flex shrink-0 items-center justify-center p-text-2 transition-colors hover:bg-[var(--c-neutral-tint)] hover:p-text ${className}`}
-    >
+    <Link to={APP_ROUTES.newWorkspace} onClick={onClick} aria-label="New workspace" title="New workspace"
+      className={`${buttonClass({ variant: "ghost", iconOnly: true })} shrink-0 ${className}`}>
       <NotePencilIcon size={17} />
     </Link>
   );

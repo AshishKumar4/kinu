@@ -14,7 +14,7 @@ import { JsonObjectSchema, projectJsonValue, type JsonObject, type JsonValue } f
 import { DESKTOP_MEMBERS } from '../execution/desktop';
 import type { ExecCallContext } from '../execution/signal';
 import { programExecContext } from './outcome';
-import type { CodemodeProvider } from '../types/codemode';
+import type { CodemodeProvider, CodemodeResult } from '../types/codemode';
 import { callArgs, codemodeNamespace } from './operation-surfaces';
 import { SLATE_PROGRAM_MEMBERS } from '../slates/rpc';
 
@@ -201,4 +201,38 @@ export function executorNamespace(provider: ExecutorProviderSurface, files?: Rea
   if (slates === undefined) return namespace;
 
   return { ...namespace, tools: { ...namespace.tools, slates }, declarations: { ...namespace.declarations, slates: SLATES_DECLARATION } };
+}
+
+const CwdOption = v.looseObject({ cwd: v.string() });
+
+const MachineAnswer = v.object({ machine: v.string(), path: v.string() });
+
+/**
+ * A program's `workspace.startProcess` whose cwd is the computer's starts there, through the computer's own member and
+ * its gate, in the computer's own terms (`fs.machine`): run where the files live, as `child_process` and the shell tool
+ * do. The workspace's member, and its gate, are never asked for it. Other calls are the workspace's own.
+ */
+export function routedByCwd(namespaces: readonly CodemodeProvider[]): CodemodeProvider[] {
+  const workspace = namespaces.find((namespace) => namespace.name === 'workspace');
+  const start = workspace?.tools['startProcess'];
+  const machine = workspace?.tools['fs.machine'];
+  const computer = namespaces.find((namespace) => namespace.name === 'computer')?.tools['startProcess'];
+
+  if (workspace === undefined || start === undefined || machine === undefined || computer === undefined) return [...namespaces];
+
+  const routed = {
+    ...start,
+    execute: async (...args: unknown[]): Promise<CodemodeResult> => {
+      const options = v.safeParse(CwdOption, args[1]);
+
+      if (!options.success) return await start.execute(...args);
+      const where = v.safeParse(MachineAnswer, await machine.execute(options.output.cwd));
+
+      return where.success && where.output.machine === 'computer'
+        ? await computer.execute(args[0], { ...options.output, cwd: where.output.path })
+        : await start.execute(...args);
+    },
+  };
+
+  return namespaces.map((namespace) => (namespace === workspace ? { ...namespace, tools: { ...namespace.tools, startProcess: routed } } : namespace));
 }

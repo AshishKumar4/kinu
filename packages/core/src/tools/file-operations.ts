@@ -30,8 +30,9 @@ import { withClampedToolResult } from './clamp';
 import { BUILTIN_TOOL_DESCRIPTIONS } from './registry';
 import type { Tool } from 'ai';
 import { FILE, type SlateBuildNoteSchema } from '../operations/file';
-import { SLATES_ROOT } from '../vfs/workspace-path';
+import { SLATES_ROOT, walkedPath } from '../vfs/workspace-path';
 import type { SlateCallResult } from '../slates/rpc';
+import { noteFileChange } from '../execution/call-effects';
 
 /** Most names one `list` returns; matches `tools/db-codemode.ts` SELECT_LIMIT_MAX. */
 const FILE_LIST_MAX_ENTRIES = 1_000;
@@ -145,7 +146,7 @@ interface Landing {
 
 export interface FileDeps {
   /** The tool's file plane; its `resolve`, where it has one, says where a path landed, so a result names that file. */
-  readonly vfs: VFS & CheckpointFiles & Partial<Pick<VfsMountRouting, 'resolve'>>;
+  readonly vfs: VFS & CheckpointFiles & Partial<Pick<VfsMountRouting, 'resolve' | 'owner'>>;
   readonly home: string;
   readonly ledger: TurnFileLedger;
   /** The turn-cumulative bulk budget; a read the file outran is recorded there. */
@@ -195,6 +196,13 @@ export function serveFile(current: () => FileDeps): Readonly<Record<keyof typeof
     list: serve(FILE.list, async ({ path, offset }) => await run((files) => files.list(path, offset ?? 0))),
     stat: serve(FILE.stat, async ({ path }) => await run((files) => files.stat(path))),
     search: serve(FILE.search, async ({ path, query }) => await run((files) => files.search(path, query))),
+    machine: serve(FILE.machine, async ({ path }) => {
+      const { vfs, home } = current();
+      // A plane with no mounts (the CLI's) is the workspace's alone.
+      const owner = vfs.owner === undefined ? { executor: 'workspace' as const, path: walkedPath(path, home) } : await vfs.owner(path);
+
+      return { machine: owner.executor, ...('device' in owner && { device: owner.device }), path: owner.path };
+    }),
   };
 }
 
@@ -206,8 +214,7 @@ const ReadCallSchema = v.object({ op: v.literal('read') });
  */
 /** The native `file` tool over the actor's served file operations; `files` is what its results are clamped into. */
 export function createFileTool(served: Readonly<Record<keyof typeof FILE, Served>>, files: Pick<FileDeps, 'vfs' | 'home' | 'budget'>): Tool {
-  // A whole file is a program's to hold; the native tool reads a window of it.
-  const tool = nativeTool(BUILTIN_TOOL_DESCRIPTIONS.file, Object.values(served).filter((member) => member !== served.text));
+  const tool = nativeTool(BUILTIN_TOOL_DESCRIPTIONS.file, Object.values(served));
   const clamp = { files: { vfs: files.vfs, home: files.home }, budget: files.budget, producer: 'file_read', images: true } as const;
   const reads = withClampedToolResult(tool, { ...clamp, maxChars: FILE_READ_MAX_CHARS });
   const others = withClampedToolResult(tool, clamp);
@@ -434,7 +441,10 @@ function fileOps(deps: FileDeps) {
       let landed: { readonly report: VfsWriteReport | null; readonly checked: WriteGuarantee };
 
       try {
-        landed = await persist(target, content, (revision) => ledger.observeWhole(path, shown, revision), observed);
+        landed = await persist(target, content, (revision) => {
+          ledger.observeWhole(path, shown, revision);
+          noteFileChange(path, existing === null ? 'created' : 'replaced');
+        }, observed);
       } catch (err) {
         const vfsFail = vfsFailure(deps.planes, { error: err }, 'write', path);
 
@@ -495,7 +505,10 @@ function fileOps(deps: FileDeps) {
       let landed: { readonly report: VfsWriteReport | null; readonly checked: WriteGuarantee };
 
       try {
-        landed = await persist(target, outcome.content, (writtenRevision) => ledger.observeEdited(path, current, outcome, writtenRevision), observed);
+        landed = await persist(target, outcome.content, (writtenRevision) => {
+          ledger.observeEdited(path, current, outcome, writtenRevision);
+          noteFileChange(path, 'edited');
+        }, observed);
       } catch (err) {
         const vfsFail = vfsFailure(deps.planes, { error: err }, 'edit', path);
         ledger.recordEdit(path, vfsFail.reason);

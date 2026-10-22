@@ -259,16 +259,17 @@ function largest(...windows: readonly (number | undefined)[]): number | undefine
   return known.length === 0 ? undefined : Math.max(...known);
 }
 
-/** The rows a provider's own visibility rule shows. The rest are logged once per listing, by slug and visibility, so a
- *  model the account's catalog withholds can be told from one it lacks. */
+/** The rows a provider's own visibility rule shows. Each listing is logged once, its shown rows by slug and the rest by
+ *  slug and visibility, so a model the account's catalog withholds can be told from one it lacks (m2074a). */
 export function shownCatalogRows(provider: string, rows: readonly ChatGptCatalogRow[], shows: (visibility: string | undefined) => boolean): ChatGptCatalogRow[] {
+  const shown = rows.filter((row) => shows(row.visibility));
   const hidden = rows.filter((row) => !shows(row.visibility));
 
-  if (hidden.length > 0) {
-    diagnostics.event('provider.catalog_hidden', { provider, hidden: hidden.map((row) => `${row.model.id}:${row.visibility ?? 'unset'}`).join(',') });
-  }
+  diagnostics.event('provider.catalog_listed', {
+    provider, shown: shown.map((row) => row.model.id).join(','), hidden: hidden.map((row) => `${row.model.id}:${row.visibility ?? 'unset'}`).join(','),
+  });
 
-  return rows.filter((row) => shows(row.visibility));
+  return shown;
 }
 
 function parseCodexModels(input: { body: unknown }): ModelInfo[] {

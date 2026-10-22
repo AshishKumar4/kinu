@@ -16,6 +16,7 @@ import {
 import { requireControl } from '@kinu.run/core/control-plane';
 import * as store from '@kinu.run/core/control-plane';
 import * as feedbackStore from '@kinu.run/core/control-plane';
+import * as cpStore from '@kinu.run/core/control-plane/store';
 import * as v from 'valibot';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { sqlExec } from './helpers/user-do';
@@ -616,6 +617,47 @@ describe('the audit log', () => {
       users: 3, workspaces: 1, workspacesRemoved: 1, activeUsers24h: 1, activeUsers7d: 2,
     });
     close();
+  });
+});
+
+// Deleting an account keeps the operators' audit, each row naming it under one pseudonym, and changes no other
+// account's row. Review of the account deletion, 2026-10-20: a substring replacement turned maria@example.com into
+// "mari<pseudonym>" when a@example.com was deleted, and left "removed priya-notes" naming the deleted workspace.
+describe("a deleted account in the operators' audit", () => {
+  test('rows about it name the pseudonym, whole tokens only; no other account\'s row changes', () => {
+    const { sql, close } = freshStore();
+    const priya = { userId: 'a'.repeat(32), email: 'a@example.com' };
+
+    const audit = (id: string, over: { actorEmail?: string; actorUserId?: string; target?: string; detail: string }) => {
+      store.appendAudit(sql, {
+        actorEmail: 'ops@kinu.run', actorUserId: 'operator', operation: 'workspace_remove', targetKind: 'workspace', target: '', outcome: 'ok', ...over,
+      }, 1_000);
+
+      return id;
+    };
+
+    try {
+      store.observeWorkspace(sql, { userId: priya.userId, name: 'notes', displayName: 'Notes' });
+      store.observeWorkspace(sql, { userId: 'b'.repeat(32), name: 'notes-archive', displayName: 'Archive' });
+      audit('removed', { target: `${priya.userId}/notes`, detail: 'removed notes' });
+      audit('asked', { actorEmail: priya.email, actorUserId: priya.userId, target: `${priya.userId}/notes/turn-1`, detail: 'asked by a@example.com' });
+      audit('maria', { actorEmail: 'maria@example.com', actorUserId: 'b'.repeat(32), target: `${'b'.repeat(32)}/notes-archive`, detail: 'removed notes-archive for maria@example.com' });
+      audit('mention', { target: `${'b'.repeat(32)}/notes-archive`, detail: 'a@example.com reported notes-archive' });
+      const before = store.listAudit(sql, { limit: 10 }).items;
+
+      cpStore.forgetUser(sql, priya, 'deleted-x');
+
+      const after = new Map(store.listAudit(sql, { limit: 10 }).items.map((row) => [row.detail, row]));
+      const rows = [...after.values()].map((row) => ({ actorEmail: row.actorEmail, actorUserId: row.actorUserId, target: row.target, detail: row.detail }));
+
+      expect(rows).toEqual(expect.arrayContaining([
+        { actorEmail: 'ops@kinu.run', actorUserId: 'operator', target: 'deleted-x/workspace-1', detail: 'removed workspace-1' },
+        { actorEmail: 'deleted-x', actorUserId: 'deleted-x', target: 'deleted-x/workspace-1/turn-1', detail: 'asked by deleted-x' },
+        { actorEmail: 'maria@example.com', actorUserId: 'b'.repeat(32), target: `${'b'.repeat(32)}/notes-archive`, detail: 'removed notes-archive for maria@example.com' },
+        { actorEmail: 'ops@kinu.run', actorUserId: 'operator', target: `${'b'.repeat(32)}/notes-archive`, detail: 'deleted-x reported notes-archive' },
+      ]));
+      expect(rows).toHaveLength(before.length);
+    } finally { close(); }
   });
 });
 

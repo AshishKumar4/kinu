@@ -1,7 +1,7 @@
 /**
  * Explore in the gallery: `explore` (the feed; `&kind=`, `&category=`, `&q=` as its URL takes them) and
  * `explore-workspace&id=<blueprint>` (`&install=1` with Install open; `&assistant=1` once it is the person's), in the
- * product's own shell; `&signed=out` for a visitor's page, under the public bar. With `&assistant=1` the roster holds the assistant marked Home, and `&at=assistant` opens its
+ * product's own shell; `&signed=out` for a visitor's page, under the public bar; `&feed=kinu` with Kinu's own alone. With `&assistant=1` the roster holds the assistant marked Home, and `&at=assistant` opens its
  * own address with the roster's read held 1.5 s, so the page draws before it knows it is Home. `/api/explore` is
  * answered here from a fixed feed of the owner's kind of work, ranked as the index would, Kinu's own read from core.
  * Kinu's blueprints show their served pictures; an app's picture is a listing's read, which a test or a shot answers.
@@ -79,6 +79,9 @@ const ITEMS: readonly ExploreItem[] = [
   }, []),
 ];
 
+/** Explore's apps as the Gallery lists them, so a listed slate's page opens on any of them (the whole app's frame). */
+export const EXPLORE_LISTINGS: readonly GalleryListing[] = ITEMS.flatMap((item) => (item.kind === "app" ? [item.app] : []));
+
 /** A blueprint's page: Kinu's own as the server makes it, and any other in the feed its card's words and a plain inside. */
 function pageOf(card: WorkspaceCard): BlueprintPage {
   const own = kinuBlueprint(card.id);
@@ -105,7 +108,11 @@ function feed(search: URLSearchParams): Response {
   const stars = (item: ExploreItem) => (item.kind === "app" ? item.app.stars : item.workspace.stars);
   const listed = (item: ExploreItem) => (item.kind === "app" ? item.app.listedAt : item.workspace.listedAt);
 
+  // `&feed=kinu`: the catalogue as production's is today, Kinu's own blueprints and nothing else.
+  const kinuOnly = new URLSearchParams(location.search).get("feed") === "kinu";
+
   const items = ITEMS
+    .filter((item) => !kinuOnly || (item.kind === "workspace" && item.workspace.maker.kinu))
     .filter((item) => kind === null || item.kind === kind)
     .filter((item) => category === null || (item.kind === "app" ? item.app.category : item.workspace.category) === category)
     .filter((item) => q === "" || `${title(item)} ${line(item)}`.toLowerCase().includes(q));
@@ -123,7 +130,7 @@ const blueprintOf = (id: string) => ITEMS.flatMap((item) => (item.kind === "work
 
 /** `/api/explore*` answered from the feed above, and an install answered as made: its body is kept on the page as
  *  `data-explore-installed` for a test to read. Anything else goes on. */
-function installExploreFixture(): void {
+export function installExploreFixture(): void {
   const next = window.fetch.bind(window);
 
   window.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -177,7 +184,7 @@ function installExploreFixture(): void {
 }
 
 const ASSISTANT: RosterEntry = {
-  name: "personal-assistant-4f2a", displayName: "Personal assistant", createdAt: NOW - DAY, lastVisited: NOW, overview: null, decisions: 0, logo: null, home: true,
+  name: "personal-assistant-4f2a", displayName: "Kinu", createdAt: NOW - DAY, lastVisited: NOW, overview: null, decisions: 0, logo: null, home: true,
 };
 
 const loading = (node: React.ReactNode) => <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader size="base" /></div>}>{node}</Suspense>;

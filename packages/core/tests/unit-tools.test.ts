@@ -1,5 +1,6 @@
 /** Unit tests for the canonical tool surface. `skills` is not a BuiltinToolDeps field. */
 
+import { lonelyTree, ROOT_DELEGATION_BUDGET } from './helpers-agents';
 import { createFileCodemodeProvider } from '../src/tools/file-operations';
 import { buildToolSurface, type CodemodeSurface } from '../src/tools/builtins';
 import { serveMemory } from '../src/tools/memory-operations';
@@ -8,6 +9,11 @@ import { createSandboxExecutor } from '../src/execution/sandbox';
 import { DefaultExecutionRouter } from '../src/execution/router';
 import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
 import { toolExecute, createRecordingLogger, present } from '@kinu.run/test-utils';
+import { createMemoryVfs, seedFiles } from '@kinu.run/test-utils/vfs';
+import { standardMounts, withMountTable } from '../src/vfs/mounts';
+import { hostedToolFiles } from '../src/execution/approval';
+import { cloudPlanes } from '../src/vfs/resolve';
+import { WORKSPACE_ROOT } from '../src/index';
 import { asSchema, jsonSchema, tool } from 'ai';
 import * as v from 'valibot';
 import { createTestRuntime, conversationsFor, actorJobsFor, servedStoresFor } from './helpers';
@@ -26,12 +32,11 @@ import {
   type CodemodeBuilder,
   type JsonValue,
   type ReportDeps,
-  type SubordinateReportHandoff,
+  type SubagentReportHandoff,
   type TeamToolDeps,
   type AgentRuntime,
   TurnEscalationLedger,
 } from '../src/index';
-import { ROOT_DELEGATION_BUDGET } from '../src/subordinates/depth';
 import { setDiagnosticsSink } from '../src/obs/index';
 import type { JsonObject } from '../src/utils/json';
 import type { Fact, FactsStore } from '../src/memory/facts';
@@ -139,16 +144,17 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       delegation: ROOT_DELEGATION_BUDGET,
       snapshot: () => [],
       list: async () => [],
+      tree: lonelyTree,
       create: async () => ({
         name: 's',
         displayName: 'S',
-        subordinate: { name: 's', displayName: 'S', role: 'researcher', actorReference: null, birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
+        subagent: { name: 's', displayName: 'S', role: 'researcher', actorReference: null, birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
       }),
       rename: async () => ({
         ok: true as const,
         name: 's',
         displayName: 'S',
-        subordinate: { name: 's', displayName: 'S', role: 'researcher', actorReference: null, birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
+        subagent: { name: 's', displayName: 'S', role: 'researcher', actorReference: null, birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
       }),
       spawn: async () => ({ name: 's', displayName: 'S' }),
       assign: async () => ({ ok: true as const, name: 's', ...stubHandoff }),
@@ -326,7 +332,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   });
 
   test('report.send carries a third-argument handoff to the same deps, and refuses a field it does not own', async () => {
-    const delivered: Array<{ status: string; content: string; handoff?: SubordinateReportHandoff }> = [];
+    const delivered: Array<{ status: string; content: string; handoff?: SubagentReportHandoff }> = [];
 
     const deps: ReportDeps = { report: async (input) => {
       delivered.push(input);
@@ -414,8 +420,10 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     expect(escalations.snapshot().escalations).toEqual(before);
   });
 
-  // rc22 release evals (coding): a computer command's cwd written as the workspace names the computer's files.
-  test("a computer command's cwd written as the workspace names it is refused with the computer's own path, before it runs", async () => {
+  // rc22 release evals (coding): a computer command's cwd written as the workspace names the computer's files. Owner
+  // decision, 2026-10-20 ("Run where the files live"): a command runs on the machine its cwd is on, in that machine's
+  // terms, which the file plane says.
+  test("a command whose cwd is the computer's runs there, in the computer's own terms", async () => {
     const { rt } = createTestRuntime();
     const ran: string[] = [];
     const unreachable = async (): Promise<never> => { throw new Error('the command alone reaches the computer'); };
@@ -432,11 +440,25 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
         return { stdout: 'ran', stderr: '', exitCode: 0 };
       },
     }));
-    const shellTool = { execute: toolExecute<{ command: string; runtime?: string; cwd?: string }, string>(tools({ ...rt, executionRouter: router }).shell) };
+    const computerFiles = createMemoryVfs().vfs;
+    await seedFiles(computerFiles, { '/workspace/true-myth/package.json': '{}' });
+    await rt.toolFiles.mkdir('notes', { recursive: true });
+    const mounted = withMountTable(rt.toolFiles, standardMounts((name) => (name === 'computer' ? { files: computerFiles, isAvailable: () => true } : undefined)));
 
-    await expect(shellTool.execute({ command: 'npm test', runtime: 'computer', cwd: '/computer/workspace/true-myth' })).rejects
-      .toThrow('cwd "/computer/workspace/true-myth" is the workspace\'s name for computer\'s /workspace/true-myth; on computer it is "/workspace/true-myth"');
-    expect(ran).toEqual([]);
+    // Gated, as the hosted runtime hands it to the tools (staging rc29: the gate passed `resolve` on and not `owner`).
+    const toolFiles = hostedToolFiles(mounted, cloudPlanes(WORKSPACE_ROOT), { mode: () => 'strict' });
+
+    const shellTool = { execute: toolExecute<{ command: string; runtime?: string; cwd?: string }, string>(tools({ ...rt, toolFiles, executionRouter: router }).shell) };
+
+    await shellTool.execute({ command: 'npm test', runtime: 'computer', cwd: '/computer/workspace/true-myth' });
+    await shellTool.execute({ command: 'npm run build', cwd: '/computer/workspace/true-myth' });
+    await shellTool.execute({ command: 'ls', runtime: 'computer', cwd: '/workspace/true-myth' });
+    // The computer starts each in the directory it was given.
+    expect(ran).toEqual(['npm test', 'npm run build', 'ls'].map((command) => `cd -- '/workspace/true-myth' || exit\n${command}`));
+
+    // The workspace's own place stays the workspace's.
+    expect(await shellTool.execute({ command: 'pwd', cwd: 'notes' })).not.toContain('ran');
+    expect(ran).toHaveLength(3);
   });
 
   test('gated run commands return an error the MODEL can act on', async () => {

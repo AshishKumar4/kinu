@@ -38,13 +38,13 @@ describe('a long turn, in the real chat', () => {
 
       expect(top).toEqual([{ kind: 'rollup', rolledUp: false, phases: '5', state: null, title: 'calls', now: false }]);
       // The answer, and the thought that led to it, stand outside the rollup.
-      expect(await page.evaluate(() => [...document.querySelectorAll('.p-thread-column .prose-chat')].filter((words) => words.closest('[data-turn-rollup]') === null).length)).toBe(1);
+      expect(await page.evaluate(() => [...document.querySelectorAll('.p-thread-column [data-said]')].filter((words) => words.closest('[data-turn-rollup]') === null).length)).toBe(1);
 
       await page.click('[data-turn-rollup] > button');
       await page.waitForSelector('[data-turn-rollup] [data-disclosure-body="open"]');
       expect(await page.$$eval('[data-turn-rollup] [data-tool-run]', (phases) => phases.filter((phase) => phase.getClientRects().length > 0).length)).toBe(5);
       // Its words to the owner after each of the first four phases are inside it, shown once it opens.
-      expect(await page.$$eval('[data-turn-rollup] .prose-chat', (words) => words.filter((said) => said.getClientRects().length > 0).length)).toBe(4);
+      expect(await page.$$eval('[data-turn-rollup] [data-said]', (words) => words.filter((said) => said.getClientRects().length > 0).length)).toBe(4);
 
       await page.click('[data-turn-rollup] [data-tool-run] > button');
       await page.waitForFunction(() => [...document.querySelectorAll('[data-turn-rollup] [data-tool-run] [data-tool-state]')].some((row) => row.getClientRects().length > 0));
@@ -117,7 +117,10 @@ describe('a long turn, in the real chat', () => {
     await withGallery(async ({ newPage, origin }) => {
       const live = await opened(newPage, origin, '&at=37&lines=asked');
 
-      // The settled phases above the running one ask; the stub finds no committed answer and writes nothing.
+      // Running first: the workspace's claim on the turn arrives after the page's first draw, and the page may ask before it
+      // (armada, 2026-10-20). Then the settled phases above the running one ask; the stub finds no committed answer and
+      // writes nothing.
+      await live.waitForSelector('[data-tool-run="live"]');
       await live.waitForFunction(() => (document.documentElement.dataset.phaseLinesAsked ?? '').includes('lt-a1'));
       expect(await live.evaluate(() => ({
         running: document.querySelector('[data-tool-run="live"]') !== null,

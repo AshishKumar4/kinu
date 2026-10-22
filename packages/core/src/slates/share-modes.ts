@@ -1,6 +1,6 @@
 /**
  * How a live share acts (docs/SLATE-SHARING-NIMBUS.md §2): the contract the share path, the Gallery and the share
- * sheet build against. A share's row is the workspace's `slate_live_shares`; these are its new columns' values, the
+ * sheet build against. A share's row is the workspace's `slate_shares` (its `live` kind); these are its new columns' values, the
  * viewer's consent rows in their own account, and the one call that keeps a Gallery listing in step with its share.
  */
 import * as v from 'valibot';
@@ -25,7 +25,7 @@ export const ShareStartSchema = v.picklist(['as-is', 'empty']);
 
 /**
  * A slate's revision (`share-policy.ts` `slateRevision`): the source digest its durable app was last built from. A
- * viewer's consent and the owner's `owner`-mode grant (`slate_live_shares.grant_revision`) each name the revision they
+ * viewer's consent and the owner's `owner`-mode grant (`slate_shares.grant_revision`) each name the revision they
  * were given for; a different one asks again.
  */
 export type SlateRevision = string;
@@ -77,7 +77,7 @@ const SharedAs = { share: Name, workspace: Name, slate: Name, handle: Name };
  */
 export const GalleryListingSyncSchema = v.variant('listed', [
   v.object({
-    /** `slate_live_shares.id`. */
+    /** Its `slate_shares.id`. */
     ...SharedAs,
     listed: v.literal(true),
     url: v.pipe(v.string(), v.minLength(1)),

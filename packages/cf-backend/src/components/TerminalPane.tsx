@@ -1,7 +1,7 @@
 // Native container PTY, device PTY, workspace shell and line-mode terminal lanes.
 
 import { Cause, Effect, type Exit } from 'effect';
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useContext, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react";
 import { Terminal, type IDisposable } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -16,6 +16,8 @@ import {
 } from "@kinu.run/core";
 import type { ExecutorCommandResult } from "@kinu.run/core";
 import { WorkspaceTerminalOutputSchema } from "@kinu.run/core";
+import { IconControl } from "@/components/ui/IconControl";
+import { TerminalReplay } from "@/components/terminal-replay";
 
 export type { TerminalPaneOutput };
 
@@ -64,10 +66,10 @@ function TerminalFrame({ leading, state, failure, copies, action, hostRef, barOn
     <div className="flex h-full w-full flex-col">
       <div className={`flex shrink-0 items-center gap-3 pr-3 pl-4 ${barOnGround ? "p-terminal-ground h-9" : "h-11"}`}>
         {leading}
-        <span className="ml-auto flex shrink-0 items-center gap-3 p-meta p-text-3">
-          {failure !== null && <span className="max-w-[16rem] truncate p-danger" title={failure}>{failure}</span>}
+        <span className="t-meta ml-auto flex shrink-0 items-center gap-3 p-text-3">
+          {failure !== null && <span className="max-w-64 truncate p-danger" title={failure}>{failure}</span>}
           {state !== null && (
-            <span data-terminal-state className="inline-flex shrink-0 items-center gap-1.5">
+            <span data-terminal-state className="inline-flex shrink-0 items-center gap-2">
               <span aria-hidden className="p-env-dot" data-tone={STATE_SAYS[state].tone} />{STATE_SAYS[state].word}
             </span>
           )}
@@ -76,8 +78,10 @@ function TerminalFrame({ leading, state, failure, copies, action, hostRef, barOn
           {action}
         </span>
       </div>
-      {/* FitAddon measures the host less its padding, so the text starts on the column's left edge. */}
-      <div ref={hostRef} className={`p-terminal-ground min-h-0 flex-1 overflow-hidden pl-4 ${barOnGround ? "pt-1" : "border-t p-border pt-2"}`} />
+      {/* The inset is xterm's own padding (`p-terminal-host`): FitAddon takes the host's whole width as room and subtracts
+          only the terminal's padding, so a host's own would size the screen past the pane's edge. */}
+      <div ref={hostRef} data-on-ground={barOnGround ? "" : undefined}
+        className={`p-terminal-host p-terminal-ground min-h-0 flex-1 overflow-hidden ${barOnGround ? "" : "border-t p-border"}`} />
     </div>
   );
 }
@@ -92,6 +96,9 @@ const SCROLLBACK_LINES = 5_000;
 export function TerminalPane({ workspace, executor, outputs, onExecute, leading, session, device, barOnGround, trailing }: TerminalPaneProps) {
   const lane = terminalLane(executor);
   const frame = { leading, barOnGround, trailing };
+  const replay = useContext(TerminalReplay);
+
+  if (replay !== null) return <LineTerminal executor={executor} outputs={replay.get(executor) ?? []} frame={frame} />;
 
   if (lane.mode === "line") return <LineTerminal executor={executor} outputs={outputs ?? []} onExecute={onExecute} frame={frame} />;
 
@@ -334,13 +341,11 @@ function PtyTerminal({ workspace, executor, session, device: machine, frame }: {
     : { note: "⇧⌃C copies", title: "⌃C reaches a full-screen program. Suspend, fg and bg do not work here." };
 
   const restartShell = device ? null : (
-    <button type="button" aria-label="Restart the shell" title="Restart the shell: a new one, for after a shell exits"
-      onClick={() => detach(Effect.catchCause(Effect.gen(function* () {
+    <IconControl place="bar" className="shrink-0" aria-label="Restart the shell" title="Restart the shell: a new one, for after a shell exits" onClick={() => detach(Effect.catchCause(Effect.gen(function* () {
         yield* Effect.promise(async () => restart());
-      }), showing(setFailure)))}
-      className="p-bar-icon shrink-0">
+      }), showing(setFailure)))}>
       <ArrowCounterClockwiseIcon size={14} />
-    </button>
+    </IconControl>
   );
 
   return <TerminalFrame {...frame} state={state} failure={failure} copies={copies} action={restartShell} hostRef={hostRef} />;

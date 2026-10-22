@@ -130,7 +130,7 @@ describe('the queue card, as the reader sees it', () => {
       rpc: SILENT_RPC,
     }));
 
-    expect(html.match(/checked/g)?.length).toBe(3);
+    expect(html.match(/aria-checked="true"/g)?.length).toBe(3);
     expect(html).toContain('Approve all');
   });
 
@@ -155,7 +155,7 @@ describe('the queue card, as the reader sees it', () => {
       flow,
     }));
 
-    expect(html.match(/checked/g)?.length).toBe(2);
+    expect(html.match(/aria-checked="true"/g)?.length).toBe(2);
     expect(html).toContain('Approve 2');
   });
 
@@ -170,7 +170,7 @@ describe('the queue card, as the reader sees it', () => {
       flow,
     }));
 
-    expect(html).not.toContain('checked');
+    expect(html).not.toContain('aria-checked="true"');
     expect(html).toContain('Approved. It runs when the agent picks the decision up.');
   });
 
@@ -187,6 +187,6 @@ describe('the queue card, as the reader sees it', () => {
     }));
 
     expect(html).toContain('Could not record the decision');
-    expect(html.match(/checked/g)?.length).toBe(3);
+    expect(html.match(/aria-checked="true"/g)?.length).toBe(3);
   });
 });

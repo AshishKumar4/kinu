@@ -5,7 +5,7 @@ import { createTestRuntime, toolExecute } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
   buildBuiltinTools, initAllTables, initTaskListTable,
-  FILE, TASKS, WEB, SUBORDINATE_REPORT_STATUSES,
+  FILE, TASKS, WEB, SUBAGENT_REPORT_STATUSES,
   type AgentRuntime, type WebSearchProvider,
 } from '../src/index';
 import { asSchema, type ToolSet } from 'ai';
@@ -43,12 +43,12 @@ const SURFACES: readonly DispatchSurface[] = [
     build: (rt) => buildBuiltinTools({ rt, conversations: conversationsFor(rt) }),
   },
   {
-    tool: 'report', field: 'status', vocabulary: SUBORDINATE_REPORT_STATUSES,
+    tool: 'report', field: 'status', vocabulary: SUBAGENT_REPORT_STATUSES,
     build: (rt) => buildBuiltinTools({ rt, report: { report: async () => ({ ok: true }) }, conversations: conversationsFor(rt) }),
   },
   {
     // Whole-file text is for programs; the native tool reads a bounded window.
-    tool: 'file', field: 'op', vocabulary: Object.keys(FILE).filter((member) => member !== 'text'),
+    tool: 'file', field: 'op', vocabulary: Object.keys(FILE).filter((member) => member !== 'text' && member !== 'machine'),
     build: (rt) => buildBuiltinTools({ rt, conversations: conversationsFor(rt) }),
   },
 ];

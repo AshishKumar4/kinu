@@ -14,7 +14,8 @@ export function processResult(work: Promise<{ stdout: string; stderr: string; ex
   });
 
   return {
-    pid, isPty: false, stdin: null, stdout: channel('stdout'), stderr: channel('stderr'),
+    // The pipe every exec of the box's asks for (`containerExec`), which it closes and this one reads nothing from.
+    pid, isPty: false, stdin: new WritableStream<Uint8Array>(), stdout: channel('stdout'), stderr: channel('stderr'),
     get exitCode() { return completed.promise.then(result => result.exitCode); },
     kill(signal = 15) { kill?.(signal); completed.resolve({ stdout: '', stderr: '', exitCode: 128 + signal }); },
     resize() { throw new Error('this process has no PTY'); },

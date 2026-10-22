@@ -291,7 +291,7 @@ contract. At `@nimbus-sh/core` 0.14.0 the set is `vfs_state`, `vfs_inodes`,
 `nimbus_facet_storage`. `NimbusWorkspace.destroy()` drops the `vfs_*` tables
 and keeps the `nimbus_*` ones. Kinu adds its own `kinu_workspace_generation`.
 The manifest declares all of them present on every root (`cf-orchestrator`,
-`cf-subordinate`, `cli`). On hosted, `@nimbus-sh/worker` 0.12.0 adds a
+`cf-subagent`, `cli`). On hosted, `@nimbus-sh/worker` 0.12.0 adds a
 transform store in the workspace object, `nimbus_transform_results`,
 `nimbus_transform_result_parts` and `nimbus_transform_store`, created by the
 first hosted node launch that transforms a module, charged to the storage
@@ -496,8 +496,8 @@ Every model request leaves evidence in `actor_requests`: one row for a turn's
 admission, then one row per step. An admission's messages are the working
 context revision it was admitted at. A step's messages are a revision of the
 actor's `requests` context, which nobody selects and which is stored in the
-same interval rows (`context_memberships`); `request_renders` names that
-revision. So a step writes only the positions that changed since the previous
+same interval rows (`context_memberships`); the request's `rendered_*` columns
+name that revision. So a step writes only the positions that changed since the previous
 request. A message the step pipeline made or rewrote (a woven block, replayed
 tool-call ids, cache markers) is one `render` row, named by the SHA-256 of its
 stored bytes, however many requests carry it. `SessionRequests`
@@ -527,23 +527,23 @@ its own DDL, all of it `IF NOT EXISTS`, all of it run from the same
 | Events hub | `agent_log`, `reply_channels`, `triggers` | `core/src/events/hub/schema.ts` |
 | Run-event log | `run_events` | `core/src/events/recorder.ts` |
 | Turn ratings | `turn_ratings` | `core/src/evolution/ratings.ts` |
-| Struggles and tool lessons | `turn_struggles`, `tool_lessons` | `core/src/evolution/struggles.ts` |
-| Lessons | `lessons`, `pattern_extractions` | `core/src/evolution/lessons.ts` |
+| Tool lessons | `tool_lessons` | `core/src/evolution/struggles.ts` |
+| Lessons | `lessons` | `core/src/evolution/lessons.ts` |
 | Refinement | `refinement_requests` | `core/src/evolution/refinement.ts` |
-| Branching heads | `head_runs`, `head_journal`, `head_evidence`, `head_steps`, `head_merge_results` | `core/src/heads/schema.ts` |
+| Branching heads | `head_runs`, `head_journal`, `head_steps` | `core/src/heads/schema.ts` |
 | Swarm search | `search_nodes`, `mcts_search_runs` (durable checkpoints) | `core/src/mcts/schemas.ts`, `search-store.ts` |
 | Alternate takes | `alternate_takes` (a settled `/branch` redirect) | `core/src/mcts/takes.ts` |
 | Swarm leaderboard | `exploration_records` (cumulative across runs), `exploration_objectives` (what each objective measures) | `core/src/strategy/records.ts` |
 | Swarm node content | `swarm_node_records` (what a swarm re-entry reads) | `core/src/strategy/swarm-resume.ts` |
 | Turn lifecycle | `actor_turn_claims` (`preparing` from the claim, `admitted` once bound to its program and context; `withdrawn_through`, the epoch through which a Retry of the turn's answer withdrew its executions' output; the facts it was prepared with and the profile it bound), `agent_sequence` (one sequence an agent, over its chat turns, runs and reports: a claim's epoch is its capability) and the session tables above | `core/src/orchestrator/actor-claims.ts` |
-| Deliveries and fences (D13) | `agent_deliveries` (what each agent is owed, until its isolate answers), `actor_turn_fence` (one row an agent: its newest opening, its run, `ended_at`, a Stop's `cancelled_at`; a call that runs more of a turn holds only while it holds that opening), `actor_executions` (each execution an agent opened here, by turn and run, with its newest opening's epoch: a close runs only if it names that execution under that epoch) | `core/src/subordinates/deliveries.ts`, `core/src/subordinates/turn-fence.ts` |
-| Once-only effects | `tool_effect_claims` (a receipt, started until its result is kept, kept where its effect commits and keyed on its run; an agent's isolate keeps none for a call whose effect commits in the workspace, and the workspace prunes a run's receipts as the run settles, a delivered run's as it takes the run's end), `effect_tombstones` | `core/src/tools/effect-claim.ts`, `core/src/identity/effect-tombstones.ts` |
+| Deliveries and fences (D13) | `agent_deliveries` (what each agent is owed, until its isolate answers), `actor_turn_fence` (one row an agent: its newest opening, its run, `ended_at`, a Stop's `cancelled_at`; a call that runs more of a turn holds only while it holds that opening), `actor_executions` (each execution an agent opened here, by turn and run, with its newest opening's epoch: a close runs only if it names that execution under that epoch) | `core/src/subagents/deliveries.ts`, `core/src/subagents/turn-fence.ts` |
+| Once-only effects | `tool_effect_claims` (a receipt, started until its result is kept, kept where its effect commits and keyed on its run; an agent's isolate keeps none for a call whose effect commits in the workspace, and the workspace prunes a run's receipts as the run settles, a delivered run's as it takes the run's end), `effect_tombstones`, `prepared_outputs` (a model's answer for keyed work, held until its tombstone lands) | `core/src/tools/effect-claim.ts`, `core/src/identity/effect-tombstones.ts` |
 | Facts | `agent_facts`, `agent_fact_history` | `core/src/memory/facts.ts` |
 | Account memory (user object) | `agent_facts`, `agent_fact_history` under `ACCOUNT_FACTS_ACTOR`, `account_notes`, `account_memory_proposals` | `core/src/memory/account.ts`, `cf-backend/src/user/account-memory.ts` |
 | Conversation search | `conversation_fts` (derived FTS5 index) | `core/src/memory/conversation-search.ts`, created by the store on first use |
 | Background jobs | `background_jobs` | `core/src/jobs/store.ts` |
 | Task list | `agent_tasks` (one plan per actor; note and plan link are columns) | `core/src/tools/task-store.ts` |
-| Approvals | `deferred_approvals`, `device_consent_asks` (a device call's ask, then the owner's answer until the call it answers spends it), `instruction_approvals` | `core/src/safety/deferred-approval.ts`, `device-consent.ts`, `instruction-trust.ts` |
+| Approvals | `owner_requests` (an action parked on the owner, or a device call's ask, each until the call it answers spends it), `instruction_approvals` | `core/src/safety/owner-requests.ts`, `deferred-approval.ts`, `device-consent.ts`, `instruction-trust.ts` |
 | Workspaces an agent made | `agent_workspaces` (the Changelog's record of each workspace the agent created in its owner's account) | `core/src/identity/agent-workspaces.ts` |
 | Plan review | `plan_reviews` | `core/src/plans/review.ts` |
 | Curriculum | `proposed_tasks` | `core/src/curriculum/proposer.ts` |
@@ -557,8 +557,8 @@ These are created outside that pass, by the root that owns each:
 
 | Subsystem | Tables | Owner |
 |---|---|---|
-| Subordinate roster | `actor_subordinates` (every actor that can hire) | `core/src/subordinates/roster.ts` |
-| Orchestrator-local | `sleep_time_updates`, `turn_craft_usage` | `cf-backend/src/orchestrator.ts`, inline |
+| Subagent roster | `actor_subagents` (every actor that can hire) | `core/src/subagents/roster.ts` |
+| Orchestrator-local | `turn_craft_usage` | `cf-backend/src/orchestrator.ts`, inline |
 | Webhook ingress (cf only) | `webhook_rate_windows`, `webhook_replay_claims`, `webhook_secrets` | `core/src/events/ingress/webhook.ts` (`initWebhookIngressTables`), `rate-limit.ts`, `secrets.ts` |
 
 Two tables are created lazily: `completed_turns` by the `EvolutionEngine`
@@ -571,7 +571,7 @@ the first queue or drain: `outbox_peer` for the peer transport and
 `core/src/events/outbox.ts` supplies the SQL handle and the alarm.
 
 `test-utils/src/conformance/manifest.ts` declares every table per root
-(`cf-orchestrator`, `cf-subordinate`, `cli`) as wired, lazy, or absent with a
+(`cf-orchestrator`, `cf-subagent`, `cli`) as wired, lazy, or absent with a
 stated reason. The conformance suite compares that declaration with the real
 `sqlite_master`. The manifest is the complete list; this page describes it.
 
@@ -599,7 +599,7 @@ The pass runs in this order:
 
 Then each root adds what only it carries. The orchestrator DO also runs
 `initWebhookIngressTables`,
-`subordinateRoster.ensureSchema()`, and its inline turn tables. An in-memory
+`subagentRoster.ensureSchema()`, and its inline turn tables. An in-memory
 flag makes the whole call run once per activation. No persistent schema
 version is tracked, because a cold activation always re-runs it.
 
@@ -608,9 +608,12 @@ Each table has exactly one owning module. A second definition of
 second `scaffold_versions` is how `status` and `parent_version` did.
 
 A table's `CREATE TABLE IF NOT EXISTS` is its genesis. No module carries a
-column reconcile, a `CHECK`-widening rebuild, or a row backfill. This tree
-deploys as a reset (docs/DEPLOYMENT.md, the migrations paragraph), so every
-row it writes is under the DDL in the tree. `scripts/schema-drift.ts` holds
+column reconcile, a `CHECK`-widening rebuild, or a row backfill, so every row
+a build writes is under the DDL in its tree. `scripts/schema-drift.ts` holds
 that DDL to `scripts/schema-genesis.lock.json` in both directions. A shipped
 table whose shape must change has two fixes: a new table of its own for the
-new columns, or another reset with a re-lock.
+new columns, which keeps the old rows, or a re-lock deployed with
+`--reset-tables`, which drops exactly the tables the lock diff names, with the
+tables that refer to them, and makes them anew empty at each object's first
+contact (docs/DEPLOYMENT.md; ARCHITECTURE-DECISIONS L28). No row is carried
+over.

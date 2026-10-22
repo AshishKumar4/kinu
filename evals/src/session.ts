@@ -102,14 +102,14 @@ import { Effect } from 'effect';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import type { ActorLedger } from './results';
 import { inspectedStepMessages, type StepMessageCache, type StepMessages } from './transcript';
-import { StepOutputInspectionSchema } from '../../packages/core/src/subordinates/inspection';
-import { helperAddress, ROOT, type HelperAddress } from './helper-address';
+import { StepOutputInspectionSchema } from '../../packages/core/src/subagents/inspection';
+import { subagentAddress, ROOT, type SubagentAddress } from './subagent-address';
 
 import {
   EVAL_WORKSPACE_BEAT_MS, hostedActorSocketPath, JOB_OUTPUT_EVENT, JsonValueSchema, ORCHESTRATOR_AGENT_SLUG,
   RunEventSchema, SendStateSchema, STEER_STEP_METADATA_KEY, ChatHistoryEntrySchema, positionPageSchema, renderSoulMarkdown, CommandResultSchema,
   type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type PositionPageRequest, type RunEvent, type SendState,
-  type SubordinateInspectionRequest, type WorkMode, type WorkspaceSpend,
+  type SubagentInspectionRequest, type WorkMode, type WorkspaceSpend,
   QualityDaySchema, type QualityDay, betaSwarms,
   ChangelogEntrySchema, RefinementListingSchema, type ChangelogEntry, type RefinementListing,
 } from '../../packages/core/src/index';
@@ -326,7 +326,7 @@ function pageOf<Item extends v.GenericSchema>(item: Item) {
   ]);
 }
 
-/** The inspector's answers a check reads (`inspectSubordinate`): the lead's helpers and each helper's runs. */
+/** The inspector's answers a check reads (`inspectSubagent`): the lead's subagents and each subagent's runs. */
 export const InspectionAnswerSchema = v.variant('view', [
   StepOutputInspectionSchema,
   v.object({ view: v.literal('children'), page: pageOf(v.object({
@@ -377,15 +377,15 @@ export type PublicSwarmRun = v.InferOutput<typeof SwarmRunSchema>;
 
 const SwarmPageSchema = pageOf(SwarmRunSchema);
 
-/** A helper's room: the socket on its path, and the streams it hears. */
-type HelperRoom = { readonly socket: WebSocket; readonly heard: HeardStreams };
+/** A subagent's room: the socket on its path, and the streams it hears. */
+type SubagentRoom = { readonly socket: WebSocket; readonly heard: HeardStreams };
 
 /** The broadcasts live output rides, to every socket: a head's words and each step its journal lands
  *  (`publishHeadStreamFrame`, `announceHeadActivity` in cf-backend `actor-agent.ts`), where swarm nodes speak only,
  *  and a running job's output (`job_output`, core `jobs/live-output.ts`), where a detached build speaks only. */
 const LIVE_OUTPUT_FRAMES: ReadonlySet<string> = new Set(['head_stream', 'head_activity', JOB_OUTPUT_EVENT]);
 
-/** How soon a helper's room that closed is opened again: a room the edge refuses is not dialled at every poll. */
+/** How soon a subagent's room that closed is opened again: a room the edge refuses is not dialled at every poll. */
 const ROOM_REDIAL_MS = 30_000;
 
 const SetModelSchema = v.object({ spec: v.string() });
@@ -492,24 +492,24 @@ const SlateListingSchema = v.object({
 
 export type PublicSlateListing = v.InferOutput<typeof SlateListingSchema>;
 
-/** The roster rows `listSubordinates` serves (orchestrator.ts:5536), narrowed
+/** The roster rows `listSubagents` serves (orchestrator.ts:5536), narrowed
  *  to the three facts a delegation case grades: WHO was hired, whether the row
  *  is still active, and the `lifetime` that decided it — the one column no
- *  later state recovers (core/src/subordinates/roster.ts:38-44), which is what
+ *  later state recovers (core/src/subagents/roster.ts:38-44), which is what
  *  makes "a task hire retired itself" checkable at all.
  *
  *  The RPC the AGENT SURFACE reads: `AgentSurface.tsx:321`'s `loadRoster` and
  *  the chat's own roster refresh (`hooks/use-workspace-reads.ts`) both call it. */
-const SubordinateRowSchema = v.object({
+const SubagentRowSchema = v.object({
   name: v.string(),
   status: v.picklist(['idle', 'working', 'awaiting_input', 'dismissed']),
   lifetime: v.string(),
 });
 
-const SubordinateRosterSchema = v.array(SubordinateRowSchema);
+const SubagentRosterSchema = v.array(SubagentRowSchema);
 
 /** One row of the roster, as the Agents surface lists it. */
-export type PublicSubordinate = v.InferOutput<typeof SubordinateRowSchema>;
+export type PublicSubagent = v.InferOutput<typeof SubagentRowSchema>;
 
 /** An agent as the Agents panel lists it: `working` from a turn owed to it (queued, handed over, or due from its event
  *  log) through the claim that runs it, until that turn ends (core `read-models/workspace-agents.ts`). `open.path` is a
@@ -732,7 +732,7 @@ export class KinuPublicSession {
   onChunk: (type: string) => void = () => undefined;
 
   /** Told of each live chunk heard outside this session's own turns: a turn the product opened in the workspace's room
-   *  (`room` null), a helper's turn in its own room, a head's words (`head_stream`) and each step it lands (`head_activity`). */
+   *  (`room` null), a subagent's turn in its own room, a head's words (`head_stream`) and each step it lands (`head_activity`). */
   onHeard: (room: string | null, type: string) => void = () => undefined;
 
   /** Live frames heard so far in every room this session hears. The ledger writes a step only when it ends, so a model
@@ -746,12 +746,12 @@ export class KinuPublicSession {
 
   private moving = new AbortController();
 
-  /** The streams each open socket hears: the workspace's room from `dial`, each helper's from `listen`. The ledger writes
-   *  a call only when it ends (`tool_call_end`), so a call that runs for minutes, a helper's task, is seen running only here. */
+  /** The streams each open socket hears: the workspace's room from `dial`, each subagent's from `listen`. The ledger writes
+   *  a call only when it ends (`tool_call_end`), so a call that runs for minutes, a subagent's task, is seen running only here. */
   private readonly hearing = new Set<HeardStreams>();
 
-  /** The helpers' rooms this session listens to, by helper name, and when each one that closed last closed. */
-  private readonly rooms = new Map<string, HelperRoom>();
+  /** The subagents' rooms this session listens to, by subagent name, and when each one that closed last closed. */
+  private readonly rooms = new Map<string, SubagentRoom>();
 
   private readonly roomsClosedAt = new Map<string, number>();
 
@@ -827,7 +827,7 @@ export class KinuPublicSession {
     await this.boundary(`clearing the conversation on ${this.workspace}`, () => this.rpc('clearConversation', []));
   }
 
-  /** A socket on the workspace's room, or on a helper's when `room` is its path tail (`hostedActorSocketPath`). */
+  /** A socket on the workspace's room, or on a subagent's when `room` is its path tail (`hostedActorSocketPath`). */
   private newSocket(room?: string): WebSocket {
     const url = new URL(
       `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(this.workspace)}${room === undefined ? '' : `/${room}`}`,
@@ -1114,7 +1114,7 @@ export class KinuPublicSession {
   }
 
   /** The tool calls running in every stream this session hears, by id: its own turns', the product's own, and the
-   *  rooms of the helpers it listens to. */
+   *  rooms of the subagents it listens to. */
   toolCallsInFlight(): string[] {
     return [...this.hearing].flatMap((streams) => streams.running());
   }
@@ -1145,25 +1145,25 @@ export class KinuPublicSession {
   }
 
   /**
-   * Listen to exactly these helpers' rooms, by name or path. A helper's turn streams to its own window alone (`broadcastToActor`), so it
+   * Listen to exactly these subagents' rooms, by name or path. A subagent's turn streams to its own window alone (`broadcastToActor`), so it
    * is heard only on a socket opened on its path, as its window opens one. A room opened mid-turn is replayed the turn, as every room
    * is, so a call that started before it opened is known to run.
    */
-  listen(helpers: readonly string[]): void {
+  listen(subagents: readonly string[]): void {
     for (const [name, room] of this.rooms) {
-      if (helpers.includes(name)) continue;
+      if (subagents.includes(name)) continue;
       this.rooms.delete(name);
       this.hearing.delete(room.heard);
       room.socket.close();
     }
 
-    for (const name of helpers) {
+    for (const name of subagents) {
       if (this.rooms.has(name) || Date.now() - (this.roomsClosedAt.get(name) ?? -Infinity) < ROOM_REDIAL_MS) continue;
       this.rooms.set(name, this.openRoom(name));
     }
   }
 
-  private openRoom(name: string): HelperRoom {
+  private openRoom(name: string): SubagentRoom {
     const socket = this.newSocket(hostedActorSocketPath(name));
     const heard = new HeardStreams();
     const acked = new Set<string>();
@@ -1209,8 +1209,8 @@ export class KinuPublicSession {
    *   detached tool call became: `shell`/`eval` calls that outrun the
    *   foreground window answer a `{jobId}` handle and settle out of turn, so
    *   their result is reachable only through this row — never in the run
-   *   events of the prompt that issued them. `of`, a helper's name, reads
-   *   that helper's own jobs (the RPC's `actor`); a helper dismissed since the
+   *   events of the prompt that issued them. `of`, a subagent's name, reads
+   *   that subagent's own jobs (the RPC's `actor`); a subagent dismissed since the
    *   roster was read has none.
    */
   async backgroundJobs(of?: string): Promise<readonly PublicBackgroundJob[]> {
@@ -1317,12 +1317,12 @@ export class KinuPublicSession {
     }
   }
 
-  /** A subordinate's children, transcript, runs or events, as the Agents surface's inspector reads them
-   *  (`inspectSubordinate`). */
-  async inspect(request: SubordinateInspectionRequest): Promise<InspectionAnswer> {
+  /** A subagent's children, transcript, runs or events, as the Agents surface's inspector reads them
+   *  (`inspectSubagent`). */
+  async inspect(request: SubagentInspectionRequest): Promise<InspectionAnswer> {
     return v.parse(InspectionAnswerSchema, await this.boundary(
-      `inspectSubordinate on ${this.input.origin}/${this.workspace}`,
-      () => this.rpc('inspectSubordinate', [v.parse(JsonValueSchema, request)]),
+      `inspectSubagent on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('inspectSubagent', [v.parse(JsonValueSchema, request)]),
     ));
   }
 
@@ -1361,7 +1361,7 @@ export class KinuPublicSession {
   }
 
   /**
-   * The delegation roster — `listSubordinates`, the RPC the Agents surface's
+   * The delegation roster — `listSubagents`, the RPC the Agents surface's
    * own card is bound to (`components/surfaces/AgentSurface.tsx:321`) and the
    * one the chat refreshes on every reconnect (`hooks/use-kinu.ts:1990`).
    *
@@ -1370,13 +1370,13 @@ export class KinuPublicSession {
    * only the roster holds — a hire result says who was hired, never who is
    * still employed.
    */
-  async subordinates(): Promise<readonly PublicSubordinate[]> {
+  async subagents(): Promise<readonly PublicSubagent[]> {
     const rows = await this.boundary(
-      `listSubordinates on ${this.input.origin}/${this.workspace}`,
-      () => this.rpc('listSubordinates', []),
+      `listSubagents on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('listSubagents', []),
     );
 
-    return v.parse(SubordinateRosterSchema, rows);
+    return v.parse(SubagentRosterSchema, rows);
   }
 
   /** Every agent of the workspace as the Agents panel lists it (`listWorkspaceAgents`, `hooks/use-kinu.ts`). */
@@ -1553,16 +1553,16 @@ export class KinuPublicSession {
   async actorLedgers(rootEvents: readonly RunEvent[]): Promise<ActorLedger[]> {
     const ledgers: ActorLedger[] = [{ actor: 'main', events: rootEvents }];
 
-    const visit = async (hirer: HelperAddress): Promise<void> => {
+    const visit = async (hirer: SubagentAddress): Promise<void> => {
       for (let cursor: { after: string } | undefined; ;) {
         const children = await this.inspect({ ...hirer, path: [...hirer.path], view: 'children', page: cursor === undefined ? { limit: RUN_PAGE } : { limit: RUN_PAGE, cursor } });
 
-        if (children.view !== 'children') throw new Error(`the public inspector could not list the helpers of ${hirer.actor ?? 'main'}`);
+        if (children.view !== 'children') throw new Error(`the public inspector could not list the subagents of ${hirer.actor ?? 'main'}`);
 
         await Promise.all(children.page.items.map(async (child) => {
           if (child.actorReference === null) return;
 
-          const address = helperAddress(child);
+          const address = subagentAddress(child);
 
           ledgers.push({ actor: child.actorReference.actorId, events: await this.actorEvents(address) });
           await visit(address);
@@ -1578,7 +1578,7 @@ export class KinuPublicSession {
     return ledgers;
   }
 
-  private async actorEvents(address: HelperAddress): Promise<RunEvent[]> {
+  private async actorEvents(address: SubagentAddress): Promise<RunEvent[]> {
     const events: RunEvent[] = [];
 
     for (let cursor: { after: string } | undefined; ;) {
@@ -1593,7 +1593,7 @@ export class KinuPublicSession {
     }
   }
 
-  private async appendActorEvents(events: RunEvent[], address: HelperAddress, runId: string): Promise<void> {
+  private async appendActorEvents(events: RunEvent[], address: SubagentAddress, runId: string): Promise<void> {
     for (let since = 0; ;) {
       const page = await this.inspect({ ...address, path: [...address.path], view: 'events', runId, query: { since, limit: EVENT_PAGE } });
 

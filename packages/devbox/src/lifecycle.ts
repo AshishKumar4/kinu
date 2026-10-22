@@ -494,6 +494,11 @@ export interface SupervisedProcessSpec {
    * (`Devbox.revealedEnv`), and the job holds them in memory, never here or in any file beside it.
    */
   readonly reveal?: boolean;
+  /**
+   * The background job it runs as on its workspace: the box tells the workspace when it ends (`process-ended`, with
+   * its exit code and the tail of what it wrote) and when the box's restore starts it again (`process-restored`).
+   */
+  readonly job?: string;
 }
 
 /** The token is generated once and reused so preview URLs survive restarts verbatim;
@@ -575,7 +580,7 @@ export function restartPlan(
 
 /** A runtime list, not a bare type union: the receiving host validates stages against it,
  *  so producer and consumer share this one list or incidents get rejected unseen. */
-export const INCIDENT_STAGES = ['attach', 'checkpoint', 'process', 'port', 'quiesce', 'rest', 'recovered'] as const;
+export const INCIDENT_STAGES = ['attach', 'checkpoint', 'process', 'port', 'quiesce', 'rest', 'recovered', 'process-ended', 'process-restored'] as const;
 
 export type IncidentStage = (typeof INCIDENT_STAGES)[number];
 
@@ -646,6 +651,10 @@ export interface DevboxIncident {
   readonly processId: string | undefined;
   readonly port: number | undefined;
   readonly at: number;
+  /** The job a supervised process runs as, on `process-ended` and `process-restored`. */
+  readonly job?: string | undefined;
+  /** Its exit code, on `process-ended`: absent where none was kept (the process was lost). */
+  readonly exitCode?: number | undefined;
 }
 
 /** `queued` only once the announcement landed; `undelivered` (or a throw) keeps the row pending

@@ -3,6 +3,7 @@ import {
 } from '@kinu.run/core';
 import { authoredRefusal, KinuError, renderThrownChain } from '@kinu.run/core/obs';
 import * as v from 'valibot';
+import { AI_GATEWAY_CONFIG_KEY } from './credentials';
 import { libraryTiles } from './roster';
 import { singletonValue, type UserObjectHost } from './user-host';
 import type { UserWorkspaces } from './workspaces';
@@ -169,6 +170,9 @@ export class UserProfileStore {
     if (key === PROFILE_CATALOG_CONFIG_KEY) {
       throw new KinuError('bad_input', 'profile_catalog has a dedicated typed CAS route.');
     }
+
+    // An authentication setting: its write moves the credentials' revision (`selectAIGateway`).
+    if (key === AI_GATEWAY_CONFIG_KEY) throw new KinuError('bad_input', `${AI_GATEWAY_CONFIG_KEY} has a dedicated route, PUT /api/user/cloudflare/gateway.`);
   }
 
   async getConfig(caller: UserCaller, key: string): Promise<string | null> {

@@ -3,6 +3,7 @@
 import { Fragment, type ReactNode } from "react";
 import type { TranscriptEntry } from "@kinu.run/core";
 import { MessageView } from "@/components/MessageView";
+import { Surface } from "@/components/ui/Surface";
 
 export function KeptTranscript({ entries, unavailable, before }: {
   entries: readonly TranscriptEntry[];
@@ -16,9 +17,9 @@ export function KeptTranscript({ entries, unavailable, before }: {
           {before?.(message.id)}
           {unavailable.has(message.id)
             ? (
-              <p role="note" className="rounded-md border border-dashed p-border px-3 py-2 text-xs p-text-3">
+              <Surface look="clip" as="p" className="t-meta border border-dashed p-border px-3 py-2 p-text-3" role="note">
                 This message is unavailable: it was stored in the agent's private files, which close when it is dismissed.
-              </p>
+              </Surface>
             )
             : <MessageView message={message} steers={steers} liveTail={null} />}
         </Fragment>

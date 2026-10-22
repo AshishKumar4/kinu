@@ -168,7 +168,8 @@ const FLEET_BOUNDARIES: readonly FleetBoundary[] = [
     emitter: 'event',
     means: 'A workspace object activated: one row per construction, whatever woke it (a request, '
       + 'an alarm, a reset). Counted per workspace per hour it separates an idle eviction from a '
-      + 'restart loop.',
+      + 'restart loop. `facets` is how many facet names the workspace has given out, against the '
+      + '65,536 its object may use in its life (do.facet.count).',
   },
   {
     id: 'wake.unfinished_arms',

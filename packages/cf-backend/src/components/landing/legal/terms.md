@@ -2,7 +2,7 @@
 
 Last updated: 20 October 2026
 
-Kinu at kinu.run is run by me, Ashish Kumar Singh. By using it, you agree to these terms. Questions go to ashishkmr472@gmail.com.
+Kinu at kinu.run is run by me, Ashish Kumar Singh. By using it, you agree to these terms. Questions go to privacy@kinu.run.
 
 ## Your account
 

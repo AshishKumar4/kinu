@@ -85,9 +85,9 @@
    The reference is `~/kinu-landing-design/Kinu App v2.dc.html`, drawn by
    the owner himself: dark grounds, solid hairlines instead of alpha glows,
    one gold accent rationed to intent, silk as the bright end of the same
-   thread, and three self-hosted faces — Schibsted Grotesk for everything
-   that reads, Newsreader for slates that ask for a serif, Fragment Mono
-   for labels and commands. Two palettes wear it (core's `web/theme.ts`):
+   thread, and self-hosted faces — Inter for everything that reads
+   (docs/DESIGN-SYSTEM.md §1.3), Newsreader for slates that ask for a
+   serif, Fragment Mono for code. Two palettes wear it (core's `web/theme.ts`):
    Graphite, near-neutral so brass is the only colour on screen, and Warm,
    the mock's umber at half its tint.
 
@@ -117,31 +117,120 @@ html, body, #root {
   font-family: var(--font-ui);
 }
 
-:root {
+/* Every element that names a look (a swatch, a quadrant of the system frame) resolves these again, so Kumo's colours
+   and the code ground follow the look they sit in rather than the page's. */
+:root, [data-theme], [data-mode] {
   /* Radii — the mock's own measures, stated as roles. Outer cards and the
      composer are 14px; the grouped cards INSIDE a surface (tool rows,
      journal, key-value tables) stay at Tailwind's 12px rung; rows and
      fields 8px; controls 6px; actions and chips are pills. `--r-card` and
-     `--r-overlay` alias no Tailwind rung — the mock's two 14px measures sit
+     `--r-card` alias no Tailwind rung — the mock's two 14px measures sit
      between Tailwind's 12 and 16, and a role that means "outer card" should
      not have to negotiate with a library scale to say so. The radii and
      every colour and shadow token, for each theme and mode, are core's
      `web/theme.ts`, which the signed-out pages share; they arrive through
      `virtual:kinu-theme.css`. What lives here only points at them. */
 
+  /* Layout constants (docs/DESIGN-SYSTEM.md §1.4): the only arbitrary measures feature code may name. */
+  --layout-frame: 1152px;
+  --layout-gutter: 32px;
+  --layout-bar: 46px;
+  --layout-sidebar: 240px;
+  --layout-tile-min: 300px;
+  --layout-chat-column: 780px;
+  /* The composer: the chat column and its 20 of gutter each side, so its text lines up with the answers'. */
+  --layout-composer: calc(var(--layout-chat-column) + 40px);
+  /* An open page tab's action and the gap after it: its 20 square and 3. */
+  --layout-page-action: 23px;
+  --layout-tool-list: 400px;
+  --layout-tool-places: 220px;
+  --layout-reader: 760px;
+  --layout-flow: 520px;
+  /* A setting's name column beside its control, and a list of things beside the one open. */
+  --layout-field: 11rem minmax(0, 1fr);
+  --layout-rail-list: 13rem minmax(0, 1fr);
+  /* A drawer's width beside the page it opens over. */
+  --layout-drawer: min(640px, 92vw);
+  /* The file list's columns: icon, name, then size and age in one cell, or a column each from 26rem; its tiles, as many
+     as fit at their least. */
+  --layout-files-row: 1rem minmax(0, 1fr) auto;
+  --layout-files-row-wide: 1rem minmax(0, 1fr) 4.5rem 4rem;
+  --layout-files-tiles: repeat(auto-fill, minmax(6.5rem, 1fr));
+  /* The one tile grid (ui/Tiles.tsx): 300 or more across, one column on a phone. */
+  --layout-tiles: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+  /* Figures in a row, as many as fit at 84 or more. */
+  --layout-stats: repeat(auto-fit, minmax(5.25rem, 1fr));
+  /* A lead beside what follows it, two to one (Explore's featured blueprint). */
+  --layout-lead: minmax(0, 2fr) minmax(0, 1fr);
+  /* A blueprint's page: what it shows beside what it says. */
+  --layout-detail: minmax(0, 1.25fr) minmax(0, 1fr);
+  /* A question's options beside the preview of the one under the pointer. */
+  --layout-question: minmax(0, 1fr) minmax(0, 1.2fr);
+  /* Home: the brief's column and the side column. */
+  --layout-home: minmax(0, 680px) 300px;
+  /* A head over what fills the rest. */
+  --layout-head-body: auto minmax(0, 1fr);
+  /* An exploration: the tree's column beside the board; -wide adds the reader on the right. */
+  --layout-exploration: minmax(220px, 280px) minmax(0, 1fr);
+  --layout-exploration-wide: minmax(200px, 250px) minmax(0, 1fr) minmax(330px, 400px);
+  /* A tool call's row: its icon, its words, its runtime and its state. */
+  --layout-tool-row: 20px minmax(0, 1fr) auto auto;
+  /* A row led by a 14 mark (a step's dot, a day's band), then its words; -end adds what closes it, -mark a 16 mark,
+     and -inset is where its words start, for a line under it. */
+  --layout-mark-row: 14px minmax(0, 1fr);
+  --layout-mark-row-end: 14px minmax(0, 1fr) auto;
+  --layout-mark-row-mark: 14px minmax(0, 1fr) 16px;
+  --layout-mark-row-inset: 22px;
+  /* A short label's column beside its value (a changelog entry's facts). */
+  --layout-label-row: 64px minmax(0, 1fr);
+  /* Labels as wide as the widest, then the values (a mail's To and Subject). */
+  --layout-label-auto: auto minmax(0, 1fr);
+  /* Under a line led by a 15 icon, the words that line up with its words: the icon and its 8 gap. */
+  --layout-under-icon: 23px;
+  /* Under a file's header, the line that lines up with its name: past the back control and the mark. */
+  --layout-file-meta: 34px;
+  /* The inspector's inset round its content and a work card's, the composer's 18. */
+  --layout-inset: 18px;
+  /* Home's frame and its room above and below, more on a taller screen within bounds; a new chat's the same. */
+  --layout-home-frame: 1080px;
+  --layout-home-pad: clamp(72px, 12vh, 132px);
+  --layout-new-chat: 720px;
+  --layout-new-chat-pad: clamp(48px, 12vh, 120px);
+  /* A welcome step's most before it scrolls inside its card. */
+  --layout-welcome-step: 62vh;
+  /* A card of questions' most before it scrolls; -wide from sm up. */
+  --layout-questions: min(45vh, 32rem);
+  --layout-questions-wide: min(55vh, 32rem);
+  /* On a phone, the share of the explorer a node's transcript takes under the tree. */
+  --layout-transcript-phone: 55%;
+  /* A file's preview beside its list, from 64rem up. */
+  --layout-preview-pane: 42%;
+  /* The phone's navigation drawer at its widest. */
+  --layout-nav-drawer: 85vw;
+  /* The folded rail's account menu, just past its 56. */
+  --layout-rail-menu: 60px;
+  /* A capture shown zoomed in its cover: its top left, at 165% of the cover's width. */
+  --layout-zoomed: 165%;
+  /* The model picker's menu: as wide as its names, never past the screen; its list a scroll of its own. */
+  --layout-picker: min(28rem, calc(100vw - 1rem));
+  --layout-picker-list: min(24rem, 60vh);
+
   /* motion */
   --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-glide: cubic-bezier(0.32, 0.72, 0, 1);  /* a selection that travels: quick to leave, soft to land */
-  --dur-fast: 120ms;
-  --dur-base: 150ms;
+  /* The three durations (docs/DESIGN-SYSTEM.md §1.7): a state change, something entering, a fold. The landing's film
+     keeps two of its own, here beside them. */
+  --dur-state: 120ms;
   --dur-enter: 220ms;
   --dur-fold: 300ms;  /* a block that folds: longer than a control's change, since it moves a whole block */
+  --dur-rise: 700ms;
+  --dur-draw: 1100ms;
 
   /* The code surface: one silk tone on a recessed well rather than
      syntax-coloured — CodeBlock in components/surfaces/shared.tsx sets every
      inline identifier in the bright thread colour. A code block is a well,
-     which is what `--c-recessed` already means. */
-  --c-code-bg:  var(--c-recessed);
+     which is what `--c-sunken` already means. */
+  --c-code-bg:  var(--c-sunken);
 
   /* ── Kumo, retoned ──────────────────────────────────────────────
      Kumo's components are compiled: their utilities (`bg-kumo-brand`,
@@ -162,23 +251,23 @@ html, body, #root {
      `--c-*`, which each theme's blocks re-point. ── */
   --color-kumo-canvas: var(--c-bg);
   --color-kumo-base: var(--c-bg);
-  --color-kumo-elevated: var(--c-elevated);
+  --color-kumo-elevated: var(--c-fill);
   --color-kumo-tint: var(--c-surface);
-  --color-kumo-recessed: var(--c-recessed);
+  --color-kumo-recessed: var(--c-sunken);
   --color-kumo-overlay: var(--c-overlay);
-  --color-kumo-control: var(--c-surface);
+  --color-kumo-control: var(--c-button-bg);
   --color-kumo-contrast: var(--c-text);
   --color-kumo-interact: var(--c-fill);
   /* `fill` is a chip/track tone (Kumo's Badge, Combobox and Meter), so it has
      to read as a step above whatever it sits on — a solid surface step
      disappears the moment the container is that same step, which is exactly
      where badges live. An ink alpha composes over any rung of the ladder. */
-  --color-kumo-fill: var(--c-neutral-tint);
-  --color-kumo-fill-hover: var(--c-border-strong);
-  --color-kumo-line: var(--c-border);
-  --color-kumo-hairline: var(--c-input-border);
+  --color-kumo-fill: var(--c-hover);
+  --color-kumo-fill-hover: var(--c-button-bg-hover);
+  --color-kumo-line: var(--c-button-line);
+  --color-kumo-hairline: var(--c-field-border);
   --color-kumo-brand: var(--c-accent);
-  --color-kumo-brand-hover: color-mix(in srgb, var(--c-accent) 92%, #000);
+  --color-kumo-brand-hover: var(--c-accent-hover);
   --color-kumo-danger: var(--c-danger);
   --color-kumo-success: var(--c-success);
   --color-kumo-warning: var(--c-warning);
@@ -199,14 +288,14 @@ html, body, #root {
      the only cyan and violet on screen. */
   --color-kumo-badge-red: var(--c-danger);
   --color-kumo-badge-orange: var(--c-accent);
-  --color-kumo-badge-orange-subtle: var(--c-accent-subtle);
+  --color-kumo-badge-orange-subtle: var(--c-selected);
   --color-kumo-badge-green: var(--c-success);
   --color-kumo-badge-blue: var(--c-info);
   --color-kumo-badge-teal: var(--c-text-3);
-  --color-kumo-badge-teal-subtle: var(--c-neutral-tint);
+  --color-kumo-badge-teal-subtle: var(--c-hover);
   --color-kumo-badge-purple: var(--c-text-3);
-  --color-kumo-badge-neutral: var(--c-neutral-tint);
-  --color-kumo-badge-inverted: var(--c-accent-subtle);
+  --color-kumo-badge-neutral: var(--c-hover);
+  --color-kumo-badge-inverted: var(--c-selected);
 
   --text-color-kumo-default: var(--c-text);
   --text-color-kumo-strong: var(--c-text);
@@ -239,7 +328,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   *:hover, *:focus-within { scrollbar-color: var(--c-border-strong) transparent; }
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: transparent; border-radius: 999px; }
+  ::-webkit-scrollbar-thumb { background: transparent; border-radius: var(--r-pill); }
   *:hover::-webkit-scrollbar-thumb { background: var(--c-border-strong); }
 }
 
@@ -261,25 +350,25 @@ body { background: var(--c-bg); color: var(--c-text); }
    These are `@utility` rather than plain rules inside `@layer components`
    for one reason: variants. Tailwind only generates `hover:`/`focus:`
    forms for utilities it knows about, and these were plain classes — so
-   every `hover:p-text`, `hover:p-danger` and `hover:p-elevated` in the app
+   every `hover:p-text`, `hover:p-danger` and `hover:p-hover` in the app
    emitted no CSS whatsoever and silently did nothing. Each sets exactly one
    property, so promoting them out of the components layer cannot re-draw a
    border or a radius the way `.p-card` would. Locked by unit-p-utility-
    variants.test.ts. ── */
 @utility p-bg       { background: var(--c-bg); }
-@utility p-recessed { background: var(--c-recessed); }
+@utility p-sunken   { background: var(--c-sunken); }
 @utility p-sidebar  { background: var(--c-sidebar); }
 @utility p-surface  { background: var(--c-surface); }
-@utility p-elevated { background: var(--c-elevated); }
 @utility p-fill     { background: var(--c-fill); }
+@utility p-hover    { background: var(--c-hover); }
 
 @utility p-text   { color: var(--c-text); }
 @utility p-text-2 { color: var(--c-text-2); }
 @utility p-text-3 { color: var(--c-text-3); }
-@utility p-text-4 { color: var(--c-text-4); }
-@utility p-accent { color: var(--c-accent-fg); }
+@utility p-accent-fg { color: var(--c-accent-fg); }
 @utility p-accent-mark { color: var(--c-accent-mark); }
-@utility p-accent-subtle { background: var(--c-accent-subtle); }
+@utility p-accent { color: var(--c-accent); }
+@utility p-selected { background: var(--c-selected); }
 
 @utility p-success { color: var(--c-success); }
 @utility p-warning { color: var(--c-warning); }
@@ -288,11 +377,42 @@ body { background: var(--c-bg); color: var(--c-text); }
 
 @layer components {
 
+/* ── Named variants (docs/DESIGN-SYSTEM.md §1.3) ─────────────────────
+   Approved and settled parts keep their own sizes, each under the name of what it is; nothing else writes them. */
+:root {
+  /* role.chat-heading: a report's headings in assistant prose, in px so they hold wherever they sit; the workbench's
+     follow its 14px prose in em. */
+  --t-chat-heading-1: 22px;
+  --t-chat-heading-2: 19px;
+  --t-chat-heading-3: 17px;
+  --t-chat-heading-workbench-1: 1.1em;
+  --t-chat-heading-workbench-2: 1.05em;
+  --t-chat-heading-workbench-3: 1em;
+  /* role.code-workbench: the approved code block inside the workbench. */
+  --t-code-workbench: 12.5px;
+  /* role.workspace-tab: the settled workspace tab's title. */
+  --t-workspace-tab: 13.5px;
+  /* role.field-touch: a field's value on a touch screen. iOS Safari zooms the page into any field under 16px. */
+  --t-field-touch: max(16px, 1em);
+  /* role.hero: Home's question, and a new chat's, growing with the window within bounds. */
+  --t-hero: clamp(38px, 4vw, 46px);
+  --t-hero-chat: clamp(28px, 3.4vw, 40px);
+  /* role.wordmark: the name beside Kinu's mark. */
+  --t-wordmark: 18px;
+}
+
+/* role.public-*: a signed-out public page (the deploy flow, as the landing, /privacy and /terms) reads at the public
+   pages' size, from theme.ts's tokens, not the app chrome's: its body and a row's name 15, its lede 17. */
+.t-public-body { font: 400 var(--t-public-body)/var(--t-public-body-leading) var(--font-ui); color: var(--c-text-2); }
+.t-public-item { font: 500 var(--t-public-body)/var(--t-public-body-leading) var(--font-ui); color: var(--c-text); }
+.t-public-lede { font: 400 var(--t-public-lede)/var(--t-public-lede-leading) var(--font-ui); color: var(--c-text-2); }
+
 /* ── Chat markdown ─────────────────────────────────────────────────── */
-/* The `chat` role — agent response prose: 16px/26px at a 16px root. */
+/* The `chat` role — agent response prose: Inter at 15.5px/26px, the x-height Schibsted's 16px had
+   (docs/DESIGN-SYSTEM.md §1.3). */
 .prose-chat {
-  font-size: 1rem; line-height: 1.625; color: var(--c-text-2);
-  letter-spacing: -0.006em;
+  font-size: 15.5px; line-height: 1.68; color: var(--c-text-2);
+  letter-spacing: 0;
   p { margin: 0.45em 0; }
   p:first-child { margin-top: 0; }
   p:last-child { margin-bottom: 0; }
@@ -300,72 +420,67 @@ body { background: var(--c-bg); color: var(--c-text); }
   ul, ol { margin: 0.45em 0; padding-left: 1.25rem; }
   ul { list-style: disc; } ol { list-style: decimal; }
   h1, h2, h3 { font-weight: 600; margin: 0.7em 0 0.3em; letter-spacing: -0.01em; line-height: 1.3; }
-  /* Response headings hold their own hierarchy in rem: a report's h1 stays
-     22px whether it leads a message or follows a code block. */
-  h1 { font-size: 1.375rem; } h2 { font-size: 1.1875rem; } h3 { font-size: 1.0625rem; }
+  /* A report's h1 stays 22px whether it leads a message or follows a code block. */
+  h1 { font-size: var(--t-chat-heading-1); } h2 { font-size: var(--t-chat-heading-2); } h3 { font-size: var(--t-chat-heading-3); }
 }
 
 .prose-thinking {
-  font-size: 0.8125rem; line-height: 1.55; color: var(--c-text-3);
+  font-size: 13px; line-height: 1.55; color: var(--c-text-3);
   p { margin: 0.35em 0; }
   p:first-child { margin-top: 0; }
   p:last-child { margin-bottom: 0; }
   strong { font-weight: 600; color: var(--c-text-2); }
   ul, ol { margin: 0.35em 0; padding-left: 1.1rem; }
   ul { list-style: disc; } ol { list-style: decimal; }
-  h1, h2, h3 { font-size: 1em; font-weight: 600; margin: 0.5em 0 0.2em; color: var(--c-text-2); }
+  h1, h2, h3 { font-size: inherit; font-weight: 600; margin: 0.5em 0 0.2em; color: var(--c-text-2); }
   &[data-folded] { max-height: 3lh; overflow: hidden; }
-  &[data-folded][data-overflows] { mask-image: linear-gradient(to bottom, #000 45%, transparent); }
+  &[data-folded][data-overflows] { mask-image: linear-gradient(to bottom, var(--c-text) 45%, transparent); }
 }
 
-/* ── Type roles — the scale lives here, not in per-component literals ─ */
-/* One name per role, in rem at a 16px root; the comment carries the pixel
-   a default root renders. A `text-[…]` literal beside one of these is an
-   exception and says why on its own line. */
-.p-t-chat     { font-size: 1rem; line-height: 1.625; }                                   /* chat prose — 16/26 */
-.p-t-composer { font-size: 1rem; line-height: 1.5; }                                     /* composer input — 16/24 */
-.p-t-control  { font-size: 0.875rem; line-height: 1.4286; font-weight: 500; }            /* navigation & controls — 14/20 */
-.p-t-status   { font-family: var(--font-ui); font-size: 0.75rem; line-height: 1.5; font-weight: 500; } /* status labels — 12/18, sans */
-.p-t-code     { font-family: var(--font-mono); font-size: 0.875rem; line-height: 1.5714; } /* code — 14/22 Fragment Mono */
+/* ── Type roles (docs/DESIGN-SYSTEM.md §1.3): the only way to set a size, weight, leading or tracking ──
+   Rendered px; each role carries its default ink, which an ink utility beside it overrides. Inter for everything that
+   reads, Fragment Mono for code. Weights are 400, 500 and 600. They sit in the components layer with the rest. */
+.t-hero       { font: 600 36px/44px var(--font-ui); letter-spacing: -0.015em; color: var(--c-text); }
+.t-page-title { font: 600 24px/32px var(--font-ui); letter-spacing: -0.011em; color: var(--c-text); }
+.t-hero { font-size: var(--t-hero); }
+.t-hero-chat { font-size: var(--t-hero-chat); }
+.t-title      { font: 600 15px/22px var(--font-ui); letter-spacing: -0.005em; color: var(--c-text); }
+.t-nav        { font: 500 14px/20px var(--font-ui); color: var(--c-text-2); }
+.t-label      { font: 600 13px/20px var(--font-ui); color: var(--c-text-2); }
+.t-item       { font: 500 13px/20px var(--font-ui); color: var(--c-text); }
+.t-body       { font: 400 13px/20px var(--font-ui); color: var(--c-text-2); }
+.t-control    { font: 500 13px/20px var(--font-ui); }
+.t-meta       { font: 400 12px/16px var(--font-ui); color: var(--c-text-3); font-variant-numeric: tabular-nums; }
+.t-status     { font: 500 12px/16px var(--font-ui); }
+.t-micro      { font: 600 11px/14px var(--font-ui); letter-spacing: 0.01em; }
+.t-composer   { font: 400 15px/24px var(--font-ui); color: var(--c-text); }
+.t-code       { font: 400 13px/20px var(--font-mono); color: var(--c-accent-fg); }
+/* Code inside running text sits a step under the words around it. */
+:is(p, li, .t-body, .t-item, .prose-chat) > .t-code { font-size: 0.92em; }
+.t-mono       { font-family: var(--font-mono); }
 
-/* A page title, and nothing smaller. The display face at UI sizes is a
-   heading pretending to be an interface; at 24px and up it is the product's
-   voice, and it is the same voice the signed-out pages speak in. */
-.p-display  { font-family: var(--font-display); font-weight: 500; letter-spacing: -0.02em; }
-/* Mono, because a label is a name for the thing beside it and should not
-   compete with it for the same font. Letter-spacing is lower than a
-   proportional face needs: mono is already wide. */
-.p-eyebrow  { font-family: var(--font-mono); font-size: 11px; line-height: 16px; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; color: var(--c-text-3); }
-/* The annotation register — mono captions beside code and other identifiers
-   a name is written about. Ordinary metadata and status moved to `.p-meta`
-   and `.p-t-status`; what stays here names a technical object. */
-.p-annotation { font-family: var(--font-mono); font-size: 10px; line-height: 14px; letter-spacing: 0.045em; font-variant-numeric: tabular-nums; }
-.p-meta     { font-family: var(--font-ui); font-size: 0.75rem; line-height: 18px; letter-spacing: -0.005em; } /* supporting metadata — 12/18 */
-.p-row-text { font-size: 0.8125rem; line-height: 20px; letter-spacing: -0.008em; }        /* dense rows — 13/20 */
-.p-title    { font-size: 0.9375rem; line-height: 22px; font-weight: 600; letter-spacing: -0.01em; } /* panel heading — 15/22 */
-/* A panel heading — the display face at UI weight. `.p-display` is rationed
-   to page titles at 24px+; this is the same voice for the headings inside a
-   working surface (workspace name, section heads), where 15-17px of the
-   display face reads as the product speaking rather than a dashboard label. */
-.p-heading  { font-family: var(--font-display); font-weight: 500; letter-spacing: -0.015em; }
 /* A numeral *treatment*, not a type role — size comes from the role next to
    it. (These classes are unlayered and so outrank Tailwind's utilities: a
    font-size here silently overrides the `text-[11px]` it is written beside.) */
 .p-num      { font-variant-numeric: tabular-nums; font-family: var(--font-mono); }
 
 /* ── Surfaces ──────────────────────────────────────────────────────── */
-.p-overlay  { background: var(--c-overlay); box-shadow: var(--shadow-overlay); border-radius: var(--r-overlay); }
+.p-overlay  { background: var(--c-overlay); box-shadow: var(--shadow-overlay); border-radius: var(--r-card); }
 /* For overlays that own their own background (a drawer is a full-height
    panel, not a dialog) but still need the dialog's lift. */
 .p-shadow-overlay { box-shadow: var(--shadow-overlay); }
 .p-shadow-menu { box-shadow: var(--shadow-menu); }
 .p-scrim { background: var(--c-scrim); backdrop-filter: blur(2px); }
 .p-border   { border-color: var(--c-border); }
+.p-border-strong { border-color: var(--c-border-strong); }
+.p-border-dash { border-color: var(--c-dash); }
 
-.p-accent-bg      { background: var(--c-accent-subtle); }
+.p-accent-bg      { background: var(--c-selected); }
 
 /* ── Status ────────────────────────────────────────────────────────── */
 
+/* Dot: a state's 6 dot alone (ui/Dot.tsx). */
+.p-dot { display: inline-block; width: 6px; height: 6px; flex-shrink: 0; border-radius: var(--r-pill); }
 .p-dot-success { background: var(--c-success); }
 .p-dot-warning { background: var(--c-warning); }
 .p-dot-danger  { background: var(--c-danger); }
@@ -384,14 +499,19 @@ body { background: var(--c-bg); color: var(--c-text); }
    Set in the mono annotation face: a badge is a status ANNOTATION on the
    thing beside it, the same register the banner writes its captions in. */
 .p-badge-success, .p-badge-warning, .p-badge-danger, .p-badge-info, .p-badge-neutral {
-  font-size: 0.75rem; line-height: 18px; font-weight: 500; border-radius: 999px;
+  font-size: 12px; line-height: 18px; font-weight: 500; border-radius: var(--r-pill);
   font-family: var(--font-mono); letter-spacing: 0.01em;
 }
 .p-badge-success { background: var(--c-success-tint); color: var(--c-success); }
 .p-badge-warning { background: var(--c-warning-tint); color: var(--c-warning); }
 .p-badge-danger  { background: var(--c-danger-tint);  color: var(--c-danger); }
 .p-badge-info    { background: var(--c-info-tint);    color: var(--c-info); }
-.p-badge-neutral { background: var(--c-neutral-tint); color: var(--c-text-2); }
+.p-badge-neutral { background: var(--c-hover); color: var(--c-text-2); }
+
+/* A run's state on its row (ui/Status.tsx StatePill). */
+.p-state-pill { display: inline-flex; min-height: 24px; flex-shrink: 0; align-items: center; gap: 8px; padding: 0 8px; border-radius: var(--r-pill); }
+.p-state-pill-live { background: var(--c-selected); color: var(--c-accent-fg); }
+.p-state-pill-quiet { background: var(--c-fill); color: var(--c-text-3); }
 
 .p-tint-warning { background: var(--c-warning-tint); border-color: color-mix(in srgb, var(--c-warning) 30%, transparent); }
 
@@ -403,7 +523,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-notice-success, .p-notice-warning, .p-notice-danger, .p-notice-info, .p-notice-neutral {
   border-radius: var(--r-card);
 }
-.p-notice-neutral { background: var(--c-neutral-tint); color: var(--c-text-2); border: 1px solid var(--c-border); }
+.p-notice-neutral { background: var(--c-hover); color: var(--c-text-2); border: 1px solid var(--c-border); }
 .p-notice-success { background: var(--c-success-tint); color: var(--c-success); border: 1px solid color-mix(in srgb, var(--c-success) 30%, transparent); }
 .p-notice-warning { background: var(--c-warning-tint); color: var(--c-warning); border: 1px solid color-mix(in srgb, var(--c-warning) 30%, transparent); }
 .p-notice-danger  { background: var(--c-danger-tint);  color: var(--c-danger);  border: 1px solid color-mix(in srgb, var(--c-danger) 30%, transparent); }
@@ -419,13 +539,16 @@ body { background: var(--c-bg); color: var(--c-text); }
   overflow: hidden;
 }
 .p-group > * + * { border-top: 1px dashed var(--c-dash); }
+/* Inside a card (a Settings group, the mail reader), a group is its rows under that rule alone, never a second box
+   (design review 2026-10-20, "no nested cards"): the card's own edge and padding are the group's. */
+.p-card .p-group, .p-card-body .p-group, .p-surface-panel .p-group { border: 0; border-radius: 0; background: transparent; overflow: visible; }
 /* A `contents` wrapper (a CardSlot) draws no box, so its rows take the rule themselves. */
 .p-group > * + .contents > :first-child,
 .p-group > .contents > * + * { border-top: 1px dashed var(--c-dash); }
+/* The group's dashed rule where there is no box to draw: above one block, or between a list's rows. */
+.p-rule-dashed { border-top: 1px dashed var(--c-dash); }
+.p-rows-dashed > :not(:last-child) { border-bottom: 1px dashed var(--c-dash); }
 
-/* A section label — names a block ("Mission", "Journal", "Identity") at the
-   panel-heading size, in the faint register that keeps it under the title. */
-.p-label { font-size: 0.9375rem; line-height: 22px; font-weight: 600; color: var(--c-text-4); }
 
 /* ── Cards — quiet at rest; only cards that are actually interactive
       react (`p-card-hover`), and with a surface step, never an accent flood. ── */
@@ -434,9 +557,9 @@ body { background: var(--c-bg); color: var(--c-text); }
   border: 1px solid var(--c-border);
   border-radius: var(--r-card);
   box-shadow: var(--shadow-card);
-  transition: border-color var(--dur-base) ease-out, background-color var(--dur-base) ease-out;
+  transition: border-color var(--dur-state) ease-out, background-color var(--dur-state) ease-out;
 }
-.p-card-hover:hover { background: var(--c-elevated); }
+.p-card-hover:hover { background: var(--c-hover); }
 
 /* Code wells retain their surface and scroll behavior. Shiki supplies syntax
    colors from its light/dark themes; inline code keeps its own ink.
@@ -447,7 +570,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-code {
   background: var(--c-code-bg);
   border: 1px solid var(--c-border);
-  color: var(--c-code);
+  color: var(--c-accent-fg);
   font-family: var(--font-mono);
 }
 /* The header shares the block's ground and is separated by the hairline
@@ -460,7 +583,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 @layer utilities {
   .p-code .p-code-highlight pre {
     margin: 0; padding: 0.625rem 0.75rem; background: transparent !important;
-    font-size: 0.875rem; line-height: 1.5714;
+    font-size: 14px; line-height: 1.5714;
     font-family: var(--font-mono);
   }
   [data-mode="dark"] .p-code-highlight .shiki { color: var(--shiki-dark) !important; }
@@ -511,29 +634,39 @@ body { background: var(--c-bg); color: var(--c-text); }
 /* Inline code sits IN a sentence: it takes the warm ink and a whisper of
    ground, never a border, and it wraps rather than pushing the column. */
 .p-code-inline {
-  background: var(--c-neutral-tint);
-  color: var(--c-code);
+  background: var(--c-hover);
+  color: var(--c-accent-fg);
   font-family: var(--font-mono);
-  font-size: 0.875em;
+  font-size: 0.92em;
   padding: 0.1em 0.35em;
   border-radius: var(--r-control);
   overflow-wrap: anywhere;
 }
-/* User chat turn — the mock's bubble: one warm plane, one solid border,
-   no gradient. The 16/16/4/16 radius is applied at the call site because
-   the clipped corner is directional (it points at the speaker). */
+/* The person's chat turn (ui/Bubble.tsx) — the mock's bubble: one warm plane, one solid border, no gradient, and the
+   clipped corner pointing at the speaker. `-notes` is the narrower bubble a review's notes go in. */
 .p-user-bubble {
+  position: relative;
+  max-width: min(80%, 42rem);
+  padding: 12px 18px;
+  border-radius: var(--r-bubble) var(--r-bubble) var(--r-bubble-tail) var(--r-bubble);
   background-color: var(--c-user-bg);
   border: 1px solid var(--c-user-border);
   color: var(--c-text);
 }
+.p-user-bubble-notes { width: 100%; max-width: min(85%, 34rem); padding: 12px 16px 8px; }
+.p-user-bubble-rule { border-top: 1px solid var(--c-user-border); }
 
 /* ── Interactive ───────────────────────────────────────────────────── */
 
 .p-focus:focus-within {
   border-color: var(--c-accent);
-  box-shadow: 0 0 0 3px var(--c-accent-subtle);
+  box-shadow: 0 0 0 3px var(--c-selected);
 }
+/* The prompt card (workspaces/PromptCard.tsx) on Home and a new chat: the field's ground in a long soft drop, its edge
+   turning accent while it is written in or a file is dragged over it. */
+.p-prompt-card { overflow: hidden; border-radius: var(--r-prompt); background: var(--c-field); transition: border-color var(--dur-state) ease-out, box-shadow var(--dur-state) ease-out; }
+.p-prompt-card, .p-prompt-card:focus-within { box-shadow: var(--shadow-prompt); }
+.p-prompt-card[data-drag-over] { border-color: var(--c-accent); }
 
 /* ── Tabs ──────────────────────────────────────────────────────────
    A tab belongs to the panel underneath it, and says so with its bottom
@@ -544,7 +677,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-tab {
   border-bottom: 2px solid transparent;
   color: var(--c-text-3);
-  transition: color var(--dur-base) ease-out, border-color var(--dur-base) ease-out;
+  transition: color var(--dur-state) ease-out, border-color var(--dur-state) ease-out;
 }
 .p-tab:hover { color: var(--c-text-2); border-bottom-color: var(--c-border-strong); }
 .p-tab-active {
@@ -552,6 +685,146 @@ body { background: var(--c-bg); color: var(--c-text); }
   border-bottom-color: var(--c-accent);
 }
 .p-tab-active:hover { color: var(--c-accent-fg); border-bottom-color: var(--c-accent); }
+
+/* A strip inside a card scrolls over the card's ground. */
+.p-card-body .p-tabstrip { --scroll-ground: var(--c-surface); }
+
+/* NavRow (ui/NavRow.tsx): the nav role on the row radius; the open row on the selected ground in the accent's ink,
+   any other neutral under the pointer. */
+.p-nav-row {
+  display: flex; width: 100%; min-width: 0; align-items: center; gap: 8px; border: 0; border-radius: var(--r-row);
+  background: none; color: var(--c-text-2); text-align: left; cursor: pointer;
+  transition: background-color var(--dur-state) ease-out, color var(--dur-state) ease-out;
+}
+.p-nav-row-md { padding: 6px 12px; font: 500 14px/20px var(--font-ui); }
+.p-nav-row-sm { padding: 6px 12px 6px calc(8px + var(--nav-depth, 0) * 14px); }
+.p-nav-row-quiet { color: var(--c-text-3); }
+.p-nav-row-icon, .p-nav-row-icon-sm { position: relative; justify-content: center; width: 36px; height: 36px; padding: 0; }
+.p-nav-row-icon-sm { width: 32px; height: 32px; }
+.p-nav-row:hover { background: color-mix(in srgb, var(--c-text) 6%, transparent); color: var(--c-text); }
+.p-nav-row[data-current] { background: var(--c-selected); color: var(--c-accent-fg); }
+
+/* Covers (ui/Covers.tsx): a kind's glyph at the cover's size; a page set into its frame as a sheet of paper is. */
+.p-cover-glyph > svg { width: 34px; height: 34px; }
+.p-page-cover { padding: 5% 14% 0; }
+
+/* DropHint (ui/FilePicker.tsx): a dashed accent edge over the place, its words on an accent pill. */
+.p-drop-hint {
+  pointer-events: none; position: absolute; inset: -12px; z-index: 20; display: flex; align-items: center; justify-content: center;
+  border: 2px dashed var(--c-accent); border-radius: var(--r-card); background: color-mix(in srgb, var(--c-bg) 74%, transparent);
+}
+.p-drop-hint[data-flush] { inset: 0; }
+.p-drop-hint-words {
+  display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: var(--r-pill); background: var(--c-accent);
+  color: var(--c-accent-on); box-shadow: var(--shadow-menu);
+}
+
+/* Floating (ui/Floating.tsx): a panel at a point, on the overlay ground, above the page and its drawers. */
+.p-floating {
+  position: fixed; z-index: 60; background: var(--c-overlay); border: 1px solid var(--c-border);
+  border-radius: var(--r-card); box-shadow: var(--shadow-overlay);
+}
+
+/* Entries (ui/Entries.tsx): a tool pane's items. The open one on the fill with its name at the item weight; the keys'
+   cursor on it only while the list has the keyboard; what is hidden dimmed. */
+.p-entry { cursor: pointer; color: var(--c-text-2); transition: background-color var(--dur-state) ease-out; }
+.p-entry:hover { background: var(--c-hover); color: var(--c-text); }
+.p-entry[data-open], .group\/list:focus-visible .p-entry[data-cursor] { background: var(--c-fill); color: var(--c-text); }
+.p-entry[data-open] .t-body { font-weight: 500; }
+.p-entry[data-hidden] [data-entry-face] { opacity: 0.55; }
+.p-entry-tile { border-radius: var(--r-row); }
+.p-entry-inert, .p-entry-inert:hover { cursor: default; background: none; color: var(--c-text-3); }
+.p-entries-head { position: sticky; top: 0; z-index: 10; border-bottom: 1px solid var(--c-border); background: var(--c-sidebar); color: var(--c-text-3); }
+[data-tree-row] { display: flex; align-items: center; gap: 4px; padding: 1px 8px 1px calc(8px + var(--tree-depth, 0) * 12px); font: 400 12px/16px var(--font-ui); }
+.p-tree-gap { width: 14px; flex-shrink: 0; }
+.p-tree-fold { display: flex; flex-shrink: 0; padding: 0; border: 0; background: none; color: var(--c-text-3); cursor: pointer; }
+.p-tree-fold:hover { color: var(--c-text); }
+
+/* Preformatted (ui/Preformatted.tsx): text as it is, on the recessed ground, scrolling within its own height. */
+.p-preformatted { margin: 0; padding: 4px 8px; overflow: auto; border-radius: var(--r-inner); background: var(--c-sunken); color: var(--c-text-2); }
+.p-preformatted-wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* A quiet Select (ui/Select.tsx): no edge or ground until the pointer is on it; Kumo's own fill and ring give way. */
+.p-select.p-select-quiet { background: transparent !important; box-shadow: none !important; color: var(--c-text-2); transition: background-color var(--dur-state) ease-out; }
+.p-select.p-select-quiet:is(:hover, :focus-visible) { background: var(--c-hover) !important; }
+
+/* IconTile (ui/IconTile.tsx): an icon on a small tile of the hover wash. */
+.p-icon-tile { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; border-radius: var(--r-inner); background: var(--c-hover); }
+.p-icon-tile.size-7 { border-radius: var(--r-control); }
+
+/* Surface (ui/Surface.tsx): the named grounds a box may take, each with its edge and radius. */
+.p-surface-page { background: var(--c-bg); }
+.p-surface-chrome { background: var(--c-sidebar); }
+.p-surface-panel { border: 1px solid var(--c-border); border-radius: var(--r-card); background: var(--c-surface); }
+.p-surface-sheet { background: var(--c-surface); }
+.p-surface-well { border-radius: var(--r-control); background: var(--c-sunken); }
+.p-surface-tile { border-radius: var(--r-inner); background: var(--c-fill); }
+.p-surface-wash { border-radius: var(--r-control); background: var(--c-hover); }
+.p-surface-selected { border-radius: var(--r-row); background: var(--c-selected); }
+.p-surface-outlined { border: 1px solid var(--c-border); border-radius: var(--r-control); }
+.p-surface-round { border-radius: var(--r-pill); }
+.p-surface-clip { overflow: hidden; border-radius: var(--r-control); }
+.p-surface-paper { background: var(--c-paper); }
+.p-surface-screen { background: var(--c-screen); }
+/* Count (ui/Badge.tsx): a count over a mark, at its top right. */
+.p-count { position: absolute; top: -1px; right: -1px; display: flex; min-width: 16px; height: 16px; align-items: center; justify-content: center; padding: 0 4px; border-radius: var(--r-pill); text-align: center; }
+.p-count-accent { background: var(--c-accent); color: var(--c-accent-on); box-shadow: 0 0 0 2px var(--c-sidebar); }
+.p-count-quiet { min-width: 14px; height: auto; padding: 0 3px; background: var(--c-fill); color: var(--c-text-2); }
+.p-count-bar { min-width: 14px; height: auto; padding: 0 3px; background: var(--c-accent); color: var(--c-accent-on); box-shadow: 0 0 0 1.5px var(--c-bg); }
+/* ProgressBar (ui/Meter.tsx): a run's steps, one thin bar on the fill, the accent's part growing. */
+.p-progress { height: 4px; width: 100%; overflow: hidden; border-radius: var(--r-pill); background: var(--c-fill); }
+.p-progress-fill { height: 100%; border-radius: var(--r-pill); background: var(--c-accent); transition: width var(--dur-fold) ease-out; }
+/* Over a cover (an upload under way): the strong edge's track and the accent's mark, keeping up with each step. */
+.p-progress[data-on-cover] { background: var(--c-border-strong); }
+.p-progress[data-on-cover] > .p-progress-fill { background: var(--c-accent-mark); transition-duration: var(--dur-state); }
+/* A share's bar, a whole in parts, and a part's key (ui/Meter.tsx). */
+.p-share { height: 6px; overflow: hidden; border-radius: var(--r-pill); background: var(--c-hover); }
+.p-share > span { display: block; height: 100%; border-radius: var(--r-pill); background: var(--c-accent); }
+.p-share[data-tone="warning"] > span { background: var(--c-warning); }
+.p-share[data-tone="danger"] > span { background: var(--c-danger); }
+.p-stacked { display: flex; height: 12px; overflow: hidden; border-radius: var(--r-control); background: var(--c-hover); }
+.p-swatch { display: inline-block; width: 8px; height: 8px; flex-shrink: 0; border: 1px solid var(--c-border); }
+/* A run of steps (ui/Meter.tsx StepDots): the current dot long in the accent's ink, those done faint, the rest on the fill. */
+.p-step-dot { display: block; width: 16px; height: 6px; border-radius: var(--r-pill); background: var(--c-fill); transition: all 150ms cubic-bezier(0.4, 0, 0.2, 1); }
+.p-step-dot[data-state="current"] { width: 32px; background: var(--c-accent-fg); }
+.p-step-dot[data-state="done"] { background: var(--c-accent-fg); opacity: 0.4; }
+/* What a welcome step shows, one card after another (pages/WelcomePage.tsx), 90 ms apart; the steps' frame eases to
+   the height of the one in view. */
+.p-reveal-step { transition-delay: calc(var(--reveal-step) * 90ms); }
+.p-welcome-frame { transition: height 300ms ease-out; }
+/* An avatar (ui/Avatar.tsx): a circle of its name's hue, the initial white in every look. */
+.p-avatar { border-radius: var(--r-pill); font-weight: 600; color: var(--c-avatar-ink); }
+/* The wordmark (ui/KinuLogo.tsx): the name beside the mark, 18, or 17 in the app's own sidebar. */
+.p-wordmark { font-size: var(--t-wordmark); font-weight: 500; }
+.p-wordmark[data-compact] { font-size: 17px; }
+/* Emphasis in running text is `<strong>`: the item role's weight, at the sentence's own size and in its ink. */
+:where(strong) { font-weight: 500; }
+/* Rail (ui/Rail.tsx): a strip of the tabs above below its breakpoint, fading at its scrolling edge; a column of rows
+   from it up, the open row on the selected ground. */
+.p-rail { display: flex; border-bottom: 1px solid var(--c-border); mask-image: linear-gradient(to right, black calc(100% - 24px), transparent); }
+.p-rail-item {
+  display: flex; flex-shrink: 0; align-items: center; gap: 6px; margin-bottom: -1px; padding: 13px 8px; white-space: nowrap;
+  border: 0; border-bottom: 2px solid transparent; background: none; color: var(--c-text-3); cursor: pointer;
+  transition: color var(--dur-state) ease-out, border-color var(--dur-state) ease-out, background-color var(--dur-state) ease-out;
+}
+.p-rail-item:hover { color: var(--c-text-2); border-bottom-color: var(--c-border-strong); }
+.p-rail-item[aria-current="true"] { color: var(--c-accent-fg); border-bottom-color: var(--c-accent); }
+.p-rail-item:not([aria-current="true"]) > svg { color: var(--c-text-3); }
+.p-rail-detail { display: none; }
+@media (min-width: 768px) {
+  .p-rail[data-at="md"] { flex-direction: column; gap: 1px; overflow: visible; border-bottom: 0; mask-image: none; }
+  .p-rail[data-at="md"] .p-rail-item { margin-bottom: 0; padding: 7px 12px; border-bottom: 0; border-radius: var(--r-row); color: var(--c-text-2); }
+  .p-rail[data-at="md"] .p-rail-item:hover { background: var(--c-hover); color: var(--c-text); }
+  .p-rail[data-at="md"] .p-rail-item[aria-current="true"] { background: var(--c-selected); color: var(--c-accent-fg); }
+  .p-rail[data-at="md"] .p-rail-detail { display: block; }
+}
+@media (min-width: 1024px) {
+  .p-rail[data-at="lg"] { flex-direction: column; gap: 1px; overflow: visible; border-bottom: 0; mask-image: none; }
+  .p-rail[data-at="lg"] .p-rail-item { margin-bottom: 0; padding: 7px 12px; border-bottom: 0; border-radius: var(--r-row); color: var(--c-text-2); }
+  .p-rail[data-at="lg"] .p-rail-item:hover { background: var(--c-hover); color: var(--c-text); }
+  .p-rail[data-at="lg"] .p-rail-item[aria-current="true"] { background: var(--c-selected); color: var(--c-accent-fg); }
+  .p-rail[data-at="lg"] .p-rail-detail { display: block; }
+}
 
 /* ── Fold ──────────────────────────────────────────────────────────
    A block folds by its height and its opacity together, on one curve, so
@@ -567,10 +840,17 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-fold[data-folded] { grid-template-rows: 0fr; opacity: 0; }
 .p-fold > * { min-height: 0; overflow: hidden; }
 .p-fold-turn { transition: rotate var(--dur-fold) var(--ease-out-strong); }
-.p-fold-frame { transition: height var(--dur-fold) var(--ease-out-strong); }
+/* Disclosure's row (ui/Disclosure.tsx): caret, name, what is inside; the name brightens on hover. */
+.p-disclosure { display: flex; width: 100%; min-width: 0; align-items: center; gap: 8px; padding: 0; border: 0; background: none; color: var(--c-text-3); font: inherit; text-align: left; cursor: pointer; }
+.p-disclosure:hover .t-item { color: var(--c-text); }
+.p-disclosure .t-item { color: var(--c-text); }
+/* An answer's slate frame (slates/InlineSlate.tsx): in its fold at the card radius, its height easing; in the work
+   surface's pane, the page's ground edge to edge. */
+.p-slate-frame { display: block; width: 100%; border: 0; border-radius: var(--r-card); transition: height var(--dur-fold) var(--ease-out-strong); }
+.p-slate-frame[data-pane] { flex: 1 1 0%; min-height: 0; border-radius: 0; background: var(--c-bg); transition: none; }
 [data-fold-still] :is(.p-fold, .p-fold-turn) { transition: none; }
 @media (prefers-reduced-motion: reduce) {
-  .p-fold, .p-fold-turn, .p-fold-frame { transition: none; }
+  .p-fold, .p-fold-turn, .p-slate-frame { transition: none; }
 }
 
 /* Tab strip — scrolls when its column is narrower than the set of surfaces,
@@ -590,85 +870,343 @@ body { background: var(--c-bg); color: var(--c-text); }
 }
 .p-tabstrip::-webkit-scrollbar { display: none; }
 
-/* Buttons — one hierarchy.
-   p-btn        primary: brass fill + ink, both modes
-   p-btn-danger destructive confirm: danger fill + ink
-   p-btn-quiet  secondary: hairline + surface
-   p-btn-ghost  tertiary: text only, surface on hover
+/* ── The one button (components/ui/Button.tsx; design review 2026-10-20) ──
+   md 32 / sm 28, r8, 13/500; primary brass at 600, one per view. Filled buttons carry their own ink rather than
+   white: brass is a light fill (white on it measures 2.4:1), and so is the dark-mode danger tone (`--c-danger-on`). */
+.p-button {
+  display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; gap: 6px;
+  border: 1px solid transparent; border-radius: var(--r-control); white-space: nowrap; cursor: pointer;
+  font: 500 13px/20px var(--font-ui);
+  transition: background-color var(--dur-state) ease-out, border-color var(--dur-state) ease-out, box-shadow var(--dur-state) ease-out, color var(--dur-state) ease-out;
+}
+.p-button-md { height: 32px; padding: 0 14px; }
+.p-button-sm { height: 28px; padding: 0 10px; }
+/* lg: a public page's call to action, at the public pages' size (role.public-control). */
+.p-button-lg { height: 38px; padding: 0 15px; font-size: var(--t-public-control); }
+.p-button-md.p-button-icon { width: 32px; padding: 0; }
+.p-button-sm.p-button-icon { width: 28px; padding: 0; }
+/* A page's header actions are md whatever a call site asks: one height on every header row (PageHeader). */
+.p-page-actions .p-button { height: 32px; padding: 0 14px; }
+.p-page-actions .p-button.p-button-icon { width: 32px; padding: 0; }
+/* A button is known by its label and its fill step: a quiet edge and lift (A4), never an input's 3:1 outline. Pressed is
+   the darker fill alone; a shrink on a 28 px button reads as jitter. */
+.p-button-secondary { background: var(--c-button-bg); border-color: var(--c-button-line); color: var(--c-text); box-shadow: var(--shadow-button); }
+/* Hover steps the fill and keeps the edge: a darker edge over the lift read as a second outline in light. */
+.p-button-secondary:is(:hover, [data-force="hover"]) { background: var(--c-button-bg-hover); }
+.p-button-secondary:is(:active, [data-force="active"]) { background: var(--c-button-bg-active); box-shadow: none; }
 
-   Filled buttons carry their own ink rather than white: brass is a LIGHT
-   fill (white on it measures 2.4:1), and so is the dark-mode danger tone.
-   Kumo's `primary`/`destructive` variants hardcode `!text-white` and are
-   therefore the one part of its library we do not use — the call sites
-   render `FilledButton` (components/ui/FilledButton.tsx), which pairs these
-   looks with Kumo's own `size="sm"` box. */
-.p-btn {
-  background: var(--c-accent);
-  color: var(--c-accent-on);
-  border: none;
+.p-button-primary { background: var(--c-accent); color: var(--c-accent-on); font-weight: 600; box-shadow: var(--shadow-primary); }
+.p-button-primary:is(:hover, [data-force="hover"]) { background: var(--c-accent-hover); }
+.p-button-primary:is(:active, [data-force="active"]) { background: var(--c-accent-active); box-shadow: none; }
+
+.p-button-ghost { background: transparent; color: var(--c-text-2); }
+.p-button-ghost:is(:hover, [data-force="hover"]) { background: var(--c-hover); color: var(--c-text); }
+.p-button-ghost:is(:active, [data-force="active"]), .p-button-ghost[aria-pressed="true"] { background: color-mix(in srgb, var(--c-text) 10%, transparent); color: var(--c-text); }
+
+.p-button-danger { background: var(--c-button-bg); border-color: var(--c-button-line); color: var(--c-danger); box-shadow: var(--shadow-button); }
+.p-button-danger:is(:hover, [data-force="hover"]) { background: var(--c-danger-tint); border-color: color-mix(in srgb, var(--c-danger) 30%, transparent); }
+
+.p-button-destructive { background: var(--c-danger); color: var(--c-danger-on); font-weight: 600; box-shadow: var(--shadow-destructive); }
+.p-button-destructive:is(:hover, [data-force="hover"]) { background: var(--c-danger-hover); }
+
+.p-button:disabled { cursor: default; box-shadow: none; }
+/* A busy button is disabled only to the pointer: it keeps its look and width, a spinner in its icon's place. */
+.p-button[aria-busy="true"] { cursor: progress; }
+/* One disabled look for every variant: a flat muted fill, muted ink, no edge and no lift. */
+.p-button:disabled:not([aria-busy]) { background: var(--c-hover); color: var(--c-text-3); border-color: transparent; box-shadow: none; }
+/* Disabled is the variant's own shape, muted: a ghost stays unfilled, so no disabled control reads as pressed. */
+.p-button-ghost:disabled:not([aria-busy]) { background: transparent; }
+
+/* `data-force` draws a state at rest for the system frame (?frame=system), in place of the pointer and the keyboard. */
+
+/* A form's save bar (ui/SaveBar.tsx): floating at its column's foot, in and out over 220 ms. */
+.p-save-bar {
+  position: sticky; bottom: 16px; z-index: 10; display: flex; align-items: center; gap: 12px;
+  height: 48px; margin-top: 24px; padding: 8px 8px 8px 16px;
+  border: 1px solid var(--c-border); border-radius: var(--r-card); background: var(--c-overlay); box-shadow: var(--shadow-menu);
+  animation: p-save-bar-in var(--dur-enter) var(--ease-out-strong);
+  transition: opacity var(--dur-enter) var(--ease-out-strong), transform var(--dur-enter) var(--ease-out-strong);
+}
+.p-save-bar[data-state="closed"] { opacity: 0; transform: translateY(8px); }
+@keyframes p-save-bar-in { from { opacity: 0; transform: translateY(8px); } }
+@media (prefers-reduced-motion: reduce) { .p-save-bar { animation: none; transition: none; } }
+
+/* A tool's bar and its narrow-screen row (ui/PageHeader.tsx ToolBar): the chat bar's height, every control 28. */
+.p-tool-bar {
+  display: flex; flex-shrink: 0; align-items: center; gap: 8px; height: 46px; padding: 0 16px;
+  border-bottom: 1px solid var(--c-border); background: var(--c-bg);
+}
+.p-tool-title { font: 600 15px/22px var(--font-display); letter-spacing: -0.006em; color: var(--c-text); white-space: nowrap; }
+.p-tool-row {
+  display: flex; flex-shrink: 0; align-items: center; gap: 8px; height: 44px; padding: 0 16px;
+  border-bottom: 1px solid var(--c-border); overflow-x: auto; scrollbar-width: none;
+}
+.p-tool-row::-webkit-scrollbar { display: none; }
+/* The row scrolls rather than squeezing what it holds. */
+.p-tool-row > * { flex-shrink: 0; }
+@media (max-width: 639px) {
+  :root, [data-theme], [data-mode] { --layout-gutter: 20px; --layout-bar: 48px; }
+  .p-tool-bar { height: 48px; }
+  .p-tool-title { font-size: 17px; line-height: 24px; }
+}
+
+/* ── The component set (components/ui/, docs/DESIGN-SYSTEM.md §2): each class is its component's alone ── */
+
+/* Row: tile · name and meta · status · ⋯ or + (ui/Row.tsx). */
+.p-row {
+  display: grid; align-items: center; column-gap: 12px; min-height: 56px; padding: 0 8px;
+  grid-template-columns: 32px minmax(0, 1fr) 120px 28px;
   border-radius: var(--r-row);
-  font-weight: 600;
-  letter-spacing: -0.008em;
-  transition: background-color var(--dur-base) ease-out, transform var(--dur-fast) var(--ease-out-strong);
+  transition: background-color var(--dur-state) ease-out;
 }
-.p-btn:hover { background: color-mix(in srgb, var(--c-accent) 92%, #000); }
-.p-btn:active { transform: scale(0.98); }
-/* A filled button cannot fade to disabled: 45% brass over a warm canvas is
-   the canvas, and HomePage's primary action disappeared until you typed.
-   Disabled drops the fill entirely and becomes a neutral chip — still an
-   object, visibly not actionable. */
-.p-btn:disabled { background: var(--c-neutral-tint); color: var(--c-text-3); cursor: default; transform: none; }
+.p-row:is(:hover, [data-force="hover"]) { background: var(--c-hover); }
+.p-row[aria-current="true"] { background: var(--c-selected); }
+.p-row-control { grid-template-columns: 32px minmax(0, 1fr) 120px auto 28px; }
+.p-row-state { display: contents; }
+@media (max-width: 639px) {
+  .p-row-control { grid-template-columns: 32px minmax(0, 1fr) 28px; }
+  .p-row-control .p-row-state { display: flex; align-items: center; gap: 12px; grid-row: 2; grid-column: 2 / -1; padding-bottom: 8px; }
+}
+.p-row-tile {
+  display: flex; width: 32px; height: 32px; flex-shrink: 0; align-items: center; justify-content: center;
+  border: 1px solid var(--c-border); border-radius: var(--r-control); background: var(--c-fill); color: var(--c-text-3);
+}
+.p-row-action, .p-menu-trigger {
+  display: flex; width: 28px; height: 28px; flex-shrink: 0; align-items: center; justify-content: center;
+  border-radius: var(--r-control); color: var(--c-text-3); transition: background-color var(--dur-state) ease-out, color var(--dur-state) ease-out;
+}
+.p-row-action:is(:hover, [data-force="hover"]), .p-menu-trigger:is(:hover, [data-force="hover"]), .p-menu-trigger[data-popup-open] { background: var(--c-hover); color: var(--c-text); }
+.p-row-action:disabled { opacity: 0.4; }
 
-/* Brass is the same light object in both modes, so its ink is fixed. Danger
-   is not — it is a light salmon on umber and a deep red on paper — so its ink
-   is the ground, which is that tone's opposite in either mode. */
-.p-btn-danger {
-  background: var(--c-danger);
-  color: var(--c-bg);
-  border: none;
-  border-radius: var(--r-row);
-  font-weight: 600;
-  letter-spacing: -0.008em;
-  transition: background-color var(--dur-base) ease-out, transform var(--dur-fast) var(--ease-out-strong);
+/* Menu (ui/Menu.tsx): Base UI's menu on the overlay at the row radius, items 32. On a phone it is a sheet from the
+   bottom edge over a scrim, its items 40 for a finger. */
+.p-menu-positioner { z-index: 60; }
+.p-menu-scrim { position: fixed; inset: 0; z-index: 59; background: var(--c-scrim); backdrop-filter: blur(2px); }
+.p-menu {
+  min-width: 180px; padding: 4px; outline: none; background: var(--c-overlay); border: 1px solid var(--c-border);
+  border-radius: var(--r-row); box-shadow: var(--shadow-menu); transform-origin: var(--transform-origin);
+  transition: opacity var(--dur-enter) var(--ease-out-strong), transform var(--dur-enter) var(--ease-out-strong);
 }
-.p-btn-danger:hover { background: color-mix(in srgb, var(--c-danger) 88%, #000); }
-.p-btn-danger:active { transform: scale(0.98); }
-.p-btn-danger:disabled { background: var(--c-neutral-tint); color: var(--c-text-3); cursor: default; transform: none; }
+.p-menu:is([data-starting-style], [data-ending-style]) { opacity: 0; transform: scale(0.98); }
+/* A menu leaving takes no press: the scrim of a sheet that is fading out would swallow the next one. */
+:is(.p-menu, .p-menu-scrim, .p-menu-positioner)[data-closed] { pointer-events: none; }
+.p-menu[data-sheet] { width: calc(100vw - 24px); max-height: 70vh; overflow-y: auto; border-radius: var(--r-card); box-shadow: var(--shadow-overlay); }
+.p-menu-name { padding: 4px 8px 8px; color: var(--c-text-3); }
+.p-menu-item {
+  display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 6px 8px; border-radius: var(--r-control);
+  font: 500 13px/20px var(--font-ui); color: var(--c-text); cursor: pointer; outline: none; user-select: none;
+}
+.p-menu[data-sheet] .p-menu-item { min-height: 40px; }
+.p-menu-item[data-highlighted] { background: var(--c-hover); }
+.p-menu-item[data-disabled] { cursor: default; color: var(--c-text-3); }
+.p-menu-item[data-disabled] .p-menu-icon { opacity: 0.45; }
+.p-menu-icon { display: flex; flex-shrink: 0; color: var(--c-text-3); }
+.p-menu-danger, .p-menu-danger .p-menu-icon { color: var(--c-danger); }
+.p-menu-danger[data-highlighted] { background: var(--c-danger-tint); }
+.p-menu-check { display: flex; margin-left: auto; color: var(--c-accent-fg); }
+.p-menu-rule { height: 1px; margin: 4px; background: var(--c-border); }
+@media (prefers-reduced-motion: reduce) { .p-menu { transition: none; } }
 
-.p-btn-quiet {
-  background: var(--c-surface);
-  color: var(--c-text);
-  border: 1px solid var(--c-input-border);
-  border-radius: var(--r-row);
-  font-weight: 500;
-  letter-spacing: -0.008em;
-  transition: background-color var(--dur-base) ease-out, border-color var(--dur-base) ease-out, transform var(--dur-fast) var(--ease-out-strong);
+/* Pressable: a whole row or tile to press, its wash and its ring and nothing else (ui/Pressable.tsx). */
+.p-pressable {
+  display: block; width: 100%; text-align: left; background: transparent; border-width: 0; padding: 0; color: inherit;
+  border-radius: var(--r-row); cursor: pointer; transition: background-color var(--dur-state) ease-out;
 }
-.p-btn-quiet:hover { background: var(--c-elevated); border-color: var(--c-border-strong); }
-.p-btn-quiet:active { transform: scale(0.98); }
-.p-btn-quiet:disabled { opacity: 0.45; cursor: default; transform: none; }
+.p-pressable:is(:hover, [data-force="hover"]) { background: var(--c-hover); }
+.p-pressable:is(:active, [data-force="active"]) { background: var(--c-pressed); }
+.p-pressable[data-selected] { background: var(--c-selected); }
+.p-pressable-compact { width: auto; border-radius: var(--r-control); }
+.p-pressable-flush { border-radius: 0; }
+/* The row whose content is open beside its list sits on the fill, as Files' open entry does. */
+.p-pressable[aria-current="true"] { background: var(--c-fill); }
+/* A control whose panel is open (`open`) sits on the fill until it closes. */
+.p-pressable[data-open] { background: var(--c-fill); }
 
-.p-btn-ghost {
-  background: transparent;
-  color: var(--c-text-2);
-  border: none;
-  border-radius: var(--r-control);
-  font-weight: 500;
-  transition: background-color var(--dur-base) ease-out, color var(--dur-base) ease-out;
+/* An action inside running text (ui/InlineAction.tsx): the sentence's type, accent ink, underlined on hover. */
+.p-inline-action { display: inline; padding: 0; border: 0; background: none; color: var(--c-accent-fg); text-align: inherit; cursor: pointer; }
+/* A press takes the type of what it sits in, unless it names a role of its own (`t-meta` on a strip, `t-body` on a menu row). */
+:where(.p-pressable, .p-inline-action) { font: inherit; }
+.p-inline-action:hover { text-decoration: underline; }
+.p-inline-action:disabled { cursor: default; color: var(--c-text-3); text-decoration: none; }
+
+/* A busy button's spinner, in the icon's place. */
+.p-button-spinner {
+  width: 14px; height: 14px; flex-shrink: 0; border-radius: var(--r-pill);
+  border: 2px solid currentColor; border-right-color: transparent; animation: p-spin 0.8s linear infinite;
 }
-.p-btn-ghost:hover { background: var(--c-neutral-tint); color: var(--c-text); }
-.p-btn-ghost:disabled { opacity: 0.45; cursor: default; }
+@keyframes p-spin { to { transform: rotate(360deg); } }
+
+/* Field: the text controls, md 32 / sm 28, on the field ground with the 3:1 edge (ui/Field.tsx, ui/Select.tsx). */
+.p-field {
+  width: 100%; padding: 0 12px; border: 1px solid var(--c-field-border); border-radius: var(--r-control);
+  background: var(--c-field); color: var(--c-text); font: 400 13px/20px var(--font-ui);
+  transition: border-color var(--dur-state) ease-out;
+}
+.p-field::placeholder { color: var(--c-text-3); }
+.p-field:is(:hover, [data-force="hover"]) { border-color: var(--c-border-strong); }
+.p-field[aria-invalid="true"] { border-color: var(--c-danger); }
+.p-field:disabled { opacity: 0.5; cursor: default; }
+.p-field-md { height: 32px; }
+.p-field-sm { height: 28px; padding: 0 10px; }
+.p-field-area { min-height: 80px; height: auto; padding: 8px 12px; resize: vertical; }
+/* A field with words inside its edge around the value (TextInput's before and after); the box takes the focus ring. */
+.p-field-affixed { display: flex; align-items: center; gap: 8px; cursor: text; }
+.p-field-affixed[data-invalid] { border-color: var(--c-danger); }
+/* A bare field (TextInput and TextArea `bare`): drawn into its surface, which owns its edge; the value and placeholder only. */
+:where(.p-field-surface) { width: 100%; min-width: 0; padding: 0; border: 0; background: transparent; color: var(--c-text); font: inherit; outline: none; resize: none; }
+.p-field-surface::placeholder { color: var(--c-text-3); }
+.p-field-bare, .p-field-bare:focus-visible { min-width: 0; flex: 1; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: inherit; outline: none; }
+.p-select {
+  width: 100%; border-radius: var(--r-control) !important; border: 1px solid var(--c-field-border) !important;
+  background: var(--c-field) !important; box-shadow: none !important; font: 400 13px/20px var(--font-ui) !important;
+}
+.p-select.p-field-md { height: 32px !important; }
+.p-select.p-field-sm { height: 28px !important; }
+.p-select:focus-visible { border-color: var(--c-focus) !important; }
+
+/* Checkbox and radio: 16, the check radius and the pill (ui/Check.tsx). */
+.p-check, .p-radio {
+  display: inline-flex; width: 16px; height: 16px; flex-shrink: 0; align-items: center; justify-content: center;
+  border: 1px solid var(--c-field-border); background: var(--c-field); color: var(--c-accent-on);
+  transition: background-color var(--dur-state) ease-out, border-color var(--dur-state) ease-out;
+}
+.p-check { border-radius: var(--r-check); }
+.p-radio { border-radius: var(--r-pill); }
+.p-check[data-checked], .p-check[data-indeterminate], .p-radio[data-checked] { background: var(--c-accent); border-color: var(--c-accent); }
+.p-radio-dot { width: 6px; height: 6px; border-radius: var(--r-pill); background: var(--c-accent-on); }
+.p-check[data-disabled], .p-radio[data-disabled] { opacity: 0.5; }
+
+/* Choices: one of a few options, rows in a group or tiles over a picture, the whole option the radio (ui/Choices.tsx). */
+.p-choice {
+  width: 100%; text-align: left; color: var(--c-text-3); font: inherit; cursor: pointer; background: transparent;
+  transition: background-color var(--dur-state) ease-out, border-color var(--dur-state) ease-out;
+}
+.p-choice[data-disabled] { cursor: default; opacity: 0.5; }
+.p-choice[data-checked] .p-choice-icon { color: var(--c-accent-fg); }
+.p-choice[data-checked] .p-radio { background: var(--c-accent); border-color: var(--c-accent); }
+.p-choice-row { display: flex; align-items: flex-start; gap: 12px; padding: 8px 12px; border: 0; }
+.p-choice-row:is(:hover, [data-force="hover"]):not([data-disabled]) { background: var(--c-hover); }
+.p-choice-row[data-checked] { background: var(--c-fill); }
+.p-choice-tile { display: block; padding: 8px; border: 1px solid var(--c-border); border-radius: var(--r-card); }
+.p-choice-tile:is(:hover, [data-force="hover"]):not([data-disabled]) { border-color: var(--c-border-strong); }
+.p-choice-tile[data-checked] { border-color: var(--c-accent); }
+
+/* Switch: a 32 by 18 track, a 14 thumb, white in both modes (ui/Switch.tsx). */
+.p-switch {
+  position: relative; display: inline-flex; width: 32px; height: 18px; flex-shrink: 0; align-items: center; padding: 0 2px;
+  border: 0; border-radius: var(--r-pill); background: color-mix(in srgb, var(--c-field-border) 60%, transparent);
+  cursor: pointer; transition: background-color var(--dur-state) ease-out;
+}
+.p-switch[data-checked] { background: var(--c-accent); }
+.p-switch:disabled { opacity: 0.5; cursor: default; }
+.p-switch-thumb {
+  width: 14px; height: 14px; border-radius: var(--r-pill); background: var(--c-button-bg);
+  box-shadow: 0 1px 2px var(--c-shadow-drop); transition: transform var(--dur-state) var(--ease-glide);
+}
+.p-switch-thumb[data-checked] { transform: translateX(14px); background: var(--c-accent-on); }
+@media (prefers-reduced-motion: reduce) { .p-switch-thumb { transition: none; } }
+
+/* Tabs: an underline strip 40 tall (ui/Tabs.tsx). */
+.p-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--c-border); overflow-x: auto; scrollbar-width: none; }
+.p-tabs::-webkit-scrollbar { display: none; }
+.p-tabs-tab {
+  display: inline-flex; height: 40px; flex-shrink: 0; align-items: center; gap: 6px; padding: 0 10px; margin-bottom: -1px;
+  border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--c-text-3); font: 500 14px/20px var(--font-ui);
+  white-space: nowrap; cursor: pointer; transition: color var(--dur-state) ease-out;
+}
+.p-tabs-tab:hover { color: var(--c-text-2); }
+.p-tabs-tab[aria-current="page"] { color: var(--c-accent-fg); border-bottom-color: var(--c-accent); }
+
+/* Chip: 24 tall and round, the status role (ui/Chip.tsx). */
+.p-chip {
+  display: inline-flex; height: 24px; max-width: 100%; align-items: center; gap: 4px; padding: 0 8px;
+  border-radius: var(--r-pill); font: 500 12px/16px var(--font-ui);
+}
+.p-chip-removable { padding-right: 4px; }
+.p-chip-neutral { background: var(--c-hover); color: var(--c-text-2); }
+.p-chip-success { background: var(--c-success-tint); color: var(--c-success); }
+.p-chip-warning { background: var(--c-warning-tint); color: var(--c-warning); }
+.p-chip-danger { background: var(--c-danger-tint); color: var(--c-danger); }
+.p-chip-info { background: var(--c-info-tint); color: var(--c-info); }
+.p-chip-accent { background: var(--c-selected); color: var(--c-accent-fg); }
+.p-chip-remove {
+  display: flex; width: 16px; height: 16px; flex-shrink: 0; align-items: center; justify-content: center;
+  border: 0; border-radius: var(--r-pill); background: transparent; color: inherit; opacity: 0.7; cursor: pointer;
+}
+.p-chip-remove:hover { opacity: 1; background: var(--c-hover); }
+
+/* Badge: what a thing is, 20 tall at the control radius (ui/Badge.tsx). */
+.p-badge {
+  display: inline-flex; height: 20px; flex-shrink: 0; align-items: center; gap: 4px; padding: 0 6px;
+  border-radius: var(--r-control); font: 600 11px/14px var(--font-ui); letter-spacing: 0.01em; white-space: nowrap;
+}
+.p-badge-neutral { background: var(--c-hover); color: var(--c-text-2); }
+.p-badge-accent { background: var(--c-selected); color: var(--c-accent-fg); }
+.p-badge.p-badge-info { background: var(--c-info-tint); color: var(--c-info); }
+.p-badge-onPicture { background: color-mix(in srgb, var(--c-overlay) 92%, transparent); color: var(--c-text); box-shadow: 0 0 0 1px var(--c-border); }
+
+/* Card: the label above, the body a box at 20 inside and 20 apart (ui/Card.tsx). */
+.p-card-body {
+  display: flex; flex-direction: column; gap: 20px; padding: 20px;
+  background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--r-card);
+}
+
+/* FlowCard: the 520 card of a flow and its dots (ui/FlowCard.tsx). */
+.p-flow-dot { display: block; width: 16px; height: 6px; border-radius: var(--r-pill); background: var(--c-fill); transition: width var(--dur-enter) var(--ease-out-strong); }
+.p-flow-dot-here { width: 32px; background: var(--c-accent-fg); }
+.p-flow-dot-done { background: color-mix(in srgb, var(--c-accent-fg) 40%, transparent); }
+.p-flow-card { overflow: hidden; background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--r-card); }
+.p-flow-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--c-border); }
+
+/* Dialog: 440, 560 or 720, 24 inside, the card radius, on the overlay (ui/Modal.tsx). */
+.p-dialog {
+  display: flex; width: 100%; max-height: calc(100vh - 2rem); flex-direction: column; gap: 16px; overflow-y: auto; padding: 24px;
+  background: var(--c-overlay); border: 1px solid var(--c-border); border-radius: var(--r-card); box-shadow: var(--shadow-overlay);
+  animation: p-dialog-in var(--dur-enter) var(--ease-out-strong);
+}
+.p-dialog-sm { max-width: 440px; }
+.p-dialog-md { max-width: 560px; }
+.p-dialog-lg { max-width: 720px; }
+@keyframes p-dialog-in { from { opacity: 0; transform: translateY(8px) scale(0.98); } }
+@media (max-width: 639px) { .p-dialog { padding: 16px; } }
+@media (prefers-reduced-motion: reduce) { .p-dialog { animation: none; } }
+
+/* Popover and tooltip (ui/Popover.tsx, ui/Tooltip.tsx). */
+.p-popover { padding: 12px !important; border-radius: var(--r-card) !important; box-shadow: var(--shadow-menu) !important; }
+.p-tooltip, :has(> [data-tooltip-body]) {
+  padding: 4px 8px !important; border: 0 !important; border-radius: var(--r-control) !important; background: var(--c-text) !important;
+  color: var(--c-bg) !important; font: 400 12px/16px var(--font-ui) !important; box-shadow: none !important;
+}
+
+/* Notice: the tone's tint, a line in its ink at 30%, the body in its ink (ui/Notice.tsx). */
+.p-notice { display: flex; align-items: flex-start; gap: 12px; padding: 12px 16px; border: 1px solid; border-radius: var(--r-row); }
+.p-notice-tone-info { background: var(--c-info-tint); border-color: color-mix(in srgb, var(--c-info) 30%, transparent); color: var(--c-info); }
+.p-notice-tone-success { background: var(--c-success-tint); border-color: color-mix(in srgb, var(--c-success) 30%, transparent); color: var(--c-success); }
+.p-notice-tone-warning { background: var(--c-warning-tint); border-color: color-mix(in srgb, var(--c-warning) 30%, transparent); color: var(--c-warning); }
+.p-notice-tone-danger { background: var(--c-danger-tint); border-color: color-mix(in srgb, var(--c-danger) 30%, transparent); color: var(--c-danger); }
+.p-notice :is(.t-body, .t-item, .t-meta) { color: inherit; }
+
+/* Meter: a 4 bar on the hover wash (ui/Meter.tsx). */
+.p-meter-track { height: 4px !important; border-radius: var(--r-pill) !important; background: var(--c-hover) !important; }
+.p-meter-accent { background: var(--c-accent) !important; border-radius: var(--r-pill) !important; }
+.p-meter-warning { background: var(--c-warning) !important; border-radius: var(--r-pill) !important; }
+.p-meter-danger { background: var(--c-danger) !important; border-radius: var(--r-pill) !important; }
+
+/* CopyField: mono in a sunken well (ui/CopyField.tsx). */
+.p-copy-field { background: var(--c-sunken) !important; border-radius: var(--r-control) !important; font-family: var(--font-mono) !important; }
 
 /* Composer — the one place the user acts; a distinct raised surface that
    lifts a touch on focus. */
 .p-composer {
   background: var(--c-composer-bg);
   border: 1px solid var(--c-composer-line);
-  border-radius: 24px;
+  border-radius: var(--r-composer);
   box-shadow: var(--shadow-composer);
-  transition: border-color var(--dur-base) ease-out, box-shadow var(--dur-base) ease-out;
+  transition: border-color var(--dur-state) ease-out, box-shadow var(--dur-state) ease-out;
 }
 .p-composer:focus-within { border-color: var(--c-composer-line-focus); }
+/* The approved composer's field: its text 18 in from the edge, the action row close under it. */
+.p-composer [data-composer-field] { padding: 12px 18px 4px; }
 
 /* The attention stack: what waits on the owner, attached to the composer's top
    edge. The open card is the composer's own surface, inset so it reads as a
@@ -678,7 +1216,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-attention-card {
   padding: 11px 14px 12px;
   border: 1px solid color-mix(in srgb, var(--c-warning) 26%, var(--c-composer-line));
-  border-radius: 18px;
+  border-radius: var(--r-card);
   background: var(--c-composer-bg);
   box-shadow: var(--shadow-menu);
   animation: fade-in var(--dur-enter) var(--ease-out-strong);
@@ -692,12 +1230,12 @@ body { background: var(--c-bg); color: var(--c-text); }
   height: 26px;
   padding: 0 11px;
   border: 1px solid var(--c-composer-line);
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: var(--c-composer-bg);
   color: var(--c-text-3);
   font-size: 12px;
   cursor: pointer;
-  transition: color var(--dur-fast) ease-out;
+  transition: color var(--dur-state) ease-out;
 }
 .p-attention-behind:hover { color: var(--c-text); }
 @media (max-width: 640px) {
@@ -726,7 +1264,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   min-height: 34px;
   padding: 4px 5px 4px 12px;
   border: 1px solid var(--c-composer-line);
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: var(--c-composer-bg);
   box-shadow: var(--shadow-menu);
   color: var(--c-text-2);
@@ -742,7 +1280,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 }
 .p-pill[data-tone="warning"] { border-color: color-mix(in srgb, var(--c-warning) 28%, transparent); }
 .p-pills > .p-pill { width: 100%; }
-.p-pill:not(:has(.p-pill-action, .p-pill-icon)) { padding-right: 14px; }
+.p-pill:not(:has(.p-pill-action, .p-icon-control-pill)) { padding-right: 14px; }
 .p-pill-mark { display: flex; flex-shrink: 0; align-items: center; justify-content: center; width: 16px; height: 20px; }
 .p-pill-mark[data-tone="danger"] { color: var(--c-danger); }
 .p-pill-mark[data-tone="warning"] { color: var(--c-warning); }
@@ -752,6 +1290,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-pill-mark[data-tone="quiet"] { color: var(--c-text-3); }
 .p-pill-body { display: flex; min-width: 0; flex: 1 1 auto; align-items: baseline; gap: 6px; }
 .p-pill-source { flex-shrink: 0; color: var(--c-text); font-weight: 600; white-space: nowrap; }
+.p-pill-source-note { margin-left: 8px; font-weight: 400; color: var(--c-text-3); }
 .p-pill-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .p-pill-dim { min-width: 0; overflow: hidden; color: var(--c-text-3); text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .p-pill-action {
@@ -761,30 +1300,28 @@ body { background: var(--c-bg); color: var(--c-text); }
   gap: 5px;
   height: 26px;
   padding: 0 11px;
-  border-radius: 999px;
-  background: var(--c-neutral-tint);
+  border-radius: var(--r-pill);
+  background: var(--c-hover);
   color: var(--c-text);
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
-  transition: background-color var(--dur-fast) ease-out;
+  transition: background-color var(--dur-state) ease-out;
 }
 .p-pill-action:hover { background: color-mix(in srgb, var(--c-text) 12%, transparent); }
+/* Quiet: ink only, in any tone of pill, under the pointer too. */
+.p-pill-action[data-quiet] { background: transparent !important; }
 .p-pill[data-tone="danger"] .p-pill-action { background: color-mix(in srgb, var(--c-danger) 16%, transparent); }
 .p-pill[data-tone="danger"] .p-pill-action:hover { background: color-mix(in srgb, var(--c-danger) 24%, transparent); }
-.p-pill-icon {
+.p-icon-control-pill {
   display: inline-flex;
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
   width: 26px;
   height: 26px;
-  border-radius: 999px;
-  color: var(--c-text-3);
-  cursor: pointer;
-  transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
+  border-radius: var(--r-pill);
 }
-.p-pill-icon:hover { color: var(--c-text); background: var(--c-neutral-tint); }
 /* Opened, a pill is a card of the same edge: its words wrap, its details below, its actions at the foot. */
 .p-pill[data-open] {
   display: flex;
@@ -793,7 +1330,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   align-items: stretch;
   gap: 0;
   padding: 10px 12px 10px 14px;
-  border-radius: 16px;
+  border-radius: var(--r-card);
 }
 .p-pill[data-open] :is(.p-pill-text, .p-pill-dim) { overflow: visible; white-space: normal; }
 /* Opened, a long label or source wraps, rather than running under the controls beside it. */
@@ -803,25 +1340,27 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-pill-head { display: flex; min-width: 0; align-items: flex-start; gap: 8px; }
 .p-pill-controls { display: flex; flex-shrink: 0; align-items: center; gap: 2px; margin: -3px -4px -3px 0; }
 /* What the provider's body said, when it parses: a few facts, label beside value. */
-.p-pill-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 14px; margin: 8px 0 0 24px; font-size: 12.5px; line-height: 18px; }
+.p-pill-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 14px; margin: 8px 0 0 24px; font-size: 12px; line-height: 18px; }
 .p-pill-facts > dt { color: var(--c-text-3); }
 .p-pill-facts > dd { min-width: 0; margin: 0; color: var(--c-text-2); overflow-wrap: anywhere; }
 .p-pill-raw { margin: 8px 0 0 24px; }
 .p-pill-raw > summary { display: inline-flex; align-items: center; gap: 5px; color: var(--c-text-3); font-size: 12px; cursor: pointer; list-style: none; }
 .p-pill-raw > summary::-webkit-details-marker { display: none; }
 .p-pill-raw > summary:hover { color: var(--c-text); }
-.p-pill-raw > summary > svg { transition: transform var(--dur-fast) ease-out; }
+.p-pill-raw > summary > svg { transition: transform var(--dur-state) ease-out; }
 .p-pill-raw[open] > summary > svg { transform: rotate(90deg); }
 .p-code-wrap pre, .p-code-wrap code { white-space: pre-wrap; overflow-wrap: anywhere; }
 
+/* Under a failed turn's mark, the detail lines up with its words: the 14 icon and the 7 gap. */
+.p-turn-mark + .p-pill-detail { margin-left: 21px; }
 .p-pill-detail {
   margin: 8px 0 0 24px;
   padding: 8px 10px;
   max-height: 120px;
   overflow: auto;
   border: 1px solid var(--c-border);
-  border-radius: 10px;
-  background: var(--c-recessed);
+  border-radius: var(--r-control);
+  background: var(--c-sunken);
   color: var(--c-text-2);
   font-family: var(--font-mono);
   font-size: 12px;
@@ -838,7 +1377,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   height: 26px;
   padding: 0 11px;
   border: 1px solid var(--c-composer-line);
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: var(--c-composer-bg);
   color: var(--c-text-3);
   font-size: 12px;
@@ -854,9 +1393,9 @@ body { background: var(--c-bg); color: var(--c-text); }
   background: var(--c-surface);
   box-shadow: none;
   color: var(--c-text-3);
-  font-size: 12.5px;
+  font-size: 12px;
   cursor: pointer;
-  transition: border-color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
+  transition: border-color var(--dur-state) ease-out, background-color var(--dur-state) ease-out;
 }
 .p-pill[data-history]:hover { border-color: var(--c-border-strong); }
 /* The closed pill and its one action, capped together: capping the pill alone left it off-centre in a wider row. */
@@ -864,14 +1403,14 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-pill[data-history] .p-pill-source { color: var(--c-text-2); font-weight: 500; }
 /* Opened, it is as wide as the thread's column, so it never narrows as its words wrap. */
 .p-pill[data-history][data-open] { padding: 9px 14px 11px; cursor: default; }
-.p-pill-said { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; font-size: 11.5px; white-space: nowrap; }
+.p-pill-said { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; font-size: 12px; white-space: nowrap; }
 .p-pill-count {
   flex-shrink: 0;
   min-width: 20px;
   height: 18px;
   padding: 0 5px;
-  border-radius: 999px;
-  background: var(--c-neutral-tint);
+  border-radius: var(--r-pill);
+  background: var(--c-hover);
   color: var(--c-text-2);
   font-size: 11px;
   line-height: 18px;
@@ -882,8 +1421,8 @@ body { background: var(--c-bg); color: var(--c-text); }
 /* A turn's failure, where it happened: one quiet line. Its words open in place; the pill above the prompt acts. */
 .p-turn-mark { display: flex; min-width: 0; align-items: baseline; gap: 7px; color: var(--c-text-3); font-size: 13px; line-height: 20px; }
 .p-turn-mark > svg { flex-shrink: 0; align-self: center; }
-.p-turn-mark-link { flex-shrink: 0; color: var(--c-text-3); text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 3px; cursor: pointer; }
-.p-turn-mark-link:hover { color: var(--c-text); }
+.p-inline-action[data-quiet] { flex-shrink: 0; color: var(--c-text-3); text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 3px; cursor: pointer; }
+.p-inline-action[data-quiet]:hover { color: var(--c-text); }
 
 /* ── Images in the thread ──────────────────────────────────────────
    A picture the agent made or named, shown where it was named: at its own size up to the column, on the recessed
@@ -895,10 +1434,10 @@ body { background: var(--c-bg); color: var(--c-text); }
   overflow: hidden;
   border: 1px solid var(--c-border);
   border-radius: var(--r-card);
-  background: var(--c-recessed);
+  background: var(--c-sunken);
   vertical-align: top;
 }
-.p-shot-frame { position: relative; display: flex; justify-content: center; padding: 0; cursor: zoom-in; background: var(--c-recessed); }
+.p-shot-frame { position: relative; display: flex; justify-content: center; padding: 0; cursor: zoom-in; background: var(--c-sunken); }
 .p-shot-frame > img { display: block; max-width: 100%; max-height: 360px; width: auto; height: auto; object-fit: contain; }
 .p-shot[data-size="thumb"] .p-shot-frame > img { max-height: 200px; }
 .p-shot-caption {
@@ -914,12 +1453,13 @@ body { background: var(--c-bg); color: var(--c-text); }
   font-size: 12px;
 }
 .p-shot-name { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); color: var(--c-text-2); }
-.p-shot-where { flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px; padding: 0 7px; height: 20px; border-radius: 999px; background: var(--c-neutral-tint); color: var(--c-text-3); font-size: 11px; }
+.p-shot-where { flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px; padding: 0 7px; height: 20px; border-radius: var(--r-pill); background: var(--c-hover); color: var(--c-text-3); font-size: 11px; }
 .p-shot-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 8px; }
 .p-shot-grid > .p-shot-note { margin: 0; }
 .p-shot-grid .p-shot { display: flex; margin: 0; }
 .p-shot-grid .p-shot-frame > img { width: 100%; height: 190px; max-height: none; object-fit: cover; object-position: top; }
 .p-shot-wait { display: block; width: min(100%, 520px); aspect-ratio: 16 / 10; }
+.p-skeleton-bar.p-shot-wait { border-radius: 0; }
 .p-shot[data-size="thumb"] .p-shot-wait { width: min(100%, 320px); }
 .p-shot-note {
   display: flex;
@@ -931,9 +1471,9 @@ body { background: var(--c-bg); color: var(--c-text); }
   min-height: 34px;
   padding: 6px 8px 6px 11px;
   border: 1px dashed var(--c-border-strong);
-  border-radius: 12px;
+  border-radius: var(--r-row);
   color: var(--c-text-3);
-  font-size: 12.5px;
+  font-size: 12px;
 }
 .p-lightbox {
   position: fixed;
@@ -947,7 +1487,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 }
 .p-lightbox-bar { display: flex; align-items: center; gap: 10px; height: 52px; padding: 0 12px 0 18px; color: var(--c-text-2); font-size: 13px; }
 .p-lightbox-stage { display: flex; min-height: 0; flex: 1; align-items: center; justify-content: center; padding: 8px 56px 40px; }
-.p-lightbox-stage > img { max-width: 100%; max-height: 100%; border-radius: 10px; box-shadow: var(--shadow-overlay); }
+.p-lightbox-stage > img { max-width: 100%; max-height: 100%; border-radius: var(--r-row); box-shadow: var(--shadow-overlay); }
 .p-lightbox-step {
   position: absolute;
   top: 50%;
@@ -957,7 +1497,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   width: 36px;
   height: 36px;
   border: 1px solid var(--c-border);
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: var(--c-surface);
   color: var(--c-text-2);
   transform: translateY(-50%);
@@ -976,31 +1516,29 @@ body { background: var(--c-bg); color: var(--c-text); }
   gap: 5px;
   height: 32px;
   padding: 0 10px;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   color: var(--c-text-3);
   font-size: 13px;
   cursor: pointer;
-  transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
+  transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out;
 }
-.p-composer-quiet:hover:not(:disabled) { color: var(--c-text); background: var(--c-neutral-tint); }
+.p-composer-quiet:hover:not(:disabled) { color: var(--c-text); background: var(--c-hover); }
 .p-composer-quiet[aria-pressed="true"] { color: var(--c-text); }
 .p-composer-mode { display: flex; flex-shrink: 0; align-items: center; }
-.p-composer-round, .p-composer-send {
+.p-icon-control-composer, .p-composer-send {
   display: inline-flex;
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
   width: 32px;
   height: 32px;
-  border-radius: 50%;
+  border-radius: var(--r-pill);
   cursor: pointer;
-  transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out, opacity var(--dur-fast) ease-out;
+  transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out, opacity var(--dur-state) ease-out;
 }
-.p-composer-round { color: var(--c-text-3); }
-.p-composer-round:hover:not(:disabled) { color: var(--c-text); background: var(--c-neutral-tint); }
 .p-composer-send { background: var(--c-accent); color: var(--c-accent-on); }
 .p-composer-send:hover:not(:disabled) { background: color-mix(in srgb, var(--c-accent) 90%, var(--c-text)); }
-.p-composer-send:disabled { background: var(--c-neutral-tint); color: var(--c-text-4); cursor: default; }
+.p-composer-send:disabled { background: var(--c-hover); color: var(--c-text-3); cursor: default; }
 .p-composer-send[data-stop] { background: var(--c-text); color: var(--c-bg); }
 /* Model and effort read as quiet text with a chevron, like the rest of the row. */
 .p-composer-model { display: flex; min-width: 0; flex: 0 1 auto; align-items: center; gap: 2px; }
@@ -1014,14 +1552,14 @@ body { background: var(--c-bg); color: var(--c-text); }
   box-shadow: none !important;
   color: var(--c-text-3) !important;
   font-size: 13px !important;
-  border-radius: 999px !important;
-  transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
+  border-radius: var(--r-pill) !important;
+  transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out;
 }
-.p-composer-model :is(button, [role="combobox"]):hover { color: var(--c-text) !important; background: var(--c-neutral-tint) !important; }
+.p-composer-model :is(button, [role="combobox"]):hover { color: var(--c-text) !important; background: var(--c-hover) !important; }
 .p-composer-model :is(button, [role="combobox"]) > span[aria-hidden="true"]:last-child { right: 8px; }
 .p-composer-model [data-model-picker] svg { display: none; }
 
-.p-row-hover:hover { background: var(--c-elevated); }
+.p-row-hover:hover { background: var(--c-hover); }
 
 /* MCTS tree labels. Below the zoom where an 11px label lands under ~8px on
    screen they are noise rather than text, so the whole layer is gated on one
@@ -1091,9 +1629,8 @@ body { background: var(--c-bg); color: var(--c-text); }
    workspace with nothing in it.
 
    Colour and highlight are SEPARATE properties, not two stops of one gradient.
-   `--c-fill` and `--c-elevated` are the same value in both dark palettes (see
-   the note at the top of the token block), so a tone-to-tone sweep is invisible
-   there; and a bar whose whole surface is the animation disappears the moment
+   Neighbouring grounds sit one small step apart in the dark palettes, so a
+   tone-to-tone sweep is invisible there; and a bar whose whole surface is the animation disappears the moment
    `prefers-reduced-motion` stops it. A solid base plus a travelling highlight
    holds in all four palettes and still reads as a bar when it is standing
    still. */
@@ -1108,7 +1645,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-busy-bar {
   position: relative;
   overflow: hidden;
-  border-radius: 9999px;
+  border-radius: var(--r-pill);
   background-color: var(--c-border-strong);
 }
 .p-busy-bar::after {
@@ -1163,10 +1700,20 @@ body { background: var(--c-bg); color: var(--c-text); }
    sites carry `focus:outline-none` to suppress the browser's own ring
    before drawing their own border treatment; layered, that utility would
    win and leave those controls with no visible focus at all. */
-:focus-visible {
-  outline: 2px solid var(--c-accent);
-  outline-offset: 1px;
+:focus-visible, [data-force="focus"], [data-focus-box]:has(:focus-visible) {
+  /* Focus (docs/DESIGN-SYSTEM.md §1.1): one ring of --c-focus on every focusable, drawn here alone. On a control with an
+     edge (a secondary button, a field, a chip, a tab) it takes the edge's place and hugs it, so it reads as one outline,
+     never a grey hairline with a brass ring outside it. On a filled control it stands 2 px off: the page between is what
+     it contrasts with, since brass on a brass or danger fill measures 1.0 to 1.5:1 (palette-ux holds both). */
+  outline: 2px solid var(--c-focus);
+  outline-offset: var(--focus-gap, -1px);
+  border-color: var(--c-focus);
 }
+.p-button-primary, .p-button-destructive, .p-switch[data-checked], .p-check[data-checked], .p-radio[data-checked] { --focus-gap: 2px; }
+/* A field drawn as one box around its input and its icon (`data-focus-box`): the box takes the ring, the input none. */
+[data-focus-box] :focus-visible { outline: none; }
+/* The prompt card's own edge says it has the keys (above), so its field takes no ring of its own. */
+.p-prompt-card :focus-visible { outline: none; }
 
 /* Pressed: Kumo's controls carry no hook of their own, and a dim moves nothing, so a full-width row presses too. */
 :where(button, a[href], [role="button"], summary):not(:disabled, .p-tab):active {
@@ -1211,12 +1758,12 @@ body { background: var(--c-bg); color: var(--c-text); }
    weekly lines draw from left to right once, then hold. */
 @keyframes landing-rise { from { transform: scaleY(0); } to { transform: scaleY(1); } }
 @keyframes landing-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
-.landing-rise { transform-origin: bottom; animation: landing-rise 700ms var(--ease-out-strong) both; }
-.landing-draw { stroke-dasharray: 1; animation: landing-draw 1100ms ease-out both; }
+.landing-rise { transform-origin: bottom; animation: landing-rise var(--dur-rise) var(--ease-out-strong) both; }
+.landing-draw { stroke-dasharray: 1; animation: landing-draw var(--dur-draw) ease-out both; }
 
 @layer utilities {
   .animate-fade-in { animation: fade-in var(--dur-enter) var(--ease-out-strong); }
-  .animate-scale-in { animation: scale-in var(--dur-fast) ease-out; }
+  .animate-scale-in { animation: scale-in var(--dur-state) ease-out; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1227,7 +1774,6 @@ body { background: var(--c-bg); color: var(--c-text); }
   .p-busy-bar::after { animation: none; left: 30%; }
   /* The caret still marks where the text is being written; it just holds. */
   .p-streaming > :last-child::after { animation: none; }
-  .p-btn:active, .p-btn-quiet:active { transform: none; }
   /* The dot still marks the run as in progress; it just holds. */
   .p-dot-pulse { animation: none; }
   /* The dashboard is drawn settled: every bar at its height, every line whole. */
@@ -1260,7 +1806,7 @@ body > .annotation-toolbar {
   --destructive: var(--c-danger);
   --destructive-foreground: var(--c-text);
   --border: var(--c-border);
-  --input: var(--c-input-border);
+  --input: var(--c-field-border);
   --ring: var(--c-accent);
   --success: var(--c-success);
   --warning: var(--c-warning);
@@ -1289,7 +1835,7 @@ body > .annotation-toolbar {
 }
 
 @layer components {
-  :is([data-kinu-plan-review], [data-kinu-annotations]) .annotation-highlight { border-radius: var(--radius-xs); padding: 0 2px; margin: 0 -2px; }
+  :is([data-kinu-plan-review], [data-kinu-annotations]) .annotation-highlight { border-radius: var(--r-check); padding: 0 2px; margin: 0 -2px; }
   [data-kinu-plan-review] .annotation-highlight.math-inline-annotation { display: inline-flex; align-items: center; line-height: 1; }
   [data-kinu-plan-review] .annotation-highlight.math-block-annotation { display: block; }
   :is([data-kinu-plan-review], [data-kinu-annotations]) .annotation-highlight.deletion {
@@ -1321,7 +1867,7 @@ body > .annotation-toolbar {
   [data-kinu-plan-review] .alert-important { border-left-color: var(--c-accent); }
   [data-kinu-plan-review] .alert-important .alert-title { color: var(--c-accent-fg); }
 
-  [data-kinu-plan-review] .directive { border-color: var(--border); background: color-mix(in srgb, var(--muted) 50%, transparent); }
+  [data-kinu-plan-review] .directive { border-color: var(--c-border); background: var(--c-sunken); }
   [data-kinu-plan-review] .directive-title { color: var(--muted-foreground); }
   [data-kinu-plan-review] .directive-note,
   [data-kinu-plan-review] .directive-info { border-color: color-mix(in srgb, var(--c-info) 40%, transparent); background: color-mix(in srgb, var(--c-info) 10%, transparent); }
@@ -1356,10 +1902,10 @@ body > .annotation-toolbar {
 [data-plan-title] code {
   padding: 0.05em 0.25em;
   border-radius: var(--r-control);
-  background: var(--c-neutral-tint);
-  color: var(--c-code);
+  background: var(--c-hover);
+  color: var(--c-accent-fg);
   font-family: var(--font-mono);
-  font-size: 0.875em;
+  font-size: 0.92em;
 }
 
 .plan-review-document {
@@ -1397,7 +1943,7 @@ body > .annotation-toolbar {
 .plan-review-document [data-print-region="article"] > p[data-block-id] {
   margin-block: 0 1rem;
   color: var(--c-text-2);
-  font-size: 1rem;
+  font-size: 15.5px;
   line-height: 1.75;
   letter-spacing: -0.006em;
 }
@@ -1408,7 +1954,7 @@ body > .annotation-toolbar {
   border-bottom: 1px solid var(--c-border);
   color: var(--c-text);
   font-family: var(--font-display);
-  font-size: 1.25rem;
+  font-size: var(--t-chat-heading-2);
   font-weight: 600;
   line-height: 1.35;
   letter-spacing: -0.015em;
@@ -1417,7 +1963,7 @@ body > .annotation-toolbar {
 .plan-review-document [data-print-region="article"] > :is(h3, h4, h5, h6)[data-block-id] {
   margin-block: 2rem 0.75rem;
   color: var(--c-text);
-  font-size: 1rem;
+  font-size: 15.5px;
   font-weight: 600;
   line-height: 1.45;
   letter-spacing: -0.01em;
@@ -1427,7 +1973,7 @@ body > .annotation-toolbar {
   margin-block: 0.5rem;
   gap: 0.75rem;
   color: var(--c-text-2);
-  font-size: 1rem;
+  font-size: 15.5px;
   line-height: 1.65;
 }
 
@@ -1441,10 +1987,10 @@ body > .annotation-toolbar {
 .plan-review-document [data-block-id] :not(pre) > code {
   padding: 0.1em 0.35em;
   border-radius: var(--r-control);
-  background: var(--c-neutral-tint);
-  color: var(--c-code);
+  background: var(--c-hover);
+  color: var(--c-accent-fg);
   font-family: var(--font-mono);
-  font-size: 0.875em;
+  font-size: 0.92em;
   overflow-wrap: anywhere;
 }
 
@@ -1457,11 +2003,11 @@ body > .annotation-toolbar {
   overflow-y: hidden;
   overscroll-behavior-x: contain;
   border: 1px solid var(--c-border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--r-row);
   background: var(--c-code-bg);
-  color: var(--c-code);
+  color: var(--c-accent-fg);
   font-family: var(--font-mono);
-  font-size: 0.875rem;
+  font-size: 14px;
   line-height: 1.5714;
 }
 
@@ -1476,7 +2022,7 @@ body > .annotation-toolbar {
   border-bottom: 1px solid var(--c-border);
   color: var(--c-text-3);
   font-family: var(--font-mono);
-  font-size: 0.625rem;
+  font-size: 11px;
   font-weight: 500;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -1491,15 +2037,45 @@ body > .annotation-toolbar {
   padding: 0.75rem 0 0.75rem 1rem;
   border-left-width: 2px;
   color: var(--c-text-2);
-  font-size: 1rem;
+  font-size: 15.5px;
   line-height: 1.65;
 }
 
 .plan-review-document [data-print-region="article"] > div[data-block-id]:has(table) {
   margin-block: 2rem;
   border: 1px solid var(--c-border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--r-row);
 }
+
+/* The plan document's other blocks (components/plan-review/Viewer.tsx), drawn here as the chat's prose is. */
+.plan-review-document [data-plan-frontmatter] {
+  margin: 16px 0 24px; padding: 16px; border: 1px solid var(--c-border); border-radius: var(--r-row); background: var(--c-sunken);
+}
+.plan-review-document [data-plan-frontmatter-key] { min-width: 80px; font-weight: 500; color: var(--c-text-3); }
+.plan-review-document blockquote[data-block-id]:not([class*="alert-"]) { border-left-color: color-mix(in srgb, var(--c-accent) 50%, transparent); font-style: italic; }
+.plan-review-document [data-plan-item] { margin-left: calc(var(--plan-depth, 0) * 1.25rem); }
+.plan-review-document .math-annotatable[data-math-display] {
+  margin-block: 20px; padding: 16px; overflow-x: auto; text-align: center;
+  border: 1px solid var(--c-border); border-radius: var(--r-row); background: var(--c-sunken);
+}
+.plan-review-document .directive { margin-block: 16px; padding: 16px; border: 1px solid; border-radius: var(--r-row); }
+.plan-review-document [data-block-id] table { width: 100%; border-collapse: collapse; }
+.plan-review-document [data-block-id] :is(th, td) { padding: 8px 12px; border: 1px solid var(--c-border); text-align: left; }
+.plan-review-document [data-block-id] th { background: var(--c-sunken); font-weight: 500; }
+.plan-review-document hr[data-block-id] { margin-block: 32px; border: 0; border-top: 1px solid var(--c-border); }
+
+.plan-review-document [data-print-region="article"] { border-radius: var(--r-card); }
+/* The document's own actions, over its top edge as it scrolls. */
+.plan-review-document [data-plan-document-actions] {
+  border-radius: var(--r-row); background: color-mix(in srgb, var(--c-surface) 95%, transparent); box-shadow: var(--shadow-card); backdrop-filter: blur(4px);
+}
+/* A note in the rail: its card, the chosen one on the accent's edge. */
+[data-annotation-panel] [data-annotation-id] {
+  border: 1px solid var(--c-border); border-radius: var(--r-row); background: var(--c-surface);
+  transition: border-color var(--dur-state) ease-out, background-color var(--dur-state) ease-out;
+}
+[data-annotation-panel] [data-annotation-id]:hover { border-color: var(--c-border-strong); }
+[data-annotation-panel] [data-annotation-id][data-selected] { border-color: var(--c-accent); background: color-mix(in srgb, var(--c-accent) 5%, var(--c-surface)); }
 
 /* Shown only where the rail OVERLAYS the document — the container query below.
    Beside it, there is nothing to dim. */
@@ -1539,7 +2115,7 @@ body > .annotation-toolbar {
   }
 
   [data-plan-title] {
-    font-size: 1.5rem;
+    font-size: 24px;
   }
 
   [data-plan-actions] {
@@ -1564,33 +2140,28 @@ body > .annotation-toolbar {
    rem at a 16px root; comments carry the pixels a default root renders. */
 :is([data-workbench], .p-workbench) {
   .prose-chat {
-    /* 14.496px on 1.7 — the scale the owner approved for assistant prose. */
-    font-size: 0.906rem;
-    line-height: 1.7;
+    /* 14px on 1.72: Inter at the x-height of the 14.5px Schibsted the owner approved for assistant prose. */
+    font-size: 14px;
+    line-height: 1.72;
 
     /* Headings were em-scaled off the prose size before d04: they keep that
        hierarchy rather than rem rungs. */
-    h1, h2, h3 { line-height: 1.7; }
-    h1 { font-size: 1.1em; } h2 { font-size: 1.05em; } h3 { font-size: 1em; }
+    h1, h2, h3 { line-height: 1.72; }
+    h1 { font-size: var(--t-chat-heading-workbench-1); } h2 { font-size: var(--t-chat-heading-workbench-2); } h3 { font-size: var(--t-chat-heading-workbench-3); }
   }
-  .p-t-chat    { font-size: 0.875rem; line-height: 1.6; }    /* user bubble — 14px */
-  .p-t-control { font-size: 0.6875rem; }                     /* navigation & controls — 11px */
-  .p-t-status  { font-size: 0.6875rem; }                     /* status labels — 11px */
-  .p-t-code    { font-size: 0.78125rem; line-height: 1.55; } /* code — 12.5px */
-  .p-label     { font-size: 0.78125rem; line-height: 18px; } /* section label — 12.5px */
 
   .p-badge-success, .p-badge-warning, .p-badge-danger, .p-badge-info, .p-badge-neutral {
     font-size: 11px; line-height: 16px;
   }
 
-  .p-code .p-code-highlight pre { font-size: 0.78125rem; line-height: 1.55; } /* 12.5px */
+  .p-code .p-code-highlight pre { font-size: var(--t-code-workbench); line-height: 1.55; }
 
   /* Inline code read slightly under its sentence before d04. */
-  .p-code-inline { font-size: 0.9em; }
-  [data-plan-title] code { font-size: 0.82em; }
-  .plan-review-document [data-block-id] :not(pre) > code { font-size: 0.9em; }
-  .plan-review-document pre[data-block-id] { font-size: 0.8125rem; line-height: 1.65; } /* 13px */
-  .plan-review-document pre[data-block-id]::before { font-size: 0.6875rem; } /* 11px */
+  .p-code-inline { font-size: 0.92em; }
+  [data-plan-title] code { font-size: 0.92em; }
+  .plan-review-document [data-block-id] :not(pre) > code { font-size: 0.92em; }
+  .plan-review-document pre[data-block-id] { font-size: 13px; line-height: 1.65; } /* 13px */
+  .plan-review-document pre[data-block-id]::before { font-size: 11px; } /* 11px */
 }
 
 /* ── Pages redesign ──────────────────────────────────────────────────
@@ -1598,22 +2169,103 @@ body > .annotation-toolbar {
    one-pixel lift, fast. Its own layer block so it sits under utilities like
    the grammar above and overrides `.p-card`'s transition list by order. */
 @layer components {
-.p-card-lift {
-  transition: border-color 120ms ease-out, transform 120ms ease-out;
-}
-.p-card-lift:hover {
-  border-color: color-mix(in srgb, var(--c-accent) 40%, transparent);
-  transform: translateY(-1px);
-}
-@media (prefers-reduced-motion: reduce) {
-  .p-card-lift:hover { transform: none; }
-}
+/* A tile (ui/Tiles.tsx): the card's edge, ground and radius, its edge darkening on hover; a 16:10 cover. The featured
+   tile's cover takes 56% beside its body from md up, and the tile lifts toward the accent instead. A capture sits in the
+   cover at the inner radius. */
+.p-tile { border: 1px solid var(--c-border); border-radius: var(--r-card); background: var(--c-surface); transition: border-color var(--dur-state) ease-out; }
+.p-tile:is(:hover, [data-force="hover"]) { border-color: var(--c-border-strong); }
+.p-tile-cover, .p-tile-featured-cover { aspect-ratio: 16 / 10; }
+@media (min-width: 768px) { .p-tile-featured-cover { aspect-ratio: auto; width: 56%; } }
+.p-tile-featured { transition: border-color var(--dur-state) ease-out, transform var(--dur-state) ease-out; }
+.p-tile-featured:hover { border-color: color-mix(in srgb, var(--c-accent) 40%, transparent); transform: translateY(-1px); }
+@media (prefers-reduced-motion: reduce) { .p-tile-featured:hover { transform: none; } }
+.p-capture { border-radius: var(--r-inner); }
+/* A diff (surfaces/changes/diff.tsx): an added or removed line on its tone's wash with a 2 rule at its start, its changed
+   words on a stronger wash, folds and blank sides on a quiet one. Code wraps anywhere at a tab of 2, ligatures off so an
+   operator reads as typed; a noted line's number is set heavier. */
+.p-diff { font-variant-ligatures: none; }
+/* A terminal's inset is xterm's padding, which its fit subtracts from the room the host gives it (TerminalPane.tsx). */
+.p-terminal-host > .xterm { padding: 8px 0 0 16px; }
+.p-terminal-host[data-on-ground] > .xterm { padding-top: 4px; }
+/* An answer's slate open in the chat: its tools float over its top right on the tile. */
+.p-slate-tools { border-radius: var(--r-inner); background: var(--c-fill); }
+/* A computer's desktop expanded over the workspace, letterboxed on the screen's own black as a player does. */
+.p-desktop-stage[data-expanded] { background: var(--c-screen); }
+/* The app's backdrop (AppBackground.tsx), softened a touch and masked by its temperament: today's field lit toward its
+   right, quiet's living only at the page's edges. */
+.p-backdrop { filter: blur(0.4px); }
+.p-backdrop[data-background-temperament="today"] { mask-image: radial-gradient(ellipse 55% 55% at 58% 50%, color-mix(in srgb, black 70%, transparent), black 100%); }
+.p-backdrop[data-background-temperament="quiet"] { mask-image: radial-gradient(ellipse 62% 62% at 58% 50%, transparent 35%, color-mix(in srgb, black 60%, transparent) 70%, black 100%); }
+/* Rows ruled apart by the hairline (a blueprint's steps, what an install adds), as the dashed rule splits a group's. */
+.p-rows-ruled > :not(:last-child) { border-bottom: 1px solid var(--c-border); }
+/* A row that holds a link and its own controls: the wash under the pointer, though the row itself is no press. */
+.p-hover-row { transition: background-color var(--dur-state) ease-out; }
+.p-hover-row:hover { background: var(--c-hover); }
+/* A list that scrolls under a header fades in from its top edge as it leaves it. */
+.p-fade-top { mask-image: linear-gradient(to bottom, transparent, black 1.25rem); }
+/* A tree's row stepped in by its depth, 14 a step. */
+.p-tree-indent { padding-left: calc(var(--tree-depth, 0) * 14px); }
+/* History not yet read, held as faint bars where its rows will land. */
+.p-history-reserve { background-image: repeating-linear-gradient(to bottom, transparent 0 12px, color-mix(in srgb, currentColor 5%, transparent) 12px 20px, transparent 20px 28px); background-size: 60% 28px; background-repeat: repeat-y; }
+/* Work's Needs you (surfaces/WorkTab.tsx): the selected ground in an accent edge, its section's label in the accent's ink. */
+.p-needs-you { border: 1px solid color-mix(in srgb, var(--c-accent) 32%, transparent); }
+.p-needs-you .p-label { color: var(--c-accent-fg) !important; }
+/* A strip across the workbench's top saying the connection's state: reconnecting on the warning's tint, closed on the danger's. */
+.p-banner-warning { background: var(--c-warning-tint); }
+.p-banner-danger { background: var(--c-danger-tint); }
+/* A code block's frame (surfaces/shared.tsx), and a markdown table's head on the fill. */
+.p-code-block { overflow: hidden; border-radius: var(--r-row); }
+.p-table-head { background: var(--c-fill); font-weight: 500; }
+/* An underline that waits for the pointer in a quiet ink, clear of the words' descenders (a changelog entry's headline). */
+.p-quiet-underline { text-decoration-color: var(--c-border-strong); text-underline-offset: 4px; }
+/* A head's outcome above its transcript (NodeTranscript.tsx): a failure on the danger's tint, a report on the tile, each
+   ruled at its start in its tone. */
+.p-outcome[data-tone="danger"] { background: var(--c-danger-tint); border-left-color: var(--c-danger); }
+.p-outcome[data-tone="accent"] { border-left-color: var(--c-accent); }
+/* An answer to a question (ui/Check.tsx ChoiceOption): a row at the control radius, the fill under the pointer, the
+   platform's own mark in the accent, on the first line. */
+.p-choice-option { display: flex; align-items: flex-start; gap: 8px; padding: 4px 8px; overflow: hidden; border-radius: var(--r-control); cursor: pointer; }
+.p-choice-option:hover { background: var(--c-fill); }
+.p-choice-option-mark { flex-shrink: 0; margin-top: 1px; accent-color: var(--c-accent); }
+/* The folded rail (SidebarRail.tsx) eases its width, and each lane fades in as it takes over. */
+.p-sidebar-rail { transition: width 180ms ease-out; }
+@media (prefers-reduced-motion: no-preference) { .p-sidebar-lane { animation: fade-in 180ms ease-out; } }
+@media (prefers-reduced-motion: reduce) { .p-sidebar-rail { transition: none; } }
+/* Words struck through, the rule a quieter step of their own ink (a removed file, a finished task). */
+.p-struck { text-decoration-line: line-through; text-decoration-color: color-mix(in srgb, currentColor 45%, transparent); }
+/* A task on the workspace's board (workspaces/WorkspaceOverview.tsx): a card on the page's ground. */
+.p-task-card { border: 1px solid var(--c-border); border-radius: var(--r-card); background: var(--c-bg); transition: border-color var(--dur-state) ease-out, background-color var(--dur-state) ease-out; }
+.p-task-card:hover { border-color: var(--c-border-strong); }
+/* The inspector's resize handle (WorkbenchPanels.tsx): a 13 wide grip over the seam, its 3 rule in the accent as the
+   pointer nears and solid while it drags or has the keys. The library's `focus` is any focus, a drag's too, so the
+   rule keys on its own states and :focus-visible. */
+.p-resize-handle { z-index: 2; flex-shrink: 0; width: 13px; margin: 0 -8px 0 -5px; background: transparent; cursor: col-resize; touch-action: none; user-select: none; }
+.p-resize-rule { display: block; width: 3px; height: 100%; margin: 0 auto; background: transparent; transition: background-color 150ms cubic-bezier(0.4, 0, 0.2, 1); }
+.p-resize-handle:hover .p-resize-rule, .p-resize-handle[data-separator="hover"] .p-resize-rule { background: color-mix(in srgb, var(--c-accent) 60%, transparent); }
+.p-resize-handle:focus-visible .p-resize-rule, .p-resize-handle[data-separator="active"] .p-resize-rule { background: var(--c-accent); }
+/* A table's row that opens what it names (the operator's lists): the hover wash, and the hand. */
+tr[data-opens] { cursor: pointer; transition: background-color var(--dur-state) ease-out; }
+tr[data-opens]:hover { background: var(--c-hover); }
+/* A search tree's key (swarm-tree.tsx): the score's ramp, the winning line, a fan-in vertex's accent edge. */
+.p-legend-score { background: linear-gradient(90deg in oklab, var(--c-danger), var(--c-warning), var(--c-success)); }
+.p-legend-line { background: var(--c-accent); }
+.p-surface-outlined.p-legend-fan { border-color: var(--c-accent); }
+.p-diff-code { overflow-wrap: anywhere; tab-size: 2; }
+.p-diff-add { background: color-mix(in srgb, var(--c-success) 10%, transparent); box-shadow: inset 2px 0 0 var(--c-success); }
+.p-diff-del { background: color-mix(in srgb, var(--c-danger) 10%, transparent); box-shadow: inset 2px 0 0 var(--c-danger); }
+.p-diff-word, .p-diff-note { -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+.p-diff-word { border-radius: var(--r-check); }
+.p-diff-word-add { background: color-mix(in srgb, var(--c-success) 30%, transparent); }
+.p-diff-word-del { background: color-mix(in srgb, var(--c-danger) 30%, transparent); }
+.p-diff-quiet { background: color-mix(in srgb, var(--c-text) 3.5%, transparent); }
+.p-diff-gutter[data-noted] { font-weight: 600; }
 }
 
-/* iOS zooms the page when a text field under 16px takes focus. Unlayered, so it outranks each field's size utility. */
+/* iOS zooms the page when a text field under 16px takes focus. Unlayered, so it outranks each field's size utility; one
+   `:is()` at an attribute's weight, so it outranks a field's type role (`t-meta`, `t-composer`) as well. */
 @media (pointer: coarse) {
-  input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"], [type="button"], [type="submit"], [type="reset"], [type="image"]),
-  textarea, select { font-size: max(16px, 1em); }
+  :is(input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"], [type="button"], [type="submit"], [type="reset"], [type="image"]),
+  textarea, select) { font-size: var(--t-field-touch); }
 }
 
 /* ── Workspace bar ─────────────────────────────────────────────────
@@ -1625,7 +2277,7 @@ body > .annotation-toolbar {
 .p-bar {
   --bar-line: var(--c-border-strong);
   --bar-ground: var(--c-bg);
-  --flare: 8px;
+  --flare: var(--r-workspace-tab-flare);
   position: relative;
   display: flex;
   flex-shrink: 0;
@@ -1635,6 +2287,13 @@ body > .annotation-toolbar {
 }
 [data-mode="light"] .p-bar { --bar-line: var(--c-border); }
 .p-bar > :not(.p-bar-strip) { border-bottom: 1px solid var(--bar-line); }
+/* A bar draws its hairline only where something below needs a baseline (tabs opening onto the chat, columns meeting
+   it). The chat alone (`focus`, Home's assistant) has neither: what scrolls under its bar fades out instead. */
+.p-bar[data-layout="focus"] > :not(.p-bar-strip) { border-bottom: 0; }
+.p-bar[data-layout="focus"]::after {
+  content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 20px; z-index: 1;
+  pointer-events: none; background: linear-gradient(var(--bar-ground), transparent);
+}
 .p-bar-menu { display: none; align-items: center; padding-left: 8px; }
 @media (max-width: 767px) { .p-bar-menu { display: flex; } }
 .p-bar-strip { position: relative; display: flex; min-width: 0; flex: 1; }
@@ -1647,7 +2306,7 @@ body > .annotation-toolbar {
   width: 28px;
   pointer-events: none;
   opacity: 0;
-  transition: opacity var(--dur-base) ease-out;
+  transition: opacity var(--dur-state) ease-out;
 }
 .p-bar-strip::before { left: 0; background: linear-gradient(to left, transparent, var(--bar-ground)); }
 .p-bar-strip::after { right: 0; background: linear-gradient(to right, transparent, var(--bar-ground)); }
@@ -1696,7 +2355,7 @@ body > .annotation-toolbar {
   white-space: nowrap;
 }
 .p-bar-sizer { visibility: hidden; overflow: hidden; height: 100%; }
-.p-bar-tab[data-title] :is(.p-bar-sizer, .p-bar-link) { font-weight: 600; font-size: 13.5px; letter-spacing: -0.01em; }
+.p-bar-tab[data-title] :is(.p-bar-sizer, .p-bar-link) { font-weight: 600; font-size: var(--t-workspace-tab); letter-spacing: -0.01em; }
 .p-bar-tab[data-active] .p-bar-sizer { font-weight: 500; }
 @media (max-width: 767px) {
   .p-bar-tab { min-width: 96px; }
@@ -1710,17 +2369,16 @@ body > .annotation-toolbar {
   width: 1px;
   height: 14px;
   background: var(--bar-line);
-  transition: opacity var(--dur-base) ease-out;
+  transition: opacity var(--dur-state) ease-out;
 }
 .p-bar-tab:is([data-active], [data-after-active])::before { opacity: 0; }
 .p-bar-link {
   position: absolute;
   inset: 0;
   color: var(--c-text-3);
-  transition: color var(--dur-base) ease-out, padding var(--dur-fast) ease-out;
+  transition: color var(--dur-state) ease-out, padding var(--dur-state) ease-out;
 }
 .p-bar-link:hover { color: var(--c-text-2); }
-.p-bar-link:focus-visible { outline: none; color: var(--c-text); text-decoration: underline; text-underline-offset: 4px; text-decoration-color: var(--c-accent); }
 .p-bar-tab[data-active] .p-bar-link { color: var(--c-text); font-weight: 500; }
 .p-bar-tab[data-title] .p-bar-link { color: var(--c-text); }
 .p-bar-tab[data-title]:not([data-active]) .p-bar-link:hover { color: var(--c-accent-fg); }
@@ -1733,7 +2391,7 @@ body > .annotation-toolbar {
   align-items: center;
   opacity: 0;
   pointer-events: none;
-  transition: opacity var(--dur-fast) ease-out;
+  transition: opacity var(--dur-state) ease-out;
 }
 /* A tap is no hover: on touch, only the open tab carries its actions, so a tap meant for a name never lands on a
    pencil or a cross that appeared under it. The workspace's name is open on its overview, and renames there. The open
@@ -1741,55 +2399,49 @@ body > .annotation-toolbar {
 @media (hover: hover) {
   .p-bar-tab:is(:hover, :focus-within) .p-bar-actions { opacity: 1; pointer-events: auto; }
   .p-bar-tab:is(:hover, :focus-within):has(.p-bar-actions) .p-bar-link { padding-right: calc(var(--flare) + 52px); }
-  .p-bar-tab:is(:hover, :focus-within):has(.p-bar-action:only-child) .p-bar-link { padding-right: calc(var(--flare) + 32px); }
+  .p-bar-tab:is(:hover, :focus-within):has(.p-icon-control-tab:only-child) .p-bar-link { padding-right: calc(var(--flare) + 32px); }
 }
 @media (hover: none) {
   .p-bar-tab[data-active] .p-bar-actions { opacity: 1; pointer-events: auto; }
   .p-bar-tab[data-active]:has(.p-bar-actions) :is(.p-bar-sizer, .p-bar-link) { padding-right: calc(var(--flare) + 52px); }
-  .p-bar-tab[data-active]:has(.p-bar-action:only-child) :is(.p-bar-sizer, .p-bar-link) { padding-right: calc(var(--flare) + 32px); }
+  .p-bar-tab[data-active]:has(.p-icon-control-tab:only-child) :is(.p-bar-sizer, .p-bar-link) { padding-right: calc(var(--flare) + 32px); }
 }
-.p-bar-action {
+.p-icon-control-tab {
   display: flex;
   align-items: center;
   justify-content: center;
   width: 22px;
   height: 22px;
-  border-radius: 6px;
-  color: var(--c-text-4);
-  transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
+  border-radius: var(--r-inner);
 }
-.p-bar-action:hover, .p-bar-action:focus-visible { outline: none; background: var(--c-neutral-tint); color: var(--c-text); }
-.p-bar-action[data-danger]:hover, .p-bar-action[data-danger]:focus-visible { color: var(--c-danger); }
+/* IconControl (ui/IconControl.tsx): the third ink, the text on the hover wash, a danger one danger. */
+.p-icon-control { color: var(--c-text-3); cursor: pointer; transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out; }
+.p-icon-control:is(:hover, :focus-visible):not(:disabled) { background: var(--c-hover); color: var(--c-text); }
+.p-icon-control[data-danger]:is(:hover, :focus-visible) { color: var(--c-danger); }
 .p-bar-rename { display: flex; align-items: center; gap: 6px; height: 100%; padding: 0 calc(var(--flare) + 6px) 2px; }
-.p-bar-rename input {
+.p-bar-rename-field {
   min-width: 72px;
   max-width: 200px;
   height: 26px;
   padding: 0 7px;
-  border-radius: 7px;
-  border: 1px solid var(--c-accent);
-  background: var(--c-input-bg);
+  border-radius: var(--r-workspace-tab);
+  border: 1px solid var(--c-field-border);
+  background: var(--c-field);
   color: var(--c-text);
   font-size: 13px;
-  outline: none;
-  box-shadow: 0 0 0 3px var(--c-accent-subtle);
 }
 .p-bar-rename-error { font-size: 11px; color: var(--c-danger); white-space: nowrap; }
 .p-bar-new { position: relative; z-index: 1; display: flex; flex-shrink: 0; align-items: center; height: 38px; padding: 0 10px 2px 2px; }
-.p-bar-icon {
+.p-icon-control-bar {
   display: flex;
   align-items: center;
   justify-content: center;
   width: 28px;
   height: 28px;
-  border-radius: 8px;
-  color: var(--c-text-3);
-  transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
+  border-radius: var(--r-control);
 }
-.p-bar-icon:hover, .p-bar-icon:focus-visible { outline: none; background: var(--c-neutral-tint); color: var(--c-text); }
-/* The header's count of agents at work out of sight: the accent, so it reads in dark and light alike. */
-.p-agents-badge { background: var(--c-accent); color: var(--c-accent-on); box-shadow: 0 0 0 1.5px var(--c-bg); }
-.p-bar-icon[aria-current="page"], .p-bar-icon[aria-pressed="true"] { color: var(--c-text); }
+.p-icon-control-inline { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; padding: 4px; border-radius: var(--r-inner); }
+.p-icon-control:is([aria-current="page"], [aria-pressed="true"]) { color: var(--c-text); }
 .p-bar-trailing { display: flex; flex-shrink: 0; align-items: center; gap: 2px; padding: 0 10px 0 6px; }
 .p-bar-outline { position: absolute; top: 8px; bottom: 0; left: 0; pointer-events: none; }
 .p-bar-outline > span { position: absolute; bottom: 0; border: 0 solid var(--bar-line); }
@@ -1799,18 +2451,18 @@ body > .annotation-toolbar {
   height: var(--flare);
   border-right-width: 1px;
   border-bottom-width: 1px;
-  border-bottom-right-radius: var(--flare);
+  border-bottom-right-radius: var(--r-workspace-tab-flare);
 }
-.p-bar-outline > [data-part="body"] { top: 0; bottom: var(--flare); border-width: 1px 1px 0; border-radius: 10px 10px 0 0; }
+.p-bar-outline > [data-part="body"] { top: 0; bottom: var(--flare); border-width: 1px 1px 0; border-radius: var(--r-workspace-tab-outline) var(--r-workspace-tab-outline) 0 0; }
 .p-bar-outline > [data-part="flare-end"] {
   width: var(--flare);
   height: var(--flare);
   border-left-width: 1px;
   border-bottom-width: 1px;
-  border-bottom-left-radius: var(--flare);
+  border-bottom-left-radius: var(--r-workspace-tab-flare);
 }
 .p-bar-outline > [data-part="arm-end"] { right: 0; border-bottom-width: 1px; }
-.p-bar-outline[data-glide] > span { transition: left 260ms var(--ease-glide), width 260ms var(--ease-glide); }
+.p-bar-outline[data-glide] > span { transition: left var(--dur-fold) var(--ease-glide), width var(--dur-fold) var(--ease-glide); }
 @media (prefers-reduced-motion: reduce) {
   .p-bar-outline[data-glide] > span { transition: none; }
 }
@@ -1829,8 +2481,8 @@ body > .annotation-toolbar {
   margin: 0;
   padding: 3px;
   list-style: none;
-  border-radius: 10px;
-  background: var(--c-recessed);
+  border-radius: var(--r-control);
+  background: var(--c-sunken);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c-border) 70%, transparent);
 }
 .p-tool {
@@ -1842,31 +2494,30 @@ body > .annotation-toolbar {
   height: 26px;
   min-width: 30px;
   padding: 0 7px;
-  border-radius: 7px;
+  border-radius: var(--r-inner);
   color: var(--c-text-3);
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 500;
   letter-spacing: -0.005em;
   white-space: nowrap;
-  transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out, box-shadow var(--dur-fast) ease-out;
+  transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out, box-shadow var(--dur-state) ease-out;
 }
-.p-tool:hover { color: var(--c-text); background: var(--c-neutral-tint); }
-.p-tool:focus-visible { outline: 1.5px solid var(--c-accent); outline-offset: 1px; }
+.p-tool:hover { color: var(--c-text); background: var(--c-hover); }
 .p-tool[aria-current="true"] {
   padding: 0 9px 0 8px;
   color: var(--c-text);
   background: var(--c-surface);
-  box-shadow: 0 0 0 1px var(--c-border), 0 1px 2px rgb(0 0 0 / 0.18);
+  box-shadow: 0 0 0 1px var(--c-border), var(--shadow-tab);
 }
 .p-tool[aria-current="true"] > svg { color: var(--c-accent-mark); }
 .p-tool-count {
   min-width: 15px;
   height: 15px;
   padding: 0 4px;
-  border-radius: 8px;
-  background: var(--c-neutral-tint);
+  border-radius: var(--r-control);
+  background: var(--c-hover);
   color: var(--c-text-2);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   line-height: 15px;
   text-align: center;
@@ -1889,7 +2540,7 @@ body > .annotation-toolbar {
     height: 6px;
     padding: 0;
     overflow: hidden;
-    border-radius: 50%;
+    border-radius: var(--r-pill);
     background: var(--c-text-3);
     color: transparent;
   }
@@ -1907,19 +2558,19 @@ body > .annotation-toolbar {
   max-width: 168px;
   align-items: center;
   height: 26px;
-  border-radius: 7px;
+  border-radius: var(--r-inner);
   color: var(--c-text-3);
-  transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
+  transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out;
 }
-.p-page:hover { color: var(--c-text); background: var(--c-neutral-tint); }
-.p-page-link { display: flex; min-width: 0; align-items: center; gap: 6px; height: 100%; padding: 0 9px 0 8px; font-size: 12.5px; font-weight: 500; letter-spacing: -0.005em; white-space: nowrap; }
-.p-page-link:focus-visible { border-radius: 7px; outline: 1.5px solid var(--c-accent); outline-offset: 1px; }
+.p-page:hover { color: var(--c-text); background: var(--c-hover); }
+.p-page-link { display: flex; min-width: 0; align-items: center; gap: 6px; height: 100%; padding: 0 9px 0 8px; font-size: 13px; font-weight: 500; letter-spacing: -0.005em; white-space: nowrap; }
+.p-page-link:focus-visible { border-radius: var(--r-inner); }
 .p-pages-row > .p-page:first-child, .p-page[data-open] { flex-shrink: 1; }
-.p-page[data-open] { color: var(--c-text); background: var(--c-surface); box-shadow: 0 0 0 1px var(--c-border), 0 1px 2px rgb(0 0 0 / 0.18); }
+.p-page[data-open] { color: var(--c-text); background: var(--c-surface); box-shadow: 0 0 0 1px var(--c-border), var(--shadow-tab); }
 .p-page[data-open] > .p-page-link > svg, .p-page-picker > svg:first-child { color: var(--c-accent-mark); }
-.p-page[data-open]:has(.p-bar-action) .p-page-link { padding-right: 2px; }
-.p-page > .p-bar-action { width: 20px; height: 20px; margin-right: 3px; }
-.p-page-picker { gap: 6px; max-width: 100%; padding: 0 8px; font-size: 12.5px; font-weight: 500; white-space: nowrap; }
+.p-page[data-open]:has(.p-icon-control-tab) .p-page-link { padding-right: 2px; }
+.p-page > .p-icon-control-tab { width: 20px; height: 20px; margin-right: 3px; }
+.p-page-picker { gap: 6px; max-width: 100%; padding: 0 8px; font-size: 13px; font-weight: 500; white-space: nowrap; }
 .p-page-picker > .p-tool-count { flex-shrink: 0; }
 .p-pages-menu { position: absolute; top: calc(100% + 8px); left: 0; z-index: 40; width: 240px; padding: 4px; }
 .p-bar-more {
@@ -1928,14 +2579,14 @@ body > .annotation-toolbar {
   gap: 5px;
   height: 24px;
   padding: 0 8px;
-  border-radius: 7px;
+  border-radius: var(--r-control);
   color: var(--c-text-3);
   font-size: 12px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
-  transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
+  transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out;
 }
-.p-bar-more:hover, .p-bar-more[aria-expanded="true"] { color: var(--c-text); background: var(--c-neutral-tint); }
+.p-bar-more:hover, .p-bar-more[aria-expanded="true"] { color: var(--c-text); background: var(--c-hover); }
 
 /* A page shown in the column sits inset on its ground, framed as a card of its own. */
 .p-pane { display: flex; height: 100%; min-height: 0; flex-direction: column; padding: 12px 12px 14px; }
@@ -1946,11 +2597,11 @@ body > .annotation-toolbar {
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--c-border);
-  border-radius: 12px;
+  border-radius: var(--r-row);
   background: var(--c-surface);
 }
 .p-pane-head { display: flex; flex-shrink: 0; align-items: center; gap: 2px; height: 36px; padding: 0 6px 0 12px; border-bottom: 1px solid var(--c-border); }
-.p-pane-url { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 11.5px; color: var(--c-text-3); }
+.p-pane-url { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 12px; color: var(--c-text-3); }
 .p-pane-body { min-height: 0; flex: 1; overflow: hidden; }
 
 /* An agent's status, read by shape as well as hue: a turning arc while it
@@ -1961,7 +2612,7 @@ body > .annotation-toolbar {
   content: "";
   width: 10px;
   height: 10px;
-  border-radius: 50%;
+  border-radius: var(--r-pill);
   border: 2px solid color-mix(in srgb, var(--c-accent-mark) 32%, transparent);
   border-top-color: var(--c-accent-mark);
   animation: p-status-turn 1.15s linear infinite;
@@ -1970,7 +2621,7 @@ body > .annotation-toolbar {
   content: "";
   width: 7px;
   height: 7px;
-  border-radius: 50%;
+  border-radius: var(--r-pill);
   background: var(--c-danger);
   animation: p-status-halo 2.4s ease-out infinite;
 }
@@ -2069,7 +2720,7 @@ body > .annotation-toolbar {
   top: 3px;
   bottom: 3px;
   width: 1px;
-  border-radius: 1px;
+  border-radius: var(--r-pill);
   background: var(--c-border);
 }
 
@@ -2081,14 +2732,14 @@ body > .annotation-toolbar {
   grid-template-columns: 1fr 1fr;
   width: 200%;
   height: 100%;
-  transition: transform 280ms var(--ease-glide);
+  transition: transform var(--dur-fold) var(--ease-glide);
 }
-.p-slide > * { min-width: 0; transition: opacity 280ms var(--ease-glide); }
+.p-slide > * { min-width: 0; transition: opacity var(--dur-fold) var(--ease-glide); }
 .p-slide[data-drilled] { transform: translateX(-50%); }
 .p-slide[data-drilled] > :first-child, .p-slide:not([data-drilled]) > :last-child { opacity: 0; }
 @media (prefers-reduced-motion: reduce) {
   .p-slide { transition: none; }
-  .p-slide > * { transition-duration: 120ms; }
+  .p-slide > * { transition-duration: var(--dur-state); }
 }
 
 /* The composer floats over the chat's end: no rule, no band. The thread
@@ -2108,7 +2759,7 @@ body > .annotation-toolbar {
   right: 5px;
   width: 6px;
   height: 6px;
-  border-radius: 50%;
+  border-radius: var(--r-pill);
   background: var(--c-accent-mark);
   box-shadow: 0 0 0 2px var(--c-bg);
 }
@@ -2116,7 +2767,7 @@ body > .annotation-toolbar {
 /* Environment: one surface on the column's ground. The machines are a row of equal chips, the chosen one on the
    accent's wash; the chosen machine's head sits on the ground itself; its terminal or screen runs from one hairline
    to the column's foot. */
-.p-env-chip {
+.p-chip-toggle {
   display: inline-flex;
   max-width: 100%;
   align-items: center;
@@ -2124,24 +2775,24 @@ body > .annotation-toolbar {
   height: 30px;
   padding: 0 11px 0 10px;
   border: 1px solid var(--c-border);
-  border-radius: 9px;
+  border-radius: var(--r-control);
   background: var(--c-surface);
   color: var(--c-text-2);
   font-size: 13px;
   font-weight: 500;
   letter-spacing: -0.005em;
-  transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out, border-color var(--dur-fast) ease-out;
+  transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out, border-color var(--dur-state) ease-out;
 }
-.p-env-chip:hover { border-color: var(--c-border-strong); color: var(--c-text); }
-.p-env-chip:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 1px; }
-.p-env-chip[aria-pressed="true"] {
+.p-chip-toggle:hover { border-color: var(--c-border-strong); color: var(--c-text); }
+.p-chip-toggle[aria-pressed="true"] {
   border-color: color-mix(in srgb, var(--c-accent) 38%, transparent);
-  background: var(--c-accent-subtle);
+  background: var(--c-selected);
   color: var(--c-text);
 }
-.p-env-chip[aria-pressed="true"] > svg { color: var(--c-accent-mark); }
+.p-chip-toggle[aria-pressed="true"] > svg { color: var(--c-accent-mark); }
+.p-chip-toggle[data-size="sm"] { height: 28px; padding: 0 8px; font: 500 12px/16px var(--font-ui); letter-spacing: 0; }
 /* One status language for machines and terminals: the dot's colour says the state, its motion says work. */
-.p-env-dot { width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; background: var(--c-success); }
+.p-env-dot { width: 7px; height: 7px; flex-shrink: 0; border-radius: var(--r-pill); background: var(--c-success); }
 .p-env-dot[data-tone="working"] { background: var(--c-accent-mark); animation: dot-pulse 1.4s ease-in-out infinite; }
 .p-env-dot[data-tone="attention"] { background: var(--c-warning); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-warning) 28%, transparent); }
 .p-env-dot[data-tone="danger"] { background: var(--c-danger); }
@@ -2151,22 +2802,6 @@ body > .annotation-toolbar {
 [data-env-status] { color: var(--c-text-3); }
 [data-env-status][data-tone="attention"] { color: var(--c-warning); font-weight: 500; }
 [data-env-status][data-tone="danger"] { color: var(--c-danger); font-weight: 500; }
-.p-env-action {
-  display: inline-flex;
-  height: 28px;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 6px;
-  padding: 0 10px;
-  border: 1px solid var(--c-border);
-  border-radius: 8px;
-  background: var(--c-surface);
-  color: var(--c-text-2);
-  font-size: 12.5px;
-  font-weight: 500;
-}
-.p-env-action:hover { color: var(--c-text); border-color: var(--c-border-strong); }
-.p-env-action:disabled { opacity: 0.6; }
 /* A machine's sessions as tabs (D90): a name and its dot; the open one carries the accent's underline down onto the
    rule its terminal starts under. Tabs that do not fit fade at the edge and scroll. */
 .p-session-tabs {
@@ -2207,7 +2842,7 @@ body > .annotation-toolbar {
   bottom: 0;
   left: 10px;
   height: 2px;
-  border-radius: 2px;
+  border-radius: var(--r-pill);
   background: var(--c-accent);
 }
 .p-session-tabs > :first-child .p-session-tab[aria-selected="true"]::after,
@@ -2220,10 +2855,10 @@ body > .annotation-toolbar {
   height: 16px;
   margin: 0 2px 0 -6px;
   place-items: center;
-  border-radius: 4px;
+  border-radius: var(--r-check);
   color: var(--c-text-3);
 }
-.p-session-close:hover { color: var(--c-text); background: var(--c-neutral-tint); }
+.p-session-close:hover { color: var(--c-text); background: var(--c-hover); }
 .p-session-tab-slot:hover .p-session-close, .p-session-tab-slot:focus-within .p-session-close { display: grid; }
 .p-session-rename {
   align-self: center;
@@ -2231,12 +2866,12 @@ body > .annotation-toolbar {
   height: 26px;
   padding: 0 8px;
   border: 1px solid var(--c-accent);
-  border-radius: 6px;
+  border-radius: var(--r-inner);
   background: var(--c-surface);
   color: var(--c-text);
   font-size: 13px;
 }
-.p-term-port { display: inline-flex; align-items: center; gap: 3px; color: var(--c-accent-fg); font-family: var(--font-mono); font-size: 11.5px; }
+.p-term-port { display: inline-flex; align-items: center; gap: 3px; color: var(--c-accent-fg); font-family: var(--font-mono); font-size: 12px; }
 /* The terminal's own ground, under its padding as under its text. */
 .p-terminal-ground { background: var(--c-bg); }
 
@@ -2244,5 +2879,5 @@ body > .annotation-toolbar {
 .p-desktop-veil {
   background:
     radial-gradient(90% 70% at 50% 115%, color-mix(in srgb, var(--c-accent) 14%, transparent), transparent 70%),
-    var(--c-recessed);
+    var(--c-sunken);
 }

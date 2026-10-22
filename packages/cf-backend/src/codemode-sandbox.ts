@@ -6,8 +6,8 @@
 import { DynamicWorkerExecutor, sanitizeToolName } from '@cloudflare/codemode';
 import { normalizeCode } from '@cloudflare/codemode/normalize';
 import {
-  explainSandboxError, nestedMembers, renderCraftedDefinitions, SANDBOX_CONSOLE_PRELUDE, SANDBOX_CREATE_TOOL_PRELUDE,
-  NO_TIMER_DEADLINE_MS, bindTaskPlan, launched, codemodeFunction, decodeJsonValue, relayedAnswer,
+  CRAFTED_TOOL_NAMESPACE, explainSandboxError, nestedMembers, renderCraftedDefinitions, SANDBOX_CONSOLE_PRELUDE, SANDBOX_CREATE_TOOL_PRELUDE,
+  NO_TIMER_DEADLINE_MS, bindTaskPlan, launched, codemodeFunction, type MemberImpacts, decodeJsonValue, relayedAnswer,
   type CraftedToolSource, type ExecuteResult, type Executor, type ProgramStop, type ResolvedProvider as HostProvider,
 } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -38,7 +38,8 @@ export function renderToolsPrelude(crafted: readonly CraftedToolSource[], identi
     '    __kinu.bindSlates(__kinuWorkspace);',
     '    const __kinuBuiltins = await __kinu.loadBuiltins();',
     `    const process = __kinu.createProcess(${JSON.stringify(identity.cwd)});`,
-    '    const require = __kinu.createRequire({ workspace: __kinuWorkspace, builtins: __kinuBuiltins.loaded, cwd: process.cwd() });',
+    '    const __kinuMachines = { computer: typeof computer === "undefined" ? null : computer, device: typeof device === "undefined" ? null : device };',
+    '    const require = __kinu.createRequire({ workspace: __kinuWorkspace, machines: __kinuMachines, builtins: __kinuBuiltins.loaded, cwd: process.cwd() });',
     `    const fetch = __kinu.createFetch(${JSON.stringify(EGRESS_FAILURE_HEADER)});`,
     // The program's own bindings first (the owner's secrets granted here, `process.env` holds them too), never over these.
     `    const env = Object.freeze({ ...this.env, workspace: ${JSON.stringify(identity.workspace)}, missingBuiltins: __kinuBuiltins.missing });`,
@@ -49,13 +50,13 @@ export function renderToolsPrelude(crafted: readonly CraftedToolSource[], identi
 /**
  * Capture the invocation's task plan and failure census before the RPC hop.
  */
-function attributeProviders(providers: ResolvedProvider[]): ResolvedProvider[] {
+function attributeProviders(providers: ResolvedProvider[], impacts: MemberImpacts): ResolvedProvider[] {
   return providers.map((provider) => {
     const fns: ResolvedProvider['fns'] = {};
 
     for (const [name, fn] of Object.entries(provider.fns)) {
       const invoke = bindTaskPlan(fn);
-      fns[name] = codemodeFunction(provider.name, name, invoke);
+      fns[name] = codemodeFunction(provider.name, name, invoke, impacts(provider.name, name));
     }
 
     const attributed: ResolvedProvider = { name: provider.name, fns };
@@ -69,10 +70,10 @@ function attributeProviders(providers: ResolvedProvider[]): ResolvedProvider[] {
 type ProgramResult = Awaited<ReturnType<DynamicWorkerExecutor['execute']>>;
 
 /**
- * A provider as the sandbox must hold it for a program to reach each member by the name it wrote. The vendor registers
- * a member under its sanitized name (`delete` as `delete_`) but dispatches the name the program wrote, so `state.delete`
- * never resolved; its namespace serves its own properties first, so each such name is set there as the sanitized
- * member. `workspace.createTool` takes the function itself, sent as its source: source written as text in the program
+ * A provider as the sandbox must hold it for a program to reach each member by the name it wrote, in the shape an
+ * in-process program holds one (`programNamespace`). The vendor registers a member under its sanitized name (`delete`
+ * as `delete_`) but dispatches the name the program wrote, so `state.delete` never resolved; its namespace serves its
+ * own properties first, so each member is set there by the name written, as the registered member. `workspace.createTool` takes the function itself, sent as its source: source written as text in the program
  * had its escapes read once by the program and again by the tool's parser.
  *
  * Every namespace has its own `then`, undefined, so it is never a thenable: the vendor's proxy answers any other name
@@ -88,10 +89,12 @@ function reachableAsWritten(provider: ResolvedProvider): ResolvedProvider {
 
   const lines = [`    ${ns}.then = undefined;`];
 
+  // Each member it serves is its own property, so `'slates' in workspace` says whether slates are served
+  // (`programNamespace`, the in-process shape); any other name the vendor's proxy answers, refused when called.
   for (const [name, member] of held) {
     if (typeof member !== 'string') {
       lines.push(`    ${ns}[${JSON.stringify(name)}] = Object.freeze({ ${Object.entries(member).map(([inner, full]) => `${JSON.stringify(inner)}: ${registered(full)}`).join(', ')} });`);
-    } else if (sanitizeToolName(name) !== name) lines.push(`    ${ns}[${JSON.stringify(name)}] = ${registered(name)};`);
+    } else lines.push(`    ${ns}[${JSON.stringify(name)}] = ${registered(name)};`);
   }
 
   if (ns === 'workspace' && Object.hasOwn(provider.fns, 'createTool')) lines.push(`    ${SANDBOX_CREATE_TOOL_PRELUDE}`);
@@ -123,7 +126,11 @@ export class CodemodeLauncher extends WorkerEntrypoint<{ readonly LOADER: Worker
       loader: this.env.LOADER, egress: egress === null ? null : codemodeEgress(egress), kinuNode, env, timeout: deadlineMs ?? NO_TIMER_DEADLINE_MS,
     });
 
-    return await worker.execute(`async () => { ${SANDBOX_CONSOLE_PRELUDE}\n return await (\n${normalizeCode(source)}\n)(); }`, providers.map(reachableAsWritten));
+    // The vendor runs preludes in its providers' order: every namespace holds its members as its own first, so `tools.*`'s
+    // prelude, which binds slates where the workspace serves them, finds what each serves.
+    const ordered = [...providers.filter((provider) => provider.name !== CRAFTED_TOOL_NAMESPACE), ...providers.filter((provider) => provider.name === CRAFTED_TOOL_NAMESPACE)];
+
+    return await worker.execute(`async () => { ${SANDBOX_CONSOLE_PRELUDE}\n return await (\n${normalizeCode(source)}\n)(); }`, ordered.map(reachableAsWritten));
   }
 
   /** Asked from a detached background job's context (core jobs/runner `alive`), over the path its programs take. */
@@ -168,10 +175,13 @@ export class KinuSandboxExecutor {
   readonly #inner: ProgramLaunch;
   /** Source run before each program, in its scope: `describe` (`describeProgramSource`). */
   readonly #prelude: string;
+  /** What each member's served operation declares, from the providers it was built over (`servedImpacts`). */
+  readonly #impacts: MemberImpacts;
 
-  constructor(launch: ProgramLaunch, prelude = '') {
+  constructor(launch: ProgramLaunch, prelude = '', impacts: MemberImpacts = () => null) {
     this.#inner = launch;
     this.#prelude = prelude;
+    this.#impacts = impacts;
   }
 
   async execute(code: string, providers: DynamicProviderInput) {
@@ -184,7 +194,7 @@ export class KinuSandboxExecutor {
       // as a result so the shared completion mapper retains its classification.
       const callable = normalizeCode(code);
       const source = `async () => { ${this.#prelude}\n try { return await (${callable})(); } catch (cause) { if (cause && cause.success === false && typeof cause.error === 'string') return cause; throw cause; } }`;
-      const result = await this.#inner.run(source, attributeProviders(providerArr));
+      const result = await this.#inner.run(source, attributeProviders(providerArr, this.#impacts));
 
       // DWE returns sandbox-internal failures as strings; only the native-tool ReferenceError is
       // rewritten into the correction.

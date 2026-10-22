@@ -9,7 +9,7 @@ import { ShareModeSchema, ShareStartSchema } from './share-modes';
 import { GalleryCategorySchema } from './gallery-api';
 
 
-const SHARE_KINDS = ['blueprint', 'live'] as const;
+export const SHARE_KINDS = ['blueprint', 'live'] as const;
 
 export type ShareKind = (typeof SHARE_KINDS)[number];
 
@@ -350,7 +350,6 @@ export const SlateShareRecordSchema = v.object({
   id: v.string(),
   slate: v.string(),
   publication: v.string(),
-  included: v.array(v.string()),
   createdAt: v.number(),
   revokedAt: v.nullable(v.number()),
   users: v.array(v.string()),

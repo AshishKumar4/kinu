@@ -4,7 +4,7 @@ import type { Page } from 'puppeteer';
 import { launchTestChrome } from '../../scripts/test-chrome';
 import { collectEvalTasks } from '../src/eval';
 import { recordSlateCalls, SlateView, WorkspaceBrowser } from '../src/browser';
-import { EvalVerifier, type EvalCheckOutcome, type HelperWork, type ReachedRun, type VerifierSession } from '../src/verifier';
+import { EvalVerifier, type EvalCheckOutcome, type SubagentWork, type ReachedRun, type VerifierSession } from '../src/verifier';
 import { InspectionAnswerSchema, openPublicSession } from '../src/session';
 import { resolveWebIdentity, type WorkspaceWeb } from '../src/workspace-roster';
 import type { Sight } from '../src/sight';
@@ -20,13 +20,13 @@ const Colour = v.tuple([v.number(), v.number(), v.number()]);
 
 const Appearance = v.object({ background: Colour, light: v.number(), host: v.nullable(Colour), hostLight: v.nullable(v.number()), letters: v.number(), readable: v.number(), overflow: v.number() });
 
-const Helper = v.object({ name: v.string(), status: v.string(), runs: v.array(v.object({ startedAt: v.number(), endedAt: v.optional(v.nullable(v.number())), status: v.nullable(v.string()), userMessage: v.nullable(v.string()) })) });
+const Subagent = v.object({ name: v.string(), status: v.string(), runs: v.array(v.object({ startedAt: v.number(), endedAt: v.optional(v.nullable(v.number())), status: v.nullable(v.string()), userMessage: v.nullable(v.string()) })) });
 
 const Input = v.object({
   task: v.string(), part: v.string(), turn: v.optional(v.number(), 1), checks: v.array(v.string()), expected: v.optional(v.boolean(), true),
   prepare: v.optional(v.array(v.string()), []),
   files: v.optional(v.record(v.string(), v.string()), {}), replies: v.optional(v.array(v.string()), []),
-  events: v.optional(v.array(RunEventSchema), []), helpers: v.optional(v.array(Helper)),
+  events: v.optional(v.array(RunEventSchema), []), subagents: v.optional(v.array(Subagent)),
   rpc: v.optional(v.array(v.object({ id: v.string(), method: v.string(), args: v.array(JsonValueSchema), answer: JsonValueSchema })), []),
   seen: v.optional(SightSchema), modes: v.optional(v.object({ light: Appearance, dark: Appearance })),
   html: v.optional(v.array(v.string())), pressed: v.optional(v.boolean(), true),
@@ -132,7 +132,7 @@ async function offline(): Promise<void> {
     listSlates: absent, readBytes: absent, listFiles: absent, craftedTools: absent, memoryContent: absent,
     memoryFacts: absent, workspaceWork: absent,
     inspect: async (request) => {
-      const row = input.rpc.find((call) => call.id === 'workspace' && call.method === 'inspectSubordinate' && JSON.stringify(call.args) === JSON.stringify([request]));
+      const row = input.rpc.find((call) => call.id === 'workspace' && call.method === 'inspectSubagent' && JSON.stringify(call.args) === JSON.stringify([request]));
 
       if (row === undefined) throw new Error('the replay has no saved canonical inspector page for this request');
 
@@ -184,10 +184,10 @@ async function offline(): Promise<void> {
 
     verifier.browse = <T>(body: (seen: WorkspaceBrowser) => Promise<T>) => body(browser);
 
-    if (input.helpers !== undefined) {
-      const helpers: HelperWork[] = input.helpers;
+    if (input.subagents !== undefined) {
+      const subagents: SubagentWork[] = input.subagents;
 
-      verifier.helperWork = () => Promise.resolve(helpers);
+      verifier.subagentWork = () => Promise.resolve(subagents);
     }
 
     if (input.reached !== undefined) {

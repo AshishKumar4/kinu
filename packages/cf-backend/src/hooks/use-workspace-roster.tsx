@@ -399,6 +399,11 @@ export function WorkspaceRosterProvider({ children, live = openRosterSocket }: {
   return <WorkspaceRosterContext.Provider value={value}>{children}</WorkspaceRosterContext.Provider>;
 }
 
+/** The roster, where a page has one: a frame drawn without its provider (the landing, a gallery frame) has none. */
+export function useWorkspaceRosterIfAny(): WorkspaceRosterValue | null {
+  return useContext(WorkspaceRosterContext);
+}
+
 export function useWorkspaceRoster(): WorkspaceRosterValue {
   return settleSync(Effect.gen(function* () {
     const roster = useContext(WorkspaceRosterContext);

@@ -1,22 +1,28 @@
 /** The server grant is the read set plus the ticked set; the dialog renders, never decides. */
 import { Effect } from 'effect';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Button, Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
+import { Button } from "@/components/ui/Button";
 import {
   CaretDownIcon, CaretRightIcon, FileDashedIcon, GlobeIcon, IdentificationCardIcon, PackageIcon, SquaresFourIcon, StopCircleIcon, UserCircleIcon,
-  UsersIcon, WarningIcon,
+  UsersIcon,
 } from "@phosphor-icons/react";
 import * as v from "valibot";
 import { OwnedLiveShareSchema, SlateReachSchema, SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, type LiveShareBody, type LiveShareCreated, type LiveShareVisibility, type OwnedLiveShare, type SharePreapproval, type ShareMode, type SlateCapabilityGraph, type SlateGraphNamespace, type SlateGraphMember, type SlateReach } from "@kinu.run/core";
 import { showing, detach } from "@kinu.run/core/obs";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { listShare, readPreapprovals, revokeShare, setShareMode, shareLive, withdrawPreapproval } from "@/lib/shared-api";
 import { ShareListing, type ListShare } from "./ShareListing";
 import { answered } from "./BlueprintShareForm";
 import { AccessPicker, EmailsField, emailsOf, Failure, Lead, type AccessOption } from "./ShareParts";
-import { TileMenu, type MenuItem } from "@/components/drive/DriveTiles";
+import { Menu, type MenuItem } from "@/components/ui/Menu";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Notice } from "@/components/ui/Notice";
+import { Group } from "@/components/ui/Group";
+import { Choices, type Choice } from "@/components/ui/Choices";
+import { Checkbox } from "@/components/ui/Check";
+import { Pressable } from "@/components/ui/Pressable";
+import { Segmented } from "@/components/ui/Segmented";
 
 export interface LiveShareFixture {
   graph: SlateReach;
@@ -57,47 +63,10 @@ const ACCESS: readonly AccessOption<LiveShareVisibility>[] = [
  * each person's own parts on their own connections, and it can be listed. Mine: the owner's connections within the
  * reach listed, each change waiting for the owner, never listed in the Gallery.
  */
-const MODES: readonly CardOption<ShareMode>[] = [
+const MODES: readonly Choice<ShareMode>[] = [
   { id: "own", icon: <UserCircleIcon size={16} />, label: "Their own access", detail: "Each person sees their own data, on their own connections. Nothing of yours is used." },
   { id: "owner", icon: <IdentificationCardIcon size={16} />, label: "My access", detail: "It acts with your connections, within the reach below. Each change waits for you." },
 ];
-
-/** One choice of a few, each with what it means, all shown at once. `marker` names its data attribute. */
-interface CardOption<T extends string> {
-  readonly id: T;
-  readonly icon: ReactNode;
-  readonly label: string;
-  readonly detail: string;
-  readonly disabled?: boolean;
-}
-
-function ChoiceCards<T extends string>({ label, marker, options, value, onChange, disabled }: {
-  label: string;
-  marker: `data-${string}`;
-  options: readonly CardOption<T>[];
-  value: T;
-  onChange: (id: T) => void;
-  disabled: boolean;
-}) {
-  return (
-    <div role="radiogroup" aria-label={label} className="p-group">
-      {options.map((option) => (
-        <button key={option.id} type="button" role="radio" aria-checked={value === option.id} {...{ [marker]: option.id }} onClick={() => onChange(option.id)}
-          disabled={disabled || option.disabled === true}
-          className={`flex w-full items-start gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--c-elevated)] ${value === option.id ? "bg-[var(--c-elevated)]" : ""}`}>
-          <span className={`mt-0.5 flex shrink-0 ${value === option.id ? "p-accent" : "p-text-3"}`}>{option.icon}</span>
-          <span className="min-w-0 flex-1">
-            <span className="block p-row-text font-medium p-text">{option.label}</span>
-            <span className="block p-meta p-text-3">{option.detail}</span>
-          </span>
-          <span className={`mt-1 flex size-4 shrink-0 items-center justify-center rounded-full border ${value === option.id ? "border-[var(--c-accent)]" : "border-[var(--c-border-strong)]"}`}>
-            {value === option.id && <span className="size-2 rounded-full bg-[var(--c-accent)]" />}
-          </span>
-        </button>
-      ))}
-    </div>
-  );
-}
 
 /**
  * The choice of mode, both shown, as it decides what the slate can do with whose data. `unbuilt`: the slate has no
@@ -111,7 +80,7 @@ function ModeChoice({ value, onChange, disabled, unbuilt, emptyCopy }: {
   /** An empty copy runs on each person's own access: it has nothing of the owner's to act on. */
   emptyCopy: boolean;
 }) {
-  const ownerAccess = (mode: CardOption<ShareMode>) => {
+  const ownerAccess = (mode: Choice<ShareMode>) => {
     if (emptyCopy) return { ...mode, disabled: true, detail: "An empty copy runs on each person's own access." };
 
     return unbuilt ? { ...mode, disabled: true, detail: "Open it once first, so there is a version of it to approve." } : mode;
@@ -119,7 +88,7 @@ function ModeChoice({ value, onChange, disabled, unbuilt, emptyCopy }: {
 
   const options = MODES.map((mode) => (mode.id === "owner" ? ownerAccess(mode) : mode));
 
-  return <ChoiceCards label="It runs with" marker="data-share-mode" options={options} value={value} onChange={onChange} disabled={disabled} />;
+  return <Choices label="It runs with" marker="data-share-mode" options={options} value={value} onChange={onChange} disabled={disabled} />;
 }
 
 /**
@@ -128,22 +97,21 @@ function ModeChoice({ value, onChange, disabled, unbuilt, emptyCopy }: {
  */
 type ShareStart = NonNullable<LiveShareBody["start"]>;
 
-const STARTS: readonly CardOption<ShareStart>[] = [
+const STARTS: readonly Choice<ShareStart>[] = [
   { id: "as-is", icon: <PackageIcon size={16} />, label: "As it is now", detail: "They see what it holds now, and what it holds next." },
   { id: "empty", icon: <FileDashedIcon size={16} />, label: "An empty copy", detail: "A copy of its code, holding nothing yet, is shared instead. This one stays as it is." },
 ];
 
 function StartChoice({ value, onChange, disabled }: { value: ShareStart; onChange: (start: ShareStart) => void; disabled: boolean }) {
-  return <ChoiceCards label="They start with" marker="data-share-start" options={STARTS} value={value} onChange={onChange} disabled={disabled} />;
+  return <Choices label="They start with" marker="data-share-start" options={STARTS} value={value} onChange={onChange} disabled={disabled} />;
 }
 
 /** What "My access" lets the people it is shared with do, said before it is chosen; it is never listed. */
 function OwnerWarning() {
   return (
-    <p data-share-owner-warning className="flex gap-2 rounded-lg p-tint-warning px-3 py-2 p-meta p-text">
-      <WarningIcon size={14} className="mt-0.5 shrink-0 p-warning" />
-      <span>Everyone you share it with acts as you, within this reach: what it reads of yours, they see. Any change it makes waits for you to approve it, and a change to its code stops it until you approve the new reach. It can't be listed in the Gallery.</span>
-    </p>
+    <Notice tone="warning" data-share-owner-warning="">
+      Everyone you share it with acts as you, within this reach: what it reads of yours, they see. Any change it makes waits for you to approve it, and a change to its code stops it until you approve the new reach. It can't be listed in the Gallery.
+    </Notice>
   );
 }
 
@@ -175,12 +143,12 @@ function PrimaryAction({ reviewing, busy, canShare, canApprove, onShare, onAppro
   onShare: () => void;
   onApprove: () => void;
 }) {
-  if (reviewing) return <FilledButton className="h-8 px-4 text-sm" onClick={onApprove} disabled={busy || !canApprove} data-share-approve-reach>Approve the new reach</FilledButton>;
+  if (reviewing) return <Button variant="primary" size="sm"  onClick={onApprove} disabled={busy || !canApprove} data-share-approve-reach>Approve the new reach</Button>;
 
   return (
-    <FilledButton className="h-8 px-4 text-sm" onClick={onShare} disabled={!canShare} data-share-submit>
+    <Button variant="primary" size="sm"  onClick={onShare} disabled={!canShare} data-share-submit>
       {busy ? <><Loader size="sm" /><span className="ml-1">Sharing…</span></> : "Share"}
-    </FilledButton>
+    </Button>
   );
 }
 
@@ -201,9 +169,9 @@ function NamespaceRow({ row, visibility, approved, onToggle, disabled }: {
   let members: ReactNode;
 
   if (row.problem !== undefined) {
-    members = <p className="p-badge-danger inline-block rounded px-2 py-0.5 text-[11px]">{row.problem}</p>;
+    members = <p className="t-meta p-danger">{row.problem}</p>;
   } else if (row.members.length === 0) {
-    members = <p className="p-text-4">No members.</p>;
+    members = <p className="p-text-3">No members.</p>;
   } else {
     members = (
       <ul className="space-y-1">
@@ -216,8 +184,8 @@ function NamespaceRow({ row, visibility, approved, onToggle, disabled }: {
             return (
               <li key={key} className="flex items-center gap-2">
                 <span className="font-mono p-text-2">{member.member}</span>
-                <span className="p-text-4">{IMPACT_WORDS[member.impact]}</span>
-                <span className="ml-auto p-text-4">Always on</span>
+                <span className="p-text-3">{IMPACT_WORDS[member.impact]}</span>
+                <span className="ml-auto p-text-3">Always on</span>
               </li>
             );
           }
@@ -225,14 +193,11 @@ function NamespaceRow({ row, visibility, approved, onToggle, disabled }: {
           const checked = approved.has(key);
 
           return (
-            <li key={key} className={`-mx-2 rounded-md px-2 py-1.5 ${checked ? "p-tint-warning" : ""}`}>
-              <label className="flex cursor-pointer items-center gap-2">
-                <span className="font-mono p-text">{member.member}</span>
-                <span className="p-text-3">{IMPACT_WORDS[member.impact]}</span>
-                <input type="checkbox" checked={checked} onChange={() => onToggle(approval)} disabled={disabled}
-                  className="ml-auto size-4 accent-[var(--c-accent)]" aria-describedby={`risk-${key}`} data-approve={`${row.namespace}.${member.member}`} />
-              </label>
-              <p id={`risk-${key}`} className="mt-0.5 leading-relaxed p-text-3">{risk}</p>
+            <li key={key} className="py-1">
+              <Checkbox checked={checked} onChange={() => onToggle(approval)} disabled={disabled} describedBy={`risk-${key}`}
+                data-approve={`${row.namespace}.${member.member}`}
+                label={<span className="flex flex-wrap gap-x-2"><span className="t-mono p-text">{member.member}</span><span className="p-text-3">{IMPACT_WORDS[member.impact]}</span></span>} />
+              <p id={`risk-${key}`} className="mt-px pl-6 p-text-3">{risk}</p>
             </li>
           );
         })}
@@ -241,10 +206,10 @@ function NamespaceRow({ row, visibility, approved, onToggle, disabled }: {
   }
 
   return (
-    <li className="space-y-1.5 py-2">
+    <li className="space-y-2 border-t p-border py-2 first:border-t-0">
       <div className="flex flex-wrap items-baseline gap-x-2">
-        <span className="font-mono text-xs font-medium p-text">{row.namespace}</span>
-        {row.title !== row.namespace && <span className="p-text-4">{row.title}</span>}
+        <span className="t-status t-mono p-text">{row.namespace}</span>
+        {row.title !== row.namespace && <span className="p-text-3">{row.title}</span>}
       </div>
       {members}
     </li>
@@ -272,18 +237,17 @@ function Reach({ graph, visibility, approved, onToggle, disabled }: {
   if (approved.size > 0) changes = `${String(approved.size)} ${approved.size === 1 ? "change" : "changes"} allowed`;
 
   return (
-    <div className="p-group">
-      <button type="button" aria-expanded={open} data-share-reach onClick={() => setOpen((shown) => !shown)}
-        className="flex w-full items-center gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--c-elevated)]">
-        <span className="w-14 shrink-0 p-row-text font-medium p-text">Reach</span>
-        <span className="flex min-w-0 flex-1 p-meta p-text-3">
+    <Group>
+      <Pressable aria-expanded={open} data-share-reach onClick={() => setOpen((shown) => !shown)} className="flex items-center gap-3 px-3 py-2">
+        <span className="t-item w-14 shrink-0 p-text">Reach</span>
+        <span className="t-meta flex min-w-0 flex-1 p-text-3">
           <span className="truncate">{names}</span>
           <span className="shrink-0 whitespace-pre"> · {changes}</span>
         </span>
-        {open ? <CaretDownIcon size={13} className="shrink-0 p-text-4" /> : <CaretRightIcon size={13} className="shrink-0 p-text-4" />}
-      </button>
+        {open ? <CaretDownIcon size={14} className="shrink-0 p-text-3" /> : <CaretRightIcon size={14} className="shrink-0 p-text-3" />}
+      </Pressable>
       {open && (
-        <div className="space-y-2 border-t p-border px-3.5 py-2 text-xs">
+        <div className="t-meta space-y-2 border-t p-border px-3 py-2">
           <p className="p-text-3">Everything here uses your connections. Reading is on; each change stays off until you tick it.</p>
           {graph.slates.map((slateId) => {
             const rows = graph.namespaces.filter((row) => row.slate === slateId);
@@ -296,7 +260,7 @@ function Reach({ graph, visibility, approved, onToggle, disabled }: {
             return (
               <div key={slateId} className={via === null ? "" : "border-l-2 p-border pl-3"}>
                 {via !== null && <div className="p-text-3">via <span className="font-mono">{via}</span> → <span className="font-mono">{slateId}</span></div>}
-                <ul className="divide-y divide-[var(--c-border)]">
+                <ul>
                   {rows.map((row) => (
                     <NamespaceRow key={`${row.slate}/${row.namespace}`} row={row} visibility={visibility} approved={approved} onToggle={onToggle} disabled={disabled} />
                   ))}
@@ -309,7 +273,7 @@ function Reach({ graph, visibility, approved, onToggle, disabled }: {
           </p>
         </div>
       )}
-    </div>
+    </Group>
   );
 }
 
@@ -323,6 +287,8 @@ function modeWords(row: OwnedLiveShare): ReactNode {
 
   return <span className="p-warning">Stopped: {editor === null ? "its code changed" : <>changed by {editor}</>} since you approved its reach</span>;
 }
+
+const PERSON_ROLES: readonly { readonly id: "use" | "edit"; readonly label: string }[] = [{ id: "use", label: "Use" }, { id: "edit", label: "Edit" }];
 
 /**
  * The people being added, each to use it or also to edit it: an editor changes the slate from their own workspace's
@@ -341,26 +307,18 @@ function PeopleRoles({ people, editors, onRole, ownerAccess, disabled }: {
   const anyEditor = people.some((email) => editors.has(email));
 
   return (
-    <div className="space-y-1.5">
-      <ul className="p-group">
+    <div className="space-y-2">
+      <Group list>
         {people.map((email) => (
-          <li key={email} data-share-person={email} className="flex items-center gap-3 px-3.5 py-2">
-            <span className="min-w-0 flex-1 truncate p-meta p-text-2">{email}</span>
-            <div role="radiogroup" aria-label={`What ${email} can do`} className="flex shrink-0 rounded-md p-fill p-0.5">
-              {([["use", "Use"], ["edit", "Edit"]] as const).map(([role, label]) => {
-                const on = (role === "edit") === editors.has(email);
-
-                return (
-                  <button key={role} type="button" role="radio" aria-checked={on} data-share-person-role={role} disabled={disabled} onClick={() => onRole(email, role === "edit")}
-                    className={`rounded px-2.5 py-0.5 text-xs ${on ? "p-surface font-medium p-text shadow-sm" : "p-text-3"}`}>{label}</button>
-                );
-              })}
-            </div>
+          <li key={email} data-share-person={email} className="flex items-center gap-3 px-3 py-2">
+            <span className="t-meta min-w-0 flex-1 truncate p-text-2">{email}</span>
+            <Segmented size="sm" label={`What ${email} can do`} segments={PERSON_ROLES} value={editors.has(email) ? "edit" : "use"}
+              onChange={(role) => onRole(email, role === "edit")} disabled={disabled} />
           </li>
         ))}
-      </ul>
+      </Group>
       {anyEditor && (
-        <p data-share-editors-note className="p-meta p-text-3">
+        <p data-share-editors-note className="t-meta p-text-3">
           People who edit change it from their own workspace&apos;s agent, here in yours.
           {ownerAccess && " Each change stops it on your access until you approve its reach again."}
         </p>
@@ -376,7 +334,7 @@ function PeopleRoles({ people, editors, onRole, ownerAccess, disabled }: {
 function NotRunning({ reason, shared }: { reason: string | null; shared: boolean }) {
   if (reason === null || !shared) return null;
 
-  return <p role="status" data-share-broken className="flex gap-2 rounded-lg p-tint-warning px-3 py-2 p-meta p-text"><WarningIcon size={14} className="mt-0.5 shrink-0 p-warning" /><span>{reason}</span></p>;
+  return <Notice tone="warning" data-share-broken="">{reason}</Notice>;
 }
 
 /** A share's numbers, as its owner reads them: who opened it through its link, and how often; never who. */
@@ -402,7 +360,7 @@ function WhoLine({ row }: { row: OwnedLiveShare }) {
 
         return (
           <span key={email} data-live-share-person={email} data-live-share-role={edits ? "edit" : "use"} className="min-w-0 truncate">
-            {email}{edits && <span className="p-accent"> (edits)</span>}{index < row.users.length - 1 && ","}
+            {email}{edits && <span className="p-accent-fg"> (edits)</span>}{index < row.users.length - 1 && ","}
           </span>
         );
       })}
@@ -444,37 +402,35 @@ function SharedRow({ row, actions }: { row: OwnedLiveShare; actions: SharedRowAc
   const who = row.visibility === "public" ? "Anyone with the link" : "People you added";
 
   return (
-    <li data-live-share={row.id} className="space-y-1.5 px-3.5 py-2">
-      <div className="flex items-start gap-3">
-        <span className="flex shrink-0 pt-0.5 p-text-3">{row.visibility === "public" ? <GlobeIcon size={14} /> : <UsersIcon size={14} />}</span>
-        <span className="min-w-0 flex-1 space-y-0.5">
-          <span className="flex min-w-0 p-meta p-text-2"><WhoLine row={row} /></span>
-          <span className="block p-meta p-text-3">
+    <li data-live-share={row.id} className="flex items-start gap-3 px-3 py-2">
+      <span className="flex shrink-0 pt-px p-text-3">{row.visibility === "public" ? <GlobeIcon size={14} /> : <UsersIcon size={14} />}</span>
+      <div className="min-w-0 flex-1 space-y-2">
+        <div className="space-y-px">
+          <span className="t-meta flex min-w-0 p-text-2"><WhoLine row={row} /></span>
+          <span className="t-meta block p-text-3">
             <span data-live-share-mode={row.mode}>{modeWords(row)}</span>
             {row.paused && <span className="p-warning"> · paused today: limit reached</span>}
             {row.gallery !== null && <span data-live-share-listed> · In the Gallery</span>}
           </span>
-          <span data-live-share-views className="block p-meta p-text-3">{viewsWords(row)}</span>
-        </span>
-        <TileMenu name={who} items={rowMenu(row, actions, () => setListing((open) => !open))} className="relative shrink-0" />
-      </div>
-      {row.mode === "owner" && row.stale && (
-        <div className="pl-[26px]">
-          <Button size="xs" variant="secondary" data-live-share-review={row.id} onClick={() => actions.onReview(row.id)} disabled={actions.disabled}>Review the new reach</Button>
+          <span data-live-share-views className="t-meta block p-text-3">{viewsWords(row)}</span>
         </div>
-      )}
-      {listing && row.mode === "own" && <div className="pl-[26px]"><ShareListing share={row} onList={(next) => actions.onList(row.id, next)} disabled={actions.disabled} /></div>}
+        {row.mode === "owner" && row.stale && (
+          <Button size="sm" variant="secondary" data-live-share-review={row.id} onClick={() => actions.onReview(row.id)} disabled={actions.disabled}>Review the new reach</Button>
+        )}
+        {listing && row.mode === "own" && <ShareListing share={row} onList={(next) => actions.onList(row.id, next)} disabled={actions.disabled} />}
+      </div>
+      <Menu name={who} items={rowMenu(row, actions, () => setListing((open) => !open))} className="relative shrink-0" />
     </li>
   );
 }
 
 function SharedNow({ shares, actions }: { shares: readonly OwnedLiveShare[]; actions: SharedRowActions }) {
   return (
-    <div className="space-y-1.5">
-      <p className="p-meta font-medium p-text-3">Shared now</p>
-      <ul className="p-group">
+    <div className="space-y-2">
+      <p className="t-status p-text-3">Shared now</p>
+      <Group list>
         {shares.map((row) => <SharedRow key={row.id} row={row} actions={actions} />)}
-      </ul>
+      </Group>
     </div>
   );
 }
@@ -500,22 +456,22 @@ function AlwaysAllowed({ standing, graph, onWithdraw, disabled }: {
   const titleOf = (entry: SharePreapproval) => graph?.namespaces.find((row) => row.slate === entry.slate && row.namespace === entry.namespace)?.title ?? entry.namespace;
 
   return (
-    <details data-share-always className="group space-y-1.5">
-      <summary className="flex cursor-pointer list-none items-center gap-1.5 p-meta font-medium p-text-3">
+    <details data-share-always className="group space-y-2">
+      <summary className="t-status flex cursor-pointer list-none items-center gap-2 p-text-3">
         <CaretRightIcon size={12} className="transition-transform group-open:rotate-90" />Always allowed ({standing.length})
       </summary>
-      <ul className="p-group">
+      <Group list>
         {standing.map((entry) => (
-          <li key={JSON.stringify([standingKey(entry), entry.root])} data-share-always-entry={standingKey(entry)} className="flex items-center gap-3 px-3.5 py-2">
+          <li key={JSON.stringify([standingKey(entry), entry.root])} data-share-always-entry={standingKey(entry)} className="flex items-center gap-3 px-3 py-2">
             <span className="min-w-0 flex-1">
-              <span className="block truncate p-meta p-text-2"><span className="font-mono">{entry.member}</span> on {titleOf(entry)}</span>
-              {Object.keys(entry.root).length > 0 && <span className="block truncate p-meta p-text-3">{rootWords(entry.root)}</span>}
+              <span className="t-meta block truncate p-text-2"><span className="font-mono">{entry.member}</span> on {titleOf(entry)}</span>
+              {Object.keys(entry.root).length > 0 && <span className="t-meta block truncate p-text-3">{rootWords(entry.root)}</span>}
             </span>
-            <Button size="xs" variant="ghost" data-share-always-withdraw onClick={() => onWithdraw(entry)} disabled={disabled}>Revoke</Button>
+            <Button size="sm" variant="ghost" data-share-always-withdraw onClick={() => onWithdraw(entry)} disabled={disabled}>Revoke</Button>
           </li>
         ))}
-      </ul>
-      <p className="p-meta p-text-3">These go ahead without asking you, on every share of it on your access, until its code changes.</p>
+      </Group>
+      <p className="t-meta p-text-3">These go ahead without asking you, on every share of it on your access, until its code changes.</p>
     </details>
   );
 }
@@ -585,15 +541,8 @@ function useSharedRefusal(rpc: WorkspaceRpc, slate: string, fixture: LiveShareFi
 /** Whether the people it is shared with may fork it: a fork is their own copy, on their own connections. */
 function ForkChoice({ value, onChange, disabled }: { value: boolean; onChange: (fork: boolean) => void; disabled: boolean }) {
   return (
-    <label className="flex items-start gap-3">
-      <span className="flex w-7 shrink-0 justify-center pt-1">
-        <input type="checkbox" checked={value} onChange={(event) => onChange(event.target.checked)} disabled={disabled} data-share-fork className="size-4 accent-[var(--c-accent)]" />
-      </span>
-      <span>
-        <span className="block p-row-text font-medium p-text">Let them fork it</span>
-        <span className="block p-meta p-text-3">A fork is their own copy, on their own connections.</span>
-      </span>
-    </label>
+    <Checkbox checked={value} onChange={onChange} disabled={disabled} data-share-fork=""
+      label={<span><span className="t-item block">Let them fork it</span><span className="t-meta block">A fork is their own copy, on their own connections.</span></span>} />
   );
 }
 
@@ -609,12 +558,10 @@ function choicesWords(choices: { mode: ShareMode; start: ShareStart | null; fork
 /** The choices, said in one line until asked for, then each in place: the safe ones are the defaults. */
 function ChoicesSummary({ words, open, onToggle, disabled }: { words: string; open: boolean; onToggle: () => void; disabled: boolean }) {
   return (
-    <p data-share-summary className="flex flex-wrap items-baseline gap-x-2 p-meta p-text-3">
-      <span>{words}</span>
-      <button type="button" data-share-options aria-expanded={open} onClick={onToggle} disabled={disabled} className="font-medium p-accent hover:underline">
-        {open ? "Done" : "Change"}
-      </button>
-    </p>
+    <div data-share-summary className="flex flex-wrap items-center gap-x-2">
+      <span className="t-meta">{words}</span>
+      <Button variant="ghost" size="sm" data-share-options aria-expanded={open} onClick={onToggle} disabled={disabled}>{open ? "Done" : "Change"}</Button>
+    </div>
   );
 }
 
@@ -635,7 +582,7 @@ function limitsWords(graph: SlateReach): string {
  * A share's choices: one line of them until asked to change, then each in place. A stopped share's reach, shown for
  * approving again, opens them with no line above. What a first share starts from is asked of it alone.
  */
-function Choices({ choices, set, first, reviewing, reach, busy }: {
+function ShareChoices({ choices, set, first, reviewing, reach, busy }: {
   choices: ShareChoicesState;
   set: { readonly mode: (mode: ShareMode) => void; readonly start: (start: ShareStart) => void; readonly fork: (fork: boolean) => void };
   first: boolean;
@@ -662,7 +609,7 @@ function Choices({ choices, set, first, reviewing, reach, busy }: {
           }} />}
           <ModeChoice value={mode} onChange={set.mode} disabled={busy || reviewing} unbuilt={graph !== null && graph.revision === null} emptyCopy={start === "empty"} />
           {mode === "owner" && <OwnerReach graph={graph} failed={reach.failed} visibility={reach.visibility} approved={reach.approved} onToggle={reach.onToggle} disabled={busy} />}
-          {graph !== null && <p className="p-meta p-text-3" data-share-limits>{limitsWords(graph)}</p>}
+          {graph !== null && <p className="t-meta p-text-3" data-share-limits>{limitsWords(graph)}</p>}
         </div>
       )}
     </>
@@ -797,21 +744,21 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
   if (created !== null) {
     return (
       <>
-        <div className="space-y-3 text-xs">
-          <p className="p-notice-success rounded-md px-3 py-2" data-share-created>
+        <div className="t-meta space-y-3">
+          <Notice tone="success" data-share-created="">
             Shared. {whoCanOpen(created.share)}
             {created.listing === "pending" && " The list will catch up."}
-          </p>
+          </Notice>
           {created.url === null ? (
-            <p className="p-meta p-text-3">This deployment cannot make share links: it has no preview host or signing secret.</p>
+            <p className="t-meta p-text-3">This deployment cannot make share links: it has no preview host or signing secret.</p>
           ) : (
             <div className="flex items-center gap-2">
-              <a href={created.url} className="min-w-0 flex-1 break-all font-mono p-accent" target="_blank" rel="noopener noreferrer">{created.url}</a>
-              <CopyButton value={created.url} what="the share link" className="p-btn-quiet rounded p-1" />
+              <a href={created.url} className="min-w-0 flex-1 break-all font-mono p-accent-fg" target="_blank" rel="noopener noreferrer">{created.url}</a>
+              <CopyButton variant="secondary" value={created.url} what="the share link" />
             </div>
           )}
         </div>
-        <div className="flex justify-end"><FilledButton className="h-8 px-4 text-sm" onClick={onClose}>Done</FilledButton></div>
+        <div className="flex justify-end"><Button variant="primary" size="md" onClick={onClose}>Done</Button></div>
       </>
     );
   }
@@ -828,7 +775,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
           </>
         )}
         <AccessPicker options={ACCESS} value={visibility} onChange={setVisibility} disabled={busy} />
-        <Choices choices={{ mode, start, fork }} set={{ mode: setMode, start: setStart, fork: setFork }} first={shares.length === 0} reviewing={reviewing !== null}
+        <ShareChoices choices={{ mode, start, fork }} set={{ mode: setMode, start: setStart, fork: setFork }} first={shares.length === 0} reviewing={reviewing !== null}
           reach={{ graph, failed: err !== null, visibility, approved, onToggle: toggle }} busy={busy} />
         {shares.length > 0 && (
           <SharedNow shares={shares} actions={{

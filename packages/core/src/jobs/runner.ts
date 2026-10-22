@@ -8,10 +8,10 @@ import { every, REAL_CLOCK, type Clock } from '../types/clock';
 import type { DeviceRequestOwnership } from './device-ownership';
 import { BackgroundJobStore, serializeJobResult, type BackgroundJob, type JobResume } from './store';
 import { JobOutputFeeds, type JobOutputFrame } from './live-output';
-import { nanoid } from '../utils/nanoid';
 import { runWorkModeInvocation } from '../execution/work-mode';
 import { recoveryBackoffMs } from '../utils/recovery-backoff';
 import type { WorkMode } from '../types/turn';
+import { newJobId, type JobAdoption } from '../types/jobs';
 import * as v from 'valibot';
 import { parseJsonValue, type JsonValue } from '../utils/json';
 import { attempt as attempted, classify, diagnostics, hold, renderThrownChain, toKinuError } from '../obs/index';
@@ -111,17 +111,11 @@ export interface BackgroundRetryRequest {
   readonly controller: AbortController;
 }
 
-interface DetachRequest {
-  readonly kind: string;
-  readonly input: JsonValue;
-  readonly mode: WorkMode;
-  readonly controller: AbortController;
-  readonly promise: Promise<unknown>;
+/** Running work a job takes over (`adopt`): a call that outran its window, or a process started as one. */
+interface DetachRequest extends Omit<JobAdoption, 'jobId'> {
+  /** The id it was started under; absent, one is minted. */
+  readonly jobId?: string;
   readonly ownership?: DeviceRequestOwnership;
-}
-
-export function newJobId(): string {
-  return `bgjob-${nanoid()}`;
 }
 
 export interface BackgroundJobRunnerDeps {
@@ -168,7 +162,11 @@ export type WorkspaceJobPorts = Required<Pick<BackgroundJobRunnerDeps, 'jobOutpu
 
 const SearchJobInputSchema = v.object({ task: v.string() });
 
-const RunJobInputSchema = v.object({ command: v.string(), runtime: v.optional(v.string()) });
+/** The jobs a command runs as, each on a machine its label names. */
+const COMMAND_JOB_KINDS: ReadonlySet<string> = new Set(['shell', 'startProcess']);
+
+/** A command's job: where it runs, as the machine that took it wrote it (`machine`), or the shell's runtime. */
+const RunJobInputSchema = v.object({ command: v.string(), runtime: v.optional(v.string()), machine: v.optional(v.string()) });
 
 const ExecuteJobInputSchema = v.object({ code: v.string() });
 
@@ -181,13 +179,14 @@ function describeJobInput(kind: string, input: JsonValue): string | undefined {
     }
   }
 
-  if (kind === 'shell') {
+  if (COMMAND_JOB_KINDS.has(kind)) {
     const parsed = v.safeParse(RunJobInputSchema, input);
 
     if (parsed.success) {
-      const runtime = parsed.output.runtime ? `${executorLabel(parsed.output.runtime)}: ` : '';
+      const ran = parsed.output.machine ?? parsed.output.runtime;
+      const where = ran ? `${executorLabel(ran)}: ` : '';
 
-      return `${runtime}${parsed.output.command.slice(0, 80)}`;
+      return `${where}${parsed.output.command.slice(0, 80)}`;
     }
   }
 
@@ -207,12 +206,16 @@ export function wakeText(job: BackgroundJob, reader: 'agent' | 'inline' = 'agent
     ? ` (generation ${String(job.epoch + 1)}: it was interrupted and picked up again)`
     : '';
 
+  // A command's job is named by its label, which says where it ran: its output alone is no evidence of the machine
+  // (walkthrough F3, 2026-10-21: a process on the computer printed `/` and was reported as the workspace's).
+  const ranAs = COMMAND_JOB_KINDS.has(job.kind) && job.label !== null ? ` It ran as ${job.label}.` : '';
+
   if (job.status === 'completed') {
     const read = reader === 'inline'
       ? `Its result:\n${job.result ?? '(empty)'}\n\nSynthesize it / continue`
       : `Read the full result with agent.jobResult('${job.id}'), then synthesize it / continue`;
 
-    return `Background ${job.kind} job ${job.id} completed${generation}. ${read} the work you backgrounded. `
+    return `Background ${job.kind} job ${job.id} completed${generation}.${ranAs} ${read} the work you backgrounded. `
       + `The result says whether it is COMPLETE or PARTIAL: say which when you report it.`;
   }
 
@@ -232,7 +235,7 @@ export function wakeText(job: BackgroundJob, reader: 'agent' | 'inline' = 'agent
       + `retry continues that one rather than starting another, and an identical spawn is refused.`;
   }
 
-  return `Background ${job.kind} job ${job.id} failed${generation}${detail}. This is yours to fix: `
+  return `Background ${job.kind} job ${job.id} failed${generation}${detail}.${ranAs} This is yours to fix: `
     + `read the error, change what it names, and run the command again. Report what was wrong and `
     + `what you changed.`;
 }
@@ -262,6 +265,8 @@ export class BackgroundJobRunner {
    */
   private readonly cancelling = new Set<string>();
   private readonly fenced = new Map<string, () => Promise<void>>();
+  /** Each cancel in flight, settled once it has decided the job's row: what an outside completion waits on. */
+  private readonly deciding = new Map<string, Promise<unknown>>();
 
   /** Each watched job's context: when it last answered, the probe it has not answered yet, and how to stop asking. */
   private readonly heard = new Map<string, WatchedJob>();
@@ -340,7 +345,7 @@ export class BackgroundJobRunner {
       thresholdMs: this.policy.detachAfterMs,
       clock: this.deps.clock ?? REAL_CLOCK,
       onThreshold: async (kind, promise) =>
-        await this.onThreshold({ kind, input, mode, controller, promise, ownership }),
+        await this.adopt({ kind, input, mode, controller, promise, ...(ownership !== undefined && { jobId: ownership.jobId, ownership }) }),
       released: (release) => {
         this.releasable.add(release);
 
@@ -365,7 +370,11 @@ export class BackgroundJobRunner {
     return true;
   }
 
-  private async onThreshold(request: DetachRequest): Promise<DetachOutcome> {
+  /**
+   * Running work made a job: a call its window moved, or a process `workspace.startProcess` started, which is one from
+   * its start. Past the cap it is refused, and the work stays its caller's.
+   */
+  async adopt(request: DetachRequest): Promise<DetachOutcome> {
     const { kind, input, mode, controller, promise, ownership } = request;
     const running = this.liveDetachedCount();
 
@@ -375,7 +384,7 @@ export class BackgroundJobRunner {
       return { detached: false, reason: 'too many jobs already running' };
     }
 
-    const jobId = this.createJob(ownership?.jobId ?? newJobId(), { kind, input, mode, controller });
+    const jobId = this.createJob(request.jobId ?? newJobId(), { kind, input, mode, controller });
     this.deps.logActivity?.('bg_job_started', `${kind} -> ${jobId}`);
     // In the detaching request's trace, so a call cancelled after its job took it over can be joined to the job.
     diagnostics.event('jobs.detached', { jobId, kind });
@@ -737,6 +746,44 @@ export class BackgroundJobRunner {
     } satisfies AgentSignal);
   }
 
+  /**
+   * A running job's work answered where its own promise cannot hear it (its object restarted before the job was resumed):
+   * its row settles with `result`, as its promise's would, and the agent is woken as for any settle. A job no longer
+   * running has nothing to complete.
+   */
+  async complete(jobId: string, result: JsonValue): Promise<void> {
+    // A cancel in flight decides first, as it does for a settle by the job's own promise: a cancel that stops the work
+    // leaves nothing to complete, and one refused leaves the job running, which this completes. Its failure is its own.
+    // A cancel asked again once one is refused decides in turn, so each in flight is waited on.
+    for (let pending = this.deciding.get(jobId); pending !== undefined; pending = this.deciding.get(jobId)) await Promise.allSettled([pending]);
+    const job = this.deps.store.get(jobId);
+
+    if (job?.status !== 'running' || !this.deps.store.settle(jobId, job.epoch, serializeJobResult({ value: result }), Date.now())) return;
+    // As a settle by its own promise: its work is accounted, and its agent woken once.
+    this.interrupted.delete(jobId);
+    this.deps.logActivity?.('bg_job_settled', `${jobId} completed`);
+    this.notifySettled(jobId);
+    await this.wake(jobId);
+  }
+
+  /**
+   * Tells the agent something of a job that is still running, which it still waits on: a running job's wake would read
+   * as its end. Once per `note`: a re-delivery of the same note lands as one message. A job no longer running has
+   * nothing to note.
+   */
+  async note(jobId: string, note: { readonly id: string; readonly text: string }): Promise<void> {
+    const job = this.deps.store.get(jobId);
+
+    if (job?.status !== 'running') return;
+
+    await this.deps.inbox.send({
+      kind: 'background_job',
+      text: `Background ${job.kind} job ${jobId} is still running: ${note.text}`,
+      idempotencyKey: `${backgroundJobWakeTrigger(jobId)}:note:${note.id}`,
+      metadata: { kinuMode: job.workMode, jobId, kind: job.kind, status: job.status },
+    } satisfies AgentSignal);
+  }
+
   /** Abort, mark cancelled, and wake the agent, which was told to wait for this result. */
   async cancel(jobId: string): Promise<boolean> {
     if (await this.stop(jobId) !== 'stopped') return false;
@@ -776,6 +823,19 @@ export class BackgroundJobRunner {
     if (this.deps.store.get(jobId)?.status !== 'running') return 'settled';
 
     if (this.cancelling.has(jobId)) return 'refused';
+    const deciding = this.decide(jobId);
+
+    this.deciding.set(jobId, deciding);
+
+    try {
+      return await deciding;
+    } finally {
+      // A cancel asked again once this one was refused may hold the entry now: it is that one's to remove.
+      if (this.deciding.get(jobId) === deciding) this.deciding.delete(jobId);
+    }
+  }
+
+  private async decide(jobId: string): Promise<'stopped' | 'refused' | 'settled'> {
     this.cancelling.add(jobId);
     let refusal: { readonly error: unknown } | undefined;
 

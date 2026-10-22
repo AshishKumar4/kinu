@@ -97,6 +97,15 @@ export class Snapshots {
     return dead.success ? dead.output : [];
   }
 
+  /** `wipe` deletes the box's storage; the snapshots still owed a deletion stay recorded, for a sweep to pay. */
+  async keepingOwed(wipe: () => Promise<void>): Promise<void> {
+    const owed = this.#dead();
+
+    await wipe();
+
+    if (owed.length > 0) this.ports.kv.put(DEAD_SNAPSHOTS_KEY, owed);
+  }
+
   /** A failed deletion never holds a wake or save, and stays owed for the next sweep. */
   sweep(): Promise<void> { return this.#sweeping ??= this.#sweep().finally(() => { this.#sweeping = undefined; }); }
 

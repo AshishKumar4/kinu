@@ -5,7 +5,7 @@ import { workspacePath, WORKSPACE_ROOT } from '../vfs/workspace-path';
 export const LIVE_READS = [
   'getExposedPorts', 'getToolDescriptions', 'listSlates', 'getEvolutionChangelog', 'listPendingActions',
   'getMemoryContent', 'getExecutors', 'listBackgroundJobs', 'getWorkspaceTabPresence', 'getActivePlanReview',
-  'listWorkspaceWork', 'listWorkspaceAgents', 'listSubordinates', 'getQuality', 'getWorkspaceGitHub', 'inspectWork',
+  'listWorkspaceWork', 'listWorkspaceAgents', 'listSubagents', 'getQuality', 'getWorkspaceGitHub', 'inspectWork',
   'listOwnerQuestions', 'listOwedIntents',
 ] as const;
 
@@ -30,7 +30,7 @@ const OWED: readonly LiveRead[] = ['inspectWork', 'getWorkspaceTabPresence'];
 
 const AGENTS: readonly LiveRead[] = ['listWorkspaceAgents'];
 
-export const ROSTER_READS: readonly LiveRead[] = [...AGENTS, 'listSubordinates'];
+export const ROSTER_READS: readonly LiveRead[] = [...AGENTS, 'listSubagents'];
 
 /** Every write to one of these tables moves the reads that select from it. */
 const READS_BY_TABLE: ReadonlyMap<string, readonly LiveRead[]> = new Map<string, readonly LiveRead[]>([
@@ -44,8 +44,7 @@ const READS_BY_TABLE: ReadonlyMap<string, readonly LiveRead[]> = new Map<string,
   ['turn_ratings', [...LEDGER, 'getQuality']],
   // A review's `turn_complete` is the quality read's count of turns.
   ['evolution_events', ['getQuality']],
-  ['deferred_approvals', [...QUEUE, ...AGENTS]],
-  ['device_consent_asks', AGENTS],
+  ['owner_requests', [...QUEUE, ...AGENTS]],
   ['agent_workspaces', LEDGER],
   ['proposed_tasks', QUEUE],
   ['plan_reviews', ['getActivePlanReview', 'getToolDescriptions', ...QUEUE, 'listWorkspaceWork', ...AGENTS]],
@@ -53,9 +52,8 @@ const READS_BY_TABLE: ReadonlyMap<string, readonly LiveRead[]> = new Map<string,
   // The owner's intents on their way: each owed delivery row, until the agent's wake delivers it.
   ['agent_deliveries', ['listOwedIntents']],
   ['background_jobs', ['listBackgroundJobs', 'getWorkspaceTabPresence']],
-  ['background_job_serves', ['listBackgroundJobs', 'getWorkspaceTabPresence']],
   ['agent_tasks', WORK],
-  ['actor_subordinates', ROSTER_READS],
+  ['actor_subagents', ROSTER_READS],
   ['actor_config', ROSTER_READS],
   // What Work → Now lists, and whether Work has it at all.
   ['actor_turn_claims', [...AGENTS, ...OWED]],

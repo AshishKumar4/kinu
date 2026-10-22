@@ -428,9 +428,11 @@ describe('the ladder measures something', () => {
       'Eval framework logic',
       'Gate self-tests: secrets, corpus, preflight',
       'Live and first-run suites, credential-free',
+      'Live app in a browser: a connect through the Worker',
       'Live app in a browser: a long chat and its plans',
       'Live app in a browser: a page that loses the turn',
       'Live app in a browser: a running turn',
+      'Live app in a browser: a slate asks the agent from its program, and from the page',
       'Live app in a browser: a slate that serves its own page, in its answer',
       'Live app in a browser: a wait on the provider',
       'Live app in a browser: the inspector column\'s layout',
@@ -537,7 +539,9 @@ describe('the ladder measures something', () => {
       .sort();
 
     expect(bunSuitesUnderTests.length).toBeGreaterThan(0);
-    expect(claims('bun test ./tests/live-model/ ./tests/first-run/', tracked).sort()).toEqual(bunSuitesUnderTests);
+    // The design system's gate sits beside them at the root, its own row's.
+    expect([...claims('bun test ./tests/live-model/ ./tests/first-run/', tracked), ...claims('bun test --timeout=0 tests/design-system.test.ts', tracked)].sort())
+      .toEqual(bunSuitesUnderTests);
 
     // The other half of the partition: every runnable suite no `bun test` can
     // select is an eval task, and `bun run evals` claims exactly those.

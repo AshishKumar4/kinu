@@ -152,7 +152,9 @@ export function operationInputSchema<Op extends Operation>(op: Op) {
  * so a missing field is refused by name. Each operation's result is said here once, for a program calling it too.
  * An operation the wiring has but `withheld` names is not offered, and a call to it is refused with the reason.
  */
-export function nativeTool(description: string, members: readonly Served[], withheld: ReadonlyMap<string, string> = new Map()): Tool {
+export function nativeTool(description: string, offered: readonly Served[], withheld: ReadonlyMap<string, string> = new Map()): Tool {
+  // A program's own operations (`tool: false`) are never the native tool's.
+  const members = offered.filter(({ op }) => op.tool !== false);
   const ops = members.map(({ op }) => op.name).join(', ');
 
   return nativeCall((input) => {
@@ -305,6 +307,15 @@ function declarationOf(op: Operation): string {
   const doc = docs.length === 0 ? `/** ${op.help} */` : ['/**', ` * ${op.help}`, ...docs, ' */'].join('\n');
 
   return `${doc}\n${op.name.split('.').at(-1) ?? op.name}(${params.join(', ')}): Promise<${returnsOf(op)} | Refusal>;`;
+}
+
+/** A member that takes its whole input as one object, as `tools.<name>(input)` does: its declaration, by the schema of
+ *  that input, and its call form. */
+export function objectInputDeclaration(op: Operation): MemberDeclaration {
+  return {
+    full: `/** ${op.help} */\n${op.name}(input: ${oneLine(typeOf(typeJsonSchema(op.input)))}): Promise<${returnsOf(op)} | Refusal>;`,
+    call: `${op.name}(input)`,
+  };
 }
 
 /** Each retired member of `ns` no served operation took back, as a call that refuses naming its successor. */

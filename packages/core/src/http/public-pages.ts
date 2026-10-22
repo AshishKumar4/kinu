@@ -196,7 +196,7 @@ const CARD_CSS = `
 .gate{position:relative;isolation:isolate;flex:1;display:flex;align-items:flex-start;justify-content:center;
 overflow:hidden;padding:clamp(64px,13vh,140px) 24px 96px}
 .gate::before{content:"";position:absolute;z-index:-1;inset:0;
-background:radial-gradient(circle at 50% 22%,var(--c-accent-subtle),transparent 36%)}
+background:radial-gradient(circle at 50% 22%,var(--c-selected),transparent 36%)}
 .card{position:relative;width:min(500px,100%);padding:32px;border:var(--rule);
 border-radius:var(--r-card);background:var(--c-surface);box-shadow:var(--shadow-overlay)}
 .card h1{margin:0;padding-right:34px;font-size:32px;letter-spacing:-0.025em;max-width:none}
@@ -212,10 +212,10 @@ font-size:22px;line-height:1}
 .modal-close:hover{background:var(--c-fill);color:var(--c-text)}
 .providers{display:grid;gap:12px;margin-top:26px}
 .provider{display:flex;align-items:center;justify-content:space-between;gap:12px;
-min-height:48px;padding:0 17px;border:1px solid var(--c-input-border);border-radius:var(--r-row);
+min-height:48px;padding:0 17px;border:1px solid var(--c-field-border);border-radius:var(--r-row);
 background:var(--c-fill);color:var(--c-text);font-size:14.5px;font-weight:600;
 transition:background 150ms var(--ease),border-color 150ms var(--ease)}
-.provider:hover{border-color:var(--c-accent);background:var(--c-accent-subtle)}
+.provider:hover{border-color:var(--c-accent);background:var(--c-selected)}
 .provider::after{content:"\\2192";color:var(--c-text-3)}
 .provider:hover::after{color:var(--c-accent-fg)}
 dl{display:grid;margin:22px 0 0;border-top:var(--rule)}
@@ -226,7 +226,7 @@ dd{margin:0;text-align:right}
 form{margin-top:20px}
 .fields{display:grid;gap:14px;margin-top:24px}
 .fields label{display:grid;gap:6px;color:var(--c-text-2);font-size:13px;font-weight:560}
-.fields input{min-height:42px;padding:0 13px;border:1px solid var(--c-input-border);border-radius:var(--r-row);
+.fields input{min-height:42px;padding:0 13px;border:1px solid var(--c-field-border);border-radius:var(--r-row);
 background:var(--c-bg);color:var(--c-text);font:inherit;font-size:14.5px}
 .fields input:focus-visible{outline:2px solid var(--c-accent);outline-offset:1px;border-color:var(--c-accent)}
 .fields .muted,.fields .status{margin:-6px 0 0}

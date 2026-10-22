@@ -12,7 +12,7 @@ export const CHAT_PAGE_BYTES = 1024 * 1024;
 export const CHAT_SEED_ROWS = 60;
 
 export function initSessionTranscriptTables(exec: RawSqlExec): void {
-  exec(`CREATE TABLE IF NOT EXISTS conversation_entries (
+  exec(`CREATE TABLE IF NOT EXISTS conversation_entries ( /* derived from session_messages: an entry's parts are its messages */
     actor_id TEXT NOT NULL,
     session_id TEXT NOT NULL,
     id TEXT NOT NULL,

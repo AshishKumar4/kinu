@@ -10,21 +10,22 @@
  */
 
 import { Effect } from 'effect';
-import type { Page } from 'puppeteer';
+import type { Page, Target } from 'puppeteer';
 import * as v from 'valibot';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { ChatHistoryEntrySchema, rowText, TurnClaimFrameSchema } from '@kinu.run/core';
+import { ChatHistoryEntrySchema, JsonValueSchema, rowText, TurnClaimFrameSchema, type JsonValue } from '@kinu.run/core';
 import { renderThrownChain, tolerate, detach } from '@kinu.run/core/obs';
 import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-spec';
 
-import { DESKTOP, withLiveApp, type LiveApp } from './live-app-harness';
+import { apiJson, DESKTOP, withLiveApp, type LiveApp } from './live-app-harness';
+import { CONSENT_CHOICE, startConsentingProvider } from './consenting-oauth';
 import { recordDeadEnds } from '../evals/src/browser';
 import { createWorkspace, listWorkspaces, LOOPBACK_IDENTITY } from '../evals/src/workspace-roster';
 import { CHAT_COMPOSER_LIVE, CHATS, INSPECTOR_PANEL, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, OPEN_NAMES, countRpc, frameLedger, named, openInspector, PAGE_TABS, painted, pressSend, pressUntil, recordRenderTasks, rendered, sendInChat, settled, settledAfter, until, waitOn, type ControlAttempt, type RpcCounter } from './browser-page';
 import { rowVerdicts, type RowVerdicts } from './row-verdicts';
 import { registerScriptedModel, startScriptedModel } from './scripted-model';
-import { KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_FIRST_TURN_MISSION, PACED_TURN_ANSWER, ANSWERED_TURN_ASK, CLEARED_TURN_ASK, OBSERVED_TURN_ASK, PACED_TURN_ASK, RECONNECT_STEPS, RECONNECT_TURN_ASK, SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNANSWERED_PROBE_TURN_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK, laterReconnectTurn, toldBackTurn, unsentFirstTurn, DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, type HeldCall, LOGO_WAITED_MISSION, MINUTE_LIMITED_ASK, MINUTE_WAITED_OUT, ProviderWaitProbe, providerWaitTurn, WAITED_TURN_ASK, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, PLAN_TASK_TITLES, planTasksProbe, STOPPED_ASK, STOPPED_ANSWER, HANDED_BACK_ASK, StopProbe, FOLLOW_UP_ASK, FOLLOW_UP_ANSWER, OPENING_ASK, OPENING_ANSWER, stopProbeTurn, SLATE_ID, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, slateUiTurn } from './live-app-scripts';
+import { KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_FIRST_TURN_MISSION, PACED_TURN_ANSWER, ANSWERED_TURN_ASK, CLEARED_TURN_ASK, OBSERVED_TURN_ASK, PACED_TURN_ASK, RECONNECT_STEPS, RECONNECT_TURN_ASK, SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNANSWERED_PROBE_TURN_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK, laterReconnectTurn, toldBackTurn, unsentFirstTurn, DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, type HeldCall, LOGO_WAITED_MISSION, MINUTE_LIMITED_ASK, MINUTE_WAITED_OUT, ProviderWaitProbe, providerWaitTurn, WAITED_TURN_ASK, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, PLAN_TASK_TITLES, planTasksProbe, STOPPED_ASK, STOPPED_ANSWER, HANDED_BACK_ASK, StopProbe, FOLLOW_UP_ASK, FOLLOW_UP_ANSWER, OPENING_ASK, OPENING_ANSWER, stopProbeTurn, SLATE_ID, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, slateUiTurn, SLATE_ASK_ID, SLATE_ASK_PROBE, SlateAskProbe, slateAskTurn } from './live-app-scripts';
 import { FALLBACK_ANSWER, type ScriptedRequest } from './scripted-protocol';
 import { openPublicSocket } from '../tests/first-run/public-socket';
 import { drivePlanReview, type WalkthroughVerdict } from './plan-demo-film';
@@ -162,8 +163,39 @@ interface KeptTabVerdict {
   readonly workPresence: readonly boolean[];
 }
 
+/** What a page said of a connect's end (`data-connect-ended`), or null while it said nothing. */
+type ConnectSaid = 'connected' | 'failed' | null;
+
+/** The connect row: an MCP server that signs in, against a provider that asks the person (consenting-oauth.ts), through
+ *  the Worker's own callback and the account's own storage. Statuses are the account's server list's. */
+interface ConnectVerdict {
+  /** Setup walked to its tools step by its own Next, popups blocked, a server added and approved in that tab: the
+   *  address the tab came back to, and the server's status then. */
+  readonly sameTab: { readonly back: string; readonly status: string };
+  /** A finish page for another run, opened while a sign-in waited in its helper tab: whether the helper was still open,
+   *  and what the starting page said. */
+  readonly planted: { readonly helperOpen: boolean; readonly said: ConnectSaid };
+  /** The person declined: whether the helper closed, what the page said, the server's status, and whether its row
+   *  offered the sign-in again. */
+  readonly denied: { readonly helperClosed: boolean; readonly said: ConnectSaid; readonly status: string; readonly signInOffered: boolean };
+  /** That sign-in, run again and approved: what the page said, and the server's status. Null where none was offered. */
+  readonly retried: { readonly said: ConnectSaid; readonly status: string } | null;
+}
+
+/** The slate-ask row: what a slate's `agent.ask` answered from the agent's own program, and from the person's page. */
+interface SlateAskVerdict {
+  /** The program's result: the ask's reply or the slate's fallback, the refusal, and the ask's time in the slate; or
+   *  the handle of a job it was moved into. */
+  readonly program: JsonValue;
+  /** How long the program held the turn, from the step that asked for it to the step that read its result. */
+  readonly programMs: number;
+  /** The page's call: the agent's own reply, in a turn the question opened. */
+  readonly page: JsonValue;
+}
+
 export interface TierVerdicts {
   bootFailure: string | null;
+  connect: ConnectVerdict | null;
   liveIndicator: LiveIndicatorVerdict | null;
   openedMidTurn: OpenedMidTurnVerdict | null;
   reconnect: ReconnectVerdict | null;
@@ -185,7 +217,9 @@ export interface TierVerdicts {
   stopThenSend: StopThenSendVerdict | null;
   newChatStop: NewChatStopVerdict | null;
   slateUi: SlateUiVerdict | null;
+  slateAsk: SlateAskVerdict | null;
   providerWait: ProviderWaitVerdict | null;
+  workspaceViews: WorkspaceViewsVerdict | null;
   state: StateVerdict | null;
 }
 
@@ -383,6 +417,75 @@ async function measureControls(newPage: LiveApp['newPage'], origin: string): Pro
     railLaneBefore: before.railLane,
     railAttempts: rail.attempts,
     railLaneAfter: rail.value,
+  };
+}
+
+/** What a workspace's own addresses draw (rc29 walkthrough F2): the desktop's old page, a view no page answers, the overview. */
+interface WorkspaceViewsVerdict {
+  /** Where `/workspace/:id/desktop` came to rest, its path and query. */
+  readonly desktopLandedAt: string;
+  /** It drew the overview, as it did once its view was gone (the defect). */
+  readonly desktopOverview: boolean;
+  /** The workspace with its Environment open. */
+  readonly desktopEnvironment: boolean;
+  /** The machine Environment chose, and its Desktop tab where it has one: shown, not shown, or no such tab. */
+  readonly desktopMachine: string;
+  readonly desktopTab: 'current' | 'other' | 'none';
+  /** A view no page answers: the not-found page, never the overview. */
+  readonly unknownNotFound: boolean;
+  readonly unknownOverview: boolean;
+  /** The overview's own address still draws it. */
+  readonly overviewDrawn: boolean;
+}
+
+const OVERVIEW = `document.querySelector('[data-workspace-overview]') !== null`;
+
+const NOT_FOUND = `document.querySelector('[data-not-found]') !== null`;
+
+/** Environment is the open tool and its machine row has chosen a machine. */
+const ENVIRONMENT_CHOSEN = `document.querySelector('button.p-tool[aria-label="Environment"][aria-current="true"]') !== null
+  && document.querySelector('[data-env-card] [data-env-select][aria-pressed="true"]') !== null`;
+
+async function measureWorkspaceViews(newPage: LiveApp['newPage'], origin: string): Promise<WorkspaceViewsVerdict> {
+  const workspace = await createWorkspace(
+    origin, LOOPBACK_IDENTITY, { name: `live-row-views-${RUN_ID}`, purpose: 'workspace views probe', model: SCRIPTED_MODEL_SPEC });
+
+  const page = await newPage();
+
+  await page.setViewport(DESKTOP);
+  await named('the desktop address to load', () => page.goto(`${origin}/workspace/${workspace}/desktop`, { waitUntil: 'load' }));
+  await until(page, 'the desktop address to land', `${OVERVIEW} || (${ENVIRONMENT_CHOSEN})`);
+
+  const desktop = v.parse(v.object({ at: v.string(), overview: v.boolean(), environment: v.boolean(), machine: v.string(), tab: v.picklist(['current', 'other', 'none']) }),
+    await page.evaluate(`(() => {
+      const tab = [...document.querySelectorAll('[role="tab"].p-session-tab')].find((each) => (each.textContent ?? '').trim() === 'Desktop');
+
+      return {
+        at: location.pathname + location.search,
+        overview: ${OVERVIEW},
+        environment: ${ENVIRONMENT_CHOSEN},
+        machine: document.querySelector('[data-env-card]:has([data-env-select][aria-pressed="true"])')?.getAttribute('data-env-card') ?? '',
+        tab: tab === undefined ? 'none' : (tab.getAttribute('aria-selected') === 'true' && 'current') || 'other',
+      };
+    })()`));
+
+  await shoot(page, 'f2-desktop');
+  await named('a view no page answers to load', () => page.goto(`${origin}/workspace/${workspace}/nonsense`, { waitUntil: 'load' }));
+  await until(page, 'an unknown view to draw', `${OVERVIEW} || ${NOT_FOUND}`);
+
+  const unknownOverview = v.parse(v.boolean(), await page.evaluate(OVERVIEW));
+  const unknownNotFound = v.parse(v.boolean(), await page.evaluate(NOT_FOUND));
+
+  await named('the overview to load', () => page.goto(`${origin}/workspace/${workspace}/overview`, { waitUntil: 'load' }));
+  await until(page, 'the overview to draw', `${OVERVIEW} || ${NOT_FOUND}`);
+
+  const overviewDrawn = v.parse(v.boolean(), await page.evaluate(OVERVIEW));
+
+  await page.close();
+
+  return {
+    desktopLandedAt: desktop.at, desktopOverview: desktop.overview, desktopEnvironment: desktop.environment, desktopMachine: desktop.machine,
+    desktopTab: desktop.tab, unknownNotFound, unknownOverview, overviewDrawn,
   };
 }
 
@@ -798,7 +901,7 @@ const DROP_SOCKETS = `(() => {
   return dropped;
 })()`;
 
-const ANSWER_BLOCKS = `[...document.querySelectorAll('#chat .prose-chat, #chat [data-tool-state]')].map((node) =>
+const ANSWER_BLOCKS = `[...document.querySelectorAll('#chat [data-said], #chat [data-tool-state]')].map((node) =>
   node.matches('[data-tool-state]')
     ? 'T:' + (node.querySelector('strong')?.textContent ?? '').trim()
     : 'P:' + (node.textContent ?? '').trim().slice(0, 40))`;
@@ -1466,7 +1569,7 @@ interface PlanTasksVerdict {
   readonly unlinked: readonly string[];
 }
 
-const TASK_TITLE = `(row) => row.querySelector('.p-row-text')?.firstChild?.textContent ?? ''`;
+const TASK_TITLE = `(row) => row.querySelector('[data-task-title]')?.firstChild?.textContent ?? ''`;
 
 const PLAN_CARDS = `[...document.querySelectorAll('[data-plan-card]')].map((card) => [...card.querySelectorAll('[data-task-depth]')]
   .map((row) => [(${TASK_TITLE})(row), Number(row.getAttribute('data-task-depth'))]))`;
@@ -1659,6 +1762,241 @@ async function measureSlateUi(newPage: LiveApp['newPage'], origin: string, heard
 
     return { ...reach, tabs, opened, drawn: first.drawn, shown: first.shown, redrawn: again.drawn, reshown: again.shown, forged: await forgedBlocks(page, origin, workspace) };
   } finally {
+    await page.close();
+  }
+}
+
+/** A wait across a page load under `vite dev`: one load took 97-102 s, cold or warm, on a box at load 13 of 24 cores
+ *  (2026-10-23, /mnt/local/kinu/tmp/connect-live/warm.ts). A sign-in's end crosses two, so three loads' time. */
+const ACROSS_PAGE_LOADS_MS = 300_000;
+
+const ServerRowsSchema = v.array(v.looseObject({ id: v.string(), name: v.string(), status: v.string() }));
+
+/** The account's server named `name`, as its server list says it. */
+async function listedServer(origin: string, name: string): Promise<{ readonly id: string; readonly status: string }> {
+  const listed = await named(`the account's server list, for ${name}`, async () => apiJson(origin, '/api/user/mcp/servers'));
+  const row = v.parse(ServerRowsSchema, listed).find((each) => each.name === name);
+
+  if (row === undefined) throw new Error(`the account lists no MCP server ${name}`);
+
+  return row;
+}
+
+/** What `page` says of its last connect's end. */
+async function connectSaid(page: Page): Promise<ConnectSaid> {
+  return v.parse(v.nullable(v.picklist(['connected', 'failed'])), await page.evaluate(() => document.querySelector('[data-connect-ended]')?.getAttribute('data-connect-ended') ?? null));
+}
+
+/** Adds the server `name` at `serverUrl` from the MCP panel `page` shows. */
+async function addCustomServer(page: Page, name: string, serverUrl: string): Promise<void> {
+  await pressButton(page, 'button', 'Add custom server');
+  await page.waitForSelector('input[placeholder="github"]');
+  await page.type('input[placeholder="github"]', name);
+  await page.type('input[placeholder="https://mcp.example.com/v1"]', serverUrl);
+  await pressButton(page, 'button', 'Add server');
+}
+
+/** The tab `press` opens from `page`, or null where none opens within `ms`: read off the browser's targets as each is
+ *  made, so a wait that ends finds nothing left listening. */
+async function opensTab(page: Page, press: () => Promise<void>, ms: number): Promise<Target | null> {
+  const browser = page.browser();
+  const { promise, resolve } = Promise.withResolvers<Target | null>();
+  const created = (target: Target) => { if (target.opener() === page.target()) resolve(target); };
+
+  const timer = setTimeout(() => { resolve(null); }, ms);
+
+  browser.on('targetcreated', created);
+
+  try {
+    await press();
+
+    return await promise;
+  } finally {
+    clearTimeout(timer);
+    browser.off('targetcreated', created);
+  }
+}
+
+/** The helper tab a click starts a sign-in in, at the provider's consent page; `closed` settles as it closes. */
+async function signInHelper(page: Page, press: () => Promise<void>): Promise<{ readonly helper: Page; readonly closed: Promise<void> }> {
+  const target = await named('the sign-in tab', async () => opensTab(page, press, ACROSS_PAGE_LOADS_MS));
+
+  if (target === null) {
+    throw new Error(`the sign-in opened no tab; its page said ${await page.evaluate(() => document.querySelector('[data-connect-ended]')?.textContent ?? 'nothing')}`);
+  }
+
+  const helper = await target.page();
+
+  if (helper === null) throw new Error('the sign-in opened no tab');
+  const closed = new Promise<void>((resolve) => { helper.once('close', () => { resolve(); }); });
+
+  await named('the provider\'s consent page', async () => helper.waitForSelector(`[${CONSENT_CHOICE}]`, { timeout: ACROSS_PAGE_LOADS_MS }));
+
+  return { helper, closed };
+}
+
+/** The person's answer on the provider's consent page. A DOM click, as `pressButton` presses: puppeteer's own waits on
+ *  the renderer's answer to the mouse, which a navigation to another origin can leave unanswered. */
+async function consent(page: Page, choice: 'approve' | 'deny'): Promise<void> {
+  await page.$eval(`[${CONSENT_CHOICE}="${choice}"]`, (link) => { if (link instanceof HTMLElement) link.click(); });
+}
+
+/** What a tab that never left its finish page shows, for a failure to name: where it is, the end it read, and the
+ *  return its connect stored. */
+async function finishShown(page: Page): Promise<string> {
+  const shown = await page.evaluate(() => ({
+    finished: document.querySelector('[data-connect-finished]')?.getAttribute('data-connect-finished') ?? null,
+    stored: sessionStorage.getItem('kinu-connect-return'),
+    text: document.body.innerText.slice(0, 300),
+  }));
+
+  return `${page.url()} ${JSON.stringify(shown)}`;
+}
+
+/**
+ * Whether `page`'s tab reaches an address starting `at` within `ms`, read off its target, which follows the tab through
+ * every origin. A wait in its page stays with the document it began in: one begun on the provider's page never saw the
+ * tab come back (2026-10-23, /mnt/local/kinu/tmp/connect-live/debug2.ts: back at 219 s, the wait pending till teardown).
+ */
+async function reaches(page: Page, at: string, ms: number): Promise<boolean> {
+  const target = page.target();
+  const browser = page.browser();
+  const { promise, resolve } = Promise.withResolvers<boolean>();
+  const changed = (each: Target) => { if (each === target && each.url().startsWith(at)) resolve(true); };
+
+  const timer = setTimeout(() => { resolve(false); }, ms);
+
+  browser.on('targetchanged', changed);
+  changed(target);
+
+  try {
+    return await promise;
+  } finally {
+    clearTimeout(timer);
+    browser.off('targetchanged', changed);
+  }
+}
+
+/** Whether `closed` settled within the time a finish page has to load and close its tab. */
+async function closedSoon(closed: Promise<void>): Promise<boolean> {
+  return Promise.race([closed.then(() => true), new Promise<boolean>((resolve) => { setTimeout(() => { resolve(false); }, ACROSS_PAGE_LOADS_MS); })]);
+}
+
+/** A wait on setup's own page, named as `until` names its waits. Not `until`: it reads the welcome page offering Next,
+ *  which every step of setup does, as an account stopped in front of the page it asked for. */
+async function onSetup(page: Page, what: string, condition: string): Promise<void> {
+  await named(what, async () => page.waitForFunction(condition, { timeout: ACROSS_PAGE_LOADS_MS, polling: 100 }));
+}
+
+/** Walks setup to its tools step by its own Next, as a person does: `?step=` is never typed in. */
+async function walkToTools(page: Page, origin: string): Promise<void> {
+  await page.goto(`${origin}/welcome`, { waitUntil: 'load' });
+  const shown = `document.querySelector('[data-welcome-step]:not([aria-hidden="true"])')?.getAttribute('data-welcome-step') ?? null`;
+
+  for (let pressed = 0; ; pressed += 1) {
+    await onSetup(page, 'a setup step', `${shown} !== null`);
+    const step = v.parse(v.string(), await page.evaluate(shown));
+
+    if (step === 'tools') return;
+
+    if (pressed === 8) throw new Error(`setup never reached its tools step; it shows ${step}`);
+    await pressButton(page, 'button', await page.$('[data-mail-not-now]') === null ? 'Next' : 'Not now');
+    await onSetup(page, `setup past its ${step} step`, `${shown} !== ${JSON.stringify(step)}`);
+  }
+}
+
+/**
+ * The connect row. Its first sign-in runs in the tab itself (a blocked popup) from setup's tools step, reached by Next;
+ * the rest run in a helper tab from that step opened in another tab: a finish page for another run is opened while one
+ * waits, the person declines, then signs in again and approves.
+ */
+async function measureConnect(newPage: LiveApp['newPage'], origin: string): Promise<ConnectVerdict> {
+  const provider = startConsentingProvider();
+  const setup = await newPage();
+  const panel = await newPage();
+
+  try {
+    await walkToTools(setup, origin);
+    // A popup blocker's answer: no helper tab, so the connect runs here.
+    await setup.evaluate(() => { window.open = () => null; });
+    await addCustomServer(setup, 'Samehub', provider.serverUrl);
+    await named('the consent page in the setup tab', async () => setup.waitForSelector(`[${CONSENT_CHOICE}="approve"]`, { timeout: ACROSS_PAGE_LOADS_MS }));
+    await consent(setup, 'approve');
+
+    const cameBack = await named('the setup tab back from its sign-in', async () => reaches(setup, `${origin}/welcome`, ACROSS_PAGE_LOADS_MS));
+
+    if (!cameBack) throw new Error(`the setup tab never came back from its sign-in: ${await finishShown(setup)}`);
+    await onSetup(setup, 'setup to draw its step again', `document.querySelector('[data-welcome-step]') !== null`);
+    const back = new URL(setup.url());
+    const sameTab = { back: back.pathname + back.search + back.hash, status: (await listedServer(origin, 'Samehub')).status };
+
+    // Setup's tools step, as the MCP page sends an account that has not finished setup there.
+    await named('setup\'s tools step to load', async () => panel.goto(`${origin}/welcome?step=tools`, { waitUntil: 'load' }));
+    await onSetup(panel, 'the MCP servers on setup\'s tools step', `[...document.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Add custom server')`);
+    const first = await signInHelper(panel, async () => addCustomServer(panel, 'Denyhub', provider.serverUrl));
+
+    // Opened by no script, so it stays: it names a run that is not the panel's.
+    const planted = await newPage();
+
+    await named('the planted finish page to load', async () => planted.goto(`${origin}/connected?run=${crypto.randomUUID()}&service=Denyhub`, { waitUntil: 'load' }));
+    await until(planted, 'the planted finish page', `document.querySelector('[data-connect-finished]') !== null`);
+    // A broadcast reaches every tab of the origin within a frame or two; a second is many.
+    await new Promise((resolve) => { setTimeout(resolve, 1000); });
+    const plantedSaw = { helperOpen: !first.helper.isClosed(), said: await connectSaid(panel) };
+
+    await planted.close();
+    await consent(first.helper, 'deny');
+    const helperClosed = await named('the declined sign-in\'s tab to close', async () => closedSoon(first.closed));
+
+    await onSetup(panel, 'the panel to say how the sign-in ended', `document.querySelector('[data-connect-ended]') !== null`);
+    const deniedSaid = await connectSaid(panel);
+    const denyhub = await listedServer(origin, 'Denyhub');
+    // The panel's list read after the end, as a person sees it.
+    await named('setup\'s tools step to reload', async () => panel.reload({ waitUntil: 'load' }));
+    await onSetup(panel, 'setup\'s tools step listing Denyhub', `document.querySelector('[data-mcp-server="${denyhub.id}"]') !== null`);
+    const signIn = `[data-mcp-server="${denyhub.id}"] [data-mcp-sign-in]`;
+    const denied = { helperClosed, said: deniedSaid, status: denyhub.status, signInOffered: await panel.$(signIn) !== null };
+
+    if (!denied.signInOffered) return { sameTab, planted: plantedSaw, denied, retried: null };
+    // Pressed as `pressButton` presses: the row sits in setup's own scrolled step, where a mouse lands on what covers it.
+    const again = await signInHelper(panel, async () => panel.$eval(signIn, (button) => { if (button instanceof HTMLElement) button.click(); }));
+
+    await consent(again.helper, 'approve');
+    await named('the approved sign-in\'s tab to close', async () => closedSoon(again.closed));
+    await onSetup(panel, 'the panel to say the sign-in connected', `document.querySelector('[data-connect-ended="connected"]') !== null`);
+
+    return { sameTab, planted: plantedSaw, denied, retried: { said: await connectSaid(panel), status: (await listedServer(origin, 'Denyhub')).status } };
+  } finally {
+    await named('the connect row\'s pages to close', async () => Promise.all([setup.close(), panel.close()]));
+    await provider.stop();
+  }
+}
+
+/**
+ * A slate whose method asks the agent, called first from the agent's own program in its turn, then from the person's
+ * page with no turn running. The program's call is read off the turn's last request, its time off the run's ledger.
+ */
+async function measureSlateAsk(newPage: LiveApp['newPage'], origin: string, probe: SlateAskProbe): Promise<SlateAskVerdict> {
+  const workspace = await createWorkspace(origin, LOOPBACK_IDENTITY, { name: `live-row-slate-ask-${RUN_ID}`, purpose: 'slate ask probe', model: SCRIPTED_MODEL_SPEC });
+  const page = await openRecorded(newPage, origin, workspace);
+  const socket = openPublicSocket(origin, { kind: 'loopback' }, `/agents/orchestrator-agent/${workspace}`, new AbortController().signal);
+
+  try {
+    if (!(await socket.opened)) throw new Error('the slate-ask socket did not open');
+    await sendInChat(page, SLATE_ASK_PROBE);
+    const { request, programMs } = await named('the program\'s result', () => probe.heard);
+    await until(page, 'the probe turn to end', `!(${STOP_OFFERED})`);
+    const ran = request.calls.find((call) => call.name === 'eval');
+
+    if (ran === undefined) throw new Error('the probe turn ran no program');
+
+    // From the page, as the person's own call: no turn of the agent's waits on it.
+    const answered = v.parse(v.looseObject({ ok: v.boolean(), value: v.optional(JsonValueSchema) }),
+      await socket.rpc('slate', [{ op: 'call', id: SLATE_ASK_ID, method: 'ask' }]));
+
+    return { program: v.parse(JsonValueSchema, JSON.parse(ran.result)), programMs, page: answered.value ?? null };
+  } finally {
+    socket.close('slate-ask');
     await page.close();
   }
 }
@@ -2066,7 +2404,7 @@ async function measureState(app: LiveApp): Promise<StateVerdict> {
 export const LIVE_ROWS = [
   'live-indicator', 'opened-mid-turn', 'reconnect', 'observed-reconnect', 'unanswered-probe', 'slept', 'watched-slept', 'answered',
   'unsent-answer', 'controls', 'walkthrough', 'own-server', 'kept-tab', 'chat-scroll', 'mid-thought', 'dropped-file', 'cleared', 'plan-tasks',
-  'stop-then-send', 'new-chat-stop', 'slate-ui', 'provider-wait', 'state',
+  'stop-then-send', 'new-chat-stop', 'slate-ui', 'slate-ask', 'provider-wait', 'connect', 'workspace-views', 'state',
 ] as const;
 
 export type LiveRow = (typeof LIVE_ROWS)[number];
@@ -2087,8 +2425,8 @@ export interface LiveRows extends Pick<RowVerdicts, 'verdictOf'> {
 export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
   const observed: TierVerdicts = {
     liveIndicator: null, openedMidTurn: null, reconnect: null, observedReconnect: null, unansweredProbe: null, slept: null, watchedSlept: null, answered: null,
-    unsentAnswer: null, bootFailure: null,
-    controls: null, walkthrough: null, ownServer: null, keptTab: null, chatScroll: null, midThought: null, droppedFile: null, cleared: null, planTasks: null, stopThenSend: null, newChatStop: null, slateUi: null, providerWait: null, state: null,
+    unsentAnswer: null, bootFailure: null, slateAsk: null, connect: null,
+    controls: null, walkthrough: null, ownServer: null, keptTab: null, chatScroll: null, midThought: null, droppedFile: null, cleared: null, planTasks: null, stopThenSend: null, newChatStop: null, slateUi: null, providerWait: null, workspaceViews: null, state: null,
   };
 
   // Set once the dev server is up: a row that breaks names the file its server's output is kept in.
@@ -2112,6 +2450,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
     const openingHeld = heldCall();
     const toldBack = Promise.withResolvers<ScriptedRequest>();
     const slateHeard = Promise.withResolvers<ScriptedRequest>();
+    const askProbe = new SlateAskProbe();
     const waitProbe = new ProviderWaitProbe();
 
     // The watched turn follows the answered one in its conversation, so it is matched first, by the latest ask.
@@ -2122,7 +2461,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
       ?? reconnectTurn(request, UNANSWERED_PROBE_TURN_ASK, probeWaitHeld)
       ?? reconnectTurn(request, SLEPT_TURN_ASK, sleptHeld) ?? reconnectTurn(request, WATCHED_SLEPT_TURN_ASK, watchedSleptHeld, true)
       ?? unsentFirstTurn(request, unsentHeld) ?? reconnectTurn(request, CLEARED_TURN_ASK, clearedHeld)
-      ?? keptTabProbe(request) ?? thinkingTurn(request) ?? planTasksProbe(request) ?? stopProbeTurn(request, stopProbe, openingHeld) ?? slateUiTurn(request, slateHeard.resolve) ?? planWalkthrough(request));
+      ?? keptTabProbe(request) ?? thinkingTurn(request) ?? planTasksProbe(request) ?? stopProbeTurn(request, stopProbe, openingHeld) ?? slateUiTurn(request, slateHeard.resolve) ?? slateAskTurn(request, askProbe) ?? planWalkthrough(request));
 
     await withLiveApp(async (app) => {
       const { newPage, origin } = app;
@@ -2158,7 +2497,10 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
         'stop-then-send': async () => { observed.stopThenSend = await attempt('stop-then-send', () => measureStopThenSend(newPage, origin, stopProbe)); },
         'new-chat-stop': async () => { observed.newChatStop = await attempt('new-chat-stop', () => measureNewChatStop(newPage, origin, openingHeld)); },
         'slate-ui': async () => { observed.slateUi = await attempt('slate-ui', () => measureSlateUi(newPage, origin, slateHeard.promise)); },
+        'slate-ask': async () => { observed.slateAsk = await attempt('slate-ask', () => measureSlateAsk(newPage, origin, askProbe)); },
+        'connect': async () => { observed.connect = await attempt('connect', () => measureConnect(newPage, origin)); },
         'provider-wait': async () => { observed.providerWait = await attempt('provider-wait', () => measureProviderWait(newPage, origin, waitProbe)); },
+        'workspace-views': async () => { observed.workspaceViews = await attempt('workspace-views', () => measureWorkspaceViews(newPage, origin)); },
         'state': async () => { observed.state = await attempt('state', () => measureState(app)); },
       };
 

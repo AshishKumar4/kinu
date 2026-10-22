@@ -31,7 +31,7 @@ export { htmlToMarkdown, stripBase64Images, looksLikeHtml } from './markdown';
 
 export { MOVIE_CUES, MOVIE_END, type LandingMovieHandle } from './landing-movie-contract';
 
-export { browserSessions, initBrowserSessionTable, ownsBrowserSession, type BrowserSessionBinding } from './browser-sessions';
+export { browserSessions, closeWorkspaceBrowserSessions, initBrowserSessionTable, ownsBrowserSession, type BrowserSessionBinding } from './browser-sessions';
 
 export { createWebCodemodeProvider, serveWeb, type WebDeps } from '../tools/web-operations';
 

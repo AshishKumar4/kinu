@@ -11,7 +11,7 @@ import * as v from 'valibot';
 
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
-import { sqlCheckList } from '../identity/schema';
+import { sqlCheckList } from '../utils/sql';
 import type { FactsStore } from '../memory/facts';
 import type { InstructionApprovalStore } from '../safety/instruction-trust';
 import type { ScaffoldControl } from './control';

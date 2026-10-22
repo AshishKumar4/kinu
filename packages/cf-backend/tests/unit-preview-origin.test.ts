@@ -23,7 +23,7 @@ import { publicHtmlHeaders, withAppSecurityHeaders } from '@kinu.run/core';
 import { LIVE_SHARE_OPEN_PATH, PROVIDER_PROXY_PATH, USER_AI_PROXY_PATH, USER_AI_RUN_PATH, USER_WEB_SEARCH_PATH } from '@kinu.run/core';
 import { DEPLOY_API } from '@kinu.run/core/deploy';
 import { crossSiteRejection } from '../src/auth/session';
-import { CLI_APPROVAL_CSRF_COOKIE_NAME, OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME } from '../src/auth/cookies';
+import { CLI_APPROVAL_CSRF_COOKIE_NAME, oauthStateCookieName, SESSION_COOKIE_NAME } from '../src/auth/cookies';
 import {
   handleNimbusPreviewHostRequest,
   nimbusPreviewConfigured,
@@ -338,7 +338,7 @@ describe('serving the preview host', () => {
           `${SESSION_COOKIE_NAME}=owner`,
           'guest_session=guest',
           `${CLI_APPROVAL_CSRF_COOKIE_NAME}=csrf`,
-          `${OAUTH_STATE_COOKIE_NAME}=handoff`,
+          `${oauthStateCookieName('0123456789abcdef')}=handoff`,
         ].join('; '),
         authorization: `Bearer ptc_${OWNER}_${'a'.repeat(44)}`,
         'proxy-authorization': 'Basic c2VjcmV0',
@@ -477,7 +477,7 @@ describe('serving a Nimbus preview host', () => {
           `${SESSION_COOKIE_NAME}=owner`,
           'guest_session=guest',
           `${CLI_APPROVAL_CSRF_COOKIE_NAME}=csrf`,
-          `${OAUTH_STATE_COOKIE_NAME}=handoff`,
+          `${oauthStateCookieName('0123456789abcdef')}=handoff`,
         ].join('; '),
         authorization: `Bearer pta_${OWNER}_${'b'.repeat(44)}`,
         'proxy-authorization': 'Basic c2VjcmV0',
@@ -1099,12 +1099,14 @@ describe('the app document policy', () => {
     expect(cspOf(null)).toContain("connect-src 'self' wss://kinu.example.com");
   });
 
-  // KaTeX_Size3-Regular.woff2 is inlined by Vite as `data:font/woff2`; without `font-src` the browser refuses it.
-  test('the inlined maths font survives the font-src rule', () => {
-    expect(cspOf(null)).toContain("font-src 'self' data:");
+  // The build inlines no font (vite.config.ts), so fonts come from this origin alone, on the app as on a public page.
+  test('fonts come from this origin alone', () => {
+    expect(cspOf(null)).toContain("font-src 'self';");
   });
 
-  // D70: KasmVNC's client takes its socket's host, port and path from settings a user can edit.
+  // D70: KasmVNC's client takes its socket's host, port and path from settings a user can edit. It reads its own codec
+  // probes (a few bytes of AVC, HEVC and AV1 it carries as `data:` URLs) with fetch, which a connect-src without `data:`
+  // refused twice on every open (production walkthrough rc30 F8); a `data:` URL leaves the page with nothing.
   test('the desktop client is framed by the app alone, and its socket reaches this origin only', () => {
     const res = withAppSecurityHeaders(
       new Response('<!doctype html>', { headers: { 'content-type': 'text/html' } }), new URL(`${APP}/kasmvnc/vnc.html`), `https://*.${SUFFIX}`,
@@ -1116,7 +1118,7 @@ describe('the app document policy', () => {
       frame: res.headers.get('x-frame-options'), ancestors: /frame-ancestors [^;]*/.exec(csp)?.[0], connect: /connect-src [^;]*/.exec(csp)?.[0],
       frames: /frame-src [^;]*/.exec(csp)?.[0],
     }).toEqual({
-      frame: 'SAMEORIGIN', ancestors: "frame-ancestors 'self'", connect: `connect-src 'self' wss://${new URL(APP).host}`, frames: "frame-src 'none'",
+      frame: 'SAMEORIGIN', ancestors: "frame-ancestors 'self'", connect: `connect-src 'self' wss://${new URL(APP).host} data:`, frames: "frame-src 'none'",
     });
   });
 

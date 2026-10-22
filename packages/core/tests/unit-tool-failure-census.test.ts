@@ -5,7 +5,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
-import { oneMachine, toolExecute, type RecordingLogger, createRecordingLogger } from '@kinu.run/test-utils';
+import { NO_JOBS, oneMachine, toolExecute, type RecordingLogger, createRecordingLogger } from '@kinu.run/test-utils';
 import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import {
   buildBuiltinTools, censusToolFailures, classifyToolFailure,
@@ -583,7 +583,7 @@ describe('each executor tool files its own failure in the right part', () => {
       files: sessionFilesOver() };
 
     const narrow = createNimbusWorkspaceExecutor({
-      box, inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), craftStore: rt.craftStore },
+      box, jobs: NO_JOBS, inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), craftStore: rt.craftStore },
     });
 
     const refusal = await narrow.tools.startProcess.execute('node server.js');

@@ -7,8 +7,8 @@
 
 import { Agent, getAgentByName, type AgentContext } from 'agents';
 import * as v from 'valibot';
-import { actorReferenceOf, isSubordinateOrigin, ownerCaller, WORKSPACE_ROOT, type ArchiveCursor, type Clock } from '@kinu.run/core';
-import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { actorReferenceOf, isSubagentOrigin, ownerCaller, WORKSPACE_ROOT, type ArchiveCursor, type Clock } from '@kinu.run/core';
+import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { handClock } from '@kinu.run/test-utils/hand-clock';
 import { createCompositeLogger, createConsoleLogger, diagnostics, setDiagnosticsSink } from '@kinu.run/core/obs';
 import { createRecordingLogger } from '@kinu.run/test-utils/recording';
@@ -16,7 +16,7 @@ import { ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
 import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import type { UserDO } from '../../src/user/user-do';
-import { HIRE_CHILD_MODEL, hireControlUrl, hireModelsBaseUrl, JOB_GATE, REPORT_MARK, type ActorRow, type JobRow, type JobWatchState, type ArchiveSections, type ChildScript, type HireObservation, type LogRow, type RosterRow, type TurnCount } from './hire-shapes';
+import { HIRE_CHILD_MODEL, hireControlUrl, hireModelsBaseUrl, JOB_GATE, PROCESS_LOG, REPORT_MARK, type ActorRow, type JobRow, type JobWatchState, type ArchiveSections, type ChildScript, type HireObservation, type LogRow, type RosterRow, type TurnCount } from './hire-shapes';
 import { hostedActorPlacement } from '../../src/actor-hosting';
 
 export * from '../../src/server';
@@ -51,7 +51,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
 
     // `ActorAgent`'s constructor already sealed the surface with non-enumerable shadows over these reads;
     // deleting the shadow lets the wider seal below expose the prototype method.
-    const reads = ['rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'wakeReturned', 'wakeWhileRunning', 'stopHosted', 'settled', 'archiveSections', 'jobWindowArmed', 'outrunJobWindow', 'openJobGate', 'redeliverJobWake', 'jobWatchState', 'jobRows', 'pendingAlarm', 'watchRelays', 'relayLost', 'runStatuses'];
+    const reads = ['rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'wakeReturned', 'wakeWhileRunning', 'stopHosted', 'settled', 'archiveSections', 'jobWindowArmed', 'outrunJobWindow', 'openJobGate', 'redeliverJobWake', 'jobWatchState', 'jobRows', 'pendingAlarm', 'watchRelays', 'relayLost', 'runStatuses', 'processTicks'];
 
     for (const name of reads) Reflect.deleteProperty(this, name);
 
@@ -108,6 +108,13 @@ export class HireOrchestrator extends ProductionOrchestrator {
     await writeText(this.workspaceBox(this.shellId()).store({ home: WORKSPACE_ROOT }), JOB_GATE, 'open');
   }
 
+  /** The lines the `process` script's process wrote. */
+  async processTicks(): Promise<string[]> {
+    const text = await readText(this.workspaceBox(this.shellId()).store({ home: WORKSPACE_ROOT }), PROCESS_LOG);
+
+    return text.split('\n').filter((line) => line !== '');
+  }
+
   /** What a restart does for a job whose lane row outlived its settle: re-deliver its wake. */
   async redeliverJobWake(jobId: string): Promise<void> {
     await this.jobAuthorities.recover({ phase: 'running', jobId, kind: 'shell' });
@@ -153,9 +160,9 @@ export class HireOrchestrator extends ProductionOrchestrator {
       actor_id: string; name: string; lifetime: string; status: string; task_event_id: string | null;
     }>(`SELECT actor_id, name,
         COALESCE((SELECT lifetime FROM workspace_actors
-          WHERE actor_id = json_extract(actor_subordinates.actor_reference, '$.actorId')),
+          WHERE actor_id = json_extract(actor_subagents.actor_reference, '$.actorId')),
           json_extract(birth_request, '$.seed.lifetime')) AS lifetime,
-        status, task_event_id FROM actor_subordinates ORDER BY created_at`).toArray();
+        status, task_event_id FROM actor_subagents ORDER BY created_at`).toArray();
 
     return rows.map((row) => ({
       actorId: row.actor_id, name: row.name, lifetime: row.lifetime,
@@ -182,7 +189,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
       consumed_at: number | null; payload: string;
     }>(`SELECT actor_id, id, variant, turn_id, consumed_at, payload
         FROM agent_log
-        WHERE kind = 'event' AND variant IN ('subordinate_task', 'subordinate_report')
+        WHERE kind = 'event' AND variant IN ('subagent_task', 'subagent_report')
         ORDER BY id`).toArray();
 
     return rows.map((row) => {
@@ -210,16 +217,16 @@ export class HireOrchestrator extends ProductionOrchestrator {
     });
   }
 
-  /** Runs started per actor: the root's in this object, each subordinate's in its own database. */
+  /** Runs started per actor: the root's in this object, each subagent's in its own database. */
   async turnCounts(): Promise<TurnCount[]> {
     const counts: TurnCount[] = this.probeState.storage.sql.exec<{ actor_id: string; runs: number }>(
       `SELECT actor_id, COUNT(DISTINCT run_id) AS runs FROM run_events
        WHERE type = 'run_start' GROUP BY actor_id`).toArray().map((row) => ({ actorId: row.actor_id, runs: row.runs }));
 
-    const subordinates = this.probeState.storage.sql.exec<{ actor_id: string }>(
+    const subagents = this.probeState.storage.sql.exec<{ actor_id: string }>(
       `SELECT actor_id FROM workspace_actors WHERE origin IN ('user', 'agent', 'evolution')`).toArray();
 
-    for (const { actor_id: actorId } of subordinates) {
+    for (const { actor_id: actorId } of subagents) {
       const seen = await (await this.agentFacetOf(actorId)).inspect(this.agentSnapshot(actorId), { path: [], view: 'runs', page: { limit: 100 } });
 
       if (seen.view === 'runs' && seen.page.items.length > 0) counts.push({ actorId, runs: seen.page.items.length });
@@ -284,9 +291,9 @@ export class HireOrchestrator extends ProductionOrchestrator {
   }
 
   private countReturnedWake(): void {
-    // A subordinate's turn claim is in its own database; the workspace knows which of its turns are running.
+    // A subagent's turn claim is in its own database; the workspace knows which of its turns are running.
     const inFlight = this.actorDirectoryStore().list()
-      .filter((record) => isSubordinateOrigin(record.origin) && this.currentTurnOf(actorReferenceOf(record)) !== null).length;
+      .filter((record) => isSubagentOrigin(record.origin) && this.currentTurnOf(actorReferenceOf(record)) !== null).length;
 
     diagnostics.event('probe.wake_returned', { delegatedTurnsInFlight: inFlight });
 
@@ -346,11 +353,11 @@ const WireLogSchema = v.looseObject({
 
 
 /** A `Pick` intersection: the full stub type instantiates too deeply to compile. */
-type HireTarget = Pick<ProductionOrchestrator, 'claimOwner' | 'setModel' | 'setSoul' | 'runTaskFromMcp' | 'dismissSubordinate'>
+type HireTarget = Pick<ProductionOrchestrator, 'claimOwner' | 'setModel' | 'setSoul' | 'runTaskFromMcp' | 'dismissSubagent'>
   & Pick<HireOrchestrator,
     'rosterRows' | 'actorRows' | 'logRows' | 'turnCounts' | 'driveOwedWork' | 'rootActorId' | 'childTranscript' | 'wakeReturned' | 'wakeWhileRunning' | 'stopHosted' | 'settled' | 'archiveSections'
     | 'jobWindowArmed' | 'outrunJobWindow' | 'openJobGate' | 'redeliverJobWake' | 'jobWatchState' | 'jobRows' | 'pendingAlarm'
-    | 'watchRelays' | 'relayLost' | 'runStatuses'>;
+    | 'watchRelays' | 'relayLost' | 'runStatuses' | 'processTicks'>;
 
 /** `durableObjects` installs `HireOrchestrator` under the `OrchestratorAgent` name, so every stub carries the fixture reads. */
 interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
@@ -442,7 +449,7 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
 
   /** The owner's Dismiss of `name` with its history kept, answered as the roster menu reads it. */
   async dismissAnswer(workspace: string, name: string): Promise<string> {
-    return JSON.stringify(await (await this.target(workspace)).dismissSubordinate(name, true));
+    return JSON.stringify(await (await this.target(workspace)).dismissSubagent(name, true));
   }
 
   /** The owner's Dismiss with its history kept, as the roster menu calls it. */
@@ -452,7 +459,7 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
 
     if (child === undefined) throw new Error('no hired child to dismiss');
 
-    return (await target.dismissSubordinate(child.name, true)).name;
+    return (await target.dismissSubagent(child.name, true)).name;
   }
 
   async settled(workspace: string): Promise<void> {
@@ -506,6 +513,10 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
 
   async jobRows(workspace: string): Promise<JobRow[]> {
     return await (await this.target(workspace)).jobRows();
+  }
+
+  async processTicks(workspace: string): Promise<string[]> {
+    return await (await this.target(workspace)).processTicks();
   }
 
   async watchRelays(workspace: string): Promise<void> {

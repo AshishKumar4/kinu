@@ -226,7 +226,7 @@ async function streamed(page: Page, frame: Frame, control: string, answer: { rea
 
 /**
  * Row (1008-ac, 1008-ad): a slate streams answers as they are written, the model's through `ai.stream` and the
- * agent's own reply through `agent.ask`, and its owner's slate may hire a helper. The slate is built by a turn; its
+ * agent's own reply through `agent.ask`, and its owner's slate may hire a subagent. The slate is built by a turn; its
  * page is opened from the Pages strip, as the owner opens it.
  */
 export async function slateStreamsAndHires(target: FlowTarget): Promise<SlateReachVerdict> {

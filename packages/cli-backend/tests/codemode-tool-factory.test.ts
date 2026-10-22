@@ -18,6 +18,8 @@ interface ExecuteToolResult {
   result: JsonValue | undefined;
   logs?: string[];
   error?: string;
+  /** The host's record of what the program changed (`execution/call-effects.ts`). */
+  effects?: { call: string; unclassified?: number };
 }
 
 type ExecuteTool = (args: { code: string }) => Promise<ExecuteToolResult>;
@@ -65,8 +67,9 @@ return { image: Array.from(image), text: Array.from(await fs.readFile('notes.md'
 test('a program calls workspace.fs.text on the served workspace file plane', async () => {
   const { rt } = createWorkspaceRuntime();
   await writeText(rt.toolFiles, 'nested.md', 'nested workspace bytes');
+  // It only read: its record says it changed nothing.
   expect(await machineProgram(rt)({ code: 'return await workspace.fs.text("nested.md");' }))
-    .toEqual({ result: 'nested workspace bytes' });
+    .toEqual({ result: 'nested workspace bytes', effects: { call: expect.any(String) } });
 });
 
 test('a retired workspace.readFile program refuses naming workspace.fs.text(path)', async () => {
@@ -88,7 +91,7 @@ test('fs.promises.readdir returns every entry beyond the file-list page cap', as
   const execute = machineProgram(rt);
   const first = await execute({ code: 'return await workspace.fs.list("many");' });
   expect(first.result).toMatchObject({ entries: names.slice(0, 1_000), truncated: { total: names.length, next: 1_000 } });
-  expect(await execute({ code: 'return await require("fs").promises.readdir("many");' })).toEqual({ result: names });
+  expect(await execute({ code: 'return await require("fs").promises.readdir("many");' })).toEqual({ result: names, effects: { call: expect.any(String) } });
 });
 
 // An MCP or extension tool is no native definition: `eval` reaches it, read per call, its input checked as a native call's is.
@@ -119,7 +122,9 @@ describe('createNodeCodemodeToolFactory — external tools', () => {
     const run = toolExecute<{ code: string }, ExecuteToolResult>(createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) })(surface));
     external = { mcp_tracker_find_issue: lookup };
 
-    expect(await run({ code: 'return await tools["mcp_tracker_find_issue"]({ title: "login" });' })).toEqual({ result: { id: 'ISSUE-7' } });
+    // An external tool's impact is its server's to say, and none is declared: its call may have changed something.
+    expect(await run({ code: 'return await tools["mcp_tracker_find_issue"]({ title: "login" });' }))
+      .toEqual({ result: { id: 'ISSUE-7' }, effects: { call: expect.any(String), unclassified: 1 } });
     await expect(run({ code: 'return await tools["mcp_tracker_find_issue"]({ name: "login" });' })).rejects.toThrow('title is required');
     expect(calls).toEqual([{ title: 'login' }]);
   });
@@ -160,7 +165,7 @@ describe('createNodeCodemodeToolFactory — console capture + implicit return', 
       .toEqual([{ name: 'cache_echo', description: 'Return the supplied text' }]);
     expect(craftedToolDeclarations({ eval: first }, { workMode: 'build', allowedTools: [] })).toEqual([]);
     expect(await toolExecute<{ code: string }, ExecuteToolResult>(next)({ code: 'return await tools.cache_echo("CACHE_ECHO_OK");' }))
-      .toEqual({ result: 'CACHE_ECHO_OK' });
+      .toEqual({ result: 'CACHE_ECHO_OK', effects: { call: expect.any(String) } });
   });
 
   test('the provider sees the callable declaration in the ledger and a real call returns its output', async () => {
@@ -224,7 +229,7 @@ describe('createNodeCodemodeToolFactory — console capture + implicit return', 
   // A `new Function` body sees no module scope and Bun has no `require` global, yet the description advertises `require`.
   test('require resolves the Node builtins inside the sandbox', async () => {
     const out = await makeTool()({ code: 'const path = require("node:path");\nreturn path.join("a", "b");' });
-    expect(out).toEqual({ result: 'a/b' });
+    expect(out).toEqual({ result: 'a/b', effects: { call: expect.any(String) } });
   });
 
   test('a throw still surfaces the console output produced before it', async () => {
@@ -427,6 +432,32 @@ describe('createNodeCodemodeToolFactory — native tools under tools.<name>', ()
     expect(seen).toEqual(['ls']);
   });
 
+  // Duplication audit, 2026-10-20 (InternalFish #12): the local factory declared only the namespaces it was given, so a
+  // program's describe('tools.shell') threw where the cloud's, describing what the call reaches, answered.
+  test("a program's describe answers for tools.* as the cloud's does", async () => {
+    const built = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) })({
+      cwd: WORKSPACE_ROOT, stores: freshServedStores(), native: surfaceWith(async () => 'ran'), external: () => ({}), craftedTools: () => [],
+    });
+
+    const out = await toolExecute<{ code: string }, ExecuteToolResult>(built)({ code: "return describe('tools.shell');" });
+
+    expect(out.error).toBeUndefined();
+    expect(out.result).toEqual(expect.stringContaining('shell('));
+  });
+
+  // Duplication audit, 2026-10-20 (InternalFish #12): eval held a namespace as a plain object, so a member it does not
+  // serve was a TypeError where the cloud's sandbox refuses it by name.
+  test('a namespace is held as the cloud sandbox holds one: a member it does not serve is refused by name', async () => {
+    const built = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), namespaces: [{
+      name: 'workspace', tools: { exec: { description: 'run', execute: async () => 'ran' } },
+    }] })({ cwd: WORKSPACE_ROOT, stores: freshServedStores(), native: {}, external: () => ({}), craftedTools: () => [] });
+
+    const run = toolExecute<{ code: string }, ExecuteToolResult>(built);
+
+    await expect(run({ code: 'return await workspace.nope();' })).rejects.toThrow('Tool "nope" not found');
+    expect((await run({ code: "return ['exec' in workspace, 'slates' in workspace, (await workspace) === workspace];" })).result).toEqual([true, false, true]);
+  });
+
   test('the sandbox does not bind its own entry', async () => {
     let calls = 0;
     const native = surfaceWith(async () => '');
@@ -618,7 +649,8 @@ test('each workspace.slates member reaches the slate host as one operation, and 
     'answers.push(await board.$preview(), await board.$methods(), await board.$commit(), await board.$history(), await board.$graph());',
     "answers.push(await board.$restore('v1'), await slates.$list(), await slates.$fork('v1'));",
     'const refused = await board.$remove();',
-    "const envelope = [typeof workspace.slate, await Promise.resolve().then(() => workspace.slates({ op: 'list' })).then(() => 'called', () => 'not callable')];",
+    // Served is a member's own: a name the workspace does not serve is no member of it, as in the cloud's sandbox.
+    "const envelope = ['slate' in workspace, await Promise.resolve().then(() => workspace.slates({ op: 'list' })).then(() => 'called', () => 'not callable')];",
     'return { answers, refused, envelope, awaited: (await board) === board };',
   ].join('\n');
 
@@ -629,7 +661,7 @@ test('each workspace.slates member reaches the slate host as one operation, and 
       'call', 'call', 'preview', 'methods', 'commit', 'history', 'graph', 'restore', 'list', 'fork',
     ],
     refused: { success: false, reason: 'denied', error: 'not yours' },
-    envelope: ['undefined', 'not callable'],
+    envelope: [false, 'not callable'],
     awaited: true,
   });
 

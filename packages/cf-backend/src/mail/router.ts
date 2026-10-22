@@ -50,7 +50,8 @@ async function resolve(deps: MailRouterDeps, to: string): Promise<{ userId: stri
 
   const claim = await deps.name(recipient.username).lookup();
 
-  if (claim === null || claim.state === 'retired') return null;
+  // A name kept with no owner is retired: it routes nowhere, and its row keeps anyone from claiming it again.
+  if (claim === null || claim.user_id === '') return null;
 
   // An alias is a whole address of its own: `hello@D` reaching a workspace's box.
   if (claim.kind === 'alias') {

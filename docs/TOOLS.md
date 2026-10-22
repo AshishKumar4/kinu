@@ -191,7 +191,7 @@ gains concentrate on weak models.
 `team`, and `peers`. Each operation is declared in
 `delegation/agents-operations.ts` and offered only where its wiring is
 (`agentsActionsFor`, `delegation/agents-tool.ts`). `hire`'s `lifetime` decides
-whether the helper persists. A `swarm` on a live session runs in the background
+whether the subagent persists. A `swarm` on a live session runs in the background
 and its result wakes the caller. The `agents` notes are
 `BUILTIN_TOOL_SPECS.agents.notes` in `registry.ts`; the prompt's `## Delegation`
 section (`prompts/delegation-section.md`) names the operations the actor holds.
@@ -211,7 +211,7 @@ loop-detection steers: `repeated_call`, `repeated_failure`, `no_progress`.
    Registered verifiers score verify-scored candidates. Nodes are full agents.
    See [EXPLORATION.md](./EXPLORATION.md).
 3. `hire` without `lifetime` (or with `lifetime:'durable'`) starts a persistent
-   subordinate. With `context:'fresh'` (the default) it starts from its role
+   subagent. With `context:'fresh'` (the default) it starts from its role
    and message; `context:'inherit'` also hands it the caller's recent turns.
 
 A swarm derives its answer shape from `score` and `advance`, never `settle`.
@@ -229,17 +229,24 @@ prompt's `## Delegation` section, and the `agents.*` namespace:
 
 | Operation | The deps that put it on the surface |
 |---|---|
-| `swarm` | `swarm` (a model to expand with and a workspace to measure in), and the account's swarms beta on |
+| `swarm` | `swarm` (a model to expand with and a workspace to measure in), the account's swarms beta on, and below the delegation depth cap: a search's nodes are agents a level below it |
 | `hire`, `dismiss` | `team`, below the delegation depth cap |
 | `assign`, `message`, `list` | `team` below the cap, or `peers` |
 | `hireWorkspace`, `reply` | `peers` |
+
+`list` shows the caller's subtree as a tree, from the read model the person's sidebar draws (`readWorkspaceAgents`;
+`delegation/agent-tree.ts`): Main sees the whole workspace, a hire itself and what it started, and peers are listed
+beside it. Each row is an agent after the one that started it, with its kind, status, what it works on, depth, last
+activity and the reports to the caller it has not read; siblings run first, then wait, rest and fail, by their last
+activity. It shows 32 rows unless `limit` asks for up to 200, counts the rest, and lists dismissed agents and settled
+swarm workers only with `retired:true`. `list({agent})` is one agent's status in detail.
 
 `lifetime` is gated one level finer, on `team.temporary`. With no port to run a
 task hire on, the field is in neither the JSON Schema nor the program
 declaration, so it is absent from the schema rather than refused at call time.
 `topic` is gated the same way on `peers`, and `deliverable` on `team`.
 
-- A hired subordinate is a logical actor of the workspace object, with a full
+- A hired subagent is a logical actor of the workspace object, with a full
   turn loop and a shared Nimbus session. `hire` takes a `role` and a `message`,
   with an optional new `name`. `assign` hands an existing `agent` its next
   workstream, with `deliverable` optional. `message` sends a note without a
@@ -253,13 +260,13 @@ declaration, so it is absent from the schema rather than refused at call time.
   `report.send`, through `ReportDeps.report`. Turn answers relay automatically,
   so `report` carries milestones.
 
-Owners read retained subordinate history through the workspace RPC
-`inspectSubordinate`. This read is separate from model delegation and does not
-make a dismissed agent addressable. `CloudAgentClient.inspectSubordinate`
+Owners read retained subagent history through the workspace RPC
+`inspectSubagent`. This read is separate from model delegation and does not
+make a dismissed agent addressable. `CloudAgentClient.inspectSubagent`
 (`packages/cli/src/cloud-agent-client.ts`) uses the same interactive owner
 transport. Scoped access tokens cannot use it.
 
-`path` lists direct subordinate names from the workspace root; an empty path
+`path` lists direct subagent names from the workspace root; an empty path
 reads the root. The `children`, `history`, `runs`, and `plans` views take
 `page` with `limit` and an optional `cursor`. The `events` view takes `runId`
 and `query` with `limit` and an optional inclusive `since` index. `plan` and
@@ -309,17 +316,17 @@ has already dispatched and no model can correct it. It logs
 
 ### Delivery
 
-`assign` to an existing subordinate, and `message`, never block on a busy
+`assign` to an existing subagent, and `message`, never block on a busy
 target. Both return the three fields `renderHandoff` builds:
 
 | Field | Meaning |
 |-------|---------|
-| `event_id` | The admitted event's id. The eventual `subordinate_report` cites the same id, which ties an answer arriving turns later to the request |
+| `event_id` | The admitted event's id. The eventual `subagent_report` cites the same id, which ties an answer arriving turns later to the request |
 | `delivery` | `starts_now` (the target was idle; the drain starts a turn) or `queued` (the target was busy or the event was already admitted, so it waits for its own Plan/Build-homogeneous turn) |
-| `subordinate_phase` | `{busy, lastActivityAt, workingOn}`: what the target was doing when the message arrived |
+| `subagent_phase` | `{busy, lastActivityAt, workingOn}`: what the target was doing when the message arrived |
 
 `assign` adds `status: working` and the `ASSIGN_NOTES` sentence for its
-`delivery`. `message` to a subordinate adds `status: delivered | queued`; to a
+`delivery`. `message` to a subagent adds `status: delivered | queued`; to a
 peer it returns that transport's result. `reply` answers through
 `peers.reply` and returns its result. `assign` to a peer, and `hireWorkspace`,
 are the calls here that wait, as above. The host stamps the Plan/Build mode,
@@ -362,7 +369,7 @@ every machine:
 | Member | Answers | Admitted by |
 |---|---|---|
 | `exec(command, { cwd?, name?, parts? })` | the output as text, or `{ stdout, stderr, exitCode }` with `parts` | `shell` |
-| `startProcess(command, { cwd? })` | `{ processId }` | `process_long` |
+| `startProcess(command, { cwd? })` | `{ processId, jobId? }` | `process_long` |
 | `stopProcess(processId)` | `{ stopped }` | `process_long` |
 | `listProcesses()` | `[{ processId, pid?, status, restartable?, command, session?, waiting? }]` | `process_long` |
 | `logs(processId, { lines?, bytes? })` | text | `process_long` |
@@ -375,7 +382,11 @@ Every `device` member also takes `{ device? }`. A variable a process needs goes
 at the head of its command (`PORT=4100 node server.js`).
 
 - The hosted workspace has all of them, plus `createTool`, `listTools`,
-  `retireTool` and `slates`.
+  `retireTool` and `slates`. A process its `startProcess` starts is a
+  background job of the agent's from its start (`jobId`): the job holds the
+  workspace awake while the process runs, and its end, or a restart that lost
+  it, wakes the agent. One past the job cap is stopped and refused. A retry of
+  its job starts the command again as a job of its own.
 - The CLI workspace has `exec` and `fs`, plus `createTool`, `listTools`,
   `retireTool` and `slates`; it declares no `process_long` or `net_inbound`.
 - The computer has all of them, plus `resize(size)` where it has sizes,

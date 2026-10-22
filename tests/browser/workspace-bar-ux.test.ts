@@ -12,14 +12,13 @@ import { scratchDir } from '@kinu.run/test-utils';
 
 import { withGallery, type Gallery } from '../../scripts/gallery-harness';
 import { TEST_REQUIREMENTS } from '../../scripts/test-requirements';
+import { AGENT_TAB, agentTab, askNewChat, CHATS, NEW_CHAT, NEW_CHAT_LINK, RENAME_BUTTON } from '../../scripts/browser-page';
 
 declare global {
   interface Window {
     galleryNavigate?: (path: string) => Promise<void>;
   }
 }
-
-const CHATS = 'nav[aria-label="Chats"]';
 
 /** Picks `file` as a person does: `box`'s own attach button opens the file picker, and its chip shows the file taken. */
 async function pick(page: Page, box: string, file: string): Promise<void> {
@@ -50,17 +49,9 @@ async function openWorkspacePage(newPage: Gallery['newPage'], origin: string, qu
   await page.setViewport({ width: 1280, height: 900 });
   await page.goto(`${origin}/gallery.html?frame=workspacepage${query}`, { waitUntil: 'networkidle0' });
   await page.reload({ waitUntil: 'networkidle0' });
-  await page.waitForSelector(`${CHATS} [data-agent-tab="main"]`);
+  await page.waitForSelector(`${CHATS} ${agentTab('main')}`);
 
   return page;
-}
-
-/** + then the first message: what a person does to open a chat. */
-async function startChat(page: Page, opening: string): Promise<void> {
-  await page.click(`${CHATS} a[aria-label="New chat"]`);
-  await page.waitForSelector('[data-new-chat] textarea');
-  await page.type('[data-new-chat] textarea', opening);
-  await page.click('[data-new-chat] button[type="submit"]');
 }
 
 async function waitForNewChatOpen(page: Page): Promise<void> {
@@ -73,7 +64,7 @@ async function waitForNewChatOpen(page: Page): Promise<void> {
 
 describe('a chat in the workspace, as an ordinary conversation', () => {
   /** Kept equal to the gallery's two-frame refusal, so a chain it stopped chaining fails the equality. */
-  const CREATE_REFUSAL_CHAIN = 'the workspace refused the new agent: subordinate quota exhausted';
+  const CREATE_REFUSAL_CHAIN = 'the workspace refused the new agent: subagent quota exhausted';
 
   test('+ asks the workspace question; the first message opens and names the chat as the current tab and is sent once', async () => {
     await withGallery(async ({ newPage, origin }) => {
@@ -81,20 +72,20 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
       const sends = () => page.evaluate(() => Number(document.documentElement.dataset.galleryChatSends ?? '0'));
       const before = await sends();
 
-      await page.click(`${CHATS} a[aria-label="New chat"]`);
-      await page.waitForSelector('[data-new-chat]');
+      await page.click(`${CHATS} ${NEW_CHAT_LINK}`);
+      await page.waitForSelector(NEW_CHAT);
 
-      await page.type('[data-new-chat] textarea', 'Audit the route bindings');
-      await page.click('[data-new-chat] button[type="submit"]');
+      await page.type(`${NEW_CHAT} textarea`, 'Audit the route bindings');
+      await page.click(`${NEW_CHAT} button[type="submit"]`);
       await waitForNewChatOpen(page);
       // Named from its first words, which the workspace is asked to name it by.
       await page.waitForSelector('[data-agent-pane="api-worker/agents/audit-route-bindings"] textarea');
       await page.waitForFunction((from) => Number(document.documentElement.dataset.galleryChatSends ?? '0') === from + 1, {}, before);
 
       // The opening is spent: leaving the chat and coming back sends nothing again.
-      await page.click(`${CHATS} [data-agent-tab="main"] a`);
+      await page.click(`${CHATS} ${agentTab('main')} a`);
       await page.waitForSelector('[data-agent-pane="api-worker/main"] textarea');
-      await page.click(`${CHATS} [data-agent-tab]:not([data-agent-tab="main"]) a`);
+      await page.click(`${CHATS} ${AGENT_TAB}:not(${agentTab('main')}) a`);
       await page.waitForSelector('[data-agent-pane^="api-worker/agents/"] textarea');
       expect(await sends()).toBe(before + 1);
       await page.close();
@@ -105,12 +96,12 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await openWorkspacePage(newPage, origin, '&createFails=1');
 
-      await startChat(page, 'Audit the route bindings');
+      await askNewChat(page, 'Audit the route bindings');
       await page.waitForFunction((chain) => (document.querySelector('[data-new-chat]')?.textContent ?? '').includes(chain), {}, CREATE_REFUSAL_CHAIN);
       // The draft survives the refusal, so the retry is one click.
-      expect(await page.$eval('[data-new-chat] textarea', (field) => field.value)).toBe('Audit the route bindings');
+      expect(await page.$eval(`${NEW_CHAT} textarea`, (field) => field.value)).toBe('Audit the route bindings');
 
-      await page.click('[data-new-chat] button[type="submit"]');
+      await page.click(`${NEW_CHAT} button[type="submit"]`);
       await waitForNewChatOpen(page);
       expect(await page.evaluate(() => document.body.innerText)).not.toContain(CREATE_REFUSAL_CHAIN);
       await page.close();
@@ -121,7 +112,7 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
   test('a chat renames in its tab and deletes after a confirmation; Main\'s × clears its conversation and Main stays', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await openWorkspacePage(newPage, origin, '&transcript=revert');
-      const main = `${CHATS} [data-agent-tab="main"]`;
+      const main = `${CHATS} ${agentTab('main')}`;
       const chatText = () => page.$eval('#chat', (column) => column.textContent ?? '');
 
       expect(await page.$(`${main} button[aria-label="Delete Main"]`)).toBeNull();
@@ -135,12 +126,12 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
       await clickDialogButton(page, 'Cancel');
       expect(await chatText()).toBe(before);
 
-      await startChat(page, 'Audit the route bindings');
+      await askNewChat(page, 'Audit the route bindings');
       await waitForNewChatOpen(page);
       const open = `${CHATS} [data-active]`;
 
       await page.hover(`${open} a`);
-      await page.click(`${open} button[aria-label^="Rename "]`);
+      await page.click(`${open} ${RENAME_BUTTON}`);
       await page.waitForSelector(`${open} input[aria-label="Chat name"]`);
       await page.type(`${open} input[aria-label="Chat name"]`, 'Payments triage');
       await page.keyboard.press('Enter');
@@ -175,7 +166,7 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
   test('Settings asks the tab\'s own Clear Main, and a clear the server refuses stays in the dialog over every message', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await openWorkspacePage(newPage, origin, '&transcript=revert&clear=refused');
-      const main = `${CHATS} [data-agent-tab="main"]`;
+      const main = `${CHATS} ${agentTab('main')}`;
       const chatText = () => page.$eval('#chat', (column) => column.textContent ?? '');
 
       await page.waitForFunction(() => (document.querySelector('#chat')?.textContent ?? '').length > 300);
@@ -213,7 +204,7 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
   test('Main takes a title of its own, which its tab shows', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await openWorkspacePage(newPage, origin);
-      const main = `${CHATS} [data-agent-tab="main"]`;
+      const main = `${CHATS} ${agentTab('main')}`;
 
       await page.hover(`${main} a`);
       await page.click(`${main} button[aria-label="Rename Main"]`);
@@ -230,7 +221,7 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
     // a thinking level is written to THIS actor, never the workspace.
     await withGallery(async ({ newPage, origin }) => {
       const page = await openWorkspacePage(newPage, origin);
-      await startChat(page, 'Audit the route bindings');
+      await askNewChat(page, 'Audit the route bindings');
       await waitForNewChatOpen(page);
       await page.waitForFunction(() => {
         const picker = document.querySelector('[data-agent-pane] [data-model-picker="Model"]');
@@ -302,11 +293,11 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
       await page.type(`${main} textarea`, 'Read my notes');
       expect(await sentBy(page, `${main} button[aria-label="Send"]`)).toEqual(['file:notes.csv', 'text:Read my notes']);
 
-      await page.click(`${CHATS} a[aria-label="New chat"]`);
-      await page.waitForSelector('[data-new-chat] textarea');
-      await pick(page, '[data-new-chat]', join(files, 'wrangler-tail.log'));
-      await page.type('[data-new-chat] textarea', 'Why does the deploy answer 500?');
-      expect(await sentBy(page, '[data-new-chat] button[type="submit"]')).toEqual(['file:wrangler-tail.log', 'text:Why does the deploy answer 500?']);
+      await page.click(`${CHATS} ${NEW_CHAT_LINK}`);
+      await page.waitForSelector(`${NEW_CHAT} textarea`);
+      await pick(page, NEW_CHAT, join(files, 'wrangler-tail.log'));
+      await page.type(`${NEW_CHAT} textarea`, 'Why does the deploy answer 500?');
+      expect(await sentBy(page, `${NEW_CHAT} button[type="submit"]`)).toEqual(['file:wrangler-tail.log', 'text:Why does the deploy answer 500?']);
 
       // Home's box creates the workspace; the file waits in its chat and goes out with the first message there.
       await page.evaluate(() => {
@@ -466,7 +457,7 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
         await page.setViewport({ width: 1440, height: 900 });
         await page.goto(`${origin}/gallery.html?frame=workspaceshell`, { waitUntil: 'networkidle0' });
         await page.waitForSelector(`${rows} [data-workspace-chat]`);
-        await startChat(page, 'Audit the route bindings');
+        await askNewChat(page, 'Audit the route bindings');
         await waitForNewChatOpen(page);
         const label = await openTab(page);
 
@@ -510,7 +501,7 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
         await page.tap(`${title} .p-bar-link`);
         await page.waitForSelector('[data-workspace-overview]');
         // A touch where the pencil is drawn opens the field; one that fell through to the name would not.
-        await page.tap(`${title} button[aria-label^="Rename "]`);
+        await page.tap(`${title} ${RENAME_BUTTON}`);
         await page.waitForSelector(`${title} input[aria-label="Workspace name"]`);
       } finally { await page.close(); }
     });
@@ -543,12 +534,12 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await openWorkspacePage(newPage, origin);
       await page.type('[data-agent-pane="api-worker/main"] textarea', 'main draft');
-      await startChat(page, 'Audit the route bindings');
+      await askNewChat(page, 'Audit the route bindings');
       await waitForNewChatOpen(page);
       await page.waitForSelector('[data-agent-pane^="api-worker/agents/"] textarea');
       expect(await page.$eval('[data-agent-pane] textarea', (field) => field.value)).toBe('');
 
-      await page.click(`${CHATS} [data-agent-tab="main"] a`);
+      await page.click(`${CHATS} ${agentTab('main')} a`);
       await page.waitForSelector('[data-agent-pane="api-worker/main"]');
       expect(await page.$eval('[data-agent-pane] textarea', (field) => field.value)).toBe('main draft');
       await page.close();

@@ -178,6 +178,11 @@ export class MemoryStore {
 		return this.sql<{ id: string; kind: 'upsert' | 'delete'; revision: number }>`SELECT id, kind, revision FROM memory_projection_updates ORDER BY revision LIMIT ${limit}`;
 	}
 
+	/** Every chunk that may have a projection: the chunks indexed now, and those whose projection is still owed. */
+	projectedIds(): string[] {
+		return this.sql<{ id: string }>`SELECT id FROM memory_note_chunks UNION SELECT id FROM memory_projection_updates`.map((row) => row.id);
+	}
+
 	ackProjection(updates: readonly { id: string; revision: number }[]): void {
 		for (const update of updates) void this.sql`DELETE FROM memory_projection_updates WHERE id = ${update.id} AND revision = ${update.revision}`;
 	}

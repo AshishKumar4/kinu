@@ -111,7 +111,7 @@ describe('the actor hands a terminal socket to the runtime shell', () => {
         value: function* () { yield pane.wire; yield chat.wire; },
       });
 
-      agent.broadcast(JSON.stringify({ type: 'reads_changed', reads: ['listSubordinates'] }));
+      agent.broadcast(JSON.stringify({ type: 'reads_changed', reads: ['listSubagents'] }));
       agent.broadcast('again', ['chat']);
 
       expect(fanout.mock.calls.map(([, without]) => without)).toEqual([['pane'], ['chat', 'pane']]);

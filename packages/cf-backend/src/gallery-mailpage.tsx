@@ -1,7 +1,7 @@
 /** The production Mail page, reading and writing the HTTP fixture made from the approved wireframe's mail. */
 import { Route, Routes, useParams } from "react-router-dom";
 import * as v from "valibot";
-import { MAIL_VIEWS, type MailBox, type MailListing, type MailMessageView, type MailThreadSummary, type MailThreadView } from "@kinu.run/core";
+import { importantMail, MAIL_VIEWS, type MailBox, type MailListing, type MailMessageView, type MailThreadSummary, type MailThreadView } from "@kinu.run/core";
 import Layout from "@/components/layout";
 import MailPage from "@/pages/MailPage";
 import { ADDRESSES, OWNER, THREADS } from "@/gallery-mail";
@@ -15,7 +15,7 @@ const OutgoingSchema = v.object({
 
 type Outgoing = v.InferOutput<typeof OutgoingSchema>;
 
-function installFixture(): void {
+export function installMailPageFixture(): void {
   const params = new URLSearchParams(location.search);
   const next = window.fetch.bind(window);
   const assistant = params.get("assistant") !== "none";
@@ -136,10 +136,7 @@ function installFixture(): void {
     if (!enabled || address === null) return { enabled, unread: 0, items: [] };
     const listing = list(new URL("/api/user/mail/threads?view=important", location.href));
 
-    return { enabled, unread: listing.unread, items: listing.threads.slice(0, limit).map((thread) => ({
-      thread: thread.id, from: { name: thread.from[0]?.name ?? thread.from[0]?.address ?? "", address: thread.from[0]?.address ?? "" }, to: boxes.find((box) => box.path === thread.path)?.address ?? "", subject: thread.subject,
-      reason: thread.important ?? "", at: thread.at, unread: thread.unread,
-    })) };
+    return { enabled, unread: listing.unread, items: importantMail(listing.threads.slice(0, limit), boxes) };
   };
 
   /** The person's address, created with its box. */
@@ -220,7 +217,7 @@ function WorkspaceChat() {
 }
 
 export default function mailPageFrame() {
-  installFixture();
+  installMailPageFixture();
   const params = new URLSearchParams(location.search);
   const view = MAIL_VIEWS.find((name) => name === params.get("view")) ?? "important";
   const thread = params.get("thread");

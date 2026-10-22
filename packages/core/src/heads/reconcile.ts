@@ -7,6 +7,9 @@ import type { RunEventInput } from '../events/types';
 import type { MctsSearchStore } from '../mcts/search-store';
 import type { AgentInbox } from '../types/signals';
 import type { AbandonedHeadRun, HeadJournal } from './journal';
+import type { WorkspaceActor } from '../identity/workspace-actors';
+import { parseActorKey } from '../identity/actor-key';
+import { headStatusUnsettled, storedHeadReportStatus } from './types';
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import { diagnostics, settle, toKinuError, tolerate } from '../obs/index';
@@ -274,4 +277,47 @@ function recordAbandonedRuns(
   }).pipe(Effect.catch((failure) => Effect.sync(() => {
     diagnostics.failure('head.abandonment_record_failed', failure, { rootId: run.rootId });
   }))), { discard: true });
+}
+
+/**
+ * Retire run actors (a head's or a node's, origin `swarm`) whose work is provably finished. The journal is the only
+ * status authority: any reported status is terminal, unknown statuses are not, and an actor with no row is retired only
+ * when nothing live claims exploration work, because a search creates its actor before its node's row. An actor that
+ * holds a turn its recovery may re-drive is never retired here: that turn is its own. Each backend runs it at start of
+ * life, over its own actors and with its own retirement.
+ */
+export async function reclaimSettledRunActors(deps: {
+  readonly actors: readonly WorkspaceActor[];
+  /** Actors holding an unsettled turn claim (`ActorHost.resumable`). */
+  readonly resumable: ReadonlySet<string>;
+  readonly ledger: {
+    readHead(id: string): { readonly status: string } | null;
+    hasLiveExploration(): boolean;
+  };
+  retire(actor: WorkspaceActor): Promise<void>;
+}): Promise<{ readonly retired: number; readonly retained: number }> {
+  let retired = 0;
+  let retained = 0;
+  const live = deps.ledger.hasLiveExploration();
+
+  const settled = (actor: WorkspaceActor): boolean => {
+    if (actor.origin !== 'swarm' || deps.resumable.has(actor.actorId)) return false;
+    const head = deps.ledger.readHead(parseActorKey(actor.name).id);
+
+    if (head === null) return !live;
+
+    return !headStatusUnsettled(head.status) && storedHeadReportStatus(head.status) !== null;
+  };
+
+  for (const actor of deps.actors) {
+    if (!settled(actor)) {
+      retained += 1;
+      continue;
+    }
+
+    await deps.retire(actor);
+    retired += 1;
+  }
+
+  return { retired, retained };
 }

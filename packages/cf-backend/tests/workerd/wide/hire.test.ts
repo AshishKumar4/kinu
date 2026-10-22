@@ -17,7 +17,7 @@ const probe = (workspace: string) => env.HIRE_PROBE.get(env.HIRE_PROBE.idFromNam
 /** Admissions in a child's log; the root's own rows must not inflate a bound. */
 function childAdmissions(observed: HireObservation): readonly LogRow[] {
   return observed.log.filter(
-    (row) => row.variant === 'subordinate_task' && row.actorId !== observed.rootActorId,
+    (row) => row.variant === 'subagent_task' && row.actorId !== observed.rootActorId,
   );
 }
 
@@ -45,8 +45,8 @@ describe('hire', () => {
     expect(observed.transcript.join(' ')).toContain(CHILD_ANSWER);
   });
 
-  // Owner, 2026-08-18: a hired agent hires its own helpers, to depth 4.
-  it('a helper\'s own task hire answers that helper, and the relayed answer reaches the root', async () => {
+  // Owner, 2026-08-18: a hired agent hires its own subagents, to depth 4.
+  it('a subagent\'s own task hire answers that subagent, and the relayed answer reaches the root', async () => {
     const workspace = 'hire-nested';
 
     await probe(workspace).setup(workspace, 'hire-root', 'nest');
@@ -66,7 +66,7 @@ describe('hire', () => {
     expect(hired.every((row) => row.status === 'dismissed')).toBe(true);
   });
 
-  it('a helper\'s own task child that notes its progress still answers the helper, which answers only then', async () => {
+  it('a subagent\'s own task child that notes its progress still answers the subagent, which answers only then', async () => {
     const workspace = 'hire-nested-progress';
 
     await probe(workspace).setup(workspace, 'hire-root', 'nest-progress');
@@ -76,12 +76,12 @@ describe('hire', () => {
     const observed: HireObservation = await probe(workspace).observe(workspace);
     const toRoot = observed.reports.filter((report) => report.includes(NEST_RELAY));
 
-    // The helper's turn on the progress note is not its answer: its own hire still works.
+    // The subagent's turn on the progress note is not its answer: its own hire still works.
     expect(toRoot.every((report) => report.includes(CHILD_ANSWER))).toBe(true);
     expect(toRoot.length).toBeGreaterThan(0);
   });
 
-  it('a chain of helpers each hiring its own stops at the depth cap and still answers the root', async () => {
+  it('a chain of subagents each hiring its own stops at the depth cap and still answers the root', async () => {
     const workspace = 'hire-chain';
 
     await probe(workspace).setup(workspace, 'hire-root', 'chain');
@@ -92,11 +92,11 @@ describe('hire', () => {
     const hired = observed.actors.filter((row) => row.hired);
 
     expect(hired).toHaveLength(DELEGATION_MAX_DEPTH);
-    // Relayed up every level: the deepest helper's own answer reaches the root.
+    // Relayed up every level: the deepest subagent's own answer reaches the root.
     expect(observed.rootReports.join(' ')).toContain(CHAIN_BOTTOM);
   });
 
-  it('dismissing a helper retires the task agent it hired, mid-turn', async () => {
+  it('dismissing a subagent retires the task agent it hired, mid-turn', async () => {
     const workspace = 'hire-nested-dismiss';
 
     await probe(workspace).setup(workspace, 'hire-root', 'nest-park');
@@ -122,7 +122,7 @@ describe('hire', () => {
     const observed: HireObservation = await probe(workspace).observe(workspace);
     const answer = observed.reports.join(' ');
 
-    expect(observed.log).toContainEqual(expect.objectContaining({ actorId: observed.rootActorId, variant: 'subordinate_report', status: 'blocked' }));
+    expect(observed.log).toContainEqual(expect.objectContaining({ actorId: observed.rootActorId, variant: 'subagent_report', status: 'blocked' }));
     expect(answer).not.toContain(CHILD_ANSWER);
 
     const hired = observed.roster.filter((row) => row.lifetime === 'task');
@@ -153,7 +153,7 @@ describe('hire', () => {
 
     // The interrupted `agents` call was claimed before the abort, so recovery settles it as the lost-call
     // refusal (effect-claim.ts), which is a settled caller too.
-    expect(observed.log).toContainEqual(expect.objectContaining({ actorId: observed.rootActorId, variant: 'subordinate_report' }));
+    expect(observed.log).toContainEqual(expect.objectContaining({ actorId: observed.rootActorId, variant: 'subagent_report' }));
   });
 
   // warm-forge-4d6acc02, 2026-09-25: a delegated turn run inside the alarm slept on an 8-day Retry-After until the
@@ -249,12 +249,12 @@ describe('hire', () => {
       observed.reports.join(' '),
       observed.transcript.join(' '),
       observed.log
-        .filter((row) => row.variant === 'subordinate_report')
+        .filter((row) => row.variant === 'subagent_report')
         .map((row) => `${row.kind}:${row.bodyLength}`)
         .join(' '),
     ].join(' ');
 
-    expect(durable).toMatch(new RegExp(`${CHILD_ANSWER}|subordinate_report|completed`));
+    expect(durable).toMatch(new RegExp(`${CHILD_ANSWER}|subagent_report|completed`));
 
     const hired = observed.roster.filter((row) => row.lifetime === 'task');
 
@@ -284,7 +284,7 @@ describe('hire', () => {
     const admissions = childAdmissions(observed);
 
     expect(admissions, [
-      `subordinate_task rows: ${String(admissions.length)}`,
+      `subagent_task rows: ${String(admissions.length)}`,
       `body lengths: ${admissions.map((row) => String(row.bodyLength)).join(',')}`,
       `newest body head: ${admissions.at(-1)?.body.slice(0, 160) ?? ''}`,
     ].join(' | ')).toHaveLength(1);
@@ -294,7 +294,7 @@ describe('hire', () => {
     expect(childTurns).toHaveLength(1);
     expect(childTurns[0]?.runs).toBe(1);
   });
-  it('a message to a hired durable subordinate produces one turn and no unbounded admissions', async () => {
+  it('a message to a hired durable subagent produces one turn and no unbounded admissions', async () => {
     const app = env.HIRE_APP;
 
     const created = await app.fetch('http://localhost/api/user/workspaces', {
@@ -318,7 +318,7 @@ describe('hire', () => {
       await client.rpc('setModel', ['openai-compat/hire-root-durable'], v.object({ spec: v.string() }));
       client.send('Hire a durable auditor, then send it one message.');
       await client.completed();
-      const roster = await client.rpc('listSubordinates', [], HireRosterSchema);
+      const roster = await client.rpc('listSubagents', [], HireRosterSchema);
       const observed = await probe(workspace).observe(workspace);
 
       expect(roster.filter((row) => row.lifetime === 'durable')).toHaveLength(1);
@@ -364,7 +364,7 @@ describe('hire', () => {
       await root.rpc('setModel', ['openai-compat/hire-root-durable'], v.object({ spec: v.string() }));
       root.send('Hire a durable auditor, then send it one message.');
       await root.completed();
-      const [auditor] = (await root.rpc('listSubordinates', [], HireRosterSchema)).filter((row) => row.lifetime === 'durable');
+      const [auditor] = (await root.rpc('listSubagents', [], HireRosterSchema)).filter((row) => row.lifetime === 'durable');
       const name = auditor?.name ?? '';
       const pane = await hireSocket(app, `${workspacePath}/${hostedActorSocketPath(name)}`, CHILD_ANSWER);
 

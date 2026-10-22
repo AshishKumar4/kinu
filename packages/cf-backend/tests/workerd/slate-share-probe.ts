@@ -46,7 +46,7 @@ const TRIAGE = {
     ['memory', 'recall'], ['memory', 'remember'], ['agent', 'send'], ['slates', 'triage-digest', 'summary'],
   ],
   'triage-digest': [['fs', 'text'], ['slates', 'issues', 'refresh']],
-  // What a slate never reaches: control of its calling agent, or making tools; and helpers, the owner's own slate's alone.
+  // What a slate never reaches: control of its calling agent, or making tools; and subagents, the owner's own slate's alone.
   overreach: [['agents', 'hire'], ['agent', 'hire'], ['workspace', 'createTool']],
 } as const;
 
@@ -510,7 +510,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   /** One operation as `as` asks it: the owner at the root, the owner in Plan mode, or a hired agent. */
   async operationAs(as: 'root' | 'plan' | 'hire', input: JsonValue): Promise<SlateCallResult> {
     const callers: Record<typeof as, SlateCaller> = {
-      root: ROOT_SLATE_CALLER, plan: { ...ROOT_SLATE_CALLER, workMode: 'plan' }, hire: { ...ROOT_SLATE_CALLER, path: [{ name: 'helper' }] },
+      root: ROOT_SLATE_CALLER, plan: { ...ROOT_SLATE_CALLER, workMode: 'plan' }, hire: { ...ROOT_SLATE_CALLER, path: [{ name: 'subagent' }] },
     };
 
     return this.host.controller.operation(callers[as], v.parse(SlateOperationSchema, input));

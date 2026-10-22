@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, readlinkSync, rmSync, symlinkSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { cloudflare } from "@cloudflare/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
@@ -19,7 +19,9 @@ import { ASSETS_HOSTS } from './src/assets-hosts';
 import { DEV_PREVIEW_SUFFIX, devPreviewPort, devPreviewTlsDir, devPreviewZone } from './vite-preview-zone';
 
 /** Nimbus loads its runtime artifacts from `env.ASSETS` `/_assets/*`; symlink the pinned package's tree
- *  into `public/` so dev and build carry it and a version bump re-points it. */
+ *  into `public/` so dev and build carry it and a version bump re-points it. The link is relative, so a checkout
+ *  moved (`git worktree move`) still reaches its own install; an absolute one dangled, and the gallery build, which
+ *  copies `public/` without this config, failed on it. */
 const nimbusAssets = join(
   dirname(createRequire(import.meta.url).resolve("@nimbus-sh/worker/package.json")),
   "public/_assets",
@@ -27,11 +29,13 @@ const nimbusAssets = join(
 
 const staged = resolve(__dirname, "public/_assets");
 
+const stagedTarget = relative(dirname(staged), nimbusAssets);
+
 const stagedLink = lstatSync(staged, { throwIfNoEntry: false });
 
-if (!stagedLink?.isSymbolicLink() || readlinkSync(staged) !== nimbusAssets) {
+if (!stagedLink?.isSymbolicLink() || readlinkSync(staged) !== stagedTarget) {
   rmSync(staged, { recursive: true, force: true });
-  symlinkSync(nimbusAssets, staged, "dir");
+  symlinkSync(stagedTarget, staged, "dir");
 }
 
 if (!existsSync(staged)) {
@@ -156,6 +160,10 @@ export default defineConfig(({ command }) => ({
   environments: {
     client: {
       build: {
+        // A font is always a file of this origin, never a `data:` URL: under Vite's 4 KB default KaTeX_Size3-Regular.woff2
+        // (3.6 KB) was inlined into the CSS every page shares, and the public pages' CSP, which allows fonts from `'self'`
+        // alone, refused it on every landing load (rc29 walkthrough F3).
+        assetsInlineLimit: (file: string) => (/\.(?:woff2?|ttf|otf|eot)$/u.test(file) ? false : undefined),
         rolldownOptions: {
           input: {
             app: resolve(__dirname, "index.html"),

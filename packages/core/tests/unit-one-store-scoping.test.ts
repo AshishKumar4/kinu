@@ -21,13 +21,14 @@ import { initCompletedTurnTable, createCompletedTurnStore } from '../src/evoluti
 import { initRefinementTables, createRefinementStore } from '../src/evolution/refinement';
 import { initActorStateSchema } from '../src/state/workspace-schema';
 import {
-  initEffectTombstoneTable, effectAlreadyDone, recordEffectDone,
+  initEffectTombstoneTable, effectAlreadyDone, preparedOutput, prepareOutput, recordEffectDone, retirePreparedOutput,
 } from '../src/identity/effect-tombstones';
 import { initTerminalEffectTable, TerminalEffectLedger } from '../src/orchestrator/terminal-effects';
 import {
   initToolEffectClaimTable, claimToolEffect, settleToolEffect,
 } from '../src/tools/effect-claim';
-import { initDeferredApprovalsTable, DeferredApprovalStore } from '../src/safety/deferred-approval';
+import { DeferredApprovalStore } from '../src/safety/deferred-approval';
+import { initOwnerRequestsTable } from '../src/safety/owner-requests';
 import {
   initInstructionApprovalsTable, InstructionApprovalStore, instructionDigest,
 } from '../src/safety/instruction-trust';
@@ -57,8 +58,8 @@ import {
 } from '../src/experience/imports';
 import { MissionBudgetLedger, listMissionSpend } from '../src/mission-budget';
 import { initWorkspaceActorTable } from '../src/identity/workspace-actors';
-import { SubordinateRosterStore } from '../src/subordinates/roster';
-import { readSubordinateLiveStatus } from '../src/subordinates/support';
+import { SubagentRosterStore } from '../src/subagents/roster';
+import { readSubagentLiveStatus } from '../src/subagents/support';
 import { initEventsHubTables } from '../src/events/hub/schema';
 import { EventLog } from '../src/events/hub/log';
 import { ReplyChannelStore } from '../src/events/hub/reply-channel';
@@ -192,25 +193,23 @@ describe('two actors, one database: lessons', () => {
   });
 });
 
-describe('two actors, one database: pattern_extractions', () => {
-  test('one effect key holds a different held answer for each actor', () => {
+describe('two actors, one database: prepared_outputs', () => {
+  test('one effect key holds a different held answer for each actor, and for each scope', () => {
     const w = world();
-    initLessonTables(w.execRaw);
+    initEffectTombstoneTable(w.execRaw);
+    const pattern = { scope: 'turn_review_step', key: 'turn-1:pattern' };
+    const sleep = { scope: 'sleep_time', key: 'turn-1:pattern' };
 
-    // The store lives in the engine; the row identity is what is scoped.
-    for (const [actor, answer] of [[w.a, 'from-a'], [w.b, 'from-b']] as const) {
-      void w.sql`INSERT INTO pattern_extractions (actor_id, effect_key, answer)
-        VALUES (${actor.actorId}, ${'turn-1:pattern'}, ${answer})`;
-    }
+    prepareOutput(w.sql, w.a, pattern, 'from-a');
+    prepareOutput(w.sql, w.a, pattern, 'again from-a');
+    prepareOutput(w.sql, w.b, pattern, 'from-b');
+    prepareOutput(w.sql, w.a, sleep, 'slept on by a');
 
-    expect(w.count('pattern_extractions')).toBe(2);
-
-    const read = (actor: ActorHandle): string | undefined => w.sql<{ answer: string }>`
-      SELECT answer FROM pattern_extractions
-      WHERE actor_id = ${actor.actorId} AND effect_key = ${'turn-1:pattern'}`[0]?.answer;
-
-    expect(read(w.a)).toBe('from-a');
-    expect(read(w.b)).toBe('from-b');
+    expect(w.count('prepared_outputs')).toBe(3);
+    expect([preparedOutput(w.sql, w.a, pattern), preparedOutput(w.sql, w.b, pattern), preparedOutput(w.sql, w.a, sleep)])
+      .toEqual(['from-a', 'from-b', 'slept on by a']);
+    retirePreparedOutput(w.sql, w.a, pattern);
+    expect([preparedOutput(w.sql, w.a, pattern), preparedOutput(w.sql, w.b, pattern)]).toEqual([undefined, 'from-b']);
     w.close();
   });
 });
@@ -323,8 +322,8 @@ describe('two actors, one database: fibers, evolution_events, executor_output, a
       WHERE actor_id = ${w.a.actorId} AND id = ${'out-1'}`[0]?.stdout).toBe('a');
 
     // The real reader over `activity_log`.
-    expect(readSubordinateLiveStatus(w.exec, w.a).recentSteps.map((s) => s.summary)).toEqual(['a']);
-    expect(readSubordinateLiveStatus(w.exec, w.b).recentSteps.map((s) => s.summary)).toEqual(['b']);
+    expect(readSubagentLiveStatus(w.exec, w.a).recentSteps.map((s) => s.summary)).toEqual(['a']);
+    expect(readSubagentLiveStatus(w.exec, w.b).recentSteps.map((s) => s.summary)).toEqual(['b']);
     w.close();
   });
 });
@@ -406,10 +405,10 @@ describe('two actors, one database: tool_effect_claims', () => {
   });
 });
 
-describe('two actors, one database: deferred_approvals', () => {
+describe('two actors, one database: owner_requests', () => {
   test('the owner\'s decision for one actor does not answer for the other', () => {
     const w = world();
-    initDeferredApprovalsTable(w.execRaw);
+    initOwnerRequestsTable(w.execRaw);
     const a = new DeferredApprovalStore(w.sql, w.a);
     const b = new DeferredApprovalStore(w.sql, w.b);
 
@@ -420,7 +419,7 @@ describe('two actors, one database: deferred_approvals', () => {
 
     a.create(action, []);
     b.create(action, []);
-    expect(w.count('deferred_approvals')).toBe(2);
+    expect(w.count('owner_requests')).toBe(2);
 
     expect(a.decide('appr-1', 'approved', 5)?.status).toBe('approved');
     expect(a.standing({ command: action.command, executor: action.executor, context: {} }, 6)?.status).toBe('approved');
@@ -675,13 +674,13 @@ describe('two actors, one database: mission_budget', () => {
   });
 });
 
-describe('two actors, one database: actor_subordinates', () => {
+describe('two actors, one database: actor_subagents', () => {
   test('two parents each hire a "reviewer" and neither can dismiss the other\'s', () => {
     const w = world();
     // A roster row reads its hire's origin from the actor directory, so the table exists.
     initWorkspaceActorTable(w.execRaw);
-    const a = new SubordinateRosterStore(w.exec, w.a);
-    const b = new SubordinateRosterStore(w.exec, w.b);
+    const a = new SubagentRosterStore(w.exec, w.a);
+    const b = new SubagentRosterStore(w.exec, w.b);
     a.ensureSchema();
     b.ensureSchema();
 
@@ -695,7 +694,7 @@ describe('two actors, one database: actor_subordinates', () => {
 
     a.create(entry);
     b.create(entry);
-    expect(w.count('actor_subordinates')).toBe(2);
+    expect(w.count('actor_subagents')).toBe(2);
 
     a.assign('reviewer', 'review the diff');
     expect(a.get('reviewer')?.status).toBe('working');
@@ -705,7 +704,7 @@ describe('two actors, one database: actor_subordinates', () => {
     expect(a.list()).toHaveLength(0);
     expect(b.list().map((r) => r.name)).toEqual(['reviewer']);
     a.remove('reviewer');
-    expect(w.count('actor_subordinates')).toBe(1);
+    expect(w.count('actor_subagents')).toBe(1);
     w.close();
   });
 });
@@ -840,7 +839,7 @@ describe('a handle whose validation throws is refused before the statement runs'
     initCompletedTurnTable(w.execRaw);
     initEffectTombstoneTable(w.execRaw);
     initToolEffectClaimTable(w.execRaw);
-    initDeferredApprovalsTable(w.execRaw);
+    initOwnerRequestsTable(w.execRaw);
     initInstructionApprovalsTable(w.execRaw);
     initPlanReviewTable(w.execRaw);
     initRefinementTables(w.execRaw);
@@ -874,7 +873,7 @@ describe('a handle whose validation throws is refused before the statement runs'
       ['tool_effect_claims', () => claimToolEffect(w.sql, w.revocable, {
         turnId: 't', runId: 'r', callId: 'c', digest: 'd',
       })],
-      ['deferred_approvals', () => approvals.create({
+      ['owner_requests', () => approvals.create({
         id: 'appr-1', command: 'c', executor: 'e', context: {}, reason: 'r', requestedAt: 1,
       }, [])],
       ['instruction_approvals', () => new InstructionApprovalStore(

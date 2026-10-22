@@ -1,6 +1,7 @@
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import { attempt, attemptSync, DevboxError } from './errors';
+import { containerExec } from './processes';
 
 const Reply = v.variant('ok', [
   v.object({ ok: v.literal(true), sha256: v.string() }),
@@ -53,7 +54,7 @@ export function writeFileIfDigest(
       if (!OPERATION.test(named)) return yield* Effect.fail(new DevboxError('file', `a digest write is named by a UUID, not ${JSON.stringify(named)}`));
     }
 
-    const writer = yield* attempt('io', () => container.exec(['python3', '-c', WRITE_IF_DIGEST, path, journal, expected ?? '', operation, ...settled], { stdin: 'pipe' }));
+    const writer = yield* attempt('io', () => containerExec(container, ['python3', '-c', WRITE_IF_DIGEST, path, journal, expected ?? '', operation, ...settled], { stdin: 'pipe' }));
     const stdin = writer.stdin;
 
     if (stdin === null) return yield* Effect.fail(new DevboxError('io', 'the digest write took no stdin'));

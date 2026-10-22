@@ -11,7 +11,7 @@ import {
   type JsonValue,
 } from "@kinu.run/core";
 import * as v from "valibot";
-import { chatCompletionBody, chatCompletionStream, present, runToExit, type ChatUsage } from "@kinu.run/test-utils";
+import { chatCompletionBody, chatCompletionStream, chatResponse, present, runToExit, type ChatUsage } from "@kinu.run/test-utils";
 
 /** Output to assertable text, stripped of terminal decoration. */
 function toText(output: string): string {
@@ -547,9 +547,7 @@ function startMockLlm(answer: string, usage: ChatUsage | null = { prompt_tokens:
 
       const reply = { model: "mock-model", text: answer, ...(usage !== null && { usage }) };
 
-      return body.stream
-        ? new Response(chatCompletionStream(reply), { headers: { "content-type": "text/event-stream" } })
-        : new Response(chatCompletionBody(reply), { headers: { "content-type": "application/json" } });
+      return chatResponse(reply, body.stream === true);
     },
   });
 

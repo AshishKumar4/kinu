@@ -363,7 +363,7 @@ describe('the dynamic block carries every genuinely-live plane', () => {
     const text = present(renderDynamicContextBlock({
       jobs: roster([job(1)]),
       delegates: roster([
-        { kind: 'subordinate', name: 'ana', phase: 'working', task: 'survey the prior art' },
+        { kind: 'subagent', name: 'ana', phase: 'working', task: 'survey the prior art' },
         { kind: 'swarm node', name: 'run-7', phase: '2 of 3 nodes running', task: null },
       ]),
       approvals: roster([{ id: 'cons-1', kind: 'device consent', detail: 'device: git push origin main' }]),
@@ -371,7 +371,7 @@ describe('the dynamic block carries every genuinely-live plane', () => {
 
     expect(isDynamicBlock(text)).toBe(true);
     expect(text).toContain('- job-1 (think_heads): explore option 1');
-    expect(text).toContain('- ana (subordinate), working: survey the prior art');
+    expect(text).toContain('- ana (subagent), working: survey the prior art');
     expect(text).toContain('- run-7 (swarm node), 2 of 3 nodes running');
     expect(text).toContain('- device consent: device: git push origin main');
   });
@@ -922,13 +922,13 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
           factsBlock: '- a = 1\n- b = 2\n- c = 3', approvals: roster([consent]), recoveries: ['`uv pip install` ran clean'],
           missingCapabilities: [{ source: 'mcp: github', reason: 'not connected' }],
           jobs: roster([{ id: 'job-1', kind: 'shell', label: 'build' }]),
-          delegates: roster([{ kind: 'subordinate', name: 'ana', phase: 'working', task: 'survey' }]),
+          delegates: roster([{ kind: 'subagent', name: 'ana', phase: 'working', task: 'survey' }]),
         },
         {
           factsBlock: '- a = 1\n- b = 9\n- c = 3', approvals: roster([consent, { id: 'c-2', kind: 'shell', detail: 'rm -rf build' }]),
           missingCapabilities: [{ source: 'mcp: github', reason: 'token expired' }],
           jobs: roster([{ id: 'job-1', kind: 'shell', label: 'build and test' }, { id: 'job-2', kind: 'think_heads', label: null }]),
-          delegates: roster([{ kind: 'subordinate', name: 'ana', phase: 'done', task: 'survey' }]),
+          delegates: roster([{ kind: 'subagent', name: 'ana', phase: 'done', task: 'survey' }]),
         },
       ]);
     });
@@ -974,7 +974,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
         factsBlock: '- k = v',
         tasks: roster([task(1)]),
         jobs: roster([{ id: 'job-1', kind: 'shell', label: 'build' }]),
-        delegates: roster([{ kind: 'subordinate', name: 'ana', phase: 'working', task: 'survey' }]),
+        delegates: roster([{ kind: 'subagent', name: 'ana', phase: 'working', task: 'survey' }]),
         approvals: roster([{ id: 'cons-1', kind: 'device consent', detail: 'git push' }]),
         recoveries: ['`pip install` failed until `uv pip install` ran clean'],
         missingCapabilities: [{ source: 'mcp: github', reason: 'not connected' }],

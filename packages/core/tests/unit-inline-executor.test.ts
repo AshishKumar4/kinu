@@ -20,12 +20,16 @@ import { TurnContextBudget } from '../src/context-budget';
 import { present, toolExecute } from '@kinu.run/test-utils';
 import type { JsonValue, JsonObject } from '../src/utils/json';
 import type { CraftedTool } from '../src/types/craft';
+import type { ShellExecOptions } from '../src/types/primitives';
 import { callCodemodeMember } from '../src/tools/sandbox-contract';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { cloudPlanes } from '../src/vfs/resolve';
 import { namespaceDeclaration, nestedMembers } from '../src/tools/operation-surfaces';
 import { describeProgramSource, programDeclarations } from '../src/tools/registry';
 import { KINU_NODE_MODULE_SOURCE } from '../src/execution/codemode-node-shim';
+import { standardMounts, withMountTable } from '../src/vfs/mounts';
+import { hostedToolFiles } from '../src/execution/approval';
+import { createMemoryVfs, seedFiles } from '@kinu.run/test-utils/vfs';
 
 /** A tool nothing has offered yet: chosen once in two offers, rated 3 of 5, by the smoothing. */
 const UNMEASURED = craftPreference({ offered: 0, chosen: 0, rated: 0, rating_sum: 0 });
@@ -62,6 +66,47 @@ function buildExec(rt: ReturnType<typeof createTestRuntime>['rt'], slate?: Inlin
 
   return withFileTools(rt, createInlineExecutor(deps));
 }
+
+// Owner decision, 2026-10-20 ("Run where the files live"). rc22: a program's seven `execFile('npx', ['tsc', …],
+// { cwd: '/computer/workspace/…' })` ran tsc in the workspace over the mounted files, 30 s each, against 13-17 s on the
+// computer itself.
+describe("a program's child_process runs on the machine its cwd is on", () => {
+  test('a cwd under /computer runs on the computer in its own terms; any other, in the workspace', async () => {
+    const { rt } = createTestRuntime();
+    const ran: (readonly [string, string, string | undefined])[] = [];
+
+    const answer = (machine: string) => async (command: string, options?: ShellExecOptions) => {
+      ran.push([machine, command, options?.cwd]);
+
+      return { exitCode: 0, stdout: `${machine}\n`, stderr: '' };
+    };
+
+    const computerFiles = createMemoryVfs().vfs;
+    await seedFiles(computerFiles, { '/workspace/app/package.json': '{}' });
+    await writeText(rt.storage.vfs, 'notes/n.md', 'n');
+    const mounted = withMountTable(rt.storage.vfs, standardMounts((name) => (name === 'computer' ? { files: computerFiles, isAvailable: () => true } : undefined)));
+
+    // As the hosted runtime hands it to the file operations: gated (staging rc29, 2026-10-21: the gate passed `resolve`
+    // on and not `owner`, so a program's cwd under /computer ran in the workspace).
+    const plane = hostedToolFiles(mounted, cloudPlanes(WORKSPACE_ROOT), { mode: () => 'strict' });
+
+    const exec = createInlineExecutor({
+      filesOwner: 'agent', vfs: rt.storage.vfs, craftStore: rt.craftStore, sql: rt.storage.sql, shell: { exec: answer('workspace') },
+    });
+
+    const tools = withFileTools(rt, exec, { vfs: plane }).tools;
+    const workspace = nestedMembers(Object.fromEntries(Object.entries(tools).map(([name, entry]) => [name, entry.execute])));
+    const kinu: unknown = await import(`data:text/javascript;base64,${Buffer.from(KINU_NODE_MODULE_SOURCE).toString('base64')}`);
+
+    const run = new Function('__kinu', 'workspace', 'machines', 'cwd', `const cp = __kinu.createRequire({ workspace, machines, builtins: {}, cwd })("child_process");
+      return Promise.all([cp.execFile("npx", ["tsc", "--noEmit"], { cwd: "/computer/workspace/app" }), cp.execFile("ls", [], { cwd: "notes" })]);`);
+
+    expect(await run(kinu, workspace, { computer: { exec: answer('computer') }, device: null }, WORKSPACE_ROOT)).toEqual([
+      { stdout: 'computer\n', stderr: '' }, { stdout: 'workspace\n', stderr: '' },
+    ]);
+    expect(ran).toEqual([['computer', "'npx' 'tsc' '--noEmit'", '/workspace/app'], ['workspace', "'ls'", `${WORKSPACE_ROOT}/notes`]]);
+  });
+});
 
 describe('workspace provider (InlineExecutor)', () => {
   test('a retired member called from a program names workspace.fs.text(path)', async () => {

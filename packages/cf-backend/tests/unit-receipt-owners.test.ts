@@ -80,8 +80,8 @@ test("an agent's settled run leaves the workspace no receipt of the tools it ran
 
   // An agent the owner adds inherits the workspace's mission, which the owner's soul states.
   await workspace.agent.setSoul('# Kinu\n\n## Mission\n\nKeep the ledger.\n');
-  const { subordinate } = await workspace.agent.createSubordinateAgent();
-  const actorId = subordinate.actorId ?? '';
+  const { subagent } = await workspace.agent.createSubagentAgent();
+  const actorId = subagent.actorId ?? '';
 
   await asPane([actorConnectionTag(actorId)], () => workspace.agent.send(TASK, crypto.randomUUID()));
   await driveUntil(workspace, 'the agent never answered', () => during.length > 0);

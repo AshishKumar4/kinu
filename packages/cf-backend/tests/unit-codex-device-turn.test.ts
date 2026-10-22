@@ -5,7 +5,7 @@ import * as v from 'valibot';
 import { CODEX_CRED_KEY, asFetchFunction, requestUrl, type JsonValue, DEVICE_FRAMES, DEVICE_METHOD } from '@kinu.run/core';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type DeviceFrame, type TestUserDO } from './helpers/user-do';
 import {
-  agentSql, catalogTurn, driveUntil, hostedSubordinateHarness, makeEnv, orchestratorHarness, wakeForDelegatedTask, mainDatabase } from './helpers/actor-harness';
+  agentSql, catalogTurn, driveUntil, hostedSubagentHarness, makeEnv, orchestratorHarness, wakeForDelegatedTask, mainDatabase } from './helpers/actor-harness';
 
 const OWNER_USER_ID = 'fedcba9876543210fedcba9876543210';
 
@@ -134,7 +134,7 @@ test('the Activity tab names the machine of the newest Codex step by its current
 test("a hired agent's Codex call from its own isolate goes out through the owner's machine", async () => {
   const { user, actor, relayed, connectMachine } = await codexWorkspace();
   await connectMachine('studio');
-  const hire = await hostedSubordinateHarness(actor, { name: 'coder', displayName: 'Coder', nameOrigin: 'user', mission: 'code' });
+  const hire = await hostedSubagentHarness(actor, { name: 'coder', displayName: 'Coder', nameOrigin: 'user', mission: 'code' });
   const hireId = hire.actor.handle.actorId;
 
   const ended = (): string[] => agentSql(actor, hireId)<{ payload: string }>`

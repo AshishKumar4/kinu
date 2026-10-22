@@ -81,9 +81,10 @@ const SCHEMA_CLASSES = `${root}scripts/schema-classes.json`;
  *  (core state/schema-repair.ts). Kept, never pruned: an object a release never opened may still hold one. */
 const SCHEMA_RETIRED = `${root}scripts/schema-retired.json`;
 
-const SchemaClassesSchema = v.object({
+const SchemaClassesSchema = v.strictObject({
   account: v.array(v.string()), workspace: v.array(v.string()), agent: v.array(v.string()), local: v.array(v.string()),
   control: v.array(v.string()), mailname: v.array(v.string()), mailbox: v.array(v.string()),
+  monitor: v.array(v.string()), deploy: v.array(v.string()),
 });
 
 /** A class's stamp: seven hex digits of the digest of the genesis of its tables, which SQLite's `user_version`
@@ -494,6 +495,23 @@ function violationsOf(kind: DdlKind, entries: readonly TableDdl[], lock: Genesis
   return violations;
 }
 
+/** Each table and view the corpus declares that no class of scripts/schema-classes.json makes: no object's reset reads
+ *  its shape, so a change to it would reach no database (core state/schema-repair.ts). */
+export function ownerViolations(entries: readonly TableDdl[], classes: Readonly<Record<string, readonly string[]>>): Violation[] {
+  const owned = new Set(Object.values(classes).flat());
+
+  return entries.filter(({ table }) => !owned.has(table)).map(({ table, file }) => ({
+    key: lockKey(table, file),
+    detail: finding({
+      invariant: 'every table and view belongs to the class of each database that makes it',
+      at: `${file} (${table})`,
+      found: 'no class in scripts/schema-classes.json lists it',
+      silently: 'a release that changes its shape leaves every database holding it in the old one, and its writes fail there',
+      fix: 'list it under the class of every object that makes it, and have that class\'s repair make it (its init, or `later` for a table made on first use)',
+    }),
+  }));
+}
+
 /**
  * The genesis to record for a table the lock does not know yet: today's DDL,
  * because a table that has never shipped has no storage older than its DDL.
@@ -624,7 +642,10 @@ export function survey(lock: GenesisLock = readGenesisLock()): Survey {
     views,
     store,
     lock,
-    violations: [...driftViolations([...tables, store], lock), ...viewDriftViolations(views, lock)],
+    violations: [
+      ...driftViolations([...tables, store], lock), ...viewDriftViolations(views, lock),
+      ...ownerViolations([...tables, ...views], v.parse(v.pipe(v.string(), v.parseJson(), SchemaClassesSchema), readFileSync(SCHEMA_CLASSES, 'utf8'))),
+    ],
     retired: Object.keys(lock).filter((key) => !present.has(key)).sort(),
   };
 }

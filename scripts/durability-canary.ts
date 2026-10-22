@@ -31,7 +31,7 @@ const { values: options } = parseArgs({
   options: {
     steps: { type: 'string', default: '540' },
     sleep: { type: 'string', default: '20' },
-    'helper-steps': { type: 'string', default: '540' },
+    'subagent-steps': { type: 'string', default: '540' },
     jobs: { type: 'string', default: '3' },
     'job-sleep': { type: 'string', default: '900' },
     'tail-minutes': { type: 'string', default: '60' },
@@ -42,7 +42,7 @@ const { values: options } = parseArgs({
   },
 });
 
-type CountOption = 'steps' | 'sleep' | 'helper-steps' | 'jobs' | 'job-sleep' | 'tail-minutes' | 'margin-minutes' | 'max-recheck-minutes';
+type CountOption = 'steps' | 'sleep' | 'subagent-steps' | 'jobs' | 'job-sleep' | 'tail-minutes' | 'margin-minutes' | 'max-recheck-minutes';
 
 function numberFlag(name: CountOption): number {
   const value = Number(options[name]);
@@ -54,13 +54,13 @@ function numberFlag(name: CountOption): number {
 
 const load: CanaryLoad = {
   steps: numberFlag('steps'), sleepSeconds: numberFlag('sleep'),
-  helperSteps: numberFlag('helper-steps'), jobs: numberFlag('jobs'), jobSleepSeconds: numberFlag('job-sleep'),
+  subagentSteps: numberFlag('subagent-steps'), jobs: numberFlag('jobs'), jobSleepSeconds: numberFlag('job-sleep'),
 };
 
 if (Object.values(load).some((value) => !Number.isSafeInteger(value))) throw new Error('canary load knobs must be integers (the deployed script parses integer loads)');
 
-if (load.steps < 1 || load.helperSteps < 1 || load.sleepSeconds < 1 || load.sleepSeconds >= 30 || load.jobSleepSeconds <= 30) {
-  throw new Error('root/helper steps must be positive, inline sleep must be 1..29 s, and job sleep must be past 30 s');
+if (load.steps < 1 || load.subagentSteps < 1 || load.sleepSeconds < 1 || load.sleepSeconds >= 30 || load.jobSleepSeconds <= 30) {
+  throw new Error('root/subagent steps must be positive, inline sleep must be 1..29 s, and job sleep must be past 30 s');
 }
 
 const tailMs = numberFlag('tail-minutes') * MINUTE;
@@ -84,7 +84,7 @@ const out = options.out ?? `/mnt/local/kinu/logs/bg-canary-${iso(Date.now()).rep
 
 const detachMs = BACKGROUND_POLICY.interactive.detachAfterMs;
 
-const swarmMs = load.helperSteps * load.sleepSeconds * 1000;
+const swarmMs = load.subagentSteps * load.sleepSeconds * 1000;
 
 const swarmForegroundMs = Math.min(swarmMs, detachMs);
 
@@ -92,15 +92,15 @@ const prefixMs = swarmForegroundMs + load.jobs * detachMs;
 
 const rootMs = prefixMs + load.steps * load.sleepSeconds * 1000;
 
-const helperMs = swarmForegroundMs + swarmMs;
+const subagentMs = swarmForegroundMs + swarmMs;
 
 const jobsMs = load.jobs === 0 ? 0 : swarmForegroundMs + (load.jobs - 1) * detachMs + load.jobSleepSeconds * 1000;
 
-const plannedMs = Math.max(rootMs, helperMs, jobsMs, swarmMs);
+const plannedMs = Math.max(rootMs, subagentMs, jobsMs, swarmMs);
 
 const plan = {
   model: SCRIPTED_MODEL_SPEC, worker, load, ask: canaryAsk(load),
-  timelineMinutes: { swarmNodesParallel: swarmMs / MINUTE, root: rootMs / MINUTE, helper: helperMs / MINUTE,
+  timelineMinutes: { swarmNodesParallel: swarmMs / MINUTE, root: rootMs / MINUTE, subagent: subagentMs / MINUTE,
     lastDetachedShellJob: jobsMs / MINUTE, work: plannedMs / MINUTE, inspectionMargin: marginMs / MINUTE,
     firstWorkspaceTouch: (plannedMs + marginMs) / MINUTE, recheckEvery: RECHECK / MINUTE,
     maxRecheckAfterFirstTouch: recheckCapMs / MINUTE, idleTail: tailMs / MINUTE,
@@ -108,7 +108,7 @@ const plan = {
     earliestReport: (plannedMs + marginMs + tailMs + TELEMETRY_LAG + LANDED_HOLD_MS) / MINUTE },
   noWorkspaceTraffic: 'Disconnect after the first tool output; inspect only at the planned work end plus margin, then at most every 15 minutes up to the cap. Disconnect again for the entire idle tail.',
   accountLeaseHeartbeat: 'Every 60 s, POST /api/user/workspaces/:name/touch updates UserDO.last_visited only; no workspace RPC. Idle object telemetry includes any invocation it might unexpectedly cause.',
-  assumptions: ['The ideate swarm has five parallel nodes, each using helper steps.',
+  assumptions: ['The ideate swarm has five parallel nodes, each using subagent steps.',
     'The swarm and detached shell calls return after the 30 s interactive foreground window; hire returns immediately.',
     'Provider/tool/queue overhead is not included in the sleep arithmetic; the inspection margin and capped rechecks disclose overruns.'],
   out,
@@ -200,7 +200,7 @@ try {
   } else {
     findings.push({ name: 'work.not-finished-at-inspection-cap', kind: 'defect', cause: 'Work remained unfinished at the configured observation cap; no idle-rest claim is made.',
       evidence: [{ at: iso(lastTouch), event: 'ledger inspection', count: touches.length,
-        detail: `root DONE ${String(measured.root.done.count)}, helper DONE ${String(measured.helper.helpers.reduce((sum, helper) => sum + helper.done.count, 0))}, jobs completed ${String(measured.jobs.completed)}/${String(load.jobs)}` }] });
+        detail: `root DONE ${String(measured.root.done.count)}, subagent DONE ${String(measured.subagent.subagents.reduce((sum, subagent) => sum + subagent.done.count, 0))}, jobs completed ${String(measured.jobs.completed)}/${String(load.jobs)}` }] });
   }
 
   await waitUntil((idle?.to ?? lastTouch) + TELEMETRY_LAG, 'telemetry landing');
@@ -232,7 +232,7 @@ if (session !== null) {
 
     const read = () => measureCanaryTelemetry({ worker, workspace: session?.workspace ?? '',
       observed: { from: createdAt, to: observedTo }, active: { from: activeFrom, to: activeTo }, idle, touches, activations: ring,
-      helperActors: measured?.helper.helpers.flatMap((helper) => helper.actor === null ? [] : [helper.actor]) ?? [] });
+      subagentActors: measured?.subagent.subagents.flatMap((subagent) => subagent.actor === null ? [] : [subagent.actor]) ?? [] });
 
     // Rows land late, so the read is repeated until what it counts holds still, as every verdict reader does.
     const settled = await settledRead({
@@ -254,7 +254,7 @@ if (session !== null) {
       const disruptionsAt = telemetry.active.rows.flatMap((row) => row.at === null ? [] : [Date.parse(row.at)]);
 
       const owners = [{ owner: 'root', markers: measured.root.markers },
-        ...measured.helper.helpers.map((helper) => ({ owner: `helper.${helper.name}`, markers: helper.markers }))];
+        ...measured.subagent.subagents.map((subagent) => ({ owner: `subagent.${subagent.name}`, markers: subagent.markers }))];
 
       const split = owners.reduce<CanaryFinding[]>((kept, { owner, markers }) => withInterruptedSteps(kept, owner, markers, disruptionsAt), integrityFindings);
       const others = findings.filter((finding) => !integrityFindings.includes(finding));
@@ -280,7 +280,7 @@ const beforeFirstTouch = measured?.finishedAt == null || firstTouch === null ? n
 if (measured?.ended === true && beforeFirstTouch !== true) findings.push({ name: 'work.autonomy-not-proven', kind: 'defect',
   cause: beforeFirstTouch === false ? 'Work finished only after the first driver inspection; the inspection may have woken the object.'
     : 'Work ended, but at least one completion timestamp was unavailable, so finishing before the first touch cannot be proven.',
-  evidence: [{ at: measured.finishedAt === null ? null : iso(measured.finishedAt), event: 'run_end/helper DONE/jobs settledAt', count: 1,
+  evidence: [{ at: measured.finishedAt === null ? null : iso(measured.finishedAt), event: 'run_end/subagent DONE/jobs settledAt', count: 1,
     detail: `first touch ${firstTouch === null ? 'none' : iso(firstTouch)}` }] });
 
 const intact = measured !== null && integrityFindings.length === 0;

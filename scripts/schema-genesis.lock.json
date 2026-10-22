@@ -1,4 +1,10 @@
 {
+  "account_epochs@packages/core/src/state/user-schema.ts": [
+    "id INTEGER PRIMARY KEY CHECK (id = 1)",
+    "auth_generation INTEGER",
+    "credentials_revision INTEGER",
+    "credential_floor INTEGER"
+  ],
   "account_memory_proposals@packages/core/src/memory/account.ts": [
     "id TEXT PRIMARY KEY",
     "proposal_json TEXT NOT NULL",
@@ -42,7 +48,7 @@
     "context_id TEXT NOT NULL",
     "PRIMARY KEY(actor_id,context_id)"
   ],
-  "actor_executions@packages/core/src/subordinates/turn-fence.ts": [
+  "actor_executions@packages/core/src/subagents/turn-fence.ts": [
     "actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id)",
     "turn_id TEXT NOT NULL",
     "run_id TEXT NOT NULL",
@@ -65,15 +71,19 @@
     "revision INTEGER NOT NULL",
     "context_id TEXT NOT NULL",
     "context_revision INTEGER NOT NULL",
+    "rendered_context_id TEXT",
+    "rendered_revision INTEGER",
     "metadata_json TEXT",
     "metadata_path TEXT",
     "recorded_at INTEGER NOT NULL",
     "PRIMARY KEY(actor_id,request_id)",
     "UNIQUE(actor_id,turn_id,epoch,revision)",
     "FOREIGN KEY(actor_id,context_id,context_revision) REFERENCES context_revisions(actor_id,context_id,revision)",
+    "FOREIGN KEY(actor_id,rendered_context_id,rendered_revision) REFERENCES context_revisions(actor_id,context_id,revision)",
+    "CHECK((rendered_context_id IS NULL) = (rendered_revision IS NULL))",
     "CHECK((metadata_json IS NULL) <> (metadata_path IS NULL))"
   ],
-  "actor_subordinates@packages/core/src/subordinates/roster.ts": [
+  "actor_subagents@packages/core/src/subagents/roster.ts": [
     "actor_id TEXT NOT NULL",
     "name TEXT NOT NULL",
     "status TEXT NOT NULL CHECK (status IN ('idle','working','awaiting_input','dismissed'))",
@@ -119,7 +129,7 @@
     "oom_cuts INTEGER NOT NULL DEFAULT 0",
     "PRIMARY KEY(actor_id,turn_id)"
   ],
-  "actor_turn_fence@packages/core/src/subordinates/turn-fence.ts": [
+  "actor_turn_fence@packages/core/src/subagents/turn-fence.ts": [
     "actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id)",
     "seq INTEGER NOT NULL",
     "turn_id TEXT NOT NULL",
@@ -135,7 +145,7 @@
     "created_by TEXT NOT NULL",
     "created_at INTEGER NOT NULL"
   ],
-  "agent_deliveries@packages/core/src/subordinates/deliveries.ts": [
+  "agent_deliveries@packages/core/src/subagents/deliveries.ts": [
     "seq INTEGER PRIMARY KEY AUTOINCREMENT",
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL",
@@ -194,13 +204,13 @@
     "consumed_at INTEGER",
     "PRIMARY KEY (actor_id, id)"
   ],
-  "agent_open_turns@packages/core/src/subordinates/open-turns.ts": [
+  "agent_open_turns@packages/core/src/subagents/open-turns.ts": [
     "actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id)",
     "turn_id TEXT NOT NULL",
     "opened_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, turn_id)"
   ],
-  "agent_report_steers@packages/core/src/subordinates/report-sequence.ts": [
+  "agent_report_steers@packages/core/src/subagents/report-sequence.ts": [
     "actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id)",
     "ord INTEGER NOT NULL",
     "id TEXT NOT NULL",
@@ -209,18 +219,18 @@
     "at_step INTEGER",
     "PRIMARY KEY (actor_id, ord)"
   ],
-  "agent_reports@packages/core/src/subordinates/report-sequence.ts": [
+  "agent_reports@packages/core/src/subagents/report-sequence.ts": [
     "actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id)",
     "seq INTEGER NOT NULL",
     "standing_json TEXT NOT NULL",
     "holds INTEGER NOT NULL CHECK (holds IN (0, 1))",
     "charged_json TEXT NOT NULL DEFAULT '[]'"
   ],
-  "agent_sequence@packages/core/src/subordinates/report-sequence.ts": [
+  "agent_sequence@packages/core/src/subagents/report-sequence.ts": [
     "actor_id TEXT PRIMARY KEY",
     "seq INTEGER NOT NULL"
   ],
-  "agent_stops@packages/core/src/subordinates/deliveries.ts": [
+  "agent_stops@packages/core/src/subagents/deliveries.ts": [
     "actor_id TEXT PRIMARY KEY",
     "generation INTEGER NOT NULL",
     "retired INTEGER NOT NULL DEFAULT 0",
@@ -240,7 +250,7 @@
     "session_id TEXT",
     "PRIMARY KEY (actor_id, seq)"
   ],
-  "agent_turn_reports@packages/core/src/subordinates/turn-reports.ts": [
+  "agent_turn_reports@packages/core/src/subagents/turn-reports.ts": [
     "actor_id TEXT NOT NULL",
     "turn_id TEXT NOT NULL",
     "settled INTEGER NOT NULL",
@@ -284,12 +294,6 @@
     "pid INTEGER NOT NULL",
     "generation TEXT NOT NULL"
   ],
-  "background_job_serves@packages/core/src/jobs/store.ts": [
-    "actor_id TEXT NOT NULL",
-    "job_id TEXT NOT NULL",
-    "port INTEGER NOT NULL",
-    "PRIMARY KEY (actor_id, job_id)"
-  ],
   "background_jobs@packages/core/src/jobs/store.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL",
@@ -306,6 +310,7 @@
     "retry_of TEXT",
     "created_at INTEGER NOT NULL",
     "settled_at INTEGER",
+    "serves_port INTEGER",
     "PRIMARY KEY (actor_id, id)"
   ],
   "browser_sessions@packages/core/src/web/browser-sessions.ts": [
@@ -376,13 +381,6 @@
     "notes_json TEXT NOT NULL",
     "PRIMARY KEY (actor_id, source)"
   ],
-  "cli_agent_connect_tickets@packages/core/src/state/user-schema.ts": [
-    "ticket_hash TEXT PRIMARY KEY",
-    "user_id TEXT NOT NULL",
-    "agent_name TEXT NOT NULL",
-    "cli_token_hash TEXT NOT NULL",
-    "expires_at INTEGER NOT NULL"
-  ],
   "compaction_archive@packages/core/src/state/workspace-schema.ts": [
     "actor_id TEXT NOT NULL",
     "session_key TEXT NOT NULL",
@@ -411,6 +409,16 @@
     "review TEXT NOT NULL CHECK (review IN ('none','awaiting_followup','queued','claimed','done'))",
     "created_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, id)"
+  ],
+  "connection_tickets@packages/core/src/state/user-schema.ts": [
+    "ticket_hash TEXT PRIMARY KEY",
+    "purpose TEXT NOT NULL CHECK (purpose IN (${sqlCheckList(CONNECTION_TICKET_PURPOSES)}))",
+    "expires_at INTEGER NOT NULL",
+    "device_id TEXT",
+    "token_was_current INTEGER",
+    "workspace TEXT",
+    "cli_token_hash TEXT",
+    "CHECK ((purpose = 'device_connect' AND device_id IS NOT NULL AND token_was_current IS NOT NULL AND workspace IS NULL AND cli_token_hash IS NULL) OR (purpose = 'device_join' AND device_id IS NOT NULL AND token_was_current IS NULL AND cli_token_hash IS NULL) OR (purpose = 'cli_agent_connect' AND device_id IS NULL AND token_was_current IS NULL AND workspace IS NOT NULL AND cli_token_hash IS NOT NULL))"
   ],
   "context_memberships@packages/core/src/session/schema.ts": [
     "actor_id TEXT NOT NULL",
@@ -526,6 +534,7 @@
   ],
   "cp_feedback@packages/core/src/control-plane/store.ts": [
     "id TEXT PRIMARY KEY",
+    "kind TEXT NOT NULL CHECK (kind IN (${sqlCheckList(FEEDBACK_KINDS)}))",
     "created_at INTEGER NOT NULL",
     "user_id TEXT NOT NULL",
     "email TEXT NOT NULL",
@@ -563,27 +572,6 @@
     "broken TEXT",
     "last_used_at INTEGER NOT NULL DEFAULT 0"
   ],
-  "deferred_approval_hits@packages/core/src/safety/deferred-approval.ts": [
-    "actor_id TEXT NOT NULL",
-    "approval_id TEXT NOT NULL",
-    "rule TEXT NOT NULL",
-    "decision TEXT NOT NULL",
-    "PRIMARY KEY (actor_id, approval_id, rule)"
-  ],
-  "deferred_approvals@packages/core/src/safety/deferred-approval.ts": [
-    "actor_id TEXT NOT NULL",
-    "id TEXT NOT NULL",
-    "command TEXT NOT NULL",
-    "executor TEXT NOT NULL DEFAULT ''",
-    "context TEXT NOT NULL DEFAULT '{}'",
-    "reason TEXT NOT NULL",
-    "status TEXT NOT NULL DEFAULT 'queued'",
-    "requested_at INTEGER NOT NULL",
-    "decided_at INTEGER",
-    "spend_seq INTEGER NOT NULL DEFAULT 0",
-    "surface TEXT",
-    "PRIMARY KEY (actor_id, id)"
-  ],
   "deploy_step@packages/cf-backend/src/deploy/deploy-do.ts": [
     "id TEXT PRIMARY KEY",
     "seq INTEGER NOT NULL",
@@ -594,26 +582,6 @@
     "notes TEXT NOT NULL DEFAULT '[]'",
     "failure TEXT",
     "facts TEXT NOT NULL DEFAULT '{}'"
-  ],
-  "device_connect_tickets@packages/core/src/state/user-schema.ts": [
-    "ticket_hash TEXT PRIMARY KEY",
-    "device_id TEXT NOT NULL",
-    "expires_at INTEGER NOT NULL",
-    "token_was_current INTEGER"
-  ],
-  "device_consent_asks@packages/core/src/safety/device-consent.ts": [
-    "consent_id TEXT PRIMARY KEY",
-    "actor_id TEXT",
-    "device_id TEXT NOT NULL",
-    "device_label TEXT NOT NULL",
-    "method TEXT NOT NULL",
-    "command TEXT NOT NULL",
-    "workspace_name TEXT",
-    "created_at INTEGER NOT NULL",
-    "epoch INTEGER NOT NULL",
-    "status TEXT NOT NULL DEFAULT 'queued'",
-    "decided_at INTEGER",
-    "surface TEXT"
   ],
   "device_consent@packages/core/src/state/user-schema.ts": [
     "agent_name TEXT NOT NULL",
@@ -632,12 +600,6 @@
     "background_job_id TEXT",
     "cancel_claim TEXT",
     "cancel_outcome TEXT CHECK (cancel_outcome IN ('terminated', 'unknown'))"
-  ],
-  "device_joins@packages/core/src/state/user-schema.ts": [
-    "device_id TEXT PRIMARY KEY",
-    "ticket_hash TEXT NOT NULL UNIQUE",
-    "workspace TEXT",
-    "expires_at INTEGER NOT NULL"
   ],
   "device_notice_pending@packages/core/src/state/user-schema.ts": [
     "agent_name TEXT PRIMARY KEY"
@@ -671,7 +633,7 @@
     "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
     "PRIMARY KEY (actor_id, id)"
   ],
-  "evolution_helpers@packages/core/src/identity/evolution-helpers.ts": [
+  "evolution_subagents@packages/core/src/identity/evolution-subagents.ts": [
     "actor_id TEXT NOT NULL",
     "name TEXT NOT NULL",
     "lane_request_id TEXT NOT NULL",
@@ -797,7 +759,6 @@
     "workspace TEXT NOT NULL",
     "item TEXT NOT NULL",
     "user_id TEXT NOT NULL",
-    "at INTEGER NOT NULL",
     "PRIMARY KEY (kind, workspace, item, user_id)"
   ],
   "gallery_listings@packages/core/src/slates/gallery.ts": [
@@ -816,15 +777,6 @@
     "listed_at INTEGER NOT NULL",
     "viewers INTEGER NOT NULL DEFAULT 0",
     "PRIMARY KEY (kind, workspace, item)"
-  ],
-  "gallery_reports@packages/core/src/slates/gallery.ts": [
-    "kind TEXT NOT NULL CHECK (kind IN ('app', 'workspace'))",
-    "workspace TEXT NOT NULL",
-    "item TEXT NOT NULL",
-    "email TEXT NOT NULL",
-    "reason TEXT NOT NULL",
-    "at INTEGER NOT NULL",
-    "PRIMARY KEY (kind, workspace, item, email)"
   ],
   "gallery_stars@packages/core/src/slates/gallery.ts": [
     "kind TEXT NOT NULL CHECK (kind IN ('app', 'workspace'))",
@@ -889,17 +841,12 @@
     "merge_strategy TEXT NOT NULL DEFAULT 'synthesize'",
     "PRIMARY KEY (actor_id, id)"
   ],
-  "head_merge_results@packages/core/src/heads/schema.ts": [
-    "actor_id TEXT NOT NULL",
-    "root_id TEXT NOT NULL",
-    "merged_narrative TEXT NOT NULL",
-    "PRIMARY KEY (actor_id, root_id)"
-  ],
   "head_runs@packages/core/src/heads/schema.ts": [
     "actor_id TEXT NOT NULL",
     "root_id TEXT NOT NULL",
     "rationale TEXT",
     "spawned_at INTEGER NOT NULL",
+    "merged_narrative TEXT",
     "PRIMARY KEY (actor_id, root_id)"
   ],
   "head_steps@packages/core/src/heads/schema.ts": [
@@ -967,18 +914,13 @@
     "workspace TEXT",
     "actor_id TEXT",
     "wake TEXT NOT NULL DEFAULT 'owner' CHECK (wake IN ('owner', 'allowlist', 'verified', 'never'))",
-    "state TEXT NOT NULL DEFAULT 'active' CHECK (state IN ('active', 'retired'))",
-    "created_at INTEGER NOT NULL",
-    "retired_at INTEGER",
     "CHECK ((kind = 'person') = (path = ''))",
     "CHECK ((workspace IS NULL) = (actor_id IS NULL))",
-    "CHECK (kind = 'person' OR workspace IS NOT NULL)",
-    "CHECK ((state = 'retired') = (retired_at IS NOT NULL))"
+    "CHECK (kind = 'person' OR workspace IS NOT NULL)"
   ],
   "mail_allow@packages/core/src/state/mail-schema.ts": [
     "path TEXT NOT NULL REFERENCES mail_addresses (path)",
     "sender TEXT NOT NULL",
-    "added_at INTEGER NOT NULL",
     "PRIMARY KEY (path, sender)"
   ],
   "mail_attachments@packages/core/src/state/mail-schema.ts": [
@@ -987,23 +929,18 @@
     "filename TEXT NOT NULL",
     "content_type TEXT NOT NULL",
     "size INTEGER NOT NULL",
-    "digest TEXT NOT NULL",
-    "inline_cid TEXT"
+    "digest TEXT NOT NULL"
   ],
   "mail_box@packages/core/src/state/mail-schema.ts": [
     "id INTEGER PRIMARY KEY CHECK (id = 1)",
     "user_id TEXT NOT NULL",
     "email TEXT NOT NULL",
-    "username TEXT NOT NULL",
-    "created_at INTEGER NOT NULL"
+    "username TEXT NOT NULL"
   ],
   "mail_messages@packages/core/src/state/mail-schema.ts": [
     "id TEXT PRIMARY KEY",
     "thread_id TEXT NOT NULL REFERENCES mail_threads (id)",
-    "direction TEXT NOT NULL CHECK (direction IN ('in', 'out'))",
     "header_id TEXT",
-    "in_reply_to TEXT",
-    "refs TEXT NOT NULL DEFAULT '[]'",
     "from_addr TEXT NOT NULL",
     "from_name TEXT",
     "to_json TEXT NOT NULL DEFAULT '[]'",
@@ -1019,14 +956,12 @@
     "text_key TEXT",
     "html_key TEXT",
     "raw_key TEXT",
-    "size INTEGER NOT NULL",
     "read INTEGER NOT NULL DEFAULT 0 CHECK (read IN (0, 1))",
     "written_by TEXT",
-    "send_state TEXT CHECK (send_state IS NULL OR send_state IN ('draft', 'queued', 'sent', 'delivered', 'bounced', 'failed', 'complained'))",
-    "CHECK ((direction = 'in') = (send_state IS NULL))",
-    "CHECK (direction = 'out' OR (raw_key IS NOT NULL AND written_by IS NULL))",
+    "send_state TEXT CHECK (send_state IS NULL OR send_state IN ('draft', 'queued'))",
+    "CHECK (send_state IS NOT NULL OR (raw_key IS NOT NULL AND written_by IS NULL))",
     "CHECK (text_body IS NULL OR text_key IS NULL)",
-    "CHECK (woke IS NULL OR (direction = 'in' AND verdict = 'verified'))",
+    "CHECK (woke IS NULL OR (send_state IS NULL AND verdict = 'verified'))",
     "UNIQUE (thread_id, header_id)"
   ],
   "mail_name@packages/core/src/state/mail-schema.ts": [
@@ -1034,11 +969,7 @@
     "user_id TEXT NOT NULL",
     "kind TEXT NOT NULL CHECK (kind IN ('username', 'alias'))",
     "target_path TEXT",
-    "state TEXT NOT NULL DEFAULT 'active' CHECK (state IN ('active', 'former', 'retired'))",
-    "claimed_at INTEGER NOT NULL",
-    "ended_at INTEGER",
-    "CHECK ((kind = 'alias') = (target_path IS NOT NULL))",
-    "CHECK ((state = 'active') = (ended_at IS NULL))"
+    "CHECK ((kind = 'alias') = (target_path IS NOT NULL))"
   ],
   "mail_threads@packages/core/src/state/mail-schema.ts": [
     "id TEXT PRIMARY KEY",
@@ -1046,12 +977,9 @@
     "subject TEXT NOT NULL",
     "important TEXT CHECK (important IS NULL OR length(important) BETWEEN 1 AND 280)",
     "trashed_at INTEGER",
-    "created_at INTEGER NOT NULL",
-    "CHECK (important IS NULL OR path = '')"
-  ],
-  "mail_untriaged@packages/core/src/state/mail-schema.ts": [
-    "thread_id TEXT PRIMARY KEY REFERENCES mail_threads (id)",
-    "since INTEGER NOT NULL"
+    "untriaged_since INTEGER",
+    "CHECK (important IS NULL OR path = '')",
+    "CHECK (untriaged_since IS NULL OR path = '')"
   ],
   "mcts_search_runs@packages/core/src/mcts/search-store.ts": [
     "actor_id TEXT NOT NULL",
@@ -1133,15 +1061,29 @@
     "status TEXT NOT NULL",
     "answers_json TEXT",
     "asked_at INTEGER NOT NULL",
-    "closed_at INTEGER",
     "resumed_at INTEGER",
     "PRIMARY KEY (actor_id, id)"
   ],
-  "pattern_extractions@packages/core/src/evolution/lessons.ts": [
-    "actor_id TEXT NOT NULL",
-    "effect_key TEXT NOT NULL",
-    "answer TEXT NOT NULL",
-    "PRIMARY KEY (actor_id, effect_key)"
+  "owner_requests@packages/core/src/safety/owner-requests.ts": [
+    "kind TEXT NOT NULL CHECK (kind IN ('action', 'device'))",
+    "id TEXT NOT NULL",
+    "actor_id TEXT",
+    "command TEXT NOT NULL",
+    "status TEXT NOT NULL",
+    "requested_at INTEGER NOT NULL",
+    "decided_at INTEGER",
+    "surface TEXT",
+    "executor TEXT",
+    "context TEXT",
+    "reason TEXT",
+    "spend_seq INTEGER",
+    "rule_hits TEXT",
+    "device_id TEXT",
+    "device_label TEXT",
+    "method TEXT",
+    "workspace_name TEXT",
+    "epoch INTEGER",
+    "CHECK ((kind = 'action' AND actor_id IS NOT NULL AND status IN ('queued', 'approved', 'denied', 'spent') AND executor IS NOT NULL AND context IS NOT NULL AND reason IS NOT NULL AND spend_seq IS NOT NULL AND rule_hits IS NOT NULL AND device_id IS NULL AND device_label IS NULL AND method IS NULL AND workspace_name IS NULL AND epoch IS NULL) OR (kind = 'device' AND status IN ('queued', 'once', 'always', 'deny') AND device_id IS NOT NULL AND device_label IS NOT NULL AND method IS NOT NULL AND epoch IS NOT NULL AND executor IS NULL AND context IS NULL AND reason IS NULL AND spend_seq IS NULL AND rule_hits IS NULL))"
   ],
   "pending_steer_files@packages/core/src/orchestrator/inbox.ts": [
     "seq INTEGER PRIMARY KEY AUTOINCREMENT",
@@ -1171,11 +1113,17 @@
     "annotations_json TEXT NOT NULL DEFAULT '[]'",
     "feedback TEXT",
     "handoff_accepted INTEGER NOT NULL DEFAULT 0 CHECK (handoff_accepted IN (0, 1))",
-    "handoff_attempt INTEGER NOT NULL DEFAULT 0 CHECK (handoff_attempt >= 0)",
     "created_at INTEGER NOT NULL",
     "updated_at INTEGER NOT NULL",
     "writes INTEGER NOT NULL DEFAULT 1",
     "PRIMARY KEY (actor_id, id, revision)"
+  ],
+  "prepared_outputs@packages/core/src/identity/effect-tombstones.ts": [
+    "actor_id TEXT NOT NULL",
+    "scope TEXT NOT NULL",
+    "key TEXT NOT NULL",
+    "output TEXT NOT NULL",
+    "PRIMARY KEY (actor_id, scope, key)"
   ],
   "proposed_tasks@packages/core/src/curriculum/proposer.ts": [
     "actor_id TEXT NOT NULL",
@@ -1227,15 +1175,6 @@
     "state TEXT NOT NULL DEFAULT 'open' CHECK(state IN ('open', 'replied', 'expired', 'aborted'))",
     "created_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, id)"
-  ],
-  "request_renders@packages/core/src/session/schema.ts": [
-    "actor_id TEXT NOT NULL",
-    "request_id TEXT NOT NULL",
-    "context_id TEXT NOT NULL",
-    "revision INTEGER NOT NULL",
-    "PRIMARY KEY(actor_id,request_id)",
-    "FOREIGN KEY(actor_id,request_id) REFERENCES actor_requests(actor_id,request_id)",
-    "FOREIGN KEY(actor_id,context_id,revision) REFERENCES context_revisions(actor_id,context_id,revision)"
   ],
   "run_events@packages/core/src/events/recorder.ts": [
     "actor_id TEXT NOT NULL",
@@ -1342,8 +1281,7 @@
   ],
   "slate_edit_marks@packages/core/src/slates/live-shares.ts": [
     "slate_id TEXT PRIMARY KEY",
-    "editor TEXT NOT NULL",
-    "revision_before TEXT"
+    "editor TEXT NOT NULL"
   ],
   "slate_file_manifest@packages/core/src/state/workspace-schema.ts": [
     "slate_id TEXT NOT NULL",
@@ -1364,30 +1302,6 @@
     "failure TEXT",
     "generation INTEGER NOT NULL DEFAULT 0",
     "PRIMARY KEY (slate, authority)"
-  ],
-  "slate_live_share_users@packages/core/src/slates/live-shares.ts": [
-    "share_id TEXT NOT NULL",
-    "user_id TEXT NOT NULL",
-    "email TEXT NOT NULL",
-    "created_at INTEGER NOT NULL",
-    "role TEXT NOT NULL DEFAULT 'use' CHECK (role IN ('use', 'edit'))",
-    "PRIMARY KEY (share_id, user_id)"
-  ],
-  "slate_live_shares@packages/core/src/slates/live-shares.ts": [
-    "id TEXT PRIMARY KEY",
-    "slate_id TEXT NOT NULL",
-    "visibility TEXT NOT NULL CHECK (visibility IN ('users', 'public'))",
-    "handle TEXT NOT NULL UNIQUE",
-    "grant_json TEXT NOT NULL",
-    "created_at INTEGER NOT NULL",
-    "revoked_at INTEGER",
-    "mode TEXT NOT NULL DEFAULT 'own' CHECK (mode IN ('own', 'owner'))",
-    "grant_revision TEXT",
-    "listing_line TEXT",
-    "listing_category TEXT CHECK (listing_category IS NULL OR listing_category IN ('work', 'money', 'home', 'developer', 'fun'))",
-    "CHECK ((mode = 'owner') = (grant_revision IS NOT NULL))",
-    "CHECK ((listing_line IS NULL) = (listing_category IS NULL))",
-    "CHECK (listing_line IS NULL OR mode = 'own')"
   ],
   "slate_pictures@packages/cf-backend/src/slates/pictures.ts": [
     "slate TEXT NOT NULL",
@@ -1413,6 +1327,7 @@
     "user_id TEXT NOT NULL",
     "email TEXT NOT NULL",
     "created_at INTEGER NOT NULL",
+    "role TEXT NOT NULL DEFAULT 'use' CHECK (role IN ('use', 'edit'))",
     "PRIMARY KEY (share_id, user_id)"
   ],
   "slate_share_views@packages/core/src/slates/live-shares.ts": [
@@ -1423,11 +1338,22 @@
   ],
   "slate_shares@packages/core/src/slates/shares.ts": [
     "id TEXT PRIMARY KEY",
+    "kind TEXT NOT NULL CHECK (kind IN (${sqlCheckList(SHARE_KINDS)}))",
     "slate_id TEXT NOT NULL",
-    "publication_id TEXT NOT NULL",
-    "included_paths TEXT NOT NULL",
     "created_at INTEGER NOT NULL",
-    "revoked_at INTEGER"
+    "revoked_at INTEGER",
+    "publication_id TEXT",
+    "visibility TEXT CHECK (visibility IN ('users', 'public'))",
+    "handle TEXT UNIQUE",
+    "grant_json TEXT",
+    "mode TEXT CHECK (mode IN ('own', 'owner'))",
+    "grant_revision TEXT",
+    "listing_line TEXT",
+    "listing_category TEXT CHECK (listing_category IS NULL OR listing_category IN ('work', 'money', 'home', 'developer', 'fun'))",
+    "CHECK ((kind = 'blueprint' AND publication_id IS NOT NULL AND visibility IS NULL AND handle IS NULL AND grant_json IS NULL AND mode IS NULL AND grant_revision IS NULL AND listing_line IS NULL AND listing_category IS NULL) OR (kind = 'live' AND publication_id IS NULL AND visibility IS NOT NULL AND handle IS NOT NULL AND grant_json IS NOT NULL AND mode IS NOT NULL))",
+    "CHECK ((mode = 'owner') = (grant_revision IS NOT NULL))",
+    "CHECK ((listing_line IS NULL) = (listing_category IS NULL))",
+    "CHECK (listing_line IS NULL OR mode = 'own')"
   ],
   "slate_state@packages/core/src/slates/state.ts": [
     "slate_id TEXT NOT NULL",
@@ -1468,10 +1394,6 @@
     "mark TEXT NOT NULL",
     "at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, mark)"
-  ],
-  "sleep_time_updates@packages/core/src/orchestrator/sleep-time-lane.ts": [
-    "effect_key TEXT PRIMARY KEY",
-    "update_json TEXT NOT NULL"
   ],
   "stream_parts@packages/core/src/session/schema.ts": [
     "actor_id TEXT NOT NULL",
@@ -1584,25 +1506,12 @@
     "created_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, id)"
   ],
-  "turn_struggles@packages/core/src/evolution/struggles.ts": [
-    "actor_id TEXT NOT NULL",
-    "turn_id TEXT NOT NULL",
-    "errors INTEGER NOT NULL",
-    "steps INTEGER NOT NULL",
-    "struggles TEXT NOT NULL",
-    "created_at INTEGER NOT NULL",
-    "PRIMARY KEY (actor_id, turn_id)"
-  ],
   "user_access_tokens@packages/core/src/cli/access-tokens.ts": [
     "token_hash TEXT PRIMARY KEY",
     "name TEXT NOT NULL",
     "scopes TEXT NOT NULL",
     "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
     "last_used_at INTEGER"
-  ],
-  "user_auth_generation@packages/core/src/state/user-schema.ts": [
-    "id INTEGER PRIMARY KEY CHECK (id = 1)",
-    "generation INTEGER NOT NULL"
   ],
   "user_browser_sessions@packages/core/src/state/user-schema.ts": [
     "token_hash TEXT PRIMARY KEY",
@@ -1627,16 +1536,8 @@
     "value TEXT NOT NULL",
     "version INTEGER NOT NULL DEFAULT 0"
   ],
-  "user_credential_floor@packages/core/src/state/user-schema.ts": [
-    "id INTEGER PRIMARY KEY CHECK (id = 1)",
-    "generation INTEGER NOT NULL"
-  ],
   "user_credential_revisions@packages/core/src/state/user-schema.ts": [
     "key TEXT PRIMARY KEY",
-    "revision INTEGER NOT NULL"
-  ],
-  "user_credentials_revision@packages/core/src/state/user-schema.ts": [
-    "id INTEGER PRIMARY KEY CHECK (id = 1)",
     "revision INTEGER NOT NULL"
   ],
   "user_credentials@packages/core/src/state/user-schema.ts": [
@@ -1644,21 +1545,11 @@
     "kind TEXT NOT NULL",
     "value TEXT NOT NULL"
   ],
-  "user_device_protocol_refusals@packages/core/src/state/user-schema.ts": [
-    "device_id TEXT PRIMARY KEY REFERENCES user_devices(id) ON DELETE CASCADE"
-  ],
   "user_device_retired_tokens@packages/core/src/state/user-schema.ts": [
     "token_hash TEXT PRIMARY KEY",
     "device_id TEXT NOT NULL REFERENCES user_devices(id) ON DELETE CASCADE",
     "retired_at INTEGER NOT NULL",
     "reuse_detected_at INTEGER"
-  ],
-  "user_device_update_refusals@packages/core/src/state/user-schema.ts": [
-    "device_id TEXT PRIMARY KEY REFERENCES user_devices(id) ON DELETE CASCADE",
-    "version TEXT NOT NULL",
-    "runtime TEXT NOT NULL",
-    "reason TEXT NOT NULL",
-    "refused_at INTEGER NOT NULL"
   ],
   "user_devices@packages/core/src/state/user-schema.ts": [
     "id TEXT PRIMARY KEY",
@@ -1682,7 +1573,12 @@
     "tier TEXT NOT NULL DEFAULT 'sandboxed'",
     "version TEXT",
     "update_check INTEGER NOT NULL DEFAULT 1",
-    "unstopped_at INTEGER"
+    "unstopped_at INTEGER",
+    "update_refused_version TEXT",
+    "update_refused_runtime TEXT",
+    "update_refusal_reason TEXT",
+    "protocol_refused INTEGER NOT NULL DEFAULT 0 CHECK (protocol_refused IN (0, 1))",
+    "CHECK ((update_refused_version IS NULL) = (update_refused_runtime IS NULL) AND (update_refused_version IS NULL) = (update_refusal_reason IS NULL))"
   ],
   "user_mcp_servers@packages/core/src/state/user-schema.ts": [
     "id TEXT PRIMARY KEY",
@@ -1734,7 +1630,10 @@
     "last_visited INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
     "delete_pending INTEGER NOT NULL DEFAULT 0",
     "create_pending INTEGER NOT NULL DEFAULT 0",
-    "fork_lease_expires_at INTEGER"
+    "fork_lease_expires_at INTEGER",
+    "nudge_attempts INTEGER NOT NULL DEFAULT 0",
+    "nudge_next_at INTEGER NOT NULL DEFAULT 0",
+    "token_hash TEXT UNIQUE"
   ],
   "vfs_state.schema@@nimbus-sh/core": [
     "schema 3"
@@ -1779,10 +1678,6 @@
     "CHECK ((origin = 'system') = (parent_actor_id IS NULL))",
     "CHECK (origin IN ('system','agent') OR lifetime = (CASE origin WHEN 'user' THEN 'durable' ELSE 'task' END))"
   ],
-  "workspace_capability_tokens@packages/core/src/safety/workspace-capability.ts": [
-    "workspace_name TEXT PRIMARY KEY",
-    "token_hash TEXT NOT NULL UNIQUE"
-  ],
   "workspace_capability@packages/cf-backend/src/actor-agent.ts": [
     "id INTEGER PRIMARY KEY CHECK (id = 1)",
     "token TEXT NOT NULL"
@@ -1797,11 +1692,6 @@
   "workspace_logos@packages/core/src/state/user-schema.ts": [
     "name TEXT PRIMARY KEY",
     "svg TEXT NOT NULL"
-  ],
-  "workspace_overview_nudges@packages/core/src/state/user-schema.ts": [
-    "name TEXT PRIMARY KEY",
-    "attempts INTEGER NOT NULL",
-    "next_at INTEGER NOT NULL"
   ],
   "workspace_overviews@packages/core/src/state/user-schema.ts": [
     "name TEXT PRIMARY KEY",

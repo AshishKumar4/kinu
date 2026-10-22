@@ -49,8 +49,8 @@ test("a delivery committed with its wake, whose alarm a reset kept from being se
   const workspace = gatewayWorkspace(gateway);
 
   await workspace.agent.setSoul('# Purpose\n\nGreet whoever asks.');
-  const { subordinate } = await workspace.agent.createSubordinateAgent();
-  const actorId = v.parse(v.string(), subordinate.actorId);
+  const { subagent } = await workspace.agent.createSubagentAgent();
+  const actorId = v.parse(v.string(), subagent.actorId);
 
   // The owner's words commit with their wake, and their crossing does not reach the agent's isolate.
   workspace.agent.harnessIsolateRefusal = { refuses: (id) => id === actorId, error: new KinuError('unavailable', 'the isolate is unreachable') };

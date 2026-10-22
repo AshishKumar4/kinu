@@ -169,7 +169,7 @@
   <text class="xs" x="154" y="680">a Worker Loader isolate</text>
   <text class="xs" x="36" y="697" fill="var(--fg)">swarm nodes</text>
   <text class="xs" x="154" y="697">per-agent Worker Loader facets</text>
-  <text class="xs" x="36" y="714" fill="var(--fg)">subordinates</text>
+  <text class="xs" x="36" y="714" fill="var(--fg)">subagents</text>
   <text class="xs" x="154" y="714">per-agent Worker Loader facets</text>
   <text class="xs" x="36" y="731" fill="var(--fg)">also</text>
   <text class="xs" x="154" y="731">UserDO — MCP once-auth, devices, registry</text>
@@ -188,6 +188,6 @@
   <text class="xs" x="592" y="697">run in the search’s own process</text>
   <text class="xs" x="474" y="714" fill="var(--fg)">MCTS branches</text>
   <text class="xs" x="592" y="714">child processes, same workspace SQLite</text>
-  <text class="xs" x="474" y="731" fill="var(--fg)">subordinates</text>
+  <text class="xs" x="474" y="731" fill="var(--fg)">subagents</text>
   <text class="xs" x="592" y="731">Logical workspace actors</text>
 </svg>

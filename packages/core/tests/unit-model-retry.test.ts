@@ -11,7 +11,7 @@ import { asFetchFunction } from '../src/providers/fetch-shim';
 import { createWorkersAIProvider } from '../src/providers/workers-ai-provider';
 import { withModelStack } from '../src/providers/wire-model';
 import { describeProviderError, toProviderError } from '../src/providers/util';
-import { classifyErrorCode } from '../src/obs/index';
+import { classifyErrorCode, KinuError } from '../src/obs/index';
 import type { JsonValue } from '../src/utils/json';
 import { convertArrayToReadableStream, MockLanguageModelV4 } from 'ai/test';
 import type { ModelStreamPart } from '@kinu.run/test-utils';
@@ -687,5 +687,86 @@ describe('the model stack retries every call once, in one place', () => {
 
     expect(requests).toBe(1);
     expect(toProviderError({ doing: 'calling the model', cause: failure }).code).toBe('budget');
+  });
+});
+
+// Every Workers AI generate is read from its stream (`WORKERS_AI_STREAMS_GENERATE`): what a generate asked by stream
+// answers, and how often, must be what one asked whole answered.
+describe('a generate read from its stream', () => {
+  const USAGE = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 2, text: 2, reasoning: 0 } };
+  const FINISH: ModelStreamPart = { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: USAGE };
+
+  /** A model answering each ask with the next of `answers`; `asked` runs as each ask opens. */
+  function byStream(answers: readonly (readonly ModelStreamPart[])[], asked: () => void = () => {}) {
+    let opened = 0;
+
+    const inner = new MockLanguageModelV4({
+      doStream: async () => {
+        const parts = answers[Math.min(opened, answers.length - 1)] ?? [];
+        opened += 1;
+        asked();
+
+        return { stream: convertArrayToReadableStream<ModelStreamPart>([...parts]) };
+      },
+    });
+
+    const model = wrapLanguageModel({ model: inner, middleware: retryMiddleware({
+      provider: 'example', lane: LANE, generateByStream: true, warn: () => {}, sleep: async () => {}, pacer: new ProviderPacer(),
+    }) });
+
+    return { model, opened: () => opened };
+  }
+
+  test('keeps each block a reused id opens, as text and reasoning alternate', async () => {
+    const { model } = byStream([[
+      { type: 'stream-start', warnings: [] },
+      { type: 'text-start', id: 'txt-0' }, { type: 'text-delta', id: 'txt-0', delta: 'A' }, { type: 'text-end', id: 'txt-0' },
+      { type: 'reasoning-start', id: 'reasoning-0' }, { type: 'reasoning-delta', id: 'reasoning-0', delta: 'R' }, { type: 'reasoning-end', id: 'reasoning-0' },
+      { type: 'text-start', id: 'txt-0' }, { type: 'text-delta', id: 'txt-0', delta: 'B' }, { type: 'text-end', id: 'txt-0' },
+      FINISH,
+    ]]);
+
+    const result = await generateText({ model, prompt: 'hi', maxRetries: 0 });
+
+    expect({ text: result.text, reasoning: result.reasoningText }).toEqual({ text: 'AB', reasoning: 'R' });
+  });
+
+  test('is asked again when its stream fails part way, since nothing of it reached its caller', async () => {
+    const busy = new APICallError({ message: 'busy', url: 'https://api.example.com/v1/chat/completions', requestBodyValues: undefined, statusCode: 503, isRetryable: true });
+
+    const { model, opened } = byStream([
+      [{ type: 'stream-start', warnings: [] }, { type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: 'par' }, { type: 'error', error: busy }],
+      [{ type: 'stream-start', warnings: [] }, { type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: 'whole' }, { type: 'text-end', id: 't' }, FINISH],
+    ]);
+
+    // The SDK retries nothing here, so a second ask is the stack's own.
+    const result = await generateText({ model, prompt: 'hi', maxRetries: 0, providerOptions: callRetries(1) });
+
+    expect({ text: result.text, opened: opened() }).toEqual({ text: 'whole', opened: 2 });
+  });
+
+  test.each([
+    { failure: 'a spent allowance', error: new KinuError('budget', 'the allowance is spent') },
+    { failure: "the provider's final refusal", error: new APICallError({ message: 'bad request', url: 'https://api.example.com/v1/chat/completions', requestBodyValues: undefined, statusCode: 400, isRetryable: false }) },
+  ])('is not asked again when $failure ends its stream part way', async ({ error }) => {
+    const { model, opened } = byStream([
+      [{ type: 'stream-start', warnings: [] }, { type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: 'par' }, { type: 'error', error }],
+      [{ type: 'stream-start', warnings: [] }, { type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: 'whole' }, { type: 'text-end', id: 't' }, FINISH],
+    ]);
+
+    await expect(generateText({ model, prompt: 'hi', maxRetries: 0, providerOptions: callRetries(1) })).rejects.toThrow();
+    expect(opened()).toBe(1);
+  });
+
+  test('is not asked again once its caller has let go', async () => {
+    const caller = new AbortController();
+    const dropped = new Error('the connection dropped');
+
+    const { model, opened } = byStream([
+      [{ type: 'stream-start', warnings: [] }, { type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: 'par' }, { type: 'error', error: dropped }],
+    ], () => caller.abort());
+
+    await expect(generateText({ model, prompt: 'hi', maxRetries: 0, abortSignal: caller.signal, providerOptions: callRetries(1) })).rejects.toThrow();
+    expect(opened()).toBe(1);
   });
 });

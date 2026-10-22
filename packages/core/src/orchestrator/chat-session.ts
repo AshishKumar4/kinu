@@ -10,9 +10,9 @@ import type { RewindTold } from './rewind-notice';
 import {
   deliveredSignal, IntentResultSchema, MessageIdSchema, type Delivery, type DeliveryAnswer, type DeliveryInput, type IntentInput, type IntentResult, type OwedDelivery,
   type TurnDeliveryInput,
-} from '../subordinates/deliveries';
+} from '../subagents/deliveries';
 import type { PlanDecisionOutcome } from '../types/plans';
-import { refusedRun, type RunEndOutcome } from '../subordinates/agent-isolate';
+import { refusedRun, type RunEndOutcome } from '../subagents/agent-isolate';
 import { driveExecution, type AssembledRound, type ClaimedRound } from './execution-driver';
 import { authoredTurnMetadata, stampAuthorship, turnTags, type TurnTags } from '../types/turn-metadata';
 import type { TurnAuthorship } from '../types/turn';
@@ -66,8 +66,8 @@ import type { SessionTranscript, PreparedConversationEntry } from '../session/tr
 import { RECOVERY_BACKOFF_CEILING_MS } from '../utils/recovery-backoff';
 import type { MessageReference } from '../session/messages';
 import type { ContextSelection } from '../session/context';
-import { subordinateTurnContext } from '../subordinates/support';
-import { taskTurnEnding } from '../subordinates/temporary';
+import { subagentTurnContext } from '../subagents/support';
+import { taskTurnEnding } from '../subagents/temporary';
 import { SIGNALS_SEEN_METADATA_KEY, TURN_END_METADATA_KEY, TURN_FAILURE_METADATA_KEY, type SeenSplice } from '../read-models/background-event';
 import { TaskReminders, TASK_REMINDER_EVENT, type TaskReminder } from '../tasks/reminder';
 import type { AgentTaskTree } from '../tools/task-store';
@@ -728,6 +728,28 @@ export class ChatSession {
   async announcementSettled(identity: string): Promise<void> {
     if (!this.announcementInFlight(identity)) return;
     await this.joinAnnounced(identity);
+  }
+
+  /**
+   * Once the turn announced under `identity` has settled, or is held: queued behind an open question to the owner,
+   * which only their answer lets run (`runnable`). The pump is joined too, so a question opened while it waits is seen.
+   */
+  async announcementSettledOrHeld(identity: string): Promise<'settled' | 'held'> {
+    for (;;) {
+      if (!this.announcementInFlight(identity)) return 'settled';
+
+      if (this.heldByOwner(identity)) return 'held';
+      const pump = this.activePump;
+
+      // With no pump yet, the join is the only wait, as `announcementSettled`'s is.
+      await (pump === null ? this.joinAnnounced(identity) : Promise.race([this.joinAnnounced(identity), pump]));
+    }
+  }
+
+  private heldByOwner(identity: string): boolean {
+    const queued = this.runningAnnouncement === identity ? undefined : this.queue.find((item) => item.idempotencyKey === identity);
+
+    return queued !== undefined && !this.runnable()(queued);
   }
 
   announcementInFlight(identity: string): boolean {
@@ -1462,9 +1484,14 @@ export class ChatSession {
     await this.actorSession.orchestrator.drainPendingEvents();
   }
 
-  /** Once at startup, before the recovery drain; see {@link NO_STRANDED_DELIVERY_GRACE}. Answered deliveries' leases are already closed. */
+  /**
+   * Once at startup, before the recovery drain; see {@link NO_STRANDED_DELIVERY_GRACE}. Answered deliveries' leases are
+   * already closed. A drained turn this process restored (`restoreChat`) still owes its events: one held behind an open
+   * question, or the one the last process left open. Re-pending theirs would deliver them again with the next drain.
+   */
   reclaimStrandedEventDeliveries(): void {
-    const reclaimed = this.eventLog.unbindStale(NO_STRANDED_DELIVERY_GRACE);
+    const restored = new Set(this.queue.flatMap((item) => (item.idempotencyKey === undefined ? [] : [item.idempotencyKey])));
+    const reclaimed = this.eventLog.unbindStale(NO_STRANDED_DELIVERY_GRACE, Date.now(), restored);
 
     if (reclaimed.length === 0) return;
     diagnostics.event('event.deliveries_reclaimed', { count: reclaimed.length });
@@ -1842,7 +1869,7 @@ export class ChatSession {
 
   /** Everything here may throw; runOpenedTurn owns what that means. */
   private async birthContext(drainTurnId: string): Promise<readonly SerializedMessage[]> {
-    return await this.ports.birthContext?.(drainTurnId) ?? subordinateTurnContext(this.eventLog, drainTurnId);
+    return await this.ports.birthContext?.(drainTurnId) ?? subagentTurnContext(this.eventLog, drainTurnId);
   }
 
   private settleContext(item: QueueItem, prepared: PreparedTurn, failure: Error | null): boolean {

@@ -93,9 +93,9 @@ describe("a listed slate's page", () => {
 
           // Fork picks a workspace for the copy of its code.
           await page.click('[data-gallery-fork]');
-          await page.waitForSelector('input[name="fork-target"]', SOON);
+          await page.waitForSelector('[data-fork-target]', SOON);
           await page.keyboard.press('Escape');
-          await page.waitForFunction(() => document.querySelector('input[name="fork-target"]') === null, SOON);
+          await page.waitForFunction(() => document.querySelector('[data-fork-target]') === null, SOON);
 
           await page.click('[data-gallery-report]');
           await page.type('[data-gallery-report-reason]', 'It asks for a token in its first screen.');
@@ -112,7 +112,7 @@ describe("a listed slate's page", () => {
       const back = await freshPage(gallery, 'gallery-slate&slate=pr-board&fork=1', 'light', 'desktop');
 
       try {
-        await back.waitForSelector('input[name="fork-target"]', SOON);
+        await back.waitForSelector('[data-fork-target]', SOON);
       } finally {
         await back.close();
       }

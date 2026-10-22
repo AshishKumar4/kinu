@@ -350,7 +350,7 @@ schema genesis moved with it, so a local database from before is refused, not
 opened without its soul. Pinned by "an agent with its own uid edits SOUL.md"
 (red at 0644, the soul at 0664) and its cloud and CLI flows. The owner's write
 is uid 0's, so it replaces a link an agent left at `SOUL.md` rather than
-writing through it, and a hired subordinate's turn reads the file as it stands.
+writing through it, and a hired subagent's turn reads the file as it stands.
 
 W4. A workspace delete is the object's own storage wipe (`destroy()`, whose
 `deleteAll()` takes every agent facet's database with the workspace's), with
@@ -521,27 +521,27 @@ D1. One delegation surface, `agents`, with `hire` (durable or task lifetime),
 `swarm`, `msg`, `list`, `dismiss`. A hire starts fresh on role and mission; a
 swarm node may inherit the parent's conversation
 (`config.context:'inherit'`). Decided 2026-09-03. Being extended 2026-09-13:
-`hire` gains the same `context` field so a subordinate can be forked when the
+`hire` gains the same `context` field so a subagent can be forked when the
 work depends on the conversation (`feat/hire-fork`). Later note: `feat/hire-fork`
 merged as 8216dc82b.
 
 D2. The root actor delegates across roles in the fusion pattern from the
 owner's oh-my-pi fork: dedicated streams to a durable specialist hire,
 research to a researcher task hire, general work to a task hire. Coupled,
-dependent or single-context work stays with the root. Subordinates keep their
+dependent or single-context work stays with the root. Subagents keep their
 role prompts. Decided 2026-09-13; lands with `feat/delegation-prompts`. Later
 note: merged as 550ee2dac.
 
 D3. An assignment is not an external event, so no reactor drains one. A
-`subordinate_task` row is the whole turn input of the subordinate it names, and
+`subagent_task` row is the whole turn input of the subagent it names, and
 one runner owns it: core `drainAssignments`
-(`core/src/subordinates/assignments.ts`), driven by the cloud sweep
+(`core/src/subagents/assignments.ts`), driven by the cloud sweep
 (`drainAdmittedDelegations`) and by the local host's pass
 (`drainAssignedWork`). `wakesADrain` states the exclusion once, for the batch,
 the wake fold and the runner. Decided 2026-09-17, commit 8946319e3. Measured
 the same day in the workerd pool (`tests/workerd/hire.test.ts`, "one brief
 produces exactly one child turn"). Before: one hire brief produced 242
-`subordinate_task` rows with bodies nesting 253 -> 850 characters. The
+`subagent_task` rows with bodies nesting 253 -> 850 characters. The
 reactor digested the row into "1 event arrived while you were idle …", the
 hosted turn admission re-published that digest as a new assignment, and the
 durable sweep ran the raw brief beside it. After: 1 row whose body is the
@@ -554,7 +554,7 @@ two wake chains and only one of them reaches the sweep.
 `drainAdmittedDelegations` runs from `maintenanceWork`, whose only caller is
 `_kinuTerminalRetryTick`. `nextWakeAt` feeds `armTimer`, whose
 `_kinuTimerTick` fires due triggers, the peer outbox and the email reconcile
-and reads no `subordinate_task` row. So `admitHostedTask`'s arm woke a frame
+and reads no `subagent_task` row. So `admitHostedTask`'s arm woke a frame
 that could not take the row and re-armed itself from the same fold, and the
 assignment waited for whatever unrelated obligation next put a row on the retry
 chain. `armWake` now arms that chain (`armDelegationWake`) and the fold is out
@@ -562,7 +562,7 @@ of `nextWakeAt`. The predicate was already in the right place, since
 `owedUntimedWork` counts an admitted delegation. Measured the same day on the
 hire file's own rows, with only the arm changed. Under the fold, cases 1-4 took
 60,722 / 67,002 / 61,003 / 60,988 ms (one per unrelated 60-second recovery
-row), and case 6's two `subordinate_task` rows stood `turn_id NULL, consumed_at
+row), and case 6's two `subagent_task` rows stood `turn_id NULL, consumed_at
 NULL` for the 45 s a probe sampled, with the child opening no run. Under the
 arm the same four take 640 / 6,995 / 1,006 / 983 ms, the child opens both
 runs, and all six rows pass in 31 s. The local host arms nothing and
@@ -573,21 +573,21 @@ and no drain runs it.
 D4. A delegated turn brackets its run in the durable ledger, like every other
 turn. The local host already did this: an assignment is admitted there as
 the child's own chat turn, and `ChatSession.processTurn` calls `openTurnRun`
-(`caused_by: subordinate_task`). The cloud runner drives `runHeadInference`
+(`caused_by: subagent_task`). The cloud runner drives `runHeadInference`
 directly, which never enters that queue, so it wrote no bracket. Decided
 2026-09-17: the stricter side wins, and the delegated turn opens and closes the
 run with the same cause and the same input text. Measured the same day in the
 workerd pool. Before, a hired child's ledger held `step_finish` alone (one run
 id, no `run_start`, no `run_end`), so `getRunSummaries` answered
 `causedBy: null, userMessage: null, status: null` for it, which is what
-`subordinateInspection`'s `runs` view shows a reader of a hired child.
+`subagentInspection`'s `runs` view shows a reader of a hired child.
 
 D5. There is one inherited-context kind, `fork`. The `digest` kind rendered the
 parent's recent conversation as prose for a fresh hire. Its only reader was
 the reactor's rendering of the assignment row, which D3 removed: both turn
 runners read the messages and answered `[]` for a digest, so from 69ef79b17 it
 reached nobody. Deleted end to end 2026-09-17 (schema arm, both producers, the
-`renderSubordinateInheritedContext` renderer and the visibility prefix)
+`renderSubagentInheritedContext` renderer and the visibility prefix)
 rather than spliced into the turn, because the product's own pin refuses it:
 `cf-backend/tests/unit-hire-fork.test.ts`, "a cf hire context=fresh starts from
 its birth-time conversation", requires a fresh hire's first message to be its
@@ -1807,6 +1807,31 @@ interleaved, 06:56 to 07:13Z:
 | 4f8392898 + the slate host at first use | 0 | 284 ms | 444 ms | 578 ms |
 
 The MCP cut's refusal came in round 11, where the slate-host build read 303 ms.
+
+L28. `--reset-tables` drops exactly the tables the genesis-lock diff names and makes them anew empty; no row is carried
+over (the owner's decision, 2026-10-20: "Drop changed tables"). It replaces the row-preserving repair of 5e999c1e7
+(2026-10-15), which rebuilt each stale table, copied the rows both shapes held back with their rowids, refilled a table
+its DDL called a regenerable cache, and refused where rows could not be copied. That repair, its cache marking, its
+copy-back and its foreign-key group rebuild are gone; the owner's rule had been that a schema change resets only its
+tables, with no migrations and no compatibility code.
+- Kept: each object applies the reset to its own database the first time the new build opens it, before any event reads
+  it (Cloudflare's list of objects misses classes, which is why a fleet walk alone failed); the genesis stamps, and
+  refusing a deploy that moves one without `--reset-tables`; `scripts/reset.ts tables-plan` naming every table it will
+  drop, and production's typed confirmation naming them; the drop of a table no build declares any longer.
+- Foreign keys: a table that refers to a dropped one is dropped with it, transitively, and the plan names it ("dropped
+  with <parent>, which it refers to") and the confirmation lists it. Rows left in a kept table would name rows that are
+  gone, which the foreign-key check refuses, so both kept or both dropped are the only consistent states. Refusing
+  instead would leave no way to reset a referenced table short of a meaningless DDL edit to each table that refers to it,
+  which ends in the same drop with less said.
+- Every table belongs to a class (`gate:schema-drift` refuses one no class lists), so a reshape reaches every database
+  that holds it. A table made on first use is listed too, and its class's repair makes it in the trial (`later`), so its
+  shape is read; a reset drops it and leaves it to that first use. The monitor and a deploy run became classes of their
+  own for this (`monitor`, `deploy`). A table whose rows are only valid against another's with no foreign key (a fold
+  over its rowids) says so beside its DDL (`/* derived from <table> */`) and is dropped with it, named in the plan.
+- A reset refuses only where the init cannot run over what the database holds; it reads no row, so no data a deployment
+  holds can make it refuse.
+- Proof: each database's census carries a digest of every table's rows (`/ops/tables`), so a census before the upload and
+  one after show exactly the tables the reset dropped and every other table byte for byte.
 
 ## Providers
 

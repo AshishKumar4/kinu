@@ -43,7 +43,7 @@ import {
   type DeploySecretVault, type DeploySnapshot, type DeployStepFailure,
   type DeployStepRow, type DeployStepSeed, type DeploymentRecord,
 } from '@kinu.run/core/deploy';
-import { randomToken } from '@kinu.run/core';
+import { durableStamps, randomToken, readStamp, repairSchema, SCHEMA_TABLES, writeStamp } from '@kinu.run/core';
 import { diagnostics, KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
@@ -125,7 +125,18 @@ export class DeployRunDO extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
+    const stamps = durableStamps(ctx.storage.kv);
+    const unmade = readStamp(stamps, this.sql, 'deploy') === 'unmade';
+
+    // Its ledger, reset where a release changed it (core state/schema-repair.ts): the run then replays its steps, each
+    // idempotent. A reset of one table refuses only where its init cannot run, and then the init below refuses every
+    // call in SQLite's words.
+    repairSchema(this.sql, {
+      schema: 'deploy', tables: SCHEMA_TABLES.deploy, stamps, transactionSync: (write) => ctx.storage.transactionSync(write), init: () => { this.initSchema(); },
+    }, `deploy run ${ctx.id.toString()}`);
     this.initSchema();
+
+    if (unmade) writeStamp(stamps, 'deploy');
   }
 
   /** Idempotent; called again after `deleteAll` drops the table under a live activation. */

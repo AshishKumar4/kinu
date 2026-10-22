@@ -2,10 +2,11 @@
  * The living background behind the signed-in shell, in a real browser.
  *
  * The shipped `Layout` mounts it under `?frame=app&path=…`: a neural mesh on
- * a fixed canvas behind the rail and the page, invisible to the pointer, still
- * for a reduced-motion visitor and for a phone, absent where a transcript
- * would be, and following the overview read model through idle, working and
- * the attention a waiting decision earns.
+ * a fixed canvas behind the rail and the new-workspace page, invisible to the
+ * pointer, still for a reduced-motion visitor and for a phone, absent behind
+ * any chat (Home is the assistant's), and following the overview read model
+ * through idle, working and the attention a waiting decision earns. Quiet
+ * (`&background=quiet`), it draws nothing while nothing moves.
  *
  * What it cannot see, it leaves to the unit tier: the tissue's own numbers
  * (packages/core/tests/unit-neural-mesh.test.ts) and the renderer keeping its
@@ -29,6 +30,8 @@ const DISPLAYED = ['api-worker', 'perf-audit', 'email-triage', 'design-sys', 'ha
 
 interface BackgroundHandle {
   renderer(): 'webgpu' | 'canvas' | 'static' | 'pending';
+  renders(): number;
+  settled(): boolean;
   time(): number;
   mode(): 'idle' | 'working' | 'attention';
   pointer(): number;
@@ -150,7 +153,7 @@ function stepsOf(readings: readonly number[]): number[] {
 describe('the living background', () => {
   test('sits behind the rail and the page, untouchable', async () => {
     await withGallery(async (gallery) => {
-      const page = await freshPage(gallery, '&path=/');
+      const page = await freshPage(gallery, '&path=/new');
 
       try {
         await liveBackground(page);
@@ -218,7 +221,7 @@ describe('the living background', () => {
 
   test('stops its clock while the tab is hidden', async () => {
     await withGallery(async (gallery) => {
-      const page = await freshPage(gallery, '&path=/');
+      const page = await freshPage(gallery, '&path=/new');
 
       try {
         await liveBackground(page);
@@ -244,7 +247,7 @@ describe('the living background', () => {
 
       try {
         await page.setViewport({ width: 1440, height: 900 });
-        await page.goto(`${gallery.origin}/gallery.html?frame=app&path=/`, { waitUntil: 'networkidle0' });
+        await page.goto(`${gallery.origin}/gallery.html?frame=app&path=/new`, { waitUntil: 'networkidle0' });
         await liveBackground(page);
 
         const renderer = await page.evaluate(() => window.__kinuAppBackground?.renderer());
@@ -272,13 +275,72 @@ describe('the living background', () => {
 
       try {
         await page.setViewport({ width: 390, height: 844 });
-        await page.goto(`${gallery.origin}/gallery.html?frame=app&path=/`, { waitUntil: 'networkidle0' });
+        await page.goto(`${gallery.origin}/gallery.html?frame=app&path=/new`, { waitUntil: 'networkidle0' });
         await liveBackground(page);
 
         const renderer = await page.evaluate(() => window.__kinuAppBackground?.renderer());
         expect(renderer).toBe('static');
 
         await page.screenshot({ path: join(SHOTS, 'phone.png'), fullPage: false });
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  test('is not drawn behind Home, the assistant\'s chat', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, '&path=/');
+
+      try {
+        await page.waitForSelector('main');
+        expect(await page.$('[data-app-background]')).toBeNull();
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  // 2026-10-20, the owner: "more subtle, and more interactive to the cursor", and no idle CPU.
+  test('quiet, it draws nothing while nothing moves, lights under the moving pointer, and rests again', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, '&path=/new&background=quiet', 'light');
+
+      try {
+        await liveBackground(page);
+        const drawn = () => page.evaluate(() => window.__kinuAppBackground?.renders() ?? -1);
+
+        const frames = (count: number) => page.evaluate((n) => new Promise<void>((done) => {
+          let left = n;
+
+          const next = () => {
+            left -= 1;
+
+            if (left <= 0) done();
+            else requestAnimationFrame(next);
+          };
+
+          requestAnimationFrame(next);
+        }), count);
+
+        // Once anything the page's opening set moving has died out, two seconds of the page's own frames add none.
+        await page.waitForFunction(() => window.__kinuAppBackground?.settled() === true);
+        await frames(2);
+        const resting = await drawn();
+        await frames(120);
+        expect(await drawn() - resting).toBe(0);
+
+        for (let step = 0; step < 12; step += 1) await page.mouse.move(80 + step * 6, 120 + step * 4);
+        await frames(10);
+        const moved = await drawn();
+        expect(moved).toBeGreaterThan(resting);
+
+        // The pointer at rest lets go and the field settles; then it costs nothing again.
+        await page.waitForFunction(() => window.__kinuAppBackground?.settled() === true);
+        await frames(2);
+        const after = await drawn();
+        await frames(120);
+        expect(await drawn() - after).toBe(0);
       } finally {
         await page.close();
       }
@@ -305,7 +367,7 @@ describe('the living background', () => {
     await withGallery(async (gallery) => {
       // Frozen: the flash ages by the steps below, never by the frames a loaded
       // machine delivers late (each frame advances at most 0.05 s of tissue time).
-      const page = await freshPage(gallery, '&path=/', 'dark', true);
+      const page = await freshPage(gallery, '&path=/new', 'dark', true);
 
       try {
         await liveBackground(page);
@@ -343,7 +405,7 @@ describe('the living background', () => {
 
   test('the mouse reaches the mesh across page elements and releases on leaving', async () => {
     await withGallery(async (gallery) => {
-      const page = await freshPage(gallery, '&path=/', 'light', true);
+      const page = await freshPage(gallery, '&path=/new', 'light', true);
 
       try {
         await liveBackground(page);
@@ -381,7 +443,7 @@ describe('the living background', () => {
 
       try {
         await page.setViewport({ width: 1440, height: 900, hasTouch: true, isMobile: false });
-        await page.goto(`${gallery.origin}/gallery.html?frame=app&path=/`, { waitUntil: 'networkidle0' });
+        await page.goto(`${gallery.origin}/gallery.html?frame=app&path=/new`, { waitUntil: 'networkidle0' });
         expect(await page.evaluate(() => matchMedia('(hover: none)').matches)).toBe(true);
         await liveBackground(page);
 
