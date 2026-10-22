@@ -938,9 +938,9 @@ export async function openSlateShareDialog(page: Page, tile: string): Promise<vo
   await until(page, 'the share dialog\'s limits', `document.querySelector('[role="dialog"] [data-share-limits]') !== null`);
 }
 
-/** Submit the public share when its control can accept the click, then read the created link. */
+/** Submit the public share when its control can accept the click, then read the created link. Who can open it is a
+ *  set of choices shown whole (ShareParts' AccessPicker), no longer a menu behind a button of its own. */
 export async function submitPublicSlateShare(page: Page): Promise<string | null> {
-  await page.click('[data-share-access]');
   await page.click('[data-share-access-option="public"]');
   await until(page, 'the public share to be ready', `document.querySelector('[data-share-submit]:not([disabled])') !== null`);
   await page.click('[data-share-submit]');
