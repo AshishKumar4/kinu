@@ -2,6 +2,7 @@ import type { VFS, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 /** The `file` tool: exact-match editor, honest read, read-before-write gate. Asserts the model-facing contract. */
 
 import { describe, expect, test } from 'bun:test';
+import { renderThrownChain } from '../src/obs/index';
 import { toolExecute } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { applyFileEdits, FILE_READ_LINE_CHARS, FILE_READ_LINES, FILE_READ_MAX_CHARS, formatFileSlice, type FileEditFailure } from '../src/tools/file-edit';
@@ -31,6 +32,7 @@ import { failedToolOutcome, withCodemodeProgram } from '../src/tools/outcome';
 import { codemodeFunction } from '../src/tools/sandbox-contract';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { cloudPlanes, resolvePath } from '../src/vfs/resolve';
+import { isBuiltinSkillFile } from '../src/skills/view';
 
 describe('applyFileEdits', () => {
   test('replaces the one occurrence and leaves the rest byte-identical', () => {
@@ -513,6 +515,50 @@ function toolFor(vfs: VFS, ledger = new TurnFileLedger()) {
 }
 
 const StringResultSchema = v.string();
+
+// H3, 2026-10-21: 11 trials read `skills/slates/SKILL.md`, which starts at the home, for the prompt's
+// `vfs://skills/slates/SKILL.md`. The refusal names the address meant, where it is a file known without a look.
+test("a relative path that named nothing is told the address of a built-in skill it meant, and nothing else", async () => {
+  const looked: string[] = [];
+  const files = memoryVfs();
+
+  // Every look the tool makes, so none is made for a guess (review, 2026-10-22: a look could cross a link onto a
+  // computer it would wake, or a person's device).
+  const watched = {
+    ...files,
+    stat: async (path: string) => {
+      looked.push(path);
+
+      return files.stat(path);
+    },
+  };
+
+  const entry = withCheckedInput('file', fileToolOver({
+    home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: watched, ledger: new TurnFileLedger(), budget: new TurnContextBudget(),
+    knownFile: isBuiltinSkillFile,
+  }));
+
+  const call = toolExecute<FileToolTestInput, JsonValue>(entry);
+
+  const refusal = async (path: string) => {
+    const [read] = await Promise.allSettled([call({ op: 'read', path })]);
+
+    return read.status === 'rejected' ? renderThrownChain({ cause: read.reason }) : 'it read';
+  };
+
+  expect({
+    builtin: await refusal('skills/slates/SKILL.md'),
+    notBuiltin: await refusal('skills/absent/SKILL.md'),
+    elsewhere: await refusal('workspace/app.ts'),
+    // The only looks are each read's own path: none for a suggestion.
+    looked: [...new Set(looked)],
+  }).toEqual({
+    builtin: expect.stringContaining('did you mean `vfs://skills/slates/SKILL.md`?'),
+    notBuiltin: expect.not.stringContaining('did you mean'),
+    elsewhere: expect.not.stringContaining('did you mean'),
+    looked: ['skills/slates/SKILL.md', 'skills/absent/SKILL.md', 'workspace/app.ts'],
+  });
+});
 
 test('a denied edit keeps its counter through the persisted file-edit event', async () => {
   const { stores, db } = createTestRuntime();

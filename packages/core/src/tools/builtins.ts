@@ -98,7 +98,7 @@ export function codemodeSurface(
 }
 
 /** What an actor's builtins read its stores from. */
-export type BuiltinStoreInputs = Pick<BuiltinToolDeps, 'rt' | 'conversations' | 'vectorStore' | 'facts' | 'account' | 'fileLedger' | 'contextBudget' | 'slateBuild' | 'roleSwitch'>;
+export type BuiltinStoreInputs = Pick<BuiltinToolDeps, 'rt' | 'conversations' | 'vectorStore' | 'facts' | 'account' | 'fileLedger' | 'contextBudget' | 'slateBuild' | 'roleSwitch' | 'knownFile'>;
 
 /**
  * The stores an actor's builtins run over, from its tool deps: its file plane on the turn's ledger and budget, its
@@ -112,6 +112,7 @@ export function builtinStoreDeps(deps: BuiltinStoreInputs): StoreDeps {
   const files: FileDeps = {
     vfs: rt.toolFiles, home: rt.storage.home, ledger: deps.fileLedger ?? new TurnFileLedger(), budget: deps.contextBudget ?? new TurnContextBudget(),
     memory: rt.memory, planes: rt.planes, ...(deps.slateBuild !== undefined && { slateBuild: deps.slateBuild }),
+    ...(deps.knownFile !== undefined && { knownFile: deps.knownFile }),
   };
 
   const memory: MemoryDeps = {
@@ -153,6 +154,8 @@ export interface BuiltinToolDeps {
   contextBudget?: TurnContextBudget;
   /** Whether a slate still builds, so `file` answers it for a slate it wrote into; a check, never a preview. */
   slateBuild?: (slate: string) => Promise<SlateCallResult>;
+  /** Whether a file plane's path is a file known there without a look (`FileDeps.knownFile`): a built-in skill's. */
+  knownFile?: (path: string) => boolean;
   /** Per-turn escalation ledger; omitted → fresh one. */
   escalations?: TurnEscalationLedger;
   /** Test seam; defaults to one JSON line per event on `console`. */

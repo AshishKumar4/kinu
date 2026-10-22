@@ -57,6 +57,7 @@ import type { WorkMode } from '../types/turn';
 import type { ModelCallSink } from '../events/model-call';
 import type { BuiltinToolName } from '../tools/registry';
 import { defaultLoopOrigin } from '../scaffold/loop-origin';
+import { isBuiltinSkillFile } from '../skills/view';
 
 /** A head's builtins plus `report`. */
 export const NODE_BUILTIN_TOOLS = [...HEAD_BUILTIN_TOOLS, 'report'] as const satisfies readonly BuiltinToolName[];
@@ -303,6 +304,7 @@ function buildNodeToolSet(input: {
     codemode: deps.codemode,
     post: input.arbitrate ? buildProposeTool(input.arbitrate, scratch) : undefined,
     effectClaims: { ...deps.receipts, execution: () => ({ turnId: input.turnId, runId: deps.runId }) },
+    knownFile: isBuiltinSkillFile,
     wrapFinished: (finished) => wrapToolsForBackground(finished, {
       jobRunner: input.jobRunner,
       backgroundable: CONFINED_BACKGROUNDABLE_TOOLS,
