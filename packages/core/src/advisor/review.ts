@@ -46,9 +46,9 @@ export interface AdvisorNote {
   readonly class: AdvisorNoteClass;
 }
 
-/** Shared by writer and scorer so a renamed field fails to compile on the other side.
- *  `turnId` is null for a turn with no durable id (programmatic wake); such a note is deduped but scores nothing. */
-export const AdvisorRowDataSchema = v.object({
+/** What an `advisor_note` row's data holds. `turnId` is null for a turn with no durable id (programmatic wake); such a
+ *  note is deduped but scores nothing. */
+const AdvisorRowDataSchema = v.object({
   severity: v.picklist(ADVISOR_SEVERITIES),
   class: v.picklist(ADVISOR_NOTE_CLASSES),
   turnId: v.nullable(v.string()),
@@ -62,7 +62,7 @@ export type AdvisorRowData = v.InferOutput<typeof AdvisorRowDataSchema>;
  *  (`https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/advisor/emission-guard.ts#L9-L16`). */
 type SuppressionRule = 'duplicate' | 'content-free' | 'gate-open' | 'below-floor';
 
-export type AdvisorDisposition =
+type AdvisorDisposition =
   | 'deliver'
   /** Record it and stay quiet: one `evolution_events` row the owner can read. */
   | 'changelog'

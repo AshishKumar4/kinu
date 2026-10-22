@@ -1768,7 +1768,7 @@ export { SessionAdvisor, type AdvisorContext } from './advisor/session-advisor';
 export { type AdvisorLane } from './advisor/advisor-ports';
 
 export {
-  EvolutionLanes, improvementLanesOpen, evolutionPassOpen, recordedTurn, type EvolutionLanesDeps, type TurnContinuity,
+  EvolutionLanes, evolutionPassOpen, recordedTurn, type EvolutionLanesDeps, type TurnContinuity,
 } from './orchestrator/evolution-lanes';
 
 export { ActorSession, CLEAR_NEEDS_IDLE, type ActorSessionOptions, type ActorTurnLease, type ActorExecutionInput, type ActorExecutionResult } from './orchestrator/actor-session';
@@ -2160,7 +2160,6 @@ export {
   ADVISOR_EVENT_TYPE,
   ADVISOR_NOTE_MAX_CHARS,
   ADVISOR_SEVERITIES,
-  AdvisorRowDataSchema,
   ADVISOR_SEVERITY_LABEL,
   ADVISOR_SEVERITY_METADATA_KEY,
   ADVISOR_NOTE_METADATA_KEY,

@@ -12,7 +12,7 @@ export type ModelRoutePolicy =
   | { readonly kind: 'fixed'; readonly tier: TierId; readonly effort?: ReasoningEffort }
   | { readonly kind: 'platform' };
 
-export const MODEL_ROUTE_POLICY = {
+const MODEL_ROUTE_POLICY = {
   agent: { kind: 'invocation' },
   head: { kind: 'invocation' },
   swarm: { kind: 'invocation' },

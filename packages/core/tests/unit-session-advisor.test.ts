@@ -1,17 +1,24 @@
 // The in-session advisor: it reads each step's output once, batches what ends while it reviews, routes its notes by
 // severity, guards what it may say, never fails the turn it watches, and does nothing until the owner turns it on.
 import { describe, expect, test } from 'bun:test';
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { tool, jsonSchema, type ModelMessage } from 'ai';
-import { createTestSql } from '@kinu.run/test-utils';
+import { createMemoryVfs, createTestSql } from '@kinu.run/test-utils';
 import { createTestActor } from './helpers';
-import { SessionAdvisor, ADVISOR_NOTES_PER_UPDATE, type AdvisedTurn, type AdvisorModel, type AdvisorReply } from '../src/advisor/session-advisor';
+import { SessionAdvisor, type AdvisedTurn, type AdvisorModel, type AdvisorReply } from '../src/advisor/session-advisor';
 import {
-  ADVISOR_HEADER, ADVISOR_SEVERITY_LABEL, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND, keptAdvisorNote, normalizeNote,
-  type AdvisorNote,
+  ADVISOR_HEADER, ADVISOR_NOTE_MAX_CHARS, ADVISOR_SEVERITIES, ADVISOR_SEVERITY_LABEL, ADVISOR_SEVERITY_METADATA_KEY,
+  ADVISOR_SIGNAL_KIND, keptAdvisorNote, normalizeNote, type AdvisorNote,
 } from '../src/advisor/review';
+import { advisorWorkspaceGuidance, type AdvisorWorkspace } from '../src/prompting/agents-md';
+import { stepContextLimit } from '../src/context-window';
+import { CHARS_PER_TOKEN } from '../src/token-estimate';
 import type { AdvisorSeverity } from '../src/types/advisor';
 import type { AgentSignal, SendOutcome } from '../src/types/signals';
-import type { JsonValue } from '../src/utils/json';
+import type { JsonObject, JsonValue } from '../src/utils/json';
+
+/** The most notes short of a blocker one update says: oh-my-pi's emission guard, `ADVISOR_NOTES_PER_UPDATE`. */
+const NOTES_PER_UPDATE = 4;
 
 function harness(opts: {
   readonly enabled?: boolean;
@@ -19,6 +26,7 @@ function harness(opts: {
   readonly finalWaitMs?: number;
   readonly minSeverity?: AdvisorSeverity;
   readonly gateOpen?: boolean;
+  readonly guidance?: () => Promise<string>;
 } = {}) {
   const { sql, execRaw } = createTestSql();
   const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'reviewed');
@@ -55,7 +63,7 @@ function harness(opts: {
 
       return true;
     },
-    guidance: async () => '',
+    guidance: opts.guidance ?? (async () => ''),
     ...(opts.finalWaitMs !== undefined && { finalWaitMs: opts.finalWaitMs }),
   });
 
@@ -66,20 +74,22 @@ function harness(opts: {
   };
 }
 
-/** A model that answers each call with the next reply, recording the conversation each call was sent. */
+/** A model that answers each call with the next reply, recording the system prompt and conversation each was sent. */
 function scripted(replies: readonly (AdvisorReply | (() => Promise<AdvisorReply>))[]) {
   const asked: (readonly ModelMessage[])[] = [];
+  const systems: string[] = [];
   let at = 0;
 
-  const model: AdvisorModel = async ({ messages }) => {
+  const model: AdvisorModel = async ({ system, messages }) => {
     asked.push([...messages]);
+    systems.push(system);
     const next = replies[at] ?? silent;
     at += 1;
 
     return typeof next === 'function' ? await next() : next;
   };
 
-  return { model, asked, calls: () => at };
+  return { model, asked, systems, calls: () => at };
 }
 
 const silent: AdvisorReply = { toolCalls: [], responseMessages: [{ role: 'assistant', content: '' }] };
@@ -191,13 +201,13 @@ describe('the in-session advisor', () => {
       .toEqual({ said: ['blocker'], kept: [['blocker', true], ['nit', false]], interrupts: 0 });
   });
 
-  test(`says at most ${String(ADVISOR_NOTES_PER_UPDATE)} notes short of a blocker in one update`, async () => {
+  test(`says at most ${String(NOTES_PER_UPDATE)} notes short of a blocker in one update`, async () => {
     const { advisor, sent } = harness();
-    const notes = Array.from({ length: ADVISOR_NOTES_PER_UPDATE + 2 }, (_, at) => ({ note: `Distinct problem number ${String(at)} in the rounding code.`, severity: 'nit', class: 'wrong-work' }));
+    const notes = Array.from({ length: NOTES_PER_UPDATE + 2 }, (_, at) => ({ note: `Distinct problem number ${String(at)} in the rounding code.`, severity: 'nit', class: 'wrong-work' }));
     const { model } = scripted([advising(...notes)]);
     await runTurn(advisor, turnOf(model), [step('edited')]);
 
-    expect(sent).toHaveLength(ADVISOR_NOTES_PER_UPDATE);
+    expect(sent).toHaveLength(NOTES_PER_UPDATE);
   });
 
   test('a call repeated is warned once, then ends the update', async () => {
@@ -304,6 +314,21 @@ describe('where a note goes', () => {
     }
   });
 
+  test('every declared severity and class is advice, and an over-long note is cut, not refused', async () => {
+    for (const severity of ADVISOR_SEVERITIES) {
+      for (const noteClass of ['wrong-work', 'missed-capability', 'dissatisfaction'] as const) {
+        const { said } = await oneStep(advising({ note: `A ${severity} about ${noteClass}.`, severity, class: noteClass }));
+
+        expect(said.map((signal) => signal.severity)).toEqual([severity]);
+      }
+    }
+
+    const run = harness();
+    const { model } = scripted([silent, advising({ ...concern, note: 'x'.repeat(ADVISOR_NOTE_MAX_CHARS + 200) })]);
+    await runTurn(run.advisor, turnOf(model), [step('edited')]);
+    expect(run.recorded.map((entry) => entry.note.note.length)).toEqual([ADVISOR_NOTE_MAX_CHARS]);
+  });
+
   test('advice with an unknown or absent severity or class is refused, neither said nor kept', async () => {
     const refused: JsonValue[] = [
       { note: 'x is wrong', severity: 'critical', class: 'wrong-work' },
@@ -314,5 +339,127 @@ describe('where a note goes', () => {
     ];
 
     for (const advice of refused) expect(await oneStep(advising(advice))).toMatchObject({ said: [], kept: [] });
+  });
+});
+
+describe('what the advisor reads', () => {
+  /** The request and `steps`, each its own step, as one review after another reads them. */
+  async function read(steps: readonly ModelMessage[][]): Promise<string> {
+    const { advisor } = harness();
+    const { model, asked } = scripted([]);
+    await runTurn(advisor, turnOf(model), steps);
+
+    return readOf(asked.at(-1) ?? []).join('\n');
+  }
+
+  const call = (input: JsonObject): ModelMessage[] => [{ role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c', toolName: 'shell', input }] }];
+
+  const result = (value: string): ModelMessage[] => [{
+    role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c', toolName: 'shell', output: { type: 'text', value } }],
+  }];
+
+  test('a call and its result, by tool, and nothing of a step that only reasoned', async () => {
+    const text = await read([call({ command: 'kinu rotate' }), result('exit 1'), [{ role: 'assistant', content: [{ type: 'reasoning', text: 'thinking it over' }] }]]);
+
+    expect(text).toContain('shell');
+    expect(text).toContain('kinu rotate');
+    expect(text).toContain('exit 1');
+    expect(text).not.toContain('thinking it over');
+  });
+
+  // The advisor's route may be another vendor's, so credential-shaped values are redacted before its model reads them.
+  // Fixtures are assembled at runtime: a contiguous real-shaped literal trips `scripts/secret-scan.ts` and push protection.
+  const bearer = 'Bearer ' + 't'.repeat(40);
+  const awsKey = 'AK' + 'IA' + '1'.repeat(16);
+  const kinuToken = 'pt' + 'a_' + 'ab12cd34';
+  const providerKey = 'sk' + '-ant-' + 'x'.repeat(24);
+  const privateKey = '-----BE' + 'GIN RSA PRIVATE KEY-----\nMIIB fake body\n-----END RSA PRIVATE KEY-----';
+
+  test('tool arguments, results and replies carrying credentials are read redacted, a private key body and all', async () => {
+    const leaked = `deployed with ${awsKey} as ${kinuToken}\n${privateKey}`;
+    const text = await read([call({ command: 'deploy', token: bearer, key: providerKey }), result(leaked), step(leaked)]);
+
+    for (const secret of [bearer, awsKey, kinuToken, providerKey, 'MIIB fake body']) expect(text).not.toContain(secret);
+    expect(text).toContain('<redacted>');
+  });
+
+  test('secret-free values are read verbatim, lookalikes included', async () => {
+    const commit = 'deadbeef'.repeat(5);
+    const text = await read([call({ command: 'kinu rotate', commit, hint: 'pass a Bearer token along' }), result('exit 1')]);
+
+    for (const kept of ['kinu rotate', commit, 'Bearer token', 'exit 1']) expect(text).toContain(kept);
+    expect(text).not.toContain('redacted');
+  });
+});
+
+describe("the advisor's system prompt", () => {
+  test('names the capabilities the agent can reach, so a missed one can be named', async () => {
+    const { advisor } = harness();
+    const { model, systems } = scripted([]);
+    await runTurn(advisor, turnOf(model), [step('edited')]);
+
+    expect(systems[0]).toContain('file, agents');
+  });
+
+  const limits = { contextWindow: 800, modelOutputLimit: 400 };
+  const budget = stepContextLimit(limits) * CHARS_PER_TOKEN;
+
+  /** The system prompt a review sends with the workspace's ADVISOR.md holding `content`, and the files read for it. */
+  async function promptWith(content?: string) {
+    const { vfs } = createMemoryVfs();
+
+    if (content !== undefined) await writeText(vfs, 'ADVISOR.md', content);
+    const reads: string[] = [];
+
+    const workspace: AdvisorWorkspace = {
+      vfs: {
+        ...vfs,
+        stat: async (path) => {
+          const stat = await vfs.stat(path);
+
+          return stat === null || content === undefined ? stat : { ...stat, size: new TextEncoder().encode(content).length };
+        },
+        readFile: async (path) => {
+          reads.push(path);
+
+          return vfs.readFile(path);
+        },
+      },
+      limits: async () => limits,
+    };
+
+    const { advisor } = harness({ guidance: async () => await advisorWorkspaceGuidance(workspace) });
+    const { model, systems } = scripted([]);
+    await runTurn(advisor, turnOf(model), []);
+
+    return { prompt: systems[0] ?? '', reads };
+  }
+
+  test('with no ADVISOR.md, the prompt is the one with no guidance, and nothing is read', async () => {
+    const without = await promptWith();
+    const { advisor } = harness();
+    const { model, systems } = scripted([]);
+    await runTurn(advisor, turnOf(model), []);
+
+    expect(without.reads).toEqual([]);
+    expect(without.prompt).toBe(systems[0] ?? '');
+  });
+
+  test('an admitted ADVISOR.md has its own section, at the exact byte budget too', async () => {
+    const guidance = 'Watch the migration backup. '.padEnd(budget, 'x');
+    const { prompt, reads } = await promptWith(guidance);
+
+    expect(reads).toEqual(['ADVISOR.md']);
+    expect(prompt).toContain(guidance);
+  });
+
+  test('an oversized ADVISOR.md is never read or partly admitted, and UTF-8 bytes are what is priced', async () => {
+    const oversized = await promptWith('x'.repeat(budget + 1));
+    const wide = await promptWith('é'.repeat(budget));
+
+    expect(oversized.reads).toEqual([]);
+    expect(oversized.prompt).not.toContain('x'.repeat(budget + 1));
+    expect(wide.reads).toEqual([]);
+    expect(wide.prompt).toContain('ADVISOR.md');
   });
 });

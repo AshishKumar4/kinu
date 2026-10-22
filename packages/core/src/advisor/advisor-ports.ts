@@ -20,10 +20,10 @@ import type { Served } from '../operations/operation';
 import type { AdvisorModel } from './session-advisor';
 
 /** The file operations that change nothing. */
-export const ADVISOR_FILE_OPERATIONS: ReadonlySet<string> = new Set(['read', 'list', 'stat', 'search']);
+const ADVISOR_FILE_OPERATIONS: ReadonlySet<string> = new Set(['read', 'list', 'stat', 'search']);
 
 /** The memory operations that change nothing. */
-export const ADVISOR_MEMORY_OPERATIONS: ReadonlySet<string> = new Set(['recall', 'search', 'searchConversations', 'readConversation', 'listConversations']);
+const ADVISOR_MEMORY_OPERATIONS: ReadonlySet<string> = new Set(['recall', 'search', 'searchConversations', 'readConversation', 'listConversations']);
 
 const READ_ONLY = 'Read-only: the operations that change nothing.';
 

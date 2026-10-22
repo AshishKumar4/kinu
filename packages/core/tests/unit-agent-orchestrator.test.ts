@@ -4,7 +4,7 @@ import { Database } from 'bun:sqlite';
 import { createTestActors, createTestActorsOver, createTestSql, withHostDeliveries } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { AgentOrchestrator, type AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
-import { improvementLanesOpen, recordedTurn } from '../src/orchestrator/evolution-lanes';
+import { evolutionPassOpen, recordedTurn } from '../src/orchestrator/evolution-lanes';
 import { WORKSPACE_CREATED_EVENT } from '../src/identity/soul';
 import { RUN_END_REASONS, creditedTurnId } from '../src/orchestrator/turn-lifecycle';
 import { declareTerminalRoster, type TerminalActor, type TerminalTurnFacts } from '../src/orchestrator/terminal-roster';
@@ -336,9 +336,12 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
 });
 
 describe('AgentOrchestrator — the settle’s claimable parts', () => {
-  test('the lanes open only on a completed Build turn', () => {
+  test('the evolution pass opens only on a completed Build turn, unless its agent recorded the turn', () => {
     for (const workMode of ['build', 'plan'] as const) {
-      for (const status of RUN_END_REASONS) expect(improvementLanesOpen(status, workMode)).toBe(status === 'completed' && workMode === 'build');
+      for (const status of RUN_END_REASONS) {
+        expect(evolutionPassOpen(status, workMode, false)).toBe(status === 'completed' && workMode === 'build');
+        expect(evolutionPassOpen(status, workMode, true)).toBe(workMode === 'build');
+      }
     }
   });
 

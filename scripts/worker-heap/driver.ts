@@ -177,6 +177,13 @@ type BindingInputs = { readonly stream?: boolean; readonly messages?: readonly o
  * held 6.6 MB where it had held 3.9 MB (armada evo-42). Null for a turn's step.
  */
 function laneAnswer(inputs: BindingInputs): string | null {
+  // The advisor's review, answered at once with silence: the measured cost is its being there, not what it says.
+  if (asksAdvisor(JSON.stringify(inputs))) {
+    model.advisorCalls += 1;
+
+    return `data: ${JSON.stringify({ response: '' })}\n\n${USAGE}data: [DONE]\n\n`;
+  }
+
   if (inputs.tools !== undefined) return null;
 
   return inputs.stream === true
@@ -187,13 +194,6 @@ function laneAnswer(inputs: BindingInputs): string | null {
 /** The product's `AI` binding: each streamed turn answers `answerBytes` of text, and waits while `holding`. */
 async function scriptedBody(inputs: BindingInputs): Promise<string> {
   model.calls += 1;
-
-  if (asksAdvisor(JSON.stringify(inputs))) {
-    model.advisorCalls += 1;
-
-    return `data: ${JSON.stringify({ response: '' })}\n\n${USAGE}data: [DONE]\n\n`;
-  }
-
   const lane = laneAnswer(inputs);
 
   if (lane !== null) return lane;

@@ -205,8 +205,6 @@ export interface HeldIsolateCall {
   release(): void;
 }
 
-let delayedRunReview: { readonly reached: (storageKey: string) => void; readonly released: Promise<void> } | null = null;
-
 let delayedObserve: { readonly from: (storageKey: string) => boolean; readonly reached: (storageKey: string) => void } | null = null;
 
 /** The next model stream an isolate `from` gives its workspace to read is never finished reading: the isolate waits on
@@ -228,19 +226,6 @@ export function holdNextResume(): Promise<string> {
   delayedResume = { reached: reached.resolve };
 
   return reached.promise;
-}
-
-/** The next crossing that carries a delivered run's round reviews to its workspace (its end's report) waits on the way
- *  until released. */
-export function delayNextRunReview(): HeldIsolateCall {
-  const reached = Promise.withResolvers<string>();
-  const released = Promise.withResolvers<void>();
-
-  const held = { reached: reached.resolve, released: released.promise };
-
-  delayedRunReview = held;
-
-  return disarmedOnRelease(held, { armed: () => delayedRunReview, disarm: () => { delayedRunReview = null; } }, { reached: reached.promise, release: released.resolve });
 }
 
 let delayedModelReport: { readonly from: (storageKey: string) => boolean; readonly reached: (storageKey: string) => void; readonly released: Promise<void> } | null = null;
@@ -705,15 +690,6 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
             delayedRunEnd = null;
             delayedEnd.reached();
             await delayedEnd.released;
-          }
-
-          const reviewed = report.runEnds.some(({ outcome }) => 'ended' in outcome && (outcome.ended.reviews?.length ?? 0) > 0);
-          const delayedReview = reviewed ? delayedRunReview : null;
-
-          if (delayedReview !== null) {
-            delayedRunReview = null;
-            delayedReview.reached(placement.storageKey);
-            await delayedReview.released;
           }
 
           const catching = heldReports.get(placement.storageKey);

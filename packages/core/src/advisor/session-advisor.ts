@@ -80,7 +80,7 @@ export interface SessionAdvisorDeps {
 }
 
 /** At most this many notes short of a blocker said per update (oh-my-pi's emission guard: 309 calls in one session). */
-export const ADVISOR_NOTES_PER_UPDATE = 4;
+const ADVISOR_NOTES_PER_UPDATE = 4;
 
 /** Model calls one update may make: a read, another, then its verdict. */
 const ROUNDS_PER_UPDATE = 6;
@@ -89,7 +89,7 @@ const ROUNDS_PER_UPDATE = 6;
 const CONVERSATION_MAX_CHARS = 240_000;
 
 /** How long a turn waits at its end for the review of its last step. */
-export const FINAL_REVIEW_WAIT_MS = 120_000;
+const FINAL_REVIEW_WAIT_MS = 120_000;
 
 /** Each message the advisor reads, at most this long, and each tool call's arguments and result. */
 const MESSAGE_CHARS = EVIDENCE_BUDGETS.outcomeAssistantResponse;
@@ -124,7 +124,7 @@ const ADVISE_TOOL = tool({
   }),
 });
 
-export function advisorSystemPrompt(reachable: readonly string[], guidance: string): string {
+function advisorSystemPrompt(reachable: readonly string[], guidance: string): string {
   return [
     'You watch an autonomous coding agent work, step by step, and advise it. You see each step as it ends, marked',
     '[in progress] while its turn continues. You have read-only tools to check what you see; you cannot change',
@@ -170,7 +170,7 @@ function renderPart(part: MessagePart): string {
 }
 
 /** One of the agent's messages, as the advisor reads it: its role and what it said or did. */
-export function renderForAdvisor(message: ModelMessage, inProgress: boolean): string | null {
+function renderForAdvisor(message: ModelMessage, inProgress: boolean): string | null {
   const parts = typeof message.content === 'string' ? [shown(message.content, MESSAGE_CHARS)] : message.content.map(renderPart);
   const body = parts.filter((part) => part !== '').join('\n');
 
@@ -181,7 +181,7 @@ export function renderForAdvisor(message: ModelMessage, inProgress: boolean): st
 
 /** One `advise` call's note, or null where it is not one: an unknown or absent severity or class answers nothing, since
  *  a note whose kind is unlabeled is one a judge cannot be told. */
-export function adviseNote(input: JsonValue): AdvisorNote | null {
+function adviseNote(input: JsonValue): AdvisorNote | null {
   const parsed = v.safeParse(AdviseSchema, input);
 
   if (!parsed.success || !isAdvisorSeverity(parsed.output.severity) || !isAdvisorNoteClass(parsed.output.class)) return null;

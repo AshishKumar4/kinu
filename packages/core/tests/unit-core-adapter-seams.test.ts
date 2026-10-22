@@ -20,7 +20,7 @@ import {
   craftedToolDescription, type CraftedTool,
   CRAFTED_TOOL_NAMESPACE, nativeToolFunctions,
   initCompletedTurnTable, createCompletedTurnStore,
-  initEventsHubTables, EventLog, improvementLanesOpen,
+  initEventsHubTables, EventLog, evolutionPassOpen,
   type ModelPricing, type CompletedTurn, type SqlExec,
   type BackendHost, type BroadcastEvent, type ProgrammaticTurn,
   ExtensionHost, TerminalTransitions, chatTerminalEffects, terminalEffect, initTerminalEffectTable, initToolEffectClaimTable,
@@ -787,9 +787,9 @@ describe('the post-settle lane verdict is ONE core decision', () => {
   ] as const;
 
   for (const [status, mode, open] of cases) {
-    test(`a ${status} ${mode} turn ${open ? 'opens' : 'closes'} the improvement lanes`, () => {
+    test(`a ${status} ${mode} turn ${open ? 'opens' : 'closes'} the evolution pass`, () => {
       // As the `improvement_lanes` row asks, from the mode the turn ran in, on its producing activation or a replay.
-      expect(improvementLanesOpen(status, mode)).toBe(open);
+      expect(evolutionPassOpen(status, mode, false)).toBe(open);
     });
   }
 });
