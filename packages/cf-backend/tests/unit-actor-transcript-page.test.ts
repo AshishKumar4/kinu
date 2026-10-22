@@ -21,6 +21,7 @@ function retainedDatabase() {
   const files: NimbusSandboxFiles = {
     as: () => files, readBytes: async (path) => created.vfs.readFile(path), read: refuse, readRange: refuse, exists: refuse,
     write: refuse, writeIfRevision: refuse, list: refuse, stat: refuse, lstat: refuse, readlink: refuse, rename: refuse, mkdir: refuse, chmod: refuse, delete: refuse,
+    unlink: refuse, rmdir: refuse, appendFile: refuse, symlink: refuse, realpath: refuse, truncate: refuse, utimes: refuse, chown: refuse,
   };
 
   const context = makeCtx(created.db, 'retained-agent');

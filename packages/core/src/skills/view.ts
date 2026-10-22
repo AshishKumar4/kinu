@@ -4,6 +4,7 @@ import type { VFS, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 
 import type { VfsMount } from '../vfs/mounts';
 import { syscallError, type VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { normalizePath } from '@nimbus-sh/core/vfs/composite.js';
 import { Effect } from 'effect';
 import { settle } from '../obs/effect';
 import { SHARED_SKILLS_DIR } from '../vfs/shared-drive';
@@ -20,6 +21,16 @@ type Located =
   | { readonly kind: 'file'; readonly file: SkillFile; readonly rest: string };
 
 /** `plane` names the workspace's files by their `vfs://` path, read per call. */
+/**
+ * Whether `path`, on the agent's file plane, is a built-in skill's file: the view answers one from memory, with no look
+ * at any plane, so a refusal may name it without one (`FileDeps.knownFile`).
+ */
+export function isBuiltinSkillFile(path: string): boolean {
+  const [view, name, file, ...more] = path.split('/').filter((segment) => segment !== '');
+
+  return `/${view ?? ''}` === SKILLS_VIEW && name !== undefined && Object.hasOwn(BUILTIN_SKILL_FILES, name) && file === SKILL_FOLDER_FILE && more.length === 0;
+}
+
 export function skillsMount(plane: () => VFS): VfsMount {
   const encoder = new TextEncoder();
   const absent = (path: string, syscall: string) => syscallError('ENOENT', syscall, `${SKILLS_VIEW}${path}`);
@@ -29,9 +40,10 @@ export function skillsMount(plane: () => VFS): VfsMount {
       + `${vfsReference(WORKSPACE_SKILLS_DIR)}/<name>/${SKILL_FOLDER_FILE}, or under ${vfsReference(SHARED_SKILLS_DIR)} for the owner's Drive`,
   });
 
-  /** The skill a path names and the rest of the path; null for the root or an unknown name. */
+  /** The skill a path names and the rest of the path; null for the root or an unknown name. The view holds no links, so
+   *  its `.` and `..` are its names' own (Nimbus hands the mount every segment as written, ask 58). */
   const locate = async (path: string): Promise<Located | null> => {
-    const [name, ...rest] = path.split('/').filter((segment) => segment !== '');
+    const [name, ...rest] = normalizePath(path).split('/').filter((segment) => segment !== '');
 
     if (name === undefined) return null;
     const text = Object.hasOwn(BUILTIN_SKILL_FILES, name) ? BUILTIN_SKILL_FILES[name] : undefined;
@@ -52,7 +64,7 @@ export function skillsMount(plane: () => VFS): VfsMount {
   const stat = async (path: string): Promise<VfsStat | null> => {
     const located = await locate(path);
 
-    if (located === null) return path.split('/').some((segment) => segment !== '') ? null : FOLDER_STAT;
+    if (located === null) return normalizePath(path) === '/' ? FOLDER_STAT : null;
 
     if (located.rest === '') return FOLDER_STAT;
 
@@ -100,7 +112,7 @@ export function skillsMount(plane: () => VFS): VfsMount {
         const located = yield* Effect.promise(() => locate(path));
 
         if (located === null) {
-          if (path.split('/').some((segment) => segment !== '')) return yield* Effect.fail(absent(path, 'scandir'));
+          if (normalizePath(path) !== '/') return yield* Effect.fail(absent(path, 'scandir'));
           const names = [...Object.keys(BUILTIN_SKILL_FILES), ...(yield* Effect.promise(() => listSkillFiles(plane()))).map((file) => file.name)];
 
           return names.sort(compareCodeUnits).map((name) => ({ name, type: 'directory' }));

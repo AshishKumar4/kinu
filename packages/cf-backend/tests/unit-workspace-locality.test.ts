@@ -759,6 +759,44 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     expect(redriven).toEqual(['keeper']);
     expect(kv.has('resident-launch:41')).toBe(false);
   });
+
+  test('a node resident an instance reset interrupted is relaunched with the environment it was launched with', async () => {
+    // Vendor-format coupling, as above: worker 0.25's node journal row, and the row its session keeper keeps the launch
+    // env in beside it (`process-env:<record>`). Nimbus keeps no env of its own (ask 62), so without the keeping the
+    // re-drive stops before it spawns, naming the environment; with it the re-drive goes on to spawn, which this suite's
+    // bindings cannot (no ASSETS for the node runtime).
+    const actor = actorObject();
+    const kv = new Map<string, JsonValue>();
+    Object.assign(actor.ctx.storage, durableStorage(kv));
+    kv.set('resident-launch:42', {
+      pid: 42, command: 'node server.js', attempt: 0, phase: 'starting', owner: 'server', restart: 'never',
+      cred: { uid: CRED_SESSION_USER.uid, gid: CRED_SESSION_USER.gid, groups: [...CRED_SESSION_USER.groups], umask: CRED_SESSION_USER.umask },
+      recipe: { kind: 'node', code: 'setInterval(() => {}, 1000);', opts: { argv: ['node', 'server.js'], cwd: '/home/main' } },
+    });
+    kv.set('process-env:resident-launch:42', { env: { HOME: '/home/main', GREETING: 'kept' } });
+    const warned: string[] = [];
+    const warn = console.warn;
+    console.warn = (...args: unknown[]) => { warned.push(args.map(String).join(' ')); };
+
+    try {
+      const workspace = createHostedWorkspace({
+        tasks: HELD_NIMBUS_TASKS,
+        ctx: actor.ctx, env: workspaceBindings(),
+        previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
+      });
+
+      await workspace.facetManager();
+
+      while (actor.held.length > 0) await Promise.all(actor.held.splice(0));
+    } finally {
+      console.warn = warn;
+    }
+
+    const redrive = warned.filter((line) => line.includes('pid 42'));
+
+    expect(redrive.join('\n')).not.toContain('environment');
+    expect(redrive.join('\n')).toContain('the node runtime requires an env.ASSETS binding');
+  });
 });
 
 // A dev server a job started reads as that job serving, as a sandbox job's does: Nimbus names each process by the exec

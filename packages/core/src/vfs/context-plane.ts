@@ -1,4 +1,5 @@
 import type { Awaitable, VFS, VfsCasResult, VfsDirent, VfsRevision, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
+import { normalizePath } from '@nimbus-sh/core/vfs/composite.js';
 import * as v from 'valibot';
 
 import type { ActorClaimReader, ContextEventRecorder, ContextTurnClaim, StagedContextDeferral } from '../types/context-plane';
@@ -225,6 +226,12 @@ function changesAgainst(base: readonly ContextEntry[], desired: readonly Desired
   return changes;
 }
 
+/** A context path's names. The view holds no links, so its `.` and `..` are its names' own (Nimbus hands the mount
+ *  every segment as written, ask 58). */
+function contextSegments(path: string): string[] {
+  return normalizePath(path).split('/').filter((part) => part !== '');
+}
+
 function isContextDirectory(head: string | undefined, second: string | undefined, third: string | undefined): boolean {
   return head === undefined || head === 'agents' || (head === 'requests' && third === undefined)
     || (head === 'revisions' && second === undefined) || (head === 'proposals' && second === undefined);
@@ -232,9 +239,9 @@ function isContextDirectory(head: string | undefined, second: string | undefined
 
 export function localContextTree(stores: () => ActorContextStores, editor: ContextEditor): ContextTree {
   const target = (path: string): Target | null => {
-    const segments = path.split('/').filter(part => part !== '' && part !== '.');
+    const segments = contextSegments(path);
 
-    return segments.includes('..') || (segments[0] === 'agents' && segments.length > 1) ? null : { stores: stores(), author: editor.author, segments, child: editor.child };
+    return segments[0] === 'agents' && segments.length > 1 ? null : { stores: stores(), author: editor.author, segments, child: editor.child };
   };
 
   const located = (path: string): Target => {
@@ -664,11 +671,9 @@ export function remoteContextTree(remote: ContextTreeOpener): ContextTree {
 
 function contextFiles(deps: ContextMountDeps): ContextTree {
   const route = (path: string): { readonly tree: ContextTree; readonly path: string; readonly root?: true } | 'agents' | null => {
-    const parts = path.split('/').filter(part => part !== '' && part !== '.');
+    const parts = contextSegments(path);
 
-    if (parts.includes('..')) return null;
-
-    if (parts[0] !== 'agents') return { tree: deps.own(), path, ...(parts.length === 0 && { root: true as const }) };
+    if (parts[0] !== 'agents') return { tree: deps.own(), path: `/${parts.join('/')}`, ...(parts.length === 0 && { root: true as const }) };
 
     if (parts.length === 1) return 'agents';
     const child = deps.children?.tree(parts[1] ?? '', deps.actorId) ?? null;

@@ -260,7 +260,7 @@ export const BUILTIN_TOOL_SPECS = {
     notes: [
       'Write it like a Node script: top-level statements, `await` anywhere, and `return` (or a trailing expression) hands back the result. Type annotations do not parse.',
       '`tools.<name>(input)` calls a native tool with the input its schema declares; a tool saved with `workspace.createTool` joins `tools` from the next program, declared in dynamic_context.',
-      '`require()` loads Node builtins, plus `fs`, `fs/promises` and `child_process` over your workspace files and shell; `process.cwd()` is the workspace root. Only promise forms work: `execSync`, `spawn` and `fs.*Sync` throw.',
+      '`require()` loads Node builtins, plus Node\'s own `fs`, `fs/promises` and `child_process` over your workspace files and each machine\'s shell; `process.cwd()` is the workspace root. Callback and promise forms work, and `exec`/`execFile` also resolve, awaited, to `{ stdout, stderr }`; every `*Sync` form throws. A child gets no stdin and not its `env`, and its output arrives when it exits.',
       `With \`child_process\`: ${EXEC_RUNS_WHERE_ITS_CWD_IS}`,
       '`fs` keeps bytes as they are: `readFile` without an encoding returns the file\'s bytes as a `Uint8Array`, and `writeFile` writes a `Uint8Array` exactly.',
       '`console.log` output comes back with the result. Variables do not survive between programs; a `private` `db` table keeps data.',

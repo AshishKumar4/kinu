@@ -42,10 +42,13 @@ test("a viewer writes none of the owner's files and cannot become anyone else, s
 
   expect(planted.stderr).toContain('Permission denied');
   expect((await owner('cat owned.txt; test -e planted.txt && echo planted')).stdout).toBe('owner');
-  expect(sudo.stderr).toContain("a share's viewer runs only as itself");
-  expect(sudo.stdout).not.toContain('uid=0');
-  expect(nested.stderr).toContain("a share's viewer runs only as itself");
-  expect(nested.stdout).not.toContain('uid=0');
+
+  // Refused where the process would be made (Nimbus's `mayChangeIdentity`), not by the command's name.
+  for (const refused of [sudo, nested]) {
+    expect(refused.stderr).toContain('EPERM');
+    expect(refused.stdout).not.toContain('uid=0');
+  }
+
   // The owner's own `sudo` is as it was.
   expect((await owner('sudo id')).stdout).toStartWith('uid=0(');
 });

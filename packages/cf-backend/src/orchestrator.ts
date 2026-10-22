@@ -64,6 +64,7 @@ import { isWorkspaceTerminal, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } 
 import { ShareViewerClaimSchema, type ShareViewerClaim } from '@kinu.run/core';
 import {
   AgentOpenTurns, AgentReports, TurnFences, type AcceptedReport, type AgentOwes, type RunEndReport, type OpenWork, announcementOf, RECOVERY_BACKOFF_CEILING_MS, type SentWords, type AgentOpenTurn, CHAT_SESSION_ID, steerSkillsBlock, subagentTurnContext, type SessionEvent, type SessionTranscript, type TurnEndEvent,
+  isBuiltinSkillFile,
 } from '@kinu.run/core';
 // Main actor's payload plane on both fork halves: the carried conversation references
 // payload files by absolute path, and the fork is a cut of the main actor's conversation.
@@ -1799,6 +1800,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       contextBudget: ledgers.context,
       fileLedger: ledgers.files,
       slateBuild: reach.kind === 'workspace' ? (slate) => this.slateBuild(slate) : this.slateBuildFor(actor.record.name),
+      knownFile: isBuiltinSkillFile,
       ...(reach.kind === 'workspace' && { roleSwitch: agentRoleSwitch(() => profile()?.inputs?.envelope ?? null) }),
     };
   }

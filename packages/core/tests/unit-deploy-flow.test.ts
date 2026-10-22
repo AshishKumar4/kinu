@@ -310,6 +310,9 @@ class FakeCloudflare implements CloudflareTransport {
     return null;
   }
 
+  /** Email Sending's suppression list, as the account answers it. */
+  suppressions: { email: string; reason: string; expires_at: string | null; scope: { type: string; value: string } }[] = [];
+
   readonly secrets = new Map<string, string>();
 
   scriptExists = false;
@@ -339,6 +342,8 @@ class FakeCloudflare implements CloudflareTransport {
     const zone = /^\/zones\/([^/?]+)$/u.exec(call.path)?.[1];
 
     if (call.path === '/user') return this.ok({ id: 'user-1', email: INPUTS.ownerEmail });
+
+    if (call.path.includes('/email/sending/suppressions')) return this.ok(this.suppressions);
 
     if (scripts) return this.ok([...this.scriptExists ? [INPUTS.instanceName] : [], ...this.otherScripts].map((id) => ({ id })));
 
@@ -1120,6 +1125,22 @@ describe('a guided run', () => {
     expect([uploaded('KINU_MAIL_ZONE'), uploaded('KINU_MAIL_ROUTING_TOKEN'), uploaded('EMAIL_DOMAIN')]).toEqual(['zone-raman', 'minted-token', 'mail.raman.dev']);
     expect(cloudflare.dns.map((record) => `${record.type} ${record.name}`)).toEqual(['MX cf-bounce.mail.raman.dev', 'TXT cf-bounce._domainkey.mail.raman.dev', 'TXT _dmarc.mail.raman.dev']);
     expect(rows.find((row) => row.id === 'mail')?.detail).toBe('Mail onboarded on mail.raman.dev: each address routed to kinu by a rule of its own, sending, and DMARC at p=none.');
+  });
+
+  // staging 2026-10-22: a test that bounced before its routing rule took effect suppressed privacy@ for a week, and
+  // nothing said so: each later send was refused.
+  test('a recipient Email Sending suppressed for the domain is named with why and until when, and nothing else is', async () => {
+    cloudflare.zones.set('raman.dev', 'zone-raman');
+    cloudflare.suppressions = [
+      { email: 'privacy@mail.raman.dev', reason: 'hard_bounce', expires_at: '2026-10-29T09:29:55Z', scope: { type: 'sending_domain', value: 'mail.raman.dev' } },
+      { email: 'someone@elsewhere.dev', reason: 'complaint', expires_at: null, scope: { type: 'sending_domain', value: 'elsewhere.dev' } },
+    ];
+    const rows = await run({ ...INPUTS, mailDomain: 'mail.raman.dev' });
+    const said = progress.flatMap((event) => (event.kind === 'step-note' && event.id === 'mail' ? [event.note] : []));
+
+    expect(rows.find((row) => row.id === 'mail')?.state).toBe('done');
+    expect(said).toEqual(["Mail from mail.raman.dev is refused to privacy@mail.raman.dev (hard_bounce, until 2026-10-29T09:29:55Z). "
+      + 'Lift any that should get mail in the dashboard: Email, then Email Sending, then Suppression list.']);
   });
 
   test('a host deeper under its zone is routed in the nearest zone above it, each name asked for from the host up', async () => {

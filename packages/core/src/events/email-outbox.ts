@@ -5,6 +5,7 @@
  */
 
 import { Effect } from 'effect';
+import * as v from 'valibot';
 import { scheduledOutbox, type Outbox, type OutboxDisposition } from './outbox';
 import { type SqlExec } from '../types/primitives';
 import { diagnostics, renderThrownChain, settle, toKinuError } from "../obs/index";
@@ -27,10 +28,18 @@ export interface EmailSender {
   send(message: OutboundEmailMessage): Promise<{ messageId: string }>;
 }
 
+/** `final`: no retry is coming, the send was refused for good or ran out of attempts; else the outbox tries again. */
 export type OutboundSendResult =
   | { status: 'sent' }
   | { status: 'deduped' }
-  | { status: 'failed'; error: string };
+  | { status: 'failed'; error: string; final: boolean };
+
+/**
+ * The sending service's refusal of a recipient it suppressed after a hard bounce or a complaint
+ * (developers.cloudflare.com/email-service/api/send-emails/workers-api, read 2026-10-22). Every retry is refused the
+ * same way until the suppression lapses, so the send fails at once, saying so.
+ */
+const SuppressedSchema = v.object({ code: v.literal('E_RECIPIENT_SUPPRESSED') });
 
 const MAX_SEND_ATTEMPTS = 8;
 
@@ -64,6 +73,10 @@ export class EmailOutbox {
               otherwise: 'unavailable',
             }));
 
+            if (v.is(SuppressedSchema, failed.cause)) {
+              return { status: 'poison', reason: `a recipient is on the sending service's suppression list after a bounce or complaint: ${renderThrownChain(failed)}` };
+            }
+
             return { status: 'retry', reason: renderThrownChain(failed) };
           },
         })));
@@ -88,7 +101,7 @@ export class EmailOutbox {
 
     if (settled?.state === 'sent') return { status: 'sent' };
 
-    return { status: 'failed', error: settled?.lastError ?? 'the send did not complete' };
+    return { status: 'failed', error: settled?.lastError ?? 'the send did not complete', final: settled?.state === 'dlq' };
   }
 
   async reconcile(binding: EmailSender, now: number): Promise<number> {

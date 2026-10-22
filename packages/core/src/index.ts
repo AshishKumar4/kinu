@@ -1086,6 +1086,10 @@ export {
 
 export { computerProcessResume, stopComputerProcessJob } from './jobs/computer-process';
 
+export { isWorkspaceProcessJob, stopWorkspaceProcessJob, workspaceProcessJobRuns } from './jobs/workspace-process';
+
+export { onceMoreIfNotAdmitted } from './execution/not-admitted';
+
 export { ComputerProcessEnds, jobState, type ComputerProcessJobRows, type ComputerProcessJobState } from './execution/computer-process-ends';
 
 export {
@@ -1874,7 +1878,7 @@ export {
 export {
   parseSkillFile, skillNameProblem,
   discoverSkills, readSkillFile, workspaceSkillPath, skillBodyChars,
-  BUILTIN_SKILLS, BUILTIN_SKILL_FILES, BUILTIN_SKILL_HEADERS, BUILTIN_SKILL_NAMES, skillsMount,
+  BUILTIN_SKILLS, BUILTIN_SKILL_FILES, BUILTIN_SKILL_HEADERS, BUILTIN_SKILL_NAMES, isBuiltinSkillFile, skillsMount,
   resolveActiveSkills, extractExplicitInvocations, admitSkillsIndex, admitActiveSkills,
   renderActiveSkillsSection, renderSkillsIndexSection, skillIndexLine, unreadSkillLine,
   unionAllowedTools, toolAllowedBySkills, trustedActiveSkills,

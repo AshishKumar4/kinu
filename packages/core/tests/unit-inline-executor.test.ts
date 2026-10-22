@@ -27,6 +27,7 @@ import { cloudPlanes } from '../src/vfs/resolve';
 import { namespaceDeclaration, nestedMembers } from '../src/tools/operation-surfaces';
 import { describeProgramSource, programDeclarations } from '../src/tools/registry';
 import { KINU_NODE_MODULE_SOURCE } from '../src/execution/codemode-node-shim';
+import { createNodeCompat } from '@nimbus-sh/core/node-compat';
 import { standardMounts, withMountTable } from '../src/vfs/mounts';
 import { hostedToolFiles } from '../src/execution/approval';
 import { createMemoryVfs, seedFiles } from '@kinu.run/test-utils/vfs';
@@ -42,6 +43,15 @@ const ToolSummarySchema = v.object({
 });
 
 const ToolCreatedSchema = v.object({ ok: v.boolean(), name: v.string(), action: v.string() });
+
+const KinuNodeSchema = v.object({ createRequire: v.function() });
+
+/** The sandbox's own module, loaded as the CLI loads it, beside Nimbus's node-compat, which both hosts hand its `require`. */
+async function kinuNode() {
+  const module = v.parse(KinuNodeSchema, await import(`data:text/javascript;base64,${Buffer.from(KINU_NODE_MODULE_SOURCE).toString('base64')}`));
+
+  return { createRequire: module.createRequire, createNodeCompat };
+}
 
 const ToolNamedSchema = v.object({ ok: v.boolean(), name: v.string() });
 
@@ -96,9 +106,9 @@ describe("a program's child_process runs on the machine its cwd is on", () => {
 
     const tools = withFileTools(rt, exec, { vfs: plane }).tools;
     const workspace = nestedMembers(Object.fromEntries(Object.entries(tools).map(([name, entry]) => [name, entry.execute])));
-    const kinu: unknown = await import(`data:text/javascript;base64,${Buffer.from(KINU_NODE_MODULE_SOURCE).toString('base64')}`);
+    const kinu = await kinuNode();
 
-    const run = new Function('__kinu', 'workspace', 'machines', 'cwd', `const cp = __kinu.createRequire({ workspace, machines, builtins: {}, cwd })("child_process");
+    const run = new Function('__kinu', 'workspace', 'machines', 'cwd', `const cp = __kinu.createRequire({ createNodeCompat: __kinu.createNodeCompat, workspace, machines, builtins: {}, cwd })("child_process");
       return Promise.all([cp.execFile("npx", ["tsc", "--noEmit"], { cwd: "/computer/workspace/app" }), cp.execFile("ls", [], { cwd: "notes" })]);`);
 
     expect(await run(kinu, workspace, { computer: { exec: answer('computer') }, device: null }, WORKSPACE_ROOT)).toEqual([
@@ -126,8 +136,8 @@ describe('workspace provider (InlineExecutor)', () => {
     expect(await workspace.tools['fs.list'].execute('many')).toMatchObject({
       entries: names.slice(0, 1_000), truncated: { total: names.length, next: 1_000 },
     });
-    const kinu: unknown = await import(`data:text/javascript;base64,${Buffer.from(KINU_NODE_MODULE_SOURCE).toString('base64')}`);
-    const run = new Function('__kinu', 'workspace', 'cwd', 'const require = __kinu.createRequire({ workspace, builtins: {}, cwd }); return require("fs").promises.readdir("many");');
+    const kinu = await kinuNode();
+    const run = new Function('__kinu', 'workspace', 'cwd', 'const require = __kinu.createRequire({ createNodeCompat: __kinu.createNodeCompat, workspace, builtins: {}, cwd }); return require("fs").promises.readdir("many");');
 
     expect(await run(kinu, nestedMembers(Object.fromEntries(Object.entries(workspace.tools).map(([name, entry]) => [name, entry.execute]))), WORKSPACE_ROOT)).toEqual(names);
   });
@@ -139,14 +149,14 @@ describe('workspace provider (InlineExecutor)', () => {
     await writeText(rt.toolFiles, 'journal.md', 'kept line\n');
     const members = Object.fromEntries(Object.entries(buildExec(rt).tools).map(([name, entry]) => [name, entry.execute]));
     const workspace = nestedMembers(members);
-    const kinu: unknown = await import(`data:text/javascript;base64,${Buffer.from(KINU_NODE_MODULE_SOURCE).toString('base64')}`);
+    const kinu = await kinuNode();
 
     // Read once this turn, so the plane would take a whole-file write over it; then the host's next read refused as
     // unavailable, as a store that did not answer refuses, and every other member as it is.
     expect(await present(members['fs.text'], 'fs.text')('journal.md')).toBe('kept line\n');
     const failingReads = nestedMembers({ ...members, 'fs.text': async () => ({ success: false, reason: 'unavailable', error: 'the file plane did not answer' }) });
 
-    const append = new Function('__kinu', 'workspace', 'cwd', `const fs = __kinu.createRequire({ workspace, builtins: {}, cwd })("fs").promises;
+    const append = new Function('__kinu', 'workspace', 'cwd', `const fs = __kinu.createRequire({ createNodeCompat: __kinu.createNodeCompat, workspace, builtins: {}, cwd })("fs").promises;
       return fs.appendFile("journal.md", "new line\\n").then(() => null, (error) => error.code);`);
 
     expect(await append(kinu, failingReads, WORKSPACE_ROOT)).toBe('EIO');
@@ -154,7 +164,7 @@ describe('workspace provider (InlineExecutor)', () => {
     // The real plane: an existing file is appended to, and a file stated absent starts empty.
     expect(await append(kinu, workspace, WORKSPACE_ROOT)).toBeNull();
     expect(await readText(rt.toolFiles, `${WORKSPACE_ROOT}/journal.md`)).toBe('kept line\nnew line\n');
-    const fresh = new Function('__kinu', 'workspace', 'cwd', 'return __kinu.createRequire({ workspace, builtins: {}, cwd })("fs").promises.appendFile("fresh.md", "first\\n");');
+    const fresh = new Function('__kinu', 'workspace', 'cwd', 'return __kinu.createRequire({ createNodeCompat: __kinu.createNodeCompat, workspace, builtins: {}, cwd })("fs").promises.appendFile("fresh.md", "first\\n");');
     await fresh(kinu, workspace, WORKSPACE_ROOT);
     expect(await readText(rt.toolFiles, `${WORKSPACE_ROOT}/fresh.md`)).toBe('first\n');
   });
@@ -168,9 +178,9 @@ describe('workspace provider (InlineExecutor)', () => {
     await kernel.mkdir('/scratch/project/subdir', { recursive: true });
     await kernel.symlink('/scratch/project/subdir', `${WORKSPACE_ROOT}/link`);
     const workspace = nestedMembers(Object.fromEntries(Object.entries(buildExec(rt).tools).map(([name, entry]) => [name, entry.execute])));
-    const kinu: unknown = await import(`data:text/javascript;base64,${Buffer.from(KINU_NODE_MODULE_SOURCE).toString('base64')}`);
+    const kinu = await kinuNode();
 
-    const write = new Function('__kinu', 'workspace', 'cwd', 'return __kinu.createRequire({ workspace, builtins: {}, cwd })("fs").promises.writeFile("link/../config", "from the program");');
+    const write = new Function('__kinu', 'workspace', 'cwd', 'return __kinu.createRequire({ createNodeCompat: __kinu.createNodeCompat, workspace, builtins: {}, cwd })("fs").promises.writeFile("link/../config", "from the program");');
 
     await write(kinu, workspace, WORKSPACE_ROOT);
     expect(new TextDecoder().decode(await kernel.readFile('/scratch/project/config'))).toBe('from the program');
@@ -178,15 +188,15 @@ describe('workspace provider (InlineExecutor)', () => {
   });
 
   test('the Node fs adapter reads ENOENT only where the host said the file is absent', async () => {
-    const kinu: unknown = await import(`data:text/javascript;base64,${Buffer.from(KINU_NODE_MODULE_SOURCE).toString('base64')}`);
+    const kinu = await kinuNode();
 
-    const codeOf = new Function('__kinu', 'answer', `const fs = __kinu.createRequire({ workspace: { fs: { text: async () => answer, stat: async () => answer } }, builtins: {}, cwd: "/w" })("fs").promises;
-      return Promise.all([fs.readFile("a.md", "utf8"), fs.readFile("a.md"), fs.stat("a.md"), fs.exists("a.md")].map((read) => read.then((value) => value, (error) => error.code)));`);
+    const codeOf = new Function('__kinu', 'answer', `const fs = __kinu.createRequire({ createNodeCompat: __kinu.createNodeCompat, workspace: { fs: { text: async () => answer, stat: async () => answer } }, builtins: {}, cwd: "/w" })("fs").promises;
+      return Promise.all([fs.readFile("a.md", "utf8"), fs.readFile("a.md"), fs.stat("a.md"), fs.access("a.md")].map((read) => read.then((value) => value, (error) => error.code)));`);
 
-    expect(await codeOf(kinu, { success: false, reason: 'missing', error: 'no such file' })).toEqual(['ENOENT', 'ENOENT', 'ENOENT', false]);
+    expect(await codeOf(kinu, { success: false, reason: 'missing', error: 'no such file' })).toEqual(['ENOENT', 'ENOENT', 'ENOENT', 'ENOENT']);
     expect(await codeOf(kinu, { success: false, reason: 'unavailable', error: 'the file plane did not answer' })).toEqual(['EIO', 'EIO', 'EIO', 'EIO']);
     expect(await codeOf(kinu, { success: false, reason: 'denied', error: 'not yours' })).toEqual(['EACCES', 'EACCES', 'EACCES', 'EACCES']);
-    expect(await codeOf(kinu, { success: false, reason: null, error: 'ENOENT: no such file: a.md' })).toEqual(['ENOENT', 'ENOENT', 'ENOENT', false]);
+    expect(await codeOf(kinu, { success: false, reason: null, error: 'ENOENT: no such file: a.md' })).toEqual(['ENOENT', 'ENOENT', 'ENOENT', 'ENOENT']);
   });
 
   test('invalid file arguments are classified binding values, never refusal-shaped text', async () => {

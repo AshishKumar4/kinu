@@ -24,7 +24,9 @@ const TranscriptEventSchema = v.variant('type', [
   }),
 ]);
 
-const CheckSchema = v.looseObject({ id: v.string(), pass: v.boolean(), evidence: v.optional(JsonValueSchema) });
+const CheckSchema = v.looseObject({
+  id: v.string(), pass: v.boolean(), evidence: v.optional(JsonValueSchema), rung: v.optional(v.literal(true)), unjudged: v.optional(v.literal(true)),
+});
 
 const Count = v.pipe(v.number(), v.integer(), v.minValue(0));
 

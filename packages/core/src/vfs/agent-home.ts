@@ -9,7 +9,7 @@ import { Effect } from 'effect';
 import { settleSync } from '../obs/effect';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
-import type { Command } from '@nimbus-sh/core/substrate/lifo/commands/types.js';
+import type { IdentityChangePolicy } from '@nimbus-sh/core/workspace';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import type { VfsRemoval } from '@nimbus-sh/core/vfs/vfs.js';
 import { removeWhole } from './mounts';
@@ -353,26 +353,11 @@ export function restoreAgentTmpConfinements(
   }));
 }
 
-/** The workspace shell's command table, as far as one command is replaced in it. */
-interface CommandTable {
-  resolve(name: string): Promise<Command | undefined>;
-  register(name: string, command: Command): void;
-}
-
 /**
- * `sudo` and `su` refused to a process running as the viewer, at each engine boot: either would give it another uid,
- * and with it the owner's files and processes. Every other caller runs them as before.
+ * The workspace's answer to a process taking another uid (Nimbus asks it before every such process, by `sudo`, `su` or
+ * any command's runAs): a process running as the viewer takes none, since another uid is its owner's files and
+ * processes. Every other process changes as before.
  */
-export async function refuseViewerIdentityChange(commands: CommandTable, sql: SqlDatabase): Promise<void> {
-  for (const name of ['sudo', 'su']) {
-    const command = await commands.resolve(name);
-
-    if (command === undefined) continue;
-    commands.register(name, async (context) => {
-      if (context.cred === undefined || agentNameOfUid(sql, context.cred.uid) !== VIEWER_HOME_NAME) return await command(context);
-      await context.stderr.write(`${name}: a share's viewer runs only as itself on this workspace: its owner's files and processes are not its own\n`);
-
-      return 1;
-    });
-  }
+export function viewerStaysItself(sql: SqlDatabase): IdentityChangePolicy {
+  return (from) => agentNameOfUid(sql, from.uid) !== VIEWER_HOME_NAME;
 }

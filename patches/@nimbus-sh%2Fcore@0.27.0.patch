@@ -1,5 +1,43 @@
+diff --git a/dist/node-compat/fs.js b/dist/node-compat/fs.js
+index e58cf64276ba6db4e44ba5d13226f5707410b802..7bff5a14d2992b0e3bf0ee412937f0d202f8a9ba 100644
+--- a/dist/node-compat/fs.js
++++ b/dist/node-compat/fs.js
+@@ -229,9 +229,14 @@ export function createNodeFs(faces, { cwd, stdin, reachStreams }) {
+         const at = namedPath(cwd, path);
+         const abs = at.abs;
+         try {
+-            if (encoding) {
++            // Text is read as text; any other encoding (base64, hex, latin1) is
++            // the file's bytes in it, as Node's Buffer#toString gives them.
++            if (encoding && /^utf-?8$/i.test(encoding)) {
+                 return yield* step('open', at, (f) => f.readFileString(abs));
+             }
++            if (encoding) {
++                return Buffer.from(yield* step('open', at, (f) => f.readFile(abs))).toString(encoding);
++            }
+             // Return Buffer (not raw Uint8Array) so .toString() yields UTF-8 text.
+             // Many packages do JSON.parse(fs.readFileSync('package.json')) without
+             // encoding, expecting Buffer.toString() to return the file contents.
+@@ -769,7 +774,16 @@ export function createNodeFs(faces, { cwd, stdin, reachStreams }) {
+     // The engine's own read and write streams, over this filesystem: Node's
+     // ReadStream and WriteStream read and write through the `fs` they are given.
+     // A face without descriptors has none to give them (ENOSYS).
+-    const engineFs = realm.getBuiltinModule('node:fs');
++    // An engine without Node's fs (a Worker Loader isolate before
++    // compatibility date 2025-09-01) has no streams to build on: each is ENOSYS.
++    const engineFs = realm.getBuiltinModule('node:fs') ?? {
++        ReadStream: class {
++            constructor(path) { throw lacks('open', streamPath(path)); }
++        },
++        WriteStream: class {
++            constructor(path) { throw lacks('open', streamPath(path)); }
++        },
++    };
+     const streamFs = { open, read, write, close, fsync };
+     const streamPath = (path) => (path === null || path === undefined ? undefined : resolvePath(cwd, path));
+     // A stream given no fs of its own (none, undefined or null, which Node's
 diff --git a/dist/runtime/session-protocol.d.ts b/dist/runtime/session-protocol.d.ts
-index 4eaa12f44b56f4dafca514d27c21781b5988cf49..46ddceada12af463331f098da9b728c9c52173b5 100644
+index e2e45cf26533e9bf1a97f5cdf9dc85a0a9227113..6b8b050598de58b64f61f0364139242e9438a13f 100644
 --- a/dist/runtime/session-protocol.d.ts
 +++ b/dist/runtime/session-protocol.d.ts
 @@ -1,5 +1,6 @@
@@ -7,9 +45,9 @@ index 4eaa12f44b56f4dafca514d27c21781b5988cf49..46ddceada12af463331f098da9b728c9
  import type { VfsCred } from './os-contracts.js';
 +import type { VfsCasResult } from '../vfs/vfs.js';
  import type { ProcessTerminalSize } from './process-io-protocol.js';
- export declare const SessionProcessSchema: z.ZodObject<{
-     pid: z.ZodNumber;
-@@ -572,6 +573,8 @@ export interface SessionRpc {
+ /** The process a process starts again, and why (ProcessEntry.restartedFrom). */
+ export declare const ProcessRestartSchema: z.ZodDiscriminatedUnion<[z.ZodObject<{
+@@ -733,6 +734,8 @@ export interface SessionRpc {
      _rpcReadFile(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'readFile'>>;
      _rpcReadFileBytes(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'readFileBytes'>>;
      _rpcWriteFile(path: string, content: string | Uint8Array, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'writeFile'>>;
@@ -18,41 +56,8 @@ index 4eaa12f44b56f4dafca514d27c21781b5988cf49..46ddceada12af463331f098da9b728c9
      _rpcStat(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'stat'>>;
      _rpcLstat(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'lstat'>>;
      _rpcReadlink(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'readlink'>>;
-diff --git a/dist/shell/shell-entrypoints.d.ts b/dist/shell/shell-entrypoints.d.ts
-index d0295e6ff1926520c222babff875189fc9afad13..cf4199e1aef21df154e944058cc06a7e75eff072 100644
---- a/dist/shell/shell-entrypoints.d.ts
-+++ b/dist/shell/shell-entrypoints.d.ts
-@@ -13,6 +13,7 @@ type ShellCommandContext = {
-     cwd?: string;
-     env?: Record<string, string>;
-     stdin?: unknown;
-+    signal?: AbortSignal;
-     terminalStdin?: TerminalInputStream;
-     isFdTerminal?: (fd: number) => boolean;
-     pid: number;
-@@ -28,6 +29,7 @@ export type ShellEntrypointExecutor = {
-         onStdout?: (data: Uint8Array) => void | Promise<void>;
-         onStderr?: (data: Uint8Array) => void | Promise<void>;
-         stdin?: string | CommandInputStream;
-+        signal?: AbortSignal;
-         terminalStdin?: TerminalInputStream;
-         runExitTrap?: boolean;
-         isolateShellState?: boolean;
-diff --git a/dist/shell/shell-entrypoints.js b/dist/shell/shell-entrypoints.js
-index 3dbf2da43bdf0a981014f797f6024758288da99d..e3eb09c797cc11810db398a35097e6fcb46e5bf3 100644
---- a/dist/shell/shell-entrypoints.js
-+++ b/dist/shell/shell-entrypoints.js
-@@ -53,6 +53,8 @@ function makeShellEntrypoint(shellName, shell) {
-                 shellOptions: program.options,
-                 scriptMode: true,
-                 stdin: inheritedStdin.stdin,
-+                // Kinu patch (NIMBUS-ASKS #42): a stopped `bash -c` loop stops.
-+                signal: ctx.signal,
-                 terminalStdin: ctx.terminalStdin,
-                 onStdout: hooks.onStdout,
-                 onStderr: hooks.onStderr,
 diff --git a/dist/workspace/supervisor-op.js b/dist/workspace/supervisor-op.js
-index 179e56a2a05e21f4123ca4b50000bc67ed90d97f..5aeafc9c2aeb497a19f9252d8232c0bd07ddc81b 100644
+index 525e645cf0e8a0960f10f53238b44e85378ea409..47cd4fa7047b6317575d11f793b9f6d9477ba41a 100644
 --- a/dist/workspace/supervisor-op.js
 +++ b/dist/workspace/supervisor-op.js
 @@ -6,6 +6,7 @@ import { traced } from '@nimbus-sh/platform/tracing.js';
@@ -63,10 +68,10 @@ index 179e56a2a05e21f4123ca4b50000bc67ed90d97f..5aeafc9c2aeb497a19f9252d8232c0bd
  import { RuntimeFsPathSchema as FsPath } from '../runtime/filesystem-path.js';
  import { readDirectoryBatch } from '../runtime/read-directory-batch.js';
  import { sendRemoval } from '../runtime/filesystem-methods.js';
-@@ -293,6 +294,27 @@ const NATIVE_OPS = {
+@@ -310,6 +311,27 @@ const NATIVE_OPS = {
      fsReadRangeUncached: (e, t) => readRange(e, t, { cached: false }),
      fsRevision: (e, t) => fsFor(e, t).revision(e.args?.[0] === undefined ? undefined : stringArg(e, 0)),
-     writeFile: (e, t) => fsFor(e, t).writeFile(FsPath.parse(e.args?.[0]), contentArg(e, 1)),
+     writeFile: (e, t) => fsFor(e, t).writeFile(FsPath.parse(e.args?.[0]), contentArg(e, 1), WriteFileOptions.parse(e.args?.[2])),
 +    // Kinu patch (NIMBUS-ASKS #55): a whole-file write only over the revision
 +    // the caller read (0: nothing there), answered as
 +    // SqliteFiles.writeFileIfRevision answers. The stat and the write are one
@@ -92,7 +97,7 @@ index 179e56a2a05e21f4123ca4b50000bc67ed90d97f..5aeafc9c2aeb497a19f9252d8232c0bd
      // process keeps that stat for its sync view, and asked for it in a second
      // call before (node-shims _writeFileAsync). The write is committed before
 diff --git a/dist/workspace/supervisor-ops.d.ts b/dist/workspace/supervisor-ops.d.ts
-index 0126312967cab8e10d733db920ba2c4b4a046cbf..cc886222603e69013f52bb9eb38408be8e6ba2f6 100644
+index 35597dedbcd30ab8a6f9bc9511c6a36468c2687b..7e717352c28b5156b01c7e59a1baa1150ac05dc1 100644
 --- a/dist/workspace/supervisor-ops.d.ts
 +++ b/dist/workspace/supervisor-ops.d.ts
 @@ -22,6 +22,7 @@ export declare const SUPERVISOR_OP_TABLE: {
@@ -104,7 +109,7 @@ index 0126312967cab8e10d733db920ba2c4b4a046cbf..cc886222603e69013f52bb9eb38408be
      readonly lstat: "joined";
      readonly utimes: "once";
 diff --git a/dist/workspace/supervisor-ops.js b/dist/workspace/supervisor-ops.js
-index 22369b746b4d057e24ad793c15dddf46e0e81532..74c673f3bb3c3c47fcbab59feb118208515aad0c 100644
+index 4d395cc08b5e91ec1e09d8254fccbe577e17e009..9266a76c128372453a7b3ce5a0751371e1c1838a 100644
 --- a/dist/workspace/supervisor-ops.js
 +++ b/dist/workspace/supervisor-ops.js
 @@ -22,6 +22,8 @@ export const SUPERVISOR_OP_TABLE = {
@@ -116,8 +121,44 @@ index 22369b746b4d057e24ad793c15dddf46e0e81532..74c673f3bb3c3c47fcbab59feb118208
      stat: 'joined',
      lstat: 'joined',
      utimes: 'once',
+diff --git a/src/node-compat/fs.ts b/src/node-compat/fs.ts
+index 5ebc0b5bc45614c0fd42679bec36b1c1cc438565..d2fc29c96f07f6fe0808143c2405ae3706f945db 100644
+--- a/src/node-compat/fs.ts
++++ b/src/node-compat/fs.ts
+@@ -334,9 +334,14 @@ export function createNodeFs(faces: NodeFaces, { cwd, stdin, reachStreams }: Nod
+     const at = namedPath(cwd, path);
+     const abs = at.abs;
+     try {
+-      if (encoding) {
++      // Text is read as text; any other encoding (base64, hex, latin1) is the
++      // file's bytes in it, as Node's Buffer#toString gives them.
++      if (encoding && /^utf-?8$/i.test(encoding)) {
+         return yield* step('open', at, (f) => f.readFileString(abs));
+       }
++      if (encoding) {
++        return Buffer.from(yield* step('open', at, (f) => f.readFile(abs))).toString(encoding);
++      }
+       // Return Buffer (not raw Uint8Array) so .toString() yields UTF-8 text.
+       // Many packages do JSON.parse(fs.readFileSync('package.json')) without
+       // encoding, expecting Buffer.toString() to return the file contents.
+@@ -902,8 +907,13 @@ export function createNodeFs(faces: NodeFaces, { cwd, stdin, reachStreams }: Nod
+ 
+   // The engine's own read and write streams, over this filesystem: Node's
+   // ReadStream and WriteStream read and write through the `fs` they are given.
+-  // A face without descriptors has none to give them (ENOSYS).
+-  const engineFs = realm.getBuiltinModule('node:fs');
++  // A face without descriptors has none to give them (ENOSYS). An engine
++  // without Node's fs (a Worker Loader isolate before compatibility date
++  // 2025-09-01) has no streams to build on: each is ENOSYS too.
++  const engineFs = realm.getBuiltinModule('node:fs') ?? {
++    ReadStream: class { constructor(path?: string | URL | null) { throw lacks('open', streamPath(path)); } },
++    WriteStream: class { constructor(path?: string | URL | null) { throw lacks('open', streamPath(path)); } },
++  };
+   const streamFs = { open, read, write, close, fsync };
+   const streamPath = (path: string | URL | null | undefined): string | undefined => (path === null || path === undefined ? undefined : resolvePath(cwd, path));
+   // A stream given no fs of its own (none, undefined or null, which Node's
 diff --git a/src/runtime/session-protocol.ts b/src/runtime/session-protocol.ts
-index 5348b43d2c47aa5806210cb1ec638d48e9e23f08..951774ebe9db214cf8df1d2baa9ca33189a9954e 100644
+index 66452b29e191e1591acd3d632b76089f5116b942..bdfc9e8c667468b841ef340f974470ca9165f876 100644
 --- a/src/runtime/session-protocol.ts
 +++ b/src/runtime/session-protocol.ts
 @@ -1,5 +1,6 @@
@@ -127,7 +168,7 @@ index 5348b43d2c47aa5806210cb1ec638d48e9e23f08..951774ebe9db214cf8df1d2baa9ca331
  import type { ProcessTerminalSize } from './process-io-protocol.js';
  import { ExecOutputSchema } from './exec-stream.js';
  
-@@ -268,6 +269,8 @@ export interface SessionRpc {
+@@ -344,6 +345,8 @@ export interface SessionRpc {
    _rpcReadFile(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'readFile'>>;
    _rpcReadFileBytes(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'readFileBytes'>>;
    _rpcWriteFile(path: string, content: string | Uint8Array, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'writeFile'>>;
@@ -136,37 +177,8 @@ index 5348b43d2c47aa5806210cb1ec638d48e9e23f08..951774ebe9db214cf8df1d2baa9ca331
    _rpcStat(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'stat'>>;
    _rpcLstat(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'lstat'>>;
    _rpcReadlink(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'readlink'>>;
-diff --git a/src/shell/shell-entrypoints.ts b/src/shell/shell-entrypoints.ts
-index c04a0b1a140e5ea01c9125f6e51517dbd23b8f09..3a590ad17a71840acc8e4059aadf23d6bb0d2fd4 100644
---- a/src/shell/shell-entrypoints.ts
-+++ b/src/shell/shell-entrypoints.ts
-@@ -15,6 +15,7 @@ type ShellCommandContext = {
-   cwd?: string;
-   env?: Record<string, string>;
-   stdin?: unknown;
-+  signal?: AbortSignal;
-   terminalStdin?: TerminalInputStream;
-   isFdTerminal?: (fd: number) => boolean;
-   pid: number;
-@@ -31,6 +32,7 @@ export type ShellEntrypointExecutor = {
-     onStdout?: (data: Uint8Array) => void | Promise<void>;
-     onStderr?: (data: Uint8Array) => void | Promise<void>;
-     stdin?: string | CommandInputStream;
-+    signal?: AbortSignal;
-     terminalStdin?: TerminalInputStream;
-     runExitTrap?: boolean;
-     isolateShellState?: boolean;
-@@ -117,6 +119,8 @@ function makeShellEntrypoint(
-         shellOptions: program.options,
-         scriptMode: true,
-         stdin: inheritedStdin.stdin,
-+        // Kinu patch (NIMBUS-ASKS #42): a stopped `bash -c` loop stops.
-+        signal: ctx.signal,
-         terminalStdin: ctx.terminalStdin,
-         onStdout: hooks.onStdout,
-         onStderr: hooks.onStderr,
 diff --git a/src/workspace/supervisor-op.ts b/src/workspace/supervisor-op.ts
-index 6096daff7343d36a581584012141da7039d93008..365bfa074def1f8f73c2eafa60cbfcc93b3a9776 100644
+index 301efdcfc0cb191b34bfc89675f9176e9df6b9da..6ae7becbb5f91be68ca1baf59865d463d6ee84e0 100644
 --- a/src/workspace/supervisor-op.ts
 +++ b/src/workspace/supervisor-op.ts
 @@ -9,6 +9,8 @@ import { traced, type SpanRecorder } from '@nimbus-sh/platform/tracing.js';
@@ -178,10 +190,10 @@ index 6096daff7343d36a581584012141da7039d93008..365bfa074def1f8f73c2eafa60cbfcc9
  import { RuntimeFsPathSchema as FsPath } from '../runtime/filesystem-path.js';
  import { readDirectoryBatch } from '../runtime/read-directory-batch.js';
  import { sendRemoval } from '../runtime/filesystem-methods.js';
-@@ -464,6 +466,24 @@ const NATIVE_OPS = {
+@@ -481,6 +483,24 @@ const NATIVE_OPS = {
    fsReadRangeUncached: (e, t) => readRange(e, t, { cached: false }),
    fsRevision: (e, t) => fsFor(e, t).revision(e.args?.[0] === undefined ? undefined : stringArg(e, 0)),
-   writeFile: (e, t) => fsFor(e, t).writeFile(FsPath.parse(e.args?.[0]), contentArg(e, 1)),
+   writeFile: (e, t) => fsFor(e, t).writeFile(FsPath.parse(e.args?.[0]), contentArg(e, 1), WriteFileOptions.parse(e.args?.[2])),
 +  // Kinu patch (NIMBUS-ASKS #55): a whole-file write only over the revision
 +  // the caller read (0: nothing there), answered as
 +  // SqliteFiles.writeFileIfRevision answers. The stat and the write are one
@@ -204,7 +216,7 @@ index 6096daff7343d36a581584012141da7039d93008..365bfa074def1f8f73c2eafa60cbfcc9
    // process keeps that stat for its sync view, and asked for it in a second
    // call before (node-shims _writeFileAsync). The write is committed before
 diff --git a/src/workspace/supervisor-ops.ts b/src/workspace/supervisor-ops.ts
-index aa5a9af58abcfdf9dc7dee36bf81cf66eb66cde2..f110098f03ac609a613cf18b2b35ba1df6e4a6c4 100644
+index abc539a68ebb58b4471e6672b651075620ff94ac..1c476f39f5a7c3a5f254d7e66d1128cf8cff137d 100644
 --- a/src/workspace/supervisor-ops.ts
 +++ b/src/workspace/supervisor-ops.ts
 @@ -22,6 +22,8 @@ export const SUPERVISOR_OP_TABLE = {

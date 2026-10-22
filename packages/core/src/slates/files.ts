@@ -12,7 +12,7 @@ import { compareCodeUnits } from '../utils/text';
 import { unmovedSince } from '../vfs/unmoved';
 import { removeWhole } from '../vfs/mounts';
 import type { VfsRemoval } from '@nimbus-sh/core/vfs/vfs.js';
-import type { FsTime } from '@nimbus-sh/core/runtime/os-contracts.js';
+import type { RuntimeFsBridge } from '@nimbus-sh/core/runtime/os-contracts.js';
 
 export { SlateDirectoryName };
 
@@ -76,6 +76,9 @@ class SlateManifest {
     this.sql.exec('DELETE FROM slate_file_manifest WHERE slate_id = ? AND path = ?', this.slate, path);
   }
 }
+
+/** A time `utimes` sets: an instant, or now, or left as it is (Nimbus's own, which core no longer exports by name). */
+type FsTime = Parameters<RuntimeFsBridge['utimes']>[1];
 
 /** Synchronous because source and metadata share one host transaction. */
 export interface SlateFileTree {
