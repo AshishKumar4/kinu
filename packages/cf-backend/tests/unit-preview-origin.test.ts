@@ -1104,7 +1104,9 @@ describe('the app document policy', () => {
     expect(cspOf(null)).toContain("font-src 'self';");
   });
 
-  // D70: KasmVNC's client takes its socket's host, port and path from settings a user can edit.
+  // D70: KasmVNC's client takes its socket's host, port and path from settings a user can edit. It reads its own codec
+  // probes (a few bytes of AVC, HEVC and AV1 it carries as `data:` URLs) with fetch, which a connect-src without `data:`
+  // refused twice on every open (production walkthrough rc30 F8); a `data:` URL leaves the page with nothing.
   test('the desktop client is framed by the app alone, and its socket reaches this origin only', () => {
     const res = withAppSecurityHeaders(
       new Response('<!doctype html>', { headers: { 'content-type': 'text/html' } }), new URL(`${APP}/kasmvnc/vnc.html`), `https://*.${SUFFIX}`,
@@ -1116,7 +1118,7 @@ describe('the app document policy', () => {
       frame: res.headers.get('x-frame-options'), ancestors: /frame-ancestors [^;]*/.exec(csp)?.[0], connect: /connect-src [^;]*/.exec(csp)?.[0],
       frames: /frame-src [^;]*/.exec(csp)?.[0],
     }).toEqual({
-      frame: 'SAMEORIGIN', ancestors: "frame-ancestors 'self'", connect: `connect-src 'self' wss://${new URL(APP).host}`, frames: "frame-src 'none'",
+      frame: 'SAMEORIGIN', ancestors: "frame-ancestors 'self'", connect: `connect-src 'self' wss://${new URL(APP).host} data:`, frames: "frame-src 'none'",
     });
   });
 

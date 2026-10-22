@@ -66,7 +66,7 @@ function appDocumentCsp(url: URL, previewOrigin: string | null, framedBy: string
 }
 
 /** Framed by the app alone; its socket's host, port and path are settings a user can edit, so only this
- *  origin is reachable whatever they say. */
+ *  origin is reachable whatever they say. `data:` is its own codec probes, read with fetch: nothing leaves by one. */
 function desktopClientCsp(url: URL): string {
   return [
     "default-src 'self'",
@@ -76,7 +76,7 @@ function desktopClientCsp(url: URL): string {
     "base-uri 'none'",
     "form-action 'none'",
     "frame-ancestors 'self'",
-    `connect-src 'self' ${url.protocol === 'https:' ? 'wss' : 'ws'}://${url.host}`,
+    `connect-src 'self' ${url.protocol === 'https:' ? 'wss' : 'ws'}://${url.host} data:`,
     "img-src 'self' data:",
     "frame-src 'none'",
   ].join('; ');

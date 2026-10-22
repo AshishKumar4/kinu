@@ -683,6 +683,11 @@ function useLayoutPending(known: WorkspaceLayout | undefined): boolean {
 /** What the composer says while no turn runs: in `focus`, whom it addresses. */
 const restingPlaceholder = (focus: FocusIdentity | null) => (focus?.label === undefined ? "Send a message..." : `Message ${focus.label}…`);
 
+/** The inspector's layout is decided: a landing that opens a surface in it can, and not before. */
+function inspectorReady(control: InspectorControl | null): boolean {
+  return control?.ready === true;
+}
+
 function OpenWorkspace({ onGone, workspace, identity, layout }: WorkspacePageProps & { onGone: (workspace: string) => void }) {
   const params = useParams();
   const agentId = workspace ?? params.agentId;
@@ -730,7 +735,7 @@ function OpenWorkspace({ onGone, workspace, identity, layout }: WorkspacePagePro
     desktopLanding, desktopLanded,
   } = useWorkbenchSurfaces({
     workspace: agentId ?? "", executors: state.executors, slates: state.slates, search: location.search,
-    inspectorReady: inspectorControl?.ready === true,
+    inspectorReady: inspectorReady(inspectorControl),
   });
 
   const { shownAgent, rosterLoaded, panel: agentsPanel } = useAgentsPanel({ listed: state.workspaceAgents, live, workspace: agentId, node: shownNode, subName, workbench });
