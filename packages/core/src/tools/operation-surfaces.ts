@@ -149,7 +149,7 @@ export function operationInputSchema<Op extends Operation>(op: Op) {
 /**
  * A capability's native tool. `op` is its one required field and names the operation; every other field is any of
  * its operations' fields, described with the operations that take it. A call is held to its own operation's schema,
- * so a missing field is refused by name. Each operation's result is said here once, for a program calling it too.
+ * so a missing field is refused by name.
  * An operation the wiring has but `withheld` names is not offered, and a call to it is refused with the reason.
  */
 export function nativeTool(description: string, offered: readonly Served[], withheld: ReadonlyMap<string, string> = new Map()): Tool {
@@ -172,19 +172,20 @@ export function nativeTool(description: string, offered: readonly Served[], with
 
     return { served, fields };
   }, {
-    description: `${description} ${members.map(({ op }) => `${op.name}: ${op.help} Returns ${returnsOf(op)}.`).join(' ')}`,
+    // Each operation's result is the call's to show, and `describe` declares it for a program: not said here.
+    description: `${description} ${members.map(({ op }) => `${op.name}: ${op.help}`).join(' ')}`,
     parameters: nativeToolSchema(members.map(({ op }) => op)),
   }, members);
 }
 
 /** One operation as its own native tool, its fields at the top level. */
 export function operationTool(description: string, served: Served): Tool {
-  return nativeCall((fields) => ({ served, fields }), { description: `${description} Returns ${returnsOf(served.op)}.`, parameters: inputJsonSchema(served.op) }, [served]);
+  return nativeCall((fields) => ({ served, fields }), { description, parameters: inputJsonSchema(served.op) }, [served]);
 }
 
 /** {@link operationTool} as a turn offers it where another store runs it: its description and input, with no executor. */
 export function declaredOperationTool(description: string, op: Operation): Tool {
-  const declared = tool({ description: `${description} Returns ${returnsOf(op)}.`, inputSchema: operationInputSchema(op) });
+  const declared = tool({ description, inputSchema: operationInputSchema(op) });
 
   return allowedInPlan(op) ? permitInPlan(declared) : declared;
 }
