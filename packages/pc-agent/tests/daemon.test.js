@@ -2225,6 +2225,9 @@ describe('daemon process under Bun against a local hub', () => {
     fs.mkdirSync(path.join(project, '.git'), { recursive: true });
     fs.mkdirSync(path.join(project, 'src'));
     fs.writeFileSync(path.join(project, 'README.md'), 'shop');
+    // The home takes no new entry directly in it while it lacks a run-later file (sandbox.js guardedPaths), so the
+    // command run from it changes a file already there.
+    fs.writeFileSync(path.join(machine, 'notes.txt'), 'owner');
 
     await withDaemon({ HOME: machine }, async ({ hub, reply }) => {
       hub.socket().send(JSON.stringify({

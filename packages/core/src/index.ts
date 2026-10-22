@@ -1600,7 +1600,7 @@ export {
 
 export {
   DeviceConsentRegistry, DeviceConsentStore, deviceConsentMoved, deviceConsentOutcome, type DeviceConsentOutcome,
-  DEVICE_CONNECT_DISCLOSURE, issuedDeviceConnected, summarizeDeviceAction,
+  DEVICE_CONNECT_DISCLOSURE, HOME_FOLDER_CONSENT, issuedDeviceConnected, summarizeDeviceAction,
   type DeviceConsentAnswer, type DeviceConsentRequest, type DeviceConsentVerdict, type DeviceBinding,
   type PendingDeviceConsent, type DeviceConsentNotice, PendingDeviceConsentSchema, ResolvedDeviceConsentSchema,
 } from './safety/device-consent';

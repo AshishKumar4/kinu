@@ -27,11 +27,15 @@ const path = require('node:path');
 
 const util = require('node:util');
 
+const { execFile } = require('node:child_process');
+
 const update = require('./update.js');
 
 const { fromDotenv, launchDotenv: suppliedBy, launchDotenvFiles, unsandboxedCommandEnvironment } = require('../../core/src/cli/command-env.ts');
 
 const { MACHINE_SANDBOX_REASONS } = require('../../core/src/execution/machine-sandbox-reasons.ts');
+
+const { RUN_LATER, RUN_LATER_NAMES } = require('../../core/src/execution/run-later-paths.ts');
 
 const { runToExit } = update;
 
@@ -102,6 +106,21 @@ const LINUX_TEMP_ROOTS = Object.freeze(['/tmp', '/var/tmp']);
 const LINUX_MASK_FILES = Object.freeze([
   '/run/docker.sock', '/var/run/docker.sock',
 ]);
+
+/** Entries a plan reads of each writable root looking for repositories and
+ *  startup-file links; the bound on a plan's cost. A root with more is named in
+ *  the plan result, so the model is told which repositories went unguarded.
+ *  Measured 2026-09-27 on ext4 NVMe at load ~10, a root past the cap (150,000
+ *  files): 51-61 ms warm. Cold is unmeasured here (no way to drop the dentry
+ *  cache without root); review job 195 measured about 3.3 s on a huge shared
+ *  folder. */
+const GUARD_ENTRIES = 50_000;
+
+/** Folders the guard's walk never enters: no repository the owner commits in lives in a dependency or cache tree. */
+const WALK_SKIPPED = new Set(['node_modules', '.cache']);
+
+/** Repositories asked of git at once: each question is two short git processes. */
+const GIT_QUESTIONS_AT_ONCE = 8;
 
 /** SBPL has no mount namespace to swap a home into, so macOS denies these
  *  subpaths and re-allows the agent home and the consented roots after. The
@@ -334,6 +353,521 @@ function realPathOrNull(candidate) {
   }
 }
 
+/** A path's metadata, or null when it cannot be read: absent, or behind a directory this user may not open. */
+function statOrNull(candidate) {
+  try {
+    return fs.statSync(candidate);
+  } catch (err) {
+    if (!err || (err.code !== 'ENOENT' && err.code !== 'EACCES' && err.code !== 'ENOTDIR' && err.code !== 'ELOOP')) throw err;
+
+    return null;
+  }
+}
+
+/** A path's own metadata, a link's being the link's, or null when nothing is there. */
+function lstatOrNull(candidate) {
+  try {
+    return fs.lstatSync(candidate);
+  } catch (err) {
+    if (!err || (err.code !== 'ENOENT' && err.code !== 'ENOTDIR')) throw err;
+
+    return null;
+  }
+}
+
+/** A directory's entries, or none when it cannot be listed. */
+function entriesOf(dir) {
+  try {
+    return fs.readdirSync(dir, { withFileTypes: true });
+  } catch (err) {
+    if (!err || (err.code !== 'ENOENT' && err.code !== 'EACCES' && err.code !== 'ENOTDIR' && err.code !== 'EPERM')) throw err;
+
+    return [];
+  }
+}
+
+/*
+ * THE INVARIANT this section keeps, checked as a whole: code git runs on the
+ * owner's ordinary commands, named by git's configuration, is never writable
+ * to the agent. Every repository in or around a writable root (found down by
+ * its `.git` or as a bare git directory, and out by asking git from each root
+ * upward, repository after repository) is asked of git, with every
+ * configuration level; each hooks and template directory, config file, and
+ * program a config value names that lands in a writable root is bound
+ * read-only, and so is each linked worktree's `.git` file and each worktree's
+ * gitdir and commondir record. Every folder from a writable root down to a
+ * kept path is pinned (pinAncestors), so none of them can be moved aside and
+ * replaced by a writable copy; the cost is that the agent cannot rename or
+ * remove a repository, or a folder holding one. What cannot be asked is named
+ * in plan.unguarded, with why. Build and test scripts are code the owner runs
+ * too, and are not covered: the consent line says so.
+ */
+
+/** git-config(1) keys, as of git 2.53, whose value is a program git runs on an ordinary command (an alias only when
+ *  it starts with `!`). */
+const PROGRAM_KEYS = new RegExp('^(core\\.(fsmonitor|pager|editor|sshcommand|askpass|gitproxy)|sequence\\.editor|pager\\..+'
+  + '|credential\\.(.+\\.)?helper|gpg\\.(.+\\.)?program|diff\\..+\\.(command|textconv)|merge\\..+\\.driver'
+  + '|filter\\..+\\.(clean|smudge|process)|(merge|diff)tool\\..+\\.cmd|interactive\\.difffilter'
+  + '|remote\\..+\\.(uploadpack|receivepack)|alias\\..+)$', 'u');
+
+/** Values of those keys that switch a built-in on or off rather than name a program. */
+const SWITCH_VALUES = new Set(['', 'true', 'false', 'yes', 'no', 'on', 'off', '1', '0']);
+
+/** The environment git is asked in: none of the daemon's own GIT_*, which could answer for another repository. A
+ *  `ceiling` keeps a repository git cannot read from being answered for by one around it. */
+function gitEnvironment(home, ceiling) {
+  const env = { HOME: home, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, PATH: process.env.PATH, GIT_CEILING_DIRECTORIES: ceiling };
+
+  return Object.fromEntries(Object.entries(env).filter(([, value]) => value !== undefined));
+}
+
+/** `git -C <at> <args>`: its exit code (-1 when git could not run) and what it printed. */
+function gitIn(at, args, env) {
+  return new Promise((resolve) => {
+    execFile('git', ['-C', at, ...args], { env, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
+      if (error === null) {
+        resolve({ code: 0, stdout, stderr });
+
+        return;
+      }
+
+      // A code that is no exit status is git failing to start (ENOENT).
+      const code = Number.isInteger(error.code) ? error.code : -1;
+      resolve({ code, stdout, stderr: code === -1 ? String(error.message) : stderr });
+    });
+  });
+}
+
+const leadingLine = (text) => text.trim().split('\n')[0];
+
+/**
+ * Every value git reads at `level` (all of them for `[]`) with where it read it, asked through
+ * `git config --get-regexp --show-origin --includes -z`, each `<origin>\0<key>\n<value>\0`; nothing is parsed here.
+ */
+async function configAt(dir, env, level) {
+  const read = await gitIn(dir, ['config', ...level, '--get-regexp', '--show-origin', '--includes', '-z', '.'], env);
+
+  // 1 with nothing said: no value at that level.
+  if (read.code === 1 && read.stderr.trim() === '') return { entries: [] };
+
+  if (read.code !== 0) return { refused: leadingLine(read.stderr) };
+  const fields = read.stdout.split('\0');
+  const entries = [];
+
+  for (let index = 0; index + 1 < fields.length; index += 2) {
+    const [key = '', ...value] = fields[index + 1].split('\n');
+    entries.push({ origin: fields[index], key, value: value.join('\n') });
+  }
+
+  return { entries };
+}
+
+/**
+ * One repository asked of git from `at` (its working tree, or its git directory when it is bare): the git directory,
+ * the common one, the hooks directory git would run (worktrees, commondir, config.worktree, core.hooksPath at every
+ * level through includes), and every value git reads for it. Neither command runs a hook or fsmonitor: neither
+ * reads the index. Measured 2026-09-25: 1.6-1.9 ms for one repository, 7-21 ms for twenty asked concurrently.
+ */
+async function askRepository(at, home) {
+  const env = gitEnvironment(home, path.dirname(at));
+  const where = await gitIn(at, ['rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir', '--git-path', 'hooks'], env);
+
+  if (where.code !== 0) return { refused: leadingLine(where.stderr) };
+  const config = await configAt(at, env, []);
+
+  if (config.refused !== undefined) return config;
+  const [gitDir, commonDir, hooks] = where.stdout.trim().split('\n');
+
+  return { gitDir, commonDir, hooks, entries: config.entries };
+}
+
+/** Where git runs for the repository that holds `from`: its working tree, or its git directory when `from` is in
+ *  one (a bare repository's, or a `.git`). Null when none holds it, or `{ refused }`. */
+async function repositoryHolding(from, env) {
+  const where = await gitIn(from, ['rev-parse', '--path-format=absolute', '--git-dir', '--is-bare-repository', '--is-inside-git-dir'], env);
+
+  if (where.code !== 0) return /not a git repository/u.test(where.stderr) ? null : { refused: leadingLine(where.stderr) };
+  const [gitDir, bare, insideGitDir] = where.stdout.trim().split('\n');
+
+  if (bare === 'true' || insideGitDir === 'true') return { at: gitDir };
+  const top = await gitIn(from, ['rev-parse', '--path-format=absolute', '--show-toplevel'], env);
+
+  return top.code === 0 ? { at: top.stdout.trim() } : { refused: leadingLine(top.stderr) };
+}
+
+/**
+ * Git's answers, kept while every file each came from is as it was: a file method asks the guard on every write, and
+ * git's processes are most of its cost (the daemon's link-swap race writes 2,000 times). A file's signature is its
+ * inode, size, and change and modify times in nanoseconds; an answer whose file changed while git was being asked is
+ * not kept, so a kept answer is never older than its files.
+ */
+const gitAnswers = new Map();
+
+/** What `file` is now, to tell whether it changed: '-' when nothing is there. */
+function signatureOf(file) {
+  let stat;
+
+  try {
+    stat = fs.statSync(file, { bigint: true });
+  } catch (err) {
+    // Nothing there, or a file where a folder would be: that is the state too.
+    if (!err || (err.code !== 'ENOENT' && err.code !== 'ENOTDIR')) throw err;
+
+    return '-';
+  }
+
+  return `${String(stat.ino)}:${String(stat.size)}:${String(stat.mtimeNs)}:${String(stat.ctimeNs)}`;
+}
+
+/** `ask`'s answer for `key`, asked again only when a file `filesOf` names for it has changed since it was kept. */
+async function remembered(key, filesOf, ask) {
+  const kept = gitAnswers.get(key);
+
+  if (kept !== undefined && kept.files.every((file, at) => signatureOf(file) === kept.signatures[at])) return kept.answer;
+  // Wall clock, as a file's change time is, a millisecond early for the clocks' rounding.
+  const askedAt = BigInt(Date.now() - 1) * 1_000_000n;
+  const answer = await ask();
+  const files = filesOf(answer);
+  const signatures = files.map(signatureOf);
+  const changedMeanwhile = signatures.some((signature) => signature !== '-' && BigInt(signature.split(':')[3] ?? '0') >= askedAt);
+
+  if (changedMeanwhile) gitAnswers.delete(key);
+  else gitAnswers.set(key, { answer, files, signatures });
+
+  return answer;
+}
+
+/** The files the owner's global and the machine's system git configuration are read from, as git looks for them. */
+function globalConfigFiles(home) {
+  return [path.join(home, '.gitconfig'), path.join(process.env.XDG_CONFIG_HOME ?? path.join(home, '.config'), 'git', 'config'), '/etc/gitconfig'];
+}
+
+/** Every file a configuration answer read, through its includes. */
+const originsOf = (answer) => (answer.entries ?? []).filter((entry) => entry.origin.startsWith('file:')).map((entry) => entry.origin.slice('file:'.length));
+
+/** Each directory from `from` up to the root: a `.git` made or removed in one changes it. */
+function ancestorsOf(from) {
+  const dirs = [];
+
+  for (let dir = from; ; dir = path.dirname(dir)) {
+    dirs.push(dir);
+
+    if (dir === path.dirname(dir)) return dirs;
+  }
+}
+
+/** Each repository `ask` answers for, GIT_QUESTIONS_AT_ONCE at a time. */
+async function askEach(places, ask) {
+  const answers = [];
+
+  for (let at = 0; at < places.length; at += GIT_QUESTIONS_AT_ONCE) {
+    answers.push(...await Promise.all(places.slice(at, at + GIT_QUESTIONS_AT_ONCE).map(async (place) => ({ place, answer: await ask(place) }))));
+  }
+
+  return answers;
+}
+
+/** A path a config value names, as git reads it: `~/` is the home, and a relative one is from `base`, or null when
+ *  that depends on where git runs. */
+function configuredPath(value, home, base) {
+  if (value.startsWith('~/')) return path.join(home, value.slice(2));
+
+  if (path.isAbsolute(value)) return value;
+
+  return base === null ? null : path.resolve(base, value);
+}
+
+/** The first word of a program-valued config value: git hands these to the shell, and `!` marks a shell command. */
+function programWord(value) {
+  const [word = ''] = value.trim().replace(/^!/u, '').trim().split(/\s+/u);
+
+  return word.replace(/^(["'])(.*)\1$/u, '$2');
+}
+
+/**
+ * What stays read-only inside the writable roots, as `{ guarded, unguarded }` (THE INVARIANT above). `guarded` lists
+ * `{ path, kind }`: a `directory` or `config` is created empty first when missing, git's own layout, so a command
+ * cannot create it, and a `file` is bound where it exists. Every name a known startup file has in a writable root, as
+ * a hard link or its link's target, is kept too. `unguarded` lists `{ path, why }` for what could not be asked: a
+ * root whose walk stopped at GUARD_ENTRIES, a repository git refused, a relative program or directory whose place
+ * depends on where git runs, a missing file a config names in a writable root, and a PATH directory in a writable root
+ * ahead of a program a config names by bare name. Also not guarded: a repository made during a command, and one
+ * inside node_modules.
+ */
+async function guardedPaths(writableRoots, home, deviceHome) {
+  const guarded = new Map();
+  const notes = new Map();
+
+  const unguarded = { push: (note) => notes.set(`${note.path}\0${note.why}`, note) };
+
+  const inRoot = (candidate) => writableRoots.some((root) => within(root, candidate));
+
+  const keep = (candidate, kind, why = RUN_BY_THE_OWNER) => {
+    const real = realTarget(candidate);
+
+    if (inRoot(real) && !guarded.has(real)) guarded.set(real, { kind, why });
+  };
+
+  if (writableRoots.length === 0) return { guarded: [], unguarded: [] };
+  const { linked, sealedFor } = runLaterGuards(home, inRoot, keep);
+
+  const repositories = new Set();
+  // A git directory the walk reaches is a bare repository: a `.git` is taken at its entry, never walked into.
+  const isGitDirectory = (listed) => ['HEAD', 'objects', 'refs'].every((name) => listed.some((entry) => entry.name === name));
+
+  const descend = (full, entry) => {
+    if (entry.name === '.git' && (entry.isDirectory() || entry.isFile())) {
+      repositories.add(path.dirname(full));
+
+      return false;
+    }
+
+    if (entry.isDirectory()) return !WALK_SKIPPED.has(entry.name) && !within(deviceHome, full);
+    const stat = entry.isFile() && linked.size > 0 ? statOrNull(full) : null;
+    const linkedWhy = stat === null ? undefined : linked.get(`${String(stat.dev)}:${String(stat.ino)}`);
+
+    if (linkedWhy !== undefined) keep(full, 'file', linkedWhy);
+
+    return false;
+  };
+
+  const bare = (dir, listed) => {
+    if (!isGitDirectory(listed)) return false;
+    repositories.add(dir);
+
+    return true;
+  };
+
+  // A root inside another is walked as part of it.
+  const outermost = writableRoots.filter((candidate) => !writableRoots.some((other) => other !== candidate && within(other, candidate)));
+  const unwalled = gitEnvironment(home, undefined);
+
+  for (const root of outermost) {
+    if (walkEntries(root, GUARD_ENTRIES, descend, bare)) unguarded.push({ path: root, why: `the sandbox stopped looking after ${String(GUARD_ENTRIES)} entries` });
+
+    // Outward, repository after repository: a submodule's superproject, a monorepo around a shared package, a bare
+    // repository whose git directory holds the root.
+    for (let from = root; from !== path.dirname(from);) {
+      const holding = await remembered(`holding\0${from}\0${home}`, (answer) => [...ancestorsOf(from), ...globalConfigFiles(home), ...answer?.at === undefined ? [] : [path.join(answer.at, '.git')]],
+        async () => repositoryHolding(from, unwalled));
+
+      if (holding === null) break;
+
+      if (holding.refused !== undefined) {
+        unguarded.push({ path: from, why: `git refused to read the repository around it: ${holding.refused}` });
+        break;
+      }
+
+      repositories.add(holding.at);
+      from = path.dirname(holding.at);
+    }
+  }
+
+  const execPath = await remembered(`exec-path\0${process.env.PATH ?? ''}`, () => (process.env.PATH ?? '').split(path.delimiter).filter((dir) => path.isAbsolute(dir)).map((dir) => path.join(dir, 'git')),
+    async () => gitIn('/', ['--exec-path'], unwalled));
+
+  const searched = (process.env.PATH ?? '').split(path.delimiter).filter((dir) => path.isAbsolute(dir));
+
+  // A value names a program by path, relative to `base` (where git runs it; null when that depends on the caller),
+  // or by bare name, which the shell finds through PATH.
+  const keepProgram = ({ origin, key, value }, base) => {
+    if (SWITCH_VALUES.has(value.trim().toLowerCase()) || (key.startsWith('alias.') && !value.trim().startsWith('!'))) return;
+    const helper = key.startsWith('credential.') && !value.trim().startsWith('!') && !programWord(value).includes('/');
+    const word = helper ? `git-credential-${programWord(value)}` : programWord(value);
+
+    if (word.includes('/')) {
+      const named = configuredPath(word, home, base);
+
+      if (named === null) unguarded.push({ path: origin, why: `${key} names the relative program ${word}, which runs from wherever git runs` });
+      else if (inRoot(realTarget(named)) && statOrNull(named) === null) unguarded.push({ path: named, why: `${key} names it, and it does not exist yet` });
+      else keep(named, 'file');
+
+      return;
+    }
+
+    const dirs = helper && execPath.code === 0 ? [execPath.stdout.trim(), ...searched] : searched;
+    const found = dirs.findIndex((dir) => statOrNull(path.join(dir, word))?.isFile() === true);
+
+    if (found !== -1) keep(path.join(dirs[found], word), 'file');
+
+    for (const dir of (found === -1 ? dirs : dirs.slice(0, found)).filter(inRoot)) {
+      unguarded.push({ path: dir, why: `${key} runs ${word} through PATH, and a program made in this directory would run instead` });
+    }
+  };
+
+  const keepDirectory = ({ origin, key, value }, base) => {
+    const named = configuredPath(value, home, base);
+
+    if (named === null) unguarded.push({ path: origin, why: `${key} names the relative directory ${value}, whose place depends on where git runs` });
+    else keep(named, 'directory');
+  };
+
+  const keepConfigured = (entries, base) => {
+    for (const entry of entries) {
+      if (entry.origin.startsWith('file:')) keep(path.resolve(base ?? '/', entry.origin.slice('file:'.length)), 'file');
+
+      // A repository's own hooks directory is git's answer (askRepository); a relative global one is each repository's.
+      const hooksPath = entry.key === 'core.hookspath' && base === null && configuredPath(entry.value, home, null) !== null;
+
+      if (PROGRAM_KEYS.test(entry.key)) keepProgram(entry, base);
+      else if (entry.key === 'init.templatedir' || hooksPath) keepDirectory(entry, base);
+    }
+  };
+
+  // Once per plan, the owner's global and the machine's system configuration: a value there counts even where no
+  // repository sits.
+  for (const level of [['--global'], ['--system']]) {
+    const config = await remembered(`config\0${level[0]}\0${home}`, (answer) => [...globalConfigFiles(home), ...originsOf(answer)], async () => configAt('/', unwalled, level));
+
+    if (config.refused === undefined) keepConfigured(config.entries, null);
+    else unguarded.push({ path: level[0], why: `git refused to read that configuration: ${config.refused}` });
+  }
+
+  const repositoryFiles = (at, answer) => [path.join(at, '.git'), at, ...globalConfigFiles(home), ...originsOf(answer),
+    ...answer.commonDir === undefined ? [] : [path.join(answer.commonDir, 'config'), path.join(answer.gitDir, 'config.worktree'), path.join(answer.commonDir, 'worktrees')]];
+
+  for (const { place, answer } of await askEach([...repositories], (at) => remembered(`repository\0${at}\0${home}`, (asked) => repositoryFiles(at, asked), async () => askRepository(at, home)))) {
+    if (answer.refused !== undefined) {
+      unguarded.push({ path: place, why: `git refused to read it: ${answer.refused}` });
+      continue;
+    }
+
+    // The default hooks directory too: the config that points elsewhere could be changed by the owner later.
+    for (const hooks of [answer.hooks, path.join(answer.commonDir, 'hooks')]) keep(hooks, 'directory');
+
+    for (const config of [path.join(answer.commonDir, 'config'), path.join(answer.gitDir, 'config.worktree')]) keep(config, 'config');
+
+    // Where the owner's git in a linked worktree finds its git directory, and where each worktree's record says the
+    // common one and the worktree are: rewritten, they lead the owner's next command into a repository the agent made.
+    if (statOrNull(path.join(place, '.git'))?.isFile() === true) keep(path.join(place, '.git'), 'file');
+
+    for (const worktree of entriesOf(path.join(answer.commonDir, 'worktrees'))) {
+      for (const record of ['gitdir', 'commondir']) keep(path.join(answer.commonDir, 'worktrees', worktree.name, record), 'file');
+    }
+
+    keepConfigured(answer.entries, place);
+  }
+
+  for (const [dir, missing] of sealedFor) {
+    if (!guarded.has(dir)) guarded.set(dir, { kind: 'sealed', why: sealedWhy(dir, missing) });
+  }
+
+  pinAncestors(guarded, writableRoots);
+  openSealed(guarded, deviceHome);
+
+  return { guarded: [...guarded].map(([kept, entry]) => ({ path: kept, ...entry })), unguarded: [...notes.values()] };
+}
+
+/**
+ * The run-later paths (core run-later-paths.ts) inside the writable roots: each that exists is kept (`keep`); for each
+ * that does not, the folder that would hold it, in `sealedFor` with what would be made there. `linked` names each kept
+ * file with other names, by device and inode: a hard link in a writable root is the same file.
+ */
+function runLaterGuards(home, inRoot, keep) {
+  const linked = new Map();
+  const sealedFor = new Map();
+
+  for (const { tail, why } of RUN_LATER) {
+    const real = realTarget(path.join(home, tail));
+
+    if (!inRoot(real)) continue;
+    const stat = statOrNull(real);
+
+    if (stat !== null) {
+      keep(real, 'file', why);
+
+      if (stat.isFile() && stat.nlink > 1) linked.set(`${String(stat.dev)}:${String(stat.ino)}`, why);
+      continue;
+    }
+
+    // Missing: no bind can hold a name that does not exist without making it, so the folder that would hold it takes
+    // no new entry (never a placeholder in the owner's home, which would change what their shell or tool reads).
+    let dir = path.dirname(real);
+
+    while (statOrNull(dir) === null) dir = path.dirname(dir);
+    sealedFor.set(dir, [...sealedFor.get(dir) ?? [], `~/${tail}`]);
+  }
+
+  return { linked, sealedFor };
+}
+
+/** Why a sealed folder takes no new entry, as a refusal says it after "device path '<path>' is ": what would land there,
+ *  and what to do instead. */
+function sealedWhy(dir, missing) {
+  return `a new entry directly in ${dir}, which takes none: ${missing.join(', ')} would be made there, and ${missing.length === 1 ? 'it runs' : 'they run'} `
+    + `outside the sandbox. Create it inside an existing folder instead, e.g. ${path.join(dir, 'projects')}/…`;
+}
+
+/**
+ * Each entry already in a sealed folder stays writable, bound over itself (`open`), but for what the guard keeps there
+ * and links, which a bind would follow out of the folder. Being a mount, an open entry cannot be renamed or removed.
+ */
+function openSealed(guarded, deviceHome) {
+  // An entry this adds is `open`, which the loop passes over when it meets it.
+  for (const [dir, entry] of guarded) {
+    if (entry.kind !== 'sealed') continue;
+
+    for (const child of entriesOf(dir)) {
+      const full = path.join(dir, child.name);
+
+      if (child.isSymbolicLink() || guarded.has(full) || within(deviceHome, full) || within(full, deviceHome)) continue;
+      guarded.set(full, { kind: 'open', why: '' });
+    }
+  }
+}
+
+/**
+ * Each folder between a writable root and a kept path becomes a `pin`: bound over itself, a mountpoint the command
+ * cannot rename or remove (EBUSY). Without it, moving `.git` or any folder above it carries the read-only binds away,
+ * and a writable copy put back in its place is what the owner's git reads next. A folder inside a kept directory is
+ * already read-only, and a root is itself a mount.
+ */
+function pinAncestors(guarded, writableRoots) {
+  const readOnlyDirs = [...guarded].filter(([, entry]) => entry.kind === 'directory' || entry.kind === 'file').map(([kept]) => kept);
+
+  // A pin this adds is met in turn, and its ancestors are pinned as the kept path's would be.
+  for (const kept of guarded.keys()) {
+    for (let dir = path.dirname(kept); ; dir = path.dirname(dir)) {
+      const inside = writableRoots.some((root) => root !== dir && within(root, dir));
+
+      if (!inside || guarded.has(dir) || readOnlyDirs.some((readOnly) => within(readOnly, dir))) break;
+      guarded.set(dir, { kind: 'pin', why: '' });
+    }
+  }
+}
+
+/** Walks `root` breadth first, following no link, handing `descend` each entry until `limit` are read; `descend`
+ *  answers whether to walk into a directory, and `stop` whether a directory's listing ends the walk into it. True
+ *  when an entry was left unread. */
+function walkEntries(root, limit, descend, stop) {
+  const pending = [root];
+  let seen = 0;
+
+  for (let at = 0; at < pending.length; at += 1) {
+    const listed = entriesOf(pending[at]);
+
+    if (at > 0 && stop(pending[at], listed)) continue;
+
+    for (const entry of listed) {
+      if (seen === limit) return true;
+      seen += 1;
+      const full = path.join(pending[at], entry.name);
+
+      if (descend(full, entry)) pending.push(full);
+    }
+  }
+
+  return false;
+}
+
+/**
+ * The read-only half of the Linux view, as mounts. Each system tree is bound at
+ * its own path, and a top-level link into another bound tree stays a link:
+ * merged-/usr makes `/bin` a link to `usr/bin`, and `#!/bin/bash` needs the
+ * name. `/etc/resolv.conf` points into `/run/systemd/resolve` on Ubuntu, so
+ * that directory is bound too, or nothing in the sandbox resolves a host name
+ * and nothing installs.
+ */
 /**
  * The read-only half of the Linux view, as mounts. Each system tree is bound at
  * its own path, and a top-level link into another bound tree stays a link:
@@ -382,6 +916,58 @@ const OUTSIDE_THE_SANDBOX = 'outside what this device\'s sandbox exposes, which 
 
 const INSIDE_KINU = 'inside Kinu\'s own directory, which the tunnel never serves';
 
+const RUN_BY_THE_OWNER = 'code the owner\'s shell or git runs outside the sandbox, which stays read-only to the agent';
+
+/**
+ * What a command's error output shows the guard refused (guardedPaths), as sentences that name each path and why; empty
+ * when it shows none. A refused write on a line naming a kept path or a sealed folder, or "Device or resource busy" on
+ * one naming a pinned or opened folder. `names` is what `guardNames` recorded at the start. Seatbelt's denial reads
+ * "Operation not permitted" (unmeasured here: this is a Linux box).
+ */
+function guardNote(stderr, names) {
+  const said = new Map();
+  const lines = stderr.split('\n');
+  const refused = (line) => /Read-only file system|Operation not permitted/u.test(line);
+
+  const escaped = (text) => text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+  // A kept path, by its full path or by its last name as a word of the line (a relative path, as a shell says it).
+  const mentions = (line, kept) => [line.includes(kept), new RegExp(`(?:^|[\\s/'"])${escaped(path.basename(kept))}(?:[\\s:'"]|$)`, 'u').test(line)].includes(true);
+  // A new entry directly in the sealed folder: its own last name follows the folder, then the line's punctuation.
+  const newEntryIn = (line, dir) => new RegExp(`${escaped(dir)}/[^/\\s:'"]+(?:[\\s:'"]|$)`, 'u').test(line);
+
+  for (const line of lines.filter(refused)) {
+    const kept = names.kept.filter((entry) => mentions(line, entry.path));
+
+    for (const entry of kept) said.set(entry.path, `${entry.path} is ${entry.why}.`);
+
+    for (const sealed of kept.length > 0 ? [] : names.sealed.filter((entry) => newEntryIn(line, entry.path))) {
+      said.set(sealed.path, `That is ${sealed.why}`);
+    }
+  }
+
+  for (const line of lines) {
+    if (line.includes('Device or resource busy') && names.pinned.some((name) => line.includes(name))) {
+      said.set('pinned', 'A folder holding what the sandbox keeps read-only, or an entry of a folder that takes no new entry, cannot be renamed or removed.');
+    }
+  }
+
+  return said.size === 0 ? '' : `Kinu's sandbox refused that. ${[...said.values()].join(' ')}`;
+}
+
+/** What `guardNote` needs of a plan's guard: each kept path with why, each sealed folder with why, and the last names
+ *  of the pinned and opened folders. */
+function guardNames(guarded) {
+  const kept = guarded.filter((entry) => entry.kind === 'file' || entry.kind === 'directory' || entry.kind === 'config');
+  const pinned = [...new Set(guarded.filter((entry) => entry.kind === 'pin' || entry.kind === 'open').map((entry) => path.basename(entry.path)))];
+
+  return {
+    kept: kept.map((entry) => ({ path: entry.path, why: entry.why })),
+    sealed: guarded.filter((entry) => entry.kind === 'sealed').map((entry) => ({ path: entry.path, why: entry.why })),
+    pinned,
+  };
+}
+
+
 /**
  * The policy, as one object, in one layout on Linux and macOS.
  *
@@ -416,7 +1002,41 @@ function viewFor(options) {
     .sort((left, right) => right.length - left.length);
 
   const linux = platform !== 'darwin';
-  const scope = { home, deviceHome, own: [agentHome, agentTmp], writable: roots };
+  // Every root is writable but for what the guard keeps (guardedPaths): git's hooks and settings in each repository,
+  // and in a consented home the declared run-later paths (RUN_LATER), owner decision 2026-10-22.
+  const writableRoots = roots;
+  const scope = { home, deviceHome, own: [agentHome, agentTmp], writable: writableRoots };
+  // Read by `guards()`, which a plan awaits first and a write method awaits in its queue (`refuseGuarded`); a read
+  // never asks for them.
+  let reading = null;
+  let read = null;
+  const guards = () => (reading ??= guardedPaths(writableRoots, home, deviceHome).then((found) => (read = found)));
+
+  const guardsRead = () => {
+    if (read === null) throw new Error('the guards of a consented directory were asked before they were read');
+
+    return read;
+  };
+
+  // What the guard keeps that a write to `target` would change: a kept path holding it, or a sealed folder it would be
+  // a new entry of.
+  const guardedWrite = (target) => {
+    if (read === null || within(agentHome, target) || within(agentTmp, target) || !writableRoots.some((root) => within(root, target))) return null;
+    const { guarded } = read;
+    const kept = guarded.find((entry) => (entry.kind === 'file' || entry.kind === 'directory' || entry.kind === 'config') && within(entry.path, target));
+
+    if (kept !== undefined) return kept;
+    const sealed = guarded.find((entry) => entry.kind === 'sealed' && entry.path === path.dirname(target));
+
+    return sealed !== undefined && lstatOrNull(target) === null ? sealed : null;
+  };
+
+  const writeRefusal = (decision) => {
+    if (decision.access === VIEW_READ_ONLY) return { why: decision.why };
+    const refused = guardedWrite(decision.path);
+
+    return refused === null ? null : { why: refused.why };
+  };
 
   const readMounts = linux ? linuxReadMounts() : [];
   const readTrees = readMounts.map((mount) => mount.real);
@@ -457,7 +1077,7 @@ function viewFor(options) {
 
     if (within(deviceHome, target)) return { access: VIEW_INVISIBLE, path: target, why: INSIDE_KINU };
 
-    if (roots.some((root) => within(root, target))) return { access: VIEW_WRITABLE, path: target };
+    if (writableRoots.some((root) => within(root, target))) return { access: VIEW_WRITABLE, path: target };
 
     if (linux) {
       if (readTrees.some((tree) => within(tree, target))) return { access: VIEW_READ_ONLY, path: target };
@@ -481,6 +1101,30 @@ function viewFor(options) {
     agentTmp,
     deviceHome,
     roots,
+    guards,
+    /**
+     * Refuses a write the guard keeps (`guardedPaths`) to `target`, a path this view already judged for writing, with
+     * why, once the guards are read. A write method awaits it in its queue, right before it acts, so its path is judged
+     * on arrival as ever and its order is kept.
+     */
+    async refuseGuarded(target) {
+      await guards();
+      const refused = guardedWrite(target);
+
+      if (refused === null) return;
+      const error = new Error(`device path '${target}' is ${refused.why}`);
+
+      error.code = VIEW_READ_ONLY;
+      throw error;
+    },
+    /** Each path kept read-only inside the writable roots, as `{ path, kind }` (guardedPaths), once `guards()` read them. */
+    get guarded() {
+      return guardsRead().guarded;
+    },
+    /** What went unguarded, as `{ path, why }` (guardedPaths), once `guards()` read it. */
+    get unguarded() {
+      return guardsRead().unguarded;
+    },
     readMounts,
     // Kinu's own directory, wherever a bind would otherwise carry it in; the
     // mask goes on after every bind, so no bind can uncover it again.
@@ -532,13 +1176,15 @@ function viewFor(options) {
         throw error;
       }
 
-      if (decision.access === VIEW_READ_ONLY && mode === 'write') {
+      const refused = mode === 'write' ? writeRefusal(decision) : null;
+
+      if (refused !== null) {
         const consented = roots.length === 0 ? 'none' : roots.join(', ');
 
-        const error = new Error(
-          `device path '${requested}' is read-only in this device's sandbox; `
-          + `write inside the agent's home or one of the consented directories (${consented})`,
-        );
+        const error = new Error(refused.why === undefined
+          ? `device path '${requested}' is read-only in this device's sandbox; `
+            + `write inside the agent's home or one of the consented directories (${consented})`
+          : `device path '${requested}' is ${refused.why}`);
 
         error.code = VIEW_READ_ONLY;
         throw error;
@@ -637,6 +1283,8 @@ function rawViewFor(options) {
       // a missing path produces.
       return requested;
     },
+    // The Sandbox switch is off: the owner chose no guard, and a write method's queue asks it of every view alike.
+    refuseGuarded: async () => {},
     checkpointDirectory: (dir) => checkpointVerdict(scope, dir),
     workingTree: (dir) => workingTreeVerdict(scope, dir),
   };
@@ -724,6 +1372,21 @@ function buildLinuxArgv(view, options) {
   // owner shared and later deleted is no reason to refuse every command.
   for (const root of [...view.roots].reverse()) argv.push('--bind-try', root, root);
 
+  // Over the writable roots that hold them (guardedPaths), outer before inner, so a pin or an opened entry never covers
+  // a read-only bind below it: a sealed folder read-only, then each entry already in it writable again. Git's own
+  // directories and config are made first when missing; nothing else is.
+  for (const { path: kept, kind } of [...(options.guarded ?? [])].sort((a, b) => a.path.length - b.path.length)) {
+    if (kind === 'pin' || kind === 'open') {
+      argv.push('--bind-try', kept, kept);
+      continue;
+    }
+
+    if (kind === 'directory') fs.mkdirSync(kept, { recursive: true });
+    else if (kind === 'config') fs.closeSync(fs.openSync(kept, 'a'));
+
+    if (fs.existsSync(kept)) argv.push('--ro-bind', kept, kept);
+  }
+
   for (const dir of view.hiddenDirs) argv.push('--tmpfs', dir);
 
   for (const file of view.hiddenFiles) argv.push('--ro-bind', '/dev/null', file);
@@ -750,12 +1413,24 @@ function buildLinuxArgv(view, options) {
  *  agent's own" expressible without enumerating what to hide. Kinu's own
  *  directory is denied after the consented roots, which may hold it, and the
  *  agent's directories inside it are allowed again after that. */
-function buildMacProfile(view, daemonDirs = { writable: [], readable: [] }) {
+function buildMacProfile(view, daemonDirs = {}) {
   const subpath = (dir) => `(subpath ${JSON.stringify(dir)})`;
   // Kinu's directories a confined program of the daemon writes (a checkpoint store) are allowed again with the agent's.
-  const own = [view.agentHome, view.agentTmp, ...daemonDirs.writable];
-  const readable = daemonDirs.readable.length === 0 ? [] : [`(allow file-read* ${daemonDirs.readable.map(subpath).join(' ')})`];
+  const own = [view.agentHome, view.agentTmp, ...(daemonDirs.writable ?? [])];
+  const daemonReadable = daemonDirs.readable ?? [];
+  const readable = daemonReadable.length === 0 ? [] : [`(allow file-read* ${daemonReadable.map(subpath).join(' ')})`];
   const writable = [...own, ...view.roots, '/private/tmp', '/private/var/tmp'];
+  const guarded = daemonDirs.guarded ?? [];
+  const readOnly = guarded.filter((entry) => entry.kind === 'file' || entry.kind === 'directory' || entry.kind === 'config');
+  const pinned = guarded.filter((entry) => entry.kind === 'pin');
+  const sealed = guarded.filter((entry) => entry.kind === 'sealed');
+  const childOf = (dir) => `(regex #"^${dir.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}/[^/]+$")`;
+
+  // A pin denies writing the folder's own entry (rename, removal), never what is created inside it; a sealed folder
+  // denies creating an entry directly in it, while those already there stay writable.
+  const kept = (readOnly.length === 0 ? '' : ` (deny file-write* ${readOnly.map((entry) => subpath(entry.path)).join(' ')})`)
+    + (pinned.length === 0 ? '' : ` (deny file-write* ${pinned.map((entry) => `(literal ${JSON.stringify(entry.path)})`).join(' ')})`)
+    + (sealed.length === 0 ? '' : ` (deny file-write-create ${sealed.map((entry) => childOf(entry.path)).join(' ')})`);
 
   return [
     '(version 1)',
@@ -763,7 +1438,7 @@ function buildMacProfile(view, daemonDirs = { writable: [], readable: [] }) {
     '(allow process-exec*) (allow process-fork) (allow signal (target same-sandbox))',
     '(allow file-read*)',
     `(deny file-read* file-write* ${MAC_DENY_SUBPATHS.map(subpath).join(' ')})`,
-    `(allow file-read* file-write* ${writable.map(subpath).join(' ')})`,
+    `(allow file-read* file-write* ${writable.map(subpath).join(' ')})${kept}`,
     `(deny file-read* file-write* ${subpath(view.deviceHome)})`,
     `(allow file-read* file-write* ${own.map(subpath).join(' ')})`,
     ...readable,
@@ -801,7 +1476,7 @@ const MAC_SANDBOX_EXEC = '/usr/bin/sandbox-exec';
  * namespace. Wrapping it instead would put that ledger — and Kinu's whole
  * directory — inside the view the command can see.
  */
-function plan(options) {
+async function plan(options) {
   const platform = options.platform ?? os.platform();
   const command = options.command;
 
@@ -827,6 +1502,8 @@ function plan(options) {
     roots: options.roots,
   });
 
+  await view.guards();
+
   // A cwd the command cannot write is a cwd that fails on its first redirect,
   // so an unwritable one falls back to the agent's own home.
   const requestedCwd = options.cwd === undefined || options.cwd === null ? view.agentHome : trimPath(options.cwd);
@@ -844,12 +1521,14 @@ function plan(options) {
 
     return {
       view,
-      argv: [MAC_SANDBOX_EXEC, '-p', buildMacProfile(view), 'bash', '-c', command],
+      argv: [MAC_SANDBOX_EXEC, '-p', buildMacProfile(view, { guarded: view.guarded }), 'bash', '-c', command],
       env,
       cwd,
       // No mount namespace to `--chdir` into, so the process starts there.
       spawnCwd: cwd,
-      profile: buildMacProfile(view),
+      profile: buildMacProfile(view, { guarded: view.guarded }),
+      unguarded: view.unguarded,
+      guardNames: guardNames(view.guarded),
     };
   }
 
@@ -870,13 +1549,15 @@ function plan(options) {
   return {
     view,
     statusFd: options.statusFd,
-    argv: buildLinuxArgv(view, { cwd, env, command, gpu, statusFd: options.statusFd }),
+    argv: buildLinuxArgv(view, { cwd, env, command, gpu, statusFd: options.statusFd, guarded: view.guarded }),
     // bwrap carries the environment through `--setenv`, so the process that
     // spawns it needs none of it: an inherited variable here would be a second
     // path into the command's environment.
     env: {},
     cwd,
     gpu,
+    unguarded: view.unguarded,
+    guardNames: guardNames(view.guarded),
   };
 }
 
@@ -932,7 +1613,7 @@ async function probe(options = {}) {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-sandbox-probe-'));
 
   try {
-    const attempt = plan({
+    const attempt = await plan({
       platform,
       home: os.homedir(),
       agentHome: path.join(scratch, 'home'),
@@ -1030,4 +1711,9 @@ module.exports = {
   confined,
   probe,
   helloCapability,
+  guardNote,
+  RUN_BY_THE_OWNER,
+  RUN_LATER,
+  RUN_LATER_NAMES,
+  GUARD_ENTRIES,
 };

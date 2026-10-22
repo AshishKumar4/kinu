@@ -183,12 +183,18 @@ function readCapturedOutput(file) {
 /** Beside a command's supervisor files: why no checkpoint covers what it changes, when none does. */
 const UNCHECKPOINTED_FILE = 'uncheckpointed';
 
-/** A command a signal ended says so, in the words the CLI's own shell uses (cli-backend runtime.ts exitStatus). */
+/** Beside a sandboxed command's supervisor files: the last names of what its plan kept and pinned (sandbox.js). */
+const GUARD_NAMES_FILE = 'guard-names';
+
+/** A command a signal ended says so, in the words the CLI's own shell uses (cli-backend runtime.ts exitStatus); one the
+ *  guard refused says why, as the kernel's words name no reason. */
 function readExecResult(dir) {
   const terminal = readTerminalResult(dir);
   const stderr = readCapturedOutput(path.join(dir, 'stderr'));
-  const note = terminal.signal === null ? '' : `Command terminated by ${terminal.signal}.`;
-  const uncheckpointed = readUncheckpointed(dir);
+  const guardNames = readNote(dir, GUARD_NAMES_FILE);
+  const refused = guardNames === null ? '' : sandbox.guardNote(stderr, guardNames);
+  const note = [refused, terminal.signal === null ? '' : `Command terminated by ${terminal.signal}.`].filter((line) => line !== '').join('\n');
+  const uncheckpointed = readNote(dir, UNCHECKPOINTED_FILE);
 
   const result = {
     stdout: readCapturedOutput(path.join(dir, 'stdout')),
@@ -201,10 +207,10 @@ function readExecResult(dir) {
   return { terminal, result };
 }
 
-/** Why no checkpoint covers what the command in `dir` changed, as its start recorded it, or null. */
-function readUncheckpointed(dir) {
+/** A note the command's start recorded in `dir` (why no checkpoint covers it, what its guard kept), or null. */
+function readNote(dir, file) {
   try {
-    return JSON.parse(fs.readFileSync(path.join(dir, UNCHECKPOINTED_FILE), 'utf8'));
+    return JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8'));
   } catch (err) {
     if (err && err.code === 'ENOENT') return null;
     throw err;
@@ -1045,6 +1051,10 @@ async function startSupervisor({ root, env, requestId }, command, plan, { unchec
 
   if (uncheckpointed !== null) {
     fs.writeFileSync(path.join(dir, UNCHECKPOINTED_FILE), JSON.stringify(uncheckpointed), { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+  }
+
+  if (plan.guardNames !== undefined) {
+    fs.writeFileSync(path.join(dir, GUARD_NAMES_FILE), JSON.stringify(plan.guardNames), { encoding: 'utf8', mode: 0o600, flag: 'wx' });
   }
 
   // The record's liveness, held here before its supervisor exists and handed to it at its spawn: a daemon that
