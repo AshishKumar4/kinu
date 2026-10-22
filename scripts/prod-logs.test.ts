@@ -3,6 +3,7 @@ import * as v from 'valibot';
 import { ALERT_THRESHOLDS } from '@kinu.run/core/analytics';
 import { KinuError } from '@kinu.run/core/obs';
 import { activationDisruptions, canaryActivations } from './durability-canary-telemetry';
+import { deployLanded } from './worker-deployments';
 import {
   alarmsThatRan, deletionTimes, idleWakeHours, ordinalHours, settledRead, Telemetry, terminalEffectStates, type VersionRead, versionFindings, versionRead,
   versionSignals, workWindow,
@@ -470,4 +471,30 @@ describe('a code update\'s reset in a version\'s window', () => {
       `1 invocation(s) of KinuDevbox ended in an uncaught exception: "${RESET}", in request r1 of object box-1`,
     ]);
   });
+});
+
+// worker-deployments.ts, which the version read and the canary ask.
+
+const deployedAt = (iso: string) => Date.parse(iso);
+
+const deployWindow = { from: deployedAt('2026-10-21T20:31:52Z'), to: deployedAt('2026-10-21T20:41:12Z') };
+
+// A code update's reset is a deploy's only when a deploy other than the version's own landed inside its window.
+test('a deploy of another version inside the window rolled the version over; its own deploy and later ones did not', () => {
+  const own = { at: deployedAt('2026-10-21T20:31:53Z'), versions: ['v1'] };
+  const next = { at: deployedAt('2026-10-21T20:40:00Z'), versions: ['v2'] };
+  const later = { at: deployedAt('2026-10-21T21:00:00Z'), versions: ['v2'] };
+  const before = { at: deployedAt('2026-10-21T19:00:00Z'), versions: ['v0'] };
+
+  expect({
+    rolled: deployLanded([later, next, own, before], deployWindow, 'v1'),
+    quiet: deployLanded([later, own, before], deployWindow, 'v1'),
+  }).toEqual({ rolled: true, quiet: false });
+});
+
+test('a full list that does not reach back to the window cannot say, and fails', () => {
+  const newer = Array.from({ length: 10 }, (_, index) => ({ at: deployedAt('2026-10-21T22:00:00Z') + index * 60_000, versions: [`n${String(index)}`] }));
+
+  expect(() => deployLanded(newer, deployWindow, 'v1')).toThrow('whether one landed inside the window is unknown');
+  expect(deployLanded(newer.slice(0, 3), deployWindow, 'v1')).toBe(false);
 });
