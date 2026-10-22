@@ -550,12 +550,13 @@ test("a relative path that named nothing is told the address of a built-in skill
     builtin: await refusal('skills/slates/SKILL.md'),
     notBuiltin: await refusal('skills/absent/SKILL.md'),
     elsewhere: await refusal('workspace/app.ts'),
-    looked: looked.filter((path) => !path.startsWith(`${WORKSPACE_ROOT}/`)),
+    // The only looks are each read's own path: none for a suggestion.
+    looked: [...new Set(looked)],
   }).toEqual({
     builtin: expect.stringContaining('did you mean `vfs://skills/slates/SKILL.md`?'),
     notBuiltin: expect.not.stringContaining('did you mean'),
     elsewhere: expect.not.stringContaining('did you mean'),
-    looked: [],
+    looked: ['skills/slates/SKILL.md', 'skills/absent/SKILL.md', 'workspace/app.ts'],
   });
 });
 
