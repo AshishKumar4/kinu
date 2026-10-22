@@ -133,6 +133,50 @@ print('keys', *keys, 'buttons', *buttons)
 `;
 
 /**
+ * Types `argv[1]` with xdotool, each character past ASCII that the keymap lacks bound to a free keycode first and left
+ * bound. xdotool binds such a character itself to a scratch keycode and restores the keymap right after its press, so
+ * an app that reads the event after the restore types nothing: the golden contract's `ü` was lost at the end of an
+ * otherwise whole line (staging 11d9df0da, 2026-10-22). A keysym the keymap already holds is typed with no remap. Past
+ * the free keycodes, xdotool binds the rest as it would have.
+ */
+export const TYPE_PY = String.raw`import ctypes, os, sys
+text = sys.argv[1]
+x = ctypes.cdll.LoadLibrary('libX11.so.6')
+x.XOpenDisplay.restype = ctypes.c_void_p
+x.XKeysymToKeycode.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+x.XKeysymToKeycode.restype = ctypes.c_ubyte
+x.XDisplayKeycodes.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int)]
+x.XGetKeyboardMapping.argtypes = [ctypes.c_void_p, ctypes.c_ubyte, ctypes.c_int, ctypes.POINTER(ctypes.c_int)]
+x.XGetKeyboardMapping.restype = ctypes.POINTER(ctypes.c_ulong)
+x.XChangeKeyboardMapping.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_ulong), ctypes.c_int]
+x.XFree.argtypes = [ctypes.c_void_p]
+x.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
+x.XCloseDisplay.argtypes = [ctypes.c_void_p]
+
+def keysym(char):
+    code = ord(char)
+    return code if code <= 0xff else 0x01000000 | code
+
+opened = x.XOpenDisplay(b':0')
+if opened:
+    display = ctypes.c_void_p(opened)
+    wanted = [sym for sym in dict.fromkeys(keysym(char) for char in text if ord(char) > 0x7e) if not x.XKeysymToKeycode(display, sym)]
+    if wanted:
+        low, high, per = ctypes.c_int(), ctypes.c_int(), ctypes.c_int()
+        x.XDisplayKeycodes(display, ctypes.byref(low), ctypes.byref(high))
+        count = high.value - low.value + 1
+        table = x.XGetKeyboardMapping(display, low.value, count, ctypes.byref(per))
+        free = [low.value + at for at in range(count) if all(table[at * per.value + level] == 0 for level in range(per.value))]
+        x.XFree(table)
+        for code, sym in zip(reversed(free), wanted):
+            row = [sym] * min(2, per.value) + [0] * max(0, per.value - 2)
+            x.XChangeKeyboardMapping(display, code, per.value, (ctypes.c_ulong * per.value)(*row), 1)
+        x.XSync(display, 0)
+    x.XCloseDisplay(display)
+os.execvp('xdotool', ['xdotool', 'type', '--delay', '12', '--', text])
+`;
+
+/**
  * The xdotool argv that performs `action`, one invocation. No `mousemove --sync`: it waits for the pointer to leave
  * where it was, about 15 s when it is already at the point, and a warp then a click on one X connection are served in
  * order without it. What a run cut short leaves down is let up by {@link LET_UP_PY}, whatever the action.
@@ -143,7 +187,8 @@ export function xdotoolOf(action: Exclude<DesktopAction, { kind: 'screenshot' | 
       return ['xdotool', ...action.hold.flatMap((key) => ['keydown', key]), 'mousemove', ...xy(action.at),
         'click', '--repeat', String(action.count), '--delay', '80', BUTTONS[action.button], ...action.hold.flatMap((key) => ['keyup', key])];
     case 'type':
-      return ['xdotool', 'type', '--delay', '12', '--', action.text];
+      // xdotool still types it, after {@link TYPE_PY} bound what the keymap lacked.
+      return ['python3', '-c', TYPE_PY, action.text];
     case 'key':
       // Held: down, a wait, up, in the one run.
       return action.holdMs === undefined
