@@ -116,7 +116,7 @@ if [ "\${1##*/}" = "deploy-report.ts" ] && [ "$2" = "open" ]; then
   printf '%s\\n' "$KINU_DEPLOY_ROOT/report"
 fi
 # The reds the report names, by phase, as deploy.sh asks (\`holds-red\`): each note it wrote, and each red a phase's
-# runner recorded before it ended red (KINU_DEPLOY_FAIL_REPORTED).
+# runner recorded before it ended red (a failing gate named \`recorded:<command>\`).
 if [ "\${1##*/}" = "deploy-report.ts" ] && [ "$2" = "note" ]; then
   printf '%s\\n' "$4" >> "$KINU_DEPLOY_ROOT/reds"
 fi
@@ -126,12 +126,13 @@ if [ "\${1##*/}" = "deploy-report.ts" ] && [ "$2" = "holds-red" ]; then
   for phase in \${4//,/ }; do grep -qx "$phase" "$KINU_DEPLOY_ROOT/reds" && exit 0; done
   exit 1
 fi
-if [ -n "$KINU_DEPLOY_FAIL_REPORTED" ] && [ "$KINU_DEPLOY_FAIL_REPORTED" = "$command_line" ]; then
+# The ladder's own verdict: a red recorded, then exit 1. A runner that throws (\`crashed:<command>\`): exit 1 too,
+# having recorded nothing.
+if [ "$KINU_DEPLOY_FAIL" = "recorded:$command_line" ]; then
   printf '%s\\n' "\${2#--deploy-phase=}" >> "$KINU_DEPLOY_ROOT/reds"
   exit 1
 fi
-# A runner that throws: exit 1, as its own verdict exits, having recorded nothing.
-if [ -n "$KINU_DEPLOY_CRASH" ] && [ "$KINU_DEPLOY_CRASH" = "$command_line" ]; then
+if [ "$KINU_DEPLOY_FAIL" = "crashed:$command_line" ]; then
   exit 1
 fi
 # WHAT THE INFRASTRUCTURE PHASE ACTUALLY SAW. The account gate reads its phase
@@ -193,17 +194,14 @@ exit 0
 
 /** One deploy run against stub commands.
  *
- *  `failingGate` names a command (a phase, or a step deploy.sh takes itself) that exits 47; `killGate` SIGKILLs one,
+ *  `failingGate` names a command (a phase, or a step deploy.sh takes itself) that exits 47, or, prefixed `recorded:` or
+ *  `crashed:`, a phase that exits 1 having recorded its red or nothing; `killGate` SIGKILLs one,
  *  so it settles with no verdict of its own. `option` is the script's second word, and `ambientPhase` is a
  *  KINU_INFRA_PHASE already on the environment — the one thing that must never decide how strictly a deploy is
  *  checked. */
 interface DeployRun {
   readonly failingGate?: string;
   readonly killGate?: string;
-  /** A phase whose runner records a red in the report, then exits 1: the ladder's own verdict. */
-  readonly failReported?: string;
-  /** A phase whose runner exits 1 having recorded nothing, as one that throws does. */
-  readonly crashGate?: string;
   readonly dirty?: boolean;
   readonly environment?: string;
   readonly option?: string;
@@ -365,8 +363,6 @@ function uploadFixture(fixture: string, uploadRuns: readonly UploadRun[] | undef
 async function runDeploy({
   failingGate = "",
   killGate = "",
-  failReported = "",
-  crashGate = "",
   dirty = false,
   option,
   options = [],
@@ -469,8 +465,6 @@ exit 87
       PATH: `${fixture}:/usr/bin:/bin`,
       KINU_DEPLOY_FAIL: failingGate,
       KINU_DEPLOY_KILL: killGate,
-      KINU_DEPLOY_FAIL_REPORTED: failReported,
-      KINU_DEPLOY_CRASH: crashGate,
       TMPDIR: fixture,
       KINU_DEPLOY_GATE_LOG: log,
       KINU_DEPLOY_ROOT: fixture,
@@ -929,8 +923,8 @@ describe("deploy gate", () => {
   // Staging e8837b133, 2026-10-22: the ladder threw on a report it could not parse and exited 1, the status its own
   // verdict also exits with, so the deploy went red with "0 red" in its report. The report decides, not the status.
   test("a phase that ends red naming no red of its own is named in the report; one that recorded its red is not named twice", async () => {
-    const crashed = await runDeploy({ crashGate: phaseRun("source") });
-    const reported = await runDeploy({ failReported: phaseRun("source") });
+    const crashed = await runDeploy({ failingGate: `crashed:${phaseRun("source")}` });
+    const reported = await runDeploy({ failingGate: `recorded:${phaseRun("source")}` });
     const runner = "note source the source phase's runner it ended with exit";
 
     expect({

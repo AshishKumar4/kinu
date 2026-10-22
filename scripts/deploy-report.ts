@@ -416,6 +416,7 @@ function reportReds(input: Pick<ReportInput, 'meta' | 'entries'>): ReportEntry[]
 export function renderReport(input: ReportInput): RenderedReport {
   const { dir, meta, entries, previous, evals } = input;
   const marks = new Map(entries.flatMap((entry) => (entry.kind === 'mark' ? [[entry.mark, entry.seconds] as const] : [])));
+  const budget = meta.mode === 'gates-only' ? undefined : budgetRed(marks.get('end'));
   const reds = reportReds(input);
   const soak = entries.filter(soaked);
   const carried = new Set(previous?.summary.reds ?? []);
