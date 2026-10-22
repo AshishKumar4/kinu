@@ -162,6 +162,9 @@ export type WorkspaceJobPorts = Required<Pick<BackgroundJobRunnerDeps, 'jobOutpu
 
 const SearchJobInputSchema = v.object({ task: v.string() });
 
+/** The jobs a command runs as, each on a machine its label names. */
+const COMMAND_JOB_KINDS: ReadonlySet<string> = new Set(['shell', 'startProcess']);
+
 /** A command's job: where it runs, as the machine that took it wrote it (`machine`), or the shell's runtime. */
 const RunJobInputSchema = v.object({ command: v.string(), runtime: v.optional(v.string()), machine: v.optional(v.string()) });
 
@@ -176,7 +179,7 @@ function describeJobInput(kind: string, input: JsonValue): string | undefined {
     }
   }
 
-  if (kind === 'shell' || kind === 'startProcess') {
+  if (COMMAND_JOB_KINDS.has(kind)) {
     const parsed = v.safeParse(RunJobInputSchema, input);
 
     if (parsed.success) {
@@ -203,9 +206,9 @@ export function wakeText(job: BackgroundJob, reader: 'agent' | 'inline' = 'agent
     ? ` (generation ${String(job.epoch + 1)}: it was interrupted and picked up again)`
     : '';
 
-  // Named by its label, which says where it ran: its output alone is no evidence of the machine (walkthrough F3,
-  // 2026-10-21: a process on the computer printed `/` and was reported as the workspace's).
-  const ranAs = job.label === null ? '' : ` It ran as ${job.label}.`;
+  // A command's job is named by its label, which says where it ran: its output alone is no evidence of the machine
+  // (walkthrough F3, 2026-10-21: a process on the computer printed `/` and was reported as the workspace's).
+  const ranAs = COMMAND_JOB_KINDS.has(job.kind) && job.label !== null ? ` It ran as ${job.label}.` : '';
 
   if (job.status === 'completed') {
     const read = reader === 'inline'
