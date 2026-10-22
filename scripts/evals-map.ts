@@ -15,6 +15,7 @@ import { gitIn } from '../packages/test-utils/src/git-env';
 import { MapResultSchema, type EvalRun, type MapResult, type TrialItem } from './evals-artifacts';
 import { drainArmadaProgress } from './armada-progress';
 import { KINU_ARMADA, keysWindows, kinuArmada, leaseBlock, outranked } from './evals-lease';
+import { EVAL_SUITES, suiteTasks, type EvalSuite } from './evals-suites';
 import { NETWORK_SCOPE, processEvals, resolveGh, settleEvalRun } from './evals-post';
 import { isEvalTask, trackedFiles } from './sources';
 import { REPO_ROOT as ROOT } from './repo-root';
@@ -167,17 +168,18 @@ async function mapTrials(argv: string[], items: readonly QueuedTrial[], started:
 
 /**
  * The legs a run measures, each a deployment and the build it serves: staging against production, staging alone
- * (`stagingOnly`), or the one deployment KINU_EVAL_ORIGIN names (`pass`). `asked` is the build the caller expects the
- * candidate to serve.
+ * (`stagingOnly`), production alone (`daily`: its baseline is the day before's run, `promote.ts daily`), or the one
+ * deployment KINU_EVAL_ORIGIN names (`pass`). `asked` is the build the caller expects the candidate to serve.
  */
-async function legsOf(pass: boolean, stagingOnly: boolean, asked: string | undefined) {
-  const target = evalTargetVerdict(pass ? process.env['KINU_EVAL_ORIGIN'] : deploymentOf('staging').origin);
+async function legsOf(pass: boolean, stagingOnly: boolean, daily: DailyDeployment | null, asked: string | undefined) {
+  const candidateOrigin = pass ? process.env['KINU_EVAL_ORIGIN'] : deploymentOf(daily ?? 'staging').origin;
+  const target = evalTargetVerdict(candidateOrigin);
 
   if (target.kind === 'refused' || target.why !== 'deployment') throw new Error('evals-map names a real Kinu deployment through KINU_EVAL_ORIGIN');
 
   const origins: { leg: 'candidate' | 'baseline'; origin: string }[] = [{ leg: 'candidate', origin: target.origin }];
 
-  if (!pass && !stagingOnly) origins.push({ leg: 'baseline', origin: deploymentOf('production').origin });
+  if (!pass && !stagingOnly && daily === null) origins.push({ leg: 'baseline', origin: deploymentOf('production').origin });
 
   const [candidateBuild = '', baselineBuild = ''] = await Promise.all(origins.map(async ({ origin }) => (await deployedBuild({ origin })).sha));
 
@@ -267,16 +269,38 @@ async function leasedMap(plan: MapPlan, started: (job: string) => void) {
   }
 }
 
-async function main(): Promise<number> {
-  const { values, positionals } = parseArgs({ allowPositionals: true, options: {
-    tasks: { type: 'string' }, trials: { type: 'string' }, out: { type: 'string' }, post: { type: 'string' },
-    pass: { type: 'boolean', default: false }, record: { type: 'boolean', default: false },
-    'staging-only': { type: 'boolean', default: false },
-    'calls-at-once': { type: 'string' },
-    sequence: { type: 'boolean', default: false },
-    settle: { type: 'string' },
-  } });
+/** `ended`, the run's trials, then the eval keys' windows read again, whether it answered or threw: its own cost. */
+async function reported<T>(ended: () => Promise<T>): Promise<T> {
+  try {
+    return await ended();
+  } finally {
+    await keysWindows((line) => { console.log(`${line} (after the run)`); }, { refuseSpent: false });
+  }
+}
 
+/** Where a daily run's candidate runs. */
+type DailyDeployment = 'production' | 'staging';
+
+/** A daily run as its record names it (`EvalRun`): its suite, and where its candidate runs. */
+interface DailyRun {
+  readonly suite: EvalSuite;
+  readonly deployment: DailyDeployment;
+}
+
+/** A daily run's suite and where its candidate runs (`--suite`, `--on`): the fast suite on production unless named. */
+function dailyRun(values: { readonly suite?: string | undefined; readonly on?: string | undefined }): DailyRun {
+  const suite = v.parse(v.picklist(EVAL_SUITES, `--suite is ${EVAL_SUITES.join(' or ')}`), values.suite ?? 'fast');
+  const deployment = v.parse(v.picklist(['production', 'staging'], '--on is production or staging'), values.on ?? 'production');
+
+  return { suite, deployment };
+}
+
+/** The calls a run makes at once (`--calls-at-once`), refused with any pair of flags that cannot run together. */
+function checkedBudget(values: {
+  readonly 'calls-at-once'?: string | undefined; readonly 'staging-only': boolean; readonly daily: boolean;
+  readonly pass: boolean; readonly record: boolean; readonly post?: string | undefined;
+  readonly suite?: string | undefined; readonly on?: string | undefined;
+}): number {
   // A run on someone's own plan keeps to fewer calls at once than the eval key's ceiling, never more.
   const budget = values['calls-at-once'] === undefined ? MUSE_CALLS_AT_ONCE : Number(values['calls-at-once']);
 
@@ -288,6 +312,31 @@ async function main(): Promise<number> {
   if (values['staging-only'] && (values.pass || values.record || values.post !== undefined)) {
     throw new Error('--staging-only measures models, never a build\'s verdict: drop --pass, --record and --post');
   }
+
+  // The daily run measures the build production serves; its verdict is `promote.ts daily`'s, against the day before's.
+  if (values.daily && (values.pass || values['staging-only'] || values.record || values.post !== undefined)) {
+    throw new Error('--daily is a suite\'s full matrix on one deployment, recorded by `promote.ts daily`: drop --pass, --staging-only, --record and --post');
+  }
+
+  if (!values.daily && (values.suite !== undefined || values.on !== undefined)) throw new Error('--suite and --on name a daily run\'s: add --daily');
+
+  return budget;
+}
+
+async function main(): Promise<number> {
+  const { values, positionals } = parseArgs({ allowPositionals: true, options: {
+    tasks: { type: 'string' }, trials: { type: 'string' }, out: { type: 'string' }, post: { type: 'string' },
+    pass: { type: 'boolean', default: false }, record: { type: 'boolean', default: false },
+    'staging-only': { type: 'boolean', default: false },
+    'calls-at-once': { type: 'string' },
+    sequence: { type: 'boolean', default: false },
+    settle: { type: 'string' },
+    daily: { type: 'boolean', default: false },
+    suite: { type: 'string' },
+    on: { type: 'string' },
+  } });
+
+  const budget = checkedBudget(values);
 
   // Resolved before hours of trials, in this caller's environment: the network scope the posting runs in need not find it.
   const gh = values.post === undefined ? null : resolveGh();
@@ -312,7 +361,8 @@ async function main(): Promise<number> {
   const sha = gitIn(ROOT, 'rev-parse', 'HEAD');
 
   if (!clean) throw new Error('armada measures a committed checkout: commit the tree first');
-  const { origins, candidateBuild, baselineBuild } = await legsOf(values.pass, values['staging-only'], positionals[0]);
+  const gated = values.daily ? dailyRun(values) : null;
+  const { origins, candidateBuild, baselineBuild } = await legsOf(values.pass, values['staging-only'], gated?.deployment ?? null, positionals[0]);
 
   const matrix = evalMatrix({
     ...process.env, KINU_EVAL_TRIALS: values.pass ? '1' : values.trials ?? process.env['KINU_EVAL_TRIALS'], KINU_EVAL_SEQUENCE: values.sequence ? '1' : '0',
@@ -320,7 +370,9 @@ async function main(): Promise<number> {
 
   const allTasks = trackedFiles().filter(isEvalTask).sort();
 
-  const taskFiles = evalTaskFiles(allTasks, values.tasks);
+  // A daily run and a deploy's soak run their suite's tasks; the soak, the fast ones (scripts/evals-suites.ts).
+  const suite = gated?.suite ?? (values.pass ? 'fast' : null);
+  const taskFiles = evalTaskFiles(suite === null ? allTasks : suiteTasks(suite, allTasks), values.tasks);
 
   const out = resolve(values.out ?? process.env['BENCH_ARTIFACTS'] ?? join(ROOT, 'bench-artifacts', 'evals-armada', `${String(Date.now())}-${sha.slice(0, 12)}`));
 
@@ -329,23 +381,27 @@ async function main(): Promise<number> {
 
   const run: EvalRun = {
     definitions: sha, candidateBuild, baselineBuild, taskFiles, models: [...matrix.models], arms: [...matrix.arms],
-    trials: matrix.trials, startedAt, jobs: [], budget, pass: values.pass,
+    trials: matrix.trials, startedAt, jobs: [], budget, pass: values.pass, ...gated !== null && { daily: true, ...gated },
   };
 
-  // Kept as soon as armada names the job, so a run cut short still says which job holds its trials.
-  const { items, job, outcomes } = await leasedMap({ sha, out, origins, matrix, taskFiles, slots: allTasks.length, pass: values.pass, budget }, (named) => {
-    run.jobs = [named];
+  // What the run cost the eval keys, read against the windows it started with, however its trials end.
+  const { postExit, job } = await reported(async () => {
+    // Kept as soon as armada names the job, so a run cut short still says which job holds its trials.
+    const map = await leasedMap({ sha, out, origins, matrix, taskFiles, slots: allTasks.length, pass: values.pass, budget }, (named) => {
+      run.jobs = [named];
+      writeFileSync(join(out, 'run.json'), `${JSON.stringify(run, null, 2)}\n`);
+    });
+
+    run.jobs = [map.job];
     writeFileSync(join(out, 'run.json'), `${JSON.stringify(run, null, 2)}\n`);
+    writeFileSync(join(out, 'trial-job.json'), `${JSON.stringify({ job: map.job, outcomes: map.outcomes }, null, 2)}\n`);
+
+    if (map.outcomes.some((outcome) => outcome.kind === 'cancelled')) return { postExit: 130, job: map.job };
+
+    return { postExit: await processEvals(run, map.items, map.outcomes, join(out, 'evals')), job: map.job };
   });
 
-  run.jobs = [job];
-  writeFileSync(join(out, 'run.json'), `${JSON.stringify(run, null, 2)}\n`);
-  writeFileSync(join(out, 'trial-job.json'), `${JSON.stringify({ job, outcomes }, null, 2)}\n`);
-
-  if (outcomes.some((outcome) => outcome.kind === 'cancelled')) return 130;
-
-  const postExit = await processEvals(run, items, outcomes, join(out, 'evals'));
-
+  if (postExit === 130) return postExit;
   run.wallSeconds = (Date.now() - startedAt) / 1000;
   writeFileSync(join(out, 'evals', 'run.json'), `${JSON.stringify(run, null, 2)}\n`);
   console.log(`report: ${join(out, 'evals')}; wall ${run.wallSeconds.toFixed(1)}s, armada job ${job}`);

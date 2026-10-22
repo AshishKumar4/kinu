@@ -5,6 +5,7 @@ import type { Page } from 'puppeteer';
 import type { JsonValue } from '@kinu.run/core';
 
 import { withGallery, type Gallery } from '../../scripts/gallery-harness';
+import { OPEN_MENU, openRowMenu, pressRowMenu, ROW_MENU } from '../../scripts/browser-page';
 
 
 const VIEWPORTS = { desktop: { width: 1280, height: 860 }, mobile: { width: 390, height: 844 } } as const;
@@ -188,9 +189,9 @@ describe('MCP presets', () => {
         );
 
         // Not connected, the card keeps its way to the sign-in, begun again for a run of its own.
-        await page.click('[data-plugin-source="github"] [data-row-menu]');
-        await page.waitForSelector('[role="menu"][data-open] [data-plugin-sign-in]');
-        const again = await signInTab(page, '[role="menu"][data-open] [data-plugin-sign-in]');
+        await page.click(`[data-plugin-source="github"] ${ROW_MENU}`);
+        await page.waitForSelector(`${OPEN_MENU} [data-plugin-sign-in]`);
+        const again = await signInTab(page, `${OPEN_MENU} [data-plugin-sign-in]`);
         const runs = await begunRuns(page);
 
         expect({ again, runs: runs.length, distinct: new Set(runs).size }).toEqual({ again: sentTo, runs: 2, distinct: 2 });
@@ -339,9 +340,7 @@ describe('MCP presets', () => {
         const signInAgain = async (runs: number) => {
           const retryTarget = page.browser().waitForTarget((target) => target.opener() === page.target());
 
-          await page.click(`${row} [data-row-menu]`);
-          await page.waitForSelector('[role="menu"][data-open] [data-plugin-sign-in]');
-          await page.click('[role="menu"][data-open] [data-plugin-sign-in]');
+          await pressRowMenu(page, row, '[data-plugin-sign-in]');
           const tab = await (await retryTarget).page();
 
           if (tab === null) throw new Error('the sign-in opened no tab');
@@ -381,11 +380,10 @@ describe('MCP presets', () => {
       const row = '[data-plugin-source="github"]';
 
       try {
-        await page.waitForSelector(`${row} [data-row-menu]`);
-        await page.click(`${row} [data-row-menu]`);
-        await page.waitForSelector('[role="menu"][data-open] [role="menuitem"]');
+        await page.waitForSelector(`${row} ${ROW_MENU}`);
+        await openRowMenu(page, row);
 
-        expect(await page.$('[role="menu"][data-open] [data-plugin-sign-in]')).toBeNull();
+        expect(await page.$(`${OPEN_MENU} [data-plugin-sign-in]`)).toBeNull();
       } finally {
         await page.close();
       }

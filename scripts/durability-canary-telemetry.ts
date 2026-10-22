@@ -1,5 +1,6 @@
 import { Telemetry, gapStats, readToken, type Filter, type TelemetryEvent } from './prod-logs';
 import type { CanaryFinding } from './durability-canary-ledger';
+import { listDeployments, type Deployment } from './worker-deployments';
 
 const EVENT_LIMIT = 2000;
 
@@ -156,16 +157,30 @@ function activationRows(rows: readonly TelemetryEvent[], at: {
   return { before, during, priorOutcomes };
 }
 
-/** Whether a deploy ended the activation before `current`: a new build, a resume on one, or the code-updated reset. */
-function deployEvidence(previous: CanaryActivation, current: CanaryActivation, before: readonly TelemetryEvent[], during: readonly TelemetryEvent[]) {
+/**
+ * Whether a deploy ended the activation before `current`: a new build, a resume on one, or the code-updated reset when a
+ * deploy of the worker landed between the two activations. With none, that reset is the build's own
+ * (platform-catalog.ts do.storage.write_await_reset), `unexcused`.
+ */
+function deployEvidence(previous: CanaryActivation, current: CanaryActivation, rows: { readonly before: readonly TelemetryEvent[]; readonly during: readonly TelemetryEvent[] }, deployments: readonly Deployment[]) {
   const changedVersion = previous.version !== null && current.version !== null && previous.version !== current.version;
-  const resumedOnNewBuild = during.filter((row) => row.source.event === 'turn.resumed' && row.source.fields.sameBuild === 'no');
-  const resetRows = before.filter(codeUpdated);
+  const resumedOnNewBuild = rows.during.filter((row) => row.source.event === 'turn.resumed' && row.source.fields.sameBuild === 'no');
+  const resetRows = rows.before.filter(codeUpdated);
+  const from = previous.at ?? Number.NEGATIVE_INFINITY;
+  const to = current.at ?? Number.POSITIVE_INFINITY;
+  const landed = deployments.some((deployment) => deployment.at > from && deployment.at <= to);
+  const deployReset = landed && resetRows.length > 0;
 
-  return { changedVersion, resumedOnNewBuild, resetRows, deploy: changedVersion || resumedOnNewBuild.length > 0 || resetRows.length > 0 };
+  return { changedVersion, resumedOnNewBuild, resetRows, unexcused: deployReset ? [] : resetRows, deploy: changedVersion || resumedOnNewBuild.length > 0 || deployReset };
 }
 
-function activationDisruptions(rows: readonly TelemetryEvent[], activations: readonly CanaryActivation[], window: CanaryWindow, touches: readonly CanaryTouch[]) {
+/** Each activation after the first, and how the one before it ended; `around`: the active window, the driver's touches,
+ *  and the worker's deploys. */
+export function activationDisruptions(rows: readonly TelemetryEvent[], activations: readonly CanaryActivation[], around: {
+  readonly window: CanaryWindow; readonly touches: readonly CanaryTouch[]; readonly deployments: readonly Deployment[];
+}) {
+  const { window, touches, deployments } = around;
+
   const disruptions = [];
   const startupRow = (ordinal: number) => rows.find((row) => row.source.event === 'actor.startup' && row.source.fields.activation === ordinal);
 
@@ -179,7 +194,7 @@ function activationDisruptions(rows: readonly TelemetryEvent[], activations: rea
       previous, current, nextAt: activations[index + 1]?.at ?? window.to + 1, currentRow, previousRow: startupRow(previous.ordinal),
     });
 
-    const { changedVersion, resumedOnNewBuild, resetRows, deploy } = deployEvidence(previous, current, before, during);
+    const { changedVersion, resumedOnNewBuild, resetRows, unexcused, deploy } = deployEvidence(previous, current, { before, during }, deployments);
 
     const invocation = currentRow?.$workers.eventType ?? during.find((row) => row.$metadata.type === 'cf-worker-event'
       && row.$metadata.requestId !== undefined && row.$metadata.requestId === currentRow?.$metadata.requestId)?.$workers.eventType;
@@ -187,7 +202,7 @@ function activationDisruptions(rows: readonly TelemetryEvent[], activations: rea
     const request = invocation === 'fetch' || invocation === 'rpc' || invocation === 'jsrpc';
     const own = current.at === null ? undefined : touches.find((touch) => (current.at ?? 0) >= touch.from && (current.at ?? 0) <= touch.to);
     const fibers = during.filter((row) => row.source.event === 'fiber.recovered');
-    const endedBy = deploy ? 'deploy' : 'eviction';
+    const endedBy = endingOf(deploy, unexcused.length > 0);
     const requestSource = own === undefined ? 'other-or-unattributed-request' : 'driver-touch-by-time';
 
     disruptions.push({ ordinal: current.ordinal, at: current.at === null ? null : iso(current.at), previousStartupAt: previous.at === null ? null : iso(previous.at),
@@ -203,6 +218,13 @@ function activationDisruptions(rows: readonly TelemetryEvent[], activations: rea
   }
 
   return disruptions;
+}
+
+/** How an activation ended: a deploy, the build's own code-updated reset with no deploy, or an eviction. */
+function endingOf(deploy: boolean, reset: boolean): 'deploy' | 'reset' | 'eviction' {
+  if (deploy) return 'deploy';
+
+  return reset ? 'reset' : 'eviction';
 }
 
 function idleReport(rows: readonly TelemetryEvent[], activations: readonly CanaryActivation[], window: CanaryWindow | null) {
@@ -231,6 +253,20 @@ export interface CanaryTelemetryRequest {
   readonly subagentActors: readonly string[];
   /** The ring the driver read at its last touch; null when it could not. */
   readonly activations: readonly CanaryActivation[] | null;
+}
+
+/** The cause of an activation the build's own code-updated reset ended, with no deploy of the worker between. */
+const UNEXCUSED_RESET = 'reset.code-updated-without-deploy';
+
+/** The worker's deploys; one that cannot be read is a read failure, and no reset is excused as a deploy's. */
+async function workerDeployments(client: CanaryTelemetry, worker: string): Promise<readonly Deployment[]> {
+  try {
+    return await listDeployments(worker);
+  } catch (cause) {
+    client.failures.push(`the deployments of ${worker} could not be read, so no code-updated reset is a deploy's: ${cause instanceof Error ? cause.message : String(cause)}`);
+
+    return [];
+  }
 }
 
 export async function measureCanaryTelemetry(request: CanaryTelemetryRequest) {
@@ -284,7 +320,7 @@ export async function measureCanaryTelemetry(request: CanaryTelemetryRequest) {
 
   if (request.activations === null) client.limitations.push('The activation ring could not be read; activations come from the ordinals on surviving startup rows, a gap for each lost one.');
 
-  const disruptions = activationDisruptions(rows, activations, request.active, request.touches);
+  const disruptions = activationDisruptions(rows, activations, { window: request.active, touches: request.touches, deployments: await workerDeployments(client, request.worker) });
   const fiberEvents = active.filter((row) => row.source.event.startsWith('fiber.'));
   const idle = idleReport(rows, activations, request.idle);
 
@@ -313,6 +349,8 @@ export async function measureCanaryTelemetry(request: CanaryTelemetryRequest) {
       disruptions: disruptions.length, perActiveHour: hours > 0 ? disruptions.length / hours : null,
       endedBy: countBy(disruptions.flatMap((row) => {
         if (row.endedBy === 'deploy') return ['deploy'];
+
+        if (row.endedBy === 'reset') return [UNEXCUSED_RESET];
 
         if (row.evictionOutcomes.length === 0) return ['eviction.silent'];
 
@@ -348,12 +386,14 @@ export function telemetryFindings(measured: CanaryTelemetryMeasurement): CanaryF
     const rows = measured.active.rows.filter((row) => {
       if (row.endedBy === 'deploy') return cause.cause === 'deploy';
 
+      if (row.endedBy === 'reset') return cause.cause === UNEXCUSED_RESET;
+
       if (cause.cause === 'eviction.silent') return row.evictionDetail === 'silent';
 
       return row.evictionOutcomes.some((outcome) => cause.cause === `eviction.${outcome}`);
     });
 
-    findings.push({ name: `disruption.${cause.cause}`, kind: 'disruption', cause: `${String(cause.count)} disruptions, ${String(cause.perActiveHour)} per active hour.`,
+    findings.push({ name: `disruption.${cause.cause}`, kind: cause.cause === UNEXCUSED_RESET ? 'defect' : 'disruption', cause: `${String(cause.count)} disruptions, ${String(cause.perActiveHour)} per active hour.`,
       evidence: rows.map((row) => ({ at: row.at, event: 'actor.startup', count: 1,
         detail: `${row.previousStartupAt} -> ${row.at}; resumed ${JSON.stringify(row.resumedBy)}; previous outcomes ${JSON.stringify(row.previousNonOkInvocations)}` })) });
   }
