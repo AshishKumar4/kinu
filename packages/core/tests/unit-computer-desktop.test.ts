@@ -109,6 +109,10 @@ describe('the desktop members', () => {
     await call(computer, 'key', ['w'], { hold: 800 });
     await call(computer, 'scroll', [5, 6], -3, { dx: 2 });
     await call(computer, 'move', [7, 8]);
+    // Minecraft trials, 2026-10-22: under a captured pointer the view turns by motion alone, so a game is aimed by a
+    // distance, and clicked where the pointer is.
+    await call(computer, 'move', { by: [0, -150] });
+    await call(computer, 'click', null);
     expect(await call(computer, 'drag', [1, 2], [3, 4])).toBeNull();
 
     const expected: DesktopAction[] = [
@@ -120,6 +124,8 @@ describe('the desktop members', () => {
       { kind: 'key', keys: 'w', holdMs: 800 },
       { kind: 'scroll', at: [5, 6], dy: -3, dx: 2 },
       { kind: 'move', at: [7, 8] },
+      { kind: 'move', by: [0, -150] },
+      { kind: 'click', button: 'left', count: 1, hold: [] },
       { kind: 'drag', from: [1, 2], to: [3, 4] },
     ];
 

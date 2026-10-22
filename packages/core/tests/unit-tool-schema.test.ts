@@ -215,11 +215,11 @@ describe('MCP tool names', () => {
       return answer.admitted;
     });
 
-    // Admitted as a turn admits them: through the surface cache, against a window that carries every one.
+    // Collision resolution belongs to the shared catalog cache.
     let admitted: readonly SerializableToolDescriptor[] = [];
     const cache = new McpToolSurfaceCache(async (descriptors) => { admitted = descriptors; });
 
-    await cache.refresh(async () => ({ descriptors: described, unavailable: [] }), { contextWindow: 200_000, modelOutputLimit: null, nativeToolTokens: 0 });
+    await cache.refresh(async () => ({ descriptors: described, unavailable: [] }));
     const keys = admitted.map((descriptor) => descriptor.toolKey);
 
     expect(keys).toHaveLength(5);

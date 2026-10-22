@@ -40,29 +40,29 @@ test('an email and a timer turn reach the owner\'s MCP tool once a settled turn 
 
   agent.harnessHoldsCapability('harness-token');
 
-  // Each turn's first request says whether the tool was offered; an offered tool is called once through `eval`.
+  // Each turn discovers the live catalog; a warm connection's tool is called through the same eval.
   const offered: boolean[] = [];
   const results: string[] = [];
-  // Resolved when a turn's model reads its tool's answer: main's turn runs in its isolate, across a relay.
-  const answeredTool = Promise.withResolvers<void>();
 
   agent.modelFactory = () => scriptedTurnModel({ doGenerate: (options) => {
-    const prompt = JSON.stringify(options.prompt);
-    const answered = options.prompt.some((message) => message.role === 'tool');
+    const last = options.prompt.at(-1);
 
-    if (answered) {
-      results.push(...options.prompt.flatMap((message) => (message.role === 'tool' ? message.content.map((part) => JSON.stringify(part)) : [])));
-      answeredTool.resolve();
+    if (last?.role === 'tool') {
+      const answers = last.content.map((part) => JSON.stringify(part));
+      const discovered = answers.some((answer) => answer.includes(KEY));
+      results.push(...answers);
+      offered.push(discovered);
 
       return said('found it');
     }
 
-    offered.push(prompt.includes(`tools[\\"${KEY}\\"]`));
-
-    if (!prompt.includes(`tools[\\"${KEY}\\"]`)) return said('no tracker to ask');
-
     return {
-      content: [{ type: 'tool-call', toolCallId: 'find', toolName: 'eval', input: JSON.stringify({ code: `return await tools[${JSON.stringify(KEY)}]({ title: 'login' });` }) }],
+      content: [{ type: 'tool-call', toolCallId: 'find', toolName: 'eval', input: JSON.stringify({ code: `
+        const match = (await codemode.search("find issue title")).results[0];
+        if (match === undefined) return { path: null };
+        await codemode.describe(match.path);
+        return { path: match.path, value: await tools[match.method]({ title: "login" }) };
+      ` }) }],
       finishReason: { unified: 'tool-calls', raw: undefined }, usage: USAGE, warnings: [],
     };
   } });
@@ -75,6 +75,7 @@ test('an email and a timer turn reach the owner\'s MCP tool once a settled turn 
   const email = async (n: number) => {
     await agent.mailArrived(ownerMail(n, 'find the login issue'));
     await fireSoonestWake(agent, db);
+    await agent.harnessAgentsIdle();
     await until(() => offered.length >= n && settled(), `turn ${String(n)} settled`);
   };
 
@@ -85,7 +86,7 @@ test('an email and a timer turn reach the owner\'s MCP tool once a settled turn 
     // Wakes fire soonest first; the timer's is among the next few.
     for (let fired = 0; fired < 4 && offered.length < n; fired++) {
       await fireSoonestWake(agent, db);
-      await nextTurn();
+      await agent.harnessAgentsIdle();
     }
 
     await until(() => offered.length >= n && settled(), `turn ${String(n)} settled`);
@@ -103,7 +104,6 @@ test('an email and a timer turn reach the owner\'s MCP tool once a settled turn 
 
     // Warmed: the next timer turn is offered the tool and calls it.
     await timer(3);
-    await answeredTool.promise;
     expect({ called: mcp.calls.length > 0, answered: results.length > 0 }).toEqual({ called: true, answered: true });
   } finally {
     restore();
