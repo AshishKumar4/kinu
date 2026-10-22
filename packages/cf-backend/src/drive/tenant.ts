@@ -1,6 +1,7 @@
 /** A user's Mossaic tenant; the tenant id is the Kinu user id, and this is the only place the SDK is constructed. */
 import { createVFS, type MossaicEnv } from '@mossaic/sdk';
 import { mossaicVfs, objectNamed, type MossaicVfs } from '@kinu.run/core';
+import { confirmedDeletion } from '../confirmed-deletion';
 import type { MossaicShardDO, MossaicUserDO } from './mossaic-objects';
 
 export type MossaicObject = MossaicEnv['MOSSAIC_USER'];
@@ -30,23 +31,42 @@ function tenantObjectNames(tenant: string) {
   return { user: `vfs:default:${tenant}`, shard: (index: number) => `vfs:default:${tenant}:s${String(index)}` };
 }
 
-/** The Drive's two objects, as Kinu deploys them: the classes whose deletes `destroyDriveTenant` calls. */
-interface DriveObjects {
-  readonly MOSSAIC_USER?: DurableObjectNamespace<MossaicUserDO>;
-  readonly MOSSAIC_SHARD?: DurableObjectNamespace<MossaicShardDO>;
+/** A namespace of the Drive's objects, as far as `destroyDriveTenant` calls into it: an object by its name. */
+interface DriveNamespace<Id, Stub> {
+  idFromName(name: string): Id;
+  get(id: Id): Stub;
+}
+
+/** An object's methods as a stub answers them: each one's answer awaited. */
+type Answered<T> = { [K in keyof T]: T[K] extends (...args: infer A) => infer R ? (...args: A) => Promise<Awaited<R>> : never };
+
+/** The Drive's two objects, as Kinu deploys them: the calls its deletion makes of each. */
+interface DriveObjects<Id> {
+  readonly MOSSAIC_USER?: DriveNamespace<Id, Answered<Pick<MossaicUserDO, 'tenantShards' | 'destroyUser' | 'storedTables'>>>;
+  readonly MOSSAIC_SHARD?: DriveNamespace<Id, Answered<Pick<MossaicShardDO, 'destroyShard' | 'storedTables'>>>;
 }
 
 /** The account's Drive deleted whole, as the account is: every shard its bytes may be on, then its user object. */
-export async function destroyDriveTenant(env: DriveObjects, tenant: string): Promise<{ readonly shards: number }> {
+export async function destroyDriveTenant<Id>(env: DriveObjects<Id>, tenant: string): Promise<{ readonly shards: number }> {
   const { MOSSAIC_USER: users, MOSSAIC_SHARD: shards } = env;
 
   if (users === undefined || shards === undefined) return { shards: 0 };
   const names = tenantObjectNames(tenant);
-  const user = objectNamed(users, names.user);
-  const spans = await user.tenantShards();
+  const spans = await objectNamed(users, names.user).tenantShards();
 
-  for (let index = 0; index < spans; index += 1) await objectNamed(shards, names.shard(index)).destroyShard();
-  await user.destroyUser();
+  for (let index = 0; index < spans; index += 1) {
+    await confirmedDeletion(() => {
+      const shard = objectNamed(shards, names.shard(index));
+
+      return { destroy: async () => shard.destroyShard(), remains: async () => shard.storedTables() };
+    }, `the Drive's shard ${String(index)}`);
+  }
+
+  await confirmedDeletion(() => {
+    const user = objectNamed(users, names.user);
+
+    return { destroy: async () => user.destroyUser(), remains: async () => user.storedTables() };
+  }, "the Drive's user object");
 
   return { shards: spans };
 }
