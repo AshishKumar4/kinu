@@ -93,7 +93,9 @@ existed. `auto` resolves the profile from the model the way `resolveFamily`
 today, extended by one column in the same place: a `claude` family defaults to
 `claude-code`, `gpt` to `codex`, everything else to `kinu`. A named profile
 forces that surface onto any model. The mode is a workspace setting the owner
-changes from the UI and the CLI, read at every step and never cached.
+changes from the UI and the CLI, read at every step and never cached; an
+agent's isolate reads it off the grant its step runs under, which the
+workspace issues with its mode as it stands (step 1, below).
 
 ## Steps
 
@@ -107,6 +109,18 @@ changes from the UI and the CLI, read at every step and never cached.
    prompt-prefix cache figures so they read per profile. No behaviour changes
    under any mode; the pin is the byte-identical prefix. This step is small
    and lands first because every later step reads it.
+   Done: `resolveHarnessSurface` in `packages/core/src/prompting/model-profile.ts`;
+   the setting is the workspace's `AgentConfigStore.getHarnessMode`
+   (`harness_mode`, unset reads `native`). Each step of every actor reads it as
+   its request leaves (`prepareStep`): from the workspace's store beside it, and
+   in an agent's isolate off the grant its step runs under, so a change reaches
+   that isolate at its next grant. Its `step_finish` records
+   `harness: { mode, surface }` beside the step's usage, so a run carries its
+   mode step by step, as a mid-run switch changes it; the readers that sum cache
+   figures still sum across profiles, and a per-profile report is a reader over
+   that field. Calls outside a turn's steps (a scaffold's own, a cache warm, a
+   compaction) are not stamped. The pin: `contract-cache-hit` sends the same
+   request bytes under each of the six modes as with no mode read at all.
 
 2. Tool presentation. A manifest per profile in `packages/core/src/tools`
    beside the registry: for each native tool, the wire tools it presents as
