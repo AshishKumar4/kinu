@@ -20,6 +20,16 @@ type Located =
   | { readonly kind: 'file'; readonly file: SkillFile; readonly rest: string };
 
 /** `plane` names the workspace's files by their `vfs://` path, read per call. */
+/**
+ * Whether `path`, on the agent's file plane, is a built-in skill's file: the view answers one from memory, with no look
+ * at any plane, so a refusal may name it without one (`FileDeps.knownFile`).
+ */
+export function isBuiltinSkillFile(path: string): boolean {
+  const [view, name, file, ...more] = path.split('/').filter((segment) => segment !== '');
+
+  return `/${view ?? ''}` === SKILLS_VIEW && name !== undefined && Object.hasOwn(BUILTIN_SKILL_FILES, name) && file === SKILL_FOLDER_FILE && more.length === 0;
+}
+
 export function skillsMount(plane: () => VFS): VfsMount {
   const encoder = new TextEncoder();
   const absent = (path: string, syscall: string) => syscallError('ENOENT', syscall, `${SKILLS_VIEW}${path}`);

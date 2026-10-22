@@ -32,6 +32,7 @@ import { failedToolOutcome, withCodemodeProgram } from '../src/tools/outcome';
 import { codemodeFunction } from '../src/tools/sandbox-contract';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { cloudPlanes, resolvePath } from '../src/vfs/resolve';
+import { isBuiltinSkillFile } from '../src/skills/view';
 
 describe('applyFileEdits', () => {
   test('replaces the one occurrence and leaves the rest byte-identical', () => {
@@ -515,29 +516,14 @@ function toolFor(vfs: VFS, ledger = new TurnFileLedger()) {
 
 const StringResultSchema = v.string();
 
-// H3, 2026-10-21: 11 trials read `skills/slates/SKILL.md`, which starts at the home, for the
-// `vfs://skills/slates/SKILL.md` the prompt names. The refusal names the address that is there, and only that one.
-test("a relative path that named nothing is told the plane's address that names a file, if one does", async () => {
-  const { call } = toolFor(memoryVfs({ '/skills/slates/SKILL.md': '# Slates' }));
-
-  const refusal = async (path: string) => {
-    const [read] = await Promise.allSettled([call({ op: 'read', path })]);
-
-    return read.status === 'rejected' ? renderThrownChain({ cause: read.reason }) : 'it read';
-  };
-
-  expect({ skill: await refusal('skills/slates/SKILL.md'), nowhere: await refusal('skills/absent/SKILL.md') }).toEqual({
-    skill: expect.stringContaining('did you mean `vfs://skills/slates/SKILL.md`?'),
-    nowhere: expect.not.stringContaining('did you mean'),
-  });
-});
-
-// Review findings (2026-10-22): a guess is looked for in the skills view alone, so it never crosses a link onto a
-// computer it would wake or a person's device; and a look its plane cannot answer leaves the refusal a miss.
-test("a miss's suggestion looks only in the skills view, and a look that fails leaves the miss as it was", async () => {
-  const files = memoryVfs({ '/computer/workspace/app.ts': 'x' });
+// H3, 2026-10-21: 11 trials read `skills/slates/SKILL.md`, which starts at the home, for the prompt's
+// `vfs://skills/slates/SKILL.md`. The refusal names the address meant, where it is a file known without a look.
+test("a relative path that named nothing is told the address of a built-in skill it meant, and nothing else", async () => {
   const looked: string[] = [];
+  const files = memoryVfs();
 
+  // Every look the tool makes, so none is made for a guess (review, 2026-10-22: a look could cross a link onto a
+  // computer it would wake, or a person's device).
   const watched = {
     ...files,
     stat: async (path: string) => {
@@ -547,30 +533,30 @@ test("a miss's suggestion looks only in the skills view, and a look that fails l
     },
   };
 
-  // Only the suggestion's look fails: the read's own stat of the path it was given answers, as a miss.
-  const failing = {
-    ...files,
-    stat: async (path: string): Promise<VfsStat | null> => {
-      if (path === '/skills/slates/SKILL.md') throw new VfsError('EIO', 'the plane is down', path);
+  const entry = withCheckedInput('file', fileToolOver({
+    home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: watched, ledger: new TurnFileLedger(), budget: new TurnContextBudget(),
+    knownFile: isBuiltinSkillFile,
+  }));
 
-      return files.stat(path);
-    },
+  const call = toolExecute<FileToolTestInput, JsonValue>(entry);
+
+  const refusal = async (path: string) => {
+    const [read] = await Promise.allSettled([call({ op: 'read', path })]);
+
+    return read.status === 'rejected' ? renderThrownChain({ cause: read.reason }) : 'it read';
   };
-
-  const read = async (vfs: VFS, path: string) => {
-    const [answer] = await Promise.allSettled([toolFor(vfs).call({ op: 'read', path })]);
-
-    return answer.status === 'rejected' ? answer.reason : null;
-  };
-
-  const onComputer = await read(watched, 'workspace/app.ts');
-  const unanswered = await read(failing, 'skills/slates/SKILL.md');
 
   expect({
-    computerLooked: looked.some((path) => path.startsWith('/computer')),
-    computerSuggested: renderThrownChain({ cause: onComputer }).includes('did you mean'),
-    unansweredCode: v.parse(v.object({ code: v.string() }), unanswered).code,
-  }).toEqual({ computerLooked: false, computerSuggested: false, unansweredCode: 'missing' });
+    builtin: await refusal('skills/slates/SKILL.md'),
+    notBuiltin: await refusal('skills/absent/SKILL.md'),
+    elsewhere: await refusal('workspace/app.ts'),
+    looked: looked.filter((path) => !path.startsWith(`${WORKSPACE_ROOT}/`)),
+  }).toEqual({
+    builtin: expect.stringContaining('did you mean `vfs://skills/slates/SKILL.md`?'),
+    notBuiltin: expect.not.stringContaining('did you mean'),
+    elsewhere: expect.not.stringContaining('did you mean'),
+    looked: [],
+  });
 });
 
 test('a denied edit keeps its counter through the persisted file-edit event', async () => {

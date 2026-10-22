@@ -42,9 +42,6 @@ export type PathOwner =
 	| { readonly executor: 'workspace' | 'computer'; readonly path: string }
 	| { readonly executor: 'device'; readonly device: string; readonly path: string };
 
-/** The read-only view of every skill, on every plane (`skills/view.ts`): here, beside the mounts, so a tool can name it. */
-export const SKILLS_VIEW = '/skills';
-
 export const EXECUTOR_MOUNTS = {
 	device: '/pc',
 	computer: '/computer',

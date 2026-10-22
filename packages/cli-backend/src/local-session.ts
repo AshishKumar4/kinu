@@ -5,7 +5,7 @@
 
 import { lookup } from 'node:dns/promises';
 import { realpathSync } from 'node:fs';
-import { ASKED, historyTurnPairs, openWorkspaceMainActor, providerAccounts, testModel, toolDescription, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
+import { ASKED, historyTurnPairs, isBuiltinSkillFile, openWorkspaceMainActor, providerAccounts, testModel, toolDescription, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
 import type { ActorHandle, ChatReport, DeliveryAnswer, InProcessDeliveries, JsonObject, OwedDelivery, ReceiptExecution } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { resolve } from 'node:path';
@@ -2859,6 +2859,7 @@ export class LocalAgentSession {
       // Budget state lives on the accumulator so this model-lifetime toolset reads the live turn.
       contextBudget: ledgers.context,
       fileLedger: ledgers.files,
+      knownFile: isBuiltinSkillFile,
       ...(this.actorReach.kind === 'workspace' && { roleSwitch: agentRoleSwitch(() => this.actorSession.profileInputs?.envelope ?? null) }),
     };
   }

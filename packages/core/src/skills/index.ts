@@ -16,7 +16,7 @@ export {
 
 export { BUILTIN_SKILLS, BUILTIN_SKILL_FILES } from './builtins';
 
-export { skillsMount } from './view';
+export { isBuiltinSkillFile, skillsMount } from './view';
 
 export {
   resolveActiveSkills,
