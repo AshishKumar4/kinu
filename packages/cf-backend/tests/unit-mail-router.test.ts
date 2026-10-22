@@ -55,6 +55,9 @@ function delivery(woke: MailDelivery['woke'], extra: Partial<MailDelivery> = {})
 class Deps implements MailRouterDeps {
   readonly domain = 'kinu.run';
 
+  // The deployment's own addresses: `privacy@` to ashish's own box, `legal@` to a username nobody holds yet.
+  readonly aliases = new Map([['privacy', 'ashish'], ['legal', 'nobody']]);
+
   readonly delivered: { userId: string; recipient: MailRecipient }[] = [];
 
   readonly woken: MailDelivery[] = [];
@@ -106,6 +109,26 @@ describe('the recipient names a box, or the message is refused', () => {
     await routeInboundMail(inbound('ashishks@kinu.run'), routed);
     await routeInboundMail(inbound('hello@kinu.run'), routed);
     expect(routed.delivered.map((each) => [each.userId, each.recipient.path])).toEqual([['u-ashish', ''], ['u-ashish', 'api-worker']]);
+  });
+
+  // The owner's legal pages name privacy@kinu.run (2026-10-22): it reaches their own box through MAIL_ALIASES.
+  test('a deployment address reaches the own box of the account its config names, and nothing under it', async () => {
+    const routed = deps(delivery(null));
+
+    await routeInboundMail(inbound('privacy@kinu.run'), routed);
+    await routeInboundMail(inbound('privacy+gdpr@kinu.run'), routed);
+    expect(routed.delivered).toEqual([
+      { userId: 'u-ashish', recipient: { username: 'privacy', path: '', tag: null } },
+      { userId: 'u-ashish', recipient: { username: 'privacy', path: '', tag: 'gdpr' } },
+    ]);
+
+    // Under it, or to a username nobody holds yet: refused at SMTP time, never held or lost.
+    for (const to of ['scout.privacy@kinu.run', 'legal@kinu.run']) {
+      const message = inbound(to);
+
+      expect(await routeInboundMail(message, routed)).toMatchObject({ outcome: 'refused' });
+      expect(message.rejected).toBe('No such address here.');
+    }
   });
 
   test('an unclaimed or retired label, another domain, or an account with no box yet is refused at SMTP time', async () => {

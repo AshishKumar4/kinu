@@ -56,7 +56,7 @@ function storeOf(userId: string): MailStore {
 
 function env(accounts: 'operators' | 'everyone' = 'operators'): MailRoutesEnv {
   return {
-    EMAIL_DOMAIN: 'kinu.run', MAIL_ACCOUNTS: accounts, CONTROL_PLANE_ADMINS: ASHISH.email, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    EMAIL_DOMAIN: 'kinu.run', MAIL_ACCOUNTS: accounts, MAIL_ALIASES: '{"privacy": "ashish"}', CONTROL_PLANE_ADMINS: ASHISH.email, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     UserDO: {
       idFromName: (userId: string) => userId,
       get: (userId: string) => ({
@@ -178,7 +178,14 @@ describe('a person creates their address once, as the deployment allows', () => 
     expect(await check(PRIYA, 'ashish')).toEqual({ username: 'ashish', available: false, refusal: 'taken' });
     expect(await check(ASHISH, 'ashish')).toEqual({ username: 'ashish', available: true, refusal: null });
     expect(await check(PRIYA, 'postmaster')).toEqual({ username: 'postmaster', available: false, refusal: 'reserved' });
+    // The deployment's own address (MAIL_ALIASES) is nobody's to take, its operators' included.
+    expect(await check(PRIYA, 'privacy')).toEqual({ username: 'privacy', available: false, refusal: 'reserved' });
     expect(await check(PRIYA, 'Priya R')).toEqual({ username: 'Priya R', available: false, refusal: 'invalid' });
+  });
+
+  test("a deployment's own address cannot be created as anyone's, an operator's included", async () => {
+    expect(await call(ASHISH, { method: 'POST', path: '/api/user/mail/address', body: { username: 'privacy' } })).toMatchObject({ status: 400, body: { error: 'That name is kept for mail systems.' } });
+    expect(claims.size).toBe(0);
   });
 
   test('creating again keeps the account\'s first address', async () => {
