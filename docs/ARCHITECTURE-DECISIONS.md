@@ -1151,9 +1151,17 @@ a facet of its own) and D13's "every agent's advisor in core `ActorAdvisor`".
 - While the turn runs, a note lands at the next step and a blocker also
   releases the step's foreground calls, as a person's words do. The turn's end
   waits up to 120 s for its last step's review; from then a blocker opens the
-  next turn and a nit or concern is kept unsaid. A hired agent's blocker also
-  reaches its hirer. A note is said, then recorded: one said and not recorded
-  only misses the dedupe window. Runs (heads, swarm nodes) are not reviewed.
+  next turn and a nit or concern is kept unsaid. A review keeps the turn it
+  began on: one that outlives its turn speaks only as that turn's after-turn
+  review, and the next turn drops the last one's steps not yet reviewed. A
+  failed turn, which emits no `onTurnEnd`, is ended for its advisor by the
+  execution's cleanup. A hired agent's blocker also reaches its hirer. A note
+  is said, then recorded: one said and not recorded only misses the dedupe
+  window. Its delivery key names its turn and its normalised text, so a turn
+  restarted after a death says a new note and never says one twice.
+- Not reviewed: runs (heads, swarm nodes), and a turn whose scaffold runs its
+  own inference instead of `host.defaultInference()`, which emits none of the
+  turn hooks (the hire reviewed such a turn at its end).
 - Gone: the hire (`ActorAdvisor`, the `advisor` system role and its prompt),
   `hireAdvisor` and `deliverAdvice`, `AdviceJobs`, `AgentReview` round
   reviews, `AdvisorRecoverySnapshot`. `advisor_review` stays in the terminal
@@ -1164,27 +1172,31 @@ a facet of its own) and D13's "every agent's advisor in core `ActorAdvisor`".
   one is told.
 - Measured on the worker-heap gate's 150-step turn, advisor answered at once
   with silence, 3 runs a shape on armada (hire: 70102c5fa; in session:
-  97d575f47, job 20261022192330-ff869b22). Main's isolate, off then on: the
-  hire made 2 advisor calls and peaked at 45.6-49.4 MB against 26.1-29.8 MB,
-  allocating about 115 MB more; in session the turn made 151 calls (the
-  request and each step), peaked at 67.4-73.3 MB against 26.7-29.8 MB, kept
-  7.4-7.5 MB live by the last step against 4.4 MB, and allocated 299-301 MB
-  against 87-91 MB. The workspace allocated about 45 MB more under the hire
-  and 18-20 MB more in session. The turn took 1.9-2.9 s longer in session
-  (+16-25%), about 13-19 ms a step. The live set stays flat; the allocation is
-  the advisor's conversation sent whole on every call, so it grows with the
+  cac0cbe68, job 20261022200553-3fd08cdc, which 97d575f47's three runs agree
+  with). Main's isolate, off then on: the hire made 2 advisor calls and peaked
+  at 45.6-49.4 MB against 26.1-29.8 MB, allocating about 115 MB more; in
+  session the turn made 151 calls (the request and each step), peaked at
+  71.7-72.8 MB against 29.7-30.3 MB, grew 7.4 MB live from its first step to
+  its last against 4.4 MB, and allocated 298-309 MB against 85-86 MB. The
+  workspace allocated about 45 MB more under the hire and 17-19 MB more in
+  session. In session the turn took 0-22% longer (at most 3.6 s, 24 ms a
+  step; 7-25% on 97d575f47). The live set stays flat; the allocation is the
+  advisor's conversation sent whole on every call, so it grows with the
   square of the steps until the 240k clear.
-- Containment, same job, every run alike: an advisor call that throws, and
-  one that throws from a timer beside a rejection no one awaits, each left
-  main's turn to run all 4 of its steps and come to rest (269-764 ms), its
-  isolate kept (a buffer planted before it was still there), and the next
-  turn reviewed. A 200 MB allocation and a 44 s CPU loop were not run:
-  workerd enforces neither limit. On the platform D9 measured that both reset
-  the isolate that runs them, which is now the reviewed agent's, so such a
-  failure costs that agent's turn, recovered as any reset turn is (D13), and
-  leaves the workspace standing.
+- Containment, same jobs, every run alike: an advisor call that throws, and
+  one beside an uncaught throw (from a timer on 97d575f47, a microtask on
+  cac0cbe68) and a rejection no one awaits, each left main's turn to run all
+  4 of its steps and come to rest (263-764 ms), its isolate kept (a buffer
+  planted before it was still there), and the next turn reviewed. A note
+  store that throws fails that one advice call (unit test). A 200 MB
+  allocation and a 44 s CPU loop were not run: workerd enforces neither
+  limit. On the platform D9 measured that both reset the isolate that runs
+  them, which is now the reviewed agent's, so such a failure costs that
+  agent's turn, recovered as any reset turn is (D13), and leaves the
+  workspace standing.
 - Not measured: review latency on a real provider. The step loop never waits
-  for a review mid-turn; the turn's end waits for one call.
+  for a review mid-turn; the turn's end waits for its last step's review, one
+  model call when the advisor reads nothing.
 
 ## Deploy ladder
 
