@@ -81,6 +81,7 @@ import { ALARM_WORK, classifyErrorCode, HOSTED_ALARM_WORK } from '@kinu.run/core
 import { PLATFORM_CATALOG } from '../packages/core/src/platform-catalog';
 import { recordStep } from './deploy-report';
 import { restAnswer } from './cloudflare-rest';
+import { deployLanded, listDeployments } from './worker-deployments';
 import { requireCloudflareAccountId } from './infra-cloudflare';
 import { INFRA_ENVIRONMENTS, type InfraEnvironment, deployedConfig } from './infra-manifest';
 import {
@@ -417,6 +418,11 @@ export class Telemetry {
 
   private filters(filters: readonly Filter[]): Filter[] {
     return [eq('$metadata.service', this.args.worker), ...filters];
+  }
+
+  /** Whether a deploy of the worker other than `version`'s own landed inside the window (worker-deployments.ts). */
+  async deployInside(version: string): Promise<boolean> {
+    return deployLanded(await listDeployments(this.args.worker, this.api), this.args, version);
   }
 
   private async result(body: QueryBody): Promise<v.InferOutput<typeof TelemetryResult>['result']> {
@@ -1086,7 +1092,8 @@ function effectText(sample: EffectSample | undefined): string {
   return sample === undefined ? '' : `; e.g. object ${sample.object}, turn ${sample.sequence}: ${sample.detail}`;
 }
 
-/** The runtime's error for a call a code deploy cut off (platform-catalog.ts do.reset.transient): the deploy, not the version. */
+/** The runtime's error for a call a code update cut off (platform-catalog.ts do.reset.transient): a deploy's only when
+ *  one landed inside the window ({@link deployLanded}); otherwise the version's own (do.storage.write_await_reset). */
 const CODE_UPDATE_RESET = PLATFORM_CATALOG['do.reset.transient'].observable.find((seen) => seen.context === 'code deploy')?.message ?? '';
 
 /** An entrypoint's uncaught exceptions, less those a code update caused. */
@@ -1192,11 +1199,11 @@ export function versionSignals(read: VersionRead): WindowSignal[] {
  *  held none of an entrypoint that threw 20 times beside two that threw 184 (staging, 2026-10-08). Its text is the last
  *  line the request logged, the error that ended it; the object is the invocation's, or, for an RPC entrypoint, the
  *  call's in its trace that has one. The first exception a code update did not cause is the one shown. */
-async function exceptionSamples(t: Telemetry, scope: readonly Filter[], entrypoints: ReadonlySet<string>): Promise<ExceptionSample[]> {
+async function exceptionSamples(t: Telemetry, scope: readonly Filter[], entrypoints: ReadonlySet<string>, rolled: boolean): Promise<ExceptionSample[]> {
   const samples: ExceptionSample[] = [];
 
   for (const entrypoint of entrypoints) {
-    const sample = await exceptionSample(t, scope, entrypoint);
+    const sample = await exceptionSample(t, scope, entrypoint, rolled);
 
     if (sample !== undefined) samples.push(sample);
   }
@@ -1204,7 +1211,8 @@ async function exceptionSamples(t: Telemetry, scope: readonly Filter[], entrypoi
   return samples;
 }
 
-async function exceptionSample(t: Telemetry, scope: readonly Filter[], entrypoint: string): Promise<ExceptionSample | undefined> {
+/** `rolled`: a deploy landed inside the window, so a code update's words are its, and a sample passes over them. */
+async function exceptionSample(t: Telemetry, scope: readonly Filter[], entrypoint: string, rolled: boolean): Promise<ExceptionSample | undefined> {
   const ended = await t.sampleEvents([
     ...scope, eq('$metadata.type', 'cf-worker-event'), eq('$workers.outcome', 'exception'), eq('$workers.entrypoint', entrypoint),
   ], 10);
@@ -1222,7 +1230,7 @@ async function exceptionSample(t: Telemetry, scope: readonly Filter[], entrypoin
     const message = [...logged].sort((a, b) => b.timestamp - a.timestamp)
       .map((line) => line.$metadata.error ?? line.source.message ?? '').find((text) => text !== '') ?? '';
 
-    if (message === CODE_UPDATE_RESET || (message === '' && textless !== undefined)) continue;
+    if ((rolled && message === CODE_UPDATE_RESET) || (message === '' && textless !== undefined)) continue;
     const own = event.$workers.durableObjectId ?? '';
     const trace = event.$metadata.traceId ?? '';
     const traced = own !== '' || trace === '' ? [] : await t.sampleEvents([eq('$metadata.traceId', trace), eq('$metadata.type', 'cf-worker-event')], 20);
@@ -1256,17 +1264,20 @@ async function effectSample(t: Telemetry, scope: readonly Filter[], event: strin
 }
 
 /** What `versionId` did in `t`'s window; `around` reads the same version through {@link workWindow}. */
-async function versionRead(t: Telemetry, around: Telemetry, versionId: string): Promise<VersionRead> {
+export async function versionRead(t: Telemetry, around: Telemetry, versionId: string): Promise<VersionRead> {
   const scope = [eq('$workers.scriptVersion.id', versionId)];
   const invocations = [...scope, eq('$metadata.type', 'cf-worker-event')];
   const notOk: Filter = { key: '$workers.outcome', operation: 'neq', value: 'ok', type: 'string' };
   const ended = await t.count({ filters: [...invocations, notOk], groupBy: ['$workers.outcome', '$workers.entrypoint'], distinct: DO_ID, limit: 100 });
 
   // One runtime error line per invocation the reset ended; their request ids need not be theirs (staging 3fe2aa81: three
-  // KinuDevbox calls ended at 02:41:09.120Z, and all three lines named one request).
-  const deployResets = await t.count({
+  // KinuDevbox calls ended at 02:41:09.120Z, and all three lines named one request). They are a deploy's only when one
+  // landed in the window; with none they stay the version's own exceptions.
+  const rolled = await t.deployInside(versionId);
+
+  const deployResets = rolled ? await t.count({
     filters: [...scope, eq('$metadata.type', 'cf-worker'), eq('$metadata.error', CODE_UPDATE_RESET)], groupBy: ['$workers.entrypoint'], limit: 100,
-  });
+  }) : [];
 
   const failed = await t.count({ filters: [...scope, eq('event', 'turn.terminal_effect_failed')], groupBy: ['fields.sequence'], limit: 500 });
   // `turn.terminal_effect`: the sequences' owed and settled rows, and their effects' parks and failures.
@@ -1302,7 +1313,7 @@ async function versionRead(t: Telemetry, around: Telemetry, versionId: string): 
 
   return {
     ...read,
-    thrown: threw.size === 0 ? [] : await exceptionSamples(t, scope, threw),
+    thrown: threw.size === 0 ? [] : await exceptionSamples(t, scope, threw, rolled),
     effects: {
       failed: total(failed), failedTurns: failed.length,
       failedSample: failed.length === 0 ? undefined : await effectSample(t, scope, 'turn.terminal_effect_failed'),

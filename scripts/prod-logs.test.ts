@@ -2,9 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { ALERT_THRESHOLDS } from '@kinu.run/core/analytics';
 import { KinuError } from '@kinu.run/core/obs';
-import { canaryActivations } from './durability-canary-telemetry';
+import { activationDisruptions, canaryActivations } from './durability-canary-telemetry';
 import {
-  alarmsThatRan, deletionTimes, idleWakeHours, ordinalHours, settledRead, Telemetry, terminalEffectStates, type VersionRead, versionFindings,
+  alarmsThatRan, deletionTimes, idleWakeHours, ordinalHours, settledRead, Telemetry, terminalEffectStates, type VersionRead, versionFindings, versionRead,
   versionSignals, workWindow,
 } from './prod-logs';
 
@@ -354,6 +354,19 @@ const startup = (timestamp: number, activation: number) => ({
   timestamp, source: { event: 'actor.startup', code: '', cause: '', fields: { activation } }, $workers: { scriptVersion: { id: 'v' } }, $metadata: {},
 });
 
+// 2026-10-22: a code update's reset with no deploy is the build's own (platform-catalog.ts do.storage.write_await_reset);
+// the canary filed every one as a deploy's.
+test('the canary files a code-updated reset as a deploy\'s only when a deploy landed between the activations', () => {
+  const reset = { timestamp: 15, source: { event: '', code: '', cause: '', fields: {} }, $workers: {}, $metadata: { type: 'cf-worker', error: 'Durable Object reset because its code was updated.' } };
+  const activations = [{ ordinal: 1, at: 10, version: 'v' }, { ordinal: 2, at: 20, version: 'v' }];
+
+  const endedBy = (deployedAt: number) => activationDisruptions([startup(10, 1), startup(20, 2), reset], activations, {
+    window: { from: 0, to: 100 }, touches: [], deployments: [{ at: deployedAt, versions: ['w'] }],
+  }).map((row) => row.endedBy);
+
+  expect({ deployed: endedBy(18), none: endedBy(50) }).toEqual({ deployed: ['deploy'], none: ['reset'] });
+});
+
 // Staging 2026-10-08: the canary's object started six times and telemetry kept four of the startup rows.
 test('a dropped startup row is an activation still: the ordinals count it, at an unknown time', () => {
   const read = canaryActivations(null, [startup(10, 3), startup(40, 6), startup(20, 4)]);
@@ -393,4 +406,68 @@ test('a window that does not change reads the same however the API orders its ti
   } finally {
     await server.stop(true);
   }
+});
+
+// 2026-10-22: the words of a code update's reset came from awaited writes between dense CPU with no deploy
+// (platform-catalog.ts do.storage.write_await_reset), and the report excused every one of them as the deploy's.
+describe('a code update\'s reset in a version\'s window', () => {
+  const RESET = 'Durable Object reset because its code was updated.';
+  const from = Date.parse('2026-10-21T20:31:52Z');
+  const to = Date.parse('2026-10-21T20:41:12Z');
+
+  /** One KinuDevbox invocation that ended in an exception, its request's line the reset's words; `deployedAt` is when
+   *  the one deploy after the version's own landed. */
+  const deployment = async (deployedAt: number) => {
+    const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: async (request) => {
+      if (request.method === 'GET') {
+        return Response.json({ success: true, result: { deployments: [
+          { created_on: new Date(deployedAt).toISOString(), versions: [{ version_id: 'next' }] },
+          { created_on: new Date(from + 1000).toISOString(), versions: [{ version_id: 'v1' }] },
+          { created_on: '2026-10-21T19:00:00Z', versions: [{ version_id: 'v0' }] },
+        ] } });
+      }
+
+      const body = JSON.stringify(await request.json());
+      const has = (text: string) => body.includes(text);
+
+      if (has('"view":"calculations"') && !has('granularity') && has('"operation":"neq","value":"ok"')) {
+        const groups = [{ key: '$workers.outcome', value: 'exception' }, { key: '$workers.entrypoint', value: 'KinuDevbox' }];
+
+        return Response.json({ success: true, result: { calculations: [{ alias: 'count', aggregates: [{ groups, value: 1 }] }, { alias: 'distinct', aggregates: [{ groups, value: 1 }] }] } });
+      }
+
+      if (has('"view":"calculations"') && !has('granularity') && has(RESET)) {
+        return Response.json({ success: true, result: { calculations: [{ alias: 'count', aggregates: [{ groups: [{ key: '$workers.entrypoint', value: 'KinuDevbox' }], value: 1 }] }] } });
+      }
+
+      if (has('"view":"events"') && has('"value":"exception"')) {
+        return Response.json({ success: true, result: { events: { events: [{ $metadata: { requestId: 'r1' }, $workers: { durableObjectId: 'box-1', entrypoint: 'KinuDevbox' }, timestamp: from + 5000 }] } } });
+      }
+
+      if (has('"view":"events"') && has('"value":"r1"')) {
+        return Response.json({ success: true, result: { events: { events: [{ $metadata: { requestId: 'r1', error: RESET }, timestamp: from + 5000 }] } } });
+      }
+
+      return Response.json({ success: true, result: {} });
+    } });
+
+    try {
+      const window = { worker: 'kinu-staging', from, to };
+      const read = await versionRead(new Telemetry('token', window, server.url.origin), new Telemetry('token', window, server.url.origin), 'v1');
+
+      return versionFindings(read).map((finding) => finding.finding);
+    } finally {
+      await server.stop(true);
+    }
+  };
+
+  test('is the deploy\'s when a deploy landed inside the window, and no finding', async () => {
+    expect(await deployment(to - 60_000)).toEqual([]);
+  });
+
+  test('is the version\'s own uncaught exception, with its words, when none did', async () => {
+    expect(await deployment(to + 60_000)).toEqual([
+      `1 invocation(s) of KinuDevbox ended in an uncaught exception: "${RESET}", in request r1 of object box-1`,
+    ]);
+  });
 });
