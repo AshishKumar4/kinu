@@ -29,6 +29,8 @@ export interface InboundMail {
 
 export interface MailRouterDeps {
   readonly domain: string | undefined;
+  /** The deployment's own addresses, each to the own box of the account holding its username (`MAIL_ALIASES`). */
+  readonly aliases: ReadonlyMap<string, string>;
   /** The label's MailName, which holds its claim. */
   name(label: string): Pick<MailNameDO, 'lookup'>;
   mailbox(userId: string): Pick<MailboxDO, 'deliver'>;
@@ -48,10 +50,14 @@ async function resolve(deps: MailRouterDeps, to: string): Promise<{ userId: stri
 
   if (deps.domain === undefined || deps.domain === '' || recipient === null) return null;
 
-  const claim = await deps.name(recipient.username).lookup();
+  const declared = deps.aliases.get(recipient.username);
+  const claim = await deps.name(declared ?? recipient.username).lookup();
 
   // A name kept with no owner is retired: it routes nowhere, and its row keeps anyone from claiming it again.
   if (claim === null || claim.user_id === '') return null;
+
+  // The deployment's own address (`privacy@D`) reaches its account's own box, and nothing under it.
+  if (declared !== undefined) return recipient.path === '' && claim.kind === 'username' ? { userId: claim.user_id, recipient } : null;
 
   // An alias is a whole address of its own: `hello@D` reaching a workspace's box.
   if (claim.kind === 'alias') {

@@ -414,6 +414,7 @@ describe('a clash on a full-length label', () => {
         raw: new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(bytes); controller.close(); } }), setReject: (reason) => { rejected.push(reason); },
       }, {
         domain: 'kinu.run',
+        aliases: new Map(),
         name: () => ({ lookup: () => Promise.resolve({ label: 'ashish', user_id: 'u-ashish', kind: 'username', target_path: null, state: 'active' }) }),
         mailbox: () => store,
         wake: () => Promise.resolve(),
