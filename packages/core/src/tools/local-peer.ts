@@ -11,7 +11,7 @@ import {
 } from '../events/ingress/peer';
 import { Effect } from 'effect';
 import type { EventLog } from '../events/hub/log';
-import { settle } from '../obs/index';
+import { attempt, KinuError, settle } from '../obs/index';
 import type { ReplyChannelStore } from '../events/hub/reply-channel';
 import type { ReplyChannelRow } from '../events/hub/types';
 import type { JsonValue } from '../utils/json';
@@ -65,6 +65,40 @@ export interface LocalPeerEndpoint {
   dispatch(now: number): Promise<number | null>;
 }
 
+/**
+ * The `peers` an agent's tools reach, over its hub: one shape on every host. A host supplies who it may reach and how it
+ * checks a name, as its owner it acts for, and what creating a peer means where it runs.
+ */
+export function peersToolDeps(hub: Pick<PeerHub, 'ask' | 'send' | 'reply'>, ports: {
+  /** This agent's own name: never its own peer. */
+  readonly self: string;
+  /** The peers it may reach, itself excluded. */
+  peers(): Promise<ReadonlyArray<{ readonly name: string; readonly displayName?: string }>>;
+  /** Whether it may reach `agent`: checked before a row is queued, so a typo is a tool error, not a dead letter. */
+  known(agent: string): Promise<boolean>;
+  /** The owner it acts for, asked at each call: a tool set outlives the turn it was built in. */
+  userId(): string;
+  readonly spawnWorkspace: PeersToolDeps['spawnWorkspace'];
+}): PeersToolDeps {
+  const requirePeer = (agent: string): Effect.Effect<string, KinuError> => {
+    if (agent === ports.self) return Effect.fail(new KinuError('bad_input', 'that is this agent: pick another peer (op:"list")'));
+
+    return attempt({ doing: `checking the peer ${agent}`, otherwise: 'unavailable' }, () => ports.known(agent)).pipe(Effect.flatMap((known) => (known
+      ? Effect.sync(() => ports.userId())
+      : Effect.fail(new KinuError('missing', `unknown peer "${agent}": list the ones you can reach with op:"list"`)))));
+  };
+
+  return {
+    listPeers: async () => (await ports.peers()).map((peer) => (peer.displayName === undefined ? { name: peer.name } : { name: peer.name, displayName: peer.displayName })),
+    ask: ({ agent, topic, message, mode, signal }) => settle(requirePeer(agent).pipe(Effect.flatMap((userId) => Effect.promise(() => hub.ask({
+      agent, userId, topic, message, mode, ...(signal !== undefined && { signal }),
+    }))))),
+    send: ({ agent, topic, message, mode }) => settle(requirePeer(agent).pipe(Effect.flatMap((userId) => Effect.promise(() => hub.send({ agent, userId, topic, message, mode }))))),
+    reply: async ({ eventId, message }) => hub.reply({ eventId, message }),
+    spawnWorkspace: ports.spawnWorkspace,
+  };
+}
+
 export function createLocalPeerEndpoint(deps: LocalPeerEndpointDeps): LocalPeerEndpoint {
   const groupId = peerGroupId(deps.self);
 
@@ -88,18 +122,6 @@ export function createLocalPeerEndpoint(deps: LocalPeerEndpointDeps): LocalPeerE
   const reachable = (): HostedAgentRef[] => deps.roster().filter((ref) =>
     ref.name !== deps.self.name && samePeerGroup(ref, deps.self));
 
-  /** Fails so a typo renders as a tool error instead of queueing a row that can only dead-letter. */
-  const requirePeer = (name: string): Effect.Effect<void> => {
-    if (name === deps.self.name) {
-      return Effect.die(new Error('that is this agent: pick another peer (op:"list")'));
-    }
-
-    return reachable().some((ref) => ref.name === name)
-      ? Effect.void
-      : Effect.die(new Error(`unknown peer "${name}" in workspace "${deps.self.workspaceId}"`
-        + '; list the ones you can reach with op:"list"'));
-  };
-
   return {
     receive: (msg) => hub.receive(msg),
     peerBack: (channel, payload) => hub.dispatchPeerBack(channel, payload),
@@ -108,24 +130,11 @@ export function createLocalPeerEndpoint(deps: LocalPeerEndpointDeps): LocalPeerE
 
       return hub.nextRetryAt();
     },
-    deps: {
-      listPeers: async () => reachable().map((ref) => (ref.displayName === undefined
-        ? { name: ref.name }
-        : { name: ref.name, displayName: ref.displayName })),
-      ask: ({ agent, topic, message, mode, signal }) => {
-        const request: Parameters<PeerHub['ask']>[0] = {
-          agent, userId: groupId, topic, message, mode,
-        };
-
-        if (signal) Object.assign(request, { signal });
-
-        return settle(Effect.andThen(requirePeer(agent), Effect.promise(() => hub.ask(request))));
-      },
-      send: ({ agent, topic, message, mode }) => settle(Effect.andThen(
-        requirePeer(agent),
-        Effect.promise(() => hub.send({ agent, userId: groupId, topic, message, mode })),
-      )),
-      reply: async ({ eventId, message }) => hub.reply({ eventId, message }),
+    deps: peersToolDeps(hub, {
+      self: deps.self.name,
+      peers: async () => reachable(),
+      known: async (agent) => reachable().some((ref) => ref.name === agent),
+      userId: () => groupId,
       // Creating a peer is the user's act; the host only binds refs it is handed.
       spawnWorkspace: async ({ name }): Promise<PeerSpawnOutcome> => ({
         agent: name ?? '',
@@ -134,6 +143,6 @@ export function createLocalPeerEndpoint(deps: LocalPeerEndpointDeps): LocalPeerE
         reason: 'creating a peer agent locally is a user action: run'
           + ` \`kinu create ${name ?? '<name>'}\` in ${deps.self.cwd}, then message it by name.`,
       }),
-    },
+    }),
   };
 }

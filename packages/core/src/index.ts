@@ -619,7 +619,7 @@ export { admitHireWork, hireLifecycle, retireHireSubtree, type HireLifecyclePort
 
 export { inheritedAsModelMessage } from './heads/head-inference';
 
-export { driveDeliveredRun } from './heads/delivered-run';
+export { driveDeliveredRun, driveSeatedRun } from './heads/delivered-run';
 
 export { initWorkspaceActorTable, facetNamesGiven, WorkspaceActorDirectory, subagentDescendants, stoppedBelow, isSubagentOrigin, whenActorTakesInput, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, bearWorkspaceIdentity, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActor, type CreateWorkspaceActor, actorStanding, type ActorStanding, actorEnded, endedStandingOf, type ActorEnded } from './identity/workspace-actors';
 
@@ -658,7 +658,7 @@ export {
 } from './delegation/agents-tool';
 
 export {
-  createLocalPeerEndpoint, samePeerGroup,
+  createLocalPeerEndpoint, peersToolDeps, samePeerGroup,
   type HostedAgentRef, type LocalPeerEndpoint,
 } from './tools/local-peer';
 
@@ -681,6 +681,8 @@ export { agentSelfHost } from './orchestrator/agent-self-host';
 
 // Platform-neutral: a backend supplies only SubagentRuntime.
 export { SubagentRosterStore, initSubagentRosterTable, subagentTitle } from './subagents/roster';
+
+export { teamToolDepsFor, temporaryPortFor } from './subagents/team-wiring';
 
 export {
   admitSubagentReport,
@@ -718,7 +720,6 @@ export {
 // The depth cap is derived per child, never stated by one.
 export {
   DELEGATION_MAX_DEPTH,
-  ROOT_DELEGATION_BUDGET,
   delegationBudgetOf,
   delegationDepthRefusal,
   delegationExhausted,
@@ -1672,7 +1673,7 @@ export {
   LiveHeadJournal, type AnnounceHeadActivity,
   type HeadStreamFrame, type HeadStreamKind,
   type ReportHeadDelta, type PublishHeadStream,
-  reconcileInterruptedForks, jobRedriveResumeGate, resumableForkRoots,
+  reconcileInterruptedForks, reclaimSettledRunActors, jobRedriveResumeGate, resumableForkRoots,
   FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
   ForkNotices, forkNoticeDeliveries, initForkNoticeTable, type ForkNotice,
   HeadController, runHeadSplit, type HeadRuntime, type HeadGrounding, type SpawnedHead, type MergeLLMFn,
