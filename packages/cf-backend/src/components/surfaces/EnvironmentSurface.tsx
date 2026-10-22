@@ -25,7 +25,7 @@ import { lazyRoute } from "@/lazy-route";
 import type { TerminalPaneProps } from "@/components/TerminalPane";
 import { TerminalReplay } from "@/components/terminal-replay";
 import { Loader } from "@/components/ui/Loader";
-import { lastValue } from "@/hooks/use-async-resource";
+import { lastValue, type AsyncResource } from "@/hooks/use-async-resource";
 import { useMounts } from "@/hooks/use-mounts";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { ComputerSize, useComputerSize, type ComputerSizeControl } from "@/components/ComputerSize";
@@ -100,6 +100,16 @@ interface Machine {
  * account says it is connected and held here: the executor's own reading follows a grant only after the hub's next
  * status push, and the terminal and every command check the grant themselves.
  */
+/** The machines once the workspace's own have read, or failed to: listed before them, a PC is chosen by default, and the
+ *  computer arriving after takes the choice and remounts the row under the person's press. */
+function listedMachines(mounts: AsyncResource<EnvironmentInfo[]>, account: readonly AccountMachine[] | null): Machine[] {
+  const read = lastValue(mounts);
+
+  if (read === null && mounts.status !== "error") return [];
+
+  return machinesOf(read ?? [], account);
+}
+
 function machinesOf(mounts: readonly EnvironmentInfo[], account: readonly AccountMachine[] | null): Machine[] {
   const pc = mounts.find((mount) => mount.name === "device");
 
@@ -217,10 +227,7 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
 
   const execByName = useMemo(() => new Map(executors.map((e) => [e.name, e])), [executors]);
   const account = useAccountMachines(workspaceName);
-  // The PCs wait for the workspace's own machines: listed first, a PC is chosen by default, and the computer arriving
-  // after it takes the choice and remounts the row under the person's press. A failed read lists them all the same.
-  const mountsRead = loaded !== null || resource.status === "error";
-  const environments = useMemo(() => (mountsRead ? machinesOf(mounts, account.machines) : []), [mountsRead, mounts, account.machines]);
+  const environments = useMemo(() => listedMachines(resource, account.machines), [resource, account.machines]);
 
   // Default selection: the environment the agent last worked in.
   const defaultMachine = useMemo(() => {
