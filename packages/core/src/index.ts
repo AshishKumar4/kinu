@@ -1763,7 +1763,7 @@ export { openingList, openingListOf, listedOn } from './read-models/opening';
 
 export { AgentOrchestrator, drainPendingEvents, type AgentOrchestratorDeps } from './orchestrator/agent-orchestrator';
 
-export { ActorAdvisor, type ActorAdvisorContext } from './advisor/actor-advisor';
+export { SessionAdvisor, type AdvisorContext } from './advisor/session-advisor';
 
 export {
   EvolutionLanes, improvementLanesOpen, evolutionPassOpen, recordedTurn, type EvolutionLanesDeps, type TurnContinuity,

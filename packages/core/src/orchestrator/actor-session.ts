@@ -39,8 +39,12 @@ import type { ModelCallSpend } from '../events/model-call';
 import type { SendOutcome } from '../types/signals';
 import { USER_MESSAGE_SIGNAL_KIND } from '../types/signals';
 
-import { ActorAdvisor, type ActorAdvisorContext } from '../advisor/actor-advisor';
-import type { TemporaryAgentPort } from '../types/subagents';
+import { SessionAdvisor, type AdvisorContext } from '../advisor/session-advisor';
+import { advisorReadTools, routedAdvisorModel } from '../advisor/advisor-ports';
+import { advisorWorkspaceGuidance } from '../prompting/agents-md';
+import { modelWindow } from '../context-window';
+import { resolveModelRoute } from '../profiles/model-route';
+import type { RouteModelBinder, RouteWalk } from '../profiles/model-lane';
 import { SessionHistory, type MaterializedHistory } from '../session/history';
 import { SessionStream } from './session-stream';
 import { steerUserMessage } from './inbox';
@@ -82,9 +86,9 @@ export interface ActorSessionOptions {
   /** Optional: the revision rows are the durable record; no recorder means no event, never a fabricated one. */
   readonly events?: ContextEventRecorder | null;
   readonly recording?: RunEventRecorder;
-  readonly advisor?: ActorAdvisorContext;
-  /** The port this actor hires its advisor through; null or absent, its turns are not reviewed. */
-  readonly advisorPort?: () => TemporaryAgentPort | null;
+  readonly advisor?: AdvisorContext;
+  /** The advisor's model lane: the backend's binder, its route walk and its spend. Absent, turns are not reviewed. */
+  readonly advisorLane?: RouteWalk & { readonly bind: RouteModelBinder; readonly spend: Omit<ModelCallSpend, 'source'> };
   /** The profile's `input`: an actor that takes no input (a swarm node, an evolution agent) is not reviewed. */
   readonly reviewed?: boolean;
   /** The completion gate has asked and not heard back, when the host keeps one: only the CLI's one-shot surface arms it. */
@@ -217,7 +221,9 @@ export class ActorSession {
   readonly actorId: string;
   readonly runtime: AgentRuntime;
   readonly orchestrator: AgentOrchestrator;
-  readonly advisor: ActorAdvisor;
+  readonly advisor: SessionAdvisor;
+  /** Bound with the steers': what a blocker's interrupt moves to the background. */
+  private releaseForeground: ((executing: number) => boolean | Promise<boolean>) | null = null;
   readonly canonical: SessionHistory;
   /** This actor's questions to its owner, in its own storage: the repair reads their answers synchronously. */
   readonly questions: OwnerQuestionStore;
@@ -251,14 +257,20 @@ export class ActorSession {
       turnId: () => this.active?.lease.turnId ?? null,
     });
 
-    this.advisor = new ActorAdvisor({
-      actor: options.runtime.actor, vfs: () => options.runtime.agentStateVfs,
-      notes: () => options.orchestration.engine, send: (signal) => this.orchestrator.signals.send(signal),
-      profile: () => this.profile, scoped: (turn) => this.orchestrator.scopedTurn(turn),
-      ...(options.advisorPort !== undefined && { port: options.advisorPort }),
-      ...(options.reviewed !== undefined && { reviewed: options.reviewed }),
-      ...(options.advisor !== undefined && { context: options.advisor }),
-      ...(options.gateOpen !== undefined && { gateOpen: options.gateOpen }),
+    const { advisor: context } = options;
+    this.advisor = new SessionAdvisor({
+      actor: options.runtime.actor,
+      config: () => context?.config ?? options.runtime.actor.config,
+      reviewed: (options.reviewed ?? true) && options.advisorLane !== undefined,
+      notes: () => options.orchestration.engine,
+      gateOpen: () => options.gateOpen?.() ?? false,
+      send: (signal) => this.orchestrator.signals.send(signal),
+      ...(context !== undefined && { parent: context.parent }),
+      interrupt: async () => (this.releaseForeground === null ? false : await this.releaseStep(this.releaseForeground)),
+      // Its own priorities where it shares none: its state plane.
+      guidance: async () => await advisorWorkspaceGuidance({
+        vfs: context === undefined ? options.runtime.agentStateVfs : await context.workspace(), limits: async () => modelWindow(null),
+      }),
     });
   }
 
@@ -274,6 +286,7 @@ export class ActorSession {
     readonly releaseForeground?: (executing: number) => boolean | Promise<boolean>;
   }): void {
     const { releaseForeground } = deps;
+    this.releaseForeground = releaseForeground ?? null;
 
     this.orchestrator.inbox.bindSteerDeps({
       onAccept: deps.onAccept,
@@ -935,6 +948,17 @@ export class ActorSession {
   }): AsyncIterable<ChatEvent> {
     const { lease, active, profile, input, program, claim, stream, tally, remote } = turn;
     const { tools, extensions } = this.turnToolset(input, profile);
+    const lane = this.options.advisorLane;
+
+    if (lane !== undefined && this.advisor.reviewsTurns) {
+      extensions.register(this.advisor.extension({
+        turnId: claim.turnId,
+        model: routedAdvisorModel(resolveModelRoute('advisor', profile), lane),
+        tools: advisorReadTools({ ...(input.stores !== null && { files: input.stores.deps.files, memory: input.stores.deps.memory }) }),
+        reachable: Object.keys(tools),
+      }));
+    }
+
     // Activation names the input's entry after its message; an edit keeps the entry.
     const turnInput = this.canonical.admittedInput(claim.turnId);
     const assertClaim = () => this.canonical.assertEpoch(claim.turnId, claim.epoch);

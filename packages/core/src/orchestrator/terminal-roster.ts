@@ -3,14 +3,13 @@
  * the same answers. Callers supply values, never decisions: what the actor's role owes (its naming, its logo,
  * its sleep-time, its review) is decided here; an effect a backend lacks is an absent part.
  */
-import { JsonValueSchema, projectJsonValue, type JsonValue } from '../utils/json';
+import { JsonValueSchema, type JsonValue } from '../utils/json';
 import { WorkModeSchema, type WorkMode } from '../types/turn';
 import type { RunEndReason } from './turn-lifecycle';
 import type { TurnContinuity } from './evolution-lanes';
 import type { OwedEffect } from './terminal-effects';
 import type { OwedTerminalEffectsInput } from './chat-session';
 import { isPlaceholderMission, WORKSPACE_CREATED_EVENT } from '../identity/soul';
-import type { ActorAdvisor } from '../advisor/actor-advisor';
 import type { CompletedTurn } from '../evolution/types';
 import * as v from 'valibot';
 import { CompletedTurnSchema } from '../evolution/session-window';
@@ -78,8 +77,6 @@ export interface TerminalActor {
     | { readonly kind: 'workspace'; readonly mission: string | null; readonly event: string | null }
     /** Any other agent: named once, from the brief its conversation opened on, however that turn ended. */
     | { readonly kind: 'agent'; readonly opensConversation: () => boolean };
-  /** Reviews the turn, on the tools it could reach, if it reviews turns at all. */
-  readonly advisor: Pick<ActorAdvisor, 'reviewsTurns' | 'snapshot'>;
   /** As scoped for its recording. */
   readonly turn: CompletedTurn;
   readonly reachableTools: readonly string[];
@@ -172,14 +169,6 @@ export function declareTerminalRoster(
       autoEvolve: facts.evolutionEnabled,
     },
   });
-
-  // Recorded, not re-read on replay: the tool surface can change.
-  if (actor.advisor.reviewsTurns) {
-    owed.push({
-      name: 'advisor_review', scope: messageId, lane: 'detached',
-      input: { status: facts.status, workMode: facts.workMode, advisor: projectJsonValue({ value: actor.advisor.snapshot(actor.turn, actor.reachableTools) }) },
-    });
-  }
 
   // Composed after the commit, where the hirer's roster is: nothing crosses before it (#75).
   if (parts.turnReport) {
