@@ -12,7 +12,7 @@ import { appFontFile, SLATE_FONTS_PATH, SLATE_PAGE_PREAMBLE } from '@kinu.run/co
 import { SLATE_CLIENT_MODULE } from '@kinu.run/core/slates';
 import { detach } from '@kinu.run/core/obs';
 import { contrast, rgba, withGallery, type Rgba } from '../../scripts/gallery-harness';
-import { inspectorPageListed } from '../../scripts/browser-page';
+import { inspectorPageListed, PAGES_NAV } from '../../scripts/browser-page';
 import { TEST_REQUIREMENTS } from '../../scripts/test-requirements';
 
 /** The answer's page as its author wrote it: a title, a heading, rows, and a paragraph that sets no colour. */
@@ -187,7 +187,7 @@ describe('an answer\'s page in the chat', () => {
 
         await page.hover(CARD);
         await page.click(`${CARD} [data-slate-saved="errors-by-route"]`);
-        await page.waitForSelector('nav[aria-label="Pages"] button[aria-label="500s by route"][aria-current="true"]');
+        await page.waitForSelector(`${PAGES_NAV} button[aria-label="500s by route"][aria-current="true"]`);
       } finally { await page.close(); }
     });
   });
