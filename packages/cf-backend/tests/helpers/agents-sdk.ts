@@ -822,6 +822,19 @@ const mcpOverlapped: string[] = [];
 /** Servers a `connectToServer` is running for. */
 const mcpConnecting = new Set<string>();
 
+/** Runs one of the vendor's calls that may open a connection's client (a connect, an establish, a discover that recovers
+ *  a stale session), recording it as overlapping when another of them runs for the same server. */
+async function connectingTo<T>(id: string, connect: () => Promise<T>): Promise<T> {
+  if (mcpConnecting.has(id)) mcpOverlapped.push(id);
+  mcpConnecting.add(id);
+
+  try {
+    return await connect();
+  } finally {
+    mcpConnecting.delete(id);
+  }
+}
+
 /** The next `connectToServer`'s hold, once {@link hangNextMcpConnect} planted it. */
 let mcpConnectGate: { readonly entered: () => void; readonly released: Promise<void> } | null = null;
 
@@ -1298,7 +1311,7 @@ class FakeMCPClientManager {
 
   establishConnection(id: string): Promise<void> {
     mcpEstablished.push(id);
-    const dial = this.establish(id);
+    const dial = connectingTo(id, async () => this.establish(id));
     this.track(dial);
 
     return dial;
@@ -1370,14 +1383,7 @@ class FakeMCPClientManager {
     if (!connection) return { state: 'failed', error: `no registered server ${id}` };
     mcpDialled.push(id);
 
-    if (mcpConnecting.has(id)) mcpOverlapped.push(id);
-    mcpConnecting.add(id);
-
-    try {
-      return await this.connectedOrSigningIn(id, connection);
-    } finally {
-      mcpConnecting.delete(id);
-    }
+    return await connectingTo(id, async () => this.connectedOrSigningIn(id, connection));
   }
 
   private async connectedOrSigningIn(id: string, connection: RecordedMcpConnection): Promise<
@@ -1419,6 +1425,10 @@ class FakeMCPClientManager {
   /** Early return without a connection (`client-zqKcsyFa.js:1991-2001`); a probe failure lands as the
    *  connection's catch does (`:762-764`) and does not clear tools. */
   async discoverIfConnected(id: string): Promise<void> {
+    await connectingTo(id, async () => this.discovered(id));
+  }
+
+  private async discovered(id: string): Promise<void> {
     mcpDiscovered.push(id);
     const connection = this.mcpConnections[id];
 
