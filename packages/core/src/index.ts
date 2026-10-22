@@ -862,6 +862,8 @@ export {
   type PromptModelProfile,
 } from './prompting/model-profile';
 
+export type { HarnessMode } from './config/harness-mode';
+
 export {
   renderAgentsMdSection,
   collectWorkspaceAgentsMd,
