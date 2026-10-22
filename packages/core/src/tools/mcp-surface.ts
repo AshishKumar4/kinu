@@ -1,11 +1,6 @@
-/** MCP tool surface both backends admit. A remote catalog is spent out of `stepContextLimit`
- *  minus the actor's own tool definitions; cf and CLI both price with {@link toolSurfaceTokens}. */
-
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import { jsonSchema, tool, type ToolExecutionOptions, type ToolSet } from 'ai';
-import { estimateTokens } from '../token-estimate';
-import { stepContextLimit } from '../context-window';
 import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
 import { mcpCallResult } from './mcp-error';
 import { KinuError, settle } from '../obs/index';
@@ -16,6 +11,7 @@ import { withEffectReceipt, type EffectClaimDeps } from './effect-claim';
 import { mcpToolKey, suffixedMcpToolKey } from './mcp-naming';
 import { revealMisrepresenting } from '../safety/untrusted-text';
 import { sha256Hex } from '../safety/argument-digest';
+import { registerMcpDescriptors } from './mcp-discovery';
 
 /** An MCP tool after crossing the RPC seam, with namespacing context for dispatch. */
 const SerializableToolDescriptorSchema = v.object({
@@ -217,22 +213,7 @@ export function omitEmptyOptionalArgs(
   return out;
 }
 
-/** Budget a remote MCP catalog is admitted against: `stepContextLimit` minus the actor's own tool surface. */
-export interface McpSurfaceBudget {
-  contextWindow: number | null;
-  /** Null when nothing reported one. Read from the same `ModelCatalogSession` as the window. */
-  modelOutputLimit: number | null;
-  nativeToolTokens: number;
-}
-
-/** Estimated cost of a serialized tool surface; one scale for actor tools and descriptors. */
-type ToolSurfacePriceable = ToolSet | SerializableToolDescriptor | readonly SerializableToolDescriptor[];
-
-export function toolSurfaceTokens(surface: ToolSurfacePriceable): number {
-  return estimateTokens(JSON.stringify(surface).length);
-}
-
-/** The catalog as admission names and orders it, whatever the budget: a repeated key takes its server's name. */
+/** A repeated key takes its server's name; every tool remains callable. */
 function servedMcpDescriptors(descriptors: readonly SerializableToolDescriptor[]): SerializableToolDescriptor[] {
   const keyUses = new Map<string, number>();
 
@@ -254,52 +235,6 @@ function byServerThenTool(a: SerializableToolDescriptor, b: SerializableToolDesc
   return a.name < b.name ? -1 : 1;
 }
 
-export interface McpDescriptorAdmission {
-  admitted: SerializableToolDescriptor[];
-  deferred: { server: string; reason: string }[];
-}
-
-/** Admits as much of a remote catalog as the remaining budget carries. Prose gets equal shares of what
- *  remains; schemas are never truncated, so an unfitting descriptor is deferred whole and reported. */
-function admitMcpDescriptors(
-  descriptors: readonly SerializableToolDescriptor[],
-  budget: McpSurfaceBudget,
-): McpDescriptorAdmission {
-  const total = Math.max(0, stepContextLimit(budget) - budget.nativeToolTokens);
-  const ordered = servedMcpDescriptors(descriptors);
-
-  const admitted: SerializableToolDescriptor[] = [];
-  const lost = new Map<string, number>();
-  let spent = 0;
-
-  for (const [index, descriptor] of ordered.entries()) {
-    const bounded = withProseInside(descriptor, Math.floor((total - spent) / (ordered.length - index)));
-    const cost = toolSurfaceTokens(bounded);
-
-    if (spent + cost > total) {
-      lost.set(descriptor.serverName, (lost.get(descriptor.serverName) ?? 0) + 1);
-      continue;
-    }
-
-    spent += cost;
-    admitted.push(bounded);
-  }
-
-  const reserve = budget.modelOutputLimit === null
-    ? 'no reported output allowance to leave room for'
-    : `this model's ${String(budget.modelOutputLimit)}-token output allowance`;
-
-  const deferred = [...lost].map(([server, count]) => ({
-    server,
-    reason: `${String(count)} of its tools did not fit this turn's remaining tool budget of `
-      + `${String(total)} tokens (a ${String(budget.contextWindow)}-token window less ${reserve}, and `
-      + `${String(budget.nativeToolTokens)} already spent by this agent's own tools), `
-      + 'so those tools are absent',
-  }));
-
-  return { admitted, deferred };
-}
-
 /** What a backend's MCP connections serve: descriptors, and the configured servers that produced none. */
 export interface McpServedSurface {
   readonly descriptors: readonly SerializableToolDescriptor[];
@@ -307,81 +242,33 @@ export interface McpServedSurface {
 }
 
 /**
- * The one admission stage, read every turn against that turn's budget. Keyed by a hash of the served descriptors,
- * never a mutation watermark (watermarks reset on cold start while rows survive); `read` failures propagate.
+ * Keyed by descriptor content, never a mutation watermark (which resets on cold start while rows survive).
+ * The complete catalog stays host-side; discovery, not the prompt window, decides what a program reads.
  */
 export class McpToolSurfaceCache<Tools> {
   private key: string | null = null;
   private built: Tools | null = null;
   private lastUnavailable: readonly { server: string; reason: string }[] = [];
-  private lastDeferred: McpDescriptorAdmission['deferred'] = [];
 
   constructor(private readonly build: (descriptors: readonly SerializableToolDescriptor[]) => Promise<Tools>) {}
 
-  /** The servers whose tools the last budget could not carry. */
-  get deferred(): McpDescriptorAdmission['deferred'] {
-    return this.lastDeferred;
-  }
-
-  /** Configured servers, and deferred tools, absent from the last served surface. */
+  /** Configured servers absent from the last served surface. */
   get unavailable(): readonly { server: string; reason: string }[] {
     return this.lastUnavailable;
   }
 
-  /** Rebuilds only when the admitted set could differ: the key holds the descriptors and every budget input. */
-  async refresh(read: () => Promise<McpServedSurface>, budget: McpSurfaceBudget): Promise<Tools> {
+  async refresh(read: () => Promise<McpServedSurface>): Promise<Tools> {
     const served = await read();
-    const admission = admitMcpDescriptors(served.descriptors, budget);
+    const key = sha256Hex(JSON.stringify(served.descriptors));
 
-    const key = `${sha256Hex(JSON.stringify(served.descriptors))}:${String(budget.contextWindow)}`
-      + `:${String(budget.modelOutputLimit)}:${String(budget.nativeToolTokens)}`;
-
-    this.lastUnavailable = [...served.unavailable, ...admission.deferred];
-    this.lastDeferred = admission.deferred;
+    this.lastUnavailable = served.unavailable;
 
     if (this.built !== null && key === this.key) return this.built;
-    this.built = await this.build(admission.admitted);
+    this.built = await this.build(servedMcpDescriptors(served.descriptors));
     this.key = key;
 
     return this.built;
   }
-}
-
-/** Schema priced first; description then title get what the share has left. Clipped text is marked. */
-function withProseInside(
-  descriptor: SerializableToolDescriptor,
-  share: number,
-): SerializableToolDescriptor {
-  if (descriptor.description === undefined && descriptor.title === undefined) return descriptor;
-  const bare = { ...descriptor };
-  delete bare.description;
-  delete bare.title;
-  let left = Math.max(0, share - toolSurfaceTokens(bare));
-  const description = clampProse(descriptor.description, left);
-
-  if (description !== undefined) left -= estimateTokens(description.length);
-  const title = clampProse(descriptor.title, left);
-
-  if (description === descriptor.description && title === descriptor.title) return descriptor;
-  const bounded: SerializableToolDescriptor = { ...descriptor };
-
-  if (description === undefined) delete bounded.description; else bounded.description = description;
-
-  if (title === undefined) delete bounded.title; else bounded.title = title;
-
-  return bounded;
-}
-
-/** Empty when the budget cannot carry any text: a lone ellipsis says less than the orchestrator's fallback. */
-function clampProse(text: string | undefined, tokens: number): string | undefined {
-  if (text === undefined) return undefined;
-
-  if (tokens <= 0) return undefined;
-  const cost = estimateTokens(text.length);
-
-  if (cost <= tokens) return text;
-
-  return `${text.slice(0, Math.floor(text.length * (tokens / cost)))}...`;
 }
 
 /**
@@ -391,7 +278,7 @@ function clampProse(text: string | undefined, tokens: number): string | undefine
  */
 const PROGRAM_RESULT_MAX_CHARS = PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value / 8;
 
-/** Admitted MCP catalog as a callable surface; `call` is backend-owned. Only `readOnly: true` exempts a tool
+/** MCP catalog as a callable surface; `call` is backend-owned. Only `readOnly: true` exempts a tool
  *  from the effect claim. */
 export interface McpToolBuild {
   readonly call: (
@@ -424,10 +311,14 @@ export function buildMcpToolSet(
 
   // Claim outermost (as in `buildActorTools`). No turn budget: only a program reads these, and what it hands the model
   // is charged as `eval`'s own.
-  return withEffectReceipt(
+  const wrapped = withEffectReceipt(
     withClampedToolResults(tools, { files: build.spill, producer: 'external_tool', maxChars: PROGRAM_RESULT_MAX_CHARS }),
     build.effectClaims,
     { safe: readOnly },
   );
+
+  registerMcpDescriptors(wrapped, descriptors);
+
+  return wrapped;
 }
 

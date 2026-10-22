@@ -7,11 +7,26 @@ import { MossaicShardDO as MossaicShard, MossaicUserDO as MossaicUser } from '@m
 
 const TopSchema = v.object({ top: v.nullable(v.number()) });
 
-/** The object's storage deleted and its activation ended, so a tenant of the same name later starts from nothing. */
+const CountSchema = v.object({ held: v.number() });
+
+/**
+ * The object's storage deleted and its activation ended, so a tenant of the same name later starts from nothing: its
+ * schema flag is in memory, and an activation left running after `deleteAll` answers "no such table" (measured in
+ * workerd, 2026-10-22). The end can cut this call's answer on its way back (production, 2026-10-22: 32 of 32 cut, where
+ * local workerd delivered 60 of 60), so the caller learns the outcome from `storedTables`, not from this answer.
+ */
 async function deleted(ctx: DurableObjectState): Promise<void> {
   await ctx.storage.deleteAlarm();
   await ctx.storage.deleteAll();
   setTimeout(() => { ctx.abort('the drive tenant was deleted'); }, 0);
+}
+
+/** How many of its own tables the object holds, read without opening its schema: none once it was deleted. */
+function storedTables(ctx: DurableObjectState): number {
+  return v.parse(CountSchema, ctx.storage.sql.exec(
+    // The runtime's own tables, `_cf_*` and `sqlite_*`, are not the object's (and `_` is a wildcard to LIKE).
+    "SELECT COUNT(*) AS held FROM sqlite_master WHERE type = 'table' AND substr(name, 1, 4) <> '_cf_' AND substr(name, 1, 7) <> 'sqlite_'",
+  ).one()).held;
 }
 
 export class MossaicUserDO extends MossaicUser {
@@ -33,11 +48,21 @@ export class MossaicUserDO extends MossaicUser {
   async destroyUser(): Promise<void> {
     await deleted(this.ctx);
   }
+
+  /** The tables this tenant's object holds: none once `destroyUser` ran. */
+  storedTables(): number {
+    return storedTables(this.ctx);
+  }
 }
 
 export class MossaicShardDO extends MossaicShard {
   /** Every chunk and record this shard holds for its tenant, deleted. */
   async destroyShard(): Promise<void> {
     await deleted(this.ctx);
+  }
+
+  /** The tables this shard holds: none once `destroyShard` ran. */
+  storedTables(): number {
+    return storedTables(this.ctx);
   }
 }

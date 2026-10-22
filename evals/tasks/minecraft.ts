@@ -2,7 +2,7 @@ import * as v from 'valibot';
 import { parseSync, type Argument, type ArrayExpressionElement, type CallExpression, type Directive, type Expression, type Statement } from 'oxc-parser';
 import { JsonValueSchema, WORKSPACE_ROOT, type JsonValue } from '@kinu.run/core';
 import { DESKTOP_MEMBERS } from '../../packages/core/src/execution/desktop';
-import { BOX_CHROMIUM_POLICY, CHROMIUM_POLICIES, DESKTOP_CHECK, DESKTOP_LOG } from '../../packages/devbox/src/desktop';
+import { BOX_CHROMIUM_POLICY, BOX_CHROMIUM_POLICY_KEYS, CHROMIUM_POLICIES, DESKTOP_CHECK, DESKTOP_LOG } from '../../packages/devbox/src/desktop';
 import type { EvalCheck, EvalPart, PrepareCommand, TrialBox } from '../src/task';
 import type { EvalVerifier } from '../src/verifier';
 
@@ -173,8 +173,17 @@ const BOX_WRITES = [
   '/root/.config/chromium/Crash Reports/',
 ];
 
-/** All the box's own policy holds: its trust, and no warning for the flags it starts the browser with. */
-const BOX_POLICY_KEYS = ['CACertificates', 'CommandLineFlagSecurityWarningsEnabled'];
+/**
+ * Whether the box's own policy holds a key the box does not write: it rewrites that policy as it renews its trust, so
+ * its contents are not hashed at lockdown, only held to the box's keys. Allowed from the box's own list: a list kept here
+ * missed the distrust 8439cc161 added (2026-10-20), and the lockdown failed in every trial since.
+ */
+export const BOX_POLICY_TAMPERED_PY = String.raw`def box_policy_tampered(path):
+    try:
+        return not set(json.load(open(path))) <= set(${JSON.stringify(BOX_CHROMIUM_POLICY_KEYS)})
+    except (OSError, ValueError):
+        return True
+`;
 
 /** The box's own daemons, which it starts when it first needs them: the mounts its sandbox serves files through. */
 const BOX_DAEMONS = ['s3fs', 'devbox-squashfuse', 'squashfuse', 'fuse-overlayfs'];
@@ -261,11 +270,8 @@ for line in open(f'{BASE}/modes'):
     mode, path = line.strip().split(maxsplit=1)
     if not os.path.exists(path) or format(os.stat(path).st_mode & 0o7777, 'o') != mode:
         tampered.append(path)
-# The box rewrites its own policy as it renews its trust; it may hold that trust and nothing more.
-try:
-    if not set(json.load(open('${BOX_CHROMIUM_POLICY}'))) <= set(${JSON.stringify(BOX_POLICY_KEYS)}):
-        tampered.append('${BOX_CHROMIUM_POLICY}')
-except (OSError, ValueError):
+${BOX_POLICY_TAMPERED_PY}
+if box_policy_tampered('${BOX_CHROMIUM_POLICY}'):
     tampered.append('${BOX_CHROMIUM_POLICY}')
 
 alive = os.path.exists(f'/proc/{browser}')
@@ -826,8 +832,7 @@ const PROMPT = 'Minecraft Classic is open full screen on your computer\'s deskto
   + 'loops, conditions, variables, functions or other tools. Look before each move. Typing is off, and only the game\'s '
   + 'keys work: w, a, s and d walk, space jumps, shift crouches, 1 to 9 pick a block, b opens the block menu, f changes '
   + 'the render distance, r respawns, e, Escape and Enter.\n\n'
-  + 'Click the game to capture the pointer; from then on, moving the pointer turns your view, and a click at another '
-  + 'point moves the pointer there first, which turns it too. A left click places the block you hold where the crosshair '
+  + 'Click the game to capture the pointer. A left click places the block you hold where the crosshair '
   + 'points (a ghost cube shows where), or breaks one; a right click switches between placing and breaking. Escape lets '
   + 'the pointer go. You reach about 6 blocks.';
 

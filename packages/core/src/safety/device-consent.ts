@@ -14,6 +14,7 @@ import { diagnostics, renderThrownChain, settle, type ErrorCode, type KinuError 
 import { DENIAL_STANDING_MS } from './deferred-approval';
 import { Effect, Result } from 'effect';
 import * as v from 'valibot';
+import { SEALABLE_FOLDERS } from '../execution/run-later-paths';
 
 /** What the owner can answer. Only `always` is remembered, as the workspace's binding to the device. */
 export type DeviceConsentAnswer = 'once' | 'always' | 'deny';
@@ -45,11 +46,22 @@ export function issuedDeviceConnected<Device extends { readonly id: string; read
   return devices.find((device) => device.id === deviceId && device.connected);
 }
 
+/**
+ * What sharing the home folder lets a sandboxed command change, said once (owner decision 2026-10-22): everything but
+ * the declared run-later paths (run-later-paths.ts), with plainly that the list cannot be complete, and the folders a
+ * missing one closes to new entries.
+ */
+export const HOME_FOLDER_CONSENT = 'If you pick your home folder, the agent can change files in it, except the ones your '
+  + 'computer runs later outside the sandbox: shell startup files, ~/.local/bin and ~/bin, autostart and login items, '
+  + 'SSH and git settings, package-manager settings and editor plugins. That list cannot be complete, so pick a project '
+  + `folder if you want nothing else in reach. Where one of those files does not exist yet, its folder (${SEALABLE_FOLDERS.join(', ')}) `
+  + 'takes no new files or folders directly in it; new work goes inside an existing folder.';
+
 /** Stated by every connect surface before the daemon is installed; one copy shared by CLI and web. */
 export const DEVICE_CONNECT_DISCLOSURE: readonly string[] = [
   'Kinu installs a small daemon here and links this machine to your account.',
   'A workspace you approve runs in a sandbox: its own home plus folders you pick. Everything else stays invisible to it.',
-  'If you pick your home folder, the agent can also change your shell startup files and git settings, which run outside the sandbox. Pick a project folder to keep them out of reach.',
+  HOME_FOLDER_CONSENT,
   'The daemon only dials out. Revoke it any time under Account settings > Devices.',
 ];
 

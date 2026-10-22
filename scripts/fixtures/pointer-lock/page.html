@@ -1,0 +1,8 @@
+<!doctype html><html><body style="margin:0;background:#8c8;height:100vh" id=b>
+<script>
+const log = [];
+document.addEventListener('mousedown', (e) => { if (document.pointerLockElement === null) document.body.requestPointerLock(); log.push({ t: 'down', button: e.button }); });
+document.addEventListener('pointerlockchange', () => log.push({ t: 'lock', locked: document.pointerLockElement !== null }));
+document.addEventListener('mousemove', (e) => log.push({ t: 'move', dx: e.movementX, dy: e.movementY, x: e.clientX, y: e.clientY }));
+setInterval(() => { document.title = 'L' + btoa(JSON.stringify(log)); }, 20);
+</script></body></html>

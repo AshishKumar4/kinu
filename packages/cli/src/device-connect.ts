@@ -11,7 +11,7 @@ import { Effect } from 'effect';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { isolatedBunArgs } from '@kinu.run/core';
 import { classify, classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle, settleSync, tolerate, toKinuError } from '@kinu.run/core/obs';
-import { describeGpuNodes, effectiveDeviceMode, sandboxReasonFix } from '@kinu.run/core';
+import { describeGpuNodes, effectiveDeviceMode, HOME_FOLDER_CONSENT, sandboxReasonFix } from '@kinu.run/core';
 import {
   claimMachine, enforceOwnerOnly, ensureSecretDir, machineProcessAlive, readMachinePid, removeMachinePid, runningMachineDaemon, runsMachineDaemon,
 } from '@kinu.run/cli-backend';
@@ -188,7 +188,7 @@ function canonicalDir(dir: string): string {
 /**
  * What linking from `root` gives the agent, said before it is confirmed (L111 #6): the folder the daemon will resolve it
  * to, by its absolute path, and what that folder is. A root of / is the whole machine with its commands unsandboxed;
- * this user's home reaches the shell's startup files and git settings, which run outside the sandbox. A root through a
+ * this user's home is writable but for what the computer runs later (HOME_FOLDER_CONSENT). A root through a
  * link is said as where it leads, the name given beside it.
  */
 export function describeConnectScope(root: string, home = homedir()): string[] {
@@ -198,7 +198,7 @@ export function describeConnectScope(root: string, home = homedir()): string[] {
   if (shared === '/') return [`Shares the whole machine, from /${through}.`, WHOLE_MACHINE_LINKED];
 
   if (shared === canonicalDir(home)) {
-    return [`Shares your whole home folder, ${shared}${through}.`, 'The agent can then change your shell startup files and git settings, which run outside the sandbox. Pass --root <project folder> to keep them out of reach.'];
+    return [`Shares your whole home folder, ${shared}${through}.`, HOME_FOLDER_CONSENT, 'Pass --root <project folder> to share only that.'];
   }
 
   return [`Shares ${shared}${through} and nothing beside it.`];

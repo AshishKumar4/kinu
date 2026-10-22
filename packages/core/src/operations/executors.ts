@@ -229,9 +229,9 @@ export function computerDesktop(screen: DesktopScreen) {
       input: deskInput(DESKTOP_INPUTS.watch, { seconds: 'How long to watch, at most 10.', fps: watchPays(screen) }),
     }),
     click: desk({
-      name: 'click', impact: 'execute', output: v.null(), help: 'Click at a point.',
+      name: 'click', impact: 'execute', output: v.null(), help: 'Click at a point, or where the pointer is.',
       input: deskInput({ ...DESKTOP_INPUTS.click, keys: v.optional(opaque(DESKTOP_INPUTS.click.keys.wrapped, KEY_LIST)) }, {
-        at: point,
+        at: `${point} Or null: where the pointer is, which moves nothing first.`,
         button: 'Default "left".',
         count: '2 double-clicks, 3 triple-clicks; default 1.',
         keys: 'Modifiers held during the click, as an array: ["shift"] or ["ctrl", "shift"].',
@@ -254,8 +254,14 @@ export function computerDesktop(screen: DesktopScreen) {
       input: deskInput(DESKTOP_INPUTS.scroll, { at: point, dy: 'Wheel clicks down; negative scrolls up.', dx: 'Wheel clicks right; negative scrolls left.' }),
     }),
     move: desk({
-      name: 'move', impact: 'execute', output: v.null(), help: 'Move the pointer to a point without clicking, to hover.',
-      input: deskInput(DESKTOP_INPUTS.move, { at: point }),
+      name: 'move', impact: 'execute', output: v.null(),
+      help: 'Move the pointer without clicking: to a point, to hover, or by a distance. In an app that captures the pointer, '
+        + 'like a game, moving it turns the view and only the distance counts: aim with { by }, and click at null, where the '
+        + 'pointer is. A point there is no place on the screen: the hidden pointer is re-centred near the edge, so moving to '
+        + 'one point again turns the view again.',
+      input: deskInput(DESKTOP_INPUTS.move, {
+        at: `${point} Or a distance, { by: [dx, dy] }: pixels right and down, negative left and up.`,
+      }),
     }),
     drag: desk({
       name: 'drag', impact: 'execute', output: v.null(), help: 'Press the left button at one point, move to another, release.',

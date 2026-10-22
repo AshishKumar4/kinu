@@ -1523,6 +1523,26 @@ export const PLATFORM_CATALOG = {
     conflictsWith: ['rpc.arg_bytes'],
   },
 
+  'email.routing.rules_per_domain': {
+    subject: 'Routing rules Cloudflare Email Routing holds for one domain',
+    limit: { value: 200, unit: 'count' },
+    origin: 'platform',
+    bounds: 'count',
+    evidence: 'documented',
+    provenance: 'https://developers.cloudflare.com/email-routing/limits/',
+    date: '2026-10-21',
+    trigger: 'a 201st routing rule asked for on one domain',
+    onBreach: 'Cloudflare refuses to make the rule; Kinu refuses the address it would have routed, in Cloudflare\'s words, and makes nothing of it',
+    observable: [],
+    firstPartySignal: true,
+    notes:
+      'An apex routes every address by its one catch-all; a subdomain has none (Catch-all rules are only available for the '
+      + 'apex domain: developers.cloudflare.com/email-service/configuration/subdomains/), so a deployment whose mail is on a '
+      + 'subdomain holds a literal rule for each address it gives out: the person\'s, and each workspace\'s and agent\'s '
+      + '(core/src/deploy/mail-rules.ts). No cap of Kinu\'s comes before this one. A rule matches one address of at most 90 '
+      + 'characters (the rules API\'s matcher value), and a +tag variant of it does not route. Unmeasured: the refusal\'s '
+      + 'words need a zone that may hold 200 probe rules, which no zone of Kinu\'s shared with a live deployment may.',
+  },
   'email.routing.message_bytes': {
     subject: 'Maximum size of an inbound message Cloudflare Email Routing delivers to a Worker',
     limit: { value: 25 * MiB, unit: 'bytes' },
@@ -2159,6 +2179,29 @@ export const PLATFORM_CATALOG = {
       + 'child fails to boot and did not record whether anything reaches the loader caller, or '
       + 'with what wording: assuming no signal is the harder and therefore safer assumption '
       + 'until somebody captures it.',
+  },
+
+  'workers_dev.fresh_route_404': {
+    subject: 'A workers.dev address just bound to a script answering 404 before it serves the script',
+    limit: null,
+    origin: 'platform',
+    bounds: 'duration',
+    evidence: 'proven-by-probe',
+    provenance: 'docs/SELF-DEPLOY.md#f44999-2026-10-21',
+    date: '2026-10-21',
+    trigger: 'a request to <script>.<subdomain>.workers.dev in the seconds after the script\'s workers.dev route is enabled',
+    onBreach: 'the address answers HTTP 404, though the script is deployed and the route enabled',
+    observable: [{ context: 'a request to the address', message: 'HTTP 404' }],
+    firstPartySignal: true,
+    measurements: [
+      { scenario: 'kinu-sdtest-before-0802: bound, then answered after one 3 s wait', value: 3_000, unit: 'ms' },
+      { scenario: 'kinu-sdtest-10210741: bound 07:49:23, 404 then, answering by 07:49:52', value: 29_000, unit: 'ms' },
+    ],
+    notes:
+      'Cloudflare publishes no figure for it. A change to a deployment is carried everywhere within a couple of seconds '
+      + '(the docs\' "Version overrides"); a workers.dev route newly enabled took up to the longest measured here. The '
+      + 'self-deploy smoke asks again while it lasts (core deploy/steps.ts SMOKE_PATIENCE_MS), never reading a 404 then '
+      + 'as the version\'s own answer.',
   },
 
   'edge.websocket_idle_reap_ms': {

@@ -56,8 +56,10 @@ export {
 } from './capability';
 
 export {
+  ANALYTICS_OFF,
   AnalyticsResultSchema,
   analyticsMissingSettings,
+  analyticsOff,
   runAnalyticsBatch,
   type AnalyticsPanels,
   type AnalyticsQuerySet,

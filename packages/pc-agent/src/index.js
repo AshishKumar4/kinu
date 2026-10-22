@@ -28,7 +28,8 @@ function checkpointedWrite(msg, { requested, content, options }, checkpoints, wr
 
   const data = options?.encoding === 'base64' ? Buffer.from(String(content), 'base64') : Buffer.from(String(content));
 
-  return mutation(checkpoints, { view, hint: msg.checkpoint }, coveredBy(verdict), (snapshot) => {
+  return mutation(checkpoints, { view, hint: msg.checkpoint }, coveredBy(verdict), async (snapshot) => {
+    await view.refuseGuarded(confined);
     const answer = write(view, confined, data);
 
     if (answer.ok === false) return answer;
@@ -1574,7 +1575,8 @@ function handle(msg, ws, ctx) {
       const view = viewFromFrame(msg);
       const entry = view.resolveEntryPath(parseString(params[0], 'device paths must be strings'), 'write');
 
-      rpcWhenSettled(ws, id, mutation(checkpoints, { view: viewFromFrame(msg), hint: null }, null, () => {
+      rpcWhenSettled(ws, id, mutation(checkpoints, { view: viewFromFrame(msg), hint: null }, null, async () => {
+        await view.refuseGuarded(entry);
         atJudged(view, entry, {}, (at) => { at.unlink(); });
 
         return { success: true };
@@ -1583,7 +1585,8 @@ function handle(msg, ws, ctx) {
       const view = viewFromFrame(msg);
       const entry = rmdirEntry(view, msg);
 
-      rpcWhenSettled(ws, id, mutation(checkpoints, { view: viewFromFrame(msg), hint: null }, null, () => {
+      rpcWhenSettled(ws, id, mutation(checkpoints, { view: viewFromFrame(msg), hint: null }, null, async () => {
+        await view.refuseGuarded(entry);
         atJudged(view, entry, {}, (at) => { at.rmdir(); });
 
         return { success: true };
@@ -1593,7 +1596,8 @@ function handle(msg, ws, ctx) {
       const view = viewFromFrame(msg);
       const confined = confinedDeviceViewPath(view, params[0], 'write');
 
-      rpcWhenSettled(ws, id, mutation(checkpoints, { view: viewFromFrame(msg), hint: null }, null, () => {
+      rpcWhenSettled(ws, id, mutation(checkpoints, { view: viewFromFrame(msg), hint: null }, null, async () => {
+        await view.refuseGuarded(confined);
         atJudged(view, confined, { createParents: recursive }, (at) => { at.mkdir(recursive); });
 
         return { success: true };

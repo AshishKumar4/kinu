@@ -8,40 +8,28 @@
  *                                                   to <file> (for devbox-container-tier.ts --tools)
  *   bun scripts/devbox-tools.ts publish <bucket>   uploads the pinned tarball's parts, built again, unless the bucket holds them
  *   bun scripts/devbox-tools.ts check <bucket>     exits 1, naming the part, when the bucket lacks one
+ *   bun scripts/devbox-tools.ts release <store> <releases>  copies the parts into the channel's releases bucket, inside R2,
+ *                                                   unless it holds them: a self-deployment copies them from the channel
  *
  * deploy.sh builds nothing: it runs `check` on the store bucket it deploys, and refuses by name.
  */
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import * as v from 'valibot';
 import { AwsClient } from 'aws4fetch';
 import { devboxTools } from '../armada/devbox-tools';
 import { deployedConfig } from './infra-manifest';
 import { r2ObjectSize } from './cloudflare-rest';
 import { restApiToken } from './cloudflare-token';
 import { requireCloudflareAccountId, wrangler } from './infra-cloudflare';
+import { partsOf, pinnedTools, TOOLS_PART_BYTES, toolsKey, type Tools } from './devbox-tools-pin';
 
-const BLOCK_LOWER = join(import.meta.dir, '..', 'packages/devbox/block-lower');
-
-const ToolsRecord = v.object({ sha256: v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/)), bytes: v.number() });
-
-/** The pinned tarball's record, from upstream.json. */
-function pinnedTools(): v.InferOutput<typeof ToolsRecord> {
-  return v.parse(v.object({ tools: ToolsRecord }), JSON.parse(readFileSync(join(BLOCK_LOWER, 'upstream.json'), 'utf8'))).tools;
-}
-
-/** The object key a box reads the tarball's parts from, `.0` first: packages/devbox/src/golden.ts reads the same. */
-const toolsKey = (sha256: string): string => `devbox-tools/${sha256}.tgz`;
-
-/** Under the 300 MiB that `wrangler r2 object put` takes. */
-const TOOLS_PART_BYTES = 256 * 1024 * 1024;
-
-/** Seed an eval fixture from staging's distribution artifact without building any local image. */
-export async function copyPinnedTools(bucket: string): Promise<void> {
+/** Seed an eval fixture from staging's distribution artifact without building any local image; or, for a release, its
+ *  channel's releases bucket from the store bucket the deploy checked, inside R2 (`deploy.sh`). */
+export async function copyPinnedTools(bucket: string, from?: string): Promise<void> {
   const tools = pinnedTools();
-  const source = deployedConfig('staging').r2_buckets?.find(row => row.binding === 'BACKUP_BUCKET')?.bucket_name;
+  const source = from ?? deployedConfig('staging').r2_buckets?.find(row => row.binding === 'BACKUP_BUCKET')?.bucket_name;
   const accessKeyId = process.env['R2_ACCESS_KEY_ID'];
   const secretAccessKey = process.env['R2_SECRET_ACCESS_KEY'];
 
@@ -55,19 +43,12 @@ export async function copyPinnedTools(bucket: string): Promise<void> {
 
     const body = await copied.text();
 
-    if (!copied.ok || body.includes('<Error>')) throw new Error(`the staging tools ${part.key} was not copied: ${String(copied.status)} ${body.slice(-300)}`);
+    if (!copied.ok || body.includes('<Error>')) throw new Error(`the tools ${source}/${part.key} was not copied: ${String(copied.status)} ${body.slice(-300)}`);
   }
 }
 
-/** Each part's key and size, in the order a box reads them. */
-function partsOf(tools: v.InferOutput<typeof ToolsRecord>): readonly { readonly key: string; readonly bytes: number }[] {
-  return Array.from({ length: Math.ceil(tools.bytes / TOOLS_PART_BYTES) }, (_, part) => ({
-    key: `${toolsKey(tools.sha256)}.${String(part)}`, bytes: Math.min(TOOLS_PART_BYTES, tools.bytes - part * TOOLS_PART_BYTES),
-  }));
-}
-
 /** The first part the bucket lacks or holds at another size. */
-async function missingPart(bucket: string, tools: v.InferOutput<typeof ToolsRecord>) {
+async function missingPart(bucket: string, tools: Tools) {
   const token = restApiToken();
 
   if (token === '') throw new Error('reading the store bucket needs the deploy\'s REST token (KINU_CLOUDFLARE_API_TOKEN)');
@@ -118,7 +99,7 @@ export function uploadPinnedTools(bucket: string, bytes: Uint8Array, progress: (
 }
 
 async function main(): Promise<number> {
-  const [command, bucket] = process.argv.slice(2);
+  const [command, bucket, into] = process.argv.slice(2);
 
   if (command === 'build') {
     const { bytes, sha256, job } = await buildTools();
@@ -155,7 +136,16 @@ async function main(): Promise<number> {
     return 0;
   }
 
-  process.stderr.write('usage: bun scripts/devbox-tools.ts build [<file>] | check <bucket> | publish <bucket>\n');
+  // A release's channel serves the tools a self-deployment copies (`ReleaseComputer`): from its releases bucket.
+  if (command === 'release' && bucket !== undefined && into !== undefined) {
+    if (await missingPart(into, pinnedTools()) === undefined) return 0;
+    await copyPinnedTools(into, bucket);
+    process.stdout.write(`${into}/${toolsKey(pinnedTools().sha256)} copied from ${bucket}\n`);
+
+    return 0;
+  }
+
+  process.stderr.write('usage: bun scripts/devbox-tools.ts build [<file>] | check <bucket> | publish <bucket> | release <store> <releases>\n');
 
   return 2;
 }
