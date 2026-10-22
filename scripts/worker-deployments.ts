@@ -39,10 +39,13 @@ export async function listDeployments(worker: string, api?: string): Promise<rea
 }
 
 /**
- * How long after a deploy lands its code update can still reset the calls of the version it replaced: the longest
- * measured. A reset later than this after the newest deploy is not that deploy's.
+ * How long after a deploy lands its code update can still reset the calls of the version it replaced: twice the
+ * longest measured. A deploy's resets landed 203 s after it (staging, 2026-10-21 19:37Z, a KinuDevbox call of the
+ * version it replaced) and 283-298 s after it (f44999 kinu-sdtest-su-0243, 2026-10-22 03:45:43Z, an alarm the old
+ * version still ran). The week's five others on staging came from the version deployed 2.6-3 h before them, so no
+ * deploy caused them. A request held across a probe's deploy for 20 minutes was never reset (kinu-probe-busy-stream).
  */
-export const ROLLOVER_SPAN_MS = 300_000;
+export const ROLLOVER_SPAN_MS = 600_000;
 
 /**
  * Who caused a code-update reset at `at`: `deploy` when a deploy other than `version`'s own landed at or before it, within
