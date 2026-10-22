@@ -23,7 +23,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { evidenceDir, git } from '@kinu.run/test-utils';
 import type { Subprocess } from 'bun';
-import type { Browser, Page } from 'puppeteer';
+import type { Browser, BrowserContext, Page } from 'puppeteer';
 import { parseJsonValue, type JsonValue } from '@kinu.run/core';
 import { holdForRelease, releaseScratch, scratchDir } from '../packages/test-utils/src/scratch';
 import { declaredSettings } from './browser-declarations';
@@ -59,7 +59,13 @@ const DEV_SERVER_LOGS = evidenceDir('dev-server');
  *  is this request's: the harness runs one row at a time against its own
  *  server. */
 function serverAccount(origin: string): string {
-  const log = devServerOutput.get(origin)?.join('') ?? '';
+  return lastServerError(devServerOutput.get(origin) ?? []);
+}
+
+/** The last failure the dev server printed in `output`, as vite prints a Worker's 500 (`Internal server error:` and its
+ *  stack), or nothing. */
+function lastServerError(output: readonly string[]): string {
+  const log = output.join('');
   const at = log.lastIndexOf('Internal server error');
 
   if (at < 0) return '';
@@ -99,8 +105,8 @@ export async function apiJson(origin: string, path: string, init?: RequestInit):
 
 export interface LiveApp {
   readonly browser: Browser;
-  /** A page with no clock, as in the gallery harness. */
-  readonly newPage: () => Promise<Page>;
+  /** A page with no clock, as in the gallery harness: in `context` when given (another device), else the browser's. */
+  readonly newPage: (context?: BrowserContext) => Promise<Page>;
   /** `http://127.0.0.1:<port>` — this run's dev server. */
   readonly origin: string;
   /** The directory this run's Durable Objects, KV and R2 live in: a scratch
@@ -370,7 +376,9 @@ export async function withDevServer<T>(body: (server: DevServer) => Promise<T>, 
       devServerOutput.delete(origin);
     }
   } catch (cause) {
-    throw new Error(`the dev server's output: ${keepOutput()}`, { cause });
+    // The row's own report carries why the server failed a request, not only the path of a log on its runner, which an
+    // armada container takes with it (live-app-alerts, 2026-10-22: a 500 "fetch failed" whose log was lost).
+    throw new Error(`the dev server's output: ${keepOutput()}${lastServerError(output)}`, { cause });
   } finally {
     held();
     // The group, not just vite: workerd outlives a lone-parent kill. SIGTERM
@@ -391,8 +399,8 @@ export async function withBrowser<T>(body: (browser: Browser) => Promise<T>, ext
 /** Boot vite dev, launch the browser, run `body`, tear both down entirely. */
 export async function withLiveApp<T>(body: (app: LiveApp) => Promise<T>, options: LiveAppOptions = {}): Promise<T> {
   return withDevServer(({ origin, statePath, keepOutput }) => withBrowser((browser) => {
-    const newPage = async (): Promise<Page> => {
-      const page = await browser.newPage();
+    const newPage = async (context?: BrowserContext): Promise<Page> => {
+      const page = await (context ?? browser).newPage();
 
       page.setDefaultTimeout(0);
       page.setDefaultNavigationTimeout(0);

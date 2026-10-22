@@ -216,7 +216,9 @@ test('silent while the owner looks at Kinu anywhere; once at a turn\'s end or an
       const device = await browser.createBrowserContext();
 
       await device.overridePermissions(origin, ['notifications']);
-      const phone = await openTab(() => device.newPage(), origin, workspace);
+      // Through the harness, so its page has no clock either: a page of its own context kept puppeteer's 30 s navigation
+      // bound, which a loaded runner passed 4 times in 10 (2026-10-22).
+      const phone = await openTab(() => newPage(device), origin, workspace);
       const devices = [page, phone];
 
       before = await total(devices);
