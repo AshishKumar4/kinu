@@ -1,5 +1,4 @@
-// Local MCP client over stdio child processes. Admission policy lives in core
-// (`McpToolSurfaceCache`, each turn); the session applies it.
+// Local MCP client over stdio child processes.
 
 import { Effect, Cause } from 'effect';
 import {
