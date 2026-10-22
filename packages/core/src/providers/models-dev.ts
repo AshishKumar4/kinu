@@ -118,6 +118,8 @@ export interface ModelsDevListOptions {
   required?: boolean;
   preferredIds?: readonly string[];
   ttlMs?: number;
+  /** How long a read of models.dev may take before it fails as unreachable (`MODELS_DEV_READ_MS`). */
+  readMs?: number;
   toolCallOnly?: boolean;
   /** Only models that answer in text alone: a realtime, live, speech or image model needs another API. */
   textOnly?: boolean;
@@ -136,7 +138,7 @@ export async function listModelsDevProviderModels(
   };
 
   return settle(Effect.gen(function* () {
-    const read = deps.modelsDev?.() ?? getModelsDevCatalog(deps.fetch, opts.ttlMs ?? DEFAULT_TTL_MS);
+    const read = deps.modelsDev?.() ?? getModelsDevCatalog(deps.fetch, opts.ttlMs ?? DEFAULT_TTL_MS, opts.readMs);
 
     const data = yield* read.pipe(
       Effect.catch((failed) => Effect.fail(stale({ reason: 'models.dev could not be read', cause: failed }))),
@@ -292,19 +294,28 @@ function concreteAPI(api: string | undefined): string | null {
   return api && !api.includes('${') ? api : null;
 }
 
-function getModelsDevCatalog(fetchFn: typeof fetch | undefined, ttlMs: number): Effect.Effect<Record<string, ModelsDevProvider>, KinuError> {
+/**
+ * How long one read of models.dev may take, its body included, before it fails as unreachable: a catalog that stalls
+ * rather than failing would otherwise hold a model picker on "loading" for as long as it stalls (2026-10-22, models.dev
+ * answering HTTP 500 for hours; a 500 failed at once, a stall would not). Its answers usually arrive within a second.
+ */
+const MODELS_DEV_READ_MS = 10_000;
+
+function getModelsDevCatalog(fetchFn: typeof fetch | undefined, ttlMs: number, readMs = MODELS_DEV_READ_MS): Effect.Effect<Record<string, ModelsDevProvider>, KinuError> {
   return Effect.suspend(() => {
     const fetchImpl = fetchFn ?? fetch;
 
     if (cache && cache.fetchFn === fetchImpl && Date.now() - cache.at < ttlMs) return Effect.succeed(cache.data);
 
-    return readModelsDevCatalog(fetchImpl);
+    return readModelsDevCatalog(fetchImpl, readMs);
   });
 }
 
-function readModelsDevCatalog(fetchImpl: typeof fetch): Effect.Effect<Record<string, ModelsDevProvider>, KinuError> {
+function readModelsDevCatalog(fetchImpl: typeof fetch, readMs: number): Effect.Effect<Record<string, ModelsDevProvider>, KinuError> {
   return Effect.gen(function* () {
-    const init: RequestInit & { readonly cf: typeof EDGE_CACHE } = { headers: { accept: 'application/json' }, cf: EDGE_CACHE };
+    const init: RequestInit & { readonly cf: typeof EDGE_CACHE } = {
+      headers: { accept: 'application/json' }, cf: EDGE_CACHE, signal: AbortSignal.timeout(readMs),
+    };
 
     const response = yield* Effect.tryPromise({
       try: () => fetchImpl(MODELS_DEV_URL, init),

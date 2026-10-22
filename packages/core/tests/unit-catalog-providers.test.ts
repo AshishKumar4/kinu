@@ -18,7 +18,8 @@ import {
   type ModelCallDeps, type AuthResolution, type JsonObject, type ModelProvider,
 } from '../src/index';
 import { describeProviderError } from '../src/providers/util';
-import { getModelsDevModelEndpoint } from '../src/providers/models-dev';
+import { getModelsDevModelEndpoint, listModelsDevProviderModels } from '../src/providers/models-dev';
+import { renderThrownChain } from '../src/obs/index';
 import { createMockFetch, present, CHAT_COMPLETION_BODY, OPENAI_RESPONSES_BODY } from '@kinu.run/test-utils';
 
 const CATALOG = {
@@ -104,6 +105,28 @@ async function call(model: Parameters<typeof generateText>[0]['model']): Promise
 }
 
 describe('models.dev provider metadata', () => {
+  // 2026-10-22: models.dev answered HTTP 500 for hours, which failed at once; a catalog that stalls instead must fail too,
+  // as unreachable, rather than hold a model picker on loading for as long as it stalls.
+  test('a read that stalls past its bound fails as unreachable, and a 500 fails at once, both as a stale list', async () => {
+    const stalled: typeof fetch = Object.assign(async (_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => { reject(init.signal?.reason); });
+    }), { preconnect: fetch.preconnect });
+
+    const failing = createMockFetch([{ match: 'models.dev/api.json', respond: { status: 500, body: {} } }]);
+
+    // The stalled read settles at all only because its bound fires: unbounded, it never answers (the test hung).
+    const failure = async (fetchFn: typeof fetch) => {
+      const [listed] = await Promise.allSettled([listModelsDevProviderModels('groq', { fetch: fetchFn }, { required: true, readMs: 50, ttlMs: 0 })]);
+
+      return listed.status === 'rejected' ? renderThrownChain({ cause: listed.reason }) : 'it listed';
+    };
+
+    expect({ stalled: await failure(stalled), failing: await failure(failing.fetch) }).toEqual({
+      stalled: expect.stringMatching(/models.dev could not be read[\s\S]*models.dev could not be reached/u),
+      failing: expect.stringMatching(/models.dev could not be read[\s\S]*models.dev returned HTTP 500/u),
+    });
+  });
+
   test('a model SDK override does not remove its provider endpoint', async () => {
     const mock = createMockFetch([{ match: 'models.dev/api.json', respond: { body: {
       mixed: {
