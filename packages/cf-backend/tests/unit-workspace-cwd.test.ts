@@ -355,6 +355,10 @@ describe('an approval in a hosted named session', () => {
     ]),
     ['a variable named as a positional parameter', 'export 0=a', `${FORCE_PUSH}; rm -r "$0"`, 'export 0=b'],
     ['a variable whose name no shell word can spell', 'export A-B=a', `${FORCE_PUSH}; rm -r "$(env | sed -n 's/^A-B=//p')"`, 'export A-B=b'],
+    // What the session keeps besides values (Nimbus 0.25's `vars`): the value alone is as it was.
+    ['a variable the session stops exporting', 'export TARGET=b', `${FORCE_PUSH}; rm -r "$TARGET"`, 'export -n TARGET'],
+    ['a variable the session makes read-only', 'export TARGET=b', `${FORCE_PUSH}; rm -r "$TARGET"`, 'readonly TARGET'],
+    ['an indexed array\'s entry', 'TARGETS=(a)', `${FORCE_PUSH}; rm -r "\${TARGETS[0]}"`, 'TARGETS=(b)'],
   ];
 
   test.each(SUBTLE_CHANGES)('sees %s: the approval does not run on the changed session', async (_what, before, asked, meanwhile) => {

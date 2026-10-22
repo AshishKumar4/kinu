@@ -155,6 +155,8 @@ const CODE_BY_ERROR_NAME = new Map<string, ErrorCode>([
   ['CapabilityDeniedError', 'denied'],
   // The SDK refusing a model's tool call against its schema.
   ['AI_InvalidToolInputError', 'bad_input'],
+  // Nimbus: a request a process's replacement refused at admission, so it ran nowhere (ask 63).
+  ['ProcessNotAdmitted', 'unavailable'],
 ]);
 
 /** Refused by another object, a shape was our bad input. */

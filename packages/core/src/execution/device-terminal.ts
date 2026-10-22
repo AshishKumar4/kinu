@@ -12,7 +12,6 @@ import * as v from 'valibot';
 import { connections, type Connections } from '@nimbus-sh/fabric/connections.js';
 import { z } from 'zod/v4';
 import type { DeviceSocket, DeviceSocketCtx, DeviceSocketHub } from './device-hub';
-import { WS_OPEN } from './device-tunnel';
 import { DEVICE_PTY_MAX_AXIS, DEVICE_FRAMES } from './device-protocol';
 
 const TERMINAL_WS_TAG_PREFIX = 'terminal:';
@@ -78,10 +77,10 @@ export class DeviceTerminalHub {
   /** By attach token: the unguessable, single-use authority a pane's upgrade carries. */
   private readonly unattached = new Map<string, PendingAttach>();
 
-  private readonly sockets: Connections<z.infer<typeof TerminalAttachmentSchema>>;
+  private readonly sockets: Connections<z.infer<typeof TerminalAttachmentSchema>, DeviceSocket>;
 
   constructor(
-    private readonly ctx: DeviceSocketCtx,
+    ctx: DeviceSocketCtx,
     private readonly devices: DeviceSocketHub,
     private readonly now: () => number = Date.now,
   ) {
@@ -139,12 +138,7 @@ export class DeviceTerminalHub {
   }
 
   paneSocket(device: string, session: string): DeviceSocket | null {
-    // Nimbus ask (connections socket type): get() erases the socket's send surface.
-    for (const ws of this.ctx.getWebSockets(terminalTag(device, session))) {
-      if (ws.readyState === WS_OPEN) return ws;
-    }
-
-    return null;
+    return this.sockets.get(terminalTag(device, session));
   }
 
   /** Bytes pass through; an unrecognised control frame is dropped and recorded as a defect. */
@@ -232,7 +226,7 @@ export class DeviceTerminalHub {
   /** A pane other than `closing` shows the session, or a token minted for it waits for one: a second open would steal
    *  the first's output. */
   claimed(device: string, session: string, closing?: DeviceSocket): boolean {
-    const showing = this.ctx.getWebSockets(terminalTag(device, session)).some((ws) => ws !== closing && ws.readyState === WS_OPEN);
+    const showing = this.sockets.list(terminalTag(device, session)).some((ws) => ws !== closing);
 
     return showing || this.pendingFor(device, session).length > 0;
   }

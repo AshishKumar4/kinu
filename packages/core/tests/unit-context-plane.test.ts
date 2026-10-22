@@ -328,6 +328,21 @@ test('evidence under /context is readable and not writable, and the plane invent
   ws.close();
 });
 
+// Nimbus hands the mount every segment as written (ask 58); the view holds no links, so `.` and `..` are its own names'.
+test('a context path walks its `.` and `..` as a path of names', async () => {
+  const ws = workspace();
+  const actor = ws.bind('actor-dots');
+  const vfs = planeFor(actor);
+  await hydrate(actor, [{ role: 'user', content: 'q' }]);
+  const working = await readText(vfs, '/context/working.jsonl');
+
+  expect(await readText(vfs, '/context/./working.jsonl')).toBe(working);
+  expect(await readText(vfs, '/context/requests/../working.jsonl')).toBe(working);
+  expect((await vfs.readdir('/context/requests/..')).map(({ name }) => name)).toContain('working.jsonl');
+  expect(await exists(vfs, '/context/requests/../nothing-here.json')).toBe(false);
+  ws.close();
+});
+
 test('a rollback is a new revision written from a retained one, and the audit it came from is unchanged', async () => {
   const ws = workspace();
   const actor = ws.bind('actor-rollback');

@@ -9,8 +9,11 @@ import { fakeMossaic } from '@kinu.run/test-utils/mossaic';
 import { agentPlane, oneMachine, present, workspaceShell } from '@kinu.run/test-utils';
 
 import { isVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { normalizePath } from '@nimbus-sh/core/vfs/composite.js';
 import { removeTree, standardMounts, withMountTable, workspaceFilePlane, type VfsMount, type WorkspacePrincipal } from '../src/vfs/mounts';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
+import { skillsMount } from '../src/skills/view';
+import { BUILTIN_SKILL_FILES } from '../src/skills/builtins';
 import { mossaicVfs } from '../src/vfs/mossaic-vfs';
 import { deviceFiles, type DeviceFileScope, type DeviceTransport } from '../src/execution/device-tunnel-executor';
 import { createWorkspaceBundle } from './helpers';
@@ -20,8 +23,12 @@ import type { JsonValue } from '../src/utils/json';
 import { agentCred, agentHome, agentTmpRoot, confineAgentTmp, provisionAgentHome } from '../src/vfs/agent-home';
 
 /** Dirents and stats distinguish directories; a miss throws the VfsError the real backends throw. */
+/** A tree of names with no links, so it walks `.` and `..` by its names: as a namespace's root that resolves its own
+ *  paths, it is handed every segment as written (Nimbus core 0.25, ask 58). */
 function fakeTree(entries: Record<string, string>): VFS {
 	const files = new Map<string, string>(Object.entries(entries));
+	// A relative path is a bare base's own spelling, as a removal hands it over.
+	const named = (path: string): string => (path.startsWith('/') ? normalizePath(path) : path);
 	const dirs = new Set<string>();
 
 	for (const path of files.keys()) {
@@ -32,14 +39,16 @@ function fakeTree(entries: Record<string, string>): VFS {
 
 	return {
 		readFile: async (path) => {
-			const content = files.get(path);
+			const content = files.get(named(path));
 
 			if (content === undefined) throw new VfsError('ENOENT', 'no such file or directory', path);
 
 			return new TextEncoder().encode(content);
 		},
-		writeFile: async (path, data) => { files.set(path, data instanceof Uint8Array ? new TextDecoder().decode(data) : data); },
-		readdir: async (path) => {
+		writeFile: async (path, data) => { files.set(named(path), data instanceof Uint8Array ? new TextDecoder().decode(data) : data); },
+		readdir: async (written) => {
+			const path = named(written);
+
 			if (path !== '/' && !dirs.has(path)) throw new VfsError('ENOENT', 'no such directory', path);
 			const names = new Set<string>();
 			const prefix = path === '/' ? '/' : `${path}/`;
@@ -51,15 +60,16 @@ function fakeTree(entries: Record<string, string>): VFS {
 
 			return [...names].map((name) => ({ name, type: dirs.has(`${prefix}${name}`) ? 'directory' : 'file' }));
 		},
-		stat: async (path) => {
+		stat: async (written) => {
+			const path = named(written);
 			const content = files.get(path);
 
 			if (content !== undefined) return { size: new TextEncoder().encode(content).byteLength, mtimeMs: 0, type: 'file' };
 
 			return dirs.has(path) ? { size: 0, mtimeMs: 0, type: 'directory' } : null;
 		},
-		unlink: async (path) => { files.delete(path); dirs.delete(path); },
-		mkdir: async (path) => { dirs.add(path); },
+		unlink: async (path) => { files.delete(named(path)); dirs.delete(named(path)); },
+		mkdir: async (path) => { dirs.add(named(path)); },
 	};
 }
 
@@ -911,4 +921,21 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 		expect(await exists(drive, '/notes.md')).toBe(false);
 		expect(await readText(container, '/workspace/notes.md')).toBe('from the Drive\n');
 	});
+});
+
+// Nimbus hands a `resolvesPaths` mount every segment as written (ask 58). /skills holds no links, so `.` and `..` are its
+// names' own, as they were when Nimbus collapsed them first.
+test('/skills walks its `.` and `..` as a path of names', async () => {
+	const view = present(skillsMount(() => fakeTree({})).files(), 'the skills view');
+	const [name] = Object.keys(BUILTIN_SKILL_FILES);
+	const skill = present(name, 'a built-in skill');
+	const text = await readText(view, `/${skill}/SKILL.md`);
+
+	for (const path of [`/./${skill}/SKILL.md`, `/${skill}/./SKILL.md`, `/${skill}/../${skill}/SKILL.md`, `/x/../${skill}/SKILL.md`]) {
+		expect([path, await readText(view, path)]).toEqual([path, text]);
+	}
+
+	expect(await view.stat('/./')).toMatchObject({ type: 'directory' });
+	expect((await view.readdir(`/${skill}/..`)).map((entry) => entry.name)).toContain(skill);
+	expect(await view.stat(`/${skill}/../nothing-here`)).toBeNull();
 });

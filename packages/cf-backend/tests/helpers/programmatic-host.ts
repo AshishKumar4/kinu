@@ -12,7 +12,7 @@ import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import type { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { adoptCtxExports, composeFabric, type CtxExports } from '@nimbus-sh/fabric/composition.js';
 import {
-  composeHostedRuntime, SupervisorRPC, type ComposedFacetManager, type HostedRuntime, type HostedRuntimeTask,
+  composeHostedRuntime, sessionProcessEnv, SupervisorRPC, type ComposedFacetManager, type HostedRuntime, type HostedRuntimeTask,
 } from '@nimbus-sh/worker/workspace-host';
 import type { PortReservationTransaction } from '@nimbus-sh/worker/port-capability';
 import * as v from 'valibot';
@@ -391,6 +391,8 @@ export function programmaticHostOver(workspace: NimbusWorkspace, seams: Programm
         },
         cancel: async (reason) => { pending.delete(reason); },
       },
+      // As the workspace host keeps them (workspace-host.ts): a relaunch gets its launch env back.
+      ...sessionProcessEnv(ctx.storage),
     });
 
     return composing;
@@ -498,6 +500,14 @@ export function credentialedSessionBox(
       mkdir: async (path) => { await (await view()).mkdir(path, { recursive: true }); },
       chmod: async (path, mode) => { await (await view()).chmod(path, mode); },
       delete: async (path, options) => { await (await view()).remove(path, { recursive: options?.recursive ?? false }); },
+      unlink: async (path) => { await (await view()).unlink(path); },
+      rmdir: async (path) => { await (await view()).rmdir(path); },
+      appendFile: async (path, content) => { await (await view()).appendFile(path, content); },
+      symlink: async (target, path) => { await (await view()).symlink(target, path); },
+      realpath: async (path) => (await view()).realpath(path),
+      truncate: async (path, size) => { await (await view()).truncate(path, size); },
+      utimes: async (path, atime, mtime, options) => { await (await view()).utimes(path, atime, mtime, { follow: options?.followSymlinks ?? true }); },
+      chown: async (path, uid, gid, options) => { await (await view()).chown(path, uid, gid, { follow: options?.followSymlinks ?? true }); },
     };
   };
 
@@ -525,6 +535,7 @@ export function credentialedSessionBox(
     files: {
       as: filesAs, read: refuse, readBytes: refuse, readRange: refuse, write: refuse, writeIfRevision: refuse, list: refuse, stat: refuse, lstat: refuse,
       readlink: refuse, rename: refuse, chmod: refuse, mkdir: refuse, exists: refuse, delete: refuse,
+      unlink: refuse, rmdir: refuse, appendFile: refuse, symlink: refuse, realpath: refuse, truncate: refuse, utimes: refuse, chown: refuse,
     },
   };
 }

@@ -266,6 +266,14 @@ function originFilesBox(f: OwnerFixture): SessionBox {
       mkdir: async (path) => { view.mkdir(path, { recursive: true }); },
       chmod: async (path, mode) => { view.chmod(path, mode); },
       delete: async (path) => { view.unlink(path); },
+      unlink: async (path) => { view.unlink(path); },
+      rmdir: refuse,
+      appendFile: refuse,
+      symlink: refuse,
+      realpath: refuse,
+      truncate: refuse,
+      utimes: refuse,
+      chown: refuse,
     },
   };
 }

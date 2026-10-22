@@ -20,6 +20,7 @@ import {
 import { tool, type ToolSet } from 'ai';
 import { programBody } from './executor';
 import * as v from 'valibot';
+import { createNodeCompat } from '@nimbus-sh/core/node-compat';
 
 interface NodeExecuteToolFactoryDeps {
   /** The program's namespaces, as `actorNamespaces` builds them. */
@@ -124,7 +125,10 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
 
           const argValues: unknown[] = [
             workspace, toolBindings, sandboxConsole,
-            node.createRequire({ workspace, machines: { computer: providerBindings['computer'] ?? null, device: providerBindings['device'] ?? null }, builtins: node.builtins, cwd: surface.cwd }),
+            node.createRequire({
+              workspace, machines: { computer: providerBindings['computer'] ?? null, device: providerBindings['device'] ?? null }, builtins: node.builtins,
+              cwd: surface.cwd, createNodeCompat,
+            }),
             node.createProcess(surface.cwd), node,
             ...extraNamespaces.map(n => providerBindings[n]),
           ];
