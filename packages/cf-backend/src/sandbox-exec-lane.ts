@@ -57,6 +57,13 @@ const BASE_ASK_MS = 1_000;
  */
 const BASE_STALL_MS = 180_000;
 
+/**
+ * How long a call waits for a box that is saving and stopping before it gets the box's words. The longest such stop
+ * is a rest: its commit (a base commit took up to 76.9 s, D50), the snapshot it waits on (the box gives that up at
+ * 60 s), and the stop the box waits for (5 s): 142 s.
+ */
+const QUIESCE_HOLD_MS = 180_000;
+
 /** After `ms`, or at once when `signal` aborts. */
 function pause(clock: Clock, ms: number, signal: AbortSignal | undefined): Promise<void> {
   const { promise, resolve } = Promise.withResolvers<void>();
@@ -73,10 +80,11 @@ function pause(clock: Clock, ms: number, signal: AbortSignal | undefined): Promi
 }
 
 /**
- * The box's readiness, held while it waits for its base snapshot to be built (D79): the box starts by itself once the
- * build verifies (D66), so a call asks again instead of handing its agent a refusal to retry. Bounded by the build's
- * progress, never by a total: each new step re-arms the bound, a failed build and every other pending are answered at
- * once, and a build that names no new step for {@link BASE_STALL_MS} is refused in the box's words.
+ * The box's readiness, held while it waits for its base snapshot to be built (D79) or saves and stops (D108): the box
+ * starts by itself once the build verifies (D66), and on the next ask once its stop is done, so a call asks again
+ * instead of handing its agent, or a terminal, a refusal to retry. A build is bounded by its progress, never by a
+ * total: each new step re-arms the bound, and a build that names no new step for {@link BASE_STALL_MS} is refused in the
+ * box's words. A stop is bounded by {@link QUIESCE_HOLD_MS}. A failed build and every other pending are answered at once.
  */
 async function readinessPastBase(
   handle: Pick<ContainerOperations, 'resolveReadiness'>, clock: Clock, signal: AbortSignal | undefined,
@@ -84,9 +92,12 @@ async function readinessPastBase(
   let readiness = await handle.resolveReadiness();
   let step: string | null | undefined;
   let movedAt = clock.now();
+  const askedAt = clock.now();
 
-  while (readiness.kind === 'pending' && readiness.building !== undefined) {
-    if (readiness.building.step !== step) {
+  while (readiness.kind === 'pending' && (readiness.building !== undefined || readiness.quiescing === true)) {
+    if (readiness.building === undefined) {
+      if (clock.now() - askedAt >= QUIESCE_HOLD_MS) return { kind: 'pending', reason: `still after ${String(QUIESCE_HOLD_MS / 1000)} s: ${readiness.reason}` };
+    } else if (readiness.building.step !== step) {
       step = readiness.building.step;
       movedAt = clock.now();
     } else if (clock.now() - movedAt >= BASE_STALL_MS) {

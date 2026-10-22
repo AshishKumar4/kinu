@@ -106,3 +106,32 @@ describe('a call that meets the base snapshot being built', () => {
     expect(ran).toEqual([]);
   });
 });
+
+// f44999, 2026-10-22: a rest's snapshot hung, and for the 14 minutes the box was saving and stopping every terminal was
+// refused "this devbox is quiescing", which the pane showed only as "Not connected" (D108).
+describe('a call that meets the box saving and stopping', () => {
+  const SAVING = 'the computer is saving its work and stopping; it starts again as soon as that is done';
+  const stopping: Answer = { kind: 'pending', reason: SAVING, quiescing: true };
+
+  test('is held, and runs as soon as the box has stopped and started again', async () => {
+    const clock = handClock();
+    const { box, ran, asked } = boxAnswering((n) => (n <= 5 ? stopping : { kind: 'restored' }));
+    const ready = adaptCloudflareSandbox(box, async () => {}, null, { clock }).ensureReady();
+
+    await lapse(clock, 5, ready);
+
+    await expect(ready).resolves.toBeUndefined();
+    expect({ ran, asked: asked() }).toEqual({ ran: [], asked: 6 });
+  });
+
+  test('is refused in the box\'s words once the stop outlasts the hold', async () => {
+    const clock = handClock();
+    const { box, ran, asked } = boxAnswering(() => stopping);
+    const exec = adaptCloudflareSandbox(box, async () => {}, null, { clock }).exec('true');
+
+    await lapse(clock, 180, exec);
+
+    await expect(exec).rejects.toMatchObject({ code: 'unavailable', message: `still after 180 s: ${SAVING}` });
+    expect({ ran, asked: asked() }).toEqual({ ran: [], asked: 181 });
+  });
+});
