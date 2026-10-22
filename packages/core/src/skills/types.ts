@@ -9,6 +9,7 @@ import type { JsonObject } from '../utils/json';
 import type { InstructionTrust } from '../types/instruction-trust';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { vfsReference } from '../vfs/resolve';
+import { SKILLS_VIEW } from '../vfs/mounts';
 
 export interface SkillParseRefusal { readonly error: string; readonly line?: number }
 
@@ -83,8 +84,8 @@ export type ActivationReason =
   | { kind: 'explicit'; matched_token: string }
   | { kind: 'always_active'; via: 'config' };
 
-/** The read-only view of every skill (`skills/view.ts`). */
-export const SKILLS_VIEW = '/skills';
+/** The read-only view of every skill (`skills/view.ts`), declared with the mounts (`vfs/mounts.ts`). */
+export { SKILLS_VIEW };
 
 /** Where the workspace writes its own skills. */
 export const WORKSPACE_SKILLS_DIR = `${WORKSPACE_ROOT}/skills`;

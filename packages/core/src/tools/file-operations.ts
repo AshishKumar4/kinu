@@ -20,7 +20,7 @@ import type { TurnFileLedger, FileEditOutcomeReason, FileSeenNeed } from '../vfs
 import { diagnostics, KinuError, renderThrownChain, settle, toKinuError, tolerateAsync } from '../obs/index';
 import { requireBuild } from '../execution/work-mode';
 import { uncheckpointedSentence } from '../execution/exec-result';
-import { RESIDENT_TEXT_MAX_BYTES, type VfsMountRouting } from '../vfs/mounts';
+import { RESIDENT_TEXT_MAX_BYTES, SKILLS_VIEW, type VfsMountRouting } from '../vfs/mounts';
 import { rasterImage } from '../utils/raster-image';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { imageCarrier, type ImageCarrier } from '../types/tool-images';
@@ -102,13 +102,16 @@ interface VfsFailure {
 }
 
 /**
- * Where a path that named nothing names a file under a plane's prefix (`prefixedAddresses`): the first reading there, so
- * the refusal says which address was meant, and the next call needs no guess (H3, 2026-10-21: 11 trials read
+ * Where a path that named nothing names a skill under a plane's prefix (`prefixedAddresses`): the reading there, so the
+ * refusal says which address was meant, and the next call needs no guess (H3, 2026-10-21: 11 trials read
  * `skills/slates/SKILL.md`, which starts at the home, for `vfs://skills/slates/SKILL.md`). One spelling is kept: only a
- * reading that is there is named.
+ * reading that is there is named. Only the skills view is looked in, the agent's own read-only files: a look anywhere
+ * else could cross a link onto a computer, which it would wake, or a person's device, for a guess.
  */
 async function meantAddress(at: { readonly vfs: Pick<VFS, 'stat'>; readonly planes: PathPlanes }, path: string): Promise<string | null> {
-  for (const reading of prefixedAddresses(path, at.planes)) {
+  const inSkills = (candidate: { readonly vfs: string }) => candidate.vfs.startsWith(`${SKILLS_VIEW}/`);
+
+  for (const reading of prefixedAddresses(path, at.planes).filter(inSkills)) {
     if (await readingThere(at.vfs, reading.at)) return reading.reference;
   }
 

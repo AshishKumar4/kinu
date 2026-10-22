@@ -237,18 +237,12 @@ function prefixedReadings(written: string, landed: string, planes: PathPlanes): 
     : `\`${reading.reference}\` is in the ${reading.view} view`)));
 }
 
-/**
- * Where `written`, a path that named nothing, would land under each plane's prefix instead, for a caller that can look
- * to name the one there (`file` tool, H3). Only the agent's own files: never a reading on a computer or a device, where
- * a look would wake a stopped box or reach a person's machine for a guess. None for a path that names no file at all.
- */
+/** Where `written`, a path that named nothing, would land under each plane's prefix instead, for a caller that can look
+ *  to name the one there (`file` tool, H3). None for a path that names no file at all. */
 export function prefixedAddresses(written: string, planes: PathPlanes): PrefixedReading[] {
-  const executors = Object.values(EXECUTOR_MOUNTS);
-
   return settleSync(Effect.matchEffect(resolvedPath(written, planes), {
     onFailure: () => Effect.succeed([]),
-    onSuccess: (at) => Effect.map(prefixedCandidates(written, at.absolute, planes),
-      (read) => read.filter((reading) => !executors.some((mount) => holds(mount, reading.vfs)))),
+    onSuccess: (at) => prefixedCandidates(written, at.absolute, planes),
   }));
 }
 
