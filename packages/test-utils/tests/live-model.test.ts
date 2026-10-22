@@ -153,6 +153,14 @@ describe('infraBoundary — the environment failing, never the build answering',
     await expect(failing(new DeploymentAnswer('the workspace RPC failed: no such tool'))).rejects.toBeInstanceOf(DeploymentAnswer);
   });
 
+  // 2026-10-22: these words came from awaited writes between dense CPU with no deploy (platform-catalog.ts
+  // do.storage.write_await_reset), and no deploy lands inside a live step.
+  test('a code update\'s reset the build relayed is the build\'s result, not infrastructure', async () => {
+    const reset = new DeploymentAnswer('the workspace RPC failed: Durable Object reset because its code was updated.');
+
+    await expect(failing(reset)).rejects.toBe(reset);
+  });
+
   test('a transport failure, and an answer from around the build, are infrastructure', async () => {
     const around = [
       new TypeError('fetch failed'),

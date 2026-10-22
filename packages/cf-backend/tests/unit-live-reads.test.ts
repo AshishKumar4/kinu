@@ -10,7 +10,7 @@ import {
 } from '@kinu.run/core';
 import { socketConnection } from './helpers/bindings';
 import {
-  chatSessionTurns, gatewayWorkspace, hostedSubordinateHarness, jobsOver, orchestratorHarness, reactivateOrchestratorHarness,
+  chatSessionTurns, gatewayWorkspace, hostedSubagentHarness, jobsOver, orchestratorHarness, reactivateOrchestratorHarness,
   type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 import { ownerMail } from './helpers/owner-mail';
@@ -56,7 +56,7 @@ async function liveRead(agent: HarnessOrchestratorAgent, read: LiveRead): Promis
     getActivePlanReview: () => agent.getActivePlanReview(),
     listWorkspaceWork: () => agent.listWorkspaceWork(),
     listWorkspaceAgents: () => agent.listWorkspaceAgents(),
-    listSubordinates: () => agent.listSubordinates(),
+    listSubagents: () => agent.listSubagents(),
     getQuality: () => agent.getQuality(30),
     getWorkspaceGitHub: () => agent.getWorkspaceGitHub(),
     inspectWork: () => agent.inspectWork(),
@@ -147,7 +147,7 @@ test('a command parked for approval names the needs-you queue', async () => {
 test("a hire's memory note names the memory read and the tab presence", async () => {
   const workspace = orchestratorHarness();
 
-  const hire = await hostedSubordinateHarness(workspace, {
+  const hire = await hostedSubagentHarness(workspace, {
     name: 'scribe-1', displayName: 'Scribe', nameOrigin: 'user', roleId: 'task', mission: 'take notes',
   });
 
@@ -196,15 +196,15 @@ test('a rating names the quality read, so an open Quality tab shows it', async (
 test('an agent dismissed names the Agents panel and the roster', async () => {
   const { agent } = orchestratorHarness();
   await agent.setSoul('# Purpose\n\nShip the coupon fix.');
-  const { name } = await agent.createSubordinateAgent();
+  const { name } = await agent.createSubagentAgent();
   const named = namedReads(agent);
   endTick(agent);
   named();
 
-  await agent.dismissSubordinate(name);
+  await agent.dismissSubagent(name);
   endTick(agent);
 
-  expect([...named()]).toEqual(expect.arrayContaining(['listWorkspaceAgents', 'listSubordinates']));
+  expect([...named()]).toEqual(expect.arrayContaining(['listWorkspaceAgents', 'listSubagents']));
 });
 
 // eval-site-preview-1-2ypddc, staging f75f06932, 2026-10-01: the eval's settle read the jobs every second because it
@@ -275,12 +275,12 @@ test('an email delivered to Main reads working until its drain takes it, and the
   expect(await activities(agent)).toEqual({ Main: 'working' });
 });
 
-// Staging f75f06932: a helper handed a task read idle until its drain claimed it.
+// Staging f75f06932: a subagent handed a task read idle until its drain claimed it.
 test('an agent handed a message reads working from the handoff, before its drain runs, and the handoff names the Agents panel', async () => {
   const { agent } = orchestratorHarness();
   await agent.setSoul('# Purpose\n\nShip the coupon fix.');
-  const { name } = await agent.createSubordinateAgent();
-  await agent.renameSubordinateAgent(name, 'Scribe');
+  const { name } = await agent.createSubagentAgent();
+  await agent.renameSubagentAgent(name, 'Scribe');
   agent.harnessDrivingUserMessage('ask the scribe', {});
   const turns = chatSessionTurns(agent);
   const { tools } = await turns.prepare({ messages: [{ role: 'user', content: 'ask the scribe' }] });
@@ -310,10 +310,10 @@ test("an agent's tab reads idle on an open page once its turn ends and it rests,
   const { agent } = workspace;
 
   await agent.setSoul('# Purpose\n\nKeep the lamp log.');
-  const { subordinate, name } = await agent.createSubordinateAgent();
-  const actorId = v.parse(v.string(), subordinate.actorId);
+  const { subagent, name } = await agent.createSubagentAgent();
+  const actorId = v.parse(v.string(), subagent.actorId);
 
-  await agent.renameSubordinateAgent(name, 'Scribe');
+  await agent.renameSubagentAgent(name, 'Scribe');
   endTick(agent);
 
   // The page reads the Agents panel again the moment a frame names it, as soon as the workspace sends it.

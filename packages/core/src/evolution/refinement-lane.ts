@@ -588,7 +588,7 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
     '',
     'Every description you write, for a skill or a tool, says when it applies, and when a similar one fits instead.',
     '',
-    'Subordinate specs (`subagent_spec`): a subordinate\'s role and spec belong to that agent\'s',
+    'Subagent specs (`subagent_spec`): a subagent\'s role and spec belong to that agent\'s',
     'own config and there is no writable proposal authority for them. Propose one only to record',
     'the finding; it will be refused rather than applied.',
     '',
@@ -845,7 +845,7 @@ async function routeEditOnce(
   }
 }
 
-const SUBAGENT_SPEC_REFUSAL = 'no writable proposal authority exists for a subordinate\'s role or spec: those '
+const SUBAGENT_SPEC_REFUSAL = 'no writable proposal authority exists for a subagent\'s role or spec: those '
   + 'belong to that agent\'s own config, which this workspace reads and never writes. '
   + 'Recorded as a finding rather than mirrored into a second agent store.';
 

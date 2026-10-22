@@ -13,10 +13,10 @@ import {
   readsWrittenBy,
   ReplyChannelStore,
   ROSTER_READS,
-  SubordinateRosterStore,
+  SubagentRosterStore,
   admitHireWork,
   hireLifecycle,
-  retireHireSubtree,
+  stopAgentsBelow,
   type ActorRetirement,
   type HireLifecyclePorts,
   type SeatedHire,
@@ -24,38 +24,34 @@ import {
   type InProcessDeliveries,
   MAIN_AGENT,
   actorReferenceOf,
-  stoppedBelow,
   deliveryMetadata,
   childContextResolver, hostedChildTree,
   createLocalPeerEndpoint,
   defaultLoopOrigin,
   samePeerGroup,
-  createTeamToolDeps,
-  createTemporaryAgentPort,
-  delegationBudgetOf,
+  teamToolDepsFor,
+  temporaryPortFor,
   inheritedContextFromTranscript,
   actorHomeName,
-  receiveSubordinateEvent,
-  publishSubordinateReport,
+  receiveSubagentEvent,
+  publishSubagentReport,
   TurnReports,
-  type SubordinateReportLedger,
-  agentNamer,
-  subordinateDescriptorSource,
+  type SubagentReportLedger,
+  subagentDescriptorSource,
   missionOf,
-  recoverSubordinateLifecycles,
-  owedSubordinateTurnReport,
-  taskAnswerIsLater,
+  recoverSubagentLifecycles,
+  hireTurnSettled,
   type ActorHost,
   type ActorReference, type AgentSignal, type SendOutcome,
   type AgentRuntime,
-  type AdmittedSubordinateReport,
+  type AdmittedSubagentReport,
   type BoundActor,
   type HostedActor,
   type ReportDeps,
-  type SubordinateReportOrigin,
-  type SubordinateEventResult,
-  type SubordinateReportHandoff,
-  type SubordinateReportStatus,
+  type SubagentReportOrigin,
+  type SubagentEventResult,
+  type SubagentReportHandoff,
+  type SubagentReportStatus,
   type AgentConfigStore,
   type JsonObject,
   type HostedAgentRef,
@@ -64,7 +60,7 @@ import {
   type ReceiveResult,
   metadataBroadcastEvent,
   type SqlExec,
-  type SubordinateRuntime,
+  type SubagentRuntime,
   type TeamToolDeps,
   type TemporaryAgentPort,
   type SerializedMessage,
@@ -72,7 +68,7 @@ import {
   type WorkspaceActor,
   type WorkspaceActorDirectory,
   readWorkspaceWork, type WorkspaceWork,
-  isSubordinateOrigin,
+  isSubagentOrigin,
   CHAT_SESSION_ID,
 } from '@kinu.run/core';
 import { Effect, Result } from 'effect';
@@ -91,8 +87,8 @@ import {
 } from '@kinu.run/core';
 import { osLeaseProcess } from './lease-process';
 import {
-  BACKGROUND_POLICY, DriverLeaseHold, REAL_CLOCK,
-  type DriverKind, type DriverLeaseHolder, type InvocationSurface,
+  BACKGROUND_POLICY, DriverLeaseHold, REAL_CLOCK, readAgentFigures, readWorkspaceAgents,
+  type ActorHandle, type DriverKind, type DriverLeaseHolder, type InvocationSurface, type PanelAgent,
   type SessionEvent,
 } from '@kinu.run/core';
 import {
@@ -109,7 +105,7 @@ import type { McpServerConfig } from '../mcp';
 /** Runtime inputs fixed for one bound agent while this host process is alive. */
 export interface LocalHostedAgent {
   rt: CLIRuntime;
-  /** Provider/auth wiring reused when this agent hires a subordinate. */
+  /** Provider/auth wiring reused when this agent hires a subagent. */
   openConfig: CLIOpenConfig;
   modelResolver?: LocalModelResolver;
   staticModel?: LanguageModel;
@@ -127,7 +123,7 @@ export interface LocalAgentHostOptions {
   roster(): readonly HostedAgentRef[];
   /** Build one already-created root agent over the host-owned handle. */
   open(ref: HostedAgentRef, db: Database, dbPath: string): Promise<LocalHostedAgent>;
-  /** Where one root's database is; a subordinate has no file (open-38). */
+  /** Where one root's database is; a subagent has no file (open-38). */
   dbPath(name: string): string;
   /** Ask for another pass by `at` (peer outbox retry). Optional: `tick` already returns the soonest retry. */
   wakeAt?(at: number): void;
@@ -159,6 +155,8 @@ interface LocalTickResult {
  */
 interface HostTree {
   readonly db: Database;
+  /** The workspace's own agent, the root of every hire here. */
+  readonly root: ActorHandle;
   readonly host: ActorHost;
   /** The root's actor directory, held: `localActorDirectory` refuses a non-root handle. */
   readonly directory: WorkspaceActorDirectory;
@@ -185,7 +183,7 @@ interface HostEntry {
   /** Address inside this process: root, root/child, root/child/grandchild. */
   key: string;
   name: string;
-  /** A subordinate inherits its root's ref pair (directory and virtual workspace). */
+  /** A subagent inherits its root's ref pair (directory and virtual workspace). */
   ref: HostedAgentRef;
   parentKey: string | null;
   tree: HostTree;
@@ -197,14 +195,14 @@ interface HostEntry {
   eventLog: EventLog;
   /** What the agent is owed: its assignments, signals and drains, each committed, then handed to its chat. */
   deliveries: InProcessDeliveries;
-  roster: SubordinateRosterStore;
+  roster: SubagentRosterStore;
   /** Built once with the entry: it holds the live waiters `shell` parks on. */
   temporary: TemporaryAgentPort;
   team: TeamToolDeps | null;
-  /** Peer mail, roots only: a subordinate could otherwise escape its depth cap via another tree. */
+  /** Peer mail, roots only: a subagent could otherwise escape its depth cap via another tree. */
   peers: LocalPeerEndpoint | null;
   children: Map<string, HostEntry>;
-  relay: SubordinateReportLedger & {
+  relay: SubagentReportLedger & {
     ownerDriven: boolean;
     mode: WorkMode;
     /** The turn the ledger is this turn's; null before the child's first turn starts. */
@@ -216,12 +214,12 @@ interface ChildReportRelay {
   child: HostEntry;
   content: string;
   mode: WorkMode;
-  status: SubordinateReportStatus;
-  origin: SubordinateReportOrigin;
+  status: SubagentReportStatus;
+  origin: SubagentReportOrigin;
   /** Dedupe key on the parent's rail, so one report cannot wake it twice. */
   sequenceId: string;
   /** The `report` tool's structured handoff; absent on the automatic turn-end relay. */
-  handoff?: SubordinateReportHandoff;
+  handoff?: SubagentReportHandoff;
   quiet?: true;
 }
 
@@ -323,7 +321,7 @@ export class LocalAgentHost {
     return (await this.resolveEntry(address)).tree.hold.acquire();
   }
 
-  /** Subordinate operations for one agent, root or subordinate, down to the depth cap. */
+  /** Subagent operations for one agent, root or subagent, down to the depth cap. */
   async team(address: string): Promise<TeamToolDeps> {
     const entry = await this.resolveEntry(address);
 
@@ -332,7 +330,7 @@ export class LocalAgentHost {
     return entry.team;
   }
 
-  /** Peer mail for one root agent; null for a subordinate. */
+  /** Peer mail for one root agent; null for a subagent. */
   async peers(address: string): Promise<LocalPeerEndpoint | null> {
     return (await this.resolveEntry(address)).peers;
   }
@@ -556,7 +554,7 @@ export class LocalAgentHost {
     });
 
     return {
-      db, host, directory, runtimes, orchestrations, liveReads, driving: 0, jobsDriven: new Set(),
+      db, root: ws.rt.actor, host, directory, runtimes, orchestrations, liveReads, driving: 0, jobsDriven: new Set(),
       hold: new DriverLeaseHold({ sql, execRaw: makeExecRaw(db), proc: osLeaseProcess(process.pid) }, this.driverKind),
     };
   }
@@ -622,8 +620,8 @@ export class LocalAgentHost {
 
     // Consumed: empty the handover slot so a re-acquisition cannot pick it up.
     input.tree.orchestrations.delete(input.actor.reference.actorId);
-    // Subordinate names are per-parent, so this roster is bound to this actor.
-    const roster = new SubordinateRosterStore(hubSql, input.actor.handle);
+    // Subagent names are per-parent, so this roster is bound to this actor.
+    const roster = new SubagentRosterStore(hubSql, input.actor.handle);
     roster.ensureSchema();
     const sessionId = CHAT_SESSION_ID;
 
@@ -687,11 +685,10 @@ export class LocalAgentHost {
       eventLog: orchestration.eventLog,
       deliveries: orchestration.deliveries,
       roster,
-      temporary: createTemporaryAgentPort({
+      temporary: temporaryPortFor({
         roster,
         runtime: this.childRuntime(input.tree, input.key),
-        now: () => Date.now(),
-        createName: agentNamer(input.tree.directory, roster),
+        directory: input.tree.directory,
         afterTurn: (_child, work) => { this.retireOffTurn(input.key, work); },
       }),
       team: null,
@@ -717,7 +714,7 @@ export class LocalAgentHost {
       ? refusalOf(new KinuError('unavailable', 'this host is closed; no driver conversion may start'))
       : entry.tree.hold.acquire()?.refused ?? null);
 
-    // Roots get peer mail; subordinates get the report spine, without which a parent's roster never
+    // Roots get peer mail; subagents get the report spine, without which a parent's roster never
     // leaves `working` on the child's own signal.
     if (input.parentKey === null) {
       entry.peers = this.buildPeerEndpoint(entry, hubSql);
@@ -792,9 +789,9 @@ export class LocalAgentHost {
     for (const roster of parent.roster.list()) {
       if (roster.birth !== null || roster.deleteRequested) continue;
 
-      await settleLogged('host.subordinate_recovery_failed', { doing: 'recovering a local subordinate', otherwise: 'io' }, async () => {
+      await settleLogged('host.subagent_recovery_failed', { doing: 'recovering a local subagent', otherwise: 'io' }, async () => {
         hires.push(await this.openChildEntry(parent, roster.name));
-      }, { parent: parent.key, subordinate: roster.name });
+      }, { parent: parent.key, subagent: roster.name });
     }
 
     return hires;
@@ -832,7 +829,7 @@ export class LocalAgentHost {
     }
   }
 
-  /** Bind an already-created subordinate; `openLocalActor` already refused a retired creation. */
+  /** Bind an already-created subagent; `openLocalActor` already refused a retired creation. */
   private async openExistingChild(
     parent: HostEntry,
     binding: LocalActorBinding,
@@ -844,7 +841,7 @@ export class LocalAgentHost {
     try {
       const rt = parent.tree.runtimes.get(binding.reference.actorId);
 
-      if (!rt) throw new KinuError('missing', 'The hosted subordinate has no bound runtime.');
+      if (!rt) throw new KinuError('missing', 'The hosted subagent has no bound runtime.');
       const ws = this.childHostedAgent(parent, binding, rt);
 
       const entry = await this.buildEntry({
@@ -869,7 +866,7 @@ export class LocalAgentHost {
 
   /** The parent's provider wiring, directory forced to the parent's ref: a child binds no other plane. */
   private childOpenConfig(parent: HostEntry, binding: LocalActorBinding): CLIOpenConfig & { facet: string } {
-    if (!isSubordinateOrigin(binding.origin)) throw new KinuError('denied', 'The roster path is not a subordinate actor.');
+    if (!isSubagentOrigin(binding.origin)) throw new KinuError('denied', 'The roster path is not a subagent actor.');
 
     return { ...parent.ws.openConfig, cwd: parent.ref.cwd, facet: actorHomeName(binding), actorBinding: binding };
   }
@@ -944,8 +941,8 @@ export class LocalAgentHost {
   }
 
   /**
-   * One agent's pass, then each subordinate's, each under the tree lease plus its own `host.run`.
-   * `ran` describes this agent; subordinate schedules still ride back.
+   * One agent's pass, then each subagent's, each under the tree lease plus its own `host.run`.
+   * `ran` describes this agent; subagent schedules still ride back.
    */
   private async tickEntry(entry: HostEntry, now: number): Promise<LocalTickResult> {
     const outcome = await this.drive(entry, () => this.runPass(entry, now));
@@ -963,7 +960,7 @@ export class LocalAgentHost {
   /** One pass's converting steps; the lease is re-checked between them: an interactive process may preempt. */
   private async runPass(entry: HostEntry, now: number): Promise<number | null> {
     const hold = entry.tree.hold;
-    const lifecyclePending = await recoverSubordinateLifecycles(entry.roster, this.childRuntime(entry.tree, entry.key));
+    const lifecyclePending = await recoverSubagentLifecycles(entry.roster, this.childRuntime(entry.tree, entry.key));
 
     if (!hold.held()) return nextTriggerAt(entry.tree.db);
 
@@ -1043,21 +1040,16 @@ export class LocalAgentHost {
       owed: async (turn) => {
         const parent = this.requireActorEntry(child.actor.record.parentActorId ?? '');
 
-        parent.roster.finishTurn(child.name, turn.ending, Date.now());
-
-        const state = child.relay;
-
-        if (state === null) return null;
-
-        return await owedSubordinateTurnReport({
-          lifetime: child.actor.record.lifetime, ending: turn.ending, assistantText: turn.assistantText, narration: async () => turn.narration,
-          reports: state, ownerDriven: turn.ownerDriven,
-          delegating: taskAnswerIsLater({ roster: child.roster, log: child.eventLog, ...(turn.taskId !== null && { turnTaskId: turn.taskId }) }),
+        return await hireTurnSettled({
+          hirer: { roster: parent.roster, announce: () => { parent.tree.liveReads.moved(ROSTER_READS); } },
+          hire: { record: child.actor.record, roster: child.roster, log: child.eventLog },
+          // With no relay state the roster still moves, and nothing is owed.
+          turn: { reports: child.relay ?? { spoke: false, settled: true }, ownerDriven: turn.ownerDriven, taskId: turn.taskId }, ended: turn,
         });
       },
       sequenceId: (messageId) => `${child.key}:turn-end:${messageId}`,
       send: async ({ text, status, mode, sequenceId, quiet }) => {
-        const relayed = await publishSubordinateReport({ mode, reports: child.relay }, {
+        const relayed = await publishSubagentReport({ mode, reports: child.relay }, {
           content: text, status, origin: 'turn_end', sequenceId, ...(quiet === true && { quiet }),
         }, report => this.relayToParent({ child, ...report }));
 
@@ -1067,7 +1059,7 @@ export class LocalAgentHost {
   }
 
   /** Publish one child report into its parent's rail; `status` moves the parent's roster row. */
-  private async relayToParent(relay: ChildReportRelay): Promise<SubordinateEventResult> {
+  private async relayToParent(relay: ChildReportRelay): Promise<SubagentEventResult> {
     const { child, content, mode, status, origin, sequenceId, handoff, quiet } = relay;
 
     if (!child.parentKey) return { id: '', disposition: 'not_awaited' };
@@ -1075,26 +1067,26 @@ export class LocalAgentHost {
 
     if (!parent) throw new Error(`parent "${child.parentKey}" is not hosted`);
 
-    return receiveSubordinateEvent({
+    return receiveSubagentEvent({
       log: parent.eventLog,
       roster: parent.roster,
       vfs: parent.ws.rt.storage.vfs,
       // One transaction: core's replay fast path answers `already_held` off the dedupe key, so an
       // interruption between insert and roster update would leave the child `working` forever.
       transaction: (body) => writeTransaction(parent.tree.db, body),
-      announce: (report: AdmittedSubordinateReport) => {
+      announce: (report: AdmittedSubagentReport) => {
         const metadata: JsonObject = {
           kind: 'report',
-          subordinate: report.subordinate,
+          subagent: report.subagent,
           timestamp: report.timestamp,
         };
 
         if (report.task) metadata.task = report.task;
         parent.session.host.broadcast(metadataBroadcastEvent(
-          'subordinate_event', metadata, { status: report.status, text: report.content },
+          'subagent_event', metadata, { status: report.status, text: report.content },
         ));
       },
-      onAdmitted: () => this.wake(parent, 'subordinate report'),
+      onAdmitted: () => this.wake(parent, 'subagent report'),
       // No job queue here: the stored answer is the owed delivery, made below and, after a death, at the next start.
       evolutionAnswerStored: () => undefined,
       onEvolutionAnswer: async () => {
@@ -1103,7 +1095,7 @@ export class LocalAgentHost {
       },
       temporary: parent.temporary,
     }, {
-      fromSubordinate: child.name,
+      fromSubagent: child.name,
       status,
       content,
       origin,
@@ -1114,11 +1106,11 @@ export class LocalAgentHost {
     }, Date.now());
   }
 
-  /** The report spine for one subordinate; roots get none. The session limits it to assigned turns. */
+  /** The report spine for one subagent; roots get none. The session limits it to assigned turns. */
   private buildReport(child: HostEntry): ReportDeps {
     return {
       report: async ({ status, content, handoff }) => {
-        const relayed = await publishSubordinateReport({ mode: child.relay?.mode ?? 'build', reports: child.relay }, {
+        const relayed = await publishSubagentReport({ mode: child.relay?.mode ?? 'build', reports: child.relay }, {
           content,
           status,
           origin: 'report_tool',
@@ -1136,35 +1128,46 @@ export class LocalAgentHost {
     };
   }
 
-  private buildTeam(parent: HostEntry): TeamToolDeps {
-    const delegation = delegationBudgetOf((actorId) => parent.tree.host.describe(actorId), parent.actor.record);
+  /** The workspace's agents as the cloud's sidebar reads them (`readWorkspaceAgents`), released hires too, over this
+   *  tree's one database: an agent hosted here and pumping runs, and its own session reports its chat. */
+  private async workspaceAgents(tree: HostTree): Promise<PanelAgent[]> {
+    const sql = makeSql(tree.db);
 
-    const input: Parameters<typeof createTeamToolDeps>[0] = {
-      delegation,
+    return await readWorkspaceAgents({
+      sql, exec: makeSqlExec(tree.db), root: tree.root, actors: tree.directory.list({ retired: true }), retained: true,
+      figures: (actorIds) => readAgentFigures(sql, actorIds),
+      queued: (actorId) => this.byActor.get(actorId)?.session.pumping() ?? false,
+      chat: (actorId) => this.byActor.get(actorId)?.session.chatReport() ?? null,
+    });
+  }
+
+  private buildTeam(parent: HostEntry): TeamToolDeps {
+    // What a capped agent is offered is core's (`offered`): no team at all.
+    return teamToolDepsFor({
+      record: parent.actor.record,
+      directory: parent.tree.directory,
       roster: parent.roster,
       runtime: this.childRuntime(parent.tree, parent.key),
-      now: () => Date.now(),
+      temporary: parent.temporary,
       inheritedContext: (): Promise<SerializedMessage[]> => inheritedContextFromTranscript(parent.actor.session.canonical.transcript(parent.sessionId)),
       originContext: async () => parent.actor.session.history,
       ownMission: () => missionOf(soulOf(parent.tree.db)) ?? '',
-      createName: agentNamer(parent.tree.directory, parent.roster),
       rosterMoved: () => { parent.tree.liveReads.moved(ROSTER_READS); },
       broadcastTask: (event) => parent.session.host.broadcast(metadataBroadcastEvent(
-        'subordinate_event',
-        { subordinate: event.subordinate, timestamp: event.timestamp },
+        'subagent_event',
+        { subagent: event.subagent, timestamp: event.timestamp },
         { status: 'task', text: event.content },
       )),
-    };
-
-    // What a capped agent is offered is core's (`offered`): no team at all.
-    return createTeamToolDeps({ ...input, temporary: parent.temporary });
+      workspaceAgents: () => this.workspaceAgents(parent.tree),
+      events: parent.eventLog,
+    });
   }
 
   /**
    * The child substrate of one hosted agent, for both durable and temporary rungs: core's one hire lifecycle over this
    * host. Keyed by address because the temporary port is built before the entry is registered.
    */
-  private childRuntime(tree: HostTree, parentKey: string): SubordinateRuntime {
+  private childRuntime(tree: HostTree, parentKey: string): SubagentRuntime {
     return hireLifecycle(this.lifecyclePorts(tree, parentKey));
   }
 
@@ -1172,7 +1175,7 @@ export class LocalAgentHost {
   private treeRetirement(tree: HostTree): Pick<HireLifecyclePorts<LocalHire>, 'directory' | 'roster' | 'retire'> {
     return {
       directory: tree.directory,
-      roster: (hirer) => this.byActor.get(hirer.actorId)?.roster ?? new SubordinateRosterStore(makeSqlExec(tree.db), tree.host.bindStores(hirer).handle),
+      roster: (hirer) => this.byActor.get(hirer.actorId)?.roster ?? new SubagentRosterStore(makeSqlExec(tree.db), tree.host.bindStores(hirer).handle),
       retire: (owner, retirement) => this.retireHeld(tree, owner, retirement),
     };
   }
@@ -1184,7 +1187,6 @@ export class LocalAgentHost {
     return {
       ...this.treeRetirement(tree),
       parent: () => ({ reference: parentOf().actor.reference, record: parentOf().actor.record }),
-      describe: (actorId) => tree.host.describe(actorId),
       born: (reference, name, seed) => this.bornChild(parentOf(), reference, name, seed),
       asHire: async (_reference, name, body) => {
         const entry = await this.openChildEntry(parentOf(), name);
@@ -1196,7 +1198,7 @@ export class LocalAgentHost {
         if (this.closed) throw new Error('LocalAgentHost is closed.');
         const admission = hire.entry.deliveries.record(admit);
 
-        if (admission.admitted) this.wake(hire.entry, 'subordinate task');
+        if (admission.admitted) this.wake(hire.entry, 'subagent task');
 
         return admission;
       },
@@ -1318,7 +1320,7 @@ export class LocalAgentHost {
     }
   }
 
-  /** Create one subordinate: descriptor rows then its hosted actor. A transaction, not a file creation. */
+  /** Create one subagent: descriptor rows then its hosted actor. A transaction, not a file creation. */
   private async birthChildEntry(
     parent: HostEntry,
     name: string,
@@ -1337,11 +1339,11 @@ export class LocalAgentHost {
       const actor = await tree.host.acquire(binding.reference, { kind: 'actor' });
       const rt = tree.runtimes.get(binding.reference.actorId);
 
-      if (!rt) throw new KinuError('missing', 'The created subordinate has no bound runtime.');
+      if (!rt) throw new KinuError('missing', 'The created subagent has no bound runtime.');
       const config = rt.actor.config;
-      const descriptor = subordinateDescriptorSource(config).read();
+      const descriptor = subagentDescriptorSource(config).read();
 
-      if (!descriptor) throw new Error(`subordinate "${name}" has no readable descriptor after creation`);
+      if (!descriptor) throw new Error(`subagent "${name}" has no readable descriptor after creation`);
       const ws = this.childHostedAgent(parent, binding, rt);
 
       const entry = await this.buildEntry({
@@ -1371,41 +1373,26 @@ export class LocalAgentHost {
     }
   }
 
-  private hirerRoster(tree: HostTree, actor: WorkspaceActor): SubordinateRosterStore | null {
-    const hirer = actor.parentActorId === null ? null : tree.directory.retained(actor.parentActorId);
-
-    if (hirer === null) return null;
-
-    return this.byActor.get(hirer.actorId)?.roster
-      ?? new SubordinateRosterStore(makeSqlExec(tree.db), tree.host.bindStores(actorReferenceOf(hirer)).handle);
-  }
-
-  /** Stops the agents below `key` (core `stoppedBelow`): what each was owed and had not taken is cancelled with its
-   *  queued turns, whether or not a turn of its runs; one the owner added has its own Stop. */
+  /** Stops the agents below `key` (core `stopAgentsBelow`), off the Stop's turn and joined by close(): a session here has
+   *  its queued turns cancelled and its running turn cut off. */
   private stopSubtree(key: string): void {
     const entry = this.entries.get(key);
 
     if (entry === undefined || this.closed) return;
     const { tree } = entry;
 
-    for (const actor of stoppedBelow(tree.directory.list(), entry.actor.reference.actorId)) {
-      const live = this.byActor.get(actor.actorId);
-      const running = live?.actor.session.inFlight === true;
+    this.retireOffTurn(entry.name, () => stopAgentsBelow(entry.actor.reference.actorId, {
+      ...this.treeRetirement(tree),
+      cancelOwed: (actor) => { this.cancelOwed(tree, actor); },
+      stopTurn: async (actor) => {
+        const live = this.byActor.get(actor.actorId);
+        const running = live?.actor.session.inFlight === true;
 
-      // What it was owed and had not taken is cancelled and the work it carried dismissed, as the cloud's Stop does; a
-      // session here has its queued turns cancelled and its running turn cut off.
-      this.cancelOwed(tree, actor);
-      live?.session.interrupt();
+        live?.session.interrupt();
 
-      // A running turn reports its own end.
-      if (running) continue;
-      const roster = this.hirerRoster(tree, actor);
-
-      if (roster?.get(actor.name)?.status !== 'working') continue;
-      roster.applyReport(actor.name, 'blocked', 'turn_end', Date.now());
-
-      if (actor.lifetime === 'task') this.retireStopped(tree, actor);
-    }
+        return running;
+      },
+    }));
   }
 
   /** What a stopped agent was owed and had not taken: cancelled, and the work it carried dismissed with it. */
@@ -1421,19 +1408,6 @@ export class LocalAgentHost {
 
         for (const event of log.query({ turn_id: drained })) log.dismiss(event.id, 'stopped by the owner', 'system');
       }
-    });
-  }
-
-  /** A stopped task agent retired as a dismissal that keeps its history: its hires, then it. */
-  private retireStopped(tree: HostTree, actor: WorkspaceActor): void {
-    const reference = actorReferenceOf(actor);
-    const hirer = tree.directory.retained(actor.parentActorId ?? '');
-    const retirement = this.treeRetirement(tree);
-
-    this.retireOffTurn(actor.name, async () => {
-      if (hirer === null) return;
-      await retireHireSubtree(retirement, reference, true);
-      await retirement.retire(actorReferenceOf(hirer), { reference, name: actor.name, destroy: false, interrupt: true });
     });
   }
 
@@ -1561,14 +1535,14 @@ function describeActors(entry: HostEntry): WorkspaceActor[] {
     .filter((record): record is WorkspaceActor => record !== null);
 }
 
-/** A subordinate's ref: its own name over its root's pair, so it cannot bind or address outside its tree. */
+/** A subagent's ref: its own name over its root's pair, so it cannot bind or address outside its tree. */
 function childRef(parent: HostEntry, childName: string): HostedAgentRef {
   return { name: childName, cwd: parent.ref.cwd, workspaceId: parent.ref.workspaceId };
 }
 
 /**
  * When this process must next wake, over every actor in the workspace. Unscoped by design: scoping to the root would
- * sleep through a subordinate's trigger.
+ * sleep through a subagent's trigger.
  */
 function nextTriggerAt(db: Database): number | null {
   const row = db.query<{ next_fire_at: number | null }, []>(`

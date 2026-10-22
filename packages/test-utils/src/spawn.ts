@@ -174,6 +174,28 @@ export function recordedIn(file: string, fixture: string, pattern = /^\s*(\d+)/u
   }));
 }
 
+/** Every process naming `fixture` in its command line now, as recorded: one no pidfile names yet included, such as the
+ *  successor a handover had started when a test's timeout cut it short. */
+export async function namingFixture(fixture: string): Promise<readonly Recorded[]> {
+  return settle(Effect.gen(function* () {
+    const found = yield* ran(['pgrep', '-f', '--', fixture.replaceAll(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`)]);
+
+    if (found.exitCode !== 0 && found.exitCode !== NONE_LEFT) {
+      return yield* Effect.fail(new KinuError('io', `pgrep -f ${fixture} failed (${String(found.exitCode)}): ${found.stderr}`));
+    }
+
+    const named: Recorded[] = [];
+
+    for (const pid of found.stdout.split('\n').filter((line) => line !== '').map(Number)) {
+      const generation = yield* generationOf(pid);
+
+      if (generation !== null && pid !== process.pid && namesFixture(pid, fixture)) named.push({ pid, generation });
+    }
+
+    return named;
+  }));
+}
+
 export async function killAndAwaitExit(recorded: Recorded, options: { readonly group?: boolean } = {}): Promise<void> {
   return settle(Effect.gen(function* () {
     // Ended, or another process holds the pid now.

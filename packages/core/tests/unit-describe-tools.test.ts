@@ -4,7 +4,7 @@
 import { describe, expect, test } from 'bun:test';
 import { jsonSchema, tool, type ToolSet } from 'ai';
 import * as v from 'valibot';
-import { describeProgramSource, narrowToolSurface, programDeclarations, programProviders, renderCodemodeDescription, withCraftedToolDeclarations } from '../src/index';
+import { narrowToolSurface, programSurface, renderCodemodeDescription, withCraftedToolDeclarations } from '../src/index';
 
 const NATIVE: ToolSet = {
   read_file: tool({
@@ -23,8 +23,9 @@ const NATIVE: ToolSet = {
 const EVERYWHERE = narrowToolSurface(undefined);
 
 function programsDescribe() {
-  const providers = programProviders({ surface: { native: NATIVE, external: () => ({}) }, namespaces: [], reach: EVERYWHERE, mode: 'build', signal: undefined });
-  const declared = v.parse(v.function(), new Function(`${describeProgramSource(programDeclarations(providers))}\nreturn describe;`)());
+  const surface = programSurface({ surface: { native: NATIVE, external: () => ({}) }, namespaces: [], reach: EVERYWHERE, mode: 'build', signal: undefined, crafted: [] });
+  const { providers } = surface;
+  const declared = v.parse(v.function(), new Function(`${surface.describe}\nreturn describe;`)());
 
   return { providers, describe: (name: string) => v.parse(v.string(), declared(name)) };
 }

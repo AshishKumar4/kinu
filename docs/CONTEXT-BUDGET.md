@@ -17,7 +17,7 @@ The cap covers the whole string the model receives. The truncation marker is pri
 | Text uploads over 8 KiB | reference text part | same | same |
 | Uploaded documents the model can accept, over 1 MiB | reference text part | same | same |
 | Pasted user text over 8 KiB | 2,000-char head + address | `.offloaded/<hash>.<ext>`, hidden in the Files tab | same |
-| Subordinate reports / peer replies | `EVENT_BRIEF_MAX_CHARS` brief, 600 chars | `.kinu/event-content/<hash>.txt` | `core/src/events/hub/content-spill.ts` |
+| Subagent reports / peer replies | `EVENT_BRIEF_MAX_CHARS` brief, 600 chars | `.kinu/event-content/<hash>.txt` | `core/src/events/hub/content-spill.ts` |
 | Compacted history ranges | checkpoint summary | `.kinu/compaction/<sessionKey>/<rangeHash>.md` | `packages/compaction/src/stores.ts` |
 
 `SPILL_DIRS` (`packages/core/src/context-budget.ts`) owns the four directories. Paths are unrooted and resolve at the workspace root. A `file` read writes nothing: its source path already addresses the whole, and the marker gives the next offset.

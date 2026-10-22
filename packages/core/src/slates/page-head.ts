@@ -19,11 +19,11 @@ export const SLATE_PAGE_STYLE = [
   ':where(code,kbd,pre,samp){font-family:var(--font-mono,ui-monospace,monospace);font-size:0.875em}',
   ':where(button,input,select,textarea){font:inherit;font-size:0.875rem;line-height:1.4286;color:inherit}',
   ':where(button){padding:6px 12px;border:1px solid var(--c-border-strong,ButtonBorder);border-radius:var(--r-control,6px);'
-    + 'background:var(--c-elevated,ButtonFace);font-weight:500;cursor:pointer}',
+    + 'background:var(--c-fill,ButtonFace);font-weight:500;cursor:pointer}',
   ':where(button:hover){border-color:var(--c-accent,ButtonBorder)}',
   ':where(button:disabled){opacity:0.5;cursor:default}',
-  ':where(input,select,textarea){padding:6px 10px;border:1px solid var(--c-input-border,ButtonBorder);border-radius:var(--r-control,6px);'
-    + 'background:var(--c-recessed,Field)}',
+  ':where(input,select,textarea){padding:6px 10px;border:1px solid var(--c-field-border,ButtonBorder);border-radius:var(--r-control,6px);'
+    + 'background:var(--c-sunken,Field)}',
   ':where(input,select,textarea,button):focus-visible{outline:2px solid var(--c-accent,Highlight);outline-offset:1px}',
   ':where(table){border-collapse:collapse}',
   ':where(th,td){padding:6px 10px;border-bottom:1px solid var(--c-border,GrayText);text-align:left}',

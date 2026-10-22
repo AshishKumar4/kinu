@@ -13,6 +13,8 @@ import { useElementSize } from "@/hooks/use-element-size";
 import type { ForkNode } from "@kinu.run/core";
 import { ancestorIds, cleanNodeLabel, clipToWidth, isCompeted, LABEL_MIN_SCALE, linkWidth, losingBranchIds, maxVisits, NODE_R_MAX, NODE_R_UNSCORED, nodeRadius, principalVariation, subtreeCount, viewNoteFor, type ExplorerSelection } from "@kinu.run/core/swarm-view";
 import { scoreBand } from '@kinu.run/core/swarm-view';
+import { Button } from "@/components/ui/Button";
+import { Surface } from "@/components/ui/Surface";
 
 interface SwarmTreeRegion {
 	runId: string;
@@ -290,6 +292,8 @@ const BAND_TOKEN = {
 	warning: "var(--c-warning)",
 	danger: "var(--c-danger)",
 } as const;
+
+const BAND_INK = { success: "p-success", warning: "p-warning", danger: "p-danger" } satisfies Record<keyof typeof BAND_TOKEN, string>;
 
 function nodeFill(node: ForkNode, ramp: (t: number) => string): string {
 	// Failed: hollow, not coloured by an unearned zero.
@@ -588,7 +592,7 @@ export function SwarmTree({
 				// Band right edge carried as data: clamping runs later from the zoom handler.
 				el.dataset.x1 = String(region.band.x1 - BAND_PAD);
 				const name = document.createElement("span");
-				name.className = `min-w-0 shrink truncate p-row-text font-medium ${
+				name.className = `min-w-0 shrink truncate t-item ${
 					region.runId === selectedRunId ? "p-text" : "p-text-2"
 				}`;
 				name.textContent = meta?.title ?? "";
@@ -596,7 +600,7 @@ export function SwarmTree({
 				name.title = meta?.title ?? "";
 				const note = document.createElement("span");
 				// The note shrinks faster: the name identifies the band.
-				note.className = "min-w-0 shrink-[4] truncate p-annotation p-text-3";
+				note.className = "t-meta t-mono min-w-0 shrink-4 truncate p-text-3";
 				note.textContent = meta?.note ?? "";
 				note.title = meta?.note ?? "";
 				el.appendChild(name);
@@ -906,8 +910,7 @@ export function SwarmTree({
 		<div className="relative flex w-full h-full flex-col overflow-hidden">
 			<div className="relative shrink-0" style={{ height: sceneH }}>
 				<svg
-					ref={svgRef} width={width} height={sceneH} className="w-full h-full block"
-					style={{ touchAction: "none" }}
+					ref={svgRef} width={width} height={sceneH} className="w-full h-full block touch-none"
 				/>
 
 				<div ref={titlesRef} aria-hidden
@@ -916,8 +919,8 @@ export function SwarmTree({
 				{/* Overlay, not in flow: an in-flow line changes scene height, refits, and could toggle itself. */}
 				{viewNote !== null && (
 					<div aria-live="polite"
-					className="absolute left-0 right-0 flex justify-end pr-4 pointer-events-none select-none p-meta p-text-3"
-						style={{ top: RULER_H, fontFamily: "var(--font-mono)" }}
+					className="t-meta t-mono absolute left-0 right-0 flex justify-end pr-4 pointer-events-none select-none p-text-3"
+						style={{ top: RULER_H }}
 					>{viewNote}</div>
 				)}
 
@@ -925,18 +928,18 @@ export function SwarmTree({
 			</div>
 
 			<div ref={attachLegend} data-tree-legend
-				className="shrink-0 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-2 pt-1 pb-1.5">
-				<div className="min-w-0 flex flex-wrap items-center gap-x-3 gap-y-1 p-meta p-text-3 select-none">
+				className="shrink-0 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-2 pt-1 pb-1">
+				<div className="t-meta min-w-0 flex flex-wrap items-center gap-x-3 gap-y-1 p-text-3 select-none">
 					{competedSelected ? (
 						<>
-							<span className="flex items-center gap-1.5">
-								<span className="h-2 w-14 rounded-full" style={{ background: "linear-gradient(90deg in oklab, var(--c-danger), var(--c-warning), var(--c-success))" }} />
+							<span className="flex items-center gap-2">
+								<Surface look="round" as="span" className="p-legend-score h-2 w-14" />
 								score
 							</span>
 							{width >= 470 && (
 								<>
-									<span className="flex items-center gap-1"><span className="size-1 rounded-full p-dot-neutral" /><span className="size-2 rounded-full p-dot-neutral" />visits</span>
-									<span className="flex items-center gap-1"><span className="inline-block w-3 h-px" style={{ background: "var(--c-accent)" }} />winning line</span>
+									<span className="flex items-center gap-1"><Surface look="round" as="span" className="size-1 p-dot-neutral" /><Surface look="round" as="span" className="size-2 p-dot-neutral" />visits</span>
+									<span className="flex items-center gap-1"><span className="p-legend-line inline-block w-3 h-px" />winning line</span>
 									<span className="opacity-70">dashed = pruned · hollow = failed</span>
 								</>
 							)}
@@ -951,16 +954,15 @@ export function SwarmTree({
 					)}
 					{fansInSelected && (
 						<span className="flex items-center gap-1">
-							<span aria-hidden className="inline-block size-2 rounded-[1px] border"
-								style={{ borderColor: "var(--c-accent)" }} />
+							<Surface look="outlined" as="span" className="p-legend-fan inline-block size-2" aria-hidden />
 							fan-in vertex
 						</span>
 					)}
 				</div>
-				<div className="ml-auto shrink-0 flex items-center gap-0.5">
+				<div className="ml-auto shrink-0 flex items-center gap-px">
 					<TreeControl label="Fold abandoned branches" onClick={foldLosing}><ArrowsInSimpleIcon size={13} /></TreeControl>
 					<TreeControl label="Expand every branch" onClick={expandAll}><ArrowsOutSimpleIcon size={13} /></TreeControl>
-					<span aria-hidden className="mx-0.5 h-3.5 w-px" style={{ background: "var(--c-border)" }} />
+					<span aria-hidden className="mx-px h-3.5 border-l p-border" />
 					<TreeControl label="Zoom out" onClick={() => scaleBy(1 / 1.5)}><MagnifyingGlassMinusIcon size={13} /></TreeControl>
 					<TreeControl label="Zoom in" onClick={() => scaleBy(1.5)}><MagnifyingGlassPlusIcon size={13} /></TreeControl>
 					<TreeControl label="Fit the selected search to view" onClick={() => fit(true)}><ArrowsOutIcon size={13} /></TreeControl>
@@ -998,12 +1000,7 @@ function positionBandTitles(
 
 function TreeControl({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
 	return (
-		<button
-			type="button" onClick={onClick} title={label} aria-label={label}
-			className="p-btn-ghost inline-flex size-6 items-center justify-center rounded-sm"
-		>
-			{children}
-		</button>
+		<Button variant="ghost" size="sm" icon={children} onClick={onClick} title={label} aria-label={label} />
 	);
 }
 
@@ -1046,24 +1043,18 @@ function NodeTip({ tip, width }: { tip: TooltipState; width: number }) {
 	const flip = tip.x + TIP_W + 24 > width;
 
 	return (
-		<div
-			className="absolute z-50 pointer-events-none p-surface p-border border rounded-lg px-3 py-2 p-shadow-menu text-xs animate-scale-in"
-			style={{
+		<Surface look="panel" className="t-meta absolute z-50 pointer-events-none px-3 py-2 p-shadow-menu animate-scale-in" style={{
 				width: TIP_W,
 				left: flip ? undefined : tip.x + 16,
 				right: flip ? width - tip.x + 16 : undefined,
 				top: tip.y + 12,
-			}}
-		>
-			<div className="font-medium p-text mb-1.5 leading-snug line-clamp-2">
+			}}>
+			<strong className="block p-text mb-2 line-clamp-2">
 				{cleanNodeLabel(node.action, runName)}
-			</div>
+			</strong>
 			<div className="flex items-center gap-2 tabular-nums">
 				{(node.status === "failed" || node.value !== null) && (
-					<span
-						className="text-base font-semibold leading-none"
-						style={{ color: node.status === "failed" ? "var(--c-danger)" : BAND_TOKEN[scoreBand(node.value ?? 0)] }}
-					>
+					<span className={`t-title ${node.status === "failed" ? "p-danger" : BAND_INK[scoreBand(node.value ?? 0)]}`}>
 						{node.status === "failed" ? "failed" : `${Math.round(Math.min(1, Math.max(0, node.value ?? 0)) * 100)}%`}
 					</span>
 				)}
@@ -1078,22 +1069,22 @@ function NodeTip({ tip, width }: { tip: TooltipState; width: number }) {
 				{node.lifecycle ?? node.status}
 			</div>
 			{fanIn !== null && (
-				<div className="mt-1.5 flex items-baseline gap-1.5 p-accent-fg">
-					<span className="p-annotation">⋈{fanIn}</span>
-					<span className="leading-snug">
+				<div className="mt-2 flex items-baseline gap-2 p-accent-fg">
+					<span className="t-meta t-mono p-accent-fg">⋈{fanIn}</span>
+					<span>
 						fan-in vertex, aggregating {fanIn} parents. The edge above it is the
 						selection parent; the other {fanIn - 1} are not in this tree.
 					</span>
 				</div>
 			)}
 			{why !== null && (
-				<div className="mt-1.5 p-text-3 leading-snug line-clamp-2">{why}</div>
+				<div className="mt-2 p-text-3 line-clamp-2">{why}</div>
 			)}
 			{node.observation && (
-				<div className="mt-1.5 pt-1.5 border-t p-border p-text-2 leading-relaxed line-clamp-3">
+				<div className="mt-2 pt-1 border-t p-border p-text-2 line-clamp-3">
 					{node.observation}
 				</div>
 			)}
-		</div>
+		</Surface>
 	);
 }

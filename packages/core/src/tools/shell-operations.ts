@@ -1,6 +1,7 @@
 /** `shell.run` served over the execution router: the workspace's shell by default, or the computer's, or a user's machine. */
 import * as v from 'valibot';
 import { Effect } from 'effect';
+import { noteCommand } from '../execution/call-effects';
 import { clampToolResult, type ClampToolResultOptions } from './clamp';
 import { createFileToolSteer } from './shell-file-steer';
 import { commandResultAt, CommandResultSchema, type CommandResult } from '../execution/exec-result';
@@ -134,6 +135,9 @@ export function serveShell({ shell, router, files, budget, escalations, logger, 
           }
 
           const result = yield* Effect.promise(() => shell.exec(args.command, shellCallOptions(args, signal, job)));
+
+          // Recorded for a program that called it (`tools.shell`), as an executor's command is (`commandAnswer`).
+          if (result.refusal === undefined) noteCommand('workspace', args.command, result.exitCode ?? 0);
 
           return yield* clamp(commandResultAt(result, true));
         }

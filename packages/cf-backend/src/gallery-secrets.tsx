@@ -135,7 +135,7 @@ export function SecretPasteFrame() {
   return (
     <div className="p-bg p-text flex min-h-screen flex-col justify-end">
       <div className="mx-auto w-full max-w-[820px] flex-1 space-y-2 px-5 py-8">
-        {sent.map((text, index) => <div key={index} className="ml-auto max-w-[80%] rounded-lg p-recessed px-3 py-2 p-row-text">{text}</div>)}
+        {sent.map((text, index) => <div key={index} className="ml-auto max-w-[80%] rounded-lg p-sunken px-3 py-2 t-body">{text}</div>)}
       </div>
       <Composer value={draft} onValueChange={setDraft} onSend={guard.guarded("send", send)} onStop={() => {}} placeholder="Send a message..."
         disabled={false} liveness={IDLE} attention={guard.offer} />

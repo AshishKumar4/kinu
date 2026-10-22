@@ -1,8 +1,7 @@
 import { Effect } from "effect";
 import { useCallback, useState, type ReactNode } from "react";
-import { Button } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import { detach, showing } from "@kinu.run/core/obs";
-import { FilledButton } from "./FilledButton";
 import { Modal } from "./Modal";
 
 /** A second way to go ahead, offered beside the main one; the main one stays the default. */
@@ -66,13 +65,13 @@ export function ConfirmDialog({ title, icon, children, action, failed, onConfirm
             {busy === alternate.action ? `${alternate.action}…` : alternate.action}
           </Button>
         )}
-        <FilledButton danger={danger} {...(marker === undefined ? {} : { [marker]: "" })} onClick={() => confirm(action, onConfirm)} disabled={busy !== null}>
+        <Button variant={danger ? "destructive" : "primary"} size="md" {...(marker === undefined ? {} : { [marker]: "" })} onClick={() => confirm(action, onConfirm)} disabled={busy !== null}>
           {busy === action ? `${action}…` : action}
-        </FilledButton>
+        </Button>
       </>}>
       {children}
       {error !== null && (
-        <div role="alert" className="p-notice-danger text-xs rounded-md px-3 py-2">{failed === undefined ? error : `${failed}: ${error}`}</div>
+        <div role="alert" className="t-meta p-notice-danger rounded-[var(--r-control)] px-3 py-2">{failed === undefined ? error : `${failed}: ${error}`}</div>
       )}
     </Modal>
   );
@@ -97,7 +96,7 @@ export function useConfirmation() {
   const dialog = pending === null ? null : (
     <ConfirmDialog title={pending.title} action={pending.action} failed={pending.failed} danger={pending.danger}
       onConfirm={pending.run} onClose={close} alternate={pending.alternate}>
-      <p className="text-xs p-text-2 leading-relaxed">{pending.body}</p>
+      <p className="t-meta p-text-2">{pending.body}</p>
     </ConfirmDialog>
   );
 

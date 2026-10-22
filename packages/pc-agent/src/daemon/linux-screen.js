@@ -16,7 +16,15 @@
 const { createHelperSource } = require('./screen-helper.js');
 
 const LINUX_SCREEN_PY = String.raw`
-import json, os, struct, sys
+import ctypes, json, os, struct, sys
+
+# Ends with the daemon that started it, which names itself after the mode (PR_SET_PDEATHSIG, SIGKILL): a daemon killed
+# while this waited on the desktop portal left it running, its GStreamer scanner writing a cache under a home already
+# removed (2026-10-21). A daemon gone before this line ran sends no signal, so this ends now.
+ctypes.CDLL(None).prctl(1, 9)
+if len(sys.argv) > 2 and os.getppid() != int(sys.argv[2]):
+    sys.exit(1)
+
 import gi
 gi.require_version('Gio', '2.0')
 gi.require_version('Gst', '1.0')
@@ -211,7 +219,7 @@ main()
 /** A Linux PC's screen source: the portal takes the viewer's keys as the X keysyms RFB carries. */
 function createLinuxSource(options) {
   return createHelperSource({
-    command: (mode) => ['python3', '-c', LINUX_SCREEN_PY, mode],
+    command: (mode) => ['python3', '-c', LINUX_SCREEN_PY, mode, String(process.pid)],
     keyCommand: (down, keysym) => ({ type: 'key', keysym, down }),
     ...options,
   });

@@ -168,7 +168,7 @@ describe("nimbus processes — each one a job of the actor's from its start", ()
     // Started under its job's id, as a job's commands are: a port it serves is its job's.
     expect(execIds).toEqual([jobId]);
 
-    expect(jobs.store.get(jobId)).toMatchObject({ kind: "startProcess", status: "running", label: "node server.js" });
+    expect(jobs.store.get(jobId)).toMatchObject({ kind: "startProcess", status: "running", label: "Workspace: node server.js" });
     expect(jobs.lanes).toEqual(["bg:startProcess"]);
     expect(jobs.woke).toEqual([]);
 
@@ -237,7 +237,7 @@ describe("nimbus processes — each one a job of the actor's from its start", ()
 
     expect(again.execIds).toEqual([retryId]);
     expect(jobs.store.get(jobId)?.retriedBy).toBe(retryId);
-    expect(jobs.store.get(retryId)).toMatchObject({ kind: "startProcess", status: "running", label: "node server.js" });
+    expect(jobs.store.get(retryId)).toMatchObject({ kind: "startProcess", status: "running", label: "Workspace: node server.js" });
 
     await jobs.runner.cancel(retryId);
     await jobs.settled();

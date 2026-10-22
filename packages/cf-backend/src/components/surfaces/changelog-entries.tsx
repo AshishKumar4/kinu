@@ -1,7 +1,8 @@
 import { Effect } from 'effect';
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { ComponentType, ReactNode } from "react";
-import { Button, Loader, type ButtonProps } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
+import { Button } from "@/components/ui/Button";
 import {
   GitBranchIcon, BrainIcon,
   ChecksIcon, CheckIcon, XIcon, GitDiffIcon,
@@ -17,6 +18,10 @@ import { ScaffoldVersionDiff } from "./ScaffoldLineage";
 import { changelogFactKey } from "./shared";
 import { timeAgo } from "@kinu.run/core";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Dot } from "@/components/ui/Dot";
+import { GroupBlock } from "@/components/ui/Group";
+import { Pressable } from "@/components/ui/Pressable";
+import { Surface } from "@/components/ui/Surface";
 
 interface ChangelogView { entries: ChangelogEntry[]; unseenCount: number; seenAt: number }
 
@@ -68,7 +73,7 @@ export function ChangelogFailure(
     return <LoadFailure what="the changelog" message={resource.message} onRetry={reload} />;
   }
 
-  return <div className="flex items-center justify-center gap-2 py-4 text-xs p-text-3" role="status">
+  return <div className="t-meta flex items-center justify-center gap-2 py-4 p-text-3" role="status">
     <Loader size="sm" />
     <span>Loading journal…</span>
   </div>;
@@ -76,8 +81,8 @@ export function ChangelogFailure(
 
 function EntryField({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="grid grid-cols-[64px_minmax(0,1fr)] gap-2 text-[11px] leading-relaxed">
-      <span className="p-text-4">{label}</span>
+    <div className="t-meta grid grid-cols-[var(--layout-label-row)] gap-2">
+      <span className="p-text-3">{label}</span>
       <span className="p-text-2 min-w-0 break-words">{children}</span>
     </div>
   );
@@ -159,14 +164,14 @@ function EntryDetails({ entry, id, expanded, rpc, onReverted }: {
   return (
     <div id={id} role="region" aria-label={`Details for ${entry.summary}`} hidden={!expanded} className="mt-2 ml-6 border-t p-border pt-2">
       {entry.kind === 'fact' && <div className="mb-2"><EntryFacts entry={entry} /></div>}
-      {evidence && <div className="p-annotation p-text-3 whitespace-pre-wrap break-words">{entry.evidence}</div>}
+      {evidence && <div className="t-meta t-mono p-text-3 whitespace-pre-wrap break-words">{entry.evidence}</div>}
       {entry.workspace !== undefined && (
-        <Link to={`/workspace/${encodeURIComponent(entry.workspace)}`} className="mt-1.5 inline-block p-meta p-accent hover:underline" data-changelog-workspace={entry.workspace}>
+        <Link to={`/workspace/${encodeURIComponent(entry.workspace)}`} className="t-meta mt-2 inline-block p-accent-fg hover:underline" data-changelog-workspace={entry.workspace}>
           Open the workspace
         </Link>
       )}
       {entry.items && entry.items.length > 0 && (
-        <SubEntryList items={entry.items} className={`${evidence ? "mt-2" : ""} space-y-1.5`} rpc={rpc} onReverted={onReverted} />
+        <SubEntryList items={entry.items} className={`${evidence ? "mt-2" : ""} space-y-2`} rpc={rpc} onReverted={onReverted} />
       )}
     </div>
   );
@@ -198,27 +203,26 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
   const headline = (
     <div className="min-w-0 flex-1">
       <div className="flex items-center gap-2">
-        <span className="p-row-text p-text flex-1 decoration-[var(--c-border-strong)] underline-offset-4 group-hover/expander:underline" title={entry.summary}>{entry.summary}</span>
-        {fresh && !kept && <span className="shrink-0 size-1.5 rounded-full bg-[var(--c-accent)]" />}
+        <span className="p-quiet-underline t-body p-text flex-1 group-hover/expander:underline" title={entry.summary}>{entry.summary}</span>
+        {fresh && !kept && <Dot tone="accent" />}
       </div>
-      <div className="mt-1 p-meta p-text-3">{timeAgo(entry.at)}</div>
+      <div className="t-meta mt-1 p-text-3">{timeAgo(entry.at)}</div>
     </div>
   );
 
   return (
-    <div className={`${grouped ? "p-3" : "p-group p-3"} ${kept ? "opacity-70" : ""}`}>
-      <div className="grid grid-cols-[14px_minmax(0,1fr)_auto] items-start gap-2">
-        <Icon size={14} className={`mt-0.5 shrink-0 ${fresh ? "p-accent" : "p-text-3"}`} />
+    <GroupBlock grouped={grouped} className={`p-3 ${kept ? "opacity-70" : ""}`}>
+      <div className="grid grid-cols-[var(--layout-mark-row-end)] items-start gap-2">
+        <Icon size={14} className={`mt-px shrink-0 ${fresh ? "p-accent-fg" : "p-text-3"}`} />
         {hasDetails ? (
-          <button
-            type="button"
-            className="group/expander min-w-0 cursor-pointer rounded-md text-left"
+          <Pressable look="compact"
+            className="group/expander min-w-0"
             aria-expanded={expanded}
             aria-controls={detailsId}
             onClick={() => setExpanded((previous) => !previous)}
           >
             {headline}
-          </button>
+          </Pressable>
         ) : headline}
         <div className="grid auto-cols-max grid-flow-col items-center gap-1 justify-self-end">
           {entry.scaffoldVersion != null && (
@@ -227,7 +231,7 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
           )}
           {actions}
           {hasDetails && (
-            <Button size="sm" variant="ghost" {...({ 'shape': 'square' } satisfies Pick<ButtonProps, 'shape'>)} onClick={() => setExpanded((previous) => !previous)}
+            <Button size="sm" variant="ghost" onClick={() => setExpanded((previous) => !previous)}
               aria-expanded={expanded} aria-controls={detailsId}
               aria-label={expanded ? `Collapse ${entry.summary}` : `Expand ${entry.summary}`}
               icon={expanded ? <CaretDownIcon size={11} /> : <CaretRightIcon size={11} />} />
@@ -236,13 +240,13 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
       </div>
 
       {notice && (
-        <div className={`mt-1.5 p-t-status ${notice.ok ? "p-success" : "p-danger"}`}>{notice.text}</div>
+        <div className={`t-status mt-2 ${notice.ok ? "p-success" : "p-danger"}`}>{notice.text}</div>
       )}
 
       {hasDetails && <EntryDetails entry={entry} id={detailsId} expanded={expanded} rpc={rpc} onReverted={onReverted} />}
 
       <EntryScaffoldDiff rpc={rpc} version={entry.scaffoldVersion} shown={diffShown} />
-    </div>
+    </GroupBlock>
   );
 }
 
@@ -251,19 +255,19 @@ function SubEntry({ entry, rpc, onReverted }: { entry: ChangelogEntry; rpc: Work
   const { busy, notice, revert } = useEntryRevert(entry.id, rpc, onReverted);
 
   return (
-    <li className={`rounded-md border p-border px-2.5 py-2 ${kept ? "opacity-70" : ""}`}>
+    <Surface look="outlined" as="li" className={`px-2 py-2 ${kept ? "opacity-70" : ""}`}>
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
-          <div className="text-xs p-text-2 leading-relaxed">{entry.summary}</div>
+          <div className="t-meta p-text-2">{entry.summary}</div>
           {entry.kind === 'fact' ? (
             <div className="mt-1"><EntryFacts entry={entry} /></div>
           ) : entry.evidence && (
-            <div className="mt-1 p-annotation p-text-3 whitespace-pre-wrap break-words">
+            <div className="t-meta t-mono mt-1 p-text-3 whitespace-pre-wrap break-words">
               {entry.evidence}
             </div>
           )}
           {notice && (
-            <div className={`mt-1.5 p-t-status ${notice.ok ? "p-success" : "p-danger"}`}>{notice.text}</div>
+            <div className={`t-status mt-2 ${notice.ok ? "p-success" : "p-danger"}`}>{notice.text}</div>
           )}
         </div>
         <div className="flex items-center gap-1 shrink-0">
@@ -279,9 +283,9 @@ function SubEntry({ entry, rpc, onReverted }: { entry: ChangelogEntry; rpc: Work
         </div>
       </div>
       {entry.items && entry.items.length > 0 && (
-        <SubEntryList items={entry.items} className="mt-2 space-y-1.5 pl-2 border-l p-border" rpc={rpc} onReverted={onReverted} />
+        <SubEntryList items={entry.items} className="mt-2 space-y-2 pl-2 border-l p-border" rpc={rpc} onReverted={onReverted} />
       )}
-    </li>
+    </Surface>
   );
 }
 

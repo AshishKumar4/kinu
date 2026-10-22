@@ -407,7 +407,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
 
     expect(model.doStreamCalls).toHaveLength(2);
     expect(JSON.stringify(model.doStreamCalls[0]?.prompt)).toContain('secret_echo');
-    expect(JSON.stringify(model.doStreamCalls[1]?.prompt.filter((message) => message.role === 'tool'))).toContain('{"result":42}');
+    expect(JSON.stringify(model.doStreamCalls[1]?.prompt.filter((message) => message.role === 'tool'))).toContain('{"result":42,');
   });
 
   // Rank 36: a head's allowed tools narrowed its native surface, never the namespaces its eval bound.

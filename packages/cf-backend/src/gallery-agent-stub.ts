@@ -60,12 +60,12 @@ export function serveGalleryRpc(rpc: GalleryRpc): void {
 async function galleryOpening(rpc: GalleryRpc): Promise<string> {
 	const list = (method: string) => openingListOf(`answering ${method}`, () => rpc<unknown>(method, []));
 
-	const [snapshot, pendingActions, backgroundJobs, inspectedWork, subordinates, pendingConsents, workspaceAgents] = await Promise.all([
+	const [snapshot, pendingActions, backgroundJobs, inspectedWork, subagents, pendingConsents, workspaceAgents] = await Promise.all([
 		rpc<unknown>("getWorkspaceSnapshot", []),
 		rpc<unknown>("listPendingActions", []),
 		rpc<unknown>("listBackgroundJobs", [WORK_TAB_JOBS]),
 		rpc<unknown>("inspectWork", []),
-		list("listSubordinates"), list("listPendingConsents"), list("listWorkspaceAgents"),
+		list("listSubagents"), list("listPendingConsents"), list("listWorkspaceAgents"),
 	]);
 
 	const opening = v.parse(v.looseObject({ chat: v.looseObject({}) }), snapshot);
@@ -74,7 +74,7 @@ async function galleryOpening(rpc: GalleryRpc): Promise<string> {
 
 	return JSON.stringify({
 		...opening, chat,
-		pendingActions, backgroundJobs, inspectedWork, subordinates, pendingConsents, workspaceAgents,
+		pendingActions, backgroundJobs, inspectedWork, subagents, pendingConsents, workspaceAgents,
 	});
 }
 

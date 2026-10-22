@@ -1,4 +1,4 @@
-import { agentTitle } from '../subordinates/nested-agent';
+import { agentTitle } from '../subagents/nested-agent';
 import { revealMisrepresenting } from '../safety/untrusted-text';
 import { ELAPSED_COUNTER } from '../tui-presentation';
 import { estimateTokens } from '../token-estimate';

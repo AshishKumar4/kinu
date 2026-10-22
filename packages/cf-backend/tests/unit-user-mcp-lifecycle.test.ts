@@ -6,7 +6,7 @@ import {
   type TestUserDO, type TestUserDOOptions,
 } from './helpers/user-do';
 import {
-  closeMcpTransport, seedMcpAnswer, failNextMcpToolCall, failNextMcpDiscovery, hangMcpEstablish, holdNextMcpToolCall, inheritedMcpManager,
+  closeMcpTransport, seedMcpAnswer, failNextMcpToolCall, failNextMcpDiscovery, hangMcpEstablish, hangNextMcpConnect, holdNextMcpToolCall, inheritedMcpManager,
   liveMcpFetch, liveMcpTransport, recordedMcpFetch, recordedMcpLifecycle, recordedMcpServers, recordedMcpToolAborts,
   recordedMcpToolCalls, requireMcpSignIn, resetRecordedMcp, seedMcpSession, seedMcpTools, seedMcpAuthContinuation, seedConfiguredMcpServer, seedSdkMcpServer, seedUndiscoveredMcpTools,
 } from './helpers/agents-sdk';
@@ -17,6 +17,7 @@ import { ProtocolError, SdkError, SdkErrorCode } from '@modelcontextprotocol/cli
 import type { McpToolSurface } from '../src/user/mcp-servers';
 import type { UserCaller } from '@kinu.run/core';
 import { refusedSseConnect, refusedToolCall } from './helpers/mcp-transport';
+import { nextTurn } from './helpers/actor-harness';
 import * as v from 'valibot';
 
 /** The descriptor surface, held to `McpToolSurfaceSchema`, the contract the orchestrator's cache reads. */
@@ -578,6 +579,58 @@ describe('a caller stops the MCP call it made', () => {
 
     await h.userDO.userMcp_cancelCall(owner, 'call-running');
     await expect(running).rejects.toMatchObject({ code: 'cancelled' });
+    h.close();
+  });
+
+  // Staging 39a0b3fd5 (2026-10-21), `mcp-reconnect` 1 of 4: a warmup redialled the server whose ended session a call was
+  // renewing, as the connection read closed between the vendor's new client and its connect. Two connects shared that
+  // client, and the renewal's handshake went out on the other's transport with no session, which the server refused.
+  test("a warmup while a call renews its server's session starts no second connect of it, and the call answers", async () => {
+    const h = harness();
+    await seedServer(h, 'srv1');
+    seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
+    seedMcpSession('srv1', 's1');
+    const owner = await testOwner();
+
+    failNextMcpToolCall(await refusedToolCall({ status: 404, body: 'session ended' }));
+    const renewal = hangNextMcpConnect();
+    const call = h.userDO.userMcp_callTool(owner, { serverId: 'srv1', name: 'do_thing', args: {}, id: 'call-renewed' });
+
+    await renewal.entered;
+    const warming = h.userDO.userMcp_warmConnections(owner);
+
+    // The warmup reads the connection while the renewal's connect is out.
+    await nextTurn();
+    renewal.release();
+    await Promise.all([call, warming]);
+
+    expect(recordedMcpLifecycle().overlapped).toEqual([]);
+    h.close();
+  });
+
+  // Main, 2026-10-21: every connect of a server is one of its dials, so none shares the vendor's client with another; a
+  // sign-in's end used to establish its server beside a warmup's redial of it.
+  test("a sign-in's end while a warmup redials its server waits for the redial, and connects once it is done", async () => {
+    const h = harness();
+    await seedServer(h, 'srv1');
+    seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
+    const owner = await testOwner();
+
+    // Failed, so the warmup redials it and the sign-in's end establishes it in earnest: the vendor's establish passes
+    // over a ready connection (`client-BnYbNT3z.js:2192`).
+    liveConnection(h, 'srv1').connectionState = 'failed';
+    const redial = hangNextMcpConnect();
+    const warming = h.userDO.userMcp_warmConnections(owner);
+
+    await redial.entered;
+    const ended = h.userDO.userMcp_handleOAuthCallback(owner, 'https://kinu.example.com/api/user/mcp/callback?state=signed.srv1&code=c');
+
+    // The sign-in's end reads the server while the redial's connect is out.
+    await nextTurn();
+    redial.release();
+    await Promise.all([warming, ended]);
+
+    expect({ overlapped: recordedMcpLifecycle().overlapped, established: recordedMcpLifecycle().established.includes('srv1') }).toEqual({ overlapped: [], established: true });
     h.close();
   });
 

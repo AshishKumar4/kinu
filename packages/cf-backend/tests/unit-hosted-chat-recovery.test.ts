@@ -42,8 +42,8 @@ async function addedAgent(workspace: StartedHarness): Promise<readonly string[]>
 /** The added agent's pane, and its id, which names its chat to the owner's reads. */
 async function agentAdded(workspace: StartedHarness): Promise<{ readonly pane: readonly string[]; readonly actorId: string }> {
   await workspace.agent.setSoul('# Purpose\n\nKeep the parser notes.');
-  const { subordinate } = await workspace.agent.createSubordinateAgent();
-  const actorId = subordinate.actorId ?? '';
+  const { subagent } = await workspace.agent.createSubagentAgent();
+  const actorId = subagent.actorId ?? '';
 
   return { pane: [actorConnectionTag(actorId)], actorId };
 }
@@ -148,10 +148,10 @@ test("a delegated task whose turn cannot be prepared is answered to its hirer as
 
   // The hirer's later turns open on its first report, so the second is read from the whole request.
   const told = () => gateway.runs.map((run) => JSON.stringify(requestOf(run).messages))
-    .filter((text) => text.includes('[subordinate_report]') && text.includes('failed to run its assigned turn'));
+    .filter((text) => text.includes('[subagent_report]') && text.includes('failed to run its assigned turn'));
 
   await driveUntil(workspace, 'the hirer was never told the second task could not run', () => told().length > 0);
   // The report names what refused the turn: the pinned model its provider does not list.
   expect(told().join(' ')).toContain('kinu-probe-does-not-exist');
-  expect(openings().filter((text) => text.includes(SECOND) && !text.includes('[subordinate_report]'))).toEqual([]);
+  expect(openings().filter((text) => text.includes(SECOND) && !text.includes('[subagent_report]'))).toEqual([]);
 });

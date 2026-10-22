@@ -8,7 +8,7 @@ import { nanoid } from '../utils/nanoid';
 import { hasPlanPermission, providersInWorkMode, toolsInWorkMode, workModeRefusal } from '../execution/work-mode';
 import type { WorkMode } from '../types/turn';
 import { branchableToolCall, bindProgramCall } from './outcome';
-import { TOOL_REACH, CODEMODE_CODE_DESCRIPTION, type ToolSurfaceNarrowing } from './registry';
+import { TOOL_REACH, CODEMODE_CODE_DESCRIPTION, describeProgramSource, programDeclarations, type ToolSurfaceNarrowing } from './registry';
 import { MACHINE_FILES } from '../operations/executors';
 import { slateReaches } from '../slates/surface';
 import { KinuError, settle, settleSync } from '../obs';
@@ -17,9 +17,11 @@ import { parsesAsExpression } from '../craft/source';
 import type { CraftedToolSource } from './crafted-executor';
 import { toolDescription } from '../utils/tool-description';
 import { allowedInPlan, defineOperation, serve, statedInput, type Served } from '../operations/operation';
-import { objectInputDeclaration, operationInputSchema } from './operation-surfaces';
+import { nestedMembers, objectInputDeclaration, operationInputSchema, type NestedMembers } from './operation-surfaces';
 import { mcpDiscoveryProvider } from './mcp-discovery';
 import { isMcpToolKey } from './mcp-naming';
+import type { Impact } from '@agent-core/core/facets';
+import type { MemberImpacts } from '../execution/call-effects';
 
 export {
   CRAFTED_TOOL_NAMESPACE, type CodemodeProvider, type CodemodeResult,
@@ -46,9 +48,40 @@ export function shownConsoleValue(logged: { readonly value: unknown }): string {
   }));
 }
 
-/** `workspace.createTool` takes a function as itself and sends its source: every function argument is sent so. */
-export function createToolArguments(args: readonly unknown[]): unknown[] {
-  return args.map((arg) => (typeof arg === 'function' ? String(arg) : arg));
+/** A member a program calls in-process: what it passes, answered as JSON, as an executor's provider serves it. */
+export type ProgramMember = (...args: JsonValue[]) => Promise<JsonValue | undefined>;
+
+/** A namespace as a program holds it: its members, its member groups, and `then`, which is never a member. */
+export interface ProgramNamespace {
+  readonly [name: string]: ProgramMember | Readonly<Record<string, ProgramMember>> | undefined;
+}
+
+/**
+ * A namespace as a program holds it in-process, as the cloud's sandbox holds one (its vendor's proxy, then
+ * `reachableAsWritten`): each member it serves is its own property, so `'slates' in workspace` says whether slates are
+ * served; a member group (`fs.read`) is an object of its members; `workspace.createTool` takes a function as its source;
+ * `then` is undefined, so it is never a thenable. Any other name is a member it does not serve, refused by name when
+ * called, in the sandbox's words.
+ */
+export function programNamespace(name: string, members: Readonly<Record<string, ProgramMember>>): ProgramNamespace {
+  const create = members['createTool'];
+  const served: ProgramNamespace = nestedMembers(members);
+
+  // A function the program passes reaches the member as its source: what the cloud's sandbox sends it.
+  const sourced: NestedMembers<ProgramMember> = name === 'workspace' && create !== undefined
+    ? { createTool: async (...args) => create(...args.map((arg) => (typeof arg === 'function' ? String(arg) : arg))) }
+    : {};
+
+  return new Proxy({ ...served, ...sourced }, {
+    get: (target, member) => {
+      // Never a member: an await reads it, and a namespace is no promise.
+      if (typeof member !== 'string' || member === 'then') return undefined;
+
+      if (Object.hasOwn(target, member)) return target[member];
+
+      return async () => settle(Effect.fail(new KinuError('missing', `Tool "${member}" not found`)));
+    },
+  });
 }
 
 /** `shownConsoleValue` as sandbox source, applied to every console level the sandbox captures. */
@@ -57,7 +90,7 @@ export const SANDBOX_CONSOLE_PRELUDE = 'const __kinuShown = (value) => { if (typ
   + 'catch (error) { return `[unserializable: ${error instanceof Error ? error.message : String(error)}]`; } }; '
   + 'for (const level of ["log", "warn", "error"]) { const write = console[level]; console[level] = (...args) => write(...args.map(__kinuShown)); }';
 
-/** `createToolArguments` as sandbox source, over the program's `workspace` namespace. */
+/** `programNamespace`'s createTool as sandbox source, over the program's `workspace` namespace: a function as its source. */
 export const SANDBOX_CREATE_TOOL_PRELUDE = '{ const create = workspace.createTool; workspace.createTool = '
   + '(...args) => create(...args.map((arg) => (typeof arg === "function" ? String(arg) : arg))); }';
 
@@ -259,7 +292,7 @@ export function toolsNamespace(tools: ToolSet, signal: AbortSignal | undefined):
  * What a program reaches, the same on every backend: `tools.*` (the turn's external tools in this mode, then its native
  * tools over them), then each namespace, every one held to the role's reach and the mode. A backend only runs it.
  */
-export function programProviders(input: {
+function programProviders(input: {
   readonly surface: { readonly native: ToolSet; readonly external: () => ToolSet };
   readonly namespaces: readonly CodemodeProvider[];
   readonly reach: ToolSurfaceNarrowing;
@@ -273,6 +306,41 @@ export function programProviders(input: {
   const tools = toolsNamespace({ ...external, ...reached(input.surface.native) }, input.signal);
 
   return [...reach.narrowProviders([tools, mcpDiscoveryProvider(external)]), ...providersInWorkMode(mode, reach.narrowProviders(input.namespaces))];
+}
+
+/**
+ * One program as its call reaches it, the same on every backend: what it reaches (`programProviders`), `tools.*` holding
+ * each crafted tool's failure census under its name (the body the program defines replaces it), and the `describe` the
+ * program reads, declaring every namespace it reaches, `tools.*` among them. A backend binds and runs it.
+ */
+export function programSurface(input: Parameters<typeof programProviders>[0] & { readonly crafted: readonly CraftedDeclaration[] }) {
+  // A crafted tool's census: what its body threw, thrown again as the host's failure under the tool's own name.
+  const failures: CodemodeProvider['tools'] = Object.fromEntries(input.crafted.map((entry) => [entry.name, {
+    description: entry.description,
+    execute: async (...args: unknown[]) => {
+      const failure = v.parse(v.object({ message: v.string(), name: v.string(), code: v.nullable(v.string()) }), args[0]);
+
+      return settle(Effect.die(Object.assign(new Error(failure.message), { name: failure.name, code: failure.code })));
+    },
+  }]));
+
+  const providers = programProviders(input).map((provider) => (provider.name === CRAFTED_TOOL_NAMESPACE
+    ? { ...provider, tools: { ...provider.tools, ...failures } }
+    : provider));
+
+  return { providers, describe: describeProgramSource(programDeclarations(providers)) };
+}
+
+/**
+ * Each member's declared impact, by the operation it serves in `providers`, for its binding (`codemodeFunction`). Not
+ * `tools.*`: a tool's operation there says only whether Plan reaches it (`toolOperation`), not what it does; a native
+ * tool says that per call (`NATIVE_ACTION_EFFECTS`).
+ */
+export function servedImpacts(providers: readonly CodemodeProvider[]): MemberImpacts {
+  const served = providers.filter((provider) => provider.name !== CRAFTED_TOOL_NAMESPACE);
+  const declared = new Map(served.flatMap((provider) => (provider.operations ?? []).map((each) => [`${provider.name}/${each.op.name}`, each.op.impact] as const)));
+
+  return (namespace, member) => declared.get(`${namespace}/${member}`) ?? null;
 }
 
 /** `tools.*` members, as `toolsNamespace` builds them. */
@@ -291,11 +359,12 @@ function accountedTool(namespace: string, member: string, owner: string | undefi
   return member.startsWith(`${MACHINE_FILES}.`) ? 'file' : `${namespace}.${member}`;
 }
 
-export function codemodeFunction<Result>(namespace: string, member: string, invoke: (...args: unknown[]) => Promise<Result>) {
+export function codemodeFunction<Result>(namespace: string, member: string, invoke: (...args: unknown[]) => Promise<Result>, impact: Impact | null = null) {
   const owner = Object.entries(TOOL_REACH).find(([name, reach]) => name === namespace && reach.codemode === namespace);
   const tool = accountedTool(namespace, member, owner?.[0]);
 
-  const call = bindProgramCall({ tool, op: owner === undefined ? null : member }, async (...args: unknown[]) => {
+  // `impact`: what the operation it serves declares, so a program's record says what the call does (`call-effects.ts`).
+  const call = bindProgramCall({ tool, op: owner === undefined ? null : member, address: { namespace, member }, impact }, async (...args: unknown[]) => {
     const value = await invoke(...args);
 
     return value === undefined ? undefined : decodeJsonValue({ value });
@@ -325,23 +394,6 @@ export function renderCraftedDefinitions(crafted: readonly CraftedToolSource[]):
   });
 
   return ['Object.assign(tools, {', ...definitions, '});'].join('\n');
-}
-
-export function craftedFailureFunctions(crafted: readonly CraftedDeclaration[]): CodemodeProvider['tools'] {
-  const functions: CodemodeProvider['tools'] = {};
-
-  for (const entry of crafted) {
-    functions[entry.name] = {
-      description: entry.description,
-      execute: async (...args) => {
-        const failure = v.parse(v.object({ message: v.string(), name: v.string(), code: v.nullable(v.string()) }), args[0]);
-
-        return settle(Effect.die(Object.assign(new Error(failure.message), { name: failure.name, code: failure.code })));
-      },
-    };
-  }
-
-  return functions;
 }
 
 /**

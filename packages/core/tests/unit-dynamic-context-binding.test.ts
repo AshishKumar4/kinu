@@ -49,7 +49,7 @@ interface Overrides {
   readonly tools?: ToolSet;
   readonly memoryTail?: string;
   readonly missingCapabilities?: readonly MissingCapability[];
-  readonly subordinateDelegates?: () => readonly DynamicDelegate[];
+  readonly subagentDelegates?: () => readonly DynamicDelegate[];
   readonly approvals?: () => ActiveRoster<DynamicApproval>;
 }
 
@@ -61,7 +61,7 @@ function collect(o: Fixture, over: Overrides = {}, stores: AgentStores = o.store
     runtime: { backend: 'cf', model: { id: 'claude-sonnet-4-7' }, date: '2026-01-01' },
     memoryTail: over.memoryTail,
     missingCapabilities: over.missingCapabilities ?? [],
-    subordinateDelegates: over.subordinateDelegates,
+    subagentDelegates: over.subagentDelegates,
     approvals: over.approvals,
   });
 }
@@ -236,17 +236,17 @@ describe('the backend-only planes ride the typed source callbacks', () => {
     expect(ctx.delegates).toEqual({ items: [], total: 0 });
   });
 
-  test('subordinates list ahead of the search roster both backends contribute', () => {
+  test('subagents list ahead of the search roster both backends contribute', () => {
     const o = setup();
 
     const ctx = collect(o, {
-      subordinateDelegates: () => [{
-        kind: 'subordinate', name: 'scout', phase: 'working', task: 'map it',
+      subagentDelegates: () => [{
+        kind: 'subagent', name: 'scout', phase: 'working', task: 'map it',
       }],
     });
 
     expect(ctx.delegates?.items[0]).toEqual({
-      kind: 'subordinate', name: 'scout', phase: 'working', task: 'map it',
+      kind: 'subagent', name: 'scout', phase: 'working', task: 'map it',
     });
   });
 

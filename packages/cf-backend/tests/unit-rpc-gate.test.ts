@@ -131,7 +131,7 @@ describe('rpc gate on scoped connections', () => {
 
   test('the old websocket-read-allowlist methods are interactive-only now — a read+exec scoped token cannot reach them (no read-only widening)', () => {
     for (const method of [
-      'checkpointStatus', 'getEvolutionChangelog', 'listSubordinates',
+      'checkpointStatus', 'getEvolutionChangelog', 'listSubagents',
       'latestAlternateTakes', 'listFileCheckpoints', 'listMounts', 'planFileRestore',
     ] as const) {
       expect(AGENT_RPC_ACCESS[method]).toBe('interactive');
@@ -146,8 +146,8 @@ describe('rpc gate on scoped connections', () => {
       'resolveDeviceConsent', 'setShellApprovalMode', 'setEvolutionConfig',
       'forkAgent', 'revertChangelogEntry', 'restoreFileCheckpoint',
       'pickAlternateTake', 'branchTurn', 'setModel', 'setDisplayName',
-      'markChangelogSeen', 'createTimerTrigger', 'createSubordinateAgent',
-      'renameSubordinateAgent', 'dismissSubordinate',
+      'markChangelogSeen', 'createTimerTrigger', 'createSubagentAgent',
+      'renameSubagentAgent', 'dismissSubagent',
       'savePlanReviewAnnotations', 'decidePlanReview',
     ]) {
       const rejection = present(rejectOutOfScopeRpc(READ_EXEC, rpcFrame(method, 'rpc-9')), `the out-of-scope rejection of ${method}`);
@@ -216,10 +216,10 @@ describe('a connect ticket names its workspace', () => {
       '/agents/orchestrator-agent/workspace/actor/researcher',
     )).toBe('workspace');
     expect(extractTicketOrchestratorAgentName(
-      '/agents/orchestrator-agent/workspace/sub/subordinate-agent/researcher',
+      '/agents/orchestrator-agent/workspace/sub/subagent/researcher',
     )).toBeNull();
     expect(extractTicketOrchestratorAgentName(
-      '/agents/orchestrator-agent/workspace/sub/subordinate-agent/researcher/sub/subordinate-agent/nested',
+      '/agents/orchestrator-agent/workspace/sub/subagent/researcher/sub/subagent/nested',
     )).toBeNull();
     expect(extractTicketOrchestratorAgentName('/agents/user-d-o/victim')).toBeNull();
   });

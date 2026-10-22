@@ -26,18 +26,18 @@ function finished([runId, eventIndex, timestamp, reason]: readonly [string, numb
 
 const MISSION = 'Reply with exactly the word bramblelight and nothing else.';
 
-const ASK = 'Hire one helper to say the word.';
+const ASK = 'Hire one subagent to say the word.';
 
-// The shape a task hire answers in since cafab2bfc: at once, its helper still at work.
+// The shape a task hire answers in since cafab2bfc: at once, its subagent still at work.
 const taskHire = call('task', 4, { op: 'hire', lifetime: 'task', role: 'task', message: MISSION }, {
   status: 'working', agent: 'ask-task-ymhu3n', lifetime: 'task', role: 'task', answer: 'Working.',
 });
 
 const durableHire = call('roster', 4, { op: 'hire' }, { name: 'task-9j4odl' });
 
-const roster = call('roster', 10, { op: 'list' }, { subordinates: [{ name: 'task-9j4odl' }] });
+const roster = call('roster', 10, { op: 'list' }, { tree: [{ name: 'main', status: 'running' }, { name: 'task-9j4odl', status: 'idle' }] });
 
-test('a task hire is read by the helper it named and the message it gave', () => {
+test('a task hire is read by the subagent it named and the message it gave', () => {
   expect(taskHires([durableHire, taskHire]).map((hire) => [hire.agent, hire.message])).toEqual([['ask-task-ymhu3n', MISSION]]);
 });
 
@@ -54,7 +54,7 @@ test('refused, errored and malformed hires are not task hires', () => {
 
 // rc21 (001f6d749), 2026-10-19: the chat showed the delivery as a `system` row and this read waited for a `user` one, so
 // the delegation case waited out its budget on an answer the hirer had already given.
-test('an answer is delivered by the first event after the ask that names its helper, as the chat shows it, and the reply that follows it', () => {
+test('an answer is delivered by the first event after the ask that names its subagent, as the chat shows it, and the reply that follows it', () => {
   const report = '1 event arrived while you were idle.\n- report from ask-task-ymhu3n: bramblelight';
 
   expect(delivered([
@@ -65,7 +65,7 @@ test('an answer is delivered by the first event after the ask that names its hel
   ], ASK, 'ask-task-ymhu3n')).toEqual({ text: report, reply: 'HIRED bramblelight' });
 });
 
-test('no message names the helper after the ask: nothing was delivered', () => {
+test('no message names the subagent after the ask: nothing was delivered', () => {
   expect(delivered([
     { role: 'user', text: 'an earlier mention of ask-task-ymhu3n' },
     { role: 'user', text: ASK },
@@ -77,7 +77,7 @@ test('no message names the helper after the ask: nothing was delivered', () => {
   expect(delivered([{ role: 'user', text: 'ask-task-ymhu3n answered' }], ASK, 'ask-task-ymhu3n')).toBeNull();
 });
 
-test("a ledger holds a delivery when a turn of its own opened on a message naming the helper", () => {
+test("a ledger holds a delivery when a turn of its own opened on a message naming the subagent", () => {
   const opened = (text: string): RunEvent => ({
     type: 'run_start', runId: 'r2', eventIndex: 0, timestamp: '2026-10-01T03:12:34.536Z', agentId: 'relay',
     turn: { turnId: 'programmatic:evt-1', messageId: 'm', kind: 'programmatic', text },
@@ -98,12 +98,12 @@ test("an actor's final answer is its last finished turn's text, not a tool step'
   expect(finalAnswer([], output)).toBe('');
 });
 
-test('the roster must contain the exact subordinate name, not a peer or substring', () => {
+test('the roster must contain the exact subagent name, not a peer or substring', () => {
   expect(observeDurableHire([durableHire, roster])).toEqual({ durableName: 'task-9j4odl', shown: true });
 
   const results: JsonValue[] = [
-    { subordinates: [], peers: [{ name: 'task-9j4odl' }] },
-    { subordinates: [{ name: 'task-9j4odl-extra' }] },
+    { tree: [], peers: [{ name: 'task-9j4odl' }] },
+    { tree: [{ name: 'task-9j4odl-extra', status: 'idle' }] },
     { error: 'task-9j4odl' },
   ];
 
@@ -112,17 +112,20 @@ test('the roster must contain the exact subordinate name, not a peer or substrin
   }
 });
 
-test('retirement needs that subordinate dismissed and a valid later roster in the same run', () => {
+test('retirement needs that subagent dismissed and a valid later roster in the same run', () => {
   const dismiss = call('retire', 4, { op: 'dismiss', agent: 'task-9j4odl' }, { ok: true });
-  const empty = call('retire', 6, { op: 'list' }, { subordinates: [] });
+  const empty = call('retire', 6, { op: 'list' }, { tree: [{ name: 'main', status: 'running' }] });
 
   expect(observeDelegationRetirement([dismiss, empty], 'task-9j4odl').retired).toBe(true);
 
   for (const events of [
     [call('retire', 4, { op: 'dismiss', agent: 'someone-else' }, { ok: true }), empty],
-    [dismiss, call('earlier', 99, { op: 'list' }, { subordinates: [] })],
-    [dismiss, call('retire', 2, { op: 'list' }, { subordinates: [] })],
+    [dismiss, call('earlier', 99, { op: 'list' }, { tree: [] })],
+    [dismiss, call('retire', 2, { op: 'list' }, { tree: [] })],
     [dismiss, call('retire', 6, { op: 'list' }, { error: 'unavailable' })],
-    [dismiss, call('retire', 6, { op: 'list' }, { subordinates: [{ name: 'task-9j4odl' }] })],
+    [dismiss, call('retire', 6, { op: 'list' }, { tree: [{ name: 'task-9j4odl', status: 'idle' }] })],
   ]) expect(observeDelegationRetirement(events, 'task-9j4odl').retired).toBe(false);
+
+  // Listed with retired agents asked for, the dismissed one is there, said to be dismissed.
+  expect(observeDelegationRetirement([dismiss, call('retire', 6, { op: 'list', retired: true }, { tree: [{ name: 'task-9j4odl', status: 'dismissed' }] })], 'task-9j4odl').retired).toBe(true);
 });

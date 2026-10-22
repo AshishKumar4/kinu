@@ -188,10 +188,10 @@ describe('Retry on a failed turn', () => {
     await workspace.started;
     // An added agent inherits SOUL.md's mission, which a workspace holds from its birth.
     await agent.setSoul('# Purpose\n\nDo each task asked.');
-    const { subordinate } = await agent.createSubordinateAgent();
+    const { subagent } = await agent.createSubagentAgent();
 
-    if (subordinate.actorId === null) throw new Error('the added agent has no actor');
-    const { wire, frames } = listen(agent, subordinate.actorId);
+    if (subagent.actorId === null) throw new Error('the added agent has no actor');
+    const { wire, frames } = listen(agent, subagent.actorId);
 
     const ask = async (id: string, trigger: 'submit-message' | 'regenerate-message') => {
       await agent.onMessage(wire, request(id, trigger));
@@ -200,7 +200,7 @@ describe('Retry on a failed turn', () => {
       await frames.until((sent) => done(sent, id).length > 0);
     };
 
-    const home = agentHome(agent.agentOf(subordinate.actorId).homeName);
+    const home = agentHome(agent.agentOf(subagent.actorId).homeName);
     const counted = async () => (await agent.execWorkspaceCommand(`cat ${home}/${COUNTER}`)).stdout;
 
     await ask('first', 'submit-message');
@@ -298,10 +298,10 @@ describe('Retry on a failed turn', () => {
     await workspace.started;
     // An added agent inherits SOUL.md's mission, which a workspace holds from its birth.
     await agent.setSoul('# Purpose\n\nDo each task asked.');
-    const { subordinate } = await agent.createSubordinateAgent();
+    const { subagent } = await agent.createSubagentAgent();
 
-    if (subordinate.actorId === null) throw new Error('the added agent has no actor');
-    const { wire, frames } = listen(agent, subordinate.actorId);
+    if (subagent.actorId === null) throw new Error('the added agent has no actor');
+    const { wire, frames } = listen(agent, subagent.actorId);
 
     await agent.onMessage(wire, request('first', 'submit-message'));
     await agent.terminalRetryPass();
@@ -363,10 +363,10 @@ describe('Retry on an answered turn', () => {
     const { agent } = workspace;
     await workspace.started;
     await agent.setSoul('# Purpose\n\nDo each task asked.');
-    const { subordinate } = await agent.createSubordinateAgent();
+    const { subagent } = await agent.createSubagentAgent();
 
-    if (subordinate.actorId === null) throw new Error('the added agent has no actor');
-    const { wire, frames } = listen(agent, subordinate.actorId);
+    if (subagent.actorId === null) throw new Error('the added agent has no actor');
+    const { wire, frames } = listen(agent, subagent.actorId);
 
     const ask = async (id: string, trigger: 'submit-message' | 'regenerate-message') => {
       await agent.onMessage(wire, request(id, trigger));
@@ -463,10 +463,10 @@ describe('Retry on an answered turn', () => {
     const { agent } = workspace;
     await workspace.started;
     await agent.setSoul('# Purpose\n\nDo each task asked.');
-    const { subordinate } = await agent.createSubordinateAgent();
+    const { subagent } = await agent.createSubagentAgent();
 
-    if (subordinate.actorId === null) throw new Error('the added agent has no actor');
-    const { actorId } = subordinate;
+    if (subagent.actorId === null) throw new Error('the added agent has no actor');
+    const { actorId } = subagent;
     const { wire, frames } = listen(agent, actorId);
     const copied = copyNextOpening(agent.agentOf(actorId).storageKey);
 

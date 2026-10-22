@@ -13,7 +13,7 @@ import type { ExecutionRecoveryRecord } from '../events/types';
 import type { PrepareStepContext, KinuExtension } from '../extension';
 import type { BackendHost } from '../types/backend-host';
 import type { AgentInbox } from '../types/signals';
-import { pendingEventsDelivery, type Delivery } from '../subordinates/deliveries';
+import { pendingEventsDelivery, type Delivery } from '../subagents/deliveries';
 import type { EvolutionEngine } from '../evolution/engine';
 import type { RecoveryFinding } from '../evolution/recovery';
 import { turnTags } from '../types/turn-metadata';

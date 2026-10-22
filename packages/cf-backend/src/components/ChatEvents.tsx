@@ -3,12 +3,12 @@
  * message written after it, not after everything since (production, 2026-10-08: they all collected at the bottom).
  */
 import { Fragment, type ReactNode } from "react";
-import { Link } from "react-router-dom";
 import type { UIMessage } from "ai";
 import { ArrowUpRightIcon, CheckCircleIcon, ClockIcon, UserPlusIcon, WarningCircleIcon } from "@phosphor-icons/react";
-import type { SubordinateActivityEvent } from "@kinu.run/core";
+import type { SubagentActivityEvent } from "@kinu.run/core";
 import { EventRow, foldRepeats } from "@/components/ProgrammaticTurnCard";
 import { eventTurnKey, messageTime } from "@/components/MessageView";
+import { IconLink } from "@/components/ui/IconControl";
 
 /** One event to place: when it happened, what makes a repeat of it, and how it draws `count` times in a row. */
 export interface PlacedEvent {
@@ -85,7 +85,7 @@ const OUTCOME_MARK = {
 } as const;
 
 /** An agent given work, or reporting on it, as the event it is: the agent's chat a link beside it. */
-export function subordinateEventRow(event: SubordinateActivityEvent, workspace: string): PlacedEvent {
+export function subagentEventRow(event: SubagentActivityEvent, workspace: string): PlacedEvent {
   const outcome = OUTCOME_MARK[eventOutcome(event.status)];
   const assigned = event.kind === "task";
   const detail = event.task === undefined || event.task === "" ? event.content : event.task;
@@ -93,25 +93,21 @@ export function subordinateEventRow(event: SubordinateActivityEvent, workspace: 
   return {
     key: event.id,
     at: event.timestamp,
-    fold: JSON.stringify([event.subordinate, event.kind, event.status, detail]),
+    fold: JSON.stringify([event.subagent, event.kind, event.status, detail]),
     draw: (count) => (
       <EventRow
         icon={assigned ? UserPlusIcon : outcome.icon}
-        tone={assigned ? "p-accent" : outcome.tone}
-        label={event.subordinate}
+        tone={assigned ? "p-accent-fg" : outcome.tone}
+        label={event.subagent}
         source={assigned ? "assigned" : outcome.verb}
         body={detail}
         count={count}
-        hooks={{ "data-subordinate-event": event.kind }}
+        hooks={{ "data-subagent-event": event.kind }}
         action={(
-          <Link
-            to={`/workspace/${workspace}/agents/${event.subordinate}`}
-            title={`Open ${event.subordinate}'s chat`}
-            aria-label={`Open ${event.subordinate}'s chat`}
-            className="mt-1 mr-1 flex size-6 shrink-0 items-center justify-center rounded-md p-text-4 transition-colors hover:bg-[var(--c-elevated)] hover:p-text-2"
-          >
+          <IconLink place="pill" to={`/workspace/${workspace}/agents/${event.subagent}`} title={`Open ${event.subagent}'s chat`}
+            aria-label={`Open ${event.subagent}'s chat`} className="mt-1 mr-1">
             <ArrowUpRightIcon size={11} />
-          </Link>
+          </IconLink>
         )}
       />
     ),

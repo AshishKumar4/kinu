@@ -18,6 +18,11 @@ import {
   Notice, PageWalker, Panel, SectionHeader, Stat, useControlRead, when,
 } from '../components/control/panels';
 import { WorkspaceDrilldown } from '../components/control/WorkspaceDrilldown';
+import { Button } from "@/components/ui/Button";
+import { Select } from "@/components/ui/Select";
+import { Checkbox } from "@/components/ui/Check";
+import { Surface } from "@/components/ui/Surface";
+import { Tabs } from "@/components/ui/Tabs";
 
 const TABS = {
   overview: { label: 'Overview', Icon: ShieldCheckIcon },
@@ -58,35 +63,20 @@ export default function ControlPage(): ReactNode {
     <div className="h-full overflow-y-auto">
       <div className="max-w-6xl mx-auto px-6 py-8 space-y-6">
         <header className="space-y-1">
-          <h1 className="p-display text-2xl">Control plane</h1>
-          <p className="text-xs p-text-3">
+          <h1 className="t-page-title">Control plane</h1>
+          <p className="t-meta p-text-3">
             Every account and workspace on this deployment. Each operator action runs through an
             owner RPC and is written to the audit log before its result shows.
           </p>
         </header>
 
-        <nav className="flex flex-wrap gap-1 border-b p-border pb-2">
-          {Object.entries(TABS).map(([key, { label, Icon }]) => (
-            <button
-              key={key}
-              onClick={() => go({ tab: key, user: null, workspace: null })}
-              className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs transition-colors ${
-                key === tab ? 'p-accent-bg p-accent' : 'p-text-3 hover:p-text'
-              }`}
-            >
-              <Icon size={13} /> {label}
-            </button>
-          ))}
-        </nav>
+        <Tabs label="Control" current={tab} onChoose={(key) => go({ tab: key, user: null, workspace: null })}
+          items={Object.entries(TABS).map(([key, { label, Icon }]) => ({ id: key, label, icon: Icon }))} />
 
         {workspace !== null && (
           <div className="space-y-3">
-            <button
-              onClick={() => go({ workspace: null })}
-              className="text-xs p-text-3 hover:p-text flex items-center gap-1"
-            >
-              <ArrowLeftIcon size={12} /> Back
-            </button>
+            <Button variant="ghost" size="sm" onClick={() => go({ workspace: null })} icon={<ArrowLeftIcon size={14} />}> Back
+            </Button>
             {user === null ? (
               // Workspace names are unique only per account, so the owner is required.
               <Notice tone="warn">
@@ -182,7 +172,7 @@ function UsersView({ onOpen }: { onOpen: (userId: string) => void }): ReactNode 
                 key: u.userId,
                 onClick: () => onOpen(u.userId),
                 cells: [
-                  <span className="font-medium">{u.email}</span>,
+                  <strong>{u.email}</strong>,
                   <span className="tabular-nums">{u.workspaces}</span>,
                   when(u.firstSeenAt), when(u.lastSeenAt),
                 ],
@@ -218,9 +208,8 @@ function UserDetailView(
 
   return (
     <div className="space-y-3">
-      <button onClick={onBack} className="text-xs p-text-3 hover:p-text flex items-center gap-1">
-        <ArrowLeftIcon size={12} /> All accounts
-      </button>
+      <Button variant="ghost" size="sm" onClick={onBack} icon={<ArrowLeftIcon size={14} />}> All accounts
+      </Button>
       <Panel load={load}>
         {(detail) => (
           <div className="space-y-3">
@@ -242,8 +231,8 @@ function UserDetailView(
                 cells: [
                   workspaceDisplayTitle(w), when(w.createdAt), when(w.lastSeenAt),
                   w.removedAt === null
-                    ? <span className="p-success p-t-status">live</span>
-                    : <span className="p-text-3 p-t-status">removed {when(w.removedAt)}</span>,
+                    ? <span className="t-status p-success">live</span>
+                    : <span className="t-status p-text-3">removed {when(w.removedAt)}</span>,
                 ],
               }))}
               empty="This account owns no workspaces."
@@ -276,13 +265,7 @@ function WorkspacesView(
         title="Workspaces" hint="Across every account, most recently seen first."
         onRefresh={reload}
         actions={
-          <label className="flex items-center gap-1.5 text-xs p-text-3">
-            <input
-              type="checkbox" checked={includeRemoved}
-              onChange={(e) => { setIncludeRemoved(e.target.checked); first(); }}
-            />
-            Show removed
-          </label>
+          <Checkbox checked={includeRemoved} onChange={(on) => { setIncludeRemoved(on); first(); }} label="Show removed" />
         }
       />
       <Panel load={load}>
@@ -294,11 +277,11 @@ function WorkspacesView(
                 key: `${w.userId}/${w.name}`,
                 onClick: () => onOpen(w.name, w.userId),
                 cells: [
-                  <span className="font-mono text-xs">{w.name}</span>,
+                  <span className="t-meta t-mono">{w.name}</span>,
                   workspaceDisplayTitle(w), when(w.lastSeenAt),
                   w.removedAt === null
-                    ? <span className="p-success p-t-status">live</span>
-                    : <span className="p-text-3 p-t-status">removed</span>,
+                    ? <span className="t-status p-success">live</span>
+                    : <span className="t-status p-text-3">removed</span>,
                 ],
               }))}
               empty="No workspaces in the index yet."
@@ -332,13 +315,13 @@ function IncidentsView(): ReactNode {
             rows={answer.incidents.map((i) => ({
               key: i.probe,
               cells: [
-                <span className="font-mono text-xs">{i.probe}</span>,
+                <span className="t-meta t-mono">{i.probe}</span>,
                 when(i.openedAt),
                 <span className="tabular-nums">{i.failures}</span>,
                 i.alertedAt === null
-                  ? <span className="p-accent p-t-status">alert owed</span>
+                  ? <span className="t-status p-accent-fg">alert owed</span>
                   : when(i.alertedAt),
-                <span className="p-text-2 text-xs">{i.detail}</span>,
+                <span className="t-meta p-text-2">{i.detail}</span>,
               ],
             }))}
             empty="Every probe is green."
@@ -351,11 +334,11 @@ function IncidentsView(): ReactNode {
 
 /** A Gallery report carries no screenshot: its route is the listing's page and its note the reason. */
 function feedbackAttachment(f: ControlFeedbackRow): ReactNode {
-  if (f.kind === 'gallery_report') return <span className="p-text-3 p-t-status">Gallery report</span>;
+  if (f.kind === 'gallery_report') return <span className="p-text-3 t-status">Gallery report</span>;
 
   return f.bytes === null
-    ? <span className="p-text-3 p-t-status">note only</span>
-    : <span className="p-meta tabular-nums">{formatBytes(f.bytes)}</span>;
+    ? <span className="p-text-3 t-status">note only</span>
+    : <span className="t-meta tabular-nums">{formatBytes(f.bytes)}</span>;
 }
 
 function FeedbackView(): ReactNode {
@@ -378,10 +361,10 @@ function FeedbackView(): ReactNode {
                 key: f.id,
                 cells: [
                   when(f.createdAt), f.email,
-                  <span className="font-mono text-xs">{f.route}</span>,
+                  <span className="t-meta t-mono">{f.route}</span>,
                   f.workspace ?? <span className="p-text-3">—</span>,
                   feedbackAttachment(f),
-                  <span className="p-text-2 text-xs whitespace-pre-wrap">{f.note}</span>,
+                  <span className="t-meta p-text-2 whitespace-pre-wrap">{f.note}</span>,
                 ],
               }))}
               empty="No feedback has been filed yet."
@@ -410,15 +393,8 @@ function MetricsView(): ReactNode {
         hint="Analytics Engine weights samples by interval. Raw counts under-report by the sample rate."
         onRefresh={reload}
         actions={
-          <select
-            value={hours}
-            onChange={(e) => setHours(Number(e.target.value))}
-            className="text-xs p-card px-2 py-1 rounded-sm"
-          >
-            {METRICS_WINDOWS.map((w) => (
-              <option key={w} value={w}>{w < 24 ? `${String(w)}h` : `${String(w / 24)}d`}</option>
-            ))}
-          </select>
+          <Select label="Window" size="sm" value={String(hours)} onChange={(next) => setHours(Number(next))}
+            options={METRICS_WINDOWS.map((w) => ({ value: String(w), label: w < 24 ? `${String(w)}h` : `${String(w / 24)}d` }))} />
         }
       />
       <Panel load={load}>
@@ -430,10 +406,10 @@ function MetricsView(): ReactNode {
         ) : (
           <div className="grid gap-3 md:grid-cols-2">
             {Object.entries(metrics.panels).map(([name, panel]) => (
-              <section key={name} className="p-card p-4 space-y-2">
-                <div className="p-eyebrow">{name}</div>
+              <Surface look="panel" as="section" key={name} className="p-4 space-y-2">
+                <div className="t-label">{name}</div>
                 <PanelBody panel={panel} />
-              </section>
+              </Surface>
             ))}
           </div>
         )}
@@ -445,20 +421,20 @@ function MetricsView(): ReactNode {
 function PanelBody({ panel }: { panel: AnalyticsResult }): ReactNode {
   if (panel.status === 'ok') return <MetricTable rows={panel.rows} />;
 
-  if (panel.status === 'unconfigured') return <div className="text-xs p-text-3">{panel.missing.join(', ')} not set</div>;
+  if (panel.status === 'unconfigured') return <div className="t-meta p-text-3">{panel.missing.join(', ')} not set</div>;
 
-  return <div className="text-xs p-danger">{panel.reason}</div>;
+  return <div className="t-meta p-danger">{panel.reason}</div>;
 }
 
 function MetricTable({ rows }: { rows: Extract<AnalyticsResult, { status: 'ok' }>['rows'] }): ReactNode {
   const columns = useMemo(() => Object.keys(rows[0] ?? {}), [rows]);
 
-  if (rows.length === 0) return <div className="text-xs p-text-3">No events in this window.</div>;
+  if (rows.length === 0) return <div className="t-meta p-text-3">No events in this window.</div>;
 
   return (
-    <table className="w-full text-xs">
+    <table className="t-meta w-full">
       <thead className="p-text-3 border-b p-border">
-        <tr>{columns.map((c) => <th key={c} className="text-left py-1 font-medium">{c}</th>)}</tr>
+        <tr>{columns.map((c) => <th key={c} className="t-status text-left py-1">{c}</th>)}</tr>
       </thead>
       <tbody>
         {rows.map((row, index) => (
@@ -477,10 +453,10 @@ function MetricTable({ rows }: { rows: Extract<AnalyticsResult, { status: 'ok' }
 
 /** `pending` is a never-recorded settlement and reads as a failure. */
 const AUDIT_TONE: Record<ControlAuditRow['outcome'], string> = {
-  ok: 'p-success p-t-status',
-  denied: 'p-accent p-t-status',
-  failed: 'p-danger p-t-status',
-  pending: 'p-danger p-t-status',
+  ok: 't-status p-success',
+  denied: 't-status p-accent-fg',
+  failed: 't-status p-danger',
+  pending: 't-status p-danger',
 };
 
 function AuditView(): ReactNode {
@@ -503,12 +479,12 @@ function AuditView(): ReactNode {
                 key: a.id,
                 cells: [
                   when(a.at), a.actorEmail,
-                  <span className="font-mono text-xs">{a.operation}</span>,
-                  <span className="font-mono text-xs">{a.target}</span>,
+                  <span className="t-meta t-mono">{a.operation}</span>,
+                  <span className="t-meta t-mono">{a.target}</span>,
                   <span className={AUDIT_TONE[a.outcome]}>
                     {a.outcome}
                   </span>,
-                  <span className="p-text-2 text-xs">{a.detail}</span>,
+                  <span className="t-meta p-text-2">{a.detail}</span>,
                 ],
               }))}
               empty="No operator has acted on this deployment."
@@ -535,23 +511,22 @@ function Table(
   { head, rows, empty }: { head: string[]; rows: TableRow[]; empty: string },
 ): ReactNode {
   if (rows.length === 0) {
-    return <section className="p-card p-8 text-center text-xs p-text-3">{empty}</section>;
+    return <Surface look="panel" as="section" className="t-meta p-8 text-center p-text-3">{empty}</Surface>;
   }
 
   return (
-    <section className="p-card overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead className="text-xs p-text-3 border-b p-border">
-          <tr>{head.map((h) => <th key={h} className="text-left px-4 py-2 font-medium">{h}</th>)}</tr>
+    <Surface look="panel" as="section" className="overflow-x-auto">
+      <table className="t-body w-full">
+        <thead className="t-meta p-text-3 border-b p-border">
+          <tr>{head.map((h) => <th key={h} className="t-status text-left px-4 py-2">{h}</th>)}</tr>
         </thead>
         <tbody>
           {rows.map((row) => (
             <tr
               key={row.key}
               onClick={row.onClick}
-              className={`border-b p-border last:border-b-0 ${
-                row.onClick === undefined ? '' : 'cursor-pointer p-card-hover'
-              }`}
+              data-opens={row.onClick === undefined ? undefined : ''}
+              className="border-b p-border last:border-b-0"
             >
               {row.cells.map((cell, index) => (
                 <td key={index} className="px-4 py-3 align-top">{cell}</td>
@@ -560,6 +535,6 @@ function Table(
           ))}
         </tbody>
       </table>
-    </section>
+    </Surface>
   );
 }

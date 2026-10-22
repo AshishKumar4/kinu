@@ -3,6 +3,8 @@
 import { Component, type ReactNode, type ErrorInfo } from "react";
 import { pageDeployedBuildSha, reportRenderFailure, routeTemplateOf } from "@kinu.run/core";
 import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
+import { Button } from "@/components/ui/Button";
+import { Surface } from "@/components/ui/Surface";
 
 interface Props {
   label?: string;
@@ -60,21 +62,18 @@ export class ErrorBoundary extends Component<Props, State> {
     return (
       <div className="h-full overflow-y-auto flex items-start justify-center p-6">
         <div className="max-w-2xl w-full text-left space-y-3">
-          <div data-failure className="text-sm font-medium p-text">
+          <div data-failure className="t-item p-text">
             This view crashed{this.props.label ? ` (${this.props.label})` : ''}. Try again, or reload the page.
           </div>
-          <div className="text-xs p-text-3 font-mono break-words p-fill rounded-sm p-3 border p-border text-left">
-            <div className="font-bold mb-2">{this.state.error.message || String(this.state.error)}</div>
+          <Surface look="tile" className="t-meta t-mono p-text-3 break-words p-3 border p-border text-left">
+            <strong className="block mb-2">{this.state.error.message || String(this.state.error)}</strong>
             {this.state.error.stack && (
-              <pre className="p-annotation whitespace-pre-wrap opacity-70">{this.state.error.stack}</pre>
+              <pre className="t-meta t-mono whitespace-pre-wrap opacity-70">{this.state.error.stack}</pre>
             )}
-          </div>
-          <button
-            onClick={this.reset}
-            className="text-xs px-3 py-1.5 rounded-md p-fill border p-border hover:p-text"
-          >
+          </Surface>
+          <Button variant="secondary" size="sm" onClick={this.reset}>
             Try again
-          </button>
+          </Button>
         </div>
       </div>
     );

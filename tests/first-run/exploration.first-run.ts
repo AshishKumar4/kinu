@@ -11,7 +11,7 @@
  * THE SMALLEST SEARCH THE PRODUCT RUNS. `ideate` is a flat wave of five
  * answering nodes with no value signal. Every swarm deeper than one level needs
  * a measured objective or a judge of at least twenty samples per node
- * (`judgeMarginalisationRefusal`), so a tree of uneven depth is the subordinate
+ * (`judgeMarginalisationRefusal`), so a tree of uneven depth is the subagent
  * tree's row (`delegation-tree`), not this one.
  *
  * THE ONLY SWARM ON THE DEPLOYMENT. The retired eval tier's swarm arm asserted

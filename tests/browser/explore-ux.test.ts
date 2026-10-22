@@ -64,7 +64,7 @@ describe('Explore', () => {
           .toEqual(['pr-board', 'issue-triage', 'worker-logs', 'firmware-lab', 'workers-health', 'do-sqlite-notes']);
 
         // A kind shows the feed alone, Kinu's own in it.
-        await page.click('[data-explore-kind-filter="workspace"]');
+        await page.click('[data-explore-filters] [data-segment="workspace"]');
         await page.waitForFunction(() => document.querySelector('[data-explore-hero]') === null, SOON);
         expect(await feedBecomes(page, ['personal-assistant', 'worker-on-call', 'release-manager', 'research-desk', 'issue-triage', 'firmware-lab']))
           .toEqual(['personal-assistant', 'worker-on-call', 'release-manager', 'research-desk', 'issue-triage', 'firmware-lab']);
@@ -89,7 +89,8 @@ describe('Explore', () => {
 
       const asked = await installed(assistant);
 
-      expect(asked).toEqual({ id: 'personal-assistant', body: { agent: 'Kinu', brief: '08:00', home: true, timeZone: expect.any(String) } });
+      // The workspace takes its assistant's name, so the roster calls Home what Home's bar does.
+      expect(asked).toEqual({ id: 'personal-assistant', body: { displayName: 'Kinu', agent: 'Kinu', brief: '08:00', home: true, timeZone: expect.any(String) } });
       // Home: the fixture marks it, and draws no Home of its own.
       await assistant.waitForSelector('[data-gallery-home]', SOON);
       await assistant.close();

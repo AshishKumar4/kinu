@@ -5,7 +5,7 @@ import {
   type AuthRequest, type AuthResolution, type HandedOffTurn, type SettledRun, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type JsonValue, type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind, type AgentSignal, type SendOutcome,
   turnSourcesFromBundle, captureOperationProfile, currentOperationProfile, recordModelOperations, PROVIDER_WAIT_PART, type ModelCallReport, type ModelOperationSink, type ProviderWaitInfo,
   type AdvisorRecoverySnapshot, type AgentFigures, type AgentReport, type HostedActor, type SerializedMessage, type SessionEvent, type TurnEndEvent,
-  type SubordinateReportLedger, type SubordinateReportStatus, type TaskTurnEnding, type WorkMode, type ResolvedTurnProfile,
+  type SubagentReportLedger, type SubagentReportStatus, type TaskTurnEnding, type WorkMode, type ResolvedTurnProfile,
   type RemoteReceipt, type ReplyToCommentToolDeps, type StoredRow, type SubmitPlanToolDeps, type TurnCraftLedger,
   providerAccounts,
 } from '@kinu.run/core';
@@ -76,12 +76,12 @@ export interface AgentWorkspace {
    *  `none` where it owed none. */
   turnReport(
     /** `taskId`: the assignment this turn answers, if one opened it. */
-    turn: { readonly reports: SubordinateReportLedger; readonly ownerDriven: boolean; readonly taskId: string | null },
+    turn: { readonly reports: SubagentReportLedger; readonly ownerDriven: boolean; readonly taskId: string | null },
     ended: { readonly ending: TaskTurnEnding; readonly assistantText: string; readonly narration: readonly string[] },
     relay: { readonly sequenceId: string; readonly mode: WorkMode },
   ): Promise<string>;
   parentReport(report: {
-    readonly text: string; readonly status: SubordinateReportStatus; readonly mode: WorkMode; readonly sequenceId: string; readonly quiet?: true;
+    readonly text: string; readonly status: SubagentReportStatus; readonly mode: WorkMode; readonly sequenceId: string; readonly quiet?: true;
   }): Promise<string>;
   /** With no `title`, lands the stand-in and answers the mission to name, or null; with one, lands the agent's own. */
   autoTitle(subject: string, title: string | null): Promise<string | null>;

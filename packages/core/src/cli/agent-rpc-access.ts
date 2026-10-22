@@ -62,8 +62,8 @@ export const AGENT_RPC_ACCESS = {
   cancelTrigger: 'interactive',
   checkpointStatus: 'interactive',
   getEvolutionChangelog: 'interactive',
-  listSubordinates: 'interactive',
-  inspectSubordinate: 'interactive',
+  listSubagents: 'interactive',
+  inspectSubagent: 'interactive',
   latestAlternateTakes: 'interactive',
   listFileCheckpoints: 'interactive',
   listMounts: 'interactive',
@@ -99,8 +99,8 @@ export const AGENT_RPC_ACCESS = {
   // Spends child-agent inference and writes user preferences into memory: the owner's call.
   requestRefinement: 'interactive',
   listRefinements: 'interactive',
-  createSubordinateAgent: 'interactive',
-  renameSubordinateAgent: 'interactive',
+  createSubagentAgent: 'interactive',
+  renameSubagentAgent: 'interactive',
   renameMainChat: 'interactive',
   decidePlanReview: 'interactive',
   dismissPlanReview: 'interactive',
@@ -112,7 +112,9 @@ export const AGENT_RPC_ACCESS = {
   reviewParkedWrite: 'interactive',
   savePlanReviewAnnotations: 'interactive',
   dismissBackgroundJob: 'interactive',
-  dismissSubordinate: 'interactive',
+  dismissSubagent: 'interactive',
+  // The owner's own choice of when a schedule fires.
+  retimeDailySchedule: 'interactive',
   // A CI token that runs tasks must not take the whole database.
   exportWorkspaceArchive: 'interactive',
   experienceAction: 'interactive',

@@ -279,7 +279,7 @@ export function PartPreviewsFrame() {
             <section data-slate-preview-display="pane" className="flex min-h-0 flex-col">
               <InlineSlate id={SLATE} rpc={previewRpc} display="pane" />
             </section>
-            <section data-slate-preview-display="inline" className="min-h-0 overflow-y-auto p-row-text">
+            <section data-slate-preview-display="inline" className="min-h-0 overflow-y-auto t-body">
               <p>Here is the board.<span className="block my-2"><InlineSlate id={SLATE} rpc={previewRpc} display="inline" /></span></p>
             </section>
           </div>
@@ -323,7 +323,7 @@ export function PartStatesFrame() {
       <div className="mx-auto grid max-w-5xl gap-4 [grid-template-columns:repeat(auto-fit,minmax(280px,1fr))]">
         {STATES.map((state) => (
           <section key={state.name} data-part-state={state.answer.kind} className="flex flex-col overflow-hidden rounded-xl border p-border p-surface">
-            <h2 className="border-b p-border px-3 py-2 p-meta font-medium p-text-2">{state.name}</h2>
+            <h2 className="border-b p-border px-3 py-2 t-status p-text-2">{state.name}</h2>
             <div className="flex h-56 flex-col gap-1.5 p-3 p-text">
               <SealedContent html={shownMarkup(state.answer)} />
               <PartView answer={state.answer} slate={TITLE} controls={controls} />

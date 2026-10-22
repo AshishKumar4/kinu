@@ -1,5 +1,6 @@
 [
   "actor_program_state",
+  "actor_subordinates",
   "artifact_trials",
   "background_job_serves",
   "cli_agent_connect_tickets",
@@ -9,6 +10,7 @@
   "device_consent_asks",
   "device_consent_requests",
   "device_joins",
+  "evolution_helpers",
   "gallery_reports",
   "gepa_candidates",
   "gepa_runs",

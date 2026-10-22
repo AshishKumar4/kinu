@@ -339,7 +339,9 @@ export function createFetch(failureHeader) {
  * operation is captured here and shadowed, so a program reaches slates through these members only.
  */
 export function bindSlates(workspace) {
-  const operate = workspace === null ? undefined : workspace.slates;
+  // A member the workspace serves is its own, in both sandboxes; any other name reads as a member that refuses when called.
+  if (workspace === null || !('slates' in workspace)) return;
+  const operate = workspace.slates;
   if (typeof operate !== 'function') return;
   const members = ${JSON.stringify(SLATE_PROGRAM_MEMBERS)};
   // Never a class method here: 'then' would make a slate look like a promise to await, and the rest

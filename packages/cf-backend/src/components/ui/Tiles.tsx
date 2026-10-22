@@ -1,0 +1,90 @@
+/**
+ * One tile system for every grid of things to open (design review 2026-10-20, "tiles"): Workspaces, Explore and Drive.
+ * Tiles are 300 px or more across, with a 20 px gap: 349 at 1440 and 1920, 312 at 1280, one column on a phone. A tile
+ * is a 16:10 cover over a hairline and a short body; hovered, only its edge darkens. A thing with no picture gets a
+ * typeset cover, never an empty box.
+ */
+import type { ReactNode } from "react";
+import { Link } from "react-router-dom";
+import { WorkspaceLogo } from "@/components/ui/Marks";
+
+export const TILE_GRID = "grid gap-5 grid-cols-[var(--layout-tiles)]";
+
+/** The tile's own box: the card radius and edge, its border darkening on hover. */
+export const TILE = "group flex h-full min-w-0 flex-col overflow-hidden p-tile";
+
+/** A folder among the tiles: the tile's edge and ground, one 48 line high, its name beside its glyph. */
+export const FOLDER_TILE = "flex h-12 min-w-0 items-center gap-3 p-tile pl-3 pr-8";
+
+/** The cover's frame: 16:10, over a hairline; a picture or a typeset cover fills it. */
+const TILE_COVER = "p-tile-cover relative block w-full shrink-0 overflow-hidden border-b p-border";
+
+const TILE_BODY = "flex min-h-0 flex-1 flex-col gap-1 px-4 pb-3 pt-3";
+
+const TILE_TITLE = "t-label truncate p-text";
+
+/**
+ * A cover for a thing with no picture: its mark at the top left, and what it is for set large at the bottom left, as a
+ * title page would set it. `line` null sets the title itself. `mark` is the thing's face where it has one other than its
+ * logo (Home's assistant, by its mascot); false leaves the corner to what the tile sets there (Explore's kind badge). The
+ * ground is one step off the tile's body in every look (`--c-fill`), never darker than the page.
+ */
+export function TypesetCover({ title, line, logo = null, mark }: { title: string; line: string | null; logo?: string | null; mark?: ReactNode }) {
+  return (
+    <span data-typeset-cover className="absolute inset-0 flex flex-col justify-between p-fill p-5">
+      <span className="flex">{mark === undefined ? <WorkspaceLogo title={title} logo={logo} size={32} /> : mark}</span>
+      <span className="t-title line-clamp-3 p-text-2">{line ?? title}</span>
+    </span>
+  );
+}
+
+/**
+ * A capture of a page, set on the cover's recessed ground at a 12 px inset with the control radius: a light page and a
+ * dark one sit in the same frame, so no tile in a grid is the odd one out by its page's mode.
+ */
+export function CaptureMat({ children }: { children: ReactNode }) {
+  return (
+    <span className="absolute inset-0 p-sunken" data-capture-mat>
+      <span className="p-capture absolute inset-3 overflow-hidden border p-border">{children}</span>
+    </span>
+  );
+}
+
+/** A tile: the cover, then its body. `children` is the body's lines under the title. */
+export function TileShell({ cover, title, children }: { cover: ReactNode; title: ReactNode; children?: ReactNode }) {
+  return (
+    <>
+      <span className={TILE_COVER}>{cover}</span>
+      <span className={TILE_BODY}>
+        <span className={TILE_TITLE}>{title}</span>
+        {children}
+      </span>
+    </>
+  );
+}
+
+/** The lead among the tiles (Explore's featured blueprint): the tile wide, its cover beside its body from `md` up, lifting
+ *  toward the accent when the pointer is on it. */
+export function FeaturedTile({ to, cover, children, ...data }: { to: string; cover: ReactNode; children: ReactNode } & Readonly<Record<`data-${string}`, string>>) {
+  return (
+    <Link to={to} className="p-tile p-tile-featured group flex min-w-0 flex-col overflow-hidden md:flex-row" {...data}>
+      <span className="p-tile-featured-cover relative block shrink-0 overflow-hidden border-b p-border md:border-b-0 md:border-r">{cover}</span>
+      {children}
+    </Link>
+  );
+}
+
+/** What a tile opens as: a link where it has an address, a press where opening it is the page's own act, else nothing. */
+export function TileOpener({ href, onOpen, className, label, children }: {
+  href?: string;
+  onOpen?: () => void;
+  className: string;
+  label: string;
+  children: ReactNode;
+}) {
+  if (href !== undefined) return <Link to={href} aria-label={label} className={className}>{children}</Link>;
+
+  if (onOpen === undefined) return <div className={className}>{children}</div>;
+
+  return <button type="button" aria-label={label} onClick={onOpen} className={`w-full text-left ${className}`}>{children}</button>;
+}

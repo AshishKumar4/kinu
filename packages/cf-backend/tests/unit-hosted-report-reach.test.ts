@@ -36,8 +36,8 @@ test("the owner's chat with an added agent offers no report, natively or in eval
   const workspace = gatewayWorkspace(gateway);
 
   await workspace.agent.setSoul('# Purpose\n\nAnswer whoever asks.');
-  const { subordinate } = await workspace.agent.createSubordinateAgent();
-  const actorId = v.parse(v.string(), subordinate.actorId);
+  const { subagent } = await workspace.agent.createSubagentAgent();
+  const actorId = v.parse(v.string(), subagent.actorId);
 
   await asPane([actorConnectionTag(actorId)], () => workspace.agent.send('Owner here: how are you?', crypto.randomUUID()));
   await driveUntil(workspace, "the owner's chat never asked the model", () => askedWith(gateway.runs, 'Owner here') !== undefined);

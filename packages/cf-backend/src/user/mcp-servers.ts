@@ -12,6 +12,7 @@ import { mcpOAuthStorage } from './mcp-oauth-storage';
 import type { UserCredentials } from './credentials';
 import type { SqlRow, UserObjectHost } from './user-host';
 import { ASSISTANT_CONFIG_KEY } from './roster';
+import type { McpSessionHost } from './mcp';
 
 /** The only place these `Env` names exist; messages and the deploy doc take their wording from here. */
 const MCP_APP_ENV = {
@@ -223,6 +224,14 @@ export class UserMcpServers {
 
   private readonly _mcpToolLists = new Map<string, McpToolListing>();
 
+  /** The SDK's manager as a call's session renewal reaches it, its connect one of {@link dials}: one object, since the
+   *  calls that meet one ended session share their renewal by it. */
+  private readonly renewing: McpSessionHost = ((servers: UserMcpServers): McpSessionHost => ({
+    get mcpConnections() { return servers.host.mcp.mcpConnections; },
+    connectToServer: async (id) => servers.dialAlone(id, async () => servers.host.mcp.connectToServer(id)),
+    discoverIfConnected: async (id) => servers.dialAlone(id, async () => servers.host.mcp.discoverIfConnected(id)),
+  }))(this);
+
   /** Servers `redialUnusable` dialled this activation: each once a wake. */
   private readonly redialled = new Set<string>();
 
@@ -326,6 +335,27 @@ export class UserMcpServers {
     })))).then(() => { this.dials.delete(serverId); });
 
     this.dials.set(serverId, dialled);
+  }
+
+  /**
+   * Runs `connect`, a call that may open `serverId`'s client (a connect, an establish, a discover that recovers a stale
+   * session), as a dial of its own: one in flight is waited out first, and this one holds the place while it runs. So a
+   * warmup that reads the connection closed meanwhile (the vendor's `init` has put a fresh client in place) joins it
+   * rather than start a second `init` on the same client (staging 39a0b3fd5, 2026-10-21). Every such call outside a
+   * dial's own body goes through here; one inside it would wait on itself.
+   */
+  private async dialAlone<Result>(serverId: string, connect: () => Promise<Result>): Promise<Result> {
+    for (let held = this.dials.get(serverId); held !== undefined; held = this.dials.get(serverId)) await held;
+    const ended = Promise.withResolvers<void>();
+
+    this.dials.set(serverId, ended.promise);
+
+    try {
+      return await connect();
+    } finally {
+      this.dials.delete(serverId);
+      ended.resolve();
+    }
   }
 
   /** Replace the SDK row with a transport this plane owns; tear down any live connection first,
@@ -572,7 +602,7 @@ export class UserMcpServers {
         `INSERT INTO user_mcp_servers (id, headers, allowed_tools, preset_id) VALUES (?, ?, ?, ?)`,
         id, sealedHeaders, allowedJson, cfg.presetId ?? null,
       );
-      const result = await mgr.connectToServer(id);
+      const result = await this.dialAlone(id, async () => mgr.connectToServer(id));
 
       if (result.state === 'failed') {
         throw new KinuError('unavailable', result.error ?? 'connection failed');
@@ -583,7 +613,7 @@ export class UserMcpServers {
       } else {
         // Awaited, not detached: waitUntil is a no-op in a DO (`do.wait_until.no_op`) and in-flight
         // promises are cancelled on reset (`do.background_task.cancelled_on_reset`).
-        await mgr.discoverIfConnected(id);
+        await this.dialAlone(id, async () => mgr.discoverIfConnected(id));
         await this.readMcpToolList(id);
       }
     } catch (err) {
@@ -899,7 +929,7 @@ export class UserMcpServers {
     try {
       const { callRenewingExpiredSession } = await import('./mcp');
 
-      return await callRenewingExpiredSession(manager, serverId, () => manager.callTool({ serverId, name, arguments: callArgs }, { signal }));
+      return await callRenewingExpiredSession(this.renewing, serverId, () => manager.callTool({ serverId, name, arguments: callArgs }, { signal }));
     } catch (err) {
       await this.convergeMcpAuthState({ serverId, cause: err });
       throw err;
@@ -972,7 +1002,7 @@ export class UserMcpServers {
     if (!isMcpTransportUnauthorized(input)) return;
     const { serverId } = input;
 
-    try { await this.host.mcp.discoverIfConnected(serverId); }
+    try { await this.dialAlone(serverId, async () => this.host.mcp.discoverIfConnected(serverId)); }
     catch (err) {
       diagnostics.failure('mcp.auth_state_convergence_failed', toKinuError({
         doing: 'reprobing an MCP connection that failed to authorize',
@@ -1007,7 +1037,7 @@ export class UserMcpServers {
         return yield* new KinuError('bad_input', `${name} offers no sign-in now.`);
       }
 
-      const result = yield* Effect.promise(async () => this.host.mcp.connectToServer(id));
+      const result = yield* Effect.promise(async () => this.dialAlone(id, async () => this.host.mcp.connectToServer(id)));
 
       if (result.state !== 'authenticating' || !result.authUrl) return yield* new KinuError('bad_input', `${name} waits for no sign-in.`);
       const state = new URL(result.authUrl).searchParams.get('state');
@@ -1033,7 +1063,7 @@ export class UserMcpServers {
       if (result.authSuccess) {
         // Awaited in its own try: tokens are already saved, so a connect failure is not an auth failure.
         // A DO cannot retain an unawaited promise (`do.wait_until.no_op`).
-        try { await this.host.mcp.establishConnection(result.serverId); }
+        try { await this.dialAlone(result.serverId, async () => this.host.mcp.establishConnection(result.serverId)); }
         catch (cause) {
           diagnostics.failure('mcp.connect_failed', toKinuError({ doing: 'establishing an authorized MCP connection', cause, otherwise: 'unavailable' }));
 

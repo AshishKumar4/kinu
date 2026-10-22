@@ -4,12 +4,12 @@
  * rows. A read writes only what changed.
  */
 import { expect, test } from 'bun:test';
-import { agentSql, gatewayWorkspace, hostedSubordinateHarness } from './helpers/actor-harness';
+import { agentSql, gatewayWorkspace, hostedSubagentHarness } from './helpers/actor-harness';
 import { chatCompletion, stubAiBinding } from './helpers/platform-gateway';
 
-async function helper() {
+async function subagent() {
   const workspace = gatewayWorkspace(stubAiBinding((run) => chatCompletion(run, 'done')));
-  const child = await hostedSubordinateHarness(workspace, { name: 'scout', displayName: 'Scout', nameOrigin: 'user', mission: 'read' });
+  const child = await hostedSubagentHarness(workspace, { name: 'scout', displayName: 'Scout', nameOrigin: 'user', mission: 'read' });
   const sql = agentSql(workspace, child.actor.handle.actorId);
 
   await workspace.agent.accountSpend();
@@ -17,8 +17,8 @@ async function helper() {
   return { workspace, actorId: child.actor.handle.actorId, sql, written: () => sql<{ n: number }>`SELECT total_changes() AS n`[0]?.n ?? -1 };
 }
 
-test("reading a helper's spend ten times writes nothing into its database", async () => {
-  const { workspace, written } = await helper();
+test("reading a subagent's spend ten times writes nothing into its database", async () => {
+  const { workspace, written } = await subagent();
   const before = written();
 
   for (let read = 0; read < 10; read += 1) await workspace.agent.accountSpend();
@@ -26,8 +26,8 @@ test("reading a helper's spend ten times writes nothing into its database", asyn
   expect(written() - before).toBe(0);
 });
 
-test("a setting the workspace changed reaches the helper's database on its next read", async () => {
-  const { workspace, actorId, sql } = await helper();
+test("a setting the workspace changed reaches the subagent's database on its next read", async () => {
+  const { workspace, actorId, sql } = await subagent();
 
   // Written as the workspace writes its rows: through its own SQL, which every store over them uses.
   void workspace.agent.sql`INSERT INTO actor_config (actor_id, key, value) VALUES (${actorId}, ${'probe.setting'}, ${'on'})`;

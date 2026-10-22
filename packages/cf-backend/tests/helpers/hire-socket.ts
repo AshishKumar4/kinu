@@ -56,8 +56,8 @@ export async function hireSocket(app: Fetcher, path: string, reply: string) {
       else if (frame.success === true) pending?.resolve(frame.result);
     }
 
-    if (frame.type === READS_CHANGED_EVENT && frame.reads?.includes('listSubordinates') === true) {
-      void rpc('listSubordinates', [], HireRosterSchema).then((read) => { roster = read; settled(); }, completion.reject);
+    if (frame.type === READS_CHANGED_EVENT && frame.reads?.includes('listSubagents') === true) {
+      void rpc('listSubagents', [], HireRosterSchema).then((read) => { roster = read; settled(); }, completion.reject);
     }
 
     if (frame.type === CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE && frame.id !== undefined) {

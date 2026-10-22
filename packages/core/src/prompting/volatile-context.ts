@@ -55,9 +55,9 @@ interface DynamicTask {
   readonly parentId: string | null;
 }
 
-/** A spawned subordinate or a running search. */
+/** A spawned subagent or a running search. */
 export interface DynamicDelegate {
-  readonly kind: 'subordinate' | 'swarm node';
+  readonly kind: 'subagent' | 'swarm node';
   readonly name: string;
   readonly phase: string;
   readonly task?: string | null;
@@ -167,7 +167,7 @@ export interface DynamicContextSources {
   }>;
   readonly liveHeadRuns: ActiveRoster<{ rootId: string; rationale: string; running: number; total: number }>;
   /** This backend's own hires, listed ahead of the search roster. Absent renders nothing. */
-  readonly subordinateDelegates?: readonly DynamicDelegate[];
+  readonly subagentDelegates?: readonly DynamicDelegate[];
   readonly approvals?: ActiveRoster<DynamicApproval>;
   readonly mail?: ActiveRoster<MailInContext>;
    readonly missingCapabilities: readonly MissingCapability[];
@@ -177,7 +177,7 @@ export interface DynamicContextSources {
 
 /** Both backends' live state for one step: this alone decides which planes exist; an absent one renders nothing. */
 export function agentDynamicContext(sources: DynamicContextSources): DynamicContext {
-  const subordinateDelegates = sources.subordinateDelegates ?? [];
+  const subagentDelegates = sources.subagentDelegates ?? [];
   const headDelegates = searchDelegates(sources.liveHeadRuns.items);
 
   const context: DynamicContext = {
@@ -198,8 +198,8 @@ export function agentDynamicContext(sources: DynamicContextSources): DynamicCont
       total: sources.openTasks.total,
     },
     delegates: {
-      items: [...subordinateDelegates, ...headDelegates],
-      total: subordinateDelegates.length + sources.liveHeadRuns.total,
+      items: [...subagentDelegates, ...headDelegates],
+      total: subagentDelegates.length + sources.liveHeadRuns.total,
     },
   };
 

@@ -12,7 +12,7 @@ import type {
   InstructionSourceRow, InstructionSourceView, Page, PageRequest, PositionCursor, PositionPageRequest,
   DeferredApproval, DeferredApprovalAnswer,
   PlanReview, ReviewAnnotation, PlanDecisionOutcome, PlanReviewDecision, PlanReviewResult, SendMetadata, WorkMode, AskingAgent, OwnerAnswer, OwedIntent,
-  SubordinateInspectionRequest, SubordinateInspectionResult, ChatHistoryEntry, WorkspaceSpend, WorkspaceWork,
+  SubagentInspectionRequest, SubagentInspectionResult, ChatHistoryEntry, WorkspaceSpend, WorkspaceWork,
   ModelTestResult, ContextFill, PendingDeviceConsent,
 } from '@kinu.run/core';
 import type { ShellApprovalHandler } from '@kinu.run/cli-backend';
@@ -309,9 +309,9 @@ export interface AgentClient {
   readonly localControls: LocalSessionControls | null;
   readonly checkpoints: FileCheckpointSurface | null;
   readonly plans: PlanReviewSurface | null;
-  /** Null where the agent's conversation partner is not the owner (a subordinate's window). */
+  /** Null where the agent's conversation partner is not the owner (a subagent's window). */
   readonly questions: OwnerQuestionSurface | null;
-  /** Null where the agent's conversation partner is not the owner (a subordinate's window). */
+  /** Null where the agent's conversation partner is not the owner (a subagent's window). */
   readonly approvals: WaitingApprovalSurface | null;
   /** Rename this conversation's agent when the backend exposes a complete
    * owner-authoritative path. Root cloud workspaces keep the web sidebar path. */
@@ -368,7 +368,7 @@ export interface AgentClient {
   setEvolutionConfig(view: Partial<EvolutionConfigView>): Promise<EvolutionConfigView>;
   listModels(): Promise<AgentModelMenu>;
   testModel(spec: string, signal: AbortSignal): Promise<ModelTestResult>;
-  inspectSubordinate(request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult>;
+  inspectSubagent(request: SubagentInspectionRequest): Promise<SubagentInspectionResult>;
   workspaceWork(): Promise<WorkspaceWork>;
 }
 

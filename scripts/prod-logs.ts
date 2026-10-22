@@ -81,6 +81,7 @@ import { ALARM_WORK, classifyErrorCode, HOSTED_ALARM_WORK } from '@kinu.run/core
 import { PLATFORM_CATALOG } from '../packages/core/src/platform-catalog';
 import { recordStep } from './deploy-report';
 import { restAnswer } from './cloudflare-rest';
+import { deployLanded, listDeployments } from './worker-deployments';
 import { requireCloudflareAccountId } from './infra-cloudflare';
 import { INFRA_ENVIRONMENTS, type InfraEnvironment, deployedConfig } from './infra-manifest';
 import {
@@ -417,6 +418,11 @@ export class Telemetry {
 
   private filters(filters: readonly Filter[]): Filter[] {
     return [eq('$metadata.service', this.args.worker), ...filters];
+  }
+
+  /** Whether a deploy of the worker other than `version`'s own landed inside the window (worker-deployments.ts). */
+  async deployInside(version: string): Promise<boolean> {
+    return deployLanded(await listDeployments(this.args.worker, this.api), this.args, version);
   }
 
   private async result(body: QueryBody): Promise<v.InferOutput<typeof TelemetryResult>['result']> {
@@ -1086,7 +1092,8 @@ function effectText(sample: EffectSample | undefined): string {
   return sample === undefined ? '' : `; e.g. object ${sample.object}, turn ${sample.sequence}: ${sample.detail}`;
 }
 
-/** The runtime's error for a call a code deploy cut off (platform-catalog.ts do.reset.transient): the deploy, not the version. */
+/** The runtime's error for a call a code update cut off (platform-catalog.ts do.reset.transient): a deploy's only when
+ *  one landed inside the window ({@link deployLanded}); otherwise the version's own (do.storage.write_await_reset). */
 const CODE_UPDATE_RESET = PLATFORM_CATALOG['do.reset.transient'].observable.find((seen) => seen.context === 'code deploy')?.message ?? '';
 
 /** An entrypoint's uncaught exceptions, less those a code update caused. */
@@ -1192,11 +1199,11 @@ export function versionSignals(read: VersionRead): WindowSignal[] {
  *  held none of an entrypoint that threw 20 times beside two that threw 184 (staging, 2026-10-08). Its text is the last
  *  line the request logged, the error that ended it; the object is the invocation's, or, for an RPC entrypoint, the
  *  call's in its trace that has one. The first exception a code update did not cause is the one shown. */
-async function exceptionSamples(t: Telemetry, scope: readonly Filter[], entrypoints: ReadonlySet<string>): Promise<ExceptionSample[]> {
+async function exceptionSamples(t: Telemetry, scope: readonly Filter[], entrypoints: ReadonlySet<string>, rolled: boolean): Promise<ExceptionSample[]> {
   const samples: ExceptionSample[] = [];
 
   for (const entrypoint of entrypoints) {
-    const sample = await exceptionSample(t, scope, entrypoint);
+    const sample = await exceptionSample(t, scope, entrypoint, rolled);
 
     if (sample !== undefined) samples.push(sample);
   }
@@ -1204,7 +1211,8 @@ async function exceptionSamples(t: Telemetry, scope: readonly Filter[], entrypoi
   return samples;
 }
 
-async function exceptionSample(t: Telemetry, scope: readonly Filter[], entrypoint: string): Promise<ExceptionSample | undefined> {
+/** `rolled`: a deploy landed inside the window, so a code update's words are its, and a sample passes over them. */
+async function exceptionSample(t: Telemetry, scope: readonly Filter[], entrypoint: string, rolled: boolean): Promise<ExceptionSample | undefined> {
   const ended = await t.sampleEvents([
     ...scope, eq('$metadata.type', 'cf-worker-event'), eq('$workers.outcome', 'exception'), eq('$workers.entrypoint', entrypoint),
   ], 10);
@@ -1222,7 +1230,7 @@ async function exceptionSample(t: Telemetry, scope: readonly Filter[], entrypoin
     const message = [...logged].sort((a, b) => b.timestamp - a.timestamp)
       .map((line) => line.$metadata.error ?? line.source.message ?? '').find((text) => text !== '') ?? '';
 
-    if (message === CODE_UPDATE_RESET || (message === '' && textless !== undefined)) continue;
+    if ((rolled && message === CODE_UPDATE_RESET) || (message === '' && textless !== undefined)) continue;
     const own = event.$workers.durableObjectId ?? '';
     const trace = event.$metadata.traceId ?? '';
     const traced = own !== '' || trace === '' ? [] : await t.sampleEvents([eq('$metadata.traceId', trace), eq('$metadata.type', 'cf-worker-event')], 20);
@@ -1256,17 +1264,20 @@ async function effectSample(t: Telemetry, scope: readonly Filter[], event: strin
 }
 
 /** What `versionId` did in `t`'s window; `around` reads the same version through {@link workWindow}. */
-async function versionRead(t: Telemetry, around: Telemetry, versionId: string): Promise<VersionRead> {
+export async function versionRead(t: Telemetry, around: Telemetry, versionId: string): Promise<VersionRead> {
   const scope = [eq('$workers.scriptVersion.id', versionId)];
   const invocations = [...scope, eq('$metadata.type', 'cf-worker-event')];
   const notOk: Filter = { key: '$workers.outcome', operation: 'neq', value: 'ok', type: 'string' };
   const ended = await t.count({ filters: [...invocations, notOk], groupBy: ['$workers.outcome', '$workers.entrypoint'], distinct: DO_ID, limit: 100 });
 
   // One runtime error line per invocation the reset ended; their request ids need not be theirs (staging 3fe2aa81: three
-  // KinuDevbox calls ended at 02:41:09.120Z, and all three lines named one request).
-  const deployResets = await t.count({
+  // KinuDevbox calls ended at 02:41:09.120Z, and all three lines named one request). They are a deploy's only when one
+  // landed in the window; with none they stay the version's own exceptions.
+  const rolled = await t.deployInside(versionId);
+
+  const deployResets = rolled ? await t.count({
     filters: [...scope, eq('$metadata.type', 'cf-worker'), eq('$metadata.error', CODE_UPDATE_RESET)], groupBy: ['$workers.entrypoint'], limit: 100,
-  });
+  }) : [];
 
   const failed = await t.count({ filters: [...scope, eq('event', 'turn.terminal_effect_failed')], groupBy: ['fields.sequence'], limit: 500 });
   // `turn.terminal_effect`: the sequences' owed and settled rows, and their effects' parks and failures.
@@ -1302,7 +1313,7 @@ async function versionRead(t: Telemetry, around: Telemetry, versionId: string): 
 
   return {
     ...read,
-    thrown: threw.size === 0 ? [] : await exceptionSamples(t, scope, threw),
+    thrown: threw.size === 0 ? [] : await exceptionSamples(t, scope, threw, rolled),
     effects: {
       failed: total(failed), failedTurns: failed.length,
       failedSample: failed.length === 0 ? undefined : await effectSample(t, scope, 'turn.terminal_effect_failed'),
@@ -1359,6 +1370,18 @@ export const SETTLE_POLL_MS = 2 * MINUTE_MS;
  */
 export const SETTLE_CAP_MS = 60 * MINUTE_MS;
 
+/**
+ * The query API's gateway answers, which say nothing of the window, so a read is asked again on the grid: 429 and 5xx
+ * (`unavailable`), and its 504 (`timeout`). Measured: the 2026-10-14 reads answered 500 to 12 of 80; the staging deploys
+ * after 2fc6aa727 (2026-10-21, 22:40-23:55Z) got a 504 on their own window and a 502 on each of five kept ones, and
+ * the same reads answered at 00:22Z with the API healthy.
+ */
+export function gatewayRefusal(thrown: { readonly cause: unknown }): boolean {
+  const code = classifyErrorCode(thrown);
+
+  return code === 'unavailable' || code === 'timeout';
+}
+
 export type SettledRead<T> =
   | { readonly settled: true; readonly value: T; readonly reads: number; readonly lateRows: number }
   | { readonly settled: false; readonly last: T; readonly reads: number; readonly lateRows: number };
@@ -1369,10 +1392,9 @@ export type SettledRead<T> =
  * before it. Reads are taken at once and then on a `pollMs` grid through the hold's instant, so the first read that may
  * settle is taken at it: a grid from the window's end read a 3 min hold first at 4 min, a minute on every deploy's
  * verdict (staging rc28, 2026-10-20). Past `capMs` from the first, the answer is "unsettled". `rows` counts what the window held at each read, so the answer names how many rows landed
- * after the first read. A read the API refuses as `unavailable` says nothing of the window, so the next tick reads
- * again: the 2026-10-14 measurement's API answered 500 to 12 of its 80 reads. Only a cap reached with no answer at all
- * fails on it; any other failure, a refused token, a query the API rejects or an answer that does not parse, fails at
- * once.
+ * after the first read. A read the API's gateway refuses ({@link gatewayRefusal}) says nothing of the window, so the
+ * next tick reads again. Only a cap reached with no answer at all fails on it; any other failure, a refused token, a
+ * query the API rejects or an answer that does not parse, fails at once.
  */
 export async function settledRead<T>(at: {
   readonly read: () => Promise<T>; readonly fingerprint: (value: T) => string; readonly rows: (value: T) => number;
@@ -1397,7 +1419,7 @@ export async function settledRead<T>(at: {
     try {
       return { value: await at.read() };
     } catch (cause) {
-      if (classifyErrorCode({ cause }) !== 'unavailable') throw cause;
+      if (!gatewayRefusal({ cause })) throw cause;
 
       return { cause };
     }
@@ -1429,10 +1451,35 @@ export async function settledRead<T>(at: {
   }
 }
 
+/** The deploy's own window read: `ended` once it settled or failed, and `done` resolving then. */
+export interface OwnRead {
+  ended: boolean;
+  readonly done: Promise<void>;
+}
+
+/**
+ * `read`, asked again on the settle grid while the API's gateway refuses it ({@link gatewayRefusal}) and the deploy's own
+ * read is still reading: a kept window waits no longer than that read already does, so it adds no wall. Its last
+ * refusal stands once the own read has ended, and any other failure stands at once.
+ */
+export async function readAgainWhile<T>(own: OwnRead, read: () => Promise<T>, sleep: (ms: number) => Promise<void> = Bun.sleep): Promise<T> {
+  for (;;) {
+    try {
+      return await read();
+    } catch (cause) {
+      if (!gatewayRefusal({ cause }) || own.ended) throw cause;
+      await Promise.race([sleep(SETTLE_POLL_MS), own.done]);
+
+      if (own.ended) throw cause;
+    }
+  }
+}
+
 /** The windows earlier deploys kept, each read once more (telemetry-windows.ts), begun before this window's own read
- *  and awaited after it, so it adds no wait. A store that cannot be reached is the only failure that keeps nothing; a
- *  token that cannot be read fails each kept window's read, and they and this window are still kept. */
-async function rereadKept(environment: InfraEnvironment): Promise<{ readonly store: WindowStore; readonly rereads: readonly Reread[] } | { readonly failed: string }> {
+ *  and awaited after it, so it adds no wait; a gateway refusal is read again while that read lasts. A store that
+ *  cannot be reached is the only failure that keeps nothing; a token that cannot be read fails each kept window's read,
+ *  and they and this window are still kept. */
+async function rereadKept(environment: InfraEnvironment, own: OwnRead): Promise<{ readonly store: WindowStore; readonly rereads: readonly Reread[] } | { readonly failed: string }> {
   try {
     const store = windowStore(environment);
     // Read once, and only when a window is kept: an unread rejection would end the process.
@@ -1443,7 +1490,7 @@ async function rereadKept(environment: InfraEnvironment): Promise<{ readonly sto
       const read = { worker: window.worker, from: Date.parse(window.from), to: Date.parse(window.to) };
       const kept = await token;
 
-      return versionSignals(await versionRead(new Telemetry(kept, read), new Telemetry(kept, { ...read, ...workWindow(read) }), window.version));
+      return versionSignals(await readAgainWhile(own, async () => versionRead(new Telemetry(kept, read), new Telemetry(kept, { ...read, ...workWindow(read) }), window.version)));
     }, () => Date.now());
 
     return { store, rereads };
@@ -1459,7 +1506,9 @@ async function rereadKept(environment: InfraEnvironment): Promise<{ readonly sto
  *  deploy's finding. */
 async function versionCommand(args: Args): Promise<number> {
   const subject = args.target ?? '';
-  const rereading = args.keepWindows === null ? undefined : rereadKept(args.keepWindows);
+  const ownEnded = Promise.withResolvers<void>();
+  const own: OwnRead = { ended: false, done: ownEnded.promise };
+  const rereading = args.keepWindows === null ? undefined : rereadKept(args.keepWindows, own);
   let findings: VersionFinding[];
   let settled: readonly WindowSignal[] | null = null;
   let sampling = 1;
@@ -1495,6 +1544,10 @@ async function versionCommand(args: Args): Promise<number> {
   } catch (cause) {
     findings = [{ what: 'the telemetry', finding: `${args.worker}'s telemetry for version ${subject} could not be read: ${cause instanceof Error ? cause.message : String(cause)}` }];
   }
+
+  // The kept windows' reads stop asking again now.
+  own.ended = true;
+  ownEnded.resolve();
 
   // Written back only after the report holds what the reads found, so a red is never acknowledged before it is reported.
   let keep: (() => Promise<void>) | undefined;

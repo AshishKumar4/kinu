@@ -5,8 +5,8 @@ import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 import { scratchDir } from '../packages/test-utils/src/scratch';
 import {
-  adoptDownloads, adoptTarball, adoptedRecord, artifactDigest, builtKey, downloadsServed, evalsKey, evalVerdictRefusal, imagesStagingNeverRan, overrideKey,
-  planRollback, readDownloads, readEvalsVerdict, stagingReds, verifiedKey, verifyServing, withdraw, writeOverride, type EvalVerdict, type Promotion, type Records,
+  adoptDownloads, adoptTarball, adoptedRecord, artifactDigest, builtKey, downloadsServed, evalGateRefusal, evalsKey, imagesStagingNeverRan, overrideKey,
+  planRollback, readDailyVerdict, readDownloads, readEvalsVerdict, stagingReds, verifiedKey, verifyServing, withdraw, writeOverride, DailyOutcomeSchema, DailyVerdictSchema, dailyReplacementRefusal, type DailyVerdict, type Promotion, type Records,
   type Verified,
 } from './promote';
 import { ResetSchema, type Reset } from './reset';
@@ -286,16 +286,75 @@ describe('a rollback', () => {
   });
 });
 
-// THE STATISTICS GATE PRODUCTION: a staging build is promoted on its evals verdict file, never on a run's own
-// conclusion, which is green whenever the run finished, however its trials went.
-describe('the eval verdict a promotion waits for', () => {
-  const verdict = (pass: boolean, reason: string): EvalVerdict => ({ pass, reason });
+// THE STATISTICS GATE PRODUCTION (owner, 2026-10-21, "Daily gated release"): production promotes whenever staging is
+// green, on the latest daily verdict, fresh and no regression; a regression is a P1, held until a fix's own run passes.
+describe('the eval gate a promotion waits for', () => {
+  const sha = 'c'.repeat(40);
+  const now = Date.parse('2026-10-22T12:00:00.000Z');
 
-  test('only a passing verdict file lets a build through', () => {
-    expect(evalVerdictRefusal(verdict(true, '5/5 held on every task'), 'verified/abc.json')).toBeUndefined();
-    expect(evalVerdictRefusal(undefined, 'verified/abc.json')).toBe('no eval verdict yet: verified/abc.json names none');
-    expect(evalVerdictRefusal(verdict(false, 'coding fell 5/5 to 1/5'), 'verified/abc.json'))
-      .toBe('the eval verdict refuses: coding fell 5/5 to 1/5 (verified/abc.json)');
+  const daily = (outcome: DailyVerdict['outcome'], measuredAt: string): DailyVerdict => ({
+    measured: 'p'.repeat(40), definitions: 'd'.repeat(40), baseline: null, jobs: ['armada-daily'], outcome, measuredAt, recordedAt: measuredAt,
+    verdict: { pass: outcome !== 'regressed' && outcome !== 'inconclusive', reason: `${outcome}.` },
+  });
+
+  const own = (pass: boolean) => ({ candidateBuild: sha, verdict: { pass, reason: pass ? 'Unchanged.' : 'Regressed.' } });
+
+  test('a fresh daily verdict that is no regression lets any build through, with no run of its own', () => {
+    expect(['unchanged', 'improved', 'baseline', 'rebaselined'].map((outcome) => evalGateRefusal(sha, daily(v.parse(DailyOutcomeSchema, outcome), '2026-10-21T13:00:00.000Z'), undefined, now)))
+      .toEqual([undefined, undefined, undefined, undefined]);
+  });
+
+  test('none at all holds every build, and says the daily run records the first', () => {
+    expect(evalGateRefusal(sha, undefined, undefined, now)).toContain('no eval verdict yet: no daily run has recorded one');
+  });
+
+  // Review finding (2026-10-21): freshness is the trials' end, not when the run was recorded, and a time ahead of the
+  // clock is no evidence of it.
+  test('one whose trials ended more than 26 hours ago holds, saying how old, as does one dated ahead of the clock', () => {
+    expect({
+      old: evalGateRefusal(sha, { ...daily('unchanged', '2026-10-21T09:00:00.000Z'), recordedAt: '2026-10-22T11:00:00.000Z' }, undefined, now),
+      ahead: evalGateRefusal(sha, daily('unchanged', '2026-10-23T12:00:00.000Z'), undefined, now),
+    }).toEqual({ old: expect.stringContaining('the latest daily eval verdict is 27.0 h old'), ahead: expect.stringContaining('h old') });
+  });
+
+  test('a regression holds as a P1, until a fix\'s own run passes on its very build', () => {
+    const regressed = daily('regressed', '2026-10-22T06:00:00.000Z');
+
+    expect({
+      held: evalGateRefusal(sha, regressed, undefined, now), ownRed: evalGateRefusal(sha, regressed, own(false), now) !== undefined,
+      otherBuild: evalGateRefusal(sha, regressed, { ...own(true), candidateBuild: 'e'.repeat(40) }, now) !== undefined,
+      fixed: evalGateRefusal(sha, regressed, own(true), now),
+    }).toEqual({ held: expect.stringContaining('a regression, a P1'), ownRed: true, otherBuild: true, fixed: undefined });
+  });
+
+  test('the first daily run\'s record, written before outcomes and trial ends were, reads as the baseline it was', () => {
+    const first = { measured: 'p'.repeat(40), definitions: 'd'.repeat(40), baseline: null, jobs: ['armada-daily'], verdict: { pass: true, reason: 'The first.' }, recordedAt: '2026-10-22T03:00:00.000Z' };
+
+    expect(v.parse(DailyVerdictSchema, first)).toMatchObject({ outcome: 'baseline', measuredAt: '2026-10-22T03:00:00.000Z' });
+  });
+
+  // Review findings (2026-10-21): a replayed run is never newer evidence, and a moved suite never clears a regression
+  // unless production serves a build whose own run passed.
+  test('a daily run replaces the standing verdict only with newer evidence, and a re-baseline clears no regression', () => {
+    const regressed = daily('regressed', '2026-10-22T06:00:00.000Z');
+    const later = '2026-10-23T06:00:00.000Z';
+
+    expect({
+      first: dailyReplacementRefusal(undefined, { outcome: 'baseline', measuredAt: later }, false),
+      replayed: dailyReplacementRefusal(daily('unchanged', later), { outcome: 'unchanged', measuredAt: '2026-10-22T06:00:00.000Z' }, false),
+      // Second review: each day that does not compare keeps the regression, however many follow.
+      overRegression: (['baseline', 'rebaselined', 'inconclusive'] as const).map((outcome) => dailyReplacementRefusal(regressed, { outcome, measuredAt: later }, false) !== undefined),
+      rebaselinedOnFix: dailyReplacementRefusal(regressed, { outcome: 'rebaselined', measuredAt: later }, true),
+      comparedAndHeld: dailyReplacementRefusal(regressed, { outcome: 'unchanged', measuredAt: later }, false),
+      newerRegression: dailyReplacementRefusal(regressed, { outcome: 'regressed', measuredAt: later }, false),
+    }).toEqual({
+      first: undefined, replayed: expect.stringContaining('stands, no older'), overRegression: [true, true, true],
+      rebaselinedOnFix: undefined, comparedAndHeld: undefined, newerRegression: undefined,
+    });
+  });
+
+  test('an inconclusive day holds as no evidence that nothing regressed, not as a P1', () => {
+    expect(evalGateRefusal(sha, daily('inconclusive', '2026-10-22T06:00:00.000Z'), undefined, now)).toContain('inconclusive, no evidence');
   });
 
   test('a completed pilot cannot authorize a promotion even if its comparison says pass', () => {
@@ -310,6 +369,7 @@ describe('the eval verdict a promotion waits for', () => {
     }));
 
     expect(() => readEvalsVerdict(dir, 'abcdef1')).toThrow('full statistical matrix');
+    expect(() => readDailyVerdict(dir, undefined, 'abcdef1')).toThrow('full statistical matrix');
   });
 });
 
