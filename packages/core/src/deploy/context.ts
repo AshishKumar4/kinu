@@ -30,18 +30,30 @@ export interface DeployFacts {
   set(key: string, value: string): void;
 }
 
+/** Where the run keeps the first owner's setup link to show it, outside the ledger and the vault the handover wipes. */
+export interface DeployOwnerSeat {
+  hold(link: string, expiresAt: number): Promise<void>;
+}
+
 export interface DeployContext {
   readonly manifest: ReleaseManifest;
   readonly inputs: DeployInputs;
   readonly transport: CloudflareTransport;
   readonly artifact: ArtifactSource;
   readonly vault: DeploySecretVault;
+  readonly seat: DeployOwnerSeat;
   readonly facts: DeployFacts;
   readonly http: HttpGet;
   /** Self-update: root secrets are not re-minted and the upload declares no migrations. */
   readonly update: boolean;
+  /** An update that also mints a new first-owner link, as a change asking for one does. */
+  readonly freshSetupLink: boolean;
+  /** Set on the version this run uploads, so a replayed upload finds it rather than making another. At most 100 bytes. */
+  readonly tag: string;
   /** Never a secret: pass resource names, not values. */
   note(message: string): void;
+  /** Resolves after `ms`: a step that waits on Cloudflare to carry a change everywhere waits through this. */
+  wait(ms: number): Promise<void>;
 }
 
 export const FACT_ACCOUNT_NAME = 'account.name';
@@ -50,9 +62,7 @@ export const FACT_WORKERS_SUBDOMAIN = 'account.workers_subdomain';
 
 export const FACT_GATEWAY_URL = 'ai_gateway.url';
 
-export const FACT_ACCESS_APP = 'access.app_id';
-
-export const FACT_OWNER_EMAIL = 'access.owner_email';
+export const FACT_OWNER_EMAIL = 'owner.email';
 
 export const FACT_VERSION_ID = 'worker.version_id';
 
@@ -60,6 +70,9 @@ export const FACT_VERSION_ID = 'worker.version_id';
 export const FACT_UPLOAD_PEAK = 'worker.held_peak_bytes';
 
 export const FACT_ADDRESS = 'worker.address';
+
+/** Set when the account has Analytics Engine off: the version is bound without its datasets (deploy/steps.ts). */
+export const FACT_ANALYTICS_OFF = 'worker.analytics_off';
 
 export function kvFact(binding: string): string {
   return `kv.${binding}`;

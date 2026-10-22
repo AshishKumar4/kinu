@@ -17,6 +17,7 @@ export interface BuiltinSignIn {
   readonly mode: 'owner' | 'invite' | 'reset' | 'sign-in' | 'setup';
   readonly reset?: string;
   readonly invite?: string;
+  readonly setup?: string;
   readonly email?: string;
   readonly notice?: string;
   readonly returnTo: string;
@@ -36,7 +37,7 @@ export function loginDocument(providers: readonly LoginProvider[], builtin: Buil
 
 const BUILTIN_COPY = {
   owner: {
-    lede: 'Create the first account. It becomes the owner of this deployment. Enter the setup token its deployer set.',
+    lede: 'Create the first account. It becomes the owner of this deployment.',
     password: 'Create account', passkey: 'Create account with a passkey',
   },
   invite: { lede: 'You were invited. Create your account for this address.', password: 'Create account', passkey: 'Create account with a passkey' },
@@ -63,17 +64,18 @@ const OWNER_RECOVERY = `<details class="recovery">
     </form>
   </details>`;
 
-function builtinBody({ mode, invite, reset, email, notice, returnTo }: BuiltinSignIn): string {
+function builtinBody({ mode, invite, reset, setup, email, notice, returnTo }: BuiltinSignIn): string {
   const copy = BUILTIN_COPY[mode];
   const registering = mode !== 'sign-in';
   const lede = notice ?? copy.lede;
+  const setupField = setup === undefined ? SETUP_FIELD : `<input type="hidden" name="setup" value="${escapeHtml(setup)}" />`;
 
   if (mode === 'setup') return `<p class="lede">${escapeHtml(lede ?? '')}</p>`;
 
   return `${lede === null ? '' : `<p class="lede">${escapeHtml(lede)}</p>`}
   <form id="builtin-sign-in" class="fields" data-mode="${registering ? 'register' : 'sign-in'}" data-return-to="${escapeHtml(returnTo)}" data-invite="${escapeHtml(invite ?? '')}" data-reset="${escapeHtml(reset ?? '')}" data-resetting="${mode === 'reset' ? '1' : ''}" novalidate>
     <label>Email<input type="email" name="email" autocomplete="${registering ? 'email' : 'username webauthn'}" required${email === undefined ? '' : ` value="${escapeHtml(email)}" readonly`} /></label>
-    ${mode === 'owner' ? SETUP_FIELD : ''}
+    ${mode === 'owner' ? setupField : ''}
     <label>Password<input type="password" name="password" autocomplete="${registering ? 'new-password' : 'current-password'}"${registering ? ' minlength="10" aria-describedby="password-rule"' : ''} /></label>
     ${registering ? `<p id="password-rule" class="muted">At least 10 characters.${mode === 'reset' ? '' : ' Not needed with a passkey.'}</p>` : ''}
     <button type="submit">${copy.password}</button>

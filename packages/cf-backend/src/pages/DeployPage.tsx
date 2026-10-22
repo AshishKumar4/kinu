@@ -1,352 +1,348 @@
-/** `/deploy` (docs/SELF-DEPLOY.md § The Cloudflare door). Public: the run key minted in this tab authorizes everything. */
-import { Effect } from 'effect';
-import { Button } from "@/components/ui/Button";
+/**
+ * `/deploy` (docs/SELF-DEPLOY-FLOW.md): a Kinu of your own on your own Cloudflare account. Public: its sign-in is the
+ * page's own, to Cloudflare, held in a cookie of this Kinu, and every read and the run it starts are that sign-in's.
+ * Start, Ready (and its Domain step), Deploying, Live; a person whose account already runs a Kinu starts on its changes.
+ */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Effect } from "effect";
+import { useSearchParams } from "react-router-dom";
+import type { ConnectEnded } from "@kinu.run/core";
+import type { DeployedKinu, DeployRunRequest, DeployRunView, DeploySession } from "@kinu.run/core/deploy";
+import { detach } from "@kinu.run/core/obs";
 import { Loader } from "@/components/ui/Loader";
-import { CloudArrowUpIcon } from "@phosphor-icons/react";
+import { beginConnect } from "@/lib/connect-window";
+import { CloudflareSaid, DeployShell, type RefusalActions } from "@/components/deploy/DeployParts";
+import { DeployStart, type DeclinedSignIn } from "@/components/deploy/DeployStart";
+import { DeployManage, type KinuChange } from "@/components/deploy/DeployManage";
+import { DeployReady, type ReadyFor } from "@/components/deploy/DeployReady";
+import { DeployLive, DeployRunning, type RunAsked } from "@/components/deploy/DeployRun";
 import {
-  DEFAULT_INSTANCE_NAME, DeployFrameSchema, FACT_OWNER_EMAIL,
-  deployDoor, deployOptions, mintRun,
-  type DeployChoice, type DeployDoor, type DeployInputs, type DeployOptions, type DeploySnapshot,
-} from "@kinu.run/core/deploy";
-import { showing, detach } from "@kinu.run/core/obs";
-import * as v from "valibot";
-import { KinuLogo } from "@/components/ui/KinuLogo";
-import { Field } from "@/components/ui/form";
-import { StepRow } from "@/components/deploy/DeployStepRow";
-import { Notice } from "@/components/ui/Notice";
-import { TextInput } from "@/components/ui/Field";
-import { Select } from "@/components/ui/Select";
-import { Checkbox } from "@/components/ui/Check";
-import { Surface } from "@/components/ui/Surface";
+  beginRun, beginSignIn, continueRun, readRun, readSession, type DeployHeard, type DeployRefused,
+} from "@/lib/deploy-page-api";
 
-/** The run key is a capability: `sessionStorage` under the run id, sent in an `authorization` header, never a URL. */
-function heldRunKey(runId: string): string {
-  return sessionStorage.getItem(`kinu.deploy.run.${runId}`) ?? "";
+/** How often a followed run is read again, by where it stands: it goes on in Cloudflare whether or not this page reads. */
+const FOLLOW_MS = { running: 2000, paused: 5000, pending: 15_000 } as const;
+
+type Stage =
+  | { readonly kind: "loading" }
+  | { readonly kind: "start" }
+  | { readonly kind: "failed"; readonly refusal: DeployRefused }
+  | { readonly kind: "manage"; readonly session: DeploySession }
+  | { readonly kind: "ready"; readonly session: DeploySession; readonly readyFor: ReadyFor }
+  | { readonly kind: "run"; readonly run: DeployRunView; readonly asked: RunAsked };
+
+function declinedOf(params: URLSearchParams): DeclinedSignIn | null {
+  const error = params.get("error") ?? "";
+
+  return error === "" ? null : { error, description: params.get("error_description") ?? "" };
 }
 
-function doorFor(runId: string): DeployDoor {
-  return deployDoor({ origin: location.origin, runId, runKey: heldRunKey(runId) });
+/** A run that waits on a sign-in to carry on: one paused past its grant, or one whose domain is ready to move onto. */
+function waitsOnSignIn(run: DeployRunView): boolean {
+  return run.paused?.id === "signin-again" || run.live?.pending?.ready === true;
 }
 
-/** The key is returned once and is not recoverable, so it is stored before the id is used. */
-async function openDeployRun(): Promise<string> {
-  const ticket = await mintRun(location.origin);
+/** How long until the followed run is read again, or null once it has nothing left to do by itself. */
+function followIn(run: DeployRunView): number | null {
+  if (waitsOnSignIn(run)) return null;
 
-  sessionStorage.setItem(`kinu.deploy.run.${ticket.runId}`, ticket.runKey);
+  if (run.state === "running") return FOLLOW_MS.running;
 
-  return ticket.runId;
+  if (run.state === "paused") return FOLLOW_MS.paused;
+
+  return run.state === "live" && run.live?.pending !== undefined ? FOLLOW_MS.pending : null;
 }
 
-/** Kept as text: a half-typed email is not an email and the form must still render it. */
-interface Answers {
-  accountId: string;
-  instanceName: string;
-  ownerEmail: string;
-  zoneId: string;
-  hostname: string;
-  sandbox: boolean;
-  keys: Record<string, string>;
-  /** The zone the deployment's mail addresses sit on, or "" for no mail (docs/MAIL.md §1). */
-  mailZoneId: string;
-  mailEveryone: boolean;
-}
-
-const EMPTY: Answers = {
-  accountId: "",
-  instanceName: DEFAULT_INSTANCE_NAME,
-  ownerEmail: "",
-  zoneId: "",
-  hostname: "",
-  sandbox: false,
-  keys: {},
-  mailZoneId: "",
-  mailEveryone: false,
-};
-
-function inputsFrom(answers: Answers, zones: readonly { id: string; name: string }[]): DeployInputs {
-  const zoned = answers.zoneId !== "" && answers.hostname !== "";
-
-  return {
-    accountId: answers.accountId,
-    instanceName: answers.instanceName,
-    address: zoned
-      ? { kind: "zone", hostname: answers.hostname, zoneId: answers.zoneId }
-      : { kind: "workers-dev", hostname: "", zoneId: "" },
-    ownerEmail: answers.ownerEmail,
-    accessEmails: [answers.ownerEmail],
-    providerKeyNames: Object.entries(answers.keys).filter(([, value]) => value !== "").map(([name]) => name),
-    sandbox: answers.sandbox,
-    mailDomain: zones.find((zone) => zone.id === answers.mailZoneId)?.name ?? "",
-    mailAccounts: answers.mailEveryone ? "everyone" : "operators",
-  };
-}
-
-function NotConfigured({ reason }: { reason: string }) {
-  return (
-    <section className="space-y-3" aria-label="Deploying to Cloudflare is not set up">
-      <Surface look="panel" className="px-5 py-4">
-        <h2 className="t-title p-text">Deploying to Cloudflare is not set up here</h2>
-        <p className="t-body mt-1 p-text-2">{reason}</p>
-        <p className="t-meta mt-3 p-text-3">
-          The owner of this Kinu registers the OAuth client once. Until then, this page cannot
-          deploy into a Cloudflare account.
-        </p>
-      </Surface>
-    </section>
-  );
-}
-
-function Answered({ options, runId, onStarted }: {
-  options: DeployOptions;
-  runId: string;
-  onStarted: (snapshot: DeploySnapshot) => void;
-}) {
-  const [answers, setAnswers] = useState<Answers>(EMPTY);
-  const [accounts, setAccounts] = useState<readonly DeployChoice[]>([]);
-  const [zones, setZones] = useState<readonly DeployChoice[]>([]);
-  const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
+/**
+ * Reads the followed run again while it goes, and stops once it is done, refused, or waiting on a sign-in. A read the
+ * door refuses is heard too; `attempt` reads again after one, since the run's own answer did not change.
+ */
+function useFollow(run: DeployRunView | null, attempt: number, onHeard: (heard: DeployHeard<DeployRunView | null>) => void): void {
   useEffect(() => {
-    let live = true;
-    const door = doorFor(runId);
+    const wait = run === null ? null : followIn(run);
 
-    const failed = showing((chain) => { if (live) setErr(chain); });
+    if (wait === null) return undefined;
 
-    detach(Effect.all([
-      Effect.catchCause(Effect.map(Effect.promise(() => door.accounts()), (found) => {
-      if (!live) return;
-      setAccounts(found);
-      setAnswers((held) => ({ ...held, accountId: held.accountId === "" ? found[0]?.id ?? "" : held.accountId }));
-    }), failed),
-      Effect.catchCause(Effect.map(Effect.promise(() => door.zones()), (found) => { if (live) setZones(found); }), failed),
-    ], { concurrency: 'unbounded' }));
+    let current = true;
 
-    return () => { live = false; };
-  }, [runId]);
+    const timer = setTimeout(() => detach(Effect.promise(async () => {
+      const heard = await readRun();
 
-  const deploy = () => Effect.gen(function* () {
-    setBusy(true);
-    setErr(null);
-
-    const door = doorFor(runId);
-
-    return yield* Effect.catchCause(Effect.gen(function* () {
-      for (const [name, value] of Object.entries(answers.keys)) {
-        if (value !== "") yield* Effect.promise(async () => door.holdProviderKey(name, value));
-      }
-
-      onStarted(yield* Effect.promise(async () => door.start(inputsFrom(answers, zones))));
-    }), showing((chain) => { setErr(chain); setBusy(false); }));
-  });
-
-  // The zones offered for the address and for mail: one list, drawn in both.
-  const zoneOptions = zones.map((zone) => ({ value: zone.id, label: zone.name }));
-
-  return (
-    <section className="space-y-4" aria-label="Your deployment">
-      <Surface look="panel" className="space-y-5 px-5 py-5">
-        <Field label="Cloudflare account" hint="Where Kinu is created. Everything it creates belongs to you.">
-          <Select label="Cloudflare account" value={answers.accountId} onChange={(accountId) => setAnswers({ ...answers, accountId })}
-            options={accounts.map((account) => ({ value: account.id, label: account.name }))} />
-        </Field>
-        <Field label="Instance name" hint="Lower-case letters, numbers and dashes. It names the Worker and its resources.">
-          <TextInput aria-label="Instance name" value={answers.instanceName} onChange={(event) => setAnswers({ ...answers, instanceName: event.target.value })} />
-        </Field>
-        <Field label="Your email" hint="This address owns the deployment and gets the one-time PIN when you sign in.">
-          <TextInput type="email" aria-label="Your email" value={answers.ownerEmail} onChange={(event) => setAnswers({ ...answers, ownerEmail: event.target.value })} />
-        </Field>
-        <Field
-          label="Address"
-          hint={zones.length === 0
-            ? "A workers.dev address, derived from your account's subdomain."
-            : "A workers.dev address by default, or a hostname in one of your zones."}
-        >
-          {zones.length > 0 && (
-            <div className="space-y-2">
-              <Select label="Zone" value={answers.zoneId} onChange={(zoneId) => setAnswers({ ...answers, zoneId })}
-                options={[{ value: "", label: "workers.dev" }, ...zoneOptions]} />
-              {answers.zoneId !== "" && (
-                <TextInput aria-label="Hostname" placeholder="kinu.example.com" value={answers.hostname} onChange={(event) => setAnswers({ ...answers, hostname: event.target.value })} />
-              )}
-            </div>
-          )}
-        </Field>
-        {zones.length > 0 && (
-          <Field label="Mail" hint="Optional. Addresses for you, your workspaces and their agents on a zone of yours; the deploy sets up its routing, sending and DNS.">
-            <div className="space-y-2">
-              <Select label="Mail domain" value={answers.mailZoneId} onChange={(mailZoneId) => setAnswers({ ...answers, mailZoneId })}
-                options={[{ value: "", label: "No mail" }, ...zoneOptions]} />
-              {answers.mailZoneId !== "" && (
-                <Checkbox checked={answers.mailEveryone} onChange={(mailEveryone) => setAnswers({ ...answers, mailEveryone })}
-                  label="Every account may have an address, not only yours" />
-              )}
-            </div>
-          </Field>
-        )}
-        {options.prompts.map((name) => (
-          <Field key={name} label={name} hint="Optional. Stored as a secret on your deployment, never here.">
-            <TextInput type="password" aria-label={name} value={answers.keys[name] ?? ""} onChange={(event) => setAnswers({ ...answers, keys: { ...answers.keys, [name]: event.target.value } })} />
-          </Field>
-        ))}
-      </Surface>
-      {err !== null && <Notice tone="danger">{err}</Notice>}
-      <div className="flex items-center justify-between gap-3">
-        <p className="t-meta p-text-3">Kinu {options.version} will be uploaded into your account.</p>
-        <Button variant="primary" size="lg"
-          onClick={() => detach(deploy())}
-          disabled={busy || answers.accountId === "" || answers.ownerEmail === ""}
-        >
-          <CloudArrowUpIcon size={15} /> Deploy my Kinu
-        </Button>
-      </div>
-    </section>
-  );
-}
-
-function Done({ snapshot, email }: { snapshot: DeploySnapshot; email: string }) {
-  const origin = `https://${snapshot.address}`;
-
-  return (
-    <section className="space-y-3" aria-label="Your Kinu is deployed">
-      <Surface look="panel" className="px-5 py-4">
-        <h2 className="t-title p-text">Your Kinu is live</h2>
-        <p className="t-body mt-1 p-text-2">
-          <a className="underline" href={origin}>{snapshot.address}</a>
-        </p>
-        <p className="t-meta mt-2 p-text-3">
-          Sign in with {email === "" ? "the email you gave" : email}. Cloudflare Access sends you a
-          one-time PIN. It is running Kinu {snapshot.version}; install new versions from its
-          Updates page.
-        </p>
-      </Surface>
-      <Surface look="panel" className="px-5 py-4">
-        <h2 className="t-title p-text">Connect this machine</h2>
-        <Surface look="sheet" as="pre" className="t-meta t-mono mt-2 overflow-x-auto px-3 py-2 p-text">
-          curl -fsSL {origin}/install.sh | bash
-        </Surface>
-      </Surface>
-    </section>
-  );
-}
-
-export default function DeployPage({ fixture, fixtureOptions }: {
-  fixture?: DeploySnapshot;
-  fixtureOptions?: DeployOptions;
-} = {}) {
-  const [options, setOptions] = useState<DeployOptions | null>(fixtureOptions ?? null);
-  // Read once: the authorize leg leaves through a full navigation and returns as a fresh mount.
-  const [runId] = useState(() => new URLSearchParams(location.search).get("run") ?? "");
-  const [snapshot, setSnapshot] = useState<DeploySnapshot | null>(fixture ?? null);
-  const [err, setErr] = useState<string | null>(null);
-  const socket = useRef<WebSocket | null>(null);
-  const live = fixture === undefined && fixtureOptions === undefined;
-
-  useEffect(() => {
-    if (!live) return;
-    let mounted = true;
-
-    detach(Effect.catchCause(Effect.map(Effect.promise(() => deployOptions(location.origin)), (offer) => { if (mounted) setOptions(offer); }), showing((chain) => { if (mounted) setErr(chain); })));
-
-    return () => { mounted = false; };
-  }, [live]);
-
-  useEffect(() => {
-    if (!live || runId === "" || heldRunKey(runId) === "") return;
-    let mounted = true;
-
-    const door = doorFor(runId);
-
-    detach(Effect.catchCause(Effect.map(Effect.promise(() => door.snapshot()), (held) => { if (mounted) setSnapshot(held); }), showing((chain) => { if (mounted) setErr(chain); })));
-
-    // The key rides the subprotocol list: a WebSocket URL cannot carry it and a browser sets no upgrade header.
-    const opened = new WebSocket(door.socketUrl(), [...door.socketProtocols()]);
-
-    socket.current = opened;
-    opened.addEventListener("message", (event: MessageEvent) => {
-      const frame = v.safeParse(DeployFrameSchema, JSON.parse(String(event.data)));
-
-      if (frame.success && frame.output.type === "deploy.snapshot" && mounted) setSnapshot(frame.output.snapshot);
-    });
+      if (current) onHeard(heard);
+    })), wait);
 
     return () => {
-      mounted = false;
-      opened.close();
-      socket.current = null;
+      current = false;
+      clearTimeout(timer);
     };
-  }, [live, runId]);
+  }, [run, attempt, onHeard]);
+}
 
-  const signIn = () => Effect.catchCause(Effect.gen(function* () {
-    // An expired run is re-signed, not replaced: a fresh run would create a second set of everything.
-    const run = runId !== "" && heldRunKey(runId) !== "" ? runId : (yield* Effect.promise(async () => openDeployRun()));
-
-    location.assign(yield* Effect.promise(async () => doorFor(run).authorize()));
-  }), showing(setErr));
-
-  const retry = useCallback((stepId: string) => {
-    detach(Effect.catchCause(Effect.map(Effect.promise(() => doorFor(runId).retry(stepId)), setSnapshot), showing(setErr)));
-  }, [runId]);
-
-  const ownerEmail = snapshot?.steps.flatMap((row) => Object.entries(row.facts))
-    .find(([key]) => key === FACT_OWNER_EMAIL)?.[1] ?? "";
-
-  // `start` answers before its first step exists, so "no rows yet" is not a run to re-answer.
-  const collecting = snapshot !== null
-    && (snapshot.state === "collecting" || snapshot.state === "authorizing")
-    && snapshot.steps.length === 0;
-
+function Failed({ refusal }: { refusal: DeployRefused }) {
   return (
-    <Surface look="page" className="min-h-screen p-text">
-      <header className="flex h-14 items-center justify-between border-b p-border px-5">
-        <a href="/" aria-label="Kinu home" className="flex items-center"><KinuLogo /></a>
-        <span className="t-meta p-text-3">Deploy your own Kinu</span>
-      </header>
-      <main className="mx-auto max-w-3xl space-y-6 px-6 py-8">
-        <div>
-          <h1 className="t-page-title">Your own Kinu, in your own account</h1>
-          <p className="t-body mt-1 p-text-2">
-            Sign in with Cloudflare, answer four questions, and watch it deploy. Nothing is built on
-            your side, and kinu.run keeps no credential of yours.
-          </p>
-        </div>
-        {err !== null && <Notice tone="danger">{err}</Notice>}
-        {options === null && err === null && <div className="flex justify-center py-16"><Loader size="base" /></div>}
-        {options !== null && !options.cloudflare && <NotConfigured reason={options.reason} />}
-        {options !== null && options.cloudflare && (snapshot === null || snapshot.state === "expired") && (
-          <section className="space-y-3" aria-label="Sign in with Cloudflare">
-            <Surface look="panel" className="px-5 py-4">
-              <h2 className="t-title p-text">Sign in with Cloudflare</h2>
-              <p className="t-body mt-1 p-text-2">
-                {snapshot?.state === "expired"
-                  ? "Your Cloudflare sign-in for this run expired. It lasts an hour after the last"
-                    + " step. Sign in again and the run picks up from the step it reached."
-                  : "Kinu asks for the permissions it needs to create your Worker, its storage and"
-                    + " its sign-in. The token stays with this run and is deleted when the run ends."
-                    + " After that, your deployment uses its own."}
-              </p>
-              <Button variant="primary" size="lg" onClick={() => detach(signIn())} className="mt-4">
-                Sign in with Cloudflare
-              </Button>
-            </Surface>
-            <p className="t-meta p-text-3">This installs Kinu {options.version}.</p>
-          </section>
-        )}
-        {options !== null && collecting && (
-          <Answered options={options} runId={runId === "" ? snapshot.runId : runId} onStarted={setSnapshot} />
-        )}
-        {snapshot !== null && !collecting && (
-          <>
-            {snapshot.state === "done" && <Done snapshot={snapshot} email={ownerEmail} />}
-            <section className="space-y-2" aria-label="Deployment steps">
-              <h2 className="t-label">{snapshot.state === "done" ? "What it did" : "Deploying"}</h2>
-              <ul className="space-y-2">
-                {snapshot.steps.map((row) => <StepRow key={row.id} row={row} onRetry={retry} />)}
-              </ul>
-            </section>
-          </>
-        )}
-      </main>
-    </Surface>
+    <DeployShell dot={1} screen="failed" title="Kinu couldn't read your Cloudflare account">
+      <p role="alert" className="t-public-body">{refusal.refused?.sentence ?? refusal.need?.sentence ?? refusal.error}</p>
+      {refusal.refused !== null && <div className="mt-3"><CloudflareSaid words={refusal.refused.details} /></div>}
+    </DeployShell>
   );
+}
+
+export default function DeployPage() {
+  const [params] = useSearchParams();
+  const declined = useRef(declinedOf(params)).current;
+  const [stage, setStage] = useState<Stage>({ kind: "loading" });
+  const [signingIn, setSigningIn] = useState(false);
+  const [deploying, setDeploying] = useState(false);
+  // The last refusal the door answered on this screen: cleared when the screen changes or a read succeeds.
+  const [refusal, setRefusal] = useState<DeployRefused | null>(null);
+  const [handedOff, setHandedOff] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  // Arrived again: a sign-in in Cloudflare's window ended, so the page reads its session and lands anew.
+  const [arrivals, setArrivals] = useState(0);
+  // The sign-in for API Tokens ended: Ready's session is read again, Ready kept as it is.
+  const [tokenReads, setTokenReads] = useState(0);
+  // The sign-in Cloudflare's window ended without, in its words: shown on Start as a declined consent is.
+  const [ended, setEnded] = useState<DeclinedSignIn | null>(null);
+
+  const go = useCallback((next: Stage) => {
+    setRefusal(null);
+    setStage(next);
+  }, []);
+
+  // A run waiting on a sign-in carries on once there is one; a carry-on the door refuses keeps the run and says why.
+  const follow = useCallback((run: DeployRunView, asked: RunAsked, signedIn: boolean, here: () => boolean) => Effect.gen(function* () {
+    if (!signedIn || !waitsOnSignIn(run)) {
+      go({ kind: "run", run, asked });
+
+      return;
+    }
+
+    const carried = yield* Effect.promise(async () => continueRun());
+
+    if (!here()) return;
+
+    if ("refusal" in carried) {
+      setStage({ kind: "run", run, asked });
+      setRefusal(carried.refusal);
+
+      return;
+    }
+
+    go({ kind: "run", run: carried.answer ?? run, asked });
+  }), [go]);
+
+  // Where a signed-in person lands: the run they left, else the Kinus they have, else a new one.
+  const land = useCallback((session: DeploySession, here: () => boolean) => Effect.gen(function* () {
+    if (session.resume !== null) {
+      const heard = yield* Effect.promise(async () => readRun());
+
+      if (!here()) return;
+
+      if ("answer" in heard && heard.answer !== null) {
+        yield* follow(heard.answer, null, session.signedIn, here);
+
+        return;
+      }
+    }
+
+    go(session.deployments.length > 0 ? { kind: "manage", session } : { kind: "ready", session, readyFor: { kind: "new" } });
+  }), [follow, go]);
+
+  // `here` is false once the page has left (or mounted again): an arrival in flight then does nothing more, so a run is
+  // carried on at most once however often the page arrives.
+  const arrive = useCallback((here: () => boolean) => Effect.gen(function* () {
+    if (declined !== null) {
+      go({ kind: "start" });
+
+      return;
+    }
+
+    const heard = yield* Effect.promise(async () => readSession());
+
+    if (!here()) return;
+
+    if ("refusal" in heard) {
+      go(heard.refusal.need?.id === "signin-again" ? { kind: "start" } : { kind: "failed", refusal: heard.refusal });
+
+      return;
+    }
+
+    if (!heard.answer.signedIn) {
+      go({ kind: "start" });
+
+      return;
+    }
+
+    yield* land(heard.answer, here);
+  }), [declined, go, land]);
+
+  useEffect(() => {
+    let here = true;
+
+    detach(arrive(() => here));
+
+    return () => { here = false; };
+  }, [arrive, arrivals]);
+
+  // Ready keeps what was chosen, with the session read again for what this sign-in can do now.
+  useEffect(() => {
+    if (tokenReads === 0) return undefined;
+    let here = true;
+
+    detach(Effect.gen(function* () {
+      const heard = yield* Effect.promise(async () => readSession());
+
+      if (here && "answer" in heard) setStage((now) => (now.kind === "ready" ? { ...now, session: heard.answer } : now));
+    }));
+
+    return () => { here = false; };
+  }, [tokenReads]);
+
+  // A sign-in in Cloudflare's window ended. Refused there, Start shows Cloudflare's words as a declined consent and any
+  // other screen its refusal; for API Tokens, Ready reads its session again; otherwise the page lands anew.
+  const signedIn = useCallback((end: ConnectEnded, apiTokens: boolean) => {
+    setSigningIn(false);
+
+    if (end.error !== null) {
+      setEnded({ error: end.error, description: "" });
+      setRefusal({ error: `Cloudflare didn't give Kinu access: ${end.error}`, status: 0, need: null, refused: null });
+    }
+
+    if (apiTokens) setTokenReads((count) => count + 1);
+    else if (end.error === null) setArrivals((count) => count + 1);
+  }, []);
+
+  // Signs in to Cloudflare in its own window (`beginConnect`, opened at the click), this page waiting until its end
+  // (`signedIn`). A refused window runs it in this tab, and the finish page brings the tab back here.
+  const signIn = useCallback((apiTokens: boolean) => {
+    const connect = beginConnect();
+
+    setSigningIn(true);
+    setRefusal(null);
+    setEnded(null);
+
+    return Effect.gen(function* () {
+      const heard = yield* Effect.promise(async () => beginSignIn(connect.id, apiTokens));
+
+      if ("refusal" in heard) {
+        connect.cancel();
+        setRefusal(heard.refusal);
+        setSigningIn(false);
+
+        return;
+      }
+
+      connect.start(heard.answer.location, (end) => signedIn(end, apiTokens));
+    });
+  }, [signedIn]);
+
+  const onSignIn = useCallback(() => detach(signIn(false)), [signIn]);
+  const onApiTokens = useCallback(() => detach(signIn(true)), [signIn]);
+
+  const asked = stage.kind === "run" ? stage.asked : null;
+
+  const onHeard = useCallback((heard: DeployHeard<DeployRunView | null>) => {
+    if ("refusal" in heard) {
+      setRefusal(heard.refusal);
+
+      // A sign-in run out waits on the person; anything else is read again.
+      if (heard.refusal.need?.id !== "signin-again") setAttempt((count) => count + 1);
+
+      return;
+    }
+
+    if (heard.answer !== null) go({ kind: "run", run: heard.answer, asked });
+  }, [asked, go]);
+
+  useFollow(stage.kind === "run" ? stage.run : null, attempt, onHeard);
+
+  const deploy = (request: DeployRunRequest, kind: RunAsked) => Effect.gen(function* () {
+    setDeploying(true);
+    setRefusal(null);
+    const begun = yield* Effect.promise(async () => beginRun(request));
+
+    if ("refusal" in begun) {
+      setRefusal(begun.refusal);
+      setDeploying(false);
+
+      return;
+    }
+
+    const heard = yield* Effect.promise(async () => readRun());
+
+    setDeploying(false);
+    setHandedOff(null);
+
+    if ("refusal" in heard) setRefusal(heard.refusal);
+    else if (heard.answer !== null) go({ kind: "run", run: heard.answer, asked: kind });
+  });
+
+  const retry = () => Effect.gen(function* () {
+    setRetrying(true);
+    const heard = yield* Effect.promise(async () => continueRun());
+
+    setRetrying(false);
+
+    if ("refusal" in heard) setRefusal(heard.refusal);
+    else if (heard.answer !== null) go({ kind: "run", run: heard.answer, asked });
+  });
+
+  const change = (session: DeploySession, kinu: DeployedKinu, picked: KinuChange) => {
+    if (picked === "update") return deploy({ kind: "update", account: kinu.account, name: kinu.name }, "update");
+
+    if (picked === "link") return deploy({ kind: "change", account: kinu.account, name: kinu.name, setupLink: true }, "change");
+
+    return Effect.sync(() => go({ kind: "ready", session, readyFor: { kind: picked, kinu } }));
+  };
+
+  const backTo = (session: DeploySession) => go(session.deployments.length > 0 ? { kind: "manage", session } : { kind: "start" });
+
+  // Back to the Kinus this sign-in has, read again: a run just done is one of them now.
+  const manage = () => Effect.gen(function* () {
+    setStage({ kind: "loading" });
+    const heard = yield* Effect.promise(async () => readSession());
+
+    go("answer" in heard && heard.answer.signedIn ? { kind: "manage", session: heard.answer } : { kind: "start" });
+  });
+
+  const refusalActions: RefusalActions = { signingIn, onSignIn, onApiTokens, onHandedOff: setHandedOff };
+
+  if (stage.kind === "loading") {
+    return (
+      <DeployShell dot={0} screen="loading">
+        <p className="inline-flex items-center gap-2 t-public-body" aria-busy="true"><Loader size="sm" />Opening…</p>
+      </DeployShell>
+    );
+  }
+
+  if (stage.kind === "start") return <DeployStart declined={ended ?? declined} refusal={refusal?.error ?? null} signingIn={signingIn} onSignIn={onSignIn} />;
+
+  if (stage.kind === "failed") return <Failed refusal={stage.refusal} />;
+
+  if (stage.kind === "manage") {
+    const { session } = stage;
+
+    return (
+      <DeployManage session={session} starting={deploying} refusal={refusal} refusalActions={refusalActions}
+        onChange={(kinu, picked) => detach(change(session, kinu, picked))} onDeployAnother={() => go({ kind: "ready", session, readyFor: { kind: "new" } })} />
+    );
+  }
+
+  if (stage.kind === "ready") {
+    const { session, readyFor } = stage;
+
+    return (
+      <DeployReady session={session} readyFor={readyFor} deploying={deploying} refusal={refusal} refusalActions={refusalActions}
+        onDeploy={(request) => detach(deploy(request, request.kind))} onBack={() => backTo(session)} />
+    );
+  }
+
+  const { run } = stage;
+
+  if (run.state === "live" && run.live !== undefined) {
+    return <DeployLive run={{ ...run, live: run.live }} asked={stage.asked} refusal={refusal} actions={refusalActions} onAddDomain={() => detach(manage())} />;
+  }
+
+  return <DeployRunning run={run} asked={stage.asked} handedOff={handedOff} retrying={retrying} refusal={refusal} actions={refusalActions} onRetry={() => detach(retry())} />;
 }

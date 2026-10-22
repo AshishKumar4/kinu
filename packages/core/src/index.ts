@@ -103,7 +103,7 @@ export type * from './mail/mailbox-api';
 
 export { importantMail, MAIL_BOX_KINDS, MAIL_SEND_STATES, MAIL_VIEWS, MAIL_WAKES, MAIL_WOKE } from './mail/mailbox-api';
 
-export { MailStore, type MailBlobs, type ParsedMail } from './mail/store';
+export { MailStore, type MailBlobs, type MailBoxOwner, type ParsedMail } from './mail/store';
 
 export { createMailCodemodeProvider, unreadMailForTurn, type MailDeps, type MailSendApprovals } from './tools/mail-codemode';
 

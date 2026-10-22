@@ -34,6 +34,7 @@ import { ReleaseManifestSchema } from '../packages/core/src/deploy/manifest';
 import type { ReleaseFile } from '../packages/core/src/deploy/manifest';
 import * as v from 'valibot';
 import { REPO_ROOT as REPO } from './repo-root';
+import { pinnedTools } from './devbox-tools-pin';
 
 
 const [version, sha, distArg, outArg] = process.argv.slice(2);
@@ -174,6 +175,8 @@ const manifest = v.parse(ReleaseManifestSchema, buildReleaseManifest({
   // publishes one yet, and a manifest that claimed one would send every
   // deployment at a URL that answers 404.
   seed: null,
+  // The computer's tools travel through the channel's releases bucket (`deploy.sh` publishes them beside the artifact).
+  tools: pinnedTools(),
 }));
 
 const manifestText = `${JSON.stringify(manifest, null, 2)}\n`;

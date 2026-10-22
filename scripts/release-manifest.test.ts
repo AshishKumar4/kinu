@@ -14,7 +14,7 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { deployedConfig, deriveInfrastructure, SUPPLY, type Supply } from './infra-manifest';
 import {
-  VAR_POLICY, buildReleaseManifest, releaseBindings, releaseSecrets, releaseVars,
+  VAR_POLICY, buildReleaseManifest, releaseBindings, releaseComputer, releaseSecrets, releaseVars,
 } from './release-manifest';
 import { RELEASE_ARTIFACT_NAME, ReleaseManifestSchema } from '../packages/core/src/deploy/manifest';
 
@@ -29,6 +29,29 @@ const MANIFEST = buildReleaseManifest({
   files: [{ path: 'worker/index.js', sha256: 'a'.repeat(64), size: 10, assetHash: null }],
   modules: ['index.js'],
   seed: null,
+  tools: { sha256: 'c'.repeat(64), bytes: 300 * 1024 * 1024 },
+});
+
+describe('the computer a release carries', () => {
+  test('is the Durable Object-managed container, on no image, reading the pinned tools from the store bucket', () => {
+    const container = (CONFIG.containers ?? []).find((entry) => 'scheduling_policy' in entry && entry.scheduling_policy === 'durable_object');
+
+    expect(MANIFEST.computer).toEqual({
+      className: container?.class_name ?? 'no durable_object container',
+      bucket: 'BACKUP_BUCKET',
+      tools: {
+        sha256: 'c'.repeat(64),
+        parts: [
+          { key: `devbox-tools/${'c'.repeat(64)}.tgz.0`, bytes: 256 * 1024 * 1024 },
+          { key: `devbox-tools/${'c'.repeat(64)}.tgz.1`, bytes: 44 * 1024 * 1024 },
+        ],
+      },
+    });
+  });
+
+  test('is none for a config that deploys no container', () => {
+    expect(releaseComputer({ ...CONFIG, containers: [] }, { sha256: 'c'.repeat(64), bytes: 1 })).toBeNull();
+  });
 });
 
 describe('the manifest is the config', () => {
