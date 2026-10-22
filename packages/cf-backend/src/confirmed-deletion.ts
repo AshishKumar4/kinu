@@ -16,7 +16,8 @@ interface Deletable {
 
 /**
  * Deletes the object `object` opens, then reads it again through a new stub (`object` is called once for each): none of
- * its own data left is the deletion done, whatever came back. The read must create nothing it counts.
+ * its own data left is the deletion done, whatever came back. Where some is left, the deletion's own failure is the
+ * reason, or, if it answered, the data it left. The read must create nothing it counts.
  */
 export async function confirmedDeletion(object: () => Deletable, what: string): Promise<void> {
   return settle(Effect.gen(function* () {
@@ -31,7 +32,8 @@ export async function confirmedDeletion(object: () => Deletable, what: string): 
 
     if (held === 0) return;
 
-    return yield* Effect.fail(new KinuError('io', `${what} still holds ${String(held)} of its own after its deletion`,
-      deleting === null ? {} : { cause: deleting }));
+    if (deleting !== null) return yield* Effect.fail(deleting);
+
+    return yield* Effect.fail(new KinuError('io', `${what} still holds ${String(held)} of its own after its deletion answered`));
   }));
 }

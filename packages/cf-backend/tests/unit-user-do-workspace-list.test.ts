@@ -4,6 +4,7 @@ import * as v from 'valibot';
 import { serveFamily } from './helpers/api';
 import { describe, expect, setSystemTime, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { renderThrownChain } from '@kinu.run/core/obs';
 import {
   TEST_CREDENTIAL_ENCRYPTION_KEY,
   createTestUserDO, createdWorkspace, testOwner, type TestUserDO, type TestUserDOOptions,
@@ -102,8 +103,11 @@ describe('a deletion that could not finish', () => {
     const owner = await testOwner();
     await harness.userDO.registerWorkspace(owner, 'half-gone');
 
-    await expect(harness.userDO.removeWorkspace(owner, 'half-gone', USER_ID))
-      .rejects.toThrow('the container refused to go');
+    // What failed names the workspace; why is its cause (`confirmedDeletion`).
+    const [removed] = await Promise.allSettled([harness.userDO.removeWorkspace(owner, 'half-gone', USER_ID)]);
+
+    expect(removed.status === 'rejected' ? renderThrownChain({ cause: removed.reason }) : 'it answered')
+      .toMatch(/the workspace half-gone[\s\S]*the container refused to go/u);
 
     expect(pendingRows(harness)).toEqual([{ name: 'half-gone', delete_pending: 1 }]);
     // Hidden from the list, the total, and the ownership gate.
@@ -406,6 +410,32 @@ describe('a deletion that could not finish', () => {
     expect(pendingRows(harness)).toEqual([]);
     expect((await harness.userDO.listWorkspaces(owner)).total).toBe(0);
     harness.close();
+  });
+});
+
+// Production, 2026-10-22: a destroy ends its activation after the wipe, which can cut its answer with any error, and
+// not only the SDK's 'destroyed'. The workspace's own read decides, not the error's text (`confirmedDeletion`).
+describe("a workspace's deletion, confirmed by reading it", () => {
+  test('lands where the wipe did, whatever cut its answer, and fails where the workspace still stands', async () => {
+    const converged = async (error: string, wiped: boolean) => {
+      const harness = createTestUserDO({ durableObjectId: USER_ID, destroyWorkspaceError: error, destroyWorkspaceWiped: wiped });
+      const owner = await testOwner();
+      await harness.userDO.registerWorkspace(owner, 'cut');
+      const [removed] = await Promise.allSettled([harness.userDO.removeWorkspace(owner, 'cut', USER_ID)]);
+      const pending = harness.db.prepare<{ n: number }, []>('SELECT COUNT(*) AS n FROM user_workspaces WHERE delete_pending = 1').get()?.n;
+
+      harness.close();
+
+      return { removed: removed.status, pending };
+    };
+
+    expect({
+      cutOtherwise: await converged('Network connection lost.', true),
+      abortedUnwiped: await converged('destroyed', false),
+    }).toEqual({
+      cutOtherwise: { removed: 'fulfilled', pending: 0 },
+      abortedUnwiped: { removed: 'rejected', pending: 1 },
+    });
   });
 });
 
