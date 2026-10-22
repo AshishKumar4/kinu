@@ -1,6 +1,3 @@
-diff --git a/node_modules/@nimbus-sh/core/.bun-tag-59583e9ba3b3daf b/.bun-tag-59583e9ba3b3daf
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/node-compat/fs.js b/dist/node-compat/fs.js
 index e58cf64276ba6db4e44ba5d13226f5707410b802..662537218e88ced39545a930e3baaa183ea4aac1 100644
 --- a/dist/node-compat/fs.js

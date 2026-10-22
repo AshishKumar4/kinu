@@ -1,6 +1,3 @@
-diff --git a/node_modules/@nimbus-sh/worker/.bun-tag-3a58be39db26b80d b/.bun-tag-3a58be39db26b80d
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/hosted/runtime.d.ts b/dist/hosted/runtime.d.ts
 index 53dd6961be290fd6ac4ca28b0b8f578929274953..dce425cc909646ebb03dc7748351187c66625df6 100644
 --- a/dist/hosted/runtime.d.ts
