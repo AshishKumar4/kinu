@@ -6,7 +6,8 @@
  */
 import * as v from 'valibot';
 import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE } from '@kinu.run/core';
-import { renderToolsPrelude } from '../../src/codemode-sandbox';
+import vendor from 'virtual:kinu-slate-vendor';
+import { NODE_COMPAT_MODULE, renderToolsPrelude } from '../../src/codemode-sandbox';
 
 /** The namespaces a program sees: absent ones are left unbound, as an actor that does not wire them leaves them. */
 export interface ProgramNamespaces {
@@ -17,9 +18,15 @@ export interface ProgramNamespaces {
 
 /** What `body` returns, read by `schema`, run as the sandbox runs an eval program, with `cwd` as its `process.cwd()`. */
 export async function runProgram<Answer>(body: string, namespaces: ProgramNamespaces, cwd: string, schema: v.GenericSchema<Answer>): Promise<Answer> {
-  // The prelude imports the shim by its module name, which only the sandbox's loader resolves: here, a data URL.
+  // The prelude imports the shim and Nimbus's node-compat by their module names, which only the sandbox's loader
+  // resolves: here, data URLs of the same sources.
   const shim = `data:text/javascript;base64,${Buffer.from(KINU_NODE_MODULE_SOURCE).toString('base64')}`;
-  const prelude = renderToolsPrelude([], { workspace: 'kinu-test', cwd }).replace(`"./${KINU_NODE_MODULE_NAME}"`, JSON.stringify(shim));
+  const compat = `data:text/javascript;base64,${Buffer.from(vendor.nodeCompat).toString('base64')}`;
+
+  const prelude = renderToolsPrelude([], { workspace: 'kinu-test', cwd })
+    .replace(`"./${KINU_NODE_MODULE_NAME}"`, JSON.stringify(shim))
+    .replace(`"./${NODE_COMPAT_MODULE}"`, JSON.stringify(compat));
+
   const names = (['workspace', 'computer', 'device'] as const).filter((name) => namespaces[name] !== undefined);
 
   // The program's text is a module's body, as the sandbox wraps it: an async function over the namespaces it binds.

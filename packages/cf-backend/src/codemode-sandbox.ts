@@ -27,6 +27,13 @@ export interface SandboxIdentity {
   readonly cwd: string;
 }
 
+/** Nimbus's node-compat as the program imports it: `require`'s fs and child_process (`slate-vendor.ts`). */
+export const NODE_COMPAT_MODULE = 'kinu-node-compat.js';
+
+async function nodeCompatSource(): Promise<string> {
+  return (await import('virtual:kinu-slate-vendor')).default.nodeCompat;
+}
+
 /**
   * `typeof` guards: a namespace this actor does not wire is an unresolved identifier, and `typeof`
   * is the one read of it that does not throw. An unparseable crafted body throws only on call.
@@ -34,12 +41,13 @@ export interface SandboxIdentity {
 export function renderToolsPrelude(crafted: readonly CraftedToolSource[], identity: SandboxIdentity): string {
   return [
     `    const __kinu = await import(${JSON.stringify(`./${KINU_NODE_MODULE_NAME}`)});`,
+    `    const __kinuCompat = await import(${JSON.stringify(`./${NODE_COMPAT_MODULE}`)});`,
     '    const __kinuWorkspace = typeof workspace === "undefined" ? null : workspace;',
     '    __kinu.bindSlates(__kinuWorkspace);',
     '    const __kinuBuiltins = await __kinu.loadBuiltins();',
     `    const process = __kinu.createProcess(${JSON.stringify(identity.cwd)});`,
     '    const __kinuMachines = { computer: typeof computer === "undefined" ? null : computer, device: typeof device === "undefined" ? null : device };',
-    '    const require = __kinu.createRequire({ workspace: __kinuWorkspace, machines: __kinuMachines, builtins: __kinuBuiltins.loaded, cwd: process.cwd() });',
+    '    const require = __kinu.createRequire({ workspace: __kinuWorkspace, machines: __kinuMachines, builtins: __kinuBuiltins.loaded, cwd: process.cwd(), createNodeCompat: __kinuCompat.createNodeCompat });',
     `    const fetch = __kinu.createFetch(${JSON.stringify(EGRESS_FAILURE_HEADER)});`,
     // The program's own bindings first (the owner's secrets granted here, `process.env` holds them too), never over these.
     `    const env = Object.freeze({ ...this.env, workspace: ${JSON.stringify(identity.workspace)}, missingBuiltins: __kinuBuiltins.missing });`,
@@ -167,7 +175,9 @@ async function programWorker(input: {
     timeout: input.timeout,
     globalOutbound: input.egress,
     bindings: { ...input.env },
-    modules: input.kinuNode ? { [KINU_NODE_MODULE_NAME]: KINU_NODE_MODULE_SOURCE, [BROWSER_CLIENT_MODULE]: await browserClientSource() } : {},
+    modules: input.kinuNode
+      ? { [KINU_NODE_MODULE_NAME]: KINU_NODE_MODULE_SOURCE, [NODE_COMPAT_MODULE]: await nodeCompatSource(), [BROWSER_CLIENT_MODULE]: await browserClientSource() }
+      : {},
   });
 }
 

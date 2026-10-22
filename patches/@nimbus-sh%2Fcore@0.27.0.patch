@@ -1,3 +1,28 @@
+diff --git a/node_modules/@nimbus-sh/core/.bun-tag-59583e9ba3b3daf b/.bun-tag-59583e9ba3b3daf
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/dist/node-compat/fs.js b/dist/node-compat/fs.js
+index e58cf64276ba6db4e44ba5d13226f5707410b802..662537218e88ced39545a930e3baaa183ea4aac1 100644
+--- a/dist/node-compat/fs.js
++++ b/dist/node-compat/fs.js
+@@ -769,7 +769,16 @@ export function createNodeFs(faces, { cwd, stdin, reachStreams }) {
+     // The engine's own read and write streams, over this filesystem: Node's
+     // ReadStream and WriteStream read and write through the `fs` they are given.
+     // A face without descriptors has none to give them (ENOSYS).
+-    const engineFs = realm.getBuiltinModule('node:fs');
++    // An engine without Node's fs (a Worker Loader isolate before
++    // compatibility date 2025-09-01) has no streams to build on: each is ENOSYS.
++    const engineFs = realm.getBuiltinModule('node:fs') ?? {
++        ReadStream: class {
++            constructor(path) { throw lacks('open', streamPath(path)); }
++        },
++        WriteStream: class {
++            constructor(path) { throw lacks('open', streamPath(path)); }
++        },
++    };
+     const streamFs = { open, read, write, close, fsync };
+     const streamPath = (path) => (path === null || path === undefined ? undefined : resolvePath(cwd, path));
+     // A stream given no fs of its own (none, undefined or null, which Node's
 diff --git a/dist/runtime/session-protocol.d.ts b/dist/runtime/session-protocol.d.ts
 index e2e45cf26533e9bf1a97f5cdf9dc85a0a9227113..6b8b050598de58b64f61f0364139242e9438a13f 100644
 --- a/dist/runtime/session-protocol.d.ts
@@ -83,6 +108,26 @@ index 4d395cc08b5e91ec1e09d8254fccbe577e17e009..9266a76c128372453a7b3ce5a0751371
      stat: 'joined',
      lstat: 'joined',
      utimes: 'once',
+diff --git a/src/node-compat/fs.ts b/src/node-compat/fs.ts
+index 5ebc0b5bc45614c0fd42679bec36b1c1cc438565..6fb52d8f5bd465325a1e48da0ed3d9022f4a671c 100644
+--- a/src/node-compat/fs.ts
++++ b/src/node-compat/fs.ts
+@@ -902,8 +902,13 @@ export function createNodeFs(faces: NodeFaces, { cwd, stdin, reachStreams }: Nod
+ 
+   // The engine's own read and write streams, over this filesystem: Node's
+   // ReadStream and WriteStream read and write through the `fs` they are given.
+-  // A face without descriptors has none to give them (ENOSYS).
+-  const engineFs = realm.getBuiltinModule('node:fs');
++  // A face without descriptors has none to give them (ENOSYS). An engine
++  // without Node's fs (a Worker Loader isolate before compatibility date
++  // 2025-09-01) has no streams to build on: each is ENOSYS too.
++  const engineFs = realm.getBuiltinModule('node:fs') ?? {
++    ReadStream: class { constructor(path?: string | URL | null) { throw lacks('open', streamPath(path)); } },
++    WriteStream: class { constructor(path?: string | URL | null) { throw lacks('open', streamPath(path)); } },
++  };
+   const streamFs = { open, read, write, close, fsync };
+   const streamPath = (path: string | URL | null | undefined): string | undefined => (path === null || path === undefined ? undefined : resolvePath(cwd, path));
+   // A stream given no fs of its own (none, undefined or null, which Node's
 diff --git a/src/runtime/session-protocol.ts b/src/runtime/session-protocol.ts
 index 66452b29e191e1591acd3d632b76089f5116b942..bdfc9e8c667468b841ef340f974470ca9165f876 100644
 --- a/src/runtime/session-protocol.ts

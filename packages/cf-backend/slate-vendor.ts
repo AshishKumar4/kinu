@@ -5,13 +5,15 @@ import type { Plugin } from 'vite';
 
 const SpecifiersSchema = v.array(v.string());
 
-/** Vendored bytes for dynamic workers: react/capnweb for the slate runner, puppeteer for `web.connectBrowser` in
- *  eval; `src/slate-vendor.d.ts` names this type. The bun test preload reads a built copy back from disk through
+/** Vendored bytes for dynamic workers: react/capnweb for the slate runner, puppeteer for `web.connectBrowser` and
+ *  Nimbus's node-compat for `fs` and `child_process` in eval; `src/slate-vendor.d.ts` names this type. The bun test preload reads a built copy back from disk through
  *  the schema. */
 export const SlateVendorSchema = v.object({
   react: v.string(),
   /** `@cloudflare/puppeteer`, 296 KB minified (2026-09-28); `@cloudflare/playwright` measured 1.8 MB. */
   puppeteer: v.string(),
+  /** `@nimbus-sh/core/node-compat`'s `createNodeCompat`, 48 KB minified (0.27.0, 2026-10-22); `node:*` stays the isolate's. */
+  nodeCompat: v.string(),
   reactStub: v.string(),
   capnweb: v.string(),
   capnwebWorkers: v.string(),
@@ -83,9 +85,10 @@ export function buildSlateVendor(): SlateVendor {
   const capnweb = bundle('export * from "capnweb";', ['browser', 'import']);
   const capnwebWorkers = bundle('export * from "capnweb";', ['workerd', 'import'], ['cloudflare:*']);
   const puppeteer = bundle('export { default } from "@cloudflare/puppeteer";', ['workerd', 'worker', 'browser', 'import'], ['node:*', 'cloudflare:*']);
+  const nodeCompat = bundle('export { createNodeCompat } from "@nimbus-sh/core/node-compat";', ['workerd', 'worker', 'import'], ['node:*']);
 
   return {
-    react: react.text, puppeteer: puppeteer.text, reactStub, capnweb: capnweb.text, capnwebWorkers: capnwebWorkers.text, reactExports,
+    react: react.text, puppeteer: puppeteer.text, nodeCompat: nodeCompat.text, reactStub, capnweb: capnweb.text, capnwebWorkers: capnwebWorkers.text, reactExports,
     imports: {
       react: importSpecifiers(react.metafile),
       capnweb: importSpecifiers(capnweb.metafile),
