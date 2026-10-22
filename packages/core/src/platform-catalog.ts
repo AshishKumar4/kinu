@@ -1456,7 +1456,51 @@ export const PLATFORM_CATALOG = {
       'These three strings are the difference between a retry that succeeds and a retry loop: '
       + 'do.isolate.oom also says "was reset" and RECURS, so a discriminator that matched on '
       + '"reset" alone would loop forever on a real OOM. Recorded as observed rather than '
-      + 'probed: they came out of production, not a designed experiment.',
+      + 'probed: they came out of production, not a designed experiment. '
+      + 'The first string is NOT always a deploy: do.storage.write_await_reset throws the same words '
+      + 'with no deploy, and it recurs as long as the work keeps its shape, so re-attempting the same '
+      + 'work loops. Its message alone cannot tell the two apart.',
+    conflictsWith: ['do.storage.write_await_reset'],
+  },
+
+  'do.storage.write_await_reset': {
+    subject:
+      'A Durable Object request that alternates SQLite writes, awaits and tens of ms of CPU is reset after about a '
+      + 'second of CPU',
+    limit: { value: 1_000, unit: 'ms' },
+    origin: 'platform',
+    bounds: 'duration',
+    evidence: 'proven-by-probe',
+    provenance: '/mnt/local/kinu/logs/research/do-write-await-reset/RESULTS.md §2',
+    date: '2026-10-22',
+    trigger: 'a request that writes SQLite, awaits anything, computes 12 ms or more, and repeats, for about 1 s of CPU',
+    onBreach:
+      'its next storage call throws and the object is reset, in the words of a code deploy though none happened; the '
+      + 'same work reset again on every attempt',
+    observable: [
+      { context: 'awaited writes between dense CPU, no deploy', message: 'Durable Object reset because its code was updated.' },
+    ],
+    firstPartySignal: true,
+    measurements: [
+      { scenario: '64 writes, ~12.5-37 ms of CPU between, a timer yield each: earliest reset (CPU)', value: 1_000, unit: 'ms' },
+      { scenario: '16 writes, ~125 ms of CPU between: reset 2 of 3, at (CPU)', value: 3_700, unit: 'ms' },
+      { scenario: '64 writes, ~4 ms of CPU between: no reset (3 of 3), up to (CPU)', value: 2_800, unit: 'ms' },
+      { scenario: '2 writes around fully synchronous CPU, no await: no reset (12 of 12), up to (CPU)', value: 8_000, unit: 'ms' },
+      { scenario: 'no writes: no reset (7 of 7), up to (CPU)', value: 6_000, unit: 'ms' },
+      { scenario: '16 writes, 12.5 ms of work between: CPU billed for 0.2 s of work, at least', value: 2_100, unit: 'ms' },
+    ],
+    notes:
+      'The writes are the variable, not calls or facets: the same CPU with no writes survived in a plain object, a '
+      + 'static facet, a loader facet and a dynamic-worker entrypoint, while with a write per slice it reset in a plain '
+      + 'object, a static facet and a loader facet alike. A held call beside the work does not protect it (D10 renews '
+      + 'the CPU budget, which this is not), nor does `await ctx.storage.sync()` after each write. The kind of await does '
+      + 'not matter (setTimeout, scheduler.wait, a real fetch): the same writes inside one synchronous section survived. '
+      + 'Each awaited write also inflates the request\'s CPU by 5-40 ms. So work that computes between writes either '
+      + 'keeps the writes in one synchronous section or keeps its CPU between awaited writes to a few ms. Not '
+      + 'established: the platform\'s mechanism, and whether CPU or wall time is the bound (64-write resets landed at '
+      + '1.1-1.3 s of wall too). The agent-placement study\'s "facet work with no call in flight is reset in 3-12 s" '
+      + 'wrote a row per slice, so it is this.',
+    conflictsWith: ['do.reset.transient'],
   },
 
   'websocket.message_bytes': {
