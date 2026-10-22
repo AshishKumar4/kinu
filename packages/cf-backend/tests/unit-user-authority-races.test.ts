@@ -7,7 +7,7 @@ import {
   asFetchFunction,
   credentialToHeaders,
 } from '@kinu.run/core';
-import { setDiagnosticsSink } from '@kinu.run/core/obs';
+import { renderThrownChain, setDiagnosticsSink } from '@kinu.run/core/obs';
 import {
   createTestUserDO,
   createdWorkspace,
@@ -126,7 +126,10 @@ describe('a workspace whose delete has begun', () => {
     const owner = await testOwner();
     const token = await provisionTestWorkspace(harness, 'doomed');
 
-    await expect(harness.userDO.removeWorkspace(owner, 'doomed', USER_ID)).rejects.toThrow('refused to go');
+    // What failed names the workspace; why is its cause (`confirmedDeletion`).
+    const [removed] = await Promise.allSettled([harness.userDO.removeWorkspace(owner, 'doomed', USER_ID)]);
+
+    expect(removed.status === 'rejected' ? renderThrownChain({ cause: removed.reason }) : 'it answered').toMatch(/the workspace doomed[\s\S]*refused to go/u);
 
     // The row survives because the teardown is still owed, but the capability token must not.
     expect(harness.db.prepare<{ delete_pending: number }, []>(
