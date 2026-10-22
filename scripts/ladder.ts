@@ -3838,7 +3838,9 @@ function rowArgv(gate: Gate, tracked: readonly string[], deploying: boolean, tim
 }
 
 export const ArmadaReportSchema = v.object({
-  job: v.string(),
+  // Null when no task job started (staging e8837b133, 2026-10-22: a secret the job named was not set), the run's
+  // `problems` then saying why.
+  job: v.nullable(v.string()),
   graded: v.picklist(['pass', 'fail', 'not graded']),
   verdicts: v.optional(v.object({
     rows: v.array(v.object({
@@ -3914,7 +3916,14 @@ export function armadaReport(answered: string): ArmadaReport | undefined {
   const ran = v.safeParse(v.pipe(v.string(), v.parseJson(), ArmadaRunSchema), last);
   const path = ran.success ? ran.output.report : null;
 
-  return path === null || !existsSync(path) ? undefined : v.parse(ArmadaReportSchema, JSON.parse(readFileSync(path, 'utf8')));
+  if (path === null || !existsSync(path)) return undefined;
+  const read = v.safeParse(v.pipe(v.string(), v.parseJson(), ArmadaReportSchema), readFileSync(path, 'utf8'));
+
+  // A report this ladder cannot read grades nothing, and says why on each of its rows, never ending the phase unreported.
+  return read.success ? read.output : {
+    job: null, graded: 'not graded', artifacts: {},
+    problems: [`armada's report ${path} does not read as this ladder expects: ${v.summarize(read.issues).replaceAll('\n', ' ')}`],
+  };
 }
 
 type ArmadaRow = NonNullable<ArmadaReport['verdicts']>['rows'][number];
@@ -3995,7 +4004,7 @@ async function armadaPhaseJob(phases: readonly DeployPhase[], rows: readonly Gat
   const graded = armadaReport(answered);
   const reproduce = armadaReproduce(argv);
 
-  if (report !== '' && graded !== undefined) recordNotice(report, { phase: phases[0] ?? 'source', what: `armada job ${graded.job}`, notice: `the ${phase} rows armada ran, at ${sha}: their logs and outputs are in that job` });
+  if (report !== '' && graded !== undefined && graded.job !== null) recordNotice(report, { phase: phases[0] ?? 'source', what: `armada job ${graded.job}`, notice: `the ${phase} rows armada ran, at ${sha}: their logs and outputs are in that job` });
 
   const failed = armadaRowVerdicts(rows, graded).filter(({ gate, verdict, green, found }) => !recordArmadaRow(report, gate, verdict, { green, found, reproduce, said, kept: graded?.artifacts[armadaTaskName(gate)] }))
     .map(({ gate }) => gate.run);
@@ -4018,7 +4027,7 @@ export function armadaRowVerdicts(rows: readonly Gate[], graded: ArmadaReport | 
     const problem = verdict?.problem ?? (graded?.graded === 'not graded' ? graded.problems.join('; ') : undefined);
 
     const found = graded === undefined ? '`armada run` wrote no report'
-      : [`job ${graded.job}`, ...problem === undefined ? [] : [problem]].join('; ');
+      : [...graded.job === null ? [] : [`job ${graded.job}`], ...problem === undefined ? [] : [problem]].join('; ');
 
     return { gate, verdict, green: graded !== undefined && graded.graded !== 'not graded' && verdict?.exitCode === 0, found };
   });
