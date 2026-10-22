@@ -4,6 +4,7 @@
  * the socket at once, tells the pane each new reason it waits, and attaches as soon as it can.
  */
 import { describe, expect, test } from 'bun:test';
+import { Effect } from 'effect';
 import type { RestoreReadiness } from '../src/restoration';
 import { attachWhenReady, type TerminalSocketEvents } from '../src/terminal';
 
@@ -39,11 +40,11 @@ function boxAnswering(answers: readonly (RestoreReadiness | Error)[], leaveAfter
       },
       wait: async (ms: number) => { now += ms; },
       now: () => now,
-      attach: async () => {
+      attach: () => Effect.sync(() => {
         attached += 1;
 
         return pty;
-      },
+      }),
     },
   };
 }

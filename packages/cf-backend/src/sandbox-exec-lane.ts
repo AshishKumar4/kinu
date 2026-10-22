@@ -68,11 +68,15 @@ function pause(clock: Clock, ms: number, signal: AbortSignal | undefined): Promi
 async function readinessPastBase(
   handle: Pick<ContainerOperations, 'resolveReadiness'>, clock: Clock, signal: AbortSignal | undefined,
 ): Promise<Readiness> {
+  let held = false;
+
   const readiness = await holdReadiness({
     ask: () => handle.resolveReadiness(), wait: (ms) => pause(clock, ms, signal), now: () => clock.now(), gone: () => signal?.aborted === true,
+    pending: () => { held = true; },
   });
 
-  signal?.throwIfAborted();
+  // Only a hold the signal ended is a cancellation; a call that was never held runs on to its own abort handling.
+  if (held) signal?.throwIfAborted();
 
   return readiness;
 }

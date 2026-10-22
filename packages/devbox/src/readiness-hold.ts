@@ -7,19 +7,19 @@
 import type { RestoreReadiness } from './restoration';
 
 /** How often a held ask asks again. */
-export const READINESS_ASK_MS = 1_000;
+const READINESS_ASK_MS = 1_000;
 
 /**
  * A base build that names no new step for this long has stopped: the caller gets the box's words. Its longest step,
  * the base image's first start, is given up by the builder at 120 s, and a fresh install took at most 31 s (D66).
  */
-export const BASE_STALL_MS = 180_000;
+const BASE_STALL_MS = 180_000;
 
 /**
  * How long an ask waits for a box that is saving and stopping. The longest such stop is a rest: its commit (a base commit
  * took up to 76.9 s, D50), the snapshot it waits on (given up at 60 s, D108), and the stop the box waits for (5 s): 142 s.
  */
-export const QUIESCE_HOLD_MS = 180_000;
+const QUIESCE_HOLD_MS = 180_000;
 
 export interface ReadinessHold {
   readonly ask: () => Promise<RestoreReadiness>;

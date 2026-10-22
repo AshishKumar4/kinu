@@ -183,7 +183,7 @@ export interface TerminalAttach extends Pick<ReadinessHold, 'ask' | 'wait' | 'no
   /** True while the box still holds the socket: false once the pane left. */
   readonly held: () => boolean;
   /** The PTY, once the box is ready. */
-  readonly attach: () => Promise<TerminalSocketEvents>;
+  readonly attach: () => Effect.Effect<TerminalSocketEvents, DevboxError>;
 }
 
 /**
@@ -207,7 +207,7 @@ export async function attachWhenReady(box: TerminalAttach): Promise<TerminalSock
 
     if (readiness.kind === 'pending') return Effect.fail(new DevboxError('io', readiness.reason));
 
-    return attempt('io', () => box.attach());
+    return box.attach();
   });
 
   return await settle(Effect.catchTag(attached, 'DevboxError', (failure) => Effect.sync(() => {

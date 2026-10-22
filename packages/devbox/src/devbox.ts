@@ -3754,7 +3754,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     const events = await attachWhenReady({
       socket: server, held: () => this.#terminals.has(server),
       ask: () => this.#resolveReadiness(arrived), wait: (ms) => scheduler.wait(ms), now: () => Date.now(),
-      attach: () => settle(this.#withActiveCaller(attempt('io', async () => attachTerminal((await this.#ensureReady(arrived)).container, params, session, server)))),
+      attach: () => this.#withActiveCaller(attempt('io', async () => attachTerminal((await this.#ensureReady(arrived)).container, params, session, server))),
     });
 
     if (events === null) this.#terminals.delete(server);
@@ -3794,19 +3794,20 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   /** A terminal's visitor left, cleanly or not: a close of ours, never the request's exception (D109). */
   override webSocketClose(socket: WebSocket): void {
-    const held = this.#terminals.get(socket);
-
-    this.#terminals.delete(socket);
-
-    if (held !== undefined && 'attached' in held) held.attached.close();
+    this.#released(socket)?.close();
   }
 
   override webSocketError(socket: WebSocket): void {
+    this.#released(socket)?.error();
+  }
+
+  /** The box lets the terminal on `socket` go: its PTY's events, when it had attached. */
+  #released(socket: WebSocket): TerminalSocketEvents | undefined {
     const held = this.#terminals.get(socket);
 
     this.#terminals.delete(socket);
 
-    if (held !== undefined && 'attached' in held) held.attached.error();
+    return held !== undefined && 'attached' in held ? held.attached : undefined;
   }
 
   /** A session's shell and screen end; its next attach opens a fresh one under the same name, in its folder. */
