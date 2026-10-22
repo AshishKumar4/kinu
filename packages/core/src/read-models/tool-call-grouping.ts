@@ -12,11 +12,15 @@ import type { DynamicToolUIPart, ReasoningUIPart, ToolUIPart, UIMessage } from "
 import * as v from "valibot";
 import { JsonObjectSchema, JsonValueSchema } from '../utils/json';
 import { toolCallEffect } from '../tools/tool-call-summary';
-import { ASK_OWNER_TOOL } from '../tools/registry';
+import { programEffectsOf, type ProgramEffects } from '../execution/call-effects';
+import { ASK_OWNER_TOOL, BUILTIN_TOOL_SPECS } from '../tools/registry';
 import { tolerate } from "../obs/index";
 import { type JsonObject, type JsonValue } from '../utils/json';
 import { extractPreviewUrl } from '../preview/preview-origin';
 import { ongoing, phaseTitle } from './tool-phase-title';
+
+/** The tool a program runs under. */
+const EVAL_PROGRAM_TOOL = BUILTIN_TOOL_SPECS.eval.name;
 
 type Part = UIMessage["parts"][number];
 
@@ -229,6 +233,16 @@ export function partEffect(part: AnyToolPart) {
   const answered = part.state === 'output-error' ? part.errorText : partOutput(part);
 
   return toolCallEffect(getToolName(part), partInput(part), part.state === 'output-available' || part.state === 'output-error' ? { toolCallId: part.toolCallId, output: answered } : undefined);
+}
+
+/** A settled program's record of what it did (`call-effects.ts`), from its answer or its failure's words; null for any
+ *  other call, a program still running, and one whose answer holds no record naming this call. */
+export function partProgramEffects(part: AnyToolPart): ProgramEffects | null {
+  if (getToolName(part) !== EVAL_PROGRAM_TOOL) return null;
+
+  if (part.state === 'output-error') return programEffectsOf(part.toolCallId, part.errorText);
+
+  return part.state === 'output-available' ? programEffectsOf(part.toolCallId, partOutput(part)) : null;
 }
 
 function partFailed(part: AnyToolPart): boolean {

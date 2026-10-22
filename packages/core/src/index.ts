@@ -2447,7 +2447,7 @@ export {
   parseProvisionError,
   partOutput,
   partInput,
-  partEffect,
+  partEffect, partProgramEffects,
   callFailed,
 } from './read-models/tool-call-grouping';
 

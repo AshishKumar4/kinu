@@ -19,7 +19,7 @@ import type { UIMessage, FileUIPart, ReasoningUIPart } from "ai";
 import {
   describeToolCall, executorLabel, rowText, summarizeToolCall,
 } from "@kinu.run/core";
-import type { DiffAnchor, InlineSteer, JsonObject, JsonValue, PlacedSteer, ToolCallEffect } from "@kinu.run/core";
+import type { DiffAnchor, InlineSteer, JsonObject, JsonValue, PlacedSteer, ProgramEffects, ToolCallEffect } from "@kinu.run/core";
 import { ASK_OWNER_TOOL, changeNotesCard, clockTime, slatesChanged } from "@kinu.run/core";
 import { FeedbackCard } from "@/components/surfaces/changes/FeedbackCard";
 import * as v from "valibot";
@@ -31,7 +31,7 @@ import { AnswerPicturesContext, PartPictures, useAnswerPictures } from "@/compon
 import { extractPreviewUrl } from "@kinu.run/core";
 import {
   groupMessageParts, phaseCalls, phaseTitle, rollUpTurn, writtenTitles,
-  partOutput, partInput, partEffect, callFailed, parseProvisionError,
+  partOutput, partInput, partEffect, partProgramEffects, callFailed, parseProvisionError,
   type AnyToolPart, type PartBlock,
 } from "@kinu.run/core";
 import { drawnText, toolCallRunning, type LiveTail } from "@kinu.run/core";
@@ -43,6 +43,7 @@ import { StatePill, StatusDot, type StatePillTone } from "@/components/ui/Status
 import { ChatDisclosure, ToolRun, TurnRollup, usePhaseLinesOnSeen, useSeenRunning, WorkLabel } from "@/components/ChatDisclosure";
 import type { UnavailableDevice } from "@/hooks/use-workspace-reads";
 import { Bubble } from "@/components/ui/Bubble";
+import { CallReceipt, ReceiptDetail } from "@/components/CallReceipt";
 import { Button } from "@/components/ui/Button";
 import { Pressable } from "@/components/ui/Pressable";
 import { Dot } from "@/components/ui/Dot";
@@ -246,9 +247,11 @@ function ToolOutput({ output }: { output: JsonValue }) {
   );
 }
 
-function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, errorText, expanded, onToggleExpand }: {
+function ToolCallBlock({ toolName, input, output, effect, receipt, isRunning, isError, errorText, expanded, onToggleExpand }: {
   toolName: string; input?: JsonObject; output?: JsonValue; isRunning: boolean; isError: boolean;
   effect: ToolCallEffect;
+  /** A program's record of what it changed, the host's (`CallReceipt`); null for any other call. */
+  receipt: ProgramEffects | null;
   /** Protocol-level failure reason; never present together with `output`. */
   errorText?: string;
   /** Keyed by toolCallId on the message: a row that joins a fold mid-stream remounts. */
@@ -317,6 +320,7 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
         </span>
         <StatePill tone={stateTone}>{stateBadge}</StatePill>
         <CaretRightIcon size={11} aria-hidden className={`shrink-0 p-text-3 transition-transform duration-150 ${expanded ? "rotate-90" : ""}`} />
+        <CallReceipt effects={receipt} />
       </Pressable>
       {toolName === "agents" && <SubagentChatLink output={output} />}
       {expanded && provisionErr && (
@@ -352,6 +356,7 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
               <div className="max-h-40 overflow-auto"><CodeBlock wrap className="language-json">{JSON.stringify(redactPayload(input), null, 2)}</CodeBlock></div>
             </div>
           )}
+          <ReceiptDetail effects={receipt} />
           {output != null && <ToolOutput output={output} />}
         </Surface>
       )}
@@ -378,6 +383,7 @@ function ToolCallPart({ part, expanded, onToggleExpand }: { part: AnyToolPart; e
         input={input}
         output={output}
         effect={partEffect(part)}
+        receipt={partProgramEffects(part)}
         isRunning={running}
         isError={callFailed(part)}
         errorText={part.state === "output-error" ? part.errorText : undefined}
