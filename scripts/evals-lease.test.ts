@@ -27,3 +27,11 @@ test('a run says what each eval key has left, and will not start into a spent wi
   expect(said.some((line) => line.includes('5h  100% used'))).toBe(true);
   await expect(keysWindows(() => {}, { keysPath, fetch: usage(60), now: NOW })).resolves.toBeUndefined();
 });
+
+// A run reads the windows again as it ends, so its own cost is measured: a window it spent is said, not refused.
+test("a run's closing read says a spent window and refuses nothing", async () => {
+  const said: string[] = [];
+
+  await expect(keysWindows((line) => said.push(line), { keysPath, fetch: usage(100), now: NOW, refuseSpent: false })).resolves.toBeUndefined();
+  expect(said.some((line) => line.includes('5h  100% used'))).toBe(true);
+});

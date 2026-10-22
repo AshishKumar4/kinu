@@ -69,6 +69,8 @@ export const VAR_POLICY = {
   CONTROL_PLANE_ADMINS: 'derived',
   // A deploy answer kept in the deployment record, so an update sends it again (docs/MAIL.md §11).
   MAIL_ACCOUNTS: 'derived',
+  // kinu.run's own addresses (privacy@ to its owner's box); a self-host names its own, if any, by hand.
+  MAIL_ALIASES: 'ours',
   DEV_USER_EMAIL: 'ours',
   // kinu.run's inference on its own account; a self-host routes each user's Workers AI through that user's credential.
   WORKERS_AI_VIA_BINDING: 'ours',

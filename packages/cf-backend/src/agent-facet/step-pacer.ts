@@ -16,23 +16,26 @@
  */
 import { Effect, Exit } from 'effect';
 import { attempt, hold, KinuError, settle, toKinuError } from '@kinu.run/core/obs';
-import { PLATFORM_CATALOG, type DynamicContext, type ResolvedTurnProfile } from '@kinu.run/core';
+import { PLATFORM_CATALOG, type DynamicContext, type HarnessMode, type ResolvedTurnProfile } from '@kinu.run/core';
 import type { AgentWorkspace, TurnBound } from './agent-turn';
 
 const RENEW_AFTER_MS = PLATFORM_CATALOG['do.facet.cpu_ms'].limit.value / 2;
 
-/** A granted step: its end, which the step calls once it ended, and the live block the grant carried, when the pace
- *  that asked for it bound the turn's profile. */
+/** A granted step: its end, which the step calls once it ended, the live block the grant carried, when the pace that
+ *  asked for it bound the turn's profile, and the workspace's `harness.mode` as the grant left it. */
 export interface GrantedStep {
   readonly ended: () => void;
   readonly dynamic: DynamicContext | null;
+  readonly harnessMode: HarnessMode;
 }
 
-/** The grant a turn's steps run under: the execution it was asked for, when, and the call it holds open. */
+/** The grant a turn's steps run under: the execution it was asked for, when, the call it holds open, and the mode it
+ *  carried, which each step it serves reads. */
 interface HeldGrant {
   readonly bound: TurnBound;
   readonly at: number;
   readonly letGo: () => void;
+  readonly harnessMode: HarnessMode;
   revoked: boolean;
 }
 
@@ -51,7 +54,7 @@ export class StepPacer {
     const held = this.held.get(bound.turnId);
 
     if (held !== undefined && profile === null && !held.revoked && !signal.aborted && sameExecution(held.bound, bound) && this.now() - held.at < RENEW_AFTER_MS) {
-      return Promise.resolve({ ended: () => {}, dynamic: null });
+      return Promise.resolve({ ended: () => {}, dynamic: null, harnessMode: held.harnessMode });
     }
 
     this.release(bound.turnId);
@@ -115,25 +118,25 @@ export class StepPacer {
         : Effect.fail(new KinuError('unavailable', `The workspace answered turn ${turnId}'s step without granting it.`))));
 
       return Effect.raceFirst(granted, unanswered).pipe(Effect.map((step): GrantedStep => {
-        holding = { bound, at: this.now(), letGo: step.ended, revoked: false };
+        holding = { bound, at: this.now(), letGo: step.ended, harnessMode: step.harnessMode, revoked: false };
         this.held.set(turnId, holding);
         signal.addEventListener('abort', () => { this.release(turnId); }, { once: true });
 
-        return { ended: () => {}, dynamic: step.dynamic };
+        return { ended: () => {}, dynamic: step.dynamic, harnessMode: step.harnessMode };
       }));
     }).pipe(Effect.ensuring(Effect.sync(() => { this.waiting.delete(turnId); })));
   }
 
   /** The call a turn's steps run under: answers once its grant is let go. `dynamic`: the live block on the profile its
-   *  pace bound. */
-  async grant(turnId: string, dynamic: DynamicContext | null): Promise<void> {
+   *  pace bound; `harnessMode`: the workspace's as it granted. */
+  async grant(turnId: string, dynamic: DynamicContext | null, harnessMode: HarnessMode): Promise<void> {
     const waiting = this.waiting.get(turnId);
 
     if (waiting === undefined) return await settle(Effect.fail(new KinuError('missing', `No step of turn ${turnId} is waiting to run.`)));
     this.waiting.delete(turnId);
     const ended = Promise.withResolvers<void>();
 
-    waiting({ ended: () => { ended.resolve(); }, dynamic });
+    waiting({ ended: () => { ended.resolve(); }, dynamic, harnessMode });
     await ended.promise;
   }
 }

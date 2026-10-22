@@ -1,5 +1,5 @@
 /**
- * Runs the gate's `tsc` over fixtures/log-ban: violations.ts must fail naming the marker type,
+ * Runs the gate's `tsrs` over fixtures/log-ban: violations.ts must fail naming the marker type,
  * allowed.ts must compile. No `@ts-expect-error`: it never says which error fired.
  */
 
@@ -30,11 +30,11 @@ interface CompileReport {
   readonly diagnostics: readonly Diagnostic[];
 }
 
-/** Uses the repo's `node_modules/.bin/tsc`, the binary `bun run check` runs. */
+/** Uses the repo's `node_modules/.bin/tsrs`, the checker `bun run check` runs. */
 async function compileFixtures(): Promise<CompileReport> {
-  const tsc = join(repoRoot, 'node_modules', '.bin', 'tsc');
+  const checker = join(repoRoot, 'node_modules', '.bin', 'tsrs');
 
-  const run = await runToExit([tsc, '--noEmit', '--pretty', 'false', '-p', fixtureProject], {
+  const run = await runToExit([checker, '--noEmit', '--pretty', 'false', '-p', fixtureProject], {
     cwd: repoRoot,
   });
 

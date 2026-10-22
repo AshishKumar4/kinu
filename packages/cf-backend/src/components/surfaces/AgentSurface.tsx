@@ -173,7 +173,7 @@ function Knows({ read, memory, memoryContent, onSearchMemory, facts, factsResour
 
         {/* The page's notice gives the reason once; this offers the retry. */}
         {read.state === "failed" && <LoadFailure what="memory" onRetry={read.retry} />}
-        {read.state === "loading" && <div className="flex h-16 items-center justify-center"><Loader size="sm" /></div>}
+        {read.state === "loading" && <div className="flex h-16 items-center justify-center" data-memory-loading><Loader size="sm" /></div>}
         {empty && <p data-empty className="t-body p-text-3">No notes yet.</p>}
 
         {searching && notes.length === 0 && <Quiet>No matches.</Quiet>}
