@@ -18,6 +18,7 @@ interface WorkspaceRpc extends Rpc.DurableObjectBranded {
   hostHeads(tag: string, count: number): Promise<void>;
   /** `worker-heap/product.ts`'s probe RPC. */
   delegatedRunners(): Promise<number>;
+  setEvolutionConfig(config: { readonly advisorEnabled: boolean }): Promise<{ readonly advisorEnabled: boolean }>;
   /** `worker-heap/product.ts`'s probe RPC. */
   quiesce(): Promise<void>;
   /** `worker-heap/product.ts`'s probe RPC. */
@@ -107,13 +108,26 @@ export class HeapDriver extends DurableObject<DriverEnv> {
     return (await read.text()).length;
   }
 
+  /** The owner's advisor switch on, as the settings card sets it. */
+  async advisor(workspace: string): Promise<void> {
+    await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).setEvolutionConfig({ advisorEnabled: true });
+  }
+
   async quiesce(workspace: string): Promise<void> {
     await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).quiesce();
   }
 }
 
 /** What the model answers and whether it answers yet; module state, which the entrypoint and fetch share. */
-const model = { answerBytes: 0, holding: false, parked: 0, calls: 0, wide: new Set<string>(), toolSteps: 0, stepBytes: 0, screenshots: 0, stepping: false, arrived: 0, released: 0, hires: 0, subagentsAnswered: 0, holdSubagent: false, subagentParked: false, nest: false, failingSteps: 0, failingAsked: 0, stepped: { binding: 0, compat: 0 } };
+const model = { answerBytes: 0, holding: false, parked: 0, calls: 0, wide: new Set<string>(), toolSteps: 0, stepBytes: 0, screenshots: 0, stepping: false, arrived: 0, released: 0, hires: 0, subagentsAnswered: 0, holdSubagent: false, subagentParked: false, nest: false, failingSteps: 0, failingAsked: 0, stepped: { binding: 0, compat: 0 }, advisorCalls: 0 };
+
+/** The advisor's own model calls: today's hire answers its review prompt (`buildAdvisorPrompt`); the in-session advisor
+ *  offers its `advise` tool. Neither is a step of the turn it reviews, so neither takes a scripted step. */
+const ADVISOR_HIRE_MARKER = 'You are reviewing one finished turn of an autonomous coding agent';
+
+function asksAdvisor(request: string): boolean {
+  return request.includes(ADVISOR_HIRE_MARKER) || /"name"\s*:\s*"advise"/u.test(request);
+}
 
 /** Each character above U+00FF in `request`, with the text before it: one of them stores the whole request two bytes each. */
 function noteWide(request: string): void {
@@ -160,6 +174,13 @@ function laneAnswer(inputs: BindingInputs): string | null {
 /** The product's `AI` binding: each streamed turn answers `answerBytes` of text, and waits while `holding`. */
 async function scriptedBody(inputs: BindingInputs): Promise<string> {
   model.calls += 1;
+
+  if (asksAdvisor(JSON.stringify(inputs))) {
+    model.advisorCalls += 1;
+
+    return `data: ${JSON.stringify({ response: inputs.tools === undefined ? '{}' : '' })}\n\n${USAGE}data: [DONE]\n\n`;
+  }
+
   const lane = laneAnswer(inputs);
 
   if (lane !== null) return lane;
@@ -268,6 +289,15 @@ async function compatAnswer(body: string): Promise<Response> {
   const asked = read.request;
   let answer: ScriptedAnswer = { text: 'Heap' };
 
+  // The advisor's review, answered at once with silence (the hire's `{}`, the in-session advisor's empty text): the
+  // measured cost is its being there, not what it says.
+  if (asksAdvisor(body)) {
+    model.advisorCalls += 1;
+    const out = compatBody({ text: body.includes(ADVISOR_HIRE_MARKER) ? '{}' : '' }, asked);
+
+    return new Response(out.body, { headers: { 'content-type': out.contentType } });
+  }
+
   if (asked.streamed) {
     model.calls += 1;
     noteWide(body);
@@ -342,7 +372,7 @@ function scriptModel(asked: URLSearchParams): Response {
     model.stepping = false;
   }
 
-  return Response.json({ parked: model.parked, calls: model.calls, wide: [...model.wide], arrived: model.arrived, subagentsAnswered: model.subagentsAnswered, subagentParked: model.subagentParked, failingSteps: model.failingSteps, stepped: model.stepped });
+  return Response.json({ parked: model.parked, calls: model.calls, wide: [...model.wide], arrived: model.arrived, subagentsAnswered: model.subagentsAnswered, subagentParked: model.subagentParked, failingSteps: model.failingSteps, stepped: model.stepped, advisorCalls: model.advisorCalls });
 }
 
 export default {
@@ -369,6 +399,7 @@ export default {
     else if (url.pathname === '/turn') await driver.turn(workspace, url.searchParams.get('text') ?? 'hello');
     else if (url.pathname === '/heads') await driver.heads(workspace, url.searchParams.get('tag') ?? 'head', Number(url.searchParams.get('count')));
     else if (url.pathname === '/quiesce') await driver.quiesce(workspace);
+    else if (url.pathname === '/advisor') await driver.advisor(workspace);
     else if (url.pathname === '/seed-screenshots') await driver.seedScreenshots(workspace, Number(url.searchParams.get('count')), Number(url.searchParams.get('bytes')));
     else if (url.pathname === '/seed') return Response.json(await driver.seed(workspace));
     else if (url.pathname === '/plant') await driver.plant(workspace, v.parse(v.picklist(['workspace', 'main']), url.searchParams.get('isolate')), v.parse(v.string(), url.searchParams.get('marker')), Number(url.searchParams.get('bytes')));
