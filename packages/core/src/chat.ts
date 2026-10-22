@@ -24,8 +24,10 @@ import {
 } from 'ai';
 import {
   assertToolsSupportedByModel,
+  resolveHarnessSurface,
   type PromptModelContext,
 } from './prompting/model-profile';
+import type { HarnessMode, HarnessSurface } from './config/harness-mode';
 import { applyCacheBreakpoints, hasCacheMarkers, type CacheBreakpointPlan, type PromptCacheRoute } from './prompting/cache-breakpoints';
 import { DEFAULT_CACHE_RETENTION, parseModelSpec, type CacheRetention } from './providers/types';
 import { TurnContextMeter, type ContextComposition } from './context-meter';
@@ -68,6 +70,12 @@ import { invalidToolCallRefusal, withStableSchemas } from './tools/tool-schema';
 import { ToolOutcomeSchema } from './types/tool-outcome';
 import { StepSpans, traceTools } from './turn-trace';
 
+/** The surface a step's request was shown as, and the `harness.mode` that resolved it for the serving model. */
+export interface HarnessStamp {
+  readonly mode: HarnessMode;
+  readonly surface: HarnessSurface;
+}
+
 export type ChatEvent = (
   | { type: 'text-delta'; delta: string }
   /** Provider reasoning as it streams. Not step output: a step that only thought is a dead stream. */
@@ -80,6 +88,8 @@ export type ChatEvent = (
   /** Cumulative turn outputs; an absent usage field is not zero. */
   | {
     type: 'step-finish'; stepIndex: number; responseMessages: readonly ModelMessage[]; usage?: Usage;
+    /** The surface the step's request was shown as, and the mode that chose it, read as it left. */
+    harness?: HarnessStamp;
     /** Where the step's one request sampled more than once (`answeredPromptTokens`): the prompt it answered from. */
     promptTokens?: number;
     finishReason?: string;
@@ -184,6 +194,8 @@ export interface ChatOptions {
   modelContext?: PromptModelContext;
   /** The turn model's spec, normalized as its fallbacks' are. */
   modelSpec: string;
+  /** The workspace's `harness.mode`, read as each step's request leaves, never cached (docs/HARNESS-PROFILES.md). */
+  harnessMode?: (() => HarnessMode) | undefined;
   /** The same resolved attempt as registry pacing; a 401 skips aliases of its refused credential snapshot. */
   attemptOf?: (spec: string) => Promise<ModelAttemptIdentity | null>;
   retries?: number;
@@ -388,6 +400,8 @@ class ProviderCall {
    *  (docs/research/harness/anthropic-sources.md §2). */
   private stepSentAt = Date.now();
   private requestBody: unknown;
+  /** The surface the step's request was shown as (`prepareStep`). */
+  private stepHarness: HarnessStamp | undefined;
   /** A finished step whose record or hook failed; the SDK drops a step-callback throw (ai 6.0.214 `notify`). */
   stepFailure: { readonly doing: string; readonly cause: unknown } | null = null;
 
@@ -410,8 +424,9 @@ class ProviderCall {
 
   /** Each step's request starts from the call's input and the seal's answers: ai 7 would carry the last step's
    *  rewrite (markers, weave) and its raw tool outputs into the next one. */
-  requestStarting(initial: readonly ModelMessage[]): ModelMessage[] {
+  requestStarting(initial: readonly ModelMessage[], harness: HarnessStamp | undefined): ModelMessage[] {
     this.stepSentAt = Date.now();
+    this.stepHarness = harness;
 
     return [...initial, ...this.responseSoFar];
   }
@@ -465,6 +480,7 @@ class ProviderCall {
       ...(context && { context }),
       ...(this.fallback !== undefined && { fallback: this.fallback }),
       ...(modelId !== '' && { modelId }),
+      ...(this.stepHarness !== undefined && { harness: this.stepHarness }),
     } };
   }
 
@@ -1009,7 +1025,9 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     // Shared step pipeline, as Think's beforeStep composes it. Also stamps the request start
     // (`ProviderCall.requestStarting`).
     const prepareStep: PrepareStep = ({ stepNumber, initialMessages, steps }) => {
-      const messages = call.requestStarting(initialMessages);
+      const mode = opts.harnessMode?.();
+      const harness = mode === undefined ? undefined : { mode, surface: resolveHarnessSurface(mode, { id: current.spec, ...(current.provider !== undefined && { provider: current.provider }) }) };
+      const messages = call.requestStarting(initialMessages, harness);
       stepSpans.start(stepOffset + stepNumber);
       const opening = stepOffset + stepNumber === 0;
       const previous = steps.at(-1);

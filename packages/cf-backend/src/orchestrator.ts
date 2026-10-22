@@ -1076,7 +1076,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         if (profile !== null) this.boundProfiles.set(actorId, profile);
         const dynamic = profile === null ? null : this.agentTurns.bind(actorId, bound, profile);
 
-        await this.stopJoined(actorId, (isolate) => isolate.step(bound.turnId, dynamic));
+        // The workspace's `harness.mode` as the grant leaves: its isolate's steps read it from there.
+        await this.stopJoined(actorId, (isolate) => isolate.step(bound.turnId, dynamic, this.config.getHarnessMode()));
       },
       resume: (bound) => this.agentTurns.resume(actorId, bound),
       guard: (bound, ...args) => this.agentTurns.guard(actorId, bound, ...args),
@@ -2097,6 +2098,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       backend: 'cf',
       executors: () => runtime.executionRouter?.listExecutors() ?? [],
       config: actor.stores.config,
+      harnessMode: () => this.config.getHarnessMode(),
       models: {
         catalog: this.modelCatalog,
         normalize: (spec) => providers.normalizeSpecSync(spec),

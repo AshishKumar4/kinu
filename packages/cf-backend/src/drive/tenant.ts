@@ -1,7 +1,7 @@
 /** A user's Mossaic tenant; the tenant id is the Kinu user id, and this is the only place the SDK is constructed. */
 import { createVFS, type MossaicEnv } from '@mossaic/sdk';
 import { mossaicVfs, objectNamed, type MossaicVfs } from '@kinu.run/core';
-import { confirmedDeletion } from '../confirmed-deletion';
+import { confirmedDeletion } from '@kinu.run/core/obs';
 import type { MossaicShardDO, MossaicUserDO } from './mossaic-objects';
 
 export type MossaicObject = MossaicEnv['MOSSAIC_USER'];
