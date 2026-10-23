@@ -74,10 +74,12 @@ function mailCardOf(deps: GoogleDeps, raw: string | undefined): Effect.Effect<Go
 
 const MessageBodySchema = v.object({ raw: v.optional(v.string()), message: v.optional(RawSchema) });
 
-/** What a Gmail write's card shows, and for a draft sent by id, the digest of the whole message it holds now. */
+/** What a Gmail write's card shows, and for a draft sent by id, the digest of the whole message it holds now and the
+ *  body that sends exactly that message (`{ id, message: { raw } }`), whatever the draft becomes after it was read. */
 interface MessageSeen {
   readonly mail: GoogleWrite['mail'];
   readonly content: string | null;
+  readonly sends?: JsonValue;
 }
 
 /** The message a Gmail write sends or keeps; a draft sent by id is read from Google first, so its card shows it and its
@@ -104,7 +106,9 @@ function messageOf(deps: GoogleDeps, found: GoogleMethodRef, params: Readonly<Re
     // A draft that cannot be read is not sent on a guess of what it holds.
     if (!kept.success) return yield* new KinuError('unavailable', `The draft ${draft.output.id} could not be read to show its owner; send it again once it can be.`);
 
-    return { mail: yield* mailCardOf(deps, kept.output.message.raw), content: sha256Hex(kept.output.message.raw) };
+    const { raw } = kept.output.message;
+
+    return { mail: yield* mailCardOf(deps, raw), content: sha256Hex(raw), sends: { id: draft.output.id, message: { raw } } };
   });
 }
 
@@ -135,8 +139,10 @@ function serveGoogle(deps: GoogleDeps): readonly Served[] {
       if (!googleWrites(found.method)) return yield* new KinuError('bad_input', `${method} only reads; call it with google.read.`);
 
       if (!(yield* Effect.promise(() => deps.held()))) return yield* new KinuError('denied', NOT_HELD);
-      const seen = yield* messageOf(deps, found, asked, body);
+      const { sends, ...seen } = yield* messageOf(deps, found, asked, body);
       const write: GoogleWrite = { by: deps.by(), method, does: found.method.d ?? method, params: asked, body: body ?? null, ...seen };
+      // A draft goes as it was read and shown, never as whatever it holds by the time it is sent.
+      const made = sends === undefined ? request : (yield* googleRequest(method, asked, sends)).request;
       const id = `google-${sha256Hex(googleWriteText(write), 32)}`;
       const verdict = deps.approvals.ask(id, write);
 
@@ -147,7 +153,7 @@ function serveGoogle(deps: GoogleDeps): readonly Served[] {
       if (spend === null) return { status: 'asked' as const, approval: id };
 
       // Spent whatever Google answers: the request may have reached it, so the next call of it asks anew.
-      const answer = yield* Effect.ensuring(sent(request), Effect.promise(async () => deps.approvals.settle(spend, 'spent')));
+      const answer = yield* Effect.ensuring(sent(made), Effect.promise(async () => deps.approvals.settle(spend, 'spent')));
 
       return { status: 'done' as const, answer };
     })),
