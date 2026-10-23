@@ -495,10 +495,10 @@ describe('an idle wake in a window whose telemetry lost rows', () => {
   const idleWakes = [{ object: 'a', hour: at(0), count: 1 }];
   const IDLE = 'object a woke 1 time(s) with nothing to watch in the hour from 2026-10-23T13:00:00Z';
 
-  test('a line an alarm logged with no alarm row of its object near is a lost row; one beside its row, or in no alarm, is not', () => {
+  test('a line an alarm logged by an object with no alarm row is a lost row; one of an alarm that ran long, or in no alarm, is not', () => {
     const alarms = [row('a', 45), row('b', 50)];
 
-    expect(lostAlarmRows(alarms, [row('b', 51), row('x', 45), row('y', 46), row('y', 47), row('z', 45, 'fetch')])).toEqual(['x', 'y']);
+    expect(lostAlarmRows(alarms, [row('b', 58), row('x', 45), row('y', 46), row('y', 47), row('z', 45, 'fetch')])).toEqual(['x', 'y']);
   });
 
   test('beside lost rows on other objects, an idle wake is a notice, unreadable, and no red', () => {
@@ -529,21 +529,24 @@ describe('an alarm in a version\'s window, beside a deletion under the version b
   /** The version's read, its alarms those `alarms` names at `delivered`, those of `canceled` the platform's `canceled`,
    *  and `deleted-before` destroyed at 02:15:15Z under the version before: only a read of its own rows, unscoped, finds
    *  it, and only one that reaches back to it. `sampledWork`: the API sampled the reads of the version's calls;
-   *  `sampledAlarms`: its alarm rows each carry interval 10. `lostAlarm`: a CliAuthDO's alarm logged `cli.auth_retired`
-   *  and its own invocation row was lost. */
-  const read = async (alarms: readonly string[], canceled: readonly string[], { delivered = '2026-10-23 02:25:00', sampledWork = false, sampledAlarms = false, lostAlarm = false } = {}) => {
+   *  `sampledAlarms`: its alarm rows each carry interval 10. `lostAt`: the minute a CliAuthDO's alarm logged
+   *  `cli.auth_retired` with no invocation row of it in the window; `earlyAlarm`: that alarm began 5 min before it. */
+  const read = async (alarms: readonly string[], canceled: readonly string[], { delivered = '2026-10-23 02:25:00', sampledWork = false, sampledAlarms = false, lostAt = '', earlyAlarm = false } = {}) => {
     const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: async (request) => {
       const asked = v.parse(v.looseObject({ timeframe: v.optional(v.object({ from: v.number() })) }), await request.json());
       const body = JSON.stringify(asked);
       const has = (text: string) => body.includes(text);
       const interval = sampledAlarms ? 10 : 1;
       const groups = (object: string) => [{ key: '$workers.durableObjectId', value: object }, { key: '$workers.eventType', value: 'alarm' }];
-      const series = (objects: readonly string[]) => [{ alias: 'count', series: [{ time: delivered, data: objects.map((object) => ({ groups: groups(object), value: interval, interval })) }] }];
+      const data = (objects: readonly string[]) => objects.map((object) => ({ groups: groups(object), value: interval, interval }));
+      const early = earlyAlarm && (asked.timeframe?.from ?? from) < from ? [{ time: '2026-10-23 02:20:00', data: data(['row-lost']) }] : [];
 
-      if (has('"granularity"') && has('"operation":"eq","value":"alarm"')) return Response.json({ success: true, result: { calculations: series(has('"value":"canceled"') ? canceled : alarms) } });
+      if (has('"granularity"') && has('"operation":"eq","value":"alarm"')) {
+        return Response.json({ success: true, result: { calculations: [{ alias: 'count', series: [{ time: delivered, data: data(has('"value":"canceled"') ? canceled : alarms) }, ...early] }] } });
+      }
 
-      if (has('"granularity"') && has('"value":"cli.auth_retired"') && lostAlarm) {
-        return Response.json({ success: true, result: { calculations: [{ alias: 'count', series: [{ time: delivered, data: [{ groups: groups('row-lost'), value: 1 }] }] }] } });
+      if (has('"granularity"') && has('"value":"cli.auth_retired"') && lostAt !== '') {
+        return Response.json({ success: true, result: { calculations: [{ alias: 'count', series: [{ time: lostAt, data: [{ groups: groups('row-lost'), value: 1 }] }] }] } });
       }
 
       if (has('"granularity"') && has('"operation":"neq","value":"alarm"') && sampledWork) return Response.json({ success: true, result: { statistics: { abr_level: 10 } } });
@@ -597,9 +600,19 @@ describe('an alarm in a version\'s window, beside a deletion under the version b
   });
 
   test('an alarm\'s line whose own row was lost is read as a lost row, and the idle wakes beside it are kept', async () => {
-    const answer = await read(['idle'], [], { lostAlarm: true });
+    const answer = await read(['idle'], [], { lostAt: '2026-10-23 02:26:00' });
 
     expect({ lost: answer.lostRows, idle: answer.idleWakes.map((idle) => idle.object) }).toEqual({ lost: ['row-lost'], idle: ['idle'] });
+  });
+
+  // The window ends at 03:31:20: a line in its 03:31 minute may be of an alarm after it, and one of an alarm that began
+  // before the window is that alarm's.
+  test('a line in the window\'s last, partly read minute, or of an alarm that began before the window, is no lost row', async () => {
+    expect({
+      lastMinute: (await read(['idle'], [], { lostAt: '2026-10-23 03:31:00' })).lostRows,
+      lastWhole: (await read(['idle'], [], { lostAt: '2026-10-23 03:30:00' })).lostRows,
+      early: (await read(['idle'], [], { lostAt: '2026-10-23 02:25:00', earlyAlarm: true })).lostRows,
+    }).toEqual({ lastMinute: [], lastWhole: ['row-lost'], early: [] });
   });
 });
 
