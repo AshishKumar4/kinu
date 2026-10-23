@@ -563,17 +563,18 @@ async function traced(namespace: CompositeVFS, looked: ReadonlySet<string>, root
 
 const COMPILED_JSX = JSON.stringify({ compilerOptions: { jsx: 'react-jsx', jsxImportSource: 'react' } });
 
-/** The class's module, compiled; a slate with no class runs an empty one. */
-function serverModule(build: SlateBuild, project: SlateProject): Effect.Effect<string, KinuError> {
+/**
+ * The class's module, compiled; a slate with no class runs an empty one. An answer's page has no files (`page`): its
+ * server's module is what its source reads, written as a generated entry the compiler reaches.
+ */
+function serverModule(build: SlateBuild, project: SlateProject, page: { readonly owner: string; readonly read: (entry: string) => Promise<string | null> }): Effect.Effect<string, KinuError> {
   return Effect.gen(function* () {
     const { main, browser } = project;
 
     if (main === undefined) return NO_APPLICATION;
+    const entry = yield* Effect.promise(async () => serverEntry(build, { main, browser }, page));
 
-    // Re-export only the class so the file's client half never reaches the server bundle.
-    if (browser === main) build.provision('server.js', `export { Slate } from "${build.root}/${main}";\n`);
-
-    const server = yield* compileSlate(build.bundler, browser === main ? `${build.entries}/server.js` : `${build.root}/${main}`, {
+    const server = yield* compileSlate(build.bundler, entry, {
       bundle: true, format: 'esm', platform: 'neutral', outfile: '/application.js',
       // Not `alias`: the nimbus-vfs resolver sees a specifier before esbuild applies it.
       external: ['cloudflare:*', 'node:*', 'capnweb', 'kinu:slate', 'react', 'react-dom/client', 'react/jsx-runtime'],
@@ -588,6 +589,21 @@ function serverModule(build: SlateBuild, project: SlateProject): Effect.Effect<s
 
     return rewriteModuleSpecifiers(compiled.contents);
   });
+}
+
+/** Where the class's module is compiled from: an answer's page's server, written as a generated entry; a class beside
+ *  its page in one file, re-exported alone so the file's client half never reaches the server bundle; else its file. */
+async function serverEntry(build: SlateBuild, project: { readonly main: string; readonly browser: string | undefined }, page: { readonly owner: string; readonly read: (entry: string) => Promise<string | null> }): Promise<string> {
+  if (ephemeralSlateAddress(page.owner) !== null) {
+    build.provision('page-server.js', await page.read(project.main) ?? '');
+
+    return `${build.entries}/page-server.js`;
+  }
+
+  if (project.browser !== project.main) return `${build.root}/${project.main}`;
+  build.provision('server.js', `export { Slate } from "${build.root}/${project.main}";\n`);
+
+  return `${build.entries}/server.js`;
 }
 
 interface BrowserSurface {
@@ -694,7 +710,7 @@ export class ResidentSlateProcesses {
         }
       }
 
-      const application = yield* serverModule(build, project);
+      const application = yield* serverModule(build, project, { owner: input.owner, read: source });
       const { assets, shell } = yield* browserSurface(build, input.owner, project, source);
 
       const modules = {

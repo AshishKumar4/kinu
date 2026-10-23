@@ -132,6 +132,9 @@ function refusalFromThrown(input: { cause: unknown }): Refusal | null {
  * One process per authored tree per caller, and one durable application per slate. The application's port and capability
  * persist in this object's storage, run as the workspace root and keep one facet SQLite until `remove`; other callers' processes are private and portless.
  */
+/** The surface namespace an answer's page's own server's methods are asked under: `[OWN_SERVER, method]`. */
+const OWN_SERVER = '$server';
+
 export class SlateHost {
   readonly controller: SlateController<SlateSource, ResidentSlateProcess>;
   private readonly resident: ResidentSlateProcesses;
@@ -397,26 +400,11 @@ export class SlateHost {
   private async drawnPageAnswer(id: string, request: JsonValue): Promise<SlateSurfaceResult> {
     if (ephemeralSlateAddress(id) === null) return { ok: false, ...refusalOf(new KinuError('denied', `${id} is not an answer's page the chat draws`)) };
     const method = v.safeParse(v.object({ method: v.string(), args: v.array(JsonValueSchema) }), request);
+    // Its server's method enters the same surface, under its own namespace, so one boundary admits both.
+    const asked = method.success ? { path: [OWN_SERVER, method.output.method], args: method.output.args, invocation: null } : request;
+    const lineage: SlateLineage = { incarnation: `drawn:${id}`, generation: this.controller.generation(id), ancestors: {} };
 
-    if (!method.success) {
-      const lineage: SlateLineage = { incarnation: `drawn:${id}`, generation: this.controller.generation(id), ancestors: {} };
-
-      return this.surfaceCall({ caller: ROOT_SLATE_CALLER, id, name: 'workspace', lineage }, request);
-    }
-
-    const { method: name, args } = method.output;
-
-    const author = await settle(slateAnswer(`reading slate ${id}`, Effect.gen({ self: this }, function* () {
-      const source = yield* attempt({ doing: `reading slate ${id}`, otherwise: 'io' }, async () => this.slateSources.resolve(ROOT_SLATE_CALLER.cred, id));
-
-      if (source.kind !== 'message' || !source.bound) {
-        return yield* new KinuError('denied', `Slate ${id} is a hired agent's page, drawn with no authority lent to it: its calls would not run where that agent's stores are`);
-      }
-
-      return source.author;
-    })));
-
-    return author.ok ? this.call({ caller: author.value, id, method: name, args }) : author;
+    return this.surfaceCall({ caller: ROOT_SLATE_CALLER, id, name: 'workspace', lineage }, asked);
   }
 
   async surfaceCall({ caller, id, name, lineage }: SlateCallFrom, request: JsonValue): Promise<SlateSurfaceResult> {
@@ -475,6 +463,12 @@ export class SlateHost {
 
       // An answer's page calls as its author as of now, in the mode the author's next turn runs in.
       const callsAs = source.kind === 'message' ? source.author : caller;
+
+      // A method of an answer's page's own server, which its page drawn in the chat asks of it through here (1023-ac).
+      if (source.kind === 'message' && parsed.output.path[0] === OWN_SERVER) {
+        return await this.call({ caller: callsAs, id, method: parsed.output.path[1] ?? '', args: parsed.output.args });
+      }
+
       // Only the owner's own slate, calling as the owner, hires or messages subagents; a hosted actor's slate never does.
       const call = routeSlateCall({ id, request: parsed.output, chain, hosted: callsAs.path.length > 0 });
       const impact = slateAddressImpact(call.address) ?? 'administer';
