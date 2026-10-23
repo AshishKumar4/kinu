@@ -24,7 +24,7 @@ const IDLE_TURN: TurnLiveness = { kind: "idle" };
 
 const LIVE_TURN: TurnLiveness = { kind: "live", turnId: null };
 
-import { diagnostics, KinuError, renderThrownChain, toKinuError, tolerate } from "@kinu.run/core/obs";
+import { diagnostics, KinuError, refusalOf, renderThrownChain, toKinuError, tolerate } from "@kinu.run/core/obs";
 import { Button } from "@/components/ui/Button";
 import {
   TrashIcon, BrainIcon, ListIcon,
@@ -32,7 +32,7 @@ import {
 import "virtual:kinu-theme.css";
 import "./index.css";
 import { markDocument, codenameFor, mintAgentName, WorkspaceTerminalInputSchema } from "@kinu.run/core";
-import { ephemeralSlateAddress, hostedActorSocketPath, mcpPresetById, type McpPreset, READS_CHANGED_EVENT, readsWrittenBy, seededRandom, SLATES_CHANGED_METADATA_KEY } from "@kinu.run/core";
+import { ephemeralSlateAddress, hostedActorSocketPath, SLATE_PUSH_EVENT, type SlateCallResult, mcpPresetById, type McpPreset, READS_CHANGED_EVENT, readsWrittenBy, seededRandom, SLATES_CHANGED_METADATA_KEY } from "@kinu.run/core";
 import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT, OwnerAnswersSchema, PositionCursorSchema, sanitizeWorkspaceLogoSvg } from "@kinu.run/core";
 import type { AlternateTakeSet, AskingAgent, OwedOwnerIntent, OwnerAnswer, ParkedWriteReview, ReasoningEffort, TakePickOutcome } from "@kinu.run/core";
 import { OwedOwnerIntentSchema } from "@kinu.run/core";
@@ -1920,6 +1920,13 @@ const GalleryPushFrameSchema = v.object({
   source: v.optional(v.string()),
 });
 
+// What an answer's page's server pushes, told to the tab as the workspace tells it (`SLATE_PUSH_EVENT`).
+window.addEventListener("gallery:slate-push", (event: Event) => {
+  const detail = event instanceof CustomEvent ? v.safeParse(v.object({ page: v.string(), data: JsonValueSchema }), event.detail) : null;
+
+  if (detail?.success === true) galleryServerPush(JSON.stringify({ type: SLATE_PUSH_EVENT, ...detail.output }));
+});
+
 window.addEventListener("gallery:push-frame", (event: Event) => {
   const detail = event instanceof CustomEvent ? v.safeParse(GalleryPushFrameSchema, event.detail) : null;
 
@@ -2471,8 +2478,53 @@ const SLATES_THREAD: UIMessage[] = [
   msg({ id: "sb-a3", role: "assistant", createdAt: NOW - 4 * 60e3, metadata: { [SLATES_CHANGED_METADATA_KEY]: ["board"] }, parts: [{ type: "text", text: "Added a last-failure column." }] }),
 ];
 
-/** The page the `errors` answer draws: a title, a heading, rows, and a paragraph that sets no colour. */
-const ERRORS_PAGE = `<title>500s by route</title>\n<h1>Errors</h1><p id="plain">/api/health leads this week.</p><ul id="rows">${"<li>/api/health</li>".repeat(12)}</ul>`;
+/**
+ * The page the `errors` answer draws: a title, a heading, rows, and a paragraph that sets no colour. Its script asks
+ * its workspace for a row count and its own server for a word, through `kinu:slate`, and draws both; its server is
+ * inert in the page.
+ */
+const ERRORS_PAGE = [
+  `<title>500s by route</title>\n<h1>Errors</h1><p id="plain">/api/health leads this week.</p><ul id="rows">${"<li>/api/health</li>".repeat(12)}</ul>`,
+  '<p id="counted"></p><p id="served"></p><p id="pushed"></p>',
+  '<script type="module">',
+  'import { onPush, slate, workspace } from "kinu:slate";',
+  'onPush((data) => { document.getElementById("pushed").textContent = "pushed " + JSON.stringify(data); });',
+  'const counted = await workspace.db.count({ table: "errors" }).catch((refused) => "refused: " + refused.message);',
+  'document.getElementById("counted").textContent = "counted " + JSON.stringify(counted);',
+  'document.getElementById("served").textContent = "served " + await slate.word("errors").catch((refused) => "refused: " + refused.message);',
+  '</script>',
+  '<script type="slate/server">',
+  'import { SlateObject } from "kinu:slate";',
+  'export class Slate extends SlateObject { word(of) { return of + " by route"; } }',
+  '</script>',
+].join("\n");
+
+/** A chart page, drawn with the chart library `kinu:slate` provides, in the theme's own colours (1023-ac). */
+const CHART_PAGE = [
+  "<title>Latency today</title>",
+  '<h2>Latency today</h2><div id="chart"></div>',
+  '<script type="module">',
+  'import uPlot from "uplot";',
+  'const css = getComputedStyle(document.documentElement);',
+  'const colour = (name) => css.getPropertyValue(name).trim();',
+  'const hours = Array.from({ length: 24 }, (_, hour) => 1729641600 + hour * 3600);',
+  'const p50 = hours.map((_, hour) => Math.round(80 + 20 * Math.sin(hour / 3)));',
+  'const p95 = hours.map((_, hour) => Math.round(180 + 50 * Math.sin(hour / 4 + 1)));',
+  'const axis = { stroke: colour("--c-text-3"), grid: { stroke: colour("--c-border") }, ticks: { stroke: colour("--c-border") } };',
+  'const at = document.getElementById("chart");',
+  'new uPlot({ width: at.clientWidth, height: 220, series: [{}, { label: "p50 ms", stroke: colour("--c-accent"), width: 2 },',
+  '  { label: "p95 ms", stroke: colour("--c-text-3"), width: 1.5 }], axes: [axis, axis] }, [hours, p50, p95], at);',
+  '</script>',
+].join("\n");
+
+/* `?transcript=chart`: an answer that draws a chart with a library `kinu:slate` provides. */
+const CHART_THREAD: UIMessage[] = [
+  msg({ id: "ch-u1", role: "user", createdAt: NOW - 5 * 60e3, parts: [{ type: "text", text: "How was latency today?" }] }),
+  msg({
+    id: "ch-a1", role: "assistant", createdAt: NOW - 4 * 60e3,
+    parts: [{ type: "text", text: `Steady, with a p95 bump mid-afternoon.\n\n<slate-ui name="latency">\n${CHART_PAGE}\n</slate-ui>` }],
+  }),
+];
 
 /* `?transcript=page`: an answer whose own page the chat draws in place, and which the person may keep as a slate. */
 const PAGE_THREAD: UIMessage[] = [
@@ -2688,6 +2740,8 @@ function seedFrameTranscript(transcript: string | null): void {
 
   if (transcript === "page") seedGalleryChat(PAGE_THREAD);
 
+  if (transcript === "chart") seedGalleryChat(CHART_THREAD);
+
   if (transcript === "events") seedGalleryChat(eventsThread());
 
   if (transcript === "splice-live" || transcript === "splice-kept") seedGalleryChat(spliceThread(transcript === "splice-kept"));
@@ -2892,6 +2946,16 @@ const PAGE_TABLE_ANSWERS: WorkspaceAnswers = {
   // page is served by the runner, so it reports its height; these slates stand for a server of their own.
   previewSlate: (id) => {
     return { ok: true, value: { url: new URL(id, SLATE_GALLERY_URL).href, port: 8789, sized: ephemeralSlateAddress(id) !== null } };
+  },
+  // An answer's page's own call, made as the page: the workspace's db, and its block's server, answered as their own.
+  drawnSlateCall: (id, request): SlateCallResult => {
+    const asked = v.parse(v.union([v.object({ path: v.array(v.string()), args: v.array(v.unknown()) }), v.object({ method: v.string(), args: v.array(v.unknown()) })]), request);
+
+    if ("method" in asked) {
+      return asked.method === "word" ? { ok: true, value: `${String(asked.args[0])} by route` } : { ok: false, ...refusalOf(new KinuError("bad_input", `no method ${asked.method}`)) };
+    }
+
+    return asked.path.join(".") === "db.count" ? { ok: true, value: { id, count: 12 } } : { ok: false, ...refusalOf(new KinuError("denied", `${asked.path.join(".")} is not answered here`)) };
   },
   // Keeping an answer's page: the kept slate is listed under the page's title, and the listing moves.
   slate: (asked) => {

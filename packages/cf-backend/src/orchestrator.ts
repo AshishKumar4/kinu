@@ -136,7 +136,7 @@ import {
   ForkNotices, forkNoticeDeliveries, initForkNoticeTable,
   appendMemoryNote,
   parseMemoryNotes,
-  type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateOperation, type SlateFileChange, SharedSlateFilesSchema, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY, slatesToPreview,
+  type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateOperation, type SlateFileChange, SharedSlateFilesSchema, type SlateReadModel, SLATES_CHANGED_EVENT, SLATE_PUSH_EVENT, ephemeralSlateAddress, SLATES_CHANGED_METADATA_KEY, slatesToPreview,
   type LiveShareRecord, type OwnedLiveShare, type LiveShareModeBody, type LiveShareListingBody, type RoomService, type SlatePreapprovals, type SlatePreapprovalWithdraw,
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
   getEvolutionStatus, listScaffoldVersions,
@@ -6074,6 +6074,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         this.armDurableWake();
       },
       previewed: (slate) => { this.noteTurnSlates('shown', [slate]); },
+      // An answer's page's server, pushing to its page where the chat that holds it is drawn.
+      pushed: (page, data) => {
+        const address = ephemeralSlateAddress(page);
+
+        if (address !== null) this.broadcastToActor(address.actorId, JSON.stringify({ type: SLATE_PUSH_EVENT, page, data }));
+      },
       messageBlock: (address) => this.answerBlock(address),
       sharesChanged: async () => {
         this.overviewChanged(true);
@@ -6368,6 +6374,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   @callable() async previewSlate(id: string): Promise<SlateCallResult> {
     return (await this.slates()).controller.preview(ROOT_SLATE_CALLER, id);
+  }
+
+  /** A call from an answer's page the owner's chat draws itself: made as the page, with its own author's authority. */
+  @callable() async drawnSlateCall(id: string, request: JsonValue): Promise<SlateCallResult> {
+    return (await this.slates()).drawnPageCall(id, request);
   }
 
   @callable() async getToolDescriptions() {

@@ -13,6 +13,7 @@ import { landingPrerender } from './vite-landing-prerender';
 import { kinuTheme } from './vite-theme';
 import { kinuIcon } from './vite-kinu-icon';
 import { slateVendor } from './slate-vendor';
+import { slatePageModules } from './vite-slate-page-modules';
 import { workerLoadCost } from './vite-worker-bundle';
 import { agentBundle } from './vite-agent-bundle';
 import { ASSETS_HOSTS } from './src/assets-hosts';
@@ -108,7 +109,7 @@ export default defineConfig(({ command }) => ({
   // checkout at a time (SHARED_RESOURCES in scripts/ladder.ts).
   cacheDir: process.env.KINU_DEV_CACHE_DIR ?? '.vite',
   plugins: [
-    kinuTheme(), kinuIcon(), iconWeights(), promptText(), slateVendor(), agentBundle(), stubClientNodeBuiltins, workerSourceMaps, workerLoadCost(), wgslClientOnly, agents(), react(),
+    kinuTheme(), kinuIcon(), iconWeights(), promptText(), slateVendor(), slatePageModules(), agentBundle(), stubClientNodeBuiltins, workerSourceMaps, workerLoadCost(), wgslClientOnly, agents(), react(),
     cloudflare({
       persistState: devStateDir === undefined ? true : { path: devStateDir },
       // A harness boot opens no Workers inspector. The plugin's default takes 9229, or the next port it finds free

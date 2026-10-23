@@ -9,11 +9,12 @@ import { promptText } from "./vite-prompt-text";
 import { kinuTheme } from './vite-theme';
 import { kinuIcon } from './vite-kinu-icon';
 import { landingPrerender } from './vite-landing-prerender';
+import { slatePageModules } from './vite-slate-page-modules';
 
 const galleryRoot = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
-  plugins: [kinuTheme(), kinuIcon(), promptText(), wgslVitePlugin(), react(), tailwindcss(), landingPrerender()],
+  plugins: [kinuTheme(), kinuIcon(), promptText(), slatePageModules(), wgslVitePlugin(), react(), tailwindcss(), landingPrerender()],
   // UMD-only, so it has no `default` export when served raw; prebundle it.
   optimizeDeps: {
     include: ["@plannotator/web-highlighter"],

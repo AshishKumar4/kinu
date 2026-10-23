@@ -4,7 +4,7 @@ import { Effect } from "effect";
 import {
   activateMctsProgressActor, applyMctsProgress, createMctsProgressState, SubagentActivityEventSchema,
   type MctsProgress, branchHeadId, CHANGES_MOVED_EVENT, followJobOutput, JOB_OUTPUT_EVENT, LIVE_READS,
-  READS_CHANGED_EVENT, SLATES_CHANGED_EVENT, WORK_TAB_JOBS, type JobOutputTail, listedOn, type LiveRead,
+  READS_CHANGED_EVENT, SLATE_PUSH_EVENT, SLATES_CHANGED_EVENT, WORK_TAB_JOBS, type JobOutputTail, listedOn, type LiveRead,
   type PendingAction, type SlateSummary,
 } from "@kinu.run/core";
 import * as v from "valibot";
@@ -32,6 +32,7 @@ import type { WorkspacePlanReference } from "@kinu.run/core";
 import type { ChatLink, ExecutorOutput, WorkspaceExtension, WorkspaceOpening } from "./use-chat-owner";
 import type { AsyncResource } from "./use-async-resource";
 import type { AgentStatus } from "@kinu.run/core";
+import { deliverSlatePush } from "@/lib/slate-pushes";
 
 export interface BranchRun {
   branchId: string;
@@ -341,6 +342,8 @@ export function useWorkspaceReads(link: ChatLink) {
       setReadMoves((moves) => Object.fromEntries([
         ...Object.entries(moves), ...msg.reads.map((read) => [read, (moves[read] ?? 0) + 1]),
       ]));
+    } else if (msg.type === SLATE_PUSH_EVENT) {
+      deliverSlatePush(msg.page, msg.data);
     } else if (msg.type === SLATES_CHANGED_EVENT) {
       setSlateReloads((previous) => {
         const next = new Map(previous);

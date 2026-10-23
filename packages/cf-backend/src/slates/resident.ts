@@ -9,10 +9,10 @@ import { CRED_KERNEL, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.
 import type { ComposedFacetManager, LongRunningWorkerSpawnOptions } from '@nimbus-sh/worker/workspace-host';
 import type { WorkspaceSession } from '@kinu.run/core/workspace';
 import {
-  escapeHtml, parseSlateProject, SLATE_DRIVEN_MEMBERS, SLATE_METHOD_NAME_SOURCE, SLATE_PAGE_PREAMBLE, slateTitle, type SlateProcess, type SlateProject, slateAuthority,
+  ephemeralSlateAddress, escapeHtml, parseSlateProject, SLATE_DRIVEN_MEMBERS, SLATE_METHOD_NAME_SOURCE, SLATE_PAGE_MODULES, SLATE_PAGE_PREAMBLE, slateTitle, type SlateProcess, type SlateProject, slateAuthority,
 } from '@kinu.run/core';
 import { attempt, diagnostics, KinuError, renderCauseChain, settle } from '@kinu.run/core/obs';
-import { confinedTo, SLATE_CLIENT_MODULE, SLATE_SERVER_MODULE, type SlateBuildFailure, type SlateBuildRead, type SlateImage } from '@kinu.run/core/slates';
+import { confinedTo, SLATE_SERVER_MODULE, type SlateBuildFailure, type SlateBuildRead, type SlateImage } from '@kinu.run/core/slates';
 import { BROWSER_CLIENT_MODULE, BROWSER_PRELUDE, browserClientSource } from '../browser-prelude';
 import { slateVendorModule } from './vendor';
 
@@ -79,7 +79,28 @@ const MAIN_MODULE = 'runner.js';
 
 const APPLICATION_MODULE = 'application.js';
 
-const CLASS_BOOT: readonly string[] = [
+/** What a page's server is told for `this.sql` or `this.storage`: an answer's page keeps no data of its own, since its
+ *  process, and any state it held, goes when it is evicted (1023-ac). */
+export const PAGE_KEEPS_NO_DATA = "a page keeps its data in workspace.db; this.sql is a saved slate's";
+
+/** What a slate of files is told for `this.push`: a page is pushed to only where the chat draws it. */
+export const ONLY_A_PAGE_PUSHES = "this.push sends an answer's page what it did not ask for; a slate's own page asks its class";
+
+/** The slate's own state as its class reads it; an answer's page's refuses (`PAGE_KEEPS_NO_DATA`). */
+const STATE: readonly string[] = [
+  '      storage: this.ctx.storage,',
+  '      kv: storageProxy(this.env.__storage),',
+  '      push: () => Promise.reject(new Error(' + JSON.stringify(ONLY_A_PAGE_PUSHES) + ')),',
+];
+
+const PAGE_STATE: readonly string[] = [
+  '      storage: { get sql() { throw new Error(' + JSON.stringify(PAGE_KEEPS_NO_DATA) + '); } },',
+  '      get kv() { throw new Error(' + JSON.stringify(PAGE_KEEPS_NO_DATA) + '); },',
+  // Told to the tabs that draw the page, through its host (`SlateHost` push).
+  '      push: async (data) => { const result = await this.env.__host.call(["push"], [data], null); if (!result.ok) throw new SlateRefusal(result); },',
+];
+
+const classBoot = (state: readonly string[]): readonly string[] => [
   '    // The authored module is imported here, not at the top: a static import',
   '    // evaluates during worker boot, where a throw in authored source (say a',
   '    // missing SlateObject import) surfaces as an io fault instead of the',
@@ -105,8 +126,7 @@ const CLASS_BOOT: readonly string[] = [
   '      return { ok: false, error: "package.json main must export class Slate extends SlateObject from kinu:slate (the Slate export or the default export); found " + (found === "" ? "no exports at all" : found) };',
   '    }',
   '    const slate = new Slate({',
-  '      storage: this.ctx.storage,',
-  '      kv: storageProxy(this.env.__storage),',
+  ...state,
   '      waitUntil: (work) => this.ctx.waitUntil(work),',
   "    }, Object.freeze({ ...this.env.__secrets, workspace: workspaceSurface(this.env.workspace) }));",
   '    // The callable surface: prototype methods between the instance and',
@@ -159,6 +179,8 @@ const SURFACE_BOOT: readonly string[] = [
  */
 export function slateRunnerSource(
   assets: readonly { readonly path: string; readonly contents: string }[], shell: string | undefined, served: 'class' | 'surface',
+  /** An answer's page, whose server keeps no state (`PAGE_KEEPS_NO_DATA`). */
+  page = false,
 ): string {
   const raw: Record<string, { body: string; immutable: boolean }> = {};
 
@@ -168,7 +190,7 @@ export function slateRunnerSource(
     'import { AsyncLocalStorage } from "node:async_hooks";',
     'import { DurableObject } from "cloudflare:workers";',
     'import { newWorkersRpcResponse, newWebSocketRpcSession, RpcTarget } from "./capnweb.js";',
-    'import { react, capnweb, slateClient } from "./vendor.js";',
+    'import { modules } from "./vendor.js";',
     'function describeExport(value) {',
     '  if (value === undefined) return "nothing";',
     '  if (typeof value === "function") {',
@@ -196,9 +218,7 @@ export function slateRunnerSource(
     'const assets = Object.freeze({',
     '  ...rawAssets,',
     ...(shell === undefined ? [] : ['  "/__kinu/index.html": { body: ' + JSON.stringify(shell) + ', immutable: false },']),
-    '  "/__kinu/react.js": { body: react, immutable: true },',
-    '  "/__kinu/capnweb.js": { body: capnweb, immutable: true },',
-    '  "/__kinu/slate.js": { body: slateClient, immutable: true },',
+    '  ...Object.fromEntries(Object.entries(modules).map(([file, body]) => ["/__kinu/" + file, { body, immutable: true }])),',
     '});',
     // Invocation is async context: `undefined` means no method is running; `null` is the root lineage.
     'const invocations = new AsyncLocalStorage();',
@@ -320,7 +340,7 @@ export function slateRunnerSource(
     '    return this.#started;',
     '  }',
     '  async #bootProcess() {',
-    ...(served === 'class' ? CLASS_BOOT : SURFACE_BOOT),
+    ...(served === 'class' ? classBoot(page ? PAGE_STATE : STATE) : SURFACE_BOOT),
     '  }',
     '  async fetch(request) { return this.handleHttpRequest(request); }',
     '  async handleHttpRequest(request) {',
@@ -590,7 +610,8 @@ function browserSurface(build: SlateBuild, id: string, project: SlateProject, re
 
     const client = yield* compileSlate(build.bundler, clientEntry, {
       bundle: true, format: 'esm', platform: 'browser', outfile: '/__kinu/client.js',
-      external: ['react', 'react-dom/client', 'react/jsx-runtime', 'capnweb', 'kinu:slate'],
+      // Every module the page's import map names is the page's one copy, never bundled in again.
+      external: Object.keys(SLATE_PAGE_MODULES),
       tsconfigRaw: COMPILED_JSX,
       fs: build.fs,
     });
@@ -677,12 +698,12 @@ export class ResidentSlateProcesses {
       const { assets, shell } = yield* browserSurface(build, input.owner, project, source);
 
       const modules = {
-        [MAIN_MODULE]: slateRunnerSource(assets, shell, main === undefined ? 'surface' : 'class'),
+        [MAIN_MODULE]: slateRunnerSource(assets, shell, main === undefined ? 'surface' : 'class', ephemeralSlateAddress(input.owner) !== null),
         [APPLICATION_MODULE]: application,
         'capnweb.js': slateVendor.capnwebWorkers,
         'server.js': SLATE_SERVER_MODULE,
         'react-stub.js': slateVendor.reactStub,
-        'vendor.js': `export const react = ${JSON.stringify(slateVendor.react)};\nexport const capnweb = ${JSON.stringify(slateVendor.capnweb)};\nexport const slateClient = ${JSON.stringify(SLATE_CLIENT_MODULE)};\n`,
+        'vendor.js': `export const modules = ${JSON.stringify(slateVendor.pageModules)};\n`,
         // Evaluated only when the slate first connects a browser, as in an eval program.
         [BROWSER_CLIENT_MODULE]: yield* Effect.promise(browserClientSource),
       };

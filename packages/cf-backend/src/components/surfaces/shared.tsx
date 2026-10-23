@@ -5,7 +5,7 @@ import { useAsyncResource } from "@/hooks/use-async-resource";
 import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { findPlaneReferences, isWholeReference, linkProse, MAX_LINES_PER_FILE, promoteSlateLinks, slateLinkId, type ChangelogEntry, type DiffLine, type MarkdownNode } from "@kinu.run/core";
-import { drawnInBrowser, ephemeralSlateId, slateUiSegments, type EphemeralSlateAddress, type SlateUiSegment } from "@kinu.run/core";
+import { blockServer, ephemeralSlateId, slateUiSegments, type EphemeralSlateAddress, type JsonValue, type SlateUiSegment } from "@kinu.run/core";
 import { KinuMark } from "@/components/ui/KinuLogo";
 import { InlineSlate } from "@/components/slates/InlineSlate";
 import { DrawnSlate } from "@/components/slates/DrawnSlate";
@@ -116,18 +116,18 @@ export function SlateLink({ id }: { id: string }) {
   return <span className="block my-2"><InlineSlate id={id} rpc={inline.rpc} display="inline" /></span>;
 }
 
-/** A `<slate-ui>` block of a stored answer, drawn by the same slate path a file slate is; where no slate can be drawn,
- *  its source, folded. */
 /**
- * A block's page, drawn by the chat itself as its answer streams (`DrawnSlate`), and opened as written once its block is
- * closed. A page that reaches the workspace through `kinu:slate` is served by its process once its answer is stored,
- * which reads the block back: until then its markup so far is drawn.
+ * A `<slate-ui>` block's page, drawn by the chat itself as its answer streams and opened as written once its block is
+ * closed (`DrawnSlate`). What it calls through `kinu:slate` reaches its workspace once its answer is stored, which reads
+ * the block back as the page's own; until then each call is refused in the page. Where no page can be drawn, its source,
+ * folded.
  */
 function SlateUiBlock({ address, html, closed, stored }: { address: EphemeralSlateAddress | null; html: string; closed: boolean; stored: boolean }) {
   const inline = useContext(SlateInlineContext);
   const rpc = inline?.rpc;
   const id = address === null ? null : ephemeralSlateId(address);
   const save = useMemo(() => (rpc === undefined || id === null || !stored ? undefined : async () => rpc("slate", [{ op: "save", page: id }])), [rpc, id, stored]);
+  const call = useMemo(() => (rpc === undefined || !stored ? undefined : async (page: string, request: JsonValue) => rpc("drawnSlateCall", [page, request])), [rpc, stored]);
 
   if (inline === null || address === null || id === null) {
     return (
@@ -138,9 +138,7 @@ function SlateUiBlock({ address, html, closed, stored }: { address: EphemeralSla
     );
   }
 
-  if (closed && stored && !drawnInBrowser(html)) return <InlineSlate id={id} block={address.name} rpc={inline.rpc} display="inline" />;
-
-  return <DrawnSlate id={id} block={address.name} html={html} closed={closed && drawnInBrowser(html)} save={save} />;
+  return <DrawnSlate id={id} block={address.name} html={blockServer(html).page} closed={closed} call={call} save={save} />;
 }
 
 /** Which chat an answer is in: the workspace's own (null), or a hired agent's. */

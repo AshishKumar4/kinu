@@ -1,4 +1,6 @@
+import { createHash } from 'node:crypto';
 import { buildSync, type Metafile } from 'esbuild';
+import { SLATE_CLIENT_MODULE } from '../core/src/slates/runtime-modules';
 import * as reactNs from 'react';
 import * as v from 'valibot';
 import type { Plugin } from 'vite';
@@ -9,13 +11,14 @@ const SpecifiersSchema = v.array(v.string());
  *  Nimbus's node-compat for `fs` and `child_process` in eval; `src/slate-vendor.d.ts` names this type. The bun test preload reads a built copy back from disk through
  *  the schema. */
 export const SlateVendorSchema = v.object({
-  react: v.string(),
+  /** Each file a page imports by name (`SLATE_PAGE_MODULES`), as served to it: React, capnweb, `kinu:slate`, uPlot
+   *  (53 KB minified, 1.6.32), Preact with htm (12 KB, 10.28.4 and 3.1.1). */
+  pageModules: v.record(v.string(), v.string()),
   /** `@cloudflare/puppeteer`, 296 KB minified (2026-09-28); `@cloudflare/playwright` measured 1.8 MB. */
   puppeteer: v.string(),
   /** `@nimbus-sh/core/node-compat`'s `createNodeCompat`, 48 KB minified (0.27.0, 2026-10-22); `node:*` stays the isolate's. */
   nodeCompat: v.string(),
   reactStub: v.string(),
-  capnweb: v.string(),
   capnwebWorkers: v.string(),
   /** External specifiers per bundle, from the metafile. */
   imports: v.object({ react: SpecifiersSchema, capnweb: SpecifiersSchema, capnwebWorkers: SpecifiersSchema }),
@@ -45,6 +48,8 @@ function bundle(stdin: string, conditions: readonly string[], external: readonly
     define: { 'process.env.NODE_ENV': '"production"' },
     conditions: [...conditions],
     external: [...external],
+    // uPlot's stylesheet, carried in its module and added to the page that imports it.
+    loader: { '.css': 'text' },
   });
 
   const text = result.outputFiles[0]?.text;
@@ -83,12 +88,32 @@ export function buildSlateVendor(): SlateVendor {
   ].join('\n');
 
   const capnweb = bundle('export * from "capnweb";', ['browser', 'import']);
+  const browser = ['browser', 'import'];
+  // One Preact for every module that names it: hooks and htm import the page's own copy by its name.
+  const preact = bundle('export * from "preact";', browser);
+  const preactHooks = bundle('export * from "preact/hooks";', browser, ['preact']);
+  const htmPreact = bundle('export * from "htm/preact";', browser, ['preact', 'preact/hooks']);
+
+  const uplot = bundle([
+    'import uPlot from "uplot";',
+    'import css from "uplot/dist/uPlot.min.css";',
+    'const style = document.createElement("style");',
+    'style.textContent = css;',
+    'document.head.append(style);',
+    'export default uPlot;',
+  ].join('\n'), browser);
+
   const capnwebWorkers = bundle('export * from "capnweb";', ['workerd', 'import'], ['cloudflare:*']);
   const puppeteer = bundle('export { default } from "@cloudflare/puppeteer";', ['workerd', 'worker', 'browser', 'import'], ['node:*', 'cloudflare:*']);
   const nodeCompat = bundle('export { createNodeCompat } from "@nimbus-sh/core/node-compat";', ['workerd', 'worker', 'import'], ['node:*']);
 
+  const pageModules = {
+    'react.js': react.text, 'capnweb.js': capnweb.text, 'slate.js': SLATE_CLIENT_MODULE,
+    'uplot.js': uplot.text, 'preact.js': preact.text, 'preact-hooks.js': preactHooks.text, 'htm-preact.js': htmPreact.text,
+  };
+
   return {
-    react: react.text, puppeteer: puppeteer.text, nodeCompat: nodeCompat.text, reactStub, capnweb: capnweb.text, capnwebWorkers: capnwebWorkers.text, reactExports,
+    pageModules, puppeteer: puppeteer.text, nodeCompat: nodeCompat.text, reactStub, capnwebWorkers: capnwebWorkers.text, reactExports,
     imports: {
       react: importSpecifiers(react.metafile),
       capnweb: importSpecifiers(capnweb.metafile),
@@ -104,6 +129,14 @@ function slateVendorBundle(): SlateVendor {
   vendor ??= buildSlateVendor();
 
   return vendor;
+}
+
+/** The page modules' files, each named for its content under `SLATE_PAGE_MODULES_PATH`: what the app serves a page the
+ *  chat draws itself, and the file names it imports them by. */
+export function slatePageFiles(): Record<string, { readonly name: string; readonly body: string }> {
+  return Object.fromEntries(Object.entries(slateVendorBundle().pageModules).map(([file, body]) => [
+    file, { name: `${file.replace(/\.js$/u, '')}-${createHash('sha256').update(body).digest('hex').slice(0, 8)}.js`, body },
+  ]));
 }
 
 /** A generated module with no imports; graph walks outside Vite must treat it that way too. */
