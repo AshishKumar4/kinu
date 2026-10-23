@@ -8,6 +8,8 @@ import { bookmarkNow, restartedForRestore, restoreArmed, type ArmedRestore, type
 
 const TopSchema = v.object({ top: v.nullable(v.number()) });
 
+const UsedSchema = v.object({ used: v.nullable(v.number()) });
+
 /** The deployment's root secret, which Mossaic's type of its env does not name: these objects run in Kinu's Worker. */
 const SecretSchema = v.looseObject({ CREDENTIAL_ENCRYPTION_KEY: v.optional(v.string()) });
 
@@ -51,6 +53,14 @@ export class MossaicUserDO extends MossaicUser {
     const pool = tables.some(({ name }) => name === 'quota') ? top('pool_size', 'quota') : 0;
 
     return Math.max(0, pool, ...named);
+  }
+
+  /** The bytes this tenant's files hold, as Mossaic itself accounts them (`quota.storage_used`); 0 before any write. */
+  storedBytes(): number {
+    const sql = this.ctx.storage.sql;
+    const made = sql.exec(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'quota'`).toArray().length > 0;
+
+    return made ? v.parse(UsedSchema, sql.exec('SELECT SUM(storage_used) AS used FROM quota').one()).used ?? 0 : 0;
   }
 
   /** Every file, version and record this tenant has, deleted; its shards are first (`destroyDriveTenant`). */

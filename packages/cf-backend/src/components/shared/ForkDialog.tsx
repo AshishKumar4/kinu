@@ -1,5 +1,5 @@
 /** Admission never runs the source; the fork lands on a panel naming what it calls on the forker's surface. */
-import { Effect } from 'effect';
+import { Cause, Effect } from 'effect';
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Loader } from "@/components/ui/Loader";
@@ -13,6 +13,7 @@ import { Choices } from "@/components/ui/Choices";
 import { listWorkspaces } from "@/lib/user-api";
 import { forkBlueprint, forkLiveShare } from "@/lib/shared-api";
 import { Notice } from "@/components/ui/Notice";
+import { useLimitRefusal } from "@/components/limits/LimitRefusal";
 
 /** The choice of a new workspace: a `+` is in no workspace's name. */
 const NEW_WORKSPACE = "+new";
@@ -41,6 +42,7 @@ export function ForkDialog({ blueprint, live, title, onClose, workspaces, create
   const [mission, setMission] = useState(title);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const offerRefusal = useLimitRefusal();
 
   useEffect(() => {
     if (workspaces !== undefined) return;
@@ -67,11 +69,16 @@ export function ForkDialog({ blueprint, live, title, onClose, workspaces, create
         : (yield* Effect.promise(async () => forkLiveShare({ live: live?.share ?? '', ownerWorkspace: live?.workspace ?? '', workspace })));
 
       yield* Effect.promise(async () => navigate(forkedSlatePath(fork)));
-    }), showing((chain) => {
-      setErr(chain);
-      setBusy(false);
-    }));
-  })), [busy, target, mission, blueprint, live, navigate, create]);
+    }), (failed) => {
+      // A limit's refusal closes this dialog for the limit's own, in the shell that offers it.
+      if (offerRefusal({ cause: Cause.squash(failed) })) return Effect.sync(onClose);
+
+      return showing((chain) => {
+        setErr(chain);
+        setBusy(false);
+      })(failed);
+    });
+  })), [busy, target, mission, blueprint, live, navigate, create, offerRefusal, onClose]);
 
   return (
     <Modal

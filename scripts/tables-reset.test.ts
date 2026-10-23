@@ -3,11 +3,14 @@
 // what refuses. After it, the walk: every account the
 // roots and the builtin directory name, each one's workspaces and every object Cloudflare lists, each asked once under
 // a pass this run wrote and then deleted, waiting out an edge still serving the build before; and what it found.
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { Database as SqliteDatabase } from 'bun:sqlite';
+import * as v from 'valibot';
 import { describe, expect, test } from 'bun:test';
 import { censusOf, initActivationTable, recordActivation, sha256Hex, type Repair, type TablesAnswer } from '@kinu.run/core';
 import { makeSql, makeSqlExec } from '../packages/core/tests/helpers';
-import { censusDiff, censusLines, changedTables, confirmation, derivedIn, planLines, referrersOf, schemaChange, verdictOf, walk, walkLines, type OpsBody, type Reached, type TablesTarget } from './tables-reset';
+import { censusDiff, censusLines, changedTables, confirmation, derivedIn, lossRefusals, planLines, referrersOf, schemaChange, verdictOf, walk, walkLines, type OpsBody, type Reached, type TablesTarget } from './tables-reset';
 
 const FROM = {
   'device_joins@packages/core/src/state/user-schema.ts': ['device_id TEXT PRIMARY KEY', 'expires_at INTEGER NOT NULL'],
@@ -84,6 +87,48 @@ test('a release that only adds tables is additive; one that reshapes or removes 
     { kind: 'changes', tables: ['kept reshaped'] },
     { kind: 'changes', tables: ['gone removed'] },
   ]);
+});
+
+// The owner, 2026-10-21: "once users come, we either have a one time migration in the workspace onStart, or alter only
+// tables where data loss is acceptable." Production refuses a plan that loses a user's rows unless the owner's words
+// name each such table.
+describe('in production, a plan that loses data', () => {
+  const plan = [
+    { table: 'agent_facts', classes: ['agent'], does: 'drop' as const },
+    { table: 'cache_warm', classes: ['workspace'], does: 'drop' as const },
+    { table: 'old_notes', classes: ['account'], does: 'retire' as const },
+    { table: 'turn_marks', classes: ['agent'], does: 'local' as const },
+  ];
+
+  const acceptable = { cache_warm: 'warmed again by the next turn' };
+
+  test('is refused for each table holding user data, a table whose loss is acceptable aside', () => {
+    expect(lossRefusals(plan, { acceptable, words: undefined })).toEqual([
+      'agent_facts [agent] holds user data, and this release drops it',
+      'old_notes [account] holds user data, and this release retires it',
+    ]);
+  });
+
+  // A name no class makes would class nothing, and a reason left empty would say nothing to the owner reading it.
+  test('is judged against schema-loss.json, which names only tables a class makes, each with why', () => {
+    const classes = v.parse(v.record(v.string(), v.array(v.string())), JSON.parse(readFileSync(join(import.meta.dir, 'schema-classes.json'), 'utf8')));
+    const loss = v.parse(v.record(v.string(), v.string()), JSON.parse(readFileSync(join(import.meta.dir, 'schema-loss.json'), 'utf8')));
+    const made = new Set(Object.values(classes).flat());
+
+    expect(Object.entries(loss).filter(([table, why]) => !made.has(table) || why.trim().length < 12)).toEqual([]);
+  });
+
+  test('passes where the owner\'s words name each such table, and only that table', () => {
+    expect({
+      both: lossRefusals(plan, { acceptable, words: 'owner 2026-10-23: drop agent_facts and old_notes, both rebuilt by the next run' }),
+      one: lossRefusals(plan, { acceptable, words: 'owner: drop agent_facts' }),
+      prefix: lossRefusals(plan, { acceptable, words: 'owner: drop agent_facts_history and old_notes' }),
+    }).toEqual({
+      both: [],
+      one: ['old_notes [account] holds user data, and this release retires it'],
+      prefix: ['agent_facts [agent] holds user data, and this release drops it'],
+    });
+  });
 });
 
 test('the plan says what each reset does: drop and make anew, with what refers to it, retire, leave as it is, or refuse', () => {

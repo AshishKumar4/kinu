@@ -132,6 +132,8 @@ export { mailInContext } from './mail/in-context';
 
 export { MAIL_MESSAGE_FIELDS, MailAddress, MailBoxPath, mailText } from './mail/message';
 
+export * from './limits/index';
+
 export { MailTriageLane, triageMail, type MailTriageDeps } from './mail/triage';
 
 export { createEmailThreadDispatcher, mailboxEmail, sendInboundEmailReceipt, sendOwnerEmail } from './mail/outbound';
@@ -1529,6 +1531,7 @@ export {
   DEV_IDENTITY_HEADER,
   EVAL_ACCOUNTS,
   EVAL_TRIAL_ACCOUNTS,
+  UPGRADE_FIXTURE_ACCOUNTS,
   WORKER_VERSION_HEADER,
   EVAL_WORKSPACE_BEAT_MS,
   EVAL_WORKSPACE_LEASE_MS,
@@ -1594,9 +1597,9 @@ export {
 
 export {
   initEgressVaultTables, listSecrets, putSecrets, setSecretDestination, deleteSecret, grantSecret, revokeSecretGrant,
-  grantedSecrets, revealedSecrets, resolveEgressInjection,
+  grantedSecrets, revealedSecrets, resolveEgressInjection, mintEgressPlaceholder, connectionEnvironment,
   type SecretSummary, type SecretInput, type SecretDestination, type GrantedSecrets, type EgressInjection,
-  type EgressInjectionResult, type EgressVaultDeps,
+  type EgressInjectionResult, type EgressVaultDeps, type ConnectionSecret,
 } from './safety/egress-vault';
 
 export {

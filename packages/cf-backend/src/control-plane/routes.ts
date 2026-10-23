@@ -46,6 +46,8 @@ type ControlPlaneReach = IndexFeedSink & Pick<ControlPlaneDO,
   | 'replaceUserWorkspaces'
   | 'recordAudit'
   | 'settleAudit'
+  | 'noteAccountStanding'
+  | 'createInvite'
 >;
 
 type ControlTarget = ActionTarget & Pick<OrchestratorAgent,
@@ -57,7 +59,7 @@ type ControlTarget = ActionTarget & Pick<OrchestratorAgent,
   | 'getExecutors'
 >;
 
-type ControlRegistry = ActionRegistry & Pick<UserDO, 'listActiveWorkspaces'>;
+type ControlRegistry = ActionRegistry & Pick<UserDO, 'listActiveWorkspaces' | 'limits_account'>;
 
 export interface ControlEnv<Id> extends ActionEnv<Id>, AdminGateEnv, AnalyticsSqlEnv {
   ControlPlaneDO: ObjectNamespace<Id, ControlPlaneReach>;
@@ -122,7 +124,7 @@ controlRoutes.get('/api/control/overview/*', async (c) => {
 
 controlRoutes.get('/api/control/users/:userId/*', (c) => settle(Effect.suspend(() => handleUserDetail(c.get('control'), rawParam(c, 'userId'), new URL(c.req.url)))));
 
-controlRoutes.get('/api/control/users/*', pagedRead((store, caller, page) => store.listUsers(caller, page)));
+controlRoutes.get('/api/control/users/*', usersList);
 
 controlRoutes.get('/api/control/workspaces/:name/*', async (c) => {
   const name = decodeURIComponent(rawParam(c, 'name'));
@@ -169,6 +171,30 @@ function pagedRead<Body>(read: (store: ControlPlaneReach, caller: ControlCaller,
 
     return json({ body: await read(controlPlaneStub(env), caller, pageQuery(new URL(c.req.url))) });
   };
+}
+
+/**
+ * A page of accounts, each with its limits read in its own object: the accounts table's columns. A row whose object
+ * could not be read keeps its place with `limits` null, and the page still answers.
+ */
+async function usersList(c: ControlContextOf): Promise<Response> {
+  const { env, caller } = c.get('control');
+  const page = await controlPlaneStub(env).listUsers(caller, pageQuery(new URL(c.req.url)));
+  const owner = await ownerCaller(env);
+  const read = await Promise.allSettled(page.items.map((row) => objectNamed(env.UserDO, row.userId).limits_account(owner)));
+
+  const items = page.items.map((row, index) => {
+    const limits = read[index];
+
+    if (limits?.status === 'fulfilled') return { ...row, limits: limits.value };
+    diagnostics.failure('control_plane.account_limits_unread', toKinuError({
+      doing: "reading an account's limits for the accounts list", cause: limits?.reason, otherwise: 'unavailable',
+    }), { userId: row.userId });
+
+    return { ...row, limits: null };
+  });
+
+  return json({ body: { ...page, items } });
 }
 
 async function workspaceList(c: ControlContextOf): Promise<Response> {
@@ -233,7 +259,7 @@ function handleAction<Id>(
     );
 
     if (intent instanceof Response) return intent;
-    const outcome = yield* Effect.promise(() => runControlAction(env, body));
+    const outcome = yield* Effect.promise(() => runControlAction(env, body, { email: admin.email, caller }));
 
     // PHASE TWO. The action has already happened; this records how it ended.
     const unsettled = yield* Effect.catchCause(Effect.gen(function* () {
@@ -349,8 +375,10 @@ function handleUserDetail<Id>(control: ControlContext<Id>, userId: string, url: 
     const request = pageQuery(url);
     const reconcile = yield* reconcileRoster(env, caller, userId, request.cursor === undefined);
     const workspaces = yield* Effect.promise(() => stub.listWorkspaces(caller, request, { userId, includeRemoved: true }));
+    // Its class, suspension and each limit read now in its own object: the list's mirror holds the class alone.
+    const limits = yield* Effect.promise(async () => objectNamed(env.UserDO, userId).limits_account(await ownerCaller(env)));
 
-    return json({ body: { user, workspaces, reconcile, viewer: admin.email } });
+    return json({ body: { user, workspaces, reconcile, limits, viewer: admin.email } });
   });
 }
 

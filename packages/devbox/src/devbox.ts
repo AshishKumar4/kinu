@@ -70,7 +70,7 @@ import {
 } from './lifecycle';
 import { createCheckpointLane, createResourceLane, heldUntilDrained, pathScopes, portScope, type ResourceScope } from './operation-lanes';
 import { SupervisedProcesses, type EndTold } from './supervised-processes';
-import { DevboxError, attempt, attemptSync, hold, settle, settleSync, startOverrun, startInterrupted, chainAdvanced, type DevboxErrorCode } from './errors';
+import { DevboxError, attempt, attemptSync, hold, refuseStart, settle, settleSync, startOverrun, startInterrupted, chainAdvanced, type DevboxErrorCode } from './errors';
 import { execRecords } from './exec-stream';
 import { BOX_SIZE_ORDER, BoxSizeSchema, DEFAULT_BOX_SIZE, instanceOf, type BoxSize, type ResizeOutcome } from './sizes';
 import type { RestorePhase, RestorePhaseStamps } from './durability/contracts';
@@ -420,6 +420,9 @@ function sameToken(held: string | undefined, given: string): boolean {
   return diff === 0;
 }
 
+/** A start from stopped as the box's host admits it: the size it starts at, or the refusal's words. */
+export type StartAdmission = { readonly size: BoxSize } | { readonly refused: string };
+
 export class Devbox<Env = unknown> extends DurableObject<Env> {
   readonly #gateways: GatewayBindings;
   #storage: DevboxStorage | undefined;
@@ -442,6 +445,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
    *  box, what its pane sent meanwhile, given to the PTY in order as it attaches (D109). */
   readonly #terminals = new Map<WebSocket, { readonly attached: TerminalSocketEvents } | { readonly waiting: (string | ArrayBuffer)[] }>();
   #refused: { readonly generation: number; readonly reason: string } | undefined;
+
+  /** The size the host admitted this box's last start from stopped at (`admitStart`), which the start runs at. */
+  #admittedSize: BoxSize | undefined;
   /** Set by `destroy`, cleared by a caller or a host (D36). */
   #closed = false;
   #teardowns = 0;
@@ -817,6 +823,19 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return Promise.resolve('queued');
   }
 
+  /**
+   * Whether this box, set to `size`, may start from stopped: the size it starts at, which may be smaller than the one
+   * set and leaves the setting as it is, or the refusal's words. Asked at every start of a stopped container
+   * (`#startContainer`), never of a running one.
+   */
+  protected async admitStart(size: BoxSize): Promise<StartAdmission> {
+    return { size };
+  }
+
+  /** The box seen running at a heartbeat, at `size`: what its host counts running time by. A host's failure here is its
+   *  own to keep from the heartbeat. */
+  protected async onRunningTick(_size: BoxSize): Promise<void> {}
+
   /** Hook for restore progress; `atMs` counts from when the attempt opened inside the hook.
    *  Synchronous, because the attempt waits for nothing of the witness's. */
   protected onRestorePhase(_phase: RestoreClockPhase, _atMs: number): void {
@@ -905,7 +924,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     if (!wasRunning && source !== undefined) {
       // D50: the one start boundary.
-      this.ctx.storage.kv.put(RUNNING_SIZE_KEY, inputs.size);
+      this.ctx.storage.kv.put(RUNNING_SIZE_KEY, this.#admittedSize ?? inputs.size);
       this.#startFrom(container, inputs, source);
     }
 
@@ -966,7 +985,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     this.#started = source;
     this.#awaitingGolden = undefined;
     this.#snapshots.started(source.kind === 'own' ? source.id : undefined);
-    container.start({ containerSnapshot: { id: source.id }, entrypoint: GOLDEN_ENTRYPOINT, instance: instanceOf(inputs.size), enableInternet: this.enableInternet });
+    // At the size its host admitted the start at (`admitStart`); a refusal stays keyed by the size set (D52).
+    container.start({ containerSnapshot: { id: source.id }, entrypoint: GOLDEN_ENTRYPOINT, instance: instanceOf(this.#admittedSize ?? inputs.size), enableInternet: this.enableInternet });
     keepStartRefusal(container);
   }
 
@@ -1379,6 +1399,15 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       await this.#settle({ phase: 'unattached', reason: refused, retry: false });
 
       return;
+    }
+
+    // A stopped box starts only if its host admits it; a running one is never asked. Nothing is kept of a refusal, so
+    // the next door asks again, once what refused it has changed.
+    if (this.ctx.container?.running !== true) {
+      const admitted = await this.admitStart(this.#size());
+
+      if ('refused' in admitted) refuseStart(admitted.refused);
+      this.#admittedSize = admitted.size;
     }
 
     if (this.ctx.container?.running !== true
@@ -3149,6 +3178,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
    *  alarm that never fired, a tick that returned early, and a ping that did not renew. */
   async #tick(input: Omit<HeartbeatTick, 'at'>): Promise<void> {
     await this.ctx.storage.put(LAST_TICK_KEY, { ...input, at: Date.now() } satisfies HeartbeatTick);
+
+    if (input.running) await this.onRunningTick(this.#runningSize() ?? this.#size());
   }
 
   /** Named schedule callback; the delivery policy lives in `incidents.ts`. */

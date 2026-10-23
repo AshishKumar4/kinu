@@ -8,8 +8,7 @@ import { GearSixIcon, KeyIcon, TrashIcon } from "@phosphor-icons/react";
 import { Page } from "@/components/ui/PageHeader";
 import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_LABEL, DEFAULT_ADVISOR_MIN_SEVERITY,
-  WORKSPACE_ARCHIVE_EXTENSION,
-  type ApprovalGrant, type ArchiveCursor, type EvolutionConfigView,
+  type ApprovalGrant, type EvolutionConfigView,
   type InstructionSourceRow, type InstructionSourceView, type SeekCursor, type ShellApprovalMode, WORKSPACE_TITLE_MAX,
 } from "@kinu.run/core";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
@@ -29,6 +28,7 @@ import { WorkspaceLogo } from "@/components/ui/Marks";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
 import { showing, detach, settle } from '@kinu.run/core/obs';
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { downloadWorkspaceArchive } from "@/lib/workspace-archive";
 import { Notice } from "@/components/ui/Notice";
 import { TextArea, TextInput } from "@/components/ui/Field";
 
@@ -549,7 +549,6 @@ function InstructionApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
   );
 }
 
-/** The export RPC answers one bounded page at a time, so the browser walks the cursor and assembles the archive. */
 function WorkspaceBackupCard({
   rpc, workspace,
 }: {
@@ -566,28 +565,7 @@ function WorkspaceBackupCard({
     setStatus("Exporting…");
 
     return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      const parts: string[] = [];
-      let cursor: ArchiveCursor | null = null;
-      let records = 0;
-
-      do {
-        const page = yield* Effect.promise(async () => rpc("exportWorkspaceArchive", [cursor]));
-        parts.push(page.lines.map((line) => `${line}\n`).join(""));
-        records += page.lines.length;
-        cursor = page.next;
-        setStatus(`Exporting… ${records} records`);
-      } while (cursor);
-
-      const url = URL.createObjectURL(new Blob(parts, { type: "application/x-ndjson" }));
-
-      yield* Effect.ensuring(Effect.sync(() => {
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = `${workspace}${WORKSPACE_ARCHIVE_EXTENSION}`;
-        link.click();
-      }), Effect.sync(() => {
-        URL.revokeObjectURL(url);
-      }));
+      const records = yield* downloadWorkspaceArchive(rpc, workspace, (read) => setStatus(`Exporting… ${read} records`));
 
       setStatus(`Downloaded ${records} records.`);
     }), showing((chain) => {
