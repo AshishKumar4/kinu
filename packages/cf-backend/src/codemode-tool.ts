@@ -132,7 +132,9 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
     toolFor(surface, scope) {
       // Built per call with the call's signal and channel: createCodeTool runs its executor without the tool call's
       // options, so a program's tool calls are stopped with its eval, and owned by it, only through what this binds.
-      const build = (mode: WorkMode, program: ProgramContext): Tool => {
+      // `written`: the program as the agent wrote it, which the executor places (`programPlace`) before the vendor's
+      // normalizer has wrapped it in a function, where an `import` no longer parses.
+      const build = (mode: WorkMode, program: ProgramContext, written?: string): Tool => {
         const signal = program.stop;
         // Read as the program starts, so a tool crafted a step ago is callable now; its body is defined in the prelude.
         const crafted = surface.craftedTools();
@@ -140,7 +142,7 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
         const { providers: reached, describe } = programSurface({ surface, namespaces: scope.namespaces(programExecutor(program)), reach: scope.reach, mode, signal, crafted });
         const { nested } = scope;
         const bound = nested === undefined ? reached : reached.map((provider) => guarded(provider, nested));
-        const executor = new KinuSandboxExecutor(options.launch(mode !== 'plan'), describe, servedImpacts(bound));
+        const executor = new KinuSandboxExecutor(options.launch(mode !== 'plan'), describe, servedImpacts(bound), { cwd: surface.cwd, crafted });
 
         const built = createCodeTool({
           // Composed here: the vendor's `{{types}}` replace reads `$` as a pattern.
@@ -160,7 +162,7 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
                 })
                 : resolved;
 
-              return executor.execute(code, live);
+              return executor.execute(written ?? code, live);
             },
           },
         });
@@ -176,7 +178,8 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
           // Read as the program starts, inside its tool call's turn: its RPC callbacks run outside that scope.
           const turn = scopedTurnSurface()?.key.turnId;
           const program = { stop: context.abortSignal, ...channel !== undefined && { channel }, ...turn !== undefined && { turn } };
-          const execute = build(currentWorkMode() === 'plan' ? 'plan' : 'build', program).execute;
+          const written = v.is(v.object({ code: v.string() }), input) ? input.code : undefined;
+          const execute = build(currentWorkMode() === 'plan' ? 'plan' : 'build', program, written).execute;
 
           if (execute === undefined) throw new Error('Codemode executor is not callable');
 

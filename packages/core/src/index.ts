@@ -891,7 +891,7 @@ export { ASKED, HeldReads, type Holds } from './utils/held-reads';
 
 export { rasterImage, type RasterImage } from './utils/raster-image';
 
-export { base64ToBytes } from './utils/base64';
+export { base64ToBytes, bytesToBase64 } from './utils/base64';
 
 export { mediaImage, mediaTokens, UNPRICED_MEDIA_TOKENS } from './prompting/media-tokens';
 
@@ -2623,6 +2623,8 @@ export {
   KINU_NODE_MODULE_NAME,
   KINU_NODE_MODULE_SOURCE,
 } from './execution/codemode-node-shim';
+
+export { KINU_PROGRAM_MODULE, programPlace, type ProgramImport, type ProgramPlace } from './execution/program-place';
 
 export {
   type DeviceHubClient,

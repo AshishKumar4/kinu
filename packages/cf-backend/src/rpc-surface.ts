@@ -278,6 +278,8 @@ const ORCHESTRATOR_METHODS = [
   'opsTables',
   'abortExecutorFileWrite',
   'acceptContainerEvent',
+  // A Node program's namespace call, from its principal's egress (`node-program.ts`).
+  'nodeProgramCall',
   'secretsMoved',
   'recordGitHubEgress',
   // Never `@callable`.

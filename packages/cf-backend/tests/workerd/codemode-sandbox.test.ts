@@ -563,7 +563,8 @@ describe('the eval sandbox under workerd', () => {
       "const looksFailed = await exec('printf x');",
       "const saved = await fs.readFile('saved.json', 'utf8');",
       "await fs.readFile('vfs://notes/a.md', 'utf8'); await fs.readFile('local://src/b.ts', 'utf8');",
-      "let missing = null; try { require('left-pad'); } catch (error) { missing = error.message; }",
+      // Named at run time, so it stays in the isolate: one named in the source runs on Node (`programPlace`).
+      "const pkg = 'left-pad'; let missing = null; try { require(pkg); } catch (error) { missing = error.message; }",
       "return { ran, failed, viaCallback, looksFailed, saved, joined: require('path').join('a', 'b'), prefixed: require('node:path') === require('path'), missing, available: require.available };",
     ].join('\n');
 

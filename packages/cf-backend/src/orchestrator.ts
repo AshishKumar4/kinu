@@ -56,6 +56,8 @@ import { AgentTurns } from "./agent-turns";
 import { AgentWakes } from "./agent-wakes";
 import type { AgentTurnActivity, AgentSnapshot, ChatWindow, RunEventRecorder, StoredRow } from '@kinu.run/core';
 import type { SerializedMessage, WebSearchProvider } from '@kinu.run/core';
+import { serveNodeProgramCall, type NodeProgramAnswer } from './node-program';
+import type { EgressPrincipal } from '@kinu.run/core';
 import type { CFRuntime } from './runtime';
 import { callOperation, listOperations, type OperationCaller, type OperationListing, type OperationResult } from '@kinu.run/core';
 import type { AgentFacet, AgentFacetCalls } from "./agent-facet/agent-facet";
@@ -1236,6 +1238,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       this.chatOpenedAt.set(actorId, Date.now());
       this.agentBound(actorId).stores.config.setHoldsTurns();
       this.claimPresented(actorId);
+      this.warmWorkspaceNodeInBackground();
 
       // The owner's words close the questions held open as the turn opens; none held, the next read is fresh.
       if (this.heldOpenQuestion(actorId) === true) this.hostedQuestionsMoved();
@@ -7277,6 +7280,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * `launchingHeadTrust` is set here, never read off the wire: the container is least trusted.
    * `waitUntil` is a no-op in a DO, so the write is awaited in this invocation; retry is the recovery.
    */
+  /** A Node program's call of one of its namespaces, as its egress handed it on: answered by the program's own provider. */
+  async nodeProgramCall(principal: EgressPrincipal | undefined, token: string | null, body: JsonValue): Promise<NodeProgramAnswer> {
+    return await serveNodeProgramCall(principal, token, body);
+  }
+
   async acceptContainerEvent(body: JsonValue): Promise<ContainerEventResult> {
     return acceptContainerEvent({
       log: this.eventLog,

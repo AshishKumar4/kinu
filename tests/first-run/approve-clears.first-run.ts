@@ -120,8 +120,12 @@ describe(SUITE, () => {
 
           // The thing the gated command will destroy, on the machine, created
           // by this case. Its disappearance is the proof that a permission
-          // became an effect — and only after the owner said yes.
-          const doomed = join(machine.home, 'doomed');
+          // became an effect — and only after the owner said yes. In a folder
+          // of the home, not directly in it: the home lacks a run-later file, so
+          // it is sealed, and where the kernel has no Landlock (armada's microVM)
+          // the seal is mounts, which keep an entry directly in it too
+          // (pc-agent daemon/landlock.js; its removal there is a pc-agent test).
+          const doomed = join(machine.home, 'first-run', 'doomed');
           mkdirSync(doomed, { recursive: true });
           writeFileSync(join(doomed, 'marker'), 'first-run\n');
           const command = `rm -r ${JSON.stringify(doomed)}`;
