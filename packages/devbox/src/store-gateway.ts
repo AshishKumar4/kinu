@@ -197,16 +197,56 @@ function serveMultipart({ request, url, bucket, name, root }: StoreCall, key: st
   });
 }
 
-/** S3 does not order a part's elements (the AWS SDKs send ETag first). */
+/** The five entities XML predefines, and a character reference by number. */
+const XML_ENTITY = /&(?:(amp|lt|gt|quot|apos)|#(\d+)|#x([0-9a-f]+));/giu;
+
+const XML_NAMED = new Map([['amp', '&'], ['lt', '<'], ['gt', '>'], ['quot', '"'], ['apos', "'"]]);
+
+/** XML text as it stands for: its entities and character references decoded. */
+function xmlText(raw: string): string {
+  return raw.replace(XML_ENTITY, (entity, named?: string, decimal?: string, hex?: string) => (named !== undefined
+    ? XML_NAMED.get(named.toLowerCase()) ?? entity
+    : String.fromCodePoint(Number.parseInt(decimal ?? hex ?? '', decimal === undefined ? 16 : 10))));
+}
+
+/** An XML document's tags, each by its local name (an `s3:` prefix and attributes set aside), and the text between them:
+ *  comments dropped, a CDATA section's text taken as written. */
+function* xmlTokens(document: string): Generator<{ readonly tag: string; readonly closing: boolean; readonly empty: boolean } | { readonly text: string }> {
+  const token = /<!--[\s\S]*?-->|<!\[CDATA\[([\s\S]*?)\]\]>|<\?[\s\S]*?\?>|<(\/?)(?:[\w.-]+:)?([\w.-]+)(?:\s[^>]*?)?(\/?)>|([^<]+)/gu;
+
+  for (const [, cdata, closing, tag, empty, text] of document.matchAll(token)) {
+    if (cdata !== undefined) yield { text: cdata };
+    else if (tag !== undefined) yield { tag, closing: closing === '/', empty: empty === '/' };
+    else if (text !== undefined) yield { text: xmlText(text) };
+  }
+}
+
+/** A part's number and its ETag, its quotes dropped; undefined for one that names neither. */
+function partOf(fields: ReadonlyMap<string, string>): R2UploadedPart | undefined {
+  const number = fields.get('PartNumber')?.trim() ?? '';
+  const etag = (fields.get('ETag') ?? '').trim().replace(/^"(.*)"$/su, '$1');
+
+  return /^\d+$/u.test(number) && etag !== '' ? { partNumber: Number(number), etag } : undefined;
+}
+
+/** A CompleteMultipartUpload body's parts, as an XML reader reads them: a prefix, attributes or entities in it (the AWS
+ *  SDKs write an ETag's quotes as `&quot;`) do not lose a part. S3 does not order a part's elements. */
 function completedParts(text: string): R2UploadedPart[] | undefined {
   const parts: R2UploadedPart[] = [];
+  let part: Map<string, string> | null = null;
+  let field: string | null = null;
 
-  for (const [, part = ''] of text.matchAll(/<Part>([\s\S]*?)<\/Part>/g)) {
-    const number = /<PartNumber>\s*(\d+)\s*<\/PartNumber>/.exec(part)?.[1];
-    const etag = /<ETag>\s*"?([^<"]+?)"?\s*<\/ETag>/.exec(part)?.[1];
+  for (const token of xmlTokens(text)) {
+    if ('text' in token) {
+      if (part !== null && field !== null) part.set(field, `${part.get(field) ?? ''}${token.text}`);
+    } else if (token.tag === 'Part') {
+      const done = token.closing && part !== null ? partOf(part) : null;
 
-    if (number === undefined || etag === undefined) return undefined;
-    parts.push({ partNumber: Number(number), etag });
+      if (done === undefined) return undefined;
+
+      if (done !== null) parts.push(done);
+      part = token.closing || token.empty ? null : new Map();
+    } else field = token.closing || token.empty ? null : token.tag;
   }
 
   return parts.length === 0 ? undefined : parts;
