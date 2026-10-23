@@ -1347,9 +1347,14 @@ describe('the account keeps one row per linked machine', () => {
       .toEqual({ deviceId: 'dev-earlier' });
     await connectTestDevice(harness, 'dev-earlier', earlier, { generation: 0, acknowledge: true });
 
-    // Again, as `kinu update` on a machine whose device.json it could not yet rewrite: the key and generation are replaced.
+    // A ticket the old key earned just before the replacement.
+    expect(await buyTicket(harness, 'dev-earlier', earlier, 1)).toMatchObject({ ok: true });
+
+    // Again, as `kinu update` on a machine whose device.json it could not yet rewrite: the key and generation are replaced,
+    // and what the old key earned goes with it.
     const replaced = testDeviceKey();
     await harness.userDO.registerDevice(owner, { publicKey: replaced.publicKey, origin: TEST_HUB_ORIGIN, label: 'renamed', reenrol: 'dev-earlier' });
+    expect(harness.sql.exec(`SELECT 1 FROM connection_tickets WHERE purpose = 'device_connect' AND device_id = ?`, 'dev-earlier').toArray()).toEqual([]);
     expect(v.parse(v.array(v.object({ public_key: v.string(), connect_generation: v.number(), label: v.string() })),
       harness.sql.exec(`SELECT public_key, connect_generation, label FROM user_devices WHERE id = ?`, 'dev-earlier').toArray()))
       .toEqual([{ public_key: replaced.publicKey, connect_generation: 0, label: 'studio' }]);

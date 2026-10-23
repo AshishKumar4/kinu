@@ -46,18 +46,22 @@ function oneLine(value: string): string {
   return value.replace(/\r\n|\r|\n/g, '\\n');
 }
 
+export type InternalEventTest = (event: KinuEvent) => boolean;
+
 /**
  * Self-emitted/internal rows never wake a turn (anti-self-wake loop); `subagent_task` rows belong
- * to `drainAssignments`. Shared with `EventLog.nextPendingDrainAt` so the wake fold cannot drift.
+ * to `drainAssignments`; `internal` ones answer no one. Shared with `EventLog.nextPendingDrainAt` so the wake fold
+ * cannot drift.
  */
-export function wakesADrain(event: KinuEvent): boolean {
+export function wakesADrain(event: KinuEvent, internal?: InternalEventTest): boolean {
   return event.ingress !== 'self_emit'
     && event.variant !== 'internal'
-    && event.variant !== 'subagent_task';
+    && event.variant !== 'subagent_task'
+    && internal?.(event) !== true;
 }
 
-export function buildDrainBatch(events: KinuEvent[]): DrainBatch | null {
-  const pending = events.filter((event) => wakesADrain(event));
+export function buildDrainBatch(events: KinuEvent[], internal?: InternalEventTest): DrainBatch | null {
+  const pending = events.filter((event) => wakesADrain(event, internal));
 
   if (pending.length === 0) return null;
   // Plan and Build never share a turn: take the oldest event's mode group; the rest drain next.

@@ -530,6 +530,9 @@ export class UserDevices {
            ON CONFLICT (id) DO UPDATE SET public_key = excluded.public_key, connect_generation = 0, expires_at = excluded.expires_at`,
         deviceId, enrolment.publicKey, trimmedLabel === '' ? 'Your PC' : trimmedLabel, now, now + DEVICE_LINK_TTL_MS,
       );
+      // In the same turn as the new key: a challenge or ticket the old key earned connects nothing after it.
+      this.host.sqlx(`DELETE FROM device_connect_challenges WHERE device_id = ?`, deviceId);
+      this.host.sqlx(`DELETE FROM connection_tickets WHERE purpose = 'device_connect' AND device_id = ?`, deviceId);
       diagnostics.event('device.reenrolled', { device: deviceId });
       this._devices.close(deviceId, 'device key replaced');
       yield* Effect.promise(() => this.devicesMoved());
@@ -635,6 +638,9 @@ export class UserDevices {
     const device = this.liveDeviceKey(proof.device);
 
     if (device === undefined) return { ok: false, refusal: this.refusalOf(proof.device) };
+
+    // A key replaced while the signature was checked: the proof was the old key's, and earns nothing now.
+    if (device.public_key !== key.public_key) return { ok: false, refusal: 'unauthorized' };
 
     if (device.expires_at !== null && device.expires_at <= now) return { ok: false, refusal: 'expired' };
 

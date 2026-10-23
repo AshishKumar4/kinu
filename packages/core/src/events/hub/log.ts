@@ -280,16 +280,31 @@ export class EventLog {
     const parked = this.parkedIds();
 
     const drainableNow = this.pending({ resolve_deferred: { now, phase: 'idle' } })
-      .some((event) => !parked.has(event.id) && wakesADrain(event));
+      .some((event) => !parked.has(event.id) && wakesADrain(event, this.isEvolutionReport));
 
     if (drainableNow) return now;
 
     const scheduled = this.deferredRows()
-      .filter(({ event }) => wakesADrain(event))
+      .filter(({ event }) => wakesADrain(event, this.isEvolutionReport))
       .flatMap(({ cond }) => cond.kind === 'at' && cond.ts > now ? [cond.ts] : []);
 
     return scheduled.length === 0 ? null : Math.min(...scheduled);
   }
+
+  /**
+   * A report on the rail from a hire an earlier build's evolution lane made: it answers no one now, so it never wakes or
+   * joins its hirer's turn. New ones never reach the rail (subagents/ingress.ts); this keeps the ones an earlier build
+   * left there, read by the hire's own origin among the workspace's actors.
+   */
+  readonly isEvolutionReport = (event: KinuEvent): boolean => {
+    if (event.variant !== 'subagent_report' || (event.payload_visibility !== 'full' && event.payload_visibility !== 'redact')) return false;
+    this.actor.assertCurrent();
+
+    return this.sql.exec(
+      `SELECT 1 FROM workspace_actors WHERE parent_actor_id = ? AND name = ? AND origin = 'evolution' LIMIT 1`,
+      this.actorId, event.payload.from_subagent,
+    ).toArray().length > 0;
+  };
 
   markConsumed(eventId: EventId, turnId: TurnId, stepIdx: number, now = Date.now()): void {
     this.actor.assertCurrent();

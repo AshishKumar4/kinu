@@ -216,3 +216,56 @@ describe('every drain path re-establishes the wake', () => {
     expect(log.nextPendingDrainAt(now)).toBeNull();
   });
 });
+
+/** A report on the rail, as `admitSubagentReport` writes one. */
+function report(from: string, mode: 'plan' | 'build', content: string): IngressDescriptor {
+  return {
+    ingress: 'subagent', variant: 'subagent_report',
+    payload: { from_subagent: from, status: 'completed', content, sequence_id: `${from}:1`, kinu_mode: mode },
+  };
+}
+
+const PROPOSAL = '{"scope":"workspace","edits":[{"kind":"prompt_section","source":"Stop after one line."}]}';
+
+/** A rail whose main once hired `ask-refiner-x1` from an evolution lane, as an earlier build's lane left it. */
+function railWithSubagent() {
+  const db = new Database(':memory:');
+  const sql = makeSqlExec(db);
+  initEventsHubTables(sql);
+  const main = createTestActorsOver(db).main;
+  db.run(
+    `INSERT INTO workspace_actors (actor_id, parent_actor_id, name, storage_key, origin, lifetime, created_at, creation_id)
+     VALUES ('lane-hire', ?, 'ask-refiner-x1', 'ask-refiner-x1', 'evolution', 'task', 1, 'refine-1')`,
+    [main.actorId],
+  );
+
+  return new EventLog(sql, main);
+}
+
+describe('an evolution subagent report on the rail belongs to its lane, not the parent', () => {
+  test('alone, it wakes nothing and drains nothing', async () => {
+    const log = railWithSubagent();
+    const now = Date.now();
+    log.publish({ descriptor: report('ask-refiner-x1', 'plan', PROPOSAL), now });
+    const { host, enqueued } = watchedHost();
+
+    expect(log.nextPendingDrainAt(now)).toBeNull();
+    await new AgentOrchestrator(withHostDeliveries({ host, engine: inertEngine(), eventLog: log })).drainPendingEvents();
+    expect(enqueued).toEqual([]);
+  });
+
+  test("beside the owner's work it is left out, and the owner's mode holds", async () => {
+    const log = railWithSubagent();
+    const now = Date.now();
+    log.publish({ descriptor: report('ask-refiner-x1', 'plan', PROPOSAL), now });
+    log.publish({ descriptor: report('researcher', 'build', 'Root cause found.'), now: now + 1 });
+    const { host, enqueued } = watchedHost();
+
+    await new AgentOrchestrator(withHostDeliveries({ host, engine: inertEngine(), eventLog: log })).drainPendingEvents();
+    expect(enqueued).toHaveLength(1);
+    expect(enqueued[0].metadata?.kinuMode).toBe('build');
+    expect(enqueued[0].text).toContain('researcher');
+    expect(enqueued[0].text).not.toContain('ask-refiner-x1');
+    expect(enqueued[0].text).not.toContain('"edits"');
+  });
+});
