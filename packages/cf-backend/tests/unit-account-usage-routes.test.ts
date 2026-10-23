@@ -7,7 +7,7 @@ import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
 import { cliRoutes, type CliRoutesEnv } from '../src/cli/routes';
 import type { AuthIdentity } from '../src/auth/session';
 import { asFetchFunction } from '@kinu.run/core';
-import { bootstrappedProfile, cliAccount, unreachableAssets, unreachableKv, userAccount, workerContext, workspaceObject } from './helpers/bindings';
+import { bootstrappedProfile, cliAccount, unreachableAssets, unreachableKv, unreachableNamespace, userAccount, workerContext, workspaceObject } from './helpers/bindings';
 import { serveFamily } from './helpers/api';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 
@@ -165,6 +165,7 @@ describe('the owner\'s usage per account, across workspaces', () => {
       OrchestratorAgent: workspaces,
       CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
       AUTH_KV: unreachableKv('AUTH_KV'),
+      CliAuthDO: unreachableNamespace('CliAuthDO'),
       ASSETS: unreachableAssets(),
     };
 

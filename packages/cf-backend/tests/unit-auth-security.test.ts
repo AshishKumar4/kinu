@@ -30,6 +30,7 @@ import { getProfile } from '../src/lib/user-api';
 import type { FamilyEnv } from '../src/api/context';
 import { Hono } from 'hono';
 import { makeKv } from './helpers/kv';
+import { cliAuthObjects } from './helpers/cli-auth';
 import { createTestUserDO, TEST_CREDENTIAL_ENCRYPTION_KEY, type TestUserDO } from './helpers/user-do';
 import type { BrowserSessionIdentity } from '../src/user/sessions';
 import type { UserCaller } from '@kinu.run/core';
@@ -97,6 +98,7 @@ function terminalSignIn() {
 
   const env: CliRoutesEnv<string> = {
     AUTH_KV: makeKv(),
+    CliAuthDO: cliAuthObjects(),
     UserDO: { idFromName: (name) => name, get: () => userDO },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     ASSETS: unreachableAssets(),

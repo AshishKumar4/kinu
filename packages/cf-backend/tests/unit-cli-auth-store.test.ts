@@ -10,6 +10,7 @@ import {
   startCliAuth,
 } from '../src/cli/auth-store';
 import { makeKv } from './helpers/kv';
+import { cliAuthObjects, type CliAuthObjects } from './helpers/cli-auth';
 import { RateLimitError } from '../src/cli/auth-store';
 import { cliRoutes, type CliRoutesAuthority, type CliRoutesEnv } from '../src/cli/routes';
 import {
@@ -26,9 +27,12 @@ const cli = serveFamily(cliRoutes);
 const ErrorResponseSchema = v.object({ error: v.string() });
 
 /** Device-code sign-in reaches neither the published assets nor a workspace object. */
-function testEnv(AUTH_KV: KvStore, UserDO: ObjectNamespace<string, CliRoutesAuthority>): CliRoutesEnv<string> {
+function testEnv(
+  AUTH_KV: KvStore, UserDO: ObjectNamespace<string, CliRoutesAuthority>, CliAuthDO: CliAuthObjects = cliAuthObjects(),
+): CliRoutesEnv<string> {
   return {
     AUTH_KV,
+    CliAuthDO,
     UserDO,
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     ASSETS: unreachableAssets(),
@@ -44,6 +48,7 @@ function handled(response: Response | null): Response {
 
 function setupEnv() {
   const kv = makeKv();
+  const objects = cliAuthObjects();
   const minted: string[] = [];
   const claimed: string[] = [];
 
@@ -65,10 +70,10 @@ function setupEnv() {
   });
 
   return {
-    kv,
+    objects,
     minted,
     claimed,
-    env: testEnv(kv, { idFromName: (name) => name, get: () => userDO }),
+    env: testEnv(kv, { idFromName: (name) => name, get: () => userDO }, objects),
   };
 }
 
@@ -85,15 +90,15 @@ function brokenKv(): KvStore {
   };
 }
 
-describe('KV-backed CLI auth store', () => {
+describe('CLI auth store', () => {
   test('approves and consumes a CLI auth request exactly once', async () => {
-    const { env, kv, minted, claimed } = setupEnv();
+    const { env, objects, minted, claimed } = setupEnv();
     const userId = '0123456789abcdef0123456789abcdef';
 
     const started = await startAuth(env, 'https://kinu.example.com', 'Ashish terminal');
     expect(started.verificationUrl).toContain(`/cli/auth?code=${encodeURIComponent(started.userCode)}`);
 
-    const pending = await inspectCliAuth(kv, started.userCode);
+    const pending = await inspectCliAuth(env, started.userCode);
     expect(pending).toMatchObject({ status: 'pending', deviceName: 'Ashish terminal' });
 
     await approveCliAuth(env, started.userCode, {
@@ -113,23 +118,19 @@ describe('KV-backed CLI auth store', () => {
     expect(second.status).toBe('expired');
     expect(minted).toHaveLength(1);
 
-    // KV cannot hold one approval to one token (no compare-and-swap, colo-cached reads): the Durable
-    // Object refuses the second redemption. The record is rewound to `approved`, as a stale colo read looks.
-    await kv.put(
-      `cli-auth:device:${await sha256Hex(started.deviceToken)}`,
-      JSON.stringify({
-        userCode: started.userCode,
-        deviceName: 'Ashish terminal',
-        status: 'approved',
-        origin: 'https://kinu.example.com',
-        userId,
-        userEmail: 'ashish@example.com',
-        createdAt: Date.now(),
-        expiresAt: Date.now() + 60_000,
-        approvedAt: Date.now(),
-      }),
-      { expirationTtl: 600 },
-    );
+    // One approval is one token whatever the request's object answers: the UserDO refuses the second redemption.
+    // The record is rewound to `approved`, which no step of the flow writes twice.
+    await objects.get(`device:${await sha256Hex(started.deviceToken)}`).open({
+      userCode: started.userCode,
+      deviceName: 'Ashish terminal',
+      status: 'approved',
+      origin: 'https://kinu.example.com',
+      userId,
+      userEmail: 'ashish@example.com',
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 60_000,
+      approvedAt: Date.now(),
+    }, Date.now() + 600_000);
     const replayed = await pollCliAuth(env, started.deviceToken, '127.0.0.1');
     expect(replayed.status).toBe('expired');
     expect(replayed.token).toBeUndefined();
@@ -150,21 +151,31 @@ describe('KV-backed CLI auth store', () => {
   });
 
   test('an unapproved request goes away on its own deadline, with nothing left behind', async () => {
-    const { env, kv } = setupEnv();
+    const { env, objects } = setupEnv();
     const started = await startAuth(env, 'https://o.example', 't');
-    expect(await inspectCliAuth(kv, started.userCode)).toMatchObject({ status: 'pending' });
+    expect(await inspectCliAuth(env, started.userCode)).toMatchObject({ status: 'pending' });
     const deadline = Date.parse(started.expiresAt);
+    const retained = deadline + 10 * 60 * 1000;
 
     try {
       setSystemTime(new Date(deadline + 1_000));
-      expect(await inspectCliAuth(kv, started.userCode)).toMatchObject({ status: 'expired' });
+      expect(await inspectCliAuth(env, started.userCode)).toMatchObject({ status: 'expired' });
       expect(await pollCliAuth(env, started.deviceToken, '127.0.0.1'))
         .toMatchObject({ status: 'expired' });
 
-      // Past retention the keys are gone with no sweep.
-      setSystemTime(new Date(deadline + 10 * 60 * 1000 + 1_000));
-      expect(await inspectCliAuth(kv, started.userCode)).toBeNull();
-      expect(kv.keys().filter((key) => key.startsWith('cli-auth:'))).toEqual([]);
+      // At the end of retention each of its objects deletes itself on its own alarm, with no sweep.
+      setSystemTime(new Date(retained + 1_000));
+      expect([...objects.held.keys()].map((name) => name.split(':')[0]).sort()).toEqual(['code', 'device']);
+
+      for (const { object, ctx } of objects.held.values()) {
+        expect(await ctx.storage.getAlarm()).toBe(retained);
+        await object.alarm();
+        expect([...(await ctx.storage.list({ prefix: '' })).keys()]).toEqual([]);
+      }
+
+      expect(await inspectCliAuth(env, started.userCode)).toBeNull();
+      expect(await pollCliAuth(env, started.deviceToken, '127.0.0.1'))
+        .toMatchObject({ status: 'expired', message: 'Unknown CLI auth request.' });
     } finally {
       setSystemTime();
     }
@@ -247,7 +258,7 @@ describe('CLI auth error propagation', () => {
     }
 
     const other = await startAuth(env, 'https://o.example', 't', '10.0.0.9');
-    expect(await inspectCliAuth(env.AUTH_KV, other.userCode)).toMatchObject({ status: 'pending', deviceName: 't' });
+    expect(await inspectCliAuth(env, other.userCode)).toMatchObject({ status: 'pending', deviceName: 't' });
   });
 });
 

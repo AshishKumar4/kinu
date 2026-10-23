@@ -1,9 +1,11 @@
-// CLI device-authorization flow. Every record is short-lived and lives in KV under its own expiry
-// (no sweep); the durable CLI token is minted and stored in the user's own DO.
+// CLI device-authorization flow. A sign-in's state lives in its own short-lived Durable Objects (`auth-do.ts`), which
+// read the same at every location: the terminal polls from one and the approval is often made at another. Its rate
+// limits stay in KV. The durable CLI token is minted and stored in the user's own DO.
 
 import { Cause, Effect, Result } from 'effect';
 import type { AuthIdentity } from '../auth/session';
 import type { UserDO } from '../user/user-do';
+import type { CliAuthDO } from './auth-do';
 import type { ObjectNamespace } from '@kinu.run/core';
 import { objectNamed, randomToken, sha256Hex } from '@kinu.run/core';
 import { readKvJson, writeKvJson, type KvStore } from '@kinu.run/agent-utils';
@@ -71,7 +73,7 @@ export interface CliAuthRequestInfo {
 }
 
 /** `expired` is never stored; it is read off `expiresAt`. */
-const CliAuthRecordSchema = v.object({
+export const CliAuthRecordSchema = v.object({
   userCode: v.string(),
   deviceName: v.string(),
   status: v.picklist(['pending', 'approved', 'consumed']),
@@ -83,9 +85,7 @@ const CliAuthRecordSchema = v.object({
   approvedAt: v.nullable(v.number()),
 });
 
-type CliAuthRecord = v.InferOutput<typeof CliAuthRecordSchema>;
-
-const CodePointerSchema = v.object({ deviceHash: v.string() });
+export type CliAuthRecord = v.InferOutput<typeof CliAuthRecordSchema>;
 
 const RateBucketSchema = v.object({ count: v.number(), resetAt: v.number() });
 
@@ -93,10 +93,19 @@ export type CliAuthAuthority = Pick<
   UserDO, 'ensureProfile' | 'mintCliToken' | 'verifyCliToken' | 'verifyAccessToken'
 >;
 
+export type CliAuthObject = Pick<CliAuthDO, 'claimCode' | 'deviceOf' | 'open' | 'read' | 'approve' | 'collect'>;
+
 export type CliAuthEnv<Id = DurableObjectId> = OwnerCapabilityEnv & {
+  /** Rate limits only: a count read stale at another location loosens a limit for a while, and holds no sign-in. */
   AUTH_KV: KvStore;
+  CliAuthDO: ObjectNamespace<Id, CliAuthObject>;
   UserDO: ObjectNamespace<Id, CliAuthAuthority>;
 };
+
+interface CliAuthApproval {
+  status: 'approved';
+  user: { id: string; email: string };
+}
 
 export interface CliTokenIdentity<Authority = DurableObjectStub<UserDO>> {
   userId: string;
@@ -194,15 +203,15 @@ export function startCliAuth<Id>(env: CliAuthEnv<Id>, request: CliAuthRequest): 
     yield* rateLimit(env.AUTH_KV, `start:${cleanRateKey(clientKey)}`, 20, now);
 
     const expiresAt = now + AUTH_TTL_MS;
+    const until = expiresAt + RETENTION_MS;
 
     for (let attempt = 0; attempt < 10; attempt += 1) {
       const deviceToken = randomToken(32);
       const userCode = createUserCode();
-
-      // Reads to prove the claim; KV has no unique key to lean on.
-      if ((yield* Effect.promise(async () => readKvJson(env.AUTH_KV, codeKey(userCode), CodePointerSchema))) !== null) continue;
-
       const deviceHash = yield* Effect.promise(async () => sha256Hex(deviceToken));
+
+      // The code before its record, harmlessly: nobody holds the code until this answers.
+      if (!(yield* Effect.promise(() => codeObject(env, userCode).claimCode(deviceHash, until)))) continue;
 
       const record: CliAuthRecord = {
         userCode,
@@ -216,9 +225,7 @@ export function startCliAuth<Id>(env: CliAuthEnv<Id>, request: CliAuthRequest): 
         approvedAt: null,
       };
 
-      // Record before pointer: a pointer that outran its record reads as an unknown code.
-      yield* Effect.promise(async () => writeKvJson(env.AUTH_KV, deviceKey(deviceHash), record, AUTH_TTL_MS + RETENTION_MS));
-      yield* Effect.promise(async () => writeKvJson(env.AUTH_KV, codeKey(userCode), { deviceHash }, AUTH_TTL_MS + RETENTION_MS));
+      yield* Effect.promise(() => deviceObject(env, deviceHash).open(record, until));
 
       return {
         deviceToken,
@@ -233,11 +240,11 @@ export function startCliAuth<Id>(env: CliAuthEnv<Id>, request: CliAuthRequest): 
   }));
 }
 
-export async function inspectCliAuth(kv: KvStore, userCode: string): Promise<CliAuthRequestInfo | null> {
-  const found = await readByUserCode(kv, userCode);
+export async function inspectCliAuth<Id>(env: Pick<CliAuthEnv<Id>, 'CliAuthDO'>, userCode: string): Promise<CliAuthRequestInfo | null> {
+  const device = await deviceByUserCode(env, userCode);
+  const record = device === null ? null : await device.read();
 
-  if (!found) return null;
-  const { record } = found;
+  if (!record) return null;
 
   return {
     userCode: record.userCode,
@@ -259,7 +266,8 @@ export function pollCliAuth<Id>(
     const hash = sha256Hex(deviceToken);
     yield* rateLimit(env.AUTH_KV, `poll-device:${hash}`, 180, now);
 
-    const record = yield* Effect.promise(() => readKvJson(env.AUTH_KV, deviceKey(hash), CliAuthRecordSchema));
+    // An approved request is consumed as it is read, so no other poll reads it approved.
+    const record = yield* Effect.promise(() => deviceObject(env, hash).collect(now));
 
     if (!record) return { status: 'expired', message: 'Unknown CLI auth request.' };
 
@@ -277,12 +285,8 @@ export function pollCliAuth<Id>(
       return { status: 'expired', message: 'CLI auth approval is incomplete. Run kinu auth again.' };
     }
 
-    // KV is the transport, not the gate: no compare-and-swap and per-colo cached reads, so two polls can
-    // both read `approved`. The one-time claim is the DO mint's, keyed by the device hash.
-    yield* Effect.promise(() => writeKvJson(
-      env.AUTH_KV, deviceKey(hash), { ...record, status: 'consumed' }, record.expiresAt + RETENTION_MS - now,
-    ));
-
+    // The one-time claim is still the UserDO mint's, keyed by the device hash: one approval is one token whatever the
+    // request's object answers.
     const userDO = objectNamed(env.UserDO, record.userId);
     const userId = record.userId;
 
@@ -318,49 +322,48 @@ export function approveCliAuth<Id>(
   userCode: string,
   identity: AuthIdentity,
   clientKey?: string,
-): Promise<{ status: 'approved'; user: { id: string; email: string } }> {
+): Promise<CliAuthApproval> {
   return settle(Effect.gen(function* () {
     const now = Date.now();
     yield* rateLimit(env.AUTH_KV, `approve:${identity.userId}:${cleanRateKey(clientKey)}`, 30, now);
 
-    const found = yield* Effect.promise(async () => readByUserCode(env.AUTH_KV, userCode));
+    const device = yield* Effect.promise(async () => deviceByUserCode(env, userCode));
 
-    if (!found) return yield* Effect.die(new CliAuthCodeError('Unknown CLI auth code.'));
-    const { deviceHash, record } = found;
+    if (device === null) return yield* Effect.die(new CliAuthCodeError('Unknown CLI auth code.'));
+    const replayed = yield* approvalOf(yield* Effect.promise(() => device.read()), identity, now);
 
-    const status = currentStatus(record, now);
-
-    if (status === 'approved' || status === 'consumed') {
-      // Idempotent replay only for the original approver; others must not learn whose code it is.
-      if (record.userId !== identity.userId) {
-        return yield* Effect.die(new CliAuthCodeError('CLI auth code already used.'));
-      }
-
-      return {
-        status: 'approved' as const,
-        user: { id: identity.userId, email: record.userEmail ?? identity.email },
-      };
-    }
-
-    if (status !== 'pending') {
-      return yield* Effect.die(new CliAuthCodeError('CLI auth code expired. Run kinu auth again.'));
-    }
-
+    if (replayed !== null) return replayed;
     const userDO = objectNamed(env.UserDO, identity.userId);
     yield* Effect.promise(async () => userDO.ensureProfile(await ownerCaller(env), identity.email));
-    yield* Effect.promise(async () => writeKvJson(env.AUTH_KV, deviceKey(deviceHash), {
-      ...record,
-      status: 'approved',
-      userId: identity.userId,
-      userEmail: identity.email,
-      approvedAt: now,
-    }, record.expiresAt + RETENTION_MS - now));
 
-    return { status: 'approved' as const, user: { id: identity.userId, email: identity.email } };
+    // The object approves only a pending request, so one approved or expired since the read is answered as it stands.
+    const approved = yield* approvalOf(yield* Effect.promise(() => device.approve(identity.userId, identity.email, now)), identity, now);
+
+    if (approved === null) return yield* Effect.die(new Error('The CLI auth request was still pending after its approval.'));
+
+    return approved;
   }));
 }
 
-/** Abuse ceiling per client key and window; per-region, not exact, since KV reads are colo-cached. */
+/** What approving `record` as `identity` answers once it is no longer pending; null while it is. */
+function approvalOf(record: CliAuthRecord | null, identity: AuthIdentity, now: number): Effect.Effect<CliAuthApproval | null> {
+  if (record === null) return Effect.die(new CliAuthCodeError('Unknown CLI auth code.'));
+  const status = currentStatus(record, now);
+
+  if (status === 'pending') return Effect.succeed(null);
+
+  if (status === 'expired') return Effect.die(new CliAuthCodeError('CLI auth code expired. Run kinu auth again.'));
+
+  // Idempotent replay only for the original approver; others must not learn whose code it is.
+  if (record.userId !== identity.userId) return Effect.die(new CliAuthCodeError('CLI auth code already used.'));
+
+  return Effect.succeed({ status: 'approved', user: { id: identity.userId, email: record.userEmail ?? identity.email } });
+}
+
+/**
+ * Abuse ceiling per client key and window. It stays in KV, whose reads are cached per location: a count read stale
+ * there loosens the limit for a while, which a ceiling can afford, and no sign-in waits on it.
+ */
 function rateLimit(kv: KvStore, key: string, limit: number, now: number): Effect.Effect<void, RateLimitError> {
   return Effect.gen(function* () {
     const bucketKey = `cli-auth-rate:${key}`;
@@ -378,28 +381,22 @@ function rateLimit(kv: KvStore, key: string, limit: number, now: number): Effect
   });
 }
 
-async function readByUserCode(
-  kv: KvStore, userCode: string,
-): Promise<{ deviceHash: string; record: CliAuthRecord } | null> {
-  const pointer = await readKvJson(kv, codeKey(normalizeUserCode(userCode)), CodePointerSchema);
+/** The request object a user code names; null for a code no live sign-in holds. */
+async function deviceByUserCode<Id>(env: Pick<CliAuthEnv<Id>, 'CliAuthDO'>, userCode: string): Promise<CliAuthObject | null> {
+  const deviceHash = await codeObject(env, normalizeUserCode(userCode)).deviceOf();
 
-  if (!pointer) return null;
-  const record = await readKvJson(kv, deviceKey(pointer.deviceHash), CliAuthRecordSchema);
-
-  if (!record) return null;
-
-  return { deviceHash: pointer.deviceHash, record };
+  return deviceHash === null ? null : deviceObject(env, deviceHash);
 }
 
-function deviceKey(deviceHash: string): string {
-  return `cli-auth:device:${deviceHash}`;
+function deviceObject<Id>(env: Pick<CliAuthEnv<Id>, 'CliAuthDO'>, deviceHash: string): CliAuthObject {
+  return objectNamed(env.CliAuthDO, `device:${deviceHash}`);
 }
 
-function codeKey(userCode: string): string {
-  return `cli-auth:code:${userCode}`;
+function codeObject<Id>(env: Pick<CliAuthEnv<Id>, 'CliAuthDO'>, userCode: string): CliAuthObject {
+  return objectNamed(env.CliAuthDO, `code:${userCode}`);
 }
 
-function currentStatus(record: CliAuthRecord, now = Date.now()): CliAuthRequestInfo['status'] {
+export function currentStatus(record: CliAuthRecord, now = Date.now()): CliAuthRequestInfo['status'] {
   if (record.status !== 'consumed' && now > record.expiresAt) return 'expired';
 
   return record.status;
