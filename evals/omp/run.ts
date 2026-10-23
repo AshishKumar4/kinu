@@ -154,7 +154,9 @@ function armHost(arm: Arm, boundary: { intended: (call: { readonly name: string;
     roster: () => [{ name: 'root', cwd: arm.snapshot, workspaceId: `omp-${arm.arm}` }],
     dbPath: () => join(arm.space, 'agent.db'),
     open: async (_ref, db, path) => {
-      const openConfig = { llm: arm.llm, defaultSpec: arm.spec, cwd: arm.snapshot, boundary };
+      const openConfig = { llm: arm.llm, defaultSpec: arm.spec, cwd: arm.snapshot, boundary,
+        ...(arm.oauthStore !== undefined && { oauthStore: arm.oauthStore }) };
+
       const { rt } = await openWorkspaceCLI(db, path, openConfig);
       rt.actor.config.setLearning(arm.arm === 'dreaming');
 
@@ -199,7 +201,9 @@ async function prepare(arm: Arm, train: readonly OwnerTurn[], last: number): Pro
     }
 
     const evolution = armEvolution({ refinements: session.listRefinements(200), changelog: session.getEvolutionChangelog(200).entries });
-    writeFileSync(join(arm.space, 'prepared.json'), `${JSON.stringify({ ...arm, llm: undefined, trained: trained.length, unreviewed, dreamPasses, evolution, spent, ms: Date.now() - started }, null, 2)}\n`);
+
+    if (trained.length > 0 && spent.modelCalls === 0) throw new Error('the dreaming arm made no training model calls; refusing to label this an on/off comparison');
+    writeFileSync(join(arm.space, 'prepared.json'), `${JSON.stringify({ ...arm, llm: undefined, oauthStore: undefined, trained: trained.length, unreviewed, dreamPasses, evolution, spent, ms: Date.now() - started }, null, 2)}\n`);
   } finally {
     await host.close();
     restore();
