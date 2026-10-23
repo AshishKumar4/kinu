@@ -50,7 +50,7 @@ test('a box that was not emptied keeps the bucket for the replay, and the snapsh
 // 2026-10-16: a namespace new to the platform answered `internal error` for up to 45 s after its deploy, and a Worker of
 // each run's own met it in 8 of 153 runs; a deploy of an existing one met it in none of 6 probes.
 test('every run deploys the same fixture Worker, and binds a bucket of its own', () => {
-  const [first, second] = ['dc20261016140327aaaaa', 'dc20261016150327bbbbb'].map(fixtureNames);
+  const [first, second] = ['dc20261016140327aaaaa', 'dc20261016150327bbbbb'].map((run) => fixtureNames(run));
 
   expect({ worker: first?.worker === second?.worker, app: first?.app === second?.app, buckets: first?.bucket !== second?.bucket, bucketIsRuns: first?.bucket.includes('dc20261016140327aaaaa') })
     .toEqual({ worker: true, app: true, buckets: true, bucketIsRuns: true });
