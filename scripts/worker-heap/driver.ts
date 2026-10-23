@@ -140,7 +140,7 @@ const ADVISOR_BYTES: number[] = [];
 const STEP_REQUEST_BYTES: number[] = [];
 
 /** What the model answers and whether it answers yet; module state, which the entrypoint and fetch share. */
-const model = { answerBytes: 0, holding: false, parked: 0, calls: 0, wide: new Set<string>(), toolSteps: 0, stepBytes: 0, screenshots: 0, stepping: false, arrived: 0, released: 0, hires: 0, subagentsAnswered: 0, holdSubagent: false, subagentParked: false, nest: false, failingSteps: 0, failingAsked: 0, stepped: { binding: 0, compat: 0 }, advisorCalls: 0, advisorBytes: ADVISOR_BYTES, stepRequestBytes: STEP_REQUEST_BYTES };
+const model = { answerBytes: 0, holding: false, parked: 0, calls: 0, wide: new Set<string>(), toolSteps: 0, stepBytes: 0, screenshots: 0, stepping: false, arrived: 0, released: 0, hires: 0, subagentsAnswered: 0, holdSubagent: false, subagentParked: false, nest: false, failingSteps: 0, failingAsked: 0, stepped: { binding: 0, compat: 0 }, compatSteps: false, advisorCalls: 0, advisorBytes: ADVISOR_BYTES, stepRequestBytes: STEP_REQUEST_BYTES };
 
 /** The advisor's own model calls, which offer its `advise` tool: none is a step of the turn it reviews, so none takes a
  *  scripted step. */
@@ -208,6 +208,15 @@ async function scriptedBody(inputs: BindingInputs): Promise<string> {
   if (lane !== null) return lane;
 
   noteWide(JSON.stringify(inputs));
+
+  // A turn stepped on the compatible path owns the steps: another workspace's call here is answered at once, counted, and
+  // takes none of them (it took half the advised pair's unadvised turn, 2026-10-23).
+  if (model.stepping && model.compatSteps) {
+    model.stepped.binding += 1;
+
+    return `data: ${JSON.stringify({ response: SLEEP_TIME_ANSWER })}\n\n${USAGE}data: [DONE]\n\n`;
+  }
+
   model.parked += 1;
   // Stepping: each call waits until the gate has read the heap at it. The cursor is every workspace's: which path took
   // each step is counted, so the gate can tell its turn's steps from another workspace's.
@@ -370,6 +379,9 @@ function scriptModel(asked: URLSearchParams): Response {
     model.stepBytes = Number(asked.get('stepBytes') ?? 0);
     model.screenshots = Number(asked.get('screenshots') ?? 0);
     model.stepping = model.toolSteps > 0;
+    // `stepPath=compat`: the steps are the compatible path's alone; another workspace's binding calls are answered and
+    // counted, never stepped.
+    model.compatSteps = asked.get('stepPath') === 'compat';
     model.arrived = 0;
     model.released = 0;
     model.stepped = { binding: 0, compat: 0 };
