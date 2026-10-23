@@ -17,7 +17,7 @@ import {
   err, importantMail, json, MAIL_MESSAGE_FIELDS, mailDeploymentAliases, mailUsernameRefusal, MAIL_VIEWS, MAIL_WAKES, MailAddress, MailBoxPath, mailText, mailThreadText, objectNamed, ownerCaller, safeJson,
   type MailListQuery, type ObjectNamespace, type OwnerCapabilityEnv,
 } from '@kinu.run/core';
-import { attempt, diagnostics, settle } from '@kinu.run/core/obs';
+import { attempt, authoredRefusal, diagnostics, settle } from '@kinu.run/core/obs';
 import type { FamilyEnv } from '../api/context';
 import { isListedOperator } from '../control-plane/admin-caller';
 import type { OrchestratorAgent } from '../orchestrator';
@@ -209,13 +209,17 @@ mailRoutes.patch('/api/user/mail/threads/:id', async (c) => {
 
 // A message the person writes: sent now, or kept as a draft. Both take the same fields.
 for (const [path, act] of [['/api/user/mail/send', 'send'], ['/api/user/mail/drafts', 'draft']] as const) {
-  mailRoutes.post(path, async (c) => {
-    const outgoing = await safeJson(c.req.raw, Outgoing);
+  mailRoutes.post(path, (c) => settle(Effect.gen(function* () {
+    const outgoing = yield* Effect.promise(async () => safeJson(c.req.raw, Outgoing));
 
     if (outgoing === null) return err(400, 'path, to, subject and text are required.');
 
-    return json({ body: await mailbox(c)[act](outgoing) });
-  });
+    // The Mailbox's own refusal (a recipient the sending service suppressed, EmailOutbox) answers in its words: across
+    // RPC it is no KinuError here, and the shared onError would answer its class alone ("Not allowed.").
+    const view = yield* Effect.tryPromise({ try: async () => mailbox(c)[act](outgoing), catch: (cause) => authoredRefusal({ doing: `${act === 'send' ? 'sending' : 'saving'} this message`, cause }) });
+
+    return json({ body: view });
+  })));
 }
 
 mailRoutes.put('/api/user/mail/boxes/wake', async (c) => {
