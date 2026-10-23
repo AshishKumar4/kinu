@@ -8,7 +8,8 @@
  * is opened and runs as written.
  */
 import { SLATE_PAGE_STYLE } from '../slates/page-head';
-import { SLATE_BRIDGE_ATTRIBUTE, SLATE_LEGACY_TOKEN_CSS, SLATE_SIZE_CHANGED_MESSAGE } from '../slates/host-context';
+import { SLATE_BRIDGE_ATTRIBUTE, SLATE_BRIDGE_MESSAGE, SLATE_LEGACY_TOKEN_CSS, SLATE_SIZE_CHANGED_MESSAGE } from '../slates/host-context';
+import { escapeHtml } from '../http/http';
 import { slateImportMap } from './slate-page';
 import { APP_FONTS_PATH, fontsCss } from './fonts';
 import { THEME_CSS } from './theme';
@@ -62,13 +63,27 @@ function drawnHead(look: DrawnPageLook, script: string): string {
     + `\n:root{${tokens}}</style><script>${script}</script>`;
 }
 
-const root = (look: DrawnPageLook) => `<html data-mode="${look.theme}" data-display="inline" ${SLATE_BRIDGE_ATTRIBUTE} style="color-scheme:${look.theme}">`;
+/** The page's host context, as a served page reads it from its address: the theme it is drawn in, inline, from the app. */
+function hostContext(look: DrawnPageLook): string {
+  return escapeHtml(JSON.stringify({ theme: look.theme, styles: { variables: look.variables }, containerDimensions: {}, display: 'inline', origin: look.appOrigin }));
+}
 
-/** The page itself, opened as written once its block is closed: the modules it imports by name are the app's. */
-export function drawnPageDocument(html: string, look: DrawnPageLook): string {
+const root = (look: DrawnPageLook) => `<html data-mode="${look.theme}" data-display="inline" ${SLATE_BRIDGE_ATTRIBUTE}="${hostContext(look)}" style="color-scheme:${look.theme}">`;
+
+/**
+ * First in the page's head, before any script of the page's own: the page's end of its `kinu:slate` session, made here
+ * so it lives and dies with this document, and the other end sent to the chat with this document's `nonce`. The chat
+ * takes one end per document it wrote and never another, so a document the frame is navigated to reaches nothing.
+ */
+const bridgeScript = (nonce: string) => `<script>(function(){var channel=new MessageChannel();window.__kinuBridge=channel.port1;`
+  + `parent.postMessage({kinu:"${SLATE_BRIDGE_MESSAGE}",nonce:${JSON.stringify(nonce)}},"*",[channel.port2]);})();</script>`;
+
+/** The page itself, opened as written once its block is closed: the modules it imports by name are the app's, and
+ *  `nonce` names this document to the chat that carries its session. */
+export function drawnPageDocument(html: string, look: DrawnPageLook, nonce: string): string {
   const modules = slateImportMap((file) => `${look.modules.base}${look.modules.files[file] ?? file}`);
 
-  return `<!doctype html>${root(look)}<head>${modules}${drawnHead(look, SIZE_SCRIPT)}</head><body>${html}</body></html>`;
+  return `<!doctype html>${root(look)}<head>${bridgeScript(nonce)}${modules}${drawnHead(look, SIZE_SCRIPT)}</head><body>${html}</body></html>`;
 }
 
 /** The frame a streaming block is drawn in: empty until its host sends the markup written so far. */

@@ -36,7 +36,8 @@ export const SLATE_HOST_CONTEXT_MESSAGE = 'host-context';
 
 export const SLATE_SIZE_CHANGED_MESSAGE = 'size-changed';
 
-/** The root attribute of a page the chat draws itself, whose `kinu:slate` session its host carries over a port. */
+/** The root attribute of a page the chat draws itself, whose `kinu:slate` session its host carries over a port: its
+ *  value is the host's context (`SlateHostContext`), as a served page reads it from its address. */
 export const SLATE_BRIDGE_ATTRIBUTE = 'data-slate-bridge';
 
 /** What such a page sends its host with the port its session runs on. */

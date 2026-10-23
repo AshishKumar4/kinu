@@ -1,6 +1,6 @@
 /** Authored-facing `kinu:slate` modules: `server.js` under `/usr/lib/kinu/slate/`, `client.js` at `/__kinu/slate.js`. */
 
-import { SLATE_BRIDGE_ATTRIBUTE, SLATE_BRIDGE_MESSAGE, SLATE_HOST_CONTEXT_MESSAGE, SLATE_QUERY_PARAM, SLATE_SIZE_CHANGED_MESSAGE } from './host-context';
+import { SLATE_BRIDGE_ATTRIBUTE, SLATE_HOST_CONTEXT_MESSAGE, SLATE_QUERY_PARAM, SLATE_SIZE_CHANGED_MESSAGE } from './host-context';
 
 /** The prototype marker lets the runner verify the contract without importing this module twice. Client-only names throw on the server. */
 export const SLATE_SERVER_MODULE = `export class SlateObject {
@@ -44,9 +44,11 @@ function defaultTheme() {
 
 const DEFAULT_CONTEXT = { theme: defaultTheme(), styles: { variables: {} }, containerDimensions: {}, display: "pane" };
 
+// A served page is told its host's context in its address; a page the chat draws, on its root (\`drawnPageDocument\`).
 function parseContext() {
-  const raw = new URLSearchParams(window.location.search).get("${SLATE_QUERY_PARAM}");
-  if (raw === null) return DEFAULT_CONTEXT;
+  const raw = new URLSearchParams(window.location.search).get("${SLATE_QUERY_PARAM}")
+    ?? document.documentElement.getAttribute("${SLATE_BRIDGE_ATTRIBUTE}");
+  if (raw === null || raw === "") return DEFAULT_CONTEXT;
   try {
     const parsed = JSON.parse(raw);
     return parsed && typeof parsed === "object" ? { ...DEFAULT_CONTEXT, ...parsed } : DEFAULT_CONTEXT;
@@ -107,15 +109,14 @@ export function onPush(listener) {
 class PageTarget extends RpcTarget {
   push(data) { for (const listener of pushed) listener(data); }
 }
-// A page the chat draws itself has no origin of its own to reach: its host carries the session (1023-ac), and the
-// host's end of it reaches the page with what its server pushes.
+// A page the chat draws itself has no origin of its own to reach: its host carries the session (1023-ac), on the port
+// its document's head made and sent before any of the page's scripts ran; the host reaches the page on it with what
+// its server pushes.
 function transport() {
   if (!bridged()) {
     return newWebSocketRpcSession(new WebSocket(new URL("/__rpc", window.location.href)));
   }
-  const channel = new MessageChannel();
-  window.parent.postMessage({ kinu: "${SLATE_BRIDGE_MESSAGE}" }, "*", [channel.port2]);
-  return newMessagePortRpcSession(channel.port1, new PageTarget());
+  return newMessagePortRpcSession(window.__kinuBridge, new PageTarget());
 }
 function session() {
   if (live === null) {
@@ -127,7 +128,7 @@ function session() {
 }
 
 // A page the chat draws reaches its server's methods through its host, which names each one ($method).
-const bridged = () => document.documentElement.hasAttribute("${SLATE_BRIDGE_ATTRIBUTE}");
+const bridged = () => document.documentElement.hasAttribute("${SLATE_BRIDGE_ATTRIBUTE}") && window.__kinuBridge instanceof MessagePort;
 export const slate = new Proxy(Object.create(null), {
   get(_target, member) {
     if (typeof member !== "string" || member === "then") return undefined;
