@@ -243,7 +243,7 @@ describe('the daemon relays model calls from the owner\'s machine', () => {
     home = join(root, 'home');
     mkdirSync(home, { recursive: true });
     writeFileSync(join(home, 'device.key'), registered.key.privateKeyPem, { mode: 0o600 });
-    writeFileSync(join(home, 'device.json'), JSON.stringify({ user: ACCOUNT, device: registered.deviceId, origin: hub.origin, root: home, generation: 0 }), { mode: 0o600 });
+    writeFileSync(join(home, 'device.json'), JSON.stringify({ user: ACCOUNT, device: registered.deviceId, origin: hub.origin, root: home, connectSecret: '' }), { mode: 0o600 });
     writeFileSync(join(home, 'pc-agent.chatgpt.json'), JSON.stringify(DEVICE_SIGN_IN), { mode: 0o600 });
 
     daemonEnv = {
