@@ -295,6 +295,15 @@ export function wordRuns(text: string): WordRun[] | null {
   ));
 }
 
+/** One word as a shell reads it, its quotes and backslash escapes undone (a path a terminal pasted: `my\\ shot.png`,
+ *  `"my shot.png"`); null for text that is no single word. */
+export function readShellWord(text: string): string | null {
+  const runs = wordRuns(text);
+  const [word, ...rest] = runs?.length === 1 ? runs[0]?.words ?? [] : [];
+
+  return word === undefined || rest.length > 0 ? null : word.text;
+}
+
 /** A program's name as a rule asks for it: the last segment of its word, null where the word expands. */
 export function programOf(command: ShellCommand): string | null {
   const program = command.words[0]?.literal ?? null;

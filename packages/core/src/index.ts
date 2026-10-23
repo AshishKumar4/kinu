@@ -1554,6 +1554,8 @@ export {
   type FilesOwner, type GatedExecutor,
 } from './safety/command-review';
 
+export { readShellWord } from './safety/shell-reading';
+
 export {
   formatApproval, gatedGrants, formatApprovalGrant, holdsGrant, parseApprovalGrant, gateExec, grantsAreSubset,
   resolveInheritedGrants, createInheritedApprovalPolicy, STRICT_NO_CHANNEL_POLICY, describeExecutionContext,

@@ -4,7 +4,7 @@
 import { stat, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, extname, resolve } from 'node:path';
-import { referencePrefixes, resolvePath, type PathPlanes, type PromptFile } from '@kinu.run/core';
+import { readShellWord, referencePrefixes, resolvePath, type PathPlanes, type PromptFile } from '@kinu.run/core';
 import { renderThrownChain, tolerateAsync } from '@kinu.run/core/obs';
 import { formatBytes } from '@kinu.run/core';
 
@@ -28,12 +28,12 @@ interface PathToken {
   mention: boolean;
 }
 
-const TOKEN_RE = /(^|\s)(@(?:"[^"\n]+"|'[^'\n]+'|\S+)|"[^"\n]+"|'[^'\n]+'|~\/\S+)/g;
+/** A mention or a path, where a person or a terminal wrote one: quoted, or a word whose spaces a backslash escapes. */
+const TOKEN_RE = /(^|\s)(@(?:"[^"\n]+"|'[^'\n]+'|(?:\\.|[^\s\\])+)|"[^"\n]+"|'[^'\n]+'|~\/(?:\\.|[^\s\\])+)/g;
 
-function stripQuotes(s: string): string {
-  return (s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))
-    ? s.slice(1, -1)
-    : s;
+/** A pasted path as the shell it came from wrote it: its quotes and escapes undone; as written where it is no word. */
+export function pastedPath(written: string): string {
+  return readShellWord(written) ?? written;
 }
 
 /** Purely lexical; resolution happens in resolvePromptAttachments. */
@@ -44,7 +44,7 @@ function extractPathTokens(text: string): PathToken[] {
     const raw = m[2];
     const index = m.index + m[1].length;
     const mention = raw.startsWith('@');
-    const path = stripQuotes(mention ? raw.slice(1) : raw);
+    const path = pastedPath(mention ? raw.slice(1) : raw);
 
     if (path) tokens.push({ raw, index, path, mention });
   }
@@ -171,7 +171,7 @@ export async function resolvePromptAttachments(
   let rewritten = text;
 
   for (const r of rewrites.sort((a, b) => b.index - a.index)) {
-    rewritten = rewritten.slice(0, r.index) + stripQuotes(r.raw.slice(1)) + rewritten.slice(r.index + r.raw.length);
+    rewritten = rewritten.slice(0, r.index) + pastedPath(r.raw.slice(1)) + rewritten.slice(r.index + r.raw.length);
   }
 
   return { text: rewritten, files, attached, errors };
