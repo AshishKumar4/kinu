@@ -206,8 +206,9 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
 
     const rows = await transcript(rt);
 
+    // Both are rows the agent's later turns read (ADR C3), the event once.
     expect(rows.map((row) => row.content)).toContain('also check X');
-    expect(rows.some((row) => row.content.includes('mail from bob'))).toBe(false);
+    expect(rows.filter((row) => row.content.includes('mail from bob'))).toHaveLength(1);
     await session.end();
   });
 

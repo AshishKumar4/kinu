@@ -317,9 +317,7 @@ export class ActorSession {
 
   private async landSteers(steers: readonly UserSteer[], atStep: number, prepareDrain?: (rows: readonly LandedSteerRow[], atStep: number, reference: MessageReference) => Promise<(selection: ContextSelection) => void>): Promise<ModelMessage> {
     const rows = describeLandedSteers(steers, atStep);
-    const claim = this.active?.claim;
-
-    if (claim === undefined || claim === null) throw new KinuError('denied', 'steer landing requires an admitted claim');
+    const claim = this.landingClaim('steer');
     const id = `steers:${steers.map(steer => steer.id ?? `${claim.turnId}:${atStep}`).join(':')}`;
     const existing = this.canonical.admittedInput(id);
     let prepared: PreparedMessage | null = null;
@@ -343,6 +341,15 @@ export class ActorSession {
     return message;
   }
 
+  /** The running turn's admitted claim, which a mid-turn landing writes under. */
+  private landingClaim(what: 'steer' | 'delivery'): ActorTurnClaim {
+    const claim = this.active?.claim;
+
+    if (claim === undefined || claim === null) throw new KinuError('denied', `a ${what} landing requires an admitted claim`);
+
+    return claim;
+  }
+
   /**
    * A step's deliveries, landed as one durable input the agent's later turns read (ADR C3): the text it read, under an
    * id its retry finds again.
@@ -351,9 +358,7 @@ export class ActorSession {
     events: readonly LandedEventRow[],
     prepareEvents?: (rows: readonly LandedEventRow[], reference: MessageReference) => Promise<(selection: ContextSelection) => void>,
   ): Promise<ModelMessage> {
-    const claim = this.active?.claim;
-
-    if (claim === undefined || claim === null) throw new KinuError('denied', 'a delivery landing requires an admitted claim');
+    const claim = this.landingClaim('delivery');
     const id = `events:${events.map((event) => event.id).join(':')}`;
     const existing = this.canonical.admittedInput(id);
     const prepared = existing === null ? await this.canonical.messages.prepare({ role: 'user', content: events.map((event) => event.text).join('\n\n') }, id) : null;

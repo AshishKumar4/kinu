@@ -2294,10 +2294,7 @@ export class ChatSession {
 
   /** Landed rows and spent reservations in one transaction; rows follow the opening message. */
   private async prepareLandedSteers(rows: readonly LandedSteerRow[], reference: MessageReference): Promise<(context: ContextSelection) => void> {
-    const turnId = this.turnId;
-    const runId = this.runId;
-
-    if (turnId === null || runId === null) throw new KinuError('denied', 'steer publication requires an active turn');
+    const { turnId, runId } = this.publishingTurn();
     const opening = this.openingRow;
     const prepared = await this.transcript.prepareSteers({ rows, reference, turnId, runId });
 
@@ -2313,13 +2310,19 @@ export class ChatSession {
     };
   }
 
+  /** The turn a mid-turn landing publishes its rows under. */
+  private publishingTurn() {
+    const { turnId, runId } = this;
+
+    if (turnId === null || runId === null) throw new KinuError('denied', 'a mid-turn landing requires an active turn');
+
+    return { turnId, runId };
+  }
+
   /** A step's landed deliveries as conversation rows, and their queued turns retired, in the landing's transaction: once
    *  in the agent's history, a delivery is read and no turn of its own runs for it. */
   private async prepareLandedEvents(rows: readonly LandedEventRow[], reference: MessageReference): Promise<(context: ContextSelection) => void> {
-    const turnId = this.turnId;
-    const runId = this.runId;
-
-    if (turnId === null || runId === null) throw new KinuError('denied', 'a delivery landing requires an active turn');
+    const { turnId, runId } = this.publishingTurn();
     const opening = this.openingRow;
     const prepared = await this.transcript.prepareSteers({ rows, reference, turnId, runId });
 

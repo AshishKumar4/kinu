@@ -319,8 +319,15 @@ describe('a sandbox lifecycle failure', () => {
       expect({ stage, status: answer.status }).toEqual({ stage, status: 'queued' });
     }
 
-    // A stage with no consequence written for it would render as `undefined` in the agent's turn.
-    const texts = (await programmaticTurns(harness)).map((turn) => turn.text);
+    // A stage with no consequence written for it would render as `undefined` in the agent's turn. Each is a turn of its
+    // own, or a row a running turn read it in (ADR C3).
+    const turns = (await programmaticTurns(harness)).map((turn) => turn.text);
+
+    const read = (await storedChat(harness)).filter((message) => message.role === 'system' && message.id.startsWith('sig'))
+      .map((message) => message.parts.flatMap((part) => part.type === 'text' ? [part.text] : []).join(''));
+
+    const texts = [...turns, ...read];
+
     expect(texts).toHaveLength(INCIDENT_STAGES.length);
 
     for (const text of texts) expect(text).not.toContain('undefined');
