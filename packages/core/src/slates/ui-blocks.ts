@@ -35,8 +35,9 @@ export interface SlateUiBlock {
 export type SlateUiSegment =
   | { readonly kind: 'text'; readonly text: string }
   | ({ readonly kind: 'slate' } & SlateUiBlock)
-  /** An opening tag whose close has not arrived: still streaming, or never closed, when `text` is all it is. */
-  | { readonly kind: 'open'; readonly name: string; readonly text: string };
+  /** An opening tag whose close has not arrived: still streaming, or never closed, when `text` is all it is. `html`
+   *  is the markup written after the tag so far. */
+  | { readonly kind: 'open'; readonly name: string; readonly text: string; readonly html: string };
 
 /** The block's `name` attribute; the first, where a tag repeats one, as HTML keeps it. */
 function blockName(attributes: string): string | null {
@@ -76,7 +77,7 @@ export function slateUiSegments(text: string): SlateUiSegment[] {
     const body = line + open[0].length;
     const close = text.indexOf(CLOSE, body);
 
-    if (close === -1) return [...segments, { kind: 'open', name, text: text.slice(line) }];
+    if (close === -1) return [...segments, { kind: 'open', name, text: text.slice(line), html: text.slice(body) }];
     segments.push({ kind: 'slate', name, html: text.slice(body, close).trim() });
     prose = close + CLOSE.length;
     line = text.indexOf('\n', prose) === -1 ? text.length : text.indexOf('\n', prose) + 1;

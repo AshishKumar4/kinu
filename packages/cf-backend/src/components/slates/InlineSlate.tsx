@@ -47,6 +47,15 @@ const SavedSlateSchema = v.object({ id: v.string(), title: v.string() });
 /** Each slate's last height in the chat, so a card drawn again opens at its size and nothing below it moves. */
 const KNOWN_HEIGHTS = new Map<string, number>();
 
+/** A height an answer's page told, kept for whatever draws it next: the page drawn here, or its served frame. */
+export function rememberHeight(id: string, height: number): void {
+  KNOWN_HEIGHTS.set(id, height);
+}
+
+export function knownHeight(id: string): number | undefined {
+  return KNOWN_HEIGHTS.get(id);
+}
+
 /** A frame that never says its height: a slate's own server, or a page that failed before it could. */
 const UNSIZED_HEIGHT = 360;
 
@@ -56,7 +65,7 @@ const SIZE_WAIT_MS = 4000;
 type SlatePreview = v.InferOutput<typeof SlatePreviewSchema>;
 
 /** Read inside effects only: `document` does not exist under the static renderer. */
-function readThemeTokens() {
+export function readThemeTokens() {
   const styles = getComputedStyle(document.documentElement);
   const variables: Record<string, string> = {};
 
@@ -146,10 +155,10 @@ function SaveControl({ name, save, open }: { name: string; save: () => Promise<S
 
 /** No chrome: the frame sits in the answer, and its fold, save and open controls show over it on hover, or always where
  *  there is no hover. Folded, it is one quiet line naming it and why. */
-function SlateCard({ id, block, measure, save, children }: {
+export function SlateCard({ id, block, measure, save, children }: {
   id: string;
   block?: string;
-  measure: Ref<HTMLSpanElement>;
+  measure?: Ref<HTMLSpanElement>;
   /** An answer's page only: a slate with files is the workspace's already. */
   save?: () => Promise<SlateCallResult>;
   children: ReactNode;

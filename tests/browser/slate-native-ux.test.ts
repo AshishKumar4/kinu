@@ -1,11 +1,12 @@
 /**
- * An answer's page in the chat as the runner serves it: opened with the runner's own head and `kinu:slate`'s real client,
- * on a preview origin the browser reaches. It is as tall as what it holds, reads in the chat's theme, and can be kept as
- * a slate of the workspace.
+ * An answer's page in the chat, drawn by the chat itself (1023-ac): no process, no fetch, a sandboxed frame on an opaque
+ * origin. It is as tall as what it holds, reads in the chat's theme, reaches nothing of the app's and nothing outside,
+ * and can be kept as a slate of the workspace, which the work surface then serves from its preview origin.
  */
 import { describe, expect, test } from 'bun:test';
 import { Effect } from 'effect';
 import type { Frame, Page } from 'puppeteer';
+import * as v from 'valibot';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { appFontFile, SLATE_FONTS_PATH, SLATE_PAGE_PREAMBLE } from '@kinu.run/core';
@@ -15,7 +16,7 @@ import { contrast, rgba, withGallery, type Rgba } from '../../scripts/gallery-ha
 import { inspectorPageListed, PAGES_NAV } from '../../scripts/browser-page';
 import { TEST_REQUIREMENTS } from '../../scripts/test-requirements';
 
-/** The answer's page as its author wrote it: a title, a heading, rows, and a paragraph that sets no colour. */
+/** The kept slate's page, as its preview origin serves it to the work surface. */
 const PAGE = `<!doctype html><html><head><title>500s by route</title></head><body>
 <h1>Errors</h1><p id="plain">/api/health leads this week.</p><ul id="rows">${'<li>/api/health</li>'.repeat(12)}</ul>
 </body></html>`;
@@ -71,7 +72,8 @@ const FONTS = join(import.meta.dir, '../../packages/cf-backend/public/assets/fon
 
 const CARD = '[data-slate-inline="pg-a1/errors"]';
 
-/** The answer's page in a workspace's chat, once it has said its height and is drawn. */
+/** The answer's page in a workspace's chat, once it has said its height and is drawn. The preview origin is answered
+ *  for the work surface, which serves the page once it is kept. */
 async function openPage(page: Page, origin: string, theme: 'dark' | 'light', viewport: { width: number; height: number }): Promise<Frame> {
   await servePage(page);
   await page.setViewport(viewport);
@@ -110,6 +112,25 @@ const innerScroll = (frame: Frame): Promise<number> => frame.evaluate(() => {
 
   return window.scrollY;
 });
+
+const ReachedSchema = v.object({
+  cookie: v.string(), storage: v.string(), host: v.string(), out: v.string(), home: v.string(), refused: v.array(v.string()),
+});
+
+/** Run in the page: whether it reaches the app's cookie, storage and document, and a request out or to the app. */
+const reach = (app: string) => `(async () => {
+  const tried = (read) => { try { read(); return 'reached'; } catch { return 'refused'; } };
+  const refused = [];
+  document.addEventListener('securitypolicyviolation', (event) => { refused.push(event.effectiveDirective); });
+  const fetched = (url) => fetch(url).then(() => 'reached', () => 'refused');
+  const out = await fetched('https://example.com/');
+  const home = await fetched(${JSON.stringify(`${app}/api/health`)});
+  const picture = new Image();
+  picture.src = 'https://example.com/pixel.png';
+  await new Promise((settle) => { picture.onerror = settle; picture.onload = settle; });
+  return { cookie: tried(() => document.cookie), storage: tried(() => localStorage.length), host: tried(() => window.parent.document.body),
+    out, home, refused: [...new Set(refused)].sort() };
+})()`;
 
 describe('an answer\'s page in the chat', () => {
   test('is as tall as what it holds: it scrolls nothing of its own, and grows and shrinks with its rows', async () => {
@@ -188,6 +209,23 @@ describe('an answer\'s page in the chat', () => {
         await page.hover(CARD);
         await page.click(`${CARD} [data-slate-saved="errors-by-route"]`);
         await page.waitForSelector(`${PAGES_NAV} button[aria-label="500s by route"][aria-current="true"]`);
+      } finally { await page.close(); }
+    });
+  });
+
+  // Opaque and sealed: whatever the page runs, nothing of the app's is within its reach, and nothing outside.
+  test('reaches nothing: no cookie, storage or document of the app, no request out, not even to the app', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      try {
+        const frame = await openPage(page, origin, 'dark', { width: 1280, height: 860 });
+        const sandbox = await page.$eval(`${CARD} iframe`, (element) => (element instanceof HTMLIFrameElement ? [...element.sandbox] : []));
+
+        const reached = v.parse(ReachedSchema, await frame.evaluate(reach(origin)));
+
+        expect(sandbox).not.toContain('allow-same-origin');
+        expect(reached).toEqual({ cookie: 'refused', storage: 'refused', host: 'refused', out: 'refused', home: 'refused', refused: ['connect-src', 'img-src'] });
       } finally { await page.close(); }
     });
   });

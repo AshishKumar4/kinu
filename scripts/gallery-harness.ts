@@ -406,7 +406,10 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, opt
     });
 
     if (bytes === null) return;
-    response.writeHead(200, { 'content-type': builtAssetContentType(file), 'content-length': String(bytes.byteLength) });
+    // A face is read by the pages the chat draws itself, on an opaque origin, as the app serves it (app-shell.ts).
+    const face = extname(file) === '.woff2' ? { 'access-control-allow-origin': '*' } : {};
+
+    response.writeHead(200, { 'content-type': builtAssetContentType(file), 'content-length': String(bytes.byteLength), ...face });
     response.end(request.method === 'HEAD' ? undefined : bytes);
   })));
 

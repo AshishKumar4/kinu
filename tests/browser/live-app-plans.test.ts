@@ -122,8 +122,11 @@ describe("an answer's slate-ui blocks are drawn in place", () => {
 
   // 1023-ad (production, 2026-10-23): a turn a click opened stores its answer only as it ends, and its block, drawn as a
   // card while it still ran, asked for a page the store did not hold: "Answer … holds no slate-ui block named …".
-  test("the click turn's page is a quiet line while that turn runs, then draws once it ends", () => {
-    expect(verdictOf(observed.slateUi, 'slate-ui').clicked).toEqual({ midTurn: 'pending', refusal: '', shown: SLATE_UI_CLICKED.words });
+  // 1023-ac (the owner): a page renders as soon as it is written, so its half is drawn while the turn still runs.
+  test("the click turn's page draws as it is written, while that turn runs, and whole once it ends", () => {
+    const { words, rest } = SLATE_UI_CLICKED;
+
+    expect(verdictOf(observed.slateUi, 'slate-ui').clicked).toEqual({ midTurn: 'drawn', refusal: '', streamed: words, shown: `${words}|${rest}` });
   });
 
   test('a reload draws them again from the stored answers, the click turn\'s too', () => {

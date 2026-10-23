@@ -300,8 +300,9 @@ export const SLATE_UI_FILE = { path: '/home/main/slate-ui-probe.txt', content: '
 
 export const SLATE_UI_SENT = 'slate-ui-click-5e7d';
 
-/** The page the click's turn answers with, which streams before that turn ends (1023-ad). */
-export const SLATE_UI_CLICKED = { name: 'clicked', words: 'clicked-slate-page-6b19' } as const;
+/** The page the click's turn answers with, written in two halves either side of a held call: `words` before it, `rest`
+ *  after it with the block's close (1023-ad, 1023-ac). */
+export const SLATE_UI_CLICKED = { name: 'clicked', words: 'clicked-slate-page-6b19', rest: 'clicked-slate-rest-2d47' } as const;
 
 /** The first page reads the file and sends on a click, as the agent that wrote it; the second only shows its words. */
 function slateUiPage(name: string, words: string): string {
@@ -333,9 +334,13 @@ export function slateUiTurn(request: ScriptedRequest, heard: (request: ScriptedR
       return { toolCall: { name: 'file', arguments: { op: 'write', path: '/home/main/slate-ui-chosen.txt', content: SLATE_UI_SENT } } };
     }
 
-    const block = ['Here is what you chose.', '', `<slate-ui name="${SLATE_UI_CLICKED.name}">`, slateUiPage(SLATE_UI_CLICKED.name, SLATE_UI_CLICKED.words), '</slate-ui>', ''].join('\n');
+    const [opened = '', closing = ''] = slateUiPage(SLATE_UI_CLICKED.name, SLATE_UI_CLICKED.words).split('</body>');
+    const lead = ['Here is what you chose.', '', `<slate-ui name="${SLATE_UI_CLICKED.name}">`, opened].join('\n');
 
-    return { text: 'Done.', pace: { firstTokenMs: 0, lead: block, leadMs: 0, rest: clicked.hold() } };
+    return {
+      text: [`<p data-rest>${SLATE_UI_CLICKED.rest}</p></body>${closing}`, '</slate-ui>', '', 'Done.'].join('\n'),
+      pace: { firstTokenMs: 0, lead, leadMs: 0, rest: clicked.hold() },
+    };
   }
 
   if (request.userTexts.at(-1) !== SLATE_UI_ASK) return null;
