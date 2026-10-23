@@ -59,7 +59,7 @@ function lane(models: Readonly<Record<string, MockLanguageModelV3>>, reports: Mo
   const catalog = { roles: {}, tiers, ...(fallbacks.length > 0 && { modelFallbacks: { [fast]: [...fallbacks] } }) };
 
   return {
-    refusals: { changes: () => 0, refused: () => {}, answered: () => {} },
+    refusals: { changes: () => 0, refused: () => {}, answered: () => {}, untrusted: () => {} },
     llm: (walked) => routedLlm((serving) => ({ model: present(models[serving.model], serving.model) }), walked, { report: (row) => { reports.push(row); } }),
     resolveProfile: async () => resolveTurnProfile({
       envelope: { authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog },
@@ -109,10 +109,18 @@ describe('a chat model answering decisions', () => {
   });
 
   // An unmeasured model's answers were never compared with Clef's: none of them is used.
-  test('the fast tier answers nothing where no model it walks was measured', async () => {
-    const decide = createStructuredDecider(ACTOR, lane({ 'openai/never-measured': scripted('{"corrected":"yes","satisfaction":"2","wrong":"nothing"}') }, [], 'openai/never-measured'));
+  test('the fast tier answers nothing where no model it walks was measured, and keeps which, until one answers', async () => {
+    const kept: unknown[] = [];
 
-    expect(await decide({ state: 's', questions: QUESTIONS })).toBeUndefined();
+    const untrusted = lane({ 'openai/never-measured': scripted('{"corrected":"yes","satisfaction":"2","wrong":"nothing"}') }, [], 'openai/never-measured');
+    // Luna's row clears what was corrected (80% against 70%).
+    const trusted = lane({ 'openai/gpt-6-luna': scripted('{"corrected":"yes"}') });
+
+    const keeping = (built: ModelLaneComponents): ModelLaneComponents => ({ ...built, refusals: { ...present(built.refusals, 'refusals'), untrusted: (asked) => { kept.push(asked); } } });
+
+    expect(await createStructuredDecider(ACTOR, keeping(untrusted))({ state: 's', questions: QUESTIONS })).toBeUndefined();
+    await createStructuredDecider(ACTOR, keeping(trusted))({ state: 's', questions: { corrected: QUESTIONS.corrected } });
+    expect(kept).toEqual([{ model: 'openai/never-measured', questions: ['corrected', 'satisfaction', 'wrong'] }, null]);
   });
 
   // Muse's measured row clears triage's bar and not a rating's (what went wrong, 65% against 77.5%).

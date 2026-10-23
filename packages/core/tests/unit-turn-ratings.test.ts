@@ -11,9 +11,9 @@ import {
   listThumbs, listTurnRatings, qualitySeries, qualityWindow, ratingOf, recordTurnRating, retractThumbs,
 } from '../src/evolution/ratings';
 import {
-  bindingDecisionRun, createDecisionPort, restDecisionRun, type DecisionAnswers, type DecisionPort, type DecisionQuestion,
+  bindingDecisionRun, createDecisionPort, DECISION_REFUSALS, restDecisionRun, type DecisionAnswers, type DecisionPort, type DecisionQuestion,
 } from '../src/providers/decision-model';
-import { tierRefusals } from '../src/profiles/tier-refusals';
+import { tierRefusals, unratedReason } from '../src/profiles/tier-refusals';
 import { readActivityLog } from '../src/identity/activity-log';
 import { KinuError } from '../src/obs/error';
 import { CLEF_BINDING_ANSWER } from '@kinu.run/test-utils/clef-binding-answer';
@@ -338,6 +338,26 @@ describe('the decision model', () => {
       expect(await run('@cf/cloudflare/clef', { state: 's', questions: {} })).toEqual(CLEF_REST_ANSWER);
       expect(seen).toEqual([{ url: expected, auth: 'Bearer t' }]);
     }
+  });
+
+  // A Claude-only CLI: Clef refuses for want of Workers AI and its fast model was never measured, so no turn is rated
+  // and no dream opens. `/refine` says so, in the owner's words, until either is fixed.
+  test('where Clef refused and the fast tier is trusted for none of a rating, the owner is told why no turn is rated', () => {
+    const { rt } = createTestRuntime();
+    const { refusals } = noticesOf(rt);
+    const refusing = { model: 'workers-ai/@cf/cloudflare/clef', cause: new KinuError('denied', 'This account has no Workers AI.') };
+
+    refusals.untrusted({ model: 'claude/claude-never-measured', questions: ['satisfaction', 'corrected', 'wrong'] });
+    expect(unratedReason(rt.actor.config, 'Settings → Models')).toBeNull();
+
+    refusals.refused({ tier: DECISION_REFUSALS, since: 0, refusals: [refusing] });
+    expect(unratedReason(rt.actor.config, 'Settings → Models')).toBe(
+      'No turn is being rated, so no dream opens: Clef, the decision model, needs Cloudflare\'s Workers AI, and claude/claude-never-measured on your '
+      + 'fast tier is not measured close enough to Clef to answer satisfaction, corrected, wrong. Connect Cloudflare, or pick another fast model, in Settings → Models.',
+    );
+
+    refusals.untrusted(null);
+    expect(unratedReason(rt.actor.config, 'Settings → Models')).toBeNull();
   });
 
   test("a refusal carries the provider's own words and the status's code", async () => {

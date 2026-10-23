@@ -1,4 +1,5 @@
 /** A tier, or the decision model that rates turns, refusing for the owner to fix is said once (T3). */
+import * as v from 'valibot';
 import type { AgentConfigStore } from '../config/store';
 import type { ActorHandle } from '../identity/actor-handle';
 import { writeActivityLog } from '../identity/activity-log';
@@ -62,5 +63,38 @@ export function tierRefusals(deps: {
       if (!saidSoFar().delete(`${REFUSAL_KEY}${tier}`)) return;
       deps.config.delete(`${REFUSAL_KEY}${tier}`);
     },
+    untrusted: (asked) => {
+      const text = asked === null ? null : JSON.stringify(asked);
+
+      if ((saidSoFar().get(UNTRUSTED_KEY) ?? null) === text) return;
+
+      if (text === null) {
+        saidSoFar().delete(UNTRUSTED_KEY);
+        deps.config.delete(UNTRUSTED_KEY);
+
+        return;
+      }
+
+      saidSoFar().set(UNTRUSTED_KEY, text);
+      deps.config.set(UNTRUSTED_KEY, text);
+    },
   };
+}
+
+/** Where `untrusted` keeps the fast-tier model no question could be asked of, beside the refusals said once. */
+const UNTRUSTED_KEY = `${REFUSAL_KEY}untrusted`;
+
+/**
+ * Why the decision model rates no turn, so no dream opens, in the owner's words; null while turns can be rated. Read
+ * from what `refused` and `untrusted` kept: Clef refusing, and the fast tier's model trusted for none of the rating's
+ * questions.
+ */
+export function unratedReason(config: Pick<AgentConfigStore, 'get'>, settings: string): string | null {
+  const untrusted = v.safeParse(v.pipe(v.string(), v.parseJson(), v.object({ model: v.string(), questions: v.array(v.string()) })), config.get(UNTRUSTED_KEY));
+
+  if (!untrusted.success || config.get(`${REFUSAL_KEY}${DECISION_REFUSALS}`) === null) return null;
+  const { model, questions } = untrusted.output;
+
+  return `No turn is being rated, so no dream opens: Clef, the decision model, needs Cloudflare's Workers AI, and ${model} on your fast tier `
+    + `is not measured close enough to Clef to answer ${questions.join(', ')}. Connect Cloudflare, or pick another fast model, in ${settings}.`;
 }

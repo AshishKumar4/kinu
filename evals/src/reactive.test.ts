@@ -71,6 +71,7 @@ describe('what an arm\'s dreams did', () => {
           request('refused', [route('prompt_section', 'refused')]),
         ],
         debt: { turnIds: [], owed: false, key: '', summary: '' },
+        unrated: null,
       },
       changelog: [
         entry('artifact:section/guidance@1:historical'), entry('artifact:section/guidance@2:current'), entry('artifact:tool/file@1:staged'),

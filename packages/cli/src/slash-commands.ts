@@ -960,7 +960,7 @@ function renderRefinementRequest(request: RefinementRequestView): string {
 }
 
 function renderRefinementsText(view: RefinementListing): string {
-  const lines = [view.debt.summary];
+  const lines = [...(view.unrated === null ? [] : [view.unrated, '']), view.debt.summary];
 
   if (view.debt.owed) {
     lines.push('  /refine now opens one over those turns.');

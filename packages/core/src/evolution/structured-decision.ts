@@ -34,7 +34,11 @@ type Agreement = Readonly<Record<string, number>>;
  * `kinu-logs/dream-cost/recorded-turns-40.jsonl` and their 18 five-turn triage windows (outputs beside it, in
  * `agreement-2026-10-20/`); a row's share is of the items both models answered, the rest lost to Workers AI 408s
  * (gemma: 28 turns; glm-4.7-flash: 32 turns, 14 windows). Re-measure when a question's wording changes.
- * Owed: the Claude models (no plan signed in), and the judge's questions (no recorded judge inputs).
+ * claude-haiku-5-5, measured 2026-10-23 through a Claude plan login (`--claude-token-file`) over these 40 turns and 18
+ * windows and EVAL-5's dreaming arm's 40 rated turns and 18 windows, pooled: satisfaction 55/80 (68.8%), corrected 66/80
+ * (82.5%), worth 33/36 (91.7%), and what went wrong 59/80, 73.8% (95% Wilson 63.2-82.1%), under its bar: no row, so a
+ * Claude-only account rates no turn yet, and `/refine` says why (`unratedReason`).
+ * Owed: Sonnet and Opus (asked of the owner first: their spend), and the judge's questions (no recorded judge inputs).
  */
 const AGREEMENT: ReadonlyMap<string, Agreement> = new Map(Object.entries({
   'gpt-6-luna': { satisfaction: 0.575, corrected: 0.8, wrong: 0.75, worth: 0.667 },
@@ -144,6 +148,9 @@ function trustedRoute(route: ModelRouteResolution, request: DecisionRequest): Mo
 export function createStructuredDecider(actor: ActorReference, lane: ModelLaneComponents): StructuredDecider {
   return (request) => onProfileRoute(actor, 'fast', lane, async (fast) => {
     const route = trustedRoute(fast, request);
+
+    // Kept for `/refine` to say why no turn is rated (`unratedReason`); cleared by the next question a model answers.
+    lane.refusals?.untrusted(route === null ? { model: fast.model, questions: Object.keys(request.questions) } : null);
 
     return route === null ? undefined : await answerStructured(lane, route, request);
   });
