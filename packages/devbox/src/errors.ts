@@ -103,6 +103,11 @@ export function observe<A>(program: Effect.Effect<A, DevboxError>, observer: { r
   } });
 }
 
+/** A start from stopped its host refused (`Devbox.admitStart`): the door that asked fails in the host's words. */
+export function refuseStart(reason: string): never {
+  return settleSync(Effect.fail(new DevboxError('refused', reason)));
+}
+
 export function startOverrun(label: string, budgetMs: number): DevboxError {
   return new DevboxError('start-overrun', `${label} exceeded its ${budgetMs}ms budget and was abandoned; the work it left running inside the container cannot be fenced from here.`);
 }

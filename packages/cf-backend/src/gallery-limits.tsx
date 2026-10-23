@@ -68,7 +68,9 @@ const row = (email: string, seen: number, limits: AccountLimits): AccountRow => 
 
 const FREE = { class: "free", suspended: null, computerSizeCap: "small" } as const;
 
-const UNBOUND = { suspended: null, limits: [], computerSizeCap: null } as const;
+const NO_READINGS: LimitReading[] = [];
+
+const UNBOUND = { suspended: null, limits: NO_READINGS, computerSizeCap: null };
 
 /** The board's five accounts: one at a limit, one near one, one invited, one suspended, and the operator. */
 const ACCOUNTS: readonly AccountRow[] = [

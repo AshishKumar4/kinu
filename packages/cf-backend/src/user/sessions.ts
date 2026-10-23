@@ -3,8 +3,8 @@ import {
   objectNamed,
   getActiveAccessTokenScopes, listAccessTokens as listAccessTokenRows, mintAccessToken as mintAccessTokenRow, revokeAccessToken as revokeAccessTokenRow, verifyAccessToken as verifyAccessTokenRow, type AccessTokenMint, type AccessTokenRecord, type AccessTokenScope, nanoid, ownerCaller, type UserCaller, validateWorkspaceName, randomToken, sha256Hex, type UserProfile,
 } from '@kinu.run/core';
-import { Effect } from 'effect';
-import { diagnostics, KinuError, settleSync, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
+import { refuseSuspended } from './limits';
 import * as v from 'valibot';
 import {
   builtinAdmission, createBuiltinInvite, findPasskeyAccount, findPasswordAccount, hasBuiltinOwner, initBuiltinAccounts, invitedEmail, isBuiltinOwner, issuePasskeyChallenge, recordPasskeyUse, registerBuiltinAccount, spendPasskeyChallenge, reserveAttempt, clearAttempts, removeBuiltinAccount, applyReset, listBuiltinAccounts, resetAccount, type Admission, type AttemptBucket, type BuiltinSql, type ChallengePurpose, type Grant, type NewBuiltinAccount, type NewInvite, type PasskeyAccount, type PasswordAccount, type PendingChallenge, type ListedAccount, type Reset, type SigningAccount,
@@ -105,7 +105,7 @@ export class UserSessions {
     identity: BrowserSessionIdentity & { credentialGeneration?: number },
   ): Promise<void> {
     await this.host.requireTier(caller, 'auth_tokens.mint');
-    this.refuseSuspended();
+    refuseSuspended(this.host.suspension());
     this.host.sqlx(
       `INSERT INTO user_browser_sessions
          (token_hash, expires_at, email, display_name, provider, provider_sub, auth_time)
@@ -327,7 +327,7 @@ export class UserSessions {
     caller: UserCaller, userId: string, authorizationHash: string, label?: string,
   ): Promise<{ token: string; tokenHash: string; expiresAt: number }> {
     await this.host.requireTier(caller, 'auth_tokens.mint');
-    this.refuseSuspended();
+    refuseSuspended(this.host.suspension());
 
     if (!/^[a-f0-9]{32}$/.test(userId)) throw new KinuError('bad_input', 'invalid user id');
 
@@ -400,13 +400,6 @@ export class UserSessions {
     await this.retireCliAuthority();
 
     return { ok: true };
-  }
-
-  /** A suspended account's credentials are not minted: its reason, as its operator gave it. */
-  private refuseSuspended(): void {
-    const reason = this.host.suspension();
-
-    if (reason !== null) settleSync(Effect.fail(new KinuError('denied', `This account is suspended: ${reason}`)));
   }
 
   /** Ends every browser session and CLI token of this account, and refuses any session of a lower generation. */
@@ -500,7 +493,7 @@ export class UserSessions {
    * name/scope validation. */
   async mintAccessToken(caller: UserCaller, userId: string, name: string, scopes: readonly string[]): Promise<AccessTokenMint> {
     await this.host.requireTier(caller, 'auth_tokens.mint');
-    this.refuseSuspended();
+    refuseSuspended(this.host.suspension());
 
     return mintAccessTokenRow(this.host.ctx.storage.sql, userId, name, scopes);
   }

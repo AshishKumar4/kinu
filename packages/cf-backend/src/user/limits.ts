@@ -44,6 +44,13 @@ function noticePeriod(limit: LimitReading, now: number): string {
   return limit.id === 'computer_hours' ? monthOf(now) : `at:${String(Math.floor(limit.limit))}`;
 }
 
+/** A suspended account's credentials are not minted: the refusal, in its operator's words; nothing for any other. */
+export function refuseSuspended(reason: string | null): void {
+  if (reason === null) return;
+
+  return settleSync(Effect.fail(new KinuError('denied', `This account is suspended: ${reason}`)));
+}
+
 export class UserLimits {
   private readonly store: AccountLimitsStore;
 

@@ -8,7 +8,7 @@ import * as cpStore from '@kinu.run/core/control-plane';
 import type { PresentedCaller } from '@kinu.run/core/control-plane';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
 import type { AuthIdentity } from '../src/auth/session';
-import { bootstrappedProfile, userAccount, workerContext } from './helpers/bindings';
+import { bootstrappedProfile, userAccount, workerContext, workspaceObject } from './helpers/bindings';
 import { serveFamily } from './helpers/api';
 import { sqlExec, TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 
@@ -46,6 +46,8 @@ function world() {
   const env: UserRoutesEnv<string> = {
     UserDO: { idFromName: (name) => name, get: (name) => account(name) },
     ControlPlaneDO: { idFromName: (name) => name, get: () => plane },
+    // No workspace is asked by these routes.
+    OrchestratorAgent: { idFromName: (name) => name, get: () => workspaceObject({}) },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   };
 

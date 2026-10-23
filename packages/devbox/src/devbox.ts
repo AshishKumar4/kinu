@@ -70,7 +70,7 @@ import {
 } from './lifecycle';
 import { createCheckpointLane, createResourceLane, heldUntilDrained, pathScopes, portScope, type ResourceScope } from './operation-lanes';
 import { SupervisedProcesses, type EndTold } from './supervised-processes';
-import { DevboxError, attempt, attemptSync, hold, settle, settleSync, startOverrun, startInterrupted, chainAdvanced, type DevboxErrorCode } from './errors';
+import { DevboxError, attempt, attemptSync, hold, refuseStart, settle, settleSync, startOverrun, startInterrupted, chainAdvanced, type DevboxErrorCode } from './errors';
 import { execRecords } from './exec-stream';
 import { BOX_SIZE_ORDER, BoxSizeSchema, DEFAULT_BOX_SIZE, instanceOf, type BoxSize, type ResizeOutcome } from './sizes';
 import type { RestorePhase, RestorePhaseStamps } from './durability/contracts';
@@ -924,7 +924,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     if (!wasRunning && source !== undefined) {
       // D50: the one start boundary.
-      this.ctx.storage.kv.put(RUNNING_SIZE_KEY, inputs.size);
+      this.ctx.storage.kv.put(RUNNING_SIZE_KEY, this.#admittedSize ?? inputs.size);
       this.#startFrom(container, inputs, source);
     }
 
@@ -985,7 +985,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     this.#started = source;
     this.#awaitingGolden = undefined;
     this.#snapshots.started(source.kind === 'own' ? source.id : undefined);
-    container.start({ containerSnapshot: { id: source.id }, entrypoint: GOLDEN_ENTRYPOINT, instance: instanceOf(inputs.size), enableInternet: this.enableInternet });
+    // At the size its host admitted the start at (`admitStart`); a refusal stays keyed by the size set (D52).
+    container.start({ containerSnapshot: { id: source.id }, entrypoint: GOLDEN_ENTRYPOINT, instance: instanceOf(this.#admittedSize ?? inputs.size), enableInternet: this.enableInternet });
     keepStartRefusal(container);
   }
 
@@ -1405,8 +1406,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     if (this.ctx.container?.running !== true) {
       const admitted = await this.admitStart(this.#size());
 
-      if ('refused' in admitted) await settle(Effect.fail(new DevboxError('refused', admitted.refused)));
-      else this.#admittedSize = admitted.size;
+      if ('refused' in admitted) refuseStart(admitted.refused);
+      this.#admittedSize = admitted.size;
     }
 
     if (this.ctx.container?.running !== true
@@ -1450,7 +1451,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   #startInputs(): StartInputs {
-    return { size: this.#admittedSize ?? this.#size(), store: this.#bucket() !== undefined, version: this.#version(), internet: this.enableInternet };
+    return { size: this.#size(), store: this.#bucket() !== undefined, version: this.#version(), internet: this.enableInternet };
   }
 
   #version(): string | null {
