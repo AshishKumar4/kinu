@@ -15,7 +15,17 @@ import type { UserObjectHost } from './user-host';
 export interface UserLimitsHost extends Pick<UserObjectHost, 'ctx' | 'env' | 'requireTier' | 'sqlx'> {
   /** The account's workspaces as its roster counts them (workspaces.ts `rosterCount`). */
   workspaceCount(): number;
+  /** The bytes the account's Drive holds, as its tenant accounts them (drive/tenant.ts `driveStoredBytes`). */
+  driveBytes(): Promise<number>;
+  /** The bytes the account's mail holds, its database and its R2 objects (MailboxDO `storedBytes`). */
+  mailBytes(): Promise<number>;
 }
+
+/**
+ * How old the account's own stores' readings may be before an admission reads them again. Each workspace reports its
+ * own size as its turns open and as files arrive; the Drive and the mail are read here.
+ */
+const STORAGE_STALE_MS = 10 * 60_000;
 
 /** The note the assistant gives once a period, when a limit is near its end; a limit with none is not mentioned. */
 const NEAR_NOTE = {
@@ -97,9 +107,23 @@ export class UserLimits {
     settleSync(this.admit(admitWorkspace));
   }
 
-  async admitStoredBytes(caller: UserCaller): Promise<void> {
+  /** New bytes: `own`, the asking workspace's size as it reads it now, is taken first; the account's stores read if stale. */
+  async admitStoredBytes(caller: UserCaller, own?: { readonly source: string; readonly bytes: number }): Promise<void> {
     await this.host.requireTier(caller, 'limits');
+
+    if (own !== undefined) this.store.sampled(own.source, own.bytes, Date.now());
+    await this.admitNewBytes();
+  }
+
+  /** New bytes from this object's own surfaces (a Drive upload): the account's stores read if stale, then the limit. */
+  async admitNewBytes(): Promise<void> {
+    await this.refreshStorage();
     await settle(this.admit(admitStoredBytes));
+  }
+
+  /** `source` changed here (a Drive upload landed): read again at the next admission or Usage read. */
+  storeChanged(source: 'drive' | 'mail'): void {
+    this.store.stale(source);
   }
 
   /** `workspace`'s computer starting from stopped at `size`: admitted, it holds the account's place until it stops. */
@@ -119,10 +143,21 @@ export class UserLimits {
     this.store.stopped(workspace, Date.now());
   }
 
-  /** A store's size as read where it lives: `drive`, `mail` or `workspace:<name>`. */
+  /** A workspace's own size, read where it lives (its object's database): `workspace:<name>`. */
   async storageSampled(caller: UserCaller, source: string, bytes: number): Promise<void> {
     await this.host.requireTier(caller, 'limits');
     this.store.sampled(source, bytes, Date.now());
+  }
+
+  /** The Drive's and the mail's sizes read again where they live, each whose last reading is past {@link STORAGE_STALE_MS}. */
+  async refreshStorage(): Promise<void> {
+    const now = Date.now();
+    const stale = (source: string): boolean => now - (this.store.measuredAt(source) ?? 0) > STORAGE_STALE_MS;
+    const [drive, mail] = await Promise.all([stale('drive') ? this.host.driveBytes() : null, stale('mail') ? this.host.mailBytes() : null]);
+
+    if (drive !== null) this.store.sampled('drive', drive, now);
+
+    if (mail !== null) this.store.sampled('mail', mail, now);
   }
 
   /** A removed workspace's size counts no more (workspaces.ts teardown). */
@@ -144,6 +179,7 @@ export class UserLimits {
 
   async limits(caller: UserCaller): Promise<LimitsReport> {
     await this.host.requireTier(caller, 'limits');
+    await this.refreshStorage();
     const now = Date.now();
     const { suspended } = this.store.standing();
     const tier = await settle(this.tier());

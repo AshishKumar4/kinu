@@ -53,7 +53,7 @@ export interface UserWorkspacesHost extends Pick<UserObjectHost, 'ctx' | 'env' |
   /** The account this registry is, whose rows the control plane's index keys on. */
   ownerId(): string;
   /** The account's limits: a new workspace is asked of them before its row is written; a removed one's size forgotten. */
-  readonly limits: Pick<UserLimits, 'admitWorkspace' | 'forgetStore'>;
+  readonly limits: Pick<UserLimits, 'admitWorkspace' | 'forgetStore' | 'refreshStorage'>;
 }
 
 /** A read the destroyed workspace answers itself with the Agents SDK's own abort (`Agent.destroy`), which it raises only
@@ -192,6 +192,8 @@ export class UserWorkspaces {
     await this.host.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
     await this.requireNotDeleting(name);
+    // The account's stores read where they live if stale, before the turn whose read and write must stay one.
+    await this.host.limits.refreshStorage();
     const now = Date.now();
 
     const existing = this.host.sqlx<{
@@ -261,6 +263,7 @@ export class UserWorkspaces {
     await this.host.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
     await this.requireNotDeleting(name);
+    await this.host.limits.refreshStorage();
 
     const existing = this.host.sqlx<{
       name: string;

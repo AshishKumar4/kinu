@@ -411,6 +411,9 @@ export function unownedWorkspace(): KinuError {
   return new KinuError('unavailable', 'This workspace has no owner yet: open it from the app or the CLI first.');
 }
 
+/** How often a workspace tells its owner's limits its size, as its turns open (`reportSizeOnCadence`). */
+const SIZE_REPORT_MS = 10 * 60_000;
+
 /** Set once a program of this workspace has run on its node (`node-program.ts`): its turns then start node as they open. */
 const NODE_PROGRAMS_RAN_KEY = 'kinu:node-programs-ran';
 
@@ -1820,6 +1823,30 @@ export abstract class ActorAgent extends Agent<Env> {
     const { stub, caller } = await this.userHub();
 
     await stub.limits_admitPlatformTurn(caller);
+  }
+
+  /** This workspace's stored bytes, as its own database reads them: the platform's number, sampled, never counted. */
+  private storedSample() {
+    return { source: `workspace:${this.workspaceName()}`, bytes: this.ctx.storage.sql.databaseSize };
+  }
+
+  /** New bytes for this workspace (a person's upload, an agent's file): the owner's limits answer, given its size now. */
+  protected async admitNewBytes(): Promise<void> {
+    if (this.getOwnerUserId() === null) return;
+    const { stub, caller } = await this.userHub();
+
+    await stub.limits_admitStoredBytes(caller, this.storedSample());
+  }
+
+  /** Tells the owner's limits this workspace's size now; a failure is logged, never the caller's. */
+  protected async reportStoredBytes(): Promise<void> {
+    if (this.getOwnerUserId() === null) return;
+    await settleLogged('limits.size_unreported', { doing: "telling the owner's limits this workspace's size", otherwise: 'unavailable' }, async () => {
+      const { stub, caller } = await this.userHub();
+      const { source, bytes } = this.storedSample();
+
+      await stub.limits_storageSampled(caller, source, bytes);
+    });
   }
 
   /** What a call on the platform's own models spent counts to the owner's day (core limits/), told, never waited on. */
@@ -3588,6 +3615,19 @@ export abstract class ActorAgent extends Agent<Env> {
     this.engine.recoverInterruptedWork();
     this.budget.activate([...turnTags({ metadata: driving }).missionLabels]);
     this.warmWorkspaceNodeInBackground();
+    this.reportSizeOnCadence();
+  }
+
+  /** When this activation last told the owner's limits its size: at most every {@link SIZE_REPORT_MS}, as turns open. */
+  private sizeReportedAt = 0;
+
+  /** The slow cadence of this workspace's size reports: as its turns open, at most once every ten minutes. */
+  private reportSizeOnCadence(): void {
+    const now = Date.now();
+
+    if (now - this.sizeReportedAt < SIZE_REPORT_MS) return;
+    this.sizeReportedAt = now;
+    this.detachOwned(Effect.promise(() => this.reportStoredBytes()));
   }
 
   /** A turn of the workspace agent's read here: its executors and folder are its own, its clock starts, and a fresh one's

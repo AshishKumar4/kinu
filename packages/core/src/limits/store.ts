@@ -163,6 +163,16 @@ export class AccountLimitsStore {
     );
   }
 
+  /** When `source` was last read; null if never. */
+  measuredAt(source: string): number | null {
+    return rows(CountRow, this.sql.exec('SELECT measured_at AS n FROM account_storage WHERE source = ?', source))[0]?.n ?? null;
+  }
+
+  /** `source` changed since it was read: its next reading is taken at once, its last counting until then. */
+  stale(source: string): void {
+    this.sql.exec('UPDATE account_storage SET measured_at = 0 WHERE source = ?', source);
+  }
+
   /** A store the account no longer has (a removed workspace): its size counts no more. */
   forgetStore(source: string): void {
     this.sql.exec('DELETE FROM account_storage WHERE source = ?', source);

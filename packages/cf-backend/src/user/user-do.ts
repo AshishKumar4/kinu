@@ -27,7 +27,7 @@ import {
 } from '@kinu.run/core';
 import { Hono } from 'hono';
 import { rawPath, rethrow } from '../api/context';
-import { destroyDriveTenant, tenantDrive } from '../drive/tenant';
+import { destroyDriveTenant, driveStoredBytes, tenantDrive } from '../drive/tenant';
 import { forgetSharesGiven, forgetSharesReceived } from './shares-given';
 import { internalCaller } from '@kinu.run/core/control-plane';
 import { BUILTIN_ACCOUNTS_OBJECT, builtinSignInOn } from '@kinu.run/core/identity';
@@ -196,11 +196,20 @@ export class UserDO extends Agent<Env> {
     ...this.host, mcpServers: this.mcpServers, shareCards: this.shareCards, evalLeases: this.evalLeases, deletions: this.workspaceDeletions,
     nudgeUnreported: () => { this.nudgeUnreported(); },
     ownerId: () => this.name,
-    limits: { admitWorkspace: () => { this.accountLimits.admitWorkspace(); }, forgetStore: (source) => { this.accountLimits.forgetStore(source); } },
+    limits: {
+      admitWorkspace: () => { this.accountLimits.admitWorkspace(); },
+      forgetStore: (source) => { this.accountLimits.forgetStore(source); },
+      refreshStorage: async () => { await this.accountLimits.refreshStorage(); },
+    },
   });
 
   /** What the account may start new (core limits/): asked by its workspaces and its routes, set by the operator plane. */
-  private readonly accountLimits = new UserLimits({ ...this.host, workspaceCount: () => this.workspaces.rosterCount() });
+  private readonly accountLimits = new UserLimits({
+    ...this.host,
+    workspaceCount: () => this.workspaces.rosterCount(),
+    driveBytes: async () => await driveStoredBytes(this.env, this.name),
+    mailBytes: async () => await objectNamed(this.env.MAILBOX, this.name).storedBytes(this.name),
+  });
 
   private readonly profile = new UserProfileStore({ ...this.host, workspaces: this.workspaces });
 
@@ -215,7 +224,15 @@ export class UserDO extends Agent<Env> {
 
   private readonly screens = new UserScreens({ ...this.host, devices: this.devices });
 
-  private readonly userDrive = new UserDrive({ ...this.host, accountId: () => this.name, driveFor: (tenant) => this.driveFor(tenant) });
+  private readonly userDrive = new UserDrive({
+    ...this.host,
+    accountId: () => this.name,
+    driveFor: (tenant) => this.driveFor(tenant),
+    limits: {
+      admitNewBytes: async () => { await this.accountLimits.admitNewBytes(); },
+      storeChanged: (source) => { this.accountLimits.storeChanged(source); },
+    },
+  });
 
   /** A sign-in: an account deleted before is a new one now, and keeps cards again. */
   async ensureProfile(caller: UserCaller, email: string, displayName?: string): Promise<UserProfile> {
@@ -1068,8 +1085,8 @@ export class UserDO extends Agent<Env> {
     return this.accountLimits.nearNote(caller);
   }
 
-  limits_admitStoredBytes(caller: UserCaller): Promise<void> {
-    return this.accountLimits.admitStoredBytes(caller);
+  limits_admitStoredBytes(caller: UserCaller, own?: { readonly source: string; readonly bytes: number }): Promise<void> {
+    return this.accountLimits.admitStoredBytes(caller, own);
   }
 
   limits_storageSampled(caller: UserCaller, source: string, bytes: number): Promise<void> {

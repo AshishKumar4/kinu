@@ -237,6 +237,21 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
     this.deleting = false;
   }
 
+  /**
+   * The bytes the account's mail holds where they live: this object's database, and every object under its R2 prefix
+   * (bytes an interrupted delivery left unreferenced count too, as `deleteBox` sweeps them).
+   */
+  async storedBytes(userId: string): Promise<number> {
+    let bytes = this.ctx.storage.sql.databaseSize;
+    const bucket = this.bucket ?? undefined;
+
+    for (let page = await bucket?.list({ prefix: `mail/${userId}/` }); page !== undefined; page = page.truncated ? await bucket?.list({ prefix: `mail/${userId}/`, cursor: page.cursor }) : undefined) {
+      for (const object of page.objects) bytes += object.size;
+    }
+
+    return bytes;
+  }
+
   /** The alarm serves both clocks: the outbox's next retry and the Trash's next emptying. */
   private async arm(at: number | null = null): Promise<void> {
     const due = [at, this.outbox.nextRetryAt(), this.store.nextPurgeAt()].filter((each): each is number => each !== null);

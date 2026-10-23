@@ -6993,8 +6993,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.executors.abortDownload(transferId);
   }
 
+  /**
+   * A person's upload, a chunk at a time. Its first chunk asks the owner's limits for new bytes, with this workspace's
+   * size as its database reads it now; its last tells them the size it left. Bytes already stored stay readable.
+   */
   async writeExecutorFileChunk(write: ExecutorFileChunkWrite): Promise<ExecutorWriteResult> {
-    return await this.executors.writeChunk(write);
+    if (write.offset === 0) await this.admitNewBytes();
+    const written = await this.executors.writeChunk(write);
+
+    if (write.final) await this.reportStoredBytes();
+
+    return written;
   }
 
   async abortExecutorFileWrite(transferId: string): Promise<void> {
