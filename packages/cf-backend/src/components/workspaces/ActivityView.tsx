@@ -21,13 +21,18 @@ const PAGE = 200;
 
 const DAY = new Intl.DateTimeFormat("en-US", { weekday: "long", month: "long", day: "numeric" });
 
-/** "Today", "Yesterday", else the day's own name and date. */
+const NEAR_DAYS = new Map([[-1, "Tomorrow"], [0, "Today"], [1, "Yesterday"]]);
+
+/** "Today", "Yesterday" or "Tomorrow", else the day's own name and date. */
 function dayOf(at: number, now: number): string {
-  const days = Math.round((midnight(now) - midnight(at)) / 864e5);
+  return NEAR_DAYS.get(Math.round((midnight(now) - midnight(at)) / 864e5)) ?? DAY.format(at);
+}
 
-  if (days === 0) return "Today";
+/** When a watch next looks: its time today, else its day and time. */
+function nextLook(at: number, now: number): string {
+  const day = dayOf(at, now);
 
-  return days === 1 ? "Yesterday" : DAY.format(at);
+  return day === "Today" ? clockTime(at) : `${day}, ${clockTime(at)}`;
 }
 
 function midnight(at: number): number {
@@ -57,7 +62,11 @@ function causeWords(cause: ActivityCause): CauseWords {
 
   if (cause.kind === "self") return { tag: "On its own", said: "" };
 
-  return { tag: cause.label, said: `${cause.source}: ${cause.brief}${cause.more > 0 ? ` (and ${String(cause.more)} more)` : ""}` };
+  // A source names its own in parentheses ("email (priya@cloudflare.com)", "schedule (Morning brief)"); said once.
+  const from = /\(([^)]+)\)/u.exec(cause.source)?.[1] ?? cause.source;
+  const said = from === cause.brief ? from : `${from}: ${cause.brief}`;
+
+  return { tag: cause.label, said: `${said}${cause.more > 0 ? ` (and ${String(cause.more)} more)` : ""}` };
 }
 
 function Entry({ entry }: { entry: ActivityEntry }) {
@@ -96,9 +105,9 @@ function Upcoming({ watches, now }: { watches: readonly Watch[]; now: number }) 
       <h2 id="activity-upcoming" className="t-label">Upcoming</h2>
       <Group list label="Upcoming" data-activity-upcoming>
         {due.map((watch, index) => (
-          <li key={`${String(index)}:${String(watch.next_fire_at)}`} className="grid grid-cols-[var(--layout-label-row)] gap-x-3 px-4 py-3">
-            <span className="t-meta tabular-nums p-text-3">{dayOf(watch.next_fire_at ?? now, now) === "Today" ? clockTime(watch.next_fire_at ?? now) : dayOf(watch.next_fire_at ?? now, now)}</span>
-            <span className="t-body min-w-0 truncate p-text">{typeof watch.spec.label === "string" ? watch.spec.label : "A scheduled look"}</span>
+          <li key={`${String(index)}:${String(watch.next_fire_at)}`} className="flex items-baseline gap-3 px-4 py-3">
+            <span className="t-body min-w-0 flex-1 truncate p-text">{typeof watch.spec.label === "string" ? watch.spec.label : "A scheduled look"}</span>
+            <span className="t-meta shrink-0 tabular-nums p-text-3">{nextLook(watch.next_fire_at ?? now, now)}</span>
           </li>
         ))}
       </Group>
