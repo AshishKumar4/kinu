@@ -12,6 +12,7 @@ import { BrandMark } from "@/components/ui/BrandMark";
 import { Button } from "@/components/ui/Button";
 import { Notice } from "@/components/ui/Notice";
 import { Status } from "@/components/ui/Status";
+import { LoadFailure } from "@/components/ui/LoadFailure";
 
 export function GoogleConnectionCard() {
   const { resource, reload } = useAsyncResource(googleConnection);
@@ -19,6 +20,9 @@ export function GoogleConnectionCard() {
   // How the last connect or disconnect ended, in Google's or Kinu's words: the finish page closed with the only copy.
   const [said, setSaid] = useState<{ readonly tone: "danger" | "warning"; readonly text: string } | null>(null);
   const { ask, dialog } = useConfirmation();
+
+  // A read that failed with nothing shown yet says so, with a retry: hidden, the card could never be reached again.
+  if (read === null && resource.status === "error") return <LoadFailure what="your Google connection" message={resource.message} onRetry={reload} />;
 
   if (read === null || !read.available) return null;
   const { connection } = read;

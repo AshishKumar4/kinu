@@ -49,6 +49,13 @@ export function googleConnectionClient(env: GoogleConnectionEnv): GoogleConnecti
 /** Google's access tokens last an hour; one is renewed this long before. */
 const GOOGLE_REFRESH_LEAD_MS = 5 * 60_000;
 
+/** A token whose answer named no lifetime is held as Google's last an hour, so it is still renewed in time. */
+const GOOGLE_TOKEN_LIFETIME_S = 3_600;
+
+function expiresAtOf(expiresIn: number | undefined): number {
+  return Date.now() + (expiresIn !== undefined && expiresIn > 0 ? expiresIn : GOOGLE_TOKEN_LIFETIME_S) * 1_000;
+}
+
 export function googleCredentialExpiring(credential: OAuthCredential): boolean {
   return credential.expiresAt !== undefined && Date.now() + GOOGLE_REFRESH_LEAD_MS >= credential.expiresAt;
 }
@@ -90,8 +97,7 @@ export function googleTokenToCredential(token: GoogleToken, account: string): OA
   const credential: OAuthCredential = { kind: 'oauth', accessToken: token.access_token, metadata: { account, scopes: grantedScopes(token.scope, []) } };
 
   if (token.refresh_token !== undefined && token.refresh_token !== '') credential.refreshToken = token.refresh_token;
-
-  if (token.expires_in !== undefined && token.expires_in > 0) credential.expiresAt = Date.now() + token.expires_in * 1_000;
+  credential.expiresAt = expiresAtOf(token.expires_in);
 
   return credential;
 }
@@ -121,11 +127,10 @@ export function refreshGoogleCredential(env: GoogleConnectionEnv, current: OAuth
 
     if (token.access_token === undefined || token.access_token === '') return yield* Effect.die(new Error('Google renewed the connection without an access token.'));
     const held = googleGrantOf(current);
-    const { expiresAt: _lapsed, ...kept } = current;
-    const renewed: OAuthCredential = { ...kept, accessToken: token.access_token, metadata: { account: held?.account ?? '', scopes: grantedScopes(token.scope, held?.scopes ?? []) } };
 
-    if (token.expires_in !== undefined && token.expires_in > 0) renewed.expiresAt = Date.now() + token.expires_in * 1_000;
-
-    return renewed;
+    return {
+      ...current, accessToken: token.access_token, expiresAt: expiresAtOf(token.expires_in),
+      metadata: { account: held?.account ?? '', scopes: grantedScopes(token.scope, held?.scopes ?? []) },
+    };
   }));
 }

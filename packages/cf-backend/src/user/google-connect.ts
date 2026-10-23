@@ -146,7 +146,13 @@ function connectedGrant(input: {
     const kv = input.env.AUTH_KV;
 
     if (kv === undefined) return yield* new KinuError('unavailable', 'This deployment has no sign-in storage (AUTH_KV) set up.');
-    const consumed = yield* Effect.promise(() => consumeOAuthState(kv, input.state, 'google', input.binding));
+
+    // Spent, expired, or issued to another browser: said in the store's words on the finish page.
+    const consumed = yield* Effect.tryPromise({
+      try: () => consumeOAuthState(kv, input.state, 'google', input.binding),
+      catch: (cause) => new KinuError('denied', renderThrownChain({ cause })),
+    });
+
     const record = consumed.record;
 
     if (consumed.refusal !== null) return yield* new KinuError('denied', consumed.refusal);

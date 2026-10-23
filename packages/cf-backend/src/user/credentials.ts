@@ -104,8 +104,11 @@ export class UserCredentials {
   }
 
   /** Model-inference credentials survive tainting (headers attach in trusted DO code, never in LLM
-   * context); everything else is owner-level. */
+   * context); everything else is owner-level. The Google connection's token is the owner's alone: a workspace reaches
+   * Google only through the account's calls, whose writes its owner approves. */
   private requireCredentialAccess(caller: UserCaller, key: string): Promise<ResolvedCaller> {
+    if (baseCredentialKey(key) === GOOGLE_OAUTH_CRED_KEY) return this.host.requireTier(caller, 'google.token');
+
     return this.host.requireTier(caller, isModelInferenceCredentialKey(key) ? 'credentials.model' : 'credentials.other');
   }
 

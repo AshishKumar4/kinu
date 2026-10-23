@@ -1,8 +1,8 @@
 // The Google connection: an operator connects it from their own page, Google's grant is kept as `google.oauth`, renewed
 // when due, retired when Google refuses it, and revoked with one token on disconnect. Real state store and vault; only
 // Google's endpoints are faked.
-import { afterEach, describe, expect, test } from 'bun:test';
-import { asFetchFunction, GOOGLE_CONNECTION_SCOPES, GOOGLE_OAUTH_CRED_KEY, type JsonValue, type OAuthCredential } from '@kinu.run/core';
+import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
+import { asFetchFunction, CapabilityDeniedError, GOOGLE_CONNECTION_SCOPES, GOOGLE_OAUTH_CRED_KEY, type JsonValue, type OAuthCredential } from '@kinu.run/core';
 import { completeGoogleConnect, GOOGLE_CONNECT_STATE_PREFIX, startGoogleConnect, type GoogleConnectEnv } from '../src/user/google-connect';
 import { makeKv } from './helpers/kv';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
@@ -122,6 +122,20 @@ describe('connecting Google', () => {
     expect(ended(await start(connectEnv({ MCP_GOOGLE_CLIENT_SECRET: '' }))).error).toContain('no Google client');
   });
 
+  test('a callback replayed, or from another browser, ends on the finish page in the store\'s words', async () => {
+    const env = connectEnv();
+    const first = await connect(env, (nonce) => ({ access_token: 'ya29.first', refresh_token: '1//refresh', expires_in: 3_599, token_type: 'Bearer', id_token: idToken(nonce) }));
+    const state = first.consent.searchParams.get('state') ?? '';
+
+    const replayed = await completeGoogleConnect({
+      request: new Request(`${ORIGIN}/api/user/mcp/callback?${new URLSearchParams({ state, code: 'again' }).toString()}`),
+      env, account: ACCOUNT, keep: async () => { throw new Error('a replay keeps nothing'); },
+    });
+
+    expect(replayed.status).toBe(302);
+    expect(ended(replayed).error).toContain('OAuth state');
+  });
+
   test('ends in its own words, keeping nothing, for another account or a grant with no refresh token', async () => {
     const grant = (nonce: string) => ({ access_token: 'ya29.first', expires_in: 3_599, token_type: 'Bearer', id_token: idToken(nonce) });
     const elsewhere = await connect(connectEnv(), grant, 'another-account');
@@ -156,6 +170,23 @@ describe('the kept connection', () => {
     harness.close();
   });
 
+  test('a renewal that names no lifetime or scopes is still renewed within the hour, its scopes kept', async () => {
+    const { harness, owner } = await connected(Date.now() + 60_000);
+
+    google(() => ({ access_token: 'ya29.bare', token_type: 'Bearer' }));
+
+    expect(await harness.userDO.googleToken(owner)).toBe('ya29.bare');
+    expect(await harness.userDO.googleConnection(owner)).toEqual({ account: 'owner@gmail.com', scopes: ['openid'] });
+
+    const forms = google(() => ({ access_token: 'ya29.later', expires_in: 3_599, token_type: 'Bearer' }));
+
+    setSystemTime(new Date(Date.now() + 56 * 60_000));
+    expect(await harness.userDO.googleToken(owner)).toBe('ya29.later');
+    setSystemTime();
+    expect(forms).toHaveLength(1);
+    harness.close();
+  });
+
   test('refused by Google, it is retired, so Settings offers Connect again', async () => {
     const { harness, owner } = await connected(Date.now() + 60_000);
 
@@ -166,11 +197,15 @@ describe('the kept connection', () => {
     harness.close();
   });
 
-  test('its token is the owner\'s alone: a workspace asking is refused', async () => {
-    const { harness } = await connected(Date.now() + 3_600_000);
+  test('its token is the owner\'s alone: a workspace asking is refused, through the generic credential reads too', async () => {
+    const { harness, owner } = await connected(Date.now() + 3_600_000);
     const shop = { workspaceToken: await provisionTestWorkspace(harness, 'shop') };
 
-    await expect(harness.userDO.googleToken(shop)).rejects.toThrow();
+    await expect(harness.userDO.googleToken(shop)).rejects.toBeInstanceOf(CapabilityDeniedError);
+    await expect(harness.userDO.getAuthHeaders(shop, GOOGLE_OAUTH_CRED_KEY)).rejects.toBeInstanceOf(CapabilityDeniedError);
+    await expect(harness.userDO.getAuth(shop, GOOGLE_OAUTH_CRED_KEY)).rejects.toBeInstanceOf(CapabilityDeniedError);
+    await expect(harness.userDO.getCredentialEndpoint(shop, GOOGLE_OAUTH_CRED_KEY)).rejects.toBeInstanceOf(CapabilityDeniedError);
+    expect(await harness.userDO.getAuthHeaders(owner, GOOGLE_OAUTH_CRED_KEY)).toEqual({ Authorization: 'Bearer ya29.held' });
     harness.close();
   });
 
