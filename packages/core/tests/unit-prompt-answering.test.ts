@@ -67,7 +67,7 @@ describe("a page's own server", () => {
   test('is taught: data in workspace.db, a server only for logic that runs server-side, and the libraries the page has', () => {
     const section = ANSWERING_SECTION.render({});
 
-    expect(section).toContain('Keep data in `workspace.db` (shared with every agent and page); a block server is for logic that runs server-side.');
+    expect(section).toContain('Keep data in `workspace.db` (shared with every agent and page; `workspace.db.sql(query, params)` takes one SQL statement); a block server is for logic that runs server-side.');
     expect(section).toContain('`uplot` for charts');
   });
 });
