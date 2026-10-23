@@ -179,10 +179,13 @@ function DriveColumn({ tab, path, shown, places, unseen }: {
 }
 
 /** Below `lg`, the places as the row under the bar; with one place there is nothing to switch. */
+/** Below `lg`, where the places column is not drawn, the places are the tool's row under its header. */
 function PlacesRow({ tab, places, unseen }: { tab: DriveTab; places: readonly DriveTab[]; unseen: boolean }) {
-  if (places.length < 2) return null;
+  const column = useMediaQuery("(min-width: 1024px)");
 
-  return <div className="p-tool-row lg:hidden"><PlaceSwitch tab={tab} places={places} unseen={unseen} /></div>;
+  if (column || places.length < 2) return null;
+
+  return <PlaceSwitch tab={tab} places={places} unseen={unseen} />;
 }
 
 /** The bar's right end: Shared's search, or My stuff's New; Slates has neither. */
@@ -915,10 +918,10 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   const builtin = contents.builtins.find((name) => name === search.get("skill"));
   const subtitle = subtitleOf(tab, path);
 
-  // A tool (design review 2026-10-20, A2): the chat bar's band, the places column from `lg` (below it, the places are the
-  // row under the bar), and the content padded 24 inside its own column.
+  // A tool: a frame page's header, the places column from `lg` (below it, the places are the row under the header), and
+  // the content padded inside its own column.
   return (
-    <ToolPage icon={<HardDrivesIcon size={18} />} title="Drive" below={<PlacesRow tab={tab} places={places} unseen={unseen} />} actions={(
+    <ToolPage icon={<HardDrivesIcon size={22} />} title="Drive" row={<PlacesRow tab={tab} places={places} unseen={unseen} />} actions={(
       <BarActions tab={tab} search={{ query, set: setQuery }} primary={(
         <PrimaryAction inSkills={inSkills} onFiles={uploadFiles}
           onFolder={(picks) => { if (picks.length > 0) uploadPicked(picks); }}

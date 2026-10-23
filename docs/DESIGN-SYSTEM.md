@@ -165,7 +165,7 @@ Define every role for all four looks in `theme.ts`. Each value below is today's 
 |---|---|---|---|---|---|---|
 | hero | `t-hero` | 36 / 44 | 600 | −0.015em | text | the `/new` question only |
 | page title | `t-page-title` | 24 / 32 | 600 | −0.011em | text | `PageHeader`, flow cards |
-| title | `t-title` | 15 / 22 | 600 | −0.005em | text | tile title, `ToolBar` title, dialog title, in-card heading |
+| title | `t-title` | 15 / 22 | 600 | −0.005em | text | tile title, dialog title, in-card heading |
 | nav | `t-nav` | 14 / 20 | 500 | 0 | text-2; open: accent-fg | sidebar, Settings rail, tab strips |
 | section label | `t-label` | 13 / 20 | 600 | 0 | text-2 | the label above every group |
 | item | `t-item` | 13 / 20 | 500 | 0 | text | row name, field label, table primary cell |
@@ -314,7 +314,7 @@ Kumo is imported in exactly one place per component: its `ui/` wrapper.
 | **Cover: Capture** | `ui/Tiles.tsx` | ours | `--c-sunken` mat, 12 inset, picture `--r-inner` | captured in the viewer's mode once both captures exist |
 | **Cover: Typeset** | `ui/Tiles.tsx` | ours | `--c-fill` ground (fixes dark holes), mark 32 top-left (`WorkspaceLogo` / `ChatMascot` / none when a badge sits there), line 17/24 500 text-2, clamp 3 | — |
 | **PageHeader / Page** | `ui/PageHeader.tsx` | ours | frame page: icon 20 or back link, `t-page-title`, actions md 32 at the right line, hairline | `rule="wide"` when a tab strip follows on phone |
-| **ToolBar / ToolPage** | `ui/PageHeader.tsx` | ours | 46 bar, icon 18 + `t-title`, 28-tall controls, hairline (REREVIEW-2 A2) | — |
+| **ToolPage** | `ui/PageHeader.tsx` | ours | a frame page's header and rhythm, a filter row as Workspaces', columns filling the height (owner, 2026-10-23) | — |
 | **ChatBar** | `WorkspaceHeader.tsx` | ours | 46 bar; Focus: no hairline + 20 px fade; Workbench: tabs + hairline (A1) | — |
 | **FlowCard** | `ui/FlowCard.tsx` **new** (Welcome, Deploy) | ours | 520 card, logo, `t-page-title`, step dots, footer with md buttons | — |
 | **SaveBar** | `ui/SaveBar.tsx` **new** | ours | floating, sticky bottom 16, 48 tall, `--r-card`, `--c-overlay`, `--shadow-menu`; "Unsaved changes" + Discard (ghost sm) + Save (primary sm) | hidden, dirty, saving, saved (1.5 s), error (`t-meta` danger, bar stays) |
@@ -513,7 +513,7 @@ Add `?frame=system` to the gallery.
 11. **Cards and tiles:** a Card with label and actions; Tile with Capture, Typeset with logo, Typeset with mascot and Typeset with badge, each at rest and hover; the grid at 1088 width.
 12. **Page kinds:**
     - the frame page header (plain, with back, with actions)
-    - the ToolBar (Mail's and Drive's)
+    - the tool page (Mail's and Drive's): the frame page header, a filter row, columns filling the height
     - the ChatBar in Focus (no rule, fade) and in Workbench (tabs, rule)
     - the FlowCard
 13. **Overlays:** SaveBar in each state; Dialog (form, confirm, destructive); Popover; Tooltip; Toast in four tones; Empty; Loader and Skeleton; Meter at 40%, 85% and 100%; Table; CopyField.

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useLocation, useNavigate, useNavigationType, useParams, useSearchParams } from "react-router-dom";
 import { Loader } from "@/components/ui/Loader";
 import { Button, ICON_ON_PHONE, buttonClass } from "@/components/ui/Button";
@@ -106,13 +106,6 @@ function viewSegment(id: MailView, loaded: Inbox | null, waiting: boolean): { id
   return count > 0 ? { id, label: MAIL_VIEW_LABEL[id], count } : { id, label: MAIL_VIEW_LABEL[id] };
 }
 
-/** Where the views, search and addresses go: in the bar where the whole set fits, else the row under it. */
-function placed({ narrow, views, search, addresses }: { narrow: boolean; views: ReactNode; search: ReactNode; addresses: ReactNode }) {
-  if (narrow) return { below: <div className="p-tool-row">{views}{search}{addresses}</div>, inBar: null };
-
-  return { view: views, inBar: <>{search}{addresses}</> };
-}
-
 function MailInbox({ account, owner }: { account: MailBoxes; owner: string }) {
   const [params, setParams] = useSearchParams();
   const location = useLocation();
@@ -125,9 +118,6 @@ function MailInbox({ account, owner }: { account: MailBoxes; owner: string }) {
   const [installing, setInstalling] = useState(false);
   const navigation = useLabelledStep(() => undefined);
   const roomy = useMediaQuery("(min-width: 1024px)");
-  // The bar holds the views, search and addresses only where the whole set fits beside the sidebar; narrower, they are a
-  // row of their own under it, drawn once wherever they are.
-  const narrow = !useMediaQuery("(min-width: 1280px)");
   const waiting = view === "important" && account.boxes.find((box) => box.kind === "person")?.workspace === null;
 
   // Router navigations transition; a controlled text input cannot wait for them.
@@ -190,29 +180,22 @@ function MailInbox({ account, owner }: { account: MailBoxes; owner: string }) {
   );
 
   const search = (
-    <label className="relative w-60 min-w-0 shrink">
+    <label className="relative w-full min-w-0 sm:ml-auto sm:w-64">
       <MagnifyingGlassIcon size={13} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 p-text-3" aria-hidden />
-      <TextInput size="sm"  value={query} onChange={(event) => { setQuery(event.target.value); at({ q: event.target.value || null }); }} placeholder="Search mail" aria-label="Search mail" data-mail-search />
+      <TextInput size="sm" className="w-full pl-8" value={query} onChange={(event) => { setQuery(event.target.value); at({ q: event.target.value || null }); }} placeholder="Search mail" aria-label="Search mail" data-mail-search />
     </label>
   );
 
   const addresses = (
-    <div className="w-40 shrink-0" data-mail-address><Choice label="Address" size="sm" className="!h-7" value={path ?? "*"} onChange={(next) => at({ path: next === "*" ? null : next, address: null })}
+    <div className="w-40 shrink-0" data-mail-address><Choice label="Address" size="sm" className="!h-7 w-full" value={path ?? "*"} onChange={(next) => at({ path: next === "*" ? null : next, address: null })}
       options={[{ value: "*", label: "All addresses" }, ...account.boxes.map((box) => ({ value: box.path, label: mailBoxLabel(box) }))]} /></div>
   );
 
-  const controls = placed({ narrow, views, search, addresses });
-
-  // A tool (design review 2026-10-20, A2): the list a full-height column with its own rule, the thread read beside it on
-  // the ground; below `lg` one of the two at a time.
+  // A tool: its views and search in a row under its header, as Workspaces' filters are; the list a full-height column with
+  // its own rule, the thread read beside it; below `lg` one of the two at a time.
   return (
-    <ToolPage icon={<EnvelopeSimpleIcon size={18} />} title="Mail" view={controls.view} below={controls.below}
-      actions={(
-        <>
-          {controls.inBar}
-          <Button variant="primary" size="sm" data-mail-compose aria-label="Compose" className={ICON_ON_PHONE} onClick={() => setComposing(true)}><NotePencilIcon size={15} /><span className="max-sm:hidden">Compose</span></Button>
-        </>
-      )}
+    <ToolPage icon={<EnvelopeSimpleIcon size={22} />} title="Mail" row={<>{views}{search}{addresses}</>}
+      actions={<Button variant="primary" size="md" data-mail-compose aria-label="Compose" className={ICON_ON_PHONE} onClick={() => setComposing(true)}><NotePencilIcon size={15} /><span className="max-sm:hidden">Compose</span></Button>}
 >
       <section className={`min-w-0 overflow-y-auto p-border lg:w-[var(--layout-tool-list)] lg:shrink-0 lg:border-r ${opened === null ? "flex-1 lg:flex-none" : "hidden lg:block"}`}>
         {navigation.error !== null && <p role="alert" className="t-body px-4 pt-3 p-danger">{navigation.error}</p>}

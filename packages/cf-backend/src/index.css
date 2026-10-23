@@ -950,23 +950,8 @@ body { background: var(--c-bg); color: var(--c-text); }
 @keyframes p-save-bar-in { from { opacity: 0; transform: translateY(8px); } }
 @media (prefers-reduced-motion: reduce) { .p-save-bar { animation: none; transition: none; } }
 
-/* A tool's bar and its narrow-screen row (ui/PageHeader.tsx ToolBar): the chat bar's height, every control 28. */
-.p-tool-bar {
-  display: flex; flex-shrink: 0; align-items: center; gap: 8px; height: 46px; padding: 0 16px;
-  border-bottom: 1px solid var(--c-border); background: var(--c-bg);
-}
-.p-tool-title { font: 600 15px/22px var(--font-display); letter-spacing: -0.006em; color: var(--c-text); white-space: nowrap; }
-.p-tool-row {
-  display: flex; flex-shrink: 0; align-items: center; gap: 8px; height: 44px; padding: 0 16px;
-  border-bottom: 1px solid var(--c-border); overflow-x: auto; scrollbar-width: none;
-}
-.p-tool-row::-webkit-scrollbar { display: none; }
-/* The row scrolls rather than squeezing what it holds. */
-.p-tool-row > * { flex-shrink: 0; }
 @media (max-width: 639px) {
   :root, [data-theme], [data-mode] { --layout-gutter: 20px; --layout-bar: 48px; }
-  .p-tool-bar { height: 48px; }
-  .p-tool-title { font-size: 17px; line-height: 24px; }
 }
 
 /* ── The component set (components/ui/, docs/DESIGN-SYSTEM.md §2): each class is its component's alone ── */
