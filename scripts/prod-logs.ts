@@ -109,6 +109,9 @@ const MINUTE_MS = 60_000;
 /** An alarm this close to its object's own work served it; past it, nothing was left to watch. */
 export const IDLE_WAKE_DISTANCE_MS = 5 * MINUTE_MS;
 
+/** An alarm handler's longest run: Cloudflare's Durable Objects limits, "a maximum wall time of 15 minutes". */
+const ALARM_WALL_MS = 15 * MINUTE_MS;
+
 /** Every line that is an alarm's own work, as each alarm the code arms names it, and each hosted library's. */
 const ALARM_WORK_EVENTS = [...new Set<string>([...Object.values(ALARM_WORK), ...Object.values(HOSTED_ALARM_WORK)].flat())];
 
@@ -514,10 +517,11 @@ export class Telemetry {
 
   /** Counts per `bucketMs` bucket; `at` is the bucket's start. */
   /** `interval`: the row's sampling, which the answer's `abr_level` does not carry; above 1 its count is an estimate. */
-  async buckets(opts: { filters: readonly Filter[]; groupBy: readonly string[]; limit?: number }, bucketMs: number): Promise<{ groups: string[]; at: number; count: number; interval: number }[]> {
+  async buckets(opts: { filters: readonly Filter[]; groupBy: readonly string[]; limit?: number; from?: number }, bucketMs: number): Promise<{ groups: string[]; at: number; count: number; interval: number }[]> {
     const result = await this.result({
       view: 'calculations',
       granularity: bucketMs,
+      timeframe: { from: opts.from ?? this.args.from, to: this.args.to },
       parameters: {
         datasets: ['cloudflare-workers'],
         filters: this.filters(opts.filters),
@@ -1084,26 +1088,19 @@ export function alarmsThatRan(
   });
 }
 
-/** Whether `rows` hold a minute of an object within {@link IDLE_WAKE_DISTANCE_MS} of a minute of its own. */
-function nearRows(rows: readonly ObjectMinuteCount[]): (object: string, minute: number) => boolean {
-  const at = new Set(rows.map((row) => `${row.object}@${String(row.minute)}`));
-
-  return (object, minute) => {
-    for (let offset = -IDLE_WAKE_DISTANCE_MS; offset <= IDLE_WAKE_DISTANCE_MS; offset += MINUTE_MS) {
-      if (at.has(`${object}@${String(minute + offset)}`)) return true;
-    }
-
-    return false;
-  };
-}
-
 /** The alarms in `alarms` with no `work` minute of their object within {@link IDLE_WAKE_DISTANCE_MS}, by object-hour. */
 export function idleWakeHours(alarms: readonly ObjectMinuteCount[], work: readonly ObjectMinuteCount[]): ObjectHourCount[] {
-  const worked = nearRows(work);
+  const worked = new Set(work.map((row) => `${row.object}@${String(row.minute)}`));
   const idle = new Map<string, ObjectHourCount>();
 
   for (const alarm of alarms) {
-    if (worked(alarm.object, alarm.minute)) continue;
+    let near = false;
+
+    for (let offset = -IDLE_WAKE_DISTANCE_MS; offset <= IDLE_WAKE_DISTANCE_MS && !near; offset += MINUTE_MS) {
+      near = worked.has(`${alarm.object}@${String(alarm.minute + offset)}`);
+    }
+
+    if (near) continue;
     const hour = Math.floor(alarm.minute / HOUR_MS) * HOUR_MS;
     const key = `${alarm.object}@${String(hour)}`;
     idle.set(key, { object: alarm.object, hour, count: (idle.get(key)?.count ?? 0) + alarm.count });
@@ -1113,8 +1110,9 @@ export function idleWakeHours(alarms: readonly ObjectMinuteCount[], work: readon
 }
 
 /**
- * The objects in `work` whose alarm logged a line (`eventType` `alarm`) with no row of theirs in `alarms` near: rows the
- * telemetry lost. It loses them in a burst at head sampling 1 and `abr_level` 1, an alarm's invocation row and its own
+ * The objects in `work` whose alarm logged a line (`eventType` `alarm`) with no row of theirs in `alarms` at all: rows
+ * the telemetry lost. `alarms` reaches {@link ALARM_WALL_MS} before the first line and `work` ends before the last alarm
+ * read, so a line's own alarm row is among them unless it was lost. It loses them in a burst at head sampling 1 and `abr_level` 1, an alarm's invocation row and its own
  * line alike. kinu-probe-logloss (account f44999, no Kinu code), 2026-10-23: 400 objects' alarms at one moment, each
  * logging one line, gave 366 invocation rows and 366 lines, 30 of each with no partner in its request, whether the line
  * came before `deleteAll()` or after. Staging's CliAuthDO that afternoon: 21 alarms without their `cli.auth_retired`
@@ -1122,9 +1120,9 @@ export function idleWakeHours(alarms: readonly ObjectMinuteCount[], work: readon
  * trace on its own object, so beside one of these an idle wake is unreadable, never excused.
  */
 export function lostAlarmRows(alarms: readonly ObjectMinuteCount[], work: readonly EventMinuteCount[]): string[] {
-  const delivered = nearRows(alarms);
+  const delivered = new Set(alarms.map((row) => row.object));
 
-  return [...new Set(work.filter((line) => line.eventType === 'alarm' && !delivered(line.object, line.minute)).map((line) => line.object))].sort();
+  return [...new Set(work.filter((line) => line.eventType === 'alarm' && !delivered.has(line.object)).map((line) => line.object))].sort();
 }
 
 function idleWake(idle: ObjectHourCount): string {
@@ -1387,14 +1385,17 @@ export async function versionRead(t: Telemetry, around: Telemetry, versionId: st
   const canceled = await perMinute(t, [...alarm, eq('$workers.outcome', 'canceled')]);
   const earlier = await deletionRowsOf(t, canceled);
   const destroyedAt = deletionTimes([...destroyedRows, ...earlier.aborted], [...teardownRows, ...earlier.tornDown]);
-  const delivered = await perMinute(t, alarm);
-  const alarms = alarmsThatRan(delivered, canceled, destroyedAt);
+  const alarms = alarmsThatRan(await perMinute(t, alarm), canceled, destroyedAt);
   const called = await perMinute(around, [...invocations, { key: '$workers.eventType', operation: 'neq', value: 'alarm', type: 'string' }]);
   const modelCalls = await perMinute(around, [...scope, eq('$metadata.type', 'cf-worker'), eq('event', 'provider.stream_opened')]);
   // An alarm's own work, as each alarm names it ({@link ALARM_WORK_EVENTS}): a teardown, a run's expiry, a sweep
   // comes long after the object's last call. Staging c6dc27da1 (Mossaic's sweep) and 7aa75f05e (a deploy run's expiry)
   // each read one as an idle wake.
-  const alarmWork = (await Promise.all(ALARM_WORK_EVENTS.map(async (event) => await perMinute(around, [...scope, eq('$metadata.type', 'cf-worker'), eq('event', event)])))).flat();
+  const alarmWork = (await Promise.all(ALARM_WORK_EVENTS.map(async (event) => await perMinute(around, [...scope, eq('$metadata.type', 'cf-worker'), eq('event', event)], { byEventType: true })))).flat();
+  // A line's alarm began at most ALARM_WALL_MS before it, and a line in the window's last, partly read minute may have
+  // its alarm after the window's end.
+  const lineAlarms = await perMinute(t, alarm, { from: t.window.from - ALARM_WALL_MS });
+  const lines = alarmWork.filter((row) => row.minute + MINUTE_MS <= t.window.to);
 
   // An alarm beside work a sampled answer dropped reads as idle. 04603ec96's deploy, its own read sampled at level
   // 1,000,000, reported a MailboxDO's 17 alarms (613467d1a's window) and an OrchestratorAgent's 2 (ff916758e's) as idle,
@@ -1420,8 +1421,7 @@ export async function versionRead(t: Telemetry, around: Telemetry, versionId: st
     },
     startups: await startupHours(t, scope),
     idleWakes: idleWakeHours(alarms, [...called, ...modelCalls, ...alarmWork]),
-    // A line past the version's window has its alarm row past the alarms read: no sign of a lost one.
-    lostRows: lostAlarmRows(delivered, alarmWork.filter((row) => row.minute <= t.window.to)),
+    lostRows: lostAlarmRows(lineAlarms, lines),
   };
 }
 
@@ -1457,10 +1457,13 @@ async function deletionRowsOf(t: Telemetry, canceled: readonly ObjectMinuteCount
   return { aborted, tornDown };
 }
 
-async function perMinute(t: Telemetry, filters: readonly Filter[]): Promise<EventMinuteCount[]> {
-  const rows = await t.buckets({ filters, groupBy: [DO_ID, '$workers.eventType'], limit: MINUTE_GROUPS_CAP }, MINUTE_MS);
+/** `byEventType`: one row per kind of request as well; `from` reaches back past the read's own window. */
+async function perMinute(t: Telemetry, filters: readonly Filter[], by: { readonly byEventType?: boolean; readonly from?: number } = {}): Promise<EventMinuteCount[]> {
+  const groupBy = by.byEventType === true ? [DO_ID, '$workers.eventType'] : [DO_ID];
+  const rows = await t.buckets({ filters, groupBy, limit: MINUTE_GROUPS_CAP, from: by.from }, MINUTE_MS);
 
-  if (new Set(rows.map((row) => row.groups[0])).size >= MINUTE_GROUPS_CAP) {
+  // The cap counts groups, an object once per kind of request.
+  if (new Set(rows.map((row) => row.groups.join('\0'))).size >= MINUTE_GROUPS_CAP) {
     throw new Error('a per-minute read reached its object cap; narrow the window before reading idle wakes');
   }
 
@@ -1609,21 +1612,25 @@ export async function readAgainWhile<T>(own: OwnRead, read: () => Promise<T>, sl
  *  and awaited after it, so it adds no wait; a gateway refusal is read again while that read lasts. A store that
  *  cannot be reached is the only failure that keeps nothing; a token that cannot be read fails each kept window's read,
  *  and they and this window are still kept. */
-async function rereadKept(environment: InfraEnvironment, own: OwnRead): Promise<{ readonly store: WindowStore; readonly rereads: readonly Reread[] } | { readonly failed: string }> {
+async function rereadKept(environment: InfraEnvironment, own: OwnRead): Promise<{ readonly store: WindowStore; readonly rereads: readonly Reread[]; readonly notices: readonly VersionFinding[] } | { readonly failed: string }> {
   try {
     const store = windowStore(environment);
     // Read once, and only when a window is kept: an unread rejection would end the process.
     let token: Promise<string> | undefined;
+    const notices: VersionFinding[] = [];
 
     const rereads = await rereadWindows(store, async (window) => {
       token ??= readToken();
       const read = { worker: window.worker, from: Date.parse(window.from), to: Date.parse(window.to) };
       const kept = await token;
+      const answer = await readAgainWhile(own, async () => versionRead(new Telemetry(kept, read), new Telemetry(kept, { ...read, ...workWindow(read) }), window.version));
 
-      return versionSignals(await readAgainWhile(own, async () => versionRead(new Telemetry(kept, read), new Telemetry(kept, { ...read, ...workWindow(read) }), window.version)));
+      notices.push(...versionNotices(answer).map((notice) => ({ ...notice, finding: `version ${window.version}'s kept window ${window.from} .. ${window.to}: ${notice.finding}` })));
+
+      return versionSignals(answer);
     }, () => Date.now());
 
-    return { store, rereads };
+    return { store, rereads, notices };
   } catch (cause) {
     return { failed: cause instanceof Error ? cause.message : String(cause) };
   }
@@ -1703,6 +1710,7 @@ async function versionCommand(args: Args): Promise<number> {
       const current = { worker: args.worker, version: subject, from: iso(args.from), to: iso(args.to), measures: settled === null ? null : measuresOf(settled) };
 
       findings = [...findings, ...late];
+      notices = [...notices, ...kept.notices];
       keep = async () => keepWindows(kept.store, [...puts, { key: windowKey(current), window: current }], removes);
     }
   }
