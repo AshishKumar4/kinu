@@ -546,8 +546,8 @@ async function advisedLongTurn(advised: boolean, run: {
   let peak = { workspace: 0, main: 0 };
   let first = { workspace: 0, main: 0 };
   let last = first;
-  // What each isolate allocated over each third of the turn's steps: a per-step cost flat in the turn's length allocates
-  // as much in its last third as in its middle one.
+  // What each isolate allocated over each third of the turn's steps, the turn's end apart: a per-step cost flat in the
+  // turn's length allocates as much a step in its last third as in its middle one.
   const thirds: Isolates<number>[] = [];
   const third = Math.floor(LONG_TURN.steps / 3);
 
@@ -561,7 +561,7 @@ async function advisedLongTurn(advised: boolean, run: {
   for (let step = 1; step <= LONG_TURN.steps; step++) {
     while (v.parse(v.object({ arrived: v.number() }), JSON.parse(await ask('/model'))).arrived < step) await Bun.sleep(2);
 
-    if (step === third + 1 || step === 2 * third + 1) thirds.push(await allocatedSoFar());
+    if (step === third + 1 || step === 2 * third + 1 || step === LONG_TURN.steps) thirds.push(await allocatedSoFar());
     const used = await inEach(isolates, async (session) => await session.usedHeap());
     peak = { workspace: Math.max(peak.workspace, used.workspace), main: Math.max(peak.main, used.main) };
 
@@ -595,14 +595,16 @@ async function advisedLongTurn(advised: boolean, run: {
     await ask(`/quiesce?workspace=${name}`);
   }
 
-  thirds.push(await inEach(isolates, async (session) => (await session.allocations()).total));
-  const allocated = thirds.reduce((sum, part) => ({ workspace: sum.workspace + part.workspace, main: sum.main + part.main }), { workspace: 0, main: 0 });
+  const end = await inEach(isolates, async (session) => (await session.allocations()).total);
+  const allocated = [...thirds, end].reduce((sum, part) => ({ workspace: sum.workspace + part.workspace, main: sum.main + part.main }), { workspace: 0, main: 0 });
   const reviews = await advisorCalls() - callsBefore;
+  const steps = [third, third, LONG_TURN.steps - 1 - 2 * third];
+  const perStep = thirds.map((part, at) => `${(part.main / (steps[at] ?? 1) / 1e6).toFixed(2)} MB`).join(', ');
 
-  // The last third runs on past the last step, through the turn's end and its last review.
   console.log(`${GATE}: ${name} ${String(LONG_TURN.steps)}-step turn: ${String(reviews)} advisor calls; turn ${String(Math.round(turnMs))} ms; peak `
     + `${inEachIsolate(peak)} used; grew ${inEachIsolate(beyond(last, first))} live first to last step; allocated `
-    + `${inEachIsolate(allocated)}, by thirds of its steps ${thirds.map((part) => inEachIsolate(part)).join(', ')}`);
+    + `${inEachIsolate(allocated)}: by thirds of its steps ${thirds.map((part) => inEachIsolate(part)).join(', ')} `
+    + `(main's isolate ${perStep} a step), and its last step and end ${inEachIsolate(end)}`);
   await ask('/model?answerBytes=0&toolSteps=0');
 }
 
