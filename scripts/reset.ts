@@ -57,7 +57,8 @@ import {
 import { servedHealth } from './served-health';
 import { readGenesisLockText } from './schema-drift';
 import {
-  censusDiff, censusLines, changedTables, confirmation, derivedIn, listedObjects, planLines, referrersOf, schemaChange, verdictOf, walk, walkLines, writeLines, type TablesTarget,
+  censusDiff, censusLines, changedTables, confirmation, derivedIn, listedObjects, lossRefusals, planLines, referrersOf, schemaChange, verdictOf, walk, walkLines, writeLines,
+  type TablesTarget,
 } from './tables-reset';
 import { OPS_PASS_PREFIX } from '@kinu.run/core';
 
@@ -584,6 +585,11 @@ async function tablesCommand(command: (typeof TABLES_COMMANDS)[number], environm
   return 2;
 }
 
+/** The tables whose loss is acceptable, each with why (`scripts/schema-loss.json`), as the candidate holds them. */
+function lossAcceptable(): Record<string, string> {
+  return v.parse(v.record(v.string(), v.string()), JSON.parse(fileAt(process.cwd(), 'HEAD', 'scripts/schema-loss.json')));
+}
+
 /** Exit 3 when the candidate moves a class's stamp: every database of that class repairs itself at first contact. */
 async function stampsMoved(environment: InfraEnvironment): Promise<number> {
   const sha = (await servedHealth(origin(plan(environment).config))).build?.sha;
@@ -728,6 +734,16 @@ async function planTables(input: { environment: InfraEnvironment; recordFile: st
     return 1;
   }
 
+  const losses = environment === 'production' ? lossRefusals(verdicts, { acceptable: lossAcceptable(), words: process.env['KINU_LOSS_OVERRIDE'] }) : [];
+
+  if (losses.length > 0) {
+    for (const line of losses) console.error(`tables: ${line}`);
+    console.error('tables: REFUSED before the upload: production loses no user\'s rows (the owner, 2026-10-21). Keep these tables\' '
+      + 'shape, or deploy with --loss-override "<the owner\'s words naming each table>". Nothing was uploaded.');
+
+    return 1;
+  }
+
   const words = confirmation(verdicts);
 
   if (environment === 'production' && words !== null && !await confirmedAtTerminal(words, 'drop exactly these tables in production\'s databases, and every row they hold')) {
@@ -839,6 +855,14 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
   }
 
   if (known && command === 'wipe' && recordFile !== undefined) {
+    // A full reset loses every user's rows: production takes one only on the owner's words saying so (2026-10-21).
+    if (environment === 'production' && !/\bevery table\b/u.test(process.env['KINU_LOSS_OVERRIDE'] ?? '')) {
+      console.error('reset: REFUSED: a full reset of production loses every user\'s rows, and the owner\'s words for it '
+        + '(--loss-override "<words naming every table>") were not given; nothing was deleted.');
+
+      return 1;
+    }
+
     if (environment === 'production' && !await confirmedAtTerminal()) {
       console.error(`reset: not confirmed at a terminal with '${PRODUCTION_CONFIRMATION}'; nothing was deleted.`);
 
