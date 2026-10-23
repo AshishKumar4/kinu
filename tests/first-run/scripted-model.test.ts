@@ -11,7 +11,7 @@ import { makeSqlExec } from '../../packages/core/tests/helpers';
 import { createMemoryVfs } from '../../packages/test-utils/src/vfs';
 import {
   CONSENT_ASK, DELEGATION_ROSTER_ASK, DELEGATION_TASK_ASK, DELEGATION_WORD, DEVICE_JOB_ASK, DEVICE_JOB_COMMAND, HELLO_SLATE_ASK, HELLO_SLATE_ID,
-  RELAY_MISSION, STANDBY_MISSION, TREE_ASK, TREE_DEEP_WORD, delegationDismissAsk, sayWordMission,
+  RELAY_MISSION, STANDBY_MISSION, TREE_ASK, TREE_DEEP_WORD, UNNAMED_MACHINE_ASK, delegationDismissAsk, sayWordMission,
 } from './asks';
 import worker, { MAX_BODY_BYTES } from '../../scripts/scripted-model-worker';
 import { SCRIPTED_MCP_PATH, SCRIPTED_MCP_TOOL, SessionAnswerSchema } from '../../scripts/scripted-mcp';
@@ -421,6 +421,30 @@ describe('the device job the first-run tier runs on a machine', () => {
     ]);
 
     expect(answered.content).toBe('JOB bgjob-devjob01');
+  });
+});
+
+// Staging 7662e2159: the owner's answer to the case's own consent card landed at the unnamed ask's first step, behind it,
+// and the script read it as the ask: the turn answered the fallback and made no call.
+describe("two-machines' unnamed ask", () => {
+  test('is the call its turn makes even when a signal lands behind it, and its answer is what the call said', async () => {
+    const landed = 'Device use APPROVED, still not run: re-issue once:\n  kinu-first-run-beta: true';
+    const first = await reply([{ role: 'user', content: UNNAMED_MACHINE_ASK }, { role: 'user', content: landed }], ['shell']);
+
+    expect(first.tool_calls?.map((made) => [made.function.name, JSON.parse(made.function.arguments)])).toEqual([
+      ['shell', { runtime: 'device', command: 'hostname', why: 'The owner asked for this command on that machine.' }],
+    ]);
+
+    const refusal = 'Which machine? Connected: kinu-first-run-alpha, kinu-first-run-beta';
+
+    const answered = await reply([
+      { role: 'user', content: UNNAMED_MACHINE_ASK },
+      { role: 'user', content: landed },
+      { role: 'assistant', content: 'Calling shell.', tool_calls: [{ id: 'call_host', type: 'function', function: { name: 'shell', arguments: JSON.stringify({ runtime: 'device', command: 'hostname' }) } }] },
+      { role: 'tool', tool_call_id: 'call_host', content: refusal },
+    ], ['shell']);
+
+    expect(answered.content).toBe(refusal);
   });
 });
 
