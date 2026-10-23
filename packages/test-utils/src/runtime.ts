@@ -10,7 +10,7 @@ import type {
 } from '@kinu.run/core';
 import { tool } from 'ai';
 import {
-  pricedModelCallEvent, builtinStoreDeps, codemodeInputSchema, serveStores, turnLedgers, WORKSPACE_ROOT, WORKSPACE_RUN_ID, cloudPlanes,
+  pricedModelCallEvent, builtinStores, codemodeInputSchema, turnLedgers, WORKSPACE_ROOT, WORKSPACE_RUN_ID, cloudPlanes,
   type ConversationRecall, type ServedStores, type TurnLedgers,
 } from '@kinu.run/core';
 import { createTestSql, type TestSql } from './sql';
@@ -138,7 +138,7 @@ function noScaffold(): Identity['scaffold'] {
  * programs alike (`CodemodeSurface.stores`), on `ledgers`.
  */
 export function servedStoresOf(rt: AgentRuntime, conversations: ConversationRecall, ledgers: Pick<TurnLedgers, 'files' | 'context'> = turnLedgers()): ServedStores {
-  return serveStores(builtinStoreDeps({ rt, conversations, vectorStore: null, fileLedger: ledgers.files, contextBudget: ledgers.context }));
+  return builtinStores({ rt, conversations, vectorStore: null, fileLedger: ledgers.files, contextBudget: ledgers.context });
 }
 
 /** A program surface's store operations over a fresh test runtime, for a test whose programs reach no store of their own. */

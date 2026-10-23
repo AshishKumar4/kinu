@@ -8,6 +8,7 @@ import { NATIVE_ACTION_EFFECTS, type ActionEffect } from '../slates/members';
 import * as v from 'valibot';
 import { oneLineClip } from '../utils/text';
 import { programEffect, programEffectsOf } from '../execution/call-effects';
+import { readShell } from '../safety/shell-reading';
 
 /** The tool a program runs under. */
 const EVAL_TOOL = 'eval';
@@ -185,10 +186,10 @@ const SUMMARIZERS = new Map<string, ToolSummarizer>(Object.entries({
 
 /* What the call does, as opposed to what it was passed. Returns "" rather than guessing. */
 
-/** Strip env assignments, `sudo`, and a leading path so `/usr/bin/git` and
- *  `FOO=1 sudo git` both reduce to `git`. */
+/** The line's first command's words as the shell reads them, its quotes undone and its assignments aside, past `sudo` and
+ *  `env` and a leading path, so `/usr/bin/git` and `FOO="a b" sudo git` both reduce to `git`. None where no shell reads it. */
 function argv(command: string): string[] {
-  const parts = command.trim().split(/\s+/).filter(Boolean);
+  const parts = (readShell(command)?.pipelines[0]?.[0]?.words ?? []).map((word) => word.text);
   let i = 0;
 
   while (i < parts.length && (/^[A-Z_][A-Z0-9_]*=/.test(parts[i]) || parts[i] === "sudo" || parts[i] === "env")) i++;

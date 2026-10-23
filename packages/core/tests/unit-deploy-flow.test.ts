@@ -2074,9 +2074,12 @@ describe('what the page reads of an account', () => {
     expect([
       await settle(domainsMatching(cloudflare, ACCOUNT, 'https://kinu.example.com/')),
       await settle(domainsMatching(cloudflare, ACCOUNT, 'FlourAndHearth.com')),
+      // CODE-8: the sign-in of a pasted URL was read as its name.
+      await settle(domainsMatching(cloudflare, ACCOUNT, 'https://deploy:token@kinu.example.com:8443/app')),
     ]).toEqual([
       [{ name: 'example.com', state: 'yours', zone: 'zone-example', status: 'active' }],
       [{ name: 'flourandhearth.com', state: 'elsewhere' }],
+      [{ name: 'example.com', state: 'yours', zone: 'zone-example', status: 'active' }],
     ]);
   });
 

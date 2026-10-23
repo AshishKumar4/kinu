@@ -317,9 +317,12 @@ export function preflight(transport: CloudflareTransport, account: string, now: 
   });
 }
 
-/** What was typed, as a name: no scheme, path, port or trailing dot. */
+/** What was typed, as a name: its URL's host as RFC 3986 bounds it, without scheme, sign-in, port, path or trailing dot. */
 function typedDomain(query: string): string {
-  return query.trim().toLowerCase().replace(/^[a-z]+:\/\//u, '').replace(/[/:?#].*$/u, '').replace(/\.$/u, '');
+  const rest = query.trim().toLowerCase().replace(/^[a-z][a-z0-9+.-]*:\/\//u, '');
+  const authority = rest.split(/[/?#]/u)[0] ?? '';
+
+  return authority.slice(authority.lastIndexOf('@') + 1).replace(/:\d*$/u, '').replace(/\.$/u, '');
 }
 
 /** The account's zones the query names or sits under, and the query itself as "elsewhere" when no zone holds it. */

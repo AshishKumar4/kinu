@@ -742,7 +742,7 @@ export {
 
 export {
   buildBuiltinTools,
-  builtinStoreDeps,
+  builtinStores,
   surfaceStores,
   type ServedTools,
   type BuiltinStoreInputs,
