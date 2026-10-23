@@ -52,7 +52,7 @@ export type WrongReason = (typeof WRONG_REASONS)[number];
 
 /** Measured on 185 Kinu turns (kinu-logs/evals-fast/clef-satisfaction): this `corrected` wording keeps new
  *  information and changed requirements out of corrections while catching every written correction and repeat. */
-const RATING_QUESTIONS = {
+export const RATING_QUESTIONS = {
   satisfaction: {
     type: 'score',
     instructions: "Judge the agent's turn by the user's next message. How satisfied is the user with that turn?",

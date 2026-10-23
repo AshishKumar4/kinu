@@ -81,20 +81,20 @@ export function tierRefusals(deps: {
   };
 }
 
-/** Where `untrusted` keeps the fast-tier model no question could be asked of, beside the refusals said once. */
-const UNTRUSTED_KEY = `${REFUSAL_KEY}untrusted`;
+/** Where `untrusted` keeps the fast-tier model no rating could be asked of, beside the refusals said once (so a change of
+ *  model settings clears it too). Spaced, as `DECISION_REFUSALS` is, so no tier's id can name it. */
+const UNTRUSTED_KEY = `${REFUSAL_KEY}untrusted rating`;
 
 /**
  * Why the decision model rates no turn, so no dream opens, in the owner's words; null while turns can be rated. Read
- * from what `refused` and `untrusted` kept: Clef refusing, and the fast tier's model trusted for none of the rating's
- * questions.
+ * from what `refused` and `untrusted` kept: Clef refusing (its notice in the activity log says why, and what fixes it),
+ * and the fast tier's model not trusted to rate a turn in its place.
  */
 export function unratedReason(config: Pick<AgentConfigStore, 'get'>, settings: string): string | null {
   const untrusted = v.safeParse(v.pipe(v.string(), v.parseJson(), v.object({ model: v.string(), questions: v.array(v.string()) })), config.get(UNTRUSTED_KEY));
 
   if (!untrusted.success || config.get(`${REFUSAL_KEY}${DECISION_REFUSALS}`) === null) return null;
-  const { model, questions } = untrusted.output;
 
-  return `No turn is being rated, so no dream opens: Clef, the decision model, needs Cloudflare's Workers AI, and ${model} on your fast tier `
-    + `is not measured close enough to Clef to answer ${questions.join(', ')}. Connect Cloudflare, or pick another fast model, in ${settings}.`;
+  return `No turn is being rated, so no dream opens: Clef, the decision model, is refusing requests (its notice in Activity says why), `
+    + `and ${untrusted.output.model} on your fast tier is not measured close enough to Clef to rate a turn in its place. Clef's access is set in ${settings}.`;
 }

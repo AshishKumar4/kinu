@@ -34,10 +34,11 @@ export interface RefinementListing {
   readonly unrated: string | null;
 }
 
-export const RefinementListingSchema: v.GenericSchema<RefinementListing> = v.object({
+/** A listing as a peer sends it: one from before `unrated` sends none, read as nothing to say. */
+export const RefinementListingSchema: v.GenericSchema<Omit<RefinementListing, 'unrated'> & { readonly unrated?: string | null }, RefinementListing> = v.object({
   requests: v.array(RefinementRequestViewSchema),
   debt: EvolutionDebtSchema,
-  unrated: v.nullable(v.string()),
+  unrated: v.optional(v.nullable(v.string()), null),
 });
 
 export function listRefinements(deps: RefinementDeps, limit = 20, settings = 'your model settings'): RefinementListing {

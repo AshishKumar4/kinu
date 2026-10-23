@@ -109,18 +109,18 @@ describe('a chat model answering decisions', () => {
   });
 
   // An unmeasured model's answers were never compared with Clef's: none of them is used.
-  test('the fast tier answers nothing where no model it walks was measured, and keeps which, until one answers', async () => {
+  test('the fast tier answers nothing where no model it walks was measured, and keeps which, until a rating is answered', async () => {
     const kept: unknown[] = [];
 
-    const untrusted = lane({ 'openai/never-measured': scripted('{"corrected":"yes","satisfaction":"2","wrong":"nothing"}') }, [], 'openai/never-measured');
-    // Luna's row clears what was corrected (80% against 70%).
-    const trusted = lane({ 'openai/gpt-6-luna': scripted('{"corrected":"yes"}') });
-
     const keeping = (built: ModelLaneComponents): ModelLaneComponents => ({ ...built, refusals: { ...present(built.refusals, 'refusals'), untrusted: (asked) => { kept.push(asked); } } });
+    const rating = { satisfaction: QUESTIONS.satisfaction, corrected: QUESTIONS.corrected, wrong: { type: 'choice', instructions: 'What went wrong?', criteria: { nothing: 'Nothing', misunderstood: 'Misread' } } } as const;
+    const untrusted = keeping(lane({ 'openai/never-measured': scripted('{}') }, [], 'openai/never-measured'));
+    const muse = 'opencode-go/muse-spark-1.3-contributor';
 
-    expect(await createStructuredDecider(ACTOR, keeping(untrusted))({ state: 's', questions: QUESTIONS })).toBeUndefined();
-    await createStructuredDecider(ACTOR, keeping(trusted))({ state: 's', questions: { corrected: QUESTIONS.corrected } });
-    expect(kept).toEqual([{ model: 'openai/never-measured', questions: ['corrected', 'satisfaction', 'wrong'] }, null]);
+    expect(await createStructuredDecider(ACTOR, untrusted)({ state: 's', questions: rating })).toBeUndefined();
+    // A triage Muse is trusted for says nothing of ratings, which it still cannot answer: the marker stays.
+    await createStructuredDecider(ACTOR, keeping(lane({ [muse]: scripted('{"worth":"yes"}') }, [], muse)))({ state: 's', questions: { worth: { type: 'noul', instructions: 'Worth a look?' } } });
+    expect(kept).toEqual([{ model: 'openai/never-measured', questions: ['satisfaction', 'corrected', 'wrong'] }]);
   });
 
   // Muse's measured row clears triage's bar and not a rating's (what went wrong, 65% against 77.5%).

@@ -15,6 +15,7 @@ import { objectOnRoute, onProfileRoute, type ModelLaneComponents, type RouteCall
 import type { ModelRouteResolution } from '../profiles/model-route';
 import { KinuError, settle, toKinuError } from '../obs/index';
 import { estimateTokens } from '../token-estimate';
+import { RATING_QUESTIONS } from './ratings';
 
 /**
  * What each yes-or-no category stands for. Unclear sits below every bar a consumer reads a yes-or-no against (0.5), so
@@ -148,10 +149,19 @@ function trustedRoute(route: ModelRouteResolution, request: DecisionRequest): Mo
 export function createStructuredDecider(actor: ActorReference, lane: ModelLaneComponents): StructuredDecider {
   return (request) => onProfileRoute(actor, 'fast', lane, async (fast) => {
     const route = trustedRoute(fast, request);
+    // A turn's rating, not a triage: only a rating's fate says whether turns are rated (`unratedReason`).
+    const rating = Object.keys(RATING_QUESTIONS).every((id) => id in request.questions);
 
-    // Kept for `/refine` to say why no turn is rated (`unratedReason`); cleared by the next question a model answers.
-    lane.refusals?.untrusted(route === null ? { model: fast.model, questions: Object.keys(request.questions) } : null);
+    if (route === null) {
+      if (rating) lane.refusals?.untrusted({ model: fast.model, questions: Object.keys(request.questions) });
 
-    return route === null ? undefined : await answerStructured(lane, route, request);
+      return undefined;
+    }
+
+    const answered = await answerStructured(lane, route, request);
+
+    if (rating && answered !== null) lane.refusals?.untrusted(null);
+
+    return answered;
   });
 }

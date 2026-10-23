@@ -5,6 +5,7 @@
  */
 import { compactToolCall } from '../src/evolution/tool-call-record';
 import { describe, expect, test } from 'bun:test';
+import * as v from 'valibot';
 import { EvolutionEngine } from '../src/evolution/engine';
 import type { CompletedTurn } from '../src/evolution/types';
 import {
@@ -14,6 +15,7 @@ import {
   bindingDecisionRun, createDecisionPort, DECISION_REFUSALS, restDecisionRun, type DecisionAnswers, type DecisionPort, type DecisionQuestion,
 } from '../src/providers/decision-model';
 import { tierRefusals, unratedReason } from '../src/profiles/tier-refusals';
+import { RefinementListingSchema } from '../src/evolution/refinement-host';
 import { readActivityLog } from '../src/identity/activity-log';
 import { KinuError } from '../src/obs/error';
 import { CLEF_BINDING_ANSWER } from '@kinu.run/test-utils/clef-binding-answer';
@@ -352,12 +354,23 @@ describe('the decision model', () => {
 
     refusals.refused({ tier: DECISION_REFUSALS, since: 0, refusals: [refusing] });
     expect(unratedReason(rt.actor.config, 'Settings → Models')).toBe(
-      'No turn is being rated, so no dream opens: Clef, the decision model, needs Cloudflare\'s Workers AI, and claude/claude-never-measured on your '
-      + 'fast tier is not measured close enough to Clef to answer satisfaction, corrected, wrong. Connect Cloudflare, or pick another fast model, in Settings → Models.',
+      'No turn is being rated, so no dream opens: Clef, the decision model, is refusing requests (its notice in Activity says why), and '
+      + 'claude/claude-never-measured on your fast tier is not measured close enough to Clef to rate a turn in its place. Clef\'s access is set in Settings → Models.',
     );
+
+    // A tier the owner named `untrusted` answering, or refusing, leaves the marker alone: no tier id can name its key.
+    refusals.answered('untrusted');
+    expect(unratedReason(rt.actor.config, 'Settings → Models')).not.toBeNull();
 
     refusals.untrusted(null);
     expect(unratedReason(rt.actor.config, 'Settings → Models')).toBeNull();
+  });
+
+  // Version skew: a peer from before `unrated` sends a listing without it, which still reads.
+  test('a refinement listing from an older peer, with no unrated line, reads as nothing to say', () => {
+    const older = { requests: [], debt: { turnIds: [], owed: false, key: '', summary: 'no new rated turns since the last dream' } };
+
+    expect(v.parse(RefinementListingSchema, older)).toEqual({ ...older, unrated: null });
   });
 
   test("a refusal carries the provider's own words and the status's code", async () => {
