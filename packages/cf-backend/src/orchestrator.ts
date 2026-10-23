@@ -4946,7 +4946,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   async getEvolutionChangelog(opts?: { limit?: number; changesOnly?: boolean }): Promise<{
     entries: ChangelogEntry[]; unseenCount: number; seenAt: number;
   }> {
-    return getEvolutionChangelog(this.boundSql, this.actorHandle(), opts?.limit, opts?.changesOnly === true);
+    return getEvolutionChangelog(this.boundSql, this.actorHandle(), {
+      limit: opts?.limit, changesOnly: opts?.changesOnly === true, approvals: this.instructionApprovals(),
+    });
   }
 
   @callable()
