@@ -273,6 +273,7 @@ import {
 import type { RestoreStatus, SessionRecord, TerminalSession } from "@kinu.run/devbox";
 import type { BoxSize } from "@kinu.run/devbox/sizes";
 import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY, type ComputerSizeState } from "./computer-size";
+import type { ComputerSize } from "@kinu.run/core";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { forgetSandboxPreviews, sandboxPreviewExposures } from "@kinu.run/core";
 import type { ExposedPortList } from "@kinu.run/core";
@@ -3824,6 +3825,30 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   async sandboxStopped(): Promise<void> {
     await this.sandboxRestore({ restoring: false, refused: undefined });
+    // Its running time stops counting, and its place is free for another of the owner's computers.
+    const { stub, caller } = await this.userHub();
+    await stub.limits_computerStopped(caller, this.name);
+  }
+
+  /**
+   * Whether this workspace's computer may start from stopped at `size` (KinuDevbox `admitStart`): its owner's limits
+   * answer, a refusal in their words. Admitted, it holds the owner's place until `sandboxStopped`.
+   */
+  async computerStartAdmitted(size: ComputerSize): Promise<string | null> {
+    const { stub, caller } = await this.userHub();
+    const [admitted] = await Promise.allSettled([stub.limits_admitComputerStart(caller, this.name, size)]);
+
+    if (admitted.status === 'fulfilled') return null;
+    const refusal = toKinuError({ doing: "asking the owner's limits whether the computer may start", otherwise: 'unavailable', cause: admitted.reason });
+
+    // Only the limits' own answer refuses a start; a limits object that could not be asked does not hold the box down.
+    return refusal.code === 'budget' || refusal.code === 'denied' ? refusal.message : null;
+  }
+
+  /** This workspace's computer seen running (KinuDevbox heartbeat): its running time counts to the owner's month. */
+  async computerRunningTick(size: ComputerSize): Promise<void> {
+    const { stub, caller } = await this.userHub();
+    await stub.limits_computerTick(caller, this.name, size);
   }
 
   async sandboxRestore(status: RestoreStatus): Promise<void> {

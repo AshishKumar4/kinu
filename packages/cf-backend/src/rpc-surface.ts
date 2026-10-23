@@ -310,6 +310,8 @@ const ORCHESTRATOR_METHODS = [
   'acceptSandboxLifecycleIncident',
   'sandboxStopped',
   'sandboxRestore',
+  'computerStartAdmitted',
+  'computerRunningTick',
   'acceptWebhookDelivery',
   'accountSpend',
   'announceDeviceAvailable',

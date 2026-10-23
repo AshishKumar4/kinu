@@ -817,6 +817,18 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return Promise.resolve('queued');
   }
 
+  /**
+   * Whether this box may start from stopped at `size`: the refusal's words, or null to start. Asked at every start of a
+   * stopped container (`#startContainer`), never of a running one.
+   */
+  protected async admitStart(_size: BoxSize): Promise<string | null> {
+    return null;
+  }
+
+  /** The box seen running at a heartbeat, at `size`: what its host counts running time by. A host's failure here is its
+   *  own to keep from the heartbeat. */
+  protected async onRunningTick(_size: BoxSize): Promise<void> {}
+
   /** Hook for restore progress; `atMs` counts from when the attempt opened inside the hook.
    *  Synchronous, because the attempt waits for nothing of the witness's. */
   protected onRestorePhase(_phase: RestoreClockPhase, _atMs: number): void {
@@ -1379,6 +1391,14 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       await this.#settle({ phase: 'unattached', reason: refused, retry: false });
 
       return;
+    }
+
+    // A stopped box starts only if its host admits it; a running one is never asked. Nothing is kept of a refusal, so
+    // the next door asks again, once what refused it has changed.
+    if (this.ctx.container?.running !== true) {
+      const notAdmitted = await this.admitStart(this.#size());
+
+      if (notAdmitted !== null) throw new DevboxError('refused', notAdmitted);
     }
 
     if (this.ctx.container?.running !== true
@@ -3149,6 +3169,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
    *  alarm that never fired, a tick that returned early, and a ping that did not renew. */
   async #tick(input: Omit<HeartbeatTick, 'at'>): Promise<void> {
     await this.ctx.storage.put(LAST_TICK_KEY, { ...input, at: Date.now() } satisfies HeartbeatTick);
+
+    if (input.running) await this.onRunningTick(this.#runningSize() ?? this.#size());
   }
 
   /** Named schedule callback; the delivery policy lives in `incidents.ts`. */

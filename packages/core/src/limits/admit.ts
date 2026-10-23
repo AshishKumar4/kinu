@@ -75,6 +75,9 @@ export function admitStoredBytes({ klass, tier, use }: Admission): KinuError | n
 export function admitComputerStart({ klass, tier, use, now }: Admission, start: { readonly workspace: string; readonly size: ComputerSize }): KinuError | null {
   const { workspace, size } = start;
 
+  // A box that already holds its place (a recovery restart, a resize) continues: only a start from stopped is asked.
+  if (use.running.some((running) => running.workspace === workspace)) return null;
+
   if (!isLimited(klass)) return null;
 
   if (COMPUTER_SIZE_ORDER.indexOf(size) > COMPUTER_SIZE_ORDER.indexOf(tier.computerSize)) {
