@@ -165,4 +165,13 @@ describe('a turn a signal opened draws live while it runs, and settles once it e
     expect(ended.phases.map(({ state, shown }) => ({ state, shown }))).toEqual(ended.phases.map(() => ({ state: 'settled', shown: false })));
     expect(ended.feedback).toBe(true);
   });
+
+  // The owner: "the 'Thinking' should change to 'Thought' after the thinking block is done", and fold as a phase does.
+  test('its thought follows while it streams, and once done reads differently and folds to its line', () => {
+    const { thought } = verdictOf(observed.turnDrawn, 'turn-drawn');
+
+    expect(thought.live).toMatchObject({ state: 'live', body: 'live', shown: true });
+    expect(thought.ended?.label).not.toBe(thought.live?.label);
+    expect(thought.ended).toMatchObject({ state: 'done', shown: false });
+  });
 });
