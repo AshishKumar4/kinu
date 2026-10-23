@@ -1,4 +1,4 @@
-import { Cause, Effect } from 'effect';
+import { Effect } from 'effect';
 import {
   objectNamed,
   autoTitleMayReplace, nameOriginOf, type NameOrigin, WORKSPACE_KEYED_ROWS, commitWorkspaceCapability, freshWorkspaceCapability, revokeWorkspaceCapability, workspaceCapabilityHash, type UserCaller, validateWorkspaceName, sanitizeWorkspaceLogoSvg, resolveWorkspaceTitle, WorkspaceOverviewSchema, type WorkspaceOverview, type RosterPage, type WorkspaceEntry, workspaceTitleProblem,
@@ -53,21 +53,9 @@ export interface UserWorkspacesHost extends Pick<UserObjectHost, 'ctx' | 'env' |
   ownerId(): string;
 }
 
-/** The Agents SDK's own abort reason (`Agent.destroy`), raised only once its wipe has finished. */
-const DESTROYED = 'destroyed';
-
-/**
- * What a workspace still holds, read once its destroy answered. A read the destroyed object answers itself, with the
- * SDK's `destroyed` abort, came after its wipe (the SDK schedules the abort once `deleteAll` resolved), so it holds
- * nothing. Local workerd sends that read to the dying object; a deployment mostly starts a new one.
- */
-function storedAfterDestroy(read: () => Promise<number>): Promise<number> {
-  return settle(Effect.catchCause(Effect.promise(read), (failed) => {
-    const cause = Cause.squash(failed);
-
-    return cause instanceof Error && cause.message === DESTROYED ? Effect.succeed(0) : Effect.failCause(failed);
-  }));
-}
+/** A read the destroyed workspace answers itself with the Agents SDK's own abort (`Agent.destroy`), which it raises only
+ *  once its wipe has finished (`confirmedDeletion`'s `ended`). */
+const destroyedItself = (failure: Error): boolean => failure.message === 'destroyed';
 
 /** The account's workspaces. */
 export class UserWorkspaces {
@@ -535,8 +523,8 @@ export class UserWorkspaces {
     await confirmedDeletion(() => {
       const opened = this.host.env.OrchestratorAgent.get(object);
 
-      return { destroy: async () => { await opened.destroyAgent(ownerUserId); }, remains: async () => storedAfterDestroy(async () => opened.storedWorkspace()) };
-    }, `the workspace ${name}`);
+      return { destroy: async () => { await opened.destroyAgent(ownerUserId); }, remains: async () => opened.storedWorkspace() };
+    }, `the workspace ${name}`, destroyedItself);
 
     // Written here, where the destroy landed: the destroyed object's own rows of it can be missing from telemetry
     // (staging f9c17ac7b, 2026-10-14: none of 7d3e6921's quiet, destroy or abort rows were stored), and a deploy's

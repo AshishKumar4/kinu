@@ -18,18 +18,22 @@ interface Deletable {
 /**
  * Deletes the object `object` opens, then reads it again through a new stub (`object` is called once for each): none of
  * its own data left is the deletion done, whatever came back. Where some is left, the deletion's own failure is the
- * reason, or, if it answered, the data it left. The read must create nothing it counts.
+ * reason, or, if it answered, the data it left. The read must create nothing it counts. `ended` names a read the object
+ * answers itself as its deletion ends it, which it gives only once its storage went (the Agents SDK aborts with
+ * `destroyed` after `deleteAll`, and local workerd sends the read to that dying object): such a read holds nothing.
  */
-export async function confirmedDeletion(object: () => Deletable, what: string): Promise<void> {
+export async function confirmedDeletion(object: () => Deletable, what: string, ended?: (failure: Error) => boolean): Promise<void> {
   return settle(Effect.gen(function* () {
     // Its outcome is the read's to say: an answer cut by the activation's end fails here with the storage gone.
     const deleting = yield* Effect.match(Effect.tryPromise({
       try: async () => object().destroy(), catch: (cause) => toKinuError({ doing: `deleting ${what}`, cause, otherwise: 'io' }),
     }), { onFailure: (failure): KinuError | null => failure, onSuccess: () => null });
 
-    const held = yield* Effect.tryPromise({
-      try: async () => object().remains(), catch: (cause) => toKinuError({ doing: `reading ${what} after its deletion`, cause, otherwise: 'io' }),
-    });
+    const held = yield* Effect.tryPromise({ try: async () => object().remains(), catch: (cause) => cause }).pipe(
+      Effect.catch((cause) => (cause instanceof Error && ended?.(cause) === true
+        ? Effect.succeed(0)
+        : Effect.fail(toKinuError({ doing: `reading ${what} after its deletion`, cause, otherwise: 'io' })))),
+    );
 
     if (held === 0) return;
 
