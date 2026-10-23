@@ -14,6 +14,7 @@ import { CopyField } from "@/components/ui/CopyField";
 import { Field, TextInput } from "@/components/ui/Field";
 import { Group } from "@/components/ui/Group";
 import { Modal } from "@/components/ui/Modal";
+import { Pressable } from "@/components/ui/Pressable";
 import { Select } from "@/components/ui/Select";
 import { Status, type StatusTone } from "@/components/ui/Status";
 import { Surface } from "@/components/ui/Surface";
@@ -141,13 +142,13 @@ export function AccountsTable({ rows, onOpen, onChanged }: { rows: readonly Acco
               <Group list>
                 {shown.map((row) => (
                   <li key={row.userId}>
-                    <button type="button" className="flex w-full items-center gap-3 px-4 py-3 text-left" onClick={() => onOpen(row.userId)} data-account={row.email}>
+                    <Pressable className="flex w-full items-center gap-3 px-4 py-3 text-left" onClick={() => onOpen(row.userId)} data-account={row.email}>
                       <span className="min-w-0 flex-1">
                         <span className="t-body block truncate p-text">{row.email}</span>
                         <span className="t-meta block p-text-3">{listLine(row)}</span>
                       </span>
                       <ClassPill limits={row.limits} />
-                    </button>
+                    </Pressable>
                   </li>
                 ))}
               </Group>

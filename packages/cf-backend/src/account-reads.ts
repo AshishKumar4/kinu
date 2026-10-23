@@ -5,7 +5,7 @@
  */
 import { Effect } from 'effect';
 import type { AccountMemory, AccountProposer, CommandEnvironment, Fact, GrantedSecrets, ProfileCatalogEnvelope, ProviderListing, UserCaller } from '@kinu.run/core';
-import { attempt, diagnostics, settle, type KinuError, type LogEventName } from '@kinu.run/core/obs';
+import { attempt, diagnostics, settle, type KinuError } from '@kinu.run/core/obs';
 import type { UserDO } from './user/user-do';
 import type { UserDoRpcMethod } from './rpc-surface';
 
@@ -60,6 +60,9 @@ export interface AccountReadsHost {
   workspace(): string;
 }
 
+/** The reads a turn does without when the account does not answer, by the event each is logged as. */
+const UNREAD = { facts: 'memory.account_read_failed', listing: 'profile.stored_listing_unread' } as const;
+
 export class AccountReads {
   /**
    * The account's reads a turn makes, held under their refresh rule (design v2 §3, §8): read at their first need, and
@@ -103,13 +106,13 @@ export class AccountReads {
    *  a period; a user object that does not answer costs the turn that block's account lines, never the turn. */
   factsForTurn(): Promise<readonly Fact[]> {
     return settle(Effect.catch(attempt({ doing: "reading the account's facts for the turn", otherwise: 'unavailable' },
-      () => this.ask((stub, caller) => stub.accountMemory_turnFacts(caller))), this.unread('memory.account_read_failed', [])));
+      () => this.ask((stub, caller) => stub.accountMemory_turnFacts(caller))), this.unread('facts', [])));
   }
 
-  /** A read the turn does without when the account does not answer: logged as `event`, and `instead` in its place. */
-  private unread<A>(event: LogEventName, instead: A): (failure: KinuError) => Effect.Effect<A> {
+  /** A read the turn does without when the account does not answer: logged under its name, `instead` in its place. */
+  private unread<A>(read: keyof typeof UNREAD, instead: A): (failure: KinuError) => Effect.Effect<A> {
     return (failure) => Effect.sync(() => {
-      diagnostics.failure(event, failure, { workspace: this.host.workspace() });
+      diagnostics.failure(UNREAD[read], failure, { workspace: this.host.workspace() });
 
       return instead;
     });
@@ -199,7 +202,7 @@ export class AccountReads {
    *  that does not answer has none, and the turn sweeps for itself. */
   storedProviderListing(accounts: string): Promise<ProviderListing | null> {
     return settle(Effect.catch(attempt({ doing: "reading the account's last provider listing", otherwise: 'unavailable' },
-      () => this.ask((stub, caller) => stub.storedProviderListing(caller, accounts))), this.unread<ProviderListing | null>('profile.stored_listing_unread', null)));
+      () => this.ask((stub, caller) => stub.storedProviderListing(caller, accounts))), this.unread<ProviderListing | null>('listing', null)));
   }
 
   /** Keeps a complete listing at the account under what it was swept under. */

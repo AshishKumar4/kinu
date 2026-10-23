@@ -106,9 +106,9 @@ export function LimitRow({ reading }: { reading: LimitReading }) {
   const words = wordsOf(reading);
 
   return (
-    <div className="grid grid-cols-[1.25rem_1fr] items-start gap-x-3 gap-y-1 px-4 py-3" data-limit={reading.id}>
-      <span className="mt-px p-text-2">{words.icon}</span>
-      <div className="min-w-0 space-y-2">
+    <div className="flex items-start gap-3 px-4 py-3" data-limit={reading.id}>
+      <span className="mt-px shrink-0 p-text-2">{words.icon}</span>
+      <div className="min-w-0 flex-1 space-y-2">
         <div className="flex items-baseline gap-2">
           <span className="t-item p-text">{words.name}</span>
           <span className="t-meta ml-auto tabular-nums p-text-2">{words.shown}</span>

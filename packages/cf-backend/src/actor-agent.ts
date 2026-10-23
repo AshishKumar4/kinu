@@ -44,7 +44,7 @@ import {
 } from "./cli/rpc-gate";
 import { codemodeSurface, HeldReads, PAGE_KEEPALIVE, readsWrittenBy, ROSTER_READS, type LiveRead, type SqlExec } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
-import { attemptInItsWords, createAgentTracing, hold, recording, renderThrownChain, type AgentTracing, type LogEventName, settle, settleSync, settleLoggedSync, settleLogged } from "@kinu.run/core/obs";
+import { attemptInItsWords, createAgentTracing, hold, recording, renderThrownChain, type AgentTracing, settle, settleSync, settleLoggedSync, settleLogged } from "@kinu.run/core/obs";
 import {
   createActorCompaction, type CompactionExtension,
   createCompactionStateStore,
@@ -405,6 +405,9 @@ export interface OwnToolsHeld {
   readonly ledgers: TurnLedgers;
   readonly stores?: ServedStores;
 }
+
+/** The owner's limits an actor asks, by the event an ask that could not reach them is logged as. */
+const LIMITS_UNASKED = { turn: 'limits.turn_unasked', bytes: 'limits.bytes_unasked' } as const;
 
 /** No one has claimed this workspace yet: every path only an owner can take refuses it in these words. */
 export function unownedWorkspace(): KinuError {
@@ -1811,9 +1814,9 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /**
    * `ask` of the owner's limits (core limits/): their own refusal (a limit, a suspension) fails the caller in their
-   * words; an account object that could not be asked is logged as `event` and refuses nothing.
+   * words; an account object that could not be asked is logged under the ask's name and refuses nothing.
    */
-  private admittedByLimits(event: LogEventName, ask: (stub: UserHubClient, caller: UserCaller) => Promise<void>): Effect.Effect<void, KinuError> {
+  private admittedByLimits(asking: keyof typeof LIMITS_UNASKED, ask: (stub: UserHubClient, caller: UserCaller) => Promise<void>): Effect.Effect<void, KinuError> {
     if (this.getOwnerUserId() === null) return Effect.void;
 
     const asked = attemptInItsWords('unavailable', async () => {
@@ -1824,7 +1827,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     return Effect.catch(asked, (failure) => (failure.code === 'budget' || failure.code === 'denied'
       ? Effect.fail(failure)
-      : Effect.sync(() => { diagnostics.failure(event, failure, { workspace: this.workspaceName() }); })));
+      : Effect.sync(() => { diagnostics.failure(LIMITS_UNASKED[asking], failure, { workspace: this.workspaceName() }); })));
   }
 
   /**
@@ -1832,7 +1835,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * (Workers AI through the deployment's binding, `createWorkersAIProvider`) is bounded by the free tier's day of tokens.
    */
   admitModelTurn(spec: string): Promise<void> {
-    return settle(this.admittedByLimits('limits.turn_unasked', (stub, caller) => stub.limits_admitTurn(caller, specProvider(spec) === WORKERS_AI_PROVIDER_ID)));
+    return settle(this.admittedByLimits('turn', (stub, caller) => stub.limits_admitTurn(caller, specProvider(spec) === WORKERS_AI_PROVIDER_ID)));
   }
 
   /** This workspace's stored bytes, as its own database reads them: the platform's number, sampled, never counted. */
@@ -1842,7 +1845,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** New bytes for this workspace (a person's upload, an agent's file): the owner's limits answer, given its size now. */
   protected admitNewBytes(): Effect.Effect<void, KinuError> {
-    return this.admittedByLimits('limits.bytes_unasked', (stub, caller) => stub.limits_admitStoredBytes(caller, this.storedSample()));
+    return this.admittedByLimits('bytes', (stub, caller) => stub.limits_admitStoredBytes(caller, this.storedSample()));
   }
 
   /** Tells the owner's limits this workspace's size now; a failure is logged, never the caller's. */
