@@ -90,11 +90,45 @@ describe('a shot', () => {
 
     store.rendered('board', PORT, T0 + 60_000);
     expect(await store.captureDue(capture(shooting(B), bucket), T0 + 90_000)).toBe(true);
-    expect([...bucket.objects.keys()]).toEqual([pictureKey('ledger', 'board', sha256Hex(B))]);
+    expect(store.digests().get('board')).toBe(sha256Hex(B));
 
     store.rendered('board', PORT, T0 + 120_000);
     expect(await store.captureDue(capture(shooting(B), bucket), T0 + 150_000)).toBe(false);
+    expect([...bucket.objects.keys()].sort()).toEqual([pictureKey('ledger', 'board', sha256Hex(A)), pictureKey('ledger', 'board', sha256Hex(B))].sort());
+  });
+
+  // ARCHITECTURE-DECISIONS W7: the workspace restored to a moment before the replacement names the old picture, and
+  // finds it, for the 30 days a restore reaches; past them and a day it is gone.
+  test('keeps the picture it replaced past the 30 days a restore reaches, then deletes it', async () => {
+    const store = pictures();
+    const bucket = memoryBucket();
+    const day = 86_400_000;
+
+    store.rendered('board', PORT, T0);
+    await store.captureDue(capture(shooting(A), bucket), T0 + 30_000);
+    store.rendered('board', PORT, T0 + 60_000);
+    await store.captureDue(capture(shooting(B), bucket), T0 + 90_000);
+    expect(store.nextDueAt()).toBe(T0 + 90_000 + 31 * day);
+
+    await store.captureDue(capture(shooting(), bucket), T0 + 90_000 + 31 * day - 1);
+    expect(bucket.objects.has(pictureKey('ledger', 'board', sha256Hex(A)))).toBe(true);
+    await store.captureDue(capture(shooting(), bucket), T0 + 90_000 + 31 * day);
     expect([...bucket.objects.keys()]).toEqual([pictureKey('ledger', 'board', sha256Hex(B))]);
+    expect(store.nextDueAt()).toBeNull();
+  });
+
+  test('a picture shot again before its grace ends is kept', async () => {
+    const store = pictures();
+    const bucket = memoryBucket();
+
+    store.rendered('board', PORT, T0);
+    await store.captureDue(capture(shooting(A), bucket), T0 + 30_000);
+    store.rendered('board', PORT, T0 + 60_000);
+    await store.captureDue(capture(shooting(B), bucket), T0 + 90_000);
+    store.rendered('board', PORT, T0 + 120_000);
+    await store.captureDue(capture(shooting(A), bucket), T0 + 150_000);
+    await store.captureDue(capture(shooting(), bucket), T0 + 150_000 + 32 * 86_400_000);
+    expect([...bucket.objects.keys()]).toEqual([pictureKey('ledger', 'board', sha256Hex(A))]);
   });
 
   // Design review 2026-10-20, N6: a capture taken in one mode stood out in the other.
@@ -111,6 +145,7 @@ describe('a shot', () => {
     // Drawn the same in both, the dark one goes with the version it belonged to.
     store.rendered('board', PORT, T0 + 60_000);
     expect(await store.captureDue(capture(shooting(A), bucket), T0 + 90_000)).toBe(true);
+    await store.captureDue(capture(shooting(), bucket), T0 + 90_000 + 31 * 86_400_000);
     expect([...bucket.objects.keys()]).toEqual([pictureKey('ledger', 'board', sha256Hex(A))]);
   });
 
@@ -234,40 +269,55 @@ describe("a removed slate's pictures", () => {
     return store;
   }
 
-  test('go, and then its row', async () => {
+  test('go after the 30 days a restore reaches, its row at once', async () => {
     const bucket = memoryBucket();
     const store = await pictured(bucket);
 
-    await store.forget('ledger', 'board', bucket);
+    await store.forget('ledger', 'board', bucket, T0 + 60_000);
 
-    expect([...bucket.objects.keys()]).toEqual([]);
     expect(store.digests().size).toBe(0);
+    expect(bucket.objects.size).toBe(1);
+    await store.captureDue(capture(failing, bucket, []), T0 + 60_000 + 31 * 86_400_000);
+    expect([...bucket.objects.keys()]).toEqual([]);
+    expect(store.nextDueAt()).toBeNull();
   });
 
-  test('R2 refusing keeps the row that names them, and the removal still goes on', async () => {
+  test('R2 refusing to list them keeps the row that names them, and the removal still goes on', async () => {
     const bucket = memoryBucket();
     const store = await pictured(bucket);
-    const refusing: MemoryBucket = { ...bucket, delete: async () => { throw new Error('R2 is unavailable'); } };
+    const refusing: MemoryBucket = { ...bucket, list: async () => { throw new Error('R2 is unavailable'); } };
 
     await store.forget('ledger', 'board', refusing);
 
     expect(store.digests().get('board')).toBe(sha256Hex(A));
   });
 
-  test('that R2 refused go on a later pass, which deletes rather than shoots a slate that is gone', async () => {
+  test('that R2 refused to list go on a later pass, which buries rather than shoots a slate that is gone', async () => {
     const bucket = memoryBucket();
     const store = await pictured(bucket);
     setSystemTime(T0 + 60_000);
 
-    await store.forget('ledger', 'board', { ...bucket, delete: async () => { throw new Error('R2 is unavailable'); } });
+    await store.forget('ledger', 'board', { ...bucket, list: async () => { throw new Error('R2 is unavailable'); } });
     const retryAt = Number(store.nextDueAt());
     expect(retryAt).toBeGreaterThan(T0 + 60_000);
 
     const unshot: PictureCapture = { ...capture(failing, bucket, []), camera: async () => { throw new Error('a gone slate was photographed'); } };
 
     expect(await store.captureDue(unshot, retryAt)).toBe(false);
+    expect(store.digests().size).toBe(0);
+    expect(store.nextDueAt()).toBe(retryAt + 31 * 86_400_000);
+  });
+
+  test('a grace R2 refuses to end is tried again on the next pass', async () => {
+    const bucket = memoryBucket();
+    const store = await pictured(bucket);
+    const due = T0 + 60_000 + 31 * 86_400_000;
+
+    await store.forget('ledger', 'board', bucket, T0 + 60_000);
+    expect(await store.captureDue(capture(failing, { ...bucket, delete: async () => { throw new Error('R2 is unavailable'); } }, []), due).then(() => 'swept', () => 'refused')).toBe('refused');
+    expect(store.nextDueAt()).toBe(due);
+    await store.captureDue(capture(failing, bucket, []), due);
     expect([...bucket.objects.keys()]).toEqual([]);
-    expect(store.nextDueAt()).toBeNull();
   });
 });
 
@@ -329,6 +379,7 @@ describe("a listed share's view", () => {
     expect(store.nextDueAt()).toBe(T0 + 60_000);
     expect(await store.captureDue(capture(shooting(B), bucket, ['board'], s1(() => publication)), T0 + 60_000)).toBe(true);
     expect(store.shareDigest('board', 's1')).toBe(sha256Hex(B));
+    await store.captureDue(capture(shooting(), bucket, ['board'], s1(() => publication)), T0 + 60_000 + 31 * 86_400_000);
     expect([...bucket.objects.keys()]).toEqual([sharePictureKey('ledger', 'board', 's1', sha256Hex(B))]);
   });
 
@@ -346,8 +397,10 @@ describe("a listed share's view", () => {
     store.listed('board', 's1', 'rev-2', T0);
     await store.captureDue(capture(shooting(A, B), bucket, ['board'], s1(() => 'rev-2')), T0 + 300_000);
     expect(bucket.objects.size).toBe(2);
+    setSystemTime(T0 + 300_000);
     await store.unlisted('ledger', 'board', 's1', bucket);
     expect(store.shareDigest('board', 's1')).toBeNull();
+    await store.captureDue(capture(shooting(), bucket, ['board'], s1(() => 'rev-2', () => false)), T0 + 300_000 + 31 * 86_400_000);
     expect([...bucket.objects.keys()]).toEqual([pictureKey('ledger', 'board', store.digests().get('board') ?? '')]);
   });
 });

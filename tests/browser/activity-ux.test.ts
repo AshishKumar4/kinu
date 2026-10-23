@@ -30,6 +30,8 @@ describe("the assistant's activity", () => {
       expect(seen[0]?.changed).toEqual(['agent.createWorkspace, mail.saveDraft']);
       expect(seen[2]?.changed).toEqual([]);
       expect(upcoming).toBe(3);
+      // Its workspace's overview, one quiet link from the header.
+      expect(await page.$eval('[data-activity-overview]', (link) => link.getAttribute('href'))).toBe('/workspace/personal-assistant/overview');
     });
   });
 });

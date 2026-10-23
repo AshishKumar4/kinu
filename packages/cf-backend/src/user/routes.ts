@@ -409,16 +409,21 @@ userRoutes.post('/api/user/chatgpt/paste/start', (c) => settle(Effect.tryPromise
   catch: (cause) => toKinuError({ doing: 'starting the ChatGPT sign-in', cause, otherwise: 'unavailable' }),
 })));
 
-userRoutes.post('/api/user/chatgpt/paste/finish', async (c) => {
-  const body = await safeJson(c.req.raw, v.object({ url: v.string() }));
+// A paste the account refuses says why in its own words: across RPC its refusal is no KinuError, so `routeError`
+// would answer only its class's ("The request is not valid.", production 2026-10-23).
+userRoutes.post('/api/user/chatgpt/paste/finish', (c) => settle(Effect.tryPromise({
+  try: async () => {
+    const body = await safeJson(c.req.raw, v.object({ url: v.string() }));
 
-  if (body === null) return err(400, 'Body must be { url }');
-  const finished = await c.get('stub').finishChatGptPasteSignIn(c.get('owner'), body.url);
+    if (body === null) return err(400, 'Body must be { url }');
+    const finished = await c.get('stub').finishChatGptPasteSignIn(c.get('owner'), body.url);
 
-  if (finished.outcome === 'signed_in') modelSettingsChanged(c);
+    if (finished.outcome === 'signed_in') modelSettingsChanged(c);
 
-  return json({ body: finished });
-});
+    return json({ body: finished });
+  },
+  catch: (cause) => authoredRefusal({ doing: 'finishing the ChatGPT sign-in', cause }),
+})));
 
 userRoutes.delete('/api/user/chatgpt', async (c) => {
   const signedOut = await c.get('stub').signOutChatGpt(c.get('owner'), c.req.query('revoke') === '1');
@@ -429,16 +434,19 @@ userRoutes.delete('/api/user/chatgpt', async (c) => {
 
 userRoutes.post('/api/user/claude/start', async (c) => json({ body: await c.get('stub').startClaudeSignIn(c.get('owner')) }));
 
-userRoutes.post('/api/user/claude/finish', async (c) => {
-  const body = await safeJson(c.req.raw, v.object({ code: v.string() }));
+userRoutes.post('/api/user/claude/finish', (c) => settle(Effect.tryPromise({
+  try: async () => {
+    const body = await safeJson(c.req.raw, v.object({ code: v.string() }));
 
-  if (body === null) return err(400, 'Body must be { code }');
-  const status = await c.get('stub').finishClaudeSignIn(c.get('owner'), body.code);
+    if (body === null) return err(400, 'Body must be { code }');
+    const status = await c.get('stub').finishClaudeSignIn(c.get('owner'), body.code);
 
-  if (status.connected) modelSettingsChanged(c);
+    if (status.connected) modelSettingsChanged(c);
 
-  return json({ body: status });
-});
+    return json({ body: status });
+  },
+  catch: (cause) => authoredRefusal({ doing: 'finishing the Claude sign-in', cause }),
+})));
 
 // Refused whatever the method.
 userRoutes.all('/api/user/config/:key', async (c, next) => {

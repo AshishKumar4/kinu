@@ -5,6 +5,7 @@ import { asFetchFunction, CLAUDE_CRED_KEY, type UserCaller } from '@kinu.run/cor
 import { serveFamily } from './helpers/api';
 import { createTestUserDO, testOwner, TEST_CREDENTIAL_ENCRYPTION_KEY, type TestUserDO } from './helpers/user-do';
 import { bootstrappedProfile, userAccount, workspaceObject } from './helpers/bindings';
+import { acrossRpc } from './helpers/jsrpc-stub';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
 import type { AuthIdentity } from '../src/auth/session';
 import * as v from 'valibot';
@@ -16,6 +17,8 @@ const TOKEN_URL = 'https://api.anthropic.com/v1/oauth/token';
 const TokenRequestSchema = v.object({ grant_type: v.string(), code: v.string(), code_verifier: v.string(), state: v.string() });
 
 const FinishedSchema = v.object({ connected: v.boolean(), error: v.optional(v.string()) });
+
+const RefusalSchema = v.looseObject({ error: v.string() });
 
 const realFetch = globalThis.fetch;
 
@@ -45,7 +48,8 @@ function routes(harness: TestUserDO) {
     async userMcp_warmConnections() { return { servers: 0 }; },
     async listActiveWorkspaces() { return [{ name: 'jarvis', displayName: 'Jarvis', createdAt: 1, lastVisited: 1, nameOrigin: 'user' as const }]; },
     startClaudeSignIn: (caller: UserCaller) => harness.userDO.startClaudeSignIn(caller),
-    finishClaudeSignIn: (caller: UserCaller, code: string) => harness.userDO.finishClaudeSignIn(caller, code),
+    // As production calls it: across RPC, where the object's refusal arrives as no KinuError.
+    finishClaudeSignIn: (caller: UserCaller, code: string) => acrossRpc((pasted: string) => harness.userDO.finishClaudeSignIn(caller, pasted))(code),
   });
 
   const env: UserRoutesEnv<string> = {
@@ -117,9 +121,30 @@ describe('Claude sign-in on the web', () => {
       const status = v.parse(FinishedSchema, await finished.json());
 
       expect(status.connected).toBe(false);
-      expect(status.error).toContain('Invalid authorization code');
+      // Claude's own words, in a sentence that says what to do; not the chain of what Kinu was doing when it failed.
+      expect(status.error).toStartWith("Claude didn't accept that code (Invalid authorization code).");
+      expect(status.error).toContain('start the sign-in again');
+      expect(status.error).not.toContain('token endpoint');
       expect(await storedKeys(harness)).toEqual([]);
       await web.settled();
+    } finally {
+      harness.close();
+    }
+  });
+
+  // Production, 2026-10-23: a paste that is no code answered "The request is not valid."
+  test('a paste that is no Claude code is refused in words that say so, before it reaches Claude', async () => {
+    const harness = createTestUserDO();
+    const web = routes(harness);
+    const seen = claudeTokenEndpoint(() => Response.json({ access_token: 'at', refresh_token: 'rt' }));
+
+    try {
+      await web.start();
+      const finished = await web.call('/claude/finish', { code: 'https://claude.ai/oauth/authorize?client_id=x' });
+
+      expect(finished.status).toBe(400);
+      expect(v.parse(RefusalSchema, await finished.json()).error).toStartWith("That isn't a Claude sign-in code.");
+      expect(seen).toEqual([]);
     } finally {
       harness.close();
     }

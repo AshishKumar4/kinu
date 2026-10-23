@@ -22,6 +22,8 @@ const SCOPES = ['org:create_api_key', 'user:profile', 'user:inference', 'user:se
 
 export const CLAUDE_REFRESH_LEAD_MS = 300_000;
 
+const REFUSED = "Claude's token endpoint refused the sign-in: ";
+
 const TokenResponseSchema = v.looseObject({
   access_token: v.pipe(v.string(), v.minLength(1)),
   refresh_token: v.optional(v.string()),
@@ -69,9 +71,11 @@ function signInCode(returned: string, state: string): Effect.Effect<string, Kinu
     return Effect.fail(new KinuError('denied', `Claude refused the sign-in: ${address.searchParams.get('error') ?? ''}`));
   }
 
-  if (code === '') return Effect.fail(new KinuError('bad_input', 'that is not a Claude sign-in code or the address Claude sent you to'));
+  if (code === '') {
+    return Effect.fail(new KinuError('bad_input', "That isn't a Claude sign-in code. Paste the code Claude showed, or the whole address of the page that didn't load."));
+  }
 
-  if (carried !== state) return Effect.fail(new KinuError('bad_input', 'that code belongs to another sign-in; start it again'));
+  if (carried !== state) return Effect.fail(new KinuError('bad_input', 'That code is from an earlier sign-in. Start the sign-in again.'));
 
   return Effect.succeed(code);
 }
@@ -111,11 +115,27 @@ function tokenRequest(
       const code = rejection.success ? rejection.output.error ?? 'unknown' : 'unknown';
       const reason = rejection.success ? rejection.output.error_description ?? code : `HTTP ${String(response.status)}`;
 
-      return yield* Effect.die(new OAuthTokenError('claude', code, `Claude's token endpoint refused the sign-in: ${reason}`));
+      return yield* Effect.die(new OAuthTokenError('claude', code, `${REFUSED}${reason}`));
     }
 
     return v.parse(TokenResponseSchema, parseJsonValue(text));
   });
+}
+
+/**
+ * A failed code exchange, said to the person who pasted the code: Claude refusing it, in Claude's own words, and what
+ * to do; anything else as a sign-in that did not go through. The chain itself is the diagnostics', not theirs.
+ */
+export function claudeSignInRefusal(failure: Error): string {
+  for (let link: unknown = failure; link instanceof Error; link = link.cause) {
+    if (link instanceof OAuthTokenError && link.issuer === 'claude') {
+      const said = link.message.startsWith(REFUSED) ? link.message.slice(REFUSED.length) : link.message;
+
+      return `Claude didn't accept that code (${said.replace(/\.$/, '')}). A code works once, for a few minutes: start the sign-in again and paste the new one.`;
+    }
+  }
+
+  return "Claude's sign-in didn't go through. Start it again; if it keeps failing, try again in a few minutes.";
 }
 
 export interface ClaudeOAuthClient {

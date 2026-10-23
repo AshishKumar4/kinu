@@ -1,7 +1,8 @@
 /**
  * The new-workspace page's background, driven by the roster's counts via `useRosterActivity`. No chat has it: Home is the
  * assistant's chat, on the plain ground. `<html data-background>` (the gallery's design bar) picks its temperament under
- * review: unnamed, as it ships; `quiet`, fainter, held to the edges and still unless the pointer moves; `none`, no field.
+ * review: unnamed, as it ships; `quiet`, fainter and held to the edges; `none`, no field. Either field is still until the
+ * pointer moves, and settles again once it rests.
  */
 import { useEffect, useRef, type ReactElement } from 'react';
 import { useLocation } from 'react-router-dom';

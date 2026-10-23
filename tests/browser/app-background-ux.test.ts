@@ -126,23 +126,31 @@ function holdAfterFrames(page: Page): Promise<number> {
 
 /** The picture's clock, read once in each of the next `frames` rendered frames:
  *  the frames are the end condition, never a duration. A running loop's own
- *  callback runs before this one in every frame, so it reads higher each time. */
-function clockOverFrames(page: Page, frames: number): Promise<number[]> {
-  return page.evaluate((count: number) => {
+ *  callback runs before this one in every frame, so it reads higher each time.
+ *  `stir`: a pointer moves across the page before the first frame and in each,
+ *  so a field that rests once nothing moves is kept moving while it is read. */
+function clockOverFrames(page: Page, frames: number, stir = false): Promise<number[]> {
+  return page.evaluate((count: number, stirring: boolean) => {
     const { promise, resolve } = Promise.withResolvers<number[]>();
     const seen: number[] = [];
 
+    const move = (): void => {
+      if (stirring) window.dispatchEvent(new PointerEvent('pointermove', { clientX: 1100 + seen.length * 4, clientY: 120, pointerType: 'mouse' }));
+    };
+
     const read = (): void => {
       seen.push(window.__kinuAppBackground?.time() ?? -1);
+      move();
 
       if (seen.length === count) resolve(seen);
       else requestAnimationFrame(read);
     };
 
+    move();
     requestAnimationFrame(read);
 
     return promise;
-  }, frames);
+  }, frames, stir);
 }
 
 /** How far the clock moved from each reading to the next. */
@@ -226,12 +234,13 @@ describe('the living background', () => {
       try {
         await liveBackground(page);
 
+        // Stirred all along: a resting field's clock stands still whether or not the tab is hidden.
         await setTabHidden(page, true);
-        const hidden = await clockOverFrames(page, 30);
+        const hidden = await clockOverFrames(page, 30, true);
         expect(stepsOf(hidden).filter((step) => step !== 0)).toEqual([]);
 
         await setTabHidden(page, false);
-        const shown = await clockOverFrames(page, 30);
+        const shown = await clockOverFrames(page, 30, true);
         expect(stepsOf([...hidden.slice(-1), ...shown]).filter((step) => step <= 0)).toEqual([]);
       } finally {
         await page.close();
@@ -301,10 +310,10 @@ describe('the living background', () => {
     });
   });
 
-  // 2026-10-20, the owner: "more subtle, and more interactive to the cursor", and no idle CPU.
-  test('quiet, it draws nothing while nothing moves, lights under the moving pointer, and rests again', async () => {
+  // 2026-10-20, the owner: "more subtle, and more interactive to the cursor", and no idle CPU; 2026-10-23, as it ships too.
+  test.each([['as it ships', ''], ['quiet', '&background=quiet']])('%s, it draws nothing while nothing moves, lights under the moving pointer, and rests again', async (_name, background) => {
     await withGallery(async (gallery) => {
-      const page = await freshPage(gallery, '&path=/new&background=quiet', 'light');
+      const page = await freshPage(gallery, `&path=/new${background}`, 'light');
 
       try {
         await liveBackground(page);
@@ -383,7 +392,7 @@ describe('the living background', () => {
 
         await waitForMode(page, 'working');
 
-        // One decision waiting: a flash, then back under the working hum.
+        // One decision waiting: a flash, then back to working.
         await setOverview(page, 'api-worker', { activity: 'working', awaitsSettings: false, decisionsWaiting: 1, hasUpdates: false, latestRun: null, slates: [], shares: [] });
         await waitForMode(page, 'attention', 1 / 60);
 
