@@ -251,7 +251,7 @@ export async function askedRow<Row extends { readonly answer: string | null; rea
 
 /** What the owner read of a request: every reply its root's turns gave, in order. Its last turn alone read empty where a
  *  task's reminder turn ended a request silently after the turn that answered (8 of the pilot's 160 answers). */
-export function rootAnswer(ended: readonly Pick<CompletedTurn, 'assistantResponse'>[]): string | null {
+function rootAnswer(ended: readonly Pick<CompletedTurn, 'assistantResponse'>[]): string | null {
   const replies = ended.map((turn) => turn.assistantResponse.trim()).filter((reply) => reply !== '');
 
   return ended.length === 0 ? null : replies.join('\n\n');

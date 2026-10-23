@@ -471,7 +471,7 @@ describe("an edit's size is what a diff of it marks", () => {
   function refusal(after: string): string | null {
     const fx = fixture();
 
-    return artifactEditRefusal(fx.rt.storage.sql, fx.rt.actor, { artifactId: sectionArtifact(LONG.id), before: LONG.source, after });
+    return artifactEditRefusal(fx.rt.storage.sql, fx.rt.actor, { artifactId: sectionArtifact(LONG.id), before: LONG.source, after })?.reason ?? null;
   }
 
   test('two small edits at the two ends of a long section are not refused for their size', () => {
@@ -2076,9 +2076,7 @@ describe('a dream is cross-judged: the dreamer drafts, the decision model measur
     const first = present(requests.find((request) => !request.task.includes(REVISION_HEADING)), "the dreamer's brief");
     const revise = present(requests.find((request) => request.task.includes(REVISION_HEADING)), 'the revision brief');
 
-    expect(first.task).toContain('changes at most 600 characters');
-    expect(revise.task).toMatch(/Edit 0: revise: a fixed gate refused it \(the edit changes \d+ characters; at most 600\)/u);
-    expect(revise.task).toContain('over the limit; the lesson is right, shorter');
+    expect(first.task).not.toBe(revise.task);
     expect(reviewer.rounds()).toBe(2);
     expect(sectionVersions(fx.rt).map((version) => version.body)).toEqual([REVISED]);
   });

@@ -80,14 +80,14 @@ export async function scoreAuthoredEdit(deps: { readonly rt: AgentRuntime; reado
   readonly artifactId: string;
   readonly body: string;
   readonly turns: readonly string[];
-}): Promise<{ readonly evidence: ArtifactEvidence; readonly detail: string } | { readonly refused: string }> {
+}): Promise<{ readonly evidence: ArtifactEvidence; readonly detail: string } | { readonly refused: string; readonly oversized?: true }> {
   const { rt } = deps;
   const before = artifactBody(rt.storage.sql, rt.actor, input.artifactId);
 
   if (before === null) return { refused: `${input.artifactId} is no evolvable artifact` };
   const vetoed = artifactEditRefusal(rt.storage.sql, rt.actor, { artifactId: input.artifactId, before, after: input.body });
 
-  if (vetoed !== null) return { refused: vetoed };
+  if (vetoed !== null) return { refused: vetoed.reason, ...(vetoed.oversized && { oversized: true }) };
 
   const bad = listTurnRatings(rt.storage.sql, rt.actor, { turnIds: input.turns }).filter((rating) => isLowRating(rating.score))
     .map((rating): JudgedTurn => ({ id: rating.turnId, side: 'bad', state: `${renderRating(rating)}\n\nWHAT WENT WRONG: ${rating.wrong ?? 'the user was dissatisfied'}` }));

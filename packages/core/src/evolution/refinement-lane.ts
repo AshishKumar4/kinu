@@ -21,7 +21,7 @@ import { Effect, Result } from 'effect';
 import * as v from 'valibot';
 
 import { scoreAuthoredEdit } from './judge';
-import { artifactBody, bundledArtifact, changedChars, listArtifactVersions, MAX_EDIT_CHARS, sectionArtifact, stageArtifact, toolArtifact, type ArtifactEvidence } from './artifacts';
+import { artifactBody, bundledArtifact, listArtifactVersions, MAX_EDIT_CHARS, sectionArtifact, stageArtifact, toolArtifact, type ArtifactEvidence } from './artifacts';
 import { BUILTIN_TOOL_DESCRIPTIONS } from '../tools/registry';
 import { isCorrected, isLowRating, listTurnRatings, renderRatedTurn, type TurnRating } from './ratings';
 import type { DecisionQuestion } from '../providers/decision-model';
@@ -419,15 +419,22 @@ function review(
   });
 }
 
-/** The reviewer's verdicts, each edit the size gate refused turned into a request to revise it, naming the measure. */
+/** The reviewer's verdicts, with every edit the size gate refused, whether the reviewer named it or not, sent back for a
+ *  revision that names the measure. */
 function withSizeRevisions(verdicts: readonly DreamVerdict[], evidence: readonly EditEvidence[]): DreamVerdict[] {
-  return verdicts.map((verdict) => {
-    const measured = evidence.find((each) => each.edit === verdict.edit);
+  const oversized = evidence.filter((measured) => measured.revisable === true && measured.refused !== undefined);
 
-    if (measured?.revisable !== true || measured.refused === undefined) return verdict;
+  return [
+    ...verdicts.filter((verdict) => !oversized.some((measured) => measured.edit === verdict.edit)),
+    ...oversized.map((measured): DreamVerdict => {
+      const said = verdicts.find((verdict) => verdict.edit === measured.edit);
 
-    return { ...verdict, verdict: 'revise', note: `a fixed gate refused it (${measured.refused}): change only the sentences the lesson needs, or drop it. The reviewer said: ${verdict.note}` };
-  });
+      return {
+        edit: measured.edit, verdict: 'revise',
+        note: `a fixed gate refused it (${measured.refused ?? ''}): change only the sentences the lesson needs, or drop it.${said === undefined ? '' : ` The reviewer said: ${said.note}`}`,
+      };
+    }),
+  ];
 }
 
 /** What the reviewer reads about each edit, measured before it is judged; a static gate's refusal routes it nowhere. */
@@ -453,10 +460,8 @@ function scoreEdits(
           const scored = await scoreAuthoredEdit({ rt: deps.control.rt, decide }, { artifactId, body: change.source, turns: request.turnIds });
 
           if (!('refused' in scored)) return { edit, note: scored.detail, artifact: scored.evidence };
-          const before = artifactBody(deps.control.sql, deps.control.rt.actor, artifactId);
-          const oversized = before !== null && changedChars(before, change.source) > MAX_EDIT_CHARS;
 
-          return { edit, note: '', refused: scored.refused, ...(oversized && { revisable: true }) };
+          return { edit, note: '', refused: scored.refused, ...(scored.oversized && { revisable: true }) };
         }
 
         case 'skill': {
