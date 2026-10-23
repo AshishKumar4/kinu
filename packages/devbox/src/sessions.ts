@@ -139,11 +139,24 @@ printf '%s\\n' "$DEVBOX_SESSION_RESUME" >${SESSION_RESUME_FILE}
 unset DEVBOX_TMUX_CONF DEVBOX_SESSION_RC DEVBOX_SESSION_RESUME`;
 
 /**
+ * read(2)'s number on each architecture Linux runs a session on, which `/proc/<pid>/syscall` begins with while a
+ * process waits in it: by the kernel's name for the machine (`uname -m`, a `case` pattern) and by Node's (`process.arch`).
+ * A PC's daemon reads the same table (pc-agent daemon/session-facts.js).
+ */
+export const READ_SYSCALLS = [
+  { machine: 'x86_64', arch: 'x64', read: '0' },
+  { machine: 'aarch64', arch: 'arm64', read: '63' },
+  { machine: 'i?86', arch: 'ia32', read: '3' },
+  { machine: 'arm*', arch: 'arm', read: '3' },
+] as const;
+
+/**
  * `reads_terminal PID`: PID is in `read(0)` on a pts, as a program waiting at a prompt is; a shell at its own prompt
  * is in `pselect` (D95, measured). The sessions read asks it of a pane's foreground group, a job's status of its tree.
  */
 export const READS_TERMINAL = `reads_terminal() {
-  [ "$(cut -d' ' -f1-2 "/proc/$1/syscall" 2>/dev/null)" = '0 0x0' ] || return 1
+  case "$(uname -m)" in ${READ_SYSCALLS.map(({ machine, read }) => `${machine}) n=${read} ;;`).join(' ')} *) return 1 ;; esac
+  [ "$(cut -d' ' -f1-2 "/proc/$1/syscall" 2>/dev/null)" = "$n 0x0" ] || return 1
   case "$(readlink "/proc/$1/fd/0")" in /dev/pts/*) return 0 ;; esac
   return 1
 }`;
