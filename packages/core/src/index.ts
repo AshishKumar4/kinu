@@ -623,7 +623,6 @@ export { driveDeliveredRun, driveSeatedRun } from './heads/delivered-run';
 
 export { initWorkspaceActorTable, facetNamesGiven, WorkspaceActorDirectory, subagentDescendants, stoppedBelow, isSubagentOrigin, whenActorTakesInput, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, bearWorkspaceIdentity, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActor, type CreateWorkspaceActor, actorStanding, type ActorStanding, actorEnded, endedStandingOf, type ActorEnded } from './identity/workspace-actors';
 
-export type { AnsweredEvolutionSubagent } from './identity/evolution-subagents';
 
 export {
   openLocalRootActor, localActorDirectory, adoptLocalActorHandle, bindLocalActorReference, registerLocalActor, openLocalActor, bindLocalActor, requireLocalActorWorkspace, retireLocalActor, recoverLocalActorRetirements, type LocalActorBinding, type LocalActorConfig,
@@ -1769,7 +1768,7 @@ export { AgentOrchestrator, drainPendingEvents, type AgentOrchestratorDeps } fro
 
 export { SessionAdvisor, type AdvisorContext } from './advisor/session-advisor';
 
-export { type AdvisorLane } from './advisor/advisor-ports';
+export { advisorReadTool, advisorReadTools, advisorReadsOver, type AdvisorLane, type AdvisorReadTools } from './advisor/advisor-ports';
 
 export {
   EvolutionLanes, evolutionPassOpen, recordedTurn, type EvolutionLanesDeps, type TurnContinuity,
@@ -2722,6 +2721,7 @@ export {
 export type {
   AgentTurnActivity, AgentRecovery, AgentAnswer, AgentAnswerTexts, AgentStanding, AgentStandingReport, AgentReport, AgentOwes, AdmittedDelivery, AgentSteps, RunEndOutcome, RunEndReport, AgentSnapshot, AgentTurnTask, AgentToolAnswer,
   AgentToolCall, AgentToolDescriptor, AgentHeadDelta, AgentTrace, AgentTurnEnd, PreparedAgentTurn, StoredRow, TurnRequestAt,
+  AgentAdvisorRead,
 } from './subagents/agent-isolate';
 
 export { refusedRun, writesSnapshotRows } from './subagents/agent-isolate';

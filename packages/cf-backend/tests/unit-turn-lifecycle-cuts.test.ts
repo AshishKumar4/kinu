@@ -25,7 +25,7 @@ function ownerWords(text: string): string {
   });
 }
 
-test("a turn that has closed runs no tool call made under it, and a reset workspace refuses it too", async () => {
+test("a turn that has closed runs no tool call or advisor read made under it, and a reset workspace refuses it too", async () => {
   const workspace = gatewayWorkspace(stubAiBinding((run) => chatCompletion(run, 'Done.')));
 
   await catalogTurn(workspace.agent, 'First turn.');
@@ -36,6 +36,9 @@ test("a turn that has closed runs no tool call made under it, and a reset worksp
   const late = { activity: [], turnId: closed.turn_id, runId: closed.run_id, epoch: closed.seq, mode: 'build' as const, parentDriven: false, callId: 'late-call', name: 'tasks', input: { op: 'add', titles: ['STALE_RPC_TASK'] } };
 
   await expect(port.executeTool(late)).rejects.toMatchObject({ code: 'cancelled' });
+  // Its advisor's reads are fenced as its calls are.
+  await expect(port.advisorRead({ turnId: closed.turn_id, runId: closed.run_id, epoch: closed.seq, callId: 'late-read', name: 'file', input: { op: 'list', path: '.' } }))
+    .rejects.toMatchObject({ code: 'cancelled' });
   const restarted = await reactivateOrchestratorHarness(workspace.db);
 
   await expect((await restarted.agent.agentWorkspace(actorId)).executeTool(late)).rejects.toMatchObject({ code: 'cancelled' });

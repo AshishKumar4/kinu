@@ -1138,38 +1138,51 @@ a facet of its own) and D13's "every agent's advisor in core `ActorAdvisor`".
   agents that take input, run while the owner's switch is on. Each step's
   output is read once as the step ends (`onStepEnd`, `[in progress]`), one
   review at a time, and steps that end during a review are read by the next.
-  It keeps its own append-only conversation, cleared past 240k characters,
+  It keeps its own conversation in a 48k-character window cut in halves,
   and calls the fixed deep route (`resolveModelRoute('advisor', …)`) through
   the turn's own model sources (`turn-assembly`'s `input.advisor`), billed as
   `advisor`. It has read-only file and memory tools on a ledger of their own,
-  so its reads never count as the agent's; hosted facets run with
-  `stores: null`, so in the cloud it has none yet. Credentials are redacted
+  so its reads never count as the agent's; in an agent's facet, whose turn
+  has no stores, the workspace serves them over the agent's held port
+  (`advisorRead`), fenced as its tool calls are. Credentials are redacted
   before its model reads anything, as the hire's prompt was. Its one voice is
   `advise({note, severity, class})`, all three required, judged by
   `judgeNote` as before; at most 4 notes short of a blocker per review, and a
   repeated call is warned once, then ends the review.
 - While the turn runs, a note lands at the next step and a blocker also
-  releases the step's foreground calls, as a person's words do. The turn's end
-  waits up to 120 s for its last step's review; from then a blocker opens the
-  next turn and a nit or concern is kept unsaid. A review keeps the turn it
-  began on: one that outlives its turn speaks only as that turn's after-turn
-  review, and the next turn drops the last one's steps not yet reviewed. A
-  failed turn, which emits no `onTurnEnd`, is ended for its advisor by the
-  execution's cleanup. A hired agent's blocker also reaches its hirer. A note
+  releases the step's foreground calls, as a person's words do. Nothing waits
+  on a review, and no clock bounds one: the turn ends when its loop does. Each
+  turn's owed reviews are kept, bound to that turn (its model, read tools and
+  delivery key), and run in order across turn boundaries, so a review that
+  outlives its turn still reviews every step of it, before any later turn's.
+  After its turn a note is that turn's: a blocker opens the next turn, a nit
+  or concern is kept unsaid. Stopping a turn cancels its reviews (the running
+  one's model call and reads aborted, those owed dropped), and a stopped
+  turn's review says nothing. The session's end joins reviews still running
+  (`track`, joined by `settleTracked`, as other post-turn work is); in an
+  agent's facet a review after its turn runs while the isolate lives, its
+  reads refused (the turn's fence) and its charge relayed as made. A failed
+  turn is ended for its advisor by the execution's cleanup. A hired agent's
+  blocker also reaches its hirer. A note
   is said, then recorded: one said and not recorded only misses the dedupe
   window. Its delivery key names its turn and its normalised text, so a turn
   restarted after a death says a new note and never says one twice.
-- Not reviewed: runs (heads, swarm nodes), and a turn whose scaffold runs its
-  own inference instead of `host.defaultInference()`, which emits none of the
-  turn hooks (the hire reviewed such a turn at its end).
+- Not reviewed: runs (heads, swarm nodes). A scaffold's own model calls
+  (`host.llmStream`) are steps like the default loop's: the session feeds one
+  `onStep` from both, and owns the turn's start and end itself.
 - Gone: the hire (`ActorAdvisor`, the `advisor` system role and its prompt),
   `hireAdvisor` and `deliverAdvice`, `AdviceJobs`, `AgentReview` round
-  reviews, `AdvisorRecoverySnapshot`. `advisor_review` stays in the terminal
-  roster as a no-op for rows an earlier build left. A `kinu-advice` job an
-  earlier build queued is dropped by the lifecycle, which finds no capability
-  for it. An `advisor` hire whose turn was still owed at the deploy fails that
-  turn on its unknown role; an evolution hire's report is only stored, so no
-  one is told.
+  reviews, `AdvisorRecoverySnapshot`, the `advisor_review` effect, and the
+  evolution lane's hires (`TemporaryRunRequest.lane`, `reclaim`, `answered`,
+  `forget`, the lane wake). A `kinu-advice` job an earlier build queued is
+  dropped by the lifecycle, which finds no capability for it. An owed terminal
+  effect this build has no handler for (an `advisor_review` row, any name an
+  older build or another key version left) ends at its first pass as a named
+  failure (`turn.terminal_effect_retired`) and leaves its sequence, which then
+  settles: before, it was `blocked`, held its turn's terminal claim open and
+  re-armed a wake every 600 s for ever. A legacy evolution hire's report
+  settles it unread. The `evolution_subagents` table stays empty of new rows
+  until the next reset of the schema drops it.
 - Measured on the worker-heap gate's 150-step turn, advisor answered at once
   with silence, 3 runs a shape on armada (hire: 70102c5fa; in session:
   cac0cbe68, job 20261022200553-3fd08cdc, which 97d575f47's three runs agree
@@ -1181,19 +1194,36 @@ a facet of its own) and D13's "every agent's advisor in core `ActorAdvisor`".
   workspace allocated about 45 MB more under the hire and 17-19 MB more in
   session. In session the turn took 0-22% longer (at most 3.6 s, 24 ms a
   step; 7-25% on 97d575f47). The live set stays flat; the allocation is the
-  advisor's conversation sent whole on every call, so it grows with the
-  square of the steps until the 240k clear.
+  advisor's conversation sent whole on every call, so it grew with the
+  square of the steps until the 240k clear. Since 2026-10-23 the advisor's
+  context is a 48k-character window cut in halves (the turn's request kept),
+  so each request is bounded: 58-59 kB in every third of a 150-step turn's
+  calls, main's peak 60.7-61.8 MB and its allocation 266-282 MB (9a09d9ac5,
+  3 runs). Main's allocation a step still rises from 1.44 to 1.96 MB across
+  the turn's thirds, against a flat 0.5-0.6 MB unadvised; not from the
+  advisor's requests, cause unknown.
 - Containment, same jobs, every run alike: an advisor call that throws, and
   one beside an uncaught throw (from a timer on 97d575f47, a microtask on
   cac0cbe68) and a rejection no one awaits, each left main's turn to run all
   4 of its steps and come to rest (263-764 ms), its isolate kept (a buffer
   planted before it was still there), and the next turn reviewed. A note
-  store that throws fails that one advice call (unit test). A 200 MB
-  allocation and a 44 s CPU loop were not run: workerd enforces neither
-  limit. On the platform D9 measured that both reset the isolate that runs
-  them, which is now the reviewed agent's, so such a failure costs that
-  agent's turn, recovered as any reset turn is (D13), and leaves the
-  workspace standing.
+  store that throws fails that one advice call (unit test).
+- Platform limits, measured 2026-10-23 on a throwaway Worker (a workspace DO
+  with agents as loader facets, each its own loader id; a turn of steps, each
+  a call into the agent; the advisor started detached at step 1's end;
+  `kinu-advisor-probe-1023`, deleted). 200 MB held on the advisor's JS heap
+  reset the agent's isolate within a step ("exceeded its memory limit"), 5 of
+  5 runs: its turn failed from the next step, the workspace and a sibling
+  agent kept their isolates, and the next request found the agent in a new
+  isolate with its SQLite intact. 200 MB of Uint8Array (off-heap) reset
+  nothing (2 of 2). A 44 s synchronous loop failed the step running it at the
+  facet's ~30 s ("exceeded CPU time limit", D10) and reset the agent alone (2
+  of 2). The same CPU in yielding slices, running on after the call that
+  started it, was cut after about 1.5 s of CPU, "reset because its code was
+  updated", and a sibling agent's isolate was reset with it (4 of 4; 0.84 s
+  was fine). So an advisor's runaway kills its own agent's turn, which recovers
+  as any reset turn does (D13), never the workspace; detached CPU can also
+  reset a sibling agent, cause unknown.
 - Not measured: review latency on a real provider. The step loop never waits
   for a review mid-turn; the turn's end waits for its last step's review, one
   model call when the advisor reads nothing.

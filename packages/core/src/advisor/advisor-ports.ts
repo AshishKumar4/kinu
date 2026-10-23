@@ -3,7 +3,7 @@
  * The tools are the agent's own operations, served again over a ledger of the advisor's own: an advisor read must not
  * count as the agent's, which is what lets the agent edit a file.
  */
-import type { Tool, ToolSet } from 'ai';
+import { jsonSchema, tool, type Tool, type ToolSet } from 'ai';
 import * as v from 'valibot';
 import { TurnContextBudget } from '../context-budget';
 import type { ModelCallSpend } from '../events/model-call';
@@ -15,7 +15,8 @@ import { serveMemory, type MemoryDeps } from '../tools/memory-operations';
 import { nativeTool } from '../tools/operation-surfaces';
 import { BUILTIN_TOOL_DESCRIPTIONS } from '../tools/registry';
 import { TurnFileLedger } from '../vfs/file-ledger';
-import { JsonValueSchema } from '../utils/json';
+import { JsonValueSchema, type JsonValue } from '../utils/json';
+import type { AgentToolDescriptor } from '../subagents/agent-isolate';
 import type { Served } from '../operations/operation';
 import type { AdvisorModel } from './session-advisor';
 
@@ -35,6 +36,13 @@ function readOnly(served: readonly Served[], allowed: ReadonlySet<string>): Serv
 export interface AdvisorReadTools {
   readonly file?: Tool;
   readonly memory?: Tool;
+}
+
+/** The advisor's read tool called `name`, if it has one. */
+export function advisorReadTool(reads: AdvisorReadTools, name: string): Tool | undefined {
+  if (name === 'file') return reads.file;
+
+  return name === 'memory' ? reads.memory : undefined;
 }
 
 /** The advisor's read-only tools over the agent's file plane and memory, each absent where the agent has none. */
@@ -58,17 +66,44 @@ export function advisorReadTools(planes: {
 
 const ToolCallSchema = v.object({ toolCallId: v.string(), toolName: v.string(), input: JsonValueSchema });
 
-/** What a backend binds the advisor's model calls with: its registry's binder, its route walk and its spend sink. */
+/** The advisor's read-only tools as an agent's isolate offers them, each executed where the agent's stores are: the
+ *  workspace serves `advisorReadTools` there, from which `descriptors` were described, and answers each read as the
+ *  text the advisor reads. */
+export function advisorReadsOver(
+  descriptors: readonly AgentToolDescriptor[],
+  read: (call: { readonly callId: string; readonly name: string; readonly input: JsonValue }) => Promise<string>,
+): AdvisorReadTools {
+  const crossing = (name: 'file' | 'memory'): Tool | undefined => {
+    const described = descriptors.find((descriptor) => descriptor.name === name);
+
+    return described === undefined ? undefined : tool({
+      description: described.description,
+      inputSchema: jsonSchema(described.inputSchema),
+      execute: async (input, { toolCallId }) => await read({ callId: toolCallId, name, input: v.parse(JsonValueSchema, input) }),
+    });
+  };
+
+  const [file, memory] = [crossing('file'), crossing('memory')];
+
+  return { ...(file !== undefined && { file }), ...(memory !== undefined && { memory }) };
+}
+
+/** What a backend binds the advisor's model calls with: its registry's binder, its route walk and its spend sink, and
+ *  the read-only tools it reads with. */
 export type AdvisorLane = RouteWalk & {
+  readonly reads: AdvisorReadTools;
   readonly bind: RouteModelBinder;
   readonly spend: Omit<ModelCallSpend, 'source'>;
 };
 
 /** The advisor's model on its route: the route's fallbacks walked, each call billed as the advisor's. */
 export function routedAdvisorModel(route: ModelRouteResolution, lane: AdvisorLane): AdvisorModel {
-  return async ({ system, messages, tools }) => await onRoute(route, lane, async (serving) => {
+  return async ({ system, messages, tools, signal }) => await onRoute(route, lane, async (serving) => {
     const { model, providerOptions } = lane.bind(serving);
-    const request: GenerateRequest = { model, system, messages: [...messages], tools: tools satisfies ToolSet, ...routeRetryOptions(serving) };
+
+    const request: GenerateRequest = {
+      model, system, messages: [...messages], tools: tools satisfies ToolSet, ...routeRetryOptions(serving), ...(signal !== undefined && { abortSignal: signal }),
+    };
 
     if (providerOptions !== undefined) request.providerOptions = { ...request.providerOptions, ...providerOptions };
     const result = await generateReported(request, { spend: { ...lane.spend, source: route.source }, spec: serving.model });

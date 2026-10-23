@@ -5,8 +5,9 @@
  */
 import type { Database } from 'bun:sqlite';
 import { expect, test } from 'bun:test';
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { ADVISOR_HEADER } from '@kinu.run/core';
-import { agentSql, catalogTurn, driveUntil, gatewayWorkspace, relayedReports, workspaceMainActor } from './helpers/actor-harness';
+import { agentSql, catalogTurn, driveUntil, gatewayWorkspace, relayedReports, workspaceFiles, workspaceMainActor } from './helpers/actor-harness';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 
@@ -161,4 +162,42 @@ test('a task hire whose advisor has nothing to say still answers its hirer', asy
 
   await driveUntil(workspace, 'the task hire answered its hirer', () => relayedReports(workspace.db).length > 0);
   expect(relayedReports(workspace.db)).toEqual(['The probe succeeded.']);
+});
+
+// The advisor's read tools are the point of its design: a facet's turn runs with no stores of its own, so its advisor
+// reads where the agent's stores are, its workspace, on a ledger of its own.
+test("a hosted hire's advisor reads the workspace's files through its workspace", async () => {
+  const decided = 'Rounding is half-even, decided at the ledger review.';
+  const path = '/home/main/rounding.md';
+  const offered: (readonly string[])[] = [];
+  const readBack: string[] = [];
+
+  const gateway = stubAiBinding((run) => {
+    const { messages, tools } = requestOf(run);
+
+    if (forTheAdvisor(run) && JSON.stringify(messages).includes(MISSION)) {
+      offered.push(tools);
+
+      if (!messages.some((message) => message.role === 'tool')) return toolCallCompletion(run, { tool: 'file', args: { op: 'read', path } }, 'read_0');
+      readBack.push(JSON.stringify(messages.filter((message) => message.role === 'tool')));
+
+      return advising(run, null);
+    }
+
+    if (forTheAdvisor(run)) return advising(run, null);
+
+    if (!forTheHire(run)) return hiring(run, 'advised');
+
+    return chatCompletion(run, 'The probe succeeded.');
+  });
+
+  const workspace = gatewayWorkspace(gateway);
+  await writeText(workspaceFiles(workspace.agent), path, decided);
+  workspaceMainActor(workspace.db).config.setAdvisorEnabled(true);
+  await catalogTurn(workspace.agent, 'Have someone check the probe.');
+  await driveUntil(workspace, "the hire's advisor read the file", () => readBack.length > 0);
+  await joinHarnessFibers();
+
+  expect(offered[0]).toEqual(expect.arrayContaining(['advise', 'file', 'memory']));
+  expect(readBack[0]).toContain(decided);
 });

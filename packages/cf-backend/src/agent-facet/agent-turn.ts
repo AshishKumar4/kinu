@@ -18,7 +18,7 @@ import { compactionDiagnostics, hostedActorCompaction } from '@kinu.run/compacti
 import type { AgentDatabase } from './agent-database';
 import type { StepPacer } from './step-pacer';
 import type { ChatTurnRequest } from '../agent-turns';
-import type { AgentHeadDelta, AgentTurnActivity, ChatWindow, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, CacheWarmArm, HarnessMode, OpenWork, PreparedAgentTurn, RunEndOutcome, TurnCapability } from '@kinu.run/core';
+import type { AgentHeadDelta, AgentTurnActivity, ChatWindow, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentAdvisorRead, AgentTrace, CacheWarmArm, HarnessMode, OpenWork, PreparedAgentTurn, RunEndOutcome, TurnCapability } from '@kinu.run/core';
 
 /** The answer's metadata, unless the workspace reads the turn's narration before it can say it. One shape, not a union:
  *  a stub's promise of a union is a union of promises. */
@@ -104,6 +104,8 @@ export interface AgentWorkspace {
   armCacheWarm(input: CacheWarmArm): Promise<number | null>;
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult>;
   executeTool(call: AgentToolCall): Promise<AgentToolAnswer>;
+  /** One of the turn's advisor's reads, served on the advisor's own ledger: the agent's own tools never run it. */
+  advisorRead(call: AgentAdvisorRead): Promise<string>;
   /** The workspace's receipts for calls of an execution whose rows here only point there; a call it holds none for is
    *  absent. Read only, so a closed or stopped turn's repair still asks. */
   receipts(turnId: string, runId: string, callIds: readonly string[]): Promise<ReadonlyMap<string, RemoteReceipt>>;
@@ -324,16 +326,21 @@ export interface LiveTurn {
 export class FacetSpend {
   private filed: Promise<unknown> = Promise.resolve();
 
+  /** Its end took the run's charges: one made after (its advisor's review of its last step) is relayed as made. */
+  private ended = false;
+
   /** `kept`: a delivered run's charges, which ride its end ({@link takeCharges}); a chat turn's are relayed as made. */
   constructor(private readonly workspace: AgentWorkspace, private readonly kept: ModelCallReport[] | null = null) {}
 
   readonly report = (report: ModelCallReport): void => {
-    if (this.kept === null) this.file(() => this.workspace.reportModelCall(report));
+    if (this.kept === null || this.ended) this.file(() => this.workspace.reportModelCall(report));
     else this.kept.push(report);
   };
 
   /** The charges kept so far, for the end that carries them. */
   takeCharges(): readonly ModelCallReport[] {
+    this.ended = true;
+
     return this.kept?.splice(0) ?? [];
   }
 

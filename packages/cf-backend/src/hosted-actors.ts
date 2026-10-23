@@ -163,7 +163,6 @@ export interface HostedActorSeams {
   deliver<A>(actor: BoundActor, admit: () => OwedAdmission<A>): Promise<A>;
   /** Who assigns the actor its work, as its chat shows it. */
   hirerName(actor: BoundActor): string;
-  rederiveWake(): void;
   temporary(actor: BoundActor): TemporaryAgentPort;
 }
 
@@ -278,8 +277,6 @@ export async function relayHostedReport(
     }),
     announce: () => { seams.announce(hirer); },
     onAdmitted: () => { if (!seams.turnInFlight(hirer.reference)) seams.scheduleDrain(hirer); },
-    // A refiner's answer is read by its lane; nothing is owed a delivery here.
-    onEvolutionAnswer: () => { seams.rederiveWake(); },
     temporary: seams.temporary(hirer),
   }, { fromSubagent: name, ...event }, Date.now());
 }
