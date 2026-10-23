@@ -7,7 +7,7 @@ export { AskOwnerInputSchema, OTHER_OPTION, OWNER_ANSWER_SIGNAL, type OwnerQuest
 
 export { initFiberTable } from './identity/schema';
 
-export { tableExists } from './utils/sql';
+export { statementText, tableExists } from './utils/sql';
 
 export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubagentInspectionRequestSchema, SubagentInspectionResultSchema, readSubagentInspection, missingSubagentHistory, type SubagentInspectionRequest, type SubagentInspectionResult, type SubagentChild } from './subagents/inspection';
 
@@ -1365,7 +1365,6 @@ export {
   FAILURE_WITHOUT_ERROR,
   CONTEXT_EDIT_VIA, CONTEXT_EDIT_STATUSES, CONTEXT_EDIT_BOUNDARIES,
   initRunEventTables,
-  parseStoredRunEvent,
   RunEventSchema,
   recordModelOperations,
   RunEventRecorder, holdRunHeads, type StepSpendSource,
@@ -1398,7 +1397,7 @@ export {
   type RunEventListener,
   type RunEventQuery,
   type BoundedRunEventQuery,
-  type StoredRunEvent, type StoredRunEventRow,
+  type StoredRunEvent,
   type ContextMeasures,
 } from './events/index';
 
@@ -1878,7 +1877,7 @@ export {
 
 export {
   parseSkillFile, skillNameProblem,
-  discoverSkills, readSkillFile, workspaceSkillPath, skillBodyChars,
+  discoverSkills, listSharedSkills, readSkillFile, workspaceSkillPath, skillBodyChars,
   BUILTIN_SKILLS, BUILTIN_SKILL_FILES, BUILTIN_SKILL_HEADERS, BUILTIN_SKILL_NAMES, isBuiltinSkillFile, skillsMount,
   resolveActiveSkills, extractExplicitInvocations, admitSkillsIndex, admitActiveSkills,
   renderActiveSkillsSection, renderSkillsIndexSection, skillIndexLine, unreadSkillLine,
@@ -1890,7 +1889,7 @@ export type {
   SkillHeader, ParsedSkill, DiscoveredSkill, ActiveSkill, SkillBodyRef,
   SkillsIndex, SkillSource, ActiveSkillSet, ActivationReason,
   SkillParseResult,
-  DiscoverOpts, SkillsDiscovery, UnreadSkillFile, SkillFileRefusal,
+  DiscoverOpts, SkillsDiscovery, UnreadSkillFile, SkillFileRefusal, SharedSkillsListing,
   LoadActiveSkillsOpts, ActivatedSkill,
 } from './skills/index';
 

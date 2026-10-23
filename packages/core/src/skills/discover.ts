@@ -4,8 +4,8 @@ import { exists, readText, type VFS, type VfsDirent } from '@nimbus-sh/core/vfs/
  * skipped; reads stay under the `admissionBytes` ceiling and the budget's file count.
  */
 import { admissionBytes, estimateTokens } from '../token-estimate';
-import { Effect, Result } from 'effect';
-import { classify, diagnostics, renderThrownChain, settle, toKinuError } from '../obs/index';
+import { Effect, Exit, Result } from 'effect';
+import { classify, diagnostics, hold, renderThrownChain, settle, toKinuError } from '../obs/index';
 
 
 import { parseSkillFile, skillNameProblem } from './parse';
@@ -41,6 +41,20 @@ export interface DiscoverOpts {
   trust: InstructionTrustResolver;
   /** A file this reader's turns do not index yet, passed over unread (`dreamSkillsHidden`); absent: none. */
   hides?: (file: Pick<SkillFile, 'name' | 'path'>) => boolean;
+  /** The shared Drive's skills root as the turn's opening listed it ({@link listSharedSkills}); absent: listed here. */
+  shared?: SharedSkillsListing;
+}
+
+/** A skills root's candidates, in the order the root's precedence reads them. */
+type SkillCandidate = Omit<SkillFile, 'source'>;
+
+/** The shared Drive's skills root, listed once: its failure is the listing's, met where it is read. */
+export type SharedSkillsListing = Promise<Exit.Exit<readonly SkillCandidate[]>>;
+
+/** Listed as a turn opens, beside its other reads of the account: each listing of the Drive is a call to the account's
+ *  store on the turn's way (#103). */
+export function listSharedSkills(vfs: VFS): SharedSkillsListing {
+  return hold(listSkillCandidates(vfs, SHARED_SKILLS_DIR));
 }
 
 /** The file a skill name loads from; `folder` is set for a `<name>/SKILL.md` folder. */
@@ -93,16 +107,16 @@ function refusalText(name: string, refusal: SkillFileRefusal): string {
 }
 
 function takeSkillFiles(
-  vfs: VFS,
-  root: { readonly dir: string; readonly source: SkillFile['source'] },
+  listed: Effect.Effect<readonly SkillCandidate[]>,
+  source: SkillFile['source'],
   taken: Map<string, SkillFile>,
   refuse: (file: { readonly name: string; readonly path: string }, refusal: SkillFileRefusal) => void,
 ): Effect.Effect<void> {
-  return Effect.map(listSkillCandidates(vfs, root.dir), (candidates) => {
+  return Effect.map(listed, (candidates) => {
     for (const { name, path, folder } of candidates) {
       const refusal = skillFileRefusal(name, taken.get(name));
 
-      if (refusal === null) taken.set(name, { name, source: root.source, path, folder });
+      if (refusal === null) taken.set(name, { name, source, path, folder });
       else refuse({ name, path }, refusal);
     }
   });
@@ -112,17 +126,22 @@ function takeSkillFiles(
 export function listSkillFiles(
   vfs: VFS,
   refuse?: (path: string, reason: string) => void,
+  shared?: SharedSkillsListing,
 ): Promise<SkillFile[]> {
   const winners = new Map<string, SkillFile>();
 
-  return settle(Effect.map(Effect.forEach(SKILL_ROOTS, (root) => takeSkillFiles(vfs, root, winners,
+  const listed = (root: typeof SKILL_ROOTS[number]): Effect.Effect<readonly SkillCandidate[]> => (shared !== undefined && root.source === 'shared'
+    ? Effect.flatten(Effect.promise(() => shared))
+    : listSkillCandidates(vfs, root.dir));
+
+  return settle(Effect.map(Effect.forEach(SKILL_ROOTS, (root) => takeSkillFiles(listed(root), root.source, winners,
     (file, refusal) => refuse?.(file.path, refusalText(file.name, refusal))), { discard: true }), () => [...winners.values()]));
 }
 
 export function refusedSkillFiles(vfs: VFS, dir: string): Promise<ReadonlyMap<string, SkillFileRefusal>> {
   const refused = new Map<string, SkillFileRefusal>();
 
-  return settle(Effect.as(takeSkillFiles(vfs, { dir, source: 'shared' }, new Map(), (file, refusal) => refused.set(file.path, refusal)), refused));
+  return settle(Effect.as(takeSkillFiles(listSkillCandidates(vfs, dir), 'shared', new Map(), (file, refusal) => refused.set(file.path, refusal)), refused));
 }
 
 /** One name's file by the same precedence; null for a built-in or an unmounted optional root. */
@@ -177,7 +196,7 @@ export function discoverSkills(
       opts.admissionTokens / estimateTokens(workspaceSkillIndexLine('a').length + 1),
     );
 
-    for (const { name, source, path } of yield* Effect.promise(() => listSkillFiles(vfs, onErr))) {
+    for (const { name, source, path } of yield* Effect.promise(() => listSkillFiles(vfs, onErr, opts.shared))) {
       if (opts.hides?.({ name, path }) === true) continue;
 
       if (slots <= 0) { omitted += 1; continue; }
@@ -221,7 +240,7 @@ export function discoverSkills(
 }
 
 /** One root's unopened candidates in name order; a missing directory or mount is empty. */
-function listSkillCandidates(vfs: VFS, dir: string): Effect.Effect<Omit<SkillFile, 'source'>[]> {
+function listSkillCandidates(vfs: VFS, dir: string): Effect.Effect<SkillCandidate[]> {
   return Effect.gen(function* () {
     // Listed with no lookup before it, and only a folder or a link asked for its SKILL.md: on the shared Drive each lookup
     // is a call to the account's store on the turn's way, where a missing local root's second walk is a statement (#103).
@@ -231,7 +250,7 @@ function listSkillCandidates(vfs: VFS, dir: string): Effect.Effect<Omit<SkillFil
         : Effect.die(failed.cause))),
     );
 
-    const candidates: Omit<SkillFile, 'source'>[] = [];
+    const candidates: SkillCandidate[] = [];
 
     for (const { name: entry, type } of entries) {
       if (entry.endsWith('.md')) {

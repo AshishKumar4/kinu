@@ -9,9 +9,9 @@ export {
 } from './parse';
 
 export {
-  discoverSkills, readSkillFile, workspaceSkillPath, refusedSkillFiles,
+  discoverSkills, listSharedSkills, readSkillFile, workspaceSkillPath, refusedSkillFiles,
   BUILTIN_SKILL_HEADERS, BUILTIN_SKILL_NAMES,
-  type DiscoverOpts, type SkillsDiscovery, type UnreadSkillFile, type SkillFileRefusal,
+  type DiscoverOpts, type SkillsDiscovery, type UnreadSkillFile, type SkillFileRefusal, type SharedSkillsListing,
 } from './discover';
 
 export { BUILTIN_SKILLS, BUILTIN_SKILL_FILES } from './builtins';

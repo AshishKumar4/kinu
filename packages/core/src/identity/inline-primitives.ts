@@ -5,6 +5,7 @@ import type { WorkspaceBundle, WorkspaceOptions } from '../vfs/nimbus-workspace'
 import { CraftStore as AgentUtilsCraftStore } from '@kinu.run/agent-utils/stores';
 import type { CraftStore } from '../types/agent-runtime';
 import type { RawSqlExec, SqlExec, SqlExecutor, SqlValue, Storage } from '../types/primitives';
+import { statementText } from '../utils/sql';
 import * as v from 'valibot';
 
 export interface AgentDatabase {
@@ -62,7 +63,7 @@ export function wrapDatabase(db: AgentDatabase) {
   const exec = sqlExecOver(db);
 
   const sql: SqlExecutor = <T = unknown>(strings: TemplateStringsArray, ...values: unknown[]): T[] =>
-    exec<T>(strings.join('?'), ...values);
+    exec<T>(statementText(strings), ...values);
 
   const execRaw: RawSqlExec = (ddl: string) => db.exec(ddl);
   const transactionSync: Storage['transactionSync'] = (write) => db.transaction(write)();

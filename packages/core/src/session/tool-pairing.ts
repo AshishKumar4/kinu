@@ -34,6 +34,17 @@ function identified<P extends PairingPart>(part: P): part is CallOrResult<P> {
 export function toolPairingParts<P extends PairingPart>(messages: readonly PairingMessage<P>[]): ToolPairingPart<P>[] {
   const parts: ToolPairingPart<P>[] = [];
 
+  visitToolPairingParts(messages, (at, role, part) => { parts.push({ at, role, part }); });
+
+  return parts;
+}
+
+/** {@link toolPairingParts}, each handed to `visit` as it is met, which builds nothing per part for a question that
+ *  keeps none of them. */
+export function visitToolPairingParts<P extends PairingPart>(
+  messages: readonly PairingMessage<P>[],
+  visit: (at: number, role: 'assistant' | 'tool', part: CallOrResult<P>) => void,
+): void {
   for (let at = 0; at < messages.length; at++) {
     const { role, content } = messages[at];
 
@@ -45,11 +56,9 @@ export function toolPairingParts<P extends PairingPart>(messages: readonly Pairi
       if (part.type !== 'tool-call' && part.type !== 'tool-result') continue;
 
       if (!identified(part)) return settleSync(Effect.fail(new KinuError('bad_input', 'tool history part has no call identity')));
-      parts.push({ at, role, part });
+      visit(at, role, part);
     }
   }
-
-  return parts;
 }
 
 /** Pairing is ordered and includes provider-executed results carried by an assistant message. */

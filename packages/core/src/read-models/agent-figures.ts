@@ -1,7 +1,7 @@
 import * as v from 'valibot';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
-import { parseStoredRunEvent } from '../events/recorder';
 import { summarizeSteps } from '../events/step-stats';
+import { UsageSchema } from '../usage';
 import type { StepCost } from '../events/types';
 
 export interface AgentFigures {
@@ -53,10 +53,8 @@ interface FoldedEvent {
   readonly input: number | null;
   readonly output: number | null;
   readonly usd: number | null;
-  /** A step's own payload, typed where every stored event is (`parseStoredRunEvent`); null for every other event. */
-  readonly step: string | null;
-  readonly run_id: string;
-  readonly event_index: number;
+  /** A step's usage as stored, its JSON; null for every other event. */
+  readonly step_usage: string | null;
   readonly type: string;
   readonly ts: string;
   /** A turn's end: the time since its start. */
@@ -81,11 +79,11 @@ function actorFigures(sql: SqlExecutor, actorId: string): AgentFigures {
 
   // By the actor index's rowid, never by type: the type index would scan every step the actor ever took.
   const events = sql<FoldedEvent>`
-    SELECT e.rowid AS seq, e.run_id, e.event_index, e.type, e.ts,
+    SELECT e.rowid AS seq, e.type, e.ts,
            CASE WHEN e.type IN ('step_finish', 'model_call') THEN json_extract(e.payload, '$.usage.input') END AS input,
            CASE WHEN e.type IN ('step_finish', 'model_call') THEN json_extract(e.payload, '$.usage.output') END AS output,
            CASE WHEN e.type IN ('step_finish', 'model_call') THEN json_extract(e.payload, '$.usd') END AS usd,
-           CASE WHEN e.type = 'step_finish' THEN e.payload END AS step,
+           CASE WHEN e.type = 'step_finish' THEN json_extract(e.payload, '$.usage') END AS step_usage,
            CASE WHEN e.type = 'turn_end' THEN (
              SELECT SUM((julianday(e.ts) - julianday(s.ts)) * 86400000) FROM run_events s INDEXED BY idx_run_events_run_ts
              WHERE s.actor_id = e.actor_id AND s.run_id = e.run_id AND s.type = 'turn_start'
@@ -110,10 +108,13 @@ function actorFigures(sql: SqlExecutor, actorId: string): AgentFigures {
     if (event.ms !== null) activeMs = compensated(activeMs, event.ms);
   }
 
+  // A step's usage decoded alone: its whole payload, parsed through the run-event schema, was 2.8 of the 202 MB a 150-step
+  // turn allocated in its agent's isolate (heap gate, 2026-10-23).
   const window = [...totals.window, ...events.flatMap((event): Array<v.InferOutput<typeof WindowStepSchema>> => {
-    const step = event.step === null ? null : parseStoredRunEvent({ ...event, payload: event.step });
+    if (event.type !== 'step_finish') return [];
+    const usage = event.step_usage === null ? undefined : v.parse(UsageSchema, JSON.parse(event.step_usage));
 
-    return step?.type === 'step_finish' ? [[step.usage?.input ?? null, step.usage?.cacheRead ?? null]] : [];
+    return [[usage?.input ?? null, usage?.cacheRead ?? null]];
   })].slice(-AGENT_STEP_WINDOW);
 
   const steps = window.map(([stepInput, cacheRead]): StepCost => ({

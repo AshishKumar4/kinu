@@ -102,7 +102,14 @@ export function measureContext(input: {
   tools?: ToolDefsLike | undefined;
   messages: readonly ModelMessage[];
 }): ContextComposition {
-  return settleSync(Effect.map(toolSegments(input.tools ?? {}), (toolRows) => composition(input, toolRows)));
+  return settleSync(Effect.map(constantSegments(input), (constants) => composition(constants, input.messages)));
+}
+
+/** The system's sections and the tools' rows: a turn's, measured once by its meter. */
+function constantSegments(turn: TurnConstants): Effect.Effect<readonly ContextSegment[]> {
+  const sections = splitPromptSections(systemText(turn.system)).map((section): ContextSegment => ({ plane: 'system', label: section.title, chars: section.chars, items: 1 }));
+
+  return Effect.map(toolSegments(turn.tools ?? {}), (tools) => [...sections, ...tools]);
 }
 
 function toolSegments(tools: ToolDefsLike): Effect.Effect<ContextSegment[], never> {
@@ -112,21 +119,15 @@ function toolSegments(tools: ToolDefsLike): Effect.Effect<ContextSegment[], neve
   );
 }
 
-function composition(input: Parameters<typeof measureContext>[0], toolRows: readonly ContextSegment[]): ContextComposition {
-  const segments: ContextSegment[] = [];
-
-  for (const section of splitPromptSections(systemText(input.system))) {
-    segments.push({ plane: 'system', label: section.title, chars: section.chars, items: 1 });
-  }
-
-  segments.push(...toolRows);
+function composition(constants: readonly ContextSegment[], messages: readonly ModelMessage[]): ContextComposition {
+  const segments = [...constants];
 
   // Fold per role: a per-message row would be unbounded.
   const roles = new Map<string, { chars: number; items: number }>();
   let ephemeralChars = 0;
   let ephemeralItems = 0;
 
-  for (const message of input.messages) {
+  for (const message of messages) {
     const chars = messageChars(message);
 
     if (isEphemeral(message)) {
@@ -169,6 +170,9 @@ interface TurnConstants {
  *  measurement with its request's usage. */
 export class TurnContextMeter {
   private readonly turn: TurnConstants;
+  /** Its turn's constant rows, measured at its first step: every step re-split the system prompt and re-ran each tool's
+   *  measure, 2.2 of the 202 MB a 150-step turn allocated in its agent's isolate (heap gate, 2026-10-23). */
+  private constants: readonly ContextSegment[] | undefined;
   private latest: ContextComposition | undefined;
 
   constructor(turn: TurnConstants) {
@@ -176,7 +180,18 @@ export class TurnContextMeter {
   }
 
   measure(messages: readonly ModelMessage[]): void {
-    this.latest = measureContext({ ...this.turn, messages });
+    this.latest = composition(this.turnConstants(), messages);
+  }
+
+  turnConstants(): readonly ContextSegment[] {
+    if (this.constants !== undefined) return this.constants;
+
+    return settleSync(Effect.map(constantSegments(this.turn), (constants) => {
+      // A schema its measure could not read yet is asked again at the next step, as each step asked it before.
+      if (Object.values(this.turn.tools ?? {}).every((def) => def?.inputSchema === undefined || MEASURED.has(def.inputSchema))) this.constants = constants;
+
+      return constants;
+    }));
   }
 
   /** Undefined when nothing measured the step; callers report no breakdown rather than an empty one. */
