@@ -361,6 +361,8 @@ describe('the descriptor read is off the connection critical path', () => {
     const h = harness();
     const owner = await testOwner();
     await seedServer(h, 'srv1', { name: 'huge' });
+    seedMcpTools('srv1', [{ name: 'small', inputSchema: { type: 'object' } }]);
+    await readSurface(h, owner);
     seedMcpTools('srv1', [{ name: 'big', description: 'x'.repeat(2 * 1024 * 1024 + 1), inputSchema: { type: 'object' } }]);
 
     const lines = await diagnosticsDuring(async () => {
@@ -368,6 +370,7 @@ describe('the descriptor read is off the connection critical path', () => {
     });
 
     expect(lines.some((line) => line.name === 'mcp.listing_not_kept')).toBe(true);
+    // The smaller list it kept before goes too: a wake seats nothing rather than tools the server no longer lists.
     const woken = createTestUserDO({ storage: h.db });
 
     expect((await readSurface(woken, owner)).descriptors).toEqual([]);
@@ -387,6 +390,30 @@ describe('the descriptor read is off the connection critical path', () => {
 
     const woken = createTestUserDO({ storage: first.db });
     await woken.userDO.userMcp_handleOAuthCallback(owner, 'https://kinu.example/api/user/mcp/callback?state=pending.srv1&code=c');
+
+    expect(recordedMcpLifecycle().exchanged).toContain('srv1');
+    woken.close();
+    first.close();
+  });
+
+  test('a sign-in callback that arrives while a list read dials its server waits for that dial, and exchanges its code', async () => {
+    const first = harness();
+    const owner = await testOwner();
+    await first.userDO.userMcp_list(owner);
+    seedConfiguredMcpServer(sqlExec(first.db), 'srv1', { name: 'linear', url: 'https://mcp.linear.example/mcp', transport: 'streamable-http' });
+    seedSdkMcpServer('srv1', { type: 'streamable-http' }, { name: 'linear', url: 'https://mcp.linear.example/mcp', callbackUrl: 'https://kinu.example/api/user/mcp/callback' });
+    requireMcpSignIn('srv1', 'https://auth.example/authorize?state=pending.srv1');
+
+    const woken = createTestUserDO({ storage: first.db });
+    const dial = hangMcpEstablish();
+    const listing = woken.userDO.userMcp_list(owner);
+
+    await dial.entered;
+    const ended = woken.userDO.userMcp_handleOAuthCallback(owner, 'https://kinu.example/api/user/mcp/callback?state=pending.srv1&code=c');
+
+    await nextTurn();
+    dial.release();
+    await Promise.all([listing, ended]);
 
     expect(recordedMcpLifecycle().exchanged).toContain('srv1');
     woken.close();

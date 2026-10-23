@@ -160,6 +160,19 @@ describe('an MCP preset add', () => {
     h.close();
   });
 
+  test('the first read after a wake names the presets it holds, though it has dialled none', async () => {
+    const h = harness();
+    const owner = await testOwner();
+    await h.userDO.userMcp_add(owner, { presetId: 'github', headers: { Authorization: 'Bearer ghp_test' } }, 'https://kinu.example');
+    await h.userDO.userMcp_list(owner);
+
+    const woken = createTestUserDO({ storage: h.db });
+
+    expect(await woken.userDO.userMcp_connectedPresets(owner)).toEqual(['github']);
+    woken.close();
+    h.close();
+  });
+
   test('the catalog is the authority: a presetId add cannot smuggle its own endpoint', async () => {
     const h = harness({ mcpAppCredentials: ['google'] });
 

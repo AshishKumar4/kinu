@@ -717,6 +717,8 @@ export class UserMcpServers {
 
   async userMcp_connectedPresets(caller: UserCaller): Promise<string[]> {
     await this.host.requireTier(caller, 'mcp.manage');
+    await this.joinActivation();
+    await this.keptListings();
 
     return this.connectedPresets();
   }
@@ -727,6 +729,7 @@ export class UserMcpServers {
    * stands either way.
    */
   private async assistantConnectionsChanged(): Promise<void> {
+    await this.keptListings();
     const assistant = this.host.sqlx<{ value: string }>(`SELECT value FROM user_config WHERE key = ?`, ASSISTANT_CONFIG_KEY)[0]?.value;
 
     if (assistant === undefined) return;
@@ -978,6 +981,9 @@ export class UserMcpServers {
     // dialled for each wake's first turn as before.
     if (written.length > KEPT_LISTING_MAX_CHARS) {
       diagnostics.event('mcp.listing_not_kept', { serverId, chars: written.length });
+      // An older list kept for it would be seated after a wake in place of this one.
+      await this.host.ctx.storage.delete(listingKey(serverId));
+      kept.delete(serverId);
 
       return;
     }
@@ -1279,7 +1285,11 @@ export class UserMcpServers {
       const req = new Request(url);
       const signedFor = new URL(url).searchParams.get('state')?.split('.').at(-1);
 
-      if (signedFor !== undefined) await this.dialIfUndialled(signedFor);
+      if (signedFor !== undefined) {
+        await this.dialIfUndialled(signedFor);
+        await this.dials.get(signedFor);
+      }
+
       const result = await this.host.mcp.handleCallbackRequest(req);
       const run = await this.connectRun(result.serverId, req);
 
