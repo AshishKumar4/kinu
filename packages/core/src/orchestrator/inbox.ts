@@ -572,7 +572,7 @@ export class Inbox {
         });
       }
 
-      const entries: Array<{ readonly message: ModelMessage; readonly durable: boolean }> = [];
+      const entries: Array<{ readonly message: ModelMessage; readonly durable: boolean; readonly landed?: boolean }> = [];
 
       if (users.length > 0) {
         entries.push({ message: landedMessage ?? steerUserMessage(users.map(toUserSteer)), durable: true, landed: landedMessage !== undefined });
