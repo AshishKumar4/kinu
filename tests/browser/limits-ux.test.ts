@@ -23,10 +23,17 @@ async function open(gallery: Gallery, query: string, view: { readonly width: num
 const text = (page: Page, selector: string) => page.$eval(selector, (node) => (node instanceof HTMLElement ? node.innerText : ''));
 
 /** The open dialog's buttons and links, in order, by their words. */
-/** Presses the button `scope` holds whose words start with `words`. */
+/** Presses the button `scope` holds whose words are `words`; whether one was there to press. */
 const press = (page: Page, scope: string, words: string) => page.$$eval(`${scope} button`, (buttons, wanted) => {
-  buttons.find((button) => button.textContent?.trim().startsWith(wanted) === true)?.click();
+  const button = buttons.find((each) => each.textContent?.trim() === wanted);
+
+  button?.click();
+
+  return button !== undefined;
 }, words);
+
+/** Every wait ends: a page that never draws what is awaited fails the test at this bound, never holds it. */
+const WAIT = { timeout: 15_000 } as const;
 
 const dialogActions = (page: Page) => page.$$eval('[role="dialog"] button, [role="dialog"] a', (nodes) => nodes.map((node) => node.textContent?.trim() ?? ''));
 
@@ -35,7 +42,7 @@ describe('the free tier', () => {
     await withGallery(async (gallery) => {
       const page = await open(gallery, '&state=normal');
 
-      await page.waitForSelector('[data-account-limits="free"]');
+      await page.waitForSelector('[data-account-limits="free"]', WAIT);
       expect(await page.$$eval('[data-account-limits] [data-limit]', (rows) => rows.map((row) => row.getAttribute('data-limit')))).toEqual(['workspaces', 'computer_hours', 'stored_bytes', 'model_tokens']);
       expect(await text(page, '[data-limit="workspaces"]')).toContain('2 of 3');
       // Below 80% nothing is near: no bar.
@@ -43,7 +50,7 @@ describe('the free tier', () => {
 
       const invited = await open(gallery, '&state=invited');
 
-      await invited.waitForSelector('[data-account-limits="invited"]');
+      await invited.waitForSelector('[data-account-limits="invited"]', WAIT);
       expect(await text(invited, '[data-account-limits="invited"]')).toContain('no limits');
     });
   });
@@ -52,10 +59,10 @@ describe('the free tier', () => {
     await withGallery(async (gallery) => {
       const page = await open(gallery, '&state=near');
 
-      await page.waitForSelector('[data-limit-banner]');
+      await page.waitForSelector('[data-limit-banner]', WAIT);
       expect(await page.$eval('[data-limit-banner]', (bar) => bar.getAttribute('data-limit-banner'))).toBe('computer_hours');
       await page.click('[data-limit-banner] button[aria-label="Dismiss"]');
-      await page.waitForFunction(() => document.querySelector('[data-limit-banner]')?.getAttribute('data-limit-banner') === 'stored_bytes');
+      await page.waitForFunction(() => document.querySelector('[data-limit-banner]')?.getAttribute('data-limit-banner') === 'stored_bytes', WAIT);
     });
   });
 
@@ -71,7 +78,7 @@ describe('the free tier', () => {
       for (const { dialog, title, actions } of cases) {
         const page = await open(gallery, `&state=full&dialog=${dialog}`);
 
-        await page.waitForSelector('[role="dialog"]');
+        await page.waitForSelector('[role="dialog"]', WAIT);
         expect(await text(page, '[role="dialog"]')).toContain(title);
         // The dialog's own close control comes first; the footer's ways on follow it in order.
         expect((await dialogActions(page)).filter((words) => words !== '')).toEqual(expect.arrayContaining(actions));
@@ -84,7 +91,7 @@ describe('the free tier', () => {
     await withGallery(async (gallery) => {
       const page = await open(gallery, '&state=full');
 
-      await page.waitForSelector('[data-turn-limit="model_tokens"]');
+      await page.waitForSelector('[data-turn-limit="model_tokens"]', WAIT);
       expect(await text(page, '[data-turn-limit="model_tokens"]')).toContain('Use your own key');
     });
   });
@@ -93,18 +100,18 @@ describe('the free tier', () => {
     await withGallery(async (gallery) => {
       const page = await open(gallery, '&state=normal');
 
-      await page.waitForSelector('[data-accounts] table');
+      await page.waitForSelector('[data-accounts] table', WAIT);
       const shown = () => page.$$eval('[data-accounts] tbody tr', (rows) => rows.map((row) => row.getAttribute('data-account')));
 
       expect(await shown()).toHaveLength(5);
-      await press(page, '[data-accounts]', 'At a limit');
-      await page.waitForFunction(() => document.querySelectorAll('[data-accounts] tbody tr').length === 1);
+      expect(await press(page, '[data-accounts]', 'At a limit 1')).toBe(true);
+      await page.waitForFunction(() => document.querySelectorAll('[data-accounts] tbody tr').length === 1, WAIT);
       expect(await shown()).toEqual(['ada@example.com']);
 
-      await press(page, '[data-accounts]', 'Invite');
-      await page.waitForSelector('[role="dialog"]');
-      await press(page, '[role="dialog"]', 'Make a link instead');
-      await page.waitForFunction(() => document.querySelector('[role="dialog"]')?.textContent?.includes('/invite/7f3a9c') === true);
+      expect(await press(page, '[data-accounts]', 'Invite')).toBe(true);
+      await page.waitForSelector('[role="dialog"]', WAIT);
+      expect(await press(page, '[role="dialog"]', 'Make a link instead')).toBe(true);
+      await page.waitForFunction(() => document.querySelector('[role="dialog"]')?.textContent?.includes('/invite/7f3a9c') === true, WAIT);
     });
   });
 
@@ -120,7 +127,7 @@ describe('the free tier', () => {
         for (const state of ['near', 'full', 'invited']) {
           const page = await open(gallery, `&state=${state}`, view);
 
-          await page.waitForSelector('[data-account-limits]');
+          await page.waitForSelector('[data-account-limits]', WAIT);
           await page.screenshot({ path: join(dir, `${name}-${state}.png`), fullPage: true });
           await page.close();
         }
@@ -128,7 +135,7 @@ describe('the free tier', () => {
         for (const dialog of ['workspaces', 'storage', 'computer', 'elsewhere']) {
           const page = await open(gallery, `&state=full&dialog=${dialog}`, view);
 
-          await page.waitForSelector('[role="dialog"]');
+          await page.waitForSelector('[role="dialog"]', WAIT);
           await page.screenshot({ path: join(dir, `${name}-dialog-${dialog}.png`) });
           await page.close();
         }
