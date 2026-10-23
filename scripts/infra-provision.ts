@@ -34,6 +34,10 @@
 
 import { createInterface } from 'node:readline/promises';
 import { randomBytes } from 'node:crypto';
+import * as v from 'valibot';
+import { KinuError } from '@kinu.run/core/obs';
+import { restCall } from './cloudflare-rest';
+import { restApiToken } from './cloudflare-token';
 import {
   type Deployment, type Observation, type Run, authenticated, deployment, environmentArgs, kvNamespace, r2, secretNames,
   requireCloudflareAccountId, vectorize, why,
@@ -72,6 +76,16 @@ export interface SecretIo {
   install(name: string, value: string): Run;
   /** Shows the operator a value minted here, once. */
   show(text: string): void;
+  /** The account's tokens, for the `account-token` supplies; absent where nothing may mint one. */
+  readonly tokens?: AccountTokens;
+}
+
+/** Account-owned tokens, as the operator's own token reaches them (`/accounts/<id>/tokens`). */
+export interface AccountTokens {
+  /** The active tokens named `name`, by id; or why the account would not say. */
+  list(name: string): Promise<{ readonly held: readonly string[] } | { readonly refused: string }>;
+  /** A token named `name` holding the permission group `permission` on this account alone. */
+  mint(name: string, permission: string): Promise<{ readonly id: string; readonly value: string }>;
 }
 
 /** What one environment's Worker says about itself, for the report line. */
@@ -239,6 +253,79 @@ export async function putSecret(name: string, { worker }: Pick<Infrastructure, '
   return { id, outcome: 'created', detail: typed.length > 0 ? 'installed from the value you pasted' : 'generated and installed' };
 }
 
+/**
+ * An `account-token` supply minted and installed, with no one asked (ledger 1019-am). Its name is the Worker's, so each
+ * deployment holds its own. One the Worker names and the account still holds is left; one the account lost is minted
+ * again. None is ever revoked here: deploys of one environment are serialized per machine only, a Worker's secret is
+ * never read back, and a failed install may still have landed, so no token can be proved unheld. Other active tokens
+ * of its name are named as kept.
+ */
+export async function mintAccountToken(name: string, { worker }: Pick<Infrastructure, 'worker'>, io: SecretIo, installed: boolean): Promise<Step | null> {
+  const permission = SUPPLY.get(name)?.permission ?? '';
+  const tokenName = `${worker.workerName} · ${name}`;
+
+  if (io.tokens === undefined) return { id: name, outcome: 'refused', detail: 'nothing here may mint an account token' };
+  const listed = await io.tokens.list(tokenName);
+
+  if ('refused' in listed) return { id: name, outcome: 'refused', detail: `the account would not list its tokens: ${listed.refused}` };
+
+  if (installed && listed.held.length > 0) return null;
+  const minted = await io.tokens.mint(tokenName, permission);
+  const run = io.install(name, minted.value);
+
+  if (!run.ok) return { id: name, outcome: 'failed', detail: `\`wrangler secret put ${name}\` failed, and token ${minted.id} minted for it is kept, as it may have landed: ${why(run)}` };
+
+  const others = listed.held.length === 0 ? '' : `; ${String(listed.held.length)} other active token(s) of that name are kept (${listed.held.join(', ')}), as which one a Worker holds cannot be read back`;
+
+  return { id: name, outcome: 'created', detail: `minted as "${tokenName}" (${permission}) and installed${others}` };
+}
+
+const TokensSchema = v.object({
+  result: v.array(v.object({ id: v.string(), name: v.string(), status: v.string() })),
+  result_info: v.object({ total_count: v.number() }),
+});
+
+/** The largest page the token list serves (Cloudflare's List Tokens reference). */
+const TOKENS_PER_PAGE = 50;
+
+const GroupsSchema = v.object({ result: v.array(v.object({ id: v.string(), name: v.string() })) });
+
+const MintedSchema = v.object({ result: v.object({ id: v.string(), value: v.string() }) });
+
+/** {@link AccountTokens} on `account`, with the operator's own REST token: an account token, owned by the account and
+ *  by no person, is minted with the account's `API Tokens Write` (measured on f44999, 2026-10-23). */
+export function accountTokens(account: string, { token = restApiToken(), api }: { readonly token?: string; readonly api?: string } = {}): AccountTokens {
+  const at = (path: string) => `/accounts/${account}/tokens${path}`;
+
+  return {
+    list: async (name) => {
+      try {
+        const held: string[] = [];
+
+        for (let page = 1, pages = 1; page <= pages; page += 1) {
+          const answer = await restCall({ method: 'GET', path: at(`?per_page=${String(TOKENS_PER_PAGE)}&page=${String(page)}`), token, api }, TokensSchema);
+
+          pages = Math.ceil(answer.result_info.total_count / TOKENS_PER_PAGE);
+          held.push(...answer.result.filter((one) => one.name === name && one.status === 'active').map(({ id }) => id));
+        }
+
+        return { held };
+      } catch (cause) {
+        if (cause instanceof KinuError && cause.code === 'denied') return { refused: cause.message };
+        throw cause;
+      }
+    },
+    mint: async (name, permission) => {
+      const group = (await restCall({ method: 'GET', path: at('/permission_groups'), token, api }, GroupsSchema)).result.find((one) => one.name === permission);
+
+      if (group === undefined) throw new KinuError('missing', `Cloudflare names no permission group "${permission}"`);
+      const policies = [{ effect: 'allow', resources: { [`com.cloudflare.api.account.${account}`]: '*' }, permission_groups: [{ id: group.id }] }];
+
+      return (await restCall({ method: 'POST', path: at(''), token, api, body: { name, policies } }, MintedSchema)).result;
+    },
+  };
+}
+
 /* ── Reporting ────────────────────────────────────────────────────────── */
 
 const MARK = {
@@ -254,8 +341,9 @@ export async function provisionSecrets(
   infrastructure: Pick<Infrastructure, 'worker'>,
   live: Deployment,
   held: () => Observation & { readonly names?: readonly string[] },
-  io: SecretIo,
+  io: SecretIo & { readonly only?: 'account-token' },
 ): Promise<Step[]> {
+  const { only } = io;
   // On a Worker that does not exist `wrangler secret put` makes a placeholder to hold them, so the secrets precede
   // any code, and the first deploy replaces it.
   const observed = live.state === 'absent' ? { state: 'absent' } as const : held();
@@ -270,7 +358,15 @@ export async function provisionSecrets(
   const steps: Step[] = [];
 
   for (const [name, supply] of SUPPLY) {
-    if (supply.handling === 'config-var') continue;
+    if (supply.handling === 'config-var' || (only !== undefined && supply.handling !== only)) continue;
+
+    if (supply.handling === 'account-token') {
+      const step = await mintAccountToken(name, infrastructure, io, names.has(name));
+
+      if (step !== null) steps.push(step);
+      console.log(`  [${MARK[step?.outcome ?? 'existed']}] ${name}\n           ${step?.detail ?? 'held by the account and set'}`);
+      continue;
+    }
 
     if (names.has(name)) {
       console.log(`  [${MARK.existed}] ${name}\n           already set`);
@@ -315,8 +411,24 @@ function manualWorklist(resources: readonly Resource[]): void {
   }
 }
 
+/** `--account-tokens`, as every deploy runs it before its upload gates: each `account-token` supply minted or kept,
+ *  nothing asked, nothing else provisioned. Exits 1 on a token it could not mint, which the infra gate then names. */
+async function mintTokens(environment: (typeof INFRA_ENVIRONMENTS)[number]): Promise<number> {
+  const infrastructure = deriveInfrastructure(environment);
+
+  const steps = await provisionSecrets(infrastructure, deployment(environment), () => secretNames(environment), {
+    ask: async () => '', interactive: false, show: () => undefined, only: 'account-token',
+    install: (secret, value) => wrangler(['secret', 'put', secret, ...environmentArgs(infrastructure.environment)], { stdin: value }),
+    tokens: accountTokens(requireCloudflareAccountId()),
+  });
+
+  return steps.some((step) => step.outcome === 'failed' || step.outcome === 'refused') ? 1 : 0;
+}
+
 async function main(): Promise<number> {
   const environment = environmentFrom(process.argv.slice(2));
+
+  if (environment !== undefined && process.argv.includes('--account-tokens')) return await mintTokens(environment);
 
   if (environment === undefined) {
     console.error(`infra:provision: usage: bun run infra:provision [${INFRA_ENVIRONMENTS.join('|')}]`);
@@ -370,6 +482,7 @@ async function main(): Promise<number> {
       interactive,
       install: (secret, value) => wrangler(['secret', 'put', secret, ...environmentArgs(infrastructure.environment)], { stdin: value }),
       show: (text) => { process.stderr.write(text); },
+      tokens: accountTokens(requireCloudflareAccountId()),
     }));
   } finally {
     reader?.close();

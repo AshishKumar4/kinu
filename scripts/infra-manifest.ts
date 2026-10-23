@@ -569,6 +569,9 @@ export const UNOBSERVABLE = new Map<ResourceKind, string>([
 export type Handling =
   /** provision must ask a human, at a terminal, and cannot proceed without one. */
   | 'prompt'
+  /** an account-owned Cloudflare token of one permission (`Supply.permission`), which the deploy mints itself with the
+   *  operator's own token, named for its Worker, and mints again when it is gone. */
+  | 'account-token'
   /** it exists somewhere else entirely and has to be fetched before starting. */
   | 'out-of-band'
   /** not a secret: a plain value that belongs in `vars`, whose absence turns a
@@ -592,6 +595,8 @@ export interface Supply {
   /** The prompt mints it, 32 random bytes shown exactly once, when the operator presses enter. `paste` says whether
    *  it also installs a value the operator already holds; `keep` is where the shown value must go. */
   readonly minted?: { readonly paste: boolean; readonly keep: string };
+  /** For `account-token`: the one permission group it holds, by Cloudflare's name, on this account alone. */
+  readonly permission?: string;
 }
 
 /**
@@ -671,13 +676,14 @@ export const SUPPLY = new Map<string, Supply>([
       + 'Account | Workers Observability | Read, scoped to this account. The owner mints it.',
   }],
   ['DEVBOX_REGISTRY_TOKEN', {
-    handling: 'prompt',
+    handling: 'account-token',
     required: true,
     absent: 'every workspace box keeps the snapshots of lineages nothing can wake again: a destroyed '
       + 'box, a box re-rooted through chain recovery. They pile up in the image\'s registry repository '
       + 'until they lapse after 30 days, and each box logs that it could not delete them (D65).',
-    source: 'https://dash.cloudflare.com/profile/api-tokens — a custom token with '
-      + 'Account | Containers | Edit, scoped to this account. The owner mints it.',
+    source: 'minted by every deploy as an account token holding Workers Containers Write alone, '
+      + 'named "<worker> · DEVBOX_REGISTRY_TOKEN"; minted again when deleted.',
+    permission: 'Workers Containers Write',
   }],
   ['JWT_SECRET', {
     handling: 'prompt',
