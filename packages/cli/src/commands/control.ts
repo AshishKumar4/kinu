@@ -1,13 +1,12 @@
 import { requireAuthConfig } from '../config';
 import { isReasoningEffort, projectJsonValue, REASONING_EFFORTS, ReasoningEffortSchema, type JsonValue, type ModelMenu, type ReasoningEffort, type TimerTrigger, type TimerTriggerOpts } from '@kinu.run/core';
-import { resolveAgentTarget } from '../agent-target';
+import { resolveAgentTarget, type AgentTarget } from '../agent-target';
 import {
   cancelLocalTrigger,
   createLocalTimerTrigger,
   getLocalToolSurface,
   listLocalJobs,
   listLocalTriggers,
-  readLocalNextTurnTier,
   readLocalWorkspacePins,
   setLocalWorkspaceModel,
   setLocalWorkspaceReasoningEffort,
@@ -16,7 +15,6 @@ import { readDefaultTier } from '../profiles';
 import {
   callAgentRpc,
   CancelJobSchema,
-  CloudAgentStatusSchema,
   CloudBackgroundJobSchema,
   CloudToolDescriptionsSchema,
   CloudTriggerListSchema,
@@ -25,11 +23,12 @@ import {
   type CloudWebhookTrigger,
 } from '../cloud-api';
 import * as v from 'valibot';
-import { ACCENT, DIM, effortRunsAt, OK, printJson, WARN, type NextTurnEffort } from '../display';
+import { ACCENT, DIM, effortRunsAs, OK, printJson, WARN } from '../display';
 import { parsePositiveInt, parseTime, webhookTriggerInput } from '../options';
 import { createConfiguredLocalModelResolver } from '../local-model-resolver';
 import {
   normalizeModelMenu,
+  specWithoutAccount,
   validateModelSpec,
   type AgentModelEntry,
   type AgentModelMenu,
@@ -161,20 +160,28 @@ export async function effortCommand(name: string, level: string | undefined): Pr
 
   const shown = result.effort ?? readDefaultTier()?.reasoningEffort ?? 'medium';
 
-  // The level the next turn sends, as `kinu status` reads it.
-  let next: NextTurnEffort;
+  console.log(`${DIM('reasoning effort')} ${shown}${result.effort === null ? ' (the default tier\'s)' : ''}${await runsAsOnItsModel(target, shown)}`);
+}
 
-  try {
-    const auth = target.mode === 'cloud' ? requireAuthConfig() : null;
+/** What the workspace's model, its own or the default tier's, is sent for `effort`; nothing where the catalog is unread. */
+async function runsAsOnItsModel(target: AgentTarget, effort: ReasoningEffort): Promise<string> {
+  const auth = target.mode === 'cloud' ? requireAuthConfig() : null;
 
-    next = auth === null
-      ? (await readLocalNextTurnTier(target.localName))?.reasoningEffort ?? null
-      : (await callAgentRpc({ origin: auth.origin, token: auth.token, name: target.cloudName, method: 'getAgentStatus', schema: CloudAgentStatusSchema })).reasoningEffort ?? null;
-  } catch (cause) {
-    next = { unread: renderThrownChain({ cause }) };
-  }
+  const pinned = auth === null
+    ? (await readLocalWorkspacePins(target.localName)).model
+    : (await callAgentRpc({ origin: auth.origin, token: auth.token, name: target.cloudName, method: 'getStoredModelSpec', schema: StoredModelSchema })).spec;
 
-  console.log(`${DIM('reasoning effort')} ${shown}${result.effort === null ? ' (the default tier\'s)' : ''}${effortRunsAt(shown, next)}`);
+  const model = pinned ?? readDefaultTier()?.model;
+
+  if (model === undefined) return '';
+
+  const catalog = auth === null
+    ? await loadModelCatalog(() => createConfiguredLocalModelResolver().resolver.listModels())
+    : await loadModelCatalog(() => listCloudAvailableModels(auth.origin, auth.token));
+
+  if ('unreadable' in catalog) return '';
+
+  return effortRunsAs(effort, catalog.models.find((entry) => entry.spec === specWithoutAccount(model))?.reasoningEfforts);
 }
 
 /** Validation is advisory: an unreachable catalog must say why rather than read as an empty menu. */

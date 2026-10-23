@@ -623,23 +623,23 @@ describe('the turn profile authority reader', () => {
     expect(effort('none')).toBeUndefined();
   });
 
-  test('/effort says the level the next turn runs at when the model does not take the stored one', async () => {
+  test('/effort says what the model is sent for a stored level it does not take', async () => {
     const steps = await runScenario(`
       const { updateDefaultTier } = await import('./packages/cli/src/default-model.ts');
       const { executeSlashCommand } = await import('./packages/cli/src/slash-commands.ts');
-      const glm = 'workers-ai/@cf/zai-org/glm-5.3';
       await updateDefaultTier({ model: 'openai/first-model' });
-      const at = (stored, next) => ({
+      const at = (stored, levels) => ({
         getReasoningEffort: async () => stored,
-        getModelSpec: async () => glm,
-        status: async () => ({ name: 'w', purpose: '', model: glm, reasoningEffort: next }),
-        listModels: async () => ({ models: [{ spec: glm, reasoningEfforts: ['low', 'high', 'max'] }], failures: [] }),
+        getModelSpec: async () => 'workers-ai/pinned',
+        listModels: async () => ({ models: [{ spec: 'workers-ai/pinned', reasoningEfforts: levels }], failures: [] }),
       });
-      await step('stale', async () => (await executeSlashCommand(at('medium', 'low'), '/effort')).text);
-      await step('taken', async () => (await executeSlashCommand(at('high', 'high'), '/effort')).text);
+      await step('stale', async () => (await executeSlashCommand(at('medium', ['low', 'high', 'max']), '/effort')).text);
+      await step('none', async () => (await executeSlashCommand(at('medium', []), '/effort')).text);
+      await step('taken', async () => (await executeSlashCommand(at('high', ['low', 'high', 'max']), '/effort')).text);
     `);
 
-    expect(expectText(steps.stale)).toContain('Reasoning effort: medium (the next turn runs at low)\n');
+    expect(expectText(steps.stale)).toContain('Reasoning effort: medium (runs as low)\n');
+    expect(expectText(steps.none)).toContain('Reasoning effort: medium (runs as none: the model takes no level)\n');
     expect(expectText(steps.taken)).toContain('Reasoning effort: high\n');
   });
 });

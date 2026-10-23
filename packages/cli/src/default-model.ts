@@ -2,7 +2,7 @@
 
 import { Effect } from 'effect';
 import { settle } from '@kinu.run/core/obs';
-import { BUILTIN_PROFILE_CATALOG, carriedReasoningEffort, type ProfileCatalogEnvelope, type ReasoningEffort, type TierAssignment } from '@kinu.run/core';
+import { BUILTIN_PROFILE_CATALOG, retargetedTier, type ProfileCatalogEnvelope, type ReasoningEffort, type TierAssignment } from '@kinu.run/core';
 import { firstOpenAiCompatModel, usableModelDefaults } from './config';
 import { createConfiguredLocalModelResolver } from './local-model-resolver';
 import {
@@ -63,12 +63,12 @@ export async function updateDefaultTier(
   }
 
   const current = await loadActiveProfile();
-  const { reasoningEffort: stored, ...previous } = current.catalog.tiers.default;
-  const effort = edit.reasoningEffort ?? (edit.model === undefined ? stored : carriedReasoningEffort(stored, declared));
+  const previous = current.catalog.tiers.default;
+  const moved = edit.model === undefined || edit.reasoningEffort !== undefined ? previous : retargetedTier(previous, edit.model, declared);
 
   const catalog = {
     ...current.catalog,
-    tiers: { ...current.catalog.tiers, default: { ...previous, ...edit, ...effort !== undefined && { reasoningEffort: effort } } },
+    tiers: { ...current.catalog.tiers, default: { ...moved, ...edit } },
   };
 
   return current.authority.kind === 'local'

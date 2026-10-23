@@ -2192,7 +2192,7 @@ export { EvolutionChangelogViewSchema, type EvolutionChangelogView } from './rea
 
 // Profile catalogs
 export {
-  TIER_IDS, DEFAULT_PROVIDER_RETRIES, TierIdSchema, tierIdsOf, isTierId, ROLE_ID_RE,
+  TIER_IDS, DEFAULT_PROVIDER_RETRIES, TierIdSchema, tierIdsOf, isTierId, retargetedTier, ROLE_ID_RE,
   isValidRoleId, validateProfileCatalog, validateProfileCatalogEnvelope,
   profileCatalogCanonical, profileCatalogDigest, deriveRoleLabel, effectiveRoleCatalog,
   BUILTIN_ROLE_DEFINITIONS, BUILTIN_PROFILE_CATALOG,

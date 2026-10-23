@@ -7,7 +7,7 @@ import type { InstructionSourceRow } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { loadActiveProfile, updateDefaultAccount } from './default-model';
 import { readAllAccountUsage } from './account-usage';
-import { effortRunsAt, plural, renderAccountSpendLines, renderSearchTreeLines, type NextTurnEffort } from './display';
+import { effortRunsAs, plural, renderAccountSpendLines, renderSearchTreeLines } from './display';
 import { conversationMarkdown, lastAnswer } from './conversation-export';
 import { listLocalAgentNames } from './agent-list';
 import { writeFileSync } from 'node:fs';
@@ -787,10 +787,12 @@ async function effortCommand({ client, arg }: SlashContext): Promise<SlashOutcom
     const model = spec ?? tier.model;
     // Levels come from the model's catalog entry (#9); unreadable falls back to the whole vocabulary.
     let levels: string;
+    let runs = '';
 
     try {
       const listed = specWithoutAccount(model);
       const declared = (await client.listModels()).models.find((entry) => entry.spec === listed)?.reasoningEfforts;
+      runs = effortRunsAs(current, declared);
       levels = declared === undefined
         ? `${REASONING_EFFORTS.join(', ')} (the catalog does not say which ${model} accepts)`
         : offeredReasoningEfforts(declared, current).join(', ') || 'none; the model takes no effort setting';
@@ -798,18 +800,9 @@ async function effortCommand({ client, arg }: SlashContext): Promise<SlashOutcom
       levels = `${REASONING_EFFORTS.join(', ')} (catalog unavailable: ${renderThrownChain({ cause })})`;
     }
 
-    // The level the next turn sends, as the status reads it.
-    let next: NextTurnEffort;
-
-    try {
-      next = (await client.status()).reasoningEffort;
-    } catch (cause) {
-      next = { unread: renderThrownChain({ cause }) };
-    }
-
     return {
       kind: 'text',
-      text: `Reasoning effort: ${current}${stored === null ? ' (the default tier\'s)' : ''}${effortRunsAt(current, next)}\nLevels for ${model}: ${levels}\nSet this workspace's with /effort <level>.`,
+      text: `Reasoning effort: ${current}${stored === null ? ' (the default tier\'s)' : ''}${runs}\nLevels for ${model}: ${levels}\nSet this workspace's with /effort <level>.`,
     };
   }
 
