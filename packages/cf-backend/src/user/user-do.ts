@@ -849,6 +849,10 @@ export class UserDO extends Agent<Env> {
     return this.mcpServers.userMcp_beginConnect(caller, id, run);
   }
 
+  userMcp_reconnect(caller: UserCaller, id: string): ReturnType<UserMcpServers['userMcp_reconnect']> {
+    return this.mcpServers.userMcp_reconnect(caller, id);
+  }
+
   chatgptPlan(caller: UserCaller): Promise<ChatGptPlanStatus> {
     return this.chatgpt.chatgptPlan(caller);
   }

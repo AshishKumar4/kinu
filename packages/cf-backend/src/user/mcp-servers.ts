@@ -1,6 +1,6 @@
 import { Cause, Effect, Exit } from 'effect';
 import {
-  ConnectRunSchema, nanoid, plainFetch, type ConnectEnded, type JsonObject, type JsonValue, JsonObjectSchema, decodeJsonValue, McpProtocolFailureSchema, type UserCaller, compareCodeUnits, type McpPresetId, type McpRefusal, mcpPresetById, describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor, validateMcpServerInput, readAllowedTools, parseMcpHeaders, McpTransportSchema, type McpTransport, GITHUB_MCP_PRESET, GitHubRefreshAskSchema, refreshGitHub, type GitHubRefreshAnswer, type GitHubRefreshAsk, type McpPresetAvailability, type McpServerSummary, MCP_PRESETS, type McpPreset, CALLABLE_MCP_STATES, mapConnectionStatus, type McpConnectionStatus, mcpCredentialTransport, mcpListingRefusals, McpTransitionLog, observedMcpState, type McpObservedState, type McpToolListing,
+  ConnectRunSchema, nanoid, plainFetch, type ConnectEnded, type JsonObject, type JsonValue, JsonObjectSchema, decodeJsonValue, McpProtocolFailureSchema, type UserCaller, compareCodeUnits, type McpPresetId, type McpRefusal, mcpPresetById, describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor, validateMcpServerInput, readAllowedTools, parseMcpHeaders, McpTransportSchema, type McpTransport, GITHUB_MCP_PRESET, GitHubRefreshAskSchema, refreshGitHub, type GitHubRefreshAnswer, type GitHubRefreshAsk, type McpPresetAvailability, type McpServerSummary, MCP_PRESETS, type McpPreset, CALLABLE_MCP_STATES, mapConnectionStatus, type McpConnectionStatus, mcpCredentialTransport, mcpListingRefusals, McpTransitionLog, observedMcpState, type McpObservedConnection, type McpObservedState, type McpToolListing,
 } from '@kinu.run/core';
 import type { MCPClientManager } from 'agents/mcp/client';
 import type { CallToolResult } from '@modelcontextprotocol/client';
@@ -105,6 +105,36 @@ function offersSignIn(status: McpConnectionStatus, server: { readonly oauthClien
   if (server.credential) return false;
 
   return status === 'authenticating' || (status === 'failed' && server.oauthClient);
+}
+
+/**
+ * The longest a turn's tool surface waits for the dials its object's wake started. A UserDO hibernates after seconds
+ * idle and every wake dials each server again (production, the owner's account, 2026-10-23: 22 wakes in 20 minutes, each
+ * after 14-56 s idle; GitHub ready 1-2 s into each), so a turn that read its surface at once opened without the
+ * servers its own call had just woken. A dial still out past this is named unavailable, still connecting.
+ */
+const SEAT_WAIT_MS = 8_000;
+
+/** Why a server offers no tools to a turn that opened while it was not ready, as its connection stands. */
+function notSeatedReason(connection: McpObservedConnection | undefined): string {
+  const fixed = 'A turn\'s tool set is fixed when it opens; the next turn reads the connection again.';
+
+  switch (observedMcpState(connection)) {
+    case 'connecting':
+    case 'discovering':
+    case 'connected':
+      return `still connecting ${String(SEAT_WAIT_MS / 1000)} s after this turn opened, so its tools are absent from this turn. ${fixed}`;
+    case 'authenticating':
+      return 'waiting for a sign-in: sign in to it again in Settings → MCP servers.';
+    case 'failed':
+      return `its connection failed${connection?.connectionError ? `: ${connection.connectionError}` : ''}. It is dialled again when this account's object next wakes, or from Settings → MCP servers.`;
+    case 'closed':
+      return `its connection closed. ${fixed}`;
+    case 'absent':
+    case 'unknown':
+    case 'ready':
+      return `not connected when this turn opened, so its tools are absent from this turn. ${fixed}`;
+  }
 }
 
 /** How many of a server's refusals are kept: enough to find a listing's own among requests made beside it. */
@@ -767,6 +797,7 @@ export class UserMcpServers {
    *  critical path: starts and awaits no network work; `unavailable` lists servers not yet ready. */
   async userMcp_toolDescriptors(caller: UserCaller): Promise<McpToolSurface> {
     await this.host.requireTier(caller, 'mcp.tools');
+    await this.seatConnections();
 
     const catalog = this.catalog();
 
@@ -843,12 +874,7 @@ export class UserMcpServers {
           return { server: r.name, reason: `connected, but its tool list could not be read, so it offers no tools: ${listing.failure}` };
         }
 
-        return {
-          server: r.name,
-          reason: `not connected when this turn opened, so its tools are absent from this turn. They are `
-            + `installed by the next turn once the connection completes: a turn's tool set is fixed `
-            + `when the turn opens.`,
-        };
+        return { server: r.name, reason: notSeatedReason(connections[r.id]) };
       }), ...refused];
 
     // Sorted because the orchestrator's cache hashes this JSON; SDK map order is unstable and would
@@ -857,6 +883,53 @@ export class UserMcpServers {
     out.sort((a, b) => compareCodeUnits(a.toolKey, b.toolKey));
 
     return { descriptors: out, unavailable };
+  }
+
+  /**
+   * Waits, up to {@link SEAT_WAIT_MS}, for the dials this object's wake started: the activation's reconciliation, then
+   * each server it dialled and each the SDK restored. It starts no dial of its own; a server with none out is read as
+   * it stands. `mcp.turn_seated` says how each server stood when the turn took its tools.
+   */
+  private async seatConnections(): Promise<void> {
+    const startedAt = Date.now();
+
+    await this.activationSettled();
+    const dialling = [...this.dials.values()];
+    const timer = Promise.withResolvers<void>();
+    const bound = setTimeout(timer.resolve, SEAT_WAIT_MS);
+
+    try {
+      await Promise.race([Promise.allSettled([...dialling, this.host.mcp.waitForConnections({ timeout: SEAT_WAIT_MS })]), timer.promise]);
+    } finally {
+      clearTimeout(bound);
+    }
+
+    const states = Object.entries(this.host.mcp.mcpConnections).map(([id, connection]) => `${id}:${observedMcpState(connection)}`);
+
+    diagnostics.event('mcp.turn_seated', { dialled: dialling.length, waitedMs: Date.now() - startedAt, servers: states.join(' ') });
+  }
+
+  /**
+   * One server dialled again at the person's ask, for a connection that failed or closed: the row's Reconnect. A server
+   * that needs a sign-in is begun by `userMcp_beginConnect` instead, and one that is live is left alone.
+   */
+  async userMcp_reconnect(caller: UserCaller, id: string): Promise<{ status: McpConnectionStatus; error: string | null }> {
+    await this.host.requireTier(caller, 'mcp.manage');
+    await this.joinActivation();
+    const name = this.catalog().get(id)?.name;
+
+    if (name === undefined || this.host.sqlx<{ id: string }>(`SELECT id FROM user_mcp_servers WHERE id = ?`, id).length === 0) {
+      throw new KinuError('missing', 'This account has no such MCP server.');
+    }
+
+    const state = observedMcpState(this.host.mcp.mcpConnections[id]);
+
+    if (state !== 'failed' && state !== 'closed' && state !== 'absent') throw new KinuError('bad_input', `${name} is ${state}, not failed: there is nothing to reconnect.`);
+    diagnostics.event('mcp.reconnect_asked', { serverId: id, from: state });
+    await this.dialAlone(id, async () => this.connectAndDiscover(id));
+    const connection = this.host.mcp.mcpConnections[id];
+
+    return { status: mapConnectionStatus(connection?.connectionState), error: connection?.connectionError ?? null };
   }
 
   /** Called over RPC by the orchestrator's per-tool closure; the result must be JSON-serializable. */

@@ -32,7 +32,7 @@ export const PAGE_ROWS = {
   devices: ['device-link', 'two-machines'],
   mail: { unreachable: 'mail defaults to deployment operators only (MAIL_ACCOUNTS); the eval-service account cannot claim an address' },
   userSettings: ['account-settings', 'cloudflare-login'],
-  userMcp: ['blueprint-fork', 'mcp-reconnect', 'mcp-expiry'],
+  userMcp: ['blueprint-fork', 'mcp-reconnect', 'mcp-expiry', 'mcp-wake'],
   workspace: ['snapshot-after-turn', 'approve-clears', 'enter-sends'],
   workspaceAgent: ['agent-tab', 'agent-chats-persist', 'agent-dismissed-chat'],
   workspaceAgentPath: ['agent-nested-chat'],

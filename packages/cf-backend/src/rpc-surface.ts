@@ -199,6 +199,7 @@ const USER_DO_METHODS = [
   'userMcp_githubRefresh',
   'userMcp_handleOAuthCallback',
   'userMcp_beginConnect',
+  'userMcp_reconnect',
   'userMcp_connectedPresets',
   'userMcp_list',
   'userMcp_presets',

@@ -2,12 +2,12 @@
 import { Effect } from 'effect';
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 import {
-  ArrowSquareOutIcon, PlusIcon, SignInIcon, TrashIcon, XIcon,
+  ArrowClockwiseIcon, ArrowSquareOutIcon, PlusIcon, SignInIcon, TrashIcon, XIcon,
 } from "@phosphor-icons/react";
 import {
   MCP_PRESETS, mcpPresetById, type ConnectEnded, type McpPreset, type McpPresetId, type McpServerSummary,
 } from "@kinu.run/core";
-import { addMcpServer, removeMcpServer, type McpServerInput } from "@/lib/user-api";
+import { addMcpServer, reconnectMcpServer, removeMcpServer, type McpServerInput } from "@/lib/user-api";
 import { beginConnect, signInMcpServer, type ConnectRun } from "@/lib/connect-window";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { SECRET_REGION } from "@/components/ui/SecretValue";
@@ -171,6 +171,20 @@ export function PresetRow({ preset, server, appConfigured, onChanged, onConnecte
 
   const { ask, dialog } = useConfirmation();
 
+  const reconnect = useCallback(() => detach(Effect.promise(async () => {
+    if (server === undefined) return;
+
+    try {
+      const after = await reconnectMcpServer(server.id);
+
+      setErr(after.error === null ? null : `${preset.title} did not reconnect: ${after.error}`);
+    } catch (cause) {
+      setErr(`${preset.title} did not reconnect: ${renderThrownChain({ cause })}`);
+    }
+
+    onChanged();
+  })), [server, preset.title, onChanged]);
+
   const remove = () => {
     if (!server) return;
     ask({
@@ -186,9 +200,14 @@ export function PresetRow({ preset, server, appConfigured, onChanged, onConnecte
   if (server !== undefined) {
     const signInItem: readonly MenuItem[] = server.signIn ? [{ label: "Sign in", icon: <SignInIcon size={16} />, onSelect: signInAgain, marker: "data-plugin-sign-in" }] : [];
 
+    // A failed connection that needs no sign-in is dialled again on the person's ask.
+    const reconnectItem: readonly MenuItem[] = server.status === "failed" && !server.signIn
+      ? [{ label: "Reconnect", icon: <ArrowClockwiseIcon size={16} />, onSelect: reconnect, marker: "data-plugin-reconnect" }] : [];
+
     trailing = (
       <Menu name={preset.title} items={[
         ...signInItem,
+        ...reconnectItem,
         { label: "Docs", icon: <ArrowSquareOutIcon size={16} />, onSelect: () => { window.open(preset.docsUrl, "_blank", "noopener,noreferrer"); } },
         { label: "Remove", icon: <TrashIcon size={16} />, onSelect: remove, danger: true },
       ]} />
@@ -216,7 +235,7 @@ export function PresetRow({ preset, server, appConfigured, onChanged, onConnecte
       tile={<BrandMark brand={brand} size={18} />}
       status={server === undefined ? undefined : <ServerStatus status={server.status} />}
       action={trailing}
-      below={asking || err !== null ? (
+      below={asking || err !== null || Boolean(server?.error) ? (
         <div className="space-y-1">
           {asking && (
             <div className="flex items-center gap-2">
@@ -231,6 +250,7 @@ export function PresetRow({ preset, server, appConfigured, onChanged, onConnecte
             </div>
           )}
           {err !== null && <p className="t-status p-danger" data-plugin-error>{err}</p>}
+          {err === null && server?.error && <p className="t-status p-danger" data-plugin-error>{server.error}</p>}
         </div>
       ) : undefined}
     />

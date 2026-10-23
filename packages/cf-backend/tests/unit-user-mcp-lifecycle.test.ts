@@ -308,7 +308,7 @@ describe('a server that refuses its tool list', () => {
 });
 
 describe('the descriptor read is off the connection critical path', () => {
-  test('it starts no connection work and waits for none', async () => {
+  test('it starts no connection work of its own', async () => {
     const h = harness();
     const owner = await testOwner();
     await h.userDO.userMcp_list(owner);
@@ -319,36 +319,44 @@ describe('the descriptor read is off the connection critical path', () => {
 
     const surface = await readSurface(h, owner);
 
-    // A dial's `_connectWithRetry` has no bound, so the read starts none and waits for none.
+    // A dial's `_connectWithRetry` has no bound, so the read starts none: it waits only for those a wake started.
     const after = recordedMcpLifecycle();
     expect(after.established.length).toBe(establishedBefore);
     expect(after.restored).toBe(restoredBefore);
-    expect(after.waited).toBe(0);
     expect(surface.descriptors).toEqual([]);
     expect(surface.unavailable[0]?.server).toBe('slow');
     h.close();
   });
 
-  test('it returns promptly while a server is still connecting, and never blocks on it', async () => {
+  // The owner, production, 2026-10-23: the account's object woke 22 times in 20 minutes and dialled every server again
+  // each time; a turn whose call woke it read its tools at once, and opened without GitHub.
+  test('a read made while its object\'s wake is still dialling waits for that dial, and offers the server\'s tools', async () => {
     const first = harness();
     const owner = await testOwner();
     await seedServer(first, 'srv1', { name: 'fast' });
-    seedConfiguredMcpServer(sqlExec(first.db), 'srv2', { name: 'stuck', url: 'https://srv2.example/sse', transport: 'auto', headers: 'sealed' });
+    seedConfiguredMcpServer(sqlExec(first.db), 'srv2', { name: 'waking', url: 'https://srv2.example/sse', transport: 'auto', headers: 'sealed' });
     const gate = hangMcpEstablish();
-    // The activation registers the credentialed server and starts its dial; the warmup waits on it.
+    // The activation registers the credentialed server and starts its dial, as a wake does.
     const h = createTestUserDO({ storage: first.db });
     const warming = h.userDO.userMcp_warmConnections(owner);
 
-    // The gate must be engaged, or this cannot tell "the read does not wait" from "nothing to wait for".
+    // The gate must be engaged, or this cannot tell "the read waits" from "nothing to wait for".
     await gate.entered;
     expect(recordedMcpLifecycle().established).toContain('srv2');
     seedMcpTools('srv1', [{ name: 'ready_tool', inputSchema: { type: 'object' } }]);
+    // The tools it will offer, on a connection still dialling (seeding marks it ready).
+    seedMcpTools('srv2', [{ name: 'woken_tool', inputSchema: { type: 'object' } }]);
+    liveConnection(h, 'srv2').connectionState = 'connecting';
 
-    const surface = await readSurface(h, owner);
+    // Read before the dial ends, released well after a read that did not wait would have answered without it.
+    const reading = readSurface(h, owner);
 
-    expect(surface.descriptors.map((d) => d.toolKey)).toEqual(['mcp_fast_ready_tool']);
-    expect(surface.unavailable.map((u) => u.server)).toEqual(['stuck']);
+    await new Promise((resolve) => { setTimeout(resolve, 200); });
     gate.release();
+    const surface = await reading;
+
+    expect(surface.descriptors.map((d) => d.toolKey)).toEqual(['mcp_fast_ready_tool', 'mcp_waking_woken_tool']);
+    expect(surface.unavailable).toEqual([]);
     await warming;
     h.close();
     first.close();

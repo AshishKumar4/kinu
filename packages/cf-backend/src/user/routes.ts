@@ -43,7 +43,7 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   | 'listCloudflareAccounts' | 'selectCloudflareAccount' | 'listAIGateways' | 'selectAIGateway'
   | 'userMcp_list' | 'userMcp_presets' | 'userMcp_add' | 'userMcp_remove' | 'userMcp_connectedPresets'
   | 'userMcp_handleOAuthCallback'
-  | 'userMcp_beginConnect'
+  | 'userMcp_beginConnect' | 'userMcp_reconnect'
   | 'accountMemory_view' | 'accountMemory_decide' | 'accountMemory_put' | 'accountMemory_forget' | 'accountMemory_forgetNote'
   | 'slateAiSpend'
   | 'listSecrets' | 'putSecrets' | 'setSecretDestination' | 'deleteSecret' | 'grantSecret' | 'revokeSecretGrant'
@@ -557,6 +557,12 @@ userRoutes.post('/api/user/mcp/servers/:id/connect', (c) => settle(Effect.gen(fu
     try: async () => json({ body: await c.get('stub').userMcp_beginConnect(c.get('owner'), decodeURIComponent(rawParam(c, 'id')), body.output.run) }),
     catch: (cause) => authoredRefusal({ doing: 'beginning this MCP server\'s sign-in', cause }),
   });
+})));
+
+// A failed or closed server dialled again at the person's ask (the row's Reconnect).
+userRoutes.post('/api/user/mcp/servers/:id/reconnect', (c) => settle(Effect.tryPromise({
+  try: async () => json({ body: await c.get('stub').userMcp_reconnect(c.get('owner'), decodeURIComponent(rawParam(c, 'id'))) }),
+  catch: (cause) => authoredRefusal({ doing: 'reconnecting this MCP server', cause }),
 })));
 
 userRoutes.delete('/api/user/mcp/servers/:id', (c) => settle(Effect.tryPromise({

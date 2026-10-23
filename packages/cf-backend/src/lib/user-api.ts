@@ -454,6 +454,10 @@ export const addMcpServer   = (input: McpServerInput) =>
 export const beginMcpConnect = (id: string, run: string) =>
   settle(api(v.object({ authUrl: v.string() }), 'POST', `/mcp/servers/${encodeURIComponent(id)}/connect`, { run }));
 
+/** A failed or closed MCP server dialled again: where its connection stands after. */
+export const reconnectMcpServer = (id: string) =>
+  settle(api(v.object({ status: McpServerSummarySchema.entries.status, error: v.nullable(v.string()) }), 'POST', `/mcp/servers/${encodeURIComponent(id)}/reconnect`));
+
 export const removeMcpServer = (id: string) =>
   settle(api(OkSchema, 'DELETE', `/mcp/servers/${encodeURIComponent(id)}`));
 
