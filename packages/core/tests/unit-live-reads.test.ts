@@ -10,6 +10,15 @@ test('a write names the reads of its table and nothing else', () => {
   expect(readsWrittenBy('INSERT INTO t (a) VALUES (?) ON CONFLICT (a) DO UPDATE SET a = excluded.a')).toEqual([]);
 });
 
+test('a write is read as SQLite reads it: quoted and schema-qualified names, a comment or a string naming another table', () => {
+  expect(readsWrittenBy('UPDATE [plan_reviews] SET status = ?')).toContain('getActivePlanReview');
+  expect(readsWrittenBy('INSERT INTO main.background_jobs (id) VALUES (?)')).toEqual(['listBackgroundJobs', 'getWorkspaceTabPresence']);
+  expect(readsWrittenBy("INSERT INTO conversation_entries (body) VALUES ('then UPDATE plan_reviews')")).toEqual([]);
+  expect(readsWrittenBy('-- moves background_jobs too\nUPDATE plan_reviews SET status = ?')).toContain('getActivePlanReview');
+  expect(readsWrittenBy('WITH stale AS (SELECT id FROM plan_reviews) DELETE FROM background_jobs WHERE id IN (SELECT id FROM stale)'))
+    .toEqual(['listBackgroundJobs', 'getWorkspaceTabPresence']);
+});
+
 test('a swarm worker added or removed moves tab presence; its status moves only the Agents panel', () => {
   expect(readsWrittenBy('INSERT INTO head_journal (id) VALUES (?)')).toEqual(['listWorkspaceAgents', 'getWorkspaceTabPresence']);
   expect(readsWrittenBy('DELETE FROM search_nodes WHERE root_id = ?')).toEqual(['getWorkspaceTabPresence']);

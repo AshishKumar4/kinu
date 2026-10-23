@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="640" height="950" viewBox="0 0 640 950" style="max-width:100%;height:auto;display:block" role="img" aria-labelledby="workspace-current-title workspace-current-desc">
 <title id="workspace-current-title">CURRENT: Hosted workspace ownership</title>
-<desc id="workspace-current-desc">One workspace root Durable Object holds the main agent, hires and exploration actors over one workspace SQLite. Actor-scoped records and the canonical Nimbus files share that database. Shared storage is not shared authority.</desc>
+<desc id="workspace-current-desc">One workspace root Durable Object holds the roster of the main agent, hires and exploration actors; each agent runs in its own isolate with its own SQLite, reached by RPC. The root's SQLite keeps actor rows keyed by actor_id and the canonical Nimbus files. Shared storage is not shared authority.</desc>
 <!-- Sources: docs/ARCHITECTURE.md#the-actor-hierarchy; packages/core/src/state/actor-host.ts; packages/cf-backend/src/hosted-actors.ts. Current-source baseline: 95696234e. -->
 <style>text{font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}path,rect{vector-effect:non-scaling-stroke}</style>
 <defs>
@@ -16,7 +16,7 @@
 <tspan x="32" dy="0">Hosted workspace ownership</tspan>
 </text>
 <text x="32" y="111" font-size="21" font-weight="400" fill="#625544" text-anchor="start">
-<tspan x="32" dy="0">One database. Logical actors, actor-led keys.</tspan>
+<tspan x="32" dy="0">Root actor rows in one database; agents isolated.</tspan>
 </text>
 <rect x="24" y="146" width="592" height="430" rx="14" fill="none" stroke="#CBBFA9" stroke-width="2" />
 <text x="40" y="176" font-size="20" font-weight="650" fill="#625544" text-anchor="start">
@@ -28,7 +28,7 @@
 <tspan x="68" dy="0">Main agent</tspan>
 </text>
 <text x="68" y="268" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
-<tspan x="68" dy="0">Default workspace conversation</tspan>
+<tspan x="68" dy="0">Conversation in its own isolate</tspan>
 </text>
 </g>
 <g>
@@ -37,8 +37,8 @@
 <tspan x="68" dy="0">Subagent actor</tspan>
 </text>
 <text x="68" y="380" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
-<tspan x="68" dy="0">Own session, queue,</tspan>
-<tspan x="68" dy="30">home and actor rows</tspan>
+<tspan x="68" dy="0">Own isolate, queue,</tspan>
+<tspan x="68" dy="30">session and home.</tspan>
 </text>
 </g>
 <g>
@@ -59,11 +59,11 @@
 <tspan x="68" dy="0">One workspace SQLite</tspan>
 </text>
 <text x="68" y="543" font-size="18" font-weight="400" fill="#29231C" text-anchor="start">
-<tspan x="68" dy="0">Actor-scoped records</tspan>
+<tspan x="68" dy="0">Actor rows keyed by actor_id</tspan>
 </text>
 </g>
 <text x="320" y="620" font-size="21" font-weight="400" fill="#355B6A" text-anchor="middle">
-<tspan x="320" dy="0">Bound by one ActorHost — no per-actor database, no state RPC</tspan>
+<tspan x="320" dy="0">Root ActorHost; each agent has its own isolate and SQLite.</tspan>
 </text>
 <g>
 <rect x="40" y="648" width="560" height="145" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />

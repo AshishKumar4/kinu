@@ -4,7 +4,7 @@ import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { serveFamily } from './helpers/api';
 import { describe, expect, test } from 'bun:test';
 import { cliRoutes, type CliRoutesEnv } from '../src/cli/routes';
-import { cliAccount, workspaceObject, unreachableAssets, unreachableKv } from './helpers/bindings';
+import { cliAccount, workspaceObject, unreachableAssets, unreachableKv, unreachableNamespace } from './helpers/bindings';
 import { AGENT_RPC_ACCESS, CLI_PREVIEW_ENTRY_PATH, PRIVATE_NO_STORE } from '@kinu.run/core';
 import type { JsonValue } from '@kinu.run/core';
 import type { AccessTokenScope, UserCaller } from '@kinu.run/core';
@@ -199,6 +199,7 @@ function setupEnv(opts: { sessionMintedAt?: number } = {}) {
     OrchestratorAgent: { idFromName: (n) => n, get: () => agent },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     AUTH_KV: unreachableKv('AUTH_KV'),
+    CliAuthDO: unreachableNamespace('CliAuthDO'),
     ASSETS: unreachableAssets(),
   };
 

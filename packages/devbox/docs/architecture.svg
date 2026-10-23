@@ -51,7 +51,7 @@
   <text class="t" x="769" y="56" text-anchor="middle">Container</text>
   <text class="s" x="769" y="80" text-anchor="middle">/workspace on its disk;</text>
   <text class="s" x="769" y="98" text-anchor="middle">starts from a snapshot</text>
-  <text class="s" x="769" y="116" text-anchor="middle">or the image</text>
+  <text class="s" x="769" y="116" text-anchor="middle">its own, else golden</text>
 
   <line class="line" x1="196" y1="80" x2="300" y2="80" marker-end="url(#arrow)"/>
   <text class="s" x="248" y="70" text-anchor="middle">RPC, fetch</text>

@@ -84,15 +84,29 @@ describe('the thread the page paints', () => {
     const answer: UIMessage = { id: 'a0', role: 'assistant', parts: [text('<slate-ui name="first">…</slate-ui>', 'done')] };
     const opened: UIMessage = { id: 'u-click', role: 'user', parts: [text('slate-ui-click')] };
     const liveness = { kind: 'live', turnId: 'u-click' } as const;
+    const stored = new Set(['u1', 'a0']);
 
-    expect(liveTailRow({ rows: [userTurn, answer], liveness })).toBeNull();
-    expect(liveTailRow({ rows: [userTurn, answer, opened], liveness })).toBe('u-click');
+    expect(liveTailRow({ rows: [userTurn, answer], liveness, stored })).toBeNull();
+    expect(liveTailRow({ rows: [userTurn, answer, opened], liveness, stored })).toBe('u-click');
     const streaming: UIMessage = { id: 'a1', role: 'assistant', parts: [] };
 
-    expect(liveTailRow({ rows: [userTurn, answer, opened, streaming], liveness })).toBe('a1');
+    expect(liveTailRow({ rows: [userTurn, answer, opened, streaming], liveness, stored })).toBe('a1');
     // The tab's own stream, before its claim names the turn, owns the last row; nothing live owns none.
-    expect(liveTailRow({ rows: [userTurn, answer], liveness: { kind: 'live', turnId: null } })).toBe('a0');
-    expect(liveTailRow({ rows: [userTurn, answer], liveness: { kind: 'idle' } })).toBeNull();
+    expect(liveTailRow({ rows: [userTurn, answer], liveness: { kind: 'live', turnId: null }, stored })).toBe('a0');
+    expect(liveTailRow({ rows: [userTurn, answer], liveness: { kind: 'idle' }, stored })).toBeNull();
+  });
+
+  // Production, 2026-10-23: a turn a signal opened (a new workspace's first) publishes its opening row only as it ends,
+  // so its answer drew settled while it ran: its work folded, its feedback shown.
+  test("a turn a signal opened draws into the answer its stream writes, never the finished one above", () => {
+    const answer: UIMessage = { id: 'a0', role: 'assistant', parts: [text('done before', 'done')] };
+    const liveness = { kind: 'live', turnId: 'programmatic:sig-1' } as const;
+    const stored = new Set(['u1', 'a0']);
+
+    expect(liveTailRow({ rows: [userTurn, answer], liveness, stored })).toBeNull();
+    const streaming: UIMessage = { id: 'a1', role: 'assistant', parts: [] };
+
+    expect(liveTailRow({ rows: [userTurn, answer, streaming], liveness, stored })).toBe('a1');
   });
 
   test('a live assistant row reads its own parts', () => {

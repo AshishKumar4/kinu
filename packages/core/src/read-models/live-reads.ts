@@ -1,5 +1,5 @@
 import { MEMORY_PATH } from '../memory/note';
-import { WRITE } from '../utils/held-reads';
+import { statementWrite } from '../utils/sql';
 import { workspacePath, WORKSPACE_ROOT } from '../vfs/workspace-path';
 
 export const LIVE_READS = [
@@ -81,14 +81,13 @@ export function readsOfTables(tables: readonly string[]): readonly LiveRead[] {
 }
 
 export function readsWrittenBy(query: string): readonly LiveRead[] {
-  const write = WRITE.exec(query);
-  const table = write?.[2]?.toLowerCase();
+  const write = statementWrite(query);
 
-  if (table === undefined) return NONE;
+  if (write === null) return NONE;
 
-  const membership = write?.[1]?.toUpperCase().startsWith('UPDATE') === false;
-  const byRow = READS_BY_TABLE.get(table) ?? NONE;
-  const byMembership = (membership ? READS_BY_MEMBERSHIP.get(table) : undefined) ?? NONE;
+  const membership = write.verb !== 'update';
+  const byRow = READS_BY_TABLE.get(write.table) ?? NONE;
+  const byMembership = (membership ? READS_BY_MEMBERSHIP.get(write.table) : undefined) ?? NONE;
 
   return byMembership === NONE ? byRow : [...byRow, ...byMembership];
 }

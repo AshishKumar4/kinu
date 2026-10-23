@@ -21,7 +21,7 @@ rewrite what came before them.
 |---|---|---|---|
 | Tool definitions | The native tools this agent may call in this work mode, then MCP and extension tools | The role, the work mode, an active skill's tool restriction, or an MCP server connecting | `profile.allowedTools`; `composeTurn` in `cf-backend/src/actor-agent.ts`, `composeNextRequest` in `cli-backend/src/local-session.ts` |
 | System: core | Operating guidance, the execution environments this workspace has, the tool index, persistence, code execution, delegation, background work, verification, output format | The tool list, or a promoted prompt section | `buildSystemPromptSync`, `packages/core/src/prompt.ts` |
-| System: lead doctrine | Seven sections on briefing, parallel work, review, interruptions and delivery | Never between turns; only a root agent that can hire has it | same |
+| System: lead doctrine | Six sections on responsibility, briefing, parallel work, review, interruptions and delivery | Never between turns; only a root agent that can hire has it | same |
 | System: workspace | `SOUL.md`, approved `AGENTS.md`, the skills index, pinned skill bodies | The owner edits one of them, or a dream's skill lands at a cold turn | same |
 | System: agent | The agent's and workspace's names, the role section | A rename or a role change | same |
 | Unapproved instruction files | `AGENTS.md` and skill files nobody approved, sealed in `<workspace_instructions>` as reference material | Their bytes change | `renderUnverifiedInstructions`, `prompt.ts` |
@@ -38,7 +38,7 @@ a plain build turn states no mode, because operating guidance says that no mode 
 
 | Provider | Markers | Routed by | Idle lifetime Kinu assumes (default / long retention) |
 |---|---|---|---|
-| Anthropic | Last tool (cloud only), end of the system prompt, and the last two messages, moved to the new tail on every step | the prefix | 5 minutes / 1 hour |
+| Anthropic | Last tool (direct Anthropic only), end of the system prompt, and the last two messages, moved to the new tail on every step | the prefix | 5 minutes / 1 hour |
 | OpenAI | none: the provider caches the prefix itself | the prefix | 60 minutes / 24 hours |
 | Codex | none | `session_id`, the workspace; `conversation_id` and `x-client-request-id`, the conversation (`chatgptSessionHeaders`, `providers/codex.ts`) | 60 minutes / 24 hours |
 | ChatGPT sign-in | none | the same headers | 60 minutes |
@@ -56,7 +56,7 @@ The conversation and workspace a call is routed under (`actorAffinity`, `provide
 
 - The workspace's own agent on the cloud: `kinu-<agent name>`, one key across its conversations and its swarm nodes (`owned-model-services.ts`).
 - A hired agent on the cloud: `kinu-<its own name>` (`agent-facet/agent-turn.ts`).
-- A CLI session: `kinu-<workspace name>` (`local-session.ts`); a CLI hire, `kinu-<its own name>` (`runtime.ts`).
+- A CLI session: `kinu-<agent name>` (`local-session.ts`); a CLI hire, `kinu-<its own name>` (`runtime.ts`).
 - Every actor's workspace: `kinu-workspace-<workspace id>`, so the conversations of one workspace share ChatGPT's session.
 
 At each step the request is the previous request plus the new tool calls and results, and perhaps one delta
@@ -103,11 +103,10 @@ a delta before its own input if state changed. Nothing before it moves.
 | System prompt | Core, lead doctrine, workspace, agent | Core, workspace, agent; no lead doctrine | The search's half, then the node's: its isolation, and that only its `report` counts |
 | Opening messages | The conversation | The parent's brief; with `context: 'inherit'`, the parent's conversation before it | The node's seed; with `context: 'inherit'`, the parent's conversation before it |
 | Dynamic context | Every plane | Its own runtime facts, tasks, jobs and hires; no memory tail | Its runtime facts and its own state; no memory tail, no delegates |
-| Cache key (cloud) | `kinu-<agent>` | `kinu-<agent>`, its own | `kinu-<search root>`, shared by the search |
+| Cache key (cloud) | `kinu-<agent>` | `kinu-<agent>`, its own | `kinu-<its caller>`, the agent that ran the search, shared by every node |
 
-Sources: `assignedTurnFraming` (`prompt.ts`), `hostedActorDynamicContext` (`cf-backend/src/orchestrator.ts`),
-`nodeSystemPrompt` and `NODE_WITHHELD_TOOLS` (`packages/core/src/strategy/node-agent.ts`),
-`explorationDynamicContext` (`cf-backend/src/hosted-actors.ts`).
+Sources: `prompt.ts`, `cf-backend/src/agent-turns.ts` (a hosted turn's memory tail), and `nodeSystemPrompt` and
+`NODE_BUILTIN_TOOLS` (`packages/core/src/strategy/node-agent.ts`).
 
 ## Measured
 

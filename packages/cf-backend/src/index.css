@@ -1735,8 +1735,10 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-button-primary, .p-button-destructive, .p-switch[data-checked], .p-check[data-checked], .p-radio[data-checked] { --focus-gap: 2px; }
 /* A field drawn as one box around its input and its icon (`data-focus-box`): the box takes the ring, the input none. */
 [data-focus-box] :focus-visible { outline: none; }
-/* The prompt card's own edge says it has the keys (above), so its field takes no ring of its own. */
-.p-prompt-card :focus-visible { outline: none; }
+/* A bare field drawn into a surface whose own edge says it has the keys (the prompt card's `p-focus`, the composer's
+   line) takes no ring of its own: a square ring cut across the composer's rounded corners (2026-10-21, d72c02a2 made the
+   ring unlayered and dbd3dc9d moved the composer's field onto TextArea bare). The surface's buttons keep theirs. */
+:is(.p-focus, .p-composer) .p-field-surface:focus-visible { outline: none; }
 
 /* Pressed: Kumo's controls carry no hook of their own, and a dim moves nothing, so a full-width row presses too. */
 :where(button, a[href], [role="button"], summary):not(:disabled, .p-tab):active {

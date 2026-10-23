@@ -213,6 +213,28 @@ describe('web provider — fetch', () => {
     expect((await provider.fetch('https://example.com/page')).markdown).toContain('a &lt;b&gt; cd \u{1F600} e f');
   });
 
+  // CODE-8: tags were cut at the first `>`, so an attribute holding one leaked its tail into the text, and a link whose
+  // href was unquoted lost its target.
+  test('an HTML page is read by its parser: attributes holding `>` and unquoted links read as a browser reads them', async () => {
+    const html = '<html><head><title>Status &amp; uptime</title></head><body><svg><title>icon</title></svg>'
+      + '<p title="a > b">Read <a href=https://status.example.com/a>the status page</a></p></body></html>';
+
+    const { fetch } = stubFetch(() => ({ body: html, headers: { 'content-type': 'text/html' } }));
+    const provider = createDefaultWebSearchProvider({ search: NO_SEARCH, browser: NO_BROWSER_RUN, fetch });
+    const res = await provider.fetch('https://example.com/page');
+
+    expect(res.title).toBe('Status & uptime');
+    expect(res.markdown).toBe('Read [the status page](https://status.example.com/a)');
+  });
+
+  test('a markdown page\'s title is its front matter\'s, else its first heading outside a code block', async () => {
+    const body = '```sh\n# not a heading\n```\n\n# Durable Objects\n\nbody';
+    const { fetch } = stubFetch(() => ({ body, headers: { 'content-type': 'text/markdown' } }));
+    const provider = createDefaultWebSearchProvider({ search: NO_SEARCH, browser: NO_BROWSER_RUN, fetch });
+
+    expect((await provider.fetch('https://example.com/md')).title).toBe('Durable Objects');
+  });
+
   test('text/markdown content passes through without HTML conversion', async () => {
     const { fetch, calls } = stubFetch(() => ({ body: '# Already Markdown\n\nclean', headers: { 'content-type': 'text/markdown' } }));
     const provider = createDefaultWebSearchProvider({ search: NO_SEARCH, browser: NO_BROWSER_RUN, fetch });

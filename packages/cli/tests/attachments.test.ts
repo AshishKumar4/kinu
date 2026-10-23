@@ -91,6 +91,15 @@ describe('resolvePromptAttachments', () => {
     expect(result.text).toBe(`summarize "${pdf}"`);
   });
 
+  test('a path a terminal pasted with its spaces escaped resolves as the file it names', async () => {
+    const dir = makeDir();
+    const img = join(dir, 'my shot.png');
+    writeFileSync(img, PNG_BYTES);
+
+    const mention = await resolvePromptAttachments(`what is in @${img.replaceAll(' ', '\\ ')}`, { limitBytes: CAP, cwd: dir });
+    expect(mention.attached.map(({ path }) => path)).toEqual([img]);
+  });
+
   test('relative @mentions resolve against the provided cwd', async () => {
     const dir = makeDir();
     mkdirSync(join(dir, 'assets'));
