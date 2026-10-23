@@ -9,7 +9,7 @@ import { SessionContext, type ContextSelection, type ContextEntry } from './cont
 import { SessionProposals, type ContextProposal } from './proposals';
 import { SessionRequests } from './requests';
 import { KinuError } from '../obs/error';
-import { settleSync } from '../obs/effect';
+import { settle, settleSync } from '../obs/effect';
 import { diagnostics } from '../obs/log';
 import { SessionTranscript, type ConversationEntry } from './transcript';
 import { toolPairingGaps } from './tool-pairing';
@@ -423,9 +423,16 @@ export class SessionHistory {
       ORDER BY r.epoch,step,m.output_slot`;
 
     const parts: (MessagePartReference & { epoch: number; step: number; order: number })[] = [];
+    // Read a slice of bytes at a time, the loop let go between: one message at a time, a 450-step screenshot turn's output
+    // held its agent's isolate 101 ms in one turn (the facet loop gate, armada job 20261023130508-8a189f83; D14).
+    const stored = await this.messages.materializePartsOf(rows.map((row) => row.message_id));
 
     for (const row of rows) {
-      for (const part of await this.messages.materializeParts({ messageId: row.message_id })) parts.push({ messageId: row.message_id, partNo: part.partNo, epoch: row.epoch, step: row.step, order: part.streamOrder });
+      const held = stored.get(row.message_id);
+
+      if (held === undefined) return settle(Effect.fail(new KinuError('missing', 'session message does not exist')));
+
+      for (const part of held) parts.push({ messageId: row.message_id, partNo: part.partNo, epoch: row.epoch, step: row.step, order: part.streamOrder });
     }
 
     parts.sort((a, b) => a.epoch - b.epoch || a.step - b.step || a.order - b.order);

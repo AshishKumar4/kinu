@@ -1331,6 +1331,12 @@ a facet of its own) and D13's "every agent's advisor in core `ActorAdvisor`".
   `standardizePrompt`, zod over the whole prompt each call, growing with the
   history); the fifth ended on a driver request the harness's fetch timed out.
   The gate is a script, not yet a tier row, until that timeout is settled.
+  Then a turn's output, read one message at a time in one turn at its end,
+  held the screenshot turn's agent 101 ms, and a 512 kB slice with its sizing
+  97-113 ms: the output reads through the same slices, now 256 kB, the sizing
+  in a turn of its own. On 9d3891adf the 3 readable runs of 4 read 66-85 ms at
+  most (a major GC in the screenshot agent; its turn's end commit), and the
+  production turn stays 378 statements.
   A host that pauses the thread 5 ms mid-turn splits a turn as a wait does,
   so the driver runs a synchronous control turn every lap on workerd's one
   thread, and a run that read a pause inside one, or no control turn, is
