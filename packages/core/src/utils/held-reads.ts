@@ -1,12 +1,9 @@
-import { statementText } from './sql';
-
-/** The table a statement writes, and how: the first write keyword names it (SQLite writes one table a statement). */
-export const WRITE = /\b(INSERT(?:\s+OR\s+\w+)?\s+INTO|REPLACE\s+INTO|UPDATE(?:\s+OR\s+\w+)?|DELETE\s+FROM)\s+["`]?(\w+)/i;
+import { statementText, statementWrite } from './sql';
 
 const TABLES = new WeakMap<TemplateStringsArray, string | null>();
 
 function writtenTable(query: string): string | null {
-  return WRITE.exec(query)?.[2]?.toLowerCase() ?? null;
+  return statementWrite(query)?.table ?? null;
 }
 
 function tableOf(strings: TemplateStringsArray): string | null {
