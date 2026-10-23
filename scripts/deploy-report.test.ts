@@ -4,13 +4,15 @@ import { join } from 'node:path';
 import * as v from 'valibot';
 import { childEnv, runToExit, scratchDir } from '@kinu.run/test-utils';
 import { measurePromptUsage, type Assertion } from '../evals/src/results';
-import { markInstant, previousSummary, recordMarkAt, recordRunner, renderReport, type ReportEntry, type ReportSummary } from './deploy-report';
+import {
+  externalCause, externalOnly, markInstant, previousSummary, recordMarkAt, recordRed, recordRunner, renderReport, type ReportEntry, type ReportSummary,
+} from './deploy-report';
 
 const META = { environment: 'staging', mode: 'deploy', sha: 'bbbbbbbbbbbbbbbb', startedAt: '2026-09-30T20:00:00.000Z' };
 
-const red = (phase: string, command: string): ReportEntry => ({
+const red = (phase: string, command: string, external?: string): ReportEntry => ({
   kind: 'red', phase, what: command, command, verdict: 'exit 1', finding: `${command} went red`, reproduce: command,
-  log: `/logs/${command}.log`, tail: ['(fail) one test'],
+  log: `/logs/${command}.log`, tail: ['(fail) one test'], external,
 });
 
 const summary = (sha: string, dir: string, mode: string, reds: readonly string[]): ReportSummary => ({
@@ -218,5 +220,83 @@ finish
     ].map((line) => JSON.stringify(line)).join('\n')}\n`);
 
     expect(previousSummary(index, '/reports/this')?.sha).toBe('aaaa');
+  });
+});
+
+/** A first-run tier's output as it ends: two vitest projects begun, the fleet's green summary, each failed case's first
+ *  error line and the summary that counts them, then the spend check's (`after` in its place). */
+const vitest = (errors: readonly string[], after: readonly string[] = ['tier liveness: PROVEN — 176 model call(s)']): string => [
+  ' RUN  v4.1.12 /home/ci/work/kinu/kinu', ' RUN  v4.1.12 /home/ci/work/kinu/kinu',
+  ' Test Files  7 passed (7)', '      Tests  9 passed (9)',
+  ` ❯  first-run-cases  tests/first-run/web-search.first-run.ts (${String(errors.length)} test | ${String(errors.length)} failed) 8322ms`,
+  `⎯⎯⎯⎯⎯⎯⎯ Failed Tests ${String(errors.length)} ⎯⎯⎯⎯⎯⎯⎯`, '',
+  ...errors.flatMap((error, at) => [
+    // Coloured as vitest writes it into the row's log.
+    `\u001b[41m\u001b[1m FAIL \u001b[22m\u001b[49m \u001b[30m\u001b[45m first-run-cases \u001b[49m\u001b[39m tests/first-run/case-${String(at)}.first-run.ts > MEASURED: case-${String(at)}`,
+    error, ' ❯ expectReached tests/first-run/first-run.ts:370:3', '',
+  ]),
+  ` Test Files  ${String(errors.length)} failed | 43 passed (50)`, `      Tests  ${String(errors.length)} failed | 43 passed | 4 skipped (50)`,
+  'error: "vitest" exited with code 1', ...after,
+].join('\n');
+
+// Production 06498fc55, 2026-10-23: the first-run tier's three web searches, refused by the owner's AI Gateway credits.
+const GATEWAY = 'Error: web-search/searched: 1 web search call(s), none answered: call-web-0 "Linkup on this deployment\'s AI Gateway: '
+  + 'Cloudflare answered 402: Your AI Gateway credit balance is zero, so this search could not be billed. Load credits on yo — the defect';
+
+const OWN = 'Error: web-search/searched: 1 web search call(s), none answered: call-web-0 "Your Kinu account\'s search answered 402: payment required"';
+
+// The provider's words as the gallery's stand-in answers them (gallery-web-search.ts), quoted by a product assertion.
+const QUOTED = 'AssertionError: expected \'Exa on your AI Gateway: Cloudflare answered 402: Your AI Gateway credit balance is zero\' to equal \'results\'';
+
+const CREDITS = "the AI Gateway's credit balance is zero (Cloudflare, HTTP 402)";
+
+describe('a red that is a provider\'s refusal, not the build\'s (owner, 2026-10-23, "Promote, list them")', () => {
+  test('every failed test refused by the provider\'s own billing is external; a 402 of our own, or a failure past the list, holds', () => {
+    expect({
+      gateway: externalCause(vitest([GATEWAY, GATEWAY, GATEWAY])),
+      own: externalCause(vitest([GATEWAY, OWN])),
+      unproven: externalCause(vitest([GATEWAY], ['tier liveness: UNPROVEN — no model call'])),
+      spendCut: externalCause(vitest([GATEWAY], ['error: spend.jsonl line 3 does not parse'])),
+      uncounted: externalCause(vitest([GATEWAY]).replace('Tests  1 failed', 'Tests  2 failed')),
+      projectCut: externalCause(vitest([GATEWAY]).replace(' Test Files  7 passed (7)\n      Tests  9 passed (9)\n', '')),
+      quoted: externalCause(vitest([QUOTED.replace('AssertionError', 'Error')])),
+      asserted: externalCause(vitest([QUOTED])),
+      oneOfTwo: externalCause(vitest([GATEWAY.replace('1 web search call(s)', '2 web search call(s)')])),
+      killed: externalCause(`${vitest([GATEWAY])}\nKILLED  First-run tier  after 600s with no output, 900.0s in — the run hung`),
+      left: externalCause(`${vitest([GATEWAY])}\nLEFT    First-run tier  exited with 1 process(es) of its own still running, now ended: chrome`),
+      bun: externalCause(`(fail) web search\n${GATEWAY}\n 0 pass\n 1 fail`),
+    }).toEqual({
+      gateway: `${CREDITS}, in 3 failed test(s)`, own: undefined, unproven: undefined, spendCut: undefined, uncounted: undefined,
+      projectCut: undefined, quoted: undefined, asserted: undefined, oneOfTwo: undefined, killed: undefined, left: undefined, bun: undefined,
+    });
+  });
+
+  test('a recorded red keeps its cause, and production takes the build only when every red is external', () => {
+    const dir = scratchDir('deploy-report-external');
+
+    const row = { phase: 'post-publish', what: 'First-run tier', command: 'bun run gate:first-run', finding: 'red', reproduce: 'run', output: vitest([GATEWAY]) };
+
+    recordRed(dir, { ...row, verdict: 'exit 1' });
+    recordRed(dir, { ...row, verdict: 'killed: silent for its bound' });
+
+    const [external, killed] = readFileSync(join(dir, 'entries.jsonl'), 'utf8').trim().split('\n')
+      .map((line) => v.parse(v.looseObject({ external: v.optional(v.string()) }), JSON.parse(line)).external);
+
+    const report = (entries: readonly ReportEntry[]) => renderReport({ dir: '/reports/this', meta: META, entries: [...entries] });
+    const firstRun = red('post-publish', 'bun run gate:first-run', external);
+
+    expect(killed).toBeUndefined();
+    expect(report([firstRun]).text).toContain(`- external: ${CREDITS}, in 1 failed test(s)`);
+    expect({
+      only: externalOnly(report([firstRun]).summary),
+      mixed: externalOnly(report([firstRun, red('post-publish', 'bash scripts/product-flows-tier.sh --flow=activity')]).summary),
+      own: externalOnly(report([red('post-publish', 'bun run gate:first-run', externalCause(vitest([OWN])))]).summary),
+      green: externalOnly(report([]).summary),
+    }).toEqual({
+      only: { promote: true, listed: `post-publish: bun run gate:first-run: ${CREDITS}, in 1 failed test(s)` },
+      mixed: { promote: false, held: ['post-publish: bash scripts/product-flows-tier.sh --flow=activity'] },
+      own: { promote: false, held: ['post-publish: bun run gate:first-run'] },
+      green: { promote: false, held: [] },
+    });
   });
 });
