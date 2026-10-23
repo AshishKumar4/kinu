@@ -529,7 +529,9 @@ exit 87
 
   const RETIREMENTS = 'bun scripts/reset.ts retirements';
 
-  const events = logged.filter((event) => !event.startsWith(REPORT) && !event.startsWith('bun scripts/ladder.ts --ci-') && !event.startsWith(STAMPS) && !event.startsWith(RETIREMENTS));
+  const MINT = 'bun scripts/infra-provision.ts';
+
+  const events = logged.filter((event) => ![REPORT, 'bun scripts/ladder.ts --ci-', STAMPS, RETIREMENTS, MINT].some((step) => event.startsWith(step)));
 
   // What the deploy wrote, apart from its reads of the report (`holds-red`).
   const report = logged.filter((event) => event.startsWith(REPORT) && !event.startsWith(`${REPORT}holds-red `))
@@ -546,6 +548,8 @@ exit 87
     ci: logged.filter((event) => event.startsWith('bun scripts/ladder.ts --ci-')),
     stamps: logged.filter((event) => event.startsWith(STAMPS)),
     retirements: logged.filter((event) => event.startsWith(RETIREMENTS)),
+    // The tokens the deploy mints, each with where it came among the steps.
+    minted: logged.flatMap((event, at) => (event.startsWith(MINT) ? [{ event, beforeUpload: logged.slice(at).includes(phaseRun('upload')) }] : [])),
     stdout: run.stdout.toString(),
     stderr: run.stderr.toString(),
     infraPhase,
@@ -567,6 +571,19 @@ describe("deploy gate", () => {
 
     expect({ status: run.status, events: run.events, ci: run.ci, said: run.stdout.includes(said), refused: run.stdout.includes('armada has no green verdict for testsha') })
       .toEqual({ status: 1, events: [phaseRun('preflight')], ci: ['bun scripts/ladder.ts --ci-verdict=testsha'], said: true, refused: true });
+  });
+
+  // Ledger 1019-am: once every refusal before the upload passed, the deploy mints the tokens its deployment needs; a
+  // rehearsal, or a deploy refused before its upload, mints nothing.
+  test('a deploy mints its account tokens just before the upload gates; a rehearsal, or a refused deploy, none', async () => {
+    const runs = await Promise.all([{}, { option: '--promote' }, { option: '--gates-only' }, { ci: 'red' as const }, { dirty: true }].map(async (asked) => runDeploy(asked)));
+    const [staging, production, ...none] = runs;
+
+    expect({ staging: staging?.minted, production: production?.minted, none: none.map((run) => run.minted) }).toEqual({
+      staging: [{ event: 'bun scripts/infra-provision.ts staging --account-tokens', beforeUpload: true }],
+      production: [{ event: 'bun scripts/infra-provision.ts production --account-tokens', beforeUpload: true }],
+      none: [[], [], []],
+    });
   });
 
   // The owner, 2026-10-23, "Monitors don't block": what the published version did (telemetry) is said in the report and

@@ -34,7 +34,7 @@ import { deleteR2Prefix, deletedByRest, restAnswer, restCall } from './cloudflar
 import { restApiToken } from './cloudflare-token';
 import { confirmationPhrase, partition } from './infra-teardown';
 import { POLL_SECONDS, settle, type SettleClock } from './edge-settled';
-import { plan, provisionSecrets, putSecret, type SecretIo } from './infra-provision';
+import { accountTokens, plan, provisionSecrets, putSecret, type SecretIo } from './infra-provision';
 import { type Reset, resetResourceIds, servingOf } from './reset';
 import { isProductSource, readMatching } from './sources';
 
@@ -1311,7 +1311,7 @@ describe('an empty account reaches its first deploy', () => {
     for (const name of required) expect(refused.join('\n')).toContain(name);
   });
 
-  test('provisioning installs every required secret though no Worker exists yet', async () => {
+  test('provisioning installs every required secret though no Worker exists yet, an account token minted', async () => {
     const installed: string[] = [];
 
     const steps = await provisionSecrets(staging, { state: 'absent' }, () => ({ state: 'absent' }), {
@@ -1323,6 +1323,7 @@ describe('an empty account reaches its first deploy', () => {
         return { ok: true, stdout: '', stderr: '', code: 0 };
       },
       show: () => undefined,
+      tokens: { list: async () => ({ held: [] }), mint: async () => ({ id: 'minted', value: 'a minted token' }) },
     });
 
     expect(installed).toEqual(required);
@@ -1338,6 +1339,107 @@ describe('an empty account reaches its first deploy', () => {
 
     for (const phase of PHASES) {
       expect((await findings(phase, { state: 'deployed', versionId: 'v', bindings: [] }, rest)).join('\n')).toContain(missing);
+    }
+  });
+});
+
+/**
+ * Ledger 1019-am: a token the deployment needs is minted by the deploy as an account-owned token of one permission,
+ * named for its Worker; one deleted upstream is minted again though the Worker still names the secret, and no token
+ * another run may have installed is revoked.
+ */
+describe('a token the deploy mints itself', () => {
+  const staging = { worker: deriveInfrastructure('staging').worker };
+  const NAME = `${staging.worker.workerName} · DEVBOX_REGISTRY_TOKEN`;
+
+  /** An account whose tokens are `held` (by name and id, each active), and what the provisioning did to it. */
+  function account(held: readonly { readonly id: string; readonly name: string }[], refused = false) {
+    const done: string[] = [];
+    let minted = 0;
+
+    const io: SecretIo = {
+      ask: async () => { throw new Error('a minted token asks nobody'); },
+      interactive: false,
+      install: (name, value) => {
+        done.push(`install ${name} ${value}`);
+
+        return { ok: true, stdout: '', stderr: '', code: 0 };
+      },
+      show: () => undefined,
+      tokens: {
+        list: async (name) => (refused ? { refused: 'the token API answered 403' } : { held: held.filter((token) => token.name === name).map(({ id }) => id) }),
+        mint: async (name, permission) => {
+          minted += 1;
+          done.push(`mint ${name} ${permission}`);
+
+          return { id: `new-${String(minted)}`, value: `value-${String(minted)}` };
+        },
+      },
+    };
+
+    return { io, done };
+  }
+
+  const step = async (held: readonly { readonly id: string; readonly name: string }[], present: readonly string[], refused = false) => {
+    const { io, done } = account(held, refused);
+    const steps = await provisionSecrets(staging, { state: 'deployed', versionId: 'v', bindings: [] }, () => ({ state: 'present', detail: '', names: [...present] }), { ...io, only: 'account-token' });
+
+    return { steps: steps.map(({ id, outcome }) => `${id} ${outcome}`), done };
+  };
+
+  test('absent, it is minted with its one permission, installed with no one asked, and nothing else is touched', async () => {
+    expect(await step([], [])).toEqual({
+      steps: ['DEVBOX_REGISTRY_TOKEN created'],
+      done: [`mint ${NAME} Workers Containers Write`, 'install DEVBOX_REGISTRY_TOKEN value-1'],
+    });
+  });
+
+  test('deleted upstream, it is minted again though the Worker names it; another active one of its name is kept, never revoked', async () => {
+    expect({
+      deleted: await step([], ['DEVBOX_REGISTRY_TOKEN']),
+      held: await step([{ id: 'old', name: NAME }], ['DEVBOX_REGISTRY_TOKEN']),
+      replaced: await step([{ id: 'old', name: NAME }], []),
+    }).toEqual({
+      deleted: { steps: ['DEVBOX_REGISTRY_TOKEN created'], done: [`mint ${NAME} Workers Containers Write`, 'install DEVBOX_REGISTRY_TOKEN value-1'] },
+      held: { steps: [], done: [] },
+      replaced: { steps: ['DEVBOX_REGISTRY_TOKEN created'], done: [`mint ${NAME} Workers Containers Write`, 'install DEVBOX_REGISTRY_TOKEN value-1'] },
+    });
+  });
+
+  test('where the account refuses its token list, it is refused with why, and the gate reports the secret as before', async () => {
+    expect(await step([], [], true)).toEqual({ steps: ['DEVBOX_REGISTRY_TOKEN refused'], done: [] });
+  });
+
+  // The list's answer as f44999 gave it on 2026-10-23: `result_info` with `total_count`, 50 a page at most.
+  test('the account\'s answer is read across its pages, by name and status, and a mint names its one permission on this account', async () => {
+    const asked: string[] = [];
+    const tokens = Array.from({ length: 51 }, (_, at) => ({ id: `t${String(at)}`, name: at === 50 || at === 3 ? NAME : 'other', status: at === 3 ? 'expired' : 'active' }));
+
+    const server = Bun.serve({
+      port: 0,
+      fetch: async (request) => {
+        const url = new URL(request.url);
+
+        asked.push(`${request.method} ${url.pathname}${url.search}`);
+
+        if (url.pathname.endsWith('/permission_groups')) return Response.json({ result: [{ id: 'g1', name: 'Workers Containers Write' }] });
+
+        if (request.method === 'POST') return Response.json({ result: { id: 'new', value: 'v', policies: (await request.json()) } });
+        const page = Number(url.searchParams.get('page'));
+
+        return Response.json({ result: tokens.slice((page - 1) * 50, page * 50), result_info: { page, per_page: 50, count: 0, total_count: tokens.length } });
+      },
+    });
+
+    try {
+      const rest = accountTokens('acct', { token: 't', api: `http://localhost:${String(server.port)}` });
+
+      expect({ held: await rest.list(NAME), minted: await rest.mint(NAME, 'Workers Containers Write'), asked }).toEqual({
+        held: { held: ['t50'] }, minted: { id: 'new', value: 'v' },
+        asked: ['GET /accounts/acct/tokens?per_page=50&page=1', 'GET /accounts/acct/tokens?per_page=50&page=2', 'GET /accounts/acct/tokens/permission_groups', 'POST /accounts/acct/tokens'],
+      });
+    } finally {
+      await server.stop(true);
     }
   });
 });

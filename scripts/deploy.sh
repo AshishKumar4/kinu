@@ -657,6 +657,12 @@ fi
 # plan; and the secret scan, since a credential in a published asset cannot be
 # withdrawn. Every other gate's red is recoverable on staging, so it runs after
 # the upload and gates the promotion instead.
+# The account tokens the deployment needs (DEVBOX_REGISTRY_TOKEN), minted with this deploy's own Cloudflare token once
+# every refusal before it passed, and installed before the account gate reads the Worker's secrets (infra-provision.ts
+# mintAccountToken). One it cannot mint is the gate's red, as an absent secret always was.
+if [ "$KINU_GATES_ONLY" != "1" ]; then
+  bun "$KINU_ROOT/scripts/infra-provision.ts" "$KINU_ENV" --account-tokens || echo -e "${BOLD}An account token could not be minted; the account gate names it.${NC}"
+fi
 if [ "$KINU_PROMOTE" != "1" ]; then
   if ! run_phase upload; then
     echo -e "${RED}The upload checks are red, so nothing was uploaded.${NC}"
