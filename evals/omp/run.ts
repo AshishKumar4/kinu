@@ -19,7 +19,7 @@ import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, wr
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import * as v from 'valibot';
-import { CLAUDE_CRED_KEY, credentialToHeaders, EvolutionEngine, historyTurnPairs, type AgentRuntime, type CompletedTurn, type JobRetirement, type JsonValue, type LLMProviderConfig, type ReasoningEffort } from '../../packages/core/src/index';
+import { CLAUDE_CRED_KEY, credentialToHeaders, DEFAULT_DECISION_MODEL, EvolutionEngine, historyTurnPairs, type AgentRuntime, type CompletedTurn, type JobRetirement, type JsonValue, type LLMProviderConfig, type ReasoningEffort } from '../../packages/core/src/index';
 import { createConsoleLogger, renderThrownChain, setDiagnosticsSink, type Logger } from '../../packages/core/src/obs/index';
 import { createWorkspace } from '../../packages/core/src/workspace-birth';
 import { createRefinementStore } from '../../packages/core/src/evolution/refinement';
@@ -39,6 +39,9 @@ const DREAM_PASSES = 40;
 const SETTLED = new Set(['applied', 'rolled_back', 'refused']);
 
 const MODEL_HOST = 'api.cloudflare.com:443';
+
+/** The decision model every arm rates with, as the Workers AI endpoint names it. */
+const DECISION_MODEL = DEFAULT_DECISION_MODEL.replace(/^workers-ai\//u, '');
 
 /** A Claude plan login's host, for a `claude/` spec. */
 const CLAUDE_HOST = 'api.anthropic.com:443';
@@ -328,14 +331,16 @@ if (import.meta.main) {
 
   if (claude && claudeToken === undefined) throw new Error(`set ${CLAUDE_TOKEN_FILE_ENV} to the file holding the plan login's access token`);
 
-  if (!claude && (account === undefined || token === undefined)) throw new Error('set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN');
+  if (account === undefined || token === undefined) throw new Error('set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN');
   const model = spec.replace(/^workers-ai\//u, '');
   const base = join(out, model.replaceAll('/', '_'), arm);
-  const egress = limitEgress([claude ? CLAUDE_HOST : MODEL_HOST]);
+  const egress = limitEgress(claude ? [CLAUDE_HOST, MODEL_HOST] : [MODEL_HOST]);
   const effort = v.parse(v.optional(v.picklist(['low', 'medium', 'high', 'xhigh', 'max'])), values.effort);
 
+  // A `claude/` arm keeps Workers AI for the decision model (Clef), which only `/ai/run` serves and the dreaming arm rates
+  // its training turns with: without it the ratings were refused (401) and the arm trained on nothing (2026-10-23).
   const models: ArmModels = claude && claudeToken !== undefined
-    ? { llm: null, oauthStore: claudeLogin(claudeToken), ...(effort !== undefined && { effort }) }
+    ? { llm: account === undefined || token === undefined ? null : workersAi(account, token, DECISION_MODEL), oauthStore: claudeLogin(claudeToken), ...(effort !== undefined && { effort }) }
     : { llm: workersAi(account ?? '', token ?? '', model), ...(effort !== undefined && { effort }) };
 
   try {
