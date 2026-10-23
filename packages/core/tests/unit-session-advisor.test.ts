@@ -610,6 +610,7 @@ describe("the advisor's read tools", () => {
     const { rt } = createTestRuntime();
     const agentLedger = new TurnFileLedger();
     const content = 'rounding: half-even\n';
+    await rt.toolFiles.mkdir(rt.storage.home, { recursive: true });
     await writeText(rt.toolFiles, `${rt.storage.home}/ledger.md`, content);
 
     const reads = advisorReadTools({
