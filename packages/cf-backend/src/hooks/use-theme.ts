@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { Result } from "effect";
 import { DEFAULT_THEME, MODE_KEY, modeFor, PREFERS_LIGHT, themeNamed, type Mode, type ThemeName } from "@kinu.run/core";
 
 /**
@@ -20,11 +21,21 @@ const SERVER_THEME: Theme = { mode: "dark", name: DEFAULT_THEME };
 
 interface ThemeStore {
   snapshot: Theme;
+  /** A mode the page's host named (`holdMode`), which the system does not move. */
+  held: boolean;
   readonly listeners: Set<() => void>;
   readonly mql: MediaQueryList;
 }
 
 let store: ThemeStore | null = null;
+
+/** The device's stored choice, as the head's script reads it: none where storage refuses to be read (a sandboxed
+ *  frame, storage turned off), which leaves the system to decide. */
+function storedMode(): string | null {
+  const read = Result.try(() => localStorage.getItem(MODE_KEY));
+
+  return Result.isSuccess(read) ? read.success : null;
+}
 
 function apply(theme: Theme): void {
   const root = document.documentElement;
@@ -45,17 +56,17 @@ function browserStore(): ThemeStore {
   const mql = window.matchMedia(PREFERS_LIGHT);
 
   const opened: ThemeStore = {
-    mql, listeners: new Set(),
-    snapshot: { mode: modeFor(localStorage.getItem(MODE_KEY), mql.matches), name: themeNamed(document.documentElement.dataset.theme) ?? DEFAULT_THEME },
+    mql, listeners: new Set(), held: false,
+    snapshot: { mode: modeFor(storedMode(), mql.matches), name: themeNamed(document.documentElement.dataset.theme) ?? DEFAULT_THEME },
   };
 
   // Drawn in the mode it holds from the moment it opens: the head drew the same rule, but the system may have changed
   // before this store opened, with no change left for it to hear.
   apply(opened.snapshot);
   mql.addEventListener("change", () => {
-    const mode = modeFor(localStorage.getItem(MODE_KEY), mql.matches);
+    const mode = modeFor(storedMode(), mql.matches);
 
-    if (mode !== opened.snapshot.mode) commit(opened, { ...opened.snapshot, mode });
+    if (!opened.held && mode !== opened.snapshot.mode) commit(opened, { ...opened.snapshot, mode });
   });
   store = opened;
 
@@ -70,7 +81,18 @@ export function startTheme(): void {
 
 export function setMode(mode: ThemeMode): void {
   const open = browserStore();
-  localStorage.setItem(MODE_KEY, mode);
+
+  // Kept on the device where its storage takes it, and for this page alone where it refuses.
+  Result.try(() => { localStorage.setItem(MODE_KEY, mode); });
+  commit(open, { ...open.snapshot, mode });
+}
+
+/** A page whose host names its mode (a part's frame, `?scheme=`): drawn in it and kept, whatever the system does, and
+ *  never stored on the device. */
+export function holdMode(mode: ThemeMode): void {
+  const open = browserStore();
+
+  open.held = true;
   commit(open, { ...open.snapshot, mode });
 }
 
