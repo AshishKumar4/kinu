@@ -1865,6 +1865,9 @@ async function measureSlateUi(newPage: LiveApp['newPage'], origin: string, heard
   }
 }
 
+/** The statuses an MCP server's row shows while it is still connecting, which its page reads again. */
+const UNSETTLED_MCP = ['connecting', 'discovering'] as const;
+
 /** A wait across a page load under `vite dev`: one load took 97-102 s, cold or warm, on a box at load 13 of 24 cores
  *  (2026-10-23, /mnt/local/kinu/tmp/connect-live/warm.ts). A sign-in's end crosses two, so three loads' time. */
 const ACROSS_PAGE_LOADS_MS = 300_000;
@@ -2027,6 +2030,12 @@ async function measureConnect(newPage: LiveApp['newPage'], origin: string): Prom
     if (!cameBack) throw new Error(`the setup tab never came back from its sign-in: ${await finishShown(setup)}`);
     await onSetup(setup, 'setup to draw its step again', `document.querySelector('[data-welcome-step]') !== null`);
     const back = new URL(setup.url());
+    const samehub = await listedServer(origin, 'Samehub');
+
+    // Read as the person reads it: once setup shows the server settled. Its object can start over between the sign-in
+    // and the page's read, and its list then says `discovering` while the new wake dials it, which the page reads again
+    // (use-mcp-servers.ts `unsettled`). The connect row read that instant once in 4 (next-rc 99a13686c, 2026-10-23).
+    await onSetup(setup, 'setup to show Samehub settled', `!${JSON.stringify(UNSETTLED_MCP)}.includes(document.querySelector('[data-mcp-server="${samehub.id}"]')?.getAttribute('data-mcp-status') ?? 'connecting')`);
     const sameTab = { back: back.pathname + back.search + back.hash, status: (await listedServer(origin, 'Samehub')).status };
 
     // Setup's tools step, as the MCP page sends an account that has not finished setup there.

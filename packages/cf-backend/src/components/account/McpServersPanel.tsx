@@ -94,7 +94,7 @@ export function McpServersPanel({ mcp }: { mcp: McpServers }) {
       ) : (
         <Group>
             {servers.map((s) => (
-              <div key={s.id} className="px-4 py-3" data-mcp-server={s.id}>
+              <div key={s.id} className="px-4 py-3" data-mcp-server={s.id} data-mcp-status={s.status}>
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-2">
                   <span className="t-item p-text">{s.name}</span>
                   <Status tone={mcpServerStatus(s.status).tone}>{mcpServerStatus(s.status).label}</Status>
