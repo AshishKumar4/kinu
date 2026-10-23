@@ -180,6 +180,7 @@ import {
   initWebhookIngressTables,
   type WebhookDelivery, type WebhookDeliveryResult, type WebhookSecretStore,
   createTimerTrigger, cancelTrigger, listTriggers, fireDueTriggers, retimeDailyTrigger, type TrustLevel,
+  WatchClaims, watchProviders, checkAnswerOf, type WatchOutcome, type WatchCheck,
   type TriggerView,
   type MailAdmission, type MailArrival, type HandedMail, handedMailSignal, spillEventContent, unreadMailForTurn, MailTriageLane, triageMail,
   PeerHub, type PeerMessage, type ReceiveResult,
@@ -233,6 +234,7 @@ import { ownedByAnotherAccount } from './user/workspace-ownership';
 import { workspaceOwner, type LiveShareReading, type SlateEditor, type WorkspaceOwnerRpc } from './workspace-owner-rpc';
 import {
   ActorAgent,
+  ALARM_PROGRAM_WAIT_MS,
   EVOLUTION_LANE_FIBER,
   readTurnContinuity,
   unownedWorkspace,
@@ -2568,6 +2570,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   protected _pendingBranches: PendingBranch[] = [];
 
   private _triggerRegistry: TriggerRegistry | null = null;
+  /** Where this object's watchers check, one check per trigger at a time (watch.ts). */
+  private readonly watching = {
+    run: (check: WatchCheck, state: JsonValue | undefined, input: JsonValue | undefined) => this.watchCheck(check, state, input),
+    claims: new WatchClaims(),
+  };
   private _replyChannels: ReplyChannelStore | null = null;
   private readonly warmingLanes = new Map<string, CacheWarmingLane>();
 
@@ -2618,6 +2625,34 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     return warmed;
+  }
+
+  /**
+   * A watcher's check: its program over the workspace agent's own reads, observing only, offline, within the alarm's
+   * wall. Its answer decides whether the agent wakes (watch.ts); a program that throws, answers off its shape or runs
+   * past the wall parks the watcher until its code changes.
+   */
+  private async watchCheck(check: WatchCheck, state: JsonValue | undefined, input: JsonValue | undefined): Promise<WatchOutcome> {
+    const began = Date.now();
+    // Read as its role reads in Plan: a check reaches nothing its agent's own programs could not.
+    const namespaces = this.ownNamespaces('plan');
+    const authority = await this.slateAuthority('plan', namespaces);
+    const providers = watchProviders(authority.reach.narrowProviders(namespaces), check.reads ?? []);
+    const unread = (check.reads ?? []).filter((name) => !providers.some((provider) => provider.name === name));
+
+    if (unread.length > 0) return { kind: 'parked', reason: 'program', detail: `its check reads ${unread.join(', ')}, which this agent cannot read in Plan` };
+    const given = `const state = ${JSON.stringify(state ?? null)};\nconst input = ${JSON.stringify(input ?? null)};\n`;
+    const ran = await this.rt.executor.execute(`${given}${check.code}`, providers, { deadlineMs: ALARM_PROGRAM_WAIT_MS });
+
+    if (ran.error !== undefined) {
+      return { kind: 'parked', reason: Date.now() - began >= ALARM_PROGRAM_WAIT_MS ? 'overran' : 'program', detail: ran.error.slice(0, 2_000) };
+    }
+
+    const answer = checkAnswerOf(ran.result);
+
+    return answer === null
+      ? { kind: 'parked', reason: 'program', detail: 'its check answered neither { fire: false, state? } nor { fire: true, brief, state? }' }
+      : { kind: 'answered', answer };
   }
 
   protected get triggerRegistry(): TriggerRegistry {
@@ -4757,7 +4792,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     await this.tracing.invocation('alarm', 'tick', async (tick) => {
       // A phase's failure is `fail`ed on its span, not rethrown: the tick continues to the next phase.
       await tick.span('alarm.due_triggers', (span) => settle(Effect.catchCause(Effect.gen({ self: this }, function* () {
-        const { fired } = yield* Effect.promise(() => fireDueTriggers({ registry: this.triggerRegistry, log: this.eventLog }, now));
+        const { fired } = yield* Effect.promise(() => fireDueTriggers({ registry: this.triggerRegistry, log: this.eventLog, watch: this.watching }, now));
         span.setAttribute('kinu.triggers_fired', fired);
       }), phaseFailed(span, { doing: 'firing the triggers due on this wake', otherwise: 'io' }, (failure) => {
         diagnostics.failure('schedule.due_triggers_failed', failure);
@@ -7444,6 +7479,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       secrets: this.webhookSecrets,
       sql: this.ctx.storage.sql,
       onAdmitted: () => { this.armDurableWake(); },
+      watch: this.watching,
     }, opts);
   }
 

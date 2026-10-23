@@ -132,6 +132,8 @@ export const TimerPayloadSchema = v.object({
   user_payload: v.optional(v.unknown()),
   /** The woken turn and everything it spawns debit this label (mission-budget.ts). */
   mission_label: v.optional(v.string()),
+  /** What a watcher's check found, which is why it fired (watch.ts): read from outside, never an instruction. */
+  watch_brief: v.optional(v.string()),
 });
 
 export type TimerPayload = v.InferOutput<typeof TimerPayloadSchema>;

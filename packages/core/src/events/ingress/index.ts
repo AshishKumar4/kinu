@@ -13,3 +13,5 @@ export * from './triggers';
 export * from './email';
 
 export * from './peer';
+
+export * from './watch';

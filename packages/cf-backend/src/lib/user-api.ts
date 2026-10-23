@@ -463,10 +463,11 @@ export const beginMcpConnect = (id: string, run: string) =>
   settle(api(v.object({ authUrl: v.string() }), 'POST', `/mcp/servers/${encodeURIComponent(id)}/connect`, { run }));
 
 /** A failed or closed MCP server dialled again: null once it answers again, else what went wrong in words for `name`'s row. */
-export const reconnectSaying = (id: string, name: string): Promise<string | null> => settle(Effect.match(
+export const reconnectSaying = (id: string, name: string): Promise<string | null> => settle(Effect.matchCause(
   api(v.object({ status: McpServerSummarySchema.entries.status, error: v.nullable(v.string()) }), 'POST', `/mcp/servers/${encodeURIComponent(id)}/reconnect`),
   {
-    onFailure: (cause) => `${name} did not reconnect: ${renderThrownChain({ cause })}`,
+    // A refusal travels as a defect (`lib/http.ts`): every cause is said, not only a typed failure.
+    onFailure: (cause) => `${name} did not reconnect: ${renderThrownChain({ cause: Cause.squash(cause) })}`,
     onSuccess: (after) => (after.error === null ? null : `${name} did not reconnect: ${after.error}`),
   },
 ));
