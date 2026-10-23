@@ -522,17 +522,14 @@ export class AgentDatabase {
     return (ref) => chatMediaPath(workspace, actorId, ref);
   }
 
-  /** An answer's text parts and the mode its agent last ran in; null when the id names no answer of this agent's. */
+  /** An answer's text parts; null when the id names no answer of this agent's. Read as its chat is, retired or not: a
+   *  dismissed agent's pages draw while its chat stays readable (1023-ad). */
   async answerTexts(messageId: string): Promise<AgentAnswerTexts | null> {
-    const bound = this.actorHost().bindStores(this.reference());
-    const answer = await bound.stores.history.transcript(CHAT_SESSION_ID).message(messageId);
+    const answer = await this.readable().transcript.message(messageId);
 
     if (answer?.role !== 'assistant') return null;
 
-    return {
-      texts: answer.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])),
-      workMode: bound.stores.claims.latestTurn()?.workMode ?? 'plan',
-    };
+    return { texts: answer.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])) };
   }
 
   /** One of its answers as its transcript holds it and as it reads; null when the id names none. */

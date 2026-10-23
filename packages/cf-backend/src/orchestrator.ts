@@ -6092,13 +6092,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /**
    * The block an answer's page is read from, every text part as the chat draws it. The workspace's own answer runs
    * with its authority in the mode its next turn runs in. A hired agent's is read from its own isolate and drawn with
-   * no authority lent to it: a call run from here would not run where that agent's stores are.
+   * no authority lent to it: a call run from here would not run where that agent's stores are. A dismissed agent's
+   * chat stays readable until it is destroyed (`agentOf`), and so do its pages (1023-ad: they answered "holds no
+   * slate-ui block" once it was dismissed).
    */
   private async answerBlock(address: EphemeralSlateAddress): Promise<MessageBlock> {
     if (address.actorId !== null) {
-      const answer = this.liveActor(address.actorId)
-        ? await this.agentCall(address.actorId, (isolate, snapshot) => isolate.answerTexts(snapshot, address.messageId))
-        : null;
+      const answer = this.actorDirectoryStore().retained(address.actorId) === null
+        ? null
+        : await this.agentCall(address.actorId, (isolate, snapshot) => isolate.answerTexts(snapshot, address.messageId));
 
       return { html: addressedBlock(answer?.texts ?? [], address).html, author: null };
     }

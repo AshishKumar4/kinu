@@ -924,7 +924,7 @@ const NOTED: NotedChanges = { source: 'workspace', label: 'Workspace', mode: 'vf
 
 type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'setModel' | 'setSoul' | 'setEvolutionConfig' | 'setDisplayName' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp' | 'evalAbortActivation' | 'workspaceTitle'
-  | 'createSubagentAgent'>
+  | 'createSubagentAgent' | 'dismissSubagent'>
   & Pick<ObservedOrchestrator, 'probeFile'>
   & Pick<ProductionOrchestrator, 'getChangeNotes' | 'saveChangeNotes' | 'sendChangeNotes'>
   & Pick<ObservedOrchestrator, 'refuseReservations' | 'owedSends' | 'latestClaimOutcome' | 'recoveryPass'
@@ -1803,7 +1803,13 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       socket.send(JSON.stringify({ type: 'rpc', id: 'agent-send', method: 'send', args: [AGENT_SLATE_ASK, 'agent-slate-1'] }));
       await awaitWithLimit(ended.promise, 20000, 'agent slate probe: the agent never finished its answer');
 
-      return await target.answerSlates(created.subagent.actorId);
+      const hired = await target.answerSlates(created.subagent.actorId);
+
+      // Dismissed with its history kept, its chat stays readable, and so does the page it drew there.
+      await target.dismissSubagent(created.name, true);
+      await awaitSettled(target);
+
+      return { ...hired, dismissed: (await target.answerSlates(created.subagent.actorId)).answered };
     } finally {
       socket.close(1000, 'agent slate probe complete');
     }

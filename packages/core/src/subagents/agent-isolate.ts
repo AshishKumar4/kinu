@@ -197,11 +197,10 @@ export interface AgentRecovery {
   readonly stalled: readonly { readonly turnId: string; readonly workMode: WorkMode }[];
 }
 
-/** One answer of an agent's, as its `<slate-ui>` blocks are read from it: its text parts, and the mode the agent last
- *  ran in, which its pages run in. */
+/** One answer of an agent's, as its `<slate-ui>` blocks are read from it: its text parts. The mode its pages run in is
+ *  the workspace's to say (`answerBlock`), never read off the agent. */
 export interface AgentAnswerTexts {
   readonly texts: readonly string[];
-  readonly workMode: WorkMode;
 }
 
 /** Where an agent's chat stands between turns, as its window and its workspace's tile read it. */

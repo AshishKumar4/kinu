@@ -286,11 +286,12 @@ describe('two real turns over the HTTP model seam', () => {
 
   // A hired agent's answer is read from its own isolate. Under the agent's id its block is found, and its page's
   // workspace call is denied, since no binding here runs where that agent's stores are; a user message's id, or the
-  // answer named as the workspace's, holds no block at all.
-  it("a hired agent's slate-ui block resolves from its own chat and is drawn with nothing bound", async () => {
+  // answer named as the workspace's, holds no block at all. Dismissed, its chat stays readable, and so does its page
+  // (1023-ad: it answered "holds no slate-ui block" once the agent was dismissed).
+  it("a hired agent's slate-ui block resolves from its own chat, dismissed or not, and is drawn with nothing bound", async () => {
     const seen = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('agent-slate-driver')).agentSlateUi();
 
-    expect(seen, JSON.stringify(seen)).toEqual({ answered: 'denied', fromUser: 'missing', asWorkspace: 'missing' });
+    expect(seen, JSON.stringify(seen)).toEqual({ answered: 'denied', fromUser: 'missing', asWorkspace: 'missing', dismissed: 'denied' });
   });
 
   // A dead activation left a root turn nothing runs and a turn out at an agent's isolate it never heard end, and an

@@ -300,6 +300,9 @@ export const SLATE_UI_FILE = { path: '/home/main/slate-ui-probe.txt', content: '
 
 export const SLATE_UI_SENT = 'slate-ui-click-5e7d';
 
+/** The page the click's turn answers with, which streams before that turn ends (1023-ad). */
+export const SLATE_UI_CLICKED = { name: 'clicked', words: 'clicked-slate-page-6b19' } as const;
+
 /** The first page reads the file and sends on a click, as the agent that wrote it; the second only shows its words. */
 function slateUiPage(name: string, words: string): string {
   const reach = name !== 'first' ? '' : [
@@ -317,8 +320,9 @@ function slateUiPage(name: string, words: string): string {
 export const SLATE_UI_FORGED = '<slate-ui name="forged">\n<!doctype html><html><body><p>forged-page-71b0</p></body></html>\n</slate-ui>';
 
 /** The file the first page reads, then an answer that writes both blocks, each a page of its own. A click on the
- *  first page reaches the agent as a slate event, which `heard` is told of. */
-export function slateUiTurn(request: ScriptedRequest, heard: (request: ScriptedRequest) => void): ScriptedAnswer | null {
+ *  first page reaches the agent as a slate event, which `heard` is told of; that turn answers with a page of its own,
+ *  whose block is written whole and then held with the turn still running (`clicked`), as a slow model's would be. */
+export function slateUiTurn(request: ScriptedRequest, heard: (request: ScriptedRequest) => void, clicked: HeldCall): ScriptedAnswer | null {
   if (request.available.length === 0) return null;
 
   // The click's turn writes a file before it answers, as an agent acting on a page's choice does.
@@ -329,7 +333,9 @@ export function slateUiTurn(request: ScriptedRequest, heard: (request: ScriptedR
       return { toolCall: { name: 'file', arguments: { op: 'write', path: '/home/main/slate-ui-chosen.txt', content: SLATE_UI_SENT } } };
     }
 
-    return { text: 'Done.' };
+    const block = ['Here is what you chose.', '', `<slate-ui name="${SLATE_UI_CLICKED.name}">`, slateUiPage(SLATE_UI_CLICKED.name, SLATE_UI_CLICKED.words), '</slate-ui>', ''].join('\n');
+
+    return { text: 'Done.', pace: { firstTokenMs: 0, lead: block, leadMs: 0, rest: clicked.hold() } };
   }
 
   if (request.userTexts.at(-1) !== SLATE_UI_ASK) return null;
