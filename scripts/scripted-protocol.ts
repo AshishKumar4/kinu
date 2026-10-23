@@ -48,10 +48,10 @@ export interface ScriptedAnswer {
   readonly refused?: { readonly message: string };
 }
 
-/** A 429 the way an OpenAI-compatible provider sends one: its error body, and the seconds to wait in `retry-after` when
- *  it states any. */
-export interface RateLimitedResponse {
-  readonly status: 429;
+/** An error the way an OpenAI-compatible provider sends one: a 429 with its error body and the seconds to wait in
+ *  `retry-after` when it states any, or a 400 refusing the request. */
+interface ErrorResponse {
+  readonly status: 429 | 400;
   readonly headers: Readonly<Record<string, string>>;
   readonly body: string;
 }
@@ -64,7 +64,7 @@ const WORKERS_AI_PER_MINUTE = {
 };
 
 /** The error response an answer stands for, a rate limit or a refusal; null for one the model answers. */
-export function errorAnswer(answer: ScriptedAnswer): RateLimitedResponse | null {
+export function errorAnswer(answer: ScriptedAnswer): ErrorResponse | null {
   if (answer.rateLimited !== undefined) return rateLimitedAnswer(answer.rateLimited);
 
   if (answer.refused === undefined) return null;
@@ -76,7 +76,7 @@ export function errorAnswer(answer: ScriptedAnswer): RateLimitedResponse | null 
   };
 }
 
-function rateLimitedAnswer(limited: NonNullable<ScriptedAnswer['rateLimited']>): RateLimitedResponse {
+function rateLimitedAnswer(limited: NonNullable<ScriptedAnswer['rateLimited']>): ErrorResponse {
   const { retryAfterSeconds, perMinute = false } = limited;
 
   return {
