@@ -7,7 +7,7 @@ import { parseReleaseManifest } from "@kinu.run/core/deploy";
 import { generateReleaseSigningKey } from "../packages/core/src/http/release-signing";
 import { CLI_DIST_PLATFORMS } from "../packages/core/src/http/deployed-assets";
 import {
-  DEPLOY_PHASES, GATE_DEADLINE_SECONDS, LADDER, deployOrder, type DeployPhase,
+  DEPLOY_PHASES, GATE_DEADLINE_SECONDS, LADDER, deployOrder, readsDeployment, type DeployPhase,
 } from "./ladder";
 import { CONTROL_PLANE_ACCESS_PATHS, deriveInfrastructure } from "./infra-manifest";
 import type { Deployment } from "./infra-cloudflare";
@@ -43,16 +43,23 @@ function armadaBuild(environment: string, ...options: string[]): string {
   return ["bun scripts/release-build.ts", environment, "testsha", ...options].join(" ");
 }
 
-/** The build starts beside the upload gates, so where its event falls among theirs is a race: the events without it,
- *  and whether it started, after the preflight. */
+/** The build starts beside the upload gates, and the source phase once they pass, so where their events fall among the
+ *  others is a race: the events without them, whether the build started after the preflight, and whether the source
+ *  phase ran after the upload gates. */
 function besideTheBuild(events: readonly string[], build: string) {
-  return { events: events.filter((event) => event !== build), started: events.indexOf(build) > events.indexOf(phaseRun("preflight")) };
+  const source = phaseRun("source");
+
+  return {
+    events: events.filter((event) => event !== build && event !== source),
+    started: events.indexOf(build) > events.indexOf(phaseRun("preflight")),
+    source: events.indexOf(source) > events.indexOf(phaseRun("upload")),
+  };
 }
 
 /** What a staging deploy runs after the fixture's build, which fails on purpose: the rows that read the deployment
- *  named as not run, then every local gate and the hammer, to their end. */
+ *  named as not run, beside the source phase begun after the upload gates. */
 const AFTER_A_FAILED_BUILD: readonly string[] = [
-  skipped("staging does not serve this build: the build on armada failed"), phaseRun("source"),
+  skipped("staging does not serve this build: the build on armada failed"),
 ];
 
 /** The commands one phase of the plan runs. */
@@ -568,7 +575,7 @@ describe("deploy gate", () => {
     const run = await runDeploy();
 
     expect(run.status).toBe(1);
-    expect(besideTheBuild(run.events, armadaBuild("staging"))).toEqual({ events: [...STOPS, WITHDRAW, ...AFTER_A_FAILED_BUILD], started: true });
+    expect(besideTheBuild(run.events, armadaBuild("staging"))).toEqual({ events: [...STOPS, WITHDRAW, ...AFTER_A_FAILED_BUILD], started: true, source: true });
     expect(run.infraEnvironment).toBe("staging");
   });
 
@@ -581,9 +588,9 @@ describe("deploy gate", () => {
       events: [
         ...STOPS, WITHDRAW,
         skipped("staging does not serve this build: testsha's record on staging could not be withdrawn, so this deploy will not replace what it verified"),
-        phaseRun("source"),
       ],
       started: true,
+      source: true,
     });
   });
 
@@ -601,6 +608,7 @@ describe("deploy gate", () => {
     expect(besideTheBuild(run.events, armadaBuild("production", "--promote"))).toEqual({
       events: [phaseRun("preflight"), PROMOTION_CHECK, phaseRun("upload"), skipped("production does not serve this build: the build on armada failed")],
       started: true,
+      source: false,
     });
     expect(run.infraEnvironment).toBe("production");
   });
@@ -626,6 +634,7 @@ describe("deploy gate", () => {
     expect(besideTheBuild(run.events, armadaBuild("production", "--promote"))).toEqual({
       events: [phaseRun("preflight"), OVERRIDE, phaseRun("upload"), skipped("production does not serve this build: the build on armada failed")],
       started: true,
+      source: false,
     });
     expect(run.report).toContain("notice promote owner override, unverified the owner: production is down, ship the fix");
     expect(run.events.some((event) => event.startsWith("bun scripts/promote.ts check") || event.startsWith("bun scripts/promote.ts record"))).toBe(false);
@@ -914,7 +923,7 @@ describe("deploy gate", () => {
     expect(run.status).toBe(1);
     // 128 + SIGKILL. The status is the child's fate, not a claim the runner made.
     expect(run.stdout).toContain("the source phase failed (exit 137)");
-    expect(besideTheBuild(run.events, armadaBuild("staging"))).toEqual({ events: [...STOPS, WITHDRAW, ...AFTER_A_FAILED_BUILD], started: true });
+    expect(besideTheBuild(run.events, armadaBuild("staging"))).toEqual({ events: [...STOPS, WITHDRAW, ...AFTER_A_FAILED_BUILD], started: true, source: true });
     expect(run.report).toContain(
       "note source the source phase's runner it ended with exit 137 and no verdict of its own, so a row it had not reported on may be red and unnamed",
     );
@@ -963,7 +972,7 @@ describe("deploy gate", () => {
     expect(blocked.stdout).toContain("Another staging deploy is running on this machine");
 
     expect((await runDeploy({ lockHeld: true, option: "--promote" })).status).toBe(75);
-    expect(besideTheBuild((await runDeploy()).events, armadaBuild("staging"))).toEqual({ events: [...STOPS, WITHDRAW, ...AFTER_A_FAILED_BUILD], started: true });
+    expect(besideTheBuild((await runDeploy()).events, armadaBuild("staging"))).toEqual({ events: [...STOPS, WITHDRAW, ...AFTER_A_FAILED_BUILD], started: true, source: true });
   });
 
   // REPORT-ALL. After the upload gates nothing stops a deploy: every phase runs
@@ -973,8 +982,8 @@ describe("deploy gate", () => {
       const run = await runDeploy({ failingGate: phaseRun("source"), option });
 
       const expected = option === undefined
-        ? { events: [...STOPS, WITHDRAW, ...AFTER_A_FAILED_BUILD], started: true }
-        : { events: [...STOPS, phaseRun("source")], started: false };
+        ? { events: [...STOPS, WITHDRAW, ...AFTER_A_FAILED_BUILD], started: true, source: true }
+        : { events: [...STOPS], started: false, source: true };
 
       expect(run.status, `a red source phase under ${option ?? "a deploy"} did not fail it`).toBe(1);
       expect(besideTheBuild(run.events, armadaBuild("staging")), `the ${option ?? "deploy"} stopped at the red source phase\n${run.stdout}`).toEqual(expected);
@@ -1023,7 +1032,7 @@ describe("deploy gate", () => {
     // Same phases, same order, same failure semantics as any other deploy. This
     // is the assertion that would catch a future `--bootstrap` that skipped a
     // check rather than re-scoping one.
-    expect(besideTheBuild(bootstrap.events, armadaBuild("staging"))).toEqual({ events: [...STOPS, WITHDRAW, ...AFTER_A_FAILED_BUILD], started: true });
+    expect(besideTheBuild(bootstrap.events, armadaBuild("staging"))).toEqual({ events: [...STOPS, WITHDRAW, ...AFTER_A_FAILED_BUILD], started: true, source: true });
     expect(bootstrap.infraPhase).toBe("bootstrap");
     // The operator is told what is deferred and what is not, before the gates run.
     expect(bootstrap.stdout).toContain("BOOTSTRAP");
@@ -1187,6 +1196,10 @@ describe("deploy gate", () => {
     const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
     expect(source.indexOf('stop_phase upload')).toBeLessThan(source.indexOf('Step 2: Building Kinu'));
     expect(source.indexOf('run_phase post-publish')).toBeGreaterThan(source.indexOf('Step 4: Post-deploy smoke test'));
+    // m1929a: no source row reads the deployment, so the phase runs beside the build and the publish, joined at the wave.
+    expect(PLAN.filter((row) => (row.phase ?? 'source') === 'source' && readsDeployment(row)).map((row) => row.run)).toEqual([]);
+    expect(source.indexOf('--deploy-phase=source >')).toBeLessThan(source.indexOf('Step 2: Building Kinu'));
+    expect(source.indexOf('join_source\n  mark wave')).toBeGreaterThan(source.indexOf('run_phase post-publish\n'));
   });
 
   test("the Worker demands an assertion for a subset of what Access is told to cover", () => {
