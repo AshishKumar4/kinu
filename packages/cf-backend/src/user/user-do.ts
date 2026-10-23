@@ -155,7 +155,8 @@ export class UserDO extends Agent<Env> {
     sessionStands: (tokenHash) => this.sessions.sessionStands(tokenHash),
   };
 
-  private readonly credentials = new UserCredentials(this.host);
+  // The Google connection is a connection the assistant's watchers key on, as a preset's server is.
+  private readonly credentials = new UserCredentials({ ...this.host, googleMoved: async () => this.mcpServers.connectionsChanged() });
 
   private readonly secrets: UserSecrets = new UserSecrets(this.host, {
     configured: () => this.mcpServers.githubConnected(),

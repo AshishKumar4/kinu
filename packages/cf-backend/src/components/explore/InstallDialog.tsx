@@ -9,14 +9,14 @@ import { Effect } from "effect";
 import { Loader } from "@/components/ui/Loader";
 import { Button } from "@/components/ui/Button";
 import { DownloadSimpleIcon, KeyIcon } from "@phosphor-icons/react";
-import { APP_ROUTES, mcpPresetById, PERSONAL_ASSISTANT_ID } from "@kinu.run/core";
+import { APP_ROUTES, PERSONAL_ASSISTANT_ID } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
 import { Modal } from "@/components/ui/Modal";
 import { Choice, Field } from "@/components/ui/form";
 import { Switch } from "@/components/ui/Switch";
 import { Status } from "@/components/ui/Status";
 import { BrandMark } from "@/components/ui/BrandMark";
-import { presetBrand } from "@/components/plugins/McpPresetCards";
+import { connectionTitle, presetBrand } from "@/components/plugins/McpPresetCards";
 import { installBlueprint, type BlueprintPage } from "@/lib/explore-api";
 import { DEFAULT_ASSISTANT } from "@/components/assistant/AssistantStep";
 import { TextInput } from "@/components/ui/Field";
@@ -69,7 +69,7 @@ export function InstallDialog({ page, connected, onClose }: { page: BlueprintPag
           <Surface look="outlined" as="ul" className="p-rows-ruled overflow-hidden">
             {page.workspace.needs.map((need) => {
               const brand = presetBrand(need.connection);
-              const title = need.connection === null ? (need.secret ?? "A secret") : (mcpPresetById(need.connection)?.title ?? need.connection);
+              const title = need.connection === null ? (need.secret ?? "A secret") : connectionTitle(need.connection);
               const has = connected(need.connection);
 
               return (

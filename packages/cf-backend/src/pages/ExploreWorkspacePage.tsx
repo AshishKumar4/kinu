@@ -9,12 +9,12 @@ import { Link, useParams } from "react-router-dom";
 import { Effect } from "effect";
 import { Loader } from "@/components/ui/Loader";
 import { ClockIcon, HandPalmIcon, HouseIcon, KeyIcon, LayoutIcon, RobotIcon, StarIcon, AppWindowIcon, DownloadSimpleIcon } from "@phosphor-icons/react";
-import { APP_ROUTES, mcpPresetById, PERSONAL_ASSISTANT_ID } from "@kinu.run/core";
+import { APP_ROUTES, PERSONAL_ASSISTANT_ID } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { Status } from "@/components/ui/Status";
 import { BrandMark } from "@/components/ui/BrandMark";
-import { presetBrand } from "@/components/plugins/McpPresetCards";
+import { connectionTitle, presetBrand } from "@/components/plugins/McpPresetCards";
 import { CATEGORY_WORDS } from "@/components/sharing/words";
 import { KindBadge, Maker, kinuBlueprintPicture } from "@/components/explore/ExploreCard";
 import { InstallDialog } from "@/components/explore/InstallDialog";
@@ -59,7 +59,7 @@ function Row({ icon, title, meta, children }: { icon: ReactNode; title: string; 
 /** A need, and whether you already have it: a connection is yours once its server is connected in Plugins. */
 function NeedRow({ need, connected }: { need: ExploreNeed; connected: boolean }) {
   const brand = presetBrand(need.connection);
-  const name = need.connection === null ? (need.secret ?? "A secret") : (mcpPresetById(need.connection)?.title ?? need.connection);
+  const name = need.connection === null ? (need.secret ?? "A secret") : connectionTitle(need.connection);
 
   return (
     <li className="flex items-start gap-3 px-4 py-3" data-blueprint-need={need.connection ?? need.secret}>

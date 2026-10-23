@@ -5,7 +5,7 @@ import {
   ArrowClockwiseIcon, ArrowSquareOutIcon, PlusIcon, SignInIcon, TrashIcon, XIcon,
 } from "@phosphor-icons/react";
 import {
-  MCP_PRESETS, mcpPresetById, type ConnectEnded, type McpPreset, type McpPresetId, type McpServerSummary,
+  GOOGLE_CONNECTION, MCP_PRESETS, mcpPresetById, type ConnectEnded, type McpPreset, type McpPresetId, type McpServerSummary,
 } from "@kinu.run/core";
 import { addMcpServer, reconnectSaying, removeMcpServer, type McpServerInput } from "@/lib/user-api";
 import { beginConnect, signInMcpServer, type ConnectRun } from "@/lib/connect-window";
@@ -23,14 +23,20 @@ import { Button } from "@/components/ui/Button";
 const PRESET_MARK: Record<McpPresetId, BrandName> = {
   github: "github",
   cloudflare: "cloudflare",
-  google: "google",
 };
 
-/** `preset_id` is an arbitrary string on the wire; the catalog resolves it. */
-export function presetBrand(presetId: string | null): BrandName | undefined {
-  const preset = presetId === null ? undefined : mcpPresetById(presetId);
+/** A connection a blueprint names: a preset's id, which the catalog resolves (`preset_id` is any string on the wire), or
+ *  the Google connection. */
+export function presetBrand(connection: string | null): BrandName | undefined {
+  if (connection === GOOGLE_CONNECTION) return "google";
+  const preset = connection === null ? undefined : mcpPresetById(connection);
 
   return preset === undefined ? undefined : PRESET_MARK[preset.id];
+}
+
+/** What a blueprint's connection is called: its preset's title, or Google; a name nothing resolves, as it is. */
+export function connectionTitle(connection: string): string {
+  return connection === GOOGLE_CONNECTION ? "Google" : (mcpPresetById(connection)?.title ?? connection);
 }
 
 /** The host a server answers on; null for a URL that does not parse. */

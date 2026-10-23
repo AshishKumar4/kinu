@@ -2,7 +2,7 @@
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { describe, expect, test } from 'bun:test';
-import { asFetchFunction, createCredentialCipher, mcpPresetById, type JsonObject, type JsonValue } from '@kinu.run/core';
+import { asFetchFunction, createCredentialCipher, GOOGLE_OAUTH_CRED_KEY, mcpPresetById, type OAuthCredential, type JsonObject, type JsonValue } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
 import {
   createTestUserDO, sqlExec, testOwner, TEST_CREDENTIAL_ENCRYPTION_KEY,
@@ -173,16 +173,46 @@ describe('an MCP preset add', () => {
     h.close();
   });
 
+  // The Google connection replaced the Gmail preview preset (ledger 1023-n): the assistant's Gmail check keys on it.
+  test('the Google connection is a connection the assistant is told of as it comes and goes', async () => {
+    const h = harness();
+    const owner = await testOwner();
+    const credential: OAuthCredential = { kind: 'oauth', accessToken: 'ya29.held', refreshToken: '1//refresh', expiresAt: Date.now() + 3_600_000, metadata: { account: 'owner@gmail.com', scopes: [] } };
+
+    await h.userDO.claimConfig(owner, 'assistant', 'kinu-home');
+    await h.userDO.setCredential(owner, GOOGLE_OAUTH_CRED_KEY, credential);
+
+    expect(await h.userDO.userMcp_connectedPresets(owner)).toEqual(['google']);
+    await h.userDO.deleteCredential(owner, GOOGLE_OAUTH_CRED_KEY, false);
+    expect(h.connectionsChanged).toEqual(['kinu-home:google', 'kinu-home:']);
+    h.close();
+  });
+
+  test('a server from the retired Gmail preset goes at the next wake, with everything kept of it', async () => {
+    const h = harness();
+    const owner = await testOwner();
+    const gmail = await h.userDO.userMcp_add(owner, { name: 'Gmail', serverUrl: 'https://gmailmcp.googleapis.com/mcp/v1', headers: { Authorization: 'Bearer t' } }, 'https://kinu.example');
+
+    sqlExec(h.db).exec(`UPDATE user_mcp_servers SET preset_id = 'google' WHERE id = ?`, gmail.id);
+
+    const woken = createTestUserDO({ storage: h.db });
+
+    expect(await woken.userDO.userMcp_list(owner)).toEqual([]);
+    expect(catalogOf(gmail.id)).toBeUndefined();
+    woken.close();
+    h.close();
+  });
+
   test('the catalog is the authority: a presetId add cannot smuggle its own endpoint', async () => {
-    const h = harness({ mcpAppCredentials: ['google'] });
+    const h = harness({ mcpAppCredentials: ['github'] });
 
     const added = await h.userDO.userMcp_add(
       await testOwner(),
-      { presetId: 'google', name: 'x', serverUrl: 'https://attacker.example/mcp' },
+      { presetId: 'github', name: 'x', serverUrl: 'https://attacker.example/mcp' },
       'https://kinu.example',
     );
 
-    expect(catalogOf(added.id)?.serverUrl).toBe('https://gmailmcp.googleapis.com/mcp/v1');
+    expect(catalogOf(added.id)?.serverUrl).toBe('https://api.githubcopilot.com/mcp/');
     h.close();
   });
 
@@ -192,20 +222,17 @@ describe('an MCP preset add', () => {
     await expect(
       h.userDO.userMcp_add(await testOwner(), { presetId: 'github' }, 'https://kinu.example'),
     ).rejects.toMatchObject({ code: 'bad_input' });
-    await expect(
-      h.userDO.userMcp_add(await testOwner(), { presetId: 'google' }, 'https://kinu.example'),
-    ).rejects.toMatchObject({ code: 'bad_input' });
 
     const rows = sqlExec(h.db).exec(`SELECT id FROM user_mcp_servers`).toArray();
     expect(rows.length).toBe(0);
     h.close();
   });
 
-  // Gmail's MCP answers anyone's initialize and tools/list, so it connected unsigned on staging (2026-10-19) and would
+  // Gmail's MCP answered anyone's initialize and tools/list, so it connected unsigned on staging (2026-10-19) and would
   // have refused the first call of some turn. A registered app's server is not reached unsigned: its sign-in starts.
   test("a registered app's server is answered 401 until signed in, without a request leaving, so its sign-in starts at add", async () => {
-    const h = harness({ mcpAppCredentials: ['google'] });
-    const added = await h.userDO.userMcp_add(await testOwner(), { presetId: 'google' }, 'https://kinu.example');
+    const h = harness({ mcpAppCredentials: ['github'] });
+    const added = await h.userDO.userMcp_add(await testOwner(), { presetId: 'github' }, 'https://kinu.example');
     const send = present(liveMcpTransport(added.id)?.fetch, "the server's transport fetch");
     const network = globalThis.fetch;
     const left: string[] = [];
@@ -217,7 +244,7 @@ describe('an MCP preset add', () => {
     });
 
     try {
-      const unsigned = await send(present(mcpPresetById('google'), 'the Gmail preset').serverUrl, { method: 'POST', body: '{}' });
+      const unsigned = await send(present(mcpPresetById('github'), 'the GitHub preset').serverUrl, { method: 'POST', body: '{}' });
 
       expect({ status: unsigned.status, challenge: unsigned.headers.get('www-authenticate'), left }).toEqual({ status: 401, challenge: 'Bearer', left: [] });
     } finally {
@@ -313,7 +340,6 @@ describe('an MCP preset add', () => {
     expect(rows).toEqual([
       { id: 'github', appConfigured: true },
       { id: 'cloudflare', appConfigured: true },
-      { id: 'google', appConfigured: false },
     ]);
     h.close();
   });

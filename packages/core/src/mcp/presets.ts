@@ -1,6 +1,6 @@
 // One-click MCP server catalog, shared by the add surface, `preset_id` tagging, and preset validation.
 
-export type McpPresetId = 'github' | 'cloudflare' | 'google';
+export type McpPresetId = 'github' | 'cloudflare';
 
 export interface McpPreset {
   readonly id: McpPresetId;
@@ -82,20 +82,6 @@ export const MCP_PRESETS: readonly McpPreset[] = [
     transport: 'streamable-http',
     auth: 'oauth',
     docsUrl: 'https://developers.cloudflare.com/agents/model-context-protocol/cloudflare/servers-for-cloudflare/',
-  },
-  {
-    id: 'google',
-    title: 'Gmail',
-    description: 'Read and search your mail',
-    // Requires a user-created OAuth client with redirect `<deployment-origin>/api/user/mcp/callback`.
-    serverUrl: 'https://gmailmcp.googleapis.com/mcp/v1',
-    transport: 'streamable-http',
-    auth: 'oauth-app',
-    scope: 'https://www.googleapis.com/auth/gmail.readonly',
-    // Google issues a refresh token only to an offline request, and again only with consent asked once more
-    // (developers.google.com/identity/protocols/oauth2/web-server#offline): without it, Gmail signs out within the hour.
-    authorize: { access_type: 'offline', prompt: 'consent' },
-    docsUrl: 'https://developers.google.com/workspace/gmail/api/guides/configure-mcp-server',
   },
 ];
 

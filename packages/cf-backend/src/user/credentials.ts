@@ -81,7 +81,10 @@ function credentialBaseURL(storedKey: string, cred: Credential): string | null {
 /** The selected AI Gateway: written only by `selectAIGateway`, an authentication setting like a credential. */
 export const AI_GATEWAY_CONFIG_KEY = 'cloudflare_ai_gateway';
 
-export type UserCredentialsHost = Pick<UserObjectHost, 'ctx' | 'env' | 'requireTier' | 'sqlx'>;
+export type UserCredentialsHost = Pick<UserObjectHost, 'ctx' | 'env' | 'requireTier' | 'sqlx'> & {
+  /** Told when the Google connection came or went, so the watchers keyed on it arm or cancel. */
+  readonly googleMoved?: () => Promise<void>;
+};
 
 /** The account's credential vault. */
 export class UserCredentials {
@@ -124,6 +127,8 @@ export class UserCredentials {
 
     await this.writeCredential(key, cred);
 
+    if (key === GOOGLE_OAUTH_CRED_KEY) await this.host.googleMoved?.();
+
     // Discover AI Gateways right after Cloudflare login so my-gateway works without a settings visit.
     // listAIGateways never throws.
     if (key === CLOUDFLARE_OAUTH_CRED_KEY) await this.listAIGateways(await ownerCaller(this.host.env));
@@ -132,8 +137,11 @@ export class UserCredentials {
   async deleteCredential(caller: UserCaller, key: string, revoke: boolean): Promise<DisconnectOutcome> {
     await this.host.requireTier(caller, 'credentials.other');
     validateCredentialKey(key);
+    const outcome = await this.disconnectCredential(key, revoke);
 
-    return this.disconnectCredential(key, revoke);
+    if (key === GOOGLE_OAUTH_CRED_KEY) await this.host.googleMoved?.();
+
+    return outcome;
   }
 
   /**
@@ -662,7 +670,10 @@ export class UserCredentials {
       GOOGLE_OAUTH_CRED_KEY,
       held,
       () => refreshGoogleCredential(this.host.env, held.cred),
-      async (revision) => { this.retireRejectedCredential(GOOGLE_OAUTH_CRED_KEY, revision); },
+      async (revision) => {
+        this.retireRejectedCredential(GOOGLE_OAUTH_CRED_KEY, revision);
+        await this.host.googleMoved?.();
+      },
     );
 
     if (renewed === 'revoked') return null;

@@ -343,7 +343,7 @@ if (mcpPresetVariant === "connected") {
 const mcpSecrets = (() => {
   const raw = new URLSearchParams(location.search).get("mcp-secrets");
 
-  const listed = raw === null ? ["github", "google"] : raw.split(",");
+  const listed = raw === null ? ["github"] : raw.split(",");
 
   return new Set(listed.filter((entry) => entry.length > 0));
 })();
@@ -698,7 +698,6 @@ function mcpPresetsFixture(): Response {
   return fixtureJson([
     { id: "github", appConfigured: mcpSecrets.has("github") },
     { id: "cloudflare", appConfigured: true },
-    { id: "google", appConfigured: mcpSecrets.has("google") },
   ]);
 }
 
@@ -944,6 +943,11 @@ function welcomeMailFixture(path: string, method: string, body: BodyInit | null 
   return null;
 }
 
+/** The Google connection, offered and not yet connected: its card's way in. */
+function googleConnectionFixture(path: string): Response | null {
+  return path === "/api/user/google" ? fixtureJson({ available: true, connection: null }) : null;
+}
+
 /** Built-in sign-in off, as on an account with an OAuth app: the invite card stays away. */
 function builtinAuthFixture(path: string): Response | null {
   return path === "/api/user/builtin-auth" ? fixtureJson({ enabled: false, owner: false }) : null;
@@ -953,6 +957,7 @@ const SETTINGS_SLICES: readonly SettingsSlice[] = [
   secretsFixture,
   galleryWebSearchTest,
   builtinAuthFixture,
+  googleConnectionFixture,
   welcomeMailFixture,
   accountMemoryFixture,
   accountProfileFixture,

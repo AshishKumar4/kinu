@@ -35,15 +35,13 @@ If you connect Google, Kinu asks Google for access to Gmail, Google Calendar, Go
 - `drive`: read and change the files in your Drive.
 - `contacts.readonly`: read your contacts.
 
-If you connect Gmail on its own, Kinu asks only for read-only access (`gmail.readonly`), and it cannot send, change or delete anything in your Gmail.
-
 - Kinu uses this access only to do what you or your agents ask: read and summarise mail, find files and events, prepare replies. Anything that sends, changes or deletes something at Google waits for your approval first.
 - Kinu sends the content of a message, event or file to the AI model only when it processes that item for you.
 - Kinu does not use your Google data for advertising, does not sell it, and does not use it to develop, improve or train general AI or machine-learning models.
 - No person reads your Google data, except with your permission, to investigate a security problem or abuse, or when the law requires it.
 - Kinu's use of information received from Google APIs adheres to the [Google API Services User Data Policy](https://developers.google.com/terms/api-services-user-data-policy), including the Limited Use requirements.
 
-You can disconnect Google or Gmail at any time in Settings. Kinu then deletes the stored Google credential, and can ask Google to revoke it. You can also remove Kinu's access in your Google Account at https://myaccount.google.com/permissions.
+You can disconnect Google at any time in Settings. Kinu then deletes the stored Google credential, and can ask Google to revoke it. You can also remove Kinu's access in your Google Account at https://myaccount.google.com/permissions.
 
 ## How Kinu learns
 

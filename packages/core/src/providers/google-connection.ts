@@ -11,6 +11,9 @@ import { OAuthTokenError } from './oauth-token-error';
 
 export const GOOGLE_OAUTH_CRED_KEY = 'google.oauth';
 
+/** The connection a blueprint names for it (`connection: 'google'`), held while the account holds `google.oauth`. */
+export const GOOGLE_CONNECTION = 'google';
+
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 
 export const GOOGLE_REVOKE_URL = 'https://oauth2.googleapis.com/revoke';

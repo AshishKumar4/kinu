@@ -1,6 +1,6 @@
 import { Cause, Effect, Exit } from 'effect';
 import {
-  ConnectRunSchema, nanoid, plainFetch, type ConnectEnded, type JsonObject, type JsonValue, JsonObjectSchema, decodeJsonValue, McpProtocolFailureSchema, type UserCaller, compareCodeUnits, type McpPresetId, type McpRefusal, type RemoteMcpTool, mcpPresetById, describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor, validateMcpServerInput, readAllowedTools, parseMcpHeaders, McpTransportSchema, type McpTransport, GITHUB_MCP_PRESET, GitHubRefreshAskSchema, refreshGitHub, type GitHubRefreshAnswer, type GitHubRefreshAsk, type McpPresetAvailability, type McpServerSummary, MCP_PRESETS, type McpPreset, CALLABLE_MCP_STATES, mapConnectionStatus, type McpConnectionStatus, mcpCredentialTransport, mcpListingRefusals, McpTransitionLog, observedMcpState, type McpObservedConnection, type McpObservedState, type McpToolListing,
+  ConnectRunSchema, GOOGLE_CONNECTION, GOOGLE_OAUTH_CRED_KEY, nanoid, plainFetch, type ConnectEnded, type JsonObject, type JsonValue, JsonObjectSchema, decodeJsonValue, McpProtocolFailureSchema, type UserCaller, compareCodeUnits, type McpPresetId, type McpRefusal, type RemoteMcpTool, mcpPresetById, describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor, validateMcpServerInput, readAllowedTools, parseMcpHeaders, McpTransportSchema, type McpTransport, GITHUB_MCP_PRESET, GitHubRefreshAskSchema, refreshGitHub, type GitHubRefreshAnswer, type GitHubRefreshAsk, type McpPresetAvailability, type McpServerSummary, MCP_PRESETS, type McpPreset, CALLABLE_MCP_STATES, mapConnectionStatus, type McpConnectionStatus, mcpCredentialTransport, mcpListingRefusals, McpTransitionLog, observedMcpState, type McpObservedConnection, type McpObservedState, type McpToolListing,
 } from '@kinu.run/core';
 import type { MCPClientManager } from 'agents/mcp/client';
 import type { CallToolResult } from '@modelcontextprotocol/client';
@@ -17,7 +17,6 @@ import type { McpSessionHost } from './mcp';
 /** The only place these `Env` names exist; messages and the deploy doc take their wording from here. */
 const MCP_APP_ENV = {
   github: { id: 'MCP_GITHUB_CLIENT_ID', secret: 'MCP_GITHUB_CLIENT_SECRET' },
-  google: { id: 'MCP_GOOGLE_CLIENT_ID', secret: 'MCP_GOOGLE_CLIENT_SECRET' },
 } as const satisfies Partial<Record<McpPresetId, {
   readonly id: keyof Env;
   readonly secret: keyof Env;
@@ -32,7 +31,7 @@ function mcpAppEnvNames(
 ): { readonly clientIdEnv: McpAppEnvKey; readonly clientSecretEnv: McpAppEnvKey } | undefined {
   if (preset.auth !== 'oauth-app') return undefined;
 
-  if (preset.id === 'github' || preset.id === 'google') {
+  if (preset.id === 'github') {
     const names = MCP_APP_ENV[preset.id];
 
     return { clientIdEnv: names.id, clientSecretEnv: names.secret };
@@ -383,7 +382,17 @@ export class UserMcpServers {
    */
   private async reconcile(): Promise<void> {
     const mgr = this.host.mcp;
-    const configs = this.host.sqlx<McpConfigRow>(`SELECT id, headers, preset_id FROM user_mcp_servers`);
+    const all = this.host.sqlx<McpConfigRow>(`SELECT id, headers, preset_id FROM user_mcp_servers`);
+    const retired = (config: McpConfigRow) => config.preset_id !== null && mcpPresetById(config.preset_id) === undefined;
+
+    // A server from a preset Kinu no longer offers (the Gmail preview's, which the Google connection replaced) goes, with
+    // everything kept of it.
+    for (const row of all.filter(retired)) {
+      await this.retire(row.id);
+      diagnostics.event('mcp.retired_preset_removed', { serverId: row.id, preset: row.preset_id ?? '' });
+    }
+
+    const configs = all.filter((config) => !retired(config));
     const configured = new Set(configs.map((row) => row.id));
     const catalog = this.catalog();
 
@@ -761,7 +770,8 @@ export class UserMcpServers {
     return { id, authUrl };
   }
 
-  /** The presets the account is connected to now: configured, and their connection one a call can use. */
+  /** The connections the account holds now: each preset configured with a connection a call can use, and the Google
+   *  connection (`GOOGLE_CONNECTION`) while its grant is kept. */
   connectedPresets(): string[] {
     const connections = this.host.mcp.mcpConnections;
 
@@ -770,8 +780,17 @@ export class UserMcpServers {
     const held = (id: string): boolean => CALLABLE_MCP_STATES.has(mapConnectionStatus(connections[id]?.connectionState))
       || (this.undialled(id) && this.kept?.has(id) === true);
 
-    return this.host.sqlx<{ id: string; preset_id: string | null }>(`SELECT id, preset_id FROM user_mcp_servers WHERE preset_id IS NOT NULL`)
+    const presets = this.host.sqlx<{ id: string; preset_id: string | null }>(`SELECT id, preset_id FROM user_mcp_servers WHERE preset_id IS NOT NULL`)
       .flatMap((row) => (row.preset_id !== null && held(row.id) ? [row.preset_id] : []));
+
+    const google = this.host.sqlx(`SELECT 1 FROM user_credentials WHERE key = ?`, GOOGLE_OAUTH_CRED_KEY).length > 0;
+
+    return google ? [...presets, GOOGLE_CONNECTION] : presets;
+  }
+
+  /** The assistant told the connections moved: the Google connection came or went. */
+  connectionsChanged(): Promise<void> {
+    return this.assistantConnectionsChanged();
   }
 
   async userMcp_connectedPresets(caller: UserCaller): Promise<string[]> {
@@ -806,6 +825,12 @@ export class UserMcpServers {
     if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) throw new KinuError('bad_input', 'Invalid server id.');
     await this.activationSettled();
 
+    await this.retire(id);
+    await this.assistantConnectionsChanged();
+  }
+
+  /** A server gone from the live manager, its configuration, and all kept of it: its tool list and its sign-ins' runs. */
+  private async retire(id: string): Promise<void> {
     try { await this.host.mcp.removeServer(id); }
     catch (err) {
       diagnostics.failure('mcp.live_server_removal_failed', toKinuError({
@@ -821,7 +846,6 @@ export class UserMcpServers {
     await this.host.ctx.storage.delete(listingKey(id));
     // Its sign-ins' runs go with it: no callback of its can name one now.
     await this.host.ctx.storage.delete([...(await this.host.ctx.storage.list({ prefix: connectRunKey(id, '') })).keys()]);
-    await this.assistantConnectionsChanged();
   }
 
   /**

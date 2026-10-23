@@ -1,6 +1,6 @@
 /** The account's MCP servers and the presets they install from: one read every view of them on a page shares. */
-import type { McpPresetAvailability, McpServerSummary } from "@kinu.run/core";
-import { listMcpPresets, listMcpServers } from "@/lib/user-api";
+import { GOOGLE_CONNECTION, type McpPresetAvailability, type McpServerSummary } from "@kinu.run/core";
+import { googleConnection, listMcpPresets, listMcpServers } from "@/lib/user-api";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { lastValue, useAsyncResource, type AsyncResourceControl } from "@/hooks/use-async-resource";
 
@@ -52,9 +52,13 @@ export function useMcpWatch(mcp: McpServers): void {
   useEffect(() => watch(), [watch]);
 }
 
-/** Whether the account holds a server from a preset that is signed in and serving: a blueprint's need reads it. */
-export function useConnectedPreset(): (preset: string) => boolean {
+/** Whether the account holds a connection: a server from a preset, signed in and serving, or the Google connection. A
+ *  blueprint's need reads it. */
+export function useConnectedPreset(): (connection: string) => boolean {
   const servers = lastValue(useMcpServers().servers.resource) ?? [];
+  const google = lastValue(useAsyncResource(googleConnection).resource)?.connection ?? null;
 
-  return (preset) => servers.some((server) => server.presetId === preset && (server.status === "ready" || server.status === "connected"));
+  return (connection) => (connection === GOOGLE_CONNECTION
+    ? google !== null
+    : servers.some((server) => server.presetId === connection && (server.status === "ready" || server.status === "connected")));
 }
