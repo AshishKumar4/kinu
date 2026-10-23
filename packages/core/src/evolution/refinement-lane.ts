@@ -472,6 +472,13 @@ function scoreEdits(
   ));
 }
 
+/** What a fact must say, which the dreamer drafts by and the reviewer holds it to: the world model shows every fact on
+ *  every turn, and the glm pilot's dreamed "all UI work goes to the expert lane" ran a layout request into a staffing step
+ *  (EVAL-5, 2026-10-23). */
+const FACT_SCOPE = 'A fact is shown to the agent on every later turn, whatever the work: its value names the situation '
+  + 'it holds for, in the user\'s terms ("when they ask for a deploy, ..."), is never a rule for all work, and leaves out '
+  + 'what held only for the session it was said in.';
+
 /** The owner's order for where a lesson goes, which the dreamer drafts by and the reviewer holds it to. */
 const EDIT_PRIORITY = 'Put a lesson in the first place that can carry it: a prompt section or a tool description, then a '
   + 'memory fact, and a skill last. A skill is for a multi-step procedure that no prompt section or tool description '
@@ -603,7 +610,7 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
     '',
     'Recorded fact keys (`fact`): the durable world model. Propose one ONLY for a preference the',
     'user stated in their own words, and quote those words verbatim from a turn above; a fact whose',
-    'quote is not in the trajectory is refused:',
+    `quote is not in the trajectory is refused. ${FACT_SCOPE} The keys recorded now:`,
     factLines,
     '',
     'Skill files (`skill`): a procedure the agent follows when its description matches the work, and the last',
@@ -720,6 +727,7 @@ async function renderReviewerBrief(
     '',
     EDIT_PRIORITY,
     'Reject a skill that an edit to a prompt section or a tool description would cover.',
+    `Reject a fact that does not hold to this: ${FACT_SCOPE}`,
     '',
     `## The turns it read (${String(input.reviewed.length)})`,
     '',
