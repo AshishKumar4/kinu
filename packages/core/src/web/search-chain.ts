@@ -55,9 +55,6 @@ interface WebSearchDeps {
   readonly pacer?: ProviderPacer;
 }
 
-/** What fixes a search no one could pay for, as its refusal ends. */
-const UNPAID_FIX = 'To search again, add AI Gateway credits, or a search key in Settings > Web search.';
-
 /** What a result's snippet keeps: the clip Tavily snippets had. Cloudflare's descriptions run to 8,000 characters. */
 const SNIPPET_CHARS = 600;
 
@@ -80,6 +77,8 @@ interface Payer {
   readonly lane: string;
   /** The entry as the person reads it, naming who pays. */
   readonly entry: string;
+  /** What fixes this entry's refusal for want of payment (402), in the person's terms: whose credits, and where. */
+  readonly unpaid: string;
   /** Who refuses in its own words: Cloudflare for its API, else the provider. */
   readonly speaker: string;
   readonly answer: v.GenericSchema<unknown, SearchAnswer>;
@@ -113,6 +112,7 @@ export function chainWebSearch(deps: WebSearchDeps): WebSearch {
 
       return {
         kind: 'payer', lane: `websearch|${route.provider}|key:${sha256Hex(key).slice(0, 16)}`, entry, speaker: label,
+        unpaid: `add credits to your ${label} account, or choose another search in Settings > Web search`,
         answer: direct.answer, refusal: direct.refusal, account: { provider: route.provider, name: accountOf(auth.credentialKey ?? route.provider) },
         send: (signal) => fetchImpl(request.url, { ...request.init, signal }),
       } satisfies Payer;
@@ -138,6 +138,7 @@ export function chainWebSearch(deps: WebSearchDeps): WebSearch {
 
       return {
         ...common, lane: `websearch|${route.provider}|${root}|${gateway ?? ''}`, entry, account: { provider: MY_GATEWAY_PROVIDER_ID, name: MAIN_ACCOUNT },
+        unpaid: 'add credits to your AI Gateway in Cloudflare, or a search key in Settings > Web search',
         // One renewal of the login on a 401, as every Cloudflare call makes.
         send: async (signal) => {
           const said = await authenticatedSend({ key: CLOUDFLARE_WEB_SEARCH_CRED_KEY, getAuth: deps.getAuth, auth: login, send: sign(signal) });
@@ -153,6 +154,7 @@ export function chainWebSearch(deps: WebSearchDeps): WebSearch {
 
     return {
       ...common, lane: `websearch|${route.provider}|deployment`, entry: `${label} on this deployment's AI Gateway`, account: undefined,
+      unpaid: 'this deployment\'s search credits are spent: add your own search key in Settings > Web search',
       send: () => deployment(asked),
     } satisfies Payer;
   });
@@ -229,13 +231,17 @@ export function chainWebSearch(deps: WebSearchDeps): WebSearch {
 
     const unpaidAfter = (at: number) => [...resolved.entries()].filter(([next, payer]) => next > at && payer.kind === 'refused').map(([, payer]) => (payer.kind === 'refused' ? payer.said : ''));
 
-    // A search refused for want of payment (402: the gateway's credits spent) ends naming the fix.
-    let unpaid = false;
+    // A search refused for want of payment (402) ends naming the fix, each payer's in its own terms.
+    const unpaid = new Set<string>();
 
-    const exhausted = (last: Refused, at: number) => new KinuError(
-      (last.status === null ? null : codeForStatus(last.status)) ?? 'unavailable',
-      [...said, last.said, ...unpaidAfter(at)].join('; ') + (unpaid || last.status === 402 ? `. ${UNPAID_FIX}` : ''),
-    );
+    const exhausted = (last: Refused, at: number) => {
+      const fixes = [...unpaid].join('; ');
+
+      return new KinuError(
+        (last.status === null ? null : codeForStatus(last.status)) ?? 'unavailable',
+        [...said, last.said, ...unpaidAfter(at)].join('; ') + (fixes === '' ? '' : `. To search again, ${fixes}.`),
+      );
+    };
 
     for (const [at, route] of routes.entries()) {
       const payer = yield* payerAt(at, route);
@@ -257,7 +263,7 @@ export function chainWebSearch(deps: WebSearchDeps): WebSearch {
 
         // Every refusal hands over, a 400 too: a one-line query is rarely what a provider refuses. Cloudflare answers 400
         // to a gateway the account lacks (2026-10-19), and another entry may be paid for elsewhere.
-        unpaid ||= outcome.status === 402;
+        if (outcome.status === 402) unpaid.add(payer.unpaid);
 
         if (!(yield* lastPaid(at))) {
           said.push(outcome.said);

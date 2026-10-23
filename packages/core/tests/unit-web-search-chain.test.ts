@@ -109,7 +109,7 @@ describe('who pays for a search through Cloudflare', () => {
     await expect(w.searchWith([EXA], 0)({ query: 'q', limit: 5 }))
       .rejects.toMatchObject({
         code: 'denied',
-        message: 'Exa on your AI Gateway: Cloudflare answered 402: Your AI Gateway credit balance is zero. To search again, add AI Gateway credits, or a search key in Settings > Web search.',
+        message: 'Exa on your AI Gateway: Cloudflare answered 402: Your AI Gateway credit balance is zero. To search again, add credits to your AI Gateway in Cloudflare, or a search key in Settings > Web search.',
       });
     expect(w.asked).toEqual([]);
   });
@@ -169,7 +169,7 @@ describe('a refusal along the chain', () => {
       code: 'denied',
       message: 'Exa on this deployment\'s AI Gateway: Cloudflare answered 402: Your AI Gateway credit balance is zero; '
         + 'Linkup on this deployment\'s AI Gateway: Cloudflare answered 403: Authentication error. '
-        + 'To search again, add AI Gateway credits, or a search key in Settings > Web search.',
+        + 'To search again, this deployment\'s search credits are spent: add your own search key in Settings > Web search.',
     });
     expect(w.asked).toEqual(['exa:q:5', 'linkup:q:5']);
     expect(w.waits).toEqual([]);
@@ -202,7 +202,7 @@ describe('a refusal along the chain', () => {
 
     await expect(search(async () => null)({ query: 'q', limit: 5 })).rejects.toMatchObject({
       message: 'Exa on this deployment\'s AI Gateway: Cloudflare answered 402: Your AI Gateway credit balance is zero; Exa with your key: no Exa key is stored. '
-        + 'To search again, add AI Gateway credits, or a search key in Settings > Web search.',
+        + 'To search again, this deployment\'s search credits are spent: add your own search key in Settings > Web search.',
     });
   });
 

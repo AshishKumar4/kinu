@@ -101,7 +101,7 @@ test("a refusal reaches the CLI in Cloudflare's own words, and no one else's tok
   await expect(spent.viaCli(SESSION_TOKEN).search('wrangler deploy')).rejects.toMatchObject({
     // With no key stored, the default chain's second entry says one would serve.
     code: 'denied', message: "Exa on this deployment's AI Gateway: Cloudflare answered 402: Your AI Gateway credit balance is zero; Exa with your key: no Exa key is stored. "
-      + 'To search again, add AI Gateway credits, or a search key in Settings > Web search.',
+      + "To search again, this deployment's search credits are spent: add your own search key in Settings > Web search.",
   });
 
   // Signed out, or a token not minted for the deployment's services: refused at the gate, nothing searched.
