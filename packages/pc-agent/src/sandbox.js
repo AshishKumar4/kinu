@@ -1399,25 +1399,9 @@ function buildLinuxArgv(view, options) {
   // owner shared and later deleted is no reason to refuse every command.
   for (const root of [...view.roots].reverse()) argv.push('--bind-try', root, root);
 
-  // Over the writable roots that hold them (guardedPaths), outer before inner, so a pin or an opened entry never covers
-  // a read-only bind below it. Sealed by Landlock, a sealed folder is pinned (it cannot be renamed or removed) and the
-  // launcher refuses new entries in it; sealed by mounts, it is read-only, then each entry already in it writable again.
-  // Git's own directories and config are made first when missing; nothing else is.
   const landlock = options.seal === 'landlock';
 
-  for (const { path: kept, kind } of [...(options.guarded ?? [])].sort((a, b) => a.path.length - b.path.length)) {
-    if (kind === 'open' && landlock) continue;
-
-    if (kind === 'pin' || kind === 'open' || (kind === 'sealed' && landlock)) {
-      argv.push('--bind-try', kept, kept);
-      continue;
-    }
-
-    if (kind === 'directory') fs.mkdirSync(kept, { recursive: true });
-    else if (kind === 'config') fs.closeSync(fs.openSync(kept, 'a'));
-
-    if (fs.existsSync(kept)) argv.push('--ro-bind', kept, kept);
-  }
+  argv.push(...guardedMounts(options.guarded ?? [], landlock));
 
   for (const dir of view.hiddenDirs) argv.push('--tmpfs', dir);
 
@@ -1441,6 +1425,32 @@ function buildLinuxArgv(view, options) {
 
   for (const name of Object.keys(options.env)) argv.push('--setenv', name, options.env[name]);
   argv.push('--', ...program);
+
+  return argv;
+}
+
+/**
+ * The binds that keep what the guard keeps (guardedPaths), over the writable roots that hold them, outer before inner,
+ * so a pin or an opened entry never covers a read-only bind below it. Sealed by Landlock, a sealed folder is pinned (it
+ * cannot be renamed or removed) and the launcher refuses new entries in it; sealed by mounts, it is read-only, then each
+ * entry already in it writable again. Git's own directories and config are made first when missing; nothing else is.
+ */
+function guardedMounts(guarded, landlock) {
+  const argv = [];
+
+  for (const { path: kept, kind } of [...guarded].sort((a, b) => a.path.length - b.path.length)) {
+    if (kind === 'open' && landlock) continue;
+
+    if (kind === 'pin' || kind === 'open' || (kind === 'sealed' && landlock)) {
+      argv.push('--bind-try', kept, kept);
+      continue;
+    }
+
+    if (kind === 'directory') fs.mkdirSync(kept, { recursive: true });
+    else if (kind === 'config') fs.closeSync(fs.openSync(kept, 'a'));
+
+    if (fs.existsSync(kept)) argv.push('--ro-bind', kept, kept);
+  }
 
   return argv;
 }
