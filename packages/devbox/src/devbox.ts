@@ -7,7 +7,7 @@ import { launched } from './exec-launcher';
 import { nativeStartClock } from './native-clock';
 import type { DevboxExecOptions, ExecResult, ReadOptions, FileResult, ListFilesOptions, FileMetadata, GatewayBindings } from './contracts';
 import { listFiles as readDirectory } from './file-listing';
-import { writeFileIfDigest as writeFileIfDigestInGuest, type DigestWriteRequest } from './file-digest-write';
+import { writeFileIfDigest as writeFileIfDigestInGuest } from './file-digest-write';
 import { DEFAULT_EXCLUDES, DiskChainStateSchema, DiskChainStorage, UnboundStorage, diskChain, recoveryNotice, type DiskChain, type DiskChainPorts } from './disk-chain';
 import { STORE_MOUNT, chainStoreRoot, storeObjectUrl } from './store-gateway';
 import { snapshotRegistry, type SnapshotRegistry } from './snapshot-registry';
@@ -26,10 +26,10 @@ import {
 } from './sessions';
 import { bridgeSockets } from './socket-bridge';
 import { DESKTOP_CHECK, DESKTOP_PORT } from './desktop';
+import { DesktopLease, LET_UP_PY, SCREENSHOT, offScreen, pngSize, watchArgv, xdotoolOf } from './desktop-input';
 import {
-  DesktopLease, DesktopRequestSchema, LET_UP_PY, SCREENSHOT, offScreen, pngSize, watchArgv, xdotoolOf,
-  type DesktopAction, type DesktopAnswer, type DesktopRequest, type DesktopScreen,
-} from './desktop-input';
+  DEVBOX_WORKDIR, DesktopRequestSchema, type DesktopAction, type DesktopAnswer, type DesktopRequest, type DesktopScreen, type DigestWriteRequest,
+} from './wire';
 import { LABEL_LIMIT, LABEL_NAME, ZoneSchema, previewAddress, type PreviewAddress } from './preview';
 import { Cause, Deferred, Effect, Exit, Result, Semaphore } from 'effect';
 
@@ -86,7 +86,6 @@ import {
 } from './incidents';
 import {
   DEVBOX_RUNTIME_DIR,
-  DEVBOX_WORKDIR,
   type AttachOutcome,
   type CheckpointKind,
   type CheckpointOutcome,

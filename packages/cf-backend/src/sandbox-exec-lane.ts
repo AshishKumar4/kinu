@@ -4,9 +4,10 @@
  * and an abort kills the process, not just the wait. See `SandboxHandle.exec`.
  */
 
-import { jsonResultOrVoid, REAL_CLOCK, SandboxPending, WORKSPACE_BACKUP_DIR, type Clock, type OutputSink, type SandboxHandle } from '@kinu.run/core';
+import { jsonResultOrVoid, REAL_CLOCK, SandboxPending, type Clock, type OutputSink, type SandboxHandle } from '@kinu.run/core';
 import { attempt, classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle, toKinuError, type ErrorCode } from "@kinu.run/core/obs";
 import { devboxFailure, holdReadiness, readExec, type DevboxErrorCode } from '@kinu.run/devbox';
+import { DEVBOX_WORKDIR } from '@kinu.run/devbox/wire';
 import { Effect } from 'effect';
 import type { KinuDevbox } from "./kinu-devbox";
 import { sandboxPreviewLabelOf } from "@kinu.run/core";
@@ -98,7 +99,7 @@ async function execWithoutDeadline(
   },
   output: OutputSink | undefined,
 ) {
-  const options = { cwd: cwd ?? WORKSPACE_BACKUP_DIR, execId, ...(env !== undefined && { env }) };
+  const options = { cwd: cwd ?? DEVBOX_WORKDIR, execId, ...(env !== undefined && { env }) };
 
   return await stoppable(handle, { execId, signal, doing: 'computer.exec' }, () => (output === undefined
     ? handle.exec(command, options)

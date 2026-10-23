@@ -7,43 +7,13 @@
 import { Effect, Semaphore } from 'effect';
 import * as v from 'valibot';
 import { KinuError, refusalOf, settle, toKinuError, type Refusal } from '../obs/index';
+import type { DesktopAction, DesktopAnswer, DesktopRequest, DesktopScreen as BoxScreen } from '@kinu.run/devbox/wire';
 import type { ExecutorTool, ExecutorToolResult } from './types';
 
-/** [x, y]: pixels of the screenshot, from its top left. */
-type DesktopPoint = readonly [number, number];
-
-type DesktopButton = 'left' | 'right' | 'middle';
-
-/**
- * One action the box performs on the screen. `text` holds no line break or tab and at most {@link TYPED_CHUNK}
- * characters; `keys` and a click's `hold` (its modifiers, sent as `keys`) are spelt as {@link desktopChord} spells them.
- */
-export type DesktopAction =
-  | { readonly kind: 'screenshot' }
-  | { readonly kind: 'watch'; readonly seconds: number; readonly frames: number }
-  | { readonly kind: 'click'; readonly at?: DesktopPoint; readonly button: DesktopButton; readonly count: number; readonly hold: readonly string[] }
-  | { readonly kind: 'type'; readonly text: string }
-  | { readonly kind: 'key'; readonly keys: string; readonly holdMs?: number }
-  | { readonly kind: 'scroll'; readonly at: DesktopPoint; readonly dy: number; readonly dx: number }
-  | { readonly kind: 'move'; readonly at: DesktopPoint }
-  | { readonly kind: 'move'; readonly by: readonly [number, number] }
-  | { readonly kind: 'drag'; readonly from: DesktopPoint; readonly to: DesktopPoint };
-
-/** An action, and the agent it is for: the screen has one driver at a time. */
-export interface DesktopRequest {
-  readonly driver: string;
-  readonly action: DesktopAction;
-}
-
-/** `off_screen`: a point outside it. `driven`: another agent drives it. `look_first`: this agent has not looked since
- *  another could have changed it. */
-type DesktopRefusal = 'off_screen' | 'driven' | 'look_first';
-
-/** The box's answer: `png` is base64. A refusal is the box's verdict on the request, given before any input. */
-export type DesktopAnswer =
-  | { readonly kind: 'done' }
-  | { readonly kind: 'screen'; readonly png: string; readonly width: number; readonly height: number }
-  | { readonly kind: 'refused'; readonly reason: DesktopRefusal; readonly detail: string };
+/** The box's own words: it parses each request it is sent (`DesktopRequestSchema`). A typed action's `text` holds no
+ *  line break or tab and at most {@link TYPED_CHUNK} characters; `keys` and a click's `hold` are spelt as
+ *  {@link desktopChord} spells them. */
+export type { DesktopAction, DesktopAnswer, DesktopRequest } from '@kinu.run/devbox/wire';
 
 /** The members that look, which Plan keeps and a program moved to the background may still call. */
 const LOOKING = ['screenshot', 'watch'] as const;
@@ -136,9 +106,7 @@ export const WATCH_DEFAULT_FRAMES = 4;
  * The desktop as the box runs it, from the box's own constants: its size, and how a watch tiles its frames: each at
  * `percent` of the screen's width and height, `columns[n - 1]` to a row for `n` frames, at most as many as `columns`.
  */
-export interface DesktopScreen {
-  readonly width: number;
-  readonly height: number;
+export interface DesktopScreen extends BoxScreen {
   readonly sheet: { readonly percent: number; readonly columns: readonly number[] };
 }
 

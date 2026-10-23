@@ -9,7 +9,8 @@
  * `recover`, on the fresh container the tier's crash left, attaches the chain cold and reads the tree back.
  */
 import * as v from 'valibot';
-import { DEVBOX_RUNTIME_DIR as RT, DEVBOX_WORKDIR as WD } from '../src/storage';
+import { DEVBOX_RUNTIME_DIR as RT } from '../src/storage';
+import { DEVBOX_WORKDIR as WD } from '../src/wire';
 import type { RecoveryAcceptance } from './contract-types';
 import { diskHarness, TREE, type DiskContractInput } from './disk-contracts';
 

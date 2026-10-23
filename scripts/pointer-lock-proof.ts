@@ -12,7 +12,8 @@
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import * as v from 'valibot';
-import { xdotoolOf, type DesktopAction } from '../packages/devbox/src/desktop-input';
+import { xdotoolOf } from '../packages/devbox/src/desktop-input';
+import type { DesktopAction } from '../packages/devbox/src/wire';
 
 const FIXTURE = join(import.meta.dir, 'fixtures', 'pointer-lock');
 

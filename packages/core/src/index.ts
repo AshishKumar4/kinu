@@ -1080,7 +1080,7 @@ export {
 
 export {
   createSandboxExecutor, computerProcessJob, type ComputerProcessEnd, type ComputerProcessJobs, type SandboxHandle, type SandboxResize, isSandboxTransientError, SandboxPending,
-  sandboxSizeLabel, WORKSPACE_BACKUP_DIR, sandboxFiles,
+  sandboxSizeLabel, sandboxFiles,
 } from './execution/sandbox';
 
 export { computerProcessResume, stopComputerProcessJob } from './jobs/computer-process';

@@ -4,7 +4,8 @@
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import { DevboxError, attempt, attemptSync, settle } from './errors';
-import { DEVBOX_RUNTIME_DIR, DEVBOX_WORKDIR, type AttachOutcome, type CheckpointKind, type CheckpointOutcome, type DevboxStorage } from './storage';
+import { DEVBOX_RUNTIME_DIR, type AttachOutcome, type CheckpointKind, type CheckpointOutcome, type DevboxStorage } from './storage';
+import { DEVBOX_WORKDIR } from './wire';
 import { STORE_MOUNT } from './store-gateway';
 import { deltaTarCommand, levelsAfter, mergeListsCommand } from './disk-delta';
 import { type ArchiveSource, DISK_STREAM, normalizeArchiveExclude, shellPath, streamCommand } from './stream-archive';
