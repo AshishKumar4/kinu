@@ -155,7 +155,7 @@
   "dependencies": {
     "ai": "7.0.148",
     "valibot": "^1.5.0",
-    "zod": "^4.3.6"
+    "zod": "^4.6.7"
   },
   "//devDependencies:bun": "Bun 1.4.3 carries both oven-sh/bun#44279 (retired-realm crashes, which the canary pin was for) and #44581 (13a98b0dbd), whose absence left a synchronous spawn spinning over a zombie child: the production deploy contract row went silent in 12 of 48 runs on canary 9bd19c98e and 0 of 96 on 1.4.3 (2026-10-14, #83).",
   "//devDependencies:@nimbus-sh/runtime": "Nimbus numbers a runtime rebuild as a prerelease of its upstream version (3.13.14-1, the reproducible CPython core 0.16 requires), and semver ranks it below the plain 3.13.14, so a caret picks the older build. Both stay exact; move them with core.",
@@ -186,7 +186,7 @@
     "oxlint": "^1.78.0",
     "oxlint-tsgolint": "^7.0.2001",
     "postcss": "^8.5.28",
-    "puppeteer": "^25.10.0",
+    "puppeteer": "^25.16.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "sql-parser-cst": "^0.42.1",
@@ -229,6 +229,7 @@
   "//overrides:sharp": "sharp is pinned because every Miniflare release holds it at 0.35.4: GHSA-wq5f-xc86-pv6w (librsvg CVE-2026-96889) is fixed in 0.35.5. Delete it once Miniflare depends on 0.35.5 or later.",
   "//overrides:shell-quote": "shell-quote resolves 1.8.4 under react-devtools-core (`^1.6.1`): GHSA-pqg4-j6r4-53mv, command injection in quote(), is fixed in 1.11.0. Delete it once the resolve lands 1.11.0 or later without it.",
   "//overrides:@cloudflare/sandbox": "The sandbox's zod is pinned here because @cloudflare/sandbox depends on one exact zod (1.0.0 on 4.5.4, 1.0.2 on 4.6.7), so the resolve hoisted its version and nested a copy of ours under every other dependent: core, cf-backend, cli-backend, the MCP client, core, server and sdk, the four Nimbus packages and the mossaic SDK. The Worker bundled each directory as its own zod, about 1.2 MB of module-scope data at load (worker-heap attribution, 2026-10-07). Delete it once the sandbox's dependency is a range.",
+  "//overrides:@cloudflare/vitest-plugin": "The vitest plugin's zod is pinned here because @cloudflare/vitest-plugin 1.3.4 depends on exactly 4.4.3, which carries GHSA-mrhx-c7xc-m3w5 (memory exhausted validating oversized constrained collections), fixed in 4.6.6. 4.6.7 is the same major and the one copy everything else resolves. Delete it once the plugin depends on 4.6.6 or later.",
   "//overrides:@modelcontextprotocol/server": "vgpu 0.4.1 (still at 0.6.0) pins 2.0.0 exactly; advisories 1242647, 1242648 and 1242666 (shared transport cross-delivery, validation memory exhaustion, foreign bearer tokens) are fixed in 2.3.0. agents 0.29.0 peers 2.3.1 itself, so only vgpu's copy is overridden. Drop once vgpu moves past 2.3.0.",
   "overrides": {
     "basic-ftp": "^6.2.1",
@@ -243,7 +244,10 @@
     "sharp": "0.35.5",
     "shell-quote": "^1.11.0",
     "@cloudflare/sandbox": {
-      "zod": "4.6.5"
+      "zod": "4.6.7"
+    },
+    "@cloudflare/vitest-plugin": {
+      "zod": "4.6.7"
     },
     "vgpu": {
       "@modelcontextprotocol/server": "2.3.1"
