@@ -16,8 +16,8 @@
  * stack and no gap between them past {@link LOOP_GAP_US}. Blind: turns back to back with no wait between read as one
  * stretch (conservative); native work outside JavaScript (`(program)`) reads as waiting; the host's speed against the
  * platform's is unmeasured; and work no workload here runs is unread (the workloads: a step's turns, a cold workspace,
- * heads, the 150-step long turn unadvised and advised, a failing turn, the 450-step screenshot turn with its chat's
- * seeds, and twelve subagents' hires).
+ * heads, the 150-step long turn unadvised, advised and compacted against a 64k window, a failing turn, the 450-step
+ * screenshot turn with its chat's seeds, twelve subagents' hires, and 40 advised steps of 200 kB results).
  */
 import { profileEveryIsolate, profileLoop, targetIds, type BusyStretch, type LoopProfile } from './inspector';
 

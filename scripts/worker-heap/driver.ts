@@ -44,7 +44,7 @@ interface AccountRpc extends Rpc.DurableObjectBranded {
   ensureProfile(caller: { ownerToken: string }, email: string, name: string): Promise<void>;
   registerWorkspace(caller: { ownerToken: string }, name: string, displayName: string): Promise<void>;
   ensureWorkspaceCapability(workspace: string, capabilityHash: string): Promise<void>;
-  setCredential(caller: { ownerToken: string }, key: string, credential: { kind: 'openai-compat'; baseURL: string; apiKey: string }): Promise<void>;
+  setCredential(caller: { ownerToken: string }, key: string, credential: { kind: 'openai-compat'; baseURL: string; apiKey: string; contextWindow?: number }): Promise<void>;
 }
 
 interface DriverEnv {
@@ -59,9 +59,10 @@ interface DriverEnv {
 const OWNER = 'fedcba9876543210fedcba9876543211';
 
 export class HeapDriver extends DurableObject<DriverEnv> {
-  /** `compat`: the workspace runs on the OpenAI-compatible path, the one the hosted providers (OpenRouter, OpenCode Go) take.
+  /** `compat`: the workspace runs on the OpenAI-compatible path, the one the hosted providers (OpenRouter, OpenCode Go) take;
+   *  `window`, the context window its credential declares, which compaction folds against (none: no fold).
    *  Answers the workspace's object id, which names its agents' Worker Loader isolates. */
-  async setUp(workspace: string, compat: boolean): Promise<string> {
+  async setUp(workspace: string, compat: boolean, window: number | null): Promise<string> {
     const caller = { ownerToken: this.env.OWNER_TOKEN };
     const users = this.env.UserDO.get(this.env.UserDO.idFromName(OWNER));
     const agent = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace));
@@ -71,7 +72,12 @@ export class HeapDriver extends DurableObject<DriverEnv> {
     await users.ensureWorkspaceCapability(workspace, claim.capabilityHash);
     await agent.setSoul('# Heap\n\nAnswer.');
 
-    if (compat) await users.setCredential(caller, 'openai-compat.default', { kind: 'openai-compat', baseURL: `http://${this.env.COMPAT_HOST}`, apiKey: 'heap' });
+    if (compat) {
+      await users.setCredential(caller, 'openai-compat.default', {
+        kind: 'openai-compat', baseURL: `http://${this.env.COMPAT_HOST}`, apiKey: 'heap', ...(window !== null && { contextWindow: window }),
+      });
+    }
+
     await agent.setModel(compat ? SCRIPTED_MODEL_SPEC : 'workers-ai/@cf/zai-org/glm-5.3');
     // The model's change reaches main's isolate detached, and loads it: setup ends once it has.
     await agent.joinDetached();
@@ -140,7 +146,11 @@ const ADVISOR_BYTES: number[] = [];
 const STEP_REQUEST_BYTES: number[] = [];
 
 /** What the model answers and whether it answers yet; module state, which the entrypoint and fetch share. */
-const model = { answerBytes: 0, holding: false, parked: 0, calls: 0, wide: new Set<string>(), toolSteps: 0, stepBytes: 0, screenshots: 0, stepping: false, arrived: 0, released: 0, hires: 0, subagentsAnswered: 0, holdSubagent: false, subagentParked: false, nest: false, failingSteps: 0, failingAsked: 0, stepped: { binding: 0, compat: 0 }, compatSteps: false, advisorCalls: 0, advisorBytes: ADVISOR_BYTES, stepRequestBytes: STEP_REQUEST_BYTES };
+/** A compaction's summary call carries this (`buildCompactionSummaryPrompt`), on either path: the loop pass's compacting
+ *  turn names its folds by it. */
+const SUMMARY_PROMPT = 'Write the summary with exactly these sections';
+
+const model = { answerBytes: 0, holding: false, parked: 0, calls: 0, wide: new Set<string>(), toolSteps: 0, stepBytes: 0, screenshots: 0, stepRead: false, summaries: 0, stepping: false, arrived: 0, released: 0, hires: 0, subagentsAnswered: 0, holdSubagent: false, subagentParked: false, nest: false, failingSteps: 0, failingAsked: 0, stepped: { binding: 0, compat: 0 }, compatSteps: false, advisorCalls: 0, advisorBytes: ADVISOR_BYTES, stepRequestBytes: STEP_REQUEST_BYTES };
 
 /** The advisor's own model calls, which offer its `advise` tool: none is a step of the turn it reviews, so none takes a
  *  scripted step. */
@@ -185,6 +195,8 @@ type BindingInputs = { readonly stream?: boolean; readonly messages?: readonly o
 function laneAnswer(inputs: BindingInputs): string | null {
   // The advisor's review, answered at once with silence: the measured cost is its being there, not what it says.
   const asked = JSON.stringify(inputs);
+
+  if (asked.includes(SUMMARY_PROMPT)) model.summaries += 1;
 
   if (asksAdvisor(asked)) {
     model.advisorCalls += 1;
@@ -321,6 +333,17 @@ async function scriptedAnswer(inputs: Parameters<typeof scriptedBody>[0]): Promi
   }), { headers: { 'content-type': 'text/event-stream' } });
 }
 
+/** A tool step's call. A screenshot turn reads one of its seeded screenshots a step, as a desktop turn takes one.
+ *  `stepRead`: the first step writes its page and every later one reads it back, a step's result as large as its page, as
+ *  a program's or a log's. Otherwise each step writes its page. */
+function stepCall(seq: number, page: string): NonNullable<ScriptedAnswer['toolCall']> {
+  if (model.screenshots > 0) return { name: 'file', arguments: { op: 'read', path: `shots/step-${String(seq % model.screenshots)}.png` } };
+
+  if (model.stepRead && seq > 1) return { name: 'file', arguments: { op: 'read', path: 'notes/step-1.md' } };
+
+  return { name: 'file', arguments: { op: 'write', path: `notes/step-${String(seq)}.md`, content: page } };
+}
+
 /** The OpenAI-compatible endpoint: each step of the long turn writes a page through the file tool, as an agent writing
  *  files does, so every later request carries that page again in the call's arguments. */
 async function compatAnswer(body: string): Promise<Response> {
@@ -329,6 +352,8 @@ async function compatAnswer(body: string): Promise<Response> {
   if ('refusal' in read) return new Response(read.refusal.body, { status: read.refusal.status, headers: { 'content-type': 'application/json' } });
   const asked = read.request;
   let answer: ScriptedAnswer = { text: 'Heap' };
+
+  if (body.includes(SUMMARY_PROMPT)) model.summaries += 1;
 
   // The advisor's review, answered at once with silence: the measured cost is its being there, not what it says.
   if (asksAdvisor(body)) {
@@ -354,10 +379,7 @@ async function compatAnswer(body: string): Promise<Response> {
     model.parked -= 1;
     const page = 'word '.repeat(Math.ceil(model.stepBytes / 5)).slice(0, model.stepBytes);
 
-    // A screenshot turn reads one of its seeded screenshots a step, as a desktop turn takes one.
-    const step = model.screenshots > 0
-      ? { name: 'file', arguments: { op: 'read', path: `shots/step-${String(seq % model.screenshots)}.png` } }
-      : { name: 'file', arguments: { op: 'write', path: `notes/step-${String(seq)}.md`, content: page } };
+    const step = stepCall(seq, page);
 
     answer = model.toolSteps > 0 ? { toolCall: step } : { text: 'done' };
 
@@ -388,6 +410,7 @@ function scriptModel(asked: URLSearchParams): Response {
     model.toolSteps = Number(asked.get('toolSteps'));
     model.stepBytes = Number(asked.get('stepBytes') ?? 0);
     model.screenshots = Number(asked.get('screenshots') ?? 0);
+    model.stepRead = asked.get('stepRead') === '1';
     model.stepping = model.toolSteps > 0;
     // `stepPath=compat`: the steps are the compatible path's alone; another workspace's binding calls are answered and
     // counted, never stepped.
@@ -420,7 +443,7 @@ function scriptModel(asked: URLSearchParams): Response {
     model.stepping = false;
   }
 
-  return Response.json({ parked: model.parked, calls: model.calls, wide: [...model.wide], arrived: model.arrived, subagentsAnswered: model.subagentsAnswered, subagentParked: model.subagentParked, failingSteps: model.failingSteps, stepped: model.stepped, advisorCalls: model.advisorCalls, advisorBytes: model.advisorBytes, stepRequestBytes: model.stepRequestBytes });
+  return Response.json({ parked: model.parked, calls: model.calls, wide: [...model.wide], arrived: model.arrived, subagentsAnswered: model.subagentsAnswered, subagentParked: model.subagentParked, failingSteps: model.failingSteps, stepped: model.stepped, advisorCalls: model.advisorCalls, advisorBytes: model.advisorBytes, stepRequestBytes: model.stepRequestBytes, summaries: model.summaries });
 }
 
 export default {
@@ -454,7 +477,7 @@ export default {
     else if (url.pathname === '/seed-screenshots') await driver.seedScreenshots(workspace, Number(url.searchParams.get('count')), Number(url.searchParams.get('bytes')));
     else if (url.pathname === '/seed') return Response.json(await driver.seed(workspace));
     else if (url.pathname === '/plant') await driver.plant(workspace, v.parse(v.picklist(['workspace', 'main']), url.searchParams.get('isolate')), v.parse(v.string(), url.searchParams.get('marker')), Number(url.searchParams.get('bytes')));
-    else return new Response(await driver.setUp(workspace, url.searchParams.get('compat') === '1'));
+    else return new Response(await driver.setUp(workspace, url.searchParams.get('compat') === '1', url.searchParams.has('window') ? Number(url.searchParams.get('window')) : null));
 
     return new Response(null, { status: 204 });
   },

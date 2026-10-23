@@ -648,6 +648,37 @@ async function advisedLongTurn(advised: boolean, run: {
   await ask('/model?answerBytes=0&toolSteps=0');
 }
 
+/** The loop pass's own turns, each in a fresh workspace with its steps unheld: the long turn against a declared window,
+ *  so compaction folds it as it grows, and 40 steps each reading back a 200 kB page with the advisor reviewing them, as a
+ *  program's or a log's large result. Each prints what shows it ran: its summary calls, its advisor's calls. */
+async function loopOnlyTurns(ask: (path: string) => Promise<string>): Promise<void> {
+  const seen = async () => v.parse(v.object({ summaries: v.number(), advisorCalls: v.number() }), JSON.parse(await ask('/model')));
+
+  const turn = async (name: string, script: string): Promise<{ summaries: number; advisorCalls: number }> => {
+    const before = await seen();
+    await ask(`/quiesce?workspace=${name}`);
+    await ask(`/model?answerBytes=0&${script}&stepPath=compat`);
+    await ask('/model?released=1000000');
+    await ask(`/turn?workspace=${name}&text=long`);
+    await ask(`/main-idle?workspace=${name}`);
+    await ask(`/quiesce?workspace=${name}`);
+    await ask('/model?answerBytes=0&toolSteps=0');
+    const after = await seen();
+
+    return { summaries: after.summaries - before.summaries, advisorCalls: after.advisorCalls - before.advisorCalls };
+  };
+
+  // At 64k the first fold lands near step 70: each 3 kB step adds about 760 tokens of estimate.
+  await ask('/?workspace=compacted&compat=1&window=64000');
+  const compacted = await turn('compacted', `toolSteps=${String(LONG_TURN.steps - 1)}&stepBytes=${String(LONG_TURN.stepBytes)}`);
+  console.log(`${GATE}: compacted ${String(LONG_TURN.steps)}-step turn: ${String(compacted.summaries)} summary calls`);
+
+  await ask('/?workspace=results&compat=1');
+  await ask('/advisor?workspace=results');
+  const results = await turn('results', 'toolSteps=40&stepBytes=200000&stepRead=1');
+  console.log(`${GATE}: 40 steps of 200 kB results, advised: ${String(results.advisorCalls)} advisor calls`);
+}
+
 /** A four-step turn with `fault` armed in its advisor's model calls, then a clean one, in a fresh workspace: whether
  *  each ran every step and came to rest, how long it took, the advisor calls the gateway answered, and whether main's
  *  isolate kept the buffer planted before the faulted turn (a reset of the isolate drops it). A reading, not a bound. */
@@ -951,6 +982,8 @@ export async function measure({ loopTurns }: { readonly loopTurns: boolean }): P
       } else if (loops !== null) {
         await advisedLongTurn(true, { ask, workspace, port, sessions, readings: false });
       }
+
+      if (loops !== null) await loopOnlyTurns(ask);
 
       // Opt-in: what an advisor's failure reaches, now that it runs in the isolate of the agent it reviews.
       if (process.env.HEAP_ADVISOR_FAULTS === '1') {
