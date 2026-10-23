@@ -205,6 +205,8 @@ export function cliAccount<Built extends Partial<CliRoutesAuthority>>(built: Bui
 
   return {
     ensureProfile: refuse('ensureProfile'),
+    limits: refuse('limits'),
+    limits_inviteRedeemed: refuse('limits_inviteRedeemed'),
     getProfile: refuse('getProfile'),
     getConfig: refuse('getConfig'),
     setConfig: refuse('setConfig'),

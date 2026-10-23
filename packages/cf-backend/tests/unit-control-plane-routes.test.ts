@@ -13,7 +13,7 @@ import type { ControlCapability, PresentedCaller } from '@kinu.run/core/control-
 import * as v from 'valibot';
 import {
   CACHE_HIT_EMA_ALPHA, JsonValueSchema,
-  type ActivitySnapshot, type ApprovalGrant, type DeferredApprovalAnswer, type JsonValue,
+  type ActivitySnapshot, type ApprovalGrant, type DeferredApprovalAnswer, type JsonValue, type LimitsReport,
   type UserCaller, type WorkspaceEntry,
 } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
@@ -193,6 +193,14 @@ function harness(options: World = {}): Harness {
     touchWorkspace(): Promise<void> {
       throw new Error('ControlPlaneDO.touchWorkspace: not reachable in this test');
     },
+    async noteAccountStanding(caller: PresentedCaller, userId: string, standing: { readonly class: 'free' | 'invited'; readonly suspendedAt: number | null }) {
+      await gate(caller, 'accounts.write'); store.noteAccountStanding(sql, userId, standing, Date.now());
+    },
+    async createInvite(caller: PresentedCaller, createdBy: string) {
+      await gate(caller, 'accounts.write');
+
+      return await store.createInvite(sql, createdBy, Date.now());
+    },
   };
 
   const emptyListStub = (workspace: string, method: string) => async () => {
@@ -280,6 +288,8 @@ function harness(options: World = {}): Harness {
     },
   });
 
+  const standings = new Map<string, { readonly class: 'free' | 'invited'; readonly suspended: { readonly at: number; readonly reason: string } | null }>();
+
   const userStub = (userId: string) => ({
     async hasWorkspace(_caller: UserCaller, name: string) {
       return (rosters.get(userId) ?? []).some((row) => row.name === name);
@@ -305,6 +315,21 @@ function harness(options: World = {}): Harness {
       owners.delete(workspace);
       rosters.set(userId, (rosters.get(userId) ?? []).filter((row) => row.name !== workspace));
       removed.push({ userId: owner, workspace });
+    },
+    // The account's standing as core limits/ keeps it, in this fake's own map.
+    async limits_setClass(_caller: UserCaller, klass: 'free' | 'invited') {
+      standings.set(userId, { ...(standings.get(userId) ?? { suspended: null }), class: klass });
+    },
+    async limits_suspend(_caller: UserCaller, reason: string) {
+      standings.set(userId, { ...(standings.get(userId) ?? { class: 'free' }), suspended: { at: 1, reason } });
+    },
+    async limits_unsuspend() {
+      standings.set(userId, { ...(standings.get(userId) ?? { class: 'free' }), suspended: null });
+    },
+    async limits(): Promise<LimitsReport> {
+      const standing = standings.get(userId) ?? { class: 'free', suspended: null };
+
+      return { class: standing.class, suspended: standing.suspended, limits: [] };
     },
   });
 

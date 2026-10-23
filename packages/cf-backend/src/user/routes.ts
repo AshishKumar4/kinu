@@ -20,7 +20,8 @@ import { idempotent } from '@nimbus-sh/fabric/do-calls.js';
 import { logDoCallRetry } from '../obs/do-call-retry';
 import type { UserCaller } from '@kinu.run/core';
 import { isControlPlaneOperator, type AdminGateEnv } from '../control-plane/admin-caller';
-import { controlPlaneStub, hasControlPlane, type ControlPlaneEnv } from '../control-plane/stub';
+import { controlPlaneStub, hasControlPlane } from '../control-plane/stub';
+import type { IndexFeedSink } from '../control-plane/index-feed';
 import type { ControlPlaneDO } from '../control-plane/control-plane-do';
 import { internalCaller } from '@kinu.run/core/control-plane';
 import { ownerGate, rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
@@ -53,7 +54,9 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   | 'listSecrets' | 'putSecrets' | 'setSecretDestination' | 'deleteSecret' | 'grantSecret' | 'revokeSecretGrant'
 >;
 
-export interface UserRoutesEnv<Id> extends CreateWorkspaceEnv<Id>, AdminGateEnv, Partial<ControlPlaneEnv<Id, Pick<ControlPlaneDO, 'redeemInvite'>>> {
+export interface UserRoutesEnv<Id> extends CreateWorkspaceEnv<Id>, AdminGateEnv {
+  /** The control plane, as the index feed and an invite link's spending reach it. */
+  ControlPlaneDO?: ObjectNamespace<Id, IndexFeedSink & Pick<ControlPlaneDO, 'redeemInvite'>>;
   /** The deployment's binding, whose `websearch` Settings' Test reaches for an account with no Cloudflare login. */
   readonly AI?: CreateWorkspaceEnv<Id>['AI'] & WebSearchEnv['AI'];
   UserDO: ObjectNamespace<Id, UserRoutesAuthority>;
