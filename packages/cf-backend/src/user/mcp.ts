@@ -32,8 +32,10 @@ function causeChain(input: { cause: unknown }): Error[] {
 export async function readUndiscoveredToolList(
   server: { readonly name: string },
   client: Pick<Client, 'request'>,
-  refusal: () => McpRefusal | undefined = () => undefined,
+  refusals: () => readonly McpRefusal[] = () => [],
 ): Promise<McpToolListing> {
+  const before = refusals().length;
+
   try {
     return {
       listed: await listMcpToolsLeniently(server, (cursor) => client.request(
@@ -47,7 +49,8 @@ export async function readUndiscoveredToolList(
     const status = causeChain({ cause }).find((link): link is SdkHttpError => link instanceof SdkHttpError)?.status;
 
     if (status === undefined) return { failure: renderCauseChain(error) };
-    const said = refusal()?.wwwAuthenticate ?? null;
+    // This listing's own refusal: a tools/list refused with this status since it began, not another request's.
+    const said = refusals().slice(before).filter((refusal) => refusal.rpc === 'tools/list' && refusal.status === status).at(-1)?.wwwAuthenticate ?? null;
 
     return { failure: `${server.name} refused its tool list: HTTP ${String(status)}, ${said === null ? 'with no reason given' : `saying ${said}`}` };
   }

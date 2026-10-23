@@ -107,6 +107,9 @@ function offersSignIn(status: McpConnectionStatus, server: { readonly oauthClien
   return status === 'authenticating' || (status === 'failed' && server.oauthClient);
 }
 
+/** How many of a server's refusals are kept: enough to find a listing's own among requests made beside it. */
+const REFUSALS_KEPT = 16;
+
 /** A registered app's server is signed in to before it is used, unless a token in `headers` stands in for the app. */
 function signInBy(appCredentials: { clientId: string } | null, hasHeaders: boolean): 'first' | 'when-asked' {
   return appCredentials !== null && !hasHeaders ? 'first' : 'when-asked';
@@ -225,8 +228,9 @@ export class UserMcpServers {
 
   private readonly _mcpToolLists = new Map<string, McpToolListing>();
 
-  /** Each server's last refusal by its own origin, as its transport saw it: what its tool list's failure names. */
-  private readonly refusals = new Map<string, McpRefusal>();
+  /** Each server's recent refusals by its own origin, as its transport saw them, oldest first: a tool list's failure
+   *  names its own among them. */
+  private readonly refusals = new Map<string, McpRefusal[]>();
 
   /** The SDK's manager as a call's session renewal reaches it, its connect one of {@link dials}: one object, since the
    *  calls that meet one ended session share their renewal by it. */
@@ -416,8 +420,8 @@ export class UserMcpServers {
   /** Keeps `serverId`'s refusal and logs it: its status and `WWW-Authenticate`, never the token or the body. */
   private refused(serverId: string): (refusal: McpRefusal) => void {
     return (refusal) => {
-      this.refusals.set(serverId, refusal);
-      diagnostics.event('mcp.server_refused', { serverId, method: refusal.method, status: refusal.status, wwwAuthenticate: refusal.wwwAuthenticate ?? '' });
+      this.refusals.set(serverId, [...(this.refusals.get(serverId) ?? []), refusal].slice(-REFUSALS_KEPT));
+      diagnostics.event('mcp.server_refused', { serverId, method: refusal.method, rpc: refusal.rpc ?? '', status: refusal.status, wwwAuthenticate: refusal.wwwAuthenticate ?? '' });
     };
   }
 
@@ -480,10 +484,8 @@ export class UserMcpServers {
       // A corrupt list allows none: an empty list, and why, on the server's card.
       const allowed = 'failure' in read ? [] : read.allowed;
       const listing = conn?.connectionState === 'connected' ? this._mcpToolLists.get(r.id) : undefined;
-      const unlisted = listing !== undefined && 'failure' in listing;
-      const connection = mapConnectionStatus(conn?.connectionState);
       // A server that answers its handshake and fails its tool list offers nothing: it reads failed, not connected.
-      const status = unlisted ? 'failed' : connection;
+      const status = listing !== undefined && 'failure' in listing ? 'failed' : mapConnectionStatus(conn?.connectionState);
       const lenient = listing !== undefined && 'listed' in listing ? listing.listed : null;
 
       const tools = lenient === null
@@ -500,10 +502,9 @@ export class UserMcpServers {
 
       const toolsCount = allowed ? tools.filter((t: { name: string }) => allowed.includes(t.name)).length : tools.length;
 
-      // The person begins it for a fresh address; a declined sign-in is not dialled again on its own. A tool list the
-      // server refused for the token (401, 403) asks for one too; one that failed otherwise does not.
-      const refusedToken = unlisted && [401, 403].includes(this.refusals.get(r.id)?.status ?? 0);
-      const signIn = offersSignIn(refusedToken ? 'failed' : connection, signInFacts(r.id));
+      // The person begins it for a fresh address; a declined sign-in is not dialled again on its own. A failed tool list
+      // offers none: its transport is still connected, which a sign-in would not replace (`userMcp_beginConnect`).
+      const signIn = offersSignIn(mapConnectionStatus(conn?.connectionState), signInFacts(r.id));
 
       return {
         id: r.id,
@@ -726,7 +727,7 @@ export class UserMcpServers {
 
     const name = this.catalog().get(id)?.name ?? id;
     const { readUndiscoveredToolList } = await import('./mcp');
-    const listing = await readUndiscoveredToolList({ name }, conn.client, () => this.refusals.get(id));
+    const listing = await readUndiscoveredToolList({ name }, conn.client, () => this.refusals.get(id) ?? []);
     this._mcpToolLists.set(id, listing);
 
     for (const refusal of 'listed' in listing ? mcpListingRefusals({ id, name }, listing.listed) : []) {

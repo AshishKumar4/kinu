@@ -225,7 +225,7 @@ describe('a server that refuses its tool list', () => {
   const refusedList = () => new SdkHttpError(SdkErrorCode.ClientHttpNotImplemented,
     'Error POSTing to endpoint: {"id":0,"jsonrpc":"2.0","result":{"cacheScope":"public","resultType":"complete","tools":[]}}', { status: 403, statusText: '' });
 
-  test('reads failed, not connected, and names the status and what the server said, not the body', async () => {
+  test('reads failed, not connected, and names the status and what its own tools/list was told, not the body', async () => {
     const first = harness();
     const owner = await testOwner();
     await seedServer(first, 'gm1', { name: 'Gmail' });
@@ -234,32 +234,47 @@ describe('a server that refuses its tool list', () => {
     // The next object's activation runs each server on the transport the plane builds.
     const h = createTestUserDO({ storage: first.db });
     await h.userDO.userMcp_list(owner);
-    seedUndiscoveredMcpTools('gm1', async () => { throw refusedList(); });
-    seedUndiscoveredMcpTools('gm2', async () => { throw refusedList(); });
     const [gmail, calendar] = [liveMcpFetch('gm1'), liveMcpFetch('gm2')];
 
     if (gmail === null || calendar === null) throw new Error('a server runs on no transport of the plane\'s');
+    const rpc = (method: string) => ({ method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 0, method }) });
 
-    // What each transport saw of the refusal; Calendar's server said why.
+    // Each listing goes out on its server's transport and is refused 403: Gmail's with no reason; Calendar's says why,
+    // while a tool call beside it is refused with another challenge, which is not the listing's.
+    seedUndiscoveredMcpTools('gm1', async () => {
+      await gmail('https://gm1.example/sse', rpc('tools/list'));
+      throw refusedList();
+    });
+    seedUndiscoveredMcpTools('gm2', async () => {
+      await calendar('https://gm2.example/sse', rpc('tools/list'));
+      await calendar('https://gm2.example/sse', rpc('tools/call'));
+      throw refusedList();
+    });
+
     const real = globalThis.fetch;
 
-    globalThis.fetch = Object.assign(async (url: Request | URL | RequestInfo) => new Response('{}', {
-      status: 403, headers: (url instanceof Request ? url.url : url.toString()).includes('gm2') ? { 'www-authenticate': 'Bearer error="insufficient_scope", scope="calendar.readonly"' } : {},
-    }), { preconnect: real.preconnect });
+    globalThis.fetch = Object.assign(async (url: Request | URL | RequestInfo, init?: RequestInit) => {
+      const body = typeof init?.body === 'string' ? init.body : '';
+      const challenge = body.includes('tools/call') ? 'Bearer error="invalid_token"' : 'Bearer error="insufficient_scope", scope="calendar.readonly"';
+
+      const at = url instanceof Request ? url.url : url.toString();
+
+      return new Response('{}', { status: 403, headers: at.includes('gm2') ? { 'www-authenticate': challenge } : {} });
+    }, { preconnect: real.preconnect });
+
+    // A list reads each tool list again: both reads go out to the refusing servers.
+    let listed: Awaited<ReturnType<typeof h.userDO.userMcp_list>>;
 
     try {
-      await gmail('https://gm1.example/sse', { method: 'POST' });
-      await calendar('https://gm2.example/sse', { method: 'POST' });
+      await h.userDO.userMcp_warmConnections(owner);
+      listed = await h.userDO.userMcp_list(owner);
     } finally {
       globalThis.fetch = real;
     }
 
-    await h.userDO.userMcp_warmConnections(owner);
-    const listed = await h.userDO.userMcp_list(owner);
-
-    expect(listed.map((server) => ({ name: server.name, status: server.status, tools: server.toolsCount, error: server.error }))).toEqual([
-      { name: 'Calendar', status: 'failed', tools: 0, error: 'Calendar refused its tool list: HTTP 403, saying Bearer error="insufficient_scope", scope="calendar.readonly"' },
-      { name: 'Gmail', status: 'failed', tools: 0, error: 'Gmail refused its tool list: HTTP 403, with no reason given' },
+    expect(listed.map((server) => ({ name: server.name, status: server.status, tools: server.toolsCount, error: server.error, signIn: server.signIn }))).toEqual([
+      { name: 'Calendar', status: 'failed', tools: 0, error: 'Calendar refused its tool list: HTTP 403, saying Bearer error="insufficient_scope", scope="calendar.readonly"', signIn: false },
+      { name: 'Gmail', status: 'failed', tools: 0, error: 'Gmail refused its tool list: HTTP 403, with no reason given', signIn: false },
     ]);
     h.close();
     first.close();

@@ -7,6 +7,7 @@
 import { Effect } from 'effect';
 import { diagnostics, hold } from '../obs/index';
 import { copyHeaders } from '../providers/fetch-shim';
+import { safeJsonParse } from '../utils/json';
 import { describeMcpTool, type ListedMcpTools, type McpToolRefusal } from '../tools/mcp-surface';
 import type { McpConnectionStatus } from './servers';
 
@@ -53,7 +54,7 @@ export function mcpCredentialTransport(
       // The SDK keeps only the status and the body of a refusal, and a server may answer one with its whole result
       // (Gmail's MCP refuses a token with its tool list, 2026-10-23); what the server said of the token is kept here.
       if (!response.ok && new URL(url.toString()).origin === endpoint.origin) {
-        refused({ method: init?.method ?? 'GET', status: response.status, wwwAuthenticate: response.headers.get('www-authenticate') });
+        refused({ method: init?.method ?? 'GET', rpc: rpcMethodOf(init), status: response.status, wwwAuthenticate: response.headers.get('www-authenticate') });
       }
 
       return response;
@@ -64,8 +65,18 @@ export function mcpCredentialTransport(
 /** A server's own origin refusing a request: its status and what its `WWW-Authenticate` said, never its body. */
 export interface McpRefusal {
   readonly method: string;
+  /** The JSON-RPC method the request carried (`tools/list`), or null for one that carried none or several. */
+  readonly rpc: string | null;
   readonly status: number;
   readonly wwwAuthenticate: string | null;
+}
+
+/** The one JSON-RPC method a request's body names; a body that is not JSON (`safeJsonParse` keeps it as text) names none. */
+function rpcMethodOf(init: RequestInit | undefined): string | null {
+  if (typeof init?.body !== 'string') return null;
+  const message = safeJsonParse(init.body);
+
+  return typeof message === 'object' && message !== null && !Array.isArray(message) && typeof message['method'] === 'string' ? message['method'] : null;
 }
 
 /** The one transport option the SDK's persistence whitelist does not keep. */

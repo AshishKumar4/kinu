@@ -353,13 +353,14 @@ describe('mcpCredentialTransport', () => {
 
     try {
       const opts = mcpCredentialTransport('https://mcp.example/mcp', async () => CREDENTIAL, 'when-asked', (refusal) => { refusals.push(refusal); });
-      const statuses = [(await opts.fetch('https://mcp.example/mcp', { method: 'POST' })).status, (await opts.fetch('https://mcp.example/said')).status];
+      const listing = { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 0, method: 'tools/list' }) };
+      const statuses = [(await opts.fetch('https://mcp.example/mcp', listing)).status, (await opts.fetch('https://mcp.example/said')).status];
       await opts.fetch('https://idp.elsewhere/token', { method: 'POST' });
 
       expect(statuses).toEqual([403, 401]);
       expect(refusals).toEqual([
-        { method: 'POST', status: 403, wwwAuthenticate: null },
-        { method: 'GET', status: 401, wwwAuthenticate: 'Bearer error="invalid_token"' },
+        { method: 'POST', rpc: 'tools/list', status: 403, wwwAuthenticate: null },
+        { method: 'GET', rpc: null, status: 401, wwwAuthenticate: 'Bearer error="invalid_token"' },
       ]);
     } finally {
       globalThis.fetch = real;
