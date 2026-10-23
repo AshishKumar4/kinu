@@ -2369,6 +2369,8 @@ export { drawnText, liveTailRow, threadLiveTail, toolCallRunning, type LiveTail 
 
 export { liveStep, watchingLine, type Watch } from './read-models/focus-line';
 
+export { activityOf, receiptSummary, type ActivityCause, type ActivityEntry } from './read-models/activity';
+
 export { messagesUpTo, turnRows } from './read-models/fork-count';
 
 export {
