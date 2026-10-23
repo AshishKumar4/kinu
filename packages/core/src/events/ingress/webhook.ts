@@ -10,7 +10,7 @@ import type { TriggerRegistry } from '../hub/triggers';
 import { spillEventContent } from '../hub/content-spill';
 import { Effect, Result } from 'effect';
 import { settle, settleSync } from '../../obs/index';
-import { decodeJsonValue, safeJsonParse } from '../../utils/json';
+import { decodeJsonValue, safeJsonParse, type JsonValue } from '../../utils/json';
 import { checkWatcher, watchCheckOf, type WatchDeps } from './watch';
 import type { SqlExec } from '../../types/primitives';
 import { hmacSha256Hex, timingSafeEqual } from '../../utils/crypto';
@@ -205,6 +205,21 @@ function verifyWebhookAuth(
   });
 }
 
+/**
+ * A watcher's delivery is its check's input, and only what the check found is published. Answered once the check
+ * committed: a deliverer that gave up and sends again is folded into the running check's re-check.
+ */
+async function watchedDelivery(deps: WebhookIngressDeps, triggerId: string, at: number, input: JsonValue): Promise<WebhookDeliveryResult> {
+  const { watch } = deps;
+
+  if (watch === undefined) return { status: 'rejected', http_status: 503, reason: 'this workspace runs no checks' };
+  const fired = await checkWatcher({ registry: deps.triggers, log: deps.log, ...watch }, triggerId, { at, timer: false, input }, Date.now);
+
+  if (fired) deps.onAdmitted();
+
+  return { status: 'admitted', event_id: undefined, admitted: fired };
+}
+
 export function acceptWebhookDelivery(
   deps: WebhookIngressDeps,
   opts: WebhookDelivery,
@@ -252,19 +267,7 @@ export function acceptWebhookDelivery(
       return { status: 'admitted', event_id: held.event_id ?? undefined, admitted: false };
     }
 
-    // A watcher's delivery is its check's input, and only what the check found is published. Answered once the check
-    // committed: a deliverer that gave up and sends again is folded into the running check's re-check.
-    const { watch } = deps;
-
-    if (watch !== undefined && watchCheckOf(trigger) !== null) {
-      const input = decodeJsonValue({ value: parsedBody ?? null });
-
-      const fired = yield* Effect.promise(() => checkWatcher({ registry: deps.triggers, log: deps.log, ...watch }, trigger.id, { at: opts.now, timer: false, input }, Date.now));
-
-      if (fired) deps.onAdmitted();
-
-      return { status: 'admitted', event_id: undefined, admitted: fired };
-    }
+    if (deps.watch !== undefined && watchCheckOf(trigger) !== null) return yield* Effect.promise(() => watchedDelivery(deps, trigger.id, opts.now, decodeJsonValue({ value: parsedBody ?? null })));
 
     const delivery_id = opts.delivery_id ?? `${opts.now}-${Math.random().toString(36).slice(2, 10)}`;
 
