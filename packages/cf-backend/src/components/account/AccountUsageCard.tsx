@@ -11,6 +11,7 @@ import { useAsyncResource } from "@/hooks/use-async-resource";
 import { Group } from "@/components/ui/Group";
 import { Meter } from "@/components/ui/Meter";
 import { Button } from "@/components/ui/Button";
+import { UsageLimits } from "@/components/limits/UsageLimits";
 
 function usedShare(window: LimitWindow): number | undefined {
   if (window.usedPercent !== undefined) return Math.min(1, Math.max(0, window.usedPercent / 100));
@@ -121,7 +122,9 @@ export function AccountUsageCard() {
 
   return (
     <>
-      <Card title="Limits">
+      <UsageLimits />
+      {/* The windows of the accounts the person connected: named apart from this deployment's own limits above. */}
+      <Card title="Your providers' limits">
         <CardSlot resource={usage.resource} what="your limits" onRetry={usage.reload}>
           {(value) => <LimitsTable usage={value} onRefresh={readAgain} />}
         </CardSlot>
