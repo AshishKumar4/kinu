@@ -25,7 +25,26 @@ interface FakeHistory {
 /** `lands`: whether a restart applies the armed restore, as the platform does at the object's next start. */
 /** `lands`: whether a restart applies the armed restore, as the platform does at the object's next start. `missing`:
  *  the bytes a mailbox's or workspace's rows name that its bucket no longer holds, by object name. */
-function world(written: readonly string[], lands = true, { shards = 0, missing = {} }: { readonly shards?: number; readonly missing?: Readonly<Record<string, readonly string[]>> } = {}) {
+/** A stub as the platform makes one: any name it is asked for is a call, which fails where the class has no such method
+ *  (staging 2026-10-23: the account's object was asked `opsMissing`, and the restore of its mailbox and Drive never ran). */
+function rpcStub<Methods extends object>(methods: Methods): Methods {
+  const known = new Map<string | symbol, unknown>(Object.entries(methods));
+
+  return new Proxy(methods, {
+    get: (_target, key) => (known.has(key) ? known.get(key) : async () => { throw new Error(`The RPC receiver does not implement the method "${String(key)}".`); }),
+  });
+}
+
+interface WorldOptions {
+  readonly shards?: number;
+  readonly missing?: Readonly<Record<string, readonly string[]>>;
+  /** Objects whose bytes read fails, by name. */
+  readonly unreadable?: readonly string[];
+  /** Objects whose restore fails to arm, by class and name. */
+  readonly refusing?: readonly string[];
+}
+
+function world(written: readonly string[], lands = true, { shards = 0, missing = {}, unreadable = [], refusing = [] }: WorldOptions = {}) {
   const asked: string[] = [];
   const armed: string[] = [];
   const histories = new Map<string, FakeHistory>();
@@ -37,6 +56,8 @@ function world(written: readonly string[], lands = true, { shards = 0, missing =
     return {
       opsRestore: async (caller: OpsCaller, target: RestoreTarget) => {
         await requireOps({ CREDENTIAL_ENCRYPTION_KEY: KEY }, caller);
+
+        if (refusing.includes(key)) throw new Error('This database has no history');
         armed.push(`${key}:${JSON.stringify(target)}`);
         const now = history();
         const undo = mark(now.generation + 1, 0xffffffff);
@@ -53,13 +74,19 @@ function world(written: readonly string[], lands = true, { shards = 0, missing =
         throw new Error('ops: restarted for a restore');
       },
       opsBookmark: async () => mark(history().generation, history().step),
-      opsMissing: async () => {
-        const gone = missing[String(id.name)] ?? [];
-
-        return { named: gone.length + 3, missing: gone.length, keys: [...gone] };
-      },
     };
   };
+
+  /** A class whose rows name R2 bytes: the workspace, the mailbox. */
+  const namingBytes = (name: string, id: DurableObjectId) => ({
+    ...restorable(name, id),
+    opsMissing: async () => {
+      if (unreadable.includes(String(id.name))) throw new Error('the bucket did not answer');
+      const gone = missing[String(id.name)] ?? [];
+
+      return { named: gone.length + 3, missing: gone.length, keys: [...gone] };
+    },
+  });
 
   const namedObjects = <Stub>(stub: (id: DurableObjectId) => Stub) => ({
     idFromName: (object: string) => ({ toString: () => sha256Hex(object), equals: () => false, name: object }),
@@ -68,8 +95,8 @@ function world(written: readonly string[], lands = true, { shards = 0, missing =
 
   const namespace = (name: string): OpsEnv['UserDO'] => ({
     idFromName: (named) => ({ toString: () => sha256Hex(named), equals: () => false, name: named }),
-    get: (id) => ({
-      ...restorable(name, id),
+    get: (id) => rpcStub({
+      ...(name === 'OrchestratorAgent' ? namingBytes(name, id) : restorable(name, id)),
       opsTables: async (caller: OpsCaller): Promise<TablesAnswer> => {
         await requireOps({ CREDENTIAL_ENCRYPTION_KEY: KEY }, caller);
         asked.push(`${name}:${id.toString()}`);
@@ -87,9 +114,9 @@ function world(written: readonly string[], lands = true, { shards = 0, missing =
     DEV_USER_EMAIL: 'eval-service@kinu.run',
     UserDO: namespace('UserDO'),
     OrchestratorAgent: namespace('OrchestratorAgent'),
-    MAILBOX: namedObjects((id) => restorable('MailboxDO', id)),
-    MOSSAIC_USER: namedObjects((id) => ({ ...restorable('MossaicUserDO', id), tenantShards: async () => shards })),
-    MOSSAIC_SHARD: namedObjects((id) => restorable('MossaicShardDO', id)),
+    MAILBOX: namedObjects((id) => rpcStub(namingBytes('MailboxDO', id))),
+    MOSSAIC_USER: namedObjects((id) => rpcStub({ ...restorable('MossaicUserDO', id), tenantShards: async () => shards })),
+    MOSSAIC_SHARD: namedObjects((id) => rpcStub(restorable('MossaicShardDO', id))),
   };
 
   return { env, asked, armed };
@@ -209,8 +236,10 @@ const Restored = v.object({
   objects: v.array(v.looseObject({
     class: v.string(), name: v.string(), undo: v.string(), current: v.string(), landed: v.boolean(),
     missing: v.optional(v.object({ named: v.number(), missing: v.number(), keys: v.array(v.string()) })),
+    unread: v.optional(v.string()),
   })),
   landed: v.boolean(),
+  stopped: v.optional(v.string()),
 });
 
 test('a restore without the pass arms nothing', async () => {
@@ -310,4 +339,39 @@ test('a moment outside the last 30 days is refused before anything is armed', as
   expect(asked).toEqual([]);
   expect(await restoreArmed(ctx, { CREDENTIAL_ENCRYPTION_KEY: KEY }, caller, { at: now - 60_000 })).toEqual({ bookmark: mark(0, 10), undo: mark(2, 0xffffffff), previous: mark(1, 4) });
   expect(asked).toEqual([`for ${String(now - 60_000)}`, `arm ${mark(0, 10)}`]);
+});
+
+// Staging 2026-10-23: the account's object was asked which bytes were gone, which it has no call for, and the route
+// answered 503 with its mailbox and Drive never restored and no undo for the object it had.
+test('an account restore reads missing bytes only of the objects whose rows name them, and restores every object', async () => {
+  const user = 'u-2';
+  const { env, armed } = world([`${OPS_PASS_PREFIX}${sha256Hex(PASS)}`], true, { shards: 1 });
+  const answer = await opsRoutes.fetch(restore(`Bearer ${PASS}`, { object: { class: 'UserDO', name: user }, to: { at: 7 } }), env);
+  const { objects } = v.parse(Restored, await answer.json());
+
+  expect({ status: answer.status, armed: armed.length, missing: objects.map((one) => `${one.class} ${one.missing === undefined ? '-' : String(one.missing.missing)}`) }).toEqual({
+    status: 200, armed: 4, missing: ['UserDO -', 'MailboxDO 0', 'MossaicUserDO -', 'MossaicShardDO -'],
+  });
+});
+
+test('a missing read that fails is said, and the restore it follows still answers as landed', async () => {
+  const user = 'u-3';
+  const { env } = world([`${OPS_PASS_PREFIX}${sha256Hex(PASS)}`], true, { unreadable: [user] });
+  const answer = await opsRoutes.fetch(restore(`Bearer ${PASS}`, { object: { class: 'UserDO', name: user }, to: { at: 7 } }), env);
+  const said = v.parse(Restored, await answer.json());
+
+  expect({ status: answer.status, landed: said.landed, mailbox: said.objects.find((one) => one.class === 'MailboxDO')?.unread })
+    .toEqual({ status: 200, landed: true, mailbox: expect.stringContaining('the bucket did not answer') });
+});
+
+// An undo can only take back what the answer names: a restore stopped part way answers what it did before it stopped.
+test('an account restore stopped part way answers the objects it restored and why it stopped', async () => {
+  const user = 'u-4';
+  const { env, armed } = world([`${OPS_PASS_PREFIX}${sha256Hex(PASS)}`], true, { refusing: [`MailboxDO:${user}`] });
+  const answer = await opsRoutes.fetch(restore(`Bearer ${PASS}`, { object: { class: 'UserDO', name: user }, to: { at: 7 } }), env);
+  const said = v.parse(Restored, await answer.json());
+
+  expect({ status: answer.status, armed, restored: said.objects.map((one) => one.class), stopped: said.stopped }).toEqual({
+    status: 502, armed: [`UserDO:${user}:{"at":7}`], restored: ['UserDO'], stopped: expect.stringContaining('MailboxDO'),
+  });
 });
