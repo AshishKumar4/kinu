@@ -107,8 +107,9 @@
 # confirmation naming every table it drops, and only then: a release that only adds tables drops nothing, and stage.sh
 # deploys it unattended (`reset.ts schema-change`). Production refuses a plan that drops or retires a table holding user
 # data, every table but those scripts/schema-loss.json names, unless `--loss-override "<owner's words>"` names it (the
-# owner, 2026-10-21); a full `--reset` of production needs words naming every table. The owner's other way, a one-time
-# migration, has no mechanism yet: the repair drops every table it finds changed. After the upload, once this deploy's version answers, it opens every object
+# owner, 2026-10-21); a full `--reset` of production needs words naming every table, and a release retiring a class
+# words naming it (`reset.ts retirements`, every deploy). The owner's other way, a one-time migration, has no mechanism
+# yet: the repair drops every table it finds changed. After the upload, once this deploy's version answers, it opens every object
 # once, so each resets itself before a user waits on it, prints what each did and writes each database's census
 # (`scripts/reset.ts tables-plan` and `tables`, scripts/tables-reset.ts).
 # Chosen per release; automatic only for one that only adds tables. Its record goes where a reset's does, and a rerun
@@ -297,6 +298,11 @@ fi
 # The plan is the candidate's lock against the build the deployment serves now, read before the upload replaces it;
 # its record is kept here and published just before the upload, the first moment any object resets.
 KINU_TABLES_RECORD=""
+# A release that retires a class deletes its namespace and every row in it: production refuses one the owner's words
+# (--loss-override) do not name (the owner, 2026-10-21; `reset.ts retirements`). A full --reset deletes every class anyway.
+if [ "$KINU_RESET" != "1" ] && [ "$KINU_ROLLBACK" != "1" ] && [ "$KINU_GATES_ONLY" != "1" ]; then
+  bun "$KINU_ROOT/scripts/reset.ts" retirements "$KINU_ENV" || exit 1
+fi
 if [ "$KINU_RESET_TABLES" = "1" ]; then
   if [ "$KINU_RESET" = "1" ] || [ "$KINU_GATES_ONLY" = "1" ]; then
     echo -e "${RED}--reset-tables keeps every object: --reset deletes them all anyway, and --gates-only stops before the build.${NC}"
