@@ -1299,10 +1299,14 @@ a facet of its own) and D13's "every agent's advisor in core `ActorAdvisor`".
   most of it walking tool results' overflow pages to reach each event's `ts`.
   With the seed read four messages a slice, the fold 200 events a slice of the
   types it adds, and a timer yield between slices, no agent's isolate held its
-  loop 100 ms in 3 of 3 runs (9c17e632c); the longest were the long turn's
-  prompt check in the AI SDK (`standardizePrompt`, zod over the whole prompt
-  each call, 36-88 ms and growing with the history), seed slices back to back
-  (47-82 ms) and the advised turn's Effect runs (79 ms). On staging, 7 days to
+  loop 100 ms in 5 of 9 runs (942242390 to e7d32f872); 3 read one 111 ms
+  stretch in the screenshot turn's message reads (`materializePartsOf`, its
+  payload reads and decoding), and 1 ended on a driver request past its time
+  limit. The longest otherwise were the long turn's prompt check in the AI SDK
+  (`standardizePrompt`, zod over the whole prompt each call, 36-88 ms and
+  growing with the history), seed slices (47-82 ms) and the advised turn's
+  Effect runs (79 ms). The gate is a script, not yet a tier row, until both
+  are settled. On staging, 7 days to
   2026-10-23 (`agent.isolate_invocation`, sampled 1 in 10), agent invocations
   of 100 ms of CPU or more were 31% of `step`, 3% of `activePlanReview` and 1%
   of `seed`; an invocation's CPU includes an isolate's start, so it bounds a
