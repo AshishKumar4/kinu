@@ -77,7 +77,7 @@
   <rect x="602" y="88" width="274" height="56" rx="7" fill="var(--pinkFill)" stroke="var(--pinkLine)"/>
   <text class="b" x="614" y="109" text-anchor="start" fill="var(--pink)">Autonomous ingress</text>
   <text class="s" x="614" y="124" text-anchor="start">webhook · email · timer · MCP</text>
-  <text class="xs" x="614" y="139" text-anchor="start">peer agent · sandbox callback</text>
+  <text class="xs" x="614" y="139" text-anchor="start">peer agent · computer callback</text>
   <path d="M161 144 L161 166" fill="none" stroke="var(--blueLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-blue)"/>
   <path d="M450 144 L450 166" fill="none" stroke="var(--blueLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-blue)"/>
   <path d="M739 144 L739 166" fill="none" stroke="var(--pinkLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-pink)"/>
@@ -97,7 +97,7 @@
   <text class="xs" x="259" y="305" text-anchor="start">hires · swarm nodes · roles</text>
   <rect x="456" y="254" width="197" height="58" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="468" y="275" text-anchor="start">Evolution</text>
-  <text class="xs" x="468" y="290" text-anchor="start">MCTS · CraftStore</text>
+  <text class="xs" x="468" y="290" text-anchor="start">swarm · CraftStore</text>
   <text class="xs" x="468" y="305" text-anchor="start">mutable scaffold</text>
   <rect x="665" y="254" width="197" height="58" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="677" y="275" text-anchor="start">Context</text>
@@ -108,7 +108,7 @@
   <text class="xs" x="50" y="360" text-anchor="start">/home/main, plus one home per agent</text>
   <rect x="316" y="324" width="266" height="46" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="328" y="345" text-anchor="start">ExecutionRouter</text>
-  <text class="xs" x="328" y="360" text-anchor="start">workspace · sandbox · device · parent</text>
+  <text class="xs" x="328" y="360" text-anchor="start">workspace · computer · device · parent</text>
   <rect x="594" y="324" width="266" height="46" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="606" y="345" text-anchor="start">EventLog + Inbox</text>
   <text class="xs" x="606" y="360" text-anchor="start">the reactor, and what wakes a turn</text>
@@ -150,7 +150,7 @@
   <rect x="610" y="478" width="64" height="21" rx="10.5" fill="var(--blueFill)" stroke="var(--blueLine)"/>
   <text class="xs mono" x="642" y="492.1" text-anchor="middle" fill="var(--blue)">setTimer</text>
   <rect x="681" y="478" width="86" height="21" rx="10.5" stroke-dasharray="3 3" fill="var(--slateFill)" stroke="var(--rule)"/>
-  <text class="xs mono" x="724" y="492.1" text-anchor="middle" fill="var(--fg)">headRuntime</text>
+  <text class="xs mono" x="724" y="492.1" text-anchor="middle" fill="var(--fg)">closed</text>
   <text class="xs" x="24" y="519">Selected interface members; dashed = optional. Actor identity also belongs to the runtime.</text>
   <text class="xs" x="24" y="535">Container: Devbox — platform snapshots; an R2 disk chain for recovery.</text>
   <line x1="24" y1="545" x2="876" y2="545" stroke="var(--orangeLine)" stroke-width="2"/>
@@ -164,7 +164,7 @@
   <text class="xs" x="36" y="646" fill="var(--fg)">shell</text>
   <text class="xs" x="154" y="646">Nimbus’s own shell over the file plane</text>
   <text class="xs" x="36" y="663" fill="var(--fg)">schedule</text>
-  <text class="xs" x="154" y="663">DO alarms, cron, durable fibers</text>
+  <text class="xs" x="154" y="663">DO alarms, timer triggers, durable fibers</text>
   <text class="xs" x="36" y="680" fill="var(--fg)">executor</text>
   <text class="xs" x="154" y="680">a Worker Loader isolate</text>
   <text class="xs" x="36" y="697" fill="var(--fg)">swarm nodes</text>
@@ -175,7 +175,7 @@
   <text class="xs" x="154" y="731">UserDO — MCP once-auth, devices, registry</text>
   <rect x="462" y="569" width="414" height="175" rx="7" fill="var(--greenFill)" stroke="var(--greenLine)"/>
   <text class="b" x="474" y="590" text-anchor="start" fill="var(--green)">cli-backend  ·  your machine</text>
-  <text class="s" x="474" y="605" text-anchor="start">LocalAgentSession implements BackendHost</text>
+  <text class="s" x="474" y="605" text-anchor="start">LocalAgentSession supplies BackendHost</text>
   <text class="xs" x="474" y="629" fill="var(--fg)">storage</text>
   <text class="xs" x="592" y="629">one bun:sqlite file; real files in own space</text>
   <text class="xs" x="474" y="646" fill="var(--fg)">shell</text>
@@ -186,8 +186,8 @@
   <text class="xs" x="592" y="680">a Bun subprocess</text>
   <text class="xs" x="474" y="697" fill="var(--fg)">swarm nodes</text>
   <text class="xs" x="592" y="697">run in the search’s own process</text>
-  <text class="xs" x="474" y="714" fill="var(--fg)">MCTS branches</text>
-  <text class="xs" x="592" y="714">child processes, same workspace SQLite</text>
+  <text class="xs" x="474" y="714" fill="var(--fg)">steer branches</text>
+  <text class="xs" x="592" y="714">in-process, same workspace SQLite</text>
   <text class="xs" x="474" y="731" fill="var(--fg)">subagents</text>
   <text class="xs" x="592" y="731">Logical workspace actors</text>
 </svg>
