@@ -1777,7 +1777,7 @@ export class LocalAgentSession {
       executors: () => this.rt.executionRouter?.listExecutors() ?? [],
       harnessMode: () => this.workspaceConfig().getHarnessMode(),
       config: this.config,
-      skills: vfsTurnSkills(this.rt.ownFiles, this.config, this.instructionTrust, this.turnHidesSkills),
+      skills: vfsTurnSkills(this.rt.ownFiles, this.config, this.instructionTrust, { ...(this.turnHidesSkills !== undefined && { hides: this.turnHidesSkills }) }),
       models: this.turnModels(),
       profileInputs: async () => {
         const inputs = await this.profiles().inputs();

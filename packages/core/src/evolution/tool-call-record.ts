@@ -4,7 +4,7 @@ import type { ToolOutcome } from '../tools/outcome';
 import { codemodeProgramOf } from '../tools/codemode-reach';
 import { stableStringify } from '../safety/argument-digest';
 import { evidenceWindow, EVIDENCE_BUDGETS } from '../utils/evidence-window';
-import { decodeJsonValue, isJsonObject, type JsonObject, type JsonValue, isJsonString } from '../utils/json';
+import { isJsonObject, type JsonObject, type JsonValue, isJsonString } from '../utils/json';
 import { fnv1a64 } from '../utils/fnv1a';
 import { detached } from '../utils/text';
 import { redactSecrets } from '../safety/secret-patterns';
@@ -105,8 +105,7 @@ function window(value: JsonValue, serialized?: string): string {
 
 /** A call keeps only what its finished-turn readers read. */
 export function compactToolCall(call: ToolCallInput): ToolCallRecord {
-  const decoded = decodeJsonValue({ value: call.args });
-  const text = stringLeaves(decoded);
+  const text = stringLeaves(call.args);
   const written = pathsMatching(text, WRITE_PATTERNS);
   const revisited = pathsMatching(text, REVISIT_PATTERNS);
   const op = call.args.op !== undefined && isJsonString(call.args.op) ? call.args.op : null;
@@ -117,8 +116,8 @@ export function compactToolCall(call: ToolCallInput): ToolCallRecord {
     if (op === 'read') revisited.add(call.args.path);
   }
 
-  // The arguments' stable serialization, taken once for their digest and their window: `decoded` is their copy.
-  const serialized = stableStringify(decoded);
+  // The arguments' stable serialization, taken once for their digest and their window.
+  const serialized = stableStringify(call.args);
 
   const record: ToolCallRecord = {
     name: call.name,

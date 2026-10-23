@@ -166,22 +166,22 @@ const DIGEST_LIMIT = 800;
 /** The digest's first `DIGEST_LIMIT` units, short of a surrogate pair the limit would split. */
 const digestCut = (text: string): string => text.slice(0, headEnd(text, DIGEST_LIMIT));
 
+function bounded(json: JsonValue): JsonValue {
+  const serialized = JSON.stringify(json);
+
+  return serialized.length <= DIGEST_LIMIT ? json : digestCut(serialized) + '...';
+}
+
 /** Bounded projection for durable records; oversized values degrade to a truncated JSON string ending in `…`. */
 export function digestJsonValue(input: { value: unknown }): JsonValue | undefined {
-  const absent = v.safeParse(v.union([v.null(), UndefinedSchema]), input.value);
+  const { value } = input;
 
-  if (absent.success) return absent.output;
-  const text = v.safeParse(v.string(), input.value);
+  if (value === null || value === undefined) return value;
 
-  if (text.success) return text.output.length > DIGEST_LIMIT ? digestCut(text.output) + '...' : text.output;
+  if (typeof value === 'string') return value.length > DIGEST_LIMIT ? digestCut(value) + '...' : value;
 
   return settleSync(Effect.try({
-    try: (): JsonValue => {
-      const json = projectJsonValue(input);
-      const serialized = JSON.stringify(json);
-
-      return serialized.length <= DIGEST_LIMIT ? json : digestCut(serialized) + '...';
-    },
+    try: (): JsonValue => bounded(projectJsonValue(input)),
     catch: (cause) => ({ cause }),
   }).pipe(
     // `String()` would give "[object Object]"; the reason takes its place.

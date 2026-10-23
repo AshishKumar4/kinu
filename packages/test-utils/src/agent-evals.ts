@@ -1,6 +1,6 @@
 /** Behavioural scorers over run events; each reports a denominator separately from passes. */
 import {
-  censusToolFailures, classifyToolFailure, parseStoredRunEvent, type ActorHandle, type RunEvent, type SqlExecutor, type StoredRunEventRow,
+  censusToolFailures, classifyToolFailure, RunEventRecorder, type ActorHandle, type RunEvent, type SqlExecutor,
 } from '@kinu.run/core';
 
 /**
@@ -27,20 +27,13 @@ function verdict(eligible: number, passed: number, detail: string): BehaviourSco
 }
 
 /**
- * Every recorded event of one type, parsed through `parseStoredRunEvent`. The type filter runs in SQL
- * so a malformed row of another type cannot break unrelated scorers; a malformed row of this type throws.
+ * Every recorded event of one type, as the recorder reads it back. The type filter runs in SQL so a malformed row of
+ * another type cannot break unrelated scorers; a malformed row of this type throws.
  */
 function eventsOfType<K extends RunEvent['type']>(
   sql: SqlExecutor, actor: ActorHandle, type: K,
 ): Extract<RunEvent, { type: K }>[] {
-  actor.assertCurrent();
-
-  const rows = sql<StoredRunEventRow>`
-    SELECT run_id, event_index, type, ts, payload FROM run_events
-    WHERE actor_id = ${actor.actorId} AND type = ${type}
-    ORDER BY run_id ASC, event_index ASC`;
-
-  return rows.map((row) => parseStoredRunEvent(row))
+  return new RunEventRecorder(sql, actor).readRecentByType(type, Number.MAX_SAFE_INTEGER)
     .filter((event): event is Extract<RunEvent, { type: K }> => event.type === type);
 }
 

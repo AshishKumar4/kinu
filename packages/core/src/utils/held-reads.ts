@@ -1,3 +1,5 @@
+import { statementText } from './sql';
+
 /** The table a statement writes, and how: the first write keyword names it (SQLite writes one table a statement). */
 export const WRITE = /\b(INSERT(?:\s+OR\s+\w+)?\s+INTO|REPLACE\s+INTO|UPDATE(?:\s+OR\s+\w+)?|DELETE\s+FROM)\s+["`]?(\w+)/i;
 
@@ -11,7 +13,7 @@ function tableOf(strings: TemplateStringsArray): string | null {
   const known = TABLES.get(strings);
 
   if (known !== undefined) return known;
-  const table = writtenTable(strings.join('?'));
+  const table = writtenTable(statementText(strings));
 
   TABLES.set(strings, table);
 

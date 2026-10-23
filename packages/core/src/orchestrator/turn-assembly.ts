@@ -139,9 +139,12 @@ function advisorReads(offered: TurnTools): AdvisorReadTools {
 /** A one-shot run brings its tools and brief; the actor brings the rest. */
 export type RunTurnSources = Omit<TurnAssemblySources, 'toolset' | 'externalTools' | 'wiredToolNames' | 'codemodeCapabilities' | 'brief'>;
 
-/** `hides`: the skills this turn's reader does not index yet (`dreamSkillsHidden`). */
-export function vfsTurnSkills(vfs: VFS, config: TurnSkillsConfig, trust: InstructionTrustResolver, hides?: DiscoverOpts['hides']): TurnAssemblySources['skills'] {
-  return (userText, roleSkills, limits) => resolveTurnSkills({ vfs, config, userText, roleSkills, trust, limits, ...(hides !== undefined && { hides }) });
+/** `hides`: the skills this turn's reader does not index yet (`dreamSkillsHidden`); `shared`: the shared Drive's root as
+ *  its opening listed it. */
+export function vfsTurnSkills(
+  vfs: VFS, config: TurnSkillsConfig, trust: InstructionTrustResolver, read: Pick<DiscoverOpts, 'hides' | 'shared'> = {},
+): TurnAssemblySources['skills'] {
+  return (userText, roleSkills, limits) => resolveTurnSkills({ vfs, config, userText, roleSkills, trust, limits, ...read });
 }
 
 export interface TurnAssemblyRequest {

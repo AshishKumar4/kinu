@@ -8,7 +8,7 @@ import {
   chatMediaPath, chatSeed, drawnStep, getChatHistoryPage, inheritedContextFromTranscript, turnRequestIndex, turnRequestPage,
   recordedTurns, type RecordedTurn,
   type TurnRequestIndex, type TurnRequestPage, RunEventRecorder, spendLedger, type SpendLedger, type StepSpendSource,
-  readAgentFigures, NO_FIGURES, type AgentFigures,
+  readAgentFigures, NO_FIGURES, statementText, type AgentFigures,
   localContextTree, readableActor, type ReadableActor, type ContextEditor, type ContextTree, type ConversationRecall,
   type AgentOwnInspection, type ChatHistoryPage, type PositionPageRequest, type SerializedMessage,
   type SubagentInspectionResult, type SubagentReportLedger, type ModelPricing, type SqlExecutor,
@@ -83,7 +83,7 @@ const IdentitySchema = v.object({
 
 /** Tagged statements over an agent's own SQLite, its rows for a read. */
 function agentSql(sql: SqlStorage): SqlExecutor {
-  return <T,>(query: TemplateStringsArray, ...values: SqlValue[]): T[] => sql.exec<Extract<T, Record<string, SqlStorageValue>>>(query.join('?'), ...values).toArray();
+  return <T,>(query: TemplateStringsArray, ...values: SqlValue[]): T[] => sql.exec<Extract<T, Record<string, SqlStorageValue>>>(statementText(query), ...values).toArray();
 }
 
 /** The tables an agent's database is made with: its constructor's, and its repair's. */
@@ -172,7 +172,7 @@ export class AgentDatabase {
     if (writesSnapshotRows(query)) this.adopted = null;
     this.held.written(query);
 
-    return this.storage.sql.exec<Extract<T, Record<string, SqlStorageValue>>>(query.join('?'), ...values).toArray();
+    return this.storage.sql.exec<Extract<T, Record<string, SqlStorageValue>>>(statementText(query), ...values).toArray();
   };
 
   /** For stores that take a raw statement. */

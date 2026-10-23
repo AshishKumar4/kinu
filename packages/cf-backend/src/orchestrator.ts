@@ -23,7 +23,7 @@ import {
   EventLog, actorReferenceOf, stoppedBelow, stopAgentsBelow,
   artifactOverrides, currentArtifacts,
   agentsActionsFor, agentsProfileContext, betaSwarms, buildActorTools, BACKGROUNDABLE_TOOLS,
-  vfsTurnSkills, conversationKey, captureOperationProfile, type RunTurnSources,
+  vfsTurnSkills, listSharedSkills, type SharedSkillsListing, conversationKey, captureOperationProfile, type RunTurnSources,
   describeAgentTools, inTurnSurface, turnLedgers, type TurnLedgers, surfaceReach, turnArtifacts, withToolText,
   BUILTIN_TOOL_NAMES, codemodeCapabilitiesFor, agentRoleSwitch, currentOperationProfile,
   ownProfileChoices, pruneTurnReceipts, remoteReceipts, type SeatedActor, type SettledRun, type SurfaceReach, type ExecutionLane, type OperationProfile, type CodemodeSurface,
@@ -405,6 +405,10 @@ interface SourcePlanes {
   /** Whether the owner holds a mail address, read once for its turn or run seat, which never rejects: null on a
    *  deployment with no mail, or where the read failed (logged), each of which offers mail as before. */
   readonly mail: Promise<boolean | null> | null;
+  /** A turn's unread mail, read after {@link mail} says the owner holds an address; null with no turn. */
+  readonly unreadMail: ReturnType<typeof unreadMailForTurn> | null;
+  /** The shared Drive's skills root, listed for a turn; null with no turn. */
+  readonly sharedSkills: SharedSkillsListing | null;
 }
 
 /** An assignment's delivery, as its metadata names it. */
@@ -1504,7 +1508,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // programs' `mail` both follow that read (`runSeatMail`), so an owner with no address offers its runs no mail.
       sources: async (actor) => {
         const reach = actorReach(actorPolicy(actor.record));
-        const planes = this.sourcePlanes(actor.runtime, reach, false);
+        const planes = this.sourcePlanes(actor, reach, false);
         const sources = await this.actorSources(actor, reach, null, planes);
 
         this.runSeatMail.set(actor, await (planes.mail ?? Promise.resolve(null)));
@@ -1663,7 +1667,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // Its sources' crossings wait on nothing of its own, so they are in flight beside its profile's resolution, or since
     // its opening asked for the account's settings.
-    const planes = this.turnPlanes(key.actorId, runtime, reach.actor);
+    const planes = this.turnPlanes(key.actorId, actor, reach.actor);
     const resolved = await this.surfaceProfile(actor, turn, opened);
 
     // Read once per turn, and moved only by a turn whose prompt cache is cold: the prompt prefix holds within a segment.
@@ -1950,14 +1954,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private openingReads(actorId: string): void {
     const seat = this.actorHost().hosted(actorReferenceOf(this.actingAgentOf(actorId)));
 
-    if (seat !== null) this.openingPlanes.set(actorId, this.sourcePlanes(seat.runtime, actorReach(actorPolicy(seat.record)), true));
+    if (seat !== null) this.openingPlanes.set(actorId, this.sourcePlanes(seat, actorReach(actorPolicy(seat.record)), true));
   }
 
   /**
-   * The settings revision read of an idle agent's next opening, with its planes, started as the delivery that opens its
-   * work crosses (`admit`): they reach the owner's object before the tile that admission moves, whose write would hold
-   * their answers behind its flush. Written there; taken by the agent's next preparation (`openingAccount`); dropped
-   * when the agent tells it rests or is retired (`openingAccountDropped`).
+   * The settings revision read of the next opening of an agent with no turn running, with its planes, started as the
+   * delivery that opens it crosses (`admit`): they reach the owner's object before the tile that admission moves, whose
+   * write would hold their answers behind its flush, and are answered while the agent admits and opens its turn. Written
+   * there; taken by the agent's next preparation (`openingAccount`); dropped when the agent tells it rests or is retired
+   * (`openingAccountDropped`).
    */
   private readonly accountAtOpen = new Map<string, Promise<Exit.Exit<void, KinuError>>>();
 
@@ -1990,24 +1995,36 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** A turn's source reads: its opening's, taken, or started now. */
-  private turnPlanes(actorId: string, runtime: CFRuntime, reach: ActorReach): SourcePlanes {
+  private turnPlanes(actorId: string, actor: CFSeat, reach: ActorReach): SourcePlanes {
     const opened = this.openingPlanes.get(actorId);
 
-    if (opened === undefined) return this.sourcePlanes(runtime, reach, true);
+    if (opened === undefined) return this.sourcePlanes(actor, reach, true);
     this.openingPlanes.delete(actorId);
 
     return opened;
   }
 
-  /** Its sources' crossings that wait on nothing of a turn's own, started at once: for a `turn`, the account's facts and
-   *  the owner's MCP descriptors where it reaches them; the hub's device check for an agent on the workspace's lanes. */
-  private sourcePlanes(runtime: CFRuntime, reach: ActorReach, turn: boolean): SourcePlanes {
+  /** Its sources' crossings that wait on nothing of a turn's own, started at once: for a `turn`, the account's facts, its
+   *  unread mail, the shared Drive's skills and the owner's MCP descriptors where it reaches them; the hub's device check
+   *  for an agent on the workspace's lanes. */
+  private sourcePlanes(actor: CFSeat, reach: ActorReach, turn: boolean): SourcePlanes {
+    const mail = this.ownerMailRead();
+
     return {
       descriptors: turn && reach.kind === 'workspace' ? this.userMcpDescriptors() : null,
-      device: reach.kind === 'workspace' ? runtime.deviceTransport.refreshStatus() : Promise.resolve(),
+      device: reach.kind === 'workspace' ? actor.runtime.deviceTransport.refreshStatus() : Promise.resolve(),
       facts: turn ? this.account.factsForTurn(this.actorHandle().name) : null,
-      mail: this.ownerMailRead(),
+      mail,
+      unreadMail: turn ? this.unreadMailOf(actor, mail) : null,
+      sharedSkills: turn ? listSharedSkills(actor.runtime.storage.vfs) : null,
     };
+  }
+
+  /** An agent's unread mail for its turn, once `owned` says its owner holds an address. */
+  private async unreadMailOf(actor: CFSeat, owned: Promise<boolean | null>): ReturnType<typeof unreadMailForTurn> {
+    const mail = (await owned) === false ? null : this.mailFor(actor.handle.actorId, actor.record.name);
+
+    return mail === null ? undefined : await unreadMailForTurn(mail, this.name);
   }
 
   /** Each run seat's own mail read, by the actor it seated: one seat's answer, never another's. */
@@ -2036,7 +2053,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * a run's seat asks with no turn. Its `planes` are started here unless its surface started them.
    */
   protected async actorSources(
-    actor: CFSeat, reach: ActorReach, turn: SourcesTurn | null, planes = this.sourcePlanes(actor.runtime, reach, turn !== null),
+    actor: CFSeat, reach: ActorReach, turn: SourcesTurn | null, planes = this.sourcePlanes(actor, reach, turn !== null),
   ): Promise<RunTurnSources> {
     const { runtime } = actor;
     const trust = this.instructionTrust();
@@ -2088,7 +2105,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         resolve: (spec) => (reach.kind === 'workspace' ? this.turnModel(spec) : this.ownedModelServices.resolveModel(spec)),
         routed: routedModelReads(providers),
       },
-      skills: vfsTurnSkills(runtime.storage.vfs, actor.stores.config, trust, turn?.hidesSkills),
+      skills: vfsTurnSkills(runtime.storage.vfs, actor.stores.config, trust, {
+        ...(turn?.hidesSkills !== undefined && { hides: turn.hidesSkills }), ...(planes.sharedSkills !== null && { shared: planes.sharedSkills }),
+      }),
       profileInputs: async () => inputs,
       choices,
       ancestors: () => this.ancestorProfiles(actor.handle) ?? [],
@@ -2108,11 +2127,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       attachmentBudget: turn?.surface.ledgers.context ?? turnLedgers().context,
       extensions: () => (reach.kind === 'workspace' ? this.extensions.list() : []),
       accountFacts: () => planes.facts ?? this.account.factsForTurn(this.actorHandle().name),
-      mail: async () => {
-        const mail = ownerMail === false ? null : this.mailFor(actor.handle.actorId, actor.record.name);
-
-        return mail === null ? undefined : unreadMailForTurn(mail, this.name);
-      },
+      mail: () => planes.unreadMail ?? this.unreadMailOf(actor, Promise.resolve(ownerMail)),
       dynamic: (reads) => (profile, tools) => this.actorDynamicContext(actor, reach, { profile, tools, reads, surface: turn?.surface ?? null }),
       operation: (profile, operationInputs) => captureOperationProfile({
         actor: actor.handle, profile, inputs: operationInputs, runId: turn?.surface.key.runId ?? WORKSPACE_RUN_ID, turnId: turn?.surface.key.turnId ?? null,
@@ -2976,8 +2991,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     transaction: (body) => this.ctx.storage.transactionSync(body),
     wake: (actorId, at) => this.owedWake(actorId, at ?? Date.now() + RECOVERY_BACKOFF_CEILING_MS),
     admit: async (actorId, delivery) => {
-      // An agent at rest opens its work on what crosses: its opening's account reads go out ahead of its tile.
-      if (!this.agentsWorking.has(actorId)) this.openingAccountStarted(actorId);
+      // An agent with no turn running opens one on what crosses: its opening's account reads go out ahead of its tile and
+      // its own admission, at rest or between turns (#103: a warm turn's preparation waited 150 ms on them). The fence is
+      // durable: a turn this activation did not open runs on past a reset, with no turn of it held here.
+      if (this.agentTurns.currentTurn(actorId) === null && this.heldFence(actorId)?.live !== true) this.openingAccountStarted(actorId);
       let working = false;
 
       try {
