@@ -57,9 +57,9 @@ afterAll(async () => {
   }
 });
 
-// The two `cloudflare:` builtins the Agents SDK's ROOT module imports
+// The `cloudflare:` builtins the Agents SDK's ROOT module imports
 // (`EmailMessage` from cloudflare:email, `RpcTarget`/`exports` from
-// cloudflare:workers). They exist only inside workerd, so under `bun test`
+// cloudflare:workers), and the egress module's `connect` (cloudflare:sockets). They exist only inside workerd, so under `bun test`
 // any suite whose graph reaches `agents`' root — every real UserDO or
 // orchestrator harness — fails to LOAD, and its coverage silently never runs.
 // This is a boundary shim, not behavior: the platform semantics of both
@@ -89,6 +89,16 @@ Bun.plugin({
             readonly to: string,
             readonly raw: string | ReadableStream,
           ) {}
+        },
+      },
+      loader: 'object',
+    }));
+    // Dialling exists only inside workerd: a suite that dials stands its own `connect` in, and one that only links the
+    // egress module never reaches it.
+    build.module('cloudflare:sockets', () => ({
+      exports: {
+        connect: () => {
+          throw new Error('cloudflare:sockets connect does not exist under bun test — a suite that dials mocks the module');
         },
       },
       loader: 'object',

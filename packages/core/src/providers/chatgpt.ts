@@ -12,7 +12,7 @@ import type { AuthRequest, AuthResolution, ModelInfo, ModelProvider, ProviderDep
 import { StaleModelList, statelessResponses } from './util';
 import { streamedGenerate } from './middleware/stream-generate';
 import { heardFetch } from './middleware/attempt';
-import { lazyModel } from './wire-model';
+import { lazyModel, MODEL_SDKS } from './wire-model';
 
 const CHATGPT_BASE_URL = 'https://api.openai.com/v1';
 
@@ -343,7 +343,7 @@ export function createChatGptProvider(opts: ChatGptProviderOptions = {}): ModelP
         }));
       });
 
-      const model = lazyModel('openai.responses', modelId, async () => (await import('@ai-sdk/openai'))
+      const model = lazyModel('openai.responses', modelId, async () => (await MODEL_SDKS.openai())
         .createOpenAI({ baseURL: CHATGPT_BASE_URL, apiKey: 'chatgpt-plan', headers: chatgptSessionHeaders(deps), fetch: customFetch })
         .responses(modelId));
 
