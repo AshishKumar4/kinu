@@ -22,18 +22,18 @@ const ScreenCloseSchema = v.object({ type: v.literal(DEVICE_FRAMES.screenClose),
 
 async function connectDevice(harness: TestUserDO, hello: JsonValue = { ...CAPABLE_HELLO, desktop: READY }) {
   const { deviceId, key } = await registerTestDevice(harness.userDO, 'studio tower');
-  const machine = { deviceId, key, generation: 0 };
+  const machine = { deviceId, key, secret: '' };
 
   return { deviceId, machine, device: await dialDevice(harness, machine, hello) };
 }
 
 /** The daemon's socket, dialled as the daemon does with the device's key, and its HELLO sent. */
 async function dialDevice(
-  harness: TestUserDO, machine: { deviceId: string; key: TestDeviceKey; generation: number }, hello: JsonValue = { ...CAPABLE_HELLO, desktop: READY },
+  harness: TestUserDO, machine: { deviceId: string; key: TestDeviceKey; secret: string }, hello: JsonValue = { ...CAPABLE_HELLO, desktop: READY },
 ) {
-  const device = await connectTestDevice(harness, machine.deviceId, machine.key, { generation: machine.generation, acknowledge: true });
+  const device = await connectTestDevice(harness, machine.deviceId, machine.key, { secret: machine.secret, acknowledge: true });
 
-  machine.generation += 1;
+  machine.secret = device.handed;
   await harness.userDO.webSocketMessage(device.ws, JSON.stringify(hello));
 
   return device;

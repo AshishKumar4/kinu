@@ -321,7 +321,8 @@ describe('daemon startup hardening', () => {
     expect(readDeviceConfig(configPath)).toEqual(whole);
 
     for (const field of Object.keys(whole)) {
-      for (const partial of [{ ...whole, [field]: undefined }, { ...whole, [field]: '' }]) {
+      // '' is the connect secret a machine holds before its first connect, so it alone may be empty.
+      for (const partial of [{ ...whole, [field]: undefined }, ...(field === 'connectSecret' ? [] : [{ ...whole, [field]: '' }])]) {
         fs.writeFileSync(configPath, JSON.stringify(partial), { mode: 0o600 });
         expect(() => readDeviceConfig(configPath)).toThrow();
       }

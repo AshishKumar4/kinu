@@ -276,7 +276,8 @@ private theorem admit_in_step (h : Hub) (s : Nat) (hq : InStep (h, s)) :
       rcases hs with hs | hs
       · exact hs
       · exact absurd hs hps
-    exact ⟨c, p, by simp [admit, hps, hsc], hcn, hsc⟩
+    have hpc : p ≠ some c := by rw [← hsc]; exact hps
+    exact ⟨c, p, by simp [admit, hpc, hsc], hcn, hsc⟩
 
 private theorem connect_in_step (q : Hub × Nat) (a : Answer) (hq : InStep q) : InStep (connect q.1 q.2 a) := by
   obtain ⟨h, s⟩ := q

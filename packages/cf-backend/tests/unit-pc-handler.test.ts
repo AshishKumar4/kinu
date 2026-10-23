@@ -27,7 +27,10 @@ const GOOD_KEY = "k".repeat(43);
 
 const GOOD_TICKET = `pct_${"y".repeat(32)}`;
 
-const GOOD_PROOF = { user: GOOD_USER, device: GOOD_DEVICE, generation: 0, nonce: GOOD_NONCE, signature: GOOD_SIGNATURE };
+const GOOD_PROOF = { user: GOOD_USER, device: GOOD_DEVICE, secret: '', nonce: GOOD_NONCE, signature: GOOD_SIGNATURE };
+
+/** A connect secret the hub never handed: the one a copy of the key could make up. */
+const STALE_SECRET = 'S'.repeat(43);
 
 const GOOD_JOIN = `pjt_${GOOD_USER}_${"j".repeat(43)}`;
 
@@ -85,7 +88,7 @@ function makeUserDO(): RecordedUserDO {
 
           if (proof.signature === GOOD_SIGNATURE) return { ok: true as const, ticket: GOOD_TICKET, expiresAt: Date.now() + 60_000 };
 
-          return { ok: false as const, refusal: proof.generation === 9 ? 'cloned' as const : 'unauthorized' as const };
+          return { ok: false as const, refusal: proof.secret === STALE_SECRET ? 'cloned' as const : 'unauthorized' as const };
         },
         async recordDeviceUpdateRefusal(_caller: UserCaller, proof: DeviceChallengeProof, refusal: { version: string; runtime: string; reason: string }) {
           proofs.push({ origin: proof.origin, signature: proof.signature });
@@ -173,10 +176,10 @@ describe("/pc/connect-ticket", () => {
     expect(userDO.proofs).toEqual([{ origin: "https://kinu.test", signature: GOOD_SIGNATURE }]);
   });
 
-  test("a malformed user, device, nonce or generation is refused before any namespace lookup", async () => {
+  test("a malformed user, device, nonce or connect secret is refused before any namespace lookup", async () => {
     for (const fields of [
       { user: "not-a-user" }, { user: GOOD_USER.toUpperCase() }, { device: "" }, { device: "dev-a:b" }, { nonce: "pct_short" },
-      { generation: -1 }, { generation: 1.5 }, { generation: "0" }, { signature: undefined },
+      { secret: undefined }, { secret: 0 }, { secret: "short" }, { secret: `${"S".repeat(42)}=` }, { signature: undefined },
     ]) {
       const userDO = makeUserDO();
       const response = await pcRoutes.fetch(ticketPost(JSON.stringify({ ...GOOD_PROOF, ...fields })), makeEnv(userDO));
@@ -195,7 +198,7 @@ describe("/pc/connect-ticket", () => {
 
   test("a device revoked for a second holder of its key is told so, and to connect again", async () => {
     const userDO = makeUserDO();
-    const response = await pcRoutes.fetch(ticketPost(JSON.stringify({ ...GOOD_PROOF, signature: WRONG_SIGNATURE, generation: 9 })), makeEnv(userDO));
+    const response = await pcRoutes.fetch(ticketPost(JSON.stringify({ ...GOOD_PROOF, signature: WRONG_SIGNATURE, secret: STALE_SECRET })), makeEnv(userDO));
     expect(response.status).toBe(401);
     const said = v.parse(v.object({ error: v.string() }), await response.json()).error;
     expect(said).toContain("two machines used its key");

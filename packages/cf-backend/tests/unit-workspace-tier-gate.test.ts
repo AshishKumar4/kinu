@@ -21,7 +21,7 @@ const USER_ID = '0123456789abcdef0123456789abcdef';
 const TOKEN_HASH = 'a'.repeat(64);
 
 /** A daemon's signed challenge, well formed and proving nothing: the gate refuses before it is read. */
-const DEVICE_PROOF = { origin: 'https://kinu.test', device: 'dev-1', generation: 0, nonce: `pcc_${'n'.repeat(43)}`, signature: 's'.repeat(86) };
+const DEVICE_PROOF = { origin: 'https://kinu.test', device: 'dev-1', secret: '', nonce: `pcc_${'n'.repeat(43)}`, signature: 's'.repeat(86) };
 
 // A provider/OAuth call that survives the gate must fail loudly rather than dial out.
 const realFetch = globalThis.fetch;
