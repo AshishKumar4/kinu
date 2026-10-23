@@ -371,11 +371,14 @@ function tokenPattern(name: string): RegExp {
   return new RegExp(`(?<![A-Za-z0-9._%+-])${name.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}(?![A-Za-z0-9._%+-])`, 'giu');
 }
 
-/** `userId`'s workspaces the index holds as removed, whose name no live workspace holds now. */
-export function removedWorkspaceNames(sql: ControlPlaneSql, userId: string): string[] {
+/** `userId`'s workspaces the index holds as removed, whose name no live workspace holds now; `only`'s alone, if named. */
+export function removedWorkspaceNames(sql: ControlPlaneSql, userId: string, only?: string): string[] {
+  // The live names are read once, not once per removed row: a correlated scan by name, which no index leads with, cost
+  // every removed row of the account a pass over the whole table (staging 04603ec96, 1.2 s a forget, reset).
   return select(sql, v.object({ name: v.string() }),
-    `SELECT w.name FROM cp_workspaces w WHERE w.user_id = ? AND w.removed_at IS NOT NULL
-       AND NOT EXISTS (SELECT 1 FROM cp_workspaces v WHERE v.name = w.name AND v.removed_at IS NULL)`, userId).map((row) => row.name);
+    `SELECT w.name FROM cp_workspaces w WHERE w.user_id = ? AND w.removed_at IS NOT NULL${only === undefined ? '' : ' AND w.name = ?'}
+       AND w.name NOT IN (SELECT v.name FROM cp_workspaces v WHERE v.removed_at IS NULL)`,
+    ...(only === undefined ? [userId] : [userId, only])).map((row) => row.name);
 }
 
 export interface ReconcileOutcome {
