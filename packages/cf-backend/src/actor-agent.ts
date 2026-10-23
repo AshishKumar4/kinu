@@ -230,7 +230,7 @@ type ActorJobSeams = Pick<BackgroundJobRunnerDeps,
  * given (do.alarm.wall_ms), so the platform never ends the handler mid-wait. A handler ended at its wall resets the
  * object and closes every socket (warm-forge-4d6acc02, 2026-09-25).
  */
-const ALARM_PROGRAM_WAIT_MS = Math.floor(PLATFORM_CATALOG['do.alarm.wall_ms'].limit.value * 9 / 10);
+export const ALARM_PROGRAM_WAIT_MS = Math.floor(PLATFORM_CATALOG['do.alarm.wall_ms'].limit.value * 9 / 10);
 
 
 
@@ -2795,7 +2795,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * turn's Plan. Its reach is the in-flight turn's profile while one runs (not the cached one, which outlives its turn),
    * else that same resolution over native, codemode and the given MCP tools.
    */
-  private async slateAuthority(
+  protected async slateAuthority(
     requested: WorkMode, providers: readonly CodemodeProvider[], mcpToolKeys: readonly string[] = [],
   ): Promise<SlateAuthority> {
     const { profile, inputs } = await this.actorProfile({
