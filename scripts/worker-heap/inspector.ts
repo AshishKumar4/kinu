@@ -152,10 +152,78 @@ const SamplingReplySchema = v.object({ result: v.object({ profile: v.object({ he
 
 /** A CPU profile's samples, each a node, and the time before it. */
 const CpuReplySchema = v.object({ result: v.object({ profile: v.object({
-  nodes: v.array(v.object({ id: v.number(), callFrame: v.object({ functionName: v.string() }) })),
+  nodes: v.array(v.object({
+    id: v.number(),
+    callFrame: v.object({ functionName: v.string(), url: v.optional(v.string(), ''), lineNumber: v.optional(v.number(), -1) }),
+    children: v.optional(v.array(v.number()), []),
+  })),
   samples: v.array(v.number()),
   timeDeltas: v.array(v.number()),
 }) }) });
+
+/** The longest stretch an isolate ran with no idle sample in it: one event-loop turn, or turns back to back. */
+export interface BusyStretch {
+  readonly ms: number;
+  /** The frames at least a fifth of its samples ran under, by the share of them, largest first. */
+  readonly frames: readonly { readonly frame: string; readonly share: number }[];
+}
+
+/** A gap between two samples longer than this, in µs, is the isolate waiting: five sampling intervals. */
+const LOOP_GAP_US = 5000;
+
+/** The longest busy stretch in `profile`, and the frames its samples spent most time under. */
+function longestBusy(profile: v.InferOutput<typeof CpuReplySchema>['result']['profile']): BusyStretch {
+  const byId = new Map(profile.nodes.map((node) => [node.id, node]));
+  const parent = new Map<number, number>();
+
+  for (const node of profile.nodes) for (const child of node.children) parent.set(child, node.id);
+
+  // No JavaScript on the stack is the loop waiting: workerd marks no `(idle)` of its own, so its event loop's wait reads
+  // as `(program)` (measured 2026-10-23: a run read as 73 s busy in one facet, and 60 s in the assets worker, until it was).
+  const waiting = new Set(['(idle)', '(program)', '(root)']);
+  const idle = new Set(profile.nodes.filter((node) => waiting.has(node.callFrame.functionName)).map((node) => node.id));
+  let [best, bestFrom, bestTo, run, from] = [0, 0, 0, 0, 0];
+
+  for (const [at, sample] of profile.samples.entries()) {
+    // The time since the sample before: the profiler takes none while the isolate waits, so a gap past a few intervals
+    // is a wait, and the turn before it has ended (measured 2026-10-23: unbroken, a run read as 82 s busy).
+    const delta = profile.timeDeltas[at] ?? 0;
+
+    if (idle.has(sample) || delta > LOOP_GAP_US) {
+      run = 0;
+      from = idle.has(sample) ? at + 1 : at;
+
+      if (idle.has(sample)) continue;
+    } else {
+      run += delta;
+    }
+
+    if (run > best) [best, bestFrom, bestTo] = [run, from, at];
+  }
+
+  const counts = new Map<string, number>();
+
+  for (let at = bestFrom; at <= bestTo; at++) {
+    const seen = new Set<string>();
+
+    for (let id: number | undefined = profile.samples[at]; id !== undefined; id = parent.get(id)) {
+      const frame = byId.get(id)?.callFrame;
+
+      if (frame === undefined || frame.functionName === '(root)') continue;
+      const name = `${frame.functionName || '(anonymous)'} ${frame.url.split('/').slice(-2).join('/')}:${String(frame.lineNumber + 1)}`;
+
+      if (!seen.has(name)) counts.set(name, (counts.get(name) ?? 0) + 1);
+      seen.add(name);
+    }
+  }
+
+  const samples = Math.max(1, bestTo - bestFrom + 1);
+
+  const frames = [...counts].map(([frame, count]) => ({ frame, share: count / samples })).filter((each) => each.share >= 0.2)
+    .sort((a, b) => b.share - a.share).slice(0, 12);
+
+  return { ms: best / 1000, frames };
+}
 
 export interface Allocations {
   readonly total: number;
@@ -231,11 +299,44 @@ export interface Inspector {
   readonly close: () => void;
 }
 
+/** What every read answers while the loop gate profiles each isolate (`loop-turns.ts`): workerd takes one inspector
+ *  session an isolate, a snapshot under a running CPU profile stalled the gate past its silence bound twice
+ *  (2026-10-23), and the profiler's own allocation would move every heap figure anyway. */
+const NOT_READ: Inspector = {
+  usedHeap: async () => 0,
+  liveHeap: async () => 0,
+  liveSplit: async () => ({ live: 0, code: 0 }),
+  makeup: async () => ({ kinds: [], strings: [] }),
+  markedBytes: async () => 0,
+  sampleAllocations: async () => {},
+  allocations: async () => ({ total: 0, sites: [] }),
+  sampleCpu: async () => {},
+  cpuBusyMs: async () => 0,
+  close: () => {},
+};
+
+/** Whether {@link inspect} reads the heap: until {@link profileEveryIsolate}. */
+let readsHeap = true;
+
+/** From now every {@link inspect} answers {@link NOT_READ}: the loop gate holds each isolate's one session. */
+export function profileEveryIsolate(): void {
+  readsHeap = false;
+}
+
+type Target = v.InferOutput<typeof TargetsSchema>[number];
+
+async function targets(port: number): Promise<Target[]> {
+  return v.parse(TargetsSchema, await (await fetch(`http://127.0.0.1:${String(port)}/json`)).json());
+}
+
+/** Every isolate workerd lists, by target id. */
+export async function targetIds(port: number): Promise<readonly string[]> {
+  return (await targets(port)).map((target) => target.id);
+}
+
 /** One inspector session on each isolate whose target id `picks` accepts, however many there are. */
 export async function inspectAll(port: number, picks: (id: string) => boolean): Promise<Inspector[]> {
-  const targets = v.parse(TargetsSchema, await (await fetch(`http://127.0.0.1:${String(port)}/json`)).json());
-
-  return await Promise.all(targets.filter((target) => picks(target.id))
+  return await Promise.all((await targets(port)).filter((target) => picks(target.id))
     .map(async (target) => await inspect(port, `the isolate ${target.id}`, (id) => id === target.id)));
 }
 
@@ -243,57 +344,16 @@ export async function inspectAll(port: number, picks: (id: string) => boolean): 
  *  a Worker Loader's too, as `<binding>:<loader key>` (server.c++ at v1.20260930.2, `WorkerLoaderNamespace::loadIsolate`
  *  and `makeWorkerImpl`). */
 export async function inspect(port: number, isolate: string, picks: (id: string) => boolean): Promise<Inspector> {
-  const targets = v.parse(TargetsSchema, await (await fetch(`http://127.0.0.1:${String(port)}/json`)).json());
-  const [target, ...more] = targets.filter((each) => picks(each.id));
+  const listed = await targets(port);
+  const [target, ...more] = listed.filter((each) => picks(each.id));
 
   if (target === undefined || more.length > 0) {
-    throw new Error(`worker-heap: no one inspector target for ${isolate} among ${targets.map((t) => t.id).join(', ')}`);
+    throw new Error(`worker-heap: no one inspector target for ${isolate} among ${listed.map((t) => t.id).join(', ')}`);
   }
 
-  const socket = new WebSocket(target.webSocketDebuggerUrl);
-  const opened = Promise.withResolvers<void>();
-  const replies = new Map<number, (raw: string) => void>();
-  let chunks: string[] = [];
-  let next = 0;
+  if (!readsHeap) return NOT_READ;
 
-  socket.addEventListener('open', () => { opened.resolve(); });
-  socket.addEventListener('error', () => { opened.reject(new Error('worker-heap: the inspector socket failed')); });
-  socket.addEventListener('message', (event) => {
-    const raw = String(event.data);
-    const message: unknown = JSON.parse(raw);
-    const chunk = v.safeParse(SnapshotChunkSchema, message);
-
-    if (chunk.success) {
-      chunks.push(chunk.output.params.chunk);
-
-      return;
-    }
-
-    const reply = v.safeParse(InspectorReplySchema, message);
-
-    if (reply.success) replies.get(reply.output.id)?.(raw);
-  });
-  await opened.promise;
-
-  /** A snapshot collects first, so its node sizes add up to what is live. */
-  const snapshotNow = async <Parsed>(schema: v.GenericSchema<Parsed>): Promise<Parsed> => {
-    chunks = [];
-    await send('HeapProfiler.takeHeapSnapshot');
-    const snapshot = v.parse(schema, JSON.parse(chunks.join('')));
-    chunks = [];
-
-    return snapshot;
-  };
-
-  /** The raw reply, which each caller parses for the field it asked for. */
-  const send = (method: string, params?: Readonly<Record<string, number | boolean>>): Promise<string> => {
-    next += 1;
-    const answer = Promise.withResolvers<string>();
-    replies.set(next, answer.resolve);
-    socket.send(JSON.stringify({ id: next, method, ...(params !== undefined && { params }) }));
-
-    return answer.promise;
-  };
+  const { send, snapshotNow, close } = await connect(target);
 
   return {
     // Uncollected: what the isolate holds at this instant, garbage included.
@@ -321,6 +381,85 @@ export async function inspect(port: number, isolate: string, picks: (id: string)
 
       return busy / 1000;
     },
-    close: () => { socket.close(); },
+    close,
   };
+}
+
+/** An isolate's CPU profiled from {@link profileLoop} to `stop`, which answers its longest busy stretch and closes. */
+export interface LoopProfile {
+  readonly stop: () => Promise<BusyStretch>;
+}
+
+/** Profiles the isolate `id` from now, a sample a millisecond; null when it is no longer listed. */
+export async function profileLoop(port: number, id: string): Promise<LoopProfile | null> {
+  const target = (await targets(port)).find((each) => each.id === id);
+
+  if (target === undefined) return null;
+  const { send, close } = await connect(target);
+
+  await send('Profiler.enable');
+  await send('Profiler.setSamplingInterval', { interval: 1000 });
+  await send('Profiler.start');
+
+  return {
+    stop: async () => {
+      const stretch = longestBusy(v.parse(CpuReplySchema, JSON.parse(await send('Profiler.stop'))).result.profile);
+      close();
+
+      return stretch;
+    },
+  };
+}
+
+/** An open inspector session: a request's raw reply, which each caller parses for the field it asked for, and a heap
+ *  snapshot, which collects first, so its node sizes add up to what is live. */
+async function connect(target: Target): Promise<{
+  readonly send: (method: string, params?: Readonly<Record<string, number | boolean>>) => Promise<string>;
+  readonly snapshotNow: <Parsed>(schema: v.GenericSchema<Parsed>) => Promise<Parsed>;
+  readonly close: () => void;
+}> {
+  const socket = new WebSocket(target.webSocketDebuggerUrl);
+  const opened = Promise.withResolvers<void>();
+  const replies = new Map<number, (raw: string) => void>();
+  let chunks: string[] = [];
+  let next = 0;
+
+  socket.addEventListener('open', () => { opened.resolve(); });
+  socket.addEventListener('error', () => { opened.reject(new Error('worker-heap: the inspector socket failed')); });
+  socket.addEventListener('message', (event) => {
+    const raw = String(event.data);
+    const message: unknown = JSON.parse(raw);
+    const chunk = v.safeParse(SnapshotChunkSchema, message);
+
+    if (chunk.success) {
+      chunks.push(chunk.output.params.chunk);
+
+      return;
+    }
+
+    const reply = v.safeParse(InspectorReplySchema, message);
+
+    if (reply.success) replies.get(reply.output.id)?.(raw);
+  });
+  await opened.promise;
+
+  const send = (method: string, params?: Readonly<Record<string, number | boolean>>): Promise<string> => {
+    next += 1;
+    const answer = Promise.withResolvers<string>();
+    replies.set(next, answer.resolve);
+    socket.send(JSON.stringify({ id: next, method, ...(params !== undefined && { params }) }));
+
+    return answer.promise;
+  };
+
+  const snapshotNow = async <Parsed>(schema: v.GenericSchema<Parsed>): Promise<Parsed> => {
+    chunks = [];
+    await send('HeapProfiler.takeHeapSnapshot');
+    const snapshot = v.parse(schema, JSON.parse(chunks.join('')));
+    chunks = [];
+
+    return snapshot;
+  };
+
+  return { send, snapshotNow, close: () => { socket.close(); } };
 }

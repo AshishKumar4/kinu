@@ -1437,6 +1437,24 @@ export const LADDER: readonly Gate[] = [
     inputs: CLIENT_BUILD,
   },
   {
+    run: 'bun run gate:facet-loop',
+    label: 'Agent isolate event-loop turns',
+    tier: 'ci',
+    seconds: 120,
+    catches: 'an agent\'s isolate holding its event loop 100 ms or more in one stretch. Measured on the platform '
+      + '2026-10-23 (kinu-advisor-probe-1023b, D14): a Worker Loader facet whose turns each take 0.1-0.4 s of CPU is '
+      + 'reset after about 1-3 s of such CPU, "Durable Object reset because its code was updated", and takes its '
+      + 'workspace object and every sibling agent with it (0.42 s turns 12 of 13 runs, 0.1 s turns 1 of 2; 40 ms turns '
+      + 'for 4 s of CPU 0 of 2). The row runs the heap gate\'s workloads (a step\'s turns, heads, the 150-step long '
+      + 'turn unadvised and advised, the 450-step screenshot turn and its chat\'s seeds, twelve subagents) with every '
+      + 'isolate under a CPU profiler, and fails on any agent\'s isolate whose longest stretch reaches 100 ms. Before '
+      + 'their fixes a chat\'s seed read 157-246 ms and a 450-step turn\'s figures fold 80-142 ms (2026-10-23).',
+    blind: 'turns back to back with no wait between read as one stretch; native work outside JavaScript reads as '
+      + 'waiting; this host\'s speed against the platform\'s is unmeasured; the workspace object\'s isolate is read, '
+      + 'not bounded (the same turns there reset nothing); work no workload runs is unread.',
+    inputs: CLIENT_BUILD,
+  },
+  {
     run: 'bun run gate:dependency-advisories',
     label: 'Dependency advisory policy',
     tier: 'ci',

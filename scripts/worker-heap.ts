@@ -53,7 +53,8 @@
  * each); green, every read 4,000,000 and 0, with 1 MB reclaimed in the planted isolate and 1 MB allocated in the other,
  * which the total-delta rule failed in 5 runs of 5 (20261012095805-8126adc8).
  *
- * `--no-build` reads the existing `dist/kinu` (a deploy already built it).
+ * `--no-build` reads the existing `dist/kinu` (a deploy already built it). `--loop-turns` runs the facet loop gate
+ * instead (`worker-heap/loop-turns.ts`): the same workloads under a CPU profiler, no heap read.
  */
 
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -69,6 +70,7 @@ import * as v from 'valibot';
 import { ownerCaller } from '../packages/core/src/safety/workspace-capability';
 import { workersAiBinding } from '../packages/cf-backend/tests/helpers/workers-ai-binding';
 import { buildAgentBundle } from '../packages/cf-backend/vite-agent-bundle';
+import { LoopWatch, loopVerdict, type LoopTurn } from './worker-heap/loop-turns';
 import { inspect, inspectAll, type Allocations, type HeapMakeup, type Inspector, type LiveHeap } from './worker-heap/inspector';
 import { REPO_ROOT } from './repo-root';
 
@@ -465,6 +467,8 @@ function plantingAssets(directory: string): string {
 }
 
 export interface HeapMeasurement {
+  /** Each isolate's longest busy stretch over every workload, in the loop pass; else none. */
+  readonly loopTurns: readonly LoopTurn[];
   /** What a step parked on the model holds live beyond the idle workspace before it, at {@link STEP}. */
   readonly stepLive: Isolates<number>;
   /** What the idle workspace holds after {@link STEP}'s turns beyond right after setup: its data, and apart from it the
@@ -528,6 +532,8 @@ async function advisedLongTurn(advised: boolean, run: {
   readonly workspace: Inspector;
   readonly port: number;
   readonly sessions: Inspector[];
+  /** Whether its heap figures are read and printed: not in the loop pass. */
+  readonly readings: boolean;
 }): Promise<void> {
   const { ask } = run;
 
@@ -611,6 +617,13 @@ async function advisedLongTurn(advised: boolean, run: {
   const steps = [third, third, LONG_TURN.steps - 1 - 2 * third];
   const perStep = thirds.map((part, at) => `${(part.main / (steps[at] ?? 1) / 1e6).toFixed(2)} MB`).join(', ');
 
+  if (!run.readings) {
+    console.log(`${GATE}: ${name} ${String(LONG_TURN.steps)}-step turn: ${String(reviews)} advisor calls`);
+    await ask('/model?answerBytes=0&toolSteps=0');
+
+    return;
+  }
+
   console.log(`${GATE}: ${name} ${String(LONG_TURN.steps)}-step turn: ${String(reviews)} advisor calls; turn ${String(Math.round(turnMs))} ms; peak `
     + `${inEachIsolate(peak)} used; grew ${inEachIsolate(beyond(last, first))} live first to last step; allocated `
     + `${inEachIsolate(allocated)}: by thirds of its steps ${thirds.map((part) => inEachIsolate(part)).join(', ')} `
@@ -669,7 +682,8 @@ async function faultedAdvisorTurn(fault: 'throw' | 'uncaught', ask: (path: strin
   await ask('/model?answerBytes=0&toolSteps=0');
 }
 
-export async function measure(): Promise<HeapMeasurement> {
+/** `loopTurns`: the facet loop gate's pass (`loop-turns.ts`), every isolate profiled and no heap read. */
+export async function measure({ loopTurns }: { readonly loopTurns: boolean }): Promise<HeapMeasurement> {
   const wrangler = v.parse(WranglerSchema, JSON.parse(readFileSync(join(DIST, 'wrangler.json'), 'utf8')));
   const key = btoa('worker-heap-credential-key-32byt');
   const port = await freePort();
@@ -737,12 +751,21 @@ export async function measure(): Promise<HeapMeasurement> {
 
   try {
     driver = await mf.getWorker('driver');
+    // The loop pass profiles every isolate but the driver's from when it appears; the profiler's own allocation would move
+    // the heap figures, so the heap pass runs without it.
+    const loops = loopTurns ? new LoopWatch(port, (id) => id !== 'core:user:driver') : null;
+    await loops?.start();
+    // Each workspace by its object's id, as an agent's isolate id carries it: the loop pass names its workload.
+    const workspaces = new Map<string, string>();
 
     const ask = async (path: string): Promise<string> => {
       const response = await driver.fetch(`http://driver.invalid${path}`);
       const body = await response.text();
 
       if (!response.ok) throw new Error(`worker-heap: ${path} answered ${String(response.status)}: ${body}`);
+      const opened = /^\/\?workspace=([^&]+)/u.exec(path)?.[1];
+
+      if (opened !== undefined) workspaces.set(body, opened);
 
       return body;
     };
@@ -909,46 +932,24 @@ export async function measure(): Promise<HeapMeasurement> {
       const settledSubagents = await workspace.liveHeap();
       const perSubagentRetained = (settledSubagents - beforeSubagents) / SUBAGENTS.count;
 
-      // One subagent held at its last working step: what a running subagent turn holds beyond a settled one.
-      await ask(`/model?answerBytes=${String(SUBAGENTS.answerBytes)}&hires=1&holdSubagent=1`);
-      const running = ask('/turn?workspace=subagents&text=HIRE-ROOT');
+      // The loop pass skips the held and nested hires: they measure what a parked subagent holds, which it does not read,
+      // and under its profiler the nested one outlasted the driver's fetch twice (2026-10-23).
+      const { subagentTurnLive, waitingParentLive, concurrentAgentsLive } = loops === null
+        ? await heldSubagents({ ask, workspace, port, subagentsWorkspace, settledSubagents, noRunners })
+        : { subagentTurnLive: 0, waitingParentLive: 0, concurrentAgentsLive: [] };
 
-      while (!v.parse(v.object({ subagentParked: v.boolean() }), JSON.parse(await ask('/model'))).subagentParked) await Bun.sleep(50);
-      const subagentTurnLive = await workspace.liveHeap() - settledSubagents;
-      await ask('/model?holdSubagent=0');
-      await running;
-      await noRunners(0);
-
-      // The subagent, its pages written, hires one of its own, held on its first call: the subagent and the root wait.
-      await ask(`/model?answerBytes=${String(SUBAGENTS.waitingPageBytes)}&hires=1&nest=1&holdSubagent=1`);
-      const nested = ask('/turn?workspace=subagents&text=HIRE-ROOT');
-
-      while (!v.parse(v.object({ subagentParked: v.boolean() }), JSON.parse(await ask('/model'))).subagentParked) await Bun.sleep(50);
-
-      // Waiting: the subagent's turn ended with its hire's answer owed, so the held hire's runner is the only one left.
-      await noRunners(1);
-      const waitingParentLive = await workspace.liveHeap() - settledSubagents;
-      const agents = await inspectAll(port, mainOf(subagentsWorkspace));
-      const concurrentAgentsLive: number[] = [];
-
-      try {
-        for (const agent of agents) concurrentAgentsLive.push(await agent.liveHeap());
-      } finally {
-        for (const agent of agents) agent.close();
-      }
-
-      await ask('/model?holdSubagent=0');
-      await nested;
-      await noRunners(0);
       await ask('/model?hires=0&nest=0');
       // Settled as each workload above is before the next: the subagents' sleep-time pass runs in the workspace's isolate.
       await ask('/main-idle?workspace=subagents');
       await ask('/quiesce?workspace=subagents');
 
       // Opt-in, for D9's measurement of the advisor's placement: the long turn again, advisor off then on, in fresh
-      // workspaces at the same point of the run, so the pair differs in the advisor alone.
+      // workspaces at the same point of the run, so the pair differs in the advisor alone. The loop pass runs the advised
+      // one: the advisor reviews every step in the isolate of the agent it reviews.
       if (process.env.HEAP_ADVISOR === '1') {
-        for (const advised of [false, true]) await advisedLongTurn(advised, { ask, workspace, port, sessions });
+        for (const advised of [false, true]) await advisedLongTurn(advised, { ask, workspace, port, sessions, readings: loops === null });
+      } else if (loops !== null) {
+        await advisedLongTurn(true, { ask, workspace, port, sessions, readings: false });
       }
 
       // Opt-in: what an advisor's failure reaches, now that it runs in the isolate of the agent it reviews.
@@ -965,9 +966,11 @@ export async function measure(): Promise<HeapMeasurement> {
         return await inEach(stepIsolates, async (session) => await session.markedBytes(marker));
       };
 
-      const planted = { workspace: await plant('workspace'), main: await plant('main') };
+      // The loop pass ends with the workloads: planting reads the heap, which it does not.
+      const turns = loops === null ? [] : await loops.stop(workspaces);
+      const planted = loops === null ? { workspace: await plant('workspace'), main: await plant('main') } : { workspace: { workspace: 0, main: 0 }, main: { workspace: 0, main: 0 } };
 
-      return { screenshotTurn, planted, concurrentAgentsLive, failedPortRetained, failedPortCalls, coldStepLive, stepLive: beyond(during, idle), idleRetained: retainedApart(idleSplit, setUpSplit), headsRetained, perSubagentRetained, subagentTurnLive, waitingParentLive, longTurnPeak, longTurnGrowth: beyond(lastLive, firstLive), longTurnAllocated, bindingTurnsAllocated, setupMakeup, live: { setUp, longTurnFirst: firstLive, longTurnLast: lastLive }, wide };
+      return { loopTurns: turns, screenshotTurn, planted, concurrentAgentsLive, failedPortRetained, failedPortCalls, coldStepLive, stepLive: beyond(during, idle), idleRetained: retainedApart(idleSplit, setUpSplit), headsRetained, perSubagentRetained, subagentTurnLive, waitingParentLive, longTurnPeak, longTurnGrowth: beyond(lastLive, firstLive), longTurnAllocated, bindingTurnsAllocated, setupMakeup, live: { setUp, longTurnFirst: firstLive, longTurnLast: lastLive }, wide };
     } finally {
       for (const session of sessions) session.close();
     }
@@ -975,6 +978,55 @@ export async function measure(): Promise<HeapMeasurement> {
     await mf.dispose();
     rmSync(assets, { recursive: true, force: true });
   }
+}
+
+/** A subagent held at its last working step, then one waiting on a held hire of its own: what each holds live in the
+ *  workspace's isolate beyond the settled subagents, and each agent isolate's live heap while the hire is held. */
+async function heldSubagents(run: {
+  readonly ask: (path: string) => Promise<string>;
+  readonly workspace: Inspector;
+  readonly port: number;
+  readonly subagentsWorkspace: string;
+  readonly settledSubagents: number;
+  readonly noRunners: (left: number) => Promise<void>;
+}): Promise<{ subagentTurnLive: number; waitingParentLive: number; concurrentAgentsLive: number[] }> {
+  const { ask, workspace, settledSubagents, noRunners } = run;
+
+  const parked = async () => {
+    while (!v.parse(v.object({ subagentParked: v.boolean() }), JSON.parse(await ask('/model'))).subagentParked) await Bun.sleep(50);
+  };
+
+  // One subagent held at its last working step: what a running subagent turn holds beyond a settled one.
+  await ask(`/model?answerBytes=${String(SUBAGENTS.answerBytes)}&hires=1&holdSubagent=1`);
+  const running = ask('/turn?workspace=subagents&text=HIRE-ROOT');
+  await parked();
+  const subagentTurnLive = await workspace.liveHeap() - settledSubagents;
+  await ask('/model?holdSubagent=0');
+  await running;
+  await noRunners(0);
+
+  // The subagent, its pages written, hires one of its own, held on its first call: the subagent and the root wait.
+  await ask(`/model?answerBytes=${String(SUBAGENTS.waitingPageBytes)}&hires=1&nest=1&holdSubagent=1`);
+  const nested = ask('/turn?workspace=subagents&text=HIRE-ROOT');
+  await parked();
+
+  // Waiting: the subagent's turn ended with its hire's answer owed, so the held hire's runner is the only one left.
+  await noRunners(1);
+  const waitingParentLive = await workspace.liveHeap() - settledSubagents;
+  const agents = await inspectAll(run.port, mainOf(run.subagentsWorkspace));
+  const concurrentAgentsLive: number[] = [];
+
+  try {
+    for (const agent of agents) concurrentAgentsLive.push(await agent.liveHeap());
+  } finally {
+    for (const agent of agents) agent.close();
+  }
+
+  await ask('/model?holdSubagent=0');
+  await nested;
+  await noRunners(0);
+
+  return { subagentTurnLive, waitingParentLive, concurrentAgentsLive };
 }
 
 /** {@link SCREENSHOT_TURN} on a workspace of its own, its main's isolate read a window at a time: each step parks on the
@@ -1144,12 +1196,15 @@ async function main(args: readonly string[]): Promise<number> {
     if (built.exitCode !== 0) return built.exitCode;
   }
 
+  // The facet loop gate's pass: its findings are the loop turns alone (loop-turns.ts).
+  if (args.includes('--loop-turns')) return loopVerdict((await measure({ loopTurns: true })).loopTurns);
+
   const graph = staticGraph(DIST);
   const wasm = graph.filter((module) => module.endsWith('.wasm'));
 
   // One character above U+00FF stores a whole module's retained source two bytes per character.
   const wide = graph.filter((module) => module.endsWith('.js') && isWide(readFileSync(join(DIST, module), 'utf8')));
-  const measured = await measure();
+  const measured = await measure({ loopTurns: false });
   const steps = `${String(LONG_TURN.steps)}-step turn`;
 
   for (const isolate of ISOLATES) {
