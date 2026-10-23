@@ -1,6 +1,8 @@
 import * as v from 'valibot';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
-import { JsonValueSchema, READS_CHANGED_EVENT, parseJsonValue, type JsonValue, type WorkMode } from '../../packages/core/src/index';
+import {
+  ChatResponseFrameSchema, JsonValueSchema, READS_CHANGED_EVENT, parseJsonValue, terminalChatError, type JsonValue, type WorkMode,
+} from '../../packages/core/src/index';
 import { tolerate } from '../../packages/core/src/obs/index';
 import { CloudTurnStream } from '../../packages/cli/src/cloud-turn-stream';
 import { createUserUiMessage, type AgentSendResult, type AgentTurnResult } from '../../packages/cli/src/agent-client';
@@ -85,19 +87,8 @@ export function encodeRpcRequest(input: {
   });
 }
 
-/** A turn frame, narrowed to the fields a turn is accumulated from. */
-export interface PublicResponseFrame {
-  readonly id: string;
-  readonly body?: string;
-  readonly done?: boolean;
-  readonly error?: boolean;
-  /** The DO's own admission verdict, on the done frame alone: 'mid-turn' when
-   *  the send was spliced into the run already open, 'turn' when it opened one
-   *  of its own. Absent on streamed bodies and on builds that predate the field. */
-  readonly landed?: 'mid-turn' | 'turn';
-  /** Set by the DO on every frame of a stream it REPLAYS: heard, but not the workspace working now. */
-  readonly replay?: boolean;
-}
+/** A turn frame, as core reads it, for the send it answers. */
+export type PublicResponseFrame = Omit<v.InferOutput<typeof ChatResponseFrameSchema>, 'type' | 'id'> & { readonly id: string };
 
 /** What one decoded socket frame is. `other` is not an error: the DO fans
  *  broadcasts (branch status, head activity, mcts progress) down the same
@@ -124,15 +115,9 @@ export type PublicFrame =
 const FrameSchema = v.object({
   type: v.string(),
   id: v.optional(v.string()),
-  body: v.optional(v.string()),
-  done: v.optional(v.boolean()),
-  landed: v.optional(v.picklist(['mid-turn', 'turn'])),
-  /** The DO sets `error: true` on a terminal failure frame and carries the text
-   *  in `body`; an RPC reply's `error` is the failure itself, which may be a
-   *  string or a structured value. One field, two producers, so both shapes are
-   *  admitted here and each branch below reads the one it means. */
-  error: v.optional(v.union([v.boolean(), JsonValueSchema])),
-  replay: v.optional(v.boolean()),
+  /** An RPC reply's `error` is the failure itself, a string or a structured value; a turn frame's is read as core
+   *  reads it, below. */
+  error: v.optional(JsonValueSchema),
   success: v.optional(v.boolean()),
   result: v.optional(JsonValueSchema),
   reads: v.optional(v.array(v.string())),
@@ -158,19 +143,12 @@ export function decodeFrame(data: SocketPayload): PublicFrame | null {
   const { type, id } = frame.output;
 
   if (type === CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE) {
-    if (id === undefined) return { kind: 'other', type };
+    const response = v.safeParse(ChatResponseFrameSchema, parsed);
 
-    return {
-      kind: 'response',
-      frame: {
-        id,
-        body: frame.output.body,
-        done: frame.output.done,
-        error: frame.output.error === true,
-        replay: frame.output.replay,
-        landed: frame.output.landed,
-      },
-    };
+    if (!response.success || response.output.id === undefined) return { kind: 'other', type };
+    const { body, done, error, landed, replay, reason } = response.output;
+
+    return { kind: 'response', frame: { id: response.output.id, body, done, error, landed, replay, reason } };
   }
 
   // A REPLY, told from a request by the field the producer always sets. The
@@ -251,6 +229,8 @@ export interface PublicTurnRecorder {
   finish(answer: string | null, hadError: boolean): void;
   /** The send's settled result, or null while it is still open. */
   settled(): PublicTurn | null;
+  /** The runtime's refusal of the send at its door, in its own words: no turn ran, so none settles. */
+  refusal(): Error | null;
 }
 
 /**
@@ -262,19 +242,23 @@ export interface PublicTurnRecorder {
  */
 export function recordPublicTurn(): PublicTurnRecorder {
   let settled: PublicTurn | null = null;
+  let refusal: Error | null = null;
 
-  // A recorded frame stream is a turn the workspace took; a refusal at its door never reaches this recorder.
   const stream = new CloudTurnStream(() => {}, {
     resolve: (result) => { settled = result; },
-    reject: (refusal) => { throw refusal; },
+    reject: (refused) => { refusal = refused; },
   });
 
   return {
     apply(frame) {
-      if (settled !== null) return;
+      if (settled !== null || refusal !== null) return;
 
       if (frame.error === true) {
-        stream.settle(true);
+        const ended = terminalChatError({ ...frame, type: CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE });
+
+        // Refused at the door, the send was never admitted: it fails as the shipped client fails it, as a send.
+        if (ended?.refused === true) stream.refused(ended.body);
+        else stream.settle(true);
 
         return;
       }
@@ -295,6 +279,7 @@ export function recordPublicTurn(): PublicTurnRecorder {
       stream.settle(hadError);
     },
     settled: () => settled,
+    refusal: () => refusal,
   };
 }
 

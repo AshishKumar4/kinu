@@ -2403,7 +2403,7 @@ export {
   createPlanAnnotationSaveQueue,
 } from './plans/plan-annotation-save';
 
-export { terminalChatError, type ChatTurnError, type TerminalFrame } from './utils/chat-turn-error';
+export { ChatResponseFrameSchema, terminalChatError, type ChatTurnError, type TerminalFrame } from './utils/chat-turn-error';
 
 export {
   newSendLatch, admitTurn, abandonTurn, abandonTurnIfOwner,
