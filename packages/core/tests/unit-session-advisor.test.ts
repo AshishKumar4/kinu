@@ -26,7 +26,6 @@ const NOTES_PER_UPDATE = 4;
 function harness(opts: {
   readonly enabled?: boolean;
   readonly reviewed?: boolean;
-  readonly finalWaitMs?: number;
   readonly minSeverity?: AdvisorSeverity;
   readonly gateOpen?: boolean;
   readonly guidance?: () => Promise<string>;
@@ -76,7 +75,6 @@ function harness(opts: {
       return true;
     },
     guidance: opts.guidance ?? (async () => ''),
-    ...(opts.finalWaitMs !== undefined && { finalWaitMs: opts.finalWaitMs }),
   });
 
   return {
@@ -90,18 +88,20 @@ function harness(opts: {
 function scripted(replies: readonly (AdvisorReply | (() => Promise<AdvisorReply>))[]) {
   const asked: (readonly ModelMessage[])[] = [];
   const systems: string[] = [];
+  const signals: (AbortSignal | undefined)[] = [];
   let at = 0;
 
-  const model: AdvisorModel = async ({ system, messages }) => {
+  const model: AdvisorModel = async ({ system, messages, signal }) => {
     asked.push([...messages]);
     systems.push(system);
+    signals.push(signal);
     const next = replies[at] ?? silent;
     at += 1;
 
     return typeof next === 'function' ? await next() : next;
   };
 
-  return { model, asked, systems, calls: () => at };
+  return { model, asked, systems, signals, calls: () => at };
 }
 
 const silent: AdvisorReply = { toolCalls: [], responseMessages: [{ role: 'assistant', content: '' }] };
@@ -117,9 +117,9 @@ const step = (text: string): ModelMessage[] => [{ role: 'assistant', content: [{
 const turnOf = (model: AdvisorModel, tools: AdvisedTurn['tools'] = {}, turnId: string | null = 't1'): AdvisedTurn => ({ turnId, model, tools, reachable: ['file', 'agents'] });
 
 /** A turn of `steps`, each outlasting the review it starts (a model call takes longer than a scripted review), unless
- *  `overlapping`: then the steps end at once and the turn ends with its reviews still to run. */
+ *  `overlapping`: then the steps end at once and the turn ends with its reviews still to run. Read once its reviews ran. */
 async function runTurn(advisor: SessionAdvisor, turn: AdvisedTurn, steps: readonly ModelMessage[][], overlapping = false): Promise<void> {
-  const stepTakes = async () => { if (!overlapping) await advisor.settled(1000); };
+  const stepTakes = async () => { if (!overlapping) await advisor.settled(); };
 
   advisor.beginTurn(turn, { role: 'user', content: 'Fix the ledger rounding.' });
   await stepTakes();
@@ -129,7 +129,8 @@ async function runTurn(advisor: SessionAdvisor, turn: AdvisedTurn, steps: readon
     await stepTakes();
   }
 
-  await advisor.finish();
+  advisor.endTurn();
+  await advisor.settled();
 }
 
 /** The ids of the advisor's own tool calls with no result after them: a provider refuses a request that holds one. */
@@ -174,7 +175,8 @@ describe('the in-session advisor', () => {
     advisor.step(step('two'));
     advisor.step(step('three'));
     gate.resolve(silent);
-    await advisor.finish();
+    advisor.endTurn();
+    await advisor.settled();
 
     // The first review read the request; every step that ended while it ran is the second's, read together.
     expect(calls()).toBe(2);
@@ -198,19 +200,19 @@ describe('the in-session advisor', () => {
   });
 
   test('after its turn, a concern is kept as a changelog note and only a blocker is said, interrupting nothing', async () => {
-    const { advisor, sent, recorded, interrupts, outcome } = harness({ finalWaitMs: 0 });
+    const { advisor, sent, recorded, interrupts, outcome } = harness();
     const gate = Promise.withResolvers<AdvisorReply>();
     const { model } = scripted([() => gate.promise, advising({ note: 'The sum is computed twice over the same rows.', severity: 'blocker', class: 'wrong-work' })]);
     outcome('queued');
     await runTurn(advisor, turnOf(model), [step('done')], true);
     gate.resolve(advising({ note: 'A cheaper index exists for this lookup; consider it later.', severity: 'concern', class: 'wrong-work' }));
-    await advisor.settled(1000);
+    await advisor.settled();
 
     expect(recorded.map((entry) => [entry.note.severity, entry.spoken])).toEqual([['concern', false], ['blocker', true]]);
     expect({ said: sent.map((signal) => signal.severity), interrupts: interrupts() }).toEqual({ said: ['blocker'], interrupts: 0 });
   });
 
-  test("the last step's review is waited for, and only its blocker is said", async () => {
+  test("the last step's review runs after its turn, and only its blocker is said", async () => {
     const { advisor, sent, recorded, interrupts } = harness();
 
     const { model } = scripted([
@@ -221,7 +223,7 @@ describe('the in-session advisor', () => {
       ),
     ]);
 
-    // The request's review, then the last step's: the turn's end waits for the second.
+    // The request's review, then the last step's, which runs on after the turn ends.
     await runTurn(advisor, turnOf(model), [step('all tests pass')], true);
 
     expect({ said: sent.map((signal) => signal.severity), kept: recorded.map((entry) => [entry.note.severity, entry.spoken]), interrupts: interrupts() })
@@ -310,29 +312,34 @@ describe('the in-session advisor', () => {
     }
   });
 
-  test("a review that outlives its turn speaks for that turn alone, and the next turn's steps go to the next turn's model", async () => {
-    const { advisor, sent, recorded, interrupts } = harness({ finalWaitMs: 0 });
+  // The owner's design is a review of every step: a slow review and the steps queued behind it are not dropped when the
+  // next turn starts, and nothing waits on them.
+  test("a review delayed past the next turn's start still runs for its own turn's steps, and nothing is lost", async () => {
+    const { advisor, sent, recorded, interrupts } = harness();
     const gate = Promise.withResolvers<AdvisorReply>();
-    const first = scripted([() => gate.promise]);
+    const first = scripted([() => gate.promise, advising({ note: 'The first turn skipped its tests.', severity: 'blocker', class: 'wrong-work' })]);
     const second = scripted([]);
     advisor.beginTurn(turnOf(first.model, {}, 't1'), { role: 'user', content: 'the first ask' });
     advisor.step(step('the first turn step'));
-    await advisor.finish();
+    advisor.step(step('the first turn last step'));
+    advisor.endTurn();
     advisor.beginTurn(turnOf(second.model, {}, 't2'), { role: 'user', content: 'the second ask' });
-    gate.resolve(advising({ note: 'The first turn skipped its tests.', severity: 'blocker', class: 'wrong-work' }));
     advisor.step(step('the second turn step'));
-    await advisor.settled(1000);
-    await advisor.finish();
-    const secondRead = readOf(second.asked.at(-1) ?? []);
+    gate.resolve(silent);
+    await advisor.settled();
+    advisor.endTurn();
+    const firstRead = first.asked.flatMap((messages) => readOf(messages));
+    const secondRead = second.asked.flatMap((messages) => readOf(messages));
 
+    // Every step reviewed, each by its own turn's model, the first turn's before the second's.
+    expect(firstRead.some((text) => text.includes('the first turn last step'))).toBe(true);
+    expect(secondRead.some((text) => text.includes('the second turn step'))).toBe(true);
+    expect(first.calls()).toBe(2);
+    expect(second.asked.length).toBeGreaterThan(0);
     // The first turn's blocker came after it: said to open a turn, keyed on its own turn, interrupting the second nothing.
     expect(recorded.map((entry) => [entry.note.severity, entry.spoken])).toEqual([['blocker', true]]);
     expect(sent.map((signal) => signal.idempotencyKey?.includes(':t1:'))).toEqual([true]);
     expect(interrupts()).toBe(0);
-    // Its step not reviewed when the second turn began is dropped; the second's steps go to the second's model alone.
-    expect(first.calls()).toBe(1);
-    expect(secondRead.some((text) => text.includes('the second turn step'))).toBe(true);
-    expect(secondRead.some((text) => text.includes('the first turn step'))).toBe(false);
   });
 
   test('a turn that failed, ended without an answer, is ended for its advisor: a late concern is kept, not said', async () => {
@@ -342,20 +349,23 @@ describe('the in-session advisor', () => {
     advisor.beginTurn(turnOf(model), { role: 'user', content: 'go' });
     advisor.endTurn();
     gate.resolve(advising({ note: 'The retry loop never reads its exit status.', severity: 'concern', class: 'wrong-work' }));
-    await advisor.settled(1000);
+    await advisor.settled();
 
     expect({ said: sent, kept: recorded.map((entry) => [entry.note.severity, entry.spoken]) }).toEqual({ said: [], kept: [['concern', false]] });
   });
 
-  test("a turn the owner stopped says nothing more, not even a blocker its review finds after the stop", async () => {
+  test("stopping a turn cancels its reviews: the running one aborted and silent, those owed dropped", async () => {
     const { advisor, sent, recorded, interrupts } = harness();
     const gate = Promise.withResolvers<AdvisorReply>();
-    const { model } = scripted([() => gate.promise]);
+    const { model, signals, calls } = scripted([() => gate.promise]);
     advisor.beginTurn(turnOf(model), { role: 'user', content: 'go' });
+    advisor.step(step('a step queued behind the running review'));
     advisor.endTurn(true);
     gate.resolve(advising({ note: 'The migration ran against production.', severity: 'blocker', class: 'wrong-work' }));
-    await advisor.settled(1000);
+    await advisor.settled();
 
+    expect(signals[0]?.aborted).toBe(true);
+    expect(calls()).toBe(1);
     expect({ said: sent, interrupts: interrupts(), kept: recorded.map((entry) => [entry.note.severity, entry.spoken]) })
       .toEqual({ said: [], interrupts: 0, kept: [['blocker', false]] });
   });

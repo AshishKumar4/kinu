@@ -98,9 +98,12 @@ export type AdvisorLane = RouteWalk & {
 
 /** The advisor's model on its route: the route's fallbacks walked, each call billed as the advisor's. */
 export function routedAdvisorModel(route: ModelRouteResolution, lane: AdvisorLane): AdvisorModel {
-  return async ({ system, messages, tools }) => await onRoute(route, lane, async (serving) => {
+  return async ({ system, messages, tools, signal }) => await onRoute(route, lane, async (serving) => {
     const { model, providerOptions } = lane.bind(serving);
-    const request: GenerateRequest = { model, system, messages: [...messages], tools: tools satisfies ToolSet, ...routeRetryOptions(serving) };
+
+    const request: GenerateRequest = {
+      model, system, messages: [...messages], tools: tools satisfies ToolSet, ...routeRetryOptions(serving), ...(signal !== undefined && { abortSignal: signal }),
+    };
 
     if (providerOptions !== undefined) request.providerOptions = { ...request.providerOptions, ...providerOptions };
     const result = await generateReported(request, { spend: { ...lane.spend, source: route.source }, spec: serving.model });

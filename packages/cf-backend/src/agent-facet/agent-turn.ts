@@ -326,16 +326,21 @@ export interface LiveTurn {
 export class FacetSpend {
   private filed: Promise<unknown> = Promise.resolve();
 
+  /** Its end took the run's charges: one made after (its advisor's review of its last step) is relayed as made. */
+  private ended = false;
+
   /** `kept`: a delivered run's charges, which ride its end ({@link takeCharges}); a chat turn's are relayed as made. */
   constructor(private readonly workspace: AgentWorkspace, private readonly kept: ModelCallReport[] | null = null) {}
 
   readonly report = (report: ModelCallReport): void => {
-    if (this.kept === null) this.file(() => this.workspace.reportModelCall(report));
+    if (this.kept === null || this.ended) this.file(() => this.workspace.reportModelCall(report));
     else this.kept.push(report);
   };
 
   /** The charges kept so far, for the end that carries them. */
   takeCharges(): readonly ModelCallReport[] {
+    this.ended = true;
+
     return this.kept?.splice(0) ?? [];
   }
 

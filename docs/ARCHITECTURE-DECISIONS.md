@@ -1150,13 +1150,20 @@ a facet of its own) and D13's "every agent's advisor in core `ActorAdvisor`".
   `judgeNote` as before; at most 4 notes short of a blocker per review, and a
   repeated call is warned once, then ends the review.
 - While the turn runs, a note lands at the next step and a blocker also
-  releases the step's foreground calls, as a person's words do. The turn's end
-  waits up to 120 s for its last step's review; from then a blocker opens the
-  next turn and a nit or concern is kept unsaid. A review keeps the turn it
-  began on: one that outlives its turn speaks only as that turn's after-turn
-  review, and the next turn drops the last one's steps not yet reviewed. A
-  failed turn, which emits no `onTurnEnd`, is ended for its advisor by the
-  execution's cleanup. A hired agent's blocker also reaches its hirer. A note
+  releases the step's foreground calls, as a person's words do. Nothing waits
+  on a review, and no clock bounds one: the turn ends when its loop does. Each
+  turn's owed reviews are kept, bound to that turn (its model, read tools and
+  delivery key), and run in order across turn boundaries, so a review that
+  outlives its turn still reviews every step of it, before any later turn's.
+  After its turn a note is that turn's: a blocker opens the next turn, a nit
+  or concern is kept unsaid. Stopping a turn cancels its reviews (the running
+  one's model call and reads aborted, those owed dropped), and a stopped
+  turn's review says nothing. The session's end joins reviews still running
+  (`track`, joined by `settleTracked`, as other post-turn work is); in an
+  agent's facet a review after its turn runs while the isolate lives, its
+  reads refused (the turn's fence) and its charge relayed as made. A failed
+  turn is ended for its advisor by the execution's cleanup. A hired agent's
+  blocker also reaches its hirer. A note
   is said, then recorded: one said and not recorded only misses the dedupe
   window. Its delivery key names its turn and its normalised text, so a turn
   restarted after a death says a new note and never says one twice.

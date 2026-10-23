@@ -266,6 +266,8 @@ export class ActorSession {
       send: (signal) => this.orchestrator.signals.send(signal),
       ...(context !== undefined && { parent: context.parent }),
       interrupt: async () => (this.releaseForeground === null ? false : await this.releaseStep(this.releaseForeground)),
+      // A review running on past its turn is the session's work: its end joins it.
+      track: (work) => { this.orchestrator.track(work, 'advisor review'); },
       // Its own priorities where it shares none: its state plane.
       guidance: async () => await advisorWorkspaceGuidance({
         vfs: context === undefined ? options.runtime.agentStateVfs : await context.workspace(), limits: async () => modelWindow(null),
@@ -840,8 +842,6 @@ export class ActorSession {
         await emit(event);
       }
 
-      // The turn answered: it waits for its advisor's review of its last step, while its model lane is still its own.
-      await this.advisor.finish();
     } catch (cause) {
       if (!tally.completed) this.messages.push(...this.orchestrator.inbox.recordedMessages());
       tally.failure = cause instanceof Error ? cause : new Error(renderThrownChain({ cause }), { cause });
