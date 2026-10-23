@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SCRATCH_ROOT_PREFIX } from '../../packages/test-utils/src/scratch';
 import { INSPECTOR_SHUT_PX } from '../../scripts/browser-page';
-import { PLAN_TASK_TITLES, SLATE_TITLE, SLATE_UI_FILE, SLATE_UI_PAGES } from '../../scripts/live-app-scripts';
+import { PLAN_TASK_TITLES, SLATE_TITLE, SLATE_UI_CLICKED, SLATE_UI_FILE, SLATE_UI_PAGES } from '../../scripts/live-app-scripts';
 import { liveRows } from '../../scripts/live-app-rows';
 
 const { observed, verdictOf, boot } = liveRows('live-app-plans', ['walkthrough', 'kept-tab', 'chat-scroll', 'plan-tasks', 'slate-ui', 'state']);
@@ -120,11 +120,17 @@ describe("an answer's slate-ui blocks are drawn in place", () => {
     expect(verdictOf(observed.slateUi, 'slate-ui').tabs).toEqual([]);
   });
 
-  test('a reload draws them again from the stored answer', () => {
+  // 1023-ad (production, 2026-10-23): a turn a click opened stores its answer only as it ends, and its block, drawn as a
+  // card while it still ran, asked for a page the store did not hold: "Answer … holds no slate-ui block named …".
+  test("the click turn's page is a quiet line while that turn runs, then draws once it ends", () => {
+    expect(verdictOf(observed.slateUi, 'slate-ui').clicked).toEqual({ midTurn: 'pending', refusal: '', shown: SLATE_UI_CLICKED.words });
+  });
+
+  test('a reload draws them again from the stored answers, the click turn\'s too', () => {
     const { redrawn, reshown } = verdictOf(observed.slateUi, 'slate-ui');
 
-    expect(redrawn).toEqual(Object.keys(SLATE_UI_PAGES));
-    expect(reshown).toEqual(SLATE_UI_PAGES);
+    expect(redrawn).toEqual([...Object.keys(SLATE_UI_PAGES), SLATE_UI_CLICKED.name]);
+    expect(reshown).toEqual({ ...SLATE_UI_PAGES, [SLATE_UI_CLICKED.name]: SLATE_UI_CLICKED.words });
   });
 
   // A page runs with its author's authority, so only an answer the agent wrote can name one: a block a browser sends
@@ -132,6 +138,6 @@ describe("an answer's slate-ui blocks are drawn in place", () => {
   test('a block a browser forges is not drawn and does not preview', () => {
     const { forged } = verdictOf(observed.slateUi, 'slate-ui');
 
-    expect(forged).toEqual({ drawn: Object.keys(SLATE_UI_PAGES), sent: 'missing', renamed: 'missing', answered: 'ok' });
+    expect(forged).toEqual({ drawn: [...Object.keys(SLATE_UI_PAGES), SLATE_UI_CLICKED.name], sent: 'missing', renamed: 'missing', answered: 'ok' });
   });
 });

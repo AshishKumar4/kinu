@@ -25,7 +25,7 @@ import { createWorkspace, listWorkspaces, LOOPBACK_IDENTITY } from '../evals/src
 import { CHAT_COMPOSER_LIVE, CHATS, INSPECTOR_PANEL, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, OPEN_NAMES, countRpc, frameLedger, named, openInspector, PAGE_TABS, painted, pressSend, pressUntil, recordRenderTasks, rendered, sendInChat, settled, settledAfter, until, waitOn, type ControlAttempt, type RpcCounter } from './browser-page';
 import { rowVerdicts, type RowVerdicts } from './row-verdicts';
 import { registerScriptedModel, startScriptedModel } from './scripted-model';
-import { KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_FIRST_TURN_MISSION, PHASED_FIRST_TURN_MISSION, PHASED_TURN_ANSWER, phasedFirstTurn, PACED_TURN_ANSWER, ANSWERED_TURN_ASK, CLEARED_TURN_ASK, OBSERVED_TURN_ASK, PACED_TURN_ASK, RECONNECT_STEPS, RECONNECT_TURN_ASK, SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNANSWERED_PROBE_TURN_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK, laterReconnectTurn, toldBackTurn, unsentFirstTurn, DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, type HeldCall, LOGO_WAITED_MISSION, MINUTE_LIMITED_ASK, MINUTE_WAITED_OUT, ProviderWaitProbe, providerWaitTurn, WAITED_TURN_ASK, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, PLAN_TASK_TITLES, planTasksProbe, STOPPED_ASK, STOPPED_ANSWER, HANDED_BACK_ASK, StopProbe, FOLLOW_UP_ASK, FOLLOW_UP_ANSWER, OPENING_ASK, OPENING_ANSWER, stopProbeTurn, SLATE_ID, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, slateUiTurn, SLATE_ASK_ID, SLATE_ASK_PROBE, SlateAskProbe, slateAskTurn } from './live-app-scripts';
+import { KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_FIRST_TURN_MISSION, PHASED_FIRST_TURN_MISSION, PHASED_TURN_ANSWER, phasedFirstTurn, PACED_TURN_ANSWER, ANSWERED_TURN_ASK, CLEARED_TURN_ASK, OBSERVED_TURN_ASK, PACED_TURN_ASK, RECONNECT_STEPS, RECONNECT_TURN_ASK, SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNANSWERED_PROBE_TURN_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK, laterReconnectTurn, toldBackTurn, unsentFirstTurn, DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, type HeldCall, LOGO_WAITED_MISSION, MINUTE_LIMITED_ASK, MINUTE_WAITED_OUT, ProviderWaitProbe, providerWaitTurn, WAITED_TURN_ASK, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, PLAN_TASK_TITLES, planTasksProbe, STOPPED_ASK, STOPPED_ANSWER, HANDED_BACK_ASK, StopProbe, FOLLOW_UP_ASK, FOLLOW_UP_ANSWER, OPENING_ASK, OPENING_ANSWER, stopProbeTurn, SLATE_ID, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, SLATE_UI_CLICKED, slateUiTurn, SLATE_ASK_ID, SLATE_ASK_PROBE, SlateAskProbe, slateAskTurn } from './live-app-scripts';
 import { FALLBACK_ANSWER, type ScriptedRequest } from './scripted-protocol';
 import { openPublicSocket } from '../tests/first-run/public-socket';
 import { drivePlanReview, type WalkthroughVerdict } from './plan-demo-film';
@@ -1687,6 +1687,9 @@ interface SlateUiVerdict {
   readonly read: string;
   readonly heard: boolean;
   readonly kept: boolean;
+  /** The page the click's turn answered with: what its block was while that turn still ran (a quiet line, or a card that
+   *  asked for a page the store did not hold yet, 1023-ad), any refusal it showed, and its words once the turn ended. */
+  readonly clicked: { readonly midTurn: 'pending' | 'card'; readonly refusal: string; readonly shown: string };
   /** The work surface's page tabs on a page opened while both pages run: an unsaved page has none (#90). */
   readonly tabs: readonly string[];
   /** What the first page shows once its card's open control brought it up in the work surface. */
@@ -1738,7 +1741,9 @@ async function forgedBlocks(page: Page, origin: string, workspace: string): Prom
   }
 }
 
-const SLATE_UI_DRAWN = `document.querySelectorAll('[data-slate-ui] iframe[src]').length === ${String(Object.keys(SLATE_UI_PAGES).length)}`;
+const slateUiDrawn = (count: number) => `document.querySelectorAll('[data-slate-ui] iframe[src]').length === ${String(count)}`;
+
+const SLATE_UI_DRAWN = slateUiDrawn(Object.keys(SLATE_UI_PAGES).length);
 
 /** Each drawn block's name and the text its frame's page shows, once it shows any. */
 async function slateUiFrames(page: Page): Promise<{ drawn: string[]; shown: Record<string, string> }> {
@@ -1761,7 +1766,36 @@ async function slateUiFrames(page: Page): Promise<{ drawn: string[]; shown: Reco
 
 /** The first page's frame, once it has read the file through `workspace`: what it read, and whether its click then
  *  reaches the agent. */
-async function firstPageReach(page: Page, heard: Promise<ScriptedRequest>): Promise<{ read: string; heard: boolean; kept: boolean }> {
+const CLICKED_CARD = `[data-slate-ui="${SLATE_UI_CLICKED.name}"]`;
+
+/** The click's turn's page while that turn is held after writing its block, then once it ends: drawn only then. */
+async function clickedPage(page: Page, held: HeldCall): Promise<SlateUiVerdict['clicked']> {
+  await waitOn(page, "the click turn's answer, held", held.arrived);
+  await until(page, "the click turn's block in the chat", `document.querySelector('[data-slate-ui-pending="${SLATE_UI_CLICKED.name}"], ${CLICKED_CARD}') !== null`);
+
+  const midTurn = v.parse(v.picklist(['pending', 'card']), await page.evaluate(`document.querySelector(${JSON.stringify(CLICKED_CARD)}) === null ? 'pending' : 'card'`));
+
+  // A card drawn this early asks for its page at once; its refusal, if the store does not hold the answer yet, is read.
+  if (midTurn === 'card') await until(page, "the early card's answer", `document.querySelector('${CLICKED_CARD} iframe[src], ${CLICKED_CARD} [role="alert"], ${CLICKED_CARD} .p-notice') !== null`);
+
+  const refusal = v.parse(v.string(), await page.evaluate(`document.querySelector(${JSON.stringify(CLICKED_CARD)})?.textContent ?? ''`));
+
+  held.release();
+  await until(page, 'the click turn to end', `!(${STOP_OFFERED})`);
+
+  // A card that refused its page keeps the refusal until it is drawn again: no frame comes, and the row reports it.
+  if (midTurn === 'card' && await page.$(`${CLICKED_CARD} iframe[src]`) === null) return { midTurn, refusal, shown: '' };
+
+  await until(page, "the click turn's page drawn", `document.querySelector(${JSON.stringify(`${CLICKED_CARD} iframe[src]`)}) !== null`);
+  const src = await page.$eval(`${CLICKED_CARD} iframe`, (frame) => frame.getAttribute('src') ?? '');
+  const frame = await named("the click turn's frame", () => page.waitForFrame((each) => each.url().startsWith(new URL(src).origin)));
+
+  await named("the click turn's page words", () => frame.waitForFunction(() => document.querySelector('[data-words]') !== null));
+
+  return { midTurn, refusal: midTurn === 'card' ? refusal : '', shown: await frame.evaluate(() => document.querySelector('[data-words]')?.textContent ?? '') };
+}
+
+async function firstPageReach(page: Page, heard: Promise<ScriptedRequest>, held: HeldCall): Promise<{ read: string; heard: boolean; kept: boolean; clicked: SlateUiVerdict['clicked'] }> {
   const src = await page.$eval('[data-slate-ui="first"] iframe', (frame) => frame.getAttribute('src') ?? '');
   const frame = await page.waitForFrame((each) => each.url().startsWith(new URL(src).origin));
 
@@ -1779,12 +1813,12 @@ async function firstPageReach(page: Page, heard: Promise<ScriptedRequest>): Prom
   await settled(page, frameHeight, { box: `document.querySelector('[data-slate-ui="first"] iframe')` });
   await frame.click('#send');
   const request = await waitOn(page, 'the click reaching the agent', heard);
+  const clicked = await clickedPage(page, held);
 
-  await until(page, 'the click turn to end', `!(${STOP_OFFERED})`);
   // A page drawn again is a new frame, and the one clicked is detached.
   const kept = !frame.detached && await frame.evaluate(() => document.body.dataset['clicked'] === 'yes');
 
-  return { read, heard: request.userTexts.some((text) => text.includes(SLATE_UI_SENT)), kept };
+  return { read, heard: request.userTexts.some((text) => text.includes(SLATE_UI_SENT)), kept, clicked };
 }
 
 /** The first page, opened from its card in the work surface: what the work surface's frame of it shows. */
@@ -1838,7 +1872,7 @@ async function openedInWorkSurface(page: Page): Promise<string> {
 }
 
 /** An answer with two blocks is drawn as two slates, each its own page, and a reload draws them again from the stored answer. */
-async function measureSlateUi(newPage: LiveApp['newPage'], origin: string, heard: Promise<ScriptedRequest>): Promise<SlateUiVerdict> {
+async function measureSlateUi(newPage: LiveApp['newPage'], origin: string, heard: Promise<ScriptedRequest>, held: HeldCall): Promise<SlateUiVerdict> {
   const workspace = await createWorkspace(origin, LOOPBACK_IDENTITY, { name: `live-row-slate-ui-${RUN_ID}`, purpose: 'slate ui probe', model: SCRIPTED_MODEL_SPEC });
   const page = await openRecorded(newPage, origin, workspace);
 
@@ -1846,14 +1880,14 @@ async function measureSlateUi(newPage: LiveApp['newPage'], origin: string, heard
     await sendInChat(page, SLATE_UI_ASK);
     await until(page, 'both blocks drawn', `${SLATE_UI_DRAWN} && !(${STOP_OFFERED})`);
     const first = await slateUiFrames(page);
-    const reach = await firstPageReach(page, heard);
+    const reach = await firstPageReach(page, heard, held);
     const opened = await openedInWorkSurface(page);
 
     // A page opened while both pages run lists every preview they hold.
     const listed = await previewsListed(page);
 
     await named('the reload', () => page.reload({ waitUntil: 'load' }));
-    await until(page, 'both blocks drawn again', SLATE_UI_DRAWN);
+    await until(page, 'every block drawn again', slateUiDrawn(Object.keys(SLATE_UI_PAGES).length + 1));
     const again = await slateUiFrames(page);
 
     await listed();
@@ -2559,6 +2593,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
     const openingHeld = heldCall();
     const toldBack = Promise.withResolvers<ScriptedRequest>();
     const slateHeard = Promise.withResolvers<ScriptedRequest>();
+    const slateClicked = heldCall();
     const askProbe = new SlateAskProbe();
     const waitProbe = new ProviderWaitProbe();
 
@@ -2570,7 +2605,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
       ?? reconnectTurn(request, UNANSWERED_PROBE_TURN_ASK, probeWaitHeld)
       ?? reconnectTurn(request, SLEPT_TURN_ASK, sleptHeld) ?? reconnectTurn(request, WATCHED_SLEPT_TURN_ASK, watchedSleptHeld, true)
       ?? unsentFirstTurn(request, unsentHeld) ?? reconnectTurn(request, CLEARED_TURN_ASK, clearedHeld)
-      ?? keptTabProbe(request) ?? thinkingTurn(request) ?? planTasksProbe(request) ?? stopProbeTurn(request, stopProbe, openingHeld) ?? slateUiTurn(request, slateHeard.resolve) ?? slateAskTurn(request, askProbe) ?? planWalkthrough(request));
+      ?? keptTabProbe(request) ?? thinkingTurn(request) ?? planTasksProbe(request) ?? stopProbeTurn(request, stopProbe, openingHeld) ?? slateUiTurn(request, slateHeard.resolve, slateClicked) ?? slateAskTurn(request, askProbe) ?? planWalkthrough(request));
 
     await withLiveApp(async (app) => {
       const { newPage, origin } = app;
@@ -2605,7 +2640,13 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
         'plan-tasks': async () => { observed.planTasks = await attempt('plan-tasks', () => measurePlanTasks(newPage, origin)); },
         'stop-then-send': async () => { observed.stopThenSend = await attempt('stop-then-send', () => measureStopThenSend(newPage, origin, stopProbe)); },
         'new-chat-stop': async () => { observed.newChatStop = await attempt('new-chat-stop', () => measureNewChatStop(newPage, origin, openingHeld)); },
-        'slate-ui': async () => { observed.slateUi = await attempt('slate-ui', () => measureSlateUi(newPage, origin, slateHeard.promise)); },
+        'slate-ui': async () => {
+          try {
+            observed.slateUi = await attempt('slate-ui', () => measureSlateUi(newPage, origin, slateHeard.promise, slateClicked));
+          } finally {
+            slateClicked.release();
+          }
+        },
         'slate-ask': async () => { observed.slateAsk = await attempt('slate-ask', () => measureSlateAsk(newPage, origin, askProbe)); },
         'connect': async () => { observed.connect = await attempt('connect', () => measureConnect(newPage, origin)); },
         'provider-wait': async () => { observed.providerWait = await attempt('provider-wait', () => measureProviderWait(newPage, origin, waitProbe)); },

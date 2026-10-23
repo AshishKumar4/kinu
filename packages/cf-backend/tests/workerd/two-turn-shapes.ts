@@ -437,6 +437,8 @@ export interface AgentSlateUi {
   readonly answered: string;
   readonly fromUser: string;
   readonly asWorkspace: string;
+  /** How the answer's block resolves once the agent was dismissed, its history kept. */
+  readonly dismissed?: string;
 }
 
 /** The work read while a hired agent's own turn is held at the model, and the agent's name. */
