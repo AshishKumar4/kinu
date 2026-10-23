@@ -88,7 +88,7 @@ describe('Explore', () => {
         await page.waitForSelector('[data-explore-hero="personal-assistant"] img[data-blueprint-picture]', SOON);
         expect(await page.$eval('[data-explore-hero="personal-assistant"] img[data-blueprint-picture]', (img) => img.getAttribute('data-blueprint-picture'))).toBe(assistant);
         expect(await page.$$eval('[data-explore-also] img[data-blueprint-picture]', (images) => images.map((img) => img.getAttribute('data-blueprint-picture'))))
-          .not.toContain('deploys-light');
+          .toEqual(['deploys', 'release', 'report']);
 
         // Its file is there to load, in either mode.
         await page.waitForFunction(() => {
