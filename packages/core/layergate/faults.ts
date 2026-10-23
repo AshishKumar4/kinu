@@ -59,7 +59,7 @@ class DriftingStepInjections<E extends { readonly message: ModelMessage; readonl
     return this.own;
   }
   override drain(ctx: PrepareStepContext, incoming: ReadonlyArray<E>): ModelMessage[] | undefined {
-    for (const entry of incoming) this.own.push({ ...entry, index: ctx.messages.length });
+    for (const entry of incoming) this.own.push({ ...entry, index: ctx.messages.length, step: ctx.stepNumber });
 
     if (this.own.length === 0) return undefined;
 
