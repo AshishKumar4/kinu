@@ -12,7 +12,6 @@ import * as v from 'valibot';
 import { attempt, diagnostics, renderThrownChain, settle, toKinuError, type KinuError } from '../obs/index';
 import type { JsonValue } from '../utils/json';
 import type { AgentConfigStore } from '../config/store';
-import type { KinuExtension } from '../extension';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import type { AgentSignal, SendOutcome } from '../types/signals';
@@ -20,7 +19,7 @@ import { isAdvisorSeverity } from '../types/advisor';
 import { EVIDENCE_BUDGETS, evidenceWindow, renderToolResult } from '../utils/evidence-window';
 import { redactSecrets } from '../safety/secret-patterns';
 import { fnv1a32Hex } from '../utils/fnv1a';
-import type { AdvisorReadTools } from './advisor-ports';
+import { advisorReadTool, type AdvisorReadTools } from './advisor-ports';
 import {
   ADVISOR_NOTE_MAX_CHARS, ADVISOR_RULES, isAdvisorNoteClass, judgeNote, normalizeNote, sayAdvisorNote, type AdvisorNote,
 } from './review';
@@ -37,6 +36,8 @@ export type AdvisorModel = (request: {
   readonly system: string;
   readonly messages: readonly ModelMessage[];
   readonly tools: ToolSet;
+  /** Aborted when the turn the review is for is stopped. */
+  readonly signal?: AbortSignal;
 }) => Promise<AdvisorReply>;
 
 /** What a turn hands its advisor: the model on the turn's route, its read-only tools and what it reviews against. */
@@ -76,8 +77,8 @@ export interface SessionAdvisorDeps {
   readonly interrupt: () => Promise<boolean>;
   /** ADVISOR.md and AGENTS.md as the advisor reads them. */
   readonly guidance: () => Promise<string>;
-  /** How long a turn waits at its end for the review of its last step; {@link FINAL_REVIEW_WAIT_MS} unless set. */
-  readonly finalWaitMs?: number;
+  /** Takes a review that runs on past its turn's end, so the session's end joins it. */
+  readonly track?: (work: Promise<void>) => void;
 }
 
 /** At most this many notes short of a blocker said per update (oh-my-pi's emission guard: 309 calls in one session). */
@@ -86,11 +87,14 @@ const ADVISOR_NOTES_PER_UPDATE = 4;
 /** Model calls one update may make: a read, another, then its verdict. */
 const ROUNDS_PER_UPDATE = 6;
 
-/** The advisor's own context, cleared past this; the agent's history is never replayed into it. */
-const CONVERSATION_MAX_CHARS = 240_000;
+/** The advisor's own context, at most about this long (one update may pass it): a turn's every step then sends a
+ *  request of bounded size, so its cost per step is flat in the turn's length. The agent's history is never replayed. */
+const WINDOW_CHARS = 48_000;
 
-/** How long a turn waits at its end for the review of its last step. */
-const FINAL_REVIEW_WAIT_MS = 120_000;
+/** What a full window keeps, its newest whole exchanges: it is cut in halves, not slid, so between two cuts each request
+ *  extends the last and the provider's cached prefix holds. */
+const KEPT_CHARS = WINDOW_CHARS / 2;
+
 
 /** Each message the advisor reads, at most this long, and each tool call's arguments and result. */
 const MESSAGE_CHARS = EVIDENCE_BUDGETS.outcomeAssistantResponse;
@@ -195,10 +199,9 @@ function worded<A>(doing: string, effect: Effect.Effect<A, KinuError>): Effect.E
   return Effect.catchDefect(effect, (cause) => Effect.fail(toKinuError({ doing, otherwise: 'unavailable', cause })));
 }
 
-function readToolNamed(tools: AdvisorReadTools, name: string): Tool | undefined {
-  if (name === 'file') return tools.file;
-
-  return name === 'memory' ? tools.memory : undefined;
+/** A message's length as the window counts it. */
+function sizeOf(message: ModelMessage): number {
+  return JSON.stringify(message.content).length;
 }
 
 /** One advisor update's guards: notes short of a blocker counted, and repeated identical calls. */
@@ -224,6 +227,15 @@ interface ReviewedTurn {
   readonly turn: AdvisedTurn;
   running: boolean;
   readonly backlog: string[];
+  /** The request the turn answers, as the advisor read it: kept through every cut of the window, as what it judges by. */
+  readonly request: string | null;
+  /** The owner stopped the turn: its reviews are cancelled, and one still running says nothing more, as nothing else of a
+   *  stopped turn does. */
+  stopped: boolean;
+  /** Aborts the turn's reviews' model calls and reads when it is stopped. */
+  readonly cancel: AbortController;
+  /** ADVISOR.md and AGENTS.md, read once a turn: its system prompt is then one through the turn, a cached prefix. */
+  guidance: string | null;
 }
 
 /** The tool result every call of a stopped update gets: a call left without one fails every later request. */
@@ -235,7 +247,8 @@ export class SessionAdvisor {
   private conversationChars = 0;
   /** The turn whose steps are read now; null before the first. */
   private current: ReviewedTurn | null = null;
-  /** Turns with steps read and not yet reviewed, oldest first. */
+  /** Turns with steps read and not yet reviewed, oldest first: a turn's steps are reviewed after its end too, by its own
+   *  model, for its own turn, before any later turn's. */
   private owed: ReviewedTurn[] = [];
   private reviewing: Promise<void> | null = null;
 
@@ -250,52 +263,41 @@ export class SessionAdvisor {
     return this.deps.reviewed && this.enabled;
   }
 
-  /** The turn's hooks: it starts, each step's output is read, and its end waits for the last step's review. */
-  extension(turn: AdvisedTurn): KinuExtension {
-    return {
-      name: 'kinu.advisor',
-      onTurnStart: (ctx) => {
-        // The last turn's steps not yet reviewed are dropped: its model and tools were its own.
-        this.endTurn();
-        this.owed = [];
-        this.current = { turn, running: true, backlog: [] };
-        // The request the turn answers: the last of the turn's input, as the agent read it.
-        const asked = ctx.history.at(-1);
+  /** A turn starts, answering `asked`, the last of its input as the agent reads it. The session that runs the turn calls
+   *  this once, whoever runs its inference: the default loop or the turn's scaffold. */
+  beginTurn(turn: AdvisedTurn, asked: ModelMessage | undefined): void {
+    // The last turn's steps not yet reviewed stay owed, reviewed first, by its own model and for its own turn.
+    this.endTurn();
+    const request = asked?.role === 'user' ? renderForAdvisor(asked, true) : null;
+    this.current = { turn, running: true, backlog: [], request, stopped: false, cancel: new AbortController(), guidance: null };
 
-        if (asked !== undefined && asked.role === 'user') this.read([asked]);
-      },
-      onStepEnd: (ctx) => {
-        this.read(ctx.produced);
-      },
-      // The last step was read at its end, and the turn waits for that review. No step follows it, so from here a note
-      // is the turn's after it: a nit or a concern is kept unsaid, and a blocker opens the next turn.
-      onTurnEnd: async () => {
-        this.endTurn();
-        await this.settled(this.deps.finalWaitMs ?? FINAL_REVIEW_WAIT_MS);
-      },
-    };
+    if (asked !== undefined && request !== null) this.read([asked]);
   }
 
-  /** The turn ended, however it ended: a failed turn emits no `onTurnEnd`, so its execution says so here too. */
-  endTurn(): void {
-    if (this.current !== null) this.current.running = false;
+  /** One step's own messages, as it ended: a model call of the default loop or of the scaffold's own inference. */
+  step(produced: readonly ModelMessage[]): void {
+    this.read(produced);
   }
 
-  /** Once every review owed has run, or `waitMs` has passed: one timer, cleared, so no wait outlives the call (a pending
-   *  timer holds a CLI process open), and no clock read a test may have frozen. */
-  async settled(waitMs: number): Promise<void> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const expired = new Promise<'expired'>((resolve) => { timer = setTimeout(() => { resolve('expired'); }, waitMs); });
+  /** The turn ended, however it ended, and nothing waits on its reviews: one still owed runs on and, as no step follows,
+   *  speaks as the turn's after it (a nit or concern kept unsaid, a blocker opening the next turn). A turn `stopped` has
+   *  its reviews cancelled: those owed dropped, the one running aborted. */
+  endTurn(stopped = false): void {
+    const ended = this.current;
 
-    try {
-      while (this.reviewing !== null) {
-        const pending = this.reviewing;
+    if (ended === null) return;
+    ended.running = false;
 
-        if (await Promise.race([pending.then(() => 'reviewed' as const), expired]) === 'expired' || this.reviewing === pending) return;
-      }
-    } finally {
-      clearTimeout(timer);
-    }
+    if (!stopped || ended.stopped) return;
+    ended.stopped = true;
+    ended.backlog.length = 0;
+    this.owed = this.owed.filter((owed) => owed !== ended);
+    ended.cancel.abort();
+  }
+
+  /** Once every review owed has run: on completion, never a clock. */
+  async settled(): Promise<void> {
+    while (this.reviewing !== null) await this.reviewing;
   }
 
   /** The agent's messages, appended to what the next review of their turn reads; a review starts if none runs. */
@@ -312,7 +314,14 @@ export class SessionAdvisor {
 
     if (reviewed.backlog.length > 0 && !this.owed.includes(reviewed)) this.owed.push(reviewed);
 
-    if (this.owed.length > 0 && this.reviewing === null) this.reviewing = this.review();
+    if (this.owed.length > 0 && this.reviewing === null) this.startReview();
+  }
+
+  /** Reviews what is owed, as work the session's end joins. */
+  private startReview(): void {
+    const reviewing = this.review();
+    this.reviewing = reviewing;
+    this.deps.track?.(reviewing);
   }
 
   /** Reviews what was read and not yet reviewed, an update at a time, until nothing is owed. Never fails. */
@@ -327,7 +336,7 @@ export class SessionAdvisor {
       this.reviewing = null;
 
       // A step read as the last update ended is reviewed now, not at the next step's end.
-      if (this.owed.length > 0) this.reviewing = this.review();
+      if (this.owed.length > 0) this.startReview();
     }))));
   }
 
@@ -338,17 +347,16 @@ export class SessionAdvisor {
 
     // A throw anywhere in it, a store's included, is the review's failure: worded, logged, and never the turn's.
     return worded('reviewing the agent\'s steps', Effect.gen({ self: this }, function* () {
-      if (this.conversationChars > CONVERSATION_MAX_CHARS) [this.conversation, this.conversationChars] = [[], 0];
-
       for (const text of delta) this.append({ role: 'user', content: text });
-      const guidance = yield* attempt({ doing: 'reading the advisor\'s guidance', otherwise: 'unavailable' }, () => this.deps.guidance());
-      const system = advisorSystemPrompt(turn.reachable, guidance);
+      this.fit(reviewed.request);
+      reviewed.guidance ??= yield* attempt({ doing: 'reading the advisor\'s guidance', otherwise: 'unavailable' }, () => this.deps.guidance());
+      const system = advisorSystemPrompt(turn.reachable, reviewed.guidance);
       const tools: ToolSet = { ...turn.tools, advise: ADVISE_TOOL };
       const offered = Object.fromEntries(Object.entries(tools).map(([name, offeredTool]) => [name, { ...offeredTool, execute: undefined }]));
       const guards = new UpdateGuards();
 
       for (let round = 0; round < ROUNDS_PER_UPDATE; round++) {
-        const reply = yield* attempt({ doing: 'asking the advisor', otherwise: 'unavailable' }, () => turn.model({ system, messages: this.conversation, tools: offered }));
+        const reply = yield* attempt({ doing: 'asking the advisor', otherwise: 'unavailable' }, () => turn.model({ system, messages: this.conversation, tools: offered, signal: reviewed.cancel.signal }));
         const results: { toolCallId: string; toolName: string; text: string }[] = [];
         let stopped = false;
 
@@ -358,7 +366,7 @@ export class SessionAdvisor {
           let text = repeated === 'stop' ? STOPPED : 'You made this exact call already; its result has not changed. Decide from what you have.';
 
           if (repeated === 'ok') {
-            text = call.toolName === 'advise' ? yield* this.advise(reviewed, call.input, guards) : yield* this.readTool(readToolNamed(turn.tools, call.toolName), call.input);
+            text = call.toolName === 'advise' ? yield* this.advise(reviewed, call.input, guards) : yield* this.readTool(advisorReadTool(turn.tools, call.toolName), call.input, reviewed.cancel.signal);
           }
 
           results.push({ toolCallId: call.toolCallId, toolName: call.toolName, text });
@@ -376,20 +384,47 @@ export class SessionAdvisor {
         // A loop past its warning, or an update whose only calls were advice: nothing more to read.
         if (stopped || reply.toolCalls.every((call) => call.toolName === 'advise')) return;
       }
-    })).pipe(Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('advisor.review_failed', failure, { actorId: this.deps.actor.actorId }); })));
+    })).pipe(Effect.catch((failure) => Effect.sync(() => {
+      // A stopped turn's review was cancelled, not failed.
+      if (!reviewed.stopped) diagnostics.failure('advisor.review_failed', failure, { actorId: this.deps.actor.actorId });
+    })));
   }
 
   private append(message: ModelMessage): void {
     this.conversation.push(message);
-    this.conversationChars += JSON.stringify(message.content).length;
+    this.conversationChars += sizeOf(message);
+  }
+
+  /** Past the window, the oldest exchanges go until {@link KEPT_CHARS} are left, cut before one of the agent's messages so
+   *  no tool call loses its result; the turn's `request` is put back first if it went. */
+  private fit(request: string | null): void {
+    if (this.conversationChars <= WINDOW_CHARS) return;
+    let dropped = 0;
+    let cut = 0;
+
+    for (const [at, message] of this.conversation.entries()) {
+      if (message.role === 'user' && this.conversationChars - dropped <= KEPT_CHARS) break;
+      dropped += sizeOf(message);
+      cut = at + 1;
+    }
+
+    // Never past the newest of the agent's messages: those are what this update reads.
+    let newest = 0;
+
+    for (const [at, message] of this.conversation.entries()) if (message.role === 'user') newest = at;
+    const kept = this.conversation.slice(Math.min(cut, newest));
+    const pinned = request !== null && !kept.some((message) => message.content === request) ? [{ role: 'user' as const, content: request }] : [];
+
+    this.conversation = [...pinned, ...kept];
+    this.conversationChars = this.conversation.reduce((total, message) => total + sizeOf(message), 0);
   }
 
   /** A read's result as the advisor's model reads it; a read that fails is its result, not the review's failure. */
-  private readTool(offered: Tool | undefined, input: JsonValue): Effect.Effect<string> {
+  private readTool(offered: Tool | undefined, input: JsonValue, signal: AbortSignal): Effect.Effect<string> {
     if (offered?.execute === undefined) return Effect.succeed('There is no such tool.');
 
     return attempt({ doing: 'running the advisor\'s read', otherwise: 'unavailable' }, async () => {
-      const result: unknown = await offered.execute?.(input, { toolCallId: 'advisor', messages: [], context: undefined });
+      const result: unknown = await offered.execute?.(input, { toolCallId: 'advisor', messages: [], context: undefined, abortSignal: signal });
 
       return shown(renderToolResult(result), MESSAGE_CHARS);
     }).pipe(Effect.catch((failure) => Effect.succeed(shown(`The read failed: ${renderThrownChain({ cause: failure })}`, MESSAGE_CHARS))));
@@ -419,7 +454,7 @@ export class SessionAdvisor {
     // After the turn only a blocker opens one: a nit or concern then is a changelog note, kept and visible.
     const running = reviewed.running;
 
-    if (verdict.disposition !== 'deliver' || (!running && note.severity !== 'blocker')) {
+    if (verdict.disposition !== 'deliver' || reviewed.stopped || (!running && note.severity !== 'blocker')) {
       notes.recordAdvisorNote(note, turnId, false);
 
       return Effect.succeed('Recorded, not said.');

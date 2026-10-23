@@ -12,7 +12,6 @@ import { initCompletedTurnTable, createCompletedTurnStore } from '../src/evoluti
 import { createTestActors, createTestActorsOver, createTestSql, withHostDeliveries } from '@kinu.run/test-utils';
 import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host';
 import { makeSqlExec } from './helpers';
-import { EvolutionSubagentStore } from '../src/identity/evolution-subagents';
 
 function newEventLog(): EventLog {
   const db = new Database(':memory:');
@@ -233,7 +232,8 @@ function railWithSubagent() {
   const sql = makeSqlExec(db);
   initEventsHubTables(sql);
   const main = createTestActorsOver(db).main;
-  new EvolutionSubagentStore(sql, main).record('ask-refiner-x1', { requestId: 'refine-1' }, 1);
+  // As an earlier build's lane left its hire.
+  db.run('INSERT INTO evolution_subagents (actor_id, name, lane_request_id, created_at) VALUES (?, ?, ?, 1)', [main.actorId, 'ask-refiner-x1', 'refine-1']);
 
   return new EventLog(sql, main);
 }

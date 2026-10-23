@@ -89,8 +89,6 @@ const TERMINAL_EFFECT_NAMES = [
   'turn_record', 'event_drain', 'improvement_lanes',
   // Detached: its reflection is a model call that waits on no reply; the row is its one owner, retried and parked.
   'turn_lessons',
-  // Retired: the advisor now reviews inside the turn. A row an earlier build left settles without running.
-  'advisor_review',
   'sleep_time', 'auto_title',
   // Detached; a refused drawing completes and the monogram stays.
   'workspace_logo',
@@ -296,10 +294,6 @@ export function actorTerminalEffects(ports: ActorEffectPorts): TerminalEffectTab
 
         return { status: 'completed' };
       },
-    }),
-    advisor_review: terminalEffect({
-      input: v.unknown(),
-      run: async () => ({ status: 'completed' }),
     }),
     turn_report: terminalEffect({
       input: TurnReportSchema,
@@ -826,23 +820,20 @@ export class TerminalEffectLedger {
     this.deps.actor.assertCurrent();
 
     if (row.status === 'parked' || row.nextAttemptAt > this.deps.now()) return;
+
+    // No handler in this build: no retry can make it run, so it ends here and its sequence can settle.
+    if (row.target.kind === 'blocked') {
+      this.retire(sequenceId, row, row.target.reason);
+
+      return;
+    }
+
     const attempts = row.attempts + 1;
     const nextAttemptAt = this.deps.now() + terminalEffectBackoffMs(attempts);
     const inline = row.lane === 'inline' && row.target.kind === 'runnable' && row.target.effect.synchronous;
 
     // Any awaited body keeps its durable attempt before starting.
     if (!inline) this.recordAttempt(sequenceId, row, nextAttemptAt);
-
-    if (row.target.kind === 'blocked') {
-      this.record(sequenceId, row.key, 'blocked');
-      diagnostics.failure('turn.terminal_effect_blocked', toKinuError({
-        doing: `attempting the ${row.rawName} effect a settled turn owed`,
-        cause: new Error(row.target.reason),
-        otherwise: 'unsupported',
-      }), { sequence: sequenceId, effect: row.key, attempts });
-
-      return;
-    }
 
     const { name, effect } = row.target;
     const fault = this.deps.fault?.() ?? null;
@@ -899,6 +890,16 @@ export class TerminalEffectLedger {
       SET status = 'completed'
       WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId}
         AND effect_key = ${row.key} AND status != 'completed'`;
+  }
+
+  /** An effect this build has no handler for, which an older build or another key version left owed: it ends as failed,
+   *  named, and leaves the sequence, which no clock could change. */
+  private retire(sequenceId: string, row: PendingRow, reason: string): void {
+    diagnostics.failure('turn.terminal_effect_retired', toKinuError({
+      doing: `running the ${row.rawName} effect a settled turn owed`, cause: new Error(reason), otherwise: 'unsupported',
+    }), { sequence: sequenceId, effect: row.key, name: row.rawName });
+    void this.deps.sql`DELETE FROM terminal_effects
+      WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId} AND effect_key = ${row.key}`;
   }
 
   /** A run that threw, once its attempt is recorded: ended, owed later, abandoned, parked on the owner, or owed again. */

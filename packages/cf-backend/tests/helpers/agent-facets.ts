@@ -741,6 +741,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
 
           return answer;
         },
+        advisorRead: (call) => host().advisorRead(call),
         receipts: (turnId, runId, callIds) => host().receipts(turnId, runId, callIds),
         observe: async (lines) => {
           const delayed = delayedObserve;

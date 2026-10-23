@@ -1218,6 +1218,29 @@ describe('LocalAgentSession — the advisor reviews each step, in the session', 
     expect(notes(db)).toEqual(['The old keys were never revoked; revoke them before reporting done.']);
   });
 
+  test("a turn whose scaffold runs its own model calls has each of them reviewed, as a step of the turn", async () => {
+    const { db, rt } = workspaceRuntime();
+    rt.actor.config.setLearning(false);
+    rt.actor.config.setAdvisorEnabled(true);
+    const advisor = scriptedAdvisor();
+    let calls = 0;
+    const model = withScriptedAdvisor(() => oneStepAnswer(`scaffold call ${String(++calls)} answered`), advisor);
+    // The scaffold never runs the default loop: its two model calls are its own.
+    await rt.agentStateVfs.mkdir('scaffold', { recursive: true });
+    await writeText(rt.agentStateVfs, `${rt.identity.scaffold.path}.v1`, 'async function run() { '
+      + 'await host.llmStream({ system: "sys", messages: [{ role: "user", content: "first" }] }); '
+      + 'await host.llmStream({ system: "sys", messages: [{ role: "user", content: "second" }] }); }');
+    rt.identity.scaffold.version = async () => 1;
+    const session = new LocalAgentSession({ rt, db, model, onEvent: () => {} });
+
+    await session.send('rotate the keys', { id: crypto.randomUUID() });
+    await session.end();
+
+    expect(calls).toBe(2);
+    expect(advisor.asked.at(-1)).toContain('scaffold call 1 answered');
+    expect(advisor.asked.at(-1)).toContain('scaffold call 2 answered');
+  });
+
   test('with the switch off, no step is reviewed', async () => {
     const { db, session, advisor } = setupWithAdvisor(false);
 

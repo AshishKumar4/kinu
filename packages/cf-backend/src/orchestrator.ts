@@ -1183,6 +1183,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         // Open while the tool runs, under the RPC that relayed it: a kill keeps the cut span's name.
         return this.tracing.invocation('rpc', `tool.${call.name}`, () => this.agentTurns.execute(actorId, call));
       },
+      advisorRead: (call) => this.agentTurns.advisorRead(actorId, call),
       // A repair's question, read only: its calls' effects committed here, under the receipts each kept.
       receipts: async (turnId, runId, callIds) => remoteReceipts(this.boundSql, this.agentBound(actorId).handle, { turnId, runId }, callIds),
       observe: async (lines) => { await this.chatRooms.hostedRoom(actorId)?.observe(uiChunks(lines)); },
@@ -1525,7 +1526,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       jobSeat: (actorId) => ({ ports: this.workspaceJobPorts(actorId), attach: (authority) => this.jobAuthorities.attach(authority) }),
       retireJobs: (actorId) => this.jobAuthorities.retire(actorId),
       temporary: (actor) => this.temporaryAgentPort(actor.reference),
-      rederiveWake: () => { this.armDurableWake(); },
       register: async ({ creationId, loop }) => {
         const entry = await this.actorDirectory({
           action: 'register', creationId, name: explorationActorKey(creationId), origin: 'swarm', lifetime: 'task',

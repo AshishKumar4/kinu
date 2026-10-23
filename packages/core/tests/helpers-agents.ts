@@ -55,9 +55,6 @@ export const temporaryPortStub = {
     transcript: 'kept' as const,
   }),
   release: async () => {},
-  reclaim: () => null,
-  answered: () => [],
-  forget: () => {},
 };
 
 /** A roster no agent has joined yet: its owner alone. */

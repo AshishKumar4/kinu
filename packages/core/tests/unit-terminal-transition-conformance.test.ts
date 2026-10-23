@@ -192,6 +192,11 @@ class Plane {
       VALUES (${terminalEffectKey(name, TRANSITION.messageId)})`;
   }
 
+  /** `name`'s owed row as a build that named it `as` left it. */
+  rename(name: TerminalEffectName, as: string): void {
+    void this.sql`UPDATE terminal_effects SET effect_name = ${as} WHERE effect_name = ${name}`;
+  }
+
   interruptAt(phase: TerminalEffectPhase | null, name?: TerminalEffectName): void {
     this.cut = phase === null || name === undefined ? null : { phase, name };
   }
@@ -472,19 +477,19 @@ test('recorded terminal rosters with colliding identities belong only to their a
   db.close();
 });
 
-test('an unsupported recorded roster remains inspectable and owed after reopening', async () => {
+test('an unsupported recorded roster ends at its first replay, and its transition settles and stays settled', async () => {
   await conform(async (plane) => {
     plane.process().record(TRANSITION, roster([UNIMPLEMENTED]));
     plane.restart();
     await plane.replay();
     const sequence = plane.process().sequenceId(TRANSITION);
-    const owed = plane.process().ledger.owed(sequence);
-    expect(owed).toHaveLength(1);
-    expect(owed[0]).toMatchObject({ status: 'blocked', rawName: UNIMPLEMENTED, input: JSON.stringify({ answer: ANSWER }) });
+    expect(plane.process().ledger.owed(sequence)).toEqual([]);
+    expect(plane.process().incomplete()).toEqual([]);
     plane.restart();
     await plane.replay();
-    expect(plane.process().ledger.owed(sequence)).toEqual(owed);
-    expect(plane.process().incomplete()).toEqual([TRANSITION]);
+    expect(plane.process().ledger.owed(sequence)).toEqual([]);
+    expect(plane.process().incomplete()).toEqual([]);
+    expect(plane.snapshot().wake).toBe('none');
   });
 });
 
@@ -700,32 +705,43 @@ describe('terminal transition conformance across two adapters', () => {
     expect(snap.runs[K(LATE)]).toBeUndefined();
   });
 
-  test('an effect this build cannot run stays blocked, owed, and holds the transition open', async () => {
+  // An effect no handler of this build runs, which an older build left owed, ends at its first pass as a named failure:
+  // a clock can never make it run, so it may hold neither the turn's terminal claim nor a wake.
+  test('an effect this build has no handler for ends once, named, and its transition settles arming no wake', async () => {
+    const before = logged('turn.terminal_effect_retired', K(UNIMPLEMENTED)).length;
+
     const snap = await conform(async (plane) => {
       await plane.settle(() => roster([...SEQUENCE, UNIMPLEMENTED]));
       await plane.join();
+    });
+
+    expect(snap.effects).toEqual([]);
+    expect(claimState(snap)).toEqual({ [TERMINAL_CLAIM_CALL]: SETTLED });
+    expect(snap.runs).toEqual(RAN_ONCE);
+    expect(snap.wake).toBe('none');
+    // Once under each transport.
+    expect(logged('turn.terminal_effect_retired', K(UNIMPLEMENTED)).length - before).toBe(2);
+  });
+
+  test('an owed row whose name this build does not know settles once, recovered, and arms no wake', async () => {
+    const before = logged('turn.terminal_effect_retired', K(UNIMPLEMENTED)).length;
+
+    const snap = await conform(async (plane) => {
+      // Cut before anything ran, the row renamed to one no build here knows, as an older build left it.
+      plane.interruptAt('before', SEQUENCE[0]);
+      await plane.settle(() => roster([...SEQUENCE, UNIMPLEMENTED]));
+      await plane.join();
+      plane.rename(UNIMPLEMENTED, 'no_such_effect');
+      plane.interruptAt(null);
       plane.advance(PAST_BACKOFF_MS);
       await plane.recover();
     });
 
-    // Nothing pruned: a blocked row is work a deploy still owes.
-    expect(dispositions(snap)).toEqual({
-      [K('task_reminder')]: 'completed',
-      [K('event_reply')]: 'completed',
-      [K('turn_record')]: 'completed',
-      [K('auto_title')]: 'completed',
-      [K(UNIMPLEMENTED)]: 'blocked',
-    });
-    const blocked = snap.effects.find((row) => row.key === K(UNIMPLEMENTED));
-    expect(logged('turn.terminal_effect_blocked', K(UNIMPLEMENTED)).length).toBeGreaterThan(0);
-    // Still blocked: converging to success would erase the evidence.
-    expect(blocked?.attempts).toBe(2);
-    expect(claimState(snap)).toEqual({
-      [TERMINAL_CLAIM_CALL]: null,
-      [TOOL_CLAIM.callId]: null,
-    });
+    expect(snap.effects).toEqual([]);
+    expect(claimState(snap)).toEqual({ [TERMINAL_CLAIM_CALL]: SETTLED });
     expect(snap.runs).toEqual(RAN_ONCE);
-    expect(snap.wake).toBe('future');
+    expect(snap.wake).toBe('none');
+    expect(logged('turn.terminal_effect_retired', K(UNIMPLEMENTED)).length - before).toBe(2);
   });
 
   /** A detached row must not hold inline work behind it on replay. */
