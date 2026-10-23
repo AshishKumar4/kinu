@@ -5,6 +5,7 @@ import { readBuildStamp, type AssetFetcher } from './deployed-assets';
 import { escapeHtml } from './http';
 import { PAGE_BUILD_META } from '../web/page-build';
 import { APP_FONTS_PATH } from '../web/fonts';
+import { SLATE_PAGE_MODULES_PATH } from '../web/slate-page';
 import { VISITOR_PAGE_ATTRIBUTE } from '../web/visitor-page';
 import { withAppSecurityHeaders } from './security-headers';
 import type { ThemeName } from '../web/theme';
@@ -13,8 +14,8 @@ interface AppShellEnv extends PreviewSuffixEnv, PreviewPortEnv {
   readonly ASSETS: AssetFetcher;
 }
 
-/** A file the client build names by its content: `<name>-<8-char hash>.<ext>` directly under /assets/. */
-const CONTENT_NAMED_ASSET = /^\/assets\/[^/]+-[A-Za-z0-9_-]{8}\.[a-z0-9]+$/u;
+/** A file the client build names by its content: `<name>-<8-char hash>.<ext>` under /assets/, or its page modules under /assets/slate/. */
+const CONTENT_NAMED_ASSET = /^\/assets\/(?:slate\/)?[^/]+-[A-Za-z0-9_-]{8}\.[a-z0-9]+$/u;
 
 /**
  * How long a browser keeps what the app's files answer: the one place that decides it; null keeps the assets service's
@@ -38,15 +39,16 @@ function cachePolicy(pathname: string, status: number, html: boolean): string | 
 /** `response` answered under its {@link cachePolicy}. */
 function cached(response: Response, url: URL): Response {
   const policy = cachePolicy(url.pathname, response.status, response.headers.get('content-type')?.includes('text/html') ?? false);
-  // The app's faces are read by the pages the chat draws itself, whose origin is opaque (`drawnPageDocument`).
-  const face = url.pathname.startsWith(APP_FONTS_PATH);
+  // The app's faces and page modules are read by the pages the chat draws itself, whose origin is opaque
+  // (`drawnPageDocument`).
+  const shared = url.pathname.startsWith(APP_FONTS_PATH) || url.pathname.startsWith(SLATE_PAGE_MODULES_PATH);
 
-  if (policy === null && !face) return response;
+  if (policy === null && !shared) return response;
   const headers = new Headers(response.headers);
 
   if (policy !== null) headers.set('cache-control', policy);
 
-  if (face) headers.set('access-control-allow-origin', '*');
+  if (shared) headers.set('access-control-allow-origin', '*');
 
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }

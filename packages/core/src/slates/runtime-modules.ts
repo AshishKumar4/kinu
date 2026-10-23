@@ -1,6 +1,6 @@
 /** Authored-facing `kinu:slate` modules: `server.js` under `/usr/lib/kinu/slate/`, `client.js` at `/__kinu/slate.js`. */
 
-import { SLATE_HOST_CONTEXT_MESSAGE, SLATE_QUERY_PARAM, SLATE_SIZE_CHANGED_MESSAGE } from './host-context';
+import { SLATE_BRIDGE_ATTRIBUTE, SLATE_BRIDGE_MESSAGE, SLATE_HOST_CONTEXT_MESSAGE, SLATE_QUERY_PARAM, SLATE_SIZE_CHANGED_MESSAGE } from './host-context';
 
 /** The prototype marker lets the runner verify the contract without importing this module twice. Client-only names throw on the server. */
 export const SLATE_SERVER_MODULE = `export class SlateObject {
@@ -14,6 +14,8 @@ export const SLATE_SERVER_MODULE = `export class SlateObject {
   get sql() { return this.#context.storage.sql; }
   get storage() { return this.#context.kv; }
   get ctx() { return { waitUntil: this.#context.waitUntil }; }
+  /** Sends the slate's page a JSON value it did not ask for; its page hears it through onPush. An answer's page only. */
+  push(data) { return this.#context.push(data); }
 }
 SlateObject.prototype[Symbol.for("kinu.slate")] = true;
 function clientOnly(name) {
@@ -28,12 +30,13 @@ export const resize = clientOnly("resize");
 export const mount = clientOnly("mount");
 export const fit = clientOnly("fit");
 export const workspace = clientOnly("workspace");
+export const onPush = clientOnly("onPush");
 `;
 
 /** React and capnweb resolve through the same import map, so this module keeps the singletons shared with the host frame. */
 export const SLATE_CLIENT_MODULE = `import { createElement, useMemo, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
-import { newWebSocketRpcSession } from "capnweb";
+import { newMessagePortRpcSession, newWebSocketRpcSession, RpcTarget } from "capnweb";
 
 function defaultTheme() {
   return typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
@@ -93,20 +96,42 @@ function documentHeight() {
 // passed across a call, and every call would pay the handshake. A broken one
 // is replaced on the next call, never reasoned about.
 let live = null;
+const pushed = new Set();
+/** What the page's server sends it unasked (its this.push(data)), each value as it comes. Returns the unsubscribe. */
+export function onPush(listener) {
+  pushed.add(listener);
+  // Opened now, so a server's push reaches a page that has called nothing yet.
+  session();
+  return () => pushed.delete(listener);
+}
+class PageTarget extends RpcTarget {
+  push(data) { for (const listener of pushed) listener(data); }
+}
+// A page the chat draws itself has no origin of its own to reach: its host carries the session (1023-ac), and the
+// host's end of it reaches the page with what its server pushes.
+function transport() {
+  if (!bridged()) {
+    return newWebSocketRpcSession(new WebSocket(new URL("/__rpc", window.location.href)));
+  }
+  const channel = new MessageChannel();
+  window.parent.postMessage({ kinu: "${SLATE_BRIDGE_MESSAGE}" }, "*", [channel.port2]);
+  return newMessagePortRpcSession(channel.port1, new PageTarget());
+}
 function session() {
   if (live === null) {
-    const socket = new WebSocket(new URL("/__rpc", window.location.href));
-    const stub = newWebSocketRpcSession(socket);
+    const stub = transport();
     stub.onRpcBroken(() => { if (live !== null && live.stub === stub) live = null; });
     live = { stub };
   }
   return live.stub;
 }
 
+// A page the chat draws reaches its server's methods through its host, which names each one ($method).
+const bridged = () => document.documentElement.hasAttribute("${SLATE_BRIDGE_ATTRIBUTE}");
 export const slate = new Proxy(Object.create(null), {
   get(_target, member) {
     if (typeof member !== "string" || member === "then") return undefined;
-    return (...args) => session()[member](...args);
+    return (...args) => (bridged() ? session().$method(member, args) : session()[member](...args));
   },
 });
 

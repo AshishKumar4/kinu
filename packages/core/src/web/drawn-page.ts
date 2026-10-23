@@ -1,36 +1,33 @@
 /**
- * An answer's page the browser draws itself (1023-ac): a `<slate-ui>` block that reaches nothing through `kinu:slate`
- * needs no process, no preview origin and no fetch. Its frame is a `srcdoc` document, sandboxed to an opaque origin, with
- * the head every slate page has (the app's palette and faces, the chat's type, its height told to the host) and a
- * policy that lets it reach nothing outside: its own inline script and style, the app's faces, and pictures it makes.
- * While its answer streams, a frame draws the markup written so far, its scripts inert; once the block is closed, the
- * page itself is opened and runs as written.
+ * An answer's page the browser draws itself (1023-ac): no preview origin and no fetch of its own. Its frame is a `srcdoc`
+ * document, sandboxed to an opaque origin, with the head every slate page has (the app's palette and faces, the chat's
+ * type, its height told to the host), the modules a page imports by name (`SLATE_PAGE_MODULES`, from the app), and a
+ * policy that lets it reach nothing outside: its own inline script and style, those modules, the app's faces, and
+ * pictures it makes. Its `kinu:slate` session runs over a port its host carries (`SLATE_BRIDGE_ATTRIBUTE`). While its
+ * answer streams, a frame draws the markup written so far, its scripts inert; once the block is closed, the page itself
+ * is opened and runs as written.
  */
 import { SLATE_PAGE_STYLE } from '../slates/page-head';
-import { SLATE_LEGACY_TOKEN_CSS, SLATE_SIZE_CHANGED_MESSAGE } from '../slates/host-context';
+import { SLATE_BRIDGE_ATTRIBUTE, SLATE_LEGACY_TOKEN_CSS, SLATE_SIZE_CHANGED_MESSAGE } from '../slates/host-context';
+import { slateImportMap } from './slate-page';
 import { APP_FONTS_PATH, fontsCss } from './fonts';
 import { THEME_CSS } from './theme';
 
 /** What the host sends a streaming frame: the block's markup written so far. */
 export const SLATE_DRAW_MESSAGE = 'draw';
 
-/** A block whose page reaches the workspace through `kinu:slate` is served by its process; any other is drawn here. */
-export function drawnInBrowser(html: string): boolean {
-  return !html.includes('kinu:slate');
-}
-
 /**
  * Nothing outside: no request a script makes, no form sent, no picture or face from another site. Whatever the app's
  * own policy allows, the frame inherits and this narrows.
  */
-function drawnPolicy(appOrigin: string): string {
+function drawnPolicy(look: DrawnPageLook): string {
   return [
     "default-src 'none'",
-    "script-src 'unsafe-inline'",
+    `script-src 'unsafe-inline' ${look.modules.base}`,
     "style-src 'unsafe-inline'",
     'img-src data: blob:',
     'media-src data: blob:',
-    `font-src ${appOrigin}`,
+    `font-src ${look.appOrigin}`,
     "connect-src 'none'",
     "form-action 'none'",
     "base-uri 'none'",
@@ -53,21 +50,25 @@ export interface DrawnPageLook {
   readonly variables: Readonly<Record<string, string>>;
   /** The app's origin, whose faces the page reads. */
   readonly appOrigin: string;
+  /** Where the app serves each page module's file (by its name in `SLATE_PAGE_MODULES`), all under `base`. */
+  readonly modules: { readonly base: string; readonly files: Readonly<Record<string, string>> };
 }
 
 function drawnHead(look: DrawnPageLook, script: string): string {
   const tokens = Object.entries(look.variables).map(([name, value]) => `${name}:${value}`).join(';');
 
-  return `<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${drawnPolicy(look.appOrigin)}">`
+  return `<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${drawnPolicy(look)}">`
     + `<style>${THEME_CSS}\n${SLATE_LEGACY_TOKEN_CSS}\n${fontsCss(`${look.appOrigin}${APP_FONTS_PATH}`)}\n${SLATE_PAGE_STYLE}`
     + `\n:root{${tokens}}</style><script>${script}</script>`;
 }
 
-const root = (look: DrawnPageLook) => `<html data-mode="${look.theme}" data-display="inline" style="color-scheme:${look.theme}">`;
+const root = (look: DrawnPageLook) => `<html data-mode="${look.theme}" data-display="inline" ${SLATE_BRIDGE_ATTRIBUTE} style="color-scheme:${look.theme}">`;
 
-/** The page itself, opened as written once its block is closed. */
+/** The page itself, opened as written once its block is closed: the modules it imports by name are the app's. */
 export function drawnPageDocument(html: string, look: DrawnPageLook): string {
-  return `<!doctype html>${root(look)}<head>${drawnHead(look, SIZE_SCRIPT)}</head><body>${html}</body></html>`;
+  const modules = slateImportMap((file) => `${look.modules.base}${look.modules.files[file] ?? file}`);
+
+  return `<!doctype html>${root(look)}<head>${modules}${drawnHead(look, SIZE_SCRIPT)}</head><body>${html}</body></html>`;
 }
 
 /** The frame a streaming block is drawn in: empty until its host sends the markup written so far. */

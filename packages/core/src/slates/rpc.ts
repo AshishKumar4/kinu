@@ -163,6 +163,9 @@ export interface SlateProblem extends Refusal {
 
 export const SLATES_CHANGED_EVENT = 'slates_changed';
 
+/** What an answer's page's server sends its page unasked (`this.push(data)`), told to the tabs that draw it. */
+export const SLATE_PUSH_EVENT = 'slate_push';
+
 /** A directory name for a slate called `title`, free in `/slates`: its words lower-cased and joined by dashes. */
 export function slateIdFor(title: string, taken: (id: string) => boolean): string {
   const base = title.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').slice(0, 48).replace(/^-+|-+$/g, '') || 'page';

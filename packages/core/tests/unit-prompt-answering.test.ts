@@ -3,7 +3,7 @@ import { createTestRuntime } from '@kinu.run/test-utils';
 import { buildSystemPromptSync } from '../src/prompt';
 import type { SystemPromptOptions } from '../src/prompt';
 import { ANSWERING_SECTION } from '../src/prompting/section-templates';
-import { slateUiSegments } from '../src/slates/ui-blocks';
+import { blockServer, slateUiSegments } from '../src/slates/ui-blocks';
 import { answerDrawsPages, TERMINAL_TURN_KEY } from '../src/types/turn-metadata';
 import type { PromptExecutorInfo } from '../src/prompting/surface';
 
@@ -51,6 +51,24 @@ describe('an answer is taught pages only where a person reads it with its pages 
     const example = section.slice(section.indexOf('<example>\n') + '<example>\n'.length, section.indexOf('\n</example>'));
 
     expect(slateUiSegments(example).map((segment) => segment.kind)).toEqual(['text', 'slate']);
+  });
+});
+
+// 1023-ac: a page's server rides in its block, inert in the page, and runs in its process; its data is the workspace's.
+describe("a page's own server", () => {
+  test('is the slate/server script of its block, taken out of the page the chat draws; a block without one is all page', () => {
+    const page = '<p>rows</p><script type="module">import { slate } from "kinu:slate"; slate.load();</script>';
+    const server = 'import { SlateObject } from "kinu:slate";\nexport class Slate extends SlateObject { load() { return 1; } }';
+
+    expect(blockServer(`${page}\n<script type="slate/server">${server}</script>`)).toEqual({ page: `${page}\n`, server });
+    expect(blockServer(page)).toEqual({ page, server: null });
+  });
+
+  test('is taught: data in workspace.db, a server only for logic that runs server-side, and the libraries the page has', () => {
+    const section = ANSWERING_SECTION.render({});
+
+    expect(section).toContain('Keep data in `workspace.db` (shared with every agent and page); a block server is for logic that runs server-side.');
+    expect(section).toContain('`uplot` for charts');
   });
 });
 

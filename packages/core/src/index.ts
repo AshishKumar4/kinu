@@ -401,7 +401,7 @@ export { SLATE_READ_MODELS, type SlateReadModel } from './slates/read-models';
 export type { SlateProcess } from './slates/process';
 
 export {
-  isSlateMethodName, SLATE_METHOD_NAME_SOURCE, SlateOperationSchema, slateIdFor, requireSlateWorkMode, type SlateOperation, SLATES_CHANGED_EVENT, type SlateCallResult, type SlateAnswer, type SlateSurfaceResult, type SlateSurfaceValue, isJsonAnswer,
+  isSlateMethodName, SLATE_METHOD_NAME_SOURCE, SlateOperationSchema, slateIdFor, requireSlateWorkMode, type SlateOperation, SLATES_CHANGED_EVENT, SLATE_PUSH_EVENT, type SlateCallResult, type SlateAnswer, type SlateSurfaceResult, type SlateSurfaceValue, isJsonAnswer,
   type SlateSummary, type SlateProblem, SharedSlateFilesSchema, SlateFileChangeSchema, type SharedSlateFiles, type SlateFileChange,
 } from './slates/rpc';
 
@@ -409,18 +409,18 @@ export { initSlateStateTable, SLATE_HOST_BINDING, SLATE_STORAGE_BINDING, slateSt
 
 // Browser-safe slate vocabulary, so it belongs on this value-imported barrel.
 export {
-  buildSlateHostContext, isSlateFrameMessage, keptSlateContext, slateFrameSrc, slateLinkId,
+  buildSlateHostContext, isSlateFrameMessage, keptSlateContext, slateFrameSrc, slateLinkId, SLATE_BRIDGE_MESSAGE,
   SLATE_HOST_CONTEXT_MESSAGE, SLATE_INLINE_HEIGHT_LIMIT, SLATE_QUERY_PARAM, SLATE_SIZE_CHANGED_MESSAGE, SLATE_THEME_TOKENS,
   SlateFrameMessageSchema, type SlateHostContext,
 } from './slates/host-context';
 
 export {
-  addressedBlock, ephemeralSlateAddress, ephemeralSlateId, slateUiSegments, SLATE_UI_ATTRIBUTE,
+  addressedBlock, blockServer, ephemeralSlateAddress, ephemeralSlateId, slateUiSegments, SLATE_UI_ATTRIBUTE,
   type EphemeralSlateAddress, type SlateUiBlock, type SlateUiSegment,
 } from './slates/ui-blocks';
 
 export {
-  drawnInBrowser, drawnPageDocument, drawnStreamDocument, SLATE_DRAW_MESSAGE, type DrawnPageLook,
+  drawnPageDocument, drawnStreamDocument, SLATE_DRAW_MESSAGE, type DrawnPageLook,
 } from './web/drawn-page';
 
 // Cross-workspace experience transfer
@@ -2355,7 +2355,7 @@ export {
 
 export { hueStops, rankHue } from './web/agent-colour';
 
-export { SLATE_PAGE_PREAMBLE } from './web/slate-page';
+export { SLATE_PAGE_MODULES, SLATE_PAGE_MODULES_PATH, SLATE_PAGE_PREAMBLE, slateImportMap } from './web/slate-page';
 
 export { APP_FONTS_PATH, appFontFile, SLATE_FONTS_PATH } from './web/fonts';
 

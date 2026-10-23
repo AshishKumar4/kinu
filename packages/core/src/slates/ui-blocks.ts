@@ -83,6 +83,17 @@ export function slateUiSegments(text: string): SlateUiSegment[] {
   return prose < text.length ? [...segments, { kind: 'text', text: text.slice(prose) }] : segments;
 }
 
+/** A block's own server: a `<script type="slate/server">` whose module exports `class Slate extends SlateObject`. A
+ *  browser runs no script of that type, so it is inert in the page that carries it. */
+const SERVER = /<script\b[^>]*\btype\s*=\s*(["'])slate\/server\1[^>]*>([\s\S]*?)<\/script>/iu;
+
+/** A block's page, and its server's module when it carries one: the page is what a frame draws, the server what runs. */
+export function blockServer(html: string): { readonly page: string; readonly server: string | null } {
+  const found = SERVER.exec(html);
+
+  return found === null ? { page: html, server: null } : { page: html.replace(found[0], ''), server: found[2] ?? '' };
+}
+
 /** The block of an answer's texts that an address names, the first of that name; refused when the answer holds none. */
 export function addressedBlock(texts: readonly string[], address: EphemeralSlateAddress): SlateUiBlock {
   const block = texts.flatMap(slateUiSegments).find((segment) => segment.kind === 'slate' && segment.name === address.name);

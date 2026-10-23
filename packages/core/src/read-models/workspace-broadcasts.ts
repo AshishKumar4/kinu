@@ -7,12 +7,13 @@ import * as v from 'valibot';
 import { JobOutputFrameSchema } from '../jobs/live-output';
 import { PlanReviewSchema } from '../plans/review';
 import { PROVIDER_WAIT_SOURCES } from '../providers/types';
-import { SLATES_CHANGED_EVENT } from '../slates/rpc';
+import { SLATE_PUSH_EVENT, SLATES_CHANGED_EVENT } from '../slates/rpc';
 import { WorkspacePlanReferenceSchema } from '../subagents/inspection';
 import { LIVE_READS, READS_CHANGED_EVENT } from './live-reads';
 import { TurnClaimFrameSchema } from './turn-liveness';
 import { UsageSchema } from '../usage';
 import { CHANGES_MOVED_EVENT } from './workspace-diff';
+import { JsonValueSchema } from '../utils/json';
 
 /** A turn waiting on its provider (a 429/529 sleep, backoff, a sibling's cooldown), not thinking: told only to the
  *  windows of the turn it holds. `attempt` is 0 when the wait precedes the first attempt. */
@@ -134,6 +135,8 @@ export const WorkspaceBroadcastSchema = v.variant('type', [
   v.object({ type: v.literal(READS_CHANGED_EVENT), reads: v.array(v.picklist(LIVE_READS)) }),
   JobOutputFrameSchema,
   v.object({ type: v.literal(SLATES_CHANGED_EVENT), ids: v.array(v.string()) }),
+  // An answer's page's server, sending its page a value (`this.push`), for the tab that draws the page to hand on.
+  v.object({ type: v.literal(SLATE_PUSH_EVENT), page: v.string(), data: JsonValueSchema }),
   v.object({ type: v.literal(CHANGES_MOVED_EVENT) }),
   BranchStatusFrameSchema,
   v.object({ type: v.literal('head_activity'), headId: v.string() }),
