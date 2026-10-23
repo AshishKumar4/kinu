@@ -53,8 +53,8 @@ const StringAttachmentReference = v.object({ $sessionStringAttachment: v.object(
 const AttachmentReference = v.object({ $sessionAttachment: v.object({ path: v.string(), digest: v.string(), bytes: v.number(), buffer: v.optional(v.boolean()) }) });
 
 /** A restored archive can hold a literal past float range (`1e400`); it parses to Infinity, which no JSON value holds:
- *  null then. */
-function parsedJson(text: string): { readonly value: JsonValue } | null {
+ *  undefined then, which no JSON text parses to. */
+function parsedJson(text: string): JsonValue | undefined {
   let outOfRange = false;
 
   const value: JsonValue = JSON.parse(text, (_key, item: JsonValue) => {
@@ -63,13 +63,13 @@ function parsedJson(text: string): { readonly value: JsonValue } | null {
     return item;
   });
 
-  return outOfRange ? null : { value };
+  return outOfRange ? undefined : value;
 }
 
 function storedJson(text: string): Effect.Effect<JsonValue, KinuError> {
   const parsed = parsedJson(text);
 
-  return parsed === null ? Effect.fail(new KinuError('bad_input', 'a stored message holds a number out of JSON range')) : Effect.succeed(parsed.value);
+  return parsed === undefined ? Effect.fail(new KinuError('bad_input', 'a stored message holds a number out of JSON range')) : Effect.succeed(parsed);
 }
 
 export class SessionPayloadReader {
@@ -84,13 +84,13 @@ export class SessionPayloadReader {
     return settle(this.readJson(payload));
   }
 
-  readStored(json: string | null, path: string | null): Promise<JsonValue> {
+  async readStored(json: string | null, path: string | null): Promise<JsonValue> {
     // Inline, as nearly every payload is, read without a runner: only a file's read or a refusal needs one.
-    const inline = json !== null && path === null ? parsedJson(json) : null;
+    const inline = json !== null && path === null ? parsedJson(json) : undefined;
 
-    if (inline !== null) return Promise.resolve(inline.value);
+    if (inline !== undefined) return inline;
 
-    return settle(Effect.flatMap(storedPayload(json, path), (payload) => this.readJson(payload)));
+    return await settle(Effect.flatMap(storedPayload(json, path), (payload) => this.readJson(payload)));
   }
 
   private readJson(payload: SessionPayload): Effect.Effect<JsonValue, KinuError> {

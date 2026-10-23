@@ -187,7 +187,8 @@ export class TurnContextMeter {
     if (this.constants !== undefined) return this.constants;
 
     return settleSync(Effect.map(constantSegments(this.turn), (constants) => {
-      this.constants = constants;
+      // A schema its measure could not read yet is asked again at the next step, as each step asked it before.
+      if (Object.values(this.turn.tools ?? {}).every((def) => def?.inputSchema === undefined || MEASURED.has(def.inputSchema))) this.constants = constants;
 
       return constants;
     }));

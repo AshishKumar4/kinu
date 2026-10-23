@@ -180,9 +180,6 @@ export function digestJsonValue(input: { value: unknown }): JsonValue | undefine
 
   if (typeof value === 'string') return value.length > DIGEST_LIMIT ? digestCut(value) + '...' : value;
 
-  // Already JSON, as a tool's arguments are: digested without a runner, which only a projection that may throw needs.
-  if (v.is(JsonValueSchema, value)) return bounded(value);
-
   return settleSync(Effect.try({
     try: (): JsonValue => bounded(projectJsonValue(input)),
     catch: (cause) => ({ cause }),
