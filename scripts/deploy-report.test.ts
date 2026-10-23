@@ -21,7 +21,8 @@ const summary = (sha: string, dir: string, mode: string, reds: readonly string[]
 });
 
 describe('the deploy report', () => {
-  test('the final report withdraws this staging run’s record at 1201 s, but keeps it at 1199 s', async () => {
+  // The owner, 2026-10-23, "Monitors don't block": a deploy over its wall is said, and keeps its record.
+  test('the final report keeps this staging run’s record at 1199 s and at 1201 s, and withdraws it on a red', async () => {
     const source = readFileSync(new URL('deploy.sh', import.meta.url), 'utf8');
     const start = source.indexOf('finish() {');
     const end = source.indexOf('\n}\n', start);
@@ -31,19 +32,20 @@ describe('the deploy report', () => {
 
     const finish = source.slice(start, end + 2);
 
-    for (const [seconds, published, expected] of [
-      [1199, 1, [0, '1']],
-      [1201, 1, [1, '0']],
-      [1201, 0, [1, '1']],
+    for (const [seconds, published, reds, expected] of [
+      [1199, 1, [], [0, '1']],
+      [1201, 1, [], [0, '1']],
+      [1201, 1, [red('post-publish', 'bun run gate:first-run')], [1, '0']],
+      [1201, 0, [red('post-publish', 'bun run gate:first-run')], [1, '1']],
     ] as const) {
       const { summary: verdict } = renderReport({ dir: '/reports/final', meta: META,
-        entries: [{ kind: 'mark', mark: 'end', seconds }],
+        entries: [{ kind: 'mark', mark: 'end', seconds }, ...reds],
       });
 
       const run = await runToExit(['bash', '-c', `
 KINU_ROOT=.
 KINU_ENV=staging
-KINU_REDS=0
+KINU_REDS=${String(verdict.reds.length)}
 DEPLOY_PUBLISHED=${String(published)}
 verified=1
 trap 'printf "%s" "$verified"' EXIT
@@ -59,7 +61,7 @@ finish
   });
 
   // m1973, m1976: the budget subtracted the longest eval trial, so a deploy far over twenty minutes was reported within it.
-  test('the whole deploy, start to verdict, is held to twenty minutes; the eval soak\'s red is its own, never the deploy\'s', () => {
+  test('the whole deploy, start to verdict, is measured against twenty minutes and said, never a red; the eval soak\'s red is its own', () => {
     const input = (seconds: number) => ({
       dir: '/reports/budget', meta: META, entries: [
         { kind: 'mark' as const, mark: 'end', seconds },
@@ -77,7 +79,9 @@ finish
     const at = renderReport(input(1200));
     const over = renderReport(input(1201));
 
-    expect({ at: at.summary.reds, over: over.summary.reds }).toEqual({ at: [], over: ['budget: deployment wall'] });
+    expect({ at: at.summary.reds, over: over.summary.reds }).toEqual({ at: [], over: [] });
+    expect(over.text).toContain('Notices, not reds');
+    expect(over.text).toContain('budget: deployment wall: The deploy took 1201.0 s');
     expect(at.text).toContain('Soak, after the verdict');
     expect(at.text).toContain('chess trial 1 failed its checks');
     expect(over.text).toContain('product flows');

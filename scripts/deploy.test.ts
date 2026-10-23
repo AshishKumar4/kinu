@@ -117,6 +117,10 @@ if [[ "$1" == */scripts/reset.ts ]] && [ "$2" = "stamps" ] && [ "$KINU_STAMPS_MO
   echo 'account'
   exit 3
 fi
+if [[ "$1" == */scripts/prod-logs.ts ]] && [ "$2" = "version" ] && [ "$KINU_TELEMETRY_RED" = "1" ]; then
+  echo 'kinu-staging version 9b1f: object a woke 3 time(s) with nothing to watch'
+  exit 1
+fi
 if [[ "$1" == */scripts/reset.ts ]] && [ "$2" = "retirements" ] && [ "$KINU_RETIRES" = "1" ]; then
   echo 'retirements: REFUSED before the upload: OldDO'
   exit 1
@@ -232,6 +236,8 @@ interface DeployRun {
   readonly stampsMoved?: boolean;
   /** The build retires a class the served build exports, unnamed by the owner's words (`reset.ts retirements` exits 1). */
   readonly retires?: boolean;
+  /** The telemetry read of the published version ends red (prod-logs.ts version). */
+  readonly telemetryRed?: boolean;
   /** The reset the environment is still in: its placeholder serves and its build never uploaded. */
   readonly pendingReset?: string;
   /** A KINU_RESET_RECORD already on the environment, which must never soften a deploy nobody asked to reset. */
@@ -391,6 +397,7 @@ async function runDeploy({
   ci = 'green',
   stampsMoved = false,
   retires = false,
+  telemetryRed = false,
   pendingReset = "none",
   ambientRecord = "",
   account,
@@ -506,6 +513,7 @@ exit 87
       KINU_CI: ci,
       KINU_STAMPS_MOVED: flag(stampsMoved),
       KINU_RETIRES: flag(retires),
+      KINU_TELEMETRY_RED: flag(telemetryRed),
       XDG_RUNTIME_DIR: fixture,
     }),
   });
@@ -559,6 +567,16 @@ describe("deploy gate", () => {
 
     expect({ status: run.status, events: run.events, ci: run.ci, said: run.stdout.includes(said), refused: run.stdout.includes('armada has no green verdict for testsha') })
       .toEqual({ status: 1, events: [phaseRun('preflight')], ci: ['bun scripts/ladder.ts --ci-verdict=testsha'], said: true, refused: true });
+  });
+
+  // The owner, 2026-10-23, "Monitors don't block": what the published version did (telemetry) is said in the report and
+  // holds nothing.
+  test('a telemetry read that ends red is a notice of the deploy, never its red', async () => {
+    const [quiet, loud] = await Promise.all([false, true].map(async (telemetryRed) => runDeploy({ uploadRuns: [{ says: 'success', status: 0 }], telemetryRed })));
+    const read = (run: Awaited<ReturnType<typeof runDeploy>>) => run.events.some((event) => event.startsWith('bun scripts/prod-logs.ts version 9b1f'));
+
+    expect({ read: [read(quiet), read(loud)], status: loud.status, notice: loud.report.filter((event) => event.startsWith('notice telemetry')).length, red: loud.report.some((event) => event.startsWith('note telemetry')) })
+      .toEqual({ read: [true, true], status: quiet.status, notice: 1, red: false });
   });
 
   // A build that moves a class's stamp repairs every database of that class at first contact, so it never deploys
