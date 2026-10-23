@@ -90,6 +90,8 @@ export interface LandedEventRow {
   readonly metadata: JsonObject;
   /** The delivery it answers, whose queued turn its landing retires. */
   readonly deliveryId?: string;
+  /** The turn its events were bound to, whose lease its landing closes. */
+  readonly replyTurnId?: string;
 }
 
 /**
@@ -433,6 +435,7 @@ export class Inbox {
   private readonly injections = new StepInjections<{
     readonly message: ModelMessage;
     readonly durable: boolean;
+    readonly landed?: boolean;
   }>();
 
   constructor(
@@ -544,8 +547,9 @@ export class Inbox {
 
           if (events.length > 0 && onEvents !== undefined) landedEvents = yield* Effect.promise(async () => await onEvents(events.map((event) => landedEventRow(event, ctx.stepNumber)), ctx.stepNumber));
         }), (failed) => Effect.gen({ self: this }, function* () {
-          // Signals may arrive during the await; the failed prefix goes back ahead of them.
-          this.pending = [...drained, ...this.pending];
+          // Signals may arrive during the await; what did not land goes back ahead of them. Words that landed are in the
+          // history already, and given back they would run again as a turn of their own.
+          this.pending = [...(landedMessage === undefined ? drained : events), ...this.pending];
 
           return yield* Effect.failCause(failed);
         }));
@@ -571,10 +575,10 @@ export class Inbox {
       const entries: Array<{ readonly message: ModelMessage; readonly durable: boolean }> = [];
 
       if (users.length > 0) {
-        entries.push({ message: landedMessage ?? steerUserMessage(users.map(toUserSteer)), durable: true });
+        entries.push({ message: landedMessage ?? steerUserMessage(users.map(toUserSteer)), durable: true, landed: landedMessage !== undefined });
       }
 
-      if (landedEvents !== undefined) entries.push({ message: landedEvents, durable: true });
+      if (landedEvents !== undefined) entries.push({ message: landedEvents, durable: true, landed: true });
       const bodies = [...(landedEvents === undefined ? events : []), ...steering].map(stepBody);
       const activated = users.length > 0 ? (yield* Effect.promise(async () => this.steers.skills?.(users.map((user) => user.text).join('\n\n')))) : null;
 
@@ -613,13 +617,15 @@ export class Inbox {
 
   /**
    * A Stop's cutoff on the running turn (design v3 C): user signals the model never saw go back to the composer, and
-   * every delivered signal it holds, read or not, is cancelled with the turn rather than re-delivered at its settle.
+   * every delivered signal it holds and did not land, read or not, is cancelled with the turn rather than re-delivered at
+   * its settle.
    * Answers both: the steers, and the cancelled signals' delivery ids.
    */
   interrupt(): InterruptedInputs {
     const returned = this.pending.filter(isUserSignal);
     const unread = this.pending.filter((signal) => !isUserSignal(signal));
-    const cancelled = [...unread, ...this.absorbed.filter((signal) => !isUserSignal(signal))];
+    // A landed one is read and answered by its landing: nothing of it is cancelled.
+    const cancelled = [...unread, ...this.absorbed.filter((signal) => !isUserSignal(signal) && !this.landedCards.has(signal.cardId))];
     this.pending = [];
     this.absorbed = this.absorbed.filter(isUserSignal);
 
@@ -633,11 +639,6 @@ export class Inbox {
     }
 
     return { steers: returned.map(toUserSteer), cancelled: cancelled.flatMap((signal) => (signal.idempotencyKey === undefined ? [] : [signal.idempotencyKey])) };
-  }
-
-  /** The delivery ids of the signals this turn's steps read: answered by its completed commit. */
-  get absorbedDeliveries(): readonly string[] {
-    return this.absorbed.flatMap((signal) => (isUserSignal(signal) || signal.idempotencyKey === undefined ? [] : [signal.idempotencyKey]));
   }
 
   /** Replace the user queue from its durable authority, ahead of pending events. Called once, as the session
@@ -870,6 +871,7 @@ function landedEventRow(signal: DeliveredSignal, atStep: number): LandedEventRow
     id: signal.cardId, text: stepBody(signal), atStep,
     metadata: { ...turnMetadata(signal), [SIGNAL_ID_METADATA_KEY]: signal.cardId, [SPLICE_STEP_METADATA_KEY]: atStep },
     ...(signal.idempotencyKey !== undefined && { deliveryId: signal.idempotencyKey }),
+    ...(signal.replyTurnId !== undefined && { replyTurnId: signal.replyTurnId }),
   };
 }
 

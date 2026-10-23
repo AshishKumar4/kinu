@@ -230,7 +230,6 @@ export class ActorSession {
   readonly dynamic = new DynamicContextLedger(true);
   private readonly messages: ModelMessage[] = [];
   private readonly landed: LandedSteerRow[] = [];
-  private landedEvents = 0;
   private active: ActiveTurn | null = null;
   private mode: WorkMode = 'build';
 
@@ -369,7 +368,6 @@ export class ActorSession {
       prepared, reference, turnId: claim.turnId,
       assertOwner: () => { this.canonical.assertEpoch(claim.turnId, claim.epoch); }, ...(publish !== undefined && { publish }),
     });
-    this.landedEvents += events.length;
 
     return await this.canonical.messages.materialize(reference);
   }
@@ -383,8 +381,6 @@ export class ActorSession {
     return operation ? operation.inputs : this.active?.profileInputs ?? null;
   }
   get landedSteers(): readonly LandedSteerRow[] { return this.landed; }
-  /** Whether this turn has landed any row mid-turn, a person's words or a delivery. */
-  get landedAny(): boolean { return this.landed.length > 0 || this.landedEvents > 0; }
   get inFlight(): boolean { return this.active !== null && this.active.phase !== 'settling'; }
   /** Until `finishTurn`, a settling turn owns its claim. */
   get turnOpen(): boolean { return this.active !== null; }
@@ -549,7 +545,6 @@ export class ActorSession {
     this.mode = mode;
     this.turnMetadata = metadata;
     this.landed.length = 0;
-    this.landedEvents = 0;
     this.orchestrator.beginTurn(startedAt, metadata);
     this.orchestrator.restrictTurnWorkMode(mode);
 

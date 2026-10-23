@@ -241,11 +241,11 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
             scroll={{ initialScroll: ui.savedScroll, onScrollPosition: ui.rememberScroll, settled: state.transcriptSeeded }}
             pending={<ConversationSkeleton />}
             empty={empty}
-            rows={(before) => thread.entries.map(({ message: msg, steers }, i) => (
+            rows={(before) => thread.entries.map(({ message: msg, steers, landed }, i) => (
               <Fragment key={msg.id}>
                 {before(msg.id)}
                 {extras.before?.(i)}
-                {repeats[i] !== 0 && <MessageView {...extras.row?.(msg, i)} message={msg} steers={steers} repeats={repeats[i]}
+                {repeats[i] !== 0 && <MessageView {...extras.row?.(msg, i)} message={msg} steers={steers} landed={landed} repeats={repeats[i]}
                   answerSlates={answerSlates} liveTail={msg.id === liveRow ? tail : null}
                   onRetry={i === thread.entries.length - 1 && !live && !retryOwed && dismissedFailure === msg.id ? state.retryLastMessage : undefined} />}
               </Fragment>

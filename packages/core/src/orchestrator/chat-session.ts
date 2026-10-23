@@ -2198,10 +2198,7 @@ export class ChatSession {
       this.persist(ending.answer);
       this.pendingSends.retire([...(item.pendingSendId === undefined ? [] : [item.pendingSendId]), ...(item.steerIds ?? [])]);
 
-      if (roster !== null) {
-        for (const id of this.actorSession.orchestrator.inbox.absorbedDeliveries) this.pendingSends.retireTurn(id);
-        this.ports.terminal().record(roster.transition, roster.owed);
-      }
+      if (roster !== null) this.ports.terminal().record(roster.transition, roster.owed);
 
       if (told !== undefined) this.ports.terminal().record(told.transition, [told.owed]);
 
@@ -2299,7 +2296,7 @@ export class ChatSession {
     const prepared = await this.transcript.prepareSteers({ rows, reference, turnId, runId });
 
     return context => {
-      if (opening !== null && !this.actorSession.landedAny) this.transcript.appendUser(opening);
+      if (opening !== null) this.transcript.appendUser(opening);
 
       for (const entry of prepared) {
         this.transcript.appendUser({ ...entry, context });
@@ -2319,19 +2316,23 @@ export class ChatSession {
     return { turnId, runId };
   }
 
-  /** A step's landed deliveries as conversation rows, and their queued turns retired, in the landing's transaction: once
-   *  in the agent's history, a delivery is read and no turn of its own runs for it. */
+  /** A step's landed deliveries as conversation rows, their queued turns retired and their events' leases closed, in the
+   *  landing's transaction: once in the agent's history, a delivery is read, and nothing hands it over again. */
   private async prepareLandedEvents(rows: readonly LandedEventRow[], reference: MessageReference): Promise<(context: ContextSelection) => void> {
     const { turnId, runId } = this.publishingTurn();
     const opening = this.openingRow;
     const prepared = await this.transcript.prepareSteers({ rows, reference, turnId, runId });
 
     return context => {
-      if (opening !== null && !this.actorSession.landedAny) this.transcript.appendUser(opening);
+      if (opening !== null) this.transcript.appendUser(opening);
 
       for (const entry of prepared) this.transcript.appendUser({ ...entry, context });
 
-      for (const row of rows) if (row.deliveryId !== undefined) this.pendingSends.retireTurn(row.deliveryId);
+      for (const row of rows) {
+        if (row.deliveryId !== undefined) this.pendingSends.retireTurn(row.deliveryId);
+
+        if (row.replyTurnId !== undefined) this.eventLog.markTurnCompleted(row.replyTurnId);
+      }
     };
   }
 

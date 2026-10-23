@@ -302,8 +302,37 @@ describe('Inbox — a delivery landed mid-turn', () => {
     inbox.landMidTurn(wake('never read', { idempotencyKey: 'evt-unread' }));
     const stopped = inbox.interrupt();
 
-    expect(stopped.cancelled).toEqual(['evt-unread', 'evt-read']);
+    expect(stopped.cancelled).toEqual(['evt-unread']);
     expect(lifecycle(cards)).toEqual(['pending', 'shown', 'pending', 'undelivered']);
+  });
+
+  test('a later step sends it once: the session\'s history holds it from then on', async () => {
+    const { inbox } = landing({ turnInFlight: true });
+
+    inbox.beginTurn(undefined);
+    inbox.landMidTurn(wake('turn text', { stepText: 'the helper reports DONE' }));
+    await inbox.prepareStep({ stepNumber: 0, messages: [user('q')] });
+    const later = [user('q'), { role: 'user' as const, content: 'the helper reports DONE' }, assistant('a')];
+
+    expect(await inbox.prepareStep({ stepNumber: 1, messages: later })).toBeUndefined();
+  });
+
+  test('when a step lands words and then fails to land a delivery, only the delivery is read again', async () => {
+    const { inbox, queued } = setup({ turnInFlight: true });
+
+    inbox.bindSteerDeps({
+      onDrain: () => ({ role: 'user', content: 'the words, landed' }),
+      onEvents: async () => { throw new Error('the write failed'); },
+    });
+    const sent = inbox.send(words('u-1', 'the words'));
+
+    inbox.landMidTurn(wake('the delivery'));
+    await expect(inbox.prepareStep({ stepNumber: 0, messages: [user('q')] })).rejects.toThrow('the write failed');
+    expect(await sent).toBe('mid-turn');
+    inbox.settle({ completed: false });
+    await Promise.resolve();
+
+    expect(queued.map((turn) => turn.text)).toEqual(['the delivery']);
   });
 
   test('a landing that fails aborts the step and leaves the delivery to be read again', async () => {

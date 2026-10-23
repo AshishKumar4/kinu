@@ -4,18 +4,26 @@
  * streamText rebuilds each step's messages from scratch, so every drained
  * injection is re-applied at its base-coordinate index (step-0 message count).
  * It lands at the tail of its step, after tool results, and keeps that index
- * for the turn so the prompt-cache prefix stays stable.
+ * for the turn so the prompt-cache prefix stays stable. One `landed` in the
+ * session's history is applied only at its own step: every later step's base
+ * holds it already, and applying it again sent it twice.
  */
 
 import type { ModelMessage } from 'ai';
 import type { PrepareStepContext } from '../extension';
 
 /** `durable`: whether the entry becomes chat history on replay. A steer does, and an event its backend landed as a
- *  row (ADR C3); steering and activated skills do not. */
-export type RecordedInjection<E extends { readonly message: ModelMessage; readonly durable: boolean }> =
-  E & { readonly index: number };
+ *  row (ADR C3); steering and activated skills do not. `landed`: written to the session's history, which every later
+ *  step's base reads. */
+export type RecordedInjection<E extends Injection> = E & { readonly index: number; readonly step: number };
 
-export class StepInjections<E extends { readonly message: ModelMessage; readonly durable: boolean }> {
+interface Injection {
+  readonly message: ModelMessage;
+  readonly durable: boolean;
+  readonly landed?: boolean;
+}
+
+export class StepInjections<E extends Injection> {
   private baseLength = 0;
   private entries: Array<RecordedInjection<E>> = [];
 
@@ -27,14 +35,16 @@ export class StepInjections<E extends { readonly message: ModelMessage; readonly
     if (ctx.stepNumber === 0) this.baseLength = ctx.messages.length;
 
     for (const entry of incoming) {
-      this.entries.push({ ...entry, index: ctx.messages.length });
+      this.entries.push({ ...entry, index: ctx.messages.length, step: ctx.stepNumber });
     }
 
-    if (this.entries.length === 0) return undefined;
+    const applied = this.entries.filter((entry) => entry.landed !== true || entry.step === ctx.stepNumber);
+
+    if (applied.length === 0) return undefined;
     const next = [...ctx.messages];
     let offset = 0;
 
-    for (const entry of this.entries) {
+    for (const entry of applied) {
       // A tool result now standing at the pinned index answers the call before it;
       // land after the pair rather than between its halves.
       let at = entry.index + offset;

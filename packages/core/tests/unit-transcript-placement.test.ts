@@ -49,24 +49,34 @@ function answerKeeping(id: string, steps: number, kept: readonly { readonly id: 
 }
 
 describe('a delivery landed mid-turn', () => {
-  test('its answer draws it at its step, so the thread holds it once', () => {
-    const { entries } = buildTranscript([user('u1', 'go'), deliveryRow('sig:evt-1', 'the helper reports DONE', 1),
-      answerKeeping('a1', 3, [{ id: 'sig:evt-1', atStep: 1, text: 'the helper reports DONE' }])]);
+  test('the answer that read it draws it at its step, so the thread holds it once', () => {
+    const { entries } = buildTranscript([user('u1', 'go'), deliveryRow('sig:evt-1', 'the helper reports DONE', 1), turn('a1', 3)]);
 
     expect(entries.map((entry) => entry.message.id)).toEqual(['u1', 'a1']);
+    expect(entries[1]?.landed).toEqual([{ id: 'sig:evt-1', atStep: 1, text: 'the helper reports DONE', metadata: expect.objectContaining({ kinuEvent: 'event_drain' }) }]);
   });
 
-  test('one no answer keeps stands as its own row, before what came next', () => {
-    const { entries } = buildTranscript([user('u1', 'go'), deliveryRow('sig:evt-1', 'read, then the turn failed', 0), user('u2', 'again')]);
+  test('past a steer landed later in the same turn, it still reaches its answer', () => {
+    const { entries } = buildTranscript([user('u1', 'go'), deliveryRow('sig:evt-1', 'DONE', 1), steerRow('s1', 'also this', 2),
+      answerKeeping('a1', 3, [{ id: 'sig:evt-1', atStep: 1, text: 'DONE' }])]);
 
-    expect(entries.map((entry) => entry.message.id)).toEqual(['u1', 'sig:evt-1', 'u2']);
+    expect(entries.map((entry) => entry.message.id)).toEqual(['u1', 'a1']);
+    expect(entries[1]?.landed?.map((splice) => splice.id)).toEqual(['sig:evt-1']);
+    expect(entries[1]?.steers.map((steer) => steer.id)).toEqual(['s1']);
+  });
+
+  test('one no answer read stands as its own row: before what came next, or last', () => {
+    const before = buildTranscript([user('u1', 'go'), deliveryRow('sig:evt-1', 'read, then the turn failed', 0), user('u2', 'again')]);
+    const last = buildTranscript([user('u1', 'go'), deliveryRow('sig:evt-1', 'read, then stopped', 0)]);
+
+    expect(before.entries.map((entry) => entry.message.id)).toEqual(['u1', 'sig:evt-1', 'u2']);
+    expect(last.entries.map((entry) => entry.message.id)).toEqual(['u1', 'sig:evt-1']);
   });
 
   test('held across a tick until its answer arrives', () => {
     const first = extendTranscript(EMPTY_TRANSCRIPT_FOLD, [user('u1', 'go'), deliveryRow('sig:evt-1', 'DONE', 1)]);
-    const next = extendTranscript(first, [answerKeeping('a1', 2, [{ id: 'sig:evt-1', atStep: 1, text: 'DONE' }])]);
+    const next = extendTranscript(first, [turn('a1', 2)]);
 
-    expect(sealTranscript(first).entries.map((entry) => entry.message.id)).toEqual(['u1']);
     expect(sealTranscript(next).entries.map((entry) => entry.message.id)).toEqual(['u1', 'a1']);
   });
 });

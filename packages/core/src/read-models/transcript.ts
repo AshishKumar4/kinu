@@ -6,7 +6,8 @@
 import type { UIMessage } from 'ai';
 import * as v from 'valibot';
 import { SPLICE_STEP_METADATA_KEY, STEER_METADATA_KEY, STEER_STEP_METADATA_KEY } from '../orchestrator/inbox';
-import { splicesSeenOn } from './background-event';
+import type { SeenSplice } from './background-event';
+import { JsonObjectSchema, type JsonObject } from '../utils/json';
 import { rowText } from '../utils/ui-message';
 
 export type TranscriptPart = UIMessage['parts'][number];
@@ -24,6 +25,8 @@ export type PlacedSteer = InlineSteer & { readonly state: 'landed'; readonly atS
 export interface TranscriptEntry {
   readonly message: UIMessage;
   readonly steers: readonly PlacedSteer[];
+  /** Deliveries landed while it ran (ADR C3), each drawn at the step that read it. */
+  readonly landed?: readonly SeenSplice[];
 }
 
 export interface Transcript {
@@ -48,6 +51,17 @@ const SteerRowSchema = v.looseObject({
   [STEER_STEP_METADATA_KEY]: v.number(),
 });
 
+/** A landed delivery no answer read, as its own row. */
+function heldEntry(splice: SeenSplice): TranscriptEntry {
+  return { message: { id: splice.id, role: 'system', parts: [{ type: 'text', text: splice.text }], metadata: splice.metadata }, steers: NO_STEERS };
+}
+
+function spliceRowMetadata(message: UIMessage): JsonObject {
+  const parsed = v.safeParse(JsonObjectSchema, message.metadata ?? {});
+
+  return parsed.success ? parsed.output : {};
+}
+
 /** Step of a landed delivery's row (`landedEventRow`), or null. */
 function spliceRowStep(row: { metadata: unknown }): number | null {
   const parsed = v.safeParse(v.looseObject({ [SPLICE_STEP_METADATA_KEY]: v.pipe(v.number(), v.integer(), v.minValue(0)) }), row.metadata ?? {});
@@ -71,8 +85,8 @@ export interface TranscriptFold {
   readonly pending: readonly PlacedSteer[];
   /** Durable steer row ids; a live steer's id can only collide with its own durable row. */
   readonly steerRowIds: ReadonlySet<string>;
-  /** Deliveries landed mid-turn, held for their answer, which draws each kept one at its step. */
-  readonly held: readonly UIMessage[];
+  /** Deliveries landed mid-turn, held for the answer that read them. */
+  readonly held: readonly SeenSplice[];
 }
 
 const NO_STEERS: readonly PlacedSteer[] = [];
@@ -92,16 +106,14 @@ export function extendTranscript(
   let held = contiguous ? [...fold.held] : [];
 
   for (const message of messages) {
-    if (spliceRowStep({ metadata: message.metadata }) !== null) {
-      held.push(message);
+    const spliced = spliceRowStep({ metadata: message.metadata });
+
+    // A landed delivery waits, past the turn's steers, for the answer that read it, which draws it at its step.
+    if (spliced !== null) {
+      held.push({ id: message.id, atStep: spliced, text: rowText(message), metadata: spliceRowMetadata(message) });
       continue;
     }
 
-    // A landed delivery its answer keeps is drawn there, at its step; one no answer keeps stands as its own row.
-    const kept = message.role === 'assistant' ? new Set(splicesSeenOn({ metadata: message.metadata }).map((splice) => splice.id)) : new Set<string>();
-
-    for (const row of held) if (!kept.has(row.id)) entries.push({ message: row, steers: NO_STEERS });
-    held = [];
     const step = message.role === 'user' ? steerRowStep({ metadata: message.metadata }) : null;
 
     if (step !== null) {
@@ -110,15 +122,18 @@ export function extendTranscript(
       continue;
     }
 
-    if (message.role === 'assistant' && pending.length > 0) {
-      entries.push({ message, steers: pending });
+    if (message.role === 'assistant' && (pending.length > 0 || held.length > 0)) {
+      entries.push({ message, steers: pending, ...(held.length > 0 && { landed: held }) });
       pending = [];
+      held = [];
       continue;
     }
 
-    // A steer whose turn failed before its assistant message persisted.
+    // A steer or a delivery whose turn ended before its assistant message persisted stands alone.
     for (const orphan of pending) entries.push({ message: steerMessage(orphan), steers: NO_STEERS });
+    entries.push(...held.map(heldEntry));
     pending = [];
+    held = [];
     entries.push({ message, steers: NO_STEERS });
   }
 
@@ -129,9 +144,9 @@ export function extendTranscript(
 export function sealTranscript(
   fold: TranscriptFold, live: readonly InlineSteer[] = [],
 ): Transcript {
-  const entries = fold.pending.length === 0
+  const entries = fold.pending.length === 0 && fold.held.length === 0
     ? fold.entries
-    : [...fold.entries, ...fold.pending.map((orphan) => ({ message: steerMessage(orphan), steers: NO_STEERS }))];
+    : [...fold.entries, ...fold.pending.map((orphan) => ({ message: steerMessage(orphan), steers: NO_STEERS })), ...fold.held.map(heldEntry)];
 
   const unseen = live.filter((steer) => !fold.steerRowIds.has(steer.id));
   const placeable = unseen.filter(isPlaced);
