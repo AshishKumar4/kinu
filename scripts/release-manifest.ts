@@ -177,7 +177,7 @@ export function releaseSecrets(
 
     rows.push({
       name,
-      handling: entry.handling === 'prompt' ? whenPrompted : 'out-of-band',
+      handling: entry.handling === 'out-of-band' ? 'out-of-band' : whenPrompted,
       required,
       prompt: entry.source ?? entry.absent,
     });
