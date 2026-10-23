@@ -17,6 +17,7 @@ const AccountStatusSchema = v.object({
   selectedId: v.nullable(v.string()),
   accounts: v.array(v.object({ id: v.string(), name: v.string() })),
   webSearch: v.boolean(),
+  signInExpired: v.boolean(),
 });
 
 const PERSONAL = { id: 'aaa111aaa111aaa111aaa111aaa111aa', name: 'Personal' };
@@ -54,7 +55,7 @@ describe('Cloudflare account selection', () => {
   test('no Cloudflare credential means nothing to pick', async () => {
     const harness = createTestUserDO();
     expect(await harness.userDO.listCloudflareAccounts(await testOwner()))
-      .toEqual({ connected: false, selectedId: null, accounts: [], webSearch: false });
+      .toEqual({ connected: false, selectedId: null, accounts: [], webSearch: false, signInExpired: false });
     harness.close();
   });
 
@@ -69,6 +70,7 @@ describe('Cloudflare account selection', () => {
         selectedId: PERSONAL.id,
         accounts: [PERSONAL, EMPLOYER],
         webSearch: false,
+        signInExpired: false,
       });
       expect(await harness.userDO.getCredentialEndpoint(await testOwner(), CLOUDFLARE_OAUTH_CRED_KEY))
         .toEqual({ baseURL: `https://api.cloudflare.com/client/v4/accounts/${PERSONAL.id}/ai/v1` });
@@ -89,7 +91,7 @@ describe('Cloudflare account selection', () => {
         metadata: { accountId: PERSONAL.id },
       });
       expect(await harness.userDO.listCloudflareAccounts(owner)).toEqual({
-        connected: true, selectedId: PERSONAL.id, accounts: [], webSearch: false,
+        connected: true, selectedId: PERSONAL.id, accounts: [], webSearch: false, signInExpired: false,
       });
       await expect(harness.userDO.selectCloudflareAccount(owner, PERSONAL.id)).rejects.toMatchObject({ code: 'bad_input' });
       expect(await harness.userDO.getCredentialEndpoint(owner, CLOUDFLARE_OAUTH_CRED_KEY))
@@ -181,7 +183,7 @@ function routeHarness(selectFails = false) {
       return [{ name: 'jarvis', displayName: 'Jarvis', createdAt: 1, nameOrigin: 'user' as const }];
     },
     async listCloudflareAccounts() {
-      return { connected: true, selectedId: PERSONAL.id, accounts: [PERSONAL, EMPLOYER], webSearch: true };
+      return { connected: true, selectedId: PERSONAL.id, accounts: [PERSONAL, EMPLOYER], webSearch: true, signInExpired: false };
     },
     async selectCloudflareAccount(_caller: UserCaller, id: string) {
       if (selectFails) throw new KinuError('bad_input', 'That Cloudflare account is not one this login can see.');
@@ -249,13 +251,67 @@ describe('a Cloudflare login and web search', () => {
   });
 });
 
+// MA-022: a login Cloudflare refused to refresh kept its row, so Settings went on showing it connected and offered no
+// sign-in; the gateway listing only went quiet.
+describe('a Cloudflare login past its expiry', () => {
+  /** Cloudflare's token endpoint refusing the refresh token, as it answers one it never issued or revoked. */
+  function refusingRefresh() {
+    const original = globalThis.fetch;
+    let asked = 0;
+
+    globalThis.fetch = asFetchFunction(async () => {
+      asked += 1;
+
+      return new Response(JSON.stringify({ error: 'invalid_grant', error_description: 'The provided authorization grant is invalid' }),
+        { status: 400, headers: { 'content-type': 'application/json' } });
+    });
+
+    return { asked: () => asked, restore: () => { globalThis.fetch = original; } };
+  }
+
+  const expired = (): OAuthCredential => ({ ...multiAccountCredential(), expiresAt: Date.now() - 3_600_000 });
+
+  test('asks for a new sign-in once Cloudflare refuses its refresh, and never spends the refresh token again', async () => {
+    const network = refusingRefresh();
+    const harness = createTestUserDO({ cloudflareOAuthClientId: 'cid' });
+
+    try {
+      const owner = await testOwner();
+      await harness.userDO.setCredential(owner, CLOUDFLARE_OAUTH_CRED_KEY, expired());
+      const refused = network.asked();
+
+      expect(await harness.userDO.listCloudflareAccounts(owner)).toMatchObject({ connected: true, signInExpired: true });
+      expect(await harness.userDO.listAIGateways(owner)).toMatchObject({ connected: false, gateways: [] });
+      expect({ refused, after: network.asked() }).toEqual({ refused: 1, after: 1 });
+    } finally {
+      harness.close();
+      network.restore();
+    }
+  });
+
+  test('whose refresh failed for want of a client keeps its refresh token and is not asked to sign in again', async () => {
+    const restore = stubGatewayNetwork();
+    const harness = createTestUserDO();
+
+    try {
+      const owner = await testOwner();
+      await harness.userDO.setCredential(owner, CLOUDFLARE_OAUTH_CRED_KEY, expired());
+
+      expect(await harness.userDO.listCloudflareAccounts(owner)).toMatchObject({ signInExpired: false });
+    } finally {
+      harness.close();
+      restore();
+    }
+  });
+});
+
 describe('the account selector is reachable over HTTP', () => {
   test('GET /cloudflare/accounts lists what the login can see', async () => {
     const { call } = routeHarness();
     const res = await call('/cloudflare/accounts', 'GET');
     expect(res?.status).toBe(200);
     expect(v.parse(AccountStatusSchema, await res?.json())).toEqual({
-      connected: true, selectedId: PERSONAL.id, accounts: [PERSONAL, EMPLOYER], webSearch: true,
+      connected: true, selectedId: PERSONAL.id, accounts: [PERSONAL, EMPLOYER], webSearch: true, signInExpired: false,
     });
   });
 
