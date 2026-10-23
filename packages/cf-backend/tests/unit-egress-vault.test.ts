@@ -6,6 +6,7 @@ import {
   CapabilityDeniedError, EGRESS_PLACEHOLDER_PREFIX, isEgressPlaceholder, type EgressRequestFacts, type SecretInput, type UserCaller,
 } from '@kinu.run/core';
 import { USER_DO_RPC_SURFACE } from '../src/rpc-surface';
+import { gitCredentialEnvironment } from '../src/account-reads';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
 
 const SECRET = ['sk_live_', '0123456789abcdefghij'].join('');
@@ -271,5 +272,80 @@ describe('reachability', () => {
   test('every secrets method the egress, the workspace and Settings call is on the RPC surface', () => {
     const called = ['resolveEgressInjection', 'listSecrets', 'putSecrets', 'setSecretDestination', 'deleteSecret', 'grantSecret', 'revokeSecretGrant', 'grantedSecrets', 'revealedSecrets'];
     expect(called.filter((name) => !USER_DO_RPC_SURFACE.includes(name))).toEqual([]);
+  });
+});
+
+// The owner, 2026-10-23: `git clone` of a private repo failed with "could not read Username"; the GitHub connection's
+// token reached its MCP tools and not git. Every workspace now holds a placeholder for it, as `GIT_TOKEN`, which git
+// sends as Basic's password and the egress swaps for the connection's token at github.com alone.
+describe("the GitHub connection is every workspace's git credential, never its value", () => {
+  /** Git's request, Basic `x-access-token:<placeholder>`, to `url`. */
+  function fetchPack(placeholder: string, url = 'https://github.com/owner/private.git/info/refs?service=git-upload-pack'): EgressRequestFacts {
+    return { host: new URL(url).hostname, url, headers: [['authorization', `Basic ${btoa(`x-access-token:${placeholder}`)}`]] };
+  }
+
+  async function connected(): Promise<Awaited<ReturnType<typeof account>> & { id: string }> {
+    const harness = await account();
+    const added = await harness.userDO.userMcp_add(harness.owner, { presetId: 'github', headers: { Authorization: 'Bearer gho_connection0123456789' } }, 'https://kinu.example');
+
+    return Object.assign(harness, { id: added.id });
+  }
+
+  test('a workspace holds GIT_TOKEN as a placeholder; git\'s Basic to github.com spends the connection\'s token', async () => {
+    const harness = await connected();
+    const placeholder = await placeholderIn(harness, harness.shop, 'GIT_TOKEN');
+
+    expect(isEgressPlaceholder(placeholder)).toBe(true);
+    expect(await harness.userDO.resolveEgressInjection(harness.owner, fetchPack(placeholder), 'blog'))
+      .toEqual({ kind: 'forward', substitutions: [{ placeholder, secret: 'gho_connection0123456789' }] });
+    harness.close();
+  });
+
+  test('anywhere but github.com it is refused, and no workspace can read its value', async () => {
+    const harness = await connected();
+    const placeholder = await placeholderIn(harness, harness.shop, 'GIT_TOKEN');
+
+    expect((await harness.userDO.resolveEgressInjection(harness.owner, fetchPack(placeholder, 'https://gitlab.com/owner/x.git/info/refs'), 'shop')).kind).toBe('refuse');
+    expect(await harness.userDO.revealedSecrets(harness.shop)).toEqual({});
+    harness.close();
+  });
+
+  test('disconnecting GitHub takes it from every workspace, and git with a held copy is told to connect again', async () => {
+    const harness = await connected();
+    const placeholder = await placeholderIn(harness, harness.shop, 'GIT_TOKEN');
+
+    await harness.userDO.userMcp_remove(harness.owner, harness.id);
+
+    expect((await harness.userDO.grantedSecrets(harness.shop)).granted.map((secret) => secret.name)).not.toContain('GIT_TOKEN');
+    expect(await harness.userDO.resolveEgressInjection(harness.owner, fetchPack(placeholder), 'shop')).toEqual({
+      kind: 'refuse', status: 403,
+      reason: 'GitHub is not connected to this account any more, so git cannot reach your GitHub repositories. Connect GitHub '
+        + 'again in Settings → Connections; the next git command uses it.',
+    });
+    harness.close();
+  });
+
+  test('a GIT_TOKEN the owner granted stands in the connection\'s place', async () => {
+    const harness = await connected();
+    await harness.userDO.putSecrets(harness.owner, [{ name: 'GIT_TOKEN', hosts: ['github.com'], position: AUTHORIZATION, value: 'ghp_owner_own' }], ['shop']);
+    const placeholder = await placeholderIn(harness, harness.shop, 'GIT_TOKEN');
+
+    expect((await harness.userDO.grantedSecrets(harness.shop)).granted.filter((secret) => secret.name === 'GIT_TOKEN')).toHaveLength(1);
+    expect(await harness.userDO.resolveEgressInjection(harness.owner, fetchPack(placeholder), 'shop'))
+      .toEqual({ kind: 'forward', substitutions: [{ placeholder, secret: 'ghp_owner_own' }] });
+    harness.close();
+  });
+});
+
+describe("a computer's own git is pointed at GIT_TOKEN for github.com, by its environment alone", () => {
+  test('a helper in GIT_CONFIG_* answers git with the placeholder; none for a GIT_TOKEN bound elsewhere', () => {
+    const binding = { name: 'GIT_TOKEN', placeholder: `${EGRESS_PLACEHOLDER_PREFIX}x`, position: AUTHORIZATION, reveal: false };
+
+    expect(gitCredentialEnvironment([{ ...binding, hosts: ['github.com'] }])).toEqual({
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'credential.https://github.com.helper',
+      GIT_CONFIG_VALUE_0: '!f() { test "$1" = get && echo username=x-access-token && echo "password=$GIT_TOKEN"; }; f',
+    });
+    expect(gitCredentialEnvironment([{ ...binding, hosts: ['gitlab.com'] }])).toEqual({});
   });
 });

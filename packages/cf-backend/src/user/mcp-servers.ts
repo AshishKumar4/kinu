@@ -189,6 +189,8 @@ interface McpServerUnavailable {
 export interface UserMcpServersHost extends Pick<UserObjectHost, 'ctx' | 'env' | 'requireTier' | 'sqlx'> {
   readonly mcp: MCPClientManager;
   readonly vault: Pick<UserCredentials, 'sealMcpHeaders' | 'openMcpHeaders' | 'getAuthHeaders'>;
+  /** Told when a connection came or went, so each workspace reads its connection-held secrets again. */
+  readonly connectionsMoved?: () => Promise<void>;
 }
 
 /** Where a sign-in keeps the run it was begun for: under the exact OAuth state the SDK minted for it, which its callback
@@ -662,6 +664,8 @@ export class UserMcpServers {
    * stands either way.
    */
   private async assistantConnectionsChanged(): Promise<void> {
+    // The GitHub connection is every workspace's git credential: each reads its secrets again.
+    await this.host.connectionsMoved?.();
     const assistant = this.host.sqlx<{ value: string }>(`SELECT value FROM user_config WHERE key = ?`, ASSISTANT_CONFIG_KEY)[0]?.value;
 
     if (assistant === undefined) return;
@@ -1172,6 +1176,18 @@ export class UserMcpServers {
     if (authorization === null) return { observed: [], outcome: 'no-token' };
 
     return settle(refreshGitHub({ authorization, ask: asked, fetch: plainFetch(fetch) }));
+  }
+
+  /** Whether the account holds a GitHub connection: its preset's row. */
+  githubConnected(): boolean {
+    return this.host.sqlx<{ id: string }>(`SELECT id FROM user_mcp_servers WHERE preset_id = ? LIMIT 1`, GITHUB_MCP_PRESET).length > 0;
+  }
+
+  /** The GitHub connection's token, as git sends it: Basic's password. Null with no connection, or none signed in. */
+  async githubGitToken(): Promise<string | null> {
+    const authorization = await this.githubMcpAuthorization();
+
+    return authorization === null ? null : authorization.replace(/^Bearer\s+/iu, '');
   }
 
   private async githubMcpAuthorization(): Promise<string | null> {

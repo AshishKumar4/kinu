@@ -132,7 +132,7 @@ export function initEgressVaultTables(sql: SqlExec): void {
 }
 
 /** Independent of the secret by construction. */
-function mintEgressPlaceholder(): string {
+export function mintEgressPlaceholder(): string {
   return `${EGRESS_PLACEHOLDER_PREFIX}${nanoid(PLACEHOLDER_BODY_LENGTH)}`;
 }
 
@@ -323,11 +323,25 @@ function bindings(sql: SqlExec, workspace: string): (EgressSecretBinding & { rea
   });
 }
 
-export function grantedSecrets(sql: SqlExec, workspace: string): GrantedSecrets {
+/**
+ * A secret an account's connection holds rather than the vault (the GitHub connection's token, as `GIT_TOKEN`): bound
+ * as a granted one is, to every workspace of the account, and opened from the connection at each request. A secret the
+ * owner granted under the same name stands in its place.
+ */
+export interface ConnectionSecret {
+  readonly binding: EgressSecretBinding;
+  /** Its value as the connection holds it now; null once the connection is gone. */
+  readonly open: () => Promise<string | null>;
+  /** Why a request carrying it was refused once the connection is gone, in words the program can act on. */
+  readonly gone: string;
+}
+
+export function grantedSecrets(sql: SqlExec, workspace: string, connections: readonly EgressSecretBinding[] = []): GrantedSecrets {
   const granted = bindings(sql, workspace);
   const all = v.parse(v.object({ count: v.number() }), sql.exec(`SELECT count(*) AS count FROM user_secrets`).toArray()[0]).count;
+  const named = new Set(granted.map((binding) => binding.name));
 
-  return { granted, withheld: all - granted.length };
+  return { granted: [...granted, ...connections.filter((binding) => !named.has(binding.name)).map((binding) => ({ ...binding, reveal: false }))], withheld: all - granted.length };
 }
 
 /** The values `workspace`'s agents may read, by name; asked for each command, never kept. */
@@ -357,14 +371,34 @@ function open(deps: EgressVaultDeps, name: string): Effect.Effect<string> {
  * Decide one intercepted request for `workspace` and open only the secrets it may spend: the owner's grants to that
  * workspace as they stand, the scheme and the destination, on every request.
  */
-export function resolveEgressInjection(deps: EgressVaultDeps, facts: EgressRequestFacts, workspace: string): Promise<EgressInjectionResult> {
+export function resolveEgressInjection(
+  deps: EgressVaultDeps,
+  facts: EgressRequestFacts,
+  workspace: string,
+  connections: readonly ConnectionSecret[] = [],
+): Promise<EgressInjectionResult> {
   return settle(Effect.gen(function* () {
-    const plan = planEgress(facts, bindings(deps.sql, workspace));
+    const granted = bindings(deps.sql, workspace);
+    const named = new Set(granted.map((binding) => binding.name));
+    const held = new Map(connections.filter((secret) => !named.has(secret.binding.name)).map((secret) => [secret.binding.placeholder, secret]));
+    const plan = planEgress(facts, [...granted, ...[...held.values()].map((secret) => secret.binding)]);
 
     if (plan.kind === 'refuse') return plan;
     const substitutions: EgressInjection[] = [];
 
-    for (const { name, placeholder } of plan.substitutions) substitutions.push({ placeholder, secret: yield* open(deps, name) });
+    for (const { name, placeholder } of plan.substitutions) {
+      const connection = held.get(placeholder);
+
+      if (connection === undefined) {
+        substitutions.push({ placeholder, secret: yield* open(deps, name) });
+        continue;
+      }
+
+      const secret = yield* Effect.promise(connection.open);
+
+      if (secret === null) return { kind: 'refuse', status: 403, reason: connection.gone };
+      substitutions.push({ placeholder, secret });
+    }
 
     return { kind: 'forward', substitutions };
   }));

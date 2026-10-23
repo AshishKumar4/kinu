@@ -1582,9 +1582,9 @@ export {
 
 export {
   initEgressVaultTables, listSecrets, putSecrets, setSecretDestination, deleteSecret, grantSecret, revokeSecretGrant,
-  grantedSecrets, revealedSecrets, resolveEgressInjection,
+  grantedSecrets, revealedSecrets, resolveEgressInjection, mintEgressPlaceholder,
   type SecretSummary, type SecretInput, type SecretDestination, type GrantedSecrets, type EgressInjection,
-  type EgressInjectionResult, type EgressVaultDeps,
+  type EgressInjectionResult, type EgressVaultDeps, type ConnectionSecret,
 } from './safety/egress-vault';
 
 export {

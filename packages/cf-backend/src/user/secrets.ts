@@ -3,17 +3,68 @@
  * a workspace reads only its own grants; the egress opens one for each request that names its placeholder.
  */
 import {
-  createCredentialCipher, deleteSecret, grantedSecrets, grantSecret, listSecrets, objectNamed, putSecrets, resolveEgressInjection,
-  revealedSecrets, revokeSecretGrant, setSecretDestination,
-  type EgressInjectionResult, type EgressRequestFacts, type EgressVaultDeps, type GrantedSecrets, type SecretInput,
-  type ResolvedCaller, type SecretDestination, type SecretSummary, type UserCaller,
+  createCredentialCipher, deleteSecret, grantedSecrets, grantSecret, listSecrets, mintEgressPlaceholder, objectNamed, putSecrets,
+  resolveEgressInjection, revealedSecrets, revokeSecretGrant, setSecretDestination,
+  type ConnectionSecret, type EgressInjectionResult, type EgressRequestFacts, type EgressSecretBinding, type EgressVaultDeps,
+  type GrantedSecrets, type SecretInput, type ResolvedCaller, type SecretDestination, type SecretSummary, type UserCaller,
 } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { attempt, diagnostics, KinuError, settle } from '@kinu.run/core/obs';
 import type { UserObjectHost } from './user-host';
 
+/** The account's GitHub connection, as the git credential its workspaces hold. */
+export interface GitHubGitSource {
+  /** Whether the account holds a GitHub connection now. */
+  readonly held: () => boolean;
+  /** The connection's token as git sends it (Basic's password), or null once there is none. */
+  readonly token: () => Promise<string | null>;
+}
+
+/** Where the GitHub connection's git placeholder is kept: minted once per account, so a workspace's copy stays good. */
+const GITHUB_GIT_PLACEHOLDER_KEY = 'secrets:github-git-placeholder';
+
+/** The variable the connection's credential appears as: Nimbus's git reads it, and the computer's git through `gitCredentialEnvironment`. */
+export const GITHUB_GIT_SECRET = 'GIT_TOKEN';
+
 export class UserSecrets {
-  constructor(private readonly host: UserObjectHost) {}
+  constructor(private readonly host: UserObjectHost, private readonly github: GitHubGitSource | null = null) {}
+
+  /** The GitHub connection's git credential as a binding: github.com only, in the Authorization header (git's Basic). */
+  private async githubBinding(): Promise<EgressSecretBinding> {
+    const kept = await this.host.ctx.storage.get(GITHUB_GIT_PLACEHOLDER_KEY);
+    let placeholder = typeof kept === 'string' ? kept : null;
+
+    if (placeholder === null) {
+      placeholder = mintEgressPlaceholder();
+      await this.host.ctx.storage.put(GITHUB_GIT_PLACEHOLDER_KEY, placeholder);
+    }
+
+    return { name: GITHUB_GIT_SECRET, hosts: ['github.com'], position: { kind: 'authorization' }, placeholder };
+  }
+
+  /** The connection-held secrets a request may carry: the GitHub connection's, which is refused clearly once it is gone. */
+  private async connectionSecrets(): Promise<ConnectionSecret[]> {
+    const { github } = this;
+
+    if (github === null) return [];
+
+    return [{
+      binding: await this.githubBinding(),
+      open: async () => github.token(),
+      gone: 'GitHub is not connected to this account any more, so git cannot reach your GitHub repositories. Connect GitHub '
+        + 'again in Settings → Connections; the next git command uses it.',
+    }];
+  }
+
+  /** The GitHub connection's binding while the account holds one. */
+  private async heldConnections(): Promise<EgressSecretBinding[]> {
+    return this.github?.held() === true ? [await this.githubBinding()] : [];
+  }
+
+  /** Every workspace of the account drops its secrets: a connection that bears one came or went. */
+  connectionsMoved(): Promise<void> {
+    return settle(this.moved(this.host.sqlx<{ name: string }>(`SELECT name FROM user_workspaces`).map((row) => row.name)));
+  }
 
   /** AAD names this secret in this object, so a ciphertext cannot be replayed in another row or account. */
   private async deps(): Promise<EgressVaultDeps> {
@@ -74,7 +125,12 @@ export class UserSecrets {
 
   /** The calling workspace's own grants; the owner capability names no workspace, so it has none to read. */
   grantedSecrets(caller: UserCaller): Promise<GrantedSecrets> {
-    return settle(Effect.map(this.callingWorkspace(caller), (workspace) => grantedSecrets(this.host.ctx.storage.sql, workspace)));
+    return settle(Effect.gen({ self: this }, function* () {
+      const workspace = yield* this.callingWorkspace(caller);
+      const connections = yield* Effect.promise(() => this.heldConnections());
+
+      return grantedSecrets(this.host.ctx.storage.sql, workspace, connections);
+    }));
   }
 
   /** The values the calling workspace's agents may read; asked for each command and never kept there. */
@@ -105,8 +161,9 @@ export class UserSecrets {
     return settle(Effect.gen({ self: this }, function* () {
       yield* this.require(caller, 'secrets.inject');
       const deps = yield* Effect.promise(() => this.deps());
+      const connections = yield* Effect.promise(() => this.connectionSecrets());
 
-      return yield* Effect.promise(() => resolveEgressInjection(deps, facts, workspace));
+      return yield* Effect.promise(() => resolveEgressInjection(deps, facts, workspace, connections));
     }));
   }
 
