@@ -116,20 +116,21 @@ function workspaces(account: { readonly origin: string; readonly identity: Publi
 }
 
 /** Create a workspace through the app's own route; the name it answers with is the one the URL takes, which is not
- *  always the one asked for. */
-export async function createWorkspace(origin: string, identity: PublicWebIdentity, body: CreateWorkspaceBody): Promise<string> {
-  return v.parse(CreatedSchema, await workspaces({ origin, identity }, '', { method: 'POST', body: JSON.stringify(body) }, 'create a workspace')).name;
+ *  always the one asked for. `signal` ends the request. */
+export async function createWorkspace(origin: string, identity: PublicWebIdentity, body: CreateWorkspaceBody, signal?: AbortSignal): Promise<string> {
+  return v.parse(CreatedSchema, await workspaces({ origin, identity }, '', { method: 'POST', body: JSON.stringify(body), signal }, 'create a workspace')).name;
 }
 
-/** Every workspace on the identity's account, page by page, as the sidebar's roster lists them. */
-export async function listWorkspaces(origin: string, identity: PublicWebIdentity): Promise<RosterRow[]> {
+/** Every workspace on the identity's account, page by page, as the sidebar's roster lists them. `signal` ends each
+ *  request. */
+export async function listWorkspaces(origin: string, identity: PublicWebIdentity, signal?: AbortSignal): Promise<RosterRow[]> {
   const rows: RosterRow[] = [];
   let cursor: string | null = null;
 
   do {
     // Annotated because the loop reads its own result: `page.nextCursor` feeds the next iteration.
     const page: v.InferOutput<typeof RosterPageSchema> = v.parse(RosterPageSchema, await workspaces(
-      { origin, identity }, cursor === null ? '' : `?cursor=${encodeURIComponent(cursor)}`, {}, 'list the workspaces',
+      { origin, identity }, cursor === null ? '' : `?cursor=${encodeURIComponent(cursor)}`, { signal }, 'list the workspaces',
     ));
 
     rows.push(...page.entries);
@@ -139,9 +140,9 @@ export async function listWorkspaces(origin: string, identity: PublicWebIdentity
   return rows;
 }
 
-/** Delete a workspace, the DELETE the sidebar's Remove issues. */
-export async function deleteWorkspace(origin: string, identity: PublicWebIdentity, name: string): Promise<void> {
-  await workspaces({ origin, identity }, `/${encodeURIComponent(name)}`, { method: 'DELETE' }, `delete the workspace ${name}`);
+/** Delete a workspace, the DELETE the sidebar's Remove issues. `signal` ends the request. */
+export async function deleteWorkspace(origin: string, identity: PublicWebIdentity, name: string, signal?: AbortSignal): Promise<void> {
+  await workspaces({ origin, identity }, `/${encodeURIComponent(name)}`, { method: 'DELETE', signal }, `delete the workspace ${name}`);
 }
 
 /** Writers per account racing for its catalog, and a spare: each lost race means another writer landed (409, measured

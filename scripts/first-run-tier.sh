@@ -154,8 +154,9 @@ scripted_account gateway > /dev/null || exit 1
 scripted_account settings > /dev/null || exit 1
 
 # THE CASE THAT MEETS THE FREE TIER ACTS AS `limits`, the one eval account it binds (core limits/class.ts): every
-# other account a tier drives is exempt, so its workspaces past three are refused here alone.
-scripted_account limits > /dev/null || exit 1
+# other account a tier drives is exempt, so its workspaces past three are refused here alone. Its bearer alone: the
+# scripted model's proof opens a workspace, which an account left at its limit by a cut-off run would be refused.
+account_bearer limits > /dev/null || exit 1
 
 echo "── first-run tier ────────────────────────────────────────"
 echo "target:   $KINU_ORIGIN"

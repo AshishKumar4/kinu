@@ -62,86 +62,139 @@ async function readLimits(origin: string, identity: PublicWebIdentity, signal: A
   return parsed?.success === true ? { report: parsed.output, detail: text.slice(0, 400) } : { report: null, detail: `${String(answer.status)} ${text.slice(0, 300)}` };
 }
 
-/** A create as the sidebar asks it, answered raw: its status and body. */
+/** A create as the sidebar asks it, answered raw: its status, body, and the workspace it made if it made one. */
 async function askToCreate(origin: string, identity: PublicWebIdentity, name: string, signal: AbortSignal) {
   const answer = await fetch(`${origin}/api/user/workspaces`, {
     method: 'POST', headers: { ...webHeaders(identity), 'content-type': 'application/json' }, body: JSON.stringify({ name }), signal,
   });
 
-  return { status: answer.status, body: (await answer.text()).slice(0, 600) };
+  const body = await answer.text();
+  const created = answer.ok ? v.safeParse(v.object({ name: v.string() }), JSON.parse(body)) : null;
+
+  return { status: answer.status, body: body.slice(0, 600), made: created?.success === true ? created.output.name : null };
 }
 
 const RefusalSchema = v.object({ error: v.string(), code: v.string() });
+
+/** How long the sweep and the teardown may take: each ends on its own bound, apart from the case's budget. */
+const CLEANUP_MS = 60_000;
+
+/**
+ * Removes every workspace on the `limits` account but `keep`, before the case opens its own: a run cut off before its
+ * teardown left the account at its limit, where opening the case's workspace would be refused.
+ */
+async function sweep(origin: string, identity: PublicWebIdentity, keep: readonly string[]): Promise<void> {
+  const signal = AbortSignal.timeout(CLEANUP_MS);
+
+  for (const row of await listWorkspaces(origin, identity, signal)) {
+    if (!keep.includes(row.name)) await deleteWorkspace(origin, identity, row.name, signal);
+  }
+}
+
+/** Deletes each of `made` still there, every one attempted; the names whose delete failed, with why. */
+async function teardown(origin: string, identity: PublicWebIdentity, made: Set<string>): Promise<string[]> {
+  const signal = AbortSignal.timeout(CLEANUP_MS);
+
+  const deleted = await Promise.allSettled([...made].map(async (name) => {
+    await deleteWorkspace(origin, identity, name, signal);
+    made.delete(name);
+  }));
+
+  return deleted.flatMap((outcome) => (outcome.status === 'rejected' ? [String(outcome.reason)] : []));
+}
+
+/** The probe: the report, the limit met and refused in its words, the held ones answering, and room again. */
+async function probe({ session, origin, identity, budget, made }: {
+  session: { readonly workspace: string };
+  origin: string;
+  identity: PublicWebIdentity;
+  budget: AbortSignal;
+  made: Set<string>;
+}): Promise<EvalSubgoal[]> {
+  const subgoals: EvalSubgoal[] = [];
+  const first = await readLimits(origin, identity, budget);
+  const reading = workspacesOf(first.report);
+
+  subgoals.push({
+    what: 'limits-read',
+    reached: first.report?.class === 'free' && first.report.freeTier && reading?.used === 1 && reading.limit === 3
+      && first.report.computerSizeCap === 'small' && first.report.limits.length === 5,
+    detail: first.detail,
+  });
+
+  const stamp = String(Date.now());
+
+  for (const index of [2, 3]) made.add(await createWorkspace(origin, identity, { name: `limits-probe-${stamp}-${String(index)}` }, budget));
+  const held = [session.workspace, ...made];
+
+  const full = await readLimits(origin, identity, budget);
+  const fourth = await askToCreate(origin, identity, `limits-probe-${stamp}-4`, budget);
+
+  // A deployment with no free tier makes it: torn down with the rest.
+  if (fourth.made !== null) made.add(fourth.made);
+  const refusal = v.safeParse(RefusalSchema, JSON.parse(fourth.body === '' ? 'null' : fourth.body));
+
+  subgoals.push({
+    what: 'at-the-limit',
+    reached: workspacesOf(full.report)?.used === 3 && workspacesOf(full.report)?.reached === true,
+    detail: full.detail,
+  });
+  subgoals.push({
+    what: 'fourth-refused',
+    reached: fourth.status === 413 && refusal.success && refusal.output.code === 'budget' && refusedFor(refusal.output.error) === 'workspaces',
+    detail: `POST /api/user/workspaces answered ${String(fourth.status)} ${fourth.body}`,
+  });
+
+  // All three held ones keep answering at the limit, the refused ask taking none of them; removing one makes room.
+  const listed = (await listWorkspaces(origin, identity, budget)).map((row) => row.name);
+
+  subgoals.push({
+    what: 'held-ones-answer',
+    reached: held.length === 3 && held.every((name) => listed.includes(name)),
+    detail: `held ${held.join(', ')}; the roster lists ${listed.join(', ')}`,
+  });
+
+  const removed = held.at(-1);
+
+  if (removed !== undefined && removed !== session.workspace) {
+    await deleteWorkspace(origin, identity, removed, budget);
+    made.delete(removed);
+  }
+
+  const after = await readLimits(origin, identity, budget);
+
+  subgoals.push({
+    what: 'room-after-removal',
+    reached: workspacesOf(after.report)?.used === 2 && workspacesOf(after.report)?.reached === false,
+    detail: after.detail,
+  });
+
+  return subgoals;
+}
 
 describe(SUITE, () => {
   liveTest(`MEASURED: ${CASE}`, async () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
 
+    await sweep(PLAN.origin, PLAN.identity, []);
     await runFirstRunCase(PLAN, {
       id: CASE, defect: DEFECT, modelCalls: 'none', budgetMs: 5 * 60_000, genesis: false,
       purpose: "Disposable probe of a free account's workspace limit; no model task.",
       async run({ session, plan, budget }) {
-        const subgoals: EvalSubgoal[] = [];
         const { origin, identity } = plan;
-        const made: string[] = [];
 
-        try {
-          // A run cut off before its teardown left workspaces behind: removed, so the count starts at this case's own.
-          for (const row of await listWorkspaces(origin, identity)) {
-            if (row.name !== session.workspace) await deleteWorkspace(origin, identity, row.name);
-          }
+        // Each workspace this case made, until its delete succeeded.
+        const made = new Set<string>();
+        const probed = await Promise.allSettled([probe({ session, origin, identity, budget, made })]);
+        const left = await teardown(origin, identity, made);
+        const [outcome] = probed;
 
-          const first = await readLimits(origin, identity, budget);
-          const reading = workspacesOf(first.report);
+        // The case's own failure stands; otherwise a teardown that left workspaces behind is its red.
+        if (outcome?.status === 'rejected') throw outcome.reason;
 
-          subgoals.push({
-            what: 'limits-read',
-            reached: first.report?.class === 'free' && first.report.freeTier && reading?.used === 1 && reading.limit === 3
-              && first.report.computerSizeCap === 'small' && first.report.limits.length === 5,
-            detail: first.detail,
-          });
+        if (left.length > 0) throw new Error(`the account-limits teardown left workspaces behind: ${left.join('; ')}`);
 
-          const stamp = String(Date.now());
-
-          for (const index of [2, 3]) made.push(await createWorkspace(origin, identity, { name: `limits-probe-${stamp}-${String(index)}` }));
-
-          const full = await readLimits(origin, identity, budget);
-          const fourth = await askToCreate(origin, identity, `limits-probe-${stamp}-4`, budget);
-          const refusal = v.safeParse(RefusalSchema, JSON.parse(fourth.body === '' ? 'null' : fourth.body));
-
-          subgoals.push({
-            what: 'at-the-limit',
-            reached: workspacesOf(full.report)?.used === 3 && workspacesOf(full.report)?.reached === true,
-            detail: full.detail,
-          });
-          subgoals.push({
-            what: 'fourth-refused',
-            reached: fourth.status === 413 && refusal.success && refusal.output.code === 'budget' && refusedFor(refusal.output.error) === 'workspaces',
-            detail: `POST /api/user/workspaces answered ${String(fourth.status)} ${fourth.body}`,
-          });
-
-          // What the account has keeps answering at its limit, and removing one makes room again.
-          const listed = (await listWorkspaces(origin, identity)).map((row) => row.name);
-          const removed = made.pop();
-
-          if (removed !== undefined) await deleteWorkspace(origin, identity, removed);
-          const after = await readLimits(origin, identity, budget);
-
-          subgoals.push({
-            what: 'held-ones-answer',
-            reached: [session.workspace, ...made].every((name) => listed.includes(name)),
-            detail: `the roster lists ${listed.join(', ')}`,
-          });
-          subgoals.push({
-            what: 'room-after-removal',
-            reached: workspacesOf(after.report)?.used === 2 && workspacesOf(after.report)?.reached === false,
-            detail: after.detail,
-          });
-
-          return subgoals;
-        } finally {
-          for (const name of made) await deleteWorkspace(origin, identity, name);
-        }
+        return outcome?.status === 'fulfilled' ? outcome.value : [];
       },
     }, observations);
   });
