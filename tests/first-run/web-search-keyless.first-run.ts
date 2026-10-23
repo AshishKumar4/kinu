@@ -24,11 +24,10 @@ const DEFECT: FirstRunDefect = {
   missedBecause: 'the only deployed search row gives its account a Tavily key pointed at the scripted search, so the '
     + 'provider a person with no key gets was never called on a deployment.',
   provedRedAt: null,
-  redDirection: 'RED while Cloudflare\'s Web Search API answers the deployment 402: until the account has AI Gateway '
-    + 'credits the tool says web search is not available on this deployment, and `searched` and `results-returned` '
-    + 'are missed. Measured on staging 667f96316, 2026-10-19, through an account with no search key and a real model: '
-    + 'the `web` search answered "Web search is not available on this deployment right now". The case itself first runs '
-    + 'on the deploy that carries the `keyless` account.',
+  redDirection: 'RED when the deployment\'s own search does not answer an account with no key: `searched` and '
+    + '`results-returned` are missed, as the owner\'s 522 was. Its premise that the gateway needs credits was wrong: '
+    + 'staging answered the keyless search 200 in 1.5 s with none (2026-10-19 14:40Z, ledger 1017-c). The case first '
+    + 'runs on the deploy that carries the `keyless` account.',
 };
 
 const PLAN = firstRunCasePlan(SUITE, 'keyless', 'keyless');
