@@ -6,7 +6,7 @@ import {
   announcementOf, type SeatedActor, type TurnSurface,
   type ActorReference, type DynamicContext, type ModelPricing, type ResolvedTurnProfile, type TierId, type WorkMode,
   type HeadInput, type RunInference, type HeadReport, type SqlExecutor, type MissionBudgetPort, type MissionGovernor, type Executor, turnTags,
-  openingCacheCold, type OpenWork,
+  openingCacheCold, type OpenWork, advisorReadTool, advisorReadTools, describeAgentTools, renderToolResult, type AdvisorReadTools, type AgentAdvisorRead,
 } from '@kinu.run/core';
 import type { TurnCall } from './agent-facets';
 import type { TurnBound, TurnCapabilityOf } from './agent-facet/agent-turn';
@@ -86,6 +86,8 @@ interface OpenTurn {
   readonly fenced?: OpenedAt;
   /** A run's end, which its agent tells with a report (`runEnded`). */
   readonly ended?: ReturnType<typeof Promise.withResolvers<AgentTurnEnd>>;
+  /** Its advisor's read-only tools over the agent's stores, on a ledger of their own (`advisorRead`). */
+  advisor?: AdvisorReadTools;
 }
 
 /** Values held per agent's turn: a turn id names a turn only within its agent, whose owner's message ids are its own. */
@@ -534,6 +536,9 @@ export class AgentTurns {
     );
 
     turn.memoryTail = sources.memoryTail ?? undefined;
+    turn.advisor = advisorReadTools({ files: surface.stores.deps.files, memory: surface.stores.deps.memory });
+    const { file, memory } = turn.advisor;
+    const advisorTools = (await describeAgentTools({ ...(file !== undefined && { file }), ...(memory !== undefined && { memory }) })).descriptors;
     const brief = run?.brief?.(callableToolNames(mode, surface.offered));
     const facts = this.offeredFacts(turn, prepared);
 
@@ -552,6 +557,7 @@ export class AgentTurns {
       ...(brief !== undefined && { brief }),
       opening: encodeModelMessageValues(run === undefined ? [] : run.opening ?? buildHeadMessages(input)),
       tools: surface.descriptors,
+      advisorTools,
       ownerLane: surface.ownerLane,
       dynamic: this.dynamic(turn, prepared),
       ...(run?.mission !== undefined && { missionLabels: run.mission.labels }),
@@ -668,6 +674,22 @@ export class AgentTurns {
     const control = { stores: prepared.surface.stores, ...(signal !== undefined && { signal }) };
 
     return await actor.runtime.executor.execute(code, [...supplied, ...scaffoldProviders(actor.runtime, control, this.mode(turn, prepared))], opts);
+  }
+
+  /** One of the turn's advisor's reads, on the advisor's own ledger: it never marks what the agent read. A turn this
+   *  workspace no longer holds is not read again for it: the read fails, and the advisor decides without it. */
+  async advisorRead(actorId: string, call: AgentAdvisorRead): Promise<string> {
+    const turn = this.turn(actorId, call.turnId);
+    const read = advisorReadTool(turn.advisor ?? {}, call.name);
+
+    if (read?.execute === undefined) return settleSync(Effect.fail(new KinuError('bad_input', `The advisor has no read tool ${call.name}.`)));
+
+    const output: unknown = await runWorkModeInvocation(this.mode(turn, this.prepared(turn)), () => read.execute?.(call.input, {
+      toolCallId: call.callId, messages: [], context: undefined, abortSignal: this.cut(actorId, call.turnId).signal,
+    }));
+
+    // As the advisor reads every result: rendered whole here, windowed and redacted where it reads it.
+    return renderToolResult(output);
   }
 
   async execute(actorId: string, call: AgentToolCall): Promise<AgentToolAnswer> {
