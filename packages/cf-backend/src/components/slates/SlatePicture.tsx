@@ -1,6 +1,8 @@
 import { useState, type ReactNode } from "react";
 import { pictureUrl } from "@/lib/user-api";
 import { pictureSrc } from "@kinu.run/core/web/picture-src";
+import { pictureForMode } from "@kinu.run/core";
+import { useTheme } from "@/hooks/use-theme";
 import { CaptureMat } from "@/components/ui/Tiles";
 
 /**
@@ -17,9 +19,11 @@ export function SlatePicture({ workspace, slate, className, fallback, at = pictu
   mat?: boolean;
 }) {
   const [failed, setFailed] = useState<string | null>(null);
+  // In the mode the page is in (design review 2026-10-20, N6): a slate that draws a dark of its own is shown in it.
+  const { mode } = useTheme();
 
   if (slate === undefined || slate.picture === undefined || slate.picture === null) return fallback;
-  const src = pictureSrc(at(workspace, slate.id, slate.picture));
+  const src = pictureSrc(at(workspace, slate.id, pictureForMode(slate.picture, mode)));
 
   if (src === failed) return fallback;
 

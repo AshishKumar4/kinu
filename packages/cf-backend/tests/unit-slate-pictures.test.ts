@@ -5,7 +5,7 @@
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { sha256Hex } from '@kinu.run/core';
-import { initSlatePictureTable, pictureKey, shareCaptureUrl, sharePictureKey, SlatePictures, type Camera, type PictureCapture } from '../src/slates/pictures';
+import { initSlatePictureTable, pictureKey, readPictureInMode, shareCaptureUrl, sharePictureKey, SlatePictures, type Camera, type PictureCapture, type Shots } from '../src/slates/pictures';
 import { durableSqlStorage } from './helpers/programmatic-host';
 import { memoryBucket, type MemoryBucket } from './helpers/r2';
 
@@ -30,15 +30,15 @@ function pictures(): SlatePictures {
   return new SlatePictures(sql);
 }
 
-/** A camera whose shots are `frames` in turn. */
-function shooting(...frames: Uint8Array[]): Camera {
+/** A camera whose shots are `frames` in turn: a slate that draws the same in either mode, unless a frame is a pair. */
+function shooting(...frames: Array<Uint8Array | Shots>): Camera {
   return {
     async shoot() {
       const frame = frames.shift();
 
       if (frame === undefined) throw new Error('no frame');
 
-      return frame;
+      return frame instanceof Uint8Array ? { light: frame, dark: frame } : frame;
     },
     async close() {},
   };
@@ -97,6 +97,38 @@ describe('a shot', () => {
     expect([...bucket.objects.keys()]).toEqual([pictureKey('ledger', 'board', sha256Hex(B))]);
   });
 
+  // Design review 2026-10-20, N6: a capture taken in one mode stood out in the other.
+  test('of a slate that draws a dark of its own keeps that capture beside its light one, both named by one digest', async () => {
+    const store = pictures();
+    const bucket = memoryBucket();
+    const pair = sha256Hex(Buffer.concat([A, B]));
+
+    store.rendered('board', PORT, T0);
+    expect(await store.captureDue(capture(shooting({ light: A, dark: B }), bucket), T0 + 30_000)).toBe(true);
+    expect(store.digests().get('board')).toBe(pair);
+    expect([...bucket.objects.keys()].sort()).toEqual([pictureKey('ledger', 'board', pair), pictureKey('ledger', 'board', `${pair}-dark`)].sort());
+
+    // Drawn the same in both, the dark one goes with the version it belonged to.
+    store.rendered('board', PORT, T0 + 60_000);
+    expect(await store.captureDue(capture(shooting(A), bucket), T0 + 90_000)).toBe(true);
+    expect([...bucket.objects.keys()]).toEqual([pictureKey('ledger', 'board', sha256Hex(A))]);
+  });
+
+  test('asked for in dark is the dark capture where the slate drew one, else the light one', async () => {
+    const bucket = memoryBucket();
+    const keyOf = (version: string) => pictureKey('ledger', 'board', version);
+    const light = sha256Hex(A);
+
+    await bucket.put(keyOf(light), A, { httpMetadata: { contentType: 'image/webp' } });
+    const plain = await readPictureInMode(bucket, keyOf, `${light}-dark`, 'private');
+
+    await bucket.put(keyOf(`${light}-dark`), B, { httpMetadata: { contentType: 'image/webp' } });
+    const dark = await readPictureInMode(bucket, keyOf, `${light}-dark`, 'private');
+
+    expect([...new Uint8Array(await plain?.arrayBuffer() ?? new ArrayBuffer(0))]).toEqual([...A]);
+    expect([...new Uint8Array(await dark?.arrayBuffer() ?? new ArrayBuffer(0))]).toEqual([...B]);
+  });
+
   test('that fails keeps the old picture and waits longer each time, three tries at most', async () => {
     const store = pictures();
     const bucket = memoryBucket();
@@ -148,7 +180,7 @@ describe('a shot', () => {
           pastItsLife: store.captures(PORT, handle, T0 + 150_000),
         });
 
-        return A;
+        return { light: A, dark: A };
       },
       async close() {},
     };
@@ -181,7 +213,7 @@ describe('a shot', () => {
       async shoot() {
         await store.forget('ledger', 'board', bucket);
 
-        return A;
+        return { light: A, dark: A };
       },
       async close() {},
     };
@@ -247,7 +279,7 @@ describe("a listed share's view", () => {
     (share === 's1' && listed() ? { url: shareCaptureUrl(HOST), publication: publication(), held } : null);
 
   /** A camera whose shots are `frames` in turn, keeping each address it was pointed at in `seen`. */
-  function aimed(seen: string[], ...frames: Uint8Array[]): Camera {
+  function aimed(seen: string[], ...frames: Array<Uint8Array | Shots>): Camera {
     const lens = shooting(...frames);
 
     return {
@@ -329,7 +361,7 @@ describe("a share view's shot", () => {
       shoot: async () => {
         await meanwhile();
 
-        return frame;
+        return { light: frame, dark: frame };
       },
       close: async () => {},
     };
