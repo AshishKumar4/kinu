@@ -20,7 +20,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import * as v from 'valibot';
 import {
-  accountOf, baseCredentialKey, CLOUDFLARE_OAUTH_CRED_KEY, DEFAULT_WORKERS_AI_MODEL_SPEC, DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, EVAL_WORKSPACE_LEASE_MS,
+  accountOf, baseCredentialKey, CLOUDFLARE_OAUTH_CRED_KEY, profileCatalogDigest, DEFAULT_WORKERS_AI_MODEL_SPEC, DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, EVAL_WORKSPACE_LEASE_MS,
   MAIN_ACCOUNT, MY_GATEWAY_PROVIDER_ID, validateCredential, type OAuthCredential,
   parseEvalAccount, parseGatewayTarget, type EvalAccount,
 } from '@kinu.run/core';
@@ -245,17 +245,26 @@ async function readyTrialAccount(input: Provisioning & { identity: string }, acc
 
   // A bare account inherits a single Workers AI model for its swarm judge. Its refusal ended every research swarm
   // in run 37880718948. Keys alone do not configure that route: keep the user's retry count, and cross providers, to
-  // the run's own models. A model the run measures falls back to none: a call another model answered would be counted
-  // as its own (2026-10-23, a GLM 5.3 run's 98 calls answered by Muse).
+  // the one model a single-model run measures. Nothing else falls back: a model the run measures takes the chain of
+  // the tier it runs under or its own (`profiles/resolve.ts`), and a call another model answered would be counted as its
+  // own (2026-10-23, a GLM 5.3 run's 98 calls answered by Muse), so no tier keeps a chain and no measured model has one.
   const model = DEFAULT_WORKERS_AI_MODEL_SPEC;
-  const chain = input.models.includes(model) ? [] : [...input.models];
+  const [only, ...more] = input.models;
+  const judgeChain = only !== undefined && more.length === 0 && only !== model ? [only] : [];
 
   const deepRoute: CatalogNeed = (catalog) => {
-    const { [model]: kept, ...rest } = catalog.modelFallbacks ?? {};
+    const tiers = Object.fromEntries(Object.entries(catalog.tiers).map(([id, tier]) => {
+      const { fallbacks: _chain, ...unchained } = tier ?? { model };
 
-    if (catalog.tiers.deep?.model === model && JSON.stringify(kept ?? []) === JSON.stringify(chain)) return null;
+      return [id, id === 'deep' ? { ...unchained, model } : unchained];
+    }));
 
-    return { ...catalog, tiers: { ...catalog.tiers, deep: { ...catalog.tiers.deep, model } }, modelFallbacks: chain.length > 0 ? { ...rest, [model]: chain } : rest };
+    const { modelFallbacks: chained, ...base } = catalog;
+    const kept = Object.entries(chained ?? {}).filter(([spec]) => spec !== model && !input.models.includes(spec));
+    const chains = judgeChain.length > 0 ? [...kept, [model, judgeChain] as const] : kept;
+    const next = { ...base, tiers: { ...catalog.tiers, ...tiers, deep: tiers['deep'] ?? { model } }, ...chains.length > 0 && { modelFallbacks: Object.fromEntries(chains) } };
+
+    return profileCatalogDigest(next) === profileCatalogDigest(catalog) ? null : next;
   };
 
   try {
