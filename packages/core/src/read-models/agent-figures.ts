@@ -3,6 +3,7 @@ import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import { summarizeSteps } from '../events/step-stats';
 import { UsageSchema } from '../usage';
 import type { StepCost } from '../events/types';
+import { nextLoopTurn } from '../types/clock';
 
 export interface AgentFigures {
   readonly tokens?: number;
@@ -61,37 +62,64 @@ interface FoldedEvent {
   readonly ms: number | null;
 }
 
+/** The run events one event-loop turn folds. A 450-step screenshot turn's events folded at its end in one turn held its
+ *  agent's isolate 80-142 ms (the facet loop gate, 2026-10-23), and the platform resets a facet whose turns take 0.1 s
+ *  and more, its workspace with it (D14). */
+const FOLD_SLICE_EVENTS = 200;
+
 /** Over a database whose workspace schema is initialized, as the workspace's and every agent's isolate's is: main's
  *  isolate reads its own at every turn's end, where asking `sqlite_master` was a statement a turn. */
-export function readAgentFigures(sql: SqlExecutor, actorIds: readonly string[]): ReadonlyMap<string, AgentFigures> {
-  if (actorIds.length === 0) return new Map();
+export async function readAgentFigures(sql: SqlExecutor, actorIds: readonly string[]): Promise<ReadonlyMap<string, AgentFigures>> {
+  const figures = new Map<string, AgentFigures>();
 
-  return new Map(actorIds.map((actorId) => [actorId, actorFigures(sql, actorId)]));
+  for (const actorId of actorIds) figures.set(actorId, await actorFigures(sql, actorId));
+
+  return figures;
 }
 
 /** Folded forward: the events since the last read are added to the totals stored with it, so a turn's end reads its own
- *  turn's events, never the whole history (the join over every turn read 2,999 rows at turn 300). The EMA is
- *  summarized, as it always was, over the newest {@link AGENT_STEP_WINDOW} steps, kept with the totals: a step that
- *  reported no cache use still pushes an older measured one out. */
-function actorFigures(sql: SqlExecutor, actorId: string): AgentFigures {
+ *  turn's events, never the whole history (the join over every turn read 2,999 rows at turn 300), a slice at a time with
+ *  the loop let go between slices. The EMA is summarized, as it always was, over the newest {@link AGENT_STEP_WINDOW}
+ *  steps, kept with the totals: a step that reported no cache use still pushes an older measured one out. */
+async function actorFigures(sql: SqlExecutor, actorId: string): Promise<AgentFigures> {
   const [stored] = sql<{ through: number; totals: string }>`SELECT through, totals FROM agent_figure_folds WHERE actor_id = ${actorId}`;
-  const totals = stored === undefined ? NO_TOTALS : v.parse(TotalsSchema, JSON.parse(stored.totals));
+  let totals = stored === undefined ? NO_TOTALS : v.parse(TotalsSchema, JSON.parse(stored.totals));
+  const from = stored?.through ?? 0;
+  let through = from;
 
-  // By the actor index's rowid, never by type: the type index would scan every step the actor ever took.
-  const events = sql<FoldedEvent>`
-    SELECT e.rowid AS seq, e.type, e.ts,
-           CASE WHEN e.type IN ('step_finish', 'model_call') THEN json_extract(e.payload, '$.usage.input') END AS input,
-           CASE WHEN e.type IN ('step_finish', 'model_call') THEN json_extract(e.payload, '$.usage.output') END AS output,
-           CASE WHEN e.type IN ('step_finish', 'model_call') THEN json_extract(e.payload, '$.usd') END AS usd,
-           CASE WHEN e.type = 'step_finish' THEN json_extract(e.payload, '$.usage') END AS step_usage,
-           CASE WHEN e.type = 'turn_end' THEN (
-             SELECT SUM((julianday(e.ts) - julianday(s.ts)) * 86400000) FROM run_events s INDEXED BY idx_run_events_run_ts
-             WHERE s.actor_id = e.actor_id AND s.run_id = e.run_id AND s.type = 'turn_start'
-               AND json_extract(s.payload, '$.turnIndex') = json_extract(e.payload, '$.turnIndex')) END AS ms
-    FROM run_events e INDEXED BY idx_run_events_actor
-    WHERE e.actor_id = ${actorId} AND e.rowid > ${stored?.through ?? 0}
-    ORDER BY e.ts, e.rowid`;
+  for (let events = foldSlice(sql, actorId, through); events.length > 0; events = foldSlice(sql, actorId, through)) {
+    totals = folded(totals, events);
+    through = events.at(-1)?.seq ?? through;
 
+    if (events.length < FOLD_SLICE_EVENTS) break;
+    await nextLoopTurn();
+  }
+
+  const { input, output, usd, activeMs, last, window } = totals;
+
+  const steps = window.map(([stepInput, cacheRead]): StepCost => ({
+    usage: { ...(stepInput !== null && { input: stepInput }), ...(cacheRead !== null && { cacheRead }) },
+  }));
+
+  const cacheEma = summarizeSteps(steps, { windowLimit: AGENT_STEP_WINDOW }).cacheHit.ema;
+
+  if (through > from) {
+    void sql`INSERT INTO agent_figure_folds (actor_id, through, totals)
+      VALUES (${actorId}, ${through}, ${JSON.stringify({ input, output, usd, activeMs, window, last })})
+      ON CONFLICT (actor_id) DO UPDATE SET through = excluded.through, totals = excluded.totals`;
+  }
+
+  return {
+    ...((input !== null || output !== null) && { tokens: (input ?? 0) + (output ?? 0) }),
+    ...(usd !== null && { usd: usd[0] + usd[1] }),
+    activeMs: Math.round(activeMs[0] + activeMs[1]),
+    cacheEma,
+    ...(last !== undefined && { lastActiveAt: last }),
+  };
+}
+
+/** `totals` with `events` added. */
+function folded(totals: v.InferOutput<typeof TotalsSchema>, events: readonly FoldedEvent[]): v.InferOutput<typeof TotalsSchema> {
   let { input, output, usd, activeMs, last } = totals;
 
   for (const event of events) {
@@ -108,8 +136,8 @@ function actorFigures(sql: SqlExecutor, actorId: string): AgentFigures {
     if (event.ms !== null) activeMs = compensated(activeMs, event.ms);
   }
 
-  // A step's usage decoded alone: its whole payload, parsed through the run-event schema, was 2.8 of the 202 MB a 150-step
-  // turn allocated in its agent's isolate (heap gate, 2026-10-23).
+  // A step's usage decoded alone: its whole payload, parsed through the run-event schema, was 2.8 of the 202 MB a
+  // 150-step turn allocated in its agent's isolate (heap gate, 2026-10-23).
   const window = [...totals.window, ...events.flatMap((event): Array<v.InferOutput<typeof WindowStepSchema>> => {
     if (event.type !== 'step_finish') return [];
     const usage = event.step_usage === null ? undefined : v.parse(UsageSchema, JSON.parse(event.step_usage));
@@ -117,28 +145,28 @@ function actorFigures(sql: SqlExecutor, actorId: string): AgentFigures {
     return [[usage?.input ?? null, usage?.cacheRead ?? null]];
   })].slice(-AGENT_STEP_WINDOW);
 
-  const steps = window.map(([stepInput, cacheRead]): StepCost => ({
-    usage: { ...(stepInput !== null && { input: stepInput }), ...(cacheRead !== null && { cacheRead }) },
-  }));
+  return { input, output, usd, activeMs, window, ...(last !== undefined && { last }) };
+}
 
-  const cacheEma = summarizeSteps(steps, { windowLimit: AGENT_STEP_WINDOW }).cacheHit.ema;
-
-  if (events.length > 0) {
-    // Reduced, not spread: an agent's first read folds its whole history.
-    const through = events.reduce((newest, event) => Math.max(newest, event.seq), 0);
-
-    void sql`INSERT INTO agent_figure_folds (actor_id, through, totals)
-      VALUES (${actorId}, ${through}, ${JSON.stringify({ input, output, usd, activeMs, window, last })})
-      ON CONFLICT (actor_id) DO UPDATE SET through = excluded.through, totals = excluded.totals`;
-  }
-
-  return {
-    ...((input !== null || output !== null) && { tokens: (input ?? 0) + (output ?? 0) }),
-    ...(usd !== null && { usd: usd[0] + usd[1] }),
-    activeMs: Math.round(activeMs[0] + activeMs[1]),
-    cacheEma,
-    ...(last !== undefined && { lastActiveAt: last }),
-  };
+/** The actor's next {@link FOLD_SLICE_EVENTS} run events a fold reads after the rowid `through`, oldest first. By the actor
+ *  index's rowid, never by type: the type index would scan every step the actor ever took. Only those events' `ts` is
+ *  read: it is stored after the payload, so reading it walks every overflow page of a tool call's result, and a 450-step
+ *  screenshot turn's slice of 200 events held its agent's isolate 70-130 ms doing so (the facet loop gate, 2026-10-23). */
+function foldSlice(sql: SqlExecutor, actorId: string, through: number): FoldedEvent[] {
+  return sql<FoldedEvent>`
+    SELECT e.rowid AS seq, e.type, e.ts,
+           CASE WHEN e.type IN ('step_finish', 'model_call') THEN json_extract(e.payload, '$.usage.input') END AS input,
+           CASE WHEN e.type IN ('step_finish', 'model_call') THEN json_extract(e.payload, '$.usage.output') END AS output,
+           CASE WHEN e.type IN ('step_finish', 'model_call') THEN json_extract(e.payload, '$.usd') END AS usd,
+           CASE WHEN e.type = 'step_finish' THEN json_extract(e.payload, '$.usage') END AS step_usage,
+           CASE WHEN e.type = 'turn_end' THEN (
+             SELECT SUM((julianday(e.ts) - julianday(s.ts)) * 86400000) FROM run_events s INDEXED BY idx_run_events_run_ts
+             WHERE s.actor_id = e.actor_id AND s.run_id = e.run_id AND s.type = 'turn_start'
+               AND json_extract(s.payload, '$.turnIndex') = json_extract(e.payload, '$.turnIndex')) END AS ms
+    FROM run_events e INDEXED BY idx_run_events_actor
+    WHERE e.actor_id = ${actorId} AND e.rowid > ${through} AND e.type IN ('step_finish', 'model_call', 'turn_start', 'turn_end')
+    ORDER BY e.rowid
+    LIMIT ${FOLD_SLICE_EVENTS}`;
 }
 
 export function initAgentFiguresTable(execRaw: RawSqlExec): void {

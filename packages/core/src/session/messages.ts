@@ -7,9 +7,34 @@ import { sha256Hex } from '../safety/argument-digest';
 import { encodeModelMessage, decodeModelMessageValues, decodeOwnModelMessage, recordCarries } from './message-codec';
 import { JsonObjectSchema, isParsedJsonObject, jsonObjectElements, type JsonObject, type JsonValue } from '../utils/json';
 import { freezeTree } from '../utils/freeze';
+import { nextLoopTurn } from '../types/clock';
 import { spilledDigest, type SessionPayloads, type SessionPayloadReader, type SessionPayload } from './payload';
 
 export interface MessageReference { readonly messageId: string }
+
+/** The stored message bytes one event-loop turn reads and decodes, past its first message. A chat's seed read in one
+ *  statement held its agent's isolate 157-305 ms in the facet loop gate's screenshot turn, about 70 ms a megabyte on its
+ *  hosts (2026-10-23), and the platform resets a facet whose turns take 0.1 s and more, its workspace with it (D14). A
+ *  slice bounded in SQL by a running sum (a window over every remaining row) took 1.8-7.2 s in one turn there. */
+const MATERIALIZE_SLICE_BYTES = 512 * 1024;
+
+/** Message ids in slices of at most {@link MATERIALIZE_SLICE_BYTES} each, a slice's first message whatever its size. */
+function byteSlices(sized: readonly { readonly message_id: string; readonly bytes: number }[]): string[][] {
+  const slices: string[][] = [];
+  let bytes = Infinity;
+
+  for (const row of sized) {
+    if (bytes + row.bytes > MATERIALIZE_SLICE_BYTES) {
+      slices.push([]);
+      bytes = 0;
+    }
+
+    slices.at(-1)?.push(row.message_id);
+    bytes += row.bytes;
+  }
+
+  return slices;
+}
 
 export type MessageOrigin = 'input' | 'output' | 'edit' | 'context_transform' | 'render';
 
@@ -212,19 +237,32 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
     return { row, parts };
   }
 
-  /** Each named message's parts, its rows in one statement; a message no row holds is absent. */
+  /**
+   * Each named message's parts, in slices of {@link MATERIALIZE_SLICE_BYTES}, the loop let go between them; an absent row
+   * stays absent. The slices are planned from each row's stored size, read from its header (`octet_length`), never its
+   * content: a text page is two reads.
+   */
   async materializePartsOf(messageIds: readonly string[]): Promise<Map<string, readonly StoredPart[]>> {
     this.actor.assertCurrent();
-
-    const rows = this.sql<MessageRow & { message_id: string }>`SELECT message_id,origin,role,native_content_kind,envelope_json,sealed_at,content_json,content_path
-      FROM session_messages WHERE actor_id=${this.actor.actorId} AND message_id IN (SELECT value FROM json_each(${JSON.stringify(messageIds)}))`;
-
     const parts = new Map<string, readonly StoredPart[]>();
 
-    for (const row of rows) {
-      parts.set(row.message_id, row.sealed_at === null
-        ? await this.streamed(row.message_id)
-        : storedParts(await this.payloads.readStored(row.content_json, row.content_path)));
+    const sized = this.sql<{ message_id: string; bytes: number }>`SELECT message_id, COALESCE(octet_length(content_json), 0) AS bytes
+      FROM session_messages WHERE actor_id=${this.actor.actorId} AND message_id IN (SELECT value FROM json_each(${JSON.stringify(messageIds)}))`;
+
+    for (const [at, slice] of byteSlices(sized).entries()) {
+      if (at > 0) {
+        await nextLoopTurn();
+        this.actor.assertCurrent();
+      }
+
+      const rows = this.sql<MessageRow & { message_id: string }>`SELECT message_id,origin,role,native_content_kind,envelope_json,sealed_at,content_json,content_path
+        FROM session_messages WHERE actor_id=${this.actor.actorId} AND message_id IN (SELECT value FROM json_each(${JSON.stringify(slice)}))`;
+
+      for (const row of rows) {
+        parts.set(row.message_id, row.sealed_at === null
+          ? await this.streamed(row.message_id)
+          : storedParts(await this.payloads.readStored(row.content_json, row.content_path)));
+      }
     }
 
     this.actor.assertCurrent();

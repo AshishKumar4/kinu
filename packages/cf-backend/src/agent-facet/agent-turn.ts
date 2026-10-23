@@ -635,7 +635,7 @@ export async function deliveredRun(
           ended: {
             ...report,
             activity: database.takeActivity(),
-            figures: database.figures(),
+            figures: await database.figures(),
             errorMessage: report.errorMessage ?? null,
             ...(produced !== undefined && { produced: encodeModelMessageValues(produced) }),
             ...(charges.length > 0 && { charges }),

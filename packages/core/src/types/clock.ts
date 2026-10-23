@@ -24,6 +24,15 @@ export function waitOn(clock: Clock, ms: number): Promise<void> {
   return promise;
 }
 
+/** Lets the event loop run whatever is waiting before this continues: a yield, not a wait (no time passes for it). Work
+ *  that can take long in one isolate turn yields between its slices; see the drawn page's slice. */
+export function nextLoopTurn(): Promise<void> {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  setTimeout(resolve, 0);
+
+  return promise;
+}
+
 /** Re-arms `after` on each firing, so a hand clock needs no second primitive. */
 export function every(clock: Clock, ms: number, fire: () => void): () => void {
   let cancel: () => void = () => {};
