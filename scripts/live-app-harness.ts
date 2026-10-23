@@ -63,14 +63,17 @@ function serverAccount(origin: string): string {
 }
 
 /** The last failure the dev server printed in `output`, as vite prints a Worker's 500 (`Internal server error:` and its
- *  stack), or nothing. */
+ *  stack), after the lines it printed just before, or nothing. A 500 whose error is `fetch failed` is miniflare losing
+ *  its workerd, and vite prints none of that error's cause: what came before is the one account of why (live-app rows
+ *  on armada's AMD EPYC 25/1 hosts, 5 of 50 against 1 of 524 elsewhere, 2026-10-22..23). */
 function lastServerError(output: readonly string[]): string {
   const log = output.join('');
   const at = log.lastIndexOf('Internal server error');
 
   if (at < 0) return '';
+  const before = log.slice(0, at).split('\n').filter((line) => !line.includes('analytics.sink_installed')).slice(-15);
 
-  return `\n--- vite dev said ---\n${log.slice(at).split('\n').slice(0, 20).join('\n')}`;
+  return `\n--- vite dev said before it ---\n${before.join('\n')}\n--- vite dev said ---\n${log.slice(at).split('\n').slice(0, 20).join('\n')}`;
 }
 
 /** The route's JSON answer, parsed as a value rather than passed as unknown.
