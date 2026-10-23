@@ -79,7 +79,7 @@ import * as v from 'valibot';
 import { ALERT_THRESHOLDS, findWakeLoops, type StartupHour, type WakeLoop } from '@kinu.run/core/analytics';
 import { ALARM_WORK, classifyErrorCode, HOSTED_ALARM_WORK, KinuError } from '@kinu.run/core/obs';
 import { PLATFORM_CATALOG } from '../packages/core/src/platform-catalog';
-import { recordNotice, recordStep } from './deploy-report';
+import { recordNotice } from './deploy-report';
 import { restAnswer } from './cloudflare-rest';
 import { listDeployments, resetCause, type Deployment } from './worker-deployments';
 import { requireCloudflareAccountId } from './infra-cloudflare';
@@ -1794,7 +1794,8 @@ async function versionCommand(args: Args): Promise<number> {
 
   const dir = process.env['KINU_DEPLOY_REPORT'] ?? '';
 
-  for (const found of findings) if (dir !== '') recordStep(dir, { phase: 'telemetry', what: found.what, finding: found.finding });
+  // Each a notice, never a red (the owner, 2026-10-23: "Monitors don't block").
+  for (const found of findings) if (dir !== '') recordNotice(dir, { phase: 'telemetry', what: found.what, notice: found.finding });
 
   const window = { from: iso(args.from), to: iso(args.to) };
   const noticed = noticeLines(dir, notices);
@@ -1816,7 +1817,7 @@ async function versionCommand(args: Args): Promise<number> {
       const unkept = { what: 'the kept telemetry windows', finding: `this window, and what the kept ones were read to hold, could not be written `
         + `back for later deploys: ${cause instanceof Error ? cause.message : String(cause)}` };
 
-      if (dir !== '') recordStep(dir, { phase: 'telemetry', what: unkept.what, finding: unkept.finding });
+      if (dir !== '') recordNotice(dir, { phase: 'telemetry', what: unkept.what, notice: unkept.finding });
       // Beside, not inside, the answer `--json` printed above.
       (args.json ? console.error : console.log)(`  ${unkept.finding}`);
 

@@ -319,13 +319,14 @@ function trialName(trial: Assertion): string {
 }
 
 
-/** Report-only: work finishes normally. The whole deploy, start to verdict, against 20 minutes (L24); the soak runs after. */
-function budgetRed(seconds: number | undefined): ReportEntry | undefined {
+/** Report-only: work finishes normally. The whole deploy, start to verdict, against 20 minutes (L24); the soak runs after.
+ *  Over it is a notice, never a red (the owner, 2026-10-23: "Monitors don't block"). */
+function budgetNotice(seconds: number | undefined): Extract<ReportEntry, { kind: 'notice' }> | undefined {
   if (seconds === undefined) return undefined;
 
   return seconds <= 1200 ? undefined : {
-    kind: 'step', phase: 'budget', what: 'deployment wall',
-    finding: `The deploy took ${seconds.toFixed(1)} s from its start to its verdict, over the 1200 s budget. No work was cancelled or omitted.`,
+    kind: 'notice', phase: 'budget', what: 'deployment wall',
+    notice: `The deploy took ${seconds.toFixed(1)} s from its start to its verdict, over the 1200 s budget. No work was cancelled or omitted.`,
   };
 }
 
@@ -471,25 +472,21 @@ function redSections(reds: readonly ReportEntry[], isNew: (entry: ReportEntry) =
   return lines;
 }
 
-/** Every red the report names: each entry's, and the budget's once the deploy's end is marked. What the render counts,
- *  and what `holds-red` answers from. */
+/** Every red the report names. What the render counts, and what `holds-red` answers from. */
 function reportReds(input: Pick<ReportInput, 'meta' | 'entries'>): ReportEntry[] {
-  const marks = new Map(input.entries.flatMap((entry) => (entry.kind === 'mark' ? [[entry.mark, entry.seconds] as const] : [])));
-  const budget = input.meta.mode === 'gates-only' ? undefined : budgetRed(marks.get('end'));
-
-  return [...deployReds(input.entries), ...budget === undefined ? [] : [budget]];
+  return deployReds(input.entries);
 }
 
 export function renderReport(input: ReportInput): RenderedReport {
   const { dir, meta, entries, previous, evals } = input;
   const marks = new Map(entries.flatMap((entry) => (entry.kind === 'mark' ? [[entry.mark, entry.seconds] as const] : [])));
-  const budget = meta.mode === 'gates-only' ? undefined : budgetRed(marks.get('end'));
+  const budget = meta.mode === 'gates-only' ? undefined : budgetNotice(marks.get('end'));
   const reds = reportReds(input);
   const soak = entries.filter(soaked);
   const carried = new Set(previous?.summary.reds ?? []);
   const isNew = (entry: ReportEntry): boolean => !carried.has(identity(entry) ?? '');
   const skipped = entries.flatMap((entry) => (entry.kind === 'skipped' ? [`- ${entry.phase}: \`${entry.what}\`, because ${entry.why}`] : []));
-  const notices = entries.flatMap((entry) => (entry.kind === 'notice' ? [`- ${entry.phase}: ${entry.what}: ${entry.notice}`] : []));
+  const notices = [...entries, ...budget === undefined ? [] : [budget]].flatMap((entry) => (entry.kind === 'notice' ? [`- ${entry.phase}: ${entry.what}: ${entry.notice}`] : []));
   const dispatched = entries.flatMap((entry) => (entry.kind === 'dispatched' ? [`- ${entry.what}: ${entry.url}`] : []));
   const timings = [...marks].map(([name, seconds]) => `| ${name} | ${String(seconds)} |`);
   const rows = new Map(entries.flatMap((entry) => entry.kind === 'timing' ? [[`${entry.phase}: ${entry.command ?? entry.what}`, entry] as const] : []));
@@ -509,7 +506,7 @@ export function renderReport(input: ReportInput): RenderedReport {
     ...section('Notices, not reds', notices),
     ...section('Started, not awaited', dispatched),
     ...section('Deployment budget', ended === undefined || meta.mode === 'gates-only' ? [] : [
-      `Whole deploy, start to verdict: ${ended.toFixed(1)} s / 1200 s — ${budget === undefined ? 'within budget' : 'RED'}. This budget never cancels work or cuts coverage.`,
+      `Whole deploy, start to verdict: ${ended.toFixed(1)} s / 1200 s — ${budget === undefined ? 'within budget' : 'over budget, a notice'}. This budget never cancels work or cuts coverage.`,
     ]),
     ...section('Soak, after the verdict', soak.length === 0 ? [] : [
       `${String(soak.length)} red in the eval soak, which ran after this deploy's verdict and is no red of it.`, ...redSections(soak, () => true),
@@ -603,10 +600,10 @@ if (import.meta.main) {
 
   if (command === 'budget' && rest.length === 1) {
     const input = readReport(first);
-    const red = input.meta.mode === 'gates-only' ? undefined : budgetRed(Number(rest[0]));
+    const over = input.meta.mode === 'gates-only' ? undefined : budgetNotice(Number(rest[0]));
 
-    if (red?.kind === 'step') console.error(red.finding);
-    process.exit(red === undefined && deployReds(input.entries).length === 0 ? 0 : 1);
+    if (over !== undefined) console.error(over.notice);
+    process.exit(deployReds(input.entries).length === 0 ? 0 : 1);
   }
 
   if (command === 'render' && (rest.length === 0 || (rest.length === 1 && rest[0] === 'after-soak'))) {

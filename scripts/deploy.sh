@@ -1371,9 +1371,9 @@ fi
 # own: an invocation that ended in an uncaught exception or that the platform
 # ended, a terminal effect that failed or was left owed, an object started as
 # often as the product calls a wake loop, an alarm with nothing to watch. Each
-# is a red of this deploy whatever its tests said, in the report under
-# `telemetry` (L18); so is telemetry it cannot read, and telemetry whose reads
-# still disagree after an hour. Its window ends when the wave's last row that
+# is a notice of this deploy, in the report under `telemetry`, and holds
+# nothing (the owner, 2026-10-23: "Monitors don't block"); so is telemetry it
+# cannot read, and telemetry whose reads still disagree after an hour. Its window ends when the wave's last row that
 # drove the deployment did (the ladder's `traffic` mark), not at its verdict:
 # 99.96% of a window's rows have landed three minutes after its end
 # (`SETTLE_HOLD_MS`), so the first read then that agrees with the one before it
@@ -1387,10 +1387,8 @@ if [ "$KINU_ENV" = "staging" ] && [ "${DEPLOY_PUBLISHED:-0}" = "1" ] && [ -n "$K
   echo -e "${BOLD}Step 5b: What version $KINU_VERSION did on staging${NC}"
   KINU_TRAFFIC_ENDED="$(report when traffic)" || KINU_TRAFFIC_ENDED=""
   bun "$KINU_ROOT/scripts/prod-logs.ts" version "$KINU_VERSION" --worker "$KINU_WORKER" --since "$KINU_LIVE_AT" \
-    ${KINU_TRAFFIC_ENDED:+--until "$KINU_TRAFFIC_ENDED"} --keep-windows "$KINU_ENV" || {
-    KINU_REDS=1
-    reported_red telemetry || report note telemetry "the telemetry read" "scripts/prod-logs.ts ended red and named no finding of its own"
-  }
+    ${KINU_TRAFFIC_ENDED:+--until "$KINU_TRAFFIC_ENDED"} --keep-windows "$KINU_ENV" \
+    || report notice telemetry "the telemetry read" "scripts/prod-logs.ts found something; each finding is a notice here, and none holds the deploy"
 fi
 
 # ── Step 6: The record, or the history and the evals ─────────────
