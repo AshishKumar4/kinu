@@ -44,6 +44,7 @@ import { noHead, ownerGate, rawParam, type FamilyEnv } from '../api/context';
 import { accountApi, type AccountApiVariables } from '../user/account-api';
 import { authenticateCli, type CliBearerVariables } from '../api/cli-bearer';
 import * as v from 'valibot';
+import { classifyDoCall, isRetryableDoCall } from '@nimbus-sh/platform/oom-classify.js';
 import { authoredRefusal, classify, diagnostics, KinuError, renderThrownChain, toKinuError, settleLogged, settle } from '@kinu.run/core/obs';
 
 /** A machine's public key, and how it came to ask: `device` a browser issued it, `reenrol` its id from an earlier
@@ -1097,14 +1098,17 @@ exec "$KINU_BUN" "\${KINU_BUN_ISOLATED[@]}" run "$CLI_DIR/cli.js" "$@"
   });
 }
 
-/** Rate limits are 429, caller-correctable code failures are 400, and
- *  everything else (KV outage, UserDO failure, …) is a real 500. */
+/** Rate limits are 429, caller-correctable code failures are 400, a platform failure of an object that outlasted the
+ *  store's retries is 503 (try again), and everything else (KV outage, a UserDO refusal, …) is a real 500. */
 function cliAuthError(e: Error): Effect.Effect<Response, KinuError> {
   if (e instanceof RateLimitError) return Effect.succeed(err(429, e.message));
 
   if (e instanceof CliAuthCodeError) return Effect.succeed(err(400, e.message));
+  const transient = classifyDoCall(e);
 
-  return Effect.fail(toKinuError({ doing: 'answering a CLI sign-in request', cause: e, otherwise: 'io' }));
+  return Effect.fail(toKinuError({
+    doing: 'answering a CLI sign-in request', cause: e, otherwise: isRetryableDoCall(transient) || transient === 'overloaded' ? 'unavailable' : 'io',
+  }));
 }
 
 
