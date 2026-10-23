@@ -11,7 +11,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { readSources } from "../../../scripts/sources.ts";
+import { isWorkerSource, readSources } from "../../../scripts/sources.ts";
 import { isFunctionLike, parse, superClassName, walk } from "../../../scripts/syntax.ts";
 import { lintJson, type LintDiagnostic } from "./shared/oxlint-json.ts";
 import { readLintConfig } from "./shared/lint-config.ts";
@@ -134,6 +134,23 @@ export async function ask(model: never, prompt: string, spend: never): Promise<s
 `,
   },
   {
+    rule: "no-unmeasured-dynamic-import",
+    // A sibling loaded inline with no measurement: a deferral nothing showed was a cut, and an await the path did not need.
+    at: "packages/cf-backend/src",
+    bad: `export async function packed(text: string): Promise<Uint8Array> {
+  const { gzipSync } = await import("node:zlib");
+
+  return gzipSync(text);
+}
+`,
+    good: `import { gzipSync } from "node:zlib";
+
+export function packed(text: string): Uint8Array {
+  return gzipSync(text);
+}
+`,
+  },
+  {
     rule: "require-variant-utility",
     // A hover state on a plain components rule: Tailwind emits no rule for it, so it never paints.
     beside: {
@@ -239,13 +256,15 @@ for (const { rule } of cases) {
  * SQL rule, and function declarations for the duplicate rule. A corpus that has silently gone to
  * zero on either must fail loudly rather than report a clean lint.
  */
-const corpus = { files: 0, selects: 0, functions: 0, modelCalls: 0, agentClasses: 0, tuiModules: 0, variantClasses: 0 };
+const corpus = { files: 0, selects: 0, functions: 0, modelCalls: 0, agentClasses: 0, tuiModules: 0, variantClasses: 0, dynamicImports: 0 };
 /** Functions, and classes whose `extends` names an agent base, read from the parsed source. */
-function shapes(file: string, text: string): { functions: number; agentClasses: number } {
-  const counted = { functions: 0, agentClasses: 0 };
+function shapes(file: string, text: string): { functions: number; agentClasses: number; dynamicImports: number } {
+  const counted = { functions: 0, agentClasses: 0, dynamicImports: 0 };
 
   walk(parse(file, text).root, (node) => {
     if (isFunctionLike(node) && node.type !== "MethodDefinition") counted.functions += 1;
+
+    if (node.type === "ImportExpression" && isWorkerSource(file)) counted.dynamicImports += 1;
     const base = superClassName(node);
 
     if (base === "Agent" || base === "ActorAgent") counted.agentClasses += 1;
@@ -261,7 +280,7 @@ assert.deepEqual(shapes("fixture.ts", [
   "  extends ActorAgent<Env> {}",
   "const label = 'a => b';",
   "",
-].join("\n")), { functions: 0, agentClasses: 1 });
+].join("\n")), { functions: 0, agentClasses: 1, dynamicImports: 0 });
 
 for (const [file, text] of readSources()) {
   corpus.files += 1;
@@ -270,6 +289,7 @@ for (const [file, text] of readSources()) {
   corpus.functions += found.functions;
   corpus.modelCalls += text.match(/\b(generateText|streamText|generateObject|streamObject)\(/gu)?.length ?? 0;
   corpus.agentClasses += found.agentClasses;
+  corpus.dynamicImports += found.dynamicImports;
   corpus.tuiModules += file.startsWith("packages/cli/src/tui/") ? 1 : 0;
   corpus.variantClasses += text.match(/[a-z-]+:p-[a-z]/gu)?.length ?? 0;
 }
@@ -280,6 +300,7 @@ assert.ok(corpus.modelCalls > 0, `found ${corpus.files} sources but no model cal
 assert.ok(corpus.agentClasses > 0, `found ${corpus.files} sources but no class on an agent base; the seal rule would inspect nothing`);
 assert.ok(corpus.tuiModules > 0, `found ${corpus.files} sources but none under packages/cli/src/tui; the colour rule would inspect nothing`);
 assert.ok(corpus.variantClasses > 0, `found ${corpus.files} sources but no variant-prefixed design class; the utility rule would inspect nothing`);
+assert.ok(corpus.dynamicImports > 0, `found ${corpus.files} sources but no import() in Worker source; the measured-import rule would inspect nothing`);
 
 // System temp dir, NOT the repo root: gates built on scripts/sources.ts enumerate untracked
 // worktree files on purpose, so repo-root scratch is visible mid-run to every one of them.
@@ -345,7 +366,7 @@ try {
   );
 
   process.stdout.write(
-    `no-design-smells: ${cases.length} rules proven red->green through oxlint over ${corpus.selects} SELECTs, ${corpus.functions} functions, ${corpus.modelCalls} model calls, ${corpus.agentClasses} agent classes, ${corpus.tuiModules} TUI modules and ${corpus.variantClasses} variant classes in ${corpus.files} sources\n`,
+    `no-design-smells: ${cases.length} rules proven red->green through oxlint over ${corpus.selects} SELECTs, ${corpus.functions} functions, ${corpus.modelCalls} model calls, ${corpus.agentClasses} agent classes, ${corpus.tuiModules} TUI modules, ${corpus.variantClasses} variant classes and ${corpus.dynamicImports} dynamic imports in ${corpus.files} sources\n`,
   );
 } finally {
   rmSync(fixtures, { recursive: true, force: true });

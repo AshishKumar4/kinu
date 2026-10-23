@@ -200,7 +200,8 @@ function connectRunKey(serverId: string, state?: string): string {
 
 const StoredConnectRunSchema = v.object({ run: ConnectRunSchema });
 
-/** The account's MCP servers. */
+/** The account's MCP servers. Each call that meets the wire imports `./mcp`, the SDK's half of the client, there: 471 to
+ *  419 ms of startup (L27). */
 export class UserMcpServers {
   private readonly restoreUserMcp: ReturnType<typeof retireActivationRestore>;
 

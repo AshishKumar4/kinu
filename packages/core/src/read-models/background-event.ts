@@ -146,7 +146,7 @@ export function slatesChanged(row: { metadata: unknown }): readonly string[] {
   return metadataField(row, SLATES_CHANGED_METADATA_KEY, v.array(v.string())) ?? [];
 }
 
-/** The changed slates no answer showed or linked; the Markdown grammar loads only when there are words to read. */
+/** The changed slates no answer showed or linked; the Markdown grammar loads only when there are words to read (d6d81cbf9). */
 export async function slatesToPreview(changed: Iterable<string>, shown: ReadonlySet<string>, texts: readonly string[]): Promise<string[]> {
   const pending = new Set(changed);
 

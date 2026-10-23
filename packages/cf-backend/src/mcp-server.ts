@@ -166,6 +166,7 @@ function serveMcp<Id>(request: Request, env: McpEnv<Id>, resolveAgent: McpResolv
 
     return yield* Effect.tryPromise({
       try: async () => {
+        // The server SDK loads at the first MCP request: the startup closure 6,981 to 6,533 KiB (12d8c7440).
         const { answerMcp } = await import("./mcp-tools");
 
         return withCors(await answerMcp(request, resolveAgent, agentName, answer));
