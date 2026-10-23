@@ -9,7 +9,7 @@ import { SessionContext, type ContextSelection, type ContextEntry } from './cont
 import { SessionProposals, type ContextProposal } from './proposals';
 import { SessionRequests } from './requests';
 import { KinuError } from '../obs/error';
-import { settleSync } from '../obs/effect';
+import { settle, settleSync } from '../obs/effect';
 import { diagnostics } from '../obs/log';
 import { SessionTranscript, type ConversationEntry } from './transcript';
 import { toolPairingGaps } from './tool-pairing';
@@ -430,7 +430,7 @@ export class SessionHistory {
     for (const row of rows) {
       const held = stored.get(row.message_id);
 
-      if (held === undefined) throw new KinuError('missing', 'session message does not exist');
+      if (held === undefined) return settle(Effect.fail(new KinuError('missing', 'session message does not exist')));
 
       for (const part of held) parts.push({ messageId: row.message_id, partNo: part.partNo, epoch: row.epoch, step: row.step, order: part.streamOrder });
     }
