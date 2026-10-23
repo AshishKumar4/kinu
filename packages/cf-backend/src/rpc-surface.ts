@@ -200,6 +200,7 @@ const USER_DO_METHODS = [
   'userMcp_handleOAuthCallback',
   'userMcp_beginConnect',
   'userMcp_reconnect',
+  'evalAbortActivation',
   'userMcp_connectedPresets',
   'userMcp_list',
   'userMcp_presets',
@@ -247,7 +248,7 @@ export type UserDoRpcMethod = (typeof USER_DO_METHODS)[number];
 export const USER_DO_RPC_SURFACE: readonly string[] = [...PLATFORM_RPC_SURFACE, ...USER_DO_METHODS];
 
 /** Never gated: a deletion must work when start throws, and the deploy's tables walk reads tables alone. */
-const USER_DO_STARTLESS: ReadonlySet<string> = new Set(['deleteAccount', 'opsTables']);
+const USER_DO_STARTLESS: ReadonlySet<string> = new Set(['deleteAccount', 'opsTables', 'evalAbortActivation']);
 
 export const USER_DO_STARTED_RPC: readonly string[] = USER_DO_METHODS.filter((name) => !USER_DO_STARTLESS.has(name));
 

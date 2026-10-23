@@ -1,9 +1,9 @@
 /**
  * An account's MCP server answers the first call after the account's object has slept. The account's object (UserDO)
  * hibernates after seconds idle and every wake dials each server again. This case connects the tiers' own server
- * (scripts/scripted-mcp.ts), calls it, then leaves the account idle long enough to sleep, and calls again at once. That
- * second call is the first request of the wake, and it reads the account's tool surface the way a turn does (a slate's
- * call goes through `userMcp_toolDescriptors`).
+ * (scripts/scripted-mcp.ts), calls it, ends the account's activation as hibernation does (the eval-only
+ * `POST /api/user/eval/abort`), and calls again at once. That second call is the first request of the wake, and it reads
+ * the account's tool surface the way a turn does (a slate's call goes through `userMcp_toolDescriptors`).
  */
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
@@ -28,9 +28,9 @@ const DEFECT: FirstRunDefect = {
     + 'dial ("it returns promptly while a server is still connecting"), and no deployed row ever let an account sleep '
     + 'before using its connection.',
   provedRedAt: null,
-  redDirection: 'RED on a build whose descriptor read does not wait for its wake\'s dials: the call after the idle answers "Your '
-    + 'connections do not offer …", so `answers-first-call-after-sleep` is missed. Green requires the call before the idle '
-    + 'and the first call after it to answer, and the server to be removed.',
+  redDirection: 'RED on a build whose descriptor read does not wait for its wake\'s dials: the call after the wake answers "Your '
+    + 'connections do not offer …", so `answers-first-call-after-wake` is missed. Green requires the account\'s activation to '
+    + 'end on request, the call before it and the first call after it to answer, and the server to be removed.',
 };
 
 const PLAN = firstRunCasePlan(SUITE, 'mcpwake');
@@ -40,12 +40,6 @@ const liveTest = test.skipIf(PLAN === null);
 const observations: EvalObservation[] = [];
 
 afterAll(async () => { await publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
-
-/**
- * How long the account is left alone: longer than the idle after which production woke the owner's object afresh
- * (14-56 s, 2026-10-23), and than a Durable Object's idle eviction (70-140 s).
- */
-const IDLE_MS = 150_000;
 
 const Answered = v.object({ ok: v.literal(true), value: JsonValueSchema });
 
@@ -69,7 +63,7 @@ describe(SUITE, () => {
 
     await runFirstRunCase(PLAN, {
       id: CASE, defect: DEFECT, modelCalls: 'none', genesis: false,
-      budgetMs: IDLE_MS + 180_000,
+      budgetMs: 180_000,
       purpose: 'Disposable MCP wake probe; no model task.',
       async run({ session, plan }) {
         const headers = webHeaders(plan.identity);
@@ -116,12 +110,14 @@ END`));
         try {
           const before = await called();
 
-          subgoals.push({ what: 'answers-before-sleep', reached: before.answered, detail: before.detail });
-          // Nothing of this account is touched while it sleeps: the next call is the first request of its wake.
-          await new Promise((resolve) => { setTimeout(resolve, IDLE_MS); });
+          subgoals.push({ what: 'answers-before-wake', reached: before.answered, detail: before.detail });
+          // The account's activation ends as hibernation ends it; the next call is the first request of its wake.
+          const aborted = await fetch(`${plan.origin}/api/user/eval/abort`, { method: 'POST', headers });
+
+          subgoals.push({ what: 'account-activation-ended', reached: aborted.status === 202, detail: `abort answered ${String(aborted.status)}` });
           const after = await called();
 
-          subgoals.push({ what: 'answers-first-call-after-sleep', reached: after.answered, detail: after.detail });
+          subgoals.push({ what: 'answers-first-call-after-wake', reached: after.answered, detail: after.detail });
         } finally {
           const removed = await fetch(`${plan.origin}/api/user/mcp/servers/${encodeURIComponent(connection.output.id)}`, { method: 'DELETE', headers });
 

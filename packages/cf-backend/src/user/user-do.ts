@@ -853,6 +853,14 @@ export class UserDO extends Agent<Env> {
     return this.mcpServers.userMcp_reconnect(caller, id);
   }
 
+  /**
+   * Eval-only: ends this account's activation as the platform's hibernation does, so the next request is a fresh wake
+   * that dials every MCP server again. Sealed in `rpc-surface.ts`, eval-service identity only (`eval/abort-route.ts`).
+   */
+  evalAbortActivation(): void {
+    this.ctx.abort('eval-service: the account activation was aborted on request');
+  }
+
   chatgptPlan(caller: UserCaller): Promise<ChatGptPlanStatus> {
     return this.chatgpt.chatgptPlan(caller);
   }

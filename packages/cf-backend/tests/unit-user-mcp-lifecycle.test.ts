@@ -6,7 +6,7 @@ import {
   type TestUserDO, type TestUserDOOptions,
 } from './helpers/user-do';
 import {
-  closeMcpTransport, seedMcpAnswer, failNextMcpToolCall, failNextMcpDiscovery, hangMcpEstablish, hangNextMcpConnect, holdNextMcpToolCall, inheritedMcpManager,
+  closeMcpTransport, seedMcpAnswer, failNextMcpToolCall, failNextMcpDiscovery, hangMcpEstablish, hangNextMcpConnect, holdNextMcpToolCall, inheritedMcpManager, nextMcpWait,
   liveMcpFetch, liveMcpTransport, recordedMcpFetch, recordedMcpLifecycle, recordedMcpServers, recordedMcpToolAborts,
   recordedMcpToolCalls, requireMcpSignIn, resetRecordedMcp, seedMcpSession, seedMcpTools, seedMcpAuthContinuation, seedConfiguredMcpServer, seedSdkMcpServer, seedUndiscoveredMcpTools,
 } from './helpers/agents-sdk';
@@ -311,9 +311,10 @@ describe('the descriptor read is off the connection critical path', () => {
     await seedServer(first, 'srv1', { name: 'fast' });
     seedConfiguredMcpServer(sqlExec(first.db), 'srv2', { name: 'waking', url: 'https://srv2.example/sse', transport: 'auto', headers: 'sealed' });
     const gate = hangMcpEstablish();
-    // The activation registers the credentialed server and starts its dial, as a wake does.
+    // The read is the wake's first request: its activation registers the credentialed server and starts its dial.
     const h = createTestUserDO({ storage: first.db });
-    const warming = h.userDO.userMcp_warmConnections(owner);
+    const waiting = nextMcpWait();
+    const reading = readSurface(h, owner);
 
     // The gate must be engaged, or this cannot tell "the read waits" from "nothing to wait for".
     await gate.entered;
@@ -323,16 +324,15 @@ describe('the descriptor read is off the connection critical path', () => {
     seedMcpTools('srv2', [{ name: 'woken_tool', inputSchema: { type: 'object' } }]);
     liveConnection(h, 'srv2').connectionState = 'connecting';
 
-    // Read before the dial ends, released well after a read that did not wait would have answered without it.
-    const reading = readSurface(h, owner);
+    // A read that did not wait answers while the dial is still out; one that waits reaches the wait first.
+    const firstToCome = await Promise.race([reading.then(() => 'answered' as const), waiting.then(() => 'waiting' as const)]);
 
-    await new Promise((resolve) => { setTimeout(resolve, 200); });
     gate.release();
     const surface = await reading;
 
+    expect(firstToCome).toBe('waiting');
     expect(surface.descriptors.map((d) => d.toolKey)).toEqual(['mcp_fast_ready_tool', 'mcp_waking_woken_tool']);
     expect(surface.unavailable).toEqual([]);
-    await warming;
     h.close();
     first.close();
   });
