@@ -221,6 +221,9 @@ export function cliAccount<Built extends Partial<CliRoutesAuthority>>(built: Bui
     getCredentialEndpoint: refuse('getCredentialEndpoint'),
     // An account's own AI in other people's slates: none in these tests.
     slateAiSpend: async () => [],
+    // The owner's limits as a deployment with no free tier answers them: every call admitted, nothing to count.
+    limits_admitTurn: async () => undefined,
+    limits_platformTokensSpent: async () => undefined,
     relayDevice: refuse('relayDevice'),
     relayModelCall: refuse('relayModelCall'),
     cancelModelRelay: refuse('cancelModelRelay'),

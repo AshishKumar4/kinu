@@ -5,7 +5,8 @@ import { serveFamily } from './helpers/api';
 import { afterEach, describe, expect, test } from 'bun:test';
 import type { CliRoutesEnv } from '../src/cli/routes';
 import { aiProxyRoutes } from '../src/user/ai-proxy';
-import { cliAccount, unreachableAssets, unreachableKv, unreachableNamespace } from './helpers/bindings';
+import { cliAccount, unreachableAssets, unreachableKv, unreachableNamespace, workerContext } from './helpers/bindings';
+import { KinuError } from '@kinu.run/core/obs';
 import {
   asFetchFunction,
   parseJsonObject,
@@ -18,7 +19,10 @@ import { chatResponse, OK_CHAT_ANSWER } from '@kinu.run/test-utils';
 import { requestUrl } from '@kinu.run/core';
 
 
-const aiProxy = serveFamily(aiProxyRoutes);
+/** What the proxy left running past its answer: a platform model's tokens counted to the owner's day. */
+const PROXY_CTX = workerContext();
+
+const aiProxy = serveFamily(aiProxyRoutes, { ctx: PROXY_CTX });
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 
@@ -275,6 +279,33 @@ describe('AI proxy model → upstream selection', () => {
     // The raw answer keeps a refusal's status for the CLI's retry; the replica pin rides the binding's headers.
     expect(directOptions[0]?.returnRawResponse).toBe(true);
     expect(directOptions[0]?.extraHeaders).toEqual({ 'x-session-affinity': 'eval-run' });
+  });
+
+  test("a call on the platform's models is the owner's limits' to admit, and its tokens count to the owner's day", async () => {
+    const counted: number[] = [];
+    const { env, directRuns } = setupEnv({ evalService: true });
+    const refusing = { refuse: false };
+    // The account's limits as its object answers them, refusing once told to.
+    Object.assign(env.UserDO.get('owner'), {
+      async limits_admitTurn() {
+        if (refusing.refuse) throw new KinuError('budget', "Request refused before submission: today's free model use is spent (500,000 of 500,000 tokens).");
+      },
+      async limits_platformTokensSpent(_caller: UserCaller, tokens: number) { counted.push(tokens); },
+    });
+
+    const answered = await aiProxy(chatRequest(AI_TOKEN, { model: '@cf/moonshotai/kimi-k2.6', messages: [{ role: 'user', content: 'ping' }] }), env);
+
+    expect(answered?.status).toBe(200);
+    await Promise.all(PROXY_CTX.retained);
+    expect(counted).toEqual([2]);
+
+    refusing.refuse = true;
+    const refused = await aiProxy(chatRequest(AI_TOKEN, { model: '@cf/moonshotai/kimi-k2.6', messages: [{ role: 'user', content: 'ping' }] }), env);
+
+    expect(refused?.status).toBe(413);
+    expect(await refused?.text()).toContain("today's free model use is spent");
+    // Refused before the binding: the model never ran for it.
+    expect(directRuns).toHaveLength(1);
   });
 
   test('a binding stream held open after [DONE] still ends', async () => {

@@ -37,10 +37,29 @@ export interface BindingCompletionRequest {
   readonly model: string;
   readonly body: JsonObject;
   readonly request: Request;
+  /** The tokens (input and output) the answer reports it spent, told once it says so: what the platform paid for. */
+  readonly spent?: (tokens: number) => void;
+}
+
+/** A frame's or a whole answer's `usage`, in either API's names. */
+const UsageCarrierSchema = v.looseObject({
+  usage: v.looseObject({
+    prompt_tokens: v.optional(v.number()), completion_tokens: v.optional(v.number()),
+    input_tokens: v.optional(v.number()), output_tokens: v.optional(v.number()),
+  }),
+});
+
+type UsageCarrier = v.InferOutput<typeof UsageCarrierSchema>;
+
+/** Tells `spent` of the tokens, input and output, a frame or a whole answer reports it spent. */
+function report(spent: ((tokens: number) => void) | undefined, { usage }: UsageCarrier): void {
+  const tokens = (usage.prompt_tokens ?? usage.input_tokens ?? 0) + (usage.completion_tokens ?? usage.output_tokens ?? 0);
+
+  if (tokens > 0) spent?.(tokens);
 }
 
 /** The raw answer keeps the refusal's status and Retry-After for the caller's retry; a cancelled call is the caller's. */
-export function bindingCompletion(binding: WorkersAIRunBinding, { model, body, request }: BindingCompletionRequest): Effect.Effect<Response> {
+export function bindingCompletion(binding: WorkersAIRunBinding, { model, body, request, spent }: BindingCompletionRequest): Effect.Effect<Response> {
   const affinity = sessionAffinityOf(request.headers);
 
   const options: WorkersAIRunOptions = {
@@ -53,7 +72,7 @@ export function bindingCompletion(binding: WorkersAIRunBinding, { model, body, r
 
   return Effect.tryPromise({ try: () => binding.run(model, bindingInputs(body, stream), options), catch: (cause) => cause }).pipe(
     Effect.matchEffect({
-      onSuccess: (answer) => Effect.promise(() => relayed(answer, model, stream)),
+      onSuccess: (answer) => Effect.promise(() => relayed(answer, { model, stream, spent })),
       onFailure: (cause) => {
         const failure = toKinuError({ doing: `Workers AI binding inference for ${model}`, cause, otherwise: 'io' });
 
@@ -76,18 +95,25 @@ function bindingInputs(body: JsonObject, stream: boolean): JsonObject {
 }
 
 /** `Ai.run` rereads its options from the shared binding after awaiting, so a concurrent call can pick the shape. */
-async function relayed(answer: Response | ReadableStream<Uint8Array> | JsonObject, model: string, stream: boolean): Promise<Response> {
+async function relayed(
+  answer: Response | ReadableStream<Uint8Array> | JsonObject,
+  { model, stream, spent }: Pick<BindingCompletionRequest, 'model' | 'spent'> & { readonly stream: boolean },
+): Promise<Response> {
   if (answer instanceof Response && !answer.ok) return refusal(answer);
   const body = answer instanceof Response ? answer.body : answer;
   const json = answer instanceof Response && (answer.headers.get('content-type') ?? '').includes('json');
 
   if (body instanceof ReadableStream && !json && stream) {
-    return new Response(body.pipeThrough(openAIEvents(model)), { headers: { 'content-type': 'text/event-stream' } });
+    return new Response(body.pipeThrough(openAIEvents(model, spent)), { headers: { 'content-type': 'text/event-stream' } });
   }
 
   if (stream) return errorResponse(502, `Workers AI model ${model} did not stream: it answered a whole completion.`);
+  const whole = body instanceof ReadableStream ? v.parse(JsonObjectSchema, await new Response(body).json()) : body ?? {};
+  const carried = v.safeParse(UsageCarrierSchema, whole);
 
-  return completion(body instanceof ReadableStream ? v.parse(JsonObjectSchema, await new Response(body).json()) : body ?? {}, model);
+  if (carried.success) report(spent, carried.output);
+
+  return completion(whole, model);
 }
 
 async function refusal(answer: Response): Promise<Response> {
@@ -134,7 +160,7 @@ function toolCalls(output: NativeOutput, scope: string, offset: number): JsonObj
 
 /** Line by line: OpenAI chunks, comments and separators pass verbatim; a native frame becomes chunks; `[DONE]` ends the
  *  stream, because the binding may hold its body open behind it. */
-function openAIEvents(model: string): TransformStream<Uint8Array, Uint8Array> {
+function openAIEvents(model: string, spent: ((tokens: number) => void) | undefined): TransformStream<Uint8Array, Uint8Array> {
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   const id = `chatcmpl-${crypto.randomUUID()}`;
@@ -153,6 +179,11 @@ function openAIEvents(model: string): TransformStream<Uint8Array, Uint8Array> {
   const translated = (line: string): string | null => {
     const data = line.startsWith('data:') ? tolerate<unknown>(() => JSON.parse(line.slice('data:'.length)), 'malformed-input') : undefined;
     const openAI = v.safeParse(ChunkSchema, data);
+
+    // Its usage, in either shape, is what the stream says it spent: the frame passes on as it came.
+    const carried = v.safeParse(UsageCarrierSchema, data);
+
+    if (carried.success) report(spent, carried.output);
 
     if (openAI.success) {
       finished ||= openAI.output.choices.some((choice) => choice.finish_reason != null);
