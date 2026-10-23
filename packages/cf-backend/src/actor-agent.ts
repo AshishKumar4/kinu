@@ -416,6 +416,22 @@ const SIZE_REPORT_MS = 10 * 60_000;
 /** Set once a program of this workspace has run on its node (`node-program.ts`): its turns then start node as they open. */
 const NODE_PROGRAMS_RAN_KEY = 'kinu:node-programs-ran';
 
+/**
+ * Why a slate's call to `server`'s `tool` found nothing, in words the person can act on: a fork reaches its forker's own
+ * server of that name, never the original owner's, so a server this account has not connected says to connect it.
+ */
+function mcpMissing(offered: McpToolSurface, server: string, tool: string): string {
+  const unavailable = offered.unavailable.find((row) => row.server === server);
+
+  if (unavailable !== undefined) return `The MCP server ${server} is not available: ${unavailable.reason}`;
+
+  if (!offered.descriptors.some((d) => d.serverName === server)) {
+    return `No MCP server named ${server} is connected to this account. Connect one in Settings > MCP servers, then run this again.`;
+  }
+
+  return `${server} offers no tool ${tool} to this actor`;
+}
+
 export abstract class ActorAgent extends Agent<Env> {
   // Actor profile: these members are the whole difference between actor kinds.
 
@@ -2615,7 +2631,7 @@ export abstract class ActorAgent extends Agent<Env> {
           // A server is named as the actor's programs name it, so a fork reaches its forker's server of that name.
           const descriptor = offered.descriptors.find((d) => d.serverName === route.server && d.name === route.tool);
 
-          if (descriptor === undefined) return yield* new KinuError('missing', `${route.server} offers no tool ${route.tool} to this actor`);
+          if (descriptor === undefined) return yield* new KinuError('missing', mcpMissing(offered, route.server, route.tool));
           // Enforce `readOnly` grants here so a read grant cannot write through a non-read-only tool.
 
           if (route.readOnly === true && descriptor.readOnly !== true) {
