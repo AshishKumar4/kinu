@@ -50,7 +50,8 @@ function frontmatterDoc(src: string): Effect.Effect<MarkdownDoc> {
   const fmRaw = src.slice(4, closeMatch.index);              // skip "---\n"
   const body = src.slice(closeMatch.index + closeMatch[0].length);
 
-  return Effect.map(flatYaml(fmRaw), (frontmatter) => ({ frontmatter, body }));
+  // A header saved with CRLF or CR line ends reads as it would with LF ones; the body keeps its bytes.
+  return Effect.map(flatYaml(fmRaw.replace(/\r\n?/gu, '\n')), (frontmatter) => ({ frontmatter, body }));
 }
 
 function flatYaml(src: string): Effect.Effect<JsonObject> {
