@@ -489,21 +489,27 @@ describe('a code update\'s reset in a version\'s window', () => {
 // only under this version and in its window.
 describe('an alarm in a version\'s window, beside a deletion under the version before', () => {
   const from = Date.parse('2026-10-23T02:24:40Z');
-  const to = Date.parse('2026-10-23T02:31:20Z');
-  const delivered = '2026-10-23 02:25:00';
+  const to = Date.parse('2026-10-23T03:31:20Z');
+  const destroyedAt = Date.parse('2026-10-23T02:15:15.408Z');
 
-  /** The version's read, its alarms those `alarms` names at 02:25Z, those of `canceled` the platform's `canceled`, and
-   *  `deleted-before` destroyed at 02:15:15Z under the version before: only a read of its own rows, unscoped, finds it. */
-  const idleWakes = async (alarms: readonly string[], canceled: readonly string[]) => {
+  /** The version's read, its alarms those `alarms` names at `delivered`, those of `canceled` the platform's `canceled`,
+   *  and `deleted-before` destroyed at 02:15:15Z under the version before: only a read of its own rows, unscoped, finds
+   *  it, and only one that reaches back to it. `sampledWork`: the API sampled the reads of the version's calls. */
+  const read = async (alarms: readonly string[], canceled: readonly string[], { delivered = '2026-10-23 02:25:00', sampledWork = false } = {}) => {
     const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: async (request) => {
-      const body = JSON.stringify(await request.json());
+      const asked = v.parse(v.looseObject({ timeframe: v.optional(v.object({ from: v.number() })) }), await request.json());
+      const body = JSON.stringify(asked);
       const has = (text: string) => body.includes(text);
       const series = (objects: readonly string[]) => [{ alias: 'count', series: [{ time: delivered, data: objects.map((object) => ({ groups: [{ key: '$workers.durableObjectId', value: object }], value: 1 })) }] }];
 
       if (has('"granularity"') && has('"operation":"eq","value":"alarm"')) return Response.json({ success: true, result: { calculations: series(has('"value":"canceled"') ? canceled : alarms) } });
 
-      if (has('"view":"events"') && has('"value":"workspace.destroyed"') && has('"key":"fields.object","operation":"eq","value":"deleted-before"') && !has('scriptVersion')) {
-        const row = { timestamp: Date.parse('2026-10-23T02:15:15.408Z'), source: { event: 'workspace.destroyed', fields: { workspace: 'eval-killn-kimi-0-xrstnt', object: 'deleted-before' } } };
+      if (has('"granularity"') && has('"operation":"neq","value":"alarm"') && sampledWork) return Response.json({ success: true, result: { statistics: { abr_level: 10 } } });
+
+      const reaches = (asked.timeframe?.from ?? Infinity) <= destroyedAt;
+
+      if (has('"view":"events"') && has('"value":"workspace.destroyed"') && has('"key":"fields.object","operation":"eq","value":"deleted-before"') && !has('scriptVersion') && reaches) {
+        const row = { timestamp: destroyedAt, source: { event: 'workspace.destroyed', fields: { workspace: 'eval-killn-kimi-0-xrstnt', object: 'deleted-before' } } };
 
         return Response.json({ success: true, result: { events: { events: [row] } } });
       }
@@ -513,13 +519,14 @@ describe('an alarm in a version\'s window, beside a deletion under the version b
 
     try {
       const window = { worker: 'kinu-staging', from, to };
-      const read = await versionRead(new Telemetry('token', window, server.url.origin), new Telemetry('token', window, server.url.origin), 'v1');
 
-      return read.idleWakes.map((idle) => idle.object);
+      return await versionRead(new Telemetry('token', window, server.url.origin), new Telemetry('token', window, server.url.origin), 'v1');
     } finally {
       await server.stop(true);
     }
   };
+
+  const idleWakes = async (...args: Parameters<typeof read>) => (await read(...args)).idleWakes.map((idle) => idle.object);
 
   test('a delivery cancelled after an earlier version deleted its object is no wake', async () => {
     expect(await idleWakes(['deleted-before'], ['deleted-before'])).toEqual([]);
@@ -527,6 +534,19 @@ describe('an alarm in a version\'s window, beside a deletion under the version b
 
   test('an alarm that ran with no work is a wake, and so is a cancelled one of an object never deleted', async () => {
     expect(await idleWakes(['idle', 'moved'], ['moved'])).toEqual(['idle', 'moved']);
+  });
+
+  // 04603ec96's deploy read a day before each such delivery, for every kept window at once, and the API answered 500.
+  test('a deletion is read back an hour from its delivery, and no further', async () => {
+    expect({
+      within: await idleWakes(['deleted-before'], ['deleted-before'], { delivered: '2026-10-23 03:14:00' }),
+      past: await idleWakes(['deleted-before'], ['deleted-before'], { delivered: '2026-10-23 03:16:00' }),
+    }).toEqual({ within: [], past: ['deleted-before'] });
+  });
+
+  // 04603ec96's deploy, its own read sampled at level 1,000,000, read alarms beside dropped calls as idle wakes.
+  test('a read whose answers of the version\'s work were sampled is asked again, never read as idle', async () => {
+    await expect(read(['idle'], [], { sampledWork: true })).rejects.toMatchObject({ code: 'unavailable', message: expect.stringContaining('sampled the reads of the version\'s work') });
   });
 });
 
