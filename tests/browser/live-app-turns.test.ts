@@ -174,4 +174,13 @@ describe('a turn a signal opened draws live while it runs, and settles once it e
     expect(thought.ended?.label).not.toBe(thought.live?.label);
     expect(thought.ended).toMatchObject({ state: 'done', shown: false });
   });
+
+  // The owner: "as I type into this prompt box, the highlighting is wrong here": a square ring inside the rounded composer.
+  test("the composer's field takes no ring of its own, steering or idle, and the control after it keeps its own", () => {
+    const { focus } = verdictOf(observed.turnDrawn, 'turn-drawn');
+
+    expect(focus.steering).toMatchObject({ outline: 'none', inComposer: true });
+    expect(focus.idle).toMatchObject({ outline: 'none', inComposer: true });
+    expect(focus.next.outline).not.toBe('none');
+  });
 });
