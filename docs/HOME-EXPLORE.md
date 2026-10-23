@@ -44,6 +44,23 @@ Setup's new step "A personal assistant" opens with Yes chosen, so Next installs 
 - A **workspace** it runs: status dot, its headline (Working, Needs you · n, Last run failed), its plan's title and a done/total bar, in Today's Workspaces; the brief names what each did overnight.
 - A **watch**: its last finding in a line, checked and next times, in Today's Watching; a firing that found something becomes a turn in the chat, opened by its event pill.
 
+### Held to Muse's bar
+
+The owner asked for the personal assistant to be "as polished and nice as Meta Muse" (2026-10-18, 1018-xao). Muse is
+Meta's personal agent. Its own sources (about.fb.com's launch post, its App Store listing, and Meta's help page on
+approvals) describe the patterns below. Each one is mapped to what Kinu has.
+
+| Muse | Kinu |
+| --- | --- |
+| One conversation, like messaging a person ("just like messaging another person") | Home is the assistant's chat, with nothing above it (`1c58cfce0`) |
+| A status at the top in plain words ("Is working", "Making something", "Is updating memory") | Home's bar names the step a live turn is on, in its call's own words ("Running bun test", "Writing"), not a generic "Working" (`focus-line.ts`, this change) |
+| Upcoming: its scheduled tasks and reminders | At rest, the bar counts what it watches and names the next one due, from its own triggers ("Watching 4 · Daily brief tomorrow 8:00 AM"), where it said "Idle" (this change) |
+| Asks before sensitive actions: allow once, always, or deny | The approval stack's Approve, Always and Deny, and standing approvals under Settings |
+| Keeps working after you leave, and comes back when something changes or needs you | Turns run without the page; owner alerts chime and notify when something waits on you |
+| Remembers, and forgets what you tell it to | Account and workspace memory, each fact forgettable in Settings › Memory and the Agent tab |
+| "Name it, shape how it talks, and make it your own" | Setup names it, and its face comes from your name (`355bd2e55`); its soul sets how it talks |
+| A full activity log of what it did and plans to do | Not built as one view. The Agent tab's Changelog and Work hold its parts; tapping the assistant could open them as Muse's does, which is next |
+
 ## 3. The focus layout
 
 A workspace keeps a layout, `workbench` (today's) or `focus`, in its root actor's config (`layout`), so every browser shows it alike and a blueprint can set it. Focus draws the chat alone at the reading width: the bar shows who is talking in place of the chat tabs (a Chats button reveals them when there is more than one), the inspector starts closed and never opens by itself for what waits on the owner, and the agents stay behind the bar's agents button. The phone shows one bar. Any workspace can choose it in its settings (wireframe `focus-workspace`).
