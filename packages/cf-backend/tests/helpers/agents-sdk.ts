@@ -916,18 +916,6 @@ let mcpRestored = 0;
 
 let mcpWaited = 0;
 
-/** Resolved by the next `waitForConnections`: when a read reaches its wait for the dials out. */
-let mcpWaitArrived: (() => void) | null = null;
-
-/** Resolves when anything next waits on the manager's dials in flight (`waitForConnections`). */
-export function nextMcpWait(): Promise<void> {
-  const arrived = Promise.withResolvers<void>();
-
-  mcpWaitArrived = arrived.resolve;
-
-  return arrived.promise;
-}
-
 let mcpEstablishGate: Promise<void> | null = null;
 
 let mcpEstablishArrived: (() => void) | null = null;
@@ -1126,7 +1114,6 @@ export function resetRecordedMcp(): void {
   liveMcpManager = null;
   mcpRestored = 0;
   mcpWaited = 0;
-  mcpWaitArrived = null;
   mcpEstablishGate = null;
   mcpEstablishArrived = null;
 }
@@ -1354,8 +1341,6 @@ class FakeMCPClientManager {
 
   async waitForConnections(): Promise<void> {
     mcpWaited += 1;
-    mcpWaitArrived?.();
-    mcpWaitArrived = null;
     await Promise.allSettled(this.pending);
   }
 

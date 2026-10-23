@@ -24,13 +24,13 @@ const DEFECT: FirstRunDefect = {
     + 'UserDO woke 22 times in 20 minutes, each after 14-56 s idle, and each wake dialled every server again (GitHub ready '
     + '1-2 s in). A turn whose own call woke the object read its tools at once, so it opened with GitHub "not connected '
     + 'when this turn opened".',
-  missedBecause: 'packages/cf-backend/tests/unit-user-mcp-lifecycle.test.ts pinned the descriptor read as never waiting for a '
-    + 'dial ("it returns promptly while a server is still connecting"), and no deployed row ever let an account sleep '
-    + 'before using its connection.',
+  missedBecause: 'packages/cf-backend/tests/unit-user-mcp-lifecycle.test.ts pinned a turn\'s tools as only those of servers '
+    + 'already dialled ("it returns promptly while a server is still connecting"), and no deployed row ever let an account '
+    + 'sleep before using its connection.',
   provedRedAt: null,
-  redDirection: 'RED on a build whose descriptor read does not wait for its wake\'s dials: the call after the wake answers "Your '
-    + 'connections do not offer …", so `answers-first-call-after-wake` is missed. Green requires the account\'s activation to '
-    + 'end on request, the call before it and the first call after it to answer, and the server to be removed.',
+  redDirection: 'RED on a build that seats a turn\'s tools only from servers whose wake dial has finished: the call after the wake '
+    + 'answers "Your connections do not offer …", so `answers-first-call-after-wake` is missed. Green requires the account\'s '
+    + 'activation to end on request, the call before it and the first call after it to answer, and the server to be removed.',
 };
 
 const PLAN = firstRunCasePlan(SUITE, 'mcpwake');
