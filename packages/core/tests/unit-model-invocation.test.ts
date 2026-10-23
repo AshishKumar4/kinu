@@ -23,6 +23,7 @@ import { DEFAULT_WEB_SEARCH_CHAIN } from '../src/providers/web-search';
 import type { ModelCallSink } from '../src/events/model-call';
 import type { Usage } from '../src/usage';
 import { renderThrownChain } from '../src/obs/error';
+import { isParsedJsonObject, JsonValueSchema, type JsonObject, type JsonValue } from '../src/utils/json';
 import { sha256Hex } from '../src/safety/argument-digest';
 import { retryMiddleware } from '../src/providers/middleware/retry';
 import { ProviderPacer } from '../src/providers/pacing';
@@ -258,6 +259,46 @@ describe('a structured call', () => {
 
     await expect(generateObjectReported({ model, prompt: 'p', maxRetries: 0 }, Fact, { spend: { source: 'fast', report: () => {} } })).rejects.toThrow();
     expect(sent).toEqual([expect.objectContaining({ text: { format: expect.objectContaining({ type: 'json_schema', strict: false }) } })]);
+  });
+
+  // Staging's sleep-time pass on claude-haiku-5-5 was refused so on every turn (2026-10-23); both refusals are
+  // Anthropic's own words, through opencode-go the same day.
+  test('a Claude model is sent an open value as schemas its decoder takes, and answers', async () => {
+    const Remembered = v.object({ key: v.string(), value: JsonValueSchema, seen: v.array(v.unknown()) });
+
+    const nodes = (schema: JsonValue): JsonObject[] => {
+      if (Array.isArray(schema)) return schema.flatMap(nodes);
+
+      return isParsedJsonObject(schema) ? [schema, ...Object.values(schema).flatMap(nodes)] : [];
+    };
+
+    const refusal = (schema: JsonValue): string | undefined => {
+      const all = nodes(schema);
+
+      if (all.some((node) => Object.keys(node).length === 0)) return 'Empty schema ({}) that accepts any JSON value is not supported. Please specify a concrete type.';
+
+      return all.some((node) => [node.type].flat().includes('object') && node.additionalProperties !== false)
+        ? 'For \'object\' type, \'additionalProperties\' must be explicitly set to false'
+        : undefined;
+    };
+
+    const model = createWireModel({
+      name: 'opencode-go', modelId: 'claude-haiku-5-5', baseURL: 'https://opencode.example/v1', protocol: 'messages', reasoning: false,
+      fetch: asFetchFunction(async (_input, init) => {
+        const body = v.parse(v.object({ output_config: v.object({ format: v.object({ schema: JsonValueSchema }) }) }), await new Response(init?.body).json());
+        const refused = refusal(body.output_config.format.schema);
+
+        if (refused !== undefined) return Response.json({ type: 'error', error: { type: 'invalid_request_error', message: `output_config.format.schema: ${refused}` } }, { status: 400 });
+
+        return Response.json({
+          id: 'msg_1', type: 'message', role: 'assistant', model: 'claude-haiku-5-5', stop_reason: 'end_turn', stop_sequence: null,
+          content: [{ type: 'text', text: '{"key":"tea","value":["green","oolong"],"seen":[1]}' }], usage: { input_tokens: 9, output_tokens: 2 },
+        });
+      }),
+    });
+
+    expect(await generateObjectReported({ model, prompt: 'p', maxRetries: 0 }, Remembered, { spend: { source: 'fast', report: () => {} } }))
+      .toEqual({ key: 'tea', value: ['green', 'oolong'], seen: [1] });
   });
 });
 
