@@ -91,6 +91,8 @@ export {
   censusOf, OPS_OBJECTS_PER_REQUEST, OPS_PASS_PREFIX, opsCaller, requireOps, type OpsCaller, type StoreCensus, type TableRows, type TablesAnswer,
 } from './state/ops-tables';
 
+export { armRestore, restoreLanded, RestoreTargetSchema, type ArmedRestore, type RestoreTarget, type StorageHistory } from './state/ops-restore';
+
 export { ACCOUNT_EPOCH_FIELDS, type ConnectionTicketPurpose, initUserTables, PROFILE_CATALOG_CONFIG_KEY, WORKSPACE_KEYED_ROWS } from './state/user-schema';
 
 export { initMailNameTables, initMailboxTables } from './state/mail-schema';
@@ -1179,7 +1181,6 @@ export {
 
 export {
   answerParentRpc, createParentExecutor, type ParentWorkspaceHandle, type ParentExecResult,
-  type ParentRpcWrite,
 } from './execution/parent';
 
 export {

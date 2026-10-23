@@ -41,7 +41,7 @@ import {
   type PlanReview, actorReadHandle, ownerLaneDeclarations, type IntentResult, type OwedIntent, type OwedOwnerIntent,
   createEmailThreadDispatcher,
 } from "@kinu.run/core";
-import { censusOf, requireOps, WorkspaceLayoutSchema, type BlueprintSchedule, type OpsCaller, type TablesAnswer, type WorkspaceLayout, type WorkspaceSeed } from '@kinu.run/core';
+import { armRestore, censusOf, requireOps, type ArmedRestore, type RestoreTarget, WorkspaceLayoutSchema, type BlueprintSchedule, type OpsCaller, type TablesAnswer, type WorkspaceLayout, type WorkspaceSeed } from '@kinu.run/core';
 import { createHostedWorkspace, type HostedBox, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import { WorkspaceExecutors, type ExecutorFileChunkRead, type ExecutorFileChunkWrite } from "./workspace-executors";
 import { HeldRead } from "./account-reads";
@@ -4392,6 +4392,27 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * same. A wiped or unborn workspace answers for itself alone: it has no agents. Only `/ops/tables` holds the
    * capability. A Nimbus sibling holds no workspace table.
    */
+  /** The operator's restore (`/ops/restore`): this workspace's storage, its agents' facets with it, armed to go back to
+   *  `target` when the object next starts; `opsRestart` ends it at once. Only `/ops/restore` holds the capability. */
+  async opsRestore(caller: OpsCaller, target: RestoreTarget): Promise<ArmedRestore> {
+    await requireOps(this.env, caller);
+
+    return await armRestore(this.ctx.storage, target, Date.now());
+  }
+
+  /** Ends this activation, so an armed restore lands; the rejection of this call is its receipt. */
+  async opsRestart(caller: OpsCaller): Promise<void> {
+    await requireOps(this.env, caller);
+    this.ctx.abort('ops: restarted for a restore');
+  }
+
+  /** Where this object's history stands now. */
+  async opsBookmark(caller: OpsCaller): Promise<string> {
+    await requireOps(this.env, caller);
+
+    return await this.ctx.storage.getCurrentBookmark();
+  }
+
   async opsTables(caller: OpsCaller): Promise<TablesAnswer> {
     await requireOps(this.env, caller);
     const reached = !this.nimbusSibling && this.storageRefusal === undefined && this.workspaceBorn() ? this.keptAgents() : [];
