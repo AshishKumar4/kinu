@@ -180,6 +180,20 @@ describe('CLI auth store', () => {
       setSystemTime();
     }
   });
+
+  test('a code typed loosely finds its sign-in, and text no start could draw reaches no object', async () => {
+    const { env, objects } = setupEnv();
+    const started = await startAuth(env, 'https://o.example', 't');
+    const approver = { userId: '0123456789abcdef0123456789abcdef', email: 'ashish@example.com', sub: 'sub', provider: 'test', authTime: Date.now() };
+
+    expect(await inspectCliAuth(env, ` ${started.userCode.replace('-', '').toLowerCase()} `)).toMatchObject({ status: 'pending' });
+    const reached = [...objects.held.keys()];
+
+    expect(await inspectCliAuth(env, 'x'.repeat(4096))).toBeNull();
+    await expect(approveCliAuth(env, 'ABCD-EFGH-JKLM', approver, '127.0.0.1'))
+      .rejects.toMatchObject({ code: 'bad_input', message: expect.stringContaining('Unknown CLI auth code.') });
+    expect([...objects.held.keys()]).toEqual(reached);
+  });
 });
 
 describe('minting a CLI bearer is the owner capability\'s alone', () => {

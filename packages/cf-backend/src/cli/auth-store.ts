@@ -383,7 +383,11 @@ function rateLimit(kv: KvStore, key: string, limit: number, now: number): Effect
 
 /** The request object a user code names; null for a code no live sign-in holds. */
 async function deviceByUserCode<Id>(env: Pick<CliAuthEnv<Id>, 'CliAuthDO'>, userCode: string): Promise<CliAuthObject | null> {
-  const deviceHash = await codeObject(env, normalizeUserCode(userCode)).deviceOf();
+  const code = normalizeUserCode(userCode);
+
+  // Text no start could have drawn names no sign-in, so it reaches no object.
+  if (!/^[A-Z0-9]{4}-[A-Z0-9]{4}$/u.test(code)) return null;
+  const deviceHash = await codeObject(env, code).deviceOf();
 
   return deviceHash === null ? null : deviceObject(env, deviceHash);
 }
