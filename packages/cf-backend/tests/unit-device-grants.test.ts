@@ -11,7 +11,7 @@ import {
   CAPABLE_HELLO, CONSENT_REFUSED, OTHER_WORKSPACE, WORKSPACE, daemon, deviceHarness,
 } from './helpers/device-harness';
 import type { UserCaller } from '@kinu.run/core';
-import { connectedDevices, DeviceSocketHub, soleLiveDevice, DEVICE_CONNECT_SECRET, DEVICE_METHOD } from '@kinu.run/core';
+import { connectedDevices, DeviceSocketHub, soleLiveDevice, DEVICE_CONNECT_SECRET, DEVICE_FRAMES, DEVICE_METHOD } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { appProbe, concretePath, PROBE_ORIGIN } from './helpers/app-probe';
 import {
@@ -20,7 +20,8 @@ import {
 } from '@kinu.run/core';
 import { UserDevices } from '../src/user/devices';
 import {
-  buyTicket, connectProof, connectTestDevice, registerTestDevice, secretAck, secretHash, signConnect, signReplace, testDeviceKey, TEST_HUB_ORIGIN,
+  buyTicket, connectProof, connectTestDevice, handedSecret, openDeviceSocket, registerTestDevice, secretAck, secretHash, signConnect, signReplace,
+  testDeviceKey, TEST_HUB_ORIGIN,
 } from './helpers/device-key';
 
 
@@ -1149,7 +1150,7 @@ describe('a device key is its credential, and a second holder is found', () => {
     return (await harness.userDO.listDevices(await testOwner())).find((device) => device.id === deviceId);
   }
 
-  test("each accepted connect hands a fresh random secret, committed only on the machine's answer naming it", async () => {
+  test("each accepted connect hands a fresh secret, committed only on the machine's answer naming it", async () => {
     const harness = createTestUserDO({ deviceResponder: daemon });
     const { deviceId, key } = await registerTestDevice(harness.userDO, 'ashish@studio');
 
@@ -1187,6 +1188,36 @@ describe('a device key is its credential, and a second holder is found', () => {
     const kept = await connectTestDevice(harness, deviceId, key, { secret: lost.handed, acknowledge: true });
     expect(stored(harness, deviceId)).toMatchObject({ connect_secret_hash: secretHash(kept.handed), clone_detected_at: null, revoked_at: null });
     expect(await deviceRow(harness, deviceId)).toMatchObject({ connected: true, cloneDetectedAt: null });
+    await harness.joinFibers();
+    harness.close();
+  });
+
+  // Device protocol 5's review, 2026-10-23: a predecessor and successor on one machine can each hold a ticket bought on
+  // one committed secret. Were each socket handed its own secret, the second would replace the one the first stored
+  // and answered, and the machine's next connect would read as a clone.
+  test('two sockets accepted on one committed secret are handed the same next one, so the first one answered still commits', async () => {
+    const harness = createTestUserDO({ deviceResponder: daemon });
+    const { deviceId, key } = await registerTestDevice(harness.userDO, 'ashish@studio');
+    const settled = await connectTestDevice(harness, deviceId, key, { secret: '', acknowledge: true });
+
+    // Both tickets bought on the committed secret before either socket says AUTH.
+    const predecessor = await buyTicket(harness, deviceId, key, settled.handed);
+    const successor = await buyTicket(harness, deviceId, key, settled.handed);
+
+    if (!predecessor.ok || !successor.ok) throw new Error('the hub refused a ticket on the committed secret');
+    const first = await openDeviceSocket(harness);
+    await harness.userDO.webSocketMessage(first.ws, JSON.stringify({ type: DEVICE_FRAMES.auth, user: harness.userDO.name, ticket: predecessor.ticket }));
+    const second = await openDeviceSocket(harness);
+    await harness.userDO.webSocketMessage(second.ws, JSON.stringify({ type: DEVICE_FRAMES.auth, user: harness.userDO.name, ticket: successor.ticket }));
+
+    const handed = handedSecret(first);
+    expect(handed).not.toBeNull();
+    expect(handedSecret(second)).toBe(handed);
+
+    // The second never answers; the first's answer commits what both were handed, and the machine connects on it.
+    await harness.userDO.webSocketMessage(first.ws, secretAck(handed ?? ''));
+    expect(stored(harness, deviceId)).toMatchObject({ connect_secret_hash: secretHash(handed ?? ''), pending_secret_hash: null, revoked_at: null });
+    expect(await buyTicket(harness, deviceId, key, handed ?? '')).toMatchObject({ ok: true });
     await harness.joinFibers();
     harness.close();
   });

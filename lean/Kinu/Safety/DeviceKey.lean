@@ -9,11 +9,15 @@
   (`issueDeviceConnectChallenge`, `provenChallenge`) and over the connect
   secret the machine's device.json holds (`issueDeviceConnectTicket`). The
   socket's first frame spends the ticket (`authenticateDeviceSocket`), which
-  hands the machine a fresh random secret, kept as handed; the machine's answer
+  hands the machine a fresh secret, kept as handed; the machine's answer
   commits it (`acknowledgeConnectSecret`). A signed secret that is neither the
   committed one nor the one handed means two machines hold the key, and revokes
-  the device. The secret is random, so no copy of device.json taken before the
-  owner's machine connected again holds one the hub keeps.
+  the device. The secret is derived under the deployment's root key, so a copy
+  of the machine's files cannot compute the next one: a copy goes stale once a
+  fresh secret is committed, by the machine's answer or by its next connect on
+  it. Until then a copy holds a secret the hub still takes (the committed one,
+  or, taken after the machine stored the handed one, that one), and the theorems
+  below say nothing of that window.
 
   - A ticket is spent at most once and admits nothing from its minute on
     (`a_ticket_is_spent_once`, `a_ticket_dies_at_its_minute`), nor for a revoked
@@ -36,10 +40,14 @@
   The signature is a premise: the model starts once it verified, so a request
   the device's key did not sign is outside it, as the key's secrecy is.
   Challenges, tickets, keys and secrets are their hashes or public halves, as
-  the hub stores them. A random secret is never handed twice, which the model
-  states as the order the hub handed them in (`Hub.next`): `0` is the '' a
-  machine holds before its first connect. One connect is one step, ticket and
-  AUTH together. Time is left out for the link: every connect falls inside its
+  the hub stores them. A secret handed on one committed secret is never handed
+  on another, which the model states as the order the hub handed them in
+  (`Hub.next`): `0` is the '' a machine holds before its first connect. One
+  connect is one step, ticket, AUTH, the machine storing its secret and its
+  answer together: two connects of one machine that overlap (a predecessor and
+  its successor) are outside the model, and the hub hands both the same secret
+  for them (`connectSecretFor`). The two-holder theorem assumes every answer
+  arrives. Time is left out for the link: every connect falls inside its
   absolute window, outside which the hub refuses without revoking.
 -/
 

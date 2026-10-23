@@ -5,7 +5,7 @@ import {
   type DeviceChallengeIssue, type DeviceChallengeProof, type DeviceConnectProof, type DeviceEnrolment, type DeviceSocket, type DeviceTicketIssue, type DeviceTicketRefusal,
 } from '@kinu.run/core';
 import {
-  type DeviceExecOutput, NO_DEVICE_CONNECTED, watchedOutput, SEVERAL_DEVICES_CONNECTED, relayRefusal, type RelayedProvider, isWorkspaceName, nanoid, type DeviceCheckpointHint, type DeviceConsentRequest, type JsonObject, type JsonValue, CapabilityDeniedError, type UserCaller, type ResolvedCaller, DeviceSocketHub, DeviceRequestLedger, type ClaimedDeviceRequest, type DeviceCancelOutcome, randomToken, sha256Hex, type DeviceChatGptStatus, deviceConsentMoved, deviceConsentOutcome, type DeviceConsentOutcome, DEVICE_UPDATE, cliArtifactPath, deviceUpdateState, readBuildStamp, BuildStampSchema, type BuildStamp, type DeviceUpdateFrame, type DeviceUpdateState, parseDeviceCancelAnswer, nextDeviceRequestId, DEVICE_METHOD, DEVICE_ERRORS, deviceFailure, deviceMethodHas, type DeviceTunnel, DEVICE_TIERS, effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix, sandboxCause, summarizeDeviceAction, type DeviceStatus, type DeviceFileScope, type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
+  type DeviceExecOutput, NO_DEVICE_CONNECTED, watchedOutput, SEVERAL_DEVICES_CONNECTED, relayRefusal, type RelayedProvider, isWorkspaceName, nanoid, type DeviceCheckpointHint, type DeviceConsentRequest, type JsonObject, type JsonValue, CapabilityDeniedError, type UserCaller, type ResolvedCaller, DeviceSocketHub, DeviceRequestLedger, type ClaimedDeviceRequest, type DeviceCancelOutcome, randomToken, sha256Hex, type DeviceChatGptStatus, deviceConsentMoved, deviceConsentOutcome, type DeviceConsentOutcome, DEVICE_UPDATE, base64Url, hmacSha256Hex, cliArtifactPath, deviceUpdateState, readBuildStamp, BuildStampSchema, type BuildStamp, type DeviceUpdateFrame, type DeviceUpdateState, parseDeviceCancelAnswer, nextDeviceRequestId, DEVICE_METHOD, DEVICE_ERRORS, deviceFailure, deviceMethodHas, type DeviceTunnel, DEVICE_TIERS, effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix, sandboxCause, summarizeDeviceAction, type DeviceStatus, type DeviceFileScope, type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
 } from '@kinu.run/core';
 import { attemptInItsWords, diagnostics, joining, KinuError, renderThrownChain, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -203,6 +203,18 @@ function secretHashOf(secret: string): string | null {
   return secret === '' ? null : sha256Hex(secret);
 }
 
+/**
+ * The connect secret a socket of `device` is handed while its committed one hashes to `committed` (null for none):
+ * derived under the deployment's root key, so every socket accepted on one committed secret hands the same one, as a
+ * predecessor and successor on one machine overlap and share its device.json, and no copy of the machine's files,
+ * lacking the key, computes it. 32 bytes as base64url.
+ */
+async function connectSecretFor(rootKey: string, at: { device: string; publicKey: string; committed: string | null }): Promise<string> {
+  const hex = await hmacSha256Hex(rootKey, `kinu-device-connect-secret:5:${at.device}:${at.publicKey}:${at.committed ?? ''}`);
+
+  return base64Url(Uint8Array.from(hex.match(/../gu) ?? [], (pair) => Number.parseInt(pair, 16)));
+}
+
 /** The served build as the connect that opened a device's socket read it. */
 const SERVED_STAMP_KEY = 'devices.served_stamp';
 
@@ -291,15 +303,8 @@ export class UserDevices {
     }
 
     this._devices.admit(deviceId, ws);
-    // Random, so no copy of device.json derives the next one; committed only when the daemon answers that it stored it
-    // (`acknowledgeConnectSecret`), and until then a connect signing the one it holds now still connects.
-    const secret = randomToken(32);
-
-    this.host.sqlx(
-      `UPDATE user_devices SET pending_secret_hash = ?, last_seen_at = ?, expires_at = ? WHERE id = ?`,
-      sha256Hex(secret), now, now + DEVICE_LINK_TTL_MS, deviceId,
-    );
-    ws.send(JSON.stringify({ type: DEVICE_FRAMES.connectSecret, secret }));
+    this.host.sqlx(`UPDATE user_devices SET last_seen_at = ?, expires_at = ? WHERE id = ?`, now, now + DEVICE_LINK_TTL_MS, deviceId);
+    await this.handConnectSecret(ws, deviceId, device);
 
     // Clear offline notices only on tracked workspaces; an unreachable one keeps its row for next accept.
     const label = this.deviceLabel(deviceId);
@@ -322,6 +327,38 @@ export class UserDevices {
     }
 
     await this.devicesMoved();
+  }
+
+  /**
+   * Hands the accepted socket the connect secret its machine's next connect signs, kept as its hash until the machine
+   * says it stored it (`acknowledgeConnectSecret`); until then a connect signing the one it holds now still connects.
+   * Written only while the committed secret it was derived from is still the committed one: one that moved meanwhile
+   * (an answer, a lost answer recovered) hands nothing this time, and the machine keeps a secret the hub still takes.
+   */
+  private async handConnectSecret(ws: DeviceSocket, deviceId: string, device: DeviceKeyRow): Promise<void> {
+    const rootKey = (this.host.env.CREDENTIAL_ENCRYPTION_KEY ?? '').trim();
+
+    // A deployment with no root key signs no one in; a secret derived from none would be anyone's to compute.
+    if (rootKey === '') {
+      this._devices.refuseCredentials(ws, 'this deployment has no CREDENTIAL_ENCRYPTION_KEY');
+
+      return;
+    }
+
+    const secret = await connectSecretFor(rootKey, { device: deviceId, publicKey: device.public_key, committed: device.connect_secret_hash });
+
+    const handed = this.host.sqlx<{ id: string }>(
+      `UPDATE user_devices SET pending_secret_hash = ? WHERE id = ? AND public_key = ? AND connect_secret_hash IS ? AND revoked_at IS NULL RETURNING id`,
+      sha256Hex(secret), deviceId, device.public_key, device.connect_secret_hash,
+    );
+
+    if (handed.length === 0) {
+      diagnostics.event('device.connect_secret_unhanded', { device: deviceId });
+
+      return;
+    }
+
+    ws.send(JSON.stringify({ type: DEVICE_FRAMES.connectSecret, secret }));
   }
 
   /** The daemon stored the connect secret whose hash is `secretHash` in its device.json: committed when it is the one

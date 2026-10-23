@@ -9,7 +9,7 @@
 import { Effect } from 'effect';
 import { json, publicError, readBounded } from './http';
 import { ownerCaller, type OwnerCapabilityEnv, type UserCaller } from '../safety/workspace-capability';
-import { authoredRefusal, diagnostics, KinuError, renderThrownChain, settle } from "../obs/index";
+import { authoredRefusal, diagnostics, KinuError, settle } from "../obs/index";
 import { ingressAdmitted, ingressDenied, peerIp } from './ingress-budget';
 import type { KvStore } from "@kinu.run/agent-utils";
 import * as v from "valibot";
@@ -218,11 +218,10 @@ async function readPcBody(
 
   try {
     return { parsed: JSON.parse(new TextDecoder().decode(bounded)) };
-  } catch (cause) {
-    diagnostics.event(PC_BODY_MALFORMED[rail], {
-      error: renderThrownChain({ cause }),
-      bytesRead: bounded.byteLength,
-    });
+  } catch {
+    // The parser's own words can quote the body, and a ticket's carries the machine's connect secret: what failed, and
+    // how much was read, alone.
+    diagnostics.event(PC_BODY_MALFORMED[rail], { error: 'not JSON', bytesRead: bounded.byteLength });
 
     return json({ body: { error: "malformed JSON body" } }, { status: 400 });
   }

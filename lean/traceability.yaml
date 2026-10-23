@@ -290,6 +290,7 @@ requirements:
       - packages/cf-backend/src/user/devices.ts#UserDevices.provenChallenge
       - packages/cf-backend/src/user/devices.ts#UserDevices.issueDeviceConnectTicket
       - packages/cf-backend/src/user/devices.ts#UserDevices.authenticateDeviceSocket
+      - packages/cf-backend/src/user/devices.ts#UserDevices.handConnectSecret
       - packages/cf-backend/src/user/devices.ts#UserDevices.acknowledgeConnectSecret
       - packages/cf-backend/src/user/devices.ts#UserDevices.revokeClonedDevice
       - packages/pc-agent/src/index.js#storeConnectSecret
@@ -298,7 +299,8 @@ requirements:
       - A connect is one step, ticket and AUTH together; a socket that fails between the two, and two connects of one device inside one ticket's minute, are outside the model
       - Two holders are found when answers arrive; two holders whose every answer is lost can alternate unseen until one answer arrives, which the model leaves out
       - Every connect falls inside the link's absolute window; outside it the hub refuses without revoking, which the model leaves out
-      - A secret is 32 random bytes, which the model states as the order they were handed in; one guessed, or handed twice, is outside it
+      - A secret is an HMAC under the deployment's root key of the committed one, which the model states as the order they were handed in; the model hands a new one where the hub, on an unstored or overlapping connect, hands the same again, and a secret guessed without the key, or colliding with an earlier one, is outside it
+      - A copy of the machine's files holds a secret the hub takes until a fresh one is committed (by the machine's answer or its next connect on it); the theorems say nothing of a copy inside that window
       - Challenges and tickets are their SHA-256 hashes; the model assumes distinct secrets hash apart
       - No fixture runs the UserDO's challenge, ticket and generation paths against the model; the bun suites (unit-device-key-connect, unit-device-grants) run them against a real UserDO
   PR-STORE-001:
