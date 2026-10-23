@@ -477,19 +477,19 @@ test('recorded terminal rosters with colliding identities belong only to their a
   db.close();
 });
 
-test('an unsupported recorded roster remains inspectable and owed after reopening', async () => {
+test('an unsupported recorded roster ends at its first replay, and its transition settles and stays settled', async () => {
   await conform(async (plane) => {
     plane.process().record(TRANSITION, roster([UNIMPLEMENTED]));
     plane.restart();
     await plane.replay();
     const sequence = plane.process().sequenceId(TRANSITION);
-    const owed = plane.process().ledger.owed(sequence);
-    expect(owed).toHaveLength(1);
-    expect(owed[0]).toMatchObject({ status: 'blocked', rawName: UNIMPLEMENTED, input: JSON.stringify({ answer: ANSWER }) });
+    expect(plane.process().ledger.owed(sequence)).toEqual([]);
+    expect(plane.process().incomplete()).toEqual([]);
     plane.restart();
     await plane.replay();
-    expect(plane.process().ledger.owed(sequence)).toEqual(owed);
-    expect(plane.process().incomplete()).toEqual([TRANSITION]);
+    expect(plane.process().ledger.owed(sequence)).toEqual([]);
+    expect(plane.process().incomplete()).toEqual([]);
+    expect(plane.snapshot().wake).toBe('none');
   });
 });
 
