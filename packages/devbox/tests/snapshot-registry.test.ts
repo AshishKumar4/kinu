@@ -31,6 +31,17 @@ function platform(options: { readonly pageSize?: number; readonly filler?: numbe
   const repository = `${ACCOUNT}/kinu-devbox-native`;
   const before = Array.from({ length: options.filler ?? 0 }, (_, index) => `aaa-${String(index).padStart(5, '0')}`);
 
+  /** The credentials endpoint: a refused token, then each failure it is told to answer, then credentials. */
+  const minted = (authorization: string | undefined): Response => {
+    if (authorization !== 'Bearer token-1') return Response.json({ success: false, errors: [{ code: 10000, message: 'Authentication error' }] }, { status: 403 });
+
+    const failing = mintFailures.shift();
+
+    if (failing !== undefined) return Response.json({ error: 'Internal Server Error', request_id: '132bf737-f395-434e-a2ee-cd6165d4f377' }, { status: failing });
+
+    return Response.json({ success: true, errors: [], result: { username: 'v1', password: 'pw' } });
+  };
+
   const names = () => [...before, ...[...tags.keys(), ...manifests].sort()].map((name) => [before.includes(name) ? `${ACCOUNT}/a-filler` : repository, name] as const);
 
   const fetcher = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -39,15 +50,7 @@ function platform(options: { readonly pageSize?: number; readonly filler?: numbe
     const authorization = v.parse(v.optional(v.record(v.string(), v.string()), {}), init?.headers)['authorization'];
     calls.push(`${method} ${url.host}${url.pathname}`);
 
-    if (url.host === 'api.cloudflare.com') {
-      if (authorization !== 'Bearer token-1') return Response.json({ success: false, errors: [{ code: 10000, message: 'Authentication error' }] }, { status: 403 });
-
-      const failing = mintFailures.shift();
-
-      if (failing !== undefined) return Response.json({ error: 'Internal Server Error', request_id: '132bf737-f395-434e-a2ee-cd6165d4f377' }, { status: failing });
-
-      return Response.json({ success: true, errors: [], result: { username: 'v1', password: 'pw' } });
-    }
+    if (url.host === 'api.cloudflare.com') return minted(authorization);
 
     if (authorization !== `Basic ${btoa('v1:pw')}`) return new Response('unauthorized', { status: 401 });
 
