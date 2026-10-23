@@ -157,6 +157,11 @@ describe('reading and writing', () => {
     expect(first.sent.map((r) => r.url)).toEqual(['https://gmail.googleapis.com/gmail/v1/users/me/drafts/d1?format=raw']);
     expect(first.asked[0]).toMatchObject({ mail: CARD, content: expect.stringMatching(/^[0-9a-f]{64}$/u) });
     expect(await changed.call('write', draft)).not.toEqual(asked);
+
+    // Approved, it sends the message as it was read and shown: the draft's id with that message, not the id alone.
+    first.approved.add(v.parse(v.object({ approval: v.string() }), asked).approval);
+    await first.call('write', draft);
+    expect(first.sent.at(-1)?.body).toBe(JSON.stringify({ id: 'd1', message: { raw: RAW } }));
   });
 
   test('a write is asked only of an account that holds the connection, and a refused one is spent, so it asks anew', async () => {
