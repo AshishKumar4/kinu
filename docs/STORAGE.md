@@ -31,7 +31,7 @@ Three stores sit outside actor SQLite:
   FTS5 and is never the source of truth.
 
 `AUTH_KV` holds only expiring records, each with its own TTL: browser
-sessions, one-time OAuth handoff state, and CLI browser-approval state. None of
+sessions, one-time OAuth handoff state, and CLI sign-in rate limits. None of
 it is a source of truth. A user's identity lives in their `UserDO`, keyed on a
 userId derived from the verified email. If the namespace is emptied, every user
 signs in again and nothing else is lost. The handoff record keeps the hash of a
