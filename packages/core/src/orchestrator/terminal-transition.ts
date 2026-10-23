@@ -381,8 +381,8 @@ export class TerminalTransitions {
    *  retry instant, which a wake must reach (staging caff2855f, 2026-10-23: a facet's task reminder stayed owed a minute
    *  after its turn committed, its retry waiting on its workspace's wake). One still closing is driven as its close ends. */
   async followUpCommitted(): Promise<void> {
-    if (this.ledger.followUpDue(FOLLOW_UP_TURN_EFFECTS) === 0) return;
-    await this.replayOwedAndRearm();
+    // Each close re-arms from what it left (`closed`); one still closing reads its row due as it ends.
+    if (this.ledger.followUpDue(FOLLOW_UP_TURN_EFFECTS) > 0) await this.resumeAll();
   }
 
   /** Idempotent: re-arms from what is left. */

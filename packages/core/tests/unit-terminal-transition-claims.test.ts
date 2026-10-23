@@ -80,6 +80,7 @@ describe('an effect owed until its follow-up turn commits', () => {
 
     onDisk = true;
     await transitions.followUpCommitted();
+    await transitions.idle();
 
     expect(transitions.incomplete()).toEqual([]);
     expect(wakes).toEqual([]);

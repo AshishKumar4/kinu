@@ -33,10 +33,10 @@ async function settle(
   harness: ActorHarness<HarnessOrchestratorAgent>, turnId: string, messageId: string, reason: 'stop' | typeof OUTPUT_LIMIT_REACHED,
 ): Promise<{ readonly effects: readonly EffectRow[]; readonly answer: string }> {
   const settled = await chatSessionTurns(harness.agent).settle({ turnId, messageId, text: 'the answer so far', finishReason: reason });
-  const effects = storedEffects(harness, turnId, settled.messageId);
+
   await joinHarnessFibers();
 
-  return { effects, answer: settled.messageId };
+  return { effects: storedEffects(harness, turnId, settled.messageId), answer: settled.messageId };
 }
 
 /** Whether the continuation turn keyed on `messageId` is in the stored conversation. */
@@ -58,9 +58,8 @@ describe('a cloud turn cut at the output limit is continued exactly once', () =>
     // Keyed on this response so a post-eviction replay finds the same turn.
     expect(await continuationOnDisk(harness, answer)).toBe(true);
     expect((await harness.agent.listRuns()).items).toHaveLength(2);
-    // Still owed: the continuation turn ran after the row was attempted.
-    expect(effects.find((row) => row.effect_key === `v1:output_continuation:${answer}`))
-      .toMatchObject({ status: 'pending' });
+    // Closed as the continuation committed, though it ran after the row was attempted.
+    expect(owesContinuation(effects)).toBe(false);
   });
 
   /** A continuation after a natural stop is a second answer and costs a turn. */
