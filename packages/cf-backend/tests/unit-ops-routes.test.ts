@@ -302,6 +302,17 @@ test('an account\'s Drive goes back on the shards its restored records name; a p
   });
 });
 
+// Review of 8ef437003: a Drive user object that did not land still names the shards of now, not of the moment.
+test('a Drive user object whose restore did not land restores no shard, and says it stopped there', async () => {
+  const { env, armed } = world([`${OPS_PASS_PREFIX}${sha256Hex(PASS)}`], false, { shards: 2 });
+  const answer = await opsRoutes.fetch(restore(`Bearer ${PASS}`, { object: { class: 'UserDO', email: 'owner@example.com' }, to: { at: 7 } }), env);
+  const read = v.parse(Restored, await answer.json());
+
+  expect({ status: answer.status, shards: armed.filter((object) => object.startsWith('MossaicShardDO')), stopped: read.stopped }).toEqual({
+    status: 502, shards: [], stopped: expect.stringContaining('has not landed, so which shards'),
+  });
+});
+
 test('an account goes back by a moment, never a bookmark, and a body naming neither is refused', async () => {
   const { env, armed } = world([`${OPS_PASS_PREFIX}${sha256Hex(PASS)}`]);
 
