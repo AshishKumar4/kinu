@@ -1138,12 +1138,13 @@ a facet of its own) and D13's "every agent's advisor in core `ActorAdvisor`".
   agents that take input, run while the owner's switch is on. Each step's
   output is read once as the step ends (`onStepEnd`, `[in progress]`), one
   review at a time, and steps that end during a review are read by the next.
-  It keeps its own append-only conversation, cleared past 240k characters,
+  It keeps its own conversation in a 48k-character window cut in halves,
   and calls the fixed deep route (`resolveModelRoute('advisor', …)`) through
   the turn's own model sources (`turn-assembly`'s `input.advisor`), billed as
   `advisor`. It has read-only file and memory tools on a ledger of their own,
-  so its reads never count as the agent's; hosted facets run with
-  `stores: null`, so in the cloud it has none yet. Credentials are redacted
+  so its reads never count as the agent's; in an agent's facet, whose turn
+  has no stores, the workspace serves them over the agent's held port
+  (`advisorRead`), fenced as its tool calls are. Credentials are redacted
   before its model reads anything, as the hire's prompt was. Its one voice is
   `advise({note, severity, class})`, all three required, judged by
   `judgeNote` as before; at most 4 notes short of a blocker per review, and a
@@ -1159,9 +1160,9 @@ a facet of its own) and D13's "every agent's advisor in core `ActorAdvisor`".
   is said, then recorded: one said and not recorded only misses the dedupe
   window. Its delivery key names its turn and its normalised text, so a turn
   restarted after a death says a new note and never says one twice.
-- Not reviewed: runs (heads, swarm nodes), and a turn whose scaffold runs its
-  own inference instead of `host.defaultInference()`, which emits none of the
-  turn hooks (the hire reviewed such a turn at its end).
+- Not reviewed: runs (heads, swarm nodes). A scaffold's own model calls
+  (`host.llmStream`) are steps like the default loop's: the session feeds one
+  `onStep` from both, and owns the turn's start and end itself.
 - Gone: the hire (`ActorAdvisor`, the `advisor` system role and its prompt),
   `hireAdvisor` and `deliverAdvice`, `AdviceJobs`, `AgentReview` round
   reviews, `AdvisorRecoverySnapshot`, the `advisor_review` effect, and the
@@ -1186,8 +1187,14 @@ a facet of its own) and D13's "every agent's advisor in core `ActorAdvisor`".
   workspace allocated about 45 MB more under the hire and 17-19 MB more in
   session. In session the turn took 0-22% longer (at most 3.6 s, 24 ms a
   step; 7-25% on 97d575f47). The live set stays flat; the allocation is the
-  advisor's conversation sent whole on every call, so it grows with the
-  square of the steps until the 240k clear.
+  advisor's conversation sent whole on every call, so it grew with the
+  square of the steps until the 240k clear. Since 2026-10-23 the advisor's
+  context is a 48k-character window cut in halves (the turn's request kept),
+  so each request is bounded: 58-59 kB in every third of a 150-step turn's
+  calls, main's peak 60.7-61.8 MB and its allocation 266-282 MB (9a09d9ac5,
+  3 runs). Main's allocation a step still rises from 1.44 to 1.96 MB across
+  the turn's thirds, against a flat 0.5-0.6 MB unadvised; not from the
+  advisor's requests, cause unknown.
 - Containment, same jobs, every run alike: an advisor call that throws, and
   one beside an uncaught throw (from a timer on 97d575f47, a microtask on
   cac0cbe68) and a rejection no one awaits, each left main's turn to run all
