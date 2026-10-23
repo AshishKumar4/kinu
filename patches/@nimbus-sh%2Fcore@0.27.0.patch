@@ -56,6 +56,33 @@ index e2e45cf26533e9bf1a97f5cdf9dc85a0a9227113..6b8b050598de58b64f61f0364139242e
      _rpcStat(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'stat'>>;
      _rpcLstat(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'lstat'>>;
      _rpcReadlink(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'readlink'>>;
+diff --git a/dist/vfs/sqlite-vfs.js b/dist/vfs/sqlite-vfs.js
+index 93284d156b35ddddcf98291265eb0e5f81ccf562..9a5d675e344afb1938b29a10d3b320002fcb5c81 100644
+--- a/dist/vfs/sqlite-vfs.js
++++ b/dist/vfs/sqlite-vfs.js
+@@ -2228,7 +2228,9 @@ export class SqliteVFS {
+      * its umask cannot refuse. Sticky only restricts others and is kept.
+      */
+     creationMode(requested, cred) {
+-        return requested & ~cred.umask & (this.isConfined(cred) ? 0o1777 : 0o7777);
++        // A process sets its own umask, to 000 as readily as to 077: a confined principal's new entry grants others no
++        // write, as its chmod could not (Kinu ask 74).
++        return requested & ~cred.umask & (this.isConfined(cred) ? 0o1775 : 0o7777);
+     }
+     /**
+      * What a new entry at storage key `key` is made with, from its parent (a
+@@ -4995,6 +4997,11 @@ export class SqliteVFS {
+         if (perms !== null && (!Number.isSafeInteger(perms) || perms < 0 || perms > 0o777)) {
+             throw vfsError('EINVAL', `default ACL ${String(perms)}`);
+         }
++        // A default ACL is a mode for every entry made beneath, so a confined principal's widens no further than its
++        // chmod: the group and other entries may only lose bits of the ACL the directory holds (Kinu ask 74).
++        if (perms !== null && this.isConfined(cred) && (perms & 0o077 & ~(inode.defaultAcl ?? 0)) !== 0) {
++            throw vfsError('EPERM', path, 'default ACL would grant permission outside your own principal');
++        }
+         this.admit(this.lexicalKey(path, cred), this.physicalKey(inode.path));
+         this.publishMetadata(inode, { defaultAcl: perms });
+     }
 diff --git a/dist/workspace/supervisor-op.js b/dist/workspace/supervisor-op.js
 index 525e645cf0e8a0960f10f53238b44e85378ea409..47cd4fa7047b6317575d11f793b9f6d9477ba41a 100644
 --- a/dist/workspace/supervisor-op.js
@@ -177,6 +204,33 @@ index 66452b29e191e1591acd3d632b76089f5116b942..bdfc9e8c667468b841ef340f974470ca
    _rpcStat(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'stat'>>;
    _rpcLstat(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'lstat'>>;
    _rpcReadlink(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'readlink'>>;
+diff --git a/src/vfs/sqlite-vfs.ts b/src/vfs/sqlite-vfs.ts
+index d064532dbd6439dbaa8a1711458907778c104ec3..d3c0ab7cbead5c5feeb40efd21c54d218a9b9132 100644
+--- a/src/vfs/sqlite-vfs.ts
++++ b/src/vfs/sqlite-vfs.ts
+@@ -3195,7 +3195,9 @@ export class SqliteVFS {
+    * its umask cannot refuse. Sticky only restricts others and is kept.
+    */
+   private creationMode(requested: number, cred: Pick<VfsCred, 'uid' | 'umask'>): number {
+-    return requested & ~cred.umask & (this.isConfined(cred) ? 0o1777 : 0o7777);
++    // A process sets its own umask, to 000 as readily as to 077: a confined principal's new entry grants others no
++    // write, as its chmod could not (Kinu ask 74).
++    return requested & ~cred.umask & (this.isConfined(cred) ? 0o1775 : 0o7777);
+   }
+ 
+   /**
+@@ -6022,6 +6024,11 @@ export class SqliteVFS {
+     if (perms !== null && (!Number.isSafeInteger(perms) || perms < 0 || perms > 0o777)) {
+       throw vfsError('EINVAL', `default ACL ${String(perms)}`);
+     }
++    // A default ACL is a mode for every entry made beneath, so a confined principal's widens no further than its
++    // chmod: the group and other entries may only lose bits of the ACL the directory holds (Kinu ask 74).
++    if (perms !== null && this.isConfined(cred) && (perms & 0o077 & ~(inode.defaultAcl ?? 0)) !== 0) {
++      throw vfsError('EPERM', path, 'default ACL would grant permission outside your own principal');
++    }
+     this.admit(this.lexicalKey(path, cred), this.physicalKey(inode.path));
+     this.publishMetadata(inode, { defaultAcl: perms });
+   }
 diff --git a/src/workspace/supervisor-op.ts b/src/workspace/supervisor-op.ts
 index 301efdcfc0cb191b34bfc89675f9176e9df6b9da..6ae7becbb5f91be68ca1baf59865d463d6ee84e0 100644
 --- a/src/workspace/supervisor-op.ts
