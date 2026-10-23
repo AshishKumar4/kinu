@@ -276,6 +276,27 @@ describe('every trial account a run acts as', () => {
     }
   });
 
+  // 2026-10-23: a GLM 5.3 run's trial accounts held GLM's fallback to Muse, so 98 of its calls answered as Muse and
+  // were counted as GLM's.
+  test('a run measuring the judge\'s own model gives it no fallback, and takes away one a run before left', async () => {
+    const { server, accounts, at } = accountsDeployment();
+    const base = { origin: at, keysPath: keysPathOf(homeWithKeys({ 'opencode-go.bearer': KEY })), identity: IDENTITY, identityEnv: 'KINU_EVAL_WEB_IDENTITY', trialAccounts: ['trial-1'] as const };
+
+    try {
+      await provisionEvalProviderKeys({ ...base, models: [MODEL] });
+      const muse = accounts.get('trial-1')?.catalog.catalog.modelFallbacks;
+
+      await provisionEvalProviderKeys({ ...base, models: [DEFAULT_WORKERS_AI_MODEL_SPEC] });
+      const glm = accounts.get('trial-1')?.catalog.catalog;
+
+      expect(muse?.[DEFAULT_WORKERS_AI_MODEL_SPEC]).toEqual([MODEL]);
+      expect({ deep: glm?.tiers.deep?.model, fallbacks: glm?.modelFallbacks?.[DEFAULT_WORKERS_AI_MODEL_SPEC] })
+        .toEqual({ deep: DEFAULT_WORKERS_AI_MODEL_SPEC, fallbacks: undefined });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   // Staging 2620e7c05, 2026-10-19: a gateway model (my-gateway/anthropic/claude-sonnet-5.5) is listed only for an account
   // holding a Cloudflare login and a selected AI Gateway, and the selection is a user_config row.
   test('a run on a gateway model gives each account the deployment\'s Cloudflare login and gateway, and keeps them', async () => {

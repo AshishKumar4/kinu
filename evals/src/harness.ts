@@ -309,6 +309,20 @@ async function closeWorkspace(session: KinuPublicSession, reads: ClosingReads | 
   return { events, ledgers, output, costUsd, workspace };
 }
 
+/**
+ * Why a trial is no measure of `model`: a call of its that fell back answered as another model (2026-10-23, a GLM 5.3
+ * run's 98 calls answered by Muse on the account's fallback chain, counted as GLM's). Null when every call of the
+ * model's own was its own.
+ */
+export function substitutions(ledgers: readonly ActorLedger[], model: string): string | null {
+  const fellBack = ledgers.flatMap(({ events }) => events.flatMap((event) => (event.type === 'model_fallback' && event.from === model ? [event.to] : [])));
+
+  if (fellBack.length === 0) return null;
+  const to = [...new Set(fellBack)].join(', ');
+
+  return `${model} fell back ${String(fellBack.length)} time(s), to ${to}: those calls answered as another model, so this trial measures no one model`;
+}
+
 /** How many of a turn's checks passed, of those judged: one whose judgement could not be had is said apart, not counted
  *  as failed (`EvalCheck.unjudged`). */
 function checksPassed(checks: readonly EvalCheck[]): string {
@@ -450,6 +464,10 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
       } catch (error) {
         errors.push({ name: 'InfraError', message: renderThrownChain({ cause: error }) });
       }
+
+      const substituted = substitutions(ledgers, input.model);
+
+      if (substituted !== null) errors.push({ name: 'InfraError', message: substituted });
 
       const metrics = measure(events);
       const promptUsage = measurePromptUsage(ledgers);

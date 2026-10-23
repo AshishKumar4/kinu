@@ -25,7 +25,7 @@ import {
   parseEvalAccount, parseGatewayTarget, type EvalAccount,
 } from '@kinu.run/core';
 import { evalWebIdentityEnv } from '@kinu.run/test-utils';
-import { DEFAULT_MODELS, evalMatrix } from '../evals/src/config';
+import { evalMatrix } from '../evals/src/config';
 import { listWorkspaces, settleCatalog, webHeaders, type CatalogNeed, type PublicWebIdentity } from '../evals/src/workspace-roster';
 import { trialInheritedRows } from '../evals/src/slot';
 import { ARMS } from '../evals/src/target';
@@ -244,12 +244,19 @@ async function readyTrialAccount(input: Provisioning & { identity: string }, acc
   if (planned !== null) return { given, reset, finding: planned };
 
   // A bare account inherits a single Workers AI model for its swarm judge. Its refusal ended every research swarm
-  // in run 37880718948. Keys alone do not configure that route: keep the user's retry count, and cross providers.
+  // in run 37880718948. Keys alone do not configure that route: keep the user's retry count, and cross providers, to
+  // the run's own models. A model the run measures falls back to none: a call another model answered would be counted
+  // as its own (2026-10-23, a GLM 5.3 run's 98 calls answered by Muse).
   const model = DEFAULT_WORKERS_AI_MODEL_SPEC;
+  const chain = input.models.includes(model) ? [] : [...input.models];
 
-  const deepRoute: CatalogNeed = (catalog) => catalog.tiers.deep?.model === model && JSON.stringify(catalog.modelFallbacks?.[model]) === JSON.stringify(DEFAULT_MODELS)
-    ? null
-    : { ...catalog, tiers: { ...catalog.tiers, deep: { ...catalog.tiers.deep, model } }, modelFallbacks: { ...catalog.modelFallbacks, [model]: DEFAULT_MODELS } };
+  const deepRoute: CatalogNeed = (catalog) => {
+    const { [model]: kept, ...rest } = catalog.modelFallbacks ?? {};
+
+    if (catalog.tiers.deep?.model === model && JSON.stringify(kept ?? []) === JSON.stringify(chain)) return null;
+
+    return { ...catalog, tiers: { ...catalog.tiers, deep: { ...catalog.tiers.deep, model } }, modelFallbacks: chain.length > 0 ? { ...rest, [model]: chain } : rest };
+  };
 
   try {
     await settleCatalog(input.origin, headers, [deepRoute]);
