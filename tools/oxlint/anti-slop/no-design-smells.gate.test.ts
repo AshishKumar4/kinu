@@ -183,6 +183,21 @@ export function stream(model: unknown): unknown {
 `,
   },
   {
+    rule: "no-storage-restore-outside-ops",
+    // A facet's own restore call: it rewinds the whole workspace at its next start (kinu-probe-pitr, 2026-10-23).
+    at: "packages/cf-backend/src/agent-facet",
+    bad: `declare const ctx: { storage: { getBookmarkForTime(at: number): Promise<string>; onNextSessionRestoreBookmark(bookmark: string): Promise<string> } };
+export async function rewind(at: number): Promise<string> {
+  return await ctx.storage.onNextSessionRestoreBookmark(await ctx.storage.getBookmarkForTime(at));
+}
+`,
+    good: `declare const stub: { opsRestore(caller: unknown, target: { at: number }): Promise<unknown> };
+export async function rewind(caller: unknown, at: number): Promise<unknown> {
+  return await stub.opsRestore(caller, { at });
+}
+`,
+  },
+  {
     rule: "no-cli-credential-flag",
     // A credential in argv: readable from the process list and kept by every command log.
     bad: `declare function run(argv: readonly string[]): void;
@@ -256,7 +271,7 @@ for (const { rule } of cases) {
  * SQL rule, and function declarations for the duplicate rule. A corpus that has silently gone to
  * zero on either must fail loudly rather than report a clean lint.
  */
-const corpus = { files: 0, selects: 0, functions: 0, modelCalls: 0, agentClasses: 0, tuiModules: 0, variantClasses: 0, dynamicImports: 0 };
+const corpus = { files: 0, selects: 0, functions: 0, modelCalls: 0, agentClasses: 0, tuiModules: 0, variantClasses: 0, dynamicImports: 0, restoreCalls: 0 };
 /** Functions, and classes whose `extends` names an agent base, read from the parsed source. */
 function shapes(file: string, text: string): { functions: number; agentClasses: number; dynamicImports: number } {
   const counted = { functions: 0, agentClasses: 0, dynamicImports: 0 };
@@ -292,6 +307,7 @@ for (const [file, text] of readSources()) {
   corpus.dynamicImports += found.dynamicImports;
   corpus.tuiModules += file.startsWith("packages/cli/src/tui/") ? 1 : 0;
   corpus.variantClasses += text.match(/[a-z-]+:p-[a-z]/gu)?.length ?? 0;
+  corpus.restoreCalls += text.match(/\.(getBookmarkForTime|onNextSessionRestoreBookmark)\(/gu)?.length ?? 0;
 }
 assert.ok(corpus.files > 0, "found no TypeScript sources under packages/*/src; the rules would gate nothing");
 assert.ok(corpus.selects > 0, `found ${corpus.files} sources but no SELECT; the SQL rule would inspect nothing`);
@@ -300,6 +316,7 @@ assert.ok(corpus.modelCalls > 0, `found ${corpus.files} sources but no model cal
 assert.ok(corpus.agentClasses > 0, `found ${corpus.files} sources but no class on an agent base; the seal rule would inspect nothing`);
 assert.ok(corpus.tuiModules > 0, `found ${corpus.files} sources but none under packages/cli/src/tui; the colour rule would inspect nothing`);
 assert.ok(corpus.variantClasses > 0, `found ${corpus.files} sources but no variant-prefixed design class; the utility rule would inspect nothing`);
+assert.ok(corpus.restoreCalls > 0, `found ${corpus.files} sources but no point-in-time restore call; the restore rule would inspect nothing`);
 assert.ok(corpus.dynamicImports > 0, `found ${corpus.files} sources but no import() in Worker source; the measured-import rule would inspect nothing`);
 
 // System temp dir, NOT the repo root: gates built on scripts/sources.ts enumerate untracked

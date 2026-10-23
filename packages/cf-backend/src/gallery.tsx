@@ -1341,6 +1341,9 @@ function userFixture(path: string, method: string, body: BodyInit | null | undef
 
   if (deploying !== null) return deploying;
 
+  // No free tier binds the gallery's account: the limits' bar and Usage section stay away (the `limits` frame draws them).
+  if (path === "/api/user/limits") return Promise.resolve(fixtureJson({ class: "operator", suspended: null, limits: [], computerSizeCap: null, freeTier: false }));
+
   // The account's choices, kept in this browser for every frame that reads one.
   const stored = storedConfigFixture(path, method, body);
 
@@ -8112,6 +8115,12 @@ async function mount() {
       const { default: mailPageFrame } = await import("@/gallery-mailpage");
 
       return mailPageFrame();
+    }],
+    // The free tier's screens (core limits/): `&state=` the account's stage, `&dialog=` a refusal (gallery-limits.tsx).
+    ["limits", async () => {
+      const { default: limitsFrame } = await import("@/gallery-limits");
+
+      return limitsFrame();
     }],
     ["snapshotrace", () => Promise.resolve(snapshotRaceFrame())],
     ["qualitylive", () => {

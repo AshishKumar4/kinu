@@ -57,34 +57,18 @@ export type HubTarget = Pick<OrchestratorAgent,
  * A resolver, not the binding: the SDK's `getAgentByName` awaits `__unsafe_ensureInitialized` (runs `onStart`) under its
  * own retry (agents@0.26.0 `dist/agent-routing.js:176-183`, read 2026-10-06). Injectable for tests.
  */
-export type HubResolver = (name: string) => Promise<HubTarget>;
-
 export type HubEnv = Pick<Env, 'WEBHOOK_ROUTE_SECRET'>;
 
-interface HubVariables extends WorkspaceVariables {
-  hub: HubTarget;
-}
-
-type HubContext<Bindings extends HubEnv> = Context<FamilyEnv<Bindings, HubVariables>>;
+type HubContext<Bindings extends HubEnv, Agent extends HubTarget> = Context<FamilyEnv<Bindings, WorkspaceVariables<Agent>>>;
 
 const TRIGGERS = `${LITERAL_WORKSPACE}/triggers`;
 
 const EMAIL = `${LITERAL_WORKSPACE}/email`;
 
-export function hubRoutes<Bindings extends HubEnv>(
-  resolverFor: (env: Bindings) => HubResolver,
-): Hono<FamilyEnv<Bindings, HubVariables>> {
-  const routes = new Hono<FamilyEnv<Bindings, HubVariables>>();
+export function hubRoutes<Bindings extends HubEnv, Agent extends HubTarget = HubTarget>(): Hono<FamilyEnv<Bindings, WorkspaceVariables<Agent>>> {
+  const routes = new Hono<FamilyEnv<Bindings, WorkspaceVariables<Agent>>>();
 
-  const resolve = async (c: HubContext<Bindings>, next: () => Promise<void>): Promise<void> => {
-    c.set('hub', await resolverFor(c.env)(c.get('workspace').name));
-    await next();
-  };
-
-  // Resolved before the method check.
-  routes.use(`${TRIGGERS}/*`, resolve);
-
-  routes.on('GET', [TRIGGERS, `${TRIGGERS}/`], async (c) => json({ body: await c.get('hub').listTriggers() }));
+  routes.on('GET', [TRIGGERS, `${TRIGGERS}/`], async (c) => json({ body: await c.get('workspace').agent.listTriggers() }));
 
   routes.on('POST', [TRIGGERS, `${TRIGGERS}/`], (c) => settle(createTrigger(c)));
 
@@ -92,7 +76,7 @@ export function hubRoutes<Bindings extends HubEnv>(
 
   // `owner`: proven by the workspace gate; the model's cancel comes as `self`.
   routes.delete(`${TRIGGERS}/:id`, async (c) =>
-    json({ body: await c.get('hub').cancelTrigger(decodeURIComponent(rawParam(c, 'id')), 'owner') }));
+    json({ body: await c.get('workspace').agent.cancelTrigger(decodeURIComponent(rawParam(c, 'id')), 'owner') }));
 
   routes.all(`${TRIGGERS}/*`, async () => err(404, 'not found'));
 
@@ -108,16 +92,12 @@ export function hubRoutes<Bindings extends HubEnv>(
         ? parseInt(url.searchParams.get('limit') ?? '', 10) : undefined,
     });
 
-    const agent = await resolverFor(c.env)(c.get('workspace').name);
-
     return json({
-      body: await agent.listRecentEvents({ variant, since: bounds.since, limit: bounds.limit }),
+      body: await c.get('workspace').agent.listRecentEvents({ variant, since: bounds.since, limit: bounds.limit }),
     });
   });
 
-  routes.use(EMAIL, resolve);
-
-  routes.get(EMAIL, async (c) => json({ body: await c.get('hub').getEmailIngress() }));
+  routes.get(EMAIL, async (c) => json({ body: await c.get('workspace').agent.getEmailIngress() }));
 
   routes.put(EMAIL, async (c) => {
     const request = c.get('workspace').request;
@@ -129,7 +109,7 @@ export function hubRoutes<Bindings extends HubEnv>(
 
     if (!body) return err(400, 'notifications (boolean) required');
 
-    const agent = c.get('hub');
+    const { agent } = c.get('workspace');
 
     await agent.setEmailNotifications(body.notifications);
 
@@ -141,7 +121,7 @@ export function hubRoutes<Bindings extends HubEnv>(
   return routes;
 }
 
-function createTrigger<Bindings extends HubEnv>(c: HubContext<Bindings>): Effect.Effect<Response, KinuError> {
+function createTrigger<Bindings extends HubEnv, Agent extends HubTarget>(c: HubContext<Bindings, Agent>): Effect.Effect<Response, KinuError> {
   return Effect.gen(function* () {
     const request = c.get('workspace').request;
     // Creating a trigger is a grant (same rule as the CLI webhook route: auth/session.ts isFreshAuthTime).
@@ -166,7 +146,7 @@ function createTrigger<Bindings extends HubEnv>(c: HubContext<Bindings>): Effect
     });
 
     const created = yield* Effect.tryPromise({
-      try: () => c.get('hub').createDurableWebhook({
+      try: () => c.get('workspace').agent.createDurableWebhook({
         label,
         auth_mode: authMode,
         secret: body.secret,

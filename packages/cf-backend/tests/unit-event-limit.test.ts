@@ -12,7 +12,7 @@ const DEFAULT_PAGE = 100;
 const UNTRUSTED_CEILING = 500;
 
 import { eventsOver, orchestratorHarness } from './helpers/actor-harness';
-import type { HubEnv, HubResolver } from '../src/events/routes';
+import type { HubEnv, HubTarget } from '../src/events/routes';
 
 // Dynamic: the route module resolves the Agent SDK at import time, so it loads after `actor-harness`
 // installs the stand-in.
@@ -39,16 +39,16 @@ const seeded = (() => {
     eventsOver(harness.db).publish({ descriptor: chatDescriptor(`event ${i}`), now: 1000 + i });
   }
 
-  return { resolveAgent: () => Promise.resolve(harness.agent), harness };
+  return { agent: harness.agent, harness };
 })();
 
 /** The events path reads no binding; the route secret is reached only on trigger creation. */
 const NO_BINDING_READ: HubEnv = {};
 
 async function eventsVia(
-  resolveAgent: HubResolver, query: string,
+  agent: HubTarget, query: string,
 ): Promise<{ status: number; count: number }> {
-  const res = await serveFamily(hubRoutes(() => resolveAgent), { workspace: { name: WORKSPACE } })(new Request(`https://kinu.example.com/api/workspaces/${WORKSPACE}/events${query}`), NO_BINDING_READ);
+  const res = await serveFamily(hubRoutes(), { workspace: { name: WORKSPACE, agent } })(new Request(`https://kinu.example.com/api/workspaces/${WORKSPACE}/events${query}`), NO_BINDING_READ);
 
   if (!res) throw new Error('the route did not claim the request');
   const body: unknown = await res.json();
@@ -78,7 +78,7 @@ const BOUNDED_QUERIES: readonly { readonly name: string; readonly query: string;
 describe('the events route closes `limit` before it can reach SQL', () => {
   for (const bound of BOUNDED_QUERIES) {
     test(bound.name, async () => {
-      expect(await eventsVia(seeded.resolveAgent, bound.query)).toEqual({ status: 200, count: bound.count });
+      expect(await eventsVia(seeded.agent, bound.query)).toEqual({ status: 200, count: bound.count });
     });
   }
 });

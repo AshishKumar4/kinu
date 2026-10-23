@@ -563,16 +563,18 @@ describe('previews are isolated by host', () => {
 
 /**
  * A6 SIGN-IN HAS NO SINGLE CHOKEPOINT. Sign-in state is short-lived KV records plus each user's own object,
- * which answers whether a session is live. A database or a singleton auth object in front of every sign-in
- * would make one binding the login path of every user at once.
+ * which answers whether a session is live, and a CLI sign-in's own objects. A database or a singleton auth object
+ * in front of every sign-in would make one binding the login path of every user at once.
  */
 describe('sign-in has no single chokepoint', () => {
-  test('auth state is the AUTH_KV namespace and the user objects, and nothing fronts them', () => {
+  test('auth state is the AUTH_KV namespace and per-user or per-sign-in objects, and nothing fronts them', () => {
     const objects = CONFIG.durable_objects.bindings.flatMap((binding) => [binding.name, binding.class_name]);
 
     expect(CONFIG.kv_namespaces.map((namespace) => namespace.binding)).toContain('AUTH_KV');
     expect(CONFIG.d1_databases ?? []).toEqual([]);
-    expect(objects.filter((name) => /auth/iu.test(name))).toEqual([]);
+    // Binding and class: one object per CLI sign-in, named by its device hash or user code (cli/auth-store.ts), so a
+    // second device reads its approval strongly consistent; a new auth object is an edit made here.
+    expect(objects.filter((name) => /auth/iu.test(name))).toEqual(['CliAuthDO', 'CliAuthDO']);
   });
 });
 

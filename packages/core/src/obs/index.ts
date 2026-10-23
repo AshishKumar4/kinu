@@ -51,7 +51,7 @@ export {
   type Refusal,
 } from './error';
 
-export { attempt, attemptInItsWords, flight, hold, inItsWords, recording, refusing, settle, settleSync, showing, tolerate, tolerateAsync, tolerated } from './effect';
+export { attempt, attemptInItsWords, flight, hold, inItsWords, joining, recording, refusing, settle, settleSync, showing, tolerate, tolerateAsync, tolerated, type Joined } from './effect';
 
 export { confirmedDeletion } from './confirmed-deletion';
 

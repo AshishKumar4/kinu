@@ -32,7 +32,7 @@ function drive(spans: number, keeps: ReadonlySet<string> = new Set()) {
 
   const env = {
     MOSSAIC_USER: namespace((name) => ({
-      tenantShards: async () => spans, destroyUser: async () => deletion(name), storedTables: async () => of(name).tables,
+      tenantShards: async () => spans, destroyUser: async () => deletion(name), storedTables: async () => of(name).tables, storedBytes: async () => 0,
     })),
     MOSSAIC_SHARD: namespace((name) => ({ destroyShard: async () => deletion(name), storedTables: async () => of(name).tables })),
   };

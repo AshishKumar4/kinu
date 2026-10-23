@@ -49,10 +49,12 @@ async function answered(label, response) {
   throw new Error(label + ' answered ' + response.status + ': ' + body);
 }
 
+/** An element's text from the store's answer, as the gateway escapes it (escapeXml). */
 function tag(text, name) {
   const found = new RegExp('<' + name + '>([^<]*)</' + name + '>').exec(text);
+  const entities = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
 
-  return found === null ? '' : found[1];
+  return found === null ? '' : found[1].replace(/&(amp|lt|gt|quot|apos);/g, (_entity, named) => entities[named]);
 }
 
 /** A part is final once the archiver has written a little past it. */

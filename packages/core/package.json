@@ -35,6 +35,7 @@
     "@ai-sdk/provider-utils": "5.0.65",
     "@cloudflare/codemode": "0.5.5",
     "@kinu.run/agent-utils": "workspace:*",
+    "@kinu.run/devbox": "workspace:*",
     "@nimbus-sh/core": "0.27.0",
     "@nimbus-sh/fabric": "^0.22.0",
     "@nimbus-sh/sdk": "0.21.0",

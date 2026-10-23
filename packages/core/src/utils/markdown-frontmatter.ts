@@ -158,18 +158,57 @@ function findNextIndentedLine(lines: string[], from: number): PeekResult | null 
   return null;
 }
 
-function stripComment(line: string): string {
-  let inS = false, inD = false;
+/** Where YAML starts a scalar: a line's first character, after `: ` or `- `, or after `[` or `,` in a flow list. */
+function startsScalar(line: string, at: number): boolean {
+  const before = line.slice(0, at).trimEnd();
 
+  return before === '' || before.endsWith(':') || before.endsWith('-') || before.endsWith('[') || before.endsWith(',');
+}
+
+/** The end of the quoted scalar opening at `at`, past its closing quote: `\` escapes in double quotes, `''` in single. */
+function quotedEnd(line: string, at: number): number {
+  const quote = line[at];
+
+  for (let j = at + 1; j < line.length; j++) {
+    if (quote === '"' && line[j] === '\\') j += 1;
+    else if (line[j] === quote) {
+      if (quote === "'" && line[j + 1] === "'") j += 1;
+      else return j + 1;
+    }
+  }
+
+  return line.length;
+}
+
+/** `line` without its comment: a `#` at the line's start or after a space, outside a quoted scalar. A quote opens a
+ *  scalar only where one starts (`key: 'x'`), so the apostrophe in `Don't` is a character of the text. */
+function stripComment(line: string): string {
   for (let j = 0; j < line.length; j++) {
     const c = line[j];
 
-    if (c === '"' && !inS) inD = !inD;
-    else if (c === "'" && !inD) inS = !inS;
-    else if (c === '#' && !inS && !inD) return line.slice(0, j);
+    if ((c === '"' || c === "'") && startsScalar(line, j)) j = quotedEnd(line, j) - 1;
+    else if (c === '#' && (j === 0 || /\s/u.test(line[j - 1] ?? ''))) return line.slice(0, j);
   }
 
   return line;
+}
+
+/** A flow list's items, split at the commas outside a quoted item. */
+function flowItems(inner: string): string[] {
+  const items: string[] = [];
+  let from = 0;
+
+  for (let j = 0; j < inner.length; j++) {
+    const c = inner[j];
+
+    if ((c === '"' || c === "'") && startsScalar(inner, j)) j = quotedEnd(inner, j) - 1;
+    else if (c === ',') {
+      items.push(inner.slice(from, j));
+      from = j + 1;
+    }
+  }
+
+  return [...items, inner.slice(from)];
 }
 
 function parseScalar(s: string): FrontmatterScalar {
@@ -201,7 +240,7 @@ function parseScalar(s: string): FrontmatterScalar {
 
     if (!inner) return [];
 
-    return inner.split(',').map(x => parseScalar(x.trim()));
+    return flowItems(inner).map(x => parseScalar(x.trim()));
   }
 
   if (/^-?\d+$/.test(t)) return Number(t);

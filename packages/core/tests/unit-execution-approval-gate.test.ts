@@ -587,7 +587,19 @@ describe('codemode calls on a workspace over the user\'s mounts', () => {
     // program given as text is judged as any other command (whether it should ask is the owner's open question).
     expect((await shell.exec('rm -rf /pc/laptop/proj')).refusal).toMatchObject(DENIED);
     expect((await shell.exec(python)).refusal).toBeUndefined();
-    expect(asked.map((request) => request.command)).toEqual(['rm -rf /pc/laptop/proj']);
+
+    // A path named where no command holds it, quoted apart (a loop's list, an array, a heredoc a shell reads), or reached
+    // after a `cd` that moved only a substitution: each delete is on the user's files.
+    const reaching = [
+      `for d in /p''c/laptop/project; do :; done; rm -rf "$d"`, `dirs=(/p''c/laptop/project); rm -rf "\${dirs[@]}"`,
+      `bash <<'EOF'\nrm -rf /p''c/laptop/project\nEOF`, 'cd /; echo "$(cd /tmp)"; rm -rf pc/laptop/project',
+      // A line this reading cannot parse, that names the user's files, may write over one.
+      'printf replacement > /pc/laptop/important.txt; cat <<< ok',
+    ];
+
+    for (const command of reaching) expect((await shell.exec(command)).refusal).toMatchObject(DENIED);
+
+    expect(asked.map((request) => request.command)).toEqual(['rm -rf /pc/laptop/proj', ...reaching]);
     expect(ran).toEqual([python]);
   });
 
@@ -596,14 +608,25 @@ describe('codemode calls on a workspace over the user\'s mounts', () => {
     const { provider, ran } = mountedWorkspaceProvider();
     router.register(provider);
     const start = present(router.getProvider('workspace'), 'the workspace executor').tools.startProcess;
-    const onto = ['mv notes.md /shared/notes.md', 'cp -r build /pc/laptop/proj', 'echo done > /shared/status.txt', 'cp -t /pc/laptop a.txt b.txt'];
+
+    const onto = [
+      'mv notes.md /shared/notes.md', 'cp -r build /pc/laptop/proj', 'echo done > /shared/status.txt', 'cp -t /pc/laptop a.txt b.txt',
+      '{ printf replacement; } > /pc/laptop/important.txt',
+      // A shell's script writes as the line does.
+      "bash -c 'printf replacement >/pc/laptop/important.txt'", "eval 'printf replacement >/pc/laptop/important.txt'",
+      "bash <<'EOF'\nprintf replacement >/pc/laptop/important.txt\nEOF",
+    ];
 
     for (const command of onto) expect(await start.execute(command)).toMatchObject(DENIED);
 
-    for (const command of ['mv notes.md done.md', 'echo done >> /shared/log.txt', 'cp /shared/notes.md .']) expect(await start.execute(command)).toBe('ok');
+    // Each `cd` is kept beside the directories before it, so a line of many is read in bounded time, not 2^n.
+    const wander = 'abcdefghijklmnopqrstuvwxyz'.split('').map((directory) => `cd ${directory}`).join('; ');
+    const runs = ['mv notes.md done.md', 'echo done >> /shared/log.txt', 'cp /shared/notes.md .', wander];
+
+    for (const command of runs) expect(await start.execute(command)).toBe('ok');
 
     expect(asked.map((request) => request.command)).toEqual(onto);
-    expect(ran).toEqual(['start mv notes.md done.md', 'start echo done >> /shared/log.txt', 'start cp /shared/notes.md .']);
+    expect(ran).toEqual(runs.map((command) => `start ${command}`));
   });
 
   test('a hosted node\'s shell, whose box starts every call at its home, reads each command from there', async () => {

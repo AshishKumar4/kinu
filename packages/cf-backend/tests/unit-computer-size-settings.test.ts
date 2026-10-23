@@ -92,9 +92,18 @@ describe('what the owner reads', () => {
 
   for (const { name, state, pending, says } of NOTES) {
     test(name, () => {
-      expect(workspaceSizeNote(state, pending)).toBe(says);
+      expect(workspaceSizeNote(state, pending, null)).toBe(says);
     });
   }
+
+  // 2026-10-23: a free account's computer starts at small whatever its size (core limits/ `startSize`), and its setting
+  // stays: the line says both, never that it runs larger at its next start.
+  test("a free account's computer set larger says it runs small, and that the size it is set to stays", () => {
+    const state = { account: null, chosen: 'large', size: 'large', running: 'small', startRefused: null, stalled: null } as const;
+
+    expect(workspaceSizeNote(state, false, 'small')).toBe("A free account's computer runs at Small, whatever size is set. Large stays set, for when the account has no limits.");
+    expect(workspaceSizeNote({ ...state, chosen: 'small', size: 'small' }, false, 'small')).toBeNull();
+  });
 
   // 2026-10-17: a stop's kill of a run reading a disk that stopped answering never landed, and the owner had nothing to
   // press: the card says why the stop still waits, and what its own Stop does.

@@ -65,6 +65,7 @@ export function workerEnv(reached: Partial<Env> = {}): Env {
     DeployRunDO: unreachableObjects('DeployRunDO'),
     MAILNAME: unreachableObjects('MAILNAME'),
     MAILBOX: unreachableObjects('MAILBOX'),
+    CliAuthDO: unreachableObjects('CliAuthDO'),
     AUTH_KV: unreachableKvNamespace('AUTH_KV'),
     BROWSER: unreachableBrowser(),
     ASSETS: unreachableFetcher('ASSETS'),
@@ -189,6 +190,7 @@ export function bootstrappedProfile(email: string, displayName: string | null = 
 export function staticRouteCliEnv(): CliRoutesEnv<string> {
   return {
     AUTH_KV: unreachableKv('AUTH_KV'),
+    CliAuthDO: unreachableNamespace('CliAuthDO'),
     ASSETS: unreachableAssets(),
     UserDO: unreachableNamespace('UserDO'),
     OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
@@ -221,6 +223,9 @@ export function cliAccount<Built extends Partial<CliRoutesAuthority>>(built: Bui
     getCredentialEndpoint: refuse('getCredentialEndpoint'),
     // An account's own AI in other people's slates: none in these tests.
     slateAiSpend: async () => [],
+    // The owner's limits as a deployment with no free tier answers them: every call admitted, nothing to count.
+    limits_admitTurn: async () => undefined,
+    limits_platformTokensSpent: async () => undefined,
     relayDevice: refuse('relayDevice'),
     relayModelCall: refuse('relayModelCall'),
     cancelModelRelay: refuse('cancelModelRelay'),
@@ -308,6 +313,8 @@ export function userAccount<Built extends Partial<UserRoutesAuthority>>(
     hasWorkspace: refuse('hasWorkspace'),
     ensureProfile: refuse('ensureProfile'),
     getProfile: refuse('getProfile'),
+    limits: refuse('limits'),
+    limits_inviteRedeemed: refuse('limits_inviteRedeemed'),
     setDisplayName: refuse('setDisplayName'),
     getProfileCatalog: refuse('getProfileCatalog'),
     getWorkspaceProfileCatalog: refuse('getWorkspaceProfileCatalog'),
@@ -326,6 +333,8 @@ export function userAccount<Built extends Partial<UserRoutesAuthority>>(
     userMcp_remove: refuse('userMcp_remove'),
     userMcp_handleOAuthCallback: refuse('userMcp_handleOAuthCallback'),
     userMcp_beginConnect: refuse('userMcp_beginConnect'),
+    userMcp_reconnect: refuse('userMcp_reconnect'),
+    evalAbortActivation: refuse('evalAbortActivation'),
     listWorkspaces: refuse('listWorkspaces'),
     listActiveWorkspaces: refuse('listActiveWorkspaces'),
     touchWorkspace: refuse('touchWorkspace'),
@@ -351,6 +360,7 @@ export function userAccount<Built extends Partial<UserRoutesAuthority>>(
     listCredentials: refuse('listCredentials'),
     setCredential: refuse('setCredential'),
     deleteCredential: refuse('deleteCredential'),
+    googleConnection: refuse('googleConnection'),
     checkpointCredentials: refuse('checkpointCredentials'),
     restoreCredentials: refuse('restoreCredentials'),
     getAuth: refuse('getAuth'),

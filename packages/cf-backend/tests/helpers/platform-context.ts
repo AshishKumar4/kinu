@@ -5,6 +5,15 @@ import { type JsonValue, type SqlValue } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
 import { makeSqlExec } from '../../../core/tests/helpers';
 import { SCRIPT_EXPORTS } from './programmatic-host';
+import { PLATFORM_CATALOG } from '../../../core/src/platform-catalog';
+
+/** The most a Durable Object's SQLite binds to one statement, which bun's would not refuse. */
+const BOUND_PARAMS = PLATFORM_CATALOG['do.sqlite.bound_params'].limit.value;
+
+/** A statement the platform refuses, refused here as workerd words it. */
+export function boundAsTheObjectBinds(bindings: readonly unknown[]): void {
+  if (bindings.length > BOUND_PARAMS) throw new Error(`too many SQL variables (${String(bindings.length)} > ${String(BOUND_PARAMS)}): SQLITE_ERROR`);
+}
 
 /** Each database's synchronous KV, as the platform keeps it beside the SQL: every activation over the database reads
  *  the pairs the last one wrote (a schema stamp, a recorded name), as a SQLite-backed object's does. */
@@ -24,6 +33,7 @@ export function makeCtx(db: Database, id = 'harness-actor', objectName = id): Ag
   const canonicalSql = makeSqlExec(db);
 
   const sqlExec = (query: string, ...bindings: SqlValue[]) => {
+    boundAsTheObjectBinds(bindings);
     const rows = canonicalSql.exec(query, ...bindings).toArray();
 
     return {
@@ -45,7 +55,15 @@ export function makeCtx(db: Database, id = 'harness-actor', objectName = id): Ag
 
   const context = {
     storage: {
-      sql: { exec: sqlExec },
+      sql: {
+        exec: sqlExec,
+        // The platform's own size of the object's database, which the owner's limits sample (core limits/).
+        get databaseSize(): number {
+          const pages = present(db.query<{ page_count: number }, []>('PRAGMA page_count').get(), 'the page_count row').page_count;
+
+          return pages * present(db.query<{ page_size: number }, []>('PRAGMA page_size').get(), 'the page_size row').page_size;
+        },
+      },
       // The synchronous face of the same pairs, as a SQLite-backed object's: the namespace name a destroy keeps.
       kv: {
         get: (key: string): JsonValue | undefined => kv.get(key),

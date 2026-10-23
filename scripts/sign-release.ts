@@ -30,7 +30,7 @@ if (!outDir || !version || !sha) {
   process.exit(2);
 }
 
-const checksums: ReleaseChecksums = {};
+const checksums: Record<string, string> = {};
 
 for (const name of readdirSync(outDir)) {
   if (!name.endsWith('.sha256')) continue;

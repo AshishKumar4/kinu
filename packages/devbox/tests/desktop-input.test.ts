@@ -5,7 +5,8 @@ import { TestDevbox } from './support/test-devbox';
 import { describe, expect, test } from 'bun:test';
 
 import { harness } from './support/devbox-harness';
-import { xdotoolOf, type DesktopRequest } from '../src/desktop-input';
+import { xdotoolOf } from '../src/desktop-input';
+import type { DesktopRequest } from '../src/wire';
 
 class DesktopBox extends TestDevbox<unknown> {
 

@@ -7,8 +7,7 @@ import type { ToolResultOutput } from '@ai-sdk/provider-utils';
 import * as v from 'valibot';
 import { isJsonObject, JsonValueSchema, type JsonValue } from '../utils/json';
 import { ImageCarrierSchema, type ToolImage } from '../types/tool-images';
-
-const IMAGE_DATA_URL = /^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/]+=*)$/u;
+import { imageDataUrl } from '../utils/data-url';
 
 export interface TakenImages {
   /** Images become `[image N]`; a nested carrier becomes its own output. */
@@ -32,10 +31,10 @@ export function takeImages(value: JsonValue): TakenImages {
     const text = v.safeParse(v.string(), node);
 
     if (text.success) {
-      const match = IMAGE_DATA_URL.exec(text.output);
+      const image = imageDataUrl(text.output);
 
-      if (match === null) return node;
-      images.push({ mediaType: match[1], data: match[2] });
+      if (image === null) return node;
+      images.push(image);
 
       return `[image ${images.length}]`;
     }

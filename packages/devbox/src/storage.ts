@@ -36,9 +36,6 @@ export interface DevboxStorage {
   discard: () => Promise<void>;
 }
 
-/** The directory a devbox makes durable, and every command's default working directory. */
-export const DEVBOX_WORKDIR = '/workspace';
-
 /** In the SDK's backup-directory allowlist, so the container may touch it. */
 export const DEVBOX_RUNTIME_DIR = '/var/tmp/devbox';
 

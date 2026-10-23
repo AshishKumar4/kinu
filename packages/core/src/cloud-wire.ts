@@ -22,10 +22,18 @@ export const DEV_IDENTITY_ACCOUNT_HEADER = 'x-kinu-dev-identity-account';
  *  account-wide settings, which rows running beside it as `scripted` read), `keyless` (the scripted model, no search
  *  key and no Cloudflare login, so a search takes the deployment's own gateway, as a person's who never chose does),
  *  `gateway` (signed in to Cloudflare, so its searches bill its own account's gateway), `cloudflare-login` (a
- *  Cloudflare login the first-run row expires and refuses, so no other row reads it while it is dead). */
-export const EVAL_ACCOUNTS = ['devices', 'scripted', 'settings', 'keyless', 'gateway', 'cloudflare-login'] as const;
+ *  Cloudflare login the first-run row expires and refuses, so no other row reads it while it is dead), `limits` (the one
+ *  eval account under the free tier's limits, every other being exempt, so the deployed flow test meets them). */
+export const EVAL_ACCOUNTS = ['devices', 'scripted', 'settings', 'keyless', 'gateway', 'cloudflare-login', 'limits'] as const;
+
+/** The eval account the free tier binds (limits/class.ts): the deployed flow test of the limits runs as it. */
+export const LIMITED_EVAL_ACCOUNT = 'limits' satisfies (typeof EVAL_ACCOUNTS)[number];
 
 export const EVAL_TRIAL_ACCOUNTS = 512;
+
+/** The upgrade tier's builtin accounts on staging (scripts/upgrade-fixtures.ts): test identities, not people, so the free
+ *  tier classes them eval (limits/class.ts). */
+export const UPGRADE_FIXTURE_ACCOUNTS = { fixture: 'upgrade-fixture@kinu.run', sender: 'upgrade-sender@kinu.run' } as const;
 
 /** The header naming the Worker version that answered: every published host's response carries it (cf-backend's
  *  server.ts). A deploy and a secret change each make a new version, and every Durable Object restarts on it, so the

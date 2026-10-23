@@ -23,6 +23,7 @@ import { settleSync } from '../obs/effect';
 import { durableStamps, readStamp, StoragePredatesReleaseError, writeStamp, type SchemaClass, type StampKv, type StampStore } from '../identity/schema-stamp';
 import { SCHEMA_RETIRED, SCHEMA_TABLES } from '../identity/schema-genesis';
 import type { SqlExec } from '../types/primitives';
+import { SQL_TOKEN, sqlNames } from '../utils/sql';
 
 /** The mark a table's DDL carries inside its CREATE when its rows are only valid against another table's of the same
  *  database, with no foreign key to say so (a fold over the other's rowids, a key the other's retained rows are judged
@@ -128,13 +129,10 @@ export function rowsOf(sql: SqlExec, table: string): number {
   return v.parse(CountSchema, sql.exec(`SELECT COUNT(*) AS rows FROM "${table}"`).toArray()[0]).rows;
 }
 
-/** A statement's tokens: a quoted string or name (kept exactly), a comment, spacing, a paren or comma, or a word. */
-const TOKEN = /'(?:[^']|'')*'|"(?:[^"]|"")*"|`(?:[^`]|``)*`|\[[^\]]*\]|--[^\n]*|\/\*[\s\S]*?(?:\*\/|$)|\s+|[(),]|[^'"`[\s(),\-/]+|./gu;
-
 /** A statement as two builds may have spelled it alike: its comments, its spacing and `IF NOT EXISTS` aside. Quoted text
  *  (a string, a quoted name) is kept exactly, so a changed default is seen. */
 function normal(statement: string | null | undefined): string {
-  const tokens = ((statement ?? '').match(TOKEN) ?? []).map((token) => (/^(?:--|\/\*|\s)/u.test(token) ? ' ' : token));
+  const tokens = ((statement ?? '').match(SQL_TOKEN) ?? []).map((token) => (/^(?:--|\/\*|\s)/u.test(token) ? ' ' : token));
 
   const kept = tokens.filter((token, at) => token !== ' '
     || !(at === 0 || at === tokens.length - 1 || /^[(), ]$/u.test(tokens[at - 1] ?? '') || /^[(),]$/u.test(tokens[at + 1] ?? '')));
@@ -183,7 +181,13 @@ function groupOf(parents: ReadonlyMap<string, readonly string[]>, table: string)
 function dependents(rows: readonly SchemaRow[], tables: readonly string[]): SchemaRow[] {
   const names = new Set(tables);
   const found = new Set<SchemaRow>();
-  const namesOne = (row: SchemaRow) => [...names].some((name) => row.tbl_name === name || new RegExp(`\\b${name}\\b`, 'iu').test(row.sql ?? ''));
+
+  // A name the statement reads, a string literal's text aside.
+  const namesOne = (row: SchemaRow) => {
+    const read = sqlNames(row.sql ?? '');
+
+    return [...names].some((name) => row.tbl_name === name || read.has(name.toLowerCase()));
+  };
 
   for (let grown = true; grown;) {
     const next = rows.filter((row) => (row.type === 'trigger' || row.type === 'view') && !found.has(row) && namesOne(row));

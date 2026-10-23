@@ -73,6 +73,23 @@ const DDL = [
      detail       TEXT    NOT NULL
    )`,
   `CREATE INDEX IF NOT EXISTS cp_audit_at ON cp_audit (at DESC, id)`,
+  // Each account's class and suspension as an operator last set them (limits/), for the accounts list: the account's
+  // own object holds the truth. No row: free.
+  `CREATE TABLE IF NOT EXISTS cp_account_standing (
+     user_id      TEXT    PRIMARY KEY,
+     class        TEXT    NOT NULL CHECK (class IN ('free', 'invited')),
+     suspended_at INTEGER,
+     updated_at   INTEGER NOT NULL
+   )`,
+  // An operator's single-use invite link, kept by its token's hash, 7 days; spent by the account that opens it.
+  `CREATE TABLE IF NOT EXISTS cp_invites (
+     token_hash  TEXT    PRIMARY KEY,
+     created_by  TEXT    NOT NULL,
+     created_at  INTEGER NOT NULL,
+     expires_at  INTEGER NOT NULL,
+     redeemed_by TEXT,
+     redeemed_at INTEGER
+   )`,
 ] as const;
 
 /** The control plane's tables: its index of users, workspaces, feedback and audit, and the Gallery's (slates/gallery.ts). */
@@ -88,6 +105,9 @@ export const ControlUserRowSchema = v.object({
   firstSeenAt: v.number(),
   lastSeenAt: v.number(),
   workspaces: v.number(),
+  /** As an operator set it (`cp_account_standing`); free where none did. */
+  class: v.picklist(['free', 'invited']),
+  suspendedAt: v.nullable(v.number()),
 });
 
 export type ControlUserRow = v.InferOutput<typeof ControlUserRowSchema>;
@@ -183,6 +203,8 @@ const UserSqlRowSchema = v.object({
   first_seen_at: v.number(),
   last_seen_at: v.number(),
   workspaces: v.number(),
+  class: v.nullable(v.picklist(['free', 'invited'])),
+  suspended_at: v.nullable(v.number()),
 });
 
 type UserSqlRow = v.InferOutput<typeof UserSqlRowSchema>;
@@ -359,9 +381,50 @@ export function forgetUser(sql: ControlPlaneSql, person: { readonly userId: stri
 
   sql.exec('DELETE FROM cp_feedback WHERE user_id = ?', userId);
   sql.exec('DELETE FROM cp_workspaces WHERE user_id = ?', userId);
+  sql.exec('DELETE FROM cp_account_standing WHERE user_id = ?', userId);
+  sql.exec('UPDATE cp_invites SET redeemed_by = ? WHERE redeemed_by = ?', pseudonym, userId);
   sql.exec('DELETE FROM cp_users WHERE user_id = ?', userId);
 
   return { feedback };
+}
+
+/** An account's class and suspension as an operator just set them, for the accounts list. */
+export function noteAccountStanding(sql: ControlPlaneSql, userId: string, standing: { readonly class: 'free' | 'invited'; readonly suspendedAt: number | null }, now: number): void {
+  sql.exec(
+    `INSERT INTO cp_account_standing (user_id, class, suspended_at, updated_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT (user_id) DO UPDATE SET class = excluded.class, suspended_at = excluded.suspended_at, updated_at = excluded.updated_at`,
+    userId, standing.class, standing.suspendedAt, now,
+  );
+}
+
+/** How long an invite link stays open (the owner's board, 2026-10-23). */
+export const INVITE_LINK_MS = 7 * DAY_MS;
+
+/** A new invite link's token, kept only as its hash: the operator's link is its only copy. */
+export async function createInvite(sql: ControlPlaneSql, createdBy: string, now: number): Promise<{ readonly token: string; readonly expiresAt: number }> {
+  const token = `inv_${crypto.randomUUID().replaceAll('-', '')}`;
+  const expiresAt = now + INVITE_LINK_MS;
+
+  sql.exec('INSERT INTO cp_invites (token_hash, created_by, created_at, expires_at) VALUES (?, ?, ?, ?)', await sha256Hex(token), createdBy, now, expiresAt);
+
+  return { token, expiresAt };
+}
+
+const InviteRow = v.object({ created_by: v.string(), expires_at: v.number(), redeemed_by: v.nullable(v.string()) });
+
+/** Spends an invite link for `userId`, once: who made it, or why it cannot be spent. Spent again by its own redeemer, it answers as before. */
+export async function redeemInvite(sql: ControlPlaneSql, token: string, userId: string, now: number): Promise<{ readonly createdBy: string } | 'unknown' | 'spent' | 'expired'> {
+  const tokenHash = await sha256Hex(token);
+  const [row] = select(sql, InviteRow, 'SELECT created_by, expires_at, redeemed_by FROM cp_invites WHERE token_hash = ?', tokenHash);
+
+  if (row === undefined) return 'unknown';
+
+  if (row.redeemed_by !== null) return row.redeemed_by === userId ? { createdBy: row.created_by } : 'spent';
+
+  if (row.expires_at <= now) return 'expired';
+  sql.exec('UPDATE cp_invites SET redeemed_by = ?, redeemed_at = ? WHERE token_hash = ?', userId, now, tokenHash);
+
+  return { createdBy: row.created_by };
 }
 
 const AuditNamesRow = v.object({ id: v.string(), actor_user: v.string(), actor_email: v.string(), target: v.string(), detail: v.string() });
@@ -371,11 +434,14 @@ function tokenPattern(name: string): RegExp {
   return new RegExp(`(?<![A-Za-z0-9._%+-])${name.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}(?![A-Za-z0-9._%+-])`, 'giu');
 }
 
-/** `userId`'s workspaces the index holds as removed, whose name no live workspace holds now. */
-export function removedWorkspaceNames(sql: ControlPlaneSql, userId: string): string[] {
+/** `userId`'s workspaces the index holds as removed, whose name no live workspace holds now; `only`'s alone, if named. */
+export function removedWorkspaceNames(sql: ControlPlaneSql, userId: string, only?: string): string[] {
+  // The live names are read once, not once per removed row: a correlated scan by name, which no index leads with, cost
+  // every removed row of the account a pass over the whole table (staging 04603ec96, 1.2 s a forget, reset).
   return select(sql, v.object({ name: v.string() }),
-    `SELECT w.name FROM cp_workspaces w WHERE w.user_id = ? AND w.removed_at IS NOT NULL
-       AND NOT EXISTS (SELECT 1 FROM cp_workspaces v WHERE v.name = w.name AND v.removed_at IS NULL)`, userId).map((row) => row.name);
+    `SELECT w.name FROM cp_workspaces w WHERE w.user_id = ? AND w.removed_at IS NOT NULL${only === undefined ? '' : ' AND w.name = ?'}
+       AND w.name NOT IN (SELECT v.name FROM cp_workspaces v WHERE v.removed_at IS NULL)`,
+    ...(only === undefined ? [userId] : [userId, only])).map((row) => row.name);
 }
 
 export interface ReconcileOutcome {
@@ -402,21 +468,18 @@ export function replaceUserWorkspaces(
       userId, row.name, row.displayName, row.createdAt, row.lastVisited);
   }
 
-  const names = live.map((row) => row.name);
+  // Each absent row its own statement: a statement binds at most `do.sqlite.bound_params` values, so the live names
+  // cannot go in one `NOT IN` (an account of 99 refused every reconcile).
+  const present = new Set(live.map((row) => row.name));
 
-  const before = count(sql,
-    `SELECT COUNT(*) AS n FROM cp_workspaces WHERE user_id = ? AND removed_at IS NULL`, userId);
+  const absent = select(sql, v.object({ name: v.string() }),
+    'SELECT name FROM cp_workspaces WHERE user_id = ? AND removed_at IS NULL', userId).filter((row) => !present.has(row.name));
 
-  const placeholders = names.map(() => '?').join(', ');
-  sql.exec(`UPDATE cp_workspaces SET removed_at = ?
-     WHERE user_id = ? AND removed_at IS NULL
-       ${names.length > 0 ? `AND name NOT IN (${placeholders})` : ''}`,
-    now, userId, ...names);
+  for (const { name } of absent) {
+    sql.exec('UPDATE cp_workspaces SET removed_at = ? WHERE user_id = ? AND name = ? AND removed_at IS NULL', now, userId, name);
+  }
 
-  const after = count(sql,
-    `SELECT COUNT(*) AS n FROM cp_workspaces WHERE user_id = ? AND removed_at IS NULL`, userId);
-
-  return { present: live.length, tombstoned: before - after };
+  return { present: live.length, tombstoned: absent.length };
 }
 
 export function overview(sql: ControlPlaneSql, now = Date.now()): ControlOverview {
@@ -462,8 +525,9 @@ export function listUsers(sql: ControlPlaneSql, request: PageRequest = {}): Page
     schema: UserSqlRowSchema,
     columns: `u.user_id, u.email, u.display_name, u.first_seen_at, u.last_seen_at,
             (SELECT COUNT(*) FROM cp_workspaces w
-              WHERE w.user_id = u.user_id AND w.removed_at IS NULL) AS workspaces`,
-    from: 'cp_users u',
+              WHERE w.user_id = u.user_id AND w.removed_at IS NULL) AS workspaces,
+            s.class, s.suspended_at`,
+    from: 'cp_users u LEFT JOIN cp_account_standing s ON s.user_id = u.user_id',
     at: 'u.last_seen_at',
     id: 'u.user_id',
     project: projectUser,
@@ -480,8 +544,9 @@ export function getUser(sql: ControlPlaneSql, userId: string): ControlUserRow | 
   const row = select(sql, UserSqlRowSchema,
     `SELECT u.user_id, u.email, u.display_name, u.first_seen_at, u.last_seen_at,
             (SELECT COUNT(*) FROM cp_workspaces w
-              WHERE w.user_id = u.user_id AND w.removed_at IS NULL) AS workspaces
-       FROM cp_users u WHERE u.user_id = ?`, userId)[0];
+              WHERE w.user_id = u.user_id AND w.removed_at IS NULL) AS workspaces,
+            s.class, s.suspended_at
+       FROM cp_users u LEFT JOIN cp_account_standing s ON s.user_id = u.user_id WHERE u.user_id = ?`, userId)[0];
 
   return row ? projectUser(row) : null;
 }
@@ -615,6 +680,8 @@ function projectUser(row: UserSqlRow): ControlUserRow {
     firstSeenAt: row.first_seen_at,
     lastSeenAt: row.last_seen_at,
     workspaces: row.workspaces,
+    class: row.class ?? 'free',
+    suspendedAt: row.suspended_at,
   };
 }
 

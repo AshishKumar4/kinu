@@ -9,6 +9,7 @@ import type { WebhookSecretStore } from './secrets';
 import { JsonObjectSchema, type JsonObject } from '../../utils/json';
 import { Effect } from 'effect';
 import { KinuError, settleSync } from '../../obs/index';
+import { checkWatcher, watchCheckOf, WatchCheckSchema, type WatchCheck, type WatchDeps } from './watch';
 
 export interface TimerTriggerOpts {
   cron?: string;
@@ -19,6 +20,8 @@ export interface TimerTriggerOpts {
   payload?: JsonObject;
   trust?: 'authenticated' | 'owner';
   missionLabel?: string;
+  /** Makes it a watcher: the check runs at each firing, and only what it found wakes the agent (watch.ts). */
+  check?: WatchCheck;
 }
 
 export interface TimerTrigger {
@@ -62,6 +65,8 @@ export async function createTimerTrigger(
   if (opts.payload !== undefined) Object.assign(triggerSpec, { payload: opts.payload });
 
   if (opts.missionLabel !== undefined) Object.assign(triggerSpec, { mission_label: opts.missionLabel });
+
+  if (opts.check !== undefined) Object.assign(triggerSpec, { check: v.parse(WatchCheckSchema, opts.check) });
 
   const id = await registry.register({
     kind,
@@ -193,19 +198,57 @@ export async function retimeDailyTrigger(request: RetimeTriggerRequest): Promise
   return { at, nextFireAt };
 }
 
+/** A firing done: a schedule's next one armed, a one-shot's ended. Nothing where the firing is no longer the row's own: a
+ *  provider deferred it, or it was parked or cancelled. */
+async function settleFiring(registry: TriggerRegistry, id: string, scheduledAt: number): Promise<void> {
+  const row = registry.get(id);
+
+  if (row === null || row.state !== 'active' || row.next_fire_at !== scheduledAt) return;
+  const spec = v.parse(TimerSpecSchema, row.spec);
+  const now = Date.now();
+
+  if (row.kind === 'timer_cron') {
+    await registry.markFired(id, now, spec.cron === undefined ? null : nextCronFire(spec.cron, now, spec.time_zone));
+
+    return;
+  }
+
+  await registry.markFired(id, now, null);
+  registry.revoke(id, now);
+}
+
 export interface TimerFireDeps {
   registry: TriggerRegistry;
   log: EventLog;
+  /** Where a watcher's check runs; absent, a watcher's firings pass unchecked and wake nothing. */
+  watch?: Pick<WatchDeps, 'run' | 'claims'>;
 }
 
-/** Re-fire after eviction is a no-op publish via dedupe on `(trigger_id, scheduled_fire_at)`. */
+/**
+ * Re-fire after eviction is a no-op publish via dedupe on `(trigger_id, scheduled_fire_at)`. A watcher's firing stays due
+ * until its check commits (`settleFiring`), so one a reset cut off is checked again.
+ */
 export async function fireDueTriggers(deps: TimerFireDeps, now: number) {
   let fired = 0;
+  const checks: Promise<boolean>[] = [];
 
   for (const trigger of deps.registry.due(now)) {
     if (trigger.kind !== 'timer_cron' && trigger.kind !== 'timer_oneshot') continue;
     fired += 1;
     const spec = v.parse(TimerSpecSchema, trigger.spec);
+    const scheduledAt = trigger.next_fire_at ?? now;
+
+    if (watchCheckOf(trigger) !== null) {
+      // A backend that runs no checks wakes no agent for a watcher: its firing passes, unchecked.
+      if (deps.watch === undefined) await settleFiring(deps.registry, trigger.id, scheduledAt);
+      else {
+        const firingDone = async (id: string, at: number) => { await settleFiring(deps.registry, id, at); };
+
+        checks.push(checkWatcher({ registry: deps.registry, log: deps.log, ...deps.watch, firingDone }, trigger.id, { at: scheduledAt, timer: true }, Date.now));
+      }
+
+      continue;
+    }
 
     deps.log.publish({
       descriptor: {
@@ -213,7 +256,7 @@ export async function fireDueTriggers(deps: TimerFireDeps, now: number) {
         variant: 'timer',
         payload: {
           trigger_id: trigger.id,
-          scheduled_fire_at: trigger.next_fire_at ?? now,
+          scheduled_fire_at: scheduledAt,
           label: spec.label,
           user_payload: spec.payload,
           mission_label: spec.mission_label,
@@ -230,6 +273,8 @@ export async function fireDueTriggers(deps: TimerFireDeps, now: number) {
       deps.registry.revoke(trigger.id, now);
     }
   }
+
+  await Promise.all(checks);
 
   return { fired };
 }

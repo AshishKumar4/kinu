@@ -3,6 +3,8 @@
  * history an instruction sets aside, and a thread as an agent reads it. Attachment bytes never leave this layer.
  */
 
+import { readHtml } from '../utils/html';
+
 /** RFC 3834: another machine's auto-reply would loop with Kinu's on-thread replies, so these are dropped. */
 export function isAutoReplyEmail(headers: Headers): boolean {
   // RFC 3834: "no" is the only value that marks human-sent mail.
@@ -52,28 +54,11 @@ export function stripQuotedReply(text: string): string {
   return stripped.length > 0 ? stripped : text.trim();
 }
 
-
-function htmlToText(html: string): string {
-  return html
-    .replace(/<(style|script)[\s\S]*?<\/\1>/gi, ' ')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/(p|div|tr|li|h[1-6])>/gi, '\n')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&#39;|&apos;/g, "'")
-    .replace(/&quot;/g, '"')
-    .replace(/[ \t]+/g, ' ')
-    .replace(/\n\s+\n/g, '\n\n')
-    .trim();
-}
-
-export function inboundBody(text: string | undefined, html: string | undefined): string {
+/** A message's words: its plain part, else its HTML part read as the web reader reads a page. */
+export async function inboundBody(text: string | undefined, html: string | undefined): Promise<string> {
   if (text !== undefined && text.trim() !== '') return text;
 
-  if (html !== undefined) return htmlToText(html);
+  if (html !== undefined) return (await readHtml(html)).markdown;
 
   return '';
 }

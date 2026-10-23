@@ -10,17 +10,6 @@ const Reply = v.variant('ok', [
 
 export type DigestWrite = v.InferOutput<typeof Reply>;
 
-/** One digest write as a caller sends it: the new bytes as base64, the digest they replace, and its sends' names. */
-export interface DigestWriteRequest {
-  readonly path: string;
-  readonly contentBase64: string;
-  readonly expected: string | null;
-  /** This write's name across every send of it. */
-  readonly operation: string;
-  /** The caller's earlier writes whose answers it holds. */
-  readonly settled: readonly string[];
-}
-
 /** A write's name across its sends: a UUID, safe as a file name in the guest. */
 const OPERATION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 

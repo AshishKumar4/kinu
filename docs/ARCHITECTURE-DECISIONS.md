@@ -387,6 +387,72 @@ same-socket STARTTLS slips, this design comes back: key-only socket names, the
 control connection, the cancelled read, and `keyed-socket.ts`'s recognizer and
 two-tag framing deleted.
 
+W7. A workspace or an account is restored to a moment of the last 30 days
+from its Durable Objects' own SQLite history (Cloudflare's point-in-time
+recovery), by the operator: `bun scripts/restore.ts <environment> workspace
+<name> --at=<ISO time> | --bookmark=<bookmark>`, or `account <email|id>
+--at=<ISO time>`. Its authority is the deploy's: a pass written into the
+deployment's AUTH_KV with wrangler under the account's API token, as the
+tables walk writes one, then `/ops/restore`
+(`packages/cf-backend/src/ops-routes.ts`). Each object arms its restore
+(`packages/core/src/state/ops-restore.ts`), the route ends it at once and
+reads its history from a fresh start: the restore landed when the object
+stands past its undo bookmark. One that did not land is answered 502, as an
+armed restore lands at the object's next start, over what was written in
+between. A workspace goes back with every agent of it. An account goes back
+with what is the person's: its UserDO, its mailbox (MailboxDO, every box of
+the account), then its Drive's user object before each of its shards, all to
+the same moment, so no shard's sweep meets a reference the restored tenant
+names; an account goes back by moment only, as a bookmark is one object's.
+Its workspaces are each their own restore. The script writes an undo file
+naming each object's bookmark just before; `--undo=<file>` takes the restore
+back. Only `ops-restore.ts` may make the PITR calls
+(`anti-slop/no-storage-restore-outside-ops`). Decided 2026-10-23.
+
+Measured on staging (Worker `kinu-probe-pitr`, one SQLite object with a
+facet, compat 2026-09-30, deleted after):
+- A restore by time to 2.5 min after a write, of an object then written again
+  and its alarm deleted: the object's SQL row and KV key, its facet's row and
+  key, and its alarm all came back. A second restore to the same time after it
+  found the same bookmark. Restoring to the undo bookmark brought back the
+  later writes and the deleted alarm.
+- An object deleted whole (`deleteAll`, flushed, then ended) and restored to a
+  moment before: its rows, its KV and its facet's all came back. So a deleted
+  workspace or account is restorable for 30 days.
+- A facet cannot go back alone. Its storage has the PITR calls, and its
+  `getBookmarkForTime` returned the parent's bookmark for the same moment: one
+  history. Its `onNextSessionRestoreBookmark` plus `ctx.facets.abort` changed
+  nothing at once, and the whole object, parent and facet, went back at the
+  parent's next start (a redeploy). So no facet code may call the PITR API,
+  and a workspace's agents go back with it. An agent alone would need its
+  rows read at the moment and written back, which this does not do (Main,
+  2026-10-23: not needed).
+- A time a few seconds after the object first wrote was refused ("This
+  database has no history"); seconds after a restore, a time before it was
+  refused ("Requested time is before this database existed"). Bookmarks
+  restored at once either way. Minutes apart, every time lookup answered.
+
+R2 bytes. R2 keeps no versions, so a row restored to a moment must find the
+bytes it named then. Within a live account the bytes outlive their rows: mail
+the Trash empties and a slate's replaced, unlisted or removed pictures are
+buried 31 days (`mail_blob_graves`, `slate_picture_graves`) and deleted by
+their object's alarm unless a row names them again. Drive keeps its bytes in
+its shards' SQLite, which go back with the tenant. A workspace's teardown and
+an account's deletion delete their R2 bytes at once, as the owner chose
+(2026-10-23, "Delete files at once"): slate pictures, the devbox's disk
+layers, mail bodies. So a deleted workspace or account restores its database
+but not those bytes, and the restore names each object's rows whose bytes
+are gone (its `missing`), rather than leave them dangling unsaid.
+
+What else it does not bring back. A workspace's devbox (KinuDevbox) is not
+restored: its disk layers are R2 objects a save deletes when it supersedes
+them, so an earlier chain would name layers that are gone, and its recovery
+refuses such a chain. An account's roster goes back with it: a workspace made
+since is in no roster, and one deleted since is named again, its storage
+restorable by its own restore. A session or credential revoked since is valid
+again, so revocations after the moment are redone by hand. The privacy page
+says deleted data can remain in this history for up to 30 days.
+
 ## Chat loop
 
 C1. The stored assistant row holds the turn's answer. The runner selects it
@@ -837,6 +903,12 @@ isolate. Every agent facet is a direct child of the workspace object, so the
 tree is two levels deep.
 Later note: reversed for the advisor by D14 (2026-10-22): the workspace no
 longer reviews a finished turn; each agent's own session reviews its steps.
+Later note (2026-10-23, D14's probe): the containment above holds for memory
+and for a blocking loop, not for CPU in short event-loop turns. A facet whose
+turns each take 0.1-0.4 s of CPU is reset by the platform after about 1-3 s
+of it, and its parent workspace object and every sibling facet are reset with
+it ("reset because its code was updated"); 40 ms turns are not, and another
+workspace object is never touched.
 No request waits for a turn's end (2026-09-28): the delegation lane
 returns once the turn is delivered, and the turn's end, the agent's next
 queued turn and the lane's bookkeeping run in the request that carries the
@@ -1199,9 +1271,14 @@ a facet of its own) and D13's "every agent's advisor in core `ActorAdvisor`".
   context is a 48k-character window cut in halves (the turn's request kept),
   so each request is bounded: 58-59 kB in every third of a 150-step turn's
   calls, main's peak 60.7-61.8 MB and its allocation 266-282 MB (9a09d9ac5,
-  3 runs). Main's allocation a step still rises from 1.44 to 1.96 MB across
-  the turn's thirds, against a flat 0.5-0.6 MB unadvised; not from the
-  advisor's requests, cause unknown.
+  3 runs). The advisor's own cost a step is flat: with both arms held to
+  all 150 of their steps (07b6a8f2b; before it, other workspaces' calls took
+  74 of the unadvised turn's steps, which read as a flat 0.5-0.6 MB a step),
+  main allocates 1.01-1.06, 1.17-1.24 and 1.52-1.54 MB a step over the
+  turn's thirds unadvised and 1.49-1.55, 1.66-1.76 and 1.94-1.96 advised, so
+  the advisor adds 0.42-0.52 MB a step in every third (2 runs). The rise in
+  both arms is the agent's own request, which carries its history (222, 392,
+  562 kB), not the advisor's.
 - Containment, same jobs, every run alike: an advisor call that throws, and
   one beside an uncaught throw (from a timer on 97d575f47, a microtask on
   cac0cbe68) and a rejection no one awaits, each left main's turn to run all
@@ -1218,15 +1295,26 @@ a facet of its own) and D13's "every agent's advisor in core `ActorAdvisor`".
   isolate with its SQLite intact. 200 MB of Uint8Array (off-heap) reset
   nothing (2 of 2). A 44 s synchronous loop failed the step running it at the
   facet's ~30 s ("exceeded CPU time limit", D10) and reset the agent alone (2
-  of 2). The same CPU in yielding slices, running on after the call that
-  started it, was cut after about 1.5 s of CPU, "reset because its code was
-  updated", and a sibling agent's isolate was reset with it (4 of 4; 0.84 s
-  was fine). So an advisor's runaway kills its own agent's turn, which recovers
-  as any reset turn does (D13), never the workspace; detached CPU can also
-  reset a sibling agent, cause unknown.
+  of 2). So a runaway allocation or blocking loop kills its own agent's turn,
+  which recovers as any reset turn does (D13), and nothing else.
+- CPU in short turns is not contained (`kinu-advisor-probe-1023b`, deleted;
+  object instance ids beside isolate ids, a second workspace watched): a
+  facet whose event-loop turns each take 0.1-0.4 s of CPU is reset by the
+  platform after about 1-3 s of such CPU, "Durable Object reset because its
+  code was updated", and the reset takes its parent workspace object and
+  every sibling agent with it (detached or in-call, with or without SQLite
+  writes; 13 of 14 runs at 0.42 s, 1 of 2 at 0.1 s). 40 ms turns for 4 s of
+  CPU reset nothing (2 of 2); the same 0.42 s turns in a plain Durable Object
+  or in the parent object itself reset nothing (4 of 4); another workspace
+  was never touched. No Kinu code is in the probe: this is the platform's.
+  An earlier reading here ("never the workspace") read isolate ids only, and
+  the workspace object is reset in a kept isolate. So an agent's or its
+  advisor's code that holds the event loop for 100 ms or more, repeatedly,
+  can reset its whole workspace; the advisor's own work per call (rendering
+  and redacting at most a 48k window) is far under that, and its waits are
+  model calls. Not measured: the longest event-loop turn Kinu's facets take.
 - Not measured: review latency on a real provider. The step loop never waits
-  for a review mid-turn; the turn's end waits for its last step's review, one
-  model call when the advisor reads nothing.
+  for a review, and no turn waits for its advisor.
 
 ## Deploy ladder
 
@@ -2175,12 +2263,24 @@ to every process the call starts. `egressFor` gives such a process an egress
 that names no owner, so a placeholder it finds (in a generated image, a job's
 files) is refused, never spent; an owner's process keeps the owner's egress.
 `sudo` and `su` are refused to the viewer's uid at each engine boot, so it
-writes none of the owner's files and never becomes anyone else. A share's
+never becomes anyone else. A share's
 granted process and port control (listing, stopping and reading the logs of
 processes, exposing ports) stays the owner's delegated authority, as the
 owner chose to keep viewers' shell access (Main, 2026-10-19). Residual: an
 owner's process that relays requests for whoever reaches it on loopback acts
 with the owner's egress; and a file grant acts as the agent it is given for.
+Later note (2026-10-23, ledger 1018-xar): the owner chose (2026-10-19T19:44:35Z)
+that a share's commands write "your project too, as today". A workspace made
+since then has its project tree (`/home/main`) setgid to the project group
+(1001), sticky, with a group-writable default ACL, set by the boot that makes
+main's `.kinu` (`provisionProjectHome`); the viewer and the workspace agent's
+session carry that group. Sticky, because write on the root would otherwise let
+the viewer remove or rename `SOUL.md` and `.kinu`. `.kinu`, `SOUL.md`, every
+other home and `/tmp` stay as they were, and an older workspace, which already
+has its `.kinu`, keeps its tree (one whose owner deletes `.kinu` is shared at
+its next boot, as a new one).
+Nimbus's own session user takes no extra group (Nimbus ask 73), so the owner's
+own shell cannot write a file a viewer made in the project.
 
 ## Open
 

@@ -21,7 +21,7 @@ import { Effect, Result } from 'effect';
 import * as v from 'valibot';
 
 import { scoreAuthoredEdit } from './judge';
-import { artifactBody, bundledArtifact, listArtifactVersions, sectionArtifact, stageArtifact, toolArtifact, type ArtifactEvidence } from './artifacts';
+import { artifactBody, bundledArtifact, listArtifactVersions, MAX_EDIT_CHARS, sectionArtifact, stageArtifact, toolArtifact, type ArtifactEvidence } from './artifacts';
 import { BUILTIN_TOOL_DESCRIPTIONS } from '../tools/registry';
 import { isCorrected, isLowRating, listTurnRatings, renderRatedTurn, type TurnRating } from './ratings';
 import type { DecisionQuestion } from '../providers/decision-model';
@@ -391,14 +391,19 @@ function review(
         continue;
       }
 
+      // An edit the size gate refused goes back for the one revision whatever the reviewer said, with what it measured:
+      // its author can bring it within the limit, which no reviewer can (glm and kimi dreams, 2026-10-23: 13 of 19
+      // section edits refused for size, the reviewers' notes asking for them shorter).
+      const sendBack = round === 0 ? withSizeRevisions(latest.verdicts, latest.evidence) : latest.verdicts;
+
       // One revision at most: a second request for one is a rejection.
-      if (round > 0 || !latest.verdicts.some((verdict) => verdict.verdict === 'revise')) {
+      if (round > 0 || !sendBack.some((verdict) => verdict.verdict === 'revise')) {
         return { proposal, round: { evidence: latest.evidence, verdicts: latest.verdicts } };
       }
 
       const revised = yield* askHelper(deps, {
         roleLabel: 'dreamer', tier: 'fast',
-        brief: () => renderReviseBrief(deps, request, { proposal, verdicts: latest.verdicts ?? [] }),
+        brief: () => renderReviseBrief(deps, request, { proposal, verdicts: sendBack }),
       }, RefinementProposalSchema);
 
       // A revision that does not answer, or answers at another scope, leaves the first round's verdicts standing.
@@ -412,6 +417,24 @@ function review(
       if (!claim.record({ review: { rounds }, proposal, detail: proposal.summary } satisfies SettleRefinementPatch)) return null;
     }
   });
+}
+
+/** The reviewer's verdicts, with every edit the size gate refused, whether the reviewer named it or not, sent back for a
+ *  revision that names the measure. */
+function withSizeRevisions(verdicts: readonly DreamVerdict[], evidence: readonly EditEvidence[]): DreamVerdict[] {
+  const oversized = evidence.filter((measured) => measured.revisable === true && measured.refused !== undefined);
+
+  return [
+    ...verdicts.filter((verdict) => !oversized.some((measured) => measured.edit === verdict.edit)),
+    ...oversized.map((measured): DreamVerdict => {
+      const said = verdicts.find((verdict) => verdict.edit === measured.edit);
+
+      return {
+        edit: measured.edit, verdict: 'revise',
+        note: `a fixed gate refused it (${measured.refused ?? ''}): change only the sentences the lesson needs, or drop it.${said === undefined ? '' : ` The reviewer said: ${said.note}`}`,
+      };
+    }),
+  ];
 }
 
 /** What the reviewer reads about each edit, measured before it is judged; a static gate's refusal routes it nowhere. */
@@ -433,9 +456,12 @@ function scoreEdits(
           const decide = deps.control.rt.decide;
 
           if (decide === undefined) return { edit, note: '', refused: 'no decision model is wired to measure the edit' };
-          const scored = await scoreAuthoredEdit({ rt: deps.control.rt, decide }, { artifactId: editOwnerAndTarget(change)[1], body: change.source, turns: request.turnIds });
+          const artifactId = editOwnerAndTarget(change)[1];
+          const scored = await scoreAuthoredEdit({ rt: deps.control.rt, decide }, { artifactId, body: change.source, turns: request.turnIds });
 
-          return 'refused' in scored ? { edit, note: '', refused: scored.refused } : { edit, note: scored.detail, artifact: scored.evidence };
+          if (!('refused' in scored)) return { edit, note: scored.detail, artifact: scored.evidence };
+
+          return { edit, note: '', refused: scored.refused, ...(scored.oversized && { revisable: true }) };
         }
 
         case 'skill': {
@@ -450,6 +476,13 @@ function scoreEdits(
     },
   ));
 }
+
+/** What a fact must say, which the dreamer drafts by and the reviewer holds it to: the world model shows every fact on
+ *  every turn, and the glm pilot's dreamed "all UI work goes to the expert lane" ran a layout request into a staffing step
+ *  (EVAL-5, 2026-10-23). */
+const FACT_SCOPE = 'A fact is shown to the agent on every later turn, whatever the work: its value names the situation '
+  + 'it holds for, in the user\'s terms ("when they ask for a deploy, ..."), is never a rule for all work, and leaves out '
+  + 'what held only for the session it was said in.';
 
 /** The owner's order for where a lesson goes, which the dreamer drafts by and the reviewer holds it to. */
 const EDIT_PRIORITY = 'Put a lesson in the first place that can carry it: a prompt section or a tool description, then a '
@@ -567,7 +600,10 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
     EDIT_PRIORITY,
     '',
     'Registered prompt sections (`prompt_section`), each as it reads now: replacing one costs every turn its bytes,',
-    'and a longer section must earn them with a strictly better measured score.',
+    'and a longer section must earn them with a strictly better measured score. An edit to a section or a tool text',
+    `changes at most ${String(MAX_EDIT_CHARS)} characters of it, counted as the words it removes plus the words it adds:`,
+    'a larger change is refused before anyone reads it. Write the whole text back with only the sentences the lesson',
+    'needs changed, every other word as it is.',
     '',
     sections,
     '',
@@ -579,7 +615,7 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
     '',
     'Recorded fact keys (`fact`): the durable world model. Propose one ONLY for a preference the',
     'user stated in their own words, and quote those words verbatim from a turn above; a fact whose',
-    'quote is not in the trajectory is refused:',
+    `quote is not in the trajectory is refused. ${FACT_SCOPE} The keys recorded now:`,
     factLines,
     '',
     'Skill files (`skill`): a procedure the agent follows when its description matches the work, and the last',
@@ -696,6 +732,7 @@ async function renderReviewerBrief(
     '',
     EDIT_PRIORITY,
     'Reject a skill that an edit to a prompt section or a tool description would cover.',
+    `Reject a fact that does not hold to this: ${FACT_SCOPE}`,
     '',
     `## The turns it read (${String(input.reviewed.length)})`,
     '',

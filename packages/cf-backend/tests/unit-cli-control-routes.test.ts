@@ -4,7 +4,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   cliRoutes, type CliAgentTarget, type CliRoutesAuthority, type CliRoutesEnv,
 } from '../src/cli/routes';
-import { cliAccount, workspaceObject, unreachableAssets, unreachableKv } from './helpers/bindings';
+import { cliAccount, workspaceObject, unreachableAssets, unreachableKv, unreachableNamespace } from './helpers/bindings';
 import type { ObjectNamespace } from '@kinu.run/core';
 import { PRIVATE_NO_STORE } from '@kinu.run/core';
 import { JsonValueSchema, type JsonObject, type JsonValue } from '@kinu.run/core';
@@ -46,6 +46,7 @@ function testEnv(
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     WEBHOOK_ROUTE_SECRET: 'test-webhook-route-secret-0123456789',
     AUTH_KV: unreachableKv('AUTH_KV'),
+    CliAuthDO: unreachableNamespace('CliAuthDO'),
     ASSETS: unreachableAssets(),
   };
 }

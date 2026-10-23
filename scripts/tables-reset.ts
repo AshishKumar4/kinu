@@ -105,6 +105,40 @@ export function changedTables(from: GenesisLock, to: GenesisLock): ReleaseTables
   return { changed, added };
 }
 
+/** What a release does to the served build's tables, and the tables it names. */
+export interface SchemaChange {
+  readonly kind: 'none' | 'additive' | 'changes';
+  readonly tables: readonly string[];
+}
+
+/**
+ * What a release does to the tables of the build a deployment serves, the one place deploys read it (`reset.ts
+ * schema-change`, /mnt/local/kinu/bin/stage.sh): `none`; `additive`, tables made and none changed, which ships with
+ * --reset-tables on its own, as no database drops anything; `changes`, a table reshaped or removed, which holds for
+ * Main and, in production, the owner's migration rule. The tables it names are the added, or the changed with how.
+ */
+export function schemaChange({ changed, added }: ReleaseTables): SchemaChange {
+  if (changed.length > 0) return { kind: 'changes', tables: changed.map(({ table, change }) => `${table} ${change}`) };
+
+  return added.length > 0 ? { kind: 'additive', tables: [...added] } : { kind: 'none', tables: [] };
+}
+
+/**
+ * Production's refusals of a plan that loses data (the owner, 2026-10-21: "once users come, we either have a one time
+ * migration in the workspace onStart, or alter only tables where data loss is acceptable"): one line for each table the
+ * plan drops or retires that holds user data, every table but those `acceptable` names (`scripts/schema-loss.json`, each
+ * with why), unless the owner's `words` name it. A table no file classes holds user data, so a new one is never lost
+ * by being forgotten.
+ */
+export function lossRefusals(
+  verdicts: readonly TableVerdict[], { acceptable, words }: { readonly acceptable: Readonly<Record<string, string>>; readonly words: string | undefined },
+): string[] {
+  const named = new Set((words ?? '').split(/[^a-z0-9_]+/u));
+
+  return verdicts.filter((verdict) => (verdict.does === 'drop' || verdict.does === 'retire') && !Object.hasOwn(acceptable, verdict.table) && !named.has(verdict.table))
+    .map(({ table, classes, does }) => `${table} [${classes.join(', ')}] holds user data, and this release ${does === 'drop' ? 'drops' : 'retires'} it`);
+}
+
 /** One changed table as the plan finds it. */
 export interface TableVerdict {
   readonly table: string;

@@ -13,7 +13,12 @@ import type { UserDO } from '../user/user-do';
 import { ownerCaller } from '@kinu.run/core';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import type { IndexFeedSink } from './index-feed';
-import type { ControlPlaneEnv } from './stub';
+import { controlPlaneStub, type ControlPlaneEnv } from './stub';
+import type { ControlPlaneDO } from './control-plane-do';
+import type { PresentedCaller } from '@kinu.run/core/control-plane';
+import { STORED_CLASSES } from '@kinu.run/core';
+import { accountIdFor } from '../auth/store';
+import type { SignInDeclarationEnv } from '@kinu.run/core/identity';
 import type { ObjectNamespace } from '@kinu.run/core';
 
 /** A UserDO name; it makes the workspace name beside it an address rather than a guess. */
@@ -81,6 +86,14 @@ export const ControlActionSchema = v.variant('action', [
     /** The operator retypes the name: the one destructive action, picked from a cross-account list. */
     confirm: v.pipe(v.string(), v.nonEmpty()),
   }),
+  // An account's standing (core limits/): its class, and a suspension that starts nothing new until lifted.
+  v.object({ action: v.literal('account.class'), userId: UserIdSchema, class: v.picklist(STORED_CLASSES) }),
+  v.object({ action: v.literal('account.suspend'), userId: UserIdSchema, reason: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(300)) }),
+  v.object({ action: v.literal('account.unsuspend'), userId: UserIdSchema }),
+  /** An email invited before or after its first sign-in: its account is the one that email signs in as. */
+  v.object({ action: v.literal('invite.email'), email: v.pipe(v.string(), v.trim(), v.toLowerCase(), v.email()) }),
+  /** A single-use link, 7 days: whoever signs in and opens it is invited. */
+  v.object({ action: v.literal('invite.link') }),
 ]);
 
 export type ControlAction = v.InferOutput<typeof ControlActionSchema>;
@@ -111,7 +124,7 @@ export interface ActionOutcome {
 }
 
 /** `request` names no domain object: a body the schema refused, still audited. */
-type AuditTargetKind = 'job' | 'approval' | 'workspace' | 'request';
+type AuditTargetKind = 'job' | 'approval' | 'workspace' | 'request' | 'account' | 'invite';
 
 export interface ActionIdentity {
   /** snake_case: the analytics sink groups on the tail after the first dot. */
@@ -124,6 +137,30 @@ export interface ActionIdentity {
 export function describeAction(action: ControlAction): ActionIdentity {
   // The analytics sink groups on the tail after the first dot, so dots become underscores.
   const operation = action.action.replace(/\./g, '_');
+
+  switch (action.action) {
+    case 'account.class':
+    case 'account.suspend':
+    case 'account.unsuspend':
+      return { operation, targetKind: 'account', target: action.userId };
+    case 'invite.email':
+      return { operation, targetKind: 'invite', target: action.email };
+    case 'invite.link':
+      return { operation, targetKind: 'invite', target: '' };
+    case 'job.cancel':
+    case 'job.retry':
+    case 'job.dismiss':
+    case 'approvals.decide':
+    case 'jobs.clear':
+    case 'shell_grants.revoke':
+    case 'workspace.remove':
+    case 'workspace.turn_read':
+      return describeWorkspaceAction(operation, action);
+  }
+}
+
+/** A workspace's action: its target names the account and the workspace. */
+function describeWorkspaceAction(operation: string, action: Extract<ControlAction, { workspace: string }>): ActionIdentity {
   const owned = `${action.userId}/${action.workspace}`;
 
   switch (action.action) {
@@ -156,10 +193,13 @@ export type ActionTarget = Pick<OrchestratorAgent,
 >;
 
 export type ActionRegistry = Pick<UserDO,
-  'hasWorkspace' | 'ensureWorkspaceCapability' | 'removeWorkspace'
+  'hasWorkspace' | 'ensureWorkspaceCapability' | 'removeWorkspace' | 'limits_setClass' | 'limits_suspend' | 'limits_unsuspend' | 'limits'
 >;
 
-export interface ActionEnv<Id> extends ControlPlaneEnv<Id, IndexFeedSink> {
+/** The control plane as the account actions reach it: its index feed, and the accounts list's mirror and invite links. */
+type ActionControlPlane = IndexFeedSink & Pick<ControlPlaneDO, 'noteAccountStanding' | 'createInvite'>;
+
+export interface ActionEnv<Id> extends ControlPlaneEnv<Id, ActionControlPlane>, SignInDeclarationEnv {
   OrchestratorAgent: ObjectNamespace<Id, ActionTarget>;
   UserDO: ObjectNamespace<Id, ActionRegistry>;
 }
@@ -171,8 +211,9 @@ export interface ActionEnv<Id> extends ControlPlaneEnv<Id, IndexFeedSink> {
 export function runControlAction<Id>(
   env: ActionEnv<Id>,
   action: ControlAction,
+  operator: { readonly email: string; readonly caller: PresentedCaller },
 ): Promise<ActionOutcome> {
-  return settle(Effect.catchCause(Effect.promise(() => controlAction(env, action)), (failed) => Effect.sync((): ActionOutcome => {
+  return settle(Effect.catchCause(Effect.promise(() => (isAccountAction(action) ? accountAction(env, action, operator) : controlAction(env, action))), (failed) => Effect.sync((): ActionOutcome => {
     const cause = Cause.squash(failed);
 
     // The chain is the durable row's detail; the CODE is what the dataset gets.
@@ -185,7 +226,42 @@ export function runControlAction<Id>(
   })));
 }
 
-async function controlAction<Id>(env: ActionEnv<Id>, action: ControlAction): Promise<ActionOutcome> {
+type AccountAction = Extract<ControlAction, { action: `account.${string}` | `invite.${string}` }>;
+
+function isAccountAction(action: ControlAction): action is AccountAction {
+  return action.action.startsWith('account.') || action.action.startsWith('invite.');
+}
+
+/**
+ * An account's standing, set in its own object (core limits/) and mirrored for the accounts list. An invite by email
+ * reaches the account that email signs in as, whether it has signed in yet or not: its object keeps the class until it
+ * does.
+ */
+async function accountAction<Id>(env: ActionEnv<Id>, action: AccountAction, operator: { readonly email: string; readonly caller: PresentedCaller }): Promise<ActionOutcome> {
+  const owner = await ownerCaller(env);
+  const plane = controlPlaneStub(env);
+
+  if (action.action === 'invite.link') {
+    const { token, expiresAt } = await plane.createInvite(operator.caller, operator.email);
+
+    return { outcome: 'ok', detail: `invite link made, open until ${new Date(expiresAt).toISOString()}`, reason: 'ok', result: { path: `/invite/${token}`, expiresAt } };
+  }
+
+  const userId = action.action === 'invite.email' ? await accountIdFor(env, action.email) : action.userId;
+  const user = objectNamed(env.UserDO, userId);
+
+  if (action.action === 'account.suspend') await user.limits_suspend(owner, action.reason, operator.email);
+  else if (action.action === 'account.unsuspend') await user.limits_unsuspend(owner);
+  else await user.limits_setClass(owner, action.action === 'invite.email' ? 'invited' : action.class, operator.email);
+  const now = await user.limits(owner);
+  const klass = now.class === 'invited' ? 'invited' : 'free';
+
+  await plane.noteAccountStanding(operator.caller, userId, { class: klass, suspendedAt: now.suspended?.at ?? null });
+
+  return { outcome: 'ok', detail: `${userId} is ${now.class}${now.suspended === null ? '' : ', suspended'}`, reason: 'ok', affected: 1 };
+}
+
+async function controlAction<Id>(env: ActionEnv<Id>, action: Exclude<ControlAction, AccountAction>): Promise<ActionOutcome> {
   if (action.action === 'workspace.remove') {
     // Checked before waking any Durable Object.
     if (action.confirm !== action.workspace) {

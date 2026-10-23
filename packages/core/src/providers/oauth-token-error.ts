@@ -3,7 +3,7 @@ import { SPENT_REFRESH_CODES } from './chatgpt-protocol';
 
 /** An OAuth code distinguishes a terminal refusal from a transient failure. */
 export class OAuthTokenError extends Data.TaggedError('OAuthTokenError')<{ readonly message: string }> {
-  constructor(readonly issuer: 'cloudflare' | 'codex' | 'claude' | 'chatgpt', readonly oauthError: string, message: string) {
+  constructor(readonly issuer: 'cloudflare' | 'codex' | 'claude' | 'chatgpt' | 'google', readonly oauthError: string, message: string) {
     super({ message });
   }
 

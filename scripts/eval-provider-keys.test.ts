@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
 import { BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, JsonValueSchema, profileCatalogDigest, validateCredential, validateCredentialKey,
-  validateProfileCatalog, type JsonValue, type ProfileCatalogEnvelope } from '@kinu.run/core';
+  validateProfileCatalog, type JsonValue, type ProfileCatalog, type ProfileCatalogEnvelope } from '@kinu.run/core';
 import { childEnv, scratchDir } from '@kinu.run/test-utils';
 import { catalogCredKey } from '../packages/core/src/providers/catalog';
 import { provisionEvalProviderKeys } from './eval-provider-keys';
@@ -271,6 +271,69 @@ describe('every trial account a run acts as', () => {
 
       expect(cleaned.trials?.reset).toEqual(['trial-1']);
       expect(cleaned.findings).toEqual([]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  // 2026-10-23: a GLM 5.3 run's trial accounts held GLM's fallback to Muse, so 98 of its calls answered as Muse and
+  // were counted as GLM's. A measured model takes its own chain, else its tier's (profiles/resolve.ts): neither may hold one.
+  test('a measured model has no chain to fall back on, its own or its tier\'s; only a one-model run\'s judge falls back, to it', async () => {
+    const { server, accounts, at } = accountsDeployment();
+    const base = { origin: at, keysPath: keysPathOf(homeWithKeys({ 'opencode-go.bearer': KEY })), identity: IDENTITY, identityEnv: 'KINU_EVAL_WEB_IDENTITY', trialAccounts: ['trial-1'] as const };
+
+    const chainsOf = (catalog: ProfileCatalog | undefined) => ({
+      models: catalog?.modelFallbacks ?? {},
+      tiers: Object.entries(catalog?.tiers ?? {}).flatMap(([id, tier]) => (tier?.fallbacks === undefined ? [] : [id])),
+      deep: catalog?.tiers.deep?.model,
+    });
+
+    try {
+      await provisionEvalProviderKeys({ ...base, models: [MODEL] });
+      const muse = accounts.get('trial-1')?.catalog;
+      const trial = muse?.catalog;
+
+      if (muse === undefined || trial === undefined) throw new Error('the trial account was never configured');
+      // As a person's catalog may hold: a default tier with a chain, a measured model's own, and a fast model's through it.
+      muse.catalog = {
+        ...trial, tiers: { ...trial.tiers, default: { model: MODEL, fallbacks: [DEFAULT_WORKERS_AI_MODEL_SPEC] }, fast: { model: 'openrouter/fast' } },
+        modelFallbacks: { ...trial.modelFallbacks, [MODEL]: [DEFAULT_WORKERS_AI_MODEL_SPEC], 'openrouter/fast': [MODEL, 'claude/claude-haiku-5-5'] },
+      };
+
+      await provisionEvalProviderKeys({ ...base, models: [MODEL] });
+      const one = chainsOf(accounts.get('trial-1')?.catalog.catalog);
+
+      await provisionEvalProviderKeys({ ...base, models: [DEFAULT_WORKERS_AI_MODEL_SPEC] });
+      const glm = chainsOf(accounts.get('trial-1')?.catalog.catalog);
+
+      await provisionEvalProviderKeys({ ...base, models: [MODEL, 'claude/claude-haiku-5-5'] });
+      const two = chainsOf(accounts.get('trial-1')?.catalog.catalog);
+      const version = accounts.get('trial-1')?.catalog.version;
+
+      await provisionEvalProviderKeys({ ...base, models: [MODEL, 'claude/claude-haiku-5-5'] });
+
+      expect(one).toEqual({ models: { [DEFAULT_WORKERS_AI_MODEL_SPEC]: [MODEL] }, tiers: [], deep: DEFAULT_WORKERS_AI_MODEL_SPEC });
+      expect(glm).toEqual({ models: {}, tiers: [], deep: DEFAULT_WORKERS_AI_MODEL_SPEC });
+      expect(two).toEqual({ models: {}, tiers: [], deep: DEFAULT_WORKERS_AI_MODEL_SPEC });
+      expect(accounts.get('trial-1')?.catalog.version).toBe(version);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  // The owner, 2026-10-23: trajectory reviews on Claude Haiku 5.5 at low effort. A run that names none, the gate's, gets
+  // the account's default back, not the last run's.
+  test('a run\'s effort is its trial accounts\' default tier\'s, and a run naming none takes it away', async () => {
+    const { server, accounts, at } = accountsDeployment();
+    const base = { origin: at, keysPath: keysPathOf(homeWithKeys({ 'opencode-go.bearer': KEY })), identity: IDENTITY, identityEnv: 'KINU_EVAL_WEB_IDENTITY', trialAccounts: ['trial-1'] as const, models: [MODEL] };
+
+    try {
+      await provisionEvalProviderKeys({ ...base, effort: 'low' });
+      const low = accounts.get('trial-1')?.catalog.catalog.tiers.default;
+
+      await provisionEvalProviderKeys(base);
+
+      expect([low?.reasoningEffort, accounts.get('trial-1')?.catalog.catalog.tiers.default.reasoningEffort]).toEqual(['low', undefined]);
     } finally {
       await server.stop(true);
     }

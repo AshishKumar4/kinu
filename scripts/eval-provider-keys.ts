@@ -20,12 +20,12 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import * as v from 'valibot';
 import {
-  accountOf, baseCredentialKey, CLOUDFLARE_OAUTH_CRED_KEY, DEFAULT_WORKERS_AI_MODEL_SPEC, DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, EVAL_WORKSPACE_LEASE_MS,
+  accountOf, baseCredentialKey, CLOUDFLARE_OAUTH_CRED_KEY, profileCatalogDigest, ReasoningEffortSchema, type ReasoningEffort, DEFAULT_WORKERS_AI_MODEL_SPEC, DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, EVAL_WORKSPACE_LEASE_MS,
   MAIN_ACCOUNT, MY_GATEWAY_PROVIDER_ID, validateCredential, type OAuthCredential,
   parseEvalAccount, parseGatewayTarget, type EvalAccount,
 } from '@kinu.run/core';
 import { evalWebIdentityEnv } from '@kinu.run/test-utils';
-import { DEFAULT_MODELS, evalMatrix } from '../evals/src/config';
+import { evalMatrix } from '../evals/src/config';
 import { listWorkspaces, settleCatalog, webHeaders, type CatalogNeed, type PublicWebIdentity } from '../evals/src/workspace-roster';
 import { trialInheritedRows } from '../evals/src/slot';
 import { ARMS } from '../evals/src/target';
@@ -59,6 +59,9 @@ export interface Provisioning {
    *  has one owner, whose renewals single-flight in its own object: the trial account its model's sequence runs in, given
    *  those its models name ({@link plansNamed}) once. eval-service never holds one; the run deletes them at its end. */
   readonly planGrants?: Readonly<Record<string, OAuthCredential>>;
+  /** The reasoning effort the run's turns ask (`KINU_EVAL_EFFORT`), set on each trial account's default tier; absent,
+   *  none is set, and one a run before left is taken away. */
+  readonly effort?: ReasoningEffort;
 }
 
 /**
@@ -244,12 +247,30 @@ async function readyTrialAccount(input: Provisioning & { identity: string }, acc
   if (planned !== null) return { given, reset, finding: planned };
 
   // A bare account inherits a single Workers AI model for its swarm judge. Its refusal ended every research swarm
-  // in run 37880718948. Keys alone do not configure that route: keep the user's retry count, and cross providers.
+  // in run 37880718948. Keys alone do not configure that route: keep the user's retry count, and cross providers, to
+  // the one model a single-model run measures. Nothing else falls back: a model the run measures takes the chain of
+  // the tier it runs under or its own (`profiles/resolve.ts`), or sits in another model's, and a call another model
+  // answered would be counted as its own (2026-10-23, a GLM 5.3 run's 98 calls answered by Muse), so no other chain stays.
   const model = DEFAULT_WORKERS_AI_MODEL_SPEC;
+  const [only, ...more] = input.models;
+  const judgeChain = only !== undefined && more.length === 0 && only !== model ? [only] : [];
 
-  const deepRoute: CatalogNeed = (catalog) => catalog.tiers.deep?.model === model && JSON.stringify(catalog.modelFallbacks?.[model]) === JSON.stringify(DEFAULT_MODELS)
-    ? null
-    : { ...catalog, tiers: { ...catalog.tiers, deep: { ...catalog.tiers.deep, model } }, modelFallbacks: { ...catalog.modelFallbacks, [model]: DEFAULT_MODELS } };
+  const deepRoute: CatalogNeed = (catalog) => {
+    const tiers = Object.fromEntries(Object.entries(catalog.tiers).map(([id, tier]) => {
+      const { fallbacks: _chain, ...unchained } = tier ?? { model };
+
+      const { reasoningEffort: _effort, ...uneffortful } = unchained;
+      const sized = id === 'default' ? { ...uneffortful, ...input.effort !== undefined && { reasoningEffort: input.effort } } : unchained;
+
+      return [id, id === 'deep' ? { ...sized, model } : sized];
+    }));
+
+    // Any other chain could pass through a measured model and on past it (a fast model's C → A → B), so none is kept.
+    const { modelFallbacks: _chains, ...base } = catalog;
+    const next = { ...base, tiers: { ...catalog.tiers, ...tiers, deep: tiers['deep'] ?? { model } }, ...judgeChain.length > 0 && { modelFallbacks: { [model]: judgeChain } } };
+
+    return profileCatalogDigest(next) === profileCatalogDigest(catalog) ? null : next;
+  };
 
   try {
     await settleCatalog(input.origin, headers, [deepRoute]);
@@ -393,10 +414,12 @@ if (import.meta.main) {
 
   const gateway = needsGateway(matrix.models) ? gatewayFor(origin) : undefined;
   const planGrants = plansIn(process.env['KINU_EVAL_PLAN_GRANTS']);
+  const namedEffort = process.env['KINU_EVAL_EFFORT']?.trim() ?? '';
+  const effort = namedEffort === '' ? undefined : v.parse(ReasoningEffortSchema, namedEffort);
 
   const { stored, findings, trials, notes } = await provisionEvalProviderKeys({
     origin, keysPath: EVAL_PROVIDER_KEYS, identity, identityEnv, models: matrix.models, trialAccounts: accounts,
-    ...gateway !== undefined && { gateway }, ...planGrants !== undefined && { planGrants },
+    ...gateway !== undefined && { gateway }, ...planGrants !== undefined && { planGrants }, ...effort !== undefined && { effort },
   });
 
   for (const note of notes ?? []) console.log(`eval-provider-keys: ${note}`);

@@ -91,6 +91,11 @@ export {
   censusOf, OPS_OBJECTS_PER_REQUEST, OPS_PASS_PREFIX, opsCaller, requireOps, type OpsCaller, type StoreCensus, type TableRows, type TablesAnswer,
 } from './state/ops-tables';
 
+export {
+  bookmarkNow, missingBytes, restartedForRestore, restoreArmed, restoreLanded, RestoreTargetSchema,
+  type ArmedRestore, type DeploymentSecret, type MissingBytes, type RestorableState, type RestoreTarget, type StorageHistory,
+} from './state/ops-restore';
+
 export { ACCOUNT_EPOCH_FIELDS, type ConnectionTicketPurpose, initUserTables, PROFILE_CATALOG_CONFIG_KEY, WORKSPACE_KEYED_ROWS } from './state/user-schema';
 
 export { initMailNameTables, initMailboxTables } from './state/mail-schema';
@@ -118,6 +123,8 @@ export { handedMailSignal, MAIL_HANDED_EVENT, type HandedMail } from './mail/han
 export { mailInContext } from './mail/in-context';
 
 export { MAIL_MESSAGE_FIELDS, MailAddress, MailBoxPath, mailText } from './mail/message';
+
+export * from './limits/index';
 
 export { MailTriageLane, triageMail, type MailTriageDeps } from './mail/triage';
 
@@ -1080,7 +1087,7 @@ export {
 
 export {
   createSandboxExecutor, computerProcessJob, type ComputerProcessEnd, type ComputerProcessJobs, type SandboxHandle, type SandboxResize, isSandboxTransientError, SandboxPending,
-  sandboxSizeLabel, WORKSPACE_BACKUP_DIR, sandboxFiles,
+  sandboxSizeLabel, sandboxFiles,
 } from './execution/sandbox';
 
 export { computerProcessResume, stopComputerProcessJob } from './jobs/computer-process';
@@ -1179,7 +1186,6 @@ export {
 
 export {
   answerParentRpc, createParentExecutor, type ParentWorkspaceHandle, type ParentExecResult,
-  type ParentRpcWrite,
 } from './execution/parent';
 
 export {
@@ -1205,7 +1211,7 @@ export {
 
 export {
   agentHome, agentArtifactDirectory, agentTmpRoot, agentCred, agentIdentity, agentNameOfUid, VIEWER_HOME_NAME,
-  provisionAgentHome, confineAgentTmp, releaseAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
+  provisionAgentHome, confineAgentTmp, releaseAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot, PROJECT_OWNER_CRED,
   settleSharedRoots,
   ensureIdentityTable,
   actorHomeName,
@@ -1343,6 +1349,8 @@ export {
 export { MarkdownFrontmatterError, parseMarkdownFrontmatter } from './utils/markdown-frontmatter';
 
 export { compareCodeUnits } from './utils/text';
+
+export { readHtml, type HtmlReading } from './utils/html';
 
 export {
   runSleepTimeCompute, applySleepTimeUpdate, accountProposals,
@@ -1515,6 +1523,7 @@ export {
   DEV_IDENTITY_HEADER,
   EVAL_ACCOUNTS,
   EVAL_TRIAL_ACCOUNTS,
+  UPGRADE_FIXTURE_ACCOUNTS,
   WORKER_VERSION_HEADER,
   EVAL_WORKSPACE_BEAT_MS,
   EVAL_WORKSPACE_LEASE_MS,
@@ -1550,6 +1559,8 @@ export {
   type FilesOwner, type GatedExecutor,
 } from './safety/command-review';
 
+export { readShellWord } from './safety/shell-reading';
+
 export {
   formatApproval, gatedGrants, formatApprovalGrant, holdsGrant, parseApprovalGrant, gateExec, grantsAreSubset,
   resolveInheritedGrants, createInheritedApprovalPolicy, STRICT_NO_CHANNEL_POLICY, describeExecutionContext,
@@ -1578,9 +1589,9 @@ export {
 
 export {
   initEgressVaultTables, listSecrets, putSecrets, setSecretDestination, deleteSecret, grantSecret, revokeSecretGrant,
-  grantedSecrets, revealedSecrets, resolveEgressInjection,
+  grantedSecrets, revealedSecrets, resolveEgressInjection, mintEgressPlaceholder, connectionEnvironment,
   type SecretSummary, type SecretInput, type SecretDestination, type GrantedSecrets, type EgressInjection,
-  type EgressInjectionResult, type EgressVaultDeps,
+  type EgressInjectionResult, type EgressVaultDeps, type ConnectionSecret,
 } from './safety/egress-vault';
 
 export {
@@ -2013,8 +2024,10 @@ export {
   readExecutorFileBytes, statExecutorFile, renameExecutorPathOp, deleteExecutorPathOp,
   listEnvironments, joinDir, parentDir,
   FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, FILES_PAGE_ENTRIES, shownEntries,
-  ExecutorFileUpload, ExecutorFileDownload, ChunkedUpload, pumpUploadChunks,
+  ExecutorFileUpload, ExecutorFileDownload, ChunkedUpload,
 } from './read-models/files';
+
+export { serveDownload, serveUpload } from './read-models/file-transfer';
 
 export type {
   DirEntry, EnvironmentInfo, ExecutorFileLookup, ExecutorRowLookup, ExecutorTextFile, ExecutorWriteResult,
@@ -2582,6 +2595,7 @@ export {
 export {
   APP_ROUTES,
   cloudflareConnectPath,
+  googleConnectPath,
   CONNECT_CHANNEL,
   connectedPath,
   connectEndedOf,
@@ -2710,7 +2724,7 @@ export { MCP_PRESETS, mcpPresetById, type McpPreset, type McpPresetId } from './
 
 export {
   CALLABLE_MCP_STATES, mapConnectionStatus, mcpCredentialTransport, mcpListingRefusals, McpTransitionLog, observedMcpState,
-  type McpCredentialTransport, type McpFailureKind, type McpObservedState, type McpToolListing,
+  type McpCredentialTransport, type McpFailureKind, type McpObservedConnection, type McpObservedState, type McpRefusal, type McpToolListing,
 } from './mcp/client';
 
 export {

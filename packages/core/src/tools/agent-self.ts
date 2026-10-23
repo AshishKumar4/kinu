@@ -12,6 +12,7 @@ import { PROPOSED_TASK_STATUSES, type ProposedTask } from '../types/proposals';
 import type { ModifyResult, ScaffoldVersionView } from '../types/scaffold';
 import type { QualityDay } from '../types/quality';
 import type { TimerTrigger } from '../events/ingress/triggers';
+import type { WatchCheck } from '../types/watch';
 import type { TrustLevel } from '../events/hub/types';
 import { nanoid } from '../utils/nanoid';
 import { safeJsonParse, type JsonObject, type JsonValue } from '../utils/json';
@@ -35,7 +36,7 @@ export interface AgentSelfHost {
   listScaffoldVersions(limit?: number): Promise<ScaffoldVersionView[]>;
   createTimerTrigger(opts: {
     cron?: string; atMs?: number; label?: string; payload?: JsonObject;
-    missionLabel?: string;
+    missionLabel?: string; check?: WatchCheck;
   }): Promise<TimerTrigger>;
   /** The cumulative spend governor — a schedule declares its mission budget
    *  here, and `agent.budget` reads it back. */
@@ -144,7 +145,7 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
       const label = declaredLabel === undefined || declaredLabel === '' ? `schedule-${nanoid()}` : declaredLabel;
       const missionLabel = limits === null ? undefined : label;
       const budget = limits === null ? undefined : host.budget.declare(label, limits);
-      const trigger = yield* Effect.promise(() => host.createTimerTrigger({ cron, atMs, missionLabel, label: opts.label, payload: opts.payload }));
+      const trigger = yield* Effect.promise(() => host.createTimerTrigger({ cron, atMs, missionLabel, label: opts.label, payload: opts.payload, ...(opts.check !== undefined && { check: opts.check }) }));
 
       return budget === undefined ? trigger : { ...trigger, budget };
     })),

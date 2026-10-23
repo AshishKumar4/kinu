@@ -1,25 +1,21 @@
 /** Ownership of `:name` is proven before any workspace route runs, and only then indexed. */
 import type { MiddlewareHandler } from 'hono';
 import { Result } from 'effect';
-import { err, type Activation, type HandedMail } from '@kinu.run/core';
+import { err } from '@kinu.run/core';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { observeWorkspaceUse } from '../control-plane/index-feed';
 import { appendIdentityHeaders } from '../cli/rpc-gate';
 import { rawParam, type ApiVariables, type FamilyEnv } from './context';
 import type { AuthIdentity } from '../auth/session';
 
-/** The workspace object a claim hands back: the `OrchestratorAgent` namespace's stub. */
-type ClaimedWorkspace = Env['OrchestratorAgent'] extends DurableObjectNamespace<infer Agent> ? DurableObjectStub<Agent> : never;
+/** The workspace object a claim hands back: the `OrchestratorAgent` namespace's stub. Each call it takes is async, so the
+ *  SDK starts the object before the first one runs (agents 0.26, `tests/workerd/start-before-rpc.test.ts`). */
+export type ClaimedWorkspace = Env['OrchestratorAgent'] extends DurableObjectNamespace<infer Agent> ? DurableObjectStub<Agent> : never;
 
-export interface WorkspaceAgent {
-  evalAbortActivation(): Promise<void>;
-  activations(): Promise<readonly Activation[]>;
-  mailHanded(handed: HandedMail): Promise<{ status: 'queued' | 'skipped' }>;
-}
-
-interface OwnedWorkspace {
+interface OwnedWorkspace<Agent> {
   readonly name: string;
-  readonly agent: WorkspaceAgent;
+  /** The claimed stub, as a family reads it: the members it calls. */
+  readonly agent: Agent;
   /** Identity headers rewritten from the verified identity. */
   readonly request: Request;
 }
@@ -27,8 +23,10 @@ interface OwnedWorkspace {
 /** Old matchers compared the path with the decoded name: only an escape-free spelling matches. */
 export const LITERAL_WORKSPACE = '/api/workspaces/:name{[^/%]+}';
 
-export interface WorkspaceVariables extends ApiVariables {
-  workspace: OwnedWorkspace;
+/** What the gate proved, for a family that calls `Agent`'s members of the claimed workspace; every family reads the one
+ *  stub the gate claimed, never one of its own. */
+export interface WorkspaceVariables<Agent = ClaimedWorkspace> extends ApiVariables {
+  workspace: OwnedWorkspace<Agent>;
 }
 
 export type WorkspaceEnv = FamilyEnv<Env, WorkspaceVariables>;

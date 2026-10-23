@@ -3,7 +3,7 @@ import { objectNamed, DeviceDesktopSchema, DeviceHelloSchema, DeviceUpdateHelloS
 import {
   type DeviceExecOutput, NO_DEVICE_CONNECTED, watchedOutput, SEVERAL_DEVICES_CONNECTED, relayRefusal, type RelayedProvider, isWorkspaceName, nanoid, type DeviceCheckpointHint, type DeviceConsentRequest, type JsonObject, type JsonValue, CapabilityDeniedError, ownerCaller, type UserCaller, type ResolvedCaller, DeviceSocketHub, DeviceRequestLedger, type ClaimedDeviceRequest, type DeviceCancelOutcome, randomToken, sha256Hex, type DeviceChatGptStatus, deviceConsentMoved, deviceConsentOutcome, type DeviceConsentOutcome, DEVICE_UPDATE, cliArtifactPath, deviceUpdateState, readBuildStamp, BuildStampSchema, type BuildStamp, type DeviceUpdateFrame, type DeviceUpdateState, parseDeviceCancelAnswer, nextDeviceRequestId, DEVICE_METHOD, DEVICE_ERRORS, deviceFailure, deviceMethodHas, type DeviceTunnel, DEVICE_TIERS, effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix, sandboxCause, summarizeDeviceAction, type DeviceStatus, type DeviceFileScope, type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
 } from '@kinu.run/core';
-import { attemptInItsWords, diagnostics, KinuError, renderThrownChain, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
+import { attemptInItsWords, diagnostics, joining, KinuError, renderThrownChain, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import type { UserObjectHost } from './user-host';
 import { SingleUseTickets } from './single-use-tickets';
@@ -1362,23 +1362,18 @@ export class UserDevices {
     deviceId: string,
   ): Promise<{ ok: boolean; unstoppedCommands: number }> {
     await this.host.requireTier(caller, 'device.manage');
+
     // Coalesce concurrent revokes of one device: two sweeps sharing the row could let a confirmed
     // sweep erase unconfirmed commands the other reported. A DO serializes nothing across an await.
-    const inFlight = this._revoking.get(deviceId);
-
-    if (inFlight) return inFlight;
-    const task = this.sweepAndRevokeDevice(deviceId);
-    this._revoking.set(deviceId, task);
-
-    try {
-      const revoked = await task;
+    return this.revoking(deviceId, async () => {
+      const revoked = await this.sweepAndRevokeDevice(deviceId);
       await this.devicesMoved();
 
       return revoked;
-    } finally { this._revoking.delete(deviceId); }
+    });
   }
 
-  private readonly _revoking = new Map<string, Promise<{ ok: boolean; unstoppedCommands: number }>>();
+  private readonly revoking = joining<string, { ok: boolean; unstoppedCommands: number }>();
 
   private async sweepAndRevokeDevice(
     deviceId: string,

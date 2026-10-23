@@ -9,7 +9,8 @@
  * `recover`, on the fresh container the tier's crash left, attaches the chain cold and reads the tree back.
  */
 import * as v from 'valibot';
-import { DEVBOX_RUNTIME_DIR as RT, DEVBOX_WORKDIR as WD } from '../src/storage';
+import { DEVBOX_RUNTIME_DIR as RT } from '../src/storage';
+import { DEVBOX_WORKDIR as WD } from '../src/wire';
 import type { RecoveryAcceptance } from './contract-types';
 import { diskHarness, TREE, type DiskContractInput } from './disk-contracts';
 
@@ -85,6 +86,11 @@ for name in sorted(os.listdir(layers), key=int, reverse=True):
 print(json.dumps(out))
 `;
 
+/** What the box held when a read failed: its disks, the copy's failures, and the block lower's last words, last, as a
+ *  call's answer keeps its end. */
+const STATE = `df -B1M --output=target,used,avail / ${RT} 2>&1 | tr -s ' '; echo "-- copy: $(grep -c 'error reading' ${RT}/disk-hydrate.log 2>/dev/null) failed reads"; `
+  + `echo '-- block lower'; tail -4 ${RT}/disk-blk.log 2>&1 | cut -c1-160; true`;
+
 /** The first reads a resumed agent makes: the workspace's top, then 4 KiB of the large file the last save wrote. */
 const FIRST_READ = `
 import os, sys, time
@@ -102,7 +108,7 @@ function median(values: readonly number[]): number {
 }
 
 export async function recoveryAcceptance(asked: RecoveryAcceptance, input: DiskContractInput): Promise<RecoveryMeasurement> {
-  const { sh, readState, save, attach, reset } = diskHarness(input, KEY);
+  const { exec, sh, readState, save, attach, reset } = diskHarness(input, KEY);
   const py = (script: string, ...args: readonly (string | number)[]) => sh(`python3 -c '${script.replaceAll("'", "'\\''")}' ${args.join(' ')}`);
   const saved = () => readState()?.deltas.reduce((sum, delta) => sum + delta.saves, 0) ?? 0;
 
@@ -164,7 +170,12 @@ export async function recoveryAcceptance(asked: RecoveryAcceptance, input: DiskC
       const records = v.parse(LayerRecordsSchema, JSON.parse(await py(RECORDS, `${RT}/disk-layers`)));
       const blockLower = v.parse(BlockLowerStatsSchema, JSON.parse(await sh(`cat ${RT}/disk-blk.json 2>/dev/null || echo null`)));
       const treeAt = Date.now();
-      const tree = await sh(`{ ${TREE}; } | sha256sum | cut -d' ' -f1`);
+      const walked = await exec(`{ ${TREE}; } | sha256sum | cut -d' ' -f1`);
+
+      // 4096 changed files of 1 MiB, 2026-10-23: the walk met EIO in the last folder on today's block lower and the
+      // indexed one alike. What the box held then is the account of why.
+      if (walked.exitCode !== 0) throw new Error(`the recovered tree could not be read: ${walked.stderr.slice(0, 160)}\n${await sh(STATE)}`);
+      const tree = walked.stdout;
 
       if (tree !== expected) throw new Error(`the recovered tree is not the one saved: ${tree} where ${String(expected)} was sealed`);
 

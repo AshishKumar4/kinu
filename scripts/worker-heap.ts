@@ -239,6 +239,12 @@ export const LONG_TURN_ALLOCATED_BOUND_BYTES = 295_000_000;
  *  kept, 2951-2956 kB in the workspace's. */
 export const IDLE_DATA_BOUND_BYTES = { workspace: 1_000_000, main: 3_300_000 } as const;
 
+/** The deployment's vars but its free tier: the heap is measured over workspaces one owner sets up, more than a free
+ *  account holds, and the limits answer each setup the same way under any class. */
+function heapVars(vars: Readonly<Record<string, string>>): Record<string, string> {
+  return Object.fromEntries(Object.entries(vars).filter(([name]) => name !== 'ACCOUNT_LIMITS'));
+}
+
 const WranglerSchema = v.object({
   compatibility_date: v.string(),
   compatibility_flags: v.array(v.string()),
@@ -539,7 +545,7 @@ async function advisedLongTurn(advised: boolean, run: {
   await ask(`/quiesce?workspace=${name}`);
   const advisorCalls = async () => v.parse(v.object({ advisorCalls: v.number() }), JSON.parse(await ask('/model'))).advisorCalls;
   const callsBefore = await advisorCalls();
-  await ask(`/model?answerBytes=0&toolSteps=${String(LONG_TURN.steps - 1)}&stepBytes=${String(LONG_TURN.stepBytes)}`);
+  await ask(`/model?answerBytes=0&toolSteps=${String(LONG_TURN.steps - 1)}&stepBytes=${String(LONG_TURN.stepBytes)}&stepPath=compat`);
   await inEach(isolates, async (session) => { await session.sampleAllocations(); });
   const started = performance.now();
   const turn = ask(`/turn?workspace=${name}&text=long`);
@@ -576,8 +582,15 @@ async function advisedLongTurn(advised: boolean, run: {
 
   await turn;
   const turnMs = performance.now() - started;
-  await ask('/model?released=1000000');
-  // The turn's end waits for its last step's review: read once the advisor's calls have come and no other has followed
+  const { stepped } = v.parse(v.object({ stepped: v.object({ binding: v.number(), compat: v.number() }) }), JSON.parse(await ask('/model?released=1000000')));
+
+  // Its own turn took every scripted step, so both arms measure the same work; another workspace's calls answered
+  // meanwhile are counted, not stepped.
+  if (stepped.compat !== LONG_TURN.steps) {
+    throw new Error(`the ${name} long turn took ${String(stepped.compat)} of its ${String(LONG_TURN.steps)} scripted steps (${String(stepped.binding)} other calls answered)`);
+  }
+
+  // Its last step's review runs on after the turn: read once the advisor's calls have come and no other has followed
   // for 3 s (a minute at most), and the turn's agent and workspace have settled.
   await ask(`/main-idle?workspace=${name}`);
   await ask(`/quiesce?workspace=${name}`);
@@ -696,7 +709,7 @@ export async function measure(): Promise<HeapMeasurement> {
     },
     workers: [{
       name: 'kinu', ...compat, modulesRoot: DIST, modules: await productModules(), workerLoaders: { LOADER: {} },
-      bindings: { ...wrangler.vars, CREDENTIAL_ENCRYPTION_KEY: key },
+      bindings: { ...heapVars(wrangler.vars), CREDENTIAL_ENCRYPTION_KEY: key },
       ai,
       assets: { binding: wrangler.assets.binding, directory: assets },
       r2Buckets: wrangler.r2_buckets.map((bucket) => bucket.binding),

@@ -3,7 +3,7 @@
  * neither `Accept: text/markdown` nor `env.AI.toMarkdown` is available. Not a faithful renderer.
  */
 
-import { decodeEntities, HTML_ENTITIES } from '../utils/text';
+import { readHtml } from '../utils/html';
 
 /** Strip base64 data-URI images and SVGs (token noise). Mirrors hermes-agent clean_base64_images. */
 export function stripBase64Images(text: string): string {
@@ -13,53 +13,9 @@ export function stripBase64Images(text: string): string {
     .replace(/data:[^;,]+;base64,[A-Za-z0-9+/=\s]{200,}/g, '[binary-data]');
 }
 
-const BLOCK_TAGS =
-  'address|article|aside|blockquote|details|div|dl|dd|dt|fieldset|figcaption|figure|footer|form|header|hr|main|nav|ol|p|pre|section|table|tr|ul';
-
-
-/** Convert an HTML string to a compact markdown-ish text suitable for an LLM. */
-export function htmlToMarkdown(html: string): string {
-  let s = html;
-
-  s = s.replace(/<!--[\s\S]*?-->/g, '');
-  s = s.replace(/<(script|style|noscript|template|svg|head)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
-
-  s = s.replace(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi, (_, lvl: string, inner: string) => {
-    return `\n\n${'#'.repeat(Number(lvl))} ${stripTags(inner).trim()}\n\n`;
-  });
-
-  s = s.replace(/<a\b[^>]*?href=["']([^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi, (_, href: string, inner: string) => {
-    const text = stripTags(inner).trim();
-
-    if (!text) return '';
-
-    if (!href || href.startsWith('#') || href.startsWith('javascript:')) return text;
-
-    return `[${text}](${href})`;
-  });
-
-  s = s.replace(/<li\b[^>]*>([\s\S]*?)<\/li>/gi, (_, inner: string) => `\n- ${stripTags(inner).trim()}`);
-  s = s.replace(/<\/td>\s*<td\b[^>]*>/gi, ' | ');
-  s = s.replace(/<(td|th)\b[^>]*>([\s\S]*?)<\/\1>/gi, (_, _t, inner: string) => `${stripTags(inner).trim()} `);
-  s = s.replace(/<br\s*\/?>(?!\n)/gi, '\n');
-  s = s.replace(new RegExp(`</(?:${BLOCK_TAGS})>`, 'gi'), '\n\n');
-  s = s.replace(new RegExp(`<(?:${BLOCK_TAGS})\\b[^>]*>`, 'gi'), '\n');
-
-  s = stripTags(s);
-  s = decodeEntities(s, HTML_ENTITIES);
-  s = stripBase64Images(s);
-
-  s = s
-    .replace(/[ \t]+/g, ' ')
-    .replace(/ *\n */g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-
-  return s;
-}
-
-export function stripTags(html: string): string {
-  return html.replace(/<[^>]+>/g, '');
+/** An HTML page as compact markdown text (`readHtml`), its inline images' bytes aside. */
+export async function htmlToMarkdown(html: string): Promise<string> {
+  return stripBase64Images((await readHtml(html)).markdown);
 }
 
 /** True when the byte stream looks like HTML rather than already-clean text. */

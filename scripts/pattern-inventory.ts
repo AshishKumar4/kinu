@@ -361,9 +361,21 @@ if (import.meta.main) {
     { file: 'scripts/skip-ratchet.ts', owner: 'parseJUnit', classification: 'REPLACED',
       replacement: 'scripts/xml.ts reads the report as XML; outcomes are child elements',
       proof: 'bun test scripts/skip-ratchet.test.ts' },
+    { file: 'packages/core/src/safety/command-review.ts', owner: 'shellSteps', classification: 'REPLACED',
+      replacement: 'packages/core/src/safety/shell-reading.ts walks the AST of Nimbus\'s own shell parser; scanCommand stays as its floor',
+      proof: 'bun test packages/core/tests/unit-approval-gate.test.ts --test-name-pattern "however it is spelled"' },
     { file: 'lean/check-traceability.mjs', owner: 'tsScan', classification: 'REPLACED',
       replacement: 'lean/ts-refs.mjs resolves tsRefs through oxc-parser',
-      proof: 'bun test scripts/lean-citations.test.ts' }];
+      proof: 'bun test scripts/lean-citations.test.ts' },
+    { file: 'packages/core/src/web/markdown.ts', owner: 'htmlToMarkdown, mail htmlToText', classification: 'REPLACED',
+      replacement: 'packages/core/src/utils/html.ts reads a page with HTMLRewriter, the parser workerd and Bun provide',
+      proof: 'bun test packages/core/tests/unit-web.test.ts --test-name-pattern "read by its parser"' },
+    { file: 'packages/devbox/src/store-gateway.ts', owner: 'completedParts', classification: 'REPLACED',
+      replacement: 'xmlTokens reads the completion body as XML tokens, entities decoded',
+      proof: 'bun test packages/devbox/tests/store-gateway.test.ts --test-name-pattern "multipart upload completes"' },
+    { file: 'packages/core/src/utils/held-reads.ts', owner: 'WRITE', classification: 'REPLACED',
+      replacement: 'packages/core/src/utils/sql.ts statementWrite reads SQLite\'s tokens',
+      proof: 'bun test packages/core/tests/unit-live-reads.test.ts --test-name-pattern "read as SQLite reads it"' }];
 
   if (process.argv.includes('--write') && pending.length === 0) writeFileSync(new URL('./pattern-inventory.json', import.meta.url), `${JSON.stringify({
     candidates: result.candidates.map(({ file, kind, owner, source, decision }) => ({

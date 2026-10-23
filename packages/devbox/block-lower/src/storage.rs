@@ -1,5 +1,5 @@
 use crate::index::{chunk_name, hash, hex, invalid, lookup, IndexRef, Source, BLOCK};
-use crate::model::{path_valid, Record};
+use crate::model::{path_valid, DirAttrs, Record};
 use crate::namespace::PathMap;
 use serde::Serialize;
 use std::ffi::CString;
@@ -179,40 +179,133 @@ pub struct Metrics {
     pub read_requests: u64,
 }
 
+/// A delta's block records. Before m1966b a layer listed them all in
+/// `.devbox-delta/manifest.json` (v4), which a recovery read whole at start.
+/// Now each is found by its path's SHA-256 (v5): `records/<2>/<sha>` holds a
+/// record, and `dirs/<2>/<sha>` the names under a directory that lead to one,
+/// so a recovery reads only what it is asked for.
+pub enum Records {
+    None,
+    Listed {
+        files: PathMap<Record>,
+        dirs: PathMap<Vec<String>>,
+    },
+    Indexed(Root),
+}
+
+impl Records {
+    pub fn listed(records: Vec<Record>) -> Self {
+        let mut dirs: PathMap<Vec<String>> = PathMap::new();
+        let mut files = PathMap::new();
+        for record in records {
+            let mut parent = String::new();
+            for part in record.p.split('/') {
+                let mut names = dirs.get(&parent).cloned().unwrap_or_default();
+                if !names.iter().any(|name| name == part) {
+                    names.push(part.to_owned());
+                    dirs.insert(&parent, names);
+                }
+                parent = if parent.is_empty() {
+                    part.to_owned()
+                } else {
+                    format!("{parent}/{part}")
+                };
+            }
+            let path = record.p.clone();
+            files.insert(&path, record);
+        }
+        Self::Listed { files, dirs }
+    }
+
+    /// The record this layer holds for `path`, if any.
+    pub fn record(&self, path: &str) -> io::Result<Option<Record>> {
+        match self {
+            Self::None => Ok(None),
+            Self::Listed { files, .. } => Ok(files.get(path).cloned()),
+            Self::Indexed(meta) => {
+                let Some(bytes) = read_named(meta, "records", path)? else {
+                    return Ok(None);
+                };
+                let record: Record = serde_json::from_slice(&bytes)?;
+                if record.p != path || record.mode > 0o7777 {
+                    return Err(invalid("a record is not its path's"));
+                }
+                record.over.validate(record.s)?;
+                Ok(Some(record))
+            }
+        }
+    }
+
+    /// The names directly under `dir` that lead to a record of this layer,
+    /// or `None` when none is under it.
+    pub fn names(&self, dir: &str) -> io::Result<Option<Vec<String>>> {
+        match self {
+            Self::None => Ok(None),
+            Self::Listed { dirs, .. } => Ok(dirs.get(dir).cloned()),
+            Self::Indexed(meta) => {
+                let Some(bytes) = read_named(meta, "dirs", dir)? else {
+                    return Ok(None);
+                };
+                let names = bytes
+                    .split(|byte| *byte == 0)
+                    .filter(|name| !name.is_empty())
+                    .map(|name| String::from_utf8(name.to_vec()).map_err(|_| invalid("a name is not UTF-8")))
+                    .collect::<io::Result<Vec<_>>>()?;
+                if names.iter().any(|name| !path_valid(name) || name.contains('/')) {
+                    return Err(invalid("hostile name under a directory"));
+                }
+                Ok(Some(names))
+            }
+        }
+    }
+}
+
+/// `.devbox-delta/<kind>/<first two hex digits>/<sha256 of path>`, read whole.
+fn read_named(meta: &Root, kind: &str, path: &str) -> io::Result<Option<Vec<u8>>> {
+    let name = hex(&hash(path.as_bytes()));
+    let Some(mut file) = meta.file(&format!(".devbox-delta/{kind}/{}/{name}", &name[..2]))? else {
+        return Ok(None);
+    };
+    let mut bytes = Vec::new();
+    io::Read::read_to_end(&mut file, &mut bytes)?;
+    Ok(Some(bytes))
+}
+
 /// One delta layer: its overlay `tree/`, and the block records of
 /// `.devbox-delta/` when it has any.
 pub struct Layer {
     pub tree: Root,
     pub meta: Option<Root>,
-    pub files: Vec<Record>,
-    records: PathMap<usize>,
+    pub records: Records,
 }
 
 impl Layer {
-    pub fn new(tree: Root, meta: Option<Root>, files: Vec<Record>) -> Self {
-        let records = files
-            .iter()
-            .enumerate()
-            .map(|(at, record)| (record.p.as_str(), at))
-            .collect();
+    pub fn new(tree: Root, meta: Option<Root>, records: Records) -> Self {
         Self {
             tree,
             meta,
-            files,
             records,
         }
     }
+}
 
-    pub fn record(&self, path: &str) -> Option<&Record> {
-        self.records.get(path).map(|at| &self.files[*at])
-    }
+/// What the block lower serves at a path: a file whose newest version is a
+/// layer's record, a directory that leads to one, or nothing (the overlay's
+/// other lowers answer).
+pub enum Resolved {
+    Absent,
+    File(usize, Record),
+    Dir(DirAttrs),
 }
 
 /// Where a block of a served file comes from, newest version first.
 enum Version {
     /// A layer's record, with that version's own size: its index and chunks were cut to it.
     Blocks(usize, IndexRef, u64),
-    Whole(File),
+    /// The file's last whole copy: in that layer's tree, or the base's when `None`. Opened for each read and closed
+    /// after it: a descriptor kept for every file read ran out (EMFILE) once about 4,000 files with block records had
+    /// been read, and every read after failed (the recovery acceptance at 4,096 changed files, 2026-10-23).
+    Whole(Option<usize>),
 }
 
 pub struct Storage {
@@ -239,16 +332,94 @@ impl Storage {
         std::fs::write(&self.stats, serde_json::to_vec(&self.metrics)?)
     }
 
-    /// Whether a layer above `layer` replaced or removed `path`: then the
-    /// overlay serves that layer's version and this record is not the file.
-    pub fn shadowed(&self, layer: usize, path: &str) -> io::Result<bool> {
-        for above in &self.layers[layer + 1..] {
-            if above.record(path).is_some() || !matches!(above.tree.probe(path)?, Presence::Absent)
-            {
-                return Ok(true);
+    /// What `path` is here, newest layer first, reading only that path's
+    /// records: a layer's record is the file unless a newer layer replaced or
+    /// removed it, and a directory is served when some layer holds records
+    /// under it that no newer layer hid. A layer's own records are not hidden
+    /// by its own tree.
+    pub fn resolve(&self, path: &str) -> io::Result<Resolved> {
+        for (at, layer) in self.layers.iter().enumerate().rev() {
+            if let Some(record) = layer.records.record(path)? {
+                return Ok(Resolved::File(at, record));
+            }
+            if !matches!(layer.tree.probe(path)?, Presence::Absent) {
+                break;
             }
         }
-        Ok(false)
+        for layer in self.layers.iter().rev() {
+            if layer.records.names(path)?.is_some() {
+                return Ok(Resolved::Dir(self.directory(path)?.unwrap_or(DirAttrs {
+                    mode: 0o755,
+                    uid: 0,
+                    gid: 0,
+                    t: 0,
+                })));
+            }
+            match layer.tree.probe(path)? {
+                Presence::Absent => {}
+                Presence::Hidden => return Ok(Resolved::Absent),
+                Presence::Present(found) if found.st_mode & libc::S_IFMT != libc::S_IFDIR => {
+                    return Ok(Resolved::Absent)
+                }
+                Presence::Present(_) => {}
+            }
+        }
+        Ok(Resolved::Absent)
+    }
+
+    /// Every name any layer's records lead to under `dir`, once each, sorted:
+    /// which of them are served is each one's `resolve`.
+    pub fn names(&self, dir: &str) -> io::Result<Vec<String>> {
+        let mut names = Vec::new();
+        for layer in &self.layers {
+            names.extend(layer.records.names(dir)?.unwrap_or_default());
+        }
+        names.sort();
+        names.dedup();
+        Ok(names)
+    }
+
+    /// A directory's attributes as the overlay shows them: from the newest lower holding it.
+    fn directory(&self, path: &str) -> io::Result<Option<DirAttrs>> {
+        let roots = self
+            .layers
+            .iter()
+            .rev()
+            .map(|layer| &layer.tree)
+            .chain(std::iter::once(&self.base));
+        for root in roots {
+            let found = if path.is_empty() {
+                root.stat_root()?
+            } else {
+                match root.probe(path)? {
+                    Presence::Present(stat) => stat,
+                    Presence::Hidden => return Ok(None),
+                    Presence::Absent => continue,
+                }
+            };
+            if found.st_mode & libc::S_IFMT != libc::S_IFDIR {
+                return Ok(None);
+            }
+            let t = u64::try_from(found.st_mtime).unwrap_or(0) * 1_000_000_000
+                + u64::try_from(found.st_mtime_nsec).unwrap_or(0);
+            return Ok(Some(DirAttrs {
+                mode: (found.st_mode & 0o7777) as u16,
+                uid: found.st_uid,
+                gid: found.st_gid,
+                t,
+            }));
+        }
+        Ok(None)
+    }
+
+    /// The root's attributes, as `directory` reads them.
+    pub fn root_attrs(&self) -> io::Result<DirAttrs> {
+        Ok(self.directory("")?.unwrap_or(DirAttrs {
+            mode: 0o755,
+            uid: 0,
+            gid: 0,
+            t: 0,
+        }))
     }
 
     /// The versions a block of `path` resolves through, from `layer` down to
@@ -258,24 +429,24 @@ impl Storage {
         let mut out = Vec::new();
         for at in (0..=layer).rev() {
             let current = &self.layers[at];
-            if let Some(record) = current.record(path) {
-                out.push(Version::Blocks(at, record.over.clone(), record.s));
+            if let Some(record) = current.records.record(path)? {
+                out.push(Version::Blocks(at, record.over, record.s));
                 continue;
             }
             match current.tree.probe(path)? {
                 Presence::Absent => continue,
                 Presence::Hidden => return Err(invalid("a block record has no earlier version")),
                 Presence::Present(_) => {
-                    out.push(Version::Whole(current.tree.required(path)?));
+                    current.tree.required(path)?;
+                    out.push(Version::Whole(Some(at)));
                     return Ok(out);
                 }
             }
         }
-        let base = self
-            .base
+        self.base
             .file(path)?
             .ok_or_else(|| invalid("a block record has no earlier version"))?;
-        out.push(Version::Whole(base));
+        out.push(Version::Whole(None));
         Ok(out)
     }
 
@@ -298,24 +469,33 @@ impl Storage {
             self.versions.insert(path, chain);
         }
         let mut cursor = offset;
+        // The whole version, opened by the first block that reaches it and closed with this read.
+        let mut whole = None;
         while cursor < offset + count {
             let block = cursor / BLOCK * BLOCK;
             let end = (block + BLOCK).min(offset + count);
             let start = usize::try_from(cursor - offset).map_err(|_| invalid("read offset"))?;
             let stop = usize::try_from(end - offset).map_err(|_| invalid("read offset"))?;
-            self.block(path, block, cursor, &mut result[start..stop])?;
+            self.block(path, (block, cursor), &mut result[start..stop], &mut whole)?;
             cursor = end;
         }
         Ok(result)
     }
 
     /// Fills `out` with `path`'s bytes from `cursor`, all within `block`; a version shorter than
-    /// the served file reads as zeros past its end.
-    fn block(&mut self, path: &str, block: u64, cursor: u64, out: &mut [u8]) -> io::Result<()> {
+    /// the served file reads as zeros past its end. `whole`: the whole version, once opened.
+    fn block(
+        &mut self,
+        path: &str,
+        (block, cursor): (u64, u64),
+        out: &mut [u8],
+        whole: &mut Option<File>,
+    ) -> io::Result<()> {
         let Self {
             versions,
             layers,
             metrics,
+            base,
             ..
         } = self;
         let chain = versions
@@ -368,7 +548,14 @@ impl Storage {
                     }
                     return Ok(());
                 }
-                Version::Whole(file) => {
+                Version::Whole(at) => {
+                    let file = match whole {
+                        Some(file) => file,
+                        None => whole.insert(match at {
+                            Some(at) => layers[*at].tree.required(path)?,
+                            None => base.required(path)?,
+                        }),
+                    };
                     let available = file
                         .metadata()?
                         .len()
@@ -470,7 +657,49 @@ mod tests {
             });
             Some(Root::open(dir).unwrap())
         };
-        Layer::new(Root::open(&dir.join("tree")).unwrap(), meta, files)
+        Layer::new(Root::open(&dir.join("tree")).unwrap(), meta, Records::listed(files))
+    }
+
+    /// `layer`, its records found by path as a v5 delta writes them (disk-delta.ts).
+    fn indexed(dir: &Path, layer: Layer) -> Layer {
+        let name = |path: &str| {
+            let name = hex(&hash(path.as_bytes()));
+            format!("{}/{name}", &name[..2])
+        };
+        let Records::Listed { files, dirs } = &layer.records else {
+            panic!("a listed layer");
+        };
+        let mut paths = vec![String::new()];
+        while let Some(parent) = paths.pop() {
+            let Some(names) = dirs.get(&parent) else {
+                continue;
+            };
+            let at = dir.join(".devbox-delta/dirs").join(name(&parent));
+            std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+            std::fs::write(at, names.iter().map(|n| format!("{n}\0")).collect::<String>()).unwrap();
+            for child in names {
+                let path = if parent.is_empty() { child.clone() } else { format!("{parent}/{child}") };
+                if let Some(record) = files.get(&path) {
+                    let at = dir.join(".devbox-delta/records").join(name(&path));
+                    std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+                    let over = &record.over;
+                    std::fs::write(at, format!(
+                        r#"{{"p":"{path}","s":{},"mode":{},"uid":0,"gid":0,"t":0,"over":{{"index":"{}","root":"{}","count":{}}}}}"#,
+                        record.s, record.mode, over.index, over.root, over.count
+                    )).unwrap();
+                }
+                paths.push(path);
+            }
+        }
+        Layer::new(layer.tree, layer.meta, Records::Indexed(Root::open(dir).unwrap()))
+    }
+
+    fn served(storage: &Storage, path: &str) -> String {
+        match storage.resolve(path).unwrap() {
+            Resolved::Absent => "absent".to_owned(),
+            Resolved::File(at, record) => format!("file of layer {at}, {} bytes", record.s),
+            Resolved::Dir(attrs) => format!("directory {:o}", attrs.mode),
+        }
     }
 
     #[test]
@@ -513,8 +742,7 @@ mod tests {
             storage.read("file", 1, 3 * 16384 + 5, 16380, 8).unwrap(),
             vec![67, 67, 67, 67, 66, 66, 66, 66]
         );
-        assert!(!storage.shadowed(1, "file").unwrap());
-        assert!(storage.shadowed(0, "file").unwrap());
+        assert_eq!(served(&storage, "file"), "file of layer 1, 49157 bytes");
         std::fs::remove_dir_all(path).unwrap();
     }
 
@@ -576,7 +804,7 @@ mod tests {
             storage.read("file", 1, 2 * 16384, 0, 2 * 16384).unwrap(),
             wanted
         );
-        assert!(storage.shadowed(1, "file").unwrap());
+        assert_eq!(served(&storage, "file"), "absent");
         std::fs::remove_dir_all(path).unwrap();
     }
 
@@ -620,6 +848,139 @@ mod tests {
             storage.read("file", 0, 2 * 16384, 16384, 2).unwrap(),
             vec![65, 65]
         );
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    /// The descriptors this process holds.
+    fn descriptors() -> usize {
+        std::fs::read_dir("/proc/self/fd").unwrap().count()
+    }
+
+    // The recovery acceptance at 4,096 changed files (2026-10-23): every file read through a block record kept its
+    // whole version open, and past about 4,000 the process had no descriptor left (EMFILE) and every read failed.
+    #[test]
+    fn a_file_read_through_its_blocks_holds_no_descriptor_after_the_read() {
+        let path = std::env::temp_dir().join(format!("devbox-descriptors-test-{}", std::process::id()));
+        let files = 300;
+        std::fs::create_dir_all(path.join("base")).unwrap();
+        std::fs::create_dir_all(path.join("one/tree")).unwrap();
+        let mut records = Vec::new();
+        let block = vec![66; 16384];
+        let digest = hash(&block);
+        let chunk = path.join("one").join(chunk_name(&digest));
+        std::fs::create_dir_all(chunk.parent().unwrap()).unwrap();
+        std::fs::write(chunk, &block).unwrap();
+        let (over, bytes) = index(&[(0, Some(digest))]);
+        std::fs::write(path.join(format!("one/.devbox-delta/{}", over.index)), bytes).unwrap();
+        for n in 0..files {
+            std::fs::write(path.join(format!("base/f{n}")), vec![65; 2 * 16384]).unwrap();
+            records.push(Record { p: format!("f{n}"), s: 2 * 16384, mode: 0o644, uid: 0, gid: 0, t: 0, over: over.clone() });
+        }
+        let one = Layer::new(Root::open(&path.join("one/tree")).unwrap(), Some(Root::open(&path.join("one")).unwrap()), Records::listed(records));
+        let mut storage = Storage::new(Root::open(&path.join("base")).unwrap(), vec![one], path.join("stats"));
+        let before = descriptors();
+        let mut wanted = vec![66; 16384];
+        wanted.extend(vec![65; 16384]);
+        for n in 0..files {
+            assert_eq!(storage.read(&format!("f{n}"), 0, 2 * 16384, 0, 2 * 16384).unwrap(), wanted);
+        }
+        // Other tests run beside this one and hold a few of their own: a kept descriptor per file is 300.
+        assert!(descriptors() < before + 50, "{} descriptors held after reading {files} files", descriptors() - before);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    /// A layer whose record sits at `record` (16 KiB, block 0 rewritten), with `tree` beside it.
+    fn holding(dir: &Path, record: &str, tree: &[(&str, Option<&[u8]>)]) -> Layer {
+        for (path, bytes) in tree {
+            let at = dir.join("tree").join(path);
+            match bytes {
+                Some(bytes) => {
+                    std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+                    std::fs::write(at, bytes).unwrap();
+                }
+                None => std::fs::create_dir_all(at).unwrap(),
+            }
+        }
+        let mut made = layer(dir, &[], &[(0, Some(vec![66; 16384]))], 16384);
+        let Records::Listed { files, .. } = &mut made.records else {
+            panic!("a listed layer");
+        };
+        let mut moved = files.get("file").cloned().unwrap();
+        moved.p = record.to_owned();
+        made.records = Records::listed(vec![moved]);
+        made
+    }
+
+    // m1966b: a v5 layer's records are found by path, read only when asked for, and answer as a v4 manifest's did.
+    #[test]
+    fn a_path_resolves_through_indexed_records_as_through_a_manifest() {
+        let path = std::env::temp_dir().join(format!("devbox-indexed-test-{}", std::process::id()));
+        std::fs::create_dir_all(path.join("base/src/deep")).unwrap();
+        // The directories' own mode, whatever the umask the test runs under (0o002 on gcp-vm read 775).
+        for dir in ["base/src", "base/src/deep"] {
+            std::fs::set_permissions(path.join(dir), std::os::unix::fs::PermissionsExt::from_mode(0o750)).unwrap();
+        }
+        std::fs::write(path.join("base/src/deep/db.bin"), vec![65; 16384]).unwrap();
+        std::fs::write(path.join("base/src/old.bin"), vec![65; 16384]).unwrap();
+        std::fs::write(path.join("base/moved"), vec![65; 16384]).unwrap();
+        for v5 in [false, true] {
+            let at = path.join(if v5 { "v5" } else { "v4" });
+            let made = |name: &str, record: &str, tree: &[(&str, Option<&[u8]>)]| {
+                let layer = holding(&at.join(name), record, tree);
+                if v5 { indexed(&at.join(name), layer) } else { layer }
+            };
+            // 0: db.bin's blocks; 1: old.bin's, and moved became a directory; 2: old.bin whited out, db.bin's blocks again.
+            let layers = vec![
+                made("zero", "src/deep/db.bin", &[]),
+                made("one", "src/old.bin", &[("moved", None), ("moved/x", Some(b"x"))]),
+                made("two", "src/deep/db.bin", &[("src/.wh.old.bin", Some(b""))]),
+            ];
+            // The trees' directories as the base's: the newest lower holding one names its mode, whatever the umask.
+            for name in ["zero", "one", "two"] {
+                for dir in ["tree/src", "tree/src/deep", "tree/moved"] {
+                    if at.join(name).join(dir).is_dir() {
+                        std::fs::set_permissions(at.join(name).join(dir), std::os::unix::fs::PermissionsExt::from_mode(0o750)).unwrap();
+                    }
+                }
+            }
+            let storage = Storage::new(Root::open(&path.join("base")).unwrap(), layers, path.join("stats"));
+            let seen: Vec<String> = ["src/deep/db.bin", "src/old.bin", "src", "src/deep", "moved", "missing", "src/deep/db.bin/x"]
+                .iter()
+                .map(|p| format!("{p}: {}", served(&storage, p)))
+                .collect();
+            assert_eq!(
+                seen,
+                [
+                    "src/deep/db.bin: file of layer 2, 16384 bytes",
+                    "src/old.bin: absent",
+                    "src: directory 750",
+                    "src/deep: directory 750",
+                    "moved: absent",
+                    "missing: absent",
+                    "src/deep/db.bin/x: absent",
+                ],
+                "v5 {v5}"
+            );
+            assert_eq!(storage.names("").unwrap(), ["src"]);
+            assert_eq!(storage.names("src").unwrap(), ["deep", "old.bin"]);
+            assert_eq!(storage.names("src/deep").unwrap(), ["db.bin"]);
+        }
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn a_record_found_under_another_path_is_refused() {
+        let path = std::env::temp_dir().join(format!("devbox-misfiled-test-{}", std::process::id()));
+        std::fs::create_dir_all(path.join("base")).unwrap();
+        let layer = indexed(&path.join("one"), holding(&path.join("one"), "a", &[]));
+        let name = |p: &str| {
+            let name = hex(&hash(p.as_bytes()));
+            path.join("one/.devbox-delta/records").join(format!("{}/{name}", &name[..2]))
+        };
+        std::fs::create_dir_all(name("b").parent().unwrap()).unwrap();
+        std::fs::copy(name("a"), name("b")).unwrap();
+        let storage = Storage::new(Root::open(&path.join("base")).unwrap(), vec![layer], path.join("stats"));
+        assert!(storage.resolve("b").is_err());
         std::fs::remove_dir_all(path).unwrap();
     }
 
