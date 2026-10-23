@@ -329,8 +329,11 @@ export interface CensusDiff {
   readonly failed: readonly string[];
 }
 
-/** The rows each ledger table keeps before its newest replaces its oldest: the activations' ring (identity/activations.ts). */
-const LEDGER_RING = new Map([['workspace_activations', ACTIVATION_SLOTS]]);
+/** The ledger each activation of a hosted workspace appends to (identity/activations.ts). */
+const ACTIVATIONS = 'workspace_activations';
+
+/** The rows each ledger table keeps before its newest replaces its oldest: the activations' ring. */
+const LEDGER_RING = new Map([[ACTIVATIONS, ACTIVATION_SLOTS]]);
 
 /** A ledger's rows after against before: how many were added, or why the earlier ones are not all there as they were.
  *  A ring at its size lets go exactly as many of its oldest as came past it, and no other row. */
@@ -387,10 +390,24 @@ function ledgerBadly(was: CensusRow, now: CensusRow, frozen: boolean): string | 
  * generation's moved or made row on a database the walk reset. On a frozen target (staging during a release's eval)
  * every other change outside the plan fails too; on production, where people write all along, it is named only.
  */
-export function censusDiff(before: string, after: string, planned: ReadonlySet<string>, frozen: boolean): CensusDiff {
+/** A tables release's plan as the census reads it: the tables it drops and makes anew, and the tables it adds. */
+export interface PlannedTables {
+  readonly changed: ReadonlySet<string>;
+  readonly added: ReadonlySet<string>;
+}
+
+export function censusDiff(before: string, after: string, { changed: planned, added }: PlannedTables, frozen: boolean): CensusDiff {
   const was = censusOfLines(before);
   const now = censusOfLines(after);
-  const reset = new Set([...was.rows.values()].filter((row) => planned.has(row.table)).map((row) => row.database));
+  // A workspace takes a generation each time it is made (nimbus-workspace.ts), so one the walk opened moves it with its
+  // activation, as one whose tables the walk reset does.
+  const opened = [...now.rows.values()].filter((row) => row.table === ACTIVATIONS && row.rows > (was.rows.get(`${row.database}\t${row.table}`)?.rows ?? 0)).map((row) => row.database);
+  const reset = new Set([...[...was.rows.values()].filter((row) => planned.has(row.table)).map((row) => row.database), ...opened]);
+  // An object the census before did not hold was made since, by a sign-in or a first request: a reset changes only objects
+  // that exist, so it is said once, never as each of its tables changed (staging 4ebac191c, 2026-10-23: one new account
+  // read as 46 changes).
+  const existed = new Set([...[...was.rows.values()].map((row) => row.database), ...was.unreadable]);
+  const made = new Map<string, number>();
   const found: Findings = { hard: [], soft: [], emptied: [], expected: [], alike: 0 };
   const unproven = (database: string, when: string) => `${database}: not read ${when}, so nothing of it is proven`;
 
@@ -407,7 +424,12 @@ export function censusDiff(before: string, after: string, planned: ReadonlySet<s
   }
 
   for (const [key, row] of now.rows) {
-    const judged = was.rows.has(key) || plannedIndexOf(row, now.rows, planned) !== undefined ? null : judgedNew(key, row, planned, reset);
+    if (!existed.has(row.database)) {
+      made.set(row.database, (made.get(row.database) ?? 0) + 1);
+      continue;
+    }
+
+    const judged = was.rows.has(key) || plannedIndexOf(row, now.rows, planned) !== undefined ? null : judgedNew(key, row, { planned, added }, reset);
 
     if (judged !== null) found[judged.kind].push(judged.said);
   }
@@ -419,6 +441,7 @@ export function censusDiff(before: string, after: string, planned: ReadonlySet<s
       `census-diff: ${String(found.alike)} table(s) as they were`,
       ...section('emptied or retired, as planned', found.emptied),
       ...section('written by a first open, as expected (activations added; a reset database\'s generation)', found.expected),
+      ...section('made since the census before, not by the reset', [...made].map(([database, tables]) => `${database}\tnew object, ${String(tables)} table(s)`)),
       ...section('REFUSED, the reset\'s structure', found.hard),
       ...section(frozen ? 'CHANGED OUTSIDE THE PLAN on a frozen target' : 'changed outside the plan, as people wrote (not a failure on production)', found.soft),
     ],
@@ -485,10 +508,13 @@ function judgedGeneration(said: string, row: CensusRow, then: CensusRow, reset: 
 
 /** A table only the census after holds: a planned one must be empty; a generation must be one row, made by the walk's
  *  first open on a database it reset. */
-function judgedNew(key: string, row: CensusRow, planned: ReadonlySet<string>, reset: ReadonlySet<string>): Judged | null {
+function judgedNew(key: string, row: CensusRow, { planned, added }: { readonly planned: ReadonlySet<string>; readonly added: ReadonlySet<string> }, reset: ReadonlySet<string>): Judged | null {
   const said = `${key}\tnew, ${String(row.rows)} row(s)`;
 
   if (planned.has(row.table)) return row.rows === 0 ? null : { kind: 'hard', said: `${said}: a planned table kept rows` };
+
+  // A table the plan adds is made by each database's repair, empty.
+  if (added.has(row.table)) return row.rows === 0 ? null : { kind: 'soft', said: `${said}: a table the plan adds holds rows` };
 
   if (row.table !== GENERATION) return { kind: 'soft', said };
 
