@@ -172,7 +172,8 @@ export function nativeTool(description: string, offered: readonly Served[], with
 
     return { served, fields };
   }, {
-    // Each operation's result is the call's to show, and `describe` declares it for a program: not said here.
+    // A native call shows its result to its caller. A program, the one caller that needs a result's shape before the
+    // call, reads it from the capability's namespace through `describe`: not said here.
     description: `${description} ${members.map(({ op }) => `${op.name}: ${op.help}`).join(' ')}`,
     parameters: nativeToolSchema(members.map(({ op }) => op)),
   }, members);
@@ -180,12 +181,12 @@ export function nativeTool(description: string, offered: readonly Served[], with
 
 /** One operation as its own native tool, its fields at the top level. */
 export function operationTool(description: string, served: Served): Tool {
-  return nativeCall((fields) => ({ served, fields }), { description, parameters: inputJsonSchema(served.op) }, [served]);
+  return nativeCall((fields) => ({ served, fields }), { description: `${description} Returns ${returnsOf(served.op)}.`, parameters: inputJsonSchema(served.op) }, [served]);
 }
 
 /** {@link operationTool} as a turn offers it where another store runs it: its description and input, with no executor. */
 export function declaredOperationTool(description: string, op: Operation): Tool {
-  const declared = tool({ description, inputSchema: operationInputSchema(op) });
+  const declared = tool({ description: `${description} Returns ${returnsOf(op)}.`, inputSchema: operationInputSchema(op) });
 
   return allowedInPlan(op) ? permitInPlan(declared) : declared;
 }

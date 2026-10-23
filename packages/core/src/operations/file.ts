@@ -2,7 +2,7 @@
 import * as v from 'valibot';
 import { ImageCarrierSchema } from '../types/tool-images';
 import { described, namespace } from './operation';
-import { FILE_READ_LINES, FILE_READ_MAX_CHARS } from '../types/file-edits';
+import { FILE_READ_LINE_CHARS, FILE_READ_LINES, FILE_READ_MAX_CHARS } from '../types/file-edits';
 
 const Path = described(v.pipe(v.string(), v.trim(), v.nonEmpty()), 'Relative paths resolve at the workspace root.');
 
@@ -34,14 +34,14 @@ const FileEditSchema = v.strictObject({
 const Encoding = v.optional(described(v.picklist(['utf8', 'base64']), 'utf8 (the default) as text; base64, the file\'s bytes exactly, for a file that is not text.'));
 
 /** Interpolated, so the help states the window the executor shows. */
-const READ_WINDOW = `${String(FILE_READ_LINES)} lines (${String(FILE_READ_MAX_CHARS)} characters)`;
+const READ_WINDOW = `${String(FILE_READ_LINES)} lines or ${String(FILE_READ_MAX_CHARS)} characters, whichever ends first`;
 
 const fileOp = namespace('file', { slate: true });
 
 export const FILE = {
   read: fileOp({
     name: 'read',
-    help: `Up to ${READ_WINDOW} of a text file, each line prefixed by its number and a tab; the footer gives the offset to continue. An image is shown to you.`,
+    help: `Up to ${READ_WINDOW}, of a text file, each line prefixed by its number and a tab and cut past ${String(FILE_READ_LINE_CHARS)} characters; the footer gives the offset to continue. An image is shown to you.`,
     impact: 'observe',
     input: v.strictObject({ path: Path, offset: Lines('The first line, 1-indexed; default 1.'), limit: Lines(`Lines to return; default ${String(FILE_READ_LINES)}.`) }),
     output: v.union([v.string(), ImageCarrierSchema]),
@@ -55,7 +55,7 @@ export const FILE = {
   }),
   edit: fileOp({
     name: 'edit',
-    help: 'Replace text in a file you have read, all edits or none; refused if the file changed since.',
+    help: 'Replace text in a file you have read since the last compaction, all edits or none; refused if the file changed since.',
     impact: 'mutate',
     input: v.strictObject({ path: Path, edits: described(v.pipe(v.array(FileEditSchema), v.minLength(1)), 'Matched against the file as last read.') }),
     output: v.strictObject({ ...Written, applied: v.array(v.strictObject({ line: v.number(), removedLines: v.number(), addedLines: v.number() })) }),

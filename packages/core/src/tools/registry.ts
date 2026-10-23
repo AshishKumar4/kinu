@@ -259,11 +259,11 @@ export const BUILTIN_TOOL_SPECS = {
     notes: [
       'A Node-style script: top-level `await`, and `return` (or a trailing expression) gives the result. Type annotations do not parse.',
       '`tools.<name>(input)` calls a native tool; a tool saved with `workspace.createTool` joins `tools` from the next program.',
-      '`require()` loads Node builtins, with `fs`, `fs/promises` and `child_process` over your workspace files and each machine\'s shell. `*Sync` forms throw; an awaited `exec`/`execFile` resolves to `{ stdout, stderr }`, once the child exits.',
+      '`require()` loads Node builtins, with `fs`, `fs/promises` and `child_process` over your workspace files and each machine\'s shell; `process.cwd()` is the workspace root. `*Sync` forms throw; an awaited `exec`/`execFile` resolves to `{ stdout, stderr }` once the child exits. A child gets no stdin and not its `env`.',
       `With \`child_process\`: ${EXEC_RUNS_WHERE_ITS_CWD_IS}`,
       '`readFile` without an encoding returns a `Uint8Array`.',
       'Variables do not survive between programs; a `private` `db` table keeps data. Run independent calls together with `Promise.all`, and `return` what you need rather than logging it.',
-      'A refused call resolves to a `Refusal`, `{ success: false, reason, error }`, instead of throwing: check for one before reading a result.',
+      'A refused call resolves to a `Refusal`, `{ success: false, reason, error }`, instead of throwing: check for one before reading a result. Returning it fails the call with that reason.',
       'Start with one `//` comment naming the operation and its target: it is shown as the call\'s intent.',
       '`describe(\'ns\')` and `describe(\'ns.member\')` return full TypeScript declarations: read one before relying on an option\'s name or a result\'s shape.',
     ],
@@ -273,7 +273,7 @@ export const BUILTIN_TOOL_SPECS = {
     name: 'shell',
     summary: 'Run a shell command in one runtime and return its output.',
     notes: [
-      'Each call is a fresh shell in `cwd` (default: your home), so `cd` and `export` last one call; a `name` keeps them across calls.',
+      'Each call is a fresh shell in `cwd` (default: your home), so `cd` and `export` last one call, and calls run side by side; a `name` keeps them across calls and runs one call at a time.',
       `On the workspace runtime: ${EXEC_RUNS_WHERE_ITS_CWD_IS}`,
       EXEC_ANSWERS_AT_EXIT,
       'Each runtime has its own files; `workspace` is the one the `file` tool reads.',
@@ -285,7 +285,7 @@ export const BUILTIN_TOOL_SPECS = {
     name: 'file',
     summary: 'Read, list, stat, search, edit or write files in your workspace.',
     notes: [
-      'In a large file, `search` for the lines you need, then `read` around them with `offset` and `limit`.',
+      'Find before you read: `search` for the lines you need, then `read` around them with `offset` and `limit`.',
       'Read a file before you `edit` it. Each `old_text` must occur exactly once, copied without the line numbers a read shows.',
     ],
     example: "file({op:'edit', path:'src/api.ts', edits:[{old_text:'timeout: 30', new_text:'timeout: 60'}]})",
@@ -295,7 +295,8 @@ export const BUILTIN_TOOL_SPECS = {
     summary: 'Delegate work to other agents and message them.',
     notes: [
       'Do the work yourself by default: a subagent costs a brief, and you see only its report.',
-      'Delegate only large work separable from your next step: independent pieces that can run at once, or a long side task whose output would flood your context. Never delegate a small piece, or split a modest job across subagents.',
+      'Delegate only large work, separable from your next step, that clearly costs more to do than to brief and check: independent pieces that can run at once, or a long side task whose output would flood your context.',
+      'Keep work you would redo to trust. Never delegate a small piece, or split a modest job across subagents.',
     ],
     // Cheapest complete call: `ideate` is the one preset that takes no `objective`.
     example: "agents({op:'swarm', preset:'ideate', task:'Three ways to stop staging 502ing under load'})",
@@ -305,7 +306,7 @@ export const BUILTIN_TOOL_SPECS = {
     name: 'tasks',
     summary: 'Your task list, shown in your context at every step, and your active role.',
     notes: [
-      'Keep a list for work of three or more steps, not a one-step request; mark each item done as soon as it is.',
+      'Keep a list for work of three or more steps, not a one-step request. Update it in the same step as the work, and mark each item done as soon as it is.',
     ],
     example: "tasks({op:'add', titles:['Reproduce the 502', 'Patch the gateway timeout', 'Add a regression test']})",
   },
