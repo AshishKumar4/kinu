@@ -1432,11 +1432,16 @@ describe("the page's mode", () => {
         await page.evaluateOnNewDocument(() => {
           Object.defineProperty(window, 'localStorage', { get: () => { throw new DOMException('storage is off', 'SecurityError'); } });
         });
-        await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'dark' }]);
-        await page.goto(`${origin}/gallery.html?frame=part-frame&part=standup&scheme=light`, { waitUntil: 'networkidle0' });
+        // The system turns away from the mode the page opened in and back, more than once: each turn the page reports is
+        // one the slate's scheme must outlast.
+        await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'light' }]);
+        await page.goto(`${origin}/gallery.html?frame=part-frame&part=standup&scheme=dark`, { waitUntil: 'networkidle0' });
         await page.waitForSelector('[data-part-outside]');
+        const worn = [await shownOn(page)];
 
-        expect([await shownOn(page), await systemTurns(page, 'light'), await systemTurns(page, 'dark')]).toEqual(['light', 'light', 'light']);
+        for (const system of ['dark', 'light', 'dark', 'light'] as const) worn.push(await systemTurns(page, system));
+
+        expect(worn).toEqual(['dark', 'dark', 'dark', 'dark', 'dark']);
       } finally {
         await page.close();
       }
