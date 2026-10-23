@@ -104,25 +104,51 @@ const CATALOG = 'https://registry.cloudflare.com/v2/_catalog?tags=true';
 /** The catalog answers a page of names across repositories, so a snapshot past the first is on a later one. */
 const CATALOG_PAGES = 100;
 
+/**
+ * Mints asked before the credentials endpoint's own failure is the answer. It answered 500 to one of a staging run's
+ * cleanup mints (2026-10-22, request 132bf737-f395-434e-a2ee-cd6165d4f377) while every other mint of the run answered,
+ * and a cleanup that left a snapshot for it kept the run's bucket and failed the tier. A 4xx is the token's, and final.
+ */
+const MINT_ATTEMPTS = 3;
+
+/** Between mints the endpoint refused for itself (429 or 5xx). */
+const MINT_RETRY_MS = 2_000;
+
 const sha256 = (value: string): string => createHash('sha256').update(value).digest('hex');
 
 /** The next page's cursor: the registry's link names it as `last`, without the angle brackets RFC 8288 gives it. */
 const nextCursor = (link: string | null): string | undefined => /[?&]last=([^&;>\s]+)/.exec(link ?? '')?.[1];
 
+/** `wait`: the pause between mints the endpoint refused for itself, a timer unless a test passes its own. */
 export function snapshotRegistry(input: {
   readonly token: string;
   readonly account: string;
   readonly fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  readonly wait?: (ms: number) => Promise<void>;
 }): SnapshotRegistry {
   const { account } = input;
+  const wait = input.wait ?? (async (ms: number) => { await new Promise((resolve) => { setTimeout(resolve, ms); }); });
 
   const call = (doing: string, url: string, init: RequestInit) => attempt('io', () => input.fetch(url, init), doing);
 
-  const credentials = Effect.gen(function* () {
+  /** One mint, asked again while the endpoint refuses for itself, up to MINT_ATTEMPTS. */
+  const mint = (asked: number): Effect.Effect<Response, DevboxError> => Effect.gen(function* () {
     const minted = yield* call('minting registry credentials', `https://api.cloudflare.com/client/v4/accounts/${account}/containers/registries/registry.cloudflare.com/credentials`, {
       method: 'POST', headers: { authorization: `Bearer ${input.token}`, 'content-type': 'application/json' },
       body: JSON.stringify({ expiration_minutes: 5, permissions: ['pull', 'push'] }),
     });
+
+    if ((minted.status === 429 || minted.status >= 500) && asked < MINT_ATTEMPTS) {
+      yield* attempt('io', () => wait(MINT_RETRY_MS));
+
+      return yield* mint(asked + 1);
+    }
+
+    return minted;
+  });
+
+  const credentials = Effect.gen(function* () {
+    const minted = yield* mint(1);
 
     const answer = v.safeParse(Minted, yield* attempt('io', () => minted.json()));
 
