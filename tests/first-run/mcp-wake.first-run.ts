@@ -33,7 +33,9 @@ const DEFECT: FirstRunDefect = {
     + 'activation to end on request, the call before it and the first call after it to answer, and the server to be removed.',
 };
 
-const PLAN = firstRunCasePlan(SUITE, 'mcpwake');
+// Its own account: it ends the account's activation, and as `scripted` that ended the call of every case beside it
+// on the account (staging 0d1c0a5b1, users-share: "the account activation was aborted on request").
+const PLAN = firstRunCasePlan(SUITE, 'mcpwake', 'mcp-wake');
 
 const liveTest = test.skipIf(PLAN === null);
 

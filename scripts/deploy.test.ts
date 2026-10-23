@@ -117,6 +117,14 @@ if [[ "$1" == */scripts/reset.ts ]] && [ "$2" = "stamps" ] && [ "$KINU_STAMPS_MO
   echo 'account'
   exit 3
 fi
+if [[ "$1" == */scripts/prod-logs.ts ]] && [ "$2" = "version" ] && [ "$KINU_TELEMETRY_RED" = "1" ]; then
+  echo 'kinu-staging version 9b1f: object a woke 3 time(s) with nothing to watch'
+  exit 1
+fi
+if [[ "$1" == */scripts/reset.ts ]] && [ "$2" = "retirements" ] && [ "$KINU_RETIRES" = "1" ]; then
+  echo 'retirements: REFUSED before the upload: OldDO'
+  exit 1
+fi
 # The deploy's report directory, as scripts/deploy-report.ts opens and names it, its logs directory made.
 if [ "\${1##*/}" = "deploy-report.ts" ] && [ "$2" = "open" ]; then
   mkdir -p "$KINU_DEPLOY_ROOT/report/logs"
@@ -226,6 +234,10 @@ interface DeployRun {
   readonly ci?: 'green' | 'absent' | 'red';
   /** The build moves a class's stamp (`reset.ts stamps` exits 3). */
   readonly stampsMoved?: boolean;
+  /** The build retires a class the served build exports, unnamed by the owner's words (`reset.ts retirements` exits 1). */
+  readonly retires?: boolean;
+  /** The telemetry read of the published version ends red (prod-logs.ts version). */
+  readonly telemetryRed?: boolean;
   /** The reset the environment is still in: its placeholder serves and its build never uploaded. */
   readonly pendingReset?: string;
   /** A KINU_RESET_RECORD already on the environment, which must never soften a deploy nobody asked to reset. */
@@ -367,6 +379,11 @@ function uploadFixture(fixture: string, uploadRuns: readonly UploadRun[] | undef
   }
 }
 
+/** A fixture's switch, as the stubs read it from the environment. */
+function flag(on: boolean): string {
+  return on ? '1' : '0';
+}
+
 async function runDeploy({
   failingGate = "",
   killGate = "",
@@ -379,6 +396,8 @@ async function runDeploy({
   lockHeld = false,
   ci = 'green',
   stampsMoved = false,
+  retires = false,
+  telemetryRed = false,
   pendingReset = "none",
   ambientRecord = "",
   account,
@@ -481,18 +500,20 @@ exit 87
       KINU_DEPLOY_RECORD_LOG: recordLog,
       ...accountFixture(fixture, pendingReset, account),
       KINU_DEPLOY_INFRA_STATUS_LOG: infraStatusLog,
-      KINU_DEPLOY_UPLOAD_FIXTURE: uploadRuns === undefined ? '0' : '1',
+      KINU_DEPLOY_UPLOAD_FIXTURE: flag(uploadRuns !== undefined),
       KINU_DEPLOY_UPLOAD_ARGV: uploadArgv,
       // Always set, so the assertion that the script overrides it is about the
       // script rather than about whichever shell ran the suite.
       KINU_INFRA_PHASE: ambientPhase,
       KINU_INFRA_ENVIRONMENT: ambientEnvironment,
       KINU_RESET_RECORD: ambientRecord,
-      KINU_DEPLOY_DIRTY: dirty ? "1" : "0",
+      KINU_DEPLOY_DIRTY: flag(dirty),
       KINU_SCRIPTED_MODEL_KEY: scriptedKey,
       SKIP_E2E: "1",
       KINU_CI: ci,
-      KINU_STAMPS_MOVED: stampsMoved ? '1' : '0',
+      KINU_STAMPS_MOVED: flag(stampsMoved),
+      KINU_RETIRES: flag(retires),
+      KINU_TELEMETRY_RED: flag(telemetryRed),
       XDG_RUNTIME_DIR: fixture,
     }),
   });
@@ -506,7 +527,11 @@ exit 87
 
   const STAMPS = 'bun scripts/reset.ts stamps';
 
-  const events = logged.filter((event) => !event.startsWith(REPORT) && !event.startsWith('bun scripts/ladder.ts --ci-') && !event.startsWith(STAMPS));
+  const RETIREMENTS = 'bun scripts/reset.ts retirements';
+
+  const MINT = 'bun scripts/infra-provision.ts';
+
+  const events = logged.filter((event) => ![REPORT, 'bun scripts/ladder.ts --ci-', STAMPS, RETIREMENTS, MINT].some((step) => event.startsWith(step)));
 
   // What the deploy wrote, apart from its reads of the report (`holds-red`).
   const report = logged.filter((event) => event.startsWith(REPORT) && !event.startsWith(`${REPORT}holds-red `))
@@ -522,6 +547,9 @@ exit 87
     report,
     ci: logged.filter((event) => event.startsWith('bun scripts/ladder.ts --ci-')),
     stamps: logged.filter((event) => event.startsWith(STAMPS)),
+    retirements: logged.filter((event) => event.startsWith(RETIREMENTS)),
+    // The tokens the deploy mints, each with where it came among the steps.
+    minted: logged.flatMap((event, at) => (event.startsWith(MINT) ? [{ event, beforeUpload: logged.slice(at).includes(phaseRun('upload')) }] : [])),
     stdout: run.stdout.toString(),
     stderr: run.stderr.toString(),
     infraPhase,
@@ -545,6 +573,29 @@ describe("deploy gate", () => {
       .toEqual({ status: 1, events: [phaseRun('preflight')], ci: ['bun scripts/ladder.ts --ci-verdict=testsha'], said: true, refused: true });
   });
 
+  // Ledger 1019-am: once every refusal before the upload passed, the deploy mints the tokens its deployment needs; a
+  // rehearsal, or a deploy refused before its upload, mints nothing.
+  test('a deploy mints its account tokens just before the upload gates; a rehearsal, or a refused deploy, none', async () => {
+    const runs = await Promise.all([{}, { option: '--promote' }, { option: '--gates-only' }, { ci: 'red' as const }, { dirty: true }].map(async (asked) => runDeploy(asked)));
+    const [staging, production, ...none] = runs;
+
+    expect({ staging: staging?.minted, production: production?.minted, none: none.map((run) => run.minted) }).toEqual({
+      staging: [{ event: 'bun scripts/infra-provision.ts staging --account-tokens', beforeUpload: true }],
+      production: [{ event: 'bun scripts/infra-provision.ts production --account-tokens', beforeUpload: true }],
+      none: [[], [], []],
+    });
+  });
+
+  // The owner, 2026-10-23, "Monitors don't block": what the published version did (telemetry) is said in the report and
+  // holds nothing.
+  test('a telemetry read that ends red is a notice of the deploy, never its red', async () => {
+    const [quiet, loud] = await Promise.all([false, true].map(async (telemetryRed) => runDeploy({ uploadRuns: [{ says: 'success', status: 0 }], telemetryRed })));
+    const read = (run: Awaited<ReturnType<typeof runDeploy>>) => run.events.some((event) => event.startsWith('bun scripts/prod-logs.ts version 9b1f'));
+
+    expect({ read: [read(quiet), read(loud)], status: loud.status, notice: loud.report.filter((event) => event.startsWith('notice telemetry')).length, red: loud.report.some((event) => event.startsWith('note telemetry')) })
+      .toEqual({ read: [true, true], status: quiet.status, notice: 1, red: false });
+  });
+
   // A build that moves a class's stamp repairs every database of that class at first contact, so it never deploys
   // without its plan having been printed (scripts/reset.ts stamps).
   test('a build that moves a stamp is refused without --reset-tables, before anything runs', async () => {
@@ -554,6 +605,16 @@ describe("deploy gate", () => {
     expect({ status: moved.status, events: moved.events, stamps: moved.stamps, said: moved.stdout.includes('deploy with --reset-tables') })
       .toEqual({ status: 1, events: [], stamps: ['bun scripts/reset.ts stamps staging'], said: true });
     expect(plain.stamps).toEqual(['bun scripts/reset.ts stamps staging']);
+  });
+
+  // The owner, 2026-10-21: production loses no user's rows unnamed, and a retired class deletes every row of it.
+  test('a build that retires a class is refused before anything runs, every deploy asking', async () => {
+    const retired = await runDeploy({ retires: true });
+    const plain = await runDeploy({});
+
+    expect({ status: retired.status, events: retired.events, retirements: retired.retirements, said: retired.stdout.includes('REFUSED before the upload: OldDO') })
+      .toEqual({ status: 1, events: [], retirements: ['bun scripts/reset.ts retirements staging'], said: true });
+    expect(plain.retirements).toEqual(['bun scripts/reset.ts retirements staging']);
   });
 
   test('a green armada verdict is read once, before the upload gates', async () => {

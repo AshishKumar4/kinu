@@ -3,20 +3,21 @@
  * fetches no code. One daemon owns a machine via `~/.kinu/pc-agent.pid`, which the daemon also claims itself.
  */
 
-import { randomBytes } from 'node:crypto';
+import { generateKeyPairSync, randomBytes } from 'node:crypto';
 import { closeSync, existsSync, fsyncSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, hostname } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { Effect } from 'effect';
+import * as v from 'valibot';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { isolatedBunArgs } from '@kinu.run/core';
+import { DEVICE_KEY_FILE, deviceReplaceMessage, isolatedBunArgs, signDeviceMessage, type DeviceReplacement } from '@kinu.run/core';
 import { classify, classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle, settleSync, tolerate, toKinuError } from '@kinu.run/core/obs';
 import { describeGpuNodes, effectiveDeviceMode, HOME_FOLDER_CONSENT, sandboxReasonFix } from '@kinu.run/core';
 import {
   claimMachine, enforceOwnerOnly, ensureSecretDir, machineProcessAlive, readMachinePid, removeMachinePid, runningMachineDaemon, runsMachineDaemon,
 } from '@kinu.run/cli-backend';
 import { AGENT_HOME, ensureAgentHome, loadConfigFile, requireAuthConfig, resolveCloudSession, updateConfigFile } from './config';
-import { joinCloudDevice, listCloudDevices, registerCloudDevice, type CloudDevice, type CloudDeviceSandbox } from './cloud-api';
+import { joinCloudDevice, listCloudDevices, registerCloudDevice, whoami, type CloudDevice, type CloudDeviceSandbox } from './cloud-api';
 import { buildDaemonFiles, type DaemonFiles } from './daemon-build';
 import { readDaemonLogTail, rotateDaemonLogIfNeeded } from './daemon-log';
 import { issuedDeviceConnected, waitForAnswer, type StoppableWaitOptions } from '@kinu.run/core';
@@ -58,6 +59,10 @@ export const DAEMON_LOG_PATH = join(AGENT_HOME, 'pc-agent.log');
 export const DESKTOP_SHARE_PATH = join(AGENT_HOME, 'desktop.json');
 
 export const DEVICE_CONFIG_PATH = join(AGENT_HOME, 'device.json');
+
+/** This machine's Ed25519 private key, PKCS#8 PEM at 0600, beside device.json: the half of its credential that never
+ *  leaves it (core `execution/device-key.ts`). */
+const DEVICE_KEY_PATH = join(AGENT_HOME, DEVICE_KEY_FILE);
 
 /** The daemon reports this root in HELLO and the hub composes `<root>/<workspace>/home`; the daemon owns everything under it. */
 const AGENT_ROOT = join(AGENT_HOME, 'agents');
@@ -104,9 +109,11 @@ export function connectDevice(auth: DeviceAuth, opts: ConnectDeviceOptions = {})
   return settle(Effect.gen(function* () {
     const local = yield* readLocalDevice();
     const replacedLocalConfig = local.kind === 'malformed';
+    // An earlier protocol's link is dead at the hub: its daemon serves nothing, so it is replaced as a malformed one is.
+    const deadLocalConfig = replacedLocalConfig || local.kind === 'earlier';
     const previous = local.kind === 'current' ? deviceOnOrigin(local.config, auth.origin) : undefined;
 
-    if (!replacedLocalConfig && opts.session && (yield* runningDaemonPid()) !== null) {
+    if (!deadLocalConfig && opts.session && (yield* runningDaemonPid()) !== null) {
       // The running daemon owns device.json and its credentials.
       const devices = yield* listDevicesForConnect(auth, 'checking whether the installed daemon is connected');
 
@@ -115,10 +122,12 @@ export function connectDevice(auth: DeviceAuth, opts: ConnectDeviceOptions = {})
 
     yield* assertDaemonPlatformSupported();
     const runtime = yield* daemonRuntime();
-    const device = yield* registerDeviceForConnect(auth, opts.label, previous?.token, opts.device);
-    yield* installDaemonFiles(device, deviceRoot(opts.root));
+    const key = yield* newDeviceKey();
+    const replaces = yield* replacementOf(previous, auth.origin, key.publicKey);
+    const device = yield* registerDeviceForConnect(auth, { publicKey: key.publicKey, label: opts.label, replaces, device: opts.device });
+    yield* installDaemonFiles(device, key, deviceRoot(opts.root));
 
-    if (replacedLocalConfig && opts.session) yield* stopRunningDaemon();
+    if (deadLocalConfig && opts.session) yield* stopRunningDaemon();
     const launch = yield* startInstalledDaemon(opts.session === true, runtime);
     // The daemon must show as connected on the server before success is claimed.
     const connected = yield* waitForDaemon(launch, opts, () => listedConnected(auth, device.deviceId));
@@ -140,30 +149,34 @@ export type JoinDeviceResult =
 /**
  * A machine with no session joins the account a browser's connect command names, by the ticket it carries. One this
  * account did not link is never relinked to it silently. With no session to read the account's devices by, the hub's
- * accepting the daemon is read here: it hands an accepted socket a new token, which the daemon writes over the one
- * this wrote.
+ * accepting the daemon is read here: it hands an accepted socket its first connect secret, which the daemon writes over
+ * the '' this wrote.
  */
 export function joinDevice(origin: string, ticket: string, account: string, opts: ConnectDeviceOptions = {}): Promise<JoinDeviceResult> {
   return settle(Effect.gen(function* () {
     const local = yield* readLocalDevice();
     const replacedLocalConfig = local.kind === 'malformed';
     const previous = local.kind === 'current' ? deviceOnOrigin(local.config, origin) : undefined;
+    // A link an earlier protocol made is dead at the hub, and still another account's machine.
+    const linked = local.kind === 'current' || local.kind === 'earlier' ? deviceOnOrigin(local.config, origin) : undefined;
 
-    if (previous !== undefined && previous.user !== account) return yield* new KinuError('bad_input', LINKED_ELSEWHERE);
+    if (linked !== undefined && linked.user !== account) return yield* new KinuError('bad_input', LINKED_ELSEWHERE);
     yield* assertDaemonPlatformSupported();
     const runtime = yield* daemonRuntime();
+    const key = yield* newDeviceKey();
+    const replaces = yield* replacementOf(previous, origin, key.publicKey);
 
     const device = yield* Effect.tryPromise({
-      try: () => joinCloudDevice(origin, { ticket, label: opts.label, replaces: previous?.token }),
+      try: () => joinCloudDevice(origin, { ticket, publicKey: key.publicKey, label: opts.label, replaces }),
       catch: (cause) => new KinuError(classifyErrorCode({ cause }) ?? 'unavailable', 'joining this machine to your Kinu account', {
-        cause: new Error(redactSecrets(renderThrownChain({ cause }), [ticket, ...(previous === undefined ? [] : [previous.token])])),
+        cause: new Error(redactSecrets(renderThrownChain({ cause }), [ticket])),
       }),
     });
 
     const root = deviceRoot(opts.root);
-    yield* installDaemonFiles(device, root);
+    yield* installDaemonFiles(device, key, root);
     const launch = yield* startInstalledDaemon(false, runtime);
-    const accepted = yield* waitForDaemon(launch, opts, async () => (tokenRotatedFrom(device.token) ? true : undefined));
+    const accepted = yield* waitForDaemon(launch, opts, async () => (connectedSinceLinked() ? true : undefined));
 
     if (accepted === undefined) return { kind: 'cancelled', deviceId: device.deviceId, replacedLocalConfig } satisfies JoinDeviceResult;
     thisDeviceConnected = true;
@@ -174,6 +187,56 @@ export function joinDevice(origin: string, ticket: string, account: string, opts
 
 const LINKED_ELSEWHERE = 'This machine is linked to another Kinu account, and this command connects it to a different one. '
   + 'Nothing was changed. To move it, run `kinu connect` signed in as the account it should belong to.';
+
+export type ReenrolResult =
+  /** Nothing to enrol: no device.json here, or one this protocol wrote. */
+  | { kind: 'current' }
+  /** Enrolling needs what this CLI has not: a session, on the machine's origin, of the machine's account. */
+  | { kind: 'needs-connect'; message: string }
+  | { kind: 'reenrolled'; deviceId: string; label: string }
+  | { kind: 'cancelled'; deviceId: string };
+
+const EARLIER_NEEDS_SESSION = 'This machine was connected by an earlier Kinu, whose device credential the hub no longer accepts. '
+  + 'Run `kinu connect` to connect it again.';
+
+const EARLIER_ELSEWHERE = 'This machine was connected by an earlier Kinu to another account or server than this CLI is signed in to. '
+  + 'Run `kinu connect` signed in as the account it should belong to.';
+
+/**
+ * `kinu update` on a machine an earlier device protocol linked, whose device.json holds a bearer no hub takes now: the
+ * same device enrolled again with a new key by this CLI's own session, which must be of the machine's account and
+ * server, then the daemon this CLI carries installed and restarted, and its connect awaited. With no such session there
+ * is nothing to enrol it by, and the way back is `kinu connect`.
+ */
+export function reenrolEarlierDevice(auth: DeviceAuth | null, opts: Pick<ConnectDeviceOptions, 'onWaiting' | 'signal'> = {}): Promise<ReenrolResult> {
+  return settle(Effect.gen(function* () {
+    const local = yield* readLocalDevice();
+
+    if (local.kind !== 'earlier') return { kind: 'current' } satisfies ReenrolResult;
+    const earlier = local.config;
+
+    if (auth === null) return { kind: 'needs-connect', message: EARLIER_NEEDS_SESSION } satisfies ReenrolResult;
+    const signedIn = yield* Effect.tryPromise({ try: () => whoami(auth.origin, auth.token), catch: (cause) => listingFailure(auth, 'reading which account this CLI is signed in to', { cause }) });
+
+    if (deviceOnOrigin(earlier, auth.origin) === undefined || signedIn.user.id !== earlier.user) {
+      return { kind: 'needs-connect', message: EARLIER_ELSEWHERE } satisfies ReenrolResult;
+    }
+
+    yield* assertDaemonPlatformSupported();
+    const runtime = yield* daemonRuntime();
+    const key = yield* newDeviceKey();
+    const device = yield* registerDeviceForConnect(auth, { publicKey: key.publicKey, label: defaultDeviceName(), reenrol: earlier.device });
+
+    yield* installDaemonFiles(device, key, earlier.root);
+    const launch = yield* startInstalledDaemon(false, runtime);
+    const connected = yield* waitForDaemon(launch, opts, () => listedConnected(auth, device.deviceId));
+
+    if (connected === undefined) return { kind: 'cancelled', deviceId: device.deviceId } satisfies ReenrolResult;
+    thisDeviceConnected = true;
+
+    return { kind: 'reenrolled', deviceId: device.deviceId, label: connected.label } satisfies ReenrolResult;
+  }));
+}
 
 /** The scope a device's file calls get: the directory named, made absolute, or this user's home. */
 export function deviceRoot(named: string | undefined): string {
@@ -396,8 +459,8 @@ function listDevicesForConnect(auth: DeviceAuth, doing: string): Effect.Effect<C
   return Effect.tryPromise({ try: () => listCloudDevices(auth.origin, auth.token), catch: (cause) => listingFailure(auth, doing, { cause }) });
 }
 
-/** This machine's registration on `origin`, as the daemon's `device.json` holds it: its token, which linking again
- *  replaces, and the device the hub issued it, where the CLI that linked it recorded one. */
+/** This machine's registration on `origin`, as the daemon's `device.json` holds it: the device the hub issued it, whose
+ *  key linking again proves it held. */
 function localDevice(origin: string): Effect.Effect<DeviceConfig | undefined, KinuError> {
   return Effect.gen(function* () {
     const local = yield* readLocalDevice();
@@ -408,9 +471,20 @@ function localDevice(origin: string): Effect.Effect<DeviceConfig | undefined, Ki
   });
 }
 
+/** device.json as an earlier device protocol wrote it: a bearer the hub minted, and the device it named, where the CLI
+ *  that linked it recorded one. Read only to enrol the same machine again. */
+const EarlierDeviceConfigSchema = v.object({
+  user: v.pipe(v.string(), v.minLength(1)),
+  device: v.optional(v.pipe(v.string(), v.minLength(1))),
+  token: v.string(),
+  origin: v.pipe(v.string(), v.minLength(1)),
+  root: v.pipe(v.string(), v.check((root) => isAbsolute(root))),
+});
+
 type LocalDeviceRead =
   | { readonly kind: 'none' }
   | { readonly kind: 'current'; readonly config: DeviceConfig }
+  | { readonly kind: 'earlier'; readonly config: v.InferOutput<typeof EarlierDeviceConfigSchema> }
   | { readonly kind: 'malformed'; readonly error: KinuError };
 
 function readLocalDevice(): Effect.Effect<LocalDeviceRead, KinuError> {
@@ -418,6 +492,9 @@ function readLocalDevice(): Effect.Effect<LocalDeviceRead, KinuError> {
     const text = yield* io('reading this machine\'s device config', () => tolerate(() => readFileSync(DEVICE_CONFIG_PATH, 'utf-8'), 'enoent'));
 
     if (text === undefined) return { kind: 'none' };
+    const earlier = v.safeParse(EarlierDeviceConfigSchema, tolerate(() => JSON.parse(text), 'malformed-input'));
+
+    if (earlier.success) return { kind: 'earlier', config: earlier.output };
 
     // The daemon's own schema: the CLI reads device.json as the daemon that runs on it will.
     return yield* Effect.try({
@@ -430,16 +507,68 @@ function readLocalDevice(): Effect.Effect<LocalDeviceRead, KinuError> {
   });
 }
 
-function deviceOnOrigin(config: DeviceConfig, origin: string): DeviceConfig | undefined {
+function deviceOnOrigin<Config extends { readonly origin: string }>(config: Config, origin: string): Config | undefined {
   return config.origin.replace(/\/+$/, '') === origin.replace(/\/+$/, '') ? config : undefined;
 }
 
 
-function registerDeviceForConnect(auth: DeviceAuth, label: string | undefined, replaces: string | undefined, device: string | undefined) {
+/** A fresh Ed25519 keypair for this machine: the private half as PKCS#8 PEM for device.key, the public half as the 43
+ *  base64url characters of its raw bytes, which is all the hub keeps. */
+interface DeviceKey {
+  readonly privateKeyPem: string;
+  readonly publicKey: string;
+}
+
+function newDeviceKey(): Effect.Effect<DeviceKey, KinuError> {
+  return Effect.gen(function* () {
+    const { privateKey, publicKey } = yield* io('making this machine\'s device key', () => generateKeyPairSync('ed25519'));
+    // A JWK's `x` is the raw public key, base64url: the hub's form.
+    const raw = publicKey.export({ format: 'jwk' }).x;
+
+    if (raw === undefined) return yield* new KinuError('io', 'the Ed25519 public key exported no raw bytes');
+
+    return { privateKeyPem: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), publicKey: raw };
+  });
+}
+
+/**
+ * The old key's signature over the registration `publicKey` makes, when this machine holds a device linked on
+ * `origin`: the hub revokes that one for it, so linking again leaves no stale row. None when that key is gone, or will
+ * not sign: the new link stands either way, and the owner removes the old row.
+ */
+function replacementOf(previous: DeviceConfig | undefined, origin: string, publicKey: string): Effect.Effect<DeviceReplacement | undefined, KinuError> {
+  return Effect.gen(function* () {
+    const pem = previous === undefined ? undefined : yield* io('reading this machine\'s device key', () => tolerate(() => readFileSync(DEVICE_KEY_PATH, 'utf8'), 'enoent'));
+
+    if (previous === undefined || pem === undefined) return undefined;
+    const message = deviceReplaceMessage(new URL(origin).origin, previous.device, publicKey);
+
+    return yield* Effect.tryPromise({ try: () => signDeviceMessage(pem, message), catch: (cause) => cause }).pipe(Effect.match({
+      onSuccess: (signature): DeviceReplacement | undefined => ({ device: previous.device, signature }),
+      onFailure: (cause): DeviceReplacement | undefined => {
+        diagnostics.event('device.connect.replace_unsigned', { device: previous.device, error: renderThrownChain({ cause }) });
+
+        return undefined;
+      },
+    }));
+  });
+}
+
+interface DeviceRegistrationAsk {
+  readonly publicKey: string;
+  readonly label?: string | undefined;
+  readonly replaces?: DeviceReplacement | undefined;
+  /** The device a browser issued for this machine. */
+  readonly device?: string | undefined;
+  /** The id an earlier protocol's link gave this machine, kept as its key is replaced (`kinu update`). */
+  readonly reenrol?: string | undefined;
+}
+
+function registerDeviceForConnect(auth: DeviceAuth, ask: DeviceRegistrationAsk) {
   return Effect.tryPromise({
-    try: () => registerCloudDevice(auth.origin, auth.token, { label, replaces, device }),
+    try: () => registerCloudDevice(auth.origin, auth.token, ask),
     catch: (cause) => {
-      const detail = redactSecrets(renderThrownChain({ cause }), [auth.token, ...(replaces === undefined ? [] : [replaces])]);
+      const detail = redactSecrets(renderThrownChain({ cause }), [auth.token]);
 
       if (/\b(?:duplicate|already exists|already in use)\b/i.test(detail)) {
         return new KinuError(
@@ -483,7 +612,11 @@ const removeAfter = (doing: string, { cause }: { readonly cause: unknown }, path
   catch: (cleanup) => toKinuError({ doing, cause: new AggregateError([cause, cleanup], 'device install and cleanup both failed'), otherwise: 'io' }),
 });
 
-function installDaemonFiles(device: { origin: string; userId: string; deviceId: string; token: string }, root: string): Effect.Effect<void, KinuError> {
+/**
+ * The daemon, its siblings, device.key and device.json (protocol 5: no connect secret yet), each staged whole and landed
+ * by rename.
+ */
+function installDaemonFiles(device: { origin: string; userId: string; deviceId: string }, key: DeviceKey, root: string): Effect.Effect<void, KinuError> {
   return Effect.gen(function* () {
     yield* io(`preparing the device install directory ${AGENT_HOME}`, () => {
       ensureAgentHome();
@@ -493,10 +626,10 @@ function installDaemonFiles(device: { origin: string; userId: string; deviceId: 
     const config = `${JSON.stringify({
       user: device.userId,
       device: device.deviceId,
-      token: device.token,
       origin: device.origin.replace(/\/+$/, ''),
       // The consented root: this user's home, or the directory the command named; never where the shell happened to be.
       root,
+      connectSecret: '',
     }, null, 2)}\n`;
 
     const files = yield* daemonFiles();
@@ -514,8 +647,12 @@ function installDaemonFiles(device: { origin: string; userId: string; deviceId: 
     let stampPending: string | null = stampTemporary;
     const siblingsPending = new Set(siblingTemporaries.map((entry) => entry.temporary));
     let configPending: string | null = null;
+    let keyPending: string | null = null;
 
     const land = Effect.gen(function* () {
+      const keyTemporary = yield* stageInstallFile(DEVICE_KEY_PATH, key.privateKeyPem, 0o600);
+
+      keyPending = keyTemporary;
       const configTemporary = yield* stageInstallFile(DEVICE_CONFIG_PATH, config, 0o600);
 
       configPending = configTemporary;
@@ -538,6 +675,10 @@ function installDaemonFiles(device: { origin: string; userId: string; deviceId: 
           stampPending = null;
           enforceOwnerOnly(VERSION_STAMP_PATH, 0o600);
           rmSync(UPDATE_PENDING_PATH, { force: true });
+          // The key, then the config that names its device: the two credentials land together, last.
+          renameSync(keyTemporary, DEVICE_KEY_PATH);
+          keyPending = null;
+          enforceOwnerOnly(DEVICE_KEY_PATH, 0o600);
           renameSync(configTemporary, DEVICE_CONFIG_PATH);
           configPending = null;
           enforceOwnerOnly(DEVICE_CONFIG_PATH, 0o600);
@@ -548,7 +689,7 @@ function installDaemonFiles(device: { origin: string; userId: string; deviceId: 
     });
 
     yield* Effect.catch(land, (cause) => Effect.andThen(
-      removeAfter('cleaning up a failed device install', { cause }, [scriptPending, stampPending, ...siblingsPending, configPending]),
+      removeAfter('cleaning up a failed device install', { cause }, [scriptPending, stampPending, ...siblingsPending, keyPending, configPending]),
       failedWhile('installing the device daemon', { cause }),
     ));
   });
@@ -593,13 +734,13 @@ function syncAgentDirectory(): void {
   }
 }
 
-/** Whether the hub accepted this machine's daemon since it was handed `token`: an accepted socket is handed a new one,
+/** Whether the hub accepted this machine's daemon since it was linked: an accepted socket is handed a connect secret,
  *  which the daemon writes into device.json before it answers. */
-function tokenRotatedFrom(token: string): boolean {
+function connectedSinceLinked(): boolean {
   // The daemon writes it whole, by rename, so a file that does not parse was written by something else.
   const text = tolerate(() => readFileSync(DEVICE_CONFIG_PATH, 'utf-8'), 'enoent');
 
-  return text !== undefined && parseDeviceConfig(text, DEVICE_CONFIG_PATH).token !== token;
+  return text !== undefined && parseDeviceConfig(text, DEVICE_CONFIG_PATH).connectSecret !== '';
 }
 
 /** The device's roster row once it reads connected; a transient listing error while the daemon lives is not-yet. */

@@ -107,8 +107,9 @@
 # confirmation naming every table it drops, and only then: a release that only adds tables drops nothing, and stage.sh
 # deploys it unattended (`reset.ts schema-change`). Production refuses a plan that drops or retires a table holding user
 # data, every table but those scripts/schema-loss.json names, unless `--loss-override "<owner's words>"` names it (the
-# owner, 2026-10-21); a full `--reset` of production needs words naming every table. The owner's other way, a one-time
-# migration, has no mechanism yet: the repair drops every table it finds changed. After the upload, once this deploy's version answers, it opens every object
+# owner, 2026-10-21); a full `--reset` of production needs words naming every table, and a release retiring a class
+# words naming it (`reset.ts retirements`, every deploy). The owner's other way, a one-time migration, has no mechanism
+# yet: the repair drops every table it finds changed. After the upload, once this deploy's version answers, it opens every object
 # once, so each resets itself before a user waits on it, prints what each did and writes each database's census
 # (`scripts/reset.ts tables-plan` and `tables`, scripts/tables-reset.ts).
 # Chosen per release; automatic only for one that only adds tables. Its record goes where a reset's does, and a rerun
@@ -297,6 +298,11 @@ fi
 # The plan is the candidate's lock against the build the deployment serves now, read before the upload replaces it;
 # its record is kept here and published just before the upload, the first moment any object resets.
 KINU_TABLES_RECORD=""
+# A release that retires a class deletes its namespace and every row in it: production refuses one the owner's words
+# (--loss-override) do not name (the owner, 2026-10-21; `reset.ts retirements`). A full --reset deletes every class anyway.
+if [ "$KINU_RESET" != "1" ] && [ "$KINU_ROLLBACK" != "1" ] && [ "$KINU_GATES_ONLY" != "1" ]; then
+  bun "$KINU_ROOT/scripts/reset.ts" retirements "$KINU_ENV" || exit 1
+fi
 if [ "$KINU_RESET_TABLES" = "1" ]; then
   if [ "$KINU_RESET" = "1" ] || [ "$KINU_GATES_ONLY" = "1" ]; then
     echo -e "${RED}--reset-tables keeps every object: --reset deletes them all anyway, and --gates-only stops before the build.${NC}"
@@ -651,6 +657,12 @@ fi
 # plan; and the secret scan, since a credential in a published asset cannot be
 # withdrawn. Every other gate's red is recoverable on staging, so it runs after
 # the upload and gates the promotion instead.
+# The account tokens the deployment needs (DEVBOX_REGISTRY_TOKEN), minted with this deploy's own Cloudflare token once
+# every refusal before it passed, and installed before the account gate reads the Worker's secrets (infra-provision.ts
+# mintAccountToken). One it cannot mint is the gate's red, as an absent secret always was.
+if [ "$KINU_GATES_ONLY" != "1" ]; then
+  bun "$KINU_ROOT/scripts/infra-provision.ts" "$KINU_ENV" --account-tokens || echo -e "${BOLD}An account token could not be minted; the account gate names it.${NC}"
+fi
 if [ "$KINU_PROMOTE" != "1" ]; then
   if ! run_phase upload; then
     echo -e "${RED}The upload checks are red, so nothing was uploaded.${NC}"
@@ -1365,9 +1377,9 @@ fi
 # own: an invocation that ended in an uncaught exception or that the platform
 # ended, a terminal effect that failed or was left owed, an object started as
 # often as the product calls a wake loop, an alarm with nothing to watch. Each
-# is a red of this deploy whatever its tests said, in the report under
-# `telemetry` (L18); so is telemetry it cannot read, and telemetry whose reads
-# still disagree after an hour. Its window ends when the wave's last row that
+# is a notice of this deploy, in the report under `telemetry`, and holds
+# nothing (the owner, 2026-10-23: "Monitors don't block"); so is telemetry it
+# cannot read, and telemetry whose reads still disagree after an hour. Its window ends when the wave's last row that
 # drove the deployment did (the ladder's `traffic` mark), not at its verdict:
 # 99.96% of a window's rows have landed three minutes after its end
 # (`SETTLE_HOLD_MS`), so the first read then that agrees with the one before it
@@ -1381,10 +1393,8 @@ if [ "$KINU_ENV" = "staging" ] && [ "${DEPLOY_PUBLISHED:-0}" = "1" ] && [ -n "$K
   echo -e "${BOLD}Step 5b: What version $KINU_VERSION did on staging${NC}"
   KINU_TRAFFIC_ENDED="$(report when traffic)" || KINU_TRAFFIC_ENDED=""
   bun "$KINU_ROOT/scripts/prod-logs.ts" version "$KINU_VERSION" --worker "$KINU_WORKER" --since "$KINU_LIVE_AT" \
-    ${KINU_TRAFFIC_ENDED:+--until "$KINU_TRAFFIC_ENDED"} --keep-windows "$KINU_ENV" || {
-    KINU_REDS=1
-    reported_red telemetry || report note telemetry "the telemetry read" "scripts/prod-logs.ts ended red and named no finding of its own"
-  }
+    ${KINU_TRAFFIC_ENDED:+--until "$KINU_TRAFFIC_ENDED"} --keep-windows "$KINU_ENV" \
+    || report notice telemetry "the telemetry read" "scripts/prod-logs.ts found something; each finding is a notice here, and none holds the deploy"
 fi
 
 # ── Step 6: The record, or the history and the evals ─────────────

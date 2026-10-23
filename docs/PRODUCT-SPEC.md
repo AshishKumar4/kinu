@@ -79,7 +79,7 @@ Each name keeps one meaning across the product. Workspace, agent, conversation, 
 These rules govern every feature below.
 
 1. **One workspace file plane.** The workspace owns one canonical base filesystem. Agent homes and private temporary paths are views inside it, not separate copies of the project.
-2. **Shared workspace state is explicit.** In the cloud product, the main agent and its subagent and exploration actors share one workspace SQLite store. Agent identity and access rules still partition the records.
+2. **Shared workspace state is explicit.** In the cloud product, the workspace object holds the shared files, roster, ledgers and memory index. Each agent, main included, keeps its own conversation, turns, claims and run events in its own isolate's SQLite.
 3. **Shared storage is not shared authority.** Sharing a database gives an actor no access to another actor's private context, the owner's credentials or policy tables.
 4. **One core for full agents.** Main, persistent, temporary and tool-using exploration actors run the same core turn. Their wrappers supply identity, role, lifetime, context seed and task-specific ports.
 5. **Visible state is truthful.** Queued, running, waiting for approval, failed, cancelled, completed and missing are different states. A transport acknowledgement is not a completed task.
@@ -97,7 +97,7 @@ These rules govern every feature below.
 
 ### 4.1 Current hosted architecture
 
-A hosted workspace has a root `OrchestratorAgent` Durable Object. Its SQLite storage backs the canonical Nimbus workspace and every actor's state. The main agent, its hires, its ask-by-role temporaries, its heads, its swarm nodes and its MCTS branches are logical actors bound by one `ActorHost` over that database, with `actor_id` leading the key of every actor-owned row. A database export is therefore a snapshot of every retained actor, not only the main one.
+A hosted workspace has a root `OrchestratorAgent` Durable Object. Its SQLite storage backs the canonical Nimbus workspace, the roster, the ledgers and the memory index. Every agent, main included, runs its turns in its own `AgentFacet` isolate with its own SQLite, which keeps its conversation, turn and effect claims and run events; it calls its tools back through workspace RPC. The workspace hosts every agent through its actor host. A workspace export includes every retained agent's isolate database, main's included.
 
 ![Current workspace ownership with one shared actor store](diagrams/product-workspace-current.svg)
 

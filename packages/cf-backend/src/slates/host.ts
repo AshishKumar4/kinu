@@ -8,7 +8,7 @@ import {
 } from '@kinu.run/core/slates';
 import {
   ephemeralSlateAddress, ingressAdmitted, onceMoreIfNotAdmitted, slateTitle, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING,
-  SlateCallRequestSchema, requireWorkModePermission, routeSlateCall, issuedSlateInvocation, slateAddressImpact, SLATE_DRIVEN_MEMBERS,
+  SlateCallRequestSchema, requireWorkModePermission, routeSlateCall, issuedSlateInvocation, SLATE_DRIVEN_MEMBERS,
   isJsonAnswer, JsonValueSchema, isSlateMethodName, answeredRefusal, reoriginateRequest,
   escapeHtml, keptSlateContext, publicPage, sharedBuildRefusal, VIEWER_EXCHANGE_PATH,
   type JsonValue, type SlateRoute, type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateSurfaceValue, type SlateInvocation,
@@ -471,7 +471,7 @@ export class SlateHost {
 
       // Only the owner's own slate, calling as the owner, hires or messages subagents; a hosted actor's slate never does.
       const call = routeSlateCall({ id, request: parsed.output, chain, hosted: callsAs.path.length > 0 });
-      const impact = slateAddressImpact(call.address) ?? 'administer';
+      const { impact } = call;
       const driven = reportOnly && call.address.namespace === 'web' && SLATE_DRIVEN_MEMBERS.includes(call.address.member);
       // An answer's page is never shared or published, so what it calls is no slate's graph.
       const record = (namespace: string, member: string) => { if (source.kind !== 'message') this.controller.usage.record(id, { namespace, member }); };

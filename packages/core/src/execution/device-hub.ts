@@ -1,17 +1,21 @@
 /**
- * Hibernation-aware ownership of device-daemon WebSockets tagged `device:<deviceId>`; `ctx.getWebSockets()`
- * is the liveness truth and tunnels are a rebuilt cache. The toolchain probe lives on the socket attachment,
- * not SQL, so it never outlives the connection it describes.
+ * Hibernation-aware ownership of device-daemon WebSockets, every one tagged `device`; `ctx.getWebSockets()` is the
+ * liveness truth and tunnels are a rebuilt cache. A socket is accepted before it says which device it is (its first
+ * frame, AUTH, does), and tags are fixed at accept, so the device a socket serves is its attachment's. The toolchain
+ * probe lives on the attachment too, not SQL, so it never outlives the connection it describes.
  */
 import { KinuError } from '../obs/error';
 import { diagnostics } from '../obs/log';
 import { attempt, settle } from '../obs/effect';
 import { Effect } from 'effect';
 import type { JsonValue } from '../utils/json';
-import { DeviceTunnel, NO_DEVICE_CONNECTED, type TunnelSocket } from './device-tunnel';
-import { DEVICE_ERRORS, DEVICE_METHOD, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, DEVICE_VERSION_REFUSAL_CLOSE, DEVICE_UPDATE_REQUIRED, deviceFailure } from './device-protocol';
+import { DeviceTunnel, NO_DEVICE_CONNECTED, WS_OPEN, type TunnelSocket } from './device-tunnel';
+import {
+  DEVICE_AUTH_DEADLINE_CLOSE, DEVICE_AUTH_DEADLINE_MS, DEVICE_CREDENTIALS_REJECTED_CLOSE, DEVICE_ERRORS, DEVICE_METHOD, DEVICE_FEATURES,
+  DEVICE_PROTOCOL_VERSION, DEVICE_VERSION_REFUSAL_CLOSE, DEVICE_UPDATE_REQUIRED, deviceFailure,
+} from './device-protocol';
 import { DeviceRelays, parseDeviceRelayFrame, type DeviceRelayRequest } from './device-relay';
-import { REAL_CLOCK } from '../types/clock';
+import { REAL_CLOCK, type Clock } from '../types/clock';
 import { deviceToolchainAnswer, freshDeviceToolchain, type DeviceToolchain } from './device-status';
 import { TOOLCHAIN_PROBE_BINARIES } from './toolchain';
 import { EXECUTOR_CAPABILITIES } from './types';
@@ -20,8 +24,11 @@ import { connections, type Connections, type ConnectionSocket, type ConnectionsC
 import { z } from 'zod/v4';
 import * as v from 'valibot';
 
+/** Every device socket's one tag, from accept, before its AUTH names the device. */
+const DEVICE_SOCKET_TAG = 'device';
 
-const DEVICE_WS_TAG_PREFIX = 'device:';
+/** The close reason the daemon reads as its successor having connected (`SOCKET_REPLACED_REASON` in pc-agent). */
+const DEVICE_SOCKET_REPLACED_REASON = 'replaced by a new connection';
 
 /** Probe round-trip deadline; short because it runs on turn assembly. A miss leaves the row unmeasured. */
 const PROBE_TIMEOUT_MS = 3_000;
@@ -53,12 +60,11 @@ const DeviceAttachmentSchema = z.object({
   desktop: z.unknown().optional(),
 });
 
+/** A socket accepted and not yet authenticated: when it is closed if no AUTH has come. */
+const UnauthenticatedAttachmentSchema = z.object({ awaitingAuthUntil: AttachmentNumberSchema });
+
 export interface DeviceSocketCtx extends ConnectionsContext<DeviceSocket> {
   acceptWebSocket(ws: DeviceSocket, tags: string[]): void;
-}
-
-function deviceTag(deviceId: string): string {
-  return `${DEVICE_WS_TAG_PREFIX}${deviceId}`;
 }
 
 /** Device id of a hibernatable socket, or null for agents-SDK sockets (attachments carry `__pk`). */
@@ -81,27 +87,95 @@ export class DeviceSocketHub {
 
   private readonly sockets: Connections<z.infer<typeof DeviceAttachmentSchema>, DeviceSocket>;
 
-  constructor(ctx: DeviceSocketCtx) {
+  private readonly pending: Connections<z.infer<typeof UnauthenticatedAttachmentSchema>, DeviceSocket>;
+
+  /** Each unauthenticated socket's deadline timer, disarmed by its AUTH. A wake loses them; the attachment keeps the
+   *  deadline, read again on the socket's next frame. */
+  private readonly deadlines = new Map<DeviceSocket, () => void>();
+
+  constructor(private readonly ctx: DeviceSocketCtx, private readonly clock: Clock = REAL_CLOCK) {
     this.sockets = connections(ctx, DeviceAttachmentSchema);
-  }
-
-  /** Accept a daemon socket, replacing any previous one. A replacement is reported, never silent. */
-  accept(deviceId: string, server: DeviceSocket): void {
-    this.dropTunnel(deviceId);
-
-    for (const _socket of this.sockets.list(deviceTag(deviceId))) {
-      diagnostics.event('device.socket_replaced', { device: deviceId });
-    }
-
-    this.sockets.accept(server, { key: deviceTag(deviceId), attachment: { device: deviceId } });
+    this.pending = connections(ctx, UnauthenticatedAttachmentSchema);
   }
 
   /**
-   * What a daemon's HELLO admits it to. `serve`: the current protocol, every method announced; its socket carries
-   * calls. `update`: the protocol before this one, held open only so the hub can push it the build that brings it
-   * here, with no tunnel, so no call reaches it. Anything else is refused and its socket closed.
+   * Accept a daemon's socket before it says which device it is. It serves nothing and replaces nothing until `admit`
+   * binds it, and is closed with {@link DEVICE_AUTH_DEADLINE_CLOSE} if no AUTH binds it in time.
    */
-  hello(deviceId: string, version: number, features: readonly string[]): 'serve' | 'update' | 'refused' {
+  acceptUnauthenticated(server: DeviceSocket): void {
+    this.ctx.acceptWebSocket(server, [DEVICE_SOCKET_TAG]);
+    this.pending.write(server, { awaitingAuthUntil: this.clock.now() + DEVICE_AUTH_DEADLINE_MS });
+    this.deadlines.set(server, this.clock.after(DEVICE_AUTH_DEADLINE_MS, () => this.closeIfUnauthenticated(server)));
+  }
+
+  /** Whether `ws` is a device socket that has not authenticated yet, whose first frame must be AUTH. */
+  isUnauthenticated(ws: DeviceSocket): boolean {
+    return this.pending.read(ws) !== null;
+  }
+
+  /** Whether `ws` may still authenticate: unauthenticated and open, before its deadline. One past it is closed here,
+   *  as a wake loses the timer that would have. */
+  withinAuthDeadline(ws: DeviceSocket): boolean {
+    return this.isUnauthenticated(ws) && ws.readyState === WS_OPEN && !this.closeIfUnauthenticated(ws);
+  }
+
+  /** Closes `ws` as a dead credential: its AUTH named no live ticket. */
+  refuseCredentials(ws: DeviceSocket, reason: string): void {
+    this.disarm(ws);
+    diagnostics.event('device.auth_refused', { reason });
+    ws.close(DEVICE_CREDENTIALS_REJECTED_CLOSE, reason);
+  }
+
+  /** True when `ws` closed before it authenticated: its deadline goes with it, and nothing else was its. */
+  forgetUnauthenticated(ws: DeviceSocket): boolean {
+    if (!this.isUnauthenticated(ws)) return false;
+    this.disarm(ws);
+
+    return true;
+  }
+
+  /** True when `ws` was still unauthenticated at its deadline, and is closed now. */
+  private closeIfUnauthenticated(ws: DeviceSocket): boolean {
+    const awaiting = this.pending.read(ws);
+
+    if (awaiting === null || ws.readyState !== WS_OPEN || this.clock.now() < awaiting.awaitingAuthUntil) return false;
+    this.disarm(ws);
+    diagnostics.event('device.auth_deadline', {});
+    ws.close(DEVICE_AUTH_DEADLINE_CLOSE, 'no AUTH frame arrived in time');
+
+    return true;
+  }
+
+  private disarm(ws: DeviceSocket): void {
+    this.deadlines.get(ws)?.();
+    this.deadlines.delete(ws);
+  }
+
+  /** Bind an authenticated socket to its device, replacing any socket the device had. A replacement is reported,
+   *  never silent. */
+  admit(deviceId: string, ws: DeviceSocket): void {
+    this.disarm(ws);
+    this.dropTunnel(deviceId);
+
+    for (const old of this.socketsOf(deviceId)) {
+      diagnostics.event('device.socket_replaced', { device: deviceId });
+      old.close(1000, DEVICE_SOCKET_REPLACED_REASON);
+    }
+
+    this.sockets.write(ws, { device: deviceId });
+  }
+
+  /** The device's open sockets: one, but for the turn a newcomer replaces it in. */
+  private socketsOf(deviceId: string): DeviceSocket[] {
+    return this.sockets.list(DEVICE_SOCKET_TAG).filter((ws) => this.sockets.read(ws)?.device === deviceId);
+  }
+
+  /**
+   * What a daemon's HELLO admits it to. `serve`: this protocol, every method announced; its socket carries calls.
+   * Anything else is refused and its socket closed. No earlier protocol is held open for an update push: a daemon gets
+   * here only through AUTH, which only this protocol speaks, so an earlier one never reaches a HELLO.
+   */
+  hello(deviceId: string, version: number, features: readonly string[]): 'serve' | 'refused' {
     if (version === DEVICE_PROTOCOL_VERSION && DEVICE_FEATURES.every((method) => features.includes(method))) {
       this.annotate(deviceId, { protocolVersion: version, features: [...features] });
 
@@ -111,8 +185,6 @@ export class DeviceSocketHub {
     // Whatever this socket was admitted to before, it serves nothing now: no tunnel, and none rebuilt after a wake.
     this.dropTunnel(deviceId);
     this.withdraw(deviceId);
-
-    if (version === DEVICE_PROTOCOL_VERSION - 1) return 'update';
     this.refuse(deviceId);
 
     return 'refused';
@@ -125,7 +197,7 @@ export class DeviceSocketHub {
   }
 
   liveSocket(deviceId: string): DeviceSocket | null {
-    return this.sockets.get(deviceTag(deviceId));
+    return this.socketsOf(deviceId)[0] ?? null;
   }
 
   /** The fresh toolchain answer, or null: never asked, unable to answer, or stale. Null never means "has none". */
@@ -283,7 +355,7 @@ export class DeviceSocketHub {
   connectedDeviceIds(): string[] {
     const ids: string[] = [];
 
-    for (const ws of this.sockets.list()) {
+    for (const ws of this.sockets.list(DEVICE_SOCKET_TAG)) {
       const id = this.sockets.read(ws)?.device;
 
       if (id && !ids.includes(id)) ids.push(id);
@@ -367,6 +439,6 @@ export class DeviceSocketHub {
   close(deviceId: string, reason: string): void {
     this.dropTunnel(deviceId);
 
-    for (const ws of this.sockets.list(deviceTag(deviceId))) ws.close(1000, reason);
+    for (const ws of this.socketsOf(deviceId)) ws.close(1000, reason);
   }
 }

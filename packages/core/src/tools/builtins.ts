@@ -105,7 +105,11 @@ export type BuiltinStoreInputs = Pick<BuiltinToolDeps, 'rt' | 'conversations' | 
  * memory (the account's only beside its facts), and its task list. The one reading of them for its native tools and,
  * through those tools' served set, its programs.
  */
-export function builtinStoreDeps(deps: BuiltinStoreInputs): StoreDeps {
+export function builtinStores(deps: BuiltinStoreInputs): ServedStores {
+  return serveStores(builtinStoreDeps(deps));
+}
+
+function builtinStoreDeps(deps: BuiltinStoreInputs): StoreDeps {
   const { rt, facts } = deps;
   const account = facts === undefined ? undefined : deps.account;
 
@@ -171,7 +175,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps, served?: ServedStores):
   const { rt } = deps;
 
   const budget = deps.contextBudget ?? new TurnContextBudget();
-  const stores = served ?? serveStores(builtinStoreDeps({ ...deps, contextBudget: budget }));
+  const stores = served ?? builtinStores({ ...deps, contextBudget: budget });
   const escalations = deps.escalations ?? new TurnEscalationLedger();
   // `diagnostics`, not console: the host decides the sink (obs/log.ts).
   const logger = deps.logger ?? diagnostics;
@@ -306,7 +310,7 @@ export interface ServedTools {
 
 /** The store operations a surface's deps serve: `served` when its caller holds them, else served once from the deps. */
 export function surfaceStores(deps: BuiltinStoreInputs & { readonly served?: ServedStores }): ServedStores {
-  return deps.served ?? serveStores(builtinStoreDeps(deps));
+  return deps.served ?? builtinStores(deps);
 }
 
 export function buildToolSurface(surfaceDeps: ToolSurfaceDeps): ToolSet {

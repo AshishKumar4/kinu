@@ -14,6 +14,7 @@ import {
 import type { UserCaller } from '@kinu.run/core';
 import { createHubDeviceTransport } from '@kinu.run/core';
 import { CONSENT_REFUSED } from './helpers/device-harness';
+import { registerTestDevice } from './helpers/device-key';
 
 const WORKSPACE = 'workspace-a';
 
@@ -37,8 +38,8 @@ interface Fleet extends TestUserDO {
 async function twoDaemons(): Promise<Fleet> {
   const harness = createTestUserDO({ deviceResponder: daemonOn });
   const owner = await testOwner();
-  const { deviceId: macId } = await harness.userDO.registerDevice(owner, 'ashish@mac');
-  const { deviceId: rigId } = await harness.userDO.registerDevice(owner, 'mrwhite@rig');
+  const { deviceId: macId } = await registerTestDevice(harness.userDO, 'ashish@mac', owner);
+  const { deviceId: rigId } = await registerTestDevice(harness.userDO, 'mrwhite@rig', owner);
   const mac = harness.attachDaemon(macId);
   const rig = harness.attachDaemon(rigId);
   await harness.sendDeviceHello({

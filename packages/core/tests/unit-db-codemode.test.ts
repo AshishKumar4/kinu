@@ -4,6 +4,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import * as v from 'valibot';
 import { createTestActors, present, testActorHandle, type TestActors } from '@kinu.run/test-utils';
 import { makeExecRaw, makeSql, makeSqlExec } from './helpers';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
@@ -820,5 +821,107 @@ describe('agent data in the one workspace snapshot', () => {
       finally { target.close(); }
     }
     finally { w.close(); }
+  });
+});
+
+/** `db.sql` over the shared tables: what it reaches is read off the program SQLite compiles, never off its text. */
+describe('db.sql', () => {
+  const PEOPLE = "CREATE TABLE IF NOT EXISTS app_people (id INTEGER PRIMARY KEY, name TEXT NOT NULL, team TEXT)";
+
+  test('a CREATE TABLE declares a shared table the typed reads and a fork keep, and SQL reads and writes it', () => {
+    const w = world();
+
+    try {
+      const a = w.store(w.a);
+
+      expect(a.sql(PEOPLE, [])).toEqual({ rows: [], rowsAffected: 0 });
+      expect(a.schema('people')).toMatchObject({ scope: 'workspace', columns: [
+        { name: 'id', type: 'integer', primaryKey: true }, { name: 'name', type: 'text', notNull: true }, { name: 'team', type: 'text' },
+      ] });
+      expect(a.sql('INSERT INTO app_people (name, team) VALUES (?, ?), (?, ?)', ['Ada', 'core', 'Lin', null])).toEqual({ rows: [], rowsAffected: 2 });
+      // Another agent reads the same rows: the table is the workspace's.
+      expect(w.store(w.b).sql('SELECT p.name, count(*) AS n FROM app_people p GROUP BY p.name ORDER BY p.name', [])).toEqual({
+        rows: [{ name: 'Ada', n: 1 }, { name: 'Lin', n: 1 }], rowsAffected: 0,
+      });
+      expect(a.select('people', { orderBy: [{ column: 'id', dir: 'asc' }] })).toEqual([{ id: 1, name: 'Ada', team: 'core' }, { id: 2, name: 'Lin', team: null }]);
+      expect(a.sql('UPDATE app_people SET team = ? WHERE team IS NULL RETURNING name', ['ops'])).toEqual({ rows: [{ name: 'Lin' }], rowsAffected: 1 });
+      expect(w.events(w.a).flatMap((event) => (event.type === 'db_op' ? [`${event.op}:${event.table}:${String(event.rowsAffected)}`] : [])))
+        .toEqual(['createTable:people:0', 'sql:people:2', 'sql:people:1']);
+    } finally { w.close(); }
+  });
+
+  test("an agent's own tables, its private ones and the host's are out of reach, however the statement reaches them", async () => {
+    const w = world();
+
+    try {
+      const a = w.store(w.a);
+
+      a.sql(PEOPLE, []);
+      a.createTable({ name: 'mine', scope: 'actor', columns: [{ name: 'k', type: 'text' }] });
+      a.createTable({ name: 'secret', scope: 'private', columns: [{ name: 'k', type: 'text' }] });
+      const provider = createDbCodemodeProvider(a, { private: true });
+      const sql = present(Object.entries(provider.tools).find(([name]) => name === 'sql')?.[1], 'db.sql').execute;
+      const refusal = async (query: string): Promise<string> => v.parse(v.looseObject({ reason: v.optional(v.string()) }), await sql(query, [])).reason ?? 'ran';
+
+      for (const query of [
+        'SELECT * FROM mine', 'SELECT * FROM secret', 'SELECT * FROM app_mine', 'SELECT * FROM app_secret',
+        'SELECT * FROM workspace_actors', 'SELECT name FROM app_people WHERE id IN (SELECT rowid FROM workspace_actors)',
+        'WITH x AS (SELECT * FROM run_events) SELECT * FROM x', 'SELECT * FROM app_people JOIN workspace_actors',
+        'INSERT INTO app_people (name) SELECT name FROM workspace_actors', 'CREATE TABLE copy AS SELECT * FROM workspace_actors',
+        'DELETE FROM agent_data_tables', 'SELECT * FROM sqlite_master', "SELECT * FROM pragma_table_info('app_people')",
+        'DROP TABLE app_people', 'ALTER TABLE app_people ADD COLUMN x TEXT', 'CREATE INDEX px ON app_people(name)', 'PRAGMA table_list',
+        'SELECT 1; DELETE FROM app_people', 'CREATE TABLE people (id INTEGER)', 'SELECT :name', 'SELECT ?1',
+      ]) expect([query, await refusal(query)]).toEqual([query, expect.stringMatching(/^(bad_input|denied)$/u)]);
+
+      expect(await refusal('CREATE TABLE app_mine (k TEXT)')).toBe('denied');
+      expect(a.sql('SELECT count(*) AS n FROM app_people', []).rows).toEqual([{ n: 0 }]);
+    } finally { w.close(); }
+  });
+
+  test('a write is held to Plan as a typed write to a shared table is; a read is not', () => {
+    const w = world();
+
+    try {
+      const a = w.store(w.a);
+
+      a.sql(PEOPLE, []);
+      inWorkMode('plan', () => {
+        expect(a.sql('SELECT count(*) AS n FROM app_people', []).rows).toEqual([{ n: 0 }]);
+        expect(() => a.sql('WITH x AS (SELECT 1) DELETE FROM app_people WHERE id IN (SELECT * FROM x)', [])).toThrow();
+      });
+    } finally { w.close(); }
+  });
+
+  test('typed calls and SQL read and write one table, whatever its columns and aliases share its name', () => {
+    const w = world();
+
+    try {
+      const a = w.store(w.a);
+
+      a.createTable({ name: 'budget', scope: 'workspace', columns: [{ name: 'budget', type: 'integer' }, { name: 'app_budget', type: 'text' }] });
+      a.apply({ op: 'insert', table: 'budget', rows: [{ budget: 5, app_budget: 'typed' }] });
+      expect(a.sql('INSERT INTO app_budget (budget, app_budget) VALUES (?, ?)', [7, 'sql'])).toEqual({ rows: [], rowsAffected: 1 });
+      expect(a.sql('SELECT budget AS budget, app_budget AS app_budget FROM app_budget AS budget ORDER BY budget.budget', [])).toEqual({
+        rows: [{ budget: 5, app_budget: 'typed' }, { budget: 7, app_budget: 'sql' }], rowsAffected: 0,
+      });
+      expect(a.select('budget', { orderBy: [{ column: 'budget', dir: 'desc' }] })).toEqual([{ budget: 7, app_budget: 'sql' }, { budget: 5, app_budget: 'typed' }]);
+      // The typed name is not the SQL one: SQL is told the table's stored name.
+      expect(() => a.sql('SELECT * FROM budget', [])).toThrow('app_<name>');
+    } finally { w.close(); }
+  });
+
+  test('its placeholders are counted and its answer bounded, by name', () => {
+    const w = world();
+
+    try {
+      const a = w.store(w.a);
+
+      a.sql(PEOPLE, []);
+      expect(() => a.sql('SELECT * FROM app_people WHERE id = ?', [])).toThrow('holds 1 `?` and params 0 values');
+      expect(() => a.sql(`SELECT ${Array.from({ length: 101 }, () => '?').join(', ')}`, Array.from({ length: 101 }, (_, at) => at))).toThrow('at most 100');
+      expect(() => a.sql("WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 1001) SELECT x FROM c", [])).toThrow('at most 1000');
+      // A `?` inside a string or a comment is no placeholder.
+      expect(a.sql("SELECT '?' AS q -- ?\n", []).rows).toEqual([{ q: '?' }]);
+    } finally { w.close(); }
   });
 });

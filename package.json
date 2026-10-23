@@ -155,7 +155,7 @@
   "dependencies": {
     "ai": "7.0.148",
     "valibot": "^1.5.0",
-    "zod": "^4.3.6"
+    "zod": "^4.6.7"
   },
   "//devDependencies:bun": "Bun 1.4.3 carries both oven-sh/bun#44279 (retired-realm crashes, which the canary pin was for) and #44581 (13a98b0dbd), whose absence left a synchronous spawn spinning over a zombie child: the production deploy contract row went silent in 12 of 48 runs on canary 9bd19c98e and 0 of 96 on 1.4.3 (2026-10-14, #83).",
   "//devDependencies:@nimbus-sh/runtime": "Nimbus numbers a runtime rebuild as a prerelease of its upstream version (3.13.14-1, the reproducible CPython core 0.16 requires), and semver ranks it below the plain 3.13.14, so a caret picks the older build. Both stay exact; move them with core.",
@@ -186,7 +186,7 @@
     "oxlint": "^1.78.0",
     "oxlint-tsgolint": "^7.0.2001",
     "postcss": "^8.5.28",
-    "puppeteer": "^25.10.0",
+    "puppeteer": "^25.16.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "sql-parser-cst": "^0.42.1",
@@ -215,7 +215,7 @@
   "//patchedDependencies:workers-ai-provider": "4.0.1's binding chat model (as 4.0.0's) hangs on a body workerd holds open after `data: [DONE]`, misreads the shapes `Ai.run` returns when a concurrent call rewrote its shared options, drops binding refusals' status and Retry-After, asks no stream usage, emits no raw chunks, swallows unreadable events, ignores call headers (`x-session-affinity`), merges index-less native tool calls, finishes tool calls as `stop`, reports `usage.raw` as `{ total }`, reads no `workersAi` options, and streams a token twice when a chunk carries it in both `response` and `choices` (llama-3.3-70b). Delete once cloudflare/ai ships the fixes drafted in kinu-logs/agents-upstream/workers-ai-provider-binding-stream.md and workers-ai-provider-json-stream.md.",
   "//patchedDependencies:@ai-sdk/provider-utils": "5.0.65's `parseJsonEventStream` (as 5.0.53's) ignores `data: [DONE]`, so a producer that keeps the body open after it keeps the model stream open. Delete once vercel/ai ships the fix drafted in kinu-logs/agents-upstream/ai-sdk-sse-done-usage-only-chunk.md.",
   "//patchedDependencies:@ai-sdk/openai-compatible": "3.0.75 (as 3.0.62) requires `choices` on every chunk, so Cloudflare's usage-only report without it (KINU-049) fails the step; and it converts the whole history again every step, which the patch converts once per frozen message (drafted in kinu-logs/main/AI-SDK-ASKS.md). Delete once vercel/ai ships the fix drafted in kinu-logs/agents-upstream/ai-sdk-sse-done-usage-only-chunk.md.",
-  "//patchedDependencies:@nimbus-sh/core": "0.27.0's session has no revision-checked write (NIMBUS-ASKS #55): the supervisor op writeFileIfRevision writes a whole file only over the revision its caller read (0: none), stat and write in one synchronous step, a file with no revision of its own refused ENOTSUP, and SessionRpc declares _rpcWriteFileIfRevision; worker and sdk carry the rest. And node-compat's createNodeFs extends node:fs's ReadStream and WriteStream when it is made, so it throws in the eval isolate (compatibility date 2025-06-01, where getBuiltinModule('node:fs') is undefined: armada 20261022090043-dc8e2d79); with none its streams are ENOSYS, as a face without descriptors already makes them; and its readFile with an encoding other than utf8 (base64, hex) answered the bytes decoded as UTF-8, where Node answers them in that encoding (#70). Source and dist. Delete once Nimbus ships asks #55 and #70 (/mnt/local/kinu/tmp/nimbus-asks/).",
+  "//patchedDependencies:@nimbus-sh/core": "0.27.0's session has no revision-checked write (NIMBUS-ASKS #55): the supervisor op writeFileIfRevision writes a whole file only over the revision its caller read (0: none), stat and write in one synchronous step, a file with no revision of its own refused ENOTSUP, and SessionRpc declares _rpcWriteFileIfRevision; worker and sdk carry the rest. And node-compat's createNodeFs extends node:fs's ReadStream and WriteStream when it is made, so it throws in the eval isolate (compatibility date 2025-06-01, where getBuiltinModule('node:fs') is undefined: armada 20261022090043-dc8e2d79); with none its streams are ENOSYS, as a face without descriptors already makes them; and its readFile with an encoding other than utf8 (base64, hex) answered the bytes decoded as UTF-8, where Node answers them in that encoding (#70). And setDefaultAcl let a confined principal set any default ACL on a directory it owns, so a share's viewer, refused `chmod o+w`, could make the same grant with `setfacl -d -m o::rwx` and open the project to the workspace's other agents: a confined principal's ACL may now only lose group and other bits of the one the directory holds, and what it creates grants others no write whatever its process umask (#74). Source and dist. Delete once Nimbus ships asks #55, #70 and #74 (/mnt/local/kinu/tmp/nimbus-asks/).",
   "//patchedDependencies:@nimbus-sh/worker": "0.25.0 carries #55's _rpcWriteFileIfRevision (session/rpc.js, NimbusSession and the hosted session, all sending core's op). A program's tls.connect({ socket }) under an egress still fails with ERR_NIMBUS_EGRESS_STARTTLS, so STARTTLS (SMTP 587, pg ssl) cannot start; the staged shims (public/_assets/runtime/node-shims-df298aa46ab0bb20.js, its pinned sha256 re-stamped in dist/node-shims-artifact.generated.js) key every plain socket under an egress and ask the egress for TLS over a keyed one in-band, which Kinu's egress makes on the same server connection (#46: same-socket STARTTLS waits on workerd). Asks #42, #56 and #57's hunks are gone: shipped by 0.25 and 0.26. Delete with #55 and #46.",
   "//patchedDependencies:@nimbus-sh/sdk": "0.21.0's files plane still writes with no precondition, so a hosted agent's checked save would read the file, compare it and write it in two calls, losing a write that landed between. files.writeIfRevision(path, content, expected) writes only over the revision its stat gave (0: no file), checked and written in one synchronous step at the session, through core's writeFileIfRevision supervisor op and worker's _rpcWriteFileIfRevision; a file with no revision (a mount's) is refused ENOTSUP. The remote endpoint does not carry it. Delete once Nimbus ships ask #55 (/mnt/local/kinu/tmp/nimbus-asks/).",
   "//patchedDependencies:vite": "8.3.4's non-HMR prepareStackTrace runner retains fetched source beside V8's executed source and inline map URL. Cache the map once, omit its payload from execution, and release consumed source. HMR and native Node source maps stay unchanged; remove this patch when Vite releases that ownership.",
@@ -229,6 +229,7 @@
   "//overrides:sharp": "sharp is pinned because every Miniflare release holds it at 0.35.4: GHSA-wq5f-xc86-pv6w (librsvg CVE-2026-96889) is fixed in 0.35.5. Delete it once Miniflare depends on 0.35.5 or later.",
   "//overrides:shell-quote": "shell-quote resolves 1.8.4 under react-devtools-core (`^1.6.1`): GHSA-pqg4-j6r4-53mv, command injection in quote(), is fixed in 1.11.0. Delete it once the resolve lands 1.11.0 or later without it.",
   "//overrides:@cloudflare/sandbox": "The sandbox's zod is pinned here because @cloudflare/sandbox depends on one exact zod (1.0.0 on 4.5.4, 1.0.2 on 4.6.7), so the resolve hoisted its version and nested a copy of ours under every other dependent: core, cf-backend, cli-backend, the MCP client, core, server and sdk, the four Nimbus packages and the mossaic SDK. The Worker bundled each directory as its own zod, about 1.2 MB of module-scope data at load (worker-heap attribution, 2026-10-07). Delete it once the sandbox's dependency is a range.",
+  "//overrides:@cloudflare/vitest-plugin": "The vitest plugin's zod is pinned here because @cloudflare/vitest-plugin 1.3.4 depends on exactly 4.4.3, which carries GHSA-mrhx-c7xc-m3w5 (memory exhausted validating oversized constrained collections), fixed in 4.6.6. 4.6.7 is the same major and the one copy everything else resolves. Delete it once the plugin depends on 4.6.6 or later.",
   "//overrides:@modelcontextprotocol/server": "vgpu 0.4.1 (still at 0.6.0) pins 2.0.0 exactly; advisories 1242647, 1242648 and 1242666 (shared transport cross-delivery, validation memory exhaustion, foreign bearer tokens) are fixed in 2.3.0. agents 0.29.0 peers 2.3.1 itself, so only vgpu's copy is overridden. Drop once vgpu moves past 2.3.0.",
   "overrides": {
     "basic-ftp": "^6.2.1",
@@ -243,7 +244,10 @@
     "sharp": "0.35.5",
     "shell-quote": "^1.11.0",
     "@cloudflare/sandbox": {
-      "zod": "4.6.5"
+      "zod": "4.6.7"
+    },
+    "@cloudflare/vitest-plugin": {
+      "zod": "4.6.7"
     },
     "vgpu": {
       "@modelcontextprotocol/server": "2.3.1"

@@ -51,13 +51,17 @@ Later note: `contract-cache-hit.test.ts` (3534aabd5) pins a nonzero
 `cacheRead` per caching provider against a mocked provider cache; no
 live-provider read is pinned.
 
-C3. External events reach a running turn at its next step as one spliced user
-message at the step tail. The message is re-applied at the same index on every
-later step and is gone at turn end. A queued event becomes its own durable
-programmatic turn. Delivery decides which path an event takes (live turn
-versus idle actor); event kind does not. Reviewed 2026-09-13 against
-`orchestrator/inbox.ts` and `prompting/step-injections.ts`; pinned by
-`unit-step-injections.test.ts` and `unit-signals.test.ts`.
+C3. External events reach a running turn at its next step as one user message at
+the step tail, landed first as a durable input row, as a person's words are
+(`UserSteerDeps.onEvents`). The agent's later turns read it, an aborted or
+stopped turn does not hand it over again, and the chat draws it at the step
+that read it. A queued event becomes its own durable programmatic turn.
+Delivery decides which path an event takes (live turn versus idle actor);
+event kind does not. Revised 2026-10-23, reversing "gone at turn end": the
+durability canary showed a subagent's report read mid-turn left no row the
+root's later turns could read, and each such splice broke the next turn's
+prompt-cache prefix where it had stood. Pinned by `unit-signals.test.ts`
+('a delivery landed mid-turn') and `unit-transcript-placement.test.ts`.
 
 C4. Events carry 26-character ULIDs that the agent does not see. The only id
 the agent can name back is a peer ask's `event_id` reply route. Reviewed
@@ -404,6 +408,10 @@ with what is the person's: its UserDO, its mailbox (MailboxDO, every box of
 the account), then its Drive's user object before each of its shards, all to
 the same moment, so no shard's sweep meets a reference the restored tenant
 names; an account goes back by moment only, as a bookmark is one object's.
+Its shards are those the restored Drive's records name (`namedShards`); a
+pool shard none names held none of its bytes and is answered `skipped`: one
+that never stored a chunk has no history (staging dd3066a00, 2026-10-23, on
+trial-509: the restore stopped there though every byte was back).
 Its workspaces are each their own restore. The script writes an undo file
 naming each object's bookmark just before; `--undo=<file>` takes the restore
 back. Only `ops-restore.ts` may make the PITR calls
@@ -1331,6 +1339,12 @@ a facet of its own) and D13's "every agent's advisor in core `ActorAdvisor`".
   `standardizePrompt`, zod over the whole prompt each call, growing with the
   history); the fifth ended on a driver request the harness's fetch timed out.
   The gate is a script, not yet a tier row, until that timeout is settled.
+  Then a turn's output, read one message at a time in one turn at its end,
+  held the screenshot turn's agent 101 ms, and a 512 kB slice with its sizing
+  97-113 ms: the output reads through the same slices, now 256 kB, the sizing
+  in a turn of its own. On 9d3891adf the 3 readable runs of 4 read 66-85 ms at
+  most (a major GC in the screenshot agent; its turn's end commit), and the
+  production turn stays 378 statements.
   A host that pauses the thread 5 ms mid-turn splits a turn as a wait does,
   so the driver runs a synchronous control turn every lap on workerd's one
   thread, and a run that read a pause inside one, or no control turn, is
@@ -2031,6 +2045,17 @@ over (the owner's decision, 2026-10-20: "Drop changed tables"). It replaces the 
 its DDL called a regenerable cache, and refused where rows could not be copied. That repair, its cache marking, its
 copy-back and its foreign-key group rebuild are gone; the owner's rule had been that a schema change resets only its
 tables, with no migrations and no compatibility code.
+- The owner's rule of 2026-10-21 ("once users come, we either have a one time migration in the workspace onStart, or
+  alter only tables where data loss is acceptable") is kept by the production loss guard (`scripts/schema-loss.json`,
+  `--loss-override`); no generic migration mechanism is built (Main, 2026-10-23: no change waits for one). A change
+  that must keep rows writes its own one-time migration for its own tables, reviewed then. Measured for it, on a
+  throwaway SQLite Durable Object (compat 2026-09-30, 2026-10-23, deleted after): `PRAGMA foreign_keys` is 1 and stays
+  1; `PRAGMA legacy_alter_table = ON` takes, yet `ALTER TABLE p RENAME TO p_old` still rewrites every child's
+  `REFERENCES p` to `p_old`, and dropping `p_old` then ran the children's ON DELETE CASCADE (their rows gone) and SET
+  NULL. `defer_foreign_keys` defers the check, not the actions. So copying a parent aside and dropping it keeps a child
+  only where every foreign key naming it is ON DELETE NO ACTION, which re-inserting the parent's rows satisfies before
+  the transaction's check; a CASCADE, SET NULL, SET DEFAULT or RESTRICT child must be staged and restored too. An
+  unlanded start, with its review's findings: branch feat/schema-migrations.
 - Kept: each object applies the reset to its own database the first time the new build opens it, before any event reads
   it (Cloudflare's list of objects misses classes, which is why a fleet walk alone failed); the genesis stamps, and
   refusing a deploy that moves one without `--reset-tables`; `scripts/reset.ts tables-plan` naming every table it will
@@ -2299,9 +2324,16 @@ Later note (2026-10-23, ledger 1018-xar): the owner chose (2026-10-19T19:44:35Z)
 that a share's commands write "your project too, as today". A workspace made
 since then has its project tree (`/home/main`) setgid to the project group
 (1001), sticky, with a group-writable default ACL, set by the boot that makes
-main's `.kinu` (`provisionProjectHome`); the viewer and the workspace agent's
-session carry that group. Sticky, because write on the root would otherwise let
-the viewer remove or rename `SOUL.md` and `.kinu`. `.kinu`, `SOUL.md`, every
+main's `.kinu` (`provisionProjectHome`), before it makes `.kinu`, so a boot that
+dies between the two is finished by the next; the viewer and the workspace
+agent's session carry that group. Sticky, because write on the root would
+otherwise let the viewer remove or rename `SOUL.md` and `.kinu`. The viewer is a
+confined principal, so nothing it makes grants others write: Nimbus refuses such
+a chmod, and Kinu's Nimbus patch (ask 74) refuses such a default ACL and keeps
+other-write off what a confined principal creates, whatever its umask, so a
+directory made in its `/tmp` and moved in grants none either. The workspace's
+other agents read the project and write none of it, but for `SOUL.md`, which
+every agent writes through the workspace group (as before). `.kinu`, `SOUL.md`, every
 other home and `/tmp` stay as they were, and an older workspace, which already
 has its `.kinu`, keeps its tree (one whose owner deletes `.kinu` is shared at
 its next boot, as a new one).

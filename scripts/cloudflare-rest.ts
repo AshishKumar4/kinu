@@ -69,6 +69,8 @@ export interface RestRequest {
   /** The API root; a test serves its own. */
   readonly api?: string;
   readonly timeoutMs?: number;
+  /** Hears each answer's status and headers, refused or not, before its text is read. */
+  readonly heard?: (answer: Response) => void;
 }
 
 /** One Cloudflare REST call's answer, as text. A refusal throws a KinuError classified by its status, as any HTTP
@@ -85,6 +87,7 @@ export async function restAnswer(request: RestRequest): Promise<string> {
     signal: AbortSignal.timeout(request.timeoutMs ?? 60_000),
   });
 
+  request.heard?.(answer);
   const text = await answer.text();
 
   if (!answer.ok) {

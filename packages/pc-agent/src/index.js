@@ -108,6 +108,8 @@ const { DAEMON_PREDECESSOR_ENV } = require('../../core/src/cli/command-env.ts');
 
 const { shellQuote } = require('../../core/src/utils/shell.ts');
 
+const { DEVICE_CONNECT_SECRET: CONNECT_SECRET, DEVICE_KEY_FILE, deviceConnectMessage, deviceRefusalMessage, signDeviceMessage } = require('../../core/src/execution/device-key.ts');
+
 const protocol = require('./device-protocol.json');
 
 const METHODS = Object.fromEntries(Object.keys(protocol.methods).map((name) => [name, name]));
@@ -145,6 +147,10 @@ const RUNNING_VERSION = update.readVersionStamp(DEVICE_HOME);
 
 const CONFIG_PATH = path.join(DEVICE_HOME, 'device.json');
 
+/** This machine's private key (PKCS#8 PEM, 0600), which `kinu connect` made and nothing but this machine holds: every
+ *  connect is bought with its signature, so a copy of device.json alone connects nothing. */
+const KEY_PATH = path.join(DEVICE_HOME, DEVICE_KEY_FILE);
+
 /** The directory this daemon owns for agent homes. The HUB computes the home
  *  for one (device, workspace) beneath it and sends it on the exec frame; the
  *  daemon owns the PATH so an uninstall has one directory to remove. */
@@ -160,20 +166,11 @@ const PID_PATH = path.join(DEVICE_HOME, 'pc-agent.pid');
  *  one. `packages/cli/tests/device-connect.test.ts` pins the number. */
 const ALREADY_RUNNING_EXIT = 3;
 
-const TOKEN_ROTATION = FRAMES.rotate;
-
-/** This daemon's answer once the rotated token is on disk, core's
- *  DEVICE_FRAMES.rotated. The hub keeps the superseded token valid until
- *  this frame arrives and drops it then, so the grace covers exactly the
- *  failure it exists for — a rotation lost with its socket — and not the
- *  indefinite window a copy of device.json could spend. */
-const TOKEN_ROTATION_ACK = FRAMES.rotated;
-
-/** The hub's close code for a token it will not accept again, and the message
- *  the ticket exchange raises for the same refusal over HTTP. Both mean the
- *  same thing: this machine's credential is dead and no amount of retrying
- *  brings it back, so the daemon stops LOUDLY instead of dialling forever. */
-const CREDENTIALS_REJECTED_CLOSE = 4401;
+/** The hub's close code for an AUTH it will not accept, and the message the
+ *  ticket exchange raises for the same refusal over HTTP. Both mean the same
+ *  thing: this machine's credential is dead and no amount of retrying brings
+ *  it back, so the daemon stops LOUDLY instead of dialling forever. */
+const CREDENTIALS_REJECTED_CLOSE = protocol.credentialsRejectedClose;
 
 /** The hub's close reason when another socket took this device's slot. Its
  *  words, verbatim (`DEVICE_SOCKET_REPLACED_REASON` in core): after this
@@ -183,11 +180,8 @@ const SOCKET_REPLACED_REASON = 'replaced by a new connection';
 
 const CREDENTIALS_REJECTED = 'device credentials were rejected; re-run: kinu connect';
 
-/** The shape the hub mints a device token in (`pdt_` and 32 url-safe characters). */
-const DEVICE_TOKEN = /^pdt_[A-Za-z0-9_-]{32,}$/;
-
 /** Hosts a development hub may serve over plain http from the owner's own
- *  machine; the token never crosses a network there. */
+ *  machine; nothing this daemon sends crosses a network there. */
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 const REJECTED_EXIT = 4;
@@ -1666,16 +1660,18 @@ function readDeviceConfig(configPath = CONFIG_PATH) {
 }
 
 /**
- * The one schema of device.json, which the CLI reads it by too: JSON naming
- * the user, token, origin and root this daemon runs on, each a nonempty
- * string; `origin` one this daemon will send its token to; `root`, the
- * directory the owner linked (their home, or one the command named),
- * absolute. `device`, the registration the hub issued, is the CLI's and
- * never read here: a nonempty string where
- * `kinu connect` wrote one, absent where the previous release linked the
- * machine, which an update leaves as it is. Fields beyond these are kept, so
- * a rotated token is written back with them. `text` is the file's contents;
- * a parse error never echoes them.
+ * The one schema of device.json (device protocol 5), which the CLI reads it by
+ * too: JSON naming the user, device, origin and root this daemon runs on, each
+ * a nonempty string, and the connect secret it holds. `origin` is one this
+ * daemon will connect to; `root`, the directory the owner linked (their home,
+ * or one the command named), absolute; `connectSecret`, the last one the hub
+ * handed this machine ('' before its first connect), which its next connect
+ * signs beside the key: a copy of this file and device.key taken before the
+ * owner's machine connected again connects nothing. One with a `token` was
+ * written for an earlier protocol, whose bearer no hub takes now, and
+ * `kinu update` enrols the machine again. Fields beyond these are kept, so a
+ * new secret is written back with them.
+ * `text` is the file's contents; a parse error never echoes them.
  */
 function parseDeviceConfig(text, configPath) {
   let value;
@@ -1690,8 +1686,12 @@ function parseDeviceConfig(text, configPath) {
     throw new Error(`device config at ${configPath} is corrupt; re-run: kinu connect`, { cause: safeCause });
   }
 
-  const expectation = `device config at ${configPath} is missing its user, token, origin or directory; re-run: kinu connect`;
+  const expectation = `device config at ${configPath} is missing its user, device, origin, directory or connect secret; re-run: kinu connect`;
   const cfg = parseRecord(value, expectation);
+
+  if (cfg.token !== undefined) {
+    throw new Error(`device config at ${configPath} was written for an earlier Kinu, whose credential this hub no longer accepts; run: kinu update`);
+  }
 
   const nonempty = (field, refusal) => {
     const named = parseString(cfg[field], refusal);
@@ -1701,19 +1701,20 @@ function parseDeviceConfig(text, configPath) {
     return named;
   };
 
-  const [user, token, origin, root] = ['user', 'token', 'origin', 'root'].map((field) => nonempty(field, expectation));
+  const [user, device, origin, root] = ['user', 'device', 'origin', 'root'].map((field) => nonempty(field, expectation));
 
   if (!path.isAbsolute(root)) throw new Error(`device config at ${configPath} names a directory that is not absolute; re-run: kinu connect`);
 
-  if (cfg.device !== undefined) nonempty('device', `device config at ${configPath} names a device that is not a nonempty string; re-run: kinu connect`);
+  if (typeof cfg.connectSecret !== 'string' || !(cfg.connectSecret === '' || CONNECT_SECRET.test(cfg.connectSecret))) throw new Error(expectation);
 
-  return { ...cfg, user, token, origin: trustedOrigin(origin, configPath), root };
+  return { ...cfg, user, device, origin: trustedOrigin(origin, configPath), root, connectSecret: cfg.connectSecret };
 }
 
 /**
- * The origin this daemon POSTs its long-lived token to: https, or plain http to
- * this machine. Any other scheme hands the token to whatever the network path
- * is, so the daemon refuses to start rather than send it.
+ * The origin this daemon connects to: https, or plain http to this machine.
+ * Any other scheme hands its tickets and everything its socket carries to
+ * whatever the network path is, so the daemon refuses to start rather than
+ * connect.
  */
 function trustedOrigin(text, configPath) {
   let url;
@@ -1726,7 +1727,7 @@ function trustedOrigin(text, configPath) {
 
   if (url.protocol === 'https:' || (url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname))) return text;
 
-  throw new Error(`device config at ${configPath} names ${url.protocol}//${url.host}; this daemon sends its token `
+  throw new Error(`device config at ${configPath} names ${url.protocol}//${url.host}; this daemon connects `
     + 'only to an https origin, or over plain http to this machine');
 }
 
@@ -1746,7 +1747,7 @@ function connectFailureMessage(err, secrets) {
   let message = raw;
 
   if (status && (status[1] === '401' || status[1] === '403')) {
-    message = 'refused by the server (invalid, used, or expired connect ticket); retrying with a fresh ticket';
+    message = 'refused by the server; retrying with a fresh ticket';
   } else if (status && status[1] === '404') {
     message = 'the configured server has no device connect endpoint';
   } else if (status && status[1] === '426') {
@@ -1756,77 +1757,92 @@ function connectFailureMessage(err, secrets) {
   return redactConnectSecrets(message, secrets);
 }
 
-async function getConnectTicket(cfg, httpOrigin, fetchFn = fetch) {
+/**
+ * POSTs `body` to the hub and answers the JSON record it sends back. A refusal
+ * of this machine's credential (401, 403) is CREDENTIALS_REJECTED, the hub's
+ * words its cause; any other failure says what `doing` was.
+ */
+async function postToHub(fetchFn, url, body, doing) {
   let res;
 
   try {
-    res = await fetchFn(httpOrigin + '/pc/connect-ticket', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ user: cfg.user, token: cfg.token }),
-    });
+    res = await fetchFn(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   } catch (err) {
-    throw new Error('ticket exchange could not reach the server', {
-      cause: new Error(redactConnectSecrets(err instanceof Error ? err.message : err, [cfg.token])),
-    });
+    throw new Error(`${doing} could not reach the server`, { cause: err instanceof Error ? err : new Error(String(err)) });
   }
 
-  let body = {};
+  let answer = {};
 
-  try { body = await res.json(); }
+  try { answer = await res.json(); }
   catch (cause) {
     // A gateway's non-JSON error page is diagnosed by the status check below;
     // an unreadable body behind HTTP 200 is a real protocol failure.
     if (res.ok) {
       const safeCause = cause instanceof SyntaxError
-        ? new Error('ticket response is not valid JSON')
-        : new Error('ticket response could not be read');
+        ? new Error(`${doing} response is not valid JSON`)
+        : new Error(`${doing} response could not be read`);
 
-      throw new Error(`ticket exchange returned an unreadable body: HTTP ${res.status}`, { cause: safeCause });
+      throw new Error(`${doing} returned an unreadable body: HTTP ${res.status}`, { cause: safeCause });
     }
   }
 
-  let record;
+  const record = parseRecord(answer, `${doing} returned an invalid body`);
+  const said = record.error === undefined ? `HTTP ${res.status}` : parseString(record.error, `${doing} returned an invalid body`);
+
+  if (res.status === 401 || res.status === 403) throw new Error(CREDENTIALS_REJECTED, { cause: new Error(said) });
+
+  if (!res.ok) throw new Error(`${doing} failed: HTTP ${res.status}`, { cause: new Error(said) });
+
+  return record;
+}
+
+/**
+ * `message` signed with this machine's key. A key that is missing or will not
+ * sign is a dead credential, refused as the hub refuses one: a device.json
+ * without its key is a copy, and connects nothing.
+ */
+async function signWithDeviceKey(keyPath, message) {
+  let pem;
 
   try {
-    record = parseRecord(body, 'ticket exchange returned an invalid body');
-  } catch (cause) {
-    const detail = cause instanceof Error ? cause.message : 'ticket response is invalid';
-    throw new Error('ticket exchange returned an invalid body', {
-      cause: new Error(redactConnectSecrets(detail, [cfg.token])),
-    });
+    pem = fs.readFileSync(keyPath, 'utf8');
+  } catch (err) {
+    throw new Error(CREDENTIALS_REJECTED, { cause: new Error(`no device key at ${keyPath}, so this device.json is not one this machine linked`, { cause: err }) });
   }
-
-  let ticket = '';
-  let serviceError = '';
 
   try {
-    if (record.ticket !== undefined) {
-      ticket = parseString(record.ticket, 'ticket exchange returned an invalid connect ticket');
-    }
-
-    if (record.error !== undefined) {
-      serviceError = redactConnectSecrets(
-        parseString(record.error, 'ticket exchange returned an invalid body'),
-        [cfg.token],
-      );
-    }
-  } catch (cause) {
-    const detail = cause instanceof Error ? cause.message : 'ticket response fields are invalid';
-    throw new Error('ticket exchange returned an invalid body', {
-      cause: new Error(redactConnectSecrets(detail, [cfg.token])),
-    });
+    return await signDeviceMessage(pem, message);
+  } catch (err) {
+    throw new Error(CREDENTIALS_REJECTED, { cause: new Error(`the device key at ${keyPath} cannot sign`, { cause: err }) });
   }
+}
 
-  if (!res.ok || ticket.length === 0) {
-    const detail = serviceError || `HTTP ${res.status}`;
+/** A single-use challenge the hub issues this device, which only its key's signature turns into anything. */
+async function connectChallenge(cfg, httpOrigin, fetchFn) {
+  const challenge = await postToHub(fetchFn, `${httpOrigin}/pc/connect-challenge`, { user: cfg.user, device: cfg.device }, 'connect challenge');
+  const nonce = challenge.nonce === undefined ? '' : parseString(challenge.nonce, 'connect challenge returned an invalid nonce');
 
-    if (res.status === 401 || res.status === 403) {
-      throw new Error(CREDENTIALS_REJECTED, { cause: new Error(detail) });
-    }
+  if (!/^pcc_[A-Za-z0-9_-]{32,}$/.test(nonce)) throw new Error('connect challenge returned an invalid nonce');
 
-    throw new Error(`ticket exchange failed: HTTP ${res.status}`, { cause: new Error(detail) });
-  }
+  return nonce;
+}
+
+/**
+ * A connect ticket, bought with this machine's key: the hub's challenge,
+ * signed over the hub's origin, this device and the connect secret
+ * device.json holds on disk now, which a successor on this machine may have
+ * moved since this process read it.
+ */
+async function getConnectTicket(cfg, httpOrigin, fetchFn = fetch, files = { configPath: CONFIG_PATH, keyPath: KEY_PATH }) {
+  const nonce = await connectChallenge(cfg, httpOrigin, fetchFn);
+  const { connectSecret: secret } = readDeviceConfig(files.configPath);
+  const signature = await signWithDeviceKey(files.keyPath, deviceConnectMessage(new URL(httpOrigin).origin, cfg.device, secret, nonce));
+
+  const answered = await postToHub(
+    fetchFn, `${httpOrigin}/pc/connect-ticket`, { user: cfg.user, device: cfg.device, secret, nonce, signature }, 'ticket exchange',
+  );
+
+  const ticket = answered.ticket === undefined ? '' : parseString(answered.ticket, 'ticket exchange returned an invalid connect ticket');
 
   if (!/^pct_[A-Za-z0-9_-]{32,}$/.test(ticket)) {
     throw new Error('ticket exchange returned an invalid connect ticket', { cause: new Error('ticket format is invalid') });
@@ -1837,7 +1853,7 @@ async function getConnectTicket(cfg, httpOrigin, fetchFn = fetch) {
 
 function startConnectLoop(opts) {
   const {
-    getTicket, dial, logger = log, secret = () => '', schedule = setTimeout, onClose,
+    getTicket, dial, logger = log, schedule = setTimeout, onClose,
     onRejected = () => {}, cancel = clearTimeout,
   } = opts;
 
@@ -1847,9 +1863,9 @@ function startConnectLoop(opts) {
 
   /**
    * The one outcome retrying cannot fix. A rejected credential means the hub
-   * has this machine's token superseded or revoked, so the loop stops and says
-   * which command relinks it — a daemon that kept dialling would fill the log
-   * with a failure the owner never reads and never act on it.
+   * no longer knows this machine's key, or this machine has none, so the loop
+   * stops and says which command relinks it — a daemon that kept dialling
+   * would fill the log with a failure the owner never reads and never act on.
    */
   function stopRejected(detail) {
     stopped = true;
@@ -1871,10 +1887,11 @@ function startConnectLoop(opts) {
       ticket = await getTicket();
     } catch (err) {
       if (err instanceof Error && err.message === CREDENTIALS_REJECTED) {
-        return stopRejected('the ticket exchange refused this device token');
+        // The hub's words, or this machine's: why, and what to run.
+        return stopRejected(err.cause instanceof Error ? err.cause.message : 'the ticket exchange refused this device');
       }
 
-      logger('Ticket exchange failed:', connectFailureMessage(err, [secret()]));
+      logger('Ticket exchange failed:', connectFailureMessage(err, []));
       retry();
 
       return;
@@ -1887,7 +1904,7 @@ function startConnectLoop(opts) {
     try {
       ws = dial(ticket);
     } catch (err) {
-      logger('Connect attempt failed:', connectFailureMessage(err, [secret(), currentTicket]));
+      logger('Connect attempt failed:', connectFailureMessage(err, [currentTicket]));
       retry();
 
       return;
@@ -1912,7 +1929,7 @@ function startConnectLoop(opts) {
       try {
         ws.send(PING_FRAME);
       } catch (err) {
-        logger('Keepalive could not be sent:', connectFailureMessage(err, [secret(), currentTicket]));
+        logger('Keepalive could not be sent:', connectFailureMessage(err, [currentTicket]));
 
         return;
       }
@@ -1963,13 +1980,13 @@ function startConnectLoop(opts) {
       retry();
     });
     ws.addEventListener('error', (err) => {
-      logger('Connect attempt failed:', connectFailureMessage(err, [secret(), currentTicket]));
+      logger('Connect attempt failed:', connectFailureMessage(err, [currentTicket]));
     });
   }
 
   /** @param {unknown} error */
   function reportConnectFailure(error) {
-    logger('Connect attempt failed:', connectFailureMessage(error, [secret(), currentTicket]));
+    logger('Connect attempt failed:', connectFailureMessage(error, [currentTicket]));
     retry();
   }
 
@@ -1986,9 +2003,11 @@ function startConnectLoop(opts) {
   };
 }
 
-function persistRotatedToken(cfg, token, configPath = CONFIG_PATH) {
-  const temporary = `${configPath}.rotate-${process.pid}-${Date.now()}`;
-  const next = { ...cfg, token };
+/** Writes `connectSecret` into device.json by rename of a whole file, so a crash leaves the old file or the new one;
+ *  memory takes it only once the rename landed. */
+function persistConnectSecret(cfg, connectSecret, configPath = CONFIG_PATH) {
+  const temporary = `${configPath}.secret-${process.pid}-${Date.now()}`;
+  const next = { ...cfg, connectSecret };
   let fileDescriptor;
 
   try {
@@ -1998,7 +2017,7 @@ function persistRotatedToken(cfg, token, configPath = CONFIG_PATH) {
     fs.closeSync(fileDescriptor);
     fileDescriptor = undefined;
     fs.renameSync(temporary, configPath);
-    cfg.token = token;
+    cfg.connectSecret = connectSecret;
 
     if (os.platform() !== 'win32') {
       const directoryDescriptor = fs.openSync(path.dirname(configPath), 'r');
@@ -2009,32 +2028,35 @@ function persistRotatedToken(cfg, token, configPath = CONFIG_PATH) {
   } catch (err) {
     if (fileDescriptor !== undefined) fs.closeSync(fileDescriptor);
     fs.rmSync(temporary, { force: true });
-    throw new Error('persist rotated device token', { cause: err });
+    throw new Error('persist connect secret', { cause: err });
   }
 }
 
-function handleTokenRotation(
+/**
+ * The hub's CONNECT_SECRET frame: the secret this machine's next connect
+ * signs, stored before it is answered. True when it is on disk, the one case
+ * the daemon answers CONNECT_SECRET_ACK and the hub commits it; a machine that
+ * could not store it answers nothing, and connects next on the one it holds,
+ * which the hub still holds too.
+ */
+function storeConnectSecret(
   cfg,
   msg,
   configPath = CONFIG_PATH,
   logger = log,
 ) {
-  if (!msg || msg.type !== TOKEN_ROTATION) return false;
+  if (typeof msg.secret !== 'string' || !CONNECT_SECRET.test(msg.secret)) {
+    logger('Connect secret refused:', 'the frame carries no secret; the one on disk stays');
 
-  // The daemon acknowledges only when the token it holds equals the frame's,
-  // so a token it refuses to store is also one it never acknowledges, and the
-  // hub keeps honouring the one on disk.
-  if (!(Object(msg.token) instanceof String) || !DEVICE_TOKEN.test(String(msg.token))) {
-    logger('Device token rotation refused:', 'the frame carries no device token; the one on disk stays');
-
-    return true;
+    return false;
   }
 
   try {
-    persistRotatedToken(cfg, msg.token, configPath);
-    logger('Device token rotated');
+    persistConnectSecret(cfg, msg.secret, configPath);
   } catch (err) {
-    logger('Device token rotation failed:', err);
+    logger('Connect secret could not be stored:', err);
+
+    return false;
   }
 
   return true;
@@ -2042,9 +2064,9 @@ function handleTokenRotation(
 
 // ── Machine lock ───────────────────────────────────────────────────────
 //
-// Two daemons on one machine share one device.json, so both connect with the
-// same credentials, both answer the hub, and each rotation invalidates the
-// other's token. The pidfile is the lock, and this daemon takes it in its own
+// Two daemons on one machine share one device.json and key, so both connect
+// with the same credential, both answer the hub, and each takes the slot from
+// the other. The pidfile is the lock, and this daemon takes it in its own
 // process: the CLI is one starter of this file, never the only one.
 
 /**
@@ -2217,7 +2239,8 @@ async function main() {
   // `startOnApprovedBun` put this process on, the implementation the whole
   // connect protocol is exercised against. There is no `ws` fallback: a fallback is a second
   // implementation that never runs in CI and failed first in the field.
-  const mkWs = (url) => new globalThis.WebSocket(url);
+  // Bun's takes the upgrade's headers, which is where the account rides.
+  const mkWs = (url, headers) => new globalThis.WebSocket(url, { headers });
 
   // Probed once, by RUNNING the real sandbox shape: a check that only looked
   // for the binary would report success on every machine whose AppArmor policy
@@ -2257,7 +2280,6 @@ async function main() {
       if (ended.length > 0) log('device.terminals_closed_with_credential', ended.join(' '));
       ctx.screens.closeAll();
     },
-    secret: () => cfg.token,
     onClose: (event) => {
       // The successor this daemon started has connected: the hub gave it this
       // device's slot and closed this socket for it. This daemon's work is
@@ -2295,9 +2317,11 @@ async function main() {
       liveSocket = null;
     },
     dial(ticket) {
-      const wsUrl = `${WS_ORIGIN}/pc/connect?user=${encodeURIComponent(USER)}&ticket=${encodeURIComponent(ticket)}`;
       log('Connecting to', WS_ORIGIN + '/pc/connect');
-      const ws = mkWs(wsUrl);
+      // Neither the account nor the ticket rides in the URL, which edge and
+      // proxy logs keep: the account in the header the hub routes by, the
+      // ticket in the socket's first frame.
+      const ws = mkWs(`${WS_ORIGIN}/pc/connect`, { [protocol.accountHeader]: USER });
       // A screen's bytes arrive as binary messages, read in the turn they land.
       ws.binaryType = 'arraybuffer';
       ws.addEventListener('open', () => {
@@ -2315,6 +2339,8 @@ async function main() {
         // under the full tier, sent so the hub never runs a command on this
         // machine to learn a path.
         liveSocket = ws;
+        // AUTH first: the hub serves nothing on this socket before it.
+        ws.send(JSON.stringify({ type: FRAMES.auth, user: USER, ticket }));
         ws.send(JSON.stringify(helloFrame()));
       });
       ws.addEventListener('message', (ev) => {
@@ -2342,17 +2368,12 @@ async function main() {
         // on its own promise, and the socket keeps serving meanwhile.
         if (updater.handle(msg)) return;
 
-        // The hub rotates this machine's long-lived token on every accepted
-        // connect. Rename a complete same-directory file before changing memory:
-        // a crash leaves either the old valid JSON or the complete new JSON.
-        if (handleTokenRotation(cfg, msg)) {
-          // `persistRotatedToken` assigns cfg.token only after the rename
-          // lands, so this comparison is "the new secret is on disk" and
-          // nothing weaker. The hub mints a fresh secret per rotation, so it
-          // can never equal the one already held. Acknowledging is what ends
-          // the grace on the superseded token: a rotation this daemon failed
-          // to persist must keep it, or the machine is locked out.
-          if (cfg.token === msg.token) ws.send(JSON.stringify({ type: TOKEN_ROTATION_ACK }));
+        // The hub hands every accepted connect a fresh connect secret.
+        // Answered, by its hash, only once it is on disk: the answer is what
+        // the hub commits, and a connect signing any secret but the committed
+        // one or the one just handed reads as a second machine holding this key.
+        if (msg && msg.type === FRAMES.connectSecret) {
+          if (storeConnectSecret(cfg, msg)) ws.send(JSON.stringify({ type: FRAMES.connectSecretAck, secretHash: sha256Of(cfg.connectSecret) }));
 
           return;
         }
@@ -2458,7 +2479,10 @@ async function refuse(runtime, reason) {
       log('device.runtime_refusal_unsent', 'no build stamp: the hub pushes nothing to an unstamped daemon');
     } else {
       const cfg = readDeviceConfig(CONFIG_PATH);
-      const status = await update.reportRefusal({ origin: hubOrigin(cfg), cfg, version: RUNNING_VERSION, runtime, reason });
+      const origin = hubOrigin(cfg);
+    const nonce = await connectChallenge(cfg, origin, fetch);
+    const signature = await signWithDeviceKey(KEY_PATH, deviceRefusalMessage(new URL(origin).origin, cfg.device, nonce));
+    const status = await update.reportRefusal({ origin, cfg, proof: { nonce, signature }, version: RUNNING_VERSION, runtime, reason });
       log(status === 200 ? 'device.runtime_refusal_sent' : 'device.runtime_refusal_unsent', `HTTP ${String(status)}`);
     }
   } catch (err) {
@@ -2526,6 +2550,6 @@ module.exports = {
   parseDeviceConfig,
   startConnectLoop,
   getConnectTicket,
-  persistRotatedToken,
-  handleTokenRotation,
+  persistConnectSecret,
+  storeConnectSecret,
 };

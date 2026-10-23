@@ -27,6 +27,7 @@
  * reply.
  */
 import { chmodSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { generateKeyPairSync } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import type { Subprocess } from 'bun';
 
@@ -96,10 +97,15 @@ export interface AttachMachineRequest {
  */
 export async function attachMachine(request: AttachMachineRequest): Promise<AttachedMachine> {
   const { account, name, home } = request;
+  // The machine's key, as `kinu connect` makes it: the hub is sent its public half alone.
+  const key = generateKeyPairSync('ed25519');
+  const publicKey = key.publicKey.export({ format: 'jwk' }).x;
+
+  if (publicKey === undefined) throw new Error('the Ed25519 public key exported no raw bytes');
 
   const registration = await infraBoundary(
     `POST ${account.origin}/api/cli/devices (${name})`,
-    () => registerCloudDevice(account.origin, account.cliToken, { label: name }),
+    () => registerCloudDevice(account.origin, account.cliToken, { publicKey, label: name }),
   );
 
   // `~/.local/bin`, not `~/bin`: a sandboxed command's PATH is rebuilt by the
@@ -112,23 +118,26 @@ export async function attachMachine(request: AttachMachineRequest): Promise<Atta
   // directly in it (pc-agent sandbox.js guardedPaths), and the shim's first line made one.
   const execLogPath = join(home, 'first-run', 'exec.log');
   // The machine's own KINU_HOME is `.kinu` inside the consented root, the
-  // layout `kinu connect` gives a person's home: device.json and the bearer
+  // layout `kinu connect` gives a person's home: device.json and device.key
   // live there, apart from the rest of the root this shim's directory is in.
   const kinuHome = join(home, '.kinu');
   mkdirSync(binDir, { recursive: true, mode: 0o700 });
   mkdirSync(dirname(execLogPath), { recursive: true, mode: 0o700 });
   mkdirSync(join(kinuHome, 'agents'), { recursive: true, mode: 0o700 });
   mkdirSync(join(kinuHome, 'inflight'), { recursive: true, mode: 0o700 });
+  writeFileSync(join(kinuHome, 'device.key'), key.privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600 });
   writeFileSync(
     join(kinuHome, 'device.json'),
     `${JSON.stringify({
       user: registration.userId,
-      token: registration.token,
+      device: registration.deviceId,
       origin: registration.origin.replace(/\/+$/, ''),
       // The directory this machine consented, as `kinu connect` records the one
       // it ran in. Its own home, so a command that writes lands on this machine
       // and nowhere near the checkout.
       root: home,
+      // No connect yet: the hub hands the first secret to the socket it accepts.
+      connectSecret: '',
     }, null, 2)}\n`,
     { mode: 0o600 },
   );

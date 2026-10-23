@@ -96,7 +96,7 @@ export interface OpsEnv extends SignInDeclarationEnv {
   UserDO: RestorableNamespace;
   OrchestratorAgent: RestorableNamespace;
   MAILBOX?: Named<Restorable & NamesBytes>;
-  MOSSAIC_USER?: Named<Restorable & { tenantShards(): Promise<number> }>;
+  MOSSAIC_USER?: Named<Restorable & { tenantShards(): Promise<number>; namedShards(): Promise<number[]> }>;
   MOSSAIC_SHARD?: Named<Restorable>;
   ControlPlaneDO?: { idFromName(name: string): DurableObjectId; get(id: DurableObjectId): OpsControlPlane };
 }
@@ -237,12 +237,23 @@ function bytesOf(read: () => Promise<MissingBytes>): Effect.Effect<{ readonly mi
   });
 }
 
+/** A pool shard no restored record names: it held nothing of the tenant's at the moment. */
+interface ObjectSkipped {
+  readonly class: string;
+  readonly name: string;
+  readonly why: string;
+}
+
 /**
  * An account's objects, each to the same moment: the account, its mailbox, then its Drive's user object before each
- * shard, so no shard's sweep sees a reference the restored tenant names as gone. A bookmark is one object's, so an
- * account goes back by moment, never by bookmark.
+ * shard its restored records name, so no shard's sweep sees a reference the restored tenant names as gone. A pool shard
+ * none names held none of its bytes, and is skipped: one that never stored a chunk has no history to go back on
+ * (staging dd3066a00, 2026-10-23, "This database has no history"). A bookmark is one object's, so an account goes back
+ * by moment, never by bookmark.
  */
-function accountRestored(env: OpsEnv, { name, caller, to }: { readonly name: string; readonly caller: OpsCaller; readonly to: RestoreTarget }, done: ObjectRestored[]): Effect.Effect<void, KinuError> {
+function accountRestored(
+  env: OpsEnv, { name, caller, to }: { readonly name: string; readonly caller: OpsCaller; readonly to: RestoreTarget }, done: ObjectRestored[], skipped: ObjectSkipped[],
+): Effect.Effect<void, KinuError> {
   return Effect.gen(function* () {
     yield* restoredOne({ objectClass: 'UserDO', name, namespace: env.UserDO }, caller, to, done);
 
@@ -253,9 +264,17 @@ function accountRestored(env: OpsEnv, { name, caller, to }: { readonly name: str
     const names = tenantObjectNames(name);
 
     yield* restoredOne({ objectClass: 'MossaicUserDO', name: names.user, namespace: users }, caller, to, done);
-    const spans = yield* attempt({ doing: "reading how many shards the Drive spans", otherwise: 'unavailable' }, () => users.get(users.idFromName(names.user)).tenantShards());
 
-    for (let index = 0; index < spans; index += 1) yield* restoredOne({ objectClass: 'MossaicShardDO', name: names.shard(index), namespace: shards }, caller, to, done);
+    // Its shards are read from its records as of the moment: until it lands, they are now's.
+    if (done.at(-1)?.landed !== true) return yield* new KinuError('unavailable', `the Drive's user object ${names.user} has not landed, so which shards it names at the moment is unknown`);
+    const user = users.get(users.idFromName(names.user));
+    const spans = yield* attempt({ doing: 'reading how many shards the Drive spans', otherwise: 'unavailable' }, () => user.tenantShards());
+    const holding = new Set(yield* attempt({ doing: 'reading the shards its restored records name', otherwise: 'unavailable' }, () => user.namedShards()));
+
+    for (let index = 0; index < Math.max(spans, ...holding, -1) + 1; index += 1) {
+      if (holding.has(index)) yield* restoredOne({ objectClass: 'MossaicShardDO', name: names.shard(index), namespace: shards }, caller, to, done);
+      else if (index < spans) skipped.push({ class: 'MossaicShardDO', name: names.shard(index), why: 'held nothing at the moment: no record of the restored Drive names it' });
+    }
   });
 }
 
@@ -267,26 +286,28 @@ opsRoutes.post('/ops/restore', (c) => settle(Effect.gen(function* () {
   if (body === null) return err(400, 'The body names one workspace or account and the moment ({ at }) or bookmark it goes back to.');
   const caller = yield* Effect.promise(() => opsCaller(c.env));
   const done: ObjectRestored[] = [];
+  const skipped: ObjectSkipped[] = [];
 
-  if ('undo' in body) return answered(done, yield* Effect.exit(undone(c.env, body.undo, caller, done)));
+  if ('undo' in body) return answered({ done, skipped }, yield* Effect.exit(undone(c.env, body.undo, caller, done)));
   const { object, to } = body;
   const name = 'email' in object ? yield* Effect.promise(() => accountIdFor(c.env, object.email)) : object.name;
 
   if (object.class === 'UserDO' && 'bookmark' in to) return err(400, 'An account goes back by a moment ({ at }): a bookmark names one object\'s history, and an account is several.');
 
   const work = object.class === 'UserDO'
-    ? accountRestored(c.env, { name, caller, to }, done)
+    ? accountRestored(c.env, { name, caller, to }, done, skipped)
     : restoredOne({ objectClass: 'OrchestratorAgent', name, namespace: c.env.OrchestratorAgent }, caller, to, done);
 
-  return answered(done, yield* Effect.exit(work));
+  return answered({ done, skipped }, yield* Effect.exit(work));
 })));
 
-/** The objects a restore named and what each answered, and where it stopped: all landed and none stopped is 200. */
-function answered(done: readonly ObjectRestored[], ended: Exit.Exit<void, KinuError>): Response {
+/** The objects a restore named and what each answered, those it skipped and why, and where it stopped: all landed and
+ *  none stopped is 200. */
+function answered({ done, skipped }: { readonly done: readonly ObjectRestored[]; readonly skipped: readonly ObjectSkipped[] }, ended: Exit.Exit<void, KinuError>): Response {
   const stopped = Exit.isFailure(ended) ? renderThrownChain({ cause: Cause.squash(ended.cause) }) : undefined;
   const landed = stopped === undefined && done.every((one) => one.landed);
 
-  return json({ body: { objects: done, landed, ...(stopped !== undefined && { stopped }) } }, { status: landed ? 200 : 502 });
+  return json({ body: { objects: done, skipped, landed, ...(stopped !== undefined && { stopped }) } }, { status: landed ? 200 : 502 });
 }
 
 /** Each object back to its own bookmark, in the order the restore took them. */

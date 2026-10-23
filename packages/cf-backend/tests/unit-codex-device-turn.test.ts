@@ -6,6 +6,7 @@ import { CODEX_CRED_KEY, asFetchFunction, requestUrl, type JsonValue, DEVICE_FRA
 import { createTestUserDO, provisionTestWorkspace, testOwner, type DeviceFrame, type TestUserDO } from './helpers/user-do';
 import {
   agentSql, catalogTurn, driveUntil, hostedSubagentHarness, makeEnv, orchestratorHarness, wakeForDelegatedTask, mainDatabase } from './helpers/actor-harness';
+import { registerTestDevice } from './helpers/device-key';
 
 const OWNER_USER_ID = 'fedcba9876543210fedcba9876543210';
 
@@ -79,7 +80,7 @@ async function codexWorkspace(): Promise<CodexWorkspace> {
   const world = { userDO: opened.userDO, workspace: WORKSPACE, ownerUserId: OWNER_USER_ID };
 
   const connectMachine = async (label: string): Promise<string> => {
-    const { deviceId } = await opened.userDO.registerDevice(owner, label);
+    const { deviceId } = await registerTestDevice(opened.userDO, label, owner);
     opened.attachDaemon(deviceId);
 
     return deviceId;

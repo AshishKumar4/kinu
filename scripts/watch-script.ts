@@ -14,7 +14,7 @@ const FLAG_PATH = '/scratch/watch-flag.md';
 
 /** The check: the flag's text against the last text it fired on. */
 const CHECK = [
-  `const read = await file.read({ path: '${FLAG_PATH}' });`,
+  `const read = await file.text('${FLAG_PATH}');`,
   "const text = typeof read === 'string' ? read.trim() : '';",
   "const seen = state === null ? '' : state.seen;",
   "return text !== '' && text !== seen ? { fire: true, brief: `flag: ${text}`, state: { seen: text } } : { fire: false, state: { seen } };",

@@ -15,7 +15,9 @@ const CLOSE = '</slate-ui>';
 
 const OPEN = /^[ \t]*<slate-ui\b([^>]*)>/;
 
-const NAME_ATTRIBUTE = /\bname\s*=\s*(?:"([^"]*)"|'([^']*)')/;
+/** One attribute of a start tag, as HTML's attribute states read it: a name, then an optional `=` and a value quoted or
+ *  bare. A quoted value is consumed whole, so a `name=` inside another attribute's value is that value's text. */
+const ATTRIBUTE = /([^\s"'>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/gu;
 
 const NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
@@ -37,9 +39,10 @@ export type SlateUiSegment =
    *  is the markup written after the tag so far. */
   | { readonly kind: 'open'; readonly name: string; readonly text: string; readonly html: string };
 
+/** The block's `name` attribute; the first, where a tag repeats one, as HTML keeps it. */
 function blockName(attributes: string): string | null {
-  const found = NAME_ATTRIBUTE.exec(attributes);
-  const name = found?.[1] ?? found?.[2];
+  const named = [...attributes.matchAll(ATTRIBUTE)].find(([, attribute]) => attribute?.toLowerCase() === 'name');
+  const name = named === undefined ? undefined : named[2] ?? named[3] ?? named[4];
 
   return name !== undefined && NAME.test(name) ? name : null;
 }

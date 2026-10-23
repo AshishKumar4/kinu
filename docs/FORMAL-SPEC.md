@@ -25,10 +25,10 @@ evidence.
 | Evolution | 22 | counter postconditions, craft-list operations, a scaled-natural EMA, scaffold lookup and append | The real EMA uses configurable JavaScript floating-point arithmetic, and the model asserts several transition postconditions |
 | Agent | 18 | lifecycle counters, an abstract turn queue, durable-fiber budget fields | The production queue and SDK persistence semantics are not refined from these models |
 | Execution | 6 | what each shipped executor claims, over the inputs its constructor reads | The capability lists are transcribed from the constructors; no fixture runs them |
-| Safety | 30 | the credential store's client view, envelope binding and rotation; what a connected machine's file methods reach in each tier; the connect ticket, token rotation and reuse revocation | The cipher's guarantees are premises. Paths are judged where a syscall reaches them, and a link swapped after the check is outside the model. A connection is one atomic step inside the token's window |
+| Safety | 32 | the credential store's client view, envelope binding and rotation; what a connected machine's file methods reach in each tier; the connect challenge and ticket, the connect generation, and finding two holders of one device key | The cipher's and the device signature's guarantees are premises. Paths are judged where a syscall reaches them, and a link swapped after the check is outside the model. A connect is one atomic step inside the link's window |
 | SharingNimbus | 29 | the shared server's own/owner-mode authority, revision-bound personal consent, single-use approvals for every uncontained call (reads included), code-only forks, per-call revocation, fixed-history noninterference and delegated-egress disclosure | The pure policy functions are refined by 461 generated cases. Egress confinement assumes truthful read-only/closed-world declarations. Host routing, confined processes, sealed rendering, exact approval prompts and Workers/Nimbus isolation require runtime evidence; hash collision resistance, redirects, timing channels and relaying are not proved |
 
-Measured 2026-10-16: 52 requirements and 422 enrolled theorems. The eight
+Measured 2026-10-22: 52 requirements and 424 enrolled theorems. The eight
 `PR-SHARE-NIMBUS` requirements replace the retired room/DIFC requirements and
 enroll 29 theorems in `lean/Kinu/SharingNimbus/`. The fixture
 `lean/fixtures/share-policy-cases.json` evaluates the Lean decisions; its replay

@@ -12,7 +12,7 @@ import {
   CLI_DIST_PATHS, CLI_RUNTIME_PATH, CLI_VERSION_PATH, fetchDeployedAsset, type AssetFetcher,
 } from '@kinu.run/core';
 import { RELEASE_ARTIFACT_NAME, RELEASE_MANIFEST_PATH } from '@kinu.run/core/deploy';
-import { err, escapeHtml, json, safeJson } from '@kinu.run/core';
+import { err, escapeHtml, json, safeJson, DEVICE_KEY_MALFORMED, DeviceReplacementSchema, isDevicePublicKey } from '@kinu.run/core';
 import { randomToken } from '@kinu.run/core';
 import type { OrchestratorAgent } from '../orchestrator';
 import { webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE, type WebhookRouteEnv } from '@kinu.run/core';
@@ -44,9 +44,18 @@ import { noHead, ownerGate, rawParam, type FamilyEnv } from '../api/context';
 import { accountApi, type AccountApiVariables } from '../user/account-api';
 import { authenticateCli, type CliBearerVariables } from '../api/cli-bearer';
 import * as v from 'valibot';
+import { classifyDoCall, isRetryableDoCall } from '@nimbus-sh/platform/oom-classify.js';
 import { authoredRefusal, classify, diagnostics, KinuError, renderThrownChain, toKinuError, settleLogged, settle } from '@kinu.run/core/obs';
 
-const DeviceRegistrationRequestSchema = v.object({ label: v.optional(v.string()), replaces: v.optional(v.string()), device: v.optional(v.string()) });
+/** A machine's public key, and how it came to ask: `device` a browser issued it, `reenrol` its id from an earlier
+ *  protocol's link, `replaces` its old key's signature over this registration. */
+const DeviceRegistrationRequestSchema = v.object({
+  publicKey: v.string(),
+  label: v.optional(v.string()),
+  replaces: v.optional(DeviceReplacementSchema),
+  device: v.optional(v.string()),
+  reenrol: v.optional(DeviceReplacementSchema.entries.device),
+});
 
 export type CliRoutesAuthority = CliAuthAuthority & SessionAuthority & CloudWorkspaceRegistry & Pick<
   UserDO,
@@ -326,10 +335,17 @@ cliRoutes.post('/api/cli/workspaces/:name/triggers/webhook', (c) => {
 cliRoutes.post('/api/cli/devices', (c) => settle(Effect.tryPromise({
   try: async () => {
     const cli = c.get('cli');
-    const registration = await safeJson(c.req.raw, DeviceRegistrationRequestSchema) ?? {};
-    const { deviceId, token } = await cli.userDO.registerDevice(c.get('owner'), registration.label, registration.replaces, registration.device);
+    const registration = await safeJson(c.req.raw, DeviceRegistrationRequestSchema);
 
-    return json({ body: { deviceId, token, userId: cli.userId, origin: new URL(c.req.url).origin } }, { status: 201 });
+    if (registration === null || !isDevicePublicKey(registration.publicKey)) return err(400, DEVICE_KEY_MALFORMED);
+    const origin = new URL(c.req.url).origin;
+
+    const { deviceId } = await cli.userDO.registerDevice(c.get('owner'), {
+      publicKey: registration.publicKey, origin, label: registration.label, replaces: registration.replaces,
+      join: registration.device, reenrol: registration.reenrol,
+    });
+
+    return json({ body: { deviceId, userId: cli.userId, origin } }, { status: 201 });
   },
   catch: (cause) => authoredRefusal({ doing: 'registering this device', cause }),
 })));
@@ -1082,14 +1098,17 @@ exec "$KINU_BUN" "\${KINU_BUN_ISOLATED[@]}" run "$CLI_DIR/cli.js" "$@"
   });
 }
 
-/** Rate limits are 429, caller-correctable code failures are 400, and
- *  everything else (KV outage, UserDO failure, …) is a real 500. */
+/** Rate limits are 429, caller-correctable code failures are 400, a platform failure of an object that outlasted the
+ *  store's retries is 503 (try again), and everything else (KV outage, a UserDO refusal, …) is a real 500. */
 function cliAuthError(e: Error): Effect.Effect<Response, KinuError> {
   if (e instanceof RateLimitError) return Effect.succeed(err(429, e.message));
 
   if (e instanceof CliAuthCodeError) return Effect.succeed(err(400, e.message));
+  const transient = classifyDoCall(e);
 
-  return Effect.fail(toKinuError({ doing: 'answering a CLI sign-in request', cause: e, otherwise: 'io' }));
+  return Effect.fail(toKinuError({
+    doing: 'answering a CLI sign-in request', cause: e, otherwise: isRetryableDoCall(transient) || transient === 'overloaded' ? 'unavailable' : 'io',
+  }));
 }
 
 

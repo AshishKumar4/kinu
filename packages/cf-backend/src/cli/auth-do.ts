@@ -16,9 +16,12 @@ const RECORD_KEY = 'record';
 const DEVICE_KEY = 'device';
 
 export class CliAuthDO extends DurableObject<Env> {
-  /** A code's claim for `deviceHash`, kept until `until`; false while another sign-in holds the code. */
+  /** A code's claim for `deviceHash`, kept until `until`; false while another sign-in holds the code. The same device's
+   *  claim made again answers true, so a claim kept before the platform failed its answer can be repeated. */
   async claimCode(deviceHash: string, until: number): Promise<boolean> {
-    if (await this.deviceOf() !== null) return false;
+    const held = await this.deviceOf();
+
+    if (held !== null) return held === deviceHash;
     // The alarm first: an object cut off between the two writes then holds nothing past it.
     await this.ctx.storage.setAlarm(until);
     await this.ctx.storage.put(DEVICE_KEY, deviceHash);

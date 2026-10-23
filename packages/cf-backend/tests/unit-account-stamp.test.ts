@@ -63,18 +63,18 @@ test('an account whose init cannot run over what it holds answers every call wit
   const { storage, owner } = await leftBehind();
 
   // A table holding the name of an index the init makes: no reset can run the init, so it refuses.
-  storage.exec('DROP INDEX idx_user_devices_token_hash; CREATE TABLE idx_user_devices_token_hash (id TEXT)');
+  storage.exec('DROP INDEX idx_user_cli_tokens_active; CREATE TABLE idx_user_cli_tokens_active (id TEXT)');
   const refused = createTestUserDO({ storage });
 
   try {
-    await expect(refused.userDO.getProfile(owner)).rejects.toThrow('idx_user_devices_token_hash');
+    await expect(refused.userDO.getProfile(owner)).rejects.toThrow('idx_user_cli_tokens_active');
     // A socket or request is refused as a call is.
     expect((await refused.userDO.fetch(new Request('https://user/devices/connect'))).status).toBe(503);
     expect(kvOf(storage).get('kinu.schema_stamp')).toBe(1);
     // Neither its changed table nor its retired one was dropped.
     expect(storage.query('SELECT share_id FROM user_share_cards UNION ALL SELECT device_id FROM device_joins').all())
       .toEqual([{ share_id: 's-1' }, { share_id: 'd-1' }]);
-    expect((await refused.userDO.opsTables(await ops())).refused).toContain('idx_user_devices_token_hash');
+    expect((await refused.userDO.opsTables(await ops())).refused).toContain('idx_user_cli_tokens_active');
   } finally {
     refused.close();
   }

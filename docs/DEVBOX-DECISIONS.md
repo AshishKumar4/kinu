@@ -5182,6 +5182,16 @@ What is fixed in it (the 2026-09-16 device audit, `kinu-logs/audit-0916/SECURITY
   edge and proxy logs keep it. Fix: the ticket travels in the first frame.
 - Both change the protocol: `DEVICE_PROTOCOL_VERSION` moves up, and a daemon on the previous version is admitted to take
   its update only, as today (`device-hub.ts`). Queued behind the self-deploy build.
+- Done in device protocol 5 (2026-10-22). `kinu connect` writes an Ed25519 key to `device.key` (PKCS#8 PEM, 0600) and
+  sends the hub its public half; device.json holds no secret. A ticket is bought with the key's signature over a
+  single-use challenge, the hub's origin and the machine's connect generation, and the socket's first frame, AUTH,
+  carries it: the URL carries neither ticket nor account (the account id, which is no secret, rides in
+  `x-kinu-auth-account`). Each accepted connect hands the next generation, committed on the machine's answer; a signed
+  generation that is neither the committed one nor the next revokes the device and records `clone_detected_at`. No
+  update-only admission remains: a protocol 4 daemon cannot authenticate (its bearer is refused at the ticket, in words
+  naming `kinu update`), so HELLO serves protocol 5 only and closes any other with 4406. `kinu update` enrols a machine
+  protocol 4 linked again, under its own id with a new key, through the CLI's own session; with none, it says to run
+  `kinu connect`. The model is `lean/Kinu/Safety/DeviceKey.lean` (PR-DEVICE-002).
 
 D107. The box ends a process with an exec of `kill` on its pid, and sizes a terminal with an exec of `stty` on its client's
 terminal (`/proc/<pid>/fd/0`). It never calls `ExecProcess.kill()` or `resize()`: both are workerd tasks nobody can await,

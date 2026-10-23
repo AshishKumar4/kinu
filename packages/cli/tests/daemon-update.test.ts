@@ -14,9 +14,10 @@ import {
   type DeviceStatus, type DeviceTransport, type JsonObject, DEVICE_METHOD,
 } from '@kinu.run/core';
 import {
-  DAEMON_FILES, daemonArchive, PLATFORM_ARTIFACT, releaseSigningEnv, ROTATED_TOKEN, startUpdateHub,
+  DAEMON_FILES, daemonArchive, HUB_NONCE, PLATFORM_ARTIFACT, releaseSigningEnv, startUpdateHub,
   type HubPush, type HubSocket, type UpdateHub,
 } from './helpers/update-hub';
+import { createHash, generateKeyPairSync, verify } from 'node:crypto';
 import { readProcessOutput, waitForDaemonPid, waitForFileText } from './helpers/device-process';
 
 const repoRoot = resolve(__dirname, '../../..');
@@ -29,15 +30,8 @@ const NEW_DAEMON = `${DAEMON_FILES['pc-agent.js']}\n// build ${NEW}\n`;
 
 const NEW_FILES = { ...DAEMON_FILES, 'pc-agent.js': NEW_DAEMON };
 
-/** The daemon production runs on device protocol 3, as it installs (packages/pc-agent/tests/fixtures/protocol-3). */
-const PROTOCOL_3 = join(repoRoot, 'packages/pc-agent/tests/fixtures/protocol-3');
-
-const PROTOCOL_3_FILES: Record<string, string> = Object.fromEntries(
-  ['pc-agent.js', 'sandbox.js', 'pty.js', 'update.js', 'chatgpt.js', 'device-protocol.json']
-    .map((name) => [name, readFileSync(join(PROTOCOL_3, `${name}.txt`), 'utf8')]),
-);
-
-const AnnouncedSchema = v.looseObject({ protocolVersion: v.number(), features: v.array(v.string()) });
+/** The machine's key, as `kinu connect` writes device.key beside device.json. */
+const MACHINE_KEY = generateKeyPairSync('ed25519');
 
 const hubs: UpdateHub[] = [];
 
@@ -97,8 +91,9 @@ function installedMachine(origin: string, stamp: string | null, config: JsonObje
   for (const [name, source] of Object.entries(files)) writeFileSync(join(home, name), source, { mode: 0o700 });
 
   if (stamp !== null) writeFileSync(join(home, 'pc-agent.version'), `${stamp}\n`, { mode: 0o600 });
-  // As the previous release's `kinu connect` wrote it (beaf28a46), and as an update leaves it: the fields the daemon reads.
-  writeFileSync(join(home, 'device.json'), `${JSON.stringify({ user: 'user_1', token: `pdt_${'a'.repeat(32)}`, origin, root: home }, null, 2)}\n`, { mode: 0o600 });
+  // As `kinu connect` writes them, and as an update leaves them: the fields the daemon reads, and the key it signs with.
+  writeFileSync(join(home, 'device.json'), `${JSON.stringify({ user: 'user_1', device: 'dev-1', origin, root: home, connectSecret: '' }, null, 2)}\n`, { mode: 0o600 });
+  writeFileSync(join(home, 'device.key'), MACHINE_KEY.privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600 });
   writeFileSync(join(home, 'config.json'), `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
 
   return home;
@@ -244,28 +239,6 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     expect(served.hits.filter((hit) => hit.startsWith('/downloads/'))).toEqual([PLATFORM_ARTIFACT]);
   });
 
-
-  test('a protocol-3 daemon from the previous release takes the pushed build, comes back on this protocol and serves', async () => {
-    const served = hub({ served: NEW, archive: await daemonArchive(NEW_FILES, NEW) });
-    const home = installedMachine(served.origin, OLD, {}, PROTOCOL_3_FILES);
-    startPipedDaemon(home, await releaseSigningEnv());
-
-    await served.sockets.until((hellos) => hellos[1] !== undefined);
-    const [previous, successor] = [present(served.sockets.items[0], 'the protocol-3 HELLO'), present(served.sockets.items[1], 'the successor HELLO')];
-    const before = v.parse(AnnouncedSchema, previous.hello);
-    const after = v.parse(AnnouncedSchema, successor.hello);
-
-    expect({ protocol: before.protocolVersion, sessions: before.features.includes('ptyList') }).toEqual({ protocol: 3, sessions: false });
-    expect({ protocol: after.protocolVersion, sessions: after.features.includes('ptyList'), version: successor.hello.version })
-      .toEqual({ protocol: 4, sessions: true, version: NEW });
-
-    // It serves on the new protocol: a digest-checked write lands, outside the Kinu home the tunnel never serves.
-    const file = join(scratchDir('protocol-3-updated'), 'landed.txt');
-
-    successor.send({ id: 'checked', method: 'writeFileIfDigest', params: [file, 'after the update', null, {}], sandbox: { tier: 'raw', agentHome: '', roots: [] } });
-    expect(v.parse(ReplySchema, await successor.waitForReply('checked'))).toMatchObject({ result: { ok: true } });
-    expect(readFileSync(file, 'utf8')).toBe('after the update');
-  });
 
   test('a build that ships a daemon file this one never had lands it, and comes up on it', async () => {
     // The new daemon requires a module the running build does not ship: the archive's own file list says what lands.
@@ -517,16 +490,18 @@ describe('the daemon answers the hub in core\'s frames', () => {
     expect(asked.filter((method) => method === DEVICE_METHOD.listFiles).length).toBe(pages.length);
   });
 
-  test('a rotated token is on disk when the daemon acknowledges it', async () => {
+  test('a connect secret is on disk when the daemon acknowledges it, named by its hash', async () => {
     const served = hub({ served: OLD, archive: await daemonArchive(NEW_FILES, NEW) });
     const home = installedMachine(served.origin, OLD);
     startDaemon(home, await releaseSigningEnv());
 
     await served.sockets.until((hellos) => hellos[0] !== undefined);
     const socket = present(served.sockets.items[0], 'the HELLO');
-    await socket.frames.until((frames) => frames.some((frame) => frame.type === DEVICE_FRAMES.rotated));;
+    await socket.frames.until((frames) => frames.some((frame) => frame.type === DEVICE_FRAMES.connectSecretAck));
+    const handed = '1'.padEnd(43, 's');
 
-    expect(parseJsonObject(installed(home, 'device.json')).token).toBe(ROTATED_TOKEN);
+    expect(parseJsonObject(installed(home, 'device.json')).connectSecret).toBe(handed);
+    expect(socket.frames.items.find((frame) => frame.type === DEVICE_FRAMES.connectSecretAck)).toMatchObject({ secretHash: createHash('sha256').update(handed).digest('hex') });
   });
 
   test('a sandboxed command\'s whole output reads back through core\'s file client at the /tmp path it printed', async () => {
@@ -659,11 +634,16 @@ describe('a release that needs a newer Bun than the machine runs', () => {
     await Promise.race([served.refusals.until((posted) => posted.length > 0), served.sockets.until((hellos) => hellos.length > 1)]);
     expect(served.refusals.items).toEqual([{
       user: 'user_1',
-      token: ROTATED_TOKEN,
+      device: 'dev-1',
+      nonce: HUB_NONCE,
+      signature: expect.any(String),
       version: NEW,
       runtime: 'Bun 1.4.0',
       reason: `this machine runs Bun 1.4.0, and Bun ${APPROVED_BUN} could not be provided: curl: (6) Could not resolve host: bun.sh`,
     }]);
+    // Signed by the machine's own key, over the hub's challenge and the hub it was sent to.
+    const message = Buffer.from(`kinu-device-update-refused:5:${served.origin}:dev-1:${HUB_NONCE}`);
+    expect(verify(null, message, MACHINE_KEY.publicKey, Buffer.from(served.refusals.items[0]?.signature ?? '', 'base64url'))).toBe(true);
 
     await daemon.waitForLog('device.update_rolled_back');
     expect(pidfile(home)).toBe(oldPid);

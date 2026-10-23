@@ -24,7 +24,9 @@ export class DeviceOutputHubProbeDO extends DurableObject<Cloudflare.Env> {
 
     if (session !== null) this.terminals.attach(session, pair[1]);
     else {
-      this.devices.accept(DEVICE, pair[1]);
+      // Accepted as the account accepts a daemon's socket, then bound as its AUTH binds it.
+      this.devices.acceptUnauthenticated(pair[1]);
+      this.devices.admit(DEVICE, pair[1]);
       this.devices.hello(DEVICE, DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
     }
 

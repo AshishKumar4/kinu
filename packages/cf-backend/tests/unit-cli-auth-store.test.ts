@@ -11,7 +11,7 @@ import {
 } from '../src/cli/auth-store';
 import { makeKv } from './helpers/kv';
 import { cliAuthObjects, type CliAuthObjects } from './helpers/cli-auth';
-import { RateLimitError } from '../src/cli/auth-store';
+import { RateLimitError, type CliAuthObject } from '../src/cli/auth-store';
 import { cliRoutes, type CliRoutesAuthority, type CliRoutesEnv } from '../src/cli/routes';
 import {
   bootstrappedProfile, cliAccount, unreachableAssets, unreachableNamespace,
@@ -46,26 +46,31 @@ function handled(response: Response | null): Response {
   return response;
 }
 
-function setupEnv() {
+/** `resetAccount`: the platform resets the account's object once at each of its calls, before the call runs or after. */
+function setupEnv(options: { resetAccount?: 'before' | 'after' } = {}) {
   const kv = makeKv();
   const objects = cliAuthObjects();
   const minted: string[] = [];
   const claimed: string[] = [];
+  const once = resettingOnce(options.resetAccount ?? 'before');
+  const account = <T>(operation: string, run: () => Promise<T>): Promise<T> => (options.resetAccount === undefined ? run() : once(operation, run));
 
   const userDO = cliAccount({
-    async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
+    async ensureProfile(_caller: UserCaller, email: string) { return await account('ensureProfile', async () => bootstrappedProfile(email)); },
     async mintCliToken(_caller: UserCaller, userId: string, authorizationHash: string, label?: string) {
-      // Refuses like the real UserDO's unique index (unit-user-authority-races.test.ts), so this
-      // exercises the flow's half: the poll names the approval and maps the DO's refusal.
-      if (claimed.includes(authorizationHash)) {
-        throw new Error('That CLI authorization has already been redeemed.');
-      }
+      return await account('mintCliToken', async () => {
+        // Refuses like the real UserDO's unique index (unit-user-authority-races.test.ts), so this
+        // exercises the flow's half: the poll names the approval and maps the DO's refusal.
+        if (claimed.includes(authorizationHash)) {
+          throw new Error('That CLI authorization has already been redeemed.');
+        }
 
-      claimed.push(authorizationHash);
-      const token = `ptc_${userId}_testtoken`;
-      minted.push(`${label ?? ''}:${token}`);
+        claimed.push(authorizationHash);
+        const token = `ptc_${userId}_testtoken`;
+        minted.push(`${label ?? ''}:${token}`);
 
-      return { token, tokenHash: 'hash', expiresAt: Date.now() + 60_000 };
+        return { token, tokenHash: 'hash', expiresAt: Date.now() + 60_000 };
+      });
     },
   });
 
@@ -89,6 +94,66 @@ function brokenKv(): KvStore {
     async delete() {},
   };
 }
+
+/** The runtime's words when storage resets an object under a call (platform-catalog.ts), with the flag it sets. */
+function storageReset(): Error {
+  return Object.assign(new Error('Internal error in Durable Object storage caused object to be reset; reference = test'), { retryable: true });
+}
+
+/** A call failed once per key by a storage reset: `before` it runs, as a reset that loses the call, or `after`, as one
+ *  that loses only its answer. */
+function resettingOnce(when: 'before' | 'after') {
+  const reset = new Set<string>();
+
+  return async <T>(key: string, run: () => Promise<T>): Promise<T> => {
+    if (reset.has(key)) return await run();
+    reset.add(key);
+
+    if (when === 'after') await run();
+
+    throw storageReset();
+  };
+}
+
+const EVERY_CALL = new Set(['claimCode', 'deviceOf', 'open', 'read', 'approve', 'collect']);
+
+/** `objects` as the platform answers when it resets each object once at each call `calls` names. A stub that carried a
+ *  reset is broken, as the platform's is, so a repeat reaches the object only through a fresh one. */
+function resetObjects(
+  objects: ObjectNamespace<string, CliAuthObject>, when: 'before' | 'after', calls: ReadonlySet<string>,
+): ObjectNamespace<string, CliAuthObject> {
+  const once = resettingOnce(when);
+
+  return {
+    idFromName: (name) => objects.idFromName(name),
+    get: (name) => {
+      const object = objects.get(name);
+      let broken = false;
+
+      const at = async <T>(call: string, run: () => Promise<T>): Promise<T> => {
+        if (broken) throw new Error('a stub that carried a reset was used again');
+
+        try {
+          return await (calls.has(call) ? once(`${name} ${call}`, run) : run());
+        } catch (failed) {
+          broken = true;
+          throw failed;
+        }
+      };
+
+      return {
+        claimCode: (deviceHash, until) => at('claimCode', () => object.claimCode(deviceHash, until)),
+        deviceOf: () => at('deviceOf', () => object.deviceOf()),
+        open: (record, until) => at('open', () => object.open(record, until)),
+        read: () => at('read', () => object.read()),
+        approve: (userId, email, now) => at('approve', () => object.approve(userId, email, now)),
+        collect: (now) => at('collect', () => object.collect(now)),
+      };
+    },
+  };
+}
+
+const APPROVER = { userId: '0123456789abcdef0123456789abcdef', email: 'ashish@example.com', sub: 'sub', provider: 'test', authTime: Date.now() };
 
 describe('CLI auth store', () => {
   test('approves and consumes a CLI auth request exactly once', async () => {
@@ -193,6 +258,66 @@ describe('CLI auth store', () => {
     await expect(approveCliAuth(env, 'ABCD-EFGH-JKLM', approver, '127.0.0.1'))
       .rejects.toMatchObject({ code: 'bad_input', message: expect.stringContaining('Unknown CLI auth code.') });
     expect([...objects.held.keys()]).toEqual(reached);
+  });
+});
+
+// Staging 2026-10-23: a start among 30 at once answered 500 on "Internal error in Durable Object storage caused object
+// to be reset". The platform flags such a failure retryable, and each call of a sign-in is repeated on a fresh stub.
+describe('a CLI sign-in the platform resets under', () => {
+  test('signs in though every call of it, its objects\' and the account\'s, is reset once before it runs', async () => {
+    const { env, minted } = setupEnv({ resetAccount: 'before' });
+    const resetting = { ...env, CliAuthDO: resetObjects(env.CliAuthDO, 'before', EVERY_CALL) };
+
+    const started = await startAuth(resetting, 'https://kinu.example.com', 'terminal');
+    expect(await inspectCliAuth(resetting, started.userCode)).toMatchObject({ status: 'pending', deviceName: 'terminal' });
+    await approveCliAuth(resetting, started.userCode, APPROVER, '127.0.0.1');
+
+    expect(await pollCliAuth(resetting, started.deviceToken, '127.0.0.1')).toMatchObject({ status: 'approved', token: `ptc_${APPROVER.userId}_testtoken` });
+    expect(minted).toHaveLength(1);
+  });
+
+  test('keeps one code, one approval and one token when the platform loses only the answers of the calls that keep them', async () => {
+    const { env, objects, minted, claimed } = setupEnv();
+    const resetting = { ...env, CliAuthDO: resetObjects(objects, 'after', new Set(['claimCode', 'open', 'approve'])) };
+
+    const started = await startAuth(resetting, 'https://kinu.example.com', 'terminal');
+    const device = await sha256Hex(started.deviceToken);
+
+    // The repeated claim was this sign-in's own: one code was drawn, and it names this start's device.
+    expect([...objects.held.keys()].filter((name) => name.startsWith('code:'))).toEqual([`code:${started.userCode}`]);
+    expect(await objects.get(`code:${started.userCode}`).deviceOf()).toBe(device);
+    await approveCliAuth(resetting, started.userCode, APPROVER, '127.0.0.1');
+
+    expect(await pollCliAuth(resetting, started.deviceToken, '127.0.0.1')).toMatchObject({ status: 'approved', token: `ptc_${APPROVER.userId}_testtoken` });
+    expect(await pollCliAuth(resetting, started.deviceToken, '127.0.0.1')).toMatchObject({ status: 'expired', message: expect.stringContaining('already delivered') });
+    expect(minted).toHaveLength(1);
+    expect(claimed).toEqual([device]);
+  });
+
+  test('mints no second token when the platform loses the answers of its claim, its approval and its mint', async () => {
+    const { env, objects, minted, claimed } = setupEnv({ resetAccount: 'after' });
+    const resetting = { ...env, CliAuthDO: resetObjects(objects, 'after', new Set(['claimCode', 'open', 'approve'])) };
+
+    const started = await startAuth(resetting, 'https://kinu.example.com', 'terminal');
+    await approveCliAuth(resetting, started.userCode, APPROVER, '127.0.0.1');
+    const polls = [await pollCliAuth(resetting, started.deviceToken, '127.0.0.1'), await pollCliAuth(resetting, started.deviceToken, '127.0.0.1')];
+
+    // The mint was kept before its answer was lost: its repeat is refused as redeemed, so no second token exists.
+    expect(minted).toHaveLength(1);
+    expect(claimed).toEqual([await sha256Hex(started.deviceToken)]);
+    expect(polls.filter((poll) => poll.token !== undefined)).toHaveLength(0);
+    expect(polls.map((poll) => poll.status)).toEqual(['expired', 'expired']);
+  });
+
+  test('never hands one approval out twice: a delivery whose answer is lost is told as delivered, not failed', async () => {
+    const { env, minted } = setupEnv();
+    const resetting = { ...env, CliAuthDO: resetObjects(env.CliAuthDO, 'after', new Set(['collect'])) };
+
+    const started = await startAuth(resetting, 'https://kinu.example.com', 'terminal');
+    await approveCliAuth(resetting, started.userCode, APPROVER, '127.0.0.1');
+
+    expect(await pollCliAuth(resetting, started.deviceToken, '127.0.0.1')).toMatchObject({ status: 'expired', message: expect.stringContaining('already delivered') });
+    expect(minted).toHaveLength(0);
   });
 });
 
@@ -302,6 +427,16 @@ describe('CLI auth route status mapping', () => {
     const res = handled(await cli(startRequest(), env));
     expect(res.status).toBe(500);
     expect(v.parse(ErrorResponseSchema, await res.json()).error).not.toMatch(/namespace unavailable/i);
+  });
+
+  test('an object the platform resets past every retry → 503, try again, not 500', async () => {
+    const reset = async (): Promise<never> => { throw storageReset(); };
+
+    const resetting: CliAuthObject = { claimCode: reset, deviceOf: reset, open: reset, read: reset, approve: reset, collect: reset };
+    const env = testEnv(makeKv(), unreachableNamespace('UserDO'), { held: new Map(), idFromName: (name) => name, get: () => resetting });
+
+    const res = handled(await cli(startRequest(), env));
+    expect(res.status).toBe(503);
   });
 });
 

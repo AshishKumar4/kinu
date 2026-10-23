@@ -12,6 +12,7 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 import { mergePolicyProfile } from '@kinu.run/test-utils';
 import { createTestUserDO, testOwner, type DeviceFrame, type TestUserDO } from './helpers/user-do';
 import { createAgentProviderRegistry, userCredentials } from '../src/providers/agent-registry';
+import { registerTestDevice } from './helpers/device-key';
 
 /** A relay call's one parameter, as the daemon reads it. */
 const RelayRequestSchema = v.object({
@@ -96,7 +97,7 @@ async function rig(upstream: Upstream, beforeRelay?: (request: v.InferOutput<typ
     harness, relayed, model: registry.resolveModel('codex/gpt-5.5', { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }),
     cancelAsked: cancelAsked.promise, answerCancel: () => { cancelAnswered.resolve(); },
     attachMachine: async (answers, label = 'studio') => {
-      const { deviceId } = await harness.userDO.registerDevice(owner, label);
+      const { deviceId } = await registerTestDevice(harness.userDO, label, owner);
       machines.set(deviceId, answers);
       const daemon = harness.attachDaemon(deviceId);
 

@@ -254,19 +254,19 @@ function shareProjectTree(kernel: Pick<CredentialedVfs, 'chown' | 'chmod' | 'set
 }
 
 /**
- * Main's home, which is the project tree: provisioned as every agent's, and shared ({@link shareProjectTree}) by the call
- * that makes its `.kinu`, which is the workspace's creation. An older workspace already has one and keeps its tree as it
- * was: no migration. Read from the tree itself, so no counter or reset of one can share an old tree or skip a new one; an
- * owner who deletes `.kinu` has the tree shared at the next boot, as a new one, and a boot that dies between the two
- * leaves it unshared.
+ * Main's home, which is the project tree: shared ({@link shareProjectTree}) by the boot that makes its `.kinu`, which is
+ * the workspace's creation, then provisioned as every agent's. An older workspace already has one and keeps its tree as
+ * it was: no migration. Read from the tree itself, so no counter or reset of one can share an old tree or skip a new one;
+ * an owner who deletes `.kinu` has the tree shared at the next boot, as a new one. Shared before `.kinu` is made, so a
+ * boot that dies between the two leaves no `.kinu`, and the next boot shares the tree.
  */
 export function provisionProjectHome(root: HomeRootVfs & Pick<CredentialedVfs, 'setDefaultAcl'>, identity: AgentIdentity): string {
-  const created = !root.exists(`${WORKSPACE_ROOT}/.kinu`);
-  const home = provisionAgentHome(root, MAIN_AGENT, identity);
+  if (!root.exists(`${WORKSPACE_ROOT}/.kinu`)) {
+    if (!root.exists(WORKSPACE_ROOT)) root.mkdir(WORKSPACE_ROOT, { recursive: true });
+    shareProjectTree(root);
+  }
 
-  if (created) shareProjectTree(root);
-
-  return home;
+  return provisionAgentHome(root, MAIN_AGENT, identity);
 }
 
 /** Nimbus seeds the configured HOME (env.HOME is {@link WORKSPACE_ROOT}); `/home` holds every agent's, so root owns it. */

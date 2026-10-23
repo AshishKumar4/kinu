@@ -1,8 +1,8 @@
 /**
- * The one frame and header of a top-level page (docs/design review 2026-10-20, "one frame, filled"). Every page that is
- * not a tool or a chat sits in one centred frame, 1152 wide with a 32 px gutter (20 on a phone), and its body fills it:
- * every title on one line, every right edge (the header's action too) on one. A tool (Mail, Drive) keeps the full width
- * and the same header row; a chat has its own bar.
+ * The one frame and header of a top-level page (docs/design review 2026-10-20, "one frame, filled"). Every page but a
+ * chat sits in one centred frame, 1152 wide with a 32 px gutter (20 on a phone), and its body fills it: every title on
+ * one line, every right edge (the header's action too) on one. A tool (Mail, Drive) is drawn in the same frame under
+ * the same header, its columns filling the height below; a chat has its own bar.
  *
  * The rhythm is held here, and no page writes its own: top inset 48 (24 on a phone), a header row of 36, a hairline 20
  * below it, the body 32 below that, 64 at the foot.
@@ -11,7 +11,7 @@ import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { ArrowLeftIcon } from "@phosphor-icons/react";
 
-/** The frame every non-tool page shares; its content is 1088 wide on a desktop. */
+/** The frame every page but a chat shares; its content is 1088 wide on a desktop. */
 const PAGE_FRAME = "mx-auto w-full max-w-[var(--layout-frame)] px-5 sm:px-8";
 
 /** Top inset and foot, for a frame page and a tool alike. */
@@ -73,33 +73,21 @@ export function Page({ icon, back, title, actions, fill = false, rule, children,
 }
 
 /**
- * A tool's bar (Mail, Drive; design review 2026-10-20, A2): a tool is a working surface like a chat, so it gets the
- * chat bar's 46 px band, not a page's header. The tool's icon and name at its left, then its view; its search, filter and
- * primary at its right, every control 28 high. A hairline under it, since the tool's columns meet it.
+ * A tool page (Mail, Drive): a frame page's header in the frame's own rhythm, then the tool's row (its views and search,
+ * as Workspaces' filters sit under its header), then its columns, which fill the height left and scroll each on its
+ * own. The owner, 2026-10-23: Mail and Drive under a bar of their own (A2's 46 px band) read as another app beside the
+ * other views, which is how they were approved on 2026-10-19 too.
  */
-function ToolBar({ icon, title, view, actions }: { icon: ReactNode; title: string; view?: ReactNode; actions?: ReactNode }) {
-  return (
-    <header className="p-tool-bar" data-tool-bar>
-      <span className="flex shrink-0 p-text-3 [&>svg]:size-4.5" aria-hidden>{icon}</span>
-      <h1 className="p-tool-title">{title}</h1>
-      {view !== undefined && <div className="ml-4 flex min-w-0">{view}</div>}
-      {actions !== undefined && <div className="ml-auto flex min-w-0 items-center gap-2">{actions}</div>}
-    </header>
-  );
-}
-
-/**
- * A tool page: its bar, then `below` (what moves out of the bar on a narrow screen, a scrolling row of its own), then
- * its columns filling the rest. No top inset and no gutter: each column pads itself.
- */
-export function ToolPage({ icon, title, view, actions, below, children, ...attributes }: {
-  icon: ReactNode; title: string; view?: ReactNode; actions?: ReactNode; below?: ReactNode; children: ReactNode;
+export function ToolPage({ icon, title, actions, row, children, ...attributes }: {
+  icon: ReactNode; title: string; actions?: ReactNode; row?: ReactNode; children: ReactNode;
 } & Readonly<Record<`data-${string}`, string | boolean>>) {
   return (
-    <div className="flex h-full min-h-0 flex-col" {...attributes}>
-      <ToolBar icon={icon} title={title} view={view} actions={actions} />
-      {below}
-      <div className="flex min-h-0 flex-1">{children}</div>
+    <div className="h-full min-h-0" {...attributes}>
+      <div className={`${PAGE_FRAME} flex h-full min-h-0 flex-col pt-6 lg:pt-12`}>
+        <PageHeader icon={icon} title={title}>{actions}</PageHeader>
+        {row !== undefined && row !== null && <div className="mt-6 flex flex-wrap items-center gap-x-4 gap-y-3" data-tool-row>{row}</div>}
+        <div className="mt-6 flex min-h-0 flex-1">{children}</div>
+      </div>
     </div>
   );
 }

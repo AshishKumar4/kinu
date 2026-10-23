@@ -13,6 +13,7 @@ import type { EventLog } from '../hub/log';
 import type { TriggerRegistry } from '../hub/triggers';
 import type { TriggerRow } from '../hub/types';
 import { runWorkModeInvocation } from '../../execution/work-mode';
+import { diagnostics } from '../../obs/index';
 import { stableStringify } from '../../safety/argument-digest';
 import type { CodemodeProvider } from '../../types/codemode';
 import type { ResolvedProvider } from '../../types/primitives';
@@ -175,6 +176,11 @@ export async function checkWatcher(deps: WatchDeps, triggerId: string, asked: Wa
     const read = watchOf(trigger).state;
     const outcome = await deps.run(check, read, input);
     const committed = await commitCheck(deps, { triggerId, read, outcome, scheduledAt: at, now: now() });
+
+    // A check is the cost a watcher pays for the turns it spares: each is counted, with why one stopped.
+    diagnostics.event('watch.checked', {
+      trigger: triggerId, outcome: committed, ...(outcome.kind !== 'answered' && { kind: outcome.kind, detail: outcome.detail.slice(0, 300) }),
+    });
 
     if (committed === 'fired') fired = true;
 

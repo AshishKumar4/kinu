@@ -624,6 +624,8 @@ export {
   type AppDataStore, type DbOpRecord,
 } from './tools/db-codemode';
 
+export { ExplainRowSchema, gateProgram } from './operations/db-sql';
+
 export { ActorReferenceSchema, actorReferenceOf, bindActorHandle, sameActorReference, type ActorReference, type ActorIdentity, type ActorHandle } from './identity/actor-handle';
 
 export { explorationActorKey, isExplorationActorKey, parseActorKey, requireSubagentActorName } from './identity/actor-key';
@@ -746,7 +748,7 @@ export {
 
 export {
   buildBuiltinTools,
-  builtinStoreDeps,
+  builtinStores,
   surfaceStores,
   type ServedTools,
   type BuiltinStoreInputs,
@@ -1141,8 +1143,14 @@ export {
 export {
   DeviceHelloHeadSchema, DeviceUpdateHelloSchema, DeviceHelloSchema, DEVICE_METHOD, DEVICE_FRAMES, DEVICE_ERRORS,
   DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, DEVICE_UPDATE_REQUIRED, DEVICE_PTY_MAX_AXIS, deviceMethodHas,
-  deviceFailure,
+  deviceFailure, DeviceAuthFrameSchema, DeviceConnectSecretAckSchema, DEVICE_AUTH_DEADLINE_CLOSE, DEVICE_AUTH_DEADLINE_MS,
+  DEVICE_CREDENTIALS_REJECTED_CLOSE, DEVICE_VERSION_REFUSAL_CLOSE, DEVICE_CONNECT_ACCOUNT_HEADER,
 } from './execution/device-protocol';
+
+export {
+  DEVICE_CONNECT_SECRET, DEVICE_KEY_FILE, deviceConnectMessage, deviceRefusalMessage, deviceReplaceMessage, isDevicePublicKey, signDeviceMessage,
+  verifyDeviceSignature,
+} from './execution/device-key';
 
 export {
   DeviceSocketHub, deviceIdFromSocket, type DeviceSocket,
@@ -2708,11 +2716,22 @@ export {
   type PcUserNamespace,
   type PcIngressEnv,
   handlePcConnect,
+  handlePcConnectChallenge,
   handlePcConnectTicket,
   handlePcJoin,
   deviceJoinTicketUser,
   DEVICE_JOIN_TICKET_PREFIX,
   handlePcUpdateRefused,
+  CONNECT_TICKET_PATTERN,
+  DEVICE_KEY_MALFORMED,
+  DeviceReplacementSchema,
+  type DeviceChallengeIssue,
+  type DeviceChallengeProof,
+  type DeviceConnectProof,
+  type DeviceEnrolment,
+  type DeviceReplacement,
+  type DeviceTicketIssue,
+  type DeviceTicketRefusal,
 } from './http/pc-ingress';
 
 export {

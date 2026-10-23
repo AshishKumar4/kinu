@@ -5,13 +5,13 @@ import { KinuError } from '@kinu.run/core/obs';
 import { activationDisruptions, canaryActivations } from './durability-canary-telemetry';
 import { resetCause, ROLLOVER_SPAN_MS } from './worker-deployments';
 import {
-  alarmsThatRan, deletionTimes, idleWakeHours, ordinalHours, readAgainWhile, settledRead, Telemetry, terminalEffectStates, type VersionRead, versionFindings, versionRead,
-  versionSignals, workWindow,
+  alarmsThatRan, deletionTimes, idleWakeHours, lostAlarmRows, ordinalHours, QueryBudget, REFUSALS_IN_A_ROW, readAgainWhile, settledRead, Telemetry, terminalEffectStates, type VersionRead, versionFindings, versionNotices,
+  versionRead, versionSignals, workWindow,
 } from './prod-logs';
 
 const HOUR = 3_600_000;
 
-const quiet: VersionRead = { ended: [], thrown: [], deployResets: [], effects: { failed: 0, failedTurns: 0, terminal: { observations: 0, settled: [], owed: [], parked: [], deleted: [] } }, startups: [], idleWakes: [] };
+const quiet: VersionRead = { ended: [], thrown: [], deployResets: [], effects: { failed: 0, failedTurns: 0, terminal: { observations: 0, settled: [], owed: [], parked: [], deleted: [] } }, startups: [], idleWakes: [], lostRows: [] };
 
 const HUNG = 'The Workers runtime canceled this request because it detected that your Worker\'s code had hung and would never generate a response.';
 
@@ -331,6 +331,18 @@ describe('a read that issues a verdict', () => {
     await expect(settledRead(reader(['refused']))).rejects.toThrow('telemetry query answered 500');
   });
 
+  // Staging 99a13686c, 2026-10-23: every read refused, asked again every 2 min for 20 minutes at about 80 requests a read.
+  test('fails on the fifth refusal in a row, before or after an answer, and an answer starts the count again', async () => {
+    const never = reader(['refused']);
+    const later = reader([5, 'refused']);
+    const between = reader([5, 'refused', 'refused', 'refused', 'refused', 6, 6, 6]);
+
+    await expect(settledRead(never)).rejects.toThrow('telemetry query answered 500');
+    await expect(settledRead(later)).rejects.toThrow('telemetry query answered 500');
+    expect({ never: never.startedAt.length, later: later.startedAt.length, between: await settledRead(between) })
+      .toEqual({ never: REFUSALS_IN_A_ROW, later: REFUSALS_IN_A_ROW + 1, between: { settled: true, value: 6, reads: 3, lateRows: 1 } });
+  });
+
   test('fails at once on any failure but the API\'s refusal, the first read or a later one', async () => {
     const first = reader(['rejected', 5]);
     const later = reader([5, 'refused', 5, 'rejected', 5]);
@@ -487,6 +499,40 @@ describe('a code update\'s reset in a version\'s window', () => {
 // Staging 613467d1a, 2026-10-23: three eval workspaces destroyed at 02:15-02:16Z under the version before, their sleep-time
 // wakes delivered `canceled` at 02:25Z in this version's window, and each read as an idle wake: the deletions were read
 // only under this version and in its window.
+// Staging's CliAuthDO, 2026-10-23: telemetry lost 21 alarms' lines and 24 lines' alarm rows in one burst, and the gate
+// read each of the 21 as a red idle wake (kinu-probe-logloss measured the platform's loss; see lostAlarmRows).
+describe('an idle wake in a window whose telemetry lost rows', () => {
+  const at = (minute: number) => Date.parse('2026-10-23T13:00:00Z') + minute * 60_000;
+  const row = (object: string, minute: number, eventType = 'alarm') => ({ object, minute: at(minute), count: 1, eventType });
+  const idleWakes = [{ object: 'a', hour: at(0), count: 1 }];
+  const IDLE = 'object a woke 1 time(s) with nothing to watch in the hour from 2026-10-23T13:00:00Z';
+
+  test('a line an alarm logged by an object with no alarm row is a lost row; one of an alarm that ran long, or in no alarm, is not', () => {
+    const alarms = [row('a', 45), row('b', 50)];
+
+    expect(lostAlarmRows(alarms, [row('b', 58), row('x', 45), row('y', 46), row('y', 47), row('z', 45, 'fetch')])).toEqual(['x', 'y']);
+  });
+
+  test('beside lost rows on other objects, an idle wake is a notice, unreadable, and no red', () => {
+    const read = { ...quiet, idleWakes, lostRows: ['b'] };
+
+    expect({ findings: versionFindings(read), signals: versionSignals(read), notices: versionNotices(read) }).toEqual({
+      findings: [], signals: [],
+      notices: [{ what: 'idle wakes', finding: `unreadable (telemetry lost rows): ${IDLE}; 1 object(s) logged in an alarm with no row of it, e.g. b` }],
+    });
+  });
+
+  test('in a window that lost no rows an idle wake is red, and lost rows with no idle wake say nothing', () => {
+    expect({
+      clean: { findings: versionFindings({ ...quiet, idleWakes }), notices: versionNotices({ ...quiet, idleWakes }) },
+      lostOnly: { findings: versionFindings({ ...quiet, lostRows: ['b'] }), notices: versionNotices({ ...quiet, lostRows: ['b'] }) },
+    }).toEqual({
+      clean: { findings: [{ what: 'idle wakes', finding: IDLE }], notices: [] },
+      lostOnly: { findings: [], notices: [] },
+    });
+  });
+});
+
 describe('an alarm in a version\'s window, beside a deletion under the version before', () => {
   const from = Date.parse('2026-10-23T02:24:40Z');
   const to = Date.parse('2026-10-23T03:31:20Z');
@@ -494,21 +540,36 @@ describe('an alarm in a version\'s window, beside a deletion under the version b
 
   /** The version's read, its alarms those `alarms` names at `delivered`, those of `canceled` the platform's `canceled`,
    *  and `deleted-before` destroyed at 02:15:15Z under the version before: only a read of its own rows, unscoped, finds
-   *  it, and only one that reaches back to it. `sampledWork`: the API sampled the reads of the version's calls. */
-  const read = async (alarms: readonly string[], canceled: readonly string[], { delivered = '2026-10-23 02:25:00', sampledWork = false } = {}) => {
+   *  it, and only one that reaches back to it. `sampledWork`: the API sampled the reads of the version's calls;
+   *  `sampledAlarms`: its alarm rows each carry interval 10. `lostAt`: the minute a CliAuthDO's alarm logged
+   *  `cli.auth_retired` with no invocation row of it in the window; `earlyAlarm`: that alarm began 5 min before it. */
+  let deletionReads = 0;
+
+  const read = async (alarms: readonly string[], canceled: readonly string[], { delivered = '2026-10-23 02:25:00', sampledWork = false, sampledAlarms = false, lostAt = '', earlyAlarm = false } = {}) => {
     const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: async (request) => {
       const asked = v.parse(v.looseObject({ timeframe: v.optional(v.object({ from: v.number() })) }), await request.json());
       const body = JSON.stringify(asked);
       const has = (text: string) => body.includes(text);
-      const series = (objects: readonly string[]) => [{ alias: 'count', series: [{ time: delivered, data: objects.map((object) => ({ groups: [{ key: '$workers.durableObjectId', value: object }], value: 1 })) }] }];
+      const interval = sampledAlarms ? 10 : 1;
+      const groups = (object: string) => [{ key: '$workers.durableObjectId', value: object }, { key: '$workers.eventType', value: 'alarm' }, { key: 'event', value: 'cli.auth_retired' }];
+      const data = (objects: readonly string[]) => objects.map((object) => ({ groups: groups(object), value: interval, interval }));
+      const early = earlyAlarm && (asked.timeframe?.from ?? from) < from ? [{ time: '2026-10-23 02:20:00', data: data(['row-lost']) }] : [];
 
-      if (has('"granularity"') && has('"operation":"eq","value":"alarm"')) return Response.json({ success: true, result: { calculations: series(has('"value":"canceled"') ? canceled : alarms) } });
+      if (has('"granularity"') && has('"operation":"eq","value":"alarm"')) {
+        return Response.json({ success: true, result: { calculations: [{ alias: 'count', series: [{ time: delivered, data: data(has('"value":"canceled"') ? canceled : alarms) }, ...early] }] } });
+      }
+
+      if (has('"granularity"') && /"operation":"in","value":"[^"]*\bcli\.auth_retired\b/u.test(body) && lostAt !== '') {
+        return Response.json({ success: true, result: { calculations: [{ alias: 'count', series: [{ time: lostAt, data: [{ groups: groups('row-lost'), value: 1 }] }] }] } });
+      }
 
       if (has('"granularity"') && has('"operation":"neq","value":"alarm"') && sampledWork) return Response.json({ success: true, result: { statistics: { abr_level: 10 } } });
 
       const reaches = (asked.timeframe?.from ?? Infinity) <= destroyedAt;
 
-      if (has('"view":"events"') && has('"value":"workspace.destroyed"') && has('"key":"fields.object","operation":"eq","value":"deleted-before"') && !has('scriptVersion') && reaches) {
+      if (has('"view":"events"') && has('"operation":"in"')) deletionReads += 1;
+
+      if (has('"view":"events"') && has('"value":"workspace.destroyed"') && /"key":"fields\.object","operation":"(?:eq|in)","value":"[^"]*\bdeleted-before\b/u.test(body) && !has('scriptVersion') && reaches) {
         const row = { timestamp: destroyedAt, source: { event: 'workspace.destroyed', fields: { workspace: 'eval-killn-kimi-0-xrstnt', object: 'deleted-before' } } };
 
         return Response.json({ success: true, result: { events: { events: [row] } } });
@@ -532,6 +593,16 @@ describe('an alarm in a version\'s window, beside a deletion under the version b
     expect(await idleWakes(['deleted-before'], ['deleted-before'])).toEqual([]);
   });
 
+  // Staging 99a13686c's window, 2026-10-23: two reads for each of 29 objects were 58 of a version read's 77 requests.
+  test('the deletions of every object a delivery was cancelled for are read together, 200 objects a read', async () => {
+    const others = Array.from({ length: 200 }, (_, at) => `moved-${String(at)}`);
+
+    deletionReads = 0;
+    const wakes = await idleWakes(['deleted-before', ...others], ['deleted-before', ...others]);
+
+    expect({ wakes: wakes.length, deleted: wakes.includes('deleted-before'), reads: deletionReads }).toEqual({ wakes: 200, deleted: false, reads: 4 });
+  });
+
   test('an alarm that ran with no work is a wake, and so is a cancelled one of an object never deleted', async () => {
     expect(await idleWakes(['idle', 'moved'], ['moved'])).toEqual(['idle', 'moved']);
   });
@@ -547,6 +618,27 @@ describe('an alarm in a version\'s window, beside a deletion under the version b
   // 04603ec96's deploy, its own read sampled at level 1,000,000, read alarms beside dropped calls as idle wakes.
   test('a read whose answers of the version\'s work were sampled is asked again, never read as idle', async () => {
     await expect(read(['idle'], [], { sampledWork: true })).rejects.toMatchObject({ code: 'unavailable', message: expect.stringContaining('sampled the reads of the version\'s work') });
+  });
+
+  // bc4ab809's deploy: one delivery, its row's interval 10 in an answer at abr_level 1, read as 10 idle wakes.
+  test('a per-minute row Cloudflare sampled counts the events it stored, never its estimate', async () => {
+    expect((await read(['idle'], [], { sampledAlarms: true })).idleWakes.map((idle) => idle.count)).toEqual([1]);
+  });
+
+  test('an alarm\'s line whose own row was lost is read as a lost row, and the idle wakes beside it are kept', async () => {
+    const answer = await read(['idle'], [], { lostAt: '2026-10-23 02:26:00' });
+
+    expect({ lost: answer.lostRows, idle: answer.idleWakes.map((idle) => idle.object) }).toEqual({ lost: ['row-lost'], idle: ['idle'] });
+  });
+
+  // The window ends at 03:31:20: a line in its 03:31 minute may be of an alarm after it, and one of an alarm that began
+  // before the window is that alarm's.
+  test('a line in the window\'s last, partly read minute, or of an alarm that began before the window, is no lost row', async () => {
+    expect({
+      lastMinute: (await read(['idle'], [], { lostAt: '2026-10-23 03:31:00' })).lostRows,
+      lastWhole: (await read(['idle'], [], { lostAt: '2026-10-23 03:30:00' })).lostRows,
+      early: (await read(['idle'], [], { lostAt: '2026-10-23 02:25:00', earlyAlarm: true })).lostRows,
+    }).toEqual({ lastMinute: [], lastWhole: ['row-lost'], early: [] });
   });
 });
 
@@ -606,6 +698,13 @@ describe('a kept window read beside the deploy\'s own', () => {
     expect({ read: await readAgainWhile(own, kept.read, async () => {}), asked: kept.asked() }).toEqual({ read: 7, asked: 3 });
   });
 
+  test('keeps the fifth refusal in a row however long the own read lasts', async () => {
+    const kept = answering(['gateway']);
+
+    await expect(readAgainWhile(reading(), kept.read, async () => {})).rejects.toThrow('answered 502');
+    expect(kept.asked()).toBe(REFUSALS_IN_A_ROW);
+  });
+
   test('keeps its last refusal once the own read has ended, and fails at once on any other failure', async () => {
     const own = reading();
     const kept = answering(['gateway', 7]);
@@ -629,5 +728,60 @@ describe('a kept window read beside the deploy\'s own', () => {
 
     await expect(waiting).rejects.toThrow('answered 502');
     expect(kept.asked()).toBe(1);
+  });
+});
+
+// Staging 99a13686c, 2026-10-23: a deploy's reads spent about 80 requests every 2 min for 20 minutes, and the account's
+// API answered 403. The query API states the user's budget on each answer (1,200 requests a 300 s window).
+describe('the API budget every telemetry read spends from', () => {
+  const answer = (status: number, left: number, endsIn: number, headers: Record<string, string> = {}) => new Response('{}', { status, headers: {
+    'ratelimit-policy': '"default";q=1200;w=300', ratelimit: `"default";r=${String(left)};t=${String(endsIn)}`, ...headers,
+  } });
+
+  /** A budget on a clock its sleeps advance. */
+  const budget = () => {
+    const slept: number[] = [];
+    let clock = 1_000_000;
+
+    return { slept, budget: new QueryBudget(async (ms) => { slept.push(ms); clock += ms; }, () => clock) };
+  };
+
+  test('a read waits for the window\'s end rather than spend the half kept for the account\'s other calls, and every read waits with it', async () => {
+    const half = budget();
+    const above = budget();
+
+    half.budget.heard(answer(200, 599, 40));
+    above.budget.heard(answer(200, 600, 40));
+    await Promise.all([half.budget.spend(), half.budget.spend(), above.budget.spend()]);
+    await half.budget.spend();
+
+    expect({ half: half.slept, above: above.slept }).toEqual({ half: [40_000], above: [] });
+  });
+
+  test('a 429 leaves nothing to spend until its retry-after', async () => {
+    const limited = budget();
+
+    limited.budget.heard(answer(429, 0, 200, { 'retry-after': '30' }));
+    await limited.budget.spend();
+
+    expect(limited.slept).toEqual([30_000]);
+  });
+
+  // Review of 6e61b8313: a later 429 or an answer out of order released the reads before the API's own cooldown ended.
+  test('a 429 heard during a wait, or before any policy, holds every read to its retry-after; a later answer never shortens it', async () => {
+    const later = budget();
+    const unpolicied = budget();
+
+    later.budget.heard(answer(200, 599, 10));
+    const waiting = later.budget.spend();
+
+    later.budget.heard(answer(429, 0, 200, { 'retry-after': '60' }));
+    later.budget.heard(answer(200, 1100, 5));
+    await waiting;
+    unpolicied.budget.heard(new Response('{}', { status: 429, headers: { 'retry-after': '30' } }));
+    await unpolicied.budget.spend();
+
+    // The 429 came once the first 10 s had passed, on a clock its sleeps advance.
+    expect({ later: later.slept, unpolicied: unpolicied.slept }).toEqual({ later: [10_000, 60_000], unpolicied: [30_000] });
   });
 });

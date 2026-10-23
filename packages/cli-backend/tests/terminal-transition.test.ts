@@ -582,7 +582,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
 });
 
 describe('an owed follow-up turn waits for its own row', () => {
-  test('an overflow retry stays owed until its turn is on disk, and the next pass closes it', async () => {
+  test('an overflow retry stays owed until its turn is on disk, and closes as that turn commits', async () => {
     const { db, rt } = workspace();
     let overflowed = false;
 
@@ -603,12 +603,11 @@ describe('an owed follow-up turn waits for its own row', () => {
     await session.settleBackgroundWork();
 
     expect(retries()).toBe(1);
-    expect(owed()).toContain('overflow_retry');
+    expect(owed()).not.toContain('overflow_retry');
 
     session.skipBackoff();
     await session.recoverTerminalTransitions();
 
-    expect(owed()).not.toContain('overflow_retry');
     expect(retries()).toBe(1);
     await session.end();
     db.close();

@@ -47,7 +47,7 @@ const WORKSPACE_CAPABILITY_TIERS = {
   'device.consent': 'owner_only',
   /** Whether the calling workspace holds the full-filesystem tier; refusing would widen the file view, not close it. */
   'device.consent.read_self': 'workspace',
-  /** Device registry and daemon token/ticket exchange. Owner-only: `registerDevice` mints a device token. */
+  /** Device registry and the daemon's challenge and ticket exchange. Owner-only: `registerDevice` registers a machine's key. */
   'device.manage': 'owner_only',
   /** The owner's workspace roster (leaks other workspace names). */
   'workspaces.read': 'workspace',

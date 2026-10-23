@@ -65,7 +65,7 @@ if (import.meta.main) {
 
   const clef = createDecisionPort({
     run: clefRun(account, token), model: async () => DEFAULT_DECISION_MODEL, report: () => {},
-    refusals: { changes: () => 0, refused: () => {}, answered: () => {} },
+    refusals: { changes: () => 0, refused: () => {}, answered: () => {}, untrusted: () => {} },
   });
 
   const verdicts = await inFours(turns, async (turn) => ({ turn, verdict: await rated(clef, turn) }));

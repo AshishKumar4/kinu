@@ -79,7 +79,7 @@ import * as v from 'valibot';
 import { ALERT_THRESHOLDS, findWakeLoops, type StartupHour, type WakeLoop } from '@kinu.run/core/analytics';
 import { ALARM_WORK, classifyErrorCode, HOSTED_ALARM_WORK, KinuError } from '@kinu.run/core/obs';
 import { PLATFORM_CATALOG } from '../packages/core/src/platform-catalog';
-import { recordStep } from './deploy-report';
+import { recordNotice } from './deploy-report';
 import { restAnswer } from './cloudflare-rest';
 import { listDeployments, resetCause, type Deployment } from './worker-deployments';
 import { requireCloudflareAccountId } from './infra-cloudflare';
@@ -108,6 +108,9 @@ const MINUTE_MS = 60_000;
 
 /** An alarm this close to its object's own work served it; past it, nothing was left to watch. */
 export const IDLE_WAKE_DISTANCE_MS = 5 * MINUTE_MS;
+
+/** An alarm handler's longest run: Cloudflare's Durable Objects limits, "a maximum wall time of 15 minutes". */
+const ALARM_WALL_MS = 15 * MINUTE_MS;
 
 /** Every line that is an alarm's own work, as each alarm the code arms names it, and each hosted library's. */
 const ALARM_WORK_EVENTS = [...new Set<string>([...Object.values(ALARM_WORK), ...Object.values(HOSTED_ALARM_WORK)].flat())];
@@ -298,6 +301,7 @@ const GroupValue = v.pipe(v.union([v.string(), v.number(), v.boolean()]), v.tran
 const Aggregate = v.looseObject({
   groups: v.optional(v.array(v.looseObject({ key: v.string(), value: GroupValue })), []),
   value: v.number(),
+  interval: v.optional(v.number(), 1),
   sampleInterval: v.optional(v.number(), 1),
 });
 
@@ -387,6 +391,58 @@ export async function readToken(): Promise<string> {
   return token;
 }
 
+/**
+ * The user's REST budget as the query API states it on every answer: `ratelimit-policy` `"default";q=1200;w=300` (1,200
+ * requests a 300 s window, every call the user's tokens make) and `ratelimit` `"default";r=<left>;t=<seconds to the
+ * window's end>`. Every read a process makes spends from one. A read waits for the window's end rather than spend the
+ * half kept for the account's other calls: a deploy's reads once re-asked about 80 requests every 2 min for 20 min
+ * (staging 99a13686c, 2026-10-23), and the account's API answered 403 to its next.
+ */
+export class QueryBudget {
+  private left: number | undefined;
+  private quota = 0;
+  /** When the window the last answer stated ends. */
+  private endsAt = 0;
+  /** No read before it: a 429's retry-after, which no later answer shortens. */
+  private coolsAt = 0;
+  /** Set while every read waits. */
+  private resumed: Promise<void> | undefined;
+
+  constructor(private readonly sleep: (ms: number) => Promise<void> = Bun.sleep, private readonly now: () => number = Date.now) {}
+
+  /** Waits through a 429's cooldown, and, while the budget left is under half a known quota, to its window's end. */
+  async spend(): Promise<void> {
+    for (let wait = this.wait(); wait > 0; wait = this.wait()) {
+      this.resumed ??= this.sleep(wait).then(() => { this.resumed = undefined; });
+      await this.resumed;
+    }
+  }
+
+  /** The budget `answer` states; a 429 holds every read to its `retry-after`. */
+  heard(answer: Response): void {
+    const state = /\br=(\d+);t=(\d+)/u.exec(answer.headers.get('ratelimit') ?? '');
+    const quota = /\bq=(\d+)/u.exec(answer.headers.get('ratelimit-policy') ?? '');
+
+    if (quota !== null) this.quota = Number(quota[1]);
+
+    if (answer.status === 429) {
+      this.coolsAt = Math.max(this.coolsAt, this.now() + Number(answer.headers.get('retry-after') ?? state?.[2] ?? 60) * 1000);
+    } else if (state !== null) {
+      this.left = Number(state[1]);
+      this.endsAt = this.now() + Number(state[2]) * 1000;
+    }
+  }
+
+  private wait(): number {
+    const spent = this.quota > 0 && this.left !== undefined && this.left < this.quota / 2;
+
+    return Math.max(this.coolsAt - this.now(), spent ? this.endsAt - this.now() : 0);
+  }
+}
+
+/** The budget every read of this process spends from: the user's, whichever token and window. */
+const USER_BUDGET = new QueryBudget();
+
 export class Telemetry {
   /** Largest sampling level any answer carried; above 1 the counts are estimates. */
   sampling = 1;
@@ -396,12 +452,21 @@ export class Telemetry {
     private readonly args: Pick<Args, 'worker' | 'from' | 'to'>,
     /** The API's origin, Cloudflare's own unless a test serves one. */
     private readonly api?: string,
+    private readonly budget: QueryBudget = USER_BUDGET,
   ) {}
+
+  /** The timeframe every read asks, unless one narrows it. */
+  get window(): TimeWindow {
+    return { from: this.args.from, to: this.args.to };
+  }
 
   /** The answer's JSON text; `result` parses it. A refusal is classified by its status (`restAnswer`). */
   async raw(body: QueryBody): Promise<string> {
+    await this.budget.spend();
+
     return await restAnswer({
       method: 'POST',
+      heard: (answer) => { this.budget.heard(answer); },
       ...this.api !== undefined && { api: this.api },
       path: `/accounts/${ACCOUNT}/workers/observability/telemetry/query`,
       token: this.token,
@@ -507,10 +572,12 @@ export class Telemetry {
   }
 
   /** Counts per `bucketMs` bucket; `at` is the bucket's start. */
-  async buckets(opts: { filters: readonly Filter[]; groupBy: readonly string[]; limit?: number }, bucketMs: number): Promise<{ groups: string[]; at: number; count: number }[]> {
+  /** `interval`: the row's sampling, which the answer's `abr_level` does not carry; above 1 its count is an estimate. */
+  async buckets(opts: { filters: readonly Filter[]; groupBy: readonly string[]; limit?: number; from?: number }, bucketMs: number): Promise<{ groups: string[]; at: number; count: number; interval: number }[]> {
     const result = await this.result({
       view: 'calculations',
       granularity: bucketMs,
+      timeframe: { from: opts.from ?? this.args.from, to: this.args.to },
       parameters: {
         datasets: ['cloudflare-workers'],
         filters: this.filters(opts.filters),
@@ -526,6 +593,7 @@ export class Telemetry {
       // The API writes UTC bucket starts as `YYYY-MM-DD HH:MM:SS`.
       at: Math.floor(Date.parse(`${bucket.time.replace(' ', 'T')}Z`) / bucketMs) * bucketMs,
       count: a.value,
+      interval: Math.max(a.interval, a.sampleInterval),
     }))).sort((a, b) => a.at - b.at || b.count - a.count || byGroups(a, b));
   }
 
@@ -1042,9 +1110,14 @@ export interface VersionRead {
   readonly startups: readonly StartupHour[];
   /** Alarms with nothing to watch, by object-hour; see {@link idleWakeHours}. */
   readonly idleWakes: readonly ObjectHourCount[];
+  /** Objects whose alarm's line has no alarm row: rows the telemetry lost; see {@link lostAlarmRows}. */
+  readonly lostRows: readonly string[];
 }
 
 export interface ObjectMinuteCount { readonly object: string; readonly minute: number; readonly count: number }
+
+/** An {@link ObjectMinuteCount} in one kind of request (`alarm`, `fetch`, `rpc`, …). */
+export interface EventMinuteCount extends ObjectMinuteCount { readonly eventType: string }
 
 export interface ObjectHourCount { readonly object: string; readonly hour: number; readonly count: number }
 
@@ -1091,6 +1164,43 @@ export function idleWakeHours(alarms: readonly ObjectMinuteCount[], work: readon
 
   return [...idle.values()];
 }
+
+/**
+ * The objects in `work` whose alarm logged a line (`eventType` `alarm`) with no row of theirs in `alarms` at all: rows
+ * the telemetry lost. `alarms` reaches {@link ALARM_WALL_MS} before the first line and `work` ends before the last alarm
+ * read, so a line's own alarm row is among them unless it was lost. It loses them in a burst at head sampling 1 and `abr_level` 1, an alarm's invocation row and its own
+ * line alike. kinu-probe-logloss (account f44999, no Kinu code), 2026-10-23: 400 objects' alarms at one moment, each
+ * logging one line, gave 366 invocation rows and 366 lines, 30 of each with no partner in its request, whether the line
+ * came before `deleteAll()` or after. Staging's CliAuthDO that afternoon: 21 alarms without their `cli.auth_retired`
+ * and 24 of those lines without their alarm, and the gate read each of the 21 as an idle wake. A lost line leaves no
+ * trace on its own object, so beside one of these an idle wake is unreadable, never excused.
+ */
+export function lostAlarmRows(alarms: readonly ObjectMinuteCount[], work: readonly EventMinuteCount[]): string[] {
+  const delivered = new Set(alarms.map((row) => row.object));
+
+  return [...new Set(work.filter((line) => line.eventType === 'alarm' && !delivered.has(line.object)).map((line) => line.object))].sort();
+}
+
+function idleWake(idle: ObjectHourCount): string {
+  return `object ${idle.object} woke ${String(idle.count)} time(s) with nothing to watch in the hour from ${iso(idle.hour)}`;
+}
+
+/**
+ * What a fixer should see that is no red: the idle wakes of a window whose telemetry lost rows ({@link lostAlarmRows}),
+ * each of which may be an alarm whose own line was lost. The loss comes in bursts, so a wake that recurs reds in a
+ * window that lost none.
+ */
+export function versionNotices(read: VersionRead): VersionFinding[] {
+  const lost = `${String(read.lostRows.length)} object(s) logged in an alarm with no row of it, e.g. ${read.lostRows[0] ?? ''}`;
+
+  return read.lostRows.length === 0 ? [] : read.idleWakes.map((idle) => ({ what: 'idle wakes', finding: `unreadable (telemetry lost rows): ${idleWake(idle)}; ${lost}` }));
+}
+
+/** What the version read cannot see, printed beside a verdict that names nothing of it. */
+const VERSION_BLIND_SPOTS = [
+  'an idle wake in a window whose telemetry lost rows is a notice, not a red: the loss is bursty, so one that recurs reds in a window that lost none',
+  'a row Cloudflare sampled counts the events it stored, a lower bound, and a line its sampling dropped reads as absent: beside it an alarm can read idle',
+] as const;
 
 /** One finding: `what` names its kind, stable from deploy to deploy, so a report can say whether it is new. */
 export interface VersionFinding {
@@ -1151,8 +1261,8 @@ export function versionFindings(read: VersionRead): VersionFinding[] {
     findings.push({ what: 'a wake loop', finding: `object ${loop.object} started ${String(loop.peakPerHour)} times in an hour, ${String(loop.loopHours)} such hour(s)` });
   }
 
-  for (const idle of read.idleWakes) {
-    findings.push({ what: 'idle wakes', finding: `object ${idle.object} woke ${String(idle.count)} time(s) with nothing to watch in the hour from ${iso(idle.hour)}` });
+  for (const idle of read.lostRows.length === 0 ? read.idleWakes : []) {
+    findings.push({ what: 'idle wakes', finding: idleWake(idle) });
   }
 
   return findings;
@@ -1203,8 +1313,8 @@ export function versionSignals(read: VersionRead): WindowSignal[] {
     if (count >= ALERT_THRESHOLDS.startupsPerHour) signals.push({ key, count, what: 'a wake loop', finding: `object ${object} started ${String(count)} times in the hour from ${iso(hour)}` });
   }
 
-  for (const idle of read.idleWakes) {
-    signals.push({ key: `idle:${idle.object}:${String(idle.hour)}`, count: idle.count, what: 'idle wakes', finding: `object ${idle.object} woke ${String(idle.count)} time(s) with nothing to watch in the hour from ${iso(idle.hour)}` });
+  for (const idle of read.lostRows.length === 0 ? read.idleWakes : []) {
+    signals.push({ key: `idle:${idle.object}:${String(idle.hour)}`, count: idle.count, what: 'idle wakes', finding: idleWake(idle) });
   }
 
   return signals;
@@ -1338,7 +1448,12 @@ export async function versionRead(t: Telemetry, around: Telemetry, versionId: st
   // An alarm's own work, as each alarm names it ({@link ALARM_WORK_EVENTS}): a teardown, a run's expiry, a sweep
   // comes long after the object's last call. Staging c6dc27da1 (Mossaic's sweep) and 7aa75f05e (a deploy run's expiry)
   // each read one as an idle wake.
-  const alarmWork = (await Promise.all(ALARM_WORK_EVENTS.map(async (event) => await perMinute(around, [...scope, eq('$metadata.type', 'cf-worker'), eq('event', event)])))).flat();
+  // One query for them all: one each was 10 of a read's 77 requests (staging 99a13686c's window, 2026-10-23).
+  const alarmWork = await perMinute(around, [...scope, eq('$metadata.type', 'cf-worker'), { key: 'event', operation: 'in', value: ALARM_WORK_EVENTS.join(','), type: 'string' }], { byLine: true });
+  // A line's alarm began at most ALARM_WALL_MS before it, and a line in the window's last, partly read minute may have
+  // its alarm after the window's end.
+  const lineAlarms = await perMinute(t, alarm, { from: t.window.from - ALARM_WALL_MS });
+  const lines = alarmWork.filter((row) => row.minute + MINUTE_MS <= t.window.to);
 
   // An alarm beside work a sampled answer dropped reads as idle. 04603ec96's deploy, its own read sampled at level
   // 1,000,000, reported a MailboxDO's 17 alarms (613467d1a's window) and an OrchestratorAgent's 2 (ff916758e's) as idle,
@@ -1364,6 +1479,7 @@ export async function versionRead(t: Telemetry, around: Telemetry, versionId: st
     },
     startups: await startupHours(t, scope),
     idleWakes: idleWakeHours(alarms, [...called, ...modelCalls, ...alarmWork]),
+    lostRows: lostAlarmRows(lineAlarms, lines),
   };
 }
 
@@ -1374,24 +1490,30 @@ async function windowRows(t: Telemetry, versionId: string): Promise<number> {
   return rows.reduce((sum, row) => sum + row.count, 0);
 }
 
-/** Per object and minute. */
+/**
+ * The objects one deletion read names, by an `in` filter. The query API answered 500 to 1,000 ids and took 800
+ * (2026-10-23); a read per object was 58 of a version read's 77 requests (staging 99a13686c's window, 29 objects).
+ */
+const DELETION_OBJECTS_PER_READ = 200;
+
 /** The deletion rows of each object whose delivery was cancelled, by any version, from {@link DELETION_LOOKBACK_MS}
- *  before its first such delivery; one object at a time, as every kept window is read at once beside the deploy's. */
+ *  before the first such delivery; {@link DELETION_OBJECTS_PER_READ} objects a read. */
 async function deletionRowsOf(t: Telemetry, canceled: readonly ObjectMinuteCount[]): Promise<{ aborted: TelemetryEvent[]; tornDown: TelemetryEvent[] }> {
-  const first = new Map<string, number>();
+  const objects = [...new Set(canceled.map((row) => row.object))];
+  const from = Math.min(...canceled.map((row) => row.minute)) - DELETION_LOOKBACK_MS;
   const aborted: TelemetryEvent[] = [];
   const tornDown: TelemetryEvent[] = [];
 
-  for (const row of canceled) first.set(row.object, Math.min(first.get(row.object) ?? row.minute, row.minute));
+  for (let at = 0; at < objects.length; at += DELETION_OBJECTS_PER_READ) {
+    const among = (key: string): Filter => ({ key, operation: 'in', value: objects.slice(at, at + DELETION_OBJECTS_PER_READ).join(','), type: 'string' });
 
-  for (const [object, minute] of first) {
-    const from = minute - DELETION_LOOKBACK_MS;
-
-    for (const [filters, into] of [[[eq(DO_ID, object), eq('$metadata.message', 'destroyed')], aborted], [[eq('event', 'workspace.destroyed'), eq('fields.object', object)], tornDown]] as const) {
+    for (const [filters, into] of [[[among(DO_ID), eq('$metadata.message', 'destroyed')], aborted], [[eq('event', 'workspace.destroyed'), among('fields.object')], tornDown]] as const) {
       const read = await t.events(filters, EVENT_CAP, from);
 
-      // A sampled answer can drop the one row of a deletion, and its delivery would read as a wake.
-      if (read.sampling > 1) throw new KinuError('unavailable', `the API sampled the read of object ${object}'s deletion (level ${String(read.sampling)})`);
+      // A sampled answer can drop the one row of a deletion, and its delivery would read as a wake; so can a capped one.
+      if (read.sampling > 1) throw new KinuError('unavailable', `the API sampled the read of ${String(objects.length)} objects' deletions (level ${String(read.sampling)})`);
+
+      if (read.events.length >= EVENT_CAP) throw new Error(`the read of ${String(objects.length)} objects' deletions reached its cap of ${String(EVENT_CAP)} rows`);
       into.push(...read.events);
     }
   }
@@ -1399,14 +1521,20 @@ async function deletionRowsOf(t: Telemetry, canceled: readonly ObjectMinuteCount
   return { aborted, tornDown };
 }
 
-async function perMinute(t: Telemetry, filters: readonly Filter[]): Promise<ObjectMinuteCount[]> {
-  const rows = await t.buckets({ filters, groupBy: [DO_ID], limit: MINUTE_GROUPS_CAP }, MINUTE_MS);
+/** `byLine`: one row per kind of request and line as well; `from` reaches back past the read's own window. */
+async function perMinute(t: Telemetry, filters: readonly Filter[], by: { readonly byLine?: boolean; readonly from?: number } = {}): Promise<EventMinuteCount[]> {
+  const groupBy = by.byLine === true ? [DO_ID, '$workers.eventType', 'event'] : [DO_ID];
+  const rows = await t.buckets({ filters, groupBy, limit: MINUTE_GROUPS_CAP, from: by.from }, MINUTE_MS);
 
-  if (new Set(rows.map((row) => row.groups[0])).size >= MINUTE_GROUPS_CAP) {
+  // The cap counts groups, an object once per kind of request and line.
+  if (new Set(rows.map((row) => row.groups.join('\0'))).size >= MINUTE_GROUPS_CAP) {
     throw new Error('a per-minute read reached its object cap; narrow the window before reading idle wakes');
   }
 
-  return rows.map((row) => ({ object: row.groups[0] ?? '', minute: row.at, count: row.count }));
+  // A row Cloudflare sampled carries its stored events times its interval: bc4ab809's deploy read one delivery, interval
+  // 10, as 10 idle wakes. It counts the events it stored, a lower bound. Routine at abr_level 1: 187 rows of staging's
+  // last hour on 2026-10-23 at 18:30Z, busy objects at 1.06-1.7 and single events (a cancelled alarm) at 10.
+  return rows.map((row) => ({ object: row.groups[0] ?? '', minute: row.at, count: Math.max(1, Math.round(row.count / row.interval)), eventType: row.groups[1] ?? '' }));
 }
 
 /**
@@ -1449,6 +1577,13 @@ export function gatewayRefusal(thrown: { readonly cause: unknown }): boolean {
   return code === 'unavailable' || code === 'timeout';
 }
 
+/**
+ * The refusals in a row a read takes before its last one stands. The query API refused 12 of 80 reads on 2026-10-14, so
+ * five in a row is one chance in 13,000 for refusals as they come; past it the API is down, and a read asked every 2 min
+ * for an hour once spent about 80 requests a time (staging 99a13686c, 2026-10-23).
+ */
+export const REFUSALS_IN_A_ROW = 5;
+
 export type SettledRead<T> =
   | { readonly settled: true; readonly value: T; readonly reads: number; readonly lateRows: number }
   | { readonly settled: false; readonly last: T; readonly reads: number; readonly lateRows: number };
@@ -1460,8 +1595,8 @@ export type SettledRead<T> =
  * settle is taken at it: a grid from the window's end read a 3 min hold first at 4 min, a minute on every deploy's
  * verdict (staging rc28, 2026-10-20). Past `capMs` from the first, the answer is "unsettled". `rows` counts what the window held at each read, so the answer names how many rows landed
  * after the first read. A read the API's gateway refuses ({@link gatewayRefusal}) says nothing of the window, so the
- * next tick reads again. Only a cap reached with no answer at all fails on it; any other failure, a refused token, a
- * query the API rejects or an answer that does not parse, fails at once.
+ * next tick reads again, until {@link REFUSALS_IN_A_ROW} in a row or a cap reached with no answer at all fails on the
+ * last; any other failure, a refused token, a query the API rejects or an answer that does not parse, fails at once.
  */
 export async function settledRead<T>(at: {
   readonly read: () => Promise<T>; readonly fingerprint: (value: T) => string; readonly rows: (value: T) => number;
@@ -1482,11 +1617,19 @@ export async function settledRead<T>(at: {
     readAt = at.now();
   };
 
+  let refused = 0;
+
   const answer = async (): Promise<{ readonly value: T } | { readonly cause: unknown }> => {
     try {
-      return { value: await at.read() };
+      const value = await at.read();
+
+      refused = 0;
+
+      return { value };
     } catch (cause) {
-      if (!gatewayRefusal({ cause })) throw cause;
+      refused += 1;
+
+      if (!gatewayRefusal({ cause }) || refused >= REFUSALS_IN_A_ROW) throw cause;
 
       return { cause };
     }
@@ -1527,14 +1670,14 @@ export interface OwnRead {
 /**
  * `read`, asked again on the settle grid while the API's gateway refuses it ({@link gatewayRefusal}) and the deploy's own
  * read is still reading: a kept window waits no longer than that read already does, so it adds no wall. Its last
- * refusal stands once the own read has ended, and any other failure stands at once.
+ * refusal stands once the own read has ended or after {@link REFUSALS_IN_A_ROW}, and any other failure stands at once.
  */
 export async function readAgainWhile<T>(own: OwnRead, read: () => Promise<T>, sleep: (ms: number) => Promise<void> = Bun.sleep): Promise<T> {
-  for (;;) {
+  for (let refused = 1; ; refused += 1) {
     try {
       return await read();
     } catch (cause) {
-      if (!gatewayRefusal({ cause }) || own.ended) throw cause;
+      if (!gatewayRefusal({ cause }) || own.ended || refused >= REFUSALS_IN_A_ROW) throw cause;
       await Promise.race([sleep(SETTLE_POLL_MS), own.done]);
 
       if (own.ended) throw cause;
@@ -1546,21 +1689,25 @@ export async function readAgainWhile<T>(own: OwnRead, read: () => Promise<T>, sl
  *  and awaited after it, so it adds no wait; a gateway refusal is read again while that read lasts. A store that
  *  cannot be reached is the only failure that keeps nothing; a token that cannot be read fails each kept window's read,
  *  and they and this window are still kept. */
-async function rereadKept(environment: InfraEnvironment, own: OwnRead): Promise<{ readonly store: WindowStore; readonly rereads: readonly Reread[] } | { readonly failed: string }> {
+async function rereadKept(environment: InfraEnvironment, own: OwnRead): Promise<{ readonly store: WindowStore; readonly rereads: readonly Reread[]; readonly notices: readonly VersionFinding[] } | { readonly failed: string }> {
   try {
     const store = windowStore(environment);
     // Read once, and only when a window is kept: an unread rejection would end the process.
     let token: Promise<string> | undefined;
+    const notices: VersionFinding[] = [];
 
     const rereads = await rereadWindows(store, async (window) => {
       token ??= readToken();
       const read = { worker: window.worker, from: Date.parse(window.from), to: Date.parse(window.to) };
       const kept = await token;
+      const answer = await readAgainWhile(own, async () => versionRead(new Telemetry(kept, read), new Telemetry(kept, { ...read, ...workWindow(read) }), window.version));
 
-      return versionSignals(await readAgainWhile(own, async () => versionRead(new Telemetry(kept, read), new Telemetry(kept, { ...read, ...workWindow(read) }), window.version)));
+      notices.push(...versionNotices(answer).map((notice) => ({ ...notice, finding: `version ${window.version}'s kept window ${window.from} .. ${window.to}: ${notice.finding}` })));
+
+      return versionSignals(answer);
     }, () => Date.now());
 
-    return { store, rereads };
+    return { store, rereads, notices };
   } catch (cause) {
     return { failed: cause instanceof Error ? cause.message : String(cause) };
   }
@@ -1571,12 +1718,21 @@ async function rereadKept(environment: InfraEnvironment, own: OwnRead): Promise<
  *  window whose counts still moved when the reader stopped, which answers "unsettled" and names nothing in it. With
  *  `--keep-windows`, the windows earlier deploys kept are read again beside it, and what landed late in them is this
  *  deploy's finding. */
+/** `notices` written into the deploy's report in `dir`, when there is one; the lines that print them and the read's blind
+ *  spots. */
+function noticeLines(dir: string, notices: readonly VersionFinding[]): string[] {
+  for (const notice of notices) if (dir !== '') recordNotice(dir, { phase: 'telemetry', what: notice.what, notice: notice.finding });
+
+  return [...notices.map((notice) => `  notice: ${notice.finding}`), ...VERSION_BLIND_SPOTS.map((spot) => `  blind: ${spot}`)];
+}
+
 async function versionCommand(args: Args): Promise<number> {
   const subject = args.target ?? '';
   const ownEnded = Promise.withResolvers<void>();
   const own: OwnRead = { ended: false, done: ownEnded.promise };
   const rereading = args.keepWindows === null ? undefined : rereadKept(args.keepWindows, own);
   let findings: VersionFinding[];
+  let notices: VersionFinding[] = [];
   let settled: readonly WindowSignal[] | null = null;
   let sampling = 1;
   let terminal: TerminalEffectStates | undefined;
@@ -1590,7 +1746,7 @@ async function versionCommand(args: Args): Promise<number> {
     // Settled on the work window's end: its last alarms are judged by the minutes after them.
     const read = await settledRead({
       read: async () => ({ read: await versionRead(t, new Telemetry(token, around), subject), rows: await windowRows(t, subject) }),
-      fingerprint: ({ read: value }) => JSON.stringify([versionFindings(value), value.effects.terminal]),
+      fingerprint: ({ read: value }) => JSON.stringify([versionFindings(value), versionNotices(value), value.effects.terminal]),
       rows: ({ rows }) => rows,
       now: () => Date.now(), sleep: (ms) => Bun.sleep(ms), windowEnd: around.to, pollMs: SETTLE_POLL_MS, holdMs: SETTLE_HOLD_MS, capMs: SETTLE_CAP_MS,
     });
@@ -1601,6 +1757,7 @@ async function versionCommand(args: Args): Promise<number> {
     if (read.settled) {
       terminal = read.value.read.effects.terminal;
       findings = versionFindings(read.value.read);
+      notices = versionNotices(read.value.read);
       settled = versionSignals(read.value.read);
       settledNote = `settled: ${late}`;
     } else {
@@ -1630,19 +1787,22 @@ async function versionCommand(args: Args): Promise<number> {
       const current = { worker: args.worker, version: subject, from: iso(args.from), to: iso(args.to), measures: settled === null ? null : measuresOf(settled) };
 
       findings = [...findings, ...late];
+      notices = [...notices, ...kept.notices];
       keep = async () => keepWindows(kept.store, [...puts, { key: windowKey(current), window: current }], removes);
     }
   }
 
   const dir = process.env['KINU_DEPLOY_REPORT'] ?? '';
 
-  for (const found of findings) if (dir !== '') recordStep(dir, { phase: 'telemetry', what: found.what, finding: found.finding });
+  // Each a notice, never a red (the owner, 2026-10-23: "Monitors don't block").
+  for (const found of findings) if (dir !== '') recordNotice(dir, { phase: 'telemetry', what: found.what, notice: found.finding });
 
   const window = { from: iso(args.from), to: iso(args.to) };
+  const noticed = noticeLines(dir, notices);
 
   console.log(args.json
-    ? JSON.stringify({ window, version: subject, worker: args.worker, findings, terminalEffects: terminal, sampling, settled: settledNote }, null, 1)
-    : [`${args.worker} version ${subject}, ${window.from} .. ${window.to}:`, ...findings.length === 0 ? ['  nothing to report'] : findings.map((found) => `  ${found.finding}`),
+    ? JSON.stringify({ window, version: subject, worker: args.worker, findings, notices, blind: VERSION_BLIND_SPOTS, terminalEffects: terminal, sampling, settled: settledNote }, null, 1)
+    : [`${args.worker} version ${subject}, ${window.from} .. ${window.to}:`, ...findings.length === 0 ? ['  nothing to report'] : findings.map((found) => `  ${found.finding}`), ...noticed,
       ...settledNote === '' ? [] : [settledNote],
       ...terminal === undefined ? [] : [`terminal effects: ${String(terminal.observations)} owed observation(s), `
         + `${String(terminal.settled.length + terminal.owed.length + terminal.parked.length + terminal.deleted.length)} sequence(s): `
@@ -1657,7 +1817,7 @@ async function versionCommand(args: Args): Promise<number> {
       const unkept = { what: 'the kept telemetry windows', finding: `this window, and what the kept ones were read to hold, could not be written `
         + `back for later deploys: ${cause instanceof Error ? cause.message : String(cause)}` };
 
-      if (dir !== '') recordStep(dir, { phase: 'telemetry', what: unkept.what, finding: unkept.finding });
+      if (dir !== '') recordNotice(dir, { phase: 'telemetry', what: unkept.what, notice: unkept.finding });
       // Beside, not inside, the answer `--json` printed above.
       (args.json ? console.error : console.log)(`  ${unkept.finding}`);
 

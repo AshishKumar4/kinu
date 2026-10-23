@@ -74,7 +74,7 @@ import { ActorSession, type ActorTurnLease,
   createDefaultWebSearchProvider, chainWebSearch, restBrowserRunAccess, REAL_CLOCK, webSearchChainOf, type Clock, type WebSearchProvider,
   actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, actorPolicy, actorReach, type ActorReach,
   type CodemodeProvider,
-  agentRoleSwitch, builtinStoreDeps, serveStores, type BuiltinStoreInputs, type ServedStores, type TurnTools,
+  agentRoleSwitch, builtinStores, type BuiltinStoreInputs, type ServedStores, type TurnTools,
   REPORT_TOOL, turnLane, turnReach, type ReportDeps, type TurnLane, type TurnReach,
   type MissionGovernor,
   observeSystemPromptHash,
@@ -199,7 +199,7 @@ type Writable<T> = { -readonly [Key in keyof T]: T[Key] };
 export const LOCAL_MAX_INLINE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 
 /** bun:sqlite with a real `transaction`: approval decisions and settled-turn commits need atomicity. */
-export type LocalSessionDb = Pick<Database, 'query' | 'transaction'>;
+export type LocalSessionDb = Pick<Database, 'query' | 'prepare' | 'transaction'>;
 
 /**
  * The answer a subagent's turn owes its parent, installed by the owning host. A port, not a
@@ -2178,7 +2178,7 @@ export class LocalAgentSession {
       sql: this.rt.storage.sql,
       surface: (task, context, callScope) => {
         // One set for the run: each request's tools project it, and so do its machines.
-        const stores = serveStores(builtinStoreDeps(this.storeInputs()));
+        const stores = builtinStores(this.storeInputs());
 
         return createScaffoldCandidateSurface({
           rt: this.rt,
@@ -2235,7 +2235,8 @@ export class LocalAgentSession {
   }
 
   listRefinements(limit = 20) {
-    return listRefinements(this.refinementDeps, limit);
+    // As the local session's model refusals say it (`LOCAL_MODEL_SETTINGS`).
+    return listRefinements(this.refinementDeps, limit, 'your model settings');
   }
 
   /** The newest answered turns as recorded, which a pending scaffold is replayed against (`scaffold/replay.ts`). */
@@ -2540,7 +2541,7 @@ export class LocalAgentSession {
     const report = this.reportGateOpen() ? this.reportDeps : null;
     const reported = report === null ? {} : { report: () => report };
     // A program runs the store operations its native tools run; naming what a role reaches needs none in hand.
-    const stores = served ?? serveStores(builtinStoreDeps(this.storeInputs()));
+    const stores = served ?? builtinStores(this.storeInputs());
 
     if (this.actorReach.kind === 'workspace') return actorNamespaces(this.surfaceActor(mode, stores), SURFACE_POLICY.program, reported);
 
@@ -2830,7 +2831,7 @@ export class LocalAgentSession {
     return currentOperationProfile(this.rt.actor) ?? { turnId: this.chat.currentTurnId ?? WORKSPACE_RUN_ID, runId: this.chat.currentRunId ?? WORKSPACE_RUN_ID };
   }
 
-  /** What this session's builtins read its stores from (`builtinStoreDeps`): the turn's ledgers live on its accumulator. */
+  /** What this session's builtins read its stores from (`builtinStores`): the turn's ledgers live on its accumulator. */
   private storeInputs(): BuiltinStoreInputs {
     const { ledgers } = this.actorSession.orchestrator.acc;
 

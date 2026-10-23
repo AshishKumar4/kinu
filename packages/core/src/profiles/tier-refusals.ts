@@ -1,4 +1,5 @@
 /** A tier, or the decision model that rates turns, refusing for the owner to fix is said once (T3). */
+import * as v from 'valibot';
 import type { AgentConfigStore } from '../config/store';
 import type { ActorHandle } from '../identity/actor-handle';
 import { writeActivityLog } from '../identity/activity-log';
@@ -62,5 +63,38 @@ export function tierRefusals(deps: {
       if (!saidSoFar().delete(`${REFUSAL_KEY}${tier}`)) return;
       deps.config.delete(`${REFUSAL_KEY}${tier}`);
     },
+    untrusted: (asked) => {
+      const text = asked === null ? null : JSON.stringify(asked);
+
+      if ((saidSoFar().get(UNTRUSTED_KEY) ?? null) === text) return;
+
+      if (text === null) {
+        saidSoFar().delete(UNTRUSTED_KEY);
+        deps.config.delete(UNTRUSTED_KEY);
+
+        return;
+      }
+
+      saidSoFar().set(UNTRUSTED_KEY, text);
+      deps.config.set(UNTRUSTED_KEY, text);
+    },
   };
+}
+
+/** Where `untrusted` keeps the fast-tier model no rating could be asked of, beside the refusals said once (so a change of
+ *  model settings clears it too). Spaced, as `DECISION_REFUSALS` is, so no tier's id can name it. */
+const UNTRUSTED_KEY = `${REFUSAL_KEY}untrusted rating`;
+
+/**
+ * Why the decision model rates no turn, so no dream opens, in the owner's words; null while turns can be rated. Read
+ * from what `refused` and `untrusted` kept: Clef refusing (its notice in the activity log says why, and what fixes it),
+ * and the fast tier's model not trusted to rate a turn in its place.
+ */
+export function unratedReason(config: Pick<AgentConfigStore, 'get'>, settings: string): string | null {
+  const untrusted = v.safeParse(v.pipe(v.string(), v.parseJson(), v.object({ model: v.string(), questions: v.array(v.string()) })), config.get(UNTRUSTED_KEY));
+
+  if (!untrusted.success || config.get(`${REFUSAL_KEY}${DECISION_REFUSALS}`) === null) return null;
+
+  return `No turn is being rated, so no dream opens: Clef, the decision model, is refusing requests (its notice in Activity says why), `
+    + `and ${untrusted.output.model} on your fast tier is not measured close enough to Clef to rate a turn in its place. Clef's access is set in ${settings}.`;
 }

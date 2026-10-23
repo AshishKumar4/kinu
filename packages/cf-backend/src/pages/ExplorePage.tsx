@@ -15,7 +15,7 @@ import { GALLERY_CATEGORIES, GALLERY_SORTS, PERSONAL_ASSISTANT_ID, type GalleryC
 import { detach, showing } from "@kinu.run/core/obs";
 import { CATEGORY_WORDS } from "@/components/sharing/words";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { ExploreCard, exploreWorkspaceHref, KindBadge, Maker, Needs, kinuBlueprintPicture } from "@/components/explore/ExploreCard";
+import { ExploreCard, exploreWorkspaceHref, KindBadge, Maker, Needs, KinuBlueprintPicture } from "@/components/explore/ExploreCard";
 import { EXPLORE_KINDS, readExplore, type ExploreItem, type ExploreKind, type ExplorePage, type WorkspaceCard } from "@/lib/explore-api";
 import { Page } from "@/components/ui/PageHeader";
 import { FeaturedTile, TILE_GRID } from "@/components/ui/Tiles";
@@ -42,7 +42,7 @@ function Hero({ workspace, highlights }: { workspace: WorkspaceCard; highlights:
 
   return (
     <FeaturedTile to={exploreWorkspaceHref(workspace.id)} data-explore-hero={workspace.id}
-      cover={workspace.picture !== null && <img src={kinuBlueprintPicture(workspace.picture)} alt="" className="absolute inset-0 size-full object-cover object-left-top" />}>
+      cover={workspace.picture !== null && <KinuBlueprintPicture picture={workspace.picture} alt="" className="absolute inset-0 size-full object-cover object-left-top" />}>
       <span className="flex min-w-0 flex-1 flex-col gap-3 p-5">
         <span className="flex items-center gap-2"><KindBadge kind="workspace" /><span className="t-meta p-text-3">Featured</span></span>
         <span className="t-page-title p-text">{workspace.title}</span>
@@ -73,7 +73,7 @@ function AlsoFromKinu({ workspaces }: { workspaces: readonly WorkspaceCard[] }) 
         <PressableLink look="flush" key={workspace.id} to={exploreWorkspaceHref(workspace.id)} data-explore-also={workspace.id}
           className="flex items-center gap-3 border-b p-border px-4 py-3 last:border-b-0">
           <Surface look="outlined" as="span" className="relative block h-12 w-19 shrink-0 overflow-hidden">
-            {workspace.picture !== null && <img src={kinuBlueprintPicture(workspace.picture)} alt="" className="absolute inset-0 size-full object-cover object-left-top" />}
+            {workspace.picture !== null && <KinuBlueprintPicture picture={workspace.picture} alt="" className="absolute inset-0 size-full object-cover object-left-top" />}
           </Surface>
           <span className="min-w-0 flex-1">
             <span className="t-item block truncate p-text">{workspace.title}</span>

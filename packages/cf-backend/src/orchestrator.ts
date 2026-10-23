@@ -58,7 +58,7 @@ import type { AgentTurnActivity, AgentSnapshot, ChatWindow, RunEventRecorder, St
 import type { SerializedMessage, WebSearchProvider } from '@kinu.run/core';
 import { serveNodeProgramCall, type NodeProgramAnswer } from './node-program';
 import type { EgressPrincipal } from '@kinu.run/core';
-import type { CFRuntime } from './runtime';
+import { MODEL_SETTINGS, type CFRuntime } from './runtime';
 import { callOperation, listOperations, type OperationCaller, type OperationListing, type OperationResult } from '@kinu.run/core';
 import type { AgentFacet, AgentFacetCalls } from "./agent-facet/agent-facet";
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -1774,7 +1774,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * its delegation, receipted under the execution `scope` names, over the ledgers it gives. The workspace's planes (its
    * jobs, its role switch, its external tools, its program namespaces) only where its reach names them.
    */
-  /** What an actor's builtins read its stores from (`builtinStoreDeps`): its native tools, and a slate's call as it. */
+  /** What an actor's builtins read its stores from (`builtinStores`): its native tools, and a slate's call as it. */
   private storeInputs(actor: CFSeat, reach: ActorReach, ledgers: Pick<TurnLedgers, 'files' | 'context'>, profile: () => OperationProfile | null): BuiltinStoreInputs {
     const { runtime } = actor;
     // The workspace's own agent reads the account's memory whoever owns it; a hire, only once it is owned.
@@ -4467,8 +4467,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return decideDeferredApprovals(this.deferrals, ids, decision);
   }
 
-  // Device connection is user-level: UserDO owns the tunnel socket and tokens; nothing
-  // per-agent verifies, attaches, issues or lists a device token.
+  // Device connection is user-level: UserDO owns the tunnel socket and device keys; nothing
+  // per-agent verifies, attaches, issues or lists a device credential.
 
   /**
    * The deploy's walk (`scripts/reset.ts tables`): this workspace's tables and their rows and what its repair did, and,
@@ -7480,7 +7480,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Refinements newest first plus the debt that would open the next one (`/refine` with no args). */
   @callable()
   async listRefinements(limit = 20): Promise<RefinementListing> {
-    return listRefinements(this.refinementDeps, limit);
+    return listRefinements(this.refinementDeps, limit, MODEL_SETTINGS);
   }
 
   /** Called by `webhookDeliveryRoutes` so publish + dedupe run atomically in this DO. */

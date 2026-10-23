@@ -355,6 +355,8 @@ export interface AcceptedSocket {
   drop(): void;
   readonly ws: WebSocket;
   forward(far: (data: string) => void): void;
+  /** Where the object's close of this socket goes: a bridge closes its real far end with the same code. */
+  forwardClose(far: (code: number | undefined, reason: string | undefined) => void): void;
 }
 
 /**
@@ -379,6 +381,7 @@ function installRecordingSocketPair(): void {
         let closedWith: { code: number | undefined; reason: string | undefined } | null = null;
         let attachment: JsonValue = null;
         let far: ((data: string) => void) | null = null;
+        let farClose: ((code: number | undefined, reason: string | undefined) => void) | null = null;
 
         const server = {
           readyState: 1,
@@ -393,8 +396,12 @@ function installRecordingSocketPair(): void {
             far?.(data);
           },
           close: (code?: number, reason?: string) => {
+            const first = closedWith === null;
+
             server.readyState = 3;
             closedWith ??= { code, reason };
+
+            if (first) farClose?.(code, reason);
           },
           serializeAttachment: (value: JsonValue) => { attachment = value; },
           deserializeAttachment: () => attachment,
@@ -403,7 +410,9 @@ function installRecordingSocketPair(): void {
         // Delegates to `server` so `drop` is visible through it; the UserDO reads only
         // send, close, readyState and the attachment members.
         const ws: WebSocket = Object.create(server);
-        ACCEPTED_SOCKETS.push({ sent, binary, closed: () => closedWith, drop: () => { server.readyState = 3; }, ws, forward: (to) => { far = to; } });
+        ACCEPTED_SOCKETS.push({
+          sent, binary, closed: () => closedWith, drop: () => { server.readyState = 3; }, ws, forward: (to) => { far = to; }, forwardClose: (to) => { farClose = to; },
+        });
         this[0] = { readyState: 1 };
         this[1] = server;
       }
@@ -581,14 +590,14 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   const live: Array<{ ws: typeof socket; tags: string[] }> = [];
   const daemons: Array<{ deviceId: string; ws: WebSocket; frames: DeviceFrame[] }> = [];
 
-  /** A socket's tags as the platform reports them; attachment-bound fakes imply their device tag. */
+  /** A socket's tags as the platform reports them; attachment-bound fakes imply the device tag. */
   const tagsOf = (ws: WebSocket): string[] => {
     const accepted = live.find((entry) => entry.ws === ws);
 
     if (accepted) return accepted.tags;
-    const device = deviceIdFromSocket(ws);
 
-    return device === null ? [] : [`device:${device}`];
+    // Every device socket's one tag (device-hub.ts).
+    return deviceIdFromSocket(ws) === null ? [] : ['device'];
   };
 
   const kv = kvOf(db);
@@ -640,7 +649,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     abort: (reason: string): void => { aborts.push(reason); },
     // The SDK's Lifecycle starts inside it; nothing else runs concurrently in a test.
     blockConcurrencyWhile: <Result,>(fn: () => Promise<Result>): Promise<Result> => fn(),
-    // Tag-filtered like the platform: `device:<id>` returns only that machine's socket.
+    // Tag-filtered like the platform.
     getWebSockets: (tag?: string) => {
       const all = [...(attached === null ? [] : [socket]), ...live.map((entry) => entry.ws), ...daemons.map((d) => d.ws)];
 

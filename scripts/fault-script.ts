@@ -38,25 +38,35 @@ function burnCommand(slices: number): string {
     + `const t=()=>{spin(2e7);s++;if(s<${String(slices)})setTimeout(t,0)};t()"`;
 }
 
-/** The workload's turns, or null for a request that is not its own. Each call of the conversation is one step, so a step
- *  a reset interrupted is not asked again: what comes next is the next step. */
+/**
+ * The workload's turns, or null for a request that is not its own. As an agent told a call was interrupted would: a step
+ * is done once a result acknowledged it (its marker in the result), the next step is the first one not done, and one
+ * whose call was interrupted is issued again only after checking it did not take effect, so no effect lands twice.
+ */
 export function faultScript(request: ScriptedRequest): ScriptedAnswer | null {
   const match = FAULT_LOAD.exec(request.userTexts[0] ?? '');
 
   if (match === null) return null;
   const who = match[1] === 'agent' ? 'agent' : 'root';
   const load: FaultLoad = { steps: Number(match[2]), sleepSeconds: Number(match[3]), burn: Number(match[4]), slices: Number(match[5]) };
-  const made = request.calls.length;
 
-  if (who === 'root' && made === 0) {
+  if (who === 'root' && !request.calls.some((call) => call.name === 'agents')) {
     return { text: 'Hiring the agent.', toolCall: { name: 'agents', arguments: { op: 'hire', lifetime: 'task', role: 'task', message: faultAsk('agent', load) } } };
   }
 
-  const step = who === 'root' ? made - 1 : made;
+  const names = (step: number) => new RegExp(`${faultMarker(who, step)}\\b`, 'u');
+  const tries = (step: number) => request.calls.filter((call) => names(step).test(call.arguments)).length;
 
-  if (step >= load.steps) return { text: `${FAULT_PREFIX}_${who.toUpperCase()}_DONE` };
+  // The burn is started once, whatever became of its call: it marks nothing. A step tried three times is given up, which
+  // the effects then show.
+  const done = (step: number) => (who === 'root' && step === load.burn
+    ? request.calls.some((call) => call.name === 'eval')
+    : request.calls.some((call) => names(step).test(call.result)) || tries(step) >= 3);
 
-  // The burn takes the root's step `burn`: it marks nothing.
+  const step = Array.from({ length: load.steps }, (_, at) => at).find((at) => !done(at));
+
+  if (step === undefined) return { text: `${FAULT_PREFIX}_${who.toUpperCase()}_DONE` };
+
   if (who === 'root' && step === load.burn) {
     return { text: 'Starting the burn.', toolCall: { name: 'eval', arguments: {
       code: `// Starts the slice burn as a resident process.\nreturn await workspace.startProcess(${JSON.stringify(burnCommand(load.slices))});`,
@@ -64,13 +74,17 @@ export function faultScript(request: ScriptedRequest): ScriptedAnswer | null {
   }
 
   const marker = faultMarker(who, step);
+  const again = tries(step) > 0;
 
-  // The root writes a file on its odd steps: a write acknowledged once, its path the step's own.
+  // The root writes a file on its odd steps, which a second write leaves as it was.
   if (who === 'root' && step % 2 === 1) {
     return { text: `Step ${String(step)}.`, toolCall: { name: 'file', arguments: { op: 'write', path: `/scratch/fault/${marker}.md`, content: marker } } };
   }
 
-  return { text: `Step ${String(step)}.`, toolCall: { name: 'shell', arguments: {
-    runtime: 'workspace', command: `sleep ${String(load.sleepSeconds)}; echo ${marker} >> ${FAULT_EFFECTS}; echo ${marker}`,
+  // An interrupted append is checked for before it is made again.
+  const append = again ? `grep -qx ${marker} ${FAULT_EFFECTS} 2>/dev/null || echo ${marker} >> ${FAULT_EFFECTS}` : `echo ${marker} >> ${FAULT_EFFECTS}`;
+
+  return { text: again ? `Step ${String(step)} again: it was interrupted.` : `Step ${String(step)}.`, toolCall: { name: 'shell', arguments: {
+    runtime: 'workspace', command: `sleep ${String(load.sleepSeconds)}; ${append}; echo ${marker}`,
   } } };
 }

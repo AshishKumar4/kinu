@@ -284,6 +284,10 @@ const GOLDEN_REFRESH_CALLBACK = 'golden-refresh';
 
 const GOLDEN_KEY = 'devbox:golden';
 
+/** How long a start from the golden, or the golden object's own build start, has to admit its first command: the
+ *  platform's slowest first wakes ran 30 to 53 s, and once 351 s (D64). */
+const GOLDEN_ADMISSION_MS = 120_000;
+
 const AWAITING_GOLDEN_KEY = 'devbox:awaiting-golden';
 
 /** A snapshot a box starts from, and the namespace that gave it, which a failed wake asks for the next one. */
@@ -716,7 +720,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         const options = { instance: instanceOf(this.defaultSize), enableInternet: false, entrypoint: ['sleep', 'infinity'] };
         container().start('image' in from ? { ...options, image: from.image } : { ...options, containerSnapshot: { id: from.snapshot } });
         keepStartRefusal(container());
-        await firstExec(container(), AbortSignal.timeout(120_000));
+        await firstExec(container(), AbortSignal.timeout(GOLDEN_ADMISSION_MS));
       },
       exec: async (command) => decoded(await (await containerExec(container(), ['/bin/bash', '-c', command])).output()),
       pipe: (key, path) => this.#pipeParts(key, path),
@@ -990,14 +994,24 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     keepStartRefusal(container);
   }
 
-  /** A snapshot start that fails or misses the cutover falls back to the next source and the chain. */
+  /**
+   * A snapshot start that fails falls back to the next source and the chain, and so does the box's own snapshot that
+   * misses the cutover: the chain's lazy wake is the faster way in (D64). A golden has nothing faster behind it, so its
+   * start has the golden object's own bound to be admitted before it is reported lost: at the cutover, a slow golden was
+   * retired and every waiting box held for a rebuild (staging 99a13686c, 2026-10-23).
+   */
   async #admit(container: Container, signal: AbortSignal, inputs: StartInputs): Promise<boolean> {
     const started = this.#started;
 
     if (started !== undefined) {
       // Cleared once settled: a later abort killed the image's container (D64).
       const cutover = new AbortController();
-      const timer = setTimeout(() => { cutover.abort(new DevboxError('io', 'the snapshot start was not admitted within the cutover')); }, this.snapshotWakeCutoverMs);
+
+      const [bound, missed] = started.kind === 'own'
+        ? [this.snapshotWakeCutoverMs, 'the snapshot start was not admitted within the cutover']
+        : [GOLDEN_ADMISSION_MS, `the golden start was not admitted in ${String(GOLDEN_ADMISSION_MS / 1000)} s`];
+
+      const timer = setTimeout(() => { cutover.abort(new DevboxError('io', missed)); }, bound);
       const [woke] = await Promise.allSettled([firstExec(container, AbortSignal.any([signal, cutover.signal]))]);
       clearTimeout(timer);
 

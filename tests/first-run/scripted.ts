@@ -236,8 +236,16 @@ const computerDesktop: Script = (request) => latest(request) !== DESKTOP_ASK ? n
 /** two-machines: an unnamed call, answered with what the executor said; then a call naming alpha. */
 const MACHINE_ASKS = new Map([[UNNAMED_MACHINE_ASK, 'device'], [NAMED_MACHINE_ASK, FLEET_ALPHA]]);
 
+/**
+ * The machine the person's unanswered ask names. The latest such ask, not the latest user text: a signal can land at
+ * the ask's first step behind it, as the owner's answer to the case's own consent card did (staging 7662e2159: "Device
+ * use APPROVED, still not run" read as the ask, and the turn answered the fallback with no call).
+ */
+const machineAsked = (request: ScriptedRequest): string | undefined =>
+  [...request.unansweredUserTexts].reverse().map((text) => MACHINE_ASKS.get(text)).find((runtime) => runtime !== undefined);
+
 const twoMachines: Script = (request) => {
-  const runtime = MACHINE_ASKS.get(latest(request));
+  const runtime = machineAsked(request);
 
   if (runtime === undefined) return null;
 
