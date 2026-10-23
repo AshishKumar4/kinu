@@ -159,6 +159,9 @@ export interface OwedTurnQueue {
 }
 
 /** Owed until the follow-up turn's own durable row exists; queued once per response key. */
+/** The effects owed until a follow-up turn of their own commits: one committing makes them due ({@link TerminalEffectLedger.followUpDue}). */
+export const FOLLOW_UP_TURN_EFFECTS = ['overflow_retry', 'output_continuation', 'task_reminder'] as const;
+
 function owedTurnTerminalEffect<I>(queue: () => OwedTurnQueue, spec: {
   readonly input: v.GenericSchema<unknown, I>;
   readonly event: string;
@@ -659,6 +662,16 @@ export class TerminalEffectLedger {
       ON CONFLICT (actor_id, sequence_id, effect_key) DO UPDATE SET
         status = CASE WHEN terminal_effects.effect_name IN (SELECT value FROM json_each(${superseding})) THEN 'completed' ELSE 'pending' END,
         next_attempt_at = ${now}`;
+  }
+
+  /** The pending rows of effects that wait on a follow-up turn fall due now: one of their turns committed. */
+  followUpDue(effects: readonly string[]): number {
+    this.deps.actor.assertCurrent();
+
+    return this.deps.sql<{ effect_key: string }>`UPDATE terminal_effects
+      SET next_attempt_at = ${this.deps.now()}
+      WHERE actor_id = ${this.actorId} AND status = 'pending' AND effect_name IN (SELECT value FROM json_each(${JSON.stringify(effects)}))
+      RETURNING effect_key`.length;
   }
 
   /** Parked rows fall due now; the caller arms the wake. */
