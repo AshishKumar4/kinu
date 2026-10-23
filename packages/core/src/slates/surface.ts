@@ -16,6 +16,8 @@ import type { Impact } from '@agent-core/core/facets';
 import type { ShareGrant } from './sharing';
 import { WEB_SANDBOX_IMPACTS } from '../operations/web';
 import { MACHINE_FILES } from '../operations/executors';
+import { DB } from '../operations/db';
+import { sqlCallImpact } from '../tools/db-sql';
 
 /** The executor a program reaches as `workspace`; a one-name path is its member, as `workspace.listTools` is in a program. */
 const WORKSPACE_EXECUTOR = 'workspace';
@@ -118,7 +120,8 @@ function issued(input: Parameters<typeof issuedSlateInvocation>[0]): Effect.Effe
 }
 
 export type SlateRoute =
-  | { readonly kind: 'namespace'; readonly namespace: string; readonly member: string; readonly args: readonly JsonValue[] }
+  /** `readOnly`: a call whose owner was not asked, its writes refused where it runs (`db.sql` read as reading). */
+  | { readonly kind: 'namespace'; readonly namespace: string; readonly member: string; readonly args: readonly JsonValue[]; readonly readOnly?: true }
   | { readonly kind: 'tool'; readonly name: string; readonly input: JsonObject }
   | { readonly kind: 'rpc'; readonly method: SlateReadModel }
   | { readonly kind: 'mcp'; readonly server: string; readonly tool: string; readonly args: JsonObject; readonly readOnly?: true }
@@ -276,6 +279,11 @@ function routed(id: string, request: SlateCallRequest, chain: readonly string[])
       return Effect.fail(new KinuError('bad_input', `${address.namespace}.${address.member} runs at the host; only ${SLATE_DRIVEN_MEMBERS.map((member) => `web.${member}`).join(', ')} are authorized and run by the class`));
     }
 
+    // A statement's impact is its own: one read as reading asks no one, and runs where it cannot write.
+    if (found.kind === 'namespace' && address.namespace === 'db' && address.member === DB.sql.name) {
+      return Effect.map(sqlCallImpact(found.args[0]), (guessed) => ({ route: guessed === 'observe' ? { ...found, readOnly: true } : found, address, impact: guessed }));
+    }
+
     return Effect.succeed({ route: found, address, impact });
   });
 }
@@ -327,7 +335,8 @@ function admitViewer(call: SlateCall, input: ViewerCallInput): Effect.Effect<Sla
     return Effect.fail(new KinuError('unsupported', `A share's viewer asks ai.${AI_RUN_MEMBER}: a streamed answer cannot be held to the share's daily spend`));
   }
 
-  return entry.impact === call.impact ? Effect.succeed(call) : Effect.fail(refused);
+  // Granted as its catalog declares it: a statement that reads is the same member as one that writes.
+  return entry.impact === slateAddressImpact(address) ? Effect.succeed(call) : Effect.fail(refused);
 }
 
 /**

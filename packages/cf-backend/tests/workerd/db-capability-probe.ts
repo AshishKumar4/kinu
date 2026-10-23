@@ -207,6 +207,20 @@ export class DbCapabilityProbeDO extends DurableObject<Cloudflare.Env> {
     return { reason, beforeRevocation, rows: this.rows(), evidence: this.evidence(observer) };
   }
 
+  /** Every opcode the programs SQLite compiles for `statements` use, after `setup` ran: what the db.sql gate classifies. */
+  async opcodes(setup: readonly string[], statements: readonly string[]): Promise<readonly string[]> {
+    this.open();
+
+    for (const statement of setup) this.ctx.storage.sql.exec(statement);
+    const seen = new Set<string>();
+
+    for (const statement of statements) {
+      for (const row of this.ctx.storage.sql.exec<{ opcode: string }>(`EXPLAIN ${statement}`).toArray()) seen.add(row.opcode);
+    }
+
+    return [...seen].sort();
+  }
+
   /** A handle whose identity is not in the directory: a stale binding is refused before any statement runs. */
   async staleActor(): Promise<string> {
     this.open();

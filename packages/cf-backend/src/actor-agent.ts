@@ -2511,10 +2511,12 @@ export abstract class ActorAgent extends Agent<Env> {
 
       switch (route.kind) {
         case 'namespace': {
-          // The root's own path: a share's viewer comes here too, and never holds `agents`.
+          // The root's own path: a share's viewer comes here too, and never holds `agents`. A call no one was asked about
+          // as a write (`route.readOnly`) runs in Plan, where its member refuses to write.
           const owner = context.viewer !== true;
-          const authority = yield* Effect.promise(async () => this.slateAuthority(mode, this.slateNamespaces(mode, owner)));
-          const providers = providersInWorkMode(authority.mode, this.slateNamespaces(mode, owner));
+          const runs: WorkMode = route.readOnly === true ? 'plan' : mode;
+          const authority = yield* Effect.promise(async () => this.slateAuthority(runs, this.slateNamespaces(runs, owner)));
+          const providers = providersInWorkMode(authority.mode, this.slateNamespaces(runs, owner));
 
           // The owner's own slate hires under the owner's role as of now, as a program in a turn does.
           return yield* Effect.promise(async () => runOperationProfile(owner ? authority.operation ?? null : null, async () => slateMember(

@@ -10,9 +10,10 @@ import * as v from 'valibot';
 import type { CodemodeProvider } from '../types/codemode';
 import { serve } from '../operations/operation';
 import {
-  ACTOR_COLUMN, ColumnSchema, DB, IDENTIFIER, OperatorCarrierSchema, OpSchema, PredicateOperationSchema, PredicateSchema,
-  SELECT_LIMIT_DEFAULT, SelectSchema, TableNameSchema, TableSpecSchema, WhereSchema, type AppColumnType,
+  ACTOR_COLUMN, BOUND_PARAMS_MAX, ColumnSchema, DB, IDENTIFIER, OperatorCarrierSchema, OpSchema, PredicateOperationSchema, PredicateSchema,
+  SELECT_LIMIT_DEFAULT, SELECT_LIMIT_MAX, SelectSchema, TableNameSchema, TableSpecSchema, WhereSchema, type AppColumnType,
 } from '../operations/db';
+import { ExplainRowSchema, gateProgram, readSqlStatement, storedText, type SqlTableDeclaration } from './db-sql';
 import { codemodeNamespace } from './operation-surfaces';
 import type { RawSqlExec, SqlExecutor, SqlValue } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -50,8 +51,8 @@ const SQLITE_TYPE = {
 const MAX_TABLES = 64;
 
 
-/** Bound values per INSERT; longer runs are chunked, not refused. */
-const MAX_BINDINGS_PER_STATEMENT = 800;
+/** Bound values per INSERT, Durable Object SQLite's bound; longer runs are chunked, not refused. */
+const MAX_BINDINGS_PER_STATEMENT = BOUND_PARAMS_MAX;
 
 
 /** Drivers expose SQLite failures only by message; unrecognised errors stay `io`. */
@@ -84,6 +85,12 @@ interface AppOpResult {
   readonly rowsAffected: number;
 }
 
+/** A `db.sql` statement's answer: its rows, blobs as base64, and the rows a write changed. */
+interface SqlAnswer {
+  readonly rows: readonly Readonly<Record<string, JsonValue>>[];
+  readonly rowsAffected: number;
+}
+
 export interface AppDataStore {
   /** The store as a workspace fork reads and lands it. */
   readonly fork: ForkAppData;
@@ -98,6 +105,8 @@ export interface AppDataStore {
   apply(op: AppOp): AppOpResult;
   /** All mutations land or none do. */
   batch(ops: readonly AppOp[]): AppOpResult[];
+  /** One statement over the workspace-scope tables (`db-sql.ts`). */
+  sql(query: string, params: readonly (string | number | boolean | null)[]): SqlAnswer;
 }
 
 export interface AppDataStoreDeps {
@@ -154,10 +163,24 @@ class Statement {
     return this;
   }
 
+  /** How many values it binds. */
+  get bound(): number {
+    return this.values.length;
+  }
+
   run<Row>(sql: SqlExecutor): Row[] {
     const strings = [...this.parts];
 
     return sql<Row>(Object.assign(strings, { raw: strings }), ...this.values);
+  }
+
+  /** A text cut at its placeholders, each bound the value in its place. */
+  static of(segments: readonly string[], values: readonly SqlValue[]): Statement {
+    const statement = new Statement().text(segments[0] ?? '');
+
+    for (const [index, value] of values.entries()) statement.value(value).text(segments[index + 1] ?? '');
+
+    return statement;
   }
 }
 
@@ -172,6 +195,10 @@ function classified<A>(call: () => A): Effect.Effect<A, KinuError> {
 }
 
 function execute<Row>(sql: SqlExecutor, statement: Statement, doing: string): Effect.Effect<Row[], KinuError> {
+  if (statement.bound > BOUND_PARAMS_MAX) {
+    return Effect.fail(new KinuError('bad_input', `${doing}: it binds ${String(statement.bound)} values, and a statement binds at most ${String(BOUND_PARAMS_MAX)} (do.sqlite.bound_params)`));
+  }
+
   return Effect.try({
     try: () => statement.run<Row>(sql),
     catch: (cause) => {
@@ -821,6 +848,95 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
     return results;
   })));
 
+  /** The shared tables a statement reaches, by name: the workspace-scope ones, every agent's alike. */
+  const sharedTables = (doing: string): Effect.Effect<ReadonlyMap<string, string>, KinuError> => Effect.map(catalogRows(doing), (records) => new Map(
+    records.filter(({ scope }) => scope === 'workspace').map(({ name }) => [name, `${APP_TABLE_PREFIX}${name}`]),
+  ));
+
+  /** The root page of each shared table and of its indexes, by the table's name. */
+  const sharedPages = (tables: ReadonlyMap<string, string>, doing: string): Effect.Effect<ReadonlyMap<number, string>, KinuError> => {
+    const logical = new Map([...tables].map(([name, physical]) => [physical, name]));
+
+    return Effect.map(execute<{ rootpage: number; tbl_name: string }>(sql, new Statement()
+      .text(`SELECT rootpage, tbl_name FROM sqlite_master WHERE type IN ('table', 'index') AND rootpage > 0 AND tbl_name IN (SELECT value FROM json_each(`)
+      .value(JSON.stringify([...logical.keys()]))
+      .text('))'), doing), (rows) => new Map(rows.flatMap((row) => {
+      const name = logical.get(row.tbl_name);
+
+      return name === undefined ? [] : [[row.rootpage, name] as const];
+    })));
+  };
+
+  const answerRow = (row: Readonly<Record<string, StoredValue>>): Record<string, JsonValue> => Object.fromEntries(Object.entries(row).map(([key, value]) => [
+    key, value instanceof ArrayBuffer || value instanceof Uint8Array ? bytesToBase64(value instanceof ArrayBuffer ? new Uint8Array(value) : value) : value ?? null,
+  ]));
+
+  const answered = (rows: readonly Readonly<Record<string, StoredValue>>[], doing: string): Effect.Effect<SqlAnswer['rows'], KinuError> => (rows.length > SELECT_LIMIT_MAX
+    ? Effect.fail(new KinuError('bad_input', `${doing}: it answers ${String(rows.length)} rows, and one statement answers at most ${String(SELECT_LIMIT_MAX)}; add a LIMIT`))
+    : Effect.succeed(rows.map(answerRow)));
+
+  /** `CREATE TABLE` declared as `db.createTable` declares, a shared table: what forks and typed reads keep of it. */
+  const sqlDeclared = (declaration: SqlTableDeclaration): Effect.Effect<SqlAnswer, KinuError> => Effect.gen(function* () {
+    const held = yield* catalogRow(declaration.name);
+
+    if (held === undefined) {
+      yield* createdTable({ name: declaration.name, scope: 'workspace', columns: declaration.columns });
+
+      return { rows: [], rowsAffected: 0 };
+    }
+
+    const { scope } = recordOf(held);
+
+    if (scope !== 'workspace') return yield* new KinuError('denied', `db.sql: table \`${declaration.name}\` is ${scope}-scope; SQL reaches the workspace's shared tables`);
+
+    return declaration.ifNotExists ? { rows: [], rowsAffected: 0 } : yield* new KinuError('bad_input', `db.sql: table \`${declaration.name}\` already exists`);
+  });
+
+  /**
+   * One statement over the shared tables, its access read off the program SQLite compiles for it (`gateProgram`): a
+   * read runs as it is; a write runs with its evidence in one transaction, as a Plan turn's never does.
+   */
+  const sqlRan = (query: string, params: readonly (string | number | boolean | null)[]): Effect.Effect<SqlAnswer, KinuError> => Effect.gen(function* () {
+    yield* authorized();
+    const doing = 'db.sql';
+    const statement = yield* readSqlStatement(query);
+
+    if (statement.kind === 'create') return yield* sqlDeclared(statement.declaration);
+
+    if (statement.placeholders !== params.length) {
+      return yield* new KinuError('bad_input', `${doing}: its query holds ${String(statement.placeholders)} \`?\` and params ${String(params.length)} values`);
+    }
+
+    const tables = yield* sharedTables(doing);
+    const segments = storedText(statement.tokens, (name) => tables.get(name.toLowerCase()) ?? null);
+    const values = params.map((value) => (typeof value === 'boolean' ? Number(value) : value));
+
+    // Compiling is all EXPLAIN does, so what fails here is the statement's own: a word SQLite does not read, a table it
+    // does not find.
+    const explained = yield* Effect.mapError(
+      execute<unknown>(sql, Statement.of([`EXPLAIN ${segments[0] ?? ''}`, ...segments.slice(1)], values), doing),
+      (failed) => new KinuError('bad_input', failed.message.includes('no such table') ? `${failed.message}: SQL reaches the workspace's shared tables, which db.listTables names` : failed.message, { cause: failed }),
+    );
+
+    const program = yield* parseInput(v.array(ExplainRowSchema), { value: explained, where: 'its compiled program' });
+    const [target] = yield* gateProgram(program, yield* sharedPages(tables, doing));
+
+    if (target === undefined) return { rows: yield* answered(yield* execute<Record<string, StoredValue>>(sql, Statement.of(segments, values), doing), doing), rowsAffected: 0 };
+
+    yield* permitted(false, `${doing} writing a shared table`);
+
+    return yield* commit((record) => Effect.gen(function* () {
+      const rows = yield* answered(yield* execute<Record<string, StoredValue>>(sql, Statement.of(segments, values), doing), doing);
+      const changed = yield* execute<{ n: number }>(sql, new Statement().text('SELECT changes() AS n'), doing);
+      const rowsAffected = v.parse(CountSchema, changed[0]?.n ?? 0);
+
+      // Its target is the table its program opens first for writing; one an FK action reaches is that table's to answer.
+      yield* classified(() => record({ op: 'sql', table: target, scope: 'workspace', rowsAffected, batch: null }));
+
+      return { rows, rowsAffected };
+    }));
+  });
+
   const fork: ForkAppData = {
     // A fork copies only the tables whose scope forks; the agent's private ones stay with it.
     tables: () => settleSync(Effect.map(catalogRows('read the agent-data catalogue'), (records) => records
@@ -913,6 +1029,10 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
     batch(ops) {
       return settleSync(batched(ops));
     },
+
+    sql(query, params) {
+      return settleSync(sqlRan(query, params));
+    },
   };
 }
 
@@ -943,7 +1063,7 @@ export function createDbCodemodeProvider(store: AppDataStore, reach: { readonly 
 
   const on = <A>(table: string, run: () => A): Effect.Effect<A, KinuError> => Effect.flatMap(reached(table), () => classified(run));
 
-  return codemodeNamespace('db', 'Tables of your own, read and written by structured calls, not SQL.', [
+  return codemodeNamespace('db', 'Tables of your own, read and written by structured calls, and the shared ones by SQL.', [
     serve(DB.createTable, ({ spec }) => Effect.flatMap(declared(spec), () => classified(() => store.createTable(spec)))),
     serve(DB.listTables, () => classified(() => store.listTables().filter(({ scope }) => reach.private || APP_TABLE_SCOPE[scope].slates))),
     serve(DB.schema, ({ table }) => on(table, () => store.schema(table))),
@@ -953,6 +1073,8 @@ export function createDbCodemodeProvider(store: AppDataStore, reach: { readonly 
     serve(DB.update, ({ table, set, where }) => on(table, () => ({ rowsAffected: store.apply({ op: 'update', table, set, where }).rowsAffected }))),
     serve(DB.deleteRows, ({ table, where }) => on(table, () => ({ rowsAffected: store.apply({ op: 'delete', table, where }).rowsAffected }))),
     serve(DB.batch, ({ ops }) => Effect.flatMap(Effect.forEach(ops, (op) => reached(op.table), { discard: true }), () => classified(() => store.batch(ops).map(({ rowsAffected }) => ({ rowsAffected }))))),
+    // Shared tables only, which every caller reaches.
+    serve(DB.sql, ({ query, params }) => classified(() => store.sql(query, params))),
     serve(DB.dropTable, ({ table }) => on(table, () => {
       store.dropTable(table);
 
