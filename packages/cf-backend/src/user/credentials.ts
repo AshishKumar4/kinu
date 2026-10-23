@@ -1,6 +1,7 @@
 import { Effect } from 'effect';
 import {
   KeptProviderListingSchema, type ProviderListing, safeJsonParse, type Credential, CLAUDE_CRED_KEY, CODEX_CRED_KEY, baseCredentialKey, claudeCodeFrom, claudeSignInRefusal, createClaudeOAuthClient, startClaudeSignIn, subscriptionIssuer, renewableLogin, rotateLogin, usableLogin, type LoginRenewal, type SubscriptionIssuer, decodeCodexAccountId, type JsonValue, type OAuthCredential, parseJsonValue, ownerCaller, type UserCaller, type ResolvedCaller, credentialToHeaders, refusedLogin, type AuthRequest, type AuthResolution, validateCredential, validateCredentialKey, createCredentialCipher, type CredentialCipher, revocationEndpointFor, revokeOAuthGrant, type DisconnectOutcome, isModelInferenceCredentialKey, CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, accountIdFromCloudflareCredential, cloudflareAIGatewayId, cloudflareAccountsFromCredential, cloudflareWorkersAIBaseURL, fetchCloudflareAIGateways, isCloudflareAIGatewayId, isCloudflareCredentialExpiring, isCloudflareCredentialUsable, refreshCloudflareCredential, withCloudflareAccount, type CloudflareAccount, type CloudflareAIGatewaySummary, type CredentialSummary, CLOUDFLARE_WEB_SEARCH_CRED_KEY, grantsWebSearch, storedCredentialKey,
+  GOOGLE_OAUTH_CRED_KEY, googleCredentialExpiring, googleGrantOf, refreshGoogleCredential, type GoogleGrant,
 } from '@kinu.run/core';
 import { attempt, authoredRefusal, diagnostics, joining, KinuError, renderThrownChain, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -35,6 +36,7 @@ const REFRESH_DOING: ReadonlyMap<string, string> = new Map([
   [CODEX_CRED_KEY, 'refreshing the Codex credential'],
   [CLAUDE_CRED_KEY, 'refreshing the Claude credential'],
   [CLOUDFLARE_OAUTH_CRED_KEY, 'refreshing the Cloudflare credential'],
+  [GOOGLE_OAUTH_CRED_KEY, 'renewing the Google connection'],
 ]);
 
 const CLAUDE_SIGN_IN_KEY = 'claude.sign-in';
@@ -102,8 +104,11 @@ export class UserCredentials {
   }
 
   /** Model-inference credentials survive tainting (headers attach in trusted DO code, never in LLM
-   * context); everything else is owner-level. */
+   * context); everything else is owner-level. The Google connection's token is the owner's alone: a workspace reaches
+   * Google only through the account's calls, whose writes its owner approves. */
   private requireCredentialAccess(caller: UserCaller, key: string): Promise<ResolvedCaller> {
+    if (baseCredentialKey(key) === GOOGLE_OAUTH_CRED_KEY) return this.host.requireTier(caller, 'google.token');
+
     return this.host.requireTier(caller, isModelInferenceCredentialKey(key) ? 'credentials.model' : 'credentials.other');
   }
 
@@ -629,6 +634,40 @@ export class UserCredentials {
         await this.commitRefreshedCredential(CLOUDFLARE_OAUTH_CRED_KEY, rest, revision);
       },
     );
+  }
+
+  /** The Google connection as Settings shows it: the account and what it granted; null with none. Renews nothing. */
+  async googleConnection(caller: UserCaller): Promise<GoogleGrant | null> {
+    await this.host.requireTier(caller, 'credentials.other');
+    const stored = await this.readCredential(GOOGLE_OAUTH_CRED_KEY);
+
+    return stored?.kind === 'oauth' ? googleGrantOf(stored) : null;
+  }
+
+  /**
+   * The Google connection's access token, renewed when due or when Google refused the held one (`refused`). Null with
+   * no connection, or once Google refused to renew it: the row is retired, so Settings offers Connect again. Google out
+   * of reach leaves the held token, whose next call may still succeed.
+   */
+  async googleToken(caller: UserCaller, opts?: { readonly refused?: boolean }): Promise<string | null> {
+    await this.host.requireTier(caller, 'google.token');
+    const stored = await this.readCredentialAt(GOOGLE_OAUTH_CRED_KEY);
+
+    if (stored?.cred.kind !== 'oauth') return null;
+    const held = { cred: stored.cred, revision: stored.revision };
+
+    if (opts?.refused !== true && !googleCredentialExpiring(held.cred)) return held.cred.accessToken;
+
+    const renewed = await this.refreshOAuthCredential(
+      GOOGLE_OAUTH_CRED_KEY,
+      held,
+      () => refreshGoogleCredential(this.host.env, held.cred),
+      async (revision) => { this.retireRejectedCredential(GOOGLE_OAUTH_CRED_KEY, revision); },
+    );
+
+    if (renewed === 'revoked') return null;
+
+    return 'failed' in renewed ? held.cred.accessToken : renewed.accessToken;
   }
 
   /** A rejected refresh deletes only that login's row, so its connect CTA resurfaces. */

@@ -2595,6 +2595,7 @@ export {
 export {
   APP_ROUTES,
   cloudflareConnectPath,
+  googleConnectPath,
   CONNECT_CHANNEL,
   connectedPath,
   connectEndedOf,

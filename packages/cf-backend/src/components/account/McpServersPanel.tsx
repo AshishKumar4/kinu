@@ -8,6 +8,7 @@ import type { ConnectEnded, McpTransport } from "@kinu.run/core";
 import { beginConnect, signInMcpServer } from "@/lib/connect-window";
 import { addMcpServer, reconnectSaying, removeMcpServer } from "@/lib/user-api";
 import { McpPresetCards } from "@/components/plugins/McpPresetCards";
+import { GoogleConnectionCard } from "@/components/account/GoogleConnectionCard";
 import { Status } from "@/components/ui/Status";
 import { mcpServerStatus } from "@/components/plugins/mcp-status";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
@@ -59,6 +60,7 @@ export function McpServersPanel({ mcp }: { mcp: McpServers }) {
     <div className="space-y-4">
       {dialog}
       <div className="space-y-px">
+        <GoogleConnectionCard />
         <McpPresetCards servers={servers} availability={lastValue(presets.resource) ?? undefined} onChanged={reload} onConnected={connected} />
       </div>
 
