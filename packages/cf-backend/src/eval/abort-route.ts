@@ -8,6 +8,7 @@ import { diagnostics, renderThrownChain } from '@kinu.run/core/obs';
 import type { AuthIdentity } from '../auth/session';
 import { rawParam, type FamilyEnv } from '../api/context';
 import type { WorkspaceVariables } from '../api/workspace';
+import type { OrchestratorAgent } from '../orchestrator';
 
 const ABORT = '/api/workspaces/:name/eval/abort';
 
@@ -15,7 +16,7 @@ function isEvalServiceIdentity(identity: AuthIdentity): boolean {
   return identity.provider === 'dev';
 }
 
-export const evalAbortRoutes = new Hono<FamilyEnv<object, WorkspaceVariables>>();
+export const evalAbortRoutes = new Hono<FamilyEnv<object, WorkspaceVariables<Pick<OrchestratorAgent, 'evalAbortActivation'>>>>();
 
 evalAbortRoutes.on('POST', [ABORT, `${ABORT}/`], async (c) => {
   if (!isEvalServiceIdentity(c.get('identity'))) return Response.json({ error: 'Not found' }, { status: 404 });

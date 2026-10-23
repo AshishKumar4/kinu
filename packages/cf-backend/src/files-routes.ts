@@ -20,16 +20,13 @@ export interface FilesRouteAgent {
   abortExecutorFileWrite(transferId: string): Promise<void>;
 }
 
-export type FilesAgentResolver<Bindings> = (env: Bindings, agentName: string) => Promise<FilesRouteAgent>;
 
 /** Method, then query, then object, as before. */
-export function filesRoutes<Bindings extends object>(
-  resolveAgent: FilesAgentResolver<Bindings>,
-): Hono<FamilyEnv<Bindings, WorkspaceVariables>> {
-  const routes = new Hono<FamilyEnv<Bindings, WorkspaceVariables>>();
+export function filesRoutes<Bindings extends object, Agent extends FilesRouteAgent = FilesRouteAgent>(): Hono<FamilyEnv<Bindings, WorkspaceVariables<Agent>>> {
+  const routes = new Hono<FamilyEnv<Bindings, WorkspaceVariables<Agent>>>();
 
   routes.all(`${LITERAL_WORKSPACE}/files`, async (c) => {
-    const { name, request } = c.get('workspace');
+    const { agent, request } = c.get('workspace');
 
     if (request.method !== 'PUT' && request.method !== 'GET') return err(405, 'use PUT or GET');
     const url = new URL(request.url);
@@ -39,8 +36,6 @@ export function filesRoutes<Bindings extends object>(
     if (!executorId) return err(400, 'executor query parameter required');
 
     if (!path) return err(400, 'path query parameter required');
-
-    const agent = await resolveAgent(c.env, name);
 
     if (request.method === 'PUT') {
       const expectedRevision = expectedRevisionFrom(request);

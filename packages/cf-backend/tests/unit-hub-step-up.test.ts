@@ -40,7 +40,7 @@ function hubWorkspace() {
     WEBHOOK_ROUTE_SECRET: 'test-webhook-route-secret-0123456789',
   };
 
-  return { env, calls, resolveAgent: () => Promise.resolve(agent) };
+  return { env, calls, agent };
 }
 
 /** A trigger-creation request; `forgedAuthTime` is a client's own x-kinu-auth-time header. */
@@ -57,29 +57,29 @@ function createTriggerRequest(forgedAuthTime?: number) {
 }
 
 /** The verified session, as the API gate sets it: `authTime` absent when the session carries none. */
-function signedIn(authTime?: number) {
-  return { identity: { userId: 'u_1', email: 'owner@example.com', sub: 'sub_1', ...(authTime !== undefined && { authTime }) }, workspace: { name: 'jarvis' } };
+function signedIn(agent: HubTarget, authTime?: number) {
+  return { identity: { userId: 'u_1', email: 'owner@example.com', sub: 'sub_1', ...(authTime !== undefined && { authTime }) }, workspace: { name: 'jarvis', agent } };
 }
 
 describe('web trigger-creation step-up gate', () => {
   test('fresh auth time → trigger created', async () => {
-    const { env, calls, resolveAgent } = hubWorkspace();
-    const res = await serveFamily(hubRoutes(() => resolveAgent), signedIn(Date.now() - 1000))(createTriggerRequest(), env);
+    const { env, calls, agent } = hubWorkspace();
+    const res = await serveFamily(hubRoutes(), signedIn(agent, Date.now() - 1000))(createTriggerRequest(), env);
     expect(res?.status).toBe(201);
     expect(calls).toHaveLength(1);
   });
 
   test('stale auth time → 401, orchestrator never invoked', async () => {
-    const { env, calls, resolveAgent } = hubWorkspace();
-    const res = await serveFamily(hubRoutes(() => resolveAgent), signedIn(Date.now() - 5 * 60 * 1000 - 1000))(createTriggerRequest(), env);
+    const { env, calls, agent } = hubWorkspace();
+    const res = await serveFamily(hubRoutes(), signedIn(agent, Date.now() - 5 * 60 * 1000 - 1000))(createTriggerRequest(), env);
 
     expect(res?.status).toBe(401);
     expect(calls).toHaveLength(0);
   });
 
   test('missing auth time → 401, whatever auth-time header the client sent', async () => {
-    const { env, calls, resolveAgent } = hubWorkspace();
-    const res = await serveFamily(hubRoutes(() => resolveAgent), signedIn())(createTriggerRequest(Date.now()), env);
+    const { env, calls, agent } = hubWorkspace();
+    const res = await serveFamily(hubRoutes(), signedIn(agent))(createTriggerRequest(Date.now()), env);
     expect(res?.status).toBe(401);
     expect(calls).toHaveLength(0);
   });

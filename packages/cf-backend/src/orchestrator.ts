@@ -6987,7 +6987,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** Not @callable: called by the terminal HTTP route (see terminal-route.ts). */
-  prepareTerminal(executorId: string, surface: 'terminal' | 'desktop' = 'terminal'): Promise<{ ok: true } | { error: string }> {
+  async prepareTerminal(executorId: string, surface: 'terminal' | 'desktop' = 'terminal'): Promise<{ ok: true } | { error: string }> {
     return this.executors.prepareTerminal(executorId, surface);
   }
 
@@ -6995,12 +6995,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Opens via this object because only it holds the workspace capability token the hub needs.
    * `device`: the PC the pane names, when the account has several connected; the one connected without it.
    */
-  openDeviceTerminal(window: { cols: number; rows: number }, target: { device?: string; session?: string }): Promise<{ session: string; user: string } | { error: string }> {
+  async openDeviceTerminal(window: { cols: number; rows: number }, target: { device?: string; session?: string }): Promise<{ session: string; user: string } | { error: string }> {
     return this.executors.openDeviceTerminal(window, target);
   }
 
   /** As {@link openDeviceTerminal}, for the screen of the PC `device` (1014-t). */
-  openDeviceScreen(device: string): Promise<{ session: string; user: string } | { error: string }> {
+  async openDeviceScreen(device: string): Promise<{ session: string; user: string } | { error: string }> {
     return this.executors.openDeviceScreen(device);
   }
 
@@ -7284,7 +7284,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** Not @callable: creation is step-up gated in the web and CLI trigger routes only. */
-  createDurableWebhook(opts: {
+  async createDurableWebhook(opts: {
     label: string;
     auth_mode: 'hmac' | 'bearer' | 'mtls';
     secret?: string;

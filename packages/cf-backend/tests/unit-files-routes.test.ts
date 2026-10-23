@@ -47,7 +47,7 @@ function workspace(): Workspace {
 }
 
 async function route(request: Request, agent: FilesRouteAgent): Promise<Response> {
-  const response = await serveFamily(filesRoutes(async () => agent), { workspace: { name: "ws" } })(request, {});
+  const response = await serveFamily(filesRoutes(), { workspace: { name: "ws", agent } })(request, {});
 
   if (response === null) throw new Error("route did not claim the request");
 
