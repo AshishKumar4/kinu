@@ -76,7 +76,7 @@ function Entry({ entry }: { entry: ActivityEntry }) {
     <li className="grid grid-cols-[var(--layout-label-row)] gap-x-3 px-4 py-3 max-sm:grid-cols-1" data-activity-entry={entry.id} data-cause={entry.cause.kind}>
       <time className="t-meta tabular-nums p-text-3 max-sm:hidden" dateTime={new Date(entry.at).toISOString()}>{clockTime(entry.at)}</time>
       <div className="flex min-w-0 flex-col gap-1">
-        <span className="t-body min-w-0 p-text" data-activity-did>{entry.did}</span>
+        <span className="t-body min-w-0 line-clamp-2 p-text" data-activity-did>{entry.did}</span>
         <span className="t-meta flex min-w-0 items-center gap-2 p-text-3">
           <Badge tone={entry.cause.kind === "event" ? "info" : "neutral"}>{tag}</Badge>
           <span className="min-w-0 truncate" title={said}>{said}</span>

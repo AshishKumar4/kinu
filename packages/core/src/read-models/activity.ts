@@ -31,12 +31,11 @@ export interface ActivityEntry {
   readonly failed: string | null;
 }
 
-const LINE = 96;
-
+/** A text's first line; the page cuts it to its width. */
 function clip(text: string): string {
   const [first = ''] = text.trim().split('\n');
 
-  return first.length > LINE ? `${first.slice(0, LINE - 1).trimEnd()}…` : first;
+  return first;
 }
 
 function plural(count: number, one: string): string {
