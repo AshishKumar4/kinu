@@ -209,6 +209,22 @@ function foreignCall(): string | null {
   return `data: ${JSON.stringify({ response: SLEEP_TIME_ANSWER })}\n\n${USAGE}data: [DONE]\n\n`;
 }
 
+/** Stepping: a binding call waits until the gate has read the heap at it, and is its step's number (0 unstepped). The
+ *  cursor is every workspace's: which path took each step is counted, so the gate can tell its turn's steps from another
+ *  workspace's. */
+async function bindingStep(): Promise<number> {
+  model.parked += 1;
+  const seq = model.stepping ? ++model.arrived : 0;
+
+  if (seq > 0) model.stepped.binding += 1;
+
+  // A timer is I/O to the runtime; a bare pending promise would be cancelled as a hung request.
+  while (model.holding || model.released < seq) await scheduler.wait(seq > 0 ? 2 : 20);
+  model.parked -= 1;
+
+  return seq;
+}
+
 /** The product's `AI` binding: each streamed turn answers `answerBytes` of text, and waits while `holding`. */
 async function scriptedBody(inputs: BindingInputs): Promise<string> {
   model.calls += 1;
@@ -220,16 +236,7 @@ async function scriptedBody(inputs: BindingInputs): Promise<string> {
   const foreign = foreignCall();
 
   if (foreign !== null) return foreign;
-  model.parked += 1;
-  // Stepping: each call waits until the gate has read the heap at it. The cursor is every workspace's: which path took
-  // each step is counted, so the gate can tell its turn's steps from another workspace's.
-  const seq = model.stepping ? ++model.arrived : 0;
-
-  if (seq > 0) model.stepped.binding += 1;
-
-  // A timer is I/O to the runtime; a bare pending promise would be cancelled as a hung request.
-  while (model.holding || model.released < seq) await scheduler.wait(seq > 0 ? 2 : 20);
-  model.parked -= 1;
+  const seq = await bindingStep();
 
   // Hiring: the root turn hires `hires` task subagents; each subagent answers one page and is done.
 
