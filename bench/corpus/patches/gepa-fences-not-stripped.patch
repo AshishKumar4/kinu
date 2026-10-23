@@ -1,12 +1,21 @@
 diff --git a/packages/core/src/providers/structured.ts b/packages/core/src/providers/structured.ts
 --- a/packages/core/src/providers/structured.ts
 +++ b/packages/core/src/providers/structured.ts
-@@ -12,7 +12,7 @@ export interface MarkdownFencedBlock {
- export function markdownFencedBlocks(text: string): MarkdownFencedBlock[] {
-   return [...text.matchAll(/```([^\n`]*)\n([\s\S]*?)```/g)].map((match) => ({
-     tag: (match[1] ?? '').trim().split(/\s+/)[0]?.toLowerCase() || null,
--    code: (match[2] ?? '').trim(),
-+    code: match[0].trim(),
-   }));
- }
+@@ -34,7 +34,7 @@ function fenceOpening(line: string): OpenFence | null {
+     // A backtick fence's info string holds no backtick: one that does is inline code, not a fence.
+     if (run.startsWith('`') && rest.includes('`')) return null;
  
+-    return { fence: run, indent: fence[1]?.length ?? 0, tag: rest.trim().split(/\s+/u)[0]?.toLowerCase() || null, lines: [] };
++    return { fence: run, indent: fence[1]?.length ?? 0, tag: rest.trim().split(/\s+/u)[0]?.toLowerCase() || null, lines: [line] };
+   }
+ 
+   const trailing = TRAILING_FENCE.exec(line);
+@@ -65,7 +65,7 @@ export function markdownFencedBlocks(text: string): MarkdownFencedBlock[] {
+     if (open === null) {
+       open = fenceOpening(line);
+     } else if (closesFence(open, line)) {
+-      blocks.push({ tag: open.tag, code: open.lines.join('\n').trim() });
++      blocks.push({ tag: open.tag, code: [...open.lines, line].join('\n').trim() });
+       open = null;
+     } else {
+       // The fence's own indentation is stripped from each line, as far as the line has it.
