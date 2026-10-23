@@ -6,7 +6,7 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { AwaitedList } from '@kinu.run/test-utils';
 import { actorConnectionTag, agentHome, WORKSPACE_TITLE_SYSTEM_PROMPT } from '@kinu.run/core';
-import { gatewayWorkspace, storedChat, workspaceFiles, workspaceMainActor, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { gatewayWorkspace, storedChat, workspaceFiles, workspaceMainActor, runInWorkspaceShell, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 import { copyNextOpening, copyNextTurnEnd } from './helpers/agent-facets';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
@@ -201,7 +201,7 @@ describe('Retry on a failed turn', () => {
     };
 
     const home = agentHome(agent.agentOf(subagent.actorId).homeName);
-    const counted = async () => (await agent.execWorkspaceCommand(`cat ${home}/${COUNTER}`)).stdout;
+    const counted = async () => (await runInWorkspaceShell(agent, `cat ${home}/${COUNTER}`)).stdout;
 
     await ask('first', 'submit-message');
     expect(refused).toBe(true);

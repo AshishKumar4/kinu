@@ -33,9 +33,8 @@ Cloudflare registers no `parent`; only a CLI head does.
 
 `ParentWorkspaceHandle` (`core/src/execution/parent.ts`) is the parent
 interface: its shell alone, `exec(command)`. A fork's files are the folder it
-shares with its parent, read through `file`, so `parent` has no `fs`.
-`execWorkspaceCommand` appears on no surface list, so `sealRpcSurface`
-(`cf-backend/src/rpc-surface.ts`) shadows it and a stub-holder cannot call it.
+shares with its parent, read through `file`, so `parent` has no `fs`. The
+workspace object answers no parent call over RPC: a fork is a CLI head's.
 The Environment surface labels this `Parent workspace`
 (`core/src/read-models/executors.ts`).
 

@@ -257,7 +257,6 @@ export const USER_DO_STARTED_RPC: readonly string[] = USER_DO_METHODS.filter((na
 /** Members every actor exposes; entries a facet reaches on its parent stub must be listed or nested
  * trees fail closed at depth 2. `protected` members stay unreachable. */
 const ACTOR_AGENT_RPC_SURFACE = [
-  'deleteWorkspaceFile',
   'slateCallDispatch',
   'closeRevokedCliSockets',
   'closeRevokedSessionSockets',
@@ -267,13 +266,9 @@ const ACTOR_AGENT_RPC_SURFACE = [
   'headJournalRecordReport',
   'headJournalRecordSplit',
   'installWorkspaceCapability',
-  'listWorkspaceFiles',
   'missionDebit',
   'missionGuard',
   'onModelSettingsChanged',
-  'readWorkspaceFile',
-  'statWorkspaceFile',
-  'writeWorkspaceFile',
 ] as const satisfies readonly (keyof ActorAgent)[];
 
 /** Beyond `AGENT_RPC_ACCESS` (reachable by construction); `destroyAgent` is called DO-to-DO by UserDO. */

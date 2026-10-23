@@ -447,6 +447,17 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     return hostedSubagentRuntime(this.hostedSeams(), () => this.actorHost().bindStores(actorReferenceOf(this.agentOf(hirer))));
   }
   observeRuntime(): AgentRuntime { return this.rt; }
+  /** The workspace's own files, as its shell sees them, for a test's setup and inspection. */
+  observeFiles(): VFS { return this.rt.localVfs; }
+
+  /** A command in the workspace's own shell, as a test seeds or reads its state. */
+  async runInWorkspace(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    const shell = this.rt.shell;
+
+    if (shell === undefined) throw new Error('this workspace has no shell');
+
+    return shell.exec(command);
+  }
   setObservedSoul(text: string): void { this._cachedSoulText = text; }
 
   declareScaffoldPresent(): void { this._scaffoldReady = true; }
@@ -782,16 +793,14 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
 }
 
-/** The workspace's public file RPCs, adapted only for test setup and inspection. */
+/** The workspace's own files, for test setup and inspection. */
 export function workspaceFiles(agent: HarnessOrchestratorAgent): VFS {
-  return {
-    readFile: (path) => agent.readWorkspaceFile(path),
-    writeFile: async (path, data) => { await agent.writeWorkspaceFile({ kind: 'file', path, data }); },
-    readdir: (path) => agent.listWorkspaceFiles(path),
-    stat: (path, options) => agent.statWorkspaceFile(path, options),
-    mkdir: async (path, options) => { await agent.writeWorkspaceFile({ kind: 'directory', path, recursive: options?.recursive ?? false }); },
-    unlink: async (path) => { await agent.deleteWorkspaceFile(path); },
-  };
+  return agent.observeFiles();
+}
+
+/** A command in the workspace's own shell, as a test seeds or reads its state. */
+export function runInWorkspaceShell(agent: HarnessOrchestratorAgent, command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  return agent.runInWorkspace(command);
 }
 
 /** One event-loop turn, with no duration: queued I/O callbacks and detached continuations run first. */

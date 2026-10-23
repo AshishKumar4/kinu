@@ -8,7 +8,7 @@ import * as v from 'valibot';
 import { agentHome, agentTmpRoot, buildBuiltinTools, actorHomeName } from '@kinu.run/core';
 import { present, toolExecute } from '@kinu.run/test-utils';
 import { conversationsFor } from '../../core/tests/helpers';
-import { hostedSubagentHarness, orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { hostedSubagentHarness, orchestratorHarness, workspaceFiles, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 
 /** An agent the owner adds takes the workspace's mission, which the soul states. */
 const SOUL = '# Kinu\n\n## Mission\n\nBuild the thing.\n';
@@ -45,7 +45,7 @@ describe('a hosted subagent runs as its own home', () => {
     const child = await hostedSubagentHarness(parent, { ...hire, name: 'builder-1' });
     const agentName = actorHomeName({ origin: 'agent', name: child.actor.handle.name, storageKey: child.actor.handle.storageKey });
 
-    const home = await parent.agent.statWorkspaceFile(agentHome(agentName));
+    const home = await workspaceFiles(parent.agent).stat(agentHome(agentName));
     expect(home).toMatchObject(DIRECTORY);
     const shell = child.actor.runtime.shell;
 
@@ -57,7 +57,7 @@ describe('a hosted subagent runs as its own home', () => {
     await expect(writeText(child.actor.runtime.storage.vfs, '/home/main/theirs.md', 'x'))
       .rejects.toThrow(expect.objectContaining({ code: 'EACCES' }));
     expect((await shell.exec('echo s > /tmp/x')).exitCode).toBe(0);
-    expect(await parent.agent.statWorkspaceFile('/tmp/x')).toBeNull();
+    expect(await workspaceFiles(parent.agent).stat('/tmp/x')).toBeNull();
   });
 
   // A call that may outlive its window streams its output, and ran as the session user: the actor's identity was put
@@ -105,26 +105,26 @@ describe('a hosted subagent runs as its own home', () => {
     const second = await parent.agent.createSubagentAgent('Fix the coupon expiry check, again');
 
     expect([first.name, second.name]).toEqual(['fix-coupon-expiry', 'fix-coupon-expiry-2']);
-    expect(await parent.agent.statWorkspaceFile('/home/fix-coupon-expiry')).toMatchObject(DIRECTORY);
-    expect(await parent.agent.statWorkspaceFile('/home/fix-coupon-expiry-2')).toMatchObject(DIRECTORY);
+    expect(await workspaceFiles(parent.agent).stat('/home/fix-coupon-expiry')).toMatchObject(DIRECTORY);
+    expect(await workspaceFiles(parent.agent).stat('/home/fix-coupon-expiry-2')).toMatchObject(DIRECTORY);
   });
 
   test('an archive keeps the home', async () => {
     const { parent, name, agentName } = await addedAgent();
-    expect(await parent.agent.statWorkspaceFile(agentHome(agentName))).toMatchObject(DIRECTORY);
+    expect(await workspaceFiles(parent.agent).stat(agentHome(agentName))).toMatchObject(DIRECTORY);
 
     await parent.agent.dismissSubagent(name, true);
 
-    expect(await parent.agent.statWorkspaceFile(agentHome(agentName))).toMatchObject(DIRECTORY);
+    expect(await workspaceFiles(parent.agent).stat(agentHome(agentName))).toMatchObject(DIRECTORY);
   });
 
   test('a wipe releases the home and its temp root with the storage', async () => {
     const { parent, name, agentName } = await addedAgent();
-    expect(await parent.agent.statWorkspaceFile(agentHome(agentName))).toMatchObject(DIRECTORY);
+    expect(await workspaceFiles(parent.agent).stat(agentHome(agentName))).toMatchObject(DIRECTORY);
 
     await parent.agent.dismissSubagent(name, false);
 
-    expect(await parent.agent.statWorkspaceFile(agentHome(agentName))).toBeNull();
-    expect(await parent.agent.statWorkspaceFile(agentTmpRoot(agentName))).toBeNull();
+    expect(await workspaceFiles(parent.agent).stat(agentHome(agentName))).toBeNull();
+    expect(await workspaceFiles(parent.agent).stat(agentTmpRoot(agentName))).toBeNull();
   });
 });
