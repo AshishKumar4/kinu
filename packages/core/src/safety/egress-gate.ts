@@ -46,6 +46,12 @@ export interface EgressSecretBinding {
   readonly hosts: readonly string[];
   readonly position: SecretPosition;
   readonly placeholder: string;
+  /**
+   * A connection's credential that a tool sends unasked to every host (Nimbus's git sends `GIT_TOKEN` as Basic with
+   * each request): at a host it may not reach, its `Authorization` header is left off and the request goes on, so an
+   * anonymous read there still works. An owner's secret sent there is refused.
+   */
+  readonly elsewhere?: 'withheld';
 }
 
 /**
@@ -123,7 +129,7 @@ interface EgressSubstitution {
 }
 
 export type EgressPlan =
-  | { readonly kind: 'forward'; readonly substitutions: readonly EgressSubstitution[] }
+  | { readonly kind: 'forward'; readonly substitutions: readonly EgressSubstitution[]; readonly withholdAuthorization?: true }
   | { readonly kind: 'refuse'; readonly status: number; readonly reason: string };
 
 const BASIC_CREDENTIAL = /^(Basic\s+)((?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?)\s*$/i;
@@ -253,6 +259,11 @@ export function planEgress(
   const present = egressPlaceholdersIn(facts);
 
   if (present.size === 0) return { kind: 'forward', substitutions: [] };
+  const byPlaceholder = new Map(granted.map((b) => [b.placeholder, b]));
+  const withheld = new Set([...present].filter((placeholder) => withheldElsewhere(facts, byPlaceholder.get(placeholder), present)));
+
+  // Only connections' credentials, each left off here: nothing is substituted, so the request goes on, over any scheme.
+  if (withheld.size === present.size) return { kind: 'forward', substitutions: [], withholdAuthorization: true };
 
   const scheme = URL.parse(facts.url)?.protocol;
 
@@ -265,10 +276,10 @@ export function planEgress(
     };
   }
 
-  const byPlaceholder = new Map(granted.map((b) => [b.placeholder, b]));
   const substitutions: EgressSubstitution[] = [];
 
   for (const placeholder of present) {
+    if (withheld.has(placeholder)) continue;
     const binding = byPlaceholder.get(placeholder);
 
     if (!binding) {
@@ -304,7 +315,21 @@ export function planEgress(
     substitutions.push({ name: binding.name, placeholder });
   }
 
-  return { kind: 'forward', substitutions };
+  return withheld.size > 0 ? { kind: 'forward', substitutions, withholdAuthorization: true } : { kind: 'forward', substitutions };
+}
+
+/**
+ * A connection's credential at a host it may not reach, in the `Authorization` header beside no other placeholder: the
+ * header is left off whole, with whatever else it said (a Basic user name), since a credential without its secret is
+ * none. Beside another placeholder it is not, so that one is never dropped unsaid: the request is refused.
+ */
+function withheldElsewhere(facts: EgressRequestFacts, binding: EgressSecretBinding | undefined, present: ReadonlySet<string>): boolean {
+  if (binding?.elsewhere !== 'withheld' || binding.hosts.some((host) => egressHostMatches(host, facts.host))) return false;
+
+  if (strayPosition(facts, binding.placeholder, { kind: 'authorization' }) !== null) return false;
+  const authorization = facts.headers.filter(([name]) => name.toLowerCase() === 'authorization').map(([, value]) => basicCredential(value)?.decoded ?? value);
+
+  return [...present].every((other) => other === binding.placeholder || !authorization.some((value) => value.includes(other)));
 }
 
 /** Literal to find and its replacement; used only to put the placeholder back over the secret. */

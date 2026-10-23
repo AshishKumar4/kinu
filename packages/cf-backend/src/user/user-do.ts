@@ -157,7 +157,10 @@ export class UserDO extends Agent<Env> {
 
   private readonly credentials = new UserCredentials(this.host);
 
-  private readonly secrets = new UserSecrets(this.host);
+  private readonly secrets: UserSecrets = new UserSecrets(this.host, {
+    configured: () => this.mcpServers.githubConnected(),
+    token: async () => this.mcpServers.githubGitToken(),
+  });
 
   private readonly sessions = new UserSessions({
     ...this.host,
@@ -168,7 +171,9 @@ export class UserDO extends Agent<Env> {
     suspension: () => this.accountLimits.suspension(),
   });
 
-  private readonly mcpServers = new UserMcpServers({ ...this.host, mcp: this.mcp, vault: this.credentials });
+  private readonly mcpServers: UserMcpServers = new UserMcpServers({
+    ...this.host, mcp: this.mcp, vault: this.credentials, connectionsMoved: async () => this.secrets.connectionsMoved(),
+  });
 
   private readonly slateConsentStore = new SlateConsentStore(this.ctx.storage.sql);
 
