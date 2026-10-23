@@ -6,6 +6,16 @@
 
 import { decodeEntities, HTML_ENTITIES } from './text';
 
+/** `value` as text inside HTML, or inside a quoted attribute's value. */
+export function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 /** Elements whose text is no part of the page a reader sees. The head's other elements hold no text. */
 const UNSEEN: ReadonlySet<string> = new Set(['script', 'style', 'noscript', 'template', 'svg']);
 

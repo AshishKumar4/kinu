@@ -9,7 +9,7 @@
  */
 import { SLATE_PAGE_STYLE } from '../slates/page-head';
 import { SLATE_BRIDGE_ATTRIBUTE, SLATE_BRIDGE_MESSAGE, SLATE_LEGACY_TOKEN_CSS, SLATE_SIZE_CHANGED_MESSAGE } from '../slates/host-context';
-import { escapeHtml } from '../http/http';
+import { escapeHtml } from '../utils/html';
 import { slateImportMap } from './slate-page';
 import { APP_FONTS_PATH, fontsCss } from './fonts';
 import { THEME_CSS } from './theme';

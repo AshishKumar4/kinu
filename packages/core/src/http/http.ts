@@ -150,14 +150,7 @@ export async function readBounded(
   return bounded;
 }
 
-export function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
-}
+export { escapeHtml } from '../utils/html';
 
 
 /** The file-download header policy: inline only for harmless types, `nosniff` always, a `sandbox` CSP

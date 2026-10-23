@@ -2365,6 +2365,8 @@ export { hueStops, rankHue } from './web/agent-colour';
 
 export { SLATE_PAGE_MODULES, SLATE_PAGE_MODULES_PATH, SLATE_PAGE_PREAMBLE, slateImportMap } from './web/slate-page';
 
+export { slatePushes } from './web/slate-pushes';
+
 export { APP_FONTS_PATH, appFontFile, SLATE_FONTS_PATH } from './web/fonts';
 
 export {
