@@ -241,9 +241,11 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
   const computerLive = environments.some((m) => m.key === "computer" && m.mount.live);
   // The computer's sessions are read while they are on screen: its tabs, or the wide column's list. A PC's are read
   // while it is chosen and this workspace holds it (1019-aa); either one's waiting session marks its machine.
-  const sessions = useMachineSessions(rpc, computerLive && (wide || selectedMachine?.key === "computer"), null);
+  const sessions = useMachineSessions(rpc, computerLive && (wide || selectedMachine?.key === "computer"), { kind: "computer" });
   const chosenDevice = selectedMachine?.device ?? null;
-  const pcSessions = useMachineSessions(rpc, chosenDevice !== null && chosenDevice.connected && chosenDevice.granted, chosenDevice?.id ?? null);
+  const pcSessions = useMachineSessions(rpc, chosenDevice !== null && chosenDevice.connected && chosenDevice.granted, chosenDevice === null ? { kind: "computer" } : { kind: "device", id: chosenDevice.id });
+  // The workspace's own terminals (1019-aa), read while it is the machine on screen.
+  const workspaceSessions = useMachineSessions(rpc, selectedMachine?.key === "workspace", { kind: "workspace" });
 
   const waiting = new Set([
     ...(sessionWaits(sessions) ? ["computer"] : []),
@@ -268,6 +270,13 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
     if (landOn !== null) setTabs((was) => ({ ...was, [landOn]: "desktop" }));
     onDesktopLanded?.();
   }, [desktopLanding, selectedMachine, landOn, onDesktopLanded]);
+
+  /** The sessions of the machine on screen: the chosen PC's, the workspace's terminals, or the computer's. */
+  const sessionsOf = (machine: string): MachineSessions => {
+    if (chosenDevice !== null) return pcSessions;
+
+    return machine === "workspace" ? workspaceSessions : sessions;
+  };
 
   const shown: Shown = {
     tab: (machine) => tabs[machine] ?? (machine === "computer" ? sessions.sessions?.[0]?.id ?? FIRST_SESSION_ID : ONE_SHELL),
@@ -296,7 +305,7 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
           executorOutputs={executorOutputs}
           onExecute={onExecute}
           onOpenFiles={onOpenFiles}
-          sessions={chosenDevice === null ? sessions : pcSessions}
+          sessions={sessionsOf(selectedMachine.key)}
           shown={shown}
           wide={wide}
           machineRow={machineRow}
@@ -409,7 +418,7 @@ function SelectedEnvironment({ rpc, machine, grant, exec, workspace, executorOut
   executorOutputs: Map<string, ExecutorOutput[]>;
   onExecute: (id: string, cmd: string) => Promise<ExecutorCommandResult>;
   onOpenFiles: (root: string) => void;
-  /** The computer's sessions, or the chosen PC's. */
+  /** The computer's sessions, the chosen PC's, or the workspace's terminals. */
   sessions: MachineSessions;
   shown: Shown;
   wide: boolean;
@@ -423,8 +432,9 @@ function SelectedEnvironment({ rpc, machine, grant, exec, workspace, executorOut
   const size = useComputerSize(rpc, computer && mount.live);
   const name = machineLabel(machine, exec);
   const restarting = computer && size.pending === "resize";
-  // The computer's sessions or the chosen PC's, read above for the machine row's marks too; another machine has one shell.
-  const machineSessions = computer || device !== null ? sessions : null;
+  // The computer's sessions, the chosen PC's or the workspace's own terminals, read above for the machine row's marks too;
+  // any other machine has one shell.
+  const machineSessions = computer || device !== null || machine.key === "workspace" ? sessions : null;
   const listed = sessions.sessions ?? [];
   const seen = { waiting: listed.some((session) => session.needsInput), awake: listed.some((session) => session.open) };
   const status = computer ? computerStatus(mount, exec, size, seen) : machineStatus(machine, exec, { waiting: device !== null && seen.waiting });
@@ -489,7 +499,7 @@ function EnvironmentView({ mount, machineKey, device, exec, name, workspace, des
   restartingTo: string | null;
   executorOutputs: Map<string, ExecutorOutput[]>;
   onExecute: (id: string, cmd: string) => Promise<ExecutorCommandResult>;
-  /** The computer's sessions, or a PC's; null for a machine with one shell. */
+  /** The computer's sessions, a PC's or the workspace's; null for a machine with one shell. */
   sessions: MachineSessions | null;
   shown: Shown;
   wide: boolean;

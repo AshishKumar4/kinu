@@ -62,7 +62,10 @@ import type { CFRuntime } from './runtime';
 import { callOperation, listOperations, type OperationCaller, type OperationListing, type OperationResult } from '@kinu.run/core';
 import type { AgentFacet, AgentFacetCalls } from "./agent-facet/agent-facet";
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
-import { isWorkspaceTerminal, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
+import {
+  isWorkspaceTerminal, WORKSPACE_SHELL_SESSION, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG, workspaceSessionOf, workspaceSessionTag,
+  WorkspaceSessionRecordSchema, type WorkspaceSessionRecord,
+} from "@kinu.run/core";
 import { ShareViewerClaimSchema, type ShareViewerClaim } from '@kinu.run/core';
 import {
   AgentOpenTurns, AgentReports, TurnFences, type AcceptedReport, type AgentOwes, type RunEndReport, type OpenWork, announcementOf, RECOVERY_BACKOFF_CEILING_MS, type SentWords, type AgentOpenTurn, CHAT_SESSION_ID, steerSkillsBlock, subagentTurnContext, type SessionEvent, type SessionTranscript, type TurnEndEvent,
@@ -350,6 +353,9 @@ export type RecentEventRow = Pick<
 >;
 
 /** agents 0.26's Lifecycle reads this back when `ctx.id` has no name; it outlives `destroy()`, so an alarm still owed builds the object. */
+/** The terminals the person opened beside the workspace's own (`listWorkspaceSessions`): their keys and names. */
+const WORKSPACE_SESSIONS_KEY = 'kinu:workspace-sessions';
+
 const PERSISTED_NAME_KEY = '__ps_name';
 
 /** An alarm phase's failure: marked on its span and recorded, so the tick goes on to its next phase. */
@@ -2199,7 +2205,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   override async getConnectionTags(connection: Connection, ctx: ConnectionContext): Promise<string[]> {
     const tags = await super.getConnectionTags(connection, ctx);
 
-    return new URL(ctx.request.url).pathname === WORKSPACE_TERMINAL_PATH ? [WORKSPACE_TERMINAL_TAG, ...tags] : tags;
+    const url = new URL(ctx.request.url);
+
+    // The pane's session rides the query, as the computer's and a PC's do: its terminal is keyed by it.
+    return url.pathname === WORKSPACE_TERMINAL_PATH ? [WORKSPACE_TERMINAL_TAG, ...workspaceSessionTag(url.searchParams.get('session')), ...tags] : tags;
   }
 
   /** A terminal socket carries only shell frames, not the SDK's identity, state and MCP frames. */
@@ -2211,7 +2220,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (!isWorkspaceTerminal(connection.tags)) return null;
     this.mountRootFiles();
 
-    return await this.hostedWorkspace().terminal();
+    return (await this.hostedWorkspace().terminals()).terminal(workspaceSessionOf(connection.tags));
   }
 
   /** The root's file plane registers the mount table a shell serves, and it is made with the root's runtime. */
@@ -6382,6 +6391,64 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     await this.computerBox()?.closeTerminalSession(id);
   }
 
+  /** The terminals the person opened beside the workspace's own shell, in the order they were opened. */
+  private workspaceSessionRecords(): WorkspaceSessionRecord[] {
+    const kept = v.safeParse(v.array(WorkspaceSessionRecordSchema), this.ctx.storage.kv.get(WORKSPACE_SESSIONS_KEY) ?? []);
+
+    return kept.success ? kept.output : [];
+  }
+
+  /**
+   * The workspace's terminals (1019-aa), as the computer's sessions read: its own shell, then each the person opened,
+   * each its own Nimbus terminal by its key (ask 64). A terminal no record names (one an older build opened) is listed
+   * under its key.
+   */
+  @callable() async listWorkspaceSessions(): Promise<readonly TerminalSession[]> {
+    const listed = await (await this.hostedWorkspace().terminals()).list();
+    const records = this.workspaceSessionRecords();
+
+    const session = (id: string, name: string, key: string | null): TerminalSession => {
+      const live = listed.find((terminal) => terminal.key === key);
+
+      return { id, name, cwd: live?.cwd ?? WORKSPACE_ROOT, open: live?.live ?? false, running: live?.running ?? null, last: null, ports: [], branch: null, needsInput: false };
+    };
+
+    const unnamed = listed.flatMap((terminal) => (terminal.key === null || records.some((record) => record.id === terminal.key) ? [] : [terminal.key]));
+
+    return [
+      session(WORKSPACE_SHELL_SESSION, WORKSPACE_SHELL_SESSION, null),
+      ...records.map((record) => session(record.id, record.name, record.id)),
+      ...unnamed.map((key) => session(key, key, key)),
+    ];
+  }
+
+  /** A new terminal beside the workspace's own; its shell starts when its tab attaches. */
+  @callable() async openWorkspaceSession(name?: string): Promise<SessionRecord> {
+    const records = this.workspaceSessionRecords();
+    const record = v.parse(WorkspaceSessionRecordSchema, { id: `w-${nanoid(10).toLowerCase().replace(/[^a-z0-9]/gu, '0')}`, name: name ?? `shell ${String(records.length + 2)}` });
+
+    this.ctx.storage.kv.put(WORKSPACE_SESSIONS_KEY, [...records, record]);
+
+    return { ...record, cwd: WORKSPACE_ROOT };
+  }
+
+  @callable() async renameWorkspaceSession(id: string, name: string): Promise<SessionRecord> {
+    const records = this.workspaceSessionRecords();
+    const renamed = v.parse(WorkspaceSessionRecordSchema, { id, name });
+
+    if (!records.some((record) => record.id === id)) throw new KinuError('missing', `the workspace has no terminal ${id} to rename`);
+    this.ctx.storage.kv.put(WORKSPACE_SESSIONS_KEY, records.map((record) => (record.id === id ? renamed : record)));
+
+    return { ...renamed, cwd: WORKSPACE_ROOT };
+  }
+
+  /** Ends the terminal's shell and forgets it; the workspace's own shell stays. */
+  @callable() async closeWorkspaceSession(id: string): Promise<void> {
+    if (id === WORKSPACE_SHELL_SESSION) throw new KinuError('bad_input', "the workspace's own shell stays; close the ones opened beside it");
+    await (await this.hostedWorkspace().terminals()).close(id);
+    this.ctx.storage.kv.put(WORKSPACE_SESSIONS_KEY, this.workspaceSessionRecords().filter((record) => record.id !== id));
+  }
+
   /** The workspace's named sessions on its PC `device` (1014-t), as the computer's read: the same rows, the same strip. */
   @callable() async listDeviceSessions(device: string): Promise<readonly TerminalSession[]> {
     return await this.requireOwnerUserDO().listDeviceSessions(await this.userCaller(), this.workspaceName(), device);
@@ -6846,7 +6913,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** The workspace's executors: a command, the file plane, the Files routes' transfers, terminals and ports. */
   private readonly executors = new WorkspaceExecutors({
     runtime: () => this.rt,
-    workspaceTerminal: async () => await this.hostedWorkspace().terminal(),
+    workspaceTerminal: async () => await this.hostedWorkspace().terminals(),
     computerState: () => ({ refused: this.config.get(SANDBOX_REFUSED) ?? null, starting: this.config.get(SANDBOX_STARTING) != null }),
     heldPorts: async () => await (await this.slates()).controller.heldPorts(),
     recordOutput: (executorId, command, output) => { this.recordExecutorOutput(executorId, command, output); },

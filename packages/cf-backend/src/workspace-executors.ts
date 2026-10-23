@@ -13,7 +13,7 @@ import {
 import type { HeldSlatePorts } from '@kinu.run/core/slates';
 import { authoredRefusal, diagnostics, renderThrownChain, settle } from '@kinu.run/core/obs';
 import type { CFRuntime } from './runtime';
-import type { WorkspaceTerminal } from './workspace-host';
+import type { WorkspaceTerminals } from './workspace-host';
 import { unownedWorkspace } from './actor-agent';
 
 /** Transfer id is fresh per transfer, so two readers of one path cannot replace
@@ -47,7 +47,7 @@ export interface WorkspaceExecutorsHost {
   /** This activation's runtime, read per call. */
   runtime(): Pick<CFRuntime, 'executionRouter' | 'deviceTransport' | 'sandboxHandle'>;
   /** The workspace runtime's terminal, composed on first use. */
-  workspaceTerminal(): Promise<WorkspaceTerminal>;
+  workspaceTerminal(): Promise<WorkspaceTerminals>;
   /** The computer as its last status left it: a refusal it reported, or still restoring. */
   computerState(): { readonly refused: string | null; readonly starting: boolean };
   /** The workspace's ports a slate's application holds, by title, and those an answer's page holds. */
