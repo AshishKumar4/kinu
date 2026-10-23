@@ -121,7 +121,8 @@ export class ControlPlaneDO extends DurableObject<Env> {
   ): Promise<void> {
     await this.gate(caller, 'index.forget');
     cpStore.forgetWorkspace(this.store, target);
-    this.gallery.forgetWorkspaces(cpStore.removedWorkspaceNames(this.store, target.userId));
+    // This workspace's listings alone: each removal forgets its own, and every forget queues behind the last.
+    this.gallery.forgetWorkspaces(cpStore.removedWorkspaceNames(this.store, target.userId, target.name));
   }
 
   /** Commit point for a submission: the caller deletes the R2 object when no id returns. */
