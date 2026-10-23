@@ -136,7 +136,8 @@ export async function attachMachine(request: AttachMachineRequest): Promise<Atta
       // it ran in. Its own home, so a command that writes lands on this machine
       // and nowhere near the checkout.
       root: home,
-      generation: 0,
+      // No connect yet: the hub hands the first secret to the socket it accepts.
+      connectSecret: '',
     }, null, 2)}\n`,
     { mode: 0o600 },
   );

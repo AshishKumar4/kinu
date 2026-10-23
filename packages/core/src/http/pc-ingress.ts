@@ -309,8 +309,12 @@ export async function handlePcJoin<Id>(
 
   if (input instanceof Response) return input;
   const body = v.safeParse(JOIN_BODY_SCHEMA, input.parsed);
+  const asked = v.safeParse(v.object({ ticket: v.string() }), input.parsed);
   // Shape gates before idFromName: garbage never wakes a DO.
-  const user = body.success ? deviceJoinTicketUser(body.output.ticket) : null;
+  const user = asked.success ? deviceJoinTicketUser(asked.output.ticket) : null;
+
+  // A good ticket with no key is an earlier CLI's (protocol 4): it is told to update, never that its ticket is bad.
+  if (user !== null && !v.is(v.object({ publicKey: v.string() }), input.parsed)) return json({ body: { error: DEVICE_KEY_MALFORMED } }, { status: 400 });
 
   if (!body.success || user === null) return json({ body: { error: JOIN_TICKET_MALFORMED } }, { status: 400 });
   const { ticket, publicKey, label, replaces } = body.output;
