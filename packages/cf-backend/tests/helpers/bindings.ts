@@ -328,6 +328,8 @@ export function userAccount<Built extends Partial<UserRoutesAuthority>>(
     userMcp_remove: refuse('userMcp_remove'),
     userMcp_handleOAuthCallback: refuse('userMcp_handleOAuthCallback'),
     userMcp_beginConnect: refuse('userMcp_beginConnect'),
+    userMcp_reconnect: refuse('userMcp_reconnect'),
+    evalAbortActivation: refuse('evalAbortActivation'),
     listWorkspaces: refuse('listWorkspaces'),
     listActiveWorkspaces: refuse('listActiveWorkspaces'),
     touchWorkspace: refuse('touchWorkspace'),

@@ -9,7 +9,8 @@ import { connectedPath, FILES_VIEW_CONFIG_KEY, filesViewNamed, PROFILE_CATALOG_C
 import { BOX_SIZE_ORDER } from '@kinu.run/devbox/sizes';
 import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY } from '../computer-size';
 import { DEVICE_TIERS, JsonValueSchema } from '@kinu.run/core';
-import { diagnostics, authoredRefusal, toKinuError, settle, type KinuError } from '@kinu.run/core/obs';
+import { diagnostics, authoredRefusal, renderThrownChain, toKinuError, settle, type KinuError } from '@kinu.run/core/obs';
+import { isEvalServiceIdentity } from '../eval/abort-route';
 import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '@kinu.run/core';
 import { listProviderCatalog } from './available-models';
 import { notifyWorkspacesModelSettingsChanged, type CreateWorkspaceEnv } from './workspace-access';
@@ -43,7 +44,7 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   | 'listCloudflareAccounts' | 'selectCloudflareAccount' | 'listAIGateways' | 'selectAIGateway'
   | 'userMcp_list' | 'userMcp_presets' | 'userMcp_add' | 'userMcp_remove' | 'userMcp_connectedPresets'
   | 'userMcp_handleOAuthCallback'
-  | 'userMcp_beginConnect'
+  | 'userMcp_beginConnect' | 'userMcp_reconnect' | 'evalAbortActivation'
   | 'accountMemory_view' | 'accountMemory_decide' | 'accountMemory_put' | 'accountMemory_forget' | 'accountMemory_forgetNote'
   | 'slateAiSpend'
   | 'listSecrets' | 'putSecrets' | 'setSecretDestination' | 'deleteSecret' | 'grantSecret' | 'revokeSecretGrant'
@@ -565,6 +566,32 @@ userRoutes.post('/api/user/mcp/servers/:id/connect', (c) => settle(Effect.gen(fu
     try: async () => json({ body: await c.get('stub').userMcp_beginConnect(c.get('owner'), decodeURIComponent(rawParam(c, 'id')), body.output.run) }),
     catch: (cause) => authoredRefusal({ doing: 'beginning this MCP server\'s sign-in', cause }),
   });
+})));
+
+// Eval-only: ends the account object's activation, so the next request is a fresh wake that dials every MCP server again
+// (the mcp-wake first-run row). `ctx.abort` rejects the call that asked for it: that rejection is the abort's receipt.
+userRoutes.post('/api/user/eval/abort', (c) => {
+  if (!isEvalServiceIdentity(c.get('identity'))) return Response.json({ error: 'Not found' }, { status: 404 });
+  const aborted = Response.json({ aborted: true }, { status: 202 });
+
+  return settle(Effect.tryPromise({ try: () => c.get('stub').evalAbortActivation(), catch: (cause) => renderThrownChain({ cause }) }).pipe(Effect.match({
+    onFailure: (receipt) => {
+      diagnostics.event('eval.account_activation_aborted', { receipt });
+
+      return aborted;
+    },
+    onSuccess: () => {
+      diagnostics.event('eval.account_activation_abort_returned', {});
+
+      return aborted;
+    },
+  })));
+});
+
+// A failed or closed server dialled again at the person's ask (the row's Reconnect).
+userRoutes.post('/api/user/mcp/servers/:id/reconnect', (c) => settle(Effect.tryPromise({
+  try: async () => json({ body: await c.get('stub').userMcp_reconnect(c.get('owner'), decodeURIComponent(rawParam(c, 'id'))) }),
+  catch: (cause) => authoredRefusal({ doing: 'reconnecting this MCP server', cause }),
 })));
 
 userRoutes.delete('/api/user/mcp/servers/:id', (c) => settle(Effect.tryPromise({
