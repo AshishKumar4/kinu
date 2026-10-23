@@ -480,8 +480,10 @@ export class UserMcpServers {
       // A corrupt list allows none: an empty list, and why, on the server's card.
       const allowed = 'failure' in read ? [] : read.allowed;
       const listing = conn?.connectionState === 'connected' ? this._mcpToolLists.get(r.id) : undefined;
-      // A server that answers its handshake and refuses its tool list offers nothing: it reads failed, not connected.
-      const status = listing !== undefined && 'failure' in listing ? 'failed' : mapConnectionStatus(conn?.connectionState);
+      const unlisted = listing !== undefined && 'failure' in listing;
+      const connection = mapConnectionStatus(conn?.connectionState);
+      // A server that answers its handshake and fails its tool list offers nothing: it reads failed, not connected.
+      const status = unlisted ? 'failed' : connection;
       const lenient = listing !== undefined && 'listed' in listing ? listing.listed : null;
 
       const tools = lenient === null
@@ -498,8 +500,10 @@ export class UserMcpServers {
 
       const toolsCount = allowed ? tools.filter((t: { name: string }) => allowed.includes(t.name)).length : tools.length;
 
-      // The person begins it for a fresh address; a declined sign-in is not dialled again on its own.
-      const signIn = offersSignIn(status, signInFacts(r.id));
+      // The person begins it for a fresh address; a declined sign-in is not dialled again on its own. A tool list the
+      // server refused for the token (401, 403) asks for one too; one that failed otherwise does not.
+      const refusedToken = unlisted && [401, 403].includes(this.refusals.get(r.id)?.status ?? 0);
+      const signIn = offersSignIn(refusedToken ? 'failed' : connection, signInFacts(r.id));
 
       return {
         id: r.id,
