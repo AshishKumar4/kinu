@@ -649,10 +649,13 @@ async function advisedLongTurn(advised: boolean, run: {
   await ask('/model?answerBytes=0&toolSteps=0');
 }
 
-/** The loop pass's own turns, each in a fresh workspace with its steps unheld: the long turn against a declared window,
+/** The loop pass's own turns: the advised long turn, as the advisor reviews every step in the isolate of the agent it
+ *  reviews; then, each in a fresh workspace with its steps unheld, the long turn against a declared window,
  *  so compaction folds it as it grows, and 40 steps each reading back as much of a 200 kB page as the file tool reads at
  *  once (50,000 characters), with the advisor reviewing them, as a program's or a log's large result. Each prints what shows it ran: its summary calls, its advisor's calls. */
-async function loopOnlyTurns(ask: (path: string) => Promise<string>): Promise<void> {
+async function loopOnlyTurns(ask: (path: string) => Promise<string>, held: { readonly workspace: Inspector; readonly port: number; readonly sessions: Inspector[] }): Promise<void> {
+  await advisedLongTurn(true, { ask, ...held, readings: false });
+
   const seen = async () => v.parse(v.object({ summaries: v.number(), advisorCalls: v.number(), stepRequestBytes: v.array(v.number()) }), JSON.parse(await ask('/model')));
 
   const turn = async (name: string, script: string): Promise<{ summaries: number; advisorCalls: number; requests: readonly number[] }> => {
@@ -726,6 +729,21 @@ async function faultedAdvisorTurn(fault: 'throw' | 'uncaught', ask: (path: strin
   await ask(`/quiesce?workspace=${name}`);
   console.log(`${GATE}: advisor fault ${fault}: the faulted turn ${faulted}; main's isolate kept ${String(kept)} of 1 planted buffer; the next turn ${clean}`);
   await ask('/model?answerBytes=0&toolSteps=0');
+}
+
+/** A request to the driver, its body answered; each workspace a request opens recorded by the object id it answers. */
+function asking(driver: Pick<Awaited<ReturnType<Miniflare['getWorker']>>, 'fetch'>, workspaces: Map<string, string>): (path: string) => Promise<string> {
+  return async (path) => {
+    const response = await driver.fetch(`http://driver.invalid${path}`);
+    const body = await response.text();
+
+    if (!response.ok) throw new Error(`worker-heap: ${path} answered ${String(response.status)}: ${body}`);
+    const opened = /^\/\?workspace=([^&]+)/u.exec(path)?.[1];
+
+    if (opened !== undefined) workspaces.set(body, opened);
+
+    return body;
+  };
 }
 
 /** `loopTurns`: the facet loop gate's pass (`loop-turns.ts`), every isolate profiled and no heap read. */
@@ -803,18 +821,7 @@ export async function measure({ loopTurns }: { readonly loopTurns: boolean }): P
     await loops?.start();
     // Each workspace by its object's id, as an agent's isolate id carries it: the loop pass names its workload.
     const workspaces = new Map<string, string>();
-
-    const ask = async (path: string): Promise<string> => {
-      const response = await driver.fetch(`http://driver.invalid${path}`);
-      const body = await response.text();
-
-      if (!response.ok) throw new Error(`worker-heap: ${path} answered ${String(response.status)}: ${body}`);
-      const opened = /^\/\?workspace=([^&]+)/u.exec(path)?.[1];
-
-      if (opened !== undefined) workspaces.set(body, opened);
-
-      return body;
-    };
+    const ask = asking(driver, workspaces);
 
     const stepWorkspace = await ask('/?workspace=heap');
     const sessions: Inspector[] = [];
@@ -989,16 +996,10 @@ export async function measure({ loopTurns }: { readonly loopTurns: boolean }): P
       await ask('/main-idle?workspace=subagents');
       await ask('/quiesce?workspace=subagents');
 
-      // Opt-in, for D9's measurement of the advisor's placement: the long turn again, advisor off then on, in fresh
-      // workspaces at the same point of the run, so the pair differs in the advisor alone. The loop pass runs the advised
-      // one: the advisor reviews every step in the isolate of the agent it reviews.
-      if (process.env.HEAP_ADVISOR === '1') {
-        for (const advised of [false, true]) await advisedLongTurn(advised, { ask, workspace, port, sessions, readings: loops === null });
-      } else if (loops !== null) {
-        await advisedLongTurn(true, { ask, workspace, port, sessions, readings: false });
-      }
-
-      if (loops !== null) await loopOnlyTurns(ask);
+      // The loop pass's own turns, or, opt-in for D9's measurement of the advisor's placement, the long turn again, advisor
+      // off then on, in fresh workspaces at the same point of the run, so the pair differs in the advisor alone.
+      if (loops !== null) await loopOnlyTurns(ask, { workspace, port, sessions });
+      else if (process.env.HEAP_ADVISOR === '1') for (const advised of [false, true]) await advisedLongTurn(advised, { ask, workspace, port, sessions, readings: true });
 
       // Opt-in: what an advisor's failure reaches, now that it runs in the isolate of the agent it reviews.
       if (process.env.HEAP_ADVISOR_FAULTS === '1') {
@@ -1015,8 +1016,9 @@ export async function measure({ loopTurns }: { readonly loopTurns: boolean }): P
       };
 
       // The loop pass ends with the workloads: planting reads the heap, which it does not.
-      const turns = loops === null ? [] : await loops.stop(workspaces);
-      const planted = loops === null ? { workspace: await plant('workspace'), main: await plant('main') } : { workspace: { workspace: 0, main: 0 }, main: { workspace: 0, main: 0 } };
+      const { turns, planted } = loops === null
+        ? { turns: [], planted: { workspace: await plant('workspace'), main: await plant('main') } }
+        : { turns: await loops.stop(workspaces), planted: { workspace: { workspace: 0, main: 0 }, main: { workspace: 0, main: 0 } } };
 
       return { loopTurns: turns, screenshotTurn, planted, concurrentAgentsLive, failedPortRetained, failedPortCalls, coldStepLive, stepLive: beyond(during, idle), idleRetained: retainedApart(idleSplit, setUpSplit), headsRetained, perSubagentRetained, subagentTurnLive, waitingParentLive, longTurnPeak, longTurnGrowth: beyond(lastLive, firstLive), longTurnAllocated, bindingTurnsAllocated, setupMakeup, live: { setUp, longTurnFirst: firstLive, longTurnLast: lastLive }, wide };
     } finally {

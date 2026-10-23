@@ -83,38 +83,19 @@ export async function readAgentFigures(sql: SqlExecutor, actorIds: readonly stri
  *  steps, kept with the totals: a step that reported no cache use still pushes an older measured one out. */
 async function actorFigures(sql: SqlExecutor, actorId: string): Promise<AgentFigures> {
   const [stored] = sql<{ through: number; totals: string }>`SELECT through, totals FROM agent_figure_folds WHERE actor_id = ${actorId}`;
-  let { input, output, usd, activeMs, last, window } = stored === undefined ? NO_TOTALS : v.parse(TotalsSchema, JSON.parse(stored.totals));
+  let totals = stored === undefined ? NO_TOTALS : v.parse(TotalsSchema, JSON.parse(stored.totals));
   const from = stored?.through ?? 0;
   let through = from;
 
   for (let events = foldSlice(sql, actorId, through); events.length > 0; events = foldSlice(sql, actorId, through)) {
-    for (const event of events) {
-      const at = Date.parse(event.ts);
-
-      if (Number.isFinite(at)) last = Math.max(last ?? at, at);
-
-      if (event.input !== null) input = (input ?? 0) + event.input;
-
-      if (event.output !== null) output = (output ?? 0) + event.output;
-
-      if (event.usd !== null) usd = compensated(usd ?? [0, 0], event.usd);
-
-      if (event.ms !== null) activeMs = compensated(activeMs, event.ms);
-    }
-
-    // A step's usage decoded alone: its whole payload, parsed through the run-event schema, was 2.8 of the 202 MB a
-    // 150-step turn allocated in its agent's isolate (heap gate, 2026-10-23).
-    window = [...window, ...events.flatMap((event): Array<v.InferOutput<typeof WindowStepSchema>> => {
-      if (event.type !== 'step_finish') return [];
-      const usage = event.step_usage === null ? undefined : v.parse(UsageSchema, JSON.parse(event.step_usage));
-
-      return [[usage?.input ?? null, usage?.cacheRead ?? null]];
-    })].slice(-AGENT_STEP_WINDOW);
+    totals = folded(totals, events);
     through = events.at(-1)?.seq ?? through;
 
     if (events.length < FOLD_SLICE_EVENTS) break;
     await nextLoopTurn();
   }
+
+  const { input, output, usd, activeMs, last, window } = totals;
 
   const steps = window.map(([stepInput, cacheRead]): StepCost => ({
     usage: { ...(stepInput !== null && { input: stepInput }), ...(cacheRead !== null && { cacheRead }) },
@@ -135,6 +116,36 @@ async function actorFigures(sql: SqlExecutor, actorId: string): Promise<AgentFig
     cacheEma,
     ...(last !== undefined && { lastActiveAt: last }),
   };
+}
+
+/** `totals` with `events` added. */
+function folded(totals: v.InferOutput<typeof TotalsSchema>, events: readonly FoldedEvent[]): v.InferOutput<typeof TotalsSchema> {
+  let { input, output, usd, activeMs, last } = totals;
+
+  for (const event of events) {
+    const at = Date.parse(event.ts);
+
+    if (Number.isFinite(at)) last = Math.max(last ?? at, at);
+
+    if (event.input !== null) input = (input ?? 0) + event.input;
+
+    if (event.output !== null) output = (output ?? 0) + event.output;
+
+    if (event.usd !== null) usd = compensated(usd ?? [0, 0], event.usd);
+
+    if (event.ms !== null) activeMs = compensated(activeMs, event.ms);
+  }
+
+  // A step's usage decoded alone: its whole payload, parsed through the run-event schema, was 2.8 of the 202 MB a
+  // 150-step turn allocated in its agent's isolate (heap gate, 2026-10-23).
+  const window = [...totals.window, ...events.flatMap((event): Array<v.InferOutput<typeof WindowStepSchema>> => {
+    if (event.type !== 'step_finish') return [];
+    const usage = event.step_usage === null ? undefined : v.parse(UsageSchema, JSON.parse(event.step_usage));
+
+    return [[usage?.input ?? null, usage?.cacheRead ?? null]];
+  })].slice(-AGENT_STEP_WINDOW);
+
+  return { input, output, usd, activeMs, window, ...(last !== undefined && { last }) };
 }
 
 /** The actor's next {@link FOLD_SLICE_EVENTS} run events a fold reads after the rowid `through`, oldest first. By the actor

@@ -73,11 +73,8 @@ function withParts(rows: readonly EntryWithPartRow[]): ConversationEntry[] {
 /** The most rows one drawn page reads; its bytes usually end it first. */
 const DRAWN_PAGE_ROWS = 200;
 
-/**
- * The entries a drawn page reads and draws in one turn of the event loop. An agent's isolate is a Worker Loader facet,
- * which the platform resets, with its workspace and every sibling agent, after about 1-3 s of CPU in turns of 0.1-0.4 s
- * each (D14, 2026-10-23); a whole page in one turn took 157 ms (the facet loop gate, a 150-step chat's seed).
- */
+/** The entries a drawn page draws in one turn of the event loop: an agent's isolate is a Worker Loader facet, which the
+ *  platform resets, with its workspace and every sibling agent, after about 1-3 s of CPU in turns of 0.1-0.4 s (D14). */
 const DRAWN_SLICE_ROWS = 12;
 
 export interface DrawnPageRequest extends PositionPageRequest {
@@ -488,27 +485,22 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     // One past the page, so a row left over says there is more.
     const read = this.entriesBefore(request.cursor?.before ?? Number.MAX_SAFE_INTEGER, rows + 1);
     const page = read.slice(0, rows);
+
+    // The page's messages in as few reads as their bytes allow (`materializePartsOf`).
+    const parts = await this.messages.materializePartsOf([...new Set(page.filter((entry) => !this.unreadable(entry))
+      .flatMap((entry) => entry.parts.map((part) => part.messageId)))]);
+
     const items: DrawnEntry[] = [];
     let bytes = 0;
 
-    // A slice of entries at a time, their messages in one read, the loop let go between slices; the page's bytes may end
-    // it before its last slice is read.
-    for (let at = 0, full = false; at < page.length && !full; at += DRAWN_SLICE_ROWS) {
-      if (at > 0) await nextLoopTurn();
-      const slice = page.slice(at, at + DRAWN_SLICE_ROWS);
+    for (const [at, entry] of page.entries()) {
+      if (at > 0 && at % DRAWN_SLICE_ROWS === 0) await nextLoopTurn();
+      const drawn = await this.drawnEntry(entry, request.media, parts);
+      const size = drawn.message === null ? 0 : utf8Bytes(JSON.stringify(drawn.message));
 
-      const parts = await this.messages.materializePartsOf([...new Set(slice.filter((entry) => !this.unreadable(entry))
-        .flatMap((entry) => entry.parts.map((part) => part.messageId)))]);
-
-      for (const entry of slice) {
-        const drawn = await this.drawnEntry(entry, request.media, parts);
-        const size = drawn.message === null ? 0 : utf8Bytes(JSON.stringify(drawn.message));
-        full = items.length > 0 && bytes + size > request.bytes;
-
-        if (full) break;
-        items.push(drawn);
-        bytes += size;
-      }
+      if (items.length > 0 && bytes + size > request.bytes) break;
+      items.push(drawn);
+      bytes += size;
     }
 
     this.actor.assertCurrent();
