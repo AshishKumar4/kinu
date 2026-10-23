@@ -264,6 +264,9 @@ function accountRestored(
     const names = tenantObjectNames(name);
 
     yield* restoredOne({ objectClass: 'MossaicUserDO', name: names.user, namespace: users }, caller, to, done);
+
+    // Its shards are read from its records as of the moment: until it lands, they are now's.
+    if (done.at(-1)?.landed !== true) return yield* new KinuError('unavailable', `the Drive's user object ${names.user} has not landed, so which shards it names at the moment is unknown`);
     const user = users.get(users.idFromName(names.user));
     const spans = yield* attempt({ doing: 'reading how many shards the Drive spans', otherwise: 'unavailable' }, () => user.tenantShards());
     const holding = new Set(yield* attempt({ doing: 'reading the shards its restored records name', otherwise: 'unavailable' }, () => user.namedShards()));
