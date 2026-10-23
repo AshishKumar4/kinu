@@ -2,7 +2,7 @@
  * Settings › Account › Move my data (the owner's board, deploy B): what moves to a Kinu of your own and what stays,
  * and "Download everything": each workspace's archive, which `kinu import <file>` restores, and the Drive as zips.
  */
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Cause, Effect } from "effect";
 import { DownloadSimpleIcon, HardDrivesIcon, KeyIcon, SquaresFourIcon } from "@phosphor-icons/react";
 import { detach, renderThrownChain } from "@kinu.run/core/obs";
@@ -95,26 +95,27 @@ function MoveMyDataCard() {
   const [moving, setMoving] = useState<Moving>({ phase: "idle" });
   const busy = moving.phase === "workspaces" || moving.phase === "drive";
 
-  const drive = (workspaces: number) => detach(Effect.catchCause(Effect.gen(function* () {
+  const drive = (workspaces: number) => Effect.catchCause(Effect.gen(function* () {
     setMoving({ phase: "drive", read: 0, of: 0 });
     const zips = yield* Effect.promise(() => zipWholeDrive(saveBlob, (read, of) => setMoving({ phase: "drive", read, of })));
 
     setMoving({ phase: "done", workspaces, zips });
-  }), (failed) => Effect.sync(() => setMoving({ phase: "failed", why: `Drive: ${renderThrownChain({ cause: Cause.squash(failed) })}` }))));
+  }), (failed) => Effect.sync(() => setMoving({ phase: "failed", why: `Drive: ${renderThrownChain({ cause: Cause.squash(failed) })}` })));
 
-  const start = () => detach(Effect.catchCause(Effect.gen(function* () {
+  const start = () => Effect.catchCause(Effect.gen(function* () {
     const list = yield* everyWorkspace();
 
-    if (list.length === 0) drive(0);
-    else setMoving({ phase: "workspaces", list, at: 0 });
-  }), (failed) => Effect.sync(() => setMoving({ phase: "failed", why: renderThrownChain({ cause: Cause.squash(failed) }) }))));
+    if (list.length === 0) return yield* drive(0);
+    setMoving({ phase: "workspaces", list, at: 0 });
+  }), (failed) => Effect.sync(() => setMoving({ phase: "failed", why: renderThrownChain({ cause: Cause.squash(failed) }) })));
 
-  const next = () => {
+  // Handed to the workspace being downloaded, which calls it once its archive is saved.
+  const next = useCallback(() => {
     if (moving.phase !== "workspaces") return;
 
     if (moving.at + 1 < moving.list.length) setMoving({ ...moving, at: moving.at + 1 });
-    else drive(moving.list.length);
-  };
+    else detach(drive(moving.list.length));
+  }, [moving]);
 
   const current = moving.phase === "workspaces" ? moving.list[moving.at] : undefined;
 
@@ -145,7 +146,7 @@ function MoveMyDataCard() {
         {moving.phase === "done" && <p className="t-meta p-text-2" role="status">Downloaded {moving.workspaces} workspaces and your Drive in {moving.zips} zip{moving.zips === 1 ? "" : "s"}.</p>}
         {moving.phase === "failed" && <p className="t-meta p-danger" role="alert">The download stopped. {moving.why}</p>}
         <div className="flex flex-wrap items-center gap-2">
-          <Button variant="primary" size="sm" icon={<DownloadSimpleIcon size={12} />} disabled={busy} onClick={start}>Download everything</Button>
+          <Button variant="primary" size="sm" icon={<DownloadSimpleIcon size={12} />} disabled={busy} onClick={() => detach(start())}>Download everything</Button>
           <RunYourOwn variant="ghost" />
         </div>
       </div>

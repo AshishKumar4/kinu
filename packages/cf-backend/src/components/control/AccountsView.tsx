@@ -187,7 +187,7 @@ function InviteDialog({ onClose, onInvited }: { onClose: () => void; onInvited: 
   const [said, setSaid] = useState<Said | null>(null);
   const [link, setLink] = useState<string | null>(null);
 
-  const run = (action: ControlAction) => detach(Effect.promise(async () => {
+  const run = (action: ControlAction) => Effect.promise(async () => {
     setBusy(true);
     const answer = await act(action);
 
@@ -199,15 +199,15 @@ function InviteDialog({ onClose, onInvited }: { onClose: () => void; onInvited: 
     const path = typeof answer.result === "object" && answer.result !== null && "path" in answer.result ? answer.result.path : null;
 
     if (typeof path === "string") setLink(`${window.location.origin}${path}`);
-  }));
+  });
 
   return (
     <Modal title="Invite someone" icon={<UserPlusIcon size={16} />} width="md" onClose={onClose} busy={busy}
       footer={(
         <>
           <Button variant="ghost" size="sm" onClick={onClose}>Close</Button>
-          <Button variant="secondary" size="sm" disabled={busy} onClick={() => run({ action: "invite.link" })}>Make a link instead</Button>
-          <Button variant="primary" size="sm" disabled={busy || email.trim() === ""} onClick={() => run({ action: "invite.email", email: email.trim() })}>Invite</Button>
+          <Button variant="secondary" size="sm" disabled={busy} onClick={() => detach(run({ action: "invite.link" }))}>Make a link instead</Button>
+          <Button variant="primary" size="sm" disabled={busy || email.trim() === ""} onClick={() => detach(run({ action: "invite.email", email: email.trim() }))}>Invite</Button>
         </>
       )}>
       <div className="space-y-3">
@@ -227,7 +227,7 @@ function SuspendDialog({ email, userId, onClose, onDone }: { email: string; user
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
 
-  const suspend = () => detach(Effect.promise(async () => {
+  const suspend = () => Effect.promise(async () => {
     setBusy(true);
     const answer = await act({ action: "account.suspend", userId, reason: reason.trim() });
 
@@ -241,14 +241,14 @@ function SuspendDialog({ email, userId, onClose, onDone }: { email: string; user
 
     onDone();
     onClose();
-  }));
+  });
 
   return (
     <Modal title={`Suspend ${email}?`} icon={<ProhibitIcon size={16} className="p-danger" />} width="md" onClose={onClose} busy={busy}
       footer={(
         <>
           <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
-          <Button variant="destructive" size="sm" disabled={busy || reason.trim() === ""} onClick={suspend}>Suspend</Button>
+          <Button variant="destructive" size="sm" disabled={busy || reason.trim() === ""} onClick={() => detach(suspend())}>Suspend</Button>
         </>
       )}>
       <div className="space-y-3">
@@ -278,7 +278,7 @@ export function AccountStanding({ userId, email, seen, limits, onChanged }: {
   const settable = report.class === "free" || report.class === "invited";
   const stored = report.class === "invited" ? "invited" : "free";
 
-  const run = (action: ControlAction) => detach(Effect.promise(async () => {
+  const run = (action: ControlAction) => Effect.promise(async () => {
     setBusy(true);
     const answer = await act(action);
 
@@ -286,7 +286,7 @@ export function AccountStanding({ userId, email, seen, limits, onChanged }: {
     setSaid(answer);
 
     if (answer.done) onChanged();
-  }));
+  });
 
   return (
     <section className="space-y-4" data-account-standing={report.class}>
@@ -315,11 +315,11 @@ export function AccountStanding({ userId, email, seen, limits, onChanged }: {
         {settable && (
           <Select label="Class" size="sm" value={stored} disabled={busy}
             options={[{ value: "free", label: "Class: Free" }, { value: "invited", label: "Class: Invited" }]}
-            onChange={(chosen) => run({ action: "account.class", userId, class: chosen })} />
+            onChange={(chosen) => detach(run({ action: "account.class", userId, class: chosen }))} />
         )}
         {report.suspended === null
           ? <Button variant="danger" size="sm" icon={<ProhibitIcon size={12} />} disabled={busy} onClick={() => setSuspending(true)}>Suspend</Button>
-          : <Button variant="secondary" size="sm" disabled={busy} onClick={() => run({ action: "account.unsuspend", userId })}>Lift the suspension</Button>}
+          : <Button variant="secondary" size="sm" disabled={busy} onClick={() => detach(run({ action: "account.unsuspend", userId }))}>Lift the suspension</Button>}
       </div>
       <p className="t-meta p-text-3">Invited lifts every limit. Suspended can&apos;t sign in; their data stays until you lift it or remove the account.</p>
       {said !== null && <p role={said.done ? "status" : "alert"} className={`t-meta ${said.done ? "p-text-2" : "p-danger"}`}>{said.text}</p>}

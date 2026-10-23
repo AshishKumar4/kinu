@@ -1,4 +1,4 @@
-import { Cause, Effect, Exit, Result } from 'effect';
+import { Cause, Effect, Exit } from 'effect';
 import { ComputerProcessEnds, jobState } from '@kinu.run/core';
 import type { VfsDirent, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 import { type SlateCaller, type SlateCallerHop } from '@kinu.run/core/slates';
@@ -1813,27 +1813,26 @@ export abstract class ActorAgent extends Agent<Env> {
    * `ask` of the owner's limits (core limits/): their own refusal (a limit, a suspension) fails the caller in their
    * words; an account object that could not be asked is logged as `event` and refuses nothing.
    */
-  private async admittedByLimits(event: LogEventName, ask: (stub: UserHubClient, caller: UserCaller) => Promise<void>): Promise<void> {
-    if (this.getOwnerUserId() === null) return;
+  private admittedByLimits(event: LogEventName, ask: (stub: UserHubClient, caller: UserCaller) => Promise<void>): Effect.Effect<void, KinuError> {
+    if (this.getOwnerUserId() === null) return Effect.void;
 
-    const asked = await settle(Effect.result(attemptInItsWords('unavailable', async () => {
+    const asked = attemptInItsWords('unavailable', async () => {
       const { stub, caller } = await this.userHub();
 
       await ask(stub, caller);
-    })));
+    });
 
-    if (Result.isSuccess(asked)) return;
-
-    if (asked.failure.code === 'budget' || asked.failure.code === 'denied') await settle(Effect.fail(asked.failure));
-    diagnostics.failure(event, asked.failure, { workspace: this.workspaceName() });
+    return Effect.catch(asked, (failure) => (failure.code === 'budget' || failure.code === 'denied'
+      ? Effect.fail(failure)
+      : Effect.sync(() => { diagnostics.failure(event, failure, { workspace: this.workspaceName() }); })));
   }
 
   /**
    * A turn on `spec`, admitted by the owner's limits: none starts in a suspended account, and one the platform pays for
    * (Workers AI through the deployment's binding, `createWorkersAIProvider`) is bounded by the free tier's day of tokens.
    */
-  protected async admitModelTurn(spec: string): Promise<void> {
-    await this.admittedByLimits('limits.turn_unasked', (stub, caller) => stub.limits_admitTurn(caller, specProvider(spec) === WORKERS_AI_PROVIDER_ID));
+  protected admitModelTurn(spec: string): Effect.Effect<void, KinuError> {
+    return this.admittedByLimits('limits.turn_unasked', (stub, caller) => stub.limits_admitTurn(caller, specProvider(spec) === WORKERS_AI_PROVIDER_ID));
   }
 
   /** This workspace's stored bytes, as its own database reads them: the platform's number, sampled, never counted. */
@@ -1842,8 +1841,8 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /** New bytes for this workspace (a person's upload, an agent's file): the owner's limits answer, given its size now. */
-  protected async admitNewBytes(): Promise<void> {
-    await this.admittedByLimits('limits.bytes_unasked', (stub, caller) => stub.limits_admitStoredBytes(caller, this.storedSample()));
+  protected admitNewBytes(): Effect.Effect<void, KinuError> {
+    return this.admittedByLimits('limits.bytes_unasked', (stub, caller) => stub.limits_admitStoredBytes(caller, this.storedSample()));
   }
 
   /** Tells the owner's limits this workspace's size now; a failure is logged, never the caller's. */

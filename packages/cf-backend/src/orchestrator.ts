@@ -1021,7 +1021,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       chatIdle: async (reference) => { await this.agentQuiet(reference.actorId); },
       frozen: async (reference, key) => await this.agentCall(reference.actorId, (isolate, snapshot) => isolate.frozen(snapshot, { turnId: key.turnId, runId: key.runId })),
       pricing: (spec) => this.modelCatalog.pricing(spec),
-      admitModel: async (spec) => { await this.admitModelTurn(spec); },
+      admitModel: (spec) => settle(this.admitModelTurn(spec)),
       accounts: () => this.config.getProviderAccounts(),
       noteRequest: (actorId, lastRequestAt) => this.warmingOf(actorId).noteRequest(lastRequestAt),
       openWork: (actorId) => this.openWorkOf(actorId),
@@ -3838,13 +3838,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    */
   async computerStartAdmitted(size: ComputerSize): Promise<StartAdmission> {
     const { stub, caller } = await this.userHub();
-    const admitted = await settle(Effect.result(attemptInItsWords('unavailable', () => stub.limits_admitComputerStart(caller, this.name, size))));
 
-    if (Result.isSuccess(admitted)) return { size: admitted.success };
-    const refusal = admitted.failure;
-
-    // Only the limits' own answer refuses a start; a limits object that could not be asked does not hold the box down.
-    return refusal.code === 'budget' || refusal.code === 'denied' ? { refused: refusal.message } : { size };
+    return settle(Effect.match(attemptInItsWords('unavailable', () => stub.limits_admitComputerStart(caller, this.name, size)), {
+      onSuccess: (runs): StartAdmission => ({ size: runs }),
+      // Only the limits' own answer refuses a start; a limits object that could not be asked does not hold the box down.
+      onFailure: (refusal): StartAdmission => (refusal.code === 'budget' || refusal.code === 'denied' ? { refused: refusal.message } : { size }),
+    }));
   }
 
   /** This workspace's computer seen running (KinuDevbox heartbeat): its running time counts to the owner's month. */
@@ -7000,18 +6999,20 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * refusal is the upload's answer in the limit's own words, which the page knows its dialog by: thrown, the upload
    * would answer only that streaming it failed.
    */
-  async writeExecutorFileChunk(write: ExecutorFileChunkWrite): Promise<ExecutorWriteResult> {
-    if (write.offset === 0) {
-      const admitted = await settle(Effect.result(attemptInItsWords('budget', () => this.admitNewBytes())));
+  writeExecutorFileChunk(write: ExecutorFileChunkWrite): Promise<ExecutorWriteResult> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (write.offset === 0) {
+        const admitted = yield* Effect.result(this.admitNewBytes());
 
-      if (Result.isFailure(admitted)) return { error: admitted.failure.message };
-    }
+        if (Result.isFailure(admitted)) return { error: admitted.failure.message };
+      }
 
-    const written = await this.executors.writeChunk(write);
+      const written = yield* Effect.promise(() => this.executors.writeChunk(write));
 
-    if (write.final) await this.reportStoredBytes();
+      if (write.final) yield* Effect.promise(() => this.reportStoredBytes());
 
-    return written;
+      return written;
+    }));
   }
 
   async abortExecutorFileWrite(transferId: string): Promise<void> {
