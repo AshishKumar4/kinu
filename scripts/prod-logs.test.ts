@@ -5,13 +5,13 @@ import { KinuError } from '@kinu.run/core/obs';
 import { activationDisruptions, canaryActivations } from './durability-canary-telemetry';
 import { resetCause, ROLLOVER_SPAN_MS } from './worker-deployments';
 import {
-  alarmsThatRan, deletionTimes, idleWakeHours, ordinalHours, readAgainWhile, settledRead, Telemetry, terminalEffectStates, type VersionRead, versionFindings, versionRead,
-  versionSignals, workWindow,
+  alarmsThatRan, deletionTimes, idleWakeHours, lostAlarmRows, ordinalHours, readAgainWhile, settledRead, Telemetry, terminalEffectStates, type VersionRead, versionFindings, versionNotices,
+  versionRead, versionSignals, workWindow,
 } from './prod-logs';
 
 const HOUR = 3_600_000;
 
-const quiet: VersionRead = { ended: [], thrown: [], deployResets: [], effects: { failed: 0, failedTurns: 0, terminal: { observations: 0, settled: [], owed: [], parked: [], deleted: [] } }, startups: [], idleWakes: [] };
+const quiet: VersionRead = { ended: [], thrown: [], deployResets: [], effects: { failed: 0, failedTurns: 0, terminal: { observations: 0, settled: [], owed: [], parked: [], deleted: [] } }, startups: [], idleWakes: [], lostRows: [] };
 
 const HUNG = 'The Workers runtime canceled this request because it detected that your Worker\'s code had hung and would never generate a response.';
 
@@ -487,6 +487,40 @@ describe('a code update\'s reset in a version\'s window', () => {
 // Staging 613467d1a, 2026-10-23: three eval workspaces destroyed at 02:15-02:16Z under the version before, their sleep-time
 // wakes delivered `canceled` at 02:25Z in this version's window, and each read as an idle wake: the deletions were read
 // only under this version and in its window.
+// Staging's CliAuthDO, 2026-10-23: telemetry lost 21 alarms' lines and 24 lines' alarm rows in one burst, and the gate
+// read each of the 21 as a red idle wake (kinu-probe-logloss measured the platform's loss; see lostAlarmRows).
+describe('an idle wake in a window whose telemetry lost rows', () => {
+  const at = (minute: number) => Date.parse('2026-10-23T13:00:00Z') + minute * 60_000;
+  const row = (object: string, minute: number, eventType = 'alarm') => ({ object, minute: at(minute), count: 1, eventType });
+  const idleWakes = [{ object: 'a', hour: at(0), count: 1 }];
+  const IDLE = 'object a woke 1 time(s) with nothing to watch in the hour from 2026-10-23T13:00:00Z';
+
+  test('a line an alarm logged by an object with no alarm row is a lost row; one of an alarm that ran long, or in no alarm, is not', () => {
+    const alarms = [row('a', 45), row('b', 50)];
+
+    expect(lostAlarmRows(alarms, [row('b', 58), row('x', 45), row('y', 46), row('y', 47), row('z', 45, 'fetch')])).toEqual(['x', 'y']);
+  });
+
+  test('beside lost rows on other objects, an idle wake is a notice, unreadable, and no red', () => {
+    const read = { ...quiet, idleWakes, lostRows: ['b'] };
+
+    expect({ findings: versionFindings(read), signals: versionSignals(read), notices: versionNotices(read) }).toEqual({
+      findings: [], signals: [],
+      notices: [{ what: 'idle wakes', finding: `unreadable (telemetry lost rows): ${IDLE}; 1 object(s) logged in an alarm with no row of it, e.g. b` }],
+    });
+  });
+
+  test('in a window that lost no rows an idle wake is red, and lost rows with no idle wake say nothing', () => {
+    expect({
+      clean: { findings: versionFindings({ ...quiet, idleWakes }), notices: versionNotices({ ...quiet, idleWakes }) },
+      lostOnly: { findings: versionFindings({ ...quiet, lostRows: ['b'] }), notices: versionNotices({ ...quiet, lostRows: ['b'] }) },
+    }).toEqual({
+      clean: { findings: [{ what: 'idle wakes', finding: IDLE }], notices: [] },
+      lostOnly: { findings: [], notices: [] },
+    });
+  });
+});
+
 describe('an alarm in a version\'s window, beside a deletion under the version before', () => {
   const from = Date.parse('2026-10-23T02:24:40Z');
   const to = Date.parse('2026-10-23T03:31:20Z');
@@ -494,15 +528,26 @@ describe('an alarm in a version\'s window, beside a deletion under the version b
 
   /** The version's read, its alarms those `alarms` names at `delivered`, those of `canceled` the platform's `canceled`,
    *  and `deleted-before` destroyed at 02:15:15Z under the version before: only a read of its own rows, unscoped, finds
-   *  it, and only one that reaches back to it. `sampledWork`: the API sampled the reads of the version's calls. */
-  const read = async (alarms: readonly string[], canceled: readonly string[], { delivered = '2026-10-23 02:25:00', sampledWork = false } = {}) => {
+   *  it, and only one that reaches back to it. `sampledWork`: the API sampled the reads of the version's calls;
+   *  `sampledAlarms`: its alarm rows each carry interval 10. `lostAt`: the minute a CliAuthDO's alarm logged
+   *  `cli.auth_retired` with no invocation row of it in the window; `earlyAlarm`: that alarm began 5 min before it. */
+  const read = async (alarms: readonly string[], canceled: readonly string[], { delivered = '2026-10-23 02:25:00', sampledWork = false, sampledAlarms = false, lostAt = '', earlyAlarm = false } = {}) => {
     const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: async (request) => {
       const asked = v.parse(v.looseObject({ timeframe: v.optional(v.object({ from: v.number() })) }), await request.json());
       const body = JSON.stringify(asked);
       const has = (text: string) => body.includes(text);
-      const series = (objects: readonly string[]) => [{ alias: 'count', series: [{ time: delivered, data: objects.map((object) => ({ groups: [{ key: '$workers.durableObjectId', value: object }], value: 1 })) }] }];
+      const interval = sampledAlarms ? 10 : 1;
+      const groups = (object: string) => [{ key: '$workers.durableObjectId', value: object }, { key: '$workers.eventType', value: 'alarm' }];
+      const data = (objects: readonly string[]) => objects.map((object) => ({ groups: groups(object), value: interval, interval }));
+      const early = earlyAlarm && (asked.timeframe?.from ?? from) < from ? [{ time: '2026-10-23 02:20:00', data: data(['row-lost']) }] : [];
 
-      if (has('"granularity"') && has('"operation":"eq","value":"alarm"')) return Response.json({ success: true, result: { calculations: series(has('"value":"canceled"') ? canceled : alarms) } });
+      if (has('"granularity"') && has('"operation":"eq","value":"alarm"')) {
+        return Response.json({ success: true, result: { calculations: [{ alias: 'count', series: [{ time: delivered, data: data(has('"value":"canceled"') ? canceled : alarms) }, ...early] }] } });
+      }
+
+      if (has('"granularity"') && has('"value":"cli.auth_retired"') && lostAt !== '') {
+        return Response.json({ success: true, result: { calculations: [{ alias: 'count', series: [{ time: lostAt, data: [{ groups: groups('row-lost'), value: 1 }] }] }] } });
+      }
 
       if (has('"granularity"') && has('"operation":"neq","value":"alarm"') && sampledWork) return Response.json({ success: true, result: { statistics: { abr_level: 10 } } });
 
@@ -547,6 +592,27 @@ describe('an alarm in a version\'s window, beside a deletion under the version b
   // 04603ec96's deploy, its own read sampled at level 1,000,000, read alarms beside dropped calls as idle wakes.
   test('a read whose answers of the version\'s work were sampled is asked again, never read as idle', async () => {
     await expect(read(['idle'], [], { sampledWork: true })).rejects.toMatchObject({ code: 'unavailable', message: expect.stringContaining('sampled the reads of the version\'s work') });
+  });
+
+  // bc4ab809's deploy: one delivery, its row's interval 10 in an answer at abr_level 1, read as 10 idle wakes.
+  test('a per-minute read whose rows were sampled is asked again, though its answer says abr_level 1', async () => {
+    await expect(read(['idle'], [], { sampledAlarms: true })).rejects.toMatchObject({ code: 'unavailable', message: expect.stringContaining('interval 10') });
+  });
+
+  test('an alarm\'s line whose own row was lost is read as a lost row, and the idle wakes beside it are kept', async () => {
+    const answer = await read(['idle'], [], { lostAt: '2026-10-23 02:26:00' });
+
+    expect({ lost: answer.lostRows, idle: answer.idleWakes.map((idle) => idle.object) }).toEqual({ lost: ['row-lost'], idle: ['idle'] });
+  });
+
+  // The window ends at 03:31:20: a line in its 03:31 minute may be of an alarm after it, and one of an alarm that began
+  // before the window is that alarm's.
+  test('a line in the window\'s last, partly read minute, or of an alarm that began before the window, is no lost row', async () => {
+    expect({
+      lastMinute: (await read(['idle'], [], { lostAt: '2026-10-23 03:31:00' })).lostRows,
+      lastWhole: (await read(['idle'], [], { lostAt: '2026-10-23 03:30:00' })).lostRows,
+      early: (await read(['idle'], [], { lostAt: '2026-10-23 02:25:00', earlyAlarm: true })).lostRows,
+    }).toEqual({ lastMinute: [], lastWhole: ['row-lost'], early: [] });
   });
 });
 
