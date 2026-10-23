@@ -6433,20 +6433,26 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   @callable() async renameWorkspaceSession(id: string, name: string): Promise<SessionRecord> {
-    const records = this.workspaceSessionRecords();
-    const renamed = v.parse(WorkspaceSessionRecordSchema, { id, name });
+    return settle(Effect.gen({ self: this }, function* () {
+      const records = this.workspaceSessionRecords();
+      const renamed = v.parse(WorkspaceSessionRecordSchema, { id, name });
 
-    if (!records.some((record) => record.id === id)) throw new KinuError('missing', `the workspace has no terminal ${id} to rename`);
-    this.ctx.storage.kv.put(WORKSPACE_SESSIONS_KEY, records.map((record) => (record.id === id ? renamed : record)));
+      if (!records.some((record) => record.id === id)) return yield* new KinuError('missing', `the workspace has no terminal ${id} to rename`);
+      this.ctx.storage.kv.put(WORKSPACE_SESSIONS_KEY, records.map((record) => (record.id === id ? renamed : record)));
 
-    return { ...renamed, cwd: WORKSPACE_ROOT };
+      return { ...renamed, cwd: WORKSPACE_ROOT };
+    }));
   }
 
   /** Ends the terminal's shell and forgets it; the workspace's own shell stays. */
   @callable() async closeWorkspaceSession(id: string): Promise<void> {
-    if (id === WORKSPACE_SHELL_SESSION) throw new KinuError('bad_input', "the workspace's own shell stays; close the ones opened beside it");
-    await (await this.hostedWorkspace().terminals()).close(id);
-    this.ctx.storage.kv.put(WORKSPACE_SESSIONS_KEY, this.workspaceSessionRecords().filter((record) => record.id !== id));
+    return settle(Effect.gen({ self: this }, function* () {
+      if (id === WORKSPACE_SHELL_SESSION) return yield* new KinuError('bad_input', "the workspace's own shell stays; close the ones opened beside it");
+      const terminals = yield* Effect.promise(() => this.hostedWorkspace().terminals());
+
+      yield* Effect.promise(() => terminals.close(id));
+      this.ctx.storage.kv.put(WORKSPACE_SESSIONS_KEY, this.workspaceSessionRecords().filter((record) => record.id !== id));
+    }));
   }
 
   /** The workspace's named sessions on its PC `device` (1014-t), as the computer's read: the same rows, the same strip. */

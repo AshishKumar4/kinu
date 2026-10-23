@@ -35,8 +35,10 @@ function activated(listed: WorkspaceTerminalListing[] = []) {
   const { agent } = orchestratorHarness();
   const recorded = recordedTerminals(listed);
 
-  // The hosted workspace is composed by the object; here it answers with the recording terminals.
+  // The hosted workspace is composed by the object; here it answers with the recording terminals, and the root's file
+  // plane, which a terminal mounts first, is the runtime bun cannot host.
   Object.defineProperty(agent, 'hostedWorkspace', { configurable: true, value: () => ({ terminals: async () => recorded.terminals }) });
+  Object.defineProperty(agent, 'mountRootFiles', { configurable: true, value: () => {} });
 
   return { agent, recorded };
 }

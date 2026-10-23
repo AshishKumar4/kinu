@@ -409,6 +409,11 @@ function MachineRow({ environments, execByName, selected, chosen, onSelect, onCo
   );
 }
 
+/** The machines that keep sessions: the computer, a PC and the workspace (1019-aa); any other has one shell. */
+function keepsSessions(machine: Machine): boolean {
+  return machine.mount.name === "computer" || machine.key === "workspace" || machine.device !== null;
+}
+
 function SelectedEnvironment({ rpc, machine, grant, exec, workspace, executorOutputs, onExecute, onOpenFiles, sessions, shown, wide, machineRow }: {
   rpc: WorkspaceRpc;
   machine: Machine;
@@ -432,9 +437,8 @@ function SelectedEnvironment({ rpc, machine, grant, exec, workspace, executorOut
   const size = useComputerSize(rpc, computer && mount.live);
   const name = machineLabel(machine, exec);
   const restarting = computer && size.pending === "resize";
-  // The computer's sessions, the chosen PC's or the workspace's own terminals, read above for the machine row's marks too;
-  // any other machine has one shell.
-  const machineSessions = computer || device !== null || machine.key === "workspace" ? sessions : null;
+  // Read above for the machine row's marks too.
+  const machineSessions = keepsSessions(machine) ? sessions : null;
   const listed = sessions.sessions ?? [];
   const seen = { waiting: listed.some((session) => session.needsInput), awake: listed.some((session) => session.open) };
   const status = computer ? computerStatus(mount, exec, size, seen) : machineStatus(machine, exec, { waiting: device !== null && seen.waiting });
