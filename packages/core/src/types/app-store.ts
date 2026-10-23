@@ -14,7 +14,7 @@ export const APP_TABLE_SCOPE = {
 } as const satisfies Readonly<Record<AppTableScope, { readonly agentBound: boolean; readonly forks: boolean; readonly slates: boolean }>>;
 
 /** The mutations that leave evidence; the `db_op` run event carries {@link DbOpRecord}. */
-export const APP_MUTATIONS = ['createTable', 'dropTable', 'insert', 'update', 'delete'] as const;
+export const APP_MUTATIONS = ['createTable', 'dropTable', 'insert', 'update', 'delete', 'sql'] as const;
 
 export type AppMutation = (typeof APP_MUTATIONS)[number];
 

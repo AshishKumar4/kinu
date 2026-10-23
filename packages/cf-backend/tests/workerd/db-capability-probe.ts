@@ -7,7 +7,7 @@ import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { createCodeTool } from '@cloudflare/codemode/ai';
 import {
-  bindActorHandle, createAppDataStore, createDbCodemodeProvider, initWorkspaceSchema,
+  bindActorHandle, createAppDataStore, createDbCodemodeProvider, ExplainRowSchema, gateProgram, initWorkspaceSchema,
   RunEventRecorder, WORKSPACE_RUN_ID,
   WorkspaceActorDirectory,
   type ActorHandle, type AppDataStore, type CodemodeProvider, type SqlExec, type SqlExecutor, type SqlValue,
@@ -205,6 +205,26 @@ export class DbCapabilityProbeDO extends DurableObject<Cloudflare.Env> {
     }
 
     return { reason, beforeRevocation, rows: this.rows(), evidence: this.evidence(observer) };
+  }
+
+  /**
+   * The db.sql gate over the programs SQLite compiles for `statements`, after `setup` ran, every table of this object
+   * reachable: what it refuses can only be an opcode it does not admit. Each statement with what refused it.
+   */
+  async gated(setup: readonly string[], statements: readonly string[]): Promise<readonly string[]> {
+    this.open();
+
+    for (const statement of setup) this.ctx.storage.sql.exec(statement);
+
+    const pages = new Map(this.ctx.storage.sql.exec<{ rootpage: number; tbl_name: string }>("SELECT rootpage, tbl_name FROM sqlite_master WHERE rootpage > 0")
+      .toArray().map((row) => [row.rootpage, row.tbl_name]));
+
+    return statements.flatMap((statement) => {
+      const program = v.parse(v.array(ExplainRowSchema), this.ctx.storage.sql.exec(`EXPLAIN ${statement}`).toArray());
+      const gated = Effect.runSyncExit(gateProgram(program, pages));
+
+      return gated._tag === 'Success' ? [] : [`${statement}: ${String(gated.cause)}`];
+    });
   }
 
   /** A handle whose identity is not in the directory: a stale binding is refused before any statement runs. */

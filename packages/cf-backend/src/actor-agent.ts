@@ -2577,7 +2577,11 @@ export abstract class ActorAgent extends Agent<Env> {
     return settle(this.dispatchSlateCall(path, route, mode, context));
   }
 
-  private dispatchSlateCall(path: readonly SlateCallerHop[], route: SlateRoute, mode: WorkMode, context: SlateDispatchContext): Effect.Effect<SlateSurfaceValue, KinuError> {
+  private dispatchSlateCall(path: readonly SlateCallerHop[], route: SlateRoute, asked: WorkMode, context: SlateDispatchContext): Effect.Effect<SlateSurfaceValue, KinuError> {
+    // A call no one was asked about as a write (`route.readOnly`) runs in Plan, here or at the hosted actor it reaches,
+    // where its member refuses to write.
+    const mode: WorkMode = route.kind === 'namespace' && route.readOnly === true ? 'plan' : asked;
+
     return Effect.gen({ self: this }, function* () {
       // Only a namespace member is checked without running it; anything else asked about alone would run.
       if (context.authorizeOnly && route.kind !== 'namespace') {

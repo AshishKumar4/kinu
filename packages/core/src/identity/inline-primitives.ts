@@ -11,6 +11,8 @@ import * as v from 'valibot';
 export interface AgentDatabase {
   /** Compiled once per text and kept by the database (bun:sqlite's statement cache). */
   query<T = unknown>(sql: string): { all(...params: unknown[]): T[]; run(...params: unknown[]): void };
+  /** Compiled for one use, then finalized. */
+  prepare<T = unknown>(sql: string): { all(...params: unknown[]): T[]; finalize(): void };
   exec(sql: string): void;
   run(sql: string, params?: unknown[]): void;
   transaction<T>(fn: () => T): () => T;
@@ -35,9 +37,20 @@ export function watchStatements(db: Pick<AgentDatabase, 'query'>, watch: (query:
 }
 
 /** Rows for every statement, as DO storage.sql answers a write's `RETURNING`. */
-function sqlExecOver(db: Pick<AgentDatabase, 'query'>) {
+const EXPLAINED = /^\s*EXPLAIN\b/iu;
+
+function sqlExecOver(db: Pick<AgentDatabase, 'query' | 'prepare'>) {
   return <T>(query: string, ...bindings: unknown[]): T[] => {
-    const rows = db.query<T>(query).all(...bindings.map((binding) => v.parse(SqlBindingSchema, binding)));
+    const bound = bindings.map((binding) => v.parse(SqlBindingSchema, binding));
+    let rows: T[];
+
+    // bun:sqlite leaves a cached EXPLAIN in progress, and the next commit fails on it: one is compiled for its one read.
+    if (EXPLAINED.test(query)) {
+      const explained = db.prepare<T>(query);
+
+      rows = explained.all(...bound);
+      explained.finalize();
+    } else rows = db.query<T>(query).all(...bound);
     watchers.get(db)?.(query);
 
     return rows;
@@ -45,7 +58,7 @@ function sqlExecOver(db: Pick<AgentDatabase, 'query'>) {
 }
 
 /** DO storage.sql's cursor: a blob reads back as its own ArrayBuffer. */
-export function sqlStorageOver(db: Pick<AgentDatabase, 'query'>): SqlExec {
+export function sqlStorageOver(db: Pick<AgentDatabase, 'query' | 'prepare'>): SqlExec {
   const exec = sqlExecOver(db);
 
   return {

@@ -172,7 +172,7 @@ export function inspectionFiles(db: Database, cwd: string): Pick<VFS, 'readFile'
 }
 
 /** Positional-binding SQL; a Durable Object's `ctx.storage.sql` is this natively. */
-export function makeSqlExec(db: Pick<Database, 'query'>): SqlExec {
+export function makeSqlExec(db: Pick<Database, 'query' | 'prepare'>): SqlExec {
   return sqlStorageOver(db);
 }
 

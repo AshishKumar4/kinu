@@ -3,6 +3,7 @@
  * the store compiles every statement from them against the catalogued declaration (spec §9.2).
  */
 import * as v from 'valibot';
+import { PLATFORM_CATALOG } from '../platform-catalog';
 import { APP_TABLE_SCOPES } from '../types/app-store';
 import { JsonValueSchema } from '../utils/json';
 import { namespace } from './operation';
@@ -28,7 +29,12 @@ const MAX_ORDER_TERMS = 8;
 
 export const SELECT_LIMIT_DEFAULT = 100;
 
-const SELECT_LIMIT_MAX = 1000;
+export const SELECT_LIMIT_MAX = 1000;
+
+/** What one statement binds, Durable Object SQLite's own bound. */
+export const BOUND_PARAMS_MAX = PLATFORM_CATALOG['do.sqlite.bound_params'].limit.value;
+
+const STATEMENT_BYTES_MAX = PLATFORM_CATALOG['do.sqlite.statement_bytes'].limit.value;
 
 /**
  * Re-applied in {@link quoted}, the only function that emits an identifier. No flag: JSON Schema's `pattern` carries
@@ -142,14 +148,15 @@ const TableRecord = v.strictObject({ ...TableSpecSchema.pipe[0].entries, created
 
 const Changed = v.strictObject({ rowsAffected: v.number() });
 
+const SqlParamSchema = v.union([v.string(), v.number(), v.boolean(), v.null()]);
+
 /** Every db operation runs on Plan: the store decides per call, by the table's scope, whether Plan may write it. */
 const dbOp = namespace('db', { slate: true, plan: true });
 
 export const DB = {
   createTable: dbOp({
     name: 'createTable', impact: 'mutate',
-    help: 'Declare a table. No operation takes SQL: each statement is built from its arguments against the table\'s declared '
-      + 'columns. Re-declaring the same shape does nothing, and a different shape under an existing name is refused. '
+    help: 'Declare a table. Re-declaring the same shape does nothing, and a different shape under an existing name is refused. '
       + "`blob` columns take and return base64, `json` columns any JSON document. `scope: 'actor'` rows are yours alone, "
       + "`scope: 'workspace'` rows every agent's here, and a `scope: 'private'` table is yours alone and kept from forks "
       + 'and slates: the place for what one program leaves for the next.',
@@ -178,6 +185,20 @@ export const DB = {
     name: 'batch', impact: 'mutate',
     help: `Up to ${String(MAX_BATCH_OPS)} writes in one transaction: all land or none does, and \`failedIndex\` names the one that failed.`,
     input: v.strictObject({ ops: BatchSchema }), output: v.array(Changed),
+  }),
+  sql: dbOp({
+    name: 'sql', impact: 'mutate',
+    help: "One SQL statement over this workspace's shared tables (`scope: 'workspace'`). SQL tables are named app_<name>; the "
+      + 'typed calls use <name>. Each `?` binds from `params` in order: `db.sql(query, params)`, params an array (`[]` for '
+      + 'none), as a call takes no rest arguments. Answers its rows, and how many a write changed.',
+    input: v.strictObject({
+      query: v.pipe(v.string(), v.minLength(1), v.check(
+        (query) => new TextEncoder().encode(query).length <= STATEMENT_BYTES_MAX,
+        `a statement is at most ${String(STATEMENT_BYTES_MAX)} bytes`,
+      )),
+      params: v.pipe(v.array(SqlParamSchema), v.maxLength(BOUND_PARAMS_MAX, `a statement binds at most ${String(BOUND_PARAMS_MAX)} values`)),
+    }),
+    output: v.strictObject({ rows: v.array(v.record(v.string(), JsonValueSchema)), rowsAffected: v.number() }),
   }),
   dropTable: dbOp({
     name: 'dropTable', impact: 'mutate', plan: false,
