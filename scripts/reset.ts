@@ -536,8 +536,12 @@ function censusDiffCommand(environment: InfraEnvironment, args: readonly string[
     return 2;
   }
 
-  const planned = v.parse(v.object({ tables: v.array(v.object({ table: v.string() })) }), JSON.parse(readFileSync(recordFile, 'utf8')));
-  const diff = censusDiff(readFileSync(before, 'utf8'), readFileSync(after, 'utf8'), new Set(planned.tables.map(({ table }) => table)), environment !== 'production');
+  const planned = v.parse(v.object({ tables: v.array(v.object({ table: v.string() })), from: v.string(), candidate: v.string() }), JSON.parse(readFileSync(recordFile, 'utf8')));
+  // The tables the plan adds, from the two builds the record names: a record states only what its walk drops.
+  const lock = (commit: string) => readGenesisLockText(fileAt(process.cwd(), commit, 'scripts/schema-genesis.lock.json'));
+  const { added } = changedTables(lock(planned.from), lock(planned.candidate));
+  const tables = { changed: new Set(planned.tables.map(({ table }) => table)), added: new Set(added) };
+  const diff = censusDiff(readFileSync(before, 'utf8'), readFileSync(after, 'utf8'), tables, environment !== 'production');
 
   for (const line of diff.lines) console.log(line);
 
