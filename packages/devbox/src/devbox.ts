@@ -3697,6 +3697,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   async #destroyContainer(): Promise<void> {
+    // A server that runs no containers (a dev server, vite.config.ts) never started one: there is none to end.
+    if (this.ctx.container === undefined) return;
+
     await this.#container().destroy();
     await this.onStop();
   }
