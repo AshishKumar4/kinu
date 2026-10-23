@@ -618,7 +618,7 @@ async function advisedLongTurn(advised: boolean, run: {
     return [sizes.slice(0, cut), sizes.slice(cut, 2 * cut), sizes.slice(2 * cut)].map((part) => `${String(Math.round((part.length === 0 ? 0 : Math.max(...part)) / 1000))} kB`).join(', ');
   };
 
-  console.log(`${GATE}: ${name} turn's requests, largest by thirds: its steps' ${byThirds(seen.stepRequestBytes.slice(-LONG_TURN.steps))}`
+  console.log(`${GATE}: ${name} turn's requests, largest by thirds: its steps' ${byThirds(seen.stepRequestBytes)}`
     + `${reviews > 0 ? `; its advisor's ${byThirds(seen.advisorBytes.slice(-reviews))}` : ''}`);
   const [, middle = [], latest = []] = sites;
   const before = new Map(middle.map(({ site, bytes }) => [site, bytes]));

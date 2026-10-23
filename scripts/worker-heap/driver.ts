@@ -373,6 +373,7 @@ function scriptModel(asked: URLSearchParams): Response {
     model.arrived = 0;
     model.released = 0;
     model.stepped = { binding: 0, compat: 0 };
+    model.stepRequestBytes.length = 0;
   }
 
   if (asked.has('released')) model.released = Number(asked.get('released'));
