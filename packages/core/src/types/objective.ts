@@ -2,6 +2,8 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** Objective and measurement contract, declared at the platform layer so the swarm engine,
  *  swarm-input schemas and delegation surface share it without importing the strategy harness. */
 
+import * as v from 'valibot';
+
 import type { ExecOutcome } from '../execution/exec-result';
 
 import type { JsonValue } from '../utils/json';
@@ -14,11 +16,19 @@ export interface MeasurementContext {
 }
 
 /** No default: guessing "higher is better" silently inverts every cost. */
-export type ObjectiveDirection = 'minimise' | 'maximise';
+export const ObjectiveDirectionSchema = v.picklist(['minimise', 'maximise']);
+
+export type ObjectiveDirection = v.InferOutput<typeof ObjectiveDirectionSchema>;
 
 /** How a raw measurement maps onto [0,1]. `log` for multiplicative improvement (n² → n^1.5),
  *  `linear` for quantities that add. */
-export type ObjectiveScale = 'linear' | 'log';
+export const ObjectiveScaleSchema = v.picklist(['linear', 'log']);
+
+export type ObjectiveScale = v.InferOutput<typeof ObjectiveScaleSchema>;
+
+/** Only `certificate` is safe as a floor; an `adversary` bound scores a lucky honest run on a fortunate input as a
+ *  cheat. `physical` is a conservation law or hardware limit. */
+export const FloorKindSchema = v.picklist(['certificate', 'adversary', 'physical']);
 
 /** A measured verdict. `value` is raw, in the objective's unit; the harness normalises it
  *  from the measured baseline and declared target. */
@@ -85,9 +95,7 @@ export interface Floor {
   readonly value: number;
   /** The argument, not a citation: a textbook worst case is not a per-instance certificate. */
   readonly proof: string;
-  /** Only `certificate` is safe as a floor; an `adversary` bound scores a lucky honest run on a
-   *  fortunate input as a cheat. `physical` is a conservation law or hardware limit. */
-  readonly kind: 'certificate' | 'adversary' | 'physical';
+  readonly kind: v.InferOutput<typeof FloorKindSchema>;
   /** Best honest cost known when the floor was written; makes {@link floorMargin} computable. */
   readonly bestKnownHonest: number;
 }
