@@ -693,13 +693,19 @@ export function flowsScript(request: ScriptedRequest): ScriptedAnswer | null {
       : { text: `NO PLAN: this turn was offered no submit_plan, only ${request.available.join(', ') || 'no tools'}.` };
   }
 
-  if (asked(SLATE_ASK) && request.available.includes('file')) {
-    return FLOW_SLATE_CALLS[request.called.length] ?? { text: `The ${FLOW_SLATE.title} slate is running in its tab.` };
-  }
-
-  if (asked(MODE_SLATE_ASK) && request.available.includes('file')) {
-    return MODE_SLATE_CALLS[request.called.length] ?? { text: `The ${MODE_SLATE.title} slate is running in its tab.` };
-  }
-
-  return null;
+  return slateAnswer(request, asked);
 }
+
+/** The slate rows' turns: each plays its calls in order, then says its slate is running. */
+function slateAnswer(request: ScriptedRequest, asked: (ask: string) => boolean): ScriptedAnswer | null {
+  const slate = request.available.includes('file') ? SLATE_TURNS.find((turn) => asked(turn.ask)) : undefined;
+
+  if (slate === undefined) return null;
+
+  return slate.calls[request.called.length] ?? { text: `The ${slate.title} slate is running in its tab.` };
+}
+
+const SLATE_TURNS = [
+  { ask: SLATE_ASK, title: FLOW_SLATE.title, calls: FLOW_SLATE_CALLS },
+  { ask: MODE_SLATE_ASK, title: MODE_SLATE.title, calls: MODE_SLATE_CALLS },
+] as const;
