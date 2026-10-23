@@ -401,27 +401,24 @@ export async function readToken(): Promise<string> {
 export class QueryBudget {
   private left: number | undefined;
   private quota = 0;
+  /** When the window the last answer stated ends. */
   private endsAt = 0;
-  /** Set while every read waits for the window's end. */
+  /** No read before it: a 429's retry-after, which no later answer shortens. */
+  private coolsAt = 0;
+  /** Set while every read waits. */
   private resumed: Promise<void> | undefined;
 
   constructor(private readonly sleep: (ms: number) => Promise<void> = Bun.sleep, private readonly now: () => number = Date.now) {}
 
-  /** Waits, when the budget left is under half its quota, for its window's end; every read meanwhile waits with it. */
+  /** Waits through a 429's cooldown, and, while the budget left is under half a known quota, to its window's end. */
   async spend(): Promise<void> {
-    const wait = this.endsAt - this.now();
-
-    if (this.resumed === undefined && this.left !== undefined && this.left < this.quota / 2 && wait > 0) {
-      this.resumed = this.sleep(wait).then(() => {
-        this.left = undefined;
-        this.resumed = undefined;
-      });
+    for (let wait = this.wait(); wait > 0; wait = this.wait()) {
+      this.resumed ??= this.sleep(wait).then(() => { this.resumed = undefined; });
+      await this.resumed;
     }
-
-    await this.resumed;
   }
 
-  /** The budget `answer` states; a 429 leaves none until its `retry-after`. */
+  /** The budget `answer` states; a 429 holds every read to its `retry-after`. */
   heard(answer: Response): void {
     const state = /\br=(\d+);t=(\d+)/u.exec(answer.headers.get('ratelimit') ?? '');
     const quota = /\bq=(\d+)/u.exec(answer.headers.get('ratelimit-policy') ?? '');
@@ -429,12 +426,17 @@ export class QueryBudget {
     if (quota !== null) this.quota = Number(quota[1]);
 
     if (answer.status === 429) {
-      this.left = 0;
-      this.endsAt = this.now() + Number(answer.headers.get('retry-after') ?? state?.[2] ?? 60) * 1000;
+      this.coolsAt = Math.max(this.coolsAt, this.now() + Number(answer.headers.get('retry-after') ?? state?.[2] ?? 60) * 1000);
     } else if (state !== null) {
       this.left = Number(state[1]);
       this.endsAt = this.now() + Number(state[2]) * 1000;
     }
+  }
+
+  private wait(): number {
+    const spent = this.quota > 0 && this.left !== undefined && this.left < this.quota / 2;
+
+    return Math.max(this.coolsAt - this.now(), spent ? this.endsAt - this.now() : 0);
   }
 }
 

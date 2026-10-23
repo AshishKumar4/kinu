@@ -738,10 +738,12 @@ describe('the API budget every telemetry read spends from', () => {
     'ratelimit-policy': '"default";q=1200;w=300', ratelimit: `"default";r=${String(left)};t=${String(endsIn)}`, ...headers,
   } });
 
+  /** A budget on a clock its sleeps advance. */
   const budget = () => {
     const slept: number[] = [];
+    let clock = 1_000_000;
 
-    return { slept, budget: new QueryBudget(async (ms) => { slept.push(ms); }, () => 1_000_000) };
+    return { slept, budget: new QueryBudget(async (ms) => { slept.push(ms); clock += ms; }, () => clock) };
   };
 
   test('a read waits for the window\'s end rather than spend the half kept for the account\'s other calls, and every read waits with it', async () => {
@@ -763,5 +765,23 @@ describe('the API budget every telemetry read spends from', () => {
     await limited.budget.spend();
 
     expect(limited.slept).toEqual([30_000]);
+  });
+
+  // Review of 6e61b8313: a later 429 or an answer out of order released the reads before the API's own cooldown ended.
+  test('a 429 heard during a wait, or before any policy, holds every read to its retry-after; a later answer never shortens it', async () => {
+    const later = budget();
+    const unpolicied = budget();
+
+    later.budget.heard(answer(200, 599, 10));
+    const waiting = later.budget.spend();
+
+    later.budget.heard(answer(429, 0, 200, { 'retry-after': '60' }));
+    later.budget.heard(answer(200, 1100, 5));
+    await waiting;
+    unpolicied.budget.heard(new Response('{}', { status: 429, headers: { 'retry-after': '30' } }));
+    await unpolicied.budget.spend();
+
+    // The 429 came once the first 10 s had passed, on a clock its sleeps advance.
+    expect({ later: later.slept, unpolicied: unpolicied.slept }).toEqual({ later: [10_000, 60_000], unpolicied: [30_000] });
   });
 });
