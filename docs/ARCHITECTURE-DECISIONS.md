@@ -2263,12 +2263,24 @@ to every process the call starts. `egressFor` gives such a process an egress
 that names no owner, so a placeholder it finds (in a generated image, a job's
 files) is refused, never spent; an owner's process keeps the owner's egress.
 `sudo` and `su` are refused to the viewer's uid at each engine boot, so it
-writes none of the owner's files and never becomes anyone else. A share's
+never becomes anyone else. A share's
 granted process and port control (listing, stopping and reading the logs of
 processes, exposing ports) stays the owner's delegated authority, as the
 owner chose to keep viewers' shell access (Main, 2026-10-19). Residual: an
 owner's process that relays requests for whoever reaches it on loopback acts
 with the owner's egress; and a file grant acts as the agent it is given for.
+Later note (2026-10-23, ledger 1018-xar): the owner chose (2026-10-19T19:44:35Z)
+that a share's commands write "your project too, as today". A workspace made
+since then has its project tree (`/home/main`) setgid to the project group
+(1001), sticky, with a group-writable default ACL, set by the boot that makes
+main's `.kinu` (`provisionProjectHome`); the viewer and the workspace agent's
+session carry that group. Sticky, because write on the root would otherwise let
+the viewer remove or rename `SOUL.md` and `.kinu`. `.kinu`, `SOUL.md`, every
+other home and `/tmp` stay as they were, and an older workspace, which already
+has its `.kinu`, keeps its tree (one whose owner deletes `.kinu` is shared at
+its next boot, as a new one).
+Nimbus's own session user takes no extra group (Nimbus ask 73), so the owner's
+own shell cannot write a file a viewer made in the project.
 
 ## Open
 

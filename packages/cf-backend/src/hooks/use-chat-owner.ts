@@ -223,6 +223,9 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
   const [transcriptSeeded, setTranscriptSeeded] = useState(lastShown !== undefined);
   // Where each window the room sent starts reading older rows from: scroll-back continues from the one it shows first.
   const [seedEdge, setSeedEdge] = useState<SeedEdge | null>(null);
+  // The rows the room's newest window holds, a revisited chat's last ones until it lands: what a finished turn drew. A
+  // turn a signal opened draws into the last row none of them is (`liveTailRow`).
+  const [stored, setStored] = useState<ReadonlySet<string>>(() => new Set(lastShown?.map((message) => message.id)));
 
   const clearProviderWait = useCallback(() => setProviderWait(null), []);
 
@@ -551,6 +554,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
   const paneFrame = async (msg: SocketFrame): Promise<void> => {
     if (msg.type === "cf_agent_chat_messages") {
       setTranscriptSeeded(true);
+      setStored(new Set(msg.messages?.map((message) => message.id)));
       const from = msg.messages?.[0]?.id;
 
       if (from !== undefined && msg.older !== undefined) setSeedEdge({ from, older: msg.older });
@@ -814,6 +818,8 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
       transcriptSeeded,
       /** Where the newest window's scroll-back reads on from (`use-chat-thread.ts`). */
       seedEdge,
+      /** The rows the room's newest window holds: a live turn's row is never one of them (`liveTailRow`). */
+      stored,
       connectionStatus,
       /** Set when reconnecting cannot help (not this caller's workspace, or gone). The SDK owns the
        *  classification and clears it on open. */

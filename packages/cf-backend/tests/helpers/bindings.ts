@@ -65,6 +65,7 @@ export function workerEnv(reached: Partial<Env> = {}): Env {
     DeployRunDO: unreachableObjects('DeployRunDO'),
     MAILNAME: unreachableObjects('MAILNAME'),
     MAILBOX: unreachableObjects('MAILBOX'),
+    CliAuthDO: unreachableObjects('CliAuthDO'),
     AUTH_KV: unreachableKvNamespace('AUTH_KV'),
     BROWSER: unreachableBrowser(),
     ASSETS: unreachableFetcher('ASSETS'),
@@ -189,6 +190,7 @@ export function bootstrappedProfile(email: string, displayName: string | null = 
 export function staticRouteCliEnv(): CliRoutesEnv<string> {
   return {
     AUTH_KV: unreachableKv('AUTH_KV'),
+    CliAuthDO: unreachableNamespace('CliAuthDO'),
     ASSETS: unreachableAssets(),
     UserDO: unreachableNamespace('UserDO'),
     OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),

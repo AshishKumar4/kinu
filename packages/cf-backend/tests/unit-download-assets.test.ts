@@ -51,6 +51,7 @@ function testEnv(ASSETS: AssetFetcher): CliRoutesEnv<string> {
     ASSETS,
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     AUTH_KV: unreachableKv('AUTH_KV'),
+    CliAuthDO: unreachableNamespace('CliAuthDO'),
     UserDO: unreachableNamespace('UserDO'),
     OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
   };

@@ -1376,6 +1376,42 @@ export const PLATFORM_CATALOG = {
       + 'example.com answered 200. Miniflare enforces none of it.',
   },
 
+  'worker.fetch.chatgpt_refused': {
+    subject: "A Worker's fetch() to chatgpt.com (backend-api: Codex responses, models, plan usage)",
+    limit: null,
+    origin: 'platform',
+    bounds: null,
+    evidence: 'observed-in-production',
+    provenance: 'commits 249f2d25a (first seen, 2026-09-24) and a16f76cba (2026-10-07); packages/core/src/providers/codex.ts:79-84',
+    date: '2026-09-24',
+    trigger: "any request from a Cloudflare Worker's network to chatgpt.com, signed in or not",
+    onBreach: 'chatgpt.com answers a 403 HTML block page before sign-in; the request never reaches the API',
+    observable: [{ context: 'chatgpt.com/backend-api/codex/* from a Worker', message: 'HTTP 403 text/html block page' }],
+    firstPartySignal: true,
+    notes: 'Two OpenAI paths, kept apart. Codex (provider `codex`, the Codex client) calls chatgpt.com, so its login cannot make '
+      + "model calls from kinu.run: they go through the person's connected machine. Sign in with ChatGPT (provider "
+      + '`chatgpt`, the agent client) holds its login in the account vault and calls api.openai.com, which accepts Workers. '
+      + 'auth.openai.com accepts Workers. Its device code answers the Codex client and refuses the bare, unregistered agent '
+      + 'client (400 invalid_client, 2026-10-23); a registered per-account agent client is untested. A per-user egress '
+      + 'container got through to chatgpt.com and was removed (a16f76cba). Rediscovered on 2026-10-23 for want of this entry.',
+  },
+
+  'kv.read.cross_location_stale': {
+    subject: 'A Workers KV read at a location other than the one that wrote the key',
+    limit: { value: 60_000, unit: 'ms' },
+    origin: 'platform',
+    bounds: 'duration',
+    evidence: 'documented',
+    provenance: 'https://developers.cloudflare.com/kv/concepts/how-kv-works/#consistency',
+    date: '2026-10-23',
+    trigger: 'a second device polls a key that a first device, served by another location, wrote',
+    onBreach: 'the reader keeps the value it cached (a missing key included) for 60 s or more after the write',
+    observable: [],
+    firstPartySignal: false,
+    notes: 'kinu auth polled its approval through KV: the owner, on a remote PC with the approval made on a laptop, waited '
+      + 'with the CLI printing dots (2026-10-23). State a second device polls lives in a Durable Object.',
+  },
+
   'worker.simultaneous_connections': {
     subject: 'Connections simultaneously waiting for response headers, per invocation',
     limit: { value: 6, unit: 'count' },
