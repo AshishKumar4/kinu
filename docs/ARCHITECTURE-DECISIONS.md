@@ -2293,9 +2293,16 @@ Later note (2026-10-23, ledger 1018-xar): the owner chose (2026-10-19T19:44:35Z)
 that a share's commands write "your project too, as today". A workspace made
 since then has its project tree (`/home/main`) setgid to the project group
 (1001), sticky, with a group-writable default ACL, set by the boot that makes
-main's `.kinu` (`provisionProjectHome`); the viewer and the workspace agent's
-session carry that group. Sticky, because write on the root would otherwise let
-the viewer remove or rename `SOUL.md` and `.kinu`. `.kinu`, `SOUL.md`, every
+main's `.kinu` (`provisionProjectHome`), before it makes `.kinu`, so a boot that
+dies between the two is finished by the next; the viewer and the workspace
+agent's session carry that group. Sticky, because write on the root would
+otherwise let the viewer remove or rename `SOUL.md` and `.kinu`. The viewer is a
+confined principal, so nothing it makes grants others write: Nimbus refuses such
+a chmod, and Kinu's Nimbus patch (ask 74) refuses such a default ACL and keeps
+other-write off what a confined principal creates, whatever its umask, so a
+directory made in its `/tmp` and moved in grants none either. The workspace's
+other agents read the project and write none of it, but for `SOUL.md`, which
+every agent writes through the workspace group (as before). `.kinu`, `SOUL.md`, every
 other home and `/tmp` stay as they were, and an older workspace, which already
 has its `.kinu`, keeps its tree (one whose owner deletes `.kinu` is shared at
 its next boot, as a new one).
