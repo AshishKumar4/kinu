@@ -5,7 +5,8 @@
  */
 import type { UIMessage } from 'ai';
 import * as v from 'valibot';
-import { STEER_METADATA_KEY, STEER_STEP_METADATA_KEY } from '../orchestrator/inbox';
+import { SPLICE_STEP_METADATA_KEY, STEER_METADATA_KEY, STEER_STEP_METADATA_KEY } from '../orchestrator/inbox';
+import { splicesSeenOn } from './background-event';
 import { rowText } from '../utils/ui-message';
 
 export type TranscriptPart = UIMessage['parts'][number];
@@ -47,6 +48,13 @@ const SteerRowSchema = v.looseObject({
   [STEER_STEP_METADATA_KEY]: v.number(),
 });
 
+/** Step of a landed delivery's row (`landedEventRow`), or null. */
+function spliceRowStep(row: { metadata: unknown }): number | null {
+  const parsed = v.safeParse(v.looseObject({ [SPLICE_STEP_METADATA_KEY]: v.pipe(v.number(), v.integer(), v.minValue(0)) }), row.metadata ?? {});
+
+  return parsed.success ? parsed.output[SPLICE_STEP_METADATA_KEY] : null;
+}
+
 /** Step of a landed steer row, or null. A step that names no step of the turn is not guessed into place. */
 function steerRowStep(row: { metadata: unknown }): number | null {
   const parsed = v.safeParse(SteerRowSchema, row.metadata ?? {});
@@ -63,12 +71,14 @@ export interface TranscriptFold {
   readonly pending: readonly PlacedSteer[];
   /** Durable steer row ids; a live steer's id can only collide with its own durable row. */
   readonly steerRowIds: ReadonlySet<string>;
+  /** Deliveries landed mid-turn, held for their answer, which draws each kept one at its step. */
+  readonly held: readonly UIMessage[];
 }
 
 const NO_STEERS: readonly PlacedSteer[] = [];
 
 export const EMPTY_TRANSCRIPT_FOLD: TranscriptFold = {
-  entries: [], pending: [], steerRowIds: new Set(),
+  entries: [], pending: [], steerRowIds: new Set(), held: [],
 };
 
 /** Extend a fold with the next run; an unloaded gap closes pending steers before it. Pure: no mutation. */
@@ -79,8 +89,19 @@ export function extendTranscript(
   const entries = [...(contiguous ? fold.entries : sealTranscript(fold).entries)];
   const steerRowIds = new Set(fold.steerRowIds);
   let pending = contiguous ? [...fold.pending] : [];
+  let held = contiguous ? [...fold.held] : [];
 
   for (const message of messages) {
+    if (spliceRowStep({ metadata: message.metadata }) !== null) {
+      held.push(message);
+      continue;
+    }
+
+    // A landed delivery its answer keeps is drawn there, at its step; one no answer keeps stands as its own row.
+    const kept = message.role === 'assistant' ? new Set(splicesSeenOn({ metadata: message.metadata }).map((splice) => splice.id)) : new Set<string>();
+
+    for (const row of held) if (!kept.has(row.id)) entries.push({ message: row, steers: NO_STEERS });
+    held = [];
     const step = message.role === 'user' ? steerRowStep({ metadata: message.metadata }) : null;
 
     if (step !== null) {
@@ -101,7 +122,7 @@ export function extendTranscript(
     entries.push({ message, steers: NO_STEERS });
   }
 
-  return { entries, pending, steerRowIds };
+  return { entries, pending, steerRowIds, held };
 }
 
 /** Close a fold: pending steer rows trail; unseen `live` steers attach to the streamed message. */

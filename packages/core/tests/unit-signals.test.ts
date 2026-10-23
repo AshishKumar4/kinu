@@ -3,7 +3,7 @@
 import { describe, test, expect } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
-import { Inbox } from '../src/orchestrator/inbox';
+import { Inbox, type LandedEventRow } from '../src/orchestrator/inbox';
 import { DeliveryInbox, deliveredSignal } from '../src/subagents/deliveries';
 import type { BackendHost, BroadcastEvent, ProgrammaticTurn } from '../src/types/backend-host';
 import { USER_MESSAGE_SIGNAL_KIND, type AgentSignal, type SignalCardEvent } from '../src/types/signals';
@@ -246,6 +246,74 @@ describe('Inbox — the user\'s card', () => {
     await inbox.prepareStep({ stepNumber: 0, messages: [user('q')] }, [nudge('fork now')]);
     expect(lifecycle(cards)).toEqual(['pending', 'pending', 'shown', 'shown']);
     expect(cards.map((c) => c.id)).toEqual([cards[0].id, cards[1].id, cards[0].id, cards[1].id]);
+  });
+});
+
+/** ADR C3: where its backend lands them, a delivery a running turn reads is a durable row, read once. */
+describe('Inbox — a delivery landed mid-turn', () => {
+  function landing(opts: { readonly turnInFlight?: boolean } = {}) {
+    const harness = setup(opts);
+    const landed: LandedEventRow[][] = [];
+
+    harness.inbox.bindSteerDeps({ onEvents: async (events) => {
+      landed.push([...events]);
+
+      return { role: 'user', content: events.map((event) => event.text).join('\n\n') };
+    } });
+
+    return { ...harness, landed };
+  }
+
+  test('it lands before the model reads it, as the text it reads, under its card and step', async () => {
+    const { inbox, landed, cards } = landing({ turnInFlight: true });
+
+    inbox.beginTurn(undefined);
+    inbox.landMidTurn(wake('turn text', { stepText: 'mid-turn: the helper reports DONE', idempotencyKey: 'evt-1' }));
+    const messages = await inbox.prepareStep({ stepNumber: 2, messages: [user('q')] });
+
+    expect(landed).toEqual([[{
+      id: cards[0]?.id, text: 'mid-turn: the helper reports DONE', atStep: 2, deliveryId: 'evt-1',
+      metadata: expect.objectContaining({ kinuEvent: 'event_drain', kinuSpliceAtStep: 2, signalId: cards[0]?.id }),
+    }]]);
+    expect(messages?.at(-1)).toEqual({ role: 'user', content: 'mid-turn: the helper reports DONE' });
+    expect(inbox.recordedMessages()).toEqual([{ role: 'user', content: 'mid-turn: the helper reports DONE' }]);
+  });
+
+  test('a turn that fails after reading it does not hand it over again, and its answer keeps it', async () => {
+    const { inbox, queued } = landing({ turnInFlight: true });
+
+    inbox.beginTurn(undefined);
+    inbox.landMidTurn(wake('read, then the turn failed'));
+    await inbox.prepareStep({ stepNumber: 0, messages: [user('q')] });
+    inbox.stepEnded(0);
+    inbox.settle({ completed: false });
+    await Promise.resolve();
+
+    expect(queued).toEqual([]);
+    expect(inbox.landedSplices().map((splice) => splice.text)).toEqual(['read, then the turn failed']);
+  });
+
+  test('a Stop leaves it read: it is not given back, and only what the agent never read is let go', async () => {
+    const { inbox, cards } = landing({ turnInFlight: true });
+
+    inbox.beginTurn(undefined);
+    inbox.landMidTurn(wake('read', { idempotencyKey: 'evt-read' }));
+    await inbox.prepareStep({ stepNumber: 0, messages: [user('q')] });
+    inbox.landMidTurn(wake('never read', { idempotencyKey: 'evt-unread' }));
+    const stopped = inbox.interrupt();
+
+    expect(stopped.cancelled).toEqual(['evt-unread', 'evt-read']);
+    expect(lifecycle(cards)).toEqual(['pending', 'shown', 'pending', 'undelivered']);
+  });
+
+  test('a landing that fails aborts the step and leaves the delivery to be read again', async () => {
+    const { inbox } = setup({ turnInFlight: true });
+
+    inbox.bindSteerDeps({ onEvents: async () => { throw new Error('the write failed'); } });
+    inbox.landMidTurn(wake('kept for the next step'));
+    await expect(inbox.prepareStep({ stepNumber: 0, messages: [user('q')] })).rejects.toThrow('the write failed');
+    inbox.bindSteerDeps({});
+    expect((await inbox.prepareStep({ stepNumber: 1, messages: [user('q')] }))?.at(-1)).toEqual({ role: 'user', content: 'kept for the next step' });
   });
 });
 

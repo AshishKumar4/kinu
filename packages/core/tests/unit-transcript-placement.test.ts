@@ -4,7 +4,8 @@
  */
 import { describe, expect, test } from 'bun:test';
 import type { UIMessage } from 'ai';
-import { STEER_METADATA_KEY, STEER_STEP_METADATA_KEY } from '../src/orchestrator/inbox';
+import { SPLICE_STEP_METADATA_KEY, STEER_METADATA_KEY, STEER_STEP_METADATA_KEY } from '../src/orchestrator/inbox';
+import { SIGNALS_SEEN_METADATA_KEY } from '../src/read-models/background-event';
 import {
   EMPTY_TRANSCRIPT_FOLD, buildTranscript, extendTranscript, sealTranscript, segmentBySteers,
   type InlineSteer, type PlacedSteer, type TranscriptPart,
@@ -35,6 +36,40 @@ const live = (id: string, text: string, atStep: number): PlacedSteer =>
 
 const queued = (id: string, text: string): InlineSteer =>
   ({ id, text, atStep: null, state: 'queued' });
+
+/** The row a delivery landed mid-turn becomes (`landedEventRow`), as the chat reads it: harness-authored. */
+const deliveryRow = (id: string, text: string, atStep: number): UIMessage => ({
+  id, role: 'system', parts: [{ type: 'text', text }],
+  metadata: { kinuEvent: 'event_drain', kinuAuthor: 'harness', signalId: id, [SPLICE_STEP_METADATA_KEY]: atStep },
+});
+
+/** An answer that keeps the splices its agent read, each at its step. */
+function answerKeeping(id: string, steps: number, kept: readonly { readonly id: string; readonly atStep: number; readonly text: string }[]): UIMessage {
+  return { ...turn(id, steps), metadata: { [SIGNALS_SEEN_METADATA_KEY]: kept.map((splice) => ({ ...splice, metadata: {} })) } };
+}
+
+describe('a delivery landed mid-turn', () => {
+  test('its answer draws it at its step, so the thread holds it once', () => {
+    const { entries } = buildTranscript([user('u1', 'go'), deliveryRow('sig:evt-1', 'the helper reports DONE', 1),
+      answerKeeping('a1', 3, [{ id: 'sig:evt-1', atStep: 1, text: 'the helper reports DONE' }])]);
+
+    expect(entries.map((entry) => entry.message.id)).toEqual(['u1', 'a1']);
+  });
+
+  test('one no answer keeps stands as its own row, before what came next', () => {
+    const { entries } = buildTranscript([user('u1', 'go'), deliveryRow('sig:evt-1', 'read, then the turn failed', 0), user('u2', 'again')]);
+
+    expect(entries.map((entry) => entry.message.id)).toEqual(['u1', 'sig:evt-1', 'u2']);
+  });
+
+  test('held across a tick until its answer arrives', () => {
+    const first = extendTranscript(EMPTY_TRANSCRIPT_FOLD, [user('u1', 'go'), deliveryRow('sig:evt-1', 'DONE', 1)]);
+    const next = extendTranscript(first, [answerKeeping('a1', 2, [{ id: 'sig:evt-1', atStep: 1, text: 'DONE' }])]);
+
+    expect(sealTranscript(first).entries.map((entry) => entry.message.id)).toEqual(['u1']);
+    expect(sealTranscript(next).entries.map((entry) => entry.message.id)).toEqual(['u1', 'a1']);
+  });
+});
 
 describe('reading a steer row', () => {
   test('a landed steer names its step; an ordinary user message names nothing', () => {

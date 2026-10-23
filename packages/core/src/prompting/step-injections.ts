@@ -10,8 +10,8 @@
 import type { ModelMessage } from 'ai';
 import type { PrepareStepContext } from '../extension';
 
-/** `durable`: whether the entry becomes chat history on replay. A steer does; an event
- *  splice does not (its own row is the record; replaying it reads as an unanswered event). */
+/** `durable`: whether the entry becomes chat history on replay. A steer does, and an event its backend landed as a
+ *  row (ADR C3); steering and activated skills do not. */
 export type RecordedInjection<E extends { readonly message: ModelMessage; readonly durable: boolean }> =
   E & { readonly index: number };
 

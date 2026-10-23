@@ -16,7 +16,7 @@ import { ExtensionHost } from '../extension';
 import { Effect } from 'effect';
 import { KinuError, renderThrownChain, settle, settleSync, type TurnTrace, type TurnTracing } from '../obs/index';
 import { AgentOrchestrator, type AgentOrchestratorDeps } from './agent-orchestrator';
-import { describeLandedSteers, type AcceptedSteer, type Inbox, type LandedSteerRow, type UserSteer } from './inbox';
+import { describeLandedSteers, type AcceptedSteer, type Inbox, type LandedEventRow, type LandedSteerRow, type UserSteer } from './inbox';
 import { startActorTurn } from './actor-turn';
 import type { ChatTurnInput } from './chat-session';
 import { captureOperationProfile, currentOperationProfile, operationProfileStream } from '../profiles/operation';
@@ -230,6 +230,7 @@ export class ActorSession {
   readonly dynamic = new DynamicContextLedger(true);
   private readonly messages: ModelMessage[] = [];
   private readonly landed: LandedSteerRow[] = [];
+  private landedEvents = 0;
   private active: ActiveTurn | null = null;
   private mode: WorkMode = 'build';
 
@@ -253,6 +254,7 @@ export class ActorSession {
 
     this.orchestrator = new AgentOrchestrator(options.orchestration, {
       onDrain: (steers, atStep) => this.landSteers(steers, atStep),
+      onEvents: (events) => this.landEvents(events),
       turnId: () => this.active?.lease.turnId ?? null,
     });
 
@@ -281,6 +283,8 @@ export class ActorSession {
   bindSteerPersistence(deps: {
     readonly onAccept?: (steer: AcceptedSteer) => void;
     readonly prepareDrain?: (rows: readonly LandedSteerRow[], atStep: number, reference: MessageReference) => Promise<(selection: ContextSelection) => void>;
+    /** The rows a step's landed deliveries become in the conversation, published with their landing. */
+    readonly prepareEvents?: (rows: readonly LandedEventRow[], reference: MessageReference) => Promise<(selection: ContextSelection) => void>;
     readonly turnId?: () => string | null;
     readonly skills?: (text: string) => Promise<string | null>;
     /** Moves the actor's `executing` foreground calls to the background, where that frees the step (`BackgroundJobRunner.release`). */
@@ -292,6 +296,7 @@ export class ActorSession {
     this.orchestrator.inbox.bindSteerDeps({
       onAccept: deps.onAccept,
       onDrain: (steers, atStep) => this.landSteers(steers, atStep, deps.prepareDrain),
+      onEvents: (events) => this.landEvents(events, deps.prepareEvents),
       turnId: () => deps.turnId?.() ?? this.active?.lease.turnId ?? null,
       skills: deps.skills,
       ...(releaseForeground !== undefined && { release: async () => await this.releaseStep(releaseForeground) }),
@@ -338,6 +343,32 @@ export class ActorSession {
     return message;
   }
 
+  /**
+   * A step's deliveries, landed as one durable input the agent's later turns read (ADR C3): the text it read, under an
+   * id its retry finds again.
+   */
+  private async landEvents(
+    events: readonly LandedEventRow[],
+    prepareEvents?: (rows: readonly LandedEventRow[], reference: MessageReference) => Promise<(selection: ContextSelection) => void>,
+  ): Promise<ModelMessage> {
+    const claim = this.active?.claim;
+
+    if (claim === undefined || claim === null) throw new KinuError('denied', 'a delivery landing requires an admitted claim');
+    const id = `events:${events.map((event) => event.id).join(':')}`;
+    const existing = this.canonical.admittedInput(id);
+    const prepared = existing === null ? await this.canonical.messages.prepare({ role: 'user', content: events.map((event) => event.text).join('\n\n') }, id) : null;
+    const reference = existing ?? { messageId: id };
+    const publish = await prepareEvents?.(events, reference);
+
+    this.canonical.landInput({
+      prepared, reference, turnId: claim.turnId,
+      assertOwner: () => { this.canonical.assertEpoch(claim.turnId, claim.epoch); }, ...(publish !== undefined && { publish }),
+    });
+    this.landedEvents += events.length;
+
+    return await this.canonical.messages.materialize(reference);
+  }
+
   get history(): readonly ModelMessage[] { return this.messages; }
   get workMode(): WorkMode { return this.mode; }
   get profile(): ResolvedTurnProfile | null { return currentOperationProfile(this.runtime.actor)?.profile ?? this.active?.profile ?? null; }
@@ -347,6 +378,8 @@ export class ActorSession {
     return operation ? operation.inputs : this.active?.profileInputs ?? null;
   }
   get landedSteers(): readonly LandedSteerRow[] { return this.landed; }
+  /** Whether this turn has landed any row mid-turn, a person's words or a delivery. */
+  get landedAny(): boolean { return this.landed.length > 0 || this.landedEvents > 0; }
   get inFlight(): boolean { return this.active !== null && this.active.phase !== 'settling'; }
   /** Until `finishTurn`, a settling turn owns its claim. */
   get turnOpen(): boolean { return this.active !== null; }
@@ -511,6 +544,7 @@ export class ActorSession {
     this.mode = mode;
     this.turnMetadata = metadata;
     this.landed.length = 0;
+    this.landedEvents = 0;
     this.orchestrator.beginTurn(startedAt, metadata);
     this.orchestrator.restrictTurnWorkMode(mode);
 
