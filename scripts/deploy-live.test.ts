@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { handClock, scratchDir } from '@kinu.run/test-utils';
-import { DeployLive, LIVE_FILE } from './deploy-live';
+import { DeployLive, LIVE_FILE, liveFile } from './deploy-live';
 
 const START = Date.parse('2026-10-01T18:00:00.000Z');
 
@@ -25,6 +25,21 @@ function live() {
 }
 
 describe("the deploy's live status", () => {
+  // deploy.sh runs the source phase in a process of its own beside the post-publish wave (m1929a).
+  test('the source phase, beside the post-publish wave, writes a file of its own', () => {
+    const dir = scratchDir('deploy-live-source');
+    const [source, wave] = [new DeployLive(dir, 'source', handClock(START)), new DeployLive(dir, 'post-publish', handClock(START))];
+
+    source.started('Devbox contracts on real golden containers');
+    wave.started('First-run tier');
+
+    expect({
+      source: readFileSync(join(dir, liveFile('source')), 'utf8').includes('Devbox contracts'),
+      wave: readFileSync(join(dir, LIVE_FILE), 'utf8').includes('First-run tier'),
+      apart: liveFile('source') !== LIVE_FILE && existsSync(join(dir, liveFile('source'))),
+    }).toEqual({ source: true, wave: true, apart: true });
+  });
+
   test('a row is named at once when it starts and gone at once when it ends, with how long it ran and its last line', () => {
     const { status, clock, read } = live();
     const evals = status.started('Eval pass: one trial of every eval task');
