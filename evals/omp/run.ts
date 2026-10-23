@@ -19,11 +19,11 @@ import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, wr
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import * as v from 'valibot';
-import { EvolutionEngine, historyTurnPairs, type AgentRuntime, type CompletedTurn, type JobRetirement, type JsonValue, type LLMProviderConfig } from '../../packages/core/src/index';
+import { CLAUDE_CRED_KEY, credentialToHeaders, EvolutionEngine, historyTurnPairs, type AgentRuntime, type CompletedTurn, type JobRetirement, type JsonValue, type LLMProviderConfig, type ReasoningEffort } from '../../packages/core/src/index';
 import { createConsoleLogger, renderThrownChain, setDiagnosticsSink, type Logger } from '../../packages/core/src/obs/index';
 import { createWorkspace } from '../../packages/core/src/workspace-birth';
 import { createRefinementStore } from '../../packages/core/src/evolution/refinement';
-import { createLocalModelResolver, LocalAgentHost, openWorkspaceCLI, workspaceHome } from '../../packages/cli-backend/src/index';
+import { createLocalModelResolver, LocalAgentHost, openWorkspaceCLI, workspaceHome, type LocalOAuthStore } from '../../packages/cli-backend/src/index';
 import { workspaceDatabase } from '../../packages/test-utils/src/index';
 import { ownerTurnsFrom, type OwnerTurn } from '../src/omp';
 import { freezeHeldOut, FrozenHeldOutSchema, recordedShell, shellFromRecord, type FrozenHeldOut } from '../src/omp-run';
@@ -39,6 +39,14 @@ const DREAM_PASSES = 40;
 const SETTLED = new Set(['applied', 'rolled_back', 'refused']);
 
 const MODEL_HOST = 'api.cloudflare.com:443';
+
+/** A Claude plan login's host, for a `claude/` spec. */
+const CLAUDE_HOST = 'api.anthropic.com:443';
+
+/** The file a `claude/` arm reads its plan login's access token from at each call: the machine OMP's store is on writes
+ *  it (`ompGrant`, scripts/eval-plan-run.ts) as OMP renews it. The token alone: no refresh token leaves OMP, and this run
+ *  renews nothing. */
+const CLAUDE_TOKEN_FILE_ENV = 'KINU_CLAUDE_TOKEN_FILE';
 
 /**
  * What a kept call with no record answers in this run, the same for every arm: on this machine Plan runs no shell
@@ -109,10 +117,32 @@ async function dream(run: { readonly lane: () => Promise<void>; readonly tick: (
   return DREAM_PASSES;
 }
 
-interface Arm {
+/** A Claude plan login whose access token is read from `tokenFile` at each call: it saves nothing (the login is OMP's). */
+function claudeLogin(tokenFile: string): LocalOAuthStore {
+  return {
+    keys: () => [CLAUDE_CRED_KEY],
+    has: (key) => key === CLAUDE_CRED_KEY,
+    getAuth: async (key) => {
+      if (key !== CLAUDE_CRED_KEY) return null;
+      const accessToken = readFileSync(tokenFile, 'utf8').trim();
+
+      return { headers: credentialToHeaders(CLAUDE_CRED_KEY, { kind: 'oauth', accessToken, expiresAt: Number.MAX_SAFE_INTEGER }), credentialKey: key };
+    },
+    save: async () => { throw new Error('this run holds a borrowed plan login and renews none'); },
+  };
+}
+
+/** An arm's models: Workers AI over the account's token, or (`claude/`) a Claude plan login. */
+interface ArmModels {
+  readonly llm: LLMProviderConfig | null;
+  readonly oauthStore?: LocalOAuthStore;
+  /** The workspace's reasoning effort, where set. */
+  readonly effort?: ReasoningEffort;
+}
+
+interface Arm extends ArmModels {
   readonly arm: 'dreaming' | 'off';
   readonly spec: string;
-  readonly llm: LLMProviderConfig;
   readonly snapshot: string;
   /** This arm's workspace folder: its database and its files. */
   readonly space: string;
@@ -128,7 +158,9 @@ function armHost(arm: Arm, boundary: { intended: (call: { readonly name: string;
       const { rt } = await openWorkspaceCLI(db, path, openConfig);
       rt.actor.config.setLearning(arm.arm === 'dreaming');
 
-      return { rt, openConfig, modelResolver: createLocalModelResolver({ llm: arm.llm, defaultSpec: arm.spec }) };
+      if (arm.effort !== undefined) rt.actor.config.setReasoningEffort(arm.effort);
+
+      return { rt, openConfig, modelResolver: createLocalModelResolver({ llm: arm.llm, defaultSpec: arm.spec, ...(arm.oauthStore !== undefined && { oauthStore: arm.oauthStore }) }) };
     },
   });
 }
@@ -265,6 +297,7 @@ if (import.meta.main) {
   const { values } = parseArgs({ options: {
     phase: { type: 'string' }, data: { type: 'string' }, snapshot: { type: 'string' }, arm: { type: 'string' }, out: { type: 'string' },
     spec: { type: 'string', default: 'workers-ai/@cf/zai-org/glm-5.3' }, 'held-out': { type: 'string', default: '40' },
+    effort: { type: 'string' },
     'train-last': { type: 'string', default: '250' }, seed: { type: 'string', default: '1' },
     copy: { type: 'string', default: '0' }, of: { type: 'string', default: '1' },
   } });
@@ -277,15 +310,25 @@ if (import.meta.main) {
     throw new Error('--phase prepare|answer, --data, --snapshot, --out and --arm dreaming|off are required');
   }
 
-  if (account === undefined || token === undefined) throw new Error('set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN');
+  const claude = spec.startsWith('claude/');
+  const claudeToken = process.env[CLAUDE_TOKEN_FILE_ENV];
+
+  if (claude && claudeToken === undefined) throw new Error(`set ${CLAUDE_TOKEN_FILE_ENV} to the file holding the plan login's access token`);
+
+  if (!claude && (account === undefined || token === undefined)) throw new Error('set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN');
   const model = spec.replace(/^workers-ai\//u, '');
   const base = join(out, model.replaceAll('/', '_'), arm);
-  const egress = limitEgress([MODEL_HOST]);
+  const egress = limitEgress([claude ? CLAUDE_HOST : MODEL_HOST]);
+  const effort = v.parse(v.optional(v.picklist(['low', 'medium', 'high', 'xhigh', 'max'])), values.effort);
+
+  const models: ArmModels = claude && claudeToken !== undefined
+    ? { llm: null, oauthStore: claudeLogin(claudeToken), ...(effort !== undefined && { effort }) }
+    : { llm: workersAi(account ?? '', token ?? '', model), ...(effort !== undefined && { effort }) };
 
   try {
     if (phase === 'prepare') {
       mkdirSync(join(base, 'base'), { recursive: true });
-      await prepare({ arm, spec, snapshot, llm: workersAi(account, token, model), space: join(base, 'base') }, ownerTurnsFrom(readFileSync(join(data, 'train.jsonl'), 'utf8')), Number(values['train-last']));
+      await prepare({ arm, spec, snapshot, ...models, space: join(base, 'base') }, ownerTurnsFrom(readFileSync(join(data, 'train.jsonl'), 'utf8')), Number(values['train-last']));
     } else {
       const heldOut = ownerTurnsFrom(readFileSync(join(data, 'held-out.jsonl'), 'utf8'));
       const frozen = frozenSet(data, heldOut, Number(values['held-out']), Number(values.seed));
@@ -299,7 +342,7 @@ if (import.meta.main) {
         return turn;
       });
 
-      const answering: Arm = { arm, spec, snapshot, llm: workersAi(account, token, model), space: join(base, `copy-${String(copy)}`) };
+      const answering: Arm = { arm, spec, snapshot, ...models, space: join(base, `copy-${String(copy)}`) };
       const answers = join(base, `answers-${String(copy)}.jsonl`);
       const done = answeredTurnIds(answers);
 
