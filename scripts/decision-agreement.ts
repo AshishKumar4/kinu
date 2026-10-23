@@ -236,14 +236,14 @@ if (import.meta.main) {
 
   const clef = createDecisionPort({
     run: clefRun(account, token), model: async () => DEFAULT_DECISION_MODEL, report: () => {},
-    refusals: { changes: () => 0, refused: () => {}, answered: () => {} },
+    refusals: { changes: () => 0, refused: () => {}, answered: () => {}, untrusted: () => {} },
   });
 
   // Clef-flash, which an owner may pick as the decision model, measures the bar: how far from Clef the product already lets ratings be.
   const measured = values.model;
 
   const structured = isDecisionModel(measured)
-    ? createDecisionPort({ run: clefRun(account, token), model: async () => measured, report: () => {}, refusals: { changes: () => 0, refused: () => {}, answered: () => {} } })
+    ? createDecisionPort({ run: clefRun(account, token), model: async () => measured, report: () => {}, refusals: { changes: () => 0, refused: () => {}, answered: () => {}, untrusted: () => {} } })
     : structuredPort(measured, chatModel(measured, { account, token }, values['claude-token-file']));
 
   const ratings = await inFours(turns, async (turn) => ({ clef: await rated(clef, turn), structured: await rated(structured, turn) }));

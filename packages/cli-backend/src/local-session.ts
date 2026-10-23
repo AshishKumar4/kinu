@@ -2235,7 +2235,8 @@ export class LocalAgentSession {
   }
 
   listRefinements(limit = 20) {
-    return listRefinements(this.refinementDeps, limit);
+    // As the local session's model refusals say it (`LOCAL_MODEL_SETTINGS`).
+    return listRefinements(this.refinementDeps, limit, 'your model settings');
   }
 
   /** The newest answered turns as recorded, which a pending scaffold is replayed against (`scaffold/replay.ts`). */

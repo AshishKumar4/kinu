@@ -5,15 +5,17 @@
  */
 import { compactToolCall } from '../src/evolution/tool-call-record';
 import { describe, expect, test } from 'bun:test';
+import * as v from 'valibot';
 import { EvolutionEngine } from '../src/evolution/engine';
 import type { CompletedTurn } from '../src/evolution/types';
 import {
   listThumbs, listTurnRatings, qualitySeries, qualityWindow, ratingOf, recordTurnRating, retractThumbs,
 } from '../src/evolution/ratings';
 import {
-  bindingDecisionRun, createDecisionPort, restDecisionRun, type DecisionAnswers, type DecisionPort, type DecisionQuestion,
+  bindingDecisionRun, createDecisionPort, DECISION_REFUSALS, restDecisionRun, type DecisionAnswers, type DecisionPort, type DecisionQuestion,
 } from '../src/providers/decision-model';
-import { tierRefusals } from '../src/profiles/tier-refusals';
+import { tierRefusals, unratedReason } from '../src/profiles/tier-refusals';
+import { RefinementListingSchema } from '../src/evolution/refinement-host';
 import { readActivityLog } from '../src/identity/activity-log';
 import { KinuError } from '../src/obs/error';
 import { CLEF_BINDING_ANSWER } from '@kinu.run/test-utils/clef-binding-answer';
@@ -338,6 +340,37 @@ describe('the decision model', () => {
       expect(await run('@cf/cloudflare/clef', { state: 's', questions: {} })).toEqual(CLEF_REST_ANSWER);
       expect(seen).toEqual([{ url: expected, auth: 'Bearer t' }]);
     }
+  });
+
+  // A Claude-only CLI: Clef refuses for want of Workers AI and its fast model was never measured, so no turn is rated
+  // and no dream opens. `/refine` says so, in the owner's words, until either is fixed.
+  test('where Clef refused and the fast tier is trusted for none of a rating, the owner is told why no turn is rated', () => {
+    const { rt } = createTestRuntime();
+    const { refusals } = noticesOf(rt);
+    const refusing = { model: 'workers-ai/@cf/cloudflare/clef', cause: new KinuError('denied', 'This account has no Workers AI.') };
+
+    refusals.untrusted({ model: 'claude/claude-never-measured', questions: ['satisfaction', 'corrected', 'wrong'] });
+    expect(unratedReason(rt.actor.config, 'Settings → Models')).toBeNull();
+
+    refusals.refused({ tier: DECISION_REFUSALS, since: 0, refusals: [refusing] });
+    expect(unratedReason(rt.actor.config, 'Settings → Models')).toBe(
+      'No turn is being rated, so no dream opens: Clef, the decision model, is refusing requests (its notice in Activity says why), and '
+      + 'claude/claude-never-measured on your fast tier is not measured close enough to Clef to rate a turn in its place. Clef\'s access is set in Settings → Models.',
+    );
+
+    // A tier the owner named `untrusted` answering, or refusing, leaves the marker alone: no tier id can name its key.
+    refusals.answered('untrusted');
+    expect(unratedReason(rt.actor.config, 'Settings → Models')).not.toBeNull();
+
+    refusals.untrusted(null);
+    expect(unratedReason(rt.actor.config, 'Settings → Models')).toBeNull();
+  });
+
+  // Version skew: a peer from before `unrated` sends a listing without it, which still reads.
+  test('a refinement listing from an older peer, with no unrated line, reads as nothing to say', () => {
+    const older = { requests: [], debt: { turnIds: [], owed: false, key: '', summary: 'no new rated turns since the last dream' } };
+
+    expect(v.parse(RefinementListingSchema, older)).toEqual({ ...older, unrated: null });
   });
 
   test("a refusal carries the provider's own words and the status's code", async () => {

@@ -13,6 +13,7 @@ import {
   type RefinementScope,
 } from './refinement';
 import { attempt, settle, settleLogged } from '../obs/index';
+import { unratedReason } from '../profiles/tier-refusals';
 
 /** Explicit request; defaults to the unresolved outcomes at workspace scope. */
 export function requestOwnerRefinement(
@@ -29,17 +30,22 @@ export function requestOwnerRefinement(
 export interface RefinementListing {
   readonly requests: readonly RefinementRequestView[];
   readonly debt: EvolutionDebt;
+  /** Why no turn is being rated, so no dream opens (`unratedReason`); null while turns can be rated. */
+  readonly unrated: string | null;
 }
 
-export const RefinementListingSchema: v.GenericSchema<RefinementListing> = v.object({
+/** A listing as a peer sends it: one from before `unrated` sends none, read as nothing to say. */
+export const RefinementListingSchema: v.GenericSchema<Omit<RefinementListing, 'unrated'> & { readonly unrated?: string | null }, RefinementListing> = v.object({
   requests: v.array(RefinementRequestViewSchema),
   debt: EvolutionDebtSchema,
+  unrated: v.optional(v.nullable(v.string()), null),
 });
 
-export function listRefinements(deps: RefinementDeps, limit = 20): RefinementListing {
+export function listRefinements(deps: RefinementDeps, limit = 20, settings = 'your model settings'): RefinementListing {
   return {
     requests: createRefinementStore(deps.control.sql, deps.control.rt.actor).list(limit).map(refinementRequestView),
     debt: evolutionDebt(deps.control.sql, deps.control.rt.actor),
+    unrated: unratedReason(deps.control.rt.actor.config, settings),
   };
 }
 

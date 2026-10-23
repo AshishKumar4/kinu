@@ -58,7 +58,7 @@ import type { AgentTurnActivity, AgentSnapshot, ChatWindow, RunEventRecorder, St
 import type { SerializedMessage, WebSearchProvider } from '@kinu.run/core';
 import { serveNodeProgramCall, type NodeProgramAnswer } from './node-program';
 import type { EgressPrincipal } from '@kinu.run/core';
-import type { CFRuntime } from './runtime';
+import { MODEL_SETTINGS, type CFRuntime } from './runtime';
 import { callOperation, listOperations, type OperationCaller, type OperationListing, type OperationResult } from '@kinu.run/core';
 import type { AgentFacet, AgentFacetCalls } from "./agent-facet/agent-facet";
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -7469,7 +7469,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Refinements newest first plus the debt that would open the next one (`/refine` with no args). */
   @callable()
   async listRefinements(limit = 20): Promise<RefinementListing> {
-    return listRefinements(this.refinementDeps, limit);
+    return listRefinements(this.refinementDeps, limit, MODEL_SETTINGS);
   }
 
   /** Called by `webhookDeliveryRoutes` so publish + dedupe run atomically in this DO. */
