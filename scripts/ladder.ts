@@ -1447,7 +1447,7 @@ export const LADDER: readonly Gate[] = [
       + 'workspace object and every sibling agent with it (0.42 s turns 12 of 13 runs, 0.1 s turns 1 of 2; 40 ms turns '
       + 'for 4 s of CPU 0 of 2). The row runs the heap gate\'s workloads (a step\'s turns, heads, the 150-step long '
       + 'turn unadvised, advised and compacted, the 450-step screenshot turn and its chat\'s seeds, twelve subagents, '
-      + '40 advised steps of 200 kB results) with every '
+      + '40 advised steps of 50 kB results) with every '
       + 'isolate under a CPU profiler, and fails on any agent\'s isolate whose longest stretch reaches 100 ms. Before '
       + 'their fixes a chat\'s seed read 157-246 ms and a 450-step turn\'s figures fold 80-142 ms (2026-10-23).',
     blind: 'turns back to back with no wait between read as one stretch; native work outside JavaScript reads as '

@@ -650,8 +650,8 @@ async function advisedLongTurn(advised: boolean, run: {
 }
 
 /** The loop pass's own turns, each in a fresh workspace with its steps unheld: the long turn against a declared window,
- *  so compaction folds it as it grows, and 40 steps each reading back a 200 kB page with the advisor reviewing them, as a
- *  program's or a log's large result. Each prints what shows it ran: its summary calls, its advisor's calls. */
+ *  so compaction folds it as it grows, and 40 steps each reading back as much of a 200 kB page as the file tool reads at
+ *  once (50,000 characters), with the advisor reviewing them, as a program's or a log's large result. Each prints what shows it ran: its summary calls, its advisor's calls. */
 async function loopOnlyTurns(ask: (path: string) => Promise<string>): Promise<void> {
   const seen = async () => v.parse(v.object({ summaries: v.number(), advisorCalls: v.number(), stepRequestBytes: v.array(v.number()) }), JSON.parse(await ask('/model')));
 
@@ -662,6 +662,14 @@ async function loopOnlyTurns(ask: (path: string) => Promise<string>): Promise<vo
     await ask('/model?released=1000000');
     await ask(`/turn?workspace=${name}&text=long`);
     await ask(`/main-idle?workspace=${name}`);
+
+    // A review may outlive its turn: read once the advisor's calls have stopped coming for 3 s.
+    for (let last = await seen(), quiet = performance.now(); performance.now() - quiet < 3000; await Bun.sleep(250)) {
+      const now = await seen();
+
+      if (now.advisorCalls !== last.advisorCalls) [last, quiet] = [now, performance.now()];
+    }
+
     await ask(`/quiesce?workspace=${name}`);
     const after = await seen();
 
@@ -682,7 +690,8 @@ async function loopOnlyTurns(ask: (path: string) => Promise<string>): Promise<vo
   await ask('/?workspace=results&compat=1');
   await ask('/advisor?workspace=results');
   const results = await turn('results', 'toolSteps=40&stepBytes=200000&stepRead=1');
-  console.log(`${GATE}: 40 steps of 200 kB results, advised: ${String(results.advisorCalls)} advisor calls`);
+  console.log(`${GATE}: 40 advised steps of 50 kB results: ${String(results.advisorCalls)} advisor calls; its steps' requests `
+    + `ended at ${String(Math.round((results.requests.at(-1) ?? 0) / 1000))} kB`);
 }
 
 /** A four-step turn with `fault` armed in its advisor's model calls, then a clean one, in a fresh workspace: whether

@@ -1292,7 +1292,7 @@ a facet of its own) and D13's "every agent's advisor in core `ActorAdvisor`".
   and redacting at most a 48k window) is far under that, and its waits are
   model calls. Measured since (2026-10-23, the facet loop gate,
   `bun scripts/worker-heap.ts --loop-turns`: the heap gate's workloads plus a
-  compacted long turn and 40 advised steps of 200 kB results, every isolate
+  compacted long turn and 40 advised steps of 50 kB results, every isolate
   under a 1 ms CPU profiler, armada AMD EPYC hosts): a chat's seed read and
   decoded a page's messages in one turn, 157-305 ms in the 450-step screenshot
   turn's agent, and that turn's figures fold took 80-142 ms in one SQL read,

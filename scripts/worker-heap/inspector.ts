@@ -188,7 +188,8 @@ function longestBusy(profile: v.InferOutput<typeof CpuReplySchema>['result']['pr
 
   for (const [at, sample] of profile.samples.entries()) {
     // The time since the sample before: the profiler takes none while the isolate waits, so a gap past a few intervals
-    // is a wait, and the turn before it has ended (measured 2026-10-23: unbroken, a run read as 82 s busy).
+    // is a wait, and the turn before it has ended (measured 2026-10-23: unbroken, a run read as 82 s busy). A host that
+    // pauses the thread that long mid-turn splits the turn too: a blind spot the gate prints.
     const delta = profile.timeDeltas[at] ?? 0;
 
     if (idle.has(sample) || delta > LOOP_GAP_US) {
@@ -325,12 +326,15 @@ const NOT_READ: Inspector = {
   close: () => {},
 };
 
-/** Whether {@link inspect} reads the heap: until {@link profileEveryIsolate}. */
-let readsHeap = true;
+/** The workerd inspector ports whose isolates the loop gate profiles, from {@link profileEveryIsolate} to its release. */
+const profiled = new Set<number>();
 
-/** From now every {@link inspect} answers {@link NOT_READ}: the loop gate holds each isolate's one session. */
-export function profileEveryIsolate(): void {
-  readsHeap = false;
+/** Until the returned release, every {@link inspect} on `port` answers {@link NOT_READ}: the loop gate holds each of its
+ *  isolates' one session. */
+export function profileEveryIsolate(port: number): () => void {
+  profiled.add(port);
+
+  return () => { profiled.delete(port); };
 }
 
 type Target = v.InferOutput<typeof TargetsSchema>[number];
@@ -361,7 +365,7 @@ export async function inspect(port: number, isolate: string, picks: (id: string)
     throw new Error(`worker-heap: no one inspector target for ${isolate} among ${listed.map((t) => t.id).join(', ')}`);
   }
 
-  if (!readsHeap) return NOT_READ;
+  if (profiled.has(port)) return NOT_READ;
 
   const { send, snapshotNow, close } = await connect(target);
 

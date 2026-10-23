@@ -14,10 +14,10 @@
  *
  * Read in workerd under a CPU profiler sampling every millisecond: a stretch is a run of samples with JavaScript on the
  * stack and no gap between them past {@link LOOP_GAP_US}. Blind: turns back to back with no wait between read as one
- * stretch (conservative); native work outside JavaScript (`(program)`) reads as waiting; the host's speed against the
+ * stretch (conservative); a host pausing the thread 5 ms or more mid-turn reads as a wait and splits the turn; native work outside JavaScript (`(program)`) reads as waiting; the host's speed against the
  * platform's is unmeasured; and work no workload here runs is unread (the workloads: a step's turns, a cold workspace,
  * heads, the 150-step long turn unadvised, advised and compacted against a 64k window, a failing turn, the 450-step
- * screenshot turn with its chat's seeds, twelve subagents' hires, and 40 advised steps of 200 kB results).
+ * screenshot turn with its chat's seeds, twelve subagents' hires, and 40 advised steps of 50 kB results).
  */
 import { profileEveryIsolate, profileLoop, targetIds, type BusyStretch, type LoopProfile } from './inspector';
 
@@ -54,7 +54,8 @@ export function loopVerdict(turns: readonly LoopTurn[]): number {
   const over = turns.filter((turn) => turn.isolate.startsWith('LOADER:') && turn.ms >= LOOP_TURN_BOUND_MS);
 
   for (const turn of over) console.error(`facet-loop: ${turn.workload} held its event loop ${turn.ms.toFixed(0)} ms, at or past ${String(LOOP_TURN_BOUND_MS)} ms`);
-  console.log('facet-loop: blind: turns back to back read as one stretch; native work outside JavaScript reads as waiting; '
+  console.log('facet-loop: blind: turns back to back read as one stretch; a host pausing the thread 5 ms or more mid-turn '
+    + 'splits the turn; native work outside JavaScript reads as waiting; '
     + 'this host\'s speed against the platform\'s is unmeasured; the workspace object\'s own isolate is read, not bounded; '
     + 'work no workload runs is unread.');
 
@@ -67,12 +68,13 @@ export class LoopWatch {
   private readonly skipped = new Set<string>();
   private polling: Promise<void> | null = null;
   private stopping = false;
+  private release: (() => void) | null = null;
 
   /** `includes`: the isolates to profile, by target id (the gate's own driver is not the product's). */
   constructor(private readonly port: number, private readonly includes: (id: string) => boolean) {}
 
   async start(): Promise<void> {
-    profileEveryIsolate();
+    this.release = profileEveryIsolate(this.port);
     await this.attachNew();
     this.polling = this.poll();
   }
@@ -84,6 +86,7 @@ export class LoopWatch {
     const turns: LoopTurn[] = [];
 
     for (const [isolate, profile] of this.watched) turns.push({ isolate, workload: workloadOf(isolate, workspaces), ...await profile.stop() });
+    this.release?.();
 
     return turns.sort((a, b) => b.ms - a.ms);
   }

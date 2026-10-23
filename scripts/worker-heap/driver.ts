@@ -334,8 +334,8 @@ async function scriptedAnswer(inputs: Parameters<typeof scriptedBody>[0]): Promi
 }
 
 /** A tool step's call. A screenshot turn reads one of its seeded screenshots a step, as a desktop turn takes one.
- *  `stepRead`: the first step writes its page and every later one reads it back, a step's result as large as its page, as
- *  a program's or a log's. Otherwise each step writes its page. */
+ *  `stepRead`: the first step writes its page and every later one reads it back, a step's result as large as the file tool
+ *  reads at once (50,000 characters), as a program's or a log's. Otherwise each step writes its page. */
 function stepCall(seq: number, page: string): NonNullable<ScriptedAnswer['toolCall']> {
   if (model.screenshots > 0) return { name: 'file', arguments: { op: 'read', path: `shots/step-${String(seq % model.screenshots)}.png` } };
 
@@ -377,7 +377,10 @@ async function compatAnswer(body: string): Promise<Response> {
 
     while (model.holding || model.released < seq) await scheduler.wait(seq > 0 ? 2 : 20);
     model.parked -= 1;
-    const page = 'word '.repeat(Math.ceil(model.stepBytes / 5)).slice(0, model.stepBytes);
+    // A page read back is lines of 80 characters, so a read returns as much as the file tool reads at once, not one
+    // clipped line; one written alone stays a line, as the heap gate's long turn has always written it.
+    const line = model.stepRead ? `${'word '.repeat(15)}word\n` : 'word ';
+    const page = line.repeat(Math.ceil(model.stepBytes / line.length)).slice(0, model.stepBytes);
 
     const step = stepCall(seq, page);
 
