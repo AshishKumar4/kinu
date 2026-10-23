@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="640" height="1234" viewBox="0 0 640 1234" style="max-width:100%;height:auto;display:block" role="img" aria-labelledby="context-title context-desc">
 <title id="context-title">CURRENT + TARGET: Context, history and editable views</title>
-<desc id="context-desc">Actor history and compaction state are scoped within workspace SQLite. Memory, scaffold source and recall archives live in the workspace file plane. Prompt prose uses typed Markdown sections, the core every workspace shares first; runtime facts ride the dynamic context. The model also receives transformed history and dynamic context. A scaffold path alone does not prove that an actor executes a promoted loop. Dashed boxes retain the proposed editable-view protocol; raw audit and policy stay protected.</desc>
-<!-- Sources: packages/compaction/src/stores.ts; packages/core/src/prompting/volatile-context.ts; packages/cf-backend/src/actor-agent.ts:_transformInferenceResult; packages/core/src/heads/head-inference.ts; user-messages.jsonl:975 / 7e1ad485. Current-source baseline: d6a88d8e736e0ca4aa934cbabf5fa52327e5792b. -->
+<desc id="context-desc">Actor history and compaction state live in each agent's own SQLite. Memory, scaffold source and recall archives live in the workspace file plane. Prompt prose uses typed Markdown sections, the core every workspace shares first; runtime facts ride the dynamic context. The model also receives transformed history and dynamic context. A scaffold path alone does not prove that an actor executes a promoted loop. The /context view's working.jsonl and its revision check are current; loop revisions as a view remain a target, dashed; raw audit and policy stay protected.</desc>
+<!-- Sources: packages/compaction/src/stores.ts; packages/core/src/prompting/volatile-context.ts; packages/core/src/prompting/prepare-step.ts; packages/core/src/vfs/context-plane.ts; packages/core/src/heads/head-inference.ts; user-messages.jsonl:975 / 7e1ad485. Current-source baseline: d6a88d8e736e0ca4aa934cbabf5fa52327e5792b. -->
 <style>text{font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}path,rect{vector-effect:non-scaling-stroke}</style>
 <defs>
 <marker id="context-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -27,7 +27,7 @@
 <tspan x="60" dy="0">Actor history</tspan>
 </text>
 <text x="60" y="258" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
-<tspan x="60" dy="0">Workspace SQLite</tspan>
+<tspan x="60" dy="0">Agent's own SQLite</tspan>
 <tspan x="60" dy="30">Compaction state</tspan>
 </text>
 </g>
@@ -74,15 +74,15 @@
 <tspan x="68" dy="0">Writable VFS working views</tspan>
 </text>
 <text x="68" y="875" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
-<tspan x="68" dy="0">Context, history and loop revisions</tspan>
-<tspan x="68" dy="30">Main and authorized subagent views</tspan>
+<tspan x="68" dy="0">Context and history, main and subagent</tspan>
+<tspan x="68" dy="30">views: current. Loop revisions: target</tspan>
 </text>
 </g>
 <path d="M320 940 V974" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#context-arrow)" />
 <g>
-<rect x="48" y="976" width="544" height="166" rx="10" fill="#E5EDF0" stroke="#8A7B66" stroke-width="1.5" stroke-dasharray="7 5"/>
+<rect x="48" y="976" width="544" height="166" rx="10" fill="#E5EDF0" stroke="#8A7B66" stroke-width="1.5"/>
 <text x="68" y="1011" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
-<tspan x="68" dy="0">Controlled edit protocol</tspan>
+<tspan x="68" dy="0">Controlled edit protocol (current)</tspan>
 </text>
 <text x="68" y="1045" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
 <tspan x="68" dy="0">Check scope and expected revision.</tspan>

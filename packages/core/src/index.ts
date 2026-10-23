@@ -1348,6 +1348,8 @@ export { MarkdownFrontmatterError, parseMarkdownFrontmatter } from './utils/mark
 
 export { compareCodeUnits } from './utils/text';
 
+export { readHtml, type HtmlReading } from './utils/html';
+
 export {
   runSleepTimeCompute, applySleepTimeUpdate, accountProposals,
   SleepTimeUpdateSchema,
@@ -1553,6 +1555,8 @@ export {
   reviewCommand, type ApprovalDecision, type ApprovalResult,
   type FilesOwner, type GatedExecutor,
 } from './safety/command-review';
+
+export { readShellWord } from './safety/shell-reading';
 
 export {
   formatApproval, gatedGrants, formatApprovalGrant, holdsGrant, parseApprovalGrant, gateExec, grantsAreSubset,

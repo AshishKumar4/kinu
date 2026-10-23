@@ -37,7 +37,7 @@ sequenceDiagram
     User->>Agent: Message 1
     Agent->>Turn: reviewTurn(turn, followup)
     Turn->>Turn: Rate it from the reply, a thumb or a pick
-    alt rated 4 or more AND tool calls > 0
+    alt rated 3.5 or more AND tool calls > 0
         Turn->>Turn: extractPattern() → upsert CraftStore tool
     end
 
@@ -50,7 +50,7 @@ sequenceDiagram
     Note over Lifetime: Every 5 closed session windows
     Agent->>Lifetime: onLifetimeEvolution()
     Lifetime->>Lifetime: periodicCraftConsolidation()
-    Lifetime->>Lifetime: Retire low-scoring tools (EMA + time decay)
+    Lifetime->>Lifetime: Retire tools offered 50+ turns, unchosen 30 days
 ```
 
 ## Turn-level evolution
@@ -77,7 +77,7 @@ The decision model is the account's Models setting (`decisionModel` in the profi
 
 Where Clef refused for its owner to fix (no Workers AI, a spent allowance), the port asks the fast tier's chat model instead (`decisionPortOf`, `core/src/providers/decision-model.ts`, over `createStructuredDecider`, `core/src/evolution/structured-decision.ts`): each question takes one category (yes, no or unclear; a criterion's number; a choice's key), and each category stands for a fixed answer of its own, yes 0.9, no 0.1, unclear 0.4. A model answers only the questions its measured agreement with Clef clears; `scripts/decision-agreement.ts` measures it on recorded turns, question by question, and a model or question never measured is not trusted.
 
-A low rating writes no lesson of its own: the dream reads the rated turns and decides what, if anything, to change. A turn rated 4 or more with tool calls may promote a reusable procedure.
+A low rating writes no lesson of its own: the dream reads the rated turns and decides what, if anything, to change. A turn rated 3.5 or more with tool calls may promote a reusable procedure.
 
 ### Struggles teach tool lessons
 

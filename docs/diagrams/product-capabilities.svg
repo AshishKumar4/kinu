@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="640" height="1307" viewBox="0 0 640 1307" style="max-width:100%;height:auto;display:block" role="img" aria-labelledby="capabilities-title capabilities-desc">
 <title id="capabilities-title">CURRENT + TARGET: Tools and codemode capabilities</title>
-<desc id="capabilities-desc">Current native tools and eval codemode reach introduced host capabilities under actor identity, role, mode and provider gates. MCP and executor availability narrow that reach. The existing state capability is actor-scoped codemode_state; raw env.db or db is not introduced. The target database capability is a design proposal scoped to permitted data and operations, not unrestricted internal SQLite access.</desc>
-<!-- Sources: packages/cf-backend/src/codemode-tool.ts; packages/cf-backend/src/codemode-sandbox.ts; packages/core/src/tools/state-codemode.ts; docs/TOOLS.md; user-messages.jsonl:975 / 7e1ad485. Current-source baseline: d6a88d8e736e0ca4aa934cbabf5fa52327e5792b. -->
+<desc id="capabilities-desc">Current native tools and eval codemode reach introduced host capabilities under actor identity, role, mode and provider gates. MCP and executor availability narrow that reach. Scratch state is a private db table; db is implemented as typed operations, and no operation takes SQL text. Excluding protected audit, policy and secrets from it remains the target, not unrestricted internal SQLite access.</desc>
+<!-- Sources: packages/cf-backend/src/codemode-tool.ts; packages/cf-backend/src/codemode-sandbox.ts; packages/core/src/tools/db-codemode.ts; packages/core/src/operations/retired.ts; docs/TOOLS.md; user-messages.jsonl:975 / 7e1ad485. Current-source baseline: d6a88d8e736e0ca4aa934cbabf5fa52327e5792b. -->
 <style>text{font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}path,rect{vector-effect:non-scaling-stroke}</style>
 <defs>
 <marker id="capabilities-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -46,8 +46,8 @@
 <tspan x="68" dy="0">Introduced capabilities</tspan>
 </text>
 <text x="68" y="581" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
-<tspan x="68" dy="0">workspace / tools / agents / memory</tspan>
-<tspan x="68" dy="30">tasks / report / release / web</tspan>
+<tspan x="68" dy="0">workspace / tools / agents / agent / memory</tspan>
+<tspan x="68" dy="30">tasks / report / db / file / mail / web</tspan>
 <tspan x="68" dy="30">MCP and executor providers, if admitted</tspan>
 </text>
 </g>
@@ -65,11 +65,11 @@
 <g>
 <rect x="48" y="894" width="544" height="138" rx="10" fill="#E5EDF0" stroke="#8A7B66" stroke-width="1.5" />
 <text x="68" y="929" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
-<tspan x="68" dy="0">Current persistent scratch state</tspan>
+<tspan x="68" dy="0">Scratch state: db private tables</tspan>
 </text>
 <text x="68" y="963" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
-<tspan x="68" dy="0">state: actor-scoped codemode_state</tspan>
-<tspan x="68" dy="30">No raw env.db or db binding</tspan>
+<tspan x="68" dy="0">db: tables of scope 'private'</tspan>
+<tspan x="68" dy="30">Typed operations; no raw SQL</tspan>
 </text>
 </g>
 <text x="48" y="1070" font-size="20" font-weight="700" fill="#7A5514" text-anchor="start">
@@ -81,7 +81,7 @@
 <tspan x="68" dy="0">Scoped database capability</tspan>
 </text>
 <text x="68" y="1153" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
-<tspan x="68" dy="0">Explicit data and operation boundaries</tspan>
+<tspan x="68" dy="0">Typed db operations: current</tspan>
 <tspan x="68" dy="30">Protected audit, policy and secrets excluded</tspan>
 </text>
 </g>

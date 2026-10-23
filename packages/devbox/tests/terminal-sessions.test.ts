@@ -7,7 +7,8 @@ import { Effect } from 'effect';
 import type { DiskChain, DiskChainPorts } from '../src/disk-chain';
 import type { ExecResult } from '../src/contracts';
 
-import { FIRST_SESSION, jobSessionId, jobSessionName, mergeSessions, newSessionId, newSessionName, parseSessionsRead } from '../src/sessions';
+import { FIRST_SESSION, READS_TERMINAL, jobSessionId, jobSessionName, mergeSessions, newSessionId, newSessionName, parseSessionsRead } from '../src/sessions';
+import { runToExit } from '../../test-utils/src/spawn';
 import { harness } from './support/devbox-harness';
 
 class SessionBox extends TestDevbox<unknown> {
@@ -33,6 +34,28 @@ const READ = [
   row('B', '/workspace/storefront', 'main'),
   '',
 ].join('\n');
+
+describe("the box's test for a program waiting on its terminal", () => {
+  // read(2) has another number on another machine (arm64's is 63): a box on one reads its own, never x86's 0.
+  test('finds a program in read(0) on its pts by the read(2) of the machine it runs on, and no other', async () => {
+    if (process.platform !== 'linux') return;
+    const host = (await runToExit(['uname', '-m'])).stdout.trim();
+    const other = host === 'aarch64' ? 'x86_64' : 'aarch64';
+
+    // A cat on a pty of its own, waiting for a line; asked from its ancestor, as the box's read asks a pane's.
+    const probe = await runToExit(['bash', '-c', `${READS_TERMINAL}
+dir=$(mktemp -d)
+sleep 30 | script -qefc "echo \\$\\$ > $dir/pid; exec cat" /dev/null >/dev/null &
+until [ -s "$dir/pid" ] && pid=$(cat "$dir/pid") && [ "$(cat "/proc/$pid/comm" 2>/dev/null)" = cat ] \\
+  && [ "$(cut -d' ' -f3 "/proc/$pid/stat" 2>/dev/null)" = S ]; do :; done
+for machine in ${host} ${other} mips; do
+  (uname() { echo "$machine"; }; if reads_terminal "$pid"; then echo "$machine waits"; else echo "$machine runs"; fi)
+done
+kill $(jobs -p) 2>/dev/null; rm -rf "$dir"`]);
+
+    expect(probe.stdout.trim().split('\n')).toEqual([`${host} waits`, `${other} runs`, 'mips runs']);
+  });
+});
 
 describe('a read of the running sessions', () => {
   const read = parseSessionsRead(READ);

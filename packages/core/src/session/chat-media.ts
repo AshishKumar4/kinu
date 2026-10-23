@@ -5,6 +5,7 @@
  */
 import * as v from 'valibot';
 import { isJsonObject, type JsonObject, type JsonValue } from '../utils/json';
+import { imageDataUrl, readDataUrl } from '../utils/data-url';
 
 /** A stored image: its media type and its bytes, base64. */
 export interface StoredImage {
@@ -24,8 +25,6 @@ export type MediaUrl = (ref: MediaRef) => string;
 
 /** For a reader that serves no image: each named by where it is kept, which nothing fetches. */
 export const keptMediaName: MediaUrl = (ref) => `kinu-media:${ref.messageId}/${String(ref.partNo)}/${String(ref.index)}`;
-
-const IMAGE_DATA_URL = /^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/]+=*)$/u;
 
 const InlineImageSchema = v.object({ mediaType: v.string(), data: v.string() });
 
@@ -47,9 +46,9 @@ export function walkImages(value: JsonValue, visit: Visit): JsonValue {
 
   const walk = (node: JsonValue): JsonValue => {
     if (typeof node === 'string') {
-      const match = IMAGE_DATA_URL.exec(node);
+      const image = imageDataUrl(node);
 
-      return match === null ? node : take({ mediaType: match[1] ?? 'image/png', data: match[2] ?? '' });
+      return image === null ? node : take(image);
     }
 
     if (Array.isArray(node)) return node.map(walk);
@@ -96,9 +95,9 @@ export function attachmentImage(part: JsonObject): StoredImage | null {
   if (binary.success) return { mediaType, data: binary.output.$binary };
 
   if (!v.is(v.string(), carrier)) return null;
-  const match = /^data:([^;,]+);base64,(.*)$/u.exec(carrier);
+  const url = readDataUrl(carrier);
 
-  if (match !== null) return { mediaType: match[1] ?? mediaType, data: match[2] ?? '' };
+  if (url !== null && url.base64) return { mediaType: url.mediaType, data: url.data };
 
   return /^(https?:|\/)/u.test(carrier) ? null : { mediaType, data: carrier };
 }

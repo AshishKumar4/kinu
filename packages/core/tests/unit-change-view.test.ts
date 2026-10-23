@@ -121,6 +121,25 @@ describe('change view', () => {
     expect(rowsIn(blocks)[1]?.text).toBe('@@ -40,6 +40,8 @@ function f() {');
   });
 
+  test("a removed comment that begins with dashes is a removed line, and git's quoted path is the file's name", () => {
+    const [file] = parseGitDiff([
+      'diff --git "a/migr\\303\\251.sql" "b/migr\\303\\251.sql"',
+      '--- "a/migr\\303\\251.sql"',
+      '+++ "b/migr\\303\\251.sql"',
+      '@@ -1,3 +1,3 @@',
+      '--- migrate users',
+      '+++ seed users',
+      ' SELECT 1;',
+      '-drop table t;',
+      '+create table t (id int);',
+    ].join('\n'));
+
+    expect(file).toMatchObject({ path: 'migré.sql', added: 2, removed: 2 });
+    expect(file?.lines.filter((line) => line.kind !== 'hunk').map((line) => `${line.kind} ${line.text}`)).toEqual([
+      'del -- migrate users', 'add ++ seed users', 'ctx SELECT 1;', 'del drop table t;', 'add create table t (id int);',
+    ]);
+  });
+
   test('a long diff shows its first rows and counts the rest; in a stack a deleted file starts folded', () => {
     const before = numbered(400);
     const after = before.map((line, index) => (index % 2 === 0 ? `${line} changed` : line));

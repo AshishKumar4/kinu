@@ -25,25 +25,60 @@ export interface PastedSecret {
   readonly position: SecretPosition;
 }
 
-const DOTENV_LINE = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/;
+/** A line's assignment: `export` dropped, the name, then the value's text to the end of the text. */
+const DOTENV_NAME = /^[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*/u;
+
+/** A quoted value as dotenv reads it: from its opening quote to the next one no backslash escapes, across lines; in
+ *  double quotes `\n` and `\r` are a line break. Null where it never closes. */
+function quotedValue(text: string, quote: string): { value: string; length: number } | null {
+  for (let at = 1; at < text.length; at++) {
+    if (text[at] === '\\') at += 1;
+    else if (text[at] === quote) {
+      const inner = text.slice(1, at);
+
+      return { value: quote === '"' ? inner.replaceAll('\\n', '\n').replaceAll('\\r', '\r') : inner, length: at + 1 };
+    }
+  }
+
+  return null;
+}
 
 /**
  * `NAME=value` lines as dotenv reads them: `export` dropped, a `#` line skipped. A value opening with a quote runs to
- * its closing quote, `#` included, and what follows it is a comment; an unquoted one ends at ` #`.
+ * its closing quote (one a backslash escapes does not close it), `#` and line breaks included, and what follows it is a
+ * comment; an unquoted one ends at ` #`.
  */
 export function parseDotenv(text: string): DotenvEntry[] {
   const entries: DotenvEntry[] = [];
+  let rest = text;
 
-  for (const line of text.split(/\r?\n/)) {
-    const match = DOTENV_LINE.exec(line);
+  while (rest !== '') {
+    const lineEnd = rest.search(/\r?\n/u);
+    const line = lineEnd === -1 ? rest : rest.slice(0, lineEnd);
+    const assignment = line.trimStart().startsWith('#') ? null : DOTENV_NAME.exec(line);
+    let consumed = lineEnd === -1 ? rest.length : lineEnd + (rest[lineEnd] === '\r' ? 2 : 1);
 
-    if (match === null || line.trimStart().startsWith('#')) continue;
-    const [, name = '', raw = ''] = match;
-    const quote = raw.startsWith('"') || raw.startsWith("'") ? raw.charAt(0) : null;
-    const closing = quote === null ? -1 : raw.indexOf(quote, 1);
-    const value = quote === null ? raw.replace(/\s+#.*$/, '') : raw.slice(1, closing === -1 ? undefined : closing);
+    if (assignment !== null) {
+      const name = assignment[1] ?? '';
+      const raw = rest.slice(assignment[0].length);
+      const quote = /^["'`]/u.exec(raw)?.[0];
+      const quoted = quote === undefined ? null : quotedValue(raw, quote);
 
-    if (value !== '') entries.push({ name, value });
+      if (quoted !== null) {
+        // The rest of the closing line is a comment.
+        const after = raw.slice(quoted.length).search(/\r?\n/u);
+
+        consumed = after === -1 ? rest.length : assignment[0].length + quoted.length + after + (raw[quoted.length + after] === '\r' ? 2 : 1);
+
+        if (quoted.value !== '') entries.push({ name, value: quoted.value });
+      } else {
+        const value = line.slice(assignment[0].length).replace(/\s+#.*$/u, '').trim();
+
+        if (value !== '') entries.push({ name, value: quote === undefined ? value : value.slice(1) });
+      }
+    }
+
+    rest = rest.slice(consumed);
   }
 
   return entries;

@@ -74,7 +74,7 @@ The `slate` field is strict. Only `runtime`, `title` and `port` pass
 validation. It names no capabilities: every slate calls the same surface.
 `runtime` defaults to `worker`, which requires `main`. `node` requires a port
 from 1 through 65535 and `scripts.dev` or `scripts.start`. Node projects run on
-the sandbox executor; the resident preview path refuses them. A Worker declares
+the computer executor; the resident preview path refuses them. A Worker declares
 a port or lets the host allocate one. `slate.title`, or the directory id
 without one, is the one name a person sees: the work surface's tab, the card,
 shares, and the port a slate's application holds. An answer's page is called
