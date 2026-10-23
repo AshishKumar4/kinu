@@ -1000,7 +1000,13 @@ export async function openRowMenu(page: Page, row: string): Promise<void> {
  * portal and not inside the row (62d972325 moved every row menu onto ui/Menu, 2026-10-21).
  */
 export async function pressRowMenu(page: Page, row: string, item: string): Promise<void> {
-  await page.click(`${row} ${ROW_MENU}`);
+  await pressMenu(page, `${row} ${ROW_MENU}`, item);
+}
+
+/** Opens the menu `trigger` holds and presses its `item`, once the menu has drawn it: its popup mounts a render after the
+ *  press, so an item pressed at once is one not yet there (staging's drive row, 2026-10-23: "No element found"). */
+export async function pressMenu(page: Page, trigger: string, item: string): Promise<void> {
+  await page.click(trigger);
   await page.waitForSelector(`${OPEN_MENU} ${item}`);
   await page.click(`${OPEN_MENU} ${item}`);
 }
