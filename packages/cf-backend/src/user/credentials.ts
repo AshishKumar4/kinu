@@ -566,7 +566,7 @@ export class UserCredentials {
       selectedId: accountIdFromCloudflareCredential(cred),
       accounts: cloudflareAccountsFromCredential(cred),
       webSearch: grantsWebSearch(cred),
-      signInExpired: !isCloudflareCredentialUsable(cred),
+      signInExpired: isCloudflareCredentialExpiring(cred) && !renewableLogin(cred),
     };
   }
 

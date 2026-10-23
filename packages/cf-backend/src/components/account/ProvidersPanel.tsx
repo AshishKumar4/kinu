@@ -302,12 +302,12 @@ function CloudflareGatewaySection({ status, onChanged }: {
     return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () { yield* Effect.promise(async () => selectCloudflareGateway(id || null)); onChanged(); }), showing(setError)), Effect.sync(() => { setSaving(false); }));
   });
 
+  // Signing in again is the account read's to offer (`signInExpired`); a listing that failed is retried.
   if (status.error) {
     return (
-      <CloudflareAIConnectNotice
-        onConnected={onChanged}
-        message={`Could not list your AI Gateways: ${status.error}`}
-      />
+      <Notice tone="warning" action={<Button size="sm" className="shrink-0" onClick={onChanged}>Try again</Button>}>
+        <p>Could not list your AI Gateways: {status.error}</p>
+      </Notice>
     );
   }
 

@@ -289,6 +289,22 @@ describe('a Cloudflare login past its expiry', () => {
     }
   });
 
+  test('a renewable login that recorded no account is not asked to sign in again', async () => {
+    const restore = stubGatewayNetwork();
+    const harness = createTestUserDO();
+
+    try {
+      const owner = await testOwner();
+      // A sign-in whose account lookup failed keeps its tokens with no account (`cloudflareTokenToCredential`).
+      await harness.userDO.setCredential(owner, CLOUDFLARE_OAUTH_CRED_KEY, { kind: 'oauth', accessToken: 'cf-access', refreshToken: 'cf-refresh', expiresAt: Date.now() + 3_600_000 });
+
+      expect(await harness.userDO.listCloudflareAccounts(owner)).toMatchObject({ connected: true, selectedId: null, signInExpired: false });
+    } finally {
+      harness.close();
+      restore();
+    }
+  });
+
   test('whose refresh failed for want of a client keeps its refresh token and is not asked to sign in again', async () => {
     const restore = stubGatewayNetwork();
     const harness = createTestUserDO();
