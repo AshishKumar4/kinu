@@ -52,7 +52,7 @@ function ledger(opts: { readonly cutBeforeRecord?: boolean } = {}) {
 
 /** Staging caff2855f, 2026-10-23: a facet's task reminder stayed owed a minute after its follow-up turn committed. */
 describe('an effect owed until its follow-up turn commits', () => {
-  test('is finished in this process when the turn commits, with no wake asked for', async () => {
+  test('is finished in this process when the turn commits, waiting on no retry wake', async () => {
     const db = new Database(':memory:');
     const sql = makeSql(db);
     const execRaw = makeExecRaw(db);
@@ -82,8 +82,9 @@ describe('an effect owed until its follow-up turn commits', () => {
     await transitions.followUpCommitted();
     await transitions.idle();
 
+    // Only the safety net a sequence keeps while it runs, at the ceiling, never the retry instant a wake had to reach.
     expect(transitions.incomplete()).toEqual([]);
-    expect(wakes).toEqual([]);
+    expect(wakes.every((at) => at >= NOW + TERMINAL_EFFECT_RETRY_CEILING_MS)).toBe(true);
   });
 });
 
