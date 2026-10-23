@@ -9,7 +9,7 @@ import {
   type GrantedSecrets, type SecretInput, type ResolvedCaller, type SecretDestination, type SecretSummary, type UserCaller,
 } from '@kinu.run/core';
 import { Effect } from 'effect';
-import { attempt, diagnostics, KinuError, settle } from '@kinu.run/core/obs';
+import { attempt, diagnostics, KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
 import type { UserObjectHost } from './user-host';
 
 /** The account's GitHub connection, as the git credential its workspaces hold. */
@@ -24,39 +24,33 @@ export interface GitHubGitSource {
 const GITHUB_GIT_PLACEHOLDER_KEY = 'secrets:github-git-placeholder';
 
 /** The connection's own variable, which no owner secret may take: the computer's git helper reads it
- *  (`gitCredentialEnvironment`), and `GIT_TOKEN` carries it for Nimbus's git where the owner set none. */
+ *  (`connectionEnvironment`), and `GIT_TOKEN` carries it for Nimbus's git where the owner set none. */
 const GITHUB_GIT_SECRET = 'KINU_GITHUB_TOKEN';
 
 export class UserSecrets {
   constructor(private readonly host: UserObjectHost, private readonly github: GitHubGitSource | null = null) {}
 
-  /** The placeholder, read or minted once an activation: two first reads at once share one mint. */
-  private placeholder: Promise<string> | null = null;
+  /**
+   * The GitHub connection's git credential as a binding: github.com only, in the Authorization header (git's Basic). Its
+   * placeholder is read, or minted and kept, in one synchronous step, so two first reads cannot mint two.
+   */
+  private githubBinding(): EgressSecretBinding {
+    const kept = this.host.ctx.storage.kv.get(GITHUB_GIT_PLACEHOLDER_KEY);
+    const placeholder = typeof kept === 'string' ? kept : mintEgressPlaceholder();
 
-  /** The GitHub connection's git credential as a binding: github.com only, in the Authorization header (git's Basic). */
-  private async githubBinding(): Promise<EgressSecretBinding> {
-    this.placeholder ??= (async () => {
-      const kept = await this.host.ctx.storage.get(GITHUB_GIT_PLACEHOLDER_KEY);
+    if (placeholder !== kept) this.host.ctx.storage.kv.put(GITHUB_GIT_PLACEHOLDER_KEY, placeholder);
 
-      if (typeof kept === 'string') return kept;
-      const minted = mintEgressPlaceholder();
-
-      await this.host.ctx.storage.put(GITHUB_GIT_PLACEHOLDER_KEY, minted);
-
-      return minted;
-    })();
-
-    return { name: GITHUB_GIT_SECRET, hosts: ['github.com'], position: { kind: 'authorization' }, placeholder: await this.placeholder };
+    return { name: GITHUB_GIT_SECRET, hosts: ['github.com'], position: { kind: 'authorization' }, placeholder };
   }
 
   /** The connection-held secrets a request may carry: the GitHub connection's, which is refused clearly once it is gone. */
-  private async connectionSecrets(): Promise<ConnectionSecret[]> {
+  private connectionSecrets(): ConnectionSecret[] {
     const { github } = this;
 
     if (github === null) return [];
 
     return [{
-      binding: await this.githubBinding(),
+      binding: this.githubBinding(),
       open: async () => github.token(),
       gone: github.configured()
         ? 'GitHub is connected but not signed in, so git cannot reach your GitHub repositories. Finish its sign-in in '
@@ -66,9 +60,21 @@ export class UserSecrets {
     }];
   }
 
-  /** The GitHub connection's binding while it holds a token. */
-  private async heldConnections(): Promise<EgressSecretBinding[]> {
-    return this.github !== null && await this.github.token() !== null ? [await this.githubBinding()] : [];
+  /** The GitHub connection's binding while it holds a token. A token that cannot be read now offers nothing: a grant read
+   *  never fails for the connection's health. */
+  private heldConnections(): Effect.Effect<EgressSecretBinding[]> {
+    const { github } = this;
+
+    if (github === null) return Effect.succeed([]);
+
+    return Effect.catch(
+      Effect.tryPromise({ try: async () => (await github.token() === null ? [] : [this.githubBinding()]), catch: (cause) => cause }),
+      (cause) => Effect.sync(() => {
+        diagnostics.event('secrets.github_credential_unread', { cause: renderThrownChain({ cause }) });
+
+        return [];
+      }),
+    );
   }
 
   /** Every workspace of the account drops its secrets: a connection that bears one came or went. */
@@ -137,7 +143,7 @@ export class UserSecrets {
   grantedSecrets(caller: UserCaller): Promise<GrantedSecrets> {
     return settle(Effect.gen({ self: this }, function* () {
       const workspace = yield* this.callingWorkspace(caller);
-      const connections = yield* Effect.promise(() => this.heldConnections());
+      const connections = yield* this.heldConnections();
 
       return grantedSecrets(this.host.ctx.storage.sql, workspace, connections);
     }));
@@ -171,7 +177,7 @@ export class UserSecrets {
     return settle(Effect.gen({ self: this }, function* () {
       yield* this.require(caller, 'secrets.inject');
       const deps = yield* Effect.promise(() => this.deps());
-      const connections = yield* Effect.promise(() => this.connectionSecrets());
+      const connections = this.connectionSecrets();
 
       return yield* Effect.promise(() => resolveEgressInjection(deps, facts, workspace, connections));
     }));

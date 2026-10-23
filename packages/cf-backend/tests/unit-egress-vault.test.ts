@@ -337,6 +337,16 @@ describe("the GitHub connection is every workspace's git credential, never its v
     harness.close();
   });
 
+  test('a connection whose token cannot be read offers no credential, and the grant read still answers', async () => {
+    const harness = await connected();
+
+    // Sealed for another row: it no longer opens, as a corrupt or foreign value would not.
+    sqlExec(harness.db).exec(`UPDATE user_mcp_servers SET headers = 'not-a-sealed-value' WHERE id = ?`, harness.id);
+
+    expect((await harness.userDO.grantedSecrets(harness.shop)).granted.map((secret) => secret.name)).not.toContain('KINU_GITHUB_TOKEN');
+    harness.close();
+  });
+
   test('no owner secret may take the connection\'s name, or a name that points git elsewhere', async () => {
     const harness = await account();
 
@@ -367,11 +377,14 @@ describe("a computer's own git is pointed at the GitHub connection for github.co
     const helper = {
       GIT_CONFIG_COUNT: '1',
       GIT_CONFIG_KEY_0: 'credential.https://github.com.helper',
-      GIT_CONFIG_VALUE_0: '!f() { test "$1" = get && echo username=x-access-token && echo "password=$KINU_GITHUB_TOKEN"; }; f',
+      GIT_CONFIG_VALUE_0: '!f() { test "$1" = get || return 0; if [ -z "$KINU_GITHUB_TOKEN" ]; then '
+        + 'echo "Kinu: GitHub is not connected to this account, or not signed in. Connect it in Settings > Connections, then run git again." >&2; '
+        + 'return 1; fi; echo username=x-access-token; echo "password=$KINU_GITHUB_TOKEN"; }; f',
     } as const;
 
     expect(connectionEnvironment([connection])).toEqual({ ...helper, GIT_TOKEN: connection.placeholder });
     expect(connectionEnvironment([connection, { ...connection, name: 'GIT_TOKEN', placeholder: `${EGRESS_PLACEHOLDER_PREFIX}y`, hosts: ['gitlab.com'] }])).toEqual(helper);
-    expect(connectionEnvironment([])).toEqual({});
+    // No connection: the helper still answers a private repository's ask, saying to connect GitHub; Nimbus's git gets nothing.
+    expect(connectionEnvironment([])).toEqual(helper);
   });
 });
