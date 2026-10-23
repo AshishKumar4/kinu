@@ -1,6 +1,7 @@
 // One turn assembly for every actor kind on every backend; a backend supplies only the sources.
 
 import type { ServedStores } from '../tools/actor-stores';
+import { advisorReadTools, type AdvisorReadTools } from '../advisor/advisor-ports';
 import type { ModelAttemptIdentity } from '../providers/attempt-identity';
 import type { LanguageModel, ToolSet } from 'ai';
 import { Effect } from 'effect';
@@ -123,6 +124,9 @@ export interface TurnAssemblySources {
 export interface TurnTools {
   readonly tools: ToolSet;
   readonly stores: ServedStores | null;
+  /** The advisor's read-only tools, where the turn's stores are not this isolate's (an agent's facet): they read where the
+   *  stores are. Absent, they are served here over `stores`. */
+  readonly advisorReads?: AdvisorReadTools;
 }
 
 /** A one-shot run brings its tools and brief; the actor brings the rest. */
@@ -325,6 +329,7 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
       artifactVersions: artifacts.versions,
       // The advisor's calls ride the turn's own model sources and spend sink, on its own route.
       advisor: {
+        reads: offered.advisorReads ?? advisorReadTools(offered.stores === null ? {} : { files: offered.stores.deps.files, memory: offered.stores.deps.memory }),
         bind: (serving) => bindRoute(models, serving),
         ...(routed !== undefined && { attemptOf: (served: string) => routed.attemptFor(served) }),
         spend: { report: sources.scaffoldSpend.report, ...(sources.operations !== undefined && { operations: sources.operations }) },

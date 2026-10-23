@@ -546,9 +546,22 @@ async function advisedLongTurn(advised: boolean, run: {
   let peak = { workspace: 0, main: 0 };
   let first = { workspace: 0, main: 0 };
   let last = first;
+  // What each isolate allocated over each third of the turn's steps: a per-step cost flat in the turn's length allocates
+  // as much in its last third as in its middle one.
+  const thirds: Isolates<number>[] = [];
+  const third = Math.floor(LONG_TURN.steps / 3);
+
+  const allocatedSoFar = async (): Promise<Isolates<number>> => {
+    const read = await inEach(isolates, async (session) => (await session.allocations()).total);
+    await inEach(isolates, async (session) => { await session.sampleAllocations(); });
+
+    return read;
+  };
 
   for (let step = 1; step <= LONG_TURN.steps; step++) {
     while (v.parse(v.object({ arrived: v.number() }), JSON.parse(await ask('/model'))).arrived < step) await Bun.sleep(2);
+
+    if (step === third + 1 || step === 2 * third + 1) thirds.push(await allocatedSoFar());
     const used = await inEach(isolates, async (session) => await session.usedHeap());
     peak = { workspace: Math.max(peak.workspace, used.workspace), main: Math.max(peak.main, used.main) };
 
@@ -582,12 +595,14 @@ async function advisedLongTurn(advised: boolean, run: {
     await ask(`/quiesce?workspace=${name}`);
   }
 
-  const allocated = await inEach(isolates, async (session) => await session.allocations());
+  thirds.push(await inEach(isolates, async (session) => (await session.allocations()).total));
+  const allocated = thirds.reduce((sum, part) => ({ workspace: sum.workspace + part.workspace, main: sum.main + part.main }), { workspace: 0, main: 0 });
   const reviews = await advisorCalls() - callsBefore;
 
+  // The last third runs on past the last step, through the turn's end and its last review.
   console.log(`${GATE}: ${name} ${String(LONG_TURN.steps)}-step turn: ${String(reviews)} advisor calls; turn ${String(Math.round(turnMs))} ms; peak `
     + `${inEachIsolate(peak)} used; grew ${inEachIsolate(beyond(last, first))} live first to last step; allocated `
-    + `${inEachIsolate({ workspace: allocated.workspace.total, main: allocated.main.total })}`);
+    + `${inEachIsolate(allocated)}, by thirds of its steps ${thirds.map((part) => inEachIsolate(part)).join(', ')}`);
   await ask('/model?answerBytes=0&toolSteps=0');
 }
 

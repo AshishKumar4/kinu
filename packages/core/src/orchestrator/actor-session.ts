@@ -40,7 +40,7 @@ import type { SendOutcome } from '../types/signals';
 import { USER_MESSAGE_SIGNAL_KIND } from '../types/signals';
 
 import { SessionAdvisor, type AdvisorContext } from '../advisor/session-advisor';
-import { advisorReadTools, routedAdvisorModel, type AdvisorLane } from '../advisor/advisor-ports';
+import { routedAdvisorModel, type AdvisorLane } from '../advisor/advisor-ports';
 import { advisorWorkspaceGuidance } from '../prompting/agents-md';
 import { modelWindow } from '../context-window';
 import { resolveModelRoute } from '../profiles/model-route';
@@ -839,6 +839,9 @@ export class ActorSession {
         this.tallyEvent(tally, event, active.abort.signal, { native: event.source === 'native', parts });
         await emit(event);
       }
+
+      // The turn answered: it waits for its advisor's review of its last step, while its model lane is still its own.
+      await this.advisor.finish();
     } catch (cause) {
       if (!tally.completed) this.messages.push(...this.orchestrator.inbox.recordedMessages());
       tally.failure = cause instanceof Error ? cause : new Error(renderThrownChain({ cause }), { cause });
@@ -849,8 +852,8 @@ export class ActorSession {
     } finally {
       active.phase = 'settling';
       this.liveStream = null;
-      // A failed turn emits no `onTurnEnd`: its advisor learns of its end here, so a late note does not open a turn.
-      this.advisor.endTurn();
+      // A failed or stopped turn ends for its advisor here, so a late note opens no turn; a stopped one's says nothing.
+      this.advisor.endTurn(active.abort.signal.aborted);
       // A call cut with its turn reports no end.
       this.executing.clear();
       await this.settleOutput(active, durableOutput);
@@ -952,13 +955,23 @@ export class ActorSession {
     const lane = this.advisor.reviewsTurns ? input.advisor : undefined;
 
     if (lane !== undefined) {
-      extensions.register(this.advisor.extension({
+      this.advisor.beginTurn({
         turnId: claim.turnId,
         model: routedAdvisorModel(resolveModelRoute('advisor', profile), lane),
-        tools: advisorReadTools({ ...(input.stores !== null && { files: input.stores.deps.files, memory: input.stores.deps.memory }) }),
+        tools: lane.reads,
         reachable: Object.keys(tools),
-      }));
+      }, this.messages.at(-1));
     }
+
+    // Every step of the turn's inference reaches its advisor through one callback: the default loop's, and each model
+    // call a scaffold makes itself (`host.llmStream`), which runs a loop of its own that emits no turn hook.
+    const advised = (onStep: ChatOptions['onStep']): ChatOptions['onStep'] => (lane === undefined ? onStep : async (step, own) => {
+      await onStep?.(step, own);
+      this.advisor.step(own);
+    });
+
+    const onStep = advised(input.chat.onStep);
+    const scaffoldOnStep = advised(input.scaffoldStreamOptions?.onStep);
 
     // Activation names the input's entry after its message; an edit keeps the entry.
     const turnInput = this.canonical.admittedInput(claim.turnId);
@@ -970,8 +983,8 @@ export class ActorSession {
       runtime: this.runtime, mode: this.mode, task: input.task, loopVersion: input.loopVersion,
       program, scaffoldSpend: input.scaffoldSpend, stores: input.stores,
       assertActive: input.assertActive,
-      scaffoldStreamOptions: input.scaffoldStreamOptions,
-      chat: { ...input.chat, tools, history: this.messages, signal: active.abort.signal, extensions,
+      scaffoldStreamOptions: { ...input.scaffoldStreamOptions, ...(scaffoldOnStep !== undefined && { onStep: scaffoldOnStep }) },
+      chat: { ...input.chat, tools, history: this.messages, signal: active.abort.signal, extensions, ...(onStep !== undefined && { onStep }),
         // An answered question is its call's result; any other unpaired call is an interrupted one.
         lostToolCall: (call) => {
           const answered = call.toolName === ASK_OWNER_TOOL ? this.questions.outcome({ toolCallId: call.toolCallId, input: projectJsonValue({ value: call.input }) }) : null;

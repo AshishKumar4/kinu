@@ -1769,7 +1769,7 @@ export { AgentOrchestrator, drainPendingEvents, type AgentOrchestratorDeps } fro
 
 export { SessionAdvisor, type AdvisorContext } from './advisor/session-advisor';
 
-export { type AdvisorLane } from './advisor/advisor-ports';
+export { advisorReadTool, advisorReadTools, advisorReadsOver, type AdvisorLane, type AdvisorReadTools } from './advisor/advisor-ports';
 
 export {
   EvolutionLanes, evolutionPassOpen, recordedTurn, type EvolutionLanesDeps, type TurnContinuity,
@@ -2720,6 +2720,7 @@ export {
 export type {
   AgentTurnActivity, AgentRecovery, AgentAnswer, AgentAnswerTexts, AgentStanding, AgentStandingReport, AgentReport, AgentOwes, AdmittedDelivery, AgentSteps, RunEndOutcome, RunEndReport, AgentSnapshot, AgentTurnTask, AgentToolAnswer,
   AgentToolCall, AgentToolDescriptor, AgentHeadDelta, AgentTrace, AgentTurnEnd, PreparedAgentTurn, StoredRow, TurnRequestAt,
+  AgentAdvisorRead,
 } from './subagents/agent-isolate';
 
 export { refusedRun, writesSnapshotRows } from './subagents/agent-isolate';

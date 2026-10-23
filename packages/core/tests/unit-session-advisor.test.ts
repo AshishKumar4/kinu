@@ -3,9 +3,12 @@
 import { describe, expect, test } from 'bun:test';
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { tool, jsonSchema, type ModelMessage } from 'ai';
-import { createMemoryVfs, createTestSql } from '@kinu.run/test-utils';
+import { createMemoryVfs, createTestRuntime, createTestSql, present, toolExecute } from '@kinu.run/test-utils';
 import { createTestActor } from './helpers';
 import { SessionAdvisor, type AdvisedTurn, type AdvisorModel, type AdvisorReply } from '../src/advisor/session-advisor';
+import { advisorReadTools } from '../src/advisor/advisor-ports';
+import { TurnFileLedger } from '../src/vfs/file-ledger';
+import { TurnContextBudget } from '../src/context-budget';
 import {
   ADVISOR_HEADER, ADVISOR_NOTE_MAX_CHARS, ADVISOR_SEVERITIES, ADVISOR_SEVERITY_LABEL, ADVISOR_SEVERITY_METADATA_KEY,
   ADVISOR_SIGNAL_KIND, keptAdvisorNote, normalizeNote, type AdvisorNote,
@@ -116,18 +119,17 @@ const turnOf = (model: AdvisorModel, tools: AdvisedTurn['tools'] = {}, turnId: s
 /** A turn of `steps`, each outlasting the review it starts (a model call takes longer than a scripted review), unless
  *  `overlapping`: then the steps end at once and the turn ends with its reviews still to run. */
 async function runTurn(advisor: SessionAdvisor, turn: AdvisedTurn, steps: readonly ModelMessage[][], overlapping = false): Promise<void> {
-  const hooks = advisor.extension(turn);
   const stepTakes = async () => { if (!overlapping) await advisor.settled(1000); };
 
-  await hooks.onTurnStart?.({ system: '', history: [{ role: 'user', content: 'Fix the ledger rounding.' }] });
+  advisor.beginTurn(turn, { role: 'user', content: 'Fix the ledger rounding.' });
   await stepTakes();
 
-  for (const [at, produced] of steps.entries()) {
-    await hooks.onStepEnd?.({ stepNumber: at, produced });
+  for (const produced of steps) {
+    advisor.step(produced);
     await stepTakes();
   }
 
-  await hooks.onTurnEnd?.({ text: '', responseMessages: [] });
+  await advisor.finish();
 }
 
 /** The ids of the advisor's own tool calls with no result after them: a provider refuses a request that holds one. */
@@ -167,13 +169,12 @@ describe('the in-session advisor', () => {
     const { advisor } = harness();
     const gate = Promise.withResolvers<AdvisorReply>();
     const { model, asked, calls } = scripted([() => gate.promise]);
-    const hooks = advisor.extension(turnOf(model));
-    await hooks.onTurnStart?.({ system: '', history: [{ role: 'user', content: 'go' }] });
-    await hooks.onStepEnd?.({ stepNumber: 0, produced: step('one') });
-    await hooks.onStepEnd?.({ stepNumber: 1, produced: step('two') });
-    await hooks.onStepEnd?.({ stepNumber: 2, produced: step('three') });
+    advisor.beginTurn(turnOf(model), { role: 'user', content: 'go' });
+    advisor.step(step('one'));
+    advisor.step(step('two'));
+    advisor.step(step('three'));
     gate.resolve(silent);
-    await hooks.onTurnEnd?.({ text: '', responseMessages: [] });
+    await advisor.finish();
 
     // The first review read the request; every step that ended while it ran is the second's, read together.
     expect(calls()).toBe(2);
@@ -274,6 +275,23 @@ describe('the in-session advisor', () => {
     expect(unanswered(asked.at(-1) ?? [])).toEqual([]);
   });
 
+  test("however long the turn, each review's request stays bounded, keeps the turn's request, and extends the last between cuts", async () => {
+    const { advisor } = harness();
+    const { model, asked } = scripted([]);
+    const page = 'the ledger row was read and rounded again; '.repeat(36);
+    await runTurn(advisor, turnOf(model), Array.from({ length: 240 }, (_, at) => step(`step ${String(at)}: ${page}`)));
+    const sizes = asked.map((messages) => messages.reduce((total, message) => total + JSON.stringify(message.content).length, 0));
+    const third = Math.floor(sizes.length / 3);
+    const extending = asked.slice(1).filter((messages, at) => (asked[at] ?? []).every((message, index) => messages[index] === message)).length;
+
+    // Flat: the last third's requests are no larger than the middle third's, and far smaller than the turn so far.
+    expect(Math.max(...sizes.slice(-third))).toBeLessThanOrEqual(Math.max(...sizes.slice(third, 2 * third)) + page.length * 2);
+    expect(Math.max(...sizes)).toBeLessThan(page.length * 240 / 4);
+    expect(readOf(asked.at(-1) ?? []).some((text) => text.includes('Fix the ledger rounding.'))).toBe(true);
+    // Cut in halves, not slid: almost every request extends the last, so the provider's cached prefix holds.
+    expect(extending).toBeGreaterThan(asked.length * 0.9);
+  });
+
   test('a review that fails is no failure of the turn', async () => {
     const { advisor, sent } = harness();
     const { model } = scripted([async () => { throw new Error('the advisor model is down'); }]);
@@ -297,16 +315,14 @@ describe('the in-session advisor', () => {
     const gate = Promise.withResolvers<AdvisorReply>();
     const first = scripted([() => gate.promise]);
     const second = scripted([]);
-    const one = advisor.extension(turnOf(first.model, {}, 't1'));
-    await one.onTurnStart?.({ system: '', history: [{ role: 'user', content: 'the first ask' }] });
-    await one.onStepEnd?.({ stepNumber: 0, produced: step('the first turn step') });
-    await one.onTurnEnd?.({ text: '', responseMessages: [] });
-    const two = advisor.extension(turnOf(second.model, {}, 't2'));
-    await two.onTurnStart?.({ system: '', history: [{ role: 'user', content: 'the second ask' }] });
+    advisor.beginTurn(turnOf(first.model, {}, 't1'), { role: 'user', content: 'the first ask' });
+    advisor.step(step('the first turn step'));
+    await advisor.finish();
+    advisor.beginTurn(turnOf(second.model, {}, 't2'), { role: 'user', content: 'the second ask' });
     gate.resolve(advising({ note: 'The first turn skipped its tests.', severity: 'blocker', class: 'wrong-work' }));
-    await two.onStepEnd?.({ stepNumber: 0, produced: step('the second turn step') });
+    advisor.step(step('the second turn step'));
     await advisor.settled(1000);
-    await two.onTurnEnd?.({ text: '', responseMessages: [] });
+    await advisor.finish();
     const secondRead = readOf(second.asked.at(-1) ?? []);
 
     // The first turn's blocker came after it: said to open a turn, keyed on its own turn, interrupting the second nothing.
@@ -319,16 +335,29 @@ describe('the in-session advisor', () => {
     expect(secondRead.some((text) => text.includes('the first turn step'))).toBe(false);
   });
 
-  test('a turn that ends without its end hook (a failed turn) is ended for its advisor: a late concern is kept, not said', async () => {
+  test('a turn that failed, ended without an answer, is ended for its advisor: a late concern is kept, not said', async () => {
     const { advisor, sent, recorded } = harness();
     const gate = Promise.withResolvers<AdvisorReply>();
     const { model } = scripted([() => gate.promise]);
-    await advisor.extension(turnOf(model)).onTurnStart?.({ system: '', history: [{ role: 'user', content: 'go' }] });
+    advisor.beginTurn(turnOf(model), { role: 'user', content: 'go' });
     advisor.endTurn();
     gate.resolve(advising({ note: 'The retry loop never reads its exit status.', severity: 'concern', class: 'wrong-work' }));
     await advisor.settled(1000);
 
     expect({ said: sent, kept: recorded.map((entry) => [entry.note.severity, entry.spoken]) }).toEqual({ said: [], kept: [['concern', false]] });
+  });
+
+  test("a turn the owner stopped says nothing more, not even a blocker its review finds after the stop", async () => {
+    const { advisor, sent, recorded, interrupts } = harness();
+    const gate = Promise.withResolvers<AdvisorReply>();
+    const { model } = scripted([() => gate.promise]);
+    advisor.beginTurn(turnOf(model), { role: 'user', content: 'go' });
+    advisor.endTurn(true);
+    gate.resolve(advising({ note: 'The migration ran against production.', severity: 'blocker', class: 'wrong-work' }));
+    await advisor.settled(1000);
+
+    expect({ said: sent, interrupts: interrupts(), kept: recorded.map((entry) => [entry.note.severity, entry.spoken]) })
+      .toEqual({ said: [], interrupts: 0, kept: [['blocker', false]] });
   });
 
   test('is off for a new agent until the owner turns it on', () => {
@@ -573,5 +602,25 @@ describe("the advisor's system prompt", () => {
     expect(oversized.prompt).not.toContain('x'.repeat(budget + 1));
     expect(wide.reads).toEqual([]);
     expect(wide.prompt).toContain('ADVISOR.md');
+  });
+});
+
+describe("the advisor's read tools", () => {
+  test("read the agent's files on a ledger of their own, so a read never unlocks the agent's edit, and offer no write", async () => {
+    const { rt } = createTestRuntime();
+    const agentLedger = new TurnFileLedger();
+    const content = 'rounding: half-even\n';
+    await writeText(rt.toolFiles, `${rt.storage.home}/ledger.md`, content);
+
+    const reads = advisorReadTools({
+      files: () => ({ vfs: rt.toolFiles, home: rt.storage.home, planes: rt.planes, memory: rt.memory, ledger: agentLedger, budget: new TurnContextBudget() }),
+    });
+
+    const file = toolExecute<JsonObject, JsonValue>(present(reads.file, "the advisor's file tool"));
+
+    expect(JSON.stringify(await file({ op: 'read', path: 'ledger.md' }))).toContain('half-even');
+    expect(agentLedger.seenState('ledger.md', content, 'part').state).toBe('never');
+    expect(agentLedger.seenState(`${rt.storage.home}/ledger.md`, content, 'part').state).toBe('never');
+    await expect(file({ op: 'write', path: 'ledger.md', content: 'rounding: up\n' })).rejects.toThrow();
   });
 });
