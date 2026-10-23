@@ -229,7 +229,7 @@ export class UserLimits {
     const klass = this.klass();
     const shown = suspended === null ? null : { at: suspended.at, reason: suspended.reason };
 
-    return tier === null ? { class: klass, suspended: shown, limits: [], computerSizeCap: null } : limitsReport({ klass, tier, use: this.use(now), now }, shown);
+    return tier === null ? { class: klass, suspended: shown, limits: [], computerSizeCap: null, freeTier: false } : limitsReport({ klass, tier, use: this.use(now), now }, shown);
   }
 
   /** The account as the operators' accounts table reads it: its report, and its use whatever its class binds. */

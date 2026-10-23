@@ -30,8 +30,8 @@ function PlanHeader({ report }: { report: LimitsReport }) {
 }
 
 function Plan({ report }: { report: LimitsReport }) {
-  // An operator's, an eval's, or any account on a deployment with no free tier: nothing to show.
-  if (report.class !== "invited" && report.limits.length === 0) return null;
+  // A deployment with no free tier (a self-hosted Kinu), or an operator's or an eval's account: nothing to show.
+  if (!report.freeTier || (report.class !== "invited" && report.limits.length === 0)) return null;
 
   return (
     <section className="space-y-3" data-account-limits={report.class}>

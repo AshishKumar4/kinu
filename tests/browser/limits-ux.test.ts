@@ -121,10 +121,17 @@ describe('the free tier', () => {
     mkdirSync(dir, { recursive: true });
 
     await withGallery(async (gallery) => {
-      for (const view of [{ width: 1280, theme: 'light' }, { width: 1280, theme: 'dark' }, { width: 390, theme: 'light' }]) {
+      const views = [
+        { width: 1280, theme: 'light', states: ['near', 'full', 'invited'], dialogs: ['workspaces', 'storage', 'computer', 'elsewhere'] },
+        { width: 1280, theme: 'dark', states: ['near', 'full', 'invited'], dialogs: ['workspaces', 'storage', 'computer', 'elsewhere'] },
+        { width: 390, theme: 'light', states: ['near', 'full', 'invited'], dialogs: ['workspaces', 'storage', 'computer', 'elsewhere'] },
+        { width: 390, theme: 'dark', states: ['near', 'full'], dialogs: ['storage'] },
+      ];
+
+      for (const view of views) {
         const name = `${view.theme}-${String(view.width)}`;
 
-        for (const state of ['near', 'full', 'invited']) {
+        for (const state of view.states) {
           const page = await open(gallery, `&state=${state}`, view);
 
           await page.waitForSelector('[data-account-limits]', WAIT);
@@ -132,7 +139,7 @@ describe('the free tier', () => {
           await page.close();
         }
 
-        for (const dialog of ['workspaces', 'storage', 'computer', 'elsewhere']) {
+        for (const dialog of view.dialogs) {
           const page = await open(gallery, `&state=full&dialog=${dialog}`, view);
 
           await page.waitForSelector('[role="dialog"]', WAIT);

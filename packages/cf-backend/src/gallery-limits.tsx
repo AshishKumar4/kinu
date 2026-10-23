@@ -56,8 +56,8 @@ function use(stage: Exclude<State, "invited">): LimitReading[] {
 }
 
 const REPORT: LimitsReport = state === "invited"
-  ? { class: "invited", suspended: null, limits: [], computerSizeCap: null }
-  : { class: "free", suspended: null, limits: use(state), computerSizeCap: "small" };
+  ? { class: "invited", suspended: null, limits: [], computerSizeCap: null, freeTier: true }
+  : { class: "free", suspended: null, limits: use(state), computerSizeCap: "small", freeTier: true };
 
 const account = (report: LimitsReport, readings: LimitReading[]): AccountLimits => ({ report, use: readings });
 
@@ -66,11 +66,11 @@ const row = (email: string, seen: number, limits: AccountLimits): AccountRow => 
   workspaces: limits.use[0]?.used ?? 0, class: limits.report.class === "invited" ? "invited" : "free", suspendedAt: limits.report.suspended?.at ?? null, limits,
 });
 
-const FREE = { class: "free", suspended: null, computerSizeCap: "small" } as const;
+const FREE = { class: "free", suspended: null, computerSizeCap: "small", freeTier: true } as const;
 
 const NO_READINGS: LimitReading[] = [];
 
-const UNBOUND = { suspended: null, limits: NO_READINGS, computerSizeCap: null };
+const UNBOUND = { suspended: null, limits: NO_READINGS, computerSizeCap: null, freeTier: true };
 
 /** The board's five accounts: one at a limit, one near one, one invited, one suspended, and the operator. */
 const ACCOUNTS: readonly AccountRow[] = [

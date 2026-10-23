@@ -161,6 +161,8 @@ export const LimitsReportSchema = v.object({
   limits: v.array(LimitReadingSchema),
   /** The largest size the account's computers start at, whatever size is set ({@link startSize}); null for no cap. */
   computerSizeCap: v.nullable(v.picklist(COMPUTER_SIZE_ORDER)),
+  /** Whether this deployment has a free tier at all: a self-hosted Kinu has none, and says nothing of limits. */
+  freeTier: v.boolean(),
 });
 
 export type LimitsReport = v.InferOutput<typeof LimitsReportSchema>;
@@ -188,7 +190,7 @@ export function limitsReport(admission: Admission, suspended: LimitsReport['susp
 
   const limited = isLimited(klass);
 
-  return { class: klass, suspended, limits: limited ? limitReadings(admission) : [], computerSizeCap: limited ? admission.tier.computerSize : null };
+  return { class: klass, suspended, limits: limited ? limitReadings(admission) : [], computerSizeCap: limited ? admission.tier.computerSize : null, freeTier: true };
 }
 
 /**

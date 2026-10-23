@@ -295,7 +295,7 @@ function harness(options: World = {}): Harness {
   const reportOf = (userId: string): LimitsReport => {
     const standing = standings.get(userId) ?? { class: 'free', suspended: null };
 
-    return { class: standing.class, suspended: standing.suspended, limits: [], computerSizeCap: null };
+    return { class: standing.class, suspended: standing.suspended, limits: [], computerSizeCap: null, freeTier: false };
   };
 
   const userStub = (userId: string) => ({

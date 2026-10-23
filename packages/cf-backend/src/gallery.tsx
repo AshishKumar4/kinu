@@ -1336,7 +1336,7 @@ function userFixture(path: string, method: string, body: BodyInit | null | undef
   if (deploying !== null) return deploying;
 
   // No free tier binds the gallery's account: the limits' bar and Usage section stay away (the `limits` frame draws them).
-  if (path === "/api/user/limits") return Promise.resolve(fixtureJson({ class: "operator", suspended: null, limits: [], computerSizeCap: null }));
+  if (path === "/api/user/limits") return Promise.resolve(fixtureJson({ class: "operator", suspended: null, limits: [], computerSizeCap: null, freeTier: false }));
 
   // The account's choices, kept in this browser for every frame that reads one.
   const stored = storedConfigFixture(path, method, body);

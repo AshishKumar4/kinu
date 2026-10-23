@@ -16,7 +16,7 @@ const USER_ID = '0123456789abcdef0123456789abcdef';
 
 const OTHER_ID = 'fedcba9876543210fedcba9876543210';
 
-const FREE: LimitsReport = { class: 'free', suspended: null, limits: [], computerSizeCap: 'small' };
+const FREE: LimitsReport = { class: 'free', suspended: null, limits: [], computerSizeCap: 'small', freeTier: true };
 
 const identityOf = (userId: string): AuthIdentity => ({ userId, email: `${userId}@example.com`, sub: 'sub', provider: 'test', authTime: Date.now() });
 

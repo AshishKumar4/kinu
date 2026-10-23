@@ -91,7 +91,7 @@ function RefusalDialog({ refusal, asked, onClose }: { refusal: LimitRefusal; ask
   const { title, body, room } = said(refusal, asked, titled);
 
   return (
-    <Modal title={title} icon={<WarningIcon size={16} className="p-warning" />} width="md" onClose={onClose}
+    <Modal title={title} icon={<WarningIcon size={16} className="p-warning" />} width="md" maxWidthClass="max-w-xl" onClose={onClose}
       footer={(
         <>
           <Button variant="ghost" size="sm" onClick={onClose}>Not now</Button>

@@ -86,7 +86,7 @@ export function MoveMyDataSlot() {
   const limits = useAsyncResource(getLimits);
   const report = lastValue(limits.resource);
 
-  if (report === null || (report.class !== "invited" && report.limits.length === 0)) return null;
+  if (report === null || !report.freeTier || (report.class !== "invited" && report.limits.length === 0)) return null;
 
   return <MoveMyDataCard />;
 }

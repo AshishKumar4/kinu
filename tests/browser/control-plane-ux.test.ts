@@ -198,7 +198,7 @@ const TAB_HEADINGS = {
 } satisfies Record<string, string>;
 
 /** An account no free tier binds, as its own object reads it (core limits/). */
-const UNLIMITED = { report: { class: 'operator', suspended: null, limits: [], computerSizeCap: null }, use: [] };
+const UNLIMITED = { report: { class: 'operator', suspended: null, limits: [], computerSizeCap: null, freeTier: false }, use: [] };
 
 /** A row of the accounts list, with its limits as the list reads them in each account's object. */
 function userRow(userId: string, email: string, at: number): JsonValue {

@@ -49,7 +49,7 @@ function ClassPill({ limits }: { limits: AccountLimits | null }) {
   return <Status tone={classTone(shown)} hooks={{ "data-account-class": shown.toLowerCase() }}>{shown}</Status>;
 }
 
-/** A limit's use alone, for an account no limit binds: "7", "63 h", "5.8 GB". */
+/** A limit's use alone, for an account no limit binds: "7", "63 h", "5.8 GB"; its models are its class's, no limit. */
 function plain(reading: LimitReading): string {
   switch (reading.id) {
     case "workspaces":
@@ -60,8 +60,13 @@ function plain(reading: LimitReading): string {
     case "stored_bytes":
       return shownBytes(reading.used);
     case "model_tokens":
-      return `${reading.used.toLocaleString()} tokens`;
+      return "no limit";
   }
+}
+
+/** When an account was last seen, short enough for its column: "2h ago" today, "Oct 22" before. */
+function seenText(at: number): string {
+  return Date.now() - at < 864e5 ? timeAgo(at) : new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 /** One limit of one account: a free account's share and bar, any other's use alone; a dash where nothing was read. */
@@ -75,7 +80,7 @@ function LimitCell({ limits, id }: { limits: AccountLimits | null; id: ShownLimi
   const ink = { danger: "p-danger", warning: "p-warning", accent: "p-text-2" }[toneOf(percent)];
 
   return (
-    <span className="block w-24 space-y-1">
+    <span className="block w-20 space-y-1">
       <span className={`t-meta block tabular-nums ${ink}`}>{shown}</span>
       <Spent percent={percent} />
     </span>
@@ -117,16 +122,16 @@ export function AccountsTable({ rows, onOpen, onChanged }: { rows: readonly Acco
               <table className="t-body w-full">
                 <thead className="border-b p-border">
                   <tr>
-                    {["Account", "Class", ...COLUMNS.map((column) => column.name), "Seen"].map((head) => <th key={head} className="t-label px-4 py-2 text-left p-text-3">{head}</th>)}
+                    {["Account", "Class", ...COLUMNS.map((column) => column.name), "Seen"].map((head) => <th key={head} className="t-label px-3 py-2 text-left p-text-3">{head}</th>)}
                   </tr>
                 </thead>
                 <tbody>
                   {shown.map((row) => (
                     <tr key={row.userId} onClick={() => onOpen(row.userId)} data-opens="" data-account={row.email} className="border-b p-border last:border-b-0">
-                      <td className="max-w-64 truncate px-4 py-2.5 p-text">{row.email}</td>
-                      <td className="px-4 py-2.5"><ClassPill limits={row.limits} /></td>
-                      {COLUMNS.map((column) => <td key={column.id} className="px-4 py-2.5 align-middle"><LimitCell limits={row.limits} id={column.id} /></td>)}
-                      <td className="t-meta whitespace-nowrap px-4 py-2.5 p-text-3" title={when(row.lastSeenAt)}>{timeAgo(row.lastSeenAt)}</td>
+                      <td className="max-w-64 truncate px-3 py-2.5 p-text">{row.email}</td>
+                      <td className="px-3 py-2.5"><ClassPill limits={row.limits} /></td>
+                      {COLUMNS.map((column) => <td key={column.id} className="px-3 py-2.5 align-middle"><LimitCell limits={row.limits} id={column.id} /></td>)}
+                      <td className="t-meta whitespace-nowrap px-3 py-2.5 p-text-3" title={when(row.lastSeenAt)}>{seenText(row.lastSeenAt)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -293,7 +298,7 @@ export function AccountStanding({ userId, email, seen, limits, onChanged }: {
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="t-title p-text">{email}</h3>
         <ClassPill limits={limits} />
-        {seen !== null && <span className="t-meta p-text-3" title={when(seen)}>seen {timeAgo(seen)}</span>}
+        {seen !== null && <span className="t-meta p-text-3" title={when(seen)}>seen {seenText(seen)}</span>}
       </div>
       {report.suspended !== null && <p className="t-meta p-danger">Suspended {when(report.suspended.at)}: {report.suspended.reason}</p>}
       {limits.use.length > 0 && (
