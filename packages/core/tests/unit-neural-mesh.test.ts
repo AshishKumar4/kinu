@@ -115,28 +115,32 @@ describe('the mesh answers the roster', () => {
     expect(informed.mode()).toBe('attention');
   });
 
-  test('it is calm at rest and busier while agents work: a few cells lit at a time, more of them while working', () => {
-    const lit = (working: boolean): number => {
+  // 2026-10-23: the owner never asked for motion at rest, and a field that fires on its own costs a renderer every frame.
+  test('it never fires on its own: at rest or while agents work it settles, and what wakes it dies out', () => {
+    for (const working of [false, true]) {
       const picture = mesh();
-      let total = 0;
 
       picture.setActivity({ working, decisions: 0 });
+      stepSeconds(picture, 60);
+      expect(picture.frame().nodeCount).toBe(0);
+      expect(picture.settled()).toBe(true);
+    }
 
-      for (let tick = 0; tick < 60 * 60; tick += 1) {
-        picture.step(DT);
-        total += picture.frame().nodeCount;
-      }
+    const decided = mesh();
 
-      return total / 3600;
-    };
+    decided.setActivity({ working: true, decisions: 1 });
+    stepSeconds(decided, 0.5);
+    expect(decided.settled()).toBe(false);
+    stepSeconds(decided, 30);
+    expect(decided.settled()).toBe(true);
 
-    const cells = mesh().census().length;
-    const idle = lit(false);
-    const working = lit(true);
+    const pointed = mesh();
 
-    expect(idle).toBeGreaterThan(0.5);
-    expect(idle / cells).toBeLessThan(0.05);
-    expect(working / idle).toBeGreaterThan(1.8);
+    pointed.setPointer(0.95, 0.05);
+    stepSeconds(pointed, 0.5);
+    expect(pointed.settled()).toBe(false);
+    stepSeconds(pointed, 30);
+    expect(pointed.settled()).toBe(true);
   });
 
   test('a press fires the nearest cell, and the pointer charges the cells beneath it', () => {
