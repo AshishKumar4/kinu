@@ -587,7 +587,19 @@ describe('codemode calls on a workspace over the user\'s mounts', () => {
     // program given as text is judged as any other command (whether it should ask is the owner's open question).
     expect((await shell.exec('rm -rf /pc/laptop/proj')).refusal).toMatchObject(DENIED);
     expect((await shell.exec(python)).refusal).toBeUndefined();
-    expect(asked.map((request) => request.command)).toEqual(['rm -rf /pc/laptop/proj']);
+
+    // A path named where no command holds it, quoted apart (a loop's list, an array, a heredoc a shell reads), or reached
+    // after a `cd` that moved only a substitution: each delete is on the user's files.
+    const reaching = [
+      `for d in /p''c/laptop/project; do :; done; rm -rf "$d"`, `dirs=(/p''c/laptop/project); rm -rf "\${dirs[@]}"`,
+      `bash <<'EOF'\nrm -rf /p''c/laptop/project\nEOF`, 'cd /; echo "$(cd /tmp)"; rm -rf pc/laptop/project',
+      // A line this reading cannot parse, that names the user's files, may write over one.
+      'printf replacement > /pc/laptop/important.txt; cat <<< ok',
+    ];
+
+    for (const command of reaching) expect((await shell.exec(command)).refusal).toMatchObject(DENIED);
+
+    expect(asked.map((request) => request.command)).toEqual(['rm -rf /pc/laptop/proj', ...reaching]);
     expect(ran).toEqual([python]);
   });
 
@@ -596,7 +608,11 @@ describe('codemode calls on a workspace over the user\'s mounts', () => {
     const { provider, ran } = mountedWorkspaceProvider();
     router.register(provider);
     const start = present(router.getProvider('workspace'), 'the workspace executor').tools.startProcess;
-    const onto = ['mv notes.md /shared/notes.md', 'cp -r build /pc/laptop/proj', 'echo done > /shared/status.txt', 'cp -t /pc/laptop a.txt b.txt'];
+
+    const onto = [
+      'mv notes.md /shared/notes.md', 'cp -r build /pc/laptop/proj', 'echo done > /shared/status.txt', 'cp -t /pc/laptop a.txt b.txt',
+      '{ printf replacement; } > /pc/laptop/important.txt',
+    ];
 
     for (const command of onto) expect(await start.execute(command)).toMatchObject(DENIED);
 

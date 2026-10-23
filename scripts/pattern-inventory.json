@@ -211,13 +211,6 @@
       "decision": "lexical"
     },
     {
-      "file": "packages/core/src/safety/command-review.ts",
-      "kind": "hand-parser",
-      "owner": "scanCommand",
-      "sourceSha256": "a9bc3396a308b95a35276efd8388557fbb02dd201817d41bc6a5ff781cdf3374",
-      "decision": "safety"
-    },
-    {
       "file": "packages/core/src/safety/egress-destination.ts",
       "kind": "hand-parser",
       "owner": "parseIPv4",
