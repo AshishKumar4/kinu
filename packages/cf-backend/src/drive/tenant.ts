@@ -27,7 +27,7 @@ export function tenantDrive(env: DriveBindings, tenant: string): MossaicVfs | nu
  * Mossaic's names for a tenant's objects (its `vfsUserDOName` and `vfsShardDOName`, which the SDK does not export): the
  * default namespace, as `createVFS` opens it above.
  */
-function tenantObjectNames(tenant: string) {
+export function tenantObjectNames(tenant: string) {
   return { user: `vfs:default:${tenant}`, shard: (index: number) => `vfs:default:${tenant}:s${String(index)}` };
 }
 

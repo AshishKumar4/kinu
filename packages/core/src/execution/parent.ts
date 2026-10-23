@@ -17,11 +17,6 @@ import { parseInput } from '../utils/json';
 
 const StringSchema = v.string();
 
-/** `write` is a closed command union covering file write and mkdir. */
-export type ParentRpcWrite =
-  | { kind: 'file'; path: string; data: Uint8Array }
-  | { kind: 'directory'; path: string; recursive: boolean };
-
 export interface ParentExecResult {
   stdout: string;
   stderr: string;

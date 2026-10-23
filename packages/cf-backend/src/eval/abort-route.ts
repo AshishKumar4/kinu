@@ -1,6 +1,7 @@
 /**
- * `POST /api/workspaces/<name>/eval/abort`: end the workspace object's activation. Eval-service identity only;
- * every other identity is answered as if the route did not exist. ARCHITECTURE-DECISIONS C3.
+ * `POST /api/workspaces/<name>/eval/abort`: end the workspace object's activation (the account's own is
+ * `POST /api/user/eval/abort`, in `user/routes.ts`). Eval-service identity only; every other identity is answered as if
+ * the route did not exist. ARCHITECTURE-DECISIONS C3.
  * `ctx.abort` rejects the stub call that asked for it: that rejection is the abort's receipt, not a failure.
  */
 import { Hono } from 'hono';
@@ -12,7 +13,7 @@ import type { OrchestratorAgent } from '../orchestrator';
 
 const ABORT = '/api/workspaces/:name/eval/abort';
 
-function isEvalServiceIdentity(identity: AuthIdentity): boolean {
+export function isEvalServiceIdentity(identity: AuthIdentity): boolean {
   return identity.provider === 'dev';
 }
 

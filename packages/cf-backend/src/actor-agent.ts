@@ -1,6 +1,5 @@
 import { Cause, Effect, Exit } from 'effect';
 import { ComputerProcessEnds, jobState } from '@kinu.run/core';
-import type { VfsDirent, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 import { type SlateCaller, type SlateCallerHop } from '@kinu.run/core/slates';
 /**
  * Actor-agnostic substrate beneath every full-loop Kinu actor on the Cloudflare backend.
@@ -119,9 +118,6 @@ import {
   type PlanDecisionOutcome,
   type PlanReview, type ReviewAnnotation,
   type PlanReviewDecision, type PlanReviewResult, type AskingAgent, type OwnerAnswer,
-  answerParentRpc,
-  type ParentExecResult,
-  type ParentRpcWrite,
   type TeamToolDeps,
   type SubagentRuntime, type TemporaryAgentPort,
   SubagentRosterStore, subagentTitle,
@@ -3027,49 +3023,6 @@ export abstract class ActorAgent extends Agent<Env> {
 
   protected profileCatalog(): Promise<ProfileCatalogEnvelope> {
     return this.account.catalog();
-  }
-
-  /** A fork reaches these through its `parent` executor. No `@callable`: only a worker-held
-   * parent stub can reach them. */
-  async readWorkspaceFile(path: string): Promise<Uint8Array> {
-    return answerParentRpc(path, async () => this.rt.localVfs.readFile(path));
-  }
-
-  async writeWorkspaceFile(input: ParentRpcWrite): Promise<null> {
-    return answerParentRpc(input.path, async () => {
-      if (input.kind === 'file') await this.rt.localVfs.writeFile(input.path, input.data);
-      else await this.rt.localVfs.mkdir(input.path, { recursive: input.recursive });
-
-      return null;
-    });
-  }
-
-  async listWorkspaceFiles(path: string): Promise<VfsDirent[]> {
-    return answerParentRpc(path, async () => this.rt.localVfs.readdir(path));
-  }
-
-  async statWorkspaceFile(path: string, options?: { follow?: boolean }): Promise<VfsStat | null> {
-    return answerParentRpc(path, async () => this.rt.localVfs.stat(path, options));
-  }
-
-  async deleteWorkspaceFile(path: string): Promise<null> {
-    return answerParentRpc(path, async () => {
-      await this.rt.localVfs.unlink(path);
-
-      return null;
-    });
-  }
-
-  /** Run a command in this workspace's shell for a fork: one round trip instead of one RPC per
-   * file through an emulated shell. */
-  execWorkspaceCommand(command: string): Promise<ParentExecResult> {
-    return answerParentRpc('', () => {
-      const shell = this.rt.shell;
-
-      if (!shell) return settle(Effect.fail(new KinuError('unsupported', 'this workspace has no shell')));
-
-      return shell.exec(command);
-    });
   }
 
   /** Null when unset (registry picks the default). */

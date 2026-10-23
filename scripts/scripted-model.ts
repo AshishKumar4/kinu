@@ -17,7 +17,7 @@ import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-s
 import { CLOUDFLARE_OAUTH_CRED_KEY, CLOUDFLARE_WORKERS_AI_SCOPES, type EvalAccount, type WebSearchRoute } from '../packages/core/src/index';
 import { apiJson } from './live-app-harness';
 import { settleCatalog, type CatalogNeed } from '../evals/src/workspace-roster';
-import { SCRIPTED_MODELS_BODY, pacedStream, rateLimitedAnswer, readScriptedRequest, scriptedBody, type ScriptedAnswer, type ScriptedModel, type ScriptedPace, type ScriptedRequest } from './scripted-protocol';
+import { SCRIPTED_MODELS_BODY, errorAnswer, pacedStream, readScriptedRequest, scriptedBody, type ScriptedAnswer, type ScriptedModel, type ScriptedPace, type ScriptedRequest } from './scripted-protocol';
 
 
 /** The account credential a scripted run's workspaces are served through. */
@@ -90,11 +90,11 @@ export async function startScriptedModel(script: ScriptedModel): Promise<Scripte
         process.stderr.write(`scripted-model: tools=${asked.available.join(',')} called=${asked.called.join(',')} users=${JSON.stringify(asked.userTexts)}\n`);
         answers.push(answer);
 
-        if (answer.rateLimited !== undefined) {
-          const limited = rateLimitedAnswer(answer.rateLimited);
+        const failed = errorAnswer(answer);
 
-          response.writeHead(limited.status, limited.headers);
-          response.end(limited.body);
+        if (failed !== null) {
+          response.writeHead(failed.status, failed.headers);
+          response.end(failed.body);
 
           return;
         }

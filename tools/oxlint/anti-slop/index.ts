@@ -24,6 +24,7 @@ import { noTuiColourLiteralRule } from "./rules/no-tui-colour-literal.ts";
 import { noDynamicModelImportRule } from "./rules/no-dynamic-model-import.ts";
 import { noUnmeasuredDynamicImportRule } from "./rules/no-unmeasured-dynamic-import.ts";
 import { modelMethodBoundaryRule } from "./rules/model-method-boundary.ts";
+import { noStorageRestoreOutsideOpsRule } from "./rules/no-storage-restore-outside-ops.ts";
 import { requireVariantUtilityRule } from "./rules/require-variant-utility.ts";
 import { noCliCredentialFlagRule } from "./rules/no-cli-credential-flag.ts";
 import { noReduceAccumulatorCopyRule } from "./rules/no-reduce-accumulator-copy.ts";
@@ -79,6 +80,7 @@ const antiSlopPlugin = eslintCompatPlugin({
 		"no-dynamic-model-import": noDynamicModelImportRule,
 		"no-unmeasured-dynamic-import": noUnmeasuredDynamicImportRule,
 		"model-method-boundary": modelMethodBoundaryRule,
+		"no-storage-restore-outside-ops": noStorageRestoreOutsideOpsRule,
 		"require-variant-utility": requireVariantUtilityRule,
 		"no-cli-credential-flag": noCliCredentialFlagRule,
 		"no-reduce-accumulator-copy": noReduceAccumulatorCopyRule,

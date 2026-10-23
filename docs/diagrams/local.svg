@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 690" width="900" height="690" role="img" aria-labelledby="t d">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 708" width="900" height="708" role="img" aria-labelledby="t d">
   <!-- A README figure. Its sibling in this directory (same name, -dark suffix)
        is the same geometry under a different :root palette, and the README picks
        between the two with <picture>. Everything below the palette block must
@@ -91,7 +91,7 @@
   <text class="xs" x="50" y="421">real files, plus views mounted over them</text>
   <rect x="38" y="444" width="398" height="108" rx="7" fill="var(--purpleFill)" stroke="var(--purpleLine)"/>
   <text class="b mono" x="50" y="465" fill="var(--purple)">agent.db · bun:sqlite</text>
-  <text class="s" x="50" y="485">conversations · memory · jobs</text>
+  <text class="s" x="50" y="485">conversations · memory index · jobs</text>
   <text class="xs" x="50" y="506">the main agent, hires and branches share this database</text>
   <text class="xs" x="50" y="534">beside home/ and slates/; /skills is a view</text>
   <rect x="452" y="320" width="410" height="232" rx="7" fill="var(--blueFill)" stroke="var(--blueLine)"/>
@@ -105,9 +105,10 @@
   <text class="xs" x="478" y="489">commands start in the opened folder</text>
   <text class="xs" x="478" y="507">the folder's files are the actual project files</text>
   <text class="xs" x="478" y="525">changes are checkpointed before shell work</text>
-  <rect x="24" y="592" width="852" height="74" rx="7" fill="var(--slateFill)" stroke="var(--rule)" stroke-dasharray="4 3"/>
+  <rect x="24" y="592" width="852" height="92" rx="7" fill="var(--slateFill)" stroke="var(--rule)" stroke-dasharray="4 3"/>
   <text class="b" x="38" y="614">No local server between the TUI and the runtime</text>
   <text class="s" x="38" y="635">LocalAgentClient calls LocalAgentSession directly; the TUI consumes the same interface for either backend.</text>
   <text class="xs" x="38" y="653">A cloud workspace uses CloudAgentClient instead, over the web app's chat protocol.</text>
+  <text class="xs" x="38" y="671">A kinu daemon may open the same agent.db; a driver lease row in it, not a socket, decides which process drives.</text>
 </svg>
 

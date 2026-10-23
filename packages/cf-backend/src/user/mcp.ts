@@ -24,6 +24,11 @@ function causeChain(input: { cause: unknown }): Error[] {
   return chain;
 }
 
+/**
+ * `server`'s tool list, or why it has none. A server that refused the request by its HTTP status is named with that
+ * status, never the body the SDK quotes: Gmail's MCP refuses a token it will not take with 403, no reason, and its whole
+ * tool list as the body (2026-10-23). What the server said of the token is in `mcp.server_refused`.
+ */
 export async function readUndiscoveredToolList(server: { readonly name: string }, client: Pick<Client, 'request'>): Promise<McpToolListing> {
   try {
     return {
@@ -35,8 +40,9 @@ export async function readUndiscoveredToolList(server: { readonly name: string }
   } catch (cause) {
     const error = toKinuError({ doing: `reading the tool list of MCP server ${server.name}`, cause, otherwise: 'unavailable' });
     diagnostics.failure('mcp.tool_list_unreadable', error, { server: server.name });
+    const status = causeChain({ cause }).find((link): link is SdkHttpError => link instanceof SdkHttpError)?.status;
 
-    return { failure: renderCauseChain(error) };
+    return { failure: status === undefined ? renderCauseChain(error) : `${server.name} refused its tool list: HTTP ${String(status)}` };
   }
 }
 

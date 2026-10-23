@@ -374,8 +374,35 @@ describe('Trash', () => {
     clock += 86_400_000;
     expect(await store.purge()).toBe(1);
     expect(store.list({ view: 'trash' }).threads).toEqual([]);
-    expect(blobs.held.size).toBe(0);
     expect(store.list({ view: 'all', query: 'probe' }).threads).toEqual([]);
+    // The bytes outlive the rows by the 30 days a restore reaches (ARCHITECTURE-DECISIONS W7), and a day: the mailbox
+    // restored to a moment before the emptying names them, and finds them.
+    const held = blobs.held.size;
+
+    clock += 30 * 86_400_000;
+    await store.purge();
+    expect(blobs.held.size).toBe(held);
+    expect(store.nextPurgeAt()).toBe(clock + 86_400_000);
+    clock += 86_400_000;
+    await store.purge();
+    expect(blobs.held.size).toBe(0);
+    expect(store.nextPurgeAt()).toBeNull();
+  });
+
+  // The same message delivered again after its first copy was emptied: its bytes are one key, named again.
+  test('bytes named again before their grace ends are kept', async () => {
+    open('ashish@kinu.run');
+    const first = await delivered({ raw: raw('cloudflare-pass'), envelopeFrom: 'b@x', recipient: toPerson });
+
+    store.update(first.threadId, { trashed: true });
+    clock += 30 * 86_400_000;
+    await store.purge();
+    await delivered({ raw: raw('cloudflare-pass'), envelopeFrom: 'b@x', recipient: toPerson });
+    const held = blobs.held.size;
+
+    clock += 31 * 86_400_000;
+    await store.purge();
+    expect({ held: blobs.held.size, shown: store.list({ view: 'all' }).threads.length }).toEqual({ held, shown: 1 });
   });
 });
 

@@ -11,7 +11,8 @@ import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from '../act
 
 import {
   isEvalAccountEmail, objectNamed,
-  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type SecretSummary, type SecretInput, type SecretDestination, type GrantedSecrets, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, type RosterPage, type CredentialSummary, type WorkspaceEntry, type UserProfile, DEVICE_FRAMES, DEVICE_SCREEN_PATH, screenFromSocket, readScreenData, statementText, } from '@kinu.run/core';
+  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type SecretSummary, type SecretInput, type SecretDestination, type GrantedSecrets, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, type RosterPage, type CredentialSummary, type WorkspaceEntry, type UserProfile, DEVICE_FRAMES, DEVICE_SCREEN_PATH, screenFromSocket, readScreenData, statementText,   bookmarkNow, restartedForRestore, restoreArmed, type ArmedRestore, type RestoreTarget,
+} from '@kinu.run/core';
 
 import { DurableObjectOAuthClientProvider, type AgentMcpOAuthProvider } from 'agents/mcp/do-oauth-client-provider';
 
@@ -885,6 +886,18 @@ export class UserDO extends Agent<Env> {
     return this.mcpServers.userMcp_beginConnect(caller, id, run);
   }
 
+  userMcp_reconnect(caller: UserCaller, id: string): ReturnType<UserMcpServers['userMcp_reconnect']> {
+    return this.mcpServers.userMcp_reconnect(caller, id);
+  }
+
+  /**
+   * Eval-only: ends this account's activation as the platform's hibernation does, so the next request is a fresh wake
+   * that dials every MCP server again. Sealed in `rpc-surface.ts`, eval-service identity only (`eval/abort-route.ts`).
+   */
+  async evalAbortActivation(): Promise<void> {
+    this.ctx.abort('eval-service: the account activation was aborted on request');
+  }
+
   chatgptPlan(caller: UserCaller): Promise<ChatGptPlanStatus> {
     return this.chatgpt.chatgptPlan(caller);
   }
@@ -1152,6 +1165,24 @@ export class UserDO extends Agent<Env> {
   /** Keyed by {@link USER_MCP_CLIENT_NAME}, not this object's name: every stored grant uses that key, sealed. */
   override createMcpOAuthProvider(callbackUrl: string): AgentMcpOAuthProvider {
     return new DurableObjectOAuthClientProvider(mcpOAuthStorage(this.ctx, this.env), USER_MCP_CLIENT_NAME, callbackUrl);
+  }
+
+  /**
+   * The operator's restore (`/ops/restore`, ARCHITECTURE-DECISIONS W7): this account's storage, armed to go back to
+   * `target` at its next start; `opsRestart` ends it at once. Only `/ops/*` holds the capability.
+   */
+  async opsRestore(caller: OpsCaller, target: RestoreTarget): Promise<ArmedRestore> {
+    return await restoreArmed(this.ctx, this.env, caller, target);
+  }
+
+  /** Ends this activation, so an armed restore lands. */
+  async opsRestart(caller: OpsCaller): Promise<void> {
+    await restartedForRestore(this.ctx, this.env, caller);
+  }
+
+  /** Where this object's history stands now. */
+  async opsBookmark(caller: OpsCaller): Promise<string> {
+    return await bookmarkNow(this.ctx, this.env, caller);
   }
 
   /** The deploy's walk (`scripts/reset.ts tables`): this account's tables and their rows, what its repair did, and the

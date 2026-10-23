@@ -123,6 +123,7 @@ function setupEnv(opts: {
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
     AUTH_KV: unreachableKv('AUTH_KV'),
+    CliAuthDO: unreachableNamespace('CliAuthDO'),
     ASSETS: unreachableAssets(),
   };
 

@@ -91,6 +91,11 @@ export {
   censusOf, OPS_OBJECTS_PER_REQUEST, OPS_PASS_PREFIX, opsCaller, requireOps, type OpsCaller, type StoreCensus, type TableRows, type TablesAnswer,
 } from './state/ops-tables';
 
+export {
+  bookmarkNow, missingBytes, restartedForRestore, restoreArmed, restoreLanded, RestoreTargetSchema,
+  type ArmedRestore, type DeploymentSecret, type MissingBytes, type RestorableState, type RestoreTarget, type StorageHistory,
+} from './state/ops-restore';
+
 export { ACCOUNT_EPOCH_FIELDS, type ConnectionTicketPurpose, initUserTables, PROFILE_CATALOG_CONFIG_KEY, WORKSPACE_KEYED_ROWS } from './state/user-schema';
 
 export { initMailNameTables, initMailboxTables } from './state/mail-schema';
@@ -1181,7 +1186,6 @@ export {
 
 export {
   answerParentRpc, createParentExecutor, type ParentWorkspaceHandle, type ParentExecResult,
-  type ParentRpcWrite,
 } from './execution/parent';
 
 export {
@@ -1207,7 +1211,7 @@ export {
 
 export {
   agentHome, agentArtifactDirectory, agentTmpRoot, agentCred, agentIdentity, agentNameOfUid, VIEWER_HOME_NAME,
-  provisionAgentHome, confineAgentTmp, releaseAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
+  provisionAgentHome, confineAgentTmp, releaseAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot, PROJECT_OWNER_CRED,
   settleSharedRoots,
   ensureIdentityTable,
   actorHomeName,
@@ -1345,6 +1349,8 @@ export {
 export { MarkdownFrontmatterError, parseMarkdownFrontmatter } from './utils/markdown-frontmatter';
 
 export { compareCodeUnits } from './utils/text';
+
+export { readHtml, type HtmlReading } from './utils/html';
 
 export {
   runSleepTimeCompute, applySleepTimeUpdate, accountProposals,
@@ -1552,6 +1558,8 @@ export {
   reviewCommand, type ApprovalDecision, type ApprovalResult,
   type FilesOwner, type GatedExecutor,
 } from './safety/command-review';
+
+export { readShellWord } from './safety/shell-reading';
 
 export {
   formatApproval, gatedGrants, formatApprovalGrant, holdsGrant, parseApprovalGrant, gateExec, grantsAreSubset,
@@ -2715,7 +2723,7 @@ export { MCP_PRESETS, mcpPresetById, type McpPreset, type McpPresetId } from './
 
 export {
   CALLABLE_MCP_STATES, mapConnectionStatus, mcpCredentialTransport, mcpListingRefusals, McpTransitionLog, observedMcpState,
-  type McpCredentialTransport, type McpFailureKind, type McpObservedState, type McpToolListing,
+  type McpCredentialTransport, type McpFailureKind, type McpObservedConnection, type McpObservedState, type McpRefusal, type McpToolListing,
 } from './mcp/client';
 
 export {

@@ -387,6 +387,72 @@ same-socket STARTTLS slips, this design comes back: key-only socket names, the
 control connection, the cancelled read, and `keyed-socket.ts`'s recognizer and
 two-tag framing deleted.
 
+W7. A workspace or an account is restored to a moment of the last 30 days
+from its Durable Objects' own SQLite history (Cloudflare's point-in-time
+recovery), by the operator: `bun scripts/restore.ts <environment> workspace
+<name> --at=<ISO time> | --bookmark=<bookmark>`, or `account <email|id>
+--at=<ISO time>`. Its authority is the deploy's: a pass written into the
+deployment's AUTH_KV with wrangler under the account's API token, as the
+tables walk writes one, then `/ops/restore`
+(`packages/cf-backend/src/ops-routes.ts`). Each object arms its restore
+(`packages/core/src/state/ops-restore.ts`), the route ends it at once and
+reads its history from a fresh start: the restore landed when the object
+stands past its undo bookmark. One that did not land is answered 502, as an
+armed restore lands at the object's next start, over what was written in
+between. A workspace goes back with every agent of it. An account goes back
+with what is the person's: its UserDO, its mailbox (MailboxDO, every box of
+the account), then its Drive's user object before each of its shards, all to
+the same moment, so no shard's sweep meets a reference the restored tenant
+names; an account goes back by moment only, as a bookmark is one object's.
+Its workspaces are each their own restore. The script writes an undo file
+naming each object's bookmark just before; `--undo=<file>` takes the restore
+back. Only `ops-restore.ts` may make the PITR calls
+(`anti-slop/no-storage-restore-outside-ops`). Decided 2026-10-23.
+
+Measured on staging (Worker `kinu-probe-pitr`, one SQLite object with a
+facet, compat 2026-09-30, deleted after):
+- A restore by time to 2.5 min after a write, of an object then written again
+  and its alarm deleted: the object's SQL row and KV key, its facet's row and
+  key, and its alarm all came back. A second restore to the same time after it
+  found the same bookmark. Restoring to the undo bookmark brought back the
+  later writes and the deleted alarm.
+- An object deleted whole (`deleteAll`, flushed, then ended) and restored to a
+  moment before: its rows, its KV and its facet's all came back. So a deleted
+  workspace or account is restorable for 30 days.
+- A facet cannot go back alone. Its storage has the PITR calls, and its
+  `getBookmarkForTime` returned the parent's bookmark for the same moment: one
+  history. Its `onNextSessionRestoreBookmark` plus `ctx.facets.abort` changed
+  nothing at once, and the whole object, parent and facet, went back at the
+  parent's next start (a redeploy). So no facet code may call the PITR API,
+  and a workspace's agents go back with it. An agent alone would need its
+  rows read at the moment and written back, which this does not do (Main,
+  2026-10-23: not needed).
+- A time a few seconds after the object first wrote was refused ("This
+  database has no history"); seconds after a restore, a time before it was
+  refused ("Requested time is before this database existed"). Bookmarks
+  restored at once either way. Minutes apart, every time lookup answered.
+
+R2 bytes. R2 keeps no versions, so a row restored to a moment must find the
+bytes it named then. Within a live account the bytes outlive their rows: mail
+the Trash empties and a slate's replaced, unlisted or removed pictures are
+buried 31 days (`mail_blob_graves`, `slate_picture_graves`) and deleted by
+their object's alarm unless a row names them again. Drive keeps its bytes in
+its shards' SQLite, which go back with the tenant. A workspace's teardown and
+an account's deletion delete their R2 bytes at once, as the owner chose
+(2026-10-23, "Delete files at once"): slate pictures, the devbox's disk
+layers, mail bodies. So a deleted workspace or account restores its database
+but not those bytes, and the restore names each object's rows whose bytes
+are gone (its `missing`), rather than leave them dangling unsaid.
+
+What else it does not bring back. A workspace's devbox (KinuDevbox) is not
+restored: its disk layers are R2 objects a save deletes when it supersedes
+them, so an earlier chain would name layers that are gone, and its recovery
+refuses such a chain. An account's roster goes back with it: a workspace made
+since is in no roster, and one deleted since is named again, its storage
+restorable by its own restore. A session or credential revoked since is valid
+again, so revocations after the moment are redone by hand. The privacy page
+says deleted data can remain in this history for up to 30 days.
+
 ## Chat loop
 
 C1. The stored assistant row holds the turn's answer. The runner selects it
@@ -2197,12 +2263,24 @@ to every process the call starts. `egressFor` gives such a process an egress
 that names no owner, so a placeholder it finds (in a generated image, a job's
 files) is refused, never spent; an owner's process keeps the owner's egress.
 `sudo` and `su` are refused to the viewer's uid at each engine boot, so it
-writes none of the owner's files and never becomes anyone else. A share's
+never becomes anyone else. A share's
 granted process and port control (listing, stopping and reading the logs of
 processes, exposing ports) stays the owner's delegated authority, as the
 owner chose to keep viewers' shell access (Main, 2026-10-19). Residual: an
 owner's process that relays requests for whoever reaches it on loopback acts
 with the owner's egress; and a file grant acts as the agent it is given for.
+Later note (2026-10-23, ledger 1018-xar): the owner chose (2026-10-19T19:44:35Z)
+that a share's commands write "your project too, as today". A workspace made
+since then has its project tree (`/home/main`) setgid to the project group
+(1001), sticky, with a group-writable default ACL, set by the boot that makes
+main's `.kinu` (`provisionProjectHome`); the viewer and the workspace agent's
+session carry that group. Sticky, because write on the root would otherwise let
+the viewer remove or rename `SOUL.md` and `.kinu`. `.kinu`, `SOUL.md`, every
+other home and `/tmp` stay as they were, and an older workspace, which already
+has its `.kinu`, keeps its tree (one whose owner deletes `.kinu` is shared at
+its next boot, as a new one).
+Nimbus's own session user takes no extra group (Nimbus ask 73), so the owner's
+own shell cannot write a file a viewer made in the project.
 
 ## Open
 

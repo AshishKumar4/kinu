@@ -131,6 +131,22 @@ describe('skill trust binds raw policy source', () => {
     expect(windows.skills.map(({ name }) => name)).toContain('deploy');
   });
 
+  test("a skill's apostrophe is text and its comment is not, and a quoted tool in its list keeps its comma", async () => {
+    const options = { admissionTokens: 10_000, trust: () => 'unverified' as const };
+
+    const { skills } = await discoverSkills(vfs(`---
+name: deploy
+description: Don't deploy on Fridays # the team's rule
+allowed-tools: [workspace.fs.text, "a,b"]
+---
+Review the diff first.
+`), options);
+
+    expect(skills.filter(({ name }) => name === 'deploy').map(({ description, allowed_tools }) => ({ description, allowed_tools }))).toEqual([
+      { description: "Don't deploy on Fridays", allowed_tools: ['workspace.fs.text', 'a,b'] },
+    ]);
+  });
+
   test('an unapproved description never enters the system skills index', async () => {
     const source = `---
 name: deploy

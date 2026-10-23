@@ -122,11 +122,12 @@ export function ChatLiveTail({ tail }: { tail: LiveTail | null }) {
   );
 }
 
-/** Folds by rendered height, never source lines (m1111); while live, a few lines that follow the newest. */
+/** While live, a few lines that follow the newest. Once done it is a thought had: "Thought", folded to its line as a
+ *  settled phase is, a click away (the owner, 2026-10-23). */
 function ReasoningBlock({ text, live = false }: { text: string; live?: boolean }) {
   return (
-    <ChatDisclosure label="Thinking" live={live} folded="preview" follow={text} viewport="max-h-[4lh]" liveIndicator="reasoning"
-      bodyClass="prose-thinking" data-reasoning="">
+    <ChatDisclosure label={live ? "Thinking" : "Thought"} live={live} folded="hidden" follow={text} viewport="max-h-[4lh]" liveIndicator="reasoning"
+      bodyClass="prose-thinking" data-reasoning={live ? "live" : "done"}>
       <MarkdownContent content={text} />
     </ChatDisclosure>
   );
@@ -766,7 +767,7 @@ function MessageFeedback({
   })), [busy, current, messageId, onFeedback]);
 
   return (
-    <div className={`flex items-center gap-1 transition-opacity ${current === null ? 'opacity-0 group-hover/msg:opacity-100 focus-within:opacity-100' : ''}`}>
+    <div className={`flex items-center gap-1 transition-opacity ${current === null ? 'opacity-0 group-hover/msg:opacity-100 focus-within:opacity-100' : ''}`} data-message-feedback>
       <IconControl place="inline" onClick={() => toggle('positive')} disabled={busy} aria-pressed={current === 'positive'}
         title="Mark this response helpful. Feeds evolution scoring." aria-label="Mark this response helpful">
         <ThumbsUpIcon size={12} weight={current === 'positive' ? 'fill' : 'regular'} />

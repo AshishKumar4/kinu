@@ -48,6 +48,7 @@ function gatewayRoutes(upstream: typeof fetch, menu: readonly string[]) {
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
     AUTH_KV: unreachableKv('AUTH_KV'),
+    CliAuthDO: unreachableNamespace('CliAuthDO'),
     ASSETS: unreachableAssets(),
   };
 
@@ -310,6 +311,7 @@ describe('an account\'s model menu', () => {
       CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
       OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
       AUTH_KV: unreachableKv('AUTH_KV'),
+      CliAuthDO: unreachableNamespace('CliAuthDO'),
       ASSETS: unreachableAssets(),
     };
 

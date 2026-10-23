@@ -231,7 +231,7 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
   // An admitted turn with the operator's message last has no assistant row to ask, so the
   // live indicator is decided here. See `threadLiveTail`.
   const tail = threadLiveTail({ last: thread.entries.at(-1)?.message, liveness: state.liveness });
-  const liveRow = liveTailRow({ rows: thread.entries.map(({ message }) => message), liveness: state.liveness });
+  const liveRow = liveTailRow({ rows: thread.entries.map(({ message }) => message), liveness: state.liveness, stored: state.stored });
   const newest = thread.entries.at(-1)?.message;
 
   return (

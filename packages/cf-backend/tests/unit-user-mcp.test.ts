@@ -333,6 +333,39 @@ describe('mcpCredentialTransport', () => {
     });
     expect(seen).toEqual(['Bearer first', 'Bearer rotated', 'none']);
   });
+
+  // Gmail's MCP, 2026-10-23: a token it will not take is refused 403 with its whole tool list as the body, which the SDK
+  // quotes as its error; what the server said of the token is reported apart, never the body.
+  test('a refusal by the server is reported with its status and what it said of the token; another origin\'s is not', async () => {
+    const real = globalThis.fetch;
+    const refusals: unknown[] = [];
+
+    const answer = async (url: Request | URL | RequestInfo): Promise<Response> => {
+      const at = url instanceof Request ? url.url : url.toString();
+      const said = at.endsWith('/said');
+
+      return at.startsWith('https://mcp.example/')
+        ? new Response('{"result":{"tools":[]}}', { status: said ? 401 : 403, headers: said ? { 'www-authenticate': 'Bearer error="invalid_token"' } : {} })
+        : new Response('{}', { status: 400 });
+    };
+
+    globalThis.fetch = Object.assign(answer, { preconnect: real.preconnect });
+
+    try {
+      const opts = mcpCredentialTransport('https://mcp.example/mcp', async () => CREDENTIAL, 'when-asked', (refusal) => { refusals.push(refusal); });
+      const listing = { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 0, method: 'tools/list' }) };
+      const statuses = [(await opts.fetch('https://mcp.example/mcp', listing)).status, (await opts.fetch('https://mcp.example/said')).status];
+      await opts.fetch('https://idp.elsewhere/token', { method: 'POST' });
+
+      expect(statuses).toEqual([403, 401]);
+      expect(refusals).toEqual([
+        { method: 'POST', rpc: 'tools/list', status: 403, wwwAuthenticate: null },
+        { method: 'GET', rpc: null, status: 401, wwwAuthenticate: 'Bearer error="invalid_token"' },
+      ]);
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
 });
 
 async function withFetch(

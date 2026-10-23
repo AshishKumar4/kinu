@@ -5,6 +5,7 @@ import { decodePasteBytes, type CliRenderer, type PasteEvent, type TextareaRende
 import { AGENT_HOME } from '../config';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { ClipboardPaste } from './clipboard-paste';
+import { pastedPath } from '../attachments';
 
 export function useComposerPaste(options: {
   renderer: CliRenderer;
@@ -64,7 +65,7 @@ export function useComposerPaste(options: {
 
       const text = decodePasteBytes(bytes).replace(/\r\n?/g, '\n');
       const trimmed = text.trim();
-      const path = trimmed.replace(/^@/, '').replace(/^(['"])(.*)\1$/, '$2').replace(/\\ /g, ' ');
+      const path = pastedPath(trimmed.replace(/^@/, ''));
 
       if (!text.includes('\n') && /\.(png|jpe?g)$/i.test(path) && !path.includes('"')) {
         insert(`@"${path}"`, 'image');

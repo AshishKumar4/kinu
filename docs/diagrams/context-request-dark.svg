@@ -74,14 +74,14 @@
   <rect x="58" y="174" width="520" height="58" rx="7" fill="var(--blueFill)" stroke="var(--blueLine)"/>
   <text class="b" x="70" y="195" text-anchor="start" fill="var(--blue)">Core</text>
   <text class="s" x="70" y="211" text-anchor="start">operating guidance · environments · tool index · state · delegation · verification</text>
-  <text class="xs" x="70" y="226" text-anchor="start">the same bytes in every workspace for one tool list</text>
+  <text class="xs" x="70" y="226" text-anchor="start">the same bytes for one tool list and executor set</text>
   <rect x="58" y="240" width="520" height="58" rx="7" fill="var(--blueFill)" stroke="var(--blueLine)"/>
   <text class="b" x="70" y="261" text-anchor="start" fill="var(--blue)">Lead doctrine</text>
-  <text class="s" x="70" y="277" text-anchor="start">seven sections: brief, parallel work, review, interruptions, delivery</text>
+  <text class="s" x="70" y="277" text-anchor="start">six: responsibility, brief, parallel, review, interruptions, delivery</text>
   <text class="xs" x="70" y="292" text-anchor="start">root agents that can hire; the same in every workspace</text>
   <rect x="58" y="306" width="520" height="42" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="70" y="327" text-anchor="start">Workspace</text>
-  <text class="s" x="70" y="343" text-anchor="start">SOUL.md · approved AGENTS.md · skills index · pinned skill bodies</text>
+  <text class="s" x="70" y="343" text-anchor="start">SOUL.md · approved AGENTS.md · skills · pinned bodies · vfs planes</text>
   <rect x="58" y="356" width="520" height="42" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="70" y="377" text-anchor="start">Agent</text>
   <text class="s" x="70" y="393" text-anchor="start">the agent's and workspace's names · role section</text>
@@ -103,11 +103,11 @@
   <text class="b" x="70" y="665" text-anchor="start" fill="var(--orange)">The request</text>
   <text class="s" x="70" y="681" text-anchor="start">the person's message or the event that woke the turn</text>
   <text class="b" x="600" y="84" text-anchor="start">Anthropic markers</text>
-  <text class="xs" x="600" y="100" text-anchor="start">and OpenRouter on Claude models</text>
+  <text class="xs" x="600" y="100" text-anchor="start">and OpenRouter on Claude; no tool marker</text>
   <path d="M580 136 L596 136" class="edge-lite" stroke-dasharray="3 3"/>
   <rect x="600" y="125.5" width="116" height="21" rx="10.5" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
   <text class="xs" x="658" y="140" text-anchor="middle" fill="var(--orange)">last tool</text>
-  <text class="xs" x="724" y="140" text-anchor="start">cloud</text>
+  <text class="xs" x="724" y="140" text-anchor="start">direct Anthropic</text>
   <path d="M580 398 L596 398" class="edge-lite" stroke-dasharray="3 3"/>
   <rect x="600" y="387.5" width="116" height="21" rx="10.5" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
   <text class="xs" x="658" y="402" text-anchor="middle" fill="var(--orange)">end of system</text>
@@ -123,14 +123,14 @@
   <rect x="600" y="168" width="284" height="172" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="612" y="189" text-anchor="start">Cache key, no markers</text>
   <text class="s" x="612" y="207" text-anchor="start">OpenAI, Codex, ChatGPT, AI Gateway:</text>
-  <text class="xs" x="612" y="222" text-anchor="start">prompt_cache_key, the provider caches</text>
+  <text class="xs" x="612" y="222" text-anchor="start">no prompt_cache_key; the provider caches</text>
   <text class="xs" x="612" y="236" text-anchor="start">the longest prefix it has seen</text>
   <text class="s" x="612" y="256" text-anchor="start">Workers AI:</text>
   <text class="xs" x="612" y="271" text-anchor="start">x-session-affinity pins the agent</text>
   <text class="xs" x="612" y="285" text-anchor="start">to one replica and its prefix cache</text>
-  <text class="xs" x="612" y="305" text-anchor="start">Key: kinu-&lt;agent&gt; on the cloud,</text>
-  <text class="xs" x="612" y="319" text-anchor="start">&lt;conversation&gt;:&lt;session&gt; in the CLI,</text>
-  <text class="xs" x="612" y="333" text-anchor="start">kinu-&lt;search root&gt; for swarm nodes</text>
+  <text class="xs" x="612" y="305" text-anchor="start">Key: kinu-&lt;agent&gt;, cloud and CLI;</text>
+  <text class="xs" x="612" y="319" text-anchor="start">ChatGPT: a session per workspace,</text>
+  <text class="xs" x="612" y="333" text-anchor="start">a conversation per agent</text>
   <rect x="600" y="464" width="284" height="86" rx="7" fill="var(--purpleFill)" stroke="var(--purpleLine)" stroke-dasharray="3 3"/>
   <text class="b" x="612" y="485" text-anchor="start" fill="var(--purple)">Not in the system prompt</text>
   <text class="xs" x="612" y="502" text-anchor="start">date, model, cwd, device status, work</text>

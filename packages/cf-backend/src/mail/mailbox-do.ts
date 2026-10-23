@@ -11,7 +11,8 @@ import {
   durableStamps, EmailOutbox, initMailboxTables, mailboxEmail, sha256Hex, openSchema, writeStamp,
   type MailAgentMessage, type MailBox, type MailboxAgentCalls, type MailboxCalls, type MailCaller, type MailDelivery, type MailListing, type MailListQuery, type MailMessageView, type MailOutgoing,
   type MailBoxOwner, type MailRecipient, type MailThreadSummary, type MailThreadView, type MailTriaged, type MailTriageItem, type MailTriagePick, type MailWake,
-  MailStore, type MailBlobs,
+  MailStore, type MailBlobs, type ArmedRestore, type OpsCaller, type RestoreTarget, requireOps,
+  bookmarkNow, missingBytes, restartedForRestore, restoreArmed, type MissingBytes,
 } from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
 import { Effect, Exit } from 'effect';
@@ -212,6 +213,34 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
    * records them, so a retry finds them again; then, once the work under way has ended, every object under its R2
    * prefix, its rows, its outbox and its alarm. Again, it finds nothing.
    */
+  /**
+   * The operator's restore (`/ops/restore`, ARCHITECTURE-DECISIONS W7): this mailbox's storage, every box of the
+   * account in it, armed to go back to `target` at its next start; `opsRestart` ends it at once. Only `/ops/*` holds
+   * the capability.
+   */
+  async opsRestore(caller: OpsCaller, target: RestoreTarget): Promise<ArmedRestore> {
+    return await restoreArmed(this.ctx, this.env, caller, target);
+  }
+
+  /** Ends this activation, so an armed restore lands. */
+  async opsRestart(caller: OpsCaller): Promise<void> {
+    await restartedForRestore(this.ctx, this.env, caller);
+  }
+
+  /** Where this object's history stands now. */
+  async opsBookmark(caller: OpsCaller): Promise<string> {
+    return await bookmarkNow(this.ctx, this.env, caller);
+  }
+
+  /** The mail bodies and attachments this mailbox's rows name that R2 no longer holds: after a restore, what it could not
+   *  bring back. */
+  async opsMissing(caller: OpsCaller): Promise<MissingBytes> {
+    await requireOps(this.env, caller);
+    const prefix = `mail/${this.identity()?.user_id ?? 'unopened'}/`;
+
+    return await missingBytes(this.bucket, prefix, this.store.namedBlobKeys().map((key) => `${prefix}${key}`));
+  }
+
   async deleteBox(userId: string): Promise<void> {
     this.deleting = true;
     const [box] = this.ctx.storage.sql.exec('SELECT username FROM mail_box WHERE id = 1').toArray();

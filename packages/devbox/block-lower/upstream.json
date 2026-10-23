@@ -9,7 +9,7 @@
     "driver": "low-level, unmodified upstream"
   },
   "binaries": {
-    "devbox-block-lower": "cb962c7a3d0120922fba9695212735bee3462df9b4fe7bb73601bba2d586ee95",
+    "devbox-block-lower": "fb8464502f09b85f48d920856d658cf9610b32399e646b5d6c18bf392cbe2968",
     "devbox-squashfuse": "477158afaa0e965535c168618c44e12a2b5af0189fcd663603fddfbbf67d57e9",
     "sandbox-shim": "ca804ac454895015a4e35d4ee9f5e6d6da2ffd2483076d4562f18329658b2e79"
   },
@@ -19,14 +19,14 @@
     "tools-setup.sh": "cdef747ff4faafe04eed4373993af4656353cf7985b8e6e3ac03b23adbbacf1c",
     "tools-build.sh": "3c301a53661845a20b5f8492b177c99b0ec8616855163bb676db55eb2794448f",
     "src/index.rs": "e26e54ebcc3893d7ba84470512bde960e239aec9ea7c89b05dd66992417961d7",
-    "src/main.rs": "3b436f50857187a45ff68f9c5e72366c18c5504a8902b2e2f0dfd81383a0ead6",
-    "src/model.rs": "1a9e2ab5d3e08e47e3b8a79cf03f1128ff81ff2a8df07ec42cdac31896f1831d",
-    "src/namespace.rs": "b2f750bea8a1dcae7c8910aba19734615f949e1b9d395e2b4b5274487d68011f",
-    "src/storage.rs": "0fcda0d8442e05d6c897edaffae983adfd3b9a1a3428f66ea636da1e5c659eb4"
+    "src/main.rs": "33f3e577afdc3e4d498c6a3e14e0c3e157059413c0df7f5c0ac596da117cd240",
+    "src/model.rs": "e9b63e77435ea4060ecaad9684a98b5a72fb7c9187747331243d9d3f111daea6",
+    "src/namespace.rs": "ff87417b2a075c41b136ffad463a5a435351baeb142dd500a65b4d42d1f5d948",
+    "src/storage.rs": "3f6bc14fa497df3e15012abac3a2e4b83d92b9d64b90ef4a65786c5b3bc278ba"
   },
   "tools": {
-    "sha256": "487755c42357d318f211bb8d0181227835295c1c88b9d438877883955745f9a4",
-    "bytes": 358366089
+    "sha256": "0c6dd2b8410179c9fe6fe8ae020849bf4cfe53cd66b3c663d9d593a6032aee7c",
+    "bytes": 358378302
   },
   "rust": {
     "version": "1.93.1",
@@ -36,6 +36,6 @@
     "base": "cloudflare/debian-trixie",
     "debian": "snapshot.debian.org 20261002T000000Z",
     "where": "armada recipe: tools-setup.sh as root, tools-build.sh as the user",
-    "job": "20261023042720-c4a2f1c5"
+    "job": "20261023045621-b6a86f36"
   }
 }

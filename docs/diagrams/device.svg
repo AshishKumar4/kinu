@@ -83,7 +83,7 @@
   <text class="s mono" x="638" y="129">kinu connect</text>
   <text class="s" x="638" y="148">dials one outbound WebSocket</text>
   <text class="xs" x="638" y="169">real commands + files</text>
-  <text class="xs" x="638" y="188">no inbound port</text>
+  <text class="xs" x="638" y="188">no inbound network port</text>
   <path d="M276 144 L312 144" fill="none" stroke="var(--purpleLine)" stroke-width="1.4" stroke-linejoin="round" marker-start="url(#a-purple)" marker-end="url(#a-purple)"/>
   <text class="xs" x="294" y="134" text-anchor="middle">RPC</text>
   <path d="M626 144 L588 144" fill="none" stroke="var(--greenLine)" stroke-width="1.4" stroke-linejoin="round" marker-start="url(#a-green)" marker-end="url(#a-green)"/>
@@ -102,15 +102,15 @@
   <path d="M751 200 L751 238" fill="none" stroke="var(--greenLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-green)"/>
   <rect x="312" y="238" width="564" height="216" rx="10" fill="var(--bandFill)" stroke="var(--bandStroke)"/>
   <text class="band" x="326" y="260">ONE REVERSE WEBSOCKET</text>
-  <text class="s" x="326" y="281">JSON-RPC requests and replies; output streams share the connection</text>
+  <text class="s" x="326" y="281">JSON-RPC requests and replies; command, terminal and screen streams share the connection</text>
   <rect x="326" y="298" width="168" height="104" rx="7" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
   <text class="b" x="338" y="320" fill="var(--orange)">Commands</text>
-  <text class="s mono" x="338" y="340">exec · execCancel</text>
+  <text class="s mono" x="338" y="340">exec · cancel</text>
   <text class="xs" x="338" y="360">streamed output</text>
   <text class="xs" x="338" y="380">device sandbox</text>
   <rect x="510" y="298" width="168" height="104" rx="7" fill="var(--greenFill)" stroke="var(--greenLine)"/>
   <text class="b" x="522" y="320" fill="var(--green)">Files</text>
-  <text class="s mono" x="522" y="340">readFile · writeFile</text>
+  <text class="s mono" x="522" y="340">readRange · writeFile</text>
   <text class="s mono" x="522" y="360">listFiles · statPath</text>
   <text class="xs" x="522" y="380">consented file view</text>
   <rect x="694" y="298" width="168" height="104" rx="7" fill="var(--blueFill)" stroke="var(--blueLine)"/>

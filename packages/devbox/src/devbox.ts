@@ -976,7 +976,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     const own = lost === undefined ? this.#snapshots.wake() : undefined;
 
     if (own !== undefined) return { kind: 'own', id: own, boxes };
-    const answer = await boxes.getByName(GOLDEN_NAME).goldenFor(this.ctx.id.toString(), lost);
+    const answer = await boxes.getByName(this.goldenName).goldenFor(this.ctx.id.toString(), lost);
 
     return answer.kind === 'ready' ? { kind: 'golden', id: answer.id, boxes } : answer;
   }
@@ -3422,6 +3422,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   /** The name the box answers to, one DNS label of at most 63 characters, read at each start (D96); unset, the
    *  platform's 64-character container id, which no DNS label holds. */
   protected async hostname(): Promise<string | undefined> { return undefined; }
+  /** The object of this class that builds the golden every box starts from (D65): one per deployment of the class,
+   *  unless a host that deploys the class again for each run names its own. */
+  protected get goldenName(): string { return GOLDEN_NAME; }
   /** The Worker version this object runs, read at construction and at each start: a start refused under another is asked
    *  again (D94). Unset, only a changed input or a caller's explicit ask lifts a refusal. */
   protected get workerVersion(): string | undefined { return undefined; }

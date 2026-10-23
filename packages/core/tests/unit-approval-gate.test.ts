@@ -440,6 +440,37 @@ describe('gateExec', () => {
     expect(asked).toEqual(asks);
   });
 
+  // An adversarial review's lines: a heredoc lifo ends elsewhere than bash (a continued delimiter, a locale-quoted one,
+  // a carriage return), a word spelled in pieces, a goal or a mode wider than a matcher read. Each is judged at least as
+  // the text review this one replaced judged it.
+  test('a line the reading misses is judged at least as the text review judged it', async () => {
+    const asked: string[] = [];
+
+    const h = harness(DEVICE, {
+      mode: () => 'strict',
+      requestApproval: async (req) => {
+        asked.push(req.command);
+
+        return 'allow';
+      },
+    });
+
+    const asks = [
+      'suffix=; git ""push"$suffix" --force origin HEAD:main', 'suffix=; npm ""publish"$suffix"', 'chmod u+s-w /tmp/tool',
+      'mvn deploy:deploy-file -Dfile=pom.xml -Durl=https://repo.example.com/releases',
+      'cat <<EOF\nEO\\\nF\ngit push --force origin HEAD:main\nEOF', 'cat <<$"EOF"\nEOF\ngit push --force origin HEAD:main\n',
+      'cat <<EOF\r\nEOF\r\ngit push --force origin HEAD:main\n',
+    ];
+
+    for (const command of asks) expect(await h.run(command)).toBe(`ran:${command}`);
+
+    expect(asked).toEqual(asks);
+    decidesAll(['cat < ~/.ssh/id_rsa', 'printenv | rg .'], 'warn');
+    // find runs only what its actions name: a pattern that spells a program is none.
+    decidesAll(['find /tmp -name rm -o -path / -print'], 'allow');
+    decidesAll(['find . -name "*.tmp" -exec rm -r {} + -print'], 'gate');
+  });
+
   test('a gate-tier command asks the channel; approved → exec runs', async () => {
     const asked: ShellApprovalRequest[] = [];
 

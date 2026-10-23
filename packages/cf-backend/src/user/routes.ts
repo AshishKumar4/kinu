@@ -9,7 +9,8 @@ import { connectedPath, FILES_VIEW_CONFIG_KEY, filesViewNamed, PROFILE_CATALOG_C
 import { BOX_SIZE_ORDER } from '@kinu.run/devbox/sizes';
 import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY } from '../computer-size';
 import { DEVICE_TIERS, JsonValueSchema } from '@kinu.run/core';
-import { diagnostics, authoredRefusal, toKinuError, settle, type KinuError } from '@kinu.run/core/obs';
+import { diagnostics, authoredRefusal, renderThrownChain, toKinuError, settle, type KinuError } from '@kinu.run/core/obs';
+import { isEvalServiceIdentity } from '../eval/abort-route';
 import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '@kinu.run/core';
 import { listProviderCatalog } from './available-models';
 import { notifyWorkspacesModelSettingsChanged, type CreateWorkspaceEnv } from './workspace-access';
@@ -48,7 +49,7 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   | 'listCloudflareAccounts' | 'selectCloudflareAccount' | 'listAIGateways' | 'selectAIGateway'
   | 'userMcp_list' | 'userMcp_presets' | 'userMcp_add' | 'userMcp_remove' | 'userMcp_connectedPresets'
   | 'userMcp_handleOAuthCallback'
-  | 'userMcp_beginConnect'
+  | 'userMcp_beginConnect' | 'userMcp_reconnect' | 'evalAbortActivation'
   | 'accountMemory_view' | 'accountMemory_decide' | 'accountMemory_put' | 'accountMemory_forget' | 'accountMemory_forgetNote'
   | 'slateAiSpend'
   | 'listSecrets' | 'putSecrets' | 'setSecretDestination' | 'deleteSecret' | 'grantSecret' | 'revokeSecretGrant'
@@ -437,16 +438,21 @@ userRoutes.post('/api/user/chatgpt/paste/start', (c) => settle(Effect.tryPromise
   catch: (cause) => toKinuError({ doing: 'starting the ChatGPT sign-in', cause, otherwise: 'unavailable' }),
 })));
 
-userRoutes.post('/api/user/chatgpt/paste/finish', async (c) => {
-  const body = await safeJson(c.req.raw, v.object({ url: v.string() }));
+// A paste the account refuses says why in its own words: across RPC its refusal is no KinuError, so `routeError`
+// would answer only its class's ("The request is not valid.", production 2026-10-23).
+userRoutes.post('/api/user/chatgpt/paste/finish', (c) => settle(Effect.tryPromise({
+  try: async () => {
+    const body = await safeJson(c.req.raw, v.object({ url: v.string() }));
 
-  if (body === null) return err(400, 'Body must be { url }');
-  const finished = await c.get('stub').finishChatGptPasteSignIn(c.get('owner'), body.url);
+    if (body === null) return err(400, 'Body must be { url }');
+    const finished = await c.get('stub').finishChatGptPasteSignIn(c.get('owner'), body.url);
 
-  if (finished.outcome === 'signed_in') modelSettingsChanged(c);
+    if (finished.outcome === 'signed_in') modelSettingsChanged(c);
 
-  return json({ body: finished });
-});
+    return json({ body: finished });
+  },
+  catch: (cause) => authoredRefusal({ doing: 'finishing the ChatGPT sign-in', cause }),
+})));
 
 userRoutes.delete('/api/user/chatgpt', async (c) => {
   const signedOut = await c.get('stub').signOutChatGpt(c.get('owner'), c.req.query('revoke') === '1');
@@ -457,16 +463,19 @@ userRoutes.delete('/api/user/chatgpt', async (c) => {
 
 userRoutes.post('/api/user/claude/start', async (c) => json({ body: await c.get('stub').startClaudeSignIn(c.get('owner')) }));
 
-userRoutes.post('/api/user/claude/finish', async (c) => {
-  const body = await safeJson(c.req.raw, v.object({ code: v.string() }));
+userRoutes.post('/api/user/claude/finish', (c) => settle(Effect.tryPromise({
+  try: async () => {
+    const body = await safeJson(c.req.raw, v.object({ code: v.string() }));
 
-  if (body === null) return err(400, 'Body must be { code }');
-  const status = await c.get('stub').finishClaudeSignIn(c.get('owner'), body.code);
+    if (body === null) return err(400, 'Body must be { code }');
+    const status = await c.get('stub').finishClaudeSignIn(c.get('owner'), body.code);
 
-  if (status.connected) modelSettingsChanged(c);
+    if (status.connected) modelSettingsChanged(c);
 
-  return json({ body: status });
-});
+    return json({ body: status });
+  },
+  catch: (cause) => authoredRefusal({ doing: 'finishing the Claude sign-in', cause }),
+})));
 
 // Refused whatever the method.
 userRoutes.all('/api/user/config/:key', async (c, next) => {
@@ -586,6 +595,32 @@ userRoutes.post('/api/user/mcp/servers/:id/connect', (c) => settle(Effect.gen(fu
     try: async () => json({ body: await c.get('stub').userMcp_beginConnect(c.get('owner'), decodeURIComponent(rawParam(c, 'id')), body.output.run) }),
     catch: (cause) => authoredRefusal({ doing: 'beginning this MCP server\'s sign-in', cause }),
   });
+})));
+
+// Eval-only: ends the account object's activation, so the next request is a fresh wake that dials every MCP server again
+// (the mcp-wake first-run row). `ctx.abort` rejects the call that asked for it: that rejection is the abort's receipt.
+userRoutes.post('/api/user/eval/abort', (c) => {
+  if (!isEvalServiceIdentity(c.get('identity'))) return Response.json({ error: 'Not found' }, { status: 404 });
+  const aborted = Response.json({ aborted: true }, { status: 202 });
+
+  return settle(Effect.tryPromise({ try: () => c.get('stub').evalAbortActivation(), catch: (cause) => renderThrownChain({ cause }) }).pipe(Effect.match({
+    onFailure: (receipt) => {
+      diagnostics.event('eval.account_activation_aborted', { receipt });
+
+      return aborted;
+    },
+    onSuccess: () => {
+      diagnostics.event('eval.account_activation_abort_returned', {});
+
+      return aborted;
+    },
+  })));
+});
+
+// A failed or closed server dialled again at the person's ask (the row's Reconnect).
+userRoutes.post('/api/user/mcp/servers/:id/reconnect', (c) => settle(Effect.tryPromise({
+  try: async () => json({ body: await c.get('stub').userMcp_reconnect(c.get('owner'), decodeURIComponent(rawParam(c, 'id'))) }),
+  catch: (cause) => authoredRefusal({ doing: 'reconnecting this MCP server', cause }),
 })));
 
 userRoutes.delete('/api/user/mcp/servers/:id', (c) => settle(Effect.tryPromise({

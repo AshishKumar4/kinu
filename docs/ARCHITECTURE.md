@@ -71,7 +71,7 @@ The workspace hosts the shared services; every agent's turns, main's included, r
 graph TB
     A["Agent&lt;Env&gt;: agents SDK"]
     AA["ActorAgent (abstract)<br/>cf-backend/src/actor-agent.ts<br/>runtime · BackendHost · AgentOrchestrator<br/>ExtensionHost · ChatSession ports"]
-    O["OrchestratorAgent<br/>agents: swarm · hire · msg · list · dismiss<br/>codemode: release · agent"]
+    O["OrchestratorAgent<br/>agents: swarm · hire · assign · hireWorkspace · message · reply · list · dismiss<br/>codemode-only: agent · db · mail"]
     H["AgentFacet<br/>main · subagent · head · node · background<br/>own isolate and SQLite; workspace RPC for tools"]
     OMS["OwnedModelServices<br/>owner-scoped provider · model<br/>affinity · web search"]
 
@@ -108,13 +108,11 @@ what the agent reaches by what it is (`actorReach`) and by the lane its turn was
 admitted in (`turnReach`). The `agents` actions derive from the deps the factory
 wires (`actorAgentsToolDeps`, read by core's `agentsActionsFor`,
 `packages/core/src/delegation/agents-tool.ts`). Every actor below the depth
-cap has `swarm`. `hire`, `msg`, and `list` need a roster or the peer transport.
-`dismiss` needs the roster. `msg`'s `event_id` target answers an inbound agent
-message. At the depth cap the team and the search substrate are not offered, so
+cap has `swarm`. `hire`, `message`, and `list` need a roster or the peer transport.
+`dismiss` needs the roster. `reply` answers an inbound agent message by its
+`event_id`. At the depth cap the team and the search substrate are not offered, so
 the roster, the `hire` rung and `swarm` vanish together: a search's nodes are
-agents a level below it. `report` exists only on a hirer's lane. `release` is not a
-native tool: it is an orchestrator-only codemode provider, left out of the
-Plan-mode set. The owner's lane is `submit_plan` (an owner turn in Plan mode),
+agents a level below it. `report` exists only on a hirer's lane. The owner's lane is `submit_plan` (an owner turn in Plan mode),
 `reply_to_comment` (while a plan the owner sent back awaits answers) and
 `ask_owner`; their effects commit in the agent's own store, so its isolate
 builds and runs them, and the workspace only declares them.
@@ -223,7 +221,7 @@ in one transaction. A turn the process died inside continues from its run
 ledger, once, under the run it opened. The backend supplies what the loop cannot
 know through `ChatSessionPorts`: `prepareTurn` (owner reads, profile, skills, MCP
 tools, prompt, model, tools), the terminal effects a settled turn owes, the
-driver lease, and the wake. On Cloudflare `ActorAgent.prepareTurn` is that port;
+driver lease, and the wake. On Cloudflare `FacetChat.prepareTurn` is that port, in the agent's facet, its workspace answers read over RPC;
 locally `LocalAgentSession` supplies it.
 
 `ActorSession` (`packages/core/src/orchestrator/actor-session.ts`) holds one
@@ -350,14 +348,14 @@ sequenceDiagram
     participant U as User (Browser)
     participant WS as WebSocket
     participant T as OrchestratorAgent
-    participant C as ChatSession (core)
+    participant C as ChatSession (core, in main's AgentFacet)
     participant LLM as Workers AI / provider
     participant Tools as Tool execution
 
     U->>WS: cf_agent_use_chat_request
     WS->>T: ChatWireTransport → ChatSession.send
     T->>C: admit turn (durable opening row, lease)
-    C->>T: prepareTurn (profile, prompt, model, tools)
+    C->>T: prepareTurn over workspace RPC (profile, prompt, model, tools)
     C->>LLM: runChat → streamText(model, system, messages, tools)
     loop Agentic step loop
         LLM-->>C: text delta / tool call
@@ -530,13 +528,13 @@ changelog (`evolution/changelog.ts`). See [EVOLUTION.md](./EVOLUTION.md) and
 graph TB
     subgraph pkgs["packages/"]
         Core["core/<br/>ChatSession + runChat + ExtensionHost, workspace filesystem,<br/>ExecutionRouter, swarm engine, EvolutionEngine,<br/>CraftStore, scaffold, eight builtin tools, EventLog"]
-        CF["cf-backend/<br/>ActorAgent → OrchestratorAgent (one DO class),<br/>hosted actors over one SQLite, UserDO, React UI"]
+        CF["cf-backend/<br/>ActorAgent → OrchestratorAgent (one DO class),<br/>each agent in its own AgentFacet, UserDO, React UI"]
         Utils["agent-utils/<br/>stores, VFS types"]
         AC["agent-core/<br/>vendored runtime (dist); slate record types"]
         Compact["compaction/<br/>@better-compact/core ladder + Kinu codec"]
         Devbox["devbox/<br/>@kinu.run/devbox: an ephemeral container<br/>presented as a machine that stays<br/>(snapshot-chain · supervision · ports)"]
         CLI["cli/<br/>kinu create/chat/exec/…"]
-        CLIB["cli-backend/<br/>LocalAgentSession, bun:sqlite,<br/>subprocess sandbox, child_process branches"]
+        CLIB["cli-backend/<br/>LocalAgentSession, bun:sqlite,<br/>subprocess executor, in-process branches"]
         PC["pc-agent/<br/>reverse-WS device daemon → device.*"]
         TU["test-utils/<br/>shared test fakes + fixtures"]
     end
@@ -546,6 +544,9 @@ graph TB
     CF --> Compact
     CF --> Devbox
     Core --> AC
+    Core --> Utils
+    Core --> Devbox
+    Compact --> Core
     CLI --> Core
     CLI --> CLIB
     CLIB --> Core
@@ -553,10 +554,10 @@ graph TB
     CLIB --> Compact
 
     subgraph ext["External"]
-        Agents["agents (Agents SDK) ^0.22.0"]
-        AISDK["ai (Vercel AI SDK) 6.0.214"]
-        Nimbus["@nimbus-sh/core 0.12.0: the workspace filesystem"]
-        Sandbox["@cloudflare/sandbox 1.0.0 (Files and S3Mount, under packages/devbox)"]
+        Agents["agents (Agents SDK) ^0.29.0"]
+        AISDK["ai (Vercel AI SDK) 7.0.148"]
+        Nimbus["@nimbus-sh/core 0.27.0: the workspace filesystem"]
+        Sandbox["@cloudflare/sandbox 1.0.2 (Files and S3Mount, under packages/devbox)"]
     end
 
     CF --> Agents

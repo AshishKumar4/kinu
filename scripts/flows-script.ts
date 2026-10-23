@@ -49,6 +49,26 @@ export const ACCOUNT_RECALL_ASK = 'Flow account memory: which city do I live in?
 
 export const ACCOUNT_RECALL_REPLY = 'YOU LIVE IN';
 
+/** The activity row (1018-xao, Muse's activity log): an ask on Home that the assistant answers with a program creating a
+ *  workspace, then a refusal no wait helps, so its turn has a cause, a change and a reason it stopped. */
+export const ACTIVITY_ASK = 'Flow activity: start the activity check workspace.';
+
+export const ACTIVITY_WORKSPACE = 'Flow activity check';
+
+export const ACTIVITY_REFUSAL = 'Flow activity: the provider refused to go on';
+
+function activityAnswer(latest: string, request: ScriptedRequest): ScriptedAnswer | undefined {
+  if (!latest.includes(ACTIVITY_ASK)) return undefined;
+
+  if (!request.called.includes('eval')) {
+    const args = [ACTIVITY_WORKSPACE, 'The activity row made this', '# Flow activity check'].map((arg) => JSON.stringify(arg)).join(', ');
+
+    return { toolCall: { name: 'eval', arguments: { code: `return await agent.createWorkspace(${args});` } } };
+  }
+
+  return { refused: { message: ACTIVITY_REFUSAL } };
+}
+
 /** The attachment row (MA-019): a text file dropped on the chat, then an ask about it; the reply repeats the one word
  *  the file holds, which the ask never says, so a reply that has it read the file. */
 export const ATTACHMENT_FILE = 'flow-attachment.txt';
@@ -213,6 +233,32 @@ const FLOW_SLATE_CALLS: readonly ScriptedAnswer[] = [
     text: 'Starting its preview.',
     toolCall: { name: 'eval', arguments: { code: `return await workspace.slates.${FLOW_SLATE.id}.$preview();` } },
   },
+];
+
+/** The slate-pictures row (N6): a slate whose page draws a light and a dark of its own, by `prefers-color-scheme`. */
+export const MODE_SLATE = { title: 'Flow modes', id: 'modes' } as const;
+
+export const MODE_SLATE_ASK = `Use the file tool to create a slate at ${SLATES_ROOT}/${MODE_SLATE.id}/ whose page is pale in a light page and `
+  + 'near black in a dark one, then start its preview.';
+
+const MODE_SLATE_CLIENT = [
+  'export default function App() {',
+  '  return (',
+  '    <main data-modes>',
+  '      <style>{"body { margin: 0; background: #fafafa; color: #111 } @media (prefers-color-scheme: dark) { body { background: #0b0b0f; color: #eee } }"}</style>',
+  `      <h1>${MODE_SLATE.title}</h1>`,
+  '    </main>',
+  '  );',
+  '}',
+  '',
+].join('\n');
+
+const MODE_SLATE_CALLS: readonly ScriptedAnswer[] = [
+  { toolCall: { name: 'file', arguments: { op: 'write', path: `${SLATES_ROOT}/${MODE_SLATE.id}/package.json`, content: JSON.stringify({
+    name: MODE_SLATE.id, browser: 'client.tsx', slate: { title: MODE_SLATE.title, port: 8789 },
+  }, null, 2) } } },
+  { toolCall: { name: 'file', arguments: { op: 'write', path: `${SLATES_ROOT}/${MODE_SLATE.id}/client.tsx`, content: MODE_SLATE_CLIENT } } },
+  { toolCall: { name: 'eval', arguments: { code: `return await workspace.slates.${MODE_SLATE.id}.$preview();` } } },
 ];
 
 /** The pin row (1008-c): an answer drawing one page in the chat, whose pin keeps it as a slate of the workspace. */
@@ -613,7 +659,8 @@ export function flowsScript(request: ScriptedRequest): ScriptedAnswer | null {
 
   const latest = request.userTexts.at(-1) ?? '';
 
-  const proposed = agentWorkspaceAnswer(latest, request) ?? accountMemoryAnswer(latest, request) ?? attachmentAnswer(latest) ?? ownerAskAnswer(request, latest);
+  const proposed = agentWorkspaceAnswer(latest, request) ?? accountMemoryAnswer(latest, request) ?? attachmentAnswer(latest) ?? activityAnswer(latest, request)
+    ?? ownerAskAnswer(request, latest);
 
   if (proposed !== undefined) return proposed;
 
@@ -646,9 +693,19 @@ export function flowsScript(request: ScriptedRequest): ScriptedAnswer | null {
       : { text: `NO PLAN: this turn was offered no submit_plan, only ${request.available.join(', ') || 'no tools'}.` };
   }
 
-  if (asked(SLATE_ASK) && request.available.includes('file')) {
-    return FLOW_SLATE_CALLS[request.called.length] ?? { text: `The ${FLOW_SLATE.title} slate is running in its tab.` };
-  }
-
-  return null;
+  return slateAnswer(request, asked);
 }
+
+/** The slate rows' turns: each plays its calls in order, then says its slate is running. */
+function slateAnswer(request: ScriptedRequest, asked: (ask: string) => boolean): ScriptedAnswer | null {
+  const slate = request.available.includes('file') ? SLATE_TURNS.find((turn) => asked(turn.ask)) : undefined;
+
+  if (slate === undefined) return null;
+
+  return slate.calls[request.called.length] ?? { text: `The ${slate.title} slate is running in its tab.` };
+}
+
+const SLATE_TURNS = [
+  { ask: SLATE_ASK, title: FLOW_SLATE.title, calls: FLOW_SLATE_CALLS },
+  { ask: MODE_SLATE_ASK, title: MODE_SLATE.title, calls: MODE_SLATE_CALLS },
+] as const;
