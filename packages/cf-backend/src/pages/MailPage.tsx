@@ -3,7 +3,8 @@ import { Link, useLocation, useNavigate, useNavigationType, useParams, useSearch
 import { Loader } from "@/components/ui/Loader";
 import { Button, ICON_ON_PHONE, buttonClass } from "@/components/ui/Button";
 import { EnvelopeSimpleIcon, MagnifyingGlassIcon, NotePencilIcon, SparkleIcon } from "@phosphor-icons/react";
-import { APP_ROUTES, MAIL_VIEWS, suggestedMailUsername, type MailBox, type MailListing, type MailView } from "@kinu.run/core";
+import { APP_ROUTES, MAIL_VIEWS, PERSONAL_ASSISTANT_ID, suggestedMailUsername, type MailBox, type MailListing, type MailView } from "@kinu.run/core";
+import { exploreWorkspaceHref } from "@/components/explore/ExploreCard";
 import { ImportantMailRow } from "@/components/mail/ImportantMailRow";
 import { MAIL_VIEW_LABEL, MailRow, mailBoxLabel } from "@/components/mail/MailRow";
 import { MailThreadReader } from "@/components/mail/MailThreadReader";
@@ -47,7 +48,7 @@ function CreateAddress({ domain, suggested, onCreated }: { domain: string; sugge
 function InstallAssistant({ address, onClose }: { address: string; onClose: () => void }) {
   return (
     <Modal title="Your personal assistant" icon={<SparkleIcon size={18} weight="fill" className="p-accent-fg" />} onClose={onClose}
-      footer={<><Button variant="ghost" size="sm" onClick={onClose}>Not now</Button><Link to={APP_ROUTES.explore} className={buttonClass({ variant: "primary", size: "sm" })}>Install</Link></>}>
+      footer={<><Button variant="ghost" size="sm" onClick={onClose}>Not now</Button><Link to={`${exploreWorkspaceHref(PERSONAL_ASSISTANT_ID)}?install`} className={buttonClass({ variant: "primary", size: "sm" })}>Install</Link></>}>
       <p data-mail-install className="t-body p-text-2">Kinu reads <span className="font-mono p-text">{address}</span>, picks what's important, and drafts your replies.</p>
     </Modal>
   );
