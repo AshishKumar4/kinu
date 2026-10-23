@@ -1366,7 +1366,6 @@ export {
   FAILURE_WITHOUT_ERROR,
   CONTEXT_EDIT_VIA, CONTEXT_EDIT_STATUSES, CONTEXT_EDIT_BOUNDARIES,
   initRunEventTables,
-  parseStoredRunEvent,
   RunEventSchema,
   recordModelOperations,
   RunEventRecorder, holdRunHeads, type StepSpendSource,
@@ -1399,7 +1398,7 @@ export {
   type RunEventListener,
   type RunEventQuery,
   type BoundedRunEventQuery,
-  type StoredRunEvent, type StoredRunEventRow,
+  type StoredRunEvent,
   type ContextMeasures,
 } from './events/index';
 

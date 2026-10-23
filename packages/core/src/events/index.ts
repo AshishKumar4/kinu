@@ -22,7 +22,6 @@ export {
 
 export {
   initRunEventTables,
-  parseStoredRunEvent,
   RunEventSchema,
   recordModelOperations,
   RunEventRecorder,
@@ -32,7 +31,7 @@ export {
   type RunEventListener,
   type RunEventQuery,
   type BoundedRunEventQuery,
-  type StoredRunEvent, type StoredRunEventRow,
+  type StoredRunEvent,
   type ContextMeasures,
   type StepSpendSource,
   holdRunHeads,

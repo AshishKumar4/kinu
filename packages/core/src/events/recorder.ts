@@ -188,7 +188,7 @@ export interface StoredRunEventRow {
 
 /** The single place a persisted event becomes typed; readers must not re-declare event shapes. The envelope is the row's
  *  own columns, over any copy an older row's body still holds. */
-export function parseStoredRunEvent(row: StoredRunEventRow): RunEvent {
+function parseStoredRunEvent(row: StoredRunEventRow): RunEvent {
   return v.parse(RunEventSchema, { ...JSON.parse(row.payload), runId: row.run_id, eventIndex: row.event_index, type: row.type, timestamp: row.ts });
 }
 
