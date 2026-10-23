@@ -76,27 +76,24 @@ async function askToCreate(origin: string, identity: PublicWebIdentity, name: st
 
 const RefusalSchema = v.object({ error: v.string(), code: v.string() });
 
-/** How long the sweep and the teardown may take: each ends on its own bound, apart from the case's budget. */
-const CLEANUP_MS = 60_000;
-
 /**
  * Removes every workspace on the `limits` account but `keep`, before the case opens its own: a run cut off before its
- * teardown left the account at its limit, where opening the case's workspace would be refused.
+ * teardown left the account at its limit, where opening the case's workspace would be refused. Each request ends with
+ * the deployment's answer or the connection's failure, as a teardown's does.
  */
 async function sweep(origin: string, identity: PublicWebIdentity, keep: readonly string[]): Promise<void> {
-  const signal = AbortSignal.timeout(CLEANUP_MS);
-
-  for (const row of await listWorkspaces(origin, identity, signal)) {
-    if (!keep.includes(row.name)) await deleteWorkspace(origin, identity, row.name, signal);
+  for (const row of await listWorkspaces(origin, identity)) {
+    if (!keep.includes(row.name)) await deleteWorkspace(origin, identity, row.name);
   }
 }
 
-/** Deletes each of `made` still there, every one attempted; the names whose delete failed, with why. */
+/**
+ * Deletes each of `made` still there, every one attempted, after the probe settled; the deletes whose request failed,
+ * with why. Not on the case's budget, which a probe that ran out has spent: the next run's sweep takes what this left.
+ */
 async function teardown(origin: string, identity: PublicWebIdentity, made: Set<string>): Promise<string[]> {
-  const signal = AbortSignal.timeout(CLEANUP_MS);
-
   const deleted = await Promise.allSettled([...made].map(async (name) => {
-    await deleteWorkspace(origin, identity, name, signal);
+    await deleteWorkspace(origin, identity, name);
     made.delete(name);
   }));
 
