@@ -81,7 +81,7 @@ const DDL = [
      suspended_at INTEGER,
      updated_at   INTEGER NOT NULL
    )`,
-  // An operator's single-use invite link, kept by its token's hash, 14 days; spent by the account that opens it.
+  // An operator's single-use invite link, kept by its token's hash, 7 days; spent by the account that opens it.
   `CREATE TABLE IF NOT EXISTS cp_invites (
      token_hash  TEXT    PRIMARY KEY,
      created_by  TEXT    NOT NULL,
@@ -397,8 +397,8 @@ export function noteAccountStanding(sql: ControlPlaneSql, userId: string, standi
   );
 }
 
-/** How long an invite link stays open. */
-export const INVITE_LINK_MS = 14 * DAY_MS;
+/** How long an invite link stays open (the owner's board, 2026-10-23). */
+export const INVITE_LINK_MS = 7 * DAY_MS;
 
 /** A new invite link's token, kept only as its hash: the operator's link is its only copy. */
 export async function createInvite(sql: ControlPlaneSql, createdBy: string, now: number): Promise<{ readonly token: string; readonly expiresAt: number }> {

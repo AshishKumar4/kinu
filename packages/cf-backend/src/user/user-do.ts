@@ -158,7 +158,14 @@ export class UserDO extends Agent<Env> {
 
   private readonly secrets = new UserSecrets(this.host);
 
-  private readonly sessions = new UserSessions({ ...this.host, sql: (query, ...values) => this.sql(query, ...values), accountName: () => this.name, getProfile: (caller) => this.profile.getProfile(caller), workspaceRegistered: (name) => this.workspaces.workspaceRegistered(name) });
+  private readonly sessions = new UserSessions({
+    ...this.host,
+    sql: (query, ...values) => this.sql(query, ...values),
+    accountName: () => this.name,
+    getProfile: (caller) => this.profile.getProfile(caller),
+    workspaceRegistered: (name) => this.workspaces.workspaceRegistered(name),
+    suspension: () => this.accountLimits.suspension(),
+  });
 
   private readonly mcpServers = new UserMcpServers({ ...this.host, mcp: this.mcp, vault: this.credentials });
 
@@ -1117,8 +1124,10 @@ export class UserDO extends Agent<Env> {
     return this.accountLimits.setClass(caller, klass, by);
   }
 
-  limits_suspend(caller: UserCaller, reason: string, by: string): Promise<void> {
-    return this.accountLimits.suspend(caller, reason, by);
+  /** Suspended: nothing new starts, every session and token ends, and none is minted until it is lifted. */
+  async limits_suspend(caller: UserCaller, reason: string, by: string): Promise<void> {
+    await this.accountLimits.suspend(caller, reason, by);
+    await this.sessions.endEverySession(caller);
   }
 
   limits_unsuspend(caller: UserCaller): Promise<void> {

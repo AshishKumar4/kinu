@@ -92,7 +92,7 @@ export const ControlActionSchema = v.variant('action', [
   v.object({ action: v.literal('account.unsuspend'), userId: UserIdSchema }),
   /** An email invited before or after its first sign-in: its account is the one that email signs in as. */
   v.object({ action: v.literal('invite.email'), email: v.pipe(v.string(), v.trim(), v.toLowerCase(), v.email()) }),
-  /** A single-use link, 14 days: whoever signs in and opens it is invited. */
+  /** A single-use link, 7 days: whoever signs in and opens it is invited. */
   v.object({ action: v.literal('invite.link') }),
 ]);
 

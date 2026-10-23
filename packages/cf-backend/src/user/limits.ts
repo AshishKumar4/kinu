@@ -64,6 +64,11 @@ export class UserLimits {
       : Effect.succeed(tier);
   }
 
+  /** Why an operator suspended the account, or null. */
+  suspension(): string | null {
+    return this.store.standing().suspended?.reason ?? null;
+  }
+
   klass(): AccountClass {
     const email = this.email();
 
