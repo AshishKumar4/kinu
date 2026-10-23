@@ -89,17 +89,17 @@ export class DeviceUserProbeDO extends UserDO {
     sealRpcSurface(this, [...USER_DO_RPC_SURFACE, ...PROBE_METHODS]);
   }
 
-  /** A ticket for `deviceId`, bought as its daemon buys one: a challenge, signed by its key over generation 0. */
+  /** A ticket for `deviceId`, bought as its daemon's first connect buys one: a challenge, signed by its key over no secret. */
   private async ticketFor(deviceId: string, key: { readonly privateKey: CryptoKey }): Promise<string> {
     const owner = await ownerCaller(this.env);
     const challenge = await this.issueDeviceConnectChallenge(owner, deviceId);
 
     if (!challenge.ok) throw new Error(`the paired machine was issued no challenge: ${challenge.refusal}`);
-    const message = deviceConnectMessage(PROBE_HUB_ORIGIN, deviceId, 0, challenge.nonce);
+    const message = deviceConnectMessage(PROBE_HUB_ORIGIN, deviceId, '', challenge.nonce);
     const signature = base64Url(new Uint8Array(await crypto.subtle.sign('Ed25519', key.privateKey, message)));
 
     const issued = await this.issueDeviceConnectTicket(owner, {
-      origin: PROBE_HUB_ORIGIN, device: deviceId, generation: 0, nonce: challenge.nonce, signature,
+      origin: PROBE_HUB_ORIGIN, device: deviceId, secret: '', nonce: challenge.nonce, signature,
     });
 
     if (!issued.ok) throw new Error(`the paired machine was issued no connect ticket: ${issued.refusal}`);

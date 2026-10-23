@@ -108,7 +108,7 @@ const { DAEMON_PREDECESSOR_ENV } = require('../../core/src/cli/command-env.ts');
 
 const { shellQuote } = require('../../core/src/utils/shell.ts');
 
-const { DEVICE_KEY_FILE, deviceConnectMessage, deviceRefusalMessage, signDeviceMessage } = require('../../core/src/execution/device-key.ts');
+const { DEVICE_CONNECT_SECRET: CONNECT_SECRET, DEVICE_KEY_FILE, deviceConnectMessage, deviceRefusalMessage, signDeviceMessage } = require('../../core/src/execution/device-key.ts');
 
 const protocol = require('./device-protocol.json');
 
@@ -1662,13 +1662,15 @@ function readDeviceConfig(configPath = CONFIG_PATH) {
 /**
  * The one schema of device.json (device protocol 5), which the CLI reads it by
  * too: JSON naming the user, device, origin and root this daemon runs on, each
- * a nonempty string, and the connect generation it holds. `origin` is one
- * this daemon will connect to; `root`, the directory the owner linked (their
- * home, or one the command named), absolute; `generation`, the last one the
- * hub handed this machine, a whole number. It holds no secret: the key is
- * device.key's. One with a `token` was written for an earlier protocol, whose
- * bearer no hub takes now, and `kinu update` enrols the machine again. Fields
- * beyond these are kept, so a new generation is written back with them.
+ * a nonempty string, and the connect secret it holds. `origin` is one this
+ * daemon will connect to; `root`, the directory the owner linked (their home,
+ * or one the command named), absolute; `connectSecret`, the last one the hub
+ * handed this machine ('' before its first connect), which its next connect
+ * signs beside the key: a copy of this file and device.key taken before the
+ * owner's machine connected again connects nothing. One with a `token` was
+ * written for an earlier protocol, whose bearer no hub takes now, and
+ * `kinu update` enrols the machine again. Fields beyond these are kept, so a
+ * new secret is written back with them.
  * `text` is the file's contents; a parse error never echoes them.
  */
 function parseDeviceConfig(text, configPath) {
@@ -1684,7 +1686,7 @@ function parseDeviceConfig(text, configPath) {
     throw new Error(`device config at ${configPath} is corrupt; re-run: kinu connect`, { cause: safeCause });
   }
 
-  const expectation = `device config at ${configPath} is missing its user, device, origin, directory or generation; re-run: kinu connect`;
+  const expectation = `device config at ${configPath} is missing its user, device, origin, directory or connect secret; re-run: kinu connect`;
   const cfg = parseRecord(value, expectation);
 
   if (cfg.token !== undefined) {
@@ -1703,9 +1705,9 @@ function parseDeviceConfig(text, configPath) {
 
   if (!path.isAbsolute(root)) throw new Error(`device config at ${configPath} names a directory that is not absolute; re-run: kinu connect`);
 
-  if (!Number.isSafeInteger(cfg.generation) || cfg.generation < 0) throw new Error(expectation);
+  if (typeof cfg.connectSecret !== 'string' || !(cfg.connectSecret === '' || CONNECT_SECRET.test(cfg.connectSecret))) throw new Error(expectation);
 
-  return { ...cfg, user, device, origin: trustedOrigin(origin, configPath), root, generation: cfg.generation };
+  return { ...cfg, user, device, origin: trustedOrigin(origin, configPath), root, connectSecret: cfg.connectSecret };
 }
 
 /**
@@ -1827,17 +1829,17 @@ async function connectChallenge(cfg, httpOrigin, fetchFn) {
 
 /**
  * A connect ticket, bought with this machine's key: the hub's challenge,
- * signed over the hub's origin, this device and the connect generation
+ * signed over the hub's origin, this device and the connect secret
  * device.json holds on disk now, which a successor on this machine may have
  * moved since this process read it.
  */
 async function getConnectTicket(cfg, httpOrigin, fetchFn = fetch, files = { configPath: CONFIG_PATH, keyPath: KEY_PATH }) {
   const nonce = await connectChallenge(cfg, httpOrigin, fetchFn);
-  const { generation } = readDeviceConfig(files.configPath);
-  const signature = await signWithDeviceKey(files.keyPath, deviceConnectMessage(new URL(httpOrigin).origin, cfg.device, generation, nonce));
+  const { connectSecret: secret } = readDeviceConfig(files.configPath);
+  const signature = await signWithDeviceKey(files.keyPath, deviceConnectMessage(new URL(httpOrigin).origin, cfg.device, secret, nonce));
 
   const answered = await postToHub(
-    fetchFn, `${httpOrigin}/pc/connect-ticket`, { user: cfg.user, device: cfg.device, generation, nonce, signature }, 'ticket exchange',
+    fetchFn, `${httpOrigin}/pc/connect-ticket`, { user: cfg.user, device: cfg.device, secret, nonce, signature }, 'ticket exchange',
   );
 
   const ticket = answered.ticket === undefined ? '' : parseString(answered.ticket, 'ticket exchange returned an invalid connect ticket');
@@ -2001,11 +2003,11 @@ function startConnectLoop(opts) {
   };
 }
 
-/** Writes `generation` into device.json by rename of a whole file, so a crash leaves the old file or the new one; memory
- *  takes it only once the rename landed. */
-function persistGeneration(cfg, generation, configPath = CONFIG_PATH) {
-  const temporary = `${configPath}.generation-${process.pid}-${Date.now()}`;
-  const next = { ...cfg, generation };
+/** Writes `connectSecret` into device.json by rename of a whole file, so a crash leaves the old file or the new one;
+ *  memory takes it only once the rename landed. */
+function persistConnectSecret(cfg, connectSecret, configPath = CONFIG_PATH) {
+  const temporary = `${configPath}.secret-${process.pid}-${Date.now()}`;
+  const next = { ...cfg, connectSecret };
   let fileDescriptor;
 
   try {
@@ -2015,7 +2017,7 @@ function persistGeneration(cfg, generation, configPath = CONFIG_PATH) {
     fs.closeSync(fileDescriptor);
     fileDescriptor = undefined;
     fs.renameSync(temporary, configPath);
-    cfg.generation = generation;
+    cfg.connectSecret = connectSecret;
 
     if (os.platform() !== 'win32') {
       const directoryDescriptor = fs.openSync(path.dirname(configPath), 'r');
@@ -2026,33 +2028,33 @@ function persistGeneration(cfg, generation, configPath = CONFIG_PATH) {
   } catch (err) {
     if (fileDescriptor !== undefined) fs.closeSync(fileDescriptor);
     fs.rmSync(temporary, { force: true });
-    throw new Error('persist connect generation', { cause: err });
+    throw new Error('persist connect secret', { cause: err });
   }
 }
 
 /**
- * The hub's GENERATION frame: the connect generation this machine's next
- * connect signs, stored before it is answered. True when it is on disk, the
- * one case the daemon answers GENERATION_ACK and the hub commits it; a machine
- * that could not store it answers nothing, and connects next on the one it
- * holds, which the hub still holds too.
+ * The hub's CONNECT_SECRET frame: the secret this machine's next connect
+ * signs, stored before it is answered. True when it is on disk, the one case
+ * the daemon answers CONNECT_SECRET_ACK and the hub commits it; a machine that
+ * could not store it answers nothing, and connects next on the one it holds,
+ * which the hub still holds too.
  */
-function storeGeneration(
+function storeConnectSecret(
   cfg,
   msg,
   configPath = CONFIG_PATH,
   logger = log,
 ) {
-  if (!Number.isSafeInteger(msg.generation) || msg.generation < 1) {
-    logger('Connect generation refused:', 'the frame carries no generation; the one on disk stays');
+  if (typeof msg.secret !== 'string' || !CONNECT_SECRET.test(msg.secret)) {
+    logger('Connect secret refused:', 'the frame carries no secret; the one on disk stays');
 
     return false;
   }
 
   try {
-    persistGeneration(cfg, msg.generation, configPath);
+    persistConnectSecret(cfg, msg.secret, configPath);
   } catch (err) {
-    logger('Connect generation could not be stored:', err);
+    logger('Connect secret could not be stored:', err);
 
     return false;
   }
@@ -2366,12 +2368,12 @@ async function main() {
         // on its own promise, and the socket keeps serving meanwhile.
         if (updater.handle(msg)) return;
 
-        // The hub hands every accepted connect the next connect generation.
-        // Answered only once it is on disk: the answer is what the hub
-        // commits, and a connect signing any generation but the committed one
-        // or the next reads as a second machine holding this key.
-        if (msg && msg.type === FRAMES.generation) {
-          if (storeGeneration(cfg, msg)) ws.send(JSON.stringify({ type: FRAMES.generationAck, generation: cfg.generation }));
+        // The hub hands every accepted connect a fresh connect secret.
+        // Answered, by its hash, only once it is on disk: the answer is what
+        // the hub commits, and a connect signing any secret but the committed
+        // one or the one just handed reads as a second machine holding this key.
+        if (msg && msg.type === FRAMES.connectSecret) {
+          if (storeConnectSecret(cfg, msg)) ws.send(JSON.stringify({ type: FRAMES.connectSecretAck, secretHash: sha256Of(cfg.connectSecret) }));
 
           return;
         }
@@ -2548,6 +2550,6 @@ module.exports = {
   parseDeviceConfig,
   startConnectLoop,
   getConnectTicket,
-  persistGeneration,
-  storeGeneration,
+  persistConnectSecret,
+  storeConnectSecret,
 };

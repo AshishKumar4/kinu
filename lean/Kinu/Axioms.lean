@@ -154,10 +154,10 @@ import Kinu
 #print axioms Kinu.Safety.DeviceKey.a_challenge_is_spent_once
 #print axioms Kinu.Safety.DeviceKey.a_challenge_proves_only_its_device
 #print axioms Kinu.Safety.DeviceKey.revocation_is_permanent
-#print axioms Kinu.Safety.DeviceKey.the_committed_generation_connects
+#print axioms Kinu.Safety.DeviceKey.the_committed_secret_connects
 #print axioms Kinu.Safety.DeviceKey.a_lost_answer_is_recovered
-#print axioms Kinu.Safety.DeviceKey.a_stale_generation_revokes
-#print axioms Kinu.Safety.DeviceKey.an_answer_commits_only_the_next_generation
+#print axioms Kinu.Safety.DeviceKey.a_stale_secret_revokes
+#print axioms Kinu.Safety.DeviceKey.an_answer_commits_only_the_handed_secret
 #print axioms Kinu.Safety.DeviceKey.ahead_after_own
 #print axioms Kinu.Safety.DeviceKey.two_holders_are_found
 #print axioms Kinu.Safety.DeviceKey.one_holder_is_never_revoked

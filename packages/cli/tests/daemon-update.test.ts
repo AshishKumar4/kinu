@@ -17,7 +17,7 @@ import {
   DAEMON_FILES, daemonArchive, HUB_NONCE, PLATFORM_ARTIFACT, releaseSigningEnv, startUpdateHub,
   type HubPush, type HubSocket, type UpdateHub,
 } from './helpers/update-hub';
-import { generateKeyPairSync, verify } from 'node:crypto';
+import { createHash, generateKeyPairSync, verify } from 'node:crypto';
 import { readProcessOutput, waitForDaemonPid, waitForFileText } from './helpers/device-process';
 
 const repoRoot = resolve(__dirname, '../../..');
@@ -92,7 +92,7 @@ function installedMachine(origin: string, stamp: string | null, config: JsonObje
 
   if (stamp !== null) writeFileSync(join(home, 'pc-agent.version'), `${stamp}\n`, { mode: 0o600 });
   // As `kinu connect` writes them, and as an update leaves them: the fields the daemon reads, and the key it signs with.
-  writeFileSync(join(home, 'device.json'), `${JSON.stringify({ user: 'user_1', device: 'dev-1', origin, root: home, generation: 0 }, null, 2)}\n`, { mode: 0o600 });
+  writeFileSync(join(home, 'device.json'), `${JSON.stringify({ user: 'user_1', device: 'dev-1', origin, root: home, connectSecret: '' }, null, 2)}\n`, { mode: 0o600 });
   writeFileSync(join(home, 'device.key'), MACHINE_KEY.privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600 });
   writeFileSync(join(home, 'config.json'), `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
 
@@ -490,16 +490,18 @@ describe('the daemon answers the hub in core\'s frames', () => {
     expect(asked.filter((method) => method === DEVICE_METHOD.listFiles).length).toBe(pages.length);
   });
 
-  test('a connect generation is on disk when the daemon acknowledges it', async () => {
+  test('a connect secret is on disk when the daemon acknowledges it, named by its hash', async () => {
     const served = hub({ served: OLD, archive: await daemonArchive(NEW_FILES, NEW) });
     const home = installedMachine(served.origin, OLD);
     startDaemon(home, await releaseSigningEnv());
 
     await served.sockets.until((hellos) => hellos[0] !== undefined);
     const socket = present(served.sockets.items[0], 'the HELLO');
-    await socket.frames.until((frames) => frames.some((frame) => frame.type === DEVICE_FRAMES.generationAck));
+    await socket.frames.until((frames) => frames.some((frame) => frame.type === DEVICE_FRAMES.connectSecretAck));
+    const handed = '1'.padEnd(43, 's');
 
-    expect(parseJsonObject(installed(home, 'device.json')).generation).toBe(1);
+    expect(parseJsonObject(installed(home, 'device.json')).connectSecret).toBe(handed);
+    expect(socket.frames.items.find((frame) => frame.type === DEVICE_FRAMES.connectSecretAck)).toMatchObject({ secretHash: createHash('sha256').update(handed).digest('hex') });
   });
 
   test('a sandboxed command\'s whole output reads back through core\'s file client at the /tmp path it printed', async () => {

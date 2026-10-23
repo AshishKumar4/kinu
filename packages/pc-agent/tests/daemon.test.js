@@ -52,10 +52,10 @@ const {
   handle,
   createCheckpoints,
   getConnectTicket,
-  persistGeneration,
+  persistConnectSecret,
   readDeviceConfig,
   startConnectLoop,
-  storeGeneration,
+  storeConnectSecret,
   supervision,
 } = require('../src/index.js');
 
@@ -70,7 +70,7 @@ function deviceKey() {
 
 /** device.json as `kinu connect` writes it on protocol 5: no secret in it. */
 function deviceConfig(fields = {}) {
-  return { user: 'user-1', device: 'dev-1', origin: 'https://kinu.run', root: '/home/u/project', generation: 0, ...fields };
+  return { user: 'user-1', device: 'dev-1', origin: 'https://kinu.run', root: '/home/u/project', connectSecret: '', ...fields };
 }
 
 /** A hub's challenge and ticket answers, recording each request's path and body. */
@@ -170,9 +170,12 @@ async function oneTurn() {
 // file never survives a call, and files cannot pollute each other. Bun runs
 // each file in a fresh context with fresh builtins (bun 1.4.0). Check
 // `df /tmp` first when these rows go red that fast.
-describe('daemon connect generation', () => {
-  test('the next ticket exchange signs the generation on disk, with the machine\'s key, for the hub it dials', async () => {
-    const root = scratchDir('daemon-generation');
+/** A connect secret as the hub hands one: 43 base64url characters. */
+const HANDED = 'H'.repeat(43);
+
+describe('daemon connect secret', () => {
+  test('the next ticket exchange signs the secret on disk, with the machine\'s key, for the hub it dials', async () => {
+    const root = scratchDir('daemon-secret');
     const configPath = path.join(root, 'device.json');
     const keyPath = path.join(root, 'device.key');
     const key = deviceKey();
@@ -182,27 +185,27 @@ describe('daemon connect generation', () => {
     const seen = [];
 
     await getConnectTicket(cfg, 'https://kinu.run', ticketHub(seen), { configPath, keyPath });
-    persistGeneration(cfg, 1, configPath);
+    persistConnectSecret(cfg, HANDED, configPath);
     await getConnectTicket(cfg, 'https://kinu.run', ticketHub(seen), { configPath, keyPath });
 
     const tickets = seen.filter((request) => request.path === '/pc/connect-ticket').map((request) => request.body);
     expect(seen.map((request) => request.path)).toEqual(['/pc/connect-challenge', '/pc/connect-ticket', '/pc/connect-challenge', '/pc/connect-ticket']);
-    expect(tickets.map((body) => body.generation)).toEqual([0, 1]);
+    expect(tickets.map((body) => body.secret)).toEqual(['', HANDED]);
 
-    // Each signs exactly the message the hub checks: protocol, hub origin, device, generation, nonce.
+    // Each signs exactly the message the hub checks: protocol, hub origin, device, secret, nonce.
     for (const body of tickets) {
-      const message = Buffer.from(`kinu-device-connect:5:https://kinu.run:dev-1:${String(body.generation)}:${body.nonce}`);
+      const message = Buffer.from(`kinu-device-connect:5:https://kinu.run:dev-1:${body.secret}:${body.nonce}`);
       expect(crypto.verify(null, message, key.publicKey, Buffer.from(body.signature, 'base64url'))).toBe(true);
-      expect(Object.keys(body).sort()).toEqual(['device', 'generation', 'nonce', 'signature', 'user']);
+      expect(Object.keys(body).sort()).toEqual(['device', 'nonce', 'secret', 'signature', 'user']);
     }
 
-    expect(JSON.parse(fs.readFileSync(configPath, 'utf8')).generation).toBe(1);
+    expect(JSON.parse(fs.readFileSync(configPath, 'utf8')).connectSecret).toBe(HANDED);
     expect(fs.statSync(configPath).mode & 0o777).toBe(0o600);
     expect(fs.readdirSync(root).sort()).toEqual(['device.json', 'device.key']);
   });
 
   test('a device.json with no key beside it buys no ticket: the machine stops as a dead credential', async () => {
-    const root = scratchDir('daemon-generation');
+    const root = scratchDir('daemon-secret');
     const configPath = path.join(root, 'device.json');
     const cfg = deviceConfig();
     fs.writeFileSync(configPath, JSON.stringify(cfg), { mode: 0o600 });
@@ -222,18 +225,18 @@ describe('daemon connect generation', () => {
   });
 
   test('a failed persist leaves memory and the old file unchanged', () => {
-    const root = scratchDir('daemon-generation');
+    const root = scratchDir('daemon-secret');
     const configPath = path.join(root, 'missing', 'device.json');
     const cfg = deviceConfig();
 
-    expect(() => persistGeneration(cfg, 1, configPath)).toThrow('persist connect generation');
-    expect(cfg.generation).toBe(0);
+    expect(() => persistConnectSecret(cfg, HANDED, configPath)).toThrow('persist connect secret');
+    expect(cfg.connectSecret).toBe('');
     expect(fs.existsSync(configPath)).toBe(false);
     expect(fs.readdirSync(root)).toEqual([]);
   });
 
   test('a failed atomic rename preserves the config and is not acknowledged', () => {
-    const root = scratchDir('daemon-generation');
+    const root = scratchDir('daemon-secret');
     const configPath = path.join(root, 'device.json');
     const cfg = deviceConfig();
     const messages = [];
@@ -244,31 +247,31 @@ describe('daemon connect generation', () => {
     });
 
     try {
-      expect(storeGeneration(cfg, { type: 'GENERATION', generation: 1 }, configPath, (...args) => messages.push(args))).toBe(false);
-      expect(cfg.generation).toBe(0);
-      expect(JSON.parse(fs.readFileSync(configPath, 'utf8')).generation).toBe(0);
+      expect(storeConnectSecret(cfg, { type: 'CONNECT_SECRET', secret: HANDED }, configPath, (...args) => messages.push(args))).toBe(false);
+      expect(cfg.connectSecret).toBe('');
+      expect(JSON.parse(fs.readFileSync(configPath, 'utf8')).connectSecret).toBe('');
       expect(fs.readdirSync(root)).toEqual(['device.json']);
-      expect(messages[0]?.[0]).toBe('Connect generation could not be stored:');
+      expect(messages[0]?.[0]).toBe('Connect secret could not be stored:');
     } finally {
       rename.mockRestore();
     }
   });
 
-  test('a generation frame carrying anything but a whole number above 0 is neither stored nor taken', () => {
-    const root = scratchDir('daemon-generation');
+  test('a secret frame carrying anything but 43 base64url characters is neither stored nor taken', () => {
+    const root = scratchDir('daemon-secret');
     const configPath = path.join(root, 'device.json');
     const messages = [];
 
-    for (const generation of [{ weird: 'object' }, '2', 0, -1, 1.5, undefined]) {
+    for (const secret of [{ weird: 'object' }, '', 'short', 'H'.repeat(44), `${'H'.repeat(42)}=`, undefined]) {
       const cfg = deviceConfig();
       fs.writeFileSync(configPath, JSON.stringify(cfg), { mode: 0o600 });
 
-      expect(storeGeneration(cfg, { type: 'GENERATION', generation }, configPath, (...args) => messages.push(args))).toBe(false);
-      expect(cfg.generation).toBe(0);
-      expect(JSON.parse(fs.readFileSync(configPath, 'utf8')).generation).toBe(0);
+      expect(storeConnectSecret(cfg, { type: 'CONNECT_SECRET', secret }, configPath, (...args) => messages.push(args))).toBe(false);
+      expect(cfg.connectSecret).toBe('');
+      expect(JSON.parse(fs.readFileSync(configPath, 'utf8')).connectSecret).toBe('');
     }
 
-    expect(messages.map((message) => message[0])).toEqual(Array(6).fill('Connect generation refused:'));
+    expect(messages.map((message) => message[0])).toEqual(Array(6).fill('Connect secret refused:'));
   });
 });
 
@@ -324,7 +327,7 @@ describe('daemon startup hardening', () => {
       }
     }
 
-    for (const malformed of [{ ...whole, device: 1 }, { ...whole, root: 'project' }, { ...whole, generation: -1 }, { ...whole, generation: 1.5 }, { ...whole, generation: '1' }]) {
+    for (const malformed of [{ ...whole, device: 1 }, { ...whole, root: 'project' }, { ...whole, connectSecret: 1 }, { ...whole, connectSecret: 'short' }, { ...whole, connectSecret: null }]) {
       fs.writeFileSync(configPath, JSON.stringify(malformed), { mode: 0o600 });
       expect(() => readDeviceConfig(configPath)).toThrow();
     }
@@ -1789,7 +1792,7 @@ describe('daemon toolchain probe', () => {
 // proves the daemon's CommonJS source, node: builtins, child_process
 // supervision, fs.watch in-flight waits and the global WebSocket all work
 // under Bun, by running them: AUTH and HELLO on connect, the connect
-// generation stored, an exec round-trip, execCancel, a file op, and reconnect
+// connect secret stored, an exec round-trip, execCancel, a file op, and reconnect
 // after the socket drops.
 
 describe('daemon process under Bun against a local hub', () => {
@@ -1941,7 +1944,7 @@ describe('daemon process under Bun against a local hub', () => {
     expect(fs.readFileSync(logPath, 'utf8')).toContain(`Kinu PC agent: ENOTDIR: not a directory, scandir '${notADirectory}'`);
   });
 
-  test('AUTH then HELLO on connect, the connect generation, exec, cancel, file op, and reconnect — all under Bun', async () => {
+  test('AUTH then HELLO on connect, the connect secret, exec, cancel, file op, and reconnect — all under Bun', async () => {
     if (process.platform !== 'linux' && process.platform !== 'darwin') return;
     const root = scratchDir('daemon-e2e');
     // Outside KINU_HOME on purpose: Kinu's own directory is never served
@@ -1970,11 +1973,12 @@ describe('daemon process under Bun against a local hub', () => {
         expect(hub.frames[0]).toEqual({ type: 'AUTH', user: 'user-1', ticket: `pct_${'b'.repeat(32)}` });
         expect(hub.upgrades).toEqual([{ url: `${hub.origin}/pc/connect`, account: 'user-1' }]);
 
-        // GENERATION: the hub hands the next connect generation; the daemon
-        // stores it and answers, and the hub commits it on that answer.
-        hub.socket().send(JSON.stringify({ type: 'GENERATION', generation: 1 }));
-        expect(await untilHub(() => hub.frames.find((f) => f.type === 'GENERATION_ACK'))).toEqual({ type: 'GENERATION_ACK', generation: 1 });
-        expect(JSON.parse(fs.readFileSync(path.join(root, 'device.json'), 'utf8')).generation).toBe(1);
+        // CONNECT_SECRET: the hub hands a fresh connect secret; the daemon
+        // stores it and answers with its hash, and the hub commits it on that answer.
+        hub.socket().send(JSON.stringify({ type: 'CONNECT_SECRET', secret: 'H'.repeat(43) }));
+        expect(await untilHub(() => hub.frames.find((f) => f.type === 'CONNECT_SECRET_ACK')))
+          .toEqual({ type: 'CONNECT_SECRET_ACK', secretHash: crypto.createHash('sha256').update('H'.repeat(43)).digest('hex') });
+        expect(JSON.parse(fs.readFileSync(path.join(root, 'device.json'), 'utf8')).connectSecret).toBe('H'.repeat(43));
 
         const reply = replyReader(hub, daemonLog);
 
@@ -2117,11 +2121,11 @@ describe('daemon process under Bun against a local hub', () => {
     });
   });
 
-  // F3. The answer is what the hub commits, so a generation this daemon could
+  // F3. The answer is what the hub commits, so a secret this daemon could
   // NOT store must not be answered: the one still on its disk is what its next
   // connect signs, and the hub has to still hold it, or the machine reads as a
   // second holder of its key.
-  test('a generation it could not store is not acknowledged', async () => {
+  test('a secret it could not store is not acknowledged', async () => {
     if (process.platform !== 'linux' && process.platform !== 'darwin') return;
     await withDaemon(undefined, async ({ hub, root, daemonLog }) => {
       // The store is the directory, so making it unwritable is what makes the
@@ -2129,13 +2133,13 @@ describe('daemon process under Bun against a local hub', () => {
       fs.chmodSync(root, 0o500);
 
       try {
-        hub.socket().send(JSON.stringify({ type: 'GENERATION', generation: 1 }));
-        await untilHub(() => daemonLog().includes('Connect generation could not be stored:'));
-        expect(daemonLog()).toContain('Connect generation could not be stored:');
-        // The old generation is still the one on disk, and nothing told the
+        hub.socket().send(JSON.stringify({ type: 'CONNECT_SECRET', secret: 'H'.repeat(43) }));
+        await untilHub(() => daemonLog().includes('Connect secret could not be stored:'));
+        expect(daemonLog()).toContain('Connect secret could not be stored:');
+        // The old secret is still the one on disk, and nothing told the
         // hub otherwise.
-        expect(JSON.parse(fs.readFileSync(path.join(root, 'device.json'), 'utf8')).generation).toBe(0);
-        expect(hub.frames.filter((frame) => frame.type === 'GENERATION_ACK')).toEqual([]);
+        expect(JSON.parse(fs.readFileSync(path.join(root, 'device.json'), 'utf8')).connectSecret).toBe('');
+        expect(hub.frames.filter((frame) => frame.type === 'CONNECT_SECRET_ACK')).toEqual([]);
       } finally {
         fs.chmodSync(root, 0o700);
       }

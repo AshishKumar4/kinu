@@ -1137,12 +1137,12 @@ export {
 export {
   DeviceHelloHeadSchema, DeviceUpdateHelloSchema, DeviceHelloSchema, DEVICE_METHOD, DEVICE_FRAMES, DEVICE_ERRORS,
   DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, DEVICE_UPDATE_REQUIRED, DEVICE_PTY_MAX_AXIS, deviceMethodHas,
-  deviceFailure, DeviceAuthFrameSchema, DeviceGenerationAckSchema, DEVICE_AUTH_DEADLINE_CLOSE, DEVICE_AUTH_DEADLINE_MS,
+  deviceFailure, DeviceAuthFrameSchema, DeviceConnectSecretAckSchema, DEVICE_AUTH_DEADLINE_CLOSE, DEVICE_AUTH_DEADLINE_MS,
   DEVICE_CREDENTIALS_REJECTED_CLOSE, DEVICE_VERSION_REFUSAL_CLOSE, DEVICE_CONNECT_ACCOUNT_HEADER,
 } from './execution/device-protocol';
 
 export {
-  DEVICE_KEY_FILE, deviceConnectMessage, deviceRefusalMessage, deviceReplaceMessage, isDevicePublicKey, signDeviceMessage,
+  DEVICE_CONNECT_SECRET, DEVICE_KEY_FILE, deviceConnectMessage, deviceRefusalMessage, deviceReplaceMessage, isDevicePublicKey, signDeviceMessage,
   verifyDeviceSignature,
 } from './execution/device-key';
 

@@ -177,11 +177,13 @@ export function initUserTables(sql: SqlExec): void {
       id              TEXT PRIMARY KEY,
       -- The machine's Ed25519 public key, its 32 raw bytes as base64url.
       public_key      TEXT NOT NULL,
-      -- The connect generation the machine last confirmed it stored. A
-      -- connect signs the one its device.json holds: this one, or the next
-      -- when the confirmation was lost; any other means two machines hold
-      -- the key.
-      connect_generation INTEGER NOT NULL DEFAULT 0,
+      -- The SHA-256 (hex) of the connect secret the machine last confirmed
+      -- it stored, and of the one its last accepted connect was handed and
+      -- has not confirmed; null for none (the '' a machine holds before its
+      -- first connect). A connect signs the one its device.json holds: one
+      -- of these two; any other means two machines hold the key.
+      connect_secret_hash TEXT,
+      pending_secret_hash TEXT,
       -- When two machines were found holding this device's key and it was
       -- revoked for it: the incident the owner reads on the Devices page
       -- until acknowledged.

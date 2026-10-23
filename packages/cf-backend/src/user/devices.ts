@@ -193,9 +193,15 @@ export interface DeviceRegistration extends DeviceEnrolment {
 /** What a live device's credential is checked against. */
 type DeviceKeyRow = {
   readonly public_key: string;
-  readonly connect_generation: number;
+  readonly connect_secret_hash: string | null;
+  readonly pending_secret_hash: string | null;
   readonly expires_at: number | null;
 };
+
+/** A connect secret as its row keeps it: its SHA-256 (hex), or null for the '' a machine holds before its first. */
+function secretHashOf(secret: string): string | null {
+  return secret === '' ? null : sha256Hex(secret);
+}
 
 /** The served build as the connect that opened a device's socket read it. */
 const SERVED_STAMP_KEY = 'devices.served_stamp';
@@ -257,8 +263,8 @@ export class UserDevices {
 
   /**
    * A device socket's first frame. AUTH naming this account and a live ticket binds the socket to the ticket's device,
-   * a newcomer winning the slot, and hands the machine its next connect generation; anything else closes the socket as
-   * a dead credential.
+   * a newcomer winning the slot, and hands the machine a fresh connect secret, kept here as its hash until the machine
+   * says it stored it; anything else closes the socket as a dead credential.
    */
   async authenticateDeviceSocket(ws: DeviceSocket, data: string): Promise<void> {
     if (!this._devices.withinAuthDeadline(ws)) return;
@@ -285,9 +291,15 @@ export class UserDevices {
     }
 
     this._devices.admit(deviceId, ws);
-    // Committed only when the daemon answers that it stored it (`acknowledgeGeneration`).
-    ws.send(JSON.stringify({ type: DEVICE_FRAMES.generation, generation: device.connect_generation + 1 }));
-    this.host.sqlx(`UPDATE user_devices SET last_seen_at = ?, expires_at = ? WHERE id = ?`, now, now + DEVICE_LINK_TTL_MS, deviceId);
+    // Random, so no copy of device.json derives the next one; committed only when the daemon answers that it stored it
+    // (`acknowledgeConnectSecret`), and until then a connect signing the one it holds now still connects.
+    const secret = randomToken(32);
+
+    this.host.sqlx(
+      `UPDATE user_devices SET pending_secret_hash = ?, last_seen_at = ?, expires_at = ? WHERE id = ?`,
+      sha256Hex(secret), now, now + DEVICE_LINK_TTL_MS, deviceId,
+    );
+    ws.send(JSON.stringify({ type: DEVICE_FRAMES.connectSecret, secret }));
 
     // Clear offline notices only on tracked workspaces; an unreachable one keeps its row for next accept.
     const label = this.deviceLabel(deviceId);
@@ -312,21 +324,21 @@ export class UserDevices {
     await this.devicesMoved();
   }
 
-  /** The daemon stored `generation` in its device.json: committed when it is the one after the committed one, which is
-   *  the one its connect was handed. An answer for any other is stale, and changes nothing. */
-  acknowledgeGeneration(deviceId: string, generation: number): void {
+  /** The daemon stored the connect secret whose hash is `secretHash` in its device.json: committed when it is the one
+   *  its connect was handed. An answer for any other is stale, and changes nothing. */
+  acknowledgeConnectSecret(deviceId: string, secretHash: string): void {
     const committed = this.host.sqlx<{ id: string }>(
-      `UPDATE user_devices SET connect_generation = ?, last_seen_at = ?
-        WHERE id = ? AND connect_generation = ? AND revoked_at IS NULL RETURNING id`,
-      generation, Date.now(), deviceId, generation - 1,
+      `UPDATE user_devices SET connect_secret_hash = pending_secret_hash, pending_secret_hash = NULL, last_seen_at = ?
+        WHERE id = ? AND pending_secret_hash = ? AND revoked_at IS NULL RETURNING id`,
+      Date.now(), deviceId, secretHash,
     );
 
-    if (committed.length === 0) diagnostics.event('device.generation_ack_stale', { device: deviceId, generation });
+    if (committed.length === 0) diagnostics.event('device.connect_secret_ack_stale', { device: deviceId });
   }
 
   private liveDeviceKey(deviceId: string): DeviceKeyRow | undefined {
     return this.host.sqlx<DeviceKeyRow>(
-      `SELECT public_key, connect_generation, expires_at FROM user_devices WHERE id = ? AND revoked_at IS NULL`, deviceId,
+      `SELECT public_key, connect_secret_hash, pending_secret_hash, expires_at FROM user_devices WHERE id = ? AND revoked_at IS NULL`, deviceId,
     )[0];
   }
 
@@ -515,7 +527,7 @@ export class UserDevices {
   }
 
   /**
-   * `deviceId` with `enrolment`'s key and connect generation 0, its row made when the release's reset dropped it: the
+   * `deviceId` with `enrolment`'s key and no connect secret, its row made when the release's reset dropped it: the
    * earlier credential is gone, and a socket it still held closes. A device its owner removed stays removed.
    */
   private reenrolled(deviceId: string, enrolment: DeviceEnrolment): Effect.Effect<{ deviceId: string }, KinuError> {
@@ -527,7 +539,8 @@ export class UserDevices {
       const trimmedLabel = enrolment.label?.trim().slice(0, DEVICE_NAME_MAX_LENGTH) ?? '';
       this.host.sqlx(
         `INSERT INTO user_devices (id, public_key, label, created_at, expires_at) VALUES (?, ?, ?, ?, ?)
-           ON CONFLICT (id) DO UPDATE SET public_key = excluded.public_key, connect_generation = 0, expires_at = excluded.expires_at`,
+           ON CONFLICT (id) DO UPDATE SET public_key = excluded.public_key, connect_secret_hash = NULL, pending_secret_hash = NULL,
+             expires_at = excluded.expires_at`,
         deviceId, enrolment.publicKey, trimmedLabel === '' ? 'Your PC' : trimmedLabel, now, now + DEVICE_LINK_TTL_MS,
       );
       // In the same turn as the new key: a challenge or ticket the old key earned connects nothing after it.
@@ -621,19 +634,20 @@ export class UserDevices {
   }
 
   /**
-   * A one-minute, single-use socket ticket for a daemon that signed a live challenge with its device's key. The
-   * generation it signed decides the rest: the committed one connects; the next one connects too, committed first, as
-   * the daemon stored it and its answer was lost; any other means two machines hold the key, and the device is revoked.
+   * A one-minute, single-use socket ticket for a daemon that signed a live challenge with its device's key. The connect
+   * secret it signed decides the rest: the committed one connects; the one its last connect was handed connects too,
+   * committed first, as the daemon stored it and its answer was lost; any other means a second machine holds the key
+   * with a secret this one has since moved past, and the device is revoked.
    */
   async issueDeviceConnectTicket(caller: UserCaller, proof: DeviceConnectProof): Promise<DeviceTicketIssue> {
     await this.host.requireTier(caller, 'device.manage');
     const key = this.liveDeviceKey(proof.device);
 
     if (key === undefined) return { ok: false, refusal: this.refusalOf(proof.device) };
-    const proven = await this.provenChallenge(proof, key, deviceConnectMessage(proof.origin, proof.device, proof.generation, proof.nonce));
+    const proven = await this.provenChallenge(proof, key, deviceConnectMessage(proof.origin, proof.device, proof.secret, proof.nonce));
 
     if (proven !== 'proven') return { ok: false, refusal: proven === 'spent' ? 'challenge_spent' : 'unauthorized' };
-    // Read again: an answer or another connect may have moved the generation while the signature was checked.
+    // Read again: an answer or another connect may have moved the secret while the signature was checked.
     const now = Date.now();
     const device = this.liveDeviceKey(proof.device);
 
@@ -644,12 +658,14 @@ export class UserDevices {
 
     if (device.expires_at !== null && device.expires_at <= now) return { ok: false, refusal: 'expired' };
 
-    if (proof.generation === device.connect_generation + 1) {
+    const signed = secretHashOf(proof.secret);
+
+    if (device.pending_secret_hash !== null && signed === device.pending_secret_hash) {
       this.host.sqlx(
-        `UPDATE user_devices SET connect_generation = ? WHERE id = ? AND connect_generation = ?`,
-        proof.generation, proof.device, device.connect_generation,
+        `UPDATE user_devices SET connect_secret_hash = pending_secret_hash, pending_secret_hash = NULL WHERE id = ? AND pending_secret_hash = ?`,
+        proof.device, signed,
       );
-    } else if (proof.generation !== device.connect_generation) {
+    } else if (signed !== device.connect_secret_hash) {
       await this.revokeClonedDevice(caller, proof.device);
 
       return { ok: false, refusal: 'cloned' };

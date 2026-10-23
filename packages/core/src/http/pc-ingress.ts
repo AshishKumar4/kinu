@@ -13,7 +13,7 @@ import { authoredRefusal, diagnostics, KinuError, renderThrownChain, settle } fr
 import { ingressAdmitted, ingressDenied, peerIp } from './ingress-budget';
 import type { KvStore } from "@kinu.run/agent-utils";
 import * as v from "valibot";
-import { isDevicePublicKey } from '../execution/device-key';
+import { DEVICE_CONNECT_SECRET, isDevicePublicKey } from '../execution/device-key';
 import { DEVICE_CONNECT_ACCOUNT_HEADER } from '../execution/device-protocol';
 
 /** What a daemon proves a request with: its device key's signature over a challenge the hub issued it. */
@@ -25,9 +25,10 @@ export interface DeviceChallengeProof {
   readonly signature: string;
 }
 
-/** A connect's proof: the challenge's, over the connect generation the machine's device.json holds too. */
+/** A connect's proof: the challenge's, over the connect secret the machine's device.json holds too ('' before its
+ *  first connect). */
 export interface DeviceConnectProof extends DeviceChallengeProof {
-  readonly generation: number;
+  readonly secret: string;
 }
 
 /** Why a connect ticket was refused; the ingress says each in its own words. */
@@ -187,7 +188,7 @@ const SIGNED_CHALLENGE = {
 
 const TICKET_BODY_SCHEMA = v.object({
   ...SIGNED_CHALLENGE,
-  generation: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
+  secret: v.union([v.literal(''), v.pipe(v.string(), v.regex(DEVICE_CONNECT_SECRET))]),
 });
 
 /** What a daemon of an earlier protocol posts: its bearer, which is refused here in words naming the way back. */
@@ -276,12 +277,12 @@ export async function handlePcConnectTicket<Id>(
   // Shape gates before idFromName: garbage never wakes a DO.
   const body = v.safeParse(TICKET_BODY_SCHEMA, input.parsed);
 
-  if (!body.success) return json({ body: { error: "user, device, generation, nonce and signature required" } }, { status: 400 });
-  const { user, device, generation, nonce, signature } = body.output;
+  if (!body.success) return json({ body: { error: "user, device, secret, nonce and signature required" } }, { status: 400 });
+  const { user, device, secret, nonce, signature } = body.output;
 
   const issued = await ns.get(ns.idFromName(user)).issueDeviceConnectTicket(
     await ownerCaller(env),
-    { origin: new URL(request.url).origin, device, generation, nonce, signature },
+    { origin: new URL(request.url).origin, device, secret, nonce, signature },
   );
 
   if (!issued.ok) return json({ body: { error: TICKET_REFUSALS[issued.refusal].error } }, { status: TICKET_REFUSALS[issued.refusal].status });

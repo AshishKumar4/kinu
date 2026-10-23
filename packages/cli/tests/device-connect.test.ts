@@ -330,7 +330,7 @@ describe('device-connect prompt policy', () => {
     // This machine is the device its device.json names, whatever its hostname.
     const stub = startStubCloud({ devices: () => [connectedDevice(true, { id: 'dev_this', hostname: 'renamed-box' })] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
-    writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'u', device: 'dev_this', origin: stub.origin, root: repoRoot, generation: 3 }));
+    writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'u', device: 'dev_this', origin: stub.origin, root: repoRoot, connectSecret: 'ggggggggggggggggggggggggggggggggggggggggggg' }));
 
     const out = await runScript(home, `
       import { shouldOfferDeviceConnect } from './packages/cli/src/device-connect.ts';
@@ -414,7 +414,7 @@ describe('device-connect daemon lifecycle', () => {
     // runScript runs in the repo root, which is not what the daemon reports as the consented tree: this user's home is.
     // device.json holds no secret; device.key holds the machine's private key, whose public half alone was sent.
     const deviceConfig = parseJsonObject(readFileSync(join(home, 'device.json'), 'utf-8'));
-    expect(deviceConfig).toEqual({ user: 'user_1', device: 'dev_1', origin: stub.origin, root: homedir(), generation: 0 });
+    expect(deviceConfig).toEqual({ user: 'user_1', device: 'dev_1', origin: stub.origin, root: homedir(), connectSecret: '' });
     expect(statSync(join(home, 'pc-agent.js')).mode & 0o777).toBe(0o700);
     expect(statSync(join(home, 'device.json')).mode & 0o777).toBe(0o600);
     expect(statSync(join(home, 'device.key')).mode & 0o777).toBe(0o600);
@@ -444,7 +444,7 @@ describe('device-connect daemon lifecycle', () => {
     };
 
     // A device another deployment issued is that deployment's, and its key signs nothing here.
-    writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'u', device: 'dev_other_hub', origin: 'https://other.example', root: repoRoot, generation: 4 }));
+    writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'u', device: 'dev_other_hub', origin: 'https://other.example', root: repoRoot, connectSecret: 'ggggggggggggggggggggggggggggggggggggggggggg' }));
     writeFileSync(join(home, 'device.key'), generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600 });
     await connect();
     await connect();
@@ -479,7 +479,7 @@ describe('device-connect daemon lifecycle', () => {
     expect(JSON.parse(out.trim())).toMatchObject({ offered: true, result: { kind: 'connected', deviceId: 'dev_1' } });
     expect(bodies).toEqual([{}]);
     expect(stub.registrationRequests.items).toHaveLength(1);
-    expect(parseJsonObject(readFileSync(join(home, 'device.json'), 'utf-8'))).toEqual({ user: 'user_1', device: 'dev_1', origin: stub.origin, root: homedir(), generation: 0 });
+    expect(parseJsonObject(readFileSync(join(home, 'device.json'), 'utf-8'))).toEqual({ user: 'user_1', device: 'dev_1', origin: stub.origin, root: homedir(), connectSecret: '' });
   });
 
   // 26244c765: "This PC is already connected" read any connected device of the account as this machine.
@@ -499,7 +499,7 @@ describe('device-connect daemon lifecycle', () => {
       const daemon = Bun.spawn({ cmd: [process.execPath, join(home, 'pc-agent.js')], stdin: 'pipe', env: { ...process.env, KINU_HOME: home } });
       sleepers.push(daemon);
       writeFileSync(join(home, 'pc-agent.pid'), `${daemon.pid}\n`, { mode: 0o600 });
-      writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'u', device: 'dev_this', origin: stub.origin, root: repoRoot, generation: 1 }));
+      writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'u', device: 'dev_this', origin: stub.origin, root: repoRoot, connectSecret: 'ggggggggggggggggggggggggggggggggggggggggggg' }));
 
       const out = await runScript(home, `
         import { connectDevice } from './packages/cli/src/device-connect.ts';
@@ -742,7 +742,7 @@ describe('device-connect install hardening', () => {
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
     daemonHomes.push(home);
     // Every field present, on this hub, but its directory relative: the daemon refuses it at start.
-    writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'old', device: 'dev_old', origin: stub.origin, root: 'project', generation: 2 }), { mode: 0o600 });
+    writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'old', device: 'dev_old', origin: stub.origin, root: 'project', connectSecret: 'ggggggggggggggggggggggggggggggggggggggggggg' }), { mode: 0o600 });
 
     const connected = spawnConnectInPty(home, 'reconnected', repoRoot);
     await connected.waitFor('Link and start the daemon?');
@@ -1026,7 +1026,7 @@ describe('device daemon single-instance lock', () => {
 
     writeFileSync(
       join(home, 'device.json'),
-      `${JSON.stringify({ user: 'user_1', device: 'dev_1', origin, root: repoRoot, generation: 0 })}\n`,
+      `${JSON.stringify({ user: 'user_1', device: 'dev_1', origin, root: repoRoot, connectSecret: '' })}\n`,
       { mode: 0o600 },
     );
     writeFileSync(join(home, 'device.key'), generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600 });
@@ -1248,7 +1248,7 @@ const JOIN_ACCOUNT = '0123456789abcdef0123456789abcdef';
 const JOIN_TICKET = `pjt_${JOIN_ACCOUNT}_${'j'.repeat(43)}`;
 
 describe("a browser's connect command, run on a machine", () => {
-  /** A hub whose accepted daemon is handed its first connect generation, and a cloud that joins by ticket and names
+  /** A hub whose accepted daemon is handed its first connect secret, and a cloud that joins by ticket and names
    *  `signedInAs`. */
   function joinWorld(signedInAs?: { id: string; email: string }) {
     const hub = startUpdateHub({ served: VERSION, archive: new Uint8Array() });
@@ -1348,7 +1348,7 @@ describe("a browser's connect command, run on a machine", () => {
 
   // On this protocol, and on an earlier one whose link the hub no longer takes: either is another account's machine.
   for (const linked of [
-    { user: 'f'.repeat(32), device: 'dev_theirs', origin: '', root: homedir(), generation: 3 },
+    { user: 'f'.repeat(32), device: 'dev_theirs', origin: '', root: homedir(), connectSecret: 'ggggggggggggggggggggggggggggggggggggggggggg' },
     { user: 'f'.repeat(32), device: 'dev_theirs', token: 'pdt_theirs', origin: '', root: homedir() },
   ]) {
     test(`a machine linked to another account is not relinked by a ticket${'token' in linked ? ', its link from an earlier protocol' : ''}`, async () => {

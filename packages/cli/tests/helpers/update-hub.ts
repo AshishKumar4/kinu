@@ -57,7 +57,7 @@ export type HubHello = v.InferOutput<typeof HelloSchema>;
 export type HubFrame = v.InferOutput<typeof FrameSchema>;
 
 export type HubPush =
-  | { type: typeof DEVICE_FRAMES.generation; generation: number }
+  | { type: typeof DEVICE_FRAMES.connectSecret; secret: string }
   | { type: 'UPDATE'; version: string; urls: { tarball: string; checksum: string }; sha256: string; checksums?: Record<string, string>; signature?: string }
   /** Keystrokes for an open terminal, base64. */
   | { type: typeof DEVICE_FRAMES.ptyInput; session: string; data: string }
@@ -210,8 +210,8 @@ export function startUpdateHub(opts: UpdateHubOptions): UpdateHub {
 
         sockets.push(socket);
         openSockets.add(ws);
-        // As the real hub hands every accepted connect the next generation.
-        socket.send({ type: DEVICE_FRAMES.generation, generation: sockets.items.length });
+        // As the real hub hands every accepted connect a fresh connect secret.
+        socket.send({ type: DEVICE_FRAMES.connectSecret, secret: `${String(sockets.items.length)}`.padEnd(43, 's') });
 
         const behind = hello.version !== undefined && hello.version !== opts.served;
         const allowed = hello.updateCheck !== false;

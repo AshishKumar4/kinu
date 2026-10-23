@@ -1,7 +1,7 @@
 /**
  * A device's credential (device protocol 5): an Ed25519 keypair `kinu connect` makes on the machine. The private half
- * stays there, in `~/.kinu/device.key` (PKCS#8 PEM, mode 0600); the hub keeps the public half and nothing secret, so a
- * copy of `device.json` connects nothing. What each signature covers, and whether one holds.
+ * stays there, in `~/.kinu/device.key` (PKCS#8 PEM, mode 0600); the hub keeps the public half, and of the connect secret
+ * beside it in `device.json` only a hash. What each signature covers, and whether one holds.
  * Dependency-free: the hub, the CLI and the device daemon's CommonJS read this one module.
  */
 import protocol from './device-protocol.json';
@@ -30,12 +30,16 @@ function fromBase64Url(text: string): Uint8Array<ArrayBuffer> {
 
 /**
  * The bytes a daemon signs to buy a connect ticket. `origin` is the hub it dials, so a signature for staging buys
- * nothing on production; `generation` is the connect generation its device.json holds, which tells the hub whether a
- * second machine holds this key; `nonce` is the hub's single-use challenge.
+ * nothing on production; `secret` is the connect secret its device.json holds, random and handed anew at each connect
+ * the hub accepted ('' before the first), which tells the hub whether a second machine holds this key; `nonce` is the
+ * hub's single-use challenge.
  */
-export function deviceConnectMessage(origin: string, device: string, generation: number, nonce: string): Uint8Array<ArrayBuffer> {
-  return new TextEncoder().encode(`kinu-device-connect:${String(protocol.version)}:${origin}:${device}:${String(generation)}:${nonce}`);
+export function deviceConnectMessage(origin: string, device: string, secret: string, nonce: string): Uint8Array<ArrayBuffer> {
+  return new TextEncoder().encode(`kinu-device-connect:${String(protocol.version)}:${origin}:${device}:${secret}:${nonce}`);
 }
+
+/** A connect secret as the hub hands one: 32 random bytes as base64url; '' is the one a device holds before its first. */
+export const DEVICE_CONNECT_SECRET = /^[A-Za-z0-9_-]{43}$/u;
 
 /** The bytes a daemon signs to say why it refused an update, over a challenge of its own. */
 export function deviceRefusalMessage(origin: string, device: string, nonce: string): Uint8Array<ArrayBuffer> {

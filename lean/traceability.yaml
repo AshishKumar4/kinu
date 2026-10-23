@@ -267,7 +267,7 @@ requirements:
     refinement:
       - lean/fixtures/device-view.json :: packages/pc-agent/tests/refinement-device-view.test.js
   PR-DEVICE-002:
-    statement: A device's key is its credential (device protocol 5). A connect ticket admits at most once, never from its minute on and never for a revoked device; a connect challenge proves one request, of the device it was issued to; revocation is permanent; the committed connect generation connects, the next one connects committed first, and any other revokes the device; two holders of one key are found once one connects and then the other, every answer arriving, and a single holder connects forever whatever becomes of its answers.
+    statement: A device's key is its credential (device protocol 5). A connect ticket admits at most once, never from its minute on and never for a revoked device; a connect challenge proves one request, of the device it was issued to; revocation is permanent; the committed connect secret connects, the one last handed connects committed first, and any other revokes the device; two holders of one key are found once one connects and then the other, every answer arriving, and a single holder connects forever whatever becomes of its answers.
     status: proved-in-abstract-model
     theorems:
       - Kinu.Safety.DeviceKey.a_ticket_is_spent_once
@@ -276,10 +276,10 @@ requirements:
       - Kinu.Safety.DeviceKey.a_challenge_is_spent_once
       - Kinu.Safety.DeviceKey.a_challenge_proves_only_its_device
       - Kinu.Safety.DeviceKey.revocation_is_permanent
-      - Kinu.Safety.DeviceKey.the_committed_generation_connects
+      - Kinu.Safety.DeviceKey.the_committed_secret_connects
       - Kinu.Safety.DeviceKey.a_lost_answer_is_recovered
-      - Kinu.Safety.DeviceKey.a_stale_generation_revokes
-      - Kinu.Safety.DeviceKey.an_answer_commits_only_the_next_generation
+      - Kinu.Safety.DeviceKey.a_stale_secret_revokes
+      - Kinu.Safety.DeviceKey.an_answer_commits_only_the_handed_secret
       - Kinu.Safety.DeviceKey.ahead_after_own
       - Kinu.Safety.DeviceKey.two_holders_are_found
       - Kinu.Safety.DeviceKey.one_holder_is_never_revoked
@@ -290,14 +290,15 @@ requirements:
       - packages/cf-backend/src/user/devices.ts#UserDevices.provenChallenge
       - packages/cf-backend/src/user/devices.ts#UserDevices.issueDeviceConnectTicket
       - packages/cf-backend/src/user/devices.ts#UserDevices.authenticateDeviceSocket
-      - packages/cf-backend/src/user/devices.ts#UserDevices.acknowledgeGeneration
+      - packages/cf-backend/src/user/devices.ts#UserDevices.acknowledgeConnectSecret
       - packages/cf-backend/src/user/devices.ts#UserDevices.revokeClonedDevice
-      - packages/pc-agent/src/index.js#storeGeneration
+      - packages/pc-agent/src/index.js#storeConnectSecret
     remainingEvidence:
       - The signature is a premise; Ed25519's unforgeability and the private key's secrecy on the machine are outside the model
       - A connect is one step, ticket and AUTH together; a socket that fails between the two, and two connects of one device inside one ticket's minute, are outside the model
       - Two holders are found when answers arrive; two holders whose every answer is lost can alternate unseen until one answer arrives, which the model leaves out
       - Every connect falls inside the link's absolute window; outside it the hub refuses without revoking, which the model leaves out
+      - A secret is 32 random bytes, which the model states as the order they were handed in; one guessed, or handed twice, is outside it
       - Challenges and tickets are their SHA-256 hashes; the model assumes distinct secrets hash apart
       - No fixture runs the UserDO's challenge, ticket and generation paths against the model; the bun suites (unit-device-key-connect, unit-device-grants) run them against a real UserDO
   PR-STORE-001:

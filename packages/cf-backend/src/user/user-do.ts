@@ -44,7 +44,7 @@ import { UserDrive, type DriveAnswer, type DriveChunkWrite } from './drive';
 import { UserLimits } from './limits';
 import { UserDevices, type DeviceCancellationOutcome, type DeviceRegistration } from './devices';
 import {
-  ACCOUNT_EPOCH_FIELDS, DeviceGenerationAckSchema, DeviceHelloHeadSchema, DeviceHelloSchema, type DeviceChallengeProof, type DeviceConnectProof,
+  ACCOUNT_EPOCH_FIELDS, DeviceConnectSecretAckSchema, DeviceHelloHeadSchema, DeviceHelloSchema, type DeviceChallengeProof, type DeviceConnectProof,
   type DeviceEnrolment,
 } from '@kinu.run/core';
 import { UserTerminals } from './terminals';
@@ -1400,10 +1400,10 @@ export class UserDO extends Agent<Env> {
       return settle(this.chatgpt.continueChatGptSignIn(deviceId));
     }
 
-    const acknowledged = v.safeParse(DeviceGenerationAckSchema, announced);
+    const acknowledged = v.safeParse(DeviceConnectSecretAckSchema, announced);
 
     if (acknowledged.success) {
-      this.devices.acknowledgeGeneration(deviceId, acknowledged.output.generation);
+      this.devices.acknowledgeConnectSecret(deviceId, acknowledged.output.secretHash);
 
       return;
     }

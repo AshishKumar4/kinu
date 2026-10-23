@@ -3,7 +3,7 @@
 import { describe, expect, test } from 'bun:test';
 import { createTestUserDO, testOwner, type TestUserDO } from './helpers/user-do';
 import {
-  DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH,
+  DEVICE_CONNECT_PATH, DEVICE_CONNECT_SECRET, DEVICE_TERMINAL_PATH,
   DEVICE_TOOLCHAIN_TTL_MS, TOOLCHAIN_PROBE_BINARIES, TUNNEL_DISCONNECTED, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION,
   connectedDevices, type JsonValue, JsonValueSchema, DEVICE_ERRORS, DEVICE_FRAMES, DEVICE_METHOD,
   DEVICE_AUTH_DEADLINE_CLOSE, DEVICE_AUTH_DEADLINE_MS, DEVICE_CREDENTIALS_REJECTED_CLOSE, DEVICE_VERSION_REFUSAL_CLOSE,
@@ -11,7 +11,7 @@ import {
 import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { handClock, present } from '@kinu.run/test-utils';
-import { buyTicket, connectTestDevice, handedGeneration, openDeviceSocket, registerTestDevice } from './helpers/device-key';
+import { buyTicket, connectTestDevice, handedSecret, openDeviceSocket, registerTestDevice } from './helpers/device-key';
 import { CAPABLE_HELLO, WORKSPACE } from './helpers/device-harness';
 import { provisionTestWorkspace } from './helpers/user-do';
 import {
@@ -721,12 +721,12 @@ describe('/pc/connect upgrade wiring', () => {
     const socket = await openDeviceSocket(harness);
     expect(await harness.userDO.deviceRuntimeStatus(await testOwner())).toMatchObject({ devices: [{ id: deviceId, connected: false }] });
 
-    const issued = await buyTicket(harness, deviceId, key, 0);
+    const issued = await buyTicket(harness, deviceId, key, '');
 
     if (!issued.ok) throw new Error(`the device was refused a ticket: ${issued.refusal}`);
     await harness.userDO.webSocketMessage(socket.ws, JSON.stringify({ type: DEVICE_FRAMES.auth, user: harness.userDO.name, ticket: issued.ticket }));
     expect(socket.closed()).toBeNull();
-    expect(handedGeneration(socket)).toBe(1);
+    expect(handedSecret(socket)).toMatch(DEVICE_CONNECT_SECRET);
     expect(await harness.userDO.deviceRuntimeStatus(await testOwner())).toMatchObject({ devices: [{ id: deviceId, connected: true }] });
 
     expect('attachDeviceSocket' in harness.userDO).toBe(false);
@@ -737,7 +737,7 @@ describe('/pc/connect upgrade wiring', () => {
   test('a first frame that is no AUTH, or an AUTH whose ticket is forged, used or for another account, closes 4401', async () => {
     const harness = createTestUserDO();
     const { deviceId, key } = await registerTestDevice(harness.userDO, 'studio tower');
-    const issued = await buyTicket(harness, deviceId, key, 0);
+    const issued = await buyTicket(harness, deviceId, key, '');
 
     if (!issued.ok) throw new Error(`the device was refused a ticket: ${issued.refusal}`);
     const auth = (user: string, ticket: string) => JSON.stringify({ type: DEVICE_FRAMES.auth, user, ticket });
@@ -817,10 +817,10 @@ describe('device links expire on an absolute window, renewed by each accepted co
 
     const anchor = Date.now() + day;
     ageDevice(harness, deviceId, anchor);
-    expect(await buyTicket(harness, deviceId, key, 0)).toMatchObject({ ok: true });
+    expect(await buyTicket(harness, deviceId, key, '')).toMatchObject({ ok: true });
     expect(storedExpiry(harness, deviceId)).toBe(anchor);
 
-    await connectTestDevice(harness, deviceId, key, { generation: 0, acknowledge: true });
+    await connectTestDevice(harness, deviceId, key, { secret: '', acknowledge: true });
     expect(storedExpiry(harness, deviceId)).toBeGreaterThan(anchor + 100 * day);
     await harness.joinFibers();
     harness.close();
@@ -831,7 +831,7 @@ describe('device links expire on an absolute window, renewed by each accepted co
     const { deviceId, key } = await registerTestDevice(harness.userDO, 'device');
     ageDevice(harness, deviceId, Date.now() - day);
 
-    expect(await buyTicket(harness, deviceId, key, 0)).toEqual({ ok: false, refusal: 'expired' });
+    expect(await buyTicket(harness, deviceId, key, '')).toEqual({ ok: false, refusal: 'expired' });
     harness.close();
   });
 
@@ -865,7 +865,7 @@ describe('device links expire on an absolute window, renewed by each accepted co
 describe('the daemon keepalive, answered by the hub', () => {
   async function connectDevice(harness: TestUserDO) {
     const { deviceId, key } = await registerTestDevice(harness.userDO, 'studio tower');
-    const device = await connectTestDevice(harness, deviceId, key, { generation: 0, acknowledge: true });
+    const device = await connectTestDevice(harness, deviceId, key, { secret: '', acknowledge: true });
 
     return { deviceId, device };
   }

@@ -15,7 +15,7 @@
  */
 
 /** device.json as `kinu connect` writes it and the daemon reads it (device protocol 5); fields beyond these are kept.
- *  It holds no secret: the machine's key is device.key's. */
+ *  Mode 0600 beside device.key: its connect secret signs each connect with the key. */
 export interface DeviceConfig {
   readonly user: string;
   /** The registration the hub issued, whose key signs every connect. */
@@ -24,8 +24,8 @@ export interface DeviceConfig {
   readonly origin: string;
   /** The directory the owner linked, absolute: their home, or the one the connect command named. */
   readonly root: string;
-  /** The connect generation the hub last handed this machine, which its next connect signs. */
-  readonly generation: number;
+  /** The connect secret the hub last handed this machine ('' before its first connect), which its next connect signs. */
+  readonly connectSecret: string;
 }
 
 /** The contents of the file at `configPath` as a device config, or throws naming the file and the command that mends

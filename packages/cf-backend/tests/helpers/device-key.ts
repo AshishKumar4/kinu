@@ -3,7 +3,7 @@
  * the real UserDO: the challenge, the key's signature over it, the ticket, the upgrade and the AUTH frame. The signed
  * messages are spelled here from the protocol's words and signed by node's own Ed25519, apart from the code under test.
  */
-import { createPrivateKey, generateKeyPairSync, sign } from 'node:crypto';
+import { createHash, createPrivateKey, generateKeyPairSync, sign } from 'node:crypto';
 import * as v from 'valibot';
 import { DEVICE_CONNECT_PATH, DEVICE_FRAMES, type DeviceConnectProof, type DeviceTicketIssue, type UserCaller } from '@kinu.run/core';
 import { testOwner, type AcceptedSocket, type TestUserDO } from './user-do';
@@ -23,9 +23,9 @@ function signed(key: TestDeviceKey, message: string): string {
   return Buffer.from(sign(null, Buffer.from(message), createPrivateKey(key.privateKeyPem))).toString('base64url');
 }
 
-/** What a connect signs: the protocol, the hub, the device, the generation it holds and the hub's challenge. */
-export function signConnect(key: TestDeviceKey, at: { device: string; generation: number; nonce: string; origin?: string }): string {
-  return signed(key, `kinu-device-connect:5:${at.origin ?? TEST_HUB_ORIGIN}:${at.device}:${String(at.generation)}:${at.nonce}`);
+/** What a connect signs: the protocol, the hub, the device, the connect secret it holds and the hub's challenge. */
+export function signConnect(key: TestDeviceKey, at: { device: string; secret: string; nonce: string; origin?: string }): string {
+  return signed(key, `kinu-device-connect:5:${at.origin ?? TEST_HUB_ORIGIN}:${at.device}:${at.secret}:${at.nonce}`);
 }
 
 /** What an update refusal signs: the protocol, the hub, the device and the hub's challenge. */
@@ -61,17 +61,17 @@ export async function registerTestDevice(userDO: Registering, label?: string, ca
 
 const IssuedSchema = v.object({ ok: v.literal(true), nonce: v.string() });
 
-/** A fresh challenge for `deviceId`, signed by `key` over `generation`: the proof the daemon posts for a ticket. */
-export async function connectProof(harness: TestUserDO, deviceId: string, key: TestDeviceKey, generation: number): Promise<DeviceConnectProof> {
+/** A fresh challenge for `deviceId`, signed by `key` over `secret`: the proof the daemon posts for a ticket. */
+export async function connectProof(harness: TestUserDO, deviceId: string, key: TestDeviceKey, secret: string): Promise<DeviceConnectProof> {
   const issued = v.parse(IssuedSchema, await harness.userDO.issueDeviceConnectChallenge(await testOwner(), deviceId));
-  const signature = signConnect(key, { device: deviceId, generation, nonce: issued.nonce });
+  const signature = signConnect(key, { device: deviceId, secret, nonce: issued.nonce });
 
-  return { origin: TEST_HUB_ORIGIN, device: deviceId, generation, nonce: issued.nonce, signature };
+  return { origin: TEST_HUB_ORIGIN, device: deviceId, secret, nonce: issued.nonce, signature };
 }
 
-/** A ticket for `deviceId` bought with `key`, or the hub's refusal. */
-export async function buyTicket(harness: TestUserDO, deviceId: string, key: TestDeviceKey, generation: number): Promise<DeviceTicketIssue> {
-  return harness.userDO.issueDeviceConnectTicket(await testOwner(), await connectProof(harness, deviceId, key, generation));
+/** A ticket for `deviceId` bought with `key` over the connect secret `secret` ('' before the first), or the refusal. */
+export async function buyTicket(harness: TestUserDO, deviceId: string, key: TestDeviceKey, secret: string): Promise<DeviceTicketIssue> {
+  return harness.userDO.issueDeviceConnectTicket(await testOwner(), await connectProof(harness, deviceId, key, secret));
 }
 
 /** The socket the UserDO accepted for an upgrade with no ticket in it, before any frame. */
@@ -86,37 +86,47 @@ export async function openDeviceSocket(harness: TestUserDO): Promise<AcceptedSoc
   return accepted;
 }
 
-const GenerationSchema = v.object({ type: v.literal(DEVICE_FRAMES.generation), generation: v.number() });
+const ConnectSecretSchema = v.object({ type: v.literal(DEVICE_FRAMES.connectSecret), secret: v.string() });
 
-/** The generation the hub handed `socket` on its AUTH, or null for none. */
-export function handedGeneration(socket: AcceptedSocket): number | null {
+/** The connect secret the hub handed `socket` on its AUTH, or null for none. */
+export function handedSecret(socket: AcceptedSocket): string | null {
   for (const raw of socket.sent) {
-    const frame = v.safeParse(GenerationSchema, JSON.parse(raw));
+    const frame = v.safeParse(ConnectSecretSchema, JSON.parse(raw));
 
-    if (frame.success) return frame.output.generation;
+    if (frame.success) return frame.output.secret;
   }
 
   return null;
 }
 
+/** The SHA-256 (hex) a daemon names a stored secret by in its answer. */
+export function secretHash(secret: string): string {
+  return createHash('sha256').update(secret).digest('hex');
+}
+
+/** The daemon's answer that it stored `secret`. */
+export function secretAck(secret: string): string {
+  return JSON.stringify({ type: DEVICE_FRAMES.connectSecretAck, secretHash: secretHash(secret) });
+}
+
 /**
- * A daemon's whole connect: a ticket bought with `key` over `generation`, the upgrade, then AUTH as its first frame.
- * `acknowledge` answers the generation the hub hands it, as a daemon that stored it does.
+ * A daemon's whole connect: a ticket bought with `key` over `secret`, the upgrade, then AUTH as its first frame.
+ * `acknowledge` answers the secret the hub hands it, as a daemon that stored it does. The socket, and that secret.
  */
 export async function connectTestDevice(
-  harness: TestUserDO, deviceId: string, key: TestDeviceKey, opts: { readonly generation: number; readonly acknowledge: boolean },
-): Promise<AcceptedSocket> {
-  const issued = await buyTicket(harness, deviceId, key, opts.generation);
+  harness: TestUserDO, deviceId: string, key: TestDeviceKey, opts: { readonly secret: string; readonly acknowledge: boolean },
+): Promise<AcceptedSocket & { readonly handed: string }> {
+  const issued = await buyTicket(harness, deviceId, key, opts.secret);
 
   if (!issued.ok) throw new Error(`the hub refused the ticket: ${issued.refusal}`);
   const socket = await openDeviceSocket(harness);
 
   await harness.userDO.webSocketMessage(socket.ws, JSON.stringify({ type: DEVICE_FRAMES.auth, user: harness.userDO.name, ticket: issued.ticket }));
-  const generation = handedGeneration(socket);
+  const handed = handedSecret(socket);
 
-  if (opts.acknowledge && generation !== null) {
-    await harness.userDO.webSocketMessage(socket.ws, JSON.stringify({ type: DEVICE_FRAMES.generationAck, generation }));
-  }
+  if (handed === null) throw new Error('the hub handed the accepted socket no connect secret');
 
-  return socket;
+  if (opts.acknowledge) await harness.userDO.webSocketMessage(socket.ws, secretAck(handed));
+
+  return Object.assign(socket, { handed });
 }

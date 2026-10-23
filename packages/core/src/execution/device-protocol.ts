@@ -45,10 +45,11 @@ export const DeviceAuthFrameSchema = v.object({
   ticket: v.string(),
 });
 
-/** The daemon's answer once the generation the hub sent is in its device.json: the hub commits it then. */
-export const DeviceGenerationAckSchema = v.object({
-  type: v.literal(DEVICE_FRAMES.generationAck),
-  generation: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
+/** The daemon's answer once the connect secret the hub sent is in its device.json, naming it by its SHA-256 (hex): the
+ *  hub commits it then. */
+export const DeviceConnectSecretAckSchema = v.object({
+  type: v.literal(DEVICE_FRAMES.connectSecretAck),
+  secretHash: v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/u)),
 });
 
 /** What every HELLO opens with: the protocol it speaks and the methods it answers, which decide the rest. */

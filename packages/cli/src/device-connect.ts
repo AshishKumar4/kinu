@@ -149,8 +149,8 @@ export type JoinDeviceResult =
 /**
  * A machine with no session joins the account a browser's connect command names, by the ticket it carries. One this
  * account did not link is never relinked to it silently. With no session to read the account's devices by, the hub's
- * accepting the daemon is read here: it hands an accepted socket its first connect generation, which the daemon writes
- * over the 0 this wrote.
+ * accepting the daemon is read here: it hands an accepted socket its first connect secret, which the daemon writes over
+ * the '' this wrote.
  */
 export function joinDevice(origin: string, ticket: string, account: string, opts: ConnectDeviceOptions = {}): Promise<JoinDeviceResult> {
   return settle(Effect.gen(function* () {
@@ -613,8 +613,8 @@ const removeAfter = (doing: string, { cause }: { readonly cause: unknown }, path
 });
 
 /**
- * The daemon, its siblings, device.key and device.json (protocol 5: no secret in it, generation 0), each staged whole
- * and landed by rename.
+ * The daemon, its siblings, device.key and device.json (protocol 5: no connect secret yet), each staged whole and landed
+ * by rename.
  */
 function installDaemonFiles(device: { origin: string; userId: string; deviceId: string }, key: DeviceKey, root: string): Effect.Effect<void, KinuError> {
   return Effect.gen(function* () {
@@ -629,7 +629,7 @@ function installDaemonFiles(device: { origin: string; userId: string; deviceId: 
       origin: device.origin.replace(/\/+$/, ''),
       // The consented root: this user's home, or the directory the command named; never where the shell happened to be.
       root,
-      generation: 0,
+      connectSecret: '',
     }, null, 2)}\n`;
 
     const files = yield* daemonFiles();
@@ -734,13 +734,13 @@ function syncAgentDirectory(): void {
   }
 }
 
-/** Whether the hub accepted this machine's daemon since it was linked at generation 0: an accepted socket is handed
- *  the next connect generation, which the daemon writes into device.json before it answers. */
+/** Whether the hub accepted this machine's daemon since it was linked: an accepted socket is handed a connect secret,
+ *  which the daemon writes into device.json before it answers. */
 function connectedSinceLinked(): boolean {
   // The daemon writes it whole, by rename, so a file that does not parse was written by something else.
   const text = tolerate(() => readFileSync(DEVICE_CONFIG_PATH, 'utf-8'), 'enoent');
 
-  return text !== undefined && parseDeviceConfig(text, DEVICE_CONFIG_PATH).generation > 0;
+  return text !== undefined && parseDeviceConfig(text, DEVICE_CONFIG_PATH).connectSecret !== '';
 }
 
 /** The device's roster row once it reads connected; a transient listing error while the daemon lives is not-yet. */

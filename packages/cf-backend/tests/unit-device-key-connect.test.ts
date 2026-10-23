@@ -1,6 +1,6 @@
 // Device protocol 5, end to end: the shipped daemon, spawned as itself, connects through the Worker's own `/pc/*` routes
 // to a real UserDO. A machine's key is its credential (SECURITY-devices C3): a copy of device.json without device.key, or
-// with another key, buys nothing; two holders of one key are found by the connect generation; and no URL or header of
+// with another key, buys nothing; two holders of one key are found by the connect secret; and no URL or header of
 // a connect carries the ticket (M1). An earlier protocol's device.json is refused, and `kinu update` enrols it again.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { type Subprocess } from 'bun';
@@ -8,11 +8,11 @@ import { closeSync, copyFileSync, openSync, readFileSync, statSync, writeFileSyn
 import { createPublicKey } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import * as v from 'valibot';
-import { DEVICE_FRAMES } from '@kinu.run/core';
+import { DEVICE_CONNECT_SECRET, DEVICE_FRAMES } from '@kinu.run/core';
 import { killAndAwaitExit, present, recordedIn } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { createTestUserDO, testOwner, type TestUserDO } from './helpers/user-do';
-import { registerTestDevice, testDeviceKey, type TestDeviceKey } from './helpers/device-key';
+import { registerTestDevice, secretHash, testDeviceKey, type TestDeviceKey } from './helpers/device-key';
 import { startDeviceBridge, type DeviceBridge } from './helpers/device-bridge';
 
 const DAEMON_PATH = join(import.meta.dir, '../../pc-agent/src/index.js');
@@ -28,7 +28,7 @@ const REJECTED_EXIT = 4;
 /** The header the upgrade names its account in, as the wire spells it (core `DEVICE_CONNECT_ACCOUNT_HEADER`). */
 const ACCOUNT_HEADER = 'x-kinu-auth-account';
 
-const DeviceConfigSchema = v.object({ user: v.string(), device: v.string(), origin: v.string(), root: v.string(), generation: v.number() });
+const DeviceConfigSchema = v.object({ user: v.string(), device: v.string(), origin: v.string(), root: v.string(), connectSecret: v.string() });
 
 interface Daemon {
   readonly home: string;
@@ -67,10 +67,10 @@ function account() {
 }
 
 /** A machine's ~/.kinu as `kinu connect` leaves it: device.json and, unless `key` is null, device.key. */
-function machineHome(bridge: DeviceBridge, deviceId: string, key: TestDeviceKey | null, generation = 0): string {
+function machineHome(bridge: DeviceBridge, deviceId: string, key: TestDeviceKey | null): string {
   const home = scratchDir('device-key-home');
 
-  writeFileSync(join(home, 'device.json'), JSON.stringify({ user: ACCOUNT, device: deviceId, origin: bridge.origin, root: home, generation }), { mode: 0o600 });
+  writeFileSync(join(home, 'device.json'), JSON.stringify({ user: ACCOUNT, device: deviceId, origin: bridge.origin, root: home, connectSecret: '' }), { mode: 0o600 });
 
   if (key !== null) writeFileSync(join(home, 'device.key'), key.privateKeyPem, { mode: 0o600 });
 
@@ -123,24 +123,24 @@ async function firstOf(daemon: Daemon, bridge: DeviceBridge, n: number): Promise
 
 const isFrame = (type: string) => (frame: string) => frame.startsWith('{') && v.is(v.looseObject({ type: v.literal(type) }), JSON.parse(frame));
 
-/** The device's committed generation, incident and revocation, as the account stores them. */
+/** The device's committed secret (as its hash), incident and revocation, as the account stores them. */
 function stored(harness: TestUserDO, deviceId: string) {
   return v.parse(
-    v.array(v.object({ connect_generation: v.number(), clone_detected_at: v.nullable(v.number()), revoked_at: v.nullable(v.number()) })),
-    harness.sql.exec(`SELECT connect_generation, clone_detected_at, revoked_at FROM user_devices WHERE id = ?`, deviceId).toArray(),
+    v.array(v.object({ connect_secret_hash: v.nullable(v.string()), clone_detected_at: v.nullable(v.number()), revoked_at: v.nullable(v.number()) })),
+    harness.sql.exec(`SELECT connect_secret_hash, clone_detected_at, revoked_at FROM user_devices WHERE id = ?`, deviceId).toArray(),
   )[0];
 }
 
-function generationOnDisk(home: string): number {
-  return v.parse(DeviceConfigSchema, JSON.parse(readFileSync(join(home, 'device.json'), 'utf8'))).generation;
+function secretOnDisk(home: string): string {
+  return v.parse(DeviceConfigSchema, JSON.parse(readFileSync(join(home, 'device.json'), 'utf8'))).connectSecret;
 }
 
-/** A daemon connected on `home`, its first generation stored and committed. */
+/** A daemon connected on `home`, its first secret stored and committed. */
 async function connected(bridge: DeviceBridge, home: string, socket: number): Promise<Daemon> {
   const daemon = startDaemon(home);
 
   await within(daemon, bridge.helloed(socket), 'the daemon saying HELLO');
-  await within(daemon, bridge.heard(isFrame(DEVICE_FRAMES.generationAck)), 'the daemon answering its generation');
+  await within(daemon, bridge.heard(isFrame(DEVICE_FRAMES.connectSecretAck)), 'the daemon answering its secret');
 
   return daemon;
 }
@@ -179,9 +179,10 @@ describe('a connect carries its ticket in its first frame, and nothing secret an
     const routedTo = (request: (typeof upgrade)[number]) => request.headers.find(([name]) => name === ACCOUNT_HEADER)?.[1];
     expect(upgrade.map((request) => [new URL(request.url).search, routedTo(request)])).toEqual([['', ACCOUNT], ['', ACCOUNT]]);
 
-    // The machine stored the generation it was handed, and the hub committed it on the answer.
-    expect(generationOnDisk(home)).toBe(1);
-    expect(stored(harness, deviceId)).toEqual({ connect_generation: 1, clone_detected_at: null, revoked_at: null });
+    // The machine stored the secret it was handed, and the hub committed its hash on the answer; the secret itself
+    // crossed only the authenticated socket, never a request of the connect.
+    expect(secretOnDisk(home)).toMatch(DEVICE_CONNECT_SECRET);
+    expect(stored(harness, deviceId)).toEqual({ connect_secret_hash: secretHash(secretOnDisk(home)), clone_detected_at: null, revoked_at: null });
     expect(await harness.userDO.listDevices(await testOwner())).toMatchObject([{ id: deviceId, connected: true }]);
   });
 });
@@ -208,7 +209,7 @@ describe('a device key is the credential, and device.json alone is not', () => {
     // One ticket was ever bought, by the owner's machine; the copy asked for none, and the machine is untouched.
     expect(bridge.tickets).toHaveLength(1);
     expect(bridge.seen.filter((request) => new URL(request.url).pathname === '/pc/connect-ticket')).toHaveLength(1);
-    expect(stored(harness, deviceId)).toEqual({ connect_generation: 1, clone_detected_at: null, revoked_at: null });
+    expect(stored(harness, deviceId)).toEqual({ connect_secret_hash: secretHash(secretOnDisk(owners)), clone_detected_at: null, revoked_at: null });
     expect(await harness.userDO.listDevices(await testOwner())).toMatchObject([{ id: deviceId, connected: true }]);
   });
 
@@ -224,12 +225,12 @@ describe('a device key is the credential, and device.json alone is not', () => {
     expect(await firstOf(forged, bridge, 2)).toEqual({ exited: REJECTED_EXIT });
     expect(forged.log()).toContain('device credentials were rejected');
     expect(bridge.tickets).toEqual([]);
-    expect(stored(harness, deviceId)).toEqual({ connect_generation: 0, clone_detected_at: null, revoked_at: null });
+    expect(stored(harness, deviceId)).toEqual({ connect_secret_hash: null, clone_detected_at: null, revoked_at: null });
   });
 });
 
-describe('two holders of one key are found by the connect generation', () => {
-  test('the second, on the generation the first moved past, revokes the device and both are told why', async () => {
+describe('two holders of one key are found by the connect secret', () => {
+  test('the second, on the secret the first moved past, revokes the device and both are told why', async () => {
     if (process.platform !== 'linux' && process.platform !== 'darwin') return;
     const { harness, bridge } = account();
     const { deviceId, key } = await registerTestDevice(harness.userDO, 'studio');
@@ -238,11 +239,11 @@ describe('two holders of one key are found by the connect generation', () => {
     const copy = machineHome(bridge, deviceId, key);
     const owner = await connected(bridge, owners, 0);
 
-    expect(stored(harness, deviceId).connect_generation).toBe(1);
+    expect(stored(harness, deviceId).connect_secret_hash).toBe(secretHash(secretOnDisk(owners)));
     const clone = startDaemon(copy);
 
     // The owner's machine took answers 0 and 1. The copy's key is the device's, so its challenge is answered; the
-    // generation it signs is the one the owner's machine moved past, so its exchange is refused, and the device revoked.
+    // secret it signs is the one the owner's machine moved past, so its exchange is refused, and the device revoked.
     expect(await firstOf(clone, bridge, 2)).toEqual({ answered: '/pc/connect-challenge 200' });
     expect(await firstOf(clone, bridge, 3)).toEqual({ answered: '/pc/connect-ticket 401' });
     expect(stored(harness, deviceId)).toMatchObject({ clone_detected_at: expect.any(Number), revoked_at: expect.any(Number) });
@@ -266,7 +267,7 @@ describe('two holders of one key are found by the connect generation', () => {
     ]);
   });
 
-  test('a machine that stored its generation and lost the answer connects on it, and the hub commits it first', async () => {
+  test('a machine that stored its secret and lost the answer connects on it, and the hub commits it first', async () => {
     if (process.platform !== 'linux' && process.platform !== 'darwin') return;
     const { harness, bridge } = account();
     const { deviceId, key } = await registerTestDevice(harness.userDO, 'studio');
@@ -276,16 +277,18 @@ describe('two holders of one key are found by the connect generation', () => {
     // Stopped by the test: its exit is certain.
     first.child.kill('SIGTERM');
     await first.child.exited;
-    // The machine holds generation 1; the hub, as if the answer had gone down with the socket, still holds 0.
-    harness.sql.exec(`UPDATE user_devices SET connect_generation = 0 WHERE id = ?`, deviceId);
-    expect(generationOnDisk(home)).toBe(1);
+    // The machine holds the secret it was handed; the hub, as if the answer had gone down with the socket, still holds it
+    // as handed and not confirmed.
+    const held = secretOnDisk(home);
+    harness.sql.exec(`UPDATE user_devices SET pending_secret_hash = connect_secret_hash, connect_secret_hash = NULL WHERE id = ?`, deviceId);
 
     const again = startDaemon(home);
 
     await within(again, bridge.helloed(1), 'the daemon connecting again');
-    await within(again, bridge.heard((frame) => frame.startsWith('{') && v.is(v.object({ type: v.literal(DEVICE_FRAMES.generationAck), generation: v.literal(2) }), JSON.parse(frame))), 'the second generation answered');
-    expect(generationOnDisk(home)).toBe(2);
-    expect(stored(harness, deviceId)).toEqual({ connect_generation: 2, clone_detected_at: null, revoked_at: null });
+    await within(again, bridge.heard((frame) => frame.startsWith('{') && v.is(v.object({ type: v.literal(DEVICE_FRAMES.connectSecretAck), secretHash: v.string() }), JSON.parse(frame))
+      && JSON.parse(frame).secretHash !== secretHash(held)), 'the next secret answered');
+    expect(secretOnDisk(home)).not.toBe(held);
+    expect(stored(harness, deviceId)).toEqual({ connect_secret_hash: secretHash(secretOnDisk(home)), clone_detected_at: null, revoked_at: null });
   });
 });
 
