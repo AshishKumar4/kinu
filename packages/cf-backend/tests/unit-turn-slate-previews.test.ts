@@ -15,8 +15,7 @@ import { SlateInlineContext } from '../src/components/slates/context';
 import { MessageView } from '../src/components/MessageView';
 import {
   agentHistory, chatSessionTurns, gatewayWorkspace, hostedSubagentHarness, orchestratorHarness, runDelegatedTask, storedChat, workspaceFiles,
-  workspaceMainActor, mainDatabase,
-} from './helpers/actor-harness';
+  workspaceMainActor, mainDatabase, runInWorkspaceShell } from './helpers/actor-harness';
 import { scriptedGateway } from './helpers/platform-gateway';
 import { chatSeed, keptMediaName } from '@kinu.run/core';
 
@@ -83,7 +82,7 @@ test("a hire's slate edit is previewed on the hire's answer, and nowhere else", 
   const hireAnswers = (await chatSeed(agentHistory(workspace, hire.actor.handle.actorId).history.transcript(CHAT_SESSION_ID), keptMediaName)).messages.filter((message) => message.role === 'assistant');
 
   expect(hireAnswers.map((message) => slatesChanged({ metadata: message.metadata }))).toEqual([['board']]);
-  expect(await workspace.agent.readWorkspaceFile('/slates/board/client.tsx'))
+  expect(await workspaceFiles(workspace.agent).readFile('/slates/board/client.tsx'))
     .toEqual(new TextEncoder().encode('export default () => null;'));
 
   const rootAnswers = (await storedChat(workspace)).filter((message) => message.role === 'assistant');
@@ -138,8 +137,8 @@ test('a slate the turn wrote and then removed is not previewed', async () => {
 
   if (tools.file === undefined) throw new Error('Build has no file tool');
   await toolExecute<JsonValue, JsonValue>(tools.file)({ op: 'write', path: '/slates/scratch/client.tsx', content: 'x' });
-  expect(await agent.execWorkspaceCommand('rm -rf /slates/scratch')).toMatchObject({ exitCode: 0 });
-  expect(await agent.statWorkspaceFile('/slates/scratch')).toBeNull();
+  expect(await runInWorkspaceShell(agent, 'rm -rf /slates/scratch')).toMatchObject({ exitCode: 0 });
+  expect(await workspaceFiles(agent).stat('/slates/scratch')).toBeNull();
   await turns.settle({ messageId: 'a-scratch', text: 'Dropped it.' });
 
   const answer = (await storedChat(harness)).filter((message) => message.role === 'assistant').at(-1);

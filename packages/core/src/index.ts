@@ -1179,7 +1179,6 @@ export {
 
 export {
   answerParentRpc, createParentExecutor, type ParentWorkspaceHandle, type ParentExecResult,
-  type ParentRpcWrite,
 } from './execution/parent';
 
 export {
