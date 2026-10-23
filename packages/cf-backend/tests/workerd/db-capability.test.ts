@@ -4,7 +4,7 @@
  */
 import { describe, expect, test } from 'vitest';
 import { env } from 'cloudflare:test';
-import { CLASSIFIED_OPCODES, JsonValueSchema, type JsonValue } from '@kinu.run/core';
+import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
 import * as v from 'valibot';
 
 const LEDGER = `await db.createTable({ name: 'ledger', scope: 'actor', columns: [
@@ -238,37 +238,37 @@ describe('the db capability on Durable Object SQLite', () => {
     expect(run.tables.filter((name) => name.startsWith('app_')).sort()).toEqual(['app_mine', 'app_orders']);
   });
 
-  test('every opcode an app statement compiles to is one the db.sql gate classifies', async () => {
-    const seen = await probe('sql-opcodes').opcodes([
+  test('every opcode an app statement compiles to is one the db.sql gate admits', async () => {
+    const refused = await probe('sql-opcodes').gated([
       'CREATE TABLE app_parent (id INTEGER PRIMARY KEY, name TEXT UNIQUE, n INTEGER)',
       'CREATE TABLE app_child (id INTEGER PRIMARY KEY, parent INTEGER REFERENCES app_parent(id) ON DELETE CASCADE, note TEXT)',
       'CREATE INDEX app_child_parent ON app_child(parent)',
     ], [
-      'SELECT * FROM app_parent WHERE id = ?',
+      'SELECT * FROM app_parent WHERE id = 1',
       'SELECT p.name, count(c.id), sum(p.n), avg(p.n), min(p.n), max(p.n), group_concat(c.note) FROM app_parent p LEFT JOIN app_child c ON c.parent = p.id GROUP BY p.name HAVING count(*) > 0 ORDER BY 2 DESC LIMIT 5 OFFSET 1',
       'SELECT name, row_number() OVER (ORDER BY n), lag(n) OVER (PARTITION BY name ORDER BY id), sum(n) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM app_parent',
       'SELECT DISTINCT name FROM app_parent UNION SELECT note FROM app_child INTERSECT SELECT name FROM app_parent EXCEPT SELECT \'x\'',
       'WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 5) SELECT x FROM c',
       'WITH big AS MATERIALIZED (SELECT * FROM app_parent WHERE n > 1) SELECT * FROM big JOIN app_child ON app_child.parent = big.id',
-      'SELECT * FROM app_parent WHERE name LIKE ? AND n BETWEEN 1 AND 9 AND id NOT IN (SELECT parent FROM app_child) AND EXISTS (SELECT 1 FROM app_child)',
+      'SELECT * FROM app_parent WHERE name LIKE \'a%\' AND n BETWEEN 1 AND 9 AND id NOT IN (SELECT parent FROM app_child) AND EXISTS (SELECT 1 FROM app_child)',
       'SELECT CASE WHEN n > 1 THEN \'big\' ELSE \'small\' END, coalesce(name, \'\'), length(name), upper(name), substr(name, 1, 2), abs(n), round(n / 3.0, 2), CAST(n AS TEXT), typeof(n), json_extract(name, \'$.a\'), datetime(\'now\'), printf(\'%d\', n) FROM app_parent',
       'VALUES (1, 2), (3, 4)',
-      'INSERT INTO app_parent (name, n) VALUES (?, ?), (?, ?)',
-      'INSERT INTO app_parent (name, n) VALUES (?, 1) ON CONFLICT(name) DO UPDATE SET n = n + excluded.n',
+      'INSERT INTO app_parent (name, n) VALUES (\'a\', 1), (\'b\', 2)',
+      'INSERT INTO app_parent (name, n) VALUES (\'a\', 1) ON CONFLICT(name) DO UPDATE SET n = n + excluded.n',
       'INSERT OR REPLACE INTO app_parent (id, name) VALUES (1, \'z\')',
       'INSERT OR IGNORE INTO app_parent (name) SELECT note FROM app_child',
-      'INSERT INTO app_child (parent, note) VALUES (?, ?) RETURNING id, note',
+      'INSERT INTO app_child (parent, note) VALUES (1, \'n\') RETURNING id, note',
       'REPLACE INTO app_parent (id, name) VALUES (2, \'y\')',
       'UPDATE app_parent SET n = (SELECT count(*) FROM app_child WHERE app_child.parent = app_parent.id) WHERE n IS NULL',
       'UPDATE app_parent SET n = c.k FROM (SELECT parent, count(*) AS k FROM app_child GROUP BY parent) c WHERE c.parent = app_parent.id',
       'UPDATE app_child SET parent = 2 WHERE id = 1',
-      'DELETE FROM app_parent WHERE id = ?',
+      'DELETE FROM app_parent WHERE id = 1',
       'DELETE FROM app_child',
       'DELETE FROM app_parent',
       'WITH x AS (SELECT 1) DELETE FROM app_parent WHERE id IN (SELECT * FROM x)',
     ]);
 
-    expect(seen.filter((opcode) => !CLASSIFIED_OPCODES.includes(opcode))).toEqual([]);
+    expect(refused).toEqual([]);
   });
 });
 

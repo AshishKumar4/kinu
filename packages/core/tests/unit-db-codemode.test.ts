@@ -860,7 +860,7 @@ describe('db.sql', () => {
       a.createTable({ name: 'mine', scope: 'actor', columns: [{ name: 'k', type: 'text' }] });
       a.createTable({ name: 'secret', scope: 'private', columns: [{ name: 'k', type: 'text' }] });
       const provider = createDbCodemodeProvider(a, { private: true });
-      const sql = present(provider.tools['sql'], 'db.sql').execute;
+      const sql = present(Object.entries(provider.tools).find(([name]) => name === 'sql')?.[1], 'db.sql').execute;
       const refusal = async (query: string): Promise<string> => v.parse(v.looseObject({ reason: v.optional(v.string()) }), await sql(query, [])).reason ?? 'ran';
 
       for (const query of [

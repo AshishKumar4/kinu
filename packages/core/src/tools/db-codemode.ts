@@ -13,7 +13,7 @@ import {
   ACTOR_COLUMN, BOUND_PARAMS_MAX, ColumnSchema, DB, IDENTIFIER, OperatorCarrierSchema, OpSchema, PredicateOperationSchema, PredicateSchema,
   SELECT_LIMIT_DEFAULT, SELECT_LIMIT_MAX, SelectSchema, TableNameSchema, TableSpecSchema, WhereSchema, type AppColumnType,
 } from '../operations/db';
-import { ExplainRowSchema, gateProgram, readSqlStatement, storedText, type SqlTableDeclaration } from './db-sql';
+import { ExplainRowSchema, gateProgram, readSqlStatement, storedText, type SqlTableDeclaration } from '../operations/db-sql';
 import { codemodeNamespace } from './operation-surfaces';
 import type { RawSqlExec, SqlExecutor, SqlValue } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -87,7 +87,7 @@ interface AppOpResult {
 
 /** A `db.sql` statement's answer: its rows, blobs as base64, and the rows a write changed. */
 interface SqlAnswer {
-  readonly rows: readonly Readonly<Record<string, JsonValue>>[];
+  readonly rows: Record<string, JsonValue>[];
   readonly rowsAffected: number;
 }
 

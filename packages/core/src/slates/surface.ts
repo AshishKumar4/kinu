@@ -17,7 +17,7 @@ import type { ShareGrant } from './sharing';
 import { WEB_SANDBOX_IMPACTS } from '../operations/web';
 import { MACHINE_FILES } from '../operations/executors';
 import { DB } from '../operations/db';
-import { sqlCallImpact } from '../tools/db-sql';
+import { sqlCallImpact } from '../operations/db-sql';
 
 /** The executor a program reaches as `workspace`; a one-name path is its member, as `workspace.listTools` is in a program. */
 const WORKSPACE_EXECUTOR = 'workspace';

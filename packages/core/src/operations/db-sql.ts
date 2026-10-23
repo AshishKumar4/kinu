@@ -10,7 +10,7 @@ import { Effect } from 'effect';
 import * as v from 'valibot';
 import type { Impact } from '@agent-core/core/facets';
 import { KinuError } from '../obs/error';
-import type { AppColumnType } from '../operations/db';
+import type { AppColumnType } from './db';
 import type { JsonValue } from '../utils/json';
 
 interface Token {
@@ -49,60 +49,68 @@ function closing(text: string, at: number, quote: string): number | null {
   return null;
 }
 
-/** One token at `at`, or why the text holds none there. */
-function tokenAt(text: string, at: number): Token | KinuError {
-  const char = text[at] ?? '';
-  const next = text[at + 1] ?? '';
+/** Where a run of characters `test` admits, starting after `at`, ends. */
+function runEnd(text: string, at: number, test: (char: string, end: number) => boolean): number {
   let end = at + 1;
 
-  const run = (test: (char: string) => boolean): number => {
-    while (end < text.length && test(text[end] ?? '')) end += 1;
+  while (end < text.length && test(text[end] ?? '', end)) end += 1;
 
-    return end;
-  };
+  return end;
+}
 
-  if (/\s/u.test(char)) return { kind: 'space', text: text.slice(at, run((c) => /\s/u.test(c))) };
+/** A comment or blank run at `at`, or null. */
+function blankAt(text: string, at: number): Token | null {
+  const pair = text.slice(at, at + 2);
 
-  if (char === '-' && next === '-') {
+  if (/\s/u.test(text[at] ?? '')) return { kind: 'space', text: text.slice(at, runEnd(text, at, (char) => /\s/u.test(char))) };
+
+  if (pair === '--') {
     const line = text.indexOf('\n', at);
 
     return { kind: 'space', text: text.slice(at, line < 0 ? text.length : line) };
   }
 
-  if (char === '/' && next === '*') {
-    const close = text.indexOf('*/', at + 2);
+  if (pair !== '/*') return null;
+  const close = text.indexOf('*/', at + 2);
 
-    return { kind: 'space', text: text.slice(at, close < 0 ? text.length : close + 2) };
-  }
+  return { kind: 'space', text: text.slice(at, close < 0 ? text.length : close + 2) };
+}
 
-  if (char === "'" || char === '"' || char === '`' || char === '[') {
-    const close = char === '[' ? (text.indexOf(']', at) + 1 || null) : closing(text, at, char);
+/** A string or a quoted name opened at `at` by `quote`. */
+function quotedAt(text: string, at: number, quote: string): Token | KinuError {
+  const close = quote === '[' ? (text.indexOf(']', at) + 1 || null) : closing(text, at, quote);
 
-    if (close === null) return refusal(`a ${char === "'" ? 'string' : 'quoted name'} opened at character ${String(at)} is never closed`);
-    const quoted = text.slice(at, close);
+  if (close === null) return refusal(`a ${quote === "'" ? 'string' : 'quoted name'} opened at character ${String(at)} is never closed`);
+  const quoted = text.slice(at, close);
 
-    if (char === "'") return { kind: 'string', text: quoted };
+  if (quote === "'") return { kind: 'string', text: quoted };
 
-    return { kind: 'quoted', text: quoted, name: char === '[' ? quoted.slice(1, -1) : quoted.slice(1, -1).replaceAll(char + char, char) };
-  }
+  return { kind: 'quoted', text: quoted, name: quote === '[' ? quoted.slice(1, -1) : quoted.slice(1, -1).replaceAll(quote + quote, quote) };
+}
 
-  if (char === '?' || char === ':' || char === '@' || char === '$') {
-    run((c) => WORD.test(c));
+/** One token at `at`, or why the text holds none there. */
+function tokenAt(text: string, at: number): Token | KinuError {
+  const char = text[at] ?? '';
+  const blank = blankAt(text, at);
+
+  if (blank !== null) return blank;
+
+  if ("'\"`[".includes(char)) return quotedAt(text, at, char);
+
+  if ('?:@$'.includes(char)) {
+    const end = runEnd(text, at, (next) => WORD.test(next));
 
     return end > at + 1 || char !== '?' ? refusal(`it binds \`?\` placeholders in order, from params; \`${text.slice(at, end)}\` is not one`) : { kind: 'param', text: '?' };
   }
 
-  if (/[0-9]/u.test(char) || (char === '.' && /[0-9]/u.test(next))) {
-    return { kind: 'number', text: text.slice(at, run((c) => /[0-9A-Za-z_.]/u.test(c) || ('+-'.includes(c) && /[eE]/u.test(text[end - 1] ?? '')))) };
+  if (/[0-9]/u.test(char) || (char === '.' && /[0-9]/u.test(text[at + 1] ?? ''))) {
+    return { kind: 'number', text: text.slice(at, runEnd(text, at, (next, end) => /[0-9A-Za-z_.]/u.test(next) || ('+-'.includes(next) && /[eE]/u.test(text[end - 1] ?? '')))) };
   }
 
-  if (WORD_START.test(char)) {
-    const word = text.slice(at, run((c) => WORD.test(c)));
+  if (!WORD_START.test(char)) return { kind: 'punct', text: char };
+  const word = text.slice(at, runEnd(text, at, (next) => WORD.test(next)));
 
-    return { kind: 'word', text: word, name: word };
-  }
-
-  return { kind: 'punct', text: char };
+  return { kind: 'word', text: word, name: word };
 }
 
 function tokenize(text: string): Effect.Effect<Token[], KinuError> {
@@ -146,7 +154,7 @@ function single(tokens: readonly Token[]): Effect.Effect<readonly Token[], KinuE
 const RUNS = new Set(['SELECT', 'VALUES', 'WITH', 'INSERT', 'REPLACE', 'UPDATE', 'DELETE']);
 
 export function readSqlStatement(text: string): Effect.Effect<SqlStatement, KinuError> {
-  return Effect.flatMap(Effect.flatMap(tokenize(text), single), (tokens) => {
+  return Effect.flatMap(Effect.flatMap(tokenize(text), single), (tokens): Effect.Effect<SqlStatement, KinuError> => {
     const [first] = meaningful(tokens);
     const verb = first?.kind === 'word' ? first.text.toUpperCase() : '';
 
@@ -162,7 +170,30 @@ export function readSqlStatement(text: string): Effect.Effect<SqlStatement, Kinu
 
 const COLUMN_TYPES = new Map<string, AppColumnType>([['INTEGER', 'integer'], ['INT', 'integer'], ['REAL', 'real'], ['TEXT', 'text'], ['BLOB', 'blob']]);
 
-const TAKES = 'CREATE TABLE [IF NOT EXISTS] name (column TYPE [PRIMARY KEY] [UNIQUE] [NOT NULL], …), TYPE one of INTEGER, REAL, TEXT, BLOB';
+const TAKES = 'a table name, then in parentheses each column as a name and a type of INTEGER, REAL, TEXT or BLOB, with PRIMARY KEY, UNIQUE or NOT NULL';
+
+/** A column's constraints, each as declared by `db.createTable`. */
+interface ColumnConstraints {
+  primaryKey?: true;
+  unique?: true;
+  notNull?: true;
+}
+
+/** A column's constraints as `word` takes them, null where one is half spelled. */
+function constraintsOf(word: (expected: string) => boolean): ColumnConstraints | null {
+  const taken: ColumnConstraints = {};
+
+  for (;;) {
+    if (word('PRIMARY')) {
+      if (!word('KEY')) return null;
+      taken.primaryKey = true;
+    } else if (word('UNIQUE')) taken.unique = true;
+    else if (word('NOT')) {
+      if (!word('NULL')) return null;
+      taken.notNull = true;
+    } else return taken;
+  }
+}
 
 /** `CREATE TABLE` as the declaration `db.createTable` takes: what a fork and the typed reads keep of a table. */
 function tableDeclaration(tokens: readonly Token[]): Effect.Effect<SqlTableDeclaration, KinuError> {
@@ -194,7 +225,7 @@ function tableDeclaration(tokens: readonly Token[]): Effect.Effect<SqlTableDecla
 
   const takes = refusal(`it takes ${TAKES}`);
 
-  if (!word('TABLE')) return Effect.fail(refusal(`it creates tables only: ${TAKES}`));
+  if (!word('TABLE')) return Effect.fail(refusal(`it creates tables only, taking ${TAKES}`));
   const ifNotExists = word('IF');
 
   if (ifNotExists && !(word('NOT') && word('EXISTS'))) return Effect.fail(takes);
@@ -209,20 +240,10 @@ function tableDeclaration(tokens: readonly Token[]): Effect.Effect<SqlTableDecla
 
     if (column === null || type === undefined) return Effect.fail(refusal(`column \`${column ?? '?'}\` is not one it takes: ${TAKES}`));
     at += 1;
-    let [primaryKey, unique, notNull] = [false, false, false];
+    const constraints = constraintsOf(word);
 
-    for (;;) {
-      if (word('PRIMARY')) {
-        if (!word('KEY')) return Effect.fail(takes);
-        primaryKey = true;
-      } else if (word('UNIQUE')) unique = true;
-      else if (word('NOT')) {
-        if (!word('NULL')) return Effect.fail(takes);
-        notNull = true;
-      } else break;
-    }
-
-    columns.push({ name: column, type, ...(primaryKey && { primaryKey: true }), ...(unique && { unique: true }), ...(notNull && { notNull: true }) });
+    if (constraints === null) return Effect.fail(takes);
+    columns.push({ name: column, type, ...constraints });
   } while (punct(','));
 
   return punct(')') && at === tokens.length ? Effect.succeed({ name: table, ifNotExists, columns }) : Effect.fail(refusal(`it takes ${TAKES}, and nothing more`));
@@ -295,9 +316,6 @@ const ACCESS = new Map<string, Access>([
     PureFunc Function ClrSubtype GetSubtype SetSubtype FilterAdd Filter Trace CursorHint ReleaseReg Noop Explain Abortable`
     .split(/\s+/u).map((name) => [name, 'inert'] as const),
 ]);
-
-/** The opcodes this gate classifies; any other is refused. */
-export const CLASSIFIED_OPCODES: readonly string[] = [...ACCESS.keys()];
 
 export const ExplainRowSchema = v.looseObject({
   opcode: v.string(), p1: v.number(), p2: v.number(), p3: v.number(), p5: v.number(),

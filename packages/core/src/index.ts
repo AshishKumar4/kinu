@@ -610,7 +610,7 @@ export {
   type AppDataStore, type DbOpRecord,
 } from './tools/db-codemode';
 
-export { CLASSIFIED_OPCODES } from './tools/db-sql';
+export { ExplainRowSchema, gateProgram } from './operations/db-sql';
 
 export { ActorReferenceSchema, actorReferenceOf, bindActorHandle, sameActorReference, type ActorReference, type ActorIdentity, type ActorHandle } from './identity/actor-handle';
 
