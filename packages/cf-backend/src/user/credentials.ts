@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 import {
-  KeptProviderListingSchema, type ProviderListing, safeJsonParse, type Credential, CLAUDE_CRED_KEY, CODEX_CRED_KEY, baseCredentialKey, claudeCodeFrom, claudeSignInRefusal, createClaudeOAuthClient, startClaudeSignIn, subscriptionIssuer, renewableLogin, rotateLogin, usableLogin, type LoginRenewal, type SubscriptionIssuer, decodeCodexAccountId, type JsonValue, type OAuthCredential, parseJsonValue, ownerCaller, type UserCaller, type ResolvedCaller, credentialToHeaders, refusedLogin, type AuthRequest, type AuthResolution, validateCredential, validateCredentialKey, createCredentialCipher, type CredentialCipher, revocationEndpointFor, revokeOAuthGrant, type DisconnectOutcome, isModelInferenceCredentialKey, CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, accountIdFromCloudflareCredential, cloudflareAIGatewayId, cloudflareAccountsFromCredential, cloudflareWorkersAIBaseURL, fetchCloudflareAIGateways, isCloudflareAIGatewayId, isCloudflareCredentialExpiring, isCloudflareCredentialUsable, refreshCloudflareCredential, withCloudflareAccount, type CloudflareAccount, type CloudflareAIGatewaySummary, type CredentialSummary, CLOUDFLARE_WEB_SEARCH_CRED_KEY, grantsWebSearch, storedCredentialKey,
+  KeptProviderListingSchema, type ProviderListing, safeJsonParse, type Credential, CLAUDE_CRED_KEY, CODEX_CRED_KEY, baseCredentialKey, CLAUDE_OAUTH_CALLBACK_PORT, claudeCodeFrom, claudeSignInRefusal, createClaudeOAuthClient, startClaudeSignIn, subscriptionIssuer, renewableLogin, rotateLogin, usableLogin, type LoginRenewal, type SubscriptionIssuer, decodeCodexAccountId, type JsonValue, type OAuthCredential, parseJsonValue, ownerCaller, type UserCaller, type ResolvedCaller, credentialToHeaders, refusedLogin, type AuthRequest, type AuthResolution, validateCredential, validateCredentialKey, createCredentialCipher, type CredentialCipher, revocationEndpointFor, revokeOAuthGrant, type DisconnectOutcome, isModelInferenceCredentialKey, CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, accountIdFromCloudflareCredential, cloudflareAIGatewayId, cloudflareAccountsFromCredential, cloudflareWorkersAIBaseURL, fetchCloudflareAIGateways, isCloudflareAIGatewayId, isCloudflareCredentialExpiring, isCloudflareCredentialUsable, refreshCloudflareCredential, withCloudflareAccount, type CloudflareAccount, type CloudflareAIGatewaySummary, type CredentialSummary, CLOUDFLARE_WEB_SEARCH_CRED_KEY, grantsWebSearch, storedCredentialKey,
 } from '@kinu.run/core';
 import { attempt, authoredRefusal, diagnostics, KinuError, renderThrownChain, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -40,7 +40,11 @@ const REFRESH_DOING: ReadonlyMap<string, string> = new Map([
 const CLAUDE_SIGN_IN_KEY = 'claude.sign-in';
 
 /** `revision` at the start: a write or disconnect since spends the sign-in. */
-const ClaudeSignInSchema = v.object({ url: v.string(), state: v.string(), verifier: v.string(), revision: v.number() });
+/** A sign-in held from before the web returned through Anthropic's code page went to the local listener's address. */
+const ClaudeSignInSchema = v.object({
+  url: v.string(), state: v.string(), verifier: v.string(), revision: v.number(),
+  redirectUri: v.optional(v.string(), `http://localhost:${String(CLAUDE_OAUTH_CALLBACK_PORT)}/callback`),
+});
 
 export interface CodexStatus {
   connected: boolean;
@@ -647,10 +651,11 @@ export class UserCredentials {
     );
   }
 
-  /** One Claude sign-in at a time; its PKCE verifier stays in this object, as the CLI's stays on the machine. */
+  /** One Claude sign-in at a time; its PKCE verifier stays in this object, as the CLI's stays on the machine. Claude
+   *  returns the browser to Anthropic's own page, which shows the code to paste back: nothing lands on a page that fails. */
   async startClaudeSignIn(caller: UserCaller): Promise<{ readonly url: string }> {
     await this.host.requireTier(caller, 'subscription_auth');
-    const signIn = await startClaudeSignIn();
+    const signIn = await startClaudeSignIn('code-page');
 
     this.host.ctx.storage.kv.put(CLAUDE_SIGN_IN_KEY, { ...signIn, revision: this.credentialRevision(CLAUDE_CRED_KEY) });
 

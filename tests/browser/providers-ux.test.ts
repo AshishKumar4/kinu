@@ -165,17 +165,19 @@ describe('the providers list', () => {
       await page.waitForSelector(CLAUDE);
 
 
-      // Not connected, its one button is the sign-in.
+      // Not connected, its one button is the sign-in; its page opens, then its code is pasted back.
+      await rigSignInWindows(page);
       await page.click(`${CLAUDE} button`);
-      const authorize = await page.waitForSelector(`${CLAUDE} a[href^="https://claude.ai/oauth/authorize"]`);
+      const authorize = await page.waitForSelector(`${CLAUDE} [data-sign-in-open][href^="https://claude.ai/oauth/authorize"]`);
       expect(authorize).not.toBeNull();
+      await page.click(`${CLAUDE} [data-sign-in-open]`);
 
-      await page.type(`${CLAUDE} input[aria-label="Claude sign-in code"]`, 'stale-code');
+      await page.type(`${CLAUDE} [data-sign-in-paste] input`, 'stale-code');
       await page.keyboard.press('Enter');
       await page.waitForFunction(() => (document.querySelector('[data-provider="Claude"]')?.textContent ?? '').includes('Invalid authorization code'));
 
-      await page.click(`${CLAUDE} input[aria-label="Claude sign-in code"]`, { count: 3 });
-      await page.type(`${CLAUDE} input[aria-label="Claude sign-in code"]`, 'good-code');
+      await page.click(`${CLAUDE} [data-sign-in-paste] input`, { count: 3 });
+      await page.type(`${CLAUDE} [data-sign-in-paste] input`, 'good-code');
       await page.keyboard.press('Enter');
       await page.waitForSelector(`${CLAUDE} button[aria-label="Disconnect Claude"]`);
 
@@ -211,23 +213,25 @@ describe('the providers list', () => {
     });
   });
 
-  test("ChatGPT's sign-in pasted back opens in its popup, which closes once the address signs in", async () => {
+  // The owner, 2026-10-23, over the rule above for this one sign-in: its page ends on an address to copy, so it opens in a
+  // tab of its own, which the page leaves open, and what to copy is not read only once a popup has closed.
+  test("ChatGPT's sign-in pasted back opens in a tab of its own, which the page leaves open", async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
 
       await chatGptEntry(page, origin, '');
       await rigSignInWindows(page);
       await page.$$eval(`${CHATGPT} button`, (buttons) => buttons.find((button) => button.textContent?.includes('Sign in here'))?.click());
-      await page.waitForSelector(`${CHATGPT} [data-chatgpt-way="here"] a`);
-      await page.click(`${CHATGPT} [data-chatgpt-way="here"] a`);
+      await page.waitForSelector(`${CHATGPT} [data-chatgpt-way="here"] [data-sign-in-open]`);
+      await page.click(`${CHATGPT} [data-chatgpt-way="here"] [data-sign-in-open]`);
       const opened = await signInWindowSeen(page);
 
-      await page.type(`${CHATGPT} input[aria-label="Address the sign-in landed on"]`, 'http://127.0.0.1:1455/auth/callback?code=gallery');
+      await page.type(`${CHATGPT} [data-sign-in-paste] input`, 'http://127.0.0.1:1455/auth/callback?code=gallery');
       await page.$$eval(`${CHATGPT} button`, (buttons) => buttons.find((button) => button.textContent === 'Finish')?.click());
       await page.waitForSelector(`${CHATGPT} button[aria-label="Disconnect ChatGPT"]`);
 
       expect({ opened, ended: (await signInWindowSeen(page)).closed }).toEqual({
-        opened: { window: POPUP, at: 'about:blank', closed: false, linkOpensTab: 'false' }, ended: true,
+        opened: { window: null, at: null, closed: false, linkOpensTab: 'true' }, ended: false,
       });
       await page.close();
     });
@@ -242,16 +246,20 @@ describe('the providers list', () => {
       await rigSignInWindows(page);
 
       await page.click(`${CLAUDE} button`);
-      await page.waitForSelector(`${CLAUDE} a[href^="https://claude.ai/oauth/authorize"]`);
-      await page.click(`${CLAUDE} a[href^="https://claude.ai/oauth/authorize"]`);
+      await page.waitForSelector(`${CLAUDE} [data-sign-in-open]`);
+      await page.click(`${CLAUDE} [data-sign-in-open]`);
       const opened = await signInWindowSeen(page);
 
-      await page.type(`${CLAUDE} input[aria-label="Claude sign-in code"]`, 'good-code');
+      await page.type(`${CLAUDE} [data-sign-in-paste] input`, 'good-code');
       await page.keyboard.press('Enter');
       await page.waitForSelector(`${CLAUDE} button[aria-label="Disconnect Claude"]`);
 
       expect({ opened, ended: (await signInWindowSeen(page)).closed }).toEqual({
-        opened: { window: POPUP, at: 'https://claude.ai/oauth/authorize?state=gallery', closed: false, linkOpensTab: 'false' }, ended: true,
+        opened: {
+          window: POPUP, at: 'https://claude.ai/oauth/authorize?redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&state=gallery',
+          closed: false, linkOpensTab: 'false',
+        },
+        ended: true,
       });
       await page.close();
     });
@@ -262,11 +270,13 @@ describe('the providers list', () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
 
-      await chatGptEntry(page, origin, '');
+      await page.setViewport({ width: 1280, height: 1100 });
+      await page.goto(`${origin}/gallery.html?frame=usersettingsstate&section=providers`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector(CLAUDE);
       await rigSignInWindows(page, true);
-      await page.$$eval(`${CHATGPT} button`, (buttons) => buttons.find((button) => button.textContent?.includes('Sign in here'))?.click());
-      await page.waitForSelector(`${CHATGPT} [data-chatgpt-way="here"] a`);
-      await page.click(`${CHATGPT} [data-chatgpt-way="here"] a`);
+      await page.click(`${CLAUDE} button`);
+      await page.waitForSelector(`${CLAUDE} [data-sign-in-open]`);
+      await page.click(`${CLAUDE} [data-sign-in-open]`);
 
       expect(await signInWindowSeen(page)).toEqual({ window: null, at: null, closed: false, linkOpensTab: 'true' });
       await page.close();
