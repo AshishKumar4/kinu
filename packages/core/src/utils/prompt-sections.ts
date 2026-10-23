@@ -30,18 +30,19 @@ export const TURN_SKILLS_HEADING = 'The next message activates these skills; the
 
 export const SLEEP_TIME_PROMPT_OPENING = 'You are a background memory-compression agent.';
 
-export const DYNAMIC_CONTEXT_DELIMITER = /<(\/?)dynamic_context/g;
+/** A block's tag as a model reads one: in any case, with space before or after its slash. */
+export const DYNAMIC_CONTEXT_DELIMITER = /<(\s*\/?\s*)dynamic_context/giu;
 
 const SOUL_TAG = 'soul';
 
-const SOUL_FORGEABLE = /<(\/?)(soul|dynamic_context|workspace_instructions|system-reminder)/gu;
+const SOUL_FORGEABLE = /<(\s*\/?\s*)(soul|dynamic_context|workspace_instructions|system-reminder)/giu;
 
 /** One block nothing inside can close. */
 export function sealSoul(soul: string): string {
   return `<${SOUL_TAG}>\n${soul.replace(SOUL_FORGEABLE, '&lt;$1$2')}\n</${SOUL_TAG}>`;
 }
 
-export const WORKSPACE_INSTRUCTIONS_DELIMITER = /<(\/?)workspace_instructions/g;
+export const WORKSPACE_INSTRUCTIONS_DELIMITER = /<(\s*\/?\s*)workspace_instructions/giu;
 
 /**
  * Neutralize a block's own delimiter inside its body. Bodies carry unescaped
