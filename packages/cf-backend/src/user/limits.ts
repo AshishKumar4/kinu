@@ -6,8 +6,8 @@ import { Effect } from 'effect';
 import { KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import {
   accountClassOf, admitComputerStart, admitPlatformTurn, admitStoredBytes, admitWorkspace, AccountLimitsStore, dayOf,
-  freeTierOf, isLimited, limitsReport, monthOf, type AccountClass, type AccountUse, type Admission, type ComputerSize, type FreeTier,
-  type LimitId, type LimitReading, type LimitsReport, type StoredClass, type UserCaller,
+  freeTierOf, isLimited, limitReadings, limitsReport, monthOf, type AccountClass, type AccountLimits, type AccountUse, type Admission,
+  type ComputerSize, type FreeTier, type LimitId, type LimitReading, type LimitsReport, type StoredClass, type UserCaller,
 } from '@kinu.run/core';
 import { isListedOperator } from '../control-plane/admin-caller';
 import type { UserObjectHost } from './user-host';
@@ -206,6 +206,15 @@ export class UserLimits {
     const shown = suspended === null ? null : { at: suspended.at, reason: suspended.reason };
 
     return tier === null ? { class: klass, suspended: shown, limits: [] } : limitsReport({ klass, tier, use: this.use(now), now }, shown);
+  }
+
+  /** The account as the operators' accounts table reads it: its report, and its use whatever its class binds. */
+  async account(caller: UserCaller): Promise<AccountLimits> {
+    const report = await this.limits(caller);
+    const now = Date.now();
+    const tier = await settle(this.tier());
+
+    return { report, use: tier === null ? [] : limitReadings({ tier, use: this.use(now), now }) };
   }
 
   /**

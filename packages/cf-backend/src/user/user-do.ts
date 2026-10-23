@@ -1088,6 +1088,10 @@ export class UserDO extends Agent<Env> {
     return this.accountLimits.limits(caller);
   }
 
+  limits_account(caller: UserCaller): ReturnType<UserLimits['account']> {
+    return this.accountLimits.account(caller);
+  }
+
   limits_nearNote(caller: UserCaller): ReturnType<UserLimits['nearNote']> {
     return this.accountLimits.nearNote(caller);
   }

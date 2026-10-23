@@ -1,8 +1,9 @@
 export { accountClassOf } from './class';
 
 export {
-  admitComputerStart, admitPlatformTurn, admitStoredBytes, admitWorkspace, limitsReport, LimitReadingSchema, LimitsReportSchema,
-  NEAR_SHARE, refusedFor, shownBytes, type AccountUse, type Admission, type LimitReading, type LimitsReport, type RefusedFor,
+  AccountLimitsSchema, admitComputerStart, admitPlatformTurn, admitStoredBytes, admitWorkspace, limitReadings, limitsReport,
+  LimitReadingSchema, LimitsReportSchema, NEAR_SHARE, refusedFor, shownBytes, type AccountLimits, type AccountUse, type Admission,
+  type LimitReading, type LimitsReport, type RefusedFor,
 } from './admit';
 
 export {

@@ -258,8 +258,8 @@ import {
   WorkspacePlanReferenceSchema,
 } from "@kinu.run/core";
 import type { MctsSearchRunSummary, SubagentInspectionRequest, SubagentInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
-import { Cause, Effect, Exit } from 'effect';
-import { attempt, authoredRefusal, CODE_IS_REFUSAL, diagnostics, flight, hold, joining, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
+import { Cause, Effect, Exit, Result } from 'effect';
+import { attempt, attemptInItsWords, authoredRefusal, CODE_IS_REFUSAL, diagnostics, flight, hold, joining, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import type { NameOrigin } from "@kinu.run/core";
 import { deliverCloudFork, type ForkFrameAck } from "./user/workspace-fork";
@@ -3837,10 +3837,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    */
   async computerStartAdmitted(size: ComputerSize): Promise<string | null> {
     const { stub, caller } = await this.userHub();
-    const [admitted] = await Promise.allSettled([stub.limits_admitComputerStart(caller, this.name, size)]);
+    const admitted = await settle(Effect.result(attemptInItsWords('unavailable', () => stub.limits_admitComputerStart(caller, this.name, size))));
 
-    if (admitted.status === 'fulfilled') return null;
-    const refusal = toKinuError({ doing: "asking the owner's limits whether the computer may start", otherwise: 'unavailable', cause: admitted.reason });
+    if (Result.isSuccess(admitted)) return null;
+    const refusal = admitted.failure;
 
     // Only the limits' own answer refuses a start; a limits object that could not be asked does not hold the box down.
     return refusal.code === 'budget' || refusal.code === 'denied' ? refusal.message : null;
@@ -6995,10 +6995,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /**
    * A person's upload, a chunk at a time. Its first chunk asks the owner's limits for new bytes, with this workspace's
-   * size as its database reads it now; its last tells them the size it left. Bytes already stored stay readable.
+   * size as its database reads it now; its last tells them the size it left. Bytes already stored stay readable. A
+   * refusal is the upload's answer in the limit's own words, which the page knows its dialog by: thrown, the upload
+   * would answer only that streaming it failed.
    */
   async writeExecutorFileChunk(write: ExecutorFileChunkWrite): Promise<ExecutorWriteResult> {
-    if (write.offset === 0) await this.admitNewBytes();
+    if (write.offset === 0) {
+      const admitted = await settle(Effect.result(attemptInItsWords('budget', () => this.admitNewBytes())));
+
+      if (Result.isFailure(admitted)) return { error: admitted.failure.message };
+    }
+
     const written = await this.executors.writeChunk(write);
 
     if (write.final) await this.reportStoredBytes();

@@ -165,18 +165,30 @@ function reading(read: Omit<LimitReading, 'near' | 'reached'>): LimitReading {
   return { ...read, near: read.used >= read.limit * NEAR_SHARE, reached: read.used >= read.limit };
 }
 
-export function limitsReport({ klass, tier, use, now }: Admission, suspended: LimitsReport['suspended']): LimitsReport {
-  if (!isLimited(klass)) return { class: klass, suspended, limits: [] };
-
-  return {
-    class: klass,
-    suspended,
-    limits: [
-      reading({ id: 'workspaces', used: use.workspaces, limit: tier.workspaces, unit: 'count', resetsAt: null }),
-      reading({ id: 'computer_hours', used: use.computerSeconds, limit: tier.computerHoursPerMonth * 3600, unit: 'seconds', resetsAt: periodEnd('month', now) }),
-      reading({ id: 'computers_running', used: use.running.length, limit: tier.computersRunning, unit: 'count', resetsAt: null }),
-      reading({ id: 'stored_bytes', used: use.storedBytes, limit: tier.storedBytes, unit: 'bytes', resetsAt: null }),
-      reading({ id: 'model_tokens', used: use.tokensToday, limit: tier.modelTokensPerDay, unit: 'tokens', resetsAt: periodEnd('day', now) }),
-    ],
-  };
+/** The account's use against each of the free tier's limits, whatever its class binds. */
+export function limitReadings({ tier, use, now }: Omit<Admission, 'klass'>): LimitReading[] {
+  return [
+    reading({ id: 'workspaces', used: use.workspaces, limit: tier.workspaces, unit: 'count', resetsAt: null }),
+    reading({ id: 'computer_hours', used: use.computerSeconds, limit: tier.computerHoursPerMonth * 3600, unit: 'seconds', resetsAt: periodEnd('month', now) }),
+    reading({ id: 'computers_running', used: use.running.length, limit: tier.computersRunning, unit: 'count', resetsAt: null }),
+    reading({ id: 'stored_bytes', used: use.storedBytes, limit: tier.storedBytes, unit: 'bytes', resetsAt: null }),
+    reading({ id: 'model_tokens', used: use.tokensToday, limit: tier.modelTokensPerDay, unit: 'tokens', resetsAt: periodEnd('day', now) }),
+  ];
 }
+
+export function limitsReport(admission: Admission, suspended: LimitsReport['suspended']): LimitsReport {
+  const { klass } = admission;
+
+  return { class: klass, suspended, limits: isLimited(klass) ? limitReadings(admission) : [] };
+}
+
+/**
+ * An account as the operators' accounts table reads it: its report, and `use`, its use against the free tier's limits
+ * whatever its class, which an unlimited account's report leaves out; empty where the deployment has no free tier.
+ */
+export const AccountLimitsSchema = v.object({
+  report: LimitsReportSchema,
+  use: v.array(LimitReadingSchema),
+});
+
+export type AccountLimits = v.InferOutput<typeof AccountLimitsSchema>;
