@@ -20,6 +20,9 @@
  *                                                     the pre-upload gate, which defers exactly the rows it deleted
  *   bun scripts/reset.ts served <environment>         the build the deployment serves, which a tables plan diffs from
  *   bun scripts/reset.ts stamps <environment>         the classes whose stamp the candidate moves; exit 3 if any
+ *   bun scripts/reset.ts schema-change <environment>  what the candidate does to the served build's tables: none
+ *                                                     (exit 0), additive (4: only tables made, which ships with
+ *                                                     --reset-tables on its own), or changes (5: holds for Main)
  *   bun scripts/reset.ts census <environment> <out>   every table's rows and their digest on every object, for a diff
  *   bun scripts/reset.ts census-diff <environment> <before> <after> <record>
  *                                                     a census before a tables release against the walk's after it:
@@ -54,7 +57,7 @@ import {
 import { servedHealth } from './served-health';
 import { readGenesisLockText } from './schema-drift';
 import {
-  censusDiff, censusLines, changedTables, confirmation, derivedIn, listedObjects, planLines, referrersOf, verdictOf, walk, walkLines, writeLines, type TablesTarget,
+  censusDiff, censusLines, changedTables, confirmation, derivedIn, listedObjects, planLines, referrersOf, schemaChange, verdictOf, walk, walkLines, writeLines, type TablesTarget,
 } from './tables-reset';
 import { OPS_PASS_PREFIX } from '@kinu.run/core';
 
@@ -519,7 +522,7 @@ async function confirmedAtTerminal(words = PRODUCTION_CONFIRMATION, what = 'dele
 }
 
 /** A tables release's commands (scripts/tables-reset.ts). */
-const TABLES_COMMANDS = ['served', 'stamps', 'census', 'tables-plan', 'tables-record', 'tables'] as const;
+const TABLES_COMMANDS = ['served', 'stamps', 'schema-change', 'census', 'tables-plan', 'tables-record', 'tables'] as const;
 
 /** `census-diff <environment> <before> <after> <record>`: the proof a tables release keeps, its plan's tables read from
  *  its record. Staging holds still while a release's eval runs on it; production's people write all along. */
@@ -553,17 +556,9 @@ async function tablesCommand(command: (typeof TABLES_COMMANDS)[number], environm
     return 0;
   }
 
-  // Exit 3 when the candidate moves a class's stamp: every database of that class repairs itself at first contact.
-  if (command === 'stamps' && recordFile === undefined) {
-    const sha = (await servedHealth(origin(plan(environment).config))).build?.sha;
-    const served = sha === undefined ? undefined : stampsAt(sha);
-    const candidate = stampsAt('HEAD') ?? {};
-    const moved = Object.keys(candidate).filter((schema) => served?.[schema] !== candidate[schema]);
+  if (command === 'stamps' && recordFile === undefined) return await stampsMoved(environment);
 
-    console.log(moved.length === 0 ? 'none' : moved.join(','));
-
-    return moved.length === 0 ? 0 : 3;
-  }
+  if (command === 'schema-change' && recordFile === undefined) return await schemaChangeOf(environment);
 
   if (command === 'census' && recordFile !== undefined) {
     const { reached } = await walk(tablesTarget(environment, plan(environment).config));
@@ -583,9 +578,35 @@ async function tablesCommand(command: (typeof TABLES_COMMANDS)[number], environm
   if (command === 'tables' && recordFile !== undefined && flag === undefined) return await walkTables(environment, recordFile);
 
   console.error('usage: bun scripts/reset.ts served <environment> | stamps <environment> | census <environment> <out> '
-    + '| tables-plan <environment> <record> [--from <sha>] | tables-record <environment> <record> | tables <environment> <record>');
+    + '| tables-plan <environment> <record> [--from <sha>] | tables-record <environment> <record> | tables <environment> <record> '
+    + '| schema-change <environment>');
 
   return 2;
+}
+
+/** Exit 3 when the candidate moves a class's stamp: every database of that class repairs itself at first contact. */
+async function stampsMoved(environment: InfraEnvironment): Promise<number> {
+  const sha = (await servedHealth(origin(plan(environment).config))).build?.sha;
+  const served = sha === undefined ? undefined : stampsAt(sha);
+  const candidate = stampsAt('HEAD') ?? {};
+  const moved = Object.keys(candidate).filter((schema) => served?.[schema] !== candidate[schema]);
+
+  console.log(moved.length === 0 ? 'none' : moved.join(','));
+
+  return moved.length === 0 ? 0 : 3;
+}
+
+/** What this release does to the tables of the build the deployment serves (`schemaChange`): exit 0 for none, 4 for
+ *  additive, 5 for a change; a deployment whose build it cannot read is an error, never taken as unchanged. */
+async function schemaChangeOf(environment: InfraEnvironment): Promise<number> {
+  const sha = (await servedHealth(origin(plan(environment).config))).build?.sha;
+
+  if (sha === undefined) throw new Error(`${environment} serves no build stamp, so what this release changes is unknown`);
+  const change = schemaChange(releaseVerdicts(sha));
+
+  console.log(`${change.kind}${change.tables.length === 0 ? '' : `: ${change.tables.join(', ')}`}`);
+
+  return { none: 0, additive: 4, changes: 5 }[change.kind];
 }
 
 /** How long a pass lives if this process dies before it deletes it: past the longest sweep, short of a day. */

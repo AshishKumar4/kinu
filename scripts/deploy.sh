@@ -104,10 +104,12 @@
 # tables this release changed (with the tables that refer to them), made anew empty, the first time the new build
 # opens it (core state/schema-repair.ts). Before the upload it prints the plan, every table each class drops against
 # the build the deployment serves, and stops on anything that would refuse; on production it asks for a typed
-# confirmation naming every table it drops. After the upload, once this deploy's version answers, it opens every object
+# confirmation naming every table it drops, and only then: a release that only adds tables drops nothing, and stage.sh
+# deploys it unattended (`reset.ts schema-change`). After the upload, once this deploy's version answers, it opens every object
 # once, so each resets itself before a user waits on it, prints what each did and writes each database's census
 # (`scripts/reset.ts tables-plan` and `tables`, scripts/tables-reset.ts).
-# Chosen per release, never automatic. Its record goes where a reset's does, and a rerun of the walk is harmless.
+# Chosen per release; automatic only for one that only adds tables. Its record goes where a reset's does, and a rerun
+# of the walk is harmless.
 #
 # Idempotent: safe to re-run.
 set -uo pipefail
@@ -282,10 +284,8 @@ if [ "$KINU_RESET_TABLES" = "1" ]; then
     echo -e "${RED}--reset-tables keeps every object: --reset deletes them all anyway, and --gates-only stops before the build.${NC}"
     exit 2
   fi
-  if [ "$KINU_ENV" = "production" ] && [ ! -t 0 ]; then
-    echo -e "${RED}A production tables release is confirmed at a terminal, and this run has none. Nothing was deployed.${NC}"
-    exit 1
-  fi
+  # Production's confirmation is typed at a terminal only for a plan that drops or retires a table (tables-plan asks it,
+  # and refuses one with no terminal); a plan that only adds tables drops nothing, and ships unattended (stage.sh).
   KINU_TABLES_RECORD="$(mktemp -t kinu-tables.XXXXXX.json)"
   echo -e "${BOLD}TABLES: every object drops the tables this release changed, made anew empty, the first time the new build opens it. The plan:${NC}"
   bun "$KINU_ROOT/scripts/reset.ts" tables-plan "$KINU_ENV" "$KINU_TABLES_RECORD" || exit 1
