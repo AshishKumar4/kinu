@@ -102,7 +102,7 @@ export function TerminalPane({ workspace, executor, outputs, onExecute, leading,
 
   if (lane.mode === "line") return <LineTerminal executor={executor} outputs={outputs ?? []} onExecute={onExecute} frame={frame} />;
 
-  if (lane.mode === "shell") return <WorkspaceTerminal workspace={workspace} executor={executor} frame={frame} />;
+  if (lane.mode === "shell") return <WorkspaceTerminal workspace={workspace} executor={executor} session={session} frame={frame} />;
 
   return <PtyTerminal workspace={workspace} executor={executor} session={session} device={device} frame={frame} />;
 }
@@ -412,8 +412,9 @@ const TerminalControlSchema = v.variant("type", [
   v.object({ type: v.literal("error"), error: v.string() }),
 ]);
 
-/** `ready` arrives after the runtime replayed scrollback, so a reload lands on the same screen. */
-function WorkspaceTerminal({ workspace, executor, frame }: { workspace: string; executor: string; frame: FrameParts }) {
+/** `ready` arrives after the runtime replayed scrollback, so a reload lands on the same screen. `session`: which of the
+ *  workspace's terminals (1019-aa); none, its own shell. */
+function WorkspaceTerminal({ workspace, executor, session, frame }: { workspace: string; executor: string; session?: string; frame: FrameParts }) {
   const theme = useTheme();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -434,7 +435,8 @@ function WorkspaceTerminal({ workspace, executor, frame }: { workspace: string; 
 
     const socket = new WebSocket(
       `${origin}/api/workspaces/${encodeURIComponent(workspace)}/terminal`
-      + `?executor=${encodeURIComponent(executor)}&cols=${term.cols}&rows=${term.rows}`,
+      + `?executor=${encodeURIComponent(executor)}&cols=${term.cols}&rows=${term.rows}`
+      + (session === undefined ? "" : `&session=${encodeURIComponent(session)}`),
     );
 
     // The runtime sizes its editor from frames, never the query; the window is declared before any input.
@@ -479,7 +481,7 @@ function WorkspaceTerminal({ workspace, executor, frame }: { workspace: string; 
     return releaseSocketPane({
       socket, subscriptions: [shellWindow, typing], disposeChrome, copyOperation, termRef,
     });
-  }, [workspace, executor]);
+  }, [workspace, executor, session]);
 
   useTerminalPalette(termRef, theme);
 

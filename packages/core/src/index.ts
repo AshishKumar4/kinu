@@ -2250,7 +2250,7 @@ export {
 
 export {
   WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG, WorkspaceTerminalInputSchema, WorkspaceTerminalOutputSchema,
-  isWorkspaceTerminal,
+  isWorkspaceTerminal, WORKSPACE_SHELL_SESSION, workspaceSessionOf, workspaceSessionTag, WorkspaceSessionRecordSchema, type WorkspaceSessionRecord,
 } from './execution/workspace-terminal';
 
 export {

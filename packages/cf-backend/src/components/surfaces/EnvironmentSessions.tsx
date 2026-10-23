@@ -3,7 +3,7 @@
  * and the one place a session says where it is, what it serves and how its last command ended. One status language:
  * the dot a machine wears, on a session.
  */
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Effect } from "effect";
 import { DesktopIcon, FolderOpenIcon, GitBranchIcon, PlusIcon, SparkleIcon, XIcon } from "@phosphor-icons/react";
 import { attempt, detach, renderThrownChain } from "@kinu.run/core/obs";
@@ -61,18 +61,48 @@ export interface MachineSessions {
   readonly close: (id: string) => Effect.Effect<void>;
 }
 
-/** A machine's sessions: the computer's, or the PC `device`'s (1014-t), read while `watching` and the page is visible,
- *  and changed by that machine's own calls. */
-export function useMachineSessions(rpc: WorkspaceRpc, watching: boolean, device: string | null): MachineSessions {
+/** Whose sessions: the computer's, a PC's by its id (1014-t), or the workspace's own terminals (1019-aa). */
+export type SessionMachine = { readonly kind: "computer" } | { readonly kind: "device"; readonly id: string } | { readonly kind: "workspace" };
+
+/** Each machine's own calls on its sessions: the one place the strip names them. */
+function sessionCalls(rpc: WorkspaceRpc, machine: SessionMachine) {
+  if (machine.kind === "device") {
+    const { id } = machine;
+
+    return {
+      whose: "the PC's", list: () => rpc("listDeviceSessions", [id]), open: () => rpc("openDeviceSession", [id]),
+      rename: (session: string, name: string) => rpc("renameDeviceSession", [id, session, name]), close: (session: string) => rpc("closeDeviceSession", [id, session]),
+    };
+  }
+
+  if (machine.kind === "workspace") {
+    return {
+      whose: "the workspace's", list: () => rpc("listWorkspaceSessions", []), open: () => rpc("openWorkspaceSession", []),
+      rename: (session: string, name: string) => rpc("renameWorkspaceSession", [session, name]), close: (session: string) => rpc("closeWorkspaceSession", [session]),
+    };
+  }
+
+  return {
+    whose: "the computer's", list: () => rpc("listComputerSessions", []), open: () => rpc("openComputerSession", []),
+    rename: (session: string, name: string) => rpc("renameComputerSession", [session, name]), close: (session: string) => rpc("closeComputerSession", [session]),
+  };
+}
+
+/** A machine's sessions, read while `watching` and the page is visible, and changed by that machine's own calls. */
+export function useMachineSessions(rpc: WorkspaceRpc, watching: boolean, machine: SessionMachine): MachineSessions {
   const [sessions, setSessions] = useState<readonly TerminalSession[] | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const live = useRef(true);
+  // Read by its parts: a caller's machine object is new each render.
+  const { kind } = machine;
+  const device = machine.kind === "device" ? machine.id : null;
 
-  const read = useCallback(() => attempt({ doing: device === null ? "reading the computer's sessions" : "reading the PC's sessions", otherwise: "io" },
-    () => (device === null ? rpc("listComputerSessions", []) : rpc("listDeviceSessions", [device]))).pipe(
+  const calls = useMemo(() => sessionCalls(rpc, device !== null ? { kind: "device", id: device } : { kind: kind === "workspace" ? "workspace" : "computer" }), [rpc, kind, device]);
+
+  const read = useCallback(() => attempt({ doing: `reading ${calls.whose} sessions`, otherwise: "io" }, calls.list).pipe(
     Effect.map((next) => { if (live.current) { setSessions(next ?? []); setFailure(null); } }),
     Effect.catch((cause) => Effect.sync(() => { if (live.current) setFailure(renderThrownChain({ cause })); })),
-  ), [rpc, device]);
+  ), [calls]);
 
   // Only a page someone can see reads, and one read at a time: a slow box never stacks them.
   const reading = useRef(false);
@@ -115,9 +145,9 @@ export function useMachineSessions(rpc: WorkspaceRpc, watching: boolean, device:
   return {
     sessions,
     failure,
-    open: () => call("opening a session", () => (device === null ? rpc("openComputerSession", []) : rpc("openDeviceSession", [device]))),
-    rename: (id, name) => call("renaming a session", () => (device === null ? rpc("renameComputerSession", [id, name]) : rpc("renameDeviceSession", [device, id, name]))).pipe(Effect.asVoid),
-    close: (id) => call("closing a session", () => (device === null ? rpc("closeComputerSession", [id]) : rpc("closeDeviceSession", [device, id]))).pipe(Effect.asVoid),
+    open: () => call("opening a session", calls.open),
+    rename: (id, name) => call("renaming a session", () => calls.rename(id, name)).pipe(Effect.asVoid),
+    close: (id) => call("closing a session", () => calls.close(id)).pipe(Effect.asVoid),
   };
 }
 
