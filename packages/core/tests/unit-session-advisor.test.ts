@@ -116,8 +116,8 @@ const step = (text: string): ModelMessage[] => [{ role: 'assistant', content: [{
 
 const turnOf = (model: AdvisorModel, tools: AdvisedTurn['tools'] = {}, turnId: string | null = 't1'): AdvisedTurn => ({ turnId, model, tools, reachable: ['file', 'agents'] });
 
-/** A turn of `steps`, each outlasting the review it starts (a model call takes longer than a scripted review), unless
- *  `overlapping`: then the steps end at once and the turn ends with its reviews still to run. Read once its reviews ran. */
+/** A turn of `steps`, each outlasting the review it starts (a model call takes longer than a scripted review), read once
+ *  its reviews ran; unless `overlapping`: then the steps end at once and the turn ends with its reviews still to run. */
 async function runTurn(advisor: SessionAdvisor, turn: AdvisedTurn, steps: readonly ModelMessage[][], overlapping = false): Promise<void> {
   const stepTakes = async () => { if (!overlapping) await advisor.settled(); };
 
@@ -130,7 +130,7 @@ async function runTurn(advisor: SessionAdvisor, turn: AdvisedTurn, steps: readon
   }
 
   advisor.endTurn();
-  await advisor.settled();
+  await stepTakes();
 }
 
 /** The ids of the advisor's own tool calls with no result after them: a provider refuses a request that holds one. */
@@ -225,6 +225,7 @@ describe('the in-session advisor', () => {
 
     // The request's review, then the last step's, which runs on after the turn ends.
     await runTurn(advisor, turnOf(model), [step('all tests pass')], true);
+    await advisor.settled();
 
     expect({ said: sent.map((signal) => signal.severity), kept: recorded.map((entry) => [entry.note.severity, entry.spoken]), interrupts: interrupts() })
       .toEqual({ said: ['blocker'], kept: [['blocker', true], ['nit', false]], interrupts: 0 });
