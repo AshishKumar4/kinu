@@ -1193,12 +1193,23 @@ a facet of its own) and D13's "every agent's advisor in core `ActorAdvisor`".
   cac0cbe68) and a rejection no one awaits, each left main's turn to run all
   4 of its steps and come to rest (263-764 ms), its isolate kept (a buffer
   planted before it was still there), and the next turn reviewed. A note
-  store that throws fails that one advice call (unit test). A 200 MB
-  allocation and a 44 s CPU loop were not run: workerd enforces neither
-  limit. On the platform D9 measured that both reset the isolate that runs
-  them, which is now the reviewed agent's, so such a failure costs that
-  agent's turn, recovered as any reset turn is (D13), and leaves the
-  workspace standing.
+  store that throws fails that one advice call (unit test).
+- Platform limits, measured 2026-10-23 on a throwaway Worker (a workspace DO
+  with agents as loader facets, each its own loader id; a turn of steps, each
+  a call into the agent; the advisor started detached at step 1's end;
+  `kinu-advisor-probe-1023`, deleted). 200 MB held on the advisor's JS heap
+  reset the agent's isolate within a step ("exceeded its memory limit"), 5 of
+  5 runs: its turn failed from the next step, the workspace and a sibling
+  agent kept their isolates, and the next request found the agent in a new
+  isolate with its SQLite intact. 200 MB of Uint8Array (off-heap) reset
+  nothing (2 of 2). A 44 s synchronous loop failed the step running it at the
+  facet's ~30 s ("exceeded CPU time limit", D10) and reset the agent alone (2
+  of 2). The same CPU in yielding slices, running on after the call that
+  started it, was cut after about 1.5 s of CPU, "reset because its code was
+  updated", and a sibling agent's isolate was reset with it (4 of 4; 0.84 s
+  was fine). So an advisor's runaway kills its own agent's turn, which recovers
+  as any reset turn does (D13), never the workspace; detached CPU can also
+  reset a sibling agent, cause unknown.
 - Not measured: review latency on a real provider. The step loop never waits
   for a review mid-turn; the turn's end waits for its last step's review, one
   model call when the advisor reads nothing.

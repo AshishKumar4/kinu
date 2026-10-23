@@ -238,7 +238,7 @@ export class FacetChat {
       toolset: () => ({
         tools, stores: null,
         advisorReads: advisorReadsOver(prepared.advisorTools ?? [], async (call) => await workspace.advisorRead({ turnId: turn.id, runId: turn.runId, epoch: turn.epoch, ...call })),
-      }) satisfies TurnTools,
+      } satisfies TurnTools),
       externalTools: async () => ({}),
       // A measure between turns binds nothing: no turn is open to bind it to.
       settle: async (profile, inputs) => {
