@@ -570,20 +570,22 @@ userRoutes.post('/api/user/mcp/servers/:id/connect', (c) => settle(Effect.gen(fu
 
 // Eval-only: ends the account object's activation, so the next request is a fresh wake that dials every MCP server again
 // (the mcp-wake first-run row). `ctx.abort` rejects the call that asked for it: that rejection is the abort's receipt.
-userRoutes.post('/api/user/eval/abort', async (c) => {
+userRoutes.post('/api/user/eval/abort', (c) => {
   if (!isEvalServiceIdentity(c.get('identity'))) return Response.json({ error: 'Not found' }, { status: 404 });
+  const aborted = Response.json({ aborted: true }, { status: 202 });
 
-  try {
-    await c.get('stub').evalAbortActivation();
-  } catch (cause) {
-    diagnostics.event('eval.account_activation_aborted', { receipt: renderThrownChain({ cause }) });
+  return settle(Effect.tryPromise({ try: () => c.get('stub').evalAbortActivation(), catch: (cause) => renderThrownChain({ cause }) }).pipe(Effect.match({
+    onFailure: (receipt) => {
+      diagnostics.event('eval.account_activation_aborted', { receipt });
 
-    return Response.json({ aborted: true }, { status: 202 });
-  }
+      return aborted;
+    },
+    onSuccess: () => {
+      diagnostics.event('eval.account_activation_abort_returned', {});
 
-  diagnostics.event('eval.account_activation_abort_returned', {});
-
-  return Response.json({ aborted: true }, { status: 202 });
+      return aborted;
+    },
+  })));
 });
 
 // A failed or closed server dialled again at the person's ask (the row's Reconnect).

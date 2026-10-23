@@ -858,7 +858,7 @@ export class UserDO extends Agent<Env> {
    * Eval-only: ends this account's activation as the platform's hibernation does, so the next request is a fresh wake
    * that dials every MCP server again. Sealed in `rpc-surface.ts`, eval-service identity only (`eval/abort-route.ts`).
    */
-  evalAbortActivation(): void {
+  async evalAbortActivation(): Promise<void> {
     this.ctx.abort('eval-service: the account activation was aborted on request');
   }
 

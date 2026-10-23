@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/Button";
 import { PlugIcon, PlusIcon, TrashIcon, ArrowSquareOutIcon, ArrowClockwiseIcon } from "@phosphor-icons/react";
 import type { ConnectEnded, McpTransport } from "@kinu.run/core";
 import { beginConnect, signInMcpServer } from "@/lib/connect-window";
-import { addMcpServer, reconnectMcpServer, removeMcpServer } from "@/lib/user-api";
+import { addMcpServer, reconnectSaying, removeMcpServer } from "@/lib/user-api";
 import { McpPresetCards } from "@/components/plugins/McpPresetCards";
 import { Status } from "@/components/ui/Status";
 import { mcpServerStatus } from "@/components/plugins/mcp-status";
@@ -106,9 +106,9 @@ export function McpServersPanel({ mcp }: { mcp: McpServers }) {
                     )}
                     {s.status === "failed" && !s.signIn && (
                       <Button size="sm" icon={<ArrowClockwiseIcon size={14} />} data-mcp-reconnect onClick={() => detach(Effect.promise(async () => {
-                        try { await reconnectMcpServer(s.id); }
-                        catch (cause) { setSignInFailed(`${s.name} did not reconnect: ${renderThrownChain({ cause })}`); }
+                        const failed = await reconnectSaying(s.id, s.name);
 
+                        if (failed !== null) setSignInFailed(failed);
                         reload();
                       }))}>Reconnect</Button>
                     )}

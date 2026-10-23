@@ -127,15 +127,69 @@ const KeptListingSchema = v.object({
 
 type KeptListing = v.InferOutput<typeof KeptListingSchema>;
 
+/** Where a turn's tools from one server came from, and what its listing refused. */
+interface Seat {
+  readonly tools: readonly RemoteMcpTool[] | null;
+  readonly source: 'live' | 'kept' | 'none';
+  readonly refused: McpToolSurface['unavailable'];
+}
+
+/** One server's seated tools as descriptors, and the tools the surface refused, named. */
+interface SeatedTools {
+  readonly admitted: SerializableToolDescriptor[];
+  readonly refused: McpToolSurface['unavailable'];
+}
+
+/**
+ * The tools a turn takes from one server: its live list when its connection is ready or listed leniently, else the list
+ * it last kept; none when its live listing failed. A listing's refused tools travel with it.
+ */
+function seatOf(input: {
+  readonly listing: McpToolListing | undefined;
+  readonly ready: boolean;
+  readonly live: readonly RemoteMcpTool[] | undefined;
+  readonly kept: readonly RemoteMcpTool[] | undefined;
+}): Seat {
+  const { listing } = input;
+
+  if (listing !== undefined && 'failure' in listing) return { tools: null, source: 'none', refused: [] };
+  const lenient = listing?.listed;
+  const live = input.ready ? input.live ?? [] : lenient?.tools ?? null;
+
+  if (live !== null) return { tools: live, source: 'live', refused: lenient?.refused ?? [] };
+
+  return input.kept === undefined ? { tools: null, source: 'none', refused: [] } : { tools: input.kept, source: 'kept', refused: [] };
+}
+
+/** One server's seated tools as descriptors, those its allowlist names when it has one. */
+function describeSeated(
+  server: { readonly id: string; readonly name: string; readonly preset_id: string | null },
+  tools: readonly RemoteMcpTool[],
+  allowed: ReadonlySet<string> | null,
+): SeatedTools {
+  const admitted: SerializableToolDescriptor[] = [];
+  const refused: McpToolSurface['unavailable'] = [];
+
+  for (const tool of tools) {
+    if (allowed !== null && !allowed.has(tool.name)) continue;
+    const described = describeMcpTool({ id: server.id, name: server.name }, tool);
+
+    if ('admitted' in described) admitted.push(server.preset_id === null ? described.admitted : { ...described.admitted, presetId: server.preset_id });
+    else refused.push(described.refused);
+  }
+
+  return { admitted, refused };
+}
+
 /** Why a server with no kept tool list offers a turn none, as its connection stands. */
 function unseatedReason(connection: McpObservedConnection | undefined): string {
   const next = 'The next turn offers its tools once it has listed them.';
 
   switch (observedMcpState(connection)) {
     case 'authenticating':
-      return 'waiting for a sign-in: sign in to it again in Settings → MCP servers.';
+      return 'waiting for a sign-in: sign in to it again in Settings > MCP servers.';
     case 'failed':
-      return `its connection failed${connection?.connectionError ? `: ${connection.connectionError}` : ''}. Reconnect it in Settings → MCP servers.`;
+      return `its connection failed${connection?.connectionError ? `: ${connection.connectionError}` : ''}. Reconnect it in Settings > MCP servers.`;
     case 'connecting':
     case 'discovering':
     case 'connected':
@@ -870,33 +924,18 @@ export class UserMcpServers {
     // Each configured server from its live list when its connection is ready or listed, else from its kept list, which a
     // turn takes at once: no turn waits for a dial, and a call dials the server it needs (`makeCallable`).
     for (const meta of rows) {
-      const { id } = meta;
-      const conn = connections[id];
-      // Disjoint with `unavailable` by construction: a server whose live list cannot be read is offered nowhere.
-      const listing = listingFor(id);
-      const lenient = listing !== undefined && 'listed' in listing ? listing.listed : null;
-      const live = connected.has(id) ? conn?.tools ?? [] : lenient?.tools ?? null;
-      const tools = listing !== undefined && 'failure' in listing ? null : live ?? kept.get(id)?.tools ?? null;
-      const allowed = allowedById.get(id);
+      const listing = listingFor(meta.id);
+      const seat = seatOf({ listing, ready: connected.has(meta.id), live: connections[meta.id]?.tools, kept: kept.get(meta.id)?.tools });
+      const allowed = allowedById.get(meta.id);
 
-      let source = 'none';
+      seated.push(`${meta.id}:${seat.source}:${observedMcpState(connections[meta.id])}`);
 
-      if (live !== null) source = 'live';
-      else if (tools !== null) source = 'kept';
-      seated.push(`${id}:${source}:${observedMcpState(conn)}`);
+      if (seat.tools === null || allowed === undefined) continue;
+      offered.add(meta.id);
+      const described = describeSeated(meta, seat.tools, allowed);
 
-      if (tools === null || allowed === undefined) continue;
-      offered.add(id);
-
-      for (const tool of tools) {
-        if (allowed && !allowed.has(tool.name)) continue;
-        const described = describeMcpTool({ id, name: meta.name }, tool);
-
-        if ('admitted' in described) out.push(meta.preset_id === null ? described.admitted : { ...described.admitted, presetId: meta.preset_id });
-        else refused.push(described.refused);
-      }
-
-      refused.push(...(lenient?.refused ?? []));
+      out.push(...described.admitted);
+      refused.push(...described.refused, ...seat.refused);
     }
 
     diagnostics.event('mcp.turn_seated', { servers: seated.join(' ') });
@@ -1005,39 +1044,41 @@ export class UserMcpServers {
    * One server dialled again at the person's ask, for a connection that failed or closed: the row's Reconnect. A server
    * that needs a sign-in is begun by `userMcp_beginConnect` instead, and one that is live is left alone.
    */
-  async userMcp_reconnect(caller: UserCaller, id: string): Promise<{ status: McpConnectionStatus; error: string | null }> {
-    await this.host.requireTier(caller, 'mcp.manage');
-    await this.joinActivation();
-    const name = this.catalog().get(id)?.name;
+  userMcp_reconnect(caller: UserCaller, id: string): Promise<{ status: McpConnectionStatus; error: string | null }> {
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* Effect.promise(async () => this.host.requireTier(caller, 'mcp.manage'));
+      yield* Effect.promise(async () => this.joinActivation());
+      const name = this.catalog().get(id)?.name;
 
-    if (name === undefined || this.host.sqlx<{ id: string }>(`SELECT id FROM user_mcp_servers WHERE id = ?`, id).length === 0) {
-      throw new KinuError('missing', 'This account has no such MCP server.');
-    }
+      if (name === undefined || this.host.sqlx<{ id: string }>(`SELECT id FROM user_mcp_servers WHERE id = ?`, id).length === 0) {
+        return yield* new KinuError('missing', 'This account has no such MCP server.');
+      }
 
-    const state = observedMcpState(this.host.mcp.mcpConnections[id]);
-    const listed = this._mcpToolLists.get(id);
+      const state = observedMcpState(this.host.mcp.mcpConnections[id]);
+      const listed = this._mcpToolLists.get(id);
 
-    // A connection whose tool list failed is listed again on its live transport: the row read failed for that alone.
-    if (listed !== undefined && 'failure' in listed) {
-      diagnostics.event('mcp.reconnect_asked', { serverId: id, from: 'unlisted' });
-      this._mcpToolLists.delete(id);
-      await this.readMcpToolList(id);
-      const again = this._mcpToolLists.get(id);
+      // A connection whose tool list failed is listed again on its live transport: the row read failed for that alone.
+      if (listed !== undefined && 'failure' in listed) {
+        diagnostics.event('mcp.reconnect_asked', { serverId: id, from: 'unlisted' });
+        this._mcpToolLists.delete(id);
+        yield* Effect.promise(async () => this.readMcpToolList(id));
+        const again = this._mcpToolLists.get(id);
 
-      return again !== undefined && 'failure' in again
-        ? { status: 'failed', error: again.failure }
-        : { status: mapConnectionStatus(this.host.mcp.mcpConnections[id]?.connectionState), error: null };
-    }
+        return again !== undefined && 'failure' in again
+          ? { status: 'failed' as const, error: again.failure }
+          : { status: mapConnectionStatus(this.host.mcp.mcpConnections[id]?.connectionState), error: null };
+      }
 
-    if (state !== 'failed' && state !== 'closed' && state !== 'absent' && !this.undialled(id)) {
-      throw new KinuError('bad_input', `${name} is ${state}, not failed: there is nothing to reconnect.`);
-    }
+      if (state !== 'failed' && state !== 'closed' && state !== 'absent' && !this.undialled(id)) {
+        return yield* new KinuError('bad_input', `${name} is ${state}, not failed: there is nothing to reconnect.`);
+      }
 
-    diagnostics.event('mcp.reconnect_asked', { serverId: id, from: state });
-    await this.dialAlone(id, async () => this.connectAndDiscover(id));
-    const connection = this.host.mcp.mcpConnections[id];
+      diagnostics.event('mcp.reconnect_asked', { serverId: id, from: state });
+      yield* Effect.promise(async () => this.dialAlone(id, async () => this.connectAndDiscover(id)));
+      const connection = this.host.mcp.mcpConnections[id];
 
-    return { status: mapConnectionStatus(connection?.connectionState), error: connection?.connectionError ?? null };
+      return { status: mapConnectionStatus(connection?.connectionState), error: connection?.connectionError ?? null };
+    }));
   }
 
   /** Called over RPC by the orchestrator's per-tool closure; the result must be JSON-serializable. */
@@ -1185,7 +1226,7 @@ export class UserMcpServers {
 
     // `mcp.call_failed` classifies this refusal by the state it names.
     throw new KinuError('unavailable', `MCP server ${serverName} is ${reached}${why ? ` (${why})` : ''}, so the call was not sent.`
-      + (reached === 'authenticating' ? ' Sign in to it again in Settings → MCP servers.' : ' Reconnect it in Settings → MCP servers.'));
+      + (reached === 'authenticating' ? ' Sign in to it again in Settings > MCP servers.' : ' Reconnect it in Settings > MCP servers.'));
   }
 
   /**
