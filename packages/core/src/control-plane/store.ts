@@ -405,21 +405,18 @@ export function replaceUserWorkspaces(
       userId, row.name, row.displayName, row.createdAt, row.lastVisited);
   }
 
-  const names = live.map((row) => row.name);
+  // Each absent row its own statement: a statement binds at most `do.sqlite.bound_params` values, so the live names
+  // cannot go in one `NOT IN` (an account of 99 refused every reconcile).
+  const present = new Set(live.map((row) => row.name));
 
-  const before = count(sql,
-    `SELECT COUNT(*) AS n FROM cp_workspaces WHERE user_id = ? AND removed_at IS NULL`, userId);
+  const absent = select(sql, v.object({ name: v.string() }),
+    'SELECT name FROM cp_workspaces WHERE user_id = ? AND removed_at IS NULL', userId).filter((row) => !present.has(row.name));
 
-  const placeholders = names.map(() => '?').join(', ');
-  sql.exec(`UPDATE cp_workspaces SET removed_at = ?
-     WHERE user_id = ? AND removed_at IS NULL
-       ${names.length > 0 ? `AND name NOT IN (${placeholders})` : ''}`,
-    now, userId, ...names);
+  for (const { name } of absent) {
+    sql.exec('UPDATE cp_workspaces SET removed_at = ? WHERE user_id = ? AND name = ? AND removed_at IS NULL', now, userId, name);
+  }
 
-  const after = count(sql,
-    `SELECT COUNT(*) AS n FROM cp_workspaces WHERE user_id = ? AND removed_at IS NULL`, userId);
-
-  return { present: live.length, tombstoned: before - after };
+  return { present: live.length, tombstoned: absent.length };
 }
 
 export function overview(sql: ControlPlaneSql, now = Date.now()): ControlOverview {
