@@ -200,6 +200,15 @@ function laneAnswer(inputs: BindingInputs): string | null {
     : JSON.stringify({ response: SLEEP_TIME_ANSWER });
 }
 
+/** A turn stepped on the compatible path owns the steps: another workspace's call on the binding is answered at once,
+ *  counted, and takes none of them (it took half the advised pair's unadvised turn, 2026-10-23). */
+function foreignCall(): string | null {
+  if (!model.stepping || !model.compatSteps) return null;
+  model.stepped.binding += 1;
+
+  return `data: ${JSON.stringify({ response: SLEEP_TIME_ANSWER })}\n\n${USAGE}data: [DONE]\n\n`;
+}
+
 /** The product's `AI` binding: each streamed turn answers `answerBytes` of text, and waits while `holding`. */
 async function scriptedBody(inputs: BindingInputs): Promise<string> {
   model.calls += 1;
@@ -208,15 +217,9 @@ async function scriptedBody(inputs: BindingInputs): Promise<string> {
   if (lane !== null) return lane;
 
   noteWide(JSON.stringify(inputs));
+  const foreign = foreignCall();
 
-  // A turn stepped on the compatible path owns the steps: another workspace's call here is answered at once, counted, and
-  // takes none of them (it took half the advised pair's unadvised turn, 2026-10-23).
-  if (model.stepping && model.compatSteps) {
-    model.stepped.binding += 1;
-
-    return `data: ${JSON.stringify({ response: SLEEP_TIME_ANSWER })}\n\n${USAGE}data: [DONE]\n\n`;
-  }
-
+  if (foreign !== null) return foreign;
   model.parked += 1;
   // Stepping: each call waits until the gate has read the heap at it. The cursor is every workspace's: which path took
   // each step is counted, so the gate can tell its turn's steps from another workspace's.
