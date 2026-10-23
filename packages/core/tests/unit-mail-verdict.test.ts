@@ -86,3 +86,42 @@ describe('the verdict is Cloudflare\'s, read from the first Authentication-Resul
     expect(mailVerdict(PASS.replace(/\r\nFrom: [^\r\n]*/u, '')).verified).toBe(false);
   });
 });
+
+// Cloudflare's own field copies what the sender controls into it: a DKIM signature's d= and s=, the envelope sender in
+// SPF's comment and smtp.mailfrom (the PASS fixture's field, 2026-10-19). Read as RFC 8601 reads it, a `;` in a comment
+// or a quoted string separates nothing, and only a result named `dmarc` is the DMARC verdict.
+describe("text the sender put inside Cloudflare's field is never read as its verdict", () => {
+  /** PASS with Cloudflare's results replaced by `results`, as its MX would write them for a crafted message. */
+  const resultsOf = (results: string): string => {
+    const start = PASS.indexOf('\r\nAuthentication-Results: mx.cloudflare.net;');
+    const end = PASS.indexOf('\r\n', PASS.indexOf('arc=none', start));
+
+    return withFrom(`${PASS.slice(0, start)}\r\nAuthentication-Results: mx.cloudflare.net;\r\n\t${results}${PASS.slice(end)}`, 'boss@victim.example');
+  };
+
+  test("a `;` inside SPF's comment of the envelope sender starts no result of its own", () => {
+    const raw = resultsOf('dkim=none; spf=pass (mx.cloudflare.net: domain of "a;dmarc=pass header.from=victim.example x"@attacker.example designates 1.2.3.4) smtp.mailfrom=attacker.example');
+
+    expect(mailVerdict(raw).verified).toBe(false);
+  });
+
+  test("a `;` inside a quoted property value starts no result of its own", () => {
+    const raw = resultsOf('dkim=none; spf=pass smtp.mailfrom="a;dmarc=pass header.from=victim.example x"@attacker.example');
+
+    expect(mailVerdict(raw).verified).toBe(false);
+  });
+
+  test("words that read `dmarc=pass` inside another method's result are not the DMARC result", () => {
+    const raw = resultsOf('dkim=permerror header.d=attacker.example header.s=s1 dmarc=pass header.from=victim.example; dmarc=fail header.from=victim.example policy.dmarc=reject');
+
+    expect(mailVerdict(raw).verified).toBe(false);
+  });
+
+  test('two DMARC results for one message decide nothing', () => {
+    expect(mailVerdict(resultsOf('dmarc=pass header.from=victim.example; dmarc=fail header.from=victim.example')).verified).toBe(false);
+  });
+
+  test("a comment beside Cloudflare's own DMARC pass, as RFC 8601 allows one, still reads as that pass", () => {
+    expect(mailVerdict(resultsOf('dkim=pass header.d=victim.example; dmarc=pass (p=reject) header.from=victim.example policy.dmarc=reject')).verified).toBe(true);
+  });
+});
