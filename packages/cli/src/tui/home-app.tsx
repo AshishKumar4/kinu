@@ -17,8 +17,8 @@ import {
 import { listCloudAvailableModels } from '../cloud-api';
 import { connectProvider, readProviderConnections } from '../commands/provider-connect';
 import {
-  loadConfigFile,
   resolveCloudOrigin,
+  resolveCloudSession,
   type AgentMode,
 } from '../config';
 import { createConfiguredLocalModelResolver } from '../local-model-resolver';
@@ -840,12 +840,12 @@ function loadHomeModelCatalog(mode: AgentMode, opts: HomeTuiOptions): Effect.Eff
 
 function loadCloudHomeModels(originOverride: string | undefined): Effect.Effect<AgentModelMenu> {
   return Effect.suspend(() => {
-    const config = loadConfigFile();
-    const token = config.accessToken;
+    // The session every other signed-in read uses: an environment token counts, an expired stored one does not.
+    const session = resolveCloudSession();
 
-    if (!token) return Effect.die(new Error('Sign in with kinu auth to browse cloud models.'));
+    if (session === null) return Effect.die(new Error('Sign in with kinu auth to browse cloud models.'));
 
-    return Effect.promise(() => listCloudAvailableModels(resolveCloudOrigin({ origin: originOverride }), token));
+    return Effect.promise(() => listCloudAvailableModels(resolveCloudOrigin({ origin: originOverride }), session.token));
   });
 }
 
