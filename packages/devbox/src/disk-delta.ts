@@ -171,8 +171,16 @@ for path in tops:
     parent, base = os.path.split(path)
     if under_directories(path):
         put(os.path.join('tree', parent, '.wh.' + base))
-if records:
-    put('.devbox-delta/manifest.json', json.dumps({'v': 4, 'files': records}).encode())
+# Each record found by its path's SHA-256, and each directory's names that lead to one, so a recovery reads only the
+# records it is asked for (v5, m1966b): a manifest of them all was read whole at every recovery's start.
+under = {}
+for record in records:
+    put('.devbox-delta/records/' + name(record['p'])[:2] + '/' + name(record['p']), json.dumps(record).encode())
+    parts = record['p'].split('/')
+    for at in range(len(parts)):
+        under.setdefault('/'.join(parts[:at]), set()).add(parts[at])
+for parent, names in sorted(under.items()):
+    put('.devbox-delta/dirs/' + name(parent)[:2] + '/' + name(parent), b''.join(n.encode('utf-8', 'surrogateescape') + b'\\0' for n in sorted(names)))
 # Every path this layer answers for, in it for a later merge and on this disk for the next one (D77).
 held = b''.join(path.encode('utf-8', 'surrogateescape') + b'\\0' for path in changed + deleted)
 put('.devbox-delta/paths', held)

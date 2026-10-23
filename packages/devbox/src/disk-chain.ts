@@ -326,7 +326,8 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
     yield* run('mounting the recovered layers', [
       'set -e', "pids=''", ...mounts, `mkdir -p ${shellPath(UPPER)} ${shellPath(WORK)} ${shellPath(LOWERS)} ${shellPath(DEVBOX_WORKDIR)} ${shellPath(BLOCK_LOWER)}`,
       `top=''; held=''`,
-      ...deltas.map(delta => `[ -e ${shellPath(`${delta}/.devbox-delta/manifest.json`)} ] && held=1`),
+      // A layer holding block records: v5's records by path (m1966b), or the manifest of a layer from before them.
+      ...deltas.map(delta => `{ [ -e ${shellPath(`${delta}/.devbox-delta/dirs`)} ] || [ -e ${shellPath(`${delta}/.devbox-delta/manifest.json`)} ]; } && held=1`),
       `if [ -n "$held" ]; then`,
       // A shell holding the exec's stdout holds the exec (D64).
       `  mountpoint -q ${shellPath(BLOCK_LOWER)} || { (cd / && exec setsid nohup ${blocks}) >${shellPath(`${BLOCK_LOWER}.log`)} 2>&1 </dev/null &`,
