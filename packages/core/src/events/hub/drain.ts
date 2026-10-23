@@ -18,8 +18,6 @@ export interface DrainBatch {
   readonly mode: WorkMode | null;
 }
 
-export type InternalEventTest = (event: KinuEvent) => boolean;
-
 function delegatedEventMode(event: KinuEvent): WorkMode | null {
   // A turn mail wakes plans: it reads and drafts, and any effect waits for the owner's approval in the app, even the
   // owner's own mail's, since mail is a weaker channel than the signed-in app (docs/MAIL.md §3).
@@ -50,17 +48,16 @@ function oneLine(value: string): string {
 
 /**
  * Self-emitted/internal rows never wake a turn (anti-self-wake loop); `subagent_task` rows belong
- * to `drainAssignments`; `internal` ones to a lane. Shared with `EventLog.nextPendingDrainAt` so the wake fold cannot drift.
+ * to `drainAssignments`. Shared with `EventLog.nextPendingDrainAt` so the wake fold cannot drift.
  */
-export function wakesADrain(event: KinuEvent, internal?: InternalEventTest): boolean {
+export function wakesADrain(event: KinuEvent): boolean {
   return event.ingress !== 'self_emit'
     && event.variant !== 'internal'
-    && event.variant !== 'subagent_task'
-    && internal?.(event) !== true;
+    && event.variant !== 'subagent_task';
 }
 
-export function buildDrainBatch(events: KinuEvent[], internal?: InternalEventTest): DrainBatch | null {
-  const pending = events.filter((event) => wakesADrain(event, internal));
+export function buildDrainBatch(events: KinuEvent[]): DrainBatch | null {
+  const pending = events.filter((event) => wakesADrain(event));
 
   if (pending.length === 0) return null;
   // Plan and Build never share a turn: take the oldest event's mode group; the rest drain next.

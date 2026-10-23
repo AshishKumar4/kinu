@@ -358,7 +358,7 @@ export class DeliveryInbox implements AgentInbox {
  * writes it, so the event log is the record and the delivery the queue. Null when no event is owed a turn.
  */
 export function pendingEventsDelivery(eventLog: EventLog, now: number): Delivery | null {
-  const batch = buildDrainBatch(eventLog.pending({ resolve_deferred: { now, phase: 'idle' } }), eventLog.isEvolutionReport);
+  const batch = buildDrainBatch(eventLog.pending({ resolve_deferred: { now, phase: 'idle' } }));
 
   if (batch === null) return null;
   const turnId = `evt-${nanoid()}`;

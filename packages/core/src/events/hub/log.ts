@@ -14,7 +14,6 @@ import {
 import type { ActorHandle } from '../../identity/actor-handle';
 import { dedupeKeyForDescriptor } from './dedupe';
 import { wakesADrain } from './drain';
-import { EvolutionSubagentStore } from '../../identity/evolution-subagents';
 import { deriveFields } from './trust';
 import { applyVisibilityForStorage } from './visibility';
 import { ulid } from './ulid';
@@ -115,13 +114,11 @@ const OpenAssignmentRowSchema = v.object({ id: v.string() });
 export class EventLog {
   private readonly actorId: string;
 
-  private readonly evolution: EvolutionSubagentStore;
 
   /** `actorId` is captured once so a re-pointed handle cannot move the log; `assertCurrent()` runs
    *  before every statement so a retired actor stops at once. */
   constructor(private readonly sql: SqlExec, private readonly actor: ActorHandle) {
     this.actorId = actor.actorId;
-    this.evolution = new EvolutionSubagentStore(sql, actor);
   }
 
   /** Without `caused_by` the event roots its own trace. */
@@ -283,21 +280,16 @@ export class EventLog {
     const parked = this.parkedIds();
 
     const drainableNow = this.pending({ resolve_deferred: { now, phase: 'idle' } })
-      .some((event) => !parked.has(event.id) && wakesADrain(event, this.isEvolutionReport));
+      .some((event) => !parked.has(event.id) && wakesADrain(event));
 
     if (drainableNow) return now;
 
     const scheduled = this.deferredRows()
-      .filter(({ event }) => wakesADrain(event, this.isEvolutionReport))
+      .filter(({ event }) => wakesADrain(event))
       .flatMap(({ cond }) => cond.kind === 'at' && cond.ts > now ? [cond.ts] : []);
 
     return scheduled.length === 0 ? null : Math.min(...scheduled);
   }
-
-  readonly isEvolutionReport = (event: KinuEvent): boolean =>
-    event.variant === 'subagent_report'
-    && (event.payload_visibility === 'full' || event.payload_visibility === 'redact')
-    && this.evolution.has(event.payload.from_subagent);
 
   markConsumed(eventId: EventId, turnId: TurnId, stepIdx: number, now = Date.now()): void {
     this.actor.assertCurrent();

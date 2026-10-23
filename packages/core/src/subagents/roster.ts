@@ -19,7 +19,6 @@ import { SUBAGENT_ORIGINS } from '../identity/workspace-actors';
 import { SubagentBirthSchema } from './birth';
 import { parseJsonValue } from '../utils/json';
 import { KinuError } from '../obs/error';
-import { EvolutionSubagentStore, initEvolutionSubagentTable } from '../identity/evolution-subagents';
 import type { AgentConfigStore } from '../config/store';
 import type { NameOrigin } from '../identity/naming';
 
@@ -142,19 +141,16 @@ export function initSubagentRosterTable(sql: SqlExec): void {
   )`);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_actor_subagents_order
     ON actor_subagents(actor_id, created_at, name)`);
-  initEvolutionSubagentTable(sql);
 }
 
 /** Parent-actor roster; owns all subagent status policy. */
 export class SubagentRosterStore {
   private readonly actorId: string;
 
-  readonly evolution: EvolutionSubagentStore;
 
   /** Scoped to one parent actor: subagent names are unique only per parent. */
   constructor(private readonly sql: SqlExec, private readonly actor: ActorHandle) {
     this.actorId = actor.actorId;
-    this.evolution = new EvolutionSubagentStore(sql, actor);
   }
 
   ensureSchema(): void {
@@ -267,7 +263,6 @@ export class SubagentRosterStore {
       this.sql.exec(`DELETE FROM actor_subagents WHERE actor_id = ? AND name = ?
         AND json_extract(actor_reference, '$.actorId') = ? AND json_extract(actor_reference, '$.workspaceId') = ?
         AND json_extract(actor_reference, '$.parentActorId') IS ?`, this.actorId, name, reference.actorId, reference.workspaceId, reference.parentActorId);
-      this.evolution.remove(name);
     }));
   }
 
@@ -288,7 +283,6 @@ export class SubagentRosterStore {
   remove(name: string): void {
     this.actor.assertCurrent();
     this.sql.exec(`DELETE FROM actor_subagents WHERE actor_id = ? AND name = ?`, this.actorId, name);
-    this.evolution.remove(name);
   }
 
   get(name: string): SubagentRosterEntry | null {

@@ -11,6 +11,7 @@
   "device_consent_requests",
   "device_joins",
   "evolution_helpers",
+  "evolution_subagents",
   "gallery_reports",
   "gepa_candidates",
   "gepa_runs",
