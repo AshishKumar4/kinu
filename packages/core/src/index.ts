@@ -2367,6 +2367,8 @@ export {
 
 export { drawnText, liveTailRow, threadLiveTail, toolCallRunning, type LiveTail } from './read-models/message-live-tail';
 
+export { liveStep, watchingLine, type Watch } from './read-models/focus-line';
+
 export { messagesUpTo, turnRows } from './read-models/fork-count';
 
 export {

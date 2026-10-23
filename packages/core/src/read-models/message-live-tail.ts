@@ -12,8 +12,8 @@ type Part = UIMessage["parts"][number];
 export type LiveTail =
   | { kind: "text"; part: Part }
   | { kind: "reasoning"; part: Part }
-  /** Its own row carries the live dot. */
-  | { kind: "tool" }
+  /** Its own row carries the live dot; `part` is the call running. */
+  | { kind: "tool"; part: AnyToolPart }
   /** Between parts: the next thing has not arrived. */
   | { kind: "thinking" };
 
@@ -37,7 +37,7 @@ function liveTail(parts: readonly Part[]): LiveTail {
     if (part.type === "step-start") break;
 
     if (isToolUIPart(part)) {
-      if (toolCallRunning(part)) return { kind: "tool" };
+      if (toolCallRunning(part)) return { kind: "tool", part };
 
       continue;
     }

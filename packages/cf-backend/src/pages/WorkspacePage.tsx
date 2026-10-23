@@ -12,7 +12,7 @@ import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   newestOpener, ownerAsks, planSurface,
 } from "@kinu.run/core";
-import { APP_ROUTES, type OwedOwnerIntent, type PlanReview, type SignalCard, type WorkspaceLayout } from "@kinu.run/core";
+import { APP_ROUTES, threadLiveTail, type OwedOwnerIntent, type PlanReview, type SignalCard, type WorkspaceLayout } from "@kinu.run/core";
 import type { UIMessage } from "ai";
 import type { SubagentView } from "@kinu.run/core/protocol";
 import { useActorChat, useKinu } from "@/hooks/use-kinu";
@@ -22,6 +22,7 @@ import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { useAgentsNav } from "@/hooks/use-agents-nav";
 import { usePendingAttachments } from "@/hooks/use-pending-attachments";
 import { useFileDrop } from "@/hooks/use-file-drop";
+import { useFocusLine } from "@/hooks/use-focus-line";
 import { DESKTOP_LANDING, useWorkbenchSurfaces } from "@/hooks/use-workbench-surfaces";
 import NotFoundPage from "@/pages/NotFoundPage";
 import { useTurnAnnotations } from "@/hooks/use-turn-annotations";
@@ -616,7 +617,7 @@ function useLiveSplices(entries: readonly { readonly message: UIMessage }[], car
   return useMemo(() => (answering ? cards.filter((card) => card.atStep !== undefined) : []), [answering, cards]);
 }
 
-/** What the `focus` layout's bar says: the name it goes by (the workspace's title unless given) and its line. */
+/** What the `focus` layout's bar says: the name it goes by (its agent's, else the workspace's title) and its line. */
 interface FocusIdentity {
   readonly label?: string;
   readonly line: ReactNode;
@@ -625,7 +626,6 @@ interface FocusIdentity {
 /** A workspace's page, the one its route names; Home names the assistant's (`workspace`): its chat, with nothing above it. */
 interface WorkspacePageProps {
   readonly workspace?: string;
-  readonly identity?: FocusIdentity;
   /** The layout the caller already knows, drawn until the workspace's own status says: Home's assistant is `focus`. */
   readonly layout?: WorkspaceLayout;
 }
@@ -659,17 +659,16 @@ function useOwnBar(shownElsewhere: boolean): void {
   }, [shownElsewhere, area]);
 }
 
-/** The `focus` layout's bar and composer: whom they name, and what the bar says of them. Null in `workbench`. */
-function focusOf(layout: WorkspaceLayout | undefined, given: FocusIdentity | undefined, title: string, agents: { shown: PanelAgent | undefined; all: readonly PanelAgent[]; loaded: boolean }): FocusIdentity | null {
+/** The `focus` layout's bar and composer: whom they name, and what the bar says of them. Null in `workbench`. `said`
+ *  is the main agent's own line (`useFocusLine`), which another agent's chat does not take. */
+function focusOf(layout: WorkspaceLayout | undefined, title: string, agents: { shown: PanelAgent | undefined; all: readonly PanelAgent[]; loaded: boolean }, said: string | null): FocusIdentity | null {
   if (layout !== "focus") return null;
-
-  if (given !== undefined) return given;
 
   // Before the agents are read, no name rather than a wrong one: the stand-in main agent is "Main".
   if (!agents.loaded) return { line: "" };
   const speaking = agents.shown ?? agents.all.find((agent) => agent.category === "main");
 
-  return { label: speaking?.label ?? title, line: activityLine(speaking) };
+  return { label: speaking?.label ?? title, line: (speaking?.category === "main" ? said : null) ?? activityLine(speaking) };
 }
 
 /** Neither the workspace's status nor its caller has named its layout, and the roster may yet say it is Home's assistant,
@@ -688,7 +687,7 @@ function inspectorReady(control: InspectorControl | null): boolean {
   return control?.ready === true;
 }
 
-function OpenWorkspace({ onGone, workspace, identity, layout }: WorkspacePageProps & { onGone: (workspace: string) => void }) {
+function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onGone: (workspace: string) => void }) {
   const params = useParams();
   const agentId = workspace ?? params.agentId;
 
@@ -898,6 +897,8 @@ function OpenWorkspace({ onGone, workspace, identity, layout }: WorkspacePagePro
 
   const knownLayout = state.status?.layout ?? layout;
   const pending = useLayoutPending(knownLayout);
+  // What the focus bar says of the main agent: its live step, else its watches (Muse's status and Upcoming, 1018-xao).
+  const mainLine = useFocusLine(state.rpc, knownLayout === "focus", threadLiveTail({ last: state.messages.at(-1), liveness: state.liveness }));
 
   if (!agentId) return null;
 
@@ -906,7 +907,7 @@ function OpenWorkspace({ onGone, workspace, identity, layout }: WorkspacePagePro
   const rosterEntry = workspaceEntries.find((entry) => entry.name === agentId);
   // Blank until the row is read: `agentId` is the URL slug, not a title, and "Untitled" would be a false one.
   const shownTitle = rosterEntry === undefined ? "" : workspaceDisplayTitle(rosterEntry);
-  const focus = focusOf(knownLayout, identity, shownTitle, { shown: shownAgent, all: agentsPanel.list, loaded: rosterLoaded });
+  const focus = focusOf(knownLayout, shownTitle, { shown: shownAgent, all: agentsPanel.list, loaded: rosterLoaded }, mainLine);
 
   // The delete dialog goes with the bar, so a chat deleted from its sidebar row while the page connects asks too.
   const bar = (
