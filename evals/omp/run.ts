@@ -206,8 +206,11 @@ async function prepare(arm: Arm, train: readonly OwnerTurn[], last: number): Pro
 
     const evolution = armEvolution({ refinements: session.listRefinements(200), changelog: session.getEvolutionChangelog(200).entries });
 
-    if (trained.length > 0 && spent.modelCalls === 0) throw new Error('the dreaming arm made no training model calls; refusing to label this an on/off comparison');
-    writeFileSync(join(arm.space, 'prepared.json'), `${JSON.stringify({ ...arm, llm: undefined, oauthStore: undefined, trained: trained.length, unreviewed, dreamPasses, evolution, spent, ms: Date.now() - started }, null, 2)}\n`);
+    // Rated turns, not model calls, show it trained: a rating and a dream's drafts are calls no stream opens.
+    const [{ rated } = { rated: 0 }] = rt.storage.sql<{ rated: number }>`SELECT COUNT(*) AS rated FROM turn_ratings`;
+
+    if (trained.length > 0 && rated === 0) throw new Error('the dreaming arm rated none of its training turns; refusing to label this an on/off comparison');
+    writeFileSync(join(arm.space, 'prepared.json'), `${JSON.stringify({ ...arm, llm: undefined, oauthStore: undefined, trained: trained.length, rated, unreviewed, dreamPasses, evolution, spent, ms: Date.now() - started }, null, 2)}\n`);
   } finally {
     await host.close();
     restore();
