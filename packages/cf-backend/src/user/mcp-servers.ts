@@ -393,16 +393,14 @@ export class UserMcpServers {
     }
 
     // An add writes the catalog before the configuration, so only a lost catalog row leaves a configuration with no
-    // endpoint, which nothing can dial again: it goes, and says so.
+    // endpoint, which nothing can dial again: it goes, and says so. Its workspaces are not told here, so an activation
+    // never waits on them: one still holding its git credential is refused at the egress, which reads it afresh.
     const uncatalogued = configs.filter((config) => !catalog.has(config.id));
 
     for (const row of uncatalogued) {
       this.host.sqlx(`DELETE FROM user_mcp_servers WHERE id = ?`, row.id);
       diagnostics.failure('mcp.uncatalogued_server_removed', new KinuError('missing', 'a configured MCP server has no catalog entry, so no endpoint to dial'), { serverId: row.id });
     }
-
-    // A connection that went with it may bear a workspace's secret (the GitHub connection's git credential).
-    if (uncatalogued.length > 0) await this.host.connectionsMoved?.();
 
     const rows: McpHydrationRow[] = withCatalog(configs, catalog);
 

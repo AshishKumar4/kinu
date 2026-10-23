@@ -46,6 +46,12 @@ export interface EgressSecretBinding {
   readonly hosts: readonly string[];
   readonly position: SecretPosition;
   readonly placeholder: string;
+  /**
+   * A connection's credential that a tool sends unasked to every host (Nimbus's git sends `GIT_TOKEN` as Basic with
+   * each request): at a host it may not reach, its `Authorization` header is left off and the request goes on, so an
+   * anonymous read there still works. An owner's secret sent there is refused.
+   */
+  readonly elsewhere?: 'withheld';
 }
 
 /**
@@ -123,7 +129,7 @@ interface EgressSubstitution {
 }
 
 export type EgressPlan =
-  | { readonly kind: 'forward'; readonly substitutions: readonly EgressSubstitution[] }
+  | { readonly kind: 'forward'; readonly substitutions: readonly EgressSubstitution[]; readonly withholdAuthorization?: true }
   | { readonly kind: 'refuse'; readonly status: number; readonly reason: string };
 
 const BASIC_CREDENTIAL = /^(Basic\s+)((?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?)\s*$/i;
@@ -267,6 +273,7 @@ export function planEgress(
 
   const byPlaceholder = new Map(granted.map((b) => [b.placeholder, b]));
   const substitutions: EgressSubstitution[] = [];
+  let withholdAuthorization = false;
 
   for (const placeholder of present) {
     const binding = byPlaceholder.get(placeholder);
@@ -282,6 +289,11 @@ export function planEgress(
     }
 
     if (!binding.hosts.some((host) => egressHostMatches(host, facts.host))) {
+      if (withheldElsewhere(facts, binding)) {
+        withholdAuthorization = true;
+        continue;
+      }
+
       return {
         kind: 'refuse',
         status: 403,
@@ -304,7 +316,12 @@ export function planEgress(
     substitutions.push({ name: binding.name, placeholder });
   }
 
-  return { kind: 'forward', substitutions };
+  return withholdAuthorization ? { kind: 'forward', substitutions, withholdAuthorization } : { kind: 'forward', substitutions };
+}
+
+/** A connection's credential at a host it may not reach, carried only in the `Authorization` header, which is left off. */
+function withheldElsewhere(facts: EgressRequestFacts, binding: EgressSecretBinding): boolean {
+  return binding.elsewhere === 'withheld' && strayPosition(facts, binding.placeholder, { kind: 'authorization' }) === null;
 }
 
 /** Literal to find and its replacement; used only to put the placeholder back over the secret. */

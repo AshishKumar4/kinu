@@ -40,7 +40,7 @@ export class UserSecrets {
 
     if (placeholder !== kept) this.host.ctx.storage.kv.put(GITHUB_GIT_PLACEHOLDER_KEY, placeholder);
 
-    return { name: GITHUB_GIT_SECRET, hosts: ['github.com'], position: { kind: 'authorization' }, placeholder };
+    return { name: GITHUB_GIT_SECRET, hosts: ['github.com'], position: { kind: 'authorization' }, placeholder, elsewhere: 'withheld' };
   }
 
   /** The connection-held secrets a request may carry: the GitHub connection's, which is refused clearly once it is gone. */

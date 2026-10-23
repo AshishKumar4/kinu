@@ -314,6 +314,24 @@ describe('the secret reaches the upstream and comes back scrubbed', () => {
     } finally { upstream.restore(); }
   });
 
+  test("a connection's credential bound for another host is left off, and the request goes on without it", async () => {
+    const upstream = captureFetch(() => new Response('ok'));
+
+    try {
+      const response = await handleContainerEgress(
+        new Request('https://gitlab.com/owner/public.git/info/refs?service=git-upload-pack', {
+          headers: { authorization: `Basic ${btoa(`x-access-token:${PLACEHOLDER}`)}`, accept: '*/*' },
+        }),
+        fakeEnv(() => ({ kind: 'forward', substitutions: [], withholdAuthorization: true })),
+        PARAMS,
+      );
+
+      expect(response.status).toBe(200);
+      expect(upstream.seen[0]?.headers.get('authorization')).toBeNull();
+      expect(upstream.seen[0]?.headers.get('accept')).toBe('*/*');
+    } finally { upstream.restore(); }
+  });
+
   test('an echoed secret is scrubbed out of the body, headers and status text', async () => {
     const upstream = captureFetch(() => new Response(
       `invalid api key: ${SECRET}`,

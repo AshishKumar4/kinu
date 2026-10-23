@@ -300,11 +300,15 @@ describe("the GitHub connection is every workspace's git credential, never its v
     harness.close();
   });
 
-  test('anywhere but github.com it is refused, and no workspace can read its value', async () => {
+  test('anywhere but github.com it is never sent: git\'s Basic goes on without it, anywhere else it is refused', async () => {
     const harness = await connected();
     const placeholder = await placeholderIn(harness, harness.shop, 'KINU_GITHUB_TOKEN');
+    const gitlab = fetchPack(placeholder, 'https://gitlab.com/owner/public.git/info/refs?service=git-upload-pack');
 
-    expect((await harness.userDO.resolveEgressInjection(harness.owner, fetchPack(placeholder, 'https://gitlab.com/owner/x.git/info/refs'), 'shop')).kind).toBe('refuse');
+    // Nimbus's git sends its credential to every host: a public repository elsewhere is still read, anonymously.
+    expect(await harness.userDO.resolveEgressInjection(harness.owner, gitlab, 'shop')).toEqual({ kind: 'forward', substitutions: [], withholdAuthorization: true });
+    expect((await harness.userDO.resolveEgressInjection(harness.owner, { ...gitlab, url: `${gitlab.url}&t=${placeholder}` }, 'shop')).kind).toBe('refuse');
+    expect((await harness.userDO.resolveEgressInjection(harness.owner, { ...gitlab, headers: [['x-token', placeholder]] }, 'shop')).kind).toBe('refuse');
     expect(await harness.userDO.revealedSecrets(harness.shop)).toEqual({});
     harness.close();
   });
@@ -378,7 +382,7 @@ describe("a computer's own git is pointed at the GitHub connection for github.co
       GIT_CONFIG_COUNT: '1',
       GIT_CONFIG_KEY_0: 'credential.https://github.com.helper',
       GIT_CONFIG_VALUE_0: '!f() { test "$1" = get || return 0; if [ -z "$KINU_GITHUB_TOKEN" ]; then '
-        + 'echo "Kinu: GitHub is not connected to this account, or not signed in. Connect it in Settings > Connections, then run git again." >&2; '
+        + 'echo "Kinu: this command holds no GitHub credential. Connect GitHub, or finish its sign-in, in Settings > Connections; then run git again." >&2; '
         + 'return 1; fi; echo username=x-access-token; echo "password=$KINU_GITHUB_TOKEN"; }; f',
     } as const;
 

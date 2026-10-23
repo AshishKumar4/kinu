@@ -94,7 +94,7 @@ export interface GrantedSecrets {
 
 /** `substitutions` carries plaintext: substitution is positional inside a request this object does not own. */
 export type EgressInjectionResult =
-  | { readonly kind: 'forward'; readonly substitutions: readonly EgressInjection[] }
+  | { readonly kind: 'forward'; readonly substitutions: readonly EgressInjection[]; readonly withholdAuthorization?: true }
   | { readonly kind: 'refuse'; readonly status: number; readonly reason: string };
 
 export interface EgressInjection {
@@ -140,7 +140,7 @@ const GIT_CREDENTIAL_ENVIRONMENT = {
   GIT_CONFIG_COUNT: '1',
   GIT_CONFIG_KEY_0: 'credential.https://github.com.helper',
   GIT_CONFIG_VALUE_0: '!f() { test "$1" = get || return 0; if [ -z "$KINU_GITHUB_TOKEN" ]; then '
-    + 'echo "Kinu: GitHub is not connected to this account, or not signed in. Connect it in Settings > Connections, then run git again." >&2; '
+    + 'echo "Kinu: this command holds no GitHub credential. Connect GitHub, or finish its sign-in, in Settings > Connections; then run git again." >&2; '
     + 'return 1; fi; echo username=x-access-token; echo "password=$KINU_GITHUB_TOKEN"; }; f',
 } as const;
 
@@ -435,6 +435,6 @@ export function resolveEgressInjection(
       substitutions.push({ placeholder, secret });
     }
 
-    return { kind: 'forward', substitutions };
+    return plan.withholdAuthorization === true ? { kind: 'forward', substitutions, withholdAuthorization: true } : { kind: 'forward', substitutions };
   }));
 }
