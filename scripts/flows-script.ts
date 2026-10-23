@@ -235,6 +235,32 @@ const FLOW_SLATE_CALLS: readonly ScriptedAnswer[] = [
   },
 ];
 
+/** The slate-pictures row (N6): a slate whose page draws a light and a dark of its own, by `prefers-color-scheme`. */
+export const MODE_SLATE = { title: 'Flow modes', id: 'modes' } as const;
+
+export const MODE_SLATE_ASK = `Use the file tool to create a slate at ${SLATES_ROOT}/${MODE_SLATE.id}/ whose page is pale in a light page and `
+  + 'near black in a dark one, then start its preview.';
+
+const MODE_SLATE_CLIENT = [
+  'export default function App() {',
+  '  return (',
+  '    <main data-modes>',
+  '      <style>{"body { margin: 0; background: #fafafa; color: #111 } @media (prefers-color-scheme: dark) { body { background: #0b0b0f; color: #eee } }"}</style>',
+  `      <h1>${MODE_SLATE.title}</h1>`,
+  '    </main>',
+  '  );',
+  '}',
+  '',
+].join('\n');
+
+const MODE_SLATE_CALLS: readonly ScriptedAnswer[] = [
+  { toolCall: { name: 'file', arguments: { op: 'write', path: `${SLATES_ROOT}/${MODE_SLATE.id}/package.json`, content: JSON.stringify({
+    name: MODE_SLATE.id, browser: 'client.tsx', slate: { title: MODE_SLATE.title, port: 8789 },
+  }, null, 2) } } },
+  { toolCall: { name: 'file', arguments: { op: 'write', path: `${SLATES_ROOT}/${MODE_SLATE.id}/client.tsx`, content: MODE_SLATE_CLIENT } } },
+  { toolCall: { name: 'eval', arguments: { code: `return await workspace.slates.${MODE_SLATE.id}.$preview();` } } },
+];
+
 /** The pin row (1008-c): an answer drawing one page in the chat, whose pin keeps it as a slate of the workspace. */
 export const PIN_ASK = 'Flow pin: draw the lamp list here.';
 
@@ -669,6 +695,10 @@ export function flowsScript(request: ScriptedRequest): ScriptedAnswer | null {
 
   if (asked(SLATE_ASK) && request.available.includes('file')) {
     return FLOW_SLATE_CALLS[request.called.length] ?? { text: `The ${FLOW_SLATE.title} slate is running in its tab.` };
+  }
+
+  if (asked(MODE_SLATE_ASK) && request.available.includes('file')) {
+    return MODE_SLATE_CALLS[request.called.length] ?? { text: `The ${MODE_SLATE.title} slate is running in its tab.` };
   }
 
   return null;
