@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 import {
-  KeptProviderListingSchema, type ProviderListing, safeJsonParse, type Credential, CLAUDE_CRED_KEY, CODEX_CRED_KEY, baseCredentialKey, claudeCodeFrom, createClaudeOAuthClient, startClaudeSignIn, subscriptionIssuer, renewableLogin, rotateLogin, usableLogin, type LoginRenewal, type SubscriptionIssuer, decodeCodexAccountId, type JsonValue, type OAuthCredential, parseJsonValue, ownerCaller, type UserCaller, type ResolvedCaller, credentialToHeaders, refusedLogin, type AuthRequest, type AuthResolution, validateCredential, validateCredentialKey, createCredentialCipher, type CredentialCipher, revocationEndpointFor, revokeOAuthGrant, type DisconnectOutcome, isModelInferenceCredentialKey, CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, accountIdFromCloudflareCredential, cloudflareAIGatewayId, cloudflareAccountsFromCredential, cloudflareWorkersAIBaseURL, fetchCloudflareAIGateways, isCloudflareAIGatewayId, isCloudflareCredentialExpiring, isCloudflareCredentialUsable, refreshCloudflareCredential, withCloudflareAccount, type CloudflareAccount, type CloudflareAIGatewaySummary, type CredentialSummary, CLOUDFLARE_WEB_SEARCH_CRED_KEY, grantsWebSearch, storedCredentialKey,
+  KeptProviderListingSchema, type ProviderListing, safeJsonParse, type Credential, CLAUDE_CRED_KEY, CODEX_CRED_KEY, baseCredentialKey, claudeCodeFrom, claudeSignInRefusal, createClaudeOAuthClient, startClaudeSignIn, subscriptionIssuer, renewableLogin, rotateLogin, usableLogin, type LoginRenewal, type SubscriptionIssuer, decodeCodexAccountId, type JsonValue, type OAuthCredential, parseJsonValue, ownerCaller, type UserCaller, type ResolvedCaller, credentialToHeaders, refusedLogin, type AuthRequest, type AuthResolution, validateCredential, validateCredentialKey, createCredentialCipher, type CredentialCipher, revocationEndpointFor, revokeOAuthGrant, type DisconnectOutcome, isModelInferenceCredentialKey, CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, accountIdFromCloudflareCredential, cloudflareAIGatewayId, cloudflareAccountsFromCredential, cloudflareWorkersAIBaseURL, fetchCloudflareAIGateways, isCloudflareAIGatewayId, isCloudflareCredentialExpiring, isCloudflareCredentialUsable, refreshCloudflareCredential, withCloudflareAccount, type CloudflareAccount, type CloudflareAIGatewaySummary, type CredentialSummary, CLOUDFLARE_WEB_SEARCH_CRED_KEY, grantsWebSearch, storedCredentialKey,
 } from '@kinu.run/core';
 import { attempt, authoredRefusal, diagnostics, KinuError, renderThrownChain, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -677,7 +677,7 @@ export class UserCredentials {
           onFailure: (error) => {
             diagnostics.failure('user.claude_sign_in_failed', error);
 
-            return { error: renderThrownChain({ cause: error }) };
+            return { error: claudeSignInRefusal(error) };
           },
           onSuccess: (credential) => ({ credential }),
         },
