@@ -157,7 +157,8 @@ describe('a connect carries its ticket in its first frame, and nothing secret an
 
     if (ticket === undefined) throw new Error('the Worker answered no connect ticket');
     // The first frame on the socket is AUTH, and it carries the ticket the Worker answered.
-    const [first] = bridge.frames[0] ?? [];
+    // In arrival order: a frame the daemon sent in answer to AUTH can finish being handled before AUTH does.
+    const [first] = bridge.arrivals[0] ?? [];
     expect(v.parse(v.object({ type: v.string(), user: v.string(), ticket: v.string() }), JSON.parse(first ?? 'null')))
       .toEqual({ type: DEVICE_FRAMES.auth, user: ACCOUNT, ticket });
 

@@ -28,8 +28,10 @@ export interface DeviceBridge {
   readonly answers: ConnectAnswer[];
   /** Resolves once the Worker has answered its n-th connect step (from 0): recorded before the daemon reads it. */
   answered(n: number): Promise<ConnectAnswer>;
-  /** Each socket's frames from the daemon, in order, per socket. */
+  /** Each socket's frames from the daemon, per socket, in the order the UserDO finished handling them. */
   readonly frames: string[][];
+  /** Each socket's frames from the daemon, per socket, in the order they arrived. */
+  readonly arrivals: string[][];
   /** Resolves once the n-th socket (from 0) has said HELLO. */
   helloed(n: number): Promise<AcceptedSocket>;
   /** Resolves once a daemon has sent a frame `heard` matches, and the UserDO has handled it. */
@@ -62,6 +64,7 @@ export function startDeviceBridge(harness: TestUserDO, routes: BridgeRoutes = as
   const answerAt: Array<{ readonly promise: Promise<ConnectAnswer>; readonly resolve: (answer: ConnectAnswer) => void }> = [];
   const nthAnswer = (n: number) => (answerAt[n] ??= Promise.withResolvers<ConnectAnswer>());
   const frames: string[][] = [];
+  const arrivals: string[][] = [];
   const helloes: Array<{ readonly promise: Promise<AcceptedSocket>; readonly resolve: (accepted: AcceptedSocket) => void }> = [];
   const nth = (n: number) => (helloes[n] ??= Promise.withResolvers<AcceptedSocket>());
   let helloed = 0;
@@ -114,6 +117,7 @@ export function startDeviceBridge(harness: TestUserDO, routes: BridgeRoutes = as
 
       if (accepted === undefined) throw new Error('the UserDO upgraded without accepting a socket');
       frames.push([]);
+      arrivals.push([]);
 
       return bun.upgrade(request, { data: { accepted, index: frames.length - 1 } }) ? undefined : new Response('upgrade failed', { status: 500 });
     },
@@ -125,6 +129,7 @@ export function startDeviceBridge(harness: TestUserDO, routes: BridgeRoutes = as
       async message(ws, message) {
         const data = String(message);
 
+        arrivals[ws.data.index]?.push(data);
         await harness.userDO.webSocketMessage(ws.data.accepted.ws, data);
         // Kept once handled, so a test that read a frame here reads what the UserDO made of it too.
         frames[ws.data.index]?.push(data);
@@ -154,6 +159,7 @@ export function startDeviceBridge(harness: TestUserDO, routes: BridgeRoutes = as
     answers,
     answered: (n) => nthAnswer(n).promise,
     frames,
+    arrivals,
     helloed: (n) => nth(n).promise,
     heard: (heard) => {
       if (frames.flat().some(heard)) return Promise.resolve();
