@@ -23,6 +23,8 @@ export interface ShellWord {
 interface ShellRedirect {
   /** `>` or `&>`: the target is emptied first. */
   readonly truncates: boolean;
+  /** `<` or `<>`: the command reads the target. */
+  readonly reads: boolean;
   readonly target: ShellWord;
 }
 
@@ -76,6 +78,8 @@ function wordOf(parts: readonly WordPart[]): ShellWord {
 interface Walk {
   readonly pipelines: ShellPipeline[];
   followed: boolean;
+  /** A heredoc lifo ends where bash would not: the commands after it are unknown. */
+  misread: boolean;
   /** How many substitutions deep the walk stands. */
   depth: number;
 }
@@ -83,16 +87,22 @@ interface Walk {
 /** The deepest a substitution is read: each is parsed again from its own text, so past a few no accident nests. */
 const SUBSTITUTION_DEPTH = 8;
 
+/** Heredocs lifo ends elsewhere than bash does: a delimiter in locale quotes (`<<$"EOF"`), which lifo reads with its
+ *  `$`, and a line holding a carriage return, which bash keeps in the delimiter and lifo strips from the body. */
+const HEREDOC_MISREAD = /<<-?[ \t]*\$"|<<[^\n]*\r|\r[^\n]*<</u;
+
 /** `text` as the shell's grammar reads it, or null where it reads none: lifo refuses a few constructs bash runs
- *  (`<<<`, `select`), so null is not bash's verdict, only this reading's. */
+ *  (`<<<`, `select`) and ends a few heredocs elsewhere than bash, so null is not bash's verdict, only this reading's. */
 export function readShell(text: string): ShellReading | null {
+  if (HEREDOC_MISREAD.test(text)) return null;
+
   return settleSync(Effect.try({
-    try: (): ShellReading => {
-      const walk: Walk = { pipelines: [], followed: true, depth: 0 };
+    try: (): ShellReading | null => {
+      const walk: Walk = { pipelines: [], followed: true, misread: false, depth: 0 };
 
       readLists(parse(text).lists, walk);
 
-      return walk;
+      return walk.misread ? null : walk;
     },
     catch: (cause) => ({ cause }),
   }).pipe(
@@ -157,6 +167,9 @@ function readSimple(node: SimpleCommandNode, stages: ShellCommand[], walk: Walk)
 
   // An unquoted heredoc is expanded before its command reads it: a substitution in one runs, for any program.
   if (node.redirections.some(({ heredoc }) => heredoc !== undefined && !heredoc.quoted && RUNS_WHEN_EXPANDED.test(heredoc.body))) walk.followed = false;
+
+  // Bash joins an unquoted heredoc's continued lines before it looks for the delimiter; lifo looks line by line.
+  if (node.redirections.some(({ heredoc }) => heredoc !== undefined && !heredoc.quoted && heredoc.body.includes('\\\n'))) walk.misread = true;
   stages.push(stageOf(node.words, node.redirections));
 }
 
@@ -219,7 +232,11 @@ function readCompound(node: CompoundCommandNode, stages: ShellCommand[], walk: W
 function redirectOf(redirect: RedirectionNode): ShellRedirect[] {
   if (redirect.operator === 'heredoc' || redirect.operator === 'dupOutput' || redirect.operator === 'dupInput') return [];
 
-  return [{ truncates: redirect.operator === 'write' || redirect.operator === 'writeAll', target: wordOf(redirect.target) }];
+  return [{
+    truncates: redirect.operator === 'write' || redirect.operator === 'writeAll',
+    reads: redirect.operator === 'read' || redirect.operator === 'readWrite',
+    target: wordOf(redirect.target),
+  }];
 }
 
 /** Tokens that end a run of words: an operator, a list break, a grouping parenthesis. */
@@ -351,9 +368,24 @@ function shellScripts(command: ShellCommand): string[] {
  *  more than a few. Past them the reading stops following. */
 const WRAPPED_SUFFIXES = 6;
 
+/** find's actions that run a command, whose words run to a `;` or a `+`. */
+const FIND_ACTIONS: ReadonlySet<string> = new Set(['-exec', '-execdir', '-ok', '-okdir']);
+
 /** The argv suffixes that start at a word not an option, the first {@link WRAPPED_SUFFIXES}: one of them is the wrapped
- *  command, and reading every one over-collects, which only asks more. */
-function wrappedSuffixes(command: ShellCommand) {
+ *  command, and reading every one over-collects, which only asks more. find runs only what its actions name. */
+function wrappedSuffixes(program: string, command: ShellCommand) {
+  if (program === 'find') {
+    const actions = command.words.flatMap((word, at) => {
+      if (word.literal === null || !FIND_ACTIONS.has(word.literal)) return [];
+      const words = command.words.slice(at + 1);
+      const end = words.findIndex(({ literal }) => literal === ';' || literal === '+');
+
+      return [end === -1 ? words : words.slice(0, end)];
+    });
+
+    return { suffixes: actions, whole: true };
+  }
+
   const starts = command.words.flatMap((word, at) => (at > 0 && word.literal !== null && !word.literal.startsWith('-') ? [at] : []));
 
   return { suffixes: starts.slice(0, WRAPPED_SUFFIXES).map((at) => command.words.slice(at)), whole: starts.length <= WRAPPED_SUFFIXES };
@@ -417,7 +449,7 @@ export function commandsRun(reading: ShellReading): CommandsRun {
     for (const script of laterScripts(program, command)) handed(script);
 
     if (!wrapped && WRAPPERS.has(program)) {
-      const { suffixes, whole } = wrappedSuffixes(command);
+      const { suffixes, whole } = wrappedSuffixes(program, command);
 
       followed &&= whole;
 

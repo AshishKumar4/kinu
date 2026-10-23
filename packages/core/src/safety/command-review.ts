@@ -2,7 +2,8 @@
  * 'allow', 'warn', 'gate' (the owner decides) or 'deny', by rule and whose files. Against accidents, not an adversary.
  * A rule judges the commands the line runs as the shell reads them (`shell-reading.ts`), and its signature judges the
  * line's text where that reading cannot see what runs (`followed: false`), where a word of one of its programs expands,
- * and always for a deny: a review never weaker than one of the text alone.
+ * and always for a deny. Under both stands the text review this one replaced ({@link scanCommand}): a reading that
+ * misses an act, as lifo misreads a few constructs bash runs, leaves the line judged as it was, never weaker.
  */
 
 import type { ShellCwd, ShellSession } from '../execution/shell-session';
@@ -141,8 +142,9 @@ const PACKAGE_PUBLISH = new RegExp(
 
 const SECRET_READ = { name: 'secret-file-read', why: 'Reads a file likely to contain secrets.' } as const;
 
-/** A mode that sets the setuid or setgid bit: symbolic `+s` or `=…s`, or four octal digits led by 2 to 7. */
-const SETUID_MODE = /^(?:[ugoa]*[+=][rwxXt]*s[rwxXt]*|[2-7][0-7]{3})$/u;
+/** A mode that sets the setuid or setgid bit: a symbolic clause one of whose operations is `+…s` or `=…s` (`u+s-w`
+ *  holds two), or four octal digits led by 2 to 7. */
+const SETUID_MODE = /^(?:[ugoa]*(?:[-+=][rwxXstugo]*)*[+=][rwxXtugo]*s|[2-7][0-7]{3}$)/u;
 
 const DOWNLOADERS = ['curl', 'wget'];
 
@@ -168,7 +170,8 @@ function publishes(command: ShellCommand): boolean {
 
   if (program === 'gem') return sub === 'push';
 
-  if (program === 'mvn') return words.includes('deploy');
+  // The `deploy` phase, or a goal of the deploy plugin by prefix or coordinates (`deploy:deploy-file`).
+  if (program === 'mvn') return words.some((word) => word === 'deploy' || word.startsWith('deploy:') || /(?:^|:)maven-deploy-plugin(?::|$)/u.test(word));
 
   if (program === 'gradle' || program === 'gradlew') return words.some((word) => word.split(':').some((task) => task.startsWith('publish')));
 
@@ -394,7 +397,8 @@ const RULES: Rule[] = [
     harm: 'reaches_out',
   },
   {
-    fires: running(({ command }) => is(command, 'cat') && argumentsAfter(command).operands.some((word) => SECRET_PATH.test(word.text))),
+    fires: running(({ command }) => is(command, 'cat') && [...argumentsAfter(command).operands, ...command.redirects.flatMap((redirect) => (redirect.reads ? [redirect.target] : []))]
+      .some((word) => SECRET_PATH.test(word.text))),
     decision: 'warn',
     name: SECRET_READ.name,
     binaries: ['cat'],
@@ -454,6 +458,23 @@ function cdTarget(run: readonly ShellWord[], cwd: string, home: string): string 
   return target === '-' ? null : shellPath(target, cwd, home);
 }
 
+/** The most directories a line's relative paths are read from: each `cd` is kept beside the directories before it, so
+ *  a line of n of them reaches 2^n; past this many the line's paths are unknown. */
+const CWD_BOUND = 64;
+
+/** `cwds` with each `cd` in `words` taken from every one of them, or null past {@link CWD_BOUND}. */
+function movedThrough(cwds: ReadonlySet<string>, words: readonly ShellWord[], home: string): Set<string> | null {
+  const next = new Set(cwds);
+
+  for (const cwd of cwds) {
+    const moved = cdTarget(words, cwd, home);
+
+    if (moved !== undefined && moved !== null) next.add(moved);
+  }
+
+  return next.size > CWD_BOUND ? null : next;
+}
+
 function namesRoot(command: string, root: string): boolean {
   const escaped = root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -477,7 +498,7 @@ function commandFilesOwner(executor: GatedExecutor, command: string, session: Sh
   if (runs === null) return 'user';
   // Every directory a relative path may be read from: a `cd` in a substitution, a subshell or a script moves only its
   // own scope, which this reading does not track, so each is kept beside the one before it, which only asks more.
-  const cwds = new Set([session.cwd]);
+  let cwds: Set<string> | null = new Set([session.cwd]);
 
   for (const { words } of runs) {
     for (const cwd of cwds) {
@@ -486,7 +507,9 @@ function commandFilesOwner(executor: GatedExecutor, command: string, session: Sh
       if (reached.some((path) => path !== null && underRoots(path, roots))) return 'user';
     }
 
-    for (const moved of Array.from(cwds, (cwd) => cdTarget(words, cwd, session.home))) if (moved !== undefined && moved !== null) cwds.add(moved);
+    cwds = movedThrough(cwds, words, session.home);
+
+    if (cwds === null) return 'user';
   }
 
   return 'agent';
@@ -519,20 +542,25 @@ function overwritesUserFiles(executor: GatedExecutor, command: string, session: 
 
   // A line whose writes this reading cannot see, that reaches the user's files, may replace one.
   if (reading === null) return owner === 'user';
-  // As ownership reads a line: each `cd` kept beside the directory before it.
-  const cwds = new Set([session?.cwd ?? '/']);
+  // As ownership reads a line: each `cd` kept beside the directory before it. Every command the line runs, a shell's
+  // script's and a wrapper's included, is one that may write.
+  let cwds: Set<string> | null = new Set([session?.cwd ?? '/']);
 
-  for (const step of reading.pipelines.flat()) {
+  for (const { command: step } of commandsRun(reading).runs) {
     const targets = [...redirectTargets(step), copyTarget(step)].filter((target): target is string | null => target !== undefined);
+    const relative = targets.some((target) => target === null || !/^[/~]/u.test(target));
 
-    // From a directory that may be the user's, a relative write may land there.
-    if (session?.mayBeUsers === true && targets.some((target) => target === null || !/^[/~]/u.test(target))) return true;
+    // From a directory that may be the user's, a relative write may land there; from one past those tracked, it may on
+    // a line that reaches the user's files.
+    if (relative && session?.mayBeUsers === true) return true;
 
-    for (const cwd of cwds) {
+    if (relative && cwds === null) return owner === 'user';
+
+    for (const cwd of cwds ?? [home]) {
       if (targets.map((target) => shellPath(target, cwd, home)).some((path) => path !== null && underRoots(path, roots))) return true;
     }
 
-    for (const moved of Array.from(cwds, (cwd) => cdTarget(step.words, cwd, home))) if (moved !== undefined && moved !== null) cwds.add(moved);
+    if (cwds !== null) cwds = movedThrough(cwds, step.words, home);
   }
 
   return false;
@@ -582,8 +610,91 @@ export function reviewFileAccess(access: FileAccess): ApprovalResult {
   return { decision: dominant(hits), hits };
 }
 
+/** Prefix words that keep the next word in command position, as the text review read them. */
+const COMMAND_PREFIXES: ReadonlySet<string> = new Set(['sudo', 'command', 'exec', 'time', 'nice']);
+
+/** Programs that run an argument as a program; under them the text review matched each signature to the whole line. */
+const INLINE_INTERPRETERS: ReadonlySet<string> = new Set([
+  'sh', 'bash', 'zsh', 'dash', 'ksh', 'fish', 'python', 'python3', 'perl', 'ruby', 'node', 'bun', 'deno',
+  'xargs', 'ssh', 'env', 'nohup', 'timeout', 'watch', 'find', 'docker',
+]);
+
+const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/u;
+
+/** Outside quotes, each ends a simple command. `&&` and `||` fall out of `&` and `|`. */
+const COMMAND_BREAKS: ReadonlySet<string> = new Set([';', '&', '|', '(', ')', '{', '}', '\n', '`']);
+
+/** What the text review saw of a line. */
+interface CommandScan {
+  /** Programs in command position, after env assignments and prefix words. */
+  readonly invoked: ReadonlySet<string>;
+  /** The line with quoted spans blanked; a rule with programs matches its signature here. */
+  readonly unquoted: string;
+  /** An interpreter runs: every signature matches the whole line. */
+  readonly opaque: boolean;
+}
+
+/**
+ * The text review the shell reading replaced, kept as the floor under it: one quote-aware pass, independent of lifo, so
+ * a construct lifo reads unlike bash (a heredoc's end, a locale quote) is judged by it as before. Over-collecting is
+ * safe.
+ */
+function scanCommand(command: string): CommandScan {
+  const invoked = new Set<string>();
+  let unquoted = '';
+  let word = '';
+  let atCommandStart = true;
+  let quote: string | null = null;
+
+  const endWord = () => {
+    if (word.length === 0) return;
+
+    if (atCommandStart && !ENV_ASSIGNMENT.test(word)) {
+      const base = word.slice(word.lastIndexOf('/') + 1);
+
+      invoked.add(base);
+
+      if (!COMMAND_PREFIXES.has(base)) atCommandStart = false;
+    }
+
+    word = '';
+  };
+
+  for (let at = 0; at < command.length; at++) {
+    const ch = command.charAt(at);
+
+    if (quote !== null) {
+      if (ch === quote) {
+        quote = null;
+        unquoted += ' ';
+      } else word += ch;
+
+      continue;
+    }
+
+    if (ch === '"' || ch === "'") quote = ch;
+    else if (ch === '\\') at += 1;
+    else {
+      unquoted += ch;
+
+      if (ch === ' ' || ch === '\t') endWord();
+      else if (COMMAND_BREAKS.has(ch) || (ch === '$' && command.charAt(at + 1) === '(')) {
+        endWord();
+        atCommandStart = true;
+
+        if (ch === '$') at += 1;
+      } else word += ch;
+    }
+  }
+
+  endWord();
+
+  return { invoked, unquoted, opaque: [...invoked].some((program) => INLINE_INTERPRETERS.has(program)) };
+}
+
 /** No default owner: no caller silently picks a trust tier. */
 export function reviewCommand(command: string, filesOwner: FilesOwner): ApprovalResult {
+  const scan = scanCommand(command);
   const reading = readShell(command);
   const read = reading === null ? null : commandsRun(reading);
   const expanding = new Set(read?.runs.flatMap(({ command: run }) => (run.words.some((word) => word.literal === null) ? programOf(run) ?? [] : [])));
@@ -599,7 +710,11 @@ export function reviewCommand(command: string, filesOwner: FilesOwner): Approval
     const textToo = r.fires === undefined || r.decision === 'deny' || read === null || !read.followed
       || (r.binaries?.some((binary) => expanding.has(binary)) ?? false);
 
-    if (!fires && !(textToo && r.signature.test(command))) continue;
+    const scanned = r.binaries !== undefined && !scan.opaque
+      ? r.binaries.some((binary) => scan.invoked.has(binary)) && r.signature.test(scan.unquoted)
+      : r.signature.test(command);
+
+    if (!fires && !scanned && !(textToo && r.signature.test(command))) continue;
 
     // Local harm to the agent's own files is not gated; 'deny' is exempt.
     if (agentsOwn && r.harm === 'local' && r.decision !== 'deny') continue;
