@@ -16,7 +16,7 @@ import { Status } from "@/components/ui/Status";
 import { BrandMark } from "@/components/ui/BrandMark";
 import { connectionTitle, presetBrand } from "@/components/plugins/McpPresetCards";
 import { CATEGORY_WORDS } from "@/components/sharing/words";
-import { KindBadge, Maker, kinuBlueprintPicture } from "@/components/explore/ExploreCard";
+import { KindBadge, Maker, KinuBlueprintPicture } from "@/components/explore/ExploreCard";
 import { InstallDialog } from "@/components/explore/InstallDialog";
 import { useConnectedPreset } from "@/hooks/use-mcp-servers";
 import { readBlueprint, starBlueprint, type BlueprintPage, type ExploreNeed, type WorkspaceCard } from "@/lib/explore-api";
@@ -154,7 +154,7 @@ function Blueprint({ page, connected }: { page: BlueprintPage; connected: (prese
       actions={<BlueprintActions workspace={workspace} onInstall={() => setInstalling(true)} />}>
       <div className="grid gap-6 lg:grid-cols-[var(--layout-detail)]">
         <Surface look="well" className="relative aspect-16/10 overflow-hidden border p-border">
-          {workspace.picture !== null && <img src={kinuBlueprintPicture(workspace.picture)} alt={`${workspace.title} at work`} className="absolute inset-0 size-full object-cover object-left-top" />}
+          {workspace.picture !== null && <KinuBlueprintPicture picture={workspace.picture} alt={`${workspace.title} at work`} className="absolute inset-0 size-full object-cover object-left-top" />}
         </Surface>
         <div className="flex min-w-0 flex-col gap-3">
           <span className="flex flex-wrap items-center gap-2"><KindBadge kind="workspace" /><span className="t-meta p-text-3">{CATEGORY_WORDS[workspace.category]}</span></span>

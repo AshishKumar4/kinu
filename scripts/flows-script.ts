@@ -60,7 +60,8 @@ export const ACTIVITY_REFUSAL = 'Flow activity: the provider refused to go on';
 function activityAnswer(latest: string, request: ScriptedRequest): ScriptedAnswer | undefined {
   if (!latest.includes(ACTIVITY_ASK)) return undefined;
 
-  if (!request.called.includes('eval')) {
+  // This ask's own calls: a deployment's assistant keeps its chat, so an earlier run's program is in `called`.
+  if (!request.askTurn.some((call) => call.name === 'eval')) {
     const args = [ACTIVITY_WORKSPACE, 'The activity row made this', '# Flow activity check'].map((arg) => JSON.stringify(arg)).join(', ');
 
     return { toolCall: { name: 'eval', arguments: { code: `return await agent.createWorkspace(${args});` } } };

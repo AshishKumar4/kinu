@@ -674,10 +674,15 @@ export async function activityIsShown(target: FlowTarget): Promise<ActivityVerdi
   const page = await openWorkspacePage(target, '/');
 
   try {
+    // A deployment's assistant keeps its chat between runs, so an earlier run's refusal may already be drawn: this run
+    // waits for one more than it found (staging, 2026-10-23: the wait ended at once, before this turn had run).
+    const refusals = await page.$$eval('#chat [data-turn-failure]', (drawn) => drawn.length);
+
     await sendInChat(page, ACTIVITY_ASK);
     // The refusal is this row's outcome, not a dead end: `until` would end the row on it, and the chat beside Activity
     // keeps saying it, so these waits are bare and the row's deadline ends them.
-    await named('the turn to stop on the refusal', () => page.waitForFunction(`document.querySelector('#chat [data-turn-failure]') !== null`, { polling: 100 }));
+    await named('the turn to stop on the refusal', () => page.waitForFunction(
+      (found: number) => document.querySelectorAll('#chat [data-turn-failure]').length > found, { polling: 100 }, refusals));
     await page.click('[data-focus-identity]');
     await named("Activity's turns", () => page.waitForFunction(`document.querySelector('[data-activity-entry]') !== null`, { polling: 100 }));
 
