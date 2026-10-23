@@ -7,7 +7,7 @@ import { Database as SqliteDatabase } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import { censusOf, initActivationTable, recordActivation, sha256Hex, type Repair, type TablesAnswer } from '@kinu.run/core';
 import { makeSql, makeSqlExec } from '../packages/core/tests/helpers';
-import { censusDiff, censusLines, changedTables, confirmation, derivedIn, planLines, referrersOf, verdictOf, walk, walkLines, type OpsBody, type Reached, type TablesTarget } from './tables-reset';
+import { censusDiff, censusLines, changedTables, confirmation, derivedIn, planLines, referrersOf, schemaChange, verdictOf, walk, walkLines, type OpsBody, type Reached, type TablesTarget } from './tables-reset';
 
 const FROM = {
   'device_joins@packages/core/src/state/user-schema.ts': ['device_id TEXT PRIMARY KEY', 'expires_at INTEGER NOT NULL'],
@@ -65,6 +65,25 @@ test('the changed tables come from the two locks: removed, reshaped, and added',
     'driver_lease reshaped', 'head_scores reshaped', 'heads reshaped', 'tails reshaped', 'webhook_secrets reshaped', 'workspace_overviews reshaped',
   ]);
   expect(added).toEqual(['device_consent_asks']);
+});
+
+// Staging held from 06:10 on 2026-10-23 for two new tables (mail_blob_graves, slate_picture_graves) that dropped
+// nothing: a release that only adds tables ships with --reset-tables on its own, and one that changes any holds.
+test('a release that only adds tables is additive; one that reshapes or removes any is not', () => {
+  const lock = (tables: Readonly<Record<string, readonly string[]>>) => Object.fromEntries(Object.entries(tables).map(([key, parts]) => [`${key}@a.ts`, [...parts]]));
+  const base = { kept: ['id TEXT PRIMARY KEY'], gone: ['id TEXT PRIMARY KEY'] };
+
+  expect([
+    schemaChange(changedTables(lock(base), lock(base))),
+    schemaChange(changedTables(lock(base), lock({ ...base, graves: ['key TEXT PRIMARY KEY'] }))),
+    schemaChange(changedTables(lock(base), lock({ ...base, kept: ['id TEXT PRIMARY KEY', 'at INTEGER'], graves: ['key TEXT PRIMARY KEY'] }))),
+    schemaChange(changedTables(lock(base), lock({ kept: base.kept }))),
+  ]).toEqual([
+    { kind: 'none', tables: [] },
+    { kind: 'additive', tables: ['graves'] },
+    { kind: 'changes', tables: ['kept reshaped'] },
+    { kind: 'changes', tables: ['gone removed'] },
+  ]);
 });
 
 test('the plan says what each reset does: drop and make anew, with what refers to it, retire, leave as it is, or refuse', () => {
