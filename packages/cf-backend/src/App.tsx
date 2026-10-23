@@ -68,6 +68,12 @@ const DeployPage = lazyRoute(() => import("./pages/DeployPage"));
 
 const UpdatesPage = lazyRoute(() => import("./pages/UpdatesPage"));
 
+const InvitePage = lazyRoute(async () => {
+  const { default: page } = await import("./pages/InvitePage");
+
+  return { default: page };
+});
+
 // An awaited import, which `gate:wired` reads as the page's one reference.
 const NotFoundPage = lazyRoute(async () => {
   const { default: page } = await import("./pages/NotFoundPage");
@@ -180,6 +186,7 @@ export default function App({ visitor = pageIsVisitors() }: { readonly visitor?:
             {EXPLORE_ROUTES}
             <Route path={APP_ROUTES.control} element={<Page label="control-plane"><ControlPage /></Page>} />
             <Route path={APP_ROUTES.updates} element={<Page label="updates"><UpdatesPage /></Page>} />
+            <Route path={APP_ROUTES.invite} element={<Page label="invite"><InvitePage /></Page>} />
             <Route path="*" element={<Page label="not-found"><NotFoundPage /></Page>} />
           </Route>
         </Route>

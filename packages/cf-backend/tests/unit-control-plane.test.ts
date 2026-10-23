@@ -211,7 +211,7 @@ describe('the index', () => {
     const row = store.getUser(sql, 'u1');
     expect(row).toEqual({
       userId: 'u1', email: 'a@x', displayName: 'Ada',
-      firstSeenAt: 1_000, lastSeenAt: 5_000, workspaces: 0,
+      firstSeenAt: 1_000, lastSeenAt: 5_000, workspaces: 0, class: 'free', suspendedAt: null,
     });
     close();
   });

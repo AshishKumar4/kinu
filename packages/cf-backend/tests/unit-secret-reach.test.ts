@@ -6,8 +6,8 @@ import { describe, expect, test } from 'bun:test';
 import { MemoryVFS } from '@nimbus-sh/core/vfs/memory.js';
 import { present } from '@kinu.run/test-utils';
 import {
-  createInlineExecutor, createSandboxExecutor, DefaultExecutionRouter, providersWithoutOwnerSecrets, withCommandEnvironment, withholdingOwnerSecrets,
-  type CommandEnvironment, type SandboxHandle,
+  connectionEnvironment, createInlineExecutor, createSandboxExecutor, DefaultExecutionRouter, providersWithoutOwnerSecrets, withCommandEnvironment,
+  withholdingOwnerSecrets, type CommandEnvironment, type SandboxHandle,
 } from '@kinu.run/core';
 import { executorNamespace } from '../../core/src/tools/executor-operations';
 import { createFileCodemodeProvider, serveFile } from '../../core/src/tools/file-operations';
@@ -27,6 +27,9 @@ const AUTHORIZATION = { kind: 'authorization' } as const;
 
 /** Assembled, so no scanner reads a hardcoded password here. */
 const DB_VALUE = ['hunter2', 'logs', 'db'].join('-');
+
+/** What every owner's command holds besides its secrets: git's helper, which here says GitHub is not connected. */
+const GIT_HELPER = connectionEnvironment([]);
 
 /** The account: Cloudflare's token as a placeholder and the database password readable, both granted to `shop`. */
 async function shop() {
@@ -140,7 +143,7 @@ describe("the owner's own calls hold the workspace's secrets", () => {
 
     await box.provider.tools.exec.execute('env');
 
-    expect(box.execs).toEqual([{ CLOUDFLARE_API_TOKEN: placeholder, DATABASE_PASSWORD: DB_VALUE }]);
+    expect(box.execs).toEqual([{ CLOUDFLARE_API_TOKEN: placeholder, DATABASE_PASSWORD: DB_VALUE, ...GIT_HELPER }]);
   });
 
   test("an owner's job holds placeholders where it is kept, and is marked to read its values at each launch", async () => {
@@ -176,7 +179,7 @@ describe("a call that is not the owner's holds none of them", () => {
     await withholdingOwnerSecrets(() => box.exec('env', {}));
 
     // The one its agents may read too: the box writes a serving program's environment where every process reads it.
-    expect(seen).toEqual([{ CLOUDFLARE_API_TOKEN: placeholder, DATABASE_PASSWORD: kept.DATABASE_PASSWORD }, {}]);
+    expect(seen).toEqual([{ CLOUDFLARE_API_TOKEN: placeholder, DATABASE_PASSWORD: kept.DATABASE_PASSWORD, ...GIT_HELPER }, {}]);
     expect(kept.DATABASE_PASSWORD).toStartWith('pxs1_');
     expect(JSON.stringify(seen)).not.toContain(DB_VALUE);
   });
@@ -186,7 +189,7 @@ describe("a call that is not the owner's holds none of them", () => {
 
     // As `ActorAgent.codemodeLaunch` reads them for each run.
     expect(await reads.commandEnvironment('run', 'viewer')).toEqual({});
-    expect(await reads.commandEnvironment('run', 'owner')).toEqual({ CLOUDFLARE_API_TOKEN: placeholder, DATABASE_PASSWORD: DB_VALUE });
+    expect(await reads.commandEnvironment('run', 'owner')).toEqual({ CLOUDFLARE_API_TOKEN: placeholder, DATABASE_PASSWORD: DB_VALUE, ...GIT_HELPER });
   });
 });
 

@@ -10,7 +10,9 @@ import { json } from '@kinu.run/core';
 import { ownerCaller } from '@kinu.run/core';
 import { JsonObjectSchema, USER_AI_PROXY_PATH, parseJsonObject } from '@kinu.run/core';
 import { Effect } from 'effect';
-import { settle, tolerate, tolerated } from '@kinu.run/core/obs';
+import { attemptInItsWords, diagnostics, settle, settleLogged, tolerate, tolerated } from '@kinu.run/core/obs';
+import { ERROR_STATUS } from '@kinu.run/core';
+import type { UserDO } from './user-do';
 import { beneath, type FamilyEnv } from '../api/context';
 import { inferenceProxyGate, type CliBearerEnv, type CliBearerVariables } from '../api/cli-bearer';
 import type { CliAuthAuthority } from '../cli/auth-store';
@@ -28,7 +30,17 @@ export interface UserAIProxyEnv<Id> extends AvailableModelsEnv<Id>, OwnerCapabil
   AI?: NonNullable<ProviderEnv['AI']> & WorkersAIRunBinding;
 }
 
-type ProxyAuthority = CliAuthAuthority & UserCredentialClient;
+/** The account's limits as the platform's own models meet them here (core limits/). */
+type LimitsHub = Pick<UserDO, 'limits_admitTurn' | 'limits_platformTokensSpent'>;
+
+type ProxyAuthority = CliAuthAuthority & UserCredentialClient & LimitsHub;
+
+/** Whose call it is: the account, its limits, and where what the platform's model spent is told. */
+interface ProxyAccount {
+  readonly userId: string;
+  readonly limits: LimitsHub;
+  readonly spent: (tokens: number) => void;
+}
 
 export const aiProxyRoutes = new Hono<FamilyEnv<UserAIProxyEnv<unknown> & CliBearerEnv<ProxyAuthority>, CliBearerVariables<ProxyAuthority>>>();
 
@@ -69,15 +81,44 @@ aiProxyRoutes.get(`${USER_AI_PROXY_PATH}/models`, async (c) => {
 
 /** The APIs a gateway model is spoken to in (`gatewayWireModel`), each forwarded where `createCloudflareAIFetch` sends it. */
 for (const endpoint of ['chat/completions', 'responses', 'messages'] as const) {
-  aiProxyRoutes.post(`${USER_AI_PROXY_PATH}/${endpoint}`, (c) => settle(proxyCompletion(endpoint, c.req.raw, c.env, c.get('cli').userId)));
+  aiProxyRoutes.post(`${USER_AI_PROXY_PATH}/${endpoint}`, (c) => {
+    const { userId } = c.get('cli');
+    const limits = objectNamed(c.env.UserDO, userId);
+
+    // Counted after the answer, outliving the request: a count that fails is logged, never the caller's.
+    const spent = (tokens: number) => c.executionCtx.waitUntil(settleLogged('limits.cli_tokens_undebited', { doing: "counting a CLI call on the platform's models to the owner's day", otherwise: 'unavailable' },
+      async () => { await limits.limits_platformTokensSpent(await ownerCaller(c.env), tokens); }));
+
+    return settle(proxyCompletion(endpoint, c.req.raw, c.env, { userId, limits, spent }));
+  });
 }
 
 aiProxyRoutes.all(`${USER_AI_PROXY_PATH}/*`, beneath(USER_AI_PROXY_PATH, async (c) =>
   errorResponse(404, `No such AI proxy route: ${c.req.method} ${c.req.path.slice(USER_AI_PROXY_PATH.length)}`)));
 
+/**
+ * A call on one of the platform's own models, as the owner's limits admit it: their refusal (a suspended account, the
+ * day's tokens spent) in their words and status; null to go on, as also when the account could not be asked (logged).
+ */
+function platformRefusal(limits: LimitsHub, env: OwnerCapabilityEnv): Effect.Effect<Response | null> {
+  const asked = attemptInItsWords('unavailable', async () => { await limits.limits_admitTurn(await ownerCaller(env), true); });
+
+  return Effect.match(asked, {
+    onSuccess: () => null,
+    onFailure: (failure) => {
+      if (failure.code === 'budget' || failure.code === 'denied') return errorResponse(ERROR_STATUS[failure.code], failure.message);
+      diagnostics.failure('limits.cli_turn_unasked', failure);
+
+      return null;
+    },
+  });
+}
+
 function proxyCompletion<Id>(
-  endpoint: 'chat/completions' | 'responses' | 'messages', request: Request, env: UserAIProxyEnv<Id>, userId: string,
+  endpoint: 'chat/completions' | 'responses' | 'messages', request: Request, env: UserAIProxyEnv<Id>, account: ProxyAccount,
 ): Effect.Effect<Response> {
+  const { userId } = account;
+
   return Effect.gen(function* () {
     const body = yield* Effect.promise(() => request.text());
 
@@ -97,8 +138,11 @@ function proxyCompletion<Id>(
     // The binding transport reads chat bodies; anything else is the account endpoint's to answer.
     if (workersAI && endpoint === 'chat/completions' && env.WORKERS_AI_VIA_BINDING === 'on') {
       if (!env.AI) return errorResponse(503, 'Workers AI binding unavailable.');
+      const refused = yield* platformRefusal(account.limits, env);
 
-      return yield* bindingCompletion(env.AI, { model, body: parsed, request });
+      if (refused !== null) return refused;
+
+      return yield* bindingCompletion(env.AI, { model, body: parsed, request, spent: account.spent });
     }
 
     const aiFetch = createCloudflareAIFetch({

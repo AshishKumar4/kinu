@@ -4,6 +4,7 @@ import {
   addSkill, ChunkedUpload, deleteDriveEntry, driveFailure, DriveUploadTargetSchema, FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, listDrive, makeDriveFolder, markAsSkill, normalizeDrivePath, packDriveFolder, receiveDriveUpload, renameDriveEntry, SHARED_DRIVE_UNBOUND, SKILL_FOLDER_FILE, type DriveFailure, type DriveListing, type DriveUploadOutcome, type DriveUploadTarget, type MarkedSkill, type MossaicVfs, type UserCaller,
 } from '@kinu.run/core';
 import type { UserObjectHost } from './user-host';
+import type { UserLimits } from './limits';
 
 export type DriveAnswer<Value> = { readonly ok: true; readonly value: Value } | ({ readonly ok: false } & DriveFailure);
 
@@ -24,6 +25,8 @@ export interface UserDriveHost extends Pick<UserObjectHost, 'requireTier' | 'sql
   /** This account's own id, the name it is addressed by: the tenant its workspaces mount at `/shared`. */
   accountId(): string;
   driveFor(tenant: string): MossaicVfs | null;
+  /** The account's limits: an upload's first chunk asks for new bytes; its last marks the Drive's size to be read again. */
+  readonly limits: Pick<UserLimits, 'admitNewBytes' | 'storeChanged'>;
 }
 
 /** The account's Drive. */
@@ -99,6 +102,8 @@ export class UserDrive {
       let row = this.driveUploads.get(transferId);
 
       if (offset === 0) {
+        // New bytes only: the Drive's files stay readable and removable at any limit.
+        await this.host.limits.admitNewBytes();
         row = { target, upload: new ChunkedUpload() };
         this.driveUploads.set(transferId, row);
       } else if (!row || JSON.stringify(row.target) !== JSON.stringify(target)) {
@@ -112,8 +117,11 @@ export class UserDrive {
       if ('error' in step) throw new KinuError('bad_input', step.error);
 
       if (!('assembled' in step)) return { ok: true };
+      const received = await receiveDriveUpload(drive, target, step.assembled);
 
-      return receiveDriveUpload(drive, target, step.assembled);
+      this.host.limits.storeChanged('drive');
+
+      return received;
     });
   }
 

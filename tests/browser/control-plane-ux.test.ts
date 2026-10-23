@@ -197,9 +197,13 @@ const TAB_HEADINGS = {
   Audit: 'Admin audit',
 } satisfies Record<string, string>;
 
+/** An account no free tier binds, as its own object reads it (core limits/). */
+const UNLIMITED = { report: { class: 'operator', suspended: null, limits: [], computerSizeCap: null, freeTier: false }, use: [] };
+
+/** A row of the accounts list, with its limits as the list reads them in each account's object. */
 function userRow(userId: string, email: string, at: number): JsonValue {
   return {
-    userId, email, displayName: null, firstSeenAt: at - 1_000, lastSeenAt: at, workspaces: 2,
+    userId, email, displayName: null, firstSeenAt: at - 1_000, lastSeenAt: at, workspaces: 2, class: 'free', suspendedAt: null, limits: UNLIMITED,
   };
 }
 
@@ -699,6 +703,7 @@ describe('the control plane in a browser', () => {
             workspaces: end < rows.length
               ? { status: 'more', items: slice, next: { after: `2000000\u0000${String(end)}` } }
               : { status: 'end', items: slice },
+            limits: UNLIMITED,
             viewer: OPERATOR,
           });
         },

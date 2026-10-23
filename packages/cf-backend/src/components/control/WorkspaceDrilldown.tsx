@@ -89,9 +89,12 @@ const JOB_CONTROLS = [
 
 
 
+/** A workspace's action: the ones this view's buttons send, each naming its account and workspace. */
+type WorkspaceControlAction = Extract<ControlAction, { workspace: string }>;
+
 /** Holds the action itself, so the modal cannot describe one thing and send another. */
 interface PendingControl {
-  action: ControlAction;
+  action: WorkspaceControlAction;
   title: string;
   body: string;
   danger: boolean;
@@ -114,7 +117,7 @@ export function WorkspaceDrilldown(
   const [pending, setPending] = useState<PendingControl | null>(null);
   const [typedName, setTypedName] = useState('');
 
-  const act = useCallback(async (action: ControlAction) => {
+  const act = useCallback(async (action: WorkspaceControlAction) => {
     setBusy(true);
     setResult(null);
     const answer = await runAction(action);

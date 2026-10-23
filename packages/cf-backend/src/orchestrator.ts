@@ -258,8 +258,8 @@ import {
   WorkspacePlanReferenceSchema,
 } from "@kinu.run/core";
 import type { MctsSearchRunSummary, SubagentInspectionRequest, SubagentInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
-import { Cause, Effect, Exit } from 'effect';
-import { attempt, authoredRefusal, CODE_IS_REFUSAL, diagnostics, flight, hold, joining, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
+import { Cause, Effect, Exit, Result } from 'effect';
+import { attempt, attemptInItsWords, authoredRefusal, CODE_IS_REFUSAL, diagnostics, flight, hold, joining, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import type { NameOrigin } from "@kinu.run/core";
 import { deliverCloudFork, type ForkFrameAck } from "./user/workspace-fork";
@@ -270,9 +270,10 @@ import {
   type SandboxLifecycleIncidentResult,
 } from "./sandbox-lifecycle";
 
-import type { RestoreStatus, SessionRecord, TerminalSession } from "@kinu.run/devbox";
+import type { RestoreStatus, SessionRecord, StartAdmission, TerminalSession } from "@kinu.run/devbox";
 import type { BoxSize } from "@kinu.run/devbox/sizes";
 import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY, type ComputerSizeState } from "./computer-size";
+import type { ComputerSize } from "@kinu.run/core";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { forgetSandboxPreviews, sandboxPreviewExposures } from "@kinu.run/core";
 import type { ExposedPortList } from "@kinu.run/core";
@@ -1021,6 +1022,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       chatIdle: async (reference) => { await this.agentQuiet(reference.actorId); },
       frozen: async (reference, key) => await this.agentCall(reference.actorId, (isolate, snapshot) => isolate.frozen(snapshot, { turnId: key.turnId, runId: key.runId })),
       pricing: (spec) => this.modelCatalog.pricing(spec),
+      admitModel: (spec) => this.admitModelTurn(spec),
       accounts: () => this.config.getProviderAccounts(),
       noteRequest: (actorId, lastRequestAt) => this.warmingOf(actorId).noteRequest(lastRequestAt),
       openWork: (actorId) => this.openWorkOf(actorId),
@@ -2006,7 +2008,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return {
       descriptors: turn && reach.kind === 'workspace' ? this.userMcpDescriptors() : null,
       device: reach.kind === 'workspace' ? actor.runtime.deviceTransport.refreshStatus() : Promise.resolve(),
-      facts: turn ? this.account.factsForTurn(this.actorHandle().name) : null,
+      facts: turn ? this.account.factsForTurn() : null,
       mail,
       unreadMail: turn ? this.unreadMailOf(actor, mail) : null,
       sharedSkills: turn ? listSharedSkills(actor.runtime.storage.vfs) : null,
@@ -2119,7 +2121,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       scaffoldSpend: { source: 'scaffold', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
       attachmentBudget: turn?.surface.ledgers.context ?? turnLedgers().context,
       extensions: () => (reach.kind === 'workspace' ? this.extensions.list() : []),
-      accountFacts: () => planes.facts ?? this.account.factsForTurn(this.actorHandle().name),
+      accountFacts: () => planes.facts ?? this.account.factsForTurn(),
       mail: () => planes.unreadMail ?? this.unreadMailOf(actor, Promise.resolve(ownerMail)),
       dynamic: (reads) => (profile, tools) => this.actorDynamicContext(actor, reach, { profile, tools, reads, surface: turn?.surface ?? null }),
       operation: (profile, operationInputs) => captureOperationProfile({
@@ -3825,6 +3827,30 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   async sandboxStopped(): Promise<void> {
     await this.sandboxRestore({ restoring: false, refused: undefined });
+    // Its running time stops counting, and its place is free for another of the owner's computers.
+    const { stub, caller } = await this.userHub();
+    await stub.limits_computerStopped(caller, this.name);
+  }
+
+  /**
+   * Whether this workspace's computer, set to `size`, may start from stopped (KinuDevbox `admitStart`): its owner's limits
+   * answer the size it starts at (a free account's at most small), or a refusal in their words. Admitted, it holds the
+   * owner's place until `sandboxStopped`.
+   */
+  async computerStartAdmitted(size: ComputerSize): Promise<StartAdmission> {
+    const { stub, caller } = await this.userHub();
+
+    return settle(Effect.match(attemptInItsWords('unavailable', () => stub.limits_admitComputerStart(caller, this.name, size)), {
+      onSuccess: (runs): StartAdmission => ({ size: runs }),
+      // Only the limits' own answer refuses a start; a limits object that could not be asked does not hold the box down.
+      onFailure: (refusal): StartAdmission => (refusal.code === 'budget' || refusal.code === 'denied' ? { refused: refusal.message } : { size }),
+    }));
+  }
+
+  /** This workspace's computer seen running (KinuDevbox heartbeat): its running time counts to the owner's month. */
+  async computerRunningTick(size: ComputerSize): Promise<void> {
+    const { stub, caller } = await this.userHub();
+    await stub.limits_computerTick(caller, this.name, size);
   }
 
   async sandboxRestore(status: RestoreStatus): Promise<void> {
@@ -4417,7 +4443,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   async opsMissing(caller: OpsCaller): Promise<MissingBytes> {
     await requireOps(this.env, caller);
 
-    return await missingBytes(this.env.SLATE_PICTURES, picturePrefix(this.name), this.pictures.namedKeys(this.name));
+    return await missingBytes(this.env.SLATE_PICTURES, picturePrefix(this.addressedName), this.pictures.namedKeys(this.addressedName));
   }
 
   async opsTables(caller: OpsCaller): Promise<TablesAnswer> {
@@ -6995,8 +7021,26 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.executors.abortDownload(transferId);
   }
 
-  async writeExecutorFileChunk(write: ExecutorFileChunkWrite): Promise<ExecutorWriteResult> {
-    return await this.executors.writeChunk(write);
+  /**
+   * A person's upload, a chunk at a time. Its first chunk asks the owner's limits for new bytes, with this workspace's
+   * size as its database reads it now; its last tells them the size it left. Bytes already stored stay readable. A
+   * refusal is the upload's answer in the limit's own words, which the page knows its dialog by: thrown, the upload
+   * would answer only that streaming it failed.
+   */
+  writeExecutorFileChunk(write: ExecutorFileChunkWrite): Promise<ExecutorWriteResult> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (write.offset === 0) {
+        const admitted = yield* Effect.result(this.admitNewBytes());
+
+        if (Result.isFailure(admitted)) return { error: admitted.failure.message };
+      }
+
+      const written = yield* Effect.promise(() => this.executors.writeChunk(write));
+
+      if (write.final) yield* Effect.promise(() => this.reportStoredBytes());
+
+      return written;
+    }));
   }
 
   async abortExecutorFileWrite(transferId: string): Promise<void> {

@@ -331,6 +331,9 @@
     "MAIL_ACCOUNTS": "operators",
     // The deployment's own addresses (docs/MAIL.md §1): privacy@kinu.run, the legal pages' contact, to the owner's box.
     "MAIL_ALIASES": "{\"privacy\": \"ashish\"}",
+    // A free account's limits (core limits/policy.ts): `{}` the defaults. Unset, as on a self-hosted Kinu, every
+    // account is unlimited.
+    "ACCOUNT_LIMITS": "{}",
     // Account the Analytics Engine SQL API is queried against. The same id as
     // `account_id` above; a plain var because it is in this file already, and
     // the Worker cannot read the deploy-time field. Its companion is the
@@ -587,6 +590,8 @@
         "MAIL_ACCOUNTS": "everyone",
         // privacy@staging.kinu.run to the eval account's box: the production alias, provable here.
         "MAIL_ALIASES": "{\"privacy\": \"eval\"}",
+        // Production's free tier, which the eval-service+limits account meets here.
+        "ACCOUNT_LIMITS": "{}",
         "CLOUDFLARE_ACCOUNT_ID": "f44999d1ddda7012e9a87729eba250f1",
         "ANALYTICS_DATASET_SUFFIX": "_staging"
       }

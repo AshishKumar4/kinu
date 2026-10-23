@@ -99,7 +99,8 @@ const watching = (id: string, kind: string, label: string, next: number | null) 
 /** What the assistant watches: its brief each morning, its checks, and its mail, which arrives rather than fires. The
  *  bar under its name counts them and names the next one due (`watchingLine`). */
 const WATCHES = [
-  watching("t-brief", "timer_cron", "Daily brief", at(8, 0) + 864e5),
+  // Its next 08:00, a day on where that falls before the GitHub check: the bar names the check next at any hour.
+  watching("t-brief", "timer_cron", "Daily brief", at(8, 0) + (at(8, 0) + 864e5 - NOW < 10 * MIN ? 2 : 1) * 864e5),
   watching("t-github", "timer_cron", "GitHub check", NOW + 9 * MIN),
   watching("t-cloudflare", "timer_cron", "Cloudflare check", NOW + 38 * MIN),
   watching("t-mail", "email_route", "Mail", null),
