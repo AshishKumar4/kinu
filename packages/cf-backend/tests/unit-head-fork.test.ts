@@ -49,7 +49,7 @@ const sandboxFor = (id: string) => {
 const sandboxes = Object.assign(unreachableObjects<KinuDevbox>("KinuDevbox"), { getByName: sandboxFor });
 
 // Must follow the sandbox double: both helpers' module graphs reach the sandbox SDK.
-const { actorOverWorkspace, hostedExplorationHarness, orchestratorHarness } = await import("./helpers/actor-harness");
+const { actorOverWorkspace, hostedExplorationHarness, orchestratorHarness, workspaceFiles } = await import("./helpers/actor-harness");
 
 const { TEST_CREDENTIAL_ENCRYPTION_KEY } = await import('./helpers/user-do');
 
@@ -64,7 +64,7 @@ async function hostedHead(files: Record<string, string> = {}, id = 'head-1', use
   workspace.agent.harnessDeclareEnv({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY, KinuDevbox: sandboxes });
 
   for (const [path, content] of Object.entries(files)) {
-    await workspace.agent.writeWorkspaceFile({ kind: 'file', path, data: new TextEncoder().encode(content) });
+    await workspaceFiles(workspace.agent).writeFile(path, new TextEncoder().encode(content));
   }
 
   const head = await hostedExplorationHarness(workspace, id);
@@ -165,11 +165,11 @@ describe('a head forks its parent workspace', () => {
 
     expect(await present(fileNamespaceFor(rt, plane).tools['fs.text'], 'workspace.fs.text').execute('/home/main/repo/parser.ts')).toBe('one\ntwo\n');
     await writeText(rt.storage.vfs, `${home}/notes.md`, 'visible');
-    expect(await workspace.agent.readWorkspaceFile(`${home}/notes.md`))
+    expect(await workspaceFiles(workspace.agent).readFile(`${home}/notes.md`))
       .toEqual(new TextEncoder().encode('visible'));
     await expect(writeText(rt.storage.vfs, '/home/main/repo/parser.ts', 'one\ntwo\nthree\n'))
       .rejects.toThrow(expect.objectContaining({ code: 'EACCES' }));
-    expect(await workspace.agent.readWorkspaceFile('/home/main/repo/parser.ts'))
+    expect(await workspaceFiles(workspace.agent).readFile('/home/main/repo/parser.ts'))
       .toEqual(new TextEncoder().encode('one\ntwo\n'));
   });
 

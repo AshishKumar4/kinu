@@ -196,17 +196,24 @@ function verifiedIdentity(idToken: string, input: { readonly clientId: string; r
   });
 }
 
+/** What a paste that is not the address the sign-in ended on was instead, said to the person who pasted it. */
+function notTheAddress(url: URL | null): string {
+  const wanted = `Paste the address of the page that didn't load after you signed in: it starts with ${CHATGPT_PASTE_REDIRECT}.`;
+
+  if (url === null) return `That isn't an address. ${wanted}`;
+
+  return url.origin === ISSUER ? `That's the sign-in page's own address. ${wanted}` : `That isn't the address the sign-in ended on. ${wanted}`;
+}
+
 /** The owner's pasted address, checked against the sign-in it must answer. */
 function returnedCode(returned: string, held: ChatGptPasteSignIn): Effect.Effect<{ code: string; clientId: string } | 'declined', KinuError> {
   const text = returned.trim();
   const url = URL.canParse(text) ? new URL(text) : null;
 
-  if (url === null || `${url.origin}${url.pathname}` !== CHATGPT_PASTE_REDIRECT) {
-    return Effect.fail(new KinuError('bad_input', `Paste the whole address the browser ended on; it starts with ${CHATGPT_PASTE_REDIRECT}`));
-  }
+  if (url === null || `${url.origin}${url.pathname}` !== CHATGPT_PASTE_REDIRECT) return Effect.fail(new KinuError('bad_input', notTheAddress(url)));
 
   if (!timingSafeEqual(url.searchParams.get('state') ?? '', held.state)) {
-    return Effect.fail(new KinuError('bad_input', 'That address belongs to another sign-in; start the sign-in again'));
+    return Effect.fail(new KinuError('bad_input', 'That address is from an earlier sign-in. Start the sign-in again.'));
   }
 
   const problem = url.searchParams.get('error');
@@ -217,7 +224,7 @@ function returnedCode(returned: string, held: ChatGptPasteSignIn): Effect.Effect
   const code = url.searchParams.get('code') ?? '';
   const issued = url.searchParams.get('client_id');
 
-  if (code === '') return Effect.fail(new KinuError('bad_input', 'That address carries no sign-in code'));
+  if (code === '') return Effect.fail(new KinuError('bad_input', 'That address has no sign-in code: copy all of it, everything after the ? included.'));
 
   if (held.registration === null) {
     return issued === null || issued === DYNAMIC_AGENT_CLIENT

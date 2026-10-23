@@ -11,6 +11,7 @@
  * `--flow=<id>`; Bun's native test filter selects its suite and never starts the other suites' hooks.
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
+import { pictureForMode } from '@kinu.run/core';
 import { resolveWebIdentity } from '../../evals/src/workspace-roster';
 import { withBrowser, withDevServer } from '../../scripts/live-app-harness';
 import { defaultToScriptedModel, registerScriptedModel, startScriptedModel } from '../../scripts/scripted-model';
@@ -21,18 +22,18 @@ import {
   driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState, openWaitsNamed, slateOpensFromSlates,
   slateSharesReachingNothing, slateShowsItsPreview, workspaceGetsFirstAnswer, writtenFileShowsInFilesAndChanges, changesStormStaysBounded,
   openMemoryFollowsItsWriter, computerDesktopSurvivesAResize, computerSwitchKeepsItsScreens, reopenedWorkspaceRunsTheDeployedBuild,
-  computerSessionsComeBackByName, agentJobIsAnsweredInItsSession, attachmentIsReadAndShown, chatOnlyRewindIsShown, type AgentPlanVerdict, type AgentReturnVerdict,
+  computerSessionsComeBackByName, agentJobIsAnsweredInItsSession, attachmentIsReadAndShown, chatOnlyRewindIsShown, activityIsShown, slatePicturesFollowMode, type AgentPlanVerdict, type AgentReturnVerdict,
   type ApprovalStackVerdict, type HireApprovalVerdict, type AgentWorkspaceVerdict, type AccountMemoryVerdict, type StackMemoryVerdict,
   type SpliceVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict,
   type FirstAnswerVerdict, type PanelVerdict, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict,
   type StampedCardVerdict, type WrittenFileVerdict, type DesktopResizeVerdict, type DesktopSwitchVerdict, type ReopenVerdict,
-  type SessionsVerdict, type AgentJobVerdict, type AttachmentVerdict, type RewindVerdict,
+  type SessionsVerdict, type AgentJobVerdict, type AttachmentVerdict, type RewindVerdict, type ActivityVerdict, type SlatePicturesVerdict,
 } from '../../scripts/product-flows';
 import { INSPECTOR_SHUT_PX, type FlowTarget } from '../../scripts/browser-page';
 import {
   ACCOUNT_FACT, ACCOUNT_RECALL_REPLY, CONTINUE, FLOW_MEMORY_NOTE, FLOW_PROBE, FLOW_SHELL_PROBE, FLOW_SLATE, HIRE_PARKED_COMMAND, INTERRUPTED_BRIEF,
   INTERRUPTED_TITLE, PARKED_COMMANDS, PIN_PAGE, PLAN_COMMENT, AGENT_WORKSPACE, REACH_REPLY, REACH_STREAM, STACK_FACT, STACK_RECALL_REPLY, STORM_FILES,
-  THREAD_REPLY, ATTACHMENT_FILE, ATTACHMENT_REPLY, ATTACHMENT_WORD,
+  THREAD_REPLY, ATTACHMENT_FILE, ATTACHMENT_REPLY, ATTACHMENT_WORD, ACTIVITY_REFUSAL,
 } from '../../scripts/flows-script';
 import {
   chatTitledFromItsBrief, hireLivesUnderItsName, pinKeepsAnInChatPage, planCommentReachesTheAgent, slateStreamsAndHires,
@@ -594,6 +595,46 @@ describe(productFlowTestName('rewind', 'a chat-only rewind tells the agent, and 
     const rewound = verdictOf(observed, 'rewind');
 
     expect([rewound.notice !== null, rewound.noticeAfterReload !== null]).toEqual([true, true]);
+  });
+});
+
+describe(productFlowTestName('activity', "the assistant's Activity says what set a turn off, what it changed and why it stopped"), () => {
+  let observed: ActivityVerdict | null = null;
+
+  beforeAll(async () => {
+    observed = await flowRow('activity', activityIsShown);
+  });
+
+  test('pressing the assistant on Home opens its Activity, whose newest turn the person set off', () => {
+    expect(verdictOf(observed, 'activity').newest?.cause).toBe('you');
+  });
+
+  test("the turn lists what its program changed, by the host's record, and the refusal it stopped on", () => {
+    const newest = verdictOf(observed, 'activity').newest;
+
+    expect(newest?.changed.some((change) => change.includes('agent.createWorkspace'))).toBeTrue();
+    expect(newest?.stopped).toContain(ACTIVITY_REFUSAL);
+  });
+});
+
+describe(productFlowTestName('slate-pictures', "a slate's picture follows the reader's light or dark"), () => {
+  let observed: SlatePicturesVerdict | null = null;
+
+  beforeAll(async () => {
+    observed = await flowRow('slate-pictures', slatePicturesFollowMode);
+  });
+
+  test("the Drive's tile draws the camera's light picture in a light page and its dark one in a dark page", () => {
+    const { digest, light, dark } = verdictOf(observed, 'slate-pictures');
+
+    expect(light.src).toEndWith(`/${digest}`);
+    expect(dark.src).toEndWith(`/${pictureForMode(digest, 'dark')}`);
+  });
+
+  test('the dark picture is the slate as it draws its own dark, not the light one again', () => {
+    const { light, dark } = verdictOf(observed, 'slate-pictures');
+
+    expect(light.luminance - dark.luminance).toBeGreaterThan(0.5);
   });
 });
 

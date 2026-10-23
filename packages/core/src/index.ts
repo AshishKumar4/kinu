@@ -1184,7 +1184,6 @@ export {
 
 export {
   answerParentRpc, createParentExecutor, type ParentWorkspaceHandle, type ParentExecResult,
-  type ParentRpcWrite,
 } from './execution/parent';
 
 export {
@@ -2717,7 +2716,7 @@ export { MCP_PRESETS, mcpPresetById, type McpPreset, type McpPresetId } from './
 
 export {
   CALLABLE_MCP_STATES, mapConnectionStatus, mcpCredentialTransport, mcpListingRefusals, McpTransitionLog, observedMcpState,
-  type McpCredentialTransport, type McpFailureKind, type McpObservedState, type McpToolListing,
+  type McpCredentialTransport, type McpFailureKind, type McpObservedState, type McpRefusal, type McpToolListing,
 } from './mcp/client';
 
 export {

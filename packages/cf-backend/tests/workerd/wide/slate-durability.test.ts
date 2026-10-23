@@ -213,16 +213,19 @@ it('a removed slate’s URL is dead even when a new app claims its port', async 
   expect(await subject.drivePreview(boot.url)).toMatchObject({ status: 404 });
 });
 
-it('a removed slate’s picture goes with it, and its neighbour’s stays', async () => {
+// ARCHITECTURE-DECISIONS W7: the workspace restored to a moment before the removal names the picture again, so it is
+// kept 31 days (the grace's sweep is unit-tested in unit-slate-pictures.test.ts); the neighbour's is untouched.
+it('a removed slate’s picture is kept past a restore’s reach, and its neighbour’s stays', async () => {
   const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('pictures'));
   await subject.serveSlate({ workspace: 'durability-pictures', owner: 'durability-owner', id: 'keeper', body: 'keeper-body' });
   await subject.putPicture('durability-pictures', 'keeper', 'a'.repeat(64));
   await subject.putPicture('durability-pictures', 'neighbour', 'b'.repeat(64));
-  const [neighbour] = (await subject.pictureKeys('durability-pictures')).filter((key) => key.includes('/neighbour/'));
+  const pictures = async () => [...await subject.pictureKeys('durability-pictures')].sort();
+  const stored = await pictures();
 
-  expect(await subject.pictureKeys('durability-pictures')).toHaveLength(2);
+  expect(stored).toHaveLength(2);
   expect(await subject.removeSlate('durability-pictures', 'keeper')).toMatchObject({ ok: true });
-  expect(await subject.pictureKeys('durability-pictures')).toEqual([neighbour]);
+  expect(await pictures()).toEqual(stored);
 });
 
 it('the /__rpc surface answers over the durable URL after eviction', async () => {

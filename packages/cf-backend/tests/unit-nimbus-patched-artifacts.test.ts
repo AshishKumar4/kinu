@@ -11,7 +11,7 @@ import { mockAgentsSdk } from './helpers/agents-sdk';
 // `agents` reaches `cloudflare:email`: mock first, then the harness.
 mockAgentsSdk();
 
-const { orchestratorHarness } = await import('./helpers/actor-harness');
+const { orchestratorHarness, runInWorkspaceShell } = await import('./helpers/actor-harness');
 
 import { socketConnection } from './helpers/bindings';
 
@@ -97,7 +97,7 @@ describe('installed Nimbus dependency integrity', () => {
     await agent.setSoul('# Checkout\n\n## Mission\n\nAudit the checkout flow.');
 
     const edited = '# Checkout\n\n## Mission\n\nAudit the refunds flow.\n';
-    const edit = await agent.execWorkspaceCommand(`printf '${edited.replaceAll('\n', '\\n')}' > /home/main/SOUL.md; echo "exit=$?"`);
+    const edit = await runInWorkspaceShell(agent, `printf '${edited.replaceAll('\n', '\\n')}' > /home/main/SOUL.md; echo "exit=$?"`);
 
     expect(edit.stdout.trim()).toBe('exit=0');
     const prompts: string[] = [];

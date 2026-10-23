@@ -1,6 +1,6 @@
 import { Cause, Effect, Exit } from 'effect';
 import {
-  ConnectRunSchema, nanoid, plainFetch, type ConnectEnded, type JsonObject, type JsonValue, JsonObjectSchema, decodeJsonValue, McpProtocolFailureSchema, type UserCaller, compareCodeUnits, type McpPresetId, mcpPresetById, describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor, validateMcpServerInput, readAllowedTools, parseMcpHeaders, McpTransportSchema, type McpTransport, GITHUB_MCP_PRESET, GitHubRefreshAskSchema, refreshGitHub, type GitHubRefreshAnswer, type GitHubRefreshAsk, type McpPresetAvailability, type McpServerSummary, MCP_PRESETS, type McpPreset, CALLABLE_MCP_STATES, mapConnectionStatus, type McpConnectionStatus, mcpCredentialTransport, mcpListingRefusals, McpTransitionLog, observedMcpState, type McpObservedState, type McpToolListing,
+  ConnectRunSchema, nanoid, plainFetch, type ConnectEnded, type JsonObject, type JsonValue, JsonObjectSchema, decodeJsonValue, McpProtocolFailureSchema, type UserCaller, compareCodeUnits, type McpPresetId, type McpRefusal, mcpPresetById, describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor, validateMcpServerInput, readAllowedTools, parseMcpHeaders, McpTransportSchema, type McpTransport, GITHUB_MCP_PRESET, GitHubRefreshAskSchema, refreshGitHub, type GitHubRefreshAnswer, type GitHubRefreshAsk, type McpPresetAvailability, type McpServerSummary, MCP_PRESETS, type McpPreset, CALLABLE_MCP_STATES, mapConnectionStatus, type McpConnectionStatus, mcpCredentialTransport, mcpListingRefusals, McpTransitionLog, observedMcpState, type McpObservedState, type McpToolListing,
 } from '@kinu.run/core';
 import type { MCPClientManager } from 'agents/mcp/client';
 import type { CallToolResult } from '@modelcontextprotocol/client';
@@ -225,6 +225,9 @@ export class UserMcpServers {
 
   private readonly _mcpToolLists = new Map<string, McpToolListing>();
 
+  /** Each server's listing in flight: a second read joins it, so two listings of one server never overlap. */
+  private readonly listings = new Map<string, Promise<void>>();
+
   /** The SDK's manager as a call's session renewal reaches it, its connect one of {@link dials}: one object, since the
    *  calls that meet one ended session share their renewal by it. */
   private readonly renewing: McpSessionHost = ((servers: UserMcpServers): McpSessionHost => ({
@@ -388,7 +391,7 @@ export class UserMcpServers {
     const transport: NonNullable<Parameters<MCPClientManager['registerServer']>[1]['transport']> = {
       ...(row.sessionId !== null && { sessionId: row.sessionId }),
       ...(row.protocolVersion !== null && { protocolVersion: row.protocolVersion }),
-      ...mcpCredentialTransport(row.serverUrl, () => this.openMcpHeaderMap(row.id), signInBy(appCredentials, row.headers !== null)),
+      ...mcpCredentialTransport(row.serverUrl, () => this.openMcpHeaderMap(row.id), signInBy(appCredentials, row.headers !== null), this.refused(row.id)),
       type: row.transport,
     };
 
@@ -408,6 +411,13 @@ export class UserMcpServers {
 
     if (stored?.auth_url) options.authUrl = stored.auth_url;
     await mgr.registerServer(row.id, options);
+  }
+
+  /** Logs `serverId`'s refusal: its status and `WWW-Authenticate`, never the token or the body. */
+  private refused(serverId: string): (refusal: McpRefusal) => void {
+    return (refusal) => {
+      diagnostics.event('mcp.server_refused', { serverId, method: refusal.method, rpc: refusal.rpc ?? '', status: refusal.status, wwwAuthenticate: refusal.wwwAuthenticate ?? '' });
+    };
   }
 
   /** Read per request so rotated headers apply without reconnect and no decrypted copy is held. */
@@ -465,11 +475,12 @@ export class UserMcpServers {
 
     return rows.map((r): McpServerSummary => {
       const conn = connections[r.id];
-      const status = mapConnectionStatus(conn?.connectionState);
       const read = readAllowedTools(r.allowed_tools, r.name);
       // A corrupt list allows none: an empty list, and why, on the server's card.
       const allowed = 'failure' in read ? [] : read.allowed;
       const listing = conn?.connectionState === 'connected' ? this._mcpToolLists.get(r.id) : undefined;
+      // A server that answers its handshake and fails its tool list offers nothing: it reads failed, not connected.
+      const status = listing !== undefined && 'failure' in listing ? 'failed' : mapConnectionStatus(conn?.connectionState);
       const lenient = listing !== undefined && 'listed' in listing ? listing.listed : null;
 
       const tools = lenient === null
@@ -486,8 +497,9 @@ export class UserMcpServers {
 
       const toolsCount = allowed ? tools.filter((t: { name: string }) => allowed.includes(t.name)).length : tools.length;
 
-      // The person begins it for a fresh address; a declined sign-in is not dialled again on its own.
-      const signIn = offersSignIn(status, signInFacts(r.id));
+      // The person begins it for a fresh address; a declined sign-in is not dialled again on its own. A failed tool list
+      // offers none: its transport is still connected, which a sign-in would not replace (`userMcp_beginConnect`).
+      const signIn = offersSignIn(mapConnectionStatus(conn?.connectionState), signInFacts(r.id));
 
       return {
         id: r.id,
@@ -578,7 +590,7 @@ export class UserMcpServers {
     const authProvider = this.oauthProvider({ serverId: id, callbackUrl, appCredentials, preset });
 
     // The transport's fetch is a closure, never data the SDK can persist; see `mcpCredentialTransport`.
-    const credential = mcpCredentialTransport(cfg.serverUrl, () => this.openMcpHeaderMap(id), signInBy(appCredentials, headersJson !== null));
+    const credential = mcpCredentialTransport(cfg.serverUrl, () => this.openMcpHeaderMap(id), signInBy(appCredentials, headersJson !== null), this.refused(id));
 
     let authUrl: string | null = null;
     const mgr = this.host.mcp;
@@ -700,6 +712,17 @@ export class UserMcpServers {
   }
 
   private async readMcpToolList(id: string): Promise<void> {
+    const joined = this.listings.get(id);
+
+    if (joined !== undefined) return joined;
+    const listing = this.listMcpTools(id).finally(() => { this.listings.delete(id); });
+
+    this.listings.set(id, listing);
+
+    return listing;
+  }
+
+  private async listMcpTools(id: string): Promise<void> {
     const conn = this.host.mcp.mcpConnections[id];
 
     if (conn?.connectionState !== 'connected') {
@@ -711,6 +734,7 @@ export class UserMcpServers {
     const name = this.catalog().get(id)?.name ?? id;
     const { readUndiscoveredToolList } = await import('./mcp');
     const listing = await readUndiscoveredToolList({ name }, conn.client);
+
     this._mcpToolLists.set(id, listing);
 
     for (const refusal of 'listed' in listing ? mcpListingRefusals({ id, name }, listing.listed) : []) {
