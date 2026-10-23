@@ -134,13 +134,45 @@ describe('the mesh answers the roster', () => {
     stepSeconds(decided, 30);
     expect(decided.settled()).toBe(true);
 
+    // A pointer swept along the top edge for three seconds fires the cells it crosses; a few seconds after it last
+    // moved, what it set off has died out of the picture.
     const pointed = mesh();
+    let lit = 0;
 
-    pointed.setPointer(0.95, 0.05);
-    stepSeconds(pointed, 0.5);
+    for (let tick = 0; tick < 180; tick += 1) {
+      pointed.setPointer(0.2 + 0.6 * (tick / 180), 0.04);
+      pointed.step(DT);
+      lit = Math.max(lit, pointed.frame().nodeCount);
+    }
+
+    expect(lit).toBeGreaterThan(0);
     expect(pointed.settled()).toBe(false);
-    stepSeconds(pointed, 30);
-    expect(pointed.settled()).toBe(true);
+
+    let after = 0;
+
+    for (; !pointed.settled() && after < 60 * 30; after += 1) pointed.step(DT);
+
+    expect(after * DT).toBeLessThan(8);
+  });
+
+  test('a settled mesh draws what an untouched one draws, its dimmest leftovers included', () => {
+    const touched = mesh();
+    const untouched = mesh();
+
+    for (let tick = 0; tick < 180; tick += 1) {
+      touched.setPointer(0.2 + 0.6 * (tick / 180), 0.04);
+      touched.step(DT);
+    }
+
+    for (let tick = 0; !touched.settled() && tick < 60 * 30; tick += 1) touched.step(DT);
+
+    const settled = touched.frame();
+    const resting = untouched.frame();
+
+    expect(settled.nodeCount).toBe(0);
+    expect(settled.pulseCount).toBe(0);
+    expect(settled.count).toBe(resting.count);
+    expect(settled.strokes.slice(0, settled.count * STROKE_STRIDE)).toEqual(resting.strokes.slice(0, resting.count * STROKE_STRIDE));
   });
 
   test('a press fires the nearest cell, and the pointer charges the cells beneath it', () => {

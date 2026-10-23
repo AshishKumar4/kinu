@@ -146,6 +146,9 @@ const LEAK = 3;
 
 const REFRACTORY = 4;
 
+/** How lit a cell must be to be drawn: below it, a frame draws the cell as the resting tissue does. */
+const LIT = 0.06;
+
 /**
  * The chance one arriving signal fires its cell, by the synapse's own strength, idle and while agents work. Each cell
  * reaches two or three others, so a cascade runs on to about 1 / (1 - kp) cells: a handful idle, a sweep of tens
@@ -431,14 +434,17 @@ export class NeuralMesh {
   }
 
   /**
-   * Nothing lit, charged, travelling or waiting, and no pointer held: another step would draw the same frame, so a
-   * renderer may stop until something moves. A temperament that fires on its own never settles.
+   * Nothing drawn lit, travelling or waiting, and no pointer held: another step would draw the same frame, so a
+   * renderer may stop until something moves. A cell's glow below what a frame draws, and its charge, only fade with
+   * nothing arriving, so they keep no picture moving; they wait where they are until something does. A temperament
+   * that fires on its own never settles.
    */
   settled(): boolean {
     if (Number.isFinite(this.nextFiring)) return false;
     const attention = this.flashAge !== null && envelope(this.flashAge) > 0.02;
+    const drawn = this.active.some((index) => (this.cells[index]?.glow ?? 0) >= LIT);
 
-    return !attention && this.hold === 0 && this.active.length === 0 && this.spikes.length === 0 && this.flashing.length === 0 && this.queued.length === 0;
+    return !attention && this.hold === 0 && !drawn && this.spikes.length === 0 && this.flashing.length === 0 && this.queued.length === 0;
   }
 
   clearPointer(): void {
@@ -489,7 +495,7 @@ export class NeuralMesh {
       if (cell === undefined) continue;
       const lit = cell.glow + this.temperament.senseLight * cell.sense;
 
-      if (lit < 0.06) continue;
+      if (lit < LIT) continue;
       count = this.writeLit(cell, count);
       const spot = this.spot;
 
