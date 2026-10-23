@@ -20,7 +20,7 @@ import {
   isSubagentOrigin, WORKSPACE_ROOT, PLATFORM_CATALOG, ProgramsInFlight, type OwedIntent, type OwedOwnerIntent, cardWords,
   specProvider, WORKERS_AI_PROVIDER_ID,
 } from '@kinu.run/core';
-import type { EnqueueTurnResult, MailDeps, OwnerWaitsHost, PanelAgent, ProgrammaticTurn, RecordedTurn, SendState, SubagentInspectionRequest, SubagentInspectionResult } from '@kinu.run/core';
+import type { EnqueueTurnResult, GoogleDeps, MailDeps, OwnerWaitsHost, PanelAgent, ProgrammaticTurn, RecordedTurn, SendState, SubagentInspectionRequest, SubagentInspectionResult } from '@kinu.run/core';
 import type { SubagentActivityEvent } from '@kinu.run/core';
 import type { Fact } from '@kinu.run/core';
 import type { SubagentView } from '@kinu.run/core/protocol';
@@ -2846,6 +2846,7 @@ export abstract class ActorAgent extends Agent<Env> {
           // Its own turn's programs and an outside caller reach what waits on its owner from its work, as it does in eval.
           ownerWaits: this.hireOwnerWaits(hosted),
           mail: this.mailFor(hosted.handle.actorId, hosted.record.name),
+          google: this.googleFor(hosted.handle.actorId, hosted.record.name),
         });
 
         const providers = actorNamespaces(surface.actor, SURFACE_POLICY.operations);
@@ -2924,11 +2925,17 @@ export abstract class ActorAgent extends Agent<Env> {
       // The workspace's agent reads what waits on its owner through its own `agent.*`.
       ownerWaits: null,
       mail: this.mailFor(this.rt.actor.actorId, 'main'),
+      google: this.googleFor(this.rt.actor.actorId, 'main'),
     };
   }
 
   /** `mail.*` for one of this workspace's agents over its owner's Mailbox (docs/MAIL.md §3); null where there is no mail. */
   protected mailFor(_actorId: string, _name: string): MailDeps | null {
+    return null;
+  }
+
+  /** `google.*` for one of this workspace's agents through its owner's Google connection; null where there is none. */
+  protected googleFor(_actorId: string, _name: string): GoogleDeps | null {
     return null;
   }
 
@@ -3363,7 +3370,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * own turn runs, never the workspace actor's (pinned by `tests/unit-slate-composition.test.ts`).
    */
   protected hostedActorSurface(
-    actor: SeatedActor, reach: { readonly account: boolean; readonly ownerWaits: OwnerWaitsHost | null; readonly mail?: MailDeps | null },
+    actor: SeatedActor, reach: { readonly account: boolean; readonly ownerWaits: OwnerWaitsHost | null; readonly mail?: MailDeps | null; readonly google?: GoogleDeps | null },
   ) {
     // `ActorHostDeps.runtimeFor` is `createCFRuntime` on this backend; core only narrows the type.
     const { runtime } = actor;
@@ -3379,7 +3386,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const webSearch = this.ownedModelServices.getWebSearchProvider();
     // Served once: the slate's `tools.*` and its named namespaces run the same operations.
     const stores = serveStores(builtinStoreDeps(inputs));
-    const surface = this.hostedSurface({ ...actor, runtime }, { search: webSearch, stores, ownerWaits: reach.ownerWaits, mail: reach.mail ?? null });
+    const surface = this.hostedSurface({ ...actor, runtime }, { search: webSearch, stores, ownerWaits: reach.ownerWaits, mail: reach.mail ?? null, google: reach.google ?? null });
 
     return { actor: surface, native: buildBuiltinTools({ ...inputs, webSearch }, stores) };
   }
@@ -3387,7 +3394,10 @@ export abstract class ActorAgent extends Agent<Env> {
   /** A hosted actor's program surface over `held.stores`, with this workspace's browser for it. */
   protected hostedSurface(
     actor: CFSeat,
-    held: { readonly search: WebSearchProvider; readonly stores: ServedStores; readonly ownerWaits: OwnerWaitsHost | null; readonly mail: MailDeps | null; readonly agents?: () => AgentsToolDeps },
+    held: {
+      readonly search: WebSearchProvider; readonly stores: ServedStores; readonly ownerWaits: OwnerWaitsHost | null; readonly mail: MailDeps | null;
+      readonly google: GoogleDeps | null; readonly agents?: () => AgentsToolDeps;
+    },
   ): SurfaceActor {
     const { search, ...reached } = held;
 

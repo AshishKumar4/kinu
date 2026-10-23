@@ -246,7 +246,7 @@ import {
   recordJobSettled, recordSandboxRecovery, type AgentKind,
 } from "@kinu.run/core/analytics";
 import {
-  agentSelfHost, actorNamespaces, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost, type MailDeps, type MailThreadSummary, type OwnerWaitsHost,
+  agentSelfHost, actorNamespaces, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost, type GoogleDeps, type SlateEffectVerdict, type MailDeps, type MailThreadSummary, googleConnectionClient, type OwnerWaitsHost,
   ownerWaits, ownerWaitsHost, wakeMetOwnerWaits, type OwnerWaitReader, type ScopedOwnerWait,
   AgentWorkspaceStore, createAgentWorkspace, type AgentWorkspaceDeps,
   DeviceConsentRegistry, DeviceConsentStore,
@@ -275,6 +275,7 @@ import {
 import type { RestoreStatus, SessionRecord, StartAdmission, TerminalSession } from "@kinu.run/devbox";
 import type { BoxSize } from "@kinu.run/devbox/sizes";
 import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY, type ComputerSizeState } from "./computer-size";
+import { readOutgoing } from "./mail/parse";
 import type { ComputerSize } from "@kinu.run/core";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { forgetSandboxPreviews, sandboxPreviewExposures } from "@kinu.run/core";
@@ -440,6 +441,11 @@ function runEndKey(end: Pick<RunEndReport, 'id' | 'runId'>): string {
 
 /** At most this often an open makes a listed share's Gallery card be told its viewers again. */
 const VIEWS_SYNC_MS = 60 * 60 * 1000;
+
+/** An exact ask's verdict as an agent's call reads it: approved, or the approval it waits on. */
+function exactAnswer(verdict: SlateEffectVerdict): { readonly outcome: 'approved' } | { readonly outcome: 'asked' | 'denied'; readonly approval: string } {
+  return verdict.outcome === 'approved' ? verdict : { outcome: verdict.outcome, approval: verdict.action.id };
+}
 
 export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private readonly addressedName: string;
@@ -1600,7 +1606,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     actor: SeatedActor, runtime: CFRuntime,
     held: { readonly search: WebSearchProvider; readonly stores: ServedStores; readonly agents?: () => AgentsToolDeps },
   ): SurfaceActor {
-    return this.hostedSurface({ ...actor, runtime }, { ...held, ownerWaits: this.hireOwnerWaits(actor), mail: this.mailFor(actor.handle.actorId, actor.record.name) });
+    return this.hostedSurface({ ...actor, runtime }, { ...held, ownerWaits: this.hireOwnerWaits(actor), google: this.googleFor(actor.handle.actorId, actor.record.name), mail: this.mailFor(actor.handle.actorId, actor.record.name) });
   }
 
   /**
@@ -2691,12 +2697,28 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       mailbox: () => objectNamed(this.env.MAILBOX, owner),
       // An agent's message waits in this workspace's one queue, as every parked action does; its agent is woken by the answer.
       approvals: {
-        ask: (id, send) => {
-          const verdict = this.deferrals.mailSend(id, send, actorId);
-
-          return verdict.outcome === 'approved' ? verdict : { outcome: verdict.outcome, approval: verdict.action.id };
-        },
+        ask: (id, send) => exactAnswer(this.deferrals.mailSend(id, send, actorId)),
         take: (id) => this.deferrals.takeMailSend(id, actorId),
+        settle: async (spend, outcome) => this.deferrals.settle(spend, outcome, actorId),
+      },
+    };
+  }
+
+  /**
+   * `google.*` through the owner's Google connection, where the deployment has its client: a read is made by the
+   * account at once; a write waits in this workspace's one queue, as an agent's message does, and is made once on approval.
+   */
+  protected override googleFor(actorId: string, name: string): GoogleDeps | null {
+    if (googleConnectionClient(this.env) === null || this.getOwnerUserId() === null) return null;
+
+    return {
+      by: () => (actorId === this.actorHandle().actorId ? this.safeDisplayName() : name),
+      send: async (request) => await this.requireOwnerUserDO().googleCall(await this.userCaller(), request),
+      readMail: async (raw) => await readOutgoing(raw),
+      held: async () => (await this.requireOwnerUserDO().googleConnection(await this.userCaller())) !== null,
+      approvals: {
+        ask: (id, write) => exactAnswer(this.deferrals.googleWrite(id, write, actorId)),
+        take: (id) => this.deferrals.takeGoogleWrite(id, actorId),
         settle: async (spend, outcome) => this.deferrals.settle(spend, outcome, actorId),
       },
     };

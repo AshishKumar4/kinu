@@ -15,6 +15,10 @@
  *   subject and text. Bound to the address it is sent from (`executor` = {@link mailSendExecutor}). The agent that asked
  *   sends it on its next call with the same message, which takes the approval, so one approval sends it once. No
  *   standing approval is kept for it: every message asks.
+ * - `google-write`: a call an agent asked to make at Google through the account's Google connection that sends,
+ *   changes or deletes something there, naming the method and its exact parameters and body. Bound to that method
+ *   (`executor` = {@link googleWriteExecutor}). As a message is, it is sent by the agent's next call with the same
+ *   request, which takes the approval, and every call asks.
  *
  * Every reader switches on {@link ApprovalKind}; none reads the text itself.
  */
@@ -58,17 +62,38 @@ export interface MailSend {
   readonly thread: string | null;
 }
 
+/** A call an agent asked to make at Google that writes, exactly as the owner is asked to let it go once. */
+export interface GoogleWrite {
+  /** The agent that asks, by name. */
+  readonly by: string;
+  /** The method, `gmail.users.messages.send`, and what it does in Google's words. */
+  readonly method: string;
+  readonly does: string;
+  readonly params: Readonly<Record<string, JsonValue>>;
+  /** The request body; null for a method that takes none. */
+  readonly body: JsonValue;
+  /** A message it sends or keeps, as its card draws it: read from the body's MIME, or the draft's, when there is one.
+   *  Every recipient Gmail delivers to is named, Bcc's too. */
+  readonly mail: { readonly to: string; readonly cc: string; readonly bcc: string; readonly subject: string; readonly start: string } | null;
+  /** A draft sent by id: the sha256 of the whole message it held when asked, so an approval sends that draft only as it
+   *  was, and a changed draft asks anew. Null for any other call, whose body is its content. */
+  readonly content: string | null;
+}
+
 export type ApprovalKind =
   | { readonly kind: 'command'; readonly command: string }
   | { readonly kind: 'write'; readonly write: BoundFileWrite }
   | { readonly kind: 'slate-effect'; readonly effect: SlateEffect }
-  | { readonly kind: 'mail-send'; readonly send: MailSend };
+  | { readonly kind: 'mail-send'; readonly send: MailSend }
+  | { readonly kind: 'google-write'; readonly write: GoogleWrite };
 
 const BOUND_WRITE = /^file write (.+) sha256:([0-9a-f]{64}) over sha256:([0-9a-f]{64})$/su;
 
 const SLATE_EFFECT = 'slate effect ';
 
 const MAIL_SEND = 'mail send ';
+
+const GOOGLE_WRITE = 'google write ';
 
 const JsonValueSchema: v.GenericSchema<JsonValue> = v.lazy(() => v.union([
   v.string(), v.number(), v.boolean(), v.null(), v.array(JsonValueSchema), v.record(v.string(), JsonValueSchema),
@@ -92,6 +117,24 @@ export function slateEffectExecutor(slate: string): string {
 const MailSendSchema = v.strictObject({
   by: v.string(), from: v.string(), to: v.array(v.string()), cc: v.array(v.string()), subject: v.string(), text: v.string(), thread: v.nullable(v.string()),
 });
+
+const GoogleWriteSchema = v.strictObject({
+  by: v.string(), method: v.string(), does: v.string(), params: v.record(v.string(), JsonValueSchema), body: JsonValueSchema,
+  mail: v.nullable(v.strictObject({ to: v.string(), cc: v.string(), bcc: v.string(), subject: v.string(), start: v.string() })),
+  content: v.nullable(v.string()),
+});
+
+/** What a Google write is bound to, in the row's `executor`: its method. */
+export function googleWriteExecutor(method: string): string {
+  return `google:${method}`;
+}
+
+/** The text a Google write parks under: its fields in one stable order, so one call is one text. */
+export function googleWriteText(write: GoogleWrite): string {
+  const { by, method, does, params, body, mail, content } = write;
+
+  return `${GOOGLE_WRITE}${stableStringify({ by, method, does, params: { ...params }, body, mail: mail === null ? null : { ...mail }, content })}`;
+}
 
 /** What an agent's message is bound to, in the row's `executor`: the address it leaves from. */
 export function mailSendExecutor(from: string): string {
@@ -126,6 +169,12 @@ export function approvalKindOf(row: { readonly command: string; readonly executo
     const send = v.safeParse(v.pipe(v.string(), v.parseJson(), MailSendSchema), command.slice(MAIL_SEND.length));
 
     if (send.success && row.executor === mailSendExecutor(send.output.from)) return { kind: 'mail-send', send: send.output };
+  }
+
+  if (row.executor.startsWith(googleWriteExecutor('')) && command.startsWith(GOOGLE_WRITE)) {
+    const write = v.safeParse(v.pipe(v.string(), v.parseJson(), GoogleWriteSchema), command.slice(GOOGLE_WRITE.length));
+
+    if (write.success && row.executor === googleWriteExecutor(write.output.method)) return { kind: 'google-write', write: write.output };
   }
 
   return { kind: 'command', command };

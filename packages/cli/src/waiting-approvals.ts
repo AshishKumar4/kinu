@@ -87,6 +87,7 @@ function parkedWhat(parked: ApprovalKind): string {
     case 'command': return literalText(parked.command || '(command)');
     case 'write': return `Replace ${literalText(parked.write.path)}`;
     case 'slate-effect': return `${literalText(parked.effect.tool)} on ${literalText(parked.effect.server)}, for ${literalText(parked.effect.viewer)}`;
+    case 'google-write': return `Google: ${literalText(parked.write.does)} (${literalText(parked.write.method)})`;
     case 'mail-send': return `Send mail from ${literalText(parked.send.from)} to ${literalText(parked.send.to.join(', '))}: ${literalText(parked.send.subject)}`;
   }
 }
