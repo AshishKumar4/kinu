@@ -199,8 +199,10 @@ describe('a device key is the credential, and device.json alone is not', () => {
     copyFileSync(join(owners, 'device.json'), join(copy, 'device.json'));
     const thief = startDaemon(copy);
 
-    // The owner's machine took answers 0 and 1; the copy asks for nothing and stops.
-    expect(await firstOf(thief, bridge, 2)).toEqual({ exited: REJECTED_EXIT });
+    // The owner's machine took answers 0 and 1. The copy is answered a challenge, as anyone is, has nothing to sign it
+    // with, and stops before any exchange.
+    expect(await firstOf(thief, bridge, 2)).toEqual({ answered: '/pc/connect-challenge 200' });
+    expect(await firstOf(thief, bridge, 3)).toEqual({ exited: REJECTED_EXIT });
     expect(thief.log()).toContain('device credentials were rejected');
     expect(thief.log()).toContain('no device key');
     // One ticket was ever bought, by the owner's machine; the copy asked for none, and the machine is untouched.
