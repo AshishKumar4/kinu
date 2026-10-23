@@ -5,6 +5,7 @@
 import { SLATES_ROOT, workspacePath, WORKSPACE_ROOT } from '../packages/core/src/vfs/workspace-path';
 import type { ScriptedAnswer, ScriptedRequest } from './scripted-protocol';
 import { safeJsonParse } from '../packages/core/src/utils/json';
+import { TURN_STEERING_HEADER } from '../packages/core/src/orchestrator/turn-steering';
 
 /** A file name no scaffold file can carry. */
 export const FLOW_PROBE = 'flow-probe.txt';
@@ -130,11 +131,12 @@ const SPLICE_PAGE = [
 ].join('\n');
 
 /** The splice row's turns: a step's words and its wait per step, then the pings that reached the turn, in order. A
- *  page's word arrives as a message of its own, so the turn's ask is the latest message that is not a ping. */
+ *  page's word arrives as a message of its own, and the harness's steer for the third same wait as another, so the
+ *  turn's ask is the latest message that is neither. */
 function spliceScript(request: ScriptedRequest, latest: string): ScriptedAnswer | null {
   if (latest.includes(SPLICE_PAGE_ASK)) return { text: `Here is the page.\n\n${SPLICE_PAGE}` };
 
-  if ([...request.userTexts].reverse().find((text) => !text.includes(SPLICE_SENT))?.includes(SPLICE_WORK_ASK) !== true) return null;
+  if ([...request.userTexts].reverse().find((text) => !text.includes(SPLICE_SENT) && !text.includes(TURN_STEERING_HEADER))?.includes(SPLICE_WORK_ASK) !== true) return null;
   const step = SPLICE_STEPS.find((words) => !request.assistantTexts.includes(words));
 
   if (step !== undefined) return { text: step, toolCall: { name: 'shell', arguments: { runtime: 'workspace', command: SPLICE_SLEEP } } };
