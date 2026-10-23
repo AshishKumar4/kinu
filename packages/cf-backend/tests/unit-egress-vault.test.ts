@@ -300,16 +300,32 @@ describe("the GitHub connection is every workspace's git credential, never its v
     harness.close();
   });
 
-  test('anywhere but github.com it is never sent: git\'s Basic goes on without it, anywhere else it is refused', async () => {
+  test('anywhere but github.com its value is never sent: git\'s Basic goes on without it, anywhere else it is refused', async () => {
     const harness = await connected();
     const placeholder = await placeholderIn(harness, harness.shop, 'KINU_GITHUB_TOKEN');
     const gitlab = fetchPack(placeholder, 'https://gitlab.com/owner/public.git/info/refs?service=git-upload-pack');
+    const withheld = { kind: 'forward', substitutions: [], withholdAuthorization: true } as const;
 
-    // Nimbus's git sends its credential to every host: a public repository elsewhere is still read, anonymously.
-    expect(await harness.userDO.resolveEgressInjection(harness.owner, gitlab, 'shop')).toEqual({ kind: 'forward', substitutions: [], withholdAuthorization: true });
+    // Nimbus's git sends its credential to every host: a public repository elsewhere is still read, anonymously, over
+    // any scheme, since nothing is substituted.
+    expect(await harness.userDO.resolveEgressInjection(harness.owner, gitlab, 'shop')).toEqual(withheld);
+    expect(await harness.userDO.resolveEgressInjection(harness.owner, { ...gitlab, url: 'http://git.example.org/public.git/info/refs', host: 'git.example.org' }, 'shop')).toEqual(withheld);
     expect((await harness.userDO.resolveEgressInjection(harness.owner, { ...gitlab, url: `${gitlab.url}&t=${placeholder}` }, 'shop')).kind).toBe('refuse');
     expect((await harness.userDO.resolveEgressInjection(harness.owner, { ...gitlab, headers: [['x-token', placeholder]] }, 'shop')).kind).toBe('refuse');
     expect(await harness.userDO.revealedSecrets(harness.shop)).toEqual({});
+    harness.close();
+  });
+
+  test('beside an owner\'s secret in the same Authorization header it is refused, so that secret is never dropped unsaid', async () => {
+    const harness = await connected();
+
+    await harness.userDO.putSecrets(harness.owner, [{ name: 'GIT_USERNAME', hosts: ['gitlab.com'], position: AUTHORIZATION, value: 'owner-user' }], ['shop']);
+    const connection = await placeholderIn(harness, harness.shop, 'KINU_GITHUB_TOKEN');
+    const user = await placeholderIn(harness, harness.shop, 'GIT_USERNAME');
+    const url = 'https://gitlab.com/owner/private.git/info/refs?service=git-upload-pack';
+    const mixed: EgressRequestFacts = { host: 'gitlab.com', url, headers: [['authorization', `Basic ${btoa(`${user}:${connection}`)}`]] };
+
+    expect((await harness.userDO.resolveEgressInjection(harness.owner, mixed, 'shop')).kind).toBe('refuse');
     harness.close();
   });
 

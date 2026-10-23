@@ -259,6 +259,11 @@ export function planEgress(
   const present = egressPlaceholdersIn(facts);
 
   if (present.size === 0) return { kind: 'forward', substitutions: [] };
+  const byPlaceholder = new Map(granted.map((b) => [b.placeholder, b]));
+  const withheld = new Set([...present].filter((placeholder) => withheldElsewhere(facts, byPlaceholder.get(placeholder), present)));
+
+  // Only connections' credentials, each left off here: nothing is substituted, so the request goes on, over any scheme.
+  if (withheld.size === present.size) return { kind: 'forward', substitutions: [], withholdAuthorization: true };
 
   const scheme = URL.parse(facts.url)?.protocol;
 
@@ -271,11 +276,10 @@ export function planEgress(
     };
   }
 
-  const byPlaceholder = new Map(granted.map((b) => [b.placeholder, b]));
   const substitutions: EgressSubstitution[] = [];
-  let withholdAuthorization = false;
 
   for (const placeholder of present) {
+    if (withheld.has(placeholder)) continue;
     const binding = byPlaceholder.get(placeholder);
 
     if (!binding) {
@@ -289,11 +293,6 @@ export function planEgress(
     }
 
     if (!binding.hosts.some((host) => egressHostMatches(host, facts.host))) {
-      if (withheldElsewhere(facts, binding)) {
-        withholdAuthorization = true;
-        continue;
-      }
-
       return {
         kind: 'refuse',
         status: 403,
@@ -316,12 +315,20 @@ export function planEgress(
     substitutions.push({ name: binding.name, placeholder });
   }
 
-  return withholdAuthorization ? { kind: 'forward', substitutions, withholdAuthorization } : { kind: 'forward', substitutions };
+  return withheld.size > 0 ? { kind: 'forward', substitutions, withholdAuthorization: true } : { kind: 'forward', substitutions };
 }
 
-/** A connection's credential at a host it may not reach, carried only in the `Authorization` header, which is left off. */
-function withheldElsewhere(facts: EgressRequestFacts, binding: EgressSecretBinding): boolean {
-  return binding.elsewhere === 'withheld' && strayPosition(facts, binding.placeholder, { kind: 'authorization' }) === null;
+/**
+ * A connection's credential at a host it may not reach, alone in the `Authorization` header, which is left off. Beside
+ * another placeholder there it is not, so that one is never dropped unsaid: the request is refused, as any would be.
+ */
+function withheldElsewhere(facts: EgressRequestFacts, binding: EgressSecretBinding | undefined, present: ReadonlySet<string>): boolean {
+  if (binding?.elsewhere !== 'withheld' || binding.hosts.some((host) => egressHostMatches(host, facts.host))) return false;
+
+  if (strayPosition(facts, binding.placeholder, { kind: 'authorization' }) !== null) return false;
+  const authorization = facts.headers.filter(([name]) => name.toLowerCase() === 'authorization').map(([, value]) => basicCredential(value)?.decoded ?? value);
+
+  return [...present].every((other) => other === binding.placeholder || !authorization.some((value) => value.includes(other)));
 }
 
 /** Literal to find and its replacement; used only to put the placeholder back over the secret. */
