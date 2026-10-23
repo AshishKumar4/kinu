@@ -131,7 +131,7 @@ export class FacetChat {
               // Its room is sent the transcript's newest messages with its end: they are this isolate's to read.
               const window = await deps.database.seed();
 
-              await workspace.turnEnded(event, deps.database.figures(), deps.database.takeActivity(), window);
+              await workspace.turnEnded(event, await deps.database.figures(), deps.database.takeActivity(), window);
             });
           }
 

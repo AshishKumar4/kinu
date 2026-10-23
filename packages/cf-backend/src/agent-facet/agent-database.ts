@@ -666,10 +666,10 @@ export class AgentDatabase {
     }, editor);
   }
 
-  figures(): AgentFigures {
+  async figures(): Promise<AgentFigures> {
     const actorId = this.readable().actor.actorId;
 
-    return readAgentFigures(this.sql, [actorId]).get(actorId) ?? NO_FIGURES;
+    return (await readAgentFigures(this.sql, [actorId])).get(actorId) ?? NO_FIGURES;
   }
 
   spend(steps: readonly StepSpendSource[]): SpendLedger {
