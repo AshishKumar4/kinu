@@ -60,10 +60,11 @@ When this workspace starts, introduce yourself in a few lines: what you can reac
       about: 'Mail that needs you, with a reason and a draft reply; it speaks only when one does.',
       when: { kind: 'every', minutes: 15 },
       connection: 'google',
-      prompt: `Check {{owner}}'s Gmail with your Gmail tools for mail since your last check. Tell {{owner}} about the mail that needs them, a line on why each, and draft a reply where one is due. If nothing needs them, or you hold no Gmail tools, end without a message.`,
+      prompt: `Check {{owner}}'s Gmail through google.* (google.search finds the method) for mail since your last check. Tell {{owner}} about the mail that needs them, a line on why each, and draft a reply where one is due. If nothing needs them, or Google is not connected, end without a message.`,
     },
   ],
   needs: [
+    // The Google connection (`GOOGLE_CONNECTION`), held while the account holds `google.oauth`.
     { connection: 'google', secret: null, access: 'read', why: 'To read your Gmail and tell you what needs you. It drafts; you send.' },
     { connection: 'github', secret: null, access: 'read', why: 'Your reviews, mentions and pull requests.' },
   ],

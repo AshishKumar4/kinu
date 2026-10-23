@@ -222,6 +222,8 @@ export interface TestUserDOOptions {
   quietWorkspaceGate?: (name: string, ownerUserId: string) => Promise<void>;
   /** Revive over storage a retired DO wrote (eviction). The caller owns the handle; `close` leaves it open. */
   storage?: Database;
+  /** How many `connectionsChanged` notices fail before one is answered. */
+  connectionsChangedFails?: number;
   /** `oauth-app` preset ids the deployment carries a registered app for (fixed values under `MCP_APP_ENV` keys). */
   mcpAppCredentials?: readonly string[];
   /** How a workspace answers the owner's ask for its first tile; absent, the ask is only recorded. */
@@ -429,6 +431,8 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   const revokedSocketPushes: string[] = [];
   const revokedSessionPushes: string[] = [];
   const connectionsChanged: string[] = [];
+  // The first of these notices a workspace is sent fail, as an unreachable one's do.
+  let refusedNotices = options.connectionsChangedFails ?? 0;
   const overviewNudges: string[] = [];
   const secretsMoved: string[] = [];
   const consentPrompts: TestUserDO['consentPrompts'] = [];
@@ -608,8 +612,13 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
       // The asynchronous face of the same pairs, where the SDK's OAuth provider keeps an MCP server's login.
       get: async (key: string): Promise<JsonValue | undefined> => kv.get(key),
       put: async (key: string, value: JsonValue): Promise<void> => { kv.set(key, value); },
-      // One key, or many as the platform's takes them: answered with what it deleted, as each answers.
-      delete: async (key: string | readonly string[]): Promise<boolean | number> => (typeof key === 'string' ? kv.delete(key) : key.filter((each) => kv.delete(each)).length),
+      // One key, or many as the platform's takes them, at most 128 (developers.cloudflare.com/durable-objects/api/
+      // sqlite-storage-api/#delete): answered with what it deleted, as each answers.
+      delete: async (key: string | readonly string[]): Promise<boolean | number> => {
+        if (typeof key !== 'string' && key.length > 128) throw new RangeError(`storage.delete takes at most 128 keys; ${key.length} were given`);
+
+        return typeof key === 'string' ? kv.delete(key) : key.filter((each) => kv.delete(each)).length;
+      },
       list: async (listing: { prefix: string }): Promise<Map<string, JsonValue>> => new Map([...kv].filter(([key]) => key.startsWith(listing.prefix))),
       // The SDK's `destroy()` runs these before the abort; dropping every table matches `deleteAll`.
       deleteAlarm: async (): Promise<void> => {},
@@ -719,6 +728,12 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
           return { closed: 0 };
         },
         async connectionsChanged(connected: readonly string[]) {
+          if (refusedNotices > 0) {
+            refusedNotices -= 1;
+
+            throw new Error(`the workspace ${name} did not answer`);
+          }
+
           connectionsChanged.push(`${name}:${connected.join(',')}`);
         },
         async requestOverviewPush() {

@@ -5,8 +5,9 @@
 import { useState } from "react";
 import { GOOGLE_OAUTH_CRED_KEY, googleConnectPath, type ConnectEnded } from "@kinu.run/core";
 import { beginConnect } from "@/lib/connect-window";
-import { deleteCredential, googleConnection } from "@/lib/user-api";
-import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import { deleteCredential } from "@/lib/user-api";
+import { lastValue, type AsyncResourceControl } from "@/hooks/use-async-resource";
+import type { GoogleConnectionRead } from "@/hooks/use-mcp-servers";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { BrandMark } from "@/components/ui/BrandMark";
 import { Button } from "@/components/ui/Button";
@@ -14,8 +15,9 @@ import { Notice } from "@/components/ui/Notice";
 import { Status } from "@/components/ui/Status";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 
-export function GoogleConnectionCard() {
-  const { resource, reload } = useAsyncResource(googleConnection);
+/** `google`: the page's one read of the connection (`McpServers.google`), which this card reads again after a change. */
+export function GoogleConnectionCard({ google }: { google: AsyncResourceControl<GoogleConnectionRead> }) {
+  const { resource, reload } = google;
   const read = lastValue(resource);
   // How the last connect or disconnect ended, in Google's or Kinu's words: the finish page closed with the only copy.
   const [said, setSaid] = useState<{ readonly tone: "danger" | "warning"; readonly text: string } | null>(null);

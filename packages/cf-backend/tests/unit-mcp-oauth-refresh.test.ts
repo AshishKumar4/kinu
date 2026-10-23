@@ -6,8 +6,7 @@
 import { afterEach, describe, expect, jest, setSystemTime, test } from 'bun:test';
 import { Client, StreamableHTTPClientTransport, UnauthorizedError } from '@modelcontextprotocol/client';
 import { DurableObjectOAuthClientProvider } from 'agents/mcp/do-oauth-client-provider';
-import { asFetchFunction, mcpCredentialTransport, mcpPresetById, type JsonObject } from '@kinu.run/core';
-import { present } from '@kinu.run/test-utils';
+import { asFetchFunction, mcpCredentialTransport, type JsonObject } from '@kinu.run/core';
 import * as v from 'valibot';
 import { RegisteredAppOAuthClientProvider } from '../src/user/mcp-registered-app';
 import { durableObjectStorage } from './helpers/programmatic-host';
@@ -247,7 +246,8 @@ describe('Gmail, which lists its tools to anyone and refuses only a call', () =>
     const google = gmail();
 
     globalThis.fetch = asFetchFunction(google.fetch);
-    const preset = present(mcpPresetById('google'), 'the Gmail preset');
+    // As the retired Gmail preset asked (ledger 1023-n): the registered-app provider is any `oauth-app` server's.
+    const preset = { scope: 'https://www.googleapis.com/auth/gmail.readonly', authorize: { access_type: 'offline', prompt: 'consent' } };
     const callback = 'https://staging.kinu.run/api/user/mcp/callback';
 
     const provider = new RegisteredAppOAuthClientProvider({

@@ -9,14 +9,14 @@ import { Effect } from "effect";
 import { Loader } from "@/components/ui/Loader";
 import { Button } from "@/components/ui/Button";
 import { DownloadSimpleIcon, KeyIcon } from "@phosphor-icons/react";
-import { APP_ROUTES, mcpPresetById, PERSONAL_ASSISTANT_ID } from "@kinu.run/core";
+import { APP_ROUTES, PERSONAL_ASSISTANT_ID } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
 import { Modal } from "@/components/ui/Modal";
 import { Choice, Field } from "@/components/ui/form";
 import { Switch } from "@/components/ui/Switch";
 import { Status } from "@/components/ui/Status";
 import { BrandMark } from "@/components/ui/BrandMark";
-import { presetBrand } from "@/components/plugins/McpPresetCards";
+import { connectionTitle, presetBrand } from "@/components/plugins/McpPresetCards";
 import { installBlueprint, type BlueprintPage } from "@/lib/explore-api";
 import { DEFAULT_ASSISTANT } from "@/components/assistant/AssistantStep";
 import { TextInput } from "@/components/ui/Field";
@@ -25,7 +25,7 @@ import { Surface } from "@/components/ui/Surface";
 /** The brief times Install offers; the blueprint's own is 08:00. */
 const BRIEF_TIMES = ["07:00", "07:30", "08:00", "08:30", "09:00", "09:30"] as const;
 
-export function InstallDialog({ page, connected, onClose }: { page: BlueprintPage; connected: (preset: string | null) => boolean; onClose: () => void }) {
+export function InstallDialog({ page, connected, onClose }: { page: BlueprintPage; connected: (preset: string | null) => boolean | null; onClose: () => void }) {
   const navigate = useNavigate();
   const assistant = page.workspace.id === PERSONAL_ASSISTANT_ID;
   const [name, setName] = useState(assistant ? DEFAULT_ASSISTANT.name : page.workspace.title);
@@ -69,7 +69,7 @@ export function InstallDialog({ page, connected, onClose }: { page: BlueprintPag
           <Surface look="outlined" as="ul" className="p-rows-ruled overflow-hidden">
             {page.workspace.needs.map((need) => {
               const brand = presetBrand(need.connection);
-              const title = need.connection === null ? (need.secret ?? "A secret") : (mcpPresetById(need.connection)?.title ?? need.connection);
+              const title = need.connection === null ? (need.secret ?? "A secret") : connectionTitle(need.connection);
               const has = connected(need.connection);
 
               return (
@@ -80,9 +80,9 @@ export function InstallDialog({ page, connected, onClose }: { page: BlueprintPag
                   <span className="min-w-0 flex-1">
                     <span className="t-body block p-text">{title} <span className="t-meta p-text-3">{need.access === "read" ? "to read" : "to read and write"}</span></span>
                   </span>
-                  {has
-                    ? <Status tone="success">Connected</Status>
-                    : <a href={`${APP_ROUTES.plugins}?add=${need.connection ?? ""}`} className="t-meta shrink-0 p-accent-fg hover:underline">Connect</a>}
+                  {has === true && <Status tone="success">Connected</Status>}
+                  {has === false && <a href={`${APP_ROUTES.plugins}?add=${need.connection ?? ""}`} className="t-meta shrink-0 p-accent-fg hover:underline">Connect</a>}
+                  {has === null && <span className="t-meta shrink-0 p-text-3" data-need-unread>Not checked yet</span>}
                 </li>
               );
             })}
