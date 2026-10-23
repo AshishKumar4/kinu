@@ -39,6 +39,15 @@ describe('StepInjections', () => {
     expect(texts(step4)).toEqual(['q', 'a1', 'landed', 'splice', 'a2', 'later', 'a3']);
   });
 
+  test('asked again at its own step, after a provider fell back, a landed entry is not sent twice', () => {
+    const inj = new StepInjections<{ message: ModelMessage; readonly durable: boolean; readonly landed?: boolean }>();
+
+    inj.drain({ stepNumber: 1, messages: [user('q'), assistant('a1')] }, [{ message: user('landed'), durable: true, landed: true }, { message: user('splice'), durable: false }]);
+    const again = present(inj.drain({ stepNumber: 1, messages: [user('q'), assistant('a1'), user('landed')] }, []), 'the prepared step');
+
+    expect(texts(again)).toEqual(['q', 'a1', 'landed', 'splice']);
+  });
+
   test('an injection enters at the step tail and re-applies at the same base index on later steps', () => {
     const inj = new StepInjections<{ message: ModelMessage; readonly durable: boolean }>();
     expect(inj.drain({ stepNumber: 0, messages: [user('q')] }, [])).toBeUndefined();

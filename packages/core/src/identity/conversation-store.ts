@@ -27,11 +27,12 @@ export interface ConversationTurnPair {
 }
 
 // Non-strict: the enqueue seam writes other stamps.
-const DrainTurnMetadataSchema = v.object({ drainTurnId: v.optional(v.string()) });
+const DrainTurnMetadataSchema = v.object({ drainTurnId: v.optional(v.string()), kinuSpliceAtStep: v.optional(v.number()) });
 
 /**
  * The durable answer to each drain turn: the newest nonempty assistant entry of the turn whose user entry carries `drainTurnId`.
- * Empty answers are omitted: replying with nothing would close a delivery the sender still awaits.
+ * Empty answers are omitted: replying with nothing would close a delivery the sender still awaits. A delivery a running
+ * turn landed (ADR C3) is read: its turn's answer, or with none (stopped, cut off) an empty one, so it is never re-pended.
  */
 export async function answersForDrainTurns(
   transcript: SessionTranscriptReader,
@@ -58,6 +59,8 @@ export async function answersForDrainTurns(
 
       if (answer !== null && answer.content.trim().length > 0) { answers.set(drainTurnId, answer.content); break; }
     }
+
+    if (!answers.has(drainTurnId) && parsed.success && parsed.output.kinuSpliceAtStep !== undefined) answers.set(drainTurnId, '');
   }
 
   return answers;

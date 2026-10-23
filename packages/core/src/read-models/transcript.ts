@@ -100,10 +100,13 @@ export function extendTranscript(
   fold: TranscriptFold, messages: readonly UIMessage[], contiguous = true,
 ): TranscriptFold {
   if (messages.length === 0 && (contiguous || fold.pending.length === 0)) return fold;
-  const entries = [...(contiguous ? fold.entries : sealTranscript(fold).entries)];
+
+  // Across a gap pending steers close, and landed deliveries wait on: the history page and the live window meet at one
+  // turn often, whose answer reads them.
+  const entries = [...(contiguous ? fold.entries : sealTranscript({ ...fold, held: [] }).entries)];
   const steerRowIds = new Set(fold.steerRowIds);
   let pending = contiguous ? [...fold.pending] : [];
-  let held = contiguous ? [...fold.held] : [];
+  let held = [...fold.held];
 
   for (const message of messages) {
     const spliced = spliceRowStep({ metadata: message.metadata });
@@ -175,7 +178,7 @@ function attachLive(
   if (last < 0 || entries[last].message.role !== 'assistant') return entries;
 
   return entries.map((entry, index) => index === last
-    ? { message: entry.message, steers: [...entry.steers, ...live] }
+    ? { ...entry, steers: [...entry.steers, ...live] }
     : entry);
 }
 

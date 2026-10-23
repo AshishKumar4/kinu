@@ -73,6 +73,15 @@ describe('a delivery landed mid-turn', () => {
     expect(last.entries.map((entry) => entry.message.id)).toEqual(['u1', 'sig:evt-1']);
   });
 
+  test('held across a gap between a history page and the live window, and kept when a live steer joins its answer', () => {
+    const history = extendTranscript(EMPTY_TRANSCRIPT_FOLD, [user('u1', 'go'), deliveryRow('sig:evt-1', 'DONE', 1)]);
+    const sealed = sealTranscript(extendTranscript(history, [turn('a1', 3)], false), [live('s-live', 'now this', 2)]);
+
+    expect(sealed.entries.map((entry) => entry.message.id)).toEqual(['u1', 'a1']);
+    expect(sealed.entries[1]?.landed?.map((splice) => splice.id)).toEqual(['sig:evt-1']);
+    expect(sealed.entries[1]?.steers.map((steer) => steer.id)).toEqual(['s-live']);
+  });
+
   test('held across a tick until its answer arrives', () => {
     const first = extendTranscript(EMPTY_TRANSCRIPT_FOLD, [user('u1', 'go'), deliveryRow('sig:evt-1', 'DONE', 1)]);
     const next = extendTranscript(first, [turn('a1', 2)]);

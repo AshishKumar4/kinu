@@ -38,21 +38,23 @@ export class StepInjections<E extends Injection> {
       this.entries.push({ ...entry, index: ctx.messages.length, step: ctx.stepNumber });
     }
 
-    if (!this.entries.some((entry) => entry.landed !== true || entry.step === ctx.stepNumber)) return undefined;
+    // A landed entry stands in the base once the base has grown past it: a later step's, or this step's asked again
+    // after a provider fell back.
+    const inBase = (entry: RecordedInjection<E>) => entry.landed === true && ctx.messages.length > entry.index;
+
+    if (this.entries.every(inBase)) return undefined;
     const next = [...ctx.messages];
     let offset = 0;
-    // A landed entry of an earlier step stands in the base already: it moves only what its own step recorded after it,
-    // whose index was taken before it landed; a later step's index counts it.
-    const landedBefore = new Map<number, number>();
+    // Where the base holds a landed entry, it moves only the entries whose index was taken before it landed.
+    const landedAt: number[] = [];
 
     for (const entry of this.entries) {
-      const held = landedBefore.get(entry.step) ?? 0;
-
-      if (entry.landed === true && entry.step < ctx.stepNumber) {
-        landedBefore.set(entry.step, held + 1);
+      if (inBase(entry)) {
+        landedAt.push(entry.index);
         continue;
       }
 
+      const held = landedAt.filter((index) => index >= entry.index).length;
       // A tool result now standing at the pinned index answers the call before it;
       // land after the pair rather than between its halves.
       let at = entry.index + offset + held;
