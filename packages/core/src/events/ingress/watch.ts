@@ -175,7 +175,8 @@ export async function checkWatcher(deps: WatchDeps, triggerId: string, asked: Wa
     if (trigger === null || check === null) return;
     const read = watchOf(trigger).state;
     const outcome = await deps.run(check, read, input);
-    const committed = await commitCheck(deps, { triggerId, read, outcome, scheduledAt: at, now: now() });
+    const delivery = deliveryOf(input);
+    const committed = await commitCheck(deps, { triggerId, read, outcome, scheduledAt: at, now: now(), ...(delivery !== null && { delivery }) });
 
     // A check is the cost a watcher pays for the turns it spares: each is counted, with why one stopped.
     diagnostics.event('watch.checked', {
@@ -190,6 +191,24 @@ export async function checkWatcher(deps: WatchDeps, triggerId: string, asked: Wa
   return fired;
 }
 
+/** The provider's delivery id a push source hands its check as `input.delivery`, or null. */
+function deliveryOf(input: JsonValue | undefined): string | null {
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) return null;
+  const delivery = input['delivery'];
+
+  return typeof delivery === 'string' && delivery.length > 0 ? delivery : null;
+}
+
+/** Its state kept, its reason written, its firings paused. */
+function parked(registry: TriggerRegistry, trigger: TriggerRow, cause: { readonly reason: WatchParkReason; readonly detail: string }, now: number): void {
+  const watching: JsonObject = { parked: { reason: cause.reason, at: now, detail: cause.detail } };
+  const { state } = watchOf(trigger);
+
+  if (state !== undefined) watching['state'] = state;
+  registry.amendSpec(trigger.id, { ...trigger.spec, watch: watching });
+  registry.pause(trigger.id, now);
+}
+
 /** Its writes made in one synchronous section over the row read again: nothing else of this object runs between the read
  *  and the writes, so a revoke, a pause or another commit lands wholly before or wholly after. */
 async function commitCheck(deps: Pick<WatchDeps, 'registry' | 'log'>, checked: {
@@ -199,9 +218,11 @@ async function commitCheck(deps: Pick<WatchDeps, 'registry' | 'log'>, checked: {
   readonly outcome: WatchOutcome;
   /** The firing that asked for the check, which keys its fire. */
   readonly scheduledAt: number;
+  /** The provider's delivery it answered, which keys its fire instead. */
+  readonly delivery?: string;
   readonly now: number;
 }): Promise<WatchCommit> {
-  const { triggerId, read, outcome, scheduledAt, now } = checked;
+  const { triggerId, read, outcome, scheduledAt, delivery, now } = checked;
   const trigger = deps.registry.get(triggerId);
 
   if (trigger === null || trigger.state !== 'active') return 'dropped';
@@ -219,11 +240,7 @@ async function commitCheck(deps: Pick<WatchDeps, 'registry' | 'log'>, checked: {
   }
 
   if (outcome.kind === 'parked') {
-    const watching: JsonObject = { parked: { reason: outcome.reason, at: now, detail: outcome.detail } };
-
-    if (read !== undefined) watching['state'] = read;
-    deps.registry.amendSpec(triggerId, { ...trigger.spec, watch: watching });
-    deps.registry.pause(triggerId, now);
+    parked(deps.registry, trigger, { reason: outcome.reason, detail: outcome.detail }, now);
 
     return 'parked';
   }
@@ -253,6 +270,7 @@ async function commitCheck(deps: Pick<WatchDeps, 'registry' | 'log'>, checked: {
         ...(trigger.spec['payload'] !== undefined && { user_payload: trigger.spec['payload'] }),
         ...(typeof trigger.spec['mission_label'] === 'string' && { mission_label: trigger.spec['mission_label'] }),
         watch_brief: answer.brief,
+        ...(delivery !== undefined && { watch_delivery: delivery }),
       },
       trigger_creator_trust: trigger.creator_trust,
     },
