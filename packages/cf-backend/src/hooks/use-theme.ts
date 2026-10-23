@@ -1,20 +1,19 @@
 import { useSyncExternalStore } from "react";
-import { DEFAULT_THEME, themeNamed, type ThemeName } from "@kinu.run/core";
+import { DEFAULT_THEME, MODE_KEY, modeFor, PREFERS_LIGHT, themeNamed, type Mode, type ThemeName } from "@kinu.run/core";
 
 /**
- * The mode follows OS `prefers-color-scheme` until a manual toggle persists it on this device. The theme is the
- * account's, named on `<html data-theme>` by the server before the page paints; a choice in Settings re-points it here.
- * The snapshot is cached: `useSyncExternalStore` re-renders forever on a fresh object. The store opens on first use,
- * not on import, because static-markup renders have no `window`.
+ * The mode follows the system until a manual toggle persists it on this device, by core's one rule (`modeFor`), which
+ * the page's head already drew before any module loaded. The theme is the account's, named on `<html data-theme>` by
+ * the server before the page paints; a choice in Settings re-points it here. The snapshot is cached:
+ * `useSyncExternalStore` re-renders forever on a fresh object. The store opens on first use, not on import, because
+ * static-markup renders have no `window`.
  */
-export type ThemeMode = "light" | "dark";
+export type ThemeMode = Mode;
 
 export interface Theme {
   readonly mode: ThemeMode;
   readonly name: ThemeName;
 }
-
-const MODE_KEY = "theme";
 
 /** Server snapshot: what `:root` draws. */
 const SERVER_THEME: Theme = { mode: "dark", name: DEFAULT_THEME };
@@ -26,12 +25,6 @@ interface ThemeStore {
 }
 
 let store: ThemeStore | null = null;
-
-function storedMode(): ThemeMode | null {
-  const v = localStorage.getItem(MODE_KEY);
-
-  return v === "light" || v === "dark" ? v : null;
-}
 
 function apply(theme: Theme): void {
   const root = document.documentElement;
@@ -49,19 +42,30 @@ function commit(open: ThemeStore, next: Theme): void {
 
 function browserStore(): ThemeStore {
   if (store !== null) return store;
-  const mql = window.matchMedia("(prefers-color-scheme: dark)");
+  const mql = window.matchMedia(PREFERS_LIGHT);
 
   const opened: ThemeStore = {
     mql, listeners: new Set(),
-    snapshot: { mode: storedMode() ?? (mql.matches ? "dark" : "light"), name: themeNamed(document.documentElement.dataset.theme) ?? DEFAULT_THEME },
+    snapshot: { mode: modeFor(localStorage.getItem(MODE_KEY), mql.matches), name: themeNamed(document.documentElement.dataset.theme) ?? DEFAULT_THEME },
   };
 
+  // Drawn in the mode it holds from the moment it opens: the head drew the same rule, but the system may have changed
+  // before this store opened, with no change left for it to hear.
+  apply(opened.snapshot);
   mql.addEventListener("change", () => {
-    if (!storedMode()) commit(opened, { ...opened.snapshot, mode: mql.matches ? "dark" : "light" });
+    const mode = modeFor(localStorage.getItem(MODE_KEY), mql.matches);
+
+    if (mode !== opened.snapshot.mode) commit(opened, { ...opened.snapshot, mode });
   });
   store = opened;
 
   return opened;
+}
+
+/** Opens the store as a page boots: from its first frame on, the page is drawn in the mode the store holds and follows
+ *  the system, whether or not any component reads the theme. */
+export function startTheme(): void {
+  browserStore();
 }
 
 export function setMode(mode: ThemeMode): void {

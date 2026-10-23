@@ -5,6 +5,7 @@ import { requestUrl } from '@kinu.run/core';
 import { LANDING_ACCOUNT_READS } from '@/components/landing/landing-fixtures';
 import { LandingPage } from '@/components/landing/LandingPage';
 import type { ConfigRow } from '@/lib/user-api';
+import { startTheme } from '@/hooks/use-theme';
 import "virtual:kinu-theme.css";
 import './index.css';
 
@@ -70,6 +71,9 @@ async function publicPage(root: HTMLElement) {
 }
 
 const page = await publicPage(mount);
+
+// The head painted the mode (core's MODE_BOOT); from here the store holds it and follows the system.
+startTheme();
 
 // scripts/prerender-landing.ts fills the built public documents; dev templates keep an empty root.
 if (mount.firstElementChild === null) createRoot(mount).render(page);
