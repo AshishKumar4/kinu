@@ -543,6 +543,8 @@ describe('an alarm in a version\'s window, beside a deletion under the version b
    *  it, and only one that reaches back to it. `sampledWork`: the API sampled the reads of the version's calls;
    *  `sampledAlarms`: its alarm rows each carry interval 10. `lostAt`: the minute a CliAuthDO's alarm logged
    *  `cli.auth_retired` with no invocation row of it in the window; `earlyAlarm`: that alarm began 5 min before it. */
+  let deletionReads = 0;
+
   const read = async (alarms: readonly string[], canceled: readonly string[], { delivered = '2026-10-23 02:25:00', sampledWork = false, sampledAlarms = false, lostAt = '', earlyAlarm = false } = {}) => {
     const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: async (request) => {
       const asked = v.parse(v.looseObject({ timeframe: v.optional(v.object({ from: v.number() })) }), await request.json());
@@ -565,7 +567,9 @@ describe('an alarm in a version\'s window, beside a deletion under the version b
 
       const reaches = (asked.timeframe?.from ?? Infinity) <= destroyedAt;
 
-      if (has('"view":"events"') && has('"value":"workspace.destroyed"') && has('"key":"fields.object","operation":"eq","value":"deleted-before"') && !has('scriptVersion') && reaches) {
+      if (has('"view":"events"') && has('"operation":"in"')) deletionReads += 1;
+
+      if (has('"view":"events"') && has('"value":"workspace.destroyed"') && /"key":"fields\.object","operation":"(?:eq|in)","value":"[^"]*\bdeleted-before\b/u.test(body) && !has('scriptVersion') && reaches) {
         const row = { timestamp: destroyedAt, source: { event: 'workspace.destroyed', fields: { workspace: 'eval-killn-kimi-0-xrstnt', object: 'deleted-before' } } };
 
         return Response.json({ success: true, result: { events: { events: [row] } } });
@@ -587,6 +591,16 @@ describe('an alarm in a version\'s window, beside a deletion under the version b
 
   test('a delivery cancelled after an earlier version deleted its object is no wake', async () => {
     expect(await idleWakes(['deleted-before'], ['deleted-before'])).toEqual([]);
+  });
+
+  // Staging 99a13686c's window, 2026-10-23: two reads for each of 29 objects were 58 of a version read's 77 requests.
+  test('the deletions of every object a delivery was cancelled for are read together, 200 objects a read', async () => {
+    const others = Array.from({ length: 200 }, (_, at) => `moved-${String(at)}`);
+
+    deletionReads = 0;
+    const wakes = await idleWakes(['deleted-before', ...others], ['deleted-before', ...others]);
+
+    expect({ wakes: wakes.length, deleted: wakes.includes('deleted-before'), reads: deletionReads }).toEqual({ wakes: 200, deleted: false, reads: 4 });
   });
 
   test('an alarm that ran with no work is a wake, and so is a cancelled one of an object never deleted', async () => {
