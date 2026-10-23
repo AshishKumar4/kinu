@@ -2007,7 +2007,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return {
       descriptors: turn && reach.kind === 'workspace' ? this.userMcpDescriptors() : null,
       device: reach.kind === 'workspace' ? actor.runtime.deviceTransport.refreshStatus() : Promise.resolve(),
-      facts: turn ? this.account.factsForTurn(this.actorHandle().name) : null,
+      facts: turn ? this.account.factsForTurn() : null,
       mail,
       unreadMail: turn ? this.unreadMailOf(actor, mail) : null,
       sharedSkills: turn ? listSharedSkills(actor.runtime.storage.vfs) : null,
@@ -2120,7 +2120,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       scaffoldSpend: { source: 'scaffold', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
       attachmentBudget: turn?.surface.ledgers.context ?? turnLedgers().context,
       extensions: () => (reach.kind === 'workspace' ? this.extensions.list() : []),
-      accountFacts: () => planes.facts ?? this.account.factsForTurn(this.actorHandle().name),
+      accountFacts: () => planes.facts ?? this.account.factsForTurn(),
       mail: () => planes.unreadMail ?? this.unreadMailOf(actor, Promise.resolve(ownerMail)),
       dynamic: (reads) => (profile, tools) => this.actorDynamicContext(actor, reach, { profile, tools, reads, surface: turn?.surface ?? null }),
       operation: (profile, operationInputs) => captureOperationProfile({

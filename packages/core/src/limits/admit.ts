@@ -1,7 +1,7 @@
 /**
  * Whether an account may start one new thing, and the words when it may not. Each refusal says what is full, what
  * frees it, and the two ways on that need nothing freed: the person's own model (for the model cap), and their own
- * Kinu at /deploy, with Settings → Backup to bring their data. A refusal is a `budget` KinuError: work that never began.
+ * Kinu at /deploy, with Move my data in Settings to bring their data. A refusal is a `budget` KinuError: work that never began.
  */
 import * as v from 'valibot';
 import { KinuError } from '../obs/error';
@@ -19,7 +19,7 @@ export interface AccountUse {
 }
 
 /** The way on that needs nothing freed, said the same at every limit. */
-const OWN_KINU = 'or run your own Kinu with no limits at /deploy (Settings → Backup downloads your data to bring along).';
+const OWN_KINU = 'or run your own Kinu with no limits at /deploy (Move my data, in Settings under Account, downloads your data to bring along).';
 
 const GB = 1024 ** 3;
 
@@ -116,7 +116,7 @@ export function admitPlatformTurn({ klass, tier, use }: Admission): KinuError | 
 
   return refused(`${ADMISSION_REFUSAL_MARK}: today's free model use is spent (${use.tokensToday.toLocaleString('en-US')} of `
     + `${tier.modelTokensPerDay.toLocaleString('en-US')} tokens); it starts again at 00:00 UTC. To go on now, connect ChatGPT or Claude, `
-    + `or add an API key, in Settings → Models, ${OWN_KINU}`);
+    + `or add an API key, in Settings under Models, ${OWN_KINU}`);
 }
 
 /** What a refusal is about, as the person's page asks of it: the limit, or the account's suspension. */

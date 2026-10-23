@@ -66,6 +66,7 @@ const USER_DO_METHODS = [
   'decideSlateEffect',
   'accountMemory_decide',
   'accountMemory_facts',
+  'accountMemory_turnFacts',
   'accountMemory_forget',
   'accountMemory_forgetNote',
   'accountMemory_propose',

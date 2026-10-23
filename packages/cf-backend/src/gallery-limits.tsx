@@ -81,7 +81,7 @@ const ACCOUNTS: readonly AccountRow[] = [
 
 /** Each refusal as its object words it (core limits/admit.ts), as a page's failed ask carries it. */
 const REFUSALS = {
-  workspaces: "This account has its 3 free workspaces. Remove one to make another, or run your own Kinu with no limits at /deploy (Settings → Backup downloads your data to bring along).",
+  workspaces: "This account has its 3 free workspaces. Remove one to make another, or run your own Kinu with no limits at /deploy (Move my data, in Settings under Account, downloads your data to bring along).",
   storage: "This account stores 1.9 GB, past its free 2 GB, so a new upload cannot be added. Remove files or workspaces to make room, or run your own Kinu with no limits at /deploy.",
   computer: `This account's computers have run their free 20 hours this month (20.0 hours); the hours start again on ${new Date(MONTH_END).toISOString().slice(0, 10)}. Until then, or run your own Kinu with no limits at /deploy.`,
   elsewhere: "This account's free computer is running in release-notes. Stop it there to start one here, or run your own Kinu with no limits at /deploy.",

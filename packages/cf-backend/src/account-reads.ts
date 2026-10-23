@@ -99,27 +99,11 @@ export class AccountReads {
     return this.host.owned() ? this.memory(proposer) : undefined;
   }
 
-  /** The account's facts for one turn of `agent`'s memory block; a user object that does not answer costs the turn that
-   *  block's account lines, never the turn. A free account's limits near their end ride along once a period. */
-  async factsForTurn(agent: string): Promise<readonly Fact[]> {
-    const [facts, near] = await Promise.all([
-      settle(Effect.catch(attempt({ doing: "reading the account's facts for the turn", otherwise: 'unavailable' }, async () => await this.memory({ by: 'agent', agent }).facts()),
-        this.unread('memory.account_read_failed', []))),
-      this.nearLimits(),
-    ]);
-
-    return near === null ? facts : [...facts, near];
-  }
-
-  /** The account's note of its limits near their end (core limits/), said once a period; null when there is none new. */
-  private nearLimits(): Promise<Fact | null> {
-    return settle(Effect.catch(attempt({ doing: "reading the account's limits for the turn", otherwise: 'unavailable' }, async () => {
-      const note = await this.ask((stub, caller) => stub.limits_nearNote(caller));
-
-      return note === null ? null : {
-        key: 'account limits', value: note, confidence: 1, source: 'limits', lastObservedAt: Date.now(), importance: 0.9, veracity: 'tool', origin: null,
-      } satisfies Fact;
-    }), this.unread('limits.near_note_unread', null)));
+  /** The account's facts for one turn's memory block, a free account's limits near their end among them once
+   *  a period; a user object that does not answer costs the turn that block's account lines, never the turn. */
+  factsForTurn(): Promise<readonly Fact[]> {
+    return settle(Effect.catch(attempt({ doing: "reading the account's facts for the turn", otherwise: 'unavailable' },
+      () => this.ask((stub, caller) => stub.accountMemory_turnFacts(caller))), this.unread('memory.account_read_failed', [])));
   }
 
   /** A read the turn does without when the account does not answer: logged as `event`, and `instead` in its place. */

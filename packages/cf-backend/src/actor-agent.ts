@@ -1,4 +1,4 @@
-import { Cause, Effect, Exit } from 'effect';
+import { Cause, Effect, Exit, Result } from 'effect';
 import { ComputerProcessEnds, jobState } from '@kinu.run/core';
 import type { VfsDirent, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 import { type SlateCaller, type SlateCallerHop } from '@kinu.run/core/slates';
@@ -44,7 +44,7 @@ import {
 } from "./cli/rpc-gate";
 import { codemodeSurface, HeldReads, PAGE_KEEPALIVE, readsWrittenBy, ROSTER_READS, type LiveRead, type SqlExec } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
-import { attemptInItsWords, createAgentTracing, hold, recording, renderThrownChain, type AgentTracing, settle, settleSync, settleLoggedSync, settleLogged } from "@kinu.run/core/obs";
+import { attemptInItsWords, createAgentTracing, hold, recording, renderThrownChain, type AgentTracing, type LogEventName, settle, settleSync, settleLoggedSync, settleLogged } from "@kinu.run/core/obs";
 import {
   createActorCompaction, type CompactionExtension,
   createCompactionStateStore,
@@ -1810,19 +1810,30 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /**
-   * Record one non-turn model call (judges, fast tier, evolution, compaction, AI bindings) as a
-   * `model_call` row; filed under the current run or the workspace id. Row shape and pricing guard
-   * live in core's `pricedModelCallEvent`.
+   * `ask` of the owner's limits (core limits/): their own refusal (a limit, a suspension) fails the caller in their
+   * words; an account object that could not be asked is logged as `event` and refuses nothing.
    */
+  private async admittedByLimits(event: LogEventName, ask: (stub: UserHubClient, caller: UserCaller) => Promise<void>): Promise<void> {
+    if (this.getOwnerUserId() === null) return;
+
+    const asked = await settle(Effect.result(attemptInItsWords('unavailable', async () => {
+      const { stub, caller } = await this.userHub();
+
+      await ask(stub, caller);
+    })));
+
+    if (Result.isSuccess(asked)) return;
+
+    if (asked.failure.code === 'budget' || asked.failure.code === 'denied') await settle(Effect.fail(asked.failure));
+    diagnostics.failure(event, asked.failure, { workspace: this.workspaceName() });
+  }
+
   /**
    * A turn on `spec`, admitted by the owner's limits: none starts in a suspended account, and one the platform pays for
    * (Workers AI through the deployment's binding, `createWorkersAIProvider`) is bounded by the free tier's day of tokens.
    */
   protected async admitModelTurn(spec: string): Promise<void> {
-    if (this.getOwnerUserId() === null) return;
-    const { stub, caller } = await this.userHub();
-
-    await stub.limits_admitTurn(caller, specProvider(spec) === WORKERS_AI_PROVIDER_ID);
+    await this.admittedByLimits('limits.turn_unasked', (stub, caller) => stub.limits_admitTurn(caller, specProvider(spec) === WORKERS_AI_PROVIDER_ID));
   }
 
   /** This workspace's stored bytes, as its own database reads them: the platform's number, sampled, never counted. */
@@ -1832,10 +1843,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** New bytes for this workspace (a person's upload, an agent's file): the owner's limits answer, given its size now. */
   protected async admitNewBytes(): Promise<void> {
-    if (this.getOwnerUserId() === null) return;
-    const { stub, caller } = await this.userHub();
-
-    await stub.limits_admitStoredBytes(caller, this.storedSample());
+    await this.admittedByLimits('limits.bytes_unasked', (stub, caller) => stub.limits_admitStoredBytes(caller, this.storedSample()));
   }
 
   /** Tells the owner's limits this workspace's size now; a failure is logged, never the caller's. */
@@ -1861,6 +1869,11 @@ export abstract class ActorAgent extends Agent<Env> {
     })));
   }
 
+  /**
+   * Record one non-turn model call (judges, fast tier, evolution, compaction, AI bindings) as a
+   * `model_call` row; filed under the current run or the workspace id. Row shape and pricing guard
+   * live in core's `pricedModelCallEvent`.
+   */
   protected reportModelCall(report: ModelCallReport): void {
     const event = pricedModelCallEvent(report, this.modelCatalog);
 

@@ -169,16 +169,16 @@ function listLine(row: AccountRow): string {
 
 /** What an action answered, as the operator reads it. */
 interface Said {
-  readonly ok: boolean;
+  readonly done: boolean;
   readonly text: string;
 }
 
 async function act(action: ControlAction): Promise<Said & { readonly result?: unknown }> {
   const answer = await runAction(action);
 
-  if (answer.status !== "ok") return { ok: false, text: answer.status === "stale-auth" ? `${answer.reason} Sign in again, then retry.` : answer.reason };
+  if (answer.status !== "ok") return { done: false, text: answer.status === "stale-auth" ? `${answer.reason} Sign in again, then retry.` : answer.reason };
 
-  return { ok: answer.value.outcome === "ok", text: answer.value.detail, result: answer.value.result };
+  return { done: answer.value.outcome === "ok", text: answer.value.detail, result: answer.value.result };
 }
 
 function InviteDialog({ onClose, onInvited }: { onClose: () => void; onInvited: () => void }) {
@@ -194,7 +194,7 @@ function InviteDialog({ onClose, onInvited }: { onClose: () => void; onInvited: 
     setBusy(false);
     setSaid(answer);
 
-    if (!answer.ok) return;
+    if (!answer.done) return;
     onInvited();
     const path = typeof answer.result === "object" && answer.result !== null && "path" in answer.result ? answer.result.path : null;
 
@@ -216,7 +216,7 @@ function InviteDialog({ onClose, onInvited }: { onClose: () => void; onInvited: 
         </Field>
         <p className="t-meta p-text-3">An invited account has no limits, from its first sign-in. A link works once, for 7 days, for whoever opens it signed in.</p>
         {link !== null && <CopyField value={link} what="the invite link" />}
-        {said !== null && <p role={said.ok ? "status" : "alert"} className={`t-meta ${said.ok ? "p-text-2" : "p-danger"}`}>{said.text}</p>}
+        {said !== null && <p role={said.done ? "status" : "alert"} className={`t-meta ${said.done ? "p-text-2" : "p-danger"}`}>{said.text}</p>}
       </div>
     </Modal>
   );
@@ -233,7 +233,7 @@ function SuspendDialog({ email, userId, onClose, onDone }: { email: string; user
 
     setBusy(false);
 
-    if (!answer.ok) {
+    if (!answer.done) {
       setFailed(answer.text);
 
       return;
@@ -285,7 +285,7 @@ export function AccountStanding({ userId, email, seen, limits, onChanged }: {
     setBusy(false);
     setSaid(answer);
 
-    if (answer.ok) onChanged();
+    if (answer.done) onChanged();
   }));
 
   return (
@@ -322,7 +322,7 @@ export function AccountStanding({ userId, email, seen, limits, onChanged }: {
           : <Button variant="secondary" size="sm" disabled={busy} onClick={() => run({ action: "account.unsuspend", userId })}>Lift the suspension</Button>}
       </div>
       <p className="t-meta p-text-3">Invited lifts every limit. Suspended can&apos;t sign in; their data stays until you lift it or remove the account.</p>
-      {said !== null && <p role={said.ok ? "status" : "alert"} className={`t-meta ${said.ok ? "p-text-2" : "p-danger"}`}>{said.text}</p>}
+      {said !== null && <p role={said.done ? "status" : "alert"} className={`t-meta ${said.done ? "p-text-2" : "p-danger"}`}>{said.text}</p>}
       {suspending && <SuspendDialog email={email} userId={userId} onClose={() => setSuspending(false)} onDone={onChanged} />}
     </section>
   );

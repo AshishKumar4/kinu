@@ -4,7 +4,7 @@
   */
 
 import {
-  Devbox, type BoxSize, type DevboxState,
+  Devbox, type BoxSize, type DevboxState, type StartAdmission,
   type DevboxIncident, type OutboundPolicy,
   type IncidentDisposition, type RestoreClockPhase,
 } from "@kinu.run/devbox";

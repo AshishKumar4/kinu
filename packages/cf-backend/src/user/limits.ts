@@ -3,11 +3,11 @@
  * first, and what they spend or hold is reported here. A refusal is the account's word, said in core's words.
  */
 import { Effect } from 'effect';
-import { KinuError, settle, settleSync } from '@kinu.run/core/obs';
+import { attempt, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import {
   accountClassOf, admitComputerStart, admitPlatformTurn, admitStoredBytes, admitWorkspace, AccountLimitsStore, dayOf,
   freeTierOf, isLimited, limitReadings, startSize, limitsReport, monthOf, type AccountClass, type AccountLimits, type AccountUse, type Admission,
-  type ComputerSize, type FreeTier, type LimitId, type LimitReading, type LimitsReport, type StoredClass, type UserCaller,
+  type ComputerSize, type Fact, type FreeTier, type LimitId, type LimitReading, type LimitsReport, type StoredClass, type UserCaller,
 } from '@kinu.run/core';
 import { isListedOperator } from '../control-plane/admin-caller';
 import type { UserObjectHost } from './user-host';
@@ -241,7 +241,21 @@ export class UserLimits {
       return [note(`${String(Math.round((limit.used / Math.max(limit.limit, 1)) * 100))}%`)];
     });
 
-    return notes.length === 0 ? null : `${notes.join(' ')} At the limit only new things stop; the person can see each limit in Settings → Usage.`;
+    return notes.length === 0 ? null : `${notes.join(' ')} At the limit only new things stop; the person can see each limit in Settings under Usage.`;
+  }
+
+  /** The near note as a turn's account fact; none when there is nothing new, or the note could not be read (logged). */
+  async nearFact(caller: UserCaller): Promise<Fact | null> {
+    const note = await settle(Effect.catch(attempt({ doing: "reading the account's near limits for a turn", otherwise: 'unavailable' }, () => this.nearNote(caller)),
+      (failure) => Effect.sync(() => {
+        diagnostics.failure('limits.near_note_unread', failure);
+
+        return null;
+      })));
+
+    if (note === null) return null;
+
+    return { key: 'account limits', value: note, confidence: 1, source: 'limits', lastObservedAt: Date.now(), importance: 0.9, veracity: 'tool', origin: null };
   }
 
   // The operator plane's (control-plane routes, as the owner capability, audited there).

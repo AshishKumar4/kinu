@@ -3,7 +3,8 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { GiftIcon, WarningIcon } from "@phosphor-icons/react";
 import { APP_ROUTES } from "@kinu.run/core";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { Cause, Effect } from "effect";
+import { detach, renderThrownChain } from "@kinu.run/core/obs";
 import { redeemInvite } from "@/lib/limits-api";
 import { settingsPath } from "@/components/SettingsRail";
 import { Loader } from "@/components/ui/Loader";
@@ -19,10 +20,10 @@ export default function InvitePage() {
   useEffect(() => {
     let live = true;
 
-    redeemInvite(token).then(
-      () => { if (live) setRedeemed({ phase: "invited" }); },
-      (...rejected: [unknown]) => { if (live) setRedeemed({ phase: "refused", why: renderThrownChain({ cause: rejected[0] }) }); },
-    );
+    detach(Effect.catchCause(
+      Effect.map(Effect.promise(() => redeemInvite(token)), () => { if (live) setRedeemed({ phase: "invited" }); }),
+      (failed) => Effect.sync(() => { if (live) setRedeemed({ phase: "refused", why: renderThrownChain({ cause: Cause.squash(failed) }) }); }),
+    ));
 
     return () => { live = false; };
   }, [token]);

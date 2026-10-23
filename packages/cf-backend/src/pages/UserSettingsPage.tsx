@@ -19,6 +19,7 @@ import { DisplayNameField } from "@/components/account/DisplayNameField";
 import { CliInstallCard } from "@/components/account/CliInstallCard";
 import { DeleteAccountCard } from "@/components/account/DeleteAccountCard";
 import { InviteCard } from "@/components/account/InviteCard";
+import { MoveMyDataSlot } from "@/components/limits/MoveMyDataCard";
 import { DevicesCard } from "@/components/devices/DevicesCard";
 import { AccountUsageCard } from "@/components/account/AccountUsageCard";
 import { ComputerSizeSettings } from "@/components/ComputerSize";

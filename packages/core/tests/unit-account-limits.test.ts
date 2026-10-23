@@ -40,7 +40,7 @@ describe("a free account's limits refuse only something new", () => {
     expect(refused?.code).toBe('budget');
     expect(refused?.message).toContain('3 free workspaces');
     expect(refused?.message).toContain('/deploy');
-    expect(refused?.message).toContain('Settings → Backup');
+    expect(refused?.message).toContain('Move my data, in Settings under Account');
   });
 
   test('past 2 GB stored, a new workspace and a new upload are refused; under it, neither is', () => {
@@ -69,7 +69,7 @@ describe("a free account's limits refuse only something new", () => {
     expect(admitPlatformTurn(free({ tokensToday: 499_999 }))).toBeNull();
     const refused = admitPlatformTurn(free({ tokensToday: 500_000 }));
 
-    expect(refused?.message).toContain('Settings → Models');
+    expect(refused?.message).toContain('Settings under Models');
     expect(refused?.message.startsWith(ADMISSION_REFUSAL_MARK)).toBe(true);
   });
 

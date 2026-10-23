@@ -1405,8 +1405,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     if (this.ctx.container?.running !== true) {
       const admitted = await this.admitStart(this.#size());
 
-      if ('refused' in admitted) throw new DevboxError('refused', admitted.refused);
-      this.#admittedSize = admitted.size;
+      if ('refused' in admitted) await settle(Effect.fail(new DevboxError('refused', admitted.refused)));
+      else this.#admittedSize = admitted.size;
     }
 
     if (this.ctx.container?.running !== true

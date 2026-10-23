@@ -818,6 +818,13 @@ export class UserDO extends Agent<Env> {
     return this.accountMemory.accountMemory_facts(caller);
   }
 
+  /** The account's facts for one turn: its memory's, and its limits near their end once a period, in the one read. */
+  async accountMemory_turnFacts(caller: UserCaller): Promise<Fact[]> {
+    const [facts, near] = await Promise.all([this.accountMemory.accountMemory_facts(caller), this.accountLimits.nearFact(caller)]);
+
+    return near === null ? facts : [...facts, near];
+  }
+
   accountMemory_searchNotes(caller: UserCaller, query: string, limit: number): Promise<AccountNoteHit[]> {
     return this.accountMemory.accountMemory_searchNotes(caller, query, limit);
   }
