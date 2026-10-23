@@ -1879,7 +1879,7 @@ export {
 
 export {
   parseSkillFile, skillNameProblem,
-  discoverSkills, readSkillFile, workspaceSkillPath, skillBodyChars,
+  discoverSkills, listSharedSkills, readSkillFile, workspaceSkillPath, skillBodyChars,
   BUILTIN_SKILLS, BUILTIN_SKILL_FILES, BUILTIN_SKILL_HEADERS, BUILTIN_SKILL_NAMES, isBuiltinSkillFile, skillsMount,
   resolveActiveSkills, extractExplicitInvocations, admitSkillsIndex, admitActiveSkills,
   renderActiveSkillsSection, renderSkillsIndexSection, skillIndexLine, unreadSkillLine,
@@ -1891,7 +1891,7 @@ export type {
   SkillHeader, ParsedSkill, DiscoveredSkill, ActiveSkill, SkillBodyRef,
   SkillsIndex, SkillSource, ActiveSkillSet, ActivationReason,
   SkillParseResult,
-  DiscoverOpts, SkillsDiscovery, UnreadSkillFile, SkillFileRefusal,
+  DiscoverOpts, SkillsDiscovery, UnreadSkillFile, SkillFileRefusal, SharedSkillsListing,
   LoadActiveSkillsOpts, ActivatedSkill,
 } from './skills/index';
 

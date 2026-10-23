@@ -39,6 +39,7 @@ export function resolveTurnSkills(opts: {
   trust: InstructionTrustResolver;
   roleSkills?: readonly string[];
   hides?: DiscoverOpts['hides'];
+  shared?: DiscoverOpts['shared'];
 }): Promise<TurnSkillSurface> {
   const admissionTokens = stepContextLimit(opts.limits);
 
@@ -103,7 +104,10 @@ async function admitTurnSkills(
   opts: Omit<Parameters<typeof resolveTurnSkills>[0], 'limits'>,
   admissionTokens: number,
 ): Promise<TurnSkillSurface> {
-  const discovery = await discoverSkills(opts.vfs, { admissionTokens, trust: opts.trust, ...(opts.hides !== undefined && { hides: opts.hides }) });
+  const discovery = await discoverSkills(opts.vfs, {
+    admissionTokens, trust: opts.trust, ...(opts.hides !== undefined && { hides: opts.hides }), ...(opts.shared !== undefined && { shared: opts.shared }),
+  });
+
   const available = admitSkillsIndex(discovery, admissionTokens);
 
   const activated = resolveActiveSkills({
