@@ -4443,7 +4443,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   async opsMissing(caller: OpsCaller): Promise<MissingBytes> {
     await requireOps(this.env, caller);
 
-    return await missingBytes(this.env.SLATE_PICTURES, picturePrefix(this.name), this.pictures.namedKeys(this.name));
+    return await missingBytes(this.env.SLATE_PICTURES, picturePrefix(this.addressedName), this.pictures.namedKeys(this.addressedName));
   }
 
   async opsTables(caller: OpsCaller): Promise<TablesAnswer> {
