@@ -4,7 +4,10 @@ import { describe, expect, test } from 'bun:test';
 import { APICallError, isStepCount, type ModelMessage } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
-import { ExtensionHost, runChat, type ChatEvent, type ChatFallback } from '../src/index';
+import {
+  asFetchFunction, CHATGPT_CRED_KEY, createChatGptProvider, ExtensionHost, ModelCatalogSession, runChat,
+  type ChatEvent, type ChatFallback, type ModelCallDeps, type ModelInfo,
+} from '../src/index';
 import { ProviderPacer } from '../src/providers/pacing';
 
 /** One text answer, streamed the way the SDK delivers it. */
@@ -56,7 +59,29 @@ const ROW_WINDOW = 1_050_000;
 
 const OLD_TABLE_WINDOW = 272_000;
 
-async function turn(input: { readonly contextWindow: number; readonly model: MockLanguageModelV3; readonly fallbacks?: readonly ChatFallback[]; readonly extensions?: ExtensionHost }) {
+/** The plan's model list answering Sol's row, read by the provider as a signed-in account reads it. */
+async function planRows(): Promise<readonly ModelInfo[]> {
+  const catalog = { models: [{ slug: 'gpt-6.1-sol', display_name: 'GPT-6.1 Sol', visibility: 'list', context_window: OLD_TABLE_WINDOW, max_context_window: ROW_WINDOW }] };
+
+  const deps: ModelCallDeps = {
+    env: {}, sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test',
+    fetch: asFetchFunction(async () => Response.json(catalog)),
+    getAuth: async (key) => (key === CHATGPT_CRED_KEY ? { headers: { Authorization: 'Bearer at-1' } } : null),
+    hasCredential: async (key) => key === CHATGPT_CRED_KEY,
+  };
+
+  return await createChatGptProvider().listModels(deps);
+}
+
+/** What a turn on `spec` is given of its model, as the workspace's catalog session reads it from `rows`. */
+async function contextOf(spec: string, rows: readonly ModelInfo[]) {
+  const id = spec.slice(spec.indexOf('/') + 1);
+
+  return await new ModelCatalogSession({ effectiveSpec: () => spec, lookup: async () => rows.find((row) => row.id === id) ?? null, measured: () => null })
+    .contextFor(spec);
+}
+
+async function turn(input: { readonly contextWindow: number | null; readonly model: MockLanguageModelV3; readonly fallbacks?: readonly ChatFallback[]; readonly extensions?: ExtensionHost }) {
   const events: ChatEvent[] = [];
   let refused: string | null = null;
 
@@ -76,7 +101,8 @@ async function turn(input: { readonly contextWindow: number; readonly model: Moc
 describe('a long history is admitted against the window its model\'s catalog row gives', () => {
   test('past 272k, within the row: sent', async () => {
     const sol = answering();
-    const { refused, events } = await turn({ contextWindow: ROW_WINDOW, model: sol.model });
+    const { contextWindow } = await contextOf('chatgpt/gpt-6.1-sol', await planRows());
+    const { refused, events } = await turn({ contextWindow, model: sol.model });
 
     expect({ refused, calls: sol.calls() }).toEqual({ refused: null, calls: 1 });
     expect(events.find((event) => event.type === 'context-admitted')).toMatchObject({ contextWindow: ROW_WINDOW });
@@ -110,7 +136,8 @@ describe('a fallback is assembled against its own row\'s window, not the failed 
       },
     });
 
-    const { refused } = await turn({ contextWindow: ROW_WINDOW, model: unreachable, fallbacks: [fallback], extensions: host });
+    const { contextWindow } = await contextOf('chatgpt/gpt-6.1-sol', await planRows());
+    const { refused } = await turn({ contextWindow, model: unreachable, fallbacks: [fallback], extensions: host });
 
     expect({ refused, backupCalls: backup.calls(), windows: [windows[0], windows.at(-1)] })
       .toEqual({ refused: null, backupCalls: 1, windows: [ROW_WINDOW, OLD_TABLE_WINDOW] });
