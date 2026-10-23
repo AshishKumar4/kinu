@@ -299,7 +299,7 @@ export class SessionAdvisor {
 
     try {
       while (this.reviewing !== null) {
-        const pending = this.reviewing;
+        const pending: Promise<void> = this.reviewing;
 
         if (await Promise.race([pending.then(() => 'reviewed' as const), expired]) === 'expired' || this.reviewing === pending) return;
       }
@@ -407,7 +407,9 @@ export class SessionAdvisor {
     }
 
     // Never past the newest of the agent's messages: those are what this update reads.
-    const newest = this.conversation.findLastIndex((message) => message.role === 'user');
+    let newest = 0;
+
+    for (const [at, message] of this.conversation.entries()) if (message.role === 'user') newest = at;
     const kept = this.conversation.slice(Math.min(cut, newest));
     const pinned = request !== null && !kept.some((message) => message.content === request) ? [{ role: 'user' as const, content: request }] : [];
 

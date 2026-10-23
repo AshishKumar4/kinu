@@ -7,6 +7,7 @@ import {
   type ActorReference, type DynamicContext, type ModelPricing, type ResolvedTurnProfile, type TierId, type WorkMode,
   type HeadInput, type RunInference, type HeadReport, type SqlExecutor, type MissionBudgetPort, type MissionGovernor, type Executor, turnTags,
   openingCacheCold, type OpenWork, advisorReadTool, advisorReadTools, describeAgentTools, renderToolResult, type AdvisorReadTools, type AgentAdvisorRead,
+  type AgentToolDescriptor, type ServedStores,
 } from '@kinu.run/core';
 import type { TurnCall } from './agent-facets';
 import type { TurnBound, TurnCapabilityOf } from './agent-facet/agent-turn';
@@ -536,9 +537,7 @@ export class AgentTurns {
     );
 
     turn.memoryTail = sources.memoryTail ?? undefined;
-    turn.advisor = advisorReadTools({ files: surface.stores.deps.files, memory: surface.stores.deps.memory });
-    const { file, memory } = turn.advisor;
-    const advisorTools = (await describeAgentTools({ ...(file !== undefined && { file }), ...(memory !== undefined && { memory }) })).descriptors;
+    const advisorTools = await this.advisorTools(turn, surface.stores);
     const brief = run?.brief?.(callableToolNames(mode, surface.offered));
     const facts = this.offeredFacts(turn, prepared);
 
@@ -674,6 +673,14 @@ export class AgentTurns {
     const control = { stores: prepared.surface.stores, ...(signal !== undefined && { signal }) };
 
     return await actor.runtime.executor.execute(code, [...supplied, ...scaffoldProviders(actor.runtime, control, this.mode(turn, prepared))], opts);
+  }
+
+  /** The turn's advisor's read tools over the agent's stores, kept on the turn, and as its isolate is told of them. */
+  private async advisorTools(turn: OpenTurn, stores: ServedStores): Promise<readonly AgentToolDescriptor[]> {
+    turn.advisor = advisorReadTools({ files: stores.deps.files, memory: stores.deps.memory });
+    const { file, memory } = turn.advisor;
+
+    return (await describeAgentTools({ ...(file !== undefined && { file }), ...(memory !== undefined && { memory }) })).descriptors;
   }
 
   /** One of the turn's advisor's reads, on the advisor's own ledger: it never marks what the agent read. A turn this

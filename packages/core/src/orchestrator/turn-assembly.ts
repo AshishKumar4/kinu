@@ -129,6 +129,13 @@ export interface TurnTools {
   readonly advisorReads?: AdvisorReadTools;
 }
 
+/** The turn's advisor's read tools: where its stores are not this isolate's, the ones that read where they are. */
+function advisorReads(offered: TurnTools): AdvisorReadTools {
+  if (offered.advisorReads !== undefined) return offered.advisorReads;
+
+  return advisorReadTools(offered.stores === null ? {} : { files: offered.stores.deps.files, memory: offered.stores.deps.memory });
+}
+
 /** A one-shot run brings its tools and brief; the actor brings the rest. */
 export type RunTurnSources = Omit<TurnAssemblySources, 'toolset' | 'externalTools' | 'wiredToolNames' | 'codemodeCapabilities' | 'brief'>;
 
@@ -329,7 +336,7 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
       artifactVersions: artifacts.versions,
       // The advisor's calls ride the turn's own model sources and spend sink, on its own route.
       advisor: {
-        reads: offered.advisorReads ?? advisorReadTools(offered.stores === null ? {} : { files: offered.stores.deps.files, memory: offered.stores.deps.memory }),
+        reads: advisorReads(offered),
         bind: (serving) => bindRoute(models, serving),
         ...(routed !== undefined && { attemptOf: (served: string) => routed.attemptFor(served) }),
         spend: { report: sources.scaffoldSpend.report, ...(sources.operations !== undefined && { operations: sources.operations }) },
