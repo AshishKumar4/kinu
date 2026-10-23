@@ -321,15 +321,23 @@ export async function approvalsStackAtTheComposer(target: FlowTarget): Promise<A
 
     await sendAndSettle(page, APPROVALS_ASK);
     // Actions belong to this fresh workspace; account-memory cards belong to every workspace of the account. The
-    // flow's card is opened first if another took the front.
+    // flow's card is opened first if another took the front. Its rows and words are read in the look that found both
+    // rows: on staging 2026-10-23 (8769744f6) a card took the front between that look and a second one, which found
+    // none ("Expected string but received undefined").
     await until(page, "both of the flow's parked commands on one card", `(() => {
-      if (${PARKED_ROWS}.length === 2) return true;
+      const rows = ${PARKED_ROWS};
+
+      if (rows.length === 2) {
+        window.flowStack = { rows, words: document.querySelector('${ATTENTION_CARD}')?.textContent ?? '' };
+
+        return true;
+      }
+
       ${STACK_KEYS}.filter((key) => key.startsWith('action:')).forEach((key) => document.querySelector('[data-attention-behind="' + key + '"]')?.click());
 
       return false;
     })()`);
-    const stacked = v.parse(v.tuple([v.string(), v.string()]), await page.evaluate(PARKED_ROWS));
-    const openWords = v.parse(v.string(), await page.evaluate(`document.querySelector('${ATTENTION_CARD}')?.textContent ?? ''`));
+    const { rows: stacked, words: openWords } = v.parse(v.object({ rows: v.tuple([v.string(), v.string()]), words: v.string() }), await page.evaluate('window.flowStack'));
     const remaining = `${STACK_KEYS}.filter((key) => ${JSON.stringify(stacked)}.includes(key))`;
 
     // The older unticked, the newer approved alone.
