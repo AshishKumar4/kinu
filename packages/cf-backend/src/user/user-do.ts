@@ -11,7 +11,7 @@ import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from '../act
 
 import {
   isEvalAccountEmail, objectNamed,
-  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type SecretSummary, type SecretInput, type SecretDestination, type GrantedSecrets, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, type RosterPage, type CredentialSummary, type WorkspaceEntry, type UserProfile, DEVICE_FRAMES, DEVICE_SCREEN_PATH, screenFromSocket, readScreenData, statementText,   armRestore, type ArmedRestore, type RestoreTarget,
+  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type SecretSummary, type SecretInput, type SecretDestination, type GrantedSecrets, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, type RosterPage, type CredentialSummary, type WorkspaceEntry, type UserProfile, DEVICE_FRAMES, DEVICE_SCREEN_PATH, screenFromSocket, readScreenData, statementText,   bookmarkNow, restartedForRestore, restoreArmed, type ArmedRestore, type RestoreTarget,
 } from '@kinu.run/core';
 
 import { DurableObjectOAuthClientProvider, type AgentMcpOAuthProvider } from 'agents/mcp/do-oauth-client-provider';
@@ -1059,25 +1059,22 @@ export class UserDO extends Agent<Env> {
     return new DurableObjectOAuthClientProvider(mcpOAuthStorage(this.ctx, this.env), USER_MCP_CLIENT_NAME, callbackUrl);
   }
 
-  /** The operator's restore (`/ops/restore`): this account's storage, armed to go back to `target` when the object next
-   *  starts; `opsRestart` ends it at once. Only `/ops/restore` holds the capability. */
+  /**
+   * The operator's restore (`/ops/restore`, ARCHITECTURE-DECISIONS W7): this account's storage, armed to go back to
+   * `target` at its next start; `opsRestart` ends it at once. Only `/ops/*` holds the capability.
+   */
   async opsRestore(caller: OpsCaller, target: RestoreTarget): Promise<ArmedRestore> {
-    await requireOps(this.env, caller);
-
-    return await armRestore(this.ctx.storage, target, Date.now());
+    return await restoreArmed(this.ctx, this.env, caller, target);
   }
 
-  /** Ends this activation, so an armed restore lands; the rejection of this call is its receipt. */
+  /** Ends this activation, so an armed restore lands. */
   async opsRestart(caller: OpsCaller): Promise<void> {
-    await requireOps(this.env, caller);
-    this.ctx.abort('ops: restarted for a restore');
+    await restartedForRestore(this.ctx, this.env, caller);
   }
 
   /** Where this object's history stands now. */
   async opsBookmark(caller: OpsCaller): Promise<string> {
-    await requireOps(this.env, caller);
-
-    return await this.ctx.storage.getCurrentBookmark();
+    return await bookmarkNow(this.ctx, this.env, caller);
   }
 
   /** The deploy's walk (`scripts/reset.ts tables`): this account's tables and their rows, what its repair did, and the

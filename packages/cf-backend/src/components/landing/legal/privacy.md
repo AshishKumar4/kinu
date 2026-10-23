@@ -1,6 +1,6 @@
 # Kinu Privacy Policy
 
-Last updated: 20 October 2026
+Last updated: 23 October 2026
 
 I'm Ashish Kumar Singh, and I run Kinu at kinu.run. This page says what Kinu keeps about you, why, and how to remove it. Questions go to privacy@kinu.run.
 
@@ -46,6 +46,8 @@ Kinu improves your agents from your own conversations: it adjusts their instruct
 
 Delete your account in Settings › Account. Kinu then deletes your account, workspaces, files, chats, memories, mail and stored credentials. To delete one thing, delete it where it lives in Kinu.
 
+Kinu's databases keep 30 days of history so that data can be recovered after a fault. Deleted account data can remain in that history for up to 30 days before it is gone for good. It is not used for anything else in that time.
+
 ## Children
 
 Kinu is not for children under 13, and I don't knowingly keep data about them.
@@ -53,3 +55,5 @@ Kinu is not for children under 13, and I don't knowingly keep data about them.
 ## Changes
 
 If this policy changes, I'll update the date above and say what changed on this page.
+
+- 23 October 2026: added that deleted data can remain in database history for up to 30 days.

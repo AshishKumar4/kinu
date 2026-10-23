@@ -41,7 +41,7 @@ import {
   type PlanReview, actorReadHandle, ownerLaneDeclarations, type IntentResult, type OwedIntent, type OwedOwnerIntent,
   createEmailThreadDispatcher,
 } from "@kinu.run/core";
-import { armRestore, censusOf, requireOps, type ArmedRestore, type RestoreTarget, WorkspaceLayoutSchema, type BlueprintSchedule, type OpsCaller, type TablesAnswer, type WorkspaceLayout, type WorkspaceSeed } from '@kinu.run/core';
+import { bookmarkNow, censusOf, missingBytes, requireOps, restartedForRestore, restoreArmed, type ArmedRestore, type MissingBytes, type RestoreTarget, WorkspaceLayoutSchema, type BlueprintSchedule, type OpsCaller, type TablesAnswer, type WorkspaceLayout, type WorkspaceSeed } from '@kinu.run/core';
 import { createHostedWorkspace, type HostedBox, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import { WorkspaceExecutors, type ExecutorFileChunkRead, type ExecutorFileChunkWrite } from "./workspace-executors";
 import { HeldRead } from "./account-reads";
@@ -91,7 +91,7 @@ import type { PartViewer } from "./slates/part-runs";
 import { WorkspaceSlates } from "./workspace-slates";
 import type { McpToolSurface } from "./user/mcp-servers";
 import { closeWorkspaceBrowserSessions, initBrowserSessionTable, ownsBrowserSession } from "@kinu.run/core";
-import { browserCamera, initSlatePictureTable, shareCaptureUrl, SlatePictures, type PictureCapture } from "./slates/pictures";
+import { browserCamera, initSlatePictureTable, picturePrefix, shareCaptureUrl, SlatePictures, type PictureCapture } from "./slates/pictures";
 import { initSlateBuildTable } from "@kinu.run/core/slates";
 import type { BlueprintReading, ShareUser } from "@kinu.run/core/slates";
 import type { MessageBlock } from "./slates/sources";
@@ -4392,25 +4392,31 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * same. A wiped or unborn workspace answers for itself alone: it has no agents. Only `/ops/tables` holds the
    * capability. A Nimbus sibling holds no workspace table.
    */
-  /** The operator's restore (`/ops/restore`): this workspace's storage, its agents' facets with it, armed to go back to
-   *  `target` when the object next starts; `opsRestart` ends it at once. Only `/ops/restore` holds the capability. */
+  /**
+   * The operator's restore (`/ops/restore`, ARCHITECTURE-DECISIONS W7): this workspace's storage, its agents' facets
+   * with it, armed to go back to `target` at its next start; `opsRestart` ends it at once. Only `/ops/*` holds the
+   * capability.
+   */
   async opsRestore(caller: OpsCaller, target: RestoreTarget): Promise<ArmedRestore> {
-    await requireOps(this.env, caller);
-
-    return await armRestore(this.ctx.storage, target, Date.now());
+    return await restoreArmed(this.ctx, this.env, caller, target);
   }
 
-  /** Ends this activation, so an armed restore lands; the rejection of this call is its receipt. */
+  /** Ends this activation, so an armed restore lands. */
   async opsRestart(caller: OpsCaller): Promise<void> {
-    await requireOps(this.env, caller);
-    this.ctx.abort('ops: restarted for a restore');
+    await restartedForRestore(this.ctx, this.env, caller);
   }
 
   /** Where this object's history stands now. */
   async opsBookmark(caller: OpsCaller): Promise<string> {
+    return await bookmarkNow(this.ctx, this.env, caller);
+  }
+
+  /** The slate pictures this workspace's rows name that R2 no longer holds: after a restore, what it could not bring
+   *  back. Its devbox's disk is another object's, and no restore takes it back. */
+  async opsMissing(caller: OpsCaller): Promise<MissingBytes> {
     await requireOps(this.env, caller);
 
-    return await this.ctx.storage.getCurrentBookmark();
+    return await missingBytes(this.env.SLATE_PICTURES, picturePrefix(this.name), this.pictures.namedKeys(this.name));
   }
 
   async opsTables(caller: OpsCaller): Promise<TablesAnswer> {
