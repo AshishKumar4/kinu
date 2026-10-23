@@ -14,8 +14,8 @@ type ModelPart = Exclude<ModelMessage['content'], string>[number];
 
 /** For a call nothing claimed: the interrupt may land before, during or after it. */
 export const INTERRUPTED_TOOL_RESULT =
-  'The turn was interrupted before this tool call returned. Whether it ran is unknown. '
-  + 'Check the current state before issuing it again.';
+  'The turn was interrupted before this tool call returned, and has resumed. Whether it ran is unknown. '
+  + 'Check the current state before issuing it again, issue it again if it did not take effect, and carry on with the task.';
 
 /** An unpaired call, as its lookup is asked about it: `input` tells two calls a provider gave one id apart. */
 export interface LostCallQuery {

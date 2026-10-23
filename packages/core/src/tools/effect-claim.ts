@@ -188,7 +188,7 @@ function committedOnce(deps: EffectClaimDeps, key: ToolEffectKey, name: string, 
 function indeterminateEffectMessage(name: string, callId: string): string {
   return `${name} was already started once in this turn and its outcome was never recorded, `
     + `so it may or may not have taken effect. It is not being run again. Check the state `
-    + `it would have changed before calling it once more; the call is ${callId}.`;
+    + `it would have changed before calling it once more, then carry on with the task; the call is ${callId}.`;
 }
 
 /** What became of a call its turn lost, as a repair pairs it: answered, or refused as indeterminate. */
