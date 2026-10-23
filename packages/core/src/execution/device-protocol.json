@@ -1,6 +1,9 @@
 {
-  "version": 4,
+  "version": 5,
   "versionRefusalClose": 4406,
+  "credentialsRejectedClose": 4401,
+  "authDeadlineClose": 4408,
+  "accountHeader": "x-kinu-auth-account",
   "ptyMaxAxis": 1000,
   "methods": {
     "ping": {},
@@ -32,11 +35,12 @@
     "chatgptSignOut": {}
   },
   "frames": {
+    "auth": "AUTH",
     "hello": "HELLO",
     "ping": "ping",
     "pong": "pong",
-    "rotate": "ROTATE",
-    "rotated": "ROTATE_ACK",
+    "connectSecret": "CONNECT_SECRET",
+    "connectSecretAck": "CONNECT_SECRET_ACK",
     "execOutput": "EXEC_OUT",
     "relayHead": "RELAY_HEAD",
     "relayBody": "RELAY_BODY",

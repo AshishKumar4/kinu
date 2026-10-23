@@ -5,11 +5,12 @@ import {
   type JsonValue, DEVICE_METHOD,
 } from '@kinu.run/core';
 import {
-  createTestUserDO, provisionTestWorkspace, testOwner,
+  createTestUserDO, provisionTestWorkspace,
   type DeviceFrame, type TestUserDO,
   CAPABLE_HELLO,
 } from './user-do';
 import type { UserCaller } from '@kinu.run/core';
+import { registerTestDevice } from './device-key';
 
 export { CAPABLE_HELLO };
 
@@ -59,7 +60,7 @@ export async function deviceHarness(
   options: DeviceHarnessOptions = {},
 ): Promise<DeviceHarness> {
   const harness = createTestUserDO({ deviceResponder: responder });
-  const { deviceId } = await harness.userDO.registerDevice(await testOwner(), name);
+  const { deviceId } = await registerTestDevice(harness.userDO, name);
   harness.attachDevice(deviceId);
   const hello = options.hello === undefined ? CAPABLE_HELLO : options.hello;
 

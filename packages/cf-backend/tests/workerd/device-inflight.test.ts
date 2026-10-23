@@ -12,7 +12,7 @@ import * as v from 'valibot';
 import type { DeviceHelloSchema } from '@kinu.run/core';
 import {
   DEVICE_CONNECT_PATH,
-  DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, JsonValueSchema, nextDeviceRequestId, type JsonValue, DEVICE_METHOD,
+  DEVICE_FEATURES, DEVICE_FRAMES, DEVICE_PROTOCOL_VERSION, JsonValueSchema, nextDeviceRequestId, type JsonValue, DEVICE_METHOD,
 } from '@kinu.run/core';
 
 /** A stub held across a reset is broken by it; re-acquire from the id, as a real caller does. */
@@ -151,11 +151,13 @@ interface Machine {
  */
 async function machine(owner: string, workspace: string, answer: (frame: v.InferOutput<typeof FrameSchema>) => Answer, hosted = false): Promise<Machine> {
   const { deviceId, ticket } = await account(owner).pair('ashish@studio');
-  const upgraded = await account(owner).fetch(`http://probe${DEVICE_CONNECT_PATH}?ticket=${encodeURIComponent(ticket)}`, { headers: { Upgrade: 'websocket' } });
+  const upgraded = await account(owner).fetch(`http://probe${DEVICE_CONNECT_PATH}`, { headers: { Upgrade: 'websocket' } });
   const socket = upgraded.webSocket;
 
   if (socket === null) throw new Error(`the account refused the machine: ${String(upgraded.status)}`);
   socket.accept();
+  // The ticket rides in the first frame, never the URL.
+  socket.send(JSON.stringify({ type: DEVICE_FRAMES.auth, user: owner, ticket }));
   const frames: Array<v.InferOutput<typeof FrameSchema>> = [];
   const watchers: Array<{ readonly method: string; readonly heard: () => void }> = [];
   const held: string[] = [];
@@ -239,19 +241,22 @@ describe('a machine that dials again before its first connect has answered', () 
   it('gets both upgrades: the later socket replaces the earlier, and neither connect fails', async () => {
     // Staging f9c17ac7b: the earlier connect, replaced while it still awaited, sent its token on the closed socket
     // and the account object ended in an uncaught exception.
-    const { tickets } = await account('0123456789abcdef0123456789abcd02').reconnecting('ashish@studio');
-
-    const dial = (ticket: string) => account('0123456789abcdef0123456789abcd02')
-      .fetch(`http://probe${DEVICE_CONNECT_PATH}?ticket=${encodeURIComponent(ticket)}`, { headers: { Upgrade: 'websocket' } });
-
-    const upgraded = await Promise.all(tickets.map(async (ticket) => settling(dial(ticket))));
+    const reconnecting = '0123456789abcdef0123456789abcd02';
+    const { tickets } = await account(reconnecting).reconnecting('ashish@studio');
+    const dial = () => account(reconnecting).fetch(`http://probe${DEVICE_CONNECT_PATH}`, { headers: { Upgrade: 'websocket' } });
+    const upgraded = await Promise.all(tickets.map(async () => settling(dial())));
 
     expect(upgraded.map((answer) => (answer.ok ? answer.value.status : answer.error))).toEqual([101, 101]);
 
-    for (const answer of upgraded) {
+    // Each authenticates in turn on its first frame; the later one takes the slot.
+    for (const [index, answer] of upgraded.entries()) {
       if (!answer.ok) continue;
       answer.value.webSocket?.accept();
-      answer.value.webSocket?.close(1000, 'machine done');
+      answer.value.webSocket?.send(JSON.stringify({ type: DEVICE_FRAMES.auth, user: reconnecting, ticket: tickets[index] }));
+    }
+
+    for (const answer of upgraded) {
+      if (answer.ok) answer.value.webSocket?.close(1000, 'machine done');
     }
   });
 });

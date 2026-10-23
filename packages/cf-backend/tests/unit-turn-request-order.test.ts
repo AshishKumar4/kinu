@@ -1,8 +1,9 @@
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
+import { createTestUserDO, provisionTestWorkspace } from './helpers/user-do';
 import { CAPABLE_HELLO, daemon } from './helpers/device-harness';
 import { chatSessionTurns, orchestratorHarness } from './helpers/actor-harness';
+import { registerTestDevice } from './helpers/device-key';
 
 const OWNER_USER_ID = '0123456789abcdef0123456789abcdef';
 
@@ -12,7 +13,7 @@ const READ_BACK = 'Read public-artifact.txt back with your file tool and reply w
 
 test('a turn whose device just connected sends the person\u2019s request last, the machine\u2019s new row before it', async () => {
   const user = createTestUserDO({ durableObjectId: OWNER_USER_ID, deviceResponder: daemon });
-  const { deviceId } = await user.userDO.registerDevice(await testOwner(), 'ashish@studio');
+  const { deviceId } = await registerTestDevice(user.userDO, 'ashish@studio');
   const token = await provisionTestWorkspace(user, WORKSPACE, 'Jarvis');
   const actor = orchestratorHarness(undefined, { userDO: user.userDO, workspace: WORKSPACE, ownerUserId: OWNER_USER_ID });
   actor.agent.harnessHoldsCapability(token);

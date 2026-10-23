@@ -79,7 +79,7 @@ kinu <command> [options]
 | [`kinu daemon [action] [workspace]`](#kinu-daemon-action-workspace) | Start, stop or check the local scheduler daemon, or run one pass by hand with tick |
 | [`kinu deploy [target] [action]`](#kinu-deploy-target-action) | Run your own Kinu: `deploy cloudflare` in your Cloudflare account, `deploy local [start\|stop\|status]` on this PC |
 | [`kinu doctor`](#kinu-doctor) | Check the installed Kinu CLI: paths, origin and version |
-| [`kinu update [target]`](#kinu-update-target) | Update the installed Kinu command |
+| [`kinu update [target]`](#kinu-update-target) | Update the installed Kinu command, and connect again a PC an earlier Kinu linked |
 | [`kinu uninstall`](#kinu-uninstall) | Remove the installed Kinu command |
 
 ## Reference
@@ -617,7 +617,7 @@ kinu doctor
 
 ### kinu update [target]
 
-Update the installed Kinu command.
+Update the installed Kinu command, and connect again a PC an earlier Kinu linked.
 
 | Option | What it does |
 | --- | --- |

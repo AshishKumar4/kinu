@@ -20,6 +20,9 @@ const USER_ID = '0123456789abcdef0123456789abcdef';
 
 const TOKEN_HASH = 'a'.repeat(64);
 
+/** A daemon's signed challenge, well formed and proving nothing: the gate refuses before it is read. */
+const DEVICE_PROOF = { origin: 'https://kinu.test', device: 'dev-1', secret: '', nonce: `pcc_${'n'.repeat(43)}`, signature: 's'.repeat(86) };
+
 // A provider/OAuth call that survives the gate must fail loudly rather than dial out.
 const realFetch = globalThis.fetch;
 
@@ -257,14 +260,13 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
   { capability: 'device.consent', name: 'revokeDeviceConsent', run: (u, c) => u.revokeDeviceConsent(c, WORKSPACE, 'dev-1') },
 
   { capability: 'device.manage', name: 'listDevices', run: (u, c) => u.listDevices(c) },
-  { capability: 'device.manage', name: 'registerDevice', run: (u, c) => u.registerDevice(c, 'device') },
+  { capability: 'device.manage', name: 'registerDevice', run: (u, c) => u.registerDevice(c, { publicKey: 'k'.repeat(43), origin: 'https://kinu.test', label: 'device' }) },
   { capability: 'device.manage', name: 'revokeDevice', run: (u, c) => u.revokeDevice(c, 'dev-1') },
   { capability: 'device.manage', name: 'acknowledgeUnstoppedDevice', run: (u, c) => u.acknowledgeUnstoppedDevice(c, 'dev-1') },
   { capability: 'device.manage', name: 'renameDevice', run: (u, c) => u.renameDevice(c, 'dev-1', 'studio tower') },
-  { capability: 'device.manage', name: 'verifyDeviceToken', run: (u, c) => u.verifyDeviceToken(c, 'pdt_x') },
-  { capability: 'device.manage', name: 'verifyDeviceConnectTicket', run: (u, c) => u.verifyDeviceConnectTicket(c, 'pct_x') },
-  { capability: 'device.manage', name: 'issueDeviceConnectTicket', run: (u, c) => u.issueDeviceConnectTicket(c, 'pdt_x') },
-  { capability: 'device.manage', name: 'recordDeviceUpdateRefusal', run: (u, c) => u.recordDeviceUpdateRefusal(c, 'pdt_x', { version: '0.3.0+served', runtime: 'Bun 1.4.0', reason: 'install failed' }) },
+  { capability: 'device.manage', name: 'issueDeviceConnectChallenge', run: (u, c) => u.issueDeviceConnectChallenge(c, 'dev-1') },
+  { capability: 'device.manage', name: 'issueDeviceConnectTicket', run: (u, c) => u.issueDeviceConnectTicket(c, DEVICE_PROOF) },
+  { capability: 'device.manage', name: 'recordDeviceUpdateRefusal', run: (u, c) => u.recordDeviceUpdateRefusal(c, DEVICE_PROOF, { version: '0.3.0+served', runtime: 'Bun 1.4.0', reason: 'install failed' }) },
   { capability: 'device.manage', name: 'startChatGptSignIn', run: (u, c) => u.startChatGptSignIn(c) },
   { capability: 'device.manage', name: 'signOutChatGpt', run: (u, c) => u.signOutChatGpt(c, false) },
   { capability: 'device.manage', name: 'cancelChatGptSignIn', run: (u, c) => u.cancelChatGptSignIn(c) },
@@ -351,8 +353,8 @@ async function setupWorkspaces(
   // The real hub cannot accept a socket whose device row does not exist.
   if (options.connectedDeviceId) {
     harness.sql.exec(
-      `INSERT INTO user_devices (id, token_hash, label) VALUES (?, ?, ?)`,
-      options.connectedDeviceId, 'fixture-token-hash', 'fixture device',
+      `INSERT INTO user_devices (id, public_key, label) VALUES (?, ?, ?)`,
+      options.connectedDeviceId, 'k'.repeat(43), 'fixture device',
     );
     // Reports like a daemon: a machine that has proved nothing runs no commands.
     await harness.sendDeviceHello(CAPABLE_HELLO);

@@ -227,13 +227,17 @@ function report(from: string, mode: 'plan' | 'build', content: string): IngressD
 
 const PROPOSAL = '{"scope":"workspace","edits":[{"kind":"prompt_section","source":"Stop after one line."}]}';
 
+/** A rail whose main once hired `ask-refiner-x1` from an evolution lane, as an earlier build's lane left it. */
 function railWithSubagent() {
   const db = new Database(':memory:');
   const sql = makeSqlExec(db);
   initEventsHubTables(sql);
   const main = createTestActorsOver(db).main;
-  // As an earlier build's lane left its hire.
-  db.run('INSERT INTO evolution_subagents (actor_id, name, lane_request_id, created_at) VALUES (?, ?, ?, 1)', [main.actorId, 'ask-refiner-x1', 'refine-1']);
+  db.run(
+    `INSERT INTO workspace_actors (actor_id, parent_actor_id, name, storage_key, origin, lifetime, created_at, creation_id)
+     VALUES ('lane-hire', ?, 'ask-refiner-x1', 'ask-refiner-x1', 'evolution', 'task', 1, 'refine-1')`,
+    [main.actorId],
+  );
 
   return new EventLog(sql, main);
 }

@@ -462,13 +462,16 @@ const REFUSAL_REASON_MAX = 1000;
 /**
  * Tells the hub this build refuses to run here, on which runtime, and why: the hub stops pushing it until another
  * build is served or the daemon runs on another runtime, and the owner's device row says why the machine is
- * behind. Resolves the hub's HTTP status.
+ * behind. `proof` is a challenge the hub issued and this machine's key signed (`deviceRefusalMessage`). Resolves the
+ * hub's HTTP status.
  */
-async function reportRefusal({ origin, cfg, version, runtime, reason, fetchFn = fetch }) {
+async function reportRefusal({ origin, cfg, proof, version, runtime, reason, fetchFn = fetch }) {
   const res = await fetchFn(`${origin}/pc/update-refused`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ user: cfg.user, token: cfg.token, version, runtime, reason: reason.slice(0, REFUSAL_REASON_MAX) }),
+    body: JSON.stringify({
+      user: cfg.user, device: cfg.device, nonce: proof.nonce, signature: proof.signature, version, runtime, reason: reason.slice(0, REFUSAL_REASON_MAX),
+    }),
   });
 
   return res.status;

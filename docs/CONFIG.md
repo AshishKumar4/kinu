@@ -13,7 +13,8 @@ Every CLI setting lives in one JSON file. `kinu setup`, `kinu auth`, `kinu provi
   sessions/                 recorded CLI sessions
   checkpoints/              shadow-git file snapshots that `/undo` restores from
   daemon.log, daemon.pid    the local scheduler
-  device.json, pc-agent.*   the desktop execution daemon, its script and its log
+  device.json, device.key   the desktop execution daemon's link, and its private key (0600)
+  pc-agent.*                the desktop execution daemon, its script and its log
 ```
 
 `KINU_HOME` moves all of it. The CLI keeps no state anywhere else, so backing up this directory backs up everything it knows. The one exception is a file I name myself, such as an export archive: it lands where I point it.

@@ -169,9 +169,9 @@ async function pollDevice(
 }
 
 /**
- * Wait out the connect flurry. `acceptDeviceSocket` stamps `last_seen_at`
- * once, and the rotation ACK stamps it again when the daemon writes the new
- * token — both inside the first seconds of a healthy link. The hold window
+ * Wait out the connect flurry. The socket's AUTH stamps `last_seen_at` once,
+ * and the GENERATION_ACK stamps it again when the daemon writes the new
+ * generation — both inside the first seconds of a healthy link. The hold window
  * measures from the first STABLE reading, so a late ACK cannot read as a
  * redial and a genuine redial can never be explained as one.
  */

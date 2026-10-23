@@ -16,8 +16,8 @@ export const DAEMON_FILES = { 'pc-agent.js': DAEMON_SOURCE, ...DAEMON_SIBLINGS }
 
 export const SOCKET_REPLACED_REASON = 'replaced by a new connection';
 
-/** The token the hub rotates every accepted socket to, as the real hub does on connect. */
-export const ROTATED_TOKEN = `pdt_${'c'.repeat(32)}`;
+/** The challenge the hub issues every connect and refusal, which the daemon's key signs. */
+export const HUB_NONCE = `pcc_${'n'.repeat(43)}`;
 
 export const PLATFORM_ARTIFACT = `/downloads/kinu-cli-${process.platform}-${process.arch}.tar.gz`;
 
@@ -46,7 +46,9 @@ const HelloSchema = v.looseObject({
 
 const FrameSchema = v.looseObject({ id: v.optional(v.string()) });
 
-const RefusalSchema = v.object({ user: v.string(), token: v.string(), version: v.string(), runtime: v.string(), reason: v.string() });
+const RefusalSchema = v.object({
+  user: v.string(), device: v.string(), nonce: v.string(), signature: v.string(), version: v.string(), runtime: v.string(), reason: v.string(),
+});
 
 export type HubRefusal = v.InferOutput<typeof RefusalSchema>;
 
@@ -55,7 +57,7 @@ export type HubHello = v.InferOutput<typeof HelloSchema>;
 export type HubFrame = v.InferOutput<typeof FrameSchema>;
 
 export type HubPush =
-  | { type: typeof DEVICE_FRAMES.rotate; token: string }
+  | { type: typeof DEVICE_FRAMES.connectSecret; secret: string }
   | { type: 'UPDATE'; version: string; urls: { tarball: string; checksum: string }; sha256: string; checksums?: Record<string, string>; signature?: string }
   /** Keystrokes for an open terminal, base64. */
   | { type: typeof DEVICE_FRAMES.ptyInput; session: string; data: string }
@@ -141,6 +143,8 @@ export function startUpdateHub(opts: UpdateHubOptions): UpdateHub {
         });
       }
 
+      if (pathname === '/pc/connect-challenge') return Response.json({ nonce: HUB_NONCE, expiresAt: Date.now() + 60_000 });
+
       if (pathname === '/pc/connect-ticket') return Response.json({ ticket: `pct_${'b'.repeat(32)}`, expiresAt: Date.now() + 60_000 });
 
       if (pathname === '/pc/connect') return self.upgrade(req) ? undefined : new Response('upgrade failed', { status: 400 });
@@ -164,6 +168,7 @@ export function startUpdateHub(opts: UpdateHubOptions): UpdateHub {
           return;
         }
 
+        // The socket's first frame, AUTH, precedes its HELLO; this hub takes every ticket.
         const parsed = v.safeParse(HelloSchema, JSON.parse(text));
 
         if (!parsed.success) return;
@@ -205,7 +210,8 @@ export function startUpdateHub(opts: UpdateHubOptions): UpdateHub {
 
         sockets.push(socket);
         openSockets.add(ws);
-        ws.send(JSON.stringify({ type: DEVICE_FRAMES.rotate, token: ROTATED_TOKEN }));
+        // As the real hub hands every accepted connect a fresh connect secret.
+        socket.send({ type: DEVICE_FRAMES.connectSecret, secret: `${String(sockets.items.length)}`.padEnd(43, 's') });
 
         const behind = hello.version !== undefined && hello.version !== opts.served;
         const allowed = hello.updateCheck !== false;

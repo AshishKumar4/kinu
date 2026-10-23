@@ -3,13 +3,15 @@
 import { describe, expect, test } from 'bun:test';
 import { createTestUserDO, testOwner, type TestUserDO } from './helpers/user-do';
 import {
-  DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH,
+  DEVICE_CONNECT_PATH, DEVICE_CONNECT_SECRET, DEVICE_TERMINAL_PATH,
   DEVICE_TOOLCHAIN_TTL_MS, TOOLCHAIN_PROBE_BINARIES, TUNNEL_DISCONNECTED, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION,
   connectedDevices, type JsonValue, JsonValueSchema, DEVICE_ERRORS, DEVICE_FRAMES, DEVICE_METHOD,
+  DEVICE_AUTH_DEADLINE_CLOSE, DEVICE_AUTH_DEADLINE_MS, DEVICE_CREDENTIALS_REJECTED_CLOSE, DEVICE_VERSION_REFUSAL_CLOSE,
 } from '@kinu.run/core';
 import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { present } from '@kinu.run/test-utils';
+import { handClock, present } from '@kinu.run/test-utils';
+import { buyTicket, connectTestDevice, handedSecret, openDeviceSocket, registerTestDevice } from './helpers/device-key';
 import { CAPABLE_HELLO, WORKSPACE } from './helpers/device-harness';
 import { provisionTestWorkspace } from './helpers/user-do';
 import {
@@ -54,11 +56,23 @@ function fakeCtx(): DeviceSocketCtx & { accepted: Array<{ ws: FakeSocket; tags: 
   };
 }
 
+/** A daemon's socket as the account takes it: accepted before it says who it is, then bound as its AUTH binds it. */
+function admitted(hub: DeviceSocketHub, deviceId: string, ws: DeviceSocket): void {
+  hub.acceptUnauthenticated(ws);
+  hub.admit(deviceId, ws);
+}
+
+/** A socket bound to `deviceId` out of band, as a duplicate a wake found would be: tagged as every device socket is. */
+function stray(ctx: DeviceSocketCtx, ws: DeviceSocket, deviceId: string): void {
+  ctx.acceptWebSocket(ws, ['device']);
+  ws.serializeAttachment({ device: deviceId });
+}
+
 function connected() {
   const ctx = fakeCtx();
   const hub = new DeviceSocketHub(ctx);
   const ws = fakeSocket();
-  hub.accept('dev-a', ws);
+  admitted(hub, 'dev-a', ws);
   hub.hello('dev-a', DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
 
   return { ctx, hub, ws };
@@ -123,7 +137,7 @@ describe('DeviceSocketHub', () => {
     const harness = createTestUserDO();
 
     try {
-      const { deviceId } = await harness.userDO.registerDevice(await testOwner(), 'old daemon');
+      const { deviceId } = await registerTestDevice(harness.userDO, 'old daemon');
       harness.attachDaemon(deviceId);
       await harness.sendDeviceHello({ ...CAPABLE_HELLO, protocolVersion: 0, features: [] }, deviceId);
       expect(connectedDevices((await harness.userDO.deviceRuntimeStatus(await testOwner())).devices)).toEqual([]);
@@ -135,7 +149,7 @@ describe('DeviceSocketHub', () => {
     const ctx = fakeCtx();
     const hub = new DeviceSocketHub(ctx);
     const ws = fakeSocket();
-    hub.accept('dev-a', ws);
+    admitted(hub, 'dev-a', ws);
     expect(deviceIdFromSocket(ws)).toBe('dev-a');
     expect(hub.isConnected('dev-a')).toBe(true);
     expect(hub.connectedDeviceId()).toBe('dev-a');
@@ -158,8 +172,8 @@ describe('DeviceSocketHub', () => {
     const hub = new DeviceSocketHub(ctx);
     const first = fakeSocket();
     const second = fakeSocket();
-    hub.accept('dev-a', first);
-    hub.accept('dev-a', second);
+    admitted(hub, 'dev-a', first);
+    admitted(hub, 'dev-a', second);
     hub.hello('dev-a', DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
     expect(first.closed).toEqual([{ code: 1000, reason: 'replaced by a new connection' }]);
     expect(hub.liveSocket('dev-a')).toBe(second);
@@ -182,12 +196,12 @@ describe('DeviceSocketHub', () => {
     const replacement = answeringPeer('dev-a', () => hub, 'replacement daemon');
     const sibling = answeringPeer('dev-b', () => hub, 'other machine');
 
-    hub.accept('dev-a', first.socket);
-    ctx.acceptWebSocket(duplicate.socket, ['device:dev-a']);
-    ctx.acceptWebSocket(socketPeer(undefined, false).socket, ['device:dev-a']);
-    hub.accept('dev-b', sibling.socket);
+    admitted(hub, 'dev-a', first.socket);
+    stray(ctx, duplicate.socket, 'dev-a');
+    stray(ctx, socketPeer(undefined, false).socket, 'dev-a');
+    admitted(hub, 'dev-b', sibling.socket);
     hub.hello('dev-b', DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
-    hub.accept('dev-a', replacement.socket);
+    admitted(hub, 'dev-a', replacement.socket);
     hub.hello('dev-a', DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
 
     expect(await first.closed).toBe(1000);
@@ -199,7 +213,7 @@ describe('DeviceSocketHub', () => {
   test('a new hub over the same ctx rebuilds liveness + tunnel after a wake', async () => {
     const ctx = fakeCtx();
     const socket = fakeSocket();
-    new DeviceSocketHub(ctx).accept('dev-a', socket);
+    admitted(new DeviceSocketHub(ctx), 'dev-a', socket);
     new DeviceSocketHub(ctx).hello('dev-a', DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
 
     // Hibernation: in-memory hub state is gone, sockets survive on ctx.
@@ -216,15 +230,17 @@ describe('DeviceSocketHub', () => {
     expect(await reply).toBe('hi');
   });
 
-  test('a wake cannot readmit a formerly serving, now update-only daemon', async () => {
+  test('a HELLO on any protocol but this one is refused and closed, and a wake readmits nothing', async () => {
+    // Only this protocol authenticates, so no earlier one is held open for an update push (device protocol 5).
     const ctx = peerContext();
     let hub = new DeviceSocketHub(ctx);
     const daemon = answeringPeer('dev-a', () => hub, { signedIn: false });
-    hub.accept('dev-a', daemon.socket);
+    admitted(hub, 'dev-a', daemon.socket);
     hub.hello('dev-a', DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
     expect(await present(hub.tunnel('dev-a'), 'the serving daemon').rpc('exec', ['hostname'])).toEqual({ signedIn: false });
 
-    hub.hello('dev-a', DEVICE_PROTOCOL_VERSION - 1, DEVICE_FEATURES);
+    expect(hub.hello('dev-a', DEVICE_PROTOCOL_VERSION - 1, DEVICE_FEATURES)).toBe('refused');
+    expect(await daemon.closed).toBe(DEVICE_VERSION_REFUSAL_CLOSE);
     hub = new DeviceSocketHub(ctx);
     await expect(hub.chatgpt('dev-a', DEVICE_METHOD.chatgptStatus)).rejects.toMatchObject({ code: 'unavailable' });
     await expect(hub.relay('dev-a', 'relay-after-wake', { method: 'GET', url: 'https://chatgpt.com/backend-api/models', headers: [], body: null }))
@@ -235,7 +251,7 @@ describe('DeviceSocketHub', () => {
     const ctx = fakeCtx();
     const hub = new DeviceSocketHub(ctx);
     const ws = fakeSocket();
-    hub.accept('dev-a', ws);
+    admitted(hub, 'dev-a', ws);
     hub.hello('dev-a', DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
     const tunnel = hub.tunnel('dev-a');
 
@@ -253,8 +269,8 @@ describe('DeviceSocketHub', () => {
     const hub = new DeviceSocketHub(ctx);
     const first = fakeSocket();
     const second = fakeSocket();
-    hub.accept('dev-a', first);
-    hub.accept('dev-a', second); // closes `first`; its close event arrives later
+    admitted(hub, 'dev-a', first);
+    admitted(hub, 'dev-a', second); // closes `first`; its close event arrives later
     hub.hello('dev-a', DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
     const tunnel = hub.tunnel('dev-a');
 
@@ -273,7 +289,7 @@ describe('DeviceSocketHub', () => {
     const ctx = fakeCtx();
     const hub = new DeviceSocketHub(ctx);
     const ws = fakeSocket();
-    hub.accept('dev-a', ws);
+    admitted(hub, 'dev-a', ws);
     hub.close('dev-a', 'device revoked');
     expect(ws.closed).toEqual([{ code: 1000, reason: 'device revoked' }]);
     expect(hub.isConnected('dev-a')).toBe(false);
@@ -285,11 +301,11 @@ describe('DeviceSocketHub', () => {
     const first = answeringPeer('dev-a', () => hub, 'revoked machine');
     const duplicate = answeringPeer('dev-a', () => hub, 'duplicate daemon');
     const sibling = answeringPeer('dev-b', () => hub, 'other machine');
-    hub.accept('dev-a', first.socket);
-    ctx.acceptWebSocket(duplicate.socket, ['device:dev-a']);
-    ctx.acceptWebSocket(socketPeer(undefined, false).socket, ['device:dev-a']);
+    admitted(hub, 'dev-a', first.socket);
+    stray(ctx, duplicate.socket, 'dev-a');
+    stray(ctx, socketPeer(undefined, false).socket, 'dev-a');
     hub.hello('dev-a', DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
-    hub.accept('dev-b', sibling.socket);
+    admitted(hub, 'dev-b', sibling.socket);
     hub.hello('dev-b', DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
     const revoked = present(hub.tunnel('dev-a'), 'the machine before revocation');
     expect(await revoked.rpc('exec', ['hostname'])).toBe('revoked machine');
@@ -316,7 +332,7 @@ describe('DeviceTerminalHub socket ownership', () => {
 
     const first = socketPeer();
     const second = socketPeer();
-    hub.accept('dev-a', daemon.socket);
+    admitted(hub, 'dev-a', daemon.socket);
     hub.hello('dev-a', DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
 
     terminals.register('token-a', { session: 'pty-a', device: 'dev-a', workspace: 'workspace-a' });
@@ -363,7 +379,7 @@ describe('a named session on a device', () => {
     const { told, socket } = toldDaemon();
     const shell = { session: 'pty-shell', device: 'dev-a', workspace: 'workspace-a' };
 
-    hub.accept('dev-a', socket);
+    admitted(hub, 'dev-a', socket);
     hub.hello('dev-a', DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
     const firstPane = socketPeer();
 
@@ -395,7 +411,7 @@ describe('a named session on a device', () => {
     const { told, socket } = toldDaemon();
     const shell = { session: 'pty-shell', device: 'dev-a', workspace: 'workspace-a' };
 
-    hub.accept('dev-a', socket);
+    admitted(hub, 'dev-a', socket);
     hub.hello('dev-a', DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
     terminals.register('token-old', shell);
     terminals.attach('token-old', socketPeer().socket);
@@ -536,7 +552,7 @@ describe('DeviceSocketHub toolchain probe', () => {
     expect(hub.toolchain('dev-a', NOW)).not.toBeNull();
 
     // A different device can reconnect under the same row; recording on the socket, not SQL, keeps it from inheriting capabilities.
-    hub.accept('dev-a', fakeSocket());
+    admitted(hub, 'dev-a', fakeSocket());
     expect(hub.toolchain('dev-a', NOW)).toBeNull();
   });
 
@@ -693,34 +709,91 @@ describe('DeviceSocketHub ChatGPT sign-in calls', () => {
 });
 
 describe('/pc/connect upgrade wiring', () => {
-  test('the UserDO answers /pc/connect itself and verifies the ticket before upgrading', async () => {
+  test('the UserDO answers /pc/connect itself, and the socket it accepts serves nothing before AUTH', async () => {
     const harness = createTestUserDO();
-    const { token } = await harness.userDO.registerDevice(await testOwner(), 'studio tower');
-    const owner = await testOwner();
+    const { deviceId, key } = await registerTestDevice(harness.userDO, 'studio tower');
 
-    const connect = (query: string, upgrade: boolean): Promise<Response> => harness.userDO.fetch(new Request(
-      `https://kinu.example.com${DEVICE_CONNECT_PATH}${query}`,
-      upgrade ? { headers: { Upgrade: 'websocket' } } : {},
-    ));
-
-    expect((await connect('', false)).status).toBe(426);
-    expect((await connect('', true)).status).toBe(401);
-    expect((await connect('?ticket=pct_forged', true)).status).toBe(401);
+    const notUpgraded = await harness.userDO.fetch(new Request(`https://kinu.example.com${DEVICE_CONNECT_PATH}`));
+    expect(notUpgraded.status).toBe(426);
     expect(harness.acceptedSockets).toHaveLength(0);
 
-    const issued = await harness.userDO.issueDeviceConnectTicket(owner, token);
+    // No ticket in the URL: the upgrade is accepted, and is no device's until its first frame says whose.
+    const socket = await openDeviceSocket(harness);
+    expect(await harness.userDO.deviceRuntimeStatus(await testOwner())).toMatchObject({ devices: [{ id: deviceId, connected: false }] });
 
-    if (!issued.ok || !issued.ticket) throw new Error('the owner could not mint a connect ticket');
-    expect((await connect(`?ticket=${issued.ticket}`, true)).status).toBe(101);
-    expect(harness.acceptedSockets).toHaveLength(1);
+    const issued = await buyTicket(harness, deviceId, key, '');
+
+    if (!issued.ok) throw new Error(`the device was refused a ticket: ${issued.refusal}`);
+    await harness.userDO.webSocketMessage(socket.ws, JSON.stringify({ type: DEVICE_FRAMES.auth, user: harness.userDO.name, ticket: issued.ticket }));
+    expect(socket.closed()).toBeNull();
+    expect(handedSecret(socket)).toMatch(DEVICE_CONNECT_SECRET);
+    expect(await harness.userDO.deviceRuntimeStatus(await testOwner())).toMatchObject({ devices: [{ id: deviceId, connected: true }] });
 
     expect('attachDeviceSocket' in harness.userDO).toBe(false);
     await harness.joinFibers();
     harness.close();
   });
+
+  test('a first frame that is no AUTH, or an AUTH whose ticket is forged, used or for another account, closes 4401', async () => {
+    const harness = createTestUserDO();
+    const { deviceId, key } = await registerTestDevice(harness.userDO, 'studio tower');
+    const issued = await buyTicket(harness, deviceId, key, '');
+
+    if (!issued.ok) throw new Error(`the device was refused a ticket: ${issued.refusal}`);
+    const auth = (user: string, ticket: string) => JSON.stringify({ type: DEVICE_FRAMES.auth, user, ticket });
+
+    const firstFrames = [
+      JSON.stringify({ ...CAPABLE_HELLO }),
+      'ping',
+      auth(harness.userDO.name, `pct_${'f'.repeat(43)}`),
+      auth('0123456789abcdef0123456789abcdef', issued.ticket),
+    ];
+
+    for (const frame of firstFrames) {
+      const socket = await openDeviceSocket(harness);
+      await harness.userDO.webSocketMessage(socket.ws, frame);
+      expect({ frame, closed: socket.closed()?.code }).toEqual({ frame, closed: DEVICE_CREDENTIALS_REJECTED_CLOSE });
+      expect(socket.sent).toEqual([]);
+    }
+
+    // The ticket spent on the first socket opens no second.
+    const first = await openDeviceSocket(harness);
+    await harness.userDO.webSocketMessage(first.ws, auth(harness.userDO.name, issued.ticket));
+    expect(first.closed()).toBeNull();
+    const second = await openDeviceSocket(harness);
+    await harness.userDO.webSocketMessage(second.ws, auth(harness.userDO.name, issued.ticket));
+    expect(second.closed()?.code).toBe(DEVICE_CREDENTIALS_REJECTED_CLOSE);
+    await harness.joinFibers();
+    harness.close();
+  });
+
+  test('a socket that sends no AUTH within the deadline closes 4408, and one that did is left alone', () => {
+    const ctx = fakeCtx();
+    const clock = handClock(1_000);
+    const hub = new DeviceSocketHub(ctx, clock);
+    const silent = fakeSocket();
+    const authed = fakeSocket();
+
+    hub.acceptUnauthenticated(silent);
+    hub.acceptUnauthenticated(authed);
+    clock.advance(DEVICE_AUTH_DEADLINE_MS - 1);
+    hub.admit('dev-a', authed);
+    expect(silent.closed).toEqual([]);
+
+    clock.advance(1);
+    expect(silent.closed).toEqual([{ code: DEVICE_AUTH_DEADLINE_CLOSE, reason: 'no AUTH frame arrived in time' }]);
+    expect(authed.closed).toEqual([]);
+    expect(hub.isConnected('dev-a')).toBe(true);
+    // A wake loses the timer (its clock's never fire here); the deadline on the socket holds when its frame arrives.
+    const late = fakeSocket();
+    new DeviceSocketHub(ctx, handClock(clock.now())).acceptUnauthenticated(late);
+    clock.advance(DEVICE_AUTH_DEADLINE_MS);
+    expect(new DeviceSocketHub(ctx, clock).withinAuthDeadline(late)).toBe(false);
+    expect(late.closed).toEqual([{ code: DEVICE_AUTH_DEADLINE_CLOSE, reason: 'no AUTH frame arrived in time' }]);
+  });
 });
 
-describe('device links expire on an absolute window, renewed by rotation', () => {
+describe('device links expire on an absolute window, renewed by each accepted connect', () => {
   const day = 24 * 60 * 60 * 1000;
 
   function ageDevice(harness: TestUserDO, deviceId: string, expiresAt: number | null): void {
@@ -737,33 +810,34 @@ describe('device links expire on an absolute window, renewed by rotation', () =>
     return row.e;
   }
 
-  test('a freshly linked device carries a window, and USE alone does not extend it', async () => {
+  test('a freshly linked device carries a window; a ticket alone does not extend it, an accepted connect does', async () => {
     const harness = createTestUserDO();
-    const { deviceId, token } = await harness.userDO.registerDevice(await testOwner(), 'studio tower');
+    const { deviceId, key } = await registerTestDevice(harness.userDO, 'studio tower');
     expect(storedExpiry(harness, deviceId)).toBeGreaterThan(Date.now());
 
-    // Anchored to the last rotation, not verification: an idle-sliding window kept a copied device.json alive indefinitely.
     const anchor = Date.now() + day;
     ageDevice(harness, deviceId, anchor);
-    expect(await harness.userDO.verifyDeviceToken(await testOwner(), token))
-      .toEqual({ ok: true, deviceId, current: true });
+    expect(await buyTicket(harness, deviceId, key, '')).toMatchObject({ ok: true });
     expect(storedExpiry(harness, deviceId)).toBe(anchor);
+
+    await connectTestDevice(harness, deviceId, key, { secret: '', acknowledge: true });
+    expect(storedExpiry(harness, deviceId)).toBeGreaterThan(anchor + 100 * day);
+    await harness.joinFibers();
     harness.close();
   });
 
-  test('a device that stopped connecting is refused and cannot mint a ticket', async () => {
+  test('a device that stopped connecting is refused a ticket in words that say so', async () => {
     const harness = createTestUserDO();
-    const { deviceId, token } = await harness.userDO.registerDevice(await testOwner(), 'device');
+    const { deviceId, key } = await registerTestDevice(harness.userDO, 'device');
     ageDevice(harness, deviceId, Date.now() - day);
 
-    expect(await harness.userDO.verifyDeviceToken(await testOwner(), token)).toEqual({ ok: false });
-    expect(await harness.userDO.issueDeviceConnectTicket(await testOwner(), token)).toEqual({ ok: false });
+    expect(await buyTicket(harness, deviceId, key, '')).toEqual({ ok: false, refusal: 'expired' });
     harness.close();
   });
 
   test('the listing reports the window so the owner can see a link about to lapse', async () => {
     const harness = createTestUserDO();
-    const { deviceId } = await harness.userDO.registerDevice(await testOwner(), 'device');
+    const { deviceId } = await registerTestDevice(harness.userDO, 'device');
     ageDevice(harness, deviceId, 12345);
     expect(await harness.userDO.listDevices(await testOwner()))
       .toMatchObject([{ id: deviceId, expiresAt: 12345 }]);
@@ -774,7 +848,7 @@ describe('device links expire on an absolute window, renewed by rotation', () =>
     const harness = createTestUserDO();
     expect(await harness.userDO.deviceRuntimeStatus(await testOwner())).toEqual({ devices: [] });
 
-    const { deviceId } = await harness.userDO.registerDevice(await testOwner(), 'studio tower');
+    const { deviceId } = await registerTestDevice(harness.userDO, 'studio tower');
     // No toolchain offline, never an empty set (the model would read "runs nothing"); the row stays named so the
     // agent can ask for it.
     expect(await harness.userDO.deviceRuntimeStatus(await testOwner())).toEqual({
@@ -790,21 +864,8 @@ describe('device links expire on an absolute window, renewed by rotation', () =>
  */
 describe('the daemon keepalive, answered by the hub', () => {
   async function connectDevice(harness: TestUserDO) {
-    const { deviceId, token } = await harness.userDO.registerDevice(await testOwner(), 'studio tower');
-    const issued = await harness.userDO.issueDeviceConnectTicket(await testOwner(), token);
-
-    if (!issued.ok || !issued.ticket) throw new Error('the owner could not mint a connect ticket');
-
-    const response = await harness.userDO.fetch(new Request(
-      `https://kinu.example.com${DEVICE_CONNECT_PATH}?ticket=${issued.ticket}`,
-      { headers: { Upgrade: 'websocket' } },
-    ));
-
-    if (response.status !== 101) throw new Error(`the device upgrade was refused with ${response.status}`);
-
-    const device = harness.acceptedSockets.at(-1);
-
-    if (!device) throw new Error('the upgrade produced no socket');
+    const { deviceId, key } = await registerTestDevice(harness.userDO, 'studio tower');
+    const device = await connectTestDevice(harness, deviceId, key, { secret: '', acknowledge: true });
 
     return { deviceId, device };
   }

@@ -4,7 +4,7 @@
   published theorem depends on it. `lean/traceability.yaml` is the inventory.
 
   Core: Types
-  Safety: Credentials, DeviceView, DeviceToken
+  Safety: Credentials, DeviceView, DeviceKey
   SharingNimbus: Model, Theorems
   MCTS: StorageIsolation, Backpropagation, Uct
   Evolution: Timescales, CraftStore, Scaffold, FullCraftLifecycle
@@ -23,7 +23,7 @@ import Kinu.Types
 -- Safety proofs
 import Kinu.Safety.Credentials
 import Kinu.Safety.DeviceView
-import Kinu.Safety.DeviceToken
+import Kinu.Safety.DeviceKey
 
 -- Sharing proofs (the sharing design page, packages/cf-backend/src/share-design)
 -- Nimbus sharing policy and confined personal parts

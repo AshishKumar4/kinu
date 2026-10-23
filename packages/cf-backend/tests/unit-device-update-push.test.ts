@@ -2,12 +2,11 @@
  * The hub pushes UPDATE on HELLO when the named build differs, the owner allows it, and the daemon
  * has not refused that build; a daemon naming no build gets nothing.
  */
-import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, test } from 'bun:test';
-import * as v from 'valibot';
 import { Database } from 'bun:sqlite';
 import { DEVICE_PROTOCOL_VERSION, DEVICE_UPDATE, decodeJsonValue, type JsonValue } from '@kinu.run/core';
 import { createTestUserDO, provisionTestWorkspace, testOwner, TEST_USER_ENV, type TestUserDO } from './helpers/user-do';
+import { registerTestDevice, signRefusal, testDeviceKey, type TestDeviceKey } from './helpers/device-key';
 import { CAPABLE_HELLO } from './helpers/device-harness';
 import { DEVICE_UPDATE_COPY } from '../src/hooks/use-device-roster';
 import { pcRoutes } from '../src/pc-routes';
@@ -17,8 +16,8 @@ import { createRecordingLogger } from '@kinu.run/test-utils';
 
 const SERVED = '0.3.0+served1';
 
-/** The device protocol the previous release's daemon speaks (packages/pc-agent/tests/fixtures/protocol-3). */
-const PREVIOUS_PROTOCOL = new URL('../../pc-agent/tests/fixtures/protocol-3/device-protocol.json.txt', import.meta.url);
+/** The origin the refusal route is reached at, which a refusal's signature names. */
+const REFUSAL_ORIGIN = 'https://kinu.test';
 
 const LINUX_X64 = '/downloads/kinu-cli-linux-x64.tar.gz';
 
@@ -36,16 +35,16 @@ afterEach(() => {
 });
 
 /** No served build when `served` is null. */
-async function connected(served: string | null = SERVED): Promise<TestUserDO & { deviceId: string; token: string }> {
+async function connected(served: string | null = SERVED): Promise<TestUserDO & { deviceId: string; key: TestDeviceKey }> {
   const harness = createTestUserDO(served === null
     ? {}
     : { servedBuild: { version: served, checksums: { [LINUX_X64]: CHECKSUM }, signature: SIGNATURE } });
 
   open.push(harness);
-  const { deviceId, token } = await harness.userDO.registerDevice(await testOwner(), 'studio');
+  const { deviceId, key } = await registerTestDevice(harness.userDO, 'studio');
   harness.attachDevice(deviceId);
 
-  return Object.assign(harness, { deviceId, token });
+  return Object.assign(harness, { deviceId, key });
 }
 
 /** The runtime the refusing daemon ran on: the launcher's Bun before the pin moved. */
@@ -58,10 +57,22 @@ async function devices(harness: TestUserDO) {
   return harness.userDO.listDevices(await testOwner());
 }
 
-async function refuse(harness: TestUserDO, token: string, version = SERVED, reason = REFUSAL): Promise<Response> {
-  return pcRoutes.fetch(new Request('https://kinu.test/pc/update-refused', {
+/** A machine as its daemon speaks for it: its device, and the key that signs for it. */
+interface RefusingMachine {
+  readonly deviceId: string;
+  readonly key: TestDeviceKey;
+}
+
+/** The daemon's refusal as it posts one: a challenge of its own, signed by its key. A device refused a challenge posts
+ *  one it made up, as a daemon replaying an old one would. */
+async function refuse(harness: TestUserDO, { deviceId, key }: RefusingMachine, version = SERVED, reason = REFUSAL): Promise<Response> {
+  const issued = await harness.userDO.issueDeviceConnectChallenge(await testOwner(), deviceId);
+  const nonce = issued.ok ? issued.nonce : `pcc_${'x'.repeat(43)}`;
+  const signature = signRefusal(key, { origin: REFUSAL_ORIGIN, device: deviceId, nonce });
+
+  return pcRoutes.fetch(new Request(`${REFUSAL_ORIGIN}/pc/update-refused`, {
     method: 'POST',
-    body: JSON.stringify({ user: '0123456789abcdef0123456789abcdef', token, version, runtime: REFUSED_ON, reason }),
+    body: JSON.stringify({ user: '0123456789abcdef0123456789abcdef', device: deviceId, nonce, signature, version, runtime: REFUSED_ON, reason }),
   }), {
     ...TEST_USER_ENV,
     AUTH_KV: makeKv(),
@@ -85,7 +96,7 @@ describe('a daemon reports why it cannot take a served build', () => {
     });
 
     open.push(harness);
-    const { deviceId, token } = await harness.userDO.registerDevice(await testOwner(), 'studio');
+    const { deviceId, key } = await registerTestDevice(harness.userDO, 'studio');
     harness.attachDevice(deviceId);
     await harness.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: true }));
     const workspaceToken = await provisionTestWorkspace(harness, 'watching-workspace');
@@ -95,7 +106,7 @@ describe('a daemon reports why it cannot take a served build', () => {
     const restore = setDiagnosticsSink(logger);
 
     try {
-      expect((await refuse(harness, token)).status).toBe(200);
+      expect((await refuse(harness, { deviceId, key })).status).toBe(200);
       expect(refreshed).toEqual([{ workspace: 'watching-workspace', update: 'refused', updateRefusal: REFUSAL }]);
       expect(logger.emitted).toContainEqual({
         event: 'device.update_refused', code: null, cause: null,
@@ -110,12 +121,12 @@ describe('a daemon reports why it cannot take a served build', () => {
     const harness = await connected();
     await harness.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: true }));
 
-    const response = await refuse(harness, harness.token, ` ${SERVED} `);
+    const response = await refuse(harness, harness, ` ${SERVED} `);
     expect(response.status).toBe(200);
     expect(decodeJsonValue({ value: await response.json() })).toEqual({ ok: true });
     expect((await devices(harness))[0]).toMatchObject({ update: 'refused', servedVersion: SERVED, updateRefusal: REFUSAL });
 
-    const second = await refuse(harness, harness.token, SERVED, 'Bun install failed: no space left on device');
+    const second = await refuse(harness, harness, SERVED, 'Bun install failed: no space left on device');
     expect(second.status).toBe(200);
     expect((await devices(harness))[0]).toMatchObject({ update: 'refused', updateRefusal: 'Bun install failed: no space left on device' });
     expect(harness.db.query('SELECT update_refused_version, update_refused_runtime, update_refusal_reason FROM user_devices WHERE update_refused_version IS NOT NULL').all()).toEqual([{
@@ -127,14 +138,14 @@ describe('a daemon reports why it cannot take a served build', () => {
     const servedBuild = { version: SERVED, checksums: { [LINUX_X64]: CHECKSUM }, signature: SIGNATURE };
     const harness = createTestUserDO({ servedBuild });
     open.push(harness);
-    const { deviceId, token } = await harness.userDO.registerDevice(await testOwner(), 'studio');
+    const { deviceId, key } = await registerTestDevice(harness.userDO, 'studio');
     harness.attachDevice(deviceId);
     const behind = hello({ version: '0.2.0+older', updateCheck: true });
 
     await harness.sendDeviceHello(behind);
     expect(harness.devicePushes).toHaveLength(1);
     expect(harness.devicePushes[0]).toMatchObject({ type: DEVICE_UPDATE, version: SERVED });
-    expect((await refuse(harness, token)).status).toBe(200);
+    expect((await refuse(harness, { deviceId, key })).status).toBe(200);
 
     await harness.sendDeviceHello(behind);
     expect(harness.devicePushes).toHaveLength(1);
@@ -152,7 +163,7 @@ describe('a daemon reports why it cannot take a served build', () => {
     const harness = await connected();
     await harness.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: true, runtime: REFUSED_ON }));
     expect(harness.devicePushes).toHaveLength(1);
-    expect((await refuse(harness, harness.token)).status).toBe(200);
+    expect((await refuse(harness, harness)).status).toBe(200);
 
     // The daemon that refused on 1.4.0, connecting again on that runtime.
     await harness.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: true, runtime: REFUSED_ON }));
@@ -167,9 +178,9 @@ describe('a daemon reports why it cannot take a served build', () => {
 
   test('a refusal affects only its device, not another machine behind the same release', async () => {
     const harness = await connected();
-    const other = await harness.userDO.registerDevice(await testOwner(), 'other');
+    const other = await registerTestDevice(harness.userDO, 'other');
     harness.attachDaemon(other.deviceId);
-    expect((await refuse(harness, harness.token)).status).toBe(200);
+    expect((await refuse(harness, harness)).status).toBe(200);
 
     await harness.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: true }));
     await harness.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: true }), other.deviceId);
@@ -184,10 +195,10 @@ describe('a daemon reports why it cannot take a served build', () => {
     try {
       const first = createTestUserDO({ storage: db, servedBuild });
       open.push(first);
-      const { deviceId, token } = await first.userDO.registerDevice(await testOwner(), 'studio');
+      const { deviceId, key } = await registerTestDevice(first.userDO, 'studio');
       first.attachDevice(deviceId);
       await first.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: true }));
-      expect((await refuse(first, token)).status).toBe(200);
+      expect((await refuse(first, { deviceId, key })).status).toBe(200);
       first.close();
 
       const reopened = createTestUserDO({ storage: db, servedBuild });
@@ -203,7 +214,7 @@ describe('a daemon reports why it cannot take a served build', () => {
 
   test('unreported, off, unstamped and current take precedence over a refusal of the served build', async () => {
     const harness = await connected();
-    expect((await refuse(harness, harness.token)).status).toBe(200);
+    expect((await refuse(harness, harness)).status).toBe(200);
 
     for (const [fields, update] of [
       [{}, 'unreported'],
@@ -216,34 +227,47 @@ describe('a daemon reports why it cannot take a served build', () => {
     }
   });
 
-  test('a well-shaped but unknown token earns 401 and records nothing', async () => {
+  test('a signature by any key but the device\'s earns 401 and records nothing', async () => {
     const harness = await connected();
     await harness.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: true }));
-    expect((await refuse(harness, `pdt_${'w'.repeat(32)}`)).status).toBe(401);
+    expect((await refuse(harness, { deviceId: harness.deviceId, key: testDeviceKey() })).status).toBe(401);
     expect((await devices(harness))[0]).toMatchObject({ update: 'behind', updateRefusal: null });
   });
 
-  test('a device token cannot bypass the UserDO caller capability gate', async () => {
+  test('an earlier protocol\'s bearer earns 401 in words that name the update', async () => {
     const harness = await connected();
-    await expect(harness.userDO.recordDeviceUpdateRefusal({ ownerToken: '' }, harness.token, { version: SERVED, runtime: REFUSED_ON, reason: REFUSAL }))
+
+    const answer = await pcRoutes.fetch(new Request(`${REFUSAL_ORIGIN}/pc/update-refused`, {
+      method: 'POST',
+      body: JSON.stringify({ user: '0123456789abcdef0123456789abcdef', token: `pdt_${'w'.repeat(32)}`, version: SERVED, runtime: REFUSED_ON, reason: REFUSAL }),
+    }), { ...TEST_USER_ENV, AUTH_KV: makeKv(), UserDO: { idFromName: (name: string) => name, get: () => harness.userDO } });
+
+    expect(answer.status).toBe(401);
+    expect(await answer.text()).toContain('kinu update');
+  });
+
+  test('a device key cannot bypass the UserDO caller capability gate', async () => {
+    const harness = await connected();
+    const proof = { origin: REFUSAL_ORIGIN, device: harness.deviceId, nonce: `pcc_${'n'.repeat(43)}`, signature: 's'.repeat(86) };
+    await expect(harness.userDO.recordDeviceUpdateRefusal({ ownerToken: '' }, proof, { version: SERVED, runtime: REFUSED_ON, reason: REFUSAL }))
       .rejects.toThrow('owner');
     expect(harness.db.query('SELECT update_refused_version, update_refused_runtime, update_refusal_reason FROM user_devices WHERE update_refused_version IS NOT NULL').all()).toEqual([]);
   });
 
-  test('a revoked device token cannot record a refusal', async () => {
+  test('a revoked device cannot record a refusal', async () => {
     const harness = await connected();
     // An incident retains the revoked row, so its hash still exists and the revocation gate must refuse it.
     harness.db.query('UPDATE user_devices SET unstopped_at = ? WHERE id = ?').run(Date.now(), harness.deviceId);
     await harness.userDO.revokeDevice(await testOwner(), harness.deviceId);
     expect((await devices(harness))[0]).toMatchObject({ id: harness.deviceId, revokedAt: expect.any(Number) });
-    expect((await refuse(harness, harness.token)).status).toBe(401);
+    expect((await refuse(harness, harness)).status).toBe(401);
     expect(harness.db.query('SELECT update_refused_version, update_refused_runtime, update_refusal_reason FROM user_devices WHERE update_refused_version IS NOT NULL').all()).toEqual([]);
   });
 
-  test('an expired device token cannot record a refusal', async () => {
+  test('an expired device link cannot record a refusal', async () => {
     const harness = await connected();
     harness.db.query('UPDATE user_devices SET expires_at = ? WHERE id = ?').run(Date.now() - 1, harness.deviceId);
-    expect((await refuse(harness, harness.token)).status).toBe(401);
+    expect((await refuse(harness, harness)).status).toBe(401);
     expect(harness.db.query('SELECT update_refused_version, update_refused_runtime, update_refusal_reason FROM user_devices WHERE update_refused_version IS NOT NULL').all()).toEqual([]);
   });
 });
@@ -267,7 +291,7 @@ describe('the UPDATE frame a HELLO earns', () => {
   test('a build that shipped no signature pushes nothing: the daemon would refuse it', async () => {
     const harness = createTestUserDO({ servedBuild: { version: SERVED, checksums: { [LINUX_X64]: CHECKSUM } } });
     open.push(harness);
-    const { deviceId } = await harness.userDO.registerDevice(await testOwner(), 'studio');
+    const { deviceId } = await registerTestDevice(harness.userDO, 'studio');
     harness.attachDevice(deviceId);
     await harness.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: true }));
     expect(harness.devicePushes).toEqual([]);
@@ -332,7 +356,7 @@ describe('the UPDATE frame a HELLO earns', () => {
   test('a deployment with a stamp but no checksum for the artifact pushes nothing', async () => {
     const harness = createTestUserDO({ servedBuild: { version: SERVED } });
     open.push(harness);
-    const { deviceId } = await harness.userDO.registerDevice(await testOwner(), 'studio');
+    const { deviceId } = await registerTestDevice(harness.userDO, 'studio');
     harness.attachDevice(deviceId);
     await harness.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: true }));
     expect(harness.devicePushes).toEqual([]);
@@ -362,13 +386,12 @@ describe('the Devices read model carries the version and the served build', () =
     expect((await devices(harness))[0]).toMatchObject({ connected: true, update: 'current' });
   });
 
-  test('a protocol-3 daemon from the previous release is pushed the update and given nothing else', async () => {
+  test('a HELLO of the protocol before this one is refused and pushed nothing: only this protocol authenticates', async () => {
     const harness = await connected();
-    const previous = v.parse(v.object({ version: v.number(), methods: v.record(v.string(), v.unknown()) }), JSON.parse(readFileSync(PREVIOUS_PROTOCOL, 'utf8')));
 
-    await harness.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: true, protocolVersion: previous.version, features: Object.keys(previous.methods) }));
-    expect(harness.devicePushes).toEqual([expect.objectContaining({ type: DEVICE_UPDATE, version: SERVED })]);
-    expect((await devices(harness))[0]).toMatchObject({ update: 'required' });
+    await harness.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: true, protocolVersion: DEVICE_PROTOCOL_VERSION - 1 }));
+    expect(harness.devicePushes).toEqual([]);
+    expect((await devices(harness))[0]).toMatchObject({ connected: false, update: 'required' });
 
     // No call reaches it: no command, no file, no tunnel.
     const workspace = { workspaceToken: await provisionTestWorkspace(harness, 'previous-daemon-workspace') };
@@ -381,19 +404,10 @@ describe('the Devices read model carries the version and the served build', () =
     expect(harness.deviceFrames.slice(sent)).toEqual([]);
   });
 
-  test('a protocol-3 daemon whose owner turned updates off is refused outright', async () => {
-    const harness = await connected();
-    const previous = v.parse(v.object({ version: v.number() }), JSON.parse(readFileSync(PREVIOUS_PROTOCOL, 'utf8')));
-
-    await harness.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: false, protocolVersion: previous.version }));
-    expect(harness.devicePushes).toEqual([]);
-    expect((await devices(harness))[0]).toMatchObject({ connected: false, update: 'required' });
-  });
-
   test('a device registered and never heard from reads unreported', async () => {
     const harness = createTestUserDO();
     open.push(harness);
-    await harness.userDO.registerDevice(await testOwner(), 'studio');
+    await registerTestDevice(harness.userDO, 'studio');
 
     expect((await devices(harness))[0]).toMatchObject({ version: null, update: 'unreported' });
   });

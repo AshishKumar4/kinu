@@ -162,13 +162,13 @@ const DeviceSandboxSchema = v.object({
 const UserDeviceSchema = v.object({
   id: v.string(), label: v.string(), os: v.nullable(v.string()), hostname: v.nullable(v.string()),
   connected: v.boolean(), createdAt: v.number(), lastSeenAt: v.nullable(v.number()),
-  /** Measured from the last rotation (every accepted connect), so a machine in use never reaches it. */
+  /** Measured from the last accepted connect, so a machine in use never reaches it. */
   expiresAt: v.nullable(v.number()),
-  /** A stolen `device.json` shows up here as a replacement nobody caused. */
+  /** Another holder of the machine's key shows up here as a replacement nobody caused. */
   replacedAt: v.nullable(v.number()),
   revokedAt: v.nullable(v.number()), unstoppedAt: v.nullable(v.number()),
-  /** Revoked because its retired key came back: a copy exists. */
-  reuseDetectedAt: v.nullable(v.number()),
+  /** Revoked because two machines connected with its key: a copy of its ~/.kinu exists. */
+  cloneDetectedAt: v.nullable(v.number()),
   wholeMachine: v.boolean(),
   /** Workspace-specific home and roots live on the runtime status, not here. */
   sandbox: DeviceSandboxSchema,
