@@ -1488,24 +1488,30 @@ async function windowRows(t: Telemetry, versionId: string): Promise<number> {
   return rows.reduce((sum, row) => sum + row.count, 0);
 }
 
-/** Per object and minute. */
+/**
+ * The objects one deletion read names, by an `in` filter. The query API answered 500 to 1,000 ids and took 800
+ * (2026-10-23); a read per object was 58 of a version read's 77 requests (staging 99a13686c's window, 29 objects).
+ */
+const DELETION_OBJECTS_PER_READ = 200;
+
 /** The deletion rows of each object whose delivery was cancelled, by any version, from {@link DELETION_LOOKBACK_MS}
- *  before its first such delivery; one object at a time, as every kept window is read at once beside the deploy's. */
+ *  before the first such delivery; {@link DELETION_OBJECTS_PER_READ} objects a read. */
 async function deletionRowsOf(t: Telemetry, canceled: readonly ObjectMinuteCount[]): Promise<{ aborted: TelemetryEvent[]; tornDown: TelemetryEvent[] }> {
-  const first = new Map<string, number>();
+  const objects = [...new Set(canceled.map((row) => row.object))];
+  const from = Math.min(...canceled.map((row) => row.minute)) - DELETION_LOOKBACK_MS;
   const aborted: TelemetryEvent[] = [];
   const tornDown: TelemetryEvent[] = [];
 
-  for (const row of canceled) first.set(row.object, Math.min(first.get(row.object) ?? row.minute, row.minute));
+  for (let at = 0; at < objects.length; at += DELETION_OBJECTS_PER_READ) {
+    const among = (key: string): Filter => ({ key, operation: 'in', value: objects.slice(at, at + DELETION_OBJECTS_PER_READ).join(','), type: 'string' });
 
-  for (const [object, minute] of first) {
-    const from = minute - DELETION_LOOKBACK_MS;
-
-    for (const [filters, into] of [[[eq(DO_ID, object), eq('$metadata.message', 'destroyed')], aborted], [[eq('event', 'workspace.destroyed'), eq('fields.object', object)], tornDown]] as const) {
+    for (const [filters, into] of [[[among(DO_ID), eq('$metadata.message', 'destroyed')], aborted], [[eq('event', 'workspace.destroyed'), among('fields.object')], tornDown]] as const) {
       const read = await t.events(filters, EVENT_CAP, from);
 
-      // A sampled answer can drop the one row of a deletion, and its delivery would read as a wake.
-      if (read.sampling > 1) throw new KinuError('unavailable', `the API sampled the read of object ${object}'s deletion (level ${String(read.sampling)})`);
+      // A sampled answer can drop the one row of a deletion, and its delivery would read as a wake; so can a capped one.
+      if (read.sampling > 1) throw new KinuError('unavailable', `the API sampled the read of ${String(objects.length)} objects' deletions (level ${String(read.sampling)})`);
+
+      if (read.events.length >= EVENT_CAP) throw new Error(`the read of ${String(objects.length)} objects' deletions reached its cap of ${String(EVENT_CAP)} rows`);
       into.push(...read.events);
     }
   }
