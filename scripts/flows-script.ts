@@ -49,6 +49,26 @@ export const ACCOUNT_RECALL_ASK = 'Flow account memory: which city do I live in?
 
 export const ACCOUNT_RECALL_REPLY = 'YOU LIVE IN';
 
+/** The activity row (1018-xao, Muse's activity log): an ask on Home that the assistant answers with a program creating a
+ *  workspace, then a refusal no wait helps, so its turn has a cause, a change and a reason it stopped. */
+export const ACTIVITY_ASK = 'Flow activity: start the activity check workspace.';
+
+export const ACTIVITY_WORKSPACE = 'Flow activity check';
+
+export const ACTIVITY_REFUSAL = 'Flow activity: the provider refused to go on';
+
+function activityAnswer(latest: string, request: ScriptedRequest): ScriptedAnswer | undefined {
+  if (!latest.includes(ACTIVITY_ASK)) return undefined;
+
+  if (!request.called.includes('eval')) {
+    const args = [ACTIVITY_WORKSPACE, 'The activity row made this', '# Flow activity check'].map((arg) => JSON.stringify(arg)).join(', ');
+
+    return { toolCall: { name: 'eval', arguments: { code: `return await agent.createWorkspace(${args});` } } };
+  }
+
+  return { refused: { message: ACTIVITY_REFUSAL } };
+}
+
 /** The attachment row (MA-019): a text file dropped on the chat, then an ask about it; the reply repeats the one word
  *  the file holds, which the ask never says, so a reply that has it read the file. */
 export const ATTACHMENT_FILE = 'flow-attachment.txt';
@@ -613,7 +633,8 @@ export function flowsScript(request: ScriptedRequest): ScriptedAnswer | null {
 
   const latest = request.userTexts.at(-1) ?? '';
 
-  const proposed = agentWorkspaceAnswer(latest, request) ?? accountMemoryAnswer(latest, request) ?? attachmentAnswer(latest) ?? ownerAskAnswer(request, latest);
+  const proposed = agentWorkspaceAnswer(latest, request) ?? accountMemoryAnswer(latest, request) ?? attachmentAnswer(latest) ?? activityAnswer(latest, request)
+    ?? ownerAskAnswer(request, latest);
 
   if (proposed !== undefined) return proposed;
 

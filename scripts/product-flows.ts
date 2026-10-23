@@ -22,7 +22,7 @@
  */
 import type { Page } from 'puppeteer';
 import * as v from 'valibot';
-import { AccountMemoryProposalSchema, CHANGES_MOVED_EVENT, DRIVE_SKILLS_DIR, executorLabel, SLATES_ROOT, type AccountMemoryProposal } from '@kinu.run/core';
+import { AccountMemoryProposalSchema, CHANGES_MOVED_EVENT, DRIVE_SKILLS_DIR, executorLabel, PERSONAL_ASSISTANT_ID, SLATES_ROOT, type AccountMemoryProposal } from '@kinu.run/core';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { evalWorkspaceName, scratchDir } from '@kinu.run/test-utils';
@@ -35,10 +35,10 @@ import {
   APPROVALS_ASK, DECISION_HEARD, HIRE_APPROVAL_ASK, HIRE_RAN, AGENT_WORKSPACE_REPLY, AGENT_WORKSPACE_ASK, ACCOUNT_FACT, ACCOUNT_FACT_ASK,
   ACCOUNT_RECALL_ASK, ACCOUNT_RECALL_REPLY, STACK_FACT, STACK_FACT_ASK, STACK_RECALL_ASK, STACK_RECALL_REPLY,
   SPLICE_HEARD, SPLICE_PAGE_ASK, SPLICE_SENT, SPLICE_STEPS, SPLICE_WORK_ASK,
-  ATTACHMENT_ASK, ATTACHMENT_FILE, ATTACHMENT_REPLY, ATTACHMENT_UNREAD, ATTACHMENT_WORD,
+  ATTACHMENT_ASK, ATTACHMENT_FILE, ATTACHMENT_REPLY, ATTACHMENT_UNREAD, ATTACHMENT_WORD, ACTIVITY_ASK, ACTIVITY_WORKSPACE,
 } from './flows-script';
 import { FALLBACK_ANSWER } from './scripted-protocol';
-import { ACTIVE_TAB_INDEX, AGENT_TAB, AGENTS_COUNTER, agentTab, ATTENTION_BEHIND, ATTENTION_CARD, attentionBehind, attentionCard, CHAT_COMPOSER_LIVE, CHAT_IDLE, CHATS, CHECKBOX, countRpc, createFlowWorkspace, DESKTOP_RETURN, DRIVE_DIALOG_COMMIT, DRIVE_NEW, DRIVE_PLACE, drivePlace, FILES_FAILURE, frameLedger, INSPECTOR_WIDTH, MARK_REVIEWED, NEW_SESSION, openInspector, openInspectorPage, openSlateShareDialog, openWaits, openWorkspacePage, PAGE_TABS, pagesTraffic, painted, PARKED_COMMAND, parkedCommand, pressMenu, pressRowMenu, recordRenderTasks, removeFlowWorkspace, RENAME_BUTTON, rendered, sendAndSettle, sendInChat, sessionLine, settled, settledAfter, startNewChat, submitPublicSlateShare, typeIntoComposer, until, waitOn, type FlowTarget, type FrameLedger, type RpcCounts, type SendSite } from './browser-page';
+import { ACTIVE_TAB_INDEX, AGENT_TAB, AGENTS_COUNTER, agentTab, ATTENTION_BEHIND, ATTENTION_CARD, attentionBehind, attentionCard, CHAT_COMPOSER_LIVE, CHAT_IDLE, CHATS, CHECKBOX, countRpc, createFlowWorkspace, DESKTOP_RETURN, DRIVE_DIALOG_COMMIT, DRIVE_NEW, DRIVE_PLACE, drivePlace, FILES_FAILURE, frameLedger, INSPECTOR_WIDTH, MARK_REVIEWED, named, NEW_SESSION, openInspector, openInspectorPage, openSlateShareDialog, openWaits, openWorkspacePage, PAGE_TABS, pagesTraffic, painted, PARKED_COMMAND, parkedCommand, pressMenu, pressRowMenu, recordRenderTasks, removeFlowWorkspace, RENAME_BUTTON, rendered, sendAndSettle, sendInChat, sessionLine, settled, settledAfter, startNewChat, submitPublicSlateShare, typeIntoComposer, until, waitOn, type FlowTarget, type FrameLedger, type RpcCounts, type SendSite } from './browser-page';
 
 
 /** The waits open now, `; `-joined: what a row stopped for being silent was waiting on (`endedNearSilence`). */
@@ -624,6 +624,79 @@ export async function chatOnlyRewindIsShown(target: FlowTarget): Promise<RewindV
     return { sentAfter, notice, noticeAfterReload };
   } finally {
     await removeFlowWorkspace(target, workspace);
+  }
+}
+
+export interface ActivityVerdict {
+  /** Whether Home already had the assistant, or the row installed it from Explore as a person would. */
+  readonly installed: boolean;
+  /** Activity's newest turn as it drew it: what set it off, what it changed, and why it stopped. */
+  readonly newest: { readonly cause: string; readonly changed: readonly string[]; readonly stopped: string } | null;
+}
+
+/** Home is the assistant's chat: its bar in `focus` names it, and pressing it opens its Activity. */
+const ASSISTANT_HOME = `document.querySelector('[data-workspace-bar][data-layout="focus"] [data-focus-identity]') !== null`;
+
+/**
+ * The account's Personal assistant, installed from Explore as a person installs it after setup when Home has none:
+ * its blueprint's Install, kept as Home. Answers whether it had to.
+ */
+async function assistantOnHome(target: FlowTarget): Promise<boolean> {
+  const page = await signedInPage(target.browser, target);
+
+  try {
+    await page.goto(`${target.origin}/`, { waitUntil: 'load' });
+    await until(page, 'the home page', HOME_DRAWN);
+
+    if (v.parse(v.boolean(), await page.evaluate(ASSISTANT_HOME))) return false;
+
+    await page.goto(`${target.origin}/explore/workspaces/${PERSONAL_ASSISTANT_ID}`, { waitUntil: 'load' });
+    await until(page, "the assistant's Install", `document.querySelector('[data-blueprint-install]') !== null`);
+    await page.click('[data-blueprint-install]');
+    await until(page, 'the install dialog', `document.querySelector('[data-install-confirm]') !== null`);
+    await page.click('[data-install-confirm]');
+    await until(page, "Home as the assistant's chat", `location.pathname === '/' && ${ASSISTANT_HOME}`);
+
+    return true;
+  } finally {
+    await page.close();
+  }
+}
+
+/**
+ * Row: the assistant's Activity (1018-xao, Muse's activity log). An ask on Home runs a program that creates a
+ * workspace, then the provider refuses the rest; pressing the assistant in Home's bar opens its Activity, whose newest
+ * turn says the person set it off, what the program changed and why it stopped.
+ */
+export async function activityIsShown(target: FlowTarget): Promise<ActivityVerdict> {
+  const installed = await assistantOnHome(target);
+  const before = new Set((await listWorkspaces(target.origin, target.identity)).map((row) => row.name));
+  const page = await openWorkspacePage(target, '/');
+
+  try {
+    await sendInChat(page, ACTIVITY_ASK);
+    // The refusal is this row's outcome, not a dead end: `until` would end the row on it, and the chat beside Activity
+    // keeps saying it, so these waits are bare and the row's deadline ends them.
+    await named('the turn to stop on the refusal', () => page.waitForFunction(`document.querySelector('#chat [data-turn-failure]') !== null`, { polling: 100 }));
+    await page.click('[data-focus-identity]');
+    await named("Activity's turns", () => page.waitForFunction(`document.querySelector('[data-activity-entry]') !== null`, { polling: 100 }));
+
+    const newest = v.parse(v.nullable(v.object({ cause: v.string(), changed: v.array(v.string()), stopped: v.string() })), await page.evaluate(`(() => {
+      const entry = document.querySelector('[data-activity-entry]');
+      return entry === null ? null : {
+        cause: entry.getAttribute('data-cause') ?? '',
+        changed: [...entry.querySelectorAll('[data-activity-changed] li')].map((change) => change.textContent ?? ''),
+        stopped: entry.querySelector('[data-activity-failed]')?.textContent ?? '',
+      };
+    })()`));
+
+    return { installed, newest };
+  } finally {
+    await page.close();
+
+    for (const row of await listWorkspaces(target.origin, target.identity)) {
+      if (!before.has(row.name) && row.displayName === ACTIVITY_WORKSPACE) await removeFlowWorkspace(target, row.name);
+    }
   }
 }
 
