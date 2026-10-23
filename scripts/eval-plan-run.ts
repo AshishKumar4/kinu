@@ -11,13 +11,15 @@
  *                                                 trajectory reviews on Claude Haiku 5.5 at low effort)
  *   …--tasks=chat-app,office --trials=2           only those tasks, that many trials each (default: every task, one)
  *   …--effort=low                                 the trial accounts' turns ask that reasoning effort (KINU_EVAL_EFFORT)
+ *   …--on=production                              on production's build instead of staging's: it holds still unlocked, so
+ *                                                 a run there spans one build (fast-suite tasks only)
  *
  * The run is a holder this command starts (systemd unit kinu-eval-plan-run). It reads each plan's login from OMP's own
  * store, read-only and its access token alone: OMP renews its logins under its own lease, which nothing here touches,
  * and no refresh token leaves its store. The trial account a model's sequence runs in is given that access token
  * (scripts/eval-provider-keys.ts), which it uses as it is until it expires and never renews; while the run lasts, each
  * token OMP has renewed since is given again to the account that holds the old one. At the end, or on a stop, every
- * staging eval account's copy is deleted.
+ * eval account's copy on the deployment is deleted.
  */
 import { Database } from 'bun:sqlite';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -94,11 +96,11 @@ export function ompGrant(store: string, login: OmpLogin): OAuthCredential {
   }
 }
 
-/** The staging eval accounts' copies of a plan login: read, or (`clear`) deleted. */
+/** A deployment's eval accounts' copies of a plan login: read, or (`clear`) deleted. */
 export async function planLogins(origin: string, secret: string, accounts: readonly string[], clear: boolean): Promise<string[]> {
   const cleared: string[] = [];
 
-  // 32 at a time: a stop's clear of every staging eval account finishes well inside systemd's stop timeout.
+  // 32 at a time: a stop's clear of every eval account finishes well inside systemd's stop timeout.
   for (let at = 0; at < accounts.length; at += 32) {
     cleared.push(...(await Promise.all(accounts.slice(at, at + 32).map(async (account) => {
       const headers = { [DEV_IDENTITY_HEADER]: secret, ...account !== 'eval-service' && { [DEV_IDENTITY_ACCOUNT_HEADER]: account } };
@@ -140,8 +142,8 @@ export async function giveAgain(input: {
   return given;
 }
 
-/** Every eval account a run on staging can act as: eval-service and the lower half of the trial accounts. */
-function stagingAccounts(): string[] {
+/** Every eval account a run can act as, on either deployment: eval-service and the lower half of the trial accounts. */
+function evalAccounts(): string[] {
   return ['eval-service', ...Array.from({ length: EVAL_TRIAL_ACCOUNTS / 2 }, (_, at) => `trial-${String(at + 1)}`)];
 }
 
@@ -159,7 +161,7 @@ async function command(argv: readonly string[]): Promise<number> {
 
     const holder = ['bun', join(ROOT, 'scripts/eval-plan-run.ts'), '--hold', ...argv.filter(passed)];
 
-    // A stop waits for the holder's cleanup (a clear of every staging eval account) rather than the default 90 s.
+    // A stop waits for the holder's cleanup (a clear of every eval account) rather than the default 90 s.
     const started = Bun.spawnSync(['systemd-run', '--user', `--unit=${UNIT}`, '--collect', '--property=TimeoutStopSec=300', `--working-directory=${ROOT}`, `--setenv=HOME=${process.env['HOME'] ?? ''}`,
       `--setenv=PATH=${process.env['PATH'] ?? ''}`, '--setenv=TMPDIR=/mnt/local/kinu/tmp', 'bash', '-c',
       `set -a; . "$HOME/.config/kinu/secrets.env"; set +a; exec ${holder.join(' ')} > ${join(STATE, 'holder.log')} 2>&1`]);
@@ -209,7 +211,7 @@ export function modelsNamed(argv: readonly string[]): (typeof MODELS)[number][] 
 }
 
 /** The flags a run passes through, from the holder to each sequence's `evals-map`, and its effort as `KINU_EVAL_EFFORT`. */
-const PASSED = ['--without-muse', '--tasks=', '--trials=', '--effort='] as const;
+const PASSED = ['--without-muse', '--tasks=', '--trials=', '--effort=', '--on='] as const;
 
 /** `evals-map`'s own arguments among `argv`, and the effort the trial accounts' turns ask (none: their default). */
 export function trialSelection(argv: readonly string[]) {
@@ -217,22 +219,27 @@ export function trialSelection(argv: readonly string[]) {
   const trials = valued('--trials=') ?? '1';
   const tasks = valued('--tasks=');
 
-  return { map: [`--trials=${trials}`, ...tasks === undefined ? [] : [`--tasks=${tasks}`]], effort: valued('--effort=') ?? null };
+  const on = v.parse(v.picklist(['staging', 'production'], '--on is staging or production'), valued('--on=') ?? 'staging');
+  // Staging alone, or production alone as a daily run measures it (`evals-map --daily`, which records nothing by itself).
+  const where = on === 'staging' ? ['--staging-only'] : ['--daily', '--suite=fast', '--on=production'];
+
+  return { on, map: [...where, `--trials=${trials}`, ...tasks === undefined ? [] : [`--tasks=${tasks}`]], effort: valued('--effort=') ?? null };
 }
 
 /** The holder: preflight, each plan's login from OMP, the sequences, the renewed tokens given again, and the cleanup. */
 async function hold(argv: readonly string[]): Promise<number> {
-  const origin = deploymentOf('staging').origin;
-  const secret = process.env['KINU_EVAL_STAGING_WEB_IDENTITY'] ?? '';
+  const selection = trialSelection(argv);
+  const origin = deploymentOf(selection.on).origin;
+  const identityEnv = selection.on === 'staging' ? 'KINU_EVAL_STAGING_WEB_IDENTITY' : 'KINU_EVAL_WEB_IDENTITY';
+  const secret = process.env[identityEnv] ?? '';
   const out = join(STATE, `run-${new Date().toISOString().replace(/[:.]/gu, '-')}`);
   const models = modelsNamed(argv);
-  const selection = trialSelection(argv);
   const children: Bun.Subprocess[] = [];
 
-  if (secret === '') throw new Error('KINU_EVAL_STAGING_WEB_IDENTITY is not set');
+  if (secret === '') throw new Error(`${identityEnv} is not set`);
   const { sha } = await deployedBuild({ origin });
 
-  say('preflight', `staging serves ${sha}; the run measures ${models.map((each) => each.model).join(', ')} (${selection.map.join(' ')}${selection.effort === null ? '' : `, effort ${selection.effort}`}), each model's tasks in turn in one account, at most ${String(CALLS_AT_ONCE)} calls at once.`);
+  say('preflight', `${selection.on} serves ${sha}; the run measures ${models.map((each) => each.model).join(', ')} (${selection.map.join(' ')}${selection.effort === null ? '' : `, effort ${selection.effort}`}), each model's tasks in turn in one account, at most ${String(CALLS_AT_ONCE)} calls at once.`);
   await keysWindows((line) => { say('preflight', line); });
 
   // What each plan's account is given, by its key: the token last read from OMP.
@@ -241,10 +248,10 @@ async function hold(argv: readonly string[]): Promise<number> {
   for (const [key, grant] of given) say('preflight', `${key}: OMP's login ends at ${new Date(grant.expiresAt ?? 0).toISOString()}.`);
 
   if (argv.includes('--dry-run')) {
-    const held = await planLogins(origin, secret, stagingAccounts(), false);
+    const held = await planLogins(origin, secret, evalAccounts(), false);
 
-    say('dry-run', `dry run: ${String(stagingAccounts().length)} staging eval accounts read, ${held.length === 0 ? 'none holding' : held.join(', ')} a plan login.`);
-    say('dry-run', `dry run: the run would be, per model: ${selection.effort === null ? '' : `KINU_EVAL_EFFORT=${selection.effort} `}bun scripts/evals-map.ts --staging-only --sequence ${selection.map.join(' ')} --calls-at-once=${String(CALLS_AT_ONCE)} --out=${out}/<model>`);
+    say('dry-run', `dry run: ${String(evalAccounts().length)} ${selection.on} eval accounts read, ${held.length === 0 ? 'none holding' : held.join(', ')} a plan login.`);
+    say('dry-run', `dry run: the run would be, per model: ${selection.effort === null ? '' : `KINU_EVAL_EFFORT=${selection.effort} `}bun scripts/evals-map.ts --sequence ${selection.map.join(' ')} --calls-at-once=${String(CALLS_AT_ONCE)} --out=${out}/<model>`);
 
     return 0;
   }
@@ -276,7 +283,7 @@ async function hold(argv: readonly string[]): Promise<number> {
       const now = ompGrant(OMP_STORE, each.omp);
 
       if (now.accessToken === given.get(each.key)?.accessToken) continue;
-      const holders = await planLogins(origin, secret, stagingAccounts(), false);
+      const holders = await planLogins(origin, secret, evalAccounts(), false);
       const reached = await giveAgain({ origin, secret, holders, key: each.key, grant: now });
 
       given.set(each.key, now);
@@ -295,7 +302,7 @@ async function hold(argv: readonly string[]): Promise<number> {
 
   try {
     // A copy an earlier run left would be kept as the account's own (eval-provider-keys gives a grant once).
-    const stale = await planLogins(origin, secret, stagingAccounts(), true);
+    const stale = await planLogins(origin, secret, evalAccounts(), true);
 
     if (stale.length > 0) say('running', `cleared what an earlier run left: ${stale.join(', ')}`);
     mkdirSync(out, { recursive: true });
@@ -305,7 +312,7 @@ async function hold(argv: readonly string[]): Promise<number> {
     for (const { slug, model, key } of models) {
       const grant = key === null ? undefined : given.get(key);
 
-      children.push(Bun.spawn(['bun', 'scripts/evals-map.ts', '--staging-only', '--sequence', ...selection.map, `--calls-at-once=${String(CALLS_AT_ONCE)}`, `--out=${join(out, slug)}`], {
+      children.push(Bun.spawn(['bun', 'scripts/evals-map.ts', '--sequence', ...selection.map, `--calls-at-once=${String(CALLS_AT_ONCE)}`, `--out=${join(out, slug)}`], {
         cwd: ROOT,
         env: {
           ...process.env, KINU_EVAL_MODELS: model, ...selection.effort !== null && { KINU_EVAL_EFFORT: selection.effort },
@@ -332,7 +339,7 @@ async function hold(argv: readonly string[]): Promise<number> {
 
     return 1;
   } finally {
-    const cleared = await planLogins(origin, secret, stagingAccounts(), true);
+    const cleared = await planLogins(origin, secret, evalAccounts(), true);
 
     process.off('SIGTERM', requestStop);
     say('done', `cleared every plan login: ${cleared.length === 0 ? 'none was held' : cleared.join(', ')}`);

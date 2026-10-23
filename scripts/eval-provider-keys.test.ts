@@ -294,8 +294,11 @@ describe('every trial account a run acts as', () => {
       const trial = muse?.catalog;
 
       if (muse === undefined || trial === undefined) throw new Error('the trial account was never configured');
-      // As a person's catalog may hold: a default tier with a chain, and a measured model's own.
-      muse.catalog = { ...trial, tiers: { ...trial.tiers, default: { model: MODEL, fallbacks: [DEFAULT_WORKERS_AI_MODEL_SPEC] } }, modelFallbacks: { ...trial.modelFallbacks, [MODEL]: [DEFAULT_WORKERS_AI_MODEL_SPEC] } };
+      // As a person's catalog may hold: a default tier with a chain, a measured model's own, and a fast model's through it.
+      muse.catalog = {
+        ...trial, tiers: { ...trial.tiers, default: { model: MODEL, fallbacks: [DEFAULT_WORKERS_AI_MODEL_SPEC] }, fast: { model: 'openrouter/fast' } },
+        modelFallbacks: { ...trial.modelFallbacks, [MODEL]: [DEFAULT_WORKERS_AI_MODEL_SPEC], 'openrouter/fast': [MODEL, 'claude/claude-haiku-5-5'] },
+      };
 
       await provisionEvalProviderKeys({ ...base, models: [MODEL] });
       const one = chainsOf(accounts.get('trial-1')?.catalog.catalog);

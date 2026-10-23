@@ -74,9 +74,10 @@ test('a run measures Muse and each model named, and refuses a name it does not h
 });
 
 test('a run passes its tasks and trials to each sequence, and its effort to the trial accounts', () => {
-  expect(trialSelection(['--models=haiku'])).toEqual({ map: ['--trials=1'], effort: null });
-  expect(trialSelection(['--models=haiku', '--tasks=chat-app,office', '--trials=2', '--effort=low']))
-    .toEqual({ map: ['--trials=2', '--tasks=chat-app,office'], effort: 'low' });
+  expect(trialSelection(['--models=haiku'])).toEqual({ on: 'staging', map: ['--staging-only', '--trials=1'], effort: null });
+  expect(trialSelection(['--models=haiku', '--tasks=chat-app,office', '--trials=2', '--effort=low', '--on=production']))
+    .toEqual({ on: 'production', map: ['--daily', '--suite=fast', '--on=production', '--trials=2', '--tasks=chat-app,office'], effort: 'low' });
+  expect(() => trialSelection(['--on=prod'])).toThrow('--on is staging or production');
 });
 
 // A token OMP renewed reaches the account using the old one, and no other.

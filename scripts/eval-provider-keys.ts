@@ -249,8 +249,8 @@ async function readyTrialAccount(input: Provisioning & { identity: string }, acc
   // A bare account inherits a single Workers AI model for its swarm judge. Its refusal ended every research swarm
   // in run 37880718948. Keys alone do not configure that route: keep the user's retry count, and cross providers, to
   // the one model a single-model run measures. Nothing else falls back: a model the run measures takes the chain of
-  // the tier it runs under or its own (`profiles/resolve.ts`), and a call another model answered would be counted as its
-  // own (2026-10-23, a GLM 5.3 run's 98 calls answered by Muse), so no tier keeps a chain and no measured model has one.
+  // the tier it runs under or its own (`profiles/resolve.ts`), or sits in another model's, and a call another model
+  // answered would be counted as its own (2026-10-23, a GLM 5.3 run's 98 calls answered by Muse), so no other chain stays.
   const model = DEFAULT_WORKERS_AI_MODEL_SPEC;
   const [only, ...more] = input.models;
   const judgeChain = only !== undefined && more.length === 0 && only !== model ? [only] : [];
@@ -265,10 +265,9 @@ async function readyTrialAccount(input: Provisioning & { identity: string }, acc
       return [id, id === 'deep' ? { ...sized, model } : sized];
     }));
 
-    const { modelFallbacks: chained, ...base } = catalog;
-    const kept = Object.entries(chained ?? {}).filter(([spec]) => spec !== model && !input.models.includes(spec));
-    const chains = judgeChain.length > 0 ? [...kept, [model, judgeChain] as const] : kept;
-    const next = { ...base, tiers: { ...catalog.tiers, ...tiers, deep: tiers['deep'] ?? { model } }, ...chains.length > 0 && { modelFallbacks: Object.fromEntries(chains) } };
+    // Any other chain could pass through a measured model and on past it (a fast model's C → A → B), so none is kept.
+    const { modelFallbacks: _chains, ...base } = catalog;
+    const next = { ...base, tiers: { ...catalog.tiers, ...tiers, deep: tiers['deep'] ?? { model } }, ...judgeChain.length > 0 && { modelFallbacks: { [model]: judgeChain } } };
 
     return profileCatalogDigest(next) === profileCatalogDigest(catalog) ? null : next;
   };
