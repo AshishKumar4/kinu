@@ -706,6 +706,20 @@
       "owner": "scanCss",
       "sourceSha256": "35f35d506da9de173ca88a4bd3950497809f8257eadb75700965831b229ecf9b",
       "decision": "traversal"
+    },
+    {
+      "file": "packages/core/src/slates/ui-blocks.ts",
+      "kind": "regex-literal",
+      "owner": "SERVER",
+      "sourceSha256": "e79599050bfa4bb4bda950d69ecf7d7be47dbac8a9854fac1c3675f2aa1ca029",
+      "decision": "framing"
+    },
+    {
+      "file": "tests/browser/slate-native-ux.test.ts",
+      "kind": "regex-literal",
+      "owner": "<module>",
+      "sourceSha256": "4cebceea1ddffeecb06eca396f8132b3697555b4be5f2a843d9f00b0b329e528",
+      "decision": "lexical"
     }
   ]
 }

@@ -256,7 +256,8 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
   paths() {
     return {
       kinuInSlateRoot: this.vfs.as(CRED_SESSION_USER).exists('/slates/notes/.kinu'),
-      entries: this.vfs.as(CRED_SESSION_USER).readdir('/usr/lib/kinu/slate/entries/notes').map((entry) => entry.name),
+      // The root's own directory of generated entries, named for the whole root (`slateEntriesDir`).
+      entries: this.vfs.as(CRED_SESSION_USER).readdir('/usr/lib/kinu/slate/entries/slates__notes').map((entry) => entry.name),
     };
   }
 

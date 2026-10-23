@@ -427,8 +427,14 @@ export interface AlienEffect {
 /** An answer's page's own server's methods, as the chat that draws the page calls them. */
 export interface AnswerPageServer {
   readonly word: string;
+  /** The same method of another answer's block of the same name, asked at once. */
+  readonly other: string;
   readonly sql: string;
+  /** The binding its process would keep state through, reached around the class's own getters. */
+  readonly kept: string;
   readonly missing: string;
+  /** Asked once main's role is a planner. */
+  readonly planner: string;
 }
 
 export interface AnswerPageModes {

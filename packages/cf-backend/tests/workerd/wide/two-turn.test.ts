@@ -275,8 +275,14 @@ describe('two real turns over the HTTP model seam', () => {
     const server = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('page-server-driver')).answerPageServerIn();
 
     expect(server.word, JSON.stringify(server)).toBe('"errors by route"');
+    // Another answer's block of the same name runs its own server, built from its own block, though both build at once.
+    expect(server.other).toBe('"errors again"');
     expect(server.sql).toContain(PAGE_KEEPS_NO_DATA);
+    // Its process holds no binding to keep state through, whatever its code imports.
+    expect(server.kept).toBe('"no binding"');
     expect(server.missing).toMatch(/^bad_input: /u);
+    // A planner's page runs no authored code, as none of its other calls write.
+    expect(server.planner).toMatch(/^denied: /u);
   });
 
   // Staging 2026-10-19: a 341-step computer-use chat would not open. Its seed read the agent's whole conversation back

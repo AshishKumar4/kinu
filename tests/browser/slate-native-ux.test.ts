@@ -9,7 +9,7 @@ import type { Frame, Page } from 'puppeteer';
 import * as v from 'valibot';
 import { readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { appFontFile, SLATE_FONTS_PATH, SLATE_PAGE_PREAMBLE } from '@kinu.run/core';
+import { appFontFile, SLATE_BRIDGE_MESSAGE, SLATE_FONTS_PATH, SLATE_PAGE_PREAMBLE } from '@kinu.run/core';
 import { SLATE_CLIENT_MODULE } from '@kinu.run/core/slates';
 import { detach } from '@kinu.run/core/obs';
 import { contrast, rgba, withGallery, type Rgba } from '../../scripts/gallery-harness';
@@ -315,6 +315,44 @@ describe('an answer\'s page in the chat', () => {
         await page.close();
         await rm(stolen, { force: true });
       }
+    });
+  });
+
+  // A page that keeps offering ports the chat will not take holds one refusal at a time (security review of 1023-ac):
+  // each new offer's session replaces the one before, which closes, so the chat keeps one session per page, not one per
+  // offer. Each closed one's call is refused by its closing, the newest by its words.
+  test('a page that floods the chat with ports holds one refusal there at a time', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      try {
+        const frame = await openPage(page, origin, 'light', { width: 1280, height: 860 });
+
+        await frame.waitForFunction(() => (document.getElementById('counted')?.textContent ?? '') !== '');
+        // A module of the page's own, so `capnweb` resolves through the page's import map as its scripts' does.
+        await frame.evaluate((bridge) => {
+          const flood = document.createElement('script');
+
+          flood.type = 'module';
+          flood.textContent = [
+            'import { newMessagePortRpcSession } from "capnweb";',
+            'const offered = Array.from({ length: 4 }, () => {',
+            '  const channel = new MessageChannel();',
+            `  parent.postMessage({ kinu: ${JSON.stringify(bridge)}, nonce: "not-the-page" }, "*", [channel.port2]);`,
+            '  return newMessagePortRpcSession(channel.port1);',
+            '});',
+            'const answers = await Promise.all(offered.map((session) => session.$workspace(["db", "count"], [{ table: "errors" }])',
+            '  .then(() => "answered", (refused) => String(refused.message))));',
+            'document.body.dataset.flooded = JSON.stringify(answers);',
+          ].join('\n');
+          document.body.append(flood);
+        }, SLATE_BRIDGE_MESSAGE);
+        await frame.waitForFunction(() => document.body.dataset.flooded !== undefined);
+        const answers = v.parse(v.array(v.string()), JSON.parse(await frame.evaluate(() => document.body.dataset.flooded ?? '[]')));
+
+        expect(answers.slice(0, 3).every((answer) => answer.includes('closed'))).toBe(true);
+        expect(answers[3]).toContain('no longer holds the page');
+      } finally { await page.close(); }
     });
   });
 

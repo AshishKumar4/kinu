@@ -1,4 +1,7 @@
 [
   "packages/cf-backend/package.json#@ai-sdk/anthropic (unused-dependency)",
-  "packages/cf-backend/package.json#@ai-sdk/openai (unused-dependency)"
+  "packages/cf-backend/package.json#@ai-sdk/openai (unused-dependency)",
+  "packages/cf-backend/package.json#htm (unused-dependency)",
+  "packages/cf-backend/package.json#preact (unused-dependency)",
+  "packages/cf-backend/package.json#uplot (unused-dependency)"
 ]

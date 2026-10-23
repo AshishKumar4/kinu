@@ -634,6 +634,18 @@ export const DEPENDENCY_REASONS = {
     + 'bunfig.toml\'s hoisted linker resolves them against the root manifest, so it is '
     + 'the root pin that is load-bearing. No cf-backend file imports it. Deleting this '
     + 'line is a version-pin decision, not a dead-code one.',
+  'packages/cf-backend/package.json#htm (unused-dependency)':
+    'bundled by slate-vendor.ts from an esbuild entry written as text (`export * from "htm/preact"`), which no import '
+    + 'graph reads: the bytes a page the chat draws imports by name, served under /assets/slate/ and by each slate '
+    + 'runner at /__kinu/ (SLATE_PAGE_MODULES). Deleting it breaks every page that imports htm/preact.',
+  'packages/cf-backend/package.json#preact (unused-dependency)':
+    'bundled by slate-vendor.ts from an esbuild entry written as text (`export * from "preact"`), which no import '
+    + 'graph reads: the bytes a page the chat draws imports by name, served under /assets/slate/ and by each slate '
+    + 'runner at /__kinu/ (SLATE_PAGE_MODULES). Deleting it breaks every page that imports preact.',
+  'packages/cf-backend/package.json#uplot (unused-dependency)':
+    'bundled by slate-vendor.ts from an esbuild entry written as text (`export * from "uplot"`), which no import '
+    + 'graph reads: the bytes a page the chat draws imports by name, served under /assets/slate/ and by each slate '
+    + 'runner at /__kinu/ (SLATE_PAGE_MODULES). Deleting it breaks every page that imports uplot.',
   'packages/cf-backend/package.json#@ai-sdk/openai (unused-dependency)':
     'the same redundant duplicate: packages/core/src/providers/openai.ts:8 and '
     + 'packages/cli-backend/src/opencode-provider.ts:17 import it through the root pin, '

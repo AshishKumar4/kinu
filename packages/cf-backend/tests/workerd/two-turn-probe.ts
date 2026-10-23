@@ -459,26 +459,44 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
    * workspace.db; a method it does not have is refused by name.
    */
   async answerPageServer(): Promise<AnswerPageServer> {
-    const server = [
+    const server = (word: string) => [
       'import { SlateObject } from "kinu:slate";',
+      'import { env } from "cloudflare:workers";',
       'export class Slate extends SlateObject {',
-      '  async word(of) { return of + " by route"; }',
+      `  async word(of) { return of + " ${word}"; }`,
       '  async rows() { return this.sql.exec("SELECT 1").toArray().length; }',
+      // Around the class's own getters, straight to the binding its process would hold.
+      '  async kept() { return env.__storage === undefined ? "no binding" : JSON.stringify(await env.__storage.call(["put"], ["k", "v"], null)); }',
       '}',
     ].join('\n');
 
+    const block = (word: string) => `Here:\n<slate-ui name="routes">\n<p>routes</p>\n<script type="slate/server">\n${server(word)}\n</script>\n</slate-ui>`;
+
+    // Two answers, each with a block of one name and a server of its own.
     await this.seedMainChat([
       { id: 'u-served', origin: 'input', role: 'user', content: 'Show the routes.' },
-      { id: 'a-served', origin: 'output', role: 'assistant', content: `Here:\n<slate-ui name="routes">\n<p>routes</p>\n<script type="slate/server">\n${server}\n</script>\n</slate-ui>` },
+      { id: 'a-served', origin: 'output', role: 'assistant', content: block('by route') },
+      { id: 'u-again', origin: 'input', role: 'user', content: 'And again.' },
+      { id: 'a-again', origin: 'output', role: 'assistant', content: block('again') },
     ]);
 
-    const said = async (method: string, args: string[]) => {
-      const result = await this.drawnSlateCall('a-served/routes', { method, args });
+    const said = async (page: string, method: string, args: string[]) => {
+      const result = await this.drawnSlateCall(page, { method, args });
 
       return result.ok ? JSON.stringify(result.value) : `${result.reason}: ${result.error}`;
     };
 
-    return { word: await said('word', ['errors']), sql: await said('rows', []), missing: await said('absent', []) };
+    const both = await Promise.all([said('a-served/routes', 'word', ['errors']), said('a-again/routes', 'word', ['errors'])]);
+
+    const answered = {
+      word: both[0], other: both[1], sql: await said('a-served/routes', 'rows', []), kept: await said('a-served/routes', 'kept', []),
+      missing: await said('a-served/routes', 'absent', []),
+    };
+
+    // A planner's role holds its page's server to Plan too, whatever its last ask asked for.
+    await this.setRole('planner');
+
+    return { ...answered, planner: await said('a-again/routes', 'word', ['errors']) };
   }
 
   /** `done` once a transition closed; an open one answers that it resumed. */

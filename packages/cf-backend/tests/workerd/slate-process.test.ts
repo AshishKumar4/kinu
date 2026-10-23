@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { expect, it } from 'vitest';
 import * as v from 'valibot';
-import { SLATE_PAGE_PREAMBLE } from '@kinu.run/core';
+import { SLATE_PAGE_MODULES, SLATE_PAGE_PREAMBLE } from '@kinu.run/core';
 
 it('runs an authored class: the prototype is the surface and the reserved storage round-trips', async () => {
   const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('resident-class'));
@@ -220,14 +220,9 @@ it('a slate declaring a browser surface serves the shell, the client bundle, and
 
     if (importMap === undefined) throw new Error('the shell carries no import map');
 
+    // Every module a page may import by name, each from the runner's own `/__kinu/`, and each served below.
     expect(JSON.parse(importMap)).toEqual({
-      imports: {
-        'react': '/__kinu/react.js',
-        'react-dom/client': '/__kinu/react.js',
-        'react/jsx-runtime': '/__kinu/react.js',
-        'capnweb': '/__kinu/capnweb.js',
-        'kinu:slate': '/__kinu/slate.js',
-      },
+      imports: Object.fromEntries(Object.entries(SLATE_PAGE_MODULES).map(([name, file]) => [name, `/__kinu/${file}`])),
     });
 
     const mapped = Object.values(v.parse(v.object({ imports: v.record(v.string(), v.string()) }), JSON.parse(importMap)).imports)
