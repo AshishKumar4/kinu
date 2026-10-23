@@ -423,7 +423,7 @@
     },
     {
       "key": "packages/devbox/tests/snapshot-registry.test.ts#platform>fetcher",
-      "complexity": 25
+      "complexity": 24
     },
     {
       "key": "scripts/devbox-container-tier.ts#main",

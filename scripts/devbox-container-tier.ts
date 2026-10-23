@@ -541,7 +541,11 @@ async function main(): Promise<void> {
         const removed = await registry.delete(id);
 
         if (removed.kind === 'refused') throw new Error(removed.reason);
-        requireEqual((await registry.delete(id)).kind, 'absent');
+        const again = await registry.delete(id);
+
+        // Its own words, not a mismatch of kinds: staging 58601a8b0 reported `{"actual":"refused","expected":"absent"}`.
+        if (again.kind === 'refused') throw new Error(`it was deleted, then asking whether it was gone was refused: ${again.reason}`);
+        requireEqual(again.kind, 'absent');
       });
 
       if (failed.length > 0) throw new Error(failed.join('; '));
