@@ -1996,13 +1996,17 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       if (!parsed.success) return;
       const { type, id, done, error, landed, replay, continuation, body, steerId, status } = parsed.output;
 
+      // The step's tool part, ended (its file read is refused as missing), in a message list or a replayed chunk.
+      const toolStep = (type === 'cf_agent_chat_messages' || type === 'cf_agent_use_chat_response') && raw.includes('call_parity_1')
+        && /output-(available|error)/u.test(raw);
+
       const frame = v.parse(ParityFrameSchema, {
         socket: name, type,
         ...(id !== undefined && { id }), ...(done !== undefined && { done }), ...(error !== undefined && { error }),
         ...(landed !== undefined && { landed }), ...(replay !== undefined && { replay }),
         ...(continuation !== undefined && { continuation }),
         ...(body !== undefined && body !== '' && { body }),
-        ...(steerId !== undefined && { steerId }), ...(status !== undefined && { status }),
+        ...(steerId !== undefined && { steerId }), ...(status !== undefined && { status }), ...(toolStep && { toolStep }),
       });
 
       frames.push(frame);
@@ -2125,6 +2129,9 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         socket.send(this.parityFrame('PARITY-FOUR-STEER', file));
         // Acknowledged, not landed: the eviction cuts the turn first; the reservation is what survives.
         await seen(this.queuedSteer('input-PARITY-FOUR-STEER'), 'the steer admitted into the parked turn');
+        // The restarted turn's own call parks too, so what a tab sees of it before its finish can be read (m1919a): it
+        // answers the steer, the last thing its user said, which parks on `first`.
+        await fetch('http://probe-control.invalid/parity/hold', { method: 'POST', body: JSON.stringify({ parkAt: 'first' }) });
       } finally {
         socket.close(1000, 'parity prepared');
       }
@@ -2152,10 +2159,17 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     try {
       // 5. Resume: the parked producer is released, the wake continues the evicted turn and
       //    replays the acknowledged steer.
-      const { socket, done } = await this.paritySocket(target, prepared.workspace, 'B', frames);
+      const { socket, done, seen } = await this.paritySocket(target, prepared.workspace, 'B', frames);
 
       try {
         socket.send(JSON.stringify({ type: 'cf_agent_stream_resume_request' }));
+        // m1919a, the owner: a tab reopened on a restarted turn saw the steps before the restart only at its finish. As the
+        // page does, the tab acknowledges the resume, and is replayed the turn so far; the restarted call is parked, so
+        // the finish cannot come before the tool step made before the restart shows.
+        await seen((frame) => frame.socket === 'B' && frame.type === 'cf_agent_stream_resuming', 'the resume');
+        const resuming = frames.find((frame) => frame.socket === 'B' && frame.type === 'cf_agent_stream_resuming');
+        socket.send(JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: resuming?.id }));
+        await seen((frame) => frame.socket === 'B' && frame.toolStep === true, 'the step before the restart, while the restarted turn is still open');
         await fetch('http://probe-control.invalid/parity/release', { method: 'POST' });
         await awaitSettled(target);
         await awaitSleepTimeSettled(recording, prepared.workspace, 1);

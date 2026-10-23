@@ -288,6 +288,8 @@ export const ParityFrameSchema = v.object({
   body: v.optional(v.string()),
   steerId: v.optional(v.string()),
   status: v.optional(v.string()),
+  /** A message list or replayed chunk that holds PARITY-FOUR-TOOL's tool step, ended. */
+  toolStep: v.optional(v.boolean()),
 });
 
 export type ParityFrame = v.InferOutput<typeof ParityFrameSchema>;
