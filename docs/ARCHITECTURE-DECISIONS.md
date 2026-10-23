@@ -1330,7 +1330,11 @@ a facet of its own) and D13's "every agent's advisor in core `ActorAdvisor`".
   turn's message reads and decoding, the long turn's prompt check in the AI SDK,
   `standardizePrompt`, zod over the whole prompt each call, growing with the
   history); the fifth ended on a driver request the harness's fetch timed out.
-  The gate is a script, not yet a tier row, until that timeout is settled. On staging, 7 days to
+  The gate is a script, not yet a tier row, until that timeout is settled.
+  A host that pauses the thread 5 ms mid-turn splits a turn as a wait does,
+  so the driver runs a synchronous control turn every lap on workerd's one
+  thread, and a run that read a pause inside one, or no control turn, is
+  unreadable (exit 2), never green. On staging, 7 days to
   2026-10-23 (`agent.isolate_invocation`, sampled 1 in 10), agent invocations
   of 100 ms of CPU or more were 31% of `step`, 3% of `activePlanReview` and 1%
   of `seed`; an invocation's CPU includes an isolate's start, so it bounds a

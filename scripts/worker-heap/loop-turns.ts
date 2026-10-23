@@ -13,13 +13,16 @@
  * whole workspace.
  *
  * Read in workerd under a CPU profiler sampling every millisecond: a stretch is a run of samples with JavaScript on the
- * stack and no gap between them past {@link LOOP_GAP_US}. Blind: turns back to back with no wait between read as one
- * stretch (conservative); a host pausing the thread 5 ms or more mid-turn reads as a wait and splits the turn; native work outside JavaScript (`(program)`) reads as waiting; the host's speed against the
- * platform's is unmeasured; and work no workload here runs is unread (the workloads: a step's turns, a cold workspace,
+ * stack and no gap between them past 5 ms. A host pausing the thread that long mid-turn would split a turn the same
+ * way, so the driver runs a synchronous control turn every lap on the same thread, and a pause read inside one makes
+ * the run unreadable, never green. Blind: turns back to back with no wait between read as one stretch (conservative);
+ * a pause outside the control's turns is inferred from theirs, not seen; native work outside JavaScript (`(program)`)
+ * reads as waiting; the host's speed against the platform's is unmeasured; and work no workload here runs is unread
+ * (the workloads: a step's turns, a cold workspace,
  * heads, the 150-step long turn unadvised, advised and compacted against a 64k window, a failing turn, the 450-step
  * screenshot turn with its chat's seeds, twelve subagents' hires, and 40 advised steps of 50 kB results).
  */
-import { profileEveryIsolate, profileLoop, targetIds, type BusyStretch, type LoopProfile } from './inspector';
+import { longestBusy, pausesUnder, profileLoop, targetIds, type BusyStretch, type HostPauses, type LoopProfile } from './inspector';
 
 /** The longest stretch an agent's isolate may hold its loop: the shortest turn the platform reset a facet for. */
 export const LOOP_TURN_BOUND_MS = 100;
@@ -40,9 +43,16 @@ function workloadOf(isolate: string, workspaces: ReadonlyMap<string, string>): s
   return `agent ${actor} of the workspace ${workspaces.get(object) ?? object}`;
 }
 
+/** What the loop pass read: each isolate's longest stretch, and the pauses its control turns saw. */
+export interface LoopReading {
+  readonly turns: readonly LoopTurn[];
+  readonly host: HostPauses;
+}
+
 /** Prints each isolate's longest stretch, with the frames it ran under, then every agent's isolate at or past the bound
- *  and the gate's blind spots: 0 when no agent's isolate reached it, else 1. */
-export function loopVerdict(turns: readonly LoopTurn[]): number {
+ *  and the gate's blind spots: 1 when an agent's isolate reached it; else 2 when the host paused a control turn (a pause
+ *  splits a turn as a wait does) or none was read; else 0. */
+export function loopVerdict({ turns, host }: LoopReading): number {
   for (const turn of turns) {
     console.log(`facet-loop: ${turn.ms.toFixed(1)} ms, the longest stretch in ${turn.workload}`);
 
@@ -52,48 +62,69 @@ export function loopVerdict(turns: readonly LoopTurn[]): number {
   }
 
   const over = turns.filter((turn) => turn.isolate.startsWith('LOADER:') && turn.ms >= LOOP_TURN_BOUND_MS);
+  const longest = Math.max(0, ...host.pauses);
 
   for (const turn of over) console.error(`facet-loop: ${turn.workload} held its event loop ${turn.ms.toFixed(0)} ms, at or past ${String(LOOP_TURN_BOUND_MS)} ms`);
-  console.log('facet-loop: blind: turns back to back read as one stretch; a host pausing the thread 5 ms or more mid-turn '
-    + 'splits the turn; native work outside JavaScript reads as waiting; '
-    + 'this host\'s speed against the platform\'s is unmeasured; the workspace object\'s own isolate is read, not bounded; '
-    + 'work no workload runs is unread.');
+  console.log(`facet-loop: the host paused the thread ${String(host.pauses.length)} times mid-turn (longest ${longest.toFixed(0)} ms) `
+    + `in ${(host.watchedMs / 1000).toFixed(1)} s of control turns`);
+  console.log('facet-loop: blind: turns back to back read as one stretch; a pause outside the control turns is inferred from '
+    + 'theirs; native work outside JavaScript reads as waiting; this host\'s speed against the platform\'s is unmeasured; '
+    + 'the workspace object\'s own isolate is read, not bounded; work no workload runs is unread.');
 
-  return over.length > 0 ? 1 : 0;
+  if (over.length > 0) return 1;
+
+  if (host.watchedMs === 0) console.error('facet-loop: unreadable: no control turn was read, so a host pause could not be seen');
+  else if (host.pauses.length > 0) console.error('facet-loop: unreadable: this host paused the thread mid-turn, which splits a turn as a wait does');
+  else return 0;
+
+  return 2;
 }
 
-/** Watches workerd's isolates as they appear, each profiled from then, until `stop`. */
+/** The run's control: the isolate whose synchronous turn, `controlTurn` in the driver, reads the host's pauses. */
+export interface LoopControl {
+  readonly isolate: string;
+  readonly turn: () => Promise<string>;
+}
+
+/** The driver's control turn, by the name its profile carries (`driver.ts`, bundled unminified). */
+const CONTROL_FRAME = 'controlTurn';
+
+/** Watches workerd's isolates as they appear, each profiled from then, and runs a control turn every lap, until `stop`. */
 export class LoopWatch {
   private readonly watched = new Map<string, LoopProfile>();
   private readonly skipped = new Set<string>();
   private polling: Promise<void> | null = null;
   private stopping = false;
-  private release: (() => void) | null = null;
+  private controlled: LoopProfile | null = null;
 
   /** `includes`: the isolates to profile, by target id (the gate's own driver is not the product's). */
-  constructor(private readonly port: number, private readonly includes: (id: string) => boolean) {}
+  constructor(private readonly port: number, private readonly includes: (id: string) => boolean, private readonly control: LoopControl) {}
 
   async start(): Promise<void> {
-    this.release = profileEveryIsolate(this.port);
+    this.controlled = await profileLoop(this.port, this.control.isolate);
+
+    if (this.controlled === null) throw new Error(`facet-loop: no control isolate ${this.control.isolate}`);
     await this.attachNew();
     this.polling = this.poll();
   }
 
-  /** Each isolate's longest busy stretch, longest first, an agent's named by its workspace (`workspaces`, by object id). */
-  async stop(workspaces: ReadonlyMap<string, string>): Promise<LoopTurn[]> {
+  /** Each isolate's longest busy stretch, longest first, an agent's named by its workspace (`workspaces`, by object id),
+   *  and the host's pauses in the control turns. */
+  async stop(workspaces: ReadonlyMap<string, string>): Promise<LoopReading> {
+    if (this.controlled === null) throw new Error('facet-loop: stopped before it started');
     this.stopping = true;
     await this.polling;
     const turns: LoopTurn[] = [];
 
-    for (const [isolate, profile] of this.watched) turns.push({ isolate, workload: workloadOf(isolate, workspaces), ...await profile.stop() });
-    this.release?.();
+    for (const [isolate, profile] of this.watched) turns.push({ isolate, workload: workloadOf(isolate, workspaces), ...longestBusy(await profile.stop()) });
 
-    return turns.sort((a, b) => b.ms - a.ms);
+    return { turns: turns.sort((a, b) => b.ms - a.ms), host: pausesUnder(await this.controlled.stop(), CONTROL_FRAME) };
   }
 
   /** Until `stop`. An isolate that comes and goes within one poll is not profiled; none of the workloads' does. */
   private async poll(): Promise<void> {
     while (!this.stopping) {
+      await this.control.turn();
       await Bun.sleep(200);
       await this.attachNew();
     }
