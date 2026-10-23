@@ -198,21 +198,39 @@ export async function retimeDailyTrigger(request: RetimeTriggerRequest): Promise
   return { at, nextFireAt };
 }
 
+/** A firing done: a schedule's next one armed, a one-shot's ended. Nothing where the firing is no longer the row's own: a
+ *  provider deferred it, or it was parked or cancelled. */
+async function settleFiring(registry: TriggerRegistry, id: string, scheduledAt: number): Promise<void> {
+  const row = registry.get(id);
+
+  if (row === null || row.state !== 'active' || row.next_fire_at !== scheduledAt) return;
+  const spec = v.parse(TimerSpecSchema, row.spec);
+  const now = Date.now();
+
+  if (row.kind === 'timer_cron') {
+    await registry.markFired(id, now, spec.cron === undefined ? null : nextCronFire(spec.cron, now, spec.time_zone));
+
+    return;
+  }
+
+  await registry.markFired(id, now, null);
+  registry.revoke(id, now);
+}
+
 export interface TimerFireDeps {
   registry: TriggerRegistry;
   log: EventLog;
-  /** Where a watcher's check runs; absent, a watcher fires as a schedule does. */
+  /** Where a watcher's check runs; absent, a watcher's firings pass unchecked and wake nothing. */
   watch?: Pick<WatchDeps, 'run' | 'claims'>;
 }
 
 /**
- * Re-fire after eviction is a no-op publish via dedupe on `(trigger_id, scheduled_fire_at)`. A watcher's firing is moved
- * on before its check runs, and its check publishes only what it found: a reset during the check loses that firing,
- * never the change, which its cursor still leads to.
+ * Re-fire after eviction is a no-op publish via dedupe on `(trigger_id, scheduled_fire_at)`. A watcher's firing stays due
+ * until its check commits (`settleFiring`), so one a reset cut off is checked again.
  */
 export async function fireDueTriggers(deps: TimerFireDeps, now: number) {
   let fired = 0;
-  const checks: Promise<void>[] = [];
+  const checks: Promise<boolean>[] = [];
 
   for (const trigger of deps.registry.due(now)) {
     if (trigger.kind !== 'timer_cron' && trigger.kind !== 'timer_oneshot') continue;
@@ -220,9 +238,15 @@ export async function fireDueTriggers(deps: TimerFireDeps, now: number) {
     const spec = v.parse(TimerSpecSchema, trigger.spec);
     const scheduledAt = trigger.next_fire_at ?? now;
 
-    if (deps.watch !== undefined && watchCheckOf(trigger) !== null) {
-      await deps.registry.markFired(trigger.id, now, spec.cron === undefined ? null : nextCronFire(spec.cron, now, spec.time_zone));
-      checks.push(checkWatcher({ registry: deps.registry, log: deps.log, ...deps.watch }, trigger.id, { at: scheduledAt }, Date.now));
+    if (watchCheckOf(trigger) !== null) {
+      // A backend that runs no checks wakes no agent for a watcher: its firing passes, unchecked.
+      if (deps.watch === undefined) await settleFiring(deps.registry, trigger.id, scheduledAt);
+      else {
+        const firingDone = async (id: string, at: number) => { await settleFiring(deps.registry, id, at); };
+
+        checks.push(checkWatcher({ registry: deps.registry, log: deps.log, ...deps.watch, firingDone }, trigger.id, { at: scheduledAt, timer: true }, Date.now));
+      }
+
       continue;
     }
 

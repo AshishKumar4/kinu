@@ -259,9 +259,11 @@ export function acceptWebhookDelivery(
     if (watch !== undefined && watchCheckOf(trigger) !== null) {
       const input = decodeJsonValue({ value: parsedBody ?? null });
 
-      yield* Effect.promise(() => checkWatcher({ registry: deps.triggers, log: deps.log, ...watch }, trigger.id, { at: opts.now, input }, Date.now));
+      const fired = yield* Effect.promise(() => checkWatcher({ registry: deps.triggers, log: deps.log, ...watch }, trigger.id, { at: opts.now, timer: false, input }, Date.now));
 
-      return { status: 'admitted', event_id: undefined, admitted: false };
+      if (fired) deps.onAdmitted();
+
+      return { status: 'admitted', event_id: undefined, admitted: fired };
     }
 
     const delivery_id = opts.delivery_id ?? `${opts.now}-${Math.random().toString(36).slice(2, 10)}`;

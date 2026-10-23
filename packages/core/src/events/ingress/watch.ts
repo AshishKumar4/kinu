@@ -110,29 +110,31 @@ function movesBack(stored: JsonValue | undefined, next: JsonValue | undefined): 
  * both. An arrival during a check sets `again`, and the check runs once more after it commits.
  */
 export class WatchClaims {
-  private readonly running = new Map<string, { again: boolean; input: JsonValue | undefined }>();
+  private readonly running = new Map<string, { again: boolean; asked: WatchAsk }>();
 
-  /** Runs `check` for `triggerId` over `input`, or folds this arrival into the running one's re-check, which reads the
-   *  latest arrival's input. */
-  async run(triggerId: string, input: JsonValue | undefined, check: (input: JsonValue | undefined) => Promise<void>): Promise<void> {
+  /** Runs `check` for `triggerId` as `asked`, or folds this arrival into the running one's re-check, which runs as the
+   *  latest arrival asked. False for a folded arrival: the running check answers for it. */
+  async run(triggerId: string, asked: WatchAsk, check: (asked: WatchAsk) => Promise<void>): Promise<boolean> {
     const held = this.running.get(triggerId);
 
     if (held !== undefined) {
       held.again = true;
-      held.input = input;
+      held.asked = asked;
 
-      return;
+      return false;
     }
 
-    const claim = { again: false, input };
+    const claim = { again: false, asked };
 
     this.running.set(triggerId, claim);
 
     try {
       do {
         claim.again = false;
-        await check(claim.input);
+        await check(claim.asked);
       } while (claim.again);
+
+      return true;
     } finally {
       this.running.delete(triggerId);
     }
@@ -144,29 +146,42 @@ export interface WatchDeps {
   readonly log: EventLog;
   readonly run: RunCheck;
   readonly claims: WatchClaims;
+  /** A firing whose check committed, moved on as a schedule's is (`fireDueTriggers`); a delivery has none. */
+  readonly firingDone?: (triggerId: string, scheduledAt: number) => Promise<void>;
 }
 
 type WatchCommit = 'fired' | 'quiet' | 'parked' | 'deferred' | 'dropped';
 
-/**
- * One check of `triggerId`, its fire keyed by `asked.at` (the firing or delivery that asked for it), and its commit. A
- * trigger whose check is already running is checked once more after it, under that check's claim.
- */
-export async function checkWatcher(
-  deps: WatchDeps, triggerId: string, asked: { readonly at: number; readonly input?: JsonValue }, now: () => number,
-): Promise<void> {
-  const scheduledAt = asked.at;
+/** What asked for a check: a firing (`timer`, its scheduled time) or a delivery (its arrival, its body as `input`). */
+export interface WatchAsk {
+  readonly at: number;
+  readonly timer: boolean;
+  readonly input?: JsonValue;
+}
 
-  await deps.claims.run(triggerId, asked.input, async (input) => {
+/**
+ * One check of `triggerId`, its fire keyed by the arrival that asked for it, and its commit; true when it published a
+ * fire. A trigger whose check is already running is checked once more after it, under that check's claim. A firing is
+ * moved on only once its check committed: one a reset cut off is still due, and checked again.
+ */
+export async function checkWatcher(deps: WatchDeps, triggerId: string, asked: WatchAsk, now: () => number): Promise<boolean> {
+  let fired = false;
+
+  await deps.claims.run(triggerId, asked, async ({ at, timer, input }) => {
     const trigger = deps.registry.get(triggerId);
     const check = trigger === null || trigger.state !== 'active' ? null : watchCheckOf(trigger);
 
     if (trigger === null || check === null) return;
     const read = watchOf(trigger).state;
     const outcome = await deps.run(check, read, input);
+    const committed = await commitCheck(deps, { triggerId, read, outcome, scheduledAt: at, now: now() });
 
-    await commitCheck(deps, { triggerId, read, outcome, scheduledAt, now: now() });
+    if (committed === 'fired') fired = true;
+
+    if (timer && (committed === 'fired' || committed === 'quiet')) await deps.firingDone?.(triggerId, at);
   });
+
+  return fired;
 }
 
 /** Its writes made in one synchronous section over the row read again: nothing else of this object runs between the read
@@ -208,7 +223,7 @@ async function commitCheck(deps: Pick<WatchDeps, 'registry' | 'log'>, checked: {
   }
 
   const { answer } = outcome;
-  const next = answer.state ?? read;
+  const next = answer.state === undefined ? read : answer.state;
 
   // A cursor that moved back is a check that saw less than the one before it: nothing it found is new.
   if (movesBack(read, next)) return 'quiet';

@@ -4,7 +4,7 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createTestActorsOver, present } from '@kinu.run/test-utils';
 import * as v from 'valibot';
-import { TriggerRegistry, initEventsHubTables, type AlarmScheduler } from '../src/events/hub/index';
+import { TriggerRegistry, buildDrainBatch, initEventsHubTables, type AlarmScheduler } from '../src/events/hub/index';
 import {
   EventLog, WatchClaims, checkAnswerOf, checkWatcher, createTimerTrigger, fireDueTriggers,
   type WatchOutcome, type JsonValue, type RunCheck,
@@ -33,7 +33,7 @@ function watchers(run: RunCheck) {
   return {
     registry, log, claims,
     fire: (now: number) => fireDueTriggers({ registry, log, watch: { run, claims } }, now),
-    check: (id: string, at: number, input?: JsonValue) => checkWatcher({ registry, log, run, claims }, id, { at, ...(input !== undefined && { input }) }, () => NOW),
+    check: (id: string, at: number, input?: JsonValue) => checkWatcher({ registry, log, run, claims }, id, { at, timer: false, ...(input !== undefined && { input }) }, () => NOW),
     fired: () => log.pending({ variant: 'timer' }).map((event) => v.parse(v.looseObject({ watch_brief: v.optional(v.string()) }), event.payload)),
     state: (id: string) => watchOf(present(registry.get(id), 'the watcher')),
   };
@@ -170,6 +170,32 @@ describe('a watcher', () => {
     outcome = { kind: 'deferred', until: at + 3_600_000, detail: 'Retry-After: 3600' };
     await t.check(id, at);
     expect(t.registry.get(id)?.next_fire_at).toBe(at + 3_600_000);
+  });
+
+  test('a firing stays due until its check commits, and a one-shot watcher ends with its answer', async () => {
+    const slow = gated();
+
+    const t = watchers(async () => {
+      await slow.gate;
+
+      return answered({ fire: false });
+    });
+
+    const once = await createTimerTrigger(t.registry, { atMs: NOW + 1_000, check: { code: 'return { fire: false };' } }, NOW);
+    const firing = t.fire(NOW + 1_000);
+
+    expect(t.registry.due(NOW + 1_000).map((row) => row.id)).toEqual([once.id]);
+    slow.open();
+    await firing;
+    expect(t.registry.get(once.id)?.state).toBe('revoked');
+  });
+
+  test('a fire from a watcher plans, as mail does', async () => {
+    const t = watchers(async () => answered({ fire: true, brief: 'A PR needs review.' }));
+    const { id, at } = await watcher(t.registry);
+
+    await t.check(id, at);
+    expect(buildDrainBatch(t.log.pending({ variant: 'timer' }))?.mode).toBe('plan');
   });
 
   test('an answer off its shape is not an answer', () => {
