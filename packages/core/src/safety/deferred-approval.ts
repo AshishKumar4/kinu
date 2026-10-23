@@ -31,11 +31,12 @@ import {
   approvalKindOf, mailSendExecutor, mailSendText, slateEffectExecutor, slateEffectText, type ApprovalKind, type MailSend, type SlateEffect,
 } from './approval-kind';
 import { canonicalRoot } from '../slates/share-policy';
+import { wakeEachAsker } from './owner-requests';
 import type { SharePreapproval } from '../slates/sharing';
 import { nanoid } from '../utils/nanoid';
 import { parseJsonValue } from '../utils/json';
 import { diagnostics, KinuError, settle, settleLoggedSync, toKinuError } from '../obs/index';
-import { Effect, Result } from 'effect';
+import { Effect } from 'effect';
 import { serialQueue } from '@kinu.run/agent-utils';
 
 /** The `kinuEvent` kind a decision wakes the agent under; same mechanism as the background-job wake. */
@@ -747,12 +748,10 @@ export class DeferredApprovalQueue {
     // A shared slate's effect is taken by its own call's next run: no agent asked it, so none is woken for it.
     const told = decided.filter((a) => !blocked.includes(a) && approvalKindOf(a).kind !== 'slate-effect');
 
-    // Each asker once, every one tried: the decision is already durable, and one asker's failed wake (an agent
-    // retired meanwhile) is no reason another goes untold. The failures are the answer's, after.
-    const wakes = Effect.forEach(new Set(told.map((a) => a.actor)), (actorId) => {
-      const own = told.filter((a) => a.actor === actorId);
-
-      return Effect.result(this.deps.wake(actorId, {
+    return settle(Effect.as(wakeEachAsker({
+      answered: told,
+      askerOf: (action) => action.actor,
+      signal: (own) => ({
         kind: DEFERRED_APPROVAL_SIGNAL,
         text: decisionWakeMessage(own, written),
         metadata: {
@@ -760,17 +759,9 @@ export class DeferredApprovalQueue {
           // The resumption device consent's answers carry too: a denial re-issues nothing.
           ...resumedSurfaceMetadata(answer === 'denied' ? [] : own.map((a) => a.surface)),
         },
-      }));
-    });
-
-    return settle(Effect.flatMap(wakes, (results) => {
-      const failed = results.flatMap((result) => (Result.isFailure(result) ? [result.failure] : []));
-      const [first] = failed;
-
-      return first === undefined ? Effect.succeed(decided) : Effect.fail(failed.length === 1 ? first : new KinuError(
-        first.code, `${String(failed.length)} agents were not told of the decision: ${failed.map((error) => error.message).join('; ')}`,
-      ));
-    }));
+      }),
+      wake: (actorId, signal) => this.deps.wake(actorId, signal),
+    }), decided));
   }
 
   /** The bytes are read while the approved row still names them, then the row is spent, so a re-issue meanwhile

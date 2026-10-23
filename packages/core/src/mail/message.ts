@@ -19,6 +19,10 @@ export function filedRecipients<M extends MailMessageFields>(message: M): M & { 
   return { ...message, to: message.to.map(mailAddress), cc: (message.cc ?? []).map(mailAddress) };
 }
 
+/** A box by its path under its owner's username (address.ts): `''`, `<workspace>` or `<agent>.<workspace>`, two labels
+ *  of at most 20 and their dot. */
+export const MailBoxPath = v.pipe(v.string(), v.maxLength(41));
+
 /** Who writes a message, for its text's limit: the person in the app writes as much as they like; an agent, what one
  *  approval card can show whole. */
 const MAIL_TEXT_LIMIT = { person: 1_000_000, agent: 50_000 } as const;

@@ -12,6 +12,7 @@ import type { SqlExecutor } from '../types/primitives';
 import type { AgentSignal } from '../types/signals';
 import { diagnostics, renderThrownChain, settle, type ErrorCode, type KinuError } from '../obs/index';
 import { DENIAL_STANDING_MS } from './deferred-approval';
+import { wakeEachAsker } from './owner-requests';
 import { Effect, Result } from 'effect';
 import * as v from 'valibot';
 import { SEALABLE_FOLDERS } from '../execution/run-later-paths';
@@ -336,22 +337,10 @@ export class DeviceConsentRegistry {
 
     for (const ask of answered) this.deps.announce({ kind: 'settled', consentId: ask.consentId });
 
-    return settle(Effect.flatMap(this.wake(answered), (results) => {
-      const [failed] = results.flatMap((result) => (Result.isFailure(result) ? [result.failure] : []));
-
-      return failed === undefined ? Effect.succeed(true) : Effect.fail(failed);
-    }));
-  }
-
-  /** Each asker once, every one tried: the answers are already durable, and one asker's failed wake is no reason
-   *  another goes untold. The failures are the answer's, after. */
-  private wake(answered: readonly DeviceConsentAsk[]) {
-    const askers = new Set(answered.flatMap((ask) => ask.actorId ?? []));
-
-    return Effect.forEach(askers, (actorId) => {
-      const own = answered.filter((ask) => ask.actorId === actorId);
-
-      return Effect.result(this.deps.wake(actorId, {
+    return settle(Effect.as(wakeEachAsker({
+      answered,
+      askerOf: (ask) => ask.actorId,
+      signal: (own) => ({
         kind: DEVICE_CONSENT_SIGNAL,
         text: answerWakeMessage(own),
         // How many were approved and denied, for the person's card: the text is the agent's.
@@ -361,8 +350,9 @@ export class DeviceConsentRegistry {
           denied: own.filter((ask) => ask.status === 'deny').length,
           ...resumedSurfaceMetadata(own.filter((ask) => ask.status !== 'deny').map((ask) => ask.surface)),
         },
-      }));
-    });
+      }),
+      wake: (actorId, signal) => this.deps.wake(actorId, signal),
+    }), true));
   }
 
   list(): PendingDeviceConsent[] {
