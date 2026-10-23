@@ -405,12 +405,14 @@ function entriesOf(dir) {
  * too, and are not covered: the consent line says so.
  */
 
-/** git-config(1) keys, as of git 2.53, whose value is a program git runs on an ordinary command (an alias only when
- *  it starts with `!`). */
-const PROGRAM_KEYS = new RegExp('^(core\\.(fsmonitor|pager|editor|sshcommand|askpass|gitproxy)|sequence\\.editor|pager\\..+'
-  + '|credential\\.(.+\\.)?helper|gpg\\.(.+\\.)?program|diff\\..+\\.(command|textconv)|merge\\..+\\.driver'
-  + '|filter\\..+\\.(clean|smudge|process)|(merge|diff)tool\\..+\\.cmd|interactive\\.difffilter'
-  + '|remote\\..+\\.(uploadpack|receivepack)|alias\\..+)$', 'u');
+/** git-config(1) keys, as of git 2.56, whose value is a program git runs (an alias only when it starts with `!`), as
+ *  git prints them: lowercase but for a subsection. A key an older git lacks names a program it never runs. */
+const PROGRAM_KEYS = new RegExp('^(core\\.(fsmonitor|pager|editor|sshcommand|askpass|gitproxy|alternaterefscommand)'
+  + '|sequence\\.editor|pager\\..+|credential\\.(.+\\.)?helper|gpg\\.(.+\\.)?program|gpg\\.ssh\\.defaultkeycommand'
+  + '|diff\\.external|diff\\..+\\.(command|textconv)|merge\\..+\\.driver|filter\\..+\\.(clean|smudge|process)'
+  + '|(merge|diff)tool\\..+\\.(cmd|path)|interactive\\.difffilter|remote\\..+\\.(uploadpack|receivepack)'
+  + '|hook\\..+\\.command|trailer\\..+\\.(cmd|command)|uploadpack\\.packobjectshook|gc\\.recentobjectshook'
+  + '|imap\\.tunnel|(browser|man)\\..+\\.(cmd|path)|guitool\\..+\\.cmd|alias\\..+)$', 'u');
 
 /** Values of those keys that switch a built-in on or off rather than name a program. */
 const SWITCH_VALUES = new Set(['', 'true', 'false', 'yes', 'no', 'on', 'off', '1', '0']);
@@ -579,11 +581,41 @@ function configuredPath(value, home, base) {
   return base === null ? null : path.resolve(base, value);
 }
 
-/** The first word of a program-valued config value: git hands these to the shell, and `!` marks a shell command. */
-function programWord(value) {
-  const [word = ''] = value.trim().replace(/^!/u, '').trim().split(/\s+/u);
+/** Backslash escapes inside double quotes, as sh(1) reads them; anywhere else a backslash is itself. */
+const DOUBLE_QUOTED_ESCAPES = new Set(['\\', '"', '$', '`', '\n']);
 
-  return word.replace(/^(["'])(.*)\1$/u, '$2');
+/**
+ * The first word of a program-valued config value as the shell git hands it to reads it (`!` marks a shell command):
+ * single quotes keep everything, double quotes keep all but their escapes, a backslash outside quotes keeps the next
+ * character, and unquoted whitespace ends the word. `"/opt/my tools/ssh" -v` runs `/opt/my tools/ssh`.
+ */
+function programWord(value) {
+  const text = value.trim().replace(/^!/u, '').trimStart();
+  let word = '';
+  let quote = null;
+
+  for (let at = 0; at < text.length; at += 1) {
+    const char = text[at];
+    const next = text[at + 1];
+
+    if (quote === "'") {
+      if (char === "'") quote = null;
+      else word += char;
+    } else if (char === '\\' && next !== undefined && (quote === null || DOUBLE_QUOTED_ESCAPES.has(next))) {
+      word += next;
+      at += 1;
+    } else if (char === '"') {
+      quote = quote === null ? '"' : null;
+    } else if (quote === null && char === "'") {
+      quote = "'";
+    } else if (quote === null && /\s/u.test(char)) {
+      break;
+    } else {
+      word += char;
+    }
+  }
+
+  return word;
 }
 
 /**
