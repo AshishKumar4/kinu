@@ -14,7 +14,7 @@ const IDENTITY: AuthIdentity = { userId: '0123456789abcdef0123456789abcdef', ema
 
 const TOKEN_URL = 'https://api.anthropic.com/v1/oauth/token';
 
-const TokenRequestSchema = v.object({ grant_type: v.string(), code: v.string(), code_verifier: v.string(), state: v.string() });
+const TokenRequestSchema = v.object({ grant_type: v.string(), code: v.string(), code_verifier: v.string(), state: v.string(), redirect_uri: v.string() });
 
 const FinishedSchema = v.object({ connected: v.boolean(), error: v.optional(v.string()) });
 
@@ -84,6 +84,29 @@ const challengeOf = (verifier: string) => createHash('sha256').update(verifier).
 const storedKeys = async (harness: TestUserDO) => (await harness.userDO.listCredentials(await testOwner())).map((c) => c.key);
 
 describe('Claude sign-in on the web', () => {
+  // The owner, 2026-10-23: nothing should land on a page that fails. Claude returns the browser to Anthropic's own page,
+  // which shows the code; the exchange names the same address.
+  test("Claude returns the browser to Anthropic's code page, and the code it shows connects Claude", async () => {
+    const harness = createTestUserDO();
+    const web = routes(harness);
+    const seen = claudeTokenEndpoint(() => Response.json({ access_token: 'at', refresh_token: 'rt', expires_in: 3600, account: { email_address: 'owner@example.com' } }));
+
+    try {
+      const authorize = await web.start();
+      const state = authorize.searchParams.get('state') ?? '';
+
+      expect(authorize.searchParams.get('redirect_uri')).toBe('https://platform.claude.com/oauth/code/callback');
+
+      const finished = await web.call('/claude/finish', { code: `the-code#${state}` });
+
+      expect(v.parse(FinishedSchema, await finished.json())).toEqual({ connected: true });
+      expect(seen[0]).toMatchObject({ code: 'the-code', state, redirect_uri: 'https://platform.claude.com/oauth/code/callback' });
+      await web.settled();
+    } finally {
+      harness.close();
+    }
+  });
+
   test('the address Claude sent the browser to connects Claude with the verifier the sign-in began with', async () => {
     const harness = createTestUserDO();
     const web = routes(harness);
