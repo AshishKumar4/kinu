@@ -1,4 +1,4 @@
-import { Effect } from 'effect';
+import { Cause, Effect } from 'effect';
 import {
   objectNamed,
   autoTitleMayReplace, nameOriginOf, type NameOrigin, WORKSPACE_KEYED_ROWS, commitWorkspaceCapability, freshWorkspaceCapability, revokeWorkspaceCapability, workspaceCapabilityHash, type UserCaller, validateWorkspaceName, sanitizeWorkspaceLogoSvg, resolveWorkspaceTitle, WorkspaceOverviewSchema, type WorkspaceOverview, type RosterPage, type WorkspaceEntry, workspaceTitleProblem,
@@ -51,6 +51,22 @@ export interface UserWorkspacesHost extends Pick<UserObjectHost, 'ctx' | 'env' |
   nudgeUnreported(): void;
   /** The account this registry is, whose rows the control plane's index keys on. */
   ownerId(): string;
+}
+
+/** The Agents SDK's own abort reason (`Agent.destroy`), raised only once its wipe has finished. */
+const DESTROYED = 'destroyed';
+
+/**
+ * What a workspace still holds, read once its destroy answered. A read the destroyed object answers itself, with the
+ * SDK's `destroyed` abort, came after its wipe (the SDK schedules the abort once `deleteAll` resolved), so it holds
+ * nothing. Local workerd sends that read to the dying object; a deployment mostly starts a new one.
+ */
+function storedAfterDestroy(read: () => Promise<number>): Promise<number> {
+  return settle(Effect.catchCause(Effect.promise(read), (failed) => {
+    const cause = Cause.squash(failed);
+
+    return cause instanceof Error && cause.message === DESTROYED ? Effect.succeed(0) : Effect.failCause(failed);
+  }));
 }
 
 /** The account's workspaces. */
@@ -519,7 +535,7 @@ export class UserWorkspaces {
     await confirmedDeletion(() => {
       const opened = this.host.env.OrchestratorAgent.get(object);
 
-      return { destroy: async () => { await opened.destroyAgent(ownerUserId); }, remains: async () => opened.storedWorkspace() };
+      return { destroy: async () => { await opened.destroyAgent(ownerUserId); }, remains: async () => storedAfterDestroy(async () => opened.storedWorkspace()) };
     }, `the workspace ${name}`);
 
     // Written here, where the destroy landed: the destroyed object's own rows of it can be missing from telemetry
