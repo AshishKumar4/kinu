@@ -59,6 +59,7 @@ import {
 
 import { UserCredentials, type CheckpointedCredential, type CredentialEndpoint, type CodexStatus } from './credentials';
 import { UserSecrets } from './secrets';
+import { GitHubHooks, type GitHubHookAsk } from './github-hooks';
 import { mcpOAuthStorage } from './mcp-oauth-storage';
 import { UserWorkspaces, type WorkspaceRegistration, type WorkspaceRegistrationSource } from './workspaces';
 import { UserProfileStore, type ProfileCatalogWriteResult } from './profile';
@@ -175,6 +176,12 @@ export class UserDO extends Agent<Env> {
 
   private readonly mcpServers: UserMcpServers = new UserMcpServers({
     ...this.host, mcp: this.mcp, vault: this.credentials, connectionsMoved: async () => this.secrets.connectionsMoved(),
+    githubGoing: async () => this.githubHooks.deleteAll(),
+  });
+
+  /** Repository hooks for workspaces' push watchers, made with the GitHub connection's token. */
+  private readonly githubHooks = new GitHubHooks({
+    storage: this.ctx.storage, origin: this.env.CLI_PUBLIC_ORIGIN, token: async () => this.mcpServers.githubGitToken(),
   });
 
   private readonly slateConsentStore = new SlateConsentStore(this.ctx.storage.sql);
@@ -554,6 +561,16 @@ export class UserDO extends Agent<Env> {
 
   deleteCredential(caller: UserCaller, key: string, revoke: boolean): Promise<DisconnectOutcome> {
     return this.credentials.deleteCredential(caller, key, revoke);
+  }
+
+  /** A repository hook delivering to the asking workspace's own signed route, made with the GitHub connection. */
+  async githubHookCreate(caller: UserCaller, ask: GitHubHookAsk): Promise<{ readonly hookId: number }> {
+    return this.githubHooks.create(await this.requireTier(caller, 'github.hooks'), ask);
+  }
+
+  /** A hook the asking workspace made, deleted at GitHub. */
+  async githubHookDelete(caller: UserCaller, repo: string, hookId: number): Promise<void> {
+    return this.githubHooks.delete(await this.requireTier(caller, 'github.hooks'), repo, hookId);
   }
 
   /** The Google connection as Settings shows it: the account Google connected and the scopes it granted. */

@@ -174,6 +174,8 @@ const USER_DO_METHODS = [
   'acknowledgeUnstoppedDevice',
   'cancelDeviceRequestsForAgent',
   'cancelDeviceRequestsForBackgroundJob',
+  'githubHookCreate',
+  'githubHookDelete',
   'googleCall',
   'googleConnection',
   'googleToken',
