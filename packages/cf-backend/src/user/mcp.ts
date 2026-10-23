@@ -32,9 +32,9 @@ function causeChain(input: { cause: unknown }): Error[] {
 export async function readUndiscoveredToolList(
   server: { readonly name: string },
   client: Pick<Client, 'request'>,
-  refusals: () => readonly McpRefusal[] = () => [],
+  refusals: McpRefusalLog = { next: 0, since: () => [] },
 ): Promise<McpToolListing> {
-  const before = refusals().length;
+  const from = refusals.next;
 
   try {
     return {
@@ -49,11 +49,18 @@ export async function readUndiscoveredToolList(
     const status = causeChain({ cause }).find((link): link is SdkHttpError => link instanceof SdkHttpError)?.status;
 
     if (status === undefined) return { failure: renderCauseChain(error) };
-    // This listing's own refusal: a tools/list refused with this status since it began, not another request's.
-    const said = refusals().slice(before).filter((refusal) => refusal.rpc === 'tools/list' && refusal.status === status).at(-1)?.wwwAuthenticate ?? null;
+    // This listing's own refusal: a tools/list refused with this status since it began. The plane runs one listing of a
+    // server at a time, so the only other tools/list then is the SDK's own discovery, on the same server and token.
+    const said = refusals.since(from).filter((refusal) => refusal.rpc === 'tools/list' && refusal.status === status).at(-1)?.wwwAuthenticate ?? null;
 
     return { failure: `${server.name} refused its tool list: HTTP ${String(status)}, ${said === null ? 'with no reason given' : `saying ${said}`}` };
   }
+}
+
+/** A server's refusals, numbered as they came: `next` is the number the next one takes, `since(n)` those numbered n on. */
+export interface McpRefusalLog {
+  readonly next: number;
+  since(from: number): readonly McpRefusal[];
 }
 
 export interface McpSessionHost {

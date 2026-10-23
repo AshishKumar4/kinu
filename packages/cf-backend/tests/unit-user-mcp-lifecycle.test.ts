@@ -241,11 +241,24 @@ describe('a server that refuses its tool list', () => {
 
     // Each listing goes out on its server's transport and is refused 403: Gmail's with no reason; Calendar's says why,
     // while a tool call beside it is refused with another challenge, which is not the listing's.
+    const listed = { gm1: 0, gm2: 0 };
+    // Calendar's first listing holds until a second read has begun, so the two reads overlap.
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+
     seedUndiscoveredMcpTools('gm1', async () => {
+      listed.gm1 += 1;
       await gmail('https://gm1.example/sse', rpc('tools/list'));
       throw refusedList();
     });
     seedUndiscoveredMcpTools('gm2', async () => {
+      listed.gm2 += 1;
+
+      if (listed.gm2 === 1) {
+        entered.resolve();
+        await release.promise;
+      }
+
       await calendar('https://gm2.example/sse', rpc('tools/list'));
       await calendar('https://gm2.example/sse', rpc('tools/call'));
       throw refusedList();
@@ -262,17 +275,30 @@ describe('a server that refuses its tool list', () => {
       return new Response('{}', { status: 403, headers: at.includes('gm2') ? { 'www-authenticate': challenge } : {} });
     }, { preconnect: real.preconnect });
 
-    // A list reads each tool list again: both reads go out to the refusing servers.
-    let listed: Awaited<ReturnType<typeof h.userDO.userMcp_list>>;
+    // More refusals than a server keeps, all of tool calls, before any listing: the listing still finds its own.
+    // A warmup and a list read together share one listing of each server; the list after them reads again.
+    let rows: Awaited<ReturnType<typeof h.userDO.userMcp_list>>;
+    let together: typeof listed;
 
     try {
-      await h.userDO.userMcp_warmConnections(owner);
-      listed = await h.userDO.userMcp_list(owner);
+      for (let call = 0; call < 20; call += 1) await calendar('https://gm2.example/sse', rpc('tools/call'));
+      const warming = h.userDO.userMcp_warmConnections(owner);
+
+      await entered.promise;
+      const reading = h.userDO.userMcp_list(owner);
+
+      // Time for the read to reach Calendar's listing, which it joins rather than run a second.
+      await new Promise((resolve) => { setTimeout(resolve, 200); });
+      release.resolve();
+      await Promise.all([warming, reading]);
+      together = { ...listed };
+      rows = await h.userDO.userMcp_list(owner);
     } finally {
       globalThis.fetch = real;
     }
 
-    expect(listed.map((server) => ({ name: server.name, status: server.status, tools: server.toolsCount, error: server.error, signIn: server.signIn }))).toEqual([
+    expect(together.gm2).toBe(1);
+    expect(rows.map((server) => ({ name: server.name, status: server.status, tools: server.toolsCount, error: server.error, signIn: server.signIn }))).toEqual([
       { name: 'Calendar', status: 'failed', tools: 0, error: 'Calendar refused its tool list: HTTP 403, saying Bearer error="insufficient_scope", scope="calendar.readonly"', signIn: false },
       { name: 'Gmail', status: 'failed', tools: 0, error: 'Gmail refused its tool list: HTTP 403, with no reason given', signIn: false },
     ]);
