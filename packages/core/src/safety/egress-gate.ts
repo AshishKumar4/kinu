@@ -319,8 +319,9 @@ export function planEgress(
 }
 
 /**
- * A connection's credential at a host it may not reach, alone in the `Authorization` header, which is left off. Beside
- * another placeholder there it is not, so that one is never dropped unsaid: the request is refused, as any would be.
+ * A connection's credential at a host it may not reach, in the `Authorization` header beside no other placeholder: the
+ * header is left off whole, with whatever else it said (a Basic user name), since a credential without its secret is
+ * none. Beside another placeholder it is not, so that one is never dropped unsaid: the request is refused.
  */
 function withheldElsewhere(facts: EgressRequestFacts, binding: EgressSecretBinding | undefined, present: ReadonlySet<string>): boolean {
   if (binding?.elsewhere !== 'withheld' || binding.hosts.some((host) => egressHostMatches(host, facts.host))) return false;
