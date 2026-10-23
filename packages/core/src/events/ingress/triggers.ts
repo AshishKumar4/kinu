@@ -9,6 +9,7 @@ import type { WebhookSecretStore } from './secrets';
 import { JsonObjectSchema, type JsonObject } from '../../utils/json';
 import { Effect } from 'effect';
 import { KinuError, settleSync } from '../../obs/index';
+import { checkWatcher, watchCheckOf, WatchCheckSchema, type WatchCheck, type WatchDeps } from './watch';
 
 export interface TimerTriggerOpts {
   cron?: string;
@@ -19,6 +20,8 @@ export interface TimerTriggerOpts {
   payload?: JsonObject;
   trust?: 'authenticated' | 'owner';
   missionLabel?: string;
+  /** Makes it a watcher: the check runs at each firing, and only what it found wakes the agent (watch.ts). */
+  check?: WatchCheck;
 }
 
 export interface TimerTrigger {
@@ -62,6 +65,8 @@ export async function createTimerTrigger(
   if (opts.payload !== undefined) Object.assign(triggerSpec, { payload: opts.payload });
 
   if (opts.missionLabel !== undefined) Object.assign(triggerSpec, { mission_label: opts.missionLabel });
+
+  if (opts.check !== undefined) Object.assign(triggerSpec, { check: v.parse(WatchCheckSchema, opts.check) });
 
   const id = await registry.register({
     kind,
@@ -196,16 +201,30 @@ export async function retimeDailyTrigger(request: RetimeTriggerRequest): Promise
 export interface TimerFireDeps {
   registry: TriggerRegistry;
   log: EventLog;
+  /** Where a watcher's check runs; absent, a watcher fires as a schedule does. */
+  watch?: Pick<WatchDeps, 'run' | 'claims'>;
 }
 
-/** Re-fire after eviction is a no-op publish via dedupe on `(trigger_id, scheduled_fire_at)`. */
+/**
+ * Re-fire after eviction is a no-op publish via dedupe on `(trigger_id, scheduled_fire_at)`. A watcher's firing is moved
+ * on before its check runs, and its check publishes only what it found: a reset during the check loses that firing,
+ * never the change, which its cursor still leads to.
+ */
 export async function fireDueTriggers(deps: TimerFireDeps, now: number) {
   let fired = 0;
+  const checks: Promise<void>[] = [];
 
   for (const trigger of deps.registry.due(now)) {
     if (trigger.kind !== 'timer_cron' && trigger.kind !== 'timer_oneshot') continue;
     fired += 1;
     const spec = v.parse(TimerSpecSchema, trigger.spec);
+    const scheduledAt = trigger.next_fire_at ?? now;
+
+    if (deps.watch !== undefined && watchCheckOf(trigger) !== null) {
+      await deps.registry.markFired(trigger.id, now, spec.cron === undefined ? null : nextCronFire(spec.cron, now, spec.time_zone));
+      checks.push(checkWatcher({ registry: deps.registry, log: deps.log, ...deps.watch }, trigger.id, scheduledAt, Date.now));
+      continue;
+    }
 
     deps.log.publish({
       descriptor: {
@@ -213,7 +232,7 @@ export async function fireDueTriggers(deps: TimerFireDeps, now: number) {
         variant: 'timer',
         payload: {
           trigger_id: trigger.id,
-          scheduled_fire_at: trigger.next_fire_at ?? now,
+          scheduled_fire_at: scheduledAt,
           label: spec.label,
           user_payload: spec.payload,
           mission_label: spec.mission_label,
@@ -230,6 +249,8 @@ export async function fireDueTriggers(deps: TimerFireDeps, now: number) {
       deps.registry.revoke(trigger.id, now);
     }
   }
+
+  await Promise.all(checks);
 
   return { fired };
 }

@@ -152,6 +152,7 @@ const TimerPayloadSchema = v.object({
   label: v.optional(v.string()),
   user_payload: v.optional(v.unknown()),
   mission_label: v.optional(v.string()),
+  watch_brief: v.optional(v.string()),
 });
 
 const PeerAgentPayloadSchema = v.object({

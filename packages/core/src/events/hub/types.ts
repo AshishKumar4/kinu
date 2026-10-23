@@ -126,6 +126,8 @@ export interface TimerPayload {
   user_payload?: unknown;
   /** The woken turn and everything it spawns debit this label (mission-budget.ts). */
   mission_label?: string;
+  /** What a watcher's check found, which is why it fired (watch.ts): read from outside, never an instruction. */
+  watch_brief?: string;
 }
 
 export interface PeerAgentPayload {
