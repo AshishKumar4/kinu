@@ -306,7 +306,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'live', why: 'reads the machine — inode tables, temp roots, stray project markers — none of which a hash over the tree stands for.' },
   },
   {
-    run: 'bun test --timeout=0 --isolate scripts/pattern-inventory.test.ts scripts/jsonc.test.ts scripts/syntax.test.ts scripts/workerd-requirements.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/pattern-inventory.test.ts scripts/jsonc.test.ts scripts/mail-wiring.test.ts scripts/syntax.test.ts scripts/workerd-requirements.test.ts',
     label: 'Pattern census and parser self-tests',
     tier: 'push',
     seconds: 0.2, // Measured 2026-09-06 on the 24-thread workstation.
@@ -2690,18 +2690,23 @@ export const LADDER: readonly Gate[] = [
     ciExempt: 'has nothing to send to at CI: its subject is the deployment that just went up, its routing rules and its '
       + 'sending domain, as the eval identity, whose secret no pull request holds.',
     phase: 'post-publish',
-    alone: 'runs after the upload, in the wave of the tiers whose subject is the build that just shipped (L18). It acts as '
-      + 'eval-service in its own mail box, which no other row reads, and writes one message there per run.',
+    alone: 'runs after the upload, in the wave of the tiers whose subject is the build that just shipped (L18). Where it '
+      + 'may hold a box (staging) it acts as eval-service in its own, which no other row reads, and writes one message '
+      + 'there per run; where it may not (production) it only reads.',
     tier: 'deploy',
+    secrets: ['KINU_MAIL_ONBOARD_TOKEN'],
     // staging 2026-10-22: a message to the eval box's own alias was filed 3 s after it was sent.
     seconds: 10,
     catches: 'mail that no longer reaches the deployment: a routing rule that sends its address elsewhere or nowhere, an '
       + 'address Email Sending suppressed after a bounce (refused at the send, in its own words), and a mail handler '
       + 'that drops what arrives. Staging\'s inbound went unexercised from 2026-10-16 to 10-22, so none of these would '
-      + 'have shown.',
+      + 'have shown. On production, where it sends nothing: an MX that is not Email Routing\'s, a rule that hands an own '
+      + 'address (MAIL_ALIASES) to another Worker, an own address whose username has no box (privacy@ refusing its mail, '
+      + '2026-10-23), and a suppressed own address.',
     blind: 'mail from outside Cloudflare (another provider\'s MX path, SPF and DKIM as a stranger\'s mail meets them), '
-      + 'every address but the eval box\'s, and what the box\'s agent does with a message once it is filed.',
-    inputs: { kind: 'live', why: 'sends through the DEPLOYED build\'s Email Sending and reads what its mail handler filed.' },
+      + 'every address but the eval box\'s, and what the box\'s agent does with a message once it is filed. On '
+      + 'production, the mail handler itself: nothing is sent there, and staging\'s round trip runs the same build.',
+    inputs: { kind: 'live', why: 'sends through the DEPLOYED build\'s Email Sending and reads what its mail handler filed, or reads its routing and boxes.' },
   },
   {
     run: 'bash scripts/product-flows-tier.sh',

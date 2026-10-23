@@ -83,6 +83,7 @@
     "anti-slop/no-dynamic-model-import": "error",
     "anti-slop/no-unmeasured-dynamic-import": "error",
     "anti-slop/model-method-boundary": "error",
+    "anti-slop/no-storage-restore-outside-ops": "error",
     "anti-slop/require-variant-utility": "error",
     "anti-slop/no-cli-credential-flag": "error",
     "anti-slop/no-unaccounted-catch": "error",

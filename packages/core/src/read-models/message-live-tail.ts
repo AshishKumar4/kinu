@@ -53,19 +53,28 @@ function liveTail(parts: readonly Part[]): LiveTail {
 }
 
 /**
- * The row a live turn draws into: the thread's last, once the turn's opening row (the claim's `turnId`) is in the
- * thread. Until it lands the last row is a finished turn's, and handing it the tail reopens what it already drew: its
- * Slate blocks go back to their placeholder and their pages load again. A turn the tab streams before its claim names
- * it owns the last row. Null when nothing is live or the turn has no row yet.
+ * The row a live turn draws into: the thread's last, once it is the turn's. A turn the tab streams before its claim
+ * names it owns the last row; a typed turn's does once its opening row (the claim's `turnId`) is in the thread. A turn
+ * a signal opened publishes its opening row only as it ends, so its row is the last one no window the room sent holds
+ * (`stored`): the answer its stream writes (production, 2026-10-23: such a turn drew settled, its work folded and its
+ * feedback shown, until it ended). Until either lands, the last row is a finished turn's, which the room's window holds,
+ * and handing it the tail reopens what it already drew: its Slate blocks go back to their placeholder and their pages
+ * load again. Null when nothing is live or the turn has no row yet.
  */
-export function liveTailRow(input: { readonly rows: readonly Pick<UIMessage, "id">[]; readonly liveness: TurnLiveness }): string | null {
+export function liveTailRow(input: {
+  readonly rows: readonly Pick<UIMessage, "id">[];
+  readonly liveness: TurnLiveness;
+  readonly stored: ReadonlySet<string>;
+}): string | null {
   if (input.liveness.kind !== "live") return null;
   const { turnId } = input.liveness;
   const last = input.rows.at(-1);
 
   if (last === undefined) return null;
 
-  return turnId === null || input.rows.some((row) => row.id === turnId) ? last.id : null;
+  if (turnId === null || input.rows.some((row) => row.id === turnId)) return last.id;
+
+  return input.stored.has(last.id) ? null : last.id;
 }
 
 /** Before the first assistant row the tail is `thinking`; a thread that is not live has none. */

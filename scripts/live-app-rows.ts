@@ -25,7 +25,7 @@ import { createWorkspace, listWorkspaces, LOOPBACK_IDENTITY } from '../evals/src
 import { CHAT_COMPOSER_LIVE, CHATS, INSPECTOR_PANEL, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, OPEN_NAMES, countRpc, frameLedger, named, openInspector, PAGE_TABS, painted, pressSend, pressUntil, recordRenderTasks, rendered, sendInChat, settled, settledAfter, until, waitOn, type ControlAttempt, type RpcCounter } from './browser-page';
 import { rowVerdicts, type RowVerdicts } from './row-verdicts';
 import { registerScriptedModel, startScriptedModel } from './scripted-model';
-import { KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_FIRST_TURN_MISSION, PACED_TURN_ANSWER, ANSWERED_TURN_ASK, CLEARED_TURN_ASK, OBSERVED_TURN_ASK, PACED_TURN_ASK, RECONNECT_STEPS, RECONNECT_TURN_ASK, SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNANSWERED_PROBE_TURN_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK, laterReconnectTurn, toldBackTurn, unsentFirstTurn, DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, type HeldCall, LOGO_WAITED_MISSION, MINUTE_LIMITED_ASK, MINUTE_WAITED_OUT, ProviderWaitProbe, providerWaitTurn, WAITED_TURN_ASK, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, PLAN_TASK_TITLES, planTasksProbe, STOPPED_ASK, STOPPED_ANSWER, HANDED_BACK_ASK, StopProbe, FOLLOW_UP_ASK, FOLLOW_UP_ANSWER, OPENING_ASK, OPENING_ANSWER, stopProbeTurn, SLATE_ID, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, slateUiTurn, SLATE_ASK_ID, SLATE_ASK_PROBE, SlateAskProbe, slateAskTurn } from './live-app-scripts';
+import { KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_FIRST_TURN_MISSION, PHASED_FIRST_TURN_MISSION, PHASED_TURN_ANSWER, phasedFirstTurn, PACED_TURN_ANSWER, ANSWERED_TURN_ASK, CLEARED_TURN_ASK, OBSERVED_TURN_ASK, PACED_TURN_ASK, RECONNECT_STEPS, RECONNECT_TURN_ASK, SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNANSWERED_PROBE_TURN_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK, laterReconnectTurn, toldBackTurn, unsentFirstTurn, DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, type HeldCall, LOGO_WAITED_MISSION, MINUTE_LIMITED_ASK, MINUTE_WAITED_OUT, ProviderWaitProbe, providerWaitTurn, WAITED_TURN_ASK, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, PLAN_TASK_TITLES, planTasksProbe, STOPPED_ASK, STOPPED_ANSWER, HANDED_BACK_ASK, StopProbe, FOLLOW_UP_ASK, FOLLOW_UP_ANSWER, OPENING_ASK, OPENING_ANSWER, stopProbeTurn, SLATE_ID, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, slateUiTurn, SLATE_ASK_ID, SLATE_ASK_PROBE, SlateAskProbe, slateAskTurn } from './live-app-scripts';
 import { FALLBACK_ANSWER, type ScriptedRequest } from './scripted-protocol';
 import { openPublicSocket } from '../tests/first-run/public-socket';
 import { drivePlanReview, type WalkthroughVerdict } from './plan-demo-film';
@@ -211,6 +211,7 @@ export interface TierVerdicts {
   keptTab: KeptTabVerdict | null;
   chatScroll: ChatScrollVerdict | null;
   midThought: MidThoughtVerdict | null;
+  turnDrawn: TurnDrawnVerdict | null;
   droppedFile: DroppedFileVerdict | null;
   cleared: ClearedVerdict | null;
   planTasks: PlanTasksVerdict | null;
@@ -796,6 +797,104 @@ async function watchTurns(page: Page): Promise<TurnWatch> {
 
 const disagrees = (sample: v.InferOutput<typeof LiveSampleSchema>): boolean =>
   (sample.stop && sample.task === 'idle') || (!sample.stop && sample.task === 'working');
+
+/** One disclosure as the chat draws it: its words, its body's state and whether any of it is on screen, and the
+ *  block's own mark of its state. */
+const DisclosureReadSchema = v.object({ label: v.string(), body: v.string(), shown: v.boolean(), state: v.nullable(v.string()) });
+
+type DisclosureRead = v.InferOutput<typeof DisclosureReadSchema>;
+
+/** What a turn a signal opened drew while it ran and once it ended, and how the composer showed focus. */
+interface TurnDrawnVerdict {
+  /** Once its two calls made a phase and its next model call waited: the newest phase, and any feedback offered. */
+  readonly running: { readonly phase: DisclosureRead | null; readonly feedback: boolean };
+  /** Its thought while it streamed, and once the turn had ended. */
+  readonly thought: { readonly live: DisclosureRead | null; readonly ended: DisclosureRead | null };
+  /** Once it ended: every phase, and whether the answer offers feedback. */
+  readonly ended: { readonly phases: readonly DisclosureRead[]; readonly feedback: boolean };
+  /** The composer's field focused while the turn ran (Steer) and once it ended, and the control Tab moves to next. */
+  readonly focus: { readonly steering: FocusRead; readonly idle: FocusRead; readonly next: FocusRead };
+}
+
+const FocusReadSchema = v.object({ outline: v.string(), edge: v.string(), inComposer: v.boolean() });
+
+type FocusRead = v.InferOutput<typeof FocusReadSchema>;
+
+/** Each disclosure `selector` names in the chat, as drawn. */
+const disclosuresOf = (selector: string) => `[...document.querySelectorAll('#chat ${selector}')].map((block) => ({
+  label: (block.querySelector('[data-disclosure-label]')?.textContent ?? '').trim(),
+  body: block.querySelector('[data-disclosure-body]')?.getAttribute('data-disclosure-body') ?? '',
+  shown: (block.querySelector('[data-disclosure-body]')?.getClientRects().length ?? 0) > 0,
+  state: block.getAttribute('data-tool-run') ?? block.getAttribute('data-reasoning'),
+}))`;
+
+const FEEDBACK_OFFERED = `document.querySelector('#chat [data-message-feedback]') !== null`;
+
+/** The focused element's ring and the composer's edge: a field drawn into the composer shows focus on the composer. */
+const FOCUS_READ = `(() => {
+  const focused = document.activeElement;
+  const composer = focused?.closest('.p-composer') ?? document.querySelector('#chat .p-composer');
+  return {
+    outline: focused === null ? '' : getComputedStyle(focused).outlineStyle,
+    edge: composer === null ? '' : getComputedStyle(composer).borderTopColor,
+    inComposer: focused !== null && focused.closest('.p-composer') !== null,
+  };
+})()`;
+
+async function readFocus(page: Page, selector: string | null): Promise<FocusRead> {
+  if (selector !== null) await page.focus(selector);
+  else await page.keyboard.press('Tab');
+
+  return v.parse(FocusReadSchema, await page.evaluate(FOCUS_READ));
+}
+
+/** The owner, 2026-10-23: a turn a signal opened (a new workspace's first) drew settled while it ran: its work folded
+ *  shut and its feedback offered mid-turn, its thought still headed as thinking once done, and the composer drew a
+ *  square ring inside its rounded edge. The turn makes a phase of two calls, then its next model call is held: the
+ *  phase is read then, the thought as it streams, and everything again once the turn has ended. */
+async function measureTurnDrawn(newPage: LiveApp['newPage'], origin: string, phase: HeldCall): Promise<TurnDrawnVerdict> {
+  const workspace = await createWorkspace(
+    origin, LOOPBACK_IDENTITY, { name: `live-row-turn-drawn-${RUN_ID}`, purpose: PHASED_FIRST_TURN_MISSION, model: SCRIPTED_MODEL_SPEC });
+
+  const page = await openWorkspace(newPage, origin, workspace);
+
+  try {
+    // Its third model call is held until the phase is read: the turn cannot end before then.
+    await waitOn(page, 'the phased turn to wait on its model', phase.arrived);
+    await until(page, "the phase's two calls in the chat", `document.querySelector('#chat [data-tool-run-calls="2"]') !== null`);
+    await painted(page);
+
+    const phases = v.parse(v.array(DisclosureReadSchema), await page.evaluate(disclosuresOf('[data-tool-run]')));
+    const running = { phase: phases.at(-1) ?? null, feedback: v.parse(v.boolean(), await page.evaluate(FEEDBACK_OFFERED)) };
+    const steering = await readFocus(page, '[data-composer-field]');
+
+    await shoot(page, 'turn-drawn-phase-live');
+    phase.release();
+    await until(page, 'the thought to stream', `document.querySelector('#chat [data-reasoning]') !== null || !(${STOP_OFFERED})`);
+
+    const live = v.parse(v.array(DisclosureReadSchema), await page.evaluate(disclosuresOf('[data-reasoning]'))).at(-1) ?? null;
+
+    await shoot(page, 'turn-drawn-thought-live');
+    await until(page, 'the answer and Send offered again', `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(PHASED_TURN_ANSWER)}) && !(${STOP_OFFERED})`);
+    await painted(page);
+
+    const ended = {
+      phases: v.parse(v.array(DisclosureReadSchema), await page.evaluate(disclosuresOf('[data-tool-run]'))),
+      feedback: v.parse(v.boolean(), await page.evaluate(FEEDBACK_OFFERED)),
+    };
+
+    const thought = v.parse(v.array(DisclosureReadSchema), await page.evaluate(disclosuresOf('[data-reasoning]'))).at(-1) ?? null;
+    const idle = await readFocus(page, '[data-composer-field]');
+    const next = await readFocus(page, null);
+
+    await shoot(page, 'turn-drawn-ended');
+
+    return { running, thought: { live, ended: thought }, ended, focus: { steering, idle, next } };
+  } finally {
+    phase.release();
+    await page.close();
+  }
+}
 
 /** Row 9 (#29): a new workspace's page opens on its first turn, so it loads a claim that is admitted. The turn is
  *  held at its model (`pacedFirstTurn`) while the page loads again and reads its state, and the page must say it
@@ -2404,7 +2503,7 @@ async function measureState(app: LiveApp): Promise<StateVerdict> {
 export const LIVE_ROWS = [
   'live-indicator', 'opened-mid-turn', 'reconnect', 'observed-reconnect', 'unanswered-probe', 'slept', 'watched-slept', 'answered',
   'unsent-answer', 'controls', 'walkthrough', 'own-server', 'kept-tab', 'chat-scroll', 'mid-thought', 'dropped-file', 'cleared', 'plan-tasks',
-  'stop-then-send', 'new-chat-stop', 'slate-ui', 'slate-ask', 'provider-wait', 'connect', 'workspace-views', 'state',
+  'stop-then-send', 'new-chat-stop', 'slate-ui', 'slate-ask', 'provider-wait', 'connect', 'workspace-views', 'turn-drawn', 'state',
 ] as const;
 
 export type LiveRow = (typeof LIVE_ROWS)[number];
@@ -2426,7 +2525,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
   const observed: TierVerdicts = {
     liveIndicator: null, openedMidTurn: null, reconnect: null, observedReconnect: null, unansweredProbe: null, slept: null, watchedSlept: null, answered: null,
     unsentAnswer: null, bootFailure: null, slateAsk: null, connect: null,
-    controls: null, walkthrough: null, ownServer: null, keptTab: null, chatScroll: null, midThought: null, droppedFile: null, cleared: null, planTasks: null, stopThenSend: null, newChatStop: null, slateUi: null, providerWait: null, workspaceViews: null, state: null,
+    controls: null, walkthrough: null, ownServer: null, keptTab: null, chatScroll: null, midThought: null, turnDrawn: null, droppedFile: null, cleared: null, planTasks: null, stopThenSend: null, newChatStop: null, slateUi: null, providerWait: null, workspaceViews: null, state: null,
   };
 
   // Set once the dev server is up: a row that breaks names the file its server's output is kept in.
@@ -2437,6 +2536,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
 
   async function run(): Promise<void> {
     const firstTurn = heldCall();
+    const phaseHeld = heldCall();
     const reconnectHeld = heldCall();
     const observedHeld = heldCall();
     const sleptHeld = heldCall();
@@ -2456,7 +2556,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
     // The watched turn follows the answered one in its conversation, so it is matched first, by the latest ask.
     const model = await startScriptedModel((request) => providerWaitTurn(request, waitProbe) ?? droppedFileTurn(request) ?? toldBackTurn(request, toldBack.resolve) ?? pacedTurn(request)
       ?? laterReconnectTurn(request, WATCHED_ANSWER_TURN_ASK, watchedAnswerHeld)
-      ?? pacedFirstTurn(request, firstTurn) ?? reconnectTurn(request, ANSWERED_TURN_ASK, answeredHeld)
+      ?? pacedFirstTurn(request, firstTurn) ?? phasedFirstTurn(request, phaseHeld) ?? reconnectTurn(request, ANSWERED_TURN_ASK, answeredHeld)
       ?? reconnectTurn(request, RECONNECT_TURN_ASK, reconnectHeld) ?? reconnectTurn(request, OBSERVED_TURN_ASK, observedHeld)
       ?? reconnectTurn(request, UNANSWERED_PROBE_TURN_ASK, probeWaitHeld)
       ?? reconnectTurn(request, SLEPT_TURN_ASK, sleptHeld) ?? reconnectTurn(request, WATCHED_SLEPT_TURN_ASK, watchedSleptHeld, true)
@@ -2501,6 +2601,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
         'connect': async () => { observed.connect = await attempt('connect', () => measureConnect(newPage, origin)); },
         'provider-wait': async () => { observed.providerWait = await attempt('provider-wait', () => measureProviderWait(newPage, origin, waitProbe)); },
         'workspace-views': async () => { observed.workspaceViews = await attempt('workspace-views', () => measureWorkspaceViews(newPage, origin)); },
+        'turn-drawn': async () => { observed.turnDrawn = await attempt('turn-drawn', () => measureTurnDrawn(newPage, origin, phaseHeld)); },
         'state': async () => { observed.state = await attempt('state', () => measureState(app)); },
       };
 

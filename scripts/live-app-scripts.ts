@@ -183,6 +183,29 @@ export function pacedFirstTurn(request: ScriptedRequest, held: HeldCall): Script
     : { ...answer, pace: { ...answer.pace, hold: held.hold() } };
 }
 
+/* ── A turn a signal opened, drawn as it runs ──────────────────────────── */
+
+/** A workspace made with this mission takes its first turn, which a signal opens, in phases: two calls, then a thought,
+ *  then its answer. */
+export const PHASED_FIRST_TURN_MISSION = 'Take the first turn in phases: list twice, think it over, then answer.';
+
+export const PHASED_TURN_ANSWER = 'Both folders listed.';
+
+/** The thought's pace: long enough to read it live, as a thinking model's runs. */
+const PHASED_THOUGHT = { deltas: 12, everyMs: 300 } as const;
+
+/** The phased turn: two `file` lists, then a model call held once its calls have made a phase, which then thinks aloud
+ *  and answers. Null for any other request, a titling call's among them. */
+export function phasedFirstTurn(request: ScriptedRequest, phase: HeldCall): ScriptedAnswer | null {
+  if (!request.system.includes(PHASED_FIRST_TURN_MISSION) || !request.available.includes('file')) return null;
+
+  const listed = request.askTurn.filter((call) => call.name === 'file').length;
+
+  if (listed < 2) return { toolCall: { name: 'file', arguments: { op: 'list', path: listed === 0 ? '/home/main' : '/home' } } };
+
+  return { text: PHASED_TURN_ANSWER, pace: { firstTokenMs: 0, lead: '', leadMs: 0, hold: phase.hold(), reasoning: PHASED_THOUGHT } };
+}
+
 /* ── The reconnect turn ───────────────────────────────────────────────── */
 
 /** The words that ask for the reconnect turn: one per row, since each row's turn waits on a call of its own. */

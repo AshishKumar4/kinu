@@ -3,20 +3,73 @@
 // refused before any object is asked.
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { EVAL_ACCOUNTS, OPS_PASS_PREFIX, requireOps, sha256Hex, type OpsCaller, type TablesAnswer } from '@kinu.run/core';
+import { EVAL_ACCOUNTS, opsCaller, restoreArmed, OPS_PASS_PREFIX, requireOps, sha256Hex, type OpsCaller, type RestoreTarget, type TablesAnswer } from '@kinu.run/core';
 import { BUILTIN_ACCOUNTS_OBJECT } from '@kinu.run/core/identity';
 import { opsRoutes, type OpsEnv } from '../src/ops-routes';
+import { accountIdFor } from '../src/auth/store';
 
 const PASS = 'p'.repeat(43);
 
 const KEY = 'k'.repeat(64);
 
-function world(written: readonly string[]) {
+/** A bookmark of the fake history: its generation and its step, as Cloudflare writes them. */
+const mark = (generation: number, step: number) => `${generation.toString(16).padStart(8, '0')}-${step.toString(16).padStart(8, '0')}-0000510d-${'a'.repeat(32)}`;
+
+/** Where the fake history stands, and the restore armed for its next start. */
+interface FakeHistory {
+  readonly generation: number;
+  readonly step: number;
+  readonly pending: string | null;
+}
+
+/** `lands`: whether a restart applies the armed restore, as the platform does at the object's next start. */
+/** `lands`: whether a restart applies the armed restore, as the platform does at the object's next start. `missing`:
+ *  the bytes a mailbox's or workspace's rows name that its bucket no longer holds, by object name. */
+function world(written: readonly string[], lands = true, { shards = 0, missing = {} }: { readonly shards?: number; readonly missing?: Readonly<Record<string, readonly string[]>> } = {}) {
   const asked: string[] = [];
+  const armed: string[] = [];
+  const histories = new Map<string, FakeHistory>();
+
+  const restorable = (name: string, id: DurableObjectId) => {
+    const key = `${name}:${String(id.name)}`;
+    const history = () => histories.get(key) ?? { generation: 1, step: 4, pending: null };
+
+    return {
+      opsRestore: async (caller: OpsCaller, target: RestoreTarget) => {
+        await requireOps({ CREDENTIAL_ENCRYPTION_KEY: KEY }, caller);
+        armed.push(`${key}:${JSON.stringify(target)}`);
+        const now = history();
+        const undo = mark(now.generation + 1, 0xffffffff);
+
+        histories.set(key, { ...now, pending: undo });
+
+        return { bookmark: 'at' in target ? mark(0, 10) : target.bookmark, undo, previous: mark(now.generation, now.step) };
+      },
+      opsRestart: async () => {
+        const now = history();
+
+        if (lands && now.pending !== null) histories.set(key, { generation: now.generation + 2, step: 0, pending: null });
+
+        throw new Error('ops: restarted for a restore');
+      },
+      opsBookmark: async () => mark(history().generation, history().step),
+      opsMissing: async () => {
+        const gone = missing[String(id.name)] ?? [];
+
+        return { named: gone.length + 3, missing: gone.length, keys: [...gone] };
+      },
+    };
+  };
+
+  const namedObjects = <Stub>(stub: (id: DurableObjectId) => Stub) => ({
+    idFromName: (object: string) => ({ toString: () => sha256Hex(object), equals: () => false, name: object }),
+    get: stub,
+  });
 
   const namespace = (name: string): OpsEnv['UserDO'] => ({
     idFromName: (named) => ({ toString: () => sha256Hex(named), equals: () => false, name: named }),
     get: (id) => ({
+      ...restorable(name, id),
       opsTables: async (caller: OpsCaller): Promise<TablesAnswer> => {
         await requireOps({ CREDENTIAL_ENCRYPTION_KEY: KEY }, caller);
         asked.push(`${name}:${id.toString()}`);
@@ -34,9 +87,12 @@ function world(written: readonly string[]) {
     DEV_USER_EMAIL: 'eval-service@kinu.run',
     UserDO: namespace('UserDO'),
     OrchestratorAgent: namespace('OrchestratorAgent'),
+    MAILBOX: namedObjects((id) => restorable('MailboxDO', id)),
+    MOSSAIC_USER: namedObjects((id) => ({ ...restorable('MossaicUserDO', id), tenantShards: async () => shards })),
+    MOSSAIC_SHARD: namedObjects((id) => restorable('MossaicShardDO', id)),
   };
 
-  return { env, asked };
+  return { env, asked, armed };
 }
 
 const body = (names: readonly string[]) => JSON.stringify({ class: 'OrchestratorAgent', names });
@@ -135,4 +191,123 @@ test('a bound control plane is a root of the walk, opened by its one name', asyn
   expect(control).toEqual(['site']);
   expect((await ask('tables', { body: JSON.stringify({ class: 'ControlPlaneDO', names: control }) })).status).toBe(200);
   expect(opened).toEqual(['site']);
+});
+
+// The operator's restore (scripts/restore.ts, ARCHITECTURE-DECISIONS W7): behind the same pass, armed, the object ended
+// so it lands, and read back from a fresh start.
+/** A restore's body as the operator's script sends it, or one it never would. */
+interface RestoreBody {
+  readonly object: Readonly<Record<string, string>>;
+  readonly to: Readonly<Record<string, number | string>>;
+}
+
+const restore = (authorization: string | null, request: RestoreBody) => new Request('https://kinu.test/ops/restore', {
+  method: 'POST', body: JSON.stringify(request), headers: authorization === null ? {} : { authorization },
+});
+
+const Restored = v.object({
+  objects: v.array(v.looseObject({
+    class: v.string(), name: v.string(), undo: v.string(), current: v.string(), landed: v.boolean(),
+    missing: v.optional(v.object({ named: v.number(), missing: v.number(), keys: v.array(v.string()) })),
+  })),
+  landed: v.boolean(),
+});
+
+test('a restore without the pass arms nothing', async () => {
+  const { env, armed } = world([`${OPS_PASS_PREFIX}${sha256Hex(PASS)}`]);
+
+  for (const request of [restore(null, { object: { class: 'OrchestratorAgent', name: 'jarvis' }, to: { at: 1 } }), restore(`Bearer ${'q'.repeat(43)}`, { object: { class: 'OrchestratorAgent', name: 'jarvis' }, to: { at: 1 } })]) {
+    expect((await opsRoutes.fetch(request, env)).status).toBe(401);
+  }
+
+  expect(armed).toEqual([]);
+});
+
+test('a workspace goes back to a moment, the object is ended so it lands, and the answer names the undo', async () => {
+  const { env, armed } = world([`${OPS_PASS_PREFIX}${sha256Hex(PASS)}`]);
+  const answer = await opsRoutes.fetch(restore(`Bearer ${PASS}`, { object: { class: 'OrchestratorAgent', name: 'jarvis' }, to: { at: 1_792_732_236_605 } }), env);
+  const [said] = v.parse(Restored, await answer.json()).objects;
+
+  expect({ status: answer.status, armed, landed: said?.landed, past: (said?.current ?? '') > (said?.undo ?? '~') }).toEqual({
+    status: 200, armed: ['OrchestratorAgent:jarvis:{"at":1792732236605}'], landed: true, past: true,
+  });
+});
+
+// One not landed is still armed, and would land at the object's next eviction over whatever was written before it.
+test('a restore the restart did not land is said loudly, never as done', async () => {
+  const { env } = world([`${OPS_PASS_PREFIX}${sha256Hex(PASS)}`], false);
+  const answer = await opsRoutes.fetch(restore(`Bearer ${PASS}`, { object: { class: 'OrchestratorAgent', name: 'jarvis' }, to: { at: 1 } }), env);
+
+  expect({ status: answer.status, landed: v.parse(Restored, await answer.json()).landed }).toEqual({ status: 502, landed: false });
+});
+
+// What is the person's goes back together: the account, its mailbox, its Drive's user object, then every shard.
+test('an account named by its email goes back with its mailbox and its Drive, the Drive\'s user object before its shards', async () => {
+  const { env, armed } = world([`${OPS_PASS_PREFIX}${sha256Hex(PASS)}`], true, { shards: 2 });
+  const user = await accountIdFor(env, 'owner@example.com');
+  const answer = await opsRoutes.fetch(restore(`Bearer ${PASS}`, { object: { class: 'UserDO', email: 'owner@example.com' }, to: { at: 7 } }), env);
+
+  expect({ status: answer.status, armed }).toEqual({
+    status: 200,
+    armed: [`UserDO:${user}`, `MailboxDO:${user}`, `MossaicUserDO:vfs:default:${user}`, `MossaicShardDO:vfs:default:${user}:s0`, `MossaicShardDO:vfs:default:${user}:s1`]
+      .map((object) => `${object}:{"at":7}`),
+  });
+});
+
+test('an account goes back by a moment, never a bookmark, and a body naming neither is refused', async () => {
+  const { env, armed } = world([`${OPS_PASS_PREFIX}${sha256Hex(PASS)}`]);
+
+  const targets: RestoreBody['to'][] = [{ bookmark: mark(0, 10) }, {}];
+
+  for (const to of targets) expect((await opsRoutes.fetch(restore(`Bearer ${PASS}`, { object: { class: 'UserDO', name: 'u' }, to }), env)).status).toBe(400);
+  expect(armed).toEqual([]);
+});
+
+// The owner's choice (2026-10-23): a teardown or an account's deletion deletes its R2 bytes at once, so a restore can
+// bring back rows that name bytes that are gone. It says which.
+test('what a restored object\'s rows name that R2 no longer holds is named in its answer', async () => {
+  const user = 'u-1';
+  const { env } = world([`${OPS_PASS_PREFIX}${sha256Hex(PASS)}`], true, { missing: { [user]: [`mail/${user}/raw/abc.eml`] } });
+  const answer = await opsRoutes.fetch(restore(`Bearer ${PASS}`, { object: { class: 'UserDO', name: user }, to: { at: 7 } }), env);
+  const mailbox = v.parse(Restored, await answer.json()).objects.find((one) => one.class === 'MailboxDO');
+
+  expect(mailbox?.missing).toEqual({ named: 4, missing: 1, keys: [`mail/${user}/raw/abc.eml`] });
+});
+
+test('an undo takes each object back to its own bookmark', async () => {
+  const { env, armed } = world([`${OPS_PASS_PREFIX}${sha256Hex(PASS)}`]);
+  const undo = [{ class: 'UserDO', name: 'u-1', bookmark: mark(2, 0xffffffff) }, { class: 'MailboxDO', name: 'u-1', bookmark: mark(5, 0xffffffff) }];
+  const answer = await opsRoutes.fetch(new Request('https://kinu.test/ops/restore', { method: 'POST', body: JSON.stringify({ undo }), headers: { authorization: `Bearer ${PASS}` } }), env);
+
+  expect({ status: answer.status, armed }).toEqual({
+    status: 200, armed: [`UserDO:u-1:{"bookmark":"${mark(2, 0xffffffff)}"}`, `MailboxDO:u-1:{"bookmark":"${mark(5, 0xffffffff)}"}`],
+  });
+});
+
+test('a moment outside the last 30 days is refused before anything is armed', async () => {
+  const asked: string[] = [];
+
+  const storage = {
+    getCurrentBookmark: async () => mark(1, 4),
+    getBookmarkForTime: async (at: number | Date) => {
+      asked.push(`for ${String(Number(at))}`);
+
+      return mark(0, 10);
+    },
+    onNextSessionRestoreBookmark: async (bookmark: string) => {
+      asked.push(`arm ${bookmark}`);
+
+      return mark(2, 0xffffffff);
+    },
+  };
+
+  const now = Date.now();
+  const ctx = { storage, abort: () => undefined };
+  const caller = await opsCaller({ CREDENTIAL_ENCRYPTION_KEY: KEY });
+
+  // Cloudflare's documentation: the history reaches 30 days back.
+  for (const at of [now + 60_000, now - 30 * 24 * 60 * 60_000 - 1]) await expect(restoreArmed(ctx, { CREDENTIAL_ENCRYPTION_KEY: KEY }, caller, { at })).rejects.toMatchObject({ code: 'bad_input' });
+  expect(asked).toEqual([]);
+  expect(await restoreArmed(ctx, { CREDENTIAL_ENCRYPTION_KEY: KEY }, caller, { at: now - 60_000 })).toEqual({ bookmark: mark(0, 10), undo: mark(2, 0xffffffff), previous: mark(1, 4) });
+  expect(asked).toEqual([`for ${String(now - 60_000)}`, `arm ${mark(0, 10)}`]);
 });

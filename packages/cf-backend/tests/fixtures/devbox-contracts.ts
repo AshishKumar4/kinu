@@ -1,6 +1,6 @@
 /** The deploy tier's eval-owned throwaway Worker. No route is added to Kinu. */
 import * as v from 'valibot';
-import { Devbox, GOLDEN_NAME, type DevboxState } from '../../../devbox/src/index';
+import { Devbox, type DevboxState } from '../../../devbox/src/index';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace/nimbus-workspace.js';
 import { GOLDEN_BASE, GoldenStateSchema, pipeParts } from '../../../devbox/src/golden';
 import { DESKTOP_SIZE, WATCH_SHEET } from '../../../devbox/src/desktop';
@@ -8,8 +8,9 @@ import { DISK_PROBE } from '../../../devbox/src/disk-stall';
 import { DevboxError, settle } from '../../../devbox/src/errors';
 import { DEFAULT_DEVBOX_POLICY, describeThrown } from '../../../devbox/src/lifecycle';
 import { fileErrorContract, runContainerContract } from '../../../devbox/bench/container-contracts';
-import { CONTAINER_CONTRACTS, DISK_CONTRACTS } from '../../../devbox/bench/contract-types';
+import { CONTAINER_CONTRACTS, DISK_CONTRACTS, RecoveryAcceptanceSchema, type RecoveryAcceptance } from '../../../devbox/bench/contract-types';
 import { diskContract } from '../../../devbox/bench/disk-contracts';
+import { recoveryAcceptance } from '../../../devbox/bench/recovery-acceptance';
 import {
   JsonValueSchema, createSandboxExecutor, withCodemodeProgram, desktopClientUrl, executorNamespace, gateProviderExec, projectJsonValue, sandboxFiles, sha256Hex,
   timingSafeEqual, withAppSecurityHeaders, type JsonValue, type ShellApprovalPolicy,
@@ -33,6 +34,10 @@ interface Env {
   readonly PROBE_BUCKET: string;
   /** The name every contract box answers to; the tier that deploys this fixture sets it and reads it back. */
   readonly BOX_NAME: string;
+  /** The box that builds this run's golden. Every run deploys this fixture again under the same Worker, and a box of the
+   *  version before can still answer after the deploy (staging 8556f3506, 2026-10-23: its golden, under the one name
+   *  every run shared, answered from the run before, whose bucket was gone). Named by the run, no box outlives it. */
+  readonly GOLDEN_BOX: string;
 }
 
 const Snapshot = v.looseObject({ id: v.string(), lineage: v.optional(v.array(v.string()), []) });
@@ -64,6 +69,8 @@ export class ContractBox extends Devbox<Env> {
   protected override get ambientCheckpoints(): boolean { return false; }
   // As KinuDevbox's (D96), so every start here names the box on the platform's real container.
   protected override async hostname(): Promise<string> { return this.env.BOX_NAME; }
+
+  protected override get goldenName(): string { return this.env.GOLDEN_BOX; }
 
   /**
    * A box named `-parked` fails every start the way staging 7e411119d's did (D94): its own configure step writes
@@ -225,6 +232,30 @@ export class ContractBox extends Devbox<Env> {
     await diskContract(kind, { container, kv: this.ctx.storage.kv, bucket: this.env.STORE, id: this.ctx.id.toString() });
   }
 
+  /** A2's acceptance, one phase a call (`devbox-container-tier.ts --recovery-acceptance`). */
+  async recoveryAcceptance(asked: RecoveryAcceptance): Promise<JsonValue> {
+    await this.ensureReady();
+    const container = this.ctx.container;
+
+    if (container === undefined) throw new Error('this fixture has no container binding');
+
+    // Its first save installs the box's R2 mount, on the run's first container and on the fresh one after the crash. A
+    // save between phases would take the acceptance's workspace into the product's chain, whose inventory then is
+    // not the acceptance chain's, and its next save a base.
+    if (asked.phase === 'fill' || asked.phase === 'recover') await this.checkpointNow('tick');
+
+    return projectJsonValue({ value: await recoveryAcceptance(asked, { container, kv: this.ctx.storage.kv, bucket: this.env.STORE, id: this.ctx.id.toString() }) });
+  }
+
+  /** The container ends as a crash ends it, and the next call starts a fresh one: its object and its storage stay, as
+   *  the box's own `destroy` would delete them. */
+  async crash(): Promise<void> {
+    const container = this.ctx.container;
+
+    if (container === undefined) throw new Error('this fixture has no container binding');
+    await container.destroy();
+  }
+
   storageProbe(command: string) {
     if (this.env.PROBE_HTTP !== '1') throw new Error('this contract run installs no storage alternatives');
 
@@ -323,21 +354,22 @@ async function desktopRoute(request: Request, env: Env, ctx: ExecutionContext, u
   if (desktopName !== undefined) {
     const box = env.Box.getByName(desktopName);
 
-    const route = serveFamily(terminalRoutes(() => ({
-      resolveWorkspace: async () => ({
-        // As the product's: a terminal is held and told why inside the box (D109); a desktop waits here.
-        prepareTerminal: async (_executor: string, surface?: 'terminal' | 'desktop') => {
-          if (surface !== 'terminal') await box.ensureReady();
+    const workspace = {
+      // As the product's: a terminal is held and told why inside the box (D109); a desktop waits here.
+      prepareTerminal: async (_executor: string, surface?: 'terminal' | 'desktop') => {
+        if (surface !== 'terminal') await box.ensureReady();
 
-          return { ok: true as const };
-        },
-        openDeviceTerminal: async () => { throw new Error('this probe has no device'); },
-        openDeviceScreen: async () => { throw new Error('this probe has no device'); },
-        fetch: async () => new Response('this probe has no workspace terminal', { status: 404 }),
-      }),
+        return { ok: true as const };
+      },
+      openDeviceTerminal: async () => { throw new Error('this probe has no device'); },
+      openDeviceScreen: async () => { throw new Error('this probe has no device'); },
+      fetch: async () => new Response('this probe has no workspace terminal', { status: 404 }),
+    };
+
+    const route = serveFamily(terminalRoutes(() => ({
       resolveSandbox: () => box,
       UserDO: { idFromName: () => { throw new Error('this probe has no account devices'); }, get: () => { throw new Error('this probe has no account devices'); } },
-    })), { workspace: { name: desktopName }, ctx });
+    })), { workspace: { name: desktopName, agent: workspace }, ctx });
 
     return await route(request, {}) ?? new Response('desktop route not found', { status: 404 });
   }
@@ -384,10 +416,14 @@ async function contractRoute(url: URL, name: string, box: DurableObjectStub<Cont
   }
 }
 
-/** The box's state, its saves and its stop; null for any other path. */
+/** The box's state, its saves, its stop and its crash, and A2's acceptance; null for any other path. */
 async function lifecycleRoute(url: URL, box: DurableObjectStub<ContractBox>): Promise<Response | null> {
   switch (url.pathname) {
     case '/state': return Response.json(await box.devboxState());
+    case '/recovery-acceptance': return Response.json(await box.recoveryAcceptance(v.parse(RecoveryAcceptanceSchema, JSON.parse(url.searchParams.get('asked') ?? '{}'))));
+    case '/crash': await box.crash();
+
+      return Response.json({ crashed: true });
     case '/armed': return Response.json(await box.armed());
     case '/checkpoint': return Response.json(await box.checkpointNow(url.searchParams.get('kind') === 'tick' ? 'tick' : 'quiesce'));
     case '/stop': return Response.json(await box.quiesce());
@@ -438,7 +474,7 @@ async function answer(request: Request, env: Env, ctx: ExecutionContext): Promis
 
   const name = url.searchParams.get('box') ?? '';
 
-  if (!name.startsWith('eval-devbox-') && name !== GOLDEN_NAME) return new Response('only this run\'s eval workspaces', { status: 403 });
+  if (!name.startsWith('eval-devbox-')) return new Response('only this run\'s eval workspaces', { status: 403 });
   const box = env.Box.getByName(name);
   const body = request.method === 'POST' ? v.parse(Body, await request.json()) : {};
 

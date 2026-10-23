@@ -20,6 +20,10 @@ import type { SqlExec } from '../types/primitives';
 /** Trash empties itself 30 days after a thread went in (the owner, 2026-10-19). */
 const TRASH_DAYS = 30;
 
+/** Bytes outlive the rows that named them by this: the 30 days a restore of the mailbox reaches, and a day
+ *  (ARCHITECTURE-DECISIONS W7). */
+const BLOB_GRACE_DAYS = 31;
+
 /** A text part up to this size stays in the row; a longer one goes to R2. */
 const INLINE_TEXT_BYTES = 64 * 1024;
 
@@ -783,7 +787,8 @@ export class MailStore {
     return (await this.thread(threadId))?.messages.find((each) => each.id === id) ?? null;
   }
 
-  /** Empties the Trash of what has been in it 30 days: its rows, its search entries, and bytes no row names any more. */
+  /** Empties the Trash of what has been in it 30 days: its rows and its search entries. The bytes no row names any more
+   *  are kept {@link BLOB_GRACE_DAYS} days, then deleted unless a row names them again. */
   async purge(): Promise<number> {
     const cutoff = this.deps.now() - TRASH_DAYS * DAY;
     const gone = rows(v.object({ id: v.string() }), this.deps.sql.exec('SELECT id FROM mail_threads WHERE trashed_at IS NOT NULL AND trashed_at <= ?', cutoff));
@@ -802,19 +807,44 @@ export class MailStore {
       this.deps.sql.exec('DELETE FROM mail_threads WHERE id = ?', id);
     }
 
-    const named = (key: string): boolean => (key.startsWith('att/')
-      ? this.deps.sql.exec('SELECT 1 FROM mail_attachments WHERE digest = ? LIMIT 1', key.slice(4)).toArray().length > 0
-      : this.deps.sql.exec('SELECT 1 FROM mail_messages WHERE raw_key = ? OR text_key = ? OR html_key = ? LIMIT 1', key, key, key).toArray().length > 0);
+    const due = this.deps.now() + BLOB_GRACE_DAYS * DAY;
 
-    await this.deps.blobs.delete([...keys].filter((key) => !named(key)));
+    for (const unnamed of [...keys].filter((key) => !this.named(key))) {
+      this.deps.sql.exec('INSERT INTO mail_blob_graves (key, due_at) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET due_at = MAX(due_at, excluded.due_at)', unnamed, due);
+    }
+
+    const ended = rows(v.object({ key: v.string() }), this.deps.sql.exec('SELECT key FROM mail_blob_graves WHERE due_at <= ?', this.deps.now())).map(({ key }) => key);
+
+    await this.deps.blobs.delete(ended.filter((key) => !this.named(key)));
+
+    for (const key of ended) this.deps.sql.exec('DELETE FROM mail_blob_graves WHERE key = ?', key);
 
     return gone.length;
+  }
+
+  /** Whether a row names the bytes at `key`. */
+  private named(key: string): boolean {
+    return key.startsWith('att/')
+      ? this.deps.sql.exec('SELECT 1 FROM mail_attachments WHERE digest = ? LIMIT 1', key.slice(4)).toArray().length > 0
+      : this.deps.sql.exec('SELECT 1 FROM mail_messages WHERE raw_key = ? OR text_key = ? OR html_key = ? LIMIT 1', key, key, key).toArray().length > 0;
+  }
+
+  /** Every blob key a row names: the messages' bodies and their attachments. */
+  namedBlobKeys(): string[] {
+    const bodies = rows(v.object({ raw_key: v.nullable(v.string()), text_key: v.nullable(v.string()), html_key: v.nullable(v.string()) }),
+      this.deps.sql.exec('SELECT raw_key, text_key, html_key FROM mail_messages'));
+
+    const files = rows(v.object({ digest: v.string() }), this.deps.sql.exec('SELECT DISTINCT digest FROM mail_attachments'));
+
+    return [...bodies.flatMap((body) => [body.raw_key, body.text_key, body.html_key].filter((key) => key !== null)), ...files.map((file) => `att/${file.digest}`)];
   }
 
   /** When the Trash next has something to empty, or null. */
   nextPurgeAt(): number | null {
     const [row] = rows(v.object({ at: v.nullable(v.number()) }), this.deps.sql.exec('SELECT MIN(trashed_at) AS at FROM mail_threads WHERE trashed_at IS NOT NULL'));
+    const [grave] = rows(v.object({ at: v.nullable(v.number()) }), this.deps.sql.exec('SELECT MIN(due_at) AS at FROM mail_blob_graves'));
+    const due = [row?.at == null ? null : row.at + TRASH_DAYS * DAY, grave?.at ?? null].filter((at) => at !== null);
 
-    return row?.at == null ? null : row.at + TRASH_DAYS * DAY;
+    return due.length === 0 ? null : Math.min(...due);
   }
 }

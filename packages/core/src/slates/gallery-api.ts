@@ -73,6 +73,16 @@ export function gallerySlatePath(workspace: string, slate: string): string {
 }
 
 /** `GET`, public: a listed slate's picture by its digest. */
+/**
+ * A slate picture's version for the mode it is shown in (design review 2026-10-20, N6): the light capture by its digest,
+ * the dark one beside it. A slate that draws no dark of its own has none, and the route answers its light one.
+ */
+export const DARK_PICTURE = '-dark';
+
+export function pictureForMode(digest: string, mode: 'light' | 'dark'): string {
+  return mode === 'dark' ? `${digest}${DARK_PICTURE}` : digest;
+}
+
 export function galleryPicturePath(workspace: string, slate: string, picture: string): string {
   return `${gallerySlatePath(workspace, slate)}/picture/${encodeURIComponent(picture)}`;
 }

@@ -2,69 +2,8 @@
  * The desktop as agents drive it (D89): one action at a time on the screen the owner watches, sent by xdotool, and one
  * agent driving at a time. What runs on the box is decided here; the box runs it.
  */
-import * as v from 'valibot';
 import { WATCH_SHEET } from './desktop';
-
-/** The longest a key is held, and the longest a watch looks. */
-const KEY_HOLD_MAX_MS = 10_000;
-
-const WATCH_MAX_SECONDS = 10;
-
-const Coordinate = v.pipe(v.number(), v.integer(), v.minValue(0));
-
-const Point = v.pipe(v.tuple([Coordinate, Coordinate]), v.readonly());
-
-/** How far a relative move goes on each axis, in pixels: a screen's width each way is the most any turn needs. */
-const Step = v.pipe(v.number(), v.integer(), v.minValue(-4096), v.maxValue(4096));
-
-const Delta = v.pipe(v.tuple([Step, Step]), v.readonly());
-
-/** A key or modifier as X spells it; the agent's chord was read into these before it was sent. */
-const KeyName = v.pipe(v.string(), v.regex(/^[A-Za-z0-9_]+$/u));
-
-const Wheel = v.pipe(v.number(), v.integer(), v.minValue(-50), v.maxValue(50));
-
-export const DesktopRequestSchema = v.object({
-  driver: v.pipe(v.string(), v.nonEmpty()),
-  /** The id `killExec` ends the action by, as an exec's (D69): its caller's stop ends its run. */
-  execId: v.optional(v.pipe(v.string(), v.nonEmpty())),
-  action: v.variant('kind', [
-    v.object({ kind: v.literal('screenshot') }),
-    v.object({
-      kind: v.literal('watch'), seconds: v.pipe(v.number(), v.minValue(0.5), v.maxValue(WATCH_MAX_SECONDS)),
-      frames: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(WATCH_SHEET.columns.length)),
-    }),
-    v.object({
-      kind: v.literal('click'), at: v.optional(Point), button: v.picklist(['left', 'right', 'middle']),
-      count: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(3)), hold: v.pipe(v.array(KeyName), v.readonly()),
-    }),
-    // A line break or tab is a key press, never typed: xdotool types neither.
-    v.object({ kind: v.literal('type'), text: v.pipe(v.string(), v.nonEmpty(), v.maxLength(200), v.regex(/^[^\r\n\t]*$/u)) }),
-    v.object({
-      kind: v.literal('key'), keys: v.pipe(v.string(), v.regex(/^[A-Za-z0-9_]+(?:\+[A-Za-z0-9_]+)*$/u)),
-      holdMs: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(KEY_HOLD_MAX_MS))),
-    }),
-    v.object({ kind: v.literal('scroll'), at: Point, dy: Wheel, dx: Wheel }),
-    // To a point, or by a distance from wherever the pointer is: an app that captures the pointer reads motion alone.
-    v.object({ kind: v.literal('move'), at: Point }),
-    v.object({ kind: v.literal('move'), by: Delta }),
-    v.object({ kind: v.literal('drag'), from: Point, to: Point }),
-  ]),
-});
-
-export type DesktopRequest = v.InferOutput<typeof DesktopRequestSchema>;
-
-export type DesktopAction = DesktopRequest['action'];
-
-export type DesktopAnswer =
-  | { readonly kind: 'done' }
-  | { readonly kind: 'screen'; readonly png: string; readonly width: number; readonly height: number }
-  | { readonly kind: 'refused'; readonly reason: 'off_screen' | 'driven' | 'look_first'; readonly detail: string };
-
-export interface DesktopScreen {
-  readonly width: number;
-  readonly height: number;
-}
+import type { DesktopAction, DesktopAnswer, DesktopScreen } from './wire';
 
 const BUTTONS = { left: '1', middle: '2', right: '3' } as const;
 

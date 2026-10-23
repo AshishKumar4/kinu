@@ -2,7 +2,8 @@
 import { diskChain, DiskChainStateSchema, type DiskChainPorts, type DiskChainState } from '../src/disk-chain';
 import { settle } from '../src/errors';
 import { chainStoreRoot, storeObjectUrl } from '../src/store-gateway';
-import { DEVBOX_RUNTIME_DIR as RT, DEVBOX_WORKDIR as WD, type CheckpointOutcome } from '../src/storage';
+import { DEVBOX_RUNTIME_DIR as RT, type CheckpointOutcome } from '../src/storage';
+import { DEVBOX_WORKDIR as WD } from '../src/wire';
 import * as v from 'valibot';
 
 import type { DiskContract } from './contract-types';
@@ -13,7 +14,7 @@ const EXCLUDES = ['node_modules', '*.log'];
 
 const PRUNE = "\\( -name node_modules -o -name '*.log' \\) -prune -o";
 
-const TREE = `cd ${WD}; find . -xdev ${PRUNE} ! -path . -printf '%P %y %m %l\\n' | LC_ALL=C sort; `
+export const TREE = `cd ${WD}; find . -xdev ${PRUNE} ! -path . -printf '%P %y %m %l\\n' | LC_ALL=C sort; `
   + `find . -xdev ${PRUNE} -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum`;
 
 const UNMOUNT = `s=$(cat ${RT}/disk-hydrate.pid 2>/dev/null); if [ -n "$s" ]; then kill -KILL -- -"$s" 2>/dev/null || true; `
@@ -71,12 +72,16 @@ async function levelsContract(box: LevelsBox): Promise<void> {
   await box.reset(); await box.attach(); equal(await box.sh(TREE), later);
 }
 
-export async function diskContract(kind: DiskContract, input: {
+/** What a disk contract runs on: the fixture box's container, its object's storage and its store bucket. */
+export interface DiskContractInput {
   readonly container: Container;
   readonly kv: DurableObjectStorage['kv'];
   readonly bucket: R2Bucket;
   readonly id: string;
-}): Promise<void> {
+}
+
+/** A disk chain on the box's real container, its record held under `key` in the object's storage. */
+export function diskHarness(input: DiskContractInput, key: string) {
   const exec = async (command: string) => {
     const ran = await (await input.container.exec(['/bin/bash', '-o', 'pipefail', '-c', command], { cwd: '/' })).output();
 
@@ -92,27 +97,27 @@ export async function diskContract(kind: DiskContract, input: {
   };
 
   const readState = (): DiskChainState | null => {
-    const held = v.safeParse(DiskChainStateSchema, input.kv.get(KEY));
+    const held = v.safeParse(DiskChainStateSchema, input.kv.get(key));
 
     return held.success ? held.output : null;
   };
 
   const root = chainStoreRoot(`boxes/${input.id}`);
-  let clock = Date.now();
+  const clock = { at: Date.now() };
 
   const ports: DiskChainPorts = {
     exec, readState: async () => readState(),
     writeState: async (state, expected) => {
       equal(readState()?.rev ?? null, expected);
-      input.kv.put(KEY, state);
+      input.kv.put(key, state);
     },
     storeRoot: () => root,
-    storeObjectUrl: key => storeObjectUrl(root, 'STORE', key),
-    objectBytes: async key => (await input.bucket.head(key))?.size,
+    storeObjectUrl: object => storeObjectUrl(root, 'STORE', object),
+    objectBytes: async object => (await input.bucket.head(object))?.size,
     deleteObjects: async keys => { if (keys.length !== 0) await input.bucket.delete([...keys]); },
     mountStore: async () => undefined,
     excludes: () => EXCLUDES,
-    now: () => clock,
+    now: () => clock.at,
     log: () => undefined,
   };
 
@@ -121,6 +126,11 @@ export async function diskContract(kind: DiskContract, input: {
   const attach = (snapshot = false) => settle(chain.attach(snapshot));
   const reset = async () => { await sh(`${UNMOUNT}; rm -rf ${RT}/disk-* ${WD}; mkdir -p ${WD}`); };
 
+  return { exec, sh, readState, ports, clock, save, attach, reset };
+}
+
+export async function diskContract(kind: DiskContract, input: DiskContractInput): Promise<void> {
+  const { exec, sh, readState, ports, clock, save, attach, reset } = diskHarness(input, KEY);
   const copied = () => sh(`until [ -e ${RT}/disk-hydrate.done ]; do sleep 0.05; done`);
   const copyEnded = () => sh(`until [ -e ${RT}/disk-hydrate.pid ] && ! kill -0 "$(cat ${RT}/disk-hydrate.pid)" 2>/dev/null; do sleep 0.05; done`);
   const poke = (offset: number, bytes: number, byte: string) => sh(`python3 -c "import os; f=os.open('${WD}/db.bin',os.O_WRONLY); os.pwrite(f,b'${byte}'*${String(bytes)},${String(offset)}); os.close(f)"`);
@@ -260,11 +270,11 @@ export async function diskContract(kind: DiskContract, input: {
     }
 
     case 'quiesce-tick': {
-      clock = 0;
+      clock.at = 0;
       await sh(`echo a >${WD}/a`); equal((await save()).kind, 'committed');
-      clock = 10_000;
+      clock.at = 10_000;
       await sh(`echo b >${WD}/b`); equal((await save('quiesce')).kind, 'committed');
-      clock = 60_000;
+      clock.at = 60_000;
       await sh(`echo c >${WD}/c`); equal((await save()).kind, 'committed');
       break;
     }

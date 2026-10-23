@@ -187,7 +187,7 @@ test('a route answers nothing outside the bucket, host and access S3Mount record
   expect((await send('chain/x', { method: 'HEAD' })).status).toBe(404);
 });
 
-test('a multipart upload completes whatever order a client lists each part\'s fields in, and refuses a list it cannot read', async () => {
+test('a multipart upload completes whatever order or XML form a client lists each part\'s fields in, and refuses a list it cannot read', async () => {
   // S3 does not order a part's elements; the AWS SDKs send each part's checksum and ETag before its number.
   const halves = [new Uint8Array(randomBytes(5 * 1024 * 1024)), new Uint8Array(randomBytes(1_234))];
 
@@ -213,7 +213,11 @@ test('a multipart upload completes whatever order a client lists each part\'s fi
   const etagFirst = await complete('chain/etag-first.sqsh', (number, etag) => `<Part><ChecksumCRC32>AAAAAA==</ChecksumCRC32><ETag>${etag}</ETag><PartNumber>${String(number)}</PartNumber></Part>`);
   const unreadable = await complete('chain/unreadable.sqsh', (number) => `<Part><PartNumber>${String(number)}</PartNumber></Part>`);
 
-  expect({ numberFirst, etagFirst, unreadable }).toEqual({
+  // An SDK's XML writer escapes the ETag's quotes and may name the namespace on each element.
+  const escaped = await complete('chain/escaped.sqsh', (number, etag) => `<s3:Part><s3:PartNumber>${String(number)}</s3:PartNumber><s3:ETag>${etag.replaceAll('"', '&quot;')}</s3:ETag></s3:Part>`);
+
+  expect({ numberFirst, etagFirst, unreadable, escaped }).toEqual({
     numberFirst: { status: 200, stored: sha(whole) }, etagFirst: { status: 200, stored: sha(whole) }, unreadable: { status: 400, stored: null },
+    escaped: { status: 200, stored: sha(whole) },
   });
 });

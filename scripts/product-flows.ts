@@ -22,7 +22,7 @@
  */
 import type { Page } from 'puppeteer';
 import * as v from 'valibot';
-import { AccountMemoryProposalSchema, CHANGES_MOVED_EVENT, DRIVE_SKILLS_DIR, executorLabel, SLATES_ROOT, type AccountMemoryProposal } from '@kinu.run/core';
+import { AccountMemoryProposalSchema, APP_ROUTES, CHANGES_MOVED_EVENT, DRIVE_SKILLS_DIR, executorLabel, PERSONAL_ASSISTANT_ID, SLATES_ROOT, type AccountMemoryProposal } from '@kinu.run/core';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { evalWorkspaceName, scratchDir } from '@kinu.run/test-utils';
@@ -35,10 +35,10 @@ import {
   APPROVALS_ASK, DECISION_HEARD, HIRE_APPROVAL_ASK, HIRE_RAN, AGENT_WORKSPACE_REPLY, AGENT_WORKSPACE_ASK, ACCOUNT_FACT, ACCOUNT_FACT_ASK,
   ACCOUNT_RECALL_ASK, ACCOUNT_RECALL_REPLY, STACK_FACT, STACK_FACT_ASK, STACK_RECALL_ASK, STACK_RECALL_REPLY,
   SPLICE_HEARD, SPLICE_PAGE_ASK, SPLICE_SENT, SPLICE_STEPS, SPLICE_WORK_ASK,
-  ATTACHMENT_ASK, ATTACHMENT_FILE, ATTACHMENT_REPLY, ATTACHMENT_UNREAD, ATTACHMENT_WORD,
+  ATTACHMENT_ASK, ATTACHMENT_FILE, ATTACHMENT_REPLY, ATTACHMENT_UNREAD, ATTACHMENT_WORD, ACTIVITY_ASK, ACTIVITY_WORKSPACE, MODE_SLATE, MODE_SLATE_ASK,
 } from './flows-script';
 import { FALLBACK_ANSWER } from './scripted-protocol';
-import { ACTIVE_TAB_INDEX, AGENT_TAB, AGENTS_COUNTER, agentTab, ATTENTION_BEHIND, ATTENTION_CARD, attentionBehind, attentionCard, CHAT_COMPOSER_LIVE, CHAT_IDLE, CHATS, CHECKBOX, countRpc, createFlowWorkspace, DESKTOP_RETURN, DRIVE_DIALOG_COMMIT, DRIVE_NEW, DRIVE_PLACE, drivePlace, FILES_FAILURE, frameLedger, INSPECTOR_WIDTH, MARK_REVIEWED, NEW_SESSION, openInspector, openInspectorPage, openSlateShareDialog, openWaits, openWorkspacePage, PAGE_TABS, pagesTraffic, painted, PARKED_COMMAND, parkedCommand, pressRowMenu, recordRenderTasks, removeFlowWorkspace, RENAME_BUTTON, rendered, sendAndSettle, sendInChat, sessionLine, settled, settledAfter, startNewChat, submitPublicSlateShare, typeIntoComposer, until, waitOn, type FlowTarget, type FrameLedger, type RpcCounts, type SendSite } from './browser-page';
+import { ACTIVE_TAB_INDEX, AGENT_TAB, AGENTS_COUNTER, agentTab, ATTENTION_BEHIND, ATTENTION_CARD, attentionBehind, attentionCard, CHAT_COMPOSER_LIVE, CHAT_IDLE, CHATS, CHECKBOX, countRpc, createFlowWorkspace, DESKTOP_RETURN, DRIVE_DIALOG_COMMIT, DRIVE_NEW, DRIVE_PLACE, drivePlace, FILES_FAILURE, frameLedger, INSPECTOR_WIDTH, MARK_REVIEWED, named, NEW_SESSION, openInspector, openInspectorPage, openSlateShareDialog, openWaits, openWorkspacePage, PAGE_TABS, pagesTraffic, painted, PARKED_COMMAND, parkedCommand, pressMenu, pressRowMenu, recordRenderTasks, removeFlowWorkspace, RENAME_BUTTON, rendered, sendAndSettle, sendInChat, sessionLine, settled, settledAfter, startNewChat, submitPublicSlateShare, typeIntoComposer, until, waitOn, type FlowTarget, type FrameLedger, type RpcCounts, type SendSite } from './browser-page';
 
 
 /** The waits open now, `; `-joined: what a row stopped for being silent was waiting on (`endedNearSilence`). */
@@ -414,7 +414,16 @@ export interface AgentWorkspaceVerdict {
   readonly created: { readonly name: string; readonly displayName: string } | null;
   /** The Agent tab's Changelog entry for it: its words, and the workspace it opens. */
   readonly changelog: { readonly summary: string; readonly opens: string } | null;
+  /** The receipt lines under the turn's calls (WEB-3), and the operations the opened calls list: what the host recorded
+   *  the program did. */
+  readonly receipts: readonly string[];
+  readonly operations: readonly string[];
 }
+
+/** Every fold of the chat's settled work and every call opened, so each call's receipt is drawn whole. */
+const OPEN_FOLDS = `(() => {
+  for (const fold of document.querySelectorAll('#chat :is([data-tool-run], [data-turn-rollup], [data-tool-state])[aria-expanded="false"], #chat :is([data-tool-run], [data-turn-rollup]) button[aria-expanded="false"]')) fold.click();
+})()`;
 
 /**
  * Row: the workspace's main agent creates a workspace in its owner's account, at once, nothing asked (the owner,
@@ -436,6 +445,12 @@ export async function agentCreatesAWorkspace(target: FlowTarget): Promise<AgentW
     const said = v.parse(v.string(), await page.evaluate(`document.querySelector('#chat')?.textContent ?? ''`));
     const link = /https?:\/\/\S+?\/workspace\/[a-z0-9-]+/u.exec(said.slice(said.lastIndexOf(AGENT_WORKSPACE_REPLY)))?.[0] ?? '';
 
+    await page.evaluate(OPEN_FOLDS);
+    await page.evaluate(OPEN_FOLDS);
+    await painted(page);
+    const receipts = v.parse(v.array(v.string()), await page.evaluate(`[...document.querySelectorAll('#chat [data-tool-receipt]')].map((line) => line.textContent ?? '')`));
+    const operations = v.parse(v.array(v.string()), await page.evaluate(`[...document.querySelectorAll('#chat [data-receipt-operation]')].map((row) => row.getAttribute('data-receipt-operation') ?? '')`));
+
     created = /\/workspace\/([a-z0-9-]+)$/u.exec(link)?.[1] ?? null;
     const row = (await listWorkspaces(target.origin, target.identity)).find((entry) => entry.name === created);
 
@@ -454,7 +469,7 @@ export async function agentCreatesAWorkspace(target: FlowTarget): Promise<AgentW
     })()`));
 
     return {
-      link, changelog, existedBefore: created !== null && before.has(created),
+      link, changelog, receipts, operations, existedBefore: created !== null && before.has(created),
       created: row === undefined ? null : { name: row.name, displayName: row.displayName ?? '' },
     };
   } finally {
@@ -609,6 +624,79 @@ export async function chatOnlyRewindIsShown(target: FlowTarget): Promise<RewindV
     return { sentAfter, notice, noticeAfterReload };
   } finally {
     await removeFlowWorkspace(target, workspace);
+  }
+}
+
+export interface ActivityVerdict {
+  /** Whether Home already had the assistant, or the row installed it from Explore as a person would. */
+  readonly installed: boolean;
+  /** Activity's newest turn as it drew it: what set it off, what it changed, and why it stopped. */
+  readonly newest: { readonly cause: string; readonly changed: readonly string[]; readonly stopped: string } | null;
+}
+
+/** Home is the assistant's chat: its bar in `focus` names it, and pressing it opens its Activity. */
+const ASSISTANT_HOME = `document.querySelector('[data-workspace-bar][data-layout="focus"] [data-focus-identity]') !== null`;
+
+/**
+ * The account's Personal assistant, installed from Explore as a person installs it after setup when Home has none:
+ * its blueprint's Install, kept as Home. Answers whether it had to.
+ */
+async function assistantOnHome(target: FlowTarget): Promise<boolean> {
+  const page = await signedInPage(target.browser, target);
+
+  try {
+    await page.goto(`${target.origin}/`, { waitUntil: 'load' });
+    await until(page, 'the home page', HOME_DRAWN);
+
+    if (v.parse(v.boolean(), await page.evaluate(ASSISTANT_HOME))) return false;
+
+    await page.goto(`${target.origin}/explore/workspaces/${PERSONAL_ASSISTANT_ID}`, { waitUntil: 'load' });
+    await until(page, "the assistant's Install", `document.querySelector('[data-blueprint-install]') !== null`);
+    await page.click('[data-blueprint-install]');
+    await until(page, 'the install dialog', `document.querySelector('[data-install-confirm]') !== null`);
+    await page.click('[data-install-confirm]');
+    await until(page, "Home as the assistant's chat", `location.pathname === '/' && ${ASSISTANT_HOME}`);
+
+    return true;
+  } finally {
+    await page.close();
+  }
+}
+
+/**
+ * Row: the assistant's Activity (1018-xao, Muse's activity log). An ask on Home runs a program that creates a
+ * workspace, then the provider refuses the rest; pressing the assistant in Home's bar opens its Activity, whose newest
+ * turn says the person set it off, what the program changed and why it stopped.
+ */
+export async function activityIsShown(target: FlowTarget): Promise<ActivityVerdict> {
+  const installed = await assistantOnHome(target);
+  const before = new Set((await listWorkspaces(target.origin, target.identity)).map((row) => row.name));
+  const page = await openWorkspacePage(target, '/');
+
+  try {
+    await sendInChat(page, ACTIVITY_ASK);
+    // The refusal is this row's outcome, not a dead end: `until` would end the row on it, and the chat beside Activity
+    // keeps saying it, so these waits are bare and the row's deadline ends them.
+    await named('the turn to stop on the refusal', () => page.waitForFunction(`document.querySelector('#chat [data-turn-failure]') !== null`, { polling: 100 }));
+    await page.click('[data-focus-identity]');
+    await named("Activity's turns", () => page.waitForFunction(`document.querySelector('[data-activity-entry]') !== null`, { polling: 100 }));
+
+    const newest = v.parse(v.nullable(v.object({ cause: v.string(), changed: v.array(v.string()), stopped: v.string() })), await page.evaluate(`(() => {
+      const entry = document.querySelector('[data-activity-entry]');
+      return entry === null ? null : {
+        cause: entry.getAttribute('data-cause') ?? '',
+        changed: [...entry.querySelectorAll('[data-activity-changed] li')].map((change) => change.textContent ?? ''),
+        stopped: entry.querySelector('[data-activity-failed]')?.textContent ?? '',
+      };
+    })()`));
+
+    return { installed, newest };
+  } finally {
+    await page.close();
+
+    for (const row of await listWorkspaces(target.origin, target.identity)) {
+      if (!before.has(row.name) && row.displayName === ACTIVITY_WORKSPACE) await removeFlowWorkspace(target, row.name);
+    }
   }
 }
 
@@ -1647,6 +1735,99 @@ export async function slateShowsItsPreview(target: FlowTarget): Promise<SlatePre
   }
 }
 
+/** A picture as a page drew it: the address it loaded and its mean luminance, 0 to 1. */
+const DrawnPictureSchema = v.object({ src: v.string(), luminance: v.number() });
+
+export interface SlatePicturesVerdict {
+  /** The digest of the camera's picture of the slate, as the owner's slates list it once it took one. */
+  readonly digest: string;
+  /** What the Drive's tile of the slate drew in a light page, and in a dark one. */
+  readonly light: v.InferOutput<typeof DrawnPictureSchema>;
+  readonly dark: v.InferOutput<typeof DrawnPictureSchema>;
+}
+
+/** The digest of `workspace`'s mode slate's picture, read from the owner's slates; null until the camera took one. */
+const modeSlatePicture = (workspace: string) => `fetch('/api/shared').then((answer) => answer.json()).then((library) => library.slates
+  .find((slate) => slate.workspace === ${JSON.stringify(workspace)} && slate.id === ${JSON.stringify(MODE_SLATE.id)})?.picture ?? null)`;
+
+/** The drawn `img` at `selector`, scaled onto a canvas and averaged: same-origin, so its pixels are the page's to read. */
+const drawnPicture = (selector: string) => `(() => {
+  const image = document.querySelector(${JSON.stringify(selector)});
+  const canvas = Object.assign(document.createElement('canvas'), { width: 64, height: 40 });
+  const context = canvas.getContext('2d');
+  context.drawImage(image, 0, 0, 64, 40);
+  const pixels = context.getImageData(0, 0, 64, 40).data;
+  let sum = 0;
+  for (let at = 0; at < pixels.length; at += 4) sum += 0.2126 * pixels[at] + 0.7152 * pixels[at + 1] + 0.0722 * pixels[at + 2];
+  return { src: image.getAttribute('src') ?? '', luminance: sum / (pixels.length / 4) / 255 };
+})()`;
+
+/** The slate's preview, opened in the inspector and drawn once: the camera shoots a slate a while after it last drew. */
+async function modeSlateDrawn(page: Page): Promise<void> {
+  const frameSelector = `#inspector iframe[title="${MODE_SLATE.id}"]`;
+
+  await openInspector(page);
+  await openInspectorPage(page, MODE_SLATE.title);
+  await until(page, "the slate's preview frame", `document.querySelector(${JSON.stringify(frameSelector)}) !== null`);
+
+  const frame = await (await page.$(frameSelector))?.contentFrame();
+
+  if (frame === null || frame === undefined) throw new Error("the slate's preview frame has no document");
+
+  await waitOn(page, "the slate's page to draw", frame.waitForFunction('document.querySelector("[data-modes]") !== null', { polling: 100 }));
+}
+
+/** The Drive's tile of `workspace`'s mode slate, in a page of `mode`: the picture it drew. */
+async function modeSlateTile(target: FlowTarget, workspace: string, mode: 'light' | 'dark'): Promise<v.InferOutput<typeof DrawnPictureSchema>> {
+  const page = await signedInPage(target.browser, target);
+  const tile = `[data-drive-workspace=${JSON.stringify(workspace)}][data-drive-slate=${JSON.stringify(MODE_SLATE.id)}] img[data-slate-picture]`;
+
+  try {
+    await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: mode }]);
+    await page.goto(`${target.origin}${APP_ROUTES.slates}`, { waitUntil: 'load' });
+    await until(page, `the slate's tile, drawn ${mode}`, `document.querySelector(${JSON.stringify(tile)})?.complete === true`);
+
+    return v.parse(DrawnPictureSchema, await page.evaluate(drawnPicture(tile)));
+  } finally {
+    await page.close();
+  }
+}
+
+/**
+ * Row: a slate's picture follows the reader's light or dark (N6). One turn builds a slate whose page draws a dark of its
+ * own and starts its preview; once the reader has opened it, the camera shoots it in both modes. The Drive's tile of it
+ * then draws the light picture in a light page and the dark one in a dark page.
+ */
+export async function slatePicturesFollowMode(target: FlowTarget): Promise<SlatePicturesVerdict> {
+  const workspace = await createFlowWorkspace(target, 'slate-pictures');
+
+  try {
+    const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
+
+    try {
+      await sendAndSettle(page, MODE_SLATE_ASK);
+      await modeSlateDrawn(page);
+    } finally {
+      await page.close();
+    }
+
+    const reader = await signedInPage(target.browser, target);
+    let digest: string;
+
+    try {
+      await reader.goto(`${target.origin}${APP_ROUTES.slates}`, { waitUntil: 'load' });
+      digest = await named("the camera's picture of the slate", async () => v.parse(v.string(),
+        await (await reader.waitForFunction(modeSlatePicture(workspace), { polling: 5_000 })).jsonValue()));
+    } finally {
+      await reader.close();
+    }
+
+    return { digest, light: await modeSlateTile(target, workspace, 'light'), dark: await modeSlateTile(target, workspace, 'dark') };
+  } finally {
+    await removeFlowWorkspace(target, workspace);
+  }
+}
+
 const DRIVE_LISTED = `[...document.querySelectorAll('[data-drive-entry]')].map((row) => row.getAttribute('data-drive-entry') ?? '')`;
 
 /** Counts, on `window`, every listing of the Drive's root the page's own fetch
@@ -1751,8 +1932,7 @@ export async function driveKeepsWhatIsDone(target: FlowTarget): Promise<DriveVer
     await relisted(page, async () => { await page.goto(`${target.origin}/drive`, { waitUntil: 'load' }); }, true);
     await openMyStuff(page);
     await relisted(page, async () => {
-      await page.click(DRIVE_NEW);
-      await page.click('[data-drive-new-folder]');
+      await pressMenu(page, DRIVE_NEW, '[data-drive-new-folder]');
       await nameInDialog(page, folder);
     });
 

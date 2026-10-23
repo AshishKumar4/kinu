@@ -7,11 +7,10 @@
  * every apical dendrite reaches toward its nearest edge, as cortex's do toward its surface.
  *
  * A cell fires: a spike runs down its axon, the synapse glints, the signal creeps up the dendrite to the next soma, and
- * the next cell may fire in turn, so a thought travels through the mesh as a cascade that always dies out. Idle, cells
- * fire rarely; while agents work, often, and the cascades run on. A decision arriving starts a cascade from a corner.
- * The pointer charges the cells beneath it, and a click fires the nearest. The whole mesh carries its temperament's
- * share of its ink: texture first, neurons when you look. Quiet, it never fires on its own, so it settles and a
- * renderer draws nothing until the pointer moves (`settled`).
+ * the next cell may fire in turn, so a thought travels through the mesh as a cascade that always dies out. A decision
+ * arriving starts a cascade from a corner. The pointer charges the cells beneath it, and a click fires the nearest. The
+ * whole mesh carries its temperament's share of its ink: texture first, neurons when you look. It never fires on its
+ * own, so it settles and a renderer draws nothing until the pointer moves (`settled`): no idle CPU (2026-10-23).
  *
  * Every resting stroke is written once into the frame's rest prefix, which a renderer keeps; only lit cells and
  * travelling signals are drawn each frame, and a tick touches only the cells doing anything. Lengths are CSS pixels; a
@@ -44,7 +43,7 @@ export interface MeshOptions {
   readonly field?: Field;
   /** How much of its full ink the whole mesh carries, resting tissue and firing alike; its temperament's by default. */
   readonly opacity?: number;
-  /** `today`, as it ships; `quiet`, the owner's proposal: fainter, held to the edges, and still unless touched. */
+  /** `today`, as it ships; `quiet`, the owner's proposal: fainter and held to the edges. Both are still unless touched. */
   readonly temperament?: MeshTemperamentName;
 }
 
@@ -72,8 +71,8 @@ interface MeshTemperament {
 
 const TEMPERAMENTS = {
   today: {
-    bandShare: 0.32, bandPx: [120, 340], falloff: 1.7, opacity: 0.2, idleRate: 0.7, workingRate: 1.8, workingRelease: 1.35,
-    pointerReach: 130, pointerCharge: 0.55, senseLight: 0.55, pointerRest: Number.POSITIVE_INFINITY,
+    bandShare: 0.32, bandPx: [120, 340], falloff: 1.7, opacity: 0.2, idleRate: 0, workingRate: 0, workingRelease: 1,
+    pointerReach: 130, pointerCharge: 0.55, senseLight: 0.55, pointerRest: 0.8,
   },
   quiet: {
     bandShare: 0.22, bandPx: [90, 240], falloff: 2.6, opacity: 0.12, idleRate: 0, workingRate: 0, workingRelease: 1,
@@ -146,6 +145,9 @@ const DENDRITE_TAIL_PX = 22;
 const LEAK = 3;
 
 const REFRACTORY = 4;
+
+/** How lit a cell must be to be drawn: below it, a frame draws the cell as the resting tissue does. */
+const LIT = 0.06;
 
 /**
  * The chance one arriving signal fires its cell, by the synapse's own strength, idle and while agents work. Each cell
@@ -432,14 +434,17 @@ export class NeuralMesh {
   }
 
   /**
-   * Nothing lit, charged, travelling or waiting, and no pointer held: another step would draw the same frame, so a
-   * renderer may stop until something moves. A temperament that fires on its own never settles.
+   * Nothing drawn lit, travelling or waiting, and no pointer held: another step would draw the same frame, so a
+   * renderer may stop until something moves. A cell's glow below what a frame draws, and its charge, only fade with
+   * nothing arriving, so they keep no picture moving; they wait where they are until something does. A temperament
+   * that fires on its own never settles.
    */
   settled(): boolean {
     if (Number.isFinite(this.nextFiring)) return false;
     const attention = this.flashAge !== null && envelope(this.flashAge) > 0.02;
+    const drawn = this.active.some((index) => (this.cells[index]?.glow ?? 0) >= LIT);
 
-    return !attention && this.hold === 0 && this.active.length === 0 && this.spikes.length === 0 && this.flashing.length === 0 && this.queued.length === 0;
+    return !attention && this.hold === 0 && !drawn && this.spikes.length === 0 && this.flashing.length === 0 && this.queued.length === 0;
   }
 
   clearPointer(): void {
@@ -490,7 +495,7 @@ export class NeuralMesh {
       if (cell === undefined) continue;
       const lit = cell.glow + this.temperament.senseLight * cell.sense;
 
-      if (lit < 0.06) continue;
+      if (lit < LIT) continue;
       count = this.writeLit(cell, count);
       const spot = this.spot;
 

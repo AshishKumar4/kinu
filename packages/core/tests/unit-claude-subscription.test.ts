@@ -502,7 +502,7 @@ describe('the Claude sign-in', () => {
     expect(claudeCodeFrom('http://localhost:54545/callback?code=abc&state=s1', 's1')).toBe('abc');
     expect(claudeCodeFrom(' abc#s1 ', 's1')).toBe('abc');
     expect(claudeCodeFrom('abc', 's1')).toBe('abc');
-    expect(() => claudeCodeFrom('abc#s2', 's1')).toThrow('that code belongs to another sign-in; start it again');
+    expect(() => claudeCodeFrom('abc#s2', 's1')).toThrow('That code is from an earlier sign-in. Start the sign-in again.');
     expect(() => claudeCodeFrom('http://localhost:54545/callback?error=access_denied&state=s1', 's1')).toThrow('Claude refused the sign-in: access_denied');
   });
 });

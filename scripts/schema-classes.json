@@ -135,6 +135,7 @@
     "slate_edit_marks",
     "slate_file_manifest",
     "slate_images",
+    "slate_picture_graves",
     "slate_pictures",
     "slate_publications",
     "slate_share_users",
@@ -382,6 +383,7 @@
     "mail_addresses",
     "mail_allow",
     "mail_attachments",
+    "mail_blob_graves",
     "mail_box",
     "mail_messages",
     "mail_threads"

@@ -915,9 +915,10 @@ describe('thinking in a settled turn', () => {
   });
 });
 
-describe('a long thought folds by its height', () => {
-  // m1111: a thought that is one long paragraph never folded, because the fold counted source lines.
-  test('one long paragraph shows a few lines and an expand, and expanding shows all of it', async () => {
+describe('a settled thought folds to its line', () => {
+  // m1111: a thought that is one long paragraph never folded, because the fold counted source lines; 2026-10-23, the
+  // owner: once done, a thought folds as a phase does.
+  test('one long paragraph shows none of itself and an expand, and expanding shows all of it', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       await page.setViewport({ width: 900, height: 1200 });

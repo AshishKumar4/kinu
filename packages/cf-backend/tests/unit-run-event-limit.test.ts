@@ -1,7 +1,7 @@
 // KINU-N019: a negative `limit` reached SQLite as `LIMIT -1`, which SQLite reads as no limit. Checked against a
 // real recorder over real SQLite; the stub's `getRunEventText` is the production body, and the direct RPC's
 // `getRunEvents` is checked on its own below.
-import type { RunEventsResolver, RunEventsTarget } from '../src/run-events-routes';
+import type { RunEventsTarget } from '../src/run-events-routes';
 import { serveFamily } from './helpers/api';
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -50,13 +50,13 @@ function runEventsWorkspace(message: (i: number) => string = (i) => `event ${i}`
     },
   };
 
-  return { resolveAgent: () => Promise.resolve(stub), recorder, pages };
+  return { agent: stub, recorder, pages };
 }
 
 async function eventsVia(
-  resolveAgent: RunEventsResolver, query: string,
+  agent: RunEventsTarget, query: string,
 ): Promise<{ status: number; count: number; indices: number[] }> {
-  const res = await serveFamily(runEventsRoutes(REAL_CLOCK, () => resolveAgent), { workspace: { name: 'jarvis' } })(new Request(
+  const res = await serveFamily(runEventsRoutes(REAL_CLOCK), { workspace: { name: 'jarvis', agent } })(new Request(
     `https://kinu.example.com/api/workspaces/jarvis/runs/run-1/events${query}`,
   ), {});
 
@@ -91,8 +91,8 @@ const BOUNDED_QUERIES: readonly { readonly name: string; readonly query: string;
 describe('the run-events route closes `limit` before it can reach SQL', () => {
   for (const bound of BOUNDED_QUERIES) {
     test(bound.name, async () => {
-      const { resolveAgent } = runEventsWorkspace();
-      expect(await eventsVia(resolveAgent, bound.query)).toMatchObject({ status: 200, count: bound.count });
+      const { agent } = runEventsWorkspace();
+      expect(await eventsVia(agent, bound.query)).toMatchObject({ status: 200, count: bound.count });
     });
   }
 });
@@ -100,9 +100,9 @@ describe('the run-events route closes `limit` before it can reach SQL', () => {
 describe('the object answers the route in pages bounded by their stored text', () => {
   test('a full page of large events is joined from bounded pages, every event once and in order', async () => {
     // 700 events of about 4 KiB: a 500-event page is about 2 MB of text, eight times the page bound.
-    const { resolveAgent, pages } = runEventsWorkspace((i) => `event ${i} ${'x'.repeat(4000)}`);
+    const { agent, pages } = runEventsWorkspace((i) => `event ${i} ${'x'.repeat(4000)}`);
 
-    const read = await eventsVia(resolveAgent, '?since=100&limit=500');
+    const read = await eventsVia(agent, '?since=100&limit=500');
 
     expect(read).toMatchObject({ status: 200, count: 500 });
     expect(read.indices).toEqual(Array.from({ length: 500 }, (_, i) => 100 + i));
@@ -110,9 +110,9 @@ describe('the object answers the route in pages bounded by their stored text', (
   });
 
   test('an event larger than the bound still comes, alone in its page, and the reader passes it', async () => {
-    const { resolveAgent, pages } = runEventsWorkspace((i) => (i === 3 ? 'x'.repeat(RUN_EVENT_PAGE_BYTES) : `event ${i}`));
+    const { agent, pages } = runEventsWorkspace((i) => (i === 3 ? 'x'.repeat(RUN_EVENT_PAGE_BYTES) : `event ${i}`));
 
-    const read = await eventsVia(resolveAgent, '?since=0&limit=10');
+    const read = await eventsVia(agent, '?since=0&limit=10');
 
     expect(read.indices).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(pages.filter((bytes) => bytes > RUN_EVENT_PAGE_BYTES)).toHaveLength(1);
@@ -122,10 +122,10 @@ describe('the object answers the route in pages bounded by their stored text', (
 describe('a follower resuming on a large ledger', () => {
   test('drains it in pages bounded by their text, each event once and in order, then closes at the run end', async () => {
     // A trial-sized backlog: 350 events of about 4 KiB past the follower's Last-Event-ID, one read today.
-    const { resolveAgent, recorder, pages } = runEventsWorkspace((i) => `event ${i} ${'x'.repeat(4000)}`);
+    const { agent, recorder, pages } = runEventsWorkspace((i) => `event ${i} ${'x'.repeat(4000)}`);
     recorder.emit('run-1', { type: 'run_end' });
 
-    const res = await serveFamily(runEventsRoutes(REAL_CLOCK, () => resolveAgent), { workspace: { name: 'jarvis' } })(new Request(
+    const res = await serveFamily(runEventsRoutes(REAL_CLOCK), { workspace: { name: 'jarvis', agent } })(new Request(
       'https://kinu.example.com/api/workspaces/jarvis/runs/run-1/stream', { headers: { 'Last-Event-ID': '349' } },
     ), {});
 

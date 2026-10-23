@@ -104,10 +104,12 @@
 # tables this release changed (with the tables that refer to them), made anew empty, the first time the new build
 # opens it (core state/schema-repair.ts). Before the upload it prints the plan, every table each class drops against
 # the build the deployment serves, and stops on anything that would refuse; on production it asks for a typed
-# confirmation naming every table it drops. After the upload, once this deploy's version answers, it opens every object
+# confirmation naming every table it drops, and only then: a release that only adds tables drops nothing, and stage.sh
+# deploys it unattended (`reset.ts schema-change`). After the upload, once this deploy's version answers, it opens every object
 # once, so each resets itself before a user waits on it, prints what each did and writes each database's census
 # (`scripts/reset.ts tables-plan` and `tables`, scripts/tables-reset.ts).
-# Chosen per release, never automatic. Its record goes where a reset's does, and a rerun of the walk is harmless.
+# Chosen per release; automatic only for one that only adds tables. Its record goes where a reset's does, and a rerun
+# of the walk is harmless.
 #
 # Idempotent: safe to re-run.
 set -uo pipefail
@@ -282,10 +284,8 @@ if [ "$KINU_RESET_TABLES" = "1" ]; then
     echo -e "${RED}--reset-tables keeps every object: --reset deletes them all anyway, and --gates-only stops before the build.${NC}"
     exit 2
   fi
-  if [ "$KINU_ENV" = "production" ] && [ ! -t 0 ]; then
-    echo -e "${RED}A production tables release is confirmed at a terminal, and this run has none. Nothing was deployed.${NC}"
-    exit 1
-  fi
+  # Production's confirmation is typed at a terminal only for a plan that drops or retires a table (tables-plan asks it,
+  # and refuses one with no terminal); a plan that only adds tables drops nothing, and ships unattended (stage.sh).
   KINU_TABLES_RECORD="$(mktemp -t kinu-tables.XXXXXX.json)"
   echo -e "${BOLD}TABLES: every object drops the tables this release changed, made anew empty, the first time the new build opens it. The plan:${NC}"
   bun "$KINU_ROOT/scripts/reset.ts" tables-plan "$KINU_ENV" "$KINU_TABLES_RECORD" || exit 1
@@ -403,9 +403,13 @@ json_field() {
 # `stop_phase <phase>` ends the deploy on a red, for the phases nothing may pass:
 # the preflight, the precondition for any verdict, and the upload gates.
 run_phase() {
-  local status
   bun scripts/ladder.ts "--deploy-phase=$1"
-  status=$?
+  phase_ended "$1" "$?"
+}
+
+# phase_ended <phase> <status>: a phase's runner ended with <status>, and a red is the deploy's.
+phase_ended() {
+  local status=$2
   if [ "$status" -eq 0 ]; then return 0; fi
   KINU_REDS=1
   echo -e "${RED}❌ the $1 phase failed (exit $status).${NC}"
@@ -460,6 +464,26 @@ reported_red() {
 }
 # The build started beside the upload gates (see THE BUILD below), cancelled when the deploy ends before it is awaited.
 KINU_BUILD_PID=""
+# The source phase, started once the upload gates pass (see THE SOURCE PHASE below), cancelled when the deploy ends
+# before it is joined.
+KINU_SOURCE_PID=""
+cancel_source() {
+  [ -n "$KINU_SOURCE_PID" ] || return 0
+  kill -TERM -- "-$KINU_SOURCE_PID" 2>/dev/null || kill -TERM "$KINU_SOURCE_PID" 2>/dev/null
+  wait "$KINU_SOURCE_PID" 2>/dev/null
+  KINU_SOURCE_PID=""
+  echo "The source phase was cancelled; its output is $KINU_DEPLOY_REPORT/logs/source.log."
+}
+# join_source: the source phase's output and its verdict, once it ends.
+join_source() {
+  local status
+  [ -n "$KINU_SOURCE_PID" ] || return 0
+  wait "$KINU_SOURCE_PID"
+  status=$?
+  KINU_SOURCE_PID=""
+  cat "$KINU_DEPLOY_REPORT/logs/source.log"
+  phase_ended source "$status"
+}
 cancel_build() {
   [ -n "$KINU_BUILD_PID" ] || return 0
   kill -TERM -- "-$KINU_BUILD_PID" 2>/dev/null || kill -TERM "$KINU_BUILD_PID" 2>/dev/null
@@ -469,6 +493,7 @@ cancel_build() {
 }
 finish() {
   cancel_build
+  cancel_source
   mark end
   # The verdict is the report's: a deploy red here names a red there, the budget's included once the end is marked, or
   # the report says that no step named one.
@@ -623,6 +648,15 @@ if [ "$KINU_GATES_ONLY" = "1" ]; then
   mark source
   echo "Gates only: stopping before the build, as asked."
   finish
+fi
+
+# THE SOURCE PHASE, started here and joined at the wave: no row of it reads the deployment (ladder.ts
+# `readsDeployment`), so it need not wait out the build and the publish. Its longest row, the devbox contracts
+# (635-692 s), set every staging deploy's wave, and it waited about 85 s past the build for the publish to end
+# (m1929a, staging 8769744f6, c423b5989, 613467d1a and 887cd238e, 2026-10-23). A promotion runs no source phase.
+if [ "$KINU_PROMOTE" != "1" ]; then
+  setsid -w bun scripts/ladder.ts --deploy-phase=source >"$KINU_DEPLOY_REPORT/logs/source.log" 2>&1 </dev/null &
+  KINU_SOURCE_PID=$!
 fi
 
 # ── Steps 2 to 4: build, upload, and prove the deployment serves it ──
@@ -1264,11 +1298,11 @@ else
     fi
   fi
   if [ -z "$KINU_TIERS_WHY" ]; then
-    run_phase post-publish,source
+    run_phase post-publish
   else
     skip_phase post-publish "$KINU_TIERS_WHY"
-    run_phase source
   fi
+  join_source
   mark wave
 fi
 

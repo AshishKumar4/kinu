@@ -1,7 +1,7 @@
 import { Effect, Cause } from 'effect';
 import type { Browser, BrowserWorker } from '@cloudflare/puppeteer';
 import * as v from 'valibot';
-import { isWorkspaceName, markStoreChanged, sha256Hex, VIEWER_EXCHANGE_PATH, type RawSqlExec, type SqlExec } from '@kinu.run/core';
+import { DARK_PICTURE, isWorkspaceName, markStoreChanged, sha256Hex, VIEWER_EXCHANGE_PATH, type RawSqlExec, type SqlExec } from '@kinu.run/core';
 import { SlateDirectoryName } from '@kinu.run/core/slates';
 import { diagnostics, recording, toKinuError, settle } from '@kinu.run/core/obs';
 import { PREVIEW_CAPABILITY_HANDLE_LENGTH } from '../workspace-host';
@@ -15,6 +15,11 @@ const RETRY_MS = 30_000;
 const LOCAL_DEV_ZONE = '.localhost';
 
 const ATTEMPTS = 3;
+
+/** A picture no row names any more is kept this long: past the 30 days a restore of the workspace reaches, and a day,
+ *  so a workspace restored to a moment before it was replaced finds the picture its row names (ARCHITECTURE-DECISIONS
+ *  W7). */
+const GRAVE_MS = 31 * 86_400_000;
 
 const SHOTS_PER_TICK = 3;
 
@@ -47,6 +52,11 @@ export function initSlatePictureTable(execRaw: RawSqlExec): void {
     capture_until  INTEGER,
     PRIMARY KEY (slate, view)
   )`);
+  // A picture's R2 object no row names any more, deleted once `due_at` passes ({@link GRAVE_MS}).
+  execRaw(`CREATE TABLE IF NOT EXISTS slate_picture_graves (
+    key    TEXT PRIMARY KEY,
+    due_at INTEGER NOT NULL
+  )`);
 }
 
 const DueRowSchema = v.object({
@@ -56,6 +66,8 @@ const DueRowSchema = v.object({
 type DuePicture = v.InferOutput<typeof DueRowSchema>;
 
 const StoredRowSchema = v.object({ slate: v.string(), digest: v.string() });
+
+const NamedRowSchema = v.object({ slate: v.string(), view: v.string(), digest: v.string() });
 
 export class SlatePictures {
   constructor(private readonly db: SqlExec) {}
@@ -91,21 +103,52 @@ export class SlatePictures {
 
   /**
    * `share` listed no more: its view goes at once, so a listing made later is a view of its own, then its pictures. R2
-   * refusing leaves them to go with the slate.
+   * refusing to list them leaves them to go with the slate.
    */
   unlisted(workspace: string, slate: string, share: string, bucket: PictureBucket | undefined): Promise<void> {
     return settle(Effect.gen({ self: this }, function* () {
       this.db.exec(`DELETE FROM slate_pictures WHERE slate = ? AND view = ? AND view <> '${PREVIEW_VIEW}'`, slate, share);
       markStoreChanged(this.db);
 
-      if (bucket !== undefined) yield* Effect.promise(() => deletePictures(bucket, sharePicturePrefix(workspace, slate, share)));
+      if (bucket !== undefined) this.bury(yield* Effect.promise(() => listedKeys(bucket, sharePicturePrefix(workspace, slate, share))), Date.now());
     }));
   }
 
   nextDueAt(): number | null {
-    const [row] = this.db.exec(`SELECT MIN(due_at) AS at FROM slate_pictures`).toArray();
+    const [row] = this.db.exec(`SELECT MIN(at) AS at FROM (SELECT MIN(due_at) AS at FROM slate_pictures UNION ALL SELECT MIN(due_at) FROM slate_picture_graves)`).toArray();
 
     return v.parse(v.object({ at: v.nullable(v.number()) }), row).at;
+  }
+
+  /** `keys` named by no row now: each deleted {@link GRAVE_MS} from `now`, unless a row names it again first. */
+  private bury(keys: readonly string[], now: number): void {
+    for (const key of keys) {
+      this.db.exec(`INSERT INTO slate_picture_graves (key, due_at) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET due_at = MAX(due_at, excluded.due_at)`, key, now + GRAVE_MS);
+    }
+  }
+
+  /**
+   * A shot no row came to name, deleted at once: every key a row stops naming is buried first (a replacement, a removal,
+   * an unlisting), so one with no grave was never named and no restore can name it. One with a grave keeps its due.
+   */
+  private discarded(bucket: PictureBucket, keys: readonly string[]): Effect.Effect<void> {
+    return Effect.gen({ self: this }, function* () {
+      const unnamed = keys.filter((key) => this.db.exec(`SELECT 1 FROM slate_picture_graves WHERE key = ?`, key).toArray().length === 0);
+
+      if (unnamed.length > 0) yield* Effect.promise(async () => bucket.delete([...unnamed]));
+    });
+  }
+
+  /** The pictures whose grace has passed, deleted from R2, then their graves. */
+  private swept(bucket: PictureBucket, now: number): Effect.Effect<void> {
+    return Effect.gen({ self: this }, function* () {
+      const due = this.db.exec(`SELECT key FROM slate_picture_graves WHERE due_at <= ?`, now).toArray().map((row) => v.parse(v.object({ key: v.string() }), row).key);
+
+      if (due.length === 0) return;
+      yield* Effect.promise(async () => bucket.delete([...due]));
+
+      for (const key of due) this.db.exec(`DELETE FROM slate_picture_graves WHERE key = ?`, key);
+    });
   }
 
   private due(now: number): DuePicture[] {
@@ -137,11 +180,14 @@ export class SlatePictures {
     this.db.exec(`UPDATE slate_pictures SET capture_handle = NULL, capture_until = NULL WHERE slate = ? AND view = '${PREVIEW_VIEW}'`, slate);
   }
 
-  private stored(picture: DuePicture, digest: string, taken: string | null): void {
+  /** `keys` are its new version's places, named again, so no grave holds them. */
+  private stored(picture: DuePicture, digest: string, taken: string | null, keys: readonly string[]): void {
     this.db.exec(
       `UPDATE slate_pictures SET digest = ?, taken = ?, due_at = NULL, due_since = NULL, attempts = 0 WHERE slate = ? AND view = ?`,
       digest, taken, picture.slate, picture.view,
     );
+
+    for (const key of keys) this.db.exec(`DELETE FROM slate_picture_graves WHERE key = ?`, key);
     markStoreChanged(this.db);
   }
 
@@ -168,10 +214,19 @@ export class SlatePictures {
     }));
   }
 
+  /** The R2 key of each picture a row names: its light capture, which every stored version has. */
+  namedKeys(workspace: string): string[] {
+    return this.db.exec(`SELECT slate, view, digest FROM slate_pictures WHERE digest IS NOT NULL`).toArray().map((row) => {
+      const named = v.parse(NamedRowSchema, row);
+
+      return viewPictureKey(workspace, named, named.digest);
+    });
+  }
+
   /** Left open: a shot whose put lands between this listing and the row's removal keeps its object; rare, and teardown reclaims it. */
-  forget(workspace: string, slate: string, bucket: PictureBucket | undefined): Promise<void> {
+  forget(workspace: string, slate: string, bucket: PictureBucket | undefined, now = Date.now()): Promise<void> {
     return settle(Effect.catchCause(Effect.gen({ self: this }, function* () {
-      if (bucket !== undefined) yield* Effect.promise(() => deletePictures(bucket, picturePrefix(workspace, slate)));
+      if (bucket !== undefined) this.bury(yield* Effect.promise(() => listedKeys(bucket, picturePrefix(workspace, slate))), now);
       this.db.exec(`DELETE FROM slate_pictures WHERE slate = ?`, slate);
       markStoreChanged(this.db);
     }), recording({ doing: `deleting the pictures of removed slate ${slate}`, otherwise: 'unavailable' }, (failure) => {
@@ -185,13 +240,14 @@ export class SlatePictures {
 
   captureDue(capture: PictureCapture, now: number): Promise<boolean> {
     return settle(Effect.gen({ self: this }, function* () {
+      yield* this.swept(capture.bucket, now);
       const due = this.due(now);
 
       if (due.length === 0) return false;
       const live = yield* Effect.promise(async () => capture.slates());
 
       for (const picture of due) {
-        if (!live.has(picture.slate)) yield* Effect.promise(async () => this.forget(capture.workspace, picture.slate, capture.bucket));
+        if (!live.has(picture.slate)) yield* Effect.promise(async () => this.forget(capture.workspace, picture.slate, capture.bucket, now));
       }
 
       const shots = due.filter((picture) => live.has(picture.slate));
@@ -212,7 +268,7 @@ export class SlatePictures {
       yield* Effect.ensuring(Effect.gen({ self: this }, function* () {
         for (const picture of shots.slice(0, SHOTS_PER_TICK)) {
           yield* Effect.catchCause(Effect.gen({ self: this }, function* () {
-            changed = (yield* this.shoot(camera, capture, picture)) || changed;
+            changed = (yield* this.shoot(camera, capture, picture, now)) || changed;
           }), (failed) => Effect.sync(() => {
             const cause = Cause.squash(failed);
             this.failed(picture, Date.now());
@@ -229,12 +285,12 @@ export class SlatePictures {
     }));
   }
 
-  private shoot(camera: Camera, capture: PictureCapture, picture: DuePicture): Effect.Effect<boolean> {
-    return picture.view === PREVIEW_VIEW ? this.shootPreview(camera, capture, picture) : this.shootShare(camera, capture, picture);
+  private shoot(camera: Camera, capture: PictureCapture, picture: DuePicture, now: number): Effect.Effect<boolean> {
+    return picture.view === PREVIEW_VIEW ? this.shootPreview(camera, capture, picture, now) : this.shootShare(camera, capture, picture, now);
   }
 
   /** The owner's private preview, entered by its port with a capture handle open only while it is shot. */
-  private shootPreview(camera: Camera, capture: PictureCapture, picture: DuePicture): Effect.Effect<boolean> {
+  private shootPreview(camera: Camera, capture: PictureCapture, picture: DuePicture, now: number): Effect.Effect<boolean> {
     return Effect.gen({ self: this }, function* () {
       const token = captureToken();
       this.openCapture(picture.slate, token.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH), Date.now() + CAPTURE_HANDLE_LIFE_MS);
@@ -246,7 +302,7 @@ export class SlatePictures {
         if (url === null) return yield* Effect.die(new Error('this deployment has no preview host'));
 
         // The owner's own preview, kept as theirs alone while its slate is: no share's view ever takes it.
-        return yield* this.kept(camera, capture, picture, { url, taken: null, holds: () => !this.removed(picture) });
+        return yield* this.kept(camera, capture, picture, { url, taken: null, holds: () => !this.removed(picture), now });
       }), Effect.sync(() => {
         this.closeCapture(picture.slate);
       }));
@@ -254,7 +310,7 @@ export class SlatePictures {
   }
 
   /** A listed share's picture, taken through its own host past its consent page; listed no more, none is taken. */
-  private shootShare(camera: Camera, capture: PictureCapture, picture: DuePicture): Effect.Effect<boolean> {
+  private shootShare(camera: Camera, capture: PictureCapture, picture: DuePicture, now: number): Effect.Effect<boolean> {
     return Effect.gen({ self: this }, function* () {
       const entry = yield* Effect.promise(async () => capture.share(picture.view));
 
@@ -265,41 +321,58 @@ export class SlatePictures {
       }
 
       // Kept only for the listing it was due for, under the share's authority as it stood as the shot began.
-      return yield* this.kept(camera, capture, picture, { url: entry.url, taken: entry.publication, holds: () => entry.held() && this.sameListing(picture) });
+      return yield* this.kept(camera, capture, picture, { url: entry.url, taken: entry.publication, holds: () => entry.held() && this.sameListing(picture), now });
     });
   }
 
   /**
-   * The shot at `url`, stored under its digest in its view's own place, and the one before it gone. `holds` is read
-   * once the shot is in R2, with nothing awaited before it is kept: what no longer holds keeps nothing of it.
+   * The shot at `url`, stored under its digest in its view's own place, and the one before it buried for {@link GRAVE_MS}
+   * from `now`. `holds` is read once the shot is in R2, with nothing awaited before it is kept: what no longer holds
+   * keeps nothing of it. A slate
+   * that draws itself dark too has that capture beside it (`DARK_PICTURE`), the digest naming the pair; one that draws
+   * the same either way has its light capture alone, by its own digest.
    */
-  private kept(camera: Camera, capture: PictureCapture, picture: DuePicture, at: { readonly url: string; readonly taken: string | null; readonly holds: () => boolean }): Effect.Effect<boolean> {
+  private kept(
+    camera: Camera, capture: PictureCapture, picture: DuePicture,
+    at: { readonly url: string; readonly taken: string | null; readonly holds: () => boolean; readonly now: number },
+  ): Effect.Effect<boolean> {
     return Effect.gen({ self: this }, function* () {
-      const shot = yield* Effect.promise(async () => camera.shoot(at.url));
-      const digest = sha256Hex(shot);
+      const shots = yield* Effect.promise(async () => camera.shoot(at.url));
+      const dark = sha256Hex(shots.dark) === sha256Hex(shots.light) ? null : shots.dark;
+      const digest = dark === null ? sha256Hex(shots.light) : sha256Hex(Buffer.concat([shots.light, dark]));
       const changed = digest !== picture.digest;
-      const key = viewPictureKey(capture.workspace, picture, digest);
+      const keys = versionKeys(capture.workspace, picture, digest);
 
-      if (changed) yield* Effect.promise(async () => capture.bucket.put(key, shot, { httpMetadata: { contentType: 'image/webp' } }));
+      if (changed) {
+        yield* Effect.promise(async () => capture.bucket.put(keys[0], shots.light, { httpMetadata: { contentType: 'image/webp' } }));
+
+        if (dark !== null) yield* Effect.promise(async () => capture.bucket.put(keys[1], dark, { httpMetadata: { contentType: 'image/webp' } }));
+      }
 
       if (!at.holds()) {
-        if (changed) yield* Effect.promise(async () => capture.bucket.delete(key));
+        if (changed) yield* this.discarded(capture.bucket, keys);
 
         return false;
       }
 
-      this.stored(picture, digest, at.taken);
+      this.stored(picture, digest, at.taken, keys);
       const previous = picture.digest;
 
-      if (changed && previous !== null) yield* Effect.promise(async () => capture.bucket.delete(viewPictureKey(capture.workspace, picture, previous)));
+      if (changed && previous !== null) this.bury(versionKeys(capture.workspace, picture, previous), at.now);
 
       return changed;
     });
   }
 }
 
+/** A slate as the camera took it: as it draws in a light page, then in a dark one. */
+export interface Shots {
+  readonly light: Uint8Array;
+  readonly dark: Uint8Array;
+}
+
 export interface Camera {
-  shoot(url: string): Promise<Uint8Array>;
+  shoot(url: string): Promise<Shots>;
   close(): Promise<void>;
 }
 
@@ -307,7 +380,22 @@ export interface PictureBucket {
   get(key: string): Promise<{ readonly body: ReadableStream; readonly httpEtag: string } | null>;
   put(key: string, value: Uint8Array, options: { httpMetadata: { contentType: string } }): Promise<void>;
   delete(keys: string | string[]): Promise<void>;
-  list(options: { prefix: string }): Promise<{ objects: { key: string }[]; truncated: boolean }>;
+  list(options: { prefix: string; cursor?: string }): Promise<{ objects: { key: string }[]; truncated: boolean; cursor?: string }>;
+}
+
+/** Every key under `prefix`, page by page. */
+async function listedKeys(bucket: PictureBucket, prefix: string): Promise<string[]> {
+  const keys: string[] = [];
+
+  for (let cursor: string | undefined, more = true; more;) {
+    const listed = await bucket.list(cursor === undefined ? { prefix } : { prefix, cursor });
+
+    keys.push(...listed.objects.map((object) => object.key));
+    more = listed.truncated;
+    cursor = listed.cursor;
+  }
+
+  return keys;
 }
 
 export interface PictureCapture {
@@ -339,8 +427,9 @@ function captureToken(): string {
   return [...crypto.getRandomValues(new Uint8Array(12))].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-/** Waits on load, not the network: a streaming slate never idles. */
-async function photograph(browser: Browser, url: string): Promise<Uint8Array> {
+/** Waits on load, not the network: a streaming slate never idles. Taken light, then dark with the page as it stands:
+ *  `prefers-color-scheme` is what a slate's own CSS reads, so a slate that draws a dark of its own does so. */
+async function photograph(browser: Browser, url: string): Promise<Shots> {
   const page = await browser.newPage();
 
   try {
@@ -349,32 +438,46 @@ async function photograph(browser: Browser, url: string): Promise<Uint8Array> {
     }
 
     await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 0.5 });
+    await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'light' }]);
+
     const response = await page.goto(url, { waitUntil: 'load', timeout: CAPTURE_HANDLE_LIFE_MS });
 
     if (response === null || !response.ok()) throw new Error(`the preview answered ${String(response?.status() ?? 'nothing')}`);
-    await page.evaluate(() => new Promise<void>((resolve) => {
-      requestAnimationFrame(() => { requestAnimationFrame(() => { resolve(); }); });
-    }));
 
-    return await page.screenshot({ type: 'webp', quality: 80 });
+    const inScheme = async (scheme: 'light' | 'dark'): Promise<Uint8Array> => {
+      await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: scheme }]);
+      // Two frames drawn: what the scheme set out is on the page.
+      await page.evaluate(() => new Promise<void>((resolve) => {
+        requestAnimationFrame(() => { requestAnimationFrame(() => { resolve(); }); });
+      }));
+
+      return await page.screenshot({ type: 'webp', quality: 80 });
+    };
+
+    return { light: await inScheme('light'), dark: await inScheme('dark') };
   } finally {
     await page.close();
   }
 }
 
-/** A picture as a route names it: its slate, and the digest of one version. */
+/** A picture as a route names it: its slate, and the digest of one version, its dark capture's with `DARK_PICTURE`. */
 export const PictureAddressSchema = v.object({
   workspace: v.pipe(v.string(), v.check(isWorkspaceName)),
   slate: SlateDirectoryName,
-  digest: v.pipe(v.string(), v.regex(/^[a-f0-9]{64}$/u)),
+  digest: v.pipe(v.string(), v.regex(/^[a-f0-9]{64}(?:-dark)?$/u)),
 });
+
+/** The version a picture address names, without its mode. */
+export function pictureVersion(digest: string): string {
+  return digest.endsWith(DARK_PICTURE) ? digest.slice(0, -DARK_PICTURE.length) : digest;
+}
 
 /**
  * A picture's bytes by its {@link pictureKey}, for a caller its route admitted: the owner's own route, or the Gallery's
  * for a listed slate. `cache` is who may keep them; a digest names one version, so either keeps it for good. Null when
  * there is none.
  */
-export async function readSlatePicture(bucket: PictureBucket, key: string, cache: 'private' | 'public'): Promise<Response | null> {
+async function readSlatePicture(bucket: PictureBucket, key: string, cache: 'private' | 'public'): Promise<Response | null> {
   const object = await bucket.get(key);
 
   if (object === null) return null;
@@ -383,6 +486,14 @@ export async function readSlatePicture(bucket: PictureBucket, key: string, cache
     headers: { 'content-type': 'image/webp', 'cache-control': `${cache}, max-age=31536000, immutable`, etag: object.httpEtag },
   });
 }
+
+/** A picture in the mode its address asks: the dark capture where the slate drew one, else its light one. */
+export async function readPictureInMode(bucket: PictureBucket, keyOf: (digest: string) => string, digest: string, cache: 'private' | 'public'): Promise<Response | null> {
+  const dark = digest === pictureVersion(digest) ? null : await readSlatePicture(bucket, keyOf(digest), cache);
+
+  return dark ?? await readSlatePicture(bucket, keyOf(pictureVersion(digest)), cache);
+}
+
 
 export function pictureKey(workspace: string, slate: string, digest: string): string {
   return `${picturePrefix(workspace, slate)}${digest}.webp`;
@@ -399,6 +510,11 @@ function sharePicturePrefix(workspace: string, slate: string, share: string): st
 
 function viewPictureKey(workspace: string, picture: Pick<DuePicture, 'slate' | 'view'>, digest: string): string {
   return picture.view === PREVIEW_VIEW ? pictureKey(workspace, picture.slate, digest) : sharePictureKey(workspace, picture.slate, picture.view, digest);
+}
+
+/** A version's two places: its light capture, and its dark one where the slate drew one. */
+function versionKeys(workspace: string, picture: Pick<DuePicture, 'slate' | 'view'>, digest: string): readonly [string, string] {
+  return [viewPictureKey(workspace, picture, digest), viewPictureKey(workspace, picture, `${digest}${DARK_PICTURE}`)];
 }
 
 /** Where a share's host takes a visitor with no account past its consent page, on to its slate's own page. */

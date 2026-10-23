@@ -20,12 +20,10 @@ import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { parseInput, projectJsonValue, type JsonValue } from '../utils/json';
 import { direntType } from '../vfs/dirent';
 import { EXECUTOR_MOUNTS } from '../vfs/mounts';
+import { DEVBOX_WORKDIR, type DigestWriteRequest } from '@kinu.run/devbox/wire';
 import { desktopTools, type DesktopAnswer, type DesktopRequest, type DesktopScreen } from './desktop';
 import type { CommandEnvironment } from './command-environment';
 import { COMPUTER_OWNER_ONLY, ownerComputerCall, secretsCaller } from './secrets-caller';
-
-/** The container's working directory and default cwd; declared here because core must not depend on @kinu.run/devbox. */
-export const WORKSPACE_BACKUP_DIR = '/workspace';
 
 interface SandboxExposeOptions {
   name?: string;
@@ -80,9 +78,7 @@ export interface SandboxHandle {
   /** Lands `contentBase64` only over the bytes whose sha256 is `expected` (null: no file there), in one guest step.
    *  `operation` names this write across every send of it; `settled` names this caller's earlier writes it has answers
    *  for, whose answers the guest no longer keeps. */
-  writeFileIfDigest(write: {
-    readonly path: string; readonly contentBase64: string; readonly expected: string | null; readonly operation: string; readonly settled: readonly string[];
-  }): Promise<VfsDigestWrite>;
+  writeFileIfDigest(write: DigestWriteRequest): Promise<VfsDigestWrite>;
   listFiles(path: string, opts?: { recursive?: boolean }):
     Promise<{ files: Array<SandboxFileMetadata & { name: string }> }>;
   /** Native stat; `follow: false` reads the entry itself, never its siblings. */
@@ -356,7 +352,7 @@ function execMember({ handle, names, shells, touch, environment }: Computer): Ex
         return { refused: refusalOf(new KinuError('unsupported', 'computer.exec: this runtime keeps no named shells')) };
       }
 
-      const place = { home: WORKSPACE_BACKUP_DIR, scope: shells?.scope ?? '', stateDirectory: shells?.stateDirectory ?? '' };
+      const place = { home: DEVBOX_WORKDIR, scope: shells?.scope ?? '', stateDirectory: shells?.stateDirectory ?? '' };
       const reportCwd = reportsCwd({ context: args[1] });
       const { name } = exec;
 
@@ -364,7 +360,7 @@ function execMember({ handle, names, shells, touch, environment }: Computer): Ex
       // container takes no stdin from a call.
       const named = namedShellCall(shellCall(command, exec, { stdin: false }), name, shells === undefined ? undefined : async (shell) => (await machineShellCwd({
         exec: async (read) => {
-          const r = await touch(() => handle.exec(read, { cwd: WORKSPACE_BACKUP_DIR }));
+          const r = await touch(() => handle.exec(read, { cwd: DEVBOX_WORKDIR }));
 
           return { stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode };
         },
@@ -383,7 +379,7 @@ function execMember({ handle, names, shells, touch, environment }: Computer): Ex
             const res = await touch(() => {
               if (signal?.aborted) throw notDispatched();
               // The signal is added only when given, so an adapter can tell "none" from "already fired".
-              const opts: SandboxExecOptions = { cwd: WORKSPACE_BACKUP_DIR, ...(Object.keys(env).length > 0 && { env }) };
+              const opts: SandboxExecOptions = { cwd: DEVBOX_WORKDIR, ...(Object.keys(env).length > 0 && { env }) };
 
               if (signal !== undefined) opts.signal = signal;
 
@@ -434,7 +430,7 @@ function startProcessMember({ handle, touch, environment, processJobs }: Compute
       const cwd = parseInput(
         OptionalStringSchema,
         { value: v.is(v.string(), rawOpts) ? rawOpts : rawOpts?.cwd },
-      ) ?? WORKSPACE_BACKUP_DIR;
+      ) ?? DEVBOX_WORKDIR;
 
       return { call: { text: command, cwd, context: {} }, run: async () => {
         try {
@@ -594,7 +590,7 @@ function ownerComputerTool(member: ExecutorTool): ExecutorTool {
 export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxExecutorOptions = {}): ExecutorProvider {
   const { previewHostSuffix, activated, sizes, shells, desktop } = options;
   // One call at a time per name, and a name a detached job holds answers at once.
-  const names = createShellSession({ home: WORKSPACE_BACKUP_DIR, userRoots: () => [] });
+  const names = createShellSession({ home: DEVBOX_WORKDIR, userRoots: () => [] });
   const connected = handle != null;
   const previews = previewHostSuffix !== undefined && previewHostSuffix.length > 0;
   // In use once a call through it answered: a box that never came up (a server that runs no containers, a start that
@@ -707,8 +703,8 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
     name: 'computer',
     kind: 'computer',
     files: handle ? sandboxFiles(handle, (call) => withSandboxRetry(() => touch(call))) : undefined,
-    homeDir: async () => WORKSPACE_BACKUP_DIR,
-    fileRoot: () => ownerComputerCall(async () => ({ root: EXECUTOR_MOUNTS.computer, home: WORKSPACE_BACKUP_DIR })),
+    homeDir: async () => DEVBOX_WORKDIR,
+    fileRoot: () => ownerComputerCall(async () => ({ root: EXECUTOR_MOUNTS.computer, home: DEVBOX_WORKDIR })),
     capabilities: new Set(capabilities),
     filesOwner: 'agent',
     isAvailable: () => connected,

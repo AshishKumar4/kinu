@@ -199,6 +199,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     this.meter = metered.meter;
     this.unmetered = metered.unmetered;
     Reflect.deleteProperty(this, 'chatHistoryPage');
+    Reflect.deleteProperty(this, 'probeFile');
     Reflect.deleteProperty(this, 'seedScreenshotChat');
     Reflect.deleteProperty(this, 'chatPagesWalk');
     Reflect.deleteProperty(this, 'pendingSteers');
@@ -233,7 +234,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'mainQuiet');
     Reflect.deleteProperty(this, 'terminalState');
     Reflect.deleteProperty(this, 'alienEffect');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'plantCrossings', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'seedScreenshotChat', 'chatPagesWalk', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState', 'strandedWork', 'answerSlates', 'answerPageModes', 'cutTerminal', 'liveTerminal', 'mainQuiet', 'terminalState', 'alienEffect']);
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'plantCrossings', 'settleState', 'probeFile', 'sleepTimeNow', 'chatHistoryPage', 'seedScreenshotChat', 'chatPagesWalk', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState', 'strandedWork', 'answerSlates', 'answerPageModes', 'cutTerminal', 'liveTerminal', 'mainQuiet', 'terminalState', 'alienEffect']);
   }
 
   /** `query` over main's own isolate, where its conversation, sends, claims and runs are kept (D9). */
@@ -588,6 +589,13 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     };
   }
 
+  /** A file of the workspace's own, for the probe's setup and inspection. */
+  async probeFile(path: string, content?: string): Promise<string> {
+    if (content !== undefined) await this.rt.localVfs.writeFile(path, new TextEncoder().encode(content));
+
+    return new TextDecoder().decode(await this.rt.localVfs.readFile(path));
+  }
+
   /** Runs inside the object: `DurableObjectStub`'s mapping of `Page<ChatHistoryEntry>`
    *  overflows TypeScript's instantiation depth at the caller. */
   async chatHistoryPage(): Promise<HistoryResult> {
@@ -879,8 +887,8 @@ interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
 /** Named member by member: `DurableObjectStub<OrchestratorAgent>` over `getChatHistoryPage`
  *  overflows TypeScript's instantiation depth. */
 type ExerciseTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
-  'claimOwner' | 'setModel' | 'runTaskFromMcp' | 'getWorkspaceSnapshot' | 'writeWorkspaceFile'>
-  & Pick<ObservedOrchestrator, 'chatHistoryPage' | 'settleState'>;
+  'claimOwner' | 'setModel' | 'runTaskFromMcp' | 'getWorkspaceSnapshot'>
+  & Pick<ObservedOrchestrator, 'chatHistoryPage' | 'settleState' | 'probeFile'>;
 
 /** A new workspace's logo is drawn by its own model; a count of what was asked leaves that call out. */
 function effectStatuses(rows: ParityRows): EffectStatus[] {
@@ -916,7 +924,8 @@ const NOTED: NotedChanges = { source: 'workspace', label: 'Workspace', mode: 'vf
 
 type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'setModel' | 'setSoul' | 'setEvolutionConfig' | 'setDisplayName' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp' | 'evalAbortActivation' | 'workspaceTitle'
-  | 'createSubagentAgent' | 'readWorkspaceFile'>
+  | 'createSubagentAgent'>
+  & Pick<ObservedOrchestrator, 'probeFile'>
   & Pick<ProductionOrchestrator, 'getChangeNotes' | 'saveChangeNotes' | 'sendChangeNotes'>
   & Pick<ObservedOrchestrator, 'refuseReservations' | 'owedSends' | 'latestClaimOutcome' | 'recoveryPass'
   | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'strandedWork' | 'answerSlates' | 'answerPageModes' | 'cutTerminal' | 'liveTerminal' | 'mainQuiet' | 'terminalState' | 'alienEffect' | 'inspectWork' | 'chatHistoryPage' | 'seedScreenshotChat' | 'chatPagesWalk' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
@@ -1909,7 +1918,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
     return {
       kills,
-      file: new TextDecoder().decode(await target.readWorkspaceFile(KILL_FILE)),
+      file: await target.probeFile(KILL_FILE),
       issued: calls.at(-1)?.toolCalls.map((call) => call.id) ?? [],
       steps,
       answers: (await target.chatHistoryPage()).items.filter((message) => message.role === 'assistant').length,
@@ -1996,13 +2005,17 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       if (!parsed.success) return;
       const { type, id, done, error, landed, replay, continuation, body, steerId, status } = parsed.output;
 
+      // The step's tool part, ended (its file read is refused as missing), in a message list or a replayed chunk.
+      const toolStep = (type === 'cf_agent_chat_messages' || type === 'cf_agent_use_chat_response') && raw.includes('call_parity_1')
+        && /output-(available|error)/u.test(raw);
+
       const frame = v.parse(ParityFrameSchema, {
         socket: name, type,
         ...(id !== undefined && { id }), ...(done !== undefined && { done }), ...(error !== undefined && { error }),
         ...(landed !== undefined && { landed }), ...(replay !== undefined && { replay }),
         ...(continuation !== undefined && { continuation }),
         ...(body !== undefined && body !== '' && { body }),
-        ...(steerId !== undefined && { steerId }), ...(status !== undefined && { status }),
+        ...(steerId !== undefined && { steerId }), ...(status !== undefined && { status }), ...(toolStep && { toolStep }),
       });
 
       frames.push(frame);
@@ -2125,6 +2138,9 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         socket.send(this.parityFrame('PARITY-FOUR-STEER', file));
         // Acknowledged, not landed: the eviction cuts the turn first; the reservation is what survives.
         await seen(this.queuedSteer('input-PARITY-FOUR-STEER'), 'the steer admitted into the parked turn');
+        // The restarted turn's own call parks too, so what a tab sees of it before its finish can be read (m1919a): it
+        // answers the steer, the last thing its user said, which parks on `first`.
+        await fetch('http://probe-control.invalid/parity/hold', { method: 'POST', body: JSON.stringify({ parkAt: 'first' }) });
       } finally {
         socket.close(1000, 'parity prepared');
       }
@@ -2152,10 +2168,17 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     try {
       // 5. Resume: the parked producer is released, the wake continues the evicted turn and
       //    replays the acknowledged steer.
-      const { socket, done } = await this.paritySocket(target, prepared.workspace, 'B', frames);
+      const { socket, done, seen } = await this.paritySocket(target, prepared.workspace, 'B', frames);
 
       try {
         socket.send(JSON.stringify({ type: 'cf_agent_stream_resume_request' }));
+        // m1919a, the owner: a tab reopened on a restarted turn saw the steps before the restart only at its finish. As the
+        // page does, the tab acknowledges the resume, and is replayed the turn so far; the restarted call is parked, so
+        // the finish cannot come before the tool step made before the restart shows.
+        await seen((frame) => frame.socket === 'B' && frame.type === 'cf_agent_stream_resuming', 'the resume');
+        const resuming = frames.find((frame) => frame.socket === 'B' && frame.type === 'cf_agent_stream_resuming');
+        socket.send(JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: resuming?.id }));
+        await seen((frame) => frame.socket === 'B' && frame.toolStep === true, 'the step before the restart, while the restarted turn is still open');
         await fetch('http://probe-control.invalid/parity/release', { method: 'POST' });
         await awaitSettled(target);
         await awaitSleepTimeSettled(recording, prepared.workspace, 1);
@@ -2569,14 +2592,8 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       await this.httpReset();
       await target.setModel(drive.model);
 
-      // Seeded through the workspace-file RPC, never the VFS.
-      if (drive.seedFile !== undefined) {
-        await target.writeWorkspaceFile({
-          kind: 'file',
-          path: drive.seedFile.path,
-          data: new TextEncoder().encode(drive.seedFile.content),
-        });
-      }
+      // Seeded inside the object, before the turn reads it.
+      if (drive.seedFile !== undefined) await target.probeFile(drive.seedFile.path, drive.seedFile.content);
 
       restore = capture();
 

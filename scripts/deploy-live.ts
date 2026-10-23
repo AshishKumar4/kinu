@@ -16,6 +16,12 @@ import type { RunStatus } from './deadline';
 /** The live status's file in a deploy's report directory. */
 export const LIVE_FILE = 'live.txt';
 
+/** The file `phase`'s status is written to: the source phase runs beside the post-publish wave, in a process of its own
+ *  (deploy.sh THE SOURCE PHASE), and two writers of one file would each replace the other's. */
+export function liveFile(phase: string): string {
+  return phase === 'source' ? 'live-source.txt' : LIVE_FILE;
+}
+
 /** The shortest time between two rewrites for output alone. */
 const REWRITE_MS = 1_000;
 
@@ -108,7 +114,7 @@ export class DeployLive {
       : `deploy phase ${this.phase} at ${at}: ${running.length === 0 ? 'nothing running' : `${String(running.length)} row(s) running`}`;
 
     const lines = running.map((row) => `${row.label}, ${elapsed(now - row.startedAt)}: ${row.last === '' ? '(nothing printed yet)' : row.last}`);
-    const file = join(this.dir, LIVE_FILE);
+    const file = join(this.dir, liveFile(this.phase));
 
     writeFileSync(`${file}.part`, `${[head, ...lines].join('\n')}\n`);
     renameSync(`${file}.part`, file);

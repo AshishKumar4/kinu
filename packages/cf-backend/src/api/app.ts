@@ -35,12 +35,9 @@ import { activationRoutes } from './activations-route';
 import { filesRoutes } from '../files-routes';
 import { terminalRouteDeps, terminalRoutes } from '../terminal-route';
 import { routeError, apiPath, beneath, familyMount, type FamilyEnv } from './context';
-import { workspaceGate } from './workspace';
+import { workspaceGate, type ClaimedWorkspace } from './workspace';
 
 const app = new Hono<FamilyEnv<Env>>({ getPath: apiPath });
-
-/** The SDK's one binding for every workspace family. */
-const workspaceAgent = (env: Env) => (name: string) => getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, name);
 
 /** Each family mounts at the root, its declared bindings checked against `Env`. */
 const mount = familyMount(app);
@@ -74,7 +71,8 @@ app.all('/api/health', async (c) => serveApp(c.req.raw, c.env));
 
 app.all('/api/auth/*', beneath<FamilyEnv<Env>>('/api/auth', async (c) => serveApp(c.req.raw, c.env)));
 
-mount(webhookDeliveryRoutes(workspaceAgent));
+// Delivery is public: no gate claimed the workspace, so it reaches the object itself.
+mount(webhookDeliveryRoutes((env: Env) => (name: string) => getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, name)));
 
 // Ahead of the session gate: a crash on a page anyone may open is reported too. A live session behind a report is read
 // here as the gate reads it, the cross-site rule with it; no session is no refusal.
@@ -126,7 +124,7 @@ mount(updatesRoutes);
 
 app.use('/api/workspaces/:name/*', workspaceGate);
 
-mount(runEventsRoutes(REAL_CLOCK, workspaceAgent));
+mount(runEventsRoutes<Env, ClaimedWorkspace>(REAL_CLOCK));
 
 mount(evalAbortRoutes);
 
@@ -134,11 +132,11 @@ mount(activationRoutes);
 
 mount(mailHandRoutes);
 
-mount(hubRoutes(workspaceAgent));
+mount(hubRoutes<Env, ClaimedWorkspace>());
 
-mount(filesRoutes((env: Env, name: string) => workspaceAgent(env)(name)));
+mount(filesRoutes<Env, ClaimedWorkspace>());
 
-mount(terminalRoutes(terminalRouteDeps));
+mount(terminalRoutes<Env, ClaimedWorkspace>(terminalRouteDeps));
 
 app.notFound(async (c) => serveApp(c.req.raw, c.env));
 

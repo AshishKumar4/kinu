@@ -11,7 +11,8 @@ import { KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
 import { waitForAnswer } from '@kinu.run/core';
 
 export interface CliAuthCallbacks {
-  started?(flow: { verificationUrl: string; userCode: string }): void;
+  /** `opened` is false where no browser could be seen (SSH, or no display): the person approves on another device. */
+  started?(flow: { verificationUrl: string; userCode: string; opened: boolean }): void;
   pending?(): void;
   completed?(email: string): void;
 }
@@ -23,8 +24,8 @@ export function authenticateCli(
   return settle(Effect.gen(function* () {
     const origin = defaultOrigin(opts);
     const flow = yield* Effect.promise(async () => startCliAuth(origin, hostname()));
-    callbacks.started?.({ verificationUrl: flow.verificationUrl, userCode: flow.userCode });
-    openBrowser(flow.verificationUrl);
+    const opened = openBrowser(flow.verificationUrl);
+    callbacks.started?.({ verificationUrl: flow.verificationUrl, userCode: flow.userCode, opened });
 
     // The hub owns the deadline: the poll answers `expired` by itself.
     const status = yield* Effect.promise(async () => waitForAnswer(async (): Promise<CliAuthPoll | undefined> => {
@@ -52,7 +53,13 @@ export async function authCommand(opts: { origin?: string }): Promise<void> {
   console.log('');
   await authenticateCli(opts, {
     started(flow) {
-      console.log(`${DIM('Open:')} ${ACCENT(flow.verificationUrl)}`);
+      if (flow.opened) {
+        console.log(`${DIM('Open:')} ${ACCENT(flow.verificationUrl)}`);
+      } else {
+        console.log('No browser was opened here (SSH or no display). Open this link on any device and approve:');
+        console.log(`  ${ACCENT(flow.verificationUrl)}`);
+      }
+
       console.log(`${DIM('Code:')} ${ACCENT(flow.userCode)}`);
       console.log('');
     },
@@ -170,11 +177,22 @@ function browserOpener(os: string): string {
   return os === 'win32' ? 'cmd' : 'xdg-open';
 }
 
-export function openBrowser(url: string): void {
-  const command = browserOpener(platform());
+/**
+ * Starts the system browser on `url` where the person can see it; false where it started none. Over SSH a browser opens
+ * on the remote machine's screen, not the one being read, and Linux without a display has none: there `xdg-open` falls
+ * back to a terminal browser (w3m, lynx) that nobody asked for. Every caller prints the link as well.
+ */
+export function openBrowser(url: string): boolean {
+  const os = platform();
+  const set = (name: string): boolean => (process.env[name] ?? '') !== '';
 
-  const args = platform() === 'win32' ? ['/c', 'start', '', url] : [url];
-  const child = spawn(command, args, { detached: true, stdio: 'ignore' });
+  if (['SSH_CONNECTION', 'SSH_CLIENT', 'SSH_TTY'].some(set)) return false;
+
+  if (os === 'linux' && !['DISPLAY', 'WAYLAND_DISPLAY'].some(set)) return false;
+  const args = os === 'win32' ? ['/c', 'start', '', url] : [url];
+  const child = spawn(browserOpener(os), args, { detached: true, stdio: 'ignore' });
   child.on('error', () => {});
   child.unref();
+
+  return true;
 }

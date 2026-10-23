@@ -1,13 +1,16 @@
 /** Hub types. Spec: docs/ARCHITECTURE.md "Events and ingress". */
 
 import { Data } from 'effect';
-import type { WorkMode } from '../../types/turn';
-import type { SubagentInheritedContext } from '../../types/subagents';
-import type { JsonObject, JsonValue } from '../../utils/json';
+import * as v from 'valibot';
+import { WorkModeSchema } from '../../types/turn';
+import { SubagentInheritedContextSchema } from '../../types/subagents';
+import { JsonValueSchema, type JsonObject, type JsonValue } from '../../utils/json';
 import type { MailWoke } from '../../mail/mailbox-api';
 
 /** Meet-semilattice `external < authenticated < owner < self`; merge only restricts. */
-export type TrustLevel = 'external' | 'authenticated' | 'owner' | 'self';
+export const TrustSchema = v.picklist(['external', 'authenticated', 'owner', 'self']);
+
+export type TrustLevel = v.InferOutput<typeof TrustSchema>;
 
 export const TRUST_ORDER = {
   external: 0, authenticated: 1, owner: 2, self: 3,
@@ -15,30 +18,25 @@ export const TRUST_ORDER = {
 
 /** Derived from `(trust, variant)`. `urgent` preempts the step; `normal` injects at the next step
  *  boundary; `background` may roll to the next turn. */
-export type Priority = 'urgent' | 'normal' | 'background';
+export const PrioritySchema = v.picklist(['urgent', 'normal', 'background']);
+
+export type Priority = v.InferOutput<typeof PrioritySchema>;
 
 export type Phase = 'idle' | 'linear' | 'heads' | 'reactor' | 'merging';
 
-export type PayloadPolicy =
-  | 'full'
-  | 'redact'
-  | 'hash'
-  | 'hmac'
-  | 'opaque_handle';
+export const PayloadPolicySchema = v.picklist(['full', 'redact', 'hash', 'hmac', 'opaque_handle']);
 
-export type IngressKind =
-  | 'chat_ws'
-  | 'webhook_hmac'
-  | 'webhook_bearer'  // bearer secret in header or path
-  | 'webhook_mtls'
-  | 'timer_alarm'
-  | 'computer_cb'      // callback from computer.exec(..., {notify_when})
-  | 'peer_async'
-  | 'mcp_streamable'
-  | 'email_inbound'   // inbound mail via Cloudflare Email Routing → Worker email()
-  | 'subagent'     // same-workspace facet spine: parent↔subagent task/report
-  | 'self_emit'
-  | 'reply_request';
+export type PayloadPolicy = v.InferOutput<typeof PayloadPolicySchema>;
+
+/** `webhook_bearer`: a bearer secret in a header or the path. `computer_cb`: a callback from `computer.exec(...,
+ *  {notify_when})`. `email_inbound`: mail through Cloudflare Email Routing to the Worker's `email()`. `subagent`: the
+ *  same-workspace facet spine, parent and subagent task and report. */
+export const IngressSchema = v.picklist([
+  'chat_ws', 'webhook_hmac', 'webhook_bearer', 'webhook_mtls', 'timer_alarm', 'computer_cb', 'peer_async', 'mcp_streamable',
+  'email_inbound', 'subagent', 'self_emit', 'reply_request',
+]);
+
+export type IngressKind = v.InferOutput<typeof IngressSchema>;
 
 /** Single source for both the route picklist and the type, so a new variant reaches every surface. */
 export const EVENT_VARIANTS = [
@@ -56,6 +54,8 @@ export const EVENT_VARIANTS = [
   'mcp_chat',
   'mcp_third_party',
 ] as const;
+
+export const VariantSchema = v.picklist(EVENT_VARIANTS);
 
 export type EventVariant = (typeof EVENT_VARIANTS)[number];
 
@@ -90,77 +90,91 @@ export interface ReplyChannelRow {
   created_at: number;
 }
 
-export interface ChatPayload {
-  text: string;
-}
+const NullableString = v.nullable(v.string());
 
-export interface WebhookPayload {
-  webhook_id: string;
-  http_method: string;
-  http_headers: Record<string, string>;
-  body: unknown;
-  delivery_id: string;
+export const ChatPayloadSchema = v.object({ text: v.string() });
+
+export type ChatPayload = v.InferOutput<typeof ChatPayloadSchema>;
+
+export const WebhookPayloadSchema = v.object({
+  webhook_id: v.string(),
+  http_method: v.string(),
+  http_headers: v.record(v.string(), v.string()),
+  body: v.unknown(),
+  delivery_id: v.string(),
   /** Set when the body outgrew the brief budget. */
-  body_path?: string;
+  body_path: v.optional(v.string()),
   /** Set instead of `body_path` when the spill failed. */
-  body_unsaved?: string;
-}
+  body_unsaved: v.optional(v.string()),
+});
 
-export interface ProcessDonePayload {
-  process_id: string;
-  command: string;
-  exit_code: number;
-  stdout_excerpt: string;
-  stderr_excerpt: string;
-  duration_ms: number;
-  full_stdout_handle?: string;
-  full_stderr_handle?: string;
-  stdout_unsaved?: string;
-  stderr_unsaved?: string;
-}
+export type WebhookPayload = v.InferOutput<typeof WebhookPayloadSchema>;
 
-export interface TimerPayload {
-  trigger_id: TriggerId;
-  scheduled_fire_at: number;
-  label?: string;
-  user_payload?: unknown;
+export const ProcessDonePayloadSchema = v.object({
+  process_id: v.string(),
+  command: v.string(),
+  exit_code: v.number(),
+  stdout_excerpt: v.string(),
+  stderr_excerpt: v.string(),
+  duration_ms: v.number(),
+  full_stdout_handle: v.optional(v.string()),
+  full_stderr_handle: v.optional(v.string()),
+  stdout_unsaved: v.optional(v.string()),
+  stderr_unsaved: v.optional(v.string()),
+});
+
+export type ProcessDonePayload = v.InferOutput<typeof ProcessDonePayloadSchema>;
+
+export const TimerPayloadSchema = v.object({
+  trigger_id: v.string(),
+  scheduled_fire_at: v.number(),
+  label: v.optional(v.string()),
+  user_payload: v.optional(v.unknown()),
   /** The woken turn and everything it spawns debit this label (mission-budget.ts). */
-  mission_label?: string;
+  mission_label: v.optional(v.string()),
   /** What a watcher's check found, which is why it fired (watch.ts): read from outside, never an instruction. */
-  watch_brief?: string;
-}
+  watch_brief: v.optional(v.string()),
+});
 
-export interface PeerAgentPayload {
-  from_agent_name: string;
-  from_user_id: string;
-  topic: string;
-  body: JsonValue;
+export type TimerPayload = v.InferOutput<typeof TimerPayloadSchema>;
+
+export const PeerAgentPayloadSchema = v.object({
+  from_agent_name: v.string(),
+  from_user_id: v.string(),
+  topic: v.string(),
+  body: JsonValueSchema,
   /** Receiver-side dedupe key: crash redelivery is a no-op; repeated topics are not collapsed. */
-  sender_event_id: string;
-  reply_expected?: boolean;
-  body_path?: string;
-  body_unsaved?: string;
-  kinu_mode: WorkMode;
-}
+  sender_event_id: v.string(),
+  reply_expected: v.optional(v.boolean()),
+  body_path: v.optional(v.string()),
+  body_unsaved: v.optional(v.string()),
+  kinu_mode: WorkModeSchema,
+});
 
-export interface FileChangedPayload {
-  path: string;
-  change: 'created' | 'modified' | 'deleted';
-  size?: number;
-}
+export type PeerAgentPayload = v.InferOutput<typeof PeerAgentPayloadSchema>;
+
+export const FileChangedPayloadSchema = v.object({
+  path: v.string(),
+  change: v.picklist(['created', 'modified', 'deleted']),
+  size: v.optional(v.number()),
+});
+
+export type FileChangedPayload = v.InferOutput<typeof FileChangedPayloadSchema>;
 
 /** `task` starts or replaces an assignment; `message` is injected into the next turn. */
-export interface SubagentTaskPayload {
-  from_workspace: string;
-  kind: 'task' | 'message';
-  body: string;
-  deliverable?: string;
-  inherited_context?: SubagentInheritedContext;
-  kinu_mode: WorkMode;
-  creation_id?: string;
-  message_id?: string;
-  idempotency_key?: string;
-}
+export const SubagentTaskPayloadSchema = v.object({
+  from_workspace: v.string(),
+  kind: v.picklist(['task', 'message']),
+  body: v.string(),
+  deliverable: v.optional(v.string()),
+  inherited_context: v.optional(SubagentInheritedContextSchema),
+  kinu_mode: WorkModeSchema,
+  creation_id: v.optional(v.string()),
+  message_id: v.optional(v.string()),
+  idempotency_key: v.optional(v.string()),
+});
+
+export type SubagentTaskPayload = v.InferOutput<typeof SubagentTaskPayloadSchema>;
 
 /** One declaration read by the event schema, `report` tool, codemode and dispatcher. */
 export const SUBAGENT_REPORT_STATUSES = ['progress', 'completed', 'blocked'] as const;
@@ -183,66 +197,74 @@ export type SubagentReportHandoff = {
  *  Matches {@link EVENT_BRIEF_MAX_CHARS}. */
 export const SUBAGENT_REPORT_HANDOFF_MAX_CHARS = 600;
 
-export interface SubagentReportPayload extends SubagentReportHandoff {
-  from_subagent: string;
-  status: SubagentReportStatus;
-  content: string;
-  /** Durable identity on both sides; stated by the sender, since a receiver-minted key would be new
-   *  on every replay. */
-  sequence_id: string;
-  task?: string;
-  content_path?: string;
-  content_unsaved?: string;
-  kinu_mode: WorkMode;
-}
+/** `v.object` strips unnamed fields; the total `satisfies` makes a forgotten field a compile error. */
+const HandoffPayloadEntries = {
+  concerns: v.optional(v.pipe(v.array(v.string()), v.readonly())),
+  deviations: v.optional(v.pipe(v.array(v.string()), v.readonly())),
+  findings: v.optional(v.pipe(v.array(v.string()), v.readonly())),
+  open_work: v.optional(v.pipe(v.array(v.string()), v.readonly())),
+} satisfies Record<SubagentReportHandoffField, v.GenericSchema<readonly string[] | undefined>>;
 
-export interface EmailAttachmentMeta {
-  filename: string;
-  content_type: string;
-  size: number;
-}
+export const SubagentReportPayloadSchema = v.object({
+  from_subagent: v.string(),
+  status: v.picklist(SUBAGENT_REPORT_STATUSES),
+  content: v.string(),
+  /** Durable identity on both sides; stated by the sender, since a receiver-minted key would be new on every replay. */
+  sequence_id: v.string(),
+  task: v.optional(v.string()),
+  content_path: v.optional(v.string()),
+  content_unsaved: v.optional(v.string()),
+  ...HandoffPayloadEntries,
+  kinu_mode: WorkModeSchema,
+});
 
-export interface EmailPayload {
-  from: string;
-  to: string;
-  subject: string;
-  body_text: string;
-  message_id: string | null;
-  in_reply_to: string | null;
-  references: string | null;
+export type SubagentReportPayload = v.InferOutput<typeof SubagentReportPayloadSchema>;
+
+const EmailAttachmentMetaSchema = v.object({ filename: v.string(), content_type: v.string(), size: v.number() });
+
+export type EmailAttachmentMeta = v.InferOutput<typeof EmailAttachmentMetaSchema>;
+
+export const EmailPayloadSchema = v.object({
+  from: v.string(),
+  to: v.string(),
+  subject: v.string(),
+  body_text: v.string(),
+  message_id: NullableString,
+  in_reply_to: NullableString,
+  references: NullableString,
   /** Bytes never enter the event log. */
-  attachments: EmailAttachmentMeta[];
-  body_path?: string;
-  body_unsaved?: string;
+  attachments: v.array(EmailAttachmentMetaSchema),
+  body_path: v.optional(v.string()),
+  body_unsaved: v.optional(v.string()),
   /** Where the Mailbox filed it: `mail.read(thread)` reads it. Input's body is not in the event, only here. */
-  mail?: { box: string; thread: string; message: string };
-}
+  mail: v.optional(v.object({ box: v.string(), thread: v.string(), message: v.string() })),
+});
 
-export interface InternalPayload {
-  kind: string;
-  data: unknown;
-}
+export type EmailPayload = v.InferOutput<typeof EmailPayloadSchema>;
 
-export interface ReplyRequestPayload {
-  question: string;
-  schema?: unknown;
-  awaiting_event_id: EventId;
-}
+export const InternalPayloadSchema = v.object({ kind: v.string(), data: v.unknown() });
 
-export interface McpChatPayload {
-  client_id: string;
-  method: string;
-  arguments: unknown;
-  request_id: string;
-}
+export type InternalPayload = v.InferOutput<typeof InternalPayloadSchema>;
 
-export interface McpThirdPartyPayload {
-  client_id: string;
-  client_label: string;
-  method: string;
-  arguments: unknown;
-  request_id: string;
-}
+export const ReplyRequestPayloadSchema = v.object({
+  question: v.string(),
+  schema: v.optional(v.unknown()),
+  awaiting_event_id: v.string(),
+});
+
+export type ReplyRequestPayload = v.InferOutput<typeof ReplyRequestPayloadSchema>;
+
+export const McpChatPayloadSchema = v.object({
+  client_id: v.string(), method: v.string(), arguments: v.unknown(), request_id: v.string(),
+});
+
+export type McpChatPayload = v.InferOutput<typeof McpChatPayloadSchema>;
+
+export const McpThirdPartyPayloadSchema = v.object({
+  client_id: v.string(), client_label: v.string(), method: v.string(), arguments: v.unknown(), request_id: v.string(),
+});
+
+export type McpThirdPartyPayload = v.InferOutput<typeof McpThirdPartyPayloadSchema>;
 
 export interface BaseEvent {
   id: EventId;

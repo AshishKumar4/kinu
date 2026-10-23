@@ -126,6 +126,8 @@ export { MailboxDO } from "./mail/mailbox-do";
 
 export { DeployRunDO } from "./deploy/deploy-do";
 
+export { CliAuthDO } from "./cli/auth-do";
+
 // Exports are what workerd exposes on `ctx.exports` (`enable_ctx_exports`).
 // SupervisorRPC comes from its declaring module, never `@nimbus-sh/sdk/worker`,
 // whose root composes a hosted fabric first (first-write-wins per isolate), nor

@@ -2,11 +2,12 @@
  *  are immutable after insert; `turn_id`/`step_idx` may rebind. */
 
 import * as v from 'valibot';
-import { WorkModeSchema } from '../../types/turn';
 import {
-  SUBAGENT_REPORT_STATUSES,
+  ChatPayloadSchema, EmailPayloadSchema, FileChangedPayloadSchema, IngressSchema, InternalPayloadSchema, McpChatPayloadSchema,
+  McpThirdPartyPayloadSchema, PayloadPolicySchema, PeerAgentPayloadSchema, PrioritySchema, ProcessDonePayloadSchema,
+  ReplyRequestPayloadSchema, SubagentReportPayloadSchema, SubagentTaskPayloadSchema, TimerPayloadSchema, TrustSchema,
+  VariantSchema, WebhookPayloadSchema,
   type EventId, type EventVariant, type IngressDescriptor,
-  type SubagentReportHandoffField,
   type Priority, type KinuEvent, type RevisitCondition,
   type TraceId, type TurnId,
 } from './types';
@@ -25,7 +26,6 @@ import {
   parseJsonValue,
 } from '../../utils/json';
 import { boundedInt, boundPageQuery } from '../../utils/bounds';
-import { SubagentInheritedContextSchema } from '../../types/subagents';
 import { Effect } from 'effect';
 import { diagnostics, settleSync, toKinuError, type KinuError } from '../../obs/index';
 
@@ -74,24 +74,6 @@ const PRIORITY_ORDER = {
   background: 0, normal: 1, urgent: 2,
 } satisfies Record<Priority, number>;
 
-const IngressSchema = v.picklist([
-  'chat_ws', 'webhook_hmac', 'webhook_bearer', 'webhook_mtls', 'timer_alarm',
-  'computer_cb', 'peer_async', 'mcp_streamable',
-  'email_inbound', 'subagent', 'self_emit', 'reply_request',
-]);
-
-const VariantSchema = v.picklist([
-  'chat', 'webhook', 'process_done', 'timer', 'peer_agent', 'subagent_task',
-  'subagent_report', 'file_changed', 'email', 'internal', 'reply_request',
-  'mcp_chat', 'mcp_third_party',
-]);
-
-const TrustSchema = v.picklist(['external', 'authenticated', 'owner', 'self']);
-
-const PrioritySchema = v.picklist(['urgent', 'normal', 'background']);
-
-const PayloadPolicySchema = v.picklist(['full', 'redact', 'hash', 'hmac', 'opaque_handle']);
-
 const NullableString = v.nullable(v.string());
 
 const NullableNumber = v.nullable(v.number());
@@ -119,125 +101,6 @@ const EventRowSchema = v.object({
   received_at: v.number(),
   dedupe_key: NullableString,
   step_idx: NullableNumber,
-});
-
-const ChatPayloadSchema = v.object({ text: v.string() });
-
-const WebhookPayloadSchema = v.object({
-  webhook_id: v.string(),
-  http_method: v.string(),
-  http_headers: v.record(v.string(), v.string()),
-  body: v.unknown(),
-  delivery_id: v.string(),
-  body_path: v.optional(v.string()),
-  body_unsaved: v.optional(v.string()),
-});
-
-const ProcessDonePayloadSchema = v.object({
-  process_id: v.string(),
-  command: v.string(),
-  exit_code: v.number(),
-  stdout_excerpt: v.string(),
-  stderr_excerpt: v.string(),
-  duration_ms: v.number(),
-  full_stdout_handle: v.optional(v.string()),
-  full_stderr_handle: v.optional(v.string()),
-  stdout_unsaved: v.optional(v.string()),
-  stderr_unsaved: v.optional(v.string()),
-});
-
-const TimerPayloadSchema = v.object({
-  trigger_id: v.string(),
-  scheduled_fire_at: v.number(),
-  label: v.optional(v.string()),
-  user_payload: v.optional(v.unknown()),
-  mission_label: v.optional(v.string()),
-  watch_brief: v.optional(v.string()),
-});
-
-const PeerAgentPayloadSchema = v.object({
-  from_agent_name: v.string(),
-  from_user_id: v.string(),
-  topic: v.string(),
-  body: JsonValueSchema,
-  sender_event_id: v.string(),
-  reply_expected: v.optional(v.boolean()),
-  body_path: v.optional(v.string()),
-  body_unsaved: v.optional(v.string()),
-  kinu_mode: WorkModeSchema,
-});
-
-const SubagentTaskPayloadSchema = v.object({
-  from_workspace: v.string(),
-  kind: v.picklist(['task', 'message']),
-  body: v.string(),
-  deliverable: v.optional(v.string()),
-  inherited_context: v.optional(SubagentInheritedContextSchema),
-  kinu_mode: WorkModeSchema,
-  creation_id: v.optional(v.string()),
-  message_id: v.optional(v.string()),
-  idempotency_key: v.optional(v.string()),
-});
-
-/** `v.object` strips unnamed fields; the total `satisfies` makes a forgotten field a compile error. */
-const HandoffPayloadEntries = {
-  concerns: v.optional(v.array(v.string())),
-  deviations: v.optional(v.array(v.string())),
-  findings: v.optional(v.array(v.string())),
-  open_work: v.optional(v.array(v.string())),
-} satisfies Record<SubagentReportHandoffField, v.GenericSchema<string[] | undefined>>;
-
-const SubagentReportPayloadSchema = v.object({
-  from_subagent: v.string(),
-  status: v.picklist(SUBAGENT_REPORT_STATUSES),
-  content: v.string(),
-  sequence_id: v.string(),
-  task: v.optional(v.string()),
-  content_path: v.optional(v.string()),
-  content_unsaved: v.optional(v.string()),
-  ...HandoffPayloadEntries,
-  kinu_mode: WorkModeSchema,
-});
-
-const FileChangedPayloadSchema = v.object({
-  path: v.string(),
-  change: v.picklist(['created', 'modified', 'deleted']),
-  size: v.optional(v.number()),
-});
-
-const EmailPayloadSchema = v.object({
-  from: v.string(),
-  to: v.string(),
-  subject: v.string(),
-  body_text: v.string(),
-  message_id: NullableString,
-  in_reply_to: NullableString,
-  references: NullableString,
-  attachments: v.array(v.object({
-    filename: v.string(),
-    content_type: v.string(),
-    size: v.number(),
-  })),
-  body_path: v.optional(v.string()),
-  body_unsaved: v.optional(v.string()),
-  mail: v.optional(v.object({ box: v.string(), thread: v.string(), message: v.string() })),
-});
-
-const InternalPayloadSchema = v.object({ kind: v.string(), data: v.unknown() });
-
-const ReplyRequestPayloadSchema = v.object({
-  question: v.string(),
-  schema: v.optional(v.unknown()),
-  awaiting_event_id: v.string(),
-});
-
-const McpChatPayloadSchema = v.object({
-  client_id: v.string(), method: v.string(), arguments: v.unknown(), request_id: v.string(),
-});
-
-const McpThirdPartyPayloadSchema = v.object({
-  client_id: v.string(), client_label: v.string(), method: v.string(),
-  arguments: v.unknown(), request_id: v.string(),
 });
 
 const RevisitConditionSchema = v.variant('kind', [

@@ -1,6 +1,7 @@
 // A real UserDO over bun:sqlite: the class only needs `ctx`/`env` from its DO base,
 // so capability tests exercise the actual credential-guarding methods.
 import { AwaitedList } from '@kinu.run/test-utils';
+import { boundAsTheObjectBinds } from './platform-context';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import type { AgentContext } from 'agents';
 import { joinHarnessFibers, mockAgentsSdk, rememberMcpManager, inheritedMcpManager } from './agents-sdk';
@@ -62,6 +63,8 @@ class DriveHarnessUserDO extends UserDO {
 export function sqlExec(db: Database): SqlExec {
   return {
     exec(query: string, ...bindings: SqlValue[]) {
+      boundAsTheObjectBinds(bindings);
+
       type NativeSqlValue = string | number | boolean | null | Uint8Array;
 
       type NativeSqlRow = Record<string, NativeSqlValue>;

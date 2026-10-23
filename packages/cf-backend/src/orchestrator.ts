@@ -41,7 +41,7 @@ import {
   type PlanReview, actorReadHandle, ownerLaneDeclarations, type IntentResult, type OwedIntent, type OwedOwnerIntent,
   createEmailThreadDispatcher,
 } from "@kinu.run/core";
-import { censusOf, requireOps, WorkspaceLayoutSchema, type BlueprintSchedule, type OpsCaller, type TablesAnswer, type WorkspaceLayout, type WorkspaceSeed } from '@kinu.run/core';
+import { PROJECT_OWNER_CRED, bookmarkNow, censusOf, missingBytes, requireOps, restartedForRestore, restoreArmed, type ArmedRestore, type MissingBytes, type RestoreTarget, WorkspaceLayoutSchema, type BlueprintSchedule, type OpsCaller, type TablesAnswer, type WorkspaceLayout, type WorkspaceSeed } from '@kinu.run/core';
 import { createHostedWorkspace, type HostedBox, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import { WorkspaceExecutors, type ExecutorFileChunkRead, type ExecutorFileChunkWrite } from "./workspace-executors";
 import { HeldRead } from "./account-reads";
@@ -91,7 +91,7 @@ import type { PartViewer } from "./slates/part-runs";
 import { WorkspaceSlates } from "./workspace-slates";
 import type { McpToolSurface } from "./user/mcp-servers";
 import { closeWorkspaceBrowserSessions, initBrowserSessionTable, ownsBrowserSession } from "@kinu.run/core";
-import { browserCamera, initSlatePictureTable, shareCaptureUrl, SlatePictures, type PictureCapture } from "./slates/pictures";
+import { browserCamera, initSlatePictureTable, picturePrefix, shareCaptureUrl, SlatePictures, type PictureCapture } from "./slates/pictures";
 import { initSlateBuildTable } from "@kinu.run/core/slates";
 import type { BlueprintReading, ShareUser } from "@kinu.run/core/slates";
 import type { MessageBlock } from "./slates/sources";
@@ -261,7 +261,7 @@ import {
 } from "@kinu.run/core";
 import type { MctsSearchRunSummary, SubagentInspectionRequest, SubagentInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
 import { Cause, Effect, Exit } from 'effect';
-import { attempt, authoredRefusal, CODE_IS_REFUSAL, diagnostics, flight, hold, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
+import { attempt, authoredRefusal, CODE_IS_REFUSAL, diagnostics, flight, hold, joining, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import type { NameOrigin } from "@kinu.run/core";
 import { deliverCloudFork, type ForkFrameAck } from "./user/workspace-fork";
@@ -796,8 +796,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   async agentCred(record: WorkspaceActor): Promise<VfsCred> {
-    // The workspace's own agent acts as the session user, in its turns as in the owner's own shell.
-    if (actorPolicy(record).workspaceAgent) return CRED_SESSION_USER;
+    // The workspace's own agent acts as the session user, in its turns as in the owner's own shell, with the project's group:
+    // it writes what a share's viewer made in the project.
+    if (actorPolicy(record).workspaceAgent) return PROJECT_OWNER_CRED;
     const home = await this.actorHomes.get(record, actorReferenceOf(record));
 
     if (home?.cred !== undefined) return home.cred;
@@ -871,7 +872,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private readonly stopOwed = this.held.holdEach(['agent_stops'], (actorId: string) => this.stops.owed(actorId));
 
   /** The crossing of an agent's unanswered Stop each caller joins: one at a time per agent, dropped once it settles. */
-  private readonly stopReplays = new Map<string, Promise<boolean>>();
+  private readonly stopReplays = joining<string, boolean>();
 
   /**
    * An agent's Stop its isolate has not answered (the workspace reset before it did), crossed now at its cutoff and
@@ -880,19 +881,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    */
   private async stopReplayed(actorId: string): Promise<boolean> {
     if (this.stopOwed(actorId) === null) return false;
-    const running = this.stopReplays.get(actorId);
 
-    if (running !== undefined) return await running;
-
-    const replay = (async () => {
+    return await this.stopReplays(actorId, async () => {
       await this.stopCrossed(actorId, null);
 
       return true;
-    })().finally(() => { this.stopReplays.delete(actorId); });
-
-    this.stopReplays.set(actorId, replay);
-
-    return await replay;
+    });
   }
 
   /** The chat's interrupt, at `cutoff` and at an owed Stop's, read before it crosses: that Stop is retired once the
@@ -2851,7 +2845,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this._rootActor ??= this.workspaceActors().main();
   }
 
-  private readonly actorRetirementsInFlight = new Map<string, Promise<ActorDirectoryResult>>();
+  private readonly actorRetirementsInFlight = joining<string, ActorDirectoryResult>();
 
   async actorDirectory(operation: ChildActorOperation): Promise<ActorDirectoryResult> {
     const { actorId, workspaceId, parentActorId } = this.actorHandle();
@@ -2885,7 +2879,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     if (input.action !== 'retire') return directory.apply(caller, path, input);
-    const pending = this.actorRetirementsInFlight.get(input.reference.actorId);
+    const pending = this.actorRetirementsInFlight.inFlight(input.reference.actorId);
 
     if (pending) {
       directory.apply(caller, path, input);
@@ -2893,7 +2887,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       return await pending;
     }
 
-    const retirement = (async (): Promise<ActorDirectoryResult> => {
+    const retirement = this.actorRetirementsInFlight(input.reference.actorId, async (): Promise<ActorDirectoryResult> => {
       const entry = directory.apply(caller, path, input);
       await this.scheduleTerminalRetry(Date.now());
       // The host does the whole physical retirement in one call: runtime objects, `actor_id` rows in
@@ -2903,16 +2897,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       });
 
       return entry.state === 'deleted' ? entry : directory.apply(caller, path, { action: 'release', name: input.name, reference: input.reference });
-    })();
-
-    this.actorRetirementsInFlight.set(input.reference.actorId, retirement);
+    });
 
     try {
       return await retirement;
     } catch (cause) {
       throw toKinuError({ doing: 'retiring an actor and its physical storage', cause, otherwise: 'io' });
-    } finally {
-      if (this.actorRetirementsInFlight.get(input.reference.actorId) === retirement) this.actorRetirementsInFlight.delete(input.reference.actorId);
     }
   }
 
@@ -4438,6 +4428,33 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * same. A wiped or unborn workspace answers for itself alone: it has no agents. Only `/ops/tables` holds the
    * capability. A Nimbus sibling holds no workspace table.
    */
+  /**
+   * The operator's restore (`/ops/restore`, ARCHITECTURE-DECISIONS W7): this workspace's storage, its agents' facets
+   * with it, armed to go back to `target` at its next start; `opsRestart` ends it at once. Only `/ops/*` holds the
+   * capability.
+   */
+  async opsRestore(caller: OpsCaller, target: RestoreTarget): Promise<ArmedRestore> {
+    return await restoreArmed(this.ctx, this.env, caller, target);
+  }
+
+  /** Ends this activation, so an armed restore lands. */
+  async opsRestart(caller: OpsCaller): Promise<void> {
+    await restartedForRestore(this.ctx, this.env, caller);
+  }
+
+  /** Where this object's history stands now. */
+  async opsBookmark(caller: OpsCaller): Promise<string> {
+    return await bookmarkNow(this.ctx, this.env, caller);
+  }
+
+  /** The slate pictures this workspace's rows name that R2 no longer holds: after a restore, what it could not bring
+   *  back. Its devbox's disk is another object's, and no restore takes it back. */
+  async opsMissing(caller: OpsCaller): Promise<MissingBytes> {
+    await requireOps(this.env, caller);
+
+    return await missingBytes(this.env.SLATE_PICTURES, picturePrefix(this.name), this.pictures.namedKeys(this.name));
+  }
+
   async opsTables(caller: OpsCaller): Promise<TablesAnswer> {
     await requireOps(this.env, caller);
     const reached = !this.nimbusSibling && this.storageRefusal === undefined && this.workspaceBorn() ? this.keptAgents() : [];
@@ -7022,7 +7039,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** Not @callable: called by the terminal HTTP route (see terminal-route.ts). */
-  prepareTerminal(executorId: string, surface: 'terminal' | 'desktop' = 'terminal'): Promise<{ ok: true } | { error: string }> {
+  async prepareTerminal(executorId: string, surface: 'terminal' | 'desktop' = 'terminal'): Promise<{ ok: true } | { error: string }> {
     return this.executors.prepareTerminal(executorId, surface);
   }
 
@@ -7030,12 +7047,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Opens via this object because only it holds the workspace capability token the hub needs.
    * `device`: the PC the pane names, when the account has several connected; the one connected without it.
    */
-  openDeviceTerminal(window: { cols: number; rows: number }, target: { device?: string; session?: string }): Promise<{ session: string; user: string } | { error: string }> {
+  async openDeviceTerminal(window: { cols: number; rows: number }, target: { device?: string; session?: string }): Promise<{ session: string; user: string } | { error: string }> {
     return this.executors.openDeviceTerminal(window, target);
   }
 
   /** As {@link openDeviceTerminal}, for the screen of the PC `device` (1014-t). */
-  openDeviceScreen(device: string): Promise<{ session: string; user: string } | { error: string }> {
+  async openDeviceScreen(device: string): Promise<{ session: string; user: string } | { error: string }> {
     return this.executors.openDeviceScreen(device);
   }
 
@@ -7319,7 +7336,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** Not @callable: creation is step-up gated in the web and CLI trigger routes only. */
-  createDurableWebhook(opts: {
+  async createDurableWebhook(opts: {
     label: string;
     auth_mode: 'hmac' | 'bearer' | 'mtls';
     secret?: string;

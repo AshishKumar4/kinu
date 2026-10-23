@@ -27,7 +27,7 @@ import {
   WEB,
   type WebSearchRoute,
 } from '@kinu.run/core';
-import { settle } from '@kinu.run/core/obs';
+import { renderThrownChain, settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { ApiError, request } from './http';
 import type { BoxSize } from '@kinu.run/devbox/sizes';
@@ -408,7 +408,7 @@ export type CloudflareAccountStatus = v.InferOutput<typeof CloudflareAccountStat
 const CloudflareAccountStatusSchema = v.object({
   connected: v.boolean(), selectedId: v.nullable(v.string()),
   accounts: v.array(v.object({ id: v.string(), name: v.string() })),
-  webSearch: v.boolean(),
+  webSearch: v.boolean(), signInExpired: v.boolean(),
 });
 
 export const listCloudflareAccounts = () =>
@@ -453,6 +453,15 @@ export const addMcpServer   = (input: McpServerInput) =>
 /** An MCP server's sign-in begun for `run`: its sign-in address, which its callback ends with that run. */
 export const beginMcpConnect = (id: string, run: string) =>
   settle(api(v.object({ authUrl: v.string() }), 'POST', `/mcp/servers/${encodeURIComponent(id)}/connect`, { run }));
+
+/** A failed or closed MCP server dialled again: null once it answers again, else what went wrong in words for `name`'s row. */
+export const reconnectSaying = (id: string, name: string): Promise<string | null> => settle(Effect.match(
+  api(v.object({ status: McpServerSummarySchema.entries.status, error: v.nullable(v.string()) }), 'POST', `/mcp/servers/${encodeURIComponent(id)}/reconnect`),
+  {
+    onFailure: (cause) => `${name} did not reconnect: ${renderThrownChain({ cause })}`,
+    onSuccess: (after) => (after.error === null ? null : `${name} did not reconnect: ${after.error}`),
+  },
+));
 
 export const removeMcpServer = (id: string) =>
   settle(api(OkSchema, 'DELETE', `/mcp/servers/${encodeURIComponent(id)}`));

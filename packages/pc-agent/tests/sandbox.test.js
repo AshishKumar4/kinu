@@ -869,6 +869,35 @@ describe('the device sandbox, as the kernel enforces it', () => {
     expect(plan.unguarded).toEqual([{ path: broken, why: expect.stringContaining('git refused to read it: ') }]);
   });
 
+  // CODE-8 row 3 (2026-10-23): git hands these values to the shell, so a program's first word is a shell word, quotes
+  // and backslashes read; and git-config(1) as of 2.56 names more program-valued keys than the list held.
+  test('a program a config names with quotes or escapes, or under a key the list lacked, is the program the shell runs', async () => {
+    const home = scratchDir('sandbox-program-words');
+    const work = path.join(home, 'work');
+    const app = path.join(work, 'app');
+
+    const named = {
+      'core.sshCommand': [`"${work}/my tools/ssh" -v`, `${work}/my tools/ssh`],
+      'diff.external': [`'${work}/other tool/diff' --color`, `${work}/other tool/diff`],
+      'hook.lint.command': [`${work}/hook\\ tool/lint run`, `${work}/hook tool/lint`],
+      'gpg.ssh.defaultKeyCommand': [`${work}/keys`, `${work}/keys`],
+      'trailer.sign.cmd': [`${work}/trailer.sh`, `${work}/trailer.sh`],
+    };
+
+    await initialized(app);
+
+    for (const [key, [value]] of Object.entries(named)) expect((await owner(home, app, ['config', key, value])).exitCode).toBe(0);
+
+    const plan = await sandbox.plan({
+      tier: 'sandboxed', platform: 'darwin', home, agentHome: path.join(home, '.kinu', 'agents', 'ws', 'home'),
+      agentTmp: path.join(home, '.kinu', 'agents', 'ws', 'tmp'), deviceHome: path.join(home, '.kinu'), roots: [work], cwd: work, source: {}, command: 'true',
+    });
+
+    expect(plan.unguarded.toSorted((a, b) => a.path.localeCompare(b.path))).toEqual(Object.entries(named)
+      .map(([key, [, program]]) => ({ path: program, why: `${key.toLowerCase()} names it, and it does not exist yet` }))
+      .toSorted((a, b) => a.path.localeCompare(b.path)));
+  });
+
   test('a root past the walk\'s entry cap is named, so the model hears its repositories went unguarded', async () => {
     const home = scratchDir('sandbox-capped');
     const deviceHome = path.join(home, '.kinu');

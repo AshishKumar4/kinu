@@ -485,7 +485,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           modules: probeModules('public-surface-probe.ts', { ...probeRuntime, keepNames: true }),
           // `DEV_USER_EMAIL` is the loopback identity; `WORKERS_AI_VIA_BINDING` puts its inference on `AI`.
           bindings: { DEV_USER_EMAIL: 'probe@local', WORKERS_AI_VIA_BINDING: 'on', CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
-          // The CLI device sign-in and its rate limits live in AUTH_KV (cli-scoped-socket).
+          // The CLI device sign-in's rate limits live in AUTH_KV, its state in CliAuthDO (cli-scoped-socket).
           kvNamespaces: ['AUTH_KV'],
           ai: await getSurfaceAi(),
           serviceBindings: { ASSETS: agentAssets() },
@@ -493,6 +493,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           durableObjects: {
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
+            CliAuthDO: { className: 'CliAuthDO', useSQLite: true },
           },
         })],
 ["deploy-probe", async () => ({

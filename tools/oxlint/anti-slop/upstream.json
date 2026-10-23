@@ -19,6 +19,7 @@
     "no-dynamic-model-import",
     "no-unmeasured-dynamic-import",
     "model-method-boundary",
+    "no-storage-restore-outside-ops",
     "no-effect-swallow",
     "no-elapsed-work-deadline",
     "no-empty-catch",
@@ -80,6 +81,7 @@
       "no-dynamic-model-import",
       "no-unmeasured-dynamic-import",
       "model-method-boundary",
+      "no-storage-restore-outside-ops",
       "require-variant-utility",
       "no-cli-credential-flag",
       "no-bare-error-in-durable-object"
@@ -108,7 +110,7 @@
     },
     "index.ts": {
       "upstream": "9deed4cb455b9a6251001dc3a525d5b5e2c6ef989dd1c01e804c2edf0a697415",
-      "local": "d2585ad19ac0b2ea4023bd0889158be4510a63ad8ad8deaf0ab08e86a36acb14",
+      "local": "2dd2f639da30eddc670c954bdc8deba74978a4ff32b24a0056b6cbaf470599a7",
       "reason": "Registers the Kinu-local rules declared in kinuRules beside the pinned upstream rules. Upstream has no counterpart for these policy rules."
     },
     "live-tree.gate.test.ts": {
@@ -226,6 +228,12 @@
       "kinuOnly": true
     },
     "rules/model-method-boundary.ts": {
+      "kinuOnly": true
+    },
+    "rules/no-storage-restore-outside-ops.test.ts": {
+      "kinuOnly": true
+    },
+    "rules/no-storage-restore-outside-ops.ts": {
       "kinuOnly": true
     },
     "rules/no-effect-swallow.test.ts": {

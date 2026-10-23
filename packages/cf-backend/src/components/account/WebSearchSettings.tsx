@@ -186,6 +186,11 @@ function Payer({ status, onConnected }: { status: CloudflareAccountStatus; onCon
       message="No Cloudflare account is connected, so Kinu pays for these searches for now." />;
   }
 
+  if (status.signInExpired) {
+    return <CloudflareAIConnectNotice onConnected={onConnected} action="Sign in to Cloudflare again"
+      message="Your Cloudflare sign-in has expired, so Kinu pays for these searches until you sign in again." />;
+  }
+
   if (!status.webSearch) {
     return <CloudflareAIConnectNotice onConnected={onConnected} action="Connect Cloudflare again"
       message="Connect Cloudflare again so these searches are paid through your account. Until then Kinu pays for them." />;

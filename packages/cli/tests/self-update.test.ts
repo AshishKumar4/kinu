@@ -57,7 +57,7 @@ interface StubOrigin {
 const signingKey = generateReleaseSigningKey();
 
 /** `signing` models the hostile deployment of SECURITY-devices C1. */
-function startOrigin(opts: { platform: Uint8Array; runtime: Uint8Array; corrupt?: boolean; signing?: 'none' | 'foreign' }): StubOrigin {
+function startOrigin(opts: { platform: Uint8Array; runtime: Uint8Array; corrupt?: boolean; signing?: 'none' | 'foreign'; upperHex?: boolean }): StubOrigin {
   const hits: string[] = [];
 
   const files = { [PLATFORM_ARTIFACT]: opts.platform, [RUNTIME_ARTIFACT]: opts.runtime };
@@ -71,7 +71,10 @@ function startOrigin(opts: { platform: Uint8Array; runtime: Uint8Array; corrupt?
     const key = opts.signing === 'foreign' ? await generateReleaseSigningKey() : await signingKey;
     const signed = await signRelease(SERVED, checksums, key.privateKeyPkcs8Base64);
 
-    return { ...stamp, checksums: signed.checksums, signature: signed.signature };
+    // A signer may write its digests in either case: the message it signs holds them lowercase.
+    const listed = opts.upperHex ? Object.fromEntries(Object.entries(signed.checksums).map(([name, hex]) => [name, hex.toUpperCase()])) : signed.checksums;
+
+    return { ...stamp, checksums: listed, signature: signed.signature };
   })();
 
   const server = Bun.serve({
@@ -206,6 +209,14 @@ describe('refreshCliTree stages, verifies and swaps', () => {
     expect(await refresh(home, stub.origin)).toBeNull();
     expect(currentCli(home)).toBe(cliSource(SERVED));
     expect(cliEntries(home)).toEqual(['current', 'prev']);
+  });
+
+  test('a release whose signer wrote its digests in capitals lands, as the device daemon takes it', async () => {
+    const stub = startOrigin({ platform: await tarball({ 'cli.js': cliSource(SERVED), 'package.json': '{}' }), runtime, upperHex: true });
+    const home = installedHome('1.0.0+old');
+
+    expect(await refresh(home, stub.origin)).toBeNull();
+    expect(currentCli(home)).toBe(cliSource(SERVED));
   });
 
   test('an unsigned manifest, or one signed by another key, downloads nothing (C1)', async () => {

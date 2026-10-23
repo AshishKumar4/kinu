@@ -819,16 +819,16 @@
       "loadAtStart": 0.13,
       "exit": 0
     },
-    "bun test --timeout=0 --isolate scripts/pattern-inventory.test.ts scripts/jsonc.test.ts scripts/syntax.test.ts scripts/workerd-requirements.test.ts": {
+    "bun test --timeout=0 --isolate scripts/pattern-inventory.test.ts scripts/jsonc.test.ts scripts/mail-wiring.test.ts scripts/syntax.test.ts scripts/workerd-requirements.test.ts": {
       "machine": "linux x64, AMD EPYC (8 threads)",
-      "wallSeconds": 2.57,
-      "cpuSeconds": 2.95,
-      "peakRssMb": 160.15,
-      "peakRunnable": 7,
-      "peakCpuThreads": 1.65,
-      "meanThreads": 1.15,
-      "samples": 47,
-      "loadAtStart": 0.24,
+      "wallSeconds": 3.55,
+      "cpuSeconds": 3.22,
+      "peakRssMb": 169.38,
+      "peakRunnable": 4,
+      "peakCpuThreads": 1.47,
+      "meanThreads": 0.91,
+      "samples": 58,
+      "loadAtStart": 0,
       "exit": 0
     },
     "bun test --timeout=0 --isolate scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts": {

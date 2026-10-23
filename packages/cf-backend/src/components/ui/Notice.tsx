@@ -27,7 +27,7 @@ export function Notice({ tone, children, action, alert = tone === "danger", phra
     <Box role={alert ? "alert" : "status"} className={`p-notice p-notice-tone-${tone}${className === undefined ? "" : ` ${className}`}`} {...data}>
       <Icon size={16} className="mt-0.5 shrink-0" />
       <Box className="min-w-0 flex-1 t-body">{children}</Box>
-      {action}
+      {action !== undefined && <Box className="p-notice-action">{action}</Box>}
     </Box>
   );
 }

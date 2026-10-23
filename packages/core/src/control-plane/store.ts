@@ -371,11 +371,14 @@ function tokenPattern(name: string): RegExp {
   return new RegExp(`(?<![A-Za-z0-9._%+-])${name.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}(?![A-Za-z0-9._%+-])`, 'giu');
 }
 
-/** `userId`'s workspaces the index holds as removed, whose name no live workspace holds now. */
-export function removedWorkspaceNames(sql: ControlPlaneSql, userId: string): string[] {
+/** `userId`'s workspaces the index holds as removed, whose name no live workspace holds now; `only`'s alone, if named. */
+export function removedWorkspaceNames(sql: ControlPlaneSql, userId: string, only?: string): string[] {
+  // The live names are read once, not once per removed row: a correlated scan by name, which no index leads with, cost
+  // every removed row of the account a pass over the whole table (staging 04603ec96, 1.2 s a forget, reset).
   return select(sql, v.object({ name: v.string() }),
-    `SELECT w.name FROM cp_workspaces w WHERE w.user_id = ? AND w.removed_at IS NOT NULL
-       AND NOT EXISTS (SELECT 1 FROM cp_workspaces v WHERE v.name = w.name AND v.removed_at IS NULL)`, userId).map((row) => row.name);
+    `SELECT w.name FROM cp_workspaces w WHERE w.user_id = ? AND w.removed_at IS NOT NULL${only === undefined ? '' : ' AND w.name = ?'}
+       AND w.name NOT IN (SELECT v.name FROM cp_workspaces v WHERE v.removed_at IS NULL)`,
+    ...(only === undefined ? [userId] : [userId, only])).map((row) => row.name);
 }
 
 export interface ReconcileOutcome {
@@ -402,21 +405,18 @@ export function replaceUserWorkspaces(
       userId, row.name, row.displayName, row.createdAt, row.lastVisited);
   }
 
-  const names = live.map((row) => row.name);
+  // Each absent row its own statement: a statement binds at most `do.sqlite.bound_params` values, so the live names
+  // cannot go in one `NOT IN` (an account of 99 refused every reconcile).
+  const present = new Set(live.map((row) => row.name));
 
-  const before = count(sql,
-    `SELECT COUNT(*) AS n FROM cp_workspaces WHERE user_id = ? AND removed_at IS NULL`, userId);
+  const absent = select(sql, v.object({ name: v.string() }),
+    'SELECT name FROM cp_workspaces WHERE user_id = ? AND removed_at IS NULL', userId).filter((row) => !present.has(row.name));
 
-  const placeholders = names.map(() => '?').join(', ');
-  sql.exec(`UPDATE cp_workspaces SET removed_at = ?
-     WHERE user_id = ? AND removed_at IS NULL
-       ${names.length > 0 ? `AND name NOT IN (${placeholders})` : ''}`,
-    now, userId, ...names);
+  for (const { name } of absent) {
+    sql.exec('UPDATE cp_workspaces SET removed_at = ? WHERE user_id = ? AND name = ? AND removed_at IS NULL', now, userId, name);
+  }
 
-  const after = count(sql,
-    `SELECT COUNT(*) AS n FROM cp_workspaces WHERE user_id = ? AND removed_at IS NULL`, userId);
-
-  return { present: live.length, tombstoned: before - after };
+  return { present: live.length, tombstoned: absent.length };
 }
 
 export function overview(sql: ControlPlaneSql, now = Date.now()): ControlOverview {

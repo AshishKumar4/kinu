@@ -69,6 +69,7 @@ function routeEnv(userDO: TestUserDO['userDO']): UserRoutesEnv<string> & CliRout
     UserDO: { idFromName: (name) => name, get: () => userDO },
     OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
     AUTH_KV: unreachableKv('AUTH_KV'),
+    CliAuthDO: unreachableNamespace('CliAuthDO'),
     ASSETS: unreachableAssets(),
   };
 }
