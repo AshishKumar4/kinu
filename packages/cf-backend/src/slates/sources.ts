@@ -3,7 +3,8 @@ import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { slateDirectory, type WorkspaceSlates } from '@kinu.run/core/slates';
 import { ROOT_SLATE_CALLER, type SlateCaller } from '@kinu.run/core/slates';
 import {
-  addressedBlock, ephemeralSlateAddress, ephemeralSlateId, parseSlateProject, sha256Hex, type EphemeralSlateAddress, type SlateProject,
+  addressedBlock, ephemeralSlateAddress, ephemeralSlateId, parseSlateProject, readHtml, sha256Hex, type EphemeralSlateAddress,
+  type SlateProject,
 } from '@kinu.run/core';
 import type { WorkspaceSession } from '@kinu.run/core/workspace';
 
@@ -53,13 +54,7 @@ interface SlateSourceDeps {
 
 /** A page's `<title>` as a person reads it, or null when it has none: an answer's page is called by it, saved or shown. */
 async function pageTitle(html: string): Promise<string | null> {
-  let text = '';
-
-  await new HTMLRewriter().on('title', { text(chunk) { text += chunk.text; } }).transform(new Response(html)).arrayBuffer();
-
-  // The title's text as written; `&amp;` last, so an escaped entity stays itself.
-  const title = text.split(/\s+/).filter((word) => word !== '').join(' ')
-    .replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&quot;', '"').replaceAll('&#39;', "'").replaceAll('&amp;', '&');
+  const { title } = await readHtml(html);
 
   return title === '' ? null : title;
 }

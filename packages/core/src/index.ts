@@ -1348,6 +1348,8 @@ export { MarkdownFrontmatterError, parseMarkdownFrontmatter } from './utils/mark
 
 export { compareCodeUnits } from './utils/text';
 
+export { readHtml, type HtmlReading } from './utils/html';
+
 export {
   runSleepTimeCompute, applySleepTimeUpdate, accountProposals,
   SleepTimeUpdateSchema,
