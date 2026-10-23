@@ -183,6 +183,9 @@ const ProfilePatch = v.object({ displayName: v.string() });
 
 userRoutes.get('/api/user/profile', async (c) => accountProfile(c, await c.get('stub').getProfile(c.get('owner'))));
 
+/** The account's class and each limit read now, for Settings → Usage and the near-limit banner (core limits/). */
+userRoutes.get('/api/user/limits', async (c) => json({ body: await c.get('stub').limits(c.get('owner')) }));
+
 userRoutes.patch('/api/user/profile', async (c) => {
   const body = await safeJson(c.req.raw, ProfilePatch);
 

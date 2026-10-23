@@ -165,10 +165,13 @@ export class UserLimits {
     this.store.forgetStore(source);
   }
 
-  /** A turn on one of the platform's own models. */
-  async admitPlatformTurn(caller: UserCaller): Promise<void> {
+  /**
+   * A turn of one of the account's agents: refused in a suspended account, and, on one of the platform's own models
+   * (`platform`), past the day's tokens. A turn on the person's own key or login meets no free-tier limit.
+   */
+  async admitTurn(caller: UserCaller, platform: boolean): Promise<void> {
     await this.host.requireTier(caller, 'limits');
-    await settle(this.admit(admitPlatformTurn));
+    await settle(this.admit((admission) => (platform ? admitPlatformTurn(admission) : null)));
   }
 
   /** Tokens (input and output) a platform-model step spent, from the binding's own usage. */

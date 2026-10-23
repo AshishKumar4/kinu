@@ -31,7 +31,8 @@ export interface AgentTurnsDeps {
   /** What an execution of the agent froze as it bound, in its own store; null before then. */
   frozen(reference: ActorReference, key: Pick<TurnBound, 'turnId' | 'runId'>): Promise<FrozenAuthority | null>;
   pricing(spec: string): ModelPricing | null;
-  /** Whether a turn may run on the model `spec`: refuses, in the owner's limits' words, past the platform models' day. */
+  /** Whether a turn may run on the model `spec`: refuses, in the owner's limits' words, in a suspended account or past
+   *  the platform models' day. */
   admitModel(spec: string): Promise<void>;
   accounts(): Readonly<Record<string, string>>;
   /** A real provider request of the agent's is starting: noted on its warming lane, which answers until when it kept the
@@ -544,7 +545,7 @@ export class AgentTurns {
     const facts = this.offeredFacts(turn, prepared);
 
     if (facts === null) return null;
-    // A turn on one of the platform's own models is the owner's limits' to admit; one on their own key or login is not.
+    // Every turn is the owner's limits' to admit: a suspended account starts none, and a platform model's day is bounded.
     await this.deps.admitModel(prepared.model);
 
     return {

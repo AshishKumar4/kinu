@@ -1815,14 +1815,14 @@ export abstract class ActorAgent extends Agent<Env> {
    * live in core's `pricedModelCallEvent`.
    */
   /**
-   * A turn on `spec` is admitted by the owner's limits when the platform pays for it: Workers AI through the deployment's
-   * binding (`createWorkersAIProvider`). A turn on the person's own key or login is never asked.
+   * A turn on `spec`, admitted by the owner's limits: none starts in a suspended account, and one the platform pays for
+   * (Workers AI through the deployment's binding, `createWorkersAIProvider`) is bounded by the free tier's day of tokens.
    */
-  protected async admitPlatformModel(spec: string): Promise<void> {
-    if (specProvider(spec) !== WORKERS_AI_PROVIDER_ID || this.getOwnerUserId() === null) return;
+  protected async admitModelTurn(spec: string): Promise<void> {
+    if (this.getOwnerUserId() === null) return;
     const { stub, caller } = await this.userHub();
 
-    await stub.limits_admitPlatformTurn(caller);
+    await stub.limits_admitTurn(caller, specProvider(spec) === WORKERS_AI_PROVIDER_ID);
   }
 
   /** This workspace's stored bytes, as its own database reads them: the platform's number, sampled, never counted. */

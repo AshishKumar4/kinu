@@ -1105,8 +1105,8 @@ export class UserDO extends Agent<Env> {
     return this.accountLimits.computerStopped(caller, workspace);
   }
 
-  limits_admitPlatformTurn(caller: UserCaller): Promise<void> {
-    return this.accountLimits.admitPlatformTurn(caller);
+  limits_admitTurn(caller: UserCaller, platform: boolean): Promise<void> {
+    return this.accountLimits.admitTurn(caller, platform);
   }
 
   limits_platformTokensSpent(caller: UserCaller, tokens: number): Promise<void> {

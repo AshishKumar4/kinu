@@ -246,7 +246,7 @@ const USER_DO_METHODS = [
   'limits_admitComputerStart',
   'limits_computerTick',
   'limits_computerStopped',
-  'limits_admitPlatformTurn',
+  'limits_admitTurn',
   'limits_platformTokensSpent',
   'limits_setClass',
   'limits_suspend',
