@@ -408,6 +408,10 @@ with what is the person's: its UserDO, its mailbox (MailboxDO, every box of
 the account), then its Drive's user object before each of its shards, all to
 the same moment, so no shard's sweep meets a reference the restored tenant
 names; an account goes back by moment only, as a bookmark is one object's.
+Its shards are those the restored Drive's records name (`namedShards`); a
+pool shard none names held none of its bytes and is answered `skipped`: one
+that never stored a chunk has no history (staging dd3066a00, 2026-10-23, on
+trial-509: the restore stopped there though every byte was back).
 Its workspaces are each their own restore. The script writes an undo file
 naming each object's bookmark just before; `--undo=<file>` takes the restore
 back. Only `ops-restore.ts` may make the PITR calls

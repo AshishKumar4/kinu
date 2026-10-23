@@ -654,3 +654,30 @@ bun run deploy --rollback
 It returns production to the newest build it took before the one it serves (`bun scripts/promote.ts rollback`). `promoted.json` in `kinu-releases` lists every build a green promotion gave production, oldest first, and the first promotion starts it with the build production served before it. A promotion that went red after its upload serves a version the list never took, so a rollback from it returns to the newest build in the list; from a listed build it returns to the one before, and withdraws the build it leaves, so a later rollback never returns to it. It runs `wrangler rollback` to that version, then proves the rollback took, the way the deploy's smoke test does: `/api/health` names the build's commit once the edge converges, and every download, the worker release tarball among them, hashes as that build's did. Assets ride the Worker version, so the rollback moves code and `/downloads/*` together, and the worker tarball a build's `release.json` names stays in `kinu-releases` under its own versioned key. A rollback moves no Durable Object, R2 or KV state. Cloudflare refuses one across a Durable Object class migration, or to a version bound to a bucket, namespace or queue that no longer exists, and keeps only the 100 most recent versions (Workers rollbacks docs); a forward deploy is then the way back.
 
 Going forward instead means a commit staging verifies: `bun run deploy`, then `bun run deploy --promote`.
+
+### Restoring a workspace or an account to a time
+
+A rollback changes the code, not anyone's data. To put one workspace or one account back as it was at a moment of the
+last 30 days:
+
+```bash
+bun scripts/restore.ts production workspace <workspace name> --at=2026-10-23T14:05:00Z
+bun scripts/restore.ts production account <email> --at=2026-10-23T14:05:00Z
+bun scripts/restore.ts production --undo=<the file it printed>
+```
+
+Run it from a checkout, as a deploy runs. A workspace goes back with every agent in it. An account goes back with its
+settings, its mail and its Drive; its workspaces do not, as each one is its own restore. Every restore writes an undo
+file, and the undo puts everything back as it was just before the restore. It answers object by object: `restored`, or
+`skipped` for a Drive shard that held nothing then. It exits 1 if anything did not land or it stopped partway, and it
+says what it did up to that point.
+
+What it cannot bring back:
+- A workspace's computer (its devbox disk). The workspace returns; the box starts from scratch.
+- Files deleted at once with a deleted workspace or account: slate pictures, the devbox's disk and mail bodies. The
+  restore names each one that is gone.
+- Anything older than 30 days, or a moment in an object's first minute.
+- Changes made after the moment. A workspace created since is not in the restored account's list, one deleted since is
+  listed again, and a sign-out or key revoked since is valid again, so redo those by hand.
+
+How it works and what was measured: ARCHITECTURE-DECISIONS W7.
