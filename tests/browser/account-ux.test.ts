@@ -107,6 +107,27 @@ declare global {
 
 const CLAUDE_FINISH = 'POST /api/user/claude/finish';
 
+/** Presses a sign-in's Open link as a person does, the provider's tab kept from loading: the card hears the click. */
+async function pressOpen(page: Page, scope: string): Promise<void> {
+  const link = `${scope} [data-sign-in-open]`;
+
+  await page.waitForSelector(link);
+  await page.$eval(link, (open) => { open.addEventListener('click', (event) => { event.preventDefault(); }); });
+  await page.click(link);
+}
+
+/** The person leaves this tab for the provider's and comes back. */
+async function leaveAndReturn(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event('blur'));
+    window.dispatchEvent(new Event('focus'));
+  });
+}
+
+const CHATGPT_ADDRESS = '[data-chatgpt-way="here"] [data-sign-in-paste] input';
+
+const CLAUDE_CODE = '[data-claude-connect] [data-sign-in-paste] input';
+
 const CHATGPT_FINISH = 'POST /api/user/chatgpt/paste/finish';
 
 const CREDENTIALS = 'GET /api/user/credentials';
@@ -395,6 +416,71 @@ describe('account panels', () => {
     });
   });
 
+  // The owner, 2026-10-23: what to do with the page that won't load was read only once it was gone, after the popup had
+  // closed. It is said and drawn before OpenAI opens, in a tab of its own; back here, the paste step shows it again.
+  test("ChatGPT here: the page that won't load is shown before OpenAI opens, again when the person is back, and a wrong paste says what it was", async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'setupmodal&panel=providers', 'light', 'desktop');
+      const here = '[data-chatgpt-way="here"]';
+
+      try {
+        await page.waitForSelector('[role="dialog"]');
+        await settleAccountFixture(page);
+        await clickByText(page, '[data-chatgpt-connect] button', 'Sign in here', '[data-chatgpt-connect]');
+        await page.waitForSelector(`${here}[data-chatgpt-step="before"] [data-dead-page]`);
+        expect(await page.$(CHATGPT_ADDRESS)).toBeNull();
+        expect(await page.$eval(`${here} [data-sign-in-open]`, (open) => ({ target: open.getAttribute('target'), rel: open.getAttribute('rel') })))
+          .toEqual({ target: '_blank', rel: 'noopener noreferrer' });
+
+        await pressOpen(page, here);
+        await page.waitForSelector(`${here}[data-chatgpt-step="paste"] [data-sign-in-paste] input`);
+        expect(await page.$(`${here} [data-paste-returned]`)).toBeNull();
+        await leaveAndReturn(page);
+        await page.waitForSelector(`${here} [data-paste-returned] [data-dead-page]`);
+
+        await page.type(CHATGPT_ADDRESS, 'https://auth.openai.com/api/accounts/authorize?client_id=x');
+        await clickByText(page, `${here} button`, 'Finish', here);
+        await page.waitForSelector(`${here} [data-sign-in-paste] [role="alert"]`);
+        expect(await page.$eval(`${here} [data-sign-in-paste] [role="alert"]`, (said) => said.textContent ?? '')).toStartWith("That's the sign-in page's own address.");
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  test("Claude: Anthropic's page shows the code to paste back here, and a refused code says why in a sentence", async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'setupmodal&panel=providers', 'dark', 'mobile');
+      const claude = '[data-claude-connect]';
+
+      try {
+        await page.waitForSelector('[role="dialog"]');
+        await settleAccountFixture(page);
+        await page.click('[data-provider="Claude"] button');
+        await page.waitForSelector(`${claude}[data-claude-connect="paste"] [data-sign-in-open]`);
+        expect(new URL(await page.$eval(`${claude} [data-sign-in-open]`, (open) => open.getAttribute('href') ?? '')).searchParams.get('redirect_uri'))
+          .toBe('https://platform.claude.com/oauth/code/callback');
+
+        await pressOpen(page, claude);
+        await page.type(CLAUDE_CODE, 'bad-code#gallery');
+        await page.keyboard.press('Enter');
+        await page.waitForSelector(`${claude} [data-sign-in-paste] [role="alert"]`);
+
+        const said = await page.$eval(`${claude} [data-sign-in-paste] [role="alert"]`, (alert) => alert.textContent ?? '');
+
+        expect(said).toStartWith("Claude didn't accept that code");
+        expect(said).not.toContain('token endpoint');
+
+        await page.$eval(CLAUDE_CODE, (input) => { if (input instanceof HTMLInputElement) input.select(); });
+        await page.type(CLAUDE_CODE, 'good-code');
+        await page.keyboard.press('Enter');
+        await page.waitForFunction(() => document.querySelector('[data-provider="Claude"] button[aria-label^="Disconnect"]') !== null);
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
   test('ChatGPT connects two ways: a machine gets its connect command, and an address pasted back here signs in', async () => {
     await withGallery(async (gallery) => {
       const page = await freshPage(gallery, 'setupmodal&panel=providers', 'dark', 'desktop');
@@ -413,16 +499,18 @@ describe('account panels', () => {
         // Here: the sign-in opens at OpenAI, and the address the browser lands on is pasted back. A sign-in
         // cancelled at OpenAI is spent: starting again fetches a fresh link and clears the old address.
         await clickByText(page, '[data-chatgpt-connect] button', 'Sign in here', '[data-chatgpt-connect]');
-        await page.waitForSelector('[data-chatgpt-way="here"] input');
-        await page.type('[data-chatgpt-way="here"] input', 'http://127.0.0.1:1455/auth/callback?error=access_denied&state=xyz');
+        await pressOpen(page, '[data-chatgpt-way="here"]');
+        await page.waitForSelector(CHATGPT_ADDRESS);
+        await page.type(CHATGPT_ADDRESS, 'http://127.0.0.1:1455/auth/callback?error=access_denied&state=xyz');
         await clickByText(page, '[data-chatgpt-way="here"] button', 'Finish', '[data-chatgpt-way="here"]');
         const starts = await page.evaluate(() => Number(document.documentElement.dataset.galleryPasteStarts ?? '0'));
         await clickByText(page, '[data-chatgpt-way="here"] button', 'Start again', '[data-chatgpt-way="here"]');
         await page.waitForFunction((before) => Number(document.documentElement.dataset.galleryPasteStarts ?? '0') > before, {}, starts);
-        await page.waitForSelector('[data-chatgpt-way="here"] input');
-        expect(await page.$eval('[data-chatgpt-way="here"] input', (input) => input.value)).toBe('');
+        await pressOpen(page, '[data-chatgpt-way="here"]');
+        await page.waitForSelector(CHATGPT_ADDRESS);
+        expect(await page.$eval(CHATGPT_ADDRESS, (input) => input.value)).toBe('');
 
-        await page.type('[data-chatgpt-way="here"] input', 'http://127.0.0.1:1455/auth/callback?code=abc&state=xyz');
+        await page.type(CHATGPT_ADDRESS, 'http://127.0.0.1:1455/auth/callback?code=abc&state=xyz');
         await clickByText(page, '[data-chatgpt-way="here"] button', 'Finish', '[data-chatgpt-way="here"]');
         // Signed in: the row says so at once, before anything else is touched, and the welcome says what it means.
         await page.waitForFunction(() => document.querySelector('[data-provider="ChatGPT"]')?.textContent?.includes('Connected') === true
@@ -440,16 +528,18 @@ describe('account panels', () => {
   test('Claude and ChatGPT sign-ins that overlap and answer out of order each end connected, with no error', async () => {
     await withGallery(async (gallery) => {
       const page = await freshPage(gallery, 'setupmodal&panel=providers', 'dark', 'desktop');
-      const code = '[aria-label="Claude sign-in code"]';
+      const code = CLAUDE_CODE;
 
       try {
         await page.waitForSelector('[role="dialog"]');
         await settleAccountFixture(page);
         await page.waitForSelector('[data-chatgpt-connect]');
         await clickByText(page, '[data-chatgpt-connect] button', 'Sign in here', '[data-chatgpt-connect]');
-        await page.waitForSelector('[data-chatgpt-way="here"] input');
-        await page.type('[data-chatgpt-way="here"] input', 'http://127.0.0.1:1455/auth/callback?code=abc&state=xyz');
+        await pressOpen(page, '[data-chatgpt-way="here"]');
+        await page.waitForSelector(CHATGPT_ADDRESS);
+        await page.type(CHATGPT_ADDRESS, 'http://127.0.0.1:1455/auth/callback?code=abc&state=xyz');
         await page.click('[data-provider="Claude"] button');
+        await pressOpen(page, '[data-claude-connect]');
         await page.waitForSelector(code);
         await page.type(code, 'good-code');
 
@@ -511,8 +601,9 @@ describe('account panels', () => {
         await settleAccountFixture(page);
         await page.waitForSelector('[data-chatgpt-connect]');
         await clickByText(page, '[data-chatgpt-connect] button', 'Sign in here', '[data-chatgpt-connect]');
-        await page.waitForSelector('[data-chatgpt-way="here"] input');
-        await page.focus('[data-chatgpt-way="here"] input');
+        await pressOpen(page, '[data-chatgpt-way="here"]');
+        await page.waitForSelector(CHATGPT_ADDRESS);
+        await page.focus(CHATGPT_ADDRESS);
         await page.keyboard.type('sk-');
 
         if (held.length === 0) throw new Error('nothing of the home page was held, so it could not arrive behind the modal');
@@ -521,7 +612,7 @@ describe('account panels', () => {
         // Typed on without touching anything: every key lands in the modal, none on the page that arrived.
         await page.keyboard.type('after-arrival');
 
-        expect(await page.$eval('[data-chatgpt-way="here"] input', (input) => (input instanceof HTMLInputElement ? input.value : null)))
+        expect(await page.$eval('[data-chatgpt-way="here"] [data-sign-in-paste] input', (input) => (input instanceof HTMLInputElement ? input.value : null)))
           .toBe('sk-after-arrival');
         expect(await page.$eval('#workspace-mission', (field) => (field instanceof HTMLTextAreaElement || field instanceof HTMLInputElement ? field.value : null)))
           .toBe('');

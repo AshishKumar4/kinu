@@ -1,8 +1,7 @@
 /** runScaffold with a mock Executor that runs the scaffold's `shell` body and emits canned events. */
 
 import { createFileTool } from '../src/tools/file-operations';
-import { serveStores } from '../src/tools/actor-stores';
-import { builtinStoreDeps } from '../src/tools/builtins';
+import { builtinStores } from '../src/tools/builtins';
 import { describe, test, expect } from 'bun:test';
 import {
   runScaffold, scaffoldProviders,
@@ -46,14 +45,14 @@ describe('runScaffold', () => {
     const built: string[] = [];
 
     // The turn's one served set, as its tools hold it.
-    const stores = serveStores(builtinStoreDeps({
+    const stores = builtinStores({
       rt, conversations: conversationsFor(rt), vectorStore: null,
       slateBuild: async (slate) => {
         built.push(slate);
 
         return { ok: true, value: null };
       },
-    }));
+    });
 
     await rt.toolFiles.writeFile('/home/main/notes.md', new TextEncoder().encode('first\n'));
     rt.identity.scaffold.read = async () => 'async function run() {}';

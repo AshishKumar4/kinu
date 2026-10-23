@@ -3,11 +3,14 @@
 // what refuses. After it, the walk: every account the
 // roots and the builtin directory name, each one's workspaces and every object Cloudflare lists, each asked once under
 // a pass this run wrote and then deleted, waiting out an edge still serving the build before; and what it found.
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { Database as SqliteDatabase } from 'bun:sqlite';
+import * as v from 'valibot';
 import { describe, expect, test } from 'bun:test';
 import { censusOf, initActivationTable, recordActivation, sha256Hex, type Repair, type TablesAnswer } from '@kinu.run/core';
 import { makeSql, makeSqlExec } from '../packages/core/tests/helpers';
-import { censusDiff, censusLines, changedTables, confirmation, derivedIn, planLines, referrersOf, verdictOf, walk, walkLines, type OpsBody, type Reached, type TablesTarget } from './tables-reset';
+import { censusDiff, censusLines, changedTables, confirmation, derivedIn, lossRefusals, planLines, referrersOf, schemaChange, verdictOf, walk, walkLines, type OpsBody, type Reached, type TablesTarget } from './tables-reset';
 
 const FROM = {
   'device_joins@packages/core/src/state/user-schema.ts': ['device_id TEXT PRIMARY KEY', 'expires_at INTEGER NOT NULL'],
@@ -65,6 +68,67 @@ test('the changed tables come from the two locks: removed, reshaped, and added',
     'driver_lease reshaped', 'head_scores reshaped', 'heads reshaped', 'tails reshaped', 'webhook_secrets reshaped', 'workspace_overviews reshaped',
   ]);
   expect(added).toEqual(['device_consent_asks']);
+});
+
+// Staging held from 06:10 on 2026-10-23 for two new tables (mail_blob_graves, slate_picture_graves) that dropped
+// nothing: a release that only adds tables ships with --reset-tables on its own, and one that changes any holds.
+test('a release that only adds tables is additive; one that reshapes or removes any is not', () => {
+  const lock = (tables: Readonly<Record<string, readonly string[]>>) => Object.fromEntries(Object.entries(tables).map(([key, parts]) => [`${key}@a.ts`, [...parts]]));
+  const base = { kept: ['id TEXT PRIMARY KEY'], gone: ['id TEXT PRIMARY KEY'] };
+
+  expect([
+    schemaChange(changedTables(lock(base), lock(base))),
+    schemaChange(changedTables(lock(base), lock({ ...base, graves: ['key TEXT PRIMARY KEY'] }))),
+    schemaChange(changedTables(lock(base), lock({ ...base, kept: ['id TEXT PRIMARY KEY', 'at INTEGER'], graves: ['key TEXT PRIMARY KEY'] }))),
+    schemaChange(changedTables(lock(base), lock({ kept: base.kept }))),
+  ]).toEqual([
+    { kind: 'none', tables: [] },
+    { kind: 'additive', tables: ['graves'] },
+    { kind: 'changes', tables: ['kept reshaped'] },
+    { kind: 'changes', tables: ['gone removed'] },
+  ]);
+});
+
+// The owner, 2026-10-21: "once users come, we either have a one time migration in the workspace onStart, or alter only
+// tables where data loss is acceptable." Production refuses a plan that loses a user's rows unless the owner's words
+// name each such table.
+describe('in production, a plan that loses data', () => {
+  const plan = [
+    { table: 'agent_facts', classes: ['agent'], does: 'drop' as const },
+    { table: 'cache_warm', classes: ['workspace'], does: 'drop' as const },
+    { table: 'old_notes', classes: ['account'], does: 'retire' as const },
+    { table: 'turn_marks', classes: ['agent'], does: 'local' as const },
+  ];
+
+  const acceptable = { cache_warm: 'warmed again by the next turn' };
+
+  test('is refused for each table holding user data, a table whose loss is acceptable aside', () => {
+    expect(lossRefusals(plan, { acceptable, words: undefined })).toEqual([
+      'agent_facts [agent] holds user data, and this release drops it',
+      'old_notes [account] holds user data, and this release retires it',
+    ]);
+  });
+
+  // A name no class makes would class nothing, and a reason left empty would say nothing to the owner reading it.
+  test('is judged against schema-loss.json, which names only tables a class makes, each with why', () => {
+    const classes = v.parse(v.record(v.string(), v.array(v.string())), JSON.parse(readFileSync(join(import.meta.dir, 'schema-classes.json'), 'utf8')));
+    const loss = v.parse(v.record(v.string(), v.string()), JSON.parse(readFileSync(join(import.meta.dir, 'schema-loss.json'), 'utf8')));
+    const made = new Set(Object.values(classes).flat());
+
+    expect(Object.entries(loss).filter(([table, why]) => !made.has(table) || why.trim().length < 12)).toEqual([]);
+  });
+
+  test('passes where the owner\'s words name each such table, and only that table', () => {
+    expect({
+      both: lossRefusals(plan, { acceptable, words: 'owner 2026-10-23: drop agent_facts and old_notes, both rebuilt by the next run' }),
+      one: lossRefusals(plan, { acceptable, words: 'owner: drop agent_facts' }),
+      prefix: lossRefusals(plan, { acceptable, words: 'owner: drop agent_facts_history and old_notes' }),
+    }).toEqual({
+      both: [],
+      one: ['old_notes [account] holds user data, and this release retires it'],
+      prefix: ['agent_facts [agent] holds user data, and this release drops it'],
+    });
+  });
 });
 
 test('the plan says what each reset does: drop and make anew, with what refers to it, retire, leave as it is, or refuse', () => {
@@ -277,6 +341,8 @@ describe('census-diff', () => {
 
   const W = 'OrchestratorAgent\tw1';
 
+  const NOTHING = { changed: new Set<string>(), added: new Set<string>() };
+
   const BEFORE = [
     line({ database: W, table: 'deferred_approvals', rows: 3, digest: 'd1' }),
     line({ database: W, table: 'notes', rows: 2, digest: 'n1' }),
@@ -295,7 +361,65 @@ describe('census-diff', () => {
   ];
 
   const PLANNED = new Set(['deferred_approvals']);
-  const diffed = (after: readonly string[], frozen = true, before = BEFORE) => censusDiff(before, after.join('\n'), PLANNED, frozen);
+
+  // Staging 4ebac191c, 2026-10-23: a release that only added tables (account_*, cp_*) failed its census, each new empty
+  // table and each workspace the walk opened, whose generation moves with its activation, read as changed outside the plan.
+  test('a table the plan adds, new and empty, and a generation that moved with its activation are as expected', () => {
+    const before = [
+      line({ database: W, table: 'workspace_activations', rows: 2, digest: 'a2', ledger: ['1:aaa', '2:bbb'] }),
+      line({ database: W, table: 'kinu_workspace_generation', rows: 1, digest: 'g1' }),
+      line({ database: 'UserDO\tu1', table: 'user_profile', rows: 1, digest: 'p1' }),
+    ].join('\n');
+
+    const after = [
+      line({ database: W, table: 'workspace_activations', rows: 3, digest: 'a3', ledger: ['1:aaa', '2:bbb', '3:ccc'] }),
+      line({ database: W, table: 'kinu_workspace_generation', rows: 1, digest: 'g2' }),
+      line({ database: 'UserDO\tu1', table: 'user_profile', rows: 1, digest: 'p1' }),
+      line({ database: 'UserDO\tu1', table: 'account_standing', rows: 0, digest: 'e' }),
+    ];
+
+    const additive = { changed: new Set<string>(), added: new Set(['account_standing']) };
+
+    expect({
+      additive: censusDiff(before, after.join('\n'), additive, true).failed,
+      seeded: censusDiff(before, [...after.slice(0, 3), line({ database: 'UserDO\tu1', table: 'account_standing', rows: 2, digest: 's' })].join('\n'), additive, true).failed,
+      unopened: censusDiff(before, [after[0] ?? '', after[1] ?? '', after[2] ?? ''].map((text, at) => (at === 0 ? before.split('\n')[0] ?? '' : text)).join('\n'), additive, true).failed,
+      unplanned: censusDiff(before, after.join('\n'), NOTHING, true).failed,
+    }).toEqual({
+      additive: [],
+      seeded: ['UserDO\tu1\taccount_standing\tnew, 2 row(s): a table the plan adds holds rows'],
+      unopened: [`${W}\tkinu_workspace_generation\t1 → 1`],
+      unplanned: ['UserDO\tu1\taccount_standing\tnew, 0 row(s)'],
+    });
+  });
+
+  // The same release's census held one account made while it ran, every table of it read as a change outside the plan.
+  test('an object the census before did not hold is said once, as made since, and fails nothing', () => {
+    const made = [...AFTER, ...['user_profile', 'user_config', 'experience_library_fts_data'].map((table, at) => line({ database: 'UserDO\tu2', table, rows: at, digest: `m${String(at)}` }))];
+    const diff = diffed(made);
+
+    expect({ failed: diff.failed, said: diff.lines.filter((text) => text.includes('u2')) }).toEqual({ failed: [], said: ['  UserDO\tu2\tnew object, 3 table(s)'] });
+  });
+
+  // A count alone proves nothing: a generation, one row before and after, moved its value; only where the walk opened the
+  // workspace, or reset it, is that a first open's write.
+  test('an equal count with an equal digest is no change, and with a moved digest is one unless a first open explains it', () => {
+    const generation = (digest: string) => line({ database: W, table: 'kinu_workspace_generation', rows: 1, digest });
+    const activations = line({ database: W, table: 'workspace_activations', rows: 2, digest: 'a2', ledger: ['1:aaa', '2:bbb'] });
+    const user = line({ database: 'UserDO\tu1', table: 'user_profile', rows: 1, digest: 'p1' });
+    const before = [activations, generation('g1'), user].join('\n');
+
+    expect({
+      same: censusDiff(before, [activations, generation('g1'), user].join('\n'), NOTHING, true),
+      moved: censusDiff(before, [activations, generation('g2'), user].join('\n'), NOTHING, true).failed,
+      rewritten: censusDiff(before, [activations, generation('g1'), line({ database: 'UserDO\tu1', table: 'user_profile', rows: 1, digest: 'p2' })].join('\n'), NOTHING, true).failed,
+    }).toEqual({
+      same: { lines: ['census-diff: 3 table(s) as they were'], failed: [] },
+      moved: [`${W}\tkinu_workspace_generation\t1 → 1`],
+      rewritten: ['UserDO\tu1\tuser_profile\t1 → 1'],
+    });
+  });
+  const diffed = (after: readonly string[], frozen = true, before = BEFORE) => censusDiff(before, after.join('\n'), { changed: PLANNED, added: new Set() }, frozen);
 
   // A planned FTS index (a virtual table, named by its mark) is made anew with the tables it keeps itself in, whose
   // rows its creation writes: those are the index's, never a change outside the plan.
@@ -304,7 +428,7 @@ describe('census-diff', () => {
     const index = (rows: readonly [string, number, string][]) => rows.map(([table, count, digest]) => line({ database: M, table, rows: count, digest }));
     const before = [...BEFORE.split('\n'), ...index([['mail_messages', 3, 'm3'], ['mail_fts', 3, 'f3'], ['mail_fts_data', 7, 'x7'], ['mail_fts_idx', 2, 'i2'], ['mail_fts_docsize', 3, 's3'], ['mail_fts_config', 1, 'c1'], ['mail_box_config', 1, 'b1']])];
     const after = [...AFTER, ...index([['mail_messages', 0, 'e'], ['mail_fts', 0, 'e'], ['mail_fts_data', 2, 'x2'], ['mail_fts_idx', 0, 'e'], ['mail_fts_config', 1, 'c1'], ['mail_box_config', 1, 'b2']])];
-    const diff = censusDiff(before.join('\n'), after.join('\n'), new Set([...PLANNED, 'mail_messages', 'mail_fts']), true);
+    const diff = censusDiff(before.join('\n'), after.join('\n'), { changed: new Set([...PLANNED, 'mail_messages', 'mail_fts']), added: new Set() }, true);
 
     // A table that only looks like one of an index's, in a database without the index's own, is judged as any other.
     expect(diff.failed).toEqual([`${M}\tmail_box_config\t1 → 1`]);
@@ -406,11 +530,11 @@ describe('census-diff', () => {
 
     const after = census();
 
-    expect(censusDiff(before, after, new Set(), false).failed).toEqual([]);
-    expect(censusDiff(before, after, new Set(), true).failed).toEqual([`${W}\tworkspace_activations\t255 → 256: 3 rows added, where one walk opens it once`]);
+    expect(censusDiff(before, after, NOTHING, false).failed).toEqual([]);
+    expect(censusDiff(before, after, NOTHING, true).failed).toEqual([`${W}\tworkspace_activations\t255 → 256: 3 rows added, where one walk opens it once`]);
     db.exec('UPDATE workspace_activations SET started_at = 1 WHERE ordinal = 100');
-    expect(censusDiff(before, census(), new Set(), false).failed).toEqual([`${W}\tworkspace_activations\t255 → 256: row(s) 100 rewritten`]);
+    expect(censusDiff(before, census(), NOTHING, false).failed).toEqual([`${W}\tworkspace_activations\t255 → 256: row(s) 100 rewritten`]);
     db.exec('DELETE FROM workspace_activations WHERE ordinal = 101');
-    expect(censusDiff(before, census(), new Set(), false).failed).toEqual([`${W}\tworkspace_activations\t255 → 255: row(s) 100 rewritten`]);
+    expect(censusDiff(before, census(), NOTHING, false).failed).toEqual([`${W}\tworkspace_activations\t255 → 255: row(s) 100 rewritten`]);
   });
 });

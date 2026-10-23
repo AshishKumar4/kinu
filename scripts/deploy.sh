@@ -50,7 +50,7 @@
 #
 # Usage:
 #   bun run deploy [--promote [--override "<owner's words>"] | --rollback] [--reset | --reset-tables] [--evals]
-#   bash scripts/deploy.sh [--promote [--override "<owner's words>"]] [--reset | --reset-tables] [--bootstrap] [--gates-only] [--evals]
+#   bash scripts/deploy.sh [--promote [--override "<owner's words>"]] [--reset | --reset-tables [--loss-override "<owner's words>"]] [--bootstrap] [--gates-only] [--evals]
 #   bash scripts/deploy.sh --rollback
 #
 # `--evals` runs the real-model evals a deploy can start: on staging, the
@@ -104,10 +104,15 @@
 # tables this release changed (with the tables that refer to them), made anew empty, the first time the new build
 # opens it (core state/schema-repair.ts). Before the upload it prints the plan, every table each class drops against
 # the build the deployment serves, and stops on anything that would refuse; on production it asks for a typed
-# confirmation naming every table it drops. After the upload, once this deploy's version answers, it opens every object
+# confirmation naming every table it drops, and only then: a release that only adds tables drops nothing, and stage.sh
+# deploys it unattended (`reset.ts schema-change`). Production refuses a plan that drops or retires a table holding user
+# data, every table but those scripts/schema-loss.json names, unless `--loss-override "<owner's words>"` names it (the
+# owner, 2026-10-21); a full `--reset` of production needs words naming every table. The owner's other way, a one-time
+# migration, has no mechanism yet: the repair drops every table it finds changed. After the upload, once this deploy's version answers, it opens every object
 # once, so each resets itself before a user waits on it, prints what each did and writes each database's census
 # (`scripts/reset.ts tables-plan` and `tables`, scripts/tables-reset.ts).
-# Chosen per release, never automatic. Its record goes where a reset's does, and a rerun of the walk is harmless.
+# Chosen per release; automatic only for one that only adds tables. Its record goes where a reset's does, and a rerun
+# of the walk is harmless.
 #
 # Idempotent: safe to re-run.
 set -uo pipefail
@@ -162,6 +167,9 @@ KINU_PROMOTE=0
 KINU_ROLLBACK=0
 KINU_RESET=0
 KINU_RESET_TABLES=0
+# The owner's words for a production reset that loses user data, naming each table (scripts/schema-loss.json).
+KINU_LOSS_OVERRIDE=""
+KINU_LOSS_WORDS=0
 KINU_EVALS=0
 KINU_OVERRIDE=""
 KINU_OVERRIDE_GIVEN=0
@@ -172,6 +180,11 @@ for option in "$@"; do
     KINU_OVERRIDE_WORDS=0
     continue
   fi
+  if [ "$KINU_LOSS_WORDS" = "1" ]; then
+    KINU_LOSS_OVERRIDE="$option"
+    KINU_LOSS_WORDS=0
+    continue
+  fi
   case "$option" in
     --promote) KINU_PROMOTE=1 ;;
     --override) KINU_OVERRIDE_GIVEN=1; KINU_OVERRIDE_WORDS=1 ;;
@@ -180,14 +193,21 @@ for option in "$@"; do
     --gates-only) KINU_GATES_ONLY=1 ;;
     --reset) KINU_RESET=1 ;;
     --reset-tables) KINU_RESET_TABLES=1 ;;
+    --loss-override) KINU_LOSS_WORDS=1 ;;
     --evals) KINU_EVALS=1 ;;
     *)
       echo -e "${RED}Unknown option '$option'.${NC}"
-      echo "Usage: scripts/deploy.sh [--promote [--override \"<owner's words>\"]] [--reset | --reset-tables] [--bootstrap] [--gates-only] [--evals] | --rollback"
+      echo "Usage: scripts/deploy.sh [--promote [--override \"<owner's words>\"]] [--reset | --reset-tables [--loss-override \"<owner's words>\"]] [--bootstrap] [--gates-only] [--evals] | --rollback"
       exit 2
       ;;
   esac
 done
+if [ -n "$KINU_LOSS_OVERRIDE" ] && [ "$KINU_RESET" != "1" ] && [ "$KINU_RESET_TABLES" != "1" ]; then
+  echo -e "${RED}--loss-override names the tables a reset may lose, so it goes with --reset or --reset-tables only.${NC}"
+  exit 2
+fi
+# reset.ts reads the owner's words where production's plan would lose user data (scripts/schema-loss.json).
+export KINU_LOSS_OVERRIDE
 if [ "$KINU_OVERRIDE_GIVEN" = "1" ] && [ -z "${KINU_OVERRIDE//[[:space:]]/}" ]; then
   echo -e "${RED}--override takes the owner's words: --override \"<why production takes a build staging did not verify>\".${NC}"
   exit 2
@@ -282,10 +302,8 @@ if [ "$KINU_RESET_TABLES" = "1" ]; then
     echo -e "${RED}--reset-tables keeps every object: --reset deletes them all anyway, and --gates-only stops before the build.${NC}"
     exit 2
   fi
-  if [ "$KINU_ENV" = "production" ] && [ ! -t 0 ]; then
-    echo -e "${RED}A production tables release is confirmed at a terminal, and this run has none. Nothing was deployed.${NC}"
-    exit 1
-  fi
+  # Production's confirmation is typed at a terminal only for a plan that drops or retires a table (tables-plan asks it,
+  # and refuses one with no terminal); a plan that only adds tables drops nothing, and ships unattended (stage.sh).
   KINU_TABLES_RECORD="$(mktemp -t kinu-tables.XXXXXX.json)"
   echo -e "${BOLD}TABLES: every object drops the tables this release changed, made anew empty, the first time the new build opens it. The plan:${NC}"
   bun "$KINU_ROOT/scripts/reset.ts" tables-plan "$KINU_ENV" "$KINU_TABLES_RECORD" || exit 1

@@ -24,8 +24,9 @@ import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { BrandMark, providerBrand } from "@/components/ui/BrandMark";
 import { ChatGptConnect, ChatGptPlanUsage, ChatGptWelcome } from "@/components/account/ChatGptConnect";
-import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import { SignInOpen, SignInPaste, SignInRisk, SignInStep, SignInSteps } from "@/components/account/SubscriptionSignIn";
 import { useProviderWindow } from "@/hooks/use-provider-window";
+import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { Status } from '@/components/ui/Status';
 import { showing, detach } from '@kinu.run/core/obs';
 import {
@@ -338,13 +339,15 @@ function CloudflareGatewaySection({ status, onChanged }: {
 }
 
 /**
- * Claude's PKCE sign-in, as `kinu provider connect claude` runs it: Claude sends the browser to a local address
- * that does not open here, so the owner pastes the code Claude shows, or that address, back.
+ * Claude's PKCE sign-in on the shared card (SubscriptionSignIn): Claude returns the browser to Anthropic's own page,
+ * which shows a code with its Copy, and the code is pasted back here. A refused code says why, in Claude's words. Its
+ * page opens in a popup this page closes once the code connects (the owner's rule, 2026-10-21).
  */
 function ClaudeConnect({ onChanged }: { onChanged: () => void }) {
-  const [authorizeUrl, setAuthorizeUrl] = useState<string | null>(null);
-  const [code, setCode] = useState('');
   const signInWindow = useProviderWindow('claude-sign-in');
+  const [authorizeUrl, setAuthorizeUrl] = useState<string | null>(null);
+  const [opened, setOpened] = useState(false);
+  const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -357,6 +360,7 @@ function ClaudeConnect({ onChanged }: { onChanged: () => void }) {
 
   const start = () => run(Effect.gen(function* () {
     setAuthorizeUrl((yield* Effect.promise(() => startClaudeSignIn())).url);
+    setOpened(false);
     setCode('');
   }));
 
@@ -369,24 +373,34 @@ function ClaudeConnect({ onChanged }: { onChanged: () => void }) {
     } else setError(result.error ?? 'Claude did not connect.');
   }));
 
+  if (authorizeUrl === null) {
+    return (
+      <div className="space-y-3" data-claude-connect="start">
+        <SignInRisk>Anthropic&apos;s terms limit plan use to its own apps, so connecting is at your own risk.</SignInRisk>
+        <Button variant="primary" size="md" onClick={() => detach(start())} disabled={busy}>Sign in with Claude</Button>
+        {error && <p role="alert" className="t-meta p-danger">{error}</p>}
+      </div>
+    );
+  }
+
   return (
-    <div className="space-y-3">
-      <Notice tone="warning">
-        Signing in with a Claude subscription runs Kinu on your own Claude plan. Anthropic&apos;s terms limit subscription use to its own apps, so you connect at your own risk.
-      </Notice>
-      {authorizeUrl === null ? (
-        <Button variant="primary" size="sm" onClick={() => detach(start())} disabled={busy}>Sign in with Claude</Button>
-      ) : (
-        <Field label={<>Open <a href={authorizeUrl} target="_blank" rel="noopener noreferrer" onClick={signInWindow.open} className="p-accent-fg underline underline-offset-2">claude.ai</a>, approve Kinu, and paste what Claude shows you</>}
-          hint="The code Claude shows, or the address your browser ended on if the page did not load.">
-          <form className="flex flex-wrap gap-2" onSubmit={(event) => { event.preventDefault(); detach(finish()); }}>
-            <TextInput className="min-w-0 flex-1" value={code} onChange={(e) => setCode(e.target.value)} placeholder="Code or address" aria-label="Claude sign-in code" autoComplete="off" />
-            <Button type="submit" disabled={busy || code.trim() === ''}>{busy ? '...' : 'Connect'}</Button>
-            <Button onClick={(...args: Parameters<typeof start>) => detach(Effect.promise(async () => start(...args)))} disabled={busy}>Start again</Button>
-          </form>
-        </Field>
-      )}
-      {error && <p className="t-meta p-danger">{error}</p>}
+    <div className="space-y-3" data-claude-connect="paste">
+      <SignInSteps>
+        <SignInStep n={1} state={opened ? 'done' : 'now'} title="Sign in at Anthropic">
+          {!opened && <SignInOpen href={authorizeUrl} label="Open claude.ai" onOpen={(event) => { signInWindow.open(event); setOpened(true); }} />}
+        </SignInStep>
+        <SignInStep n={2} state={opened ? 'now' : 'next'} title="Claude shows a code with a Copy button: copy it" />
+        <SignInStep n={3} state={opened ? 'now' : 'next'} title="Paste it here">
+          {opened && (
+            <SignInPaste label="The code Claude showed" placeholder="Code#state" value={code} onChange={setCode}
+              onSubmit={() => detach(finish())} busy={busy} problem={error} action="Connect" />
+          )}
+        </SignInStep>
+      </SignInSteps>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button variant="ghost" size="sm" onClick={() => { setAuthorizeUrl(null); setError(null); }} disabled={busy}>Cancel</Button>
+        {opened && <Button variant="ghost" size="sm" onClick={() => detach(start())} disabled={busy}>Start again</Button>}
+      </div>
     </div>
   );
 }

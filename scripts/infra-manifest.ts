@@ -832,17 +832,16 @@ export const SUPPLY = new Map<string, Supply>([
   ['MCP_GOOGLE_CLIENT_ID', {
     handling: 'out-of-band',
     required: false,
-    absent: 'the Gmail preset card is not rendered at all — the preset declares no token '
-      + 'fallback, so without the registered app there is nothing to show.',
+    absent: 'the Google connection is not offered: its card is not rendered and no agent holds google.*.',
     source: 'https://console.cloud.google.com — OAuth 2.0 client with '
-      + '`<origin>/api/user/mcp/callback` among its authorized redirect URIs; then '
-      + '`wrangler secret put`. See docs/DEPLOYMENT.md.',
+      + '`<origin>/api/user/mcp/callback` among its authorized redirect URIs, and the Gmail, Calendar, Drive, Docs, '
+      + 'Sheets, Slides and People APIs enabled; then `wrangler secret put`. See docs/DEPLOYMENT.md.',
   }],
   ['MCP_GOOGLE_CLIENT_SECRET', {
     handling: 'out-of-band',
     required: false,
     absent: 'same as MCP_GOOGLE_CLIENT_ID — without both halves of the registered client '
-      + 'the Gmail card is hidden.',
+      + 'the Google connection is not offered.',
     source: 'the same Google OAuth client as MCP_GOOGLE_CLIENT_ID.',
   }],
 ]);

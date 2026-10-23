@@ -27,7 +27,7 @@ import {
   edgeResponds, namespaceBinding, routeAnswer, secretListing,
 } from './infra-cloudflare';
 import {
-  type Audit, type AuditRequest, type Phase, type Row, PHASES, audit, environmentOf, observe, observedRow, phaseFrom, recordedResetIds,
+  type Audit, type AuditRequest, type Phase, type Row, PHASES, audit, bootstrapNeed, environmentOf, observe, observedRow, phaseFrom, recordedResetIds,
   supplyDrift, supplyRows, supplySummary, unobservableDrift,
 } from './infra-verify';
 import { deleteR2Prefix, deletedByRest, restAnswer, restCall } from './cloudflare-rest';
@@ -710,6 +710,47 @@ describe('the phases differ in exactly one tolerance, and only one direction', (
     // And the gate itself is unmoved: a deployed Worker missing a namespace it
     // declares is a finding for a direct `bun run gate:infra` too.
     expect(at('full', rows).findings).toHaveLength(1);
+  });
+
+  // Staging held from 01:12 to 12:33 on 2026-10-23 for one new class (CliAuthDO): stage.sh could not pass --bootstrap,
+  // so a release introducing a class always waited for a person. A release needs it exactly when the gate's only
+  // refusals are rows the deploy itself creates; any other refusal is the gate's to report.
+  test('a release needs bootstrap when every refusal is a resource the deploy creates, and only then', () => {
+    const gatewaySecretMissing = row('r2.x', 'absent', true);
+    const unreadable = row('durable-object.kinu:Other', 'unknown', true, 'wrangler-deploy');
+    const served = { resources: new Set(['worker.kinu']), classes: ['OrchestratorAgent'] };
+    const classes = ['OrchestratorAgent', 'ControlPlaneDO'];
+    const need = (rows: readonly Row[], baseline: Parameters<typeof bootstrapNeed>[1] = served, candidate = classes) => bootstrapNeed({ infrastructure, rows, supplied: [], unreadFields: [] }, baseline, candidate);
+
+    expect([
+      need(clean),
+      need([...clean, deployedWorker, absentNamespace]),
+      need([...clean, deployedWorker, absentNamespace, gatewaySecretMissing]).kind,
+      need([...clean, deployedWorker, absentNamespace, unreadable]).kind,
+    ]).toEqual([
+      { kind: 'none', rows: [] },
+      { kind: 'introduces', rows: ['durable-object.kinu:ControlPlaneDO'] },
+      'refused',
+      'refused',
+    ]);
+  });
+
+  // The review of 2026-10-23: deploy ownership is not newness. A class the served build already declares is drift a
+  // person repairs; an unread baseline is never an empty one; and a release that also tombstones a class deletes that
+  // namespace's rows, which no automatic path may do.
+  test('a release that would need bootstrap is held when its resource is not new, its baseline unknown, or it retires a class', () => {
+    const rows = [...clean, deployedWorker, absentNamespace];
+    const need = (baseline: Parameters<typeof bootstrapNeed>[1], candidate: readonly string[]) => bootstrapNeed({ infrastructure, rows, supplied: [], unreadFields: [] }, baseline, candidate);
+
+    expect([
+      need({ resources: new Set(['durable-object.kinu:ControlPlaneDO']), classes: ['OrchestratorAgent', 'ControlPlaneDO'] }, ['OrchestratorAgent', 'ControlPlaneDO']).held,
+      need(undefined, ['OrchestratorAgent', 'ControlPlaneDO']).held,
+      need({ resources: new Set(), classes: ['OrchestratorAgent', 'Retired'] }, ['OrchestratorAgent', 'ControlPlaneDO']).held,
+    ]).toEqual([
+      'the served build already declares durable-object.kinu:ControlPlaneDO',
+      'the build the deployment serves could not be read',
+      'it retires Retired, deleting every row of each',
+    ]);
   });
 
   test('post-deploy tolerates nothing at all, not even the Worker', () => {

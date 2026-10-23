@@ -14,6 +14,10 @@ export const CLAUDE_OAUTH_CALLBACK_PORT = 54545;
 
 const CLAUDE_OAUTH_REDIRECT_URI = `http://localhost:${String(CLAUDE_OAUTH_CALLBACK_PORT)}/callback`;
 
+/** Anthropic's own page, which shows the code to paste back: where a sign-in no local listener catches returns (the web's).
+ *  Proven 2026-10-23: the owner signed in through it and the code exchanged, from this client. */
+const CLAUDE_CODE_PAGE_REDIRECT = 'https://platform.claude.com/oauth/code/callback';
+
 const AUTHORIZE_URL = 'https://claude.ai/oauth/authorize';
 
 const TOKEN_URL = 'https://api.anthropic.com/v1/oauth/token';
@@ -38,16 +42,20 @@ export interface ClaudeSignIn {
   readonly url: string;
   readonly state: string;
   readonly verifier: string;
+  /** Where Claude returns the browser, which the exchange names again: the CLI's local listener, or Anthropic's code page. */
+  readonly redirectUri: string;
 }
 
-export async function startClaudeSignIn(): Promise<ClaudeSignIn> {
+/** `returnTo`: the CLI's local listener catches the code, or Anthropic's page shows it for the person to paste (the web). */
+export async function startClaudeSignIn(returnTo: 'local' | 'code-page' = 'local'): Promise<ClaudeSignIn> {
+  const redirectUri = returnTo === 'local' ? CLAUDE_OAUTH_REDIRECT_URI : CLAUDE_CODE_PAGE_REDIRECT;
   const pkce = await createPkcePair();
   const state = Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, '0')).join('');
 
   const params = new URLSearchParams({
     client_id: CLIENT_ID,
     response_type: 'code',
-    redirect_uri: CLAUDE_OAUTH_REDIRECT_URI,
+    redirect_uri: redirectUri,
     scope: SCOPES.join(' '),
     code_challenge: pkce.challenge,
     code_challenge_method: 'S256',
@@ -55,7 +63,7 @@ export async function startClaudeSignIn(): Promise<ClaudeSignIn> {
     code: 'true',
   });
 
-  return { url: `${AUTHORIZE_URL}?${params.toString()}`, state, verifier: pkce.verifier };
+  return { url: `${AUTHORIZE_URL}?${params.toString()}`, state, verifier: pkce.verifier, redirectUri };
 }
 
 export function claudeCodeFrom(returned: string, state: string): string {
@@ -151,7 +159,7 @@ export function createClaudeOAuthClient(fetchFn: typeof fetch = fetch): ClaudeOA
         grant_type: 'authorization_code',
         client_id: CLIENT_ID,
         code,
-        redirect_uri: CLAUDE_OAUTH_REDIRECT_URI,
+        redirect_uri: signIn.redirectUri,
         code_verifier: signIn.verifier,
         state: signIn.state,
       }, {}), (body) => credentialFrom(body, null)));

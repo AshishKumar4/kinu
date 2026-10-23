@@ -1232,8 +1232,10 @@ a facet of its own) and D13's "every agent's advisor in core `ActorAdvisor`".
   one's model call and reads aborted, those owed dropped), and a stopped
   turn's review says nothing. The session's end joins reviews still running
   (`track`, joined by `settleTracked`, as other post-turn work is); in an
-  agent's facet a review after its turn runs while the isolate lives, its
-  reads refused (the turn's fence) and its charge relayed as made. A failed
+  agent's facet a review after its turn runs on, its reads refused (the
+  turn's fence) and its charge relayed as made, and the agent's quiet
+  (`idle`, which its retirement and its workspace's deletion wait on) joins
+  it as the CLI's session end does (2026-10-23). A failed
   turn is ended for its advisor by the execution's cleanup. A hired agent's
   blocker also reaches its hirer. A note
   is said, then recorded: one said and not recorded only misses the dedupe
@@ -1312,7 +1314,31 @@ a facet of its own) and D13's "every agent's advisor in core `ActorAdvisor`".
   advisor's code that holds the event loop for 100 ms or more, repeatedly,
   can reset its whole workspace; the advisor's own work per call (rendering
   and redacting at most a 48k window) is far under that, and its waits are
-  model calls. Not measured: the longest event-loop turn Kinu's facets take.
+  model calls. Measured since (2026-10-23, the facet loop gate,
+  `bun scripts/worker-heap.ts --loop-turns`: the heap gate's workloads plus a
+  compacted long turn and 40 advised steps of 50 kB results, every isolate
+  under a 1 ms CPU profiler, armada AMD EPYC hosts): a chat's seed read and
+  decoded a page's messages in one turn, 157-305 ms in the 450-step screenshot
+  turn's agent, and that turn's figures fold took 80-142 ms in one SQL read,
+  most of it walking tool results' overflow pages to reach each event's `ts`.
+  Four messages a slice put a production turn at 404 statements (382 before),
+  and a slice bounded in SQL by a running sum took 1.8-7.2 s; the messages are
+  now read 512 kB a slice, planned from each row's header size
+  (`octet_length`), the fold 200 events a slice of the types it adds, with a
+  timer yield between slices: 378 statements, and no agent's isolate held its
+  loop 100 ms in 4 runs of 5 on 984c7e08d (longest 52-74 ms: the screenshot
+  turn's message reads and decoding, the long turn's prompt check in the AI SDK,
+  `standardizePrompt`, zod over the whole prompt each call, growing with the
+  history); the fifth ended on a driver request the harness's fetch timed out.
+  The gate is a script, not yet a tier row, until that timeout is settled.
+  A host that pauses the thread 5 ms mid-turn splits a turn as a wait does,
+  so the driver runs a synchronous control turn every lap on workerd's one
+  thread, and a run that read a pause inside one, or no control turn, is
+  unreadable (exit 2), never green. On staging, 7 days to
+  2026-10-23 (`agent.isolate_invocation`, sampled 1 in 10), agent invocations
+  of 100 ms of CPU or more were 31% of `step`, 3% of `activePlanReview` and 1%
+  of `seed`; an invocation's CPU includes an isolate's start, so it bounds a
+  turn from above and names none.
 - Not measured: review latency on a real provider. The step loop never waits
   for a review, and no turn waits for its advisor.
 
@@ -2273,9 +2299,16 @@ Later note (2026-10-23, ledger 1018-xar): the owner chose (2026-10-19T19:44:35Z)
 that a share's commands write "your project too, as today". A workspace made
 since then has its project tree (`/home/main`) setgid to the project group
 (1001), sticky, with a group-writable default ACL, set by the boot that makes
-main's `.kinu` (`provisionProjectHome`); the viewer and the workspace agent's
-session carry that group. Sticky, because write on the root would otherwise let
-the viewer remove or rename `SOUL.md` and `.kinu`. `.kinu`, `SOUL.md`, every
+main's `.kinu` (`provisionProjectHome`), before it makes `.kinu`, so a boot that
+dies between the two is finished by the next; the viewer and the workspace
+agent's session carry that group. Sticky, because write on the root would
+otherwise let the viewer remove or rename `SOUL.md` and `.kinu`. The viewer is a
+confined principal, so nothing it makes grants others write: Nimbus refuses such
+a chmod, and Kinu's Nimbus patch (ask 74) refuses such a default ACL and keeps
+other-write off what a confined principal creates, whatever its umask, so a
+directory made in its `/tmp` and moved in grants none either. The workspace's
+other agents read the project and write none of it, but for `SOUL.md`, which
+every agent writes through the workspace group (as before). `.kinu`, `SOUL.md`, every
 other home and `/tmp` stay as they were, and an older workspace, which already
 has its `.kinu`, keeps its tree (one whose owner deletes `.kinu` is shared at
 its next boot, as a new one).

@@ -36,7 +36,7 @@ import { SHELL } from '../operations/shell';
 const PROMPT_SECTION_MAX_BYTES = 4800;
 
 /** An edit's reach: one artifact, a bounded change. */
-const MAX_EDIT_CHARS = 600;
+export const MAX_EDIT_CHARS = 600;
 
 export type ArtifactStatus = (typeof ARTIFACT_STATUSES)[number];
 
@@ -225,6 +225,7 @@ export function artifactVersion(sql: SqlExecutor, actor: ActorHandle, artifactId
  * themselves alone, where the span from the first difference to the last counted the unchanged text between them
  * (the OMP pilot's dreams, 2026-10-21: a 296-character change measured 1,421); scattered edits still add up.
  */
+/** The characters an edit changes, as the size gate counts them: the words it removes and the words it adds. */
 function changedChars(before: string, after: string): number {
   const { removed, added } = changedRows(wordsOf(before), wordsOf(after));
 
@@ -284,30 +285,36 @@ function toolRefusal(part: 'description' | 'schema', before: string, after: stri
  * The static pre-live checks (§4): the edit's size, the artifact's own rule, and the misevolution gate. A veto is
  * recorded where every misevolution veto is.
  */
+/** Why the fixed gates refuse an edit; `oversized` when its size alone did, which its author can bring within the limit. */
+export interface EditRefusal {
+  readonly reason: string;
+  readonly oversized?: true;
+}
+
 export function artifactEditRefusal(sql: SqlExecutor, actor: ActorHandle, input: {
   readonly artifactId: string;
   readonly before: string;
   readonly after: string;
-}): string | null {
+}): EditRefusal | null {
   const parsed = parseArtifactId(input.artifactId);
 
-  if (parsed === null || bundledArtifact(input.artifactId) === null) return `${input.artifactId} is no evolvable artifact`;
+  if (parsed === null || bundledArtifact(input.artifactId) === null) return { reason: `${input.artifactId} is no evolvable artifact` };
 
-  if (input.after === input.before) return 'the edit changes nothing';
+  if (input.after === input.before) return { reason: 'the edit changes nothing' };
   const changed = changedChars(input.before, input.after);
 
-  if (changed > MAX_EDIT_CHARS) return `the edit changes ${String(changed)} characters; at most ${String(MAX_EDIT_CHARS)}`;
+  if (changed > MAX_EDIT_CHARS) return { reason: `the edit changes ${String(changed)} characters; at most ${String(MAX_EDIT_CHARS)}`, oversized: true };
 
   const own = parsed.kind === 'section' ? sectionRefusal(parsed.id, input.before, input.after) : toolRefusal(parsed.part, input.before, input.after);
 
-  if (own !== null) return own;
+  if (own !== null) return { reason: own };
   const misevolution = checkMisevolutionForSurface({ prose: input.after }, 'scaffold');
 
   if (misevolution.ok) return null;
 
   recordMisevolutionVeto(sql, actor, { surface: 'scaffold', violation: misevolution, detail: input.artifactId });
 
-  return `misevolution veto (${misevolution.criterionId}): ${misevolution.reason}`;
+  return { reason: `misevolution veto (${misevolution.criterionId}): ${misevolution.reason}` };
 }
 
 /**

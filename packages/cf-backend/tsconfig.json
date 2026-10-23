@@ -56,6 +56,7 @@
     "tests/workerd/relay-cut-agent.ts",
     "tests/workerd/two-turn-probe-agent.ts",
     "tests/workerd/heap-plant-agent.ts",
+    "tests/workerd/loop-turn-agent.ts",
     "tests/workerd/slate-egress-probe.ts"
   ]
 }

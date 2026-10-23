@@ -70,7 +70,9 @@
  * exits 0 is read as a pass by every human and every CI badge that sees it.
  */
 
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import * as v from 'valibot';
 import { declaredSignInProviders } from '@kinu.run/core';
 import { assertMeasured, blocked, finding } from './gate-ratchet';
@@ -82,10 +84,12 @@ import {
 } from './infra-cloudflare';
 import {
   CONTROL_PLANE_ACCESS_PATHS, type InfraEnvironment, type InfraWorker, type Infrastructure, type Resource, SUPPLY,
-  INFRA_ENVIRONMENTS, UNCAPTURED, UNOBSERVABLE, WRANGLER_CONFIG, claimedHosts, deriveInfrastructure, envFields,
-  environmentFrom, readSites, requiredIn, supplyCensus, vectorizeGeometry,
+  INFRA_ENVIRONMENTS, UNCAPTURED, UNOBSERVABLE, WRANGLER_CONFIG, claimedHosts, deployedConfig, deploymentOf, deriveInfrastructure, envFields,
+  environmentFrom, liveClasses, readSites, requiredIn, supplyCensus, vectorizeGeometry,
 } from './infra-manifest';
+import { REPO_ROOT as REPO } from './repo-root';
 import { ResetSchema, resetResourceIds, servingOf } from './reset';
+import { servedHealth } from './served-health';
 import { isProductSource, readMatching } from './sources';
 
 const GATE = 'infra';
@@ -576,6 +580,51 @@ function deferral(entry: Row, phase: Phase, workerDeployed: boolean, resetIds: r
     : undefined;
 }
 
+/** What a release's deploy needs of the gate, and the rows (or the reason) that make it so. */
+export interface BootstrapNeed {
+  readonly kind: 'none' | 'introduces' | 'refused';
+  readonly rows: readonly string[];
+  /** Why a release that would need bootstrap is held for a person. */
+  readonly held?: string;
+}
+
+/** The build a deployment serves, as its manifest declares it: the baseline a release's additions are read against. */
+export interface ServedBaseline {
+  /** Every resource id the served build's manifest declares for this environment. */
+  readonly resources: ReadonlySet<string>;
+  /** The classes it exports live: one the candidate tombstones loses its namespace and every row in it. */
+  readonly classes: readonly string[];
+}
+
+/**
+ * Whether a release's deploy needs `--bootstrap` (stage.sh, `--introduces`): `none` when the gate passes as it is;
+ * `introduces` when its every refusal is a resource the deploy itself creates (a class new to `exports`, a new container
+ * or route), the bootstrap phase refuses nothing, and the build the deployment serves declares none of them, naming
+ * them; `refused` otherwise. A resource the served build already declares is drift a person repairs, an unknown baseline
+ * is never read as an empty one, and a release that tombstones a class the served build exports deletes that namespace's
+ * rows, which stays manual (the owner, 2026-10-21) however the gate reads. Bootstrap and the gate differ by one tolerance
+ * (`deferral`), so this asks both and adds none; the post-deploy run still rejects a row the upload did not create.
+ */
+export function bootstrapNeed(
+  request: Omit<AuditRequest, 'phase'>, served: ServedBaseline | undefined, candidateClasses: readonly string[],
+): BootstrapNeed {
+  if (audit({ ...request, phase: 'full' }).findings.length === 0) return { kind: 'none', rows: [] };
+
+  if (audit({ ...request, phase: 'bootstrap' }).findings.length > 0) return { kind: 'refused', rows: [], held: 'the bootstrap phase refuses too' };
+
+  const rows = request.rows.filter((entry) => entry.verdict === 'absent' && entry.required && deployOwned(entry.origin)).map((entry) => entry.id);
+
+  if (served === undefined) return { kind: 'refused', rows, held: 'the build the deployment serves could not be read' };
+  const retired = served.classes.filter((name) => !candidateClasses.includes(name));
+
+  if (retired.length > 0) return { kind: 'refused', rows, held: `it retires ${retired.join(', ')}, deleting every row of each` };
+  const drifted = rows.filter((id) => served.resources.has(id));
+
+  if (drifted.length > 0) return { kind: 'refused', rows, held: `the served build already declares ${drifted.join(', ')}` };
+
+  return { kind: 'introduces', rows };
+}
+
 /** Pure, so the self-test drives every branch without a Cloudflare account. */
 export function audit(request: AuditRequest): Audit {
   const { infrastructure, rows, supplied, unreadFields, phase = 'full', resetIds = [] } = request;
@@ -764,6 +813,9 @@ const PHASE_FLAG = '--phase=';
 
 const PHASE_ENV = 'KINU_INFRA_PHASE';
 
+/** Asks not for a verdict but what a release's deploy needs ({@link bootstrapNeed}). */
+const INTRODUCES_FLAG = '--introduces';
+
 const ENVIRONMENT_ENV = 'KINU_INFRA_ENVIRONMENT';
 
 /** The file holding the reset record a `--reset` deploy carries: empty when the Worker was never reset. */
@@ -787,6 +839,22 @@ export function recordedResetIds(file: string, infrastructure: Infrastructure, l
     live.state === 'deployed' ? servingOf(live.versionId, live.bindings) : undefined,
     infrastructure.resources,
   );
+}
+
+/** The manifest of the build `environment` serves (`/api/health`, then that commit's wrangler.jsonc), or undefined when
+ *  it serves no build stamp or this repo lacks the commit: never an empty baseline. A health read that fails throws. */
+async function servedBaseline(environment: InfraEnvironment): Promise<ServedBaseline | undefined> {
+  const sha = (await servedHealth(deploymentOf(environment).origin)).build?.sha;
+
+  if (sha === undefined) return undefined;
+  const shown = Bun.spawnSync(['git', 'show', `${sha}:${WRANGLER_CONFIG}`], { cwd: REPO });
+
+  if (shown.exitCode !== 0) return undefined;
+  const config = join(mkdtempSync(join(tmpdir(), 'kinu-served-')), 'wrangler.jsonc');
+
+  writeFileSync(config, shown.stdout);
+
+  return { resources: new Set(deriveInfrastructure(environment, config).resources.map((resource) => resource.id)), classes: liveClasses(deployedConfig(environment, config).exports) };
 }
 
 /**
@@ -838,7 +906,7 @@ async function main(): Promise<number> {
 
   if (phase === undefined || environment === undefined) {
     console.error(`${GATE}: usage: bun scripts/infra-verify.ts [${INFRA_ENVIRONMENTS.join('|')}] `
-      + `[${PHASE_FLAG}${PHASES.join('|')}]`);
+      + `[${PHASE_FLAG}${PHASES.join('|')} | ${INTRODUCES_FLAG}]`);
 
     return 2;
   }
@@ -876,6 +944,16 @@ async function main(): Promise<number> {
 
   const sources = readMatching(isProductSource);
   const unread = [...SUPPLY.keys()].filter((name) => readSites(name, sources).length === 0);
+
+  // What a release needs (stage.sh): exit 0 for nothing, 4 for --bootstrap, 1 for a refusal the gate itself reports.
+  if (argv.includes(INTRODUCES_FLAG)) {
+    const need = bootstrapNeed({ infrastructure, rows, supplied, unreadFields: unread, resetIds }, await servedBaseline(environment), liveClasses(deployedConfig(environment).exports));
+
+    console.log(`${label}: ${need.kind}${need.rows.length === 0 ? '' : `: ${need.rows.join(', ')}`}${need.held === undefined ? '' : ` (held: ${need.held})`}`);
+
+    return { none: 0, introduces: 4, refused: 1 }[need.kind];
+  }
+
   const verdict = audit({ infrastructure, rows, supplied, unreadFields: unread, phase, resetIds });
 
   const fields = envFields();

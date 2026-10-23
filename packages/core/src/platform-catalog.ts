@@ -1493,10 +1493,11 @@ export const PLATFORM_CATALOG = {
       + 'do.isolate.oom also says "was reset" and RECURS, so a discriminator that matched on '
       + '"reset" alone would loop forever on a real OOM. Recorded as observed rather than '
       + 'probed: they came out of production, not a designed experiment. '
-      + 'The first string is NOT always a deploy: do.storage.write_await_reset throws the same words '
-      + 'with no deploy, and it recurs as long as the work keeps its shape, so re-attempting the same '
-      + 'work loops. Its message alone cannot tell the two apart.',
-    conflictsWith: ['do.storage.write_await_reset'],
+      + 'The first string is NOT always a deploy: do.storage.write_await_reset and '
+      + 'do.facet.cpu_turns_reset_parent throw the same words with no deploy, and they recur as long as '
+      + 'the work keeps its shape, so re-attempting the same work loops. Its message alone cannot tell '
+      + 'them apart.',
+    conflictsWith: ['do.storage.write_await_reset', 'do.facet.cpu_turns_reset_parent'],
   },
 
   'do.storage.write_await_reset': {
@@ -1655,7 +1656,41 @@ export const PLATFORM_CATALOG = {
       'The good half of the facet trade holds: one facet\'s reset leaves its parent and its siblings alone, so a fan-out '
       + 'of agents does not share one budget. The ceiling is not 208 MiB for Kinu: that was Nimbus\'s plain facets; a '
       + 'loaded worker\'s facet is reset near the published 128 MB. Plan on about 125 MB per agent isolate, and on agents '
-      + 'sharing an isolate sharing it. Read together with do.facet.cpu_shared, which is the price.',
+      + 'sharing an isolate sharing it. Read together with do.facet.cpu_shared, which is the price, and with '
+      + 'do.facet.cpu_turns_reset_parent, where the trade does not hold.',
+  },
+
+  'do.facet.cpu_turns_reset_parent': {
+    subject: 'A Worker Loader facet whose event-loop turns each take 0.1-0.4 s of CPU resets its parent object and every sibling',
+    limit: { value: 100, unit: 'ms' },
+    origin: 'platform',
+    bounds: 'duration',
+    evidence: 'proven-by-probe',
+    provenance: '/mnt/local/kinu/tmp/advisor-session/MEASUREMENTS.md §7',
+    date: '2026-10-23',
+    trigger: 'a loader facet running about 1-3 s of CPU in event-loop turns of 0.1 s or more each, a wait between them',
+    onBreach:
+      'the facet, its parent Durable Object (a new instance in the same isolate) and every sibling facet are reset; '
+      + 'calls through stubs held across it reject in the words of a code deploy, though none happened',
+    observable: [
+      { context: 'a facet\'s 0.42 s CPU turns, no deploy', message: 'Durable Object reset because its code was updated.' },
+    ],
+    firstPartySignal: true,
+    measurements: [
+      { scenario: '0.42 s turns, in-call or detached, with or without writes: earliest reset, after (turns); 1 of 15 runs lived', value: 2, unit: 'count' },
+      { scenario: '0.1 s turns x 80: reset 1 of 2 runs, after (turns)', value: 16, unit: 'count' },
+      { scenario: '40 ms turns x 100, about 4 s of CPU: no reset, 2 of 2 (turn)', value: 40, unit: 'ms' },
+      { scenario: 'the same 0.42 s turns in a plain object or in the parent: no reset, 4 of 4 (turn)', value: 420, unit: 'ms' },
+    ],
+    notes:
+      'A memory overrun or a 30 s blocking loop ends the facet alone (do.facet.memory_independent); repeated CPU turns '
+      + 'take the parent and its other facets too, and another parent object is never touched. Every Kinu agent runs in '
+      + 'such a facet and its parent is the workspace, so one agent\'s long turns reset the workspace and every agent '
+      + 'in it. The trigger past turn length is unknown: not a total CPU budget (0.42 s turns failed at 1.3 s and once '
+      + 'passed 8.4 s). The limit is the shortest turn seen reset; the facet loop gate holds agents under it '
+      + '(scripts/worker-heap/loop-turns.ts). A minimal repro without Kinu code (2026-10-23, 8 of 9 runs reset) is in '
+      + 'the "Minimal repro" of /mnt/local/kinu/tmp/upstream/facet-cpu-slices-reset-parent.md.',
+    conflictsWith: ['do.reset.transient'],
   },
 
   'do.facet.cpu_shared': {

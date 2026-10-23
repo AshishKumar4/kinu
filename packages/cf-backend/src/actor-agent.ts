@@ -20,7 +20,7 @@ import {
   isSubagentOrigin, WORKSPACE_ROOT, PLATFORM_CATALOG, ProgramsInFlight, type OwedIntent, type OwedOwnerIntent, cardWords,
   specProvider, WORKERS_AI_PROVIDER_ID,
 } from '@kinu.run/core';
-import type { EnqueueTurnResult, MailDeps, OwnerWaitsHost, PanelAgent, ProgrammaticTurn, RecordedTurn, SendState, SubagentInspectionRequest, SubagentInspectionResult } from '@kinu.run/core';
+import type { EnqueueTurnResult, GoogleDeps, MailDeps, OwnerWaitsHost, PanelAgent, ProgrammaticTurn, RecordedTurn, SendState, SubagentInspectionRequest, SubagentInspectionResult } from '@kinu.run/core';
 import type { SubagentActivityEvent } from '@kinu.run/core';
 import type { Fact } from '@kinu.run/core';
 import type { SubagentView } from '@kinu.run/core/protocol';
@@ -78,7 +78,7 @@ import {
   // (see turn-failure.ts).
   type AgentOrchestrator, type AgentOrchestratorDeps, actorTerminalEffects, DynamicContextLedger, actorPolicy, actorReach, type ActorReach, type BackendHost,
   EvolutionLanes, drainPendingEvents, standingFileLedger, turnLedgers, type TurnLedgers, type BoundActor, type SeatedActor, type DynamicDelegate,
-  builtinStoreDeps, serveStores, type BuiltinStoreInputs, type ServedStores,
+  builtinStores, type BuiltinStoreInputs, type ServedStores,
   type ComposedRequest,
   type AgentsToolDeps,
   type AgentsSwarmDeps,
@@ -230,7 +230,7 @@ type ActorJobSeams = Pick<BackgroundJobRunnerDeps,
  * given (do.alarm.wall_ms), so the platform never ends the handler mid-wait. A handler ended at its wall resets the
  * object and closes every socket (warm-forge-4d6acc02, 2026-09-25).
  */
-const ALARM_PROGRAM_WAIT_MS = Math.floor(PLATFORM_CATALOG['do.alarm.wall_ms'].limit.value * 9 / 10);
+export const ALARM_PROGRAM_WAIT_MS = Math.floor(PLATFORM_CATALOG['do.alarm.wall_ms'].limit.value * 9 / 10);
 
 
 
@@ -415,6 +415,22 @@ const SIZE_REPORT_MS = 10 * 60_000;
 
 /** Set once a program of this workspace has run on its node (`node-program.ts`): its turns then start node as they open. */
 const NODE_PROGRAMS_RAN_KEY = 'kinu:node-programs-ran';
+
+/**
+ * Why a slate's call to `server`'s `tool` found nothing, in words the person can act on: a fork reaches its forker's own
+ * server of that name, never the original owner's, so a server this account has not connected says to connect it.
+ */
+function mcpMissing(offered: McpToolSurface, server: string, tool: string): string {
+  const unavailable = offered.unavailable.find((row) => row.server === server);
+
+  if (unavailable !== undefined) return `The MCP server ${server} is not available: ${unavailable.reason}`;
+
+  if (!offered.descriptors.some((d) => d.serverName === server)) {
+    return `No MCP server named ${server} is connected to this account. Connect one in Settings > MCP servers, then run this again.`;
+  }
+
+  return `${server} offers no tool ${tool} to this actor`;
+}
 
 export abstract class ActorAgent extends Agent<Env> {
   // Actor profile: these members are the whole difference between actor kinds.
@@ -1590,7 +1606,7 @@ export abstract class ActorAgent extends Agent<Env> {
       surface: (task, context, callScope) => {
         // One set for the run: each request's tools project it, and so do its machines.
         const ledgers = this.ownLedgers();
-        const stores = serveStores(builtinStoreDeps(this.ownStoreInputs(ledgers)));
+        const stores = builtinStores(this.ownStoreInputs(ledgers));
 
         return createScaffoldCandidateSurface({
           ...this.scaffoldCandidateModel(),
@@ -2615,7 +2631,7 @@ export abstract class ActorAgent extends Agent<Env> {
           // A server is named as the actor's programs name it, so a fork reaches its forker's server of that name.
           const descriptor = offered.descriptors.find((d) => d.serverName === route.server && d.name === route.tool);
 
-          if (descriptor === undefined) return yield* new KinuError('missing', `${route.server} offers no tool ${route.tool} to this actor`);
+          if (descriptor === undefined) return yield* new KinuError('missing', mcpMissing(offered, route.server, route.tool));
           // Enforce `readOnly` grants here so a read grant cannot write through a non-read-only tool.
 
           if (route.readOnly === true && descriptor.readOnly !== true) {
@@ -2795,7 +2811,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * turn's Plan. Its reach is the in-flight turn's profile while one runs (not the cached one, which outlives its turn),
    * else that same resolution over native, codemode and the given MCP tools.
    */
-  private async slateAuthority(
+  protected async slateAuthority(
     requested: WorkMode, providers: readonly CodemodeProvider[], mcpToolKeys: readonly string[] = [],
   ): Promise<SlateAuthority> {
     const { profile, inputs } = await this.actorProfile({
@@ -2846,6 +2862,7 @@ export abstract class ActorAgent extends Agent<Env> {
           // Its own turn's programs and an outside caller reach what waits on its owner from its work, as it does in eval.
           ownerWaits: this.hireOwnerWaits(hosted),
           mail: this.mailFor(hosted.handle.actorId, hosted.record.name),
+          google: this.googleFor(hosted.handle.actorId, hosted.record.name),
         });
 
         const providers = actorNamespaces(surface.actor, SURFACE_POLICY.operations);
@@ -2916,7 +2933,7 @@ export abstract class ActorAgent extends Agent<Env> {
         search: as === 'owner' ? this.ownedModelServices.getWebSearchProvider() : this.ownedModelServices.getViewerWebSearchProvider(), files: this.rt.storage,
         browser: { sessions: this.browserSessionsFor(this.rt.actor.actorId), prelude: BROWSER_PRELUDE },
       },
-      stores: stores ?? serveStores(builtinStoreDeps(this.ownStoreInputs(this.ownLedgers()))),
+      stores: stores ?? builtinStores(this.ownStoreInputs(this.ownLedgers())),
       // Plan is decided per table scope at invocation.
       db: this.stores.appData,
       agents: () => this.ownAgentsToolDeps(mode),
@@ -2924,11 +2941,17 @@ export abstract class ActorAgent extends Agent<Env> {
       // The workspace's agent reads what waits on its owner through its own `agent.*`.
       ownerWaits: null,
       mail: this.mailFor(this.rt.actor.actorId, 'main'),
+      google: this.googleFor(this.rt.actor.actorId, 'main'),
     };
   }
 
   /** `mail.*` for one of this workspace's agents over its owner's Mailbox (docs/MAIL.md §3); null where there is no mail. */
   protected mailFor(_actorId: string, _name: string): MailDeps | null {
+    return null;
+  }
+
+  /** `google.*` for one of this workspace's agents through its owner's Google connection; null where there is none. */
+  protected googleFor(_actorId: string, _name: string): GoogleDeps | null {
     return null;
   }
 
@@ -3363,7 +3386,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * own turn runs, never the workspace actor's (pinned by `tests/unit-slate-composition.test.ts`).
    */
   protected hostedActorSurface(
-    actor: SeatedActor, reach: { readonly account: boolean; readonly ownerWaits: OwnerWaitsHost | null; readonly mail?: MailDeps | null },
+    actor: SeatedActor, reach: { readonly account: boolean; readonly ownerWaits: OwnerWaitsHost | null; readonly mail?: MailDeps | null; readonly google?: GoogleDeps | null },
   ) {
     // `ActorHostDeps.runtimeFor` is `createCFRuntime` on this backend; core only narrows the type.
     const { runtime } = actor;
@@ -3378,8 +3401,8 @@ export abstract class ActorAgent extends Agent<Env> {
     const inputs = this.hostedStoreInputs({ ...actor, runtime }, { files: scoped?.files ?? standingFileLedger(runtime), context: (scoped ?? turnLedgers()).context }, reach.account);
     const webSearch = this.ownedModelServices.getWebSearchProvider();
     // Served once: the slate's `tools.*` and its named namespaces run the same operations.
-    const stores = serveStores(builtinStoreDeps(inputs));
-    const surface = this.hostedSurface({ ...actor, runtime }, { search: webSearch, stores, ownerWaits: reach.ownerWaits, mail: reach.mail ?? null });
+    const stores = builtinStores(inputs);
+    const surface = this.hostedSurface({ ...actor, runtime }, { search: webSearch, stores, ownerWaits: reach.ownerWaits, mail: reach.mail ?? null, google: reach.google ?? null });
 
     return { actor: surface, native: buildBuiltinTools({ ...inputs, webSearch }, stores) };
   }
@@ -3387,7 +3410,10 @@ export abstract class ActorAgent extends Agent<Env> {
   /** A hosted actor's program surface over `held.stores`, with this workspace's browser for it. */
   protected hostedSurface(
     actor: CFSeat,
-    held: { readonly search: WebSearchProvider; readonly stores: ServedStores; readonly ownerWaits: OwnerWaitsHost | null; readonly mail: MailDeps | null; readonly agents?: () => AgentsToolDeps },
+    held: {
+      readonly search: WebSearchProvider; readonly stores: ServedStores; readonly ownerWaits: OwnerWaitsHost | null; readonly mail: MailDeps | null;
+      readonly google: GoogleDeps | null; readonly agents?: () => AgentsToolDeps;
+    },
   ): SurfaceActor {
     const { search, ...reached } = held;
 

@@ -9,14 +9,14 @@ import { Link, useParams } from "react-router-dom";
 import { Effect } from "effect";
 import { Loader } from "@/components/ui/Loader";
 import { ClockIcon, HandPalmIcon, HouseIcon, KeyIcon, LayoutIcon, RobotIcon, StarIcon, AppWindowIcon, DownloadSimpleIcon } from "@phosphor-icons/react";
-import { APP_ROUTES, mcpPresetById, PERSONAL_ASSISTANT_ID } from "@kinu.run/core";
+import { APP_ROUTES, PERSONAL_ASSISTANT_ID } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { Status } from "@/components/ui/Status";
 import { BrandMark } from "@/components/ui/BrandMark";
-import { presetBrand } from "@/components/plugins/McpPresetCards";
+import { connectionTitle, presetBrand } from "@/components/plugins/McpPresetCards";
 import { CATEGORY_WORDS } from "@/components/sharing/words";
-import { KindBadge, Maker, kinuBlueprintPicture } from "@/components/explore/ExploreCard";
+import { KindBadge, Maker, KinuBlueprintPicture } from "@/components/explore/ExploreCard";
 import { InstallDialog } from "@/components/explore/InstallDialog";
 import { useConnectedPreset } from "@/hooks/use-mcp-servers";
 import { readBlueprint, starBlueprint, type BlueprintPage, type ExploreNeed, type WorkspaceCard } from "@/lib/explore-api";
@@ -56,10 +56,11 @@ function Row({ icon, title, meta, children }: { icon: ReactNode; title: string; 
 }
 
 
-/** A need, and whether you already have it: a connection is yours once its server is connected in Plugins. */
-function NeedRow({ need, connected }: { need: ExploreNeed; connected: boolean }) {
+/** A need, and whether you already have it: a connection is yours once its server is connected in Plugins; null where
+ *  that could not be read. */
+function NeedRow({ need, connected }: { need: ExploreNeed; connected: boolean | null }) {
   const brand = presetBrand(need.connection);
-  const name = need.connection === null ? (need.secret ?? "A secret") : (mcpPresetById(need.connection)?.title ?? need.connection);
+  const name = need.connection === null ? (need.secret ?? "A secret") : connectionTitle(need.connection);
 
   return (
     <li className="flex items-start gap-3 px-4 py-3" data-blueprint-need={need.connection ?? need.secret}>
@@ -73,7 +74,9 @@ function NeedRow({ need, connected }: { need: ExploreNeed; connected: boolean })
         </span>
         <span className="t-meta block p-text-2">{need.why}</span>
       </span>
-      {connected ? <Status tone="success">Connected</Status> : <span className="t-meta shrink-0 p-text-3">At install</span>}
+      {connected === true && <Status tone="success">Connected</Status>}
+      {connected === false && <span className="t-meta shrink-0 p-text-3">At install</span>}
+      {connected === null && <span className="t-meta shrink-0 p-text-3" data-need-unread>Not checked yet</span>}
     </li>
   );
 }
@@ -139,11 +142,11 @@ function AccountBlueprint({ page }: { page: BlueprintPage }) {
   return <Blueprint page={page} connected={useConnectedPreset()} />;
 }
 
-function Blueprint({ page, connected }: { page: BlueprintPage; connected: (preset: string) => boolean }) {
+function Blueprint({ page, connected }: { page: BlueprintPage; connected: (preset: string) => boolean | null }) {
   const signedIn = useGallerySignedIn();
   const [installing, setInstalling] = useState(signedIn && new URLSearchParams(location.search).has("install"));
   const [soul, setSoul] = useState(false);
-  const has = (preset: string | null) => preset !== null && connected(preset);
+  const has = (preset: string | null): boolean | null => (preset === null ? false : connected(preset));
   const { workspace, inside } = page;
 
   return (
@@ -151,7 +154,7 @@ function Blueprint({ page, connected }: { page: BlueprintPage; connected: (prese
       actions={<BlueprintActions workspace={workspace} onInstall={() => setInstalling(true)} />}>
       <div className="grid gap-6 lg:grid-cols-[var(--layout-detail)]">
         <Surface look="well" className="relative aspect-16/10 overflow-hidden border p-border">
-          {workspace.picture !== null && <img src={kinuBlueprintPicture(workspace.picture)} alt={`${workspace.title} at work`} className="absolute inset-0 size-full object-cover object-left-top" />}
+          {workspace.picture !== null && <KinuBlueprintPicture picture={workspace.picture} alt={`${workspace.title} at work`} className="absolute inset-0 size-full object-cover object-left-top" />}
         </Surface>
         <div className="flex min-w-0 flex-col gap-3">
           <span className="flex flex-wrap items-center gap-2"><KindBadge kind="workspace" /><span className="t-meta p-text-3">{CATEGORY_WORDS[workspace.category]}</span></span>

@@ -28,9 +28,10 @@ const PASS_TTL_SECONDS = 600;
 const ObjectSchema = v.looseObject({
   class: v.string(), name: v.string(), id: v.string(), bookmark: v.string(), undo: v.string(), previous: v.string(), current: v.string(), landed: v.boolean(),
   missing: v.optional(v.object({ named: v.number(), missing: v.number(), keys: v.array(v.string()) })),
+  unread: v.optional(v.string()),
 });
 
-const AnswerSchema = v.object({ objects: v.array(ObjectSchema), landed: v.boolean() });
+const AnswerSchema = v.object({ objects: v.array(ObjectSchema), landed: v.boolean(), stopped: v.optional(v.string()) });
 
 const UndoSchema = v.array(v.object({ class: v.string(), name: v.string(), bookmark: v.string() }));
 
@@ -111,10 +112,12 @@ async function main(argv: readonly string[]): Promise<number> {
     const read = v.safeParse(AnswerSchema, JSON.parse(text));
 
     if (!read.success) throw new Error(`/ops/restore answered ${String(answer.status)}: ${text.slice(0, 600)}`);
-    const { objects, landed } = read.output;
+    const { objects, landed, stopped } = read.output;
 
     for (const one of objects) {
       console.log(`${one.class} ${one.name}: ${one.landed ? 'restored' : 'ARMED BUT NOT LANDED: it lands at the object\'s next start'}  (to ${one.bookmark}, was ${one.previous})`);
+
+      if (one.unread !== undefined) console.log(`  what its rows name could not be read, so what it lost is unknown: ${one.unread}`);
 
       if (one.missing !== undefined && one.missing.missing > 0) {
         console.log(`  ${String(one.missing.missing)} of the ${String(one.missing.named)} R2 objects its rows name are gone, deleted at once and not brought back:`);
@@ -123,6 +126,7 @@ async function main(argv: readonly string[]): Promise<number> {
       }
     }
 
+    if (stopped !== undefined) console.log(`STOPPED before the rest of it: ${stopped}`);
     const undoFile = join(mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), 'kinu-restore-')), 'undo.json');
 
     writeFileSync(undoFile, `${JSON.stringify(objects.map((one) => ({ class: one.class, name: one.name, bookmark: one.undo })), null, 2)}\n`);

@@ -4,6 +4,7 @@
  * held under their refresh rule.
  */
 import { Effect } from 'effect';
+import { connectionEnvironment } from '@kinu.run/core';
 import type { AccountMemory, AccountProposer, CommandEnvironment, Fact, GrantedSecrets, ProfileCatalogEnvelope, ProviderListing, UserCaller } from '@kinu.run/core';
 import { attempt, diagnostics, settle, type KinuError } from '@kinu.run/core/obs';
 import type { UserDO } from './user/user-do';
@@ -161,7 +162,7 @@ export class AccountReads {
     return settle(attempt({ doing: "asking the account for this workspace's secrets, without which the command was not run", otherwise: 'unavailable' }, async (): Promise<Record<string, string>> => {
       if (caller !== 'owner' || !this.host.owned()) return {};
       const { granted } = await this.grantedSecrets();
-      const placeholders = Object.fromEntries(granted.map((secret) => [secret.name, secret.placeholder]));
+      const placeholders = { ...Object.fromEntries(granted.map((secret) => [secret.name, secret.placeholder])), ...connectionEnvironment(granted) };
 
       if (use === 'keep' || !granted.some((secret) => secret.reveal)) return placeholders;
 

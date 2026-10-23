@@ -30,6 +30,12 @@ const WORKSPACE_CAPABILITY_TIERS = {
   'secrets.inject': 'owner_only',
   /** The calling workspace's own grants: names, hosts, placeholders, and the values its agents may read. */
   'secrets.read_self': 'workspace',
+  /** A call to Google's APIs through the account's Google connection, made by the account; writes are approved by the
+   *  owner in the workspace that asks, as its mail is. */
+  'google.call': 'workspace',
+  /** The Google connection's access token itself. Owner-only: a workspace holding it would act at Google as the owner,
+   *  with no approval between. */
+  'google.token': 'owner_only',
   /** AI Gateway discovery/selection: account administration, not inference. */
   'ai_gateway.admin': 'workspace',
   /** MCP tool descriptors and dispatch (acts with the owner's credentials). */

@@ -674,10 +674,15 @@ export async function activityIsShown(target: FlowTarget): Promise<ActivityVerdi
   const page = await openWorkspacePage(target, '/');
 
   try {
+    // A deployment's assistant keeps its chat between runs, so an earlier run's refusal may already be drawn: this run
+    // waits for one more than it found (staging, 2026-10-23: the wait ended at once, before this turn had run).
+    const refusals = await page.$$eval('#chat [data-turn-failure]', (drawn) => drawn.length);
+
     await sendInChat(page, ACTIVITY_ASK);
     // The refusal is this row's outcome, not a dead end: `until` would end the row on it, and the chat beside Activity
     // keeps saying it, so these waits are bare and the row's deadline ends them.
-    await named('the turn to stop on the refusal', () => page.waitForFunction(`document.querySelector('#chat [data-turn-failure]') !== null`, { polling: 100 }));
+    await named('the turn to stop on the refusal', () => page.waitForFunction(
+      (found: number) => document.querySelectorAll('#chat [data-turn-failure]').length > found, { polling: 100 }, refusals));
     await page.click('[data-focus-identity]');
     await named("Activity's turns", () => page.waitForFunction(`document.querySelector('[data-activity-entry]') !== null`, { polling: 100 }));
 
@@ -1733,6 +1738,33 @@ export async function slateShowsItsPreview(target: FlowTarget): Promise<SlatePre
   } finally {
     await removeFlowWorkspace(target, workspace);
   }
+}
+
+export interface ClaudeCodePageVerdict {
+  /** Where the sign-in it starts sends the browser back. */
+  readonly redirect: string | null;
+  /** What the account said of a code Anthropic refused. */
+  readonly refusal: string;
+}
+
+/**
+ * Row: Claude's web sign-in returns through Anthropic's code page, and the deployment's own Worker exchanges what is
+ * pasted with Anthropic (2026-10-23). No person signs in: a code made up for the row is pasted, and Anthropic refusing
+ * the code, not the client or the address it returns to, proves the exchange reached it as sent, from Worker egress.
+ */
+export async function claudeCodePageExchanges(target: FlowTarget): Promise<ClaudeCodePageVerdict> {
+  const headers = { ...webHeaders(target.identity), 'content-type': 'application/json' };
+  const started = await fetch(`${target.origin}/api/user/claude/start`, { method: 'POST', headers });
+  const authorize = new URL(v.parse(v.object({ url: v.string() }), await started.json()).url);
+  const state = authorize.searchParams.get('state') ?? '';
+
+  const finished = await fetch(`${target.origin}/api/user/claude/finish`, {
+    method: 'POST', headers, body: JSON.stringify({ code: `kinu-flow-not-a-code#${state}` }),
+  });
+
+  const answer = v.parse(v.object({ connected: v.boolean(), error: v.optional(v.string()) }), await finished.json());
+
+  return { redirect: authorize.searchParams.get('redirect_uri'), refusal: answer.error ?? '' };
 }
 
 /** A picture as a page drew it: the address it loaded and its mean luminance, 0 to 1. */

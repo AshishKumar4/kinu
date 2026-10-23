@@ -5,7 +5,7 @@
 
 import type { AccountMemoryProposal } from '../memory/account';
 import type { DeferredApproval } from '../safety/deferred-approval';
-import { approvalKindOf, type MailSend } from '../safety/approval-kind';
+import { approvalKindOf, type GoogleWrite, type MailSend } from '../safety/approval-kind';
 import { describeExecutionContext } from '../safety/approval-gate';
 import type { PendingConsent } from '../protocol';
 import type { PlanReview } from '../types/plans';
@@ -40,6 +40,8 @@ export interface PendingAction {
   readonly effect?: { readonly slate: string; readonly caller: string; readonly server: string; readonly tool: string; readonly root: Readonly<Record<string, string>> };
   /** An agent's message, exactly as approving lets it leave once (docs/MAIL.md §3). Never answered "always". */
   readonly mail?: Omit<MailSend, 'thread'>;
+  /** A call an agent asked to make at Google that writes, exactly as approving lets it go once. Never answered "always". */
+  readonly google?: GoogleWrite;
 }
 
 /** What a workspace asks of the person now. */
@@ -138,6 +140,13 @@ function deferredCard(action: PendingActionInputs['deferredActions'][number]): P
         ...card, raisedBy: action.actor, title: `Send mail to ${send.to.join(', ')}: ${send.subject}`, detail: null,
         mail: { by: send.by, from: send.from, to: send.to, cc: send.cc, subject: send.subject, text: send.text } satisfies Omit<MailSend, 'thread'>,
       };
+    }
+
+    // The agent that asked makes it on its next call; the card is the call as it would go.
+    case 'google-write': {
+      const { write } = parked;
+
+      return { ...card, raisedBy: action.actor, title: `Google: ${write.does}`, detail: null, google: write };
     }
 
     case 'command': {

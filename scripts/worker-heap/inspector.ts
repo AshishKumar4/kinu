@@ -152,10 +152,126 @@ const SamplingReplySchema = v.object({ result: v.object({ profile: v.object({ he
 
 /** A CPU profile's samples, each a node, and the time before it. */
 const CpuReplySchema = v.object({ result: v.object({ profile: v.object({
-  nodes: v.array(v.object({ id: v.number(), callFrame: v.object({ functionName: v.string() }) })),
+  nodes: v.array(v.object({
+    id: v.number(),
+    callFrame: v.object({ functionName: v.string(), url: v.optional(v.string(), ''), lineNumber: v.optional(v.number(), -1), columnNumber: v.optional(v.number(), -1) }),
+    children: v.optional(v.array(v.number()), []),
+  })),
   samples: v.array(v.number()),
   timeDeltas: v.array(v.number()),
 }) }) });
+
+export type CpuProfile = v.InferOutput<typeof CpuReplySchema>['result']['profile'];
+
+/** The longest stretch an isolate ran with no idle sample in it: one event-loop turn, or turns back to back. */
+export interface BusyStretch {
+  readonly ms: number;
+  /** The frames at least a fifth of its samples ran under, by the share of them, largest first. */
+  readonly frames: readonly { readonly frame: string; readonly share: number }[];
+  /** The frames its samples ran in themselves, a tenth of them or more, largest first: where the time went. */
+  readonly leaves: readonly { readonly frame: string; readonly share: number }[];
+}
+
+/** A gap between two samples longer than this, in µs, is the isolate waiting: five sampling intervals. */
+const LOOP_GAP_US = 5000;
+
+/** Where a host pause would hide: {@link longestBusy} reads a gap as the loop's wait, so a pause mid-turn splits it. */
+export interface HostPauses {
+  /** Each gap past {@link LOOP_GAP_US} inside a synchronous frame, in ms: the host paused the thread mid-turn. */
+  readonly pauses: readonly number[];
+  /** The time sampled inside it, in ms: how long the host was watched. */
+  readonly watchedMs: number;
+}
+
+/** The pauses inside one call of the synchronous function `frame`, `profile` holding no other ({@link profileEach}): no
+ *  wait can come between two of its samples, so a gap there is the host's, as one would be in any turn. */
+export function pausesUnder(profile: CpuProfile, frame: string): HostPauses {
+  const children = new Map(profile.nodes.map((node) => [node.id, node.children]));
+  const under = new Set<number>();
+  const stack = profile.nodes.filter((node) => node.callFrame.functionName === frame).map((node) => node.id);
+
+  for (let id = stack.pop(); id !== undefined; id = stack.pop()) {
+    under.add(id);
+    stack.push(...children.get(id) ?? []);
+  }
+
+  const pauses: number[] = [];
+  let watched = 0;
+
+  // The call's first sample comes after the wait before it: only a gap between two of its samples counts.
+  for (let at = 1; at < profile.samples.length; at++) {
+    if (!under.has(profile.samples[at] ?? -1) || !under.has(profile.samples[at - 1] ?? -1)) continue;
+    const delta = profile.timeDeltas[at] ?? 0;
+
+    if (delta > LOOP_GAP_US) pauses.push(delta / 1000);
+    else watched += delta / 1000;
+  }
+
+  return { pauses, watchedMs: watched };
+}
+
+/** The longest busy stretch in `profile`, and the frames its samples spent most time under. */
+export function longestBusy(profile: CpuProfile): BusyStretch {
+  const byId = new Map(profile.nodes.map((node) => [node.id, node]));
+  const parent = new Map<number, number>();
+
+  for (const node of profile.nodes) for (const child of node.children) parent.set(child, node.id);
+
+  // No JavaScript on the stack is the loop waiting: workerd marks no `(idle)` of its own, so its event loop's wait reads
+  // as `(program)` (measured 2026-10-23: a run read as 73 s busy in one facet, and 60 s in the assets worker, until it was).
+  const waiting = new Set(['(idle)', '(program)', '(root)']);
+  const idle = new Set(profile.nodes.filter((node) => waiting.has(node.callFrame.functionName)).map((node) => node.id));
+  let [best, bestFrom, bestTo, run, from] = [0, 0, 0, 0, 0];
+
+  for (const [at, sample] of profile.samples.entries()) {
+    // The time since the sample before: the profiler takes none while the isolate waits, so a gap past a few intervals
+    // is a wait, and the turn before it has ended (measured 2026-10-23: unbroken, a run read as 82 s busy). A host that
+    // pauses the thread that long mid-turn splits the turn too: {@link pausesUnder} reads whether it did.
+    const delta = profile.timeDeltas[at] ?? 0;
+
+    if (idle.has(sample) || delta > LOOP_GAP_US) {
+      run = 0;
+      from = idle.has(sample) ? at + 1 : at;
+
+      if (idle.has(sample)) continue;
+    } else {
+      run += delta;
+    }
+
+    if (run > best) [best, bestFrom, bestTo] = [run, from, at];
+  }
+
+  const counts = new Map<string, number>();
+  const selves = new Map<string, number>();
+
+  // Line and column, as the bundle's source map reads them, so a minified frame can be named.
+  const named = (frame: (typeof profile.nodes)[number]['callFrame']): string =>
+    `${frame.functionName || '(anonymous)'} ${frame.url.split('/').slice(-2).join('/')}:${String(frame.lineNumber + 1)}:${String(frame.columnNumber + 1)}`;
+
+  for (let at = bestFrom; at <= bestTo; at++) {
+    const seen = new Set<string>();
+    const leaf = byId.get(profile.samples[at] ?? -1)?.callFrame;
+
+    if (leaf !== undefined) selves.set(named(leaf), (selves.get(named(leaf)) ?? 0) + 1);
+
+    for (let id: number | undefined = profile.samples[at]; id !== undefined; id = parent.get(id)) {
+      const frame = byId.get(id)?.callFrame;
+
+      if (frame === undefined || frame.functionName === '(root)') continue;
+      const name = named(frame);
+
+      if (!seen.has(name)) counts.set(name, (counts.get(name) ?? 0) + 1);
+      seen.add(name);
+    }
+  }
+
+  const samples = Math.max(1, bestTo - bestFrom + 1);
+
+  const ranked = (tally: Map<string, number>, least: number) => [...tally].map(([frame, count]) => ({ frame, share: count / samples }))
+    .filter((each) => each.share >= least).sort((a, b) => b.share - a.share).slice(0, 12);
+
+  return { ms: best / 1000, frames: ranked(counts, 0.2), leaves: ranked(selves, 0.1) };
+}
 
 export interface Allocations {
   readonly total: number;
@@ -231,69 +347,61 @@ export interface Inspector {
   readonly close: () => void;
 }
 
-/** One inspector session on each isolate whose target id `picks` accepts, however many there are. */
-export async function inspectAll(port: number, picks: (id: string) => boolean): Promise<Inspector[]> {
-  const targets = v.parse(TargetsSchema, await (await fetch(`http://127.0.0.1:${String(port)}/json`)).json());
+/** What every read answers in the loop pass, which profiles each isolate (`loop-turns.ts`): workerd takes one inspector
+ *  session an isolate, a snapshot under a running CPU profile stalled the gate past its silence bound twice
+ *  (2026-10-23), and the profiler's own allocation would move every heap figure anyway. */
+const NOT_READ: Inspector = {
+  usedHeap: async () => 0,
+  liveHeap: async () => 0,
+  liveSplit: async () => ({ live: 0, code: 0 }),
+  makeup: async () => ({ kinds: [], strings: [] }),
+  markedBytes: async () => 0,
+  sampleAllocations: async () => {},
+  allocations: async () => ({ total: 0, sites: [] }),
+  sampleCpu: async () => {},
+  cpuBusyMs: async () => 0,
+  close: () => {},
+};
 
-  return await Promise.all(targets.filter((target) => picks(target.id))
-    .map(async (target) => await inspect(port, `the isolate ${target.id}`, (id) => id === target.id)));
+type Target = v.InferOutput<typeof TargetsSchema>[number];
+
+async function targets(port: number): Promise<Target[]> {
+  return v.parse(TargetsSchema, await (await fetch(`http://127.0.0.1:${String(port)}/json`)).json());
 }
 
-/** One inspector session on the one isolate whose target id `picks` accepts. workerd lists each isolate it made,
- *  a Worker Loader's too, as `<binding>:<loader key>` (server.c++ at v1.20260930.2, `WorkerLoaderNamespace::loadIsolate`
- *  and `makeWorkerImpl`). */
-export async function inspect(port: number, isolate: string, picks: (id: string) => boolean): Promise<Inspector> {
-  const targets = v.parse(TargetsSchema, await (await fetch(`http://127.0.0.1:${String(port)}/json`)).json());
-  const [target, ...more] = targets.filter((each) => picks(each.id));
+/** Every isolate workerd lists, by target id. */
+export async function targetIds(port: number): Promise<readonly string[]> {
+  return (await targets(port)).map((target) => target.id);
+}
 
-  if (target === undefined || more.length > 0) {
-    throw new Error(`worker-heap: no one inspector target for ${isolate} among ${targets.map((t) => t.id).join(', ')}`);
-  }
+/** A run's read of the one isolate whose target id `picks` accepts. workerd lists each isolate it made, a Worker
+ *  Loader's too, as `<binding>:<loader key>` (server.c++ at v1.20260930.2, `WorkerLoaderNamespace::loadIsolate` and
+ *  `makeWorkerImpl`). */
+export type Inspect = (isolate: string, picks: (id: string) => boolean) => Promise<Inspector>;
 
-  const socket = new WebSocket(target.webSocketDebuggerUrl);
-  const opened = Promise.withResolvers<void>();
-  const replies = new Map<number, (raw: string) => void>();
-  let chunks: string[] = [];
-  let next = 0;
+/** The reads of the run whose workerd listens on `port`: an inspector session each, or {@link NOT_READ} in the loop pass,
+ *  whose profiler holds each isolate's one session. */
+export function inspector(port: number, { heap }: { readonly heap: boolean }): Inspect {
+  return async (isolate, picks) => {
+    const listed = await targets(port);
+    const [target, ...more] = listed.filter((each) => picks(each.id));
 
-  socket.addEventListener('open', () => { opened.resolve(); });
-  socket.addEventListener('error', () => { opened.reject(new Error('worker-heap: the inspector socket failed')); });
-  socket.addEventListener('message', (event) => {
-    const raw = String(event.data);
-    const message: unknown = JSON.parse(raw);
-    const chunk = v.safeParse(SnapshotChunkSchema, message);
-
-    if (chunk.success) {
-      chunks.push(chunk.output.params.chunk);
-
-      return;
+    if (target === undefined || more.length > 0) {
+      throw new Error(`worker-heap: no one inspector target for ${isolate} among ${listed.map((t) => t.id).join(', ')}`);
     }
 
-    const reply = v.safeParse(InspectorReplySchema, message);
-
-    if (reply.success) replies.get(reply.output.id)?.(raw);
-  });
-  await opened.promise;
-
-  /** A snapshot collects first, so its node sizes add up to what is live. */
-  const snapshotNow = async <Parsed>(schema: v.GenericSchema<Parsed>): Promise<Parsed> => {
-    chunks = [];
-    await send('HeapProfiler.takeHeapSnapshot');
-    const snapshot = v.parse(schema, JSON.parse(chunks.join('')));
-    chunks = [];
-
-    return snapshot;
+    return heap ? await session(target, isolate) : NOT_READ;
   };
+}
 
-  /** The raw reply, which each caller parses for the field it asked for. */
-  const send = (method: string, params?: Readonly<Record<string, number | boolean>>): Promise<string> => {
-    next += 1;
-    const answer = Promise.withResolvers<string>();
-    replies.set(next, answer.resolve);
-    socket.send(JSON.stringify({ id: next, method, ...(params !== undefined && { params }) }));
+/** One read of each isolate whose target id `picks` accepts, however many there are. */
+export async function inspectAll(port: number, inspect: Inspect, picks: (id: string) => boolean): Promise<Inspector[]> {
+  return await Promise.all((await targets(port)).filter((target) => picks(target.id))
+    .map(async (target) => await inspect(`the isolate ${target.id}`, (id) => id === target.id)));
+}
 
-    return answer.promise;
-  };
+async function session(target: Target, isolate: string): Promise<Inspector> {
+  const { send, snapshotNow, close } = await connect(target);
 
   return {
     // Uncollected: what the isolate holds at this instant, garbage included.
@@ -321,6 +429,112 @@ export async function inspect(port: number, isolate: string, picks: (id: string)
 
       return busy / 1000;
     },
-    close: () => { socket.close(); },
+    close,
   };
+}
+
+/** An isolate's CPU profiled from {@link profileLoop} to `stop`, which answers the profile and closes. */
+export interface LoopProfile {
+  readonly stop: () => Promise<CpuProfile>;
+}
+
+/** An isolate's CPU profiled around each piece of work, one profile each, so no wait between two pieces is in one. */
+export interface EachProfiled {
+  readonly around: (work: () => Promise<string>) => Promise<CpuProfile>;
+  readonly close: () => void;
+}
+
+/** Profiles the isolate `id` around each piece of work, a sample a millisecond; null when it is not listed. */
+export async function profileEach(port: number, id: string): Promise<EachProfiled | null> {
+  const target = (await targets(port)).find((each) => each.id === id);
+
+  if (target === undefined) return null;
+  const { send, close } = await connect(target);
+
+  await send('Profiler.enable');
+  await send('Profiler.setSamplingInterval', { interval: 1000 });
+
+  return {
+    around: async (work) => {
+      await send('Profiler.start');
+      await work();
+
+      return v.parse(CpuReplySchema, JSON.parse(await send('Profiler.stop'))).result.profile;
+    },
+    close,
+  };
+}
+
+/** Profiles the isolate `id` from now, a sample a millisecond; null when it is no longer listed. */
+export async function profileLoop(port: number, id: string): Promise<LoopProfile | null> {
+  const target = (await targets(port)).find((each) => each.id === id);
+
+  if (target === undefined) return null;
+  const { send, close } = await connect(target);
+
+  await send('Profiler.enable');
+  await send('Profiler.setSamplingInterval', { interval: 1000 });
+  await send('Profiler.start');
+
+  return {
+    stop: async () => {
+      const { profile } = v.parse(CpuReplySchema, JSON.parse(await send('Profiler.stop'))).result;
+      close();
+
+      return profile;
+    },
+  };
+}
+
+/** An open inspector session: a request's raw reply, which each caller parses for the field it asked for, and a heap
+ *  snapshot, which collects first, so its node sizes add up to what is live. */
+async function connect(target: Target): Promise<{
+  readonly send: (method: string, params?: Readonly<Record<string, number | boolean>>) => Promise<string>;
+  readonly snapshotNow: <Parsed>(schema: v.GenericSchema<Parsed>) => Promise<Parsed>;
+  readonly close: () => void;
+}> {
+  const socket = new WebSocket(target.webSocketDebuggerUrl);
+  const opened = Promise.withResolvers<void>();
+  const replies = new Map<number, (raw: string) => void>();
+  let chunks: string[] = [];
+  let next = 0;
+
+  socket.addEventListener('open', () => { opened.resolve(); });
+  socket.addEventListener('error', () => { opened.reject(new Error('worker-heap: the inspector socket failed')); });
+  socket.addEventListener('message', (event) => {
+    const raw = String(event.data);
+    const message: unknown = JSON.parse(raw);
+    const chunk = v.safeParse(SnapshotChunkSchema, message);
+
+    if (chunk.success) {
+      chunks.push(chunk.output.params.chunk);
+
+      return;
+    }
+
+    const reply = v.safeParse(InspectorReplySchema, message);
+
+    if (reply.success) replies.get(reply.output.id)?.(raw);
+  });
+  await opened.promise;
+
+  const send = (method: string, params?: Readonly<Record<string, number | boolean>>): Promise<string> => {
+    next += 1;
+    const answer = Promise.withResolvers<string>();
+    replies.set(next, answer.resolve);
+    socket.send(JSON.stringify({ id: next, method, ...(params !== undefined && { params }) }));
+
+    return answer.promise;
+  };
+
+  const snapshotNow = async <Parsed>(schema: v.GenericSchema<Parsed>): Promise<Parsed> => {
+    chunks = [];
+    await send('HeapProfiler.takeHeapSnapshot');
+    const snapshot = v.parse(schema, JSON.parse(chunks.join('')));
+    chunks = [];
+
+    return snapshot;
+  };
+
+  return { send, snapshotNow, close: () => { socket.close(); } };
 }

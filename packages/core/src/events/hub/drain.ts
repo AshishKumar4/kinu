@@ -25,6 +25,10 @@ function delegatedEventMode(event: KinuEvent): WorkMode | null {
   // owner's own mail's, since mail is a weaker channel than the signed-in app (docs/MAIL.md §3).
   if (event.variant === 'email') return 'plan';
 
+  // A watcher's fire carries what its check read from outside (watch.ts), which plans as mail does.
+  if (event.variant === 'timer' && (event.payload_visibility === 'full' || event.payload_visibility === 'redact')
+    && event.payload.watch_brief !== undefined) return 'plan';
+
   if (event.variant !== 'peer_agent' && event.variant !== 'subagent_report') return null;
 
   if (event.payload_visibility === 'full' || event.payload_visibility === 'redact') {

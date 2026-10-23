@@ -112,6 +112,14 @@ export { MailStore, type MailBlobs, type MailBoxOwner, type ParsedMail } from '.
 
 export { createMailCodemodeProvider, unreadMailForTurn, type MailDeps, type MailSendApprovals } from './tools/mail-codemode';
 
+export { createGoogleCodemodeProvider, type GoogleDeps, type GoogleWriteApprovals } from './tools/google-operations';
+
+export { callGoogle, GoogleCallSchema, type GoogleAnswer, type GoogleCall, type GoogleTokenRead } from './google/calls';
+
+export { googleBaseUrls, type GoogleRequest } from './google/catalog';
+
+export { GOOGLE_VERBS } from './google/table';
+
 export { MAIL } from './operations/mail';
 
 export { mailHostRedirect } from './mail/host';
@@ -734,7 +742,7 @@ export {
 
 export {
   buildBuiltinTools,
-  builtinStoreDeps,
+  builtinStores,
   surfaceStores,
   type ServedTools,
   type BuiltinStoreInputs,
@@ -1589,9 +1597,9 @@ export {
 
 export {
   initEgressVaultTables, listSecrets, putSecrets, setSecretDestination, deleteSecret, grantSecret, revokeSecretGrant,
-  grantedSecrets, revealedSecrets, resolveEgressInjection,
+  grantedSecrets, revealedSecrets, resolveEgressInjection, mintEgressPlaceholder, connectionEnvironment,
   type SecretSummary, type SecretInput, type SecretDestination, type GrantedSecrets, type EgressInjection,
-  type EgressInjectionResult, type EgressVaultDeps,
+  type EgressInjectionResult, type EgressVaultDeps, type ConnectionSecret,
 } from './safety/egress-vault';
 
 export {
@@ -1637,7 +1645,7 @@ export {
   performBoundWrite, type ApprovalContent, type BoundFileWrite, type WriteSubject,
 } from './safety/bound-write';
 
-export { approvalKindOf, mailSendExecutor, mailSendText, slateEffectExecutor, slateEffectText, type ApprovalKind, type MailSend, type SlateEffect } from './safety/approval-kind';
+export { approvalKindOf, mailSendExecutor, mailSendText, slateEffectExecutor, slateEffectText, type ApprovalKind, type GoogleWrite, type MailSend, type SlateEffect } from './safety/approval-kind';
 
 export {
   ParkedWriteFiles,
@@ -2595,6 +2603,7 @@ export {
 export {
   APP_ROUTES,
   cloudflareConnectPath,
+  googleConnectPath,
   CONNECT_CHANNEL,
   connectedPath,
   connectEndedOf,

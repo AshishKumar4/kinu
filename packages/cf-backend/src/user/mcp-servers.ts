@@ -1,6 +1,6 @@
 import { Cause, Effect, Exit } from 'effect';
 import {
-  ConnectRunSchema, nanoid, plainFetch, type ConnectEnded, type JsonObject, type JsonValue, JsonObjectSchema, decodeJsonValue, McpProtocolFailureSchema, type UserCaller, compareCodeUnits, type McpPresetId, type McpRefusal, type RemoteMcpTool, mcpPresetById, describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor, validateMcpServerInput, readAllowedTools, parseMcpHeaders, McpTransportSchema, type McpTransport, GITHUB_MCP_PRESET, GitHubRefreshAskSchema, refreshGitHub, type GitHubRefreshAnswer, type GitHubRefreshAsk, type McpPresetAvailability, type McpServerSummary, MCP_PRESETS, type McpPreset, CALLABLE_MCP_STATES, mapConnectionStatus, type McpConnectionStatus, mcpCredentialTransport, mcpListingRefusals, McpTransitionLog, observedMcpState, type McpObservedConnection, type McpObservedState, type McpToolListing,
+  ConnectRunSchema, GOOGLE_CONNECTION, GOOGLE_OAUTH_CRED_KEY, nanoid, plainFetch, type ConnectEnded, type JsonObject, type JsonValue, JsonObjectSchema, decodeJsonValue, McpProtocolFailureSchema, type UserCaller, compareCodeUnits, type McpPresetId, type McpRefusal, type RemoteMcpTool, mcpPresetById, describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor, validateMcpServerInput, readAllowedTools, parseMcpHeaders, McpTransportSchema, type McpTransport, GITHUB_MCP_PRESET, GitHubRefreshAskSchema, refreshGitHub, type GitHubRefreshAnswer, type GitHubRefreshAsk, type McpPresetAvailability, type McpServerSummary, MCP_PRESETS, type McpPreset, CALLABLE_MCP_STATES, mapConnectionStatus, type McpConnectionStatus, mcpCredentialTransport, mcpListingRefusals, McpTransitionLog, observedMcpState, type McpObservedConnection, type McpObservedState, type McpToolListing,
 } from '@kinu.run/core';
 import type { MCPClientManager } from 'agents/mcp/client';
 import type { CallToolResult } from '@modelcontextprotocol/client';
@@ -17,7 +17,6 @@ import type { McpSessionHost } from './mcp';
 /** The only place these `Env` names exist; messages and the deploy doc take their wording from here. */
 const MCP_APP_ENV = {
   github: { id: 'MCP_GITHUB_CLIENT_ID', secret: 'MCP_GITHUB_CLIENT_SECRET' },
-  google: { id: 'MCP_GOOGLE_CLIENT_ID', secret: 'MCP_GOOGLE_CLIENT_SECRET' },
 } as const satisfies Partial<Record<McpPresetId, {
   readonly id: keyof Env;
   readonly secret: keyof Env;
@@ -32,7 +31,7 @@ function mcpAppEnvNames(
 ): { readonly clientIdEnv: McpAppEnvKey; readonly clientSecretEnv: McpAppEnvKey } | undefined {
   if (preset.auth !== 'oauth-app') return undefined;
 
-  if (preset.id === 'github' || preset.id === 'google') {
+  if (preset.id === 'github') {
     const names = MCP_APP_ENV[preset.id];
 
     return { clientIdEnv: names.id, clientSecretEnv: names.secret };
@@ -73,6 +72,12 @@ const MCP_OAUTH_CALLBACK_PATH = '/api/user/mcp/callback';
 /** Keys the SDK's storage (`/{clientName}/{serverId}/...`); every construction and restore
  *  must use the same name. */
 export const USER_MCP_CLIENT_NAME = 'kinu-user-mcp';
+
+/** Where a wake that retired a server keeps that the assistant's watchers are still to be armed again. */
+const WATCHERS_STALE_KEY = 'mcp:watchers-stale';
+
+/** The most keys one `storage.delete` takes (developers.cloudflare.com/durable-objects/api/sqlite-storage-api/#delete). */
+const STORAGE_DELETE_KEYS = 128;
 
 /** A server as the SDK's catalog (`cf_agents_mcp_servers`) keeps it: the one place its name, endpoint and transport live. */
 interface McpCatalogEntry {
@@ -283,6 +288,8 @@ interface McpServerUnavailable {
 export interface UserMcpServersHost extends Pick<UserObjectHost, 'ctx' | 'env' | 'requireTier' | 'sqlx'> {
   readonly mcp: MCPClientManager;
   readonly vault: Pick<UserCredentials, 'sealMcpHeaders' | 'openMcpHeaders' | 'getAuthHeaders'>;
+  /** Told when a connection came or went, so each workspace reads its connection-held secrets again. */
+  readonly connectionsMoved?: () => Promise<void>;
 }
 
 /** Where a sign-in keeps the run it was begun for: under the exact OAuth state the SDK minted for it, which its callback
@@ -381,7 +388,18 @@ export class UserMcpServers {
    */
   private async reconcile(): Promise<void> {
     const mgr = this.host.mcp;
-    const configs = this.host.sqlx<McpConfigRow>(`SELECT id, headers, preset_id FROM user_mcp_servers`);
+    const all = this.host.sqlx<McpConfigRow>(`SELECT id, headers, preset_id FROM user_mcp_servers`);
+    const retired = (config: McpConfigRow) => config.preset_id !== null && mcpPresetById(config.preset_id) === undefined;
+
+    // A server from a preset Kinu no longer offers (the Gmail preview's, which the Google connection replaced) goes, with
+    // everything kept of it.
+    for (const row of all.filter(retired)) {
+      await this.retire(row.id);
+      this.watchersStale = true;
+      diagnostics.event('mcp.retired_preset_removed', { serverId: row.id, preset: row.preset_id ?? '' });
+    }
+
+    const configs = all.filter((config) => !retired(config));
     const configured = new Set(configs.map((row) => row.id));
     const catalog = this.catalog();
 
@@ -391,8 +409,11 @@ export class UserMcpServers {
     }
 
     // An add writes the catalog before the configuration, so only a lost catalog row leaves a configuration with no
-    // endpoint, which nothing can dial again: it goes, and says so.
-    for (const row of configs.filter((config) => !catalog.has(config.id))) {
+    // endpoint, which nothing can dial again: it goes, and says so. Its workspaces are not told here, so an activation
+    // never waits on them: one still holding its git credential is refused at the egress, which reads it afresh.
+    const uncatalogued = configs.filter((config) => !catalog.has(config.id));
+
+    for (const row of uncatalogued) {
       this.host.sqlx(`DELETE FROM user_mcp_servers WHERE id = ?`, row.id);
       diagnostics.failure('mcp.uncatalogued_server_removed', new KinuError('missing', 'a configured MCP server has no catalog entry, so no endpoint to dial'), { serverId: row.id });
     }
@@ -552,6 +573,8 @@ export class UserMcpServers {
       await this.joinActivation();
       await this.readMcpToolLists();
       await this.rememberReadyListings();
+
+      if (this.watchersStale) await this.armAssistantWatchers();
     } catch (err) {
       diagnostics.failure('mcp.connection_warmup_failed', toKinuError({
         doing: 'restoring the user MCP connections on warmup',
@@ -756,7 +779,8 @@ export class UserMcpServers {
     return { id, authUrl };
   }
 
-  /** The presets the account is connected to now: configured, and their connection one a call can use. */
+  /** The connections the account holds now: each preset configured with a connection a call can use, and the Google
+   *  connection (`GOOGLE_CONNECTION`) while its grant is kept. */
   connectedPresets(): string[] {
     const connections = this.host.mcp.mcpConnections;
 
@@ -765,8 +789,28 @@ export class UserMcpServers {
     const held = (id: string): boolean => CALLABLE_MCP_STATES.has(mapConnectionStatus(connections[id]?.connectionState))
       || (this.undialled(id) && this.kept?.has(id) === true);
 
-    return this.host.sqlx<{ id: string; preset_id: string | null }>(`SELECT id, preset_id FROM user_mcp_servers WHERE preset_id IS NOT NULL`)
+    const presets = this.host.sqlx<{ id: string; preset_id: string | null }>(`SELECT id, preset_id FROM user_mcp_servers WHERE preset_id IS NOT NULL`)
       .flatMap((row) => (row.preset_id !== null && held(row.id) ? [row.preset_id] : []));
+
+    const google = this.host.sqlx(`SELECT 1 FROM user_credentials WHERE key = ?`, GOOGLE_OAUTH_CRED_KEY).length > 0;
+
+    return google ? [...presets, GOOGLE_CONNECTION] : presets;
+  }
+
+  /** The assistant told the Google connection came or went. It bears no workspace's secret, so none is told. */
+  googleConnectionMoved(): Promise<void> {
+    return this.armAssistantWatchers();
+  }
+
+  /** A wake retired a server whose watchers the assistant may still arm. Kept until the assistant is told, at the next
+   *  warm, so an eviction before then does not lose it; the wake itself waits on no workspace. */
+  private get watchersStale(): boolean {
+    return this.host.ctx.storage.kv.get(WATCHERS_STALE_KEY) === true;
+  }
+
+  private set watchersStale(stale: boolean) {
+    if (stale) this.host.ctx.storage.kv.put(WATCHERS_STALE_KEY, true);
+    else this.host.ctx.storage.kv.delete(WATCHERS_STALE_KEY);
   }
 
   async userMcp_connectedPresets(caller: UserCaller): Promise<string[]> {
@@ -783,14 +827,30 @@ export class UserMcpServers {
    * stands either way.
    */
   private async assistantConnectionsChanged(): Promise<void> {
+    // The GitHub connection is every workspace's git credential: each reads its secrets again.
+    await this.host.connectionsMoved?.();
+    await this.armAssistantWatchers();
+  }
+
+  /** The assistant's watchers armed for the connections held now: an MCP server's moving, or the Google connection's. */
+  private async armAssistantWatchers(): Promise<void> {
     await this.keptListings();
     const assistant = this.host.sqlx<{ value: string }>(`SELECT value FROM user_config WHERE key = ?`, ASSISTANT_CONFIG_KEY)[0]?.value;
 
-    if (assistant === undefined) return;
+    if (assistant === undefined) {
+      this.watchersStale = false;
+
+      return;
+    }
+
     const stub = this.host.env.OrchestratorAgent.get(this.host.env.OrchestratorAgent.idFromName(assistant));
 
+    // A notice owed stays owed until the assistant has it: one that fails, or is cut off, is told at the next warm.
     await settleLogged('mcp.assistant_watchers_unreconciled', { doing: "arming the assistant's checks of the owner's connections", otherwise: 'unavailable' },
-      async () => { await stub.connectionsChanged(this.connectedPresets()); }, { workspace: assistant });
+      async () => {
+        await stub.connectionsChanged(this.connectedPresets());
+        this.watchersStale = false;
+      }, { workspace: assistant });
   }
 
   async userMcp_remove(caller: UserCaller, id: string): Promise<void> {
@@ -799,6 +859,12 @@ export class UserMcpServers {
     if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) throw new KinuError('bad_input', 'Invalid server id.');
     await this.activationSettled();
 
+    await this.retire(id);
+    await this.assistantConnectionsChanged();
+  }
+
+  /** A server gone from the live manager, its configuration, and all kept of it: its tool list and its sign-ins' runs. */
+  private async retire(id: string): Promise<void> {
     try { await this.host.mcp.removeServer(id); }
     catch (err) {
       diagnostics.failure('mcp.live_server_removal_failed', toKinuError({
@@ -812,9 +878,15 @@ export class UserMcpServers {
     this._mcpToolLists.delete(id);
     (await this.keptListings()).delete(id);
     await this.host.ctx.storage.delete(listingKey(id));
-    // Its sign-ins' runs go with it: no callback of its can name one now.
-    await this.host.ctx.storage.delete([...(await this.host.ctx.storage.list({ prefix: connectRunKey(id, '') })).keys()]);
-    await this.assistantConnectionsChanged();
+
+    // Its sign-ins' runs go with it: no callback of its can name one now. Its OAuth keys too, by name, opened or not:
+    // the SDK clears only those its storage could open.
+    for (const prefix of [connectRunKey(id, ''), `/${USER_MCP_CLIENT_NAME}/${id}/`]) {
+      const keys = [...(await this.host.ctx.storage.list({ prefix })).keys()];
+
+      // A delete takes at most this many keys at once.
+      for (let at = 0; at < keys.length; at += STORAGE_DELETE_KEYS) await this.host.ctx.storage.delete(keys.slice(at, at + STORAGE_DELETE_KEYS));
+    }
   }
 
   /**
@@ -1421,6 +1493,20 @@ export class UserMcpServers {
     if (authorization === null) return { observed: [], outcome: 'no-token' };
 
     return settle(refreshGitHub({ authorization, ask: asked, fetch: plainFetch(fetch) }));
+  }
+
+  /** Whether the account holds a GitHub connection: its preset's row. */
+  githubConnected(): boolean {
+    return this.host.sqlx<{ id: string }>(`SELECT id FROM user_mcp_servers WHERE preset_id = ? LIMIT 1`, GITHUB_MCP_PRESET).length > 0;
+  }
+
+  /** The GitHub connection's token, as git sends it: Basic's password. Null with no connection, or none signed in. A
+   *  failure to read it names no part of it. */
+  githubGitToken(): Promise<string | null> {
+    return settle(Effect.map(
+      Effect.tryPromise({ try: () => this.githubMcpAuthorization(), catch: () => new KinuError('unavailable', 'The GitHub connection\'s token could not be read.') }),
+      (authorization) => (authorization === null ? null : authorization.replace(/^(?:Bearer|token)\s+/iu, '')),
+    ));
   }
 
   private async githubMcpAuthorization(): Promise<string | null> {

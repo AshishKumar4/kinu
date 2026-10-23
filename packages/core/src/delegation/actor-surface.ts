@@ -19,6 +19,7 @@ import { createReportCodemodeProvider, type ReportDeps } from '../tools/report-o
 import { createTasksCodemodeProvider } from '../tools/tasks-operations';
 import { createWebCodemodeProvider } from '../tools/web-operations';
 import { createMailCodemodeProvider, type MailDeps } from '../tools/mail-codemode';
+import { createGoogleCodemodeProvider, type GoogleDeps } from '../tools/google-operations';
 import { createAgentsCodemodeProvider } from './agents-operations';
 import type { AgentsToolDeps } from './agents-tool';
 
@@ -46,6 +47,8 @@ export interface SurfaceActor {
   readonly ownerWaits: OwnerWaitsHost | null;
   /** Its `mail.*` over the account's Mailbox (docs/MAIL.md §3); null where the deployment has no mail. */
   readonly mail: MailDeps | null;
+  /** Its `google.*` through the account's Google connection; null where the deployment has no Google client. */
+  readonly google: GoogleDeps | null;
 }
 
 /** How a caller's namespaces differ from the actor's own programs'. */
@@ -125,8 +128,9 @@ export function actorNamespaces(actor: SurfaceActor, policy: SurfacePolicy, call
     createDbCodemodeProvider(actor.db, { private: policy.private }),
     ...agentNamespace(self, actor.ownerWaits),
     ...(call.report === undefined ? [] : [createReportCodemodeProvider(call.report)]),
-    // The agent's own mail, never a slate's or a share's viewer's.
+    // The agent's own mail, never a slate's or a share's viewer's; the account's Google likewise.
     ...(policy.private && actor.mail !== null ? [createMailCodemodeProvider(actor.mail)] : []),
+    ...(policy.private && actor.google !== null ? [createGoogleCodemodeProvider(actor.google)] : []),
     webFor(actor.web, policy),
     // Every machine's `fs` is the actor's own `file` operations, on that machine's root in its plane; a process starts
     // on the machine its cwd is on.
@@ -146,6 +150,7 @@ export function hostedSurfaceActor(
     /** What its native `agents` delegates through, where it delegates; its programs delegate through the same. */
     readonly agents?: () => AgentsToolDeps;
     readonly mail: MailDeps | null;
+    readonly google: GoogleDeps | null;
   },
 ): SurfaceActor {
   const { runtime, stores } = actor;
@@ -159,5 +164,6 @@ export function hostedSurfaceActor(
     self: null,
     ownerWaits: inputs.ownerWaits,
     mail: inputs.mail,
+    google: inputs.google,
   };
 }

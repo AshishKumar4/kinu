@@ -472,8 +472,8 @@ function Rows() {
         <div className="space-y-3">
           <Row tile={<BrandMark brand="github" size={18} />} title="GitHub" meta="Issues, pull requests and code" status={<Status tone="success">Connected</Status>}
             action={<Menu name="GitHub" items={[{ label: "Docs", icon: <ArrowSquareOutIcon size={16} />, onSelect: () => undefined }, { label: "Remove", icon: <TrashIcon size={16} />, onSelect: () => undefined, danger: true, apart: true }]} />} attributes={{}} />
-          <Row tile={<BrandMark brand="google" size={18} />} title="Gmail" meta="Read and search your mail"
-            action={<button type="button" aria-label="Add Gmail" className={ROW_ACTION}><PlusIcon size={16} /></button>} attributes={{}} />
+          <Row tile={<BrandMark brand="google" size={18} />} title="Google" meta="Gmail, Calendar, Drive, contacts"
+            action={<button type="button" aria-label="Connect Google" className={ROW_ACTION}><PlusIcon size={16} /></button>} attributes={{}} />
           <Row tile={<RowTile icon={DesktopTowerIcon} />} title="Workstation" meta="workstation · linux · nvidia0" status={<Status tone="success">Connected</Status>}
             control={<><span className="t-item p-text-2">Sandbox</span><Switch on onChange={() => undefined} label="Sandbox on Workstation" /></>}
             action={<Menu name="Workstation" items={[{ label: "Rename", icon: <PencilSimpleIcon size={16} />, onSelect: () => undefined }]} />}

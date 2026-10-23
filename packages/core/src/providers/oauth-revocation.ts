@@ -11,6 +11,7 @@ import { CLOUDFLARE_OAUTH_CRED_KEY, cloudflareClientAuth, type CloudflareOAuthEn
 import { CHATGPT_CRED_KEY } from './chatgpt';
 import { CHATGPT_REVOKE_URL, chatgptRegistrationOf } from './chatgpt-sign-in';
 import { plainFetch } from './fetch-shim';
+import { GOOGLE_OAUTH_CRED_KEY, GOOGLE_REVOKE_URL } from './google-connection';
 
 export interface RevocationEndpoint {
   /** Named in a refusal, so the owner knows whose words they read. */
@@ -19,6 +20,8 @@ export interface RevocationEndpoint {
   readonly client: { readonly fields: Readonly<Record<string, string>>; readonly headers: Readonly<Record<string, string>> };
   /** The client is the one the login was issued to (Sign in with ChatGPT's dynamic registration). */
   readonly issuedClient?: true;
+  /** Revoking either token ends the whole grant (Google's), so one is sent: a second would be refused as unknown. */
+  readonly wholeGrant?: true;
 }
 
 /** The one list of keys a disconnect can also revoke at their provider; a key absent here can only be disconnected. */
@@ -30,6 +33,8 @@ const REVOCATION = new Map<string, { readonly provider: string; readonly endpoin
 
     return client === null ? null : { url: 'https://dash.cloudflare.com/oauth2/revoke', client };
   } }],
+  // Google's revocation takes no client authentication (developers.google.com/identity/protocols/oauth2/web-server#tokenrevoke).
+  [GOOGLE_OAUTH_CRED_KEY, { provider: 'Google', endpoint: () => ({ url: GOOGLE_REVOKE_URL, client: { fields: {}, headers: {} }, wholeGrant: true }) }],
 ]);
 
 /** A named account (`codex.oauth@work`) revokes as its provider's main one does, with its own tokens. */
@@ -61,7 +66,8 @@ export async function revokeOAuthGrant(input: {
   const tokens: [string, string][] = [];
 
   if (credential.refreshToken) tokens.push([credential.refreshToken, 'refresh_token']);
-  tokens.push([credential.accessToken, 'access_token']);
+
+  if (tokens.length === 0 || input.endpoint.wholeGrant !== true) tokens.push([credential.accessToken, 'access_token']);
 
   return settle(Effect.map(Effect.forEach(tokens, ([token, hint]) => revokeOne(input, token, hint)), (answers) => answers.filter((failure) => failure !== null)));
 }

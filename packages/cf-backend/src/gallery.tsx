@@ -343,7 +343,7 @@ if (mcpPresetVariant === "connected") {
 const mcpSecrets = (() => {
   const raw = new URLSearchParams(location.search).get("mcp-secrets");
 
-  const listed = raw === null ? ["github", "google"] : raw.split(",");
+  const listed = raw === null ? ["github"] : raw.split(",");
 
   return new Set(listed.filter((entry) => entry.length > 0));
 })();
@@ -541,6 +541,12 @@ function chatgptFixture(path: string, method: string, body: BodyInit | null | un
 
   if (path === "/api/user/chatgpt/paste/finish" && method === "POST") {
     if (v.is(v.string(), body) && body.includes("access_denied")) return fixtureJson({ outcome: "declined", email: null });
+
+    // As the account words it (core's chatgpt-sign-in): an address that is not the one the sign-in ended on.
+    if (v.is(v.string(), body) && !body.includes("127.0.0.1:1455/auth/callback")) {
+      return fixtureJson({ error: "That's the sign-in page's own address. Paste the address of the page that didn't load after you signed in: it starts with http://127.0.0.1:1455/auth/callback.", code: "bad_input" }, 400);
+    }
+
     settingsChatGptSignedIn = true;
 
     return fixtureJson({ outcome: "signed_in", email: "owner@example.com" });
@@ -581,16 +587,16 @@ async function settingsSectionsFixture(path: string, method: string, body: BodyI
   }
 
   if (path === "/api/user/claude/start" && method === "POST") {
-    return fixtureJson({ url: "https://claude.ai/oauth/authorize?state=gallery" });
+    return fixtureJson({ url: "https://claude.ai/oauth/authorize?redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&state=gallery" });
   }
 
-  // `good-code` connects; any other code is refused the way Claude's token endpoint words it.
+  // `good-code` connects; any other code is refused as the account words Claude's refusal (claudeSignInRefusal).
   if (path === "/api/user/claude/finish" && method === "POST") {
     settingsClaudeConnected = v.parse(v.object({ code: v.string() }), JSON.parse(v.parse(v.string(), body))).code === "good-code";
 
     return fixtureJson(settingsClaudeConnected
       ? { connected: true }
-      : { connected: false, error: "exchanging the Claude sign-in code: Claude's token endpoint refused the sign-in: Invalid authorization code" });
+      : { connected: false, error: "Claude didn't accept that code (Invalid authorization code). A code works once, for a few minutes: start the sign-in again and paste the new one." });
   }
 
   if (path === "/api/user/usage") {
@@ -698,7 +704,6 @@ function mcpPresetsFixture(): Response {
   return fixtureJson([
     { id: "github", appConfigured: mcpSecrets.has("github") },
     { id: "cloudflare", appConfigured: true },
-    { id: "google", appConfigured: mcpSecrets.has("google") },
   ]);
 }
 
@@ -944,6 +949,11 @@ function welcomeMailFixture(path: string, method: string, body: BodyInit | null 
   return null;
 }
 
+/** The Google connection, offered and not yet connected: its card's way in. */
+function googleConnectionFixture(path: string): Response | null {
+  return path === "/api/user/google" ? fixtureJson({ available: true, connection: null }) : null;
+}
+
 /** Built-in sign-in off, as on an account with an OAuth app: the invite card stays away. */
 function builtinAuthFixture(path: string): Response | null {
   return path === "/api/user/builtin-auth" ? fixtureJson({ enabled: false, owner: false }) : null;
@@ -953,6 +963,7 @@ const SETTINGS_SLICES: readonly SettingsSlice[] = [
   secretsFixture,
   galleryWebSearchTest,
   builtinAuthFixture,
+  googleConnectionFixture,
   welcomeMailFixture,
   accountMemoryFixture,
   accountProfileFixture,

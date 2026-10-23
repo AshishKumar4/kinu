@@ -19,9 +19,23 @@ function bytes(content: ArrayBuffer | Uint8Array | string): Uint8Array {
   return content instanceof Uint8Array ? content : new Uint8Array(content);
 }
 
-export async function parseMail(raw: Uint8Array): Promise<ParsedMail> {
+async function postalMime(raw: Uint8Array): Promise<Email> {
   // Loaded with the first message, not at the Worker's start (armada 20261007213937-cdf08921).
-  const parsed: Email = await (await import('postal-mime')).default.parse(raw);
+  return (await import('postal-mime')).default.parse(raw);
+}
+
+/** A message as it would leave, for an approval card: every recipient it is sent to, Bcc's too, and its words. */
+export async function readOutgoing(raw: Uint8Array): Promise<Pick<ParsedMail, 'to' | 'cc' | 'subject' | 'text'> & { readonly bcc: ParsedMail['cc'] }> {
+  const parsed = await postalMime(raw);
+
+  return {
+    to: parties(parsed.to), cc: parties(parsed.cc), bcc: parties(parsed.bcc),
+    subject: parsed.subject?.trim() ?? '', text: (await inboundBody(parsed.text, parsed.html)).trimEnd(),
+  };
+}
+
+export async function parseMail(raw: Uint8Array): Promise<ParsedMail> {
+  const parsed = await postalMime(raw);
   const text = (await inboundBody(parsed.text, parsed.html)).trimEnd();
 
   return {

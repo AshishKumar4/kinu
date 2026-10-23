@@ -173,6 +173,9 @@ const USER_DO_METHODS = [
   'acknowledgeUnstoppedDevice',
   'cancelDeviceRequestsForAgent',
   'cancelDeviceRequestsForBackgroundJob',
+  'googleCall',
+  'googleConnection',
+  'googleToken',
   'grantDeviceConsent',
   'revokeDeviceConsent',
   'revokeSecretGrant',
@@ -292,6 +295,7 @@ const ACTOR_AGENT_RPC_SURFACE = [
 const ORCHESTRATOR_METHODS = [
   'abortExecutorFileDownload',
   'opsBookmark',
+  'opsMissing',
   'opsRestart',
   'opsRestore',
   'opsTables',

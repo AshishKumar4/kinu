@@ -5,7 +5,7 @@ import type { UserDO } from './user-do';
 import { ROSTER_SOCKET_PATH } from './roster';
 import { appendIdentityHeaders } from '../cli/rpc-gate';
 import { pictureKey, PictureAddressSchema, readPictureInMode, type PictureBucket } from '../slates/pictures';
-import { connectedPath, FILES_VIEW_CONFIG_KEY, filesViewNamed, PROFILE_CATALOG_CONFIG_KEY, THEME_CONFIG_KEY, THEME_NAMES, themeNamed, USER_WEB_SEARCH_TEST_PATH } from '@kinu.run/core';
+import { connectedPath, GOOGLE_OAUTH_CRED_KEY, FILES_VIEW_CONFIG_KEY, filesViewNamed, PROFILE_CATALOG_CONFIG_KEY, THEME_CONFIG_KEY, THEME_NAMES, themeNamed, USER_WEB_SEARCH_TEST_PATH } from '@kinu.run/core';
 import { BOX_SIZE_ORDER } from '@kinu.run/devbox/sizes';
 import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY } from '../computer-size';
 import { DEVICE_TIERS, JsonValueSchema } from '@kinu.run/core';
@@ -21,6 +21,7 @@ import { idempotent } from '@nimbus-sh/fabric/do-calls.js';
 import { logDoCallRetry } from '../obs/do-call-retry';
 import type { UserCaller } from '@kinu.run/core';
 import { isControlPlaneOperator, type AdminGateEnv } from '../control-plane/admin-caller';
+import { completeGoogleConnect, GOOGLE_CONNECT_STATE_PREFIX, googleConnectable, startGoogleConnect, type GoogleConnectEnv } from './google-connect';
 import { controlPlaneStub, hasControlPlane } from '../control-plane/stub';
 import type { IndexFeedSink } from '../control-plane/index-feed';
 import type { ControlPlaneDO } from '../control-plane/control-plane-do';
@@ -41,7 +42,7 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   | 'fetch' | 'listWorkspaces' | 'touchWorkspace' | 'removeWorkspace' | 'hasWorkspace'
   | 'listDevices' | 'issueDeviceJoin' | 'acknowledgeUnstoppedDevice' | 'revokeDevice' | 'renameDevice' | 'listDeviceConsents'
   | 'setDeviceTier' | 'grantDeviceConsent' | 'revokeDeviceConsent'
-  | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'checkpointCredentials' | 'restoreCredentials' | 'listActiveWorkspaces' | 'getAuthHeaders' | 'getAuth'
+  | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'googleConnection' | 'checkpointCredentials' | 'restoreCredentials' | 'listActiveWorkspaces' | 'getAuthHeaders' | 'getAuth'
   | 'limits' | 'limits_inviteRedeemed'
   | 'getCodexStatus' | 'disconnectCodex' | 'startClaudeSignIn' | 'finishClaudeSignIn'
   | 'chatgptPlan' | 'startChatGptSignIn' | 'cancelChatGptSignIn' | 'startChatGptPasteSignIn' | 'finishChatGptPasteSignIn' | 'signOutChatGpt'
@@ -55,7 +56,7 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   | 'listSecrets' | 'putSecrets' | 'setSecretDestination' | 'deleteSecret' | 'grantSecret' | 'revokeSecretGrant'
 >;
 
-export interface UserRoutesEnv<Id> extends CreateWorkspaceEnv<Id>, AdminGateEnv {
+export interface UserRoutesEnv<Id> extends CreateWorkspaceEnv<Id>, AdminGateEnv, GoogleConnectEnv {
   /** The control plane, as the index feed and an invite link's spending reach it. */
   ControlPlaneDO?: ObjectNamespace<Id, IndexFeedSink & Pick<ControlPlaneDO, 'redeemInvite'>>;
   /** The deployment's binding, whose `websearch` Settings' Test reaches for an account with no Cloudflare login. */
@@ -674,7 +675,23 @@ userRoutes.delete('/api/user/memory/notes/:id', (c) => settle(Effect.tryPromise(
   catch: (cause) => authoredRefusal({ doing: 'forgetting this account note', cause }),
 })));
 
+// The Google connection: whether this account may connect it here, and the one it holds.
+userRoutes.get('/api/user/google', async (c) => json({ body: {
+  available: googleConnectable(c.env, c.get('identity').email),
+  connection: await c.get('stub').googleConnection(c.get('owner')),
+} }));
+
+userRoutes.get('/api/user/google/connect', async (c) => startGoogleConnect(c.req.raw, c.env, { account: c.get('identity').userId, email: c.get('identity').email }));
+
 userRoutes.get('/api/user/mcp/callback', async (c) => {
+  // The Google connection's sign-in returns here too, its client's registered address; its state says so.
+  if ((new URL(c.req.url).searchParams.get('state') ?? '').startsWith(GOOGLE_CONNECT_STATE_PREFIX)) {
+    return completeGoogleConnect({
+      request: c.req.raw, env: c.env, account: c.get('identity').userId,
+      keep: async (credential) => { await c.get('stub').setCredential(c.get('owner'), GOOGLE_OAUTH_CRED_KEY, credential); },
+    });
+  }
+
   // `userMcp_handleOAuthCallback` validates the `<nonce>.<serverId>` state inside UserDO.
   const ended = await c.get('stub').userMcp_handleOAuthCallback(c.get('owner'), c.req.url);
 

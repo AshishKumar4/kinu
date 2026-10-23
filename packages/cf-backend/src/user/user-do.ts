@@ -11,7 +11,7 @@ import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from '../act
 
 import {
   isEvalAccountEmail, objectNamed,
-  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type SecretSummary, type SecretInput, type SecretDestination, type GrantedSecrets, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, type RosterPage, type CredentialSummary, type WorkspaceEntry, type UserProfile, DEVICE_FRAMES, DEVICE_SCREEN_PATH, screenFromSocket, readScreenData, statementText,   bookmarkNow, restartedForRestore, restoreArmed, type ArmedRestore, type RestoreTarget,
+  ownerCaller, callGoogle, GoogleCallSchema, type GoogleAnswer, type GoogleCall, type GoogleGrant, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type SecretSummary, type SecretInput, type SecretDestination, type GrantedSecrets, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, type RosterPage, type CredentialSummary, type WorkspaceEntry, type UserProfile, DEVICE_FRAMES, DEVICE_SCREEN_PATH, screenFromSocket, readScreenData, statementText,   bookmarkNow, restartedForRestore, restoreArmed, type ArmedRestore, type RestoreTarget,
 } from '@kinu.run/core';
 
 import { DurableObjectOAuthClientProvider, type AgentMcpOAuthProvider } from 'agents/mcp/do-oauth-client-provider';
@@ -155,9 +155,13 @@ export class UserDO extends Agent<Env> {
     sessionStands: (tokenHash) => this.sessions.sessionStands(tokenHash),
   };
 
-  private readonly credentials = new UserCredentials(this.host);
+  // The Google connection is a connection the assistant's watchers key on, as a preset's server is.
+  private readonly credentials = new UserCredentials({ ...this.host, googleMoved: async () => this.mcpServers.googleConnectionMoved() });
 
-  private readonly secrets = new UserSecrets(this.host);
+  private readonly secrets: UserSecrets = new UserSecrets(this.host, {
+    configured: () => this.mcpServers.githubConnected(),
+    token: async () => this.mcpServers.githubGitToken(),
+  });
 
   private readonly sessions = new UserSessions({
     ...this.host,
@@ -168,7 +172,9 @@ export class UserDO extends Agent<Env> {
     suspension: () => this.accountLimits.suspension(),
   });
 
-  private readonly mcpServers = new UserMcpServers({ ...this.host, mcp: this.mcp, vault: this.credentials });
+  private readonly mcpServers: UserMcpServers = new UserMcpServers({
+    ...this.host, mcp: this.mcp, vault: this.credentials, connectionsMoved: async () => this.secrets.connectionsMoved(),
+  });
 
   private readonly slateConsentStore = new SlateConsentStore(this.ctx.storage.sql);
 
@@ -547,6 +553,25 @@ export class UserDO extends Agent<Env> {
 
   deleteCredential(caller: UserCaller, key: string, revoke: boolean): Promise<DisconnectOutcome> {
     return this.credentials.deleteCredential(caller, key, revoke);
+  }
+
+  /** The Google connection as Settings shows it: the account Google connected and the scopes it granted. */
+  googleConnection(caller: UserCaller): Promise<GoogleGrant | null> {
+    return this.credentials.googleConnection(caller);
+  }
+
+  /** The Google connection's access token, renewed when due or when Google refused the held one. Owner only. */
+  googleToken(caller: UserCaller, opts?: { readonly refused?: boolean }): Promise<string | null> {
+    return this.credentials.googleToken(caller, opts);
+  }
+
+  /** One request to Google's APIs through the account's connection, made here so its token never leaves the account. A
+   *  workspace's write reaches this only with its owner's approval (`google.write`). */
+  async googleCall(caller: UserCaller, request: GoogleCall): Promise<GoogleAnswer> {
+    await this.requireTier(caller, 'google.call');
+    const owner = await ownerCaller(this.env);
+
+    return callGoogle(v.parse(GoogleCallSchema, request), async (refused) => this.credentials.googleToken(owner, { refused }));
   }
 
   checkpointCredentials(caller: UserCaller, account: string): Promise<CheckpointedCredential[]> {

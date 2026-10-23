@@ -22,12 +22,12 @@ import {
   driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState, openWaitsNamed, slateOpensFromSlates,
   slateSharesReachingNothing, slateShowsItsPreview, workspaceGetsFirstAnswer, writtenFileShowsInFilesAndChanges, changesStormStaysBounded,
   openMemoryFollowsItsWriter, computerDesktopSurvivesAResize, computerSwitchKeepsItsScreens, reopenedWorkspaceRunsTheDeployedBuild,
-  computerSessionsComeBackByName, agentJobIsAnsweredInItsSession, attachmentIsReadAndShown, chatOnlyRewindIsShown, activityIsShown, slatePicturesFollowMode, type AgentPlanVerdict, type AgentReturnVerdict,
+  computerSessionsComeBackByName, agentJobIsAnsweredInItsSession, attachmentIsReadAndShown, chatOnlyRewindIsShown, activityIsShown, slatePicturesFollowMode, claudeCodePageExchanges, type AgentPlanVerdict, type AgentReturnVerdict,
   type ApprovalStackVerdict, type HireApprovalVerdict, type AgentWorkspaceVerdict, type AccountMemoryVerdict, type StackMemoryVerdict,
   type SpliceVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict,
   type FirstAnswerVerdict, type PanelVerdict, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict,
   type StampedCardVerdict, type WrittenFileVerdict, type DesktopResizeVerdict, type DesktopSwitchVerdict, type ReopenVerdict,
-  type SessionsVerdict, type AgentJobVerdict, type AttachmentVerdict, type RewindVerdict, type ActivityVerdict, type SlatePicturesVerdict,
+  type SessionsVerdict, type AgentJobVerdict, type AttachmentVerdict, type RewindVerdict, type ActivityVerdict, type SlatePicturesVerdict, type ClaudeCodePageVerdict,
 } from '../../scripts/product-flows';
 import { INSPECTOR_SHUT_PX, type FlowTarget } from '../../scripts/browser-page';
 import {
@@ -635,6 +635,26 @@ describe(productFlowTestName('slate-pictures', "a slate's picture follows the re
     const { light, dark } = verdictOf(observed, 'slate-pictures');
 
     expect(light.luminance - dark.luminance).toBeGreaterThan(0.5);
+  });
+});
+
+describe(productFlowTestName('claude-code-page', "Claude's sign-in returns through Anthropic's code page, and the deployment exchanges the code"), () => {
+  let observed: ClaudeCodePageVerdict | null = null;
+
+  beforeAll(async () => {
+    observed = await flowRow('claude-code-page', claudeCodePageExchanges);
+  });
+
+  test("the sign-in sends the browser back to Anthropic's page, which shows the code", () => {
+    expect(verdictOf(observed, 'claude-code-page').redirect).toBe('https://platform.claude.com/oauth/code/callback');
+  });
+
+  test("Anthropic, reached from the deployment, refuses the made-up code and nothing else, said in a sentence", () => {
+    const { refusal } = verdictOf(observed, 'claude-code-page');
+
+    expect(refusal).toStartWith("Claude didn't accept that code (");
+    expect(refusal).toMatch(/code/iu);
+    expect(refusal).not.toMatch(/redirect|client/iu);
   });
 });
 

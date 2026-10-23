@@ -268,6 +268,14 @@ const revoking = (revoke: boolean) => revoke ? '?revoke=1' : '';
 export const deleteCredential = (key: string, revoke: boolean) =>
   settle(api(DisconnectOutcomeSchema, 'DELETE', `/credentials/${encodeURIComponent(key)}${revoking(revoke)}`));
 
+/** The Google connection: whether this account may connect it here, and the account and scopes it holds. */
+const GoogleConnectionSchema = v.object({
+  available: v.boolean(),
+  connection: v.nullable(v.object({ account: v.string(), scopes: v.array(v.string()) })),
+});
+
+export const googleConnection = () => settle(api(GoogleConnectionSchema, 'GET', '/google'));
+
 const CodexStatusSchema = v.object({
   connected: v.boolean(), accountId: v.nullable(v.string()), expiresAt: v.nullable(v.number()),
 });
@@ -455,10 +463,11 @@ export const beginMcpConnect = (id: string, run: string) =>
   settle(api(v.object({ authUrl: v.string() }), 'POST', `/mcp/servers/${encodeURIComponent(id)}/connect`, { run }));
 
 /** A failed or closed MCP server dialled again: null once it answers again, else what went wrong in words for `name`'s row. */
-export const reconnectSaying = (id: string, name: string): Promise<string | null> => settle(Effect.match(
+export const reconnectSaying = (id: string, name: string): Promise<string | null> => settle(Effect.matchCause(
   api(v.object({ status: McpServerSummarySchema.entries.status, error: v.nullable(v.string()) }), 'POST', `/mcp/servers/${encodeURIComponent(id)}/reconnect`),
   {
-    onFailure: (cause) => `${name} did not reconnect: ${renderThrownChain({ cause })}`,
+    // A refusal travels as a defect (`lib/http.ts`): every cause is said, not only a typed failure.
+    onFailure: (cause) => `${name} did not reconnect: ${renderThrownChain({ cause: Cause.squash(cause) })}`,
     onSuccess: (after) => (after.error === null ? null : `${name} did not reconnect: ${after.error}`),
   },
 ));
