@@ -1618,7 +1618,8 @@
   "user_devices@packages/core/src/state/user-schema.ts": [
     "id TEXT PRIMARY KEY",
     "public_key TEXT NOT NULL",
-    "connect_generation INTEGER NOT NULL DEFAULT 0",
+    "connect_secret_hash TEXT",
+    "pending_secret_hash TEXT",
     "clone_detected_at INTEGER",
     "label TEXT NOT NULL",
     "os TEXT",
