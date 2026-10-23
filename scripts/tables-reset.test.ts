@@ -10,7 +10,7 @@ import * as v from 'valibot';
 import { describe, expect, test } from 'bun:test';
 import { censusOf, initActivationTable, recordActivation, sha256Hex, type Repair, type TablesAnswer } from '@kinu.run/core';
 import { makeSql, makeSqlExec } from '../packages/core/tests/helpers';
-import { censusDiff, censusLines, changedTables, confirmation, derivedIn, lossRefusals, planLines, referrersOf, schemaChange, verdictOf, walk, walkLines, type OpsBody, type Reached, type TablesTarget } from './tables-reset';
+import { censusDiff, censusLines, changedTables, classLossRefusals, confirmation, derivedIn, lossRefusals, planLines, referrersOf, schemaChange, verdictOf, walk, walkLines, type OpsBody, type Reached, type TablesTarget } from './tables-reset';
 
 const FROM = {
   'device_joins@packages/core/src/state/user-schema.ts': ['device_id TEXT PRIMARY KEY', 'expires_at INTEGER NOT NULL'],
@@ -116,6 +116,27 @@ describe('in production, a plan that loses data', () => {
     const made = new Set(Object.values(classes).flat());
 
     expect(Object.entries(loss).filter(([table, why]) => !made.has(table) || why.trim().length < 12)).toEqual([]);
+  });
+
+  // The review of 2026-10-23: an `exports` entry tombstoned (`state: 'deleted'`) deletes its class's namespace and every
+  // row in it, and no table guard saw it. A class the served build exports and the candidate does not is that loss.
+  test('a class the served build exports and the release retires is refused unless the owner\'s words name it', () => {
+    const served = ['OrchestratorAgent', 'CliAuthDO', 'OldMailDO'];
+
+    expect({
+      kept: classLossRefusals(served, ['OrchestratorAgent', 'CliAuthDO', 'OldMailDO', 'NewDO'], undefined),
+      retired: classLossRefusals(served, ['OrchestratorAgent', 'NewDO'], undefined),
+      named: classLossRefusals(served, ['OrchestratorAgent', 'NewDO'], 'owner 2026-10-23: retire CliAuthDO; OldMailDO stays'),
+      prefix: classLossRefusals(served, ['OrchestratorAgent', 'CliAuthDO'], 'owner: retire OldMail'),
+    }).toEqual({
+      kept: [],
+      retired: [
+        'CliAuthDO is exported by the build production serves, and this release retires it, deleting every row of it',
+        'OldMailDO is exported by the build production serves, and this release retires it, deleting every row of it',
+      ],
+      named: [],
+      prefix: ['OldMailDO is exported by the build production serves, and this release retires it, deleting every row of it'],
+    });
   });
 
   test('passes where the owner\'s words name each such table, and only that table', () => {

@@ -52,12 +52,12 @@ import {
   r2Text, requireCloudflareAccountId, why, wrangler,
 } from './infra-cloudflare';
 import {
-  type DeployedConfig, ExportEntrySchema, INFRA_ENVIRONMENTS, type InfraEnvironment, type Resource, bucketOf, deployedConfig, liveClasses,
+  type DeployedConfig, ExportEntrySchema, INFRA_ENVIRONMENTS, type InfraEnvironment, type Resource, WRANGLER_CONFIG, bucketOf, deployedConfig, liveClasses,
 } from './infra-manifest';
 import { servedHealth } from './served-health';
 import { readGenesisLockText } from './schema-drift';
 import {
-  censusDiff, censusLines, changedTables, confirmation, derivedIn, listedObjects, lossRefusals, planLines, referrersOf, schemaChange, verdictOf, walk, walkLines, writeLines,
+  censusDiff, censusLines, changedTables, classLossRefusals, confirmation, derivedIn, listedObjects, lossRefusals, planLines, referrersOf, schemaChange, verdictOf, walk, walkLines, writeLines,
   type TablesTarget,
 } from './tables-reset';
 import { OPS_PASS_PREFIX } from '@kinu.run/core';
@@ -523,7 +523,7 @@ async function confirmedAtTerminal(words = PRODUCTION_CONFIRMATION, what = 'dele
 }
 
 /** A tables release's commands (scripts/tables-reset.ts). */
-const TABLES_COMMANDS = ['served', 'stamps', 'schema-change', 'census', 'tables-plan', 'tables-record', 'tables'] as const;
+const TABLES_COMMANDS = ['served', 'stamps', 'schema-change', 'retirements', 'census', 'tables-plan', 'tables-record', 'tables'] as const;
 
 /** `census-diff <environment> <before> <after> <record>`: the proof a tables release keeps, its plan's tables read from
  *  its record. Staging holds still while a release's eval runs on it; production's people write all along. */
@@ -549,6 +549,11 @@ function censusDiffCommand(environment: InfraEnvironment, args: readonly string[
 }
 
 /** `served`, `stamps`, `census`, `tables-plan`, `tables-record` and `tables`: a tables release's commands. */
+/** The commands that read the deployment and the candidate alone, no record between them. */
+const READS: Partial<Record<(typeof TABLES_COMMANDS)[number], (environment: InfraEnvironment) => Promise<number>>> = {
+  stamps: stampsMoved, 'schema-change': schemaChangeOf, retirements: retirementsOf,
+};
+
 async function tablesCommand(command: (typeof TABLES_COMMANDS)[number], environment: InfraEnvironment, args: readonly string[]): Promise<number> {
   const [recordFile, flag, from] = args;
 
@@ -561,9 +566,9 @@ async function tablesCommand(command: (typeof TABLES_COMMANDS)[number], environm
     return 0;
   }
 
-  if (command === 'stamps' && recordFile === undefined) return await stampsMoved(environment);
+  const reads = READS[command];
 
-  if (command === 'schema-change' && recordFile === undefined) return await schemaChangeOf(environment);
+  if (reads !== undefined && recordFile === undefined) return await reads(environment);
 
   if (command === 'census' && recordFile !== undefined) {
     const { reached } = await walk(tablesTarget(environment, plan(environment).config));
@@ -584,7 +589,7 @@ async function tablesCommand(command: (typeof TABLES_COMMANDS)[number], environm
 
   console.error('usage: bun scripts/reset.ts served <environment> | stamps <environment> | census <environment> <out> '
     + '| tables-plan <environment> <record> [--from <sha>] | tables-record <environment> <record> | tables <environment> <record> '
-    + '| schema-change <environment>');
+    + '| schema-change <environment> | retirements <environment>');
 
   return 2;
 }
@@ -604,6 +609,34 @@ async function stampsMoved(environment: InfraEnvironment): Promise<number> {
   console.log(moved.length === 0 ? 'none' : moved.join(','));
 
   return moved.length === 0 ? 0 : 3;
+}
+
+/** Exit 1 when the candidate retires a class the deployment's served build exports and, in production, the owner's words
+ *  (`KINU_LOSS_OVERRIDE`) do not name it: its namespace and every row in it go with the deploy. Elsewhere it is said. */
+async function retirementsOf(environment: InfraEnvironment): Promise<number> {
+  const sha = (await servedHealth(origin(plan(environment).config))).build?.sha;
+
+  if (sha === undefined) throw new Error(`${environment} serves no build stamp, so which classes this release retires is unknown`);
+
+  const exported = (commit: string) => {
+    const config = join(mkdtempSync(join(tmpdir(), 'kinu-exports-')), 'wrangler.jsonc');
+
+    writeFileSync(config, fileAt(process.cwd(), commit, WRANGLER_CONFIG));
+
+    return liveClasses(deployedConfig(environment, config).exports);
+  };
+
+  const refusals = classLossRefusals(exported(sha), exported('HEAD'), environment === 'production' ? process.env['KINU_LOSS_OVERRIDE'] : undefined);
+
+  for (const line of refusals) console.error(`retirements: ${line}`);
+
+  if (refusals.length === 0) return 0;
+
+  if (environment !== 'production') return 0;
+  console.error('retirements: REFUSED before the upload: production loses no user\'s rows (the owner, 2026-10-21). Keep the class, or '
+    + 'deploy with --loss-override "<the owner\'s words naming each class>". Nothing was uploaded.');
+
+  return 1;
 }
 
 /** What this release does to the tables of the build the deployment serves (`schemaChange`): exit 0 for none, 4 for

@@ -124,6 +124,18 @@ export function schemaChange({ changed, added }: ReleaseTables): SchemaChange {
 }
 
 /**
+ * Production's refusals of a release that retires a class (an `exports` entry tombstoned, or gone), which deletes its
+ * namespace and every row in it: one line for each class the served build exports live and the candidate does not,
+ * unless the owner's `words` name it, as {@link lossRefusals} reads them for tables.
+ */
+export function classLossRefusals(served: readonly string[], candidate: readonly string[], words: string | undefined): string[] {
+  const named = new Set((words ?? '').split(/[^A-Za-z0-9_]+/u));
+
+  return served.filter((name) => !candidate.includes(name) && !named.has(name))
+    .map((name) => `${name} is exported by the build production serves, and this release retires it, deleting every row of it`);
+}
+
+/**
  * Production's refusals of a plan that loses data (the owner, 2026-10-21: "once users come, we either have a one time
  * migration in the workspace onStart, or alter only tables where data loss is acceptable"): one line for each table the
  * plan drops or retires that holds user data, every table but those `acceptable` names (`scripts/schema-loss.json`, each
