@@ -1958,11 +1958,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * The settings revision read of the next opening of an agent with no turn running, with its planes, started as the
-   * delivery that opens it crosses (`admit`): they reach the owner's object before the tile that admission moves, whose
-   * write would hold their answers behind its flush, and are answered while the agent admits and opens its turn. Written
-   * there; taken by the agent's next preparation (`openingAccount`); dropped when the agent tells it rests or is retired
-   * (`openingAccountDropped`).
+   * The settings revision read of an idle agent's next opening, with its planes, started as the delivery that opens its
+   * work crosses (`admit`): they reach the owner's object before the tile that admission moves, whose write would hold
+   * their answers behind its flush. Written there; taken by the agent's next preparation (`openingAccount`); dropped
+   * when the agent tells it rests or is retired (`openingAccountDropped`).
    */
   private readonly accountAtOpen = new Map<string, Promise<Exit.Exit<void, KinuError>>>();
 
@@ -2991,10 +2990,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     transaction: (body) => this.ctx.storage.transactionSync(body),
     wake: (actorId, at) => this.owedWake(actorId, at ?? Date.now() + RECOVERY_BACKOFF_CEILING_MS),
     admit: async (actorId, delivery) => {
-      // An agent with no turn running opens one on what crosses: its opening's account reads go out ahead of its tile and
-      // its own admission, at rest or between turns (#103: a warm turn's preparation waited 150 ms on them). The fence is
-      // durable: a turn this activation did not open runs on past a reset, with no turn of it held here.
-      if (this.agentTurns.currentTurn(actorId) === null && this.heldFence(actorId)?.live !== true) this.openingAccountStarted(actorId);
+      // An agent at rest opens its work on what crosses: its opening's account reads go out ahead of its tile.
+      if (!this.agentsWorking.has(actorId)) this.openingAccountStarted(actorId);
       let working = false;
 
       try {
