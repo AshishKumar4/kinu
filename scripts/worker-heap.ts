@@ -456,12 +456,13 @@ function retainedApart(after: Isolates<LiveHeap>, before: Isolates<LiveHeap>): H
  *  that read the wrong isolate, or none, would bound nothing there. */
 export const PLANTED_BYTES = 4_000_000;
 
-/** The built assets with main's isolate swapped for the shipped facet plus `plant` (`tests/workerd/heap-plant-agent.ts`). */
-function plantingAssets(directory: string): string {
+/** The built assets with main's isolate swapped for the shipped facet plus `plant` (`tests/workerd/heap-plant-agent.ts`), or,
+ *  in the loop pass, that facet with its zero-delay timers made visible (`tests/workerd/loop-turn-agent.ts`). */
+function plantingAssets(directory: string, entry: 'heap-plant-agent.ts' | 'loop-turn-agent.ts'): string {
   const assets = mkdtempSync(join(tmpdir(), 'kinu-worker-heap-assets-'));
 
   cpSync(directory, assets, { recursive: true });
-  writeFileSync(join(assets, '_agent/modules.json'), JSON.stringify(buildAgentBundle(join(CF_BACKEND, 'tests/workerd/heap-plant-agent.ts')).modules));
+  writeFileSync(join(assets, '_agent/modules.json'), JSON.stringify(buildAgentBundle(join(CF_BACKEND, 'tests/workerd', entry)).modules));
 
   return assets;
 }
@@ -720,7 +721,7 @@ export async function measure({ loopTurns }: { readonly loopTurns: boolean }): P
   const port = await freePort();
   const compat = { compatibilityDate: wrangler.compatibility_date, compatibilityFlags: wrangler.compatibility_flags };
   // Removed with the run, below: one a run cut short is left to preflight, which counts `kinu-`.
-  const assets = plantingAssets(resolvePath(DIST, wrangler.assets.directory));
+  const assets = plantingAssets(resolvePath(DIST, wrangler.assets.directory), loopTurns ? 'loop-turn-agent.ts' : 'heap-plant-agent.ts');
 
   let driver: Awaited<ReturnType<Miniflare['getWorker']>>;
 
