@@ -14,7 +14,7 @@ Measured through Cloudflare's Web Search API (`POST /accounts/{id}/ai/websearch/
 | Linkup | 3.17 | 32/36 | 26/36 | 21/36 | 1602 ms | $5.00 |
 | Ceramic.ai | 1.72 | 11/36 | 11/36 | 18/36 | 525 ms | $0.25 |
 
-Exa is Kinu's default (commit 2d9afcb03). All three of the API's indexes are offered, Ceramic.ai included, on the owner's call (2026-10-19); the 3.0 bar governs providers with their own API.
+Exa is Kinu's default (commit 2d9afcb03). Exa's own API is offered with the person's key, and it is the default chain's second entry: on 2026-10-23 production's gateway ran out of credits (402 "Your AI Gateway credit balance is zero") and every search failed; with a key stored, the search goes on, and with none the refusal says a key would serve. The direct path is the same index; its relevance was measured through Cloudflare only. All three of the API's indexes are offered, Ceramic.ai included, on the owner's call (2026-10-19); the 3.0 bar governs providers with their own API.
 
 Closed to new customers, so not candidates: Google's Custom Search JSON API (developers.google.com/custom-search/v1/overview: no new customers, discontinued 2027-01-01) and Bing Web Search (retired 2025-08-11, learn.microsoft.com lifecycle notice).
 

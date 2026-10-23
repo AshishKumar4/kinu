@@ -64,10 +64,31 @@ export const CLOUDFLARE_WEB_SEARCH = {
 } as const;
 
 /**
- * Exa: relevance 3.92 of 4 through Cloudflare, 35 of 36 answerable and current, junk in 3; $7.00 per 1,000 searches
- * (developers.cloudflare.com/web-search/providers).
+ * Exa's own search (exa.ai/docs/exa-spec.yaml, read 2026-10-23), the index Cloudflare serves as Exa, with the person's
+ * key: its highlights are each result's snippet. Its refusal names itself (401 `INVALID_API_KEY`, measured 2026-10-23).
  */
-const EXA: WebSearchProviderEntry = { label: 'Exa', cloudflare: true, direct: null };
+const EXA_DIRECT: DirectSearchApi = {
+  keyPage: 'https://dashboard.exa.ai/api-keys',
+  maxResults: 100,
+  request: ({ query, limit, key }) => ({
+    url: 'https://api.exa.ai/search',
+    init: { method: 'POST', headers: { 'x-api-key': key, 'content-type': 'application/json' }, body: JSON.stringify({ query, numResults: limit, contents: { highlights: true } }) },
+  }),
+  answer: v.pipe(
+    v.object({ results: v.array(v.object({ url: v.string(), title: v.optional(v.nullable(v.string())), publishedDate: v.optional(v.nullable(v.string())), highlights: v.optional(v.array(v.string())) })) }),
+    v.transform(({ results }): SearchAnswer => ({
+      hits: results.map((hit) => ({ url: hit.url, title: hit.title ?? undefined, snippet: hit.highlights?.join(' ... '), date: hit.publishedDate ?? undefined })),
+    })),
+  ),
+  refusal: v.pipe(v.object({ error: v.string() }), v.transform(({ error }) => error)),
+};
+
+/**
+ * Exa: relevance 3.92 of 4 through Cloudflare, 35 of 36 answerable and current, junk in 3; $7.00 per 1,000 searches
+ * (developers.cloudflare.com/web-search/providers). Also with the person's own key, so a search goes on without
+ * Cloudflare credits.
+ */
+const EXA: WebSearchProviderEntry = { label: 'Exa', cloudflare: true, direct: EXA_DIRECT };
 
 /** Linkup: 3.17 through Cloudflare, 32 answerable, 26 current, junk in 21; $5.00 per 1,000. */
 const LINKUP: WebSearchProviderEntry = { label: 'Linkup', cloudflare: true, direct: null };
@@ -110,5 +131,9 @@ export const WebSearchRouteSchema = v.pipe(
   v.check(servedRoute, 'a search entry names a way its provider is served: Cloudflare for the indexes its API offers, a key for a provider with its own API'),
 );
 
-/** What an account searches with until it chooses: Exa, the best index on the 36, billed through Cloudflare. */
-export const DEFAULT_WEB_SEARCH_CHAIN: readonly [WebSearchRoute, ...WebSearchRoute[]] = [{ provider: 'exa', billing: 'cloudflare' }];
+/**
+ * What an account searches with until it chooses: Exa, the best index on the 36, billed through Cloudflare, then Exa with
+ * the person's own key where they stored one, so a search goes on when the gateway's credits run out (production
+ * 2026-10-23: 402 "Your AI Gateway credit balance is zero"); with none stored, the refusal says a key would serve.
+ */
+export const DEFAULT_WEB_SEARCH_CHAIN: readonly [WebSearchRoute, ...WebSearchRoute[]] = [{ provider: 'exa', billing: 'cloudflare' }, { provider: 'exa', billing: 'key' }];

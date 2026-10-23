@@ -99,7 +99,9 @@ test("a refusal reaches the CLI in Cloudflare's own words, and no one else's tok
   const spent = world(() => Response.json({ ok: false, error: { code: 'web_search_payment_required', status: 402, message: 'Your AI Gateway credit balance is zero' } }, { status: 402 }));
 
   await expect(spent.viaCli(SESSION_TOKEN).search('wrangler deploy')).rejects.toMatchObject({
-    code: 'denied', message: "Exa on this deployment's AI Gateway: Cloudflare answered 402: Your AI Gateway credit balance is zero",
+    // With no key stored, the default chain's second entry says one would serve.
+    code: 'denied', message: "Exa on this deployment's AI Gateway: Cloudflare answered 402: Your AI Gateway credit balance is zero; Exa with your key: no Exa key is stored. "
+      + 'To search again, add AI Gateway credits, or a search key in Settings > Web search.',
   });
 
   // Signed out, or a token not minted for the deployment's services: refused at the gate, nothing searched.

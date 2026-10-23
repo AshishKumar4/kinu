@@ -4,7 +4,7 @@
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  chainWebSearch,
+  chainWebSearch, DEFAULT_WEB_SEARCH_CHAIN,
   type AuthResolver, type DeploymentSearch, type ModelCallReport, type WebSearchRoute,
 } from '../src/index';
 import { ProviderPacer } from '../src/providers/pacing';
@@ -107,7 +107,10 @@ describe('who pays for a search through Cloudflare', () => {
     const w = world({ login: true, rest: () => spent() });
 
     await expect(w.searchWith([EXA], 0)({ query: 'q', limit: 5 }))
-      .rejects.toMatchObject({ code: 'denied', message: 'Exa on your AI Gateway: Cloudflare answered 402: Your AI Gateway credit balance is zero' });
+      .rejects.toMatchObject({
+        code: 'denied',
+        message: 'Exa on your AI Gateway: Cloudflare answered 402: Your AI Gateway credit balance is zero. To search again, add AI Gateway credits, or a search key in Settings > Web search.',
+      });
     expect(w.asked).toEqual([]);
   });
 
@@ -165,10 +168,42 @@ describe('a refusal along the chain', () => {
     await expect(refused).rejects.toMatchObject({
       code: 'denied',
       message: 'Exa on this deployment\'s AI Gateway: Cloudflare answered 402: Your AI Gateway credit balance is zero; '
-        + 'Linkup on this deployment\'s AI Gateway: Cloudflare answered 403: Authentication error',
+        + 'Linkup on this deployment\'s AI Gateway: Cloudflare answered 403: Authentication error. '
+        + 'To search again, add AI Gateway credits, or a search key in Settings > Web search.',
     });
     expect(w.asked).toEqual(['exa:q:5', 'linkup:q:5']);
     expect(w.waits).toEqual([]);
+  });
+
+  // Production 2026-10-23: the deployment's gateway ran out of credits and every search failed. The default chain
+  // goes on to Exa's own API with the person's key; with none stored, the refusal says one would serve.
+  test("out of the gateway's credits, the default chain searches Exa's own API with the person's key, else says one would serve", async () => {
+    const exa: Array<{ url: string; key: string | null; body: unknown }> = [];
+
+    const exaAnswers = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init);
+
+      exa.push({ url: request.url, key: request.headers.get('x-api-key'), body: await request.json() });
+
+      return Response.json({ requestId: 'r', results: [{ url: 'https://developers.cloudflare.com/durable-objects/api/alarms/', title: 'Alarms', highlights: ['Schedule an alarm', 'per object'] }] });
+    }, { preconnect: fetch.preconnect });
+
+    const keyed: AuthResolver = async (key) => (key === 'exa' ? { headers: { Authorization: 'Bearer exa-key' }, credentialKey: 'exa' } : null);
+
+    const search = (getAuth: AuthResolver) => chainWebSearch({
+      fetch: exaAnswers, getAuth, deployment: async () => spent(), report: () => {}, pacer: new ProviderPacer({ now: () => 0, sleep: async () => {} }),
+      chain: async () => ({ routes: DEFAULT_WEB_SEARCH_CHAIN, retries: 0 }),
+    });
+
+    const found = await search(keyed)({ query: 'durable object alarms', limit: 5 });
+
+    expect(found.results.map((hit) => [hit.url, hit.snippet])).toEqual([['https://developers.cloudflare.com/durable-objects/api/alarms/', 'Schedule an alarm ... per object']]);
+    expect(exa).toEqual([{ url: 'https://api.exa.ai/search', key: 'exa-key', body: { query: 'durable object alarms', numResults: 5, contents: { highlights: true } } }]);
+
+    await expect(search(async () => null)({ query: 'q', limit: 5 })).rejects.toMatchObject({
+      message: 'Exa on this deployment\'s AI Gateway: Cloudflare answered 402: Your AI Gateway credit balance is zero; Exa with your key: no Exa key is stored. '
+        + 'To search again, add AI Gateway credits, or a search key in Settings > Web search.',
+    });
   });
 
   test("a 400 hands over too, and AI Gateway's own refusal is read in its words", async () => {
