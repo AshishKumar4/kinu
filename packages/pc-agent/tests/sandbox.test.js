@@ -344,13 +344,9 @@ describe('the device sandbox, as the kernel enforces it', () => {
       cwd: agentHome, command: 'hostname', source: {},
     });
 
-    let pathValue = null;
+    const pathValue = plan.commandEnv.PATH;
 
-    for (let i = 0; i < plan.argv.length - 2; i++) {
-      if (plan.argv[i] === '--setenv' && plan.argv[i + 1] === 'PATH') pathValue = plan.argv[i + 2];
-    }
-
-    expect(pathValue).not.toBeNull();
+    expect(pathValue).toBeDefined();
     const entries = String(pathValue).split(':');
     expect(entries.slice(0, 4)).toEqual([
       path.join(agentHome, '.local', 'bin'), path.join(agentHome, '.cargo', 'bin'), path.join(agentHome, '.bun', 'bin'),

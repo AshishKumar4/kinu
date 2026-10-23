@@ -1611,6 +1611,8 @@ async function plan(options) {
     // spawns it needs none of it: an inherited variable here would be a second
     // path into the command's environment.
     env: {},
+    // What the command runs with, set by bwrap or, sealed by Landlock, by the seal launcher.
+    commandEnv: env,
     cwd,
     gpu,
     seal,
