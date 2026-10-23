@@ -553,17 +553,20 @@ export class UserCredentials {
     accounts: CloudflareAccount[];
     /** The login grants web search, so searches through Cloudflare bill this account (`cloudflare.web-search`). */
     webSearch: boolean;
+    /** The login is past its expiry with no refresh left (Cloudflare refused it): only signing in again restores it. */
+    signInExpired: boolean;
   }> {
     await this.host.requireTier(caller, 'ai_gateway.admin');
     const cred = await this.readCredential(CLOUDFLARE_OAUTH_CRED_KEY);
 
-    if (cred?.kind !== 'oauth') return { connected: false, selectedId: null, accounts: [], webSearch: false };
+    if (cred?.kind !== 'oauth') return { connected: false, selectedId: null, accounts: [], webSearch: false, signInExpired: false };
 
     return {
       connected: true,
       selectedId: accountIdFromCloudflareCredential(cred),
       accounts: cloudflareAccountsFromCredential(cred),
       webSearch: grantsWebSearch(cred),
+      signInExpired: isCloudflareCredentialExpiring(cred) && !renewableLogin(cred),
     };
   }
 

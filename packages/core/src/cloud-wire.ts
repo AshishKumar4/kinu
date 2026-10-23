@@ -21,8 +21,9 @@ export const DEV_IDENTITY_ACCOUNT_HEADER = 'x-kinu-dev-identity-account';
 /** Each its own user: `devices` (the fleet), `scripted` (scripted-model tiers), `settings` (the one case that writes
  *  account-wide settings, which rows running beside it as `scripted` read), `keyless` (the scripted model, no search
  *  key and no Cloudflare login, so a search takes the deployment's own gateway, as a person's who never chose does),
- *  `gateway` (signed in to Cloudflare, so its searches bill its own account's gateway). */
-export const EVAL_ACCOUNTS = ['devices', 'scripted', 'settings', 'keyless', 'gateway'] as const;
+ *  `gateway` (signed in to Cloudflare, so its searches bill its own account's gateway), `cloudflare-login` (a
+ *  Cloudflare login the first-run row expires and refuses, so no other row reads it while it is dead). */
+export const EVAL_ACCOUNTS = ['devices', 'scripted', 'settings', 'keyless', 'gateway', 'cloudflare-login'] as const;
 
 export const EVAL_TRIAL_ACCOUNTS = 512;
 

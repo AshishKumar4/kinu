@@ -103,7 +103,10 @@ export function ProvidersPanel({ framed = true }: { framed?: boolean }) {
                     connect={<CloudflareAIConnectNotice onConnected={reloadAll} message="Connect Cloudflare to use your Workers AI quota and AI Gateway." />}>
                     {/* Asked first: the account decides which gateway is reachable. */}
                     <CardSlot resource={accounts.resource} what="your Cloudflare accounts" onRetry={reloadAll}>
-                      {(status) => <CloudflareAccountSection status={status} onChanged={reloadAll} />}
+                      {(status) => (status.signInExpired
+                        ? <CloudflareAIConnectNotice onConnected={reloadAll} action="Sign in to Cloudflare again"
+                          message="Your Cloudflare sign-in has expired, so your AI Gateway is off and Kinu pays for your searches until you sign in again." />
+                        : <CloudflareAccountSection status={status} onChanged={reloadAll} />)}
                     </CardSlot>
                     <CardSlot resource={gateways.resource} what="your AI gateways" onRetry={reloadAll}>
                       {(status) => <CloudflareGatewaySection status={status} onChanged={reloadAll} />}
@@ -299,12 +302,12 @@ function CloudflareGatewaySection({ status, onChanged }: {
     return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () { yield* Effect.promise(async () => selectCloudflareGateway(id || null)); onChanged(); }), showing(setError)), Effect.sync(() => { setSaving(false); }));
   });
 
+  // Signing in again is the account read's to offer (`signInExpired`); a listing that failed is retried.
   if (status.error) {
     return (
-      <CloudflareAIConnectNotice
-        onConnected={onChanged}
-        message={`Could not list your AI Gateways: ${status.error}`}
-      />
+      <Notice tone="warning" action={<Button size="sm" className="shrink-0" onClick={onChanged}>Try again</Button>}>
+        <p>Could not list your AI Gateways: {status.error}</p>
+      </Notice>
     );
   }
 

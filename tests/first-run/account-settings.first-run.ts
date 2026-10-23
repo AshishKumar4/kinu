@@ -21,8 +21,7 @@
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 import { deploymentPublicOrigin, type EvalObservation, type EvalSubgoal } from '@kinu.run/test-utils';
-import { type PublicSessionPlan } from '../../evals/src/session';
-import { webHeaders } from '../../evals/src/workspace-roster';
+import { accountRoute as call } from './account-route';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 
 const SUITE = 'First-run · account-settings';
@@ -57,37 +56,6 @@ const CliSetupSchema = v.looseObject({ publicOrigin: v.string(), installCommand:
 
 /** The name an account found unnamed is left with. */
 const UNNAMED_RESTORE = 'Kinu first-run';
-
-interface Answer<T> {
-  readonly value: T | null;
-  readonly detail: string;
-}
-
-/** One `/api/user` route, as its page calls it. */
-interface UserRoute<S extends v.GenericSchema> {
-  readonly schema: S;
-  readonly method: 'GET' | 'PATCH' | 'POST';
-  readonly path: string;
-  readonly body?: Readonly<Record<string, string>>;
-}
-
-/** One `/api/user` route as its page calls it, parsed as the page parses it. */
-async function call<S extends v.GenericSchema>(plan: PublicSessionPlan, route: UserRoute<S>): Promise<Answer<v.InferOutput<S>>> {
-  const { schema, method, path, body } = route;
-
-  const response = await fetch(new URL(`/api/user${path}`, plan.origin), {
-    method,
-    headers: { ...webHeaders(plan.identity), 'content-type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-
-  const text = await response.text();
-  const parsed = response.ok ? v.safeParse(schema, JSON.parse(text)) : null;
-
-  return parsed !== null && parsed.success
-    ? { value: parsed.output, detail: `${method} ${path} answered ${text.slice(0, 200)}` }
-    : { value: null, detail: `${method} ${path} answered ${String(response.status)}: ${text.slice(0, 200)}` };
-}
 
 describe(SUITE, () => {
   liveTest(`MEASURED: ${CASE}`, async () => {
