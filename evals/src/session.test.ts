@@ -40,6 +40,7 @@ import {
 } from './session-protocol';
 import { resolvePublicSessionPlan, KinuPublicSession, openPublicSession, type InspectionAnswer } from './session';
 import { resolveWebIdentity } from './workspace-roster';
+import { renderThrownChain } from '../../packages/core/src/obs/index';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import { SubagentInspectionRequestSchema } from '../../packages/core/src/subagents/inspection';
 import { measurePromptUsage } from './results';
@@ -47,7 +48,7 @@ import { claimTrialAccount } from './slot';
 import { reviewerCatalog, REVIEWER_ROLE_ID } from './reviewer';
 import {
   BROADCAST_FRAME, FILE_TURN_CHUNKS, FIXTURE_REQUEST_ID,
-  RECOVERY_TURN_CHUNKS, chatChunkFrame, chatErrorFrame, chatTerminalFrame, chatTurnFrames, rpcReplyFrame,
+  RECOVERY_TURN_CHUNKS, chatChunkFrame, chatErrorFrame, chatRefusedFrame, chatTerminalFrame, chatTurnFrames, rpcReplyFrame,
   streamResumingFrame,
 } from './fixtures/session-frames';
 
@@ -574,6 +575,34 @@ test("every live frame of the workspace's room is heard: the turn's own, a turn 
     // The wake's three live frames, the head's two, and the turn's chunks with its terminal frame.
     expect(session.heard()).toBe(3 + 2 + FILE_TURN_CHUNKS.length + 1);
     expect(other).toEqual(['workspace start', 'workspace text-delta', 'workspace done', 'workspace head_stream', 'workspace head_activity']);
+  } finally { await session.teardown(); await server.stop(true); }
+});
+
+test('a send the workspace refuses at its door fails as the build\'s answer, in its words, and no turn is said to have run', async () => {
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: socketOnly,
+    websocket: {
+      message(socket, message) {
+        const requestId = v.parse(ChatRequestFrameSchema, JSON.parse(message.toString())).id;
+
+        socket.send(chatRefusedFrame({ requestId, reason: 'unavailable', message: 'This workspace is being deleted.' }));
+      },
+    },
+  });
+
+  const session = new KinuPublicSession({
+    origin: server.url.origin, identity: { kind: 'loopback' }, workspace: 'probe', purpose: 'refused send',
+    llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
+  }, 'probe');
+
+  try {
+    await session.connect();
+    const [sent] = await Promise.allSettled([session.prompt('Write note.txt.')]);
+
+    if (sent.status !== 'rejected') throw new Error(`a refused send settled as ${JSON.stringify(sent.value)}`);
+    const said = renderThrownChain({ cause: sent.reason });
+
+    expect(said).toContain('This workspace is being deleted.');
+    expect(said).not.toContain(INFRA_FAILURE_MARKER);
   } finally { await session.teardown(); await server.stop(true); }
 });
 

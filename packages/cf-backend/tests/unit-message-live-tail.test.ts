@@ -33,8 +33,9 @@ describe('the tail of a live assistant row', () => {
   test('a call in flight owns the indicator — nothing is added after it', () => {
     // Its row already carries a live dot; a second indicator would claim two things are happening.
     for (const state of ['input-streaming', 'input-available'] as const) {
-      expect(tailOf([text('Running the suite.', 'done'), tool('a', state)]))
-        .toEqual({ kind: 'tool' });
+      const running = tool('a', state);
+
+      expect(tailOf([text('Running the suite.', 'done'), running])).toEqual({ kind: 'tool', part: running });
     }
   });
 

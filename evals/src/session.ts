@@ -1909,11 +1909,15 @@ export class KinuPublicSession {
 
     if (frame.done === true) this.onChunk('done');
     turn.recorder.apply(frame);
+    const refused = turn.recorder.refusal();
     const done = turn.recorder.settled();
 
-    if (done === null) return;
+    if (refused === null && done === null) return;
     this.turns.delete(requestId);
-    turn.resolve(done);
+
+    // The build's own answer, in its words: not the transport around it.
+    if (refused !== null) turn.reject(new DeploymentAnswer(refused.message));
+    else if (done !== null) turn.resolve(done);
   }
 
   /**

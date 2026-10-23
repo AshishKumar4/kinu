@@ -3,7 +3,7 @@ import { createCliRenderer, type TextareaRenderable } from '@opentui/core';
 import { createRoot, flushSync, useTerminalDimensions } from '@opentui/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  BUILTIN_ROLE_DEFINITIONS, deriveRoleLabel, offeredReasoningEfforts, type ReasoningEffort,
+  BUILTIN_ROLE_DEFINITIONS, declaredReasoningEffort, deriveRoleLabel, offeredReasoningEfforts, type ReasoningEffort,
 } from '@kinu.run/core';
 import {
   createCliAgent,
@@ -215,13 +215,15 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
   })), [defaultModel, keybindings, mode, opts]);
 
   const selectModel = useCallback((spec: string) => detach(Effect.catchCause(Effect.gen(function* () {
-    yield* Effect.promise(async () => updateDefaultTier({ model: spec }));
+    const declared = catalog.models.find((model) => model.spec === specWithoutAccount(spec))?.reasoningEfforts;
+    const profile = yield* Effect.promise(async () => updateDefaultTier({ model: spec }, declared));
     modelPickerRequestRef.current += 1;
     setDefaultModelState(spec);
+    setReasoningEffortState(profile.catalog.tiers.default.reasoningEffort ?? 'medium');
     setCatalogHint(null);
     setModelPicker(null);
     setError(null);
-  }), showing(setError))), []);
+  }), showing(setError))), [catalog]);
 
   const selectReasoningEffort = useCallback((effort: ReasoningEffort) => detach(Effect.catchCause(Effect.gen(function* () {
     yield* Effect.promise(async () => updateDefaultTier({ reasoningEffort: effort }));
@@ -229,14 +231,19 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
     setError(null);
   }), showing(setError))), []);
 
-  // The stored level stays listed if the catalog dropped it.
-  const efforts = useMemo(
-    () => offeredReasoningEfforts(
-      catalog.models.find((model) => model.spec === specWithoutAccount(defaultModel))?.reasoningEfforts,
-      reasoningEffort,
-    ),
-    [catalog, defaultModel, reasoningEffort],
+  const declaredEfforts = useMemo(
+    () => catalog.models.find((model) => model.spec === specWithoutAccount(defaultModel))?.reasoningEfforts,
+    [catalog, defaultModel],
   );
+
+  // The stored level stays listed if the catalog dropped it, with the level turns send for it.
+  const efforts = useMemo(() => offeredReasoningEfforts(declaredEfforts, reasoningEffort), [declaredEfforts, reasoningEffort]);
+
+  const effortChoice = (effort: ReasoningEffort): string => {
+    const sent = declaredReasoningEffort(effort, declaredEfforts);
+
+    return sent === effort ? effort : `${effort}→${sent ?? 'none'}`;
+  };
 
   const moveReasoningEffort = useCallback((delta: number) => {
     const index = efforts.indexOf(reasoningEffort);
@@ -556,7 +563,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
                 <box
                   key={effort}
                   style={{
-                    width: effort.length + 3,
+                    width: effortChoice(effort).length + 3,
                     backgroundColor: effort === reasoningEffort ? colors.background.elevated : undefined,
                     paddingLeft: 1,
                     paddingRight: 1,
@@ -569,7 +576,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
                   }}
                 >
                   <text>
-                    <span fg={effort === reasoningEffort ? colors.text.strong : colors.text.muted}>{effort}</span>
+                    <span fg={effort === reasoningEffort ? colors.text.strong : colors.text.muted}>{effortChoice(effort)}</span>
                   </text>
                 </box>
               ))}

@@ -13,7 +13,7 @@ import {
   WORKERS_AI_PREFERRED_MODEL_IDS,
 } from './workers-ai-catalog';
 import { heardFetch } from './middleware/attempt';
-import { lazyModel } from './wire-model';
+import { lazyModel, MODEL_SDKS } from './wire-model';
 import { workersAiModelId } from './serving-route';
 
 const AI_GATEWAY_PROVIDER_ID = 'ai-gateway';
@@ -63,7 +63,7 @@ export function createAIGatewayProvider(): ModelProvider {
 
       return settleSync('reason' in resolved
         ? Effect.die(new Error(`ai-gateway unavailable: ${resolved.reason}`))
-        : Effect.sync(() => lazyModel(`${AI_GATEWAY_PROVIDER_ID}.chat`, modelId, async () => (await import('@ai-sdk/openai-compatible')).createOpenAICompatible({
+        : Effect.sync(() => lazyModel(`${AI_GATEWAY_PROVIDER_ID}.chat`, modelId, async () => (await MODEL_SDKS.openaiCompatible()).createOpenAICompatible({
           name: AI_GATEWAY_PROVIDER_ID,
           // Never fetched: the transport parses the URL into the binding's {gateway, provider, endpoint}.
           baseURL: String(deps.env.AI_GATEWAY_URL),

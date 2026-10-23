@@ -14,7 +14,7 @@ import {
   tooLarge,
   type Annotation,
   type Capture,
-} from "@/feedback/capture";
+} from "./feedback-capture";
 import {
   FEEDBACK_ENDPOINT,
   FEEDBACK_FIELDS,

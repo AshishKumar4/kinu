@@ -1,7 +1,7 @@
 import { stripVTControlCharacters } from 'node:util';
 import chalk from 'chalk';
 import type { Command } from 'commander';
-import { BUILTIN_TOOLS, describeProviderError, describeToolCall, fmtUsd, formatBytes, quotaWindowText, summarizeToolCall, timeAgo, usageTotal } from '@kinu.run/core';
+import { BUILTIN_TOOLS, declaredReasoningEffort, describeProviderError, describeToolCall, fmtUsd, formatBytes, quotaWindowText, summarizeToolCall, timeAgo, usageTotal } from '@kinu.run/core';
 import { clipText, TUI_MARKS, SPINNER_FRAMES } from '@kinu.run/core/tui';
 import type { AccountSpend, SearchNode, ReasoningEffort, JsonObject, JsonValue, ToolOutcome } from '@kinu.run/core';
 import { STEP_RESTART_NOTICE, type AgentSearchNode } from './agent-client';
@@ -165,6 +165,13 @@ interface AgentStatusInfo {
   createdAt: number;
   scaffoldVersion: number;
   searchNodeCount: number;
+}
+
+/** Beside a stored effort, what a model declaring `declared` is sent for it when that differs: " (runs as low)". */
+export function effortRunsAs(effort: ReasoningEffort, declared: readonly ReasoningEffort[] | undefined): string {
+  const sent = declaredReasoningEffort(effort, declared);
+
+  return sent === effort ? '' : ` (runs as ${sent ?? 'none: the model takes no level'})`;
 }
 
 export function printAgentStatus(info: AgentStatusInfo, dbSize: number, extra?: {

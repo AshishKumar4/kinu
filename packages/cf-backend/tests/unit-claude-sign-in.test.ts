@@ -43,7 +43,7 @@ function routes(harness: TestUserDO) {
   const stub = userAccount({
     async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
     async userMcp_warmConnections() { return { servers: 0 }; },
-    async listActiveWorkspaces() { return [{ name: 'jarvis', displayName: 'Jarvis', createdAt: 1, nameOrigin: 'user' as const }]; },
+    async listActiveWorkspaces() { return [{ name: 'jarvis', displayName: 'Jarvis', createdAt: 1, lastVisited: 1, nameOrigin: 'user' as const }]; },
     startClaudeSignIn: (caller: UserCaller) => harness.userDO.startClaudeSignIn(caller),
     finishClaudeSignIn: (caller: UserCaller, code: string) => harness.userDO.finishClaudeSignIn(caller, code),
   });

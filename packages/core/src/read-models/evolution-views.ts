@@ -4,7 +4,7 @@ import type { AgentConfigStore } from '../config/store';
 import type { ActorHandle } from '../identity/actor-handle';
 import * as v from 'valibot';
 import {
-  buildChangelog, ChangelogEntrySchema, countUnseenChangelog, type ChangelogEntry,
+  buildChangelog, ChangelogEntrySchema, countUnseenChangelog, type BuildChangelogOptions, type ChangelogEntry,
 } from '../evolution/changelog';
 import { boundedInt } from '../utils/bounds';
 import { proposeNextTasks, type ProposedTask } from '../curriculum/proposer';
@@ -40,15 +40,16 @@ const MAX_CHANGELOG_LIMIT = 200;
 export function getEvolutionChangelog(
   sql: SqlExecutor,
   actor: ActorHandle,
-  limit = DEFAULT_CHANGELOG_LIMIT,
-  changesOnly = false,
+  opts: Pick<BuildChangelogOptions, 'limit' | 'changesOnly' | 'approvals'> = {},
 ): EvolutionChangelogView {
   // The seen marker lives on this actor's own config, so the handle alone pairs marker and ledgers.
   const seenAt = actor.config.getChangelogSeenAt();
-  const page = boundedInt(limit, DEFAULT_CHANGELOG_LIMIT, 1, MAX_CHANGELOG_LIMIT);
+  const page = boundedInt(opts.limit ?? DEFAULT_CHANGELOG_LIMIT, DEFAULT_CHANGELOG_LIMIT, 1, MAX_CHANGELOG_LIMIT);
 
   return {
-    entries: buildChangelog(sql, actor, { limit: page, changesOnly }),
+    entries: buildChangelog(sql, actor, {
+      limit: page, changesOnly: opts.changesOnly === true, ...(opts.approvals !== undefined && { approvals: opts.approvals }),
+    }),
     unseenCount: countUnseenChangelog(sql, actor, seenAt),
     seenAt,
   };

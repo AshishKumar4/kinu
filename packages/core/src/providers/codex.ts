@@ -15,7 +15,7 @@ import { Effect } from 'effect';
 import { diagnostics, KinuError, settle } from '../obs/index';
 import { knownReasoningEfforts } from './reasoning-effort';
 import { heardFetch } from './middleware/attempt';
-import { lazyModel } from './wire-model';
+import { lazyModel, MODEL_SDKS } from './wire-model';
 import { decodeCodexAccountId } from './codex-oauth';
 
 const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex';
@@ -174,7 +174,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
         return withCallAccount(res, 'codex', answer.auth.credentialKey ?? CODEX_CRED_KEY);
       })));
 
-      const model = lazyModel('openai.responses', modelId, async () => (await import('@ai-sdk/openai'))
+      const model = lazyModel('openai.responses', modelId, async () => (await MODEL_SDKS.openai())
         .createOpenAI({ baseURL, apiKey: 'oauth-placeholder', headers: chatgptSessionHeaders(deps), fetch: heardFetch(customFetch) })
         .responses(modelId));
 

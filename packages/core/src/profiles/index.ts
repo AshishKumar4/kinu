@@ -1,5 +1,5 @@
 export {
-  DEFAULT_PROVIDER_RETRIES, isTierId, ROLE_ID_RE, DEFAULT_ROLE_ID, isValidRoleId, type BuiltinRoleId, betaSwarms, SWARMS_BETA_SETTING,
+  DEFAULT_PROVIDER_RETRIES, isTierId, retargetedTier, ROLE_ID_RE, DEFAULT_ROLE_ID, isValidRoleId, type BuiltinRoleId, betaSwarms, SWARMS_BETA_SETTING,
 } from '../types/profile';
 
 export {

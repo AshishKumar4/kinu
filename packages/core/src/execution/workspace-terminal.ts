@@ -31,3 +31,33 @@ export function isWorkspaceTerminal(tags: Iterable<string>): boolean {
 
   return false;
 }
+
+/** The one shell a workspace had before it kept several: its session's own, under no key. */
+export const WORKSPACE_SHELL_SESSION = 'shell';
+
+/** A workspace terminal's key, as a session's id is written (devbox `SessionIdSchema`): the pane's `session`. */
+const WorkspaceSessionSchema = v.pipe(v.string(), v.regex(/^[a-z0-9][a-z0-9-]{0,31}$/u));
+
+/** One terminal the person opened beside the workspace's own, by its key, under the name its tab shows (the devbox's
+ *  rule, `SESSION_NAME_MAX`: 1 to 40 characters). */
+export const WorkspaceSessionRecordSchema = v.object({
+  id: WorkspaceSessionSchema,
+  name: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(40)),
+});
+
+export type WorkspaceSessionRecord = v.InferOutput<typeof WorkspaceSessionRecordSchema>;
+
+const SESSION_TAG = 'terminal-session:';
+
+/** The tag a terminal socket keeps its session under, so a frame after hibernation reaches the same shell; none for the
+ *  workspace's own shell, or a session that is no session's id. */
+export function workspaceSessionTag(session: string | null): readonly string[] {
+  return session === null || session === WORKSPACE_SHELL_SESSION || !v.is(WorkspaceSessionSchema, session) ? [] : [`${SESSION_TAG}${session}`];
+}
+
+/** The session a terminal socket's tags name; null: the workspace's own shell. */
+export function workspaceSessionOf(tags: Iterable<string>): string | null {
+  for (const tag of tags) if (tag.startsWith(SESSION_TAG)) return tag.slice(SESSION_TAG.length);
+
+  return null;
+}

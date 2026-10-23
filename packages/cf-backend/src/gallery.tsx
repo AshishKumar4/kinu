@@ -2062,6 +2062,10 @@ const GALLERY_ANSWERS: WorkspaceAnswers = {
   openDeviceSession: () => openGallerySession(GALLERY_DEVICE_SESSIONS, (count) => ({ id: `pty-${String(count + 1)}`, name: `shell ${String(count + 1)}`, cwd: "" })),
   renameDeviceSession: (_device, id, name) => renameGallerySession(GALLERY_DEVICE_SESSIONS, id, name) ?? { id, name, cwd: "" },
   closeDeviceSession: (_device, id) => { closeGallerySession(GALLERY_DEVICE_SESSIONS, id); },
+  listWorkspaceSessions: () => GALLERY_WORKSPACE_SESSIONS,
+  openWorkspaceSession: () => openGallerySession(GALLERY_WORKSPACE_SESSIONS, (count) => ({ id: `w-${String(count + 1)}`, name: `shell ${String(count + 1)}`, cwd: "/home/main" })),
+  renameWorkspaceSession: (id, name) => renameGallerySession(GALLERY_WORKSPACE_SESSIONS, id, name) ?? { id, name, cwd: "/home/main" },
+  closeWorkspaceSession: (id) => { closeGallerySession(GALLERY_WORKSPACE_SESSIONS, id); },
   // Read as `result.builtIn.map(...)`; three halves, as the orchestrator answers it.
   getToolDescriptions: () => ({ builtIn: [], executors: [], crafted: [] }),
   getAlwaysActiveSkills: () => ({ names: [] }),
@@ -2174,6 +2178,12 @@ function closeGallerySession(sessions: TerminalSession[], id: string): void {
 
   if (at >= 0) sessions.splice(at, 1);
 }
+
+/** The workspace's terminals (1019-aa) as its Nimbus session lists them: its own shell and one opened beside it. */
+const GALLERY_WORKSPACE_SESSIONS: TerminalSession[] = [
+  { id: "shell", name: "shell", cwd: "/home/main", open: true, running: null, last: null, ports: [], branch: null, needsInput: false },
+  { id: "w-tests", name: "tests", cwd: "/home/main/app", open: true, running: "bun", last: null, ports: [], branch: null, needsInput: false },
+];
 
 /** The PC's sessions (1014-t) as its daemon lists them (1019-aa): its shell, a dev server on a port, and a deploy asking
  *  a question. Its daemon reads no last command: that needs the owner's shell rc. */

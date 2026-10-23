@@ -200,6 +200,8 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
   let shellMountPoints: ShellMounts | undefined;
   let booting: Promise<NimbusWorkspace> | undefined;
 
+  // The substrate loads at the workspace's first operation, not at module evaluation (f8c0f9e1f), and is compiled then
+  // (b179dead9).
   const shellOver = async (creation: NimbusCreation): Promise<NimbusWorkspace> => {
     const { NimbusWorkspace } = await import('@nimbus-sh/core/workspace');
 

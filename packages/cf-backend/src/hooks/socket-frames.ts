@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import * as v from "valibot";
-import { PositionCursorSchema, WorkspaceBroadcastSchema } from "@kinu.run/core";
+import { ChatResponseFrameSchema, PositionCursorSchema, WorkspaceBroadcastSchema } from "@kinu.run/core";
 import { Effect } from "effect";
 import { detach, tolerate } from "@kinu.run/core/obs";
 
@@ -13,11 +13,7 @@ const SocketMessageSchema = v.variant("type", [
     messages: v.optional(v.array(v.looseObject({ id: v.string() }))),
     older: v.optional(v.nullable(PositionCursorSchema)),
   }),
-  // `reason` only on the runtime's refusal of this tab (`terminalChatError`).
-  v.object({
-    type: v.literal("cf_agent_use_chat_response"),
-    error: v.optional(v.boolean()), done: v.optional(v.boolean()), body: v.optional(v.string()), reason: v.optional(v.string()),
-  }),
+  ChatResponseFrameSchema,
   // The server's answer to the SDK's resume probe, which it sends as each socket opens: a stream to rejoin, or none.
   v.looseObject({ type: v.picklist(["cf_agent_stream_resuming", "cf_agent_stream_resume_none"]) }),
   WorkspaceBroadcastSchema,

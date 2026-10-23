@@ -2,9 +2,12 @@ import * as v from 'valibot';
 import { ERROR_CODES, RefusalSchema } from '../obs/index';
 import { FILE_REFUSAL_REASONS } from './file-edits';
 
+/** A refusal's reason: an `ErrorCode`, or one of the file plane's verdicts on an anchor or read. */
+export const ToolReasonSchema = v.picklist([...ERROR_CODES, ...FILE_REFUSAL_REASONS]);
+
 export const ToolFailureValueSchema = v.object({
   ...RefusalSchema.entries,
-  reason: v.nullable(v.picklist([...ERROR_CODES, ...FILE_REFUSAL_REASONS])),
+  reason: v.nullable(ToolReasonSchema),
   /** db.batch's refused operation index, part of the refusal a program branches on. */
   failedIndex: v.optional(v.number()),
 });
@@ -30,7 +33,7 @@ export const ToolOutcomeSchema = v.variant('success', [
   v.object({ success: v.literal(true), failures }),
   v.object({
     success: v.literal(false),
-    reason: v.nullable(v.picklist([...ERROR_CODES, ...FILE_REFUSAL_REASONS])),
+    reason: v.nullable(ToolReasonSchema),
     execution: v.optional(v.object({ exitCode: v.number() })),
     failures,
   }),

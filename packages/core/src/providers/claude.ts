@@ -15,7 +15,7 @@ import { JsonObjectSchema, JsonValueSchema, parseJsonObject, parseJsonValue } fr
 import { xxHash64 } from '../utils/xxhash64';
 import { heardFetch } from './middleware/attempt';
 import { conversationUuid } from './util';
-import { lazyModel } from './wire-model';
+import { lazyModel, MODEL_SDKS } from './wire-model';
 
 export const CLAUDE_CRED_KEY = 'claude.oauth';
 
@@ -524,7 +524,7 @@ export function createClaudeProvider(): ModelProvider {
         }))),
       };
 
-      return lazyModel('anthropic.messages', modelId, async () => (await import('@ai-sdk/anthropic'))
+      return lazyModel('anthropic.messages', modelId, async () => (await MODEL_SDKS.anthropic())
         .createAnthropic({ apiKey: 'oauth-placeholder', fetch: heardFetch(asFetchFunction((_input, init) => settle(claudeCall(call, init ?? {})))) })
         .languageModel(modelId));
     },

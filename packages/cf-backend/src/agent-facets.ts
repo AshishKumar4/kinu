@@ -7,7 +7,7 @@ import type { ChatWindow, ForkConversationPlan, ForkConversationSection, ForkCon
 import type { CacheWarmArm, ContextEditor, ContextTree, ConversationRecall, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ProviderEnv, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import type { AgentWorkspace, TurnBound, TurnCapabilityOf } from './agent-facet/agent-turn';
-import type { AgentFigures, AgentReport, AgentTurnActivity, HandedOffTurn, ResolvedTurnProfile, SettledRun, AgentHeadDelta, AgentSnapshot, AgentToolCall, AgentTrace, SessionEvent, TurnEndEvent, ModelCallReport } from '@kinu.run/core';
+import type { AgentFigures, AgentReport, AgentTurnActivity, HandedOffTurn, ResolvedTurnProfile, SettledRun, AgentHeadDelta, AgentSnapshot, AgentToolCall, AgentAdvisorRead, AgentTrace, SessionEvent, TurnEndEvent, ModelCallReport } from '@kinu.run/core';
 import type { ChatTurnRequest } from './agent-turns';
 import { attempt, diagnostics, KinuError, relayedLine, settle, toKinuError } from '@kinu.run/core/obs';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
@@ -198,6 +198,7 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   prepareTurn(bound: TurnCapabilityOf) { return this.open(() => this.answers.prepareTurn(bound), bound, 'opens'); }
   enqueueTurn(input: ProgrammaticTurn) { return this.open(() => this.answers.enqueueTurn(input)); }
   executeTool(call: AgentToolCall) { return this.open(() => this.answers.executeTool(call), call, 'executes'); }
+  advisorRead(call: AgentAdvisorRead) { return this.open(() => this.answers.advisorRead(call), call, 'executes'); }
   receipts(turnId: string, runId: string, callIds: readonly string[]) { return this.open(() => this.answers.receipts(turnId, runId, callIds)); }
   observe(lines: ReadableStream<Uint8Array>) { return this.open(() => this.answers.observe(lines)); }
   paceStep(bound: TurnBound, profile: ResolvedTurnProfile | null) { return this.open(() => this.answers.paceStep(bound, profile), bound, 'executes'); }

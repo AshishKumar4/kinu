@@ -470,6 +470,18 @@ describe('a destroyed box starts nothing of its own until it is asked again', ()
       .toEqual({ running: false, rows: [] });
   });
 
+  // A dev server runs no containers (vite.config.ts, `enable_containers: false`), and a workspace deleted there destroys
+  // its box all the same: with no container there is none to end. Its deletion answered 500 io there (2026-10-23).
+  test('a box on a server that runs no containers is destroyed all the same, keeping nothing', async () => {
+    const { box, state, rows } = harness(TestBox);
+    state.container = undefined;
+
+    await box.discardState();
+    await box.destroy();
+
+    expect([...rows.keys()]).toEqual([]);
+  });
+
   // Review, 2026-09-28: a start already past the refusal ran on after the destroy, which had not
   // waited for it, so the container it launched stayed up with nothing watching it.
   test('a start past the refusal when the box is torn down leaves nothing running once destroy returns', async () => {

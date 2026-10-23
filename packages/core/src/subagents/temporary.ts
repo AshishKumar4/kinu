@@ -27,8 +27,8 @@ export const SUBAGENT_LIFETIMES = ['durable', 'task'] as const;
 
 export type SubagentLifetime = (typeof SUBAGENT_LIFETIMES)[number];
 
-/** Later while a hire works, input is queued, or a settled hire's report waits unread. An evolution subagent (the
- *  turn's advisor) answers the runtime, never this turn, so it holds nothing. */
+/** Later while a hire works, input is queued, or a settled hire's report waits unread. An evolution subagent an earlier
+ *  build hired answers the runtime, never this turn, so it holds nothing. */
 export function taskAnswerIsLater(input: {
   readonly roster: SubagentRosterStore;
   readonly log: EventLog;
@@ -182,8 +182,7 @@ export function createTemporaryAgentPort(deps: {
       if (!roleLabel) return yield* new KinuError('bad_input', 'hire requires a role');
       const typed = request.name?.trim();
       const chosen = typed === '' ? undefined : typed;
-      // An advisor's brief is written for it, not by anyone, so it is named for its role; a name the hirer gave wins.
-      const name = deps.createName(`ask-${roleLabel}`, request.lane ? null : chosen ?? task);
+      const name = deps.createName(`ask-${roleLabel}`, chosen ?? task);
       const startedAt = deps.now();
 
       const outcome = (status: TemporaryRunOutcome['status'], answer: string, transcript: 'kept' | 'none', reason?: ErrorCode): TemporaryRunOutcome => ({
@@ -192,12 +191,10 @@ export function createTemporaryAgentPort(deps: {
 
       if (deps.roster.get(name)) return outcome('failed', 'The generated actor name is already in use.', 'none', 'denied');
 
-      if (request.lane) deps.roster.evolution.record(name, request.lane, startedAt);
-
       const birth: SubagentBirthRequest = {
         seed: {
           name, displayName: chosen ?? codenameFor(name), nameOrigin: chosen === undefined ? 'auto' : 'user', role: request.role, mission: task,
-          lifetime: TEMPORARY_LIFETIME, origin: request.lane ? 'evolution' : 'agent',
+          lifetime: TEMPORARY_LIFETIME, origin: 'agent',
         },
         assignment: {
           body: renderTemporaryTaskBrief({ task, contextRefs: refs }), mode: request.mode,
@@ -223,9 +220,6 @@ export function createTemporaryAgentPort(deps: {
       deps.afterTurn(actor, async () => { await deps.runtime.dismiss(name, { keepHistory: true, interrupt: false }, actor); });
     },
 
-    reclaim: (request) => deps.roster.evolution.answerFor(request),
-    answered: () => deps.roster.evolution.answered(),
-    forget: (name) => { deps.roster.evolution.remove(name); },
   };
 }
 

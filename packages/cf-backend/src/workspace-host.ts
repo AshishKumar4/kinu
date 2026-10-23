@@ -89,6 +89,7 @@ interface HostedRuntimeModule {
 
 let runtimeModule: Promise<HostedRuntimeModule> | null = null;
 
+/** Nimbus's hosted runtime, compiled at its first use, not at every isolate's start (b179dead9). */
 function hostedRuntimeModule(): Promise<HostedRuntimeModule> {
   runtimeModule ??= import('@nimbus-sh/worker/workspace-host').then((module) => ({
     composeHostedRuntime: module.composeHostedRuntime,
@@ -141,6 +142,23 @@ export interface WorkspaceTerminal {
   terminalClose(ws: TerminalSocket): void;
 }
 
+/** One of the workspace's terminals as Nimbus lists it (ask 64): `key` null for the session's own. */
+export interface WorkspaceTerminalListing {
+  readonly key: string | null;
+  readonly live: boolean;
+  readonly running: string | null;
+  readonly cwd: string;
+}
+
+/** The workspace's terminals, each its own shell by its key (Nimbus 0.27, `TerminalSelection`). */
+export interface WorkspaceTerminals {
+  /** The terminal under `key`; null: the session's own, the one shell a workspace had before. */
+  terminal(key: string | null): WorkspaceTerminal;
+  list(): Promise<readonly WorkspaceTerminalListing[]>;
+  /** Ends its shell; whether one was there. */
+  close(key: string): Promise<boolean>;
+}
+
 export interface WorkspaceServing {
   readonly held: readonly { readonly port: number; readonly stamp: string | null }[];
   readonly jobs: ReadonlySet<string>;
@@ -183,8 +201,8 @@ export interface HostedWorkspace {
   /** The slate host's spawn/kill path and the one registrar of a resident's port. */
   facetManager(): Promise<ComposedFacetManager>;
   ports(): Promise<PortRegistry>;
-  /** One terminal per workspace; a second attach replaces the first. */
-  terminal(): Promise<WorkspaceTerminal>;
+  /** Its terminals by key; a second attach to one key replaces the first. */
+  terminals(): Promise<WorkspaceTerminals>;
   readonly apps: DurableApps;
   /** The edge has verified the signed hostname; the full capability never leaves this object. */
   routePreview(port: number, handle: string, request: Request, pathname: string): Promise<Response>;
@@ -417,10 +435,23 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
     },
     facetManager: async () => (await compose()).facets,
     ports: async () => (await compose()).ports,
-    terminal: async () => {
-      const { attachTerminal, terminalFrame, terminalClose } = await runtime();
+    terminals: async () => {
+      const { attachTerminal, terminalFrame, terminalClose, listTerminals, closeTerminal } = await runtime();
 
-      return { attachTerminal, terminalFrame, terminalClose };
+      return {
+        terminal: (key) => {
+          const selection = key === null ? undefined : { terminal: key };
+
+          // Methods, as the runtime's own were handed over before: the runtime only compares the socket and sends on it.
+          return {
+            attachTerminal(ws: WebSocket) { return attachTerminal(ws, selection); },
+            terminalFrame(ws: WebSocket, frame: string | ArrayBuffer) { return terminalFrame(ws, frame, selection); },
+            terminalClose(ws: WebSocket) { terminalClose(ws, selection); },
+          };
+        },
+        list: async () => (await listTerminals()).map(({ name, live, running, cwd }) => ({ key: name, live, running, cwd })),
+        close: async (key) => (await closeTerminal(key)).closed,
+      };
     },
     apps: {
       async ensure({ owner, preferredPort }) {

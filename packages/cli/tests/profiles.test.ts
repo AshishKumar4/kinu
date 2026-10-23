@@ -604,6 +604,44 @@ describe('the turn profile authority reader', () => {
     expect(v.parse(ParsedDefaultTier, expectOk(steps.afterModel)).catalog.tiers.default.model)
       .toBe('openai/first-model');
   });
+
+  // PROV-3: a new default model kept the old one's effort, a level the new model need not take.
+  test('a new default model takes the stored effort as its levels have it, none where it takes none, as is where unknown', async () => {
+    const steps = await runScenario(`
+      const { updateDefaultTier } = await import('./packages/cli/src/default-model.ts');
+      await updateDefaultTier({ model: 'openai/first-model' });
+      await updateDefaultTier({ reasoningEffort: 'medium' });
+      await step('declared', async () => await updateDefaultTier({ model: 'openai/three-levels' }, ['low', 'high', 'max']));
+      await step('unknown', async () => await updateDefaultTier({ model: 'openai/unlisted' }));
+      await step('none', async () => await updateDefaultTier({ model: 'openai/no-levels' }, []));
+    `);
+
+    const effort = (name: string) => v.parse(ParsedDefaultTier, expectOk(steps[name])).catalog.tiers.default.reasoningEffort;
+
+    expect(effort('declared')).toBe('low');
+    expect(effort('unknown')).toBe('low');
+    expect(effort('none')).toBeUndefined();
+  });
+
+  test('/effort says what the model is sent for a stored level it does not take', async () => {
+    const steps = await runScenario(`
+      const { updateDefaultTier } = await import('./packages/cli/src/default-model.ts');
+      const { executeSlashCommand } = await import('./packages/cli/src/slash-commands.ts');
+      await updateDefaultTier({ model: 'openai/first-model' });
+      const at = (stored, levels) => ({
+        getReasoningEffort: async () => stored,
+        getModelSpec: async () => 'workers-ai/pinned',
+        listModels: async () => ({ models: [{ spec: 'workers-ai/pinned', reasoningEfforts: levels }], failures: [] }),
+      });
+      await step('stale', async () => (await executeSlashCommand(at('medium', ['low', 'high', 'max']), '/effort')).text);
+      await step('none', async () => (await executeSlashCommand(at('medium', []), '/effort')).text);
+      await step('taken', async () => (await executeSlashCommand(at('high', ['low', 'high', 'max']), '/effort')).text);
+    `);
+
+    expect(expectText(steps.stale)).toContain('Reasoning effort: medium (runs as low)\n');
+    expect(expectText(steps.none)).toContain('Reasoning effort: medium (runs as none: the model takes no level)\n');
+    expect(expectText(steps.taken)).toContain('Reasoning effort: high\n');
+  });
 });
 
 interface SeededConfig {

@@ -34,6 +34,7 @@ const unusedPort: AgentWorkspacePort = {
   armCacheWarm: unused,
   enqueueTurn: unused,
   executeTool: unused,
+  advisorRead: unused,
   receipts: unused,
   observe: unused,
   paceStep: unused,

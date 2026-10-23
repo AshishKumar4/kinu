@@ -276,7 +276,7 @@ function Backups({ backups, chain, stored, disabled, onChange }: {
   ].filter((route) => !chain.some(sameRoute(route)));
 
   return (
-    <Field label="If it fails" hint="Tried in order when the one before it fails.">
+    <Field label="If it fails">
       <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Web search backups">
         {backups.map((route, at) => (
           <Chip key={`${route.provider}|${route.billing}`} data-web-search-backup={`${route.provider}|${route.billing}`}

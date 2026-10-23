@@ -325,7 +325,7 @@ export interface PictureCapture {
   camera(): Promise<Camera>;
 }
 
-/** Loaded on first capture, not at cold start. */
+/** Loaded on first capture, not at cold start: its own 640 KB chunk (e6aff5c5b), compiled then (b179dead9). */
 export async function browserCamera(binding: Pick<BrowserRun, 'fetch'>): Promise<Camera> {
   const { default: puppeteer } = await import('@cloudflare/puppeteer');
   // Puppeteer types the binding's fetch as the global one, whose `preconnect` is a hint it never gives.

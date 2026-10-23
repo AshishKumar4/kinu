@@ -10,7 +10,8 @@ import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ActorHandle } from '../identity/actor-handle';
-import { renderFactValue, type FactsStore } from '../memory/facts';
+import { createFactsStore, renderFactValue, type FactsStore } from '../memory/facts';
+import { changeStanding, revertOf, STANDING_TEXT, type ChangeOwners, type ChangeStanding } from './change-standing';
 import { listScaffoldArchive, type ScaffoldStatus } from '../scaffold/archive';
 import { getPendingScaffold, applyPromotionDecision, type ScaffoldDecisionEvents } from '../scaffold/versions';
 import { rollbackScaffold } from '../scaffold/rollback';
@@ -100,6 +101,8 @@ export interface BuildChangelogOptions {
    *  limit, so bookkeeping cannot push a real change off the page. */
   changesOnly?: boolean;
   now?: number;
+  /** The trust authority a dream's skill lives by; absent: none of its skills is in effect. */
+  approvals?: ChangeOwners['approvals'];
 }
 
 const pct = (x: number) => `${Math.round(x * 100)}%`;
@@ -313,13 +316,13 @@ const REFINEMENT_STAGE_PROSE = {
   refused: 'I dreamt and changed nothing',
 } satisfies Record<RefinementStage, string>;
 
-/** The three non-refusals are distinct kinds of "not live yet". */
-const REFINEMENT_DISPOSITION_PROSE = {
-  applied: 'in effect now',
-  staged: 'takes effect after the next pause',
-  refused: 'refused by a gate',
-  rejected: 'rejected by you',
-} satisfies Record<RefinementDisposition, string>;
+/** A change no store owns (a subagent spec) stands as it was routed. */
+const ROUTED_STANDING = {
+  applied: 'in_effect',
+  staged: 'waiting',
+  refused: 'refused',
+  rejected: 'reverted',
+} as const satisfies Record<RefinementDisposition, ChangeStanding>;
 
 const DREAM_TRIGGER: Record<RefinementTrigger, string> = {
   explicit: 'you asked for it',
@@ -331,8 +334,10 @@ const DREAM_TRIGGER: Record<RefinementTrigger, string> = {
  * An aggregate card per refinement; children carry the reverts through each
  * artifact's own path (`fact_forget`, `artifact_revert`).
  */
-function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
-  return createRefinementStore(sql, actor).list(limit).map((request) => {
+function refinementEntries(owners: ChangeOwners, limit: number): ChangelogEntry[] {
+  const facts = createFactsStore(owners.sql, owners.actor);
+
+  return createRefinementStore(owners.sql, owners.actor).list(limit).map((request) => {
     const trigger = DREAM_TRIGGER[request.trigger];
 
     const turns = `${String(request.turnIds.length)} rated turn${request.turnIds.length === 1 ? '' : 's'}`;
@@ -345,11 +350,15 @@ function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number):
         ? edit.source
         : undefined;
 
+      // Read from the change's owner: a skill's trust row, a fact's last writer, a text version's row.
+      const standing = changeStanding(owners, facts, { request, route })?.standing ?? ROUTED_STANDING[route.disposition];
+      const revert = revertOf(standing, { request, route, index });
+
       const item: ChangelogEntry = {
         id: `refinement:${request.id}:${String(index)}`,
         kind: 'refinement',
         at: request.updatedAt,
-        summary: `${routeLabel(route)}: ${REFINEMENT_DISPOSITION_PROSE[route.disposition]}`,
+        summary: `${routeLabel(route)}: ${STANDING_TEXT[standing]}`,
         evidence: `${route.owner === '' ? 'no owning authority' : `owner ${route.owner}`}`
           + (route.reason === undefined ? '' : ` · ${route.reason}`)
           + (source === undefined
@@ -359,17 +368,7 @@ function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number):
               : source}`),
       };
 
-      if (route.disposition === 'applied' && route.kind === 'fact') {
-        item.revert = { type: 'fact_forget', target: route.target };
-      }
-
-      if (route.disposition === 'staged' && route.owner === 'artifact_versions') {
-        item.revert = { type: 'artifact_revert', target: route.target };
-      }
-
-      if (route.disposition === 'staged' && route.kind === 'skill' && request.stage !== 'rolled_back') {
-        item.revert = { type: 'skill_revert', target: `${request.id}#${String(index)}` };
-      }
+      if (revert !== null) item.revert = revert;
 
       return item;
     });
@@ -451,6 +450,8 @@ function ratingEntry(
 export function buildChangelog(
   sql: SqlExecutor, actor: ActorHandle, opts: BuildChangelogOptions = {},
 ): ChangelogEntry[] {
+  const owners: ChangeOwners = { sql, actor, ...(opts.approvals !== undefined && { approvals: opts.approvals }) };
+
   return settleSync(Effect.try({
     try: () => {
       const limit = opts.limit ?? 50;
@@ -458,7 +459,7 @@ export function buildChangelog(
       const entries = [
         ...scaffoldEntries(sql, actor),
         ...artifactEntries(sql, actor, limit),
-        ...refinementEntries(sql, actor, limit),
+        ...refinementEntries(owners, limit),
         ...workspaceEntries(sql, actor, limit),
       ].filter((e) => opts.since === undefined || e.at > opts.since);
 
@@ -483,15 +484,9 @@ export function buildChangelog(
 /** Unseen badge ceiling. */
 const UNSEEN_WINDOW_LIMIT = 99;
 
-/** Entries newer than the seen marker, newest first. */
-function listUnseenChangelog(
-  sql: SqlExecutor, actor: ActorHandle, seenAt: number,
-): ChangelogEntry[] {
-  return buildChangelog(sql, actor, { since: seenAt, limit: UNSEEN_WINDOW_LIMIT });
-}
-
+/** How many entries are newer than the seen marker. */
 export function countUnseenChangelog(sql: SqlExecutor, actor: ActorHandle, seenAt: number): number {
-  return listUnseenChangelog(sql, actor, seenAt).length;
+  return buildChangelog(sql, actor, { since: seenAt, limit: UNSEEN_WINDOW_LIMIT }).length;
 }
 
 export interface ChangelogRevertContext {

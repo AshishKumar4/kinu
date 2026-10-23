@@ -1766,7 +1766,7 @@ export function makeEnv(
 
             return { applied: true };
           },
-          listActiveWorkspaces: async () => (userPlane?.workspaces ?? []).map((workspace) => ({ ...workspace, createdAt: 1, nameOrigin: 'user' as const })),
+          listActiveWorkspaces: async () => (userPlane?.workspaces ?? []).map((workspace) => ({ ...workspace, createdAt: 1, lastVisited: 1, nameOrigin: 'user' as const })),
           hasWorkspace: async (_caller: UserCaller, name: string) => (userPlane?.workspaces ?? []).some((workspace) => workspace.name === name),
           userMcp_warmConnections: async (caller: UserCaller): Promise<{ servers: number }> => {
             userPlane?.warmConnections.push(caller);

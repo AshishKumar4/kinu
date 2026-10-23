@@ -75,7 +75,7 @@ describe('SessionWindow — the open window', () => {
     expect(present(win.claim(), 'the claimed window').turns).toEqual([turn]);
   });
 
-  test('a credential in a shell command or an eval program is stored redacted, in every projection of the call', () => {
+  test('a credential in a shell command, an eval program or an operation name is stored redacted, in every projection of the call', () => {
     const win = newStore();
     // Assembled at runtime: a contiguous real-shaped literal trips the secret scan and push protection.
     const cloudflare = 'cfut' + '_' + 'a'.repeat(48);
@@ -88,6 +88,7 @@ describe('SessionWindow — the open window', () => {
         compactToolCall({ name: 'shell', args: { command: `CLOUDFLARE_API_TOKEN=${cloudflare} wrangler deploy` }, result: `connected to ${db}` }),
         compactToolCall({ name: 'eval', args: { code: `await fetch('https://api.example.com', { headers: { authorization: '${jwt}', npm: '${npm}' } });` } }),
         compactToolCall({ name: 'shell', args: { command: `cat ~/.npmrc > /home/main/${npm}.txt` } }),
+        compactToolCall({ name: 'deploy', args: { op: `publish --token ${cloudflare}` } }),
       ],
     }), { awaitsFollowup: true });
 

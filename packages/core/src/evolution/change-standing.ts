@@ -12,6 +12,7 @@ import { artifactVersion, type ArtifactStatus } from './artifacts';
 import type { RefinementDeps, RefinementRequest, RefinementRoute } from './refinement';
 import { replacedBy } from '../scaffold/versions';
 import type { ScaffoldStatus } from '../types/scaffold';
+import type { ChangelogRevertAction } from './changelog';
 
 /** The stores a dream's changes live in, each the owner of whether its change is in effect. */
 export interface ChangeOwners {
@@ -33,6 +34,15 @@ export interface Standing {
   readonly standing: ChangeStanding;
   readonly since: number;
 }
+
+/** A standing as the owner reads it in the changelog and the watch. */
+export const STANDING_TEXT = {
+  refused: 'refused',
+  waiting: 'waiting for a cold turn',
+  in_effect: 'in effect',
+  reverted: 'reverted',
+  replaced: 'replaced by a later version',
+} as const satisfies Record<ChangeStanding, string>;
 
 const TEXT_STANDING = {
   current: 'in_effect',
@@ -77,6 +87,31 @@ export function changeStanding(
       return { standing: trust.decision === 'approved' && trust.digest === route.digest ? 'in_effect' : 'reverted', since: request.updatedAt };
     }
 
+    case 'subagent_spec': return null;
+  }
+}
+
+/** Whether a dream still holds its route: one the owner rejected, or a gate refused, is no longer the dream's to undo,
+ *  even where the owner has since put the same bytes in effect themselves. */
+export function routeHeld(route: Pick<RefinementRoute, 'disposition'>): boolean {
+  return route.disposition === 'staged' || route.disposition === 'applied';
+}
+
+/**
+ * How the owner reverts a dream's change that is in effect or waiting to be, through the change's own owner; null for
+ * one that is neither, or that the dream no longer holds, so a fact another writer has since written is never offered
+ * to be forgotten.
+ */
+export function revertOf(
+  standing: ChangeStanding, { request, route, index }: { readonly request: RefinementRequest; readonly route: RefinementRoute; readonly index: number },
+): ChangelogRevertAction | null {
+  if ((standing !== 'in_effect' && standing !== 'waiting') || !routeHeld(route)) return null;
+
+  switch (route.kind) {
+    case 'fact': return { type: 'fact_forget', target: route.target };
+    case 'prompt_section':
+    case 'tool_description': return { type: 'artifact_revert', target: route.target };
+    case 'skill': return request.stage === 'rolled_back' ? null : { type: 'skill_revert', target: `${request.id}#${String(index)}` };
     case 'subagent_spec': return null;
   }
 }

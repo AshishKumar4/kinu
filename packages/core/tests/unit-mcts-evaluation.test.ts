@@ -55,6 +55,13 @@ describe('verifier-owned completion through the real executor', () => {
     expect(correct.execution?.passedChecks).toBe(1);
   });
 
+  test('a program whose own text holds a fence runs whole, and its check passes', async () => {
+    const result = await evaluate('const FENCE = "```";\nfunction add(a, b) { return a + b + FENCE.length - 3; }');
+
+    expect(result.grounding).toBe('verified');
+    expect(result.execution?.passedChecks).toBe(1);
+  });
+
   test('an incomplete assertion and a bare run remain unverified, not failed or passed', async () => {
     const incomplete = await evaluate('function add(a, b) { return a + b; }', '```js\nreturn;\n```');
     const bare = await evaluate('function add(a, b) { return a + b; }', 'UNVERIFIABLE');

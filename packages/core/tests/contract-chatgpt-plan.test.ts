@@ -10,6 +10,7 @@ import {
 import { KinuError, setDiagnosticsSink } from '../src/obs/index';
 import { withModelStack } from '../src/providers/wire-model';
 import { callRetries } from '../src/providers/middleware/retry';
+import { StaleModelList } from '../src/providers/util';
 import { createRecordingLogger } from '@kinu.run/test-utils';
 
 interface Sent {
@@ -464,6 +465,15 @@ describe('the model list', () => {
       ['gpt-6-luna', 'GPT-6 Luna', null],
     ]);
   });
+  test('an answer the client cannot read is a list unread, not a crash and not an empty list', async () => {
+    const api = openai(new Response('<html>upstream connect error</html>', { status: 200, headers: { 'content-type': 'text/html' } }));
+
+    const [listed] = await Promise.allSettled([createChatGptProvider().listModels(signedIn(api.fetch).deps)]);
+
+    if (listed.status !== 'rejected') throw new Error(`an unreadable catalog listed ${JSON.stringify(listed.value)}`);
+    expect(listed.reason).toBeInstanceOf(StaleModelList);
+  });
+
   // Each window as the plan's catalog gives it on 2026-10-02 (OMP's generated `openai-codex` catalog): `context_window`
   // is the standard-priced window, `max_context_window` the most the model takes.
   test('a listing that hides nothing is logged all the same, naming what it shows', async () => {
