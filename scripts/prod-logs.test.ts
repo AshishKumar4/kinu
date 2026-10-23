@@ -484,6 +484,52 @@ describe('a code update\'s reset in a version\'s window', () => {
   });
 });
 
+// Staging 613467d1a, 2026-10-23: three eval workspaces destroyed at 02:15-02:16Z under the version before, their sleep-time
+// wakes delivered `canceled` at 02:25Z in this version's window, and each read as an idle wake: the deletions were read
+// only under this version and in its window.
+describe('an alarm in a version\'s window, beside a deletion under the version before', () => {
+  const from = Date.parse('2026-10-23T02:24:40Z');
+  const to = Date.parse('2026-10-23T02:31:20Z');
+  const delivered = '2026-10-23 02:25:00';
+
+  /** The version's read, its alarms those `alarms` names at 02:25Z, those of `canceled` the platform's `canceled`, and
+   *  `deleted-before` destroyed at 02:15:15Z under the version before: only a read of its own rows, unscoped, finds it. */
+  const idleWakes = async (alarms: readonly string[], canceled: readonly string[]) => {
+    const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: async (request) => {
+      const body = JSON.stringify(await request.json());
+      const has = (text: string) => body.includes(text);
+      const series = (objects: readonly string[]) => [{ alias: 'count', series: [{ time: delivered, data: objects.map((object) => ({ groups: [{ key: '$workers.durableObjectId', value: object }], value: 1 })) }] }];
+
+      if (has('"granularity"') && has('"operation":"eq","value":"alarm"')) return Response.json({ success: true, result: { calculations: series(has('"value":"canceled"') ? canceled : alarms) } });
+
+      if (has('"view":"events"') && has('"value":"workspace.destroyed"') && has('"key":"fields.object","operation":"eq","value":"deleted-before"') && !has('scriptVersion')) {
+        const row = { timestamp: Date.parse('2026-10-23T02:15:15.408Z'), source: { event: 'workspace.destroyed', fields: { workspace: 'eval-killn-kimi-0-xrstnt', object: 'deleted-before' } } };
+
+        return Response.json({ success: true, result: { events: { events: [row] } } });
+      }
+
+      return Response.json({ success: true, result: {} });
+    } });
+
+    try {
+      const window = { worker: 'kinu-staging', from, to };
+      const read = await versionRead(new Telemetry('token', window, server.url.origin), new Telemetry('token', window, server.url.origin), 'v1');
+
+      return read.idleWakes.map((idle) => idle.object);
+    } finally {
+      await server.stop(true);
+    }
+  };
+
+  test('a delivery cancelled after an earlier version deleted its object is no wake', async () => {
+    expect(await idleWakes(['deleted-before'], ['deleted-before'])).toEqual([]);
+  });
+
+  test('an alarm that ran with no work is a wake, and so is a cancelled one of an object never deleted', async () => {
+    expect(await idleWakes(['idle', 'moved'], ['moved'])).toEqual(['idle', 'moved']);
+  });
+});
+
 // worker-deployments.ts, which the version read and the canary ask: each reset is attributed by its own time.
 test('a reset is a deploy\'s only when another version\'s deploy landed at or before it, within the rollover\'s span', () => {
   const resetAt = Date.parse('2026-10-21T20:35:00Z');
