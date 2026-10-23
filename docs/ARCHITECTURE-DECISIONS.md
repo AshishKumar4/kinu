@@ -387,6 +387,50 @@ same-socket STARTTLS slips, this design comes back: key-only socket names, the
 control connection, the cancelled read, and `keyed-socket.ts`'s recognizer and
 two-tag framing deleted.
 
+W7. A workspace or an account is restored to a moment of the last 30 days
+from its own Durable Object's SQLite history (Cloudflare's point-in-time
+recovery), by the operator: `bun scripts/restore.ts <environment> workspace
+<name> | account <email|id> --at=<ISO time> | --bookmark=<bookmark>`. Its
+authority is the deploy's: a pass written into the deployment's AUTH_KV with
+wrangler under the account's API token, as the tables walk writes one, then
+`/ops/restore` (`packages/cf-backend/src/ops-routes.ts`). The object arms the
+restore (`packages/core/src/state/ops-restore.ts`), the route ends it at once, and reads its history
+from a fresh start: the restore landed when the object stands past the undo
+bookmark. One that did not land is answered 502, as an armed restore lands at
+the object's next start, over what was written in between. The answer names
+the undo bookmark; restoring to it takes the restore back. Decided 2026-10-23.
+
+Measured on staging (Worker `kinu-probe-pitr`, one SQLite object with a
+facet, compat 2026-09-30, deleted after):
+- A restore by time to 2.5 min after a write, of an object then written again
+  and its alarm deleted: the object's SQL row and KV key, its facet's row and
+  key, and its alarm all came back. A second restore to the same time after it
+  found the same bookmark. Restoring to the undo bookmark brought back the
+  later writes and the deleted alarm.
+- A facet cannot go back alone. Its storage has the PITR calls, and its
+  `getBookmarkForTime` returned the parent's bookmark for the same moment: one
+  history. Its `onNextSessionRestoreBookmark` plus `ctx.facets.abort` changed
+  nothing at once, and the whole object, parent and facet, went back at the
+  parent's next start (a redeploy). So no facet code may call the PITR API,
+  and a workspace's agents go back with it. An agent alone would need its
+  rows read at the moment and written back, which this does not do.
+- A time a few seconds after the object first wrote was refused ("This
+  database has no history"); seconds after a restore, a time before it was
+  refused ("Requested time is before this database existed"). Bookmarks
+  restored at once either way. Minutes apart, every time lookup answered.
+
+What it does not bring back. An account goes back alone, its roster with it:
+a workspace made since is in no roster, and one deleted since is named again
+with its storage gone. A session or credential revoked since is valid again,
+so revocations after the moment are redone by hand. A workspace's devbox is
+another object (KinuDevbox) whose disk layers are R2 objects with no
+versioning (BACKUP_BUCKET): a save deletes the layers it supersedes, so a
+devbox restored to an earlier chain names layers that may be gone; the
+restore does not touch it. Drive is Mossaic's own SQLite objects
+(MOSSAIC_USER, MOSSAIC_SHARD), restorable the same way but not by this
+command. Mail bodies (kinu-mail) and slate pictures are R2 with no
+versioning: deleted ones are gone.
+
 ## Chat loop
 
 C1. The stored assistant row holds the turn's answer. The runner selects it

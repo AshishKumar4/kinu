@@ -1,4 +1,7 @@
 /**
+ * `/ops/restore`: the operator's restore of one workspace or account to a point in time (`scripts/restore.ts`,
+ * ARCHITECTURE-DECISIONS W7), behind the same pass.
+ *
  * `/ops/tables`: the deploy's walk (`scripts/reset.ts tables`) opening the objects it names, by name alone, so each
  * repairs itself under this build (core state/schema-repair.ts), and reading back what each holds and what its repair
  * did. `/ops/roots` names the accounts the walk starts from. Their bearer is a one-time pass the step itself wrote into
@@ -9,10 +12,11 @@ import { Hono } from 'hono';
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import {
-  err, EVAL_ACCOUNTS, evalAccountEmail, json, OPS_OBJECTS_PER_REQUEST, OPS_PASS_PREFIX, opsCaller, safeJson, sha256Hex, type OpsCaller, type TablesAnswer,
+  err, EVAL_ACCOUNTS, evalAccountEmail, json, OPS_OBJECTS_PER_REQUEST, OPS_PASS_PREFIX, opsCaller, restoreLanded, RestoreTargetSchema, safeJson, sha256Hex,
+  type ArmedRestore, type OpsCaller, type RestoreTarget, type TablesAnswer,
 } from '@kinu.run/core';
 import { BUILTIN_ACCOUNTS_OBJECT, type SignInDeclarationEnv } from '@kinu.run/core/identity';
-import { attempt, renderThrownChain, settle } from '@kinu.run/core/obs';
+import { attempt, diagnostics, renderThrownChain, settle } from '@kinu.run/core/obs';
 import type { FamilyEnv } from './api/context';
 import { accountIdFor } from './auth/store';
 import { CONTROL_PLANE_SINGLETON, controlPlaneStub, hasControlPlane } from './control-plane/stub';
@@ -33,18 +37,39 @@ interface OpsObject {
   opsTables(caller: OpsCaller): Promise<TablesAnswer>;
 }
 
+/** An object a restore reaches: its storage's history, and its activation's end. */
+interface RestorableObject extends OpsObject {
+  opsRestore(caller: OpsCaller, target: RestoreTarget): Promise<ArmedRestore>;
+  opsRestart(caller: OpsCaller): Promise<void>;
+  opsBookmark(caller: OpsCaller): Promise<string>;
+}
+
 interface OpsNamespace {
   idFromName(name: string): DurableObjectId;
   get(id: DurableObjectId): OpsObject;
 }
+
+/** A namespace whose objects a restore reaches. */
+interface RestorableNamespace extends OpsNamespace {
+  get(id: DurableObjectId): RestorableObject;
+}
+
+/** One workspace by its name, or one account by its id or email; and the moment or bookmark it goes back to. */
+const RestoreRequestSchema = v.strictObject({
+  object: v.union([
+    v.strictObject({ class: v.picklist(['OrchestratorAgent', 'UserDO']), name: v.pipe(v.string(), v.nonEmpty(), v.maxLength(512)) }),
+    v.strictObject({ class: v.literal('UserDO'), email: v.pipe(v.string(), v.email()) }),
+  ]),
+  to: RestoreTargetSchema,
+});
 
 export interface OpsEnv extends SignInDeclarationEnv {
   /** Where the step wrote its pass: read by key alone. */
   AUTH_KV: { get(key: string): Promise<string | null> };
   CREDENTIAL_ENCRYPTION_KEY?: string;
   DEV_USER_EMAIL?: string;
-  UserDO: OpsNamespace;
-  OrchestratorAgent: OpsNamespace;
+  UserDO: RestorableNamespace;
+  OrchestratorAgent: RestorableNamespace;
   ControlPlaneDO?: { idFromName(name: string): DurableObjectId; get(id: DurableObjectId): OpsControlPlane };
 }
 
@@ -123,6 +148,36 @@ opsRoutes.post('/ops/tables', (c) => settle(Effect.gen(function* () {
   ), { concurrency: 10 });
 
   return json({ body: { objects: answers } });
+})));
+
+/**
+ * Arms the restore, ends the object so it lands, then reads its history from a fresh start: the restore landed when
+ * the object stands past the undo bookmark. One that did not land is still armed and would land at the next eviction,
+ * so it is said loudly, with the bookmark that takes it back.
+ */
+opsRoutes.post('/ops/restore', (c) => settle(Effect.gen(function* () {
+  if (!(yield* admitted(c.env, c.req.header('authorization')))) return err(401, REFUSED);
+  const body = yield* Effect.promise(() => safeJson(c.req.raw, RestoreRequestSchema));
+
+  if (body === null) return err(400, 'The body names one workspace or account and the moment ({ at }) or bookmark it goes back to.');
+  const caller = yield* Effect.promise(() => opsCaller(c.env));
+  const { object } = body;
+  const name = 'email' in object ? yield* Effect.promise(() => accountIdFor(c.env, object.email)) : object.name;
+  const namespace = object.class === 'UserDO' ? c.env.UserDO : c.env.OrchestratorAgent;
+  const id = namespace.idFromName(name);
+  const armed = yield* attempt({ doing: `arming ${object.class} ${name}'s restore`, otherwise: 'unavailable' }, () => namespace.get(id).opsRestore(caller, body.to));
+  const said = { class: object.class, name, id: id.toString(), ...armed };
+
+  diagnostics.event('ops.restore_armed', said);
+
+  // The rejection of this call is the restart's receipt.
+  const ended = yield* Effect.exit(attempt({ doing: 'restarting it', otherwise: 'unavailable' }, () => namespace.get(id).opsRestart(caller)));
+  const current = yield* attempt({ doing: 'reading its history after the restart', otherwise: 'unavailable' }, () => namespace.get(id).opsBookmark(caller));
+  const landed = restoreLanded(current, armed.undo);
+
+  diagnostics.event('ops.restore_answered', { ...said, current, landed, restart: ended._tag });
+
+  return json({ body: { ...said, current, landed } }, { status: landed ? 200 : 502 });
 })));
 
 opsRoutes.all('/ops/*', async () => err(404, 'Not found'));
