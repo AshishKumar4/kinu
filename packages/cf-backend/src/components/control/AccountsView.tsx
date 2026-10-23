@@ -7,7 +7,7 @@ import { useState, type ReactNode } from "react";
 import { Effect } from "effect";
 import { detach } from "@kinu.run/core/obs";
 import { ProhibitIcon, UserPlusIcon } from "@phosphor-icons/react";
-import { shownBytes, type AccountLimits, type LimitReading } from "@kinu.run/core";
+import { shownBytes, timeAgo, type AccountLimits, type LimitReading } from "@kinu.run/core";
 import { runAction, type AccountRow, type ControlAction } from "@/lib/control-api";
 import { Button } from "@/components/ui/Button";
 import { CopyField } from "@/components/ui/CopyField";
@@ -126,7 +126,7 @@ export function AccountsTable({ rows, onOpen, onChanged }: { rows: readonly Acco
                       <td className="max-w-64 truncate px-4 py-2.5 p-text">{row.email}</td>
                       <td className="px-4 py-2.5"><ClassPill limits={row.limits} /></td>
                       {COLUMNS.map((column) => <td key={column.id} className="px-4 py-2.5 align-middle"><LimitCell limits={row.limits} id={column.id} /></td>)}
-                      <td className="t-meta whitespace-nowrap px-4 py-2.5 p-text-3">{when(row.lastSeenAt)}</td>
+                      <td className="t-meta whitespace-nowrap px-4 py-2.5 p-text-3" title={when(row.lastSeenAt)}>{timeAgo(row.lastSeenAt)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -293,7 +293,7 @@ export function AccountStanding({ userId, email, seen, limits, onChanged }: {
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="t-title p-text">{email}</h3>
         <ClassPill limits={limits} />
-        {seen !== null && <span className="t-meta p-text-3">seen {when(seen)}</span>}
+        {seen !== null && <span className="t-meta p-text-3" title={when(seen)}>seen {timeAgo(seen)}</span>}
       </div>
       {report.suspended !== null && <p className="t-meta p-danger">Suspended {when(report.suspended.at)}: {report.suspended.reason}</p>}
       {limits.use.length > 0 && (

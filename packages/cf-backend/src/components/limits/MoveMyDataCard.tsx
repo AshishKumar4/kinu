@@ -2,7 +2,7 @@
  * Settings › Account › Move my data (the owner's board, deploy B): what moves to a Kinu of your own and what stays,
  * and "Download everything": each workspace's archive, which `kinu import <file>` restores, and the Drive as zips.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Cause, Effect } from "effect";
 import { DownloadSimpleIcon, HardDrivesIcon, KeyIcon, SquaresFourIcon } from "@phosphor-icons/react";
 import { detach, renderThrownChain } from "@kinu.run/core/obs";
@@ -68,6 +68,19 @@ function ArchiveRun({ name, onDone, onFailed }: { name: string; onDone: () => vo
   return null;
 }
 
+/** One thing that moves: its name, and what of it moves and how, below it. */
+function MovesRow({ icon, name, children }: { icon: ReactNode; name: string; children: ReactNode }) {
+  return (
+    <div className="flex items-start gap-3 px-4 py-3">
+      <span className="mt-0.5 shrink-0">{icon}</span>
+      <span className="min-w-0 flex-1">
+        <span className="t-body block p-text">{name}</span>
+        <span className="t-meta block p-text-3">{children}</span>
+      </span>
+    </div>
+  );
+}
+
 /** Where a free tier binds the account or an operator lifted it: on a deployment with no free tier, nothing. */
 export function MoveMyDataSlot() {
   const limits = useAsyncResource(getLimits);
@@ -110,9 +123,11 @@ function MoveMyDataCard() {
       <div className="space-y-4" data-move-my-data-card={moving.phase}>
         <p className="t-meta p-text-3">What a Kinu of your own takes from here. Your account here stays as it is until you delete it.</p>
         <Group>
-          <div className="flex items-center gap-3 px-4 py-3"><SquaresFourIcon size={16} className="p-text-2" /><span className="t-body flex-1 p-text">Workspaces</span><span className="t-meta p-text-3">chats, files, memory and slates; <code className="font-mono">kinu import</code> each one there</span></div>
-          <div className="flex items-center gap-3 px-4 py-3"><HardDrivesIcon size={16} className="p-text-2" /><span className="t-body flex-1 p-text">Drive</span><span className="t-meta p-text-3">your files and skills, as zips</span></div>
-          <div className="flex items-center gap-3 px-4 py-3"><KeyIcon size={16} className="p-text-3" /><span className="t-body flex-1 p-text-2">Keys and sign-ins don&apos;t move: add them again there.</span></div>
+          <MovesRow icon={<SquaresFourIcon size={16} className="p-text-2" />} name="Workspaces">
+            Chats, files, memory and slates, an archive each: <code className="font-mono">kinu import</code> takes each one there.
+          </MovesRow>
+          <MovesRow icon={<HardDrivesIcon size={16} className="p-text-2" />} name="Drive">Your files and skills, as zips.</MovesRow>
+          <div className="flex items-start gap-3 px-4 py-3"><KeyIcon size={16} className="mt-0.5 shrink-0 p-text-3" /><span className="t-body min-w-0 flex-1 p-text-2">Keys and sign-ins don&apos;t move: add them again there.</span></div>
         </Group>
         {current !== undefined && moving.phase === "workspaces" && (
           <div className="space-y-2" role="status">
