@@ -1205,9 +1205,14 @@ a facet of its own) and D13's "every agent's advisor in core `ActorAdvisor`".
   context is a 48k-character window cut in halves (the turn's request kept),
   so each request is bounded: 58-59 kB in every third of a 150-step turn's
   calls, main's peak 60.7-61.8 MB and its allocation 266-282 MB (9a09d9ac5,
-  3 runs). Main's allocation a step still rises from 1.44 to 1.96 MB across
-  the turn's thirds, against a flat 0.5-0.6 MB unadvised; not from the
-  advisor's requests, cause unknown.
+  3 runs). The advisor's own cost a step is flat: with both arms held to
+  all 150 of their steps (07b6a8f2b; before it, other workspaces' calls took
+  74 of the unadvised turn's steps, which read as a flat 0.5-0.6 MB a step),
+  main allocates 1.01-1.06, 1.17-1.24 and 1.52-1.54 MB a step over the
+  turn's thirds unadvised and 1.49-1.55, 1.66-1.76 and 1.94-1.96 advised, so
+  the advisor adds 0.42-0.52 MB a step in every third (2 runs). The rise in
+  both arms is the agent's own request, which carries its history (222, 392,
+  562 kB), not the advisor's.
 - Containment, same jobs, every run alike: an advisor call that throws, and
   one beside an uncaught throw (from a timer on 97d575f47, a microtask on
   cac0cbe68) and a rejection no one awaits, each left main's turn to run all
