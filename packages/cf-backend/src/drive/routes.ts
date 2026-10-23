@@ -5,10 +5,9 @@
 import { Hono, type Context } from 'hono';
 import * as v from 'valibot';
 import {
-  err, ERROR_STATUS, FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, fileResponseHeaders, json,
-  pumpUploadChunks, safeJson, type DriveFailure, type DriveUploadTarget, type UserCaller,
+  err, ERROR_STATUS, fileResponseHeaders, json, safeJson, serveDownload, serveUpload, type DriveFailure, type DriveUploadTarget, type UserCaller,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
+import { KinuError } from '@kinu.run/core/obs';
 import type { UserDO } from '../user/user-do';
 import type { DriveAnswer } from '../user/drive';
 import { ownerGate, type ApiVariables, type FamilyEnv } from '../api/context';
@@ -122,92 +121,29 @@ function uploadTarget(url: URL): DriveUploadTarget | null {
   return path === null ? null : { kind: 'file', path };
 }
 
-async function upload(request: Request, ctx: DriveContext, target: DriveUploadTarget): Promise<Response> {
-  if (request.body === null) return err(400, 'request body required');
-  const transferId = crypto.randomUUID();
-
-  const abandon = async (): Promise<void> => {
-    try {
-      await ctx.object.drive_abortUpload(ctx.owner, transferId);
-    } catch (abortCause) {
-      diagnostics.failure('drive.upload_abort_failed', toKinuError({
-        doing: 'aborting a failed chunked Drive upload',
-        cause: abortCause,
-        otherwise: 'unavailable',
-      }), { kind: target.kind });
-    }
-  };
-
-  try {
-    const outcome = await pumpUploadChunks(request, async (offset, chunk, final) => {
-      const written = await ctx.object.drive_writeChunk(ctx.owner, { target, transferId, offset, chunk, final });
-
-      if (!final && !written.ok) throw new KinuError(written.code, written.error);
-
-      return written;
-    });
-
-    if (outcome === 'too_large') {
-      await abandon();
-
-      return err(413, `the upload exceeds the ${String(Math.floor(FILE_TRANSFER_MAX_BYTES / (1024 * 1024)))} MiB transfer limit`);
-    }
-
-    if (outcome instanceof KinuError) {
-      await abandon();
-      diagnostics.failure('drive.upload_body_unreadable', outcome, { kind: target.kind });
-
-      return err(400, 'the upload stopped before the whole file arrived');
-    }
-
-    return answered(outcome.result);
-  } catch (cause) {
-    await abandon();
-
-    if (cause instanceof KinuError) return err(ERROR_STATUS[cause.code], cause.message);
-    diagnostics.failure('drive.upload_failed', toKinuError({
-      doing: 'streaming an upload to the Drive',
-      cause,
-      otherwise: 'unavailable',
-    }), { kind: target.kind });
-
-    return err(500, cause instanceof Error ? cause.message : 'upload failed');
-  }
+function upload(request: Request, ctx: DriveContext, target: DriveUploadTarget): Promise<Response> {
+  return serveUpload(request, {
+    surface: 'drive',
+    fields: { kind: target.kind },
+    write: (transferId, offset, chunk, final) => ctx.object.drive_writeChunk(ctx.owner, { target, transferId, offset, chunk, final }),
+    refused: (written) => (written.ok ? null : new KinuError(written.code, written.error)),
+    abort: (transferId) => ctx.object.drive_abortUpload(ctx.owner, transferId),
+    answer: answered,
+  });
 }
 
-async function download(ctx: DriveContext, path: string, asAttachment: boolean): Promise<Response> {
-  const transferId = crypto.randomUUID();
-  const opened = await ctx.object.drive_startDownload(ctx.owner, path, transferId);
+function download(ctx: DriveContext, path: string, asAttachment: boolean): Promise<Response> {
+  return serveDownload({
+    start: async (transferId) => {
+      const opened = await ctx.object.drive_startDownload(ctx.owner, path, transferId);
 
-  if (!opened.ok) return failed(opened);
-  const { size, name } = opened.value;
-  let offset = 0;
-
-  const stream = new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      if (offset >= size) {
-        await ctx.object.drive_abortDownload(ctx.owner, transferId);
-        controller.close();
-
-        return;
-      }
-
-      const chunk = await ctx.object.drive_readChunk(ctx.owner, transferId, offset, Math.min(FILE_CHUNK_BYTES, size - offset));
-
-      if (!chunk.ok) {
-        await ctx.object.drive_abortDownload(ctx.owner, transferId);
-        controller.error(new KinuError(chunk.code, chunk.error));
-
-        return;
-      }
-
-      offset += chunk.value.bytes.byteLength;
-      controller.enqueue(chunk.value.bytes);
+      return opened.ok ? opened.value : new KinuError(opened.code, opened.error);
     },
-    async cancel() {
-      await ctx.object.drive_abortDownload(ctx.owner, transferId);
-    },
-  });
+    read: async (transferId, offset, length) => {
+      const chunk = await ctx.object.drive_readChunk(ctx.owner, transferId, offset, length);
 
-  return new Response(stream, { headers: fileResponseHeaders(`/${name}`, asAttachment || name.endsWith('.zip')) });
+      return chunk.ok ? chunk.value.bytes : new KinuError(chunk.code, chunk.error);
+    },
+    abort: (transferId) => ctx.object.drive_abortDownload(ctx.owner, transferId),
+  }, ({ name }) => fileResponseHeaders(`/${name}`, asAttachment || name.endsWith('.zip')));
 }

@@ -2,10 +2,10 @@ import type { VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 /** Raw bytes cross in FILE_CHUNK_BYTES chunks: a whole file as one RPC argument hits `do.facet.rpc_bytes`. */
 
 import { Hono } from 'hono';
-import { FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, pumpUploadChunks, VfsRevisionSchema, type ExecutorWriteResult } from "@kinu.run/core";
+import { serveDownload, serveUpload, VfsRevisionSchema, type ExecutorWriteResult } from "@kinu.run/core";
 import * as v from 'valibot';
 import type { ExecutorFileChunkRead, ExecutorFileChunkWrite } from "./workspace-executors";
-import { diagnostics, KinuError, toKinuError } from "@kinu.run/core/obs";
+import { KinuError } from "@kinu.run/core/obs";
 import { err, fileResponseHeaders, json } from "@kinu.run/core";
 import type { FamilyEnv } from './api/context';
 import { LITERAL_WORKSPACE, type WorkspaceVariables } from './api/workspace';
@@ -65,8 +65,9 @@ function expectedRevisionFrom(request: Request): VfsRevision | undefined | null 
   return parsed.success ? parsed.output : null;
 }
 
-/** Streams chunks to the actor; the bound counts bytes pulled, not the declared length, and the actor re-checks offsets and total. */
-async function upload(transfer: {
+/** The actor's chunked write, which re-checks offsets and the total; its refusals carry no code, so each is the
+ *  request's own (400). */
+function upload(transfer: {
   request: Request;
   agent: FilesRouteAgent;
   executorId: string;
@@ -75,127 +76,40 @@ async function upload(transfer: {
 }): Promise<Response> {
   const { request, agent, executorId, path, expectedRevision } = transfer;
 
-  if (request.body === null) return err(400, 'request body required');
+  return serveUpload(request, {
+    surface: 'files',
+    fields: { executorId, path },
+    write: (transferId, offset, chunk, final): Promise<ExecutorWriteResult> => agent.writeExecutorFileChunk({
+      executorId, path, transferId, offset, chunk, final, expectedRevision,
+    }),
+    refused: (written) => ('error' in written ? new KinuError('bad_input', written.error) : null),
+    abort: (transferId) => agent.abortExecutorFileWrite(transferId),
+    answer: (result) => {
+      if ('conflict' in result) {
+        return json({ body: { error: 'This file changed after you opened it.', revision: result.revision } }, { status: 412 });
+      }
 
-  const overLimit = () => err(
-    413,
-    `file exceeds the ${String(Math.floor(FILE_TRANSFER_MAX_BYTES / (1024 * 1024)))} MiB transfer limit`,
-  );
+      if ('unsupported' in result) return json({ body: { error: result.error } }, { status: 409 });
 
-  const transferId = crypto.randomUUID();
-
-  const abandon = async (): Promise<void> => {
-    try {
-      await agent.abortExecutorFileWrite(transferId);
-    } catch (abortCause) {
-      diagnostics.failure('files.upload_abort_failed', toKinuError({
-        doing: 'aborting a failed chunked file upload',
-        cause: abortCause,
-        otherwise: 'unavailable',
-      }), { executorId, path });
-    }
-  };
-
-  let sent = 0;
-
-  try {
-    const outcome = await pumpUploadChunks(request, async (offset, chunk, final) => {
-      const written = await agent.writeExecutorFileChunk({
-        executorId, path, transferId, offset, chunk, final, expectedRevision,
-      });
-
-      if (!final && 'error' in written) throw new Error(written.error);
-      sent = offset + chunk.byteLength;
-
-      return written;
-    });
-
-    if (outcome === 'too_large') {
-      await abandon();
-
-      return overLimit();
-    }
-
-    if (outcome instanceof KinuError) {
-      await abandon();
-      diagnostics.failure('files.upload_body_unreadable', outcome, { executorId, path });
-
-      return err(400, 'the upload stopped before the whole file arrived');
-    }
-
-    const result = outcome.result;
-
-    if ('conflict' in result) {
-      return json(
-        { body: { error: 'This file changed after you opened it.', revision: result.revision } },
-        { status: 412 },
-      );
-    }
-
-    if ('unsupported' in result) return json({ body: { error: result.error } }, { status: 409 });
-
-    return 'error' in result ? err(400, result.error) : json({ body: result });
-  } catch (cause) {
-    await abandon();
-    diagnostics.failure('files.upload_failed', toKinuError({
-      doing: 'streaming an uploaded file to the workspace actor',
-      cause,
-      otherwise: 'unavailable',
-    }), { executorId, path, bytes: sent });
-
-    return err(400, cause instanceof Error ? cause.message : 'upload failed');
-  }
+      return 'error' in result ? err(400, result.error) : json({ body: result });
+    },
+  });
 }
 
-async function download(
-  agent: FilesRouteAgent,
-  executorId: string,
-  path: string,
-  url: URL,
-): Promise<Response> {
-  const transferId = crypto.randomUUID();
-  const opened = await agent.startExecutorFileDownload(executorId, path, transferId);
+/** The executor's file, by the snapshot the actor takes at its start. Its read model says a file it cannot serve is
+ *  past the limit or not there, never why else. */
+function download(agent: FilesRouteAgent, executorId: string, path: string, url: URL): Promise<Response> {
+  return serveDownload({
+    start: async (transferId) => {
+      const opened = await agent.startExecutorFileDownload(executorId, path, transferId);
 
-  if ('error' in opened) return err(opened.reason === 'too_large' ? 413 : 404, opened.error);
-
-  let offset = 0;
-
-  const stream = new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      if (offset >= opened.size) {
-        await agent.abortExecutorFileDownload(transferId);
-        controller.close();
-
-        return;
-      }
-
-      const chunk = await agent.readExecutorFileChunk({
-        executorId, path, transferId, offset, length: Math.min(FILE_CHUNK_BYTES, opened.size - offset),
-      });
-
-      if ('error' in chunk) {
-        await agent.abortExecutorFileDownload(transferId);
-        controller.error(new Error(chunk.error));
-
-        return;
-      }
-
-      if (chunk.bytes.byteLength === 0) {
-        await agent.abortExecutorFileDownload(transferId);
-        controller.error(new Error(`file ended at ${String(offset)} of ${String(opened.size)} bytes`));
-
-        return;
-      }
-
-      offset += chunk.bytes.byteLength;
-      controller.enqueue(chunk.bytes);
+      return 'error' in opened ? new KinuError(opened.reason === 'too_large' ? 'budget' : 'missing', opened.error) : opened;
     },
-    async cancel() {
-      await agent.abortExecutorFileDownload(transferId);
-    },
-  });
+    read: async (transferId, offset, length) => {
+      const chunk = await agent.readExecutorFileChunk({ executorId, path, transferId, offset, length });
 
-  return new Response(stream, {
-    headers: fileResponseHeaders(path, url.searchParams.get('download') !== null),
-  });
+      return 'error' in chunk ? new KinuError('io', chunk.error) : chunk.bytes;
+    },
+    abort: (transferId) => agent.abortExecutorFileDownload(transferId),
+  }, () => fileResponseHeaders(path, url.searchParams.get('download') !== null));
 }

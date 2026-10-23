@@ -67,12 +67,13 @@ export async function safeJson<Schema extends v.GenericSchema>(
 /**
  * Pull `request.body` under `limit`, handing each chunk to `sink`. The bound counts arriving bytes:
  * a missing `content-length` reads as 0, so the declared length is only a pre-filter. On overflow the
- * stream is cancelled, not drained. A stalled body returns classified; `sink` failures propagate.
+ * stream is cancelled, not drained, as it is when `sink` answers `stop`. A stalled body returns classified;
+ * `sink` failures propagate.
  */
 export async function readBoundedStream(
   request: Request,
   limit: number,
-  sink: (chunk: Uint8Array) => Promise<void> | void,
+  sink: BodySink,
 ): Promise<'ok' | 'too_large' | KinuError> {
   const declared = Number(request.headers.get('content-length'));
 
@@ -81,11 +82,14 @@ export async function readBoundedStream(
   return await drainBounded(request.body, limit, sink);
 }
 
+/** Where a bounded body's chunks go; `stop` ends the pull, the rest of the body unread. */
+type BodySink = (chunk: Uint8Array) => Promise<void | 'stop'> | void | 'stop';
+
 /** `body` pulled under `limit` into `sink`, as {@link readBoundedStream} pulls a request's, with no length declared. */
 async function drainBounded(
   body: ReadableStream<Uint8Array> | null,
   limit: number,
-  sink: (chunk: Uint8Array) => Promise<void> | void,
+  sink: BodySink,
 ): Promise<'ok' | 'too_large' | KinuError> {
   if (body === null) return 'ok';
   const reader = body.getReader();
@@ -111,7 +115,11 @@ async function drainBounded(
       return 'too_large';
     }
 
-    await sink(value);
+    if ((await sink(value)) === 'stop') {
+      await reader.cancel('the receiver refused the body');
+
+      return 'ok';
+    }
   }
 }
 

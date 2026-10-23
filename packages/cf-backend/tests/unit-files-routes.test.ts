@@ -57,11 +57,11 @@ async function route(request: Request, agent: FilesRouteAgent): Promise<Response
 /** The object's own five transfer calls, for a case to replace one of. */
 function delegating(agent: HarnessOrchestratorAgent): FilesRouteAgent {
   return {
-    startExecutorFileDownload: (...args) => agent.startExecutorFileDownload(...args),
-    readExecutorFileChunk: (read) => agent.readExecutorFileChunk(read),
-    abortExecutorFileDownload: (transferId) => agent.abortExecutorFileDownload(transferId),
-    writeExecutorFileChunk: (write) => agent.writeExecutorFileChunk(write),
-    abortExecutorFileWrite: (transferId) => agent.abortExecutorFileWrite(transferId),
+    startExecutorFileDownload: agent.startExecutorFileDownload.bind(agent),
+    readExecutorFileChunk: agent.readExecutorFileChunk.bind(agent),
+    abortExecutorFileDownload: agent.abortExecutorFileDownload.bind(agent),
+    writeExecutorFileChunk: agent.writeExecutorFileChunk.bind(agent),
+    abortExecutorFileWrite: agent.abortExecutorFileWrite.bind(agent),
   };
 }
 
@@ -269,6 +269,31 @@ describe("files route — PUT", () => {
     expect(await chunk("upload-a", 1, a.subarray(1), true)).toMatchObject({ ok: true });
     expect(await chunk("upload-b", 1, b.subarray(1), true)).toMatchObject({ conflict: true });
     expect(text(await ws.held())).toBe("AA");
+  });
+
+  test("a workspace that fails mid-upload is the server's failure, not the request's, and the upload is dropped", async () => {
+    const ws = workspace();
+    const dropped: string[] = [];
+    let chunks = 0;
+
+    const response = await route(put(patternBytes(FILE_CHUNK_BYTES * 2 + 7)), {
+      ...delegating(ws.agent),
+      writeExecutorFileChunk: async (write) => {
+        chunks += 1;
+
+        if (chunks === 2) throw new Error('the workspace object reset');
+
+        return ws.agent.writeExecutorFileChunk(write);
+      },
+      abortExecutorFileWrite: async (transferId) => {
+        dropped.push(transferId);
+        await ws.agent.abortExecutorFileWrite(transferId);
+      },
+    });
+
+    expect(response.status).toBe(500);
+    expect(dropped).toHaveLength(1);
+    expect(await ws.held()).toBeNull();
   });
 
   test("every chunk carries the expected revision fixed by offset zero", async () => {

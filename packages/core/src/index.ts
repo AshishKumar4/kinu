@@ -2013,8 +2013,10 @@ export {
   readExecutorFileBytes, statExecutorFile, renameExecutorPathOp, deleteExecutorPathOp,
   listEnvironments, joinDir, parentDir,
   FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, FILES_PAGE_ENTRIES, shownEntries,
-  ExecutorFileUpload, ExecutorFileDownload, ChunkedUpload, pumpUploadChunks,
+  ExecutorFileUpload, ExecutorFileDownload, ChunkedUpload,
 } from './read-models/files';
+
+export { serveDownload, serveUpload } from './read-models/file-transfer';
 
 export type {
   DirEntry, EnvironmentInfo, ExecutorFileLookup, ExecutorRowLookup, ExecutorTextFile, ExecutorWriteResult,
