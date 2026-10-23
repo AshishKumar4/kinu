@@ -259,7 +259,7 @@ import {
 } from "@kinu.run/core";
 import type { MctsSearchRunSummary, SubagentInspectionRequest, SubagentInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
 import { Cause, Effect, Exit } from 'effect';
-import { attempt, authoredRefusal, CODE_IS_REFUSAL, diagnostics, flight, hold, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
+import { attempt, authoredRefusal, CODE_IS_REFUSAL, diagnostics, flight, hold, joining, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import type { NameOrigin } from "@kinu.run/core";
 import { deliverCloudFork, type ForkFrameAck } from "./user/workspace-fork";
@@ -869,7 +869,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private readonly stopOwed = this.held.holdEach(['agent_stops'], (actorId: string) => this.stops.owed(actorId));
 
   /** The crossing of an agent's unanswered Stop each caller joins: one at a time per agent, dropped once it settles. */
-  private readonly stopReplays = new Map<string, Promise<boolean>>();
+  private readonly stopReplays = joining<string, boolean>();
 
   /**
    * An agent's Stop its isolate has not answered (the workspace reset before it did), crossed now at its cutoff and
@@ -878,19 +878,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    */
   private async stopReplayed(actorId: string): Promise<boolean> {
     if (this.stopOwed(actorId) === null) return false;
-    const running = this.stopReplays.get(actorId);
 
-    if (running !== undefined) return await running;
-
-    const replay = (async () => {
+    return await this.stopReplays(actorId, async () => {
       await this.stopCrossed(actorId, null);
 
       return true;
-    })().finally(() => { this.stopReplays.delete(actorId); });
-
-    this.stopReplays.set(actorId, replay);
-
-    return await replay;
+    });
   }
 
   /** The chat's interrupt, at `cutoff` and at an owed Stop's, read before it crosses: that Stop is retired once the
@@ -2816,7 +2809,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this._rootActor ??= this.workspaceActors().main();
   }
 
-  private readonly actorRetirementsInFlight = new Map<string, Promise<ActorDirectoryResult>>();
+  private readonly actorRetirementsInFlight = joining<string, ActorDirectoryResult>();
 
   async actorDirectory(operation: ChildActorOperation): Promise<ActorDirectoryResult> {
     const { actorId, workspaceId, parentActorId } = this.actorHandle();
@@ -2850,7 +2843,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     if (input.action !== 'retire') return directory.apply(caller, path, input);
-    const pending = this.actorRetirementsInFlight.get(input.reference.actorId);
+    const pending = this.actorRetirementsInFlight.inFlight(input.reference.actorId);
 
     if (pending) {
       directory.apply(caller, path, input);
@@ -2858,7 +2851,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       return await pending;
     }
 
-    const retirement = (async (): Promise<ActorDirectoryResult> => {
+    const retirement = this.actorRetirementsInFlight(input.reference.actorId, async (): Promise<ActorDirectoryResult> => {
       const entry = directory.apply(caller, path, input);
       await this.scheduleTerminalRetry(Date.now());
       // The host does the whole physical retirement in one call: runtime objects, `actor_id` rows in
@@ -2868,16 +2861,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       });
 
       return entry.state === 'deleted' ? entry : directory.apply(caller, path, { action: 'release', name: input.name, reference: input.reference });
-    })();
-
-    this.actorRetirementsInFlight.set(input.reference.actorId, retirement);
+    });
 
     try {
       return await retirement;
     } catch (cause) {
       throw toKinuError({ doing: 'retiring an actor and its physical storage', cause, otherwise: 'io' });
-    } finally {
-      if (this.actorRetirementsInFlight.get(input.reference.actorId) === retirement) this.actorRetirementsInFlight.delete(input.reference.actorId);
     }
   }
 
