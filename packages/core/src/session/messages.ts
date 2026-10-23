@@ -13,10 +13,11 @@ import { spilledDigest, type SessionPayloads, type SessionPayloadReader, type Se
 export interface MessageReference { readonly messageId: string }
 
 /** The stored message bytes one event-loop turn reads and decodes, past its first message. A chat's seed read in one
- *  statement held its agent's isolate 157-305 ms in the facet loop gate's screenshot turn, about 70 ms a megabyte on its
- *  hosts (2026-10-23), and the platform resets a facet whose turns take 0.1 s and more, its workspace with it (D14). A
- *  slice bounded in SQL by a running sum (a window over every remaining row) took 1.8-7.2 s in one turn there. */
-const MATERIALIZE_SLICE_BYTES = 512 * 1024;
+ *  statement held its agent's isolate 157-305 ms in the facet loop gate's screenshot turn, and a 512 kB slice of that
+ *  turn's output 97-113 ms with its size read in the same turn (armada, 2026-10-23); the platform resets a facet whose turns
+ *  take 0.1 s and more, its workspace with it (D14). A slice bounded in SQL by a running sum (a window over every
+ *  remaining row) took 1.8-7.2 s in one turn there. */
+const MATERIALIZE_SLICE_BYTES = 256 * 1024;
 
 /** Message ids in slices of at most {@link MATERIALIZE_SLICE_BYTES} each, a slice's first message whatever its size. */
 function byteSlices(sized: readonly { readonly message_id: string; readonly bytes: number }[]): string[][] {
@@ -240,7 +241,7 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
   /**
    * Each named message's parts, in slices of {@link MATERIALIZE_SLICE_BYTES}, the loop let go between them; an absent row
    * stays absent. The slices are planned from each row's stored size, read from its header (`octet_length`), never its
-   * content: a text page is two reads.
+   * content, in a turn of its own when there is more than one: a text page is two reads in one turn.
    */
   async materializePartsOf(messageIds: readonly string[]): Promise<Map<string, readonly StoredPart[]>> {
     this.actor.assertCurrent();
@@ -249,8 +250,10 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
     const sized = this.sql<{ message_id: string; bytes: number }>`SELECT message_id, COALESCE(octet_length(content_json), 0) AS bytes
       FROM session_messages WHERE actor_id=${this.actor.actorId} AND message_id IN (SELECT value FROM json_each(${JSON.stringify(messageIds)}))`;
 
-    for (const [at, slice] of byteSlices(sized).entries()) {
-      if (at > 0) {
+    const slices = byteSlices(sized);
+
+    for (const slice of slices) {
+      if (slices.length > 1) {
         await nextLoopTurn();
         this.actor.assertCurrent();
       }
