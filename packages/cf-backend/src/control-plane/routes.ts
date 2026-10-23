@@ -59,7 +59,7 @@ type ControlTarget = ActionTarget & Pick<OrchestratorAgent,
   | 'getExecutors'
 >;
 
-type ControlRegistry = ActionRegistry & Pick<UserDO, 'listActiveWorkspaces'>;
+type ControlRegistry = ActionRegistry & Pick<UserDO, 'listActiveWorkspaces' | 'limits_account'>;
 
 export interface ControlEnv<Id> extends ActionEnv<Id>, AdminGateEnv, AnalyticsSqlEnv {
   ControlPlaneDO: ObjectNamespace<Id, ControlPlaneReach>;

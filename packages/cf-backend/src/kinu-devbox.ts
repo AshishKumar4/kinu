@@ -92,8 +92,8 @@ export class KinuDevbox extends Devbox<Env> {
   }
 
   /** A start from stopped is the owning workspace's owner's to admit (core limits/): asked of its root agent. */
-  protected override async admitStart(size: BoxSize): Promise<string | null> {
-    return await (await this.#rootAgent())?.computerStartAdmitted(size) ?? null;
+  protected override async admitStart(size: BoxSize): Promise<StartAdmission> {
+    return await (await this.#rootAgent())?.computerStartAdmitted(size) ?? { size };
   }
 
   /** Each heartbeat the box is seen running counts to its owner's month; an uncounted tick is logged, never the beat's. */

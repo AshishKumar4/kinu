@@ -5,13 +5,15 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { ChatsIcon, CloudIcon, CpuIcon, DownloadSimpleIcon, HardDrivesIcon, KeyIcon, SquaresFourIcon } from "@phosphor-icons/react";
-import { APP_ROUTES, shownBytes, type LimitReading, type LimitsReport } from "@kinu.run/core";
+import { APP_ROUTES, shownBytes, type ComputerSize, type LimitReading, type LimitsReport } from "@kinu.run/core";
+import { getLimits } from "@/lib/limits-api";
+import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { ShareBar, type ShareTone } from "@/components/ui/Meter";
 import { buttonClass } from "@/components/ui/Button";
 import { Notice } from "@/components/ui/Notice";
 import { settingsPath } from "@/components/SettingsRail";
 
-export const RUN_YOUR_OWN = "Run your own Kinu";
+const RUN_YOUR_OWN = "Run your own Kinu";
 
 /** The limits a person sees: the running computer is the hours' own line, never a row of its own. */
 export type ShownLimit = Exclude<LimitReading["id"], "computers_running">;
@@ -131,6 +133,14 @@ export function ModelsUsedUp() {
       Today&apos;s Kinu models are used up, so this turn stopped. Add your own key to go on now, or they start again at {dayTurnsAt()}.
     </Notice>
   );
+}
+
+/** The largest size this account's computers start at (core limits/ `startSize`); null where none caps them, or before
+ *  the limits are read. */
+export function useComputerSizeCap(): ComputerSize | null {
+  const limits = useAsyncResource(getLimits);
+
+  return lastValue(limits.resource)?.computerSizeCap ?? null;
 }
 
 /** "Move my data": Settings › Account's list of what moves, and the download that carries it. */

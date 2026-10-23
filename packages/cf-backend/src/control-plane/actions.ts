@@ -197,7 +197,7 @@ export type ActionRegistry = Pick<UserDO,
 >;
 
 /** The control plane as the account actions reach it: its index feed, and the accounts list's mirror and invite links. */
-export type ActionControlPlane = IndexFeedSink & Pick<ControlPlaneDO, 'noteAccountStanding' | 'createInvite'>;
+type ActionControlPlane = IndexFeedSink & Pick<ControlPlaneDO, 'noteAccountStanding' | 'createInvite'>;
 
 export interface ActionEnv<Id> extends ControlPlaneEnv<Id, ActionControlPlane>, SignInDeclarationEnv {
   OrchestratorAgent: ObjectNamespace<Id, ActionTarget>;

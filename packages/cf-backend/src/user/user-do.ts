@@ -1104,7 +1104,7 @@ export class UserDO extends Agent<Env> {
     return this.accountLimits.storageSampled(caller, source, bytes);
   }
 
-  limits_admitComputerStart(caller: UserCaller, workspace: string, size: ComputerSize): Promise<void> {
+  limits_admitComputerStart(caller: UserCaller, workspace: string, size: ComputerSize): Promise<ComputerSize> {
     return this.accountLimits.admitComputerStart(caller, workspace, size);
   }
 

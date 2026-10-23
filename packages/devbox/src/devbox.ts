@@ -420,6 +420,9 @@ function sameToken(held: string | undefined, given: string): boolean {
   return diff === 0;
 }
 
+/** A start from stopped as the box's host admits it: the size it starts at, or the refusal's words. */
+export type StartAdmission = { readonly size: BoxSize } | { readonly refused: string };
+
 export class Devbox<Env = unknown> extends DurableObject<Env> {
   readonly #gateways: GatewayBindings;
   #storage: DevboxStorage | undefined;
@@ -442,6 +445,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
    *  box, what its pane sent meanwhile, given to the PTY in order as it attaches (D109). */
   readonly #terminals = new Map<WebSocket, { readonly attached: TerminalSocketEvents } | { readonly waiting: (string | ArrayBuffer)[] }>();
   #refused: { readonly generation: number; readonly reason: string } | undefined;
+
+  /** The size the host admitted this box's last start from stopped at (`admitStart`), which the start runs at. */
+  #admittedSize: BoxSize | undefined;
   /** Set by `destroy`, cleared by a caller or a host (D36). */
   #closed = false;
   #teardowns = 0;
@@ -818,11 +824,12 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   /**
-   * Whether this box may start from stopped at `size`: the refusal's words, or null to start. Asked at every start of a
-   * stopped container (`#startContainer`), never of a running one.
+   * Whether this box, set to `size`, may start from stopped: the size it starts at, which may be smaller than the one
+   * set and leaves the setting as it is, or the refusal's words. Asked at every start of a stopped container
+   * (`#startContainer`), never of a running one.
    */
-  protected async admitStart(_size: BoxSize): Promise<string | null> {
-    return null;
+  protected async admitStart(size: BoxSize): Promise<StartAdmission> {
+    return { size };
   }
 
   /** The box seen running at a heartbeat, at `size`: what its host counts running time by. A host's failure here is its
@@ -1396,9 +1403,10 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     // A stopped box starts only if its host admits it; a running one is never asked. Nothing is kept of a refusal, so
     // the next door asks again, once what refused it has changed.
     if (this.ctx.container?.running !== true) {
-      const notAdmitted = await this.admitStart(this.#size());
+      const admitted = await this.admitStart(this.#size());
 
-      if (notAdmitted !== null) throw new DevboxError('refused', notAdmitted);
+      if ('refused' in admitted) throw new DevboxError('refused', admitted.refused);
+      this.#admittedSize = admitted.size;
     }
 
     if (this.ctx.container?.running !== true
@@ -1442,7 +1450,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   #startInputs(): StartInputs {
-    return { size: this.#size(), store: this.#bucket() !== undefined, version: this.#version(), internet: this.enableInternet };
+    return { size: this.#admittedSize ?? this.#size(), store: this.#bucket() !== undefined, version: this.#version(), internet: this.enableInternet };
   }
 
   #version(): string | null {

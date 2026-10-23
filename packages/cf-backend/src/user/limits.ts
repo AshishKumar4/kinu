@@ -6,7 +6,7 @@ import { Effect } from 'effect';
 import { KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import {
   accountClassOf, admitComputerStart, admitPlatformTurn, admitStoredBytes, admitWorkspace, AccountLimitsStore, dayOf,
-  freeTierOf, isLimited, limitReadings, limitsReport, monthOf, type AccountClass, type AccountLimits, type AccountUse, type Admission,
+  freeTierOf, isLimited, limitReadings, startSize, limitsReport, monthOf, type AccountClass, type AccountLimits, type AccountUse, type Admission,
   type ComputerSize, type FreeTier, type LimitId, type LimitReading, type LimitsReport, type StoredClass, type UserCaller,
 } from '@kinu.run/core';
 import { isListedOperator } from '../control-plane/admin-caller';
@@ -131,11 +131,19 @@ export class UserLimits {
     this.store.stale(source);
   }
 
-  /** `workspace`'s computer starting from stopped at `size`: admitted, it holds the account's place until it stops. */
-  async admitComputerStart(caller: UserCaller, workspace: string, size: ComputerSize): Promise<void> {
+  /**
+   * `workspace`'s computer starting from stopped, set to `size`: admitted, it holds the account's place until it stops,
+   * and starts at the size answered, a free account's at most the tier's.
+   */
+  async admitComputerStart(caller: UserCaller, workspace: string, size: ComputerSize): Promise<ComputerSize> {
     await this.host.requireTier(caller, 'limits');
-    await settle(this.admit((admission) => admitComputerStart(admission, { workspace, size })));
-    this.store.started(workspace, size, Date.now());
+    await settle(this.admit((admission) => admitComputerStart(admission, workspace)));
+    const tier = await settle(this.tier());
+    const runs = tier === null ? size : startSize({ klass: this.klass(), tier }, size);
+
+    this.store.started(workspace, runs, Date.now());
+
+    return runs;
   }
 
   async computerTick(caller: UserCaller, workspace: string, size: ComputerSize): Promise<void> {
@@ -205,7 +213,7 @@ export class UserLimits {
     const klass = this.klass();
     const shown = suspended === null ? null : { at: suspended.at, reason: suspended.reason };
 
-    return tier === null ? { class: klass, suspended: shown, limits: [] } : limitsReport({ klass, tier, use: this.use(now), now }, shown);
+    return tier === null ? { class: klass, suspended: shown, limits: [], computerSizeCap: null } : limitsReport({ klass, tier, use: this.use(now), now }, shown);
   }
 
   /** The account as the operators' accounts table reads it: its report, and its use whatever its class binds. */

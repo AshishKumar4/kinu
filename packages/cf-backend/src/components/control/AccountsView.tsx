@@ -43,7 +43,7 @@ function classTone(shown: Shown): StatusTone {
   return shown === "Free" || shown === "Unread" ? "neutral" : "accent";
 }
 
-export function ClassPill({ limits }: { limits: AccountLimits | null }) {
+function ClassPill({ limits }: { limits: AccountLimits | null }) {
   const shown = shownClass(limits);
 
   return <Status tone={classTone(shown)} hooks={{ "data-account-class": shown.toLowerCase() }}>{shown}</Status>;

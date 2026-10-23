@@ -35,7 +35,7 @@ function day(at: number): string {
 }
 
 /** The bar's words for a limit near or at its end, as the board says them. */
-export function bannerText(reading: LimitReading): string {
+function bannerText(reading: LimitReading): string {
   switch (reading.id) {
     case "workspaces":
       return reading.reached

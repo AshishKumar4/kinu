@@ -270,7 +270,7 @@ import {
   type SandboxLifecycleIncidentResult,
 } from "./sandbox-lifecycle";
 
-import type { RestoreStatus, SessionRecord, TerminalSession } from "@kinu.run/devbox";
+import type { RestoreStatus, SessionRecord, StartAdmission, TerminalSession } from "@kinu.run/devbox";
 import type { BoxSize } from "@kinu.run/devbox/sizes";
 import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY, type ComputerSizeState } from "./computer-size";
 import type { ComputerSize } from "@kinu.run/core";
@@ -3832,18 +3832,19 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * Whether this workspace's computer may start from stopped at `size` (KinuDevbox `admitStart`): its owner's limits
-   * answer, a refusal in their words. Admitted, it holds the owner's place until `sandboxStopped`.
+   * Whether this workspace's computer, set to `size`, may start from stopped (KinuDevbox `admitStart`): its owner's limits
+   * answer the size it starts at (a free account's at most small), or a refusal in their words. Admitted, it holds the
+   * owner's place until `sandboxStopped`.
    */
-  async computerStartAdmitted(size: ComputerSize): Promise<string | null> {
+  async computerStartAdmitted(size: ComputerSize): Promise<StartAdmission> {
     const { stub, caller } = await this.userHub();
     const admitted = await settle(Effect.result(attemptInItsWords('unavailable', () => stub.limits_admitComputerStart(caller, this.name, size))));
 
-    if (Result.isSuccess(admitted)) return null;
+    if (Result.isSuccess(admitted)) return { size: admitted.success };
     const refusal = admitted.failure;
 
     // Only the limits' own answer refuses a start; a limits object that could not be asked does not hold the box down.
-    return refusal.code === 'budget' || refusal.code === 'denied' ? refusal.message : null;
+    return refusal.code === 'budget' || refusal.code === 'denied' ? { refused: refusal.message } : { size };
   }
 
   /** This workspace's computer seen running (KinuDevbox heartbeat): its running time counts to the owner's month. */

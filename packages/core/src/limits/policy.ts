@@ -37,7 +37,7 @@ export interface FreeTier {
  * The owner's free tier (2026-10-23): about 3 workspaces, 1 small computer for about 20 hours a month, 2 GB stored, and
  * platform models up to a daily cap. The cap's number is the owner's to set; 500,000 tokens a day is the proposal.
  */
-export const DEFAULT_FREE_TIER: FreeTier = {
+const DEFAULT_FREE_TIER: FreeTier = {
   workspaces: 3,
   computerHoursPerMonth: 20,
   computersRunning: 1,

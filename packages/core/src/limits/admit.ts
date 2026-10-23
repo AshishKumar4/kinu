@@ -70,20 +70,14 @@ export function admitStoredBytes({ klass, tier, use }: Admission): KinuError | n
 }
 
 /**
- * `workspace`'s computer starting from stopped at `size`: small, the account's only one running, and within the month's
- * hours. A computer already running is never asked.
+ * `workspace`'s computer starting from stopped: the account's only one running, and within the month's hours. A computer
+ * already running is never asked. Its size never refuses it: it starts at {@link startSize}.
  */
-export function admitComputerStart({ klass, tier, use, now }: Admission, start: { readonly workspace: string; readonly size: ComputerSize }): KinuError | null {
-  const { workspace, size } = start;
-
+export function admitComputerStart({ klass, tier, use, now }: Admission, workspace: string): KinuError | null {
   // A box that already holds its place (a recovery restart, a resize) continues: only a start from stopped is asked.
   if (use.running.some((running) => running.workspace === workspace)) return null;
 
   if (!isLimited(klass)) return null;
-
-  if (COMPUTER_SIZE_ORDER.indexOf(size) > COMPUTER_SIZE_ORDER.indexOf(tier.computerSize)) {
-    return refused(`A free account's computer is ${tier.computerSize}; this one is set to ${size}. Set it to ${tier.computerSize} to start it, ${OWN_KINU}`);
-  }
 
   const others = use.running.filter((running) => running.workspace !== workspace);
   const [other] = others;
@@ -100,6 +94,17 @@ export function admitComputerStart({ klass, tier, use, now }: Admission, start: 
   }
 
   return null;
+}
+
+/**
+ * The size a computer set to `size` starts at: a free account's at most the tier's (the owner, 2026-10-23: what an
+ * account already has keeps working, at the free size). Only the start is sized so; the setting stays as it was set,
+ * and an account an operator invites starts at it again.
+ */
+export function startSize({ klass, tier }: Pick<Admission, 'klass' | 'tier'>, size: ComputerSize): ComputerSize {
+  if (!isLimited(klass)) return size;
+
+  return COMPUTER_SIZE_ORDER.indexOf(size) > COMPUTER_SIZE_ORDER.indexOf(tier.computerSize) ? tier.computerSize : size;
 }
 
 /**
@@ -125,7 +130,7 @@ export type RefusedFor = 'workspaces' | 'stored_bytes' | 'computer' | 'model_tok
 const REFUSED_BY: readonly (readonly [RegExp, RefusedFor])[] = [
   [/This account has its \d+ free workspaces\./u, 'workspaces'],
   [/This account stores [\d.]+ [GM]B, past its free/u, 'stored_bytes'],
-  [/A free account's computer is \w+; this one is set to|This account's free computer is running in|This account's computers have run their free/u, 'computer'],
+  [/This account's free computer is running in|This account's computers have run their free/u, 'computer'],
   [/today's free model use is spent/u, 'model_tokens'],
   [/This account is suspended: /u, 'suspended'],
 ];
@@ -136,7 +141,7 @@ export function refusedFor(text: string): RefusedFor | null {
 }
 
 /** One limit as Settings → Usage shows it. `near` from 80% used. */
-export const LimitReadingSchema = v.object({
+const LimitReadingSchema = v.object({
   id: v.picklist(LIMIT_IDS),
   used: v.number(),
   limit: v.number(),
@@ -154,12 +159,14 @@ export const LimitsReportSchema = v.object({
   class: v.picklist(['operator', 'invited', 'eval', 'free']),
   suspended: v.nullable(v.object({ at: v.number(), reason: v.string() })),
   limits: v.array(LimitReadingSchema),
+  /** The largest size the account's computers start at, whatever size is set ({@link startSize}); null for no cap. */
+  computerSizeCap: v.nullable(v.picklist(COMPUTER_SIZE_ORDER)),
 });
 
 export type LimitsReport = v.InferOutput<typeof LimitsReportSchema>;
 
 /** The share of a limit past which the person is told it is near (the owner, 2026-10-23). */
-export const NEAR_SHARE = 0.8;
+const NEAR_SHARE = 0.8;
 
 function reading(read: Omit<LimitReading, 'near' | 'reached'>): LimitReading {
   return { ...read, near: read.used >= read.limit * NEAR_SHARE, reached: read.used >= read.limit };
@@ -179,7 +186,9 @@ export function limitReadings({ tier, use, now }: Omit<Admission, 'klass'>): Lim
 export function limitsReport(admission: Admission, suspended: LimitsReport['suspended']): LimitsReport {
   const { klass } = admission;
 
-  return { class: klass, suspended, limits: isLimited(klass) ? limitReadings(admission) : [] };
+  const limited = isLimited(klass);
+
+  return { class: klass, suspended, limits: limited ? limitReadings(admission) : [], computerSizeCap: limited ? admission.tier.computerSize : null };
 }
 
 /**

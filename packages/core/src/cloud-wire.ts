@@ -31,6 +31,10 @@ export const LIMITED_EVAL_ACCOUNT = 'limits' satisfies (typeof EVAL_ACCOUNTS)[nu
 
 export const EVAL_TRIAL_ACCOUNTS = 512;
 
+/** The upgrade tier's builtin accounts on staging (scripts/upgrade-fixtures.ts): test identities, not people, so the free
+ *  tier classes them eval (limits/class.ts). */
+export const UPGRADE_FIXTURE_ACCOUNTS = { fixture: 'upgrade-fixture@kinu.run', sender: 'upgrade-sender@kinu.run' } as const;
+
 /** The header naming the Worker version that answered: every published host's response carries it (cf-backend's
  *  server.ts). A deploy and a secret change each make a new version, and every Durable Object restarts on it, so the
  *  tooling reads it to tell a build's change from a version's (evals/src/target.ts). */

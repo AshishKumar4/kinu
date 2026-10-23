@@ -5,7 +5,7 @@
  */
 import { Effect } from 'effect';
 import type { AccountMemory, AccountProposer, CommandEnvironment, Fact, GrantedSecrets, ProfileCatalogEnvelope, ProviderListing, UserCaller } from '@kinu.run/core';
-import { attempt, diagnostics, settle } from '@kinu.run/core/obs';
+import { attempt, diagnostics, settle, type KinuError, type LogEventName } from '@kinu.run/core/obs';
 import type { UserDO } from './user/user-do';
 import type { UserDoRpcMethod } from './rpc-surface';
 
@@ -100,14 +100,35 @@ export class AccountReads {
   }
 
   /** The account's facts for one turn of `agent`'s memory block; a user object that does not answer costs the turn that
-   *  block's account lines, never the turn. */
-  factsForTurn(agent: string): Promise<readonly Fact[]> {
-    return settle(Effect.catch(attempt({ doing: "reading the account's facts for the turn", otherwise: 'unavailable' }, async () => await this.memory({ by: 'agent', agent }).facts()),
-      (failure) => Effect.sync(() => {
-        diagnostics.failure('memory.account_read_failed', failure, { workspace: this.host.workspace() });
+   *  block's account lines, never the turn. A free account's limits near their end ride along once a period. */
+  async factsForTurn(agent: string): Promise<readonly Fact[]> {
+    const [facts, near] = await Promise.all([
+      settle(Effect.catch(attempt({ doing: "reading the account's facts for the turn", otherwise: 'unavailable' }, async () => await this.memory({ by: 'agent', agent }).facts()),
+        this.unread('memory.account_read_failed', []))),
+      this.nearLimits(),
+    ]);
 
-        return [];
-      })));
+    return near === null ? facts : [...facts, near];
+  }
+
+  /** The account's note of its limits near their end (core limits/), said once a period; null when there is none new. */
+  private nearLimits(): Promise<Fact | null> {
+    return settle(Effect.catch(attempt({ doing: "reading the account's limits for the turn", otherwise: 'unavailable' }, async () => {
+      const note = await this.ask((stub, caller) => stub.limits_nearNote(caller));
+
+      return note === null ? null : {
+        key: 'account limits', value: note, confidence: 1, source: 'limits', lastObservedAt: Date.now(), importance: 0.9, veracity: 'tool', origin: null,
+      } satisfies Fact;
+    }), this.unread('limits.near_note_unread', null)));
+  }
+
+  /** A read the turn does without when the account does not answer: logged as `event`, and `instead` in its place. */
+  private unread<A>(event: LogEventName, instead: A): (failure: KinuError) => Effect.Effect<A> {
+    return (failure) => Effect.sync(() => {
+      diagnostics.failure(event, failure, { workspace: this.host.workspace() });
+
+      return instead;
+    });
   }
 
   catalog(): Promise<ProfileCatalogEnvelope> {
@@ -194,11 +215,7 @@ export class AccountReads {
    *  that does not answer has none, and the turn sweeps for itself. */
   storedProviderListing(accounts: string): Promise<ProviderListing | null> {
     return settle(Effect.catch(attempt({ doing: "reading the account's last provider listing", otherwise: 'unavailable' },
-      () => this.ask((stub, caller) => stub.storedProviderListing(caller, accounts))), (failure) => Effect.sync(() => {
-      diagnostics.failure('profile.stored_listing_unread', failure, { workspace: this.host.workspace() });
-
-      return null;
-    })));
+      () => this.ask((stub, caller) => stub.storedProviderListing(caller, accounts))), this.unread<ProviderListing | null>('profile.stored_listing_unread', null)));
   }
 
   /** Keeps a complete listing at the account under what it was swept under. */

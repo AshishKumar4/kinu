@@ -51,6 +51,7 @@ export const PAGE_ROWS = {
   liveSlatePart: ['slate-parts'],
   gallerySlate: ['gallery-listing'],
   deploy: ['deploy-door'],
+  invite: { unreachable: 'an invite link is made by an operator in the console (control-plane/actions.ts), and the eval identity is not one' },
   updates: { unreachable: 'the update offer answers only the deployment\'s recorded owner and 404s everyone else (updates/routes.ts), and the eval identity is not the owner' },
   connected: { unreachable: 'only a provider sign-in ends here, in a window it opened, and a deployed row signs in with a minted session, never through a provider' },
 } as const satisfies Record<keyof typeof APP_ROUTES, Rows | Unreachable>;

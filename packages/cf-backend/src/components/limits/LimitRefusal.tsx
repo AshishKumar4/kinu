@@ -32,10 +32,9 @@ function day(text: string): string {
   return resets === undefined ? "next month" : new Date(`${resets}T00:00:00Z`).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
 }
 
-/** The computer's three refusals, told apart by the limits' own words (core limits/ `admitComputerStart`). */
+/** The computer's two refusals, told apart by the limits' own words (core limits/ `admitComputerStart`). */
 function computerSaid(text: string, titled: (workspace: string) => string): Said {
   const elsewhere = /running in (\S+?)\. /u.exec(text)?.[1];
-  const size = /this one is set to (\w+)\./u.exec(text)?.[1];
 
   if (elsewhere !== undefined) {
     return {
@@ -43,10 +42,6 @@ function computerSaid(text: string, titled: (workspace: string) => string): Said
       body: "Stop it there to start one here. Chats keep working without the computer. On your own Kinu every workspace has its own.",
       room: { label: `Open ${titled(elsewhere)}`, to: `/workspace/${encodeURIComponent(elsewhere)}` },
     };
-  }
-
-  if (size !== undefined) {
-    return { title: "A free account's computer is small", body: `This one is set to ${size}. Set its size to small to start it. On your own Kinu any size is yours.` };
   }
 
   const hours = /their free (\d+) hours/u.exec(text)?.[1] ?? "20";

@@ -112,6 +112,8 @@ export default function UserSettingsPage() {
 
             <InviteCard />
 
+            <MoveMyDataSlot />
+
             {profile.resource.value !== null && <DeleteAccountCard email={profile.resource.value.email} />}
           </>
         )}
