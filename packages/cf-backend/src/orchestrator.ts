@@ -1774,7 +1774,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * its delegation, receipted under the execution `scope` names, over the ledgers it gives. The workspace's planes (its
    * jobs, its role switch, its external tools, its program namespaces) only where its reach names them.
    */
-  /** What an actor's builtins read its stores from (`builtinStoreDeps`): its native tools, and a slate's call as it. */
+  /** What an actor's builtins read its stores from (`builtinStores`): its native tools, and a slate's call as it. */
   private storeInputs(actor: CFSeat, reach: ActorReach, ledgers: Pick<TurnLedgers, 'files' | 'context'>, profile: () => OperationProfile | null): BuiltinStoreInputs {
     const { runtime } = actor;
     // The workspace's own agent reads the account's memory whoever owns it; a hire, only once it is owned.

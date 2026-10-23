@@ -78,7 +78,7 @@ import {
   // (see turn-failure.ts).
   type AgentOrchestrator, type AgentOrchestratorDeps, actorTerminalEffects, DynamicContextLedger, actorPolicy, actorReach, type ActorReach, type BackendHost,
   EvolutionLanes, drainPendingEvents, standingFileLedger, turnLedgers, type TurnLedgers, type BoundActor, type SeatedActor, type DynamicDelegate,
-  builtinStoreDeps, serveStores, type BuiltinStoreInputs, type ServedStores,
+  builtinStores, type BuiltinStoreInputs, type ServedStores,
   type ComposedRequest,
   type AgentsToolDeps,
   type AgentsSwarmDeps,
@@ -1590,7 +1590,7 @@ export abstract class ActorAgent extends Agent<Env> {
       surface: (task, context, callScope) => {
         // One set for the run: each request's tools project it, and so do its machines.
         const ledgers = this.ownLedgers();
-        const stores = serveStores(builtinStoreDeps(this.ownStoreInputs(ledgers)));
+        const stores = builtinStores(this.ownStoreInputs(ledgers));
 
         return createScaffoldCandidateSurface({
           ...this.scaffoldCandidateModel(),
@@ -2917,7 +2917,7 @@ export abstract class ActorAgent extends Agent<Env> {
         search: as === 'owner' ? this.ownedModelServices.getWebSearchProvider() : this.ownedModelServices.getViewerWebSearchProvider(), files: this.rt.storage,
         browser: { sessions: this.browserSessionsFor(this.rt.actor.actorId), prelude: BROWSER_PRELUDE },
       },
-      stores: stores ?? serveStores(builtinStoreDeps(this.ownStoreInputs(this.ownLedgers()))),
+      stores: stores ?? builtinStores(this.ownStoreInputs(this.ownLedgers())),
       // Plan is decided per table scope at invocation.
       db: this.stores.appData,
       agents: () => this.ownAgentsToolDeps(mode),
@@ -3385,7 +3385,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const inputs = this.hostedStoreInputs({ ...actor, runtime }, { files: scoped?.files ?? standingFileLedger(runtime), context: (scoped ?? turnLedgers()).context }, reach.account);
     const webSearch = this.ownedModelServices.getWebSearchProvider();
     // Served once: the slate's `tools.*` and its named namespaces run the same operations.
-    const stores = serveStores(builtinStoreDeps(inputs));
+    const stores = builtinStores(inputs);
     const surface = this.hostedSurface({ ...actor, runtime }, { search: webSearch, stores, ownerWaits: reach.ownerWaits, mail: reach.mail ?? null, google: reach.google ?? null });
 
     return { actor: surface, native: buildBuiltinTools({ ...inputs, webSearch }, stores) };

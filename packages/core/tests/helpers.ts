@@ -2,8 +2,8 @@ import { createFileCodemodeProvider, createFileTool } from '../src/tools/file-op
 import type { CodemodeProvider } from '../src/types/codemode';
 import type { Tool } from 'ai';
 import { turnLedgers, type TurnLedgers } from '../src/orchestrator/turn-accumulator';
-import { builtinStoreDeps } from '../src/tools/builtins';
-import { serveStores, type ServedStores } from '../src/tools/actor-stores';
+import { builtinStores } from '../src/tools/builtins';
+import type { ServedStores } from '../src/tools/actor-stores';
 import { type Awaitable, type VFS, type VfsRevision, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Test helpers: in-memory SQLite via bun:sqlite, mock LLM, mock Executor. */
 
@@ -316,7 +316,7 @@ export function fileNamespaceOver(current: () => FileDeps): CodemodeProvider {
 
 /** A runtime's file, memory and task operations, as a turn surface serves them to its native tools and programs. */
 export function servedStoresFor(rt: AgentRuntime, ledgers: Pick<TurnLedgers, 'files' | 'context'> = turnLedgers()): ServedStores {
-  return serveStores(builtinStoreDeps({ rt, conversations: conversationsFor(rt), vectorStore: null, fileLedger: ledgers.files, contextBudget: ledgers.context }));
+  return builtinStores({ rt, conversations: conversationsFor(rt), vectorStore: null, fileLedger: ledgers.files, contextBudget: ledgers.context });
 }
 
 const runtimeStores = new WeakMap<AgentRuntime, AgentStores>();

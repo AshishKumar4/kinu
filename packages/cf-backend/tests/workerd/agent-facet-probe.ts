@@ -3,7 +3,7 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { getAgentByName, type AgentContext } from 'agents';
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
-import { agentHome, JsonValueSchema, ownerCaller, runNodeAgent, toolsInWorkMode, WORKSPACE_ROOT, type Clock, builtinStoreDeps, serveStores } from '@kinu.run/core';
+import { agentHome, JsonValueSchema, ownerCaller, runNodeAgent, toolsInWorkMode, WORKSPACE_ROOT, type Clock, builtinStores } from '@kinu.run/core';
 import { codemodeSurface, narrowToolSurface } from '@kinu.run/core';
 import { handClock } from '@kinu.run/test-utils/hand-clock';
 import { diagnostics } from '@kinu.run/core/obs';
@@ -220,7 +220,7 @@ export class OrchestratorAgent extends ProductionOrchestrator {
     this.rt.craftStore.create({ name: 'double', description: 'doubles a number', code: 'async (n) => n * 2' });
     const seams = this.hostedSeams();
     const seat = await hostNodeSeat(seams, { nodeId: 'crafted-node', rootId: 'crafted-swarm', depth: 1 });
-    const execute = toolsInWorkMode('build', { eval: nodeCodemodeTool(seams, seat.actor)(codemodeSurface(seat.actor.runtime, {}, () => ({}), { stores: serveStores(builtinStoreDeps({ rt: seat.actor.runtime, conversations: seat.actor.stores.conversationSearch, vectorStore: null })) }), narrowToolSurface(undefined)) }).eval?.execute;
+    const execute = toolsInWorkMode('build', { eval: nodeCodemodeTool(seams, seat.actor)(codemodeSurface(seat.actor.runtime, {}, () => ({}), { stores: builtinStores({ rt: seat.actor.runtime, conversations: seat.actor.stores.conversationSearch, vectorStore: null }) }), narrowToolSurface(undefined)) }).eval?.execute;
 
     if (execute === undefined) throw new Error('the node has no eval');
 
