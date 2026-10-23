@@ -188,7 +188,7 @@ export function FocusBar({ workspace, agent, line, leading, trailing, tabs }: {
       {leading && <div className="p-bar-menu">{leading}</div>}
       <div className="flex min-w-0 flex-1 items-center gap-3 pl-4">
         <PressableLink to={workspace.to} className="flex w-auto min-w-0 items-center gap-3 py-1 pr-2"
-          title={`${workspace.title}: its agents, slates and plan`} data-focus-identity>
+          title={`${agent.label}: what it did and is doing`} data-focus-identity>
           <ChatMascot seed={agent.seed} colour={agent.colour} activity={agent.activity} size={24} />
           <span className="flex min-w-0 flex-col">
             <span className="t-label truncate p-text">{agent.label}</span>

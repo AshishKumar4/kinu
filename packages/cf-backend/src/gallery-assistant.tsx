@@ -1,6 +1,7 @@
 /**
  * The personal assistant in the gallery: Home with it installed (`assistant-home`, `&moment=firstrun` for the first
- * minute after setup), its chat with nothing above it, and any workspace in the focus layout (`focus-workspace`).
+ * minute after setup, `&at=/workspace/personal-assistant/activity` for its activity), its chat with nothing above it,
+ * and any workspace in the focus layout (`focus-workspace`).
  * The pages are the product's own: Layout, WorkspacePage over the gallery's socket, AttentionStack in the composer;
  * only the reads are answered here. `&roster=assistant` gives the sidebar the workspaces the assistant runs.
  */
@@ -8,8 +9,8 @@ import { Route, Routes } from "react-router-dom";
 import * as v from "valibot";
 import type { UIMessage } from "ai";
 import {
-  APP_ROUTES, buildDrainBatch, mainPanelAgent, workspaceGenesisSignal,
-  type JsonObject, type JsonValue, type KinuEvent, type RosterEntry, type WorkspaceOverview,
+  APP_ROUTES, buildDrainBatch, mainPanelAgent, PositionPageRequestSchema, workspaceGenesisSignal,
+  type ChatHistoryEntry, type JsonObject, type JsonValue, type KinuEvent, type RosterEntry, type WorkspaceOverview,
 } from "@kinu.run/core";
 import { JsonObjectSchema } from "@kinu.run/core";
 import Layout from "@/components/layout";
@@ -131,11 +132,25 @@ const BRIEF = `Two things wait on you this morning, and the rest moved overnight
 - Kinu website's Lighthouse check failed at 03:10: LCP is 3.9 s on /pricing.
 - On Cloudflare, api-worker's 5xx rate held at 0.02% and kinu-staging deployed at 07:40.`;
 
+/** A program the assistant ran, its answer carrying the host's record of what it changed (core `call-effects.ts`). */
+function program(id: string, code: string, result: string, operations: Readonly<Record<string, number>>): Message["parts"][number] {
+  return {
+    type: "tool-eval", toolCallId: id, state: "output-available", input: { code },
+    output: { result, effects: { call: id, files: [], commands: [], operations } },
+  };
+}
+
+/** The line the model wrote for a turn, which its activity entry leads with. */
+const titled = (turn: string): JsonObject => ({ kinuTurnTitle: turn });
+
 const MORNING_THREAD: Message[] = [
   { id: "y-u1", role: "user", createdAt: at(18, 4) - 864e5, parts: said("Keep an eye on #4120 overnight and tell me in the morning if CI goes red.") },
   { id: "y-a1", role: "assistant", createdAt: at(18, 5) - 864e5, parts: said("Will do. I'll check it with the GitHub watch every 15 minutes and put it in tomorrow's brief.") },
   drained("ev-brief", at(8, 0), { ...EVENT, id: "ev-timer-brief", ingress: "timer_alarm", variant: "timer", payload: { label: "Morning brief", trigger_id: "w-brief", scheduled_fire_at: at(8, 0) } }),
-  { id: "a-brief", role: "assistant", createdAt: at(8, 1), parts: said(BRIEF) },
+  {
+    id: "a-brief", role: "assistant", createdAt: at(8, 1), metadata: titled("Wrote this morning's brief"),
+    parts: [program("b-read", "await brief.gather(['mail', 'github', 'cloudflare']);", "14 messages, 9 issues, 2 deploys", {}), ...said(BRIEF)],
+  },
   drained("ev-mail", ago(30), {
     ...EVENT, id: "ev-mail-priya", ingress: "email_inbound", variant: "email",
     payload: {
@@ -143,9 +158,15 @@ const MORNING_THREAD: Message[] = [
       message_id: null, in_reply_to: null, references: null, attachments: [],
     },
   }),
-  { id: "a-mail", role: "assistant", createdAt: ago(29), parts: said("Priya asked for the Dynamic Workers demo this week. I drafted a reply offering Thursday at 16:00, after your release review, with the demo in three parts: a Worker built from chat, the slate it ships, and its logs read back. It's in your Drafts.") },
+  {
+    id: "a-mail", role: "assistant", createdAt: ago(29), metadata: titled("Drafted a reply to Priya"),
+    parts: [program("m-draft", "await mail.draft({ to: 'priya@cloudflare.com', subject: 'Re: Dynamic Workers demo on Thursday?' });", "draft saved", { "mail.saveDraft": 1 }), ...said("Priya asked for the Dynamic Workers demo this week. I drafted a reply offering Thursday at 16:00, after your release review, with the demo in three parts: a Worker built from chat, the slate it ships, and its logs read back. It's in your Drafts.")],
+  },
   { id: "u-release", role: "user", createdAt: ago(4), parts: said("Make it 16:30. And start a workspace for the API Worker v2 release: cut the release branch, write the notes from the merged PRs, and get staging green.") },
-  { id: "a-release", role: "assistant", createdAt: ago(3), parts: said("The draft says 16:30 now; it's yours to send from Drafts.\n\nI started **API Worker v2 release**, a workspace of its own, so its branch, logs and approvals stay there and this chat stays yours. It's cutting release/v2 from main now and writing the notes from the PRs merged since v1.9. It asks you before deploying to production, and I'll check on it in each brief.") },
+  {
+    id: "a-release", role: "assistant", createdAt: ago(3), metadata: titled("Started API Worker v2 release"),
+    parts: [program("r-start", "await agent.createWorkspace({ title: 'API Worker v2 release' }); await mail.draft({ at: '16:30' });", "started api-worker-v2-release", { "agent.createWorkspace": 1, "mail.saveDraft": 1 }), ...said("The draft says 16:30 now; it's yours to send from Drafts.\n\nI started **API Worker v2 release**, a workspace of its own, so its branch, logs and approvals stay there and this chat stays yours. It's cutting release/v2 from main now and writing the notes from the PRs merged since v1.9. It asks you before deploying to production, and I'll check on it in each brief.")],
+  },
 ];
 
 const GENESIS = workspaceGenesisSignal("Be Ashish's personal assistant: read his mail, GitHub and Cloudflare, brief him each morning, and run larger work in workspaces of their own.");
@@ -182,6 +203,27 @@ function assistantSnapshot(snapshot: JsonObject): JsonObject {
   };
 }
 
+/** The assistant's chat as its pages read it: its rows ending before the cursor, `limit` of them, oldest first. */
+function historyPage(args: readonly unknown[] | undefined): JsonValue {
+  const asked = v.parse(PositionPageRequestSchema, args?.[0] ?? {});
+
+  const rows = ASSISTANT_THREAD.map((message, position) => {
+    const row: ChatHistoryEntry = {
+      id: message.id, position, role: message.role, turnId: null, parts: v.parse(v.array(JsonObjectSchema), message.parts), createdAt: message.createdAt ?? NOW,
+    };
+
+    if (message.metadata !== undefined) row.metadata = v.parse(JsonObjectSchema, message.metadata);
+
+    return row;
+  });
+
+  const end = asked.cursor?.before ?? rows.length;
+  const start = Math.max(0, end - (asked.limit ?? rows.length));
+  const items = rows.slice(start, end);
+
+  return start > 0 ? { status: "more", items, next: { before: start } } : { status: "end", items };
+}
+
 /** The workspace's own answers over the gallery's, as the assistant's Durable Object would give them. */
 export function assistantRpc(base: SocketCall): SocketCall {
   return async <T,>(method: string, args?: unknown[]): Promise<T> => {
@@ -192,6 +234,8 @@ export function assistantRpc(base: SocketCall): SocketCall {
     if (method === "listWorkspaceAgents") return answer(v.parse(v.array(JsonObjectSchema), [mainPanelAgent({ label: "Kinu", activity: "idle", actorId: `actor-${ASSISTANT_WORKSPACE}` })]));
 
     if (method === "listTriggers") return answer({ triggers: WATCHES });
+
+    if (method === "getChatHistoryPage") return answer(historyPage(args));
 
     // It asks nothing of its own: it creates workspaces itself, and only an external or cross-tenant step would ask.
     if (method === "listPendingActions" || method === "listSubagents" || method === "listBackgroundJobs" || method === "inspectWork") return answer([]);
@@ -225,11 +269,12 @@ export function assistantHomeFrame(base: SocketCall) {
   seedGalleryChat(ASSISTANT_THREAD);
 
   return {
-    entries: [APP_ROUTES.home],
+    entries: [new URLSearchParams(location.search).get("at") ?? APP_ROUTES.home],
     node: (
       <Routes>
         <Route element={<Layout />}>
           <Route index element={<AssistantHome />} />
+          <Route path="/workspace/:agentId/:view" element={<WorkspacePage />} />
           <Route path="*" element={<div className="h-full" data-gallery-blank />} />
         </Route>
       </Routes>

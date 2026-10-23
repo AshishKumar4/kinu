@@ -414,7 +414,16 @@ export interface AgentWorkspaceVerdict {
   readonly created: { readonly name: string; readonly displayName: string } | null;
   /** The Agent tab's Changelog entry for it: its words, and the workspace it opens. */
   readonly changelog: { readonly summary: string; readonly opens: string } | null;
+  /** The receipt lines under the turn's calls (WEB-3), and the operations the opened calls list: what the host recorded
+   *  the program did. */
+  readonly receipts: readonly string[];
+  readonly operations: readonly string[];
 }
+
+/** Every fold of the chat's settled work and every call opened, so each call's receipt is drawn whole. */
+const OPEN_FOLDS = `(() => {
+  for (const fold of document.querySelectorAll('#chat :is([data-tool-run], [data-turn-rollup], [data-tool-state])[aria-expanded="false"], #chat :is([data-tool-run], [data-turn-rollup]) button[aria-expanded="false"]')) fold.click();
+})()`;
 
 /**
  * Row: the workspace's main agent creates a workspace in its owner's account, at once, nothing asked (the owner,
@@ -436,6 +445,12 @@ export async function agentCreatesAWorkspace(target: FlowTarget): Promise<AgentW
     const said = v.parse(v.string(), await page.evaluate(`document.querySelector('#chat')?.textContent ?? ''`));
     const link = /https?:\/\/\S+?\/workspace\/[a-z0-9-]+/u.exec(said.slice(said.lastIndexOf(AGENT_WORKSPACE_REPLY)))?.[0] ?? '';
 
+    await page.evaluate(OPEN_FOLDS);
+    await page.evaluate(OPEN_FOLDS);
+    await painted(page);
+    const receipts = v.parse(v.array(v.string()), await page.evaluate(`[...document.querySelectorAll('#chat [data-tool-receipt]')].map((line) => line.textContent ?? '')`));
+    const operations = v.parse(v.array(v.string()), await page.evaluate(`[...document.querySelectorAll('#chat [data-receipt-operation]')].map((row) => row.getAttribute('data-receipt-operation') ?? '')`));
+
     created = /\/workspace\/([a-z0-9-]+)$/u.exec(link)?.[1] ?? null;
     const row = (await listWorkspaces(target.origin, target.identity)).find((entry) => entry.name === created);
 
@@ -454,7 +469,7 @@ export async function agentCreatesAWorkspace(target: FlowTarget): Promise<AgentW
     })()`));
 
     return {
-      link, changelog, existedBefore: created !== null && before.has(created),
+      link, changelog, receipts, operations, existedBefore: created !== null && before.has(created),
       created: row === undefined ? null : { name: row.name, displayName: row.displayName ?? '' },
     };
   } finally {

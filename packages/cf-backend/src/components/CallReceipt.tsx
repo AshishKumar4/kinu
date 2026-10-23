@@ -4,36 +4,11 @@
  * host's, bound to the call's own id, so nothing the program returns can claim it. Never "changed nothing": a program's
  * own requests go untraced, so a call with no record, or an empty one, shows no receipt.
  */
-import type { ProgramEffects } from "@kinu.run/core";
-
-function plural(count: number, one: string, many = `${one}s`): string {
-  return `${String(count)} ${count === 1 ? one : many}`;
-}
-
-/** The receipt in one line, or null when the record holds nothing to say. */
-function receiptLine(effects: ProgramEffects): string | null {
-  const failed = effects.commands.filter((command) => command.exitCode !== 0).length;
-  const operations = Object.values(effects.operations).reduce((sum, count) => sum + count, 0);
-  const [only] = effects.files;
-
-  const parts = [
-    effects.files.length === 1 && only !== undefined ? `Changed ${only.path}` : null,
-    effects.files.length > 1 ? `Changed ${plural(effects.files.length, "file")}` : null,
-    effects.commands.length > 0 ? `ran ${plural(effects.commands.length, "command")}${failed > 0 ? `, ${String(failed)} failed` : ""}` : null,
-    operations > 0 ? plural(operations, "other change") : null,
-    (effects.more ?? 0) > 0 ? `${String(effects.more)} more` : null,
-  ].filter((part) => part !== null);
-
-  if (parts.length === 0) return null;
-
-  const line = parts.join(" · ");
-
-  return `${line.charAt(0).toUpperCase()}${line.slice(1)}`;
-}
+import { receiptSummary, type ProgramEffects } from "@kinu.run/core";
 
 /** The one line under the call's row; nothing for a call with no record. */
 export function CallReceipt({ effects }: { effects: ProgramEffects | null }) {
-  const line = effects === null ? null : receiptLine(effects);
+  const line = effects === null ? null : receiptSummary(effects);
 
   if (line === null) return null;
 
@@ -42,7 +17,7 @@ export function CallReceipt({ effects }: { effects: ProgramEffects | null }) {
 
 /** The record whole, in the opened call: each file and how it changed, each command and how it exited, each operation. */
 export function ReceiptDetail({ effects }: { effects: ProgramEffects | null }) {
-  if (effects === null || (receiptLine(effects) === null && (effects.unclassified ?? 0) === 0)) return null;
+  if (effects === null || (receiptSummary(effects) === null && (effects.unclassified ?? 0) === 0)) return null;
 
   const operations = Object.entries(effects.operations);
 
@@ -68,7 +43,7 @@ export function ReceiptDetail({ effects }: { effects: ProgramEffects | null }) {
             {count > 1 && <span className="shrink-0 p-text-3">×{count}</span>}
           </li>
         ))}
-        {(effects.unclassified ?? 0) > 0 && <li className="p-text-3">{plural(effects.unclassified ?? 0, "call")} whose effect no declaration says</li>}
+        {(effects.unclassified ?? 0) > 0 && <li className="p-text-3">{effects.unclassified} {effects.unclassified === 1 ? "call" : "calls"} whose effect no declaration says</li>}
         {(effects.more ?? 0) > 0 && <li className="p-text-3">and {String(effects.more)} more past the record&apos;s bounds</li>}
       </ul>
     </div>
