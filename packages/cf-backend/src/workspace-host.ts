@@ -441,10 +441,11 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
         terminal: (key) => {
           const selection = key === null ? undefined : { terminal: key };
 
+          // Methods, as the runtime's own were handed over before: the runtime only compares the socket and sends on it.
           return {
-            attachTerminal: (ws) => attachTerminal(ws, selection),
-            terminalFrame: (ws, frame) => terminalFrame(ws, frame, selection),
-            terminalClose: (ws) => { terminalClose(ws, selection); },
+            attachTerminal(ws: WebSocket) { return attachTerminal(ws, selection); },
+            terminalFrame(ws: WebSocket, frame: string | ArrayBuffer) { return terminalFrame(ws, frame, selection); },
+            terminalClose(ws: WebSocket) { terminalClose(ws, selection); },
           };
         },
         list: async () => (await listTerminals()).map(({ name, live, running, cwd }) => ({ key: name, live, running, cwd })),
