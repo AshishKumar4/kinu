@@ -478,10 +478,13 @@ export class MailStore {
 
     const at = this.deps.now();
     const woke = named === null ? null : this.wakeOf(box, verdict);
-    const threadId = this.threadFor(box.path, parsed);
     const messageId = this.deps.id();
+    // Every byte kept first; then the thread, its message, its attachments and its index with no await between them, so
+    // the object commits them together and no reader meets a thread without its message (staging 06498fc55).
     const keys = await this.keep(input.raw, parsed);
+    const attachments = await this.keepAttachments(parsed.attachments);
     const tag = input.recipient.tag === null ? '' : `+${input.recipient.tag}`;
+    const threadId = this.threadFor(box.path, parsed);
 
     this.deps.sql.exec(
       `INSERT INTO mail_messages (id, thread_id, header_id, from_addr, from_name, to_json, cc_json, delivered_to,
@@ -493,7 +496,12 @@ export class MailStore {
       parsed.subject, at, verdict.verified ? 'verified' : 'unverified', verdict.auth, woke, snippetOf(parsed.text),
       keys.text === null ? parsed.text : null, keys.text, keys.html, keys.raw,
     );
-    await this.attach(messageId, parsed.attachments);
+
+    for (const file of attachments) {
+      this.deps.sql.exec('INSERT INTO mail_attachments (id, message_id, filename, content_type, size, digest) VALUES (?, ?, ?, ?, ?, ?)',
+        this.deps.id(), messageId, file.filename, file.contentType, file.size, file.digest);
+    }
+
     this.index(messageId, parsed.subject, `${from.name ?? ''} ${from.address}`, parsed.text);
     // A thread that comes back to life leaves the Trash.
     this.deps.sql.exec('UPDATE mail_threads SET trashed_at = NULL WHERE id = ?', threadId);
@@ -547,14 +555,18 @@ export class MailStore {
     return keys;
   }
 
-  private async attach(messageId: string, files: ParsedMail['attachments']): Promise<void> {
+  /** Each attachment's bytes kept under their digest; what its row will say of it. */
+  private async keepAttachments(files: ParsedMail['attachments']): Promise<{ filename: string; contentType: string; size: number; digest: string }[]> {
+    const kept: { filename: string; contentType: string; size: number; digest: string }[] = [];
+
     for (const file of files) {
       const digest = await this.deps.digest(file.content);
 
       await this.deps.blobs.put(`att/${digest}`, file.content);
-      this.deps.sql.exec('INSERT INTO mail_attachments (id, message_id, filename, content_type, size, digest) VALUES (?, ?, ?, ?, ?, ?)',
-        this.deps.id(), messageId, file.filename, file.contentType, file.content.byteLength, digest);
+      kept.push({ filename: file.filename, contentType: file.contentType, size: file.content.byteLength, digest });
     }
+
+    return kept;
   }
 
   private index(messageId: string, subject: string, sender: string, body: string): void {
