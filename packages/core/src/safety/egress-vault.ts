@@ -131,6 +131,30 @@ export function initEgressVaultTables(sql: SqlExec): void {
   `);
 }
 
+/** The computer's own git, pointed at the GitHub connection for github.com by a helper given in the environment
+ *  (`GIT_CONFIG_*`, git 2.31+), so no file holds it. Git sends its answer as Basic's password. */
+const GIT_CREDENTIAL_ENVIRONMENT = {
+  GIT_CONFIG_COUNT: '1',
+  GIT_CONFIG_KEY_0: 'credential.https://github.com.helper',
+  GIT_CONFIG_VALUE_0: '!f() { test "$1" = get && echo username=x-access-token && echo "password=$KINU_GITHUB_TOKEN"; }; f',
+} as const;
+
+/**
+ * The variables beyond its own that a connection's credential gives a command: the computer's git helper, and
+ * `GIT_TOKEN` for Nimbus's git where the owner granted none. None without the GitHub connection.
+ */
+export function connectionEnvironment(granted: GrantedSecrets['granted']): Partial<typeof GIT_CREDENTIAL_ENVIRONMENT & { GIT_TOKEN: string }> {
+  const connection = granted.find((secret) => secret.name === 'KINU_GITHUB_TOKEN');
+
+  if (connection === undefined) return {};
+
+  return granted.some((secret) => secret.name === 'GIT_TOKEN') ? GIT_CREDENTIAL_ENVIRONMENT : { ...GIT_CREDENTIAL_ENVIRONMENT, GIT_TOKEN: connection.placeholder };
+}
+
+/** Names a connection's credential takes in every workspace (`KINU_GITHUB_TOKEN`, the GitHub connection's): no owner
+ *  secret may take one. */
+const RESERVED_SECRET_NAMES: ReadonlySet<string> = new Set(['KINU_GITHUB_TOKEN']);
+
 /** Independent of the secret by construction. */
 export function mintEgressPlaceholder(): string {
   return `${EGRESS_PLACEHOLDER_PREFIX}${nanoid(PLACEHOLDER_BODY_LENGTH)}`;
@@ -218,6 +242,11 @@ export function putSecrets(deps: EgressVaultDeps, entries: readonly SecretInput[
       if (!isSecretName(entry.name)) {
         return yield* new KinuError('bad_input', `"${entry.name}" cannot name a secret: use letters, digits and _, not starting `
           + 'with a digit, as an environment variable is named.');
+      }
+
+      if (RESERVED_SECRET_NAMES.has(entry.name) || entry.name.startsWith('GIT_CONFIG_')) {
+        return yield* new KinuError('bad_input', `"${entry.name}" is Kinu's own: it carries a connection's credential, or points git at one. `
+          + 'Name this secret otherwise.');
       }
 
       if (names.has(entry.name)) return yield* new KinuError('bad_input', `${entry.name} is listed twice.`);

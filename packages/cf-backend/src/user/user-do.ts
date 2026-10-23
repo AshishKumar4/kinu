@@ -157,7 +157,7 @@ export class UserDO extends Agent<Env> {
   private readonly credentials = new UserCredentials(this.host);
 
   private readonly secrets: UserSecrets = new UserSecrets(this.host, {
-    held: () => this.mcpServers.githubConnected(),
+    configured: () => this.mcpServers.githubConnected(),
     token: async () => this.mcpServers.githubGitToken(),
   });
 

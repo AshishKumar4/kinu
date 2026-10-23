@@ -14,32 +14,39 @@ import type { UserObjectHost } from './user-host';
 
 /** The account's GitHub connection, as the git credential its workspaces hold. */
 export interface GitHubGitSource {
-  /** Whether the account holds a GitHub connection now. */
-  readonly held: () => boolean;
-  /** The connection's token as git sends it (Basic's password), or null once there is none. */
+  /** Whether a GitHub connection is configured, signed in or not. */
+  readonly configured: () => boolean;
+  /** The connection's token as git sends it (Basic's password), or null when it holds none. */
   readonly token: () => Promise<string | null>;
 }
 
 /** Where the GitHub connection's git placeholder is kept: minted once per account, so a workspace's copy stays good. */
 const GITHUB_GIT_PLACEHOLDER_KEY = 'secrets:github-git-placeholder';
 
-/** The variable the connection's credential appears as: Nimbus's git reads it, and the computer's git through `gitCredentialEnvironment`. */
-export const GITHUB_GIT_SECRET = 'GIT_TOKEN';
+/** The connection's own variable, which no owner secret may take: the computer's git helper reads it
+ *  (`gitCredentialEnvironment`), and `GIT_TOKEN` carries it for Nimbus's git where the owner set none. */
+const GITHUB_GIT_SECRET = 'KINU_GITHUB_TOKEN';
 
 export class UserSecrets {
   constructor(private readonly host: UserObjectHost, private readonly github: GitHubGitSource | null = null) {}
 
+  /** The placeholder, read or minted once an activation: two first reads at once share one mint. */
+  private placeholder: Promise<string> | null = null;
+
   /** The GitHub connection's git credential as a binding: github.com only, in the Authorization header (git's Basic). */
   private async githubBinding(): Promise<EgressSecretBinding> {
-    const kept = await this.host.ctx.storage.get(GITHUB_GIT_PLACEHOLDER_KEY);
-    let placeholder = typeof kept === 'string' ? kept : null;
+    this.placeholder ??= (async () => {
+      const kept = await this.host.ctx.storage.get(GITHUB_GIT_PLACEHOLDER_KEY);
 
-    if (placeholder === null) {
-      placeholder = mintEgressPlaceholder();
-      await this.host.ctx.storage.put(GITHUB_GIT_PLACEHOLDER_KEY, placeholder);
-    }
+      if (typeof kept === 'string') return kept;
+      const minted = mintEgressPlaceholder();
 
-    return { name: GITHUB_GIT_SECRET, hosts: ['github.com'], position: { kind: 'authorization' }, placeholder };
+      await this.host.ctx.storage.put(GITHUB_GIT_PLACEHOLDER_KEY, minted);
+
+      return minted;
+    })();
+
+    return { name: GITHUB_GIT_SECRET, hosts: ['github.com'], position: { kind: 'authorization' }, placeholder: await this.placeholder };
   }
 
   /** The connection-held secrets a request may carry: the GitHub connection's, which is refused clearly once it is gone. */
@@ -51,14 +58,17 @@ export class UserSecrets {
     return [{
       binding: await this.githubBinding(),
       open: async () => github.token(),
-      gone: 'GitHub is not connected to this account any more, so git cannot reach your GitHub repositories. Connect GitHub '
-        + 'again in Settings → Connections; the next git command uses it.',
+      gone: github.configured()
+        ? 'GitHub is connected but not signed in, so git cannot reach your GitHub repositories. Finish its sign-in in '
+          + 'Settings > Connections; the next git command uses it.'
+        : 'GitHub is not connected to this account any more, so git cannot reach your GitHub repositories. Connect GitHub '
+          + 'again in Settings > Connections; the next git command uses it.',
     }];
   }
 
-  /** The GitHub connection's binding while the account holds one. */
+  /** The GitHub connection's binding while it holds a token. */
   private async heldConnections(): Promise<EgressSecretBinding[]> {
-    return this.github?.held() === true ? [await this.githubBinding()] : [];
+    return this.github !== null && await this.github.token() !== null ? [await this.githubBinding()] : [];
   }
 
   /** Every workspace of the account drops its secrets: a connection that bears one came or went. */

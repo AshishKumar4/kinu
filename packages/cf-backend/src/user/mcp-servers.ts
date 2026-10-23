@@ -293,10 +293,15 @@ export class UserMcpServers {
 
     // An add writes the catalog before the configuration, so only a lost catalog row leaves a configuration with no
     // endpoint, which nothing can dial again: it goes, and says so.
-    for (const row of configs.filter((config) => !catalog.has(config.id))) {
+    const uncatalogued = configs.filter((config) => !catalog.has(config.id));
+
+    for (const row of uncatalogued) {
       this.host.sqlx(`DELETE FROM user_mcp_servers WHERE id = ?`, row.id);
       diagnostics.failure('mcp.uncatalogued_server_removed', new KinuError('missing', 'a configured MCP server has no catalog entry, so no endpoint to dial'), { serverId: row.id });
     }
+
+    // A connection that went with it may bear a workspace's secret (the GitHub connection's git credential).
+    if (uncatalogued.length > 0) await this.host.connectionsMoved?.();
 
     const rows: McpHydrationRow[] = withCatalog(configs, catalog);
 
@@ -1183,11 +1188,13 @@ export class UserMcpServers {
     return this.host.sqlx<{ id: string }>(`SELECT id FROM user_mcp_servers WHERE preset_id = ? LIMIT 1`, GITHUB_MCP_PRESET).length > 0;
   }
 
-  /** The GitHub connection's token, as git sends it: Basic's password. Null with no connection, or none signed in. */
-  async githubGitToken(): Promise<string | null> {
-    const authorization = await this.githubMcpAuthorization();
-
-    return authorization === null ? null : authorization.replace(/^Bearer\s+/iu, '');
+  /** The GitHub connection's token, as git sends it: Basic's password. Null with no connection, or none signed in. A
+   *  failure to read it names no part of it. */
+  githubGitToken(): Promise<string | null> {
+    return settle(Effect.map(
+      Effect.tryPromise({ try: () => this.githubMcpAuthorization(), catch: () => new KinuError('unavailable', 'The GitHub connection\'s token could not be read.') }),
+      (authorization) => (authorization === null ? null : authorization.replace(/^(?:Bearer|token)\s+/iu, '')),
+    ));
   }
 
   private async githubMcpAuthorization(): Promise<string | null> {

@@ -4,6 +4,7 @@
  * held under their refresh rule.
  */
 import { Effect } from 'effect';
+import { connectionEnvironment } from '@kinu.run/core';
 import type { AccountMemory, AccountProposer, CommandEnvironment, Fact, GrantedSecrets, ProfileCatalogEnvelope, ProviderListing, UserCaller } from '@kinu.run/core';
 import { attempt, diagnostics, settle } from '@kinu.run/core/obs';
 import type { UserDO } from './user/user-do';
@@ -13,21 +14,6 @@ import type { UserDoRpcMethod } from './rpc-surface';
 export type UserHubClient = Pick<UserDO, UserDoRpcMethod>;
 
 /** One read held until dropped; a failed read is not held, so the next need asks again. */
-/**
- * The variables that point a computer's own git at `GIT_TOKEN` for github.com, when it is granted for github.com: a
- * credential helper given in the environment (`GIT_CONFIG_*`, git 2.31+), so no file holds it. Git sends it as Basic's
- * password, and the egress swaps in the secret it stands for. Nimbus's git reads `GIT_TOKEN` by itself.
- */
-const GIT_CREDENTIAL_ENVIRONMENT = {
-  GIT_CONFIG_COUNT: '1',
-  GIT_CONFIG_KEY_0: 'credential.https://github.com.helper',
-  GIT_CONFIG_VALUE_0: '!f() { test "$1" = get && echo username=x-access-token && echo "password=$GIT_TOKEN"; }; f',
-} as const;
-
-export function gitCredentialEnvironment(granted: GrantedSecrets['granted']): Partial<typeof GIT_CREDENTIAL_ENVIRONMENT> {
-  return granted.some((secret) => secret.name === 'GIT_TOKEN' && secret.hosts.includes('github.com')) ? GIT_CREDENTIAL_ENVIRONMENT : {};
-}
-
 export class HeldRead<A> {
   #held: Promise<A> | null = null;
   #value: A | undefined = undefined;
@@ -168,7 +154,7 @@ export class AccountReads {
     return settle(attempt({ doing: "asking the account for this workspace's secrets, without which the command was not run", otherwise: 'unavailable' }, async (): Promise<Record<string, string>> => {
       if (caller !== 'owner' || !this.host.owned()) return {};
       const { granted } = await this.grantedSecrets();
-      const placeholders = { ...Object.fromEntries(granted.map((secret) => [secret.name, secret.placeholder])), ...gitCredentialEnvironment(granted) };
+      const placeholders = { ...Object.fromEntries(granted.map((secret) => [secret.name, secret.placeholder])), ...connectionEnvironment(granted) };
 
       if (use === 'keep' || !granted.some((secret) => secret.reveal)) return placeholders;
 
