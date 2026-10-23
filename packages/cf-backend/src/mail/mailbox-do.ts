@@ -8,7 +8,7 @@ import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import {
   objectNamed,
-  durableStamps, EmailOutbox, initMailboxTables, mailboxEmail, sha256Hex, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp,
+  durableStamps, EmailOutbox, initMailboxTables, mailboxEmail, sha256Hex, openSchema, writeStamp,
   type MailAgentMessage, type MailBox, type MailboxAgentCalls, type MailboxCalls, type MailCaller, type MailDelivery, type MailListing, type MailListQuery, type MailMessageView, type MailOutgoing,
   type MailBoxOwner, type MailRecipient, type MailThreadSummary, type MailThreadView, type MailTriaged, type MailTriageItem, type MailTriagePick, type MailWake,
   MailStore, type MailBlobs,
@@ -61,20 +61,11 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
     super(ctx, env);
     this.routes = mailRoutesOf(env);
     // Storage a release left behind is repaired first, before any method reads it (core state/schema-repair.ts).
-    const stamps = durableStamps(ctx.storage.kv);
-    const unmade = readStamp(stamps, ctx.storage.sql, 'mailbox') === 'unmade';
-    const init = (): void => { initMailboxTables(ctx.storage.sql); };
-
-    const repair = repairSchema(ctx.storage.sql, {
-      schema: 'mailbox', tables: SCHEMA_TABLES.mailbox, stamps, transactionSync: (write) => ctx.storage.transactionSync(write), init,
-    }, `mailbox ${ctx.id.toString()}`);
+    const opened = openSchema(ctx.storage, 'mailbox', () => { initMailboxTables(ctx.storage.sql); }, `mailbox ${ctx.id.toString()}`);
 
     this.bucket = env.MAIL_BUCKET ?? null;
 
-    if (repair?.refused != null) this.refusal = new StoragePredatesReleaseError('mailbox', repair.refused);
-    else if (repair === null) init();
-
-    if (unmade && this.refusal === undefined) writeStamp(stamps, 'mailbox');
+    if (opened.refused !== null) this.refusal = opened.refused;
 
     // A deployment with no bucket for mail's bytes answers no call; its rows wait for one.
     if (this.bucket === null) this.refusal ??= new KinuError('unavailable', 'This deployment has no MAIL_BUCKET.');

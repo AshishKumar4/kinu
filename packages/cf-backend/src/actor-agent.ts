@@ -2200,7 +2200,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Instruction trust (KINU-N028): one store over actor SQL, scoped to this workspace so a forked
    *  or copied root starts unapproved. */
   private _instructionApprovals: InstructionApprovalStore | null = null;
-  private instructionApprovals(): InstructionApprovalStore {
+  protected instructionApprovals(): InstructionApprovalStore {
     this._instructionApprovals ??= new InstructionApprovalStore(
       this.rt.storage.sql,
       this.actorHandle(),

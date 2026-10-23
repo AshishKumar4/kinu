@@ -1085,10 +1085,6 @@ export class LocalAgentHost {
         ));
       },
       onAdmitted: () => this.wake(parent, 'subagent report'),
-      // A refiner's answer is read by its lane, which this pass drives.
-      onEvolutionAnswer: async () => {
-        this.answerWake(parent);
-      },
       temporary: parent.temporary,
     }, {
       fromSubagent: child.name,
@@ -1494,18 +1490,6 @@ export class LocalAgentHost {
       this.wakes.delete(promise);
       resolve();
     };
-  }
-
-  private answerWake(entry: HostEntry): void {
-    if (this.closed) return;
-    const admitted = this.admission();
-
-    const pass = this.drain(entry, 'refiner answer', admitted).then(() => {
-      admitted();
-      this.answerPasses.delete(pass);
-    });
-
-    this.answerPasses.add(pass);
   }
 
   private async drain(entry: HostEntry, source: string, admitted: () => void): Promise<void> {

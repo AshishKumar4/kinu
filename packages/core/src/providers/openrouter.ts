@@ -7,7 +7,7 @@ import { catalogBody, credentialCatalog } from './credential-catalog';
 import { Effect } from 'effect';
 import { knownReasoningEfforts } from './reasoning-effort';
 import { heardFetch } from './middleware/attempt';
-import { lazyModel } from './wire-model';
+import { lazyModel, MODEL_SDKS } from './wire-model';
 import { OPENAI_DEFAULT_MODEL } from './openai';
 
 export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
@@ -74,7 +74,7 @@ export function createOpenRouterProvider(opts: OpenRouterOptions = {}): ModelPro
         },
       });
 
-      return lazyModel('openrouter.chat', modelId, async () => (await import('@ai-sdk/openai-compatible')).createOpenAICompatible({
+      return lazyModel('openrouter.chat', modelId, async () => (await MODEL_SDKS.openaiCompatible()).createOpenAICompatible({
         name: 'openrouter',
         baseURL: OPENROUTER_BASE_URL,
         fetch: heardFetch(customFetch),

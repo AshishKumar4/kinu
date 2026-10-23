@@ -4,12 +4,13 @@
  * `pageTools` and `callPageTool` keep one WebMCP session per page, whose tool set follows the page's reports.
  */
 import { BROWSER_GATE_HOST } from './codemode-egress-mint';
+import { slateVendorModule } from './slates/vendor';
 
 export const BROWSER_CLIENT_MODULE = 'kinu-puppeteer.js';
 
 /** The 296 KB client, compiled only when a program that may drive a browser is launched. */
 export async function browserClientSource(): Promise<string> {
-  return (await import('virtual:kinu-slate-vendor')).default.puppeteer;
+  return (await slateVendorModule()).default.puppeteer;
 }
 
 export const BROWSER_PRELUDE = String.raw`

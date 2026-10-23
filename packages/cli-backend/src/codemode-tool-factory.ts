@@ -12,13 +12,13 @@ import type {
 import { renderThrownChain } from '@kinu.run/core/obs';
 import {
   CRAFTED_TOOL_NAMESPACE,
-  decodeJsonValue, explainSandboxError, programSurface,
+  explainSandboxError, programSurface,
   renderCodemodeDescription, codemodeInputSchema,
   withCraftedToolDeclarations, renderCraftedDefinitions,
   codemodeFunction, withCodemodeProgram, execContext, readDeviceRequestChannel, shownConsoleValue, programNamespace, servedImpacts, type ProgramMember, type ProgramNamespace,
 } from '@kinu.run/core';
 import { tool, type ToolSet } from 'ai';
-import { programBody } from './executor';
+import { runProgramInProcess } from './executor';
 import * as v from 'valibot';
 import { createNodeCompat } from '@nimbus-sh/core/node-compat';
 
@@ -28,11 +28,6 @@ interface NodeExecuteToolFactoryDeps {
   /** The role's reach, over every namespace bound, as cf's factory takes it. */
   reach: ToolSurfaceNarrowing;
 }
-
-/** Always-bound sandbox parameters; a provider may not take them. `__kinu` defines the crafted tools. */
-const FIXED_NAMESPACES: readonly string[] = [
-  'workspace', CRAFTED_TOOL_NAMESPACE, 'console', 'require', 'process', '__kinu',
-];
 
 const KinuNodeSchema = v.object({
   createRequire: v.function(), createProcess: v.function(), bindSlates: v.function(), loadBuiltins: v.function(), defineCrafted: v.function(),
@@ -119,29 +114,23 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
           const node = await loadKinuNode();
           node.bindSlates(workspace);
 
-          // Fixed names excluded: a duplicate `new Function` parameter crashes.
-          const extraNamespaces = Object.keys(providerBindings).filter(n => !FIXED_NAMESPACES.includes(n));
-          const argNames = [...FIXED_NAMESPACES, ...extraNamespaces];
-
-          const argValues: unknown[] = [
-            workspace, toolBindings, sandboxConsole,
-            node.createRequire({
+          // Always bound, over a namespace of the same name, so each name is one parameter; `__kinu` defines the crafted tools.
+          const bindings = {
+            ...providerBindings,
+            workspace,
+            [CRAFTED_TOOL_NAMESPACE]: toolBindings,
+            console: sandboxConsole,
+            require: node.createRequire({
               workspace, machines: { computer: providerBindings['computer'] ?? null, device: providerBindings['device'] ?? null }, builtins: node.builtins,
               cwd: surface.cwd, createNodeCompat,
             }),
-            node.createProcess(surface.cwd), node,
-            ...extraNamespaces.map(n => providerBindings[n]),
-          ];
-
-          const fn = new Function(...argNames, programBody(args.code, `${describe}\n${renderCraftedDefinitions(crafted)}`));
-
-          const rawResult = await fn(...argValues);
-
-          const payload: ExecuteSuccess = {
-            result: rawResult === undefined
-              ? '(no return value)'
-              : decodeJsonValue({ value: rawResult }),
+            process: node.createProcess(surface.cwd),
+            __kinu: node,
           };
+
+          const result = await runProgramInProcess(args.code, { names: Object.keys(bindings), values: Object.values(bindings) }, `${describe}\n${renderCraftedDefinitions(crafted)}`);
+
+          const payload: ExecuteSuccess = { result: result === undefined ? '(no return value)' : result };
 
           if (logs.length > 0) payload.logs = logs;
 

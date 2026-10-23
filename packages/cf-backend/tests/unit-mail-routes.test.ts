@@ -78,7 +78,7 @@ function env(accounts: 'operators' | 'everyone' = 'operators'): MailRoutesEnv {
       idFromName: (userId: string) => userId,
       get: (userId: string) => ({
         getConfig: (_caller: UserCaller, key: string) => Promise.resolve(key === 'assistant' ? assistants.get(userId) ?? null : null),
-        listActiveWorkspaces: () => Promise.resolve([...assistants.values()].map((name) => ({ name, displayName: 'Kinu', createdAt: 7 }))),
+        listActiveWorkspaces: () => Promise.resolve([...assistants.values()].map((name) => ({ name, displayName: 'Kinu', createdAt: 7, lastVisited: 7 }))),
       }),
     },
     OrchestratorAgent: {

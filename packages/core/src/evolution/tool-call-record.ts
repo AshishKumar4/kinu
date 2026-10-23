@@ -123,7 +123,7 @@ export function compactToolCall(call: ToolCallInput): ToolCallRecord {
     name: call.name,
     argsWindow: window(call.args, serialized),
     target: actionTarget(call.args),
-    op,
+    op: op === null ? null : detached(redactSecrets(op)),
     argsDigest: Object.keys(call.args).length === 0 ? null : fnv1a64(`${call.name}:${serialized}`),
     // Found in the arguments as written, then kept as every other projection is: through the secret policy.
     writtenPaths: [...written].map((path) => detached(redactSecrets(path))),

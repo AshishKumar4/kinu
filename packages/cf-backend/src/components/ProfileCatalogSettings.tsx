@@ -20,6 +20,7 @@ import {
   isValidRoleId,
   offeredReasoningEfforts,
   parseModelSpec,
+  retargetedTier,
   specWithoutAccount,
   type ProfileCatalog,
   type ProfileCatalogEnvelope,
@@ -35,7 +36,8 @@ import { Effect } from 'effect';
 import { settle, showing } from '@kinu.run/core/obs';
 import { lastValue, useAsyncResource, type AsyncResource } from '@/hooks/use-async-resource';
 import { getProfileCatalog, listAvailableModels, testModel, updateProfileCatalog } from '../lib/user-api';
-import { AccountPicker, ModelPicker, reasoningEffortLabel, specOnAccount } from './ModelPicker';
+import { AccountPicker, ModelPicker, specOnAccount } from './ModelPicker';
+import { reasoningEffortChoice } from './model-picker-options';
 import { Card, Choice, Field, composing } from './ui/form';
 import { Segmented } from './ui/Segmented';
 import { Checkbox } from "@/components/ui/Check";
@@ -46,6 +48,11 @@ import { TextArea, TextInput } from "@/components/ui/Field";
 import { Rail } from "@/components/ui/Rail";
 
 const EMPTY_MENU: ModelMenuResponse = { models: [], failures: [] };
+
+/** The levels `model`'s menu row declares; undefined when the menu does not list it. */
+function declaredEfforts(menu: ModelMenuResponse, model: string): readonly ReasoningEffort[] | undefined {
+  return menu.models.find((entry) => entry.spec === specWithoutAccount(model))?.reasoningEfforts;
+}
 
 interface TierWords {
   readonly name: string;
@@ -190,9 +197,9 @@ export function ProfileCatalogSettings() {
     const tiers = { ...draft.tiers };
 
     if (id === 'default') {
-      if (model) tiers.default = { ...tiers.default, model };
+      if (model) tiers.default = retargetedTier(tiers.default, model, declaredEfforts(menu, model));
     } else if (model) {
-      tiers[id] = { ...(tiers[id] ?? tiers.default), model };
+      tiers[id] = retargetedTier(tiers[id] ?? tiers.default, model, declaredEfforts(menu, model));
     } else {
       delete tiers[id];
     }
@@ -505,8 +512,8 @@ function TierTuning(props: {
   onEffort: (effort: ReasoningEffort | '') => void;
   onFallbacks: (fallbacks: readonly string[]) => void;
 }) {
-  const entry = props.menu.models.find((model) => model.spec === specWithoutAccount(props.assignment.model));
-  const efforts = offeredReasoningEfforts(entry?.reasoningEfforts, props.assignment.reasoningEffort);
+  const declared = declaredEfforts(props.menu, props.assignment.model);
+  const efforts = offeredReasoningEfforts(declared, props.assignment.reasoningEffort);
 
   return (
     <div className="space-y-2">
@@ -515,7 +522,7 @@ function TierTuning(props: {
           <span className="t-meta w-16 shrink-0 p-text-3">Thinking</span>
           <Segmented<ReasoningEffort | 'auto'>
             label={`${props.tierId} reasoning effort`}
-            segments={[{ id: 'auto', label: 'Auto' }, ...efforts.map((effort) => ({ id: effort, label: reasoningEffortLabel(effort) }))]}
+            segments={[{ id: 'auto', label: 'Auto' }, ...efforts.map((effort) => ({ id: effort, label: reasoningEffortChoice(effort, declared) }))]}
             value={props.assignment.reasoningEffort ?? 'auto'}
             onChange={(effort) => props.onEffort(effort === 'auto' ? '' : effort)}
           />
@@ -637,7 +644,7 @@ function RoleEditor(props: {
             onChange={(preset) => set('preset', preset)} />
         </Field>
       )}
-      <Field label="Instructions" hint="The standing brief this role works under, as the prompt reads it.">
+      <Field label="Instructions">
         <TextArea mono rows={8} aria-label="Instructions" className="max-h-132 min-h-40"
           value={props.role.instructions}
           onChange={(event) => set('instructions', event.target.value)} />

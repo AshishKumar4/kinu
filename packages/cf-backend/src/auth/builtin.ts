@@ -3,7 +3,7 @@
  * ones need its invite. A success mints the OAuth callback's session (`createSession`).
  */
 import { Hono, type Context } from 'hono';
-import { AssertionSchema, AttestationSchema, answeredChallenge, verifyNewPasskey, verifyPasskeyAnswer } from './passkeys';
+import { AssertionSchema, AttestationSchema, answeredChallenge, verifyNewPasskey, verifyPasskeyAnswer, webauthn } from './passkeys';
 import { objectNamed, base64Url, json, ownerCaller, randomToken, sha256Hex } from '@kinu.run/core';
 import { tolerateAsync } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -208,7 +208,7 @@ builtinAuthRoutes.post('/api/auth/builtin/passkey/register/options', async (c) =
   const userId = await accountIdFor(c.env, request.email);
   const url = new URL(c.req.url);
 
-  const options = await (await import('@simplewebauthn/server')).generateRegistrationOptions({
+  const options = await (await webauthn()).generateRegistrationOptions({
     rpName: RP_NAME, rpID: url.hostname, userName: request.email, userID: new TextEncoder().encode(userId),
     attestationType: 'none', authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
   });
@@ -251,7 +251,7 @@ builtinAuthRoutes.post('/api/auth/builtin/passkey/sign-in/options', async (c) =>
   const limited = await reserve(c.env, [buckets.challenge(addressKey(c.req.raw))]);
 
   if (limited) return limited;
-  const options = await (await import('@simplewebauthn/server')).generateAuthenticationOptions({ rpID: new URL(c.req.url).hostname, userVerification: 'required' });
+  const options = await (await webauthn()).generateAuthenticationOptions({ rpID: new URL(c.req.url).hostname, userVerification: 'required' });
 
   await accounts(c.env).builtinIssueChallenge(
     await ownerCaller(c.env), options.challenge,
@@ -338,7 +338,7 @@ builtinAuthRoutes.post('/api/auth/builtin/passkey/reset/options', async (c) => {
   if (account === null) return resetRefused(grant);
   const url = new URL(c.req.url);
 
-  const options = await (await import('@simplewebauthn/server')).generateRegistrationOptions({
+  const options = await (await webauthn()).generateRegistrationOptions({
     rpName: RP_NAME, rpID: url.hostname, userName: account.email, userID: new TextEncoder().encode(account.userId),
     attestationType: 'none', authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
   });

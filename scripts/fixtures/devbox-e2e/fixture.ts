@@ -11,9 +11,23 @@ import { ContractOwnerSchema, type ContractOwner } from './ledger';
  */
 export const FIXTURE_WORKER = 'kinu-devbox-contracts-staging';
 
+/**
+ * Every other run's lasting Worker: a lane proving a branch never holds the deploy's (staging, 2026-10-22: three deploys
+ * went red on "held by run …", each held by a lane's golden run). Made by the first lane run that finds it absent.
+ */
+export const LANES_FIXTURE_WORKER = 'kinu-devbox-contracts-lanes';
+
+/** What a deploy's armada job names its run (`--deploy-fixture`, ladder.ts `armadaPhaseRun`), as KINU_CONTRACTS_FIXTURE. */
+export const DEPLOY_FIXTURE = 'deploy';
+
+/** The lasting Worker a run deploys: the deploy's, when its job says it is one, else the lanes'. */
+export function fixtureWorker(env: Readonly<Record<string, string | undefined>> = process.env): string {
+  return env['KINU_CONTRACTS_FIXTURE'] === DEPLOY_FIXTURE ? FIXTURE_WORKER : LANES_FIXTURE_WORKER;
+}
+
 /** A run's names: the lasting Worker and the application wrangler names after it and its class, and the run's bucket. */
-export function fixtureNames(run: string) {
-  return { worker: FIXTURE_WORKER, app: `${FIXTURE_WORKER}-contractbox`, bucket: `kinu-${run}` };
+export function fixtureNames(run: string, worker = fixtureWorker()) {
+  return { worker, app: `${worker}-contractbox`, bucket: `kinu-${run}` };
 }
 
 /** Which run deploys the fixture: one at a time, as each binds the Worker to its own bucket and clears the golden box. */

@@ -5,6 +5,7 @@ import * as v from 'valibot';
 import { attemptBound } from './middleware/attempt';
 import { retryMiddleware, type RetryPolicy } from './middleware/retry';
 import { toolSchemaDialect } from './middleware/tool-schema-dialect';
+import { kimiToolCallIds } from './middleware/kimi-tool-call-ids';
 import { usageRepairMiddleware } from './middleware/usage-repair';
 import { toolImages } from './tool-result-images';
 import { statelessResponses } from './util';
@@ -44,19 +45,19 @@ export function createWireModel(input: WireModelInput): LanguageModelV4 {
   const fetched = { fetch: heardFetch(input.fetch ?? globalFetch) };
 
   if (input.protocol === 'messages') {
-    return lazyModel(name, modelId, async () => (await import('@ai-sdk/anthropic')).createAnthropic({ name, baseURL, ...anthropicAuth(headers ?? {}), ...fetched })(modelId));
+    return lazyModel(name, modelId, async () => (await MODEL_SDKS.anthropic()).createAnthropic({ name, baseURL, ...anthropicAuth(headers ?? {}), ...fetched })(modelId));
   }
 
   if (input.protocol === 'openai-chat') {
-    return lazyModel(`${name}.chat`, modelId, async () => (await import('@ai-sdk/openai')).createOpenAI({ name, baseURL, apiKey: 'placeholder', headers, ...fetched }).chat(modelId));
+    return lazyModel(`${name}.chat`, modelId, async () => (await MODEL_SDKS.openai()).createOpenAI({ name, baseURL, apiKey: 'placeholder', headers, ...fetched }).chat(modelId));
   }
 
   return input.protocol === 'responses'
     ? wrapLanguageModel({
-      model: lazyModel(`${name}.responses`, modelId, async () => (await import('@ai-sdk/openai')).createOpenAI({ name, baseURL, apiKey: 'placeholder', headers, ...fetched }).responses(modelId)),
+      model: lazyModel(`${name}.responses`, modelId, async () => (await MODEL_SDKS.openai()).createOpenAI({ name, baseURL, apiKey: 'placeholder', headers, ...fetched }).responses(modelId)),
       middleware: statelessResponses(input.reasoning),
     })
-    : lazyModel(`${name}.chat`, modelId, async () => (await import('@ai-sdk/openai-compatible')).createOpenAICompatible({
+    : lazyModel(`${name}.chat`, modelId, async () => (await MODEL_SDKS.openaiCompatible()).createOpenAICompatible({
       name, baseURL, headers, ...fetched, ...(input.structuredOutputs === true && { supportsStructuredOutputs: true }),
     }).chatModel(modelId));
 }
@@ -67,7 +68,7 @@ export function withModelStack(model: LanguageModel, policy: RetryPolicy): Langu
 
   const v4 = model.specificationVersion === 'v4' ? model : wrapLanguageModel({ model, middleware: [] });
 
-  return wrapLanguageModel({ model: attemptBound(v4), middleware: [retryMiddleware(policy), usageRepairMiddleware(), toolSchemaDialect, toolImages(undefined)] });
+  return wrapLanguageModel({ model: attemptBound(v4), middleware: [retryMiddleware(policy), usageRepairMiddleware(), toolSchemaDialect, kimiToolCallIds, toolImages(undefined)] });
 }
 
 /** Anthropic's SDK sends a key as `x-api-key` and a token as a bearer: a given header is moved into its setting, and
@@ -82,6 +83,15 @@ function anthropicAuth(given: Readonly<Record<string, string>>) {
 
   return { authToken: bearer === undefined || bearer === '' ? 'placeholder' : bearer, headers };
 }
+
+/** Each model SDK, imported by the first model that speaks it: used heap after setup 26.4 to 25.6 MB in the workspace,
+ *  13.9 to 13.1 MB live in a hosted agent's isolate at its first call (armada 20261007182018-643fa40c). */
+export const MODEL_SDKS = {
+  anthropic: () => import('@ai-sdk/anthropic'),
+  openai: () => import('@ai-sdk/openai'),
+  openaiCompatible: () => import('@ai-sdk/openai-compatible'),
+  workersAi: () => import('workers-ai-provider'),
+};
 
 /** A model whose SDK is imported when it is first used: an SDK no turn speaks is never compiled, and its schemas are never
  *  built. Middleware reads `provider` before the SDK loads, so it is the id that SDK names the model with. */

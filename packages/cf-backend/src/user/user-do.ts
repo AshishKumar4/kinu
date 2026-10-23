@@ -459,7 +459,7 @@ export class UserDO extends Agent<Env> {
     return this.workspaces.putWorkspaceOverview(caller, name, overview);
   }
 
-  listActiveWorkspaces(caller: UserCaller, filter?: { readonly awaitsSettings?: boolean }): Promise<Array<Pick<WorkspaceEntry, 'name' | 'displayName' | 'createdAt'>>> {
+  listActiveWorkspaces(caller: UserCaller, filter?: { readonly awaitsSettings?: boolean }): Promise<WorkspaceEntry[]> {
     return this.workspaces.listActiveWorkspaces(caller, filter);
   }
 

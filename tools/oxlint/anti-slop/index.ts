@@ -22,6 +22,7 @@ import { requireRpcSealRule } from "./rules/require-rpc-seal.ts";
 import { requireSuperAlarmRule } from "./rules/require-super-alarm.ts";
 import { noTuiColourLiteralRule } from "./rules/no-tui-colour-literal.ts";
 import { noDynamicModelImportRule } from "./rules/no-dynamic-model-import.ts";
+import { noUnmeasuredDynamicImportRule } from "./rules/no-unmeasured-dynamic-import.ts";
 import { modelMethodBoundaryRule } from "./rules/model-method-boundary.ts";
 import { requireVariantUtilityRule } from "./rules/require-variant-utility.ts";
 import { noCliCredentialFlagRule } from "./rules/no-cli-credential-flag.ts";
@@ -76,6 +77,7 @@ const antiSlopPlugin = eslintCompatPlugin({
 		"require-super-alarm": requireSuperAlarmRule,
 		"no-tui-colour-literal": noTuiColourLiteralRule,
 		"no-dynamic-model-import": noDynamicModelImportRule,
+		"no-unmeasured-dynamic-import": noUnmeasuredDynamicImportRule,
 		"model-method-boundary": modelMethodBoundaryRule,
 		"require-variant-utility": requireVariantUtilityRule,
 		"no-cli-credential-flag": noCliCredentialFlagRule,

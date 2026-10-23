@@ -8,7 +8,7 @@ import * as v from 'valibot';
 import { DurableObject } from 'cloudflare:workers';
 import { diagnostics, KinuError, settle } from '@kinu.run/core/obs';
 import {
-  censusOf, durableStamps, readStamp, repairSchema, requireOps, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp,
+  censusOf, openSchema, requireOps, StoragePredatesReleaseError,
   kinuListings,
   type ExploreKind, type ExplorePage, type GalleryCategory, type GalleryListing, type GallerySlate, type GallerySort,
   type OpsCaller, type WorkspaceCard, type Page, type PageRequest, type Repair, type TablesAnswer,
@@ -69,18 +69,11 @@ export class ControlPlaneDO extends DurableObject<Env> {
     // Not inside `blockConcurrencyWhile`: `sql.exec` does not yield, and awaited init stalls every
     // request (`tests/workerd/do-init-gate.test.ts`). Storage a release left behind is repaired first, before any
     // method reads it (core state/schema-repair.ts), as every class's is.
-    const stamps = durableStamps(ctx.storage.kv);
-    const unmade = readStamp(stamps, ctx.storage.sql, 'control') === 'unmade';
-    const init = (): void => { cpStore.initControlPlaneSchema(this.store); };
+    const opened = openSchema(ctx.storage, 'control', () => { cpStore.initControlPlaneSchema(this.store); }, 'control plane');
 
-    this.schemaRepair = repairSchema(ctx.storage.sql, {
-      schema: 'control', tables: SCHEMA_TABLES.control, stamps, transactionSync: (write) => ctx.storage.transactionSync(write), init,
-    }, 'control plane');
+    this.schemaRepair = opened.repair;
 
-    if (this.schemaRepair?.refused != null) this.storageRefusal = new StoragePredatesReleaseError('control', this.schemaRepair.refused);
-    else if (this.schemaRepair === null) init();
-
-    if (unmade && this.storageRefusal === undefined) writeStamp(stamps, 'control');
+    if (opened.refused !== null) this.storageRefusal = opened.refused;
     this.gallery = new GalleryIndex(ctx.storage.sql);
 
     // Kinu's own workspace blueprints are code: each activation lists this build's.

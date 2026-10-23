@@ -11,7 +11,7 @@ import { WORKERS_AI_PREFERRED_MODEL_IDS } from './workers-ai-catalog';
 import { CLOUDFLARE_OAUTH_CRED_KEY } from './cloudflare-oauth';
 import { toolCallIdMiddleware } from './middleware/tool-call-id';
 import { heardBinding, heardFetch } from './middleware/attempt';
-import { lazyModel } from './wire-model';
+import { lazyModel, MODEL_SDKS } from './wire-model';
 
 /** `env.AI` as the provider takes it: `Ai` where workers-types are loaded. */
 type WorkersAIChatBinding = NonNullable<WorkersAISettings['binding']>;
@@ -42,7 +42,7 @@ export function createWorkersAIProvider(deploymentBinding?: WorkersAIChatBinding
     createModel(modelId, deps): LanguageModel {
       // Without replica pinning the prefix cache never hits.
       const model = deploymentBinding
-        ? lazyModel('workersai.chat', modelId, async () => (await import('workers-ai-provider'))
+        ? lazyModel('workersai.chat', modelId, async () => (await MODEL_SDKS.workersAi())
           .createWorkersAI({ binding: heardBinding(deploymentBinding) }).chat(modelId, { sessionAffinity: deps.sessionAffinity }))
         : userAccountModel(modelId, deps);
 
@@ -64,7 +64,7 @@ function userAccountModel(modelId: string, deps: ModelCallDeps): LanguageModelV4
     requestHeaders: { [SESSION_AFFINITY_HEADER]: deps.sessionAffinity },
   });
 
-  return lazyModel('workers-ai.chat', modelId, async () => (await import('@ai-sdk/openai-compatible')).createOpenAICompatible({
+  return lazyModel('workers-ai.chat', modelId, async () => (await MODEL_SDKS.openaiCompatible()).createOpenAICompatible({
     name: 'workers-ai',
     baseURL: placeholder,
     fetch: heardFetch(customFetch),

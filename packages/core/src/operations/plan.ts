@@ -7,9 +7,9 @@ export const PLAN = {
   submit: defineOperation({
     ns: 'plan', name: 'submit', impact: 'externalSend', plan: true, slate: false,
     help: [
-      'Submit a Markdown implementation plan for the owner\'s interactive review, where they comment on it and approve it or request changes.',
-      'On the first call, write the full plan with one edit starting at line 1. After changes are requested, use the line numbers in the feedback turn to make targeted edits.',
-      'Line numbers are one-indexed and inclusive; omit end to replace through the end of the plan. Do not implement after submission: end the turn and await the owner decision.',
+      'Submit a Markdown implementation plan for the owner\'s review.',
+      'First call: the whole plan as one edit at line 1. After changes are requested, edit by the line numbers the feedback gives (one-indexed, inclusive; omit `end` to replace to the end).',
+      'Then end the turn and wait for the owner\'s decision; do not implement.',
     ].join('\n'),
     input: v.strictObject({
       edits: v.pipe(v.array(PlanEditSchema, 'a list of edits, each { start, end?, content }, sent as an array and not as text'), v.minLength(1)),

@@ -7,6 +7,10 @@ import { json } from '@kinu.run/core';
 import { attempt, renderThrownChain, settle, type KinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
+/** The WebAuthn library, imported by the routes that use it: used heap after setup 25.6 to 24.4 MB with postal-mime's
+ *  cut (armada 20261007213937-cdf08921). */
+export const webauthn = () => import('@simplewebauthn/server');
+
 export const AttestationSchema = v.object({
   id: v.string(), rawId: v.string(), type: v.literal('public-key'),
   response: v.object({
@@ -45,7 +49,7 @@ const refused = (failure: KinuError): Response =>
 
 export function verifyNewPasskey(response: v.InferOutput<typeof AttestationSchema>, party: Party) {
   return settle(Effect.match(
-    attempt({ doing: 'verifying the new passkey', otherwise: 'denied' }, async () => (await import('@simplewebauthn/server')).verifyRegistrationResponse({
+    attempt({ doing: 'verifying the new passkey', otherwise: 'denied' }, async () => (await webauthn()).verifyRegistrationResponse({
       response, expectedChallenge: answeredChallenge(response.response.clientDataJSON) ?? '',
       expectedOrigin: party.origin, expectedRPID: party.rpID, requireUserVerification: true,
     })),
@@ -61,7 +65,7 @@ export interface KnownPasskey {
 
 export function verifyPasskeyAnswer(response: v.InferOutput<typeof AssertionSchema>, passkey: KnownPasskey, party: Party) {
   return settle(Effect.match(
-    attempt({ doing: 'verifying the passkey', otherwise: 'denied' }, async () => (await import('@simplewebauthn/server')).verifyAuthenticationResponse({
+    attempt({ doing: 'verifying the passkey', otherwise: 'denied' }, async () => (await webauthn()).verifyAuthenticationResponse({
       response, expectedChallenge: answeredChallenge(response.response.clientDataJSON) ?? '',
       expectedOrigin: party.origin, expectedRPID: party.rpID, requireUserVerification: true,
       credential: { id: passkey.credentialId, publicKey: fromBase64Url(passkey.publicKey), counter: passkey.counter },

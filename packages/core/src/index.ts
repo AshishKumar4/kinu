@@ -83,7 +83,7 @@ export { ChatHistoryEntrySchema } from './types/chat';
 // Every composition root calls this and nothing else (tests/contract-workspace-schema.test.ts).
 export { initAgentIsolateSchema, initAllTables, initWorkspaceSchema, initActorStateSchema, type WorkspaceSchemaSql } from './state/workspace-schema';
 
-export { derivedFrom, repairSchema, type Repair, type TableWrites, type TouchedTable } from './state/schema-repair';
+export { derivedFrom, openSchema, repairSchema, type Repair, type TableWrites, type TouchedTable } from './state/schema-repair';
 
 export { textContains } from './utils/text-match';
 
@@ -117,7 +117,7 @@ export { handedMailSignal, MAIL_HANDED_EVENT, type HandedMail } from './mail/han
 
 export { mailInContext } from './mail/in-context';
 
-export { MAIL_MESSAGE_FIELDS, MailAddress, mailText } from './mail/message';
+export { MAIL_MESSAGE_FIELDS, MailAddress, MailBoxPath, mailText } from './mail/message';
 
 export { MailTriageLane, triageMail, type MailTriageDeps } from './mail/triage';
 
@@ -623,7 +623,6 @@ export { driveDeliveredRun, driveSeatedRun } from './heads/delivered-run';
 
 export { initWorkspaceActorTable, facetNamesGiven, WorkspaceActorDirectory, subagentDescendants, stoppedBelow, isSubagentOrigin, whenActorTakesInput, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, bearWorkspaceIdentity, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActor, type CreateWorkspaceActor, actorStanding, type ActorStanding, actorEnded, endedStandingOf, type ActorEnded } from './identity/workspace-actors';
 
-export type { AnsweredEvolutionSubagent } from './identity/evolution-subagents';
 
 export {
   openLocalRootActor, localActorDirectory, adoptLocalActorHandle, bindLocalActorReference, registerLocalActor, openLocalActor, bindLocalActor, requireLocalActorWorkspace, retireLocalActor, recoverLocalActorRetirements, type LocalActorBinding, type LocalActorConfig,
@@ -1768,7 +1767,7 @@ export { AgentOrchestrator, drainPendingEvents, type AgentOrchestratorDeps } fro
 
 export { SessionAdvisor, type AdvisorContext } from './advisor/session-advisor';
 
-export { type AdvisorLane } from './advisor/advisor-ports';
+export { advisorReadTool, advisorReadTools, advisorReadsOver, type AdvisorLane, type AdvisorReadTools } from './advisor/advisor-ports';
 
 export {
   EvolutionLanes, evolutionPassOpen, recordedTurn, type EvolutionLanesDeps, type TurnContinuity,
@@ -2191,7 +2190,7 @@ export { EvolutionChangelogViewSchema, type EvolutionChangelogView } from './rea
 
 // Profile catalogs
 export {
-  TIER_IDS, DEFAULT_PROVIDER_RETRIES, TierIdSchema, tierIdsOf, isTierId, ROLE_ID_RE,
+  TIER_IDS, DEFAULT_PROVIDER_RETRIES, TierIdSchema, tierIdsOf, isTierId, retargetedTier, ROLE_ID_RE,
   isValidRoleId, validateProfileCatalog, validateProfileCatalogEnvelope,
   profileCatalogCanonical, profileCatalogDigest, deriveRoleLabel, effectiveRoleCatalog,
   BUILTIN_ROLE_DEFINITIONS, BUILTIN_PROFILE_CATALOG,
@@ -2250,7 +2249,7 @@ export {
 
 export {
   WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG, WorkspaceTerminalInputSchema, WorkspaceTerminalOutputSchema,
-  isWorkspaceTerminal,
+  isWorkspaceTerminal, WORKSPACE_SHELL_SESSION, workspaceSessionOf, workspaceSessionTag, WorkspaceSessionRecordSchema, type WorkspaceSessionRecord,
 } from './execution/workspace-terminal';
 
 export {
@@ -2366,6 +2365,8 @@ export {
 
 export { drawnText, liveTailRow, threadLiveTail, toolCallRunning, type LiveTail } from './read-models/message-live-tail';
 
+export { liveStep, watchingLine, type Watch } from './read-models/focus-line';
+
 export { messagesUpTo, turnRows } from './read-models/fork-count';
 
 export {
@@ -2400,7 +2401,7 @@ export {
   createPlanAnnotationSaveQueue,
 } from './plans/plan-annotation-save';
 
-export { terminalChatError, type ChatTurnError, type TerminalFrame } from './utils/chat-turn-error';
+export { ChatResponseFrameSchema, terminalChatError, type ChatTurnError, type TerminalFrame } from './utils/chat-turn-error';
 
 export {
   newSendLatch, admitTurn, abandonTurn, abandonTurnIfOwner,
@@ -2719,6 +2720,7 @@ export {
 export type {
   AgentTurnActivity, AgentRecovery, AgentAnswer, AgentAnswerTexts, AgentStanding, AgentStandingReport, AgentReport, AgentOwes, AdmittedDelivery, AgentSteps, RunEndOutcome, RunEndReport, AgentSnapshot, AgentTurnTask, AgentToolAnswer,
   AgentToolCall, AgentToolDescriptor, AgentHeadDelta, AgentTrace, AgentTurnEnd, PreparedAgentTurn, StoredRow, TurnRequestAt,
+  AgentAdvisorRead,
 } from './subagents/agent-isolate';
 
 export { refusedRun, writesSnapshotRows } from './subagents/agent-isolate';

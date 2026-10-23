@@ -4,7 +4,7 @@
  */
 
 import { normalizeCode } from '@cloudflare/codemode/normalize';
-import { decodeJsonValue, JsonValueSchema, programNamespace, type ProgramNamespace } from '@kinu.run/core';
+import { decodeJsonValue, JsonValueSchema, programNamespace } from '@kinu.run/core';
 import type { Executor, ExecuteResult, JsonValue, ResolvedProvider } from '@kinu.run/core';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -171,27 +171,27 @@ function normalizeProviders(
   return [{ name: 'codemode', fns: providers }];
 }
 
-/** The one body every in-process CLI program runs as, `eval`'s and the executor's: `prelude`, then the code's value. */
-export function programBody(code: string, prelude = ''): string {
-  return `${prelude}\nreturn (\n${normalizeCode(code)}\n)()`;
+/**
+ * The one in-process run of every CLI program, `eval`'s and the executor's: `names` its function's parameters, bound to
+ * `values` in order, `prelude` before the code, and its value decoded as the sandbox's answer is.
+ */
+export async function runProgramInProcess(
+  code: string, parameters: { readonly names: readonly string[]; readonly values: readonly unknown[] }, prelude = '',
+): Promise<JsonValue | undefined> {
+  const value: unknown = await new Function(...parameters.names, `${prelude}\nreturn (\n${normalizeCode(code)}\n)()`)(...parameters.values);
+
+  return value === undefined ? undefined : decodeJsonValue({ value });
 }
 
 /** In-process execution: tool-backed code, or JS when no subprocess runtime is on PATH. */
 async function executeInProcess(
   code: string, providers: ResolvedProvider[],
 ): Promise<ExecuteResult> {
-  // As the cloud's sandbox holds a namespace, and eval here too (`programNamespace`).
-  const context: Record<string, ProgramNamespace> = Object.fromEntries(providers.map((p) => [p.name, programNamespace(p.name, p.fns)]));
-
-  const argNames = Object.keys(context);
-  const argValues = argNames.map(k => context[k]);
-
   try {
-    const fn = new Function(...argNames, programBody(code));
+    // As the cloud's sandbox holds a namespace, and eval here too (`programNamespace`).
+    const bindings = Object.fromEntries(providers.map((p) => [p.name, programNamespace(p.name, p.fns)]));
 
-    const value: unknown = await fn(...argValues);
-
-    return { result: value === undefined ? undefined : decodeJsonValue({ value }) };
+    return { result: await runProgramInProcess(code, { names: Object.keys(bindings), values: Object.values(bindings) }) };
   } catch (error) {
     return {
       result: undefined,

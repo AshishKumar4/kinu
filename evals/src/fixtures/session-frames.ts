@@ -141,6 +141,22 @@ export function chatErrorFrame(input: {
   });
 }
 
+/** The runtime refusing a send at its door, as `client-socket-gate.ts` answers one: no turn ran. */
+export function chatRefusedFrame(input: {
+  readonly requestId: string;
+  readonly reason: string;
+  readonly message: string;
+}): string {
+  return JSON.stringify({
+    type: CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE,
+    id: input.requestId,
+    reason: input.reason,
+    body: input.message,
+    done: true,
+    error: true,
+  });
+}
+
 /** A whole turn's frames, in production order. */
 export function chatTurnFrames(input: {
   readonly requestId: string;

@@ -14,7 +14,7 @@ import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 const USER_ID = '0123456789abcdef0123456789abcdef';
 
 const WORKSPACES = ['jarvis', 'scout', 'relay', 'gone'].map((name, index) => ({
-  name, displayName: name, createdAt: index, nameOrigin: 'user' as const,
+  name, displayName: name, createdAt: index, lastVisited: index, nameOrigin: 'user' as const,
 }));
 
 const work = ({ calls, input, usd, at, remaining }: { calls: number; input: number; usd: number; at: number; remaining: number }): AccountSpend => ({

@@ -6,7 +6,7 @@ import type { ToolSet } from 'ai';
  * workspace; VFS, shell, memory and craft stores all live in the owning actor's `ctx.storage.sql`.
  */
 
-import type { AgentRuntime, ActorHandle, RoutedLLM, Schedule, Identity, SqlExecutor, SqlValue, RawSqlExec, FiberCtx, ExecutionRouter, DeferredApprovalChannel, WriteObserver, ModelCallSink, ModelOperationSink, ResolvedTurnProfile, SlateCallResult, SlateOperation, ChildContextResolver, ContextTree } from "@kinu.run/core";
+import type { AgentRuntime, ActorHandle, RoutedLLM, Schedule, SqlExecutor, SqlValue, RawSqlExec, FiberCtx, ExecutionRouter, DeferredApprovalChannel, WriteObserver, ModelCallSink, ModelOperationSink, ResolvedTurnProfile, SlateCallResult, SlateOperation, ChildContextResolver, ContextTree } from "@kinu.run/core";
 import {
   objectNamed,
   nimbusSessionShell, createShellSession,
@@ -18,9 +18,7 @@ import {
   createSandboxExecutor, createDeviceTunnelExecutor, soleLiveDevice, type DeviceTransport,
   type WorkspaceFiles,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore, createSqlFiber,
-  createRoutedModelLane, routedLlm, bindRoute, type ModelLaneComponents,
-  createScaffoldSurface,
-  type FixedTierSource,
+  buildRuntime, createRoutedModelLane, routedLlm, bindRoute, type ModelLaneComponents,
   type VectorStore,
 } from "@kinu.run/core";
 import type { DeviceFileScope, LiveRead, SandboxHandle } from "@kinu.run/core";
@@ -302,27 +300,21 @@ export function createCFRuntime(
 
   const executor = createRuntimeExecutor(codemodeLauncher({ kinuNode: false, egress: null }, async () => ({})));
 
-  const laneOf = (source: FixedTierSource): ModelLaneComponents | undefined => profileLaneComponents({
-    agent, env, actor, resolveProfile: hooks.resolveProfile, source, report: hooks.reportModelCall, currentTurn: hooks.currentTurn, accounts: hooks.accounts,
+  // One binding for every lane of this actor; each call reads its route, the judge's, the fast tier's or reflection's.
+  const modelLanes = profileLaneComponents({
+    agent, env, actor, resolveProfile: hooks.resolveProfile, report: hooks.reportModelCall, currentTurn: hooks.currentTurn, accounts: hooks.accounts,
     refusals: hooks.refusals,
     modelOperations: hooks.modelOperations,
   });
-
-  const profileLane = (source: FixedTierSource): RoutedLLM | undefined => {
-    const lane = laneOf(source);
-
-    return lane === undefined ? undefined : createRoutedModelLane(actor.actor, source, lane);
-  };
 
   // The one required lane: `AgentRuntime.llm` is not optional.
   const noProfile = async (): Promise<never> => {
     throw new Error('reflection model lane has no active profile');
   };
 
-  const llm: RoutedLLM = profileLane('reflection') ?? { complete: noProfile, object: noProfile };
+  const llm: RoutedLLM = modelLanes === undefined ? { complete: noProfile, object: noProfile } : createRoutedModelLane(actor.actor, 'reflection', modelLanes);
 
   const schedule = createRealSchedule(access, sql, actor.actor);
-  const identity = createIdentity(actor.actor, originVfs, sql, actor.scaffoldPath);
 
   // Main vs hosted is stated (`rootActor`), never derived from the name. Grants are only written to
   // main's rows, so a hosted actor inherits the root's answers intersected with its own narrowing, with no
@@ -574,36 +566,33 @@ export function createCFRuntime(
     },
   }, machineShells));
 
-  const resolveTurnProfile = hooks.resolveProfile;
-  const fastLane = laneOf('fast');
-
-  const runtime: CFRuntime = {
-    actor: actor.actor,
-    storage: { vfs: agentFileVfs, home: hooks.workspaceExecution?.home ?? WORKSPACE_ROOT, sql, execRaw, transactionSync: write => access.ctx.storage.transactionSync(write) },
-    agentStateVfs: originVfs,
-    toolFiles,
-    planes,
-    startupWork,
-    memory, executor, llm, schedule, identity, craftStore,
-    get judgeModel() { return profileLane('judge'); },
-    get fastLlm() { return profileLane('fast'); },
-    ...(resolveTurnProfile !== undefined && fastLane !== undefined && {
+  const runtime: CFRuntime = Object.assign(buildRuntime({
+    actor: actor.actor, scaffoldPath: actor.scaffoldPath,
+    sql, execRaw, transactionSync: (write) => access.ctx.storage.transactionSync(write),
+    vfs: agentFileVfs, home, agentStateVfs: originVfs, toolFiles, planes,
+    memory, executor, llm, schedule, craftStore,
+    ...(modelLanes !== undefined && {
+      modelLanes,
       decide: decisionPortOf(createDecisionPort({
         run: decisionRunOf({ env, userDO: userCredentialSourceFor(env, actor) }),
-        model: async () => (await resolveTurnProfile()).decisionModel,
+        model: async () => (await modelLanes.resolveProfile()).decisionModel,
         report: hooks.reportModelCall,
         refusals: hooks.refusals,
-      }), createStructuredDecider(actor.actor, fastLane)),
+      }), createStructuredDecider(actor.actor, modelLanes)),
     }),
     executionRouter,
     shell,
+  }), {
+    // The reflection lane as built here: routed, so it answers to a schema.
+    llm,
+    startupWork,
     localVfs: baseWorkspaceVfs,
     deviceTransport,
     vectorStore,
     forgetMemoryVectors: () => forgetMemoryVectors(memoryStore, { store: vectorStore }),
     sandboxHandle,
     processRetry: processRetryTool(executionBox),
-    portHolders: () => {
+    portHolders: (): PortHolders => {
       const box = hooks.boxUse.used && previewSuffix !== undefined && sandboxHandle !== null ? sandboxHandle : null;
       let workspace: Promise<WorkspaceServing> | undefined;
       let sandbox: Promise<readonly number[]> | undefined;
@@ -624,7 +613,7 @@ export function createCFRuntime(
         answersFor: async () => (box === null ? workspaceServingScope(await served()) : null),
       };
     },
-  };
+  });
 
   runtime.release = unmount;
 
@@ -693,7 +682,6 @@ interface ProfileLaneOptions {
   readonly env: Env;
   readonly actor: ActorRuntimeIdentity;
   readonly resolveProfile: (() => Promise<ResolvedTurnProfile>) | undefined;
-  readonly source: FixedTierSource;
   readonly report: ModelCallSink;
   readonly modelOperations: ModelOperationSink;
   readonly currentTurn: ((reference: ActorReference) => string | null) | undefined;
@@ -703,20 +691,21 @@ interface ProfileLaneOptions {
 
 /** Only a completed call reports: a thrown seam was not billed. */
 function profileLaneComponents(options: ProfileLaneOptions): ModelLaneComponents | undefined {
-  const { resolveProfile, source, report, refusals } = options;
+  const { resolveProfile, report, refusals } = options;
 
   if (!resolveProfile) return undefined;
 
   return {
     resolveProfile,
     refusals,
+    // Which credential pays a spec; the app title a registry sends is no part of it.
     attemptOf: (spec) => {
-      const agent = actorProviderRegistry(options, `Kinu (${source})`);
+      const agent = actorProviderRegistry(options, 'Kinu');
 
       return agent.registry.attemptFor(agent.normalizeSpecSync(spec), agent.deps);
     },
     llm: (route) => routedLlm((serving) => {
-      const registry = actorProviderRegistry(options, `Kinu (${source})`);
+      const registry = actorProviderRegistry(options, `Kinu (${route.source})`);
 
       return bindRoute({
         normalize: (spec) => registry.normalizeSpecSync(spec),
@@ -738,18 +727,3 @@ function createRealSchedule(access: Pick<CFRuntimeAccess, 'holdLane'>, sql: SqlE
     fiber: <T>(name: string, fn: (ctx: FiberCtx) => Promise<T>): Promise<T> => fiber(name, (ctx) => access.holdLane(() => fn(ctx))),
   };
 }
-
-function createIdentity(
-  actor: ActorHandle,
-  vfs: CoreVFS,
-  sql: SqlExecutor,
-  scaffoldPath: string,
-): Identity {
-  return {
-    id: actor.actorId,
-    name: actor.name,
-    // `.vN` files are canonical; reads resolve pointer-first so a stale live view is healed.
-    scaffold: createScaffoldSurface({ vfs, sql, actor, path: scaffoldPath }),
-  };
-}
-

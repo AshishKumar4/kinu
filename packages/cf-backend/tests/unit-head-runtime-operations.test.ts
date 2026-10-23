@@ -89,7 +89,6 @@ const neverHost: HostedActorSeams = {
   jobSeat() { throw new Error("mergeLLM reached a job runner's seat"); },
   retireJobs() { throw new Error("mergeLLM retired an actor's jobs"); },
   temporary() { throw new Error('mergeLLM reached the task-hire port'); },
-  rederiveWake() { throw new Error('mergeLLM re-derived the wake'); },
 };
 
 function runtimeWith(text: string) {

@@ -232,13 +232,13 @@ describe('Mail', () => {
     });
   });
 
-  test('Important offers the assistant when absent and its modal leads to Explore', async () => {
+  test("Important offers the assistant when absent, and its modal's Install opens the assistant's install", async () => {
     await withGallery(async (gallery) => {
       const page = await open(gallery, '&assistant=none');
       expect(await page.$('[data-mail-no-assistant]')).not.toBeNull();
       await action(page, 'Set up your assistant');
       await page.waitForSelector('[role="dialog"]');
-      expect(await page.$eval('[role="dialog"] a', (link) => link.getAttribute('href'))).toBe('/explore');
+      expect(await page.$eval('[role="dialog"] a', (link) => link.getAttribute('href'))).toBe('/explore/workspaces/personal-assistant?install');
       await page.close();
     });
   });

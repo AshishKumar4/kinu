@@ -133,8 +133,14 @@ export class HeapDriver extends DurableObject<DriverEnv> {
   }
 }
 
+/** Each advisor request's length, as it arrived. */
+const ADVISOR_BYTES: number[] = [];
+
+/** Each stepped turn request's length on the OpenAI-compatible path, as it arrived. */
+const STEP_REQUEST_BYTES: number[] = [];
+
 /** What the model answers and whether it answers yet; module state, which the entrypoint and fetch share. */
-const model = { answerBytes: 0, holding: false, parked: 0, calls: 0, wide: new Set<string>(), toolSteps: 0, stepBytes: 0, screenshots: 0, stepping: false, arrived: 0, released: 0, hires: 0, subagentsAnswered: 0, holdSubagent: false, subagentParked: false, nest: false, failingSteps: 0, failingAsked: 0, stepped: { binding: 0, compat: 0 }, advisorCalls: 0 };
+const model = { answerBytes: 0, holding: false, parked: 0, calls: 0, wide: new Set<string>(), toolSteps: 0, stepBytes: 0, screenshots: 0, stepping: false, arrived: 0, released: 0, hires: 0, subagentsAnswered: 0, holdSubagent: false, subagentParked: false, nest: false, failingSteps: 0, failingAsked: 0, stepped: { binding: 0, compat: 0 }, advisorCalls: 0, advisorBytes: ADVISOR_BYTES, stepRequestBytes: STEP_REQUEST_BYTES };
 
 /** The advisor's own model calls, which offer its `advise` tool: none is a step of the turn it reviews, so none takes a
  *  scripted step. */
@@ -178,8 +184,11 @@ type BindingInputs = { readonly stream?: boolean; readonly messages?: readonly o
  */
 function laneAnswer(inputs: BindingInputs): string | null {
   // The advisor's review, answered at once with silence: the measured cost is its being there, not what it says.
-  if (asksAdvisor(JSON.stringify(inputs))) {
+  const asked = JSON.stringify(inputs);
+
+  if (asksAdvisor(asked)) {
     model.advisorCalls += 1;
+    model.advisorBytes.push(asked.length);
 
     return `data: ${JSON.stringify({ response: '' })}\n\n${USAGE}data: [DONE]\n\n`;
   }
@@ -305,6 +314,7 @@ async function compatAnswer(body: string): Promise<Response> {
   // The advisor's review, answered at once with silence: the measured cost is its being there, not what it says.
   if (asksAdvisor(body)) {
     model.advisorCalls += 1;
+    model.advisorBytes.push(body.length);
     const out = compatBody({ text: '' }, asked);
 
     return new Response(out.body, { headers: { 'content-type': out.contentType } });
@@ -316,7 +326,10 @@ async function compatAnswer(body: string): Promise<Response> {
     model.parked += 1;
     const seq = model.stepping ? ++model.arrived : 0;
 
-    if (seq > 0) model.stepped.compat += 1;
+    if (seq > 0) {
+      model.stepped.compat += 1;
+      model.stepRequestBytes.push(body.length);
+    }
 
     while (model.holding || model.released < seq) await scheduler.wait(seq > 0 ? 2 : 20);
     model.parked -= 1;
@@ -360,6 +373,7 @@ function scriptModel(asked: URLSearchParams): Response {
     model.arrived = 0;
     model.released = 0;
     model.stepped = { binding: 0, compat: 0 };
+    model.stepRequestBytes.length = 0;
   }
 
   if (asked.has('released')) model.released = Number(asked.get('released'));
@@ -384,7 +398,7 @@ function scriptModel(asked: URLSearchParams): Response {
     model.stepping = false;
   }
 
-  return Response.json({ parked: model.parked, calls: model.calls, wide: [...model.wide], arrived: model.arrived, subagentsAnswered: model.subagentsAnswered, subagentParked: model.subagentParked, failingSteps: model.failingSteps, stepped: model.stepped, advisorCalls: model.advisorCalls });
+  return Response.json({ parked: model.parked, calls: model.calls, wide: [...model.wide], arrived: model.arrived, subagentsAnswered: model.subagentsAnswered, subagentParked: model.subagentParked, failingSteps: model.failingSteps, stepped: model.stepped, advisorCalls: model.advisorCalls, advisorBytes: model.advisorBytes, stepRequestBytes: model.stepRequestBytes });
 }
 
 export default {

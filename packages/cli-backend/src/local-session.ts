@@ -1002,7 +1002,7 @@ export class LocalAgentSession {
   }
 
   getEvolutionChangelog(limit = 50): EvolutionChangelogView {
-    return getEvolutionChangelog(this.rt.storage.sql, this.rt.actor, limit);
+    return getEvolutionChangelog(this.rt.storage.sql, this.rt.actor, { limit, approvals: this.instructionApprovals });
   }
 
   markChangelogSeen(): ReturnType<typeof markChangelogSeen> {

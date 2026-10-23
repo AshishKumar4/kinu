@@ -398,6 +398,11 @@ export class Telemetry {
     private readonly api?: string,
   ) {}
 
+  /** Where its window starts. */
+  get from(): number {
+    return this.args.from;
+  }
+
   /** The answer's JSON text; `result` parses it. A refusal is classified by its status (`restAnswer`). */
   async raw(body: QueryBody): Promise<string> {
     return await restAnswer({
@@ -684,6 +689,16 @@ const EVENT_CAP = 2000;
 /** Gaps are read over the window's last 6 hours: 24-hour windows came back unsampled, 7-day ones did not. */
 const CADENCE_WINDOW_MS = 6 * HOUR_MS;
 
+/**
+ * How far before a version's window the deletion of an object whose alarm the platform cancelled in it is read, by any
+ * version: the sleep-time lane's 10-minute idle wake, armed as a turn settles, is delivered about 10 min after a
+ * deletion that cleared it, across a deploy. Staging, 2026-10-23: eval workspaces destroyed under the version before,
+ * their deliveries `canceled` in the next version's window, each read as an idle wake: 089efcff destroyed 01:59:26Z,
+ * delivered 02:06:37Z (8769744f6); 5dd5bb6f 02:15:15Z, 02:25:08Z; f7bfb673 02:15:55Z, 02:25:43Z; b303d01d 02:16:06Z,
+ * 02:25:45Z (613467d1a). A day reads unsampled (as {@link CADENCE_WINDOW_MS} says), and one object's rows a few.
+ */
+const DELETION_LOOKBACK_MS = 24 * HOUR_MS;
+
 async function timeline(t: Telemetry, args: Args): Promise<void> {
   const target = await resolveObject(t, args.target ?? '');
   const scope = [eq(DO_ID, target.id)];
@@ -864,7 +879,7 @@ export interface EffectSample {
 
 /** An effect's events that say whether it waits on the owner: parked, or failed some other way since. */
 const EFFECT_MARKS: ReadonlyMap<string, 'parked' | 'failed'> = new Map([
-  ['turn.terminal_effect_parked', 'parked'], ['turn.terminal_effect_failed', 'failed'], ['turn.terminal_effect_blocked', 'failed'],
+  ['turn.terminal_effect_parked', 'parked'], ['turn.terminal_effect_failed', 'failed'], ['turn.terminal_effect_retired', 'failed'],
 ]);
 
 export interface TerminalEffectStates {
@@ -1041,7 +1056,8 @@ export interface ObjectHourCount { readonly object: string; readonly hour: numbe
  * (`global-scope.c++` 845-848; `actor-sqlite.c++` 1023-1074 cancels one whose stored alarm is null), and a deletion
  * clears the alarm. Staging c6dc27da1, 2026-10-13: 13 eval workspaces each got one such delivery 9:54-10:00 min after
  * their `destroyed` (21:09-21:13Z), and the gate read each as an idle wake. An alarm that ran (`ok`, `exception`, a
- * platform kill) still counts, after a deletion or not: that is a re-arm.
+ * platform kill) still counts, after a deletion or not: that is a re-arm. The deletion can be the version before's
+ * ({@link DELETION_LOOKBACK_MS}).
  */
 export function alarmsThatRan(
   alarms: readonly ObjectMinuteCount[], canceled: readonly ObjectMinuteCount[], destroyedAt: ReadonlyMap<string, number>,
@@ -1314,10 +1330,11 @@ export async function versionRead(t: Telemetry, around: Telemetry, versionId: st
   // destroy it called, which the destroyed object's own rows can be missing.
   const { events: destroyedRows } = await t.events([...scope, eq('$metadata.message', 'destroyed')], EVENT_CAP);
   const { events: teardownRows } = await t.events([...scope, eq('event', 'workspace.destroyed')], EVENT_CAP);
-  const destroyedAt = deletionTimes(destroyedRows, teardownRows);
-
   const alarm = [...invocations, eq('$workers.eventType', 'alarm')];
-  const alarms = alarmsThatRan(await perMinute(t, alarm), await perMinute(t, [...alarm, eq('$workers.outcome', 'canceled')]), destroyedAt);
+  const canceled = await perMinute(t, [...alarm, eq('$workers.outcome', 'canceled')]);
+  const earlier = await deletionRowsOf(t, [...new Set(canceled.map((row) => row.object))]);
+  const destroyedAt = deletionTimes([...destroyedRows, ...earlier.aborted], [...teardownRows, ...earlier.tornDown]);
+  const alarms = alarmsThatRan(await perMinute(t, alarm), canceled, destroyedAt);
   const called = await perMinute(around, [...invocations, { key: '$workers.eventType', operation: 'neq', value: 'alarm', type: 'string' }]);
   const modelCalls = await perMinute(around, [...scope, eq('$metadata.type', 'cf-worker'), eq('event', 'provider.stream_opened')]);
   // An alarm's own work, as each alarm names it ({@link ALARM_WORK_EVENTS}): a teardown, a run's expiry, a sweep
@@ -1355,6 +1372,19 @@ async function windowRows(t: Telemetry, versionId: string): Promise<number> {
 }
 
 /** Per object and minute. */
+/** The deletion rows of each of `objects`, by any version, from {@link DELETION_LOOKBACK_MS} before `t`'s window. */
+async function deletionRowsOf(t: Telemetry, objects: readonly string[]): Promise<{ aborted: TelemetryEvent[]; tornDown: TelemetryEvent[] }> {
+  const read = await Promise.all(objects.map(async (object) => {
+    const from = t.from - DELETION_LOOKBACK_MS;
+    const { events: aborted } = await t.events([eq(DO_ID, object), eq('$metadata.message', 'destroyed')], EVENT_CAP, from);
+    const { events: tornDown } = await t.events([eq('event', 'workspace.destroyed'), eq('fields.object', object)], EVENT_CAP, from);
+
+    return { aborted, tornDown };
+  }));
+
+  return { aborted: read.flatMap((rows) => rows.aborted), tornDown: read.flatMap((rows) => rows.tornDown) };
+}
+
 async function perMinute(t: Telemetry, filters: readonly Filter[]): Promise<ObjectMinuteCount[]> {
   const rows = await t.buckets({ filters, groupBy: [DO_ID], limit: MINUTE_GROUPS_CAP }, MINUTE_MS);
 

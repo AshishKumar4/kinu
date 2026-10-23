@@ -160,6 +160,15 @@ export function openSocketAs(origin: string, headers: Readonly<Record<string, st
     }
 
     turn.recorder.apply(frame.frame);
+    const refused = turn.recorder.refusal();
+
+    if (refused !== null) {
+      turns.delete(frame.frame.id);
+      turn.reject(refused);
+
+      return;
+    }
+
     const settled = turn.recorder.settled();
 
     // The turn is over on the DO's `done` frame, sent once its answer is

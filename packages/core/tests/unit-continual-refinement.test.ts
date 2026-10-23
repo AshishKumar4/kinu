@@ -18,6 +18,7 @@ import { initLessonTables } from '../src/evolution/lessons';
 import { initTurnRatingTables, rateTurn } from '../src/evolution/ratings';
 import { dreamChangesFor, renderWatch } from '../src/evolution/watch';
 import { buildChangelog, executeChangelogRevert } from '../src/evolution/changelog';
+import { STANDING_TEXT } from '../src/evolution/change-standing';
 import {
   artifactEditRefusal, artifactOverrides, currentArtifacts, listArtifactVersions, revertArtifact, sectionArtifact, stageArtifact, toolArtifact,
   turnArtifacts,
@@ -2244,6 +2245,35 @@ describe('the quote gate — substantive, the user\'s own, and carried into the 
     expect(route.disposition).toBe('applied');
   });
 
+  test('a dream\'s skill its trust put in effect reads as in effect in the changelog, and still offers its revert', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const deps = fx.deps(scriptedRefiner(proposalText(skillProposal(BREVITY_SKILL))).port);
+    const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
+    await advanceRefinementLane(deps);
+    await activateDreamSkills(deps);
+    await advanceRefinementLane(deps);
+
+    const card = present(buildChangelog(fx.rt.storage.sql, fx.rt.actor, { approvals: fx.approvals })
+      .find((entry) => entry.id.startsWith(`refinement:${opened.id}`)), 'the dream card');
+
+    const item = present(card.items?.[0], 'the skill\'s item');
+    expect(item.summary).toEndWith(STANDING_TEXT.in_effect);
+    const revert = present(item.revert, 'the skill\'s revert');
+    expect(revert).toEqual({ type: 'skill_revert', target: `${opened.id}#0` });
+
+    // Reverted, then put back by the owner on the same bytes: the skill is in effect, but the owner's, not the dream's.
+    const events = new RunEventRecorder(fx.rt.storage.sql, fx.rt.actor);
+    expect((await executeChangelogRevert({ rt: fx.rt, facts: fx.facts, events, skills: { approvals: fx.approvals, skillsVfs: fx.rt.agentStateVfs } }, revert)).ok).toBe(true);
+
+    fx.approvals.approve(BREVITY_PATH, instructionDigest(BREVITY_SKILL));
+
+    const restored = present(buildChangelog(fx.rt.storage.sql, fx.rt.actor, { approvals: fx.approvals })
+      .find((entry) => entry.id.startsWith(`refinement:${opened.id}`))?.items?.[0], 'the restored skill\'s item');
+
+    expect(restored.revert).toBeUndefined();
+  });
+
   test('the agent\'s OWN words are not user evidence', async () => {
     // Sourced from the agent's own response: refused.
     const route = await routeQuote('a long rambling answer that nobody asked for');
@@ -2271,6 +2301,25 @@ describe('the quote gate — substantive, the user\'s own, and carried into the 
     // The child carries the owner's revert.
     expect(card?.items?.[0]?.revert).toEqual({ type: 'fact_forget', target: 'user.answer_length' });
     expect(card?.revert).toBeUndefined();
+  });
+});
+
+describe('a dream\'s fact another writer has since written', () => {
+  test('is the writer\'s: the changelog offers no revert that would forget it', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const deps = fx.deps(scriptedRefiner(proposalText(FACT_PROPOSAL)).port);
+    const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
+    await advanceRefinementLane(deps);
+
+    fx.facts.upsert('user.answer_length', 'three paragraphs', { source: 'user' });
+
+    const card = present(buildChangelog(fx.rt.storage.sql, fx.rt.actor, { limit: 50 })
+      .find((entry) => entry.id.startsWith(`refinement:${opened.id}`)), 'the dream card');
+
+    const item = present(card.items?.[0], 'the fact\'s item');
+    expect(item.revert).toBeUndefined();
+    expect(item.summary).toEndWith(STANDING_TEXT.replaced);
   });
 });
 

@@ -19,6 +19,7 @@ import {
   type ExplorationRecord, type Floor, type ObjectiveDirection, type ObjectiveIdentity,
   type PublicationState, type VerifierSpec,
 } from './objective';
+import { ObjectiveDirectionSchema, ObjectiveScaleSchema } from '../types/objective';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 
@@ -337,8 +338,8 @@ export interface StoredObjective {
 const StoredIdentitySchema: v.GenericSchema<ObjectiveIdentity> = v.object({
   metric: v.string(),
   unit: v.string(),
-  direction: v.picklist(['minimise', 'maximise']),
-  scale: v.picklist(['linear', 'log']),
+  direction: ObjectiveDirectionSchema,
+  scale: ObjectiveScaleSchema,
   verifierDigest: v.string(),
 });
 

@@ -121,6 +121,16 @@ describe('skill trust binds raw policy source', () => {
   });
 });
 
+  test('a skill saved with Windows line ends is the same skill', async () => {
+    const options = { admissionTokens: 10_000, trust: () => 'unverified' as const };
+    const unix = await discoverSkills(vfs(REVIEWED), options);
+    const windows = await discoverSkills(vfs(REVIEWED.replaceAll('\n', '\r\n')), options);
+
+    expect(windows.skills.map(({ name, description, allowed_tools }) => ({ name, description, allowed_tools })))
+      .toEqual(unix.skills.map(({ name, description, allowed_tools }) => ({ name, description, allowed_tools })));
+    expect(windows.skills.map(({ name }) => name)).toContain('deploy');
+  });
+
   test('an unapproved description never enters the system skills index', async () => {
     const source = `---
 name: deploy

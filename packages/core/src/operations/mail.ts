@@ -7,14 +7,14 @@
 import * as v from 'valibot';
 import { defineOperation, described } from './operation';
 import { mailThreadText } from '../mail/words';
-import { MAIL_MESSAGE_FIELDS, mailText } from '../mail/message';
+import { MAIL_MESSAGE_FIELDS, MailBoxPath, mailText } from '../mail/message';
 
 const Party = v.strictObject({ name: v.nullable(v.string()), address: v.string() });
 
 /** One of the boxes the agent reads, by its path: '' the person's, `<workspace>` a workspace's, `<agent>.<workspace>` an agent's. */
 const ThreadId = v.pipe(v.string(), v.nonEmpty());
 
-const BoxPath = described(v.pipe(v.string(), v.maxLength(41)), 'A box you read, by its path; default your own.');
+const BoxPath = described(MailBoxPath, 'A box you read, by its path; default your own.');
 
 const Message = {
   to: described(MAIL_MESSAGE_FIELDS.to, 'Recipients.'),

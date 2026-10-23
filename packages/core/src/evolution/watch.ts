@@ -18,7 +18,9 @@ import { evidenceWindow } from '../utils/evidence-window';
 import { diagnostics } from '../obs/index';
 import { RunEventRecorder } from '../events/recorder';
 import { artifactLabel, artifactVersion } from './artifacts';
-import { changeOwners, changeStanding, scaffoldStanding, type ChangeOwners, type ChangeStanding, type Standing } from './change-standing';
+import {
+  changeOwners, changeStanding, scaffoldStanding, STANDING_TEXT, type ChangeOwners, type ChangeStanding, type Standing,
+} from './change-standing';
 import { executeChangelogRevert, type ChangelogRevertAction } from './changelog';
 import { isCorrected, isLowRating, listRejections, listTurnRatings, type TurnRating } from './ratings';
 import {
@@ -146,14 +148,6 @@ function dreamRoutes({ sql, actor }: ChangeOwners, dreams: number): Routed[] {
     return edit === undefined ? [] : [{ request, route, edit, index }];
   }));
 }
-
-const STANDING_TEXT = {
-  refused: 'refused',
-  waiting: 'waiting for a cold turn',
-  in_effect: 'in effect',
-  reverted: 'reverted',
-  replaced: 'replaced by a later version',
-} as const satisfies Record<ChangeStanding, string>;
 
 interface Watched {
   readonly what: string;

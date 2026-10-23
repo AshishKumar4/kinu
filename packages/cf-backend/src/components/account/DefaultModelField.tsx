@@ -1,7 +1,7 @@
 import { Effect } from "effect";
 import { useCallback, useState } from "react";
 import { Loader } from "@/components/ui/Loader";
-import type { ProfileCatalogEnvelope } from "@kinu.run/core";
+import { retargetedTier, specWithoutAccount, type ModelMenuResponse, type ProfileCatalogEnvelope } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
 import { ModelPicker } from "@/components/ModelPicker";
 import { CardSlot } from "@/components/ui/CardSlot";
@@ -17,8 +17,9 @@ export function DefaultModelField() {
   const reloadMenu = menu.reload;
   const publish = catalog.set;
 
-  const choose = useCallback((envelope: ProfileCatalogEnvelope, model: string) => {
-    const tiers = { ...envelope.catalog.tiers, default: { ...envelope.catalog.tiers.default, model } };
+  const choose = useCallback((envelope: ProfileCatalogEnvelope, listing: ModelMenuResponse, model: string) => {
+    const declared = listing.models.find((entry) => entry.spec === specWithoutAccount(model))?.reasoningEfforts;
+    const tiers = { ...envelope.catalog.tiers, default: retargetedTier(envelope.catalog.tiers.default, model, declared) };
 
     setSaving(true);
     setError(null);
@@ -43,7 +44,7 @@ export function DefaultModelField() {
           ) : (
             <div className="space-y-2" data-default-model={envelope.catalog.tiers.default.model}>
               <ModelPicker models={models.models} failures={models.failures} accounts={models.accounts}
-                value={envelope.catalog.tiers.default.model} onChange={(model) => choose(envelope, model)}
+                value={envelope.catalog.tiers.default.model} onChange={(model) => choose(envelope, models, model)}
                 label="Default model" className="w-full" disabled={saving} />
               <p className="t-meta p-text-3 flex items-center gap-2">
                 {saving && <Loader size="sm" />}

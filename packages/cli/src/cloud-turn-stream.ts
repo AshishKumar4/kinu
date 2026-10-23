@@ -7,6 +7,7 @@ import {
 import { tolerate } from '@kinu.run/core/obs';
 import { asRecord } from './options';
 import type { AgentClientEvent, AgentSendResult, AgentTurnResult } from './agent-client';
+import { TurnCalls } from './turn-calls';
 
 export class CloudTurnStream {
   private readonly startedAt = Date.now();
@@ -14,8 +15,7 @@ export class CloudTurnStream {
   /** How much of `text` the finished steps wrote: a cut step's output is retracted back to it. */
   private stepText = 0;
   private steps = 0;
-  private readonly toolCalls: AgentTurnResult['toolCalls'] = [];
-  private readonly toolById = new Map<string, AgentTurnResult['toolCalls'][number]>();
+  private readonly calls = new TurnCalls();
 
   /** Turn-start owed only if the server answers with a stream; null once announced. */
   private deferredStart: string | null;
@@ -25,13 +25,19 @@ export class CloudTurnStream {
   private readonly reject: (refusal: Error) => void;
 
   constructor(
-    private readonly emit: (event: AgentClientEvent) => void,
+    private readonly sink: (event: AgentClientEvent) => void,
     send: { readonly resolve: (result: AgentSendResult) => void; readonly reject: (refusal: Error) => void },
     opts: { readonly deferStart: string | null } = { deferStart: null },
   ) {
     this.resolve = send.resolve;
     this.reject = send.reject;
     this.deferredStart = opts.deferStart;
+  }
+
+  /** Every event the stream says, its tool calls kept as it says them. */
+  private emit(event: AgentClientEvent): void {
+    this.calls.observe(event);
+    this.sink(event);
   }
 
   /**
@@ -80,7 +86,7 @@ export class CloudTurnStream {
 
     const result: AgentTurnResult = {
       text: this.text,
-      toolCalls: this.toolCalls,
+      toolCalls: this.calls.calls,
       steps: this.steps,
       durationMs: Date.now() - this.startedAt,
       hadError,
@@ -114,10 +120,7 @@ export class CloudTurnStream {
         const toolName = jsonString(chunk.toolName, 'tool');
         const toolCallId = jsonString(chunk.toolCallId, '');
         const args = asRecord({ value: chunk.input ?? null }, 'input');
-        const call = { name: toolName, args, result: undefined };
-        this.toolCalls.push(call);
 
-        if (toolCallId) this.toolById.set(toolCallId, call);
         this.emit({ type: 'tool-call', toolName, toolCallId, args });
 
         return;
@@ -126,7 +129,6 @@ export class CloudTurnStream {
       case 'tool-output-available':
       case 'tool-output-error': {
         const toolCallId = jsonString(chunk.toolCallId, '');
-        const call = this.toolById.get(toolCallId);
 
         const toolResult = type === 'tool-output-error'
           ? jsonErrorMessage(chunk.errorText, 'tool error')
@@ -136,10 +138,8 @@ export class CloudTurnStream {
           ? { success: false, reason: null } satisfies ToolOutcome
           : { success: true } satisfies ToolOutcome;
 
-        if (call) { call.result = toolResult; call.outcome = outcome; }
-
         this.emit({
-          type: 'tool-result', toolName: call?.name ?? 'tool', toolCallId, result: toolResult,
+          type: 'tool-result', toolName: this.calls.nameOf(toolCallId) ?? 'tool', toolCallId, result: toolResult,
           ...outcome,
         });
 

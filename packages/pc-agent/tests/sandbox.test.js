@@ -31,6 +31,21 @@ const sandbox = require('../src/sandbox.js');
 
 const landlock = require('../src/daemon/landlock.js');
 
+/**
+ * A blind spot a test met, said beside its green exit: to the row's notices when a runner keeps them (scripts/deadline.ts
+ * ROW_NOTICES_ENV, as scripts/row-verdicts.ts rowNotice writes them), else printed. Armada's guest kernel (Cloudflare
+ * Containers' microVM, 6.18) has no Landlock (the syscall answers ENOSYS), so its tier never runs the Landlock seal.
+ */
+function blindSpot(notice) {
+  const file = process.env.KINU_ROW_NOTICES;
+
+  if (file === undefined || file === '') console.log(`notice: ${notice}`);
+  else fs.appendFileSync(file, `${notice}\n`);
+}
+
+const NO_LANDLOCK = 'the Landlock seal did not run: this kernel has no Landlock ABI 2 (armada\'s microVM answers ENOSYS), so a sealed home '
+  + 'was sealed by mounts; the Landlock path is proven on a kernel that has it (gcp-vm, 2026-10-23)';
+
 const LINUX = process.platform === 'linux';
 
 /** One sandboxed command, run the way the supervisor runs it. */
@@ -474,7 +489,11 @@ describe('the device sandbox, as the kernel enforces it', () => {
       'mktemp > /dev/null && echo temp-made',
     ].join('; '));
 
-    if (plan.seal !== 'landlock') return;
+    if (plan.seal !== 'landlock') {
+      blindSpot(NO_LANDLOCK);
+
+      return;
+    }
 
     expect({
       printed,
@@ -507,7 +526,14 @@ describe('the device sandbox, as the kernel enforces it', () => {
   });
 
   test('the seal launcher runs nothing when it cannot seal, and in force it lets nothing new into the sealed folder', () => {
-    if (!LINUX || landlock.landlockAbi() < landlock.SEAL_ABI) return;
+    if (!LINUX) return;
+
+    if (landlock.landlockAbi() < landlock.SEAL_ABI) {
+      blindSpot(NO_LANDLOCK);
+
+      return;
+    }
+
     const dir = scratchDir('seal-launcher');
 
     fs.mkdirSync(path.join(dir, 'sub'));

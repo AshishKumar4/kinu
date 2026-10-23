@@ -7,7 +7,38 @@
  * under the grant epoch it was given in. The columns after `surface` are one kind's.
  */
 
+import { Effect, Result } from 'effect';
+import { KinuError } from '../obs/index';
 import type { RawSqlExec } from '../types/primitives';
+import type { AgentSignal } from '../types/signals';
+
+/**
+ * The agents an answer is for, each woken once with its own asks, every one tried, as both kinds wake them: the answers
+ * are already durable, and one asker's failed wake (an agent retired meanwhile) is no reason another goes untold. The
+ * failures are the answer's, after: one as itself, several as one naming each. An ask no agent made wakes nobody.
+ */
+export function wakeEachAsker<Ask>(input: {
+  readonly answered: readonly Ask[];
+  readonly askerOf: (ask: Ask) => string | undefined;
+  readonly signal: (own: readonly Ask[]) => AgentSignal;
+  readonly wake: (actorId: string, signal: AgentSignal) => Effect.Effect<void, KinuError>;
+}): Effect.Effect<void, KinuError> {
+  const { answered, askerOf } = input;
+  const askers = new Set(answered.flatMap((ask) => askerOf(ask) ?? []));
+
+  const woken = Effect.forEach(askers, (actorId) => Effect.result(input.wake(actorId, input.signal(answered.filter((ask) => askerOf(ask) === actorId)))));
+
+  return Effect.flatMap(woken, (results) => {
+    const failed = results.flatMap((result) => (Result.isFailure(result) ? [result.failure] : []));
+    const [first] = failed;
+
+    if (first === undefined) return Effect.void;
+
+    return Effect.fail(failed.length === 1 ? first : new KinuError(
+      first.code, `${String(failed.length)} agents were not told of the decision: ${failed.map((error) => error.message).join('; ')}`,
+    ));
+  });
+}
 
 export function initOwnerRequestsTable(execRaw: RawSqlExec): void {
   // `id` is an action's within its actor, a device ask's within the workspace. An action's `rule_hits` are the rules it

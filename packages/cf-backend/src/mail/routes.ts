@@ -14,7 +14,7 @@ import { Hono, type Context } from 'hono';
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import {
-  err, importantMail, json, MAIL_MESSAGE_FIELDS, mailDeploymentAliases, mailUsernameRefusal, MAIL_VIEWS, MAIL_WAKES, MailAddress, mailText, mailThreadText, objectNamed, ownerCaller, safeJson,
+  err, importantMail, json, MAIL_MESSAGE_FIELDS, mailDeploymentAliases, mailUsernameRefusal, MAIL_VIEWS, MAIL_WAKES, MailAddress, MailBoxPath, mailText, mailThreadText, objectNamed, ownerCaller, safeJson,
   type MailListQuery, type ObjectNamespace, type OwnerCapabilityEnv,
 } from '@kinu.run/core';
 import { attempt, diagnostics, settle } from '@kinu.run/core/obs';
@@ -43,7 +43,7 @@ export interface MailRoutesEnv extends OwnerCapabilityEnv {
 type MailContext = Context<FamilyEnv<MailRoutesEnv>>;
 
 const Outgoing = v.object({
-  path: v.pipe(v.string(), v.maxLength(41)),
+  path: MailBoxPath,
   ...MAIL_MESSAGE_FIELDS,
   text: mailText('person'),
   inReplyTo: v.optional(v.nullable(v.string())),
@@ -57,7 +57,7 @@ const Change = v.strictObject({ read: v.optional(v.boolean()), trashed: v.option
 const Handed = v.object({ thread: v.pipe(v.string(), v.nonEmpty(), v.maxLength(64)) });
 
 const Wake = v.object({
-  path: v.pipe(v.string(), v.maxLength(41)),
+  path: MailBoxPath,
   wake: v.picklist(MAIL_WAKES),
   allow: v.optional(v.pipe(v.array(MailAddress), v.maxLength(200))),
 });

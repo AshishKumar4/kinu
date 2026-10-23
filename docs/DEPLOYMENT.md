@@ -487,7 +487,7 @@ What meets it:
 
 - A full-reset deploy, which recreates the product's classes.
 - The promote that first creates sharing's classes, `SlateRoom` and `GalleryDO`.
-- Any fixture that creates its own Worker. The devbox contract fixture is created once, as `kinu-devbox-contracts-staging`, and each run deploys it again (`scripts/fixtures/devbox-e2e/fixture.ts`). The per-run Workers it replaced met this window in 8 of 153 runs from 2026-10-09 to 2026-10-16.
+- Any fixture that creates its own Worker. The devbox contract fixture is created once, as `kinu-devbox-contracts-staging` for a deploy's own golden row and `kinu-devbox-contracts-lanes` for every other run (a lane proving a branch), and each run deploys its one again (`scripts/fixtures/devbox-e2e/fixture.ts`). One run holds each at a time; three staging deploys on 2026-10-22 went red waiting on a lane's run when they shared one. The per-run Workers it replaced met this window in 8 of 153 runs from 2026-10-09 to 2026-10-16.
 
 ## Deploy script
 

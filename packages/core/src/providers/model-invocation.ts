@@ -5,7 +5,7 @@
  */
 
 import { generateText, JSONParseError, jsonSchema, NoObjectGeneratedError, Output, streamText, TypeValidationError } from 'ai';
-import { toJsonSchema } from '@valibot/to-json-schema';
+import { toJsonSchema, type JsonSchema } from '@valibot/to-json-schema';
 import * as v from 'valibot';
 import { Cause, Effect } from 'effect';
 import { KinuError, settle } from '../obs/index';
@@ -93,18 +93,31 @@ export function generateReported(
 const NON_STRICT: ProviderOptions = { openai: { strictJsonSchema: false }, openaiCompatible: { strictJsonSchema: false } };
 
 /**
+ * An open value (`v.unknown()`, `JsonValueSchema`), which `toJsonSchema` makes `{}`: Anthropic's decoder refuses that
+ * before any answer ("Empty schema ({}) that accepts any JSON value is not supported"; staging's sleep-time pass on
+ * claude-haiku-5-5, 2026-10-23), so it goes as the six JSON types. Each is a member of its own, which the Anthropic SDK
+ * closes as that decoder requires of an object; a list of types it would not, and the decoder refuses that too.
+ */
+const OPEN_VALUE: JsonSchema = { anyOf: [{ type: 'string' }, { type: 'number' }, { type: 'boolean' }, { type: 'null' }, { type: 'array' }, { type: 'object' }] };
+
+/** `schema` as the JSON Schema a provider is sent, an open value in it as {@link OPEN_VALUE}. */
+function sentSchema(schema: v.GenericSchema): JsonSchema {
+  return toJsonSchema(schema, { errorMode: 'ignore', overrideSchema: ({ jsonSchema: converted }) => (Object.keys(converted).length === 0 ? OPEN_VALUE : undefined) });
+}
+
+/**
  * One answer of `schema`'s shape, through the model's structured output: the provider is sent the schema as JSON
- * Schema (`toJsonSchema`; a value it cannot express, as a JSON value, is any value there), and the answer is read back
- * through `schema` itself. A generate, filed as {@link generateReported} files one: nothing of it is read until it is
- * whole, so a provider that streams its generates (Workers AI, whose silent requests end at 10 minutes with a 408,
- * `WORKERS_AI_STREAMS_GENERATE`) asks again for one its stream cut part way. An answer off the schema was billed and is
- * no answer: it fails `bad_input`, as a wrong answer does, and is not asked of another model; an answer stopped at the
- * output limit fails `unavailable`.
+ * Schema (`toJsonSchema`; a value it cannot express, as a JSON value, is any value there, {@link OPEN_VALUE}), and the
+ * answer is read back through `schema` itself. A generate, filed as {@link generateReported} files one: nothing of it
+ * is read until it is whole, so a provider that streams its generates (Workers AI, whose silent requests end at 10
+ * minutes with a 408, `WORKERS_AI_STREAMS_GENERATE`) asks again for one its stream cut part way. An answer off the
+ * schema was billed and is no answer: it fails `bad_input`, as a wrong answer does, and is not asked of another model;
+ * an answer stopped at the output limit fails `unavailable`.
  */
 export function generateObjectReported<S extends v.GenericSchema>(request: ObjectRequest, schema: S, call: ReportedCall): Promise<v.InferOutput<S>> {
   const asked: GenerateRequest = {
     ...request,
-    output: Output.object({ schema: jsonSchema(toJsonSchema(schema, { errorMode: 'ignore' })) }),
+    output: Output.object({ schema: jsonSchema(sentSchema(schema)) }),
     providerOptions: mergeProviderOptions(request.providerOptions, NON_STRICT),
   };
 

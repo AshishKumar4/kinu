@@ -251,12 +251,12 @@ describe('two real turns over the HTTP model seam', () => {
     expect(await driver().recoverRecording(workspace)).toEqual({ owed: [], open: 0, recorded: 1 });
   });
 
-  // A row a build with another effect set left owed is blocked by its name, never guessed at or dropped: it still
-  // holds its transition open for a person to resolve.
-  it('an effect this build does not implement is blocked by name and keeps its transition open', async () => {
+  // A row a build with another effect set left owed has no handler here, and no clock can give it one: it ends at its
+  // first pass, named as failed, and its transition settles.
+  it('an effect this build does not implement ends at its first pass and its transition settles', async () => {
     const alien = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('alien-effect-driver')).alienEffectIn();
 
-    expect(alien).toEqual({ status: 'blocked', transition: 'resumed' });
+    expect(alien).toEqual({ status: 'gone', transition: 'done' });
   });
 
   // An answer's page calls as its author as of each call, with nothing restarted in between: its write lands while the

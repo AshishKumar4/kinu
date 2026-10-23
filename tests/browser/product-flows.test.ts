@@ -21,12 +21,12 @@ import {
   driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState, openWaitsNamed, slateOpensFromSlates,
   slateSharesReachingNothing, slateShowsItsPreview, workspaceGetsFirstAnswer, writtenFileShowsInFilesAndChanges, changesStormStaysBounded,
   openMemoryFollowsItsWriter, computerDesktopSurvivesAResize, computerSwitchKeepsItsScreens, reopenedWorkspaceRunsTheDeployedBuild,
-  computerSessionsComeBackByName, agentJobIsAnsweredInItsSession, attachmentIsReadAndShown, type AgentPlanVerdict, type AgentReturnVerdict,
+  computerSessionsComeBackByName, agentJobIsAnsweredInItsSession, attachmentIsReadAndShown, chatOnlyRewindIsShown, type AgentPlanVerdict, type AgentReturnVerdict,
   type ApprovalStackVerdict, type HireApprovalVerdict, type AgentWorkspaceVerdict, type AccountMemoryVerdict, type StackMemoryVerdict,
   type SpliceVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict,
   type FirstAnswerVerdict, type PanelVerdict, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict,
   type StampedCardVerdict, type WrittenFileVerdict, type DesktopResizeVerdict, type DesktopSwitchVerdict, type ReopenVerdict,
-  type SessionsVerdict, type AgentJobVerdict, type AttachmentVerdict,
+  type SessionsVerdict, type AgentJobVerdict, type AttachmentVerdict, type RewindVerdict,
 } from '../../scripts/product-flows';
 import { INSPECTOR_SHUT_PX, type FlowTarget } from '../../scripts/browser-page';
 import {
@@ -567,6 +567,26 @@ describe(productFlowTestName('attachment', 'a file dropped on the chat is read a
     const attached = verdictOf(observed, 'attachment');
 
     expect([attached.sent, attached.sentAfterReload]).toEqual([true, true]);
+  });
+});
+
+describe(productFlowTestName('rewind', 'a chat-only rewind tells the agent, and the person sees the row that did'), () => {
+  let observed: RewindVerdict | null = null;
+
+  beforeAll(async () => {
+    observed = await flowRow('rewind', chatOnlyRewindIsShown);
+  });
+
+  test('the chat ends before the message walked back past', () => {
+    const sent = verdictOf(observed, 'rewind').sentAfter;
+
+    expect([sent.some((text) => text.includes('the ask that stays')), sent.some((text) => text.includes('walked back past'))]).toEqual([true, false]);
+  });
+
+  test('the row that told the agent shows where the walk-back cut, and after a reload', () => {
+    const rewound = verdictOf(observed, 'rewind');
+
+    expect([rewound.notice !== null, rewound.noticeAfterReload !== null]).toEqual([true, true]);
   });
 });
 

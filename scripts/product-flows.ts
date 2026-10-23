@@ -321,15 +321,23 @@ export async function approvalsStackAtTheComposer(target: FlowTarget): Promise<A
 
     await sendAndSettle(page, APPROVALS_ASK);
     // Actions belong to this fresh workspace; account-memory cards belong to every workspace of the account. The
-    // flow's card is opened first if another took the front.
+    // flow's card is opened first if another took the front. Its rows and words are read in the look that found both
+    // rows: on staging 2026-10-23 (8769744f6) a card took the front between that look and a second one, which found
+    // none ("Expected string but received undefined").
     await until(page, "both of the flow's parked commands on one card", `(() => {
-      if (${PARKED_ROWS}.length === 2) return true;
+      const rows = ${PARKED_ROWS};
+
+      if (rows.length === 2) {
+        window.flowStack = { rows, words: document.querySelector('${ATTENTION_CARD}')?.textContent ?? '' };
+
+        return true;
+      }
+
       ${STACK_KEYS}.filter((key) => key.startsWith('action:')).forEach((key) => document.querySelector('[data-attention-behind="' + key + '"]')?.click());
 
       return false;
     })()`);
-    const stacked = v.parse(v.tuple([v.string(), v.string()]), await page.evaluate(PARKED_ROWS));
-    const openWords = v.parse(v.string(), await page.evaluate(`document.querySelector('${ATTENTION_CARD}')?.textContent ?? ''`));
+    const { rows: stacked, words: openWords } = v.parse(v.object({ rows: v.tuple([v.string(), v.string()]), words: v.string() }), await page.evaluate('window.flowStack'));
     const remaining = `${STACK_KEYS}.filter((key) => ${JSON.stringify(stacked)}.includes(key))`;
 
     // The older unticked, the newer approved alone.
@@ -528,6 +536,77 @@ export async function attachmentIsReadAndShown(target: FlowTarget): Promise<Atta
     await page.close();
 
     return { tray, reply, sent, sentAfterReload };
+  } finally {
+    await removeFlowWorkspace(target, workspace);
+  }
+}
+
+export interface RewindVerdict {
+  /** The asks the chat offers to walk back to once the rewind answered: the first, and not the one walked back past. */
+  readonly sentAfter: readonly string[];
+  /** The row that told the agent what the rewound turn left, as the person sees it once the rewind answered: its
+   *  words, or null when no such row shows. */
+  readonly notice: string | null;
+  /** The same row after a reload, from the stored transcript. */
+  readonly noticeAfterReload: string | null;
+}
+
+const REWIND_KEPT = 'Flow rewind: the ask that stays.';
+
+const REWIND_CUT = 'Flow rewind: the ask walked back past.';
+
+/** A chat-only rewind's row (`chat_rewound`), shown: its words, or null. */
+const REWIND_NOTICE = `(() => {
+  const row = document.querySelector('#chat [data-system-event="chat_rewound"]');
+  return row instanceof HTMLElement && row.offsetParent !== null ? row.innerText : null;
+})()`;
+
+/**
+ * Row: a person walks the chat back to before a message, the conversation alone (REWIND-0924). The chat ends before
+ * it, and the row that tells the agent what its rewound turn left shows where the walk-back cut, live and after a
+ * reload.
+ */
+export async function chatOnlyRewindIsShown(target: FlowTarget): Promise<RewindVerdict> {
+  const workspace = await createFlowWorkspace(target, 'rewind');
+
+  try {
+    const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
+
+    await sendAndSettle(page, REWIND_KEPT);
+    await sendAndSettle(page, REWIND_CUT);
+    await page.evaluate(`(() => {
+      const control = [...document.querySelectorAll('#chat [data-revert-turn]')]
+        .find((each) => (each.parentElement?.textContent ?? '').includes(${JSON.stringify(REWIND_CUT)}));
+      if (!(control instanceof HTMLElement)) throw new Error('no walk-back control on the ask to walk back past');
+      control.click();
+    })()`);
+    // Its choices sit in the dialog's footer, beside the body that says it has read the turn's files.
+    await until(page, 'the walk-back dialog, read', `document.querySelector('[data-revert-dialog="ready"]') !== null
+      && document.querySelector('[data-revert-action="conversation"]') !== null`);
+
+    const ledger = await frameLedger(page);
+
+    try {
+      ledger.restart();
+      await page.click('[data-revert-action="conversation"]');
+      // The rewind's transcript reaches every tab before its answer does (chat-transport's `history-reverted`).
+      await waitOn(page, 'the walk-back answered', settledAfter(page, ledger, 'revertConversation'));
+    } finally {
+      await ledger.stop();
+    }
+
+    const sentAfter = v.parse(v.array(v.string()), await page.evaluate(SENT_MESSAGES));
+    const notice = v.parse(v.nullable(v.string()), await page.evaluate(REWIND_NOTICE));
+
+    await page.reload({ waitUntil: 'load' });
+    await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
+    await until(page, 'the kept ask in the stored transcript', `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(REWIND_KEPT)})`);
+    await painted(page);
+    const noticeAfterReload = v.parse(v.nullable(v.string()), await page.evaluate(REWIND_NOTICE));
+
+    await page.close();
+
+    return { sentAfter, notice, noticeAfterReload };
   } finally {
     await removeFlowWorkspace(target, workspace);
   }

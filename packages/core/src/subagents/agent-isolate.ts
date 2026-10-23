@@ -94,6 +94,8 @@ export interface PreparedAgentTurn {
   readonly brief?: string;
   readonly opening: readonly JsonValue[];
   readonly tools: readonly AgentToolDescriptor[];
+  /** The turn's advisor's read-only tools, which the workspace serves on a ledger of their own (`advisorRead`). */
+  readonly advisorTools?: readonly AgentToolDescriptor[];
   /** The tools the turn reaches whose effects commit in the agent's own store, which its isolate builds and runs under
    *  its own receipts: no workspace receipt is kept around them (design v2 §4). */
   readonly ownerLane: Pick<TurnReach, 'askOwner' | 'submitPlan' | 'replyToComment'>;
@@ -135,6 +137,10 @@ export interface AgentToolCall {
   readonly name: string;
   readonly input: JsonValue;
 }
+
+/** One of the turn's advisor's reads, run by the workspace over the agent's stores: never the agent's own tool, whose
+ *  ledger a read would mark, which is what lets the agent edit a file. */
+export type AgentAdvisorRead = Pick<AgentToolCall, 'turnId' | 'runId' | 'epoch' | 'callId' | 'name' | 'input'>;
 
 interface AgentCaptureDelta {
   readonly evidence: HeadCapture['evidence'];

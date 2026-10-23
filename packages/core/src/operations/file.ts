@@ -41,7 +41,7 @@ const fileOp = namespace('file', { slate: true });
 export const FILE = {
   read: fileOp({
     name: 'read',
-    help: `A text file, up to ${READ_WINDOW}, each line as its number, a tab, then the line; a line past ${String(FILE_READ_LINE_CHARS)} characters is cut, with how much follows. A footer names the lines shown and their total, and the offset that continues a read that stopped early. An image is shown to you.`,
+    help: `Up to ${READ_WINDOW}, of a text file, each line prefixed by its number and a tab and cut past ${String(FILE_READ_LINE_CHARS)} characters; the footer gives the offset to continue. An image is shown to you.`,
     impact: 'observe',
     input: v.strictObject({ path: Path, offset: Lines('The first line, 1-indexed; default 1.'), limit: Lines(`Lines to return; default ${String(FILE_READ_LINES)}.`) }),
     output: v.union([v.string(), ImageCarrierSchema]),
@@ -55,7 +55,7 @@ export const FILE = {
   }),
   edit: fileOp({
     name: 'edit',
-    help: 'Replace text in a file you have read since the conversation was last compacted, every edit applied together or none; refused when the file changed since.',
+    help: 'Replace text in a file you have read since the last compaction, all edits or none; refused if the file changed since.',
     impact: 'mutate',
     input: v.strictObject({ path: Path, edits: described(v.pipe(v.array(FileEditSchema), v.minLength(1)), 'Matched against the file as last read.') }),
     output: v.strictObject({ ...Written, applied: v.array(v.strictObject({ line: v.number(), removedLines: v.number(), addedLines: v.number() })) }),
