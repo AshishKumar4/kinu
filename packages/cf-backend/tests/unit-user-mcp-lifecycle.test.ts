@@ -261,14 +261,18 @@ describe('a server that refuses its tool list', () => {
     }, { preconnect: real.preconnect });
 
     let rows: Awaited<ReturnType<typeof h.userDO.userMcp_list>>;
+    let reconnected: Awaited<ReturnType<typeof h.userDO.userMcp_reconnect>>;
 
     try {
       await h.userDO.userMcp_warmConnections(owner);
       rows = await h.userDO.userMcp_list(owner);
+      // Reconnect from the failed row lists it again on its live transport: still refused, still named.
+      reconnected = await h.userDO.userMcp_reconnect(owner, 'gm1');
     } finally {
       globalThis.fetch = real;
     }
 
+    expect(reconnected).toEqual({ status: 'failed', error: 'Gmail refused its tool list: HTTP 403' });
     expect(rows.map((server) => ({ name: server.name, status: server.status, tools: server.toolsCount, error: server.error, signIn: server.signIn }))).toEqual([
       { name: 'Calendar', status: 'failed', tools: 0, error: 'Calendar refused its tool list: HTTP 403', signIn: false },
       { name: 'Gmail', status: 'failed', tools: 0, error: 'Gmail refused its tool list: HTTP 403', signIn: false },
@@ -318,6 +322,73 @@ describe('the descriptor read is off the connection critical path', () => {
     expect({ dialled: recordedMcpLifecycle().established.length - dialsBefore, state: liveConnection(woken, 'srv1').connectionState }).toEqual({ dialled: 0, state: 'connecting' });
     expect(surface.descriptors.map((d) => d.toolKey)).toEqual(['mcp_GitHub_list_issues']);
     expect(surface.unavailable).toEqual([]);
+    woken.close();
+    first.close();
+  });
+
+  // Review, 2026-10-23: an add's or a sign-in's discovery reached ready and kept nothing, so a wake before any turn left the
+  // server with no tools and no call that could dial it.
+  test('what an add discovers is kept, so the first turn after a wake offers it', async () => {
+    const first = harness();
+    const owner = await testOwner();
+    seedMcpTools('srv-next', [{ name: 'list_issues', inputSchema: { type: 'object' } }]);
+    const added = await first.userDO.userMcp_add(owner, { name: 'tracker', serverUrl: 'https://tracker.example/mcp', headers: { Authorization: 'Bearer t' } }, 'https://kinu.example');
+    seedMcpTools(added.id, [{ name: 'list_issues', inputSchema: { type: 'object' } }]);
+    await first.userDO.userMcp_list(owner);
+
+    const woken = createTestUserDO({ storage: first.db });
+
+    expect((await readSurface(woken, owner)).descriptors.map((d) => d.toolKey)).toEqual(['mcp_tracker_list_issues']);
+    woken.close();
+    first.close();
+  });
+
+  test('a server that has nothing to seat from is dialled by the turn that finds it so, not waited for', async () => {
+    const first = harness();
+    const owner = await testOwner();
+    await seedServer(first, 'srv1', { name: 'fresh' });
+    const woken = createTestUserDO({ storage: first.db });
+    const dialled = recordedMcpLifecycle().established.length;
+
+    expect((await readSurface(woken, owner)).unavailable.map((u) => u.server)).toEqual(['fresh']);
+    await woken.userDO.userMcp_warmConnections(owner);
+    expect(recordedMcpLifecycle().established.length - dialled).toBe(1);
+    woken.close();
+    first.close();
+  });
+
+  test('a tool list larger than one stored value is not kept, and the turn still offers it live', async () => {
+    const h = harness();
+    const owner = await testOwner();
+    await seedServer(h, 'srv1', { name: 'huge' });
+    seedMcpTools('srv1', [{ name: 'big', description: 'x'.repeat(2 * 1024 * 1024 + 1), inputSchema: { type: 'object' } }]);
+
+    const lines = await diagnosticsDuring(async () => {
+      expect((await readSurface(h, owner)).descriptors.map((d) => d.toolKey)).toEqual(['mcp_huge_big']);
+    });
+
+    expect(lines.some((line) => line.name === 'mcp.listing_not_kept')).toBe(true);
+    const woken = createTestUserDO({ storage: h.db });
+
+    expect((await readSurface(woken, owner)).descriptors).toEqual([]);
+    woken.close();
+    h.close();
+  });
+
+  // Review, 2026-10-23: a callback that woke the object found its server registered and undialled, `connecting`, which the
+  // vendor reads as signed in: it took the state and exchanged no code.
+  test('a sign-in callback that wakes the object exchanges its code', async () => {
+    const first = harness();
+    const owner = await testOwner();
+    await first.userDO.userMcp_list(owner);
+    seedConfiguredMcpServer(sqlExec(first.db), 'srv1', { name: 'linear', url: 'https://mcp.linear.example/mcp', transport: 'streamable-http' });
+    seedSdkMcpServer('srv1', { type: 'streamable-http' }, { name: 'linear', url: 'https://mcp.linear.example/mcp', callbackUrl: 'https://kinu.example/api/user/mcp/callback' });
+    requireMcpSignIn('srv1', 'https://auth.example/authorize?state=pending.srv1');
+
+    const woken = createTestUserDO({ storage: first.db });
+    await woken.userDO.userMcp_handleOAuthCallback(owner, 'https://kinu.example/api/user/mcp/callback?state=pending.srv1&code=c');
+
+    expect(recordedMcpLifecycle().exchanged).toContain('srv1');
     woken.close();
     first.close();
   });

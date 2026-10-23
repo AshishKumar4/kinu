@@ -809,6 +809,8 @@ export interface RecordedMcpLifecycle {
   discovered: readonly string[];
   restored: number;
   waited: number;
+  /** Each server whose sign-in's code was exchanged for tokens at its callback. */
+  exchanged: readonly string[];
 }
 
 const mcpServers = new Map<string, RecordedMcpServer>();
@@ -914,6 +916,8 @@ let liveMcpManager: FakeMCPClientManager | null = null;
 
 let mcpRestored = 0;
 
+const mcpExchanged: string[] = [];
+
 let mcpWaited = 0;
 
 let mcpEstablishGate: Promise<void> | null = null;
@@ -945,7 +949,7 @@ export function liveMcpFetch(id: string): McpCredentialTransport['fetch'] | null
 }
 
 export function recordedMcpLifecycle(): RecordedMcpLifecycle {
-  return { established: mcpEstablished, dialled: mcpDialled, overlapped: mcpOverlapped, discovered: mcpDiscovered, restored: mcpRestored, waited: mcpWaited };
+  return { established: mcpEstablished, dialled: mcpDialled, overlapped: mcpOverlapped, discovered: mcpDiscovered, restored: mcpRestored, waited: mcpWaited, exchanged: mcpExchanged };
 }
 
 /**
@@ -1114,6 +1118,7 @@ export function resetRecordedMcp(): void {
   liveMcpManager = null;
   mcpRestored = 0;
   mcpWaited = 0;
+  mcpExchanged.length = 0;
   mcpEstablishGate = null;
   mcpEstablishArrived = null;
 }
@@ -1367,9 +1372,13 @@ class FakeMCPClientManager {
 
     if (error !== null) return { serverId, authSuccess: false, authError: url.searchParams.get('error_description') ?? error };
 
-    return this.mcpConnections[serverId] === undefined
-      ? { serverId, authSuccess: false, authError: `no connection for ${serverId}` }
-      : { serverId, authSuccess: true };
+    if (connection === undefined) return { serverId, authSuccess: false, authError: `no connection for ${serverId}` };
+
+    // The vendor reads a `connecting` connection as signed in already: it takes the state and exchanges no code
+    // (`client-BnYbNT3z.js:2086-2103`).
+    if (connection.connectionState !== 'connecting') mcpExchanged.push(serverId);
+
+    return { serverId, authSuccess: true };
   }
 
   /** A provider with no queued `authUrl` models a server that needed no sign-in. */

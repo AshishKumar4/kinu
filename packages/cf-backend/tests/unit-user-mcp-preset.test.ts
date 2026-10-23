@@ -141,6 +141,25 @@ describe('an MCP preset add', () => {
     h.close();
   });
 
+  // Review, 2026-10-23: a wake dials no server, and a server it had not dialled read as not connected, so removing one
+  // connection after a wake told the assistant it held none and cancelled the other's watchers.
+  test('after a wake, removing one connection keeps the watchers of another the wake has not dialled', async () => {
+    const h = harness();
+    const owner = await testOwner();
+    seedMcpTools('srv-none', []);
+    await h.userDO.claimConfig(owner, 'assistant', 'kinu-home');
+    const github = await h.userDO.userMcp_add(owner, { presetId: 'github', headers: { Authorization: 'Bearer ghp_test' } }, 'https://kinu.example');
+    const other = await h.userDO.userMcp_add(owner, { name: 'tracker', serverUrl: 'https://tracker.example/mcp', headers: { Authorization: 'Bearer t' } }, 'https://kinu.example');
+
+    const woken = createTestUserDO({ storage: h.db });
+    await woken.userDO.userMcp_remove(owner, other.id);
+
+    expect({ presets: await woken.userDO.userMcp_connectedPresets(owner), told: woken.connectionsChanged.at(-1) }).toEqual({ presets: ['github'], told: 'kinu-home:github' });
+    expect(github.id).not.toBe(other.id);
+    woken.close();
+    h.close();
+  });
+
   test('the catalog is the authority: a presetId add cannot smuggle its own endpoint', async () => {
     const h = harness({ mcpAppCredentials: ['google'] });
 
