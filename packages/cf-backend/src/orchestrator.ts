@@ -41,7 +41,7 @@ import {
   type PlanReview, actorReadHandle, ownerLaneDeclarations, type IntentResult, type OwedIntent, type OwedOwnerIntent,
   createEmailThreadDispatcher,
 } from "@kinu.run/core";
-import { bookmarkNow, censusOf, missingBytes, requireOps, restartedForRestore, restoreArmed, type ArmedRestore, type MissingBytes, type RestoreTarget, WorkspaceLayoutSchema, type BlueprintSchedule, type OpsCaller, type TablesAnswer, type WorkspaceLayout, type WorkspaceSeed } from '@kinu.run/core';
+import { PROJECT_OWNER_CRED, bookmarkNow, censusOf, missingBytes, requireOps, restartedForRestore, restoreArmed, type ArmedRestore, type MissingBytes, type RestoreTarget, WorkspaceLayoutSchema, type BlueprintSchedule, type OpsCaller, type TablesAnswer, type WorkspaceLayout, type WorkspaceSeed } from '@kinu.run/core';
 import { createHostedWorkspace, type HostedBox, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import { WorkspaceExecutors, type ExecutorFileChunkRead, type ExecutorFileChunkWrite } from "./workspace-executors";
 import { HeldRead } from "./account-reads";
@@ -794,8 +794,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   async agentCred(record: WorkspaceActor): Promise<VfsCred> {
-    // The workspace's own agent acts as the session user, in its turns as in the owner's own shell.
-    if (actorPolicy(record).workspaceAgent) return CRED_SESSION_USER;
+    // The workspace's own agent acts as the session user, in its turns as in the owner's own shell, with the project's group:
+    // it writes what a share's viewer made in the project.
+    if (actorPolicy(record).workspaceAgent) return PROJECT_OWNER_CRED;
     const home = await this.actorHomes.get(record, actorReferenceOf(record));
 
     if (home?.cred !== undefined) return home.cred;

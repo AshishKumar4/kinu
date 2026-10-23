@@ -4,7 +4,7 @@
  */
 
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
-import type { AgentIdentity } from '../vfs/agent-home';
+import { PROJECT_GID, type AgentIdentity } from '../vfs/agent-home';
 import type { NimbusSandboxHandle } from './nimbus';
 import { withCommandOptions } from './node-home';
 import { principalExecId, secretsCaller } from './secrets-caller';
@@ -17,11 +17,12 @@ export interface ViewerPlace {
 }
 
 /**
- * The viewer's credential: its own uid and group and no other, so it writes only its own home and `/tmp` and reads of the
- * workspace what everyone may; files it makes are its alone.
+ * The viewer's credential: its own uid and group, and the project's ({@link PROJECT_GID}), so it writes its own home and
+ * `/tmp` and the project tree of a workspace made since, and reads of the rest what everyone may; files it makes outside
+ * the project are its alone.
  */
 export function viewerCred(identity: AgentIdentity): VfsCred {
-  return { uid: identity.uid, gid: identity.gid, groups: [identity.gid], umask: 0o077 };
+  return { uid: identity.uid, gid: identity.gid, groups: [identity.gid, PROJECT_GID], umask: 0o077 };
 }
 
 /**

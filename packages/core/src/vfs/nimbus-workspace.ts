@@ -21,7 +21,7 @@ import type { RuntimePackage, RuntimeSource } from '@nimbus-sh/core/runtime/runt
 import type { FacetHost } from '@nimbus-sh/core/runtime/facet-host.js';
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
 import {
-  agentIdentity, agentTmpRoot, confineAgentTmp, MAIN_AGENT, provisionAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
+  agentIdentity, agentTmpRoot, confineAgentTmp, MAIN_AGENT, provisionProjectHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
   settleSharedRoots, provisionWorkspaceSoul,
   type HomeRootVfs, type TmpConfiner,
   viewerStaysItself,
@@ -266,7 +266,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
 
     const root = workspace.vfs.as(CRED_KERNEL);
     const main = agentIdentity(opts.sql, MAIN_AGENT);
-    provisionAgentHome(root, MAIN_AGENT, main);
+    provisionProjectHome(root, main);
     confineAgentTmp(workspace.vfs, MAIN_AGENT, main);
     restoreAgentTmpConfinements(opts.sql, root, workspace.vfs);
     // Every change the namespace sees, on any mount, whoever made it.
