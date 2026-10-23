@@ -153,6 +153,10 @@ scripted_account gateway > /dev/null || exit 1
 # a run cut off before its restore left them there (staging rc20, 2026-10-19).
 scripted_account settings > /dev/null || exit 1
 
+# THE CASE THAT MEETS THE FREE TIER ACTS AS `limits`, the one eval account it binds (core limits/class.ts): every
+# other account a tier drives is exempt, so its workspaces past three are refused here alone.
+scripted_account limits > /dev/null || exit 1
+
 echo "── first-run tier ────────────────────────────────────────"
 echo "target:   $KINU_ORIGIN"
 echo "declared cases: $(ls tests/first-run/*.first-run.ts | wc -l | tr -d ' ') (executed/skipped cases are listed in JUnit)"
