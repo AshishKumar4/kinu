@@ -373,8 +373,10 @@
     "workspace_identity"
   ],
   "control": [
+    "cp_account_standing",
     "cp_audit",
     "cp_feedback",
+    "cp_invites",
     "cp_users",
     "cp_workspaces",
     "gallery_installs",

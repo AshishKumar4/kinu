@@ -205,8 +205,6 @@ export function cliAccount<Built extends Partial<CliRoutesAuthority>>(built: Bui
 
   return {
     ensureProfile: refuse('ensureProfile'),
-    limits: refuse('limits'),
-    limits_inviteRedeemed: refuse('limits_inviteRedeemed'),
     getProfile: refuse('getProfile'),
     getConfig: refuse('getConfig'),
     setConfig: refuse('setConfig'),
@@ -310,6 +308,8 @@ export function userAccount<Built extends Partial<UserRoutesAuthority>>(
     hasWorkspace: refuse('hasWorkspace'),
     ensureProfile: refuse('ensureProfile'),
     getProfile: refuse('getProfile'),
+    limits: refuse('limits'),
+    limits_inviteRedeemed: refuse('limits_inviteRedeemed'),
     setDisplayName: refuse('setDisplayName'),
     getProfileCatalog: refuse('getProfileCatalog'),
     getWorkspaceProfileCatalog: refuse('getWorkspaceProfileCatalog'),
