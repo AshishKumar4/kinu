@@ -171,6 +171,7 @@ function actorWith(account: AccountMemory | undefined): SurfaceActor {
     self: null,
     ownerWaits: null,
     mail: null,
+    google: null,
   };
 }
 

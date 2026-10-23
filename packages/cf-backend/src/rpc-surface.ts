@@ -172,6 +172,7 @@ const USER_DO_METHODS = [
   'acknowledgeUnstoppedDevice',
   'cancelDeviceRequestsForAgent',
   'cancelDeviceRequestsForBackgroundJob',
+  'googleCall',
   'googleConnection',
   'googleToken',
   'grantDeviceConsent',

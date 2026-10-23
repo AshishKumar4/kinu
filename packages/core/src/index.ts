@@ -112,6 +112,12 @@ export { MailStore, type MailBlobs, type MailBoxOwner, type ParsedMail } from '.
 
 export { createMailCodemodeProvider, unreadMailForTurn, type MailDeps, type MailSendApprovals } from './tools/mail-codemode';
 
+export { createGoogleCodemodeProvider, type GoogleAnswer, type GoogleDeps, type GoogleWriteApprovals } from './tools/google-operations';
+
+export { googleBaseUrls, type GoogleRequest } from './google/catalog';
+
+export { GOOGLE_VERBS } from './google/table';
+
 export { MAIL } from './operations/mail';
 
 export { mailHostRedirect } from './mail/host';
@@ -1634,7 +1640,7 @@ export {
   performBoundWrite, type ApprovalContent, type BoundFileWrite, type WriteSubject,
 } from './safety/bound-write';
 
-export { approvalKindOf, mailSendExecutor, mailSendText, slateEffectExecutor, slateEffectText, type ApprovalKind, type MailSend, type SlateEffect } from './safety/approval-kind';
+export { approvalKindOf, mailSendExecutor, mailSendText, slateEffectExecutor, slateEffectText, type ApprovalKind, type GoogleWrite, type MailSend, type SlateEffect } from './safety/approval-kind';
 
 export {
   ParkedWriteFiles,

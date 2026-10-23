@@ -244,7 +244,7 @@ import {
   recordJobSettled, recordSandboxRecovery, type AgentKind,
 } from "@kinu.run/core/analytics";
 import {
-  agentSelfHost, actorNamespaces, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost, type MailDeps, type MailThreadSummary, type OwnerWaitsHost,
+  agentSelfHost, actorNamespaces, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost, type GoogleDeps, type MailDeps, type MailThreadSummary, googleConnectionClient, type OwnerWaitsHost,
   ownerWaits, ownerWaitsHost, wakeMetOwnerWaits, type OwnerWaitReader, type ScopedOwnerWait,
   AgentWorkspaceStore, createAgentWorkspace, type AgentWorkspaceDeps,
   DeviceConsentRegistry, DeviceConsentStore,
@@ -1596,7 +1596,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     actor: SeatedActor, runtime: CFRuntime,
     held: { readonly search: WebSearchProvider; readonly stores: ServedStores; readonly agents?: () => AgentsToolDeps },
   ): SurfaceActor {
-    return this.hostedSurface({ ...actor, runtime }, { ...held, ownerWaits: this.hireOwnerWaits(actor), mail: this.mailFor(actor.handle.actorId, actor.record.name) });
+    return this.hostedSurface({ ...actor, runtime }, { ...held, ownerWaits: this.hireOwnerWaits(actor), google: this.googleFor(actor.handle.actorId, actor.record.name), mail: this.mailFor(actor.handle.actorId, actor.record.name) });
   }
 
   /**
@@ -2660,6 +2660,28 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           return verdict.outcome === 'approved' ? verdict : { outcome: verdict.outcome, approval: verdict.action.id };
         },
         take: (id) => this.deferrals.takeMailSend(id, actorId),
+        settle: async (spend, outcome) => this.deferrals.settle(spend, outcome, actorId),
+      },
+    };
+  }
+
+  /**
+   * `google.*` through the owner's Google connection, where the deployment has its client: a read is made by the
+   * account at once; a write waits in this workspace's one queue, as an agent's message does, and is made once on approval.
+   */
+  protected override googleFor(actorId: string, name: string): GoogleDeps | null {
+    if (googleConnectionClient(this.env) === null || this.getOwnerUserId() === null) return null;
+
+    return {
+      by: () => (actorId === this.actorHandle().actorId ? this.safeDisplayName() : name),
+      send: async (request) => await this.requireOwnerUserDO().googleCall(await this.userCaller(), request),
+      approvals: {
+        ask: (id, write) => {
+          const verdict = this.deferrals.googleWrite(id, write, actorId);
+
+          return verdict.outcome === 'approved' ? verdict : { outcome: verdict.outcome, approval: verdict.action.id };
+        },
+        take: (id) => this.deferrals.takeGoogleWrite(id, actorId),
         settle: async (spend, outcome) => this.deferrals.settle(spend, outcome, actorId),
       },
     };
