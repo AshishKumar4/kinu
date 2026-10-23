@@ -2983,8 +2983,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     wake: (actorId, at) => this.owedWake(actorId, at ?? Date.now() + RECOVERY_BACKOFF_CEILING_MS),
     admit: async (actorId, delivery) => {
       // An agent with no turn running opens one on what crosses: its opening's account reads go out ahead of its tile and
-      // its own admission, at rest or between turns (#103: a warm turn's preparation waited 150 ms on them).
-      if (this.agentTurns.currentTurn(actorId) === null) this.openingAccountStarted(actorId);
+      // its own admission, at rest or between turns (#103: a warm turn's preparation waited 150 ms on them). The fence is
+      // durable: a turn this activation did not open runs on past a reset, with no turn of it held here.
+      if (this.agentTurns.currentTurn(actorId) === null && this.heldFence(actorId)?.live !== true) this.openingAccountStarted(actorId);
       let working = false;
 
       try {
