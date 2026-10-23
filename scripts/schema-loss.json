@@ -1,0 +1,9 @@
+{
+  "builtin_attempts": "sign-in attempt counters, minutes long: a reset only restarts the throttle",
+  "builtin_challenges": "sign-in challenges, each answered within minutes or expired",
+  "cache_warm": "a turn's cache-warming obligation, re-armed by the next turn",
+  "connection_tickets": "one-time connection tickets, thirty minutes long: a device or CLI asks for a new one",
+  "device_status_watchers": "the sockets watching a device's status, which re-register when they reconnect",
+  "monitor_signal_streaks": "the fleet monitor's running streak counts, which start again from the next reading",
+  "webhook_rate_windows": "a webhook's rate-limit windows, minutes long"
+}
