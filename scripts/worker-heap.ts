@@ -550,12 +550,15 @@ async function advisedLongTurn(advised: boolean, run: {
   // turn's length allocates as much a step in its last third as in its middle one.
   const thirds: Isolates<number>[] = [];
   const third = Math.floor(LONG_TURN.steps / 3);
+  // Main's allocation sites a third, so a cost that grows with the turn is named by where it grows.
+  const sites: Allocations['sites'][] = [];
 
   const allocatedSoFar = async (): Promise<Isolates<number>> => {
-    const read = await inEach(isolates, async (session) => (await session.allocations()).total);
+    const read = await inEach(isolates, async (session) => await session.allocations());
     await inEach(isolates, async (session) => { await session.sampleAllocations(); });
+    sites.push(read.main.sites);
 
-    return read;
+    return { workspace: read.workspace.total, main: read.main.total };
   };
 
   for (let step = 1; step <= LONG_TURN.steps; step++) {
@@ -605,6 +608,11 @@ async function advisedLongTurn(advised: boolean, run: {
     + `${inEachIsolate(peak)} used; grew ${inEachIsolate(beyond(last, first))} live first to last step; allocated `
     + `${inEachIsolate(allocated)}: by thirds of its steps ${thirds.map((part) => inEachIsolate(part)).join(', ')} `
     + `(main's isolate ${perStep} a step), and its last step and end ${inEachIsolate(end)}`);
+  const [, middle = [], latest = []] = sites;
+  const before = new Map(middle.map(({ site, bytes }) => [site, bytes]));
+  const grew = latest.map(({ site, bytes }) => ({ site, grew: bytes - (before.get(site) ?? 0) })).sort((a, b) => b.grew - a.grew).slice(0, 6);
+  console.log(`${GATE}: ${name} turn, main's isolate, what its last third allocated beyond its middle one: `
+    + grew.map(({ site, grew: bytes }) => `${mb(bytes)} ${site}`).join('; '));
   await ask('/model?answerBytes=0&toolSteps=0');
 }
 
