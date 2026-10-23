@@ -326,7 +326,12 @@ async function fixtureFetch(url: string | URL, init?: RequestInit): Promise<Resp
   }
 }
 
-function writeFixtureConfig(worker: string, bucket: string, scratch: string, priorDeclared?: string) {
+/** The run's golden box: named by the run, as its other boxes are, so no box of an earlier run's fixture answers for it. */
+export function goldenBox(box: string): string {
+  return `${box}-golden`;
+}
+
+function writeFixtureConfig({ worker, bucket, golden }: { readonly worker: string; readonly bucket: string; readonly golden: string }, scratch: string, priorDeclared?: string) {
   const config = join(scratch, 'wrangler.jsonc');
   const imageArgument = process.argv.indexOf('--declared-image');
   const productContainer = deployedConfig('staging').containers?.find(row => row.class_name === 'KinuDevbox');
@@ -346,7 +351,7 @@ function writeFixtureConfig(worker: string, bucket: string, scratch: string, pri
     containers,
     r2_buckets: [{ binding: 'STORE', bucket_name: bucket }],
     assets: { directory: join(REPO, 'packages/cf-backend/public'), binding: 'ASSETS', run_worker_first: true },
-    vars: { CLOUDFLARE_ACCOUNT_ID: ACCOUNT, PROBE_BUCKET: bucket, PROBE_HTTP: process.argv.includes('--probe') ? '1' : '0', BOX_NAME },
+    vars: { CLOUDFLARE_ACCOUNT_ID: ACCOUNT, PROBE_BUCKET: bucket, PROBE_HTTP: process.argv.includes('--probe') ? '1' : '0', BOX_NAME, GOLDEN_BOX: golden },
   }));
 
   return { config, declared };
@@ -383,7 +388,7 @@ function fixturePlan(recovering: ReturnType<typeof recoveryReport>) {
   const box = `eval-devbox-${run}`;
   // The fifth is a box only the desktop's check opens, so it opens on a fresh box; the sixth is the agent's desktop box;
   // the seventh fails every start (D94); the eighth stops and starts under an open terminal session (D97).
-  const names = recovering?.boxes ?? [box, `${box}-native`, `${box}-disk`, 'devbox-golden', `${box}-desktop`, `${box}-agent`, `${box}-parked`, `${box}-sessions`];
+  const names = recovering?.boxes ?? [box, `${box}-native`, `${box}-disk`, goldenBox(box), `${box}-desktop`, `${box}-agent`, `${box}-parked`, `${box}-sessions`];
   const app = recovering?.app ?? named.app;
   const owner = recovering?.owner ?? contractOwner(process.env);
   const { job, index, attempt, vessel, statusUrl } = owner;
@@ -445,7 +450,7 @@ async function main(): Promise<void> {
   const steps: Step[] = recovering?.steps ?? [];
   const snapshots = new Set<string>(recovering?.snapshots);
   const cleanupErrors: string[] = [];
-  const { config, declared } = writeFixtureConfig(worker, bucket, scratch, recovering?.declared);
+  const { config, declared } = writeFixtureConfig({ worker, bucket, golden: goldenBox(box) }, scratch, recovering?.declared);
   let origin: string | undefined = recovering?.origin;
 
   const revision = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: REPO, encoding: 'utf8' }).stdout.trim();
@@ -1326,8 +1331,8 @@ print('exact' if json.load(open('${BOX_CHROMIUM_POLICY}'))['CACertificates'] == 
 
     if (ready.status !== 200) throw new Error(`the fixture route did not become ready: ${String(ready.status)}`);
     requireEqual((await fixtureFetch(`${origin}/health`)).status, 401);
-    await step('golden', () => call('/golden', v.object({ id: v.string() }), {}, 'devbox-golden'));
-    await collectSnapshots('devbox-golden');
+    await step('golden', () => call('/golden', v.object({ id: v.string() }), {}, goldenBox(box)));
+    await collectSnapshots(goldenBox(box));
     await step('declared-image-use', () => call('/inspection', v.unknown()));
     const probeArgument = process.argv.indexOf('--probe');
 
