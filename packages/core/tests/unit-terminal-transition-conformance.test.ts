@@ -731,7 +731,7 @@ describe('terminal transition conformance across two adapters', () => {
       plane.interruptAt('before', SEQUENCE[0]);
       await plane.settle(() => roster([...SEQUENCE, UNIMPLEMENTED]));
       await plane.join();
-      plane.rename(UNIMPLEMENTED, 'advisor_review');
+      plane.rename(UNIMPLEMENTED, 'no_such_effect');
       plane.interruptAt(null);
       plane.advance(PAST_BACKOFF_MS);
       await plane.recover();
