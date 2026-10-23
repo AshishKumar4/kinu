@@ -402,7 +402,10 @@ describe("a computer's own git is pointed at the GitHub connection for github.co
         + 'return 1; fi; echo username=x-access-token; echo "password=$KINU_GITHUB_TOKEN"; }; f',
     } as const;
 
-    expect(connectionEnvironment([connection])).toEqual({ ...helper, GIT_TOKEN: connection.placeholder });
+    // Nimbus's git sends `GIT_USERNAME:GIT_TOKEN`; GitHub refuses Basic with no user name, so the token's is named.
+    expect(connectionEnvironment([connection])).toEqual({ ...helper, GIT_TOKEN: connection.placeholder, GIT_USERNAME: 'x-access-token' });
+    expect(connectionEnvironment([connection, { ...connection, name: 'GIT_USERNAME', placeholder: `${EGRESS_PLACEHOLDER_PREFIX}u` }]))
+      .toEqual({ ...helper, GIT_TOKEN: connection.placeholder });
     expect(connectionEnvironment([connection, { ...connection, name: 'GIT_TOKEN', placeholder: `${EGRESS_PLACEHOLDER_PREFIX}y`, hosts: ['gitlab.com'] }])).toEqual(helper);
     // No connection: the helper still answers a private repository's ask, saying to connect GitHub; Nimbus's git gets nothing.
     expect(connectionEnvironment([])).toEqual(helper);
