@@ -8,7 +8,7 @@ import * as v from 'valibot';
 import { Effect, Exit } from 'effect';
 import { hold, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { mailRoutesOf, type MailRoutes } from '@kinu.run/core/deploy';
-import { durableStamps, initMailNameTables, mailUsernameRefusal, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp } from '@kinu.run/core';
+import { initMailNameTables, mailUsernameRefusal, openSchema, StoragePredatesReleaseError } from '@kinu.run/core';
 
 const ClaimRow = v.object({
   label: v.string(), user_id: v.string(), kind: v.picklist(['username', 'alias']), target_path: v.nullable(v.string()),
@@ -25,18 +25,9 @@ export class MailNameDO extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.routes = mailRoutesOf(env);
-    const stamps = durableStamps(ctx.storage.kv);
-    const unmade = readStamp(stamps, ctx.storage.sql, 'mailname') === 'unmade';
-    const init = (): void => { initMailNameTables(ctx.storage.sql); };
+    const opened = openSchema(ctx.storage, 'mailname', () => { initMailNameTables(ctx.storage.sql); }, `mail name ${ctx.id.toString()}`);
 
-    const repair = repairSchema(ctx.storage.sql, {
-      schema: 'mailname', tables: SCHEMA_TABLES.mailname, stamps, transactionSync: (write) => ctx.storage.transactionSync(write), init,
-    }, `mail name ${ctx.id.toString()}`);
-
-    if (repair?.refused != null) this.storageRefusal = new StoragePredatesReleaseError('mailname', repair.refused);
-    else if (repair === null) init();
-
-    if (unmade && this.storageRefusal === undefined) writeStamp(stamps, 'mailname');
+    if (opened.refused !== null) this.storageRefusal = opened.refused;
   }
 
   /** Who holds the label, and how; null while nobody does. */

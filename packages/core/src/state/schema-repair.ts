@@ -20,8 +20,8 @@ import * as v from 'valibot';
 import { KinuError } from '../obs/error';
 import { diagnostics } from '../obs/log';
 import { settleSync } from '../obs/effect';
-import { readStamp, writeStamp, type SchemaClass, type StampStore } from '../identity/schema-stamp';
-import { SCHEMA_RETIRED } from '../identity/schema-genesis';
+import { durableStamps, readStamp, StoragePredatesReleaseError, writeStamp, type SchemaClass, type StampKv, type StampStore } from '../identity/schema-stamp';
+import { SCHEMA_RETIRED, SCHEMA_TABLES } from '../identity/schema-genesis';
 import type { SqlExec } from '../types/primitives';
 
 /** The mark a table's DDL carries inside its CREATE when its rows are only valid against another table's of the same
@@ -424,4 +424,41 @@ export function repairSchema(sql: SqlExec, writes: TableWrites, database: string
 
     return repair;
   }));
+}
+
+/** A Durable Object's storage, as opening its schema reads it. */
+export interface SchemaStorage {
+  readonly sql: SqlExec;
+  readonly kv: StampKv;
+  transactionSync<A>(write: () => A): A;
+}
+
+/** What opening a schema did: its repair, where a release left the storage behind, and why every call must be refused
+ *  where that repair could not bring it to this build. */
+export interface OpenedSchema {
+  readonly repair: Repair | null;
+  readonly refused: StoragePredatesReleaseError | null;
+}
+
+/**
+ * A Durable Object's storage brought to this build at its construction, before any event reads it: storage a release left
+ * behind is repaired, which inits it; storage at this build or not yet made is inited; one made now is stamped. `init`
+ * makes tables only, since a repair also runs it in a trial it rolls back; an object's once-per-activation work follows
+ * a schema that opened.
+ */
+export function openSchema(storage: SchemaStorage, schema: SchemaClass, init: () => void, database: string): OpenedSchema {
+  const stamps = durableStamps(storage.kv);
+  const unmade = readStamp(stamps, storage.sql, schema) === 'unmade';
+
+  const repair = repairSchema(storage.sql, {
+    schema, tables: SCHEMA_TABLES[schema], stamps, transactionSync: (write) => storage.transactionSync(write), init,
+  }, database);
+
+  if (repair?.refused != null) return { repair, refused: new StoragePredatesReleaseError(schema, repair.refused) };
+
+  if (repair === null) init();
+
+  if (unmade) writeStamp(stamps, schema);
+
+  return { repair, refused: null };
 }
