@@ -19,6 +19,7 @@ import {
   durableStamps, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp, LiveWorkers, type Repair,
   type RunEventInput, type SubagentInspectionAuthority, type ConversationRecall,
   isSubagentOrigin, WORKSPACE_ROOT, PLATFORM_CATALOG, ProgramsInFlight, type OwedIntent, type OwedOwnerIntent, cardWords,
+  specProvider, WORKERS_AI_PROVIDER_ID,
 } from '@kinu.run/core';
 import type { EnqueueTurnResult, MailDeps, OwnerWaitsHost, PanelAgent, ProgrammaticTurn, RecordedTurn, SendState, SubagentInspectionRequest, SubagentInspectionResult } from '@kinu.run/core';
 import type { SubagentActivityEvent } from '@kinu.run/core';
@@ -1810,6 +1811,29 @@ export abstract class ActorAgent extends Agent<Env> {
    * `model_call` row; filed under the current run or the workspace id. Row shape and pricing guard
    * live in core's `pricedModelCallEvent`.
    */
+  /**
+   * A turn on `spec` is admitted by the owner's limits when the platform pays for it: Workers AI through the deployment's
+   * binding (`createWorkersAIProvider`). A turn on the person's own key or login is never asked.
+   */
+  protected async admitPlatformModel(spec: string): Promise<void> {
+    if (specProvider(spec) !== WORKERS_AI_PROVIDER_ID || this.getOwnerUserId() === null) return;
+    const { stub, caller } = await this.userHub();
+
+    await stub.limits_admitPlatformTurn(caller);
+  }
+
+  /** What a call on the platform's own models spent counts to the owner's day (core limits/), told, never waited on. */
+  private debitPlatformTokens(report: ModelCallReport, provider: string): void {
+    const tokens = (report.usage.input ?? 0) + (report.usage.output ?? 0);
+
+    if (provider !== WORKERS_AI_PROVIDER_ID || tokens <= 0 || this.getOwnerUserId() === null) return;
+    this.detachOwned(Effect.promise(() => settleLogged('limits.tokens_undebited', { doing: "counting a platform model call to the owner's day", otherwise: 'unavailable' }, async () => {
+      const { stub, caller } = await this.userHub();
+
+      await stub.limits_platformTokensSpent(caller, tokens);
+    })));
+  }
+
   protected reportModelCall(report: ModelCallReport): void {
     const event = pricedModelCallEvent(report, this.modelCatalog);
 
@@ -1823,6 +1847,7 @@ export abstract class ActorAgent extends Agent<Env> {
       ? this.analyticsModel()
       : this.analyticsModelOf(report.spec);
 
+    this.debitPlatformTokens(report, dimensions.provider);
     recordModelRow(this.env, {
       workspace: this.workspaceName(),
       agentKind: this.actorKind(),

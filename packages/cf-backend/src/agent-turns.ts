@@ -31,6 +31,8 @@ export interface AgentTurnsDeps {
   /** What an execution of the agent froze as it bound, in its own store; null before then. */
   frozen(reference: ActorReference, key: Pick<TurnBound, 'turnId' | 'runId'>): Promise<FrozenAuthority | null>;
   pricing(spec: string): ModelPricing | null;
+  /** Whether a turn may run on the model `spec`: refuses, in the owner's limits' words, past the platform models' day. */
+  admitModel(spec: string): Promise<void>;
   accounts(): Readonly<Record<string, string>>;
   /** A real provider request of the agent's is starting: noted on its warming lane, which answers until when it kept the
    *  cache warm for the one sent at `lastRequestAt` (`CacheWarmingLane.noteRequest`). */
@@ -542,6 +544,8 @@ export class AgentTurns {
     const facts = this.offeredFacts(turn, prepared);
 
     if (facts === null) return null;
+    // A turn on one of the platform's own models is the owner's limits' to admit; one on their own key or login is not.
+    await this.deps.admitModel(prepared.model);
 
     return {
       input,
