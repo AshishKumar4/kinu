@@ -277,6 +277,7 @@ const ACTOR_AGENT_RPC_SURFACE = [
 const ORCHESTRATOR_METHODS = [
   'abortExecutorFileDownload',
   'opsBookmark',
+  'opsMissing',
   'opsRestart',
   'opsRestore',
   'opsTables',
