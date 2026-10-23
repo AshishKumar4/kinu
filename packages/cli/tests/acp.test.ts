@@ -14,15 +14,14 @@ import {
   type SessionNotification,
 } from '@agentclientprotocol/sdk';
 import type { ShellApprovalHandler } from '@kinu.run/cli-backend';
-import { missingSubagentHistory, type ShellApprovalOutcome, type ShellApprovalRequest } from '@kinu.run/core';
+import type { ShellApprovalOutcome, ShellApprovalRequest } from '@kinu.run/core';
 import { createAcpAgent } from '../src/acp/agent';
 import { CloudTurnStream } from '../src/cloud-turn-stream';
-import { createCliSession } from '../src/session';
-import type { AgentClient, AgentClientEvent, AgentPrompt, AgentSendResult } from '../src/agent-client';
+import type { AgentClient, AgentClientEvent, AgentPrompt } from '../src/agent-client';
+import { fakeAgentClient, fakeLocalControls, TURN } from './helpers/agent-client';
 import * as v from 'valibot';
 import { present } from '@kinu.run/test-utils';
 
-const TURN: AgentSendResult = { landed: 'turn', text: '', toolCalls: [], steps: 1, durationMs: 1, hadError: false };
 
 interface FakeOptions {
   events?: AgentClientEvent[];
@@ -50,37 +49,14 @@ function fakeClient(opts: FakeOptions = {}): Fake {
   const listeners = new Set<(e: AgentClientEvent) => void>();
   const state: FakeState = { sent: [], stopped: 0, closed: 0, approval: null };
 
-  const agentClient: AgentClient = {
-    mode: 'local',
-    agentName: 'test',
-    cliSession: createCliSession('test', { noTranscript: true }),
-    inlineAttachmentLimitBytes: 1024,
-    planes: null,
-    fileLinks: { roots: [], href: () => null },
-    consents: null,
-    checkpoints: null,
-    plans: null,
-    questions: null,
-    approvals: null,
-    localControls: {
-      getAlwaysActiveSkills: () => [],
-      setAlwaysActiveSkills: () => {},
-      getShellApprovalMode: () => 'strict',
-      setShellApprovalMode: (mode) => mode,
+  const agentClient = fakeAgentClient({
+    localControls: fakeLocalControls({
       setShellApprovalHandler: (handler: ShellApprovalHandler | null) => {
         state.approval = handler;
 
         return () => { state.approval = null; };
       },
-      listModelProviders: async () => [],
-      listInstructionApprovals: async () => ({ status: 'end' as const, items: [] }),
-      readInstructionApproval: async () => null,
-      approveInstruction: async () => ({ ok: true as const, path: '', digest: '' }),
-      revokeInstruction: async () => ({ ok: true as const, path: '', digest: '' }),
-      clearConversation: async () => null,
-      compact: async () => 'folded' as const,
-    },
-    connect: async () => {},
+    }),
     subscribe: (listener: (e: AgentClientEvent) => void) => {
       listeners.add(listener);
 
@@ -95,8 +71,6 @@ function fakeClient(opts: FakeOptions = {}): Fake {
 
       return TURN;
     },
-    branch: () => false,
-    fork: async () => ({ client: agentClient, label: 'test' }),
     stop: () => {
       state.stopped += 1;
 
@@ -104,33 +78,7 @@ function fakeClient(opts: FakeOptions = {}): Fake {
     },
     close: async () => { state.closed += 1; },
     history: async () => (opts.history ?? []).map((m, i) => ({ id: String(i), role: m.role, content: m.content })),
-    status: async () => ({ name: 'test', purpose: 'test', model: null, reasoningEffort: null }),
-    describeTools: async () => ({ builtIn: [], crafted: [] }),
-    changelog: async () => ({ entries: [], unseenCount: 0 }),
-    refinements: async () => ({ requests: [], debt: { turnIds: [], owed: false, key: '', summary: 'no unresolved corrections — nothing is owed a refinement' } }),
-    requestRefinement: async () => ({ id: 'refine-test', trigger: 'explicit' as const, scope: 'workspace' as const, stage: 'refused' as const, turnIds: [], routes: [], detail: 'no outcome-labeled turns yet', createdAt: 0 }),
-    revertChangelogEntry: async () => ({ ok: false }),
-    readMemory: async () => '',
-    searchNodes: async () => [],
-    listJobs: async () => [],
-    cancelJob: async () => ({ ok: false }),
-    latestTakes: async () => null,
-    pickTake: async () => { throw new Error('no takes'); },
-    getModelSpec: async () => null,
-    setModel: async (spec) => ({ spec }),
-    setRole: async (role) => ({ role }),
-    getReasoningEffort: async () => null,
-    setReasoningEffort: async (effort) => ({ effort }),
-    getProviderAccounts: async () => ({}),
-    workspaceSpend: async () => { throw new Error('no spend'); },
-    setProviderAccount: async () => ({}),
-    getEvolutionConfig: async () => { throw new Error('no evolution config'); },
-    setEvolutionConfig: async () => { throw new Error('no evolution config'); },
-    listModels: async () => ({ models: [], failures: [] }),
-    testModel: async () => ({ ok: true, firstTokenMs: 0, totalMs: 0 }),
-    inspectSubagent: async (request) => missingSubagentHistory(request.path),
-    workspaceWork: async () => ({ plans: [], tasks: [] }),
-  };
+  });
 
   return {
     client: agentClient,

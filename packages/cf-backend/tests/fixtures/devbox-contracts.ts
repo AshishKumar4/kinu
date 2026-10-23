@@ -348,21 +348,22 @@ async function desktopRoute(request: Request, env: Env, ctx: ExecutionContext, u
   if (desktopName !== undefined) {
     const box = env.Box.getByName(desktopName);
 
-    const route = serveFamily(terminalRoutes(() => ({
-      resolveWorkspace: async () => ({
-        // As the product's: a terminal is held and told why inside the box (D109); a desktop waits here.
-        prepareTerminal: async (_executor: string, surface?: 'terminal' | 'desktop') => {
-          if (surface !== 'terminal') await box.ensureReady();
+    const workspace = {
+      // As the product's: a terminal is held and told why inside the box (D109); a desktop waits here.
+      prepareTerminal: async (_executor: string, surface?: 'terminal' | 'desktop') => {
+        if (surface !== 'terminal') await box.ensureReady();
 
-          return { ok: true as const };
-        },
-        openDeviceTerminal: async () => { throw new Error('this probe has no device'); },
-        openDeviceScreen: async () => { throw new Error('this probe has no device'); },
-        fetch: async () => new Response('this probe has no workspace terminal', { status: 404 }),
-      }),
+        return { ok: true as const };
+      },
+      openDeviceTerminal: async () => { throw new Error('this probe has no device'); },
+      openDeviceScreen: async () => { throw new Error('this probe has no device'); },
+      fetch: async () => new Response('this probe has no workspace terminal', { status: 404 }),
+    };
+
+    const route = serveFamily(terminalRoutes(() => ({
       resolveSandbox: () => box,
       UserDO: { idFromName: () => { throw new Error('this probe has no account devices'); }, get: () => { throw new Error('this probe has no account devices'); } },
-    })), { workspace: { name: desktopName }, ctx });
+    })), { workspace: { name: desktopName, agent: workspace }, ctx });
 
     return await route(request, {}) ?? new Response('desktop route not found', { status: 404 });
   }

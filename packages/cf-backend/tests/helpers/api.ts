@@ -6,7 +6,7 @@
  */
 import { Hono } from 'hono';
 import { routeError, apiPath, type FamilyEnv } from '../../src/api/context';
-import type { WorkspaceAgent, WorkspaceVariables } from '../../src/api/workspace';
+import type { WorkspaceVariables } from '../../src/api/workspace';
 import type { AuthIdentity } from '../../src/auth/session';
 import type { AccessIdentity } from '../../src/control-plane/access-gate';
 
@@ -16,25 +16,21 @@ export interface Gates {
   /** What Cloudflare Access proved, on `/api/control*`. */
   readonly access?: AccessIdentity;
   /**
-   * What the workspace gate proved: the decoded name and the claimed object, whose unbuilt calls refuse.
-   * Its request is the one sent, identity headers as the test wrote them.
+   * What the workspace gate proved: the decoded name and the claimed object, as the family reads it; without one, every
+   * member refuses. Its request is the one sent, identity headers as the test wrote them.
    */
-  readonly workspace?: { readonly name: string; readonly agent?: Partial<WorkspaceAgent> };
+  readonly workspace?: { readonly name: string; readonly agent?: unknown };
   /** The request's context; a family that retains work reaches it through `executionCtx`. */
   readonly ctx?: Pick<ExecutionContext, 'waitUntil'>;
 }
 
-function claimed(built: Partial<WorkspaceAgent> = {}): WorkspaceAgent {
-  const refuse = (member: string) => (): never => {
+/** A claimed object the test built nothing of: each member the family calls refuses. Like a stub, it is no thenable, so
+ *  returning it from an async step does not call it. */
+const UNBUILT = new Proxy({}, {
+  get: (_unbuilt, member) => (typeof member === 'symbol' || member === 'then' ? undefined : (): never => {
     throw new Error(`OrchestratorAgent.${member}: not reachable in this test`);
-  };
-
-  return {
-    evalAbortActivation: built.evalAbortActivation ?? refuse('evalAbortActivation'),
-    activations: built.activations ?? refuse('activations'),
-    mailHanded: built.mailHanded ?? refuse('mailHanded'),
-  };
-}
+  }),
+});
 
 export type Served<Bindings> = (request: Request, env: Bindings) => Promise<Response | null>;
 
@@ -43,14 +39,14 @@ export function serveFamily<Bindings extends object, Variables extends object>(
   gates: Gates = {},
 ): Served<Bindings> {
   const fellThrough = new Response(null, { status: 404 });
-  const app = new Hono<FamilyEnv<Bindings, WorkspaceVariables>>({ getPath: apiPath });
+  const app = new Hono<FamilyEnv<Bindings, WorkspaceVariables<unknown>>>({ getPath: apiPath });
 
   app.use('*', async (c, next) => {
     if (gates.identity) c.set('identity', gates.identity);
 
     if (gates.access) c.set('access', gates.access);
 
-    if (gates.workspace) c.set('workspace', { name: gates.workspace.name, agent: claimed(gates.workspace.agent), request: c.req.raw });
+    if (gates.workspace) c.set('workspace', { name: gates.workspace.name, agent: gates.workspace.agent ?? UNBUILT, request: c.req.raw });
     await next();
   });
 

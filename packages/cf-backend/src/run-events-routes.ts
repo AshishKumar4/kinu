@@ -42,9 +42,6 @@ const ALLOWED_TYPES = [
 
 export type RunEventsTarget = Pick<OrchestratorAgent, 'listRuns' | 'getRunEventText'>;
 
-/** A resolver, not the namespace binding: the SDK's `getAgentByName` (agents@0.26.0,
- *  `dist/agent-routing.js:176-183`, read 2026-10-06) awaits `__unsafe_ensureInitialized`. */
-export type RunEventsResolver = (name: string) => Promise<RunEventsTarget>;
 
 function parseTypesParam(s: string | null): RunEventType[] | undefined {
   if (!s) return undefined;
@@ -59,11 +56,10 @@ function parseTypesParam(s: string | null): RunEventType[] | undefined {
 const RUNS = '/api/workspaces/:name/runs';
 
 /** Run-event routes and the overview, on the proven workspace; trailing slashes accepted, as before. */
-export function runEventsRoutes<Bindings extends object>(
+export function runEventsRoutes<Bindings extends object, Agent extends RunEventsTarget = RunEventsTarget>(
   clock: Clock,
-  resolverFor: (env: Bindings) => RunEventsResolver,
-): Hono<FamilyEnv<Bindings, WorkspaceVariables>> {
-  const routes = new Hono<FamilyEnv<Bindings, WorkspaceVariables>>();
+): Hono<FamilyEnv<Bindings, WorkspaceVariables<Agent>>> {
+  const routes = new Hono<FamilyEnv<Bindings, WorkspaceVariables<Agent>>>();
 
   routes.on('GET', [RUNS, `${RUNS}/`], (c) => {
     const url = new URL(c.req.url);
@@ -77,7 +73,7 @@ export function runEventsRoutes<Bindings extends object>(
     const after = url.searchParams.get('after');
 
     return settle(Effect.catchCause(Effect.gen(function* () {
-      const stub = yield* Effect.promise(() => resolverFor(c.env)(c.get('workspace').name));
+      const stub = c.get('workspace').agent;
 
       return Response.json(yield* Effect.promise(() => stub.listRuns({ limit, cursor: after ? { after } : undefined })));
     }), reportingAs('runs')));
@@ -94,7 +90,7 @@ export function runEventsRoutes<Bindings extends object>(
     });
 
     return settle(Effect.catchCause(Effect.gen(function* () {
-      const stub = yield* Effect.promise(() => resolverFor(c.env)(c.get('workspace').name));
+      const stub = c.get('workspace').agent;
       const runId = rawParam(c, 'run');
       const events: string[] = [];
       let since = opts.since;
@@ -121,8 +117,7 @@ export function runEventsRoutes<Bindings extends object>(
     const lastEventId = request.headers.get('Last-Event-ID') ?? request.headers.get('last-event-id');
 
     return streamRunEvents({
-      resolveAgent: resolverFor(c.env),
-      agentName: c.get('workspace').name,
+      agent: c.get('workspace').agent,
       runId: rawParam(c, 'run'),
       sinceIndex: resumeIndexFromLastEventId(lastEventId),
       signal: request.signal,
@@ -135,8 +130,7 @@ export function runEventsRoutes<Bindings extends object>(
 
 
 interface RunEventStreamOptions {
-  readonly resolveAgent: RunEventsResolver;
-  readonly agentName: string;
+  readonly agent: RunEventsTarget;
   readonly runId: string;
   readonly sinceIndex: number;
   readonly signal: AbortSignal;
@@ -145,7 +139,7 @@ interface RunEventStreamOptions {
 }
 
 function streamRunEvents(options: RunEventStreamOptions): Response {
-  const { resolveAgent, agentName, runId, sinceIndex, signal, clock } = options;
+  const { agent: stub, runId, sinceIndex, signal, clock } = options;
   const encoder = new TextEncoder();
   // Stop polling the DO the moment the client goes away (stream cancel or request abort).
   let closed = false;
@@ -159,10 +153,7 @@ function streamRunEvents(options: RunEventStreamOptions): Response {
       let heartbeatAt = clock.now();
       signal.addEventListener('abort', () => { closed = true; }, { once: true });
 
-      const stub = await resolveAgent(agentName);
-      const resolvedAt = clock.now();
-
-      // First event, not headers, is what a reader waits for; `resolveMs` separates DO activation from the first ledger read.
+      // First event, not headers, is what a reader waits for.
       let firstByteReported = false;
 
       const reportFirstByte = (events: number): void => {
@@ -170,7 +161,6 @@ function streamRunEvents(options: RunEventStreamOptions): Response {
         firstByteReported = true;
         diagnostics.event('sse.run_events_first_byte', {
           ms: clock.now() - startedAt,
-          resolveMs: resolvedAt - startedAt,
           events,
           resumed: sinceIndex > 0,
         });

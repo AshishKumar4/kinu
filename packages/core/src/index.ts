@@ -1080,7 +1080,7 @@ export {
 
 export {
   createSandboxExecutor, computerProcessJob, type ComputerProcessEnd, type ComputerProcessJobs, type SandboxHandle, type SandboxResize, isSandboxTransientError, SandboxPending,
-  sandboxSizeLabel, WORKSPACE_BACKUP_DIR, sandboxFiles,
+  sandboxSizeLabel, sandboxFiles,
 } from './execution/sandbox';
 
 export { computerProcessResume, stopComputerProcessJob } from './jobs/computer-process';
@@ -2013,8 +2013,10 @@ export {
   readExecutorFileBytes, statExecutorFile, renameExecutorPathOp, deleteExecutorPathOp,
   listEnvironments, joinDir, parentDir,
   FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, FILES_PAGE_ENTRIES, shownEntries,
-  ExecutorFileUpload, ExecutorFileDownload, ChunkedUpload, pumpUploadChunks,
+  ExecutorFileUpload, ExecutorFileDownload, ChunkedUpload,
 } from './read-models/files';
+
+export { serveDownload, serveUpload } from './read-models/file-transfer';
 
 export type {
   DirEntry, EnvironmentInfo, ExecutorFileLookup, ExecutorRowLookup, ExecutorTextFile, ExecutorWriteResult,

@@ -5,7 +5,7 @@
  */
 
 import { CALLABLE_MCP_STATES, listMcpToolsLeniently, type McpFailureKind, type McpObservedState, type McpToolListing } from '@kinu.run/core';
-import { diagnostics, KinuError, renderCauseChain, toKinuError, type ErrorCode } from '@kinu.run/core/obs';
+import { diagnostics, joining, KinuError, renderCauseChain, toKinuError, type ErrorCode, type Joined } from '@kinu.run/core/obs';
 import { ProtocolError, SdkError, SdkErrorCode, SdkHttpError, SseError, UnauthorizedError, type Client } from '@modelcontextprotocol/client';
 import { ResultSchema } from '@modelcontextprotocol/sdk/types.js';
 
@@ -53,7 +53,7 @@ interface McpSessionConnection {
 
 interface SessionTraffic {
   readonly calls: Set<Promise<unknown>>;
-  readonly renewals: Map<string, Promise<void>>;
+  readonly renewals: Joined<string, void>;
 }
 
 const sessionTraffic = new WeakMap<McpSessionHost, Map<string, SessionTraffic>>();
@@ -65,7 +65,7 @@ export async function callRenewingExpiredSession<Result>(
 ): Promise<Result> {
   const servers = sessionTraffic.get(host) ?? new Map<string, SessionTraffic>();
   sessionTraffic.set(host, servers);
-  const traffic = servers.get(serverId) ?? { calls: new Set(), renewals: new Map() };
+  const traffic = servers.get(serverId) ?? { calls: new Set(), renewals: joining<string, void>() };
   servers.set(serverId, traffic);
   const expired = host.mcpConnections[serverId]?.sessionId;
 
@@ -75,11 +75,7 @@ export async function callRenewingExpiredSession<Result>(
     if (expired === undefined || !causeChain({ cause }).some((error) => error instanceof SdkHttpError && error.status === 404)) throw cause;
   }
 
-  const renewal = traffic.renewals.get(expired)
-    ?? renewSession({ host, serverId, expired, traffic }).finally(() => traffic.renewals.delete(expired));
-
-  traffic.renewals.set(expired, renewal);
-  await renewal;
+  await traffic.renewals(expired, () => renewSession({ host, serverId, expired, traffic }));
 
   return sent(traffic, call);
 }
