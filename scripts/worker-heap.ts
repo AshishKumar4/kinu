@@ -608,6 +608,13 @@ async function advisedLongTurn(advised: boolean, run: {
     + `${inEachIsolate(peak)} used; grew ${inEachIsolate(beyond(last, first))} live first to last step; allocated `
     + `${inEachIsolate(allocated)}: by thirds of its steps ${thirds.map((part) => inEachIsolate(part)).join(', ')} `
     + `(main's isolate ${perStep} a step), and its last step and end ${inEachIsolate(end)}`);
+  // Each advisor request's size, as the driver received it, by thirds of the calls: bounded, its last third's largest is
+  // its middle third's.
+  const sizes = v.parse(v.object({ advisorBytes: v.array(v.number()) }), JSON.parse(await ask('/model'))).advisorBytes.slice(-reviews);
+  const cut = Math.floor(sizes.length / 3);
+  const largest = [sizes.slice(0, cut), sizes.slice(cut, 2 * cut), sizes.slice(2 * cut)].map((part) => (part.length === 0 ? 0 : Math.max(...part)));
+
+  if (reviews > 0) console.log(`${GATE}: ${name} turn's advisor requests, largest by thirds of its calls: ${largest.map((bytes) => `${String(Math.round(bytes / 1000))} kB`).join(', ')}`);
   const [, middle = [], latest = []] = sites;
   const before = new Map(middle.map(({ site, bytes }) => [site, bytes]));
   const grew = latest.map(({ site, bytes }) => ({ site, grew: bytes - (before.get(site) ?? 0) })).sort((a, b) => b.grew - a.grew).slice(0, 6);
