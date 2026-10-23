@@ -37,6 +37,8 @@ function rpcStub<Methods extends object>(methods: Methods): Methods {
 
 interface WorldOptions {
   readonly shards?: number;
+  /** The shards the tenant's records name; every one of the pool unless given. */
+  readonly namedShards?: readonly number[];
   readonly missing?: Readonly<Record<string, readonly string[]>>;
   /** Objects whose bytes read fails, by name. */
   readonly unreadable?: readonly string[];
@@ -44,7 +46,7 @@ interface WorldOptions {
   readonly refusing?: readonly string[];
 }
 
-function world(written: readonly string[], lands = true, { shards = 0, missing = {}, unreadable = [], refusing = [] }: WorldOptions = {}) {
+function world(written: readonly string[], lands = true, { shards = 0, namedShards, missing = {}, unreadable = [], refusing = [] }: WorldOptions = {}) {
   const asked: string[] = [];
   const armed: string[] = [];
   const histories = new Map<string, FakeHistory>();
@@ -115,7 +117,9 @@ function world(written: readonly string[], lands = true, { shards = 0, missing =
     UserDO: namespace('UserDO'),
     OrchestratorAgent: namespace('OrchestratorAgent'),
     MAILBOX: namedObjects((id) => rpcStub(namingBytes('MailboxDO', id))),
-    MOSSAIC_USER: namedObjects((id) => rpcStub({ ...restorable('MossaicUserDO', id), tenantShards: async () => shards })),
+    MOSSAIC_USER: namedObjects((id) => rpcStub({
+      ...restorable('MossaicUserDO', id), tenantShards: async () => shards, namedShards: async () => [...namedShards ?? Array.from({ length: shards }, (_, at) => at)],
+    })),
     MOSSAIC_SHARD: namedObjects((id) => rpcStub(restorable('MossaicShardDO', id))),
   };
 
@@ -238,6 +242,7 @@ const Restored = v.object({
     missing: v.optional(v.object({ named: v.number(), missing: v.number(), keys: v.array(v.string()) })),
     unread: v.optional(v.string()),
   })),
+  skipped: v.optional(v.array(v.object({ class: v.string(), name: v.string(), why: v.string() }))),
   landed: v.boolean(),
   stopped: v.optional(v.string()),
 });
@@ -280,6 +285,20 @@ test('an account named by its email goes back with its mailbox and its Drive, th
     status: 200,
     armed: [`UserDO:${user}`, `MailboxDO:${user}`, `MossaicUserDO:vfs:default:${user}`, `MossaicShardDO:vfs:default:${user}:s0`, `MossaicShardDO:vfs:default:${user}:s1`]
       .map((object) => `${object}:{"at":7}`),
+  });
+});
+
+// Staging dd3066a00, 2026-10-23: trial-509's pool held a shard that never stored a chunk, and its history answered
+// "This database has no history", so the restore stopped there though every byte it needed was back.
+test('an account\'s Drive goes back on the shards its restored records name; a pool shard none names is skipped, held nothing', async () => {
+  const { env, armed } = world([`${OPS_PASS_PREFIX}${sha256Hex(PASS)}`], true, { shards: 3, namedShards: [1] });
+  const user = await accountIdFor(env, 'owner@example.com');
+  const answer = await opsRoutes.fetch(restore(`Bearer ${PASS}`, { object: { class: 'UserDO', email: 'owner@example.com' }, to: { at: 7 } }), env);
+  const read = v.parse(Restored, await answer.json());
+
+  expect({ status: answer.status, landed: read.landed, shards: armed.filter((object) => object.startsWith('MossaicShardDO')), skipped: read.skipped }).toEqual({
+    status: 200, landed: true, shards: [`MossaicShardDO:vfs:default:${user}:s1:{"at":7}`],
+    skipped: [0, 2].map((at) => ({ class: 'MossaicShardDO', name: `vfs:default:${user}:s${String(at)}`, why: 'held nothing at the moment: no record of the restored Drive names it' })),
   });
 });
 
