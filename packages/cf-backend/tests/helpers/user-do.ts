@@ -124,6 +124,8 @@ export interface TestUserDO {
   overviewNudges: string[];
   /** Workspaces told their secrets moved, in order. */
   secretsMoved: string[];
+  /** Workspaces told GitHub went (`gone:<workspace>`) or came back (`back:<workspace>`), in order. */
+  githubPush: string[];
   consentPrompts: Array<{
     workspace: string;
     method: string;
@@ -342,6 +344,8 @@ interface TestUserEnvironment {
       requestOverviewPush(): Promise<void>;
       devicesMoved(): Promise<{ watching: boolean }>;
       secretsMoved(): Promise<void>;
+      githubPushGone(): Promise<number>;
+      githubPushBack(): Promise<number>;
     };
   };
 }
@@ -444,6 +448,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   let refusedNotices = options.connectionsChangedFails ?? 0;
   const overviewNudges: string[] = [];
   const secretsMoved: string[] = [];
+  const githubPush: string[] = [];
   const consentPrompts: TestUserDO['consentPrompts'] = [];
   const raisedConsentIds: TestUserDO['raisedConsentIds'] = [];
   const unavailableNotices: TestUserDO['unavailableNotices'] = [];
@@ -755,6 +760,16 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
         async secretsMoved() {
           secretsMoved.push(name);
         },
+        async githubPushGone() {
+          githubPush.push(`gone:${name}`);
+
+          return 1;
+        },
+        async githubPushBack() {
+          githubPush.push(`back:${name}`);
+
+          return 1;
+        },
       }),
     },
   };
@@ -793,7 +808,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   return {
     userDO, db, sql, installed, destroyedWorkspaces, accountDeleted, aborted, revokedSocketPushes,
     abortRaised: () => aborts.until((reasons) => reasons.length > 0),
-    revokedSessionPushes, connectionsChanged, overviewNudges, secretsMoved,
+    revokedSessionPushes, connectionsChanged, overviewNudges, secretsMoved, githubPush,
     pendingConsents: (workspace) => registryFor(workspace).list(),
     resolveConsent: async (workspace, consentId, answer) => ({ ok: await registryFor(workspace).resolve(consentId, answer) }),
     consentWakes,

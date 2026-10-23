@@ -199,6 +199,35 @@ function deliveryOf(input: JsonValue | undefined): string | null {
   return typeof delivery === 'string' && delivery.length > 0 ? delivery : null;
 }
 
+/**
+ * A watcher stopped until `cause` clears, as a check that failed on it stops: a connection its source lost, say. False
+ * where it is no live watcher.
+ */
+export function parkWatcher(registry: TriggerRegistry, triggerId: string, cause: { readonly reason: WatchParkReason; readonly detail: string }, now: number): boolean {
+  const trigger = registry.get(triggerId);
+
+  if (trigger === null || trigger.state !== 'active' || watchCheckOf(trigger) === null) return false;
+  parked(registry, trigger, cause, now);
+
+  return true;
+}
+
+/**
+ * A watcher parked on `reason` checking again, that cause cleared: the reason dropped, its state kept, its firings
+ * resumed. One parked on another cause, or paused by its owner, stays as it is.
+ */
+export async function resumeWatcher(registry: TriggerRegistry, triggerId: string, reason: WatchParkReason, now: number): Promise<boolean> {
+  const trigger = registry.get(triggerId);
+
+  if (trigger === null || trigger.state !== 'paused' || watchCheckOf(trigger) === null) return false;
+  const watch = watchOf(trigger);
+
+  if (watch.parked?.reason !== reason) return false;
+  registry.amendSpec(triggerId, { ...trigger.spec, watch: watch.state === undefined ? {} : { state: watch.state } });
+
+  return await registry.resume(triggerId, now);
+}
+
 /** Its state kept, its reason written, its firings paused. */
 function parked(registry: TriggerRegistry, trigger: TriggerRow, cause: { readonly reason: WatchParkReason; readonly detail: string }, now: number): void {
   const watching: JsonObject = { parked: { reason: cause.reason, at: now, detail: cause.detail } };

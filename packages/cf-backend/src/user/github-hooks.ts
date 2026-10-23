@@ -123,15 +123,15 @@ export class GitHubHooks {
   }
 
   /** Every hook made, deleted while the connection's token still holds: called as the GitHub connection goes. One GitHub
-   *  refuses is logged and forgotten, since no token will reach it again. */
-  deleteAll(): Promise<void> {
+   *  refuses is logged and forgotten, since no token will reach it again. The workspaces they delivered to. */
+  deleteAll(): Promise<readonly string[]> {
     const { host } = this;
 
     return settle(Effect.gen(function* () {
       const listed = yield* Effect.promise(() => host.storage.list({ prefix: HOOK_KEY }));
       const kept = [...listed.values()].map((value) => v.parse(KeptHookSchema, value));
 
-      if (kept.length === 0) return;
+      if (kept.length === 0) return [];
       const token = yield* Effect.promise(() => host.token());
 
       for (const hook of kept) {
@@ -143,6 +143,8 @@ export class GitHubHooks {
 
         yield* Effect.promise(() => host.storage.delete(keyOf(hook)));
       }
+
+      return [...new Set(kept.map((hook) => hook.workspace))];
     }));
   }
 }

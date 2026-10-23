@@ -95,4 +95,19 @@ describe('a push watcher\'s repository hook', () => {
     await expect(harness.userDO.githubHookDelete(harness.owner, 'owner/repo', 42)).rejects.toThrow('No hook 42 on owner/repo');
     harness.close();
   });
+
+  test('a disconnect parks each hooked workspace\'s push watchers, and connecting GitHub again resumes them, once', async () => {
+    const harness = await connected();
+
+    github(Response.json({ id: 42 }, { status: 201 }), new Response(null, { status: 204 }));
+    await harness.userDO.githubHookCreate(harness.shop, { repo: 'owner/repo', url: await routeOf('shop'), secret: SECRET, events: ['push'] });
+    await harness.userDO.userMcp_remove(harness.owner, harness.serverId);
+    expect(harness.githubPush).toEqual(['gone:shop']);
+
+    // Connected again: the parked workspace is told once, and a later change tells it nothing.
+    await harness.userDO.userMcp_add(harness.owner, { presetId: 'github', headers: { Authorization: 'Bearer gho_connection0123456789' } }, 'https://kinu.example');
+    await harness.userDO.userMcp_add(harness.owner, { name: 'Notes', serverUrl: 'https://notes.example/mcp', headers: { Authorization: 'Bearer n' } }, 'https://kinu.example');
+    expect(harness.githubPush).toEqual(['gone:shop', 'back:shop']);
+    harness.close();
+  });
 });

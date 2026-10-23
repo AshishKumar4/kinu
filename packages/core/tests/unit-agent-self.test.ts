@@ -4,6 +4,7 @@ import { Database } from "bun:sqlite";
 import * as v from "valibot";
 import { MissionGovernor } from "../src/mission-budget";
 import { createAgentSelfProvider, type AgentSelfHost } from "../src/tools/agent-self";
+import type { PushWatcherOpts } from "../src/events/ingress/webhook";
 import { codemodeFunction, type CodemodeProvider } from "../src/tools/sandbox-contract";
 import { namespaceDeclaration } from "../src/tools/operation-surfaces";
 import type { BackgroundJob } from "../src/jobs/store";
@@ -204,6 +205,28 @@ describe("createAgentSelfProvider — delegation + validation", () => {
     expect(await create("Research desk", "", "Terse.")).toEqual(refused('"brief"'));
     expect(await called(createAgentSelfProvider(fakeHost()), "createWorkspace")("Research desk", "Read the sources.", ""))
       .toMatchObject({ success: false, reason: "unsupported" });
+  });
+
+  test("schedule with push makes a push watcher through the host; with a clock too, or on a host without one, it is refused", async () => {
+    const asked: PushWatcherOpts[] = [];
+
+    const host = fakeHost({
+      createPushWatcher: (opts) => Effect.sync(() => {
+        asked.push(opts);
+
+        return { id: "t1", kind: "webhook_durable" as const, repo: opts.repo, hookId: 42 };
+      }),
+    });
+
+    const schedule = called(createAgentSelfProvider(host), "schedule");
+    const check = { code: 'return { fire: input.event === "push", brief: "main moved" };' };
+
+    expect(await schedule({ push: { github: "owner/repo" }, check, label: "pushes" })).toEqual({ id: "t1", kind: "webhook_durable", repo: "owner/repo", hookId: 42 });
+    expect(asked).toEqual([{ repo: "owner/repo", events: ["push"], label: "pushes", check }]);
+    expect(await schedule({ push: { github: "owner/repo" }, cron: "0 * * * *" })).toEqual(refused("give it no cron"));
+    expect(await schedule({ push: { github: "not a repo" }, check })).toEqual(refused("owner/repo"));
+    expect(await called(createAgentSelfProvider(fakeHost()), "schedule")({ push: { github: "owner/repo" } })).toMatchObject({ success: false, reason: "unsupported" });
+    expect(host.calls).toEqual([]);
   });
 
   test("scaffoldVersions exposes the archive read-only via the host", async () => {

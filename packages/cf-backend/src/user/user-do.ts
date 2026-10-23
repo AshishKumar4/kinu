@@ -20,7 +20,7 @@ import { DurableObjectOAuthClientProvider, type AgentMcpOAuthProvider } from 'ag
 // via user-do (after the stub lands), not mcp.ts directly.
 export { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
 
-import { diagnostics, KinuError, refusalOf, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, refusalOf, settle, settleLogged, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import {
   censusOf, durableStamps, ERROR_STATUS, mcpPresetById, readStamp, repairSchema, SCHEMA_TABLES, requireOps, StoragePredatesReleaseError, writeStamp,
@@ -99,6 +99,10 @@ export interface AccountSettingsRevision {
 /** When the account was deleted: the one thing its object keeps after, until a sign-in makes it an account again. */
 const ACCOUNT_DELETED_KEY = 'account:deleted-at';
 
+
+/** The workspaces whose push watchers are parked on the GitHub connection, to resume once it is connected again. */
+const PUSH_PARKED_KEY = 'github-push-parked';
+
 export class UserDO extends Agent<Env> {
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
@@ -175,8 +179,12 @@ export class UserDO extends Agent<Env> {
   });
 
   private readonly mcpServers: UserMcpServers = new UserMcpServers({
-    ...this.host, mcp: this.mcp, vault: this.credentials, connectionsMoved: async () => this.secrets.connectionsMoved(),
-    githubGoing: async () => this.githubHooks.deleteAll(),
+    ...this.host, mcp: this.mcp, vault: this.credentials,
+    connectionsMoved: async () => {
+      await this.secrets.connectionsMoved();
+      await this.githubPushBack();
+    },
+    githubGoing: async () => this.githubPushGone(),
   });
 
   /** Repository hooks for workspaces' push watchers, made with the GitHub connection's token. */
@@ -561,6 +569,48 @@ export class UserDO extends Agent<Env> {
 
   deleteCredential(caller: UserCaller, key: string, revoke: boolean): Promise<DisconnectOutcome> {
     return this.credentials.deleteCredential(caller, key, revoke);
+  }
+
+  /** GitHub going: every hook made with it deleted while its token holds, and each workspace's push watchers parked on it
+   *  until it is connected again (`githubPushBack`). */
+  private async githubPushGone(): Promise<void> {
+    const workspaces = await this.githubHooks.deleteAll();
+
+    if (workspaces.length === 0) return;
+    const parked = new Set([...await this.parkedPushWorkspaces(), ...workspaces]);
+
+    await this.ctx.storage.put(PUSH_PARKED_KEY, [...parked]);
+
+    for (const workspace of workspaces) {
+      await settleLogged('github.push_watchers_unparked', { doing: `parking ${workspace}'s push watchers`, otherwise: 'unavailable' },
+        async () => { await objectNamed(this.env.OrchestratorAgent, workspace).githubPushGone(); }, { workspace });
+    }
+  }
+
+  /** GitHub connected again: each workspace whose push watchers were parked on it resumes them, each with a new hook. */
+  private async githubPushBack(): Promise<void> {
+    const parked = await this.parkedPushWorkspaces();
+
+    if (parked.length === 0 || await this.mcpServers.githubGitToken() === null) return;
+    const told = new Set<string>();
+
+    for (const workspace of parked) {
+      await settleLogged('github.push_watchers_not_resumed', { doing: `resuming ${workspace}'s push watchers`, otherwise: 'unavailable' }, async () => {
+        await objectNamed(this.env.OrchestratorAgent, workspace).githubPushBack();
+        told.add(workspace);
+      }, { workspace });
+    }
+
+    // One that did not answer is told at the next change of connections.
+    const left = parked.filter((workspace) => !told.has(workspace));
+
+    await (left.length === 0 ? this.ctx.storage.delete(PUSH_PARKED_KEY) : this.ctx.storage.put(PUSH_PARKED_KEY, left));
+  }
+
+  private async parkedPushWorkspaces(): Promise<string[]> {
+    const held = v.safeParse(v.array(v.string()), await this.ctx.storage.get(PUSH_PARKED_KEY));
+
+    return held.success ? held.output : [];
   }
 
   /** A repository hook delivering to the asking workspace's own signed route, made with the GitHub connection. */

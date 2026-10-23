@@ -6,7 +6,7 @@ import { createTestActorsOver, present } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { TriggerRegistry, buildDrainBatch, initEventsHubTables, type AlarmScheduler } from '../src/events/hub/index';
 import {
-  EventLog, WatchClaims, checkAnswerOf, checkWatcher, createTimerTrigger, fireDueTriggers,
+  EventLog, WatchClaims, checkAnswerOf, checkWatcher, createTimerTrigger, fireDueTriggers, parkWatcher, resumeWatcher,
   type WatchOutcome, type JsonValue, type RunCheck,
 } from '../src/index';
 import { makeSqlExec } from './helpers';
@@ -218,4 +218,31 @@ describe('a watcher', () => {
     expect(checkAnswerOf({ fire: 'yes', brief: 'x' })).toBeNull();
     expect(checkAnswerOf({ fire: false, state: { historyId: '123' } })).toEqual({ fire: false, state: { historyId: '123' } });
   });
+});
+
+describe('a watcher its source stops and starts', () => {
+  test('parked on its cause it keeps its state, and resumes only on that cause', async () => {
+    const t = watchers(async () => answered({ fire: false, state: { cursor: 4 } }));
+    const { id, at } = await watcher(t.registry);
+
+    await t.check(id, at);
+    expect(parkWatcher(t.registry, id, { reason: 'connection', detail: 'GitHub was disconnected' }, NOW)).toBe(true);
+    expect(t.registry.get(id)?.state).toBe('paused');
+    expect(t.state(id)).toEqual({ state: { cursor: 4 }, parked: { reason: 'connection', at: NOW, detail: 'GitHub was disconnected' } });
+
+    expect(await resumeWatcher(t.registry, id, 'program', NOW)).toBe(false);
+    expect(await resumeWatcher(t.registry, id, 'connection', NOW + 1)).toBe(true);
+    expect(t.registry.get(id)?.state).toBe('active');
+    expect(t.state(id)).toEqual({ state: { cursor: 4 } });
+  });
+
+  test('one its owner paused is not resumed by its source', async () => {
+    const t = watchers(async () => answered({ fire: false }));
+    const { id } = await watcher(t.registry);
+
+    t.registry.pause(id, NOW);
+    expect(await resumeWatcher(t.registry, id, 'connection', NOW)).toBe(false);
+    expect(t.registry.get(id)?.state).toBe('paused');
+  });
+
 });

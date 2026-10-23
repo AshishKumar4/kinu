@@ -12,6 +12,8 @@ import { PROPOSED_TASK_STATUSES, type ProposedTask } from '../types/proposals';
 import type { ModifyResult, ScaffoldVersionView } from '../types/scaffold';
 import type { QualityDay } from '../types/quality';
 import type { TimerTrigger } from '../events/ingress/triggers';
+import type { PushWatcher, PushWatcherOpts } from '../events/ingress/webhook';
+import type * as v from 'valibot';
 import type { WatchCheck } from '../types/watch';
 import type { TrustLevel } from '../events/hub/types';
 import { nanoid } from '../utils/nanoid';
@@ -38,6 +40,9 @@ export interface AgentSelfHost {
     cron?: string; atMs?: number; label?: string; payload?: JsonObject;
     missionLabel?: string; check?: WatchCheck;
   }): Promise<TimerTrigger>;
+  /** A watcher run by GitHub's deliveries for a repository, its hook made by the account's GitHub connection; absent
+   *  where GitHub cannot reach the workspace (a local session). */
+  readonly createPushWatcher?: (opts: PushWatcherOpts) => Effect.Effect<PushWatcher, KinuError>;
   /** The cumulative spend governor — a schedule declares its mission budget
    *  here, and `agent.budget` reads it back. */
   readonly budget: MissionGovernor;
@@ -105,6 +110,46 @@ function formatJobRead(job: BackgroundJob): JobRead | RunningJobRead {
 }
 
 /** The two members a program reads its owner's waits through, with whichever host it is. */
+type ScheduleOpts = v.InferOutput<typeof AGENT.schedule.input>;
+
+/** A repository as GitHub names it (docs.github.com: owner up to 39, repository up to 100 characters). */
+const GITHUB_REPOSITORY = /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/u;
+
+/** What a schedule spends against, declared before its trigger so the first fire carries the label; a named label
+ *  re-enters its row, and a blank one names no sub-ledger: the generated one keeps it addressable. */
+function declaredBudget(host: AgentSelfHost, opts: ScheduleOpts) {
+  const limits = readMissionLimits({ budget_usd: opts.budgetUsd, budget_tokens: opts.budgetTokens });
+  const declaredLabel = opts.budgetLabel?.trim();
+  const label = declaredLabel === undefined || declaredLabel === '' ? `schedule-${nanoid()}` : declaredLabel;
+
+  return limits === null ? { missionLabel: undefined, budget: undefined } : { missionLabel: label, budget: host.budget.declare(label, limits) };
+}
+
+/** A watcher GitHub's deliveries for a repository run, where the workspace can be reached by them. */
+function schedulePush(host: AgentSelfHost, opts: ScheduleOpts & { readonly push: NonNullable<ScheduleOpts['push']> }) {
+  return Effect.gen(function* () {
+    if (opts.cron !== undefined || opts.atMs !== undefined) {
+      return yield* new KinuError('bad_input', 'agent.schedule: a push watcher runs on GitHub\'s deliveries; give it no cron or atMs.');
+    }
+
+    if (!GITHUB_REPOSITORY.test(opts.push.github)) return yield* new KinuError('bad_input', 'agent.schedule: push.github names a repository as owner/repo.');
+
+    if (host.createPushWatcher === undefined) {
+      return yield* new KinuError('unsupported', 'agent.schedule: a push watcher needs the cloud workspace, where GitHub can reach it; this session has none.');
+    }
+
+    const { missionLabel, budget } = declaredBudget(host, opts);
+
+    const watcher = yield* host.createPushWatcher({
+      repo: opts.push.github, events: opts.push.events ?? ['push'],
+      ...(opts.label !== undefined && { label: opts.label }), ...(opts.payload !== undefined && { payload: opts.payload }),
+      ...(missionLabel !== undefined && { missionLabel }), ...(opts.check !== undefined && { check: opts.check }),
+    });
+
+    return budget === undefined ? watcher : { ...watcher, budget };
+  });
+}
+
 function ownerWaitMembers(waits: OwnerWaitsHost) {
   return [
     serve(AGENT.waitingOnOwner, async () => await waits.list()),
@@ -133,18 +178,14 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
     serve(AGENT.schedule, (opts) => Effect.gen(function* () {
       const { cron, atMs } = opts;
 
+      if (opts.push !== undefined) return yield* schedulePush(host, { ...opts, push: opts.push });
+
       if (cron === undefined && atMs === undefined) return yield* new KinuError('bad_input', 'agent.schedule: provide { cron } or { atMs }');
 
       if (cron !== undefined && nextCronFire(cron, Date.now()) === null) return yield* new KinuError('bad_input', `agent.schedule: unsupported cron expression: ${cron}`);
 
       if (atMs !== undefined && atMs <= Date.now()) return yield* new KinuError('bad_input', 'agent.schedule: atMs must be in the future');
-      // Declared before the trigger so the first fire carries the label; a named label re-enters its row.
-      const limits = readMissionLimits({ budget_usd: opts.budgetUsd, budget_tokens: opts.budgetTokens });
-      const declaredLabel = opts.budgetLabel?.trim();
-      // A blank label names no sub-ledger; the generated one keeps it addressable.
-      const label = declaredLabel === undefined || declaredLabel === '' ? `schedule-${nanoid()}` : declaredLabel;
-      const missionLabel = limits === null ? undefined : label;
-      const budget = limits === null ? undefined : host.budget.declare(label, limits);
+      const { missionLabel, budget } = declaredBudget(host, opts);
       const trigger = yield* Effect.promise(() => host.createTimerTrigger({ cron, atMs, missionLabel, label: opts.label, payload: opts.payload, ...(opts.check !== undefined && { check: opts.check }) }));
 
       return budget === undefined ? trigger : { ...trigger, budget };

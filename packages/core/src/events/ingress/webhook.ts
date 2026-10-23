@@ -14,8 +14,8 @@ import type { TriggerRow } from '../hub/types';
 import { spillEventContent } from '../hub/content-spill';
 import { Effect, Result } from 'effect';
 import { settle, settleSync } from '../../obs/index';
-import { decodeJsonValue, safeJsonParse, type JsonValue } from '../../utils/json';
-import { checkWatcher, watchCheckOf, type WatchDeps } from './watch';
+import { decodeJsonValue, safeJsonParse, type JsonObject, type JsonValue } from '../../utils/json';
+import { checkWatcher, watchCheckOf, WatchCheckSchema, type WatchCheck, type WatchDeps } from './watch';
 import type { SqlExec } from '../../types/primitives';
 import { hmacSha256Hex, timingSafeEqual } from '../../utils/crypto';
 import {
@@ -109,6 +109,74 @@ function webhookSecretOrMinted(provided: string | undefined): string {
   return trimmed === '' ? freshWebhookSecret() : trimmed;
 }
 
+/** A push watcher's own part of its trigger: the repository whose deliveries it checks, and the hook made for it. */
+const GitHubPushSchema = v.object({
+  source: v.literal('github-repo'), repo: v.string(), events: v.array(v.string()), hookId: v.optional(v.number()),
+});
+
+export type GitHubPush = v.InferOutput<typeof GitHubPushSchema>;
+
+/** The trigger's push watch; null for one that is none. */
+export function gitHubPushOf(trigger: Pick<TriggerRow, 'spec'>): GitHubPush | null {
+  const push = v.safeParse(GitHubPushSchema, trigger.spec['push']);
+
+  return push.success ? push.output : null;
+}
+
+/** A push watcher as its agent reads it back. */
+export interface PushWatcher {
+  readonly id: string;
+  readonly kind: 'webhook_durable';
+  readonly repo: string;
+  readonly hookId: number;
+}
+
+export interface PushWatcherOpts {
+  readonly repo: string;
+  readonly events: readonly string[];
+  readonly label?: string;
+  readonly payload?: JsonObject;
+  readonly missionLabel?: string;
+  readonly check?: WatchCheck;
+}
+
+/**
+ * A watcher GitHub's deliveries for `opts.repo` run rather than a clock: a webhook trigger an agent made, whose deliveries
+ * are signed with the secret minted here (`auth_mode: 'github'`). Its hook is made next, at GitHub, and kept by
+ * {@link keepPushHook}; a secret that cannot be stored leaves no trigger.
+ */
+export function registerPushWatcher(
+  registry: TriggerRegistry, secrets: Pick<WebhookSecretStore, 'put' | 'deleteByTrigger'>, opts: PushWatcherOpts, now: number,
+): Promise<{ readonly trigger_id: string; readonly secret: string }> {
+  return settle(Effect.gen(function* () {
+    const secret_id = `webhook_secret_${Math.random().toString(36).slice(2, 12)}`;
+    const secret = freshWebhookSecret();
+
+    const spec: JsonObject = {
+      auth_mode: 'github', secret_id, accepted_content_type: 'application/json',
+      push: { source: 'github-repo', repo: opts.repo, events: [...opts.events] },
+      ...(opts.label !== undefined && { label: opts.label }),
+      ...(opts.payload !== undefined && { payload: opts.payload }),
+      ...(opts.missionLabel !== undefined && { mission_label: opts.missionLabel }),
+      ...(opts.check !== undefined && { check: v.parse(WatchCheckSchema, opts.check) }),
+    };
+
+    const trigger_id = yield* Effect.promise(() => registry.register({ kind: 'webhook_durable', spec, creator_trust: 'authenticated' }, now));
+
+    yield* storedSecret({ registry, secrets, trigger_id, secret_id, secret, now }, `the watcher of ${opts.repo}`);
+
+    return { trigger_id, secret };
+  }));
+}
+
+/** The hook made at GitHub for a push watcher, kept in its push watch; false for a trigger that is no push watcher. */
+export function keepPushHook(registry: TriggerRegistry, triggerId: string, hookId: number): boolean {
+  const trigger = registry.get(triggerId);
+  const push = trigger === null ? null : gitHubPushOf(trigger);
+
+  return trigger !== null && push !== null && registry.amendSpec(triggerId, { ...trigger.spec, push: { ...push, hookId } });
+}
+
 /** A failed secret write revokes the trigger: an hmac trigger without a secret can never receive. */
 export async function registerDurableWebhook(
   registry: TriggerRegistry,
@@ -136,14 +204,26 @@ export async function registerDurableWebhook(
 
   if (secret === null) return registered;
 
-  return settleSync(Effect.try({ try: () => secrets.put(secret_id, trigger_id, secret), catch: (cause) => ({ cause }) }).pipe(
+  return settleSync(storedSecret({ registry, secrets, trigger_id, secret_id, secret, now }, `webhook "${opts.label}"`).pipe(Effect.as(registered)));
+}
+
+/** A new trigger's secret stored, or the trigger revoked: one that cannot verify a delivery can never receive. */
+function storedSecret(
+  held: {
+    readonly registry: TriggerRegistry; readonly secrets: Pick<WebhookSecretStore, 'put' | 'deleteByTrigger'>;
+    readonly trigger_id: string; readonly secret_id: string; readonly secret: string; readonly now: number;
+  },
+  what: string,
+): Effect.Effect<void> {
+  const { registry, secrets, trigger_id, secret_id, secret, now } = held;
+
+  return Effect.try({ try: () => secrets.put(secret_id, trigger_id, secret), catch: (cause) => ({ cause }) }).pipe(
     Effect.tapError(() => Effect.sync(() => {
       registry.revoke(trigger_id, now);
       secrets.deleteByTrigger(trigger_id);
     })),
-    Effect.catch((failed) => Effect.die(new Error(`webhook "${opts.label}" was not created: its secret could not be stored`, { cause: failed.cause }))),
-    Effect.as(registered),
-  ));
+    Effect.catch((failed) => Effect.die(new Error(`${what} was not created: its secret could not be stored`, { cause: failed.cause }))),
+  );
 }
 
 interface WebhookRefusal { readonly reason: string }
