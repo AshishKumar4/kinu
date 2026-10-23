@@ -265,8 +265,9 @@ function Crumbs({ path }: { path: string }) {
   );
 }
 
-/** A heading that names a kind of thing in a place is quiet; one that names who a share came from or went to leads. */
-const SECTION_HEADING = { quiet: "t-status mb-3 p-text-3", lead: "t-title mb-3 p-text" } as const;
+/** A heading that names a kind of thing in a place is the system's label above a group (docs/DESIGN-SYSTEM.md §1.3);
+ *  one that names who a share came from or went to leads. */
+const SECTION_HEADING = { quiet: "t-label mb-3", lead: "t-title mb-3 p-text" } as const;
 
 /** A titled group: tiles in the grid, or `rows` in one `p-group` (things with no picture, docs/APP-CONSISTENCY.md). */
 function Section({ label, titled = true, heading = "quiet", rows = false, children }: {

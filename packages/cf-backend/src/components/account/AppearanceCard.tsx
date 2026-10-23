@@ -18,9 +18,10 @@ import { setAlertSound, useAlertSound } from "@/hooks/use-owner-alerts";
 import { setMode, useTheme, wearTheme, type ThemeMode } from "@/hooks/use-theme";
 import { setAccountTheme } from "../../lib/user-api";
 
-const THEMES: Readonly<Record<ThemeName, { readonly label: string; readonly about: string }>> = {
-  graphite: { label: "Graphite", about: "Near-neutral greys. Brass is the only colour on screen." },
-  warm: { label: "Warm", about: "Kinu's umber and paper, with clearer contrast." },
+/** A look's name; its swatch shows what it is (design review 2026-10-20, F6: no line describing it). */
+const THEMES: Readonly<Record<ThemeName, { readonly label: string }>> = {
+  graphite: { label: "Graphite" },
+  warm: { label: "Warm" },
 };
 
 const MODES: readonly { readonly id: ThemeMode; readonly label: string }[] = [
@@ -51,7 +52,7 @@ function AlertFields() {
 
   return (
     <>
-      <Field label="Sound" hint="A chime when a turn ends or something waits on you." inline>
+      <Field label="Sound" inline>
         <Switch on={sound} onChange={setAlertSound} label="Sound" data-alerts-sound />
       </Field>
       <NotificationsField />
@@ -82,7 +83,6 @@ export function AppearanceCard() {
           options={THEME_NAMES.map((theme) => ({
             id: theme,
             label: THEMES[theme].label,
-            detail: THEMES[theme].about,
             picture: <ThemeSwatch theme={theme} mode={mode} />,
             aside: name === theme ? <span className="t-meta p-accent-fg">In use</span> : undefined,
           }))} />
