@@ -102,14 +102,14 @@ export function measureContext(input: {
   tools?: ToolDefsLike | undefined;
   messages: readonly ModelMessage[];
 }): ContextComposition {
-  return composition(constantSegments(input), input.messages);
+  return settleSync(Effect.map(constantSegments(input), (constants) => composition(constants, input.messages)));
 }
 
 /** The system's sections and the tools' rows: a turn's, measured once by its meter. */
-function constantSegments(turn: TurnConstants): readonly ContextSegment[] {
+function constantSegments(turn: TurnConstants): Effect.Effect<readonly ContextSegment[]> {
   const sections = splitPromptSections(systemText(turn.system)).map((section): ContextSegment => ({ plane: 'system', label: section.title, chars: section.chars, items: 1 }));
 
-  return [...sections, ...settleSync(toolSegments(turn.tools ?? {}))];
+  return Effect.map(toolSegments(turn.tools ?? {}), (tools) => [...sections, ...tools]);
 }
 
 function toolSegments(tools: ToolDefsLike): Effect.Effect<ContextSegment[], never> {
@@ -180,8 +180,17 @@ export class TurnContextMeter {
   }
 
   measure(messages: readonly ModelMessage[]): void {
-    this.constants ??= constantSegments(this.turn);
-    this.latest = composition(this.constants, messages);
+    this.latest = composition(this.turnConstants(), messages);
+  }
+
+  turnConstants(): readonly ContextSegment[] {
+    if (this.constants !== undefined) return this.constants;
+
+    return settleSync(Effect.map(constantSegments(this.turn), (constants) => {
+      this.constants = constants;
+
+      return constants;
+    }));
   }
 
   /** Undefined when nothing measured the step; callers report no breakdown rather than an empty one. */
