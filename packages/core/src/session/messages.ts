@@ -7,9 +7,15 @@ import { sha256Hex } from '../safety/argument-digest';
 import { encodeModelMessage, decodeModelMessageValues, decodeOwnModelMessage, recordCarries } from './message-codec';
 import { JsonObjectSchema, isParsedJsonObject, jsonObjectElements, type JsonObject, type JsonValue } from '../utils/json';
 import { freezeTree } from '../utils/freeze';
+import { nextLoopTurn } from '../types/clock';
 import { spilledDigest, type SessionPayloads, type SessionPayloadReader, type SessionPayload } from './payload';
 
 export interface MessageReference { readonly messageId: string }
+
+/** The messages one event-loop turn reads and decodes. An entry may refer to hundreds of messages, and a message may
+ *  carry a screenshot: the facet loop gate read a chat's seed holding its facet 157-246 ms in one read, and 139 ms at
+ *  twelve messages a slice (2026-10-23). */
+const MATERIALIZE_SLICE_MESSAGES = 4;
 
 export type MessageOrigin = 'input' | 'output' | 'edit' | 'context_transform' | 'render';
 
@@ -212,19 +218,24 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
     return { row, parts };
   }
 
-  /** Each named message's parts, its rows in one statement; a message no row holds is absent. */
+  /** Each named message's parts, read and decoded in slices, the loop let go between them; an absent row stays absent. */
   async materializePartsOf(messageIds: readonly string[]): Promise<Map<string, readonly StoredPart[]>> {
     this.actor.assertCurrent();
-
-    const rows = this.sql<MessageRow & { message_id: string }>`SELECT message_id,origin,role,native_content_kind,envelope_json,sealed_at,content_json,content_path
-      FROM session_messages WHERE actor_id=${this.actor.actorId} AND message_id IN (SELECT value FROM json_each(${JSON.stringify(messageIds)}))`;
-
     const parts = new Map<string, readonly StoredPart[]>();
 
-    for (const row of rows) {
-      parts.set(row.message_id, row.sealed_at === null
-        ? await this.streamed(row.message_id)
-        : storedParts(await this.payloads.readStored(row.content_json, row.content_path)));
+    for (let at = 0; at < messageIds.length; at += MATERIALIZE_SLICE_MESSAGES) {
+      if (at > 0) await nextLoopTurn();
+      this.actor.assertCurrent();
+      const ids = messageIds.slice(at, at + MATERIALIZE_SLICE_MESSAGES);
+
+      const rows = this.sql<MessageRow & { message_id: string }>`SELECT message_id,origin,role,native_content_kind,envelope_json,sealed_at,content_json,content_path
+        FROM session_messages WHERE actor_id=${this.actor.actorId} AND message_id IN (SELECT value FROM json_each(${JSON.stringify(ids)}))`;
+
+      for (const row of rows) {
+        parts.set(row.message_id, row.sealed_at === null
+          ? await this.streamed(row.message_id)
+          : storedParts(await this.payloads.readStored(row.content_json, row.content_path)));
+      }
     }
 
     this.actor.assertCurrent();
