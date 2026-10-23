@@ -761,7 +761,7 @@ function MessageFeedback({
   })), [busy, current, messageId, onFeedback]);
 
   return (
-    <div className={`flex items-center gap-1 transition-opacity ${current === null ? 'opacity-0 group-hover/msg:opacity-100 focus-within:opacity-100' : ''}`}>
+    <div className={`flex items-center gap-1 transition-opacity ${current === null ? 'opacity-0 group-hover/msg:opacity-100 focus-within:opacity-100' : ''}`} data-message-feedback>
       <IconControl place="inline" onClick={() => toggle('positive')} disabled={busy} aria-pressed={current === 'positive'}
         title="Mark this response helpful. Feeds evolution scoring." aria-label="Mark this response helpful">
         <ThumbsUpIcon size={12} weight={current === 'positive' ? 'fill' : 'regular'} />

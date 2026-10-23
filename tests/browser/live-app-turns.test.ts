@@ -7,7 +7,7 @@ import { liveRows, STOPPED_BY } from '../../scripts/live-app-rows';
 
 const { observed, verdictOf, boot } = liveRows('live-app-turns', [
   'live-indicator', 'opened-mid-turn', 'reconnect', 'answered', 'unsent-answer', 'dropped-file', 'cleared', 'stop-then-send', 'new-chat-stop',
-  'state',
+  'turn-drawn', 'state',
 ]);
 
 /** An answer keeps each step's text where it streamed: its steps drawn while it waits, the same blocks and then the
@@ -146,5 +146,23 @@ describe('words a Stop hands back, whichever tab pressed it', () => {
 describe("a new chat's opening offers Stop while its first call waits", () => {
   test('Stop stands while the opening waits on the model, and the opening is answered once it is let go', () => {
     expect(verdictOf(observed.newChatStop, 'new-chat-stop')).toEqual({ stopOffered: true, answered: true });
+  });
+});
+
+// The owner, 2026-10-23: a turn a signal opened (here a new workspace's first) drew as if it had ended while it ran.
+describe('a turn a signal opened draws live while it runs, and settles once it ends', () => {
+  test('its newest phase stays open and follows its calls, and no feedback is offered mid-turn', () => {
+    const { running } = verdictOf(observed.turnDrawn, 'turn-drawn');
+
+    expect(running.phase).toMatchObject({ state: 'live', body: 'live', shown: true });
+    expect(running.feedback).toBe(false);
+  });
+
+  test('once it ends every phase folds shut, and the answer offers feedback', () => {
+    const { ended } = verdictOf(observed.turnDrawn, 'turn-drawn');
+
+    expect(ended.phases.length).toBeGreaterThan(0);
+    expect(ended.phases.map(({ state, shown }) => ({ state, shown }))).toEqual(ended.phases.map(() => ({ state: 'settled', shown: false })));
+    expect(ended.feedback).toBe(true);
   });
 });
