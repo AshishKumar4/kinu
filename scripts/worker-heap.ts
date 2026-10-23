@@ -597,27 +597,9 @@ async function advisedLongTurn(advised: boolean, run: {
     throw new Error(`the ${name} long turn took ${String(stepped.compat)} of its ${String(LONG_TURN.steps)} scripted steps (${String(stepped.binding)} other calls answered)`);
   }
 
-  // Its last step's review runs on after the turn: read once the advisor's calls have come and no other has followed
-  // for 3 s (a minute at most), and the turn's agent and workspace have settled.
+  // Its last step's review runs on after the turn; main's idle joins it.
   await ask(`/main-idle?workspace=${name}`);
   await ask(`/quiesce?workspace=${name}`);
-
-  if (advised) {
-    const deadline = performance.now() + 60_000;
-    let seen = await advisorCalls();
-    let quietSince = performance.now();
-
-    while (performance.now() < deadline && (seen === callsBefore || performance.now() - quietSince < 3000)) {
-      await Bun.sleep(250);
-      const now = await advisorCalls();
-
-      if (now !== seen) [seen, quietSince] = [now, performance.now()];
-    }
-
-    await ask(`/main-idle?workspace=${name}`);
-    await ask(`/quiesce?workspace=${name}`);
-  }
-
   const end = await inEach(isolates, async (session) => (await session.allocations()).total);
   const allocated = [...thirds, end].reduce((sum, part) => ({ workspace: sum.workspace + part.workspace, main: sum.main + part.main }), { workspace: 0, main: 0 });
   const reviews = await advisorCalls() - callsBefore;
@@ -670,15 +652,8 @@ async function loopOnlyTurns(ask: (path: string) => Promise<string>, held: { rea
     await ask(`/model?answerBytes=0&${script}&stepPath=compat`);
     await ask('/model?released=1000000');
     await ask(`/turn?workspace=${name}&text=long`);
+    // Main's idle joins the reviews that outlive its turn.
     await ask(`/main-idle?workspace=${name}`);
-
-    // A review may outlive its turn: read once the advisor's calls have stopped coming for 3 s.
-    for (let last = await seen(), quiet = performance.now(); performance.now() - quiet < 3000; await Bun.sleep(250)) {
-      const now = await seen();
-
-      if (now.advisorCalls !== last.advisorCalls) [last, quiet] = [now, performance.now()];
-    }
-
     await ask(`/quiesce?workspace=${name}`);
     const after = await seen();
 

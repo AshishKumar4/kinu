@@ -475,10 +475,18 @@ export class FacetChat {
   }
 
   async idle(): Promise<void> {
-    while (this.session.pumpPromise !== null || this.terminal.closing) {
-      await this.session.pumpPromise;
-      await this.terminal.idle();
-    }
+    const { orchestrator } = this.deps.actor.session;
+
+    // Its session's tracked work is joined too, as the CLI's session end joins it: an advisor's review that outlives
+    // its turn (D14) has its charge to relay, and its blocker opens the next turn.
+    do {
+      while (this.session.pumpPromise !== null || this.terminal.closing) {
+        await this.session.pumpPromise;
+        await this.terminal.idle();
+      }
+
+      await orchestrator.settleTracked();
+    } while (this.session.pumpPromise !== null || this.terminal.closing);
 
     await this.resting;
     await this.unowned;

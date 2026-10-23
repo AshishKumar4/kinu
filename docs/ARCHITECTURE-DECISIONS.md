@@ -1232,8 +1232,10 @@ a facet of its own) and D13's "every agent's advisor in core `ActorAdvisor`".
   one's model call and reads aborted, those owed dropped), and a stopped
   turn's review says nothing. The session's end joins reviews still running
   (`track`, joined by `settleTracked`, as other post-turn work is); in an
-  agent's facet a review after its turn runs while the isolate lives, its
-  reads refused (the turn's fence) and its charge relayed as made. A failed
+  agent's facet a review after its turn runs on, its reads refused (the
+  turn's fence) and its charge relayed as made, and the agent's quiet
+  (`idle`, which its retirement and its workspace's deletion wait on) joins
+  it as the CLI's session end does (2026-10-23). A failed
   turn is ended for its advisor by the execution's cleanup. A hired agent's
   blocker also reaches its hirer. A note
   is said, then recorded: one said and not recorded only misses the dedupe
