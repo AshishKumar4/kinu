@@ -22,7 +22,7 @@ import { restApiToken } from './cloudflare-token';
 import { runWrangler, publishTeardown, runTeardownOnce, delay } from './ephemeral-deployment';
 import { snapshotRegistry } from '../packages/devbox/src/snapshot-registry';
 import artifact from '../packages/devbox/block-lower/upstream.json';
-import { CONTAINER_CONTRACTS, DISK_CONTRACTS } from '../packages/devbox/bench/contract-types';
+import { CONTAINER_CONTRACTS, DISK_CONTRACTS, type RecoveryAcceptance } from '../packages/devbox/bench/contract-types';
 import { shellQuote } from '../packages/core/src/utils/shell';
 import { endedNearSilence, rowNotice } from './row-verdicts';
 import { diskStallOf, type DiskStall } from '../packages/devbox/src/disk-stall';
@@ -48,6 +48,79 @@ const STALL_SAMPLE_MS = 30_000;
 
 /** Where the platform stall a call can meet is measured and reported. */
 const DISK_STALL_REPORT = 'kinu-logs/container-btrfs-wedge-2026-10-17';
+
+/** A container's start holds its object this long (blockConcurrencyWhile) and a recovery restores inside it (A2). */
+const START_WINDOW_MS = 30_000;
+
+/** `--<name>=<count>` on the command line, or `fallback`. */
+function countFlag(name: string, fallback: number): number {
+  const given = process.argv.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3);
+
+  return given === undefined ? fallback : v.parse(v.pipe(v.string(), v.transform(Number), v.number(), v.safeInteger(), v.minValue(1)), given);
+}
+
+/**
+ * The disk chain's contracts beside the product's, at once, on boxes of their own, each store prefix its box's: on
+ * armada 2026-10-13 the product's took about 110 s and the disk chain's 131 s, one after the other. Both end before a
+ * failure is reported, so the teardown never meets a contract still calling the fixture. `--disk`: the disk chain's
+ * alone, with no desktop and so no browser on this host; `--recovery-acceptance`: A2's acceptance alone.
+ */
+async function contractsRun({ ask, step, productContracts }: {
+  readonly ask: (path: string, name: string) => Promise<v.InferOutput<typeof Json>>;
+  readonly step: <Evidence>(contract: string, work: () => Promise<Evidence>) => Promise<void>;
+  readonly productContracts: () => Promise<void>;
+}): Promise<void> {
+  if (process.argv.includes('--recovery-acceptance')) return await recoveryAcceptanceRun((path) => ask(path, 'recovery'), step);
+
+  const diskContracts = async () => {
+    for (const kind of DISK_CONTRACTS) await step(`disk-${kind}`, () => ask(`/disk-contract?kind=${kind}`, 'disk'));
+  };
+
+  const ended = await Promise.allSettled([process.argv.includes('--disk') ? Promise.resolve() : productContracts(), diskContracts()]);
+  const failed = ended.find((outcome) => outcome.status === 'rejected');
+
+  if (failed !== undefined) throw failed.reason;
+}
+
+/**
+ * `--recovery-acceptance [--saves=288] [--big-files=512] [--big-bytes=2097152] [--big-per-save=4]`: A2 and m1966b's acceptance on one box
+ * (packages/devbox/bench/recovery-acceptance.ts). 288 saves are a day of the 5-minute tick. Its container crashes after
+ * the last save, and the fresh one recovers cold: red unless the recovery attaches inside the start's 30 s and mounts no
+ * more than D77's floor(log2 n) + 2 layers. Every phase's measurements are the report's.
+ */
+async function recoveryAcceptanceRun(
+  ask: (path: string) => Promise<v.InferOutput<typeof Json>>,
+  step: <Evidence>(contract: string, work: () => Promise<Evidence>) => Promise<void>,
+): Promise<void> {
+  const workspace = { bigFiles: countFlag('big-files', 512), bigBytes: countFlag('big-bytes', 2_097_152), bigPerSave: countFlag('big-per-save', 4) };
+  const saves = countFlag('saves', 288);
+  const phase = (asked: Pick<RecoveryAcceptance, 'phase'> & Partial<RecoveryAcceptance>) => ask(`/recovery-acceptance?asked=${encodeURIComponent(JSON.stringify({ ...workspace, ...asked }))}`);
+
+  await step('recovery-fill', () => phase({ phase: 'fill' }));
+
+  // A call answers inside fetch's 300 s: 16 saves take about 30.
+  for (let from = 1; from <= saves; from += 16) await step(`recovery-saves-${String(from)}`, () => phase({ phase: 'saves', from, count: Math.min(16, saves - from + 1) }));
+
+  await step('recovery-seal', () => phase({ phase: 'seal' }));
+  await step('recovery-crash', () => ask('/crash'));
+  let recovered: v.InferOutput<typeof RecoveryMeasured> | undefined;
+
+  await step('recovery-recover', async () => {
+    const measured = await phase({ phase: 'recover' });
+    recovered = v.parse(RecoveryMeasured, measured);
+
+    return measured;
+  });
+
+  if (recovered === undefined) throw new Error('the recovery answered nothing');
+  const { attachMs, layers, bound } = recovered;
+
+  process.stdout.write(`recovery acceptance: ${String(saves)} saves, ${String(layers)} layers (bound ${String(bound)}), attached in ${String(attachMs)} ms\n`);
+
+  if (attachMs >= START_WINDOW_MS || layers > bound) throw new Error(`the recovery took ${String(attachMs)} ms over ${String(layers)} layers: A2 holds it under ${String(START_WINDOW_MS)} ms and ${String(bound)} layers`);
+}
+
+const RecoveryMeasured = v.looseObject({ attachMs: v.number(), layers: v.number(), bound: v.number() });
 
 /** The report's step for what ended the run. */
 function failureStep({ cause }: { readonly cause: unknown }) {
@@ -1279,18 +1352,7 @@ print('exact' if json.load(open('${BOX_CHROMIUM_POLICY}'))['CACertificates'] == 
       });
 
     } else {
-      const diskContracts = async () => {
-        for (const kind of DISK_CONTRACTS) await step(`disk-${kind}`, () => call(`/disk-contract?kind=${kind}`, Json, {}, `${box}-disk`));
-      };
-
-      // At once, on boxes of their own, each store prefix its box's: on armada 2026-10-13 the product's took about
-      // 110 s and the disk chain's 131 s, one after the other. Both end before a failure is reported, so the
-      // teardown never meets a contract still calling the fixture. `--disk`: the disk chain's alone, with no desktop
-      // and so no browser on this host.
-      const ended = await Promise.allSettled([process.argv.includes('--disk') ? Promise.resolve() : productContracts(), diskContracts()]);
-      const failed = ended.find((outcome) => outcome.status === 'rejected');
-
-      if (failed !== undefined) throw failed.reason;
+      await contractsRun({ ask: (path, name) => call(path, Json, {}, `${box}-${name}`), step, productContracts });
     }
   } catch (cause) {
     steps.push(failureStep({ cause }));

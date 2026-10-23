@@ -8,8 +8,9 @@ import { DISK_PROBE } from '../../../devbox/src/disk-stall';
 import { DevboxError, settle } from '../../../devbox/src/errors';
 import { DEFAULT_DEVBOX_POLICY, describeThrown } from '../../../devbox/src/lifecycle';
 import { fileErrorContract, runContainerContract } from '../../../devbox/bench/container-contracts';
-import { CONTAINER_CONTRACTS, DISK_CONTRACTS } from '../../../devbox/bench/contract-types';
+import { CONTAINER_CONTRACTS, DISK_CONTRACTS, RecoveryAcceptanceSchema, type RecoveryAcceptance } from '../../../devbox/bench/contract-types';
 import { diskContract } from '../../../devbox/bench/disk-contracts';
+import { recoveryAcceptance } from '../../../devbox/bench/recovery-acceptance';
 import {
   JsonValueSchema, createSandboxExecutor, withCodemodeProgram, desktopClientUrl, executorNamespace, gateProviderExec, projectJsonValue, sandboxFiles, sha256Hex,
   timingSafeEqual, withAppSecurityHeaders, type JsonValue, type ShellApprovalPolicy,
@@ -225,6 +226,30 @@ export class ContractBox extends Devbox<Env> {
     await diskContract(kind, { container, kv: this.ctx.storage.kv, bucket: this.env.STORE, id: this.ctx.id.toString() });
   }
 
+  /** A2's acceptance, one phase a call (`devbox-container-tier.ts --recovery-acceptance`). */
+  async recoveryAcceptance(asked: RecoveryAcceptance): Promise<JsonValue> {
+    await this.ensureReady();
+    const container = this.ctx.container;
+
+    if (container === undefined) throw new Error('this fixture has no container binding');
+
+    // Its first save installs the box's R2 mount, on the run's first container and on the fresh one after the crash. A
+    // save between phases would take the acceptance's workspace into the product's chain, whose inventory then is
+    // not the acceptance chain's, and its next save a base.
+    if (asked.phase === 'fill' || asked.phase === 'recover') await this.checkpointNow('tick');
+
+    return projectJsonValue({ value: await recoveryAcceptance(asked, { container, kv: this.ctx.storage.kv, bucket: this.env.STORE, id: this.ctx.id.toString() }) });
+  }
+
+  /** The container ends as a crash ends it, and the next call starts a fresh one: its object and its storage stay, as
+   *  the box's own `destroy` would delete them. */
+  async crash(): Promise<void> {
+    const container = this.ctx.container;
+
+    if (container === undefined) throw new Error('this fixture has no container binding');
+    await container.destroy();
+  }
+
   storageProbe(command: string) {
     if (this.env.PROBE_HTTP !== '1') throw new Error('this contract run installs no storage alternatives');
 
@@ -384,10 +409,14 @@ async function contractRoute(url: URL, name: string, box: DurableObjectStub<Cont
   }
 }
 
-/** The box's state, its saves and its stop; null for any other path. */
+/** The box's state, its saves, its stop and its crash, and A2's acceptance; null for any other path. */
 async function lifecycleRoute(url: URL, box: DurableObjectStub<ContractBox>): Promise<Response | null> {
   switch (url.pathname) {
     case '/state': return Response.json(await box.devboxState());
+    case '/recovery-acceptance': return Response.json(await box.recoveryAcceptance(v.parse(RecoveryAcceptanceSchema, JSON.parse(url.searchParams.get('asked') ?? '{}'))));
+    case '/crash': await box.crash();
+
+      return Response.json({ crashed: true });
     case '/armed': return Response.json(await box.armed());
     case '/checkpoint': return Response.json(await box.checkpointNow(url.searchParams.get('kind') === 'tick' ? 'tick' : 'quiesce'));
     case '/stop': return Response.json(await box.quiesce());

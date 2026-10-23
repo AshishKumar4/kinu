@@ -427,7 +427,7 @@
     },
     {
       "key": "scripts/devbox-container-tier.ts#main",
-      "complexity": 25
+      "complexity": 23
     },
     {
       "key": "scripts/ladder.ts#runPending",
