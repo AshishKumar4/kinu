@@ -1831,8 +1831,8 @@ export abstract class ActorAgent extends Agent<Env> {
    * A turn on `spec`, admitted by the owner's limits: none starts in a suspended account, and one the platform pays for
    * (Workers AI through the deployment's binding, `createWorkersAIProvider`) is bounded by the free tier's day of tokens.
    */
-  protected admitModelTurn(spec: string): Effect.Effect<void, KinuError> {
-    return this.admittedByLimits('limits.turn_unasked', (stub, caller) => stub.limits_admitTurn(caller, specProvider(spec) === WORKERS_AI_PROVIDER_ID));
+  admitModelTurn(spec: string): Promise<void> {
+    return settle(this.admittedByLimits('limits.turn_unasked', (stub, caller) => stub.limits_admitTurn(caller, specProvider(spec) === WORKERS_AI_PROVIDER_ID)));
   }
 
   /** This workspace's stored bytes, as its own database reads them: the platform's number, sampled, never counted. */

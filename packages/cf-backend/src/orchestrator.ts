@@ -1021,7 +1021,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       chatIdle: async (reference) => { await this.agentQuiet(reference.actorId); },
       frozen: async (reference, key) => await this.agentCall(reference.actorId, (isolate, snapshot) => isolate.frozen(snapshot, { turnId: key.turnId, runId: key.runId })),
       pricing: (spec) => this.modelCatalog.pricing(spec),
-      admitModel: (spec) => settle(this.admitModelTurn(spec)),
+      admitModel: (spec) => this.admitModelTurn(spec),
       accounts: () => this.config.getProviderAccounts(),
       noteRequest: (actorId, lastRequestAt) => this.warmingOf(actorId).noteRequest(lastRequestAt),
       openWork: (actorId) => this.openWorkOf(actorId),

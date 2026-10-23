@@ -113,8 +113,13 @@ function MoveMyDataCard() {
   const next = useCallback(() => {
     if (moving.phase !== "workspaces") return;
 
-    if (moving.at + 1 < moving.list.length) setMoving({ ...moving, at: moving.at + 1 });
-    else detach(drive(moving.list.length));
+    if (moving.at + 1 < moving.list.length) {
+      setMoving({ ...moving, at: moving.at + 1 });
+
+      return;
+    }
+
+    detach(drive(moving.list.length));
   }, [moving]);
 
   const current = moving.phase === "workspaces" ? moving.list[moving.at] : undefined;
