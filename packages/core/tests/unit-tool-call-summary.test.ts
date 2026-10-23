@@ -81,6 +81,14 @@ describe('tool call summaries — what a command did', () => {
     expect(said('bunx wrangler deploy --dry-run')).not.toBe(said('bunx wrangler deploy'));
     expect(said('git rm old.ts')).not.toBe(said('rm old.ts'));
   });
+
+  // CODE-8: the command was split on spaces, so a quoted assignment's value read as the program.
+  test('the program is the word the shell runs, past quoted assignments', () => {
+    const said = (command: string) => describeToolCall('shell', { runtime: 'workspace', command });
+
+    expect(said('NODE_ENV="a b" npm run lint')).toBe(said('npm run lint'));
+    expect(said("FLAGS='--force deploy' sudo /usr/bin/git push")).toBe(said('git push'));
+  });
 });
 
 describe('tool call summaries — truthfulness', () => {

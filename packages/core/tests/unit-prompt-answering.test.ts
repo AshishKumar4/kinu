@@ -54,6 +54,18 @@ describe('an answer is taught pages only where a person reads it with its pages 
   });
 });
 
+// CODE-8: `\bname=` matched inside `data-name=` and inside another attribute's quoted value.
+describe("a drawn block's name", () => {
+  test('is its own name attribute, never one inside another attribute or its value', () => {
+    const named = (tag: string) => slateUiSegments(`${tag}\n<p>hi</p>\n</slate-ui>`).flatMap((segment) => (segment.kind === 'slate' ? [segment.name] : []));
+
+    expect(named('<slate-ui data-name="evil" name="good">')).toEqual(['good']);
+    expect(named(`<slate-ui title="see name='evil'" name=good>`)).toEqual(['good']);
+    expect(named('<slate-ui NAME="first" name="second">')).toEqual(['first']);
+    expect(named('<slate-ui data-name="only">')).toEqual([]);
+  });
+});
+
 describe('the shared directory is in the file layout every agent is told', () => {
   test('hosted and local alike: vfs://scratch, every agent\'s to read and write, beside each one\'s own home', () => {
     for (const backend of ['cf', 'cli-local'] as const) {
