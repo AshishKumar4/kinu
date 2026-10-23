@@ -318,6 +318,24 @@ describe('every trial account a run acts as', () => {
     }
   });
 
+  // The owner, 2026-10-23: trajectory reviews on Claude Haiku 5.5 at low effort. A run that names none, the gate's, gets
+  // the account's default back, not the last run's.
+  test('a run\'s effort is its trial accounts\' default tier\'s, and a run naming none takes it away', async () => {
+    const { server, accounts, at } = accountsDeployment();
+    const base = { origin: at, keysPath: keysPathOf(homeWithKeys({ 'opencode-go.bearer': KEY })), identity: IDENTITY, identityEnv: 'KINU_EVAL_WEB_IDENTITY', trialAccounts: ['trial-1'] as const, models: [MODEL] };
+
+    try {
+      await provisionEvalProviderKeys({ ...base, effort: 'low' });
+      const low = accounts.get('trial-1')?.catalog.catalog.tiers.default;
+
+      await provisionEvalProviderKeys(base);
+
+      expect([low?.reasoningEffort, accounts.get('trial-1')?.catalog.catalog.tiers.default.reasoningEffort]).toEqual(['low', undefined]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   // Staging 2620e7c05, 2026-10-19: a gateway model (my-gateway/anthropic/claude-sonnet-5.5) is listed only for an account
   // holding a Cloudflare login and a selected AI Gateway, and the selection is a user_config row.
   test('a run on a gateway model gives each account the deployment\'s Cloudflare login and gateway, and keeps them', async () => {

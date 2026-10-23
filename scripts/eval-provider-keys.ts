@@ -20,7 +20,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import * as v from 'valibot';
 import {
-  accountOf, baseCredentialKey, CLOUDFLARE_OAUTH_CRED_KEY, profileCatalogDigest, DEFAULT_WORKERS_AI_MODEL_SPEC, DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, EVAL_WORKSPACE_LEASE_MS,
+  accountOf, baseCredentialKey, CLOUDFLARE_OAUTH_CRED_KEY, profileCatalogDigest, ReasoningEffortSchema, type ReasoningEffort, DEFAULT_WORKERS_AI_MODEL_SPEC, DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, EVAL_WORKSPACE_LEASE_MS,
   MAIN_ACCOUNT, MY_GATEWAY_PROVIDER_ID, validateCredential, type OAuthCredential,
   parseEvalAccount, parseGatewayTarget, type EvalAccount,
 } from '@kinu.run/core';
@@ -59,6 +59,9 @@ export interface Provisioning {
    *  has one owner, whose renewals single-flight in its own object: the trial account its model's sequence runs in, given
    *  those its models name ({@link plansNamed}) once. eval-service never holds one; the run deletes them at its end. */
   readonly planGrants?: Readonly<Record<string, OAuthCredential>>;
+  /** The reasoning effort the run's turns ask (`KINU_EVAL_EFFORT`), set on each trial account's default tier; absent,
+   *  none is set, and one a run before left is taken away. */
+  readonly effort?: ReasoningEffort;
 }
 
 /**
@@ -256,7 +259,10 @@ async function readyTrialAccount(input: Provisioning & { identity: string }, acc
     const tiers = Object.fromEntries(Object.entries(catalog.tiers).map(([id, tier]) => {
       const { fallbacks: _chain, ...unchained } = tier ?? { model };
 
-      return [id, id === 'deep' ? { ...unchained, model } : unchained];
+      const { reasoningEffort: _effort, ...uneffortful } = unchained;
+      const sized = id === 'default' ? { ...uneffortful, ...input.effort !== undefined && { reasoningEffort: input.effort } } : unchained;
+
+      return [id, id === 'deep' ? { ...sized, model } : sized];
     }));
 
     const { modelFallbacks: chained, ...base } = catalog;
@@ -409,10 +415,12 @@ if (import.meta.main) {
 
   const gateway = needsGateway(matrix.models) ? gatewayFor(origin) : undefined;
   const planGrants = plansIn(process.env['KINU_EVAL_PLAN_GRANTS']);
+  const namedEffort = process.env['KINU_EVAL_EFFORT']?.trim() ?? '';
+  const effort = namedEffort === '' ? undefined : v.parse(ReasoningEffortSchema, namedEffort);
 
   const { stored, findings, trials, notes } = await provisionEvalProviderKeys({
     origin, keysPath: EVAL_PROVIDER_KEYS, identity, identityEnv, models: matrix.models, trialAccounts: accounts,
-    ...gateway !== undefined && { gateway }, ...planGrants !== undefined && { planGrants },
+    ...gateway !== undefined && { gateway }, ...planGrants !== undefined && { planGrants }, ...effort !== undefined && { effort },
   });
 
   for (const note of notes ?? []) console.log(`eval-provider-keys: ${note}`);

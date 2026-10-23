@@ -3,7 +3,7 @@ import { Database } from 'bun:sqlite';
 import { join } from 'node:path';
 import { DEV_IDENTITY_ACCOUNT_HEADER } from '@kinu.run/core';
 import { scratchDir } from '@kinu.run/test-utils';
-import { giveAgain, modelsNamed, ompGrant, planLogins } from './eval-plan-run';
+import { giveAgain, modelsNamed, ompGrant, planLogins, trialSelection } from './eval-plan-run';
 
 const held = new Map<string, string[]>([
   ['eval-service', ['opencode-go.bearer']], ['trial-1', ['opencode-go.bearer', 'claude.oauth', 'chatgpt.oauth@compare']], ['trial-2', ['codex.oauth']],
@@ -69,6 +69,14 @@ test('a run measures Muse and each model named, and refuses a name it does not h
   expect(modelsNamed(['--models=haiku']).map((each) => each.slug)).toEqual(['muse', 'haiku']);
   expect(modelsNamed(['--models=haiku,luna']).map((each) => each.model)).toEqual([expect.any(String), 'claude/claude-haiku-5-5', 'codex/gpt-6-luna']);
   expect(() => modelsNamed(['--models=opus'])).toThrow('no model is named opus');
+  // The owner, 2026-10-23: trajectory reviews on Haiku alone.
+  expect(modelsNamed(['--models=haiku', '--without-muse']).map((each) => each.slug)).toEqual(['haiku']);
+});
+
+test('a run passes its tasks and trials to each sequence, and its effort to the trial accounts', () => {
+  expect(trialSelection(['--models=haiku'])).toEqual({ map: ['--trials=1'], effort: null });
+  expect(trialSelection(['--models=haiku', '--tasks=chat-app,office', '--trials=2', '--effort=low']))
+    .toEqual({ map: ['--trials=2', '--tasks=chat-app,office'], effort: 'low' });
 });
 
 // A token OMP renewed reaches the account using the old one, and no other.

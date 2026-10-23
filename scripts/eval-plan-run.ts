@@ -7,6 +7,10 @@
  *   bun scripts/eval-plan-run.ts --models=haiku   run Muse and the named models; prints what the holder says, and returns
  *   bun scripts/eval-plan-run.ts                  the running holder's status
  *   bun scripts/eval-plan-run.ts --dry-run        everything up to the run, then stop
+ *   …--without-muse                               the named models alone, with no Muse reference (the owner, 2026-10-23:
+ *                                                 trajectory reviews on Claude Haiku 5.5 at low effort)
+ *   …--tasks=chat-app,office --trials=2           only those tasks, that many trials each (default: every task, one)
+ *   …--effort=low                                 the trial accounts' turns ask that reasoning effort (KINU_EVAL_EFFORT)
  *
  * The run is a holder this command starts (systemd unit kinu-eval-plan-run). It reads each plan's login from OMP's own
  * store, read-only and its access token alone: OMP renews its logins under its own lease, which nothing here touches,
@@ -149,7 +153,11 @@ async function command(argv: readonly string[]): Promise<number> {
   if (!active && starting) {
     mkdirSync(STATE, { recursive: true });
     rmSync(STATUS, { force: true });
-    const holder = ['bun', join(ROOT, 'scripts/eval-plan-run.ts'), '--hold', ...argv.filter((word) => word === '--dry-run' || word.startsWith('--models='))];
+
+    const passed = (word: string): boolean => word === '--dry-run' || word.startsWith('--models=')
+      || PASSED.some((flag) => word === flag || (flag.endsWith('=') && word.startsWith(flag)));
+
+    const holder = ['bun', join(ROOT, 'scripts/eval-plan-run.ts'), '--hold', ...argv.filter(passed)];
 
     // A stop waits for the holder's cleanup (a clear of every staging eval account) rather than the default 90 s.
     const started = Bun.spawnSync(['systemd-run', '--user', `--unit=${UNIT}`, '--collect', '--property=TimeoutStopSec=300', `--working-directory=${ROOT}`, `--setenv=HOME=${process.env['HOME'] ?? ''}`,
@@ -188,14 +196,28 @@ function pause(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-/** The models a run measures: Muse, and each one named (`--models=haiku,luna`). */
+/** The models a run measures: Muse unless `--without-muse`, and each one named (`--models=haiku,luna`). */
 export function modelsNamed(argv: readonly string[]): (typeof MODELS)[number][] {
   const named = (argv.find((word) => word.startsWith('--models='))?.slice('--models='.length) ?? '').split(',').filter((slug) => slug !== '');
   const unknown = named.filter((slug) => !MODELS.some((each) => each.slug === slug));
 
   if (unknown.length > 0) throw new Error(`no model is named ${unknown.join(', ')}; the models are ${MODELS.map((each) => each.slug).join(', ')}`);
 
-  return MODELS.filter((each) => each.omp === null || named.includes(each.slug));
+  const reference = !argv.includes('--without-muse');
+
+  return MODELS.filter((each) => (each.omp === null ? reference : named.includes(each.slug)));
+}
+
+/** The flags a run passes through, from the holder to each sequence's `evals-map`, and its effort as `KINU_EVAL_EFFORT`. */
+const PASSED = ['--without-muse', '--tasks=', '--trials=', '--effort='] as const;
+
+/** `evals-map`'s own arguments among `argv`, and the effort the trial accounts' turns ask (none: their default). */
+export function trialSelection(argv: readonly string[]) {
+  const valued = (flag: string): string | undefined => argv.find((word) => word.startsWith(flag))?.slice(flag.length);
+  const trials = valued('--trials=') ?? '1';
+  const tasks = valued('--tasks=');
+
+  return { map: [`--trials=${trials}`, ...tasks === undefined ? [] : [`--tasks=${tasks}`]], effort: valued('--effort=') ?? null };
 }
 
 /** The holder: preflight, each plan's login from OMP, the sequences, the renewed tokens given again, and the cleanup. */
@@ -204,12 +226,13 @@ async function hold(argv: readonly string[]): Promise<number> {
   const secret = process.env['KINU_EVAL_STAGING_WEB_IDENTITY'] ?? '';
   const out = join(STATE, `run-${new Date().toISOString().replace(/[:.]/gu, '-')}`);
   const models = modelsNamed(argv);
+  const selection = trialSelection(argv);
   const children: Bun.Subprocess[] = [];
 
   if (secret === '') throw new Error('KINU_EVAL_STAGING_WEB_IDENTITY is not set');
   const { sha } = await deployedBuild({ origin });
 
-  say('preflight', `staging serves ${sha}; the run measures ${models.map((each) => each.model).join(', ')}, one trial of each task, each model's tasks in turn in one account, at most ${String(CALLS_AT_ONCE)} calls at once.`);
+  say('preflight', `staging serves ${sha}; the run measures ${models.map((each) => each.model).join(', ')} (${selection.map.join(' ')}${selection.effort === null ? '' : `, effort ${selection.effort}`}), each model's tasks in turn in one account, at most ${String(CALLS_AT_ONCE)} calls at once.`);
   await keysWindows((line) => { say('preflight', line); });
 
   // What each plan's account is given, by its key: the token last read from OMP.
@@ -221,7 +244,7 @@ async function hold(argv: readonly string[]): Promise<number> {
     const held = await planLogins(origin, secret, stagingAccounts(), false);
 
     say('dry-run', `dry run: ${String(stagingAccounts().length)} staging eval accounts read, ${held.length === 0 ? 'none holding' : held.join(', ')} a plan login.`);
-    say('dry-run', `dry run: the run would be, per model: bun scripts/evals-map.ts --staging-only --sequence --trials=1 --calls-at-once=${String(CALLS_AT_ONCE)} --out=${out}/<model>`);
+    say('dry-run', `dry run: the run would be, per model: ${selection.effort === null ? '' : `KINU_EVAL_EFFORT=${selection.effort} `}bun scripts/evals-map.ts --staging-only --sequence ${selection.map.join(' ')} --calls-at-once=${String(CALLS_AT_ONCE)} --out=${out}/<model>`);
 
     return 0;
   }
@@ -282,9 +305,12 @@ async function hold(argv: readonly string[]): Promise<number> {
     for (const { slug, model, key } of models) {
       const grant = key === null ? undefined : given.get(key);
 
-      children.push(Bun.spawn(['bun', 'scripts/evals-map.ts', '--staging-only', '--sequence', '--trials=1', `--calls-at-once=${String(CALLS_AT_ONCE)}`, `--out=${join(out, slug)}`], {
+      children.push(Bun.spawn(['bun', 'scripts/evals-map.ts', '--staging-only', '--sequence', ...selection.map, `--calls-at-once=${String(CALLS_AT_ONCE)}`, `--out=${join(out, slug)}`], {
         cwd: ROOT,
-        env: { ...process.env, KINU_EVAL_MODELS: model, ...key !== null && grant !== undefined && { KINU_EVAL_PLAN_GRANTS: JSON.stringify({ [key]: grant }) } },
+        env: {
+          ...process.env, KINU_EVAL_MODELS: model, ...selection.effort !== null && { KINU_EVAL_EFFORT: selection.effort },
+          ...key !== null && grant !== undefined && { KINU_EVAL_PLAN_GRANTS: JSON.stringify({ [key]: grant }) },
+        },
         stdout: Bun.file(join(out, `${slug}.log`)), stderr: Bun.file(join(out, `${slug}.err`)),
       }));
     }
