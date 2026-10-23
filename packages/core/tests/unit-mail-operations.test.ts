@@ -215,3 +215,40 @@ describe('a Plan turn, which mail may have started, changes nothing it cannot un
     expect((await store.thread(thread))?.thread.trashedAt).toBeNull();
   });
 });
+
+// Staging 06498fc55, 2026-10-23: the inbound row listed the person's box while its own message was being filed, and the
+// list answered 400. A delivery made the thread, then kept the raw bytes across awaits before its message row landed;
+// now the bytes are kept first, and the thread and its message land together.
+describe('a message still being filed is in no read until it lands whole', () => {
+  test('while its bytes are kept the box lists nothing and counts nothing unread; filed, it lists it and counts it', async () => {
+    const sql = makeSqlExec(new Database(':memory:'));
+    const kept = Promise.withResolvers<void>();
+    const keeping = Promise.withResolvers<void>();
+
+    initMailboxTables(sql);
+
+    const filing = new MailStore({
+      sql, domain: 'kinu.run', now: () => NOW, id: () => crypto.randomUUID(),
+      parse: () => Promise.resolve({
+        from: { name: null, address: 'sender@example.com' }, to: [], cc: [], subject: 'inbound check', messageId: null, inReplyTo: null,
+        references: [], text: 'A deploy check: this message should arrive.', ownWords: 'A deploy check: this message should arrive.', html: null, attachments: [],
+      }),
+      // The raw bytes' write is held until the list below has run.
+      blobs: { put: async () => { keeping.resolve(); await kept.promise; }, text: () => Promise.resolve(null), delete: () => Promise.resolve() },
+      digest: (bytes) => Promise.resolve(createHash('sha256').update(bytes).digest('hex')),
+    });
+
+    filing.open({ userId: 'u-ashish', email: 'me@ashishkumarsingh.com', username: 'ashish', assistant: null });
+    const delivered = filing.deliver({ raw: new TextEncoder().encode('Subject: inbound check\r\n\r\nhi'), envelopeFrom: 'sender@example.com', recipient: { username: 'ashish', path: '', tag: null } });
+
+    await keeping.promise;
+    expect(filing.list({ view: 'all', path: '' })).toEqual({ threads: [], unread: 0 });
+    expect(filing.list({ view: 'all', path: '', unread: true }).unread).toBe(0);
+    kept.resolve();
+    await delivered;
+    const filed = filing.list({ view: 'all', path: '' });
+
+    expect(filed.threads.map((thread) => thread.subject)).toEqual(['inbound check']);
+    expect(filed.unread).toBe(1);
+  });
+});

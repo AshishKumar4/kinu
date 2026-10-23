@@ -12,7 +12,7 @@ export function KeptTranscript({ entries, unavailable, before }: {
 }) {
   return (
     <>
-      {entries.map(({ message, steers }) => (
+      {entries.map(({ message, steers, landed }) => (
         <Fragment key={message.id}>
           {before?.(message.id)}
           {unavailable.has(message.id)
@@ -21,7 +21,7 @@ export function KeptTranscript({ entries, unavailable, before }: {
                 This message is unavailable: it was stored in the agent's private files, which close when it is dismissed.
               </Surface>
             )
-            : <MessageView message={message} steers={steers} liveTail={null} />}
+            : <MessageView message={message} steers={steers} landed={landed} liveTail={null} />}
         </Fragment>
       ))}
     </>

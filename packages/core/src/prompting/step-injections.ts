@@ -4,18 +4,26 @@
  * streamText rebuilds each step's messages from scratch, so every drained
  * injection is re-applied at its base-coordinate index (step-0 message count).
  * It lands at the tail of its step, after tool results, and keeps that index
- * for the turn so the prompt-cache prefix stays stable.
+ * for the turn so the prompt-cache prefix stays stable. One `landed` in the
+ * session's history is applied only at its own step: every later step's base
+ * holds it already, and applying it again sent it twice.
  */
 
 import type { ModelMessage } from 'ai';
 import type { PrepareStepContext } from '../extension';
 
-/** `durable`: whether the entry becomes chat history on replay. A steer does; an event
- *  splice does not (its own row is the record; replaying it reads as an unanswered event). */
-export type RecordedInjection<E extends { readonly message: ModelMessage; readonly durable: boolean }> =
-  E & { readonly index: number };
+/** `durable`: whether the entry becomes chat history on replay. A steer does, and an event its backend landed as a
+ *  row (ADR C3); steering and activated skills do not. `landed`: written to the session's history, which every later
+ *  step's base reads. */
+export type RecordedInjection<E extends Injection> = E & { readonly index: number; readonly step: number };
 
-export class StepInjections<E extends { readonly message: ModelMessage; readonly durable: boolean }> {
+interface Injection {
+  readonly message: ModelMessage;
+  readonly durable: boolean;
+  readonly landed?: boolean;
+}
+
+export class StepInjections<E extends Injection> {
   private baseLength = 0;
   private entries: Array<RecordedInjection<E>> = [];
 
@@ -27,17 +35,29 @@ export class StepInjections<E extends { readonly message: ModelMessage; readonly
     if (ctx.stepNumber === 0) this.baseLength = ctx.messages.length;
 
     for (const entry of incoming) {
-      this.entries.push({ ...entry, index: ctx.messages.length });
+      this.entries.push({ ...entry, index: ctx.messages.length, step: ctx.stepNumber });
     }
 
-    if (this.entries.length === 0) return undefined;
+    // A landed entry stands in the base once the base has grown past it: a later step's, or this step's asked again
+    // after a provider fell back.
+    const inBase = (entry: RecordedInjection<E>) => entry.landed === true && ctx.messages.length > entry.index;
+
+    if (this.entries.every(inBase)) return undefined;
     const next = [...ctx.messages];
     let offset = 0;
+    // Where the base holds a landed entry, it moves only the entries whose index was taken before it landed.
+    const landedAt: number[] = [];
 
     for (const entry of this.entries) {
+      if (inBase(entry)) {
+        landedAt.push(entry.index);
+        continue;
+      }
+
+      const held = landedAt.filter((index) => index >= entry.index).length;
       // A tool result now standing at the pinned index answers the call before it;
       // land after the pair rather than between its halves.
-      let at = entry.index + offset;
+      let at = entry.index + offset + held;
 
       while (next[at]?.role === 'tool') at += 1;
       next.splice(at, 0, entry.message);

@@ -38,8 +38,8 @@ test('an ACTIVE turn absorbs the batch mid-turn — no new turn is enqueued', as
     expect(prompts).toHaveLength(2);
     expect(prompts[1]).toContain('arrived while you were working');
     expect(prompts[1]).not.toContain('arrived while you were idle');
-    // No turn of its own: the conversation is the owner's message and its one answer.
-    expect((await chatSeed(fixture.actor.stores.history.transcript(CHAT_SESSION_ID), keptMediaName)).messages.map((entry) => entry.role)).toEqual(['user', 'assistant']);
+    // No turn of its own: the conversation is the owner's message, the batch as the step read it, and its one answer.
+    expect((await chatSeed(fixture.actor.stores.history.transcript(CHAT_SESSION_ID), keptMediaName)).messages.map((entry) => entry.role)).toEqual(['user', 'system', 'assistant']);
     // The live turn's end answered the batch: its events stay bound to the batch's turn, their lease closed.
     expect(fixture.actor.runtime.storage.sql<{ consumed_at: number | null }>`
       SELECT consumed_at FROM agent_log WHERE turn_id = ${batch.id} AND kind = 'event'`).toEqual([{ consumed_at: null }]);

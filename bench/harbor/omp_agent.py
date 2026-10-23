@@ -80,7 +80,8 @@ class OmpAgent(BaseInstalledAgent):
         if not uid.isdigit():
             raise RuntimeError(f"could not resolve the agent user's uid, got {uid!r}")
 
-        with tempfile.TemporaryDirectory(dir="/mnt/local/kinu/tmp") as staging:
+        # The host's temporary directory (TMPDIR): the operator's sets it, and an Armada microVM has its own.
+        with tempfile.TemporaryDirectory() as staging:
             local = Path(staging) / CREDENTIAL_PATH.name
             local.touch(mode=0o600)
             local.write_text(json.dumps(import_document(grant)), encoding="utf-8")

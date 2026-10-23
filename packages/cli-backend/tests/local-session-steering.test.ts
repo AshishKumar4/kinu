@@ -178,6 +178,42 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     await session.end();
   });
 
+  test('a steer and an event landed mid-turn reach every later step once', async () => {
+    // Every step after the landing read both twice: its base, the session's history, held them, and the inbox applied them again.
+    const prompts: PromptMessage[][] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+
+    const model = new TestLanguageModelV2({
+      provider: 'fake', modelId: 'fake-model',
+      doStream: async (options) => {
+        prompts.push(options.prompt);
+
+        if (prompts.length < 3) return { stream: gatedToolCallStream(`call-${String(prompts.length)}`, prompts.length === 1 ? gate : Promise.resolve(), usage), response: { headers: {} } };
+
+        return { stream: textStream('done', usage), response: { headers: {} } };
+      },
+    });
+
+    const { session, events } = setup('unused', model);
+    const turn = session.send('main question', { id: crypto.randomUUID() });
+
+    await events.until((frames) => frames.some((e) => e.type === 'tool-call'));
+    const steer = session.send('also check X', { id: crypto.randomUUID() });
+
+    await fireTimer(session, 'mail from bob');
+    await session.flushPendingDrains();
+    release();
+    await turn;
+    expect(await steer).toBe('mid-turn');
+
+    const count = (prompt: PromptMessage[], needle: string) => prompt.filter((message) => message.role !== 'system' && messageText(message).includes(needle)).length;
+
+    expect(prompts.slice(1).map((prompt) => [count(prompt, 'also check X'), count(prompt, 'mail from bob')])).toEqual([[1, 1], [1, 1]]);
+    await session.end();
+  });
+
   test('a background event reaches the LIVE turn at its next step, alongside a user steer', async () => {
     // A platform wake and a user steer land at the same next step: the wake is model-visible only, the steer is durable.
     const { model, prompts, release } = toolThenAnswerModel('handled both');
@@ -206,8 +242,9 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
 
     const rows = await transcript(rt);
 
+    // Both are rows the agent's later turns read (ADR C3), the event once.
     expect(rows.map((row) => row.content)).toContain('also check X');
-    expect(rows.some((row) => row.content.includes('mail from bob'))).toBe(false);
+    expect(rows.filter((row) => row.content.includes('mail from bob'))).toHaveLength(1);
     await session.end();
   });
 

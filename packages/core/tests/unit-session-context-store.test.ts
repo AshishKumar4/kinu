@@ -500,6 +500,20 @@ test('drain recovery returns the newest nonempty canonical answer across sibling
   } finally { s.testSql.close(); }
 });
 
+test('a delivery a running turn landed is read: its drain has an answer, empty where its turn left none', async () => {
+  const s = setup();
+
+  try {
+    initSessionTranscriptTables(s.rt.storage.execRaw);
+    const transcript = new SessionTranscript({ sql: s.rt.storage.sql, actor: s.rt.actor, sessionId: 'default', messages: s.messages, payloads: s.payloads, atomic: write => s.rt.storage.transactionSync(write), selection: () => s.context.selected() });
+    const input = s.messages.insert(await s.messages.prepare({ role: 'user', content: 'the helper reports DONE' }, 'landed'), 'input');
+
+    transcript.appendUser(await transcript.prepareUser({ id: 'sig:evt-1', turnId: 'stopped', message: input, metadata: { drainTurnId: 'drain', kinuSpliceAtStep: 1 } }));
+
+    expect(await answersForDrainTurns(transcript, ['drain'])).toEqual(new Map([['drain', '']]));
+  } finally { s.testSql.close(); }
+});
+
 /** A chat transcript whose turn streamed `parts`, settled with its last streamed text, or with `answer` written apart. */
 async function settledAnswer(s: ReturnType<typeof setup>, parts: JsonObject[], answer: string | null) {
   initSessionTranscriptTables(s.rt.storage.execRaw);

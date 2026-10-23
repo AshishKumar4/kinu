@@ -317,10 +317,10 @@ that stopped the loop. Every other clean end is `completed`.
   the next turn through `BackendHost.enqueueTurn`. What a running turn never
   absorbed is re-delivered at settle the same way: the operator's words first,
   as one user-origin turn, then each event as a turn of its own. `inbox.busy` is
-  the only routing fact. Spliced event text is ephemeral like the
-  `<dynamic_context>` beside it: visible to the model at the tip, absent from
-  durable history, gone on cold start. Spliced user messages land as verbatim
-  durable rows first, so the row exists before the model reads it. Mechanical
+  the only routing fact. Spliced user messages and spliced events both land as
+  durable rows first, so the row exists before the model reads it and the
+  agent's later turns read it too (ADR C3); an event landed so is read once,
+  never re-delivered. Mechanical
   steering (`packages/core/src/orchestrator/turn-steering.ts`) is handed to the
   step being prepared, so it cannot outlive it. Everything buffered for one
   boundary drains into one splice, and user messages become one durable user

@@ -2,7 +2,8 @@
  * The inbox: the one way anything reaches an agent. A message buffers to the running turn's next step
  * boundary, or starts a turn via BackendHost.enqueueTurn. The routing read is synchronous, before any await.
  * User messages persist as a verbatim user row, are handed back on interrupt, and rerun as one user-origin
- * turn; an event's splice is ephemeral, its durable record its own row.
+ * turn. A delivery spliced into a running turn lands as a durable row too, where its backend lands them
+ * (`UserSteerDeps.onEvents`, ADR C3): the agent's later turns read it, and it is read once.
  */
 
 import { Effect, Exit } from 'effect';
@@ -76,6 +77,21 @@ export interface LandedSteerRow {
   /** Both steer keys, always together; see {@link describeLandedSteers}. */
   readonly metadata: JsonObject;
   readonly files?: ReadonlyArray<PromptFile>;
+}
+
+/** Marks a durable row as a delivery spliced into a running turn: the step that took it in. */
+export const SPLICE_STEP_METADATA_KEY = 'kinuSpliceAtStep';
+
+/** A delivery a running turn's step took in, as its durable row: its card's id, the text the agent read. */
+export interface LandedEventRow {
+  readonly id: string;
+  readonly text: string;
+  readonly atStep: number;
+  readonly metadata: JsonObject;
+  /** The delivery it answers, whose queued turn its landing retires. */
+  readonly deliveryId?: string;
+  /** The turn its events were bound to, whose lease its landing closes. */
+  readonly replyTurnId?: string;
 }
 
 /**
@@ -356,6 +372,9 @@ export interface UserSteerDeps {
   /** Persist a drain before the messages reach the provider. Rejection aborts the step; the inbox restores
    *  everything drained ahead of pending and moves no card. */
   readonly onDrain?: (steers: readonly UserSteer[], atStep: number) => void | ModelMessage | Promise<void | ModelMessage>;
+  /** Persist the deliveries a step takes in as one durable row before the model reads them, as `onDrain` does a
+   *  person's words; absent, they ride the step alone. Rejection aborts the step as `onDrain`'s does. */
+  readonly onEvents?: (events: readonly LandedEventRow[], atStep: number) => Promise<ModelMessage>;
   /** The live turn's durable id, for the rerun key. */
   readonly turnId?: () => string | null;
   /** Skill bodies the landed words activate; spliced as step reference, never a durable row. */
@@ -410,10 +429,13 @@ export class Inbox {
   private readonly stepCards = new Map<number, string[]>();
   /** This turn's mid-answer splices, by card: kept on its answer once seen ({@link seenSplices}). */
   private readonly splices = new Map<string, SeenSplice>();
+  /** The cards this turn landed as durable rows: read, so never re-delivered. */
+  private readonly landedCards = new Set<string>();
   private seen: SeenSplice[] = [];
   private readonly injections = new StepInjections<{
     readonly message: ModelMessage;
     readonly durable: boolean;
+    readonly landed?: boolean;
   }>();
 
   constructor(
@@ -513,20 +535,27 @@ export class Inbox {
       const drained = this.pending.splice(0);
       const users = drained.filter(isUserSignal);
       const events = drained.filter((signal) => !isUserSignal(signal));
+      const { onEvents } = this.steers;
       let landedMessage: ModelMessage | undefined;
+      let landedEvents: ModelMessage | undefined;
 
-      if (users.length > 0) {
+      if (users.length > 0 || (events.length > 0 && onEvents !== undefined)) {
         yield* Effect.catchCause(Effect.gen({ self: this }, function* () {
-          const landed = yield* Effect.promise(async () => this.steers.onDrain?.(users.map(toUserSteer), ctx.stepNumber));
+          const landed = users.length === 0 ? undefined : yield* Effect.promise(async () => this.steers.onDrain?.(users.map(toUserSteer), ctx.stepNumber));
 
           if (landed !== undefined) landedMessage = landed;
+
+          if (events.length > 0 && onEvents !== undefined) landedEvents = yield* Effect.promise(async () => await onEvents(events.map((event) => landedEventRow(event, ctx.stepNumber)), ctx.stepNumber));
         }), (failed) => Effect.gen({ self: this }, function* () {
-          // Signals may arrive during the await; the failed prefix goes back ahead of them.
-          this.pending = [...drained, ...this.pending];
+          // Signals may arrive during the await; what did not land goes back ahead of them. Words that landed are in the
+          // history already, and given back they would run again as a turn of their own.
+          this.pending = [...(landedMessage === undefined ? drained : events), ...this.pending];
 
           return yield* Effect.failCause(failed);
         }));
       }
+
+      if (landedEvents !== undefined) for (const event of events) this.landedCards.add(event.cardId);
 
       this.absorbed.push(...drained);
       this.tookIn(ctx.stepNumber, events.map((event) => event.cardId));
@@ -543,13 +572,14 @@ export class Inbox {
         });
       }
 
-      const entries: Array<{ readonly message: ModelMessage; readonly durable: boolean }> = [];
+      const entries: Array<{ readonly message: ModelMessage; readonly durable: boolean; readonly landed?: boolean }> = [];
 
       if (users.length > 0) {
-        entries.push({ message: landedMessage ?? steerUserMessage(users.map(toUserSteer)), durable: true });
+        entries.push({ message: landedMessage ?? steerUserMessage(users.map(toUserSteer)), durable: true, landed: landedMessage !== undefined });
       }
 
-      const bodies = [...events, ...steering].map(stepBody);
+      if (landedEvents !== undefined) entries.push({ message: landedEvents, durable: true, landed: true });
+      const bodies = [...(landedEvents === undefined ? events : []), ...steering].map(stepBody);
       const activated = users.length > 0 ? (yield* Effect.promise(async () => this.steers.skills?.(users.map((user) => user.text).join('\n\n')))) : null;
 
       if (activated !== null && activated !== undefined) bodies.unshift(activated);
@@ -573,7 +603,9 @@ export class Inbox {
     const leftoverUsers = leftover.filter(isUserSignal);
     const leftoverEvents = leftover.filter((signal) => !isUserSignal(signal));
     const absorbedEvents = absorbed.filter((signal) => !isUserSignal(signal));
-    const requeue = opts.completed ? leftoverEvents : [...absorbedEvents, ...leftoverEvents];
+    // A landed delivery is read and in the agent's history: an aborted turn does not hand it over again.
+    const unlanded = absorbedEvents.filter((signal) => !this.landedCards.has(signal.cardId));
+    const requeue = opts.completed ? leftoverEvents : [...unlanded, ...leftoverEvents];
     this.absorbed = [];
     this.injections.reset();
     this.redeliver(leftoverUsers, requeue);
@@ -585,13 +617,15 @@ export class Inbox {
 
   /**
    * A Stop's cutoff on the running turn (design v3 C): user signals the model never saw go back to the composer, and
-   * every delivered signal it holds, read or not, is cancelled with the turn rather than re-delivered at its settle.
+   * every delivered signal it holds and did not land, read or not, is cancelled with the turn rather than re-delivered at
+   * its settle.
    * Answers both: the steers, and the cancelled signals' delivery ids.
    */
   interrupt(): InterruptedInputs {
     const returned = this.pending.filter(isUserSignal);
     const unread = this.pending.filter((signal) => !isUserSignal(signal));
-    const cancelled = [...unread, ...this.absorbed.filter((signal) => !isUserSignal(signal))];
+    // A landed one is read and answered by its landing: nothing of it is cancelled.
+    const cancelled = [...unread, ...this.absorbed.filter((signal) => !isUserSignal(signal) && !this.landedCards.has(signal.cardId))];
     this.pending = [];
     this.absorbed = this.absorbed.filter(isUserSignal);
 
@@ -605,11 +639,6 @@ export class Inbox {
     }
 
     return { steers: returned.map(toUserSteer), cancelled: cancelled.flatMap((signal) => (signal.idempotencyKey === undefined ? [] : [signal.idempotencyKey])) };
-  }
-
-  /** The delivery ids of the signals this turn's steps read: answered by its completed commit. */
-  get absorbedDeliveries(): readonly string[] {
-    return this.absorbed.flatMap((signal) => (isUserSignal(signal) || signal.idempotencyKey === undefined ? [] : [signal.idempotencyKey]));
   }
 
   /** Replace the user queue from its durable authority, ahead of pending events. Called once, as the session
@@ -637,6 +666,7 @@ export class Inbox {
     this.stepCards.clear();
     this.splices.clear();
     this.seen = [];
+    this.landedCards.clear();
     this.injections.reset();
 
     if (signalId) {
@@ -661,6 +691,11 @@ export class Inbox {
   /** The mid-answer splices this turn's agent has seen, in step order: what its answer keeps, where a reload reads them. */
   seenSplices(): readonly SeenSplice[] {
     return this.seen;
+  }
+
+  /** Of {@link seenSplices}, those landed as durable rows: kept on an answer whatever its end, as the agent read them. */
+  landedSplices(): readonly SeenSplice[] {
+    return this.seen.filter((splice) => this.landedCards.has(splice.id));
   }
 
   private tookIn(stepNumber: number, cardIds: readonly string[]): void {
@@ -829,6 +864,16 @@ export class Inbox {
 }
 
 const stepBody = (signal: AgentSignal): string => signal.stepText ?? signal.text;
+
+/** A delivery's durable row: its turn's metadata, its card's id, and the step that read it. */
+function landedEventRow(signal: DeliveredSignal, atStep: number): LandedEventRow {
+  return {
+    id: signal.cardId, text: stepBody(signal), atStep,
+    metadata: { ...turnMetadata(signal), [SIGNAL_ID_METADATA_KEY]: signal.cardId, [SPLICE_STEP_METADATA_KEY]: atStep },
+    ...(signal.idempotencyKey !== undefined && { deliveryId: signal.idempotencyKey }),
+    ...(signal.replyTurnId !== undefined && { replyTurnId: signal.replyTurnId }),
+  };
+}
 
 /** The host took a signal's turn and did not run it. */
 function preempted(kind: string): void {
