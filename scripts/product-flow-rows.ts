@@ -6,7 +6,7 @@ const ProductFlowRow = v.picklist([
   'splice', 'approval-stack', 'hire-approval', 'panel', 'stamped', 'written-file', 'changes-storm', 'live-memory',
   'slate-preview', 'drive', 'drive-opens', 'slate-opens', 'slate-share', 'pin', 'titled-chat', 'hire-home',
   'slate-reach', 'plan-comment', 'desktop-resize', 'desktop-switch', 'reopen', 'computer-sessions', 'agent-job', 'attachment', 'rewind', 'activity',
-  'slate-pictures',
+  'slate-pictures', 'claude-code-page',
 ]);
 
 export const PRODUCT_FLOW_ROWS = ProductFlowRow.options;
