@@ -644,7 +644,7 @@ function RoleEditor(props: {
             onChange={(preset) => set('preset', preset)} />
         </Field>
       )}
-      <Field label="Instructions" hint="The standing brief this role works under, as the prompt reads it.">
+      <Field label="Instructions">
         <TextArea mono rows={8} aria-label="Instructions" className="max-h-132 min-h-40"
           value={props.role.instructions}
           onChange={(event) => set('instructions', event.target.value)} />

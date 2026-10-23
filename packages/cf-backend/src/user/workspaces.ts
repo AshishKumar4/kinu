@@ -53,6 +53,10 @@ export interface UserWorkspacesHost extends Pick<UserObjectHost, 'ctx' | 'env' |
   ownerId(): string;
 }
 
+/** A read the destroyed workspace answers itself with the Agents SDK's own abort (`Agent.destroy`), which it raises only
+ *  once its wipe has finished (`confirmedDeletion`'s `ended`). */
+const destroyedItself = (failure: Error): boolean => failure.message === 'destroyed';
+
 /** The account's workspaces. */
 export class UserWorkspaces {
   constructor(private readonly host: UserWorkspacesHost) {}
@@ -520,7 +524,7 @@ export class UserWorkspaces {
       const opened = this.host.env.OrchestratorAgent.get(object);
 
       return { destroy: async () => { await opened.destroyAgent(ownerUserId); }, remains: async () => opened.storedWorkspace() };
-    }, `the workspace ${name}`);
+    }, `the workspace ${name}`, destroyedItself);
 
     // Written here, where the destroy landed: the destroyed object's own rows of it can be missing from telemetry
     // (staging f9c17ac7b, 2026-10-14: none of 7d3e6921's quiet, destroy or abort rows were stored), and a deploy's

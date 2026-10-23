@@ -89,24 +89,20 @@ export const ASSISTANT_ROSTER: RosterEntry[] = [
   })),
 ];
 
-const clock = (when: number) => new Date(when).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+/** One trigger as the assistant's Durable Object lists it (`listTriggers`). */
+const watching = (id: string, kind: string, label: string, next: number | null) => ({
+  id, kind, spec: { label }, creator_trust: "owner", state: "active", created_at: NOW - 3 * 864e5,
+  paused_at: null, revoked_at: null, rate_limit_per_min: 60, next_fire_at: next, last_fire_at: null, fire_count: 0,
+});
 
-/** `8:00`, `tomorrow 8:00`, or a date. */
-function whenNext(when: number, now: number): string {
-  const day = new Date(when).toDateString();
-
-  if (day === new Date(now).toDateString()) return clock(when);
-
-  if (day === new Date(now + 864e5).toDateString()) return `tomorrow ${clock(when)}`;
-
-  return new Date(when).toLocaleDateString("en-GB", { weekday: "short", hour: "2-digit", minute: "2-digit" });
-}
-
-/** What the assistant watches: the bar under its name counts them. */
-const WATCHING = ["Morning brief", "GitHub", "Mail", "Cloudflare"] as const;
-
-/** Tomorrow's morning brief, which the bar says is next. */
-const NEXT_BRIEF = at(8, 0) + 864e5;
+/** What the assistant watches: its brief each morning, its checks, and its mail, which arrives rather than fires. The
+ *  bar under its name counts them and names the next one due (`watchingLine`). */
+const WATCHES = [
+  watching("t-brief", "timer_cron", "Daily brief", at(8, 0) + 864e5),
+  watching("t-github", "timer_cron", "GitHub check", NOW + 9 * MIN),
+  watching("t-cloudflare", "timer_cron", "Cloudflare check", NOW + 38 * MIN),
+  watching("t-mail", "email_route", "Mail", null),
+];
 
 const said = (text: string) => [{ type: "text" as const, text }];
 
@@ -195,6 +191,8 @@ export function assistantRpc(base: SocketCall): SocketCall {
 
     if (method === "listWorkspaceAgents") return answer(v.parse(v.array(JsonObjectSchema), [mainPanelAgent({ label: "Kinu", activity: "idle", actorId: `actor-${ASSISTANT_WORKSPACE}` })]));
 
+    if (method === "listTriggers") return answer({ triggers: WATCHES });
+
     // It asks nothing of its own: it creates workspaces itself, and only an external or cross-tenant step would ask.
     if (method === "listPendingActions" || method === "listSubagents" || method === "listBackgroundJobs" || method === "inspectWork") return answer([]);
 
@@ -212,14 +210,10 @@ function focusRpc(base: SocketCall): SocketCall {
   };
 }
 
-/** What the bar says of Kinu: what it watches, and when it next speaks up. */
-function AssistantLine() {
-  return <>Watching {WATCHING.length} · brief {whenNext(NEXT_BRIEF, NOW)}</>;
-}
-
-/** Home: the assistant's chat in the focus layout, with nothing above it. The brief arrives as a message in it. */
+/** Home: the assistant's chat in the focus layout, with nothing above it. The brief arrives as a message in it, and the
+ *  bar's line is the product's own, from the watches above. */
 export function AssistantHome() {
-  return <WorkspacePage workspace={ASSISTANT_WORKSPACE} identity={{ label: "Kinu", line: <AssistantLine /> }} />;
+  return <WorkspacePage workspace={ASSISTANT_WORKSPACE} />;
 }
 
 /** Home with the assistant installed, in the product's own shell. */
