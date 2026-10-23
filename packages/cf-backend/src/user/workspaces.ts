@@ -172,17 +172,18 @@ export class UserWorkspaces {
     await this.host.shareCards.reconcile(name, parsed.shares);
   }
 
-  /** Uncapped server fanout. A settings fan tells every possibly waiting workspace, never a known quiet one. */
-  async listActiveWorkspaces(caller: UserCaller, filter?: { readonly awaitsSettings?: boolean }): Promise<Array<Pick<WorkspaceEntry, 'name' | 'displayName' | 'createdAt'>>> {
+  /** The live registry, uncapped and with no roster effects: a server fanout's, and the control plane's reconciliation's.
+   *  A settings fan tells every possibly waiting workspace, never a known quiet one. */
+  async listActiveWorkspaces(caller: UserCaller, filter?: { readonly awaitsSettings?: boolean }): Promise<WorkspaceEntry[]> {
     await this.host.requireTier(caller, 'workspaces.read');
 
-    return this.host.sqlx<{ name: string; display_name: string; created_at: number }>(
-      `SELECT w.name, w.display_name, w.created_at FROM user_workspaces w
+    return this.host.sqlx<{ name: string; display_name: string; created_at: number; last_visited: number }>(
+      `SELECT w.name, w.display_name, w.created_at, w.last_visited FROM user_workspaces w
        LEFT JOIN workspace_overviews o ON o.name = w.name
        WHERE w.delete_pending = 0 AND w.create_pending = 0
          ${filter?.awaitsSettings ? "AND (o.name IS NULL OR o.activity = 'working' OR json_extract(o.overview, '$.awaitsSettings') = 1)" : ''}
        ORDER BY w.last_visited DESC`,
-    ).map((r) => ({ name: r.name, displayName: r.display_name, createdAt: r.created_at }));
+    ).map((r) => ({ name: r.name, displayName: r.display_name, createdAt: r.created_at, lastVisited: r.last_visited }));
   }
 
   /**

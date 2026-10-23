@@ -88,7 +88,7 @@ test.each(CHANGES)('when $what, a sleep-time compute parked on a refusal the own
           ? { ok: true, envelope: { authority: { kind: 'account', accountId: 'acc' }, version: 29, digest: 'd', catalog: BUILTIN_PROFILE_CATALOG } }
           : { ok: false, kind: 'conflict', currentVersion: 28, currentDigest: 'd' };
       },
-      async listActiveWorkspaces() { return [{ name: 'harness-parent', displayName: 'Harness', createdAt: 1, nameOrigin: 'user' as const }]; },
+      async listActiveWorkspaces() { return [{ name: 'harness-parent', displayName: 'Harness', createdAt: 1, lastVisited: 1, nameOrigin: 'user' as const }]; },
       async finishClaudeSignIn() {
         return change.claudeConnected === true ? { connected: true } : { connected: false, error: 'Claude refused the sign-in: invalid_grant' };
       },

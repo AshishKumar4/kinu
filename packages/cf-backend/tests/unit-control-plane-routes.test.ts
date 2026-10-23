@@ -289,14 +289,10 @@ function harness(options: World = {}): Harness {
         throw new Error(`Workspace ${name} not in your registry`);
       }
     },
-    async listWorkspaces() {
+    async listActiveWorkspaces() {
       if (options.rosterError) throw new Error(options.rosterError);
-      const entries = (rosters.get(userId) ?? []).map((row) => ({ ...row, overview: null, decisions: 0 }));
 
-      return {
-        entries, total: entries.length, nextCursor: null,
-        counts: { all: entries.length, needs: 0, working: 0, idle: 0, unreported: entries.length, decisions: 0 },
-      };
+      return rosters.get(userId) ?? [];
     },
     async removeWorkspace(_caller: UserCaller, workspace: string, owner: string) {
       // `UserDO.removeWorkspace` tears the object down first; a teardown failure keeps the registry
