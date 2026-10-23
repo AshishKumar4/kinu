@@ -1232,8 +1232,10 @@ a facet of its own) and D13's "every agent's advisor in core `ActorAdvisor`".
   one's model call and reads aborted, those owed dropped), and a stopped
   turn's review says nothing. The session's end joins reviews still running
   (`track`, joined by `settleTracked`, as other post-turn work is); in an
-  agent's facet a review after its turn runs while the isolate lives, its
-  reads refused (the turn's fence) and its charge relayed as made. A failed
+  agent's facet a review after its turn runs on, its reads refused (the
+  turn's fence) and its charge relayed as made, and the agent's quiet
+  (`idle`, which its retirement and its workspace's deletion wait on) joins
+  it as the CLI's session end does (2026-10-23). A failed
   turn is ended for its advisor by the execution's cleanup. A hired agent's
   blocker also reaches its hirer. A note
   is said, then recorded: one said and not recorded only misses the dedupe
@@ -1328,7 +1330,11 @@ a facet of its own) and D13's "every agent's advisor in core `ActorAdvisor`".
   turn's message reads and decoding, the long turn's prompt check in the AI SDK,
   `standardizePrompt`, zod over the whole prompt each call, growing with the
   history); the fifth ended on a driver request the harness's fetch timed out.
-  The gate is a script, not yet a tier row, until that timeout is settled. On staging, 7 days to
+  The gate is a script, not yet a tier row, until that timeout is settled.
+  A host that pauses the thread 5 ms mid-turn splits a turn as a wait does,
+  so the driver runs a synchronous control turn every lap on workerd's one
+  thread, and a run that read a pause inside one, or no control turn, is
+  unreadable (exit 2), never green. On staging, 7 days to
   2026-10-23 (`agent.isolate_invocation`, sampled 1 in 10), agent invocations
   of 100 ms of CPU or more were 31% of `step`, 3% of `activePlanReview` and 1%
   of `seed`; an invocation's CPU includes an isolate's start, so it bounds a

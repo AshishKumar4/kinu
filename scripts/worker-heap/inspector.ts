@@ -161,6 +161,8 @@ const CpuReplySchema = v.object({ result: v.object({ profile: v.object({
   timeDeltas: v.array(v.number()),
 }) }) });
 
+export type CpuProfile = v.InferOutput<typeof CpuReplySchema>['result']['profile'];
+
 /** The longest stretch an isolate ran with no idle sample in it: one event-loop turn, or turns back to back. */
 export interface BusyStretch {
   readonly ms: number;
@@ -173,8 +175,43 @@ export interface BusyStretch {
 /** A gap between two samples longer than this, in µs, is the isolate waiting: five sampling intervals. */
 const LOOP_GAP_US = 5000;
 
+/** Where a host pause would hide: {@link longestBusy} reads a gap as the loop's wait, so a pause mid-turn splits it. */
+export interface HostPauses {
+  /** Each gap past {@link LOOP_GAP_US} inside a synchronous frame, in ms: the host paused the thread mid-turn. */
+  readonly pauses: readonly number[];
+  /** The time sampled inside it, in ms: how long the host was watched. */
+  readonly watchedMs: number;
+}
+
+/** The pauses inside one call of the synchronous function `frame`, `profile` holding no other ({@link profileEach}): no
+ *  wait can come between two of its samples, so a gap there is the host's, as one would be in any turn. */
+export function pausesUnder(profile: CpuProfile, frame: string): HostPauses {
+  const children = new Map(profile.nodes.map((node) => [node.id, node.children]));
+  const under = new Set<number>();
+  const stack = profile.nodes.filter((node) => node.callFrame.functionName === frame).map((node) => node.id);
+
+  for (let id = stack.pop(); id !== undefined; id = stack.pop()) {
+    under.add(id);
+    stack.push(...children.get(id) ?? []);
+  }
+
+  const pauses: number[] = [];
+  let watched = 0;
+
+  // The call's first sample comes after the wait before it: only a gap between two of its samples counts.
+  for (let at = 1; at < profile.samples.length; at++) {
+    if (!under.has(profile.samples[at] ?? -1) || !under.has(profile.samples[at - 1] ?? -1)) continue;
+    const delta = profile.timeDeltas[at] ?? 0;
+
+    if (delta > LOOP_GAP_US) pauses.push(delta / 1000);
+    else watched += delta / 1000;
+  }
+
+  return { pauses, watchedMs: watched };
+}
+
 /** The longest busy stretch in `profile`, and the frames its samples spent most time under. */
-function longestBusy(profile: v.InferOutput<typeof CpuReplySchema>['result']['profile']): BusyStretch {
+export function longestBusy(profile: CpuProfile): BusyStretch {
   const byId = new Map(profile.nodes.map((node) => [node.id, node]));
   const parent = new Map<number, number>();
 
@@ -189,7 +226,7 @@ function longestBusy(profile: v.InferOutput<typeof CpuReplySchema>['result']['pr
   for (const [at, sample] of profile.samples.entries()) {
     // The time since the sample before: the profiler takes none while the isolate waits, so a gap past a few intervals
     // is a wait, and the turn before it has ended (measured 2026-10-23: unbroken, a run read as 82 s busy). A host that
-    // pauses the thread that long mid-turn splits the turn too: a blind spot the gate prints.
+    // pauses the thread that long mid-turn splits the turn too: {@link pausesUnder} reads whether it did.
     const delta = profile.timeDeltas[at] ?? 0;
 
     if (idle.has(sample) || delta > LOOP_GAP_US) {
@@ -310,7 +347,7 @@ export interface Inspector {
   readonly close: () => void;
 }
 
-/** What every read answers while the loop gate profiles each isolate (`loop-turns.ts`): workerd takes one inspector
+/** What every read answers in the loop pass, which profiles each isolate (`loop-turns.ts`): workerd takes one inspector
  *  session an isolate, a snapshot under a running CPU profile stalled the gate past its silence bound twice
  *  (2026-10-23), and the profiler's own allocation would move every heap figure anyway. */
 const NOT_READ: Inspector = {
@@ -326,17 +363,6 @@ const NOT_READ: Inspector = {
   close: () => {},
 };
 
-/** The workerd inspector ports whose isolates the loop gate profiles, from {@link profileEveryIsolate} to its release. */
-const profiled = new Set<number>();
-
-/** Until the returned release, every {@link inspect} on `port` answers {@link NOT_READ}: the loop gate holds each of its
- *  isolates' one session. */
-export function profileEveryIsolate(port: number): () => void {
-  profiled.add(port);
-
-  return () => { profiled.delete(port); };
-}
-
 type Target = v.InferOutput<typeof TargetsSchema>[number];
 
 async function targets(port: number): Promise<Target[]> {
@@ -348,25 +374,33 @@ export async function targetIds(port: number): Promise<readonly string[]> {
   return (await targets(port)).map((target) => target.id);
 }
 
-/** One inspector session on each isolate whose target id `picks` accepts, however many there are. */
-export async function inspectAll(port: number, picks: (id: string) => boolean): Promise<Inspector[]> {
-  return await Promise.all((await targets(port)).filter((target) => picks(target.id))
-    .map(async (target) => await inspect(port, `the isolate ${target.id}`, (id) => id === target.id)));
+/** A run's read of the one isolate whose target id `picks` accepts. workerd lists each isolate it made, a Worker
+ *  Loader's too, as `<binding>:<loader key>` (server.c++ at v1.20260930.2, `WorkerLoaderNamespace::loadIsolate` and
+ *  `makeWorkerImpl`). */
+export type Inspect = (isolate: string, picks: (id: string) => boolean) => Promise<Inspector>;
+
+/** The reads of the run whose workerd listens on `port`: an inspector session each, or {@link NOT_READ} in the loop pass,
+ *  whose profiler holds each isolate's one session. */
+export function inspector(port: number, { heap }: { readonly heap: boolean }): Inspect {
+  return async (isolate, picks) => {
+    const listed = await targets(port);
+    const [target, ...more] = listed.filter((each) => picks(each.id));
+
+    if (target === undefined || more.length > 0) {
+      throw new Error(`worker-heap: no one inspector target for ${isolate} among ${listed.map((t) => t.id).join(', ')}`);
+    }
+
+    return heap ? await session(target, isolate) : NOT_READ;
+  };
 }
 
-/** One inspector session on the one isolate whose target id `picks` accepts. workerd lists each isolate it made,
- *  a Worker Loader's too, as `<binding>:<loader key>` (server.c++ at v1.20260930.2, `WorkerLoaderNamespace::loadIsolate`
- *  and `makeWorkerImpl`). */
-export async function inspect(port: number, isolate: string, picks: (id: string) => boolean): Promise<Inspector> {
-  const listed = await targets(port);
-  const [target, ...more] = listed.filter((each) => picks(each.id));
+/** One read of each isolate whose target id `picks` accepts, however many there are. */
+export async function inspectAll(port: number, inspect: Inspect, picks: (id: string) => boolean): Promise<Inspector[]> {
+  return await Promise.all((await targets(port)).filter((target) => picks(target.id))
+    .map(async (target) => await inspect(`the isolate ${target.id}`, (id) => id === target.id)));
+}
 
-  if (target === undefined || more.length > 0) {
-    throw new Error(`worker-heap: no one inspector target for ${isolate} among ${listed.map((t) => t.id).join(', ')}`);
-  }
-
-  if (profiled.has(port)) return NOT_READ;
-
+async function session(target: Target, isolate: string): Promise<Inspector> {
   const { send, snapshotNow, close } = await connect(target);
 
   return {
@@ -399,9 +433,36 @@ export async function inspect(port: number, isolate: string, picks: (id: string)
   };
 }
 
-/** An isolate's CPU profiled from {@link profileLoop} to `stop`, which answers its longest busy stretch and closes. */
+/** An isolate's CPU profiled from {@link profileLoop} to `stop`, which answers the profile and closes. */
 export interface LoopProfile {
-  readonly stop: () => Promise<BusyStretch>;
+  readonly stop: () => Promise<CpuProfile>;
+}
+
+/** An isolate's CPU profiled around each piece of work, one profile each, so no wait between two pieces is in one. */
+export interface EachProfiled {
+  readonly around: (work: () => Promise<string>) => Promise<CpuProfile>;
+  readonly close: () => void;
+}
+
+/** Profiles the isolate `id` around each piece of work, a sample a millisecond; null when it is not listed. */
+export async function profileEach(port: number, id: string): Promise<EachProfiled | null> {
+  const target = (await targets(port)).find((each) => each.id === id);
+
+  if (target === undefined) return null;
+  const { send, close } = await connect(target);
+
+  await send('Profiler.enable');
+  await send('Profiler.setSamplingInterval', { interval: 1000 });
+
+  return {
+    around: async (work) => {
+      await send('Profiler.start');
+      await work();
+
+      return v.parse(CpuReplySchema, JSON.parse(await send('Profiler.stop'))).result.profile;
+    },
+    close,
+  };
 }
 
 /** Profiles the isolate `id` from now, a sample a millisecond; null when it is no longer listed. */
@@ -417,10 +478,10 @@ export async function profileLoop(port: number, id: string): Promise<LoopProfile
 
   return {
     stop: async () => {
-      const stretch = longestBusy(v.parse(CpuReplySchema, JSON.parse(await send('Profiler.stop'))).result.profile);
+      const { profile } = v.parse(CpuReplySchema, JSON.parse(await send('Profiler.stop'))).result;
       close();
 
-      return stretch;
+      return profile;
     },
   };
 }

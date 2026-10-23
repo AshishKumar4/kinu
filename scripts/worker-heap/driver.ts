@@ -400,6 +400,17 @@ async function compatAnswer(body: string): Promise<Response> {
   return new Response(out.body, { headers: { 'content-type': out.contentType } });
 }
 
+/** The facet loop gate's control turn (`loop-turns.ts`): synchronous work no wait can split (2e7 of these steps took
+ *  about 0.42 s on the platform, 2026-10-23), on workerd's one thread, which every isolate of the run shares; so a gap
+ *  its profile reads inside it is the host pausing that thread. */
+function controlTurn(): number {
+  let x = 7;
+
+  for (let at = 0; at < 2_000_000; at++) x = (x * 48_271) % 2_147_483_647;
+
+  return x;
+}
+
 const AIRequestSchema = v.object({
   inputs: v.looseObject({ stream: v.optional(v.boolean()), messages: v.optional(v.array(v.record(v.string(), v.unknown()))) }),
 });
@@ -458,6 +469,8 @@ export default {
     }
 
     if (url.pathname === '/ai') return scriptedAnswer(v.parse(AIRequestSchema, await request.json()).inputs);
+
+    if (url.pathname === '/control-turn') return Response.json(controlTurn());
     const workspace = url.searchParams.get('workspace') ?? 'heap';
     const driver = env.HEAP_DRIVER.get(env.HEAP_DRIVER.idFromName(workspace));
 
