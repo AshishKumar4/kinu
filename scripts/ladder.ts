@@ -60,6 +60,7 @@ import type { ModuleEdges } from './module-edges';
 import { identifierCalleeName, literalString, walk, type Parsed } from './syntax';
 import { AMBIENT_CREDENTIAL_ENV, AMBIENT_DECORATION_ENV, EVAL_IDENTITY_ENV, evalWebIdentityEnv, LIVE_MODEL_ENV, SCRIPTED_MODEL_KEY_ENV } from '../packages/test-utils/src/index';
 import { gitIn } from '../packages/test-utils/src/git-env';
+import { DEPLOY_FIXTURE } from './fixtures/devbox-e2e/fixture';
 import { COST_TABLE, type CostTable, costRssMb, costThreads, readCosts } from './gate-cost';
 import { PRODUCT_FLOW_ROWS } from './product-flow-rows';
 import { resourceCostFile, withResourceCosts } from './gate-cost';
@@ -3293,6 +3294,8 @@ interface CIMatrixEntry {
   readonly weight: number;
   readonly rows: PlannedRow[];
   origin?: string;
+  /** The deploy's job (`--deploy-fixture`): its golden row deploys the deploy's lasting contract fixture. */
+  fixture?: string;
 }
 
 interface CIMatrix {
@@ -3334,12 +3337,14 @@ export function secretGroup(gate: Gate): string {
 
 /** The matrix of a deploy phase's armada rows whose own secrets are `group` (`armada run <sha> -- --deploy-phase=<phase>
  *  --deploy-secrets=<group>`), weighed by their declared seconds so the longest start first. */
-function armadaPlan(phases: readonly DeployPhase[], origin: string | undefined, group: string): CIMatrix {
+function armadaPlan(phases: readonly DeployPhase[], origin: string | undefined, group: string, fixture?: string): CIMatrix {
   return {
     include: armadaPhaseRows(phases).filter((gate) => secretGroup(gate) === group).flatMap(armadaUnits).map((gate) => {
       const entry: CIMatrixEntry = { name: armadaTaskName(gate), row: gate.run, weight: Math.round(gate.seconds), rows: [gate.label] };
 
       if (readsDeployment(gate) && origin !== undefined) entry.origin = origin;
+
+      if (fixture !== undefined) entry.fixture = fixture;
 
       return entry;
     }),
@@ -3349,12 +3354,15 @@ function armadaPlan(phases: readonly DeployPhase[], origin: string | undefined, 
 /** In a deploy row's container: the deployment it drives, from its matrix entry (armada gives each task its entry as
  *  ARMADA_ITEM), as the variables the rows read; and where its declared evidence goes. */
 function adoptDeployEntry(gate: Gate): string | undefined {
-  const entry = v.safeParse(v.looseObject({ origin: v.optional(v.string()) }), JSON.parse(process.env['ARMADA_ITEM'] ?? '{}'));
+  const entry = v.safeParse(v.looseObject({ origin: v.optional(v.string()), fixture: v.optional(v.string()) }), JSON.parse(process.env['ARMADA_ITEM'] ?? '{}'));
 
   if (entry.success && entry.output.origin !== undefined) {
     process.env['KINU_EVAL_ORIGIN'] = entry.output.origin;
     process.env['KINU_ORIGIN'] = entry.output.origin;
   }
+
+  // The deploy's own golden run deploys the deploy's lasting fixture; any other run, the lanes' (fixtures/devbox-e2e).
+  if (entry.success && entry.output.fixture !== undefined) process.env['KINU_CONTRACTS_FIXTURE'] = entry.output.fixture;
 
   if (gate.evidence === undefined) return undefined;
   // In the checkout, as bench-retention's default root is: it refuses a root under the swept temp directory.
@@ -3892,7 +3900,8 @@ export function armadaPhaseRun(phase: string, rows: readonly Gate[], sha: string
 
   if (rows.some(readsDeployment) && driven === undefined) throw new Error(`the ${phase} rows drive the deployment, and KINU_EVAL_ORIGIN names none`);
   const names = [...new Set([...driven === undefined ? [] : [SCRIPTED_MODEL_KEY_ENV, evalWebIdentityEnv(driven)], ...group === '' ? [] : group.split(',')])];
-  const planArgs = [`--deploy-phase=${phase}`, ...driven === undefined ? [] : [`--deploy-origin=${driven}`], ...group === '' ? [] : [`--deploy-secrets=${group}`]];
+  // `--deploy-fixture`: a deploy's job, whose golden row holds the deploy's own lasting fixture, never a lane's.
+  const planArgs = [`--deploy-phase=${phase}`, ...driven === undefined ? [] : [`--deploy-origin=${driven}`], ...group === '' ? [] : [`--deploy-secrets=${group}`], `--deploy-fixture=${DEPLOY_FIXTURE}`];
 
   return [
     resolve(root, 'node_modules/.bin/armada'), 'run', sha, `--label=deploy ${phase}${group === '' ? '' : ` (${String(rows.length)} row with its own secrets)`}`,
@@ -4101,7 +4110,7 @@ function ciVerdict(asked: string, sha: string, report: string): number {
 /** This program's options. `--run` is not one: everything after it is the command it wraps, split off unread. */
 const LADDER_OPTIONS = {
   'ci-plan': { type: 'boolean' }, 'ci-verdict': { type: 'string' }, 'ci-costs': { type: 'string' }, 'ci-row': { type: 'string' },
-  'deploy-phase': { type: 'string' }, 'deploy-origin': { type: 'string' }, 'deploy-secrets': { type: 'string' },
+  'deploy-phase': { type: 'string' }, 'deploy-origin': { type: 'string' }, 'deploy-secrets': { type: 'string' }, 'deploy-fixture': { type: 'string' },
   tier: { type: 'string' }, gate: { type: 'string' }, changed: { type: 'string' }, verdicts: { type: 'string' },
   artifacts: { type: 'string' }, skip: { type: 'string' }, 'no-cache': { type: 'boolean' }, serial: { type: 'boolean' },
   matrix: { type: 'boolean' }, costs: { type: 'boolean' }, 'install-hooks': { type: 'boolean' }, 'audit-closure': { type: 'boolean' },
@@ -4130,7 +4139,7 @@ async function ciCommand(cli: LadderArgs): Promise<number | undefined> {
   if (cli['ci-plan'] === true) {
     const phases = phasesNamed(cli['deploy-phase']);
 
-    console.log(JSON.stringify(phases === undefined ? ciPlan(ciPlanCosts(cli['ci-costs'])) : armadaPlan(phases, cli['deploy-origin'], cli['deploy-secrets'] ?? '')));
+    console.log(JSON.stringify(phases === undefined ? ciPlan(ciPlanCosts(cli['ci-costs'])) : armadaPlan(phases, cli['deploy-origin'], cli['deploy-secrets'] ?? '', cli['deploy-fixture'])));
 
     return 0;
   }
