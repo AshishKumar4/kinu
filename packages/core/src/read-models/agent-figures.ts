@@ -137,8 +137,10 @@ async function actorFigures(sql: SqlExecutor, actorId: string): Promise<AgentFig
   };
 }
 
-/** The actor's next {@link FOLD_SLICE_EVENTS} run events after the rowid `through`, oldest first. By the actor index's
- *  rowid, never by type: the type index would scan every step the actor ever took. */
+/** The actor's next {@link FOLD_SLICE_EVENTS} run events a fold reads after the rowid `through`, oldest first. By the actor
+ *  index's rowid, never by type: the type index would scan every step the actor ever took. Only those events' `ts` is
+ *  read: it is stored after the payload, so reading it walks every overflow page of a tool call's result, and a 450-step
+ *  screenshot turn's slice of 200 events held its agent's isolate 70-130 ms doing so (the facet loop gate, 2026-10-23). */
 function foldSlice(sql: SqlExecutor, actorId: string, through: number): FoldedEvent[] {
   return sql<FoldedEvent>`
     SELECT e.rowid AS seq, e.type, e.ts,
@@ -151,7 +153,7 @@ function foldSlice(sql: SqlExecutor, actorId: string, through: number): FoldedEv
              WHERE s.actor_id = e.actor_id AND s.run_id = e.run_id AND s.type = 'turn_start'
                AND json_extract(s.payload, '$.turnIndex') = json_extract(e.payload, '$.turnIndex')) END AS ms
     FROM run_events e INDEXED BY idx_run_events_actor
-    WHERE e.actor_id = ${actorId} AND e.rowid > ${through}
+    WHERE e.actor_id = ${actorId} AND e.rowid > ${through} AND e.type IN ('step_finish', 'model_call', 'turn_start', 'turn_end')
     ORDER BY e.rowid
     LIMIT ${FOLD_SLICE_EVENTS}`;
 }
