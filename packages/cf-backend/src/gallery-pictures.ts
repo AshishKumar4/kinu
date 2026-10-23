@@ -3,6 +3,7 @@
  * answered for the digests its fixtures name (core `web/picture-src.ts` `answerPictures`, at the gallery's start): the
  * gallery's server is static, so a picture route the app addresses is read from these files instead.
  */
+import { DARK_PICTURE } from "@kinu.run/core";
 import prBoard from "./gallery-assets/pr-board.webp";
 import logs from "./gallery-assets/logs.webp";
 import ghidra from "./gallery-assets/ghidra.webp";
@@ -35,7 +36,10 @@ const BY_DIGEST = new Map<string, string>([
   [GALLERY_PICTURE.assistant, `${PUBLIC}/assistant.webp`],
 ]);
 
-/** A picture path's last segment is its digest; one the gallery holds is its file. */
+/** A picture path's last segment is its digest; one the gallery holds is its file. Its mock slates draw no dark of their
+ *  own, so a dark version is answered with the light one, as the picture route answers it. */
 export function galleryPicture(path: string): string | null {
-  return BY_DIGEST.get(path.split("/").at(-1) ?? "") ?? null;
+  const digest = path.split("/").at(-1) ?? "";
+
+  return BY_DIGEST.get(digest.endsWith(DARK_PICTURE) ? digest.slice(0, -DARK_PICTURE.length) : digest) ?? null;
 }

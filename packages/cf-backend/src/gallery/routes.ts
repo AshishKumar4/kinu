@@ -15,7 +15,7 @@ import { attempt, diagnostics, settle } from '@kinu.run/core/obs';
 import { workspaceOwner } from '../workspace-owner-rpc';
 import { crossSiteRejection, requestIdentity } from '../auth/session';
 import { rawParam, type FamilyEnv } from '../api/context';
-import { readSlatePicture, sharePictureKey } from '../slates/pictures';
+import { pictureVersion, readPictureInMode, sharePictureKey } from '../slates/pictures';
 import { internalCaller } from '@kinu.run/core/control-plane';
 import { controlPlaneStub } from '../control-plane/stub';
 import type { ControlPlaneDO, GalleryMark } from '../control-plane/control-plane-do';
@@ -125,10 +125,12 @@ galleryRoutes.get('/api/gallery/:workspace/:slate/picture/:digest', async (c) =>
   const listed = await plane.galleryListed(caller, workspace, slate);
   const bucket = c.env.SLATE_PICTURES;
 
-  if (listed === null || listed.picture !== digest || bucket === undefined) return new Response('Not found', { status: 404, headers: NO_STORE });
+  if (listed === null || listed.picture !== pictureVersion(digest) || bucket === undefined) return new Response('Not found', { status: 404, headers: NO_STORE });
 
-  // Only the picture taken through the listed share itself: never one of its owner's private preview.
-  return await readSlatePicture(bucket, sharePictureKey(workspace, slate, listed.share, digest), 'public') ?? new Response('Not found', { status: 404, headers: NO_STORE });
+  // Only the picture taken through the listed share itself: never one of its owner's private preview. Its dark capture
+  // where the slate drew one, else its light one.
+  return await readPictureInMode(bucket, (version) => sharePictureKey(workspace, slate, listed.share, version), digest, 'public')
+    ?? new Response('Not found', { status: 404, headers: NO_STORE });
 });
 
 galleryRoutes.get('/api/gallery/:workspace/:slate', (c) => settle(Effect.gen(function* () {

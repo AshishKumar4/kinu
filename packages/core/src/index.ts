@@ -354,7 +354,7 @@ export type {
 } from './slates/room-api';
 
 export {
-  GALLERY_CATEGORIES, GALLERY_SORTS, GALLERY_LAST_PAGE, GallerySlateSchema, galleryPagePath, gallerySlatePath, galleryPicturePath, GALLERY_STAR_PATH,
+  GALLERY_CATEGORIES, GALLERY_SORTS, GALLERY_LAST_PAGE, GallerySlateSchema, galleryPagePath, gallerySlatePath, galleryPicturePath, pictureForMode, DARK_PICTURE, GALLERY_STAR_PATH,
   GALLERY_REPORT_PATH, type GalleryCategory, type GalleryListing, type GallerySlate, type GallerySort, type GalleryStar,
   type GalleryReport,
   EXPLORE_KINDS, ExplorePageSchema, BlueprintPageSchema, explorePath, workspaceBlueprintPath,

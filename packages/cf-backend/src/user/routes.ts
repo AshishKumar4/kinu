@@ -4,7 +4,7 @@ import { Hono, type Context } from 'hono';
 import type { UserDO } from './user-do';
 import { ROSTER_SOCKET_PATH } from './roster';
 import { appendIdentityHeaders } from '../cli/rpc-gate';
-import { pictureKey, PictureAddressSchema, readSlatePicture, type PictureBucket } from '../slates/pictures';
+import { pictureKey, PictureAddressSchema, readPictureInMode, type PictureBucket } from '../slates/pictures';
 import { connectedPath, FILES_VIEW_CONFIG_KEY, filesViewNamed, PROFILE_CATALOG_CONFIG_KEY, THEME_CONFIG_KEY, THEME_NAMES, themeNamed, USER_WEB_SEARCH_TEST_PATH } from '@kinu.run/core';
 import { BOX_SIZE_ORDER } from '@kinu.run/devbox/sizes';
 import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY } from '../computer-size';
@@ -240,7 +240,7 @@ userRoutes.get('/api/user/pictures/:workspace/:slate/:digest', async (c) => {
 
   if (!await c.get('stub').hasWorkspace(c.get('owner'), workspace)) return err(404, 'No such picture.');
 
-  return await readSlatePicture(bucket, pictureKey(workspace, slate, digest), 'private') ?? err(404, 'No such picture.');
+  return await readPictureInMode(bucket, (version) => pictureKey(workspace, slate, version), digest, 'private') ?? err(404, 'No such picture.');
 });
 
 // A visit the roster did not take is a 404: the workspace is gone, or not visitable while it is created or torn down,

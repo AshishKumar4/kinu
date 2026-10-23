@@ -1,7 +1,7 @@
 import { Effect, Cause } from 'effect';
 import type { Browser, BrowserWorker } from '@cloudflare/puppeteer';
 import * as v from 'valibot';
-import { isWorkspaceName, markStoreChanged, sha256Hex, VIEWER_EXCHANGE_PATH, type RawSqlExec, type SqlExec } from '@kinu.run/core';
+import { DARK_PICTURE, isWorkspaceName, markStoreChanged, sha256Hex, VIEWER_EXCHANGE_PATH, type RawSqlExec, type SqlExec } from '@kinu.run/core';
 import { SlateDirectoryName } from '@kinu.run/core/slates';
 import { diagnostics, recording, toKinuError, settle } from '@kinu.run/core/obs';
 import { PREVIEW_CAPABILITY_HANDLE_LENGTH } from '../workspace-host';
@@ -271,19 +271,26 @@ export class SlatePictures {
 
   /**
    * The shot at `url`, stored under its digest in its view's own place, and the one before it gone. `holds` is read
-   * once the shot is in R2, with nothing awaited before it is kept: what no longer holds keeps nothing of it.
+   * once the shot is in R2, with nothing awaited before it is kept: what no longer holds keeps nothing of it. A slate
+   * that draws itself dark too has that capture beside it (`DARK_PICTURE`), the digest naming the pair; one that draws
+   * the same either way has its light capture alone, by its own digest.
    */
   private kept(camera: Camera, capture: PictureCapture, picture: DuePicture, at: { readonly url: string; readonly taken: string | null; readonly holds: () => boolean }): Effect.Effect<boolean> {
     return Effect.gen({ self: this }, function* () {
-      const shot = yield* Effect.promise(async () => camera.shoot(at.url));
-      const digest = sha256Hex(shot);
+      const shots = yield* Effect.promise(async () => camera.shoot(at.url));
+      const dark = sha256Hex(shots.dark) === sha256Hex(shots.light) ? null : shots.dark;
+      const digest = dark === null ? sha256Hex(shots.light) : sha256Hex(Buffer.concat([shots.light, dark]));
       const changed = digest !== picture.digest;
-      const key = viewPictureKey(capture.workspace, picture, digest);
+      const keys = versionKeys(capture.workspace, picture, digest);
 
-      if (changed) yield* Effect.promise(async () => capture.bucket.put(key, shot, { httpMetadata: { contentType: 'image/webp' } }));
+      if (changed) {
+        yield* Effect.promise(async () => capture.bucket.put(keys[0], shots.light, { httpMetadata: { contentType: 'image/webp' } }));
+
+        if (dark !== null) yield* Effect.promise(async () => capture.bucket.put(keys[1], dark, { httpMetadata: { contentType: 'image/webp' } }));
+      }
 
       if (!at.holds()) {
-        if (changed) yield* Effect.promise(async () => capture.bucket.delete(key));
+        if (changed) yield* Effect.promise(async () => capture.bucket.delete([...keys]));
 
         return false;
       }
@@ -291,15 +298,21 @@ export class SlatePictures {
       this.stored(picture, digest, at.taken);
       const previous = picture.digest;
 
-      if (changed && previous !== null) yield* Effect.promise(async () => capture.bucket.delete(viewPictureKey(capture.workspace, picture, previous)));
+      if (changed && previous !== null) yield* Effect.promise(async () => capture.bucket.delete([...versionKeys(capture.workspace, picture, previous)]));
 
       return changed;
     });
   }
 }
 
+/** A slate as the camera took it: as it draws in a light page, then in a dark one. */
+export interface Shots {
+  readonly light: Uint8Array;
+  readonly dark: Uint8Array;
+}
+
 export interface Camera {
-  shoot(url: string): Promise<Uint8Array>;
+  shoot(url: string): Promise<Shots>;
   close(): Promise<void>;
 }
 
@@ -339,8 +352,9 @@ function captureToken(): string {
   return [...crypto.getRandomValues(new Uint8Array(12))].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-/** Waits on load, not the network: a streaming slate never idles. */
-async function photograph(browser: Browser, url: string): Promise<Uint8Array> {
+/** Waits on load, not the network: a streaming slate never idles. Taken light, then dark with the page as it stands:
+ *  `prefers-color-scheme` is what a slate's own CSS reads, so a slate that draws a dark of its own does so. */
+async function photograph(browser: Browser, url: string): Promise<Shots> {
   const page = await browser.newPage();
 
   try {
@@ -349,32 +363,46 @@ async function photograph(browser: Browser, url: string): Promise<Uint8Array> {
     }
 
     await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 0.5 });
+    await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'light' }]);
+
     const response = await page.goto(url, { waitUntil: 'load', timeout: CAPTURE_HANDLE_LIFE_MS });
 
     if (response === null || !response.ok()) throw new Error(`the preview answered ${String(response?.status() ?? 'nothing')}`);
-    await page.evaluate(() => new Promise<void>((resolve) => {
-      requestAnimationFrame(() => { requestAnimationFrame(() => { resolve(); }); });
-    }));
 
-    return await page.screenshot({ type: 'webp', quality: 80 });
+    const inScheme = async (scheme: 'light' | 'dark'): Promise<Uint8Array> => {
+      await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: scheme }]);
+      // Two frames drawn: what the scheme set out is on the page.
+      await page.evaluate(() => new Promise<void>((resolve) => {
+        requestAnimationFrame(() => { requestAnimationFrame(() => { resolve(); }); });
+      }));
+
+      return await page.screenshot({ type: 'webp', quality: 80 });
+    };
+
+    return { light: await inScheme('light'), dark: await inScheme('dark') };
   } finally {
     await page.close();
   }
 }
 
-/** A picture as a route names it: its slate, and the digest of one version. */
+/** A picture as a route names it: its slate, and the digest of one version, its dark capture's with `DARK_PICTURE`. */
 export const PictureAddressSchema = v.object({
   workspace: v.pipe(v.string(), v.check(isWorkspaceName)),
   slate: SlateDirectoryName,
-  digest: v.pipe(v.string(), v.regex(/^[a-f0-9]{64}$/u)),
+  digest: v.pipe(v.string(), v.regex(/^[a-f0-9]{64}(?:-dark)?$/u)),
 });
+
+/** The version a picture address names, without its mode. */
+export function pictureVersion(digest: string): string {
+  return digest.endsWith(DARK_PICTURE) ? digest.slice(0, -DARK_PICTURE.length) : digest;
+}
 
 /**
  * A picture's bytes by its {@link pictureKey}, for a caller its route admitted: the owner's own route, or the Gallery's
  * for a listed slate. `cache` is who may keep them; a digest names one version, so either keeps it for good. Null when
  * there is none.
  */
-export async function readSlatePicture(bucket: PictureBucket, key: string, cache: 'private' | 'public'): Promise<Response | null> {
+async function readSlatePicture(bucket: PictureBucket, key: string, cache: 'private' | 'public'): Promise<Response | null> {
   const object = await bucket.get(key);
 
   if (object === null) return null;
@@ -383,6 +411,14 @@ export async function readSlatePicture(bucket: PictureBucket, key: string, cache
     headers: { 'content-type': 'image/webp', 'cache-control': `${cache}, max-age=31536000, immutable`, etag: object.httpEtag },
   });
 }
+
+/** A picture in the mode its address asks: the dark capture where the slate drew one, else its light one. */
+export async function readPictureInMode(bucket: PictureBucket, keyOf: (digest: string) => string, digest: string, cache: 'private' | 'public'): Promise<Response | null> {
+  const dark = digest === pictureVersion(digest) ? null : await readSlatePicture(bucket, keyOf(digest), cache);
+
+  return dark ?? await readSlatePicture(bucket, keyOf(pictureVersion(digest)), cache);
+}
+
 
 export function pictureKey(workspace: string, slate: string, digest: string): string {
   return `${picturePrefix(workspace, slate)}${digest}.webp`;
@@ -399,6 +435,11 @@ function sharePicturePrefix(workspace: string, slate: string, share: string): st
 
 function viewPictureKey(workspace: string, picture: Pick<DuePicture, 'slate' | 'view'>, digest: string): string {
   return picture.view === PREVIEW_VIEW ? pictureKey(workspace, picture.slate, digest) : sharePictureKey(workspace, picture.slate, picture.view, digest);
+}
+
+/** A version's two places: its light capture, and its dark one where the slate drew one. */
+function versionKeys(workspace: string, picture: Pick<DuePicture, 'slate' | 'view'>, digest: string): readonly [string, string] {
+  return [viewPictureKey(workspace, picture, digest), viewPictureKey(workspace, picture, `${digest}${DARK_PICTURE}`)];
 }
 
 /** Where a share's host takes a visitor with no account past its consent page, on to its slate's own page. */
