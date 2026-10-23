@@ -212,7 +212,10 @@ impl Layer {
 enum Version {
     /// A layer's record, with that version's own size: its index and chunks were cut to it.
     Blocks(usize, IndexRef, u64),
-    Whole(File),
+    /// The file's last whole copy: in that layer's tree, or the base's when `None`. Opened for each read and closed
+    /// after it: a descriptor kept for every file read ran out (EMFILE) once about 4,000 files with block records had
+    /// been read, and every read after failed (the recovery acceptance at 4,096 changed files, 2026-10-23).
+    Whole(Option<usize>),
 }
 
 pub struct Storage {
@@ -266,16 +269,16 @@ impl Storage {
                 Presence::Absent => continue,
                 Presence::Hidden => return Err(invalid("a block record has no earlier version")),
                 Presence::Present(_) => {
-                    out.push(Version::Whole(current.tree.required(path)?));
+                    current.tree.required(path)?;
+                    out.push(Version::Whole(Some(at)));
                     return Ok(out);
                 }
             }
         }
-        let base = self
-            .base
+        self.base
             .file(path)?
             .ok_or_else(|| invalid("a block record has no earlier version"))?;
-        out.push(Version::Whole(base));
+        out.push(Version::Whole(None));
         Ok(out)
     }
 
@@ -298,24 +301,33 @@ impl Storage {
             self.versions.insert(path, chain);
         }
         let mut cursor = offset;
+        // The whole version, opened by the first block that reaches it and closed with this read.
+        let mut whole = None;
         while cursor < offset + count {
             let block = cursor / BLOCK * BLOCK;
             let end = (block + BLOCK).min(offset + count);
             let start = usize::try_from(cursor - offset).map_err(|_| invalid("read offset"))?;
             let stop = usize::try_from(end - offset).map_err(|_| invalid("read offset"))?;
-            self.block(path, block, cursor, &mut result[start..stop])?;
+            self.block(path, (block, cursor), &mut result[start..stop], &mut whole)?;
             cursor = end;
         }
         Ok(result)
     }
 
     /// Fills `out` with `path`'s bytes from `cursor`, all within `block`; a version shorter than
-    /// the served file reads as zeros past its end.
-    fn block(&mut self, path: &str, block: u64, cursor: u64, out: &mut [u8]) -> io::Result<()> {
+    /// the served file reads as zeros past its end. `whole`: the whole version, once opened.
+    fn block(
+        &mut self,
+        path: &str,
+        (block, cursor): (u64, u64),
+        out: &mut [u8],
+        whole: &mut Option<File>,
+    ) -> io::Result<()> {
         let Self {
             versions,
             layers,
             metrics,
+            base,
             ..
         } = self;
         let chain = versions
@@ -368,7 +380,14 @@ impl Storage {
                     }
                     return Ok(());
                 }
-                Version::Whole(file) => {
+                Version::Whole(at) => {
+                    let file = match whole {
+                        Some(file) => file,
+                        None => whole.insert(match at {
+                            Some(at) => layers[*at].tree.required(path)?,
+                            None => base.required(path)?,
+                        }),
+                    };
                     let available = file
                         .metadata()?
                         .len()
@@ -620,6 +639,44 @@ mod tests {
             storage.read("file", 0, 2 * 16384, 16384, 2).unwrap(),
             vec![65, 65]
         );
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    /// The descriptors this process holds.
+    fn descriptors() -> usize {
+        std::fs::read_dir("/proc/self/fd").unwrap().count()
+    }
+
+    // The recovery acceptance at 4,096 changed files (2026-10-23): every file read through a block record kept its
+    // whole version open, and past about 4,000 the process had no descriptor left (EMFILE) and every read failed.
+    #[test]
+    fn a_file_read_through_its_blocks_holds_no_descriptor_after_the_read() {
+        let path = std::env::temp_dir().join(format!("devbox-descriptors-test-{}", std::process::id()));
+        let files = 300;
+        std::fs::create_dir_all(path.join("base")).unwrap();
+        std::fs::create_dir_all(path.join("one/tree")).unwrap();
+        let mut records = Vec::new();
+        let block = vec![66; 16384];
+        let digest = hash(&block);
+        let chunk = path.join("one").join(chunk_name(&digest));
+        std::fs::create_dir_all(chunk.parent().unwrap()).unwrap();
+        std::fs::write(chunk, &block).unwrap();
+        let (over, bytes) = index(&[(0, Some(digest))]);
+        std::fs::write(path.join(format!("one/.devbox-delta/{}", over.index)), bytes).unwrap();
+        for n in 0..files {
+            std::fs::write(path.join(format!("base/f{n}")), vec![65; 2 * 16384]).unwrap();
+            records.push(Record { p: format!("f{n}"), s: 2 * 16384, mode: 0o644, uid: 0, gid: 0, t: 0, over: over.clone() });
+        }
+        let one = Layer::new(Root::open(&path.join("one/tree")).unwrap(), Some(Root::open(&path.join("one")).unwrap()), records);
+        let mut storage = Storage::new(Root::open(&path.join("base")).unwrap(), vec![one], path.join("stats"));
+        let before = descriptors();
+        let mut wanted = vec![66; 16384];
+        wanted.extend(vec![65; 16384]);
+        for n in 0..files {
+            assert_eq!(storage.read(&format!("f{n}"), 0, 2 * 16384, 0, 2 * 16384).unwrap(), wanted);
+        }
+        // Other tests run beside this one and hold a few of their own: a kept descriptor per file is 300.
+        assert!(descriptors() < before + 50, "{} descriptors held after reading {files} files", descriptors() - before);
         std::fs::remove_dir_all(path).unwrap();
     }
 
