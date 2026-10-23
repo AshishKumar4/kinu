@@ -212,7 +212,10 @@ impl Layer {
 enum Version {
     /// A layer's record, with that version's own size: its index and chunks were cut to it.
     Blocks(usize, IndexRef, u64),
-    Whole(File),
+    /// The file's last whole copy: in that layer's tree, or the base's when `None`. Opened for each read and closed
+    /// after it: a descriptor kept for every file read ran out (EMFILE) once about 4,000 files with block records had
+    /// been read, and every read after failed (the recovery acceptance at 4,096 changed files, 2026-10-23).
+    Whole(Option<usize>),
 }
 
 pub struct Storage {
@@ -266,16 +269,16 @@ impl Storage {
                 Presence::Absent => continue,
                 Presence::Hidden => return Err(invalid("a block record has no earlier version")),
                 Presence::Present(_) => {
-                    out.push(Version::Whole(current.tree.required(path)?));
+                    current.tree.required(path)?;
+                    out.push(Version::Whole(Some(at)));
                     return Ok(out);
                 }
             }
         }
-        let base = self
-            .base
+        self.base
             .file(path)?
             .ok_or_else(|| invalid("a block record has no earlier version"))?;
-        out.push(Version::Whole(base));
+        out.push(Version::Whole(None));
         Ok(out)
     }
 
@@ -298,24 +301,33 @@ impl Storage {
             self.versions.insert(path, chain);
         }
         let mut cursor = offset;
+        // The whole version, opened by the first block that reaches it and closed with this read.
+        let mut whole = None;
         while cursor < offset + count {
             let block = cursor / BLOCK * BLOCK;
             let end = (block + BLOCK).min(offset + count);
             let start = usize::try_from(cursor - offset).map_err(|_| invalid("read offset"))?;
             let stop = usize::try_from(end - offset).map_err(|_| invalid("read offset"))?;
-            self.block(path, block, cursor, &mut result[start..stop])?;
+            self.block(path, (block, cursor), &mut result[start..stop], &mut whole)?;
             cursor = end;
         }
         Ok(result)
     }
 
     /// Fills `out` with `path`'s bytes from `cursor`, all within `block`; a version shorter than
-    /// the served file reads as zeros past its end.
-    fn block(&mut self, path: &str, block: u64, cursor: u64, out: &mut [u8]) -> io::Result<()> {
+    /// the served file reads as zeros past its end. `whole`: the whole version, once opened.
+    fn block(
+        &mut self,
+        path: &str,
+        (block, cursor): (u64, u64),
+        out: &mut [u8],
+        whole: &mut Option<File>,
+    ) -> io::Result<()> {
         let Self {
             versions,
             layers,
             metrics,
+            base,
             ..
         } = self;
         let chain = versions
@@ -368,7 +380,14 @@ impl Storage {
                     }
                     return Ok(());
                 }
-                Version::Whole(file) => {
+                Version::Whole(at) => {
+                    let file = match whole {
+                        Some(file) => file,
+                        None => whole.insert(match at {
+                            Some(at) => layers[*at].tree.required(path)?,
+                            None => base.required(path)?,
+                        }),
+                    };
                     let available = file
                         .metadata()?
                         .len()
