@@ -117,6 +117,10 @@ if [[ "$1" == */scripts/reset.ts ]] && [ "$2" = "stamps" ] && [ "$KINU_STAMPS_MO
   echo 'account'
   exit 3
 fi
+if [[ "$1" == */scripts/reset.ts ]] && [ "$2" = "retirements" ] && [ "$KINU_RETIRES" = "1" ]; then
+  echo 'retirements: REFUSED before the upload: OldDO'
+  exit 1
+fi
 # The deploy's report directory, as scripts/deploy-report.ts opens and names it, its logs directory made.
 if [ "\${1##*/}" = "deploy-report.ts" ] && [ "$2" = "open" ]; then
   mkdir -p "$KINU_DEPLOY_ROOT/report/logs"
@@ -226,6 +230,8 @@ interface DeployRun {
   readonly ci?: 'green' | 'absent' | 'red';
   /** The build moves a class's stamp (`reset.ts stamps` exits 3). */
   readonly stampsMoved?: boolean;
+  /** The build retires a class the served build exports, unnamed by the owner's words (`reset.ts retirements` exits 1). */
+  readonly retires?: boolean;
   /** The reset the environment is still in: its placeholder serves and its build never uploaded. */
   readonly pendingReset?: string;
   /** A KINU_RESET_RECORD already on the environment, which must never soften a deploy nobody asked to reset. */
@@ -379,6 +385,7 @@ async function runDeploy({
   lockHeld = false,
   ci = 'green',
   stampsMoved = false,
+  retires = false,
   pendingReset = "none",
   ambientRecord = "",
   account,
@@ -493,6 +500,7 @@ exit 87
       SKIP_E2E: "1",
       KINU_CI: ci,
       KINU_STAMPS_MOVED: stampsMoved ? '1' : '0',
+      KINU_RETIRES: retires ? '1' : '0',
       XDG_RUNTIME_DIR: fixture,
     }),
   });
@@ -506,7 +514,9 @@ exit 87
 
   const STAMPS = 'bun scripts/reset.ts stamps';
 
-  const events = logged.filter((event) => !event.startsWith(REPORT) && !event.startsWith('bun scripts/ladder.ts --ci-') && !event.startsWith(STAMPS));
+  const RETIREMENTS = 'bun scripts/reset.ts retirements';
+
+  const events = logged.filter((event) => !event.startsWith(REPORT) && !event.startsWith('bun scripts/ladder.ts --ci-') && !event.startsWith(STAMPS) && !event.startsWith(RETIREMENTS));
 
   // What the deploy wrote, apart from its reads of the report (`holds-red`).
   const report = logged.filter((event) => event.startsWith(REPORT) && !event.startsWith(`${REPORT}holds-red `))
@@ -522,6 +532,7 @@ exit 87
     report,
     ci: logged.filter((event) => event.startsWith('bun scripts/ladder.ts --ci-')),
     stamps: logged.filter((event) => event.startsWith(STAMPS)),
+    retirements: logged.filter((event) => event.startsWith(RETIREMENTS)),
     stdout: run.stdout.toString(),
     stderr: run.stderr.toString(),
     infraPhase,
@@ -554,6 +565,16 @@ describe("deploy gate", () => {
     expect({ status: moved.status, events: moved.events, stamps: moved.stamps, said: moved.stdout.includes('deploy with --reset-tables') })
       .toEqual({ status: 1, events: [], stamps: ['bun scripts/reset.ts stamps staging'], said: true });
     expect(plain.stamps).toEqual(['bun scripts/reset.ts stamps staging']);
+  });
+
+  // The owner, 2026-10-21: production loses no user's rows unnamed, and a retired class deletes every row of it.
+  test('a build that retires a class is refused before anything runs, every deploy asking', async () => {
+    const retired = await runDeploy({ retires: true });
+    const plain = await runDeploy({});
+
+    expect({ status: retired.status, events: retired.events, retirements: retired.retirements, said: retired.stdout.includes('REFUSED before the upload: OldDO') })
+      .toEqual({ status: 1, events: [], retirements: ['bun scripts/reset.ts retirements staging'], said: true });
+    expect(plain.retirements).toEqual(['bun scripts/reset.ts retirements staging']);
   });
 
   test('a green armada verdict is read once, before the upload gates', async () => {
