@@ -57,7 +57,13 @@ function workspace(calls: JsonValue[][]): ResolvedProvider {
         // As the workspace's shell refuses a word naming one of its planes (`shellReference`).
         if (/\b(?:vfs|local):\/\//u.test(String(command))) return { success: false, error: "the shell takes this machine's paths" };
 
-        const routed = String(command).replaceAll(`https://${NODE_PROGRAM_HOST}/`, `http://127.0.0.1:${String(egress?.port)}/`);
+        // The egress's part: a call to the program host reaches this test's server. Each module rides as base64.
+        const routed = String(command).replace(/printf '%s' '([A-Za-z0-9+/=]*)'/gu, (_, encoded: string) => {
+          const module = Buffer.from(encoded, 'base64').toString('utf8').replaceAll(`https://${NODE_PROGRAM_HOST}/`, `http://127.0.0.1:${String(egress?.port)}/`);
+
+          return `printf '%s' '${Buffer.from(module, 'utf8').toString('base64')}'`;
+        });
+
         const ran = Bun.spawn(['bash', '-c', `command -v node >/dev/null || node() { ${JSON.stringify(process.execPath)} "$@"; }\n${routed}`], { cwd: at, stdout: 'pipe', stderr: 'pipe' });
         const [stdout, stderr, exitCode] = await Promise.all([new Response(ran.stdout).text(), new Response(ran.stderr).text(), ran.exited]);
 
