@@ -4,7 +4,7 @@
  * wire, and the SDK with it: evaluating the SDK builds its schemas, which every isolate's startup paid for, MCP or not.
  */
 
-import { CALLABLE_MCP_STATES, listMcpToolsLeniently, type McpFailureKind, type McpObservedState, type McpToolListing } from '@kinu.run/core';
+import { CALLABLE_MCP_STATES, listMcpToolsLeniently, type McpFailureKind, type McpObservedState, type McpRefusal, type McpToolListing } from '@kinu.run/core';
 import { diagnostics, KinuError, renderCauseChain, toKinuError, type ErrorCode } from '@kinu.run/core/obs';
 import { ProtocolError, SdkError, SdkErrorCode, SdkHttpError, SseError, UnauthorizedError, type Client } from '@modelcontextprotocol/client';
 import { ResultSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -24,7 +24,16 @@ function causeChain(input: { cause: unknown }): Error[] {
   return chain;
 }
 
-export async function readUndiscoveredToolList(server: { readonly name: string }, client: Pick<Client, 'request'>): Promise<McpToolListing> {
+/**
+ * `server`'s tool list, or why it has none. A server that refused the request by its HTTP status is named with that
+ * status and what it said of the token (`refusal`, its last `WWW-Authenticate`), never the body the SDK quotes: Gmail's
+ * MCP refuses a token it will not take with 403, no reason, and its whole tool list as the body (2026-10-23).
+ */
+export async function readUndiscoveredToolList(
+  server: { readonly name: string },
+  client: Pick<Client, 'request'>,
+  refusal: () => McpRefusal | undefined = () => undefined,
+): Promise<McpToolListing> {
   try {
     return {
       listed: await listMcpToolsLeniently(server, (cursor) => client.request(
@@ -35,8 +44,12 @@ export async function readUndiscoveredToolList(server: { readonly name: string }
   } catch (cause) {
     const error = toKinuError({ doing: `reading the tool list of MCP server ${server.name}`, cause, otherwise: 'unavailable' });
     diagnostics.failure('mcp.tool_list_unreadable', error, { server: server.name });
+    const status = causeChain({ cause }).find((link): link is SdkHttpError => link instanceof SdkHttpError)?.status;
 
-    return { failure: renderCauseChain(error) };
+    if (status === undefined) return { failure: renderCauseChain(error) };
+    const said = refusal()?.wwwAuthenticate ?? null;
+
+    return { failure: `${server.name} refused its tool list: HTTP ${String(status)}, ${said === null ? 'with no reason given' : `saying ${said}`}` };
   }
 }
 

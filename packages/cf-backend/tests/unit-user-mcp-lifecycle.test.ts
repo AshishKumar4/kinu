@@ -13,7 +13,7 @@ import {
 import { classifyMcpFailure } from '../src/user/mcp';
 import { createCredentialCipher, McpToolSurfaceSchema } from '@kinu.run/core';
 import { KinuError, setDiagnosticsSink, type LogFields } from '@kinu.run/core/obs';
-import { ProtocolError, SdkError, SdkErrorCode } from '@modelcontextprotocol/client';
+import { ProtocolError, SdkError, SdkErrorCode, SdkHttpError } from '@modelcontextprotocol/client';
 import type { McpToolSurface } from '../src/user/mcp-servers';
 import type { UserCaller } from '@kinu.run/core';
 import { refusedSseConnect, refusedToolCall } from './helpers/mcp-transport';
@@ -214,6 +214,55 @@ describe('the management surface completes a round trip', () => {
     await h.userDO.userMcp_callTool(owner, { serverId: 'srv1', name: 'do_thing', args: { q: '', note: '' }, id: crypto.randomUUID() });
     expect(recordedMcpToolCalls()).toEqual([{ serverId: 'srv1', name: 'do_thing', arguments: { q: '' } }]);
     h.close();
+  });
+});
+
+// The owner, onboarding on kinu.run 90fd4539f, 2026-10-23: Gmail read "Connected · 0 tools" beside its tool list's
+// failure, which quoted Google's whole tool list. Google answered `tools/list` 403 for the token, with no reason, and that
+// list as the body; its handshake had answered 200.
+describe('a server that refuses its tool list', () => {
+  /** The SDK's error for that answer (`@modelcontextprotocol/client` 2.3.1, `_send`). */
+  const refusedList = () => new SdkHttpError(SdkErrorCode.ClientHttpNotImplemented,
+    'Error POSTing to endpoint: {"id":0,"jsonrpc":"2.0","result":{"cacheScope":"public","resultType":"complete","tools":[]}}', { status: 403, statusText: '' });
+
+  test('reads failed, not connected, and names the status and what the server said, not the body', async () => {
+    const first = harness();
+    const owner = await testOwner();
+    await seedServer(first, 'gm1', { name: 'Gmail' });
+    await seedServer(first, 'gm2', { name: 'Calendar' });
+
+    // The next object's activation runs each server on the transport the plane builds.
+    const h = createTestUserDO({ storage: first.db });
+    await h.userDO.userMcp_list(owner);
+    seedUndiscoveredMcpTools('gm1', async () => { throw refusedList(); });
+    seedUndiscoveredMcpTools('gm2', async () => { throw refusedList(); });
+    const [gmail, calendar] = [liveMcpFetch('gm1'), liveMcpFetch('gm2')];
+
+    if (gmail === null || calendar === null) throw new Error('a server runs on no transport of the plane\'s');
+
+    // What each transport saw of the refusal; Calendar's server said why.
+    const real = globalThis.fetch;
+
+    globalThis.fetch = Object.assign(async (url: Request | URL | RequestInfo) => new Response('{}', {
+      status: 403, headers: (url instanceof Request ? url.url : url.toString()).includes('gm2') ? { 'www-authenticate': 'Bearer error="insufficient_scope", scope="calendar.readonly"' } : {},
+    }), { preconnect: real.preconnect });
+
+    try {
+      await gmail('https://gm1.example/sse', { method: 'POST' });
+      await calendar('https://gm2.example/sse', { method: 'POST' });
+    } finally {
+      globalThis.fetch = real;
+    }
+
+    await h.userDO.userMcp_warmConnections(owner);
+    const listed = await h.userDO.userMcp_list(owner);
+
+    expect(listed.map((server) => ({ name: server.name, status: server.status, tools: server.toolsCount, error: server.error }))).toEqual([
+      { name: 'Calendar', status: 'failed', tools: 0, error: 'Calendar refused its tool list: HTTP 403, saying Bearer error="insufficient_scope", scope="calendar.readonly"' },
+      { name: 'Gmail', status: 'failed', tools: 0, error: 'Gmail refused its tool list: HTTP 403, with no reason given' },
+    ]);
+    h.close();
+    first.close();
   });
 });
 

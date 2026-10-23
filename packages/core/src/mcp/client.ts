@@ -23,29 +23,49 @@ export function mcpCredentialTransport(
   serverUrl: string,
   openHeaders: () => Promise<Record<string, string> | null>,
   signIn: 'first' | 'when-asked' = 'when-asked',
+  refused: (refusal: McpRefusal) => void = () => undefined,
 ): McpCredentialTransport {
   const endpoint = new URL(serverUrl);
 
+  const sent = async (url: string | URL, init?: RequestInit): Promise<Response> => {
+    const at = new URL(url.toString());
+
+    if (at.origin !== endpoint.origin) return fetch(url, init);
+
+    if (signIn === 'first' && at.pathname === endpoint.pathname && !copyHeaders(init?.headers).has('authorization')) {
+      return new Response(null, { status: 401, headers: { 'www-authenticate': 'Bearer' } });
+    }
+
+    const credential = await openHeaders();
+
+    if (credential === null || Object.keys(credential).length === 0) return fetch(url, init);
+    const headers = copyHeaders(init?.headers);
+
+    for (const [name, value] of Object.entries(credential)) headers.set(name, value);
+
+    return fetch(url, { ...init, headers, redirect: 'manual' });
+  };
+
   return {
-    fetch: refreshingOnce(async (url: string | URL, init?: RequestInit): Promise<Response> => {
-      const at = new URL(url.toString());
+    fetch: refreshingOnce(async (url, init) => {
+      const response = await sent(url, init);
 
-      if (at.origin !== endpoint.origin) return fetch(url, init);
-
-      if (signIn === 'first' && at.pathname === endpoint.pathname && !copyHeaders(init?.headers).has('authorization')) {
-        return new Response(null, { status: 401, headers: { 'www-authenticate': 'Bearer' } });
+      // The SDK keeps only the status and the body of a refusal, and a server may answer one with its whole result
+      // (Gmail's MCP refuses a token with its tool list, 2026-10-23); what the server said of the token is kept here.
+      if (!response.ok && new URL(url.toString()).origin === endpoint.origin) {
+        refused({ method: init?.method ?? 'GET', status: response.status, wwwAuthenticate: response.headers.get('www-authenticate') });
       }
 
-      const credential = await openHeaders();
-
-      if (credential === null || Object.keys(credential).length === 0) return fetch(url, init);
-      const headers = copyHeaders(init?.headers);
-
-      for (const [name, value] of Object.entries(credential)) headers.set(name, value);
-
-      return fetch(url, { ...init, headers, redirect: 'manual' });
+      return response;
     }),
   };
+}
+
+/** A server's own origin refusing a request: its status and what its `WWW-Authenticate` said, never its body. */
+export interface McpRefusal {
+  readonly method: string;
+  readonly status: number;
+  readonly wwwAuthenticate: string | null;
 }
 
 /** The one transport option the SDK's persistence whitelist does not keep. */
