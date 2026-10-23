@@ -21,6 +21,10 @@ const PREVIEW_SANDBOX_TOKENS = [
  *  also needs PREVIEW_HOST_SUFFIX to be a Public Suffix List boundary. */
 export const PREVIEW_SANDBOX = [...PREVIEW_SANDBOX_TOKENS, 'allow-same-origin'].join(' ');
 
+/** An answer's page drawn in the chat itself (`drawnPageDocument`): never its host's origin, so nothing of the app's,
+ *  no cookie, storage or document, is within its reach. */
+export const DRAWN_SANDBOX = PREVIEW_SANDBOX_TOKENS.join(' ');
+
 export interface PreviewSuffixEnv {
   PREVIEW_HOST_SUFFIX?: string;
 }

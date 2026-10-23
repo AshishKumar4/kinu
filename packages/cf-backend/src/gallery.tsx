@@ -2471,12 +2471,15 @@ const SLATES_THREAD: UIMessage[] = [
   msg({ id: "sb-a3", role: "assistant", createdAt: NOW - 4 * 60e3, metadata: { [SLATES_CHANGED_METADATA_KEY]: ["board"] }, parts: [{ type: "text", text: "Added a last-failure column." }] }),
 ];
 
+/** The page the `errors` answer draws: a title, a heading, rows, and a paragraph that sets no colour. */
+const ERRORS_PAGE = `<title>500s by route</title>\n<h1>Errors</h1><p id="plain">/api/health leads this week.</p><ul id="rows">${"<li>/api/health</li>".repeat(12)}</ul>`;
+
 /* `?transcript=page`: an answer whose own page the chat draws in place, and which the person may keep as a slate. */
 const PAGE_THREAD: UIMessage[] = [
   msg({ id: "pg-u1", role: "user", createdAt: NOW - 5 * 60e3, parts: [{ type: "text", text: "Show me this week's 500s by route." }] }),
   msg({
     id: "pg-a1", role: "assistant", createdAt: NOW - 4 * 60e3,
-    parts: [{ type: "text", text: "Here they are, by route.\n\n<slate-ui name=\"errors\">\n<title>500s by route</title>\n<ul><li>/api/health</li></ul>\n</slate-ui>\n\n/api/health leads." }],
+    parts: [{ type: "text", text: `Here they are, by route.\n\n<slate-ui name="errors">\n${ERRORS_PAGE}\n</slate-ui>\n\n/api/health leads.` }],
   }),
 ];
 

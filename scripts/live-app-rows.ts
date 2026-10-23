@@ -1689,7 +1689,14 @@ interface SlateUiVerdict {
   readonly kept: boolean;
   /** The page the click's turn answered with: what its block was while that turn still ran (a quiet line, or a card that
    *  asked for a page the store did not hold yet, 1023-ad), any refusal it showed, and its words once the turn ended. */
-  readonly clicked: { readonly midTurn: 'pending' | 'card'; readonly refusal: string; readonly shown: string };
+  readonly clicked: {
+    /** While that turn ran with the block half written: its markup so far drawn, a quiet line, or a card asking for it. */
+    readonly midTurn: 'drawn' | 'pending' | 'card';
+    readonly refusal: string;
+    /** What the half-written page showed, and the page once its turn had ended. */
+    readonly streamed: string;
+    readonly shown: string;
+  };
   /** The work surface's page tabs on a page opened while both pages run: an unsaved page has none (#90). */
   readonly tabs: readonly string[];
   /** What the first page shows once its card's open control brought it up in the work surface. */
@@ -1741,62 +1748,74 @@ async function forgedBlocks(page: Page, origin: string, workspace: string): Prom
   }
 }
 
-const slateUiDrawn = (count: number) => `document.querySelectorAll('[data-slate-ui] iframe[src]').length === ${String(count)}`;
+/** A block's page, served by its process or drawn by the chat (1023-ac). */
+const PAGE_FRAME = 'iframe:is([src], [data-slate-drawn="page"])';
+
+const slateUiDrawn = (count: number) => `document.querySelectorAll('[data-slate-ui] ${PAGE_FRAME}').length === ${String(count)}`;
+
+/** The frame at `selector`, once its page shows `[data-words]`: their words, and any `[data-rest]` after them. */
+async function framedWords(page: Page, selector: string, what: string): Promise<string> {
+  const frame = await (await page.$(selector))?.contentFrame();
+
+  if (frame === undefined || frame === null) throw new Error(`${what} has no frame`);
+  await named(`${what}'s words`, () => frame.waitForFunction(() => document.querySelector('[data-words]') !== null));
+
+  return await frame.evaluate(() => [...document.querySelectorAll('[data-words], [data-rest]')].map((said) => said.textContent ?? '').join('|'));
+}
 
 const SLATE_UI_DRAWN = slateUiDrawn(Object.keys(SLATE_UI_PAGES).length);
 
 /** Each drawn block's name and the text its frame's page shows, once it shows any. */
 async function slateUiFrames(page: Page): Promise<{ drawn: string[]; shown: Record<string, string> }> {
-  const cards = await page.$$eval('[data-slate-ui]', (found) => found.map((card) => ({
-    name: card.getAttribute('data-slate-ui') ?? '', src: card.querySelector('iframe')?.getAttribute('src') ?? '',
-  })));
-
+  const drawn = await page.$$eval('[data-slate-ui]', (found) => found.map((card) => card.getAttribute('data-slate-ui') ?? ''));
   const shown: Record<string, string> = {};
 
-  for (const { name, src } of cards) {
-    const origin = new URL(src).origin;
-    const frame = await named(`the ${name} frame`, () => page.waitForFrame((each) => each.url().startsWith(origin)));
+  for (const name of drawn) shown[name] = (await framedWords(page, `[data-slate-ui="${name}"] ${PAGE_FRAME}`, `the ${name} page`)).split('|')[0] ?? '';
 
-    await named(`the ${name} page's words`, () => frame.waitForFunction(() => document.querySelector('[data-words]') !== null));
-    shown[name] = await frame.evaluate(() => document.querySelector('[data-words]')?.textContent ?? '');
-  }
-
-  return { drawn: cards.map((card) => card.name), shown };
+  return { drawn, shown };
 }
 
 /** The first page's frame, once it has read the file through `workspace`: what it read, and whether its click then
  *  reaches the agent. */
 const CLICKED_CARD = `[data-slate-ui="${SLATE_UI_CLICKED.name}"]`;
 
-/** The click's turn's page while that turn is held after writing its block, then once it ends: drawn only then. */
+const CLICKED_STREAMING = `${CLICKED_CARD} iframe[data-slate-drawn="streaming"]`;
+
+/** How the click turn's half-written block is shown: its markup so far, a quiet line, or a card. */
+const CLICKED_SHOWN = `document.querySelector('[data-slate-ui-pending="${SLATE_UI_CLICKED.name}"]') !== null ? 'pending'
+  : document.querySelector(${JSON.stringify(CLICKED_STREAMING)}) !== null ? 'drawn' : 'card'`;
+
+/** A card drawn while its answer runs asks for its page at once: a refusal, if the store does not hold it yet, is read. */
+async function earlyCard(page: Page): Promise<string> {
+  await until(page, "the early card's answer", `document.querySelector('${CLICKED_CARD} ${PAGE_FRAME}, ${CLICKED_CARD} [role="alert"], ${CLICKED_CARD} .p-notice') !== null`);
+
+  return v.parse(v.string(), await page.evaluate(`document.querySelector(${JSON.stringify(CLICKED_CARD)})?.textContent ?? ''`));
+}
+
+/** The click's turn's page while that turn is held with its block half written, then once it ends. */
 async function clickedPage(page: Page, held: HeldCall): Promise<SlateUiVerdict['clicked']> {
   await waitOn(page, "the click turn's answer, held", held.arrived);
   await until(page, "the click turn's block in the chat", `document.querySelector('[data-slate-ui-pending="${SLATE_UI_CLICKED.name}"], ${CLICKED_CARD}') !== null`);
 
-  const midTurn = v.parse(v.picklist(['pending', 'card']), await page.evaluate(`document.querySelector(${JSON.stringify(CLICKED_CARD)}) === null ? 'pending' : 'card'`));
-
-  // A card drawn this early asks for its page at once; its refusal, if the store does not hold the answer yet, is read.
-  if (midTurn === 'card') await until(page, "the early card's answer", `document.querySelector('${CLICKED_CARD} iframe[src], ${CLICKED_CARD} [role="alert"], ${CLICKED_CARD} .p-notice') !== null`);
-
-  const refusal = v.parse(v.string(), await page.evaluate(`document.querySelector(${JSON.stringify(CLICKED_CARD)})?.textContent ?? ''`));
+  const midTurn = v.parse(v.picklist(['drawn', 'pending', 'card']), await page.evaluate(CLICKED_SHOWN));
+  const streamed = midTurn === 'drawn' ? await framedWords(page, CLICKED_STREAMING, 'the half-written page') : '';
+  const refusal = midTurn === 'card' ? await earlyCard(page) : '';
 
   held.release();
   await until(page, 'the click turn to end', `!(${STOP_OFFERED})`);
 
   // A card that refused its page keeps the refusal until it is drawn again: no frame comes, and the row reports it.
-  if (midTurn === 'card' && await page.$(`${CLICKED_CARD} iframe[src]`) === null) return { midTurn, refusal, shown: '' };
+  if (midTurn === 'card' && await page.$(`${CLICKED_CARD} ${PAGE_FRAME}`) === null) return { midTurn, refusal, streamed, shown: '' };
 
-  await until(page, "the click turn's page drawn", `document.querySelector(${JSON.stringify(`${CLICKED_CARD} iframe[src]`)}) !== null`);
-  const src = await page.$eval(`${CLICKED_CARD} iframe`, (frame) => frame.getAttribute('src') ?? '');
-  const frame = await named("the click turn's frame", () => page.waitForFrame((each) => each.url().startsWith(new URL(src).origin)));
+  await until(page, "the click turn's page drawn", `document.querySelector(${JSON.stringify(`${CLICKED_CARD} ${PAGE_FRAME}`)}) !== null`);
+  // The whole page, its rest written after the hold.
+  const shown = await framedWords(page, `${CLICKED_CARD} ${PAGE_FRAME}`, "the click turn's page");
 
-  await named("the click turn's page words", () => frame.waitForFunction(() => document.querySelector('[data-words]') !== null));
-
-  return { midTurn, refusal: midTurn === 'card' ? refusal : '', shown: await frame.evaluate(() => document.querySelector('[data-words]')?.textContent ?? '') };
+  return { midTurn, refusal, streamed, shown };
 }
 
 async function firstPageReach(page: Page, heard: Promise<ScriptedRequest>, held: HeldCall): Promise<{ read: string; heard: boolean; kept: boolean; clicked: SlateUiVerdict['clicked'] }> {
-  const src = await page.$eval('[data-slate-ui="first"] iframe', (frame) => frame.getAttribute('src') ?? '');
+  const src = await page.$eval('[data-slate-ui="first"] iframe[src]', (frame) => frame.getAttribute('src') ?? '');
   const frame = await page.waitForFrame((each) => each.url().startsWith(new URL(src).origin));
 
   await named("the first page's read", () => frame.waitForFunction(() => (document.getElementById('read')?.textContent ?? '') !== ''));

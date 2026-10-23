@@ -419,6 +419,10 @@ export {
   type EphemeralSlateAddress, type SlateUiBlock, type SlateUiSegment,
 } from './slates/ui-blocks';
 
+export {
+  drawnInBrowser, drawnPageDocument, drawnStreamDocument, SLATE_DRAW_MESSAGE, type DrawnPageLook,
+} from './web/drawn-page';
+
 // Cross-workspace experience transfer
 export {
   createExperienceLibrary,
@@ -2283,7 +2287,7 @@ export {
 
 
 export {
-  PREVIEW_SANDBOX, containPreviewResponse, extractPreviewUrl, hostOf, isPreviewHostRequest,
+  DRAWN_SANDBOX, PREVIEW_SANDBOX, containPreviewResponse, extractPreviewUrl, hostOf, isPreviewHostRequest,
   isPreviewUrl, previewHostSuffix, previewPortSuffix, previewSuffixMetaName, sandboxPreviewLabelOf,
   type PreviewPortEnv, type PreviewSuffixEnv,
 } from './preview/preview-origin';

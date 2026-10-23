@@ -4,6 +4,7 @@ import {
 import { readBuildStamp, type AssetFetcher } from './deployed-assets';
 import { escapeHtml } from './http';
 import { PAGE_BUILD_META } from '../web/page-build';
+import { APP_FONTS_PATH } from '../web/fonts';
 import { VISITOR_PAGE_ATTRIBUTE } from '../web/visitor-page';
 import { withAppSecurityHeaders } from './security-headers';
 import type { ThemeName } from '../web/theme';
@@ -37,11 +38,15 @@ function cachePolicy(pathname: string, status: number, html: boolean): string | 
 /** `response` answered under its {@link cachePolicy}. */
 function cached(response: Response, url: URL): Response {
   const policy = cachePolicy(url.pathname, response.status, response.headers.get('content-type')?.includes('text/html') ?? false);
+  // The app's faces are read by the pages the chat draws itself, whose origin is opaque (`drawnPageDocument`).
+  const face = url.pathname.startsWith(APP_FONTS_PATH);
 
-  if (policy === null) return response;
+  if (policy === null && !face) return response;
   const headers = new Headers(response.headers);
 
-  headers.set('cache-control', policy);
+  if (policy !== null) headers.set('cache-control', policy);
+
+  if (face) headers.set('access-control-allow-origin', '*');
 
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }

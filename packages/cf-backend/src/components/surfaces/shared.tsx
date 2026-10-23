@@ -5,9 +5,10 @@ import { useAsyncResource } from "@/hooks/use-async-resource";
 import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { findPlaneReferences, isWholeReference, linkProse, MAX_LINES_PER_FILE, promoteSlateLinks, slateLinkId, type ChangelogEntry, type DiffLine, type MarkdownNode } from "@kinu.run/core";
-import { ephemeralSlateId, slateUiSegments, type EphemeralSlateAddress, type SlateUiSegment } from "@kinu.run/core";
+import { drawnInBrowser, ephemeralSlateId, slateUiSegments, type EphemeralSlateAddress, type SlateUiSegment } from "@kinu.run/core";
 import { KinuMark } from "@/components/ui/KinuLogo";
 import { InlineSlate } from "@/components/slates/InlineSlate";
+import { DrawnSlate } from "@/components/slates/DrawnSlate";
 import { SlateInlineContext } from "@/components/slates/context";
 import { Pressable } from "@/components/ui/Pressable";
 import { Button } from "@/components/ui/Button";
@@ -117,10 +118,18 @@ export function SlateLink({ id }: { id: string }) {
 
 /** A `<slate-ui>` block of a stored answer, drawn by the same slate path a file slate is; where no slate can be drawn,
  *  its source, folded. */
-function SlateUiBlock({ address, html }: { address: EphemeralSlateAddress | null; html: string }) {
+/**
+ * A block's page, drawn by the chat itself as its answer streams (`DrawnSlate`), and opened as written once its block is
+ * closed. A page that reaches the workspace through `kinu:slate` is served by its process once its answer is stored,
+ * which reads the block back: until then its markup so far is drawn.
+ */
+function SlateUiBlock({ address, html, closed, stored }: { address: EphemeralSlateAddress | null; html: string; closed: boolean; stored: boolean }) {
   const inline = useContext(SlateInlineContext);
+  const rpc = inline?.rpc;
+  const id = address === null ? null : ephemeralSlateId(address);
+  const save = useMemo(() => (rpc === undefined || id === null || !stored ? undefined : async () => rpc("slate", [{ op: "save", page: id }])), [rpc, id, stored]);
 
-  if (inline === null || address === null) {
+  if (inline === null || address === null || id === null) {
     return (
       <details className="my-2">
         <summary className="t-meta p-text-3 cursor-pointer">{address?.name ?? "slate-ui"}</summary>
@@ -129,7 +138,9 @@ function SlateUiBlock({ address, html }: { address: EphemeralSlateAddress | null
     );
   }
 
-  return <InlineSlate id={ephemeralSlateId(address)} block={address.name} rpc={inline.rpc} display="inline" />;
+  if (closed && stored && !drawnInBrowser(html)) return <InlineSlate id={id} block={address.name} rpc={inline.rpc} display="inline" />;
+
+  return <DrawnSlate id={id} block={address.name} html={html} closed={closed && drawnInBrowser(html)} save={save} />;
 }
 
 /** Which chat an answer is in: the workspace's own (null), or a hired agent's. */
@@ -148,16 +159,12 @@ interface AnswerPlace {
 function AnswerSegment({ segment, place }: { segment: SlateUiSegment; place: AnswerPlace }) {
   const drawn = place.chat !== undefined;
 
+  // A block never closed in a stored answer is the answer's text, as is any block where no chat draws pages.
   if (segment.kind === "text" || (segment.kind === "open" && (place.stored || !drawn))) return <MarkdownContent content={segment.text} />;
-
-  // Its page is read from the stored answer, so until the answer is stored it is a quiet line.
-  if (segment.kind === "open" || (drawn && !place.stored)) {
-    return <Surface look="well" className="my-2 h-8 animate-pulse" data-slate-ui-pending={segment.name} aria-label={`Drawing ${segment.name}`} />;
-  }
 
   const address = place.chat === undefined ? null : { actorId: place.chat.actorId, messageId: place.messageId, name: segment.name };
 
-  return <SlateUiBlock address={address} html={segment.html} />;
+  return <SlateUiBlock address={address} html={segment.html} closed={segment.kind === "slate"} stored={place.stored} />;
 }
 
 /** An answer's text with its `<slate-ui>` blocks drawn in place. */
