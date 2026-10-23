@@ -27,7 +27,11 @@ const EMPTY_ROOT = '<div id="landing-root"></div>';
 /** Named at run time: the page is cf-backend's TSX, checked by its own project, not by the scripts' one. */
 const PAGE_MODULE = new URL('../packages/cf-backend/src/components/landing/LandingPage.tsx', import.meta.url).href;
 
+const LEGAL_MODULE = new URL('../packages/cf-backend/src/components/landing/LegalPage.tsx', import.meta.url).href;
+
 const PageModuleSchema = v.object({ LandingPage: v.custom<ComponentType>((value) => typeof value === 'function') });
+
+const LegalModuleSchema = v.object({ default: v.custom<ComponentType<{ content: string }>>((value) => typeof value === 'function') });
 
 const [dist] = process.argv.slice(2);
 
@@ -46,3 +50,21 @@ const markup = renderToString(createElement(LandingPage));
 await Bun.write(page, html.replace(EMPTY_ROOT, `<div id="landing-root">${markup}</div>`));
 
 console.log(`prerender-landing: ${String(markup.length)} characters of markup in ${page}`);
+
+const legalTemplate = await Bun.file(join(dist, 'legal.html')).text();
+
+const legalRoot = '<div id="legal-root"></div>';
+
+if (!legalTemplate.includes(legalRoot)) throw new Error('legal.html has no empty legal root to fill');
+
+const { default: LegalPage } = v.parse(LegalModuleSchema, await import(LEGAL_MODULE));
+
+for (const name of ['privacy', 'terms']) {
+  const content = await Bun.file(new URL(`../packages/cf-backend/src/components/landing/legal/${name}.md`, import.meta.url)).text();
+  const title = content.split('\n')[0].replace(/^#\s+/u, '');
+  const rendered = renderToString(createElement(LegalPage, { content }));
+  const document = legalTemplate.replace(legalRoot, `<div id="legal-root">${rendered}</div>`).replace('<title>Kinu</title>', renderToString(createElement('title', null, title)));
+
+  await Bun.write(join(dist, `${name}.html`), document);
+  console.log(`prerender-landing: ${String(rendered.length)} characters of markup in ${name}.html`);
+}
