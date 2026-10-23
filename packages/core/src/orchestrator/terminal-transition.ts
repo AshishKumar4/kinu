@@ -14,6 +14,7 @@ import type { ActorStanding } from '../identity/workspace-actors';
 import {
   TERMINAL_EFFECT_RETRY_BASE_MS,
   TerminalEffectLedger,
+  FOLLOW_UP_TURN_EFFECTS,
   type TerminalEffectFault,
   type TerminalEffectTable,
   type OwedEffect,
@@ -199,6 +200,8 @@ export class TerminalTransitions {
    * after its replay) may have put it at the ceiling.
    */
   private async closed(): Promise<void> {
+    // One that fell due while it closed (its follow-up turn committed meanwhile) is driven now, here, not by a wake.
+    if ((this.nextRetryAt() ?? Number.POSITIVE_INFINITY) <= this.deps.now()) await this.resumeAll();
     const next = this.nextRetryAt();
 
     if (next === null) await this.deps.settled();
@@ -372,6 +375,14 @@ export class TerminalTransitions {
   async ownerActed(): Promise<void> {
     if (this.ledger.release() === 0) return;
     await this.deps.scheduleRetry(this.deps.now());
+  }
+
+  /** A follow-up turn committed: the effects owed until theirs did are driven now, in this process, rather than at their
+   *  retry instant, which a wake must reach (staging caff2855f, 2026-10-23: a facet's task reminder stayed owed a minute
+   *  after its turn committed, its retry waiting on its workspace's wake). One still closing is driven as its close ends. */
+  async followUpCommitted(): Promise<void> {
+    if (this.ledger.followUpDue(FOLLOW_UP_TURN_EFFECTS) === 0) return;
+    await this.replayOwedAndRearm();
   }
 
   /** Idempotent: re-arms from what is left. */

@@ -50,6 +50,42 @@ function ledger(opts: { readonly cutBeforeRecord?: boolean } = {}) {
   return { transitions, claims, activation };
 }
 
+/** Staging caff2855f, 2026-10-23: a facet's task reminder stayed owed a minute after its follow-up turn committed. */
+describe('an effect owed until its follow-up turn commits', () => {
+  test('is finished in this process when the turn commits, with no wake asked for', async () => {
+    const db = new Database(':memory:');
+    const sql = makeSql(db);
+    const execRaw = makeExecRaw(db);
+    const actor = createTestActors(sql, execRaw).main;
+    let onDisk = false;
+    const wakes: number[] = [];
+
+    initTerminalEffectTable(execRaw);
+    initToolEffectClaimTable(execRaw);
+
+    const transitions = new TerminalTransitions({
+      standing: async () => 'live' as const, sql, actor, now: () => NOW,
+      effects: { task_reminder: terminalEffect({ input: v.object({}), runSync: () => (onDisk ? { status: 'completed' } : { status: 'owed', detail: 'the follow-up turn is queued' }) }) },
+      scheduleRetry: async (at) => { wakes.push(at); },
+      transaction: <T>(body: () => T): T => db.transaction(body)(),
+      turnIsLive: () => false, settled: async () => {}, hold: (close) => close(),
+    });
+
+    const transition = { turnId: 'turn-3', messageId: 'answer-3' };
+
+    await transitions.settle({ transition, declare: () => [{ name: 'task_reminder', scope: 'answer-3', input: {}, lane: 'inline' }] });
+    await transitions.idle();
+    expect(transitions.incomplete()).toEqual([transition]);
+    wakes.length = 0;
+
+    onDisk = true;
+    await transitions.followUpCommitted();
+
+    expect(transitions.incomplete()).toEqual([]);
+    expect(wakes).toEqual([]);
+  });
+});
+
 describe('the terminal transition claim', () => {
   /** An isolate reset between the claim and the first effect must leave a row with no result. */
   test('a claimed sequence that never finishes stays legible as unfinished', () => {

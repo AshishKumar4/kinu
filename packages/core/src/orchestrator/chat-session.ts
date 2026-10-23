@@ -1684,7 +1684,10 @@ export class ChatSession {
       kind: 'programmatic',
       idempotencyKey: input.idempotencyKey,
       metadata: { ...input.metadata, kinuEvent: input.event },
-      settle: () => {},
+      // Its turn on disk is what the effect that owed it waits on.
+      settle: (failure) => {
+        if (failure === null) this.actorSession.orchestrator.track(this.ports.terminal().followUpCommitted(), 'finishing the effects a follow-up turn answered');
+      },
     }));
     this.pump();
   }
