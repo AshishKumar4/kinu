@@ -77,6 +77,8 @@ interface Payer {
   readonly lane: string;
   /** The entry as the person reads it, naming who pays. */
   readonly entry: string;
+  /** What fixes this entry's refusal for want of payment (402), in the person's terms: whose credits, and where. */
+  readonly unpaid: string;
   /** Who refuses in its own words: Cloudflare for its API, else the provider. */
   readonly speaker: string;
   readonly answer: v.GenericSchema<unknown, SearchAnswer>;
@@ -110,6 +112,7 @@ export function chainWebSearch(deps: WebSearchDeps): WebSearch {
 
       return {
         kind: 'payer', lane: `websearch|${route.provider}|key:${sha256Hex(key).slice(0, 16)}`, entry, speaker: label,
+        unpaid: `add credits to your ${label} account, or choose another search in Settings > Web search`,
         answer: direct.answer, refusal: direct.refusal, account: { provider: route.provider, name: accountOf(auth.credentialKey ?? route.provider) },
         send: (signal) => fetchImpl(request.url, { ...request.init, signal }),
       } satisfies Payer;
@@ -135,6 +138,7 @@ export function chainWebSearch(deps: WebSearchDeps): WebSearch {
 
       return {
         ...common, lane: `websearch|${route.provider}|${root}|${gateway ?? ''}`, entry, account: { provider: MY_GATEWAY_PROVIDER_ID, name: MAIN_ACCOUNT },
+        unpaid: 'add credits to your AI Gateway in Cloudflare, or a search key in Settings > Web search',
         // One renewal of the login on a 401, as every Cloudflare call makes.
         send: async (signal) => {
           const said = await authenticatedSend({ key: CLOUDFLARE_WEB_SEARCH_CRED_KEY, getAuth: deps.getAuth, auth: login, send: sign(signal) });
@@ -150,6 +154,7 @@ export function chainWebSearch(deps: WebSearchDeps): WebSearch {
 
     return {
       ...common, lane: `websearch|${route.provider}|deployment`, entry: `${label} on this deployment's AI Gateway`, account: undefined,
+      unpaid: 'this deployment\'s search credits are spent: add your own search key in Settings > Web search',
       send: () => deployment(asked),
     } satisfies Payer;
   });
@@ -205,24 +210,50 @@ export function chainWebSearch(deps: WebSearchDeps): WebSearch {
   return ({ query, limit, signal }) => settle(Effect.gen(function* () {
     const { routes, retries } = yield* attemptInItsWords('unavailable', deps.chain);
     const said: string[] = [];
+    // Each entry's payer, resolved when first needed: a search the first entry answers resolves no other.
+    const resolved = new Map<number, Payer | Refused>();
 
-    const exhausted = (last: Refused) => new KinuError(
-      (last.status === null ? null : codeForStatus(last.status)) ?? 'unavailable',
-      [...said, last.said].join('; '),
-    );
+    const payerAt = (at: number, route: WebSearchRoute) => Effect.suspend(() => {
+      const held = resolved.get(at);
+
+      return held === undefined ? Effect.tap(payerOf(route, query, limit), (payer) => Effect.sync(() => { resolved.set(at, payer); })) : Effect.succeed(held);
+    });
+
+    // An entry is the last when no entry after it has anyone to pay (a key never stored): it is retried as the last is,
+    // and what those later entries said stays in the refusal, so the person reads that a key would serve.
+    const lastPaid = (at: number) => Effect.gen(function* () {
+      for (const [next, route] of routes.entries()) {
+        if (next > at && (yield* payerAt(next, route)).kind === 'payer') return false;
+      }
+
+      return true;
+    });
+
+    const unpaidAfter = (at: number) => [...resolved.entries()].filter(([next, payer]) => next > at && payer.kind === 'refused').map(([, payer]) => (payer.kind === 'refused' ? payer.said : ''));
+
+    // A search refused for want of payment (402) ends naming the fix, each payer's in its own terms.
+    const unpaid = new Set<string>();
+
+    const exhausted = (last: Refused, at: number) => {
+      const fixes = [...unpaid].join('; ');
+
+      return new KinuError(
+        (last.status === null ? null : codeForStatus(last.status)) ?? 'unavailable',
+        [...said, last.said, ...unpaidAfter(at)].join('; ') + (fixes === '' ? '' : `. To search again, ${fixes}.`),
+      );
+    };
 
     for (const [at, route] of routes.entries()) {
-      const final = at === routes.length - 1;
-      const payer = yield* payerOf(route, query, limit);
+      const payer = yield* payerAt(at, route);
 
       if (payer.kind === 'refused') {
-        if (final) return yield* Effect.fail(exhausted(payer));
+        if (yield* lastPaid(at)) return yield* Effect.fail(exhausted(payer, at));
         said.push(payer.said);
 
         continue;
       }
 
-      if (!final && pacer.parked(payer.lane)) continue;
+      if (pacer.parked(payer.lane) && !(yield* lastPaid(at))) continue;
 
       for (let tries = 0; ; tries++) {
         const outcome = yield* ask(route, payer, { query, limit, signal });
@@ -232,7 +263,9 @@ export function chainWebSearch(deps: WebSearchDeps): WebSearch {
 
         // Every refusal hands over, a 400 too: a one-line query is rarely what a provider refuses. Cloudflare answers 400
         // to a gateway the account lacks (2026-10-19), and another entry may be paid for elsewhere.
-        if (!final) {
+        if (outcome.status === 402) unpaid.add(payer.unpaid);
+
+        if (!(yield* lastPaid(at))) {
           said.push(outcome.said);
 
           break;
@@ -240,7 +273,7 @@ export function chainWebSearch(deps: WebSearchDeps): WebSearch {
 
         const waitMs = outcome.retryAfterMs ?? Math.floor(Math.random() * backoffCeiling(tries + 1));
 
-        if (!outcome.passing || tries >= retries || waitMs > MAX_RETRY_DELAY_MS) return yield* Effect.fail(exhausted(outcome));
+        if (!outcome.passing || tries >= retries || waitMs > MAX_RETRY_DELAY_MS) return yield* Effect.fail(exhausted(outcome, at));
         yield* attemptInItsWords('cancelled', () => pacer.pause(waitMs, signal));
       }
     }
