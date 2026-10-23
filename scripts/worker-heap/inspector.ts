@@ -154,7 +154,7 @@ const SamplingReplySchema = v.object({ result: v.object({ profile: v.object({ he
 const CpuReplySchema = v.object({ result: v.object({ profile: v.object({
   nodes: v.array(v.object({
     id: v.number(),
-    callFrame: v.object({ functionName: v.string(), url: v.optional(v.string(), ''), lineNumber: v.optional(v.number(), -1) }),
+    callFrame: v.object({ functionName: v.string(), url: v.optional(v.string(), ''), lineNumber: v.optional(v.number(), -1), columnNumber: v.optional(v.number(), -1) }),
     children: v.optional(v.array(v.number()), []),
   })),
   samples: v.array(v.number()),
@@ -166,6 +166,8 @@ export interface BusyStretch {
   readonly ms: number;
   /** The frames at least a fifth of its samples ran under, by the share of them, largest first. */
   readonly frames: readonly { readonly frame: string; readonly share: number }[];
+  /** The frames its samples ran in themselves, a tenth of them or more, largest first: where the time went. */
+  readonly leaves: readonly { readonly frame: string; readonly share: number }[];
 }
 
 /** A gap between two samples longer than this, in µs, is the isolate waiting: five sampling intervals. */
@@ -202,15 +204,23 @@ function longestBusy(profile: v.InferOutput<typeof CpuReplySchema>['result']['pr
   }
 
   const counts = new Map<string, number>();
+  const selves = new Map<string, number>();
+
+  // Line and column, as the bundle's source map reads them, so a minified frame can be named.
+  const named = (frame: (typeof profile.nodes)[number]['callFrame']): string =>
+    `${frame.functionName || '(anonymous)'} ${frame.url.split('/').slice(-2).join('/')}:${String(frame.lineNumber + 1)}:${String(frame.columnNumber + 1)}`;
 
   for (let at = bestFrom; at <= bestTo; at++) {
     const seen = new Set<string>();
+    const leaf = byId.get(profile.samples[at] ?? -1)?.callFrame;
+
+    if (leaf !== undefined) selves.set(named(leaf), (selves.get(named(leaf)) ?? 0) + 1);
 
     for (let id: number | undefined = profile.samples[at]; id !== undefined; id = parent.get(id)) {
       const frame = byId.get(id)?.callFrame;
 
       if (frame === undefined || frame.functionName === '(root)') continue;
-      const name = `${frame.functionName || '(anonymous)'} ${frame.url.split('/').slice(-2).join('/')}:${String(frame.lineNumber + 1)}`;
+      const name = named(frame);
 
       if (!seen.has(name)) counts.set(name, (counts.get(name) ?? 0) + 1);
       seen.add(name);
@@ -219,10 +229,10 @@ function longestBusy(profile: v.InferOutput<typeof CpuReplySchema>['result']['pr
 
   const samples = Math.max(1, bestTo - bestFrom + 1);
 
-  const frames = [...counts].map(([frame, count]) => ({ frame, share: count / samples })).filter((each) => each.share >= 0.2)
-    .sort((a, b) => b.share - a.share).slice(0, 12);
+  const ranked = (tally: Map<string, number>, least: number) => [...tally].map(([frame, count]) => ({ frame, share: count / samples }))
+    .filter((each) => each.share >= least).sort((a, b) => b.share - a.share).slice(0, 12);
 
-  return { ms: best / 1000, frames };
+  return { ms: best / 1000, frames: ranked(counts, 0.2), leaves: ranked(selves, 0.1) };
 }
 
 export interface Allocations {

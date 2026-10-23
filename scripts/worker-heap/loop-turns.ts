@@ -47,6 +47,8 @@ export function loopVerdict(turns: readonly LoopTurn[]): number {
     console.log(`facet-loop: ${turn.ms.toFixed(1)} ms, the longest stretch in ${turn.workload}`);
 
     for (const { frame, share } of turn.frames) console.log(`  ${(share * 100).toFixed(0).padStart(4)}%  ${frame}`);
+
+    for (const { frame, share } of turn.leaves) console.log(`  ${(share * 100).toFixed(0).padStart(4)}%  in ${frame}`);
   }
 
   const over = turns.filter((turn) => turn.isolate.startsWith('LOADER:') && turn.ms >= LOOP_TURN_BOUND_MS);

@@ -653,9 +653,9 @@ async function advisedLongTurn(advised: boolean, run: {
  *  so compaction folds it as it grows, and 40 steps each reading back a 200 kB page with the advisor reviewing them, as a
  *  program's or a log's large result. Each prints what shows it ran: its summary calls, its advisor's calls. */
 async function loopOnlyTurns(ask: (path: string) => Promise<string>): Promise<void> {
-  const seen = async () => v.parse(v.object({ summaries: v.number(), advisorCalls: v.number() }), JSON.parse(await ask('/model')));
+  const seen = async () => v.parse(v.object({ summaries: v.number(), advisorCalls: v.number(), stepRequestBytes: v.array(v.number()) }), JSON.parse(await ask('/model')));
 
-  const turn = async (name: string, script: string): Promise<{ summaries: number; advisorCalls: number }> => {
+  const turn = async (name: string, script: string): Promise<{ summaries: number; advisorCalls: number; requests: readonly number[] }> => {
     const before = await seen();
     await ask(`/quiesce?workspace=${name}`);
     await ask(`/model?answerBytes=0&${script}&stepPath=compat`);
@@ -663,16 +663,21 @@ async function loopOnlyTurns(ask: (path: string) => Promise<string>): Promise<vo
     await ask(`/turn?workspace=${name}&text=long`);
     await ask(`/main-idle?workspace=${name}`);
     await ask(`/quiesce?workspace=${name}`);
-    await ask('/model?answerBytes=0&toolSteps=0');
     const after = await seen();
 
-    return { summaries: after.summaries - before.summaries, advisorCalls: after.advisorCalls - before.advisorCalls };
+    await ask('/model?answerBytes=0&toolSteps=0');
+
+    return { summaries: after.summaries - before.summaries, advisorCalls: after.advisorCalls - before.advisorCalls, requests: after.stepRequestBytes };
   };
 
   // At 64k the first fold lands near step 70: each 3 kB step adds about 760 tokens of estimate.
   await ask('/?workspace=compacted&compat=1&window=64000');
   const compacted = await turn('compacted', `toolSteps=${String(LONG_TURN.steps - 1)}&stepBytes=${String(LONG_TURN.stepBytes)}`);
-  console.log(`${GATE}: compacted ${String(LONG_TURN.steps)}-step turn: ${String(compacted.summaries)} summary calls`);
+  // A fold shows as a step's request shrinking: the largest against the last.
+  const largest = Math.max(0, ...compacted.requests);
+
+  console.log(`${GATE}: compacted ${String(LONG_TURN.steps)}-step turn: ${String(compacted.summaries)} summary calls; its steps' requests `
+    + `peaked at ${String(Math.round(largest / 1000))} kB and ended at ${String(Math.round((compacted.requests.at(-1) ?? 0) / 1000))} kB`);
 
   await ask('/?workspace=results&compat=1');
   await ask('/advisor?workspace=results');
