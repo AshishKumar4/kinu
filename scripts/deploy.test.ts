@@ -675,15 +675,20 @@ describe("deploy gate", () => {
 
   // The advertised `wipe production` deletes nothing unless a person types the words at a terminal: piped input is
   // refused before any Cloudflare call, and this child has no wrangler on its PATH to make one with.
-  test("a production wipe with its words piped in deletes nothing", async () => {
+  // The owner, 2026-10-21: production loses no user's rows but on the owner's words, and those words are no terminal.
+  test("a production wipe without the owner's words, or with its confirmation piped in, deletes nothing", async () => {
     const record = join(scratchDir("reset-refused"), "record.json");
 
-    const run = await runToExit([process.execPath, join(REPO_ROOT, "scripts", "reset.ts"), "wipe", "production", record], {
-      env: childEnv({ PATH: "" }),
+    const wipe = (env: Record<string, string>) => runToExit([process.execPath, join(REPO_ROOT, "scripts", "reset.ts"), "wipe", "production", record], {
+      env: childEnv({ PATH: "", ...env }),
       stdin: "reset production\n",
     });
 
-    expect([run.exitCode, run.stderr]).toEqual([1, expect.stringContaining("not confirmed at a terminal")]);
+    const unnamed = await wipe({});
+    const piped = await wipe({ KINU_LOSS_OVERRIDE: "owner 2026-10-23: lose every table" });
+
+    expect([unnamed.exitCode, unnamed.stderr]).toEqual([1, expect.stringContaining("loses every user's rows")]);
+    expect([piped.exitCode, piped.stderr]).toEqual([1, expect.stringContaining("not confirmed at a terminal")]);
     expect(existsSync(record)).toBe(false);
   });
 
