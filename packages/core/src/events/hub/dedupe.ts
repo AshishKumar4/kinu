@@ -50,7 +50,9 @@ function dedupeReadableEvent(
     }
 
     case 'timer':
-      return `timer:${event.payload.trigger_id}:${event.payload.scheduled_fire_at}`;
+      return event.payload.watch_delivery === undefined
+        ? `timer:${event.payload.trigger_id}:${event.payload.scheduled_fire_at}`
+        : `timer:${event.payload.trigger_id}:delivery:${event.payload.watch_delivery}`;
 
     case 'process_done':
       return `process_done:${event.payload.process_id}`;

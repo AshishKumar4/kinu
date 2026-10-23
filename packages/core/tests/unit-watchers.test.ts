@@ -55,6 +55,21 @@ async function watcher(registry: TriggerRegistry) {
   return { id: created.id, at: present(created.nextFireAt, 'its first firing') };
 }
 
+describe('a watcher its source delivers to', () => {
+  test("a provider's redelivery fires once; another delivery fires again", async () => {
+    let n = 0;
+    const t = watchers(async () => answered({ fire: true, brief: 'A push to main.', state: { n: (n += 1) } }));
+    const { id } = await watcher(t.registry);
+
+    await t.check(id, NOW + 1, { event: 'push', delivery: 'd-1', payload: {} });
+    await t.check(id, NOW + 2, { event: 'push', delivery: 'd-1', payload: {} });
+    expect(t.fired()).toHaveLength(1);
+
+    await t.check(id, NOW + 3, { event: 'push', delivery: 'd-2', payload: {} });
+    expect(t.fired()).toHaveLength(2);
+  });
+});
+
 describe('a watcher', () => {
   test('a quiet check wakes nothing and keeps its cursor; one that found something fires with its brief', async () => {
     const seen: (JsonValue | undefined)[] = [];
