@@ -864,7 +864,7 @@ export interface EffectSample {
 
 /** An effect's events that say whether it waits on the owner: parked, or failed some other way since. */
 const EFFECT_MARKS: ReadonlyMap<string, 'parked' | 'failed'> = new Map([
-  ['turn.terminal_effect_parked', 'parked'], ['turn.terminal_effect_failed', 'failed'], ['turn.terminal_effect_blocked', 'failed'],
+  ['turn.terminal_effect_parked', 'parked'], ['turn.terminal_effect_failed', 'failed'], ['turn.terminal_effect_retired', 'failed'],
 ]);
 
 export interface TerminalEffectStates {

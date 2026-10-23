@@ -6,7 +6,6 @@ import type { EventLog } from '../events/hub/log';
 
 import { spillEventContent } from '../events/hub/content-spill';
 import { subagentReportDedupeKey } from '../events/hub/dedupe';
-import { renderSubagentHandoff } from '../events/hub/visibility';
 import type { SubagentReportHandoff, SubagentReportStatus } from '../events/hub/types';
 import type { WorkMode } from '../types/turn';
 import {
@@ -80,8 +79,6 @@ export interface SubagentIngressDeps {
   transaction<T>(body: () => T): T;
   announce(report: AdmittedSubagentReport): void;
   onAdmitted(): void;
-  /** After an evolution subagent's answer is stored, for the lane that waits on it. */
-  onEvolutionAnswer(): void | Promise<void>;
   temporary?: TemporaryAgentPort;
 }
 
@@ -102,23 +99,16 @@ export async function receiveSubagentEvent(
     return { id: '', disposition: 'not_awaited' };
   }
 
-  const answer = normalizeReportContent(input.content)
-    + (input.handoff ? renderSubagentHandoff(input.handoff) : '');
-
   const settlesTask = subagent.lifetime === TEMPORARY_LIFETIME && temporaryRunSettles(input);
 
-  // A rail row would wake the parent in the subagent's mode, with the lane's proposal in its context.
+  // An evolution subagent an earlier build hired answers no one now: a rail row would wake its hirer in its mode, with
+  // its answer in the hirer's context. It settles and is released, its answer unread.
   if (subagent.origin === 'evolution') {
     if (subagent.status === 'dismissed' || !temporaryRunSettles(input)) {
       return { id: '', disposition: 'not_awaited' };
     }
 
-    deps.transaction(() => {
-      deps.roster.evolution.storeAnswer(input.fromSubagent, input.status === 'blocked' ? 'blocked' : 'completed', answer);
-      deps.roster.applyReport(input.fromSubagent, input.status, input.origin, now);
-    });
-
-    await deps.onEvolutionAnswer();
+    deps.transaction(() => { deps.roster.applyReport(input.fromSubagent, input.status, input.origin, now); });
     deps.temporary?.release(input.fromSubagent);
 
     return { id: '', disposition: 'admitted' };

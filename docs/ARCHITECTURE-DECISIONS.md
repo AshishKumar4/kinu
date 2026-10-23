@@ -1164,12 +1164,17 @@ a facet of its own) and D13's "every agent's advisor in core `ActorAdvisor`".
   turn hooks (the hire reviewed such a turn at its end).
 - Gone: the hire (`ActorAdvisor`, the `advisor` system role and its prompt),
   `hireAdvisor` and `deliverAdvice`, `AdviceJobs`, `AgentReview` round
-  reviews, `AdvisorRecoverySnapshot`. `advisor_review` stays in the terminal
-  roster as a no-op for rows an earlier build left. A `kinu-advice` job an
-  earlier build queued is dropped by the lifecycle, which finds no capability
-  for it. An `advisor` hire whose turn was still owed at the deploy fails that
-  turn on its unknown role; an evolution hire's report is only stored, so no
-  one is told.
+  reviews, `AdvisorRecoverySnapshot`, the `advisor_review` effect, and the
+  evolution lane's hires (`TemporaryRunRequest.lane`, `reclaim`, `answered`,
+  `forget`, the lane wake). A `kinu-advice` job an earlier build queued is
+  dropped by the lifecycle, which finds no capability for it. An owed terminal
+  effect this build has no handler for (an `advisor_review` row, any name an
+  older build or another key version left) ends at its first pass as a named
+  failure (`turn.terminal_effect_retired`) and leaves its sequence, which then
+  settles: before, it was `blocked`, held its turn's terminal claim open and
+  re-armed a wake every 600 s for ever. A legacy evolution hire's report
+  settles it unread. The `evolution_subagents` table stays empty of new rows
+  until the next reset of the schema drops it.
 - Measured on the worker-heap gate's 150-step turn, advisor answered at once
   with silence, 3 runs a shape on armada (hire: 70102c5fa; in session:
   cac0cbe68, job 20261022200553-3fd08cdc, which 97d575f47's three runs agree

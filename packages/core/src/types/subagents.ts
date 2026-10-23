@@ -5,7 +5,6 @@ import type { WorkMode } from './turn';
 import type { RoleId } from './profile';
 import * as v from 'valibot';
 import type { SerializedMessage } from './heads';
-import type { AnsweredEvolutionSubagent, EvolutionSubagentAnswer, EvolutionLaneRequest } from '../identity/evolution-subagents';
 
 /**
  * The conversation a child is forked from. The `kind` tag stays because the value is persisted in
@@ -43,8 +42,6 @@ export interface TemporaryRunRequest {
   /** Workspace paths the child reads itself; programmatic callers only, not model-facing. */
   readonly contextRefs?: readonly string[];
   readonly mode: WorkMode;
-  /** An evolution subagent: it answers this lane request only. */
-  readonly lane?: EvolutionLaneRequest;
 }
 
 /** A task hire's result, returned at once; `failed` only when the child could not start. */
@@ -67,9 +64,4 @@ export interface TemporaryAgentPort {
   start(request: TemporaryRunRequest): Promise<TemporaryRunOutcome>;
   /** Called inside the child's turn, so it only schedules the retire. */
   release(name: string): void;
-  reclaim(request: EvolutionLaneRequest): EvolutionSubagentAnswer | null;
-  /** This hirer's subagents that answered and whose answer is not yet taken. */
-  answered(): readonly AnsweredEvolutionSubagent[];
-  /** The answer was taken: its row goes. */
-  forget(name: string): void;
 }

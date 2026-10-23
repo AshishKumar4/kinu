@@ -159,7 +159,7 @@ function briefWindow(text: string): string {
 
 /** Rendered whole: {@link SUBAGENT_REPORT_HANDOFF_MAX_CHARS} guarantees it fits, and the
  *  handoff has no spill file. */
-export function renderSubagentHandoff(handoff: SubagentReportHandoff): string {
+function renderSubagentHandoff(handoff: SubagentReportHandoff): string {
   let rendered = '';
 
   for (const field of SUBAGENT_REPORT_HANDOFF_FIELDS) {

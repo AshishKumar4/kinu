@@ -1526,7 +1526,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       jobSeat: (actorId) => ({ ports: this.workspaceJobPorts(actorId), attach: (authority) => this.jobAuthorities.attach(authority) }),
       retireJobs: (actorId) => this.jobAuthorities.retire(actorId),
       temporary: (actor) => this.temporaryAgentPort(actor.reference),
-      rederiveWake: () => { this.armDurableWake(); },
       register: async ({ creationId, loop }) => {
         const entry = await this.actorDirectory({
           action: 'register', creationId, name: explorationActorKey(creationId), origin: 'swarm', lifetime: 'task',
