@@ -213,8 +213,11 @@ describe('an MCP preset add', () => {
     // The wake told no workspace, and evicted before any warm, the next wake still owes the assistant its notice: the
     // first warm arms its watchers for what the account still holds, once.
     expect(woken.connectionsChanged).toEqual([]);
-    const later = createTestUserDO({ storage: h.db });
 
+    // The first warm's notice fails: it stays owed, and the next warm tells it, once.
+    const later = createTestUserDO({ storage: h.db, connectionsChangedFails: 1 });
+
+    await later.userDO.userMcp_warmConnections(owner);
     await later.userDO.userMcp_warmConnections(owner);
     await later.userDO.userMcp_warmConnections(owner);
     expect(later.connectionsChanged).toEqual(['kinu-home:']);

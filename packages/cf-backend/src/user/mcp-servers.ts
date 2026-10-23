@@ -834,16 +834,23 @@ export class UserMcpServers {
 
   /** The assistant's watchers armed for the connections held now: an MCP server's moving, or the Google connection's. */
   private async armAssistantWatchers(): Promise<void> {
-    this.watchersStale = false;
-
     await this.keptListings();
     const assistant = this.host.sqlx<{ value: string }>(`SELECT value FROM user_config WHERE key = ?`, ASSISTANT_CONFIG_KEY)[0]?.value;
 
-    if (assistant === undefined) return;
+    if (assistant === undefined) {
+      this.watchersStale = false;
+
+      return;
+    }
+
     const stub = this.host.env.OrchestratorAgent.get(this.host.env.OrchestratorAgent.idFromName(assistant));
 
+    // A notice owed stays owed until the assistant has it: one that fails, or is cut off, is told at the next warm.
     await settleLogged('mcp.assistant_watchers_unreconciled', { doing: "arming the assistant's checks of the owner's connections", otherwise: 'unavailable' },
-      async () => { await stub.connectionsChanged(this.connectedPresets()); }, { workspace: assistant });
+      async () => {
+        await stub.connectionsChanged(this.connectedPresets());
+        this.watchersStale = false;
+      }, { workspace: assistant });
   }
 
   async userMcp_remove(caller: UserCaller, id: string): Promise<void> {

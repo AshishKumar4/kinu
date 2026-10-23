@@ -222,6 +222,8 @@ export interface TestUserDOOptions {
   quietWorkspaceGate?: (name: string, ownerUserId: string) => Promise<void>;
   /** Revive over storage a retired DO wrote (eviction). The caller owns the handle; `close` leaves it open. */
   storage?: Database;
+  /** How many `connectionsChanged` notices fail before one is answered. */
+  connectionsChangedFails?: number;
   /** `oauth-app` preset ids the deployment carries a registered app for (fixed values under `MCP_APP_ENV` keys). */
   mcpAppCredentials?: readonly string[];
   /** How a workspace answers the owner's ask for its first tile; absent, the ask is only recorded. */
@@ -429,6 +431,8 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   const revokedSocketPushes: string[] = [];
   const revokedSessionPushes: string[] = [];
   const connectionsChanged: string[] = [];
+  // The first of these notices a workspace is sent fail, as an unreachable one's do.
+  let refusedNotices = options.connectionsChangedFails ?? 0;
   const overviewNudges: string[] = [];
   const secretsMoved: string[] = [];
   const consentPrompts: TestUserDO['consentPrompts'] = [];
@@ -724,6 +728,12 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
           return { closed: 0 };
         },
         async connectionsChanged(connected: readonly string[]) {
+          if (refusedNotices > 0) {
+            refusedNotices -= 1;
+
+            throw new Error(`the workspace ${name} did not answer`);
+          }
+
           connectionsChanged.push(`${name}:${connected.join(',')}`);
         },
         async requestOverviewPush() {
