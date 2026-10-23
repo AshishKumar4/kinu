@@ -7,7 +7,7 @@ export { AskOwnerInputSchema, OTHER_OPTION, OWNER_ANSWER_SIGNAL, type OwnerQuest
 
 export { initFiberTable } from './identity/schema';
 
-export { tableExists } from './utils/sql';
+export { statementText, tableExists } from './utils/sql';
 
 export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubagentInspectionRequestSchema, SubagentInspectionResultSchema, readSubagentInspection, missingSubagentHistory, type SubagentInspectionRequest, type SubagentInspectionResult, type SubagentChild } from './subagents/inspection';
 
