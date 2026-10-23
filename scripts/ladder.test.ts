@@ -31,6 +31,7 @@ import {
 } from './ladder';
 import { ANTI_SLOP_ROOT, isAntiSlopRuleSuite, isAntiSlopSuite, isBunDiscoverableSuite, isParseable, isPythonSuite, isVitestEvalSuite, readMatching } from './sources';
 import { REPO_ROOT as root } from './repo-root';
+import { fixtureWorker } from './fixtures/devbox-e2e/fixture';
 import { parseJUnit, SKIP_RATCHET_TARGETS } from './skip-ratchet';
 import { declaredName, parse, walk } from './syntax';
 import { auditClosure } from './ladder-audit';
@@ -756,6 +757,7 @@ describe('a deploy row with secrets of its own', () => {
       plan: [
         '--deploy-phase=source',
         '--deploy-secrets=DEVBOX_REGISTRY_TOKEN,KINU_CLOUDFLARE_API_TOKEN,KINU_EVAL_STAGING_WEB_IDENTITY,R2_ACCESS_KEY_ID,R2_SECRET_ACCESS_KEY',
+        '--deploy-fixture=deploy',
       ],
     });
     expect(() => armadaPhaseRun('source', rows, sha, 'https://staging.kinu.run')).toThrow('different secrets');
@@ -772,7 +774,7 @@ describe('a deploy row with secrets of its own', () => {
 
     expect(armadaReproduce(devbox)).toBe(`node_modules/.bin/armada run ${sha} `
       + '--secrets=DEVBOX_REGISTRY_TOKEN,KINU_CLOUDFLARE_API_TOKEN,KINU_EVAL_STAGING_WEB_IDENTITY,R2_ACCESS_KEY_ID,R2_SECRET_ACCESS_KEY '
-      + '-- --deploy-phase=source --deploy-secrets=DEVBOX_REGISTRY_TOKEN,KINU_CLOUDFLARE_API_TOKEN,KINU_EVAL_STAGING_WEB_IDENTITY,R2_ACCESS_KEY_ID,R2_SECRET_ACCESS_KEY');
+      + '-- --deploy-phase=source --deploy-secrets=DEVBOX_REGISTRY_TOKEN,KINU_CLOUDFLARE_API_TOKEN,KINU_EVAL_STAGING_WEB_IDENTITY,R2_ACCESS_KEY_ID,R2_SECRET_ACCESS_KEY --deploy-fixture=deploy');
   });
 
   // The upgrade fixtures' two builtin passwords and the REST token their anchor is kept with are their own, beside the
@@ -785,7 +787,28 @@ describe('a deploy row with secrets of its own', () => {
       '--secrets=KINU_SCRIPTED_MODEL_KEY,KINU_EVAL_STAGING_WEB_IDENTITY,KINU_CLOUDFLARE_API_TOKEN,KINU_UPGRADE_FIXTURE_PASSWORD,KINU_UPGRADE_SENDER_PASSWORD',
       '--deploy-phase=post-publish', '--deploy-origin=https://staging.kinu.run',
       '--deploy-secrets=KINU_CLOUDFLARE_API_TOKEN,KINU_UPGRADE_FIXTURE_PASSWORD,KINU_UPGRADE_SENDER_PASSWORD',
+      '--deploy-fixture=deploy',
     ]);
+  });
+
+  // Staging, 2026-10-22: three deploys went red on "kinu-devbox-contracts-staging is held by run …", each held by a lane
+  // proving a branch with the same armada command. Only the deploy's own job names the deploy's fixture.
+  test('only the deploy\'s job holds the deploy\'s contract fixture; a lane\'s run deploys the lanes\'', async () => {
+    const planned = async (args: readonly string[]) => {
+      const run = await runToExit([process.execPath, 'scripts/ladder.ts', '--ci-plan', '--deploy-phase=source', ...args], { cwd: root });
+      const plan = v.parse(v.object({ include: v.array(v.looseObject({ row: v.string(), fixture: v.optional(v.string()) })) }), JSON.parse(run.stdout));
+
+      return plan.include.find((entry) => entry.row === 'bun run gate:devbox-e2e');
+    };
+
+    const secrets = '--deploy-secrets=DEVBOX_REGISTRY_TOKEN,KINU_CLOUDFLARE_API_TOKEN,KINU_EVAL_STAGING_WEB_IDENTITY,R2_ACCESS_KEY_ID,R2_SECRET_ACCESS_KEY';
+    const deploy = await planned([secrets, '--deploy-fixture=deploy']);
+    const lane = await planned([secrets]);
+
+    expect({
+      deploy: deploy?.fixture, lane: lane?.fixture,
+      workers: [fixtureWorker({ KINU_CONTRACTS_FIXTURE: deploy?.fixture }), fixtureWorker({ KINU_CONTRACTS_FIXTURE: lane?.fixture })],
+    }).toEqual({ deploy: 'deploy', lane: undefined, workers: ['kinu-devbox-contracts-staging', 'kinu-devbox-contracts-lanes'] });
   });
 });
 
