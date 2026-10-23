@@ -183,8 +183,8 @@ export interface HostPauses {
   readonly watchedMs: number;
 }
 
-/** The pauses inside every call of the synchronous function `frame`: no wait can come between two of its samples, so a
- *  gap there is the host's, as one would be in any turn. */
+/** The pauses inside one call of the synchronous function `frame`, `profile` holding no other ({@link profileEach}): no
+ *  wait can come between two of its samples, so a gap there is the host's, as one would be in any turn. */
 export function pausesUnder(profile: CpuProfile, frame: string): HostPauses {
   const children = new Map(profile.nodes.map((node) => [node.id, node.children]));
   const under = new Set<number>();
@@ -198,7 +198,7 @@ export function pausesUnder(profile: CpuProfile, frame: string): HostPauses {
   const pauses: number[] = [];
   let watched = 0;
 
-  // A call's first sample comes after the wait before it: only a gap between two of its samples counts.
+  // The call's first sample comes after the wait before it: only a gap between two of its samples counts.
   for (let at = 1; at < profile.samples.length; at++) {
     if (!under.has(profile.samples[at] ?? -1) || !under.has(profile.samples[at - 1] ?? -1)) continue;
     const delta = profile.timeDeltas[at] ?? 0;
@@ -436,6 +436,33 @@ async function session(target: Target, isolate: string): Promise<Inspector> {
 /** An isolate's CPU profiled from {@link profileLoop} to `stop`, which answers the profile and closes. */
 export interface LoopProfile {
   readonly stop: () => Promise<CpuProfile>;
+}
+
+/** An isolate's CPU profiled around each piece of work, one profile each, so no wait between two pieces is in one. */
+export interface EachProfiled {
+  readonly around: (work: () => Promise<string>) => Promise<CpuProfile>;
+  readonly close: () => void;
+}
+
+/** Profiles the isolate `id` around each piece of work, a sample a millisecond; null when it is not listed. */
+export async function profileEach(port: number, id: string): Promise<EachProfiled | null> {
+  const target = (await targets(port)).find((each) => each.id === id);
+
+  if (target === undefined) return null;
+  const { send, close } = await connect(target);
+
+  await send('Profiler.enable');
+  await send('Profiler.setSamplingInterval', { interval: 1000 });
+
+  return {
+    around: async (work) => {
+      await send('Profiler.start');
+      await work();
+
+      return v.parse(CpuReplySchema, JSON.parse(await send('Profiler.stop'))).result.profile;
+    },
+    close,
+  };
 }
 
 /** Profiles the isolate `id` from now, a sample a millisecond; null when it is no longer listed. */

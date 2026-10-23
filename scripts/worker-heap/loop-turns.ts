@@ -22,10 +22,11 @@
  * heads, the 150-step long turn unadvised, advised and compacted against a 64k window, a failing turn, the 450-step
  * screenshot turn with its chat's seeds, twelve subagents' hires, and 40 advised steps of 50 kB results).
  */
-import { longestBusy, pausesUnder, profileLoop, targetIds, type BusyStretch, type HostPauses, type LoopProfile } from './inspector';
+import { PLATFORM_CATALOG } from '../../packages/core/src/platform-catalog';
+import { longestBusy, pausesUnder, profileEach, profileLoop, targetIds, type BusyStretch, type EachProfiled, type HostPauses, type LoopProfile } from './inspector';
 
 /** The longest stretch an agent's isolate may hold its loop: the shortest turn the platform reset a facet for. */
-export const LOOP_TURN_BOUND_MS = 100;
+export const LOOP_TURN_BOUND_MS = PLATFORM_CATALOG['do.facet.cpu_turns_reset_parent'].limit.value;
 
 export interface LoopTurn extends BusyStretch {
   /** workerd's target id: an agent's is `LOADER:kinu-agent:<bundle>:<workspace object id>:<actor id>`. */
@@ -95,17 +96,20 @@ export class LoopWatch {
   private readonly skipped = new Set<string>();
   private polling: Promise<void> | null = null;
   private stopping = false;
-  private controlled: LoopProfile | null = null;
+  private controlled: EachProfiled | null = null;
+  private readonly pauses: number[] = [];
+  private watchedMs = 0;
 
   /** `includes`: the isolates to profile, by target id (the gate's own driver is not the product's). */
   constructor(private readonly port: number, private readonly includes: (id: string) => boolean, private readonly control: LoopControl) {}
 
   async start(): Promise<void> {
-    this.controlled = await profileLoop(this.port, this.control.isolate);
+    const controlled = await profileEach(this.port, this.control.isolate);
 
-    if (this.controlled === null) throw new Error(`facet-loop: no control isolate ${this.control.isolate}`);
+    if (controlled === null) throw new Error(`facet-loop: no control isolate ${this.control.isolate}`);
+    this.controlled = controlled;
     await this.attachNew();
-    this.polling = this.poll();
+    this.polling = this.poll(controlled);
   }
 
   /** Each isolate's longest busy stretch, longest first, an agent's named by its workspace (`workspaces`, by object id),
@@ -117,14 +121,19 @@ export class LoopWatch {
     const turns: LoopTurn[] = [];
 
     for (const [isolate, profile] of this.watched) turns.push({ isolate, workload: workloadOf(isolate, workspaces), ...longestBusy(await profile.stop()) });
+    this.controlled.close();
 
-    return { turns: turns.sort((a, b) => b.ms - a.ms), host: pausesUnder(await this.controlled.stop(), CONTROL_FRAME) };
+    return { turns: turns.sort((a, b) => b.ms - a.ms), host: { pauses: this.pauses, watchedMs: this.watchedMs } };
   }
 
   /** Until `stop`. An isolate that comes and goes within one poll is not profiled; none of the workloads' does. */
-  private async poll(): Promise<void> {
+  private async poll(controlled: EachProfiled): Promise<void> {
     while (!this.stopping) {
-      await this.control.turn();
+      // Each control turn its own profile: two in one would read the wait between them as a pause.
+      const { pauses, watchedMs } = pausesUnder(await controlled.around(this.control.turn), CONTROL_FRAME);
+
+      this.pauses.push(...pauses);
+      this.watchedMs += watchedMs;
       await Bun.sleep(200);
       await this.attachNew();
     }
