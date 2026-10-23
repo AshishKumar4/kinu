@@ -41,6 +41,8 @@ export const APP_ROUTES = {
   gallerySlate: '/gallery/:workspace/:slate',
   deploy: '/deploy',
   updates: '/updates',
+  /** An operator's invite link (core limits/), opened signed in: the account it is opened in has no limits. */
+  invite: '/invite/:token',
   /** Where every connect run in a helper tab ends (`connectedPath`): it tells the tab that started it, then closes. */
   connected: '/connected',
 } as const;

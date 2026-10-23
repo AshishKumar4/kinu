@@ -420,7 +420,7 @@ test('a production turn runs no more statements than it was measured at, and ask
  * it sends (`facet.standing`, gone). 18 at the open since: one `account.getSettingsRevision`, the account's catalog
  * version and credentials revision in one call, because a settings change does not wake a workspace at rest, so a turn
  * opens by asking what moved and refetches only that. §8's 12 and 6 are not reached. What remains, by name:
- * the open's account reads the turn's prompt is built from (`accountMemory_facts`, `deviceRuntimeStatus`,
+ * the open's account reads the turn's prompt is built from (`accountMemory_turnFacts`, `deviceRuntimeStatus`,
  * `userMcp_toolDescriptors`, `AgentMemory.tail`: four values a turn shows that the account changes without telling the
  * workspace), the owner's tile (`putWorkspaceOverview`, twice at each end: the tile reads working as the turn opens and
  * at rest as it ends), the room's three events at the open (`host.chatEvent`: the card pending, the turn's start, the card
@@ -448,10 +448,13 @@ test('a production turn runs no more statements than it was measured at, and ask
  * 16 and 13 on 2026-10-18 (#103): a model call's start and end stay in its agent's own ledger, beside its attempts, as
  * the CLI keeps them (`host.reportModelOperation`, gone at the open and the close); 33 in all, 28 for one. Against
  * 3c27a547b the same day: 17 and 14.
+ * 17 at the open on feat/account-limits (2026-10-23): the owner's limits admit each turn (`account.limits_admitTurn`),
+ * so a suspended account starts none and a turn on the platform's own models is bounded by the day's tokens; the
+ * near-limit note rides the facts read (`account.accountMemory_turnFacts`, which replaces `accountMemory_facts`).
  */
 /** The budget per place, as measured (the history above): no crossing runs once per step beyond a step's own, nor once
  *  per earlier step. */
-const CROSSINGS = { open: 16, step: 2, close: 13 } as const;
+const CROSSINGS = { open: 17, step: 2, close: 13 } as const;
 
 /**
  * The planted calls (`ObservedOrchestrator.plantCrossings`), each counted once where it lands, and nothing else: the

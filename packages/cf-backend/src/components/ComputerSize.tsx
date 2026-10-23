@@ -6,7 +6,9 @@ import { Card, Choice, Field } from "@/components/ui/form";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { getAccountComputerSize, setAccountComputerSize } from "../lib/user-api";
-import { ACCOUNT_DEFAULT, computerSizeText, sizeSpecs, stalledNote, startRefusedNote, workspaceSizeNote, workspaceSizeOptions } from "../lib/computer-size-text";
+import { ACCOUNT_DEFAULT, cappedSizeNote, computerSizeText, sizeSpecs, stalledNote, startRefusedNote, workspaceSizeNote, workspaceSizeOptions } from "../lib/computer-size-text";
+import { useLimitRefusal } from "@/components/limits/LimitRefusal";
+import { useComputerSizeCap } from "@/components/limits/limit-words";
 import type { ComputerSizeState } from "../computer-size";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Button } from "@/components/ui/Button";
@@ -40,6 +42,8 @@ export function useComputerSize(rpc: WorkspaceRpc, enabled: boolean): ComputerSi
   const [failure, setFailure] = useState<string | null>(null);
   const [choosing, setChoosing] = useState<BoxSize | null>(null);
   const state = lastValue(resource);
+  const cap = useComputerSizeCap();
+  const offerRefusal = useLimitRefusal();
 
   const act = (action: "resize" | "start" | "stop", doing: string, change: () => Promise<ComputerSizeState | null>) => {
     setPending(action);
@@ -50,7 +54,8 @@ export function useComputerSize(rpc: WorkspaceRpc, enabled: boolean): ComputerSi
     );
 
     return (action === "resize" ? call(() => rpc("getComputerSize", [])).pipe(Effect.andThen(call(change))) : call(change)).pipe(
-      Effect.catch(shownIn(setFailure)),
+      // One of the account's limits refusing the start is that limit's dialog; anything else is said under the head.
+      Effect.catch((failed) => (offerRefusal({ cause: failed.cause ?? failed }) ? Effect.void : shownIn(setFailure)(failed))),
       Effect.ensuring(Effect.sync(() => { setPending(null); setChoosing(null); })),
     );
   };
@@ -61,7 +66,7 @@ export function useComputerSize(rpc: WorkspaceRpc, enabled: boolean): ComputerSi
 
   // A stopped computer only records the choice; a running one restarts at it.
   const restarting = pending === "resize" && state?.running !== null;
-  const note = failure ?? (state === null || restarting ? null : workspaceSizeNote(state, pending === "resize"));
+  const note = failure ?? (state === null || restarting ? null : workspaceSizeNote(state, pending === "resize", cap));
 
   const notice = state === null ? null : (
     <>
@@ -117,6 +122,7 @@ export function ComputerSize({ state: size }: { state: ComputerSizeControl }) {
 
 export function ComputerSizeSettings() {
   const { resource, reload, set } = useAsyncResource(getAccountComputerSize);
+  const cap = useComputerSizeCap();
   const [failure, setFailure] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -135,7 +141,7 @@ export function ComputerSizeSettings() {
     <Card title="Size">
       <CardSlot resource={resource} what="the computer size" onRetry={reload}>
         {(account) => (
-          <Field label="Default size" hint={failure ?? (saving ? "Saving…" : "Applies the next time a computer starts.")}>
+          <Field label="Default size" hint={failure ?? (saving ? "Saving…" : cappedSizeNote(account ?? DEFAULT_BOX_SIZE, cap) ?? "Applies the next time a computer starts.")}>
             <Choice
               label="Default computer size"
               value={account ?? DEFAULT_BOX_SIZE}

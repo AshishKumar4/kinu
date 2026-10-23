@@ -84,6 +84,11 @@ const WORKSPACE_CAPABILITY_TIERS = {
   /** Accepting, editing, promoting and forgetting the account's memory. Owner-only: an agent that could accept its own
    *  proposal would write what every workspace of the account reads. */
   'memory.account.manage': 'owner_only',
+  /** The account's limits: reading them, a workspace asking to start a new thing, and reporting what it spent or holds.
+   *  A workspace that misreported would only spend its own owner's free tier. */
+  'limits': 'workspace',
+  /** Setting an account's class or suspending it: the operator plane's, from the Worker as the owner capability. */
+  'limits.manage': 'owner_only',
 } as const satisfies Record<string, CapabilityFloor>;
 
 export type WorkspaceCapability = keyof typeof WORKSPACE_CAPABILITY_TIERS;

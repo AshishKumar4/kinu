@@ -1,4 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { LimitBanner } from "@/components/limits/LimitBanner";
+import { LimitRefusalProvider } from "@/components/limits/LimitRefusal";
 import { Link, Outlet, useLocation, useMatch } from "react-router-dom";
 import { ListIcon } from "@phosphor-icons/react";
 import Sidebar from "./Sidebar";
@@ -69,6 +71,7 @@ function Shell() {
 
   return (
     <WorkspaceRosterProvider>
+    <LimitRefusalProvider>
     <OwnerAlerts />
     <Surface look="page" className="isolate flex h-screen w-screen flex-col p-text overflow-hidden md:flex-row">
       <AppBackground />
@@ -96,15 +99,21 @@ function Shell() {
         </div>
       )}
 
-      <main ref={setMain} className="min-h-0 flex-1 min-w-0 overflow-hidden">
-        <DrawerContext.Provider value={() => setDrawerOpen(true)}>
-          <WorkspaceAreaContext.Provider value={area}>
-            <Outlet />
-          </WorkspaceAreaContext.Provider>
-        </DrawerContext.Provider>
+      <main className="flex min-h-0 flex-1 min-w-0 flex-col overflow-hidden">
+        {/* The account's near limit, one bar above every page (core limits/): its own slot, never inside a page. */}
+        <LimitBanner />
+        {/* The page's own box, which a desktop that fills the area covers: below the bar, so the bar stays seen. */}
+        <div ref={setMain} className="relative min-h-0 flex-1 overflow-hidden">
+          <DrawerContext.Provider value={() => setDrawerOpen(true)}>
+            <WorkspaceAreaContext.Provider value={area}>
+              <Outlet />
+            </WorkspaceAreaContext.Provider>
+          </DrawerContext.Provider>
+        </div>
       </main>
 
     </Surface>
+    </LimitRefusalProvider>
     </WorkspaceRosterProvider>
   );
 }

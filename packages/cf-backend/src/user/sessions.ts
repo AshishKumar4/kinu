@@ -4,6 +4,7 @@ import {
   getActiveAccessTokenScopes, listAccessTokens as listAccessTokenRows, mintAccessToken as mintAccessTokenRow, revokeAccessToken as revokeAccessTokenRow, verifyAccessToken as verifyAccessTokenRow, type AccessTokenMint, type AccessTokenRecord, type AccessTokenScope, nanoid, ownerCaller, type UserCaller, validateWorkspaceName, randomToken, sha256Hex, type UserProfile,
 } from '@kinu.run/core';
 import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
+import { refuseSuspended } from './limits';
 import * as v from 'valibot';
 import {
   builtinAdmission, createBuiltinInvite, findPasskeyAccount, findPasswordAccount, hasBuiltinOwner, initBuiltinAccounts, invitedEmail, isBuiltinOwner, issuePasskeyChallenge, recordPasskeyUse, registerBuiltinAccount, spendPasskeyChallenge, reserveAttempt, clearAttempts, removeBuiltinAccount, applyReset, listBuiltinAccounts, resetAccount, type Admission, type AttemptBucket, type BuiltinSql, type ChallengePurpose, type Grant, type NewBuiltinAccount, type NewInvite, type PasskeyAccount, type PasswordAccount, type PendingChallenge, type ListedAccount, type Reset, type SigningAccount,
@@ -82,6 +83,8 @@ export interface UserSessionsHost extends Pick<UserObjectHost, 'ctx' | 'env' | '
   accountName(): string;
   getProfile(caller: UserCaller): Promise<UserProfile | null>;
   workspaceRegistered(name: string): boolean;
+  /** Why an operator suspended the account, or null: a suspended account mints no session or token (core limits/). */
+  suspension(): string | null;
 }
 
 /** The account's sign-ins, sessions, tokens and connect tickets. */
@@ -102,6 +105,7 @@ export class UserSessions {
     identity: BrowserSessionIdentity & { credentialGeneration?: number },
   ): Promise<void> {
     await this.host.requireTier(caller, 'auth_tokens.mint');
+    refuseSuspended(this.host.suspension());
     this.host.sqlx(
       `INSERT INTO user_browser_sessions
          (token_hash, expires_at, email, display_name, provider, provider_sub, auth_time)
@@ -323,6 +327,7 @@ export class UserSessions {
     caller: UserCaller, userId: string, authorizationHash: string, label?: string,
   ): Promise<{ token: string; tokenHash: string; expiresAt: number }> {
     await this.host.requireTier(caller, 'auth_tokens.mint');
+    refuseSuspended(this.host.suspension());
 
     if (!/^[a-f0-9]{32}$/.test(userId)) throw new KinuError('bad_input', 'invalid user id');
 
@@ -400,10 +405,18 @@ export class UserSessions {
   /** Ends every browser session and CLI token of this account, and refuses any session of a lower generation. */
   async raiseCredentialFloor(caller: UserCaller, generation: number): Promise<void> {
     await this.host.requireTier(caller, 'auth_tokens.revoke');
+    await this.endEverySession(caller, generation);
+  }
+
+  /** Ends every browser session and CLI token of this account; with a `floor`, refuses any session minted under it. */
+  async endEverySession(caller: UserCaller, floor?: number): Promise<void> {
+    await this.host.requireTier(caller, 'auth_tokens.revoke');
 
     const sessions = this.host.ctx.storage.transactionSync(() => {
-      this.host.sqlx(`INSERT INTO account_epochs (id, credential_floor) VALUES (1, ?)
-        ON CONFLICT (id) DO UPDATE SET credential_floor = MAX(COALESCE(credential_floor, excluded.credential_floor), excluded.credential_floor)`, generation);
+      if (floor !== undefined) {
+        this.host.sqlx(`INSERT INTO account_epochs (id, credential_floor) VALUES (1, ?)
+          ON CONFLICT (id) DO UPDATE SET credential_floor = MAX(COALESCE(credential_floor, excluded.credential_floor), excluded.credential_floor)`, floor);
+      }
 
       const ended = this.host.sqlx<{ token_hash: string }>(`SELECT token_hash FROM user_browser_sessions`).map((row) => row.token_hash);
 
@@ -480,6 +493,7 @@ export class UserSessions {
    * name/scope validation. */
   async mintAccessToken(caller: UserCaller, userId: string, name: string, scopes: readonly string[]): Promise<AccessTokenMint> {
     await this.host.requireTier(caller, 'auth_tokens.mint');
+    refuseSuspended(this.host.suspension());
 
     return mintAccessTokenRow(this.host.ctx.storage.sql, userId, name, scopes);
   }

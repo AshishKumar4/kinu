@@ -521,7 +521,7 @@ describe('native egress constraints — red in every governed direction', () => 
   });
 
   const paths = [
-    [base, 'instance: instanceOf(inputs.size), enableInternet: this.enableInternet })', 'instance: instanceOf(inputs.size), enableInternet: true })', 'declared internet policy'],
+    [base, 'instance: instanceOf(this.#admittedSize ?? inputs.size), enableInternet: this.enableInternet })', 'instance: instanceOf(this.#admittedSize ?? inputs.size), enableInternet: true })', 'declared internet policy'],
     [router, '.interceptAllOutboundHttp(router)', '.removedHttpRoute(router)', 'HTTP has no total'],
     [router, ".interceptOutboundHttps('*', router)", ".interceptOutboundHttps('api.example.com', router)", 'HTTPS has no total'],
     [base, 'internet: this.enableInternet,', 'internet: true,', 'router does not receive'],

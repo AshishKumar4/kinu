@@ -1,6 +1,6 @@
 /** Export a type only when a caller must write its name. */
 
-export { Devbox, type DevboxState } from './devbox';
+export { Devbox, type DevboxState, type StartAdmission } from './devbox';
 
 export { type SessionRecord, type TerminalSession } from './sessions';
 

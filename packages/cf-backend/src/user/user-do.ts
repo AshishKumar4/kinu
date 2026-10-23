@@ -24,11 +24,11 @@ import { diagnostics, KinuError, refusalOf, settle, tolerate, toKinuError } from
 import * as v from 'valibot';
 import {
   censusOf, durableStamps, ERROR_STATUS, mcpPresetById, readStamp, repairSchema, SCHEMA_TABLES, requireOps, StoragePredatesReleaseError, writeStamp,
-  type OpsCaller, type Repair, type TablesAnswer,
+  type OpsCaller, type Repair, type TablesAnswer, type ComputerSize, type StoredClass,
 } from '@kinu.run/core';
 import { Hono } from 'hono';
 import { rawPath, rethrow } from '../api/context';
-import { destroyDriveTenant, tenantDrive } from '../drive/tenant';
+import { destroyDriveTenant, driveStoredBytes, tenantDrive } from '../drive/tenant';
 import { forgetSharesGiven, forgetSharesReceived } from './shares-given';
 import { internalCaller } from '@kinu.run/core/control-plane';
 import { BUILTIN_ACCOUNTS_OBJECT, builtinSignInOn } from '@kinu.run/core/identity';
@@ -41,6 +41,7 @@ import {
 } from './roster';
 
 import { UserDrive, type DriveAnswer, type DriveChunkWrite } from './drive';
+import { UserLimits } from './limits';
 import { UserDevices, type DeviceCancellationOutcome } from './devices';
 import { ACCOUNT_EPOCH_FIELDS, DeviceHelloHeadSchema, DeviceHelloSchema, DeviceUpdateHelloSchema } from '@kinu.run/core';
 import { UserTerminals } from './terminals';
@@ -158,7 +159,14 @@ export class UserDO extends Agent<Env> {
 
   private readonly secrets = new UserSecrets(this.host);
 
-  private readonly sessions = new UserSessions({ ...this.host, sql: (query, ...values) => this.sql(query, ...values), accountName: () => this.name, getProfile: (caller) => this.profile.getProfile(caller), workspaceRegistered: (name) => this.workspaces.workspaceRegistered(name) });
+  private readonly sessions = new UserSessions({
+    ...this.host,
+    sql: (query, ...values) => this.sql(query, ...values),
+    accountName: () => this.name,
+    getProfile: (caller) => this.profile.getProfile(caller),
+    workspaceRegistered: (name) => this.workspaces.workspaceRegistered(name),
+    suspension: () => this.accountLimits.suspension(),
+  });
 
   private readonly mcpServers = new UserMcpServers({ ...this.host, mcp: this.mcp, vault: this.credentials });
 
@@ -196,6 +204,19 @@ export class UserDO extends Agent<Env> {
     ...this.host, mcpServers: this.mcpServers, shareCards: this.shareCards, evalLeases: this.evalLeases, deletions: this.workspaceDeletions,
     nudgeUnreported: () => { this.nudgeUnreported(); },
     ownerId: () => this.name,
+    limits: {
+      admitWorkspace: () => { this.accountLimits.admitWorkspace(); },
+      forgetStore: (source) => { this.accountLimits.forgetStore(source); },
+      refreshStorage: async () => { await this.accountLimits.refreshStorage(); },
+    },
+  });
+
+  /** What the account may start new (core limits/): asked by its workspaces and its routes, set by the operator plane. */
+  private readonly accountLimits = new UserLimits({
+    ...this.host,
+    workspaceCount: () => this.workspaces.rosterCount(),
+    driveBytes: async () => await driveStoredBytes(this.env, this.name),
+    mailBytes: async () => await objectNamed(this.env.MAILBOX, this.name).storedBytes(this.name),
   });
 
   private readonly profile = new UserProfileStore({ ...this.host, workspaces: this.workspaces });
@@ -211,7 +232,15 @@ export class UserDO extends Agent<Env> {
 
   private readonly screens = new UserScreens({ ...this.host, devices: this.devices });
 
-  private readonly userDrive = new UserDrive({ ...this.host, accountId: () => this.name, driveFor: (tenant) => this.driveFor(tenant) });
+  private readonly userDrive = new UserDrive({
+    ...this.host,
+    accountId: () => this.name,
+    driveFor: (tenant) => this.driveFor(tenant),
+    limits: {
+      admitNewBytes: async () => { await this.accountLimits.admitNewBytes(); },
+      storeChanged: (source) => { this.accountLimits.storeChanged(source); },
+    },
+  });
 
   /** A sign-in: an account deleted before is a new one now, and keeps cards again. */
   async ensureProfile(caller: UserCaller, email: string, displayName?: string): Promise<UserProfile> {
@@ -790,6 +819,13 @@ export class UserDO extends Agent<Env> {
     return this.accountMemory.accountMemory_facts(caller);
   }
 
+  /** The account's facts for one turn: its memory's, and its limits near their end once a period, in the one read. */
+  async accountMemory_turnFacts(caller: UserCaller): Promise<Fact[]> {
+    const [facts, near] = await Promise.all([this.accountMemory.accountMemory_facts(caller), this.accountLimits.nearFact(caller)]);
+
+    return near === null ? facts : [...facts, near];
+  }
+
   accountMemory_searchNotes(caller: UserCaller, query: string, limit: number): Promise<AccountNoteHit[]> {
     return this.accountMemory.accountMemory_searchNotes(caller, query, limit);
   }
@@ -1064,6 +1100,66 @@ export class UserDO extends Agent<Env> {
 
   drive_abortDownload(caller: UserCaller, transferId: string): Promise<void> {
     return this.userDrive.drive_abortDownload(caller, transferId);
+  }
+
+  // The account's limits (user/limits.ts): read by Settings → Usage, asked before each new thing, told what is spent.
+
+  limits(caller: UserCaller): ReturnType<UserLimits['limits']> {
+    return this.accountLimits.limits(caller);
+  }
+
+  limits_account(caller: UserCaller): ReturnType<UserLimits['account']> {
+    return this.accountLimits.account(caller);
+  }
+
+  limits_nearNote(caller: UserCaller): ReturnType<UserLimits['nearNote']> {
+    return this.accountLimits.nearNote(caller);
+  }
+
+  limits_admitStoredBytes(caller: UserCaller, own?: { readonly source: string; readonly bytes: number }): Promise<void> {
+    return this.accountLimits.admitStoredBytes(caller, own);
+  }
+
+  limits_storageSampled(caller: UserCaller, source: string, bytes: number): Promise<void> {
+    return this.accountLimits.storageSampled(caller, source, bytes);
+  }
+
+  limits_admitComputerStart(caller: UserCaller, workspace: string, size: ComputerSize): Promise<ComputerSize> {
+    return this.accountLimits.admitComputerStart(caller, workspace, size);
+  }
+
+  limits_computerTick(caller: UserCaller, workspace: string, size: ComputerSize): Promise<void> {
+    return this.accountLimits.computerTick(caller, workspace, size);
+  }
+
+  limits_computerStopped(caller: UserCaller, workspace: string): Promise<void> {
+    return this.accountLimits.computerStopped(caller, workspace);
+  }
+
+  limits_admitTurn(caller: UserCaller, platform: boolean): Promise<void> {
+    return this.accountLimits.admitTurn(caller, platform);
+  }
+
+  limits_platformTokensSpent(caller: UserCaller, tokens: number): Promise<void> {
+    return this.accountLimits.platformTokensSpent(caller, tokens);
+  }
+
+  limits_setClass(caller: UserCaller, klass: StoredClass, by: string): Promise<void> {
+    return this.accountLimits.setClass(caller, klass, by);
+  }
+
+  /** Suspended: nothing new starts, every session and token ends, and none is minted until it is lifted. */
+  async limits_suspend(caller: UserCaller, reason: string, by: string): Promise<void> {
+    await this.accountLimits.suspend(caller, reason, by);
+    await this.sessions.endEverySession(caller);
+  }
+
+  limits_unsuspend(caller: UserCaller): Promise<void> {
+    return this.accountLimits.unsuspend(caller);
+  }
+
+  limits_inviteRedeemed(caller: UserCaller, by: string): Promise<void> {
+    return this.accountLimits.inviteRedeemed(caller, by);
   }
 
   /** Keyed by {@link USER_MCP_CLIENT_NAME}, not this object's name: every stored grant uses that key, sealed. */

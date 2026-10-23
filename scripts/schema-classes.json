@@ -1,8 +1,14 @@
 {
   "account": [
+    "account_computer_running",
+    "account_computer_usage",
     "account_epochs",
+    "account_limit_notices",
     "account_memory_proposals",
+    "account_model_usage",
     "account_notes",
+    "account_standing",
+    "account_storage",
     "agent_fact_history",
     "agent_facts",
     "builtin_accounts",
@@ -368,8 +374,10 @@
     "workspace_identity"
   ],
   "control": [
+    "cp_account_standing",
     "cp_audit",
     "cp_feedback",
+    "cp_invites",
     "cp_users",
     "cp_workspaces",
     "gallery_installs",

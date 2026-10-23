@@ -53,7 +53,7 @@ test("an idle agent's turn opens on account reads its tile's write does not hold
       await put(...args);
     },
     getSettingsRevision: gated('getSettingsRevision', userDO.getSettingsRevision.bind(userDO)),
-    accountMemory_facts: gated('accountMemory_facts', userDO.accountMemory_facts.bind(userDO)),
+    accountMemory_turnFacts: gated('accountMemory_turnFacts', userDO.accountMemory_turnFacts.bind(userDO)),
     userMcp_toolDescriptors: gated('userMcp_toolDescriptors', userDO.userMcp_toolDescriptors.bind(userDO)),
   });
   const runs = gateway.runs.length;
