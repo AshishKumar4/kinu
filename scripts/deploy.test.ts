@@ -373,6 +373,11 @@ function uploadFixture(fixture: string, uploadRuns: readonly UploadRun[] | undef
   }
 }
 
+/** A fixture's switch, as the stubs read it from the environment. */
+function flag(on: boolean): string {
+  return on ? '1' : '0';
+}
+
 async function runDeploy({
   failingGate = "",
   killGate = "",
@@ -488,19 +493,19 @@ exit 87
       KINU_DEPLOY_RECORD_LOG: recordLog,
       ...accountFixture(fixture, pendingReset, account),
       KINU_DEPLOY_INFRA_STATUS_LOG: infraStatusLog,
-      KINU_DEPLOY_UPLOAD_FIXTURE: uploadRuns === undefined ? '0' : '1',
+      KINU_DEPLOY_UPLOAD_FIXTURE: flag(uploadRuns !== undefined),
       KINU_DEPLOY_UPLOAD_ARGV: uploadArgv,
       // Always set, so the assertion that the script overrides it is about the
       // script rather than about whichever shell ran the suite.
       KINU_INFRA_PHASE: ambientPhase,
       KINU_INFRA_ENVIRONMENT: ambientEnvironment,
       KINU_RESET_RECORD: ambientRecord,
-      KINU_DEPLOY_DIRTY: dirty ? "1" : "0",
+      KINU_DEPLOY_DIRTY: flag(dirty),
       KINU_SCRIPTED_MODEL_KEY: scriptedKey,
       SKIP_E2E: "1",
       KINU_CI: ci,
-      KINU_STAMPS_MOVED: stampsMoved ? '1' : '0',
-      KINU_RETIRES: retires ? '1' : '0',
+      KINU_STAMPS_MOVED: flag(stampsMoved),
+      KINU_RETIRES: flag(retires),
       XDG_RUNTIME_DIR: fixture,
     }),
   });

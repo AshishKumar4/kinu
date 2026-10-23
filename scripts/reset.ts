@@ -545,6 +545,11 @@ function censusDiffCommand(environment: InfraEnvironment, args: readonly string[
 }
 
 /** `served`, `stamps`, `census`, `tables-plan`, `tables-record` and `tables`: a tables release's commands. */
+/** The commands that read the deployment and the candidate alone, no record between them. */
+const READS: Partial<Record<(typeof TABLES_COMMANDS)[number], (environment: InfraEnvironment) => Promise<number>>> = {
+  stamps: stampsMoved, 'schema-change': schemaChangeOf, retirements: retirementsOf,
+};
+
 async function tablesCommand(command: (typeof TABLES_COMMANDS)[number], environment: InfraEnvironment, args: readonly string[]): Promise<number> {
   const [recordFile, flag, from] = args;
 
@@ -557,11 +562,9 @@ async function tablesCommand(command: (typeof TABLES_COMMANDS)[number], environm
     return 0;
   }
 
-  if (command === 'stamps' && recordFile === undefined) return await stampsMoved(environment);
+  const reads = READS[command];
 
-  if (command === 'schema-change' && recordFile === undefined) return await schemaChangeOf(environment);
-
-  if (command === 'retirements' && recordFile === undefined) return await retirementsOf(environment);
+  if (reads !== undefined && recordFile === undefined) return await reads(environment);
 
   if (command === 'census' && recordFile !== undefined) {
     const { reached } = await walk(tablesTarget(environment, plan(environment).config));
@@ -582,7 +585,7 @@ async function tablesCommand(command: (typeof TABLES_COMMANDS)[number], environm
 
   console.error('usage: bun scripts/reset.ts served <environment> | stamps <environment> | census <environment> <out> '
     + '| tables-plan <environment> <record> [--from <sha>] | tables-record <environment> <record> | tables <environment> <record> '
-    + '| schema-change <environment>');
+    + '| schema-change <environment> | retirements <environment>');
 
   return 2;
 }
