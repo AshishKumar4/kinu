@@ -819,7 +819,7 @@
       "loadAtStart": 0.13,
       "exit": 0
     },
-    "bun test --timeout=0 --isolate scripts/pattern-inventory.test.ts scripts/jsonc.test.ts scripts/mail-wiring.test.ts scripts/syntax.test.ts scripts/workerd-requirements.test.ts": {
+    "bun test --timeout=0 --isolate scripts/pattern-inventory.test.ts scripts/jsonc.test.ts scripts/mail-wiring.test.ts scripts/syntax.test.ts scripts/workerd-requirements.test.ts scripts/fault-script.test.ts": {
       "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 3.55,
       "cpuSeconds": 3.22,
