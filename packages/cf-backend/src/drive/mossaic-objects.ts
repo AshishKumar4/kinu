@@ -8,6 +8,8 @@ import { bookmarkNow, restartedForRestore, restoreArmed, type ArmedRestore, type
 
 const TopSchema = v.object({ top: v.nullable(v.number()) });
 
+const ShardSchema = v.object({ shard: v.number() });
+
 const UsedSchema = v.object({ used: v.nullable(v.number()) });
 
 /** The deployment's root secret, which Mossaic's type of its env does not name: these objects run in Kinu's Worker. */
@@ -45,14 +47,28 @@ export class MossaicUserDO extends MossaicUser {
   tenantShards(): number {
     const sql = this.ctx.storage.sql;
     const top = (column: string, table: string): number => v.parse(TopSchema, sql.exec(`SELECT MAX(${column}) AS top FROM "${table}"`).one()).top ?? -1;
-
-    // Every table that names a shard, by its own definition (workerd refuses `pragma_table_info`), and the pool's size: a
-    // tenant whose tables were never made spans none.
-    const tables = sql.exec<{ name: string; ddl: string }>(`SELECT name, sql AS ddl FROM sqlite_master WHERE type = 'table' AND sql IS NOT NULL`).toArray();
+    const tables = this.#tables();
     const named = tables.filter(({ ddl }) => /\bshard_index\b/u.test(ddl)).map(({ name }) => top('shard_index', name) + 1);
     const pool = tables.some(({ name }) => name === 'quota') ? top('pool_size', 'quota') : 0;
 
     return Math.max(0, pool, ...named);
+  }
+
+  /** The shards this tenant's records name, each once: those its bytes are on. A pool shard none names holds none. */
+  namedShards(): number[] {
+    const sql = this.ctx.storage.sql;
+    const named = new Set<number>();
+
+    for (const { name } of this.#tables().filter(({ ddl }) => /\bshard_index\b/u.test(ddl))) {
+      for (const row of sql.exec(`SELECT DISTINCT shard_index AS shard FROM "${name}" WHERE shard_index IS NOT NULL`).toArray()) named.add(v.parse(ShardSchema, row).shard);
+    }
+
+    return [...named].sort((a, b) => a - b);
+  }
+
+  /** Every table, by its own definition (workerd refuses `pragma_table_info`): a tenant whose tables were never made has none. */
+  #tables(): { name: string; ddl: string }[] {
+    return this.ctx.storage.sql.exec<{ name: string; ddl: string }>(`SELECT name, sql AS ddl FROM sqlite_master WHERE type = 'table' AND sql IS NOT NULL`).toArray();
   }
 
   /** The bytes this tenant's files hold, as Mossaic itself accounts them (`quota.storage_used`); 0 before any write. */

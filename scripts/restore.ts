@@ -31,7 +31,10 @@ const ObjectSchema = v.looseObject({
   unread: v.optional(v.string()),
 });
 
-const AnswerSchema = v.object({ objects: v.array(ObjectSchema), landed: v.boolean(), stopped: v.optional(v.string()) });
+const AnswerSchema = v.object({
+  objects: v.array(ObjectSchema), landed: v.boolean(), stopped: v.optional(v.string()),
+  skipped: v.optional(v.array(v.object({ class: v.string(), name: v.string(), why: v.string() })), []),
+});
 
 const UndoSchema = v.array(v.object({ class: v.string(), name: v.string(), bookmark: v.string() }));
 
@@ -112,7 +115,7 @@ async function main(argv: readonly string[]): Promise<number> {
     const read = v.safeParse(AnswerSchema, JSON.parse(text));
 
     if (!read.success) throw new Error(`/ops/restore answered ${String(answer.status)}: ${text.slice(0, 600)}`);
-    const { objects, landed, stopped } = read.output;
+    const { objects, landed, stopped, skipped } = read.output;
 
     for (const one of objects) {
       console.log(`${one.class} ${one.name}: ${one.landed ? 'restored' : 'ARMED BUT NOT LANDED: it lands at the object\'s next start'}  (to ${one.bookmark}, was ${one.previous})`);
@@ -125,6 +128,8 @@ async function main(argv: readonly string[]): Promise<number> {
         for (const gone of one.missing.keys) console.log(`    ${gone}`);
       }
     }
+
+    for (const one of skipped) console.log(`${one.class} ${one.name}: skipped, ${one.why}`);
 
     if (stopped !== undefined) console.log(`STOPPED before the rest of it: ${stopped}`);
     const undoFile = join(mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), 'kinu-restore-')), 'undo.json');
