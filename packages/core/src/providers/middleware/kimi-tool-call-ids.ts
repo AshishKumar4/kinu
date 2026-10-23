@@ -16,7 +16,7 @@ function servesKimi(model: LanguageModelV4): boolean {
 }
 
 /** Every tool call and result in `prompt` under `functions.<tool>:<n>`, numbered in the order the calls were made. */
-export function kimiNumberedPrompt(prompt: LanguageModelV4Prompt): LanguageModelV4Prompt {
+function kimiNumberedPrompt(prompt: LanguageModelV4Prompt): LanguageModelV4Prompt {
   const ids = new Map<string, string>();
 
   const kimiId = (id: string, toolName: string): string => {
