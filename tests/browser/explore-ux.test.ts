@@ -77,6 +77,34 @@ describe('Explore', () => {
     });
   });
 
+  // The owner, 2026-10-23: the assistant's picture is Kinu's chat, so it is shown in the page's mode; a slate's picture
+  // is the slate's own look whatever the page's mode.
+  test("the assistant's picture follows the page's light or dark, on Explore and its own page; a slate's keeps its look", async () => {
+    await withGallery(async (gallery) => {
+      for (const theme of ['light', 'dark'] as const) {
+        const page = await freshPage(gallery, 'explore', theme, 'desktop');
+        const assistant = theme === 'light' ? 'assistant-light' : 'assistant';
+
+        await page.waitForSelector('[data-explore-hero="personal-assistant"] img[data-blueprint-picture]', SOON);
+        expect(await page.$eval('[data-explore-hero="personal-assistant"] img[data-blueprint-picture]', (img) => img.getAttribute('data-blueprint-picture'))).toBe(assistant);
+        expect(await page.$$eval('[data-explore-also] img[data-blueprint-picture]', (images) => images.map((img) => img.getAttribute('data-blueprint-picture'))))
+          .not.toContain('deploys-light');
+
+        // Its file is there to load, in either mode.
+        await page.waitForFunction(() => {
+          const img = document.querySelector('[data-explore-hero="personal-assistant"] img');
+
+          return img instanceof HTMLImageElement && img.complete && img.naturalWidth > 0;
+        }, SOON);
+
+        await page.goto(`${gallery.origin}/gallery.html?frame=explore-workspace&id=personal-assistant`, { waitUntil: 'load' });
+        await page.waitForSelector('[data-blueprint-page] img[data-blueprint-picture]', SOON);
+        expect(await page.$eval('[data-blueprint-page] img[data-blueprint-picture]', (img) => img.getAttribute('data-blueprint-picture'))).toBe(assistant);
+        await page.close();
+      }
+    });
+  });
+
   test("a blueprint's Install sends what its dialog chose; the assistant becomes Home", async () => {
     await withGallery(async (gallery) => {
       const assistant = await freshPage(gallery, 'explore-workspace&id=personal-assistant', 'dark', 'desktop');

@@ -12,15 +12,25 @@ import { presetBrand } from "@/components/plugins/McpPresetCards";
 import { KinuMark } from "@/components/ui/KinuLogo";
 import { CaptureMat, TILE, TileShell, TypesetCover } from "@/components/ui/Tiles";
 import { SlatePicture } from "@/components/slates/SlatePicture";
+import { useTheme } from "@/hooks/use-theme";
 import type { ExploreItem, ExploreKind, ExploreNeed } from "@/lib/explore-api";
 import { IconTile } from "@/components/ui/IconTile";
 
 /** A workspace blueprint's page. */
 export const exploreWorkspaceHref = (id: string) => `/explore/workspaces/${encodeURIComponent(id)}`;
 
-/** Where a workspace blueprint's picture is read. */
-/** A picture of one of Kinu's own blueprints at work, which the app serves with its assets, under its base. */
-export const kinuBlueprintPicture = (picture: string) => `${import.meta.env.BASE_URL}assets/explore/${encodeURIComponent(picture)}.webp`;
+/** Kinu's own blueprints whose picture is Kinu's chat, which draws a light and a dark: each has a copy for both. The
+ *  others are a slate at work, in the look the slate draws itself, as a slate's picture is (N6, 2026-10-23). */
+const IN_BOTH_MODES = new Set(["assistant"]);
+
+/** A picture of one of Kinu's own blueprints at work, which the app serves with its assets, under its base: in the mode
+ *  the page is in, where the picture has one. */
+export function KinuBlueprintPicture({ picture, alt, className, lazy = false }: { picture: string; alt: string; className: string; lazy?: boolean }) {
+  const { mode } = useTheme();
+  const file = IN_BOTH_MODES.has(picture) && mode === "light" ? `${picture}-light` : picture;
+
+  return <img src={`${import.meta.env.BASE_URL}assets/explore/${encodeURIComponent(file)}.webp`} alt={alt} loading={lazy ? "lazy" : undefined} className={className} data-blueprint-picture={file} />;
+}
 
 /** A picture of a whole page, cropped to its top left at a size its words can be read at in a card. */
 const ZOOMED = "absolute left-0 top-0 h-auto w-[var(--layout-zoomed)] max-w-none";
@@ -97,7 +107,7 @@ export function ExploreCard({ item }: { item: ExploreItem }) {
       typeset={workspace.picture === null}
       picture={workspace.picture === null
         ? <TypesetCover title={workspace.title} line={workspace.line} mark={false} />
-        : <CaptureMat><img src={kinuBlueprintPicture(workspace.picture)} alt="" loading="lazy" className={ZOOMED} /></CaptureMat>}
+        : <CaptureMat><KinuBlueprintPicture picture={workspace.picture} alt="" lazy className={ZOOMED} /></CaptureMat>}
       maker={<Maker maker={workspace.maker} />}
       numbers={<><DownloadSimpleIcon size={13} className="p-text-3" />{count(workspace.installs)}<StarIcon size={13} className="ml-2 p-text-3" />{count(workspace.stars)}</>} />
   );
