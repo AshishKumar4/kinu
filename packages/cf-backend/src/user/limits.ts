@@ -6,7 +6,7 @@ import { Effect } from 'effect';
 import { KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import {
   accountClassOf, admitComputerStart, admitPlatformTurn, admitStoredBytes, admitWorkspace, AccountLimitsStore, dayOf,
-  freeTierOf, limitsReport, monthOf, type AccountClass, type AccountUse, type Admission, type ComputerSize, type FreeTier,
+  freeTierOf, isLimited, limitsReport, monthOf, type AccountClass, type AccountUse, type Admission, type ComputerSize, type FreeTier,
   type LimitId, type LimitReading, type LimitsReport, type StoredClass, type UserCaller,
 } from '@kinu.run/core';
 import { isListedOperator } from '../control-plane/admin-caller';
@@ -154,8 +154,19 @@ export class UserLimits {
     this.store.sampled(source, bytes, Date.now());
   }
 
-  /** The Drive's and the mail's sizes read again where they live, each whose last reading is past {@link STORAGE_STALE_MS}. */
-  async refreshStorage(): Promise<void> {
+  /** Whether the account is bound by a free tier here: only then is anything read before an admission. */
+  private bound(): boolean {
+    const tier = freeTierOf(this.host.env.ACCOUNT_LIMITS);
+
+    return tier !== null && (tier === 'malformed' || isLimited(this.klass()));
+  }
+
+  /**
+   * The Drive's and the mail's sizes read again where they live, each whose last reading is past {@link STORAGE_STALE_MS},
+   * for an account a free tier binds; `always` for a reading the person asked to see.
+   */
+  async refreshStorage(always = false): Promise<void> {
+    if (!always && !this.bound()) return;
     const now = Date.now();
     const stale = (source: string): boolean => now - (this.store.measuredAt(source) ?? 0) > STORAGE_STALE_MS;
     const [drive, mail] = await Promise.all([stale('drive') ? this.host.driveBytes() : null, stale('mail') ? this.host.mailBytes() : null]);
@@ -187,7 +198,7 @@ export class UserLimits {
 
   async limits(caller: UserCaller): Promise<LimitsReport> {
     await this.host.requireTier(caller, 'limits');
-    await this.refreshStorage();
+    await this.refreshStorage(true);
     const now = Date.now();
     const { suspended } = this.store.standing();
     const tier = await settle(this.tier());
