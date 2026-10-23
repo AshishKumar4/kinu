@@ -69,7 +69,11 @@ export interface MailWiring {
   readonly routes: ReadonlyArray<{ readonly address: string; readonly workers: readonly string[] }>;
   /** Each own address, with the username it reaches and whether that box exists. */
   readonly targets: ReadonlyArray<{ readonly address: string; readonly username: string; readonly held: boolean }>;
-  /** Each own address that Email Sending has suppressed after a bounce or complaint, from any sending domain. */
+  /**
+   * Each own address that Email Sending has suppressed for the deployment's own sending domain, after a bounce or
+   * complaint: mail its people send to it is refused. One suppressed for another domain (staging's, by a test sent
+   * across) refuses only that domain's sends.
+   */
   readonly suppressed: readonly string[];
 }
 
@@ -95,7 +99,7 @@ export function wiringProblems(deployment: DeploymentMail, wiring: MailWiring): 
   }
 
   for (const address of wiring.suppressed) {
-    problems.push(`Email Sending has suppressed ${address} after a bounce or complaint, so sends to it are refused; lift it in the dashboard (Email, Email Sending, Suppression list).`);
+    problems.push(`Email Sending has suppressed ${address} for ${deployment.domain} after a bounce or complaint, so its people's sends to it are refused; lift it in the dashboard (Email, Email Sending, Suppression list).`);
   }
 
   return problems;
@@ -118,7 +122,7 @@ const MxSchema = v.object({ Answer: v.optional(v.array(v.object({ data: v.string
 
 const AvailabilitySchema = v.object({ refusal: v.nullable(v.string()) });
 
-const SuppressionsSchema = v.object({ result: v.array(v.object({ email: v.string() })) });
+const SuppressionsSchema = v.object({ result: v.array(v.object({ email: v.string(), scope: v.object({ type: v.string(), value: v.string() }) })) });
 
 /** One JSON read, its answer checked against `schema`; a refusal names what it was reading. */
 async function readJson<T>(url: string, init: RequestInit, schema: v.GenericSchema<T>, reading: string): Promise<T> {
@@ -165,7 +169,8 @@ export async function readMailWiring(deployment: DeploymentMail, origin: string,
   }));
 
   const suppressions = (await readJson(`${CLOUDFLARE_API}/accounts/${zone.account.id}/email/sending/suppressions?per_page=100`, api, SuppressionsSchema, 'Email Sending suppressions')).result;
-  const suppressed = addresses.flatMap(({ address }) => (suppressions.some((entry) => entry.email.toLowerCase() === address) ? [address] : []));
+  const ownDomain = suppressions.filter((entry) => entry.scope.type === 'sending_domain' && entry.scope.value === deployment.domain);
+  const suppressed = addresses.flatMap(({ address }) => (ownDomain.some((entry) => entry.email.toLowerCase() === address) ? [address] : []));
 
   return { mx: (mx.Answer ?? []).map((answer) => answer.data.split(' ').at(-1) ?? ''), routes, targets, suppressed };
 }
