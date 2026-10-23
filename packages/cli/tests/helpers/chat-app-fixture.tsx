@@ -2,7 +2,8 @@
 import { createTestRenderer } from '@opentui/core/testing';
 import { InputRenderable, TextareaRenderable } from '@opentui/core';
 import { createRoot, flushSync } from '@opentui/react';
-import { missingSubagentHistory, type EvolutionConfigView } from '@kinu.run/core';
+import type { EvolutionConfigView } from '@kinu.run/core';
+import { fakeAgentClient, fakeLocalControls } from './agent-client';
 
 import type {
   AgentClient,
@@ -15,7 +16,6 @@ import type {
   WaitingApprovalSurface,
 } from '../../src/agent-client';
 import type { AgentModelMenu } from '@kinu.run/core';
-import { createCliSession } from '../../src/session';
 import { ChatApp, type ChatAppOpts } from '../../src/tui/chat-app';
 import type { ListedAgent } from '../../src/agent-list';
 import type { TuiHubData } from '../../src/tui/hubs';
@@ -30,7 +30,7 @@ const EVOLUTION: EvolutionConfigView = {
   advisorMinSeverity: 'concern',
 };
 
-export const TURN = { landed: 'turn' as const, text: '', toolCalls: [], steps: 1, durationMs: 1, hadError: false };
+export { TURN } from './agent-client';
 
 /** Synchronous: the flushed unmount must finish before the renderer owning those renderables is destroyed. */
 const mounted: Array<() => void> = [];
@@ -93,36 +93,20 @@ export function fakeClient(options: FakeClientOptions) {
   let shellApprovalHandler: Parameters<LocalSessionControls['setShellApprovalHandler']>[0] = null;
   const mode = options.mode ?? 'local';
 
-  const client: AgentClient = {
+  const client = fakeAgentClient({
     mode,
     agentName: options.name,
-    cliSession: createCliSession(options.name, { noTranscript: true }),
     consents: options.consents ?? null,
     plans: options.plans ?? null,
     questions: options.questions ?? null,
     approvals: options.approvals ?? null,
-    localControls: mode === 'local' ? (options.localControls ?? {
-      getAlwaysActiveSkills: () => [],
-      setAlwaysActiveSkills: () => {},
-      getShellApprovalMode: () => 'strict',
-      setShellApprovalMode: (approval) => approval,
+    localControls: mode === 'local' ? (options.localControls ?? fakeLocalControls({
       setShellApprovalHandler: (handler) => {
         shellApprovalHandler = handler;
 
         return () => { shellApprovalHandler = null; };
       },
-      listModelProviders: async () => [],
-      listInstructionApprovals: async () => ({ status: 'end' as const, items: [] }),
-      readInstructionApproval: async () => null,
-      approveInstruction: async () => ({ ok: true as const, path: '', digest: '' }),
-      revokeInstruction: async () => ({ ok: true as const, path: '', digest: '' }),
-      clearConversation: async () => null,
-      compact: async () => 'folded' as const,
-    }) : null,
-    checkpoints: null,
-    inlineAttachmentLimitBytes: 1024,
-    planes: null,
-    fileLinks: { roots: [], href: () => null },
+    })) : null,
     connect: async () => {
       await options.connect?.();
       state.connected += 1;
@@ -132,11 +116,8 @@ export function fakeClient(options: FakeClientOptions) {
 
       return () => { listeners.delete(listener); };
     },
-    send: options.send ?? (async () => TURN),
-    branch: () => false,
-    fork: async () => ({ client, label: options.name }),
-    stop: () => [],
-    history: options.history ?? (async () => []),
+    ...options.send && { send: options.send },
+    ...options.history && { history: options.history },
     close: async () => { state.closed += 1; },
     status: options.status ?? (async () => ({
       name: options.name,
@@ -144,25 +125,12 @@ export function fakeClient(options: FakeClientOptions) {
       model: 'openai/gpt-5.5',
       reasoningEffort: 'medium',
     })),
-    describeTools: async () => ({ builtIn: [], crafted: [] }),
-    changelog: async () => ({ entries: [], unseenCount: 0 }),
-    refinements: async () => ({ requests: [], debt: { turnIds: [], owed: false, key: '', summary: 'no unresolved corrections — nothing is owed a refinement' } }),
-    requestRefinement: async () => ({ id: 'refine-test', trigger: 'explicit' as const, scope: 'workspace' as const, stage: 'refused' as const, turnIds: [], routes: [], detail: 'no outcome-labeled turns yet', createdAt: 0 }),
-    revertChangelogEntry: async () => ({ ok: false }),
-    readMemory: async () => '',
-    searchNodes: async () => [],
-    listJobs: options.listJobs ?? (async () => []),
-    cancelJob: async () => ({ ok: false }),
-    latestTakes: async () => null,
-    pickTake: async () => { throw new Error('no takes'); },
+    ...options.listJobs && { listJobs: options.listJobs },
     getModelSpec: async () => 'openai/gpt-5.5',
-    setModel: options.setModel ?? (async (spec) => ({ spec })),
-    setRole: async (role) => ({ role }),
+    ...options.setModel && { setModel: options.setModel },
     getReasoningEffort: async () => 'medium',
-    setReasoningEffort: async (effort) => ({ effort }),
-    getProviderAccounts: async () => ({}),
-    setProviderAccount: async () => ({}),
-    workspaceSpend: options.workspaceSpend ?? (async () => { throw new Error('no spend in this fixture'); }),
+    ...options.workspaceSpend && { workspaceSpend: options.workspaceSpend },
+    // This fixture's workspace keeps its evolution settings, as a real one does.
     getEvolutionConfig: async () => evolution,
     setEvolutionConfig: async (next) => {
       evolution = { ...evolution, ...next };
@@ -179,10 +147,10 @@ export function fakeClient(options: FakeClientOptions) {
       }],
       failures: [],
     })),
-    testModel: options.testModel ?? (async () => ({ ok: true, firstTokenMs: 0, totalMs: 0 })),
-    inspectSubagent: options.inspectSubagent ?? (async (request) => missingSubagentHistory(request.path)),
-    workspaceWork: options.workspaceWork ?? (async () => ({ plans: [], tasks: [] })),
-  };
+    ...options.testModel && { testModel: options.testModel },
+    ...options.inspectSubagent && { inspectSubagent: options.inspectSubagent },
+    ...options.workspaceWork && { workspaceWork: options.workspaceWork },
+  });
 
   const rename = options.rename ?? (mode === 'local'
     ? async (displayName: string) => ({ name: options.name, displayName })
