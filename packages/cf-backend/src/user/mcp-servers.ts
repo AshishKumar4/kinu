@@ -73,6 +73,12 @@ const MCP_OAUTH_CALLBACK_PATH = '/api/user/mcp/callback';
  *  must use the same name. */
 export const USER_MCP_CLIENT_NAME = 'kinu-user-mcp';
 
+/** Where a wake that retired a server keeps that the assistant's watchers are still to be armed again. */
+const WATCHERS_STALE_KEY = 'mcp:watchers-stale';
+
+/** The most keys one `storage.delete` takes (developers.cloudflare.com/durable-objects/api/sqlite-storage-api/#delete). */
+const STORAGE_DELETE_KEYS = 128;
+
 /** A server as the SDK's catalog (`cf_agents_mcp_servers`) keeps it: the one place its name, endpoint and transport live. */
 interface McpCatalogEntry {
   readonly name: string;
@@ -796,9 +802,16 @@ export class UserMcpServers {
     return this.armAssistantWatchers();
   }
 
-  /** A wake retired a server, whose watchers the assistant still arms: told at the next warm, never by the wake itself,
-   *  which waits on no workspace. */
-  private watchersStale = false;
+  /** A wake retired a server whose watchers the assistant may still arm. Kept until the assistant is told, at the next
+   *  warm, so an eviction before then does not lose it; the wake itself waits on no workspace. */
+  private get watchersStale(): boolean {
+    return this.host.ctx.storage.kv.get(WATCHERS_STALE_KEY) === true;
+  }
+
+  private set watchersStale(stale: boolean) {
+    if (stale) this.host.ctx.storage.kv.put(WATCHERS_STALE_KEY, true);
+    else this.host.ctx.storage.kv.delete(WATCHERS_STALE_KEY);
+  }
 
   async userMcp_connectedPresets(caller: UserCaller): Promise<string[]> {
     await this.host.requireTier(caller, 'mcp.manage');
@@ -862,7 +875,10 @@ export class UserMcpServers {
     // Its sign-ins' runs go with it: no callback of its can name one now. Its OAuth keys too, by name, opened or not:
     // the SDK clears only those its storage could open.
     for (const prefix of [connectRunKey(id, ''), `/${USER_MCP_CLIENT_NAME}/${id}/`]) {
-      await this.host.ctx.storage.delete([...(await this.host.ctx.storage.list({ prefix })).keys()]);
+      const keys = [...(await this.host.ctx.storage.list({ prefix })).keys()];
+
+      // A delete takes at most this many keys at once.
+      for (let at = 0; at < keys.length; at += STORAGE_DELETE_KEYS) await this.host.ctx.storage.delete(keys.slice(at, at + STORAGE_DELETE_KEYS));
     }
   }
 

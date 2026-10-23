@@ -199,19 +199,26 @@ describe('an MCP preset add', () => {
 
     await h.userDO.claimConfig(owner, 'assistant', 'kinu-home');
     sqlExec(h.db).exec(`UPDATE user_mcp_servers SET preset_id = 'google' WHERE id = ?`, gmail.id);
-    // An OAuth value sealed for no key this object holds: the SDK's own clearing passes it by, as it cannot open it.
-    kvOf(h.db).set(unopenable, 'not-a-sealed-value');
+
+    // OAuth values sealed for no key this object holds, more than one delete takes: the SDK's own clearing passes them
+    // by, as it cannot open them.
+    for (let n = 0; n < 130; n += 1) kvOf(h.db).set(`${unopenable}-${n}`, 'not-a-sealed-value');
 
     const woken = createTestUserDO({ storage: h.db });
 
     expect(await woken.userDO.userMcp_list(owner)).toEqual([]);
     expect(catalogOf(gmail.id)).toBeUndefined();
-    expect(kvOf(h.db).has(unopenable)).toBe(false);
+    expect([...kvOf(h.db).keys()].filter((key) => key.startsWith(unopenable))).toEqual([]);
 
-    // The wake told no workspace; the next warm arms the assistant's watchers for what the account still holds.
+    // The wake told no workspace, and evicted before any warm, the next wake still owes the assistant its notice: the
+    // first warm arms its watchers for what the account still holds, once.
     expect(woken.connectionsChanged).toEqual([]);
-    await woken.userDO.userMcp_warmConnections(owner);
-    expect(woken.connectionsChanged).toEqual(['kinu-home:']);
+    const later = createTestUserDO({ storage: h.db });
+
+    await later.userDO.userMcp_warmConnections(owner);
+    await later.userDO.userMcp_warmConnections(owner);
+    expect(later.connectionsChanged).toEqual(['kinu-home:']);
+    later.close();
     woken.close();
     h.close();
   });

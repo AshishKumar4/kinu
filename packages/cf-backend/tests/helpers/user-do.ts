@@ -608,8 +608,13 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
       // The asynchronous face of the same pairs, where the SDK's OAuth provider keeps an MCP server's login.
       get: async (key: string): Promise<JsonValue | undefined> => kv.get(key),
       put: async (key: string, value: JsonValue): Promise<void> => { kv.set(key, value); },
-      // One key, or many as the platform's takes them: answered with what it deleted, as each answers.
-      delete: async (key: string | readonly string[]): Promise<boolean | number> => (typeof key === 'string' ? kv.delete(key) : key.filter((each) => kv.delete(each)).length),
+      // One key, or many as the platform's takes them, at most 128 (developers.cloudflare.com/durable-objects/api/
+      // sqlite-storage-api/#delete): answered with what it deleted, as each answers.
+      delete: async (key: string | readonly string[]): Promise<boolean | number> => {
+        if (typeof key !== 'string' && key.length > 128) throw new RangeError(`storage.delete takes at most 128 keys; ${key.length} were given`);
+
+        return typeof key === 'string' ? kv.delete(key) : key.filter((each) => kv.delete(each)).length;
+      },
       list: async (listing: { prefix: string }): Promise<Map<string, JsonValue>> => new Map([...kv].filter(([key]) => key.startsWith(listing.prefix))),
       // The SDK's `destroy()` runs these before the abort; dropping every table matches `deleteAll`.
       deleteAlarm: async (): Promise<void> => {},
