@@ -227,7 +227,7 @@ mailRoutes.put('/api/user/mail/boxes/wake', async (c) => {
 });
 
 /** "Send to a workspace…" (docs/MAIL.md §8): the person's thread, as its agent reads it, to a workspace they own. */
-export const mailHandRoutes = new Hono<FamilyEnv<MailRoutesEnv, WorkspaceVariables>>();
+export const mailHandRoutes = new Hono<FamilyEnv<MailRoutesEnv, WorkspaceVariables<Pick<OrchestratorAgent, 'mailHanded'>>>>();
 
 mailHandRoutes.post('/api/workspaces/:name/mail', async (c) => {
   const body = await safeJson(c.req.raw, Handed);

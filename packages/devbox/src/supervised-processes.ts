@@ -1,7 +1,7 @@
 import { processScope, supervisedScope, type ResourceLane, type ResourceScope } from './operation-lanes';
 import type { SupervisedProcessSpec } from './lifecycle';
 import { isProcessLive, type ProcessRecord, type Processes } from './processes';
-import { DEVBOX_WORKDIR } from './storage';
+import { DEVBOX_WORKDIR } from './wire';
 import { jobSessionId } from './sessions';
 import { Effect, Result } from 'effect';
 import { attempt, settle, type DevboxError } from './errors';

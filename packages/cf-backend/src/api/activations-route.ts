@@ -5,10 +5,11 @@
  */
 import { Hono } from 'hono';
 import type { FamilyEnv } from './context';
+import type { OrchestratorAgent } from '../orchestrator';
 import type { WorkspaceVariables } from './workspace';
 
 const ACTIVATIONS = '/api/workspaces/:name/activations';
 
-export const activationRoutes = new Hono<FamilyEnv<object, WorkspaceVariables>>();
+export const activationRoutes = new Hono<FamilyEnv<object, WorkspaceVariables<Pick<OrchestratorAgent, 'activations'>>>>();
 
 activationRoutes.get(ACTIVATIONS, async (c) => Response.json({ activations: await c.get('workspace').agent.activations() }));

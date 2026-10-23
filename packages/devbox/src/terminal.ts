@@ -3,7 +3,7 @@ import { Effect } from 'effect';
 import { DevboxError, attempt, attemptSync, observe, settle } from './errors';
 import { boxEnv, containerExec, endProcess, resizePty, type TerminalSize } from './processes';
 import { INSTALL_SESSION_FILES, SAVED_SESSIONS, SESSIONS_FORGET, SESSION_FILES, SESSION_RC_FILE, SESSION_RESUME_FILE, TMUX_CONF_FILE, type SessionRecord } from './sessions';
-import { DEVBOX_WORKDIR } from './storage';
+import { DEVBOX_WORKDIR } from './wire';
 import { holdReadiness, type ReadinessHold } from './readiness-hold';
 
 const ENV = boxEnv({ ...SESSION_FILES, TERM: 'xterm-256color' });

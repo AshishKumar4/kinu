@@ -11,6 +11,7 @@ import { Hono } from 'hono';
 import { mailHandRoutes, mailRoutes, type MailRoutesEnv } from '../src/mail/routes';
 import { routeError, type FamilyEnv } from '../src/api/context';
 import type { WorkspaceVariables } from '../src/api/workspace';
+import type { OrchestratorAgent } from '../src/orchestrator';
 import type { MailNameClaim } from '../src/mail/mailname-do';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 
@@ -283,11 +284,10 @@ describe('the person sends a thread to one of their workspaces', () => {
 
   /** As the API mounts it: behind the workspace gate, which has proven `who` owns api-worker. */
   async function hand(who: { userId: string; email: string }, thread: string) {
-    const app = new Hono<FamilyEnv<MailRoutesEnv, WorkspaceVariables>>()
+    const app = new Hono<FamilyEnv<MailRoutesEnv, WorkspaceVariables<Pick<OrchestratorAgent, 'mailHanded'>>>>()
       .use('*', async (c, next) => {
         c.set('identity', { userId: who.userId, email: who.email, sub: who.userId });
         c.set('workspace', { name: 'api-worker', request: c.req.raw, agent: {
-          evalAbortActivation: () => Promise.resolve(), activations: () => Promise.resolve([]),
           mailHanded: (mail) => {
             handed.push(mail);
 

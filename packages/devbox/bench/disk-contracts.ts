@@ -2,7 +2,8 @@
 import { diskChain, DiskChainStateSchema, type DiskChainPorts, type DiskChainState } from '../src/disk-chain';
 import { settle } from '../src/errors';
 import { chainStoreRoot, storeObjectUrl } from '../src/store-gateway';
-import { DEVBOX_RUNTIME_DIR as RT, DEVBOX_WORKDIR as WD, type CheckpointOutcome } from '../src/storage';
+import { DEVBOX_RUNTIME_DIR as RT, type CheckpointOutcome } from '../src/storage';
+import { DEVBOX_WORKDIR as WD } from '../src/wire';
 import * as v from 'valibot';
 
 import type { DiskContract } from './contract-types';

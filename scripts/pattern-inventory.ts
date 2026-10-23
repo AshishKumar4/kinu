@@ -361,6 +361,9 @@ if (import.meta.main) {
     { file: 'scripts/skip-ratchet.ts', owner: 'parseJUnit', classification: 'REPLACED',
       replacement: 'scripts/xml.ts reads the report as XML; outcomes are child elements',
       proof: 'bun test scripts/skip-ratchet.test.ts' },
+    { file: 'packages/core/src/safety/command-review.ts', owner: 'scanCommand, shellSteps', classification: 'REPLACED',
+      replacement: 'packages/core/src/safety/shell-reading.ts walks the AST of Nimbus\'s own shell parser',
+      proof: 'bun test packages/core/tests/unit-approval-gate.test.ts --test-name-pattern "however it is spelled"' },
     { file: 'lean/check-traceability.mjs', owner: 'tsScan', classification: 'REPLACED',
       replacement: 'lean/ts-refs.mjs resolves tsRefs through oxc-parser',
       proof: 'bun test scripts/lean-citations.test.ts' }];

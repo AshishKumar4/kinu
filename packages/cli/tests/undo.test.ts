@@ -5,11 +5,11 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 
 import { join } from 'node:path';
 import { createHostCheckpoints } from '@kinu.run/cli-backend';
-import { DEFAULT_ADVISOR_MIN_SEVERITY, missingSubagentHistory } from '@kinu.run/core';
+import { DEFAULT_ADVISOR_MIN_SEVERITY } from '@kinu.run/core';
 import type { EvolutionConfigView, FileCheckpointEntry, FileRestoreChange } from '@kinu.run/core';
 import { commandsForClient, executeSlashCommand, filterCommands, performUndo } from '../src/slash-commands';
 import type { AgentClient, FileCheckpointSurface } from '../src/agent-client';
-import { createCliSession } from '../src/session';
+import { fakeAgentClient } from './helpers/agent-client';
 
 function inertCheckpointSurface(): FileCheckpointSurface {
   return {
@@ -20,36 +20,7 @@ function inertCheckpointSurface(): FileCheckpointSurface {
 }
 
 function slashClient(checkpoints: FileCheckpointSurface | null): AgentClient {
-  const client: AgentClient = {
-    mode: 'local', agentName: 'test', cliSession: createCliSession('test', { noTranscript: true }),
-    consents: null, localControls: null, checkpoints, plans: null, questions: null, approvals: null, inlineAttachmentLimitBytes: 1024, planes: null, fileLinks: { roots: [], href: () => null },
-    connect: async () => {}, subscribe: () => () => {},
-    send: async () => ({ landed: 'turn' as const, text: '', toolCalls: [], steps: 0, durationMs: 0, hadError: false }),
-    branch: () => false,
-    fork: async () => ({ client, label: 'test' }), stop: () => [], close: async () => {},
-    history: async () => [],
-    status: async () => ({ name: 'test', purpose: 'test', model: null, reasoningEffort: null }),
-    describeTools: async () => ({ builtIn: [], crafted: [] }),
-    changelog: async () => ({ entries: [], unseenCount: 0 }),
-    refinements: async () => ({ requests: [], debt: { turnIds: [], owed: false, key: '', summary: 'no unresolved corrections — nothing is owed a refinement' } }),
-    requestRefinement: async () => ({ id: 'refine-test', trigger: 'explicit' as const, scope: 'workspace' as const, stage: 'refused' as const, turnIds: [], routes: [], detail: 'no outcome-labeled turns yet', createdAt: 0 }),
-    revertChangelogEntry: async () => ({ ok: false }), readMemory: async () => '',
-    searchNodes: async () => [], listJobs: async () => [], cancelJob: async () => ({ ok: false }), latestTakes: async () => null,
-    pickTake: async () => { throw new Error('not used'); },
-    getModelSpec: async () => null, setModel: async (spec) => ({ spec }),
-    setRole: async (role) => ({ role }),
-    getReasoningEffort: async () => null, setReasoningEffort: async (effort) => ({ effort }),
-    getProviderAccounts: async () => ({}), setProviderAccount: async () => ({}),
-    workspaceSpend: async () => { throw new Error('no spend'); },
-    listModels: async () => ({ models: [], failures: [] }),
-    testModel: async () => ({ ok: true, firstTokenMs: 0, totalMs: 0 }),
-    inspectSubagent: async (request) => missingSubagentHistory(request.path),
-    workspaceWork: async () => ({ plans: [], tasks: [] }),
-    getEvolutionConfig: async () => { throw new Error('not used'); },
-    setEvolutionConfig: async () => { throw new Error('not used'); },
-  };
-
-  return client;
+  return fakeAgentClient({ checkpoints });
 }
 
 function realEngineClient(opts: { gitBin?: string } = {}) {

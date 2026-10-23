@@ -7,7 +7,7 @@ import { describe, expect, test } from 'bun:test';
 import { serveFamily } from './helpers/api';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { makeKv, type FakeKv } from './helpers/kv';
-import type { HubResolver, HubTarget, WebhookDeliveryEnv, WebhookDeliveryResolver, WebhookDeliveryTarget } from '../src/events/routes';
+import type { HubTarget, WebhookDeliveryEnv, WebhookDeliveryResolver, WebhookDeliveryTarget } from '../src/events/routes';
 import type { WebhookDelivery, WebhookDeliveryResult } from '@kinu.run/core';
 import { jsrpcStub } from './helpers/jsrpc-stub';
 import { workerContext } from './helpers/bindings';
@@ -44,7 +44,7 @@ interface DeliveryProbe {
 interface Harness {
   readonly env: WebhookDeliveryEnv;
   readonly resolveAgent: WebhookDeliveryResolver;
-  readonly resolveHubAgent: HubResolver;
+  readonly hub: HubTarget;
   readonly probe: DeliveryProbe;
   readonly kv: FakeKv;
 }
@@ -76,13 +76,7 @@ function harness(options: { secret?: string | null; reject?: boolean } = {}): Ha
     return agent;
   };
 
-  const resolveHubAgent: HubResolver = async (name) => {
-    probe.activations.push(`resolve:${name}`);
-
-    return hubObject();
-  };
-
-  return { env, resolveAgent, resolveHubAgent, probe, kv };
+  return { env, resolveAgent, hub: hubObject(), probe, kv };
 }
 
 function hubObject(): HubTarget {
@@ -254,10 +248,10 @@ describe('the delivery route claims exactly its own paths', () => {
   });
 
   test('the authenticated hub router does not serve delivery at all', async () => {
-    const { env, resolveHubAgent, probe } = harness();
+    const { env, hub, probe } = harness();
 
-    expect(await serveFamily(hubRoutes(() => resolveHubAgent), { workspace: { name: WORKSPACE } })(delivery(await mintedPath()), env)).toBeNull();
-    expect(await serveFamily(hubRoutes(() => resolveHubAgent), { workspace: { name: WORKSPACE } })(delivery(`/api/workspaces/${WORKSPACE}/webhook/${TRIGGER}`), env)).toBeNull();
+    expect(await serveFamily(hubRoutes(), { workspace: { name: WORKSPACE, agent: hub } })(delivery(await mintedPath()), env)).toBeNull();
+    expect(await serveFamily(hubRoutes(), { workspace: { name: WORKSPACE, agent: hub } })(delivery(`/api/workspaces/${WORKSPACE}/webhook/${TRIGGER}`), env)).toBeNull();
     expect(probe.activations).toEqual([]);
   });
 });
@@ -275,16 +269,16 @@ describe('trigger management reports what delivery hides', () => {
   }
 
   test('no route secret: creation reports the deployment, and registers nothing', async () => {
-    const { env, resolveHubAgent, probe } = harness({ secret: null });
-    const response = await serveFamily(hubRoutes(() => resolveHubAgent), freshSession)(createRequest(), env);
+    const { env, hub, probe } = harness({ secret: null });
+    const response = await serveFamily(hubRoutes(), { ...freshSession, workspace: { name: WORKSPACE, agent: hub } })(createRequest(), env);
 
     expect(response?.status).toBe(503);
     expect(probe.deliveries).toEqual([]);
   });
 
   test('with a route secret the same request is not refused as unconfigured', async () => {
-    const { env, resolveHubAgent } = harness();
-    const response = await serveFamily(hubRoutes(() => resolveHubAgent), freshSession)(createRequest(), env);
+    const { env, hub } = harness();
+    const response = await serveFamily(hubRoutes(), { ...freshSession, workspace: { name: WORKSPACE, agent: hub } })(createRequest(), env);
 
     expect(response?.status).not.toBe(503);
   });

@@ -101,6 +101,36 @@ export function tolerateAsync<T>(operation: () => Promise<T>, expected: Expected
   return settle(tolerated(Effect.promise(operation), expected));
 }
 
+/** {@link flight}'s rule for work that is already a promise: one run per key until it settles, every caller joining it. */
+export interface Joined<K, A> {
+  (key: K, run: () => Promise<A>): Promise<A>;
+  /** The run for `key` that has not settled, if one is. */
+  readonly inFlight: (key: K) => Promise<A> | undefined;
+  /** Every run that has not settled. */
+  readonly each: () => readonly Promise<A>[];
+}
+
+export function joining<K, A>(): Joined<K, A> {
+  const held = new Map<K, Promise<A>>();
+
+  const joined = (key: K, run: () => Promise<A>): Promise<A> => {
+    const running = held.get(key);
+
+    if (running !== undefined) return running;
+
+    // Removed only while still its key's run: a run started after it settled keeps its place.
+    const started: Promise<A> = run().finally(() => {
+      if (held.get(key) === started) held.delete(key);
+    });
+
+    held.set(key, started);
+
+    return started;
+  };
+
+  return Object.assign(joined, { inFlight: (key: K) => held.get(key), each: () => [...held.values()] });
+}
+
 type FlightKey = string | number | null;
 
 interface FlightOptions<I> {

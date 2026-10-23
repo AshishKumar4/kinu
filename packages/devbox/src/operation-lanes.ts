@@ -1,5 +1,6 @@
 /** Resource scopes and operation ownership, shared by the box and its gateway. */
-import { DEVBOX_WORKDIR, type CheckpointKind, type CheckpointOutcome } from './storage';
+import type { CheckpointKind, CheckpointOutcome } from './storage';
+import { DEVBOX_WORKDIR } from './wire';
 import { describeThrown } from './lifecycle';
 
 /** Namespaces distinguish files, ports and processes; a subtree claims every descendant. */

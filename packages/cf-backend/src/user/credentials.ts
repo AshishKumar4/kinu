@@ -2,7 +2,7 @@ import { Effect } from 'effect';
 import {
   KeptProviderListingSchema, type ProviderListing, safeJsonParse, type Credential, CLAUDE_CRED_KEY, CODEX_CRED_KEY, baseCredentialKey, claudeCodeFrom, createClaudeOAuthClient, startClaudeSignIn, subscriptionIssuer, renewableLogin, rotateLogin, usableLogin, type LoginRenewal, type SubscriptionIssuer, decodeCodexAccountId, type JsonValue, type OAuthCredential, parseJsonValue, ownerCaller, type UserCaller, type ResolvedCaller, credentialToHeaders, refusedLogin, type AuthRequest, type AuthResolution, validateCredential, validateCredentialKey, createCredentialCipher, type CredentialCipher, revocationEndpointFor, revokeOAuthGrant, type DisconnectOutcome, isModelInferenceCredentialKey, CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, accountIdFromCloudflareCredential, cloudflareAIGatewayId, cloudflareAccountsFromCredential, cloudflareWorkersAIBaseURL, fetchCloudflareAIGateways, isCloudflareAIGatewayId, isCloudflareCredentialExpiring, isCloudflareCredentialUsable, refreshCloudflareCredential, withCloudflareAccount, type CloudflareAccount, type CloudflareAIGatewaySummary, type CredentialSummary, CLOUDFLARE_WEB_SEARCH_CRED_KEY, grantsWebSearch, storedCredentialKey,
 } from '@kinu.run/core';
-import { attempt, authoredRefusal, diagnostics, KinuError, renderThrownChain, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
+import { attempt, authoredRefusal, diagnostics, joining, KinuError, renderThrownChain, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import type { UserObjectHost } from './user-host';
 
@@ -200,7 +200,7 @@ export class UserCredentials {
   async checkpointCredentials(caller: UserCaller, account: string): Promise<CheckpointedCredential[]> {
     await this.host.requireTier(caller, 'credentials.other');
     // A rotation in flight would spend the refresh token this reads.
-    await Promise.allSettled(this._refreshing.values());
+    await Promise.allSettled(this.refreshing.each());
     const cipher = await this.cipher();
     const checkpoint: CheckpointedCredential[] = [];
 
@@ -591,16 +591,10 @@ export class UserCredentials {
     rotate: () => Promise<OAuthCredential>,
     onRevoked: (revision: number) => Promise<void>,
   ): Promise<LoginRenewal> {
-    const inFlight = this._refreshing.get(key);
-
-    if (inFlight) return inFlight;
-    const task = this.rotateOAuthCredential(key, held, rotate, onRevoked);
-    this._refreshing.set(key, task);
-
-    try { return await task; } finally { this._refreshing.delete(key); }
+    return this.refreshing(key, () => this.rotateOAuthCredential(key, held, rotate, onRevoked));
   }
 
-  private readonly _refreshing = new Map<string, Promise<LoginRenewal>>();
+  private readonly refreshing = joining<string, LoginRenewal>();
 
   private async rotateOAuthCredential(
     key: string,
