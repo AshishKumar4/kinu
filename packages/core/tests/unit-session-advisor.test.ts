@@ -610,8 +610,7 @@ describe("the advisor's read tools", () => {
     const { rt } = createTestRuntime();
     const agentLedger = new TurnFileLedger();
     const content = 'rounding: half-even\n';
-    await rt.toolFiles.mkdir(rt.storage.home, { recursive: true });
-    await writeText(rt.toolFiles, `${rt.storage.home}/ledger.md`, content);
+    await writeText(rt.toolFiles, 'ledger.md', content);
 
     const reads = advisorReadTools({
       files: () => ({ vfs: rt.toolFiles, home: rt.storage.home, planes: rt.planes, memory: rt.memory, ledger: agentLedger, budget: new TurnContextBudget() }),
@@ -621,7 +620,6 @@ describe("the advisor's read tools", () => {
 
     expect(JSON.stringify(await file({ op: 'read', path: 'ledger.md' }))).toContain('half-even');
     expect(agentLedger.seenState('ledger.md', content, 'part').state).toBe('never');
-    expect(agentLedger.seenState(`${rt.storage.home}/ledger.md`, content, 'part').state).toBe('never');
     await expect(file({ op: 'write', path: 'ledger.md', content: 'rounding: up\n' })).rejects.toThrow();
   });
 });

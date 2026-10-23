@@ -8,7 +8,7 @@ import {
   advisorReadsOver, bindRoute, completeOnRoute, ownProfileChoices, resolveTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle, writePhaseLines, type PhaseLinePorts,
   type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpeningAsk, type JsonObject, type PlanReview, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
   type InspectedWork, type PreparedAgentTurn, type PreparedTurn, type TerminalTurnFacts, type ProfileAuthorityInputs, type ResolvedTurnProfile,
-  type SessionEvent, type TurnAssemblyRequest, type WorkMode, type OwnerQuestionStore, type RunEndOutcome, type DeliveredRun, type AgentOwes, type AgentReport, type ClaimedRound,
+  type SessionEvent, type TurnAssemblyRequest, type TurnTools, type WorkMode, type OwnerQuestionStore, type RunEndOutcome, type DeliveredRun, type AgentOwes, type AgentReport, type ClaimedRound,
   refusedRun, turnAttemptOf, endedStandingOf, WORKSPACE_RUN_ID,
 } from '@kinu.run/core';
 import { createCompactionStateStore, type CompactionStateStore } from '@kinu.run/compaction';
@@ -238,7 +238,7 @@ export class FacetChat {
       toolset: () => ({
         tools, stores: null,
         advisorReads: advisorReadsOver(prepared.advisorTools ?? [], async (call) => await workspace.advisorRead({ turnId: turn.id, runId: turn.runId, epoch: turn.epoch, ...call })),
-      }),
+      }) satisfies TurnTools,
       externalTools: async () => ({}),
       // A measure between turns binds nothing: no turn is open to bind it to.
       settle: async (profile, inputs) => {
