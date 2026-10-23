@@ -458,8 +458,10 @@ export class FakeSandbox {
   readonly startWaitOptions: unknown[] = [];
   /** Each platform start's options (D50). */
   readonly startOptions: (ContainerStartupOptions | undefined)[] = [];
-  /** Each snapshot the platform holds, and how a start from it behaves: `hang` never admits a command. */
-  readonly snapshots = new Map<string, 'ok' | 'hang'>();
+  /** Each snapshot the platform holds, and how a start from it behaves: `hang` never admits a command, `late` admits one
+   *  once {@link lateStart} is released. */
+  readonly snapshots = new Map<string, 'ok' | 'hang' | 'late'>();
+  readonly lateStart = gate();
   /** Every signal a native exec was given: the platform may act on one long after the exec settled. */
   readonly execSignals: AbortSignal[] = [];
   /** Ids never repeat, as the platform's do not: a deleted snapshot's id is not handed out again. */
@@ -1013,14 +1015,20 @@ export class FakeSandbox {
     return new Proxy(process, { get: (target, key: keyof ExecProcess) => (key === 'stdin' ? stdin : target[key]) });
   }
 
-  /** A start from a snapshot the platform no longer holds fails; one marked `hang` never comes up. */
-  #open(options: ContainerStartupOptions | undefined): Promise<void> {
+  /** A start from a snapshot the platform no longer holds fails; one marked `hang` never comes up, one marked `late` comes
+   *  up once {@link lateStart} is released. */
+  async #open(options: ContainerStartupOptions | undefined): Promise<void> {
     const snapshot = options?.containerSnapshot?.id;
 
     if (snapshot === undefined) return this.start(options);
     const behaviour = this.snapshots.get(snapshot);
 
     if (behaviour === 'hang') return new Promise<void>(() => undefined);
+
+    if (behaviour === 'late') {
+      this.lateStart.enter();
+      await this.lateStart.promise;
+    }
 
     if (behaviour === undefined) return Promise.reject(new Error(`snapshot ${snapshot} not found`));
 

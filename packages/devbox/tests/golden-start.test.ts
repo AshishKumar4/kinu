@@ -1,6 +1,6 @@
 // D65 at the box: a box with a golden builder never starts the bare base. It wakes its own snapshot,
 // else the golden, and with no golden it waits until the golden object tells it, with no clock.
-import { expect, test } from 'bun:test';
+import { expect, jest, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import type { GoldenAnswer } from '../src/golden';
 import { TOOLS_STAMP } from '../src/tools';
@@ -140,6 +140,52 @@ test('a golden the platform refuses is reported lost, and the box starts from th
   expect({ starts: container.startOptions.map(startedFrom), asked: golden.asked }).toEqual({
     starts: ['golden-gone', 'golden-1'], asked: ['golden?', 'lost golden-gone'],
   });
+});
+
+// Staging 99a13686c, 2026-10-23: a fresh golden's first start was not admitted within the snapshot cutover (10 s), the box
+// reported it lost, and the golden object retired it to rebuild, the contracts' next call refused for the rebuild.
+test('a golden start admitted after the snapshot cutover loses no golden, and the box starts from it once', async () => {
+  const { box, container } = fresh([{ kind: 'ready', id: 'golden-1', tools: PIN }, { kind: 'ready', id: 'golden-1', tools: PIN }]);
+  container.snapshots.set('golden-1', 'late');
+  jest.useFakeTimers();
+
+  try {
+    const starting = box.devboxStartup();
+
+    await container.lateStart.reached;
+    jest.advanceTimersByTime(60_000);
+    container.lateStart.release();
+    await starting;
+  } finally {
+    jest.useRealTimers();
+  }
+
+  expect({ starts: container.startOptions.map(startedFrom), asked: golden.asked, unready: (await box.devboxState()).unready }).toEqual({
+    starts: ['golden-1'], asked: ['golden?'], unready: undefined,
+  });
+});
+
+test('a golden start never admitted is reported lost after the golden\'s own admission bound, and the box starts from the next', async () => {
+  const { box, container } = fresh([{ kind: 'ready', id: 'golden-1', tools: PIN }, { kind: 'ready', id: 'golden-0', tools: PIN }]);
+  // Late and never released: it never comes up, and says when its start began.
+  container.snapshots.set('golden-1', 'late');
+  jest.useFakeTimers();
+
+  try {
+    const starting = box.devboxStartup();
+
+    await container.lateStart.reached;
+    jest.advanceTimersByTime(119_000);
+    const early = [...golden.asked];
+
+    jest.advanceTimersByTime(1_000);
+    await starting;
+    expect(early).toEqual(['golden?']);
+  } finally {
+    jest.useRealTimers();
+  }
+
+  expect({ starts: container.startOptions.map(startedFrom), asked: golden.asked }).toEqual({ starts: ['golden-1', 'golden-0'], asked: ['golden?', 'lost golden-1'] });
 });
 
 // Staging, 2026-10-08: a box refused a container for want of room reported its golden lost, and every box then waited on
