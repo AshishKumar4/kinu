@@ -12,7 +12,7 @@ import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   newestOpener, ownerAsks, planSurface,
 } from "@kinu.run/core";
-import { APP_ROUTES, threadLiveTail, type OwedOwnerIntent, type PlanReview, type SignalCard, type WorkspaceLayout } from "@kinu.run/core";
+import { APP_ROUTES, liveStep, threadLiveTail, type OwedOwnerIntent, type PlanReview, type SignalCard, type WorkspaceLayout } from "@kinu.run/core";
 import type { UIMessage } from "ai";
 import type { SubagentView } from "@kinu.run/core/protocol";
 import { useActorChat, useKinu } from "@/hooks/use-kinu";
@@ -23,6 +23,7 @@ import { useAgentsNav } from "@/hooks/use-agents-nav";
 import { usePendingAttachments } from "@/hooks/use-pending-attachments";
 import { useFileDrop } from "@/hooks/use-file-drop";
 import { useFocusLine } from "@/hooks/use-focus-line";
+import { ActivityView } from "@/components/workspaces/ActivityView";
 import { DESKTOP_LANDING, useWorkbenchSurfaces } from "@/hooks/use-workbench-surfaces";
 import NotFoundPage from "@/pages/NotFoundPage";
 import { useTurnAnnotations } from "@/hooks/use-turn-annotations";
@@ -539,7 +540,7 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
   if (focus !== null && !tabsShown && view === undefined) {
     return (
       <FocusBar
-        workspace={{ name: workspace, title, logo, to: `/workspace/${workspace}/overview` }}
+        workspace={{ name: workspace, title, logo, to: `/workspace/${workspace}/activity` }}
         agent={{
           label: focus.label ?? "", ...mascotOf(speaking?.key ?? "main", speaking?.colour ?? 0), activity: speaking?.activity,
         }}
@@ -592,6 +593,9 @@ function WorkspaceView({ view, workspace, title, state, agents, open, clearMain 
 
   // The desktop's own page went with D99: its address lands on the desktop where it lives now, the Environment surface.
   if (view === "desktop") return <Navigate to={`/workspace/${encodeURIComponent(workspace)}?${DESKTOP_LANDING}`} replace />;
+
+  // What the agent did and is doing, from its chat and its watches (1018-xao, Muse's activity log).
+  if (view === "activity") return <ActivityView workspace={workspace} title={title} rpc={state.rpc} now={liveStep(threadLiveTail({ last: state.messages.at(-1), liveness: state.liveness }))} />;
 
   if (view !== "overview") return <NotFoundPage />;
 
