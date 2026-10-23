@@ -85,7 +85,7 @@ class RefusedPage extends RpcTarget {
   }
 }
 
-const notTheDrawnPage = (): KinuError => new KinuError("forbidden", "this frame no longer holds the page the chat drew");
+const notTheDrawnPage = (): KinuError => new KinuError("denied", "this frame no longer holds the page the chat drew");
 
 /**
  * Where the page's calls go, as soon as there is one: a page drawn while its answer is still written calls before the
