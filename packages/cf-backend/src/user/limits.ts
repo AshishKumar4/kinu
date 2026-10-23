@@ -116,7 +116,7 @@ export class UserLimits {
    * nothing else runs between them and no second create races it.
    */
   admitWorkspace(): void {
-    settleSync(this.admit(admitWorkspace));
+    return settleSync(this.admit(admitWorkspace));
   }
 
   /** New bytes: `own`, the asking workspace's size as it reads it now, is taken first; the account's stores read if stale. */
@@ -124,13 +124,15 @@ export class UserLimits {
     await this.host.requireTier(caller, 'limits');
 
     if (own !== undefined) this.store.sampled(own.source, own.bytes, Date.now());
-    await this.admitNewBytes();
+
+    return this.admitNewBytes();
   }
 
   /** New bytes from this object's own surfaces (a Drive upload): the account's stores read if stale, then the limit. */
   async admitNewBytes(): Promise<void> {
     await this.refreshStorage();
-    await settle(this.admit(admitStoredBytes));
+
+    return settle(this.admit(admitStoredBytes));
   }
 
   /** `source` changed here (a Drive upload landed): read again at the next admission or Usage read. */
@@ -144,13 +146,16 @@ export class UserLimits {
    */
   async admitComputerStart(caller: UserCaller, workspace: string, size: ComputerSize): Promise<ComputerSize> {
     await this.host.requireTier(caller, 'limits');
-    await settle(this.admit((admission) => admitComputerStart(admission, workspace)));
-    const tier = await settle(this.tier());
-    const runs = tier === null ? size : startSize({ klass: this.klass(), tier }, size);
 
-    this.store.started(workspace, runs, Date.now());
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* this.admit((admission) => admitComputerStart(admission, workspace));
+      const tier = yield* this.tier();
+      const runs = tier === null ? size : startSize({ klass: this.klass(), tier }, size);
 
-    return runs;
+      this.store.started(workspace, runs, Date.now());
+
+      return runs;
+    }));
   }
 
   async computerTick(caller: UserCaller, workspace: string, size: ComputerSize): Promise<void> {
@@ -202,7 +207,8 @@ export class UserLimits {
    */
   async admitTurn(caller: UserCaller, platform: boolean): Promise<void> {
     await this.host.requireTier(caller, 'limits');
-    await settle(this.admit((admission) => (platform ? admitPlatformTurn(admission) : null)));
+
+    return settle(this.admit((admission) => (platform ? admitPlatformTurn(admission) : null)));
   }
 
   /** Tokens (input and output) a platform-model step spent, from the binding's own usage. */
@@ -214,9 +220,12 @@ export class UserLimits {
   async limits(caller: UserCaller): Promise<LimitsReport> {
     await this.host.requireTier(caller, 'limits');
     await this.refreshStorage(true);
-    const now = Date.now();
+
+    return settle(Effect.map(this.tier(), (tier) => this.reportOn(tier, Date.now())));
+  }
+
+  private reportOn(tier: FreeTier | null, now: number): LimitsReport {
     const { suspended } = this.store.standing();
-    const tier = await settle(this.tier());
     const klass = this.klass();
     const shown = suspended === null ? null : { at: suspended.at, reason: suspended.reason };
 
@@ -226,10 +235,12 @@ export class UserLimits {
   /** The account as the operators' accounts table reads it: its report, and its use whatever its class binds. */
   async account(caller: UserCaller): Promise<AccountLimits> {
     const report = await this.limits(caller);
-    const now = Date.now();
-    const tier = await settle(this.tier());
 
-    return { report, use: tier === null ? [] : limitReadings({ tier, use: this.use(now), now }) };
+    return settle(Effect.map(this.tier(), (tier) => {
+      const now = Date.now();
+
+      return { report, use: tier === null ? [] : limitReadings({ tier, use: this.use(now), now }) };
+    }));
   }
 
   /**
@@ -252,17 +263,16 @@ export class UserLimits {
   }
 
   /** The near note as a turn's account fact; none when there is nothing new, or the note could not be read (logged). */
-  async nearFact(caller: UserCaller): Promise<Fact | null> {
-    const note = await settle(Effect.catch(attempt({ doing: "reading the account's near limits for a turn", otherwise: 'unavailable' }, () => this.nearNote(caller)),
-      (failure) => Effect.sync(() => {
-        diagnostics.failure('limits.near_note_unread', failure);
+  nearFact(caller: UserCaller): Promise<Fact | null> {
+    const read = attempt({ doing: "reading the account's near limits for a turn", otherwise: 'unavailable' }, () => this.nearNote(caller));
 
-        return null;
-      })));
+    return settle(Effect.catch(Effect.map(read, (note): Fact | null => (note === null ? null : {
+      key: 'account limits', value: note, confidence: 1, source: 'limits', lastObservedAt: Date.now(), importance: 0.9, veracity: 'tool', origin: null,
+    })), (failure) => Effect.sync(() => {
+      diagnostics.failure('limits.near_note_unread', failure);
 
-    if (note === null) return null;
-
-    return { key: 'account limits', value: note, confidence: 1, source: 'limits', lastObservedAt: Date.now(), importance: 0.9, veracity: 'tool', origin: null };
+      return null;
+    })));
   }
 
   // The operator plane's (control-plane routes, as the owner capability, audited there).
