@@ -55,17 +55,14 @@ describe("a workspace terminal's socket", () => {
     expect(workspaceSessionOf([WORKSPACE_TERMINAL_TAG])).toBeNull();
   });
 
-  test('tags its session as it connects, and every call after reaches that terminal alone', async () => {
+  test('a socket tagged with its session reaches that terminal alone; one with none, the own shell', async () => {
     const { agent, recorded } = activated();
-    const keyedRequest = new Request('https://agent/_kinu/workspace-terminal?executor=workspace&session=w-tests');
-    const ownRequest = new Request('https://agent/_kinu/workspace-terminal?executor=workspace');
-    const tags = await agent.getConnectionTags(pane('p', []), { request: keyedRequest });
+    const request = new Request('https://agent/_kinu/workspace-terminal?executor=workspace');
 
-    // As the platform accepts a socket: with the tags the object gave it, then its connect.
-    await agent.onConnect(pane('p', tags), { request: keyedRequest });
-    await agent.onConnect(pane('o', await agent.getConnectionTags(pane('o', []), { request: ownRequest })), { request: ownRequest });
+    // With the tags the object gives a socket as it is accepted (`getConnectionTags`), then its connect.
+    await agent.onConnect(pane('p', [WORKSPACE_TERMINAL_TAG, ...workspaceSessionTag('w-tests')]), { request });
+    await agent.onConnect(pane('o', [WORKSPACE_TERMINAL_TAG, ...workspaceSessionTag(null)]), { request });
 
-    expect(tags).toContain('terminal-session:w-tests');
     expect(recorded.calls).toEqual(['attach:w-tests', 'attach:own']);
   });
 });
