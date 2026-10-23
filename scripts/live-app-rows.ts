@@ -1815,8 +1815,9 @@ async function clickedPage(page: Page, held: HeldCall): Promise<SlateUiVerdict['
 }
 
 async function firstPageReach(page: Page, heard: Promise<ScriptedRequest>, held: HeldCall): Promise<{ read: string; heard: boolean; kept: boolean; clicked: SlateUiVerdict['clicked'] }> {
-  const src = await page.$eval('[data-slate-ui="first"] iframe[src]', (frame) => frame.getAttribute('src') ?? '');
-  const frame = await page.waitForFrame((each) => each.url().startsWith(new URL(src).origin));
+  const frame = await (await page.$(`[data-slate-ui="first"] ${PAGE_FRAME}`))?.contentFrame();
+
+  if (frame === undefined || frame === null) throw new Error('the first page has no frame');
 
   await named("the first page's read", () => frame.waitForFunction(() => (document.getElementById('read')?.textContent ?? '') !== ''));
   const read = await frame.evaluate(() => document.getElementById('read')?.textContent ?? '');
@@ -1826,10 +1827,11 @@ async function firstPageReach(page: Page, heard: Promise<ScriptedRequest>, held:
   // The frame eases to the height the page tells once the read lands: a click aimed while it is shorter lands where
   // the button was, which reached no page (2 of 16 rows hung on Armada, 2026-10-18).
   const told = await frame.evaluate(() => Math.ceil(document.documentElement.getBoundingClientRect().height));
-  const frameHeight = `document.querySelector('[data-slate-ui="first"] iframe')?.getBoundingClientRect().height ?? 0`;
+  const firstFrame = `document.querySelector('[data-slate-ui="first"] ${PAGE_FRAME}')`;
+  const frameHeight = `${firstFrame}?.getBoundingClientRect().height ?? 0`;
 
   await until(page, 'the first frame as tall as its page', `(${frameHeight}) >= ${String(told)}`);
-  await settled(page, frameHeight, { box: `document.querySelector('[data-slate-ui="first"] iframe')` });
+  await settled(page, frameHeight, { box: firstFrame });
   await frame.click('#send');
   const request = await waitOn(page, 'the click reaching the agent', heard);
   const clicked = await clickedPage(page, held);

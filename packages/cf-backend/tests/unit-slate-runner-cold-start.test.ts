@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { present, scratchDir } from '@kinu.run/test-utils';
 import { SLATE_PAGE_PREAMBLE } from '@kinu.run/core';
 import { SLATE_SERVER_MODULE } from '@kinu.run/core/slates';
-import { slateRunnerSource } from '../src/slates/resident';
+import { ONLY_A_PAGE_PUSHES, PAGE_KEEPS_NO_DATA, slateRunnerSource } from '../src/slates/resident';
 
 /** Only `storage.sql` and `waitUntil` are read before `startProcess`. */
 interface RunnerCtx { readonly storage: { readonly sql: Record<string, never> }; waitUntil(task: Promise<void>): void }
@@ -32,8 +32,8 @@ interface RunnerInstance {
 
 interface RunnerClass { new (ctx: RunnerCtx, env: RunnerEnv): RunnerInstance }
 
-/** Dynamic import: the runner module is generated at runtime. */
-async function loadRunner(dir: string, application: string): Promise<RunnerClass> {
+/** Dynamic import: the runner module is generated at runtime. `page`: run as an answer's page's server. */
+async function loadRunner(dir: string, application: string, page = false): Promise<RunnerClass> {
   writeFileSync(join(dir, 'cf-stub.js'), [
     'export class DurableObject {',
     '  constructor(ctx, env) { this.ctx = ctx; this.env = env; }',
@@ -42,18 +42,21 @@ async function loadRunner(dir: string, application: string): Promise<RunnerClass
 
   // Scratch dirs live outside the repo, so capnweb resolves by absolute path.
   writeFileSync(join(dir, 'capnweb.js'), `export { newWorkersRpcResponse, newWebSocketRpcSession, RpcTarget } from ${JSON.stringify(import.meta.resolve('capnweb'))};`);
-  writeFileSync(join(dir, 'vendor.js'), 'export const react = ""; export const capnweb = ""; export const slateClient = "";');
+  writeFileSync(join(dir, 'vendor.js'), 'export const modules = {};');
   writeFileSync(join(dir, 'server.js'), SLATE_SERVER_MODULE);
   writeFileSync(join(dir, 'application.js'), application);
   writeFileSync(join(dir, 'runner.js'),
-    slateRunnerSource([], undefined, 'class').replace('"cloudflare:workers"', '"./cf-stub.js"'));
+    slateRunnerSource([], undefined, 'class', page).replace('"cloudflare:workers"', '"./cf-stub.js"'));
 
   const mod: { NimbusProcess?: RunnerClass } = await import(join(dir, 'runner.js'));
 
   return present(mod.NimbusProcess, "the runner module's NimbusProcess export");
 }
 
-function instanceOf(Runner: RunnerClass): RunnerInstance {
+/** What the runner asked of its host binding, in order. */
+type HostCalls = { member: string; args: readonly JsonInput[] }[];
+
+function instanceOf(Runner: RunnerClass, hostCalls: HostCalls = []): RunnerInstance {
   const kv = new Map<JsonInput, JsonInput>();
 
   const env: RunnerEnv = {
@@ -74,7 +77,13 @@ function instanceOf(Runner: RunnerClass): RunnerInstance {
         return Promise.resolve({ ok: false, reason: 'bad_input', error: `unknown storage op ${member}` });
       },
     },
-    __host: { call: () => Promise.resolve({ ok: true, value: null }) },
+    __host: {
+      call: (member: string, args: readonly JsonInput[]) => {
+        hostCalls.push({ member, args });
+
+        return Promise.resolve({ ok: true, value: null });
+      },
+    },
   };
 
   return new Runner({ storage: { sql: {} }, waitUntil() {} }, env);
@@ -143,5 +152,49 @@ describe('a page the slate serves from its own fetch', () => {
     const api = await runner.fetch(get('/api'));
 
     expect(await api.text()).toBe(JSON.stringify({ open: 3 }));
+  });
+});
+
+// 1023-ac: an answer's page's process, and any state it held, goes as the page is evicted from the sixteen kept, and
+// Save carries none of it. Its server keeps no state of its own: what it reads and writes is the workspace's db.
+describe("an answer's page's own server", () => {
+  test('is refused this.sql and this.storage, in words that say where its data goes; a saved slate keeps both', async () => {
+    const application = [
+      'import { SlateObject } from "./server.js";',
+      'export class Slate extends SlateObject {',
+      '  async fetch(request) {',
+      '    const read = new URL(request.url).pathname === "/sql" ? () => this.sql : () => this.storage;',
+      '    try { read(); return new Response("kept"); } catch (refused) { return new Response(refused.message); }',
+      '  }',
+      '}',
+    ].join('\n');
+
+    const page = instanceOf(await loadRunner(scratchDir('kinu-runner-page-server'), application, true));
+    const saved = instanceOf(await loadRunner(scratchDir('kinu-runner-saved-server'), application));
+    const answers = await Promise.all([page.fetch(get('/sql')), page.fetch(get('/storage')), saved.fetch(get('/sql')), saved.fetch(get('/storage'))]);
+
+    expect(await Promise.all(answers.map(async (answer) => answer.text()))).toEqual([PAGE_KEEPS_NO_DATA, PAGE_KEEPS_NO_DATA, 'kept', 'kept']);
+  });
+});
+
+// 1023-ac: a page's server sends its page what it did not ask for through the page's host, which tells the tabs that
+// draw it. A slate of files has its own page, which asks its class, and is told so.
+describe("an answer's page's server pushing to its page", () => {
+  test('sends the value to its host, and a slate of files is refused in words', async () => {
+    const application = [
+      'import { SlateObject } from "./server.js";',
+      'export class Slate extends SlateObject {',
+      '  async fetch() {',
+      '    try { await this.push({ open: 4 }); return new Response("pushed"); } catch (refused) { return new Response(refused.message); }',
+      '  }',
+      '}',
+    ].join('\n');
+
+    const asked: HostCalls = [];
+    const page = instanceOf(await loadRunner(scratchDir('kinu-runner-page-push'), application, true), asked);
+    const saved = instanceOf(await loadRunner(scratchDir('kinu-runner-saved-push'), application));
+
+    expect([await (await page.fetch(get('/'))).text(), await (await saved.fetch(get('/'))).text()]).toEqual(['pushed', ONLY_A_PAGE_PUSHES]);
+    expect(asked.map(({ member, args }) => [String(member), args])).toEqual([['push', [{ open: 4 }]]]);
   });
 });

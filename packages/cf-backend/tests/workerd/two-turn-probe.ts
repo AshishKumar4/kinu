@@ -342,8 +342,18 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
    *  and as a page's `workspace` call: `ok`, or the refusal's reason. */
   async answerSlates(agent: string): Promise<AgentSlateUi> {
     const reason = (result: SlateAnswer<unknown>) => (result.ok ? 'ok' : result.reason);
-    // A page's own call resolves its source first, so a block that resolves is refused only for the authority lent to it.
-    const call = async (id: string) => reason(await this.slateCallAs({ caller: ROOT_SLATE_CALLER, id: id, name: 'workspace', lineage: { incarnation: 'probe', generation: 0, ancestors: {} } }, { path: ['fs', 'stat'], args: ['/home'], invocation: null }));
+    const request = { path: ['fs', 'stat'], args: ['/home'], invocation: null };
+
+    // A page's own call resolves its source first, so a block that resolves is refused only for the authority lent to it:
+    // as its process calls, as the chat that draws it calls (1023-ac), and a method of its own server alike.
+    const call = async (id: string) => {
+      const served = reason(await this.slateCallAs({ caller: ROOT_SLATE_CALLER, id: id, name: 'workspace', lineage: { incarnation: 'probe', generation: 0, ancestors: {} } }, request));
+      const drawn = reason(await this.drawnSlateCall(id, request));
+      const method = reason(await this.drawnSlateCall(id, { method: 'word', args: [] }));
+
+      return served === drawn && (served === 'missing' || method === served) ? served : `served ${served}, drawn ${drawn}, method ${method}`;
+    };
+
     const { items } = await this.agentCall(agent, (isolate, snapshot) => isolate.historyPage(snapshot, {}));
     const answer = items.filter((item) => item.role === 'assistant').at(-1)?.id ?? 'none';
     const ask = items.filter((item) => item.role === 'user').at(-1)?.id ?? 'none';
@@ -412,12 +422,15 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
    * once the owner's next ask is a Plan one. The page's process is the same; its author's mode is read at the call.
    */
   async answerPageModes(): Promise<AnswerPageModes> {
-    const write = async () => {
-      const result = await this.slateCallAs({ caller: ROOT_SLATE_CALLER, id: 'a-page/card', name: 'workspace', lineage: { incarnation: 'probe', generation: 0, ancestors: {} } }, {
-        path: ['fs', 'write'], args: ['/home/main/page-mode.txt', 'written by the page'], invocation: null,
-      });
+    const request = { path: ['fs', 'write'], args: ['/home/main/page-mode.txt', 'written by the page'], invocation: null };
 
-      return result.ok ? 'ok' : result.reason;
+    // As its process calls (`slateCallAs`) and as the chat that draws it calls (`drawnSlateCall`, 1023-ac): one answer.
+    const write = async () => {
+      const served = await this.slateCallAs({ caller: ROOT_SLATE_CALLER, id: 'a-page/card', name: 'workspace', lineage: { incarnation: 'probe', generation: 0, ancestors: {} } }, request);
+      const drawn = await this.drawnSlateCall('a-page/card', request);
+      const [as, by] = [served, drawn].map((result) => (result.ok ? 'ok' : result.reason));
+
+      return as === by ? as : `served ${as}, drawn ${by}`;
     };
 
     await this.seedMainChat([

@@ -25,6 +25,7 @@ import { readFile } from 'node:fs/promises';
 import { createServer as createHttpServer } from 'node:http';
 import { extname, join, resolve, sep } from 'node:path';
 import type { Page } from 'puppeteer';
+import { stop as stopEsbuild } from 'esbuild';
 import { build } from 'vite';
 import * as v from 'valibot';
 import { renderThrownChain, tolerate, detach } from '@kinu.run/core/obs';
@@ -317,6 +318,9 @@ function builtGalleryDist(): Promise<string> {
       },
     });
 
+    // The page modules the gallery serves are bundled by esbuild in this process (`vite-slate-page-modules.ts`): its
+    // service ends with the build, not with the test that asked for it.
+    await stopEsbuild();
     // Its owner, recorded once vite has emptied and filled it: the `exit` handler above never runs when the process is
     // killed (a suite past its deadline, a hook past its wall), and the sweep before every suite reaps a root whose
     // recorded owner has ended (`reapAbandonedRoots`). Sixty-one leaked builds, 71 MiB each, filled the user's tmpfs
@@ -406,8 +410,9 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, opt
     });
 
     if (bytes === null) return;
-    // A face is read by the pages the chat draws itself, on an opaque origin, as the app serves it (app-shell.ts).
-    const face = extname(file) === '.woff2' ? { 'access-control-allow-origin': '*' } : {};
+    // A face or a page module is read by the pages the chat draws itself, on an opaque origin, as the app serves it
+    // (app-shell.ts).
+    const face = extname(file) === '.woff2' || pathname.includes('/assets/slate/') ? { 'access-control-allow-origin': '*' } : {};
 
     response.writeHead(200, { 'content-type': builtAssetContentType(file), 'content-length': String(bytes.byteLength), ...face });
     response.end(request.method === 'HEAD' ? undefined : bytes);

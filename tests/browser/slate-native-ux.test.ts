@@ -213,6 +213,74 @@ describe('an answer\'s page in the chat', () => {
     });
   });
 
+  // Its calls cross to its workspace over the port its frame sends the chat (1023-ac), made as the page: the workspace's
+  // db, and a method of the block's own server, whose module is inert in the page.
+  test("reaches its workspace and its own server through kinu:slate, on the port the chat carries, and hears its pushes", async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      try {
+        const frame = await openPage(page, origin, 'light', { width: 1280, height: 860 });
+
+        await frame.waitForFunction(() => (document.getElementById('served')?.textContent ?? '') !== '' && (document.getElementById('counted')?.textContent ?? '') !== '');
+
+        const drawn = await frame.evaluate(() => ({
+          counted: document.getElementById('counted')?.textContent ?? '',
+          served: document.getElementById('served')?.textContent ?? '',
+          server: document.querySelector('script[type="slate/server"]') !== null,
+        }));
+
+        expect(drawn).toEqual({ counted: 'counted {"id":"pg-a1/errors","count":12}', served: 'served errors by route', server: false });
+
+        // What its server pushes unasked reaches it on the same session: this page's, and not another's.
+        await page.evaluate(() => {
+          for (const [at, word] of [['ch-a1/latency', 'elsewhere'], ['pg-a1/errors', 'live']]) {
+            window.dispatchEvent(new CustomEvent('gallery:slate-push', { detail: { page: at, data: { word } } }));
+          }
+        });
+        await frame.waitForFunction(() => (document.getElementById('pushed')?.textContent ?? '') !== '');
+        expect(await frame.evaluate(() => document.getElementById('pushed')?.textContent ?? '')).toBe('pushed {"word":"live"}');
+      } finally { await page.close(); }
+    });
+  });
+
+  // A chart drawn with the library kinu:slate provides (1023-ac): served by the app, never reached outside, in the
+  // theme's own colours.
+  for (const theme of ['light', 'dark'] as const) {
+    test(`draws a chart with the library kinu:slate provides, in the ${theme} theme's colours`, async () => {
+      await withGallery(async ({ newPage, origin }) => {
+        const page = await newPage();
+
+        try {
+          await page.setViewport({ width: 1280, height: 860 });
+          await page.evaluateOnNewDocument((mode) => localStorage.setItem('theme', mode), theme);
+          await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=chart`, { waitUntil: 'networkidle0' });
+          const card = '[data-slate-inline="ch-a1/latency"] iframe[data-slate-drawn="page"]';
+
+          await page.waitForFunction((at) => (document.querySelector(at)?.getBoundingClientRect().height ?? 0) > 0, {}, card);
+          const frame = await (await page.$(card))?.contentFrame();
+
+          if (frame === undefined || frame === null) throw new Error('the chart page drew no frame');
+          await frame.waitForFunction(() => document.querySelector('.uplot canvas') !== null);
+
+          const drawn = await frame.evaluate(() => {
+            const canvas = document.querySelector('.uplot canvas');
+
+            return {
+              width: canvas instanceof HTMLCanvasElement ? canvas.width : 0,
+              accent: getComputedStyle(document.documentElement).getPropertyValue('--c-accent').trim() !== '',
+              legend: [...document.querySelectorAll('.u-legend .u-label')].map((label) => label.textContent ?? ''),
+            };
+          });
+
+          expect(drawn.width).toBeGreaterThan(300);
+          expect(drawn.accent).toBe(true);
+          expect(drawn.legend).toEqual(['Time', 'p50 ms', 'p95 ms']);
+        } finally { await page.close(); }
+      });
+    });
+  }
+
   // Opaque and sealed: whatever the page runs, nothing of the app's is within its reach, and nothing outside.
   test('reaches nothing: no cookie, storage or document of the app, no request out, not even to the app', async () => {
     await withGallery(async ({ newPage, origin }) => {

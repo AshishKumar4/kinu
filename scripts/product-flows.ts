@@ -203,10 +203,13 @@ export async function spliceSitsWhereItWasRead(target: FlowTarget): Promise<Spli
     const chatHas = (words: string): string => `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(words)})`;
 
     await sendAndSettle(page, SPLICE_PAGE_ASK);
-    // Its page reaches the agent through kinu:slate, so its process serves it once the answer is stored (1023-ac).
-    await until(page, 'the Ping page served', `document.querySelector('[data-slate-ui="ping"] iframe[src]') !== null`);
-    const src = await page.$eval('[data-slate-ui="ping"] iframe[src]', (frame) => frame.getAttribute('src') ?? '');
-    const frame = await page.waitForFrame((each) => each.url().startsWith(new URL(src).origin));
+    // The chat draws the Ping page itself, and carries its kinu:slate session to the agent (1023-ac).
+    const drawn = '[data-slate-ui="ping"] iframe[data-slate-drawn="page"]';
+
+    await until(page, 'the Ping page drawn', `document.querySelector(${JSON.stringify(drawn)}) !== null`);
+    const frame = await (await page.$(drawn))?.contentFrame();
+
+    if (frame === undefined || frame === null) throw new Error('the Ping page has no frame');
 
     await frame.waitForSelector('#ping');
 

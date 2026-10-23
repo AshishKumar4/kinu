@@ -18,6 +18,8 @@ test('the client module evaluates and its surface answers under a DOM shim', asy
     'export const useSyncExternalStore = (_subscribe, read) => read();',
     'export const createRoot = () => ({ render() {} });',
     'export const newWebSocketRpcSession = () => ({ onRpcBroken() {} });',
+    'export const newMessagePortRpcSession = () => ({ onRpcBroken() {} });',
+    'export class RpcTarget {}',
   ].join('\n'));
 
   const source = transpiler.transformSync(
@@ -41,7 +43,7 @@ test('the client module evaluates and its surface answers under a DOM shim', asy
 
   Object.assign(globalThis, {
     window: Object.assign(win, { parent: win }),
-    document: { documentElement: { style: { setProperty() {} }, dataset: {} }, referrer: '' },
+    document: { documentElement: { style: { setProperty() {} }, dataset: {}, hasAttribute: () => false }, referrer: '' },
     WebSocket: function () {},
   });
 
