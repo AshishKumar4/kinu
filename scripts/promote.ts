@@ -386,17 +386,20 @@ function storedVerdict(records: Records, key: string): DailyVerdict | undefined 
   return stored === undefined ? undefined : v.parse(DailyVerdictSchema, JSON.parse(stored));
 }
 
-/** The comparison may finish before the deploy writes its verified record. Keep them independent. */
-function assertEvalGate(sha: string, records: Records): void {
+/** Why the eval gate holds `sha`, or undefined. The comparison may finish before the deploy writes its verified record.
+ *  Keep them independent. */
+function evalGateHolds(sha: string, records: Records): string | undefined {
   const computer = storedVerdict(records, COMPUTER_EVALS_KEY);
   const proof = ownVerdict(records, sha);
   const computerChanged = computer === undefined ? [] : diffBetween(computer.measured, sha, { paths: COMPUTER_PATHS, names: true }).split('\n').filter((line) => line !== '');
 
-  const refused = evalGateRefusal(sha, { daily: storedVerdict(records, DAILY_EVALS_KEY), computer, computerChanged },
+  return evalGateRefusal(sha, { daily: storedVerdict(records, DAILY_EVALS_KEY), computer, computerChanged },
     proof === undefined ? undefined : { candidateBuild: proof.run.candidateBuild, verdict: proof.verdict }, Date.now());
-
-  if (refused !== undefined) throw new Error(`${sha} cannot be promoted: ${refused}`);
 }
+
+/** `check`'s exit when staging verified the build and serves it, and the eval gate alone holds it: production follows a
+ *  green staging past it, with the owner's words (stage.sh; owner, 2026-10-23, "Ship on staging green"). */
+const EVAL_HELD_EXIT = 7;
 
 
 export const verifiedKey = (sha: string): string => `verified/${sha}.json`;
@@ -934,7 +937,14 @@ async function checkCommand({ sha, origins, records }: Context): Promise<number>
   const verified = adoptedRecord(records, sha, false);
 
   await servedAs(origins.staging, sha, verified.downloads);
-  assertEvalGate(sha, records);
+  const held = evalGateHolds(sha, records);
+
+  if (held !== undefined) {
+    console.error(`promote: ${sha} cannot be promoted: ${held}`);
+
+    return EVAL_HELD_EXIT;
+  }
+
   console.log(`promote: ${sha} was verified on staging (version ${verified.stagingVersion}), staging serves that run's downloads, and the eval gate lets it through`);
 
   return 0;

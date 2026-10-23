@@ -20,6 +20,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { stripVTControlCharacters } from 'node:util';
 import * as v from 'valibot';
 import { parseResults, summarizePromptUsage, trials, type Assertion, type UsageMetadata } from '../evals/src/results';
 import { REPO_ROOT as root } from './repo-root';
@@ -35,9 +36,10 @@ const TAIL_LINES = 40;
 const MetaSchema = v.object({ environment: v.string(), mode: v.string(), sha: v.string(), startedAt: v.string() });
 
 const EntrySchema = v.variant('kind', [
+  // `external`: why the red is a provider's refusal and not the build's ({@link externalCause}), when its output says so.
   v.object({
     kind: v.literal('red'), phase: v.string(), what: v.string(), command: v.optional(v.string()), verdict: v.string(),
-    finding: v.string(), reproduce: v.string(), log: v.string(), tail: v.array(v.string()),
+    finding: v.string(), reproduce: v.string(), log: v.string(), tail: v.array(v.string()), external: v.optional(v.string()),
   }),
   v.object({ kind: v.literal('step'), phase: v.string(), what: v.string(), finding: v.string() }),
   v.object({ kind: v.literal('notice'), phase: v.string(), what: v.string(), notice: v.string() }),
@@ -71,6 +73,8 @@ const SummarySchema = v.object({
   /** The validator's startup reading of the deployed version, in ms, or null where it printed none or refused it. A
    *  summary written before 2026-10-13 holds none. */
   workerStartupMs: v.optional(v.nullable(v.number())),
+  /** Each red that is a provider's refusal, with why ({@link externalCause}); absent where none is. */
+  external: v.optional(v.array(v.object({ red: v.string(), cause: v.string() }))),
 });
 
 export type ReportSummary = v.InferOutput<typeof SummarySchema>;
@@ -116,6 +120,67 @@ export function openReport(environment: string, mode: string, sha: string, now =
   return dir;
 }
 
+/**
+ * A provider's own refusal to bill, as a first-run case reports a search none of whose calls were answered: `<case>/
+ * <subgoal>: <n> web search call(s), none answered: <call> "<entry>: <provider> answered <status>: <its words>` for each
+ * call, the provider's status and words as packages/core/src/web/search-chain.ts quotes them from its answer. Only that
+ * envelope, at the start of the test's first error: the same words quoted in an assertion are no provider's answer.
+ */
+const PROVIDER_REFUSALS: readonly { readonly cause: string; readonly said: RegExp }[] = [
+  // Production 06498fc55, 2026-10-23: the first-run tier's three web searches, on the owner's AI Gateway credits.
+  { cause: "the AI Gateway's credit balance is zero (Cloudflare, HTTP 402)", said: /[\w-]+ "[^"]*?: Cloudflare answered 402: Your AI Gateway credit balance is zero\b/gu },
+];
+
+const SEARCH_ENVELOPE = /^Error: [\w-]+\/[\w-]+: (\d+) web search call\(s\), none answered: /u;
+
+/** What a run prints when it failed past the tests vitest lists: a deadline (the tier's own, or the hang detector's and
+ *  the leftover check's, scripts/deadline.ts), a suite or an error outside any test. */
+const UNLISTED_FAILURES = [/^first-run: stopped before/mu, /^KILLED\s/mu, /^LEFT\s/mu, /Failed Suites \d+/u, /Unhandled (Errors|Rejection)/u];
+
+/** The verdict of a run vitest ended on its failed tests; a kill or any other exit is never a provider's refusal. */
+const TESTS_FAILED_VERDICT = 'exit 1';
+
+/** The provider's refusal `error`, a failed test's first error, is, or undefined: every call it names refused alike. */
+function refusalOf(error: string): string | undefined {
+  const calls = Number(SEARCH_ENVELOPE.exec(error)?.[1] ?? 0);
+
+  return PROVIDER_REFUSALS.find((refusal) => calls > 0 && (error.match(refusal.said) ?? []).length === calls)?.cause;
+}
+
+/**
+ * Why a red row is a provider's refusal and not the build's, or undefined. Only where its output says so with nothing
+ * left over: every vitest run it began printed its summary, the tier's spend check ran to its end and proved a live
+ * model (`tier liveness: PROVEN`, scripts/eval-spend.ts), the summaries count its failed tests, the first error of each
+ * is a provider's own refusal to bill ({@link refusalOf}), and nothing failed outside them. A run cut short, a 402 the
+ * code answers itself, any other runner's output and a run with any other failure hold.
+ */
+export function externalCause(colored: string): string | undefined {
+  // vitest colours its summary even into a log: production 06498fc55's ` FAIL ` is red-on-white.
+  const output = stripVTControlCharacters(colored);
+  const begun = (output.match(/^ RUN {2}v/gmu) ?? []).length;
+  const summaries = [...output.matchAll(/^\s+Tests\s+(?:(\d+) failed\b)?/gmu)];
+  const failed = summaries.reduce((sum, match) => sum + Number(match[1] ?? 0), 0);
+  const whole = begun > 0 && summaries.length === begun && /^tier liveness: PROVEN\b/mu.test(output);
+
+  if (!whole || failed === 0 || UNLISTED_FAILURES.some((marker) => marker.test(output))) return undefined;
+  const causes = output.split(/^ FAIL\s/mu).slice(1).map((block) => refusalOf(/^\w*Error: .*$/mu.exec(block)?.[0] ?? ''));
+
+  if (causes.length !== failed || causes.some((cause) => cause === undefined)) return undefined;
+
+  return `${[...new Set(causes)].join('; ')}, in ${String(failed)} failed test(s)`;
+}
+
+/** Whether production takes `summary`'s build past its reds: only when there are some and every one is a provider's
+ *  refusal, listed (owner, 2026-10-23, "Promote, list them"). Any other red holds it for Main. */
+export function externalOnly(summary: ReportSummary): { readonly promote: true; readonly listed: string } | { readonly promote: false; readonly held: readonly string[] } {
+  const external = new Map((summary.external ?? []).map((each) => [each.red, each.cause]));
+  const held = summary.reds.filter((red) => !external.has(red));
+
+  if (summary.reds.length === 0 || held.length > 0) return { promote: false, held };
+
+  return { promote: true, listed: summary.reds.map((red) => `${red}: ${external.get(red) ?? ''}`).join('; ') };
+}
+
 /** A red row of a ladder phase: its verdict, the command that reproduces it, its output's tail, and its whole output
  *  in a log of its own. */
 export function recordRed(dir: string, red: {
@@ -135,6 +200,7 @@ export function recordRed(dir: string, red: {
   append(dir, {
     kind: 'red', phase: red.phase, what: red.what, command: red.command, verdict: red.verdict, finding: red.finding,
     reproduce: red.reproduce, log, tail: red.output.trimEnd().split('\n').slice(-TAIL_LINES),
+    external: red.verdict === TESTS_FAILED_VERDICT ? externalCause(red.output) : undefined,
   });
 }
 
@@ -393,7 +459,8 @@ function redSections(reds: readonly ReportEntry[], isNew: (entry: ReportEntry) =
     for (const entry of reds) {
       if (entry.kind === 'red' && entry.phase === phase) {
         lines.push('', `### ${mark(entry)}: ${entry.what} (${entry.verdict})`, '', entry.finding, '',
-          ...entry.command === undefined ? [] : [`- command: \`${entry.command}\``], `- reproduce: \`${entry.reproduce}\``, `- whole output: ${entry.log}`, '',
+          ...entry.command === undefined ? [] : [`- command: \`${entry.command}\``], `- reproduce: \`${entry.reproduce}\``, `- whole output: ${entry.log}`,
+          ...entry.external === undefined ? [] : [`- external: ${entry.external}: the provider's refusal, not the build's, so it holds no promotion`], '',
           '```', ...entry.tail, '```');
       } else if (entry.kind === 'step' && entry.phase === phase) {
         lines.push('', `### ${mark(entry)}: ${entry.what}`, '', entry.finding);
@@ -430,6 +497,7 @@ export function renderReport(input: ReportInput): RenderedReport {
   const rowTimes = [...rows.values()].sort((a, b) => b.seconds - a.seconds).map((entry) =>
     `| ${entry.phase}: ${entry.what} | ${entry.seconds.toFixed(1)} | ${entry.silence === undefined ? '—' : entry.silence.toFixed(1)} | ${entry.command === undefined ? '—' : `\`${entry.command}\``} |`);
 
+  const external = reds.flatMap((entry) => (entry.kind === 'red' && entry.external !== undefined ? [{ red: identity(entry) ?? '', cause: entry.external }] : []));
   const ended = marks.get('end');
   const startups = entries.flatMap((entry) => (entry.kind === 'startup' ? [entry] : []));
   const deployedStartup = startups.filter((entry) => entry.at === 'deployed').at(-1)?.reading;
@@ -459,6 +527,7 @@ export function renderReport(input: ReportInput): RenderedReport {
       reds: reds.flatMap((entry) => identity(entry) ?? []), skipped: skipped.length,
       totalSeconds: marks.get('end') ?? null, liveSeconds: marks.get('live') ?? null, testable: marks.has('live'),
       workerStartupMs: typeof deployedStartup === 'number' ? deployedStartup : null,
+      external: external.length === 0 ? undefined : external,
     },
   };
 }
@@ -518,6 +587,20 @@ if (import.meta.main) {
     process.exit(reds.length > 0 ? 0 : 1);
   }
 
+  // `external <environment> <sha>`: exit 0, listing them, when every red of the last report of `sha` there is a
+  // provider's refusal ({@link externalOnly}); exit 1, naming what holds it, otherwise.
+  if (command === 'external' && rest.length === 1) {
+    const index = join(REPORTS, first, 'index.jsonl');
+
+    const last = existsSync(index) ? readFileSync(index, 'utf8').split('\n').filter((line) => line !== '').map((line) => v.parse(SummarySchema, JSON.parse(line)))
+      .filter((each) => each.sha === rest[0]).at(-1) : undefined;
+
+    const verdict: ReturnType<typeof externalOnly> = last === undefined ? { promote: false, held: [`no ${first} report of ${rest[0] ?? ''}`] } : externalOnly(last);
+
+    console.log(verdict.promote ? verdict.listed : `held by: ${verdict.held.join('; ')}`);
+    process.exit(verdict.promote ? 0 : 1);
+  }
+
   if (command === 'budget' && rest.length === 1) {
     const input = readReport(first);
     const red = input.meta.mode === 'gates-only' ? undefined : budgetRed(Number(rest[0]));
@@ -550,6 +633,6 @@ if (import.meta.main) {
     process.exit(summary.reds.length === 0 ? 0 : 1);
   }
 
-  console.error('usage: bun scripts/deploy-report.ts open|note|dispatched|startup|mark|when|holds-red|budget|render …');
+  console.error('usage: bun scripts/deploy-report.ts open|note|dispatched|startup|mark|when|holds-red|external|budget|render …');
   process.exit(2);
 }
