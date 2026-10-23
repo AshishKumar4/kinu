@@ -188,36 +188,36 @@ describe('the db capability on Durable Object SQLite', () => {
   test('db.sql reaches the shared tables only, whatever path its statement takes', async () => {
     const run = await probe('sql-reach').program(`
       // Shared rows, then every way a statement might reach past them
-      await db.sql('CREATE TABLE IF NOT EXISTS orders (id INTEGER PRIMARY KEY, item TEXT NOT NULL, n INTEGER)', []);
+      await db.sql('CREATE TABLE IF NOT EXISTS app_orders (id INTEGER PRIMARY KEY, item TEXT NOT NULL, n INTEGER)', []);
       await db.createTable({ name: 'mine', scope: 'actor', columns: [{ name: 'k', type: 'text' }] });
-      const wrote = await db.sql('INSERT INTO orders (item, n) VALUES (?, ?), (?, ?) RETURNING id', ['tea', 2, 'cake', 1]);
-      const read = await db.sql('SELECT item, sum(n) AS total FROM orders GROUP BY item ORDER BY total DESC LIMIT 10', []);
+      const wrote = await db.sql('INSERT INTO app_orders (item, n) VALUES (?, ?), (?, ?) RETURNING id', ['tea', 2, 'cake', 1]);
+      const read = await db.sql('SELECT item, sum(n) AS total FROM app_orders GROUP BY item ORDER BY total DESC LIMIT 10', []);
       const reached = {};
       const attempts = {
-        subquery: 'SELECT item FROM orders WHERE id IN (SELECT rowid FROM workspace_actors)',
+        subquery: 'SELECT item FROM app_orders WHERE id IN (SELECT rowid FROM workspace_actors)',
         cte: 'WITH x AS (SELECT * FROM run_events) SELECT * FROM x',
-        join: 'SELECT * FROM orders JOIN agent_data_tables',
-        insertSelect: 'INSERT INTO orders (item) SELECT name FROM workspace_actors',
+        join: 'SELECT * FROM app_orders JOIN agent_data_tables',
+        insertSelect: 'INSERT INTO app_orders (item) SELECT name FROM workspace_actors',
         createAs: 'CREATE TABLE copy AS SELECT * FROM workspace_actors',
         clearHost: 'DELETE FROM agent_data_tables',
         withDelete: 'WITH x AS (SELECT 1) DELETE FROM workspace_actors WHERE rowid IN (SELECT * FROM x)',
         master: 'SELECT name FROM sqlite_master',
         schema: 'SELECT name FROM sqlite_schema',
-        pragmaFunction: "SELECT * FROM pragma_table_info('orders')",
+        pragmaFunction: "SELECT * FROM pragma_table_info('app_orders')",
         actorTable: 'SELECT * FROM mine',
         actorTableStored: 'SELECT * FROM app_mine',
-        second: 'SELECT 1; DELETE FROM orders',
-        trigger: 'CREATE TRIGGER t AFTER INSERT ON orders BEGIN DELETE FROM run_events; END',
+        second: 'SELECT 1; DELETE FROM app_orders',
+        trigger: 'CREATE TRIGGER t AFTER INSERT ON app_orders BEGIN DELETE FROM run_events; END',
         view: 'CREATE VIEW v AS SELECT * FROM workspace_actors',
         index: 'CREATE INDEX ix ON workspace_actors(name)',
         alter: 'ALTER TABLE workspace_actors ADD COLUMN x TEXT',
-        drop: 'DROP TABLE orders',
+        drop: 'DROP TABLE app_orders',
         pragma: 'PRAGMA writable_schema = 1',
         attach: "ATTACH DATABASE ':memory:' AS x",
       };
       for (const [name, query] of Object.entries(attempts)) reached[name] = (await db.sql(query, [])).reason ?? 'ran';
       reached.binds = (await db.sql('SELECT ' + Array.from({ length: 101 }, () => '?').join(', '), Array.from({ length: 101 }, (_, at) => at))).reason ?? 'ran';
-      const rest = await db.sql('SELECT count(*) AS n FROM orders', []);
+      const rest = await db.sql('SELECT count(*) AS n FROM app_orders', []);
       return { wrote, read: read.rows, reached, rest: rest.rows };
     `, 'main');
 

@@ -188,9 +188,9 @@ export const DB = {
   }),
   sql: dbOp({
     name: 'sql', impact: 'mutate',
-    help: "One SQL statement over this workspace's shared tables (`scope: 'workspace'`), each `?` bound from `params` in order: "
-      + '`db.sql(query, params)`, params an array (`[]` for none), as a call takes no rest arguments. Answers its rows, and '
-      + 'how many a write changed; CREATE TABLE declares a shared table.',
+    help: "One SQL statement over this workspace's shared tables (`scope: 'workspace'`). SQL tables are named app_<name>; the "
+      + 'typed calls use <name>. Each `?` binds from `params` in order: `db.sql(query, params)`, params an array (`[]` for '
+      + 'none), as a call takes no rest arguments. Answers its rows, and how many a write changed.',
     input: v.strictObject({
       query: v.pipe(v.string(), v.minLength(1), v.check(
         (query) => new TextEncoder().encode(query).length <= STATEMENT_BYTES_MAX,

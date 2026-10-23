@@ -2,8 +2,9 @@
  * `db.sql`: one SQL statement over the workspace's shared tables. What a statement may reach is decided from the program
  * SQLite compiles for it (`EXPLAIN`), never from its text: every b-tree it opens, clears or changes must be a shared
  * table's or one of its indexes', and every opcode is one this gate classifies, so an opcode a SQLite upgrade adds is
- * refused until it is. The text is read only to keep it one statement, bind its `?` in order, address tables by their
- * names, and translate `CREATE TABLE` into a declaration.
+ * refused until it is. The text is read only to keep it one statement, bind its `?` in order, and translate `CREATE
+ * TABLE` into a declaration. A table is addressed by the name it is stored under, `app_<name>`, so nothing in a statement
+ * is rewritten: the prefix is what keeps the app's names apart from Kinu's in the one database.
  */
 
 import { Effect } from 'effect';
@@ -19,17 +20,6 @@ interface Token {
   /** A word's or a quoted identifier's name, unquoted. */
   readonly name?: string;
 }
-
-/** SQLite's keywords: a bare one is never a table's name, whatever a table is called. */
-const KEYWORDS = new Set(`ABORT ACTION ADD AFTER ALL ALTER ALWAYS ANALYZE AND AS ASC ATTACH AUTOINCREMENT BEFORE BEGIN BETWEEN
-  BY CASCADE CASE CAST CHECK COLLATE COLUMN COMMIT CONFLICT CONSTRAINT CREATE CROSS CURRENT CURRENT_DATE CURRENT_TIME
-  CURRENT_TIMESTAMP DATABASE DEFAULT DEFERRABLE DEFERRED DELETE DESC DETACH DISTINCT DO DROP EACH ELSE END ESCAPE EXCEPT
-  EXCLUDE EXCLUSIVE EXISTS EXPLAIN FAIL FILTER FIRST FOLLOWING FOR FOREIGN FROM FULL GENERATED GLOB GROUP GROUPS HAVING IF
-  IGNORE IMMEDIATE IN INDEX INDEXED INITIALLY INNER INSERT INSTEAD INTERSECT INTO IS ISNULL JOIN KEY LAST LEFT LIKE LIMIT
-  MATCH MATERIALIZED NATURAL NO NOT NOTHING NOTNULL NULL NULLS OF OFFSET ON OR ORDER OTHERS OUTER OVER PARTITION PLAN
-  PRAGMA PRECEDING PRIMARY QUERY RAISE RANGE RECURSIVE REFERENCES REGEXP REINDEX RELEASE RENAME REPLACE RESTRICT RETURNING
-  RIGHT ROLLBACK ROW ROWS SAVEPOINT SELECT SET TABLE TEMP TEMPORARY THEN TIES TO TRANSACTION TRIGGER UNBOUNDED UNION
-  UNIQUE UPDATE USING VACUUM VALUES VIEW VIRTUAL WHEN WHERE WINDOW WITH WITHOUT`.split(/\s+/u));
 
 const WORD_START = /[A-Za-z_\u0080-\uffff]/u;
 
@@ -170,7 +160,10 @@ export function readSqlStatement(text: string): Effect.Effect<SqlStatement, Kinu
 
 const COLUMN_TYPES = new Map<string, AppColumnType>([['INTEGER', 'integer'], ['INT', 'integer'], ['REAL', 'real'], ['TEXT', 'text'], ['BLOB', 'blob']]);
 
-const TAKES = 'a table name, then in parentheses each column as a name and a type of INTEGER, REAL, TEXT or BLOB, with PRIMARY KEY, UNIQUE or NOT NULL';
+/** What a table is named in SQL: the name its typed calls use, under this prefix. */
+export const SQL_TABLE_PREFIX = 'app_';
+
+const TAKES = `a table named ${SQL_TABLE_PREFIX}<name>, then in parentheses each column as a name and a type of INTEGER, REAL, TEXT or BLOB, with PRIMARY KEY, UNIQUE or NOT NULL`;
 
 /** A column's constraints, each as declared by `db.createTable`. */
 interface ColumnConstraints {
@@ -229,7 +222,8 @@ function tableDeclaration(tokens: readonly Token[]): Effect.Effect<SqlTableDecla
   const ifNotExists = word('IF');
 
   if (ifNotExists && !(word('NOT') && word('EXISTS'))) return Effect.fail(takes);
-  const table = name();
+  const stored = name();
+  const table = stored?.startsWith(SQL_TABLE_PREFIX) === true ? stored.slice(SQL_TABLE_PREFIX.length) : null;
 
   if (table === null || !punct('(')) return Effect.fail(refusal(`it takes ${TAKES}; a table made from a query is not one`));
   const columns: SqlTableDeclaration['columns'][number][] = [];
@@ -249,21 +243,13 @@ function tableDeclaration(tokens: readonly Token[]): Effect.Effect<SqlTableDecla
   return punct(')') && at === tokens.length ? Effect.succeed({ name: table, ifNotExists, columns }) : Effect.fail(refusal(`it takes ${TAKES}, and nothing more`));
 }
 
-/** Its tables named as they are stored: a name a shared table holds, bare or quoted and not a column after `.`. */
-export function storedText(tokens: readonly Token[], stored: (name: string) => string | null): string[] {
+/** Its text cut at its placeholders, each cut where a value binds. */
+export function boundSegments(tokens: readonly Token[]): string[] {
   const segments = [''];
-  let previous: Token | undefined;
 
   for (const token of tokens) {
     if (token.kind === 'param') segments.push('');
-    else {
-      const named = token.kind === 'quoted' || (token.kind === 'word' && !KEYWORDS.has(token.text.toUpperCase()));
-      const physical = named && !(previous?.kind === 'punct' && previous.text === '.') ? stored(token.name ?? token.text) : null;
-
-      segments[segments.length - 1] += physical === null ? token.text : `"${physical}"`;
-    }
-
-    if (token.kind !== 'space') previous = token;
+    else segments[segments.length - 1] += token.text;
   }
 
   return segments;

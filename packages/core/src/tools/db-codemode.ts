@@ -13,7 +13,7 @@ import {
   ACTOR_COLUMN, BOUND_PARAMS_MAX, ColumnSchema, DB, IDENTIFIER, OperatorCarrierSchema, OpSchema, PredicateOperationSchema, PredicateSchema,
   SELECT_LIMIT_DEFAULT, SELECT_LIMIT_MAX, SelectSchema, TableNameSchema, TableSpecSchema, WhereSchema, type AppColumnType,
 } from '../operations/db';
-import { ExplainRowSchema, gateProgram, readSqlStatement, storedText, type SqlTableDeclaration } from '../operations/db-sql';
+import { boundSegments, ExplainRowSchema, gateProgram, readSqlStatement, SQL_TABLE_PREFIX, type SqlTableDeclaration } from '../operations/db-sql';
 import { codemodeNamespace } from './operation-surfaces';
 import type { RawSqlExec, SqlExecutor, SqlValue } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -31,7 +31,8 @@ export {
   type AppMutation, type AppTableScope, type DbOpRecord,
 } from '../types/app-store';
 
-const APP_TABLE_PREFIX = 'app_';
+/** SQL addresses a table by this stored name (`db-sql.ts`). */
+const APP_TABLE_PREFIX = SQL_TABLE_PREFIX;
 
 /** Deliberately outside `app_`, so no logical name can address the catalogue. */
 const AGENT_DATA_CATALOG = 'agent_data_tables';
@@ -908,14 +909,14 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
     }
 
     const tables = yield* sharedTables(doing);
-    const segments = storedText(statement.tokens, (name) => tables.get(name.toLowerCase()) ?? null);
+    const segments = boundSegments(statement.tokens);
     const values = params.map((value) => (typeof value === 'boolean' ? Number(value) : value));
 
     // Compiling is all EXPLAIN does, so what fails here is the statement's own: a word SQLite does not read, a table it
     // does not find.
     const explained = yield* Effect.mapError(
       execute<unknown>(sql, Statement.of([`EXPLAIN ${segments[0] ?? ''}`, ...segments.slice(1)], values), doing),
-      (failed) => new KinuError('bad_input', failed.message.includes('no such table') ? `${failed.message}: SQL reaches the workspace's shared tables, which db.listTables names` : failed.message, { cause: failed }),
+      (failed) => new KinuError('bad_input', failed.message.includes('no such table') ? `${failed.message}: in SQL a shared table is ${APP_TABLE_PREFIX}<name>, each <name> one db.listTables names` : failed.message, { cause: failed }),
     );
 
     const program = yield* parseInput(v.array(ExplainRowSchema), { value: explained, where: 'its compiled program' });
