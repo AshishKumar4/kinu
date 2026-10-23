@@ -7,12 +7,14 @@
  *
  *   CLOUDFLARE_ACCOUNT_ID=… CLOUDFLARE_API_TOKEN=… bun scripts/decision-agreement.ts --turns turns.jsonl --model <spec>
  *   … bun scripts/decision-agreement.ts --db workspace.sqlite [--limit 40] --model <spec>
+ *   … bun scripts/decision-agreement.ts --db workspace.sqlite --model claude/<id> --claude-token-file <file>
  *
  * `--turns` reads one `{request, actions, answer, followup}` object a line; `--db` reads the rated turns a workspace's
  * `turn_ratings` holds, one per turn. Clef runs on Workers AI with the account's token. `--model` is a fast-tier spec,
  * resolved as a CLI resolves it: `workers-ai/@cf/…` on the same account, any other provider on the eval keys
  * (`eval-provider-keys.json`); or `workers-ai/@cf/cloudflare/clef-flash`, the decision model an owner may pick instead
- * of Clef, whose agreement is the bar (`TRUST_BAR`).
+ * of Clef, whose agreement is the bar (`TRUST_BAR`). A `claude/` spec runs on a Claude plan login whose access token
+ * `--claude-token-file` holds (read at each call, renewed by nothing here), as a Claude-only CLI workspace's fast tier would.
  */
 import { readFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
@@ -29,6 +31,8 @@ import {
 import { answerStructured } from '../packages/core/src/evolution/structured-decision';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '../packages/core/src/providers/workers-ai';
 import { createLocalModelResolver } from '../packages/cli-backend/src/model-resolver';
+import type { LocalOAuthStore } from '../packages/cli-backend/src/oauth-store';
+import { CLAUDE_CRED_KEY, credentialToHeaders } from '../packages/core/src/index';
 import { parseModelSpec } from '../packages/core/src/providers/types';
 import { routedLlm } from '../packages/core/src/profiles/model-lane';
 import type { ModelRouteResolution } from '../packages/core/src/profiles/model-route';
@@ -136,7 +140,7 @@ export function clefRun(account: string, token: string): DecisionRun {
 
 /** `spec` as a CLI resolves it (`createLocalModelResolver`, the one model stack): Workers AI through the account's
  *  endpoint, every other provider on the eval keys (`eval-provider-keys.json`). */
-function chatModel(spec: string, cloudflare: { readonly account: string; readonly token: string }): LanguageModel {
+function chatModel(spec: string, cloudflare: { readonly account: string; readonly token: string }, claudeTokenFile: string | undefined): LanguageModel {
   const file = keysIn(EVAL_PROVIDER_KEYS);
 
   const resolver = createLocalModelResolver({
@@ -146,9 +150,25 @@ function chatModel(spec: string, cloudflare: { readonly account: string; readonl
     },
     defaultSpec: spec,
     credentials: () => ({ apiKeyAccounts: 'why' in file ? {} : file.keys }),
+    ...(claudeTokenFile !== undefined && { oauthStore: claudeLogin(claudeTokenFile) }),
   });
 
   return resolver.resolveModel(spec, { sessionAffinity: 'kinu-agreement', workspaceAffinity: 'kinu-agreement' });
+}
+
+/** A Claude plan login whose access token `tokenFile` holds, read at each call. */
+function claudeLogin(tokenFile: string): LocalOAuthStore {
+  return {
+    keys: () => [CLAUDE_CRED_KEY],
+    has: (key) => key === CLAUDE_CRED_KEY,
+    getAuth: async (key) => {
+      if (key !== CLAUDE_CRED_KEY) return null;
+      const accessToken = readFileSync(tokenFile, 'utf8').trim();
+
+      return { headers: credentialToHeaders(CLAUDE_CRED_KEY, { kind: 'oauth', accessToken, expiresAt: Number.MAX_SAFE_INTEGER }), credentialKey: key };
+    },
+    save: async () => { throw new Error('this measurement holds a borrowed plan login and renews none'); },
+  };
 }
 
 /** The chat model answering categories, alone on its route, as the fast tier's decider asks it. */
@@ -202,7 +222,7 @@ export async function inFours<Item, Pair>(items: readonly Item[], pair: (item: I
 
 if (import.meta.main) {
   const { values } = parseArgs({
-    options: { turns: { type: 'string' }, db: { type: 'string' }, limit: { type: 'string' }, model: { type: 'string' } },
+    options: { turns: { type: 'string' }, db: { type: 'string' }, limit: { type: 'string' }, model: { type: 'string' }, 'claude-token-file': { type: 'string' } },
   });
 
   const account = process.env.CLOUDFLARE_ACCOUNT_ID;
@@ -224,7 +244,7 @@ if (import.meta.main) {
 
   const structured = isDecisionModel(measured)
     ? createDecisionPort({ run: clefRun(account, token), model: async () => measured, report: () => {}, refusals: { changes: () => 0, refused: () => {}, answered: () => {} } })
-    : structuredPort(measured, chatModel(measured, { account, token }));
+    : structuredPort(measured, chatModel(measured, { account, token }, values['claude-token-file']));
 
   const ratings = await inFours(turns, async (turn) => ({ clef: await rated(clef, turn), structured: await rated(structured, turn) }));
 
