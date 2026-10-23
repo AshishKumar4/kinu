@@ -7,6 +7,7 @@
 import { Effect } from 'effect';
 import { diagnostics, hold } from '../obs/index';
 import { copyHeaders } from '../providers/fetch-shim';
+import { safeJsonParse } from '../utils/json';
 import { describeMcpTool, type ListedMcpTools, type McpToolRefusal } from '../tools/mcp-surface';
 import type { McpConnectionStatus } from './servers';
 
@@ -23,29 +24,59 @@ export function mcpCredentialTransport(
   serverUrl: string,
   openHeaders: () => Promise<Record<string, string> | null>,
   signIn: 'first' | 'when-asked' = 'when-asked',
+  refused: (refusal: McpRefusal) => void = () => undefined,
 ): McpCredentialTransport {
   const endpoint = new URL(serverUrl);
 
+  const sent = async (url: string | URL, init?: RequestInit): Promise<Response> => {
+    const at = new URL(url.toString());
+
+    if (at.origin !== endpoint.origin) return fetch(url, init);
+
+    if (signIn === 'first' && at.pathname === endpoint.pathname && !copyHeaders(init?.headers).has('authorization')) {
+      return new Response(null, { status: 401, headers: { 'www-authenticate': 'Bearer' } });
+    }
+
+    const credential = await openHeaders();
+
+    if (credential === null || Object.keys(credential).length === 0) return fetch(url, init);
+    const headers = copyHeaders(init?.headers);
+
+    for (const [name, value] of Object.entries(credential)) headers.set(name, value);
+
+    return fetch(url, { ...init, headers, redirect: 'manual' });
+  };
+
   return {
-    fetch: refreshingOnce(async (url: string | URL, init?: RequestInit): Promise<Response> => {
-      const at = new URL(url.toString());
+    fetch: refreshingOnce(async (url, init) => {
+      const response = await sent(url, init);
 
-      if (at.origin !== endpoint.origin) return fetch(url, init);
-
-      if (signIn === 'first' && at.pathname === endpoint.pathname && !copyHeaders(init?.headers).has('authorization')) {
-        return new Response(null, { status: 401, headers: { 'www-authenticate': 'Bearer' } });
+      // The SDK keeps only the status and the body of a refusal, and a server may answer one with its whole result
+      // (Gmail's MCP refuses a token with its tool list, 2026-10-23); what the server said of the token is kept here.
+      if (!response.ok && new URL(url.toString()).origin === endpoint.origin) {
+        refused({ method: init?.method ?? 'GET', rpc: rpcMethodOf(init), status: response.status, wwwAuthenticate: response.headers.get('www-authenticate') });
       }
 
-      const credential = await openHeaders();
-
-      if (credential === null || Object.keys(credential).length === 0) return fetch(url, init);
-      const headers = copyHeaders(init?.headers);
-
-      for (const [name, value] of Object.entries(credential)) headers.set(name, value);
-
-      return fetch(url, { ...init, headers, redirect: 'manual' });
+      return response;
     }),
   };
+}
+
+/** A server's own origin refusing a request: its status and what its `WWW-Authenticate` said, never its body. */
+export interface McpRefusal {
+  readonly method: string;
+  /** The JSON-RPC method the request carried (`tools/list`), or null for one that carried none or several. */
+  readonly rpc: string | null;
+  readonly status: number;
+  readonly wwwAuthenticate: string | null;
+}
+
+/** The one JSON-RPC method a request's body names; a body that is not JSON (`safeJsonParse` keeps it as text) names none. */
+function rpcMethodOf(init: RequestInit | undefined): string | null {
+  if (typeof init?.body !== 'string') return null;
+  const message = safeJsonParse(init.body);
+
+  return typeof message === 'object' && message !== null && !Array.isArray(message) && typeof message['method'] === 'string' ? message['method'] : null;
 }
 
 /** The one transport option the SDK's persistence whitelist does not keep. */

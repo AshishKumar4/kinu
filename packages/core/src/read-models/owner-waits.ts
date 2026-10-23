@@ -165,6 +165,7 @@ function waitText(parked: ApprovalKind): string {
     case 'write': return parked.write.path;
     case 'slate-effect': return `slate ${parked.effect.slate}: ${parked.effect.tool} on ${parked.effect.server}`;
     case 'mail-send': return `mail from ${parked.send.from} to ${parked.send.to.join(', ')}: ${parked.send.subject}`;
+    case 'google-write': return `Google: ${parked.write.method}`;
     case 'command': return parked.command;
   }
 }

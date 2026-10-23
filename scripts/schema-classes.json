@@ -1,8 +1,14 @@
 {
   "account": [
+    "account_computer_running",
+    "account_computer_usage",
     "account_epochs",
+    "account_limit_notices",
     "account_memory_proposals",
+    "account_model_usage",
     "account_notes",
+    "account_standing",
+    "account_storage",
     "agent_fact_history",
     "agent_facts",
     "builtin_accounts",
@@ -135,6 +141,7 @@
     "slate_edit_marks",
     "slate_file_manifest",
     "slate_images",
+    "slate_picture_graves",
     "slate_pictures",
     "slate_publications",
     "slate_share_users",
@@ -367,8 +374,10 @@
     "workspace_identity"
   ],
   "control": [
+    "cp_account_standing",
     "cp_audit",
     "cp_feedback",
+    "cp_invites",
     "cp_users",
     "cp_workspaces",
     "gallery_installs",
@@ -382,6 +391,7 @@
     "mail_addresses",
     "mail_allow",
     "mail_attachments",
+    "mail_blob_graves",
     "mail_box",
     "mail_messages",
     "mail_threads"

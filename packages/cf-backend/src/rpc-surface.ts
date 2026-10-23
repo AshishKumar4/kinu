@@ -66,6 +66,7 @@ const USER_DO_METHODS = [
   'decideSlateEffect',
   'accountMemory_decide',
   'accountMemory_facts',
+  'accountMemory_turnFacts',
   'accountMemory_forget',
   'accountMemory_forgetNote',
   'accountMemory_propose',
@@ -126,6 +127,9 @@ const USER_DO_METHODS = [
   'issueDeviceConnectTicket',
   'issueDeviceJoin',
   'joinDevice',
+  'opsBookmark',
+  'opsRestart',
+  'opsRestore',
   'opsTables',
   'listAIGateways',
   'listAccessTokens',
@@ -170,6 +174,9 @@ const USER_DO_METHODS = [
   'acknowledgeUnstoppedDevice',
   'cancelDeviceRequestsForAgent',
   'cancelDeviceRequestsForBackgroundJob',
+  'googleCall',
+  'googleConnection',
+  'googleToken',
   'grantDeviceConsent',
   'revokeDeviceConsent',
   'revokeSecretGrant',
@@ -200,6 +207,8 @@ const USER_DO_METHODS = [
   'userMcp_githubRefresh',
   'userMcp_handleOAuthCallback',
   'userMcp_beginConnect',
+  'userMcp_reconnect',
+  'evalAbortActivation',
   'userMcp_connectedPresets',
   'userMcp_list',
   'userMcp_presets',
@@ -238,21 +247,35 @@ const USER_DO_METHODS = [
   'drive_startDownload',
   'drive_readChunk',
   'drive_abortDownload',
+  'limits',
+  'limits_account',
+  'limits_nearNote',
+  'limits_admitStoredBytes',
+  'limits_storageSampled',
+  'limits_admitComputerStart',
+  'limits_computerTick',
+  'limits_computerStopped',
+  'limits_admitTurn',
+  'limits_platformTokensSpent',
+  'limits_setClass',
+  'limits_suspend',
+  'limits_unsuspend',
+  'limits_inviteRedeemed',
 ] as const satisfies readonly (keyof UserDO)[];
 
 export type UserDoRpcMethod = (typeof USER_DO_METHODS)[number];
 
 export const USER_DO_RPC_SURFACE: readonly string[] = [...PLATFORM_RPC_SURFACE, ...USER_DO_METHODS];
 
-/** Never gated: a deletion must work when start throws, and the deploy's tables walk reads tables alone. */
-const USER_DO_STARTLESS: ReadonlySet<string> = new Set(['deleteAccount', 'opsTables']);
+/** Never gated: a deletion must work when start throws, the deploy's tables walk reads tables alone, a restore
+ *  must reach storage the start refuses, and an eval's abort ends the activation the start would begin. */
+const USER_DO_STARTLESS: ReadonlySet<string> = new Set(['deleteAccount', 'opsTables', 'opsRestore', 'opsRestart', 'opsBookmark', 'evalAbortActivation']);
 
 export const USER_DO_STARTED_RPC: readonly string[] = USER_DO_METHODS.filter((name) => !USER_DO_STARTLESS.has(name));
 
 /** Members every actor exposes; entries a facet reaches on its parent stub must be listed or nested
  * trees fail closed at depth 2. `protected` members stay unreachable. */
 const ACTOR_AGENT_RPC_SURFACE = [
-  'deleteWorkspaceFile',
   'slateCallDispatch',
   'closeRevokedCliSockets',
   'closeRevokedSessionSockets',
@@ -262,18 +285,18 @@ const ACTOR_AGENT_RPC_SURFACE = [
   'headJournalRecordReport',
   'headJournalRecordSplit',
   'installWorkspaceCapability',
-  'listWorkspaceFiles',
   'missionDebit',
   'missionGuard',
   'onModelSettingsChanged',
-  'readWorkspaceFile',
-  'statWorkspaceFile',
-  'writeWorkspaceFile',
 ] as const satisfies readonly (keyof ActorAgent)[];
 
 /** Beyond `AGENT_RPC_ACCESS` (reachable by construction); `destroyAgent` is called DO-to-DO by UserDO. */
 const ORCHESTRATOR_METHODS = [
   'abortExecutorFileDownload',
+  'opsBookmark',
+  'opsMissing',
+  'opsRestart',
+  'opsRestore',
   'opsTables',
   'abortExecutorFileWrite',
   'acceptContainerEvent',
@@ -297,6 +320,8 @@ const ORCHESTRATOR_METHODS = [
   'acceptSandboxLifecycleIncident',
   'sandboxStopped',
   'sandboxRestore',
+  'computerStartAdmitted',
+  'computerRunningTick',
   'acceptWebhookDelivery',
   'accountSpend',
   'announceDeviceAvailable',
@@ -397,8 +422,11 @@ export const ORCHESTRATOR_RPC_SURFACE: readonly string[] = [
 ];
 
 /** Never gated: a deletion must work when start throws, and must not start a workspace to delete it; the deploy's
- *  tables walk reads tables alone, and must not start every workspace to reach them. */
-const ORCHESTRATOR_STARTLESS: ReadonlySet<string> = new Set(['destroyAgent', 'storedWorkspace', 'quietForDeletion', 'evalAbortActivation', 'opsTables']);
+ *  tables walk reads tables alone, and must not start every workspace to reach them; a restore must reach storage the
+ *  start refuses. */
+const ORCHESTRATOR_STARTLESS: ReadonlySet<string> = new Set([
+  'destroyAgent', 'storedWorkspace', 'quietForDeletion', 'evalAbortActivation', 'opsTables', 'opsRestore', 'opsRestart', 'opsBookmark',
+]);
 
 export const ORCHESTRATOR_STARTED_RPC: readonly string[] = [
   ...ACTOR_AGENT_RPC_SURFACE,

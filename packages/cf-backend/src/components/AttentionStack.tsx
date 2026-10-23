@@ -10,6 +10,7 @@ import { BrainIcon, ChatCircleTextIcon, CheckIcon, DesktopTowerIcon, NotePencilI
 import { revealMisrepresenting, timeAgo, type AccountMemoryProposal, type OwedIntent, type OwedOwnerIntent, type OwnerAsk, type PendingAction, type PendingActionKind, type PendingConsent, type PlanPageRef } from "@kinu.run/core";
 import { detach, renderThrownChain } from "@kinu.run/core/obs";
 import { MailSendBody } from "@/components/mail/MailSendBody";
+import { GoogleWriteBody } from "@/components/GoogleWriteBody";
 import { AlwaysLine, alwaysLabel, ParkedCommands, ParkedDecisionFlow, ParkedWriteChange } from "@/components/ParkedCommands";
 import { QuestionCard } from "@/components/QuestionCard";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
@@ -36,7 +37,8 @@ export interface AttentionStackProps {
 
 /** A parked command, write or shared slate's change: they batch into one card. An agent's message is a card of its own. */
 function isParked(ask: OwnerAsk): ask is OwnerAsk & { kind: "action" } {
-  return ask.kind === "action" && ask.action.kind === "deferred_action" && ask.action.mail === undefined;
+  // An agent's message and a Google write are each their own card, drawn as they would go; never batched as commands.
+  return ask.kind === "action" && ask.action.kind === "deferred_action" && ask.action.mail === undefined && ask.action.google === undefined;
 }
 
 /** Collapsed cards drawn behind the open one; the rest are counted on the last. */
@@ -108,6 +110,16 @@ function ActionBody({ action, rpc }: { action: PendingAction; rpc: WorkspaceRpc 
       <>
         <MailSendBody send={mail} text={mail.text} />
         <div className="t-meta mt-1 p-text-3">Approving sends exactly this, once · asked {timeAgo(action.at)}</div>
+      </>
+    );
+  }
+
+  // A call at Google, drawn as it would go.
+  if (action.kind === "deferred_action" && action.google !== undefined) {
+    return (
+      <>
+        <GoogleWriteBody write={action.google} />
+        <div className="t-meta mt-1 p-text-3">Approving makes exactly this call, once · asked {timeAgo(action.at)}</div>
       </>
     );
   }
@@ -191,7 +203,14 @@ function answersOf(ask: OwnerAsk, props: AttentionStackProps): readonly Answer[]
   const { action } = ask;
   const deferred = (decision: "approved" | "always" | "denied") => async () => { await props.rpc("decideDeferredApprovals", [[action.id], decision]); };
 
-  // Every agent message asks (the owner, 2026-10-19): no "always" to give.
+  // Every agent message asks (the owner, 2026-10-19), and every Google write: no "always" to give.
+  if (action.kind === "deferred_action" && action.google !== undefined) {
+    return [
+      { label: "Approve once", icon: CheckIcon, weight: "primary", run: deferred("approved") },
+      { label: "Deny", icon: XIcon, weight: "quiet", run: deferred("denied") },
+    ];
+  }
+
   if (action.kind === "deferred_action" && action.mail !== undefined) {
     return [
       { label: "Approve and send", icon: CheckIcon, weight: "primary", run: deferred("approved") },

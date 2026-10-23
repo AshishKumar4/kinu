@@ -38,13 +38,13 @@ interface NamedExports {
   readonly Renamed?: ReturnType<typeof testNamespace>;
 }
 
-function boxWith(exports: NamedExports) {
+function boxWith(exports: NamedExports, Box: new (...args: ConstructorParameters<typeof TestDevbox>) => TestDevbox = TestDevbox) {
   const state = boxState({ storage: fakeStorage().handle, id: TEST_BOX_ID, blockConcurrencyWhile: (closure) => closure(), exports });
   const container = new FakeSandbox(state);
   container.running.running = false;
   state.container = container.handle();
   seedGolden(container);
-  const box = new TestDevbox(state, { DEVBOX_STORE: memoryBucket(new Map()) });
+  const box = new Box(state, { DEVBOX_STORE: memoryBucket(new Map()) });
   container.owner = box;
 
   return { box, container };
@@ -76,5 +76,32 @@ test('a box whose namespace no export accepts is refused once, naming the export
     reported: expect.stringContaining('no Durable Object namespace among the Worker\'s exports accepts this box\'s id'),
     starts: 0,
   });
+  await box.destroy();
+});
+
+// The contracts fixture is deployed again for every run under one Worker, and a box of the version before still
+// answered after a deploy (staging 8556f3506, 2026-10-23): its golden, under the one name every run shared, answered from
+// a run whose bucket was gone. A class that names its own golden is asked of that one alone.
+test('a box whose class names its own golden asks that one', async () => {
+  const named: string[] = [];
+  const asked: string[] = [];
+  const own = testNamespace(recordingGolden(asked));
+
+  const getByName = (name: string) => {
+    named.push(name);
+
+    return own.getByName('devbox-golden');
+  };
+
+  const { box, container } = boxWith({
+    DevboxGateway: gateway,
+    Other: testNamespace(READY_GOLDEN, () => false),
+    Renamed: { ...own, getByName },
+  }, class extends TestDevbox {
+    protected override get goldenName(): string { return 'eval-devbox-run-1-golden'; }
+  });
+
+  expect({ ready: await box.resolveReadiness(), named, asked, starts: container.startOptions.length })
+    .toEqual({ ready: { kind: 'restored' }, named: ['eval-devbox-run-1-golden'], asked: [TEST_BOX_ID], starts: 1 });
   await box.destroy();
 });

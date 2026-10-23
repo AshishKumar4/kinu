@@ -18,6 +18,10 @@ const DIST = join(BACKEND, 'dist');
 
 const UnsignedSchema = v.object({ version: v.string(), sha: v.string() });
 
+/** The hosts the build runs on: x86-64-v4. Of 14 staging builds to 2026-10-23, the 13 on AMD EPYC 25/17 or 26/17 took
+ *  82-109 s and the one on 25/1 (x86-64-v3) 168 s, which put 8769744f6's deploy over its 1200 s budget (m1929a). */
+const BUILD_HOSTS = 'AuthenticAMD/25/17,AuthenticAMD/26/17';
+
 async function main(): Promise<number> {
   const [target, sha, promote] = process.argv.slice(2);
 
@@ -28,7 +32,7 @@ async function main(): Promise<number> {
   }
 
   const build = Bun.spawn([
-    join(ROOT, 'node_modules', '.bin', 'armada'), 'map', `--commit=${sha}`, '--times=1', '--size=medium', '--timeout=1800', '--output',
+    join(ROOT, 'node_modules', '.bin', 'armada'), 'map', `--commit=${sha}`, '--times=1', '--size=medium', `--cpu=${BUILD_HOSTS}`, '--timeout=1800', '--output',
     `--label=deploy build ${target} ${sha}`, '--', 'bash', 'scripts/release-build.sh', target, sha, ...promote === undefined ? [] : [promote],
   ], { cwd: ROOT, stdout: 'ignore', stderr: 'pipe' });
 

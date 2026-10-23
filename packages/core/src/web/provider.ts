@@ -5,8 +5,10 @@
 
 import * as v from 'valibot';
 import { refusedResolution, assertSafeUrl, UnsafeUrlError, type HostResolver } from './url-safety';
-import { htmlToMarkdown as localHtmlToMarkdown, looksLikeHtml, stripBase64Images, stripTags } from './markdown';
-import { decodeEntities, HTML_ENTITIES } from '../utils/text';
+import { htmlToMarkdown as localHtmlToMarkdown, looksLikeHtml, stripBase64Images } from './markdown';
+import { readHtml } from '../utils/html';
+import { fromMarkdown } from 'mdast-util-from-markdown';
+import { MarkdownFrontmatterError, parseMarkdownFrontmatter } from '../utils/markdown-frontmatter';
 import { quickAction, type BrowserRunAccess, type QuickActionEngine, type QuickActionTransport } from './browser-run';
 import type { WebSearchProviderId } from '../providers/web-search';
 import type { WebSearch } from './search-chain';
@@ -120,14 +122,12 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
   const convert = (html: string, url: string): Effect.Effect<string> => {
     const toMarkdown = deps.htmlToMarkdown;
 
-    if (!toMarkdown) return Effect.sync(() => localHtmlToMarkdown(html));
+    if (!toMarkdown) return Effect.promise(() => localHtmlToMarkdown(html));
 
     return attempt({ doing: 'convert fetched HTML to markdown', otherwise: 'io' }, async () => stripBase64Images(await toMarkdown(html, { url }))).pipe(
       Effect.catch((failure) => Effect.sync(() => {
         diagnostics.failure('web.convert_failed', failure);
-
-        return localHtmlToMarkdown(html);
-      })),
+      }).pipe(Effect.andThen(Effect.promise(() => localHtmlToMarkdown(html))))),
     );
   };
 
@@ -188,7 +188,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
 
     return {
       url: finalUrl,
-      title: meta.title || extractMarkdownTitle(markdown) || undefined,
+      title: meta.title || (yield* markdownTitle(markdown)) || undefined,
       retrievedAt: new Date().toISOString(),
       markdown: markdown + note,
     };
@@ -267,9 +267,9 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
         const { bytes, clipped } = yield* Effect.promise(() => readCappedBody(answered, MAX_FETCH_BYTES));
         const raw = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
 
-        const markdown = looksLikeHtml(raw, contentType)
-          ? yield* convert(raw, finalUrl)
-          : stripBase64Images(raw);
+        const html = looksLikeHtml(raw, contentType);
+        const markdown = html ? yield* convert(raw, finalUrl) : stripBase64Images(raw);
+        const title = html ? (yield* Effect.promise(() => readHtml(raw))).title : '';
 
         const note = clipped
           ? `\n\n[fetch truncated: kept the first ${MAX_FETCH_BYTES} of more than ${MAX_FETCH_BYTES} bytes]`
@@ -277,7 +277,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
 
         return {
           url: finalUrl,
-          title: extractTitle(raw) || extractMarkdownTitle(markdown) || undefined,
+          title: title.slice(0, 300) || (yield* markdownTitle(markdown)) || undefined,
           retrievedAt: new Date().toISOString(),
           markdown: markdown.trim() + note,
         };
@@ -353,19 +353,35 @@ function clampLimit(limit: number | undefined): number {
   return boundedInt(limit, DEFAULT_SEARCH_LIMIT, 1, MAX_SEARCH_LIMIT);
 }
 
-function extractTitle(html: string): string {
-  const m = /<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(html);
+/** A markdown page's title: its front matter's `title:`, as the skill reader reads front matter, else its first
+ *  top-level heading outside a code block. */
+function markdownTitle(md: string): Effect.Effect<string> {
+  // A page whose front matter the reader refuses has none: its text is the body.
+  return Effect.try({ try: () => parseMarkdownFrontmatter(md), catch: (cause) => cause }).pipe(
+    Effect.catchIf((cause) => cause instanceof MarkdownFrontmatterError, () => Effect.succeed(null)),
+    Effect.catch((cause) => Effect.die(cause)),
+    Effect.map((front) => {
+      const named = front?.frontmatter['title'];
 
-  return m ? decodeEntities(stripTags(m[1]), HTML_ENTITIES).trim().slice(0, 300) : '';
+      if (typeof named === 'string' && named.trim() !== '') return named.trim().slice(0, 300);
+      const heading = fromMarkdown(front?.body ?? md).children.find((node) => node.type === 'heading' && node.depth === 1);
+
+      return heading === undefined ? '' : phrasingText(heading).trim().slice(0, 300);
+    }),
+  );
 }
 
-/** Frontmatter `title:`, else the first `# heading`. */
-function extractMarkdownTitle(md: string): string {
-  const fm = /^---\s*[\s\S]*?\btitle:\s*["']?([^"'\n]+)["']?\s*[\s\S]*?\n---/m.exec(md);
+/** A markdown node, as far as its text goes. */
+interface Phrasing {
+  readonly type: string;
+  readonly value?: unknown;
+  readonly children?: readonly Phrasing[];
+}
 
-  if (fm) return fm[1].trim().slice(0, 300);
-  const h1 = /^#\s+(.+)$/m.exec(md);
+/** A node's text as a reader sees it: its text and code children's values, in order. */
+function phrasingText(node: Phrasing): string {
+  if (typeof node.value === 'string') return node.value;
 
-  return h1 ? h1[1].trim().slice(0, 300) : '';
+  return (node.children ?? []).map(phrasingText).join('');
 }
 

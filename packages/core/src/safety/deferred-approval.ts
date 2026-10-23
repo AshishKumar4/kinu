@@ -28,7 +28,7 @@ import {
 } from './approval-gate';
 import type { ApprovalContent, BoundFileWrite } from './bound-write';
 import {
-  approvalKindOf, mailSendExecutor, mailSendText, slateEffectExecutor, slateEffectText, type ApprovalKind, type MailSend, type SlateEffect,
+  approvalKindOf, googleWriteExecutor, googleWriteText, mailSendExecutor, mailSendText, type GoogleWrite, slateEffectExecutor, slateEffectText, type ApprovalKind, type MailSend, type SlateEffect,
 } from './approval-kind';
 import { canonicalRoot } from '../slates/share-policy';
 import { wakeEachAsker } from './owner-requests';
@@ -872,6 +872,22 @@ export class DeferredApprovalQueue {
 
   /** The owner's approval of this exact message taken as it is sent; null where it is no longer approved. */
   takeMailSend(id: string, actorId: string): ApprovalSpend | null {
+    return this.storeOf(actorId).spend(id)?.spend ?? null;
+  }
+
+  /**
+   * A call an agent asked to make at Google that writes (approval-kind.ts `google-write`), named by `id`, its exact
+   * request: approved, its next call takes the approval ({@link takeGoogleWrite}) and goes once; else asked of the
+   * owner, or refused while their decline stands.
+   */
+  googleWrite(id: string, write: GoogleWrite, actorId: string): SlateEffectVerdict {
+    return this.exact(this.storeOf(actorId), id, {
+      command: googleWriteText(write), executor: googleWriteExecutor(write.method), reason: `wants to ${write.does.replace(/\.$/u, '').toLowerCase()} (${write.method})`,
+    });
+  }
+
+  /** The owner's approval of this exact Google write taken as it is made; null where it is no longer approved. */
+  takeGoogleWrite(id: string, actorId: string): ApprovalSpend | null {
     return this.storeOf(actorId).spend(id)?.spend ?? null;
   }
 

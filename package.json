@@ -84,6 +84,7 @@
     "gate:dependency-advisories": "bun scripts/dependency-advisory-gate.ts",
     "gate:scanner-bundle": "bun scripts/scanner-bundle-gate.ts",
     "gate:worker-heap": "bun scripts/worker-heap.ts",
+    "gate:facet-loop": "bun scripts/worker-heap.ts --loop-turns",
     "build:scanner": "bun scripts/scanner-bundle-gate.ts --write",
     "gate:patch-parity": "bun scripts/patch-parity.ts",
     "gate:secret-history": "bun scripts/secret-scan.ts --history",

@@ -2,10 +2,10 @@
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { describe, expect, test } from 'bun:test';
-import { asFetchFunction, createCredentialCipher, mcpPresetById, type JsonObject, type JsonValue } from '@kinu.run/core';
+import { asFetchFunction, createCredentialCipher, GOOGLE_OAUTH_CRED_KEY, mcpPresetById, type OAuthCredential, type JsonObject, type JsonValue } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
 import {
-  createTestUserDO, sqlExec, testOwner, TEST_CREDENTIAL_ENCRYPTION_KEY,
+  createTestUserDO, provisionTestWorkspace, sqlExec, testOwner, TEST_CREDENTIAL_ENCRYPTION_KEY,
   type TestUserDO, type TestUserDOOptions,
 } from './helpers/user-do';
 import {
@@ -141,16 +141,101 @@ describe('an MCP preset add', () => {
     h.close();
   });
 
+  // Review, 2026-10-23: a wake dials no server, and a server it had not dialled read as not connected, so removing one
+  // connection after a wake told the assistant it held none and cancelled the other's watchers.
+  test('after a wake, removing one connection keeps the watchers of another the wake has not dialled', async () => {
+    const h = harness();
+    const owner = await testOwner();
+    seedMcpTools('srv-none', []);
+    await h.userDO.claimConfig(owner, 'assistant', 'kinu-home');
+    const github = await h.userDO.userMcp_add(owner, { presetId: 'github', headers: { Authorization: 'Bearer ghp_test' } }, 'https://kinu.example');
+    const other = await h.userDO.userMcp_add(owner, { name: 'tracker', serverUrl: 'https://tracker.example/mcp', headers: { Authorization: 'Bearer t' } }, 'https://kinu.example');
+
+    const woken = createTestUserDO({ storage: h.db });
+    await woken.userDO.userMcp_remove(owner, other.id);
+
+    expect({ presets: await woken.userDO.userMcp_connectedPresets(owner), told: woken.connectionsChanged.at(-1) }).toEqual({ presets: ['github'], told: 'kinu-home:github' });
+    expect(github.id).not.toBe(other.id);
+    woken.close();
+    h.close();
+  });
+
+  test('the first read after a wake names the presets it holds, though it has dialled none', async () => {
+    const h = harness();
+    const owner = await testOwner();
+    await h.userDO.userMcp_add(owner, { presetId: 'github', headers: { Authorization: 'Bearer ghp_test' } }, 'https://kinu.example');
+    await h.userDO.userMcp_list(owner);
+
+    const woken = createTestUserDO({ storage: h.db });
+
+    expect(await woken.userDO.userMcp_connectedPresets(owner)).toEqual(['github']);
+    woken.close();
+    h.close();
+  });
+
+  // The Google connection replaced the Gmail preview preset (ledger 1023-n): the assistant's Gmail check keys on it.
+  test('the Google connection is a connection the assistant is told of as it comes and goes', async () => {
+    const h = harness();
+    const owner = await testOwner();
+    const credential: OAuthCredential = { kind: 'oauth', accessToken: 'ya29.held', refreshToken: '1//refresh', expiresAt: Date.now() + 3_600_000, metadata: { account: 'owner@gmail.com', scopes: [] } };
+
+    await provisionTestWorkspace(h, 'shop');
+    await h.userDO.claimConfig(owner, 'assistant', 'kinu-home');
+    await h.userDO.setCredential(owner, GOOGLE_OAUTH_CRED_KEY, credential);
+
+    expect(await h.userDO.userMcp_connectedPresets(owner)).toEqual(['google']);
+    await h.userDO.deleteCredential(owner, GOOGLE_OAUTH_CRED_KEY, false);
+    expect(h.connectionsChanged).toEqual(['kinu-home:google', 'kinu-home:']);
+    // The Google connection bears no workspace's secret: no workspace is told its secrets moved.
+    expect(h.secretsMoved).toEqual([]);
+    h.close();
+  });
+
+  test('a server from the retired Gmail preset goes at the next wake, with everything kept of it, and the assistant is told', async () => {
+    const h = harness();
+    const owner = await testOwner();
+    const gmail = await h.userDO.userMcp_add(owner, { name: 'Gmail', serverUrl: 'https://gmailmcp.googleapis.com/mcp/v1', headers: { Authorization: 'Bearer t' } }, 'https://kinu.example');
+    const unopenable = `/kinu-user-mcp/${gmail.id}/client-1/token`;
+
+    await h.userDO.claimConfig(owner, 'assistant', 'kinu-home');
+    sqlExec(h.db).exec(`UPDATE user_mcp_servers SET preset_id = 'google' WHERE id = ?`, gmail.id);
+
+    // OAuth values sealed for no key this object holds, more than one delete takes: the SDK's own clearing passes them
+    // by, as it cannot open them.
+    for (let n = 0; n < 130; n += 1) kvOf(h.db).set(`${unopenable}-${n}`, 'not-a-sealed-value');
+
+    const woken = createTestUserDO({ storage: h.db });
+
+    expect(await woken.userDO.userMcp_list(owner)).toEqual([]);
+    expect(catalogOf(gmail.id)).toBeUndefined();
+    expect([...kvOf(h.db).keys()].filter((key) => key.startsWith(unopenable))).toEqual([]);
+
+    // The wake told no workspace, and evicted before any warm, the next wake still owes the assistant its notice: the
+    // first warm arms its watchers for what the account still holds, once.
+    expect(woken.connectionsChanged).toEqual([]);
+
+    // The first warm's notice fails: it stays owed, and the next warm tells it, once.
+    const later = createTestUserDO({ storage: h.db, connectionsChangedFails: 1 });
+
+    await later.userDO.userMcp_warmConnections(owner);
+    await later.userDO.userMcp_warmConnections(owner);
+    await later.userDO.userMcp_warmConnections(owner);
+    expect(later.connectionsChanged).toEqual(['kinu-home:']);
+    later.close();
+    woken.close();
+    h.close();
+  });
+
   test('the catalog is the authority: a presetId add cannot smuggle its own endpoint', async () => {
-    const h = harness({ mcpAppCredentials: ['google'] });
+    const h = harness({ mcpAppCredentials: ['github'] });
 
     const added = await h.userDO.userMcp_add(
       await testOwner(),
-      { presetId: 'google', name: 'x', serverUrl: 'https://attacker.example/mcp' },
+      { presetId: 'github', name: 'x', serverUrl: 'https://attacker.example/mcp' },
       'https://kinu.example',
     );
 
-    expect(catalogOf(added.id)?.serverUrl).toBe('https://gmailmcp.googleapis.com/mcp/v1');
+    expect(catalogOf(added.id)?.serverUrl).toBe('https://api.githubcopilot.com/mcp/');
     h.close();
   });
 
@@ -160,20 +245,17 @@ describe('an MCP preset add', () => {
     await expect(
       h.userDO.userMcp_add(await testOwner(), { presetId: 'github' }, 'https://kinu.example'),
     ).rejects.toMatchObject({ code: 'bad_input' });
-    await expect(
-      h.userDO.userMcp_add(await testOwner(), { presetId: 'google' }, 'https://kinu.example'),
-    ).rejects.toMatchObject({ code: 'bad_input' });
 
     const rows = sqlExec(h.db).exec(`SELECT id FROM user_mcp_servers`).toArray();
     expect(rows.length).toBe(0);
     h.close();
   });
 
-  // Gmail's MCP answers anyone's initialize and tools/list, so it connected unsigned on staging (2026-10-19) and would
+  // Gmail's MCP answered anyone's initialize and tools/list, so it connected unsigned on staging (2026-10-19) and would
   // have refused the first call of some turn. A registered app's server is not reached unsigned: its sign-in starts.
   test("a registered app's server is answered 401 until signed in, without a request leaving, so its sign-in starts at add", async () => {
-    const h = harness({ mcpAppCredentials: ['google'] });
-    const added = await h.userDO.userMcp_add(await testOwner(), { presetId: 'google' }, 'https://kinu.example');
+    const h = harness({ mcpAppCredentials: ['github'] });
+    const added = await h.userDO.userMcp_add(await testOwner(), { presetId: 'github' }, 'https://kinu.example');
     const send = present(liveMcpTransport(added.id)?.fetch, "the server's transport fetch");
     const network = globalThis.fetch;
     const left: string[] = [];
@@ -185,7 +267,7 @@ describe('an MCP preset add', () => {
     });
 
     try {
-      const unsigned = await send(present(mcpPresetById('google'), 'the Gmail preset').serverUrl, { method: 'POST', body: '{}' });
+      const unsigned = await send(present(mcpPresetById('github'), 'the GitHub preset').serverUrl, { method: 'POST', body: '{}' });
 
       expect({ status: unsigned.status, challenge: unsigned.headers.get('www-authenticate'), left }).toEqual({ status: 401, challenge: 'Bearer', left: [] });
     } finally {
@@ -281,7 +363,6 @@ describe('an MCP preset add', () => {
     expect(rows).toEqual([
       { id: 'github', appConfigured: true },
       { id: 'cloudflare', appConfigured: true },
-      { id: 'google', appConfigured: false },
     ]);
     h.close();
   });

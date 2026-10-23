@@ -750,7 +750,7 @@ describe('a deploy row with secrets of its own', () => {
     const secretsOf = (argv: readonly string[]) => argv.find((arg) => arg.startsWith('--secrets='))?.slice('--secrets='.length).split(',').sort((a, b) => a.localeCompare(b));
 
     expect({ own: own.map((gate) => gate.run), shared: secretsOf(shared), devbox: secretsOf(devbox), json: devbox.indexOf('--json') !== -1 && devbox.indexOf('--json') < devbox.indexOf('--'), plan: devbox.slice(devbox.indexOf('--') + 1) }).toEqual({
-      own: ['bun run gate:first-run', 'bun run gate:devbox-e2e', 'bun scripts/deploy-oauth-client.ts check', 'bun scripts/upgrade-fixtures.ts'],
+      own: ['bun run gate:first-run', 'bun run gate:devbox-e2e', 'bun scripts/deploy-oauth-client.ts check', 'bun scripts/upgrade-fixtures.ts', 'bun scripts/staging-mail-inbound.ts'],
       shared: ['KINU_EVAL_STAGING_WEB_IDENTITY', 'KINU_SCRIPTED_MODEL_KEY'],
       devbox: ['DEVBOX_REGISTRY_TOKEN', 'KINU_CLOUDFLARE_API_TOKEN', 'KINU_EVAL_STAGING_WEB_IDENTITY', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY'],
       json: devbox.indexOf('--json') !== -1 && devbox.indexOf('--json') < devbox.indexOf('--'),

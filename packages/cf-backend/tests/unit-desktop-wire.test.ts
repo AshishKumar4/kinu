@@ -1,8 +1,8 @@
 /**
- * Devbox D89: core reads each desktop member's input and plans it into the box's actions; the box admits an action by
- * its own schema, declared apart because the box imports nothing of core (scripts/bench-devbox-independence.test.ts).
- * The two meet here as they do in the Worker: every action core sends, at the limits of its members' own inputs, is one
- * the box admits.
+ * Devbox D89: core reads each desktop member's input and plans it into the box's actions, typed by the box's own wire
+ * (`@kinu.run/devbox/wire`); the box admits an action by that wire's schema. A type holds an action's shape, not its
+ * bounds, so the two meet here as they do in the Worker: every action core sends, at the limits of its members' own
+ * inputs, is one the box admits.
  */
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
@@ -10,7 +10,7 @@ import { DESKTOP_SIZE, WATCH_SHEET } from '@kinu.run/devbox/desktop';
 import { createSandboxExecutor, executorNamespace, projectJsonValue, type JsonValue, type SandboxHandle } from '@kinu.run/core';
 import { DESKTOP_INPUTS } from '../../core/src/execution/desktop';
 import { sandboxHandleLifecycle } from '../../core/tests/helpers/sandbox-handle-lifecycle';
-import { DesktopRequestSchema } from '../../devbox/src/desktop-input';
+import { DesktopRequestSchema } from '@kinu.run/devbox/wire';
 
 const PNG = 'iVBORw0KGgo=';
 

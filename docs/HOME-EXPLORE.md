@@ -14,7 +14,7 @@ It is a workspace, installed from the first-party blueprint `personal-assistant`
 
 | It does | Made of |
 | --- | --- |
-| Reads mail and marks what matters, with one line on why | The workspace's mail address (`<name>@kinu.run`, Mission Inbox, `email_route` trigger) and the Gmail MCP preset; Mail's Important view and its reason line (feat/mail, `ImportantMailRow`) |
+| Reads mail and marks what matters, with one line on why | The workspace's mail address (`<name>@kinu.run`, Mission Inbox, `email_route` trigger) and the Google connection (`google.*`); Mail's Important view and its reason line (feat/mail, `ImportantMailRow`) |
 | Drafts replies; sending waits for the owner | A draft lands in Mail's Drafts; a send it asks for is a Needs-you card (`mail_send`, feat/mail's `MailSendBody`) |
 | Briefs the owner each weekday at the time they chose | A cron trigger (`agent.schedule`) whose turn writes the brief into its chat |
 | Watches GitHub and Cloudflare | Cron triggers that read through the GitHub and Cloudflare MCP presets the owner connected; each firing is a turn, quiet unless it found something |

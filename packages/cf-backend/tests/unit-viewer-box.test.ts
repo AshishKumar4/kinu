@@ -1,5 +1,5 @@
-// A share's viewer on the workspace's own (Nimbus) box runs as itself: its own uid, home and `/tmp`, writing none of the
-// owner's files, never becoming anyone else, and leaving through an egress that names no owner, so no placeholder it
+// A share's viewer on the workspace's own (Nimbus) box runs as itself: its own uid, home and `/tmp`, writing the owner's
+// project and none of the owner's other files, never becoming anyone else, and leaving through an egress that names no owner, so no placeholder it
 // finds is ever spent. Real Nimbus under the hosted main actor; requests go to a private address or carry a
 // placeholder, so the egress answers them without the network.
 import { expect, test } from 'bun:test';
@@ -16,6 +16,7 @@ async function workspaceShell() {
   const shell = present((await hostedMainActor(workspace)).actor.runtime.shell, "main's shell");
 
   return {
+    setSoul: async (text: string) => { await workspace.agent.setSoul(text); },
     owner: async (command: string, name?: string) => await shell.exec(command, name === undefined ? {} : { name }),
     viewer: async (command: string, name?: string) => await withholdingOwnerSecrets(() => shell.exec(command, name === undefined ? {} : { name })),
   };
@@ -31,17 +32,31 @@ test("a viewer's command runs as its own uid in its own home, and the owner's as
   expect(its.stdout).not.toContain('1000');
 });
 
-test("a viewer writes none of the owner's files and cannot become anyone else, sudo inside a script included", async () => {
-  const { owner, viewer } = await workspaceShell();
+test("a viewer writes the owner's project, the owner's files in it included, and nothing else of the owner's", async () => {
+  const { setSoul, owner, viewer } = await workspaceShell();
+  await setSoul('# Kiln\n\nShip the Worker.');
 
-  // The workspace's own files, where every unnamed call starts (/home/main).
-  await owner('printf owner > owned.txt');
-  const planted = await viewer('printf viewer > owned.txt; printf viewer > planted.txt');
+  // The project, where every unnamed call starts (/home/main): the owner's choice, 2026-10-19, "your project too".
+  await owner('mkdir -p src && printf owner > src/owned.txt');
+  const wrote = await viewer('printf viewer > src/owned.txt && printf viewer > planted.txt && echo wrote');
+  const read = await owner('cat src/owned.txt planted.txt');
+
+  expect(wrote.stdout).toBe('wrote\n');
+  expect(read.stdout).toBe('viewerviewer');
+
+  // The workspace's identity, the owner's own state and every other home stay out of the viewer's reach, written,
+  // removed, renamed or replaced: the project's root is sticky.
+  for (const command of ['printf x >> SOUL.md', 'touch .kinu/planted', 'mkdir /home/planted', 'rm -f SOUL.md', 'mv .kinu .kinu-old', 'mv planted.txt SOUL.md']) {
+    expect((await viewer(command)).stderr).toMatch(/Permission denied|Operation not permitted/);
+  }
+
+  expect((await owner('test -d .kinu && test -f SOUL.md && test -f planted.txt && echo kept')).stdout).toBe('kept\n');
+});
+
+test('a viewer cannot become anyone else, sudo inside a script included', async () => {
+  const { owner, viewer } = await workspaceShell();
   const sudo = await viewer('sudo id');
   const nested = await viewer("sh -c 'su root -c id'");
-
-  expect(planted.stderr).toContain('Permission denied');
-  expect((await owner('cat owned.txt; test -e planted.txt && echo planted')).stdout).toBe('owner');
 
   // Refused where the process would be made (Nimbus's `mayChangeIdentity`), not by the command's name.
   for (const refused of [sudo, nested]) {

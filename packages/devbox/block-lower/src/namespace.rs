@@ -80,24 +80,18 @@ impl<'a> FromIterator<&'a str> for NameSet<'a> {
     }
 }
 
+/// A directory's served entries, in the order they were found: a lookup is the block lower's own path map
+/// (main.rs `child`), so this only lists them.
 #[derive(Clone)]
 pub struct DirectoryEntries {
-    ids: PathMap<u64>,
     names: Vec<(String, u64)>,
 }
 impl DirectoryEntries {
     pub fn new() -> Self {
-        Self {
-            ids: PathMap::new(),
-            names: Vec::new(),
-        }
+        Self { names: Vec::new() }
     }
     pub fn insert(&mut self, name: String, id: u64) {
-        self.ids.insert(&name, id);
         self.names.push((name, id));
-    }
-    pub fn get(&self, name: &str) -> Option<&u64> {
-        self.ids.get(name)
     }
     pub fn iter(&self) -> impl Iterator<Item = &(String, u64)> {
         self.names.iter()

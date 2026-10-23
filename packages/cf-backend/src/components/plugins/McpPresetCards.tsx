@@ -2,12 +2,12 @@
 import { Effect } from 'effect';
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 import {
-  ArrowSquareOutIcon, PlusIcon, SignInIcon, TrashIcon, XIcon,
+  ArrowClockwiseIcon, ArrowSquareOutIcon, PlusIcon, SignInIcon, TrashIcon, XIcon,
 } from "@phosphor-icons/react";
 import {
-  MCP_PRESETS, mcpPresetById, type ConnectEnded, type McpPreset, type McpPresetId, type McpServerSummary,
+  GOOGLE_CONNECTION, MCP_PRESETS, mcpPresetById, type ConnectEnded, type McpPreset, type McpPresetId, type McpServerSummary,
 } from "@kinu.run/core";
-import { addMcpServer, removeMcpServer, type McpServerInput } from "@/lib/user-api";
+import { addMcpServer, reconnectSaying, removeMcpServer, type McpServerInput } from "@/lib/user-api";
 import { beginConnect, signInMcpServer, type ConnectRun } from "@/lib/connect-window";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { SECRET_REGION } from "@/components/ui/SecretValue";
@@ -23,14 +23,20 @@ import { Button } from "@/components/ui/Button";
 const PRESET_MARK: Record<McpPresetId, BrandName> = {
   github: "github",
   cloudflare: "cloudflare",
-  google: "google",
 };
 
-/** `preset_id` is an arbitrary string on the wire; the catalog resolves it. */
-export function presetBrand(presetId: string | null): BrandName | undefined {
-  const preset = presetId === null ? undefined : mcpPresetById(presetId);
+/** A connection a blueprint names: a preset's id, which the catalog resolves (`preset_id` is any string on the wire), or
+ *  the Google connection. */
+export function presetBrand(connection: string | null): BrandName | undefined {
+  if (connection === GOOGLE_CONNECTION) return "google";
+  const preset = connection === null ? undefined : mcpPresetById(connection);
 
   return preset === undefined ? undefined : PRESET_MARK[preset.id];
+}
+
+/** What a blueprint's connection is called: its preset's title, or Google; a name nothing resolves, as it is. */
+export function connectionTitle(connection: string): string {
+  return connection === GOOGLE_CONNECTION ? "Google" : (mcpPresetById(connection)?.title ?? connection);
 }
 
 /** The host a server answers on; null for a URL that does not parse. */
@@ -61,6 +67,31 @@ export function ServerStatus({ status }: { status: McpServerSummary['status'] })
   const shown = mcpServerStatus(status);
 
   return <Status tone={shown.tone}>{shown.label}</Status>;
+}
+
+/** An added server's menu: a sign-in while it asks for one, Reconnect once it failed without, its docs, and removal. */
+function ConnectedMenu({ server, title, docsUrl, signInAgain, reconnect, remove }: {
+  server: McpServerSummary;
+  title: string;
+  docsUrl: string;
+  signInAgain: () => void;
+  reconnect: () => void;
+  remove: () => void;
+}) {
+  const signInItem: readonly MenuItem[] = server.signIn ? [{ label: "Sign in", icon: <SignInIcon size={16} />, onSelect: signInAgain, marker: "data-plugin-sign-in" }] : [];
+
+  // A failed connection that needs no sign-in is dialled again on the person's ask.
+  const reconnectItem: readonly MenuItem[] = server.status === "failed" && !server.signIn
+    ? [{ label: "Reconnect", icon: <ArrowClockwiseIcon size={16} />, onSelect: reconnect, marker: "data-plugin-reconnect" }] : [];
+
+  return (
+    <Menu name={title} items={[
+      ...signInItem,
+      ...reconnectItem,
+      { label: "Docs", icon: <ArrowSquareOutIcon size={16} />, onSelect: () => { window.open(docsUrl, "_blank", "noopener,noreferrer"); } },
+      { label: "Remove", icon: <TrashIcon size={16} />, onSelect: remove, danger: true },
+    ]} />
+  );
 }
 
 /** Each row's last sign-in failure, held above the rows: on Plugins a row moves from Add to Connected as it is added, a
@@ -171,6 +202,12 @@ export function PresetRow({ preset, server, appConfigured, onChanged, onConnecte
 
   const { ask, dialog } = useConfirmation();
 
+  const reconnect = useCallback(() => detach(Effect.promise(async () => {
+    if (server === undefined) return;
+    setErr(await reconnectSaying(server.id, preset.title));
+    onChanged();
+  })), [server, preset.title, onChanged]);
+
   const remove = () => {
     if (!server) return;
     ask({
@@ -184,15 +221,7 @@ export function PresetRow({ preset, server, appConfigured, onChanged, onConnecte
   let trailing: ReactNode;
 
   if (server !== undefined) {
-    const signInItem: readonly MenuItem[] = server.signIn ? [{ label: "Sign in", icon: <SignInIcon size={16} />, onSelect: signInAgain, marker: "data-plugin-sign-in" }] : [];
-
-    trailing = (
-      <Menu name={preset.title} items={[
-        ...signInItem,
-        { label: "Docs", icon: <ArrowSquareOutIcon size={16} />, onSelect: () => { window.open(preset.docsUrl, "_blank", "noopener,noreferrer"); } },
-        { label: "Remove", icon: <TrashIcon size={16} />, onSelect: remove, danger: true },
-      ]} />
-    );
+    trailing = <ConnectedMenu server={server} title={preset.title} docsUrl={preset.docsUrl} signInAgain={signInAgain} reconnect={reconnect} remove={remove} />;
   } else if (asking) {
     trailing = (
       <RowAction data-plugin-cancel onClick={() => setOpenToken(false)} aria-label={`Cancel ${preset.title}`} title="Cancel">
@@ -216,7 +245,7 @@ export function PresetRow({ preset, server, appConfigured, onChanged, onConnecte
       tile={<BrandMark brand={brand} size={18} />}
       status={server === undefined ? undefined : <ServerStatus status={server.status} />}
       action={trailing}
-      below={asking || err !== null ? (
+      below={asking || err !== null || server?.error ? (
         <div className="space-y-1">
           {asking && (
             <div className="flex items-center gap-2">
@@ -231,6 +260,7 @@ export function PresetRow({ preset, server, appConfigured, onChanged, onConnecte
             </div>
           )}
           {err !== null && <p className="t-status p-danger" data-plugin-error>{err}</p>}
+          {err === null && server?.error && <p className="t-status p-danger" data-plugin-error>{server.error}</p>}
         </div>
       ) : undefined}
     />

@@ -23,10 +23,11 @@ export const FrozenHeldOutSchema = v.object({
 
 export type FrozenHeldOut = v.InferOutput<typeof FrozenHeldOutSchema>;
 
-/** `count` held-out turns that were answered and drew a next message, and whose request stands alone. */
-export function freezeHeldOut(heldOut: readonly OwnerTurn[], { count, seed }: { readonly count: number; readonly seed: number }): FrozenHeldOut {
-  const eligible = heldOut.filter((turn) => turn.followup !== null && turn.turn.assistantResponse.trim() !== '' && turn.turn.userMessage.length >= SHORTEST_REQUEST);
-  const turnIds = drawn(eligible, count, new Seeded(seed)).flatMap((turn) => (turn.turn.turnId === undefined ? [] : [turn.turn.turnId]));
+/** `count` held-out turns that were answered and drew a next message, and whose request stands alone; `all`, every one,
+ *  in a seeded order, so a run cut short has answered a random part. */
+export function freezeHeldOut(heldOut: readonly OwnerTurn[], { count, seed }: { readonly count: number | 'all'; readonly seed: number }): FrozenHeldOut {
+  const eligible = count === 'all' ? heldOut : heldOut.filter((turn) => turn.followup !== null && turn.turn.assistantResponse.trim() !== '' && turn.turn.userMessage.length >= SHORTEST_REQUEST);
+  const turnIds = drawn(eligible, count === 'all' ? eligible.length : count, new Seeded(seed)).flatMap((turn) => (turn.turn.turnId === undefined ? [] : [turn.turn.turnId]));
 
   return { seed, turnIds, digest: createHash('sha256').update(turnIds.join('\n')).digest('hex') };
 }

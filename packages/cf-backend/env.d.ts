@@ -7,6 +7,7 @@ import type { ControlPlaneDO } from "./src/control-plane/control-plane-do";
 import type { DeployRunDO } from "./src/deploy/deploy-do";
 import type { MailNameDO } from "./src/mail/mailname-do";
 import type { MailboxDO } from "./src/mail/mailbox-do";
+import type { CliAuthDO } from "./src/cli/auth-do";
 import type { CodemodeEgress } from "./src/codemode-egress";
 import type { CodemodeLauncher } from "./src/codemode-sandbox";
 import type { KinuEgress } from "./src/server";
@@ -48,13 +49,15 @@ declare global {
     MAILNAME: DurableObjectNamespace<MailNameDO>;
     /** One per account: every box it has (mail/mailbox-do.ts). */
     MAILBOX: DurableObjectNamespace<MailboxDO>;
+    /** One per CLI sign-in and one per its code, each deleting itself: what a second device approves (cli/auth-do.ts). */
+    CliAuthDO: DurableObjectNamespace<CliAuthDO>;
     /** Mossaic Drive tenant objects (SDK-fixed names); optional, the `/shared` mount then states its absence. */
     MOSSAIC_USER?: DurableObjectNamespace<MossaicUserDO>;
     MOSSAIC_SHARD?: DurableObjectNamespace<MossaicShardDO>;
     /** Mossaic signs listing cursors with this inside its DO, so it is a Wrangler secret on this Worker;
      *  without it every Drive listing answers 500 (measured 2026-09-21, `tests/first-run/drive`). */
     JWT_SECRET?: string;
-    /** Sessions, OAuth state, CLI approval state; all self-expiring, never a source of truth. */
+    /** Sessions, OAuth state, CLI sign-in rate limits; all self-expiring, never a source of truth. */
     AUTH_KV: KVNamespace;
     /** Durable workspace payloads; the container reaches them through `DevboxGateway`. */
     BACKUP_BUCKET?: R2Bucket;
@@ -96,9 +99,10 @@ declare global {
     GITHUB_OAUTH_CLIENT_ID?: string;
     GITHUB_OAUTH_CLIENT_SECRET?: string;
     GITHUB_OAUTH_SCOPES?: string;
-    /** OAuth apps for `oauth-app` MCP presets (secrets); absent ⇒ token fallback or not offered. */
+    /** The OAuth app for the GitHub `oauth-app` MCP preset (secrets); absent ⇒ token fallback. */
     MCP_GITHUB_CLIENT_ID?: string;
     MCP_GITHUB_CLIENT_SECRET?: string;
+    /** The Google client for the Google connection (secrets); absent ⇒ not offered. */
     MCP_GOOGLE_CLIENT_ID?: string;
     MCP_GOOGLE_CLIENT_SECRET?: string;
     /** Root user-plane secret: seals credentials and derives the owner capability; without it no
@@ -152,6 +156,10 @@ declare global {
     /** The deployment's own addresses, JSON `{ "privacy": "<username>" }`: each delivered to that account's own box,
      *  and no one's to claim (docs/MAIL.md §1). */
     MAIL_ALIASES?: string;
+    /** The free tier's numbers, JSON overriding any of core's `DEFAULT_FREE_TIER` (limits/policy.ts), `{}` its
+     *  defaults; unset, no free tier and nobody bounded. A free account is bounded by it; an operator, an invited or an
+     *  eval account is not. */
+    ACCOUNT_LIMITS?: string;
     /** Cloudflare Access org for `/control*`: JWKS origin and pinned `iss`, else any org is a valid signer.
      *  Unset ⇒ 404 to everyone; `scripts/infra-verify.ts` requires it (control-plane/access-gate.ts). */
     CONTROL_PLANE_ACCESS_TEAM_DOMAIN?: string;

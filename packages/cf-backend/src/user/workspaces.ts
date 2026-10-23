@@ -3,7 +3,7 @@ import {
   objectNamed,
   autoTitleMayReplace, nameOriginOf, type NameOrigin, WORKSPACE_KEYED_ROWS, commitWorkspaceCapability, freshWorkspaceCapability, revokeWorkspaceCapability, workspaceCapabilityHash, type UserCaller, validateWorkspaceName, sanitizeWorkspaceLogoSvg, resolveWorkspaceTitle, WorkspaceOverviewSchema, type WorkspaceOverview, type RosterPage, type WorkspaceEntry, workspaceTitleProblem,
 } from '@kinu.run/core';
-import { confirmedDeletion, diagnostics, KinuError, settle, settleLogged, toKinuError } from '@kinu.run/core/obs';
+import { confirmedDeletion, diagnostics, joining, KinuError, settle, settleLogged, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { openAnalyticsWindow } from '@kinu.run/core/analytics';
 import { ASSISTANT_CONFIG_KEY, rosterCounts, rosterPage, rosterRow, rosterSockets, sendRosterFrame, type RosterQuery } from './roster';
@@ -12,6 +12,7 @@ import { notInRegistry } from './workspace-ownership';
 
 import type { UserMcpServers } from './mcp-servers';
 import type { UserObjectHost } from './user-host';
+import type { UserLimits } from './limits';
 import type { ShareCardJobs } from './share-cards';
 import type { EvalLeaseJobs } from './eval-leases';
 import type { WorkspaceDeletionJobs } from './workspace-deletions';
@@ -51,6 +52,8 @@ export interface UserWorkspacesHost extends Pick<UserObjectHost, 'ctx' | 'env' |
   nudgeUnreported(): void;
   /** The account this registry is, whose rows the control plane's index keys on. */
   ownerId(): string;
+  /** The account's limits: a new workspace is asked of them before its row is written; a removed one's size forgotten. */
+  readonly limits: Pick<UserLimits, 'admitWorkspace' | 'forgetStore' | 'refreshStorage'>;
 }
 
 /** A read the destroyed workspace answers itself with the Agents SDK's own abort (`Agent.destroy`), which it raises only
@@ -63,7 +66,7 @@ export class UserWorkspaces {
 
   /** Provisioning in flight, per workspace. A DO does not serialize across an RPC await, so
    *  coalescing here keeps concurrent first-touches from installing tokens from different mints. */
-  private readonly _provisioning = new Map<string, Promise<void>>();
+  private readonly provisioning = joining<string, void>();
 
   /**
    * Reconcile a workspace's identity; any mismatch with `presentedHash` is repaired by minting anew.
@@ -87,11 +90,7 @@ export class UserWorkspaces {
   private async reconcileWorkspaceCapability(workspaceName: string, presentedHash: string | null): Promise<void> {
     if (presentedHash && presentedHash === workspaceCapabilityHash(this.host.ctx.storage.sql, workspaceName)) return;
 
-    const inFlight = this._provisioning.get(workspaceName);
-
-    if (inFlight) return inFlight;
-
-    const task = (async () => {
+    return this.provisioning(workspaceName, async () => {
       const { token, tokenHash } = await freshWorkspaceCapability();
 
       // Admits fork reservations, refuses rows mid-teardown and names absent from the registry.
@@ -101,11 +100,7 @@ export class UserWorkspaces {
 
       const workspace = objectNamed(this.host.env.OrchestratorAgent, workspaceName);
       await workspace.installWorkspaceCapability(token);
-    })();
-
-    this._provisioning.set(workspaceName, task);
-
-    try { await task; } finally { this._provisioning.delete(workspaceName); }
+    });
   }
 
   /** Same predicate as `listWorkspaces`' `total`: pending reservations and teardowns don't count. */
@@ -197,6 +192,8 @@ export class UserWorkspaces {
     await this.host.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
     await this.requireNotDeleting(name);
+    // The account's stores read where they live if stale, before the turn whose read and write must stay one.
+    await this.host.limits.refreshStorage();
     const now = Date.now();
 
     const existing = this.host.sqlx<{
@@ -232,6 +229,9 @@ export class UserWorkspaces {
       };
     }
 
+    // Only a new workspace is asked, and synchronously, so the read above and the write below stay one turn: one the
+    // account already has stays usable at any limit.
+    this.host.limits.admitWorkspace();
     const explicit = displayName?.trim() ?? '';
     const title = resolveWorkspaceTitle({ explicit, purpose, slug: name });
     // Use the origin the caller decided; a derived title is non-empty and must not read as
@@ -263,6 +263,7 @@ export class UserWorkspaces {
     await this.host.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
     await this.requireNotDeleting(name);
+    await this.host.limits.refreshStorage();
 
     const existing = this.host.sqlx<{
       name: string;
@@ -296,6 +297,8 @@ export class UserWorkspaces {
       };
     }
 
+    // A fork's new workspace is a new one: asked as a create is (registerWorkspace).
+    this.host.limits.admitWorkspace();
     const now = Date.now();
     const explicit = displayName?.trim() ?? '';
     const title = resolveWorkspaceTitle({ explicit, slug: name });
@@ -481,17 +484,10 @@ export class UserWorkspaces {
   /** The teardown running for each name: its DELETE, its deletion's job, a create that needs the name, an eval lease and
    *  the account's deletion join it, since a second one's cleanup, keyed by the name alone, would land on a workspace
    *  recreated after the first. */
-  private readonly tearingDown = new Map<string, Promise<void>>();
+  private readonly tearingDown = joining<string, void>();
 
   tearDownWorkspace(name: string, ownerUserId: string): Promise<void> {
-    const running = this.tearingDown.get(name);
-
-    if (running !== undefined) return running;
-    const teardown = this.tearDownOnce(name, ownerUserId).finally(() => { this.tearingDown.delete(name); });
-
-    this.tearingDown.set(name, teardown);
-
-    return teardown;
+    return this.tearingDown(name, () => this.tearDownOnce(name, ownerUserId));
   }
 
   /**
@@ -534,6 +530,7 @@ export class UserWorkspaces {
 
     if (this.host.env.SLATE_PICTURES !== undefined) await deletePictures(this.host.env.SLATE_PICTURES, picturePrefix(name));
     this.deleteWorkspaceRows(name, 'after-destroy');
+    this.host.limits.forgetStore(`workspace:${name}`);
     await this.host.evalLeases.ended(name);
     await this.host.deletions.ended(name);
     // Every deletion's, whichever entrance asked for it: only once the registry row is gone.
@@ -560,7 +557,7 @@ export class UserWorkspaces {
     const marked = `SELECT 1 AS x FROM user_workspaces WHERE name = ? AND delete_pending = 1`;
 
     // A teardown still running holds the name to its last step, past its row's removal; one that failed left it marked.
-    await Promise.allSettled([this.tearingDown.get(name)]);
+    await Promise.allSettled([this.tearingDown.inFlight(name)]);
 
     if (this.host.sqlx(marked, name).length === 0) return;
     const ownerUserId = this.host.ctx.id.name ?? '';

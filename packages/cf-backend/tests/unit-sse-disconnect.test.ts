@@ -31,7 +31,7 @@ function sseStream(answer: (read: number) => StoredRunEvent[] = () => []) {
   };
 
   return {
-    resolveAgent: () => Promise.resolve(stub),
+    agent: stub,
     pollCount: () => polled.items.length,
     polled: (count: number) => polled.until((items) => items.length >= count),
   };
@@ -41,12 +41,12 @@ describe('run-events SSE client disconnect', () => {
   test('aborting the request stops the DO poll loop', async () => {
     // The fourth read answers run_end, so a missed abort ends the stream visibly instead of
     // hanging.
-    const { resolveAgent, pollCount, polled } = sseStream((read) => read < 4 ? [] : [RUN_END]);
+    const { agent, pollCount, polled } = sseStream((read) => read < 4 ? [] : [RUN_END]);
 
     const aborter = new AbortController();
     const clock = handClock();
 
-    const res = await serveFamily(runEventsRoutes(clock, () => resolveAgent), { workspace: { name: 'jarvis' } })(new Request(
+    const res = await serveFamily(runEventsRoutes(clock), { workspace: { name: 'jarvis', agent } })(new Request(
       'https://kinu.example.com/api/workspaces/jarvis/runs/run-1/stream',
       { signal: aborter.signal },
     ), {});
@@ -85,10 +85,10 @@ describe('run-events SSE client disconnect', () => {
   });
 
   test('cancelling the response stream stops the DO poll loop', async () => {
-    const { resolveAgent, pollCount, polled } = sseStream();
+    const { agent, pollCount, polled } = sseStream();
     const clock = handClock();
 
-    const res = await serveFamily(runEventsRoutes(clock, () => resolveAgent), { workspace: { name: 'jarvis' } })(new Request(
+    const res = await serveFamily(runEventsRoutes(clock), { workspace: { name: 'jarvis', agent } })(new Request(
       'https://kinu.example.com/api/workspaces/jarvis/runs/run-1/stream',
     ), {});
 
@@ -112,10 +112,10 @@ describe('run-events SSE client disconnect', () => {
   test('a run that already ended closes after the replay instead of polling dead reads', async () => {
     // A run_end in the initial replay bypasses the poll loop's check: without the close below the
     // stream keeps polling until the timeout.
-    const { resolveAgent, pollCount } = sseStream(() => [RUN_END]);
+    const { agent, pollCount } = sseStream(() => [RUN_END]);
 
     // A stream that polled instead of closing never reaches `done`: the hang is the failure.
-    const res = await serveFamily(runEventsRoutes(handClock(), () => resolveAgent), { workspace: { name: 'jarvis' } })(new Request(
+    const res = await serveFamily(runEventsRoutes(handClock()), { workspace: { name: 'jarvis', agent } })(new Request(
       'https://kinu.example.com/api/workspaces/jarvis/runs/run-1/stream',
     ), {});
 

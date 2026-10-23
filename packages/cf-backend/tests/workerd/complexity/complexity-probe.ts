@@ -306,13 +306,13 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
 
     for (let index = 0; index < turns; index += 1) {
       turn(index);
-      readAgentFigures(this.executor, [actor.actorId]);
+      await readAgentFigures(this.executor, [actor.actorId]);
     }
 
     turn(turns);
 
     return await this.meter.measure(async () => {
-      if (readAgentFigures(this.executor, [actor.actorId]).get(actor.actorId)?.tokens !== (turns + 1) * 2 * 1_050) throw new Error('the figures missed a step');
+      if ((await readAgentFigures(this.executor, [actor.actorId])).get(actor.actorId)?.tokens !== (turns + 1) * 2 * 1_050) throw new Error('the figures missed a step');
 
       return null;
     });

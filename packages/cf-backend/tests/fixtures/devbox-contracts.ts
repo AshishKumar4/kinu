@@ -1,6 +1,6 @@
 /** The deploy tier's eval-owned throwaway Worker. No route is added to Kinu. */
 import * as v from 'valibot';
-import { Devbox, GOLDEN_NAME, type DevboxState } from '../../../devbox/src/index';
+import { Devbox, type DevboxState } from '../../../devbox/src/index';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace/nimbus-workspace.js';
 import { GOLDEN_BASE, GoldenStateSchema, pipeParts } from '../../../devbox/src/golden';
 import { DESKTOP_SIZE, WATCH_SHEET } from '../../../devbox/src/desktop';
@@ -34,6 +34,10 @@ interface Env {
   readonly PROBE_BUCKET: string;
   /** The name every contract box answers to; the tier that deploys this fixture sets it and reads it back. */
   readonly BOX_NAME: string;
+  /** The box that builds this run's golden. Every run deploys this fixture again under the same Worker, and a box of the
+   *  version before can still answer after the deploy (staging 8556f3506, 2026-10-23: its golden, under the one name
+   *  every run shared, answered from the run before, whose bucket was gone). Named by the run, no box outlives it. */
+  readonly GOLDEN_BOX: string;
 }
 
 const Snapshot = v.looseObject({ id: v.string(), lineage: v.optional(v.array(v.string()), []) });
@@ -65,6 +69,8 @@ export class ContractBox extends Devbox<Env> {
   protected override get ambientCheckpoints(): boolean { return false; }
   // As KinuDevbox's (D96), so every start here names the box on the platform's real container.
   protected override async hostname(): Promise<string> { return this.env.BOX_NAME; }
+
+  protected override get goldenName(): string { return this.env.GOLDEN_BOX; }
 
   /**
    * A box named `-parked` fails every start the way staging 7e411119d's did (D94): its own configure step writes
@@ -348,21 +354,22 @@ async function desktopRoute(request: Request, env: Env, ctx: ExecutionContext, u
   if (desktopName !== undefined) {
     const box = env.Box.getByName(desktopName);
 
-    const route = serveFamily(terminalRoutes(() => ({
-      resolveWorkspace: async () => ({
-        // As the product's: a terminal is held and told why inside the box (D109); a desktop waits here.
-        prepareTerminal: async (_executor: string, surface?: 'terminal' | 'desktop') => {
-          if (surface !== 'terminal') await box.ensureReady();
+    const workspace = {
+      // As the product's: a terminal is held and told why inside the box (D109); a desktop waits here.
+      prepareTerminal: async (_executor: string, surface?: 'terminal' | 'desktop') => {
+        if (surface !== 'terminal') await box.ensureReady();
 
-          return { ok: true as const };
-        },
-        openDeviceTerminal: async () => { throw new Error('this probe has no device'); },
-        openDeviceScreen: async () => { throw new Error('this probe has no device'); },
-        fetch: async () => new Response('this probe has no workspace terminal', { status: 404 }),
-      }),
+        return { ok: true as const };
+      },
+      openDeviceTerminal: async () => { throw new Error('this probe has no device'); },
+      openDeviceScreen: async () => { throw new Error('this probe has no device'); },
+      fetch: async () => new Response('this probe has no workspace terminal', { status: 404 }),
+    };
+
+    const route = serveFamily(terminalRoutes(() => ({
       resolveSandbox: () => box,
       UserDO: { idFromName: () => { throw new Error('this probe has no account devices'); }, get: () => { throw new Error('this probe has no account devices'); } },
-    })), { workspace: { name: desktopName }, ctx });
+    })), { workspace: { name: desktopName, agent: workspace }, ctx });
 
     return await route(request, {}) ?? new Response('desktop route not found', { status: 404 });
   }
@@ -467,7 +474,7 @@ async function answer(request: Request, env: Env, ctx: ExecutionContext): Promis
 
   const name = url.searchParams.get('box') ?? '';
 
-  if (!name.startsWith('eval-devbox-') && name !== GOLDEN_NAME) return new Response('only this run\'s eval workspaces', { status: 403 });
+  if (!name.startsWith('eval-devbox-')) return new Response('only this run\'s eval workspaces', { status: 403 });
   const box = env.Box.getByName(name);
   const body = request.method === 'POST' ? v.parse(Body, await request.json()) : {};
 

@@ -11,7 +11,8 @@ import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from '../act
 
 import {
   isEvalAccountEmail, objectNamed,
-  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type SecretSummary, type SecretInput, type SecretDestination, type GrantedSecrets, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, type RosterPage, type CredentialSummary, type WorkspaceEntry, type UserProfile, DEVICE_FRAMES, DEVICE_SCREEN_PATH, screenFromSocket, readScreenData, statementText, } from '@kinu.run/core';
+  ownerCaller, callGoogle, GoogleCallSchema, type GoogleAnswer, type GoogleCall, type GoogleGrant, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type SecretSummary, type SecretInput, type SecretDestination, type GrantedSecrets, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, type RosterPage, type CredentialSummary, type WorkspaceEntry, type UserProfile, DEVICE_FRAMES, DEVICE_SCREEN_PATH, screenFromSocket, readScreenData, statementText,   bookmarkNow, restartedForRestore, restoreArmed, type ArmedRestore, type RestoreTarget,
+} from '@kinu.run/core';
 
 import { DurableObjectOAuthClientProvider, type AgentMcpOAuthProvider } from 'agents/mcp/do-oauth-client-provider';
 
@@ -23,11 +24,11 @@ import { diagnostics, KinuError, refusalOf, settle, tolerate, toKinuError } from
 import * as v from 'valibot';
 import {
   censusOf, durableStamps, ERROR_STATUS, mcpPresetById, readStamp, repairSchema, SCHEMA_TABLES, requireOps, StoragePredatesReleaseError, writeStamp,
-  type OpsCaller, type Repair, type TablesAnswer,
+  type OpsCaller, type Repair, type TablesAnswer, type ComputerSize, type StoredClass,
 } from '@kinu.run/core';
 import { Hono } from 'hono';
 import { rawPath, rethrow } from '../api/context';
-import { destroyDriveTenant, tenantDrive } from '../drive/tenant';
+import { destroyDriveTenant, driveStoredBytes, tenantDrive } from '../drive/tenant';
 import { forgetSharesGiven, forgetSharesReceived } from './shares-given';
 import { internalCaller } from '@kinu.run/core/control-plane';
 import { BUILTIN_ACCOUNTS_OBJECT, builtinSignInOn } from '@kinu.run/core/identity';
@@ -40,6 +41,7 @@ import {
 } from './roster';
 
 import { UserDrive, type DriveAnswer, type DriveChunkWrite } from './drive';
+import { UserLimits } from './limits';
 import { UserDevices, type DeviceCancellationOutcome, type DeviceRegistration } from './devices';
 import {
   ACCOUNT_EPOCH_FIELDS, DeviceGenerationAckSchema, DeviceHelloHeadSchema, DeviceHelloSchema, type DeviceChallengeProof, type DeviceConnectProof,
@@ -154,13 +156,26 @@ export class UserDO extends Agent<Env> {
     sessionStands: (tokenHash) => this.sessions.sessionStands(tokenHash),
   };
 
-  private readonly credentials = new UserCredentials(this.host);
+  // The Google connection is a connection the assistant's watchers key on, as a preset's server is.
+  private readonly credentials = new UserCredentials({ ...this.host, googleMoved: async () => this.mcpServers.googleConnectionMoved() });
 
-  private readonly secrets = new UserSecrets(this.host);
+  private readonly secrets: UserSecrets = new UserSecrets(this.host, {
+    configured: () => this.mcpServers.githubConnected(),
+    token: async () => this.mcpServers.githubGitToken(),
+  });
 
-  private readonly sessions = new UserSessions({ ...this.host, sql: (query, ...values) => this.sql(query, ...values), accountName: () => this.name, getProfile: (caller) => this.profile.getProfile(caller), workspaceRegistered: (name) => this.workspaces.workspaceRegistered(name) });
+  private readonly sessions = new UserSessions({
+    ...this.host,
+    sql: (query, ...values) => this.sql(query, ...values),
+    accountName: () => this.name,
+    getProfile: (caller) => this.profile.getProfile(caller),
+    workspaceRegistered: (name) => this.workspaces.workspaceRegistered(name),
+    suspension: () => this.accountLimits.suspension(),
+  });
 
-  private readonly mcpServers = new UserMcpServers({ ...this.host, mcp: this.mcp, vault: this.credentials });
+  private readonly mcpServers: UserMcpServers = new UserMcpServers({
+    ...this.host, mcp: this.mcp, vault: this.credentials, connectionsMoved: async () => this.secrets.connectionsMoved(),
+  });
 
   private readonly slateConsentStore = new SlateConsentStore(this.ctx.storage.sql);
 
@@ -196,6 +211,19 @@ export class UserDO extends Agent<Env> {
     ...this.host, mcpServers: this.mcpServers, shareCards: this.shareCards, evalLeases: this.evalLeases, deletions: this.workspaceDeletions,
     nudgeUnreported: () => { this.nudgeUnreported(); },
     ownerId: () => this.name,
+    limits: {
+      admitWorkspace: () => { this.accountLimits.admitWorkspace(); },
+      forgetStore: (source) => { this.accountLimits.forgetStore(source); },
+      refreshStorage: async () => { await this.accountLimits.refreshStorage(); },
+    },
+  });
+
+  /** What the account may start new (core limits/): asked by its workspaces and its routes, set by the operator plane. */
+  private readonly accountLimits = new UserLimits({
+    ...this.host,
+    workspaceCount: () => this.workspaces.rosterCount(),
+    driveBytes: async () => await driveStoredBytes(this.env, this.name),
+    mailBytes: async () => await objectNamed(this.env.MAILBOX, this.name).storedBytes(this.name),
   });
 
   private readonly profile = new UserProfileStore({ ...this.host, workspaces: this.workspaces });
@@ -211,7 +239,15 @@ export class UserDO extends Agent<Env> {
 
   private readonly screens = new UserScreens({ ...this.host, devices: this.devices });
 
-  private readonly userDrive = new UserDrive({ ...this.host, accountId: () => this.name, driveFor: (tenant) => this.driveFor(tenant) });
+  private readonly userDrive = new UserDrive({
+    ...this.host,
+    accountId: () => this.name,
+    driveFor: (tenant) => this.driveFor(tenant),
+    limits: {
+      admitNewBytes: async () => { await this.accountLimits.admitNewBytes(); },
+      storeChanged: (source) => { this.accountLimits.storeChanged(source); },
+    },
+  });
 
   /** A sign-in: an account deleted before is a new one now, and keeps cards again. */
   async ensureProfile(caller: UserCaller, email: string, displayName?: string): Promise<UserProfile> {
@@ -520,6 +556,25 @@ export class UserDO extends Agent<Env> {
     return this.credentials.deleteCredential(caller, key, revoke);
   }
 
+  /** The Google connection as Settings shows it: the account Google connected and the scopes it granted. */
+  googleConnection(caller: UserCaller): Promise<GoogleGrant | null> {
+    return this.credentials.googleConnection(caller);
+  }
+
+  /** The Google connection's access token, renewed when due or when Google refused the held one. Owner only. */
+  googleToken(caller: UserCaller, opts?: { readonly refused?: boolean }): Promise<string | null> {
+    return this.credentials.googleToken(caller, opts);
+  }
+
+  /** One request to Google's APIs through the account's connection, made here so its token never leaves the account. A
+   *  workspace's write reaches this only with its owner's approval (`google.write`). */
+  async googleCall(caller: UserCaller, request: GoogleCall): Promise<GoogleAnswer> {
+    await this.requireTier(caller, 'google.call');
+    const owner = await ownerCaller(this.env);
+
+    return callGoogle(v.parse(GoogleCallSchema, request), async (refused) => this.credentials.googleToken(owner, { refused }));
+  }
+
   checkpointCredentials(caller: UserCaller, account: string): Promise<CheckpointedCredential[]> {
     return this.credentials.checkpointCredentials(caller, account);
   }
@@ -790,6 +845,13 @@ export class UserDO extends Agent<Env> {
     return this.accountMemory.accountMemory_facts(caller);
   }
 
+  /** The account's facts for one turn: its memory's, and its limits near their end once a period, in the one read. */
+  async accountMemory_turnFacts(caller: UserCaller): Promise<Fact[]> {
+    const [facts, near] = await Promise.all([this.accountMemory.accountMemory_facts(caller), this.accountLimits.nearFact(caller)]);
+
+    return near === null ? facts : [...facts, near];
+  }
+
   accountMemory_searchNotes(caller: UserCaller, query: string, limit: number): Promise<AccountNoteHit[]> {
     return this.accountMemory.accountMemory_searchNotes(caller, query, limit);
   }
@@ -848,6 +910,18 @@ export class UserDO extends Agent<Env> {
 
   userMcp_beginConnect(caller: UserCaller, id: string, run: string): ReturnType<UserMcpServers['userMcp_beginConnect']> {
     return this.mcpServers.userMcp_beginConnect(caller, id, run);
+  }
+
+  userMcp_reconnect(caller: UserCaller, id: string): ReturnType<UserMcpServers['userMcp_reconnect']> {
+    return this.mcpServers.userMcp_reconnect(caller, id);
+  }
+
+  /**
+   * Eval-only: ends this account's activation as the platform's hibernation does, so the next request is a fresh wake
+   * that dials every MCP server again. Sealed in `rpc-surface.ts`, eval-service identity only (`eval/abort-route.ts`).
+   */
+  async evalAbortActivation(): Promise<void> {
+    this.ctx.abort('eval-service: the account activation was aborted on request');
   }
 
   chatgptPlan(caller: UserCaller): Promise<ChatGptPlanStatus> {
@@ -1050,9 +1124,87 @@ export class UserDO extends Agent<Env> {
     return this.userDrive.drive_abortDownload(caller, transferId);
   }
 
+  // The account's limits (user/limits.ts): read by Settings → Usage, asked before each new thing, told what is spent.
+
+  limits(caller: UserCaller): ReturnType<UserLimits['limits']> {
+    return this.accountLimits.limits(caller);
+  }
+
+  limits_account(caller: UserCaller): ReturnType<UserLimits['account']> {
+    return this.accountLimits.account(caller);
+  }
+
+  limits_nearNote(caller: UserCaller): ReturnType<UserLimits['nearNote']> {
+    return this.accountLimits.nearNote(caller);
+  }
+
+  limits_admitStoredBytes(caller: UserCaller, own?: { readonly source: string; readonly bytes: number }): Promise<void> {
+    return this.accountLimits.admitStoredBytes(caller, own);
+  }
+
+  limits_storageSampled(caller: UserCaller, source: string, bytes: number): Promise<void> {
+    return this.accountLimits.storageSampled(caller, source, bytes);
+  }
+
+  limits_admitComputerStart(caller: UserCaller, workspace: string, size: ComputerSize): Promise<ComputerSize> {
+    return this.accountLimits.admitComputerStart(caller, workspace, size);
+  }
+
+  limits_computerTick(caller: UserCaller, workspace: string, size: ComputerSize): Promise<void> {
+    return this.accountLimits.computerTick(caller, workspace, size);
+  }
+
+  limits_computerStopped(caller: UserCaller, workspace: string): Promise<void> {
+    return this.accountLimits.computerStopped(caller, workspace);
+  }
+
+  limits_admitTurn(caller: UserCaller, platform: boolean): Promise<void> {
+    return this.accountLimits.admitTurn(caller, platform);
+  }
+
+  limits_platformTokensSpent(caller: UserCaller, tokens: number): Promise<void> {
+    return this.accountLimits.platformTokensSpent(caller, tokens);
+  }
+
+  limits_setClass(caller: UserCaller, klass: StoredClass, by: string): Promise<void> {
+    return this.accountLimits.setClass(caller, klass, by);
+  }
+
+  /** Suspended: nothing new starts, every session and token ends, and none is minted until it is lifted. */
+  async limits_suspend(caller: UserCaller, reason: string, by: string): Promise<void> {
+    await this.accountLimits.suspend(caller, reason, by);
+    await this.sessions.endEverySession(caller);
+  }
+
+  limits_unsuspend(caller: UserCaller): Promise<void> {
+    return this.accountLimits.unsuspend(caller);
+  }
+
+  limits_inviteRedeemed(caller: UserCaller, by: string): Promise<void> {
+    return this.accountLimits.inviteRedeemed(caller, by);
+  }
+
   /** Keyed by {@link USER_MCP_CLIENT_NAME}, not this object's name: every stored grant uses that key, sealed. */
   override createMcpOAuthProvider(callbackUrl: string): AgentMcpOAuthProvider {
     return new DurableObjectOAuthClientProvider(mcpOAuthStorage(this.ctx, this.env), USER_MCP_CLIENT_NAME, callbackUrl);
+  }
+
+  /**
+   * The operator's restore (`/ops/restore`, ARCHITECTURE-DECISIONS W7): this account's storage, armed to go back to
+   * `target` at its next start; `opsRestart` ends it at once. Only `/ops/*` holds the capability.
+   */
+  async opsRestore(caller: OpsCaller, target: RestoreTarget): Promise<ArmedRestore> {
+    return await restoreArmed(this.ctx, this.env, caller, target);
+  }
+
+  /** Ends this activation, so an armed restore lands. */
+  async opsRestart(caller: OpsCaller): Promise<void> {
+    await restartedForRestore(this.ctx, this.env, caller);
+  }
+
+  /** Where this object's history stands now. */
+  async opsBookmark(caller: OpsCaller): Promise<string> {
+    return await bookmarkNow(this.ctx, this.env, caller);
   }
 
   /** The deploy's walk (`scripts/reset.ts tables`): this account's tables and their rows, what its repair did, and the

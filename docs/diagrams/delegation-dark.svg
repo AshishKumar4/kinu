@@ -4,7 +4,7 @@
        between the two with <picture>. Everything below the palette block must
        stay byte-identical in both, so edit them together. -->
   <title id="t">Kinu delegation model</title>
-  <desc id="d">A running turn calls one agents tool: swarm, hire, msg, list and dismiss. Swarm runs a configured search; hire creates a durable or task-lifetime agent. Hires and swarm nodes are logical actors of one workspace database on both backends. The task role handles general delegated work; specialist roles narrow the assignment and authority. Messages reach subagents or permitted peer workspaces.</desc>
+  <desc id="d">A running turn calls one agents tool: swarm, hire, assign, hireWorkspace, message, reply, list and dismiss. Swarm runs a configured search; hire creates a durable or task-lifetime agent. Hires and swarm nodes are logical actors of one workspace on both backends. The task role handles general delegated work; specialist roles narrow the assignment and authority. Messages reach subagents or permitted peer workspaces.</desc>
   <style>
     :root {
       --fg: #e6edf3;
@@ -64,11 +64,11 @@
     </marker>
   </defs>
   <text class="h" x="24" y="30">Delegation — one tool, with lifetime and role per hire</text>
-  <text class="s" x="24" y="49">the doctrine has a single source: packages/core/src/tools/registry.ts</text>
+  <text class="s" x="24" y="49">tool doctrine: packages/core/src/tools/registry.ts · prompt: prompting/section-templates.ts</text>
   <text class="band" x="24" y="76">THE CALLER</text>
   <rect x="24" y="88" width="852" height="62" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="36" y="109" text-anchor="start">a turn, running</text>
-  <text class="s" x="36" y="124" text-anchor="start">One agents tool. Five actions — swarm · hire · msg · list · dismiss.</text>
+  <text class="s" x="36" y="124" text-anchor="start">One agents tool. Eight actions — swarm · hire · assign · hireWorkspace · message · reply · list · dismiss.</text>
   <text class="xs" x="36" y="139" text-anchor="start">Which ones exist here is structural: an actor gets the actions its backend wired deps for.</text>
   <path d="M255 150 L255 172" fill="none" stroke="var(--purpleLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-purple)"/>
   <path d="M691 150 L691 172" fill="none" stroke="var(--orangeLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-orange)"/>
@@ -86,7 +86,7 @@
   <text class="b" x="50" y="327" text-anchor="start">what you declare — a preset and its inputs</text>
   <text class="xs" x="50" y="342" text-anchor="start">Six named searches, plus custom with explicit axes.</text>
   <text class="xs" x="50" y="357" text-anchor="start">When required, the objective names the metric, unit,</text>
-  <text class="xs" x="50" y="372" text-anchor="start">direction, target and a registered verifier as {kind, spec}.</text>
+  <text class="xs" x="50" y="372" text-anchor="start">direction, target and verify as {kind, spec}.</text>
   <text class="xs" x="50" y="387" text-anchor="start">Verification runs code. Model judgment and an unranked</text>
   <text class="xs" x="50" y="402" text-anchor="start">candidate set are separate scoring choices.</text>
   <rect x="24" y="423" width="462" height="75" rx="7" fill="var(--purpleFill)" stroke="var(--purpleLine)"/>
@@ -104,7 +104,7 @@
   <text class="b" x="518" y="225" text-anchor="start" fill="var(--orange)">Durable or task-lifetime hire</text>
   <text class="xs" x="518" y="240" text-anchor="start">Durable: retain context between assignments.</text>
   <text class="xs" x="518" y="255" text-anchor="start">Task: report once, then archive with history kept.</text>
-  <text class="xs" x="518" y="270" text-anchor="start">Choose task for general delegated work, or a</text>
+  <text class="xs" x="518" y="270" text-anchor="start">Choose the task role for general work, or a</text>
   <text class="xs" x="518" y="285" text-anchor="start">researcher, planner, auditor or designer role.</text>
   <rect x="520" y="308" width="342" height="105" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="532" y="327" text-anchor="start">Logical workspace actor</text>
@@ -112,33 +112,33 @@
   <text class="xs" x="532" y="357" text-anchor="start">shared inference loop; role-narrowed tools</text>
   <text class="xs" x="532" y="372" text-anchor="start">shares the workspace’s files</text>
   <text class="xs" x="532" y="387" text-anchor="start">delegation stays within role and depth limits</text>
-  <text class="xs" x="532" y="402" text-anchor="start">reports back as an event that wakes you</text>
+  <text class="xs" x="532" y="402" text-anchor="start">reports back as a message that opens your next turn</text>
   <rect x="506" y="423" width="370" height="75" rx="7" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
   <text class="b" x="518" y="442" text-anchor="start" fill="var(--orange)">runs as</text>
   <text class="xs" x="518" y="457" fill="var(--fg)">cf</text>
-  <text class="xs" x="552" y="457">Logical workspace actors in one DO</text>
+  <text class="xs" x="552" y="457">Logical workspace actors, each in its own isolate</text>
   <text class="xs" x="518" y="472" fill="var(--fg)">cli</text>
   <text class="xs" x="552" y="472">Logical workspace actors, hosted locally</text>
   <text class="xs" x="518" y="487" fill="var(--fg)"></text>
-  <text class="xs" x="552" y="487">hires and branches share workspace SQLite</text>
+  <text class="xs" x="552" y="487">each agent keeps its own SQLite; roster copied in</text>
   <rect x="506" y="508" width="370" height="45" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
-  <text class="b" x="518" y="527" text-anchor="start">scope</text>
-  <text class="xs" x="518" y="542" text-anchor="start">subagent here, or a new peer workspace</text>
+  <text class="b" x="518" y="527" text-anchor="start">hireWorkspace</text>
+  <text class="xs" x="518" y="542" text-anchor="start">a specialist peer workspace, created or reused</text>
   <path d="M691 553 L691 583" fill="none" stroke="var(--orangeLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-orange)"/>
   <text class="xs" x="703" y="573">the roster a subagent joins</text>
   <rect x="24" y="587" width="852" height="130" rx="10" fill="var(--blueFill)" stroke="var(--blueLine)"/>
-  <text class="b" x="38" y="609" fill="var(--blue)">msg · list · dismiss — talking to what already exists</text>
+  <text class="b" x="38" y="609" fill="var(--blue)">assign · message · reply · list · dismiss — talking to what already exists</text>
   <text class="xs" x="38" y="628">One address space: a name resolves to a subagent in this workspace, otherwise to one of the owner’s other workspaces.</text>
   <rect x="38" y="639" width="405" height="64" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="50" y="658" text-anchor="start">subagents</text>
-  <text class="xs" x="50" y="672" text-anchor="start">hire assigns work; msg steers or follows up;</text>
+  <text class="xs" x="50" y="672" text-anchor="start">hire creates one; assign hands it work; message steers it;</text>
   <text class="xs" x="50" y="686" text-anchor="start">list reads the roster; dismiss archives the agent</text>
   <rect x="457" y="639" width="405" height="64" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="469" y="658" text-anchor="start">peers — the owner’s other workspaces</text>
-  <text class="xs" x="469" y="672" text-anchor="start">msg names an agent, or answers an incoming</text>
-  <text class="xs" x="469" y="686" text-anchor="start">agent message by event_id; never both</text>
-  <text class="xs" x="38" y="735">A message to a busy agent is queued; it does not make the sender wait for the running assignment to finish.</text>
+  <text class="xs" x="469" y="672" text-anchor="start">message names an agent; reply answers an incoming</text>
+  <text class="xs" x="469" y="686" text-anchor="start">agent message by event_id</text>
+  <text class="xs" x="38" y="735">A message to a busy agent lands at its next step; the sender does not wait for the running assignment.</text>
   <rect x="24" y="747" width="852" height="48" rx="7" fill="var(--surface)" stroke="var(--rule)" stroke-dasharray="4 3"/>
   <text class="xs" x="38" y="766"><tspan font-weight="700" fill="var(--fg)">Tree search is action:swarm</tspan> — one call, with the preset's resolved search and scoring configuration.</text>
-  <text class="xs" x="38" y="782">MCTS folded into swarm: swarm's tree search is the one search engine.</text>
+  <text class="xs" x="38" y="782">MCTS folded into swarm: swarm's tree search runs on the mcts/ modules.</text>
 </svg>

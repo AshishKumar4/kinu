@@ -57,13 +57,6 @@
       "decision": "html"
     },
     {
-      "file": "packages/core/src/mail/words.ts",
-      "kind": "regex-literal",
-      "owner": "htmlToText",
-      "sourceSha256": "019e0b8a6822d20e835f355b340ffa40264181fd90425c4239d244981a5b4750",
-      "decision": "html"
-    },
-    {
       "file": "packages/cf-backend/src/events/routes.ts",
       "kind": "hand-parser",
       "owner": "extractHeaders",
@@ -116,8 +109,8 @@
       "file": "packages/cli/src/attachments.ts",
       "kind": "hand-parser",
       "owner": "extractPathTokens",
-      "sourceSha256": "da712f6b36c92a3e61639dc08877c51a283efc7e56586b1729b0473b316f1f28",
-      "decision": "cli"
+      "sourceSha256": "8cfcfa43dd6e3cb3e06c51bfc6b2dde8ac084c0d4e34e7b0a3214aa8f78b7fae",
+      "decision": "framing"
     },
     {
       "file": "packages/cli/src/tui/actions.tsx",
@@ -214,7 +207,7 @@
       "file": "packages/core/src/safety/command-review.ts",
       "kind": "hand-parser",
       "owner": "scanCommand",
-      "sourceSha256": "a9bc3396a308b95a35276efd8388557fbb02dd201817d41bc6a5ff781cdf3374",
+      "sourceSha256": "408127650298e079b1a37da791f87ea4f2c385fba6584d9f7d401aa141ac462e",
       "decision": "safety"
     },
     {
@@ -340,7 +333,7 @@
       "file": "packages/core/src/utils/markdown-frontmatter.ts",
       "kind": "hand-parser",
       "owner": "stripComment",
-      "sourceSha256": "9dd04c280e68c2e0d7d1044c80a09510358855a177a9fa3eb74606e3b9eaf002",
+      "sourceSha256": "d519860cd158d4e1cc5d7ddc435698aa34795812a579cf563530888b7f1cad52",
       "decision": "frontmatter"
     },
     {
@@ -361,8 +354,8 @@
       "file": "packages/core/src/vfs/diff.ts",
       "kind": "hand-parser",
       "owner": "parseGitDiff",
-      "sourceSha256": "dc28518b38e748eb5e2601a1885951e0e098da3c2a72932fd4f670f1b07db64e",
-      "decision": "framing"
+      "sourceSha256": "2539cdc06e46355341926f0f368cd69613c7ad82e13ea4ba3918d0feddf3b6d6",
+      "decision": "grammar"
     },
     {
       "file": "packages/core/src/vfs/write-events.ts",
@@ -374,71 +367,8 @@
     {
       "file": "packages/core/src/web/markdown.ts",
       "kind": "regex-literal",
-      "owner": "htmlToMarkdown",
-      "sourceSha256": "ac20c291ee60f67cc6dabf55d05bc6d4b717f128103d37584f63298ceef921c5",
-      "decision": "html"
-    },
-    {
-      "file": "packages/core/src/web/markdown.ts",
-      "kind": "regex-literal",
-      "owner": "htmlToMarkdown",
-      "sourceSha256": "492b3286155c23022ca00a3575865e2d68f443b4ae5edaa61c136e3f3ba6ca58",
-      "decision": "html"
-    },
-    {
-      "file": "packages/core/src/web/markdown.ts",
-      "kind": "regex-literal",
-      "owner": "htmlToMarkdown",
-      "sourceSha256": "6332ec3ea283e67d210acb20a21b4947bfce8f438d0105cdf9b8a1ae120f30a5",
-      "decision": "html"
-    },
-    {
-      "file": "packages/core/src/web/markdown.ts",
-      "kind": "regex-literal",
-      "owner": "htmlToMarkdown",
-      "sourceSha256": "0b1244bdf6bb0b931d05c44ed7707a8a13039933ba792a7577484669583c2d23",
-      "decision": "html"
-    },
-    {
-      "file": "packages/core/src/web/markdown.ts",
-      "kind": "regex-literal",
-      "owner": "htmlToMarkdown",
-      "sourceSha256": "e51ecb88265e9e8d23f80e0c1e130aab2b435579d257dd4fce51924f06939bc6",
-      "decision": "html"
-    },
-    {
-      "file": "packages/core/src/web/markdown.ts",
-      "kind": "regex-literal",
-      "owner": "htmlToMarkdown",
-      "sourceSha256": "65f8eee795cbba1130a02b2310e4c43b960a9f1f309cba864a0a017a05c8d695",
-      "decision": "html"
-    },
-    {
-      "file": "packages/core/src/web/markdown.ts",
-      "kind": "regex-literal",
-      "owner": "htmlToMarkdown",
-      "sourceSha256": "6dc916d1e447581440755f5074b09d17eaaa236694c806fc4b65fce936acec67",
-      "decision": "html"
-    },
-    {
-      "file": "packages/core/src/web/markdown.ts",
-      "kind": "regexp-constructor",
-      "owner": "htmlToMarkdown",
-      "sourceSha256": "0e1b8f65cf207ea779cc98d5e54b361c7f6278275cfd981bc588dc44735f6b1c",
-      "decision": "html"
-    },
-    {
-      "file": "packages/core/src/web/markdown.ts",
-      "kind": "regex-literal",
       "owner": "looksLikeHtml",
       "sourceSha256": "127c430ff4a58691ae1061751aea14d2bf239beb13294a70e2efdffdd8ba8f76",
-      "decision": "html"
-    },
-    {
-      "file": "packages/core/src/web/provider.ts",
-      "kind": "regex-literal",
-      "owner": "m",
-      "sourceSha256": "ea46e30ffdff6ee4d93bfa439c9f7ffe2d87d7e88cbcd1c8864bc48b67f5ee06",
       "decision": "html"
     },
     {
@@ -516,27 +446,6 @@
       "kind": "regex-literal",
       "owner": "uploadId",
       "sourceSha256": "9b030d5cd3b5e6d2bc72c640fda0deb28395089997810eec35fe7d3f90d37dfb",
-      "decision": "xml"
-    },
-    {
-      "file": "packages/devbox/src/store-gateway.ts",
-      "kind": "regex-literal",
-      "owner": "completedParts",
-      "sourceSha256": "8b9928bf6a32150437c933640ee0419b7c95e1b6d0a2b4d0b8d084ed0ac486fb",
-      "decision": "xml"
-    },
-    {
-      "file": "packages/devbox/src/store-gateway.ts",
-      "kind": "regex-literal",
-      "owner": "number",
-      "sourceSha256": "fab31e6a5824f4932132fe1528ae9abfaa059d3e81a51c0d9d9ce5d23ec6b9a4",
-      "decision": "xml"
-    },
-    {
-      "file": "packages/devbox/src/store-gateway.ts",
-      "kind": "regex-literal",
-      "owner": "etag",
-      "sourceSha256": "a25956cd4bb8cd63d648015e3504c785b53718dd838180bd1fc542249f7ed031",
       "decision": "xml"
     },
     {
@@ -745,8 +654,8 @@
     {
       "file": "packages/core/src/safety/pasted-secrets.ts",
       "kind": "regex-literal",
-      "owner": "DOTENV_LINE",
-      "sourceSha256": "058fc6cd11f40fbf2f16e06b1588ecac8e797b6943dd8e9d5f722a9d0b83fff4",
+      "owner": "DOTENV_NAME",
+      "sourceSha256": "4f34d70fb865827daefe3aff6d4f9c274c430f0875ad73f54a2c77113808b21b",
       "decision": "grammar"
     },
     {
@@ -760,7 +669,7 @@
       "file": "packages/core/src/safety/pasted-secrets.ts",
       "kind": "hand-parser",
       "owner": "parseDotenv",
-      "sourceSha256": "0ed4736a8d709af37ebc9e48685b709235483404fc8cefc7ee444a0ec4e974db",
+      "sourceSha256": "eb4f9c1e4fc4fc8d5619510d3dcb10ca4a419a5e2582c5e0cf31e994bbfabed2",
       "decision": "grammar"
     },
     {

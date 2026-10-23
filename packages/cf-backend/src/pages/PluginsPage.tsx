@@ -14,6 +14,7 @@ import { Row, RowTile } from "@/components/ui/Row";
 import { addablePresets, hostBrand, McpPresetCards, presetOf, PresetRow, ServerStatus, usePresetErrors, type PresetAvailability, type PresetErrors } from "@/components/plugins/McpPresetCards";
 import { Menu } from "@/components/ui/Menu";
 import { AccountPanelModal } from "@/components/account/AccountPanelModal";
+import { GoogleConnectionCard } from "@/components/account/GoogleConnectionCard";
 import { Page } from "@/components/ui/PageHeader";
 
 function serverLine(server: McpServerSummary): string {
@@ -92,6 +93,8 @@ export default function PluginsPage() {
   return (
     <>
       <Page icon={<PuzzlePieceIcon size={22} />} title="Plugins" actions={<Button variant="secondary" onClick={() => setManaging(true)}>Manage</Button>}>
+        {/* One connection for all of Google, where this deployment offers it: not an MCP server. */}
+        <GoogleConnectionCard google={mcp.google} />
         <PluginSection title="Connected" onRetry={servers.reload} what="your MCP servers"
           rows={mapResource(servers.resource, (rows) => connectedRows(rows, availability, servers.reload, errors))} />
 

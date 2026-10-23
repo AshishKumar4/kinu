@@ -38,6 +38,8 @@ export interface OAuthStateInput {
   connectFor?: string | null;
   /** A connect's run, the starting page's own id (`ConnectRunSchema`), which its finish page names. */
   connectRun?: string | null;
+  /** Begins the state, so a callback shared with other sign-ins can tell this one apart (the Google connection's). */
+  statePrefix?: string;
 }
 
 /** A handoff spent by the browser it was issued to: its record, and why it is refused if it is (expired, another
@@ -124,7 +126,7 @@ export async function createOAuthState(
   input: OAuthStateInput,
 ): Promise<OAuthHandoff> {
   const now = Date.now();
-  const state = randomToken(32);
+  const state = `${input.statePrefix ?? ''}${randomToken(32)}`;
   const binding = randomToken(32);
   const expiresAt = now + OAUTH_STATE_TTL_MS;
 

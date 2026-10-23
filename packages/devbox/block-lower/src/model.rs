@@ -1,5 +1,5 @@
 use crate::index::{invalid, IndexRef};
-use crate::namespace::{DirectoryEntries, NameSet, PathMap};
+use crate::namespace::{DirectoryEntries, NameSet};
 use serde::Deserialize;
 use std::io;
 
@@ -83,82 +83,8 @@ pub struct Inode {
     pub t: u64,
     /// The layer whose record serves this file; `None` for a directory.
     pub layer: Option<usize>,
-    pub children: DirectoryEntries,
-}
-
-/// Only served files and their ancestor directories enter this table: every
-/// other path belongs to the layers' trees beneath it in the overlay.
-pub fn inodes(
-    served: &[(usize, &Record)],
-    dir: impl Fn(&str) -> io::Result<Option<DirAttrs>>,
-) -> io::Result<Vec<Inode>> {
-    let attrs = |path: &str| -> io::Result<DirAttrs> {
-        Ok(dir(path)?.unwrap_or(DirAttrs {
-            mode: 0o755,
-            uid: 0,
-            gid: 0,
-            t: 0,
-        }))
-    };
-    let root = attrs("")?;
-    let mut rows = vec![Inode {
-        path: String::new(),
-        parent: 1,
-        size: 0,
-        mode: root.mode,
-        uid: root.uid,
-        gid: root.gid,
-        t: root.t,
-        layer: None,
-        children: DirectoryEntries::new(),
-    }];
-    let mut ids = PathMap::new();
-    ids.insert("", 1);
-    for (layer, record) in served {
-        let p = record.p.as_str();
-        for path in ancestors(p).chain(std::iter::once(p)) {
-            if ids.contains_key(path) {
-                continue;
-            }
-            let (parent, name) = path.rsplit_once('/').unwrap_or(("", path));
-            let parent_id = *ids
-                .get(parent)
-                .ok_or_else(|| invalid("missing parent inode"))?;
-            let id = u64::try_from(rows.len()).map_err(|_| invalid("inode count"))? + 1;
-            let row = if path == p {
-                Inode {
-                    path: path.to_owned(),
-                    parent: parent_id,
-                    size: record.s,
-                    mode: record.mode,
-                    uid: record.uid,
-                    gid: record.gid,
-                    t: record.t,
-                    layer: Some(*layer),
-                    children: DirectoryEntries::new(),
-                }
-            } else {
-                let found = attrs(path)?;
-                Inode {
-                    path: path.to_owned(),
-                    parent: parent_id,
-                    size: 0,
-                    mode: found.mode,
-                    uid: found.uid,
-                    gid: found.gid,
-                    t: found.t,
-                    layer: None,
-                    children: DirectoryEntries::new(),
-                }
-            };
-            rows[usize::try_from(parent_id - 1).map_err(|_| invalid("inode id"))?]
-                .children
-                .insert(name.to_owned(), id);
-            rows.push(row);
-            ids.insert(path, id);
-        }
-    }
-    Ok(rows)
+    /// A directory's served entries, once a listing resolved them.
+    pub children: Option<DirectoryEntries>,
 }
 
 #[cfg(test)]

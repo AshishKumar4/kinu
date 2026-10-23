@@ -16,7 +16,8 @@ import type { ExecutorCapability, ExecutorProviderSurface } from '../src/executi
 import { namespaceDeclaration } from '../src/tools/operation-surfaces';
 import { renderCodemodeDescription } from '../src/index';
 import { TurnContextBudget } from '../src/context-budget';
-import { createSandboxExecutor, sandboxFiles, WORKSPACE_BACKUP_DIR, type SandboxHandle } from '../src/execution/sandbox';
+import { DEVBOX_WORKDIR } from '@kinu.run/devbox/wire';
+import { createSandboxExecutor, sandboxFiles, type SandboxHandle } from '../src/execution/sandbox';
 import { nativeFileRead } from './helpers/sandbox-handle-lifecycle';
 import { TurnFileLedger } from '../src/vfs/file-ledger';
 import { MemoryVFS } from '@nimbus-sh/core/vfs/memory.js';
@@ -43,13 +44,13 @@ const notFound = (path: string): Error => nativeFileError('ENOENT', path);
 
 class ContainerFs {
 	readonly files = new Map<string, Uint8Array>();
-	readonly dirs = new Set<string>(['/', WORKSPACE_BACKUP_DIR]);
+	readonly dirs = new Set<string>(['/', DEVBOX_WORKDIR]);
 	readonly calls: string[] = [];
 
 	resolve(path: string): string {
 		if (path === '') throw new TypeError('path must not be empty');
 
-		const absolute = path.startsWith('/') ? path : `${WORKSPACE_BACKUP_DIR}/${path}`;
+		const absolute = path.startsWith('/') ? path : `${DEVBOX_WORKDIR}/${path}`;
 		const out: string[] = [];
 
 		for (const segment of absolute.split('/')) {
@@ -333,7 +334,7 @@ describe('the codemode sandbox namespace', () => {
 		}
 
 		expect(fs.calls).toEqual([
-			`listFiles:${WORKSPACE_BACKUP_DIR}`, `listFiles:${WORKSPACE_BACKUP_DIR}`,
+			`listFiles:${DEVBOX_WORKDIR}`, `listFiles:${DEVBOX_WORKDIR}`,
 		]);
 
 		const root = await file({ op: 'list', path: '/computer/workspace' });

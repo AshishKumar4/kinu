@@ -5,11 +5,12 @@ import type { UserDO } from './user-do';
 import { ROSTER_SOCKET_PATH } from './roster';
 import { appendIdentityHeaders } from '../cli/rpc-gate';
 import { pictureKey, PictureAddressSchema, readPictureInMode, type PictureBucket } from '../slates/pictures';
-import { connectedPath, FILES_VIEW_CONFIG_KEY, filesViewNamed, PROFILE_CATALOG_CONFIG_KEY, THEME_CONFIG_KEY, THEME_NAMES, themeNamed, USER_WEB_SEARCH_TEST_PATH } from '@kinu.run/core';
+import { connectedPath, GOOGLE_OAUTH_CRED_KEY, FILES_VIEW_CONFIG_KEY, filesViewNamed, PROFILE_CATALOG_CONFIG_KEY, THEME_CONFIG_KEY, THEME_NAMES, themeNamed, USER_WEB_SEARCH_TEST_PATH } from '@kinu.run/core';
 import { BOX_SIZE_ORDER } from '@kinu.run/devbox/sizes';
 import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY } from '../computer-size';
 import { DEVICE_TIERS, JsonValueSchema } from '@kinu.run/core';
-import { diagnostics, authoredRefusal, toKinuError, settle, type KinuError } from '@kinu.run/core/obs';
+import { diagnostics, authoredRefusal, renderThrownChain, toKinuError, settle, type KinuError } from '@kinu.run/core/obs';
+import { isEvalServiceIdentity } from '../eval/abort-route';
 import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '@kinu.run/core';
 import { listProviderCatalog } from './available-models';
 import { notifyWorkspacesModelSettingsChanged, type CreateWorkspaceEnv } from './workspace-access';
@@ -20,6 +21,11 @@ import { idempotent } from '@nimbus-sh/fabric/do-calls.js';
 import { logDoCallRetry } from '../obs/do-call-retry';
 import type { UserCaller } from '@kinu.run/core';
 import { isControlPlaneOperator, type AdminGateEnv } from '../control-plane/admin-caller';
+import { completeGoogleConnect, GOOGLE_CONNECT_STATE_PREFIX, googleConnectable, startGoogleConnect, type GoogleConnectEnv } from './google-connect';
+import { controlPlaneStub, hasControlPlane } from '../control-plane/stub';
+import type { IndexFeedSink } from '../control-plane/index-feed';
+import type { ControlPlaneDO } from '../control-plane/control-plane-do';
+import { internalCaller } from '@kinu.run/core/control-plane';
 import { ownerGate, rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
 import { accountApi, type AccountApiVariables } from './account-api';
 import { searchAsAccount, type WebSearchEnv } from './web-search-route';
@@ -36,20 +42,23 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   | 'fetch' | 'listWorkspaces' | 'touchWorkspace' | 'removeWorkspace' | 'hasWorkspace'
   | 'listDevices' | 'issueDeviceJoin' | 'acknowledgeUnstoppedDevice' | 'revokeDevice' | 'renameDevice' | 'listDeviceConsents'
   | 'setDeviceTier' | 'grantDeviceConsent' | 'revokeDeviceConsent'
-  | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'checkpointCredentials' | 'restoreCredentials' | 'listActiveWorkspaces' | 'getAuthHeaders' | 'getAuth'
+  | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'googleConnection' | 'checkpointCredentials' | 'restoreCredentials' | 'listActiveWorkspaces' | 'getAuthHeaders' | 'getAuth'
+  | 'limits' | 'limits_inviteRedeemed'
   | 'getCodexStatus' | 'disconnectCodex' | 'startClaudeSignIn' | 'finishClaudeSignIn'
   | 'chatgptPlan' | 'startChatGptSignIn' | 'cancelChatGptSignIn' | 'startChatGptPasteSignIn' | 'finishChatGptPasteSignIn' | 'signOutChatGpt'
   | 'getConfig' | 'setConfig' | 'claimConfig'
   | 'listCloudflareAccounts' | 'selectCloudflareAccount' | 'listAIGateways' | 'selectAIGateway'
   | 'userMcp_list' | 'userMcp_presets' | 'userMcp_add' | 'userMcp_remove' | 'userMcp_connectedPresets'
   | 'userMcp_handleOAuthCallback'
-  | 'userMcp_beginConnect'
+  | 'userMcp_beginConnect' | 'userMcp_reconnect' | 'evalAbortActivation'
   | 'accountMemory_view' | 'accountMemory_decide' | 'accountMemory_put' | 'accountMemory_forget' | 'accountMemory_forgetNote'
   | 'slateAiSpend'
   | 'listSecrets' | 'putSecrets' | 'setSecretDestination' | 'deleteSecret' | 'grantSecret' | 'revokeSecretGrant'
 >;
 
-export interface UserRoutesEnv<Id> extends CreateWorkspaceEnv<Id>, AdminGateEnv {
+export interface UserRoutesEnv<Id> extends CreateWorkspaceEnv<Id>, AdminGateEnv, GoogleConnectEnv {
+  /** The control plane, as the index feed and an invite link's spending reach it. */
+  ControlPlaneDO?: ObjectNamespace<Id, IndexFeedSink & Pick<ControlPlaneDO, 'redeemInvite'>>;
   /** The deployment's binding, whose `websearch` Settings' Test reaches for an account with no Cloudflare login. */
   readonly AI?: CreateWorkspaceEnv<Id>['AI'] & WebSearchEnv['AI'];
   UserDO: ObjectNamespace<Id, UserRoutesAuthority>;
@@ -182,6 +191,28 @@ function accountProfile(c: UserContext, profile: Awaited<ReturnType<UserRoutesAu
 const ProfilePatch = v.object({ displayName: v.string() });
 
 userRoutes.get('/api/user/profile', async (c) => accountProfile(c, await c.get('stub').getProfile(c.get('owner'))));
+
+/** The account's class and each limit read now, for Settings → Usage and the near-limit banner (core limits/). */
+userRoutes.get('/api/user/limits', async (c) => json({ body: await c.get('stub').limits(c.get('owner')) }));
+
+/**
+ * An invite link opened by the signed-in person: spent once, for them, at the control plane; their account is then
+ * invited, with no limits. The link's maker (an operator's email) is the invitation's author.
+ */
+userRoutes.post('/api/user/invite/:token', async (c) => {
+  if (!hasControlPlane(c.env)) return err(404, 'This deployment makes no invite links.');
+  const { userId } = c.get('identity');
+  const redeemed = await controlPlaneStub(c.env).redeemInvite(await internalCaller(c.env), rawParam(c, 'token'), userId);
+
+  if (redeemed === 'unknown') return err(404, 'This invite link is not one of ours.');
+
+  if (redeemed === 'spent') return err(409, 'This invite link was already used by another account.');
+
+  if (redeemed === 'expired') return err(410, 'This invite link has expired; ask for a new one.');
+  await c.get('stub').limits_inviteRedeemed(c.get('owner'), redeemed.createdBy);
+
+  return json({ body: await c.get('stub').limits(c.get('owner')) });
+});
 
 userRoutes.patch('/api/user/profile', async (c) => {
   const body = await safeJson(c.req.raw, ProfilePatch);
@@ -408,16 +439,21 @@ userRoutes.post('/api/user/chatgpt/paste/start', (c) => settle(Effect.tryPromise
   catch: (cause) => toKinuError({ doing: 'starting the ChatGPT sign-in', cause, otherwise: 'unavailable' }),
 })));
 
-userRoutes.post('/api/user/chatgpt/paste/finish', async (c) => {
-  const body = await safeJson(c.req.raw, v.object({ url: v.string() }));
+// A paste the account refuses says why in its own words: across RPC its refusal is no KinuError, so `routeError`
+// would answer only its class's ("The request is not valid.", production 2026-10-23).
+userRoutes.post('/api/user/chatgpt/paste/finish', (c) => settle(Effect.tryPromise({
+  try: async () => {
+    const body = await safeJson(c.req.raw, v.object({ url: v.string() }));
 
-  if (body === null) return err(400, 'Body must be { url }');
-  const finished = await c.get('stub').finishChatGptPasteSignIn(c.get('owner'), body.url);
+    if (body === null) return err(400, 'Body must be { url }');
+    const finished = await c.get('stub').finishChatGptPasteSignIn(c.get('owner'), body.url);
 
-  if (finished.outcome === 'signed_in') modelSettingsChanged(c);
+    if (finished.outcome === 'signed_in') modelSettingsChanged(c);
 
-  return json({ body: finished });
-});
+    return json({ body: finished });
+  },
+  catch: (cause) => authoredRefusal({ doing: 'finishing the ChatGPT sign-in', cause }),
+})));
 
 userRoutes.delete('/api/user/chatgpt', async (c) => {
   const signedOut = await c.get('stub').signOutChatGpt(c.get('owner'), c.req.query('revoke') === '1');
@@ -428,16 +464,19 @@ userRoutes.delete('/api/user/chatgpt', async (c) => {
 
 userRoutes.post('/api/user/claude/start', async (c) => json({ body: await c.get('stub').startClaudeSignIn(c.get('owner')) }));
 
-userRoutes.post('/api/user/claude/finish', async (c) => {
-  const body = await safeJson(c.req.raw, v.object({ code: v.string() }));
+userRoutes.post('/api/user/claude/finish', (c) => settle(Effect.tryPromise({
+  try: async () => {
+    const body = await safeJson(c.req.raw, v.object({ code: v.string() }));
 
-  if (body === null) return err(400, 'Body must be { code }');
-  const status = await c.get('stub').finishClaudeSignIn(c.get('owner'), body.code);
+    if (body === null) return err(400, 'Body must be { code }');
+    const status = await c.get('stub').finishClaudeSignIn(c.get('owner'), body.code);
 
-  if (status.connected) modelSettingsChanged(c);
+    if (status.connected) modelSettingsChanged(c);
 
-  return json({ body: status });
-});
+    return json({ body: status });
+  },
+  catch: (cause) => authoredRefusal({ doing: 'finishing the Claude sign-in', cause }),
+})));
 
 // Refused whatever the method.
 userRoutes.all('/api/user/config/:key', async (c, next) => {
@@ -559,6 +598,32 @@ userRoutes.post('/api/user/mcp/servers/:id/connect', (c) => settle(Effect.gen(fu
   });
 })));
 
+// Eval-only: ends the account object's activation, so the next request is a fresh wake that dials every MCP server again
+// (the mcp-wake first-run row). `ctx.abort` rejects the call that asked for it: that rejection is the abort's receipt.
+userRoutes.post('/api/user/eval/abort', (c) => {
+  if (!isEvalServiceIdentity(c.get('identity'))) return Response.json({ error: 'Not found' }, { status: 404 });
+  const aborted = Response.json({ aborted: true }, { status: 202 });
+
+  return settle(Effect.tryPromise({ try: () => c.get('stub').evalAbortActivation(), catch: (cause) => renderThrownChain({ cause }) }).pipe(Effect.match({
+    onFailure: (receipt) => {
+      diagnostics.event('eval.account_activation_aborted', { receipt });
+
+      return aborted;
+    },
+    onSuccess: () => {
+      diagnostics.event('eval.account_activation_abort_returned', {});
+
+      return aborted;
+    },
+  })));
+});
+
+// A failed or closed server dialled again at the person's ask (the row's Reconnect).
+userRoutes.post('/api/user/mcp/servers/:id/reconnect', (c) => settle(Effect.tryPromise({
+  try: async () => json({ body: await c.get('stub').userMcp_reconnect(c.get('owner'), decodeURIComponent(rawParam(c, 'id'))) }),
+  catch: (cause) => authoredRefusal({ doing: 'reconnecting this MCP server', cause }),
+})));
+
 userRoutes.delete('/api/user/mcp/servers/:id', (c) => settle(Effect.tryPromise({
   try: async () => {
     await c.get('stub').userMcp_remove(c.get('owner'), c.get('key'));
@@ -610,7 +675,23 @@ userRoutes.delete('/api/user/memory/notes/:id', (c) => settle(Effect.tryPromise(
   catch: (cause) => authoredRefusal({ doing: 'forgetting this account note', cause }),
 })));
 
+// The Google connection: whether this account may connect it here, and the one it holds.
+userRoutes.get('/api/user/google', async (c) => json({ body: {
+  available: googleConnectable(c.env, c.get('identity').email),
+  connection: await c.get('stub').googleConnection(c.get('owner')),
+} }));
+
+userRoutes.get('/api/user/google/connect', async (c) => startGoogleConnect(c.req.raw, c.env, { account: c.get('identity').userId, email: c.get('identity').email }));
+
 userRoutes.get('/api/user/mcp/callback', async (c) => {
+  // The Google connection's sign-in returns here too, its client's registered address; its state says so.
+  if ((new URL(c.req.url).searchParams.get('state') ?? '').startsWith(GOOGLE_CONNECT_STATE_PREFIX)) {
+    return completeGoogleConnect({
+      request: c.req.raw, env: c.env, account: c.get('identity').userId,
+      keep: async (credential) => { await c.get('stub').setCredential(c.get('owner'), GOOGLE_OAUTH_CRED_KEY, credential); },
+    });
+  }
+
   // `userMcp_handleOAuthCallback` validates the `<nonce>.<serverId>` state inside UserDO.
   const ended = await c.get('stub').userMcp_handleOAuthCallback(c.get('owner'), c.req.url);
 

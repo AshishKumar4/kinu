@@ -11,6 +11,7 @@ import { Hono } from 'hono';
 import { mailHandRoutes, mailRoutes, type MailRoutesEnv } from '../src/mail/routes';
 import { routeError, type FamilyEnv } from '../src/api/context';
 import type { WorkspaceVariables } from '../src/api/workspace';
+import type { OrchestratorAgent } from '../src/orchestrator';
 import type { MailNameClaim } from '../src/mail/mailname-do';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 
@@ -34,6 +35,9 @@ let assistants: Map<string, string>;
 
 /** The workspaces asked to read their owner's mail, in order. */
 let readers: string[];
+
+/** A recipient the sending service has suppressed after a bounce, as the Mailbox meets it. */
+const SUPPRESSED = 'gone@bounced.example';
 
 function storeOf(userId: string): MailStore {
   const held = stores.get(userId);
@@ -119,6 +123,13 @@ function env(accounts: 'operators' | 'everyone' = 'operators'): MailRoutesEnv {
           update: (id: string, change: Parameters<MailStore['update']>[1]) => Promise.resolve(store.update(id, change)),
           draft: (outgoing: Parameters<MailStore['draft']>[0]) => store.draft(outgoing),
           send: async (outgoing: Parameters<MailStore['queue']>[0]) => {
+            // As a KinuError crosses DO RPC: its class dropped, its tag, code and words kept.
+            if (outgoing.to.includes(SUPPRESSED)) {
+              return Promise.reject(Object.assign(new Error(`Not sent: a recipient is on the sending service's suppression list after a bounce or complaint: ${SUPPRESSED}`), {
+                name: 'KinuError[denied]', _tag: 'KinuError', code: 'denied', remote: true,
+              }));
+            }
+
             sent.push({ userId, to: outgoing.to, subject: outgoing.subject });
 
             return (await store.queue(outgoing)).view;
@@ -236,6 +247,16 @@ describe('the person reads and sends their own mail, and only their own', () => 
     expect((await call(PRIYA, { method: 'GET', path: '/api/user/mail/threads?view=sent' })).status).toBe(404);
   });
 
+  // privacy@kinu.run, 2026-10-23: a send to a suppressed recipient answered "Not allowed.", so the person could not
+  // tell why their message went nowhere.
+  test("a send the Mailbox refuses answers in the Mailbox's words, the suppressed recipient named", async () => {
+    const refused = await call(ASHISH, { method: 'POST', path: '/api/user/mail/send', body: { path: '', to: [SUPPRESSED], subject: 'Hello', text: 'Hi.' } });
+
+    expect(refused.status).toBe(403);
+    expect(refused.body).toEqual({ code: 'denied', error: `Not sent: a recipient is on the sending service's suppression list after a bounce or complaint: ${SUPPRESSED}` });
+    expect(sent).toEqual([]);
+  });
+
   test('a draft is saved to Drafts, and Trash takes a thread out of All', async () => {
     const drafted = await call(ASHISH, { method: 'POST', path: '/api/user/mail/drafts', body: { path: '', to: ['dana@northwind.io'], subject: 'Re: /hooks/v2', text: 'It is ours; the fix is going out.' } });
     const listed = v.parse(v.object({ threads: v.array(v.object({ id: v.string() })) }), (await call(ASHISH, { method: 'GET', path: '/api/user/mail/threads?view=drafts' })).body);
@@ -283,11 +304,10 @@ describe('the person sends a thread to one of their workspaces', () => {
 
   /** As the API mounts it: behind the workspace gate, which has proven `who` owns api-worker. */
   async function hand(who: { userId: string; email: string }, thread: string) {
-    const app = new Hono<FamilyEnv<MailRoutesEnv, WorkspaceVariables>>()
+    const app = new Hono<FamilyEnv<MailRoutesEnv, WorkspaceVariables<Pick<OrchestratorAgent, 'mailHanded'>>>>()
       .use('*', async (c, next) => {
         c.set('identity', { userId: who.userId, email: who.email, sub: who.userId });
         c.set('workspace', { name: 'api-worker', request: c.req.raw, agent: {
-          evalAbortActivation: () => Promise.resolve(), activations: () => Promise.resolve([]),
           mailHanded: (mail) => {
             handed.push(mail);
 

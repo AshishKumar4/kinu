@@ -835,6 +835,33 @@ const homeScreenPrelude = (project: string, width = 100, height = 40, fetchStub?
     expect(observed.notice).toContain('shopbot');
   });
 
+  test('a session from KINU_TOKEN alone lists the cloud models when the screen turns to cloud', async () => {
+    const run = await runHomeScreen({
+      // No stored sign-in and no provider key: the session is the environment's, so the account's models are local's too.
+      config: { providers: {} },
+      env: { KINU_TOKEN: 'ktk_env_fixture_token_not_real' },
+      fetchStub: `async (input, init) => {
+        const url = input instanceof Request ? input.url : String(input);
+        if (globalThis.turned && url.endsWith('/api/cli/models')) {
+          globalThis.cloudListedWith = new Headers(input instanceof Request ? input.headers : init?.headers).get('authorization');
+        }
+        return url.endsWith('/api/cli/models') ? Response.json({ models: [] }) : Response.json([]);
+      }`,
+      driver: `
+        await settle();
+        mockInput.pressTab();
+        await settle();
+        globalThis.turned = true;
+        mockInput.pressArrow('down');
+        await waitFor('the cloud catalog to be asked for or refused', () => globalThis.cloudListedWith !== undefined || frame().includes('Catalog unavailable'), 1200);
+        await settle();
+        console.log(JSON.stringify({ cloud: frame().includes('Cloud workspace'), listedWith: globalThis.cloudListedWith ?? null, refused: frame().includes('Catalog unavailable') }));
+      `,
+    });
+
+    expect(JSON.parse(run.stdout)).toEqual({ cloud: true, listedWith: 'Bearer ktk_env_fixture_token_not_real', refused: false });
+  });
+
 /** Subprocess so one KINU_HOME and one renderer swap belong to one test; the caller owns the returned home. */
 async function runHomeScreen(options: {
   driver: string;
@@ -843,6 +870,8 @@ async function runHomeScreen(options: {
   height?: number;
   config?: Partial<KinuConfig>;
   fetchStub?: string;
+  /** Set after the developer's own credentials are cleared, as a shell that exported them would. */
+  env?: Readonly<Record<string, string>>;
 }) {
   const home = scratchDir('home-tui');
   const project = realpathSync(scratchDir('home-tui-project'));
@@ -875,6 +904,7 @@ async function runHomeScreen(options: {
   const env: NodeJS.ProcessEnv = { ...process.env, KINU_HOME: home, KINU_SKIP_DAEMON: '1' };
 
   for (const name of INHERITED_CREDENTIALS) delete env[name];
+  Object.assign(env, options.env);
 
   const proc = await runToExit([
     process.execPath,

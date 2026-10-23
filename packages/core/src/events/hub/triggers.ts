@@ -136,6 +136,17 @@ export class TriggerRegistry {
     return true;
   }
 
+  /** A trigger's spec rewritten in place, its schedule untouched: a watcher's cursor or why it parked. False when no such
+   *  trigger is live. */
+  amendSpec(id: TriggerId, spec: JsonObject): boolean {
+    const before = this.get(id);
+
+    if (!before || before.state === 'revoked') return false;
+    this.sql.exec(`UPDATE triggers SET spec = ? WHERE actor_id = ? AND id = ?`, JSON.stringify(spec), this.actorId, id);
+
+    return true;
+  }
+
   /** Paused triggers' alarm firings are dropped silently. */
   pause(id: TriggerId, now: number): boolean {
     const before = this.get(id);

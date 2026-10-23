@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { DeploymentAnswer } from '@kinu.run/test-utils';
-import { prepareExecutors, runClosings } from './harness';
+import { prepareExecutors, runClosings, substitutions } from './harness';
 import type { PublicExecutorResult } from './session';
 
 test('a turn\'s executors are prepared in order, and the first command the build fails stops the rest as the build\'s answer', async () => {
@@ -43,4 +43,20 @@ test('every part closes as the trial does, and a closing that fails is named whi
   ]);
 
   expect([unclosed, written]).toEqual([['closing tower: the box is gone'], ['/home/main/eval-minecraft/frames.jpg']]);
+});
+
+// 2026-10-23: a GLM 5.3 run's calls that fell back answered as Muse and were counted as GLM's.
+test('a trial whose model fell back to another measures no one model; another model\'s fallback is not its own', () => {
+  const at = '2026-10-23T03:37:05.197Z';
+  const glm = 'workers-ai/@cf/zai-org/glm-5.3';
+
+  const ledgers = [
+    { actor: 'main', events: [{ type: 'model_fallback' as const, runId: 'r', eventIndex: 1, timestamp: at, from: glm, to: 'opencode-go/muse-spark-1.3-contributor', reason: '429' }] },
+    { actor: 'helper', events: [{ type: 'model_fallback' as const, runId: 'r2', eventIndex: 1, timestamp: at, from: glm, to: 'opencode-go/muse-spark-1.3-contributor', reason: '429' }] },
+  ];
+
+  expect(substitutions(ledgers, glm)).toEqual([{ name: 'InfraError',
+    message: `${glm} fell back 2 time(s), to opencode-go/muse-spark-1.3-contributor: those calls answered as another model, so this trial measures no one model` }]);
+  expect(substitutions(ledgers, 'opencode-go/muse-spark-1.3-contributor')).toEqual([]);
+  expect(substitutions([{ actor: 'main', events: [] }], glm)).toEqual([]);
 });

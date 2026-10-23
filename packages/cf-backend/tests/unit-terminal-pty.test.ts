@@ -20,7 +20,11 @@ mockAgentsSdk();
 const { terminalRoutes } = await import('../src/terminal-route');
 
 import type { TerminalRouteDeps, TerminalWorkspace } from '../src/terminal-route';
+
 import { type RecordedLog, createRecordingLogger } from '@kinu.run/test-utils';
+
+/** The route's dependencies, and the workspace the gate claimed for the case. */
+type TerminalCase = TerminalRouteDeps & { readonly workspace: TerminalWorkspace };
 
 
 interface TerminalDouble {
@@ -37,7 +41,7 @@ interface Trace {
 }
 
 interface Harness {
-  readonly deps: TerminalRouteDeps;
+  readonly deps: TerminalCase;
   readonly trace: Trace;
 }
 
@@ -81,10 +85,10 @@ function harness(opts: {
     openDeviceScreen: () => { throw new Error('openDeviceScreen: the device lane is not driven by this suite'); },
   });
 
-  // Fakes cannot satisfy `DurableObjectId`/`DurableObjectStub`, so the route takes the two resolutions instead.
+  // Fakes cannot satisfy `DurableObjectId`/`DurableObjectStub`: the claimed workspace stands in, and the box's resolution.
   return {
     deps: {
-      resolveWorkspace: async () => agent,
+      workspace: agent,
       resolveSandbox: () => opts.sandboxBound === false ? null : container,
       UserDO: {
         idFromName: () => { throw new Error('UserDO.idFromName: the device lane is not driven by this suite'); },
@@ -104,10 +108,10 @@ function executionContext(): Pick<ExecutionContext, 'waitUntil'> {
 
 function terminalRequest(
   request: Request,
-  deps: TerminalRouteDeps,
+  deps: TerminalCase,
   ctx: Pick<ExecutionContext, 'waitUntil'> = executionContext(),
 ): Promise<Response | null> {
-  return serveFamily(terminalRoutes(() => deps), { workspace: { name: WORKSPACE }, ctx: ctx })(request, {});
+  return serveFamily(terminalRoutes(() => deps), { workspace: { name: WORKSPACE, agent: deps.workspace }, ctx: ctx })(request, {});
 }
 
 function attachRequest(query: string, init: RequestInit = {}): Request {
@@ -293,8 +297,8 @@ describe("opening a PC's desktop (1014-t)", () => {
       fetch: () => { throw new Error('fetch: a desktop is not the workspace\'s terminal'); },
     });
 
-    const deps: TerminalRouteDeps = {
-      resolveWorkspace: async () => agent,
+    const deps: TerminalCase = {
+      workspace: agent,
       resolveSandbox: () => { throw new Error('resolveSandbox: a PC\'s desktop mints no container stub'); },
       UserDO: {
         idFromName: (name) => ({ name, toString: () => name, equals: () => false }),

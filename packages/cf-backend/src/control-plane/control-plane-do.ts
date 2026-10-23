@@ -121,7 +121,8 @@ export class ControlPlaneDO extends DurableObject<Env> {
   ): Promise<void> {
     await this.gate(caller, 'index.forget');
     cpStore.forgetWorkspace(this.store, target);
-    this.gallery.forgetWorkspaces(cpStore.removedWorkspaceNames(this.store, target.userId));
+    // This workspace's listings alone: each removal forgets its own, and every forget queues behind the last.
+    this.gallery.forgetWorkspaces(cpStore.removedWorkspaceNames(this.store, target.userId, target.name));
   }
 
   /** Commit point for a submission: the caller deletes the R2 object when no id returns. */
@@ -249,6 +250,26 @@ export class ControlPlaneDO extends DurableObject<Env> {
 
       return cpStore.userIds(this.store);
     }));
+  }
+
+  /** An account's class and suspension as an operator just set them (control-plane actions), for the accounts list. */
+  async noteAccountStanding(caller: PresentedCaller, userId: string, standing: { readonly class: 'free' | 'invited'; readonly suspendedAt: number | null }): Promise<void> {
+    await this.gate(caller, 'accounts.write');
+    cpStore.noteAccountStanding(this.store, userId, standing, Date.now());
+  }
+
+  /** A single-use invite link's token, made by `createdBy` (an operator's email). */
+  async createInvite(caller: PresentedCaller, createdBy: string): Promise<{ readonly token: string; readonly expiresAt: number }> {
+    await this.gate(caller, 'accounts.write');
+
+    return await cpStore.createInvite(this.store, createdBy, Date.now());
+  }
+
+  /** Spends an invite link for the signed-in `userId` the Worker's route names. */
+  async redeemInvite(caller: PresentedCaller, token: string, userId: string): ReturnType<typeof cpStore.redeemInvite> {
+    await this.gate(caller, 'invite.redeem');
+
+    return await cpStore.redeemInvite(this.store, token, userId, Date.now());
   }
 
   async listUsers(caller: PresentedCaller, request: PageRequest = {}): Promise<Page<ControlUserRow>> {

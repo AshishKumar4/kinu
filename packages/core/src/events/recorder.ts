@@ -456,52 +456,53 @@ export class RunEventRecorder {
    * commit so no subscriber hears of an undone write.
    */
   emitDeferred(runId: string, input: RunEventInput): DeferredRunEvent {
-    return settleSync(Effect.map(this.persist(stampRunEvent(input, runId)), ({ event, seq }) => {
-      return {
-        event,
-        publish: () => {
-          if (event.type === 'context_overflow') this.measuredWindows.set(event.model, event.window);
-          this.advance(event, seq);
+    const persisted = this.persist(stampRunEvent(input, runId));
 
-          if (this.head !== null) this.head.unpublished -= 1;
+    // Written, as every event is but a statement that returned no row: no runner, which only that failure needs.
+    if (persisted === null) return settleSync(Effect.fail(new KinuError('io', 'a persisted run event returned no row')));
+    const { event, seq } = persisted;
 
-          return settleSync(Effect.forEach(this.listeners, (listener) => Effect.try({
-            try: () => listener(event),
-            catch: (cause) => toKinuError({ doing: 'notify a run-event listener', cause, otherwise: 'io' }),
-          }).pipe(Effect.catch((failure) => Effect.sync(() => {
-            diagnostics.failure('event.listener_failed', failure, { runId, eventType: event.type });
-          }))), { discard: true }));
-        },
-      };
-    }));
+    return {
+      event,
+      publish: () => {
+        if (event.type === 'context_overflow') this.measuredWindows.set(event.model, event.window);
+        this.advance(event, seq);
+
+        if (this.head !== null) this.head.unpublished -= 1;
+
+        if (this.listeners.size === 0) return;
+
+        return settleSync(Effect.forEach(this.listeners, (listener) => Effect.try({
+          try: () => listener(event),
+          catch: (cause) => toKinuError({ doing: 'notify a run-event listener', cause, otherwise: 'io' }),
+        }).pipe(Effect.catch((failure) => Effect.sync(() => {
+          diagnostics.failure('event.listener_failed', failure, { runId, eventType: event.type });
+        }))), { discard: true }));
+      },
+    };
   }
 
-  private persist(ev: UnindexedEvent): Effect.Effect<{ readonly event: RunEvent; readonly seq: number }, KinuError> {
-    return Effect.flatMap(Effect.sync(() => {
-      this.actor.assertCurrent();
+  /** Null when the write returned no row. */
+  private persist(ev: UnindexedEvent): { readonly event: RunEvent; readonly seq: number } | null {
+    this.actor.assertCurrent();
 
-      // Counted before it writes: a statement that throws may still have written.
-      if (this.head !== null) this.head.unpublished += 1;
+    // Counted before it writes: a statement that throws may still have written.
+    if (this.head !== null) this.head.unpublished += 1;
 
-      // The envelope is stored once, in its columns; the payload is the body.
-      const { runId: _runId, type: _type, timestamp: _timestamp, ...body } = ev;
+    // The envelope is stored once, in its columns; the payload is the body.
+    const { runId: _runId, type: _type, timestamp: _timestamp, ...body } = ev;
 
-      return this.sql<{ event_index: number; seq: number }>`INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts)
-        SELECT ${this.actorId}, ${ev.runId}, COALESCE(MAX(event_index), -1) + 1, ${ev.type}, ${JSON.stringify(body)}, ${ev.timestamp}
-        FROM run_events WHERE actor_id = ${this.actorId} AND run_id = ${ev.runId}
-        RETURNING event_index, rowid AS seq`[0];
-    }), (stored) => {
-      if (stored === undefined) return Effect.fail(new KinuError('io', 'a persisted run event returned no row'));
+    const [stored] = this.sql<{ event_index: number; seq: number }>`INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts)
+      SELECT ${this.actorId}, ${ev.runId}, COALESCE(MAX(event_index), -1) + 1, ${ev.type}, ${JSON.stringify(body)}, ${ev.timestamp}
+      FROM run_events WHERE actor_id = ${this.actorId} AND run_id = ${ev.runId}
+      RETURNING event_index, rowid AS seq`;
 
-      return Effect.sync(() => {
-        if (ev.type === 'scaffold_promotion' || ev.type === 'scaffold_rollback' || ev.type === 'scaffold_replayed') markStoreChanged(this.sql);
+    if (stored === undefined) return null;
 
-        // The event just written is this isolate's typed value; only a read from storage is parsed (parseStoredRunEvent).
-        const event: RunEvent = { ...ev, eventIndex: stored.event_index };
+    if (ev.type === 'scaffold_promotion' || ev.type === 'scaffold_rollback' || ev.type === 'scaffold_replayed') markStoreChanged(this.sql);
 
-        return { event, seq: stored.seq };
-      });
-    });
+    // The event just written is this isolate's typed value; only a read from storage is parsed (parseStoredRunEvent).
+    return { event: { ...ev, eventIndex: stored.event_index }, seq: stored.seq };
   }
 
   readText(runId: string, opts: BoundedRunEventQuery): StoredRunEvent[] {

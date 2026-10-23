@@ -49,7 +49,7 @@ const VERSION_STAMP = 'pc-agent.version';
  * (SECURITY-devices C1: an unsigned frame gave a hostile hub persistent code
  * execution on every machine).
  */
-const { artifactRefusal, releasePublicKey, verifyRelease } = require('../../core/src/http/release-message.ts');
+const { artifactRefusal, readSignedRelease, releasePublicKey, verifyRelease } = require('../../core/src/http/release-message.ts');
 
 
 /** Present from the moment a successor is started until a daemon connects:
@@ -117,11 +117,12 @@ function stringOrNull(value) {
   return Object(value) instanceof String ? String(value) : null;
 }
 
-/** The frame's fields as this daemon needs them, or the reason it is refused. */
+/** The frame's fields as this daemon needs them, or the reason it is refused: the signed release as every updater
+ *  reads it (`readSignedRelease`), and the archive it names. */
 function parseUpdateFrame(msg) {
-  const version = (stringOrNull(msg.version) ?? '').trim();
+  const release = readSignedRelease(msg);
 
-  if (version === '') return { error: 'no version' };
+  if ('error' in release) return release;
   const urls = Object(msg.urls) === msg.urls ? msg.urls : {};
   // The `.sha256` a hub names beside it is no authority (`downloadVerified`), so it is not read.
   const tarball = stringOrNull(urls.tarball);
@@ -132,23 +133,10 @@ function parseUpdateFrame(msg) {
   const sha256 = stringOrNull(msg.sha256);
 
   if (sha256 === null || !/^[0-9a-f]{64}$/i.test(sha256)) return { error: 'no sha256' };
-  const rawChecksums = Object(msg.checksums) === msg.checksums ? msg.checksums : null;
-  const signature = stringOrNull(msg.signature);
 
-  if (rawChecksums === null || signature === null || !/^[A-Za-z0-9+/]+=*$/.test(signature)) return { error: 'no signature' };
-  /** @type {Record<string, string>} */
-  const checksums = {};
+  if (release.checksums[tarball] !== sha256.toLowerCase()) return { error: 'the checksum named is not the signed one' };
 
-  for (const [artifact, raw] of Object.entries(rawChecksums)) {
-    const digest = stringOrNull(raw);
-
-    if (!artifact.startsWith('/') || digest === null || !/^[0-9a-f]{64}$/i.test(digest)) return { error: 'malformed checksums' };
-    checksums[artifact] = digest.toLowerCase();
-  }
-
-  if (checksums[tarball] !== sha256.toLowerCase()) return { error: 'the checksum named is not the signed one' };
-
-  return { version, tarball, sha256: sha256.toLowerCase(), checksums, signature };
+  return { ...release, tarball, sha256: sha256.toLowerCase() };
 }
 
 /** Whether the frame's signature verifies against the pinned key, as core verifies every release

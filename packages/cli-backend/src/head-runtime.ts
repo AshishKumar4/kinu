@@ -73,6 +73,7 @@ export function hostedCodemodeTool(actor: SeatedActor, search: WebSearchProvider
       stores: codemode.stores,
       // Mail is the cloud account's (docs/MAIL.md §3); a local run has none.
       mail: null,
+      google: null,
       // A head or a swarm node, whose run ends with it, holds no wait on its owner.
       ownerWaits: null,
     });

@@ -27,7 +27,7 @@ export function tenantDrive(env: DriveBindings, tenant: string): MossaicVfs | nu
  * Mossaic's names for a tenant's objects (its `vfsUserDOName` and `vfsShardDOName`, which the SDK does not export): the
  * default namespace, as `createVFS` opens it above.
  */
-function tenantObjectNames(tenant: string) {
+export function tenantObjectNames(tenant: string) {
   return { user: `vfs:default:${tenant}`, shard: (index: number) => `vfs:default:${tenant}:s${String(index)}` };
 }
 
@@ -42,8 +42,13 @@ type Answered<T> = { [K in keyof T]: T[K] extends (...args: infer A) => infer R 
 
 /** The Drive's two objects, as Kinu deploys them: the calls its deletion makes of each. */
 interface DriveObjects<Id> {
-  readonly MOSSAIC_USER?: DriveNamespace<Id, Answered<Pick<MossaicUserDO, 'tenantShards' | 'destroyUser' | 'storedTables'>>>;
+  readonly MOSSAIC_USER?: DriveNamespace<Id, Answered<Pick<MossaicUserDO, 'tenantShards' | 'destroyUser' | 'storedTables' | 'storedBytes'>>>;
   readonly MOSSAIC_SHARD?: DriveNamespace<Id, Answered<Pick<MossaicShardDO, 'destroyShard' | 'storedTables'>>>;
+}
+
+/** The bytes the account's Drive holds, as its tenant accounts them; 0 on a deployment with no Drive. */
+export async function driveStoredBytes<Id>(env: DriveObjects<Id>, tenant: string): Promise<number> {
+  return env.MOSSAIC_USER === undefined ? 0 : await objectNamed(env.MOSSAIC_USER, tenantObjectNames(tenant).user).storedBytes();
 }
 
 /** The account's Drive deleted whole, as the account is: every shard its bytes may be on, then its user object. */

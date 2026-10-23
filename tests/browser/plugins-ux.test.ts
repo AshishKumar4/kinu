@@ -91,7 +91,6 @@ describe('MCP presets', () => {
 
         expect(await presetStatus(page, 'github')).toBe('Not added');
         expect(await presetStatus(page, 'cloudflare')).toBe('Not added');
-        expect(await presetStatus(page, 'google')).toBe('Not added');
 
         // Cloudflare is the OAuth preset: one click posts the add, begins its sign-in for a run of the page's own, and
         // sends a tab of its own to the address the server answered.
@@ -117,9 +116,8 @@ describe('MCP presets', () => {
 
   test('a token preset opens one field and posts it as the bearer header', async () => {
     await withGallery(async (gallery) => {
-      // GitHub without its app: the row falls back to the PAT field. Google
-      // stays configured so the split is observable on one page.
-      const page = await freshPage(gallery, 'plugins&mcp-preset=open&mcp-secrets=google', 'dark', 'desktop');
+      // GitHub without its app: the row falls back to the PAT field.
+      const page = await freshPage(gallery, 'plugins&mcp-preset=open&mcp-secrets=', 'dark', 'desktop');
 
       try {
         await page.waitForSelector('[data-plugin-source="github"]');
@@ -175,8 +173,6 @@ describe('MCP presets', () => {
           () => document.querySelector('[data-plugin-source="github"]')?.getAttribute('data-plugin-state') === 'Not added',
         );
 
-        expect(await page.$('[data-plugin-source="google"]')).toBeNull();
-
         // GitHub's add is a sign-in, not a token prompt: no field opens, the
         // add posts the preset id alone, and the sign-in opens in its tab.
         const sentTo = await signInTab(page, '[data-plugin-source="github"] [data-plugin-add]');
@@ -205,7 +201,7 @@ describe('MCP presets', () => {
   // the deployment has no GitHub app; the manager had read them again every few seconds.
   test('a failed first read of the deployment\'s apps is asked again, and GitHub then offers its token', async () => {
     await withGallery(async (gallery) => {
-      const page = await freshPage(gallery, 'plugins&mcp-secrets=google&presets=down', 'dark', 'desktop');
+      const page = await freshPage(gallery, 'plugins&mcp-secrets=&presets=down', 'dark', 'desktop');
 
       try {
         // Every read on mount fails; once the deployment answers, only a read made after can see it.
@@ -410,10 +406,9 @@ describe('MCP presets', () => {
             expect(text).toContain('Needs sign-in');
             expect(text).toContain('Add custom server');
 
-            // The unclaimed preset says its state by what it offers: the one
-            // control that adds it.
-            expect(await presetStatus(modal, 'google')).toBe('Not added');
-            expect(await modal.$('[data-plugin-source="google"] [data-plugin-add]')).not.toBeNull();
+            // Google is one connection, not a preset: its card offers the one
+            // control that connects it.
+            expect(await modal.$('[data-google-connection="absent"] [data-connect-google]')).not.toBeNull();
             
           } finally {
             await modal.close();
@@ -434,12 +429,12 @@ describe('MCP presets', () => {
             const drawn = await drawnRows(plugins);
 
             expect(drawn.filter((row) => row.preset).map((row) => row.name))
-              .toEqual(['GitHub', 'Cloudflare', 'Gmail']);
+              .toEqual(['GitHub', 'Cloudflare']);
             // Services only, skills being in the Drive: what the account holds,
             // then what it can add. The failed server is among them, so its line
             // (a failure, where the endpoint used to be) is under the same rule.
             // A server of its own on a known service's host takes that service's mark and name.
-            expect(drawn.map((row) => row.name)).toEqual(['GitHub', 'Cloudflare', 'Linear', 'Notion', 'Gmail']);
+            expect(drawn.map((row) => row.name)).toEqual(['GitHub', 'Cloudflare', 'Linear', 'Notion']);
 
             for (const row of drawn) {
               expect(row.text).not.toContain('http');
@@ -447,9 +442,9 @@ describe('MCP presets', () => {
             }
 
             // What the account holds, once each: both connected presets and both
-            // servers of its own; the catalog's last is under Add alone.
+            // servers of its own; the catalog has nothing left to add.
             expect(await connectedList(plugins)).toEqual(['GitHub', 'Cloudflare', 'Linear', 'Notion']);
-            expect(await plugins.$$eval('section[aria-label="Add"] [data-plugin]', (nodes) => nodes.map((node) => node.getAttribute('data-plugin')))).toEqual(['Gmail']);
+            expect(await plugins.$$eval('section[aria-label="Add"] [data-plugin]', (nodes) => nodes.map((node) => node.getAttribute('data-plugin')))).toEqual([]);
             
           } finally {
             await plugins.close();

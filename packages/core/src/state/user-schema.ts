@@ -1,6 +1,7 @@
 // UserDO SQL schema, one DO per userId. Idempotent; runs on every boot. `user_access_tokens` is
 // created adapter-side by `initAccessTokenTable`. Every column the code touches is in its CREATE.
 
+import { initAccountLimitTables } from '../limits/schema';
 import type { SqlExec } from '../types/primitives';
 import { sqlCheckList } from '../utils/sql';
 import { initExperienceLibraryTables } from '../experience/library';
@@ -43,6 +44,8 @@ export interface WorkspaceKeyedRows {
 export function initUserTables(sql: SqlExec): void {
   // The account's memory: its facts in the same `agent_facts` a workspace's world model uses (memory/account.ts).
   initAccountMemoryTables((ddl) => { sql.exec(ddl); });
+  // Its limits: who it is, what of its counted use it spent, and its stores' sizes (limits/schema.ts).
+  initAccountLimitTables(sql);
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_profile (
       id           INTEGER PRIMARY KEY CHECK (id = 1),

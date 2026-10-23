@@ -13,8 +13,11 @@ const fs = require('node:fs');
 
 const path = require('node:path');
 
-// The computer's shell rule, bundled into the daemon (packages/cli/src/daemon-build.ts).
-const { isShell } = require('../../../devbox/src/sessions.ts');
+// The computer's shell rule and read(2)'s numbers, bundled into the daemon (packages/cli/src/daemon-build.ts).
+const { isShell, READ_SYSCALLS } = require('../../../devbox/src/sessions.ts');
+
+// The daemon's one reading of /proc/<pid>/stat, a command name with spaces or parentheses in it included.
+const { procStat } = require('../pty.js');
 
 /** The sandbox's launchers, which hold a PC terminal's foreground before its shell does. */
 const LAUNCHERS = new Set(['bwrap', 'sandbox-exec']);
@@ -27,8 +30,8 @@ function idle(command) {
 /** A TCP socket's state in /proc/net/tcp, LISTEN. */
 const TCP_LISTEN = '0A';
 
-/** read(2)'s number, which /proc/<pid>/syscall begins with while a process waits in it: the architecture's own. */
-const READ_SYSCALL = { x64: '0', arm64: '63', ia32: '3', arm: '3' }[process.arch] ?? null;
+/** read(2)'s number on this machine's architecture, as the computer's sessions read finds it. */
+const READ_SYSCALL = READ_SYSCALLS.find(({ arch }) => arch === process.arch)?.read ?? null;
 
 /** A Mac's ps and lsof answer in well under this; past it a row says nothing more. */
 const ASK_MS = 3_000;
@@ -112,12 +115,9 @@ function linuxFacts(sessions) {
 
   for (const entry of fs.readdirSync('/proc')) {
     if (!/^\d+$/u.test(entry)) continue;
-    const text = read(`/proc/${entry}/stat`);
+    const stat = procStat(entry);
 
-    if (text === undefined) continue;
-    const fields = text.slice(text.lastIndexOf(')') + 2).split(' ');
-
-    processes.set(Number(entry), { comm: text.slice(text.indexOf('(') + 1, text.lastIndexOf(')')), ppid: Number(fields[1]), group: Number(fields[2]), foreground: Number(fields[5]) });
+    if (stat !== undefined) processes.set(Number(entry), stat);
   }
 
   const parents = new Map([...processes].map(([pid, facts]) => [pid, facts.ppid]));

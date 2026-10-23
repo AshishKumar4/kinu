@@ -7,7 +7,7 @@ import * as v from 'valibot';
 import type { JsonValue, UserCaller } from '@kinu.run/core';
 import { serveFamily } from './helpers/api';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
-import { bootstrappedProfile, cliAccount, unreachableAssets, unreachableKv, userAccount, workspaceObject } from './helpers/bindings';
+import { bootstrappedProfile, cliAccount, unreachableAssets, unreachableKv, unreachableNamespace, userAccount, workspaceObject } from './helpers/bindings';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
 import { cliRoutes, type CliRoutesEnv } from '../src/cli/routes';
 import type { AuthIdentity } from '../src/auth/session';
@@ -77,7 +77,7 @@ async function ask(family: 'user' | 'cli', method: string, path: string, body?: 
 
   const cliEnv: CliRoutesEnv<string> = {
     UserDO: { idFromName: (name) => name, get: () => cli }, OrchestratorAgent: orchestrators, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
-    AUTH_KV: unreachableKv('AUTH_KV'), ASSETS: unreachableAssets(),
+    AUTH_KV: unreachableKv('AUTH_KV'), CliAuthDO: unreachableNamespace('CliAuthDO'), ASSETS: unreachableAssets(),
   };
 
   const response = family === 'user'

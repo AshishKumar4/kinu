@@ -7,22 +7,28 @@ import { Effect } from 'effect';
 import { settle } from '../obs/effect';
 import * as v from 'valibot';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
-import { releaseMessage } from './release-message';
+import { JsonValueSchema } from '../utils/json';
+import { readSignedRelease, releaseMessage, type SignedReleaseFields } from './release-message';
 
-const ReleaseChecksumsSchema = v.record(
-  v.pipe(v.string(), v.startsWith('/')),
-  v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/)),
+export type ReleaseChecksums = SignedReleaseFields['checksums'];
+
+/** A signed release off the wire, read by the one reader the device daemon uses too (`readSignedRelease`). */
+export const SignedReleaseSchema = v.pipe(
+  JsonValueSchema,
+  v.rawTransform(({ dataset, addIssue, NEVER }) => {
+    const read = readSignedRelease(dataset.value);
+
+    if ('error' in read) {
+      addIssue({ message: read.error });
+
+      return NEVER;
+    }
+
+    return read;
+  }),
 );
 
-export type ReleaseChecksums = v.InferOutput<typeof ReleaseChecksumsSchema>;
-
-export const SignedReleaseSchema = v.object({
-  version: v.pipe(v.string(), v.trim(), v.minLength(1)),
-  checksums: ReleaseChecksumsSchema,
-  signature: v.pipe(v.string(), v.regex(/^[A-Za-z0-9+/]+=*$/)),
-});
-
-export type SignedRelease = v.InferOutput<typeof SignedReleaseSchema>;
+export type SignedRelease = SignedReleaseFields;
 
 /** Private key is PKCS#8 base64. */
 export async function signRelease(version: string, checksums: ReleaseChecksums, privateKeyPkcs8Base64: string): Promise<SignedRelease> {

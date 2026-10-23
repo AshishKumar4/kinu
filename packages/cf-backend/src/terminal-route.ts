@@ -5,7 +5,6 @@
  */
 
 import { Hono, type Context } from "hono";
-import { getAgentByName } from "agents";
 import { diagnostics, renderThrownChain, toKinuError, type KinuError } from "@kinu.run/core/obs";
 import type { OrchestratorAgent } from "./orchestrator";
 
@@ -56,7 +55,6 @@ interface TerminalSandbox {
 }
 
 export interface TerminalRouteDeps {
-  resolveWorkspace(name: string): Promise<TerminalWorkspace>;
   /** Called on the container lane only, so device and workspace terminals mint no container stub. */
   resolveSandbox(name: string): TerminalSandbox | null;
   readonly UserDO: DeviceHolderNamespace;
@@ -64,7 +62,6 @@ export interface TerminalRouteDeps {
 
 export function terminalRouteDeps(env: Env): TerminalRouteDeps {
   return {
-    resolveWorkspace: (name) => getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, name),
     resolveSandbox: (name) => env.KinuDevbox === undefined
       ? null
       : env.KinuDevbox.getByName(sandboxIdForWorkspace(name)),
@@ -126,6 +123,8 @@ interface TerminalCall {
   readonly request: Request;
   readonly url: URL;
   readonly deps: TerminalRouteDeps;
+  /** The workspace the gate claimed. */
+  readonly workspace: TerminalWorkspace;
   readonly agentName: string;
   readonly executor: string;
   readonly verb: "attach" | "keepalive" | "reset";
@@ -136,7 +135,7 @@ interface TerminalCall {
 
 /** The workspace once its executor is ready for a terminal, or the 503 saying why not. */
 async function readyWorkspace(call: TerminalCall, lane: keyof typeof NOT_READY): Promise<TerminalWorkspace | Response> {
-  const agent = await call.deps.resolveWorkspace(call.agentName);
+  const agent = call.workspace;
   const ready = await agent.prepareTerminal(call.executor, call.surface);
 
   if (!("error" in ready)) return agent;
@@ -397,13 +396,13 @@ async function sandboxTerminal(call: TerminalCall, ctx: Pick<ExecutionContext, '
 }
 
 /** One route per verb; the query names the executor. */
-export function terminalRoutes<Bindings extends object>(
+export function terminalRoutes<Bindings extends object, Agent extends TerminalWorkspace = TerminalWorkspace>(
   depsFor: (env: Bindings) => TerminalRouteDeps,
-): Hono<FamilyEnv<Bindings, WorkspaceVariables>> {
-  const routes = new Hono<FamilyEnv<Bindings, WorkspaceVariables>>();
+): Hono<FamilyEnv<Bindings, WorkspaceVariables<Agent>>> {
+  const routes = new Hono<FamilyEnv<Bindings, WorkspaceVariables<Agent>>>();
 
-  const terminal = (verb: TerminalCall['verb']) => async (c: Context<FamilyEnv<Bindings, WorkspaceVariables>>): Promise<Response> => {
-    const { name: agentName, request } = c.get('workspace');
+  const terminal = (verb: TerminalCall['verb']) => async (c: Context<FamilyEnv<Bindings, WorkspaceVariables<Agent>>>): Promise<Response> => {
+    const { name: agentName, agent: workspace, request } = c.get('workspace');
     const url = new URL(request.url);
     const executor = url.searchParams.get("executor");
 
@@ -419,7 +418,7 @@ export function terminalRoutes<Bindings extends object>(
       return json({ body: { error: `${executor} has no terminal`, lane: "line" } }, { status: 409 });
     }
 
-    const call: TerminalCall = { request, url, deps: depsFor(c.env), agentName, executor, verb, scope, surface: "terminal" };
+    const call: TerminalCall = { request, url, deps: depsFor(c.env), workspace, agentName, executor, verb, scope, surface: "terminal" };
 
     if (executor === DEVICE_EXECUTOR) return deviceTerminal(call);
 
@@ -433,20 +432,20 @@ export function terminalRoutes<Bindings extends object>(
   routes.all(`${LITERAL_WORKSPACE}/terminal/reset`, terminal("reset"));
 
   routes.all(`${LITERAL_WORKSPACE}/devices/:device{[^/%]+}/desktop`, async (c) => {
-    const { name: agentName, request } = c.get('workspace');
+    const { name: agentName, agent: workspace, request } = c.get('workspace');
     const scope = { workspace: agentName, executor: DEVICE_EXECUTOR };
 
     return deviceDesktop({
-      request, url: new URL(request.url), deps: depsFor(c.env), agentName, executor: DEVICE_EXECUTOR, verb: "attach", scope, surface: "desktop",
+      request, url: new URL(request.url), deps: depsFor(c.env), workspace, agentName, executor: DEVICE_EXECUTOR, verb: "attach", scope, surface: "desktop",
     }, c.req.param('device'));
   });
 
   routes.all(`${LITERAL_WORKSPACE}/desktop`, async (c) => {
-    const { name: agentName, request } = c.get('workspace');
+    const { name: agentName, agent: workspace, request } = c.get('workspace');
     const scope = { workspace: agentName, executor: COMPUTER_EXECUTOR };
 
     return sandboxTerminal({
-      request, url: new URL(request.url), deps: depsFor(c.env), agentName, executor: COMPUTER_EXECUTOR, verb: "attach", scope, surface: "desktop",
+      request, url: new URL(request.url), deps: depsFor(c.env), workspace, agentName, executor: COMPUTER_EXECUTOR, verb: "attach", scope, surface: "desktop",
     }, c.executionCtx);
   });
 

@@ -275,6 +275,19 @@ describe('the Agents panel lists every agent in the workspace', () => {
     expect(figures('Main')).toEqual({ tokens: 550, usd: 0.005, activeMs: 60_000, cacheEma: 0.8, lastActiveAt: start + 60_000 });
   });
 
+  // Folded a slice of events at a time, the loop let go between: no step is lost or counted twice at a slice's edge.
+  test('a turn of more steps than one fold reads at once counts every step', async () => {
+    const { main, hire, read, turn } = workspace();
+    const alice = hire(main, 'alice', { origin: 'user' });
+    const step = { input: 100, output: 10, cacheRead: 50, usd: 0.25 };
+
+    turn(alice, 'run-a', 1, [step]);
+    await read();
+    turn(alice, 'run-b', 2, Array.from({ length: 450 }, () => step));
+
+    expect((await read()).find((agent) => agent.label === 'alice')?.figures).toMatchObject({ tokens: 451 * 110, usd: 451 * 0.25, activeMs: 180_000 });
+  });
+
   // A cloud agent's figures arrive at its turn's end; its report of its newest step can be later, and is.
   test('an agent was last active at its newest step its isolate reported, past its figures', async () => {
     const { main, hire, read, rests, turn } = workspace();

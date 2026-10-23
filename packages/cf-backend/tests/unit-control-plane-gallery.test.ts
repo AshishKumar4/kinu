@@ -36,6 +36,52 @@ test('a workspace the index forgets takes its Gallery listings with it', async (
   expect(await index.galleryListed(caller, 'shop', 'board')).toBeNull();
 });
 
+// Staging 04603ec96: an eval account held about 4,000 removed workspaces, each forget re-forgot them all at 1.2 s, and
+// the forgets the evals queued behind one another reset the object.
+test("an account's removed workspaces cost the next forget nothing: each forgets its own, as at the account's first", async () => {
+  /** Forty forgets, each of a listed workspace, after `removed` earlier removals: the statements they cost, and what stays listed. */
+  const forgets = async (removed: number) => {
+    const db = new Database(':memory:');
+    const ctx = makeCtx(db, 'site');
+    const index = new ControlPlaneDO(ctx, env);
+    const caller = await internalCaller(env);
+    const earlier = db.prepare('INSERT INTO cp_workspaces (user_id, name, display_name, created_at, last_seen_at, removed_at) VALUES (?, ?, ?, 1, 1, 2)');
+
+    db.transaction(() => {
+      for (let i = 0; i < removed; i++) earlier.run('u-eval', `eval-${String(i)}`, 'eval');
+    })();
+
+    for (const workspace of [...Array.from({ length: 40 }, (_, i) => `doomed-${String(i)}`), 'kept']) {
+      await index.observeWorkspace(caller, { userId: 'u-eval', name: workspace, displayName: workspace, createdAt: 1, at: 1 });
+      await index.gallerySync(caller, {
+        share: `share-${workspace}`, workspace, slate: 'board', handle: '0123456789', listed: true, url: `https://app.test/shared/live/${workspace}/share-${workspace}`,
+        card: { title: 'Board', line: `The ${workspace} board`, category: 'work', ownerName: 'Sam', picture: null, viewers: 0 },
+      });
+    }
+
+    const sql = ctx.storage.sql;
+    const exec = sql.exec.bind(sql);
+    let statements = 0;
+
+    sql.exec = (query, ...bindings) => {
+      statements += 1;
+
+      return exec(query, ...bindings);
+    };
+
+    for (let i = 0; i < 40; i++) await index.forgetWorkspace(caller, { userId: 'u-eval', name: `doomed-${String(i)}` });
+
+    return { statements, gone: await index.galleryListed(caller, 'doomed-7', 'board'), kept: await index.galleryListed(caller, 'kept', 'board') };
+  };
+
+  const first = await forgets(0);
+  const fleet = await forgets(4_000);
+
+  expect(fleet.statements).toBe(first.statements);
+  expect(fleet.gone).toBeNull();
+  expect(fleet.kept).not.toBeNull();
+});
+
 const A = { email: 'a@x.dev', userId: 'u-a' };
 
 const B = { email: 'b@x.dev', userId: 'u-b' };

@@ -19,7 +19,7 @@ import { webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE, type WebhookRouteEnv } f
 import {
   CliAuthCodeError, RateLimitError, approveCliAuth,
   inspectCliAuth, pollCliAuth, startCliAuth, tokenAllows,
-  type CliAuthAuthority, type CliTokenIdentity,
+  type CliAuthAuthority, type CliAuthObject, type CliTokenIdentity,
 } from './auth-store';
 import {
   ACCESS_TOKEN_SCOPES, isAgentRpcMethod, requiredRpcAccess, rpcAccessScope, rpcMovesOverview, type AccessTokenScope,
@@ -67,6 +67,7 @@ export type CliRoutesAuthority = CliAuthAuthority & SessionAuthority & CloudWork
   | 'slateAiSpend'
   | 'listSecrets' | 'putSecrets' | 'setSecretDestination' | 'deleteSecret' | 'grantSecret' | 'revokeSecretGrant'
   | 'getConfig' | 'setConfig' | 'claimConfig' | 'getProfile' | 'userMcp_connectedPresets'
+  | 'limits_admitTurn' | 'limits_platformTokensSpent'
 >;
 
 export type CliAgentTarget = CloudWorkspaceBirth & ModelSettingsFanoutTarget & AccountLedgerTarget
@@ -75,6 +76,7 @@ export type CliAgentTarget = CloudWorkspaceBirth & ModelSettingsFanoutTarget & A
 export interface CliRoutesEnv<Id>
   extends CreateWorkspaceEnv<Id>, UserAIProxyEnv<Id>, AuthEnv<Id>, WebhookRouteEnv, PreviewSuffixEnv, LabelSignerEnv {
   AUTH_KV: KvStore;
+  CliAuthDO: ObjectNamespace<Id, CliAuthObject>;
   ASSETS: AssetFetcher;
   UserDO: ObjectNamespace<Id, CliRoutesAuthority>;
   OrchestratorAgent: ObjectNamespace<Id, CliAgentTarget>;
@@ -477,7 +479,7 @@ function renderBrowserApproval<Id>(request: Request, env: CliRoutesEnv<Id>): Eff
     const code = url.searchParams.get('code');
 
     if (!code) return html('Connect the Kinu CLI', '<p>This link has no sign-in code. Run <code>kinu auth</code> in your terminal and open the link it prints.</p>', 400);
-    const requestInfo = yield* Effect.promise(() => inspectCliAuth(env.AUTH_KV, code));
+    const requestInfo = yield* Effect.promise(() => inspectCliAuth(env, code));
 
     if (!requestInfo) {
       return html('Connect the Kinu CLI', '<p>This sign-in code is unknown or has expired. Run <code>kinu auth</code> again.</p>', 400);
