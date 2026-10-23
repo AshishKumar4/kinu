@@ -43,6 +43,7 @@
     "./relay-cut-agent.ts",
     "./two-turn-probe-agent.ts",
     "./heap-plant-agent.ts",
+    "./loop-turn-agent.ts",
     "./slate-egress-probe.ts"
   ]
 }
