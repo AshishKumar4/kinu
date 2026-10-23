@@ -29,6 +29,8 @@ const { spawnSync } = require('node:child_process');
 
 const sandbox = require('../src/sandbox.js');
 
+const landlock = require('../src/daemon/landlock.js');
+
 const LINUX = process.platform === 'linux';
 
 /** One sandboxed command, run the way the supervisor runs it. */
@@ -450,6 +452,78 @@ describe('the device sandbox, as the kernel enforces it', () => {
     }
   });
 
+  // Staging 58601a8b0, 2026-10-22: a home sealed for a missing run-later file refused `rm ~/doomed` too, the seal being
+  // the folder bound read-only. The owner's rule is "no new entry directly in ~"; what is there stays the owner's to
+  // change, remove, or move into a folder (daemon/landlock.js).
+  test('sealed by Landlock, an entry already in the home is written, removed and moved out; nothing new lands in it', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
+    const home = scratchDir('sandbox-home-landlock');
+
+    fs.mkdirSync(path.join(home, 'projects', 'x'), { recursive: true });
+    fs.mkdirSync(path.join(home, 'doomed'), { recursive: true });
+    fs.writeFileSync(path.join(home, 'doomed', 'marker'), 'first-run\n');
+    fs.writeFileSync(path.join(home, 'old.txt'), 'owner\n');
+    fs.writeFileSync(path.join(home, 'keep.txt'), 'owner\n');
+    const at = (tail) => JSON.stringify(path.join(home, tail));
+
+    const { plan, printed } = await runIn(home, [home], path.join(home, 'projects', 'x'), [
+      `rm -r ${at('doomed')} && echo removed`,
+      `echo agent >> ${at('old.txt')} && echo appended`,
+      `mv ${at('old.txt')} ${at('projects/old.txt')} && echo moved-out`,
+      `echo new > ${at('new.txt')} && echo created`,
+      `mv ${at('keep.txt')} ${at('renamed.txt')} && echo renamed-in-place`,
+      `mv ${at('projects/old.txt')} ${at('.bash_profile')} && echo planted`,
+      'echo new > new.txt && echo made-in-a-folder',
+      `mkdir ${at('projects/y')} && echo folder-made`,
+      'mktemp > /dev/null && echo temp-made',
+    ].join('; '));
+
+    if (plan.seal !== 'landlock') return;
+
+    expect({
+      printed,
+      gone: fs.existsSync(path.join(home, 'doomed')),
+      moved: fs.readFileSync(path.join(home, 'projects', 'old.txt'), 'utf8'),
+      made: ['new.txt', 'renamed.txt', '.bash_profile'].filter((name) => fs.existsSync(path.join(home, name))),
+      kept: fs.existsSync(path.join(home, 'keep.txt')),
+    }).toEqual({
+      printed: ['removed', 'appended', 'moved-out', 'made-in-a-folder', 'folder-made', 'temp-made'],
+      gone: false, moved: 'owner\nagent\n', made: [], kept: true,
+    });
+  });
+
+  test('sealed by mounts, where a kernel has no Landlock, removing is refused too, and the note says so in those words', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
+    const home = scratchDir('sandbox-home-mounts');
+
+    fs.mkdirSync(path.join(home, 'projects'), { recursive: true });
+    fs.mkdirSync(path.join(home, 'doomed'), { recursive: true });
+
+    const { plan, printed, stderr } = await runIn(home, [home], path.join(home, 'projects'), {
+      command: `rm -r ${JSON.stringify(path.join(home, 'doomed'))} && echo removed`, seal: 'mounts',
+    });
+
+    const note = sandbox.guardNote(stderr, plan.guardNames);
+
+    expect({ seal: plan.seal, printed, there: fs.existsSync(path.join(home, 'doomed')) }).toEqual({ seal: 'mounts', printed: [], there: true });
+    expect(note).toContain('also keeps what is already in it from being removed or renamed');
+    expect(note).not.toContain('new entry directly');
+  });
+
+  test('the seal launcher runs nothing when it cannot seal, and in force it lets nothing new into the sealed folder', () => {
+    if (!LINUX || landlock.landlockAbi() < landlock.SEAL_ABI) return;
+    const dir = scratchDir('seal-launcher');
+
+    fs.mkdirSync(path.join(dir, 'sub'));
+    const launch = (spec, command) => spawnSync(process.execPath, ['--config=/dev/null', '-e', landlock.SEAL_LAUNCHER, '--', spec, 'bash', '-c', command], { encoding: 'utf8', env: {} });
+    const unread = launch('not a plan', 'echo ran');
+    const sealed = launch(JSON.stringify({ sealed: [dir], cwd: dir, env: { PATH: process.env.PATH ?? '' } }), 'touch x || echo refused; touch sub/y && echo below; pwd');
+
+    expect({ status: unread.status, said: unread.stdout, why: unread.stderr.includes('its plan was unreadable') }).toEqual({ status: 126, said: '', why: true });
+    expect({ said: sealed.stdout.trim().split('\n'), x: fs.existsSync(path.join(dir, 'x')), y: fs.existsSync(path.join(dir, 'sub', 'y')) })
+      .toEqual({ said: ['refused', 'below', dir], x: false, y: true });
+  });
+
   test('a refused write to a startup file says which file and why, beside the kernel\'s words', async () => {
     if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
     const home = scratchDir('sandbox-home-note');
@@ -495,16 +569,19 @@ describe('the device sandbox, as the kernel enforces it', () => {
   });
 
   /** A sandboxed command over `roots` on a machine whose home is `home`, run as the supervisor runs it. */
-  async function runIn(home, roots, cwd, command) {
+  /** `ask`: the command, or it with `seal`, how a sealed folder is sealed as `plan` takes it (the kernel's choice when
+   *  not given). */
+  async function runIn(home, roots, cwd, ask) {
+    const { command, seal } = typeof ask === 'string' ? { command: ask, seal: undefined } : ask;
     const deviceHome = path.join(home, '.kinu');
     const agentHome = path.join(deviceHome, 'agents', 'ws', 'home');
     const agentTmp = path.join(deviceHome, 'agents', 'ws', 'tmp');
 
     for (const dir of [agentHome, agentTmp]) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const plan = await sandbox.plan({ tier: 'sandboxed', home, agentHome, agentTmp, deviceHome, roots, cwd, source: {}, command });
+    const plan = await sandbox.plan({ tier: 'sandboxed', home, agentHome, agentTmp, deviceHome, roots, cwd, source: {}, command, seal });
     const run = spawnSync(plan.argv[0], plan.argv.slice(1), { env: plan.env, encoding: 'utf8' });
 
-    return { plan, printed: String(run.stdout ?? '').trim().split('\n').filter((line) => line !== '') };
+    return { plan, printed: String(run.stdout ?? '').trim().split('\n').filter((line) => line !== ''), stderr: String(run.stderr ?? '') };
   }
 
   const plant = (file) => `mkdir -p "$(dirname ${file})" && printf "#!/bin/sh\\necho planted\\n" > ${file} && chmod +x ${file} && echo planted ${file}`;
