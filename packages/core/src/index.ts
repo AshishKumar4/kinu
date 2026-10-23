@@ -1209,7 +1209,7 @@ export {
 
 export {
   agentHome, agentArtifactDirectory, agentTmpRoot, agentCred, agentIdentity, agentNameOfUid, VIEWER_HOME_NAME,
-  provisionAgentHome, confineAgentTmp, releaseAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
+  provisionAgentHome, confineAgentTmp, releaseAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot, PROJECT_OWNER_CRED,
   settleSharedRoots,
   ensureIdentityTable,
   actorHomeName,
