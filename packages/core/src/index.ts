@@ -1209,7 +1209,7 @@ export {
 
 export {
   agentHome, agentArtifactDirectory, agentTmpRoot, agentCred, agentIdentity, agentNameOfUid, VIEWER_HOME_NAME,
-  provisionAgentHome, confineAgentTmp, releaseAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
+  provisionAgentHome, confineAgentTmp, releaseAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot, PROJECT_OWNER_CRED,
   settleSharedRoots,
   ensureIdentityTable,
   actorHomeName,
@@ -2720,7 +2720,7 @@ export { MCP_PRESETS, mcpPresetById, type McpPreset, type McpPresetId } from './
 
 export {
   CALLABLE_MCP_STATES, mapConnectionStatus, mcpCredentialTransport, mcpListingRefusals, McpTransitionLog, observedMcpState,
-  type McpCredentialTransport, type McpFailureKind, type McpObservedState, type McpRefusal, type McpToolListing,
+  type McpCredentialTransport, type McpFailureKind, type McpObservedConnection, type McpObservedState, type McpRefusal, type McpToolListing,
 } from './mcp/client';
 
 export {

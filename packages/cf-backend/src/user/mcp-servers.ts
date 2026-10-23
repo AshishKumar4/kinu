@@ -1,6 +1,6 @@
 import { Cause, Effect, Exit } from 'effect';
 import {
-  ConnectRunSchema, nanoid, plainFetch, type ConnectEnded, type JsonObject, type JsonValue, JsonObjectSchema, decodeJsonValue, McpProtocolFailureSchema, type UserCaller, compareCodeUnits, type McpPresetId, type McpRefusal, mcpPresetById, describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor, validateMcpServerInput, readAllowedTools, parseMcpHeaders, McpTransportSchema, type McpTransport, GITHUB_MCP_PRESET, GitHubRefreshAskSchema, refreshGitHub, type GitHubRefreshAnswer, type GitHubRefreshAsk, type McpPresetAvailability, type McpServerSummary, MCP_PRESETS, type McpPreset, CALLABLE_MCP_STATES, mapConnectionStatus, type McpConnectionStatus, mcpCredentialTransport, mcpListingRefusals, McpTransitionLog, observedMcpState, type McpObservedState, type McpToolListing,
+  ConnectRunSchema, nanoid, plainFetch, type ConnectEnded, type JsonObject, type JsonValue, JsonObjectSchema, decodeJsonValue, McpProtocolFailureSchema, type UserCaller, compareCodeUnits, type McpPresetId, type McpRefusal, type RemoteMcpTool, mcpPresetById, describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor, validateMcpServerInput, readAllowedTools, parseMcpHeaders, McpTransportSchema, type McpTransport, GITHUB_MCP_PRESET, GitHubRefreshAskSchema, refreshGitHub, type GitHubRefreshAnswer, type GitHubRefreshAsk, type McpPresetAvailability, type McpServerSummary, MCP_PRESETS, type McpPreset, CALLABLE_MCP_STATES, mapConnectionStatus, type McpConnectionStatus, mcpCredentialTransport, mcpListingRefusals, McpTransitionLog, observedMcpState, type McpObservedConnection, type McpObservedState, type McpToolListing,
 } from '@kinu.run/core';
 import type { MCPClientManager } from 'agents/mcp/client';
 import type { CallToolResult } from '@modelcontextprotocol/client';
@@ -105,6 +105,100 @@ function offersSignIn(status: McpConnectionStatus, server: { readonly oauthClien
   if (server.credential) return false;
 
   return status === 'authenticating' || (status === 'failed' && server.oauthClient);
+}
+
+/**
+ * Where each server's last good tool list is kept, in its account object's own storage: a turn seats a server from it
+ * at once, without dialling. The owner's UserDO woke 22 times in 20 minutes (production, 2026-10-23) and dialled every
+ * server on each wake, and a turn that read its tools during those dials opened without them. These servers advertise
+ * `tools.listChanged: false`, so a kept list is exact until the server is listed again.
+ */
+function listingKey(serverId: string): string {
+  return `mcp-listing:${serverId}`;
+}
+
+/** The most characters of tool list one server keeps: a quarter of a stored value's 8 MiB limit. */
+const KEPT_LISTING_MAX_CHARS = 2 * 1024 * 1024;
+
+const KeptListingSchema = v.object({
+  tools: v.array(v.looseObject({ name: v.string(), description: v.optional(v.string()), title: v.optional(v.string()), inputSchema: v.unknown() })),
+  listedAt: v.number(),
+});
+
+type KeptListing = v.InferOutput<typeof KeptListingSchema>;
+
+/** Where a turn's tools from one server came from, and what its listing refused. */
+interface Seat {
+  readonly tools: readonly RemoteMcpTool[] | null;
+  readonly source: 'live' | 'kept' | 'none';
+  readonly refused: McpToolSurface['unavailable'];
+}
+
+/** One server's seated tools as descriptors, and the tools the surface refused, named. */
+interface SeatedTools {
+  readonly admitted: SerializableToolDescriptor[];
+  readonly refused: McpToolSurface['unavailable'];
+}
+
+/**
+ * The tools a turn takes from one server: its live list when its connection is ready or listed leniently, else the list
+ * it last kept; none when its live listing failed. A listing's refused tools travel with it.
+ */
+function seatOf(input: {
+  readonly listing: McpToolListing | undefined;
+  readonly ready: boolean;
+  readonly live: readonly RemoteMcpTool[] | undefined;
+  readonly kept: readonly RemoteMcpTool[] | undefined;
+}): Seat {
+  const { listing } = input;
+
+  if (listing !== undefined && 'failure' in listing) return { tools: null, source: 'none', refused: [] };
+  const lenient = listing?.listed;
+  const live = input.ready ? input.live ?? [] : lenient?.tools ?? null;
+
+  if (live !== null) return { tools: live, source: 'live', refused: lenient?.refused ?? [] };
+
+  return input.kept === undefined ? { tools: null, source: 'none', refused: [] } : { tools: input.kept, source: 'kept', refused: [] };
+}
+
+/** One server's seated tools as descriptors, those its allowlist names when it has one. */
+function describeSeated(
+  server: { readonly id: string; readonly name: string; readonly preset_id: string | null },
+  tools: readonly RemoteMcpTool[],
+  allowed: ReadonlySet<string> | null,
+): SeatedTools {
+  const admitted: SerializableToolDescriptor[] = [];
+  const refused: McpToolSurface['unavailable'] = [];
+
+  for (const tool of tools) {
+    if (allowed !== null && !allowed.has(tool.name)) continue;
+    const described = describeMcpTool({ id: server.id, name: server.name }, tool);
+
+    if ('admitted' in described) admitted.push(server.preset_id === null ? described.admitted : { ...described.admitted, presetId: server.preset_id });
+    else refused.push(described.refused);
+  }
+
+  return { admitted, refused };
+}
+
+/** Why a server with no kept tool list offers a turn none, as its connection stands. */
+function unseatedReason(connection: McpObservedConnection | undefined): string {
+  const next = 'The next turn offers its tools once it has listed them.';
+
+  switch (observedMcpState(connection)) {
+    case 'authenticating':
+      return 'waiting for a sign-in: sign in to it again in Settings > MCP servers.';
+    case 'failed':
+      return `its connection failed${connection?.connectionError ? `: ${connection.connectionError}` : ''}. Reconnect it in Settings > MCP servers.`;
+    case 'connecting':
+    case 'discovering':
+    case 'connected':
+    case 'closed':
+    case 'absent':
+    case 'unknown':
+    case 'ready':
+      return `it has not listed its tools yet. ${next}`;
+  }
 }
 
 /** A registered app's server is signed in to before it is used, unless a token in `headers` stands in for the app. */
@@ -227,6 +321,13 @@ export class UserMcpServers {
 
   private readonly _mcpToolLists = new Map<string, McpToolListing>();
 
+  /** Each server's kept tool list, read from storage once an activation (`keptListings`), written at every good listing. */
+  private kept: Map<string, KeptListing> | null = null;
+
+  /** Each server this activation's wake registered and no dial has reached since: the first call, sign-in or list
+   *  that needs one dials it. */
+  private readonly undialledAtWake = new Set<string>();
+
   /** Each server's listing in flight: a second read joins it, so two listings of one server never overlap. */
   private readonly listings = new Map<string, Promise<void>>();
 
@@ -313,9 +414,11 @@ export class UserMcpServers {
       registered.push(row.id);
     }
 
+    // Registered, not dialled: a turn seats each server from its kept tool list, and a call dials the one it needs.
     await this.restoreUserMcp(USER_MCP_CLIENT_NAME);
 
-    for (const id of registered) this.dial(id, () => mgr.establishConnection(id));
+    for (const row of rows) if (this.host.mcp.mcpConnections[row.id] !== undefined) this.undialledAtWake.add(row.id);
+    diagnostics.event('mcp.woke', { servers: rows.length, registered: registered.length, dialled: 0 });
     this.transitions.observe('activation');
   }
 
@@ -340,6 +443,7 @@ export class UserMcpServers {
   /** Starts `connect` unless a dial of this server is in flight; its outcome lands on the connection, a failure logged. */
   private dial(serverId: string, connect: () => Promise<void>): void {
     if (this.dials.has(serverId)) return;
+    this.undialledAtWake.delete(serverId);
 
     const dialled = hold(Effect.promise(connect).pipe(Effect.catchCause(recording({ doing: 'dialling an MCP server', otherwise: 'unavailable' }, (failure) => {
       diagnostics.failure('mcp.connect_failed', failure, { serverId });
@@ -359,6 +463,7 @@ export class UserMcpServers {
     for (let held = this.dials.get(serverId); held !== undefined; held = this.dials.get(serverId)) await held;
     const ended = Promise.withResolvers<void>();
 
+    this.undialledAtWake.delete(serverId);
     this.dials.set(serverId, ended.promise);
 
     try {
@@ -448,11 +553,12 @@ export class UserMcpServers {
     const rows = this.host.sqlx<{ n: number }>(`SELECT COUNT(*) AS n FROM user_mcp_servers`)[0];
     const servers = rows?.n ?? 0;
 
+    // Nothing is dialled: a turn seats from kept lists and a call dials what it needs. What a dial already reached is
+    // kept.
     try {
       await this.joinActivation();
-      await this.host.mcp.waitForConnections();
-      await this.redialUnusable('unusable');
       await this.readMcpToolLists();
+      await this.rememberReadyListings();
     } catch (err) {
       diagnostics.failure('mcp.connection_warmup_failed', toKinuError({
         doing: 'restoring the user MCP connections on warmup',
@@ -469,7 +575,15 @@ export class UserMcpServers {
 
     // A failed activation is a storage failure, not per-server; it must not report every server disconnected.
     await this.joinActivation();
-    await this.redialUnusable('unlinked');
+    await this.redialUnlinked();
+
+    // The person opened their servers: each one this wake has not dialled is dialled now, not waited for, and the page
+    // reads it again while it is connecting.
+    for (const serverId of Object.keys(this.host.mcp.mcpConnections)) {
+      // `dial` holds the dial and records its failure; nothing here waits for it.
+      if (this.undialled(serverId)) this.establishUndialled(serverId);
+    }
+
     const catalog = this.catalog();
     const signInFacts = await this.signInFacts();
 
@@ -653,12 +767,19 @@ export class UserMcpServers {
   connectedPresets(): string[] {
     const connections = this.host.mcp.mcpConnections;
 
+    // A server this wake has not dialled is held as it stood when it was kept: its watchers are not cancelled for a dial
+    // nothing has asked for.
+    const held = (id: string): boolean => CALLABLE_MCP_STATES.has(mapConnectionStatus(connections[id]?.connectionState))
+      || (this.undialled(id) && this.kept?.has(id) === true);
+
     return this.host.sqlx<{ id: string; preset_id: string | null }>(`SELECT id, preset_id FROM user_mcp_servers WHERE preset_id IS NOT NULL`)
-      .flatMap((row) => (row.preset_id !== null && CALLABLE_MCP_STATES.has(mapConnectionStatus(connections[row.id]?.connectionState)) ? [row.preset_id] : []));
+      .flatMap((row) => (row.preset_id !== null && held(row.id) ? [row.preset_id] : []));
   }
 
   async userMcp_connectedPresets(caller: UserCaller): Promise<string[]> {
     await this.host.requireTier(caller, 'mcp.manage');
+    await this.joinActivation();
+    await this.keptListings();
 
     return this.connectedPresets();
   }
@@ -671,6 +792,7 @@ export class UserMcpServers {
   private async assistantConnectionsChanged(): Promise<void> {
     // The GitHub connection is every workspace's git credential: each reads its secrets again.
     await this.host.connectionsMoved?.();
+    await this.keptListings();
     const assistant = this.host.sqlx<{ value: string }>(`SELECT value FROM user_config WHERE key = ?`, ASSISTANT_CONFIG_KEY)[0]?.value;
 
     if (assistant === undefined) return;
@@ -697,6 +819,8 @@ export class UserMcpServers {
 
     this.host.sqlx(`DELETE FROM user_mcp_servers WHERE id = ?`, id);
     this._mcpToolLists.delete(id);
+    (await this.keptListings()).delete(id);
+    await this.host.ctx.storage.delete(listingKey(id));
     // Its sign-ins' runs go with it: no callback of its can name one now.
     await this.host.ctx.storage.delete([...(await this.host.ctx.storage.list({ prefix: connectRunKey(id, '') })).keys()]);
     await this.assistantConnectionsChanged();
@@ -724,7 +848,8 @@ export class UserMcpServers {
     const joined = this.listings.get(id);
 
     if (joined !== undefined) return joined;
-    const listing = this.listMcpTools(id).finally(() => { this.listings.delete(id); });
+    // Whatever the listing finds, a ready connection's tools are kept: an add's or a sign-in's discovery is kept here.
+    const listing = this.listMcpTools(id).then(async () => this.rememberReadyListings()).finally(() => { this.listings.delete(id); });
 
     this.listings.set(id, listing);
 
@@ -746,6 +871,8 @@ export class UserMcpServers {
 
     this._mcpToolLists.set(id, listing);
 
+    if ('listed' in listing) await this.rememberListing(id, listing.listed.tools);
+
     for (const refusal of 'listed' in listing ? mcpListingRefusals({ id, name }, listing.listed) : []) {
       diagnostics.failure('mcp.tool_refused', new KinuError('bad_input', refusal.reason), { server: name });
     }
@@ -761,6 +888,9 @@ export class UserMcpServers {
    *  critical path: starts and awaits no network work; `unavailable` lists servers not yet ready. */
   async userMcp_toolDescriptors(caller: UserCaller): Promise<McpToolSurface> {
     await this.host.requireTier(caller, 'mcp.tools');
+    await this.activationSettled();
+    await this.rememberReadyListings();
+    const kept = await this.keptListings();
 
     const catalog = this.catalog();
 
@@ -798,32 +928,29 @@ export class UserMcpServers {
       : undefined);
 
     const offered = new Set<string>();
+    const seated: string[] = [];
 
-    for (const [id, conn] of Object.entries(connections)) {
-      // Disjoint with `unavailable` by construction: a non-ready connection contributes no descriptors,
-      // so a server whose SDK kept cached tools after a 401 is disclaimed once and offered nowhere.
-      const listing = listingFor(id);
-      const lenient = listing !== undefined && 'listed' in listing ? listing.listed : null;
+    // Each configured server from its live list when its connection is ready or listed, else from its kept list, which a
+    // turn takes at once: no turn waits for a dial, and a call dials the server it needs (`makeCallable`).
+    for (const meta of rows) {
+      const listing = listingFor(meta.id);
+      const seat = seatOf({ listing, ready: connected.has(meta.id), live: connections[meta.id]?.tools, kept: kept.get(meta.id)?.tools });
+      const allowed = allowedById.get(meta.id);
 
-      if (!connected.has(id) && lenient === null) continue;
-      const allowed = allowedById.get(id);
+      seated.push(`${meta.id}:${seat.source}:${observedMcpState(connections[meta.id])}`);
 
-      if (allowed === undefined) continue;
-      const meta = rows.find((r) => r.id === id);
+      if (seat.tools === null || allowed === undefined) continue;
+      offered.add(meta.id);
+      const described = describeSeated(meta, seat.tools, allowed);
 
-      if (!meta) continue;
-      offered.add(id);
-
-      for (const tool of lenient?.tools ?? conn.tools) {
-        if (allowed && !allowed.has(tool.name)) continue;
-        const described = describeMcpTool({ id, name: meta.name }, tool);
-
-        if ('admitted' in described) out.push(meta.preset_id === null ? described.admitted : { ...described.admitted, presetId: meta.preset_id });
-        else refused.push(described.refused);
-      }
-
-      refused.push(...(lenient?.refused ?? []));
+      out.push(...described.admitted);
+      refused.push(...described.refused, ...seat.refused);
     }
+
+    diagnostics.event('mcp.turn_seated', { servers: seated.join(' ') });
+
+    // A server with nothing to seat from is dialled now, not waited for, so the next turn has its tools.
+    for (const meta of rows) if (!offered.has(meta.id) && this.undialled(meta.id)) this.establishUndialled(meta.id);
 
     const unavailable = [...rows
       .filter((r) => !offered.has(r.id))
@@ -837,12 +964,7 @@ export class UserMcpServers {
           return { server: r.name, reason: `connected, but its tool list could not be read, so it offers no tools: ${listing.failure}` };
         }
 
-        return {
-          server: r.name,
-          reason: `not connected when this turn opened, so its tools are absent from this turn. They are `
-            + `installed by the next turn once the connection completes: a turn's tool set is fixed `
-            + `when the turn opens.`,
-        };
+        return { server: r.name, reason: unseatedReason(connections[r.id]) };
       }), ...refused];
 
     // Sorted because the orchestrator's cache hashes this JSON; SDK map order is unstable and would
@@ -851,6 +973,121 @@ export class UserMcpServers {
     out.sort((a, b) => compareCodeUnits(a.toolKey, b.toolKey));
 
     return { descriptors: out, unavailable };
+  }
+
+  /** Whether this wake registered `serverId` and nothing has dialled it since. */
+  private undialled(serverId: string): boolean {
+    return this.undialledAtWake.has(serverId) && this.host.mcp.mcpConnections[serverId] !== undefined;
+  }
+
+  /** Establishes `serverId` as a wake once did, as a dial of its own, keeping the tools it reaches. */
+  private establishUndialled(serverId: string): void {
+    this.dial(serverId, async () => {
+      await this.host.mcp.establishConnection(serverId);
+      await this.rememberReadyListings();
+    });
+  }
+
+  /** Establishes `serverId` and waits for it, if this wake registered it and nothing has dialled it. */
+  private async dialIfUndialled(serverId: string): Promise<void> {
+    if (!this.undialled(serverId)) return;
+    this.establishUndialled(serverId);
+    await this.dials.get(serverId);
+  }
+
+  /** Each server's kept tool list, read once an activation. */
+  private async keptListings(): Promise<Map<string, KeptListing>> {
+    if (this.kept !== null) return this.kept;
+    const stored = await this.host.ctx.storage.list({ prefix: listingKey('') });
+    const kept = new Map<string, KeptListing>();
+
+    for (const [key, value] of stored) {
+      const read = v.safeParse(KeptListingSchema, value);
+
+      if (read.success) kept.set(key.slice(listingKey('').length), read.output);
+    }
+
+    this.kept ??= kept;
+
+    return this.kept;
+  }
+
+  /** Keeps `tools` as `serverId`'s last good tool list, unless it already is. */
+  private async rememberListing(serverId: string, tools: readonly RemoteMcpTool[]): Promise<void> {
+    const kept = await this.keptListings();
+
+    const listed = tools.map(({ name, description, title, annotations, inputSchema }) => ({
+      name, ...description !== undefined && { description }, ...title !== undefined && { title },
+      ...annotations !== undefined && { annotations }, inputSchema,
+    }));
+
+    const written = JSON.stringify(listed);
+
+    if (JSON.stringify(kept.get(serverId)?.tools) === written) return;
+
+    // One stored value holds it, under the platform's per-value limit: a larger list is not kept, and its server is
+    // dialled for each wake's first turn as before.
+    if (written.length > KEPT_LISTING_MAX_CHARS) {
+      diagnostics.event('mcp.listing_not_kept', { serverId, chars: written.length });
+      // An older list kept for it would be seated after a wake in place of this one.
+      await this.host.ctx.storage.delete(listingKey(serverId));
+      kept.delete(serverId);
+
+      return;
+    }
+
+    const listing = v.parse(KeptListingSchema, { tools: listed, listedAt: Date.now() });
+
+    await this.host.ctx.storage.put(listingKey(serverId), listing);
+    kept.set(serverId, listing);
+  }
+
+  /** Every ready connection's tools kept: what the SDK's own discovery listed. */
+  private async rememberReadyListings(): Promise<void> {
+    for (const [id, connection] of Object.entries(this.host.mcp.mcpConnections)) {
+      if (mapConnectionStatus(connection.connectionState) === 'ready') await this.rememberListing(id, connection.tools);
+    }
+  }
+
+  /**
+   * One server dialled again at the person's ask, for a connection that failed or closed: the row's Reconnect. A server
+   * that needs a sign-in is begun by `userMcp_beginConnect` instead, and one that is live is left alone.
+   */
+  userMcp_reconnect(caller: UserCaller, id: string): Promise<{ status: McpConnectionStatus; error: string | null }> {
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* Effect.promise(async () => this.host.requireTier(caller, 'mcp.manage'));
+      yield* Effect.promise(async () => this.joinActivation());
+      const name = this.catalog().get(id)?.name;
+
+      if (name === undefined || this.host.sqlx<{ id: string }>(`SELECT id FROM user_mcp_servers WHERE id = ?`, id).length === 0) {
+        return yield* new KinuError('missing', 'This account has no such MCP server.');
+      }
+
+      const state = observedMcpState(this.host.mcp.mcpConnections[id]);
+      const listed = this._mcpToolLists.get(id);
+
+      // A connection whose tool list failed is listed again on its live transport: the row read failed for that alone.
+      if (listed !== undefined && 'failure' in listed) {
+        diagnostics.event('mcp.reconnect_asked', { serverId: id, from: 'unlisted' });
+        this._mcpToolLists.delete(id);
+        yield* Effect.promise(async () => this.readMcpToolList(id));
+        const again = this._mcpToolLists.get(id);
+
+        return again !== undefined && 'failure' in again
+          ? { status: 'failed' as const, error: again.failure }
+          : { status: mapConnectionStatus(this.host.mcp.mcpConnections[id]?.connectionState), error: null };
+      }
+
+      if (state !== 'failed' && state !== 'closed' && state !== 'absent' && !this.undialled(id)) {
+        return yield* new KinuError('bad_input', `${name} is ${state}, not failed: there is nothing to reconnect.`);
+      }
+
+      diagnostics.event('mcp.reconnect_asked', { serverId: id, from: state });
+      yield* Effect.promise(async () => this.dialAlone(id, async () => this.connectAndDiscover(id)));
+      const connection = this.host.mcp.mcpConnections[id];
+
+      return { status: mapConnectionStatus(connection?.connectionState), error: connection?.connectionError ?? null };
+    }));
   }
 
   /** Called over RPC by the orchestrator's per-tool closure; the result must be JSON-serializable. */
@@ -979,7 +1216,11 @@ export class UserMcpServers {
     const mgr = this.host.mcp;
     const state = (): McpObservedState => observedMcpState(mgr.mcpConnections[serverId]);
 
-    if (state() === 'connecting') await (this.dials.get(serverId) ?? mgr.waitForConnections());
+    // A wake registers each server undialled (`connecting`, with no dial out): the call that needs it dials it, and waits
+    // for that dial's own end, connected, failed or asking for a sign-in.
+    await this.dialIfUndialled(serverId);
+
+    if (state() === 'connecting') await this.dials.get(serverId);
 
     if (state() === 'failed' || state() === 'closed') {
       this.dial(serverId, () => this.connectAndDiscover(serverId));
@@ -994,24 +1235,20 @@ export class UserMcpServers {
 
     // `mcp.call_failed` classifies this refusal by the state it names.
     throw new KinuError('unavailable', `MCP server ${serverName} is ${reached}${why ? ` (${why})` : ''}, so the call was not sent.`
-      + (reached === 'authenticating' ? ' Sign in to it again in Settings.' : ''));
+      + (reached === 'authenticating' ? ' Sign in to it again in Settings > MCP servers.' : ' Reconnect it in Settings > MCP servers.'));
   }
 
   /**
-   * Each server no call can reach dialled once more, and waited for: a failed or closed one, and one awaiting sign-in
-   * whose link the wake lost (the SDK restores it with a new provider, and a dial authorizes again, minting a link). At
-   * most once a wake, on the warmup or the list a person opens, never on a clock: a dead server costs one dial a wake.
-   * The list redials only the unlinked, so a dead server never holds the settings page.
+   * Each server awaiting sign-in whose link the wake lost, dialled once more and waited for: the SDK restores it with a
+   * new provider, and a dial authorizes again, minting the link the settings page offers. At most once a wake.
    */
-  private async redialUnusable(which: 'unusable' | 'unlinked'): Promise<void> {
+  private async redialUnlinked(): Promise<void> {
     const started: Promise<void>[] = [];
 
     for (const [serverId, connection] of Object.entries(this.host.mcp.mcpConnections)) {
-      const state = observedMcpState(connection);
-      const unlinked = state === 'authenticating' && !connection.options.transport.authProvider?.authUrl;
-      const unusable = unlinked || state === 'failed' || state === 'closed';
+      const unlinked = observedMcpState(connection) === 'authenticating' && !connection.options.transport.authProvider?.authUrl;
 
-      if (this.redialled.has(serverId) || !(which === 'unlinked' ? unlinked : unusable)) continue;
+      if (this.redialled.has(serverId) || !unlinked) continue;
       this.redialled.add(serverId);
       this.dial(serverId, () => this.connectAndDiscover(serverId));
       started.push(this.dials.get(serverId) ?? Promise.resolve());
@@ -1024,6 +1261,7 @@ export class UserMcpServers {
     const connected = await this.host.mcp.connectToServer(serverId);
 
     if (connected.state === 'connected') await this.host.mcp.discoverIfConnected(serverId);
+    await this.rememberReadyListings();
   }
 
   /**
@@ -1063,6 +1301,8 @@ export class UserMcpServers {
       const name = this.catalog().get(id)?.name;
 
       if (!configured || name === undefined) return yield* new KinuError('missing', 'This account has no such MCP server.');
+      // A server this wake has not dialled is dialled first: its dial is what finds that it asks for a sign-in.
+      yield* Effect.promise(async () => this.dialIfUndialled(id));
       const facts = (yield* Effect.promise(async () => this.signInFacts()))(id);
 
       // Its row's own rule: a server connecting, discovering or connected is never dialled for a sign-in, which would
@@ -1088,9 +1328,18 @@ export class UserMcpServers {
     await this.host.requireTier(caller, 'mcp.manage');
 
     try {
-      // The activation restores the connection the callback completes.
+      // The activation restores the connection the callback completes; one this wake left undialled is dialled first, as
+      // every wake once dialled it: the SDK reads a `connecting` server as signed in and takes no code (agents
+      // `client-BnYbNT3z.js:2086-2103`).
       await this.joinActivation();
       const req = new Request(url);
+      const signedFor = new URL(url).searchParams.get('state')?.split('.').at(-1);
+
+      if (signedFor !== undefined) {
+        await this.dialIfUndialled(signedFor);
+        await this.dials.get(signedFor);
+      }
+
       const result = await this.host.mcp.handleCallbackRequest(req);
       const run = await this.connectRun(result.serverId, req);
 

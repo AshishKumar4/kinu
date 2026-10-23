@@ -7,7 +7,7 @@
 import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { Effect } from 'effect';
 import { settleSync } from '../obs/effect';
-import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { IdentityChangePolicy } from '@nimbus-sh/core/workspace';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
@@ -42,6 +42,17 @@ export const SESSION_UID = 1000;
 export const AGENT_UID_FLOOR = 2000;
 
 const WORKSPACE_GID = SESSION_UID;
+
+/** The project tree's group ({@link shareProjectTree}): its owner's and a share's viewer's, no other agent's. Clear of the
+ *  session's group and of every agent's own, which start at {@link AGENT_UID_FLOOR}. */
+export const PROJECT_GID = 1001;
+
+/**
+ * The session user with the project's group, where Kinu hands Nimbus the owner's credential (the workspace agent's
+ * session). Nimbus's own session user is a frozen `{1000, 1000, [1000]}` (Nimbus ask 73), so the owner's unnamed shell
+ * still cannot write a file a share's viewer made in the project.
+ */
+export const PROJECT_OWNER_CRED: VfsCred = { ...CRED_SESSION_USER, groups: [SESSION_UID, PROJECT_GID] };
 
 const SHARED_DIRECTORY_MODE = 0o2775;
 
@@ -207,18 +218,55 @@ function agentHomeLayout(agentName: string, identity: AgentIdentity): readonly A
   ];
 }
 
-/** Host-side: only uid 0 may chown. Runs every wake, so writes only what moved. */
+/** Host-side: only uid 0 may chown. Runs every wake, so writes only what moved. The project tree's own group and mode are
+ *  its creation's ({@link shareProjectTree}) and then its owner's: only its owner is settled. */
 export function provisionAgentHome(root: HomeRootVfs, agentName: string, identity: AgentIdentity): string {
   for (const dir of agentHomeLayout(agentName, identity)) {
     if (!root.exists(dir.path)) root.mkdir(dir.path, { recursive: true });
     const held = root.stat(dir.path);
+    const project = dir.path === WORKSPACE_ROOT;
+    const gid = project ? held.gid : dir.gid;
 
-    if (held.uid !== dir.uid || held.gid !== dir.gid) root.chown(dir.path, dir.uid, dir.gid);
+    if (held.uid !== dir.uid || held.gid !== gid) root.chown(dir.path, dir.uid, gid);
 
-    if ((held.mode & 0o7777) !== dir.mode) root.chmod(dir.path, dir.mode);
+    if (!project && (held.mode & 0o7777) !== dir.mode) root.chmod(dir.path, dir.mode);
   }
 
   return agentHome(agentName);
+}
+
+/** Setgid, and sticky: a viewer may write the project's root, so without it the viewer could remove or rename what it did
+ *  not make there, `SOUL.md` and `.kinu` among them (Nimbus enforces the sticky bit on unlink and rename). */
+const PROJECT_MODE = 0o3775;
+
+const PROJECT_DEFAULT_ACL = 0o775;
+
+/**
+ * The project tree ({@link WORKSPACE_ROOT}) as a new workspace makes it: its owner's, setgid to {@link PROJECT_GID}, with a
+ * default ACL that keeps what its owner or a share's viewer makes there group-writable, so each writes the other's (the
+ * owner, 2026-10-19: a share's commands write "your project too, as today"). `.kinu` and `SOUL.md` keep their own owners
+ * and modes; another agent reads the project as before.
+ */
+function shareProjectTree(kernel: Pick<CredentialedVfs, 'chown' | 'chmod' | 'setDefaultAcl'>): void {
+  kernel.chown(WORKSPACE_ROOT, SESSION_UID, PROJECT_GID);
+  kernel.chmod(WORKSPACE_ROOT, PROJECT_MODE);
+  kernel.setDefaultAcl(WORKSPACE_ROOT, PROJECT_DEFAULT_ACL);
+}
+
+/**
+ * Main's home, which is the project tree: provisioned as every agent's, and shared ({@link shareProjectTree}) by the call
+ * that makes its `.kinu`, which is the workspace's creation. An older workspace already has one and keeps its tree as it
+ * was: no migration. Read from the tree itself, so no counter or reset of one can share an old tree or skip a new one; an
+ * owner who deletes `.kinu` has the tree shared at the next boot, as a new one, and a boot that dies between the two
+ * leaves it unshared.
+ */
+export function provisionProjectHome(root: HomeRootVfs & Pick<CredentialedVfs, 'setDefaultAcl'>, identity: AgentIdentity): string {
+  const created = !root.exists(`${WORKSPACE_ROOT}/.kinu`);
+  const home = provisionAgentHome(root, MAIN_AGENT, identity);
+
+  if (created) shareProjectTree(root);
+
+  return home;
 }
 
 /** Nimbus seeds the configured HOME (env.HOME is {@link WORKSPACE_ROOT}); `/home` holds every agent's, so root owns it. */
