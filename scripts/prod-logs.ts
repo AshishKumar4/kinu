@@ -77,7 +77,7 @@
 import { spawn } from 'node:child_process';
 import * as v from 'valibot';
 import { ALERT_THRESHOLDS, findWakeLoops, type StartupHour, type WakeLoop } from '@kinu.run/core/analytics';
-import { ALARM_WORK, classifyErrorCode, HOSTED_ALARM_WORK } from '@kinu.run/core/obs';
+import { ALARM_WORK, classifyErrorCode, HOSTED_ALARM_WORK, KinuError } from '@kinu.run/core/obs';
 import { PLATFORM_CATALOG } from '../packages/core/src/platform-catalog';
 import { recordStep } from './deploy-report';
 import { restAnswer } from './cloudflare-rest';
@@ -398,11 +398,6 @@ export class Telemetry {
     private readonly api?: string,
   ) {}
 
-  /** Where its window starts. */
-  get from(): number {
-    return this.args.from;
-  }
-
   /** The answer's JSON text; `result` parses it. A refusal is classified by its status (`restAnswer`). */
   async raw(body: QueryBody): Promise<string> {
     return await restAnswer({
@@ -690,14 +685,17 @@ const EVENT_CAP = 2000;
 const CADENCE_WINDOW_MS = 6 * HOUR_MS;
 
 /**
- * How far before a version's window the deletion of an object whose alarm the platform cancelled in it is read, by any
- * version: the sleep-time lane's 10-minute idle wake, armed as a turn settles, is delivered about 10 min after a
- * deletion that cleared it, across a deploy. Staging, 2026-10-23: eval workspaces destroyed under the version before,
- * their deliveries `canceled` in the next version's window, each read as an idle wake: 089efcff destroyed 01:59:26Z,
- * delivered 02:06:37Z (8769744f6); 5dd5bb6f 02:15:15Z, 02:25:08Z; f7bfb673 02:15:55Z, 02:25:43Z; b303d01d 02:16:06Z,
- * 02:25:45Z (613467d1a). A day reads unsampled (as {@link CADENCE_WINDOW_MS} says), and one object's rows a few.
+ * How far before a delivery the platform cancelled the deletion of its object is read, by any version: the sleep-time
+ * lane's 10-minute idle wake, armed as a turn settles, is delivered about 10 min after a deletion that cleared it,
+ * across a deploy. Staging, 2026-10-23: eval workspaces destroyed under the version before, their deliveries
+ * `canceled` in the next version's window, each read as an idle wake: 089efcff destroyed 01:59:26Z, delivered 02:06:37Z
+ * (8769744f6); 5dd5bb6f 02:15:15Z, 02:25:08Z; f7bfb673 02:15:55Z, 02:25:43Z; b303d01d 02:16:06Z, 02:25:45Z (613467d1a);
+ * a33296a4 02:37:34Z, 02:46:38Z; b718e331 02:40:31Z, 02:47Z; 9ab1c588 02:38:45Z, 02:48Z (2d5d2d547). An hour holds
+ * each six times over. A day did too, but 04603ec96's deploy, the first to read a day for each such object of each
+ * kept window at once, had 7 of its 9 kept windows answered 500 throughout and others sampled, where none of the 11
+ * deploys before it had one.
  */
-const DELETION_LOOKBACK_MS = 24 * HOUR_MS;
+const DELETION_LOOKBACK_MS = HOUR_MS;
 
 async function timeline(t: Telemetry, args: Args): Promise<void> {
   const target = await resolveObject(t, args.target ?? '');
@@ -1332,7 +1330,7 @@ export async function versionRead(t: Telemetry, around: Telemetry, versionId: st
   const { events: teardownRows } = await t.events([...scope, eq('event', 'workspace.destroyed')], EVENT_CAP);
   const alarm = [...invocations, eq('$workers.eventType', 'alarm')];
   const canceled = await perMinute(t, [...alarm, eq('$workers.outcome', 'canceled')]);
-  const earlier = await deletionRowsOf(t, [...new Set(canceled.map((row) => row.object))]);
+  const earlier = await deletionRowsOf(t, canceled);
   const destroyedAt = deletionTimes([...destroyedRows, ...earlier.aborted], [...teardownRows, ...earlier.tornDown]);
   const alarms = alarmsThatRan(await perMinute(t, alarm), canceled, destroyedAt);
   const called = await perMinute(around, [...invocations, { key: '$workers.eventType', operation: 'neq', value: 'alarm', type: 'string' }]);
@@ -1341,6 +1339,11 @@ export async function versionRead(t: Telemetry, around: Telemetry, versionId: st
   // comes long after the object's last call. Staging c6dc27da1 (Mossaic's sweep) and 7aa75f05e (a deploy run's expiry)
   // each read one as an idle wake.
   const alarmWork = (await Promise.all(ALARM_WORK_EVENTS.map(async (event) => await perMinute(around, [...scope, eq('$metadata.type', 'cf-worker'), eq('event', event)])))).flat();
+
+  // An alarm beside work a sampled answer dropped reads as idle. 04603ec96's deploy, its own read sampled at level
+  // 1,000,000, reported a MailboxDO's 17 alarms (613467d1a's window) and an OrchestratorAgent's 2 (ff916758e's) as idle,
+  // each beside 15 and 22 calls of its own in those minutes. Asked again, as a gateway's refusal is.
+  if (around.sampling > 1) throw new KinuError('unavailable', `the API sampled the reads of the version's work (level ${String(around.sampling)}): an alarm beside work it dropped would read as idle`);
   const total = (rows: readonly { readonly count: number }[]): number => rows.reduce((sum, row) => sum + row.count, 0);
 
   const read = {
@@ -1372,17 +1375,28 @@ async function windowRows(t: Telemetry, versionId: string): Promise<number> {
 }
 
 /** Per object and minute. */
-/** The deletion rows of each of `objects`, by any version, from {@link DELETION_LOOKBACK_MS} before `t`'s window. */
-async function deletionRowsOf(t: Telemetry, objects: readonly string[]): Promise<{ aborted: TelemetryEvent[]; tornDown: TelemetryEvent[] }> {
-  const read = await Promise.all(objects.map(async (object) => {
-    const from = t.from - DELETION_LOOKBACK_MS;
-    const { events: aborted } = await t.events([eq(DO_ID, object), eq('$metadata.message', 'destroyed')], EVENT_CAP, from);
-    const { events: tornDown } = await t.events([eq('event', 'workspace.destroyed'), eq('fields.object', object)], EVENT_CAP, from);
+/** The deletion rows of each object whose delivery was cancelled, by any version, from {@link DELETION_LOOKBACK_MS}
+ *  before its first such delivery; one object at a time, as every kept window is read at once beside the deploy's. */
+async function deletionRowsOf(t: Telemetry, canceled: readonly ObjectMinuteCount[]): Promise<{ aborted: TelemetryEvent[]; tornDown: TelemetryEvent[] }> {
+  const first = new Map<string, number>();
+  const aborted: TelemetryEvent[] = [];
+  const tornDown: TelemetryEvent[] = [];
 
-    return { aborted, tornDown };
-  }));
+  for (const row of canceled) first.set(row.object, Math.min(first.get(row.object) ?? row.minute, row.minute));
 
-  return { aborted: read.flatMap((rows) => rows.aborted), tornDown: read.flatMap((rows) => rows.tornDown) };
+  for (const [object, minute] of first) {
+    const from = minute - DELETION_LOOKBACK_MS;
+
+    for (const [filters, into] of [[[eq(DO_ID, object), eq('$metadata.message', 'destroyed')], aborted], [[eq('event', 'workspace.destroyed'), eq('fields.object', object)], tornDown]] as const) {
+      const read = await t.events(filters, EVENT_CAP, from);
+
+      // A sampled answer can drop the one row of a deletion, and its delivery would read as a wake.
+      if (read.sampling > 1) throw new KinuError('unavailable', `the API sampled the read of object ${object}'s deletion (level ${String(read.sampling)})`);
+      into.push(...read.events);
+    }
+  }
+
+  return { aborted, tornDown };
 }
 
 async function perMinute(t: Telemetry, filters: readonly Filter[]): Promise<ObjectMinuteCount[]> {
