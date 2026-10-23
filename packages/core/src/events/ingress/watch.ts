@@ -228,7 +228,8 @@ async function commitCheck(deps: Pick<WatchDeps, 'registry' | 'log'>, checked: {
   // A cursor that moved back is a check that saw less than the one before it: nothing it found is new.
   if (movesBack(read, next)) return 'quiet';
 
-  if (stableStringify(next ?? null) !== stableStringify(read ?? null)) {
+  // An answer is the watcher checking again: a `parked` an owner's resume left behind goes with the old state.
+  if (stableStringify(next ?? null) !== stableStringify(read ?? null) || watch.parked !== undefined) {
     deps.registry.amendSpec(triggerId, { ...trigger.spec, watch: next === undefined ? {} : { state: next } });
   }
 

@@ -2636,6 +2636,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const namespaces = this.ownNamespaces('plan');
     const authority = await this.slateAuthority('plan', namespaces);
     const providers = watchProviders(authority.reach.narrowProviders(namespaces), check.reads ?? []);
+    const unread = (check.reads ?? []).filter((name) => !providers.some((provider) => provider.name === name));
+
+    if (unread.length > 0) return { kind: 'parked', reason: 'program', detail: `its check reads ${unread.join(', ')}, which this agent cannot read in Plan` };
     const given = `const state = ${JSON.stringify(state ?? null)};\nconst input = ${JSON.stringify(input ?? null)};\n`;
     const ran = await this.rt.executor.execute(`${given}${check.code}`, providers, { deadlineMs: ALARM_PROGRAM_WAIT_MS });
 
