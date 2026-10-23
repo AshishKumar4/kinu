@@ -247,6 +247,16 @@ export const isProductSource = (file: string): boolean =>
 export const isShippedSource = (file: string): boolean =>
   SHIPPED_SOURCE.test(file) && !TEST_FILE.test(file) && !isTestScaffold(file) && !file.endsWith('.d.ts');
 
+/** The packages the Worker deploys: the platform and harness, the stores, compaction, devbox's gateway and cf-backend. */
+const WORKER_SOURCE = /^packages\/(?:core|agent-utils|compaction|devbox|cf-backend)\/src\//u;
+
+/** cf-backend's browser half: its React components, pages and hooks, and any JSX module. */
+const BROWSER_SOURCE = /^packages\/cf-backend\/src\/(?:components|pages|hooks)\/|\.tsx$/u;
+
+/** What the Worker runs, a module the browser fetches aside: product source under a deployed package. */
+export const isWorkerSource = (file: string): boolean =>
+  isProductSource(file) && WORKER_SOURCE.test(file) && !BROWSER_SOURCE.test(file);
+
 /** The web client's source the design system governs (docs/DESIGN-SYSTEM.md §4): `packages/cf-backend/src`'s TypeScript
  *  but its tests, declarations and the frames the §3 audit set aside — the design gallery (`gallery*`, `diff-design/`)
  *  and the landing page's own (`components/landing/`). */

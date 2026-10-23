@@ -4,6 +4,25 @@
  * in the runtime's own words. Kinu's transport never re-serves an older turn's failure.
  */
 
+import * as v from 'valibot';
+
+/** The chat transport's response frame as every client reads it: a chunk of the turn's stream in `body`, its end in
+ *  `done`, and its failure as `error` with the text in `body`. */
+export const ChatResponseFrameSchema = v.object({
+  type: v.literal('cf_agent_use_chat_response'),
+  id: v.optional(v.string()),
+  body: v.optional(v.string()),
+  done: v.optional(v.boolean()),
+  error: v.optional(v.boolean()),
+  /** The workspace's verdict on where a send landed, on its done frame alone: spliced into the open run, or a turn of
+   *  its own. */
+  landed: v.optional(v.picklist(['mid-turn', 'turn'])),
+  /** Set on every frame of a stream the workspace replays: heard, but not the workspace working now. */
+  replay: v.optional(v.boolean()),
+  /** Set only when the runtime refused the request at its door: it never became a turn. */
+  reason: v.optional(v.string()),
+});
+
 /** A turn that ended without an answer, or the runtime refusing this tab. */
 export interface ChatTurnError {
   body: string;

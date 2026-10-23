@@ -8,7 +8,7 @@ import { countAnthropicInputTokens } from './anthropic-count';
 import { warmAnthropicCache } from './anthropic-warm';
 import type { JsonObject } from '../utils/json';
 import { heardFetch } from './middleware/attempt';
-import { lazyModel } from './wire-model';
+import { lazyModel, MODEL_SDKS } from './wire-model';
 
 export const ANTHROPIC_CRED_KEY = 'anthropic.bearer';
 
@@ -51,7 +51,7 @@ export function createAnthropicProvider(): ModelProvider {
         missingCredentialError: 'Anthropic API key not configured',
       });
 
-      return lazyModel('anthropic.messages', modelId, async () => (await import('@ai-sdk/anthropic'))
+      return lazyModel('anthropic.messages', modelId, async () => (await MODEL_SDKS.anthropic())
         .createAnthropic({ apiKey: 'placeholder', fetch: heardFetch(customFetch) }).languageModel(modelId));
     },
     countInputTokens(modelId, deps: ProviderDeps, request: CountableRequest): Promise<InputTokenCount> {

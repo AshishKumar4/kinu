@@ -8,7 +8,8 @@
 import { Cause, Effect } from 'effect';
 import * as v from 'valibot';
 import { settleSync } from '../obs/effect';
-import type { ExplorationRecord, ObjectiveDirection, ObjectiveScale } from '../strategy/objective';
+import type { ExplorationRecord } from '../strategy/objective';
+import { ObjectiveDirectionSchema, ObjectiveScaleSchema, type ObjectiveDirection, type ObjectiveScale } from '../types/objective';
 import {
   describeObjective, recordsInCell, recordsUnder,
   type CellSeek, type RecordCellHandle, type RecordObjectiveHandle,
@@ -100,7 +101,7 @@ export function listRecordObjectives(
     const fetched = seekPage(groups, page, objectiveCursor);
 
     const items = yield* Effect.forEach(fetched.items, (row) => Effect.gen(function* () {
-      const direction = yield* storedMember('direction', OBJECTIVE_DIRECTIONS, row.direction);
+      const direction = yield* storedMember('direction', ObjectiveDirectionSchema.options, row.direction);
       const handle = { objectiveId: row.objective_id, floorDigest: row.floor_digest };
 
       return {
@@ -108,7 +109,7 @@ export function listRecordObjectives(
         metric: row.metric,
         unit: row.unit,
         direction,
-        scale: yield* storedMember('scale', OBJECTIVE_SCALES, row.scale),
+        scale: yield* storedMember('scale', ObjectiveScaleSchema.options, row.scale),
         // COUNT DISTINCT skips NULLs; add the no-partition cell back.
         cells: row.named_cells + (row.unpartitioned > 0 ? 1 : 0),
         rows: row.row_count,
@@ -274,10 +275,6 @@ function parseAnchor<T>(what: string, after: string, schema: v.GenericSchema<T>)
     (failed) => Effect.die(new StaleCursorError(what, after, { cause: Cause.squash(failed) })),
   );
 }
-
-const OBJECTIVE_DIRECTIONS: readonly ObjectiveDirection[] = ['minimise', 'maximise'];
-
-const OBJECTIVE_SCALES: readonly ObjectiveScale[] = ['linear', 'log'];
 
 function storedMember<Member extends string>(column: string, admitted: readonly Member[], stored: string): Effect.Effect<Member> {
   const member = admitted.find((candidate) => candidate === stored);

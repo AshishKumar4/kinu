@@ -7,7 +7,7 @@ import type { PageRequest } from '@kinu.run/core';
 import * as v from 'valibot';
 import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from '../user/user-do';
-import { objectNamed, err, json, publicError, publicText, safeJson, type RosterPage } from '@kinu.run/core';
+import { objectNamed, err, json, publicError, publicText, safeJson } from '@kinu.run/core';
 import { ownerCaller } from '@kinu.run/core';
 import { MONITOR_SINGLETON, type MonitorDO } from '../monitor/monitor-do';
 import {
@@ -57,7 +57,7 @@ type ControlTarget = ActionTarget & Pick<OrchestratorAgent,
   | 'getExecutors'
 >;
 
-type ControlRegistry = ActionRegistry & Pick<UserDO, 'listWorkspaces'>;
+type ControlRegistry = ActionRegistry & Pick<UserDO, 'listActiveWorkspaces'>;
 
 export interface ControlEnv<Id> extends ActionEnv<Id>, AdminGateEnv, AnalyticsSqlEnv {
   ControlPlaneDO: ObjectNamespace<Id, ControlPlaneReach>;
@@ -382,42 +382,13 @@ type RosterRead =
   | { status: 'ok'; workspaces: RosterWorkspace[] }
   | { status: 'failed'; reason: string };
 
-/**
- * Walks every roster page, else rows past `WORKSPACE_LIST_LIMIT` get tombstoned. Page-count bounded
- * and reports partial. No limit is passed: `clampRosterLimit` throws on values it dislikes.
- */
+/** The account's live registry whole, read without the roster's tiles or the effects its page read runs. */
 function readRoster<Id>(env: ControlEnv<Id>, userId: string): Effect.Effect<RosterRead> {
-  const MAX_PAGES = 25;
-
   return Effect.catchCause(Effect.gen(function* () {
     const owner = yield* Effect.promise(() => ownerCaller(env));
-    const user = objectNamed(env.UserDO, userId);
-    const workspaces: RosterWorkspace[] = [];
-    let cursor: string | null = null;
+    const workspaces: RosterWorkspace[] = yield* Effect.promise(() => objectNamed(env.UserDO, userId).listActiveWorkspaces(owner));
 
-    for (let page = 0; page < MAX_PAGES; page += 1) {
-      const after = cursor;
-      const answer: RosterPage = yield* Effect.promise(() => user.listWorkspaces(owner, after === null ? {} : { cursor: after }));
-
-      for (const row of answer.entries) {
-        workspaces.push({
-          name: row.name,
-          displayName: row.displayName,
-          createdAt: row.createdAt,
-          lastVisited: row.lastVisited,
-        });
-      }
-
-      cursor = answer.nextCursor;
-
-      if (cursor === null) return { status: 'ok', workspaces } satisfies RosterRead;
-    }
-
-    // Tombstoning on a partial read would delete rows that exist, so this is a failure.
-    return {
-      status: 'failed',
-      reason: `the roster did not end within ${String(MAX_PAGES)} pages; the index was left alone`,
-    } satisfies RosterRead;
+    return { status: 'ok', workspaces } satisfies RosterRead;
   }), (failed) => Effect.sync((): RosterRead => {
     const error = authoredRefusal({ doing: 'reading a user\'s workspace roster', cause: Cause.squash(failed) });
     diagnostics.failure('control_plane.roster_unread', error, { user: userId });

@@ -89,6 +89,7 @@ interface HostedRuntimeModule {
 
 let runtimeModule: Promise<HostedRuntimeModule> | null = null;
 
+/** Nimbus's hosted runtime, compiled at its first use, not at every isolate's start (b179dead9). */
 function hostedRuntimeModule(): Promise<HostedRuntimeModule> {
   runtimeModule ??= import('@nimbus-sh/worker/workspace-host').then((module) => ({
     composeHostedRuntime: module.composeHostedRuntime,

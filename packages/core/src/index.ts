@@ -83,7 +83,7 @@ export { ChatHistoryEntrySchema } from './types/chat';
 // Every composition root calls this and nothing else (tests/contract-workspace-schema.test.ts).
 export { initAgentIsolateSchema, initAllTables, initWorkspaceSchema, initActorStateSchema, type WorkspaceSchemaSql } from './state/workspace-schema';
 
-export { derivedFrom, repairSchema, type Repair, type TableWrites, type TouchedTable } from './state/schema-repair';
+export { derivedFrom, openSchema, repairSchema, type Repair, type TableWrites, type TouchedTable } from './state/schema-repair';
 
 export { textContains } from './utils/text-match';
 
@@ -2402,7 +2402,7 @@ export {
   createPlanAnnotationSaveQueue,
 } from './plans/plan-annotation-save';
 
-export { terminalChatError, type ChatTurnError, type TerminalFrame } from './utils/chat-turn-error';
+export { ChatResponseFrameSchema, terminalChatError, type ChatTurnError, type TerminalFrame } from './utils/chat-turn-error';
 
 export {
   newSendLatch, admitTurn, abandonTurn, abandonTurnIfOwner,

@@ -22,6 +22,39 @@ import { present, type RecordedLog, createRecordingLogger } from '@kinu.run/test
 // `agents` reaches `cloudflare:email`: mock first, then dynamic imports.
 mockAgentsSdk();
 
+/** Where the egress asked the platform to connect, and which name the server's certificate is checked against. */
+interface Dialled {
+  hostname: string;
+  port: number;
+  checks: string | null;
+}
+
+/** Every TLS dial this file's stand-in for `cloudflare:sockets` was asked for. */
+const dialled: Dialled[] = [];
+
+/** A connection whose server says nothing and hangs up, so a socket carried over it ends. */
+const ended = () => new ReadableStream<Uint8Array>({ start: (controller) => { controller.close(); } });
+
+const opened = () => ({ readable: ended(), writable: new WritableStream<Uint8Array>(), opened: Promise.resolve() });
+
+await mock.module('cloudflare:sockets', () => ({
+  connect: (target: { hostname: string; port: number }, options: { secureTransport: string }) => {
+    // TLS from the start checks the host; a later startTls checks the name it is given.
+    const record: Dialled = { ...target, checks: options.secureTransport === 'on' ? target.hostname : null };
+
+    dialled.push(record);
+
+    return {
+      ...opened(),
+      startTls: (tls: { expectedServerHostname: string }) => {
+        record.checks = tls.expectedServerHostname;
+
+        return opened();
+      },
+    };
+  },
+}));
+
 const {
   CONTAINER_EVENT_HOST,
   handleContainerEvent, handleEgressConnect, handleEgressTls, parseEgressParams, parseEgressPrincipal,
@@ -1006,39 +1039,6 @@ describe('a workspace program\'s TCP socket', () => {
     expect(socket.wasClosed()).toBe(true);
   });
 });
-
-/** Where the egress asked the platform to connect, and which name the server's certificate is checked against. */
-interface Dialled {
-  hostname: string;
-  port: number;
-  checks: string | null;
-}
-
-/** Every TLS dial this file's stand-in for `cloudflare:sockets` was asked for. */
-const dialled: Dialled[] = [];
-
-/** A connection whose server says nothing and hangs up, so a socket carried over it ends. */
-const ended = () => new ReadableStream<Uint8Array>({ start: (controller) => { controller.close(); } });
-
-const opened = () => ({ readable: ended(), writable: new WritableStream<Uint8Array>(), opened: Promise.resolve() });
-
-await mock.module('cloudflare:sockets', () => ({
-  connect: (target: { hostname: string; port: number }, options: { secureTransport: string }) => {
-    // TLS from the start checks the host; a later startTls checks the name it is given.
-    const record: Dialled = { ...target, checks: options.secureTransport === 'on' ? target.hostname : null };
-
-    dialled.push(record);
-
-    return {
-      ...opened(),
-      startTls: (tls: { expectedServerHostname: string }) => {
-        record.checks = tls.expectedServerHostname;
-
-        return opened();
-      },
-    };
-  },
-}));
 
 // A program's TLS socket arrives as Nimbus's connectTls call (NIMBUS-ASKS #44): the host is judged, then the session is
 // made here, checking the server by the program's servername where it named one other than the host, as Node does.

@@ -7,11 +7,8 @@
 import * as v from 'valibot';
 import { FAILURE_WITHOUT_ERROR, type RunEvent } from '../events/types';
 import { JsonObjectSchema } from '../utils/json';
-import { CODE_IS_REFUSAL, ERROR_CODES } from '../obs/index';
-import { FILE_REFUSAL_REASONS } from '../tools/file-edit';
-import type { BindingFailure } from '../types/tool-outcome';
-
-const ToolReasonSchema = v.picklist([...ERROR_CODES, ...FILE_REFUSAL_REASONS]);
+import { CODE_IS_REFUSAL } from '../obs/index';
+import { ToolReasonSchema, type BindingFailure } from '../types/tool-outcome';
 
 /** Spread from `CODE_IS_REFUSAL` (total over `ErrorCode`) so a new code cannot arrive undecided. */
 const REASON_IS_REFUSAL = {

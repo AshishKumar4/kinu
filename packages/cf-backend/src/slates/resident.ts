@@ -14,6 +14,7 @@ import {
 import { attempt, diagnostics, KinuError, renderCauseChain, settle } from '@kinu.run/core/obs';
 import { confinedTo, SLATE_CLIENT_MODULE, SLATE_SERVER_MODULE, type SlateBuildFailure, type SlateBuildRead, type SlateImage } from '@kinu.run/core/slates';
 import { BROWSER_CLIENT_MODULE, BROWSER_PRELUDE, browserClientSource } from '../browser-prelude';
+import { slateVendorModule } from './vendor';
 
 export interface ResidentSlateProcess extends SlateProcess {
   /** The port the durable application listens on; null for a caller's private process, which is reached by RPC alone. */
@@ -628,8 +629,7 @@ export class ResidentSlateProcesses {
         this.bundlers.set(bundlerKey, bundler);
       }
 
-      // Its react, capnweb and puppeteer sources are compiled only when a slate first starts in this isolate.
-      const { default: slateVendor } = yield* attempt({ doing: 'loading the slate runtime vendor', otherwise: 'io' }, async () => import('virtual:kinu-slate-vendor'));
+      const { default: slateVendor } = yield* attempt({ doing: 'loading the slate runtime vendor', otherwise: 'io' }, slateVendorModule);
       this.provisionRuntimeFiles(session, slateVendor.reactStub);
 
       // Generated entries live under the runtime dir, never the slate root, where they would surface in listings,
@@ -718,7 +718,7 @@ export class ResidentSlateProcesses {
   launch(input: SlateLaunchInput, image: SlateImage): Promise<ResidentSlateProcess> {
     return settle(Effect.gen({ self: this }, function* () {
       const session = yield* Effect.promise(async () => this.deps.session());
-      const { workerCompatibility } = yield* attempt({ doing: 'loading the slate runtime vendor', otherwise: 'io' }, async () => import('virtual:kinu-slate-vendor'));
+      const { workerCompatibility } = yield* attempt({ doing: 'loading the slate runtime vendor', otherwise: 'io' }, slateVendorModule);
       const kernelVfs = session.vfs.as(CRED_KERNEL);
       const slateId = input.root.slice(input.root.lastIndexOf('/') + 1);
       const read = (digest: string) => kernelVfs.readFileString(facetImagePath(digest));

@@ -353,7 +353,7 @@ export function inspectLocalSubagent(name: string, request: SubagentInspectionRe
 }
 
 export function getLocalChangelog(name: string, limit = 50): EvolutionChangelogView {
-  return readMainActor(name, (sql, actor) => getEvolutionChangelog(sql, actor, limit));
+  return readMainActor(name, (sql, actor) => getEvolutionChangelog(sql, actor, { limit }));
 }
 
 export function getLocalScaffoldVersions(name: string, limit = 20): ScaffoldVersionView[] {

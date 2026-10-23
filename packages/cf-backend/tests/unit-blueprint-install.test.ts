@@ -62,7 +62,7 @@ function account({ mailDown = false } = {}) {
 
       return held;
     },
-    async listActiveWorkspaces(_caller: UserCaller) { return active.map((name) => ({ name, displayName: name, createdAt: 7 })); },
+    async listActiveWorkspaces(_caller: UserCaller) { return active.map((name) => ({ name, displayName: name, createdAt: 7, lastVisited: 7 })); },
     async userMcp_connectedPresets(_caller: UserCaller) { return ['github']; },
     async getProfile(_caller: UserCaller) {
       return { email: 'ashish@cloudflare.com', displayName: 'Ashish', createdAt: 1, lastSeenAt: 1, onboardedAt: null, workspaceCount: active.length };

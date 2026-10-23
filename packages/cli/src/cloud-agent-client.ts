@@ -9,7 +9,7 @@ import {
   ORCHESTRATOR_AGENT_SLUG,
   hostedActorSocketPath,
   decodeJsonValue,
-  terminalChatError,
+  ChatResponseFrameSchema, terminalChatError,
   parseJsonValue,
   type JsonObject,
   type JsonValue,
@@ -106,17 +106,13 @@ const ActorSnapshotSchema = v.object({
   reasoningEffort: v.nullable(ReasoningEffortSchema),
 });
 
+/** Every frame the socket carries: a turn frame's fields as core reads them, beside an RPC reply's and a broadcast's. */
 const SocketFrameSchema = v.objectWithRest({
+  ...ChatResponseFrameSchema.entries,
   type: v.string(),
-  id: v.optional(v.string()),
   success: v.optional(v.boolean()),
   result: v.optional(JsonValueSchema),
   error: v.optional(JsonValueSchema),
-  body: v.optional(v.string()),
-  done: v.optional(v.boolean()),
-  landed: v.optional(v.picklist(['mid-turn', 'turn'])),
-  /** Set only when the workspace refused the request at its door: it was never admitted as a turn. */
-  reason: v.optional(v.string()),
 }, JsonValueSchema);
 
 type SocketFrame = v.InferOutput<typeof SocketFrameSchema>;

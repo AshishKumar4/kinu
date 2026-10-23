@@ -15,7 +15,7 @@ import type { AgentRuntime } from '../types/agent-runtime';
 
 import { vfsDirname } from '../utils/vfs-helpers';
 import { writeConditionally } from '../vfs/conditional-write';
-import { changeOwners, changeStanding } from './change-standing';
+import { changeOwners, changeStanding, routeHeld } from './change-standing';
 import { Effect, Result } from 'effect';
 import { diagnostics, renderThrownChain, settle } from '../obs/index';
 import {
@@ -305,9 +305,7 @@ export async function revertDreamSkill(
     return { ok: false, error: `no dream skill at ${input.requestId} edit ${String(input.routeIndex)}` };
   }
 
-  if (route.disposition !== 'staged' && route.disposition !== 'applied') {
-    return { ok: false, error: `${route.target} is ${route.disposition}: nothing to revert` };
-  }
+  if (!routeHeld(route)) return { ok: false, error: `${route.target} is ${route.disposition}: nothing to revert` };
 
   approvals.revoke(route.target);
   const vfs = skills.skillsVfs;

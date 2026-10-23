@@ -4,7 +4,9 @@ import type { JSONObject, LanguageModelV4CallOptions, LanguageModelV4Message, La
 import { APICallError, wrapLanguageModel, type LanguageModel, type LanguageModelMiddleware } from 'ai';
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import { attempt, diagnostics, KinuError, settle, tolerate, type ErrorCode } from '../obs/index';
+import { diagnostics, KinuError, settle, tolerate, type ErrorCode } from '../obs/index';
+import { JsonValueSchema } from '../utils/json';
+import { catalogBody } from './credential-catalog';
 import { accountSession, chatgptCatalogRows, chatgptSessionHeaders, shownCatalogRows } from './codex';
 import { asFetchFunction } from './fetch-shim';
 import { withCallAccount } from './quota';
@@ -12,7 +14,7 @@ import type { AuthRequest, AuthResolution, ModelInfo, ModelProvider, ProviderDep
 import { StaleModelList, statelessResponses } from './util';
 import { streamedGenerate } from './middleware/stream-generate';
 import { heardFetch } from './middleware/attempt';
-import { lazyModel } from './wire-model';
+import { lazyModel, MODEL_SDKS } from './wire-model';
 
 const CHATGPT_BASE_URL = 'https://api.openai.com/v1';
 
@@ -295,26 +297,20 @@ export function createChatGptProvider(opts: ChatGptProviderOptions = {}): ModelP
     },
 
     async listModels(deps) {
-      const stale = (reason: string, failure?: KinuError) => new StaleModelList([], { reason: `ChatGPT models could not be read: ${reason}`, cause: failure });
+      const unread = (reason: string) => `ChatGPT models could not be read: ${reason}`;
 
       return settle(Effect.gen(function* () {
         const route = yield* Effect.promise(() => relayed(deps));
         const signed: Effect.Effect<AuthResolution | null, KinuError> = route === null ? resolvedAuth(deps) : Effect.succeed({ headers: {} });
-        const auth = yield* signed.pipe(Effect.catch((failure) => Effect.fail(stale(failure.message, failure))));
+        const auth = yield* signed.pipe(Effect.catch((failure) => Effect.fail(new StaleModelList([], { reason: unread(failure.message), cause: failure }))));
 
         if (auth === null) return [];
         const url = `${CHATGPT_BASE_URL}/models?client_version=${CURRENT_CODEX_CLIENT}`;
 
-        const res = yield* attempt({ doing: 'listing the ChatGPT models', otherwise: 'unavailable' }, () => (route?.fetch ?? deps.fetch ?? fetch)(url, { headers: auth.headers }))
-          .pipe(Effect.catch((failure) => Effect.fail(stale(failure.message, failure))));
-
-        if (!res.ok) {
-          const text = yield* Effect.promise(() => res.text());
-
-          return yield* Effect.fail(stale(refusalFrom({ url, status: res.status, headers: res.headers, text })?.message ?? `api.openai.com answered HTTP ${String(res.status)}`));
-        }
-
-        const body: unknown = yield* Effect.promise(() => res.json());
+        // A refusal is said in OpenAI's words; an unreadable answer is a list unread, as every catalog's is.
+        const body = yield* catalogBody('api.openai.com', JsonValueSchema, () => (route?.fetch ?? deps.fetch ?? fetch)(url, { headers: auth.headers }), (res, text) => (
+          res.ok ? null : refusalFrom({ url, status: res.status, headers: res.headers, text })?.message ?? null
+        )).pipe(Effect.catch((said) => Effect.fail(new StaleModelList([], { reason: unread(said.reason), cause: said.cause }))));
 
         // OpenAI's rule for this route (developers.openai.com/siwc/token-sharing-open-source/models-and-inference).
         return shownCatalogRows('chatgpt', chatgptCatalogRows({ body }), (visibility) => visibility === 'list').map((row): ModelInfo => row.model);
@@ -343,7 +339,7 @@ export function createChatGptProvider(opts: ChatGptProviderOptions = {}): ModelP
         }));
       });
 
-      const model = lazyModel('openai.responses', modelId, async () => (await import('@ai-sdk/openai'))
+      const model = lazyModel('openai.responses', modelId, async () => (await MODEL_SDKS.openai())
         .createOpenAI({ baseURL: CHATGPT_BASE_URL, apiKey: 'chatgpt-plan', headers: chatgptSessionHeaders(deps), fetch: customFetch })
         .responses(modelId));
 

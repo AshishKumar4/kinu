@@ -20,20 +20,20 @@ function authCacheKey(auth: AuthResolution): string {
   return JSON.stringify([auth.headers, auth.baseURL ?? null]);
 }
 
-/** A catalog route's answer read through `schema`, or why it said nothing: unreachable, `refused` by what answered, an
- *  error status, or a body this client cannot read. */
+/** A catalog route's answer read through `schema`, or why it said nothing: unreachable, `refused` by what answered (in
+ *  its words, read from its answer), an error status, or a body this client cannot read. */
 export function catalogBody<S extends v.GenericSchema>(
-  host: string, schema: S, send: () => Promise<Response>, refused?: (res: Response) => string | null,
+  host: string, schema: S, send: () => Promise<Response>, refused?: (res: Response, text: string) => string | null,
 ): Effect.Effect<v.InferOutput<S>, CatalogUnread> {
   return Effect.gen(function* () {
     const res = yield* Effect.tryPromise({ try: send, catch: (cause): CatalogUnread => ({ reason: `${host} could not be reached`, cause }) });
-    const refusal = refused?.(res) ?? null;
+    const text = yield* Effect.tryPromise({ try: () => res.text(), catch: (cause): CatalogUnread => ({ reason: `${host} could not be reached`, cause }) });
+    const refusal = refused?.(res, text) ?? null;
 
     if (refusal !== null) return yield* Effect.fail({ reason: refusal });
 
     if (!res.ok) return yield* Effect.fail({ reason: `${host} answered HTTP ${String(res.status)}` });
 
-    const text = yield* Effect.tryPromise({ try: () => res.text(), catch: (cause): CatalogUnread => ({ reason: `${host} could not be reached`, cause }) });
     const body = v.safeParse(v.pipe(v.string(), v.parseJson(), schema), text);
 
     if (!body.success) return yield* Effect.fail({ reason: `${host} answered a catalog this client cannot read`, cause: new v.ValiError(body.issues) });

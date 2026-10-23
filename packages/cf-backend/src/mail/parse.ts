@@ -20,7 +20,7 @@ function bytes(content: ArrayBuffer | Uint8Array | string): Uint8Array {
 }
 
 export async function parseMail(raw: Uint8Array): Promise<ParsedMail> {
-  // Loaded with the first message, not at the Worker's start: its startup budget is 1 s (AGENTS.md).
+  // Loaded with the first message, not at the Worker's start (armada 20261007213937-cdf08921).
   const parsed: Email = await (await import('postal-mime')).default.parse(raw);
   const text = inboundBody(parsed.text, parsed.html).trimEnd();
 

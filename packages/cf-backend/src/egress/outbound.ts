@@ -2,6 +2,7 @@
  *  through Worker entrypoints, judged by destination. The container's other TCP and UDP go straight out (D82) and meet
  *  none of this. Configuration props come only from the owning Durable Object. */
 
+import { connect } from 'cloudflare:sockets';
 import { Cause, Effect } from 'effect';
 import { getAgentByName } from 'agents';
 import * as v from 'valibot';
@@ -142,7 +143,6 @@ export function handleEgressConnect(socket: Socket, params: EgressPrincipal | un
       return yield* attempt({ doing: `refusing a socket to ${shown}`, otherwise: 'io' }, () => socket.close());
     }
 
-    const { connect } = yield* Effect.promise(() => import('cloudflare:sockets'));
     // The host reached is the one judged, in its canonical form: connect() reaches an IPv6 literal only bracketed, and an
     // IPv4 only as a dotted quad (PLATFORM_CATALOG 'worker.connect.address_forms').
     const reached = { hostname: judged.host, port: destination.port };
@@ -184,7 +184,6 @@ export function handleEgressTls(target: EgressTlsTarget, params: EgressPrincipal
       return yield* new KinuError('denied', judged.refusal.error);
     }
 
-    const { connect } = yield* Effect.promise(() => import('cloudflare:sockets'));
     const destination = { hostname: judged.host, port: target.port };
 
     const secure = target.servername === undefined
