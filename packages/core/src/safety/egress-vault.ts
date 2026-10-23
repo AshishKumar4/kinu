@@ -149,12 +149,15 @@ const GIT_CREDENTIAL_ENVIRONMENT = {
  * `GIT_TOKEN` for Nimbus's git, which sends it unasked, only while the GitHub connection holds a token and the owner
  * granted no `GIT_TOKEN` of their own.
  */
-export function connectionEnvironment(granted: GrantedSecrets['granted']): typeof GIT_CREDENTIAL_ENVIRONMENT & { GIT_TOKEN?: string } {
+export function connectionEnvironment(granted: GrantedSecrets['granted']): typeof GIT_CREDENTIAL_ENVIRONMENT & { GIT_TOKEN?: string; GIT_USERNAME?: string } {
   const connection = granted.find((secret) => secret.name === 'KINU_GITHUB_TOKEN');
 
   if (connection === undefined || granted.some((secret) => secret.name === 'GIT_TOKEN')) return GIT_CREDENTIAL_ENVIRONMENT;
+  // Nimbus's git sends `GIT_USERNAME:GIT_TOKEN` as Basic, and GitHub refuses one with no user name ("Repository not
+  // found", staging 2026-10-23): the token's own name for it, unless the owner named their own user.
+  const named = granted.some((secret) => secret.name === 'GIT_USERNAME') ? {} : { GIT_USERNAME: 'x-access-token' };
 
-  return { ...GIT_CREDENTIAL_ENVIRONMENT, GIT_TOKEN: connection.placeholder };
+  return { ...GIT_CREDENTIAL_ENVIRONMENT, GIT_TOKEN: connection.placeholder, ...named };
 }
 
 /** Names a connection's credential takes in every workspace (`KINU_GITHUB_TOKEN`, the GitHub connection's): no owner
