@@ -1986,6 +1986,20 @@ describe('a dream is cross-judged: the dreamer drafts, the decision model measur
 
   const REVISED = `${INCUMBENT.slice(0, -6)}TERSE.`;
 
+  /** A reviewer answering `first` on its first round and `then` on any later one, counting its rounds. */
+  function reviewerOf(first: { readonly verdict: 'accept' | 'reject' | 'revise'; readonly note: string }, then = { verdict: 'accept' as const, note: 'better' }) {
+    let rounds = 0;
+
+    return {
+      rounds: () => rounds,
+      review: () => {
+        rounds += 1;
+
+        return [{ edit: 0, ...(rounds === 1 ? first : then) }];
+      },
+    };
+  }
+
   test('the reviewer reads every drafted edit with what it was measured at; a rejected edit routes nowhere and says why', async () => {
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
@@ -2017,7 +2031,6 @@ describe('a dream is cross-judged: the dreamer drafts, the decision model measur
   test('asked to revise, the dreamer revises once with the reviewer\'s notes, and the revision is measured and judged again', async () => {
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
-    let rounds = 0;
 
     const { port, requests } = scriptedRefiner((request) => proposalText({
       scope: 'workspace', summary: 'a section',
@@ -2025,11 +2038,8 @@ describe('a dream is cross-judged: the dreamer drafts, the decision model measur
     }));
 
     // The judge passes both texts, so the reviewer decides between them.
-    const deps = fx.deps(port, undefined, undefined, () => {
-      rounds += 1;
-
-      return [rounds === 1 ? { edit: 0, verdict: 'revise', note: 'say terse, not asked' } : { edit: 0, verdict: 'accept', note: 'better' }];
-    });
+    const reviewer = reviewerOf({ verdict: 'revise', note: 'say terse, not asked' });
+    const deps = fx.deps(port, undefined, undefined, reviewer.review);
 
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
 
@@ -2039,10 +2049,55 @@ describe('a dream is cross-judged: the dreamer drafts, the decision model measur
 
     expect(revise.task).toContain('Edit 0: revise: say terse, not asked');
     expect(revise.task).toContain(JSON.stringify(CANDIDATE).slice(1, 40));
-    expect(rounds).toBe(2);
+    expect(reviewer.rounds()).toBe(2);
     expect(row.review.rounds).toHaveLength(2);
     expect(row.proposal?.edits[0]).toMatchObject({ source: REVISED });
     expect(sectionVersions(fx.rt).map((version) => version.body)).toEqual([REVISED]);
+  });
+
+  // Seen in the OMP pilot's dreams (2026-10-23): 13 of 19 section edits refused for size, unrevised, the reviewers'
+  // notes asking for them shorter. The author is told the limit, and an edit over it gets the one revision.
+  test('the dreamer is told the size limit, and an edit refused for its size goes back once with its measure', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const oversized = `${INCUMBENT}${' Rewrite every answer in full before you send it.'.repeat(16)}`;
+
+    const { port, requests } = scriptedRefiner((request) => proposalText({
+      scope: 'workspace', summary: 'a section',
+      edits: [{ ...SECTION_EDIT, source: request.task.includes(REVISION_HEADING) ? REVISED : oversized }],
+    }));
+
+    // The reviewer rejects the oversized draft, as the pilot's did; the size gate still sends it back.
+    const reviewer = reviewerOf({ verdict: 'reject', note: 'over the limit; the lesson is right, shorter' });
+    const deps = fx.deps(port, undefined, undefined, reviewer.review);
+    await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
+
+    for (let pass = 0; pass < 5; pass += 1) await advanceRefinementLane(deps);
+    const first = present(requests.find((request) => !request.task.includes(REVISION_HEADING)), "the dreamer's brief");
+    const revise = present(requests.find((request) => request.task.includes(REVISION_HEADING)), 'the revision brief');
+
+    expect(first.task).toContain('changes at most 600 characters');
+    expect(revise.task).toMatch(/Edit 0: revise: a fixed gate refused it \(the edit changes \d+ characters; at most 600\)/u);
+    expect(revise.task).toContain('over the limit; the lesson is right, shorter');
+    expect(reviewer.rounds()).toBe(2);
+    expect(sectionVersions(fx.rt).map((version) => version.body)).toEqual([REVISED]);
+  });
+
+  test('a reviewer rejecting an edit within the size limit is final: it is not sent back', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const { port, requests } = scriptedRefiner(proposalText({ scope: 'workspace', summary: 'a section', edits: [SECTION_EDIT] }));
+    const reviewer = reviewerOf({ verdict: 'reject', note: 'the turns do not show it' });
+    const deps = fx.deps(port, undefined, undefined, reviewer.review);
+
+    const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
+
+    for (let pass = 0; pass < 5; pass += 1) await advanceRefinementLane(deps);
+    const row = present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the dream');
+
+    expect(reviewer.rounds()).toBe(1);
+    expect(requests.some((request) => request.task.includes(REVISION_HEADING))).toBe(false);
+    expect(routeFor(row.routes, 'prompt_section')).toMatchObject({ disposition: 'refused' });
   });
 
   test('a second request to revise is a rejection: there is one revision', async () => {

@@ -36,7 +36,7 @@ import { SHELL } from '../operations/shell';
 const PROMPT_SECTION_MAX_BYTES = 4800;
 
 /** An edit's reach: one artifact, a bounded change. */
-const MAX_EDIT_CHARS = 600;
+export const MAX_EDIT_CHARS = 600;
 
 export type ArtifactStatus = (typeof ARTIFACT_STATUSES)[number];
 
@@ -225,7 +225,8 @@ export function artifactVersion(sql: SqlExecutor, actor: ActorHandle, artifactId
  * themselves alone, where the span from the first difference to the last counted the unchanged text between them
  * (the OMP pilot's dreams, 2026-10-21: a 296-character change measured 1,421); scattered edits still add up.
  */
-function changedChars(before: string, after: string): number {
+/** The characters an edit changes, as the size gate counts them: the words it removes and the words it adds. */
+export function changedChars(before: string, after: string): number {
   const { removed, added } = changedRows(wordsOf(before), wordsOf(after));
 
   return [...removed, ...added].reduce((sum, token) => sum + token.length, 0);

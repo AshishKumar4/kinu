@@ -21,7 +21,7 @@ import { Effect, Result } from 'effect';
 import * as v from 'valibot';
 
 import { scoreAuthoredEdit } from './judge';
-import { artifactBody, bundledArtifact, listArtifactVersions, sectionArtifact, stageArtifact, toolArtifact, type ArtifactEvidence } from './artifacts';
+import { artifactBody, bundledArtifact, changedChars, listArtifactVersions, MAX_EDIT_CHARS, sectionArtifact, stageArtifact, toolArtifact, type ArtifactEvidence } from './artifacts';
 import { BUILTIN_TOOL_DESCRIPTIONS } from '../tools/registry';
 import { isCorrected, isLowRating, listTurnRatings, renderRatedTurn, type TurnRating } from './ratings';
 import type { DecisionQuestion } from '../providers/decision-model';
@@ -391,14 +391,19 @@ function review(
         continue;
       }
 
+      // An edit the size gate refused goes back for the one revision whatever the reviewer said, with what it measured:
+      // its author can bring it within the limit, which no reviewer can (glm and kimi dreams, 2026-10-23: 13 of 19
+      // section edits refused for size, the reviewers' notes asking for them shorter).
+      const sendBack = round === 0 ? withSizeRevisions(latest.verdicts, latest.evidence) : latest.verdicts;
+
       // One revision at most: a second request for one is a rejection.
-      if (round > 0 || !latest.verdicts.some((verdict) => verdict.verdict === 'revise')) {
+      if (round > 0 || !sendBack.some((verdict) => verdict.verdict === 'revise')) {
         return { proposal, round: { evidence: latest.evidence, verdicts: latest.verdicts } };
       }
 
       const revised = yield* askHelper(deps, {
         roleLabel: 'dreamer', tier: 'fast',
-        brief: () => renderReviseBrief(deps, request, { proposal, verdicts: latest.verdicts ?? [] }),
+        brief: () => renderReviseBrief(deps, request, { proposal, verdicts: sendBack }),
       }, RefinementProposalSchema);
 
       // A revision that does not answer, or answers at another scope, leaves the first round's verdicts standing.
@@ -411,6 +416,17 @@ function review(
 
       if (!claim.record({ review: { rounds }, proposal, detail: proposal.summary } satisfies SettleRefinementPatch)) return null;
     }
+  });
+}
+
+/** The reviewer's verdicts, each edit the size gate refused turned into a request to revise it, naming the measure. */
+function withSizeRevisions(verdicts: readonly DreamVerdict[], evidence: readonly EditEvidence[]): DreamVerdict[] {
+  return verdicts.map((verdict) => {
+    const measured = evidence.find((each) => each.edit === verdict.edit);
+
+    if (measured?.revisable !== true || measured.refused === undefined) return verdict;
+
+    return { ...verdict, verdict: 'revise', note: `a fixed gate refused it (${measured.refused}): change only the sentences the lesson needs, or drop it. The reviewer said: ${verdict.note}` };
   });
 }
 
@@ -433,9 +449,14 @@ function scoreEdits(
           const decide = deps.control.rt.decide;
 
           if (decide === undefined) return { edit, note: '', refused: 'no decision model is wired to measure the edit' };
-          const scored = await scoreAuthoredEdit({ rt: deps.control.rt, decide }, { artifactId: editOwnerAndTarget(change)[1], body: change.source, turns: request.turnIds });
+          const artifactId = editOwnerAndTarget(change)[1];
+          const scored = await scoreAuthoredEdit({ rt: deps.control.rt, decide }, { artifactId, body: change.source, turns: request.turnIds });
 
-          return 'refused' in scored ? { edit, note: '', refused: scored.refused } : { edit, note: scored.detail, artifact: scored.evidence };
+          if (!('refused' in scored)) return { edit, note: scored.detail, artifact: scored.evidence };
+          const before = artifactBody(deps.control.sql, deps.control.rt.actor, artifactId);
+          const oversized = before !== null && changedChars(before, change.source) > MAX_EDIT_CHARS;
+
+          return { edit, note: '', refused: scored.refused, ...(oversized && { revisable: true }) };
         }
 
         case 'skill': {
@@ -567,7 +588,10 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
     EDIT_PRIORITY,
     '',
     'Registered prompt sections (`prompt_section`), each as it reads now: replacing one costs every turn its bytes,',
-    'and a longer section must earn them with a strictly better measured score.',
+    'and a longer section must earn them with a strictly better measured score. An edit to a section or a tool text',
+    `changes at most ${String(MAX_EDIT_CHARS)} characters of it, counted as the words it removes plus the words it adds:`,
+    'a larger change is refused before anyone reads it. Write the whole text back with only the sentences the lesson',
+    'needs changed, every other word as it is.',
     '',
     sections,
     '',
