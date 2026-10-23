@@ -8107,6 +8107,12 @@ async function mount() {
 
       return mailPageFrame();
     }],
+    // The free tier's screens (core limits/): `&state=` the account's stage, `&dialog=` a refusal (gallery-limits.tsx).
+    ["limits", async () => {
+      const { default: limitsFrame } = await import("@/gallery-limits");
+
+      return limitsFrame();
+    }],
     ["snapshotrace", () => Promise.resolve(snapshotRaceFrame())],
     ["qualitylive", () => {
       serveGalleryRpc(workspacePageWire);

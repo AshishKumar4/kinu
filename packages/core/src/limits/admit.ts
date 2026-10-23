@@ -23,9 +23,9 @@ const OWN_KINU = 'or run your own Kinu with no limits at /deploy (Settings → B
 
 const GB = 1024 ** 3;
 
-/** Bytes as a person reads them: `1.4 GB`, `820 MB`. */
+/** Bytes as a person reads them: `1.4 GB`, `2 GB`, `820 MB`. */
 export function shownBytes(bytes: number): string {
-  return bytes >= GB ? `${(bytes / GB).toFixed(1)} GB` : `${String(Math.round(bytes / 1024 ** 2))} MB`;
+  return bytes >= GB ? `${String(Number((bytes / GB).toFixed(1)))} GB` : `${String(Math.round(bytes / 1024 ** 2))} MB`;
 }
 
 /** Hours as a person reads them: `19.5 hours`. */

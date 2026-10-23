@@ -47,7 +47,7 @@ describe("a free account's limits refuse only something new", () => {
     const over = free({ storedBytes: 2 * 1024 ** 3 });
 
     expect(admitStoredBytes(free({ storedBytes: 2 * 1024 ** 3 - 1 }))).toBeNull();
-    expect(admitStoredBytes(over)?.message).toContain('2.0 GB');
+    expect(admitStoredBytes(over)?.message).toContain('past its free 2 GB');
     expect(admitWorkspace(over)?.message).toContain('a new workspace cannot be added');
   });
 
