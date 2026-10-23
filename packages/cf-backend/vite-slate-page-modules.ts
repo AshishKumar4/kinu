@@ -1,6 +1,9 @@
 import type { Plugin } from 'vite';
 import { SLATE_PAGE_MODULES_PATH } from '../core/src/web/slate-page';
-import { slatePageFiles } from './slate-vendor';
+import { SLATE_CLIENT_MODULE } from '../core/src/slates/runtime-modules';
+import { slatePageFiles as vendoredFiles } from './slate-vendor';
+
+const slatePageFiles = () => vendoredFiles(SLATE_CLIENT_MODULE);
 
 /**
  * The modules a page the chat draws itself imports by name (`SLATE_PAGE_MODULES`), as files of the app named for their

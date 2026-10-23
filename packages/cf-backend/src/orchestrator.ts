@@ -6112,8 +6112,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     const answer = await this.mainCall((isolate, snapshot) => isolate.answerTexts(snapshot, address.messageId));
+    // The mode main's role leaves it, resolved now: a role that imposes Plan holds its page, and its page's server, to
+    // Plan however its last ask was sent, as every other call of the page is held by `slateAuthority`.
+    const prepared = await this.preparedWorkMode();
+    const { mode } = await this.slateAuthority(prepared, this.slateNamespaces(prepared));
 
-    return { html: addressedBlock(answer?.texts ?? [], address).html, author: { ...ROOT_SLATE_CALLER, workMode: await this.preparedWorkMode() } };
+    return { html: addressedBlock(answer?.texts ?? [], address).html, author: { ...ROOT_SLATE_CALLER, workMode: mode } };
   }
 
   async slateCallAs(from: SlateCallFrom, request: SlateCallRequest): Promise<SlateSurfaceResult> {

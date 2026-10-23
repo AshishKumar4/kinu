@@ -21,7 +21,7 @@ import {
 } from "@kinu.run/core";
 import { abandonTurn, abandonTurnIfOwner, admitTurn, newSendLatch } from "@kinu.run/core";
 import { terminalChatError, turnFailure, type ChatTurnError } from "@kinu.run/core";
-import { turnLiveness, TURN_CLAIM_FRAME, type TurnClaimState } from "@kinu.run/core";
+import { turnLiveness, SLATE_PUSH_EVENT, slatePushes, TURN_CLAIM_FRAME, type TurnClaimState } from "@kinu.run/core";
 import { useSocketFrames, type SocketFrame } from "./socket-frames";
 import type { SeedEdge } from "./use-chat-thread";
 import {
@@ -575,6 +575,9 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
       adoptPlan(msg.plan);
     } else if (msg.type === TURN_CLAIM_FRAME) {
       setTurnClaim(msg.claim);
+    } else if (msg.type === SLATE_PUSH_EVENT) {
+      // What an answer's page's server pushed, to each frame this chat draws it in.
+      slatePushes.deliver(msg.page, msg.data);
     } else {
       await extension?.current?.frame(msg);
     }

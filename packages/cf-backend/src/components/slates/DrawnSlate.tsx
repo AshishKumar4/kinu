@@ -9,11 +9,10 @@ import { newMessagePortRpcSession, RpcTarget } from "capnweb";
 import * as v from "valibot";
 import {
   drawnPageDocument, drawnStreamDocument, DRAWN_SANDBOX, isSlateFrameMessage, SLATE_BRIDGE_MESSAGE, SLATE_DRAW_MESSAGE,
-  SLATE_INLINE_HEIGHT_LIMIT, SLATE_PAGE_MODULES_PATH, SlateFrameMessageSchema, type DrawnPageLook, type JsonValue,
+  SLATE_INLINE_HEIGHT_LIMIT, SLATE_PAGE_MODULES_PATH, SlateFrameMessageSchema, slatePushes, type DrawnPageLook, type JsonValue,
   type SlateCallResult,
 } from "@kinu.run/core";
 import { useTheme } from "@/hooks/use-theme";
-import { onSlatePush } from "@/lib/slate-pushes";
 import { Effect } from "effect";
 import { detach, diagnostics, KinuError, renderThrownChain, settle } from "@kinu.run/core/obs";
 import { knownHeight, readThemeTokens, rememberHeight, SlateCard } from "./InlineSlate";
@@ -41,22 +40,11 @@ function useDrawnLook(): DrawnPageLook {
 /** What the page's `$workspace(path, args)` reaches: its workspace, as the page itself. */
 export type DrawnCall = (id: string, request: JsonValue) => Promise<SlateCallResult>;
 
-/** A refused call, thrown in the page as the runner throws one: its reason and its words. */
-class SlateRefusal extends Error {
-  readonly reason: string;
-
-  constructor(result: { readonly reason: string; readonly error: string }) {
-    super(`${result.reason}: ${result.error}`);
-    this.name = "SlateRefusal";
-    this.reason = result.reason;
-  }
-}
-
-/** What a page's call answered, or the refusal thrown in the page. */
-function answeredIn(result: SlateCallResult): JsonValue {
-  if (!result.ok) throw new SlateRefusal({ reason: result.reason, error: result.error });
-
-  return result.value;
+/** What a page's call answered, or its refusal, in the runner's words: its reason, then why. */
+function answeredIn(asked: () => Promise<SlateCallResult>): Effect.Effect<JsonValue, KinuError> {
+  return Effect.flatMap(Effect.promise(asked), (result) => (result.ok
+    ? Effect.succeed(result.value)
+    : Effect.fail(new KinuError(result.reason, `${result.reason}: ${result.error}`))));
 }
 
 /** The page's end of its session: `$workspace`, and `$method`, a method of its block's own server (`slate.load()`). */
@@ -64,12 +52,12 @@ class DrawnPageTarget extends RpcTarget {
   /** `answering`: the call once the page's answer is stored and its workspace can read the page back. */
   constructor(private readonly id: string, private readonly answering: () => Promise<DrawnCall>) { super(); }
 
-  async $workspace(path: readonly string[], args: readonly JsonValue[]): Promise<JsonValue> {
-    return answeredIn(await (await this.answering())(this.id, { path: [...path], args: [...args], invocation: null }));
+  $workspace(path: readonly string[], args: readonly JsonValue[]): Promise<JsonValue> {
+    return settle(answeredIn(async () => (await this.answering())(this.id, { path: [...path], args: [...args], invocation: null })));
   }
 
-  async $method(method: string, args: readonly JsonValue[]): Promise<JsonValue> {
-    return answeredIn(await (await this.answering())(this.id, { method, args: [...args] }));
+  $method(method: string, args: readonly JsonValue[]): Promise<JsonValue> {
+    return settle(answeredIn(async () => (await this.answering())(this.id, { method, args: [...args] })));
   }
 }
 
@@ -120,11 +108,11 @@ function openEnd(port: MessagePort, id: string, answering: () => Promise<DrawnCa
   const page = newMessagePortRpcSession<PageEnd>(port, new DrawnPageTarget(id, answering));
 
   // A page that has closed its end hears no more; nothing waits on what it did with the last.
-  const handed = (data: JsonValue): void => detach(Effect.tryPromise({ try: () => page.push(data), catch: (cause) => cause }).pipe(
+  const unheard = slatePushes.on(id, (data) => detach(Effect.tryPromise({ try: () => page.push(data), catch: (cause) => cause }).pipe(
     Effect.catch((cause) => Effect.sync(() => { diagnostics.event("slate.push_unheard", { page: id, error: renderThrownChain({ cause }) }); })),
-  ));
+  )));
 
-  return { port, page, unheard: onSlatePush(id, handed) };
+  return { port, page, unheard };
 }
 
 function closeEnd(end: BridgeEnd | null): void {
@@ -144,19 +132,20 @@ interface WrittenPage {
  * The page's `kinu:slate` session, bound to the document this chat wrote, never to its frame: a frame can be navigated
  * to another document that keeps its window and its opaque origin. The written document's head sends its port with
  * the document's nonce before any of the page's scripts run (`drawnPageDocument`); the first such port is taken, and
- * any other after it is answered by {@link RefusedPage}. The frame's first load is that document; at any later one the
- * frame has gone elsewhere, and the session closes. Calls are made only on the port: no message to this window is ever
- * a call. Answers the frame's load.
+ * any other after it is answered by {@link RefusedPage}, one at a time: each refused offer closes the one before, so a
+ * page that keeps offering holds one session here, not one per offer. The frame's first load is that document; at any
+ * later one the frame has gone elsewhere, and its sessions close. Calls are made only on the port: no message to this
+ * window is ever a call. Answers the frame's load.
  */
 function useBridge(frame: RefObject<HTMLIFrameElement | null>, id: string, answering: () => Promise<DrawnCall>, written: WrittenPage | null): () => void {
   const end = useRef<BridgeEnd | null>(null);
+  const refused = useRef<RefusedEnd | null>(null);
   const loads = useRef(0);
 
   // Listening before the frame's document is parsed: its head speaks first, and a message nobody hears is lost.
   useLayoutEffect(() => {
     if (written === null) return;
     const PortOffer = v.object({ kinu: v.literal(SLATE_BRIDGE_MESSAGE), nonce: v.string() });
-    const refused: Disposable[] = [];
     let taken = false;
 
     loads.current = 0;
@@ -167,7 +156,8 @@ function useBridge(frame: RefObject<HTMLIFrameElement | null>, id: string, answe
       if (event.source !== frame.current?.contentWindow || event.origin !== OPAQUE_ORIGIN || port === undefined || !v.is(PortOffer, event.data)) return;
 
       if (taken || event.data.nonce !== written.nonce) {
-        refused.push(newMessagePortRpcSession<Disposable>(port, new RefusedPage()));
+        closeRefused(refused.current);
+        refused.current = { port, session: newMessagePortRpcSession<Disposable>(port, new RefusedPage()) };
 
         return;
       }
@@ -182,8 +172,8 @@ function useBridge(frame: RefObject<HTMLIFrameElement | null>, id: string, answe
       window.removeEventListener("message", onMessage);
       closeEnd(end.current);
       end.current = null;
-
-      for (const session of refused) session[Symbol.dispose]();
+      closeRefused(refused.current);
+      refused.current = null;
     };
   }, [frame, id, answering, written]);
 
@@ -193,7 +183,21 @@ function useBridge(frame: RefObject<HTMLIFrameElement | null>, id: string, answe
     if (loads.current === 1) return;
     closeEnd(end.current);
     end.current = null;
+    closeRefused(refused.current);
+    refused.current = null;
   }, []);
+}
+
+/** A port this chat refused, and the session that answers it so. */
+interface RefusedEnd {
+  readonly port: MessagePort;
+  readonly session: Disposable;
+}
+
+function closeRefused(end: RefusedEnd | null): void {
+  if (end === null) return;
+  end.session[Symbol.dispose]();
+  end.port.close();
 }
 
 /** The height a frame's page last told, from that frame alone. */

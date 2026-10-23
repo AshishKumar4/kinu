@@ -19,7 +19,7 @@ import type { KvStore } from '@kinu.run/agent-utils';
 import { attempt, ERROR_CODES, KinuError, refusalOf, settle, toKinuError, type Refusal } from '@kinu.run/core/obs';
 import type { ApprovalSpend } from '@kinu.run/core';
 import { Effect } from 'effect';
-import { ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
+import { ONLY_A_PAGE_PUSHES, PAGE_KEEPS_NO_DATA, ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
 import { slateBatchStub } from './rpc-transport';
 import { type SlateBinding, type SlateBindingProps } from './bindings';
 import { codemodeEgress } from '../codemode-egress-mint';
@@ -340,9 +340,9 @@ export class SlateHost {
     if (request.path.join('.') !== 'push') return this.releaseInvocation(caller, id, request);
 
     // Only an answer's page is drawn by tabs that hear it; the data is its own page's, whatever it names.
-    if (ephemeralSlateAddress(id) === null || request.args.length !== 1) {
-      return { ok: false, ...refusalOf(new KinuError('denied', `Slate ${id} pushes to no page: only an answer's page's server pushes, one value at a time`)) };
-    }
+    if (ephemeralSlateAddress(id) === null) return { ok: false, ...refusalOf(new KinuError('denied', ONLY_A_PAGE_PUSHES)) };
+
+    if (request.args.length !== 1) return { ok: false, ...refusalOf(new KinuError('bad_input', 'this.push sends one value at a time')) };
 
     this.deps.pushed?.(id, request.args[0] ?? null);
 
@@ -421,7 +421,12 @@ export class SlateHost {
       if (stale !== null) return { ok: false, ...refusalOf(stale) };
 
       // Answered here, not dispatched: it carries no actor capability.
-      if (name === SLATE_STORAGE_BINDING) return slateStorageCall(this.controller.state, caller, id, { member: parsed.output.path.join('.'), args: parsed.output.args });
+      if (name === SLATE_STORAGE_BINDING) {
+        if (ephemeralSlateAddress(id) !== null) return { ok: false, ...refusalOf(new KinuError('denied', PAGE_KEEPS_NO_DATA)) };
+
+        return slateStorageCall(this.controller.state, caller, id, { member: parsed.output.path.join('.'), args: parsed.output.args });
+      }
+
       // The shared slates this process runs under (`SlateCaller.via`, minted into its bindings) bound it whatever request it
       // names, or none: a callee cannot drop the authority it inherited by dropping the record that names it.
       const chain = [...new Set([...Object.keys(caller.via ?? {}), ...issued?.chain ?? []])];
@@ -721,7 +726,8 @@ export class SlateHost {
 
     const bindings: Record<string, Fetcher<SlateBinding>> = {};
 
-    for (const name of [SLATE_SURFACE, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING]) {
+    // An answer's page keeps its data in workspace.db: its process holds no storage binding, whatever its code imports.
+    for (const name of source.kind === 'message' ? [SLATE_SURFACE, SLATE_HOST_BINDING] : [SLATE_SURFACE, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING]) {
       const props: SlateBindingProps = { workspace: this.deps.workspace, id, name, caller, lineage };
       bindings[name] = exports.SlateBinding({ props });
     }

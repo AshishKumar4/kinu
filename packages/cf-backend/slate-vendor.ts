@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import { buildSync, type Metafile } from 'esbuild';
-import { SLATE_CLIENT_MODULE } from '../core/src/slates/runtime-modules';
 import * as reactNs from 'react';
 import * as v from 'valibot';
 import type { Plugin } from 'vite';
@@ -107,8 +106,10 @@ export function buildSlateVendor(): SlateVendor {
   const puppeteer = bundle('export { default } from "@cloudflare/puppeteer";', ['workerd', 'worker', 'browser', 'import'], ['node:*', 'cloudflare:*']);
   const nodeCompat = bundle('export { createNodeCompat } from "@nimbus-sh/core/node-compat";', ['workerd', 'worker', 'import'], ['node:*']);
 
+  // The libraries a page imports by name; `kinu:slate`'s own module (`slate.js`) is added by those that serve them, as
+  // this file is read by plain Node too, where a relative TypeScript import does not resolve.
   const pageModules = {
-    'react.js': react.text, 'capnweb.js': capnweb.text, 'slate.js': SLATE_CLIENT_MODULE,
+    'react.js': react.text, 'capnweb.js': capnweb.text,
     'uplot.js': uplot.text, 'preact.js': preact.text, 'preact-hooks.js': preactHooks.text, 'htm-preact.js': htmPreact.text,
   };
 
@@ -131,10 +132,10 @@ function slateVendorBundle(): SlateVendor {
   return vendor;
 }
 
-/** The page modules' files, each named for its content under `SLATE_PAGE_MODULES_PATH`: what the app serves a page the
- *  chat draws itself, and the file names it imports them by. */
-export function slatePageFiles(): Record<string, { readonly name: string; readonly body: string }> {
-  return Object.fromEntries(Object.entries(slateVendorBundle().pageModules).map(([file, body]) => [
+/** The page modules' files, `kinu:slate`'s own (`slate`) among them, each named for its content under
+ *  `SLATE_PAGE_MODULES_PATH`: what the app serves a page the chat draws itself, and the file names it imports them by. */
+export function slatePageFiles(slate: string): Record<string, { readonly name: string; readonly body: string }> {
+  return Object.fromEntries(Object.entries({ ...slateVendorBundle().pageModules, 'slate.js': slate }).map(([file, body]) => [
     file, { name: `${file.replace(/\.js$/u, '')}-${createHash('sha256').update(body).digest('hex').slice(0, 8)}.js`, body },
   ]));
 }

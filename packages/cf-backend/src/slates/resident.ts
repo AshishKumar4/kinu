@@ -12,7 +12,7 @@ import {
   ephemeralSlateAddress, escapeHtml, parseSlateProject, SLATE_DRIVEN_MEMBERS, SLATE_METHOD_NAME_SOURCE, SLATE_PAGE_MODULES, SLATE_PAGE_PREAMBLE, slateTitle, type SlateProcess, type SlateProject, slateAuthority,
 } from '@kinu.run/core';
 import { attempt, diagnostics, KinuError, renderCauseChain, settle } from '@kinu.run/core/obs';
-import { confinedTo, SLATE_SERVER_MODULE, type SlateBuildFailure, type SlateBuildRead, type SlateImage } from '@kinu.run/core/slates';
+import { confinedTo, SLATE_CLIENT_MODULE, SLATE_SERVER_MODULE, type SlateBuildFailure, type SlateBuildRead, type SlateImage } from '@kinu.run/core/slates';
 import { BROWSER_CLIENT_MODULE, BROWSER_PRELUDE, browserClientSource } from '../browser-prelude';
 import { slateVendorModule } from './vendor';
 
@@ -74,6 +74,16 @@ function runtimeFiles(reactStub: string) {
 }
 
 const RUNTIME_DIR = '/usr/lib/kinu/slate';
+
+/**
+ * Where the build of the slate at `root` writes its generated entries: under the runtime dir, never the slate root,
+ * where they would surface in listings, snapshots and revision bumps. One directory per root, whole: an answer's page is
+ * named by its block alone at its root's end, and two answers each with a block of one name would build each other's
+ * server.
+ */
+function slateEntriesDir(root: string): string {
+  return `${RUNTIME_DIR}/entries/${root.split('/').filter((part) => part !== '').join('__')}`;
+}
 
 const MAIN_MODULE = 'runner.js';
 
@@ -669,10 +679,7 @@ export class ResidentSlateProcesses {
       const { default: slateVendor } = yield* attempt({ doing: 'loading the slate runtime vendor', otherwise: 'io' }, slateVendorModule);
       this.provisionRuntimeFiles(session, slateVendor.reactStub);
 
-      // Generated entries live under the runtime dir, never the slate root, where they would surface in listings,
-      // snapshots and revision bumps.
-      const slateId = input.root.slice(input.root.lastIndexOf('/') + 1);
-      const entriesDir = `${RUNTIME_DIR}/entries/${slateId}`;
+      const entriesDir = slateEntriesDir(input.root);
       const kernelVfs = session.vfs.as(CRED_KERNEL);
 
       const provision = (name: string, contents: string) => {
@@ -719,7 +726,7 @@ export class ResidentSlateProcesses {
         'capnweb.js': slateVendor.capnwebWorkers,
         'server.js': SLATE_SERVER_MODULE,
         'react-stub.js': slateVendor.reactStub,
-        'vendor.js': `export const modules = ${JSON.stringify(slateVendor.pageModules)};\n`,
+        'vendor.js': `export const modules = ${JSON.stringify({ ...slateVendor.pageModules, 'slate.js': SLATE_CLIENT_MODULE })};\n`,
         // Evaluated only when the slate first connects a browser, as in an eval program.
         [BROWSER_CLIENT_MODULE]: yield* Effect.promise(browserClientSource),
       };
