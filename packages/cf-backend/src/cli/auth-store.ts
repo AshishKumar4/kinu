@@ -12,7 +12,9 @@ import { readKvJson, writeKvJson, type KvStore } from '@kinu.run/agent-utils';
 import { KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
 import { parseAccessTokenUserId, type AccessTokenScope } from '@kinu.run/core';
 import { ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';
+import { idempotent } from '@nimbus-sh/fabric/do-calls.js';
 import * as v from 'valibot';
+import { logDoCallRetry } from '../obs/do-call-retry';
 
 /** Routes map this (and only this) to HTTP 429. */
 export class RateLimitError extends KinuError {
@@ -286,12 +288,17 @@ export function pollCliAuth<Id>(
     }
 
     // The one-time claim is still the UserDO mint's, keyed by the device hash: one approval is one token whatever the
-    // request's object answers.
-    const userDO = objectNamed(env.UserDO, record.userId);
+    // request's object answers, and a mint repeated after the platform failed its answer is refused as redeemed.
     const userId = record.userId;
+    const deviceName = record.deviceName;
 
     const minted = yield* Effect.catchCause(
-      Effect.promise(async (): Promise<{ token: string; expiresAt: number }> => userDO.mintCliToken(await ownerCaller(env), userId, hash, record.deviceName)),
+      Effect.promise(async (): Promise<{ token: string; expiresAt: number }> => {
+        const owner = await ownerCaller(env);
+
+        return await idempotent('UserDO.mintCliToken', () => objectNamed(env.UserDO, userId),
+          (user) => user.mintCliToken(owner, userId, hash, deviceName), { onRetry: logDoCallRetry });
+      }),
       (failed) => {
         const cause = Cause.squash(failed);
 
@@ -333,8 +340,9 @@ export function approveCliAuth<Id>(
     const replayed = yield* approvalOf(yield* Effect.promise(() => device.read()), identity, now);
 
     if (replayed !== null) return replayed;
-    const userDO = objectNamed(env.UserDO, identity.userId);
-    yield* Effect.promise(async () => userDO.ensureProfile(await ownerCaller(env), identity.email));
+    const owner = yield* Effect.promise(async () => ownerCaller(env));
+    yield* Effect.promise(() => idempotent('UserDO.ensureProfile', () => objectNamed(env.UserDO, identity.userId),
+      (user) => user.ensureProfile(owner, identity.email), { onRetry: logDoCallRetry }));
 
     // The object approves only a pending request, so one approved or expired since the read is answered as it stands.
     const approved = yield* approvalOf(yield* Effect.promise(() => device.approve(identity.userId, identity.email, now)), identity, now);
@@ -393,11 +401,31 @@ async function deviceByUserCode<Id>(env: Pick<CliAuthEnv<Id>, 'CliAuthDO'>, user
 }
 
 function deviceObject<Id>(env: Pick<CliAuthEnv<Id>, 'CliAuthDO'>, deviceHash: string): CliAuthObject {
-  return objectNamed(env.CliAuthDO, `device:${deviceHash}`);
+  return retried(env, `device:${deviceHash}`);
 }
 
 function codeObject<Id>(env: Pick<CliAuthEnv<Id>, 'CliAuthDO'>, userCode: string): CliAuthObject {
-  return objectNamed(env.CliAuthDO, `code:${userCode}`);
+  return retried(env, `code:${userCode}`);
+}
+
+/**
+ * The sign-in's object `name`, each call repeated on a fresh stub when the platform failed it in a way it says a retry
+ * may pass (a storage reset, a lost connection, a deploy): staging 2026-10-23, a start among 30 at once answered 500 on
+ * one storage reset. Every method may run twice: `claimCode` answers its own claim again, `approve` the approval as it
+ * stands, and `collect` never hands one approval out twice.
+ */
+function retried<Id>(env: Pick<CliAuthEnv<Id>, 'CliAuthDO'>, name: string): CliAuthObject {
+  const call = <T>(operation: string, run: (object: CliAuthObject) => Promise<T>): Promise<T> =>
+    idempotent(`CliAuthDO.${operation}`, () => objectNamed(env.CliAuthDO, name), run, { onRetry: logDoCallRetry });
+
+  return {
+    claimCode: (deviceHash, until) => call('claimCode', (object) => object.claimCode(deviceHash, until)),
+    deviceOf: () => call('deviceOf', (object) => object.deviceOf()),
+    open: (record, until) => call('open', (object) => object.open(record, until)),
+    read: () => call('read', (object) => object.read()),
+    approve: (userId, email, now) => call('approve', (object) => object.approve(userId, email, now)),
+    collect: (now) => call('collect', (object) => object.collect(now)),
+  };
 }
 
 export function currentStatus(record: CliAuthRecord, now = Date.now()): CliAuthRequestInfo['status'] {
