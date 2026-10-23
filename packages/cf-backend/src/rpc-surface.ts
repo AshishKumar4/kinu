@@ -251,6 +251,7 @@ const USER_DO_METHODS = [
   'limits_setClass',
   'limits_suspend',
   'limits_unsuspend',
+  'limits_inviteRedeemed',
 ] as const satisfies readonly (keyof UserDO)[];
 
 export type UserDoRpcMethod = (typeof USER_DO_METHODS)[number];

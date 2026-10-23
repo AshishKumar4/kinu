@@ -46,6 +46,8 @@ type ControlPlaneReach = IndexFeedSink & Pick<ControlPlaneDO,
   | 'replaceUserWorkspaces'
   | 'recordAudit'
   | 'settleAudit'
+  | 'noteAccountStanding'
+  | 'createInvite'
 >;
 
 type ControlTarget = ActionTarget & Pick<OrchestratorAgent,
@@ -233,7 +235,7 @@ function handleAction<Id>(
     );
 
     if (intent instanceof Response) return intent;
-    const outcome = yield* Effect.promise(() => runControlAction(env, body));
+    const outcome = yield* Effect.promise(() => runControlAction(env, body, { email: admin.email, caller }));
 
     // PHASE TWO. The action has already happened; this records how it ended.
     const unsettled = yield* Effect.catchCause(Effect.gen(function* () {
@@ -349,8 +351,10 @@ function handleUserDetail<Id>(control: ControlContext<Id>, userId: string, url: 
     const request = pageQuery(url);
     const reconcile = yield* reconcileRoster(env, caller, userId, request.cursor === undefined);
     const workspaces = yield* Effect.promise(() => stub.listWorkspaces(caller, request, { userId, includeRemoved: true }));
+    // Its class, suspension and each limit read now in its own object: the list's mirror holds the class alone.
+    const limits = yield* Effect.promise(async () => objectNamed(env.UserDO, userId).limits(await ownerCaller(env)));
 
-    return json({ body: { user, workspaces, reconcile, viewer: admin.email } });
+    return json({ body: { user, workspaces, reconcile, limits, viewer: admin.email } });
   });
 }
 

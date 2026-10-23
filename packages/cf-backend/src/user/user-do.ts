@@ -1125,6 +1125,10 @@ export class UserDO extends Agent<Env> {
     return this.accountLimits.unsuspend(caller);
   }
 
+  limits_inviteRedeemed(caller: UserCaller, by: string): Promise<void> {
+    return this.accountLimits.inviteRedeemed(caller, by);
+  }
+
   /** Keyed by {@link USER_MCP_CLIENT_NAME}, not this object's name: every stored grant uses that key, sealed. */
   override createMcpOAuthProvider(callbackUrl: string): AgentMcpOAuthProvider {
     return new DurableObjectOAuthClientProvider(mcpOAuthStorage(this.ctx, this.env), USER_MCP_CLIENT_NAME, callbackUrl);

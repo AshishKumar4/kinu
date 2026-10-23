@@ -20,6 +20,9 @@ import { idempotent } from '@nimbus-sh/fabric/do-calls.js';
 import { logDoCallRetry } from '../obs/do-call-retry';
 import type { UserCaller } from '@kinu.run/core';
 import { isControlPlaneOperator, type AdminGateEnv } from '../control-plane/admin-caller';
+import { controlPlaneStub, hasControlPlane, type ControlPlaneEnv } from '../control-plane/stub';
+import type { ControlPlaneDO } from '../control-plane/control-plane-do';
+import { internalCaller } from '@kinu.run/core/control-plane';
 import { ownerGate, rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
 import { accountApi, type AccountApiVariables } from './account-api';
 import { searchAsAccount, type WebSearchEnv } from './web-search-route';
@@ -37,6 +40,7 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   | 'listDevices' | 'issueDeviceJoin' | 'acknowledgeUnstoppedDevice' | 'revokeDevice' | 'renameDevice' | 'listDeviceConsents'
   | 'setDeviceTier' | 'grantDeviceConsent' | 'revokeDeviceConsent'
   | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'checkpointCredentials' | 'restoreCredentials' | 'listActiveWorkspaces' | 'getAuthHeaders' | 'getAuth'
+  | 'limits' | 'limits_inviteRedeemed'
   | 'getCodexStatus' | 'disconnectCodex' | 'startClaudeSignIn' | 'finishClaudeSignIn'
   | 'chatgptPlan' | 'startChatGptSignIn' | 'cancelChatGptSignIn' | 'startChatGptPasteSignIn' | 'finishChatGptPasteSignIn' | 'signOutChatGpt'
   | 'getConfig' | 'setConfig' | 'claimConfig'
@@ -49,7 +53,7 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   | 'listSecrets' | 'putSecrets' | 'setSecretDestination' | 'deleteSecret' | 'grantSecret' | 'revokeSecretGrant'
 >;
 
-export interface UserRoutesEnv<Id> extends CreateWorkspaceEnv<Id>, AdminGateEnv {
+export interface UserRoutesEnv<Id> extends CreateWorkspaceEnv<Id>, AdminGateEnv, Partial<ControlPlaneEnv<Id, Pick<ControlPlaneDO, 'redeemInvite'>>> {
   /** The deployment's binding, whose `websearch` Settings' Test reaches for an account with no Cloudflare login. */
   readonly AI?: CreateWorkspaceEnv<Id>['AI'] & WebSearchEnv['AI'];
   UserDO: ObjectNamespace<Id, UserRoutesAuthority>;
@@ -185,6 +189,25 @@ userRoutes.get('/api/user/profile', async (c) => accountProfile(c, await c.get('
 
 /** The account's class and each limit read now, for Settings → Usage and the near-limit banner (core limits/). */
 userRoutes.get('/api/user/limits', async (c) => json({ body: await c.get('stub').limits(c.get('owner')) }));
+
+/**
+ * An invite link opened by the signed-in person: spent once, for them, at the control plane; their account is then
+ * invited, with no limits. The link's maker (an operator's email) is the invitation's author.
+ */
+userRoutes.post('/api/user/invite/:token', async (c) => {
+  if (!hasControlPlane(c.env)) return err(404, 'This deployment makes no invite links.');
+  const { userId } = c.get('identity');
+  const redeemed = await controlPlaneStub(c.env).redeemInvite(await internalCaller(c.env), rawParam(c, 'token'), userId);
+
+  if (redeemed === 'unknown') return err(404, 'This invite link is not one of ours.');
+
+  if (redeemed === 'spent') return err(409, 'This invite link was already used by another account.');
+
+  if (redeemed === 'expired') return err(410, 'This invite link has expired; ask for a new one.');
+  await c.get('stub').limits_inviteRedeemed(c.get('owner'), redeemed.createdBy);
+
+  return json({ body: await c.get('stub').limits(c.get('owner')) });
+});
 
 userRoutes.patch('/api/user/profile', async (c) => {
   const body = await safeJson(c.req.raw, ProfilePatch);

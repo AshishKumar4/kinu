@@ -227,4 +227,11 @@ export class UserLimits {
     await this.host.requireTier(caller, 'limits.manage');
     this.store.unsuspend(Date.now());
   }
+
+  /** An invite link `by` made, spent by this account (the person's own route, after the control plane spent it). */
+  async inviteRedeemed(caller: UserCaller, by: string): Promise<void> {
+    await this.host.requireTier(caller, 'limits.manage');
+
+    if (this.store.standing().class !== 'invited') this.store.setClass('invited', by, Date.now());
+  }
 }
