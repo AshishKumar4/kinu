@@ -444,6 +444,15 @@ describe('what the plan route answers', () => {
   });
 });
 
+/** Whether a dotted version is at least `floor`, compared part by part as numbers. */
+function clientVersionAtLeast(declared: string | null, floor: string): boolean {
+  if (declared === null || !/^\d+(\.\d+)*$/u.test(declared)) return false;
+  const [have, want] = [declared, floor].map((version) => version.split('.').map(Number));
+  const at = (have ?? []).findIndex((part, index) => part !== (want?.[index] ?? 0));
+
+  return at === -1 ? (have?.length ?? 0) >= (want?.length ?? 0) : (have?.[at] ?? 0) > (want?.[at] ?? 0);
+}
+
 describe('the model list', () => {
   test('lists what the account may pick, in the order OpenAI gives', async () => {
     const api = openai(Response.json({
@@ -459,7 +468,9 @@ describe('the model list', () => {
     expect(api.sent[0]).toMatchObject({ method: 'GET', authorization: 'Bearer at-1' });
     const listed = new URL(api.sent[0]?.url ?? '');
     expect(`${listed.origin}${listed.pathname}`).toBe('https://api.openai.com/v1/models');
-    expect(listed.searchParams.get('client_version')).not.toBeNull();
+    // OpenAI's list leaves out models newer than the client a request declares (m2074a: no version hid gpt-6.1-sol, 2026-10-05).
+    // 0.160.1 listed it on 2026-10-23 (kinu.run, eval-service's own login); an older one is not known to.
+    expect(clientVersionAtLeast(listed.searchParams.get('client_version'), '0.160.1')).toBe(true);
     expect(models.map((model) => [model.id, model.label, model.contextWindow ?? null])).toEqual([
       ['gpt-6.1-sol', 'GPT-6.1 Sol', 400_000],
       ['gpt-6-luna', 'GPT-6 Luna', null],
