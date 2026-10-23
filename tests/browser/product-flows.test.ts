@@ -235,6 +235,13 @@ describe(productFlowTestName('agent-workspace', 'a workspace the agent creates e
     expect(flow.changelog?.summary).toContain(`Created workspace "${AGENT_WORKSPACE.name}"`);
     expect(flow.changelog?.opens).toBe(`/workspace/${flow.created?.name ?? '(none)'}`);
   });
+
+  // WEB-3: the program's call shows what the host recorded it changed.
+  test("the creating program's call carries its receipt, which names the operation", () => {
+    const flow = verdictOf(observed, 'agent-workspace');
+
+    expect([flow.receipts.length > 0, flow.operations]).toEqual([true, ['agent.createWorkspace']]);
+  });
 });
 
 describe(productFlowTestName('approval-stack', 'two commands a turn parks wait as a stack docked to the composer'), () => {
