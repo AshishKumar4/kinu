@@ -164,11 +164,6 @@ class Statement {
     return this;
   }
 
-  /** How many values it binds. */
-  get bound(): number {
-    return this.values.length;
-  }
-
   run<Row>(sql: SqlExecutor): Row[] {
     const strings = [...this.parts];
 
@@ -196,10 +191,6 @@ function classified<A>(call: () => A): Effect.Effect<A, KinuError> {
 }
 
 function execute<Row>(sql: SqlExecutor, statement: Statement, doing: string): Effect.Effect<Row[], KinuError> {
-  if (statement.bound > BOUND_PARAMS_MAX) {
-    return Effect.fail(new KinuError('bad_input', `${doing}: it binds ${String(statement.bound)} values, and a statement binds at most ${String(BOUND_PARAMS_MAX)} (do.sqlite.bound_params)`));
-  }
-
   return Effect.try({
     try: () => statement.run<Row>(sql),
     catch: (cause) => {
@@ -894,8 +885,9 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
   });
 
   /**
-   * One statement over the shared tables, its access read off the program SQLite compiles for it (`gateProgram`): a
-   * read runs as it is; a write runs with its evidence in one transaction, as a Plan turn's never does.
+   * One statement over the shared tables, its access read off the program SQLite compiles for it (`gateProgram`). The
+   * catalogue's read, the program's check and its run are one transaction: on the CLI another process could otherwise
+   * drop and redeclare a table between them. A write lands with its evidence there, as a Plan turn's never does.
    */
   const sqlRan = (query: string, params: readonly (string | number | boolean | null)[]): Effect.Effect<SqlAnswer, KinuError> => Effect.gen(function* () {
     yield* authorized();
@@ -908,26 +900,30 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
       return yield* new KinuError('bad_input', `${doing}: its query holds ${String(statement.placeholders)} \`?\` and params ${String(params.length)} values`);
     }
 
-    const tables = yield* sharedTables(doing);
+    if (params.length > BOUND_PARAMS_MAX) {
+      return yield* new KinuError('bad_input', `${doing}: it binds ${String(params.length)} values, and a statement binds at most ${String(BOUND_PARAMS_MAX)} (do.sqlite.bound_params)`);
+    }
+
     const segments = boundSegments(statement.tokens);
     const values = params.map((value) => (typeof value === 'boolean' ? Number(value) : value));
 
-    // Compiling is all EXPLAIN does, so what fails here is the statement's own: a word SQLite does not read, a table it
-    // does not find.
-    const explained = yield* Effect.mapError(
-      execute<unknown>(sql, Statement.of([`EXPLAIN ${segments[0] ?? ''}`, ...segments.slice(1)], values), doing),
-      (failed) => new KinuError('bad_input', failed.message.includes('no such table') ? `${failed.message}: in SQL a shared table is ${APP_TABLE_PREFIX}<name>, each <name> one db.listTables names` : failed.message, { cause: failed }),
-    );
-
-    const program = yield* parseInput(v.array(ExplainRowSchema), { value: explained, where: 'its compiled program' });
-    const [target] = yield* gateProgram(program, yield* sharedPages(tables, doing));
-
-    if (target === undefined) return { rows: yield* answered(yield* execute<Record<string, StoredValue>>(sql, Statement.of(segments, values), doing), doing), rowsAffected: 0 };
-
-    yield* permitted(false, `${doing} writing a shared table`);
-
     return yield* commit((record) => Effect.gen(function* () {
+      const tables = yield* sharedTables(doing);
+
+      // Compiling is all EXPLAIN does, so what fails here is the statement's own: a word SQLite does not read, a table
+      // it does not find.
+      const explained = yield* Effect.mapError(
+        execute<unknown>(sql, Statement.of([`EXPLAIN ${segments[0] ?? ''}`, ...segments.slice(1)], values), doing),
+        (failed) => new KinuError('bad_input', failed.message.includes('no such table') ? `${failed.message}: in SQL a shared table is ${APP_TABLE_PREFIX}<name>, each <name> one db.listTables names` : failed.message, { cause: failed }),
+      );
+
+      const program = yield* parseInput(v.array(ExplainRowSchema), { value: explained, where: 'its compiled program' });
+      const [target] = yield* gateProgram(program, yield* sharedPages(tables, doing));
+
+      if (target !== undefined) yield* permitted(false, `${doing} writing a shared table`);
       const rows = yield* answered(yield* execute<Record<string, StoredValue>>(sql, Statement.of(segments, values), doing), doing);
+
+      if (target === undefined) return { rows, rowsAffected: 0 };
       const changed = yield* execute<{ n: number }>(sql, new Statement().text('SELECT changes() AS n'), doing);
       const rowsAffected = v.parse(CountSchema, changed[0]?.n ?? 0);
 

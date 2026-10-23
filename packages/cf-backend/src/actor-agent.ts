@@ -2494,7 +2494,11 @@ export abstract class ActorAgent extends Agent<Env> {
     return settle(this.dispatchSlateCall(path, route, mode, context));
   }
 
-  private dispatchSlateCall(path: readonly SlateCallerHop[], route: SlateRoute, mode: WorkMode, context: SlateDispatchContext): Effect.Effect<SlateSurfaceValue, KinuError> {
+  private dispatchSlateCall(path: readonly SlateCallerHop[], route: SlateRoute, asked: WorkMode, context: SlateDispatchContext): Effect.Effect<SlateSurfaceValue, KinuError> {
+    // A call no one was asked about as a write (`route.readOnly`) runs in Plan, here or at the hosted actor it reaches,
+    // where its member refuses to write.
+    const mode: WorkMode = route.kind === 'namespace' && route.readOnly === true ? 'plan' : asked;
+
     return Effect.gen({ self: this }, function* () {
       // Only a namespace member is checked without running it; anything else asked about alone would run.
       if (context.authorizeOnly && route.kind !== 'namespace') {
@@ -2511,12 +2515,10 @@ export abstract class ActorAgent extends Agent<Env> {
 
       switch (route.kind) {
         case 'namespace': {
-          // The root's own path: a share's viewer comes here too, and never holds `agents`. A call no one was asked about
-          // as a write (`route.readOnly`) runs in Plan, where its member refuses to write.
+          // The root's own path: a share's viewer comes here too, and never holds `agents`.
           const owner = context.viewer !== true;
-          const runs: WorkMode = route.readOnly === true ? 'plan' : mode;
-          const authority = yield* Effect.promise(async () => this.slateAuthority(runs, this.slateNamespaces(runs, owner)));
-          const providers = providersInWorkMode(authority.mode, this.slateNamespaces(runs, owner));
+          const authority = yield* Effect.promise(async () => this.slateAuthority(mode, this.slateNamespaces(mode, owner)));
+          const providers = providersInWorkMode(authority.mode, this.slateNamespaces(mode, owner));
 
           // The owner's own slate hires under the owner's role as of now, as a program in a turn does.
           return yield* Effect.promise(async () => runOperationProfile(owner ? authority.operation ?? null : null, async () => slateMember(
