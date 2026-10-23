@@ -58,6 +58,8 @@ export { OAuthTokenError } from './oauth-token-error';
 
 export * from './cloudflare-oauth';
 
+export * from './google-connection';
+
 export {
   DEFAULT_WEB_SEARCH_CHAIN, WEB_SEARCH_PROVIDER_IDS, WEB_SEARCH_PROVIDERS, WebSearchRouteSchema,
   type WebSearchBilling, type WebSearchProviderId, type WebSearchRoute,

@@ -68,6 +68,11 @@ export function cloudflareConnectPath(run: string): string {
   return `/auth/cloudflare/start?${new URLSearchParams({ intent: 'connect', prompt: 'login', run }).toString()}`;
 }
 
+/** Where the Google connection's connect starts, owner only: Google's consent for the Workspace client's scopes. */
+export function googleConnectPath(run: string): string {
+  return `/api/user/google/connect?${new URLSearchParams({ run }).toString()}`;
+}
+
 /** Where a connect ends, for every connect: the finish page, naming its run, the service and why it failed. */
 export function connectedPath(ended: ConnectEnded): string {
   const query = new URLSearchParams({ service: ended.service });

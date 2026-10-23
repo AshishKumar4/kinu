@@ -268,6 +268,14 @@ const revoking = (revoke: boolean) => revoke ? '?revoke=1' : '';
 export const deleteCredential = (key: string, revoke: boolean) =>
   settle(api(DisconnectOutcomeSchema, 'DELETE', `/credentials/${encodeURIComponent(key)}${revoking(revoke)}`));
 
+/** The Google connection: whether this account may connect it here, and the account and scopes it holds. */
+const GoogleConnectionSchema = v.object({
+  available: v.boolean(),
+  connection: v.nullable(v.object({ account: v.string(), scopes: v.array(v.string()) })),
+});
+
+export const googleConnection = () => settle(api(GoogleConnectionSchema, 'GET', '/google'));
+
 const CodexStatusSchema = v.object({
   connected: v.boolean(), accountId: v.nullable(v.string()), expiresAt: v.nullable(v.number()),
 });
