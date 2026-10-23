@@ -311,6 +311,7 @@ function builtGalleryDist(): Promise<string> {
           input: {
             gallery: join(CF, 'gallery.html'),
             landing: join(CF, 'landing.html'),
+            legal: join(CF, 'legal.html'),
           },
         },
       },

@@ -11,7 +11,7 @@
 import * as v from 'valibot';
 import { normalizeCode } from '@cloudflare/codemode/normalize';
 import {
-  decodeJsonValue, JsonValueSchema, KINU_NODE_MODULE_SOURCE, KINU_PROGRAM_MODULE, renderCraftedDefinitions, safeJsonParse,
+  bytesToBase64, decodeJsonValue, JsonValueSchema, KINU_NODE_MODULE_SOURCE, KINU_PROGRAM_MODULE, renderCraftedDefinitions, safeJsonParse,
   type CraftedToolSource, type EgressPrincipal, type JsonValue, type ProgramImport,
 } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -171,9 +171,12 @@ function programModule(program: NodeProgram, kinu: string, marker: string): stri
   ].join('\n');
 }
 
-/** A file written whole by one command: a heredoc no line of `content` can close early. */
-function writeCommand(path: string, content: string, fence: string): string {
-  return `cat > ${JSON.stringify(path)} <<'${fence}'\n${content}\n${fence}`;
+/**
+ * A file written whole by one command, its content as base64: the shell reads every word of a command it runs, and
+ * refuses one naming a plane (`vfs://…`, `shellReference`), which a program's strings may well do.
+ */
+function writeCommand(path: string, content: string): string {
+  return `printf '%s' '${bytesToBase64(new TextEncoder().encode(content))}' | base64 -d > ${JSON.stringify(path)}`;
 }
 
 /** Why a program that loads a native addon fails, said once: Nimbus's node loads none. */
@@ -199,13 +202,12 @@ export async function runNodeProgram(program: NodeProgram): Promise<{ result: un
   const kinu = `${dir}/kinu.mjs`;
   const main = `.kinu-eval-${id}.mjs`;
   const marker = `\u001eKINU_EVAL_ANSWER_${id} `;
-  const fence = `KINU_EVAL_${id}`;
 
   live.set(token, { principal: program.principal, providers: program.providers });
 
   try {
     const command = [
-      `mkdir -p ${dir}`, writeCommand(kinu, kinuModule(token, program.providers), fence), writeCommand(main, programModule(program, kinu, marker), fence),
+      `mkdir -p ${dir}`, writeCommand(kinu, kinuModule(token, program.providers)), writeCommand(main, programModule(program, kinu, marker)),
       `node ${main}; status=$?; rm -rf ${main} ${dir}; exit $status`,
     ].join('\n');
 

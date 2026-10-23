@@ -5,7 +5,7 @@ const ProductFlowRow = v.picklist([
   'welcome', 'first-answer', 'agent-return', 'agent-plan', 'agent-workspace', 'account-memory', 'stack-memory',
   'splice', 'approval-stack', 'hire-approval', 'panel', 'stamped', 'written-file', 'changes-storm', 'live-memory',
   'slate-preview', 'drive', 'drive-opens', 'slate-opens', 'slate-share', 'pin', 'titled-chat', 'hire-home',
-  'slate-reach', 'plan-comment', 'desktop-resize', 'desktop-switch', 'reopen', 'computer-sessions', 'agent-job', 'attachment',
+  'slate-reach', 'plan-comment', 'desktop-resize', 'desktop-switch', 'reopen', 'computer-sessions', 'agent-job', 'attachment', 'rewind',
 ]);
 
 export const PRODUCT_FLOW_ROWS = ProductFlowRow.options;

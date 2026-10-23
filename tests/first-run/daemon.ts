@@ -27,7 +27,7 @@
  * reply.
  */
 import { chmodSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import type { Subprocess } from 'bun';
 
 import { infraBoundary } from '@kinu.run/test-utils';
@@ -108,12 +108,15 @@ export async function attachMachine(request: AttachMachineRequest): Promise<Atta
   // this fixture's own. Measured 2026-09-05 with the pc-agent harness: a shim
   // in `~/bin` never runs sandboxed and `hostname` answers the real host.
   const binDir = join(home, '.local', 'bin');
-  const execLogPath = join(home, 'exec.log');
+  // In a folder of its own: the home lacks a run-later file (a ~/.zshrc), so the sandbox lets no new entry be made
+  // directly in it (pc-agent sandbox.js guardedPaths), and the shim's first line made one.
+  const execLogPath = join(home, 'first-run', 'exec.log');
   // The machine's own KINU_HOME is `.kinu` inside the consented root, the
   // layout `kinu connect` gives a person's home: device.json and the bearer
   // live there, apart from the rest of the root this shim's directory is in.
   const kinuHome = join(home, '.kinu');
   mkdirSync(binDir, { recursive: true, mode: 0o700 });
+  mkdirSync(dirname(execLogPath), { recursive: true, mode: 0o700 });
   mkdirSync(join(kinuHome, 'agents'), { recursive: true, mode: 0o700 });
   mkdirSync(join(kinuHome, 'inflight'), { recursive: true, mode: 0o700 });
   writeFileSync(

@@ -53,7 +53,17 @@ function workspace(calls: JsonValue[][]): ResolvedProvider {
       exec: async (...args) => {
         const [command, options] = args;
         const at = typeof options === 'object' && options !== null && 'cwd' in options && typeof options.cwd === 'string' ? options.cwd : cwd;
-        const routed = String(command).replaceAll(`https://${NODE_PROGRAM_HOST}/`, `http://127.0.0.1:${String(egress?.port)}/`);
+
+        // As the workspace's shell refuses a word naming one of its planes (`shellReference`).
+        if (/\b(?:vfs|local):\/\//u.test(String(command))) return { success: false, error: "the shell takes this machine's paths" };
+
+        // The egress's part: a call to the program host reaches this test's server. Each module rides as base64.
+        const routed = String(command).replace(/printf '%s' '([A-Za-z0-9+/=]*)'/gu, (_, encoded: string) => {
+          const module = Buffer.from(encoded, 'base64').toString('utf8').replaceAll(`https://${NODE_PROGRAM_HOST}/`, `http://127.0.0.1:${String(egress?.port)}/`);
+
+          return `printf '%s' '${Buffer.from(module, 'utf8').toString('base64')}'`;
+        });
+
         const ran = Bun.spawn(['bash', '-c', `command -v node >/dev/null || node() { ${JSON.stringify(process.execPath)} "$@"; }\n${routed}`], { cwd: at, stdout: 'pipe', stderr: 'pipe' });
         const [stdout, stderr, exitCode] = await Promise.all([new Response(ran.stdout).text(), new Response(ran.stderr).text(), ran.exited]);
 
@@ -93,6 +103,14 @@ describe('an eval program that imports from the workspace runs there as Node', (
     expect(answer).toEqual({ result: { sum: 42, padded: '..a', read: 'read notes.md', cwd: true }, logs: ['working'] });
     expect(calls).toEqual([['notes.md']]);
     expect((await readdir(cwd)).filter((name) => name.startsWith('.kinu-eval-'))).toEqual([]);
+  });
+
+  // staging d56a6f234: the shell refuses a command that names a plane (`vfs://…`), and the program's source rode in its
+  // command as text; it rides as base64 now, which names nothing.
+  test("a program whose source names one of the workspace's planes runs as written", async () => {
+    const answer = await run("import { x } from './lib.mjs';\nreturn 'vfs://notes/a.md and local://src/b.ts ' + x;");
+
+    expect(answer).toEqual({ result: 'vfs://notes/a.md and local://src/b.ts 41', logs: [] });
   });
 
   test('a namespace call that throws throws in the program, and an uncaught error is its answer', async () => {

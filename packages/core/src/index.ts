@@ -117,7 +117,7 @@ export { handedMailSignal, MAIL_HANDED_EVENT, type HandedMail } from './mail/han
 
 export { mailInContext } from './mail/in-context';
 
-export { MAIL_MESSAGE_FIELDS, MailAddress, mailText } from './mail/message';
+export { MAIL_MESSAGE_FIELDS, MailAddress, MailBoxPath, mailText } from './mail/message';
 
 export { MailTriageLane, triageMail, type MailTriageDeps } from './mail/triage';
 
@@ -890,7 +890,7 @@ export { ASKED, HeldReads, type Holds } from './utils/held-reads';
 
 export { rasterImage, type RasterImage } from './utils/raster-image';
 
-export { base64ToBytes } from './utils/base64';
+export { base64ToBytes, bytesToBase64 } from './utils/base64';
 
 export { mediaImage, mediaTokens, UNPRICED_MEDIA_TOKENS } from './prompting/media-tokens';
 

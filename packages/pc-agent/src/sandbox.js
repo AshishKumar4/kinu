@@ -37,6 +37,8 @@ const { MACHINE_SANDBOX_REASONS } = require('../../core/src/execution/machine-sa
 
 const { RUN_LATER, RUN_LATER_NAMES } = require('../../core/src/execution/run-later-paths.ts');
 
+const { SEAL_ABI, SEAL_LAUNCHER, SEAL_RUNTIME, landlockAbi } = require('./daemon/landlock.js');
+
 const { runToExit } = update;
 
 /** Why a machine cannot sandbox, keyed by the word upper-cased (`NO_BWRAP`). `ok` is the only status that runs a
@@ -928,6 +930,10 @@ function guardNote(stderr, names) {
   const said = new Map();
   const lines = stderr.split('\n');
   const refused = (line) => /Read-only file system|Operation not permitted/u.test(line);
+  // Landlock refuses a new entry in a sealed folder as EACCES (daemon/landlock.js).
+  const refusedMaking = (line) => refused(line) || (names.sealedBy === 'landlock' && line.includes('Permission denied'));
+  // What `rm`, `mv` and the shell say of an entry they could not take away; a seal by mounts refuses that too.
+  const removing = (line) => /cannot (?:remove|move)|rename|rmdir|unlink/u.test(line);
 
   const escaped = (text) => text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
   // A kept path, by its full path or by its last name as a word of the line (a relative path, as a shell says it).
@@ -935,13 +941,13 @@ function guardNote(stderr, names) {
   // A new entry directly in the sealed folder: its own last name follows the folder, then the line's punctuation.
   const newEntryIn = (line, dir) => new RegExp(`${escaped(dir)}/[^/\\s:'"]+(?:[\\s:'"]|$)`, 'u').test(line);
 
-  for (const line of lines.filter(refused)) {
-    const kept = names.kept.filter((entry) => mentions(line, entry.path));
+  for (const line of lines.filter(refusedMaking)) {
+    const kept = refused(line) ? names.kept.filter((entry) => mentions(line, entry.path)) : [];
 
     for (const entry of kept) said.set(entry.path, `${entry.path} is ${entry.why}.`);
 
     for (const sealed of kept.length > 0 ? [] : names.sealed.filter((entry) => newEntryIn(line, entry.path))) {
-      said.set(sealed.path, `That is ${sealed.why}`);
+      said.set(sealed.path, removing(line) && names.sealedBy !== 'landlock' ? removalRefused(sealed.path) : `That is ${sealed.why}`);
     }
   }
 
@@ -954,9 +960,16 @@ function guardNote(stderr, names) {
   return said.size === 0 ? '' : `Kinu's sandbox refused that. ${[...said.values()].join(' ')}`;
 }
 
-/** What `guardNote` needs of a plan's guard: each kept path with why, each sealed folder with why, and the last names
- *  of the pinned and opened folders. */
-function guardNames(guarded) {
+/** Why an entry already in sealed folder `dir` could not be removed or renamed: a seal by mounts holds the folder
+ *  read-only, which Landlock, missing from this kernel, would not (daemon/landlock.js). */
+function removalRefused(dir) {
+  return `${dir} takes no new entry, and on this machine, whose kernel has no Landlock (ABI ${String(SEAL_ABI)}, Linux 5.19), `
+    + 'that also keeps what is already in it from being removed or renamed. Work inside a folder in it instead.';
+}
+
+/** What `guardNote` needs of a plan's guard: each kept path with why, each sealed folder with why, the last names of the
+ *  pinned and opened folders, and how the sealed folders are sealed (`landlock`, `mounts`, or null when none is). */
+function guardNames(guarded, sealedBy = null) {
   const kept = guarded.filter((entry) => entry.kind === 'file' || entry.kind === 'directory' || entry.kind === 'config');
   const pinned = [...new Set(guarded.filter((entry) => entry.kind === 'pin' || entry.kind === 'open').map((entry) => path.basename(entry.path)))];
 
@@ -964,7 +977,21 @@ function guardNames(guarded) {
     kept: kept.map((entry) => ({ path: entry.path, why: entry.why })),
     sealed: guarded.filter((entry) => entry.kind === 'sealed').map((entry) => ({ path: entry.path, why: entry.why })),
     pinned,
+    sealedBy,
   };
+}
+
+/**
+ * How this plan seals its sealed folders: `landlock` where the kernel has ABI 2 (an entry already there stays removable),
+ * else `mounts` (the folder read-only, each entry in it bound writable again); null when nothing is sealed. A caller may
+ * name one (a test of the other).
+ */
+function sealOf(guarded, wanted) {
+  if (!guarded.some((entry) => entry.kind === 'sealed')) return null;
+
+  if (wanted !== undefined) return wanted;
+
+  return landlockAbi() >= SEAL_ABI ? 'landlock' : 'mounts';
 }
 
 
@@ -1372,20 +1399,9 @@ function buildLinuxArgv(view, options) {
   // owner shared and later deleted is no reason to refuse every command.
   for (const root of [...view.roots].reverse()) argv.push('--bind-try', root, root);
 
-  // Over the writable roots that hold them (guardedPaths), outer before inner, so a pin or an opened entry never covers
-  // a read-only bind below it: a sealed folder read-only, then each entry already in it writable again. Git's own
-  // directories and config are made first when missing; nothing else is.
-  for (const { path: kept, kind } of [...(options.guarded ?? [])].sort((a, b) => a.path.length - b.path.length)) {
-    if (kind === 'pin' || kind === 'open') {
-      argv.push('--bind-try', kept, kept);
-      continue;
-    }
+  const landlock = options.seal === 'landlock';
 
-    if (kind === 'directory') fs.mkdirSync(kept, { recursive: true });
-    else if (kind === 'config') fs.closeSync(fs.openSync(kept, 'a'));
-
-    if (fs.existsSync(kept)) argv.push('--ro-bind', kept, kept);
-  }
+  argv.push(...guardedMounts(options.guarded ?? [], landlock));
 
   for (const dir of view.hiddenDirs) argv.push('--tmpfs', dir);
 
@@ -1399,13 +1415,61 @@ function buildLinuxArgv(view, options) {
   // Last: a root holding it (the owner's home) would shadow it, and the mask on
   // Kinu's own directory, which holds it, would hide it.
   argv.push('--bind', view.agentHome, view.agentHome);
+
+  const program = options.program ?? ['bash', '-c', options.command];
+
+  if (landlock) return [...argv, ...sealedLaunch(view, options, program)];
+
   argv.push('--chdir', view.insidePath(options.cwd));
   argv.push('--clearenv');
 
   for (const name of Object.keys(options.env)) argv.push('--setenv', name, options.env[name]);
-  argv.push('--', ...(options.program ?? ['bash', '-c', options.command]));
+  argv.push('--', ...program);
 
   return argv;
+}
+
+/**
+ * The binds that keep what the guard keeps (guardedPaths), over the writable roots that hold them, outer before inner,
+ * so a pin or an opened entry never covers a read-only bind below it. Sealed by Landlock, a sealed folder is pinned (it
+ * cannot be renamed or removed) and the launcher refuses new entries in it; sealed by mounts, it is read-only, then each
+ * entry already in it writable again. Git's own directories and config are made first when missing; nothing else is.
+ */
+function guardedMounts(guarded, landlock) {
+  const argv = [];
+
+  for (const { path: kept, kind } of [...guarded].sort((a, b) => a.path.length - b.path.length)) {
+    if (kind === 'open' && landlock) continue;
+
+    if (kind === 'pin' || kind === 'open' || (kind === 'sealed' && landlock)) {
+      argv.push('--bind-try', kept, kept);
+      continue;
+    }
+
+    if (kind === 'directory') fs.mkdirSync(kept, { recursive: true });
+    else if (kind === 'config') fs.closeSync(fs.openSync(kept, 'a'));
+
+    if (fs.existsSync(kept)) argv.push('--ro-bind', kept, kept);
+  }
+
+  return argv;
+}
+
+/**
+ * The end of a Landlock-sealed plan's argv (daemon/landlock.js): the daemon's own Bun bound in, and SEAL_LAUNCHER run
+ * from `/` with no environment, which seals the folders, enters the command's directory and execs `program` with its
+ * environment. Bun reads no config: not a repository's bunfig in the command's directory, nor one an agent named.
+ */
+function sealedLaunch(view, options, program) {
+  const sealed = (options.guarded ?? []).filter((entry) => entry.kind === 'sealed').map((entry) => view.insidePath(entry.path));
+  const spec = JSON.stringify({ sealed, cwd: view.insidePath(options.cwd), env: options.env });
+
+  return [
+    '--ro-bind', process.execPath, SEAL_RUNTIME,
+    '--chdir', '/',
+    '--clearenv',
+    '--', SEAL_RUNTIME, '--config=/dev/null', '-e', SEAL_LAUNCHER, '--', spec, ...program,
+  ];
 }
 
 /** The SBPL profile. Rules evaluate in order and the LAST match wins, which is
@@ -1535,11 +1599,14 @@ async function plan(options) {
   // HOME is the agent home at its own path, as on macOS, so the path the model
   // is told is the path the command sees, and every tool's default (~/.local,
   // ~/.cache, ~/.cargo, ~/.npm) lands in the agent's own directory.
+  const seal = sealOf(view.guarded, options.seal);
+  const temp = sealedTemp(view, seal);
+
   const env = sandboxEnvironment(options.source ?? process.env, {
     HOME: view.agentHome,
-    TMPDIR: '/tmp',
+    TMPDIR: temp,
     PATH: [...toolDirs(view), ...LINUX_PATH_TAIL].join(':'),
-    XDG_RUNTIME_DIR: '/tmp/xdg',
+    XDG_RUNTIME_DIR: `${temp}/xdg`,
     NPM_CONFIG_PREFIX: path.join(view.agentHome, '.local'),
     KINU_SANDBOX: '1',
   }, options.dotenv);
@@ -1549,16 +1616,32 @@ async function plan(options) {
   return {
     view,
     statusFd: options.statusFd,
-    argv: buildLinuxArgv(view, { cwd, env, command, gpu, statusFd: options.statusFd, guarded: view.guarded }),
+    argv: buildLinuxArgv(view, { cwd, env, command, gpu, statusFd: options.statusFd, guarded: view.guarded, seal }),
     // bwrap carries the environment through `--setenv`, so the process that
     // spawns it needs none of it: an inherited variable here would be a second
     // path into the command's environment.
     env: {},
+    // What the command runs with, set by bwrap or, sealed by Landlock, by the seal launcher.
+    commandEnv: env,
     cwd,
     gpu,
+    seal,
     unguarded: view.unguarded,
-    guardNames: guardNames(view.guarded),
+    guardNames: guardNames(view.guarded, seal),
   };
+}
+
+/**
+ * The command's temp directory: /tmp, or below it when a folder sealed by Landlock lies under /tmp (a test's home):
+ * /tmp is then on the sealed folder's path and takes no new entry at its own level (daemon/landlock.js), while a folder
+ * of its own below it does. It is made in the agent's temp, which the sandbox binds at /tmp.
+ */
+function sealedTemp(view, seal) {
+  if (seal !== 'landlock' || !view.guarded.some((entry) => entry.kind === 'sealed' && within('/tmp', entry.path))) return '/tmp';
+
+  fs.mkdirSync(path.join(view.agentTmp, 'kinu-tmp', 'xdg'), { recursive: true, mode: 0o700 });
+
+  return '/tmp/kinu-tmp';
 }
 
 /**

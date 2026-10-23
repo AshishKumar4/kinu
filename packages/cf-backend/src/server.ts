@@ -398,7 +398,7 @@ worker.get('/gallery', (c) => c.redirect(`${APP_ROUTES.explore}?kind=app`));
 // decide what a visitor reads, and whom a share admits.
 // The connect finish page reads nothing of an account and says only what its address says: a sign-in that ends after
 // its session expired must still reach it, tell the page that began it and close, not land on sign-in.
-for (const path of ['/login', '/logout', DEPLOY_PAGE_PATH, APP_ROUTES.connected]) worker.all(path, appShell);
+for (const path of ['/login', '/logout', DEPLOY_PAGE_PATH, APP_ROUTES.connected, '/privacy', '/terms']) worker.all(path, appShell);
 
 for (const prefix of ['/auth', '/assets', '/shared/blueprint', '/shared/live', '/gallery', '/s']) worker.all(`${prefix}/*`, beneath<WorkerEnv>(prefix, appShell));
 
