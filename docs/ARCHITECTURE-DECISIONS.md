@@ -2045,6 +2045,17 @@ over (the owner's decision, 2026-10-20: "Drop changed tables"). It replaces the 
 its DDL called a regenerable cache, and refused where rows could not be copied. That repair, its cache marking, its
 copy-back and its foreign-key group rebuild are gone; the owner's rule had been that a schema change resets only its
 tables, with no migrations and no compatibility code.
+- The owner's rule of 2026-10-21 ("once users come, we either have a one time migration in the workspace onStart, or
+  alter only tables where data loss is acceptable") is kept by the production loss guard (`scripts/schema-loss.json`,
+  `--loss-override`); no generic migration mechanism is built (Main, 2026-10-23: no change waits for one). A change
+  that must keep rows writes its own one-time migration for its own tables, reviewed then. Measured for it, on a
+  throwaway SQLite Durable Object (compat 2026-09-30, 2026-10-23, deleted after): `PRAGMA foreign_keys` is 1 and stays
+  1; `PRAGMA legacy_alter_table = ON` takes, yet `ALTER TABLE p RENAME TO p_old` still rewrites every child's
+  `REFERENCES p` to `p_old`, and dropping `p_old` then ran the children's ON DELETE CASCADE (their rows gone) and SET
+  NULL. `defer_foreign_keys` defers the check, not the actions. So copying a parent aside and dropping it keeps a child
+  only where every foreign key naming it is ON DELETE NO ACTION, which re-inserting the parent's rows satisfies before
+  the transaction's check; a CASCADE, SET NULL, SET DEFAULT or RESTRICT child must be staged and restored too. An
+  unlanded start, with its review's findings: branch feat/schema-migrations.
 - Kept: each object applies the reset to its own database the first time the new build opens it, before any event reads
   it (Cloudflare's list of objects misses classes, which is why a fleet walk alone failed); the genesis stamps, and
   refusing a deploy that moves one without `--reset-tables`; `scripts/reset.ts tables-plan` naming every table it will
