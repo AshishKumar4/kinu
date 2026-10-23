@@ -7,7 +7,7 @@ import { describe, expect, test } from 'bun:test';
 import { Effect } from 'effect';
 import type { Frame, Page } from 'puppeteer';
 import * as v from 'valibot';
-import { readFile } from 'node:fs/promises';
+import { readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { appFontFile, SLATE_FONTS_PATH, SLATE_PAGE_PREAMBLE } from '@kinu.run/core';
 import { SLATE_CLIENT_MODULE } from '@kinu.run/core/slates';
@@ -280,6 +280,43 @@ describe('an answer\'s page in the chat', () => {
       });
     });
   }
+
+  // A frame can be navigated to another document that keeps its window and its opaque origin (an external review of
+  // 1023-ac): the session is the written document's, so a document the page sends its frame to is refused, even one
+  // that copies the written document whole, its nonce included. It is served by the gallery itself: a document the
+  // harness made up has no address of its own, and Chrome refuses its import from this loopback app before any bridge.
+  test('a document the page sends its frame to is refused through kinu:slate', async () => {
+    await withGallery(async ({ newPage, origin, dist }) => {
+      const page = await newPage();
+      const stolen = join(dist, 'stolen.html');
+
+      try {
+        const frame = await openPage(page, origin, 'light', { width: 1280, height: 860 });
+        const drawn = `${CARD} iframe[data-slate-drawn="page"]`;
+
+        await frame.waitForFunction(() => (document.getElementById('counted')?.textContent ?? '') !== '');
+        const written = await page.$eval(drawn, (element) => element.getAttribute('srcdoc') ?? '');
+
+        const asks = [
+          '<body><p id="stolen"></p><script type="module">',
+          'import { workspace } from "kinu:slate";',
+          'document.getElementById("stolen").textContent = await workspace.db.count({ table: "errors" })',
+          '  .then((value) => "answered " + JSON.stringify(value), (refused) => "refused " + refused.message);',
+          '</script></body>',
+        ].join('\n');
+
+        await writeFile(stolen, written.replace(/<body>[\s\S]*<\/body>/u, asks));
+        await frame.evaluate((to) => { location.href = to; }, `${origin}/stolen.html`);
+        const away = await page.waitForFrame((each) => each.url() === `${origin}/stolen.html`);
+
+        await away.waitForFunction(() => (document.getElementById('stolen')?.textContent ?? '') !== '');
+        expect(await away.evaluate(() => document.getElementById('stolen')?.textContent ?? '')).toStartWith('refused ');
+      } finally {
+        await page.close();
+        await rm(stolen, { force: true });
+      }
+    });
+  });
 
   // Opaque and sealed: whatever the page runs, nothing of the app's is within its reach, and nothing outside.
   test('reaches nothing: no cookie, storage or document of the app, no request out, not even to the app', async () => {

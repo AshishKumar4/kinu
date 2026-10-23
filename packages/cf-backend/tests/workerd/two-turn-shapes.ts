@@ -106,7 +106,7 @@ export const QueuedConversationSchema = v.object({
 
 export type QueuedConversation = v.InferOutput<typeof QueuedConversationSchema>;
 
-export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'agent-work' | 'agent-slate' | 'page-modes' | 'terminal-cut' | 'terminal-stuck' | 'close' | 'kill' | 'screens';
+export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'agent-work' | 'agent-slate' | 'page-modes' | 'page-server' | 'terminal-cut' | 'terminal-stuck' | 'close' | 'kill' | 'screens';
 
 /** A long computer-use session's screenshots: past the 32 MiB a facet RPC carries all together (staging 2026-10-19,
  *  70 MB), each in an answer of its own short enough to stay in its row. */
@@ -424,6 +424,13 @@ export interface AlienEffect {
 
 /** An answer's page writing a file through `workspace`: in Auto, after a Plan ask, after an Auto ask again, and
  *  once the author's role is planner. */
+/** An answer's page's own server's methods, as the chat that draws the page calls them. */
+export interface AnswerPageServer {
+  readonly word: string;
+  readonly sql: string;
+  readonly missing: string;
+}
+
 export interface AnswerPageModes {
   readonly auto: string;
   readonly plan: string;

@@ -41,6 +41,7 @@ import type {
   AgentHeldWork,
   AgentSlateUi,
   AnswerPageModes,
+  AnswerPageServer,
   TerminalState,
   AlienEffect,
   StrandedWork,
@@ -229,12 +230,13 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'strandedWork');
     Reflect.deleteProperty(this, 'answerSlates');
     Reflect.deleteProperty(this, 'answerPageModes');
+    Reflect.deleteProperty(this, 'answerPageServer');
     Reflect.deleteProperty(this, 'cutTerminal');
     Reflect.deleteProperty(this, 'liveTerminal');
     Reflect.deleteProperty(this, 'mainQuiet');
     Reflect.deleteProperty(this, 'terminalState');
     Reflect.deleteProperty(this, 'alienEffect');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'plantCrossings', 'settleState', 'probeFile', 'sleepTimeNow', 'chatHistoryPage', 'seedScreenshotChat', 'chatPagesWalk', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState', 'strandedWork', 'answerSlates', 'answerPageModes', 'cutTerminal', 'liveTerminal', 'mainQuiet', 'terminalState', 'alienEffect']);
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'plantCrossings', 'settleState', 'probeFile', 'sleepTimeNow', 'chatHistoryPage', 'seedScreenshotChat', 'chatPagesWalk', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState', 'strandedWork', 'answerSlates', 'answerPageModes', 'answerPageServer', 'cutTerminal', 'liveTerminal', 'mainQuiet', 'terminalState', 'alienEffect']);
   }
 
   /** `query` over main's own isolate, where its conversation, sends, claims and runs are kept (D9). */
@@ -449,6 +451,34 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     await this.setRole('planner');
 
     return { auto, plan, autoAgain, planner: await write() };
+  }
+
+  /**
+   * An answer whose block carries its own server (1023-ac), as the chat that draws its page calls it: its method runs in
+   * a process built from the block, as the answer's author; its `this.sql` is refused, since a page keeps its data in
+   * workspace.db; a method it does not have is refused by name.
+   */
+  async answerPageServer(): Promise<AnswerPageServer> {
+    const server = [
+      'import { SlateObject } from "kinu:slate";',
+      'export class Slate extends SlateObject {',
+      '  async word(of) { return of + " by route"; }',
+      '  async rows() { return this.sql.exec("SELECT 1").toArray().length; }',
+      '}',
+    ].join('\n');
+
+    await this.seedMainChat([
+      { id: 'u-served', origin: 'input', role: 'user', content: 'Show the routes.' },
+      { id: 'a-served', origin: 'output', role: 'assistant', content: `Here:\n<slate-ui name="routes">\n<p>routes</p>\n<script type="slate/server">\n${server}\n</script>\n</slate-ui>` },
+    ]);
+
+    const said = async (method: string, args: string[]) => {
+      const result = await this.drawnSlateCall('a-served/routes', { method, args });
+
+      return result.ok ? JSON.stringify(result.value) : `${result.reason}: ${result.error}`;
+    };
+
+    return { word: await said('word', ['errors']), sql: await said('rows', []), missing: await said('absent', []) };
   }
 
   /** `done` once a transition closed; an open one answers that it resumed. */
@@ -941,7 +971,7 @@ type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   & Pick<ObservedOrchestrator, 'probeFile'>
   & Pick<ProductionOrchestrator, 'getChangeNotes' | 'saveChangeNotes' | 'sendChangeNotes'>
   & Pick<ObservedOrchestrator, 'refuseReservations' | 'owedSends' | 'latestClaimOutcome' | 'recoveryPass'
-  | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'strandedWork' | 'answerSlates' | 'answerPageModes' | 'cutTerminal' | 'liveTerminal' | 'mainQuiet' | 'terminalState' | 'alienEffect' | 'inspectWork' | 'chatHistoryPage' | 'seedScreenshotChat' | 'chatPagesWalk' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
+  | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'strandedWork' | 'answerSlates' | 'answerPageModes' | 'answerPageServer' | 'cutTerminal' | 'liveTerminal' | 'mainQuiet' | 'terminalState' | 'alienEffect' | 'inspectWork' | 'chatHistoryPage' | 'seedScreenshotChat' | 'chatPagesWalk' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
   | 'receivePeerThenEvict' | 'timerTickFinished' | 'runCauses' | 'drainRunClosed' | 'meterBegin' | 'meterEnd' | 'plantCrossings' | 'settleState'>;
 
 /** Sleeps past the interactive detach window, so the call detaches and settles out of turn. */
@@ -1768,6 +1798,12 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     const { target } = await this.claimQueueWorkspace('page-modes');
 
     return await target.answerPageModes();
+  }
+
+  async answerPageServerIn(): Promise<AnswerPageServer> {
+    const { target } = await this.claimQueueWorkspace('page-server');
+
+    return await target.answerPageServer();
   }
 
   /** A long computer-use chat as a page opening on it meets it: its seed, every page back to the start, and one of its

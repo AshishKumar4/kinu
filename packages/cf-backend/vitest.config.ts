@@ -157,7 +157,8 @@ function agentAssets(entry = AGENT_BUNDLE_ENTRY) {
 
     if (path === '/_agent/compatibility.json') return Response.json(workerCompatibility);
 
-    if (path !== '/_agent/modules.json') return new Response('Not found', { status: 404 });
+    // Nimbus's own assets (its compiler's bindings), as the deployed Worker serves both: a slate builds beside the agent.
+    if (path !== '/_agent/modules.json') return nimbusAssets(request);
 
     let bundle = agentBundles.get(entry);
 

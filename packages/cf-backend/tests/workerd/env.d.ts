@@ -34,7 +34,7 @@ import type { PartBinding } from '../../src/slates/part-binding';
 import type {
   AgentLogEvent, CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall,
   PendingSteer, PendingSteerFile, PreparedConversation, QueuedConversation, QueueProbeMode, ReactorWake,
-  ParityCompleted, ParityPrepared, RawChatProbeResult, WakeDriveResult, ChangeNotesCompleted, ChangeNotesPrepared, OwedRepliesRecovered, ClaimUnderRecovery, StrandedWork, AgentHeldWork, AgentSlateUi, AnswerPageModes, ScreenshotChat, TerminalState, AlienEffect,
+  ParityCompleted, ParityPrepared, RawChatProbeResult, WakeDriveResult, ChangeNotesCompleted, ChangeNotesPrepared, OwedRepliesRecovered, ClaimUnderRecovery, StrandedWork, AgentHeldWork, AgentSlateUi, AnswerPageModes, AnswerPageServer, ScreenshotChat, TerminalState, AlienEffect,
   HeldClose, HeldCloseRecovered, KillJourney,
 } from './two-turn-shapes';
 import type {
@@ -108,6 +108,7 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   agentHeldWork(): Promise<AgentHeldWork>;
   agentSlateUi(): Promise<AgentSlateUi>;
   answerPageModesIn(): Promise<AnswerPageModes>;
+  answerPageServerIn(): Promise<AnswerPageServer>;
   screenshotChatIn(): Promise<ScreenshotChat>;
   cutRecordingWorkspace(phase: 'before' | 'after'): Promise<{ readonly workspace: string; readonly cut: TerminalState }>;
   recoverRecording(workspace: string, cut?: { readonly name: 'turn_record'; readonly phase: 'before' | 'after' }): Promise<TerminalState>;

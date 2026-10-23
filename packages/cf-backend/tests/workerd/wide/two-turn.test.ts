@@ -8,6 +8,7 @@ import { abortAllDurableObjects, env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import * as v from 'valibot';
 import { KINU_TIMER_JOB } from '../../../src/wake-jobs';
+import { PAGE_KEEPS_NO_DATA } from '../../../src/slates/resident';
 import { PLATFORM_CATALOG } from '@kinu.run/core';
 import {
   CallRecordSchema,
@@ -266,6 +267,16 @@ describe('two real turns over the HTTP model seam', () => {
     const modes = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('page-modes-driver')).answerPageModesIn();
 
     expect(modes).toEqual({ auto: 'ok', plan: 'denied', autoAgain: 'ok', planner: 'denied' });
+  });
+
+  // 1023-ac: an answer's block may carry its own server, which the page drawn in the chat calls through its workspace:
+  // built from the block, run as the answer's author, kept from state of its own (a page's data is workspace.db).
+  it("an answer's page's own server runs its methods from the block, and keeps no state of its own", async () => {
+    const server = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('page-server-driver')).answerPageServerIn();
+
+    expect(server.word, JSON.stringify(server)).toBe('"errors by route"');
+    expect(server.sql).toContain(PAGE_KEEPS_NO_DATA);
+    expect(server.missing).toMatch(/^bad_input: /u);
   });
 
   // Staging 2026-10-19: a 341-step computer-use chat would not open. Its seed read the agent's whole conversation back
