@@ -391,6 +391,56 @@ export async function readToken(): Promise<string> {
   return token;
 }
 
+/**
+ * The user's REST budget as the query API states it on every answer: `ratelimit-policy` `"default";q=1200;w=300` (1,200
+ * requests a 300 s window, every call the user's tokens make) and `ratelimit` `"default";r=<left>;t=<seconds to the
+ * window's end>`. Every read a process makes spends from one. A read waits for the window's end rather than spend the
+ * half kept for the account's other calls: a deploy's reads once re-asked about 80 requests every 2 min for 20 min
+ * (staging 99a13686c, 2026-10-23), and the account's API answered 403 to its next.
+ */
+export class QueryBudget {
+  private left: number | undefined;
+  private quota = 0;
+  private endsAt = 0;
+  /** Set while every read waits for the window's end. */
+  private resumed: Promise<void> | undefined;
+
+  constructor(private readonly sleep: (ms: number) => Promise<void> = Bun.sleep, private readonly now: () => number = Date.now) {}
+
+  /** Waits, when the budget left is under half its quota, for its window's end; every read meanwhile waits with it. */
+  async spend(): Promise<void> {
+    const wait = this.endsAt - this.now();
+
+    if (this.resumed === undefined && this.left !== undefined && this.left < this.quota / 2 && wait > 0) {
+      this.resumed = this.sleep(wait).then(() => {
+        this.left = undefined;
+        this.resumed = undefined;
+      });
+    }
+
+    await this.resumed;
+  }
+
+  /** The budget `answer` states; a 429 leaves none until its `retry-after`. */
+  heard(answer: Response): void {
+    const state = /\br=(\d+);t=(\d+)/u.exec(answer.headers.get('ratelimit') ?? '');
+    const quota = /\bq=(\d+)/u.exec(answer.headers.get('ratelimit-policy') ?? '');
+
+    if (quota !== null) this.quota = Number(quota[1]);
+
+    if (answer.status === 429) {
+      this.left = 0;
+      this.endsAt = this.now() + Number(answer.headers.get('retry-after') ?? state?.[2] ?? 60) * 1000;
+    } else if (state !== null) {
+      this.left = Number(state[1]);
+      this.endsAt = this.now() + Number(state[2]) * 1000;
+    }
+  }
+}
+
+/** The budget every read of this process spends from: the user's, whichever token and window. */
+const USER_BUDGET = new QueryBudget();
+
 export class Telemetry {
   /** Largest sampling level any answer carried; above 1 the counts are estimates. */
   sampling = 1;
@@ -400,6 +450,7 @@ export class Telemetry {
     private readonly args: Pick<Args, 'worker' | 'from' | 'to'>,
     /** The API's origin, Cloudflare's own unless a test serves one. */
     private readonly api?: string,
+    private readonly budget: QueryBudget = USER_BUDGET,
   ) {}
 
   /** The timeframe every read asks, unless one narrows it. */
@@ -409,8 +460,11 @@ export class Telemetry {
 
   /** The answer's JSON text; `result` parses it. A refusal is classified by its status (`restAnswer`). */
   async raw(body: QueryBody): Promise<string> {
+    await this.budget.spend();
+
     return await restAnswer({
       method: 'POST',
+      heard: (answer) => { this.budget.heard(answer); },
       ...this.api !== undefined && { api: this.api },
       path: `/accounts/${ACCOUNT}/workers/observability/telemetry/query`,
       token: this.token,
@@ -1143,6 +1197,7 @@ export function versionNotices(read: VersionRead): VersionFinding[] {
 /** What the version read cannot see, printed beside a verdict that names nothing of it. */
 const VERSION_BLIND_SPOTS = [
   'an idle wake in a window whose telemetry lost rows is a notice, not a red: the loss is bursty, so one that recurs reds in a window that lost none',
+  'a row Cloudflare sampled counts the events it stored, a lower bound, and a line its sampling dropped reads as absent: beside it an alarm can read idle',
 ] as const;
 
 /** One finding: `what` names its kind, stable from deploy to deploy, so a report can say whether it is new. */
@@ -1391,7 +1446,8 @@ export async function versionRead(t: Telemetry, around: Telemetry, versionId: st
   // An alarm's own work, as each alarm names it ({@link ALARM_WORK_EVENTS}): a teardown, a run's expiry, a sweep
   // comes long after the object's last call. Staging c6dc27da1 (Mossaic's sweep) and 7aa75f05e (a deploy run's expiry)
   // each read one as an idle wake.
-  const alarmWork = (await Promise.all(ALARM_WORK_EVENTS.map(async (event) => await perMinute(around, [...scope, eq('$metadata.type', 'cf-worker'), eq('event', event)], { byEventType: true })))).flat();
+  // One query for them all: one each was 10 of a read's 77 requests (staging 99a13686c's window, 2026-10-23).
+  const alarmWork = await perMinute(around, [...scope, eq('$metadata.type', 'cf-worker'), { key: 'event', operation: 'in', value: ALARM_WORK_EVENTS.join(','), type: 'string' }], { byLine: true });
   // A line's alarm began at most ALARM_WALL_MS before it, and a line in the window's last, partly read minute may have
   // its alarm after the window's end.
   const lineAlarms = await perMinute(t, alarm, { from: t.window.from - ALARM_WALL_MS });
@@ -1457,22 +1513,20 @@ async function deletionRowsOf(t: Telemetry, canceled: readonly ObjectMinuteCount
   return { aborted, tornDown };
 }
 
-/** `byEventType`: one row per kind of request as well; `from` reaches back past the read's own window. */
-async function perMinute(t: Telemetry, filters: readonly Filter[], by: { readonly byEventType?: boolean; readonly from?: number } = {}): Promise<EventMinuteCount[]> {
-  const groupBy = by.byEventType === true ? [DO_ID, '$workers.eventType'] : [DO_ID];
+/** `byLine`: one row per kind of request and line as well; `from` reaches back past the read's own window. */
+async function perMinute(t: Telemetry, filters: readonly Filter[], by: { readonly byLine?: boolean; readonly from?: number } = {}): Promise<EventMinuteCount[]> {
+  const groupBy = by.byLine === true ? [DO_ID, '$workers.eventType', 'event'] : [DO_ID];
   const rows = await t.buckets({ filters, groupBy, limit: MINUTE_GROUPS_CAP, from: by.from }, MINUTE_MS);
 
-  // The cap counts groups, an object once per kind of request.
+  // The cap counts groups, an object once per kind of request and line.
   if (new Set(rows.map((row) => row.groups.join('\0'))).size >= MINUTE_GROUPS_CAP) {
     throw new Error('a per-minute read reached its object cap; narrow the window before reading idle wakes');
   }
 
-  // bc4ab809's deploy read one delivery as 10 idle wakes: its row's interval was 10, in an answer at abr_level 1.
-  const sampled = Math.max(1, ...rows.map((row) => row.interval));
-
-  if (sampled > 1) throw new KinuError('unavailable', `the API sampled a per-minute read of the version (interval ${String(sampled)}): its counts are estimates`);
-
-  return rows.map((row) => ({ object: row.groups[0] ?? '', minute: row.at, count: row.count, eventType: row.groups[1] ?? '' }));
+  // A row Cloudflare sampled carries its stored events times its interval: bc4ab809's deploy read one delivery, interval
+  // 10, as 10 idle wakes. It counts the events it stored, a lower bound. Routine at abr_level 1: 187 rows of staging's
+  // last hour on 2026-10-23 at 18:30Z, busy objects at 1.06-1.7 and single events (a cancelled alarm) at 10.
+  return rows.map((row) => ({ object: row.groups[0] ?? '', minute: row.at, count: Math.max(1, Math.round(row.count / row.interval)), eventType: row.groups[1] ?? '' }));
 }
 
 /**
@@ -1515,6 +1569,13 @@ export function gatewayRefusal(thrown: { readonly cause: unknown }): boolean {
   return code === 'unavailable' || code === 'timeout';
 }
 
+/**
+ * The refusals in a row a read takes before its last one stands. The query API refused 12 of 80 reads on 2026-10-14, so
+ * five in a row is one chance in 13,000 for refusals as they come; past it the API is down, and a read asked every 2 min
+ * for an hour once spent about 80 requests a time (staging 99a13686c, 2026-10-23).
+ */
+export const REFUSALS_IN_A_ROW = 5;
+
 export type SettledRead<T> =
   | { readonly settled: true; readonly value: T; readonly reads: number; readonly lateRows: number }
   | { readonly settled: false; readonly last: T; readonly reads: number; readonly lateRows: number };
@@ -1526,8 +1587,8 @@ export type SettledRead<T> =
  * settle is taken at it: a grid from the window's end read a 3 min hold first at 4 min, a minute on every deploy's
  * verdict (staging rc28, 2026-10-20). Past `capMs` from the first, the answer is "unsettled". `rows` counts what the window held at each read, so the answer names how many rows landed
  * after the first read. A read the API's gateway refuses ({@link gatewayRefusal}) says nothing of the window, so the
- * next tick reads again. Only a cap reached with no answer at all fails on it; any other failure, a refused token, a
- * query the API rejects or an answer that does not parse, fails at once.
+ * next tick reads again, until {@link REFUSALS_IN_A_ROW} in a row or a cap reached with no answer at all fails on the
+ * last; any other failure, a refused token, a query the API rejects or an answer that does not parse, fails at once.
  */
 export async function settledRead<T>(at: {
   readonly read: () => Promise<T>; readonly fingerprint: (value: T) => string; readonly rows: (value: T) => number;
@@ -1548,11 +1609,19 @@ export async function settledRead<T>(at: {
     readAt = at.now();
   };
 
+  let refused = 0;
+
   const answer = async (): Promise<{ readonly value: T } | { readonly cause: unknown }> => {
     try {
-      return { value: await at.read() };
+      const value = await at.read();
+
+      refused = 0;
+
+      return { value };
     } catch (cause) {
-      if (!gatewayRefusal({ cause })) throw cause;
+      refused += 1;
+
+      if (!gatewayRefusal({ cause }) || refused >= REFUSALS_IN_A_ROW) throw cause;
 
       return { cause };
     }
@@ -1593,14 +1662,14 @@ export interface OwnRead {
 /**
  * `read`, asked again on the settle grid while the API's gateway refuses it ({@link gatewayRefusal}) and the deploy's own
  * read is still reading: a kept window waits no longer than that read already does, so it adds no wall. Its last
- * refusal stands once the own read has ended, and any other failure stands at once.
+ * refusal stands once the own read has ended or after {@link REFUSALS_IN_A_ROW}, and any other failure stands at once.
  */
 export async function readAgainWhile<T>(own: OwnRead, read: () => Promise<T>, sleep: (ms: number) => Promise<void> = Bun.sleep): Promise<T> {
-  for (;;) {
+  for (let refused = 1; ; refused += 1) {
     try {
       return await read();
     } catch (cause) {
-      if (!gatewayRefusal({ cause }) || own.ended) throw cause;
+      if (!gatewayRefusal({ cause }) || own.ended || refused >= REFUSALS_IN_A_ROW) throw cause;
       await Promise.race([sleep(SETTLE_POLL_MS), own.done]);
 
       if (own.ended) throw cause;

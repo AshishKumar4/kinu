@@ -5,7 +5,7 @@ import { KinuError } from '@kinu.run/core/obs';
 import { activationDisruptions, canaryActivations } from './durability-canary-telemetry';
 import { resetCause, ROLLOVER_SPAN_MS } from './worker-deployments';
 import {
-  alarmsThatRan, deletionTimes, idleWakeHours, lostAlarmRows, ordinalHours, readAgainWhile, settledRead, Telemetry, terminalEffectStates, type VersionRead, versionFindings, versionNotices,
+  alarmsThatRan, deletionTimes, idleWakeHours, lostAlarmRows, ordinalHours, QueryBudget, REFUSALS_IN_A_ROW, readAgainWhile, settledRead, Telemetry, terminalEffectStates, type VersionRead, versionFindings, versionNotices,
   versionRead, versionSignals, workWindow,
 } from './prod-logs';
 
@@ -331,6 +331,18 @@ describe('a read that issues a verdict', () => {
     await expect(settledRead(reader(['refused']))).rejects.toThrow('telemetry query answered 500');
   });
 
+  // Staging 99a13686c, 2026-10-23: every read refused, asked again every 2 min for 20 minutes at about 80 requests a read.
+  test('fails on the fifth refusal in a row, before or after an answer, and an answer starts the count again', async () => {
+    const never = reader(['refused']);
+    const later = reader([5, 'refused']);
+    const between = reader([5, 'refused', 'refused', 'refused', 'refused', 6, 6, 6]);
+
+    await expect(settledRead(never)).rejects.toThrow('telemetry query answered 500');
+    await expect(settledRead(later)).rejects.toThrow('telemetry query answered 500');
+    expect({ never: never.startedAt.length, later: later.startedAt.length, between: await settledRead(between) })
+      .toEqual({ never: REFUSALS_IN_A_ROW, later: REFUSALS_IN_A_ROW + 1, between: { settled: true, value: 6, reads: 3, lateRows: 1 } });
+  });
+
   test('fails at once on any failure but the API\'s refusal, the first read or a later one', async () => {
     const first = reader(['rejected', 5]);
     const later = reader([5, 'refused', 5, 'rejected', 5]);
@@ -537,7 +549,7 @@ describe('an alarm in a version\'s window, beside a deletion under the version b
       const body = JSON.stringify(asked);
       const has = (text: string) => body.includes(text);
       const interval = sampledAlarms ? 10 : 1;
-      const groups = (object: string) => [{ key: '$workers.durableObjectId', value: object }, { key: '$workers.eventType', value: 'alarm' }];
+      const groups = (object: string) => [{ key: '$workers.durableObjectId', value: object }, { key: '$workers.eventType', value: 'alarm' }, { key: 'event', value: 'cli.auth_retired' }];
       const data = (objects: readonly string[]) => objects.map((object) => ({ groups: groups(object), value: interval, interval }));
       const early = earlyAlarm && (asked.timeframe?.from ?? from) < from ? [{ time: '2026-10-23 02:20:00', data: data(['row-lost']) }] : [];
 
@@ -545,7 +557,7 @@ describe('an alarm in a version\'s window, beside a deletion under the version b
         return Response.json({ success: true, result: { calculations: [{ alias: 'count', series: [{ time: delivered, data: data(has('"value":"canceled"') ? canceled : alarms) }, ...early] }] } });
       }
 
-      if (has('"granularity"') && has('"value":"cli.auth_retired"') && lostAt !== '') {
+      if (has('"granularity"') && /"operation":"in","value":"[^"]*\bcli\.auth_retired\b/u.test(body) && lostAt !== '') {
         return Response.json({ success: true, result: { calculations: [{ alias: 'count', series: [{ time: lostAt, data: [{ groups: groups('row-lost'), value: 1 }] }] }] } });
       }
 
@@ -595,8 +607,8 @@ describe('an alarm in a version\'s window, beside a deletion under the version b
   });
 
   // bc4ab809's deploy: one delivery, its row's interval 10 in an answer at abr_level 1, read as 10 idle wakes.
-  test('a per-minute read whose rows were sampled is asked again, though its answer says abr_level 1', async () => {
-    await expect(read(['idle'], [], { sampledAlarms: true })).rejects.toMatchObject({ code: 'unavailable', message: expect.stringContaining('interval 10') });
+  test('a per-minute row Cloudflare sampled counts the events it stored, never its estimate', async () => {
+    expect((await read(['idle'], [], { sampledAlarms: true })).idleWakes.map((idle) => idle.count)).toEqual([1]);
   });
 
   test('an alarm\'s line whose own row was lost is read as a lost row, and the idle wakes beside it are kept', async () => {
@@ -672,6 +684,13 @@ describe('a kept window read beside the deploy\'s own', () => {
     expect({ read: await readAgainWhile(own, kept.read, async () => {}), asked: kept.asked() }).toEqual({ read: 7, asked: 3 });
   });
 
+  test('keeps the fifth refusal in a row however long the own read lasts', async () => {
+    const kept = answering(['gateway']);
+
+    await expect(readAgainWhile(reading(), kept.read, async () => {})).rejects.toThrow('answered 502');
+    expect(kept.asked()).toBe(REFUSALS_IN_A_ROW);
+  });
+
   test('keeps its last refusal once the own read has ended, and fails at once on any other failure', async () => {
     const own = reading();
     const kept = answering(['gateway', 7]);
@@ -695,5 +714,40 @@ describe('a kept window read beside the deploy\'s own', () => {
 
     await expect(waiting).rejects.toThrow('answered 502');
     expect(kept.asked()).toBe(1);
+  });
+});
+
+// Staging 99a13686c, 2026-10-23: a deploy's reads spent about 80 requests every 2 min for 20 minutes, and the account's
+// API answered 403. The query API states the user's budget on each answer (1,200 requests a 300 s window).
+describe('the API budget every telemetry read spends from', () => {
+  const answer = (status: number, left: number, endsIn: number, headers: Record<string, string> = {}) => new Response('{}', { status, headers: {
+    'ratelimit-policy': '"default";q=1200;w=300', ratelimit: `"default";r=${String(left)};t=${String(endsIn)}`, ...headers,
+  } });
+
+  const budget = () => {
+    const slept: number[] = [];
+
+    return { slept, budget: new QueryBudget(async (ms) => { slept.push(ms); }, () => 1_000_000) };
+  };
+
+  test('a read waits for the window\'s end rather than spend the half kept for the account\'s other calls, and every read waits with it', async () => {
+    const half = budget();
+    const above = budget();
+
+    half.budget.heard(answer(200, 599, 40));
+    above.budget.heard(answer(200, 600, 40));
+    await Promise.all([half.budget.spend(), half.budget.spend(), above.budget.spend()]);
+    await half.budget.spend();
+
+    expect({ half: half.slept, above: above.slept }).toEqual({ half: [40_000], above: [] });
+  });
+
+  test('a 429 leaves nothing to spend until its retry-after', async () => {
+    const limited = budget();
+
+    limited.budget.heard(answer(429, 0, 200, { 'retry-after': '30' }));
+    await limited.budget.spend();
+
+    expect(limited.slept).toEqual([30_000]);
   });
 });
