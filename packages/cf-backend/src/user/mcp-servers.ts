@@ -107,9 +107,6 @@ function offersSignIn(status: McpConnectionStatus, server: { readonly oauthClien
   return status === 'authenticating' || (status === 'failed' && server.oauthClient);
 }
 
-/** How many of a server's refusals are kept: enough to find a listing's own among requests made beside it. */
-const REFUSALS_KEPT = 16;
-
 /** A registered app's server is signed in to before it is used, unless a token in `headers` stands in for the app. */
 function signInBy(appCredentials: { clientId: string } | null, hasHeaders: boolean): 'first' | 'when-asked' {
   return appCredentials !== null && !hasHeaders ? 'first' : 'when-asked';
@@ -227,10 +224,6 @@ export class UserMcpServers {
   private readonly dials = new Map<string, Promise<void>>();
 
   private readonly _mcpToolLists = new Map<string, McpToolListing>();
-
-  /** Each server's recent refusals by its own origin, as its transport saw them, numbered as they came (`seq`): a tool
-   *  list's failure names its own among those numbered since it began. */
-  private readonly refusals = new Map<string, { next: number; kept: (McpRefusal & { readonly seq: number })[] }>();
 
   /** Each server's listing in flight: a second read joins it, so two listings of one server never overlap. */
   private readonly listings = new Map<string, Promise<void>>();
@@ -420,12 +413,9 @@ export class UserMcpServers {
     await mgr.registerServer(row.id, options);
   }
 
-  /** Keeps `serverId`'s refusal and logs it: its status and `WWW-Authenticate`, never the token or the body. */
+  /** Logs `serverId`'s refusal: its status and `WWW-Authenticate`, never the token or the body. */
   private refused(serverId: string): (refusal: McpRefusal) => void {
     return (refusal) => {
-      const log = this.refusals.get(serverId) ?? { next: 0, kept: [] };
-
-      this.refusals.set(serverId, { next: log.next + 1, kept: [...log.kept, { ...refusal, seq: log.next }].slice(-REFUSALS_KEPT) });
       diagnostics.event('mcp.server_refused', { serverId, method: refusal.method, rpc: refusal.rpc ?? '', status: refusal.status, wwwAuthenticate: refusal.wwwAuthenticate ?? '' });
     };
   }
@@ -743,12 +733,7 @@ export class UserMcpServers {
 
     const name = this.catalog().get(id)?.name ?? id;
     const { readUndiscoveredToolList } = await import('./mcp');
-    const log = (): { next: number; kept: (McpRefusal & { readonly seq: number })[] } => this.refusals.get(id) ?? { next: 0, kept: [] };
-
-    const listing = await readUndiscoveredToolList({ name }, conn.client, {
-      next: log().next,
-      since: (from) => log().kept.filter((refusal) => refusal.seq >= from),
-    });
+    const listing = await readUndiscoveredToolList({ name }, conn.client);
 
     this._mcpToolLists.set(id, listing);
 

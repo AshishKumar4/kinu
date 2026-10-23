@@ -4,7 +4,7 @@
  * wire, and the SDK with it: evaluating the SDK builds its schemas, which every isolate's startup paid for, MCP or not.
  */
 
-import { CALLABLE_MCP_STATES, listMcpToolsLeniently, type McpFailureKind, type McpObservedState, type McpRefusal, type McpToolListing } from '@kinu.run/core';
+import { CALLABLE_MCP_STATES, listMcpToolsLeniently, type McpFailureKind, type McpObservedState, type McpToolListing } from '@kinu.run/core';
 import { diagnostics, joining, KinuError, renderCauseChain, toKinuError, type ErrorCode, type Joined } from '@kinu.run/core/obs';
 import { ProtocolError, SdkError, SdkErrorCode, SdkHttpError, SseError, UnauthorizedError, type Client } from '@modelcontextprotocol/client';
 import { ResultSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -26,16 +26,10 @@ function causeChain(input: { cause: unknown }): Error[] {
 
 /**
  * `server`'s tool list, or why it has none. A server that refused the request by its HTTP status is named with that
- * status and what it said of the token (`refusal`, its last `WWW-Authenticate`), never the body the SDK quotes: Gmail's
- * MCP refuses a token it will not take with 403, no reason, and its whole tool list as the body (2026-10-23).
+ * status, never the body the SDK quotes: Gmail's MCP refuses a token it will not take with 403, no reason, and its whole
+ * tool list as the body (2026-10-23). What the server said of the token is in `mcp.server_refused`.
  */
-export async function readUndiscoveredToolList(
-  server: { readonly name: string },
-  client: Pick<Client, 'request'>,
-  refusals: McpRefusalLog = { next: 0, since: () => [] },
-): Promise<McpToolListing> {
-  const from = refusals.next;
-
+export async function readUndiscoveredToolList(server: { readonly name: string }, client: Pick<Client, 'request'>): Promise<McpToolListing> {
   try {
     return {
       listed: await listMcpToolsLeniently(server, (cursor) => client.request(
@@ -48,19 +42,8 @@ export async function readUndiscoveredToolList(
     diagnostics.failure('mcp.tool_list_unreadable', error, { server: server.name });
     const status = causeChain({ cause }).find((link): link is SdkHttpError => link instanceof SdkHttpError)?.status;
 
-    if (status === undefined) return { failure: renderCauseChain(error) };
-    // This listing's own refusal: a tools/list refused with this status since it began. The plane runs one listing of a
-    // server at a time, so the only other tools/list then is the SDK's own discovery, on the same server and token.
-    const said = refusals.since(from).filter((refusal) => refusal.rpc === 'tools/list' && refusal.status === status).at(-1)?.wwwAuthenticate ?? null;
-
-    return { failure: `${server.name} refused its tool list: HTTP ${String(status)}, ${said === null ? 'with no reason given' : `saying ${said}`}` };
+    return { failure: status === undefined ? renderCauseChain(error) : `${server.name} refused its tool list: HTTP ${String(status)}` };
   }
-}
-
-/** A server's refusals, numbered as they came: `next` is the number the next one takes, `since(n)` those numbered n on. */
-export interface McpRefusalLog {
-  readonly next: number;
-  since(from: number): readonly McpRefusal[];
 }
 
 export interface McpSessionHost {

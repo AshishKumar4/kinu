@@ -225,7 +225,7 @@ describe('a server that refuses its tool list', () => {
   const refusedList = () => new SdkHttpError(SdkErrorCode.ClientHttpNotImplemented,
     'Error POSTing to endpoint: {"id":0,"jsonrpc":"2.0","result":{"cacheScope":"public","resultType":"complete","tools":[]}}', { status: 403, statusText: '' });
 
-  test('reads failed, not connected, and names the status and what its own tools/list was told, not the body', async () => {
+  test('reads failed, not connected, and names the status, not the body', async () => {
     const first = harness();
     const owner = await testOwner();
     await seedServer(first, 'gm1', { name: 'Gmail' });
@@ -239,15 +239,13 @@ describe('a server that refuses its tool list', () => {
     if (gmail === null || calendar === null) throw new Error('a server runs on no transport of the plane\'s');
     const rpc = (method: string) => ({ method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 0, method }) });
 
-    // Each listing goes out on its server's transport and is refused 403: Gmail's with no reason; Calendar's says why,
-    // while a tool call beside it is refused with another challenge, which is not the listing's.
+    // Each listing goes out on its server's transport and is refused 403, Calendar's with a challenge the log keeps.
     seedUndiscoveredMcpTools('gm1', async () => {
       await gmail('https://gm1.example/sse', rpc('tools/list'));
       throw refusedList();
     });
     seedUndiscoveredMcpTools('gm2', async () => {
       await calendar('https://gm2.example/sse', rpc('tools/list'));
-      await calendar('https://gm2.example/sse', rpc('tools/call'));
       throw refusedList();
     });
 
@@ -262,11 +260,9 @@ describe('a server that refuses its tool list', () => {
       return new Response('{}', { status: 403, headers: at.includes('gm2') ? { 'www-authenticate': challenge } : {} });
     }, { preconnect: real.preconnect });
 
-    // More refusals than a server keeps, all of tool calls, before any listing: the listing still finds its own.
     let rows: Awaited<ReturnType<typeof h.userDO.userMcp_list>>;
 
     try {
-      for (let call = 0; call < 20; call += 1) await calendar('https://gm2.example/sse', rpc('tools/call'));
       await h.userDO.userMcp_warmConnections(owner);
       rows = await h.userDO.userMcp_list(owner);
     } finally {
@@ -274,8 +270,8 @@ describe('a server that refuses its tool list', () => {
     }
 
     expect(rows.map((server) => ({ name: server.name, status: server.status, tools: server.toolsCount, error: server.error, signIn: server.signIn }))).toEqual([
-      { name: 'Calendar', status: 'failed', tools: 0, error: 'Calendar refused its tool list: HTTP 403, saying Bearer error="insufficient_scope", scope="calendar.readonly"', signIn: false },
-      { name: 'Gmail', status: 'failed', tools: 0, error: 'Gmail refused its tool list: HTTP 403, with no reason given', signIn: false },
+      { name: 'Calendar', status: 'failed', tools: 0, error: 'Calendar refused its tool list: HTTP 403', signIn: false },
+      { name: 'Gmail', status: 'failed', tools: 0, error: 'Gmail refused its tool list: HTTP 403', signIn: false },
     ]);
     h.close();
     first.close();
