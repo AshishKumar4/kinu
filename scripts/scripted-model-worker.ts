@@ -22,7 +22,7 @@ import { timingSafeEqual } from '../packages/core/src/utils/crypto';
 import { SCRIPTED_MCP_PATH, scriptedMcp, type McpAnswer } from './scripted-mcp';
 import { OAUTH_AUTHORIZE_PATH, downFor, isPublicOAuthPath, scriptedOAuth, type GrantLedger } from './scripted-mcp-oauth';
 import { tierModel } from './tier-model';
-import { SCRIPTED_MODELS_BODY, pacedStream, rateLimitedAnswer, readScriptedRequest, scriptedBody } from './scripted-protocol';
+import { SCRIPTED_MODELS_BODY, errorAnswer, pacedStream, readScriptedRequest, scriptedBody } from './scripted-protocol';
 
 /** A Durable Object id, as much of it as this Worker reads. */
 interface GrantsId {
@@ -219,11 +219,9 @@ export default {
       const asked = read.request;
       const answer = tierModel(asked);
 
-      if (answer.rateLimited !== undefined) {
-        const limited = rateLimitedAnswer(answer.rateLimited);
+      const failed = errorAnswer(answer);
 
-        return new Response(limited.body, { status: limited.status, headers: limited.headers });
-      }
+      if (failed !== null) return new Response(failed.body, { status: failed.status, headers: failed.headers });
 
       if (asked.streamed && answer.pace !== undefined) {
         const encoder = new TextEncoder();
