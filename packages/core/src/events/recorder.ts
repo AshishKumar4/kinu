@@ -178,7 +178,7 @@ function stampRunEvent(input: RunEventInput, runId: string): UnindexedEvent {
 }
 
 /** A stored event's row: the envelope in its indexed columns, the body alone in `payload`. */
-export interface StoredRunEventRow {
+interface StoredRunEventRow {
   readonly run_id: string;
   readonly event_index: number;
   readonly type: string;
