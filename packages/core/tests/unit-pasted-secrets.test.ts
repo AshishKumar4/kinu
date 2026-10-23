@@ -36,6 +36,23 @@ describe('a pasted .env', () => {
   });
 });
 
+describe('a pasted .env whose value dotenv reads past what a line shows', () => {
+  test('a quote a backslash escapes does not end the value, and a quoted value may run across lines', () => {
+    const tail = `${OPENAI}-tail`;
+
+    expect(parseDotenv([
+      `API_KEY="say \\"${tail}\\""`,
+      `CERT="-----line one`,
+      `line two-----" # the cert`,
+      'PORT=8080',
+    ].join('\n'))).toEqual([
+      { name: 'API_KEY', value: `say \\"${tail}\\"` },
+      { name: 'CERT', value: '-----line one\nline two-----' },
+      { name: 'PORT', value: '8080' },
+    ]);
+  });
+});
+
 describe('a secret in a chat draft', () => {
   test("a provider's token in prose is offered under its SDKs' own variable, with the hosts its API answers on", () => {
     expect(pastedSecrets(`here is my token ${GITHUB} please push the branch`)).toEqual([

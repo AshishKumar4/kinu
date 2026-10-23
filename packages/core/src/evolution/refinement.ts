@@ -188,6 +188,8 @@ const EditEvidenceSchema = v.object({
   note: v.string(),
   /** A static gate refused it (the size caps, misevolution, a quote not in the turns): it routes nowhere. */
   refused: v.optional(v.string()),
+  /** The refusal is its size alone, which its author can bring within the limit: it is sent back for the one revision. */
+  revisable: v.optional(v.boolean()),
   /** A section's judge-only numbers, staged with it when it is accepted. */
   artifact: v.optional(ArtifactEvidenceSchema),
 });

@@ -146,7 +146,7 @@
   <rect x="566" y="374" width="36" height="26" rx="5" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
   <text class="xs" x="584.0" y="391" text-anchor="middle" fill="var(--orange)">ask</text>
   <rect x="566" y="404" width="36" height="4" rx="2" fill="var(--orangeLine)"/>
-  <text class="xs" x="170" y="424" text-anchor="start">cache expired: rewriting is free, so the stored blocks collapse into one</text>
+  <text class="xs" x="170" y="424" text-anchor="start">cache expired: rewriting is free, so the stored blocks collapse into one full block</text>
   <text class="s mono" x="58" y="465" text-anchor="start">compaction</text>
   <rect x="170" y="448" width="78" height="26" rx="5" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="xs" x="209.0" y="465" text-anchor="middle">T+S</text>

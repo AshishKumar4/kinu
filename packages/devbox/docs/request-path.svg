@@ -86,7 +86,7 @@
   <text class="s" x="590" y="426" text-anchor="middle">check the name and token, <tspan class="c">ensureReady()</tspan></text>
 
   <line class="line" x1="590" y1="468" x2="800" y2="468" marker-end="url(#arrow)"/>
-  <text class="c" x="695" y="460" text-anchor="middle">getTcpPort(3000).fetch()</text>
+  <text class="c" x="695" y="460" text-anchor="middle">getTcpPort(port).fetch()</text>
 
   <line class="back" x1="800" y1="498" x2="590" y2="498" marker-end="url(#arrow)"/>
   <text class="s" x="695" y="490" text-anchor="middle">the app's response</text>

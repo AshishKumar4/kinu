@@ -1,4 +1,12 @@
 import type { KvStore } from '@kinu.run/agent-utils';
+import * as v from 'valibot';
+
+/** How long a Workers KV location keeps what it read: `cacheTtl`'s default 60 s (Cloudflare KV docs, "How KV works",
+ *  read 2026-10-23: elsewhere "changes may take up to 60 seconds or more to be visible as their cached versions of the
+ *  data time-out", and reads that found no key are cached too). */
+const KV_CACHE_SECONDS = 60;
+
+const CachedSchema = v.object({ value: v.nullable(v.string()) });
 
 interface Entry {
   value: string;
@@ -46,5 +54,43 @@ export function makeKv(): FakeKv {
     ttlOf(key: string) {
       return ttls.get(key) ?? null;
     },
+  };
+}
+
+/**
+ * Workers KV as each location reads it: a location keeps what a read found, an absent key included, for KV's 60 s
+ * cache, so a write made at another location stays unseen there until that copy expires; a location reads its own
+ * writes at once. A copy expires as `makeKv`'s keys do, so `setSystemTime` ages it.
+ */
+export function locatedKv(): (location: string) => KvStore {
+  const origin = makeKv();
+  const caches = new Map<string, FakeKv>();
+
+  return (location) => {
+    const cache = caches.get(location) ?? makeKv();
+    const keep = (key: string, value: string | null) => cache.put(key, JSON.stringify({ value }), { expirationTtl: KV_CACHE_SECONDS });
+
+    caches.set(location, cache);
+
+    return {
+      async get(key: string) {
+        const cached = await cache.get(key);
+
+        if (cached !== null) return v.parse(CachedSchema, JSON.parse(cached)).value;
+        const value = await origin.get(key);
+
+        await keep(key, value);
+
+        return value;
+      },
+      async put(key: string, value: string, options: { expirationTtl: number }) {
+        await origin.put(key, value, options);
+        await keep(key, value);
+      },
+      async delete(key: string) {
+        await origin.delete(key);
+        await keep(key, null);
+      },
+    };
   };
 }

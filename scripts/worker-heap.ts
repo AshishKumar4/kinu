@@ -241,6 +241,12 @@ export const LONG_TURN_ALLOCATED_BOUND_BYTES = 295_000_000;
  *  kept, 2951-2956 kB in the workspace's. */
 export const IDLE_DATA_BOUND_BYTES = { workspace: 1_000_000, main: 3_300_000 } as const;
 
+/** The deployment's vars but its free tier: the heap is measured over workspaces one owner sets up, more than a free
+ *  account holds, and the limits answer each setup the same way under any class. */
+function heapVars(vars: Readonly<Record<string, string>>): Record<string, string> {
+  return Object.fromEntries(Object.entries(vars).filter(([name]) => name !== 'ACCOUNT_LIMITS'));
+}
+
 const WranglerSchema = v.object({
   compatibility_date: v.string(),
   compatibility_flags: v.array(v.string()),
@@ -781,7 +787,7 @@ export async function measure({ loopTurns }: { readonly loopTurns: boolean }): P
     },
     workers: [{
       name: 'kinu', ...compat, modulesRoot: DIST, modules: await productModules(), workerLoaders: { LOADER: {} },
-      bindings: { ...wrangler.vars, CREDENTIAL_ENCRYPTION_KEY: key },
+      bindings: { ...heapVars(wrangler.vars), CREDENTIAL_ENCRYPTION_KEY: key },
       ai,
       assets: { binding: wrangler.assets.binding, directory: assets },
       r2Buckets: wrangler.r2_buckets.map((bucket) => bucket.binding),

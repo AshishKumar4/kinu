@@ -129,7 +129,7 @@
   <text class="s" x="630" y="386" text-anchor="start">tail, no delegates</text>
   <rect x="618" y="404" width="266" height="62" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="xs" x="630" y="424" text-anchor="start" fill="var(--fg)">Cache key (cloud)</text>
-  <text class="s" x="630" y="441" text-anchor="start">kinu-&lt;search root&gt;,</text>
+  <text class="s" x="630" y="441" text-anchor="start">kinu-&lt;its caller&gt;,</text>
   <text class="s" x="630" y="456" text-anchor="start">shared by every node</text>
   <text class="xs" x="58" y="504" text-anchor="start">Every one of them gets the dynamic block's runtime facts: backend, model, date, and the working directory where there is one.</text>
 </svg>

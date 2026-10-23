@@ -31,7 +31,7 @@ Three stores sit outside actor SQLite:
   FTS5 and is never the source of truth.
 
 `AUTH_KV` holds only expiring records, each with its own TTL: browser
-sessions, one-time OAuth handoff state, and CLI browser-approval state. None of
+sessions, one-time OAuth handoff state, and CLI sign-in rate limits. None of
 it is a source of truth. A user's identity lives in their `UserDO`, keyed on a
 userId derived from the verified email. If the namespace is emptied, every user
 signs in again and nothing else is lost. The handoff record keeps the hash of a
@@ -67,30 +67,32 @@ replace.
 
 ## Entity relationship
 
-The core relational workspace tables, as the core schema initializers and the
-agent-utils stores create them. Workspace files live in the Nimbus filesystem
+The principal relational workspace tables, as the core schema initializers and
+the agent-utils stores create them; the jobs, events, turns, plans and contexts
+tables named below are not drawn. Workspace files live in the Nimbus filesystem
 described below. Most actor-scoped tables also carry `actor_id` as the first
 primary-key column.
 
 ```mermaid
 erDiagram
     workspace_identity {
+        INTEGER singleton UK "1: one identity per database"
         TEXT id "Stable UUID (NOT NULL)"
         TEXT name "Workspace name (NOT NULL)"
         TEXT owner_user_id "Ownership root (NOT NULL, default '')"
-        TEXT mission "One-line summary, written by writeSoul"
         INTEGER created_at "Epoch ms"
     }
     workspace_actors {
         TEXT actor_id PK "Actor ID"
         TEXT parent_actor_id FK "Parent actor"
         TEXT name "Actor name"
+        TEXT storage_key "Its storage, unique under its parent"
         TEXT origin "system/user/agent/swarm/evolution"
-        INTEGER tab "Has a chat tab"
-        INTEGER input "Takes the owner's messages"
         TEXT lifetime "durable/task"
-        INTEGER evolves "Feeds the evolution window"
         INTEGER created_at "Epoch ms"
+        TEXT creation_id "The creation that made it, unique under its parent"
+        INTEGER retiring_at "Epoch ms a retirement began"
+        INTEGER deleted_at "Epoch ms it was deleted"
     }
     actor_config {
         TEXT actor_id PK "Actor"
@@ -114,11 +116,12 @@ erDiagram
     crafted_tools {
         TEXT name PK "Tool name (snake_case)"
         TEXT description "What the tool does"
-        TEXT params "JSON Schema for input"
         TEXT code "Async arrow function body"
-        TEXT scope "local or shared"
-        REAL score "EMA score (default 0.5)"
-        INTEGER uses "Usage count (default 0)"
+        INTEGER offered "Turns it was offered in"
+        INTEGER chosen "Turns that called it"
+        INTEGER rated "Rated turns that called it"
+        REAL rating_sum "Sum of those ratings"
+        TEXT broken "Error text while broken"
         INTEGER last_used_at "Epoch ms"
         INTEGER created_at "Epoch ms"
         INTEGER updated_at "Epoch ms"
@@ -130,7 +133,7 @@ erDiagram
     search_nodes {
         TEXT actor_id PK "Actor that owns the search"
         TEXT id PK "Node ID (nanoid)"
-        TEXT parent_id FK "Parent node"
+        TEXT parent_id "Parent node"
         TEXT root_id "The search run this node belongs to"
         TEXT task "Swarm task"
         TEXT action "Approach taken"
@@ -142,6 +145,7 @@ erDiagram
         INTEGER created_at "Epoch ms"
     }
     evolution_events {
+        TEXT actor_id PK "Actor"
         TEXT id PK "Event ID"
         TEXT type "Event type"
         TEXT message "Description"
@@ -149,6 +153,7 @@ erDiagram
         INTEGER created_at "Epoch ms"
     }
     scaffold_versions {
+        TEXT actor_id PK "Actor"
         INTEGER version PK "Version number"
         INTEGER written_at "Epoch ms"
         TEXT rationale "Why it was changed"
@@ -157,6 +162,7 @@ erDiagram
         TEXT pathology "The failure cell this version was written to fix"
     }
     fibers {
+        TEXT actor_id PK "Actor"
         TEXT id PK "Fiber ID"
         TEXT name "Fiber name (NOT NULL)"
         TEXT snapshot "JSON checkpoint"
@@ -168,18 +174,22 @@ erDiagram
         TEXT role "user/assistant/system/tool"
         TEXT native_content_kind "string/parts"
         TEXT origin "input/output/edit/context_transform/render"
+        TEXT request_id "Request whose output this is"
+        INTEGER output_slot "Its place in that request's output"
+        TEXT ingress_id "Inbound delivery it records, unique per actor"
         TEXT envelope_json "Message fields other than role and content"
         INTEGER sealed_at "Epoch ms once the content is committed"
         TEXT content_json "The parts array, inline"
         TEXT content_path "The parts array in the file plane when large"
-        INTEGER recorded_at "Epoch ms"
     }
     stream_parts {
         TEXT actor_id PK "Actor"
         TEXT message_id PK "Open message"
         INTEGER part_no PK "Part"
         INTEGER segment PK "Continuation row of a long part"
+        INTEGER stream_order "Order the parts streamed in"
         TEXT descriptor_json "The part without its text"
+        TEXT descriptor_path "The descriptor in the file plane when large"
         TEXT text "Accumulated text, extended in place"
         INTEGER ended "1 once the part's stream ended"
     }
@@ -191,15 +201,21 @@ erDiagram
         TEXT role "user/assistant/system/tool"
         TEXT turn_id "Turn that wrote the entry"
         TEXT run_id "Run that wrote the entry"
+        TEXT metadata_json "Entry metadata, inline"
+        TEXT metadata_path "Entry metadata in the file plane when large"
         TEXT context_id "Working context the entry recorded"
         INTEGER context_revision "Revision of that context"
         INTEGER recorded_at "Epoch ms"
     }
     conversation_entry_parts {
+        TEXT actor_id PK "Actor"
+        TEXT session_id PK "Session"
         TEXT entry_id PK "Entry"
         INTEGER position PK "Order within the entry"
         TEXT message_id "Message whose part it shows"
         INTEGER part_no "Part of that message"
+        INTEGER text_start "Where its text starts in the part"
+        INTEGER text_length "How much of the part's text it shows"
     }
     conversation_fts {
         TEXT content "Derived FTS5 transcript index"
@@ -209,15 +225,19 @@ erDiagram
         INTEGER created_at "Epoch ms"
     }
     executor_output {
+        TEXT actor_id PK "Actor"
         TEXT id PK "Random hex ID"
         TEXT executor "Executor name"
         TEXT command "Command run"
         TEXT stdout "Standard output"
+        INTEGER stdout_len "Its full length"
         TEXT stderr "Standard error"
+        INTEGER stderr_len "Its full length"
         INTEGER exit_code "Exit code"
         INTEGER created_at "Epoch ms"
     }
     activity_log {
+        TEXT actor_id PK "Actor"
         TEXT id PK "Random hex ID"
         TEXT event "Event type"
         TEXT detail "Event details"
@@ -235,12 +255,16 @@ erDiagram
     fork_transfer {
         INTEGER id PK "Single row, or empty when no fork is arriving"
         INTEGER head_declared "1 once a begin frame declared the fork"
+        TEXT head_source_id "The forked-from workspace's UUID"
+        TEXT head_source_name "The forked-from workspace's name"
         TEXT head_cut_message_id "Where the copy stops"
-        TEXT mission "Read from the inherited SOUL.md bytes"
+        INTEGER head_cut_created_at "Epoch ms of that message"
         TEXT transfer_id "The transfer these columns belong to"
         INTEGER expected_seq "The frame the receiver will accept next"
+        INTEGER section_cursor "The row section arriving"
         TEXT stream "Rolling digest over the frames that arrived"
         TEXT import_path "The Nimbus import whose pages are still arriving"
+        INTEGER want_files "1 when the fork carries files"
         INTEGER published "1 once the commit published the fork"
     }
     fork_staged_files {
@@ -252,9 +276,9 @@ erDiagram
     crafted_tools ||--|| crafted_tools_fts : "FTS5 sync triggers"
     session_messages ||--o{ stream_parts : "an open message's accumulating parts"
     conversation_entries ||--o{ conversation_entry_parts : "parts the entry shows"
-    session_messages ||--o{ conversation_entry_parts : "message_id, part_no"
-    conversation_entries ||--o{ conversation_fts : "local transcript index"
-    search_nodes ||--o{ search_nodes : "parent_id"
+    session_messages ||--o{ conversation_entry_parts : "actor_id, message_id"
+    conversation_entries ||--o{ conversation_fts : "derived index, no key"
+    search_nodes ||--o{ search_nodes : "parent_id, no key"
 ```
 
 ## Agent identity (SOUL.md)

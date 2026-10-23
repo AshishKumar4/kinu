@@ -27,7 +27,7 @@
  *   bun scripts/upgrade-fixtures.ts     the deployment KINU_EVAL_ORIGIN names, as every post-publish row
  */
 import * as v from 'valibot';
-import { SLATES_ROOT, VfsRevisionSchema } from '@kinu.run/core';
+import { SLATES_ROOT, UPGRADE_FIXTURE_ACCOUNTS, VfsRevisionSchema } from '@kinu.run/core';
 import { evalTargetVerdict } from '../packages/test-utils/src/eval-identity';
 import { deleteWorkspace, listWorkspaces, resolveWebIdentity, webHeaders, type PublicWebIdentity } from '../evals/src/workspace-roster';
 import { openSocketAs } from '../tests/first-run/public-socket';
@@ -38,12 +38,12 @@ import { LATEST_RESET_KEY, ResetSchema, UPGRADE_ANCHOR_KEY } from './reset';
 import { rowNotice } from './row-verdicts';
 
 /** The fixture account, and the armada secret its password is held in. */
-const FIXTURE = { email: 'upgrade-fixture@kinu.run', workspace: 'upgrade-fixture' } as const;
+const FIXTURE = { email: UPGRADE_FIXTURE_ACCOUNTS.fixture, workspace: 'upgrade-fixture' } as const;
 
 const FIXTURE_PASSWORD_ENV = 'KINU_UPGRADE_FIXTURE_PASSWORD';
 
 /** The account whose slate the fixture account receives. */
-const SENDER = { email: 'upgrade-sender@kinu.run', workspace: 'upgrade-sender' } as const;
+const SENDER = { email: UPGRADE_FIXTURE_ACCOUNTS.sender, workspace: 'upgrade-sender' } as const;
 
 const SENDER_PASSWORD_ENV = 'KINU_UPGRADE_SENDER_PASSWORD';
 

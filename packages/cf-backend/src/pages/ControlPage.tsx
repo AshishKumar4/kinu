@@ -10,14 +10,14 @@ import {
   fetchUsers, fetchWorkspaces, type ReconcileReport,
 } from '../lib/control-api';
 import {
-  ANALYTICS_OFF, METRICS_WINDOWS, type AnalyticsResult, type ControlAuditRow, type ControlFeedbackRow, type ControlUserRow,
-  type ControlWorkspaceRow,
+  ANALYTICS_OFF, METRICS_WINDOWS, type AnalyticsResult, type ControlAuditRow, type ControlFeedbackRow, type ControlWorkspaceRow,
 } from '@kinu.run/core/control-plane';
 import { formatBytes, workspaceDisplayTitle, type SeekCursor } from '@kinu.run/core';
 import {
   Notice, PageWalker, Panel, SectionHeader, Stat, useControlRead, when,
 } from '../components/control/panels';
 import { WorkspaceDrilldown } from '../components/control/WorkspaceDrilldown';
+import { AccountStanding, AccountsTable } from '../components/control/AccountsView';
 import { Button } from "@/components/ui/Button";
 import { Select } from "@/components/ui/Select";
 import { Checkbox } from "@/components/ui/Check";
@@ -162,23 +162,13 @@ function UsersView({ onOpen }: { onOpen: (userId: string) => void }): ReactNode 
 
   return (
     <div className="space-y-3">
-      <SectionHeader title="Accounts" hint="Most recently seen first." onRefresh={reload} />
+      <SectionHeader title="Accounts" hint="Most recently seen first, each with its limits read now." onRefresh={reload} />
       <Panel load={load}>
         {(answer) => (
           <div className="space-y-2">
-            <Table
-              head={['Email', 'Workspaces', 'First seen', 'Last seen']}
-              rows={answer.items.map((u: ControlUserRow) => ({
-                key: u.userId,
-                onClick: () => onOpen(u.userId),
-                cells: [
-                  <strong>{u.email}</strong>,
-                  <span className="tabular-nums">{u.workspaces}</span>,
-                  when(u.firstSeenAt), when(u.lastSeenAt),
-                ],
-              }))}
-              empty="No accounts have been observed yet."
-            />
+            {answer.items.length === 0
+              ? <Table head={[]} rows={[]} empty="No accounts have been observed yet." />
+              : <AccountsTable rows={answer.items} onOpen={onOpen} onChanged={reload} />}
             <PageWalker
               status={answer.status} page={page}
               onNext={() => next(answer)}
@@ -218,6 +208,10 @@ function UserDetailView(
               hint={RECONCILE_HINT[detail.reconcile.status]}
               onRefresh={reload}
             />
+            <Surface look="panel" className="px-5 py-4">
+              <AccountStanding userId={userId} email={detail.user?.email ?? userId} seen={detail.user?.lastSeenAt ?? null}
+                limits={detail.limits} onChanged={reload} />
+            </Surface>
             {detail.reconcile.status === 'failed' && (
               <Notice tone="warn">
                 {detail.reconcile.reason} Nothing was changed in the index.

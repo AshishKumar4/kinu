@@ -15,6 +15,7 @@ import type { HeadInput, HeadReport, HeadStep } from '../heads/types';
 import type { HeadStreamKind } from '../heads/head-stream';
 import type { JsonObject, JsonValue } from '../utils/json';
 import { renderThrownChain, type ErrorCode, type KinuError } from '../obs/error';
+import { statementText, statementWrite } from '../utils/sql';
 import type { ModelPricing } from '../providers/types';
 import type { WorkMode } from '../types/turn';
 import type { TurnSourcesBundle } from '../orchestrator/turn-assembly';
@@ -28,7 +29,7 @@ export type StoredRow = Readonly<Record<string, string | number | ArrayBuffer | 
  * The tables an {@link AgentSnapshot} copies from its workspace into its agent's own isolate. A statement that writes one
  * moves every copy of them held on either side.
  */
-const SNAPSHOT_SOURCE_WRITE = /\b(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|REPLACE\s+INTO|UPDATE|DELETE\s+FROM)\s+(?:workspace_actors|workspace_identity|actor_config|scaffold_versions)\b/iu;
+const SNAPSHOT_SOURCES: ReadonlySet<string> = new Set(['workspace_actors', 'workspace_identity', 'actor_config', 'scaffold_versions']);
 
 const WRITES = new WeakMap<TemplateStringsArray, boolean>();
 
@@ -37,7 +38,7 @@ export function writesSnapshotRows(strings: TemplateStringsArray): boolean {
   const known = WRITES.get(strings);
 
   if (known !== undefined) return known;
-  const writes = SNAPSHOT_SOURCE_WRITE.test(strings.join('?'));
+  const writes = SNAPSHOT_SOURCES.has(statementWrite(statementText(strings))?.table ?? '');
 
   WRITES.set(strings, writes);
 

@@ -66,6 +66,7 @@ const USER_DO_METHODS = [
   'decideSlateEffect',
   'accountMemory_decide',
   'accountMemory_facts',
+  'accountMemory_turnFacts',
   'accountMemory_forget',
   'accountMemory_forgetNote',
   'accountMemory_propose',
@@ -172,6 +173,8 @@ const USER_DO_METHODS = [
   'acknowledgeUnstoppedDevice',
   'cancelDeviceRequestsForAgent',
   'cancelDeviceRequestsForBackgroundJob',
+  'googleConnection',
+  'googleToken',
   'grantDeviceConsent',
   'revokeDeviceConsent',
   'revokeSecretGrant',
@@ -202,6 +205,8 @@ const USER_DO_METHODS = [
   'userMcp_githubRefresh',
   'userMcp_handleOAuthCallback',
   'userMcp_beginConnect',
+  'userMcp_reconnect',
+  'evalAbortActivation',
   'userMcp_connectedPresets',
   'userMcp_list',
   'userMcp_presets',
@@ -242,15 +247,29 @@ const USER_DO_METHODS = [
   'drive_startDownload',
   'drive_readChunk',
   'drive_abortDownload',
+  'limits',
+  'limits_account',
+  'limits_nearNote',
+  'limits_admitStoredBytes',
+  'limits_storageSampled',
+  'limits_admitComputerStart',
+  'limits_computerTick',
+  'limits_computerStopped',
+  'limits_admitTurn',
+  'limits_platformTokensSpent',
+  'limits_setClass',
+  'limits_suspend',
+  'limits_unsuspend',
+  'limits_inviteRedeemed',
 ] as const satisfies readonly (keyof UserDO)[];
 
 export type UserDoRpcMethod = (typeof USER_DO_METHODS)[number];
 
 export const USER_DO_RPC_SURFACE: readonly string[] = [...PLATFORM_RPC_SURFACE, ...USER_DO_METHODS];
 
-/** Never gated: a deletion must work when start throws, the deploy's tables walk reads tables alone, and a restore
- *  must reach storage the start refuses. */
-const USER_DO_STARTLESS: ReadonlySet<string> = new Set(['deleteAccount', 'opsTables', 'opsRestore', 'opsRestart', 'opsBookmark']);
+/** Never gated: a deletion must work when start throws, the deploy's tables walk reads tables alone, a restore
+ *  must reach storage the start refuses, and an eval's abort ends the activation the start would begin. */
+const USER_DO_STARTLESS: ReadonlySet<string> = new Set(['deleteAccount', 'opsTables', 'opsRestore', 'opsRestart', 'opsBookmark', 'evalAbortActivation']);
 
 export const USER_DO_STARTED_RPC: readonly string[] = USER_DO_METHODS.filter((name) => !USER_DO_STARTLESS.has(name));
 
@@ -275,6 +294,7 @@ const ACTOR_AGENT_RPC_SURFACE = [
 const ORCHESTRATOR_METHODS = [
   'abortExecutorFileDownload',
   'opsBookmark',
+  'opsMissing',
   'opsRestart',
   'opsRestore',
   'opsTables',
@@ -300,6 +320,8 @@ const ORCHESTRATOR_METHODS = [
   'acceptSandboxLifecycleIncident',
   'sandboxStopped',
   'sandboxRestore',
+  'computerStartAdmitted',
+  'computerRunningTick',
   'acceptWebhookDelivery',
   'accountSpend',
   'announceDeviceAvailable',

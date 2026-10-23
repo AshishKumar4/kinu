@@ -1,7 +1,7 @@
 /**
  * Canonical built-in tool factory. Actors use `buildActorTools` (adds `agents`, which cannot live
  * here without an import cycle); heads and swarm nodes use this directly, filtered by `keepBuiltins`.
- * Skills are plain files and `release` is a codemode namespace, not native tools.
+ * Skills are plain files, not native tools.
  */
 
 import { tool } from 'ai';

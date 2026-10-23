@@ -233,6 +233,8 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
     name: 'resolveEgressInjection',
     run: (u, c) => u.resolveEgressInjection(c, { host: 'api.stripe.com', url: 'https://api.stripe.com/v1/charges', headers: [] }, 'w'),
   },
+  // A workspace holding the Google connection's token would act at Google as the owner, with no approval between.
+  { capability: 'google.token', name: 'googleToken', run: (u, c) => u.googleToken(c) },
   { capability: 'account', name: 'completeOnboarding', run: (u, c) => u.completeOnboarding(c) },
   { capability: 'account', name: 'setDisplayName', run: (u, c) => u.setDisplayName(c, 'Owner') },
   { capability: 'account', name: 'heldRows', run: (u, c) => u.heldRows(c) },

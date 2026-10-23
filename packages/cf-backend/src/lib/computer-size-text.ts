@@ -31,8 +31,19 @@ export function stalledNote(stalled: string): string {
   return `${stalled.charAt(0).toUpperCase()}${stalled.slice(1)}. Stop restarts the computer: files stay as last saved, and what was running starts fresh.`;
 }
 
-export function workspaceSizeNote(state: ComputerSizeState, pending: boolean): string | null {
+/** A free account's computer, set larger than its cap, runs at the cap: said where its size is chosen. Null otherwise. */
+export function cappedSizeNote(size: BoxSize, cap: BoxSize | null): string | null {
+  if (cap === null || BOX_SIZE_ORDER.indexOf(size) <= BOX_SIZE_ORDER.indexOf(cap)) return null;
+
+  return `A free account's computer runs at ${BOX_SIZES[cap].label}, whatever size is set. ${BOX_SIZES[size].label} stays set, for when the account has no limits.`;
+}
+
+/** What the workspace's size line says: a resize under way, a free account's cap, or a size waiting for the next start. */
+export function workspaceSizeNote(state: ComputerSizeState, pending: boolean, cap: BoxSize | null): string | null {
   if (pending) return state.running === null ? 'Saving…' : 'Restarting at the new size…';
+  const capped = cappedSizeNote(state.size, cap);
+
+  if (capped !== null) return capped;
 
   if (state.running !== null && state.running !== state.size) {
     return `Runs at ${BOX_SIZES[state.running].label} until it next starts, then at ${BOX_SIZES[state.size].label}.`;

@@ -37,6 +37,10 @@ const CONTROL_PLANE_CAPABILITIES = {
   'audit.write': 'admin',
   // Fans out reads over a user's whole roster.
   'index.reconcile': 'admin',
+  // An account's class and suspension, mirrored for the accounts list, and the invite links an operator makes.
+  'accounts.write': 'admin',
+  // A signed-in person spending an invite link: the Worker's route names who.
+  'invite.redeem': 'ingest',
 } as const satisfies Record<string, ControlGrade>;
 
 export type ControlCapability = keyof typeof CONTROL_PLANE_CAPABILITIES;

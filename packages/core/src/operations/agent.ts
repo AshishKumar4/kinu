@@ -6,6 +6,7 @@ import * as v from 'valibot';
 import { PROPOSED_TASK_STATUSES } from '../types/proposals';
 import { BACKGROUND_POLICY } from '../types/jobs';
 import { JsonObjectSchema } from '../utils/json';
+import { WatchCheckSchema } from '../types/watch';
 import { described, namespace } from './operation';
 import { OwnerWaitSchema } from '../types/owner-waits';
 
@@ -63,11 +64,15 @@ export const AGENT = {
   schedule: agentOp({
     name: 'schedule', impact: 'mutate',
     help: 'A future turn: `cron` recurs, `atMs` (epoch ms) fires once. `budgetUsd`/`budgetTokens` cap everything its turns '
-      + 'spend, across fires; `budgetLabel` shares one ledger between schedules.',
+      + 'spend, across fires; `budgetLabel` shares one ledger between schedules. With `check` it is a watcher: at each firing '
+      + 'the program runs first, reading only the namespaces `reads` names (their observing members) and `state`, what it '
+      + 'last answered, and returns { fire: false, state? } or { fire: true, brief, state? }; only a fire starts the turn, '
+      + 'with `brief` in it, and a check costs no model call.',
     input: v.strictObject({
       cron: v.optional(v.pipe(v.string(), v.nonEmpty())), atMs: v.optional(v.pipe(v.number(), v.finite())),
       label: v.optional(v.string()), payload: v.optional(JsonObjectSchema),
       budgetUsd: v.optional(v.number()), budgetTokens: v.optional(v.number()), budgetLabel: v.optional(v.string()),
+      check: v.optional(WatchCheckSchema),
     }),
     output: v.unknown(),
   }),

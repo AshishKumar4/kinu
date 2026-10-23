@@ -195,8 +195,9 @@ function drawnParts(parts: readonly JsonObject[], role: ConversationEntry['role'
   const calls = new Map<string, JsonObject>();
 
   for (const [at, part] of parts.entries()) {
-    // The provider's compaction summary is for the model, not the owner.
-    if (isServerCompaction(part.providerOptions)) continue;
+    // The provider's compaction summary and its own records (a `custom` part: Anthropic's message_start each step) are
+    // for the model, not the owner; a record left in would end the run of calls around it.
+    if (part.type === 'custom' || isServerCompaction(part.providerOptions)) continue;
     const name = media?.(at);
 
     if (part.type === 'tool-call') {

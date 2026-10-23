@@ -1043,9 +1043,9 @@ function draftsFor(
       name: namespace.id,
       origin: 'manual',
       binding: namespace.binding,
-      purpose: 'browser sessions, one-time OAuth state and CLI approval state — all of it '
+      purpose: 'browser sessions, one-time OAuth state and CLI sign-in rate limits — all of it '
         + 'expiring, none of it a source of truth',
-      holds: 'every live session and every CLI approval in flight. Deleting it signs everyone '
+      holds: 'every live session and every CLI sign-in\'s rate count. Deleting it signs everyone '
         + 'out; it orphans nothing, because identities live in their own UserDO.',
       manual: 'run `wrangler kv namespace create <title>` and paste the id it prints into '
         + 'wrangler.jsonc. Not automated here: KV titles are not unique, so a second run makes '

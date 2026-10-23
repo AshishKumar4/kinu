@@ -41,6 +41,8 @@ export const APP_ROUTES = {
   gallerySlate: '/gallery/:workspace/:slate',
   deploy: '/deploy',
   updates: '/updates',
+  /** An operator's invite link (core limits/), opened signed in: the account it is opened in has no limits. */
+  invite: '/invite/:token',
   /** Where every connect run in a helper tab ends (`connectedPath`): it tells the tab that started it, then closes. */
   connected: '/connected',
 } as const;
@@ -66,6 +68,11 @@ export const CONNECT_CHANNEL = 'kinu-connected';
  *  which login. The Worker's own tests start their connects here, so the address the button opens is the one proven. */
 export function cloudflareConnectPath(run: string): string {
   return `/auth/cloudflare/start?${new URLSearchParams({ intent: 'connect', prompt: 'login', run }).toString()}`;
+}
+
+/** Where the Google connection's connect starts, owner only: Google's consent for the Workspace client's scopes. */
+export function googleConnectPath(run: string): string {
+  return `/api/user/google/connect?${new URLSearchParams({ run }).toString()}`;
 }
 
 /** Where a connect ends, for every connect: the finish page, naming its run, the service and why it failed. */

@@ -8,7 +8,7 @@ import { Cause, Effect } from 'effect';
 import {
   closeReason, createScrubStream, egressPlaceholdersIn, kinuUserAgent, objectNamed, observeGitHub, OwnerCapabilityUnavailableError,
   ownerCaller, reoriginateRequest, revealHeader, revealUrl, scrubBytes, scrubText,
-  type EgressInjection, type EgressInjectionResult, type EgressRequestFacts, type GitHubRecorder, type ObjectNamespace,
+  type EgressInjectionResult, type EgressRequestFacts, type GitHubRecorder, type ObjectNamespace,
   type OwnerCapabilityEnv, type ScrubReplacement, type UserCaller,
 } from '@kinu.run/core';
 import { attempt, classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
@@ -86,7 +86,7 @@ export function sendOut<Id>(
     if (refused !== null) return refused;
 
     // With no vault, nothing it names is a placeholder (refused above): it goes as it is, asking no one.
-    if (vault === null || egressPlaceholdersIn(facts).size === 0) return yield* forwarded(request, url, [], github);
+    if (vault === null || egressPlaceholdersIn(facts).size === 0) return yield* forwarded(request, url, { substitutions: [] }, github);
 
     // Use the stub, never copy it: `Object.assign` of a JSRPC stub yields `{}` (methods live behind a Proxy).
     const owner: EgressVaultClient = objectNamed(env.UserDO, vault.ownerUserId);
@@ -102,15 +102,19 @@ export function sendOut<Id>(
 
     if (resolved.answer.kind === 'refuse') return refusal(resolved.answer.status, resolved.answer.reason);
 
-    return yield* forwarded(request, url, resolved.answer.substitutions, github);
+    return yield* forwarded(request, url, resolved.answer, github);
   });
 }
 
-/** `request` sent on with `substitutions` made, GitHub's part of it recorded. */
-function forwarded(request: Request, url: URL, substitutions: readonly EgressInjection[], github: GitHubRecorder | undefined): Effect.Effect<Response> {
+/** What a request goes on with: its substitutions, and whether its `Authorization` header is left off (a connection's
+ *  credential bound for another host, `withheldElsewhere`). */
+type Sending = Pick<EgressInjectionResult & { kind: 'forward' }, 'substitutions' | 'withholdAuthorization'>;
+
+/** `request` sent on as `sending` says, GitHub's part of it recorded. */
+function forwarded(request: Request, url: URL, sending: Sending, github: GitHubRecorder | undefined): Effect.Effect<Response> {
   return Effect.gen(function* () {
     const observed = yield* observeGitHub(request, url, github);
-    const answer = yield* forwardUpstream(observed?.request ?? request, url, substitutions);
+    const answer = yield* forwardUpstream(observed?.request ?? request, url, sending);
 
     return observed === null ? answer : observed.answered(answer);
   });
@@ -123,7 +127,7 @@ function forwarded(request: Request, url: URL, substitutions: readonly EgressInj
 function forwardUpstream(
   request: Request,
   url: URL,
-  substitutions: readonly EgressInjection[],
+  { substitutions, withholdAuthorization }: Sending,
 ): Effect.Effect<Response> {
   return Effect.gen(function* () {
     const injected: ScrubReplacement[] = substitutions.map(
@@ -137,6 +141,7 @@ function forwardUpstream(
     const headers = new Headers();
 
     for (const [name, value] of request.headers) {
+      if (withholdAuthorization === true && name.toLowerCase() === 'authorization') continue;
       const revealed = revealHeader(value, reveal);
 
       headers.set(name, revealed.value);

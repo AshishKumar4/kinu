@@ -4,7 +4,7 @@
   */
 
 import {
-  Devbox, type DevboxState,
+  Devbox, type BoxSize, type DevboxState, type StartAdmission,
   type DevboxIncident, type OutboundPolicy,
   type IncidentDisposition, type RestoreClockPhase,
 } from "@kinu.run/devbox";
@@ -34,7 +34,7 @@ interface KinuState extends DevboxState {
 /** Type-only, so nothing here reaches orchestrator code at runtime. */
 type SandboxRootClient = Pick<
   OrchestratorAgent,
-  "acceptSandboxLifecycleIncident" | "sandboxStopped" | "sandboxRestore" | "workspaceTitle"
+  "acceptSandboxLifecycleIncident" | "sandboxStopped" | "sandboxRestore" | "workspaceTitle" | "computerStartAdmitted" | "computerRunningTick"
 >;
 
 export class KinuDevbox extends Devbox<Env> {
@@ -89,6 +89,18 @@ export class KinuDevbox extends Devbox<Env> {
 
   protected override onRestorePhase(phase: RestoreClockPhase): void {
     this.#restoreNotice(phase);
+  }
+
+  /** A start from stopped is the owning workspace's owner's to admit (core limits/): asked of its root agent. */
+  protected override async admitStart(size: BoxSize): Promise<StartAdmission> {
+    return await (await this.#rootAgent())?.computerStartAdmitted(size) ?? { size };
+  }
+
+  /** Each heartbeat the box is seen running counts to its owner's month; an uncounted tick is logged, never the beat's. */
+  protected override async onRunningTick(size: BoxSize): Promise<void> {
+    await settleLogged('computer.tick_unrecorded', { doing: "counting the computer's running time", otherwise: 'unavailable' }, async () => {
+      await (await this.#rootAgent())?.computerRunningTick(size);
+    });
   }
 
   override async onStop(): Promise<void> {

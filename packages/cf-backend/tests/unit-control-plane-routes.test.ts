@@ -13,7 +13,7 @@ import type { ControlCapability, PresentedCaller } from '@kinu.run/core/control-
 import * as v from 'valibot';
 import {
   CACHE_HIT_EMA_ALPHA, JsonValueSchema,
-  type ActivitySnapshot, type ApprovalGrant, type DeferredApprovalAnswer, type JsonValue,
+  type AccountLimits, type ActivitySnapshot, type ApprovalGrant, type DeferredApprovalAnswer, type JsonValue, type LimitsReport,
   type UserCaller, type WorkspaceEntry,
 } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
@@ -70,6 +70,8 @@ interface World {
   rosters?: Record<string, WorkspaceEntry[]>;
   owners?: Record<string, string>;
   audit?: AuditFault;
+  /** Accounts whose own object does not answer a read of its limits. */
+  limitsUnread?: readonly string[];
 }
 
 function roster(...names: string[]): WorkspaceEntry[] {
@@ -193,6 +195,14 @@ function harness(options: World = {}): Harness {
     touchWorkspace(): Promise<void> {
       throw new Error('ControlPlaneDO.touchWorkspace: not reachable in this test');
     },
+    async noteAccountStanding(caller: PresentedCaller, userId: string, standing: { readonly class: 'free' | 'invited'; readonly suspendedAt: number | null }) {
+      await gate(caller, 'accounts.write'); store.noteAccountStanding(sql, userId, standing, Date.now());
+    },
+    async createInvite(caller: PresentedCaller, createdBy: string) {
+      await gate(caller, 'accounts.write');
+
+      return await store.createInvite(sql, createdBy, Date.now());
+    },
   };
 
   const emptyListStub = (workspace: string, method: string) => async () => {
@@ -280,6 +290,14 @@ function harness(options: World = {}): Harness {
     },
   });
 
+  const standings = new Map<string, { readonly class: 'free' | 'invited'; readonly suspended: { readonly at: number; readonly reason: string } | null }>();
+
+  const reportOf = (userId: string): LimitsReport => {
+    const standing = standings.get(userId) ?? { class: 'free', suspended: null };
+
+    return { class: standing.class, suspended: standing.suspended, limits: [], computerSizeCap: null, freeTier: false };
+  };
+
   const userStub = (userId: string) => ({
     async hasWorkspace(_caller: UserCaller, name: string) {
       return (rosters.get(userId) ?? []).some((row) => row.name === name);
@@ -305,6 +323,24 @@ function harness(options: World = {}): Harness {
       owners.delete(workspace);
       rosters.set(userId, (rosters.get(userId) ?? []).filter((row) => row.name !== workspace));
       removed.push({ userId: owner, workspace });
+    },
+    // The account's standing as core limits/ keeps it, in this fake's own map.
+    async limits_setClass(_caller: UserCaller, klass: 'free' | 'invited') {
+      standings.set(userId, { ...(standings.get(userId) ?? { suspended: null }), class: klass });
+    },
+    async limits_suspend(_caller: UserCaller, reason: string) {
+      standings.set(userId, { ...(standings.get(userId) ?? { class: 'free' }), suspended: { at: 1, reason } });
+    },
+    async limits_unsuspend() {
+      standings.set(userId, { ...(standings.get(userId) ?? { class: 'free' }), suspended: null });
+    },
+    async limits(): Promise<LimitsReport> {
+      return reportOf(userId);
+    },
+    async limits_account(): Promise<AccountLimits> {
+      if (options.limitsUnread?.includes(userId) === true) throw new Error('the user object is evicted');
+
+      return { report: reportOf(userId), use: [] };
     },
   });
 
@@ -795,6 +831,18 @@ describe('cross-user isolation', () => {
     });
     // Nothing tombstoned on a failed read: a failure must not empty the list an operator acts on.
     expect(store.listWorkspaces(h.sql, {}, { userId: USER_ID }).items.map((r) => r.name)).toEqual(['kept']);
+    h.close();
+  });
+
+  test("the accounts list reads each account's limits in its own object, and an unread one keeps its row", async () => {
+    const h = harness({ limitsUnread: [OTHER_ID] });
+    store.observeUser(h.sql, { userId: USER_ID, email: OPERATOR, at: 2_000 });
+    store.observeUser(h.sql, { userId: OTHER_ID, email: 'other@example.com', at: 1_000 });
+
+    const answer = await control(get('/users'), h.env, identity());
+    const page = v.parse(v.object({ items: v.array(v.object({ userId: v.string(), limits: v.nullable(v.object({ report: v.object({ class: v.string() }) })) })) }), await answered(answer).json());
+
+    expect(page.items.map((row) => [row.userId, row.limits?.report.class ?? null])).toEqual([[USER_ID, 'free'], [OTHER_ID, null]]);
     h.close();
   });
 

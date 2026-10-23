@@ -3,7 +3,7 @@
  * with My stuff's folder tree from `lg`, or below it in a switch at the top. Nothing empty is drawn: Slates and Shared
  * are placed once they hold something, and the column holds the title even when My stuff is the only place.
  */
-import { Effect, Result } from 'effect';
+import { Cause, Effect, Result } from 'effect';
 import { startTransition, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Loader } from "@/components/ui/Loader";
@@ -48,6 +48,7 @@ import { Empty } from "@/components/ui/Empty";
 import { DropHint } from "@/components/ui/FilePicker";
 import { Drawer } from "@/components/ui/Drawer";
 import { Group } from "@/components/ui/Group";
+import { useLimitRefusal } from "@/components/limits/LimitRefusal";
 
 export type DriveTab = "slates" | "mine" | "shared";
 
@@ -659,6 +660,7 @@ function useTransfers(path: string, listing: AsyncResourceControl<DriveListing>)
   const [prunedFor, setPrunedFor] = useState<DriveListing | null>(null);
   const nextTransfer = useRef(0);
   const { reload } = listing;
+  const offerRefusal = useLimitRefusal();
 
   const transfer = useCallback((sending: Sending, work: (watch: UploadWatch) => Promise<void>): void => {
     const id = ++nextTransfer.current;
@@ -671,11 +673,16 @@ function useTransfers(path: string, listing: AsyncResourceControl<DriveListing>)
       yield* Effect.promise(async () => work({ signal: abort.signal, progress: (share) => change({ progress: share }) }));
       change({ status: "landed" });
       reload();
-    }), showing((chain) => {
-      if (abort.signal.aborted) drop();
-      else change({ status: "failed", error: chain, stop: drop });
-    }))));
-  }, [reload]);
+    }), (failed) => {
+      // Storage past its limit is the limit's dialog, and the tile goes: nothing of the file landed.
+      if (offerRefusal({ cause: Cause.squash(failed) }, { file: { name: sending.name, size: sending.size } })) return Effect.sync(drop);
+
+      return showing((chain) => {
+        if (abort.signal.aborted) drop();
+        else change({ status: "failed", error: chain, stop: drop });
+      })(failed);
+    })));
+  }, [reload, offerRefusal]);
 
   // Landed: leaves once the listing holds what it landed as, and is forgotten then, so a later delete cannot bring it back.
   const shownListing = lastValue(listing.resource);

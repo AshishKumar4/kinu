@@ -44,12 +44,14 @@ export interface ScriptedAnswer {
   readonly pace?: ScriptedPace;
   /** `perMinute`: Workers AI's own refusal of a model's per-minute allowance, which states no header. */
   readonly rateLimited?: { readonly retryAfterSeconds?: number; readonly perMinute?: boolean };
+  /** A request the provider refuses for good, with `message`: no wait helps, so the turn stops on it. */
+  readonly refused?: { readonly message: string };
 }
 
-/** A 429 the way an OpenAI-compatible provider sends one: its error body, and the seconds to wait in `retry-after` when
- *  it states any. */
-export interface RateLimitedResponse {
-  readonly status: 429;
+/** An error the way an OpenAI-compatible provider sends one: a 429 with its error body and the seconds to wait in
+ *  `retry-after` when it states any, or a 400 refusing the request. */
+interface ErrorResponse {
+  readonly status: 429 | 400;
   readonly headers: Readonly<Record<string, string>>;
   readonly body: string;
 }
@@ -61,7 +63,20 @@ const WORKERS_AI_PER_MINUTE = {
   description: 'rate limiting: inference request per min rate reached',
 };
 
-export function rateLimitedAnswer(limited: NonNullable<ScriptedAnswer['rateLimited']>): RateLimitedResponse {
+/** The error response an answer stands for, a rate limit or a refusal; null for one the model answers. */
+export function errorAnswer(answer: ScriptedAnswer): ErrorResponse | null {
+  if (answer.rateLimited !== undefined) return rateLimitedAnswer(answer.rateLimited);
+
+  if (answer.refused === undefined) return null;
+
+  return {
+    status: 400,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ error: { message: answer.refused.message, type: 'invalid_request_error', code: 'scripted_refusal' } }),
+  };
+}
+
+function rateLimitedAnswer(limited: NonNullable<ScriptedAnswer['rateLimited']>): ErrorResponse {
   const { retryAfterSeconds, perMinute = false } = limited;
 
   return {

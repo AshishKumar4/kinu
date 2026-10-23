@@ -435,7 +435,7 @@
     },
     {
       "key": "scripts/reset.ts#tablesCommand",
-      "complexity": 25
+      "complexity": 22
     },
     {
       "key": "scripts/syntax.ts#importUses>bindVariable",

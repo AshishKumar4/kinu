@@ -19,11 +19,11 @@ import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, wr
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import * as v from 'valibot';
-import { EvolutionEngine, historyTurnPairs, type AgentRuntime, type CompletedTurn, type JobRetirement, type JsonValue, type LLMProviderConfig } from '../../packages/core/src/index';
+import { CLAUDE_CRED_KEY, credentialToHeaders, DEFAULT_DECISION_MODEL, EvolutionEngine, historyTurnPairs, type AgentRuntime, type CompletedTurn, type JobRetirement, type JsonValue, type LLMProviderConfig, type ReasoningEffort } from '../../packages/core/src/index';
 import { createConsoleLogger, renderThrownChain, setDiagnosticsSink, type Logger } from '../../packages/core/src/obs/index';
 import { createWorkspace } from '../../packages/core/src/workspace-birth';
 import { createRefinementStore } from '../../packages/core/src/evolution/refinement';
-import { createLocalModelResolver, LocalAgentHost, openWorkspaceCLI, workspaceHome } from '../../packages/cli-backend/src/index';
+import { createLocalModelResolver, LocalAgentHost, openWorkspaceCLI, workspaceHome, type LocalOAuthStore } from '../../packages/cli-backend/src/index';
 import { workspaceDatabase } from '../../packages/test-utils/src/index';
 import { ownerTurnsFrom, type OwnerTurn } from '../src/omp';
 import { freezeHeldOut, FrozenHeldOutSchema, recordedShell, shellFromRecord, type FrozenHeldOut } from '../src/omp-run';
@@ -39,6 +39,17 @@ const DREAM_PASSES = 40;
 const SETTLED = new Set(['applied', 'rolled_back', 'refused']);
 
 const MODEL_HOST = 'api.cloudflare.com:443';
+
+/** The decision model every arm rates with, as the Workers AI endpoint names it. */
+const DECISION_MODEL = DEFAULT_DECISION_MODEL.replace(/^workers-ai\//u, '');
+
+/** A Claude plan login's host, for a `claude/` spec. */
+const CLAUDE_HOST = 'api.anthropic.com:443';
+
+/** The file a `claude/` arm reads its plan login's access token from at each call: the machine OMP's store is on writes
+ *  it (`ompGrant`, scripts/eval-plan-run.ts) as OMP renews it. The token alone: no refresh token leaves OMP, and this run
+ *  renews nothing. */
+const CLAUDE_TOKEN_FILE_ENV = 'KINU_CLAUDE_TOKEN_FILE';
 
 /**
  * What a kept call with no record answers in this run, the same for every arm: on this machine Plan runs no shell
@@ -87,8 +98,9 @@ function workersAi(account: string, token: string, model: string): LLMProviderCo
   return { name: 'workers-ai', baseURL: `https://api.cloudflare.com/client/v4/accounts/${account}/ai/v1`, headers: { Authorization: `Bearer ${token}` }, model };
 }
 
-function frozenSet(data: string, heldOut: readonly OwnerTurn[], count: number, seed: number): FrozenHeldOut {
-  const path = join(data, 'held-out-frozen.json');
+/** `count`: that many drawn, frozen in `held-out-frozen.json`; `all`, every held-out request, in `held-out-frozen-all.json`. */
+function frozenSet(data: string, heldOut: readonly OwnerTurn[], count: number | 'all', seed: number): FrozenHeldOut {
+  const path = join(data, count === 'all' ? 'held-out-frozen-all.json' : 'held-out-frozen.json');
 
   if (existsSync(path)) return v.parse(v.pipe(v.string(), v.parseJson(), FrozenHeldOutSchema), readFileSync(path, 'utf8'));
   const frozen = freezeHeldOut(heldOut, { count, seed });
@@ -109,10 +121,32 @@ async function dream(run: { readonly lane: () => Promise<void>; readonly tick: (
   return DREAM_PASSES;
 }
 
-interface Arm {
+/** A Claude plan login whose access token is read from `tokenFile` at each call: it saves nothing (the login is OMP's). */
+function claudeLogin(tokenFile: string): LocalOAuthStore {
+  return {
+    keys: () => [CLAUDE_CRED_KEY],
+    has: (key) => key === CLAUDE_CRED_KEY,
+    getAuth: async (key) => {
+      if (key !== CLAUDE_CRED_KEY) return null;
+      const accessToken = readFileSync(tokenFile, 'utf8').trim();
+
+      return { headers: credentialToHeaders(CLAUDE_CRED_KEY, { kind: 'oauth', accessToken, expiresAt: Number.MAX_SAFE_INTEGER }), credentialKey: key };
+    },
+    save: async () => { throw new Error('this run holds a borrowed plan login and renews none'); },
+  };
+}
+
+/** An arm's models: Workers AI over the account's token, or (`claude/`) a Claude plan login. */
+interface ArmModels {
+  readonly llm: LLMProviderConfig | null;
+  readonly oauthStore?: LocalOAuthStore;
+  /** The workspace's reasoning effort, where set. */
+  readonly effort?: ReasoningEffort;
+}
+
+interface Arm extends ArmModels {
   readonly arm: 'dreaming' | 'off';
   readonly spec: string;
-  readonly llm: LLMProviderConfig;
   readonly snapshot: string;
   /** This arm's workspace folder: its database and its files. */
   readonly space: string;
@@ -124,11 +158,15 @@ function armHost(arm: Arm, boundary: { intended: (call: { readonly name: string;
     roster: () => [{ name: 'root', cwd: arm.snapshot, workspaceId: `omp-${arm.arm}` }],
     dbPath: () => join(arm.space, 'agent.db'),
     open: async (_ref, db, path) => {
-      const openConfig = { llm: arm.llm, defaultSpec: arm.spec, cwd: arm.snapshot, boundary };
+      const openConfig = { llm: arm.llm, defaultSpec: arm.spec, cwd: arm.snapshot, boundary,
+        ...(arm.oauthStore !== undefined && { oauthStore: arm.oauthStore }) };
+
       const { rt } = await openWorkspaceCLI(db, path, openConfig);
       rt.actor.config.setLearning(arm.arm === 'dreaming');
 
-      return { rt, openConfig, modelResolver: createLocalModelResolver({ llm: arm.llm, defaultSpec: arm.spec }) };
+      if (arm.effort !== undefined) rt.actor.config.setReasoningEffort(arm.effort);
+
+      return { rt, openConfig, modelResolver: createLocalModelResolver({ llm: arm.llm, defaultSpec: arm.spec, ...(arm.oauthStore !== undefined && { oauthStore: arm.oauthStore }) }) };
     },
   });
 }
@@ -167,7 +205,12 @@ async function prepare(arm: Arm, train: readonly OwnerTurn[], last: number): Pro
     }
 
     const evolution = armEvolution({ refinements: session.listRefinements(200), changelog: session.getEvolutionChangelog(200).entries });
-    writeFileSync(join(arm.space, 'prepared.json'), `${JSON.stringify({ ...arm, llm: undefined, trained: trained.length, unreviewed, dreamPasses, evolution, spent, ms: Date.now() - started }, null, 2)}\n`);
+
+    // Rated turns, not model calls, show it trained: a rating and a dream's drafts are calls no stream opens.
+    const [{ rated } = { rated: 0 }] = rt.storage.sql<{ rated: number }>`SELECT COUNT(*) AS rated FROM turn_ratings`;
+
+    if (trained.length > 0 && rated === 0) throw new Error('the dreaming arm rated none of its training turns; refusing to label this an on/off comparison');
+    writeFileSync(join(arm.space, 'prepared.json'), `${JSON.stringify({ ...arm, llm: undefined, oauthStore: undefined, trained: trained.length, rated, unreviewed, dreamPasses, evolution, spent, ms: Date.now() - started }, null, 2)}\n`);
   } finally {
     await host.close();
     restore();
@@ -204,6 +247,14 @@ export async function askedRow<Row extends { readonly answer: string | null; rea
     if (row.answer !== null || row.spent.modelCalls > 0 || attempt >= attempts) return row;
     await wait(retryMs);
   }
+}
+
+/** What the owner read of a request: every reply its root's turns gave, in order. Its last turn alone read empty where a
+ *  task's reminder turn ended a request silently after the turn that answered (8 of the pilot's 160 answers). */
+function rootAnswer(ended: readonly Pick<CompletedTurn, 'assistantResponse'>[]): string | null {
+  const replies = ended.map((turn) => turn.assistantResponse.trim()).filter((reply) => reply !== '');
+
+  return ended.length === 0 ? null : replies.join('\n\n');
 }
 
 async function answered(arm: Arm, prepared: string, turn: OwnerTurn) {
@@ -249,7 +300,7 @@ async function answered(arm: Arm, prepared: string, turn: OwnerTurn) {
     }
 
     return {
-      turnId: turn.turn.turnId, request: turn.turn.userMessage, answer: ended.at(-1)?.assistantResponse ?? null,
+      turnId: turn.turn.turnId, request: turn.turn.userMessage, answer: rootAnswer(ended),
       calls: ended.flatMap((each) => each.toolCalls.map((call) => call.name)), turns: ended.length, agents: agents.size,
       leftRunning: left.stopped, refusedStop: left.refused, kept, spent, ms: answeredAt - askedAt,
     };
@@ -265,6 +316,7 @@ if (import.meta.main) {
   const { values } = parseArgs({ options: {
     phase: { type: 'string' }, data: { type: 'string' }, snapshot: { type: 'string' }, arm: { type: 'string' }, out: { type: 'string' },
     spec: { type: 'string', default: 'workers-ai/@cf/zai-org/glm-5.3' }, 'held-out': { type: 'string', default: '40' },
+    effort: { type: 'string' },
     'train-last': { type: 'string', default: '250' }, seed: { type: 'string', default: '1' },
     copy: { type: 'string', default: '0' }, of: { type: 'string', default: '1' },
   } });
@@ -277,18 +329,30 @@ if (import.meta.main) {
     throw new Error('--phase prepare|answer, --data, --snapshot, --out and --arm dreaming|off are required');
   }
 
+  const claude = spec.startsWith('claude/');
+  const claudeToken = process.env[CLAUDE_TOKEN_FILE_ENV];
+
+  if (claude && claudeToken === undefined) throw new Error(`set ${CLAUDE_TOKEN_FILE_ENV} to the file holding the plan login's access token`);
+
   if (account === undefined || token === undefined) throw new Error('set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN');
   const model = spec.replace(/^workers-ai\//u, '');
   const base = join(out, model.replaceAll('/', '_'), arm);
-  const egress = limitEgress([MODEL_HOST]);
+  const egress = limitEgress(claude ? [CLAUDE_HOST, MODEL_HOST] : [MODEL_HOST]);
+  const effort = v.parse(v.optional(v.picklist(['low', 'medium', 'high', 'xhigh', 'max'])), values.effort);
+
+  // A `claude/` arm keeps Workers AI for the decision model (Clef), which only `/ai/run` serves and the dreaming arm rates
+  // its training turns with: without it the ratings were refused (401) and the arm trained on nothing (2026-10-23).
+  const models: ArmModels = claude && claudeToken !== undefined
+    ? { llm: account === undefined || token === undefined ? null : workersAi(account, token, DECISION_MODEL), oauthStore: claudeLogin(claudeToken), ...(effort !== undefined && { effort }) }
+    : { llm: workersAi(account ?? '', token ?? '', model), ...(effort !== undefined && { effort }) };
 
   try {
     if (phase === 'prepare') {
       mkdirSync(join(base, 'base'), { recursive: true });
-      await prepare({ arm, spec, snapshot, llm: workersAi(account, token, model), space: join(base, 'base') }, ownerTurnsFrom(readFileSync(join(data, 'train.jsonl'), 'utf8')), Number(values['train-last']));
+      await prepare({ arm, spec, snapshot, ...models, space: join(base, 'base') }, ownerTurnsFrom(readFileSync(join(data, 'train.jsonl'), 'utf8')), Number(values['train-last']));
     } else {
       const heldOut = ownerTurnsFrom(readFileSync(join(data, 'held-out.jsonl'), 'utf8'));
-      const frozen = frozenSet(data, heldOut, Number(values['held-out']), Number(values.seed));
+      const frozen = frozenSet(data, heldOut, values['held-out'] === 'all' ? 'all' : Number(values['held-out']), Number(values.seed));
       const [copy, of] = [Number(values.copy), Number(values.of)];
 
       const requests = frozen.turnIds.filter((_, at) => at % of === copy).map((id) => {
@@ -299,7 +363,7 @@ if (import.meta.main) {
         return turn;
       });
 
-      const answering: Arm = { arm, spec, snapshot, llm: workersAi(account, token, model), space: join(base, `copy-${String(copy)}`) };
+      const answering: Arm = { arm, spec, snapshot, ...models, space: join(base, `copy-${String(copy)}`) };
       const answers = join(base, `answers-${String(copy)}.jsonl`);
       const done = answeredTurnIds(answers);
 

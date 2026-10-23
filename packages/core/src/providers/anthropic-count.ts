@@ -9,6 +9,7 @@ import type {
 import { asSchema, convertToBase64 } from '@ai-sdk/provider-utils';
 import { Effect, Result } from 'effect';
 import * as v from 'valibot';
+import { readDataUrl } from '../utils/data-url';
 import { settle } from '../obs/effect';
 import type { CountableRequest, InputTokenCount } from './input-tokens';
 import type { ProviderDeps } from './types';
@@ -77,13 +78,9 @@ function countSource(tagged: FilePart['data'] | ImagePart['image'], spelled: str
     return { type: 'base64', media_type: mediaType, data: convertToBase64(bytes) };
   }
 
-  const dataUrl = /^data:([^;,]+);base64,/.exec(data);
+  const url = readDataUrl(data);
 
-  if (dataUrl?.[1]) {
-    return { type: 'base64', media_type: dataUrl[1], data: data.slice(dataUrl[0].length) };
-  }
-
-  if (data.startsWith('data:')) return null;
+  if (url !== null) return url.base64 ? { type: 'base64', media_type: url.mediaType, data: url.data } : null;
 
   if (URL.canParse(data) && !mediaType) return { type: 'url', url: data };
 

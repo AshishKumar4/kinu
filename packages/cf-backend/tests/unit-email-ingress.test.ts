@@ -73,6 +73,15 @@ describe('an instruction is the words its sender wrote this time', () => {
     expect(parsed.html).toContain('<b>tests</b>');
   });
 
+  // CODE-8: `&amp;` was decoded before `&lt;`, so text written as `&lt;br&gt;` read as a tag, and a numeric reference
+  // or a link's target never reached the agent.
+  test('HTML-only mail reads each reference once, and keeps where its links go', async () => {
+    const html = '<p>Use &amp;lt;br&amp;gt; and see <a href="https://status.northwind.io/">the status page</a> &#8212; Dana</p>';
+    const parsed = await parseMail(message(html, ['Content-Type: text/html']));
+
+    expect(parsed.text).toBe('Use &lt;br&gt; and see [the status page](https://status.northwind.io/) \u2014 Dana');
+  });
+
   test('threading headers, every address, and attachments with their bytes', async () => {
     const parsed = await parseMail(new TextEncoder().encode([
       'From: Dana Whitfield <dana@northwind.io>', 'To: scout.api-worker.ashish@kinu.run', 'Cc: "Ops, Northwind" <ops@northwind.io>',

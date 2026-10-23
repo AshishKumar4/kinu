@@ -13,7 +13,7 @@ import * as v from 'valibot';
 import { scriptedTurnModel, type ModelStreamPart, type ScriptedTurnOptions, type ScriptedTurnResult } from '@kinu.run/test-utils/turn-model';
 import { convertArrayToReadableStream, MockLanguageModelV4 } from 'ai/test';
 import type { PreparedRequest, ScriptedAnswer, ScriptedCall, SettledTurn, TurnHarness } from './turn-harness';
-import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, Clock, ModelInfo, ModelRouteResolution, ActorToolsets, SeatedActor, SurfaceReach } from '@kinu.run/core';
+import type { ComputerSize, UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, Clock, ModelInfo, ModelRouteResolution, ActorToolsets, SeatedActor, SurfaceReach } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { ObjectNamespace, WorkspaceOverview } from '@kinu.run/core';
 import type { GalleryListingSync } from '@kinu.run/core/slates';
@@ -1828,6 +1828,15 @@ export function makeEnv(
             if (refusal !== undefined) throw refusal;
             userPlane?.overviews?.push(overview);
           },
+          // The owner's limits as a deployment with no free tier answers them: nothing refused, nothing to note.
+          limits_admitTurn: async (): Promise<void> => undefined,
+          limits_admitStoredBytes: async (): Promise<void> => undefined,
+          limits_storageSampled: async (): Promise<void> => undefined,
+          limits_platformTokensSpent: async (): Promise<void> => undefined,
+          limits_nearNote: async (): Promise<null> => null,
+          limits_admitComputerStart: async (_caller: UserCaller, _workspace: string, size: ComputerSize): Promise<ComputerSize> => size,
+          limits_computerTick: async (): Promise<void> => undefined,
+          limits_computerStopped: async (): Promise<void> => undefined,
           ...(userPlane?.agentCancels !== undefined && {
             cancelDeviceRequestsForAgent: async (_caller: UserCaller, actorId: string): Promise<[]> => {
               userPlane.agentCancels?.push(actorId);

@@ -58,6 +58,8 @@ export { OAuthTokenError } from './oauth-token-error';
 
 export * from './cloudflare-oauth';
 
+export * from './google-connection';
+
 export {
   DEFAULT_WEB_SEARCH_CHAIN, WEB_SEARCH_PROVIDER_IDS, WEB_SEARCH_PROVIDERS, WebSearchRouteSchema,
   type WebSearchBilling, type WebSearchProviderId, type WebSearchRoute,
@@ -68,7 +70,7 @@ export * from './anthropic';
 export { CLAUDE_CRED_KEY, createClaudeProvider } from './claude';
 
 export {
-  CLAUDE_OAUTH_CALLBACK_PORT, CLAUDE_REFRESH_LEAD_MS, claudeCodeFrom, createClaudeOAuthClient, startClaudeSignIn,
+  CLAUDE_OAUTH_CALLBACK_PORT, CLAUDE_REFRESH_LEAD_MS, claudeCodeFrom, claudeSignInRefusal, createClaudeOAuthClient, startClaudeSignIn,
   type ClaudeOAuthClient, type ClaudeSignIn,
 } from './claude-oauth';
 

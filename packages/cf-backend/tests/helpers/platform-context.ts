@@ -55,7 +55,15 @@ export function makeCtx(db: Database, id = 'harness-actor', objectName = id): Ag
 
   const context = {
     storage: {
-      sql: { exec: sqlExec },
+      sql: {
+        exec: sqlExec,
+        // The platform's own size of the object's database, which the owner's limits sample (core limits/).
+        get databaseSize(): number {
+          const pages = present(db.query<{ page_count: number }, []>('PRAGMA page_count').get(), 'the page_count row').page_count;
+
+          return pages * present(db.query<{ page_size: number }, []>('PRAGMA page_size').get(), 'the page_size row').page_size;
+        },
+      },
       // The synchronous face of the same pairs, as a SQLite-backed object's: the namespace name a destroy keeps.
       kv: {
         get: (key: string): JsonValue | undefined => kv.get(key),

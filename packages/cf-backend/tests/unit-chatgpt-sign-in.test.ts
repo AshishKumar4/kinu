@@ -7,6 +7,7 @@ import { accountCredentialKey, asFetchFunction, CHATGPT_CRED_KEY, CHATGPT_PASTE_
 import { serveFamily } from './helpers/api';
 import { createTestUserDO, provisionTestWorkspace, testOwner, TEST_CREDENTIAL_ENCRYPTION_KEY, type TestUserDO } from './helpers/user-do';
 import { bootstrappedProfile, userAccount, workspaceObject } from './helpers/bindings';
+import { acrossRpc } from './helpers/jsrpc-stub';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
 import type { AuthIdentity } from '../src/auth/session';
 
@@ -77,6 +78,8 @@ async function tokens(authorize: URL, overrides: { scope?: string; nonce?: strin
 
 const FinishedSchema = v.object({ outcome: v.string(), email: v.nullable(v.string()) });
 
+const RefusalSchema = v.looseObject({ error: v.string() });
+
 function routes(harness: TestUserDO) {
   const pending: Promise<unknown>[] = [];
 
@@ -85,7 +88,8 @@ function routes(harness: TestUserDO) {
     async userMcp_warmConnections() { return { servers: 0 }; },
     async listActiveWorkspaces() { return []; },
     startChatGptPasteSignIn: (caller: UserCaller, account?: string) => harness.userDO.startChatGptPasteSignIn(caller, account),
-    finishChatGptPasteSignIn: (caller: UserCaller, url: string) => harness.userDO.finishChatGptPasteSignIn(caller, url),
+    // As production calls it: across RPC, where the object's refusal arrives as no KinuError.
+    finishChatGptPasteSignIn: (caller: UserCaller, url: string) => acrossRpc((pasted: string) => harness.userDO.finishChatGptPasteSignIn(caller, pasted))(url),
   });
 
   const env: UserRoutesEnv<string> = {
@@ -190,6 +194,22 @@ describe('ChatGPT sign-in by paste-back', () => {
     expect(forms).toEqual([]);
     expect(await storedKeys(harness)).not.toContain(CHATGPT_CRED_KEY);
     expect(v.parse(FinishedSchema, await (await web.finish(web.returned(authorize))).json()).outcome).toBe('signed_in');
+    harness.close();
+  });
+
+  // Production, 2026-10-23: the sign-in page's own address pasted back answered "The request is not valid."
+  test('a paste that is not the address the sign-in ended on is refused in words that say what was pasted', async () => {
+    const harness = createTestUserDO();
+    const web = routes(harness);
+    const authorize = await web.start();
+    const forms = openaiAuth(() => tokens(authorize));
+    const refusal = async (url: string) => v.parse(RefusalSchema, await (await web.finish(url)).json()).error;
+
+    expect(await refusal(authorize.href)).toStartWith("That's the sign-in page's own address.");
+    expect(await refusal('the code I was given')).toStartWith("That isn't an address.");
+    expect(await refusal(web.returned(authorize, { state: 'another-sign-in' }))).toStartWith('That address is from an earlier sign-in.');
+    expect(await refusal(web.returned(authorize, { code: '' }))).toStartWith('That address has no sign-in code');
+    expect(forms).toEqual([]);
     harness.close();
   });
 

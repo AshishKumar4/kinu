@@ -3,11 +3,11 @@
  * Rows are parsed by the store's own schemas; the envelopes below are this page's narrow projections.
  */
 import { Effect } from 'effect';
-import { JsonValueSchema, pageSchema, type JsonValue, type Page } from '@kinu.run/core';
+import { AccountLimitsSchema, JsonValueSchema, pageSchema, type JsonValue, type Page } from '@kinu.run/core';
 import {
   ControlAuditRowSchema, ControlMetricsSchema, ControlOverviewSchema, ControlUserRowSchema, ControlWorkspaceRowSchema,
   ControlFeedbackRowSchema, MonitorIncidentSchema, type ControlAuditRow, type ControlFeedbackRow, type ControlMetrics,
-  type ControlOverview, type ControlUserRow, type ControlWorkspaceRow, type MonitorIncident,
+  type ControlOverview, type ControlWorkspaceRow, type MonitorIncident,
 } from '@kinu.run/core/control-plane';
 import { settle, tolerateAsync } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -75,10 +75,16 @@ const ReconcileSchema = v.variant('status', [
 
 export type ReconcileReport = v.InferOutput<typeof ReconcileSchema>;
 
+/** An account's row with its limits read in its own object; null where that object could not be read. */
+const AccountRowSchema = v.object({ ...ControlUserRowSchema.entries, limits: v.nullable(AccountLimitsSchema) });
+
+export type AccountRow = v.InferOutput<typeof AccountRowSchema>;
+
 const UserDetailSchema = v.object({
   user: v.nullable(ControlUserRowSchema),
   workspaces: pageSchema(ControlWorkspaceRowSchema),
   reconcile: ReconcileSchema,
+  limits: AccountLimitsSchema,
   viewer: v.string(),
 });
 
@@ -87,6 +93,8 @@ type UserDetail = v.InferOutput<typeof UserDetailSchema>;
 const ActionAnswerSchema = v.object({
   outcome: v.picklist(['ok', 'denied', 'failed']),
   detail: v.string(),
+  /** What an action made, where it made something to hand on: an invite link's path. */
+  result: v.optional(JsonValueSchema),
 });
 
 type ActionAnswer = v.InferOutput<typeof ActionAnswerSchema>;
@@ -152,8 +160,8 @@ export function fetchOverview(): Promise<ControlAnswer<ControlOverview>> {
 
 export function fetchUsers(
   cursor: string | null = null, limit?: number,
-): Promise<ControlAnswer<Page<ControlUserRow>>> {
-  return settle(control(pageSchema(ControlUserRowSchema), `/users${pageQuery(cursor, limit)}`));
+): Promise<ControlAnswer<Page<AccountRow>>> {
+  return settle(control(pageSchema(AccountRowSchema), `/users${pageQuery(cursor, limit)}`));
 }
 
 /** Cursored: rows past the page ceiling must stay reachable. */

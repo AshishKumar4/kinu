@@ -94,7 +94,7 @@ export interface GrantedSecrets {
 
 /** `substitutions` carries plaintext: substitution is positional inside a request this object does not own. */
 export type EgressInjectionResult =
-  | { readonly kind: 'forward'; readonly substitutions: readonly EgressInjection[] }
+  | { readonly kind: 'forward'; readonly substitutions: readonly EgressInjection[]; readonly withholdAuthorization?: true }
   | { readonly kind: 'refuse'; readonly status: number; readonly reason: string };
 
 export interface EgressInjection {
@@ -131,8 +131,38 @@ export function initEgressVaultTables(sql: SqlExec): void {
   `);
 }
 
+/**
+ * The computer's own git, pointed at the GitHub connection for github.com by a helper given in the environment
+ * (`GIT_CONFIG_*`, git 2.31+), so no file holds it. Git asks it only for a repository that needs a sign-in, and sends
+ * its answer as Basic's password; with no connection it says so, rather than git's "could not read Username".
+ */
+const GIT_CREDENTIAL_ENVIRONMENT = {
+  GIT_CONFIG_COUNT: '1',
+  GIT_CONFIG_KEY_0: 'credential.https://github.com.helper',
+  GIT_CONFIG_VALUE_0: '!f() { test "$1" = get || return 0; if [ -z "$KINU_GITHUB_TOKEN" ]; then '
+    + 'echo "Kinu: this command holds no GitHub credential. Connect GitHub, or finish its sign-in, in Settings > Connections; then run git again." >&2; '
+    + 'return 1; fi; echo username=x-access-token; echo "password=$KINU_GITHUB_TOKEN"; }; f',
+} as const;
+
+/**
+ * The variables beyond the secrets' own that an owner's command gets: the computer's git helper, always, and
+ * `GIT_TOKEN` for Nimbus's git, which sends it unasked, only while the GitHub connection holds a token and the owner
+ * granted no `GIT_TOKEN` of their own.
+ */
+export function connectionEnvironment(granted: GrantedSecrets['granted']): typeof GIT_CREDENTIAL_ENVIRONMENT & { GIT_TOKEN?: string } {
+  const connection = granted.find((secret) => secret.name === 'KINU_GITHUB_TOKEN');
+
+  if (connection === undefined || granted.some((secret) => secret.name === 'GIT_TOKEN')) return GIT_CREDENTIAL_ENVIRONMENT;
+
+  return { ...GIT_CREDENTIAL_ENVIRONMENT, GIT_TOKEN: connection.placeholder };
+}
+
+/** Names a connection's credential takes in every workspace (`KINU_GITHUB_TOKEN`, the GitHub connection's): no owner
+ *  secret may take one. */
+const RESERVED_SECRET_NAMES: ReadonlySet<string> = new Set(['KINU_GITHUB_TOKEN']);
+
 /** Independent of the secret by construction. */
-function mintEgressPlaceholder(): string {
+export function mintEgressPlaceholder(): string {
   return `${EGRESS_PLACEHOLDER_PREFIX}${nanoid(PLACEHOLDER_BODY_LENGTH)}`;
 }
 
@@ -218,6 +248,11 @@ export function putSecrets(deps: EgressVaultDeps, entries: readonly SecretInput[
       if (!isSecretName(entry.name)) {
         return yield* new KinuError('bad_input', `"${entry.name}" cannot name a secret: use letters, digits and _, not starting `
           + 'with a digit, as an environment variable is named.');
+      }
+
+      if (RESERVED_SECRET_NAMES.has(entry.name) || entry.name.startsWith('GIT_CONFIG_')) {
+        return yield* new KinuError('bad_input', `"${entry.name}" is Kinu's own: it carries a connection's credential, or points git at one. `
+          + 'Name this secret otherwise.');
       }
 
       if (names.has(entry.name)) return yield* new KinuError('bad_input', `${entry.name} is listed twice.`);
@@ -323,11 +358,25 @@ function bindings(sql: SqlExec, workspace: string): (EgressSecretBinding & { rea
   });
 }
 
-export function grantedSecrets(sql: SqlExec, workspace: string): GrantedSecrets {
+/**
+ * A secret an account's connection holds rather than the vault (the GitHub connection's token, as `GIT_TOKEN`): bound
+ * as a granted one is, to every workspace of the account, and opened from the connection at each request. A secret the
+ * owner granted under the same name stands in its place.
+ */
+export interface ConnectionSecret {
+  readonly binding: EgressSecretBinding;
+  /** Its value as the connection holds it now; null once the connection is gone. */
+  readonly open: () => Promise<string | null>;
+  /** Why a request carrying it was refused once the connection is gone, in words the program can act on. */
+  readonly gone: string;
+}
+
+export function grantedSecrets(sql: SqlExec, workspace: string, connections: readonly EgressSecretBinding[] = []): GrantedSecrets {
   const granted = bindings(sql, workspace);
   const all = v.parse(v.object({ count: v.number() }), sql.exec(`SELECT count(*) AS count FROM user_secrets`).toArray()[0]).count;
+  const named = new Set(granted.map((binding) => binding.name));
 
-  return { granted, withheld: all - granted.length };
+  return { granted: [...granted, ...connections.filter((binding) => !named.has(binding.name)).map((binding) => ({ ...binding, reveal: false }))], withheld: all - granted.length };
 }
 
 /** The values `workspace`'s agents may read, by name; asked for each command, never kept. */
@@ -357,15 +406,35 @@ function open(deps: EgressVaultDeps, name: string): Effect.Effect<string> {
  * Decide one intercepted request for `workspace` and open only the secrets it may spend: the owner's grants to that
  * workspace as they stand, the scheme and the destination, on every request.
  */
-export function resolveEgressInjection(deps: EgressVaultDeps, facts: EgressRequestFacts, workspace: string): Promise<EgressInjectionResult> {
+export function resolveEgressInjection(
+  deps: EgressVaultDeps,
+  facts: EgressRequestFacts,
+  workspace: string,
+  connections: readonly ConnectionSecret[] = [],
+): Promise<EgressInjectionResult> {
   return settle(Effect.gen(function* () {
-    const plan = planEgress(facts, bindings(deps.sql, workspace));
+    const granted = bindings(deps.sql, workspace);
+    const named = new Set(granted.map((binding) => binding.name));
+    const held = new Map(connections.filter((secret) => !named.has(secret.binding.name)).map((secret) => [secret.binding.placeholder, secret]));
+    const plan = planEgress(facts, [...granted, ...[...held.values()].map((secret) => secret.binding)]);
 
     if (plan.kind === 'refuse') return plan;
     const substitutions: EgressInjection[] = [];
 
-    for (const { name, placeholder } of plan.substitutions) substitutions.push({ placeholder, secret: yield* open(deps, name) });
+    for (const { name, placeholder } of plan.substitutions) {
+      const connection = held.get(placeholder);
 
-    return { kind: 'forward', substitutions };
+      if (connection === undefined) {
+        substitutions.push({ placeholder, secret: yield* open(deps, name) });
+        continue;
+      }
+
+      const secret = yield* Effect.promise(connection.open);
+
+      if (secret === null) return { kind: 'refuse', status: 403, reason: connection.gone };
+      substitutions.push({ placeholder, secret });
+    }
+
+    return plan.withholdAuthorization === true ? { kind: 'forward', substitutions, withholdAuthorization: true } : { kind: 'forward', substitutions };
   }));
 }

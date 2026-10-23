@@ -145,6 +145,12 @@
       // `idFromName(user_id)`, holding every box the account has (its person, workspaces and agents).
       { "class_name": "MailNameDO", "name": "MAILNAME" },
       { "class_name": "MailboxDO", "name": "MAILBOX" },
+      // A CLI sign-in (src/cli/auth-do.ts): one object per device token's
+      // hash holding the request, one per user code naming that hash, each
+      // deleting itself after retention. The terminal and the approving
+      // browser are often at two Cloudflare locations, and KV's per-location
+      // read cache held a poll at `pending` after an approval (2026-10-23).
+      { "class_name": "CliAuthDO", "name": "CliAuthDO" },
       // The user-level shared Drive (Mossaic, built from vendored source under
       // third_party/mossaic). The binding NAMES are the SDK's contract:
       // `createVFS` reads `env.MOSSAIC_USER`, and the tenant object reads
@@ -189,6 +195,7 @@
     "DeployRunDO": { "type": "durable-object", "storage": "sqlite" },
     "MailNameDO": { "type": "durable-object", "storage": "sqlite" },
     "MailboxDO": { "type": "durable-object", "storage": "sqlite" },
+    "CliAuthDO": { "type": "durable-object", "storage": "sqlite" },
     "MossaicUserDO": { "type": "durable-object", "storage": "sqlite" },
     "MossaicShardDO": { "type": "durable-object", "storage": "sqlite" },
     // Codex model calls go through the account's connected machine; no
@@ -324,6 +331,9 @@
     "MAIL_ACCOUNTS": "operators",
     // The deployment's own addresses (docs/MAIL.md §1): privacy@kinu.run, the legal pages' contact, to the owner's box.
     "MAIL_ALIASES": "{\"privacy\": \"ashish\"}",
+    // A free account's limits (core limits/policy.ts): `{}` the defaults. Unset, as on a self-hosted Kinu, every
+    // account is unlimited.
+    "ACCOUNT_LIMITS": "{}",
     // Account the Analytics Engine SQL API is queried against. The same id as
     // `account_id` above; a plain var because it is in this file already, and
     // the Worker cannot read the deploy-time field. Its companion is the
@@ -452,7 +462,7 @@
     //   wrangler r2 bucket create kinu-mail
     { "binding": "MAIL_BUCKET", "bucket_name": "kinu-mail" }
   ],
-  // Browser sessions, one-time OAuth state, and CLI browser-approval state.
+  // Browser sessions, one-time OAuth state, and CLI sign-in rate limits.
   // All of it expires on its own clock, and all of it is read at the edge on
   // the request path, which is what KV is for. Nothing here is a source of
   // truth: an emptied namespace costs everyone a fresh sign-in and nothing else.
@@ -507,6 +517,7 @@
           { "class_name": "DeployRunDO", "name": "DeployRunDO" },
           { "class_name": "MailNameDO", "name": "MAILNAME" },
           { "class_name": "MailboxDO", "name": "MAILBOX" },
+          { "class_name": "CliAuthDO", "name": "CliAuthDO" },
           { "class_name": "MossaicUserDO", "name": "MOSSAIC_USER" },
           { "class_name": "MossaicShardDO", "name": "MOSSAIC_SHARD" }
         ]
@@ -579,6 +590,8 @@
         "MAIL_ACCOUNTS": "everyone",
         // privacy@staging.kinu.run to the eval account's box: the production alias, provable here.
         "MAIL_ALIASES": "{\"privacy\": \"eval\"}",
+        // Production's free tier, which the eval-service+limits account meets here.
+        "ACCOUNT_LIMITS": "{}",
         "CLOUDFLARE_ACCOUNT_ID": "f44999d1ddda7012e9a87729eba250f1",
         "ANALYTICS_DATASET_SUFFIX": "_staging"
       }

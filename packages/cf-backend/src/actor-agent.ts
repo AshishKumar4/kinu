@@ -18,6 +18,7 @@ import {
   durableStamps, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp, LiveWorkers, type Repair,
   type RunEventInput, type SubagentInspectionAuthority, type ConversationRecall,
   isSubagentOrigin, WORKSPACE_ROOT, PLATFORM_CATALOG, ProgramsInFlight, type OwedIntent, type OwedOwnerIntent, cardWords,
+  specProvider, WORKERS_AI_PROVIDER_ID,
 } from '@kinu.run/core';
 import type { EnqueueTurnResult, MailDeps, OwnerWaitsHost, PanelAgent, ProgrammaticTurn, RecordedTurn, SendState, SubagentInspectionRequest, SubagentInspectionResult } from '@kinu.run/core';
 import type { SubagentActivityEvent } from '@kinu.run/core';
@@ -229,7 +230,7 @@ type ActorJobSeams = Pick<BackgroundJobRunnerDeps,
  * given (do.alarm.wall_ms), so the platform never ends the handler mid-wait. A handler ended at its wall resets the
  * object and closes every socket (warm-forge-4d6acc02, 2026-09-25).
  */
-const ALARM_PROGRAM_WAIT_MS = Math.floor(PLATFORM_CATALOG['do.alarm.wall_ms'].limit.value * 9 / 10);
+export const ALARM_PROGRAM_WAIT_MS = Math.floor(PLATFORM_CATALOG['do.alarm.wall_ms'].limit.value * 9 / 10);
 
 
 
@@ -401,10 +402,16 @@ export interface OwnToolsHeld {
   readonly stores?: ServedStores;
 }
 
+/** The owner's limits an actor asks, by the event an ask that could not reach them is logged as. */
+const LIMITS_UNASKED = { turn: 'limits.turn_unasked', bytes: 'limits.bytes_unasked' } as const;
+
 /** No one has claimed this workspace yet: every path only an owner can take refuses it in these words. */
 export function unownedWorkspace(): KinuError {
   return new KinuError('unavailable', 'This workspace has no owner yet: open it from the app or the CLI first.');
 }
+
+/** How often a workspace tells its owner's limits its size, as its turns open (`reportSizeOnCadence`). */
+const SIZE_REPORT_MS = 10 * 60_000;
 
 /** Set once a program of this workspace has run on its node (`node-program.ts`): its turns then start node as they open. */
 const NODE_PROGRAMS_RAN_KEY = 'kinu:node-programs-ran';
@@ -1802,6 +1809,65 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /**
+   * `ask` of the owner's limits (core limits/): their own refusal (a limit, a suspension) fails the caller in their
+   * words; an account object that could not be asked is logged under the ask's name and refuses nothing.
+   */
+  private admittedByLimits(asking: keyof typeof LIMITS_UNASKED, ask: (stub: UserHubClient, caller: UserCaller) => Promise<void>): Effect.Effect<void, KinuError> {
+    if (this.getOwnerUserId() === null) return Effect.void;
+
+    const asked = attemptInItsWords('unavailable', async () => {
+      const { stub, caller } = await this.userHub();
+
+      await ask(stub, caller);
+    });
+
+    return Effect.catch(asked, (failure) => (failure.code === 'budget' || failure.code === 'denied'
+      ? Effect.fail(failure)
+      : Effect.sync(() => { diagnostics.failure(LIMITS_UNASKED[asking], failure, { workspace: this.workspaceName() }); })));
+  }
+
+  /**
+   * A turn on `spec`, admitted by the owner's limits: none starts in a suspended account, and one the platform pays for
+   * (Workers AI through the deployment's binding, `createWorkersAIProvider`) is bounded by the free tier's day of tokens.
+   */
+  admitModelTurn(spec: string): Promise<void> {
+    return settle(this.admittedByLimits('turn', (stub, caller) => stub.limits_admitTurn(caller, specProvider(spec) === WORKERS_AI_PROVIDER_ID)));
+  }
+
+  /** This workspace's stored bytes, as its own database reads them: the platform's number, sampled, never counted. */
+  private storedSample() {
+    return { source: `workspace:${this.workspaceName()}`, bytes: this.ctx.storage.sql.databaseSize };
+  }
+
+  /** New bytes for this workspace (a person's upload, an agent's file): the owner's limits answer, given its size now. */
+  protected admitNewBytes(): Effect.Effect<void, KinuError> {
+    return this.admittedByLimits('bytes', (stub, caller) => stub.limits_admitStoredBytes(caller, this.storedSample()));
+  }
+
+  /** Tells the owner's limits this workspace's size now; a failure is logged, never the caller's. */
+  protected async reportStoredBytes(): Promise<void> {
+    if (this.getOwnerUserId() === null) return;
+    await settleLogged('limits.size_unreported', { doing: "telling the owner's limits this workspace's size", otherwise: 'unavailable' }, async () => {
+      const { stub, caller } = await this.userHub();
+      const { source, bytes } = this.storedSample();
+
+      await stub.limits_storageSampled(caller, source, bytes);
+    });
+  }
+
+  /** What a call on the platform's own models spent counts to the owner's day (core limits/), told, never waited on. */
+  private debitPlatformTokens(report: ModelCallReport, provider: string): void {
+    const tokens = (report.usage.input ?? 0) + (report.usage.output ?? 0);
+
+    if (provider !== WORKERS_AI_PROVIDER_ID || tokens <= 0 || this.getOwnerUserId() === null) return;
+    this.detachOwned(Effect.promise(() => settleLogged('limits.tokens_undebited', { doing: "counting a platform model call to the owner's day", otherwise: 'unavailable' }, async () => {
+      const { stub, caller } = await this.userHub();
+
+      await stub.limits_platformTokensSpent(caller, tokens);
+    })));
+  }
+
+  /**
    * Record one non-turn model call (judges, fast tier, evolution, compaction, AI bindings) as a
    * `model_call` row; filed under the current run or the workspace id. Row shape and pricing guard
    * live in core's `pricedModelCallEvent`.
@@ -1819,6 +1885,7 @@ export abstract class ActorAgent extends Agent<Env> {
       ? this.analyticsModel()
       : this.analyticsModelOf(report.spec);
 
+    this.debitPlatformTokens(report, dimensions.provider);
     recordModelRow(this.env, {
       workspace: this.workspaceName(),
       agentKind: this.actorKind(),
@@ -2728,7 +2795,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * turn's Plan. Its reach is the in-flight turn's profile while one runs (not the cached one, which outlives its turn),
    * else that same resolution over native, codemode and the given MCP tools.
    */
-  private async slateAuthority(
+  protected async slateAuthority(
     requested: WorkMode, providers: readonly CodemodeProvider[], mcpToolKeys: readonly string[] = [],
   ): Promise<SlateAuthority> {
     const { profile, inputs } = await this.actorProfile({
@@ -3516,6 +3583,19 @@ export abstract class ActorAgent extends Agent<Env> {
     this.engine.recoverInterruptedWork();
     this.budget.activate([...turnTags({ metadata: driving }).missionLabels]);
     this.warmWorkspaceNodeInBackground();
+    this.reportSizeOnCadence();
+  }
+
+  /** When this activation last told the owner's limits its size: at most every {@link SIZE_REPORT_MS}, as turns open. */
+  private sizeReportedAt = 0;
+
+  /** The slow cadence of this workspace's size reports: as its turns open, at most once every ten minutes. */
+  private reportSizeOnCadence(): void {
+    const now = Date.now();
+
+    if (now - this.sizeReportedAt < SIZE_REPORT_MS) return;
+    this.sizeReportedAt = now;
+    this.detachOwned(Effect.promise(() => this.reportStoredBytes()));
   }
 
   /** A turn of the workspace agent's read here: its executors and folder are its own, its clock starts, and a fresh one's

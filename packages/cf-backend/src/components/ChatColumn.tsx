@@ -8,6 +8,7 @@ import { isPlaceholderMission, liveTailRow, threadLiveTail, turnFailure, turnFai
 import { detach } from "@kinu.run/core/obs";
 import { useParams } from "react-router-dom";
 import { usePastedSecretGuard } from "@/components/secrets/PasteOffer";
+import { limitRefusalOf } from "@/lib/limits-api";
 import { AskedQuestionsContext } from "@/components/QuestionCard";
 import { foldEventTurns } from "@/components/ChatEvents";
 import { ChatLiveTail, MessageView, ModelFallbackRows, SteerBubble } from "@/components/MessageView";
@@ -114,7 +115,8 @@ export function turnEndNotices(at: {
   const retry = { label: "Retry", icon: <ArrowsClockwiseIcon size={12} />, onClick: at.retry, disabled: at.live || at.retryOwed };
   const failure = at.newest === undefined || at.live ? null : turnFailure({ metadata: at.newest.metadata });
 
-  if (failure !== null && at.newest !== undefined && at.dismissed !== at.newest.id) {
+  // The day's limit on Kinu's models is the turn's own notice in the transcript, with its way on: said once.
+  if (failure !== null && at.newest !== undefined && at.dismissed !== at.newest.id && limitRefusalOf({ cause: failure })?.limit !== "model_tokens") {
     const { provider, words, facts, raw } = turnFailureFacts(failure);
     const id = at.newest.id;
     const stopped = provider === null ? "This turn stopped before its answer was done" : `${provider} refused the model call, so this turn stopped`;
@@ -229,7 +231,7 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
   // An admitted turn with the operator's message last has no assistant row to ask, so the
   // live indicator is decided here. See `threadLiveTail`.
   const tail = threadLiveTail({ last: thread.entries.at(-1)?.message, liveness: state.liveness });
-  const liveRow = liveTailRow({ rows: thread.entries.map(({ message }) => message), liveness: state.liveness });
+  const liveRow = liveTailRow({ rows: thread.entries.map(({ message }) => message), liveness: state.liveness, stored: state.stored });
   const newest = thread.entries.at(-1)?.message;
 
   return (

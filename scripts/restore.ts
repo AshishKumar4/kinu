@@ -4,14 +4,19 @@
  * Durable Object's own SQLite history (packages/core/src/state/ops-restore.ts, ARCHITECTURE-DECISIONS W7).
  *
  *   bun scripts/restore.ts <staging|production> workspace <name> (--at=<ISO time> | --bookmark=<bookmark>)
- *   bun scripts/restore.ts <staging|production> account <email|user id> (--at=<ISO time> | --bookmark=<bookmark>)
+ *   bun scripts/restore.ts <staging|production> account <email|user id> --at=<ISO time>
+ *   bun scripts/restore.ts <staging|production> --undo=<file>
  *
  * Its authority is the deploy's: a one-time pass written into the deployment's AUTH_KV with wrangler under the
  * account's API token, as `scripts/reset.ts tables` writes one, and deleted when the restore answers. A workspace goes
- * back with every agent of it; an account goes back alone, its roster with it. It prints the bookmark that takes the
- * restore back, the only undo: `--bookmark=<undo>` restores to the moment just before it.
+ * back with every agent of it. An account goes back with its mailbox and its Drive, its workspaces not: each is its
+ * own restore. Each restored object's rows that name R2 bytes no longer held are counted and named, as a teardown or
+ * an account's deletion deleted them at once. The undo file it writes restores each object to the moment just before.
  */
 import { randomBytes } from 'node:crypto';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import * as v from 'valibot';
 import { OPS_PASS_PREFIX, sha256Hex } from '@kinu.run/core';
 import { why, wrangler } from './infra-cloudflare';
@@ -20,9 +25,15 @@ import { deployedConfig, INFRA_ENVIRONMENTS } from './infra-manifest';
 /** A pass outlives this process by at most this, if it dies before it deletes it. */
 const PASS_TTL_SECONDS = 600;
 
-const AnswerSchema = v.looseObject({
+const ObjectSchema = v.looseObject({
   class: v.string(), name: v.string(), id: v.string(), bookmark: v.string(), undo: v.string(), previous: v.string(), current: v.string(), landed: v.boolean(),
+  missing: v.optional(v.object({ named: v.number(), missing: v.number(), keys: v.array(v.string()) })),
+  unread: v.optional(v.string()),
 });
+
+const AnswerSchema = v.object({ objects: v.array(ObjectSchema), landed: v.boolean(), stopped: v.optional(v.string()) });
+
+const UndoSchema = v.array(v.object({ class: v.string(), name: v.string(), bookmark: v.string() }));
 
 const ArgsSchema = v.object({
   environment: v.picklist(INFRA_ENVIRONMENTS),
@@ -33,13 +44,26 @@ const ArgsSchema = v.object({
 /** The request's object and target, from the command line; null with why when it says neither right. */
 export function restoreRequest(argv: readonly string[]): { readonly environment: string; readonly body: object } | { readonly refused: string } {
   const [environment, kind, name] = argv.filter((arg) => !arg.startsWith('--'));
-  const args = v.safeParse(ArgsSchema, { environment, kind, name });
   const flag = (key: string) => argv.find((arg) => arg.startsWith(`--${key}=`))?.slice(key.length + 3);
+  const undo = flag('undo');
+
+  if (undo !== undefined) {
+    const objects = v.safeParse(UndoSchema, JSON.parse(readFileSync(undo, 'utf8')));
+    const env = v.safeParse(v.picklist(INFRA_ENVIRONMENTS), environment);
+
+    if (!objects.success || !env.success) return { refused: `--undo=${undo} is not an undo file this script wrote, or the environment is not named` };
+
+    return { environment: env.output, body: { undo: objects.output } };
+  }
+
+  const args = v.safeParse(ArgsSchema, { environment, kind, name });
   const [at, bookmark] = [flag('at'), flag('bookmark')];
 
   if (!args.success) return { refused: 'name the environment, then `workspace <name>` or `account <email|user id>`' };
 
   if ((at === undefined) === (bookmark === undefined)) return { refused: 'name one of --at=<ISO time> and --bookmark=<bookmark>' };
+
+  if (args.output.kind === 'account' && bookmark !== undefined) return { refused: 'an account goes back by --at: a bookmark is one object\'s, and an account is several' };
   const moment = at === undefined ? undefined : Date.parse(at);
 
   if (moment !== undefined && Number.isNaN(moment)) return { refused: `--at=${at ?? ''} is not a time` };
@@ -66,7 +90,7 @@ async function main(argv: readonly string[]): Promise<number> {
   const asked = restoreRequest(argv);
 
   if ('refused' in asked) {
-    console.error(`restore: ${asked.refused}\nusage: bun scripts/restore.ts <staging|production> (workspace <name> | account <email|user id>) (--at=<ISO time> | --bookmark=<bookmark>)`);
+    console.error(`restore: ${asked.refused}\nusage: bun scripts/restore.ts <staging|production> (workspace <name> (--at=<ISO time> | --bookmark=<b>) | account <email|user id> --at=<ISO time> | --undo=<file>)`);
 
     return 2;
   }
@@ -88,13 +112,27 @@ async function main(argv: readonly string[]): Promise<number> {
     const read = v.safeParse(AnswerSchema, JSON.parse(text));
 
     if (!read.success) throw new Error(`/ops/restore answered ${String(answer.status)}: ${text.slice(0, 600)}`);
-    const { output } = read;
+    const { objects, landed, stopped } = read.output;
 
-    console.log(`${output.class} ${output.name} (${output.id}): ${output.landed ? 'restored' : 'ARMED BUT NOT LANDED: it lands at the object\'s next start'}`);
-    console.log(`  to        ${output.bookmark}\n  was       ${output.previous}\n  now       ${output.current}`);
-    console.log(`  undo with bun scripts/restore.ts ${asked.environment} ${argv[1] ?? ''} ${argv[2] ?? ''} --bookmark=${output.undo}`);
+    for (const one of objects) {
+      console.log(`${one.class} ${one.name}: ${one.landed ? 'restored' : 'ARMED BUT NOT LANDED: it lands at the object\'s next start'}  (to ${one.bookmark}, was ${one.previous})`);
 
-    return output.landed ? 0 : 1;
+      if (one.unread !== undefined) console.log(`  what its rows name could not be read, so what it lost is unknown: ${one.unread}`);
+
+      if (one.missing !== undefined && one.missing.missing > 0) {
+        console.log(`  ${String(one.missing.missing)} of the ${String(one.missing.named)} R2 objects its rows name are gone, deleted at once and not brought back:`);
+
+        for (const gone of one.missing.keys) console.log(`    ${gone}`);
+      }
+    }
+
+    if (stopped !== undefined) console.log(`STOPPED before the rest of it: ${stopped}`);
+    const undoFile = join(mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), 'kinu-restore-')), 'undo.json');
+
+    writeFileSync(undoFile, `${JSON.stringify(objects.map((one) => ({ class: one.class, name: one.name, bookmark: one.undo })), null, 2)}\n`);
+    console.log(`undo with: bun scripts/restore.ts ${asked.environment} --undo=${undoFile}`);
+
+    return landed ? 0 : 1;
   } finally {
     kv(asked.environment, ['delete', key]);
   }

@@ -210,7 +210,7 @@ and database under `~/.kinu/<workspace>/`.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/local-dark.svg">
-  <img alt="The CLI and TUI call a local session in the same process, without a local server. The global VFS root is the workspace's own directory, holding agent homes, slates and agent.db, with a read-only /skills view. The opened folder mounts at /local; local:// aliases vfs://local. Shell commands use real host processes and tools." src="docs/diagrams/local.svg" width="900">
+  <img alt="The CLI and TUI call a local session in the same process, without a local server; a kinu daemon may drive the same agent.db, by a lease row in it. The global VFS root is the workspace's own directory, holding agent homes, slates and agent.db, with a read-only /skills view. The opened folder mounts at /local; local:// aliases vfs://local. Shell commands use real host processes and tools." src="docs/diagrams/local.svg" width="900">
 </picture>
 
 My device daemon opens one outbound tunnel to my account; cloud chat in the TUI
@@ -234,7 +234,7 @@ adapters over it.
 | `agent-core/` | The vendored agent-core runtime that slates run on, digest-pinned to its upstream | Private |
 | `cf-backend/` | Cloudflare Workers: the workspace Durable Object and its logical actors, KinuDevbox, UserDO, the React UI | This is the deployment |
 | `cli/` | The `kinu` commands | Yes, this is the CLI |
-| `cli-backend/` | Local runtime over `bun:sqlite`, subprocess sandbox, child-process branches | Behind the CLI |
+| `cli-backend/` | Local runtime over `bun:sqlite`, subprocess executor, in-process branches | Behind the CLI |
 | `pc-agent/` | The device agent that lends your machine to a workspace | Yes |
 | `test-utils/` | Shared fakes and fixtures | In this repo's suites |
 

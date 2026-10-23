@@ -6,6 +6,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { Effect } from "effect";
 import { ClockCounterClockwiseIcon } from "@phosphor-icons/react";
+import { Link } from "react-router-dom";
 import { activityOf, clockTime, type ActivityCause, type ActivityEntry, type ChatHistoryEntry, type PositionCursor, type Watch } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
@@ -158,7 +159,8 @@ export function ActivityView({ workspace, title, rpc, now }: { workspace: string
   const next = pages.older.next;
 
   return (
-    <Page fill back={{ to: `/workspace/${encodeURIComponent(workspace)}`, label: `Back to ${title}` }} icon={<ClockCounterClockwiseIcon size={18} />} title="Activity" data-activity>
+    <Page fill back={{ to: `/workspace/${encodeURIComponent(workspace)}`, label: `Back to ${title}` }} icon={<ClockCounterClockwiseIcon size={18} />} title="Activity" data-activity
+      actions={<Link to={`/workspace/${encodeURIComponent(workspace)}/overview`} className="t-meta p-text-3 hover:underline" data-activity-overview>Overview</Link>}>
       {now !== null && (
         <section aria-labelledby="activity-now" className="flex flex-col gap-3">
           <h2 id="activity-now" className="t-label">Now</h2>
