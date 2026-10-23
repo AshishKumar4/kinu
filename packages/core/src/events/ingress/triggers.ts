@@ -222,7 +222,7 @@ export async function fireDueTriggers(deps: TimerFireDeps, now: number) {
 
     if (deps.watch !== undefined && watchCheckOf(trigger) !== null) {
       await deps.registry.markFired(trigger.id, now, spec.cron === undefined ? null : nextCronFire(spec.cron, now, spec.time_zone));
-      checks.push(checkWatcher({ registry: deps.registry, log: deps.log, ...deps.watch }, trigger.id, scheduledAt, Date.now));
+      checks.push(checkWatcher({ registry: deps.registry, log: deps.log, ...deps.watch }, trigger.id, { at: scheduledAt }, Date.now));
       continue;
     }
 

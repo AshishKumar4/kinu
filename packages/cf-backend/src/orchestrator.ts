@@ -180,7 +180,7 @@ import {
   initWebhookIngressTables,
   type WebhookDelivery, type WebhookDeliveryResult, type WebhookSecretStore,
   createTimerTrigger, cancelTrigger, listTriggers, fireDueTriggers, retimeDailyTrigger, type TrustLevel,
-  WatchClaims, watchProviders, checkAnswerOf, type CheckOutcome, type WatchCheck,
+  WatchClaims, watchProviders, checkAnswerOf, type WatchOutcome, type WatchCheck,
   type TriggerView,
   type MailAdmission, type MailArrival, type HandedMail, handedMailSignal, spillEventContent, unreadMailForTurn, MailTriageLane, triageMail,
   PeerHub, type PeerMessage, type ReceiveResult,
@@ -2568,8 +2568,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   protected _pendingBranches: PendingBranch[] = [];
 
   private _triggerRegistry: TriggerRegistry | null = null;
-  /** The watcher checks running in this object, one per trigger (watch.ts). */
-  private readonly watchClaims = new WatchClaims();
+  /** Where this object's watchers check, one check per trigger at a time (watch.ts). */
+  private readonly watching = {
+    run: (check: WatchCheck, state: JsonValue | undefined, input: JsonValue | undefined) => this.watchCheck(check, state, input),
+    claims: new WatchClaims(),
+  };
   private _replyChannels: ReplyChannelStore | null = null;
   private readonly warmingLanes = new Map<string, CacheWarmingLane>();
 
@@ -2627,10 +2630,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * wall. Its answer decides whether the agent wakes (watch.ts); a program that throws, answers off its shape or runs
    * past the wall parks the watcher until its code changes.
    */
-  private async watchCheck(check: WatchCheck, state: JsonValue | undefined): Promise<CheckOutcome> {
+  private async watchCheck(check: WatchCheck, state: JsonValue | undefined, input: JsonValue | undefined): Promise<WatchOutcome> {
     const began = Date.now();
     const providers = watchProviders(this.ownNamespaces('plan'), check.reads ?? []);
-    const ran = await this.rt.executor.execute(`const state = ${JSON.stringify(state ?? null)};\n${check.code}`, providers, { deadlineMs: ALARM_PROGRAM_WAIT_MS });
+    const given = `const state = ${JSON.stringify(state ?? null)};\nconst input = ${JSON.stringify(input ?? null)};\n`;
+    const ran = await this.rt.executor.execute(`${given}${check.code}`, providers, { deadlineMs: ALARM_PROGRAM_WAIT_MS });
 
     if (ran.error !== undefined) {
       return { kind: 'parked', reason: Date.now() - began >= ALARM_PROGRAM_WAIT_MS ? 'overran' : 'program', detail: ran.error.slice(0, 2_000) };
@@ -4717,8 +4721,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     await this.tracing.invocation('alarm', 'tick', async (tick) => {
       // A phase's failure is `fail`ed on its span, not rethrown: the tick continues to the next phase.
       await tick.span('alarm.due_triggers', (span) => settle(Effect.catchCause(Effect.gen({ self: this }, function* () {
-        const watch = { run: (check: WatchCheck, state: JsonValue | undefined) => this.watchCheck(check, state), claims: this.watchClaims };
-        const { fired } = yield* Effect.promise(() => fireDueTriggers({ registry: this.triggerRegistry, log: this.eventLog, watch }, now));
+        const { fired } = yield* Effect.promise(() => fireDueTriggers({ registry: this.triggerRegistry, log: this.eventLog, watch: this.watching }, now));
         span.setAttribute('kinu.triggers_fired', fired);
       }), phaseFailed(span, { doing: 'firing the triggers due on this wake', otherwise: 'io' }, (failure) => {
         diagnostics.failure('schedule.due_triggers_failed', failure);
@@ -7387,6 +7390,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       secrets: this.webhookSecrets,
       sql: this.ctx.storage.sql,
       onAdmitted: () => { this.armDurableWake(); },
+      watch: this.watching,
     }, opts);
   }
 

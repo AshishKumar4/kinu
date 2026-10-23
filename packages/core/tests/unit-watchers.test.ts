@@ -7,11 +7,14 @@ import * as v from 'valibot';
 import { TriggerRegistry, initEventsHubTables, type AlarmScheduler } from '../src/events/hub/index';
 import {
   EventLog, WatchClaims, checkAnswerOf, checkWatcher, createTimerTrigger, fireDueTriggers,
-  type CheckOutcome, type JsonValue, type RunCheck,
+  type WatchOutcome, type JsonValue, type RunCheck,
 } from '../src/index';
 import { makeSqlExec } from './helpers';
 
 const NOW = 1_700_000_000_000;
+
+/** The watcher's own part of its trigger, read as any reader of the row reads it. */
+const watchOf = (row: { readonly spec: JsonValue }) => v.parse(v.looseObject({ watch: v.optional(v.unknown()) }), row.spec).watch;
 
 class Alarm implements AlarmScheduler {
   async scheduleAt(): Promise<void> {}
@@ -30,13 +33,13 @@ function watchers(run: RunCheck) {
   return {
     registry, log, claims,
     fire: (now: number) => fireDueTriggers({ registry, log, watch: { run, claims } }, now),
-    check: (id: string, at: number) => checkWatcher({ registry, log, run, claims }, id, at, () => NOW),
+    check: (id: string, at: number, input?: JsonValue) => checkWatcher({ registry, log, run, claims }, id, { at, ...(input !== undefined && { input }) }, () => NOW),
     fired: () => log.pending({ variant: 'timer' }).map((event) => v.parse(v.looseObject({ watch_brief: v.optional(v.string()) }), event.payload)),
-    state: (id: string) => present(registry.get(id), 'the watcher').spec['watch'],
+    state: (id: string) => watchOf(present(registry.get(id), 'the watcher')),
   };
 }
 
-const answered = (answer: JsonValue): CheckOutcome => ({ kind: 'answered', answer: present(checkAnswerOf(answer), 'a well-formed answer') });
+const answered = (answer: JsonValue): WatchOutcome => ({ kind: 'answered', answer: present(checkAnswerOf(answer), 'a well-formed answer') });
 
 /** A check that waits on `gate` before it answers, as a slow provider read does. */
 function gated() {
@@ -76,11 +79,13 @@ describe('a watcher', () => {
     expect(t.state(id)).toEqual({ state: { cursor: 11 } });
   });
 
-  test('two overlapping arrivals with one real change make one fire, and the cursor never moves back', async () => {
+  test('overlapping deliveries with one real change make one fire, the cursor never moving back', async () => {
     const slow = gated();
+    const inputs: (JsonValue | undefined)[] = [];
     let runs = 0;
 
-    const t = watchers(async (_check, state) => {
+    const t = watchers(async (_check, state, input) => {
+      inputs.push(input);
       runs += 1;
 
       if (runs === 1) await slow.gate;
@@ -90,15 +95,16 @@ describe('a watcher', () => {
     });
 
     const { id, at } = await watcher(t.registry);
-    const first = t.check(id, at);
-    const second = t.check(id, at + 1);
-    const third = t.check(id, at + 2);
+    const first = t.check(id, at, { historyId: 1 });
+    const second = t.check(id, at + 1, { historyId: 2 });
+    const third = t.check(id, at + 2, { historyId: 3 });
 
     await second;
     await third;
     slow.open();
     await first;
     expect(runs).toBe(2);
+    expect(inputs).toEqual([{ historyId: 1 }, { historyId: 3 }]);
     expect(t.fired().map((payload) => payload.watch_brief)).toEqual(['One new message.']);
     expect(t.state(id)).toEqual({ state: { cursor: 11 } });
   });
@@ -149,12 +155,12 @@ describe('a watcher', () => {
     const row = present(t.registry.get(id), 'the watcher');
 
     expect(row.state).toBe('paused');
-    expect(row.spec['watch']).toEqual({ state: { cursor: 5 }, parked: { reason: 'connection', at: NOW, detail: 'the Google connection was revoked' } });
+    expect(watchOf(row)).toEqual({ state: { cursor: 5 }, parked: { reason: 'connection', at: NOW, detail: 'the Google connection was revoked' } });
     expect(t.registry.due(Number.MAX_SAFE_INTEGER).map((due) => due.id)).not.toContain(id);
   });
 
   test('a provider\'s retry time moves the next firing; a transient failure leaves everything as it was', async () => {
-    let outcome: CheckOutcome = { kind: 'transient', detail: 'a 503' };
+    let outcome: WatchOutcome = { kind: 'transient', detail: 'a 503' };
     const t = watchers(async () => outcome);
     const { id, at } = await watcher(t.registry);
     const before = present(t.registry.get(id), 'the watcher');

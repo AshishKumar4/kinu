@@ -10,7 +10,8 @@ import type { TriggerRegistry } from '../hub/triggers';
 import { spillEventContent } from '../hub/content-spill';
 import { Effect, Result } from 'effect';
 import { settle, settleSync } from '../../obs/index';
-import { safeJsonParse } from '../../utils/json';
+import { decodeJsonValue, safeJsonParse } from '../../utils/json';
+import { checkWatcher, watchCheckOf, type WatchDeps } from './watch';
 import type { SqlExec } from '../../types/primitives';
 import { hmacSha256Hex, timingSafeEqual } from '../../utils/crypto';
 import {
@@ -64,6 +65,8 @@ export interface WebhookIngressDeps {
   secrets: SecretStore;
   sql: SqlExec;
   onAdmitted(): void;
+  /** Where a watcher's check runs; absent, a watcher's delivery publishes as any webhook's does. */
+  watch?: Pick<WatchDeps, 'run' | 'claims'>;
 }
 
 export interface RegisterWebhookOpts {
@@ -247,6 +250,18 @@ export function acceptWebhookDelivery(
 
     if (held !== null) {
       return { status: 'admitted', event_id: held.event_id ?? undefined, admitted: false };
+    }
+
+    // A watcher's delivery is its check's input, and only what the check found is published. Answered once the check
+    // committed: a deliverer that gave up and sends again is folded into the running check's re-check.
+    const { watch } = deps;
+
+    if (watch !== undefined && watchCheckOf(trigger) !== null) {
+      const input = decodeJsonValue({ value: parsedBody ?? null });
+
+      yield* Effect.promise(() => checkWatcher({ registry: deps.triggers, log: deps.log, ...watch }, trigger.id, { at: opts.now, input }, Date.now));
+
+      return { status: 'admitted', event_id: undefined, admitted: false };
     }
 
     const delivery_id = opts.delivery_id ?? `${opts.now}-${Math.random().toString(36).slice(2, 10)}`;

@@ -37,7 +37,7 @@ const CheckAnswerSchema = v.union([
 export type CheckAnswer = v.InferOutput<typeof CheckAnswerSchema>;
 
 /** How a check ended, as its runner reads it. */
-export type CheckOutcome =
+export type WatchOutcome =
   | { readonly kind: 'answered'; readonly answer: CheckAnswer }
   | { readonly kind: 'parked'; readonly reason: WatchParkReason; readonly detail: string }
   /** The provider named when to ask again (a 429's Retry-After, GitHub's X-Poll-Interval). */
@@ -45,8 +45,8 @@ export type CheckOutcome =
   /** Network or a provider's 5xx: the trigger's next firing is the next try. */
   | { readonly kind: 'transient'; readonly detail: string };
 
-/** Runs `check` over the trigger's stored `state`. */
-export type RunCheck = (check: WatchCheck, state: JsonValue | undefined) => Promise<CheckOutcome>;
+/** Runs `check` over the trigger's stored `state`; `input` is the delivery that woke it, where one did. */
+export type RunCheck = (check: WatchCheck, state: JsonValue | undefined, input: JsonValue | undefined) => Promise<WatchOutcome>;
 
 /** A program's answer, or null where it is off-shape (the watcher parks on `program`). */
 export function checkAnswerOf(result: JsonValue | undefined): CheckAnswer | null {
@@ -110,26 +110,28 @@ function movesBack(stored: JsonValue | undefined, next: JsonValue | undefined): 
  * both. An arrival during a check sets `again`, and the check runs once more after it commits.
  */
 export class WatchClaims {
-  private readonly running = new Map<string, { again: boolean }>();
+  private readonly running = new Map<string, { again: boolean; input: JsonValue | undefined }>();
 
-  /** Runs `check` for `triggerId`, or folds this arrival into the running one's re-check. */
-  async run(triggerId: string, check: () => Promise<void>): Promise<void> {
+  /** Runs `check` for `triggerId` over `input`, or folds this arrival into the running one's re-check, which reads the
+   *  latest arrival's input. */
+  async run(triggerId: string, input: JsonValue | undefined, check: (input: JsonValue | undefined) => Promise<void>): Promise<void> {
     const held = this.running.get(triggerId);
 
     if (held !== undefined) {
       held.again = true;
+      held.input = input;
 
       return;
     }
 
-    const claim = { again: false };
+    const claim = { again: false, input };
 
     this.running.set(triggerId, claim);
 
     try {
       do {
         claim.again = false;
-        await check();
+        await check(claim.input);
       } while (claim.again);
     } finally {
       this.running.delete(triggerId);
@@ -144,20 +146,24 @@ export interface WatchDeps {
   readonly claims: WatchClaims;
 }
 
-export type WatchCommit = 'fired' | 'quiet' | 'parked' | 'deferred' | 'dropped';
+type WatchCommit = 'fired' | 'quiet' | 'parked' | 'deferred' | 'dropped';
 
 /**
- * One check of `triggerId`, its fire keyed by `scheduledAt` (the firing that asked for it), and its commit. A trigger
- * whose check is already running is checked once more after it, under that check's claim.
+ * One check of `triggerId`, its fire keyed by `asked.at` (the firing or delivery that asked for it), and its commit. A
+ * trigger whose check is already running is checked once more after it, under that check's claim.
  */
-export async function checkWatcher(deps: WatchDeps, triggerId: string, scheduledAt: number, now: () => number): Promise<void> {
-  await deps.claims.run(triggerId, async () => {
+export async function checkWatcher(
+  deps: WatchDeps, triggerId: string, asked: { readonly at: number; readonly input?: JsonValue }, now: () => number,
+): Promise<void> {
+  const scheduledAt = asked.at;
+
+  await deps.claims.run(triggerId, asked.input, async (input) => {
     const trigger = deps.registry.get(triggerId);
     const check = trigger === null || trigger.state !== 'active' ? null : watchCheckOf(trigger);
 
     if (trigger === null || check === null) return;
     const read = watchOf(trigger).state;
-    const outcome = await deps.run(check, read);
+    const outcome = await deps.run(check, read, input);
 
     await commitCheck(deps, { triggerId, read, outcome, scheduledAt, now: now() });
   });
@@ -165,11 +171,11 @@ export async function checkWatcher(deps: WatchDeps, triggerId: string, scheduled
 
 /** Its writes made in one synchronous section over the row read again: nothing else of this object runs between the read
  *  and the writes, so a revoke, a pause or another commit lands wholly before or wholly after. */
-export async function commitCheck(deps: Pick<WatchDeps, 'registry' | 'log'>, checked: {
+async function commitCheck(deps: Pick<WatchDeps, 'registry' | 'log'>, checked: {
   readonly triggerId: string;
   /** The state the check read. */
   readonly read: JsonValue | undefined;
-  readonly outcome: CheckOutcome;
+  readonly outcome: WatchOutcome;
   /** The firing that asked for the check, which keys its fire. */
   readonly scheduledAt: number;
   readonly now: number;
