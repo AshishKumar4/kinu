@@ -125,6 +125,9 @@ const USER_DO_METHODS = [
   'issueDeviceConnectTicket',
   'issueDeviceJoin',
   'joinDevice',
+  'opsBookmark',
+  'opsRestart',
+  'opsRestore',
   'opsTables',
   'listAIGateways',
   'listAccessTokens',
@@ -245,15 +248,15 @@ export type UserDoRpcMethod = (typeof USER_DO_METHODS)[number];
 
 export const USER_DO_RPC_SURFACE: readonly string[] = [...PLATFORM_RPC_SURFACE, ...USER_DO_METHODS];
 
-/** Never gated: a deletion must work when start throws, and the deploy's tables walk reads tables alone. */
-const USER_DO_STARTLESS: ReadonlySet<string> = new Set(['deleteAccount', 'opsTables']);
+/** Never gated: a deletion must work when start throws, the deploy's tables walk reads tables alone, and a restore
+ *  must reach storage the start refuses. */
+const USER_DO_STARTLESS: ReadonlySet<string> = new Set(['deleteAccount', 'opsTables', 'opsRestore', 'opsRestart', 'opsBookmark']);
 
 export const USER_DO_STARTED_RPC: readonly string[] = USER_DO_METHODS.filter((name) => !USER_DO_STARTLESS.has(name));
 
 /** Members every actor exposes; entries a facet reaches on its parent stub must be listed or nested
  * trees fail closed at depth 2. `protected` members stay unreachable. */
 const ACTOR_AGENT_RPC_SURFACE = [
-  'deleteWorkspaceFile',
   'slateCallDispatch',
   'closeRevokedCliSockets',
   'closeRevokedSessionSockets',
@@ -263,18 +266,17 @@ const ACTOR_AGENT_RPC_SURFACE = [
   'headJournalRecordReport',
   'headJournalRecordSplit',
   'installWorkspaceCapability',
-  'listWorkspaceFiles',
   'missionDebit',
   'missionGuard',
   'onModelSettingsChanged',
-  'readWorkspaceFile',
-  'statWorkspaceFile',
-  'writeWorkspaceFile',
 ] as const satisfies readonly (keyof ActorAgent)[];
 
 /** Beyond `AGENT_RPC_ACCESS` (reachable by construction); `destroyAgent` is called DO-to-DO by UserDO. */
 const ORCHESTRATOR_METHODS = [
   'abortExecutorFileDownload',
+  'opsBookmark',
+  'opsRestart',
+  'opsRestore',
   'opsTables',
   'abortExecutorFileWrite',
   'acceptContainerEvent',
@@ -398,8 +400,11 @@ export const ORCHESTRATOR_RPC_SURFACE: readonly string[] = [
 ];
 
 /** Never gated: a deletion must work when start throws, and must not start a workspace to delete it; the deploy's
- *  tables walk reads tables alone, and must not start every workspace to reach them. */
-const ORCHESTRATOR_STARTLESS: ReadonlySet<string> = new Set(['destroyAgent', 'storedWorkspace', 'quietForDeletion', 'evalAbortActivation', 'opsTables']);
+ *  tables walk reads tables alone, and must not start every workspace to reach them; a restore must reach storage the
+ *  start refuses. */
+const ORCHESTRATOR_STARTLESS: ReadonlySet<string> = new Set([
+  'destroyAgent', 'storedWorkspace', 'quietForDeletion', 'evalAbortActivation', 'opsTables', 'opsRestore', 'opsRestart', 'opsBookmark',
+]);
 
 export const ORCHESTRATOR_STARTED_RPC: readonly string[] = [
   ...ACTOR_AGENT_RPC_SURFACE,
