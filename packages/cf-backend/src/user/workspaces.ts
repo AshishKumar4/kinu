@@ -12,6 +12,7 @@ import { notInRegistry } from './workspace-ownership';
 
 import type { UserMcpServers } from './mcp-servers';
 import type { UserObjectHost } from './user-host';
+import type { UserLimits } from './limits';
 import type { ShareCardJobs } from './share-cards';
 import type { EvalLeaseJobs } from './eval-leases';
 import type { WorkspaceDeletionJobs } from './workspace-deletions';
@@ -51,6 +52,8 @@ export interface UserWorkspacesHost extends Pick<UserObjectHost, 'ctx' | 'env' |
   nudgeUnreported(): void;
   /** The account this registry is, whose rows the control plane's index keys on. */
   ownerId(): string;
+  /** The account's limits: a new workspace is asked of them before its row is written; a removed one's size forgotten. */
+  readonly limits: Pick<UserLimits, 'admitWorkspace' | 'forgetStore'>;
 }
 
 /** A read the destroyed workspace answers itself with the Agents SDK's own abort (`Agent.destroy`), which it raises only
@@ -224,6 +227,9 @@ export class UserWorkspaces {
       };
     }
 
+    // Only a new workspace is asked, and synchronously, so the read above and the write below stay one turn: one the
+    // account already has stays usable at any limit.
+    this.host.limits.admitWorkspace();
     const explicit = displayName?.trim() ?? '';
     const title = resolveWorkspaceTitle({ explicit, purpose, slug: name });
     // Use the origin the caller decided; a derived title is non-empty and must not read as
@@ -288,6 +294,8 @@ export class UserWorkspaces {
       };
     }
 
+    // A fork's new workspace is a new one: asked as a create is (registerWorkspace).
+    this.host.limits.admitWorkspace();
     const now = Date.now();
     const explicit = displayName?.trim() ?? '';
     const title = resolveWorkspaceTitle({ explicit, slug: name });
@@ -519,6 +527,7 @@ export class UserWorkspaces {
 
     if (this.host.env.SLATE_PICTURES !== undefined) await deletePictures(this.host.env.SLATE_PICTURES, picturePrefix(name));
     this.deleteWorkspaceRows(name, 'after-destroy');
+    this.host.limits.forgetStore(`workspace:${name}`);
     await this.host.evalLeases.ended(name);
     await this.host.deletions.ended(name);
     // Every deletion's, whichever entrance asked for it: only once the registry row is gone.

@@ -119,6 +119,8 @@ export { mailInContext } from './mail/in-context';
 
 export { MAIL_MESSAGE_FIELDS, MailAddress, MailBoxPath, mailText } from './mail/message';
 
+export * from './limits/index';
+
 export { MailTriageLane, triageMail, type MailTriageDeps } from './mail/triage';
 
 export { createEmailThreadDispatcher, mailboxEmail, sendInboundEmailReceipt, sendOwnerEmail } from './mail/outbound';

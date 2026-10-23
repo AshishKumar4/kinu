@@ -1,0 +1,191 @@
+/**
+ * The account's limits (core limits/), kept in its own object: each new thing its workspaces start is asked here
+ * first, and what they spend or hold is reported here. A refusal is the account's word, said in core's words.
+ */
+import { Effect } from 'effect';
+import { KinuError, settle, settleSync } from '@kinu.run/core/obs';
+import {
+  accountClassOf, admitComputerStart, admitPlatformTurn, admitStoredBytes, admitWorkspace, AccountLimitsStore, dayOf,
+  freeTierOf, limitsReport, monthOf, type AccountClass, type AccountUse, type Admission, type ComputerSize, type FreeTier,
+  type LimitId, type LimitReading, type LimitsReport, type StoredClass, type UserCaller,
+} from '@kinu.run/core';
+import { isListedOperator } from '../control-plane/admin-caller';
+import type { UserObjectHost } from './user-host';
+
+export interface UserLimitsHost extends Pick<UserObjectHost, 'ctx' | 'env' | 'requireTier' | 'sqlx'> {
+  /** The account's workspaces as its roster counts them (workspaces.ts `rosterCount`). */
+  workspaceCount(): number;
+}
+
+/** The note the assistant gives once a period, when a limit is near its end; a limit with none is not mentioned. */
+const NEAR_NOTE = {
+  workspaces: (shown: string) => `This account has used ${shown} of its free workspaces.`,
+  computer_hours: (shown: string) => `This account's computers have run ${shown} of their free hours this month.`,
+  stored_bytes: (shown: string) => `This account stores ${shown} of its free space.`,
+  model_tokens: (shown: string) => `Today's free model use is at ${shown}.`,
+} satisfies Partial<Record<LimitId, (shown: string) => string>>;
+
+const isNoted = (id: LimitId): id is keyof typeof NEAR_NOTE => id in NEAR_NOTE;
+
+/** The period a near limit is mentioned once in: its own for one that resets, else for as long as its number holds. */
+function noticePeriod(limit: LimitReading, now: number): string {
+  if (limit.id === 'model_tokens') return dayOf(now);
+
+  return limit.id === 'computer_hours' ? monthOf(now) : `at:${String(Math.floor(limit.limit))}`;
+}
+
+export class UserLimits {
+  private readonly store: AccountLimitsStore;
+
+  constructor(private readonly host: UserLimitsHost) {
+    this.store = new AccountLimitsStore(host.ctx.storage.sql);
+  }
+
+  private email(): string {
+    return this.host.sqlx<{ email: string }>('SELECT email FROM user_profile WHERE id = 1')[0]?.email ?? '';
+  }
+
+  /** The deployment's free tier; null where it has none. A malformed one refuses every new thing, saying so. */
+  private tier(): Effect.Effect<FreeTier | null, KinuError> {
+    const tier = freeTierOf(this.host.env.ACCOUNT_LIMITS);
+
+    return tier === 'malformed'
+      ? Effect.fail(new KinuError('unavailable', "This deployment's ACCOUNT_LIMITS is not an object of known limits; nothing new starts until it is mended."))
+      : Effect.succeed(tier);
+  }
+
+  klass(): AccountClass {
+    const email = this.email();
+
+    return accountClassOf({ email, operator: isListedOperator(this.host.env, email), devEmail: this.host.env.DEV_USER_EMAIL ?? '', standing: this.store.standing() });
+  }
+
+  private use(now: number): AccountUse {
+    return {
+      workspaces: this.host.workspaceCount(),
+      computerSeconds: this.store.computerSeconds(now),
+      running: this.store.running(now),
+      storedBytes: this.store.storedBytes(),
+      tokensToday: this.store.tokensToday(now),
+    };
+  }
+
+  /**
+   * Each admission: suspended first (nothing new starts in a suspended account), then the free tier where the deployment
+   * has one and the account is bound by it.
+   */
+  private admit(decide: (admission: Admission) => KinuError | null): Effect.Effect<void, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const { suspended } = this.store.standing();
+
+      if (suspended !== null) return yield* new KinuError('denied', `This account is suspended: ${suspended.reason}`);
+      const tier = yield* this.tier();
+
+      if (tier === null) return;
+      const now = Date.now();
+      const refusal = decide({ klass: this.klass(), tier, use: this.use(now), now });
+
+      if (refusal !== null) return yield* refusal;
+    });
+  }
+
+  /**
+   * A new workspace, asked synchronously inside the roster's own turn (workspaces.ts), between its read and its write, so
+   * nothing else runs between them and no second create races it.
+   */
+  admitWorkspace(): void {
+    settleSync(this.admit(admitWorkspace));
+  }
+
+  async admitStoredBytes(caller: UserCaller): Promise<void> {
+    await this.host.requireTier(caller, 'limits');
+    await settle(this.admit(admitStoredBytes));
+  }
+
+  /** `workspace`'s computer starting from stopped at `size`: admitted, it holds the account's place until it stops. */
+  async admitComputerStart(caller: UserCaller, workspace: string, size: ComputerSize): Promise<void> {
+    await this.host.requireTier(caller, 'limits');
+    await settle(this.admit((admission) => admitComputerStart(admission, { workspace, size })));
+    this.store.started(workspace, size, Date.now());
+  }
+
+  async computerTick(caller: UserCaller, workspace: string, size: ComputerSize): Promise<void> {
+    await this.host.requireTier(caller, 'limits');
+    this.store.tick(workspace, size, Date.now());
+  }
+
+  async computerStopped(caller: UserCaller, workspace: string): Promise<void> {
+    await this.host.requireTier(caller, 'limits');
+    this.store.stopped(workspace, Date.now());
+  }
+
+  /** A store's size as read where it lives: `drive`, `mail` or `workspace:<name>`. */
+  async storageSampled(caller: UserCaller, source: string, bytes: number): Promise<void> {
+    await this.host.requireTier(caller, 'limits');
+    this.store.sampled(source, bytes, Date.now());
+  }
+
+  /** A removed workspace's size counts no more (workspaces.ts teardown). */
+  forgetStore(source: string): void {
+    this.store.forgetStore(source);
+  }
+
+  /** A turn on one of the platform's own models. */
+  async admitPlatformTurn(caller: UserCaller): Promise<void> {
+    await this.host.requireTier(caller, 'limits');
+    await settle(this.admit(admitPlatformTurn));
+  }
+
+  /** Tokens (input and output) a platform-model step spent, from the binding's own usage. */
+  async platformTokensSpent(caller: UserCaller, tokens: number): Promise<void> {
+    await this.host.requireTier(caller, 'limits');
+    this.store.spentTokens(tokens, Date.now());
+  }
+
+  async limits(caller: UserCaller): Promise<LimitsReport> {
+    await this.host.requireTier(caller, 'limits');
+    const now = Date.now();
+    const { suspended } = this.store.standing();
+    const tier = await settle(this.tier());
+    const klass = this.klass();
+    const shown = suspended === null ? null : { at: suspended.at, reason: suspended.reason };
+
+    return tier === null ? { class: klass, suspended: shown, limits: [] } : limitsReport({ klass, tier, use: this.use(now), now }, shown);
+  }
+
+  /**
+   * The assistant's one note of limits near their end: each near limit not yet mentioned this period, recorded as said.
+   * Null when there is nothing new to say.
+   */
+  async nearNote(caller: UserCaller): Promise<string | null> {
+    const report = await this.limits(caller);
+    const now = Date.now();
+
+    const notes = report.limits.flatMap((limit) => {
+      const note = isNoted(limit.id) ? NEAR_NOTE[limit.id] : undefined;
+
+      if (note === undefined || !limit.near || !this.store.noticeOnce(limit.id, noticePeriod(limit, now), now)) return [];
+
+      return [note(`${String(Math.round((limit.used / Math.max(limit.limit, 1)) * 100))}%`)];
+    });
+
+    return notes.length === 0 ? null : `${notes.join(' ')} At the limit only new things stop; the person can see each limit in Settings → Usage.`;
+  }
+
+  // The operator plane's (control-plane routes, as the owner capability, audited there).
+
+  async setClass(caller: UserCaller, klass: StoredClass, by: string): Promise<void> {
+    await this.host.requireTier(caller, 'limits.manage');
+    this.store.setClass(klass, by, Date.now());
+  }
+
+  async suspend(caller: UserCaller, reason: string, by: string): Promise<void> {
+    await this.host.requireTier(caller, 'limits.manage');
+    this.store.suspend(reason, by, Date.now());
+  }
+
+  async unsuspend(caller: UserCaller): Promise<void> {
+    await this.host.requireTier(caller, 'limits.manage');
+    this.store.unsuspend(Date.now());
+  }
+}

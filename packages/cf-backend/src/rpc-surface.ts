@@ -239,6 +239,18 @@ const USER_DO_METHODS = [
   'drive_startDownload',
   'drive_readChunk',
   'drive_abortDownload',
+  'limits',
+  'limits_nearNote',
+  'limits_admitStoredBytes',
+  'limits_storageSampled',
+  'limits_admitComputerStart',
+  'limits_computerTick',
+  'limits_computerStopped',
+  'limits_admitPlatformTurn',
+  'limits_platformTokensSpent',
+  'limits_setClass',
+  'limits_suspend',
+  'limits_unsuspend',
 ] as const satisfies readonly (keyof UserDO)[];
 
 export type UserDoRpcMethod = (typeof USER_DO_METHODS)[number];

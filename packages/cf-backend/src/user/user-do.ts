@@ -23,7 +23,7 @@ import { diagnostics, KinuError, refusalOf, settle, tolerate, toKinuError } from
 import * as v from 'valibot';
 import {
   censusOf, durableStamps, ERROR_STATUS, mcpPresetById, readStamp, repairSchema, SCHEMA_TABLES, requireOps, StoragePredatesReleaseError, writeStamp,
-  type OpsCaller, type Repair, type TablesAnswer,
+  type OpsCaller, type Repair, type TablesAnswer, type ComputerSize, type StoredClass,
 } from '@kinu.run/core';
 import { Hono } from 'hono';
 import { rawPath, rethrow } from '../api/context';
@@ -40,6 +40,7 @@ import {
 } from './roster';
 
 import { UserDrive, type DriveAnswer, type DriveChunkWrite } from './drive';
+import { UserLimits } from './limits';
 import { UserDevices, type DeviceCancellationOutcome } from './devices';
 import { ACCOUNT_EPOCH_FIELDS, DeviceHelloHeadSchema, DeviceHelloSchema, DeviceUpdateHelloSchema } from '@kinu.run/core';
 import { UserTerminals } from './terminals';
@@ -195,7 +196,11 @@ export class UserDO extends Agent<Env> {
     ...this.host, mcpServers: this.mcpServers, shareCards: this.shareCards, evalLeases: this.evalLeases, deletions: this.workspaceDeletions,
     nudgeUnreported: () => { this.nudgeUnreported(); },
     ownerId: () => this.name,
+    limits: { admitWorkspace: () => { this.accountLimits.admitWorkspace(); }, forgetStore: (source) => { this.accountLimits.forgetStore(source); } },
   });
+
+  /** What the account may start new (core limits/): asked by its workspaces and its routes, set by the operator plane. */
+  private readonly accountLimits = new UserLimits({ ...this.host, workspaceCount: () => this.workspaces.rosterCount() });
 
   private readonly profile = new UserProfileStore({ ...this.host, workspaces: this.workspaces });
 
@@ -1051,6 +1056,56 @@ export class UserDO extends Agent<Env> {
 
   drive_abortDownload(caller: UserCaller, transferId: string): Promise<void> {
     return this.userDrive.drive_abortDownload(caller, transferId);
+  }
+
+  // The account's limits (user/limits.ts): read by Settings → Usage, asked before each new thing, told what is spent.
+
+  limits(caller: UserCaller): ReturnType<UserLimits['limits']> {
+    return this.accountLimits.limits(caller);
+  }
+
+  limits_nearNote(caller: UserCaller): ReturnType<UserLimits['nearNote']> {
+    return this.accountLimits.nearNote(caller);
+  }
+
+  limits_admitStoredBytes(caller: UserCaller): Promise<void> {
+    return this.accountLimits.admitStoredBytes(caller);
+  }
+
+  limits_storageSampled(caller: UserCaller, source: string, bytes: number): Promise<void> {
+    return this.accountLimits.storageSampled(caller, source, bytes);
+  }
+
+  limits_admitComputerStart(caller: UserCaller, workspace: string, size: ComputerSize): Promise<void> {
+    return this.accountLimits.admitComputerStart(caller, workspace, size);
+  }
+
+  limits_computerTick(caller: UserCaller, workspace: string, size: ComputerSize): Promise<void> {
+    return this.accountLimits.computerTick(caller, workspace, size);
+  }
+
+  limits_computerStopped(caller: UserCaller, workspace: string): Promise<void> {
+    return this.accountLimits.computerStopped(caller, workspace);
+  }
+
+  limits_admitPlatformTurn(caller: UserCaller): Promise<void> {
+    return this.accountLimits.admitPlatformTurn(caller);
+  }
+
+  limits_platformTokensSpent(caller: UserCaller, tokens: number): Promise<void> {
+    return this.accountLimits.platformTokensSpent(caller, tokens);
+  }
+
+  limits_setClass(caller: UserCaller, klass: StoredClass, by: string): Promise<void> {
+    return this.accountLimits.setClass(caller, klass, by);
+  }
+
+  limits_suspend(caller: UserCaller, reason: string, by: string): Promise<void> {
+    return this.accountLimits.suspend(caller, reason, by);
+  }
+
+  limits_unsuspend(caller: UserCaller): Promise<void> {
+    return this.accountLimits.unsuspend(caller);
   }
 
   /** Keyed by {@link USER_MCP_CLIENT_NAME}, not this object's name: every stored grant uses that key, sealed. */
