@@ -68,8 +68,9 @@ const CloudAgentSchema = v.object({
 /** Complete active list, names only; the wide bounded listing is the web surface's contract. */
 export type CloudAgent = v.InferOutput<typeof CloudAgentSchema>;
 
+/** A registered machine: the hub answers its id, the account and its own origin, and nothing secret. */
 const CloudDeviceRegistrationSchema = v.object({
-  deviceId: v.string(), token: v.string(), userId: v.string(), origin: v.string(),
+  deviceId: v.string(), userId: v.string(), origin: v.string(),
 });
 
 export type CloudDeviceRegistration = v.InferOutput<typeof CloudDeviceRegistrationSchema>;
@@ -439,18 +440,29 @@ export function revokeCliAccessToken(origin: string, token: string, ref: string)
   return settle(cloudJson(OkSchema, origin, `/api/cli/tokens/${encodeURIComponent(ref)}`, { method: 'DELETE', token }));
 }
 
-/** `replaces`: this machine's previous token. `device`: the device a browser issued for this machine to register as. */
-export function registerCloudDevice(
-  origin: string, token: string, registration: { readonly label?: string; readonly replaces?: string; readonly device?: string },
-): Promise<CloudDeviceRegistration> {
+/** A machine's public key, as it asks to be registered: `replaces` its old key's signature over this registration,
+ *  `device` the device a browser issued it, `reenrol` its id from an earlier protocol's link. */
+interface CloudDeviceRegistrationAsk {
+  readonly publicKey: string;
+  readonly label?: string | undefined;
+  readonly replaces?: { readonly device: string; readonly signature: string } | undefined;
+  readonly device?: string | undefined;
+  readonly reenrol?: string | undefined;
+}
+
+export function registerCloudDevice(origin: string, token: string, registration: CloudDeviceRegistrationAsk): Promise<CloudDeviceRegistration> {
   return settle(Effect.gen(function* () {
     const body: Record<string, JsonValue> = {};
 
+    body.publicKey = registration.publicKey;
+
     if (registration.label) body.label = registration.label;
 
-    if (registration.replaces !== undefined) body.replaces = registration.replaces;
+    if (registration.replaces !== undefined) body.replaces = { ...registration.replaces };
 
     if (registration.device !== undefined) body.device = registration.device;
+
+    if (registration.reenrol !== undefined) body.reenrol = registration.reenrol;
 
     return yield* cloudJson(CloudDeviceRegistrationSchema, origin, '/api/cli/devices', { method: 'POST', token, body });
   }));
@@ -460,15 +472,17 @@ const CloudDeviceJoinSchema = v.object({ ...CloudDeviceRegistrationSchema.entrie
 
 export type CloudDeviceJoin = v.InferOutput<typeof CloudDeviceJoinSchema>;
 
-/** A machine with no session registers as the device a browser's connect command names, spending its ticket. */
-export function joinCloudDevice(origin: string, join: { readonly ticket: string; readonly label?: string; readonly replaces?: string }): Promise<CloudDeviceJoin> {
+/** A machine with no session registers its public key as the device a browser's connect command names, spending its
+ *  ticket. */
+export function joinCloudDevice(origin: string, join: Omit<CloudDeviceRegistrationAsk, 'device' | 'reenrol'> & { readonly ticket: string }): Promise<CloudDeviceJoin> {
   const body: Record<string, JsonValue> = {};
 
   body.ticket = join.ticket;
+  body.publicKey = join.publicKey;
 
   if (join.label) body.label = join.label;
 
-  if (join.replaces !== undefined) body.replaces = join.replaces;
+  if (join.replaces !== undefined) body.replaces = { ...join.replaces };
 
   return settle(cloudJson(CloudDeviceJoinSchema, origin, '/pc/join', { method: 'POST', body }));
 }

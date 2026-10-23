@@ -9,6 +9,7 @@ import { createTestUserDO, provisionTestWorkspace, testOwner, TEST_CREDENTIAL_EN
 import { bootstrappedProfile, userAccount, workspaceObject } from './helpers/bindings';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
 import type { AuthIdentity } from '../src/auth/session';
+import { registerTestDevice } from './helpers/device-key';
 
 const IDENTITY: AuthIdentity = { userId: '0123456789abcdef0123456789abcdef', email: 'owner@example.com', sub: 'sub', provider: 'test', authTime: Date.now() };
 
@@ -286,7 +287,7 @@ describe('ChatGPT sign-in through a machine', () => {
     expect(await harness.userDO.startChatGptSignIn(owner)).toEqual({ state: 'waiting_for_machine' });
     expect((await harness.userDO.chatgptPlan(owner)).machineSignIn).toEqual({ state: 'waiting_for_machine' });
 
-    const { deviceId } = await harness.userDO.registerDevice(owner, 'studio');
+    const { deviceId } = await registerTestDevice(harness.userDO, 'studio', owner);
     harness.attachDevice(deviceId);
     await harness.sendDeviceHello({ type: 'HELLO' });
     await harness.joinFibers();
@@ -313,8 +314,8 @@ describe('ChatGPT sign-in through a machine', () => {
     });
 
     await harness.userDO.startChatGptSignIn(owner);
-    studio = (await harness.userDO.registerDevice(owner, 'studio')).deviceId;
-    const laptop = (await harness.userDO.registerDevice(owner, 'laptop')).deviceId;
+    studio = (await registerTestDevice(harness.userDO, 'studio', owner)).deviceId;
+    const laptop = (await registerTestDevice(harness.userDO, 'laptop', owner)).deviceId;
     harness.attachDaemon(studio);
     harness.attachDaemon(laptop);
 
@@ -344,7 +345,7 @@ describe('ChatGPT sign-in through a machine', () => {
     });
 
     await harness.userDO.startChatGptSignIn(owner);
-    const { deviceId } = await harness.userDO.registerDevice(owner, 'studio');
+    const { deviceId } = await registerTestDevice(harness.userDO, 'studio', owner);
     harness.attachDevice(deviceId);
     await harness.sendDeviceHello({ type: 'HELLO' });
     await harness.joinFibers();
@@ -380,9 +381,9 @@ describe('ChatGPT sign-in through a machine', () => {
       },
     });
 
-    const studio = (await harness.userDO.registerDevice(owner, 'studio')).deviceId;
-    const laptop = (await harness.userDO.registerDevice(owner, 'laptop')).deviceId;
-    const workbench = (await harness.userDO.registerDevice(owner, 'workbench')).deviceId;
+    const studio = (await registerTestDevice(harness.userDO, 'studio', owner)).deviceId;
+    const laptop = (await registerTestDevice(harness.userDO, 'laptop', owner)).deviceId;
+    const workbench = (await registerTestDevice(harness.userDO, 'workbench', owner)).deviceId;
 
     for (const device of [studio, laptop, workbench]) {
       harness.attachDaemon(device);

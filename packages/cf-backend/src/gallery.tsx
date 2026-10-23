@@ -230,7 +230,7 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
       id: "dev_1", label: "ashish-mbp", os: "darwin", hostname: "ashish-mbp.local",
       connected: true, createdAt: NOW - 40 * 864e5, lastSeenAt: NOW - 90e3,
       expiresAt: NOW + 50 * 864e5,
-      replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
+      replacedAt: null, revokedAt: null, unstoppedAt: null, cloneDetectedAt: null, wholeMachine: false,
       sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, detail: null, gpu: [] },
       desktop: { state: "none" },
       version: null, servedVersion: null, update: "unreported", updateRefusal: null,
@@ -808,7 +808,7 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
     const incident = localStorage.getItem("gallery-device-incident");
 
     if (incident === "acknowledged") return fixtureJson([]);
-    const revoked = incident === "revoked" || incident === "reused";
+    const revoked = incident === "revoked" || incident === "cloned";
 
     return fixtureJson([
       {
@@ -816,7 +816,7 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
         connected: !revoked, createdAt: NOW - 864e5, lastSeenAt: NOW, expiresAt: NOW + 864e5,
         replacedAt: null,
         revokedAt: revoked ? NOW : null, unstoppedAt: incident === "revoked" ? NOW : null,
-        reuseDetectedAt: incident === "reused" ? NOW : null, wholeMachine: false,
+        cloneDetectedAt: incident === "cloned" ? NOW : null, wholeMachine: false,
         version: null, servedVersion: null, update: "unreported", updateRefusal: null,
         sandbox: {
           tier: parseDeviceTier(localStorage.getItem("gallery-device-tier")),
@@ -827,13 +827,13 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
       // `&devices=history`: a refused update and a machine that has never connected.
       ...(new URLSearchParams(location.search).get("devices") === "history" ? [{
         id: "dev-3", label: "Lab box", os: "linux", hostname: "lab", connected: true, createdAt: NOW - 864e5, lastSeenAt: NOW, expiresAt: NOW + 864e5,
-        replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
+        replacedAt: null, revokedAt: null, unstoppedAt: null, cloneDetectedAt: null, wholeMachine: false,
         sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, detail: null, gpu: [] },
         desktop: { state: "none" },
         version: "0.2.0+older", servedVersion: "0.3.0+served", update: "refused", updateRefusal: "Bun 1.4.2 install failed: permission denied",
       }, {
         id: "dev-old", label: "Old box", os: "linux", hostname: "old", connected: false, createdAt: NOW - 90 * 864e5, lastSeenAt: null, expiresAt: null,
-        replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
+        replacedAt: null, revokedAt: null, unstoppedAt: null, cloneDetectedAt: null, wholeMachine: false,
         sandbox: { tier: "sandboxed", capability: "files_only", reason: null, detail: null, gpu: [] },
         desktop: { state: "none" },
         version: null, servedVersion: null, update: "unreported", updateRefusal: null,
@@ -842,7 +842,7 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
         id: "dev-2", label: "Owner laptop", os: "darwin", hostname: "ashish-mbp.local",
         connected: false, createdAt: NOW - 40 * 864e5, lastSeenAt: NOW - 7200e3, expiresAt: NOW + 50 * 864e5,
         replacedAt: null,
-        revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: true,
+        revokedAt: null, unstoppedAt: null, cloneDetectedAt: null, wholeMachine: true,
         sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, detail: null, gpu: [] },
         desktop: { state: "none" },
         version: null, servedVersion: null, update: "unreported", updateRefusal: null,
@@ -1011,7 +1011,7 @@ function galleryConnectDevice(id: string, label: string, connected: boolean) {
     id, label, os: "darwin", hostname: "owner-mac", connected,
     createdAt: NOW, lastSeenAt: NOW, expiresAt: NOW + 864e5,
     replacedAt: null,
-    revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
+    revokedAt: null, unstoppedAt: null, cloneDetectedAt: null, wholeMachine: false,
     sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, detail: null, gpu: [] },
     desktop: id === GALLERY_PC.id ? SHELL_PC_DESKTOP : { state: "none" },
     version: null, servedVersion: null, update: "unreported", updateRefusal: null,
@@ -7500,7 +7500,7 @@ function galleryDevice(id: string, label: string, sandbox: UserDevice["sandbox"]
   return {
     id, label, os: "linux", hostname: label, connected: true,
     createdAt: NOW - 30 * 864e5, lastSeenAt: NOW - 60e3, expiresAt: NOW + 60 * 864e5,
-    replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
+    replacedAt: null, revokedAt: null, unstoppedAt: null, cloneDetectedAt: null, wholeMachine: false,
     sandbox,
     desktop: { state: "none"},
     version: "0.3.0+gallery", servedVersion: "0.3.0+gallery", update: "current", updateRefusal: null,

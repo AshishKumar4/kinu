@@ -4397,8 +4397,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return decideDeferredApprovals(this.deferrals, ids, decision);
   }
 
-  // Device connection is user-level: UserDO owns the tunnel socket and tokens; nothing
-  // per-agent verifies, attaches, issues or lists a device token.
+  // Device connection is user-level: UserDO owns the tunnel socket and device keys; nothing
+  // per-agent verifies, attaches, issues or lists a device credential.
 
   /**
    * The deploy's walk (`scripts/reset.ts tables`): this workspace's tables and their rows and what its repair did, and,

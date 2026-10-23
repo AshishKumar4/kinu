@@ -415,10 +415,9 @@
     "purpose TEXT NOT NULL CHECK (purpose IN (${sqlCheckList(CONNECTION_TICKET_PURPOSES)}))",
     "expires_at INTEGER NOT NULL",
     "device_id TEXT",
-    "token_was_current INTEGER",
     "workspace TEXT",
     "cli_token_hash TEXT",
-    "CHECK ((purpose = 'device_connect' AND device_id IS NOT NULL AND token_was_current IS NOT NULL AND workspace IS NULL AND cli_token_hash IS NULL) OR (purpose = 'device_join' AND device_id IS NOT NULL AND token_was_current IS NULL AND cli_token_hash IS NULL) OR (purpose = 'cli_agent_connect' AND device_id IS NULL AND token_was_current IS NULL AND workspace IS NOT NULL AND cli_token_hash IS NOT NULL))"
+    "CHECK ((purpose = 'device_connect' AND device_id IS NOT NULL AND workspace IS NULL AND cli_token_hash IS NULL) OR (purpose = 'device_join' AND device_id IS NOT NULL AND cli_token_hash IS NULL) OR (purpose = 'cli_agent_connect' AND device_id IS NULL AND workspace IS NOT NULL AND cli_token_hash IS NOT NULL))"
   ],
   "context_memberships@packages/core/src/session/schema.ts": [
     "actor_id TEXT NOT NULL",
@@ -582,6 +581,11 @@
     "notes TEXT NOT NULL DEFAULT '[]'",
     "failure TEXT",
     "facts TEXT NOT NULL DEFAULT '{}'"
+  ],
+  "device_connect_challenges@packages/core/src/state/user-schema.ts": [
+    "nonce_hash TEXT PRIMARY KEY",
+    "device_id TEXT NOT NULL REFERENCES user_devices(id) ON DELETE CASCADE",
+    "expires_at INTEGER NOT NULL"
   ],
   "device_consent@packages/core/src/state/user-schema.ts": [
     "agent_name TEXT NOT NULL",
@@ -1553,8 +1557,9 @@
   ],
   "user_devices@packages/core/src/state/user-schema.ts": [
     "id TEXT PRIMARY KEY",
-    "token_hash TEXT NOT NULL",
-    "prev_token_hash TEXT",
+    "public_key TEXT NOT NULL",
+    "connect_generation INTEGER NOT NULL DEFAULT 0",
+    "clone_detected_at INTEGER",
     "label TEXT NOT NULL",
     "os TEXT",
     "hostname TEXT",

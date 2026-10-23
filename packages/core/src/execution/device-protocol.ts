@@ -4,7 +4,24 @@ import { ERROR_CODES, KinuError, type ErrorCode } from '../obs/error';
 
 export const DEVICE_PROTOCOL_VERSION = protocol.version;
 
+/** The close for a HELLO this hub does not serve: any protocol but this one, since only this one authenticates. */
 export const DEVICE_VERSION_REFUSAL_CLOSE = protocol.versionRefusalClose;
+
+/** The close for a socket whose AUTH named no live ticket: the daemon reads it as a dead credential and stops. */
+export const DEVICE_CREDENTIALS_REJECTED_CLOSE = protocol.credentialsRejectedClose;
+
+/** The close for a socket that sent no AUTH within {@link DEVICE_AUTH_DEADLINE_MS}; the daemon dials again. */
+export const DEVICE_AUTH_DEADLINE_CLOSE = protocol.authDeadlineClose;
+
+/**
+ * The account a device socket is routed to. The Worker must pick the account's object before the socket's first
+ * frame, and the account is no URL's: the name holds `auth`, so the platform's logs redact its value as a credential's
+ * (cloud-wire.ts `PlatformRedactedHeader`), and the account never sits in a log beside the address that dialled it.
+ */
+export const DEVICE_CONNECT_ACCOUNT_HEADER = protocol.accountHeader;
+
+/** How long an accepted socket may wait before its first frame, AUTH: nothing is served before it. */
+export const DEVICE_AUTH_DEADLINE_MS = 10_000;
 
 /** A terminal's window bound per axis, the daemon's and the hub's: the kernel carries each as an `unsigned short`, and a
  *  thousand cells on a side is past any real display, so more is a malformed frame. */
@@ -21,6 +38,20 @@ export const DEVICE_METHOD = Object.fromEntries(Object.keys(protocol.methods).ma
 /** Every method a current daemon answers, as its HELLO lists them. */
 export const DEVICE_FEATURES: readonly string[] = Object.keys(protocol.methods);
 
+/** A daemon's first frame on every socket: the account it connects to and the ticket its signed challenge bought. The
+ *  ticket rides here, never in the socket's URL or headers, which edge and proxy logs keep. */
+export const DeviceAuthFrameSchema = v.object({
+  type: v.literal(DEVICE_FRAMES.auth),
+  user: v.string(),
+  ticket: v.string(),
+});
+
+/** The daemon's answer once the generation the hub sent is in its device.json: the hub commits it then. */
+export const DeviceGenerationAckSchema = v.object({
+  type: v.literal(DEVICE_FRAMES.generationAck),
+  generation: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
+});
+
 /** What every HELLO opens with: the protocol it speaks and the methods it answers, which decide the rest. */
 export const DeviceHelloHeadSchema = v.object({
   type: v.literal(DEVICE_FRAMES.hello),
@@ -29,8 +60,8 @@ export const DeviceHelloHeadSchema = v.object({
 });
 
 /**
- * What a daemon on the protocol before this one is read for: whether, and to which build, it is pushed the update.
- * `version` is absent on a daemon with no build stamp, which is pushed nothing.
+ * What an update push is decided on: whether, and to which build, the daemon is pushed one. `version` is absent on a
+ * daemon with no build stamp, which is pushed nothing.
  */
 export const DeviceUpdateHelloSchema = v.object({
   ...DeviceHelloHeadSchema.entries,

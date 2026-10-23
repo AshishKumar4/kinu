@@ -27,7 +27,7 @@
  */
 import { existsSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import * as v from 'valibot';
 
 import { parseJsonValue, type JsonValue, type RunEvent } from '../../packages/core/src/index';
@@ -35,6 +35,7 @@ import { tolerate } from '../../packages/core/src/obs/index';
 import { infraBoundary } from '@kinu.run/test-utils';
 import { AGENT_HOME } from '../../packages/cli/src/config';
 import { DAEMON_LOG_PATH, DEVICE_CONFIG_PATH } from '../../packages/cli/src/device-connect';
+import { DEVICE_KEY_FILE } from '../../packages/core/src/execution/device-key';
 import { ExecutorCommandSchema, type KinuPublicSession, type PublicExecutorResult, type PublicSessionResolution } from '../../evals/src/session';
 import { webHeaders, type PublicWebIdentity } from '../../evals/src/workspace-roster';
 import type { PublicSocket } from './public-socket';
@@ -487,14 +488,14 @@ export async function runTeardown(steps: readonly TeardownStep[]): Promise<reado
  * Remove what this case wrote into the scratch home.
  *
  * The credential first, because it is the one file that still means something
- * once the process ends: `device.json` holds the device token the daemon
- * authenticates with. The home ITSELF is the runner's to remove — one throwaway
+ * once the process ends: `device.key` holds the private key the daemon signs
+ * its connects with. The home ITSELF is the runner's to remove — one throwaway
  * directory per test process, released by the `afterAll` in
  * `scripts/test-scratch-home.ts` — so deleting it here would pull it out from
  * under every other suite sharing the process.
  */
 export function removeDeviceFiles(): void {
-  for (const path of [DEVICE_CONFIG_PATH, DAEMON_LOG_PATH]) {
+  for (const path of [join(dirname(DEVICE_CONFIG_PATH), DEVICE_KEY_FILE), DEVICE_CONFIG_PATH, DAEMON_LOG_PATH]) {
     if (existsSync(path)) rmSync(path, { force: true });
   }
 }

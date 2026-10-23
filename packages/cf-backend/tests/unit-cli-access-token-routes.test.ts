@@ -139,7 +139,7 @@ function setupEnv(opts: { sessionMintedAt?: number } = {}) {
     async registerDevice(_caller: UserCaller) {
       calls.push('devices:register');
 
-      return { deviceId: 'dev_1', token: 'raw-device-token' };
+      return { deviceId: 'dev_1' };
     },
   });
 

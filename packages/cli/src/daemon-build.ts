@@ -3,8 +3,8 @@
  * siblings, so the installed files are the release's own names (scripts/build-cli-dist.sh) and the daemon loads with
  * nothing beside it but them. The release builds them once; a source-tree `kinu connect` builds them the same way.
  *
- * A module under the daemon's `daemon/` directory is part of the daemon file, bundled into it: the previous release's
- * updater lands only the siblings it knew (pc-agent/tests/fixtures/protocol-3), so a new module never ships beside it.
+ * A module under the daemon's `daemon/` directory is part of the daemon file, bundled into it: an updater lands only the
+ * siblings the build it runs knew, so a new module never ships beside it.
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';

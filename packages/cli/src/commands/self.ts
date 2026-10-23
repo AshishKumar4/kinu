@@ -3,10 +3,11 @@ import { settle } from '@kinu.run/core/obs';
 import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { isSameBuild } from '@kinu.run/core';
-import { AGENT_HOME, BIN_DIR, ensureBinDir, loadConfigFile, resolveCloudOrigin } from '../config';
+import { AGENT_HOME, BIN_DIR, ensureBinDir, loadConfigFile, resolveCloudOrigin, resolveCloudSession } from '../config';
 import { ACCENT, DIM, OK, VERSION, WARN } from '../display';
 import { fetchServedVersion } from '../version-check';
 import { CLI_CURRENT, refreshCliTree } from '../self-update';
+import { reenrolEarlierDevice, waitingDots } from '../device-connect';
 import { updateConfigFile } from '../config';
 
 interface UpdateOptions {
@@ -47,6 +48,14 @@ export function updateCommand(target: string | undefined, opts: UpdateOptions): 
     } else {
       console.log(`${WARN('!')} ${origin} published no build version; the CLI at ${DIM(CLI_CURRENT)} was left as it is`);
     }
+
+    // A machine an earlier device protocol linked connects no more until it is enrolled again, by this CLI's session.
+    const dots = waitingDots('  ');
+    const enrolled = yield* Effect.ensuring(Effect.promise(async () => reenrolEarlierDevice(resolveCloudSession(), { onWaiting: dots.onWaiting })), Effect.sync(dots.end));
+
+    if (enrolled.kind === 'needs-connect') console.log(`${WARN('!')} ${enrolled.message}`);
+    else if (enrolled.kind === 'cancelled') console.log(`${WARN('!')} This machine's daemon was enrolled again and keeps trying to connect; check: kinu desktop logs`);
+    else if (enrolled.kind === 'reenrolled') console.log(`${OK('✓')} This machine is connected again as ${ACCENT(enrolled.label)} ${DIM('(new device key)')}`);
 
     const res = yield* Effect.promise(async () => fetch(`${origin}/downloads/kinu`, { cache: 'no-store' }));
 

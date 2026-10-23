@@ -7,10 +7,11 @@ import { afterEach, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { buildBuiltinTools, type JsonValue } from '@kinu.run/core';
 import { present, toolExecute } from '@kinu.run/test-utils';
-import { createTestUserDO, provisionTestWorkspace, testOwner, type DeviceFrame, type TestUserDO } from './helpers/user-do';
+import { createTestUserDO, provisionTestWorkspace, type DeviceFrame, type TestUserDO } from './helpers/user-do';
 import { CAPABLE_HELLO } from './helpers/device-harness';
 import { chatSessionTurns, hostedMainActor, orchestratorHarness } from './helpers/actor-harness';
 import { fileNamespaceFor } from '../../core/tests/helpers';
+import { registerTestDevice } from './helpers/device-key';
 
 // Dynamic: the helpers above install the agents-SDK mock at load, and `agents` imports workerd-only modules.
 const { accountIdFor } = await import('../src/auth/store');
@@ -83,7 +84,7 @@ async function workspaceWithMachine() {
   const ownerUserId = await accountIdFor(OAUTH_DEPLOYMENT, 'owner@kinu.example.com');
   const user = createTestUserDO({ deviceResponder: daemon(machine), durableObjectId: ownerUserId });
   opened.push(user);
-  const { deviceId } = await user.userDO.registerDevice(await testOwner(), 'ashish@studio');
+  const { deviceId } = await registerTestDevice(user.userDO, 'ashish@studio');
   // The owner let this workspace use the machine: device consent is not what these tests are about.
   user.grantDevice('files', deviceId);
   user.attachDevice(deviceId);

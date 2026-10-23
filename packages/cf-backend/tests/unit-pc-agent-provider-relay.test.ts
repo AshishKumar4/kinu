@@ -11,11 +11,12 @@ import { TLSSocket } from 'node:tls';
 import { join } from 'node:path';
 import * as v from 'valibot';
 import {
-  CODEX_CRED_KEY, DEVICE_CONNECT_PATH,
-  DEVICE_FRAMES, DEVICE_METHOD,
+  CODEX_CRED_KEY, DEVICE_FRAMES, DEVICE_METHOD,
 } from '@kinu.run/core';
 import { scratchDir } from '../../test-utils/src/scratch';
-import { createTestUserDO, testOwner, type AcceptedSocket, type TestUserDO } from './helpers/user-do';
+import { createTestUserDO, testOwner, type TestUserDO } from './helpers/user-do';
+import { registerTestDevice } from './helpers/device-key';
+import { startDeviceBridge, type DeviceBridge } from './helpers/device-bridge';
 import { runToExit } from '@kinu.run/test-utils';
 
 const require_ = createRequire(import.meta.url);
@@ -206,69 +207,13 @@ function startUpstream(tls: { key: string; cert: string }) {
   };
 }
 
-/** One daemon's connection to the bridge, settled when it opens. */
-interface Connection {
-  readonly promise: Promise<AcceptedSocket>;
-  readonly resolve: (accepted: AcceptedSocket) => void;
-}
-
-/** The hub the daemon dials, bridged to the real UserDO; `connected(n)` settles as the n-th daemon connects. */
-function startHubBridge(harness: TestUserDO) {
-  const connections: Connection[] = [];
-  const nth = (n: number): Connection => (connections[n] ??= Promise.withResolvers<AcceptedSocket>());
-  let opened = 0;
-
-  const server = Bun.serve<{ accepted: AcceptedSocket }>({
-    port: 0,
-    hostname: '127.0.0.1',
-    async fetch(req, bun) {
-      const url = new URL(req.url);
-
-      if (url.pathname === '/pc/connect-ticket') {
-        const { token } = v.parse(v.object({ token: v.string() }), await req.json());
-        const issued = await harness.userDO.issueDeviceConnectTicket(await testOwner(), token);
-
-        return issued.ok ? Response.json({ ticket: issued.ticket, expiresAt: issued.expiresAt }) : new Response('refused', { status: 401 });
-      }
-
-      if (url.pathname === DEVICE_CONNECT_PATH) {
-        const upgraded = await harness.userDO.fetch(new Request(`https://kinu.example.com${DEVICE_CONNECT_PATH}${url.search}`, { headers: { Upgrade: 'websocket' } }));
-
-        if (upgraded.status !== 101) return upgraded;
-        const accepted = harness.acceptedSockets.at(-1);
-
-        if (accepted === undefined) throw new Error('the UserDO upgraded without accepting a socket');
-
-        return bun.upgrade(req, { data: { accepted } }) ? undefined : new Response('upgrade failed', { status: 500 });
-      }
-
-      return new Response('not found', { status: 404 });
-    },
-    websocket: {
-      open(ws) {
-        ws.data.accepted.forward((data) => { ws.send(data); });
-      },
-      async message(ws, message) {
-        await harness.userDO.webSocketMessage(ws.data.accepted.ws, String(message));
-
-        if (String(message) === 'ping') return;
-        const hello = v.safeParse(v.object({ type: v.literal('HELLO') }), JSON.parse(String(message)));
-
-        if (hello.success) {
-          nth(opened).resolve(ws.data.accepted);
-          opened += 1;
-        }
-      },
-    },
-  });
-
-  return { origin: `http://127.0.0.1:${String(server.port)}`, connected: (n: number) => nth(n).promise, stop: () => server.stop(true) };
-}
+/** The account a daemon here connects to: the harness's object is named by it, as a real account's is. */
+const ACCOUNT = '0123456789abcdef0123456789abcdef';
 
 describe('the daemon relays model calls from the owner\'s machine', () => {
   let harness: TestUserDO;
   let upstream: ReturnType<typeof startUpstream>;
-  let hub: ReturnType<typeof startHubBridge>;
+  let hub: DeviceBridge;
   let daemon: Subprocess<'ignore', 'pipe', 'pipe'>;
   let output: DaemonOutput;
   let deviceId: string;
@@ -287,17 +232,18 @@ describe('the daemon relays model calls from the owner\'s machine', () => {
   beforeAll(async () => {
     root = scratchDir('provider-relay');
     const certs = await mintCertificates(root);
-    harness = createTestUserDO();
+    harness = createTestUserDO({ durableObjectId: ACCOUNT });
     const owner = await testOwner();
     await harness.userDO.setCredential(owner, CODEX_CRED_KEY, { kind: 'oauth', accessToken: ACCESS_TOKEN, refreshToken: 'refresh-never-sent' });
-    const registered = await harness.userDO.registerDevice(owner, 'studio');
+    const registered = await registerTestDevice(harness.userDO, 'studio');
     deviceId = registered.deviceId;
     upstream = startUpstream(certs);
     const proxyPort = await upstream.listen();
-    hub = startHubBridge(harness);
+    hub = startDeviceBridge(harness);
     home = join(root, 'home');
     mkdirSync(home, { recursive: true });
-    writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'user-1', device: registered.deviceId, token: registered.token, origin: hub.origin, root: home }), { mode: 0o600 });
+    writeFileSync(join(home, 'device.key'), registered.key.privateKeyPem, { mode: 0o600 });
+    writeFileSync(join(home, 'device.json'), JSON.stringify({ user: ACCOUNT, device: registered.deviceId, origin: hub.origin, root: home, generation: 0 }), { mode: 0o600 });
     writeFileSync(join(home, 'pc-agent.chatgpt.json'), JSON.stringify(DEVICE_SIGN_IN), { mode: 0o600 });
 
     daemonEnv = {
@@ -307,7 +253,7 @@ describe('the daemon relays model calls from the owner\'s machine', () => {
 
     startDaemon();
     await Promise.race([
-      hub.connected(0),
+      hub.helloed(0),
       daemon.exited.then((code) => { throw new Error(`daemon exited ${String(code)} before connecting: ${output.text().slice(-2000)}`); }),
     ]);
   });
@@ -480,7 +426,7 @@ describe('the daemon relays model calls from the owner\'s machine', () => {
     daemon.kill('SIGTERM');
     await daemon.exited;
     startDaemon();
-    await hub.connected(1);
+    await hub.helloed(1);
     const kept = signIn();
     // Never answered: only the forced stop ends this rotation.
     upstream.state.held = Promise.withResolvers<void>().promise;

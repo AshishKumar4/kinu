@@ -52,12 +52,36 @@ const {
   handle,
   createCheckpoints,
   getConnectTicket,
-  handleTokenRotation,
-  persistRotatedToken,
+  persistGeneration,
   readDeviceConfig,
   startConnectLoop,
+  storeGeneration,
   supervision,
 } = require('../src/index.js');
+
+const crypto = require('node:crypto');
+
+/** A machine's key as `kinu connect` writes device.key: Ed25519, its private half PKCS#8 PEM. */
+function deviceKey() {
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
+
+  return { pem: privateKey.export({ type: 'pkcs8', format: 'pem' }), publicKey };
+}
+
+/** device.json as `kinu connect` writes it on protocol 5: no secret in it. */
+function deviceConfig(fields = {}) {
+  return { user: 'user-1', device: 'dev-1', origin: 'https://kinu.run', root: '/home/u/project', generation: 0, ...fields };
+}
+
+/** A hub's challenge and ticket answers, recording each request's path and body. */
+function ticketHub(seen, ticketAnswer = () => Response.json({ ticket: `pct_${'a'.repeat(32)}` })) {
+  return async (url, init) => {
+    const body = JSON.parse(init.body);
+    seen.push({ path: new URL(url).pathname, body });
+
+    return new URL(url).pathname === '/pc/connect-challenge' ? Response.json({ nonce: `pcc_${'n'.repeat(43)}`, expiresAt: Date.now() + 60_000 }) : ticketAnswer(body);
+  };
+}
 
 const { supervisionSupported } = require('../src/daemon/supervisor.js');
 
@@ -146,49 +170,72 @@ async function oneTurn() {
 // file never survives a call, and files cannot pollute each other. Bun runs
 // each file in a fresh context with fresh builtins (bun 1.4.0). Check
 // `df /tmp` first when these rows go red that fast.
-describe('daemon token rotation', () => {
-  test('the next ticket exchange uses the atomically persisted token', async () => {
-    const root = scratchDir('daemon-token');
+describe('daemon connect generation', () => {
+  test('the next ticket exchange signs the generation on disk, with the machine\'s key, for the hub it dials', async () => {
+    const root = scratchDir('daemon-generation');
     const configPath = path.join(root, 'device.json');
-    const cfg = { user: 'user-1', token: 'T0' };
+    const keyPath = path.join(root, 'device.key');
+    const key = deviceKey();
+    const cfg = deviceConfig();
     fs.writeFileSync(configPath, JSON.stringify(cfg), { mode: 0o600 });
+    fs.writeFileSync(keyPath, key.pem, { mode: 0o600 });
     const seen = [];
 
-    const fetchTicket = async (_url, init) => {
-      seen.push(JSON.parse(init.body));
+    await getConnectTicket(cfg, 'https://kinu.run', ticketHub(seen), { configPath, keyPath });
+    persistGeneration(cfg, 1, configPath);
+    await getConnectTicket(cfg, 'https://kinu.run', ticketHub(seen), { configPath, keyPath });
 
-      return new Response(JSON.stringify({ ticket: `pct_${'a'.repeat(32)}` }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
-    };
+    const tickets = seen.filter((request) => request.path === '/pc/connect-ticket').map((request) => request.body);
+    expect(seen.map((request) => request.path)).toEqual(['/pc/connect-challenge', '/pc/connect-ticket', '/pc/connect-challenge', '/pc/connect-ticket']);
+    expect(tickets.map((body) => body.generation)).toEqual([0, 1]);
 
-    await getConnectTicket(cfg, 'https://kinu.run', fetchTicket);
-    persistRotatedToken(cfg, 'T1', configPath);
-    await getConnectTicket(cfg, 'https://kinu.run', fetchTicket);
+    // Each signs exactly the message the hub checks: protocol, hub origin, device, generation, nonce.
+    for (const body of tickets) {
+      const message = Buffer.from(`kinu-device-connect:5:https://kinu.run:dev-1:${String(body.generation)}:${body.nonce}`);
+      expect(crypto.verify(null, message, key.publicKey, Buffer.from(body.signature, 'base64url'))).toBe(true);
+      expect(Object.keys(body).sort()).toEqual(['device', 'generation', 'nonce', 'signature', 'user']);
+    }
 
-    expect(seen.map((body) => body.token)).toEqual(['T0', 'T1']);
-    expect(JSON.parse(fs.readFileSync(configPath, 'utf8')).token).toBe('T1');
+    expect(JSON.parse(fs.readFileSync(configPath, 'utf8')).generation).toBe(1);
     expect(fs.statSync(configPath).mode & 0o777).toBe(0o600);
-    expect(fs.readdirSync(root)).toEqual(['device.json']);
+    expect(fs.readdirSync(root).sort()).toEqual(['device.json', 'device.key']);
+  });
+
+  test('a device.json with no key beside it buys no ticket: the machine stops as a dead credential', async () => {
+    const root = scratchDir('daemon-generation');
+    const configPath = path.join(root, 'device.json');
+    const cfg = deviceConfig();
+    fs.writeFileSync(configPath, JSON.stringify(cfg), { mode: 0o600 });
+    const seen = [];
+    let failure;
+
+    try {
+      await getConnectTicket(cfg, 'https://kinu.run', ticketHub(seen), { configPath, keyPath: path.join(root, 'device.key') });
+    } catch (err) {
+      failure = err;
+    }
+
+    if (!(failure instanceof Error) || !(failure.cause instanceof Error)) throw new Error('expected the exchange to refuse with a caused Error');
+    expect(failure.message).toBe('device credentials were rejected; re-run: kinu connect');
+    expect(failure.cause.message).toContain('no device key');
+    expect(seen.map((request) => request.path)).toEqual(['/pc/connect-challenge']);
   });
 
   test('a failed persist leaves memory and the old file unchanged', () => {
-    const root = scratchDir('daemon-token');
+    const root = scratchDir('daemon-generation');
     const configPath = path.join(root, 'missing', 'device.json');
-    const cfg = { user: 'user-1', token: 'T0' };
+    const cfg = deviceConfig();
 
-    expect(() => persistRotatedToken(cfg, 'T1', configPath))
-      .toThrow('persist rotated device token');
-    expect(cfg.token).toBe('T0');
+    expect(() => persistGeneration(cfg, 1, configPath)).toThrow('persist connect generation');
+    expect(cfg.generation).toBe(0);
     expect(fs.existsSync(configPath)).toBe(false);
     expect(fs.readdirSync(root)).toEqual([]);
   });
 
-  test('a failed atomic rename preserves config and reports rotation failure', () => {
-    const root = scratchDir('daemon-token');
+  test('a failed atomic rename preserves the config and is not acknowledged', () => {
+    const root = scratchDir('daemon-generation');
     const configPath = path.join(root, 'device.json');
-    const cfg = { user: 'user-1', token: `pdt_${'0'.repeat(32)}` };
+    const cfg = deviceConfig();
     const messages = [];
     fs.writeFileSync(configPath, JSON.stringify(cfg), { mode: 0o600 });
 
@@ -197,47 +244,39 @@ describe('daemon token rotation', () => {
     });
 
     try {
-      expect(handleTokenRotation(
-        cfg,
-        { type: 'ROTATE', token: `pdt_${'1'.repeat(32)}` },
-        configPath,
-        (...args) => messages.push(args),
-      )).toBe(true);
-      expect(cfg.token).toBe(`pdt_${'0'.repeat(32)}`);
-      expect(JSON.parse(fs.readFileSync(configPath, 'utf8')).token).toBe(`pdt_${'0'.repeat(32)}`);
+      expect(storeGeneration(cfg, { type: 'GENERATION', generation: 1 }, configPath, (...args) => messages.push(args))).toBe(false);
+      expect(cfg.generation).toBe(0);
+      expect(JSON.parse(fs.readFileSync(configPath, 'utf8')).generation).toBe(0);
       expect(fs.readdirSync(root)).toEqual(['device.json']);
-      expect(messages[0]?.[0]).toBe('Device token rotation failed:');
+      expect(messages[0]?.[0]).toBe('Connect generation could not be stored:');
     } finally {
       rename.mockRestore();
     }
   });
 
-  test('a rotation carrying anything but a device token is neither stored nor taken', () => {
-    const root = scratchDir('daemon-token');
+  test('a generation frame carrying anything but a whole number above 0 is neither stored nor taken', () => {
+    const root = scratchDir('daemon-generation');
     const configPath = path.join(root, 'device.json');
-    const held = `pdt_${'0'.repeat(32)}`;
     const messages = [];
 
-    for (const token of [{ weird: 'object' }, 42, 'pdt_short', `ptc_${'1'.repeat(32)}`]) {
-      const cfg = { user: 'user-1', token: held };
+    for (const generation of [{ weird: 'object' }, '2', 0, -1, 1.5, undefined]) {
+      const cfg = deviceConfig();
       fs.writeFileSync(configPath, JSON.stringify(cfg), { mode: 0o600 });
 
-      expect(handleTokenRotation(cfg, { type: 'ROTATE', token }, configPath, (...args) => messages.push(args))).toBe(true);
-      // The daemon acknowledges only when its held token equals the frame's,
-      // so an untaken token is also an unacknowledged one.
-      expect(cfg.token).toBe(held);
-      expect(JSON.parse(fs.readFileSync(configPath, 'utf8')).token).toBe(held);
+      expect(storeGeneration(cfg, { type: 'GENERATION', generation }, configPath, (...args) => messages.push(args))).toBe(false);
+      expect(cfg.generation).toBe(0);
+      expect(JSON.parse(fs.readFileSync(configPath, 'utf8')).generation).toBe(0);
     }
 
-    expect(messages.map((message) => message[0])).toEqual(Array(4).fill('Device token rotation refused:'));
+    expect(messages.map((message) => message[0])).toEqual(Array(6).fill('Connect generation refused:'));
   });
 });
 
 describe('daemon startup hardening', () => {
-  test('uses the configured home and never reflects a corrupt config token', () => {
+  test('uses the configured home and never reflects a corrupt config', () => {
     const configPath = path.join(DEVICE_HOME, 'corrupt-device.json');
-    const secret = 'pdt_secret_that_must_not_appear';
-    fs.writeFileSync(configPath, `{"user":"user-1","token":"${secret}",`);
+    const secret = 'dev-content_that_must_not_appear';
+    fs.writeFileSync(configPath, `{"user":"user-1","device":"${secret}",`);
 
     let failure;
 
@@ -255,9 +294,9 @@ describe('daemon startup hardening', () => {
       .toThrow('run: kinu connect');
   });
 
-  test('a device config naming a plaintext origin off this machine is refused before any token is sent', () => {
+  test('a device config naming a plaintext origin off this machine is refused before anything is sent', () => {
     const configPath = path.join(DEVICE_HOME, 'origin-device.json');
-    const config = (origin) => JSON.stringify({ user: 'user-1', device: 'device-1', token: `pdt_${'a'.repeat(32)}`, origin, root: '/home/u/project' });
+    const config = (origin) => JSON.stringify(deviceConfig({ origin }));
 
     for (const origin of ['http://kinu.example', 'ftp://kinu.example', 'http://192.0.2.10:8787', 'not a url']) {
       fs.writeFileSync(configPath, config(origin), { mode: 0o600 });
@@ -273,13 +312,10 @@ describe('daemon startup hardening', () => {
 
   test('a device config is read whole or refused: every field the daemon runs on, nonempty, and an absolute directory', () => {
     const configPath = path.join(DEVICE_HOME, 'partial-device.json');
-    // As the previous release's kinu connect wrote it: no device, which only the CLI reads.
-    const whole = { user: 'user-1', token: `pdt_${'a'.repeat(32)}`, origin: 'https://kinu.run', root: '/home/u/project' };
+    const whole = deviceConfig();
 
     fs.writeFileSync(configPath, JSON.stringify(whole), { mode: 0o600 });
     expect(readDeviceConfig(configPath)).toEqual(whole);
-    fs.writeFileSync(configPath, JSON.stringify({ ...whole, device: 'device-1' }), { mode: 0o600 });
-    expect(readDeviceConfig(configPath)).toEqual({ ...whole, device: 'device-1' });
 
     for (const field of Object.keys(whole)) {
       for (const partial of [{ ...whole, [field]: undefined }, { ...whole, [field]: '' }]) {
@@ -288,22 +324,33 @@ describe('daemon startup hardening', () => {
       }
     }
 
-    for (const malformed of [{ ...whole, device: '' }, { ...whole, device: 1 }, { ...whole, root: 'project' }]) {
+    for (const malformed of [{ ...whole, device: 1 }, { ...whole, root: 'project' }, { ...whole, generation: -1 }, { ...whole, generation: 1.5 }, { ...whole, generation: '1' }]) {
       fs.writeFileSync(configPath, JSON.stringify(malformed), { mode: 0o600 });
       expect(() => readDeviceConfig(configPath)).toThrow();
     }
   });
 
-  test('redacts rejected device credentials from ticket exchange failures', async () => {
-    const secret = 'pdt_secret_that_must_not_appear';
+  // An earlier protocol's link holds a bearer no hub takes: the daemon runs nothing on it, and names what mends it.
+  test('a device config an earlier protocol wrote, with its bearer, is refused in words that name kinu update', () => {
+    const configPath = path.join(DEVICE_HOME, 'earlier-device.json');
+    const bearer = `pdt_${'a'.repeat(32)}`;
+
+    fs.writeFileSync(configPath, JSON.stringify({ user: 'user-1', device: 'dev-1', token: bearer, origin: 'https://kinu.run', root: '/home/u/project' }), { mode: 0o600 });
+    expect(() => readDeviceConfig(configPath)).toThrow('run: kinu update');
+    expect(() => readDeviceConfig(configPath)).not.toThrow(bearer);
+  });
+
+  test('a ticket exchange the hub refuses is a dead credential, in the hub\'s own words', async () => {
+    const root = scratchDir('daemon-refused');
+    const configPath = path.join(root, 'device.json');
+    const keyPath = path.join(root, 'device.key');
+    fs.writeFileSync(configPath, JSON.stringify(deviceConfig()), { mode: 0o600 });
+    fs.writeFileSync(keyPath, deviceKey().pem, { mode: 0o600 });
+    const said = 'Kinu revoked this device because two machines used its key.';
     let failure;
 
     try {
-      await getConnectTicket(
-        { user: 'user-1', token: secret },
-        'https://kinu.run',
-        async () => Response.json({ error: `rejected ${secret}` }, { status: 401 }),
-      );
+      await getConnectTicket(deviceConfig(), 'https://kinu.run', ticketHub([], () => Response.json({ error: said }, { status: 401 })), { configPath, keyPath });
     } catch (err) {
       failure = err;
     }
@@ -312,9 +359,8 @@ describe('daemon startup hardening', () => {
       throw new Error('expected ticket exchange to reject with a caused Error');
     }
 
-    expect(failure.message).toContain('device credentials were rejected');
-    expect(failure.message).not.toContain(secret);
-    expect(failure.cause.message).not.toContain(secret);
+    expect(failure.message).toBe('device credentials were rejected; re-run: kinu connect');
+    expect(failure.cause.message).toBe(said);
   });
 
   test('mints a fresh ticket after a refusal and never logs either ticket', async () => {
@@ -338,7 +384,6 @@ describe('daemon startup hardening', () => {
       logger(...parts) {
         logs.push(parts.join(' '));
       },
-      secret: () => 'pdt_device_secret',
       schedule(next) {
         scheduled.push(next);
       },
@@ -383,7 +428,7 @@ describe('daemon startup hardening', () => {
 
   // A rejected credential is the one outcome retrying cannot fix. Dialling on it
   // anyway fills the log with a failure nobody reads.
-  test('a refused device token stops the loop loudly instead of dialling forever', async () => {
+  test('a refused device credential stops the loop loudly instead of dialling forever', async () => {
     const scheduled = [];
     const logs = [];
     let rejected = 0;
@@ -1596,7 +1641,7 @@ describe('daemon checkpoint protocol', () => {
 
   test('a checkpoint never covers Kinu\'s own directory', async () => {
     const { ctx } = setup();
-    fs.writeFileSync(path.join(DEVICE_HOME, 'device.json'), '{"token":"pdt_never_in_a_store"}', { mode: 0o600 });
+    fs.writeFileSync(path.join(DEVICE_HOME, 'device.key'), 'the machine key, never in a store\n', { mode: 0o600 });
     const ws = fakeWs();
 
     // A daemon that updated itself runs from its own directory, and a hint
@@ -1740,43 +1785,53 @@ describe('daemon toolchain probe', () => {
 // The suites above exercise handle() in this process. This one runs the REAL
 // daemon as a child — spawned with process.execPath (Bun) the same way
 // device-connect's daemonRuntime does — against a local fake hub speaking the
-// /pc/connect-ticket + /pc/connect upgrade protocol. It proves the daemon's
-// CommonJS source, node: builtins, child_process supervision, fs.watch
-// in-flight waits and the global WebSocket all work under Bun, by running
-// them: HELLO on connect, ROTATE persistence, an exec round-trip, execCancel,
-// a file op, and reconnect after the socket drops.
+// /pc/connect-challenge + /pc/connect-ticket + /pc/connect upgrade protocol. It
+// proves the daemon's CommonJS source, node: builtins, child_process
+// supervision, fs.watch in-flight waits and the global WebSocket all work
+// under Bun, by running them: AUTH and HELLO on connect, the connect
+// generation stored, an exec round-trip, execCancel, a file op, and reconnect
+// after the socket drops.
 
 describe('daemon process under Bun against a local hub', () => {
   const DAEMON_PATH = path.join(__dirname, '..', 'src', 'index.js');
 
   function makeConfig(root, origin) {
-    const config = { user: 'user-1', device: 'device-1', token: `pdt_${'a'.repeat(32)}`, origin, root };
+    const config = deviceConfig({ device: 'device-1', origin, root });
     const configPath = path.join(root, 'device.json');
     fs.writeFileSync(configPath, JSON.stringify(config), { mode: 0o600 });
+    fs.writeFileSync(path.join(root, 'device.key'), deviceKey().pem, { mode: 0o600 });
 
     return { config, configPath };
   }
 
   /**
-   * A local hub: ticket exchange over HTTP, the connect upgrade over
-   * WebSocket, and one captured frame stream with a JSON-frame reply helper.
-   * The daemon treats it exactly as it treats production — no test hooks
-   * inside the daemon.
+   * A local hub: the challenge and the ticket exchange over HTTP, the connect
+   * upgrade over WebSocket, and one captured frame stream with a JSON-frame
+   * reply helper. Each upgrade's URL and account header are kept. The daemon
+   * treats it exactly as it treats production — no test hooks inside the
+   * daemon.
    */
   function startFakeHub() {
     const frames = [];
     const sockets = [];
+    const upgrades = [];
 
     const hub = Bun.serve({
       port: 0,
       fetch(req, server) {
         const url = new URL(req.url);
 
+        if (url.pathname === '/pc/connect-challenge') {
+          return Response.json({ nonce: `pcc_${'n'.repeat(43)}`, expiresAt: Date.now() + 60_000 });
+        }
+
         if (url.pathname === '/pc/connect-ticket') {
           return Response.json({ ticket: `pct_${'b'.repeat(32)}`, expiresAt: Date.now() + 60_000 });
         }
 
         if (url.pathname === '/pc/connect') {
+          upgrades.push({ url: req.url, account: req.headers.get('x-kinu-auth-account') });
+
           if (server.upgrade(req)) return;
 
           return new Response('upgrade failed', { status: 400 });
@@ -1802,6 +1857,7 @@ describe('daemon process under Bun against a local hub', () => {
     return {
       origin: `http://localhost:${hub.port}`,
       frames,
+      upgrades,
       socket() { return sockets[sockets.length - 1]; },
       close() { return hub.stop(true); },
     };
@@ -1885,7 +1941,7 @@ describe('daemon process under Bun against a local hub', () => {
     expect(fs.readFileSync(logPath, 'utf8')).toContain(`Kinu PC agent: ENOTDIR: not a directory, scandir '${notADirectory}'`);
   });
 
-  test('HELLO on connect, rotation, exec, cancel, file op, and reconnect — all under Bun', async () => {
+  test('AUTH then HELLO on connect, the connect generation, exec, cancel, file op, and reconnect — all under Bun', async () => {
     if (process.platform !== 'linux' && process.platform !== 'darwin') return;
     const root = scratchDir('daemon-e2e');
     // Outside KINU_HOME on purpose: Kinu's own directory is never served
@@ -1909,13 +1965,16 @@ describe('daemon process under Bun against a local hub', () => {
         expect(hello.pid).toBeGreaterThan(0);
         const daemonLog = () => fs.readFileSync(logPath, 'utf-8');
 
-        // ROTATE: the hub rotates the long-lived token; the daemon persists
-        // it and ACKNOWLEDGES. The hub holds the superseded token valid until
-        // that frame, so this is what ends its grace.
-        const rotated = `pdt_${'c'.repeat(32)}`;
-        hub.socket().send(JSON.stringify({ type: 'ROTATE', token: rotated }));
-        expect(await untilHub(() => hub.frames.find((f) => f.type === 'ROTATE_ACK'))).not.toBeNull();
-        expect(JSON.parse(fs.readFileSync(path.join(root, 'device.json'), 'utf8')).token).toBe(rotated);
+        // AUTH is the socket's first frame, the ticket in it; the URL carries
+        // neither the ticket nor the account, which rides in its header.
+        expect(hub.frames[0]).toEqual({ type: 'AUTH', user: 'user-1', ticket: `pct_${'b'.repeat(32)}` });
+        expect(hub.upgrades).toEqual([{ url: `${hub.origin}/pc/connect`, account: 'user-1' }]);
+
+        // GENERATION: the hub hands the next connect generation; the daemon
+        // stores it and answers, and the hub commits it on that answer.
+        hub.socket().send(JSON.stringify({ type: 'GENERATION', generation: 1 }));
+        expect(await untilHub(() => hub.frames.find((f) => f.type === 'GENERATION_ACK'))).toEqual({ type: 'GENERATION_ACK', generation: 1 });
+        expect(JSON.parse(fs.readFileSync(path.join(root, 'device.json'), 'utf8')).generation).toBe(1);
 
         const reply = replyReader(hub, daemonLog);
 
@@ -2009,10 +2068,10 @@ describe('daemon process under Bun against a local hub', () => {
     }
   }
 
-  // F2. ~/.kinu holds device.json (this machine's long-lived token) and
-  // config.json (the owner's interactive CLI bearer). Reading either one turns
-  // a file grant into the tier that granted it, so the fence does not depend
-  // on which root the call carries: these frames are the raw tier, with the
+  // F2. ~/.kinu holds device.key (this machine's private key) and config.json
+  // (the owner's interactive CLI bearer). Reading either one turns a file
+  // grant into the tier that granted it, so the fence does not depend on
+  // which root the call carries: these frames are the raw tier, with the
   // owner's Sandbox switch off — the strongest thing a workspace can hold.
   test('Kinu\'s own directory is never served through the tunnel, at any tier', async () => {
     if (process.platform !== 'linux' && process.platform !== 'darwin') return;
@@ -2022,6 +2081,7 @@ describe('daemon process under Bun against a local hub', () => {
       const refused = [
         ['rpc-fence00rd-1', 'readRange', [path.join(root, 'config.json'), 0, 64]],
         ['rpc-fence00dv-1', 'readRange', [path.join(root, 'device.json'), 0, 64]],
+        ['rpc-fence00ky-1', 'readRange', [path.join(root, 'device.key'), 0, 64]],
         ['rpc-fence00ls-1', 'listFiles', [root]],
         ['rpc-fence00st-1', 'statPath', [path.join(root, 'device.json')]],
         ['rpc-fence00wr-1', 'writeFile', [path.join(root, 'device.json'), '{"token":"attacker"}']],
@@ -2057,11 +2117,11 @@ describe('daemon process under Bun against a local hub', () => {
     });
   });
 
-  // F3. Acknowledgement is what ends the hub's grace on the superseded token,
-  // so a rotation this daemon could NOT store must not be acknowledged: the
-  // secret still on its disk is the only one it has, and the hub has to keep
-  // honouring it or the machine is locked out.
-  test('a rotation it could not store is not acknowledged', async () => {
+  // F3. The answer is what the hub commits, so a generation this daemon could
+  // NOT store must not be answered: the one still on its disk is what its next
+  // connect signs, and the hub has to still hold it, or the machine reads as a
+  // second holder of its key.
+  test('a generation it could not store is not acknowledged', async () => {
     if (process.platform !== 'linux' && process.platform !== 'darwin') return;
     await withDaemon(undefined, async ({ hub, root, daemonLog }) => {
       // The store is the directory, so making it unwritable is what makes the
@@ -2069,14 +2129,13 @@ describe('daemon process under Bun against a local hub', () => {
       fs.chmodSync(root, 0o500);
 
       try {
-        hub.socket().send(JSON.stringify({ type: 'ROTATE', token: `pdt_${'d'.repeat(32)}` }));
-        await untilHub(() => daemonLog().includes('Device token rotation failed:'));
-        expect(daemonLog()).toContain('Device token rotation failed:');
-        // The old secret is still the one on disk, and nothing told the hub
-        // otherwise.
-        expect(JSON.parse(fs.readFileSync(path.join(root, 'device.json'), 'utf8')).token)
-          .toBe(`pdt_${'a'.repeat(32)}`);
-        expect(hub.frames.filter((frame) => frame.type === 'ROTATE_ACK')).toEqual([]);
+        hub.socket().send(JSON.stringify({ type: 'GENERATION', generation: 1 }));
+        await untilHub(() => daemonLog().includes('Connect generation could not be stored:'));
+        expect(daemonLog()).toContain('Connect generation could not be stored:');
+        // The old generation is still the one on disk, and nothing told the
+        // hub otherwise.
+        expect(JSON.parse(fs.readFileSync(path.join(root, 'device.json'), 'utf8')).generation).toBe(0);
+        expect(hub.frames.filter((frame) => frame.type === 'GENERATION_ACK')).toEqual([]);
       } finally {
         fs.chmodSync(root, 0o700);
       }

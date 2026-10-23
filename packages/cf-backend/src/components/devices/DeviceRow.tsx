@@ -85,9 +85,9 @@ export function DeviceRow({
         </Button>}>
           <div className="space-y-1">
             <div className="t-item">{device.label}</div>
-            {device.reuseDetectedAt !== null && (
+            {device.cloneDetectedAt !== null && (
               <>
-                <p>Kinu revoked this device: its key was used after it had been replaced, so a copy of this machine&apos;s ~/.kinu/device.json exists somewhere else.</p>
+                <p>Kinu revoked this device because two machines used its key, so a copy of this machine&apos;s ~/.kinu exists somewhere else.</p>
                 <p>Run kinu connect on the machine you trust to link it again.</p>
               </>
             )}

@@ -1,10 +1,11 @@
 // The stub origin serves poison at the retired /pc/daemon.js route, so a connect that fetches
 // executable bytes shows up as poison on disk.
-import { AwaitedList, awaitExit, killAndAwaitExit, recordedIn, runToExit } from '@kinu.run/test-utils';
+import { AwaitedList, awaitExit, killAndAwaitExit, present, recordedIn, runToExit } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 
 import { homedir } from 'node:os';
+import { createPublicKey, generateKeyPairSync, verify } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import type { Server, Subprocess } from 'bun';
 import { afterEach, beforeAll, describe, expect, test } from 'bun:test';
@@ -69,12 +70,23 @@ afterEach(async () => {
   await Promise.all(updateHubs.splice(0).map((hub) => hub.close()));
 });
 
+/** The old key's signature over a registration that replaces its device. */
+const ReplacesSchema = v.object({ device: v.string(), signature: v.string() });
+
+/** A registration as the CLI posts it, its public key apart. */
+interface StubRegistration {
+  label?: string;
+  replaces?: v.InferOutput<typeof ReplacesSchema>;
+}
+
 interface StubCloud {
   origin: string;
   hits: { daemonScript: number; ticket: number; signIn: number };
-  joins: AwaitedList<{ ticket?: string; label?: string; replaces?: string }>;
+  joins: AwaitedList<{ ticket?: string; label?: string; replaces?: v.InferOutput<typeof ReplacesSchema> }>;
   registrationRequests: AwaitedList<Request>;
   listRequests: AwaitedList<Request>;
+  /** The public key each registration and join carried, in order. */
+  publicKeys: string[];
 }
 
 interface StubCloudOptions {
@@ -82,7 +94,7 @@ interface StubCloudOptions {
   deviceOrigin?: string;
   registerGate?: Promise<void>;
   registrationFailure?: { status: number; error: string };
-  onRegister?: (body: { label?: string; replaces?: string }) => void;
+  onRegister?: (body: StubRegistration) => void;
   /** Ticket-exchange statuses in order, last repeating; 401 makes the daemon exit, 404 retries. */
   ticketStatuses?: readonly number[];
   /** The account `/api/cli/me` names for the session it is asked with. */
@@ -95,18 +107,21 @@ const POISON_MARKER = 'poisoned-daemon-ran';
 const POISON_DAEMON = [
   '// /pc/connect-ticket',
   "const cancel = 'cancel';",
-  "const rotate = 'ROTATE';",
+  "const generation = 'GENERATION';",
   "const fs = require('node:fs');",
   "const path = require('node:path');",
   `fs.writeFileSync(path.join(process.env.KINU_HOME, '${POISON_MARKER}'), 'ran');`,
   'setInterval(() => {}, 1000);',
 ].join('\n');
 
+const RegistrationBodySchema = v.object({ publicKey: v.string(), label: v.optional(v.string()), replaces: v.optional(ReplacesSchema) });
+
 function startStubCloud(opts: StubCloudOptions = {}): StubCloud {
   const hits = { daemonScript: 0, ticket: 0, signIn: 0 };
-  const joins = new AwaitedList<{ ticket?: string; label?: string; replaces?: string }>();
+  const joins = new AwaitedList<{ ticket?: string; label?: string; replaces?: v.InferOutput<typeof ReplacesSchema> }>();
   const registrationRequests = new AwaitedList<Request>();
   const listRequests = new AwaitedList<Request>();
+  const publicKeys: string[] = [];
 
   const server = Bun.serve({
     port: 0,
@@ -115,8 +130,11 @@ function startStubCloud(opts: StubCloudOptions = {}): StubCloud {
 
       if (url.pathname === '/api/cli/devices' && req.method === 'POST') {
         registrationRequests.push(req);
-        const body = v.safeParse(v.object({ label: v.optional(v.string()), replaces: v.optional(v.string()) }), await req.json());
-        opts.onRegister?.(body.success ? body.output : {});
+        const body = v.parse(RegistrationBodySchema, await req.json());
+        const { publicKey, ...registration } = body;
+
+        publicKeys.push(publicKey);
+        opts.onRegister?.(registration);
 
         if (opts.registerGate) await opts.registerGate;
 
@@ -126,7 +144,6 @@ function startStubCloud(opts: StubCloudOptions = {}): StubCloud {
 
         return Response.json({
           deviceId: 'dev_1',
-          token: 'device-token',
           userId: 'user_1',
           origin: opts.deviceOrigin ?? `http://localhost:${server.port}`,
         });
@@ -138,6 +155,10 @@ function startStubCloud(opts: StubCloudOptions = {}): StubCloud {
         return Response.json(opts.devices?.() ?? []);
       }
 
+      if (url.pathname === '/pc/connect-challenge' && opts.ticketStatuses !== undefined) {
+        return Response.json({ nonce: `pcc_${'n'.repeat(43)}`, expiresAt: Date.now() + 60_000 });
+      }
+
       if (url.pathname === '/pc/connect-ticket' && opts.ticketStatuses !== undefined) {
         const status = opts.ticketStatuses[Math.min(hits.ticket, opts.ticketStatuses.length - 1)];
         hits.ticket += 1;
@@ -146,11 +167,13 @@ function startStubCloud(opts: StubCloudOptions = {}): StubCloud {
       }
 
       if (url.pathname === '/pc/join' && req.method === 'POST') {
-        const body = v.parse(v.object({ ticket: v.optional(v.string()), label: v.optional(v.string()), replaces: v.optional(v.string()) }), await req.json());
+        const { publicKey, ...body } = v.parse(v.object({ ticket: v.optional(v.string()), ...RegistrationBodySchema.entries }), await req.json());
+
+        publicKeys.push(publicKey);
         joins.push(body);
 
         return Response.json({
-          deviceId: 'dev_joined', token: 'device-token', label: 'joined-by-ticket', userId: JOIN_ACCOUNT,
+          deviceId: 'dev_joined', label: 'joined-by-ticket', userId: JOIN_ACCOUNT,
           origin: opts.deviceOrigin ?? `http://localhost:${server.port}`,
         }, { status: 201 });
       }
@@ -171,7 +194,7 @@ function startStubCloud(opts: StubCloudOptions = {}): StubCloud {
 
   stubs.push(server);
 
-  return { origin: 'http://localhost:' + server.port, hits, joins, registrationRequests, listRequests };
+  return { origin: 'http://localhost:' + server.port, hits, joins, registrationRequests, listRequests, publicKeys };
 }
 
 function makeHome(config: JsonObject): string {
@@ -307,7 +330,7 @@ describe('device-connect prompt policy', () => {
     // This machine is the device its device.json names, whatever its hostname.
     const stub = startStubCloud({ devices: () => [connectedDevice(true, { id: 'dev_this', hostname: 'renamed-box' })] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
-    writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'u', device: 'dev_this', token: 'pdt_this', origin: stub.origin, root: repoRoot }));
+    writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'u', device: 'dev_this', origin: stub.origin, root: repoRoot, generation: 3 }));
 
     const out = await runScript(home, `
       import { shouldOfferDeviceConnect } from './packages/cli/src/device-connect.ts';
@@ -389,18 +412,21 @@ describe('device-connect daemon lifecycle', () => {
     expect(stub.registrationRequests.items.length).toBe(1);
     expect(stub.hits.daemonScript).toBe(0);
     // runScript runs in the repo root, which is not what the daemon reports as the consented tree: this user's home is.
+    // device.json holds no secret; device.key holds the machine's private key, whose public half alone was sent.
     const deviceConfig = parseJsonObject(readFileSync(join(home, 'device.json'), 'utf-8'));
-    expect(deviceConfig).toEqual({ user: 'user_1', device: 'dev_1', token: 'device-token', origin: stub.origin, root: homedir() });
+    expect(deviceConfig).toEqual({ user: 'user_1', device: 'dev_1', origin: stub.origin, root: homedir(), generation: 0 });
     expect(statSync(join(home, 'pc-agent.js')).mode & 0o777).toBe(0o700);
     expect(statSync(join(home, 'device.json')).mode & 0o777).toBe(0o600);
+    expect(statSync(join(home, 'device.key')).mode & 0o777).toBe(0o600);
+    expect(stub.publicKeys).toEqual([present(createPublicKey(readFileSync(join(home, 'device.key'), 'utf8')).export({ format: 'jwk' }).x, 'the raw public key')]);
     expect(statSync(join(home, 'agents')).mode & 0o777).toBe(0o700);
     expect(readdirSync(home).filter((entry) => entry.includes('.tmp-'))).toEqual([]);
 
     await awaitExit(status.daemonPid ?? 0);
   });
 
-  test('linking this machine again names the registration it replaces, only to the hub that issued it', async () => {
-    const bodies: Array<{ label?: string; replaces?: string }> = [];
+  test('linking this machine again names the registration it replaces, signed by its old key, only to the hub that issued it', async () => {
+    const bodies: StubRegistration[] = [];
     const stub = startStubCloud({ devices: () => [connectedDevice(true)], onRegister: (body) => { bodies.push(body); } });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
 
@@ -417,20 +443,26 @@ describe('device-connect daemon lifecycle', () => {
       if (existsSync(pidfile)) await awaitExit(Number(readFileSync(pidfile, 'utf-8').trim()));
     };
 
-    // A device.json another deployment issued is that deployment's secret, and stays unsent.
-    writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'u', device: 'dev_other_hub', token: 'pdt_other_hub', origin: 'https://other.example', root: repoRoot }));
+    // A device another deployment issued is that deployment's, and its key signs nothing here.
+    writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'u', device: 'dev_other_hub', origin: 'https://other.example', root: repoRoot, generation: 4 }));
+    writeFileSync(join(home, 'device.key'), generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600 });
     await connect();
     await connect();
 
-    expect(bodies.map((body) => body.replaces)).toEqual([undefined, 'device-token']);
+    expect(bodies.map((body) => body.replaces?.device)).toEqual([undefined, 'dev_1']);
+    // The second link's replacement is the first link's key's signature over the new key it registers.
+    const [first, second] = stub.publicKeys;
+    const signature = present(bodies[1]?.replaces, 'the replacement').signature;
+    const message = Buffer.from(`kinu-device-replace:5:${stub.origin}:dev_1:${String(second)}`);
+    expect(verify(null, message, createPublicKey({ key: { kty: 'OKP', crv: 'Ed25519', x: String(first) }, format: 'jwk' }), Buffer.from(signature, 'base64url'))).toBe(true);
   });
 
-  test('a machine the previous release linked names no device: it is offered a connect, and linking replaces its token', async () => {
-    const bodies: Array<{ label?: string; replaces?: string }> = [];
+  test('a machine an earlier protocol linked is offered a connect, and linking sends nothing of its bearer', async () => {
+    const bodies: StubRegistration[] = [];
     const stub = startStubCloud({ devices: () => [connectedDevice(true)], onRegister: (body) => { bodies.push(body); } });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
-    // As beaf28a46's kinu connect wrote it, and as an update leaves it: no device the hub issued, so none to confirm.
-    writeFileSync(join(home, 'device.json'), `${JSON.stringify({ user: 'u', token: 'pdt_this', origin: stub.origin, root: repoRoot }, null, 2)}\n`);
+    // As protocol 4's kinu connect wrote it: a bearer the hub no longer takes, so a link that confirms nothing.
+    writeFileSync(join(home, 'device.json'), `${JSON.stringify({ user: 'u', device: 'dev_this', token: 'pdt_this', origin: stub.origin, root: repoRoot }, null, 2)}\n`);
 
     const out = await runScript(home, `
       import { connectDevice, shouldOfferDeviceConnect } from './packages/cli/src/device-connect.ts';
@@ -444,9 +476,10 @@ describe('device-connect daemon lifecycle', () => {
 
     if (existsSync(pidfile)) await awaitExit(Number(readFileSync(pidfile, 'utf-8').trim()));
 
-    expect(JSON.parse(out.trim())).toEqual({ offered: true, result: connectedResult() });
-    expect(bodies.map((body) => body.replaces)).toEqual(['pdt_this']);
-    expect(parseJsonObject(readFileSync(join(home, 'device.json'), 'utf-8'))).toMatchObject({ device: 'dev_1', token: 'device-token' });
+    expect(JSON.parse(out.trim())).toMatchObject({ offered: true, result: { kind: 'connected', deviceId: 'dev_1' } });
+    expect(bodies).toEqual([{}]);
+    expect(stub.registrationRequests.items).toHaveLength(1);
+    expect(parseJsonObject(readFileSync(join(home, 'device.json'), 'utf-8'))).toEqual({ user: 'user_1', device: 'dev_1', origin: stub.origin, root: homedir(), generation: 0 });
   });
 
   // 26244c765: "This PC is already connected" read any connected device of the account as this machine.
@@ -466,7 +499,7 @@ describe('device-connect daemon lifecycle', () => {
       const daemon = Bun.spawn({ cmd: [process.execPath, join(home, 'pc-agent.js')], stdin: 'pipe', env: { ...process.env, KINU_HOME: home } });
       sleepers.push(daemon);
       writeFileSync(join(home, 'pc-agent.pid'), `${daemon.pid}\n`, { mode: 0o600 });
-      writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'u', device: 'dev_this', token: 'pdt_this', origin: stub.origin, root: repoRoot }));
+      writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'u', device: 'dev_this', origin: stub.origin, root: repoRoot, generation: 1 }));
 
       const out = await runScript(home, `
         import { connectDevice } from './packages/cli/src/device-connect.ts';
@@ -654,7 +687,7 @@ describe('device-connect install hardening', () => {
   test('kinu connect replaces a malformed local config and starts a working shipped daemon', async () => {
     const hub = startUpdateHub({ served: VERSION, archive: new Uint8Array() });
     updateHubs.push(hub);
-    const registrations: { label?: string; replaces?: string }[] = [];
+    const registrations: StubRegistration[] = [];
 
     const stub = startStubCloud({
       deviceOrigin: hub.origin,
@@ -695,10 +728,10 @@ describe('device-connect install hardening', () => {
     await socket.waitForReply('rpc-shipspill0-1ack');
   });
 
-  test('kinu connect reads device.json as the daemon does: one its daemon would refuse is replaced, its token not reused', async () => {
+  test('kinu connect reads device.json as the daemon does: one its daemon would refuse is replaced, and nothing of it is sent', async () => {
     const hub = startUpdateHub({ served: VERSION, archive: new Uint8Array() });
     updateHubs.push(hub);
-    const registrations: { label?: string; replaces?: string }[] = [];
+    const registrations: StubRegistration[] = [];
 
     const stub = startStubCloud({
       deviceOrigin: hub.origin,
@@ -709,7 +742,7 @@ describe('device-connect install hardening', () => {
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
     daemonHomes.push(home);
     // Every field present, on this hub, but its directory relative: the daemon refuses it at start.
-    writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'old', device: 'dev_old', token: 'old-token', origin: stub.origin, root: 'project' }), { mode: 0o600 });
+    writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'old', device: 'dev_old', origin: stub.origin, root: 'project', generation: 2 }), { mode: 0o600 });
 
     const connected = spawnConnectInPty(home, 'reconnected', repoRoot);
     await connected.waitFor('Link and start the daemon?');
@@ -737,8 +770,9 @@ describe('device-connect install hardening', () => {
     `);
 
     expect(failure).toContain('installing the device daemon');
-    expect(failure).not.toContain('device-token');
+    expect(failure).not.toContain('PRIVATE KEY');
     expect(existsSync(join(home, 'device.json'))).toBe(false);
+    expect(existsSync(join(home, 'device.key'))).toBe(false);
     expect(readdirSync(home).filter((entry) => entry.includes('.tmp-'))).toEqual([]);
   });
 
@@ -824,7 +858,7 @@ describe('device-connect install hardening', () => {
     expect(command).toContain(join(home, 'pc-agent.js'));
   });
 
-  test('reports a device-log permission failure without exposing the device token', async () => {
+  test('reports a device-log permission failure without exposing the device key', async () => {
     const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
     const logPath = join(home, 'pc-agent.log');
@@ -842,7 +876,7 @@ describe('device-connect install hardening', () => {
     `);
 
     expect(failure).toContain('opening the device daemon log');
-    expect(failure).not.toContain('device-token');
+    expect(failure).not.toContain('PRIVATE KEY');
   });
 
   test('fails fast when the daemon exits at startup', async () => {
@@ -992,9 +1026,10 @@ describe('device daemon single-instance lock', () => {
 
     writeFileSync(
       join(home, 'device.json'),
-      `${JSON.stringify({ user: 'user_1', device: 'dev_1', token: 'device-token', origin, root: repoRoot })}\n`,
+      `${JSON.stringify({ user: 'user_1', device: 'dev_1', origin, root: repoRoot, generation: 0 })}\n`,
       { mode: 0o600 },
     );
+    writeFileSync(join(home, 'device.key'), generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600 });
 
     return home;
   }
@@ -1213,7 +1248,8 @@ const JOIN_ACCOUNT = '0123456789abcdef0123456789abcdef';
 const JOIN_TICKET = `pjt_${JOIN_ACCOUNT}_${'j'.repeat(43)}`;
 
 describe("a browser's connect command, run on a machine", () => {
-  /** A hub whose accepted daemon is handed a new token, and a cloud that joins by ticket and names `signedInAs`. */
+  /** A hub whose accepted daemon is handed its first connect generation, and a cloud that joins by ticket and names
+   *  `signedInAs`. */
   function joinWorld(signedInAs?: { id: string; email: string }) {
     const hub = startUpdateHub({ served: VERSION, archive: new Uint8Array() });
     updateHubs.push(hub);
@@ -1310,22 +1346,28 @@ describe("a browser's connect command, run on a machine", () => {
     expect(existsSync(join(home, 'device.json'))).toBe(false);
   });
 
-  test('a machine linked to another account is not relinked by a ticket', async () => {
-    const { stub } = joinWorld();
-    const home = makeHome({ origin: stub.origin });
-    const linked = { user: 'f'.repeat(32), device: 'dev_theirs', token: 'pdt_theirs', origin: stub.origin, root: homedir() };
-    writeFileSync(join(home, 'device.json'), JSON.stringify(linked), { mode: 0o600 });
+  // On this protocol, and on an earlier one whose link the hub no longer takes: either is another account's machine.
+  for (const linked of [
+    { user: 'f'.repeat(32), device: 'dev_theirs', origin: '', root: homedir(), generation: 3 },
+    { user: 'f'.repeat(32), device: 'dev_theirs', token: 'pdt_theirs', origin: '', root: homedir() },
+  ]) {
+    test(`a machine linked to another account is not relinked by a ticket${'token' in linked ? ', its link from an earlier protocol' : ''}`, async () => {
+      const { stub } = joinWorld();
+      const home = makeHome({ origin: stub.origin });
+      const config = { ...linked, origin: stub.origin };
+      writeFileSync(join(home, 'device.json'), JSON.stringify(config), { mode: 0o600 });
 
-    const connect = spawnConnectInPty(home, 'build box', newProjectDir(), ['--join', JOIN_TICKET]);
-    await connect.waitFor('Link and start the daemon?');
-    await connect.send('y');
-    expect(await connect.proc.exited).toBe(1);
-    await connect.drained;
+      const connect = spawnConnectInPty(home, 'build box', newProjectDir(), ['--join', JOIN_TICKET]);
+      await connect.waitFor('Link and start the daemon?');
+      await connect.send('y');
+      expect(await connect.proc.exited).toBe(1);
+      await connect.drained;
 
-    expect(connect.output()).toContain('linked to another Kinu account');
-    expect(stub.joins.items).toEqual([]);
-    expect(parseJsonObject(readFileSync(join(home, 'device.json'), 'utf-8'))).toEqual(linked);
-  });
+      expect(connect.output()).toContain('linked to another Kinu account');
+      expect(stub.joins.items).toEqual([]);
+      expect(readFileSync(join(home, 'device.json'), 'utf-8')).toBe(JSON.stringify(config));
+    });
+  }
 
   test('a ticket that is not one is refused in words, before anything is installed', async () => {
     const { stub } = joinWorld();

@@ -1,7 +1,11 @@
 import { Effect } from 'effect';
-import { objectNamed, DeviceDesktopSchema, DeviceHelloSchema, DeviceUpdateHelloSchema, DEVICE_FRAMES, NO_DESKTOP, type DeviceDesktop } from '@kinu.run/core';
 import {
-  type DeviceExecOutput, NO_DEVICE_CONNECTED, watchedOutput, SEVERAL_DEVICES_CONNECTED, relayRefusal, type RelayedProvider, isWorkspaceName, nanoid, type DeviceCheckpointHint, type DeviceConsentRequest, type JsonObject, type JsonValue, CapabilityDeniedError, ownerCaller, type UserCaller, type ResolvedCaller, DeviceSocketHub, DeviceRequestLedger, type ClaimedDeviceRequest, type DeviceCancelOutcome, randomToken, sha256Hex, type DeviceChatGptStatus, deviceConsentMoved, deviceConsentOutcome, type DeviceConsentOutcome, DEVICE_UPDATE, cliArtifactPath, deviceUpdateState, readBuildStamp, BuildStampSchema, type BuildStamp, type DeviceUpdateFrame, type DeviceUpdateState, parseDeviceCancelAnswer, nextDeviceRequestId, DEVICE_METHOD, DEVICE_ERRORS, deviceFailure, deviceMethodHas, type DeviceTunnel, DEVICE_TIERS, effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix, sandboxCause, summarizeDeviceAction, type DeviceStatus, type DeviceFileScope, type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
+  objectNamed, DeviceDesktopSchema, DeviceHelloSchema, DeviceUpdateHelloSchema, DEVICE_FRAMES, NO_DESKTOP, type DeviceDesktop,
+  DeviceAuthFrameSchema, CONNECT_TICKET_PATTERN, deviceConnectMessage, deviceRefusalMessage, deviceReplaceMessage, verifyDeviceSignature,
+  type DeviceChallengeIssue, type DeviceChallengeProof, type DeviceConnectProof, type DeviceEnrolment, type DeviceSocket, type DeviceTicketIssue, type DeviceTicketRefusal,
+} from '@kinu.run/core';
+import {
+  type DeviceExecOutput, NO_DEVICE_CONNECTED, watchedOutput, SEVERAL_DEVICES_CONNECTED, relayRefusal, type RelayedProvider, isWorkspaceName, nanoid, type DeviceCheckpointHint, type DeviceConsentRequest, type JsonObject, type JsonValue, CapabilityDeniedError, type UserCaller, type ResolvedCaller, DeviceSocketHub, DeviceRequestLedger, type ClaimedDeviceRequest, type DeviceCancelOutcome, randomToken, sha256Hex, type DeviceChatGptStatus, deviceConsentMoved, deviceConsentOutcome, type DeviceConsentOutcome, DEVICE_UPDATE, cliArtifactPath, deviceUpdateState, readBuildStamp, BuildStampSchema, type BuildStamp, type DeviceUpdateFrame, type DeviceUpdateState, parseDeviceCancelAnswer, nextDeviceRequestId, DEVICE_METHOD, DEVICE_ERRORS, deviceFailure, deviceMethodHas, type DeviceTunnel, DEVICE_TIERS, effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix, sandboxCause, summarizeDeviceAction, type DeviceStatus, type DeviceFileScope, type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
 } from '@kinu.run/core';
 import { attemptInItsWords, diagnostics, KinuError, renderThrownChain, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -23,10 +27,11 @@ interface DeviceConsentCheck {
   surface?: InvocationSurface | undefined;
 }
 
-/** Measured from the last rotation (every accepted connect), so a copy of `device.json`
- *  that stops rotating expires on this clock. */
-const DEVICE_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000;
+/** Measured from the last accepted connect, so a machine that stops connecting must be linked again. */
+const DEVICE_LINK_TTL_MS = 180 * 24 * 60 * 60 * 1000;
 
+/** How long a connect challenge may be signed for: a daemon signs one the moment it arrives. */
+const DEVICE_CHALLENGE_TTL_MS = 60 * 1000;
 
 /** How long a browser's connect command stays claimable: long enough to install the CLI and sign in. */
 const DEVICE_JOIN_TTL_MS = 30 * 60 * 1000;
@@ -35,7 +40,7 @@ const DEVICE_JOIN_SPENT = 'This connect command has expired or was already used.
 
 const DEVICE_NAME_MAX_LENGTH = 80;
 
-const MINTED_DEVICE_TOKEN = /^pdt_[A-Za-z0-9_-]{32,}$/;
+const DEVICE_REMOVED = 'This machine was removed from your account, so it cannot be connected again under its old name. Run `kinu connect` on it.';
 
 function deviceCallFrame(deviceId: string, workspace: string | null, frameSandbox: JsonObject | null, opts: Parameters<UserDevices['deviceRpc']>[3]): NonNullable<Parameters<DeviceTunnel['rpc']>[2]> {
   // The proven workspace: what the daemon keys a workspace's terminal sessions on (1014-t), never a claimed name.
@@ -176,6 +181,22 @@ type DeviceJoin = {
   readonly workspace: string | null;
 };
 
+/** A signed-in machine's registration: its key, and how it came to ask. */
+export interface DeviceRegistration extends DeviceEnrolment {
+  /** The device a browser issued for this machine; it registers as that id, once, while the join lasts. */
+  readonly join?: string | undefined;
+  /** A machine linked on an earlier protocol, enrolled again under the id it had (`kinu update`): its owner's session
+   *  replaces the credential, so it keeps its name and grants. */
+  readonly reenrol?: string | undefined;
+}
+
+/** What a live device's credential is checked against. */
+type DeviceKeyRow = {
+  readonly public_key: string;
+  readonly connect_generation: number;
+  readonly expires_at: number | null;
+};
+
 /** The served build as the connect that opened a device's socket read it. */
 const SERVED_STAMP_KEY = 'devices.served_stamp';
 
@@ -199,55 +220,77 @@ export class UserDevices {
   /** Durable record of commands running on devices (core execution/device-inflight.ts); the ledger owns the table. */
   readonly _inflight: DeviceRequestLedger;
 
-  /** Single-use socket tickets a daemon trades its long-lived token for, so the token stays out of URLs and edge logs. */
-  private readonly connectTickets: SingleUseTickets<{ device_id: string; token_was_current: number | null }>;
+  /** Single-use socket tickets a daemon buys with its key's signature, spent by the socket's AUTH frame. */
+  private readonly connectTickets: SingleUseTickets<{ device_id: string }>;
 
   /** The ticket a browser's connect command carries, which registers its machine with no session there. */
   private readonly joinTickets: SingleUseTickets<DeviceJoin>;
 
   constructor(private readonly host: UserDevicesHost) {
-    this.connectTickets = new SingleUseTickets(host.sqlx.bind(host), 'device_connect', ['device_id', 'token_was_current']);
+    this.connectTickets = new SingleUseTickets(host.sqlx.bind(host), 'device_connect', ['device_id']);
     this.joinTickets = new SingleUseTickets(host.sqlx.bind(host), 'device_join', ['device_id', 'workspace'], DEVICE_JOIN_TTL_MS);
     this._devices = new DeviceSocketHub(host.ctx);
     this._inflight = new DeviceRequestLedger(host.ctx.storage.sql);
   }
 
   /**
-   * Verify + consume the connect ticket here so the upgrade is safe however it arrived, then rotate
-   * the device token over the authenticated socket. A newcomer socket wins the slot.
+   * A daemon's socket, accepted before it says which device it is: its first frame, AUTH, decides that
+   * (`authenticateDeviceSocket`), and nothing is served before it. The served build is read here, so the AUTH that
+   * follows runs in one turn up to its send: a connect another one replaces while it awaits would otherwise send on a
+   * socket already closed (staging f9c17ac7b).
    */
-  async acceptDeviceSocket(request: Request, url: URL): Promise<Response> {
+  async acceptDeviceSocket(request: Request): Promise<Response> {
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
       return new Response('Expected WebSocket', { status: 426 });
     }
 
-    const ticket = url.searchParams.get('ticket');
-    const verified = ticket ? await this.verifyDeviceConnectTicket(await ownerCaller(this.host.env), ticket) : { ok: false as const };
-
-    if (!verified.ok || !verified.deviceId) return new Response('unauthorized', { status: 401 });
-
-    // Read and minted before anything is taken: what follows, up to the token's send, runs in one turn. A connect
-    // another one replaces while it awaits would otherwise send on a socket already closed, or leave stored a token
-    // whose socket is gone (staging f9c17ac7b).
     const stamp = await this.servedStamp();
-    const token = `pdt_${randomToken(32)}`;
-    const tokenHash = await sha256Hex(token);
     const pair = new WebSocketPair();
     const [client, server] = [pair[0], pair[1]];
-    const now = Date.now();
 
-    if (this._devices.isConnected(verified.deviceId)) {
-      this.host.sqlx(`UPDATE user_devices SET replaced_at = ? WHERE id = ?`, now, verified.deviceId);
+    this.rememberServedStamp(stamp);
+    this._devices.acceptUnauthenticated(server);
+    const init: ResponseInit & { webSocket: WebSocket } = { status: 101, webSocket: client };
+
+    return new Response(null, init);
+  }
+
+  /**
+   * A device socket's first frame. AUTH naming this account and a live ticket binds the socket to the ticket's device,
+   * a newcomer winning the slot, and hands the machine its next connect generation; anything else closes the socket as
+   * a dead credential.
+   */
+  async authenticateDeviceSocket(ws: DeviceSocket, data: string): Promise<void> {
+    if (!this._devices.withinAuthDeadline(ws)) return;
+    const auth = v.safeParse(DeviceAuthFrameSchema, tolerate(() => JSON.parse(data), 'malformed-input'));
+
+    if (!auth.success || auth.output.user !== this.host.accountName() || !CONNECT_TICKET_PATTERN.test(auth.output.ticket)) {
+      this._devices.refuseCredentials(ws, 'the first frame was no AUTH for this account');
+
+      return;
     }
 
-    this.rotateDeviceToken(verified.deviceId, verified.tokenWasCurrent === true, tokenHash, now);
-    this.rememberServedStamp(stamp);
-    this._devices.accept(verified.deviceId, server);
-    server.send(JSON.stringify({ type: DEVICE_FRAMES.rotate, token }));
-    this.host.sqlx(`UPDATE user_devices SET last_seen_at = ? WHERE id = ?`, now, verified.deviceId);
+    const now = Date.now();
+    const deviceId = this.connectTickets.spend(auth.output.ticket, now)?.device_id;
+    const device = deviceId === undefined ? undefined : this.liveDeviceKey(deviceId);
+
+    if (deviceId === undefined || device === undefined) {
+      this._devices.refuseCredentials(ws, 'the connect ticket is unknown, used or expired');
+
+      return;
+    }
+
+    if (this._devices.isConnected(deviceId)) {
+      this.host.sqlx(`UPDATE user_devices SET replaced_at = ? WHERE id = ?`, now, deviceId);
+    }
+
+    this._devices.admit(deviceId, ws);
+    // Committed only when the daemon answers that it stored it (`acknowledgeGeneration`).
+    ws.send(JSON.stringify({ type: DEVICE_FRAMES.generation, generation: device.connect_generation + 1 }));
+    this.host.sqlx(`UPDATE user_devices SET last_seen_at = ?, expires_at = ? WHERE id = ?`, now, now + DEVICE_LINK_TTL_MS, deviceId);
 
     // Clear offline notices only on tracked workspaces; an unreachable one keeps its row for next accept.
-    const label = this.deviceLabel(verified.deviceId);
+    const label = this.deviceLabel(deviceId);
 
     for (const { agent_name } of this.host.sqlx<{ agent_name: string }>(
       `SELECT agent_name FROM device_notice_pending`,
@@ -257,7 +300,7 @@ export class UserDevices {
           this.host.env.OrchestratorAgent.idFromName(agent_name),
         );
 
-        await workspace.announceDeviceAvailable({ id: verified.deviceId, label });
+        await workspace.announceDeviceAvailable({ id: deviceId, label });
         this.host.sqlx(`DELETE FROM device_notice_pending WHERE agent_name = ?`, agent_name);
       } catch (cause) {
         diagnostics.event('device.available_announce_unreachable', {
@@ -267,62 +310,36 @@ export class UserDevices {
     }
 
     await this.devicesMoved();
-    const init: ResponseInit & { webSocket: WebSocket } = { status: 101, webSocket: client };
-
-    return new Response(null, init);
   }
 
-  /** A grace is kept only when the machine used the current secret, so two copies of `device.json`
-   *  cannot alternate. The absolute window restarts either way. */
-  private rotateDeviceToken(deviceId: string, keepGrace: boolean, tokenHash: string, now: number): void {
-    // Spending the grace retires the secret it replaced.
-    if (!keepGrace) {
-      const [dropped] = this.host.sqlx<{ token_hash: string }>(`SELECT token_hash FROM user_devices WHERE id = ?`, deviceId);
-      this.retireDeviceTokens(deviceId, [dropped?.token_hash ?? null], now);
-    }
-
-    // One statement: right-hand sides read the old row, so `token_hash` is the prior secret.
-    this.host.sqlx(
-      `UPDATE user_devices
-          SET prev_token_hash = CASE WHEN ? THEN token_hash ELSE NULL END,
-              token_hash = ?,
-              expires_at = ?
-        WHERE id = ?`,
-      keepGrace ? 1 : 0, tokenHash, now + DEVICE_TOKEN_TTL_MS, deviceId,
-    );
-  }
-
-  /** Kept for the token lifetime; an incident stays until the owner acknowledges it. */
-  retireDeviceTokens(deviceId: string, hashes: ReadonlyArray<string | null>, now: number): void {
-    this.host.sqlx(
-      `DELETE FROM user_device_retired_tokens WHERE retired_at <= ? AND reuse_detected_at IS NULL`,
-      now - DEVICE_TOKEN_TTL_MS,
+  /** The daemon stored `generation` in its device.json: committed when it is the one after the committed one, which is
+   *  the one its connect was handed. An answer for any other is stale, and changes nothing. */
+  acknowledgeGeneration(deviceId: string, generation: number): void {
+    const committed = this.host.sqlx<{ id: string }>(
+      `UPDATE user_devices SET connect_generation = ?, last_seen_at = ?
+        WHERE id = ? AND connect_generation = ? AND revoked_at IS NULL RETURNING id`,
+      generation, Date.now(), deviceId, generation - 1,
     );
 
-    for (const hash of hashes) {
-      if (hash === null) continue;
-      this.host.sqlx(
-        `INSERT OR IGNORE INTO user_device_retired_tokens (token_hash, device_id, retired_at) VALUES (?, ?, ?)`,
-        hash, deviceId, now,
-      );
-    }
+    if (committed.length === 0) diagnostics.event('device.generation_ack_stale', { device: deviceId, generation });
   }
 
-  /** Two copies of `device.json` exist and the hub cannot tell the owner's (RFC 9700 §4.14.2). */
-  private async revokeOnTokenReuse(caller: UserCaller, tokenHash: string): Promise<void> {
-    const [reused] = this.host.sqlx<{ device_id: string }>(
-      `UPDATE user_device_retired_tokens SET reuse_detected_at = COALESCE(reuse_detected_at, ?)
-        WHERE token_hash = ? AND device_id IN (SELECT id FROM user_devices WHERE revoked_at IS NULL)
-        RETURNING device_id`,
-      Date.now(), tokenHash,
-    );
-
-    if (!reused) return;
-    diagnostics.event('device.token_reuse_revoked', { device: reused.device_id });
-    await this.revokeDevice(caller, reused.device_id);
+  private liveDeviceKey(deviceId: string): DeviceKeyRow | undefined {
+    return this.host.sqlx<DeviceKeyRow>(
+      `SELECT public_key, connect_generation, expires_at FROM user_devices WHERE id = ? AND revoked_at IS NULL`, deviceId,
+    )[0];
   }
 
-  /** Record a daemon's HELLO: every field is this boot's, and overwrites the last. */
+  /**
+   * Two machines hold this device's key, and the hub cannot tell the owner's: it is revoked, and the incident kept for
+   * the owner until acknowledged. Recorded first, so the revocation keeps the row.
+   */
+  private async revokeClonedDevice(caller: UserCaller, deviceId: string): Promise<void> {
+    this.host.sqlx(`UPDATE user_devices SET clone_detected_at = COALESCE(clone_detected_at, ?) WHERE id = ?`, Date.now(), deviceId);
+    diagnostics.event('device.clone_revoked', { device: deviceId });
+    await this.revokeDevice(caller, deviceId);
+  }
+
   /** True when the frame was the device's screen changing (DESKTOP): held on its socket as its HELLO's is. */
   handleDesktopFrame(deviceId: string, data: string): boolean {
     const frame = v.safeParse(DesktopFrameSchema, tolerate(() => JSON.parse(data), 'malformed-input'));
@@ -333,6 +350,7 @@ export class UserDevices {
     return true;
   }
 
+  /** Record a daemon's HELLO: every field is this boot's, and overwrites the last. */
   recordDeviceHello(deviceId: string, hello: v.InferOutput<typeof DeviceHelloSchema>): void {
     const agentRoot = absolutePathOrNull(hello.agentRoot);
     const verdict = sandboxVerdictFromHello(hello, agentRoot);
@@ -440,15 +458,20 @@ export class UserDevices {
     }));
   }
 
-  /** The raw token is returned once to the CLI; only its hash is stored. 'Your PC' is the default
-   * label. `replaces` is the machine's previous token, whose registration this one replaces. `join` is the device a
-   * browser issued for this machine; it registers as that id, once, while the join lasts. */
-  registerDevice(caller: UserCaller, label?: string, replaces?: string, join?: string): Promise<{ deviceId: string; token: string }> {
+  /**
+   * A machine's public key, registered for a signed-in owner; the hub keeps nothing that connects it. 'Your PC' is the
+   * default label. `replaces` is the old key's signature over this registration, whose device it revokes. `join` is the
+   * device a browser issued for this machine; `reenrol` a device linked on an earlier protocol, whose credential this
+   * one replaces under the same id.
+   */
+  registerDevice(caller: UserCaller, registration: DeviceRegistration): Promise<{ deviceId: string }> {
     return settle(Effect.gen({ self: this }, function* () {
       yield* Effect.promise(() => this.host.requireTier(caller, 'device.manage'));
-      const claimed = join === undefined ? null : yield* this.claimDeviceJoin(join);
 
-      return yield* this.registered(caller, claimed, label, replaces);
+      if (registration.reenrol !== undefined) return yield* this.reenrolled(registration.reenrol, registration);
+      const claimed = registration.join === undefined ? null : yield* this.claimDeviceJoin(registration.join);
+
+      return yield* this.registered(caller, claimed, registration);
     }));
   }
 
@@ -456,30 +479,28 @@ export class UserDevices {
    * The machine a connect command's ticket was minted for, registered with no session: spent here, whatever comes of
    * it, so a ticket a copied command still carries claims nothing once its machine joined.
    */
-  joinDevice(caller: UserCaller, ticket: string, label?: string, replaces?: string): Promise<{ deviceId: string; token: string; label: string }> {
+  joinDevice(caller: UserCaller, ticket: string, enrolment: DeviceEnrolment): Promise<{ deviceId: string; label: string }> {
     return settle(Effect.gen({ self: this }, function* () {
       yield* Effect.promise(() => this.host.requireTier(caller, 'device.manage'));
       const claimed = this.joinTickets.spend(ticket, Date.now());
 
       if (claimed === null) return yield* new KinuError('bad_input', DEVICE_JOIN_SPENT);
-      const registered = yield* this.registered(caller, claimed, label, replaces);
+      const registered = yield* this.registered(caller, claimed, enrolment);
 
       return { ...registered, label: this.deviceLabel(registered.deviceId) };
     }));
   }
 
   /** A device registered under `claimed`'s id and granted its workspace in the same turn, or a new id with no grant. */
-  private registered(caller: UserCaller, claimed: DeviceJoin | null, label?: string, replaces?: string): Effect.Effect<{ deviceId: string; token: string }, KinuError> {
+  private registered(caller: UserCaller, claimed: DeviceJoin | null, enrolment: DeviceEnrolment): Effect.Effect<{ deviceId: string }, KinuError> {
     return Effect.gen({ self: this }, function* () {
-      const replaced = replaces === undefined ? null : yield* Effect.promise(() => this.deviceHoldingToken(caller, replaces));
+      const replaced = yield* Effect.promise(() => this.replacedRegistration(enrolment));
       const deviceId = claimed?.device_id ?? `dev-${nanoid(10)}`;
-      const token = `pdt_${randomToken(32)}`;
-      const tokenHash = sha256Hex(token);
       const now = Date.now();
-      const trimmedLabel = label?.trim().slice(0, DEVICE_NAME_MAX_LENGTH) ?? '';
+      const trimmedLabel = enrolment.label?.trim().slice(0, DEVICE_NAME_MAX_LENGTH) ?? '';
       this.host.sqlx(
-        `INSERT INTO user_devices (id, token_hash, label, created_at, expires_at) VALUES (?, ?, ?, ?, ?)`,
-        deviceId, tokenHash, trimmedLabel === '' ? 'Your PC' : trimmedLabel, now, now + DEVICE_TOKEN_TTL_MS,
+        `INSERT INTO user_devices (id, public_key, label, created_at, expires_at) VALUES (?, ?, ?, ?, ?)`,
+        deviceId, enrolment.publicKey, trimmedLabel === '' ? 'Your PC' : trimmedLabel, now, now + DEVICE_LINK_TTL_MS,
       );
 
       // Connected from a workspace's Environment, it is that workspace's without asking: the grant an approval's
@@ -489,7 +510,31 @@ export class UserDevices {
       if (replaced !== null) yield* Effect.promise(() => this.revokeDevice(caller, replaced));
       else yield* Effect.promise(() => this.devicesMoved());
 
-      return { deviceId, token };
+      return { deviceId };
+    });
+  }
+
+  /**
+   * `deviceId` with `enrolment`'s key and connect generation 0, its row made when the release's reset dropped it: the
+   * earlier credential is gone, and a socket it still held closes. A device its owner removed stays removed.
+   */
+  private reenrolled(deviceId: string, enrolment: DeviceEnrolment): Effect.Effect<{ deviceId: string }, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const [held] = this.host.sqlx<{ revoked_at: number | null }>(`SELECT revoked_at FROM user_devices WHERE id = ?`, deviceId);
+
+      if (held !== undefined && held.revoked_at !== null) return yield* new KinuError('bad_input', DEVICE_REMOVED);
+      const now = Date.now();
+      const trimmedLabel = enrolment.label?.trim().slice(0, DEVICE_NAME_MAX_LENGTH) ?? '';
+      this.host.sqlx(
+        `INSERT INTO user_devices (id, public_key, label, created_at, expires_at) VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT (id) DO UPDATE SET public_key = excluded.public_key, connect_generation = 0, expires_at = excluded.expires_at`,
+        deviceId, enrolment.publicKey, trimmedLabel === '' ? 'Your PC' : trimmedLabel, now, now + DEVICE_LINK_TTL_MS,
+      );
+      diagnostics.event('device.reenrolled', { device: deviceId });
+      this._devices.close(deviceId, 'device key replaced');
+      yield* Effect.promise(() => this.devicesMoved());
+
+      return { deviceId };
     });
   }
 
@@ -504,20 +549,16 @@ export class UserDevices {
     });
   }
 
-  /** Expired or not, holding the token proves the caller had that machine's `device.json`. */
-  private async deviceHoldingToken(caller: UserCaller, token: string): Promise<string | null> {
-    if (!MINTED_DEVICE_TOKEN.test(token)) return null;
-    const tokenHash = await sha256Hex(token);
+  /** The live device a connect replaces, when its key signed this replacement: proof the caller held that machine's
+   *  key. Null for none, and for a signature that does not hold. */
+  private async replacedRegistration(enrolment: DeviceEnrolment): Promise<string | null> {
+    const replaces = enrolment.replaces;
+    const device = replaces === undefined ? undefined : this.liveDeviceKey(replaces.device);
 
-    const [held] = this.host.sqlx<{ id: string }>(
-      `SELECT id FROM user_devices WHERE (token_hash = ? OR prev_token_hash = ?) AND revoked_at IS NULL LIMIT 1`,
-      tokenHash, tokenHash,
-    );
+    if (replaces === undefined || device === undefined) return null;
+    const message = deviceReplaceMessage(enrolment.origin, replaces.device, enrolment.publicKey);
 
-    if (held) return held.id;
-    await this.revokeOnTokenReuse(caller, tokenHash);
-
-    return null;
+    return await verifyDeviceSignature(device.public_key, replaces.signature, message) ? replaces.device : null;
   }
 
   async renameDevice(caller: UserCaller, deviceId: string, name: string): Promise<{ ok: boolean }> {
@@ -535,85 +576,107 @@ export class UserDevices {
     return { ok: true };
   }
 
-  /** The window is absolute from the last rotation; the superseded secret is a one-shot grace
-   *  (see {@link acceptDeviceSocket}); `current` says which hash matched. */
-  async verifyDeviceToken(caller: UserCaller, token: string): Promise<{ ok: boolean; deviceId?: string; current?: boolean }> {
+  /** A single-use challenge, a minute long, that only a signature by `deviceId`'s key turns into anything. Refused for a
+   *  device that is gone or revoked. */
+  async issueDeviceConnectChallenge(caller: UserCaller, deviceId: string): Promise<DeviceChallengeIssue> {
     await this.host.requireTier(caller, 'device.manage');
 
-    if (!MINTED_DEVICE_TOKEN.test(token)) return { ok: false };
-    const tokenHash = await sha256Hex(token);
+    if (this.liveDeviceKey(deviceId) === undefined) return { ok: false, refusal: this.refusalOf(deviceId) };
+    const now = Date.now();
+    const nonce = `pcc_${randomToken(32)}`;
+    const expiresAt = now + DEVICE_CHALLENGE_TTL_MS;
 
-    const row = this.host.sqlx<{ id: string; expires_at: number | null; current: number; prev_token_hash: string | null }>(
-      `SELECT id, expires_at, (token_hash = ?) AS current, prev_token_hash
-         FROM user_devices
-        WHERE (token_hash = ? OR prev_token_hash = ?) AND revoked_at IS NULL
-        LIMIT 1`,
-      tokenHash, tokenHash, tokenHash,
-    )[0];
+    this.host.sqlx(`DELETE FROM device_connect_challenges WHERE expires_at <= ?`, now);
+    this.host.sqlx(
+      `INSERT INTO device_connect_challenges (nonce_hash, device_id, expires_at) VALUES (?, ?, ?)`,
+      sha256Hex(nonce), deviceId, expiresAt,
+    );
 
-    if (!row) {
-      await this.revokeOnTokenReuse(caller, tokenHash);
-
-      return { ok: false };
-    }
-
-    if (row.expires_at !== null && row.expires_at <= Date.now()) return { ok: false };
-
-    // Spent on the ticket it buys: a machine whose connect then fails is refused, not revoked.
-    if (row.current === 1) this.retireDeviceTokens(row.id, [row.prev_token_hash], Date.now());
-    this.host.sqlx(`UPDATE user_devices SET prev_token_hash = NULL WHERE id = ?`, row.id);
-
-    return { ok: true, deviceId: row.id, current: row.current === 1 };
+    return { ok: true, nonce, expiresAt };
   }
 
-  /** Exchange the daemon's long-lived token for a one-minute, single-use WebSocket ticket scoped to
-   *  this UserDO. */
-  async issueDeviceConnectTicket(caller: UserCaller, token: string): Promise<{ ok: boolean; ticket?: string; expiresAt?: number }> {
-    await this.host.requireTier(caller, 'device.manage');
-    const verified = await this.verifyDeviceToken(await ownerCaller(this.host.env), token);
+  /** Why a device that is not live refuses: revoked because a second machine held its key, or simply unknown. */
+  private refusalOf(deviceId: string): DeviceTicketRefusal {
+    const [revoked] = this.host.sqlx<{ clone_detected_at: number | null }>(`SELECT clone_detected_at FROM user_devices WHERE id = ?`, deviceId);
 
-    if (!verified.ok || !verified.deviceId) return { ok: false };
+    return revoked?.clone_detected_at == null ? 'unauthorized' : 'cloned';
+  }
+
+  /** Whether `proof` is `deviceId`'s key's signature over `message`, on a live challenge for it, which is spent here.
+   *  The signature is checked first, so a request without the key spends no challenge of the daemon's. */
+  private async provenChallenge(proof: DeviceChallengeProof, key: DeviceKeyRow, message: Uint8Array<ArrayBuffer>): Promise<'proven' | 'unsigned' | 'spent'> {
+    if (!(await verifyDeviceSignature(key.public_key, proof.signature, message))) return 'unsigned';
+    const now = Date.now();
+    this.host.sqlx(`DELETE FROM device_connect_challenges WHERE expires_at <= ?`, now);
+
+    const spent = this.host.sqlx<{ device_id: string }>(
+      `DELETE FROM device_connect_challenges WHERE nonce_hash = ? AND device_id = ? AND expires_at > ? RETURNING device_id`,
+      sha256Hex(proof.nonce), proof.device, now,
+    );
+
+    return spent.length === 1 ? 'proven' : 'spent';
+  }
+
+  /**
+   * A one-minute, single-use socket ticket for a daemon that signed a live challenge with its device's key. The
+   * generation it signed decides the rest: the committed one connects; the next one connects too, committed first, as
+   * the daemon stored it and its answer was lost; any other means two machines hold the key, and the device is revoked.
+   */
+  async issueDeviceConnectTicket(caller: UserCaller, proof: DeviceConnectProof): Promise<DeviceTicketIssue> {
+    await this.host.requireTier(caller, 'device.manage');
+    const key = this.liveDeviceKey(proof.device);
+
+    if (key === undefined) return { ok: false, refusal: this.refusalOf(proof.device) };
+    const proven = await this.provenChallenge(proof, key, deviceConnectMessage(proof.origin, proof.device, proof.generation, proof.nonce));
+
+    if (proven !== 'proven') return { ok: false, refusal: proven === 'spent' ? 'challenge_spent' : 'unauthorized' };
+    // Read again: an answer or another connect may have moved the generation while the signature was checked.
+    const now = Date.now();
+    const device = this.liveDeviceKey(proof.device);
+
+    if (device === undefined) return { ok: false, refusal: this.refusalOf(proof.device) };
+
+    if (device.expires_at !== null && device.expires_at <= now) return { ok: false, refusal: 'expired' };
+
+    if (proof.generation === device.connect_generation + 1) {
+      this.host.sqlx(
+        `UPDATE user_devices SET connect_generation = ? WHERE id = ? AND connect_generation = ?`,
+        proof.generation, proof.device, device.connect_generation,
+      );
+    } else if (proof.generation !== device.connect_generation) {
+      await this.revokeClonedDevice(caller, proof.device);
+
+      return { ok: false, refusal: 'cloned' };
+    }
+
     const ticket = `pct_${randomToken(32)}`;
-    const expiresAt = this.connectTickets.mint(ticket, { device_id: verified.deviceId, token_was_current: verified.current === true ? 1 : 0 }, Date.now());
+    const expiresAt = this.connectTickets.mint(ticket, { device_id: proof.device }, now);
 
     return { ok: true, ticket, expiresAt };
   }
 
+  /** A daemon that could not run the build it was pushed, saying why over a challenge its key signed. */
   async recordDeviceUpdateRefusal(
-    caller: UserCaller, token: string, refusal: { version: string; runtime: string; reason: string },
+    caller: UserCaller, proof: DeviceChallengeProof, refusal: { version: string; runtime: string; reason: string },
   ): Promise<boolean> {
     await this.host.requireTier(caller, 'device.manage');
-    const verified = await this.verifyDeviceToken(await ownerCaller(this.host.env), token);
+    const key = this.liveDeviceKey(proof.device);
 
-    if (!verified.ok || !verified.deviceId) return false;
+    // A link that lapsed speaks for no machine: it must be connected again first.
+    if (key === undefined || (key.expires_at !== null && key.expires_at <= Date.now())) return false;
+
+    if (await this.provenChallenge(proof, key, deviceRefusalMessage(proof.origin, proof.device, proof.nonce)) !== 'proven') return false;
+
     this.host.sqlx(
       `UPDATE user_devices SET update_refused_version = ?, update_refused_runtime = ?, update_refusal_reason = ? WHERE id = ?`,
-      refusal.version, refusal.runtime, refusal.reason, verified.deviceId,
+      refusal.version, refusal.runtime, refusal.reason, proof.device,
     );
     diagnostics.event('device.update_refused', {
-      device: verified.deviceId, version: refusal.version, runtime: refusal.runtime, reason: refusal.reason,
+      device: proof.device, version: refusal.version, runtime: refusal.runtime, reason: refusal.reason,
     });
     await this.devicesMoved();
 
     return true;
-  }
-
-  async verifyDeviceConnectTicket(caller: UserCaller, ticket: string): Promise<{ ok: boolean; deviceId?: string; tokenWasCurrent?: boolean }> {
-    await this.host.requireTier(caller, 'device.manage');
-
-    if (!/^pct_[A-Za-z0-9_-]{32,}$/.test(ticket)) return { ok: false };
-    const row = this.connectTickets.spend(ticket, Date.now());
-
-    if (!row) return { ok: false };
-
-    const active = this.host.sqlx<{ id: string }>(
-      `SELECT id FROM user_devices WHERE id = ? AND revoked_at IS NULL LIMIT 1`, row.device_id,
-    )[0];
-
-    if (!active) return { ok: false };
-
-    // A null column (ticket predating it) reads as not proved current, so no grace is granted.
-    return { ok: true, deviceId: row.device_id, tokenWasCurrent: row.token_was_current === 1 };
   }
 
   /** User-chosen names of live machines only; ids are routing, not for a person. */
@@ -1216,12 +1279,13 @@ export class UserDevices {
   }
 
   /** Revoked rows are hidden, except those with an incident, visible until the owner acknowledges
-   *  them; `revokedAt` tells the UI not to offer connect/rename controls. */
+   *  them; `revokedAt` tells the UI not to offer connect/rename controls. `cloneDetectedAt` is the incident of a key
+   *  two machines held. */
   async listDevices(caller: UserCaller): Promise<Array<{
     id: string; label: string; os: string | null; hostname: string | null;
     connected: boolean; createdAt: number; lastSeenAt: number | null; expiresAt: number | null;
     replacedAt: number | null;
-    revokedAt: number | null; unstoppedAt: number | null; reuseDetectedAt: number | null;
+    revokedAt: number | null; unstoppedAt: number | null; cloneDetectedAt: number | null;
     wholeMachine: boolean;
     /** No home or roots here: those are per workspace, and this is the account's device registry. */
     sandbox: Pick<DeviceSandboxStatus, 'tier' | 'capability' | 'reason' | 'detail' | 'gpu'>;
@@ -1238,19 +1302,16 @@ export class UserDevices {
       id: string; label: string; os: string | null; hostname: string | null;
       created_at: number; last_seen_at: number | null; expires_at: number | null;
       replaced_at: number | null;
-      revoked_at: number | null; unstopped_at: number | null; reuse_detected_at: number | null;
+      revoked_at: number | null; unstopped_at: number | null; clone_detected_at: number | null;
       tier: string | null; version: string | null; update_check: number | null; consented_root: string | null;
       update_refused_version: string | null; update_refusal_reason: string | null; protocol_refused: number;
     }>(`SELECT d.id, d.label, d.os, d.hostname, d.created_at, d.last_seen_at, d.expires_at,
-               d.replaced_at, d.revoked_at, d.unstopped_at, x.reuse_detected_at,
+               d.replaced_at, d.revoked_at, d.unstopped_at, d.clone_detected_at,
                d.consented_root,
                d.tier, d.sandbox_capability, d.sandbox_reason, d.sandbox_detail, d.sandbox_gpu,
                d.version, d.update_check, d.update_refused_version, d.update_refusal_reason, d.protocol_refused
           FROM user_devices d
-          LEFT JOIN (SELECT device_id, MAX(reuse_detected_at) AS reuse_detected_at
-                       FROM user_device_retired_tokens WHERE reuse_detected_at IS NOT NULL
-                      GROUP BY device_id) x ON x.device_id = d.id
-         WHERE d.revoked_at IS NULL OR d.unstopped_at IS NOT NULL OR x.reuse_detected_at IS NOT NULL
+         WHERE d.revoked_at IS NULL OR d.unstopped_at IS NOT NULL OR d.clone_detected_at IS NOT NULL
          ORDER BY d.created_at DESC`)
       .map((r) => {
         const update = deviceUpdateState({
@@ -1262,7 +1323,7 @@ export class UserDevices {
           connected: r.revoked_at === null && this._devices.isConnected(r.id),
           createdAt: r.created_at, lastSeenAt: r.last_seen_at, expiresAt: r.expires_at,
           replacedAt: r.replaced_at,
-          revokedAt: r.revoked_at, unstoppedAt: r.unstopped_at, reuseDetectedAt: r.reuse_detected_at,
+          revokedAt: r.revoked_at, unstoppedAt: r.unstopped_at, cloneDetectedAt: r.clone_detected_at,
           wholeMachine: r.consented_root === '/',
           sandbox: { tier: parseDeviceTier(r.tier), ...readSandboxColumns(r) },
           desktop: r.revoked_at === null ? this._devices.desktop(r.id) : NO_DESKTOP,
@@ -1467,9 +1528,7 @@ export class UserDevices {
   private deleteRevokedDeviceWithoutIncident(deviceId: string): boolean {
     return this.host.sqlx<{ id: string }>(
       `DELETE FROM user_devices
-        WHERE id = ? AND revoked_at IS NOT NULL AND unstopped_at IS NULL
-          AND NOT EXISTS (SELECT 1 FROM user_device_retired_tokens
-                           WHERE device_id = user_devices.id AND reuse_detected_at IS NOT NULL)
+        WHERE id = ? AND revoked_at IS NOT NULL AND unstopped_at IS NULL AND clone_detected_at IS NULL
         RETURNING id`,
       deviceId,
     ).length === 1;
@@ -1483,16 +1542,13 @@ export class UserDevices {
     if (this._inflight.hasRequestsFor(deviceId)) return { ok: false };
 
     const [incident] = this.host.sqlx<{ id: string }>(
-      `SELECT id FROM user_devices d
-        WHERE id = ? AND revoked_at IS NOT NULL
-          AND (unstopped_at IS NOT NULL OR EXISTS (SELECT 1 FROM user_device_retired_tokens r
-                                                    WHERE r.device_id = d.id AND r.reuse_detected_at IS NOT NULL))`,
+      `SELECT id FROM user_devices
+        WHERE id = ? AND revoked_at IS NOT NULL AND (unstopped_at IS NOT NULL OR clone_detected_at IS NOT NULL)`,
       deviceId,
     );
 
     if (!incident) return { ok: false };
-    this.host.sqlx(`DELETE FROM user_device_retired_tokens WHERE device_id = ?`, deviceId);
-    this.host.sqlx(`UPDATE user_devices SET unstopped_at = NULL WHERE id = ?`, deviceId);
+    this.host.sqlx(`UPDATE user_devices SET unstopped_at = NULL, clone_detected_at = NULL WHERE id = ?`, deviceId);
 
     return { ok: this.deleteRevokedDeviceWithoutIncident(deviceId) };
   }

@@ -6,10 +6,11 @@
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  DEVICE_CONNECT_PATH, DEVICE_FRAMES, DEVICE_METHOD, DEVICE_SCREEN_PATH, readScreenData, screenDataFrames, type JsonValue,
+  DEVICE_FRAMES, DEVICE_METHOD, DEVICE_SCREEN_PATH, readScreenData, screenDataFrames, type JsonValue,
 } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
 import { CAPABLE_HELLO, createTestUserDO, provisionTestWorkspace, testOwner, type AcceptedSocket, type TestUserDO } from './helpers/user-do';
+import { connectTestDevice, registerTestDevice, type TestDeviceKey } from './helpers/device-key';
 
 const WORKSPACE = 'screen-workspace';
 
@@ -20,25 +21,19 @@ const ScreenOpenSchema = v.object({ id: v.string(), method: v.literal(DEVICE_MET
 const ScreenCloseSchema = v.object({ type: v.literal(DEVICE_FRAMES.screenClose), stream: v.number() });
 
 async function connectDevice(harness: TestUserDO, hello: JsonValue = { ...CAPABLE_HELLO, desktop: READY }) {
-  const { deviceId, token } = await harness.userDO.registerDevice(await testOwner(), 'studio tower');
+  const { deviceId, key } = await registerTestDevice(harness.userDO, 'studio tower');
+  const machine = { deviceId, key, generation: 0 };
 
-  return { deviceId, token, device: await dialDevice(harness, token, hello) };
+  return { deviceId, machine, device: await dialDevice(harness, machine, hello) };
 }
 
-/** The daemon's socket, dialled with the device's token, and its HELLO sent. */
-async function dialDevice(harness: TestUserDO, token: string, hello: JsonValue = { ...CAPABLE_HELLO, desktop: READY }) {
-  const issued = await harness.userDO.issueDeviceConnectTicket(await testOwner(), token);
+/** The daemon's socket, dialled as the daemon does with the device's key, and its HELLO sent. */
+async function dialDevice(
+  harness: TestUserDO, machine: { deviceId: string; key: TestDeviceKey; generation: number }, hello: JsonValue = { ...CAPABLE_HELLO, desktop: READY },
+) {
+  const device = await connectTestDevice(harness, machine.deviceId, machine.key, { generation: machine.generation, acknowledge: true });
 
-  if (!issued.ok || !issued.ticket) throw new Error('the owner could not mint a connect ticket');
-
-  const response = await harness.userDO.fetch(new Request(
-    `https://kinu.example.com${DEVICE_CONNECT_PATH}?ticket=${issued.ticket}`,
-    { headers: { Upgrade: 'websocket' } },
-  ));
-
-  if (response.status !== 101) throw new Error(`the device upgrade was refused with ${response.status}`);
-  const device = present(harness.acceptedSockets.at(-1), 'the device socket');
-
+  machine.generation += 1;
   await harness.userDO.webSocketMessage(device.ws, JSON.stringify(hello));
 
   return device;
@@ -81,11 +76,11 @@ async function attachViewer(harness: TestUserDO, session: string) {
 async function granted() {
   const harness = createTestUserDO();
   const workspace = await provisionTestWorkspace(harness, WORKSPACE, 'Screen workspace');
-  const { deviceId, token, device } = await connectDevice(harness);
+  const { deviceId, machine, device } = await connectDevice(harness);
 
   harness.grantDevice(WORKSPACE, deviceId);
 
-  return { harness, workspace, deviceId, token, device };
+  return { harness, workspace, deviceId, machine, device };
 }
 
 function text(bytes: Uint8Array | undefined): string {
@@ -159,12 +154,12 @@ describe("a PC's screen through the owner's account", () => {
   });
 
   test("a PC reconnecting ends its old connection's viewers; the old socket's late close spares the new one's", async () => {
-    const { harness, workspace, deviceId, token, device } = await granted();
+    const { harness, workspace, deviceId, machine, device } = await granted();
     const old = await openScreen(harness, device, workspace, deviceId);
     const oldViewer = present((await attachViewer(harness, old.session)).viewer, 'the old viewer');
 
     // The daemon restarts: its new socket says HELLO before the old one's close reaches this object.
-    const fresh = await dialDevice(harness, token);
+    const fresh = await dialDevice(harness, machine);
 
     expect(oldViewer.closed()).toEqual({ code: 1000, reason: 'the PC reconnected; open the Desktop tab again' });
 

@@ -9,7 +9,7 @@ import { getAgentByName, type AgentContext } from 'agents';
 import * as v from 'valibot';
 import {
   commitWorkspaceCapability, freshWorkspaceCapability, ownerCaller,
-  type SqlExec, type SqlValue, type UserCaller, DEVICE_METHOD,
+  type SqlExec, type SqlValue, type UserCaller, DEVICE_METHOD, deviceConnectMessage,
 } from '@kinu.run/core';
 import type { OrchestratorAgent } from '../../src/orchestrator';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -45,6 +45,25 @@ export interface InflightRow {
   readonly claim: string | null;
 }
 
+/** The origin a probe machine signs its connects for: the account object takes the ingress's word for it. */
+const PROBE_HUB_ORIGIN = 'http://probe';
+
+function base64Url(bytes: Uint8Array): string {
+  return btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '');
+}
+
+/** A machine's Ed25519 key as `kinu connect` makes one: its public half base64url, and its private half, which signs. */
+async function machineKey(): Promise<{ publicKey: string; privateKey: CryptoKey }> {
+  const pair = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify']);
+
+  if (!('privateKey' in pair)) throw new Error('Ed25519 generated no key pair');
+  const raw = await crypto.subtle.exportKey('raw', pair.publicKey);
+
+  if (!(raw instanceof ArrayBuffer)) throw new Error('the Ed25519 key exported no bytes');
+
+  return { publicKey: base64Url(new Uint8Array(raw)), privateKey: pair.privateKey };
+}
+
 /** Null once `call` has answered, or how it failed. */
 async function settled(call: Promise<unknown>): Promise<string | null> {
   try {
@@ -70,15 +89,30 @@ export class DeviceUserProbeDO extends UserDO {
     sealRpcSurface(this, [...USER_DO_RPC_SURFACE, ...PROBE_METHODS]);
   }
 
+  /** A ticket for `deviceId`, bought as its daemon buys one: a challenge, signed by its key over generation 0. */
+  private async ticketFor(deviceId: string, key: { readonly privateKey: CryptoKey }): Promise<string> {
+    const owner = await ownerCaller(this.env);
+    const challenge = await this.issueDeviceConnectChallenge(owner, deviceId);
+
+    if (!challenge.ok) throw new Error(`the paired machine was issued no challenge: ${challenge.refusal}`);
+    const message = deviceConnectMessage(PROBE_HUB_ORIGIN, deviceId, 0, challenge.nonce);
+    const signature = base64Url(new Uint8Array(await crypto.subtle.sign('Ed25519', key.privateKey, message)));
+
+    const issued = await this.issueDeviceConnectTicket(owner, {
+      origin: PROBE_HUB_ORIGIN, device: deviceId, generation: 0, nonce: challenge.nonce, signature,
+    });
+
+    if (!issued.ok) throw new Error(`the paired machine was issued no connect ticket: ${issued.refusal}`);
+
+    return issued.ticket;
+  }
+
   /** Registers a machine and answers the ticket its daemon connects with. */
   async pair(label: string): Promise<{ deviceId: string; ticket: string }> {
-    const owner = await ownerCaller(this.env);
-    const { deviceId, token } = await this.registerDevice(owner, label);
-    const issued = await this.issueDeviceConnectTicket(owner, token);
+    const key = await machineKey();
+    const { deviceId } = await this.registerDevice(await ownerCaller(this.env), { publicKey: key.publicKey, origin: PROBE_HUB_ORIGIN, label });
 
-    if (!issued.ok || issued.ticket === undefined) throw new Error('the paired machine was issued no connect ticket');
-
-    return { deviceId, ticket: issued.ticket };
+    return { deviceId, ticket: await this.ticketFor(deviceId, key) };
   }
 
   /**
@@ -87,14 +121,11 @@ export class DeviceUserProbeDO extends UserDO {
    * other connect run in between.
    */
   async reconnecting(label: string): Promise<{ deviceId: string; tickets: [string, string] }> {
-    const owner = await ownerCaller(this.env);
-    const { deviceId, token } = await this.registerDevice(owner, label);
+    const key = await machineKey();
+    const { deviceId } = await this.registerDevice(await ownerCaller(this.env), { publicKey: key.publicKey, origin: PROBE_HUB_ORIGIN, label });
 
     this.ctx.storage.sql.exec(`INSERT OR IGNORE INTO device_status_watchers (agent_name) VALUES (?)`, 'devices-page-open');
-    const tickets = await Promise.all([this.issueDeviceConnectTicket(owner, token), this.issueDeviceConnectTicket(owner, token)]);
-    const [first, second] = tickets.map((issued) => issued.ticket);
-
-    if (first === undefined || second === undefined) throw new Error('the paired machine was issued no connect ticket');
+    const [first, second] = await Promise.all([this.ticketFor(deviceId, key), this.ticketFor(deviceId, key)]);
 
     return { deviceId, tickets: [first, second] };
   }

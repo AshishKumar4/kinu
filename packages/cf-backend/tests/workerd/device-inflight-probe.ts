@@ -33,7 +33,9 @@ export class DeviceLedgerProbeDO extends DurableObject<Cloudflare.Env> {
 
   override fetch(): Response {
     const { 0: client, 1: server } = new WebSocketPair();
-    this.devices.accept(DEVICE, server);
+    // Accepted as the account accepts a daemon's socket, then bound as its AUTH binds it.
+    this.devices.acceptUnauthenticated(server);
+    this.devices.admit(DEVICE, server);
     this.devices.hello(DEVICE, DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
 
     return new Response(null, { status: 101, webSocket: client });

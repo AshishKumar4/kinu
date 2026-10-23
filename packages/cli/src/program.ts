@@ -403,7 +403,7 @@ export function buildProgram(): Command {
   program
     .command('update [target]')
     .helpGroup(THIS_PC)
-    .description('Update the installed Kinu command')
+    .description('Update the installed Kinu command, and connect again a PC an earlier Kinu linked')
     .option('--origin <url>', 'Kinu app origin')
     .option('--force', 'Reinstall even when already up to date')
     // Detached startup-check child: refresh silently, leave the launcher alone.

@@ -146,19 +146,21 @@ import Kinu
 #print axioms Kinu.Safety.DeviceView.an_untiered_frame_is_refused
 #print axioms Kinu.Safety.DeviceView.a_root_of_slash_is_raw
 
-/-! ## Kinu/Safety/DeviceToken.lean -/
+/-! ## Kinu/Safety/DeviceKey.lean -/
 
-#print axioms Kinu.Safety.DeviceToken.a_ticket_is_spent_once
-#print axioms Kinu.Safety.DeviceToken.a_ticket_dies_at_its_minute
-#print axioms Kinu.Safety.DeviceToken.a_revoked_devices_ticket_admits_nothing
-#print axioms Kinu.Safety.DeviceToken.revocation_is_permanent
-#print axioms Kinu.Safety.DeviceToken.a_retired_token_revokes_its_device
-#print axioms Kinu.Safety.DeviceToken.the_grace_is_one_shot
-#print axioms Kinu.Safety.DeviceToken.ahead_after_own
-#print axioms Kinu.Safety.DeviceToken.out_after_other
-#print axioms Kinu.Safety.DeviceToken.revoked_after_out
-#print axioms Kinu.Safety.DeviceToken.two_copies_cannot_alternate
-#print axioms Kinu.Safety.DeviceToken.one_holder_is_never_revoked
+#print axioms Kinu.Safety.DeviceKey.a_ticket_is_spent_once
+#print axioms Kinu.Safety.DeviceKey.a_ticket_dies_at_its_minute
+#print axioms Kinu.Safety.DeviceKey.a_revoked_devices_ticket_admits_nothing
+#print axioms Kinu.Safety.DeviceKey.a_challenge_is_spent_once
+#print axioms Kinu.Safety.DeviceKey.a_challenge_proves_only_its_device
+#print axioms Kinu.Safety.DeviceKey.revocation_is_permanent
+#print axioms Kinu.Safety.DeviceKey.the_committed_generation_connects
+#print axioms Kinu.Safety.DeviceKey.a_lost_answer_is_recovered
+#print axioms Kinu.Safety.DeviceKey.a_stale_generation_revokes
+#print axioms Kinu.Safety.DeviceKey.an_answer_commits_only_the_next_generation
+#print axioms Kinu.Safety.DeviceKey.ahead_after_own
+#print axioms Kinu.Safety.DeviceKey.two_holders_are_found
+#print axioms Kinu.Safety.DeviceKey.one_holder_is_never_revoked
 
 /-! ## Kinu/SharingNimbus/Theorems.lean -/
 

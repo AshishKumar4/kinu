@@ -29,6 +29,7 @@
   "user_credential_floor",
   "user_credentials_revision",
   "user_device_protocol_refusals",
+  "user_device_retired_tokens",
   "user_device_update_refusals",
   "user_egress_secrets",
   "user_peer_grants",

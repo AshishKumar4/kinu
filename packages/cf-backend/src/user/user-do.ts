@@ -40,8 +40,11 @@ import {
 } from './roster';
 
 import { UserDrive, type DriveAnswer, type DriveChunkWrite } from './drive';
-import { UserDevices, type DeviceCancellationOutcome } from './devices';
-import { ACCOUNT_EPOCH_FIELDS, DeviceHelloHeadSchema, DeviceHelloSchema, DeviceUpdateHelloSchema } from '@kinu.run/core';
+import { UserDevices, type DeviceCancellationOutcome, type DeviceRegistration } from './devices';
+import {
+  ACCOUNT_EPOCH_FIELDS, DeviceGenerationAckSchema, DeviceHelloHeadSchema, DeviceHelloSchema, type DeviceChallengeProof, type DeviceConnectProof,
+  type DeviceEnrolment,
+} from '@kinu.run/core';
 import { UserTerminals } from './terminals';
 import { UserScreens } from './screens';
 import { UserChatGptSignIn, type ChatGptMachineSignIn, type ChatGptPlanStatus } from './chatgpt-sign-in';
@@ -77,8 +80,6 @@ import {
 } from '@kinu.run/core/identity';
 
 const ROSTER_NUDGE_LANES = 4;
-
-const DeviceRotationAckSchema = v.object({ type: v.literal(DEVICE_FRAMES.rotated) });
 
 function isTextWebSocketMessage(
   message: string | ArrayBuffer | ArrayBufferView,
@@ -901,32 +902,28 @@ export class UserDO extends Agent<Env> {
     return this.devices.issueDeviceJoin(caller, workspace);
   }
 
-  joinDevice(caller: UserCaller, ticket: string, label?: string, replaces?: string): ReturnType<UserDevices['joinDevice']> {
-    return this.devices.joinDevice(caller, ticket, label, replaces);
+  joinDevice(caller: UserCaller, ticket: string, enrolment: DeviceEnrolment): ReturnType<UserDevices['joinDevice']> {
+    return this.devices.joinDevice(caller, ticket, enrolment);
   }
 
-  registerDevice(caller: UserCaller, label?: string, replaces?: string, join?: string): ReturnType<UserDevices['registerDevice']> {
-    return this.devices.registerDevice(caller, label, replaces, join);
+  registerDevice(caller: UserCaller, registration: DeviceRegistration): ReturnType<UserDevices['registerDevice']> {
+    return this.devices.registerDevice(caller, registration);
   }
 
   renameDevice(caller: UserCaller, deviceId: string, name: string): ReturnType<UserDevices['renameDevice']> {
     return this.devices.renameDevice(caller, deviceId, name);
   }
 
-  verifyDeviceToken(caller: UserCaller, token: string): ReturnType<UserDevices['verifyDeviceToken']> {
-    return this.devices.verifyDeviceToken(caller, token);
+  issueDeviceConnectChallenge(caller: UserCaller, deviceId: string): ReturnType<UserDevices['issueDeviceConnectChallenge']> {
+    return this.devices.issueDeviceConnectChallenge(caller, deviceId);
   }
 
-  issueDeviceConnectTicket(caller: UserCaller, token: string): ReturnType<UserDevices['issueDeviceConnectTicket']> {
-    return this.devices.issueDeviceConnectTicket(caller, token);
+  issueDeviceConnectTicket(caller: UserCaller, proof: DeviceConnectProof): ReturnType<UserDevices['issueDeviceConnectTicket']> {
+    return this.devices.issueDeviceConnectTicket(caller, proof);
   }
 
-  recordDeviceUpdateRefusal(caller: UserCaller, token: string, refusal: { version: string; runtime: string; reason: string }): Promise<boolean> {
-    return this.devices.recordDeviceUpdateRefusal(caller, token, refusal);
-  }
-
-  verifyDeviceConnectTicket(caller: UserCaller, ticket: string): ReturnType<UserDevices['verifyDeviceConnectTicket']> {
-    return this.devices.verifyDeviceConnectTicket(caller, ticket);
+  recordDeviceUpdateRefusal(caller: UserCaller, proof: DeviceChallengeProof, refusal: { version: string; runtime: string; reason: string }): Promise<boolean> {
+    return this.devices.recordDeviceUpdateRefusal(caller, proof, refusal);
   }
 
   deviceRpc(caller: UserCaller, method: string, params: JsonValue[], opts?: {
@@ -1140,7 +1137,7 @@ export class UserDO extends Agent<Env> {
 
   /** A WebSocket cannot cross RPC; the Worker forwards these upgrades. */
   private readonly _sockets = new Hono({ getPath: rawPath })
-    .all(DEVICE_CONNECT_PATH, async (c) => this.devices.acceptDeviceSocket(c.req.raw, new URL(c.req.url)))
+    .all(DEVICE_CONNECT_PATH, async (c) => this.devices.acceptDeviceSocket(c.req.raw))
     .all(DEVICE_TERMINAL_PATH, async (c) => this.terminals.acceptTerminalSocket(c.req.raw, new URL(c.req.url)))
     .all(DEVICE_SCREEN_PATH, async (c) => this.screens.acceptScreenSocket(c.req.raw, new URL(c.req.url)))
     // Frames a socket missed while it was down are not replayed, so a new one starts from what waits on the owner now.
@@ -1182,7 +1179,13 @@ export class UserDO extends Agent<Env> {
 
     const deviceId = deviceIdFromSocket(ws);
 
-    if (!deviceId) return this.lifecycle.webSocketMessage(ws, message);
+    if (!deviceId) {
+      // A device socket that has not said which device it is: its first frame must be AUTH, and nothing else is served.
+      if (this.devices._devices.isUnauthenticated(ws)) return this.devices.authenticateDeviceSocket(ws, isTextWebSocketMessage(message) ? message : '');
+
+      return this.lifecycle.webSocketMessage(ws, message);
+    }
+
     // A screen's bytes are the one binary frame a daemon sends; every other frame is JSON text.
     const screen = isTextWebSocketMessage(message) ? null : readScreenData(message);
 
@@ -1221,19 +1224,7 @@ export class UserDO extends Agent<Env> {
 
       if (admitted !== 'serve' || !hello.success) {
         this.sqlx(`UPDATE user_devices SET protocol_refused = 1 WHERE id = ?`, deviceId);
-        // The protocol before this one is pushed the build that brings it here, and nothing else.
-        const previous = v.safeParse(DeviceUpdateHelloSchema, announced);
-        // Decided and sent in the turn the HELLO arrived, on its socket: nothing is awaited before the send.
-        const update = admitted === 'update' && previous.success ? this.devices.deviceUpdateFrame(deviceId, previous.output) : null;
-
-        if (update === null || !previous.success) {
-          this.devices._devices.refuse(deviceId);
-
-          return;
-        }
-
-        diagnostics.event('device.update_pushed', { device: deviceId, from: previous.output.version ?? '', to: update.version });
-        ws.send(JSON.stringify(update));
+        this.devices._devices.refuse(deviceId);
 
         return;
       }
@@ -1257,17 +1248,10 @@ export class UserDO extends Agent<Env> {
       return settle(this.chatgpt.continueChatGptSignIn(deviceId));
     }
 
-    const acknowledged = v.safeParse(DeviceRotationAckSchema, tolerate(() => JSON.parse(data), 'malformed-input'));
+    const acknowledged = v.safeParse(DeviceGenerationAckSchema, announced);
 
     if (acknowledged.success) {
-      const now = Date.now();
-
-      const [grace] = this.sqlx<{ prev_token_hash: string | null }>(
-        `SELECT prev_token_hash FROM user_devices WHERE id = ?`, deviceId,
-      );
-
-      this.devices.retireDeviceTokens(deviceId, [grace?.prev_token_hash ?? null], now);
-      this.sqlx(`UPDATE user_devices SET prev_token_hash = NULL, last_seen_at = ? WHERE id = ?`, now, deviceId);
+      this.devices.acknowledgeGeneration(deviceId, acknowledged.output.generation);
 
       return;
     }
@@ -1298,7 +1282,13 @@ export class UserDO extends Agent<Env> {
 
     const deviceId = deviceIdFromSocket(ws);
 
-    if (!deviceId) return this.lifecycle.webSocketClose(ws, code, reason, wasClean);
+    if (!deviceId) {
+      // One that closed before its AUTH held nothing but its deadline.
+      if (this.devices._devices.forgetUnauthenticated(ws)) return;
+
+      return this.lifecycle.webSocketClose(ws, code, reason, wasClean);
+    }
+
     this.devices._devices.handleClose(deviceId, ws);
 
     // The daemon detaches its shells when the socket drops, so the panes close; each opens again on the next socket.
@@ -1312,7 +1302,7 @@ export class UserDO extends Agent<Env> {
     const [ws] = call;
 
     // Device sockets clean up in webSocketClose, which the runtime fires next.
-    if (!deviceIdFromSocket(ws) && !isRosterSocket(ws)) return this.lifecycle.webSocketError(...call);
+    if (!deviceIdFromSocket(ws) && !isRosterSocket(ws) && !this.devices._devices.isUnauthenticated(ws)) return this.lifecycle.webSocketError(...call);
   }
 
   // The Mossaic tenant id is this account's own id, the name it is addressed by, so no caller names a tenant. Every

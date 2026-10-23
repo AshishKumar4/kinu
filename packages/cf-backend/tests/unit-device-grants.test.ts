@@ -15,11 +15,13 @@ import { connectedDevices, DeviceSocketHub, soleLiveDevice, DEVICE_FRAMES, DEVIC
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { appProbe, concretePath, PROBE_ORIGIN } from './helpers/app-probe';
 import {
-  DEVICE_CONNECT_PATH, DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES, JsonValueSchema, nextDeviceRequestId,
+  DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES, JsonValueSchema, nextDeviceRequestId,
   NO_DEVICE_CONNECTED, type JsonValue,
 } from '@kinu.run/core';
-import { present } from '@kinu.run/test-utils';
 import { UserDevices } from '../src/user/devices';
+import {
+  buyTicket, connectProof, connectTestDevice, handedGeneration, registerTestDevice, signConnect, signReplace, testDeviceKey, TEST_HUB_ORIGIN,
+} from './helpers/device-key';
 
 
 // The /api app's module graph reaches the Agents SDK: mocked before it loads.
@@ -830,7 +832,8 @@ describe('device revocation admission', () => {
     if (!(hubCandidate instanceof DeviceSocketHub)) throw new Error('UserDO device hub is unavailable.');
     hub = hubCandidate;
     harness.attachDevice(null);
-    hub.accept(harness.deviceId, socket);
+    hub.acceptUnauthenticated(socket);
+    hub.admit(harness.deviceId, socket);
     hub.hello(harness.deviceId, DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
 
     const revocation = harness.userDO.revokeDevice(await testOwner(), harness.deviceId);
@@ -894,7 +897,7 @@ describe('asking for a machine when there is none', () => {
   test('the call refuses and names the registered machines on the workspace rail', async () => {
     const harness = createTestUserDO();
     const workspace = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
-    const { deviceId } = await harness.userDO.registerDevice(await testOwner(), 'studio tower');
+    const { deviceId } = await registerTestDevice(harness.userDO, 'studio tower');
 
     await expect(harness.deviceCall({ workspaceToken: workspace }, 'exec', ['make build'], {
       agentName: WORKSPACE,
@@ -964,7 +967,7 @@ describe('asking for a machine when there is none', () => {
     expect(harness.deviceFrames).toEqual([]);
 
     // A daemon that proves nothing on connect runs no commands.
-    const { deviceId } = await harness.userDO.registerDevice(await testOwner(), 'studio');
+    const { deviceId } = await registerTestDevice(harness.userDO, 'studio');
     harness.attachDevice(deviceId);
     await harness.sendDeviceHello(CAPABLE_HELLO);
     const seen = await harness.userDO.deviceRuntimeStatus(caller);
@@ -993,20 +996,9 @@ describe('asking for a machine when there is none', () => {
       agentName: WORKSPACE,
     })).rejects.toThrow(NO_DEVICE_CONNECTED);
 
-    const { deviceId, token: deviceToken } = await harness.userDO.registerDevice(await testOwner(), 'studio');
-    const issued = await harness.userDO.issueDeviceConnectTicket(await testOwner(), deviceToken);
+    const { deviceId, key } = await registerTestDevice(harness.userDO, 'studio');
+    const device = await connectTestDevice(harness, deviceId, key, { generation: 0, acknowledge: true });
 
-    if (!issued.ok || !issued.ticket) throw new Error('the owner could not mint a connect ticket');
-
-    const upgrade = await harness.userDO.fetch(new Request(
-      `https://kinu.example.com${DEVICE_CONNECT_PATH}?ticket=${issued.ticket}`,
-      { headers: { Upgrade: 'websocket' } },
-    ));
-
-    expect(upgrade.status).toBe(101);
-    const device = harness.acceptedSockets.at(-1);
-
-    if (!device) throw new Error('the device upgrade produced no socket');
     await harness.userDO.webSocketMessage(device.ws, JSON.stringify(CAPABLE_HELLO));
 
     expect(harness.availableNotices).toEqual([{
@@ -1022,7 +1014,7 @@ describe('asking for a machine when there is none', () => {
     const first = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
     await provisionTestWorkspace(harness, OTHER_WORKSPACE, 'Workspace B');
     const owner = await testOwner();
-    await harness.userDO.registerDevice(owner, 'studio-tower');
+    await registerTestDevice(harness.userDO, 'studio-tower', owner);
 
     await expect(harness.deviceCall({ workspaceToken: first }, 'exec', ['make build'], {
       agentName: WORKSPACE,
@@ -1031,17 +1023,9 @@ describe('asking for a machine when there is none', () => {
 
     const pending = harness.db.query<{ agent_name: string }, []>('SELECT agent_name FROM device_notice_pending ORDER BY agent_name ASC').all();
     expect(pending.map((row) => row.agent_name)).toEqual([WORKSPACE]);
-    const { token: deviceToken } = await harness.userDO.registerDevice(owner, 'studio');
+    const studio = await registerTestDevice(harness.userDO, 'studio', owner);
+    const device = await connectTestDevice(harness, studio.deviceId, studio.key, { generation: 0, acknowledge: true });
 
-    const issued = await harness.userDO.issueDeviceConnectTicket(owner, deviceToken);
-
-    if (!issued.ok || !issued.ticket) throw new Error('the owner could not mint a connect ticket');
-
-    const upgrade = await harness.userDO.fetch(new Request(`https://kinu.example.com${DEVICE_CONNECT_PATH}?ticket=${issued.ticket}`, { headers: { Upgrade: 'websocket' } }));
-    expect(upgrade.status).toBe(101);
-    const device = harness.acceptedSockets.at(-1);
-
-    if (!device) throw new Error('the device upgrade produced no socket');
     await harness.userDO.webSocketMessage(device.ws, JSON.stringify(CAPABLE_HELLO));
     expect(harness.availableNotices.map((n) => n.workspace)).toEqual([WORKSPACE]);
     expect(harness.db.query('SELECT agent_name FROM device_notice_pending').all()).toEqual([]);
@@ -1144,60 +1128,17 @@ describe('the machine the agent asked for, as the owner reads it', () => {
 });
 
 /**
- * A stolen `device.json` must not be an indefinite credential: rotation makes it a race, and a
- * displaced claimant must never get a fresh grace, or the race never ends.
+ * Device protocol 5: a machine's key is its credential, and a copy of it is found by the connect generation. Each
+ * accepted connect hands the machine the next generation, committed once the machine says it stored it; a ticket is
+ * bought over the committed one or the next, and anything else means two machines hold the key.
  */
-describe('a copied device.json goes stale', () => {
-  /** The incumbent socket is dropped first: the hub refuses a newcomer while the device's socket
-   *  is live. */
-  async function connectDaemon(harness: TestUserDO, token: string): Promise<string | null> {
-    harness.acceptedSockets.at(-1)?.drop();
-    const issued = await harness.userDO.issueDeviceConnectTicket(await testOwner(), token);
-
-    if (!issued.ok || !issued.ticket) return null;
-
-    const response = await harness.userDO.fetch(new Request(
-      `https://kinu.example.com${DEVICE_CONNECT_PATH}?ticket=${issued.ticket}`,
-      { headers: { Upgrade: 'websocket', 'cf-connecting-ip': '203.0.113.7', 'user-agent': 'kinu-daemon/1' } },
-    ));
-
-    expect(response.status).toBe(101);
-    const socket = harness.acceptedSockets.at(-1);
-
-    const rotation = (socket?.sent ?? [])
-      .map((raw) => v.safeParse(v.object({ type: v.string(), token: v.string() }), JSON.parse(raw)))
-      .find((parsed) => parsed.success && parsed.output.type === DEVICE_FRAMES.rotate);
-
-    return rotation?.success ? rotation.output.token : null;
-  }
-
-  /** The thief's case, and a duplicate daemon's: the newcomer wins the slot. */
-  async function claimAgainstLiveSocket(harness: TestUserDO, token: string): Promise<number> {
-    const issued = await harness.userDO.issueDeviceConnectTicket(await testOwner(), token);
-
-    if (!issued.ok || !issued.ticket) return 0;
-
-    const response = await harness.userDO.fetch(new Request(
-      `https://kinu.example.com${DEVICE_CONNECT_PATH}?ticket=${issued.ticket}`,
-      { headers: { Upgrade: 'websocket', 'cf-connecting-ip': '198.51.100.9', 'user-agent': 'thief/1' } },
-    ));
-
-    return response.status;
-  }
-
-  /** Acknowledging the persisted secret ends the grace on the superseded one. */
-  async function acknowledgeRotation(harness: TestUserDO): Promise<void> {
-    const socket = harness.acceptedSockets.at(-1);
-
-    if (!socket) throw new Error('no accepted device socket to acknowledge on');
-    await harness.userDO.webSocketMessage(socket.ws, JSON.stringify({ type: DEVICE_FRAMES.rotated }));
-  }
-
-  function graceHash(harness: TestUserDO, deviceId: string): string | null {
+describe('a device key is its credential, and a second holder is found', () => {
+  /** The device's committed connect generation and its incident, as the account stores them. */
+  function stored(harness: TestUserDO, deviceId: string) {
     return v.parse(
-      v.array(v.object({ prev_token_hash: v.nullable(v.string()) })),
-      harness.sql.exec(`SELECT prev_token_hash FROM user_devices WHERE id = ?`, deviceId).toArray(),
-    )[0].prev_token_hash;
+      v.array(v.object({ connect_generation: v.number(), clone_detected_at: v.nullable(v.number()), revoked_at: v.nullable(v.number()) })),
+      harness.sql.exec(`SELECT connect_generation, clone_detected_at, revoked_at FROM user_devices WHERE id = ?`, deviceId).toArray(),
+    )[0];
   }
 
   /** The account's row for one device, as Settings → Devices reads it; undefined once it is gone. */
@@ -1205,116 +1146,59 @@ describe('a copied device.json goes stale', () => {
     return (await harness.userDO.listDevices(await testOwner())).find((device) => device.id === deviceId);
   }
 
-  test('the token rotates on every accepted connect, and the current one keeps working', async () => {
+  test('each accepted connect hands the next generation, committed only on the machine\'s answer', async () => {
     const harness = createTestUserDO({ deviceResponder: daemon });
-    const { deviceId, token: first } = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
+    const { deviceId, key } = await registerTestDevice(harness.userDO, 'ashish@studio');
 
-    const second = await connectDaemon(harness, first);
-    expect(second).toBeTruthy();
-    expect(second).not.toBe(first);
+    const first = await connectTestDevice(harness, deviceId, key, { generation: 0, acknowledge: false });
+    expect(handedGeneration(first)).toBe(1);
+    expect(stored(harness, deviceId).connect_generation).toBe(0);
+    // An answer for any generation but the one after the committed one moves nothing.
+    await harness.userDO.webSocketMessage(first.ws, JSON.stringify({ type: DEVICE_FRAMES.generationAck, generation: 3 }));
+    expect(stored(harness, deviceId).connect_generation).toBe(0);
+    await harness.userDO.webSocketMessage(first.ws, JSON.stringify({ type: DEVICE_FRAMES.generationAck, generation: 1 }));
+    expect(stored(harness, deviceId).connect_generation).toBe(1);
 
-    // Either half of the handshake ends the grace; the reconnect survives a daemon too old to
-    // acknowledge.
-    const third = await connectDaemon(harness, second ?? '');
-    expect(third).toBeTruthy();
-
-    expect(await harness.userDO.verifyDeviceToken(await testOwner(), third ?? ''))
-      .toEqual({ ok: true, deviceId, current: true });
+    const second = await connectTestDevice(harness, deviceId, key, { generation: 1, acknowledge: true });
+    expect(handedGeneration(second)).toBe(2);
+    expect(stored(harness, deviceId)).toEqual({ connect_generation: 2, clone_detected_at: null, revoked_at: null });
     await harness.joinFibers();
     harness.close();
   });
 
-  test('a rotation lost with the socket does not brick the machine', async () => {
+  test('a generation the machine stored and whose answer was lost connects, and is committed first', async () => {
     const harness = createTestUserDO({ deviceResponder: daemon });
-    const { deviceId, token: first } = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
+    const { deviceId, key } = await registerTestDevice(harness.userDO, 'ashish@studio');
 
-    await connectDaemon(harness, first);
-    // Recovering on the grace is the one accept that may not leave another behind.
-    expect(await harness.userDO.verifyDeviceToken(await testOwner(), first))
-      .toEqual({ ok: true, deviceId, current: false });
+    // The machine stored generation 1; its answer went down with the socket.
+    await connectTestDevice(harness, deviceId, key, { generation: 0, acknowledge: false });
+    expect(stored(harness, deviceId).connect_generation).toBe(0);
+
+    const recovered = await connectTestDevice(harness, deviceId, key, { generation: 1, acknowledge: false });
+    expect(stored(harness, deviceId)).toEqual({ connect_generation: 1, clone_detected_at: null, revoked_at: null });
+    expect(handedGeneration(recovered)).toBe(2);
+    expect(await deviceRow(harness, deviceId)).toMatchObject({ connected: true, cloneDetectedAt: null });
     await harness.joinFibers();
     harness.close();
   });
 
-  test('acknowledging the rotation ends the grace, without waiting for a next call', async () => {
+  test('a stale generation is a second holder of the key: the device is revoked, its socket closed, the incident kept', async () => {
     const harness = createTestUserDO({ deviceResponder: daemon });
-    const { deviceId, token: first } = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
+    const { deviceId, key } = await registerTestDevice(harness.userDO, 'ashish@studio');
 
-    const second = await connectDaemon(harness, first);
-    // Until the machine acknowledges, the old secret still opens a socket: that grace makes a lost
-    // frame survivable.
-    expect(graceHash(harness, deviceId)).not.toBeNull();
+    // Both machines hold generation 0. The first connects and commits 1.
+    const live = await connectTestDevice(harness, deviceId, key, { generation: 0, acknowledge: true });
+    expect(stored(harness, deviceId).connect_generation).toBe(1);
 
-    await acknowledgeRotation(harness);
-
-    expect(graceHash(harness, deviceId)).toBeNull();
-    expect(await harness.userDO.verifyDeviceToken(await testOwner(), second ?? ''))
-      .toEqual({ ok: true, deviceId, current: true });
-    await harness.joinFibers();
-    harness.close();
-  });
-
-  test('the grace is one-shot: the secret the recovery dropped names a second copy', async () => {
-    const harness = createTestUserDO({ deviceResponder: daemon });
-    const { deviceId, token: stolen } = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
-
-    const thief = await connectDaemon(harness, stolen);
-    expect(thief).toBeTruthy();
-
-    // Spending the grace must not mint a fresh one over the thief's token, or the two reconnects
-    // re-arm each other indefinitely.
-    const real = await connectDaemon(harness, stolen);
-    expect(real).toBeTruthy();
-    expect(real).not.toBe(thief);
-    expect(await harness.userDO.verifyDeviceToken(await testOwner(), real ?? ''))
-      .toEqual({ ok: true, deviceId, current: true });
-    const live = harness.acceptedSockets.at(-1);
-
-    // Two parties hold this device's secrets and the hub cannot tell which is the owner's, so the
-    // thief's next try revokes the device rather than being merely refused.
-    expect(await harness.userDO.issueDeviceConnectTicket(await testOwner(), thief ?? '')).toEqual({ ok: false });
-    expect(live?.ws.readyState).toBe(WebSocket.CLOSED);
-    expect(await harness.userDO.verifyDeviceToken(await testOwner(), real ?? '')).toEqual({ ok: false });
-    expect(await deviceRow(harness, deviceId)).toMatchObject({ revokedAt: expect.any(Number), reuseDetectedAt: expect.any(Number) });
-    await harness.joinFibers();
-    harness.close();
-  });
-
-  test('a grace that bought a ticket is spent: the machine is refused next time, and not revoked', async () => {
-    const harness = createTestUserDO({ deviceResponder: daemon });
-    const { deviceId, token: first } = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
-
-    // The rotation is lost with its socket, so the machine still holds `first`, now the grace.
-    expect(await connectDaemon(harness, first)).toBeTruthy();
-    harness.acceptedSockets.at(-1)?.drop();
-
-    // The grace buys a ticket, and the upgrade never arrives.
-    expect(await harness.userDO.issueDeviceConnectTicket(await testOwner(), first)).toMatchObject({ ok: true });
-
-    expect(await harness.userDO.issueDeviceConnectTicket(await testOwner(), first)).toEqual({ ok: false });
-    expect(await deviceRow(harness, deviceId)).toMatchObject({ revokedAt: null, reuseDetectedAt: null });
-    await harness.joinFibers();
-    harness.close();
-  });
-
-  test('a retired key presented again revokes the device, closes its socket, and waits for the owner', async () => {
-    // SECURITY-devices C3. Whichever copy of device.json acknowledged first holds the only valid
-    // secret; the other copy's return is the only evidence there are two. The live socket may be
-    // the thief's, so it closes too.
-    const harness = createTestUserDO({ deviceResponder: daemon });
-    const { deviceId, token: copied } = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
-    const current = await connectDaemon(harness, copied);
-    await acknowledgeRotation(harness);
-    const live = harness.acceptedSockets.at(-1);
-    expect(live?.ws.readyState).toBe(WebSocket.OPEN);
-
-    expect(await harness.userDO.issueDeviceConnectTicket(await testOwner(), copied)).toEqual({ ok: false });
-
-    expect(live?.ws.readyState).toBe(WebSocket.CLOSED);
-    expect(await harness.userDO.verifyDeviceToken(await testOwner(), current ?? '')).toEqual({ ok: false });
+    // The second connects with the generation the first moved past, and so does a key holder a generation ahead.
+    expect(await buyTicket(harness, deviceId, key, 0)).toEqual({ ok: false, refusal: 'cloned' });
+    expect(live.closed()).toMatchObject({ code: 1000 });
+    expect(stored(harness, deviceId)).toMatchObject({ clone_detected_at: expect.any(Number), revoked_at: expect.any(Number) });
     expect(await deviceRow(harness, deviceId)).toMatchObject({
-      connected: false, revokedAt: expect.any(Number), unstoppedAt: null, reuseDetectedAt: expect.any(Number),
+      connected: false, revokedAt: expect.any(Number), unstoppedAt: null, cloneDetectedAt: expect.any(Number),
     });
+    // Revoked, it answers no challenge, and says why.
+    expect(await harness.userDO.issueDeviceConnectChallenge(await testOwner(), deviceId)).toEqual({ ok: false, refusal: 'cloned' });
 
     // The incident stays until the owner has read it; acknowledging removes the device.
     expect(await harness.userDO.acknowledgeUnstoppedDevice(await testOwner(), deviceId)).toEqual({ ok: true });
@@ -1323,96 +1207,58 @@ describe('a copied device.json goes stale', () => {
     harness.close();
   });
 
-  test('a machine that keeps its secret current never reads as a copy', async () => {
+  test('a generation ahead of the next one is a second holder too', async () => {
     const harness = createTestUserDO({ deviceResponder: daemon });
-    const { deviceId, token: first } = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
-    let held = first;
+    const { deviceId, key } = await registerTestDevice(harness.userDO, 'ashish@studio');
 
-    for (let round = 1; round <= 3; round += 1) {
-      held = present(await connectDaemon(harness, held), `rotation ${String(round)}`);
-      await acknowledgeRotation(harness);
-    }
-
-    // One rotation lost with its socket: the machine never saw it and recovers on the grace.
-    present(await connectDaemon(harness, held), 'the lost rotation');
-    held = present(await connectDaemon(harness, held), 'the recovery');
-    await acknowledgeRotation(harness);
-    held = present(await connectDaemon(harness, held), 'the next connect');
-    await acknowledgeRotation(harness);
-
-    expect(await harness.userDO.verifyDeviceToken(await testOwner(), held)).toEqual({ ok: true, deviceId, current: true });
-    expect(await deviceRow(harness, deviceId)).toMatchObject({ revokedAt: null, reuseDetectedAt: null, connected: true });
+    expect(await buyTicket(harness, deviceId, key, 2)).toEqual({ ok: false, refusal: 'cloned' });
+    expect(stored(harness, deviceId)).toMatchObject({ connect_generation: 0, clone_detected_at: expect.any(Number) });
     await harness.joinFibers();
     harness.close();
   });
 
-  test('a retired key is remembered for the token lifetime, then forgotten', async () => {
+  test('another key\'s signature, a replayed challenge or one for another device buys nothing, and revokes nothing', async () => {
     const harness = createTestUserDO({ deviceResponder: daemon });
-    const { deviceId, token: first } = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
-    const second = present(await connectDaemon(harness, first), 'the first rotation');
-    await acknowledgeRotation(harness);
-    // Retired longer ago than a device token lives (180 days): it would have expired unrotated.
-    harness.sql.exec(`UPDATE user_device_retired_tokens SET retired_at = ?`, Date.now() - 181 * 24 * 60 * 60 * 1000);
+    const owner = await testOwner();
+    const { deviceId, key } = await registerTestDevice(harness.userDO, 'ashish@studio');
+    const other = await registerTestDevice(harness.userDO, 'ashish@laptop');
 
-    const third = present(await connectDaemon(harness, second), 'the second rotation');
-    await acknowledgeRotation(harness);
+    // A key that is not this device's, even one the account knows, signs nothing for it; the challenge stays live.
+    const forged = await connectProof(harness, deviceId, other.key, 0);
+    expect(await harness.userDO.issueDeviceConnectTicket(owner, forged)).toEqual({ ok: false, refusal: 'unauthorized' });
+    const genuine = signConnect(key, { device: deviceId, generation: 0, nonce: forged.nonce });
+    expect(await harness.userDO.issueDeviceConnectTicket(owner, { ...forged, signature: genuine })).toMatchObject({ ok: true });
 
-    // Retiring the second secret forgot the first, so the store holds one row per live window.
-    expect(v.parse(
-      v.array(v.object({ n: v.number() })),
-      harness.sql.exec(`SELECT COUNT(*) AS n FROM user_device_retired_tokens`).toArray(),
-    )[0].n).toBe(1);
-    // Forgotten is refused, not reported: that secret expired on its own long ago.
-    expect(await harness.userDO.verifyDeviceToken(await testOwner(), first)).toEqual({ ok: false });
-    expect(await harness.userDO.verifyDeviceToken(await testOwner(), third)).toEqual({ ok: true, deviceId, current: true });
-    await harness.joinFibers();
-    harness.close();
-  });
+    // Spent: the same signed request again is refused, as is a signature for another hub.
+    expect(await harness.userDO.issueDeviceConnectTicket(owner, { ...forged, signature: genuine })).toEqual({ ok: false, refusal: 'challenge_spent' });
+    const staging = await connectProof(harness, deviceId, key, 0);
+    expect(await harness.userDO.issueDeviceConnectTicket(owner, { ...staging, origin: 'https://staging.kinu.example.com' })).toEqual({ ok: false, refusal: 'unauthorized' });
 
-  test('the window is absolute from the last rotation, not slid by use', async () => {
-    const harness = createTestUserDO({ deviceResponder: daemon });
-    const { deviceId, token } = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
+    // A challenge issued to one device spends for no other.
+    const borrowed = await connectProof(harness, other.deviceId, other.key, 0);
+    const signedForThis = signConnect(key, { device: deviceId, generation: 0, nonce: borrowed.nonce });
+    expect(await harness.userDO.issueDeviceConnectTicket(owner, { ...borrowed, device: deviceId, signature: signedForThis })).toEqual({ ok: false, refusal: 'challenge_spent' });
 
-    const expiry = () => v.parse(
-      v.array(v.object({ expires_at: v.number() })),
-      harness.sql.exec(`SELECT expires_at FROM user_devices WHERE id = ?`, deviceId).toArray(),
-    )[0].expires_at;
-
-    // An idle-sliding window would be rewritten to ~now+TTL; an absolute one stays put. Reading the
-    // stored value keeps this independent of suite speed.
-    const anchor = Date.now() + 400 * 24 * 60 * 60 * 1000;
-    harness.sql.exec(`UPDATE user_devices SET expires_at = ? WHERE id = ?`, anchor, deviceId);
-
-    expect(await harness.userDO.verifyDeviceToken(await testOwner(), token))
-      .toEqual({ ok: true, deviceId, current: true });
-    expect(expiry()).toBe(anchor);
-
-    harness.sql.exec(`UPDATE user_devices SET expires_at = ? WHERE id = ?`, 1, deviceId);
-    expect(await harness.userDO.verifyDeviceToken(await testOwner(), token)).toEqual({ ok: false });
+    expect(stored(harness, deviceId)).toMatchObject({ clone_detected_at: null, revoked_at: null });
     await harness.joinFibers();
     harness.close();
   });
 
   test('a second claimant takes the slot and is recorded where the owner reads it', async () => {
     const harness = createTestUserDO({ deviceResponder: daemon });
-    const { deviceId, token } = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
+    const { deviceId, key } = await registerTestDevice(harness.userDO, 'ashish@studio');
 
-    const rotated = await connectDaemon(harness, token);
-    expect((await harness.userDO.listDevices(await testOwner()))[0]).toMatchObject({
-      id: deviceId, replacedAt: null,
-    });
-    const incumbent = harness.acceptedSockets.at(-1);
+    const incumbent = await connectTestDevice(harness, deviceId, key, { generation: 0, acknowledge: true });
+    expect((await harness.userDO.listDevices(await testOwner()))[0]).toMatchObject({ id: deviceId, replacedAt: null });
 
-    // A redialling machine must not be locked out by a socket the hub has not seen close: the one-
-    // shot
-    // grace, not a refusal here, stops the alternation.
-    expect(await claimAgainstLiveSocket(harness, rotated ?? '')).toBe(101);
+    // A redialling machine must not be locked out by a socket the hub has not seen close.
+    const newcomer = await connectTestDevice(harness, deviceId, key, { generation: 1, acknowledge: true });
 
     const [row] = await harness.userDO.listDevices(await testOwner());
     expect(row.replacedAt).not.toBeNull();
     expect(row.connected).toBe(true);
-    expect(harness.acceptedSockets.at(-1)).not.toBe(incumbent);
-    expect((incumbent?.sent ?? []).filter((raw) => raw.includes(DEVICE_FRAMES.rotate))).toHaveLength(1);
+    expect(incumbent.closed()).toEqual({ code: 1000, reason: 'replaced by a new connection' });
+    expect(newcomer.closed()).toBeNull();
     await harness.joinFibers();
     harness.close();
   });
@@ -1452,26 +1298,68 @@ describe('device RPC stays unreachable from owner HTTP routes', () => {
 describe('the account keeps one row per linked machine', () => {
   test('a revoked device with nothing left to report is removed, not kept', async () => {
     const harness = createTestUserDO({ deviceResponder: daemon });
-    const { deviceId, token } = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
+    const { deviceId, key } = await registerTestDevice(harness.userDO, 'ashish@studio');
 
     expect(await harness.userDO.revokeDevice(await testOwner(), deviceId)).toEqual({ ok: true, unstoppedCommands: 0 });
 
     expect(harness.sql.exec(`SELECT id FROM user_devices WHERE id = ?`, deviceId).toArray()).toEqual([]);
-    expect(await harness.userDO.verifyDeviceToken(await testOwner(), token)).toEqual({ ok: false });
+    expect(await harness.userDO.issueDeviceConnectChallenge(await testOwner(), deviceId)).toEqual({ ok: false, refusal: 'unauthorized' });
+    expect(key.publicKey).toHaveLength(43);
     await harness.joinFibers();
     harness.close();
   });
 
-  test('linking a machine again replaces its old registration instead of adding a row', async () => {
+  test('linking a machine again replaces its old registration, on its old key\'s word only', async () => {
     const harness = createTestUserDO({ deviceResponder: daemon });
     const owner = await testOwner();
-    const first = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
+    const first = await registerTestDevice(harness.userDO, 'ashish@studio');
+    const next = testDeviceKey();
 
-    // `kinu connect` run again sends the token its device.json held.
-    const again = await harness.userDO.registerDevice(owner, 'ashish@studio', first.token);
+    // A replacement signed by any key but the old registration's replaces nothing.
+    const unsigned = await harness.userDO.registerDevice(owner, {
+      publicKey: next.publicKey, origin: TEST_HUB_ORIGIN, label: 'ashish@studio',
+      replaces: { device: first.deviceId, signature: signReplace(next, { device: first.deviceId, publicKey: next.publicKey }) },
+    });
 
-    expect((await harness.userDO.listDevices(owner)).map((device) => device.id)).toEqual([again.deviceId]);
-    expect(await harness.userDO.verifyDeviceToken(owner, first.token)).toEqual({ ok: false });
+    expect((await harness.userDO.listDevices(owner)).map((device) => device.id).sort()).toEqual([first.deviceId, unsigned.deviceId].sort());
+
+    // `kinu connect` run again signs the replacement with the key device.key held.
+    const newest = testDeviceKey();
+
+    const again = await harness.userDO.registerDevice(owner, {
+      publicKey: newest.publicKey, origin: TEST_HUB_ORIGIN, label: 'ashish@studio',
+      replaces: { device: first.deviceId, signature: signReplace(first.key, { device: first.deviceId, publicKey: newest.publicKey }) },
+    });
+
+    expect((await harness.userDO.listDevices(owner)).map((device) => device.id).sort()).toEqual([unsigned.deviceId, again.deviceId].sort());
+    expect(await harness.userDO.issueDeviceConnectChallenge(owner, first.deviceId)).toEqual({ ok: false, refusal: 'unauthorized' });
+    await harness.joinFibers();
+    harness.close();
+  });
+
+  test('an update re-enrols a machine under its own id with a new key, generation 0, and a removed one stays removed', async () => {
+    const harness = createTestUserDO({ deviceResponder: daemon });
+    const owner = await testOwner();
+    const earlier = testDeviceKey();
+
+    // The release's reset dropped the earlier row: re-enrolling makes it anew, under the id device.json names.
+    expect(await harness.userDO.registerDevice(owner, { publicKey: earlier.publicKey, origin: TEST_HUB_ORIGIN, label: 'studio', reenrol: 'dev-earlier' }))
+      .toEqual({ deviceId: 'dev-earlier' });
+    await connectTestDevice(harness, 'dev-earlier', earlier, { generation: 0, acknowledge: true });
+
+    // Again, as `kinu update` on a machine whose device.json it could not yet rewrite: the key and generation are replaced.
+    const replaced = testDeviceKey();
+    await harness.userDO.registerDevice(owner, { publicKey: replaced.publicKey, origin: TEST_HUB_ORIGIN, label: 'renamed', reenrol: 'dev-earlier' });
+    expect(v.parse(v.array(v.object({ public_key: v.string(), connect_generation: v.number(), label: v.string() })),
+      harness.sql.exec(`SELECT public_key, connect_generation, label FROM user_devices WHERE id = ?`, 'dev-earlier').toArray()))
+      .toEqual([{ public_key: replaced.publicKey, connect_generation: 0, label: 'studio' }]);
+    expect(await buyTicket(harness, 'dev-earlier', earlier, 1)).toEqual({ ok: false, refusal: 'unauthorized' });
+    expect(await buyTicket(harness, 'dev-earlier', replaced, 0)).toMatchObject({ ok: true });
+
+    // A device its owner removed, with an incident kept, is not brought back by a re-enrolment.
+    harness.sql.exec(`UPDATE user_devices SET revoked_at = 1, clone_detected_at = 1 WHERE id = ?`, 'dev-earlier');
+    await expect(harness.userDO.registerDevice(owner, { publicKey: testDeviceKey().publicKey, origin: TEST_HUB_ORIGIN, reenrol: 'dev-earlier' }))
+      .rejects.toThrow('removed from your account');
     await harness.joinFibers();
     harness.close();
   });

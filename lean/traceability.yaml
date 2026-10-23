@@ -260,41 +260,46 @@ requirements:
       - packages/pc-agent/src/index.js#AGENT_SEGMENT
     remainingEvidence:
       - Classification is proved on the path a syscall reaches, which realTarget computes; a link swapped between the check and the syscall is outside the model
-      - The raw tier confines only the daemon's file methods: a raw command runs as the owner and can read device.json, which is what the owner's Sandbox switch turned off means
+      - The raw tier confines only the daemon's file methods: a raw command runs as the owner and can read device.key, which is what the owner's Sandbox switch turned off means
       - Whether bwrap or sandbox-exec enforces the same policy for a sandboxed command is the kernel sandbox's part, outside this model
       - config.json is the CLI's bearer only when the CLI keeps its configuration in Kinu's device directory, the default ~/.kinu
       - The fixture runs viewFor on a real tree with real links, as macOS's view on this host; the Linux mounts, the temp remap and frameAgentHome are proved but not exercised by it
     refinement:
       - lean/fixtures/device-view.json :: packages/pc-agent/tests/refinement-device-view.test.js
   PR-DEVICE-002:
-    statement: A device connect ticket admits at most once, never from its minute on and never for a revoked device; revocation is permanent, a retired device token revokes its device and the grace a rotation keeps is one shot; two holders of one device.json cannot alternate, and a single holder connects forever.
+    statement: A device's key is its credential (device protocol 5). A connect ticket admits at most once, never from its minute on and never for a revoked device; a connect challenge proves one request, of the device it was issued to; revocation is permanent; the committed connect generation connects, the next one connects committed first, and any other revokes the device; two holders of one key are found once one connects and then the other, every answer arriving, and a single holder connects forever whatever becomes of its answers.
     status: proved-in-abstract-model
     theorems:
-      - Kinu.Safety.DeviceToken.a_ticket_is_spent_once
-      - Kinu.Safety.DeviceToken.a_ticket_dies_at_its_minute
-      - Kinu.Safety.DeviceToken.a_revoked_devices_ticket_admits_nothing
-      - Kinu.Safety.DeviceToken.revocation_is_permanent
-      - Kinu.Safety.DeviceToken.a_retired_token_revokes_its_device
-      - Kinu.Safety.DeviceToken.the_grace_is_one_shot
-      - Kinu.Safety.DeviceToken.ahead_after_own
-      - Kinu.Safety.DeviceToken.out_after_other
-      - Kinu.Safety.DeviceToken.revoked_after_out
-      - Kinu.Safety.DeviceToken.two_copies_cannot_alternate
-      - Kinu.Safety.DeviceToken.one_holder_is_never_revoked
+      - Kinu.Safety.DeviceKey.a_ticket_is_spent_once
+      - Kinu.Safety.DeviceKey.a_ticket_dies_at_its_minute
+      - Kinu.Safety.DeviceKey.a_revoked_devices_ticket_admits_nothing
+      - Kinu.Safety.DeviceKey.a_challenge_is_spent_once
+      - Kinu.Safety.DeviceKey.a_challenge_proves_only_its_device
+      - Kinu.Safety.DeviceKey.revocation_is_permanent
+      - Kinu.Safety.DeviceKey.the_committed_generation_connects
+      - Kinu.Safety.DeviceKey.a_lost_answer_is_recovered
+      - Kinu.Safety.DeviceKey.a_stale_generation_revokes
+      - Kinu.Safety.DeviceKey.an_answer_commits_only_the_next_generation
+      - Kinu.Safety.DeviceKey.ahead_after_own
+      - Kinu.Safety.DeviceKey.two_holders_are_found
+      - Kinu.Safety.DeviceKey.one_holder_is_never_revoked
     tsRefs:
       - packages/cf-backend/src/user/single-use-tickets.ts#TICKET_TTL_MS
       - packages/cf-backend/src/user/single-use-tickets.ts#SingleUseTickets.spend
-      - packages/cf-backend/src/user/user-do.ts#UserDO.issueDeviceConnectTicket
-      - packages/cf-backend/src/user/user-do.ts#UserDO.verifyDeviceConnectTicket
-      - packages/cf-backend/src/user/user-do.ts#UserDO.verifyDeviceToken
-      - packages/cf-backend/src/user/devices.ts#UserDevices.acceptDeviceSocket
-      - packages/cf-backend/src/user/devices.ts#UserDevices.rotateDeviceToken
-      - packages/cf-backend/src/user/devices.ts#UserDevices.revokeOnTokenReuse
+      - packages/cf-backend/src/user/devices.ts#UserDevices.issueDeviceConnectChallenge
+      - packages/cf-backend/src/user/devices.ts#UserDevices.provenChallenge
+      - packages/cf-backend/src/user/devices.ts#UserDevices.issueDeviceConnectTicket
+      - packages/cf-backend/src/user/devices.ts#UserDevices.authenticateDeviceSocket
+      - packages/cf-backend/src/user/devices.ts#UserDevices.acknowledgeGeneration
+      - packages/cf-backend/src/user/devices.ts#UserDevices.revokeClonedDevice
+      - packages/pc-agent/src/index.js#storeGeneration
     remainingEvidence:
-      - A connection is one step, ticket and rotation together; a socket that fails between the two, and two connections of one device inside one ticket's minute, are outside the model
-      - Every connection falls inside the token's absolute window and the retired tokens' retention, both DEVICE_TOKEN_TTL_MS; outside them the hub refuses without revoking, which the model leaves out
-      - Tokens and tickets are their SHA-256 hashes; the model assumes distinct secrets hash apart
-      - No fixture runs the UserDO's ticket and token paths against the model; they need a workerd Durable Object
+      - The signature is a premise; Ed25519's unforgeability and the private key's secrecy on the machine are outside the model
+      - A connect is one step, ticket and AUTH together; a socket that fails between the two, and two connects of one device inside one ticket's minute, are outside the model
+      - Two holders are found when answers arrive; two holders whose every answer is lost can alternate unseen until one answer arrives, which the model leaves out
+      - Every connect falls inside the link's absolute window; outside it the hub refuses without revoking, which the model leaves out
+      - Challenges and tickets are their SHA-256 hashes; the model assumes distinct secrets hash apart
+      - No fixture runs the UserDO's challenge, ticket and generation paths against the model; the bun suites (unit-device-key-connect, unit-device-grants) run them against a real UserDO
   PR-STORE-001:
     statement: The abstract memory index preserves new and unrelated chunks and bounds modeled search result length and score sign by construction.
     status: by-construction-witness

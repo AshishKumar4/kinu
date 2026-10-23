@@ -15,6 +15,7 @@ import { makeKv } from './helpers/kv';
 import { workerContext } from './helpers/bindings';
 import type { UserCaller } from '@kinu.run/core';
 import type { JsonValue } from '@kinu.run/core';
+import { registerTestDevice } from './helpers/device-key';
 
 // Dynamic: the helpers above install the agents-SDK mock at load, and `agents` imports workerd-only
 // `cloudflare:*` modules that crash bun's loader.
@@ -154,7 +155,7 @@ async function seam(options: {
   const user = createTestUserDO({ deviceResponder: daemon(device), durableObjectId: ownerUserId });
   const stranger = createTestUserDO({ durableObjectId: strangerUserId });
   const owner = await testOwner();
-  const { deviceId } = await user.userDO.registerDevice(owner, 'ashish@studio');
+  const { deviceId } = await registerTestDevice(user.userDO, 'ashish@studio', owner);
   user.attachDevice(deviceId);
   // Without the reported cwd the file view reaches nothing (F2's rule), which is not what these tests are about.
   await user.sendDeviceHello({ ...CAPABLE_HELLO, root: DEVICE_HOME, home: DEVICE_HOME });

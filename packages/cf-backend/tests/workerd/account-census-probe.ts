@@ -104,7 +104,8 @@ export class CensusAccountDO extends UserDO {
     await this.registerWorkspace(owner, 'priya-notes', 'Priya notes');
     const claim = await (await workspaceNamed(this.env, 'priya-notes')).claimOwner(person.userId);
     await this.ensureWorkspaceCapability('priya-notes', claim.capabilityHash);
-    await this.registerDevice(owner, "Priya's laptop");
+    // A key's public half is all the account keeps of a machine; the census counts the row, not the key.
+    await this.registerDevice(owner, { publicKey: 'p'.repeat(43), origin: 'https://kinu.run', label: "Priya's laptop" });
     await this.setCredential(owner, 'anthropic.bearer', { kind: 'bearer', token: 'sk-priya' });
     await tenantDrive(this.env, person.userId)?.writeFile('/notes.md', new TextEncoder().encode('Webhook signing: rotate the Northwind secret.\n'.repeat(DRIVE_FILE_BYTES / 46 + 1)));
     await sandboxPreviewExposures(this.env.AUTH_KV, sandboxIdForWorkspace('priya-notes')).publish(PREVIEW_PORT, 'preview-token');

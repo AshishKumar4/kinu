@@ -167,15 +167,22 @@ export function initUserTables(sql: SqlExec): void {
     )
   `);
 
-  // Devices linked via `kinu connect`; only token hashes are stored. Tokens rotate on every connect
-  // and expire an absolute window after the last rotation, so a copied `device.json` goes stale.
+  // Devices linked via `kinu connect` (device protocol 5): each holds an Ed25519 key whose private half never leaves
+  // the machine, so nothing stored here connects anything. A connect expires an absolute window after the last one.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_devices (
       id              TEXT PRIMARY KEY,
-      token_hash      TEXT NOT NULL,
-      -- The superseded secret, held until the new one is first used, so a
-      -- rotation message lost with the socket does not brick the machine.
-      prev_token_hash TEXT,
+      -- The machine's Ed25519 public key, its 32 raw bytes as base64url.
+      public_key      TEXT NOT NULL,
+      -- The connect generation the machine last confirmed it stored. A
+      -- connect signs the one its device.json holds: this one, or the next
+      -- when the confirmation was lost; any other means two machines hold
+      -- the key.
+      connect_generation INTEGER NOT NULL DEFAULT 0,
+      -- When two machines were found holding this device's key and it was
+      -- revoked for it: the incident the owner reads on the Devices page
+      -- until acknowledged.
+      clone_detected_at INTEGER,
       label           TEXT NOT NULL,
       os              TEXT,
       hostname        TEXT,
@@ -184,7 +191,7 @@ export function initUserTables(sql: SqlExec): void {
       expires_at      INTEGER,
       revoked_at      INTEGER,
       -- When a second socket took this device's live slot. Rendered in Account
-      -- settings: a silent takeover by a copied device.json shows as a
+      -- settings: a takeover by another holder of the key shows as a
       -- replacement the owner did not cause.
       replaced_at     INTEGER,
       -- The directory the owner ran "kinu connect" in, and the machine's own
@@ -224,21 +231,17 @@ export function initUserTables(sql: SqlExec): void {
         AND (update_refused_version IS NULL) = (update_refusal_reason IS NULL))
     )
   `);
-  sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_devices_token_hash ON user_devices (token_hash)`);
 
-  // Superseded device secrets, kept for the token lifetime: one presented again revokes the device.
+  // A daemon's connect challenges, kept only as hashes: minted for a minute and spent once, by the signature over one
+  // that buys a connect ticket or reports a refused update. Spending deletes it, so a challenge is live or gone.
   sql.exec(`
-    CREATE TABLE IF NOT EXISTS user_device_retired_tokens (
-      token_hash        TEXT PRIMARY KEY,
-      device_id         TEXT NOT NULL REFERENCES user_devices(id) ON DELETE CASCADE,
-      retired_at        INTEGER NOT NULL,
-      -- When the secret was presented again and the device revoked for it:
-      -- the incident the owner reads on the Devices page until acknowledged.
-      reuse_detected_at INTEGER
+    CREATE TABLE IF NOT EXISTS device_connect_challenges ( /* refilled by the next challenge a machine asks for: each row lives one minute */
+      nonce_hash TEXT PRIMARY KEY,
+      device_id  TEXT NOT NULL REFERENCES user_devices(id) ON DELETE CASCADE,
+      expires_at INTEGER NOT NULL
     )
   `);
-  sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_device_retired_tokens_retired_at
-            ON user_device_retired_tokens (retired_at)`);
+  sql.exec(`CREATE INDEX IF NOT EXISTS idx_device_connect_challenges_exp ON device_connect_challenges (expires_at)`);
 
   initDeviceInflightTable(sql);
 
@@ -303,10 +306,8 @@ export function initUserTables(sql: SqlExec): void {
 
   // Single-use tickets keep long-lived tokens out of URLs and edge logs; spending one deletes its row, so a ticket is
   // live or gone. Each purpose spends only its own (cf-backend user/single-use-tickets.ts):
-  // - `device_connect`: a daemon's socket, traded for its long-lived token. `token_was_current` says whether that token
-  //   was the device's CURRENT secret rather than the one-shot grace. The accept reads it to decide whether its rotation
-  //   may leave a grace behind: a machine recovering ON the grace shares that secret with whoever else holds a copy of
-  //   device.json, so re-granting one there is what let two claimants alternate forever.
+  // - `device_connect`: a daemon's socket, bought with a signature over its connect challenge, and spent by the socket's
+  //   AUTH frame.
   // - `device_join`: a device the browser asked to connect, issued before the machine registers. The machine claims
   //   `device_id`, so the page that asked watches the one row it will become; `workspace` is the one whose Environment
   //   issued it, granted on registering, or null for none. Thirty minutes, one per device.
@@ -318,14 +319,11 @@ export function initUserTables(sql: SqlExec): void {
       purpose           TEXT NOT NULL CHECK (purpose IN (${sqlCheckList(CONNECTION_TICKET_PURPOSES)})),
       expires_at        INTEGER NOT NULL,
       device_id         TEXT,
-      token_was_current INTEGER,
       workspace         TEXT,
       cli_token_hash    TEXT,
-      CHECK ((purpose = 'device_connect' AND device_id IS NOT NULL AND token_was_current IS NOT NULL AND workspace IS NULL
-          AND cli_token_hash IS NULL)
-        OR (purpose = 'device_join' AND device_id IS NOT NULL AND token_was_current IS NULL AND cli_token_hash IS NULL)
-        OR (purpose = 'cli_agent_connect' AND device_id IS NULL AND token_was_current IS NULL AND workspace IS NOT NULL
-          AND cli_token_hash IS NOT NULL))
+      CHECK ((purpose = 'device_connect' AND device_id IS NOT NULL AND workspace IS NULL AND cli_token_hash IS NULL)
+        OR (purpose = 'device_join' AND device_id IS NOT NULL AND cli_token_hash IS NULL)
+        OR (purpose = 'cli_agent_connect' AND device_id IS NULL AND workspace IS NOT NULL AND cli_token_hash IS NOT NULL))
     )
   `);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_connection_tickets_exp ON connection_tickets (expires_at)`);
