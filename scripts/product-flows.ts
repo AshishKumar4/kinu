@@ -533,6 +533,77 @@ export async function attachmentIsReadAndShown(target: FlowTarget): Promise<Atta
   }
 }
 
+export interface RewindVerdict {
+  /** The asks the chat offers to walk back to once the rewind answered: the first, and not the one walked back past. */
+  readonly sentAfter: readonly string[];
+  /** The row that told the agent what the rewound turn left, as the person sees it once the rewind answered: its
+   *  words, or null when no such row shows. */
+  readonly notice: string | null;
+  /** The same row after a reload, from the stored transcript. */
+  readonly noticeAfterReload: string | null;
+}
+
+const REWIND_KEPT = 'Flow rewind: the ask that stays.';
+
+const REWIND_CUT = 'Flow rewind: the ask walked back past.';
+
+/** A chat-only rewind's row (`chat_rewound`), shown: its words, or null. */
+const REWIND_NOTICE = `(() => {
+  const row = document.querySelector('#chat [data-system-event="chat_rewound"]');
+  return row instanceof HTMLElement && row.offsetParent !== null ? row.innerText : null;
+})()`;
+
+/**
+ * Row: a person walks the chat back to before a message, the conversation alone (REWIND-0924). The chat ends before
+ * it, and the row that tells the agent what its rewound turn left shows where the walk-back cut, live and after a
+ * reload.
+ */
+export async function chatOnlyRewindIsShown(target: FlowTarget): Promise<RewindVerdict> {
+  const workspace = await createFlowWorkspace(target, 'rewind');
+
+  try {
+    const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
+
+    await sendAndSettle(page, REWIND_KEPT);
+    await sendAndSettle(page, REWIND_CUT);
+    await page.evaluate(`(() => {
+      const control = [...document.querySelectorAll('#chat [data-revert-turn]')]
+        .find((each) => (each.parentElement?.textContent ?? '').includes(${JSON.stringify(REWIND_CUT)}));
+      if (!(control instanceof HTMLElement)) throw new Error('no walk-back control on the ask to walk back past');
+      control.click();
+    })()`);
+    // Its choices sit in the dialog's footer, beside the body that says it has read the turn's files.
+    await until(page, 'the walk-back dialog, read', `document.querySelector('[data-revert-dialog="ready"]') !== null
+      && document.querySelector('[data-revert-action="conversation"]') !== null`);
+
+    const ledger = await frameLedger(page);
+
+    try {
+      ledger.restart();
+      await page.click('[data-revert-action="conversation"]');
+      // The rewind's transcript reaches every tab before its answer does (chat-transport's `history-reverted`).
+      await waitOn(page, 'the walk-back answered', settledAfter(page, ledger, 'revertConversation'));
+    } finally {
+      await ledger.stop();
+    }
+
+    const sentAfter = v.parse(v.array(v.string()), await page.evaluate(SENT_MESSAGES));
+    const notice = v.parse(v.nullable(v.string()), await page.evaluate(REWIND_NOTICE));
+
+    await page.reload({ waitUntil: 'load' });
+    await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
+    await until(page, 'the kept ask in the stored transcript', `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(REWIND_KEPT)})`);
+    await painted(page);
+    const noticeAfterReload = v.parse(v.nullable(v.string()), await page.evaluate(REWIND_NOTICE));
+
+    await page.close();
+
+    return { sentAfter, notice, noticeAfterReload };
+  } finally {
+    await removeFlowWorkspace(target, workspace);
+  }
+}
+
 async function flowMemoryProposals(target: FlowTarget, workspace: string, key: string): Promise<readonly AccountMemoryProposal[]> {
   const response = await fetch(`${target.origin}/api/user/memory`, { headers: webHeaders(target.identity) });
 
