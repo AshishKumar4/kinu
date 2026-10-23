@@ -26,6 +26,7 @@
  *
  *   bun scripts/upgrade-fixtures.ts     the deployment KINU_EVAL_ORIGIN names, as every post-publish row
  */
+import { generateKeyPairSync } from 'node:crypto';
 import * as v from 'valibot';
 import { SLATES_ROOT, UPGRADE_FIXTURE_ACCOUNTS, VfsRevisionSchema } from '@kinu.run/core';
 import { evalTargetVerdict } from '../packages/test-utils/src/eval-identity';
@@ -237,7 +238,9 @@ async function joinMachine(account: Account, workspace: string): Promise<{ devic
   const ticket = /--join '([^']+)'/u.exec(issued.text)?.[1];
 
   if (ticket === undefined) return { why: `devices answered ${String(issued.status)}: ${issued.text.slice(0, 200)}` };
-  const joined = await call(account, '/pc/join', { method: 'POST', body: JSON.stringify({ ticket, label: MACHINE_LABEL }) });
+  // As `kinu connect --join` sends it (device protocol 5): the machine's public key beside the ticket.
+  const publicKey = generateKeyPairSync('ed25519').publicKey.export({ format: 'jwk' }).x;
+  const joined = await call(account, '/pc/join', { method: 'POST', body: JSON.stringify({ ticket, publicKey, label: MACHINE_LABEL }) });
   const device = joined.status === 201 ? /"deviceId":"([^"]+)"/u.exec(joined.text)?.[1] : undefined;
 
   return device === undefined ? { why: `join answered ${String(joined.status)}: ${joined.text.slice(0, 200)}` } : { device, why: '' };

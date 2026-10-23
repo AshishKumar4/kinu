@@ -457,6 +457,16 @@ describe('/pc/join', () => {
     }
   });
 
+  // Staging 0d1c0a5b1, 2026-10-23: a join with no key, as an earlier CLI sends it, was told its ticket was bad.
+  test('a good ticket with no key, as an earlier Kinu command sends it, is told to update before any namespace lookup', async () => {
+    const userDO = makeUserDO();
+    const response = await pcRoutes.fetch(new Request(JOIN_URL, { method: 'POST', body: JSON.stringify({ ticket: GOOD_JOIN, label: 'Build box' }) }), makeEnv(userDO));
+
+    expect(response.status).toBe(400);
+    expect(v.parse(v.object({ error: v.string() }), await response.json()).error).toContain('kinu update');
+    expect(userDO.idNames).toEqual([]);
+  });
+
   test('the per-source budget bounds join attempts in their own bucket', async () => {
     const userDO = makeUserDO();
     const env = makeEnv(userDO);

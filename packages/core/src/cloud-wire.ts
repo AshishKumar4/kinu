@@ -23,8 +23,9 @@ export const DEV_IDENTITY_ACCOUNT_HEADER = 'x-kinu-dev-identity-account';
  *  key and no Cloudflare login, so a search takes the deployment's own gateway, as a person's who never chose does),
  *  `gateway` (signed in to Cloudflare, so its searches bill its own account's gateway), `cloudflare-login` (a
  *  Cloudflare login the first-run row expires and refuses, so no other row reads it while it is dead), `limits` (the one
- *  eval account under the free tier's limits, every other being exempt, so the deployed flow test meets them). */
-export const EVAL_ACCOUNTS = ['devices', 'scripted', 'settings', 'keyless', 'gateway', 'cloudflare-login', 'limits'] as const;
+ *  eval account under the free tier's limits, every other being exempt, so the deployed flow test meets them),
+ *  `mcp-wake` (the row that ends its account's activation, which as `scripted` ended the call of every row beside it). */
+export const EVAL_ACCOUNTS = ['devices', 'scripted', 'settings', 'keyless', 'gateway', 'cloudflare-login', 'limits', 'mcp-wake'] as const;
 
 /** The eval account the free tier binds (limits/class.ts): the deployed flow test of the limits runs as it. */
 export const LIMITED_EVAL_ACCOUNT = 'limits' satisfies (typeof EVAL_ACCOUNTS)[number];
