@@ -105,9 +105,20 @@ async function within<T>(daemon: Daemon, waited: Promise<T>, what: string): Prom
   return first.value;
 }
 
-/** The daemon's exit code. A daemon that never exits holds the case open: its log, on the tier's timeout, says why. */
-async function exitOf(daemon: Daemon): Promise<number> {
-  return daemon.child.exited;
+/** What came first: the Worker's n-th answer to a connect step, or the daemon's exit. */
+type Outcome = { readonly answered: string } | { readonly exited: number };
+
+/**
+ * Whichever comes first of the hub's n-th answer to a connect step (from 0) and `daemon`'s exit. Each is definite: a
+ * credential the hub wrongly takes arrives as an answer (`/pc/connect-ticket 200`) and fails the case at once, and a
+ * daemon that keeps asking after a refusal arrives as its next answer, so no case waits on an exit that never comes.
+ * An answer already given is read first, as the daemon read it before it could exit.
+ */
+async function firstOf(daemon: Daemon, bridge: DeviceBridge, n: number): Promise<Outcome> {
+  return await Promise.race([
+    bridge.answered(n).then((answer): Outcome => ({ answered: `${answer.path} ${String(answer.status)}` })),
+    daemon.child.exited.then((code): Outcome => ({ exited: code })),
+  ]);
 }
 
 const isFrame = (type: string) => (frame: string) => frame.startsWith('{') && v.is(v.looseObject({ type: v.literal(type) }), JSON.parse(frame));
@@ -188,7 +199,8 @@ describe('a device key is the credential, and device.json alone is not', () => {
     copyFileSync(join(owners, 'device.json'), join(copy, 'device.json'));
     const thief = startDaemon(copy);
 
-    expect(await exitOf(thief)).toBe(REJECTED_EXIT);
+    // The owner's machine took answers 0 and 1; the copy asks for nothing and stops.
+    expect(await firstOf(thief, bridge, 2)).toEqual({ exited: REJECTED_EXIT });
     expect(thief.log()).toContain('device credentials were rejected');
     expect(thief.log()).toContain('no device key');
     // One ticket was ever bought, by the owner's machine; the copy asked for none, and the machine is untouched.
@@ -204,7 +216,10 @@ describe('a device key is the credential, and device.json alone is not', () => {
     const { deviceId } = await registerTestDevice(harness.userDO, 'studio');
     const forged = startDaemon(machineHome(bridge, deviceId, testDeviceKey()));
 
-    expect(await exitOf(forged)).toBe(REJECTED_EXIT);
+    // Anyone may ask for a challenge; the answer to its signature is the refusal, and the daemon stops on it.
+    expect(await firstOf(forged, bridge, 0)).toEqual({ answered: '/pc/connect-challenge 200' });
+    expect(await firstOf(forged, bridge, 1)).toEqual({ answered: '/pc/connect-ticket 401' });
+    expect(await firstOf(forged, bridge, 2)).toEqual({ exited: REJECTED_EXIT });
     expect(forged.log()).toContain('device credentials were rejected');
     expect(bridge.tickets).toEqual([]);
     expect(stored(harness, deviceId)).toEqual({ connect_generation: 0, clone_detected_at: null, revoked_at: null });
@@ -224,17 +239,29 @@ describe('two holders of one key are found by the connect generation', () => {
     expect(stored(harness, deviceId).connect_generation).toBe(1);
     const clone = startDaemon(copy);
 
-    expect(await exitOf(clone)).toBe(REJECTED_EXIT);
+    // The owner's machine took answers 0 and 1. The copy's key is the device's, so its challenge is answered; the
+    // generation it signs is the one the owner's machine moved past, so its exchange is refused, and the device revoked.
+    expect(await firstOf(clone, bridge, 2)).toEqual({ answered: '/pc/connect-challenge 200' });
+    expect(await firstOf(clone, bridge, 3)).toEqual({ answered: '/pc/connect-ticket 401' });
+    expect(stored(harness, deviceId)).toMatchObject({ clone_detected_at: expect.any(Number), revoked_at: expect.any(Number) });
+
+    // The hub cannot tell which machine is the owner's: by that answer it has closed the other one's socket too.
+    expect((await bridge.helloed(0)).closed()).toMatchObject({ reason: 'device revoked' });
+
+    // Both stop. A daemon that asked again after its refusal shows as a second answer past the clone's, never a wait:
+    // the owner's machine is let one reconnect, which a revoked device's challenge refuses.
+    const ended = Promise.all([clone.child.exited, owner.child.exited]).then(([cloned, owned]) => ({ exited: [cloned, owned] }));
+    const askedAgain = bridge.answered(5).then(() => ({ askedAgain: bridge.answers.slice(4).map((answer) => `${answer.path} ${String(answer.status)}`) }));
+
+    expect(await Promise.race([askedAgain, ended])).toEqual({ exited: [REJECTED_EXIT, REJECTED_EXIT] });
+    expect(bridge.answers.slice(4).every((answer) => answer.status !== 200)).toBe(true);
+    expect(bridge.tickets).toHaveLength(1);
     expect(clone.log()).toContain('two machines used its key');
     expect(clone.log()).toContain('kinu connect');
-    expect(stored(harness, deviceId)).toMatchObject({ clone_detected_at: expect.any(Number), revoked_at: expect.any(Number) });
+    expect(owner.log()).toContain('two machines used its key');
     expect(await harness.userDO.listDevices(await testOwner())).toMatchObject([
       { id: deviceId, connected: false, revokedAt: expect.any(Number), cloneDetectedAt: expect.any(Number) },
     ]);
-
-    // The hub cannot tell which machine is the owner's: the other one's socket is closed, and its next connect refused.
-    expect(await exitOf(owner)).toBe(REJECTED_EXIT);
-    expect(owner.log()).toContain('two machines used its key');
   });
 
   test('a machine that stored its generation and lost the answer connects on it, and the hub commits it first', async () => {
@@ -244,8 +271,9 @@ describe('two holders of one key are found by the connect generation', () => {
     const home = machineHome(bridge, deviceId, key);
     const first = await connected(bridge, home, 0);
 
+    // Stopped by the test: its exit is certain.
     first.child.kill('SIGTERM');
-    await exitOf(first);
+    await first.child.exited;
     // The machine holds generation 1; the hub, as if the answer had gone down with the socket, still holds 0.
     harness.sql.exec(`UPDATE user_devices SET connect_generation = 0 WHERE id = ?`, deviceId);
     expect(generationOnDisk(home)).toBe(1);
@@ -290,7 +318,8 @@ describe('a machine linked on an earlier protocol', () => {
 
     // The daemon this release ships will not run on it, and says what mends it.
     const refused = startDaemon(home);
-    expect(await exitOf(refused)).toBe(1);
+
+    expect(await firstOf(refused, bridge, 0)).toEqual({ exited: 1 });
     expect(refused.log()).toContain('run: kinu update');
 
     // Its bearer, posted as the earlier daemon posts it, is refused at the hub in the same words.

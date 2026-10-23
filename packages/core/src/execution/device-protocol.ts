@@ -15,8 +15,7 @@ export const DEVICE_AUTH_DEADLINE_CLOSE = protocol.authDeadlineClose;
 
 /**
  * The account a device socket is routed to. The Worker must pick the account's object before the socket's first
- * frame, and the account is no URL's: the name holds `auth`, so the platform's logs redact its value as a credential's
- * (cloud-wire.ts `PlatformRedactedHeader`), and the account never sits in a log beside the address that dialled it.
+ * frame; the account id is no secret, and the URL carries nothing.
  */
 export const DEVICE_CONNECT_ACCOUNT_HEADER = protocol.accountHeader;
 

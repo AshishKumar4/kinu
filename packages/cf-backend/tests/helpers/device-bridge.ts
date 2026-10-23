@@ -24,6 +24,10 @@ export interface DeviceBridge {
   readonly seen: SeenRequest[];
   /** Each connect ticket the Worker answered, as its body carried it. */
   readonly tickets: string[];
+  /** Each answer the Worker gave a connect step (the challenge, the ticket exchange), in order: its path and status. */
+  readonly answers: ConnectAnswer[];
+  /** Resolves once the Worker has answered its n-th connect step (from 0): recorded before the daemon reads it. */
+  answered(n: number): Promise<ConnectAnswer>;
   /** Each socket's frames from the daemon, in order, per socket. */
   readonly frames: string[][];
   /** Resolves once the n-th socket (from 0) has said HELLO. */
@@ -32,6 +36,15 @@ export interface DeviceBridge {
   heard(heard: (frame: string) => boolean): Promise<void>;
   stop(): Promise<void>;
 }
+
+/** One answer to a connect step, as the Worker sent it. */
+export interface ConnectAnswer {
+  readonly path: string;
+  readonly status: number;
+}
+
+/** The steps a daemon takes before its socket, each answered accepted or refused. */
+const CONNECT_STEPS: ReadonlySet<string> = new Set(['/pc/connect-challenge', '/pc/connect-ticket']);
 
 /** What a test answers beside `/pc/*`: the CLI's own routes, which the re-enrol case serves from the harness. */
 export type BridgeRoutes = (request: Request) => Promise<Response | null>;
@@ -45,6 +58,9 @@ function seen(at: SeenRequest['at'], request: Request): SeenRequest {
 export function startDeviceBridge(harness: TestUserDO, routes: BridgeRoutes = async () => null): DeviceBridge {
   const requests: SeenRequest[] = [];
   const tickets: string[] = [];
+  const answers: ConnectAnswer[] = [];
+  const answerAt: Array<{ readonly promise: Promise<ConnectAnswer>; readonly resolve: (answer: ConnectAnswer) => void }> = [];
+  const nthAnswer = (n: number) => (answerAt[n] ??= Promise.withResolvers<ConnectAnswer>());
   const frames: string[][] = [];
   const helloes: Array<{ readonly promise: Promise<AcceptedSocket>; readonly resolve: (accepted: AcceptedSocket) => void }> = [];
   const nth = (n: number) => (helloes[n] ??= Promise.withResolvers<AcceptedSocket>());
@@ -84,6 +100,13 @@ export function startDeviceBridge(harness: TestUserDO, routes: BridgeRoutes = as
         const issued = v.safeParse(TicketAnswerSchema, await answer.clone().json());
 
         if (issued.success) tickets.push(issued.output.ticket);
+      }
+
+      if (CONNECT_STEPS.has(pathname)) {
+        const step = { path: pathname, status: answer.status };
+
+        nthAnswer(answers.length).resolve(step);
+        answers.push(step);
       }
 
       if (pathname !== DEVICE_CONNECT_PATH || answer.status !== 101) return answer;
@@ -128,6 +151,8 @@ export function startDeviceBridge(harness: TestUserDO, routes: BridgeRoutes = as
     origin: `http://127.0.0.1:${String(server.port)}`,
     seen: requests,
     tickets,
+    answers,
+    answered: (n) => nthAnswer(n).promise,
     frames,
     helloed: (n) => nth(n).promise,
     heard: (heard) => {

@@ -5185,8 +5185,8 @@ What is fixed in it (the 2026-09-16 device audit, `kinu-logs/audit-0916/SECURITY
 - Done in device protocol 5 (2026-10-22). `kinu connect` writes an Ed25519 key to `device.key` (PKCS#8 PEM, 0600) and
   sends the hub its public half; device.json holds no secret. A ticket is bought with the key's signature over a
   single-use challenge, the hub's origin and the machine's connect generation, and the socket's first frame, AUTH,
-  carries it: the URL carries neither ticket nor account (the account rides in `x-kinu-auth-account`, a name the
-  platform's logs redact). Each accepted connect hands the next generation, committed on the machine's answer; a signed
+  carries it: the URL carries neither ticket nor account (the account id, which is no secret, rides in
+  `x-kinu-auth-account`). Each accepted connect hands the next generation, committed on the machine's answer; a signed
   generation that is neither the committed one nor the next revokes the device and records `clone_detected_at`. No
   update-only admission remains: a protocol 4 daemon cannot authenticate (its bearer is refused at the ticket, in words
   naming `kinu update`), so HELLO serves protocol 5 only and closes any other with 4406. `kinu update` enrols a machine
