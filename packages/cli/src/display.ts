@@ -167,6 +167,16 @@ interface AgentStatusInfo {
   searchNodeCount: number;
 }
 
+/** The level the next turn sends, as its status reads it: null when it names none, or why the status was not read. */
+export type NextTurnEffort = ReasoningEffort | null | { readonly unread: string };
+
+/** Beside a stored effort, the level the next turn sends when its model takes another: " (the next turn runs at low)". */
+export function effortRunsAt(stored: ReasoningEffort, next: NextTurnEffort): string {
+  if (next !== null && typeof next === 'object') return ` (the next turn's level is unread: ${next.unread})`;
+
+  return next === null || next === stored ? '' : ` (the next turn runs at ${next})`;
+}
+
 export function printAgentStatus(info: AgentStatusInfo, dbSize: number, extra?: {
   conversationCount?: number;
   model?: string | null;

@@ -8,6 +8,7 @@ import {
   BUILTIN_TOOLS,
   BUILTIN_TOOL_SPECS,
   DECISION_MODELS,
+  carriedReasoningEffort,
   DEFAULT_DECISION_MODEL,
   DEFAULT_PROVIDER_RETRIES,
   NAMED_SWARM_PRESETS,
@@ -35,7 +36,8 @@ import { Effect } from 'effect';
 import { settle, showing } from '@kinu.run/core/obs';
 import { lastValue, useAsyncResource, type AsyncResource } from '@/hooks/use-async-resource';
 import { getProfileCatalog, listAvailableModels, testModel, updateProfileCatalog } from '../lib/user-api';
-import { AccountPicker, ModelPicker, reasoningEffortLabel, specOnAccount } from './ModelPicker';
+import { AccountPicker, ModelPicker, specOnAccount } from './ModelPicker';
+import { reasoningEffortChoice } from './model-picker-options';
 import { Card, Choice, Field, composing } from './ui/form';
 import { Segmented } from './ui/Segmented';
 import { Checkbox } from "@/components/ui/Check";
@@ -46,6 +48,11 @@ import { TextArea, TextInput } from "@/components/ui/Field";
 import { Rail } from "@/components/ui/Rail";
 
 const EMPTY_MENU: ModelMenuResponse = { models: [], failures: [] };
+
+/** The levels `model`'s menu row declares; undefined when the menu does not list it. */
+function declaredEfforts(menu: ModelMenuResponse, model: string): readonly ReasoningEffort[] | undefined {
+  return menu.models.find((entry) => entry.spec === specWithoutAccount(model))?.reasoningEfforts;
+}
 
 interface TierWords {
   readonly name: string;
@@ -189,10 +196,17 @@ export function ProfileCatalogSettings() {
     if (!draft) return;
     const tiers = { ...draft.tiers };
 
+    // The stored effort follows the model, so the row never holds a level its model does not take.
+    const moved = ({ reasoningEffort, ...assignment }: TierAssignment): TierAssignment => {
+      const carried = carriedReasoningEffort(reasoningEffort, declaredEfforts(menu, model));
+
+      return { ...assignment, model, ...carried !== undefined && { reasoningEffort: carried } };
+    };
+
     if (id === 'default') {
-      if (model) tiers.default = { ...tiers.default, model };
+      if (model) tiers.default = moved(tiers.default);
     } else if (model) {
-      tiers[id] = { ...(tiers[id] ?? tiers.default), model };
+      tiers[id] = moved(tiers[id] ?? tiers.default);
     } else {
       delete tiers[id];
     }
@@ -505,8 +519,8 @@ function TierTuning(props: {
   onEffort: (effort: ReasoningEffort | '') => void;
   onFallbacks: (fallbacks: readonly string[]) => void;
 }) {
-  const entry = props.menu.models.find((model) => model.spec === specWithoutAccount(props.assignment.model));
-  const efforts = offeredReasoningEfforts(entry?.reasoningEfforts, props.assignment.reasoningEffort);
+  const declared = declaredEfforts(props.menu, props.assignment.model);
+  const efforts = offeredReasoningEfforts(declared, props.assignment.reasoningEffort);
 
   return (
     <div className="space-y-2">
@@ -515,7 +529,7 @@ function TierTuning(props: {
           <span className="t-meta w-16 shrink-0 p-text-3">Thinking</span>
           <Segmented<ReasoningEffort | 'auto'>
             label={`${props.tierId} reasoning effort`}
-            segments={[{ id: 'auto', label: 'Auto' }, ...efforts.map((effort) => ({ id: effort, label: reasoningEffortLabel(effort) }))]}
+            segments={[{ id: 'auto', label: 'Auto' }, ...efforts.map((effort) => ({ id: effort, label: reasoningEffortChoice(effort, declared) }))]}
             value={props.assignment.reasoningEffort ?? 'auto'}
             onChange={(effort) => props.onEffort(effort === 'auto' ? '' : effort)}
           />

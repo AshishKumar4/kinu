@@ -52,6 +52,15 @@ export function declaredReasoningEffort(
   return below.at(-1) ?? ranked[0] ?? wanted;
 }
 
+/** A tier's stored effort when its model changes: as the new model declares it, dropped when it declares none, kept
+ *  when its levels are unknown; unset stays unset. */
+export function carriedReasoningEffort(
+  stored: ReasoningEffort | undefined,
+  declared: readonly ReasoningEffort[] | undefined,
+): ReasoningEffort | undefined {
+  return stored === undefined ? undefined : declaredReasoningEffort(stored, declared) ?? undefined;
+}
+
 /** Next level in the offer, wrapping; `current` itself when the offer is empty. */
 export function nextReasoningEffort(offered: readonly ReasoningEffort[], current: ReasoningEffort): ReasoningEffort {
   return offered[(offered.indexOf(current) + 1) % offered.length] ?? current;

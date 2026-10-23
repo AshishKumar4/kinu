@@ -12,7 +12,7 @@ import {
   type ModelTestResult, 
 } from "../lib/user-api";
 import { connectCloudflare } from "./CloudflareAIConnectNotice";
-import { badgeCapabilities, groupModelMenu, modelMatchesQuery } from "./model-picker-options";
+import { badgeCapabilities, groupModelMenu, modelMatchesQuery, reasoningEffortChoice } from "./model-picker-options";
 import { BrandMark, providerBrand } from "./ui/BrandMark";
 import { ChatGptPlanUsage } from "./account/ChatGptConnect";
 import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
@@ -31,19 +31,15 @@ function modelMenuEntry(input: PickerValue): ModelMenuEntry | null {
 /** Empty clears the workspace override; the tier's effort applies. */
 const DEFAULT_EFFORT = "";
 
-export const reasoningEffortLabel = (effort: ReasoningEffort): string =>
-  effort === "xhigh" ? "Extra high" : effort[0].toUpperCase() + effort.slice(1);
-
-const effortLabel = (effort: ReasoningEffort | typeof DEFAULT_EFFORT): string =>
-  effort === DEFAULT_EFFORT ? "Default" : reasoningEffortLabel(effort);
-
 /** Shows no control when the model declares no levels. */
-function EffortPicker({ options, value, onChange, disabled }: {
-  options: readonly ReasoningEffort[];
+function EffortPicker({ declared, value, onChange, disabled }: {
+  declared: readonly ReasoningEffort[] | undefined;
   value: ReasoningEffort | null;
   onChange: (effort: ReasoningEffort | null) => void;
   disabled?: boolean;
 }) {
+  const options = offeredReasoningEfforts(declared, value);
+
   if (options.length === 0) return null;
 
   const levels: readonly (ReasoningEffort | typeof DEFAULT_EFFORT)[] = [DEFAULT_EFFORT, ...options];
@@ -51,7 +47,7 @@ function EffortPicker({ options, value, onChange, disabled }: {
   return (
     <Select label="Thinking level" size="xs" quiet className="shrink-0" value={value ?? DEFAULT_EFFORT} disabled={disabled}
       onChange={(next) => { onChange(isReasoningEffort(next) ? next : null); }}
-      options={levels.map((effort) => ({ value: effort, label: effortLabel(effort) }))} />
+      options={levels.map((effort) => ({ value: effort, label: effort === DEFAULT_EFFORT ? "Default" : reasoningEffortChoice(effort, declared) }))} />
   );
 }
 
@@ -193,7 +189,7 @@ export function ModelPicker({
       {accountPicker}
       {effort && (
         <EffortPicker
-          options={offeredReasoningEfforts(selected?.reasoningEfforts, effort.value)}
+          declared={selected?.reasoningEfforts}
           value={effort.value}
           onChange={effort.onChange}
           disabled={disabled}

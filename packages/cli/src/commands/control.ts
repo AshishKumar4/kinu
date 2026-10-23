@@ -7,6 +7,7 @@ import {
   getLocalToolSurface,
   listLocalJobs,
   listLocalTriggers,
+  readLocalNextTurnTier,
   readLocalWorkspacePins,
   setLocalWorkspaceModel,
   setLocalWorkspaceReasoningEffort,
@@ -15,6 +16,7 @@ import { readDefaultTier } from '../profiles';
 import {
   callAgentRpc,
   CancelJobSchema,
+  CloudAgentStatusSchema,
   CloudBackgroundJobSchema,
   CloudToolDescriptionsSchema,
   CloudTriggerListSchema,
@@ -23,7 +25,7 @@ import {
   type CloudWebhookTrigger,
 } from '../cloud-api';
 import * as v from 'valibot';
-import { ACCENT, DIM, OK, printJson, WARN } from '../display';
+import { ACCENT, DIM, effortRunsAt, OK, printJson, WARN, type NextTurnEffort } from '../display';
 import { parsePositiveInt, parseTime, webhookTriggerInput } from '../options';
 import { createConfiguredLocalModelResolver } from '../local-model-resolver';
 import {
@@ -157,7 +159,22 @@ export async function effortCommand(name: string, level: string | undefined): Pr
     return;
   }
 
-  console.log(`${DIM('reasoning effort')} ${result.effort ?? `${readDefaultTier()?.reasoningEffort ?? 'medium'} (the default tier's)`}`);
+  const shown = result.effort ?? readDefaultTier()?.reasoningEffort ?? 'medium';
+
+  // The level the next turn sends, as `kinu status` reads it.
+  let next: NextTurnEffort;
+
+  try {
+    const auth = target.mode === 'cloud' ? requireAuthConfig() : null;
+
+    next = auth === null
+      ? (await readLocalNextTurnTier(target.localName))?.reasoningEffort ?? null
+      : (await callAgentRpc({ origin: auth.origin, token: auth.token, name: target.cloudName, method: 'getAgentStatus', schema: CloudAgentStatusSchema })).reasoningEffort ?? null;
+  } catch (cause) {
+    next = { unread: renderThrownChain({ cause }) };
+  }
+
+  console.log(`${DIM('reasoning effort')} ${shown}${result.effort === null ? ' (the default tier\'s)' : ''}${effortRunsAt(shown, next)}`);
 }
 
 /** Validation is advisory: an unreachable catalog must say why rather than read as an empty menu. */

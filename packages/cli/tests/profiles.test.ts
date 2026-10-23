@@ -604,6 +604,44 @@ describe('the turn profile authority reader', () => {
     expect(v.parse(ParsedDefaultTier, expectOk(steps.afterModel)).catalog.tiers.default.model)
       .toBe('openai/first-model');
   });
+
+  // PROV-3: a new default model kept the old one's effort, a level the new model need not take.
+  test('a new default model takes the stored effort as its levels have it, none where it takes none, as is where unknown', async () => {
+    const steps = await runScenario(`
+      const { updateDefaultTier } = await import('./packages/cli/src/default-model.ts');
+      await updateDefaultTier({ model: 'openai/first-model' });
+      await updateDefaultTier({ reasoningEffort: 'medium' });
+      await step('declared', async () => await updateDefaultTier({ model: 'openai/three-levels' }, ['low', 'high', 'max']));
+      await step('unknown', async () => await updateDefaultTier({ model: 'openai/unlisted' }));
+      await step('none', async () => await updateDefaultTier({ model: 'openai/no-levels' }, []));
+    `);
+
+    const effort = (name: string) => v.parse(ParsedDefaultTier, expectOk(steps[name])).catalog.tiers.default.reasoningEffort;
+
+    expect(effort('declared')).toBe('low');
+    expect(effort('unknown')).toBe('low');
+    expect(effort('none')).toBeUndefined();
+  });
+
+  test('/effort says the level the next turn runs at when the model does not take the stored one', async () => {
+    const steps = await runScenario(`
+      const { updateDefaultTier } = await import('./packages/cli/src/default-model.ts');
+      const { executeSlashCommand } = await import('./packages/cli/src/slash-commands.ts');
+      const glm = 'workers-ai/@cf/zai-org/glm-5.3';
+      await updateDefaultTier({ model: 'openai/first-model' });
+      const at = (stored, next) => ({
+        getReasoningEffort: async () => stored,
+        getModelSpec: async () => glm,
+        status: async () => ({ name: 'w', purpose: '', model: glm, reasoningEffort: next }),
+        listModels: async () => ({ models: [{ spec: glm, reasoningEfforts: ['low', 'high', 'max'] }], failures: [] }),
+      });
+      await step('stale', async () => (await executeSlashCommand(at('medium', 'low'), '/effort')).text);
+      await step('taken', async () => (await executeSlashCommand(at('high', 'high'), '/effort')).text);
+    `);
+
+    expect(expectText(steps.stale)).toContain('Reasoning effort: medium (the next turn runs at low)\n');
+    expect(expectText(steps.taken)).toContain('Reasoning effort: high\n');
+  });
 });
 
 interface SeededConfig {

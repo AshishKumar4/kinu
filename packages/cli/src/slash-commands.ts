@@ -7,7 +7,7 @@ import type { InstructionSourceRow } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { loadActiveProfile, updateDefaultAccount } from './default-model';
 import { readAllAccountUsage } from './account-usage';
-import { plural, renderAccountSpendLines, renderSearchTreeLines } from './display';
+import { effortRunsAt, plural, renderAccountSpendLines, renderSearchTreeLines, type NextTurnEffort } from './display';
 import { conversationMarkdown, lastAnswer } from './conversation-export';
 import { listLocalAgentNames } from './agent-list';
 import { writeFileSync } from 'node:fs';
@@ -798,9 +798,18 @@ async function effortCommand({ client, arg }: SlashContext): Promise<SlashOutcom
       levels = `${REASONING_EFFORTS.join(', ')} (catalog unavailable: ${renderThrownChain({ cause })})`;
     }
 
+    // The level the next turn sends, as the status reads it.
+    let next: NextTurnEffort;
+
+    try {
+      next = (await client.status()).reasoningEffort;
+    } catch (cause) {
+      next = { unread: renderThrownChain({ cause }) };
+    }
+
     return {
       kind: 'text',
-      text: `Reasoning effort: ${current}${stored === null ? ' (the default tier\'s)' : ''}\nLevels for ${model}: ${levels}\nSet this workspace's with /effort <level>.`,
+      text: `Reasoning effort: ${current}${stored === null ? ' (the default tier\'s)' : ''}${effortRunsAt(current, next)}\nLevels for ${model}: ${levels}\nSet this workspace's with /effort <level>.`,
     };
   }
 

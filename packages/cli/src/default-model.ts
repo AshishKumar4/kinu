@@ -2,7 +2,7 @@
 
 import { Effect } from 'effect';
 import { settle } from '@kinu.run/core/obs';
-import { BUILTIN_PROFILE_CATALOG, type ProfileCatalogEnvelope, type ReasoningEffort, type TierAssignment } from '@kinu.run/core';
+import { BUILTIN_PROFILE_CATALOG, carriedReasoningEffort, type ProfileCatalogEnvelope, type ReasoningEffort, type TierAssignment } from '@kinu.run/core';
 import { firstOpenAiCompatModel, usableModelDefaults } from './config';
 import { createConfiguredLocalModelResolver } from './local-model-resolver';
 import {
@@ -50,9 +50,11 @@ export async function adoptDefaultModel(model: string): Promise<TierAssignment |
   return readDefaultTier();
 }
 
-/** A first model on a machine with none starts its profile. */
+/** A first model on a machine with none starts its profile. A model change that names no effort maps the stored one onto
+ *  `declared`, the new model's levels when known, so the tier never holds a level its model does not take. */
 export async function updateDefaultTier(
   patch: { model?: string; reasoningEffort?: ReasoningEffort },
+  declared?: readonly ReasoningEffort[],
 ): Promise<ProfileCatalogEnvelope> {
   const edit = patch.model === undefined ? patch : { ...patch, model: spell(patch.model) };
 
@@ -61,10 +63,12 @@ export async function updateDefaultTier(
   }
 
   const current = await loadActiveProfile();
+  const { reasoningEffort: stored, ...previous } = current.catalog.tiers.default;
+  const effort = edit.reasoningEffort ?? (edit.model === undefined ? stored : carriedReasoningEffort(stored, declared));
 
   const catalog = {
     ...current.catalog,
-    tiers: { ...current.catalog.tiers, default: { ...current.catalog.tiers.default, ...edit } },
+    tiers: { ...current.catalog.tiers, default: { ...previous, ...edit, ...effort !== undefined && { reasoningEffort: effort } } },
   };
 
   return current.authority.kind === 'local'
