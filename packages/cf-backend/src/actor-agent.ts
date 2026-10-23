@@ -2732,7 +2732,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * turn's Plan. Its reach is the in-flight turn's profile while one runs (not the cached one, which outlives its turn),
    * else that same resolution over native, codemode and the given MCP tools.
    */
-  private async slateAuthority(
+  protected async slateAuthority(
     requested: WorkMode, providers: readonly CodemodeProvider[], mcpToolKeys: readonly string[] = [],
   ): Promise<SlateAuthority> {
     const { profile, inputs } = await this.actorProfile({

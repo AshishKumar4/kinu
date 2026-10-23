@@ -2632,7 +2632,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    */
   private async watchCheck(check: WatchCheck, state: JsonValue | undefined, input: JsonValue | undefined): Promise<WatchOutcome> {
     const began = Date.now();
-    const providers = watchProviders(this.ownNamespaces('plan'), check.reads ?? []);
+    // Read as its role reads in Plan: a check reaches nothing its agent's own programs could not.
+    const namespaces = this.ownNamespaces('plan');
+    const authority = await this.slateAuthority('plan', namespaces);
+    const providers = watchProviders(authority.reach.narrowProviders(namespaces), check.reads ?? []);
     const given = `const state = ${JSON.stringify(state ?? null)};\nconst input = ${JSON.stringify(input ?? null)};\n`;
     const ran = await this.rt.executor.execute(`${given}${check.code}`, providers, { deadlineMs: ALARM_PROGRAM_WAIT_MS });
 
