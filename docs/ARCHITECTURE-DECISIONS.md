@@ -837,6 +837,12 @@ isolate. Every agent facet is a direct child of the workspace object, so the
 tree is two levels deep.
 Later note: reversed for the advisor by D14 (2026-10-22): the workspace no
 longer reviews a finished turn; each agent's own session reviews its steps.
+Later note (2026-10-23, D14's probe): the containment above holds for memory
+and for a blocking loop, not for CPU in short event-loop turns. A facet whose
+turns each take 0.1-0.4 s of CPU is reset by the platform after about 1-3 s
+of it, and its parent workspace object and every sibling facet are reset with
+it ("reset because its code was updated"); 40 ms turns are not, and another
+workspace object is never touched.
 No request waits for a turn's end (2026-09-28): the delegation lane
 returns once the turn is delivered, and the turn's end, the agent's next
 queued turn and the lane's bookkeeping run in the request that carries the
@@ -1199,9 +1205,14 @@ a facet of its own) and D13's "every agent's advisor in core `ActorAdvisor`".
   context is a 48k-character window cut in halves (the turn's request kept),
   so each request is bounded: 58-59 kB in every third of a 150-step turn's
   calls, main's peak 60.7-61.8 MB and its allocation 266-282 MB (9a09d9ac5,
-  3 runs). Main's allocation a step still rises from 1.44 to 1.96 MB across
-  the turn's thirds, against a flat 0.5-0.6 MB unadvised; not from the
-  advisor's requests, cause unknown.
+  3 runs). The advisor's own cost a step is flat: with both arms held to
+  all 150 of their steps (07b6a8f2b; before it, other workspaces' calls took
+  74 of the unadvised turn's steps, which read as a flat 0.5-0.6 MB a step),
+  main allocates 1.01-1.06, 1.17-1.24 and 1.52-1.54 MB a step over the
+  turn's thirds unadvised and 1.49-1.55, 1.66-1.76 and 1.94-1.96 advised, so
+  the advisor adds 0.42-0.52 MB a step in every third (2 runs). The rise in
+  both arms is the agent's own request, which carries its history (222, 392,
+  562 kB), not the advisor's.
 - Containment, same jobs, every run alike: an advisor call that throws, and
   one beside an uncaught throw (from a timer on 97d575f47, a microtask on
   cac0cbe68) and a rejection no one awaits, each left main's turn to run all
@@ -1218,15 +1229,26 @@ a facet of its own) and D13's "every agent's advisor in core `ActorAdvisor`".
   isolate with its SQLite intact. 200 MB of Uint8Array (off-heap) reset
   nothing (2 of 2). A 44 s synchronous loop failed the step running it at the
   facet's ~30 s ("exceeded CPU time limit", D10) and reset the agent alone (2
-  of 2). The same CPU in yielding slices, running on after the call that
-  started it, was cut after about 1.5 s of CPU, "reset because its code was
-  updated", and a sibling agent's isolate was reset with it (4 of 4; 0.84 s
-  was fine). So an advisor's runaway kills its own agent's turn, which recovers
-  as any reset turn does (D13), never the workspace; detached CPU can also
-  reset a sibling agent, cause unknown.
+  of 2). So a runaway allocation or blocking loop kills its own agent's turn,
+  which recovers as any reset turn does (D13), and nothing else.
+- CPU in short turns is not contained (`kinu-advisor-probe-1023b`, deleted;
+  object instance ids beside isolate ids, a second workspace watched): a
+  facet whose event-loop turns each take 0.1-0.4 s of CPU is reset by the
+  platform after about 1-3 s of such CPU, "Durable Object reset because its
+  code was updated", and the reset takes its parent workspace object and
+  every sibling agent with it (detached or in-call, with or without SQLite
+  writes; 13 of 14 runs at 0.42 s, 1 of 2 at 0.1 s). 40 ms turns for 4 s of
+  CPU reset nothing (2 of 2); the same 0.42 s turns in a plain Durable Object
+  or in the parent object itself reset nothing (4 of 4); another workspace
+  was never touched. No Kinu code is in the probe: this is the platform's.
+  An earlier reading here ("never the workspace") read isolate ids only, and
+  the workspace object is reset in a kept isolate. So an agent's or its
+  advisor's code that holds the event loop for 100 ms or more, repeatedly,
+  can reset its whole workspace; the advisor's own work per call (rendering
+  and redacting at most a 48k window) is far under that, and its waits are
+  model calls. Not measured: the longest event-loop turn Kinu's facets take.
 - Not measured: review latency on a real provider. The step loop never waits
-  for a review mid-turn; the turn's end waits for its last step's review, one
-  model call when the advisor reads nothing.
+  for a review, and no turn waits for its advisor.
 
 ## Deploy ladder
 
