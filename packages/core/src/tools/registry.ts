@@ -87,10 +87,9 @@ export const REPLY_TO_COMMENT_TOOL = 'reply_to_comment';
 export const ASK_OWNER_TOOL = 'ask_owner';
 
 export const ASK_OWNER_DESCRIPTION = [
-  'Ask the owner one to four questions with set choices, when you are blocked on a decision that is theirs to make: choices whose tradeoffs they must weigh, which nothing you can read settles.',
-  'Default to action. Settle what you can from the request, the workspace and sensible defaults; when several choices are acceptable, take the conventional one and say so.',
-  'Give each question two to four short options (one to five words) with the tradeoff in `description`, mark the one you recommend with `recommended`, and ask related questions together in one call. The owner can always write their own answer, so never offer "Other". A single-choice question\'s options may carry a `preview` to compare: a mockup, a snippet or a configuration.',
-  'Do the work that does not depend on the answer first: asking ends your turn, and the owner\'s answer becomes this call\'s result when they reply.',
+  'Ask the owner one to four questions with set choices, only when blocked on a decision that is theirs: tradeoffs they must weigh, which nothing you can read settles. Otherwise act, taking the conventional choice and saying so.',
+  'Give each question two to four short options with the tradeoff in `description`, mark the one you recommend with `recommended`, and ask related questions in one call. Never offer "Other": the owner can always write their own.',
+  'Do the work that does not depend on the answer first: asking ends your turn, and the answer becomes this call\'s result.',
 ].join('\n');
 
 interface CapabilityReach {
@@ -256,18 +255,17 @@ export function memoryToolSpec(hasFacts: boolean, hasAccount = false): BuiltinTo
 export const BUILTIN_TOOL_SPECS = {
   eval: {
     name: 'eval',
-    summary: 'Run a JavaScript program that can call your tools and each environment\'s namespace.',
+    summary: 'Run a JavaScript program that calls your tools and each environment\'s namespace.',
     notes: [
-      'Write it like a Node script: top-level statements, `await` anywhere, and `return` (or a trailing expression) hands back the result. Type annotations do not parse.',
-      '`tools.<name>(input)` calls a native tool with the input its schema declares; a tool saved with `workspace.createTool` joins `tools` from the next program, declared in dynamic_context.',
-      '`require()` loads Node builtins, plus Node\'s own `fs`, `fs/promises` and `child_process` over your workspace files and each machine\'s shell; `process.cwd()` is the workspace root. Callback and promise forms work, and `exec`/`execFile` also resolve, awaited, to `{ stdout, stderr }`; every `*Sync` form throws. A child gets no stdin and not its `env`, and its output arrives when it exits.',
+      'A Node-style script: top-level `await`, and `return` (or a trailing expression) gives the result. Type annotations do not parse.',
+      '`tools.<name>(input)` calls a native tool; a tool saved with `workspace.createTool` joins `tools` from the next program.',
+      '`require()` loads Node builtins, with `fs`, `fs/promises` and `child_process` over your workspace files and each machine\'s shell; `process.cwd()` is the workspace root. `*Sync` forms throw; an awaited `exec`/`execFile` resolves to `{ stdout, stderr }` once the child exits. A child gets no stdin and not its `env`.',
       `With \`child_process\`: ${EXEC_RUNS_WHERE_ITS_CWD_IS}`,
-      '`fs` keeps bytes as they are: `readFile` without an encoding returns the file\'s bytes as a `Uint8Array`, and `writeFile` writes a `Uint8Array` exactly.',
-      '`console.log` output comes back with the result. Variables do not survive between programs; a `private` `db` table keeps data.',
-      'A refused call, in any namespace, resolves to a `Refusal` instead of throwing: check for one before reading a result\'s fields. Returning it fails the call with that reason.',
-      'Run independent calls together with `await Promise.all([...])`, and `return` the values you need rather than logging them.',
-      'Start with one `//` comment naming the operation and its target; the interface shows it as the call\'s intent.',
-      '`describe(\'db\')` returns a namespace\'s full TypeScript declarations, `describe(\'db.select\')` one member\'s, and `describe()` all of them: read one before you rely on an option\'s name or a result\'s shape.',
+      '`readFile` without an encoding returns a `Uint8Array`.',
+      'Variables do not survive between programs; a `private` `db` table keeps data. Run independent calls together with `Promise.all`, and `return` what you need rather than logging it.',
+      'A refused call resolves to a `Refusal`, `{ success: false, reason, error }`, instead of throwing: check for one before reading a result. Returning it fails the call with that reason.',
+      'Start with one `//` comment naming the operation and its target: it is shown as the call\'s intent.',
+      '`describe(\'ns\')` and `describe(\'ns.member\')` return full TypeScript declarations: read one before relying on an option\'s name or a result\'s shape.',
     ],
     example: "eval({code:\"// List the newest reports\\nconst fs = require('fs/promises');\\nconst files = await fs.readdir('reports');\\nreturn files.slice(0, 5)\"})",
   },
@@ -275,14 +273,11 @@ export const BUILTIN_TOOL_SPECS = {
     name: 'shell',
     summary: 'Run a shell command in one runtime and return its output.',
     notes: [
-      'Every call is a fresh shell starting in `cwd` (default: your home), so a `cd` or `export` lasts only that call; '
-        + 'concurrent calls run side by side. A `name` keeps its directory and exported variables from call to call, '
-        + 'and runs one call at a time.',
-      'Output starts with the directory the command started in, holds both streams, labelled when both wrote, and gives the exit code when it is not zero.',
+      'Each call is a fresh shell in `cwd` (default: your home), so `cd` and `export` last one call, and calls run side by side; a `name` keeps them across calls and runs one call at a time.',
       `On the workspace runtime: ${EXEC_RUNS_WHERE_ITS_CWD_IS}`,
       EXEC_ANSWERS_AT_EXIT,
-      'Each runtime keeps its own files; `workspace` is the filesystem the `file` tool reads.',
-      'In a container, `nproc` and `free` report the host: size parallelism from the cpus and memory the execution status lists.',
+      'Each runtime has its own files; `workspace` is the one the `file` tool reads.',
+      'In a container, `nproc` and `free` report the host: size parallelism by the execution status.',
     ],
     example: "shell({runtime:'workspace', command:'npm test'})",
   },
@@ -290,8 +285,8 @@ export const BUILTIN_TOOL_SPECS = {
     name: 'file',
     summary: 'Read, list, stat, search, edit or write files in your workspace.',
     notes: [
-      'Find before you read: `search` a file for the lines you need, then `read` around them with `offset` and `limit`. A read without them shows the file from the top, a window at a time; its footer says where to continue.',
-      'Read a file before you `edit` it. An edit matches the text as last read, and fails when its `old_text` is absent or occurs more than once: copy just enough to be unique, without the line numbers a read puts before each line.',
+      'Find before you read: `search` for the lines you need, then `read` around them with `offset` and `limit`.',
+      'Read a file before you `edit` it. Each `old_text` must occur exactly once, copied without the line numbers a read shows.',
     ],
     example: "file({op:'edit', path:'src/api.ts', edits:[{old_text:'timeout: 30', new_text:'timeout: 60'}]})",
   },
@@ -299,9 +294,9 @@ export const BUILTIN_TOOL_SPECS = {
     name: 'agents',
     summary: 'Delegate work to other agents and message them.',
     notes: [
-      'Do the work yourself by default. A subagent costs more than it looks: you write its brief, you see only its report, and trusting that report means reading what it touched.',
-      'Delegate only when the work is large, separable from your next step, and clearly costs more to do than to brief and check: independent pieces that can run at the same time, or a long side task whose raw output would flood your context.',
-      'Do it yourself when it takes a handful of calls, when your next step depends on it, or when you would redo it to trust the result. Never delegate one small piece, and never split one modest job across several subagents.',
+      'Do the work yourself by default: a subagent costs a brief, and you see only its report.',
+      'Delegate only large work, separable from your next step, that clearly costs more to do than to brief and check: independent pieces that can run at once, or a long side task whose output would flood your context.',
+      'Keep work you would redo to trust. Never delegate a small piece, or split a modest job across subagents.',
     ],
     // Cheapest complete call: `ideate` is the one preset that takes no `objective`.
     example: "agents({op:'swarm', preset:'ideate', task:'Three ways to stop staging 502ing under load'})",
@@ -311,23 +306,20 @@ export const BUILTIN_TOOL_SPECS = {
     name: 'tasks',
     summary: 'Your task list, shown in your context at every step, and your active role.',
     notes: [
-      'Keep a list for work of three or more steps, never for a one-step request. Update it in the same step as the work it tracks, and mark an item done as soon as it is.',
+      'Keep a list for work of three or more steps, not a one-step request. Update it in the same step as the work, and mark each item done as soon as it is.',
     ],
     example: "tasks({op:'add', titles:['Reproduce the 502', 'Patch the gateway timeout', 'Add a regression test']})",
   },
   web: {
     name: 'web',
     summary: 'Search the web, fetch one URL as markdown, or take a screenshot of it.',
-    notes: [
-      'A fetched page too long to return is saved to the workspace, and the result names the file.',
-      'Where Browser Run is not reachable, a rendered fetch or a screenshot refuses, naming what is missing.',
-    ],
+    notes: [],
     example: "web({op:'search', query:'durable objects sqlite storage limits'})",
   },
   report: {
     name: 'report',
     summary: 'Report progress, completion or a blocker on your assignment to the workspace orchestrator.',
-    notes: ['The answer your turn ends with reaches the orchestrator anyway; report milestones, not steps. A report wakes it.'],
+    notes: ['Your final answer reaches the orchestrator anyway: report milestones, not steps.'],
     example: "report({status:'completed', content:'Auth migration merged; 3 regression tests added.'})",
   },
 } satisfies Record<BuiltinToolName, BuiltinToolSpec>;
@@ -352,8 +344,8 @@ export const BUILTIN_TOOL_DESCRIPTIONS = {
 export type SandboxSubstrate = 'hosted' | 'local';
 
 const SANDBOX_RUNS = {
-  hosted: 'Each program runs in a fresh isolate; `fetch` reaches the internet. Workspace files and npm packages can be imported; native addons can\'t.',
-  local: 'Each program runs in-process; `fetch` is the machine\'s own.',
+  hosted: '`fetch` reaches the internet. Workspace files and npm packages can be imported; native addons can\'t.',
+  local: 'Programs run in-process; `fetch` is this machine\'s own.',
 } satisfies Record<SandboxSubstrate, string>;
 
 /** The `code` field description on the `eval` input schema, shared via `codemodeInputSchema`. */
@@ -393,12 +385,10 @@ export function renderCodemodeDescription(all: readonly DescribedProvider[], sub
   return [
     BUILTIN_TOOL_DESCRIPTIONS.eval,
     `- ${SANDBOX_RUNS[substrate]}`,
-    'Discover MCP tools with `await codemode.list()` (servers), `await codemode.list(server)` (tools), '
-      + '`await codemode.search("short intent phrase")` (ranked paths), then `await codemode.describe(path)` '
-      + '(types and full input schema). Call the returned `tools.<name>(input)` path.',
-    ...(shown === undefined ? [] : [`Namespaces are globals of the program, beside \`tools\` and never inside it: call a member as ${shown}.`]),
-    'Each namespace with its members\' call forms: positional arguments, then one object of options. '
-      + 'Any call can resolve to a `Refusal`, `{ success: false, reason, error }`.',
+    'MCP tools: `codemode.list()` lists servers and `codemode.list(server)` their tools; `codemode.search("intent")` finds '
+      + 'tools; `codemode.describe(path)` gives one\'s input schema. Call the `tools.<name>(input)` path it returns.',
+    ...(shown === undefined ? [] : [`Namespaces are globals, not under \`tools\`: call a member as ${shown}.`]),
+    'Each namespace, with its members\' call forms (positional arguments, then one options object):',
     ...listed,
   ].join('\n');
 }

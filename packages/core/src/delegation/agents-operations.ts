@@ -117,7 +117,7 @@ function serveAgents(deps: () => AgentsToolDeps): readonly Served[] {
   };
 
   if (offers.has('swarm')) {
-    served.push(serve(agentsOp('swarm', `Run a search over short-lived nodes of yourself in parallel over this workspace and return what they found, judged, or measured by your verifier when you give an objective. It takes minutes; on a live session it runs in the background and its result wakes you. ${SWARM_PRESET_DOCTRINE.join(' ')}`, true, swarmEntries(temporary)),
+    served.push(serve(agentsOp('swarm', `Run short-lived copies of yourself in parallel over this workspace and return what they found: judged, or measured by your verifier against an \`objective\`. It takes minutes, in the background on a live session. ${SWARM_PRESET_DOCTRINE.join(' ')}`, true, swarmEntries(temporary)),
       (fields, call) => dispatched({ op: 'swarm', fields }, call)));
   }
 
@@ -130,7 +130,7 @@ function serveAgents(deps: () => AgentsToolDeps): readonly Served[] {
       context: optional(described(v.picklist(SWARM_CONTEXTS), 'fresh (default) starts from the message alone; inherit also carries your recent turns.')),
     };
 
-    const help = `Create a subagent under a role for one workstream; its message is its first turn. It returns at once; the subagent's report, or its failure, arrives later as a message that opens your next turn. It stays in your roster, with its context, after it reports. ${nestingRoom(team.delegation)}`;
+    const help = `Create a subagent under a role for one workstream; its message is its first turn. It returns at once, and its report arrives later as a message that opens your next turn. ${nestingRoom(team.delegation)}`;
     const lifetime = optional(described(v.picklist(SUBAGENT_LIFETIMES), 'durable (default) stays in your roster; task answers one question, as a later message, and is archived.'));
 
     served.push(temporary
@@ -173,9 +173,7 @@ function serveAgents(deps: () => AgentsToolDeps): readonly Served[] {
   }
 
   if (offers.has('list')) {
-    const tree = 'Your agents as a tree: you and every agent below you, each after the one that started it, running first, '
-      + 'with its kind, status, what it works on, depth, last activity and its reports you have not read; then Main and '
-      + 'the agents the person made, as `peer` rows without what they started; '
+    const tree = 'Your agents as a tree, each with its status, work and unread reports, then Main and the agents the person made; '
       + `${String(AGENT_TREE_LIMIT)} rows unless \`limit\` says more.`;
 
     const help = team ? `${tree}${peers ? ' Peer workspace agents beside it.' : ''}` : 'Peer workspace agents.';
