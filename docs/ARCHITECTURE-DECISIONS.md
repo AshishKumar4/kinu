@@ -1290,7 +1290,23 @@ a facet of its own) and D13's "every agent's advisor in core `ActorAdvisor`".
   advisor's code that holds the event loop for 100 ms or more, repeatedly,
   can reset its whole workspace; the advisor's own work per call (rendering
   and redacting at most a 48k window) is far under that, and its waits are
-  model calls. Not measured: the longest event-loop turn Kinu's facets take.
+  model calls. Measured since (2026-10-23, the facet loop gate,
+  `bun scripts/worker-heap.ts --loop-turns`: the heap gate's workloads plus a
+  compacted long turn and 40 advised steps of 200 kB results, every isolate
+  under a 1 ms CPU profiler, armada AMD EPYC hosts): a chat's seed read and
+  decoded a page's messages in one turn, 157-305 ms in the 450-step screenshot
+  turn's agent, and that turn's figures fold took 80-142 ms in one SQL read,
+  most of it walking tool results' overflow pages to reach each event's `ts`.
+  With the seed read four messages a slice, the fold 200 events a slice of the
+  types it adds, and a timer yield between slices, no agent's isolate held its
+  loop 100 ms in 3 of 3 runs (9c17e632c); the longest were the long turn's
+  prompt check in the AI SDK (`standardizePrompt`, zod over the whole prompt
+  each call, 36-88 ms and growing with the history), seed slices back to back
+  (47-82 ms) and the advised turn's Effect runs (79 ms). On staging, 7 days to
+  2026-10-23 (`agent.isolate_invocation`, sampled 1 in 10), agent invocations
+  of 100 ms of CPU or more were 31% of `step`, 3% of `activePlanReview` and 1%
+  of `seed`; an invocation's CPU includes an isolate's start, so it bounds a
+  turn from above and names none.
 - Not measured: review latency on a real provider. The step loop never waits
   for a review, and no turn waits for its advisor.
 
