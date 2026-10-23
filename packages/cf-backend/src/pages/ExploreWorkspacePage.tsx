@@ -56,8 +56,9 @@ function Row({ icon, title, meta, children }: { icon: ReactNode; title: string; 
 }
 
 
-/** A need, and whether you already have it: a connection is yours once its server is connected in Plugins. */
-function NeedRow({ need, connected }: { need: ExploreNeed; connected: boolean }) {
+/** A need, and whether you already have it: a connection is yours once its server is connected in Plugins; null where
+ *  that could not be read. */
+function NeedRow({ need, connected }: { need: ExploreNeed; connected: boolean | null }) {
   const brand = presetBrand(need.connection);
   const name = need.connection === null ? (need.secret ?? "A secret") : connectionTitle(need.connection);
 
@@ -73,7 +74,9 @@ function NeedRow({ need, connected }: { need: ExploreNeed; connected: boolean })
         </span>
         <span className="t-meta block p-text-2">{need.why}</span>
       </span>
-      {connected ? <Status tone="success">Connected</Status> : <span className="t-meta shrink-0 p-text-3">At install</span>}
+      {connected === true && <Status tone="success">Connected</Status>}
+      {connected === false && <span className="t-meta shrink-0 p-text-3">At install</span>}
+      {connected === null && <span className="t-meta shrink-0 p-text-3" data-need-unread>Not checked yet</span>}
     </li>
   );
 }
@@ -139,11 +142,11 @@ function AccountBlueprint({ page }: { page: BlueprintPage }) {
   return <Blueprint page={page} connected={useConnectedPreset()} />;
 }
 
-function Blueprint({ page, connected }: { page: BlueprintPage; connected: (preset: string) => boolean }) {
+function Blueprint({ page, connected }: { page: BlueprintPage; connected: (preset: string) => boolean | null }) {
   const signedIn = useGallerySignedIn();
   const [installing, setInstalling] = useState(signedIn && new URLSearchParams(location.search).has("install"));
   const [soul, setSoul] = useState(false);
-  const has = (preset: string | null) => preset !== null && connected(preset);
+  const has = (preset: string | null): boolean | null => (preset === null ? false : connected(preset));
   const { workspace, inside } = page;
 
   return (

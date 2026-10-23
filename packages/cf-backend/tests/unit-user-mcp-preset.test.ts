@@ -5,7 +5,7 @@ import { describe, expect, test } from 'bun:test';
 import { asFetchFunction, createCredentialCipher, GOOGLE_OAUTH_CRED_KEY, mcpPresetById, type OAuthCredential, type JsonObject, type JsonValue } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
 import {
-  createTestUserDO, sqlExec, testOwner, TEST_CREDENTIAL_ENCRYPTION_KEY,
+  createTestUserDO, provisionTestWorkspace, sqlExec, testOwner, TEST_CREDENTIAL_ENCRYPTION_KEY,
   type TestUserDO, type TestUserDOOptions,
 } from './helpers/user-do';
 import {
@@ -179,26 +179,39 @@ describe('an MCP preset add', () => {
     const owner = await testOwner();
     const credential: OAuthCredential = { kind: 'oauth', accessToken: 'ya29.held', refreshToken: '1//refresh', expiresAt: Date.now() + 3_600_000, metadata: { account: 'owner@gmail.com', scopes: [] } };
 
+    await provisionTestWorkspace(h, 'shop');
     await h.userDO.claimConfig(owner, 'assistant', 'kinu-home');
     await h.userDO.setCredential(owner, GOOGLE_OAUTH_CRED_KEY, credential);
 
     expect(await h.userDO.userMcp_connectedPresets(owner)).toEqual(['google']);
     await h.userDO.deleteCredential(owner, GOOGLE_OAUTH_CRED_KEY, false);
     expect(h.connectionsChanged).toEqual(['kinu-home:google', 'kinu-home:']);
+    // The Google connection bears no workspace's secret: no workspace is told its secrets moved.
+    expect(h.secretsMoved).toEqual([]);
     h.close();
   });
 
-  test('a server from the retired Gmail preset goes at the next wake, with everything kept of it', async () => {
+  test('a server from the retired Gmail preset goes at the next wake, with everything kept of it, and the assistant is told', async () => {
     const h = harness();
     const owner = await testOwner();
     const gmail = await h.userDO.userMcp_add(owner, { name: 'Gmail', serverUrl: 'https://gmailmcp.googleapis.com/mcp/v1', headers: { Authorization: 'Bearer t' } }, 'https://kinu.example');
+    const unopenable = `/kinu-user-mcp/${gmail.id}/client-1/token`;
 
+    await h.userDO.claimConfig(owner, 'assistant', 'kinu-home');
     sqlExec(h.db).exec(`UPDATE user_mcp_servers SET preset_id = 'google' WHERE id = ?`, gmail.id);
+    // An OAuth value sealed for no key this object holds: the SDK's own clearing passes it by, as it cannot open it.
+    kvOf(h.db).set(unopenable, 'not-a-sealed-value');
 
     const woken = createTestUserDO({ storage: h.db });
 
     expect(await woken.userDO.userMcp_list(owner)).toEqual([]);
     expect(catalogOf(gmail.id)).toBeUndefined();
+    expect(kvOf(h.db).has(unopenable)).toBe(false);
+
+    // The wake told no workspace; the next warm arms the assistant's watchers for what the account still holds.
+    expect(woken.connectionsChanged).toEqual([]);
+    await woken.userDO.userMcp_warmConnections(owner);
+    expect(woken.connectionsChanged).toEqual(['kinu-home:']);
     woken.close();
     h.close();
   });

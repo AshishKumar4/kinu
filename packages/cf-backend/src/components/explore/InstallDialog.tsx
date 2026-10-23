@@ -25,7 +25,7 @@ import { Surface } from "@/components/ui/Surface";
 /** The brief times Install offers; the blueprint's own is 08:00. */
 const BRIEF_TIMES = ["07:00", "07:30", "08:00", "08:30", "09:00", "09:30"] as const;
 
-export function InstallDialog({ page, connected, onClose }: { page: BlueprintPage; connected: (preset: string | null) => boolean; onClose: () => void }) {
+export function InstallDialog({ page, connected, onClose }: { page: BlueprintPage; connected: (preset: string | null) => boolean | null; onClose: () => void }) {
   const navigate = useNavigate();
   const assistant = page.workspace.id === PERSONAL_ASSISTANT_ID;
   const [name, setName] = useState(assistant ? DEFAULT_ASSISTANT.name : page.workspace.title);
@@ -80,9 +80,9 @@ export function InstallDialog({ page, connected, onClose }: { page: BlueprintPag
                   <span className="min-w-0 flex-1">
                     <span className="t-body block p-text">{title} <span className="t-meta p-text-3">{need.access === "read" ? "to read" : "to read and write"}</span></span>
                   </span>
-                  {has
-                    ? <Status tone="success">Connected</Status>
-                    : <a href={`${APP_ROUTES.plugins}?add=${need.connection ?? ""}`} className="t-meta shrink-0 p-accent-fg hover:underline">Connect</a>}
+                  {has === true && <Status tone="success">Connected</Status>}
+                  {has === false && <a href={`${APP_ROUTES.plugins}?add=${need.connection ?? ""}`} className="t-meta shrink-0 p-accent-fg hover:underline">Connect</a>}
+                  {has === null && <span className="t-meta shrink-0 p-text-3" data-need-unread>Not checked yet</span>}
                 </li>
               );
             })}

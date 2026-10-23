@@ -4,10 +4,15 @@ import { googleConnection, listMcpPresets, listMcpServers } from "@/lib/user-api
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { lastValue, useAsyncResource, type AsyncResourceControl } from "@/hooks/use-async-resource";
 
+/** The Google connection as Settings reads it: whether this account may connect it, and the one it holds. */
+export type GoogleConnectionRead = Awaited<ReturnType<typeof googleConnection>>;
+
 export interface McpServers {
   readonly servers: AsyncResourceControl<McpServerSummary[]>;
   readonly presets: AsyncResourceControl<McpPresetAvailability[]>;
-  /** Reads both again: after a change made here. */
+  /** The Google connection, one read for every card of it on the page: a change in one shows in each. */
+  readonly google: AsyncResourceControl<GoogleConnectionRead>;
+  /** Reads them all again: after a change made here. */
   readonly refresh: () => void;
   /** Reads both every few seconds until the returned release: an open manager watches. */
   readonly watch: () => () => void;
@@ -32,9 +37,11 @@ export function useMcpServers(): McpServers {
   const presetsCadence = useCallback((rows: McpPresetAvailability[] | null) => (watched || rows === null ? CADENCE_MS : null), [watched]);
   const servers = useAsyncResource(listMcpServers, serversCadence);
   const presets = useAsyncResource(listMcpPresets, presetsCadence);
+  const google = useAsyncResource(googleConnection);
   const { reload: readServers } = servers;
   const { reload: readPresets } = presets;
-  const refresh = useCallback(() => { readServers(); readPresets(); }, [readServers, readPresets]);
+  const { reload: readGoogle } = google;
+  const refresh = useCallback(() => { readServers(); readPresets(); readGoogle(); }, [readServers, readPresets, readGoogle]);
 
   const watch = useCallback(() => {
     setWatchers((count) => count + 1);
@@ -42,7 +49,7 @@ export function useMcpServers(): McpServers {
     return () => setWatchers((count) => count - 1);
   }, []);
 
-  return useMemo(() => ({ servers, presets, refresh, watch }), [servers, presets, refresh, watch]);
+  return useMemo(() => ({ servers, presets, google, refresh, watch }), [servers, presets, google, refresh, watch]);
 }
 
 /** Watches the servers and presets while the calling view is mounted. */
@@ -52,13 +59,16 @@ export function useMcpWatch(mcp: McpServers): void {
   useEffect(() => watch(), [watch]);
 }
 
-/** Whether the account holds a connection: a server from a preset, signed in and serving, or the Google connection. A
- *  blueprint's need reads it. */
-export function useConnectedPreset(): (connection: string) => boolean {
-  const servers = lastValue(useMcpServers().servers.resource) ?? [];
-  const google = lastValue(useAsyncResource(googleConnection).resource)?.connection ?? null;
+/** Whether the account holds a connection: a server from a preset, signed in and serving, or the Google connection; null
+ *  where the read that would say has not answered, which is not the same as absent. A blueprint's need reads it. */
+export function useConnectedPreset(): (connection: string) => boolean | null {
+  const mcp = useMcpServers();
+  const servers = lastValue(mcp.servers.resource);
+  const google = lastValue(mcp.google.resource);
 
-  return (connection) => (connection === GOOGLE_CONNECTION
-    ? google !== null
-    : servers.some((server) => server.presetId === connection && (server.status === "ready" || server.status === "connected")));
+  return (connection) => {
+    if (connection === GOOGLE_CONNECTION) return google === null ? null : google.connection !== null;
+
+    return servers === null ? null : servers.some((server) => server.presetId === connection && (server.status === "ready" || server.status === "connected"));
+  };
 }

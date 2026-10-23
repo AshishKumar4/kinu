@@ -94,7 +94,7 @@ export default function PluginsPage() {
     <>
       <Page icon={<PuzzlePieceIcon size={22} />} title="Plugins" actions={<Button variant="secondary" onClick={() => setManaging(true)}>Manage</Button>}>
         {/* One connection for all of Google, where this deployment offers it: not an MCP server. */}
-        <GoogleConnectionCard />
+        <GoogleConnectionCard google={mcp.google} />
         <PluginSection title="Connected" onRetry={servers.reload} what="your MCP servers"
           rows={mapResource(servers.resource, (rows) => connectedRows(rows, availability, servers.reload, errors))} />
 

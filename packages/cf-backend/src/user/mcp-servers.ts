@@ -389,6 +389,7 @@ export class UserMcpServers {
     // everything kept of it.
     for (const row of all.filter(retired)) {
       await this.retire(row.id);
+      this.watchersStale = true;
       diagnostics.event('mcp.retired_preset_removed', { serverId: row.id, preset: row.preset_id ?? '' });
     }
 
@@ -566,6 +567,8 @@ export class UserMcpServers {
       await this.joinActivation();
       await this.readMcpToolLists();
       await this.rememberReadyListings();
+
+      if (this.watchersStale) await this.armAssistantWatchers();
     } catch (err) {
       diagnostics.failure('mcp.connection_warmup_failed', toKinuError({
         doing: 'restoring the user MCP connections on warmup',
@@ -788,10 +791,14 @@ export class UserMcpServers {
     return google ? [...presets, GOOGLE_CONNECTION] : presets;
   }
 
-  /** The assistant told the connections moved: the Google connection came or went. */
-  connectionsChanged(): Promise<void> {
-    return this.assistantConnectionsChanged();
+  /** The assistant told the Google connection came or went. It bears no workspace's secret, so none is told. */
+  googleConnectionMoved(): Promise<void> {
+    return this.armAssistantWatchers();
   }
+
+  /** A wake retired a server, whose watchers the assistant still arms: told at the next warm, never by the wake itself,
+   *  which waits on no workspace. */
+  private watchersStale = false;
 
   async userMcp_connectedPresets(caller: UserCaller): Promise<string[]> {
     await this.host.requireTier(caller, 'mcp.manage');
@@ -809,6 +816,13 @@ export class UserMcpServers {
   private async assistantConnectionsChanged(): Promise<void> {
     // The GitHub connection is every workspace's git credential: each reads its secrets again.
     await this.host.connectionsMoved?.();
+    await this.armAssistantWatchers();
+  }
+
+  /** The assistant's watchers armed for the connections held now: an MCP server's moving, or the Google connection's. */
+  private async armAssistantWatchers(): Promise<void> {
+    this.watchersStale = false;
+
     await this.keptListings();
     const assistant = this.host.sqlx<{ value: string }>(`SELECT value FROM user_config WHERE key = ?`, ASSISTANT_CONFIG_KEY)[0]?.value;
 
@@ -844,8 +858,12 @@ export class UserMcpServers {
     this._mcpToolLists.delete(id);
     (await this.keptListings()).delete(id);
     await this.host.ctx.storage.delete(listingKey(id));
-    // Its sign-ins' runs go with it: no callback of its can name one now.
-    await this.host.ctx.storage.delete([...(await this.host.ctx.storage.list({ prefix: connectRunKey(id, '') })).keys()]);
+
+    // Its sign-ins' runs go with it: no callback of its can name one now. Its OAuth keys too, by name, opened or not:
+    // the SDK clears only those its storage could open.
+    for (const prefix of [connectRunKey(id, ''), `/${USER_MCP_CLIENT_NAME}/${id}/`]) {
+      await this.host.ctx.storage.delete([...(await this.host.ctx.storage.list({ prefix })).keys()]);
+    }
   }
 
   /**

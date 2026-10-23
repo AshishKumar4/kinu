@@ -60,7 +60,7 @@ export function McpServersPanel({ mcp }: { mcp: McpServers }) {
     <div className="space-y-4">
       {dialog}
       <div className="space-y-px">
-        <GoogleConnectionCard />
+        <GoogleConnectionCard google={mcp.google} />
         <McpPresetCards servers={servers} availability={lastValue(presets.resource) ?? undefined} onChanged={reload} onConnected={connected} />
       </div>
 

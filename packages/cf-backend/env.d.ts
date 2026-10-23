@@ -99,9 +99,10 @@ declare global {
     GITHUB_OAUTH_CLIENT_ID?: string;
     GITHUB_OAUTH_CLIENT_SECRET?: string;
     GITHUB_OAUTH_SCOPES?: string;
-    /** OAuth apps for `oauth-app` MCP presets (secrets); absent ⇒ token fallback or not offered. */
+    /** The OAuth app for the GitHub `oauth-app` MCP preset (secrets); absent ⇒ token fallback. */
     MCP_GITHUB_CLIENT_ID?: string;
     MCP_GITHUB_CLIENT_SECRET?: string;
+    /** The Google client for the Google connection (secrets); absent ⇒ not offered. */
     MCP_GOOGLE_CLIENT_ID?: string;
     MCP_GOOGLE_CLIENT_SECRET?: string;
     /** Root user-plane secret: seals credentials and derives the owner capability; without it no
