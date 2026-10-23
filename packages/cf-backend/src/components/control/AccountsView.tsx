@@ -128,10 +128,10 @@ export function AccountsTable({ rows, onOpen, onChanged }: { rows: readonly Acco
                 <tbody>
                   {shown.map((row) => (
                     <tr key={row.userId} onClick={() => onOpen(row.userId)} data-opens="" data-account={row.email} className="border-b p-border last:border-b-0">
-                      <td className="max-w-64 truncate px-3 py-2.5 p-text">{row.email}</td>
-                      <td className="px-3 py-2.5"><ClassPill limits={row.limits} /></td>
-                      {COLUMNS.map((column) => <td key={column.id} className="px-3 py-2.5 align-middle"><LimitCell limits={row.limits} id={column.id} /></td>)}
-                      <td className="t-meta whitespace-nowrap px-3 py-2.5 p-text-3" title={when(row.lastSeenAt)}>{seenText(row.lastSeenAt)}</td>
+                      <td className="max-w-64 truncate px-3 py-3 p-text">{row.email}</td>
+                      <td className="px-3 py-3"><ClassPill limits={row.limits} /></td>
+                      {COLUMNS.map((column) => <td key={column.id} className="px-3 py-3 align-middle"><LimitCell limits={row.limits} id={column.id} /></td>)}
+                      <td className="t-meta whitespace-nowrap px-3 py-3 p-text-3" title={when(row.lastSeenAt)}>{seenText(row.lastSeenAt)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -141,7 +141,7 @@ export function AccountsTable({ rows, onOpen, onChanged }: { rows: readonly Acco
               <Group list>
                 {shown.map((row) => (
                   <li key={row.userId}>
-                    <button type="button" className="flex w-full items-center gap-3 px-4 py-2.5 text-left" onClick={() => onOpen(row.userId)} data-account={row.email}>
+                    <button type="button" className="flex w-full items-center gap-3 px-4 py-3 text-left" onClick={() => onOpen(row.userId)} data-account={row.email}>
                       <span className="min-w-0 flex-1">
                         <span className="t-body block truncate p-text">{row.email}</span>
                         <span className="t-meta block p-text-3">{listLine(row)}</span>
@@ -307,7 +307,7 @@ export function AccountStanding({ userId, email, seen, limits, onChanged }: {
             const reading = limits.use.find((each) => each.id === column.id);
 
             return (
-              <div key={column.id} className="flex items-center gap-3 px-4 py-2.5">
+              <div key={column.id} className="flex items-center gap-3 px-4 py-3">
                 <span className="p-text-2">{reading === undefined ? null : wordsOf(reading).icon}</span>
                 <span className="t-body flex-1 p-text">{column.name}</span>
                 <span className="w-32"><LimitCell limits={limits} id={column.id} /></span>

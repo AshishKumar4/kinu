@@ -72,7 +72,7 @@ function ArchiveRun({ name, onDone, onFailed }: { name: string; onDone: () => vo
 function MovesRow({ icon, name, children }: { icon: ReactNode; name: string; children: ReactNode }) {
   return (
     <div className="flex items-start gap-3 px-4 py-3">
-      <span className="mt-0.5 shrink-0">{icon}</span>
+      <span className="mt-px shrink-0">{icon}</span>
       <span className="min-w-0 flex-1">
         <span className="t-body block p-text">{name}</span>
         <span className="t-meta block p-text-3">{children}</span>
@@ -133,7 +133,7 @@ function MoveMyDataCard() {
             Chats, files, memory and slates, an archive each: <code className="font-mono">kinu import</code> takes each one there.
           </MovesRow>
           <MovesRow icon={<HardDrivesIcon size={16} className="p-text-2" />} name="Drive">Your files and skills, as zips.</MovesRow>
-          <div className="flex items-start gap-3 px-4 py-3"><KeyIcon size={16} className="mt-0.5 shrink-0 p-text-3" /><span className="t-body min-w-0 flex-1 p-text-2">Keys and sign-ins don&apos;t move: add them again there.</span></div>
+          <div className="flex items-start gap-3 px-4 py-3"><KeyIcon size={16} className="mt-px shrink-0 p-text-3" /><span className="t-body min-w-0 flex-1 p-text-2">Keys and sign-ins don&apos;t move: add them again there.</span></div>
         </Group>
         {current !== undefined && moving.phase === "workspaces" && (
           <div className="space-y-2" role="status">
