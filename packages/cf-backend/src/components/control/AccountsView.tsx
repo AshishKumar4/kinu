@@ -81,8 +81,8 @@ function LimitCell({ limits, id }: { limits: AccountLimits | null; id: ShownLimi
   const ink = { danger: "p-danger", warning: "p-warning", accent: "p-text-2" }[toneOf(percent)];
 
   return (
-    <span className="block w-20 space-y-1">
-      <span className={`t-meta block tabular-nums ${ink}`}>{shown}</span>
+    <span className="block min-w-20 space-y-1">
+      <span className={`t-meta block whitespace-nowrap tabular-nums ${ink}`}>{shown}</span>
       <Spent percent={percent} />
     </span>
   );
