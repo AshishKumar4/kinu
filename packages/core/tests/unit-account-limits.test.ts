@@ -6,7 +6,7 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   accountClassOf, AccountLimitsStore, admitComputerStart, admitPlatformTurn, admitStoredBytes, admitWorkspace,
-  DEFAULT_FREE_TIER, freeTierOf, initAccountLimitTables, limitsReport, type AccountUse, type Admission,
+  DEFAULT_FREE_TIER, freeTierOf, initAccountLimitTables, limitsReport, refusedFor, type AccountUse, type Admission,
 } from '../src/limits/index';
 import { evalAccountEmail } from '../src/cloud-wire';
 import { makeSqlExec } from './helpers';
@@ -75,6 +75,26 @@ describe("a free account's limits refuse only something new", () => {
       expect([admitWorkspace(admission), admitStoredBytes(admission), admitPlatformTurn(admission), admitComputerStart(admission, { workspace: 'w', size: 'large' })]).toEqual([null, null, null, null]);
       expect(limitsReport(admission, null).limits).toEqual([]);
     }
+  });
+});
+
+describe('a page knows which limit refused it, from the words alone', () => {
+  test('each refusal, as written here and across objects, names its own limit; other text names none', () => {
+    const running = [{ workspace: 'other', size: 'small', started_at: NOW, last_tick_at: NOW }];
+
+    const refusals = [
+      admitWorkspace(free({ workspaces: 3 })),
+      admitStoredBytes(free({ storedBytes: 3 * 1024 ** 3 })),
+      admitComputerStart(free({ running }), { workspace: 'here', size: 'small' }),
+      admitComputerStart(free(), { workspace: 'here', size: 'large' }),
+      admitComputerStart(free({ computerSeconds: 21 * 3600 }), { workspace: 'here', size: 'small' }),
+      admitPlatformTurn(free({ tokensToday: 600_000 })),
+    ].map((refusal) => refusedFor(`[refused -> refuse] ${refusal?.message ?? ''}`));
+
+    expect(refusals).toEqual(['workspaces', 'stored_bytes', 'computer', 'computer', 'computer', 'model_tokens']);
+
+    expect(refusedFor('This account is suspended: spam sign-ups')).toBe('suspended');
+    expect(refusedFor("file exceeds the 32 MiB transfer limit")).toBeNull();
   });
 });
 

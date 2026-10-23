@@ -3,9 +3,10 @@
  * frees it, and the two ways on that need nothing freed: the person's own model (for the model cap), and their own
  * Kinu at /deploy, with Settings → Backup to bring their data. A refusal is a `budget` KinuError: work that never began.
  */
+import * as v from 'valibot';
 import { KinuError } from '../obs/error';
 import { ADMISSION_REFUSAL_MARK } from '../turn-failure';
-import { COMPUTER_SIZE_ORDER, isLimited, type AccountClass, type ComputerSize, type FreeTier, type LimitId } from './policy';
+import { COMPUTER_SIZE_ORDER, isLimited, LIMIT_IDS, type AccountClass, type ComputerSize, type FreeTier } from './policy';
 import { periodEnd, type RunningComputer } from './store';
 
 /** What of its limits an account has used, as its object reads it now. */
@@ -113,24 +114,49 @@ export function admitPlatformTurn({ klass, tier, use }: Admission): KinuError | 
     + `or add an API key, in Settings → Models, ${OWN_KINU}`);
 }
 
-/** One limit as Settings → Usage shows it. `near` from 80% used. */
-export interface LimitReading {
-  readonly id: LimitId;
-  readonly used: number;
-  readonly limit: number;
-  readonly unit: 'count' | 'seconds' | 'bytes' | 'tokens';
-  /** When the use starts again from nothing; null for a limit that never resets. */
-  readonly resetsAt: number | null;
-  readonly near: boolean;
-  readonly reached: boolean;
+/** What a refusal is about, as the person's page asks of it: the limit, or the account's suspension. */
+export type RefusedFor = 'workspaces' | 'stored_bytes' | 'computer' | 'model_tokens' | 'suspended';
+
+/**
+ * Each refusal this module and the account's object write, by its own words: the page that asked for something new
+ * knows from them which limit refused it, and shows that limit's dialog. Each is matched anywhere in the text, as a
+ * refusal crosses objects and the computer's start in words of its own around it.
+ */
+const REFUSED_BY: readonly (readonly [RegExp, RefusedFor])[] = [
+  [/This account has its \d+ free workspaces\./u, 'workspaces'],
+  [/This account stores [\d.]+ [GM]B, past its free/u, 'stored_bytes'],
+  [/A free account's computer is \w+; this one is set to|This account's free computer is running in|This account's computers have run their free/u, 'computer'],
+  [/today's free model use is spent/u, 'model_tokens'],
+  [/This account is suspended: /u, 'suspended'],
+];
+
+/** The limit a refusal's text says refused it; null for anything else. */
+export function refusedFor(text: string): RefusedFor | null {
+  return REFUSED_BY.find(([words]) => words.test(text))?.[1] ?? null;
 }
 
+/** One limit as Settings → Usage shows it. `near` from 80% used. */
+export const LimitReadingSchema = v.object({
+  id: v.picklist(LIMIT_IDS),
+  used: v.number(),
+  limit: v.number(),
+  unit: v.picklist(['count', 'seconds', 'bytes', 'tokens']),
+  /** When the use starts again from nothing; null for a limit that never resets. */
+  resetsAt: v.nullable(v.number()),
+  near: v.boolean(),
+  reached: v.boolean(),
+});
+
+export type LimitReading = v.InferOutput<typeof LimitReadingSchema>;
+
 /** What the account is, and each of its limits read now; an unlimited account has no readings. */
-export interface LimitsReport {
-  readonly class: AccountClass;
-  readonly suspended: { readonly at: number; readonly reason: string } | null;
-  readonly limits: readonly LimitReading[];
-}
+export const LimitsReportSchema = v.object({
+  class: v.picklist(['operator', 'invited', 'eval', 'free']),
+  suspended: v.nullable(v.object({ at: v.number(), reason: v.string() })),
+  limits: v.array(LimitReadingSchema),
+});
+
+export type LimitsReport = v.InferOutput<typeof LimitsReportSchema>;
 
 /** The share of a limit past which the person is told it is near (the owner, 2026-10-23). */
 export const NEAR_SHARE = 0.8;
