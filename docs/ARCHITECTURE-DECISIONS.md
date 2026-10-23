@@ -51,13 +51,17 @@ Later note: `contract-cache-hit.test.ts` (3534aabd5) pins a nonzero
 `cacheRead` per caching provider against a mocked provider cache; no
 live-provider read is pinned.
 
-C3. External events reach a running turn at its next step as one spliced user
-message at the step tail. The message is re-applied at the same index on every
-later step and is gone at turn end. A queued event becomes its own durable
-programmatic turn. Delivery decides which path an event takes (live turn
-versus idle actor); event kind does not. Reviewed 2026-09-13 against
-`orchestrator/inbox.ts` and `prompting/step-injections.ts`; pinned by
-`unit-step-injections.test.ts` and `unit-signals.test.ts`.
+C3. External events reach a running turn at its next step as one user message at
+the step tail, landed first as a durable input row, as a person's words are
+(`UserSteerDeps.onEvents`). The agent's later turns read it, an aborted or
+stopped turn does not hand it over again, and the chat draws it at the step
+that read it. A queued event becomes its own durable programmatic turn.
+Delivery decides which path an event takes (live turn versus idle actor);
+event kind does not. Revised 2026-10-23, reversing "gone at turn end": the
+durability canary showed a subagent's report read mid-turn left no row the
+root's later turns could read, and each such splice broke the next turn's
+prompt-cache prefix where it had stood. Pinned by `unit-signals.test.ts`
+('a delivery landed mid-turn') and `unit-transcript-placement.test.ts`.
 
 C4. Events carry 26-character ULIDs that the agent does not see. The only id
 the agent can name back is a peer ask's `event_id` reply route. Reviewed

@@ -4,7 +4,8 @@
  */
 import { describe, expect, test } from 'bun:test';
 import type { UIMessage } from 'ai';
-import { STEER_METADATA_KEY, STEER_STEP_METADATA_KEY } from '../src/orchestrator/inbox';
+import { SPLICE_STEP_METADATA_KEY, STEER_METADATA_KEY, STEER_STEP_METADATA_KEY } from '../src/orchestrator/inbox';
+import { SIGNALS_SEEN_METADATA_KEY } from '../src/read-models/background-event';
 import {
   EMPTY_TRANSCRIPT_FOLD, buildTranscript, extendTranscript, sealTranscript, segmentBySteers,
   type InlineSteer, type PlacedSteer, type TranscriptPart,
@@ -35,6 +36,59 @@ const live = (id: string, text: string, atStep: number): PlacedSteer =>
 
 const queued = (id: string, text: string): InlineSteer =>
   ({ id, text, atStep: null, state: 'queued' });
+
+/** The row a delivery landed mid-turn becomes (`landedEventRow`), as the chat reads it: harness-authored. */
+const deliveryRow = (id: string, text: string, atStep: number): UIMessage => ({
+  id, role: 'system', parts: [{ type: 'text', text }],
+  metadata: { kinuEvent: 'event_drain', kinuAuthor: 'harness', signalId: id, [SPLICE_STEP_METADATA_KEY]: atStep },
+});
+
+/** An answer that keeps the splices its agent read, each at its step. */
+function answerKeeping(id: string, steps: number, kept: readonly { readonly id: string; readonly atStep: number; readonly text: string }[]): UIMessage {
+  return { ...turn(id, steps), metadata: { [SIGNALS_SEEN_METADATA_KEY]: kept.map((splice) => ({ ...splice, metadata: {} })) } };
+}
+
+describe('a delivery landed mid-turn', () => {
+  test('the answer that read it draws it at its step, so the thread holds it once', () => {
+    const { entries } = buildTranscript([user('u1', 'go'), deliveryRow('sig:evt-1', 'the helper reports DONE', 1), turn('a1', 3)]);
+
+    expect(entries.map((entry) => entry.message.id)).toEqual(['u1', 'a1']);
+    expect(entries[1]?.landed).toEqual([{ id: 'sig:evt-1', atStep: 1, text: 'the helper reports DONE', metadata: expect.objectContaining({ kinuEvent: 'event_drain' }) }]);
+  });
+
+  test('past a steer landed later in the same turn, it still reaches its answer', () => {
+    const { entries } = buildTranscript([user('u1', 'go'), deliveryRow('sig:evt-1', 'DONE', 1), steerRow('s1', 'also this', 2),
+      answerKeeping('a1', 3, [{ id: 'sig:evt-1', atStep: 1, text: 'DONE' }])]);
+
+    expect(entries.map((entry) => entry.message.id)).toEqual(['u1', 'a1']);
+    expect(entries[1]?.landed?.map((splice) => splice.id)).toEqual(['sig:evt-1']);
+    expect(entries[1]?.steers.map((steer) => steer.id)).toEqual(['s1']);
+  });
+
+  test('one no answer read stands as its own row: before what came next, or last', () => {
+    const before = buildTranscript([user('u1', 'go'), deliveryRow('sig:evt-1', 'read, then the turn failed', 0), user('u2', 'again')]);
+    const last = buildTranscript([user('u1', 'go'), deliveryRow('sig:evt-1', 'read, then stopped', 0)]);
+
+    expect(before.entries.map((entry) => entry.message.id)).toEqual(['u1', 'sig:evt-1', 'u2']);
+    expect(last.entries.map((entry) => entry.message.id)).toEqual(['u1', 'sig:evt-1']);
+  });
+
+  test('held across a gap between a history page and the live window, and kept when a live steer joins its answer', () => {
+    const history = extendTranscript(EMPTY_TRANSCRIPT_FOLD, [user('u1', 'go'), deliveryRow('sig:evt-1', 'DONE', 1)]);
+    const sealed = sealTranscript(extendTranscript(history, [turn('a1', 3)], false), [live('s-live', 'now this', 2)]);
+
+    expect(sealed.entries.map((entry) => entry.message.id)).toEqual(['u1', 'a1']);
+    expect(sealed.entries[1]?.landed?.map((splice) => splice.id)).toEqual(['sig:evt-1']);
+    expect(sealed.entries[1]?.steers.map((steer) => steer.id)).toEqual(['s-live']);
+  });
+
+  test('held across a tick until its answer arrives', () => {
+    const first = extendTranscript(EMPTY_TRANSCRIPT_FOLD, [user('u1', 'go'), deliveryRow('sig:evt-1', 'DONE', 1)]);
+    const next = extendTranscript(first, [turn('a1', 2)]);
+
+    expect(sealTranscript(next).entries.map((entry) => entry.message.id)).toEqual(['u1', 'a1']);
+  });
+});
 
 describe('reading a steer row', () => {
   test('a landed steer names its step; an ordinary user message names nothing', () => {

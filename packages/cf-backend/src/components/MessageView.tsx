@@ -37,7 +37,7 @@ import {
   type AnyToolPart, type PartBlock,
 } from "@kinu.run/core";
 import { drawnText, toolCallRunning, type LiveTail } from "@kinu.run/core";
-import { redactPayload, redactSecrets, segmentBySteers, splicesSeenOn, type SignalCard } from "@kinu.run/core";
+import { redactPayload, redactSecrets, segmentBySteers, splicesSeenOn, type SeenSplice, type SignalCard } from "@kinu.run/core";
 import { classifyProgrammaticTurn, endedMidWork, isSteeredMessage, systemEventTurn, turnFailure, turnFailureFacts } from "@kinu.run/core";
 import { EventRow, foldRepeats, ProgrammaticTurnCard, type CardState } from "@/components/ProgrammaticTurnCard";
 import { useToggledSet } from "@/hooks/use-toggled-set";
@@ -477,9 +477,10 @@ interface AnswerSplice {
   readonly state: CardState;
 }
 
-/** What the answer keeps, seen, then the live cards it does not keep yet. */
-function answerSplices(message: UIMessage, live: readonly SignalCard[] = []): readonly AnswerSplice[] {
-  const kept = splicesSeenOn({ metadata: message.metadata }).map((splice) => ({ ...splice, state: "seen" as const }));
+/** What the answer keeps or landed while it ran, seen, then the live cards it does not hold yet: each once. */
+function answerSplices(message: UIMessage, live: readonly SignalCard[] = [], landed: readonly SeenSplice[] = []): readonly AnswerSplice[] {
+  const held = [...splicesSeenOn({ metadata: message.metadata }), ...landed];
+  const kept = held.filter((splice, at) => held.findIndex((other) => other.id === splice.id) === at).map((splice) => ({ ...splice, state: "seen" as const }));
   const keptIds = new Set(kept.map((splice) => splice.id));
 
   return [...kept, ...live.flatMap((card) => (card.atStep === undefined || keptIds.has(card.id) ? [] : [{
@@ -502,7 +503,7 @@ function SplicedEvent({ splice }: { splice: AnswerSplice }) {
 // referential identity and skips re-rendering.
 export const MessageView = memo(function MessageView({
   message, liveTail: tail = null, onFork, onFeedback, feedback, onRevert, takesChip,
-  signalState, steers, splices, onOpenChangeNote, answerSlates, onRetry, repeats,
+  signalState, steers, splices, landed, onOpenChangeNote, answerSlates, onRetry, repeats,
 }: {
   message: UIMessage;
   /** A turn nobody typed that came this many times in a row ({@link eventTurnKey}), drawn once. */
@@ -520,6 +521,8 @@ export const MessageView = memo(function MessageView({
   steers?: readonly PlacedSteer[];
   /** Events spliced into this answer as it ran, live; once it is kept, the answer carries its own (`splicesSeenOn`). */
   splices?: readonly SignalCard[];
+  /** Deliveries landed as rows while it ran (ADR C3), read from their rows: drawn once, with what it keeps. */
+  landed?: readonly SeenSplice[];
   onOpenChangeNote?: (source: string, anchor: DiffAnchor | undefined) => void;
   /** The chat an answer's `<slate-ui>` blocks resolve in; absent, a transcript shows their source. */
   answerSlates?: AnswerChat | undefined;
@@ -587,7 +590,7 @@ export const MessageView = memo(function MessageView({
     );
   }
 
-  const segments = segmentBySteers(message.parts, steers ?? [], answerSplices(message, splices));
+  const segments = segmentBySteers(message.parts, steers ?? [], answerSplices(message, splices, landed));
   // The fork button goes on the first segment that draws anything: a steer at step 0 leaves the first empty.
   const forkSegment = segments.findIndex((segment) => segment.parts.length > 0);
 

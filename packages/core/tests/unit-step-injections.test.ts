@@ -19,6 +19,35 @@ describe('StepInjections', () => {
     expect(inj.recorded).toHaveLength(0);
   });
 
+  test("one landed in the session's history applies at its own step only: later bases hold it", () => {
+    const inj = new StepInjections<{ message: ModelMessage; readonly durable: boolean; readonly landed?: boolean }>();
+
+    const step1 = present(inj.drain({ stepNumber: 1, messages: [user('q'), assistant('a1')] },
+      [{ message: user('landed'), durable: true, landed: true }, { message: user('splice'), durable: false }]), 'the prepared step');
+
+    expect(texts(step1)).toEqual(['q', 'a1', 'landed', 'splice']);
+    const step2 = present(inj.drain({ stepNumber: 2, messages: [user('q'), assistant('a1'), user('landed'), assistant('a2')] }, []), 'the prepared step');
+
+    expect(texts(step2)).toEqual(['q', 'a1', 'landed', 'splice', 'a2']);
+
+    const step3 = present(inj.drain({ stepNumber: 3, messages: [user('q'), assistant('a1'), user('landed'), assistant('a2')] },
+      [{ message: user('later'), durable: false }]), 'the prepared step');
+
+    expect(texts(step3)).toEqual(['q', 'a1', 'landed', 'splice', 'a2', 'later']);
+    const step4 = present(inj.drain({ stepNumber: 4, messages: [user('q'), assistant('a1'), user('landed'), assistant('a2'), assistant('a3')] }, []), 'the prepared step');
+
+    expect(texts(step4)).toEqual(['q', 'a1', 'landed', 'splice', 'a2', 'later', 'a3']);
+  });
+
+  test('asked again at its own step, after a provider fell back, a landed entry is not sent twice', () => {
+    const inj = new StepInjections<{ message: ModelMessage; readonly durable: boolean; readonly landed?: boolean }>();
+
+    inj.drain({ stepNumber: 1, messages: [user('q'), assistant('a1')] }, [{ message: user('landed'), durable: true, landed: true }, { message: user('splice'), durable: false }]);
+    const again = present(inj.drain({ stepNumber: 1, messages: [user('q'), assistant('a1'), user('landed')] }, []), 'the prepared step');
+
+    expect(texts(again)).toEqual(['q', 'a1', 'landed', 'splice']);
+  });
+
   test('an injection enters at the step tail and re-applies at the same base index on later steps', () => {
     const inj = new StepInjections<{ message: ModelMessage; readonly durable: boolean }>();
     expect(inj.drain({ stepNumber: 0, messages: [user('q')] }, [])).toBeUndefined();

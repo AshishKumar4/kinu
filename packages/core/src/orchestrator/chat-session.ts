@@ -50,7 +50,7 @@ import { CLEAR_NEEDS_IDLE, COMPACT_NEEDS_IDLE, REVERT_NEEDS_IDLE } from './actor
 import type { ActorSession, ActorTurnLease, ActorExecutionInput, ActorExecutionResult } from './actor-session';
 import type { ClaimOutcome } from './actor-claims';
 import { CompletionGate, COMPLETION_GATE_EVENT } from './completion-gate';
-import { turnInputMessage, type InputProducer, type LandedSteerRow, type PendingSendStore, type UserSteer } from './inbox';
+import { turnInputMessage, type InputProducer, type LandedEventRow, type LandedSteerRow, type PendingSendStore, type UserSteer } from './inbox';
 import { RETRIED_TURN_EVENT, runItem, runMetadata, tagged, type DeliveredRun, type QueueItem } from './chat-queue';
 import { restoreChat } from './chat-restore';
 import { DeliveredRunEnds } from './delivered-run-ends';
@@ -449,6 +449,7 @@ export class ChatSession {
     this.actorSession.bindSteerPersistence({
       onAccept: (steer) => { this.pendingSends.reserve({ ...steer, turnId: this.steerTurnId() }); },
       prepareDrain: (rows, _atStep, reference) => this.prepareLandedSteers(rows, reference),
+      prepareEvents: (rows, reference) => this.prepareLandedEvents(rows, reference),
       turnId: () => this.steerTurnId(),
       skills: (text) => this.ports.steerSkills(text),
       releaseForeground: (executing) => this.ports.releaseForeground(executing),
@@ -2004,7 +2005,8 @@ export class ChatSession {
       : await this.actorSession.recordTranscriptText(execution.claim, 'answer', fullText, execution.outputReferences);
 
     // A failed turn re-queues what it absorbed (`Inbox.settle`), so only a turn without error keeps its splices.
-    const seen = runError === null ? this.actorSession.orchestrator.inbox.seenSplices() : [];
+    // A landed splice is in the agent's history either way, so its answer keeps it too.
+    const seen = runError === null ? this.actorSession.orchestrator.inbox.seenSplices() : this.actorSession.orchestrator.inbox.landedSplices();
     const metadata = answerMetadata({ end, seen });
 
     const preparedAssistant = streamed.output || !interrupted ? await this.transcript.prepareAssistant({
@@ -2196,10 +2198,7 @@ export class ChatSession {
       this.persist(ending.answer);
       this.pendingSends.retire([...(item.pendingSendId === undefined ? [] : [item.pendingSendId]), ...(item.steerIds ?? [])]);
 
-      if (roster !== null) {
-        for (const id of this.actorSession.orchestrator.inbox.absorbedDeliveries) this.pendingSends.retireTurn(id);
-        this.ports.terminal().record(roster.transition, roster.owed);
-      }
+      if (roster !== null) this.ports.terminal().record(roster.transition, roster.owed);
 
       if (told !== undefined) this.ports.terminal().record(told.transition, [told.owed]);
 
@@ -2292,15 +2291,12 @@ export class ChatSession {
 
   /** Landed rows and spent reservations in one transaction; rows follow the opening message. */
   private async prepareLandedSteers(rows: readonly LandedSteerRow[], reference: MessageReference): Promise<(context: ContextSelection) => void> {
-    const turnId = this.turnId;
-    const runId = this.runId;
-
-    if (turnId === null || runId === null) throw new KinuError('denied', 'steer publication requires an active turn');
+    const { turnId, runId } = this.publishingTurn();
     const opening = this.openingRow;
     const prepared = await this.transcript.prepareSteers({ rows, reference, turnId, runId });
 
     return context => {
-      if (opening !== null && this.actorSession.landedSteers.length === 0) this.transcript.appendUser(opening);
+      if (opening !== null) this.transcript.appendUser(opening);
 
       for (const entry of prepared) {
         this.transcript.appendUser({ ...entry, context });
@@ -2308,6 +2304,35 @@ export class ChatSession {
       }
 
       this.settleLandings(prepared.map((entry) => entry.id), 'mid-turn');
+    };
+  }
+
+  /** The turn a mid-turn landing publishes its rows under. */
+  private publishingTurn() {
+    const { turnId, runId } = this;
+
+    if (turnId === null || runId === null) throw new KinuError('denied', 'a mid-turn landing requires an active turn');
+
+    return { turnId, runId };
+  }
+
+  /** A step's landed deliveries as conversation rows, their queued turns retired and their events' leases closed, in the
+   *  landing's transaction: once in the agent's history, a delivery is read, and nothing hands it over again. */
+  private async prepareLandedEvents(rows: readonly LandedEventRow[], reference: MessageReference): Promise<(context: ContextSelection) => void> {
+    const { turnId, runId } = this.publishingTurn();
+    const opening = this.openingRow;
+    const prepared = await this.transcript.prepareSteers({ rows, reference, turnId, runId });
+
+    return context => {
+      if (opening !== null) this.transcript.appendUser(opening);
+
+      for (const entry of prepared) this.transcript.appendUser({ ...entry, context });
+
+      for (const row of rows) {
+        if (row.deliveryId !== undefined) this.pendingSends.retireTurn(row.deliveryId);
+
+        if (row.replyTurnId !== undefined) this.eventLog.markTurnCompleted(row.replyTurnId);
+      }
     };
   }
 

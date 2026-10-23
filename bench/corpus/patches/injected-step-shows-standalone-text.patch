@@ -1,12 +1,12 @@
 diff --git a/packages/core/src/orchestrator/inbox.ts b/packages/core/src/orchestrator/inbox.ts
 --- a/packages/core/src/orchestrator/inbox.ts
 +++ b/packages/core/src/orchestrator/inbox.ts
-@@ -814,7 +814,7 @@ export class Inbox implements AgentInbox {
+@@ -862,7 +862,7 @@ export class Inbox {
    }
  }
  
 -const stepBody = (signal: AgentSignal): string => signal.stepText ?? signal.text;
 +const stepBody = (signal: AgentSignal): string => signal.text;
  
- /** The host took a signal's turn and did not run it. */
- function preempted(kind: string): void {
+ /** A delivery's durable row: its turn's metadata, its card's id, and the step that read it. */
+ function landedEventRow(signal: DeliveredSignal, atStep: number): LandedEventRow {
