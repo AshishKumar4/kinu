@@ -112,7 +112,9 @@ export { MailStore, type MailBlobs, type MailBoxOwner, type ParsedMail } from '.
 
 export { createMailCodemodeProvider, unreadMailForTurn, type MailDeps, type MailSendApprovals } from './tools/mail-codemode';
 
-export { createGoogleCodemodeProvider, type GoogleAnswer, type GoogleDeps, type GoogleWriteApprovals } from './tools/google-operations';
+export { createGoogleCodemodeProvider, type GoogleDeps, type GoogleWriteApprovals } from './tools/google-operations';
+
+export { callGoogle, GoogleCallSchema, type GoogleAnswer, type GoogleCall, type GoogleTokenRead } from './google/calls';
 
 export { googleBaseUrls, type GoogleRequest } from './google/catalog';
 

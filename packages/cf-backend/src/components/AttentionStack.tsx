@@ -37,7 +37,8 @@ export interface AttentionStackProps {
 
 /** A parked command, write or shared slate's change: they batch into one card. An agent's message is a card of its own. */
 function isParked(ask: OwnerAsk): ask is OwnerAsk & { kind: "action" } {
-  return ask.kind === "action" && ask.action.kind === "deferred_action" && ask.action.mail === undefined;
+  // An agent's message and a Google write are each their own card, drawn as they would go; never batched as commands.
+  return ask.kind === "action" && ask.action.kind === "deferred_action" && ask.action.mail === undefined && ask.action.google === undefined;
 }
 
 /** Collapsed cards drawn behind the open one; the rest are counted on the last. */

@@ -16,6 +16,7 @@ export function GoogleWriteBody({ write }: { write: GoogleWrite }) {
         <dl className="t-meta mt-1 grid grid-cols-[var(--layout-label-auto)] gap-x-3" data-google-write-mail>
           <dt className="p-text-3">To</dt><dd className="truncate p-text-2">{mail.to || "(no one yet)"}</dd>
           {mail.cc !== "" && <><dt className="p-text-3">Cc</dt><dd className="truncate p-text-2">{mail.cc}</dd></>}
+          {mail.bcc !== "" && <><dt className="p-text-3">Bcc</dt><dd className="truncate p-text-2" data-google-write-bcc>{mail.bcc}</dd></>}
           <dt className="p-text-3">Subject</dt><dd className="truncate p-text-2">{mail.subject}</dd>
           <dt className="p-text-3">Begins</dt><dd className="p-text-2 break-words">{mail.start}</dd>
         </dl>

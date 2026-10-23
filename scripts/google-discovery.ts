@@ -5,7 +5,9 @@
 //   bun scripts/google-discovery.ts
 //
 // Only methods the connection's scopes reach are kept (`GOOGLE_CONNECTION_SCOPES`); a method needing another scope
-// would only ever answer 403. Descriptions are cut to their opening.
+// would only ever answer 403. Of the API-wide parameters each method takes, `fields` is kept (some methods answer
+// nothing without it, Drive's `about.get`); the rest are transport's (`alt`, `key`, `callback`). Descriptions are cut
+// to their opening.
 import { createHash } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import * as v from 'valibot';
@@ -69,8 +71,12 @@ const DiscoveryResourceSchema: v.GenericSchema<DiscoveryResource> = v.object({
   resources: v.optional(v.record(v.string(), v.lazy(() => DiscoveryResourceSchema))),
 });
 
+/** The API-wide parameters a call may name; every other one is the transport's own. */
+const SHARED_PARAMETERS = ['fields'] as const;
+
 const DiscoveryDocumentSchema = v.object({
   revision: v.string(), rootUrl: v.string(), servicePath: v.string(),
+  parameters: v.optional(v.record(v.string(), DiscoveryParameterSchema)),
   methods: v.optional(v.record(v.string(), DiscoveryMethodSchema)),
   resources: v.optional(v.record(v.string(), DiscoveryResourceSchema)),
   schemas: v.optional(v.record(v.string(), v.object({ description: v.optional(v.string()), properties: v.optional(v.record(v.string(), DiscoveryPropertySchema)) }))),
@@ -107,12 +113,12 @@ function property(p: DiscoveryProperty): GoogleProperty {
   };
 }
 
-function method(m: DiscoveryMethod): GoogleMethod {
+function method(m: DiscoveryMethod, shared: DiscoveryMethod['parameters']): GoogleMethod {
   return {
     verb: m.httpMethod,
     path: m.path,
     ...opening(m.description, 200),
-    params: Object.fromEntries(Object.entries(m.parameters ?? {}).map(([name, p]) => [name, {
+    params: Object.fromEntries(Object.entries({ ...shared, ...m.parameters }).map(([name, p]) => [name, {
       type: p.type ?? 'string', in: p.location ?? 'query',
       ...(p.required === true && { required: true as const }), ...(p.repeated === true && { repeated: true as const }),
       ...(p.enum !== undefined && { enum: p.enum }), ...(p.format !== undefined && { format: p.format }), ...opening(p.description, 120),
@@ -136,7 +142,11 @@ async function api([name, version, title]: (typeof APIS)[number]): Promise<[stri
   return [name, {
     title, version, revision: document.revision, sha256: createHash('sha256').update(text).digest('hex'),
     baseUrl: `${document.rootUrl}${document.servicePath}`,
-    methods: Object.fromEntries(reached.map((m) => [m.id, method(m)])),
+    methods: Object.fromEntries(reached.map((m) => [m.id, method(m, Object.fromEntries(SHARED_PARAMETERS.flatMap((param) => {
+      const shared = document.parameters?.[param];
+
+      return shared === undefined ? [] : [[param, shared]];
+    })))])),
     schemas: Object.fromEntries(Object.entries(document.schemas ?? {}).map(([schema, s]) => [schema, {
       ...opening(s.description, 120),
       props: Object.fromEntries(Object.entries(s.properties ?? {}).map(([prop, p]) => [prop, property(p)])),

@@ -145,19 +145,25 @@ function typesFrom(api: GoogleApi, roots: readonly string[]): string[] {
 
 function methodDeclaration(found: GoogleMethodRef): string {
   const { api, method } = found;
-  const verb = googleWrites(method) ? 'write' : 'read';
+  const writes = googleWrites(method);
   // Required first, as a reader fills them in.
   const params = Object.entries(method.params).sort(([, a], [, b]) => Number(b.required === true) - Number(a.required === true));
+  const required = params.some(([, p]) => p.required === true);
+  const answer = `{ status: number; body: ${method.response ?? 'null'} }`;
 
   return [
     ...docLine(`${method.d ?? found.id} (${api.title}, ${method.verb})`, ''),
-    `google.${verb}(${JSON.stringify(found.id)}, {`,
+    `google.${writes ? 'write' : 'read'}(${JSON.stringify(found.id)}, {`,
+    `  params${required ? '' : '?'}: {`,
     ...params.flatMap(([name, p]) => [
-      ...docLine(p.d, '  '),
-      `  ${JSON.stringify(name)}${p.required === true ? '' : '?'}: ${wrapped(typeOf({ type: p.type, ...(p.enum !== undefined && { enum: p.enum }), ...(p.format !== undefined && { format: p.format }) }))}${p.repeated === true ? '[]' : ''};`,
+      ...docLine(p.d, '    '),
+      `    ${JSON.stringify(name)}${p.required === true ? '' : '?'}: ${wrapped(typeOf({ type: p.type, ...(p.enum !== undefined && { enum: p.enum }), ...(p.format !== undefined && { format: p.format }) }))}${p.repeated === true ? '[]' : ''};`,
     ]),
+    '  };',
     ...(method.request === undefined ? [] : ['  /** The request body. */', `  body: ${method.request};`]),
-    `}): Promise<${method.response ?? 'void'}>;`,
+    writes
+      ? `}): Promise<{ status: 'done'; answer: ${answer} } | { status: 'asked' | 'denied'; approval: string }>;`
+      : `}): Promise<${answer}>;`,
     ...typesFrom(api, [method.request, method.response].filter((name) => name !== undefined)),
   ].join('\n');
 }
@@ -182,6 +188,36 @@ export interface GoogleRequest {
 
 function textOf(value: JsonValue): string {
   return typeof value === 'string' ? value : JSON.stringify(value);
+}
+
+/** A path template as the routes it serves: `{name}` one segment, `{+name}` one or more. */
+function routePattern(path: string): RegExp {
+  const parts = path.split(/(\{\+?[^}]+\})/u).map((part) => {
+    if (part.startsWith('{+')) return '.+';
+
+    return part.startsWith('{') ? '[^/]+' : part.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+  });
+
+  return new RegExp(`^${parts.join('')}$`, 'u');
+}
+
+/** How many of a template's characters are its own, not a parameter's: the more, the more exactly it names a route. */
+function literalLength(path: string): number {
+  return path.replace(/\{[^}]+\}/gu, '').length;
+}
+
+/**
+ * Another method an expanded path reaches at Google: one with this verb whose template matches it more exactly than the
+ * called method's, so a value that spells another route (`files/trash`, `drive.files.emptyTrash`) is read as that route.
+ * Templates alike (`v1/{+resourceName}` for a person and a contact group) are the called method's own.
+ */
+function otherRouteReached(found: GoogleMethodRef, path: string): string | null {
+  const own = literalLength(found.method.path);
+
+  const closer = Object.entries(found.api.methods)
+    .find(([, method]) => method.verb === found.method.verb && literalLength(method.path) > own && routePattern(method.path).test(path));
+
+  return closer?.[0] ?? null;
 }
 
 /** Expands `{name}` and `{+name}` (RFC 6570; reserved, so a resource name keeps its slashes). */
@@ -216,7 +252,14 @@ export function googleRequest(
     if (missing.length > 0) return yield* new KinuError('bad_input', `${id} needs ${missing.join(', ')}.`);
 
     if (method.request === undefined && body !== undefined) return yield* new KinuError('bad_input', `${id} takes no body.`);
-    const url = new URL(expandedPath(method.path, new Map(Object.entries(params))), found.api.baseUrl);
+    const dotted = Object.entries(method.params).find(([name, p]) => p.in === 'path' && /(^|\/)\.{1,2}(\/|$)/u.test(textOf(params[name] ?? '')));
+
+    if (dotted !== undefined) return yield* new KinuError('bad_input', `${id}: ${dotted[0]} may not be . or .., which would name another path.`);
+    const path = expandedPath(method.path, new Map(Object.entries(params)));
+    const other = otherRouteReached(found, path);
+
+    if (other !== null) return yield* new KinuError('bad_input', `${id} with these parameters is the route of ${other} at Google; call that method by its own name.`);
+    const url = new URL(path, found.api.baseUrl);
 
     for (const [name, value] of Object.entries(params)) {
       if (method.params[name]?.in !== 'query') continue;

@@ -1,11 +1,22 @@
 // One request to Google's APIs through the account's Google connection, made here so its token never leaves the
 // account: only to the pinned APIs' own addresses, renewed and tried once more when Google refuses the token held.
 // Every answer Google gives comes back as it is, with what a caller paces or revalidates by (`ETag`, `Retry-After`);
-// an agent's operation says a refusal in Google's words (`google-operations.ts`).
+// an agent's operation says a refusal in Google's words (`tools/google-operations.ts`).
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import { GOOGLE_VERBS, googleBaseUrls, parseJsonValue, plainFetch, type GoogleAnswer, type JsonValue } from '@kinu.run/core';
-import { KinuError, settle, tolerate } from '@kinu.run/core/obs';
+import { KinuError, settle, tolerate } from '../obs/index';
+import { plainFetch } from '../providers/fetch-shim';
+import { parseJsonValue, type JsonValue } from '../utils/json';
+import { googleBaseUrls } from './catalog';
+import { GOOGLE_VERBS } from './table';
+
+/** Google's answer to one request, whatever its status: its JSON (or its text, where it sent none), and what a caller
+ *  paces or revalidates by. */
+export interface GoogleAnswer {
+  readonly status: number;
+  readonly body: JsonValue;
+  readonly headers: { readonly etag?: string; readonly retryAfter?: string };
+}
 
 export const GoogleCallSchema = v.object({
   method: v.picklist(GOOGLE_VERBS),

@@ -9,21 +9,15 @@ import type { CodemodeProvider } from '../types/codemode';
 import { googleWriteText, type GoogleWrite } from '../safety/approval-kind';
 import type { ApprovalSpend, ApprovalSpendOutcome } from '../safety/approval-gate';
 import { sha256Hex } from '../safety/argument-digest';
-import { KinuError } from '../obs/index';
+import { KinuError, tolerate } from '../obs/index';
 import { serve, type Served } from '../operations/operation';
 import { codemodeNamespace } from './operation-surfaces';
 import { GOOGLE } from '../operations/google';
 import { describeGoogle, googleRequest, googleWrites, searchGoogle, type GoogleMethodRef, type GoogleRequest } from '../google/catalog';
-import { mailCardOf } from '../google/mail-card';
+import type { GoogleAnswer } from '../google/calls';
+import type { ParsedMail } from '../mail/store';
+import { base64ToBytes } from '../utils/base64';
 import type { JsonValue } from '../utils/json';
-
-/** Google's answer to one request, whatever its status: its JSON (or its text, where it sent none), and what a caller
- *  paces or revalidates by. */
-export interface GoogleAnswer {
-  readonly status: number;
-  readonly body: JsonValue;
-  readonly headers: { readonly etag?: string; readonly retryAfter?: string };
-}
 
 /** Google's refusal in its own words: `error.message` of its JSON, else its status. */
 function refusalOf(answer: GoogleAnswer): KinuError {
@@ -47,32 +41,70 @@ export interface GoogleDeps {
   readonly by: () => string;
   /** One request through the account's Google connection, made by the account: the token never reaches the workspace. */
   readonly send: (request: GoogleRequest) => Promise<GoogleAnswer>;
+  /** A message as Kinu's Mailbox reads one (postal-mime), for a write's card. */
+  readonly readMail: (raw: Uint8Array) => Promise<Pick<ParsedMail, 'to' | 'cc' | 'subject' | 'text'> & { readonly bcc: ParsedMail['cc'] }>;
+  /** Whether the account holds the Google connection now: a write asks its owner only where it could be made. */
+  readonly held: () => Promise<boolean>;
   readonly approvals: GoogleWriteApprovals;
 }
 
 const RawSchema = v.object({ raw: v.optional(v.string()) });
 
+/** How much of a message's text a card shows. */
+const START_CHARS = 400;
+
+function bytesOf(raw: string | undefined): Uint8Array | undefined {
+  const standard = (raw ?? '').replaceAll('-', '+').replaceAll('_', '/');
+
+  return standard === '' ? undefined : tolerate(() => base64ToBytes(standard.padEnd(Math.ceil(standard.length / 4) * 4, '=')), 'malformed-input');
+}
+
+/** A message as a write's card draws it, from Gmail's base64url `raw`; null for none, or one that does not decode. */
+function mailCardOf(deps: GoogleDeps, raw: string | undefined): Effect.Effect<GoogleWrite['mail']> {
+  return Effect.gen(function* () {
+    const bytes = bytesOf(raw);
+
+    if (bytes === undefined) return null;
+    const read = yield* Effect.promise(() => deps.readMail(bytes));
+    const named = (parties: typeof read.to) => parties.map((party) => (party.name === null ? party.address : `${party.name} <${party.address}>`)).join(', ');
+
+    return { to: named(read.to), cc: named(read.cc), bcc: named(read.bcc), subject: read.subject, start: read.text.replace(/\s+/gu, ' ').trim().slice(0, START_CHARS) };
+  });
+}
+
 const MessageBodySchema = v.object({ raw: v.optional(v.string()), message: v.optional(RawSchema) });
 
-/** The message a Gmail write sends or keeps, as its card draws it; a draft sent by id is read first, so its card shows it. */
-function mailOf(deps: GoogleDeps, found: GoogleMethodRef, params: Readonly<Record<string, JsonValue>>, body: JsonValue | undefined): Effect.Effect<GoogleWrite['mail']> {
+/** What a Gmail write's card shows, and for a draft sent by id, the digest of the whole message it holds now. */
+interface MessageSeen {
+  readonly mail: GoogleWrite['mail'];
+  readonly content: string | null;
+}
+
+/** The message a Gmail write sends or keeps; a draft sent by id is read from Google first, so its card shows it and its
+ *  approval is bound to it whole. */
+function messageOf(deps: GoogleDeps, found: GoogleMethodRef, params: Readonly<Record<string, JsonValue>>, body: JsonValue | undefined): Effect.Effect<MessageSeen, KinuError> {
   return Effect.gen(function* () {
-    if (!found.id.startsWith('gmail.users.messages.') && !found.id.startsWith('gmail.users.drafts.')) return null;
+    const none: MessageSeen = { mail: null, content: null };
+
+    if (!found.id.startsWith('gmail.users.messages.') && !found.id.startsWith('gmail.users.drafts.')) return none;
     const held = v.safeParse(MessageBodySchema, body);
 
     if (found.id !== 'gmail.users.drafts.send' || !held.success || held.output.message?.raw !== undefined) {
-      return held.success ? mailCardOf(held.output.raw ?? held.output.message?.raw) : null;
+      return held.success ? { mail: yield* mailCardOf(deps, held.output.raw ?? held.output.message?.raw), content: null } : none;
     }
 
     const draft = v.safeParse(v.object({ id: v.string() }), body);
 
-    if (!draft.success) return null;
+    if (!draft.success) return none;
     // Built from the pinned table, which holds drafts.get beside drafts.send.
     const { request } = yield* Effect.orDie(googleRequest('gmail.users.drafts.get', { userId: params['userId'] ?? 'me', id: draft.output.id, format: 'raw' }, undefined));
     const answer = yield* Effect.promise(() => deps.send(request));
-    const kept = v.safeParse(v.object({ message: RawSchema }), answer.status === 200 ? answer.body : null);
+    const kept = v.safeParse(v.object({ message: v.object({ raw: v.string() }) }), answer.status === 200 ? answer.body : null);
 
-    return kept.success ? mailCardOf(kept.output.message.raw) : null;
+    // A draft that cannot be read is not sent on a guess of what it holds.
+    if (!kept.success) return yield* new KinuError('unavailable', `The draft ${draft.output.id} could not be read to show its owner; send it again once it can be.`);
+
+    return { mail: yield* mailCardOf(deps, kept.output.message.raw), content: sha256Hex(kept.output.message.raw) };
   });
 }
 
@@ -101,8 +133,10 @@ function serveGoogle(deps: GoogleDeps): readonly Served[] {
       const { found, request } = yield* googleRequest(method, asked, body);
 
       if (!googleWrites(found.method)) return yield* new KinuError('bad_input', `${method} only reads; call it with google.read.`);
-      const mail = yield* mailOf(deps, found, asked, body);
-      const write: GoogleWrite = { by: deps.by(), method, does: found.method.d ?? method, params: asked, body: body ?? null, mail };
+
+      if (!(yield* Effect.promise(() => deps.held()))) return yield* new KinuError('denied', NOT_HELD);
+      const seen = yield* messageOf(deps, found, asked, body);
+      const write: GoogleWrite = { by: deps.by(), method, does: found.method.d ?? method, params: asked, body: body ?? null, ...seen };
       const id = `google-${sha256Hex(googleWriteText(write), 32)}`;
       const verdict = deps.approvals.ask(id, write);
 
@@ -111,14 +145,16 @@ function serveGoogle(deps: GoogleDeps): readonly Served[] {
 
       // Approved a moment ago and taken since: another call of the same write went first.
       if (spend === null) return { status: 'asked' as const, approval: id };
-      const answer = yield* sent(request);
 
-      yield* Effect.promise(async () => deps.approvals.settle(spend, 'spent'));
+      // Spent whatever Google answers: the request may have reached it, so the next call of it asks anew.
+      const answer = yield* Effect.ensuring(sent(request), Effect.promise(async () => deps.approvals.settle(spend, 'spent')));
 
       return { status: 'done' as const, answer };
     })),
   ];
 }
+
+const NOT_HELD = 'Google is not connected to this account. Its owner connects it in Settings > MCP servers; then call again.';
 
 /** `google.*` for an agent's programs. */
 export function createGoogleCodemodeProvider(deps: GoogleDeps): CodemodeProvider {

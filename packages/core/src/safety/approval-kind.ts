@@ -72,8 +72,12 @@ export interface GoogleWrite {
   readonly params: Readonly<Record<string, JsonValue>>;
   /** The request body; null for a method that takes none. */
   readonly body: JsonValue;
-  /** A message it sends or keeps, as its card draws it: read from the body's MIME, or the draft's, when there is one. */
-  readonly mail: { readonly to: string; readonly cc: string; readonly subject: string; readonly start: string } | null;
+  /** A message it sends or keeps, as its card draws it: read from the body's MIME, or the draft's, when there is one.
+   *  Every recipient Gmail delivers to is named, Bcc's too. */
+  readonly mail: { readonly to: string; readonly cc: string; readonly bcc: string; readonly subject: string; readonly start: string } | null;
+  /** A draft sent by id: the sha256 of the whole message it held when asked, so an approval sends that draft only as it
+   *  was, and a changed draft asks anew. Null for any other call, whose body is its content. */
+  readonly content: string | null;
 }
 
 export type ApprovalKind =
@@ -116,7 +120,8 @@ const MailSendSchema = v.strictObject({
 
 const GoogleWriteSchema = v.strictObject({
   by: v.string(), method: v.string(), does: v.string(), params: v.record(v.string(), JsonValueSchema), body: JsonValueSchema,
-  mail: v.nullable(v.strictObject({ to: v.string(), cc: v.string(), subject: v.string(), start: v.string() })),
+  mail: v.nullable(v.strictObject({ to: v.string(), cc: v.string(), bcc: v.string(), subject: v.string(), start: v.string() })),
+  content: v.nullable(v.string()),
 });
 
 /** What a Google write is bound to, in the row's `executor`: its method. */
@@ -126,9 +131,9 @@ export function googleWriteExecutor(method: string): string {
 
 /** The text a Google write parks under: its fields in one stable order, so one call is one text. */
 export function googleWriteText(write: GoogleWrite): string {
-  const { by, method, does, params, body, mail } = write;
+  const { by, method, does, params, body, mail, content } = write;
 
-  return `${GOOGLE_WRITE}${stableStringify({ by, method, does, params: { ...params }, body, mail: mail === null ? null : { ...mail } })}`;
+  return `${GOOGLE_WRITE}${stableStringify({ by, method, does, params: { ...params }, body, mail: mail === null ? null : { ...mail }, content })}`;
 }
 
 /** What an agent's message is bound to, in the row's `executor`: the address it leaves from. */

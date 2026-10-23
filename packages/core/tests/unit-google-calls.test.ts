@@ -2,8 +2,8 @@
 // tried once more when Google refuses the held one; every answer comes back as Google gave it, with what a caller paces
 // or revalidates by.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { asFetchFunction } from '@kinu.run/core';
-import { callGoogle, type GoogleCall } from '../src/user/google-calls';
+import { asFetchFunction } from '../src/providers/fetch-shim';
+import { callGoogle, type GoogleCall } from '../src/google/calls';
 
 const LIST: GoogleCall = { method: 'GET', url: 'https://gmail.googleapis.com/gmail/v1/users/me/messages' };
 
