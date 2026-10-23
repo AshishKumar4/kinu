@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { scratchDir } from '@kinu.run/test-utils';
-import { answeredTurnIds, askedRow } from './run';
+import { answeredTurnIds, askedRow, rootAnswer } from './run';
 
 describe("a copy's answers file", () => {
   test('names the requests already answered, and a torn last line answers nothing', () => {
@@ -44,5 +44,13 @@ describe('a request the provider refused before any model call', () => {
 
     expect(await askedRow(ask, async () => {}, 1, 3)).toBe(unasked);
     expect(asks).toBe(3);
+  });
+});
+
+describe("a request's answer", () => {
+  test('is every reply its root gave, so a silent last turn after the answer does not read empty', () => {
+    expect(rootAnswer([{ assistantResponse: 'Found it: the alarm re-arms in the retry hook.' }, { assistantResponse: '' }]))
+      .toBe('Found it: the alarm re-arms in the retry hook.');
+    expect(rootAnswer([])).toBeNull();
   });
 });

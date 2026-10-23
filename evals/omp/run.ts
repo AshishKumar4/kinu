@@ -95,8 +95,9 @@ function workersAi(account: string, token: string, model: string): LLMProviderCo
   return { name: 'workers-ai', baseURL: `https://api.cloudflare.com/client/v4/accounts/${account}/ai/v1`, headers: { Authorization: `Bearer ${token}` }, model };
 }
 
-function frozenSet(data: string, heldOut: readonly OwnerTurn[], count: number, seed: number): FrozenHeldOut {
-  const path = join(data, 'held-out-frozen.json');
+/** `count`: that many drawn, frozen in `held-out-frozen.json`; `all`, every held-out request, in `held-out-frozen-all.json`. */
+function frozenSet(data: string, heldOut: readonly OwnerTurn[], count: number | 'all', seed: number): FrozenHeldOut {
+  const path = join(data, count === 'all' ? 'held-out-frozen-all.json' : 'held-out-frozen.json');
 
   if (existsSync(path)) return v.parse(v.pipe(v.string(), v.parseJson(), FrozenHeldOutSchema), readFileSync(path, 'utf8'));
   const frozen = freezeHeldOut(heldOut, { count, seed });
@@ -242,6 +243,14 @@ export async function askedRow<Row extends { readonly answer: string | null; rea
   }
 }
 
+/** What the owner read of a request: every reply its root's turns gave, in order. Its last turn alone read empty where a
+ *  task's reminder turn ended a request silently after the turn that answered (8 of the pilot's 160 answers). */
+export function rootAnswer(ended: readonly Pick<CompletedTurn, 'assistantResponse'>[]): string | null {
+  const replies = ended.map((turn) => turn.assistantResponse.trim()).filter((reply) => reply !== '');
+
+  return ended.length === 0 ? null : replies.join('\n\n');
+}
+
 async function answered(arm: Arm, prepared: string, turn: OwnerTurn) {
   // The kept calls of the request, what its own record answers a kept shell command with, and where its time went.
   const kept: Kept[] = [];
@@ -285,7 +294,7 @@ async function answered(arm: Arm, prepared: string, turn: OwnerTurn) {
     }
 
     return {
-      turnId: turn.turn.turnId, request: turn.turn.userMessage, answer: ended.at(-1)?.assistantResponse ?? null,
+      turnId: turn.turn.turnId, request: turn.turn.userMessage, answer: rootAnswer(ended),
       calls: ended.flatMap((each) => each.toolCalls.map((call) => call.name)), turns: ended.length, agents: agents.size,
       leftRunning: left.stopped, refusedStop: left.refused, kept, spent, ms: answeredAt - askedAt,
     };
@@ -335,7 +344,7 @@ if (import.meta.main) {
       await prepare({ arm, spec, snapshot, ...models, space: join(base, 'base') }, ownerTurnsFrom(readFileSync(join(data, 'train.jsonl'), 'utf8')), Number(values['train-last']));
     } else {
       const heldOut = ownerTurnsFrom(readFileSync(join(data, 'held-out.jsonl'), 'utf8'));
-      const frozen = frozenSet(data, heldOut, Number(values['held-out']), Number(values.seed));
+      const frozen = frozenSet(data, heldOut, values['held-out'] === 'all' ? 'all' : Number(values['held-out']), Number(values.seed));
       const [copy, of] = [Number(values.copy), Number(values.of)];
 
       const requests = frozen.turnIds.filter((_, at) => at % of === copy).map((id) => {
