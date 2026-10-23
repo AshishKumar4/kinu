@@ -623,6 +623,44 @@ mod tests {
         std::fs::remove_dir_all(path).unwrap();
     }
 
+    /// The descriptors this process holds.
+    fn descriptors() -> usize {
+        std::fs::read_dir("/proc/self/fd").unwrap().count()
+    }
+
+    // The recovery acceptance at 4,096 changed files (2026-10-23): every file read through a block record kept its
+    // whole version open, and past about 4,000 the process had no descriptor left (EMFILE) and every read failed.
+    #[test]
+    fn a_file_read_through_its_blocks_holds_no_descriptor_after_the_read() {
+        let path = std::env::temp_dir().join(format!("devbox-descriptors-test-{}", std::process::id()));
+        let files = 300;
+        std::fs::create_dir_all(path.join("base")).unwrap();
+        std::fs::create_dir_all(path.join("one/tree")).unwrap();
+        let mut records = Vec::new();
+        let block = vec![66; 16384];
+        let digest = hash(&block);
+        let chunk = path.join("one").join(chunk_name(&digest));
+        std::fs::create_dir_all(chunk.parent().unwrap()).unwrap();
+        std::fs::write(chunk, &block).unwrap();
+        let (over, bytes) = index(&[(0, Some(digest))]);
+        std::fs::write(path.join(format!("one/.devbox-delta/{}", over.index)), bytes).unwrap();
+        for n in 0..files {
+            std::fs::write(path.join(format!("base/f{n}")), vec![65; 2 * 16384]).unwrap();
+            records.push(Record { p: format!("f{n}"), s: 2 * 16384, mode: 0o644, uid: 0, gid: 0, t: 0, over: over.clone() });
+        }
+        let one = Layer::new(Root::open(&path.join("one/tree")).unwrap(), Some(Root::open(&path.join("one")).unwrap()), records);
+        let mut storage = Storage::new(Root::open(&path.join("base")).unwrap(), vec![one], path.join("stats"));
+        let before = descriptors();
+        let mut wanted = vec![66; 16384];
+        wanted.extend(vec![65; 16384]);
+        for n in 0..files {
+            assert_eq!(storage.read(&format!("f{n}"), 0, 2 * 16384, 0, 2 * 16384).unwrap(), wanted);
+        }
+        // Other tests run beside this one and hold a few of their own: a kept descriptor per file is 300.
+        assert!(descriptors() < before + 50, "{} descriptors held after reading {files} files", descriptors() - before);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
     #[test]
     fn anchored_sources_refuse_symlinks_and_escape() {
         let path = std::env::temp_dir().join(format!("devbox-root-test-{}", std::process::id()));
