@@ -67,6 +67,8 @@ type DuePicture = v.InferOutput<typeof DueRowSchema>;
 
 const StoredRowSchema = v.object({ slate: v.string(), digest: v.string() });
 
+const NamedRowSchema = v.object({ slate: v.string(), view: v.string(), digest: v.string() });
+
 export class SlatePictures {
   constructor(private readonly db: SqlExec) {}
 
@@ -210,6 +212,15 @@ export class SlatePictures {
 
       return [picture.slate, picture.digest];
     }));
+  }
+
+  /** The R2 key of each picture a row names: its light capture, which every stored version has. */
+  namedKeys(workspace: string): string[] {
+    return this.db.exec(`SELECT slate, view, digest FROM slate_pictures WHERE digest IS NOT NULL`).toArray().map((row) => {
+      const named = v.parse(NamedRowSchema, row);
+
+      return viewPictureKey(workspace, named, named.digest);
+    });
   }
 
   /** Left open: a shot whose put lands between this listing and the row's removal keeps its object; rare, and teardown reclaims it. */

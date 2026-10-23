@@ -829,6 +829,16 @@ export class MailStore {
       : this.deps.sql.exec('SELECT 1 FROM mail_messages WHERE raw_key = ? OR text_key = ? OR html_key = ? LIMIT 1', key, key, key).toArray().length > 0;
   }
 
+  /** Every blob key a row names: the messages' bodies and their attachments. */
+  namedBlobKeys(): string[] {
+    const bodies = rows(v.object({ raw_key: v.nullable(v.string()), text_key: v.nullable(v.string()), html_key: v.nullable(v.string()) }),
+      this.deps.sql.exec('SELECT raw_key, text_key, html_key FROM mail_messages'));
+
+    const files = rows(v.object({ digest: v.string() }), this.deps.sql.exec('SELECT DISTINCT digest FROM mail_attachments'));
+
+    return [...bodies.flatMap((body) => [body.raw_key, body.text_key, body.html_key].filter((key) => key !== null)), ...files.map((file) => `att/${file.digest}`)];
+  }
+
   /** When the Trash next has something to empty, or null. */
   nextPurgeAt(): number | null {
     const [row] = rows(v.object({ at: v.nullable(v.number()) }), this.deps.sql.exec('SELECT MIN(trashed_at) AS at FROM mail_threads WHERE trashed_at IS NOT NULL'));

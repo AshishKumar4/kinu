@@ -4,8 +4,12 @@
  */
 import * as v from 'valibot';
 import { MossaicShardDO as MossaicShard, MossaicUserDO as MossaicUser } from '@mossaic/sdk';
+import { bookmarkNow, restartedForRestore, restoreArmed, type ArmedRestore, type DeploymentSecret, type OpsCaller, type RestoreTarget } from '@kinu.run/core';
 
 const TopSchema = v.object({ top: v.nullable(v.number()) });
+
+/** The deployment's root secret, which Mossaic's type of its env does not name: these objects run in Kinu's Worker. */
+const SecretSchema = v.looseObject({ CREDENTIAL_ENCRYPTION_KEY: v.optional(v.string()) });
 
 const CountSchema = v.object({ held: v.number() });
 
@@ -30,6 +34,11 @@ function storedTables(ctx: DurableObjectState): number {
 }
 
 export class MossaicUserDO extends MossaicUser {
+  /** The deployment's root secret, as this object's env holds it. */
+  private get opsSecret(): DeploymentSecret {
+    return v.parse(SecretSchema, this.env);
+  }
+
   /** How many shards this tenant's bytes may be on: its pool, or past it where any record names a higher shard. */
   tenantShards(): number {
     const sql = this.ctx.storage.sql;
@@ -53,9 +62,33 @@ export class MossaicUserDO extends MossaicUser {
   storedTables(): number {
     return storedTables(this.ctx);
   }
+
+  /**
+   * The operator's restore (`/ops/restore`, ARCHITECTURE-DECISIONS W7): this tenant's records, its files' names and
+   * their chunks' places, armed to go back to `target` at its next start, before its shards (`scripts/restore.ts`).
+   * `opsRestart` ends it at once. Only `/ops/*` holds the capability.
+   */
+  async opsRestore(caller: OpsCaller, target: RestoreTarget): Promise<ArmedRestore> {
+    return await restoreArmed(this.ctx, this.opsSecret, caller, target);
+  }
+
+  /** Ends this activation, so an armed restore lands. */
+  async opsRestart(caller: OpsCaller): Promise<void> {
+    await restartedForRestore(this.ctx, this.opsSecret, caller);
+  }
+
+  /** Where this object's history stands now. */
+  async opsBookmark(caller: OpsCaller): Promise<string> {
+    return await bookmarkNow(this.ctx, this.opsSecret, caller);
+  }
 }
 
 export class MossaicShardDO extends MossaicShard {
+  /** The deployment's root secret, as this object's env holds it. */
+  private get opsSecret(): DeploymentSecret {
+    return v.parse(SecretSchema, this.env);
+  }
+
   /** Every chunk and record this shard holds for its tenant, deleted. */
   async destroyShard(): Promise<void> {
     await deleted(this.ctx);
@@ -64,5 +97,24 @@ export class MossaicShardDO extends MossaicShard {
   /** The tables this shard holds: none once `destroyShard` ran. */
   storedTables(): number {
     return storedTables(this.ctx);
+  }
+
+  /**
+   * The operator's restore (`/ops/restore`, ARCHITECTURE-DECISIONS W7): this shard's chunks and their references,
+   * armed to go back to `target` at its next start, after its tenant's user object. `opsRestart` ends it at once.
+   * Only `/ops/*` holds the capability.
+   */
+  async opsRestore(caller: OpsCaller, target: RestoreTarget): Promise<ArmedRestore> {
+    return await restoreArmed(this.ctx, this.opsSecret, caller, target);
+  }
+
+  /** Ends this activation, so an armed restore lands. */
+  async opsRestart(caller: OpsCaller): Promise<void> {
+    await restartedForRestore(this.ctx, this.opsSecret, caller);
+  }
+
+  /** Where this object's history stands now. */
+  async opsBookmark(caller: OpsCaller): Promise<string> {
+    return await bookmarkNow(this.ctx, this.opsSecret, caller);
   }
 }

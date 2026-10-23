@@ -91,7 +91,10 @@ export {
   censusOf, OPS_OBJECTS_PER_REQUEST, OPS_PASS_PREFIX, opsCaller, requireOps, type OpsCaller, type StoreCensus, type TableRows, type TablesAnswer,
 } from './state/ops-tables';
 
-export { armRestore, restoreLanded, RestoreTargetSchema, type ArmedRestore, type RestoreTarget, type StorageHistory } from './state/ops-restore';
+export {
+  bookmarkNow, missingBytes, restartedForRestore, restoreArmed, restoreLanded, RestoreTargetSchema,
+  type ArmedRestore, type DeploymentSecret, type MissingBytes, type RestorableState, type RestoreTarget, type StorageHistory,
+} from './state/ops-restore';
 
 export { ACCOUNT_EPOCH_FIELDS, type ConnectionTicketPurpose, initUserTables, PROFILE_CATALOG_CONFIG_KEY, WORKSPACE_KEYED_ROWS } from './state/user-schema';
 
