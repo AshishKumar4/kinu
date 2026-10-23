@@ -1,4 +1,14 @@
-import { type ModelMenuEntry } from '@kinu.run/core';
+import { declaredReasoningEffort, type ModelMenuEntry, type ReasoningEffort } from '@kinu.run/core';
+
+const reasoningEffortLabel = (effort: ReasoningEffort): string =>
+  effort === 'xhigh' ? 'Extra high' : effort[0].toUpperCase() + effort.slice(1);
+
+/** A level as a choice for a model declaring `declared`; a stored one the model does not take says what turns send. */
+export function reasoningEffortChoice(effort: ReasoningEffort, declared: readonly ReasoningEffort[] | undefined): string {
+  const sent = declaredReasoningEffort(effort, declared);
+
+  return sent === effort ? reasoningEffortLabel(effort) : `${reasoningEffortLabel(effort)} → runs ${sent === null ? 'none' : reasoningEffortLabel(sent)}`;
+}
 
 interface ModelMenuGroup {
   provider: string;

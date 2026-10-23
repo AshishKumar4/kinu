@@ -1,5 +1,5 @@
 import * as v from 'valibot';
-import type { ReasoningEffort } from '../providers/reasoning-effort';
+import { declaredReasoningEffort, type ReasoningEffort } from '../providers/reasoning-effort';
 import type { DecisionModel } from '../providers/decision-model';
 import type { NamedSwarmPreset } from './swarm';
 import type { WebSearchRoute } from '../providers/web-search';
@@ -52,6 +52,15 @@ export interface TierAssignment {
   model: string;
   reasoningEffort?: ReasoningEffort | undefined;
   fallbacks?: readonly string[] | undefined;
+}
+
+/** `tier` moved onto `model`, whose levels are `declared`: its effort becomes the one that model takes for it, dropped
+ *  when it takes none and kept when its levels are unknown, so a tier never holds a level its model does not take. */
+export function retargetedTier(tier: TierAssignment, model: string, declared: readonly ReasoningEffort[] | undefined): TierAssignment {
+  const { reasoningEffort, ...rest } = tier;
+  const carried = reasoningEffort === undefined ? null : declaredReasoningEffort(reasoningEffort, declared);
+
+  return { ...rest, model, ...carried !== null && { reasoningEffort: carried } };
 }
 
 export interface TierAssignments {
