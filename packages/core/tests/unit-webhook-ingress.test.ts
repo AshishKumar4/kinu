@@ -7,7 +7,7 @@ import {
   EventLog, TriggerRegistry,
   acceptWebhookDelivery, createWebhookSecretStore, hmacSha256Hex,
   initEventsHubTables, initWebhookIngressTables, registerDurableWebhook, cancelTrigger,
-  type SqlExec, type WebhookDelivery,
+  WatchClaims, checkAnswerOf, type JsonValue, type RunCheck, type SqlExec, type WebhookDelivery,
 } from '../src/index';
 import type { WebhookTriggerSpec } from '../src/events/ingress/webhook';
 import { createMemoryVfs, createTestActors, filesIn, present } from '@kinu.run/test-utils';
@@ -223,6 +223,78 @@ describe('webhook ingress admits a verified delivery', () => {
       hmac_signature: await hmacSha256Hex('k', `${later}.{"n":2}`),
     });
     expect(h.claims().map((row) => row.expires_at)).toEqual([later + 5 * 60 * 1000]);
+  });
+});
+
+// A repository hook Kinu made for a push watcher: GitHub signs the body alone (X-Hub-Signature-256), says the event in
+// X-GitHub-Event, and pings once when the hook is made.
+describe('a GitHub repository hook', () => {
+  const SECRET = 'hook-secret';
+  const BODY = '{"ref":"refs/heads/main","after":"abc123"}';
+  const signed = async (body: string) => `sha256=${await hmacSha256Hex(SECRET, body)}`;
+
+  async function gitHubTrigger(h: ReturnType<typeof hub>, check?: { readonly code: string }): Promise<string> {
+    const secret_id = `webhook_secret_github_${check === undefined ? 'plain' : 'watch'}`;
+
+    const id = await h.triggers.register({
+      kind: 'webhook_durable',
+      spec: { label: 'push to owner/repo', auth_mode: 'github', secret_id, accepted_content_type: 'application/json', ...(check !== undefined && { check }) },
+      creator_trust: 'self',
+    }, NOW);
+
+    h.secrets.put(secret_id, id, SECRET);
+
+    return id;
+  }
+
+  test('a delivery signed over its body is admitted once; a replay of it is a duplicate, held for three days', async () => {
+    const h = hub();
+    const trigger_id = await gitHubTrigger(h);
+    const headers = { 'x-hub-signature-256': await signed(BODY), 'x-github-event': 'push', 'x-github-delivery': 'd-1' };
+
+    expect(await h.deliver({ trigger_id, body_text: BODY, headers })).toMatchObject({ status: 'admitted', admitted: true });
+    // Its delivery id is not signed: a replay under another is the same signature, a duplicate.
+    expect(await h.deliver({ trigger_id, body_text: BODY, headers: { ...headers, 'x-github-delivery': 'd-2' } })).toMatchObject({ status: 'admitted', admitted: false });
+    expect(h.claims().map((claim) => claim.expires_at)).toEqual([NOW + 3 * 24 * 60 * 60 * 1000]);
+  });
+
+  test('a wrong or missing signature is 401, and GitHub\'s ping is answered with nothing published', async () => {
+    const h = hub();
+    const trigger_id = await gitHubTrigger(h);
+
+    expect(await h.deliver({ trigger_id, body_text: BODY, headers: { 'x-hub-signature-256': await signed('{"other":1}') } }))
+      .toEqual({ status: 'rejected', http_status: 401, reason: 'signature mismatch' });
+    expect(await h.deliver({ trigger_id, body_text: BODY, headers: { 'x-hub-signature-256': `sha1=${await hmacSha256Hex(SECRET, BODY)}` } }))
+      .toEqual({ status: 'rejected', http_status: 401, reason: 'missing X-Hub-Signature-256' });
+
+    const ping = '{"zen":"Keep it logically awesome.","hook_id":7}';
+
+    expect(await h.deliver({ trigger_id, body_text: ping, headers: { 'x-hub-signature-256': await signed(ping), 'x-github-event': 'ping' } }))
+      .toEqual({ status: 'admitted', admitted: false });
+    expect(h.log.pending({ variant: 'webhook' })).toEqual([]);
+  });
+
+  test("a push watcher's check reads GitHub's event and delivery id beside the payload", async () => {
+    const h = hub();
+    const inputs: (JsonValue | undefined)[] = [];
+
+    const run: RunCheck = async (_check, _state, input) => {
+      inputs.push(input);
+
+      return { kind: 'answered', answer: present(checkAnswerOf({ fire: false }), 'a quiet answer') };
+    };
+
+    const deps = { ...h.deps, watch: { claims: new WatchClaims(), run } };
+
+    const trigger_id = await gitHubTrigger(h, { code: 'return { fire: false };' });
+
+    await acceptWebhookDelivery(deps, {
+      trigger_id, method: 'POST', body_text: BODY, cf_mtls_verified: false, delivery_id: null, hmac_signature: null, hmac_timestamp: null,
+      bearer_header: null, content_type: 'application/json', now: NOW,
+      headers: { 'x-hub-signature-256': await signed(BODY), 'x-github-event': 'push', 'x-github-delivery': 'd-1' },
+    });
+
+    expect(inputs).toEqual([{ event: 'push', delivery: 'd-1', payload: { ref: 'refs/heads/main', after: 'abc123' } }]);
   });
 });
 

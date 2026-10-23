@@ -2,11 +2,15 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Webhook ingress. hmac: `X-Kinu-Signature` = HMAC-SHA256(secret, `<ts>.<body>`), timestamp within
  * ±5 min, signature claimed once for that window. bearer: constant-time compare. mtls: edge-verified.
+ * github: a repository hook Kinu made, `X-Hub-Signature-256` = `sha256=` HMAC-SHA256(secret, body)
+ * (docs.github.com/webhooks/using-webhooks/validating-webhook-deliveries), claimed once for the days GitHub keeps a
+ * delivery to redeliver; its `ping` is answered and checks nothing.
  */
 
 import * as v from 'valibot';
 import type { EventLog } from '../hub/log';
 import type { TriggerRegistry } from '../hub/triggers';
+import type { TriggerRow } from '../hub/types';
 import { spillEventContent } from '../hub/content-spill';
 import { Effect, Result } from 'effect';
 import { settle, settleSync } from '../../obs/index';
@@ -22,7 +26,11 @@ import type { WebhookSecretStore } from './secrets';
 
 const HMAC_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
 
-export type WebhookAuthMode = 'hmac' | 'bearer' | 'mtls';
+export type WebhookAuthMode = 'hmac' | 'bearer' | 'mtls' | 'github';
+
+/** GitHub keeps a delivery to redeliver for 3 days (docs.github.com/webhooks/testing-and-troubleshooting-webhooks/
+ *  redelivering-webhooks); its signature covers no time, so one is held that long and a replay within it is a duplicate. */
+const GITHUB_CLAIM_MS = 3 * 24 * 60 * 60 * 1000;
 
 export interface SecretStore {
   get(secretId: string): Promise<string | null>;
@@ -182,6 +190,8 @@ function verifyWebhookAuth(
       };
     }
 
+    if (spec.auth_mode === 'github') return yield* verifyGitHubDelivery(deps, spec, opts);
+
     if (spec.auth_mode === 'bearer') {
       const secretId = spec.secret_id;
 
@@ -203,6 +213,45 @@ function verifyWebhookAuth(
 
     return { ingress: 'webhook_mtls' };
   });
+}
+
+/** A delivery from a repository hook Kinu made: signed over its body alone, so its signature is what is claimed once. */
+function verifyGitHubDelivery(deps: WebhookIngressDeps, spec: Partial<WebhookTriggerSpec>, opts: WebhookDelivery): Effect.Effect<WebhookAuth, WebhookRefusal> {
+  return Effect.gen(function* () {
+    const secretId = spec.secret_id;
+
+    if (!secretId) return yield* refused('no github secret configured');
+    const secret = yield* Effect.promise(() => deps.secrets.get(secretId));
+
+    if (!secret) return yield* refused('secret revoked');
+    const presented = opts.headers['x-hub-signature-256'];
+
+    if (presented === undefined || !presented.startsWith('sha256=')) return yield* refused('missing X-Hub-Signature-256');
+    const expected = `sha256=${yield* Effect.promise(() => hmacSha256Hex(secret, opts.body_text))}`;
+
+    if (!timingSafeEqual(expected, presented)) return yield* refused('signature mismatch');
+
+    return { ingress: 'webhook_hmac', claim: { key: `github:${sha256Hex(presented, 32)}`, expiresAt: opts.now + GITHUB_CLAIM_MS } };
+  });
+}
+
+/** A repository hook's delivery as its check reads it: GitHub's event name and delivery id beside the payload. */
+function gitHubInput(opts: WebhookDelivery, payload: JsonValue): JsonValue {
+  return { event: opts.headers['x-github-event'] ?? null, delivery: opts.headers['x-github-delivery'] ?? null, payload };
+}
+
+/** A delivery a check answers, or GitHub's ping that nothing answers; null for one published as an event. */
+async function checkedDelivery(
+  deps: WebhookIngressDeps, trigger: TriggerRow, opts: WebhookDelivery, body: JsonValue,
+): Promise<WebhookDeliveryResult | null> {
+  const github = trigger.spec['auth_mode'] === 'github';
+
+  // GitHub's ping when a hook is made: answered, and nothing to check.
+  if (github && opts.headers['x-github-event'] === 'ping') return { status: 'admitted', admitted: false };
+
+  if (deps.watch === undefined || watchCheckOf(trigger) === null) return null;
+
+  return watchedDelivery(deps, trigger.id, opts.now, github ? gitHubInput(opts, body) : body);
 }
 
 /**
@@ -267,7 +316,9 @@ export function acceptWebhookDelivery(
       return { status: 'admitted', event_id: held.event_id ?? undefined, admitted: false };
     }
 
-    if (deps.watch !== undefined && watchCheckOf(trigger) !== null) return yield* Effect.promise(() => watchedDelivery(deps, trigger.id, opts.now, decodeJsonValue({ value: parsedBody ?? null })));
+    const checked = yield* Effect.promise(() => checkedDelivery(deps, trigger, opts, decodeJsonValue({ value: parsedBody ?? null })));
+
+    if (checked !== null) return checked;
 
     const delivery_id = opts.delivery_id ?? `${opts.now}-${Math.random().toString(36).slice(2, 10)}`;
 
