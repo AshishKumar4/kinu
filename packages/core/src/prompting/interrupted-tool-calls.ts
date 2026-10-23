@@ -7,7 +7,7 @@
 import type { ModelMessage, ToolModelMessage, ToolResultPart } from 'ai';
 import * as v from 'valibot';
 import type { LostToolCall } from '../tools/effect-claim';
-import { toolPairingParts } from '../session/tool-pairing';
+import { toolPairingParts, visitToolPairingParts } from '../session/tool-pairing';
 
 /** Any part a model message carries, so a pairing scan hands each call and result back as the SDK typed it. */
 type ModelPart = Exclude<ModelMessage['content'], string>[number];
@@ -43,21 +43,20 @@ export function trailingUnpairedCalls(history: readonly ModelMessage[], toolName
 }
 
 /** Every call in the history that no `tool-result` answers, `providerExecuted` ones skipped as the SDK skips them.
- *  Asked each step of the whole history: what it builds beyond the scan is one id per answer. */
+ *  Asked each step of the whole history, so it builds one id per answer and nothing per part: a part list built each
+ *  scan was 2.1 of the 191 MB a 150-step turn allocated in its agent's isolate (heap gate, 2026-10-23). */
 export function unpairedToolCalls(messages: readonly ModelMessage[]): LostCallQuery[] {
-  const parts = toolPairingParts<ModelPart>(messages);
   const answered = new Set<string>();
   const unpaired: LostCallQuery[] = [];
 
-  for (const { role, part } of parts) {
+  visitToolPairingParts<ModelPart>(messages, (_at, role, part) => {
     if (role === 'tool' && part.type === 'tool-result') answered.add(part.toolCallId);
-  }
-
-  for (const { role, part } of parts) {
+  });
+  visitToolPairingParts<ModelPart>(messages, (_at, role, part) => {
     if (role === 'assistant' && part.type === 'tool-call' && part.providerExecuted !== true && !answered.has(part.toolCallId)) {
       unpaired.push({ toolCallId: part.toolCallId, toolName: part.toolName, input: part.input });
     }
-  }
+  });
 
   return unpaired;
 }
@@ -72,9 +71,9 @@ export function settleUnpairedToolCalls(
   lost?: (call: LostCallQuery) => LostToolCall | null,
 ): ModelMessage[] | undefined {
   // Copied only once a call needs a result: every step reads the whole history, and almost every history is paired.
-  // Indexed walks: an iterator would allocate a result per part of every message, every step.
+  // Indexed walks, each pending call kept as its own part: an iterator or a copy would allocate per part, every step.
   let settled: ModelMessage[] | undefined;
-  const pending = new Map<string, { readonly toolName: string; readonly input: unknown }>();
+  const pending = new Map<string, LostCallQuery>();
 
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
@@ -84,9 +83,7 @@ export function settleUnpairedToolCalls(
       for (let at = 0; at < message.content.length; at++) {
         const part = message.content[at];
 
-        if (part.type === 'tool-call' && part.providerExecuted !== true) {
-          pending.set(part.toolCallId, { toolName: part.toolName, input: part.input });
-        }
+        if (part.type === 'tool-call' && part.providerExecuted !== true) pending.set(part.toolCallId, part);
       }
     } else if (message.role === 'tool') {
       for (let at = 0; at < message.content.length; at++) {
@@ -106,10 +103,10 @@ export function settleUnpairedToolCalls(
 }
 
 function interruptedResults(
-  pending: ReadonlyMap<string, { readonly toolName: string; readonly input: unknown }>,
+  pending: ReadonlyMap<string, LostCallQuery>,
   lost: ((call: LostCallQuery) => LostToolCall | null) | undefined,
 ): ToolModelMessage {
-  const content = [...pending].map(([toolCallId, { toolName, input }]): ToolResultPart => ({
+  const content = [...pending.values()].map(({ toolCallId, toolName, input }): ToolResultPart => ({
     type: 'tool-result',
     toolCallId,
     toolName,
