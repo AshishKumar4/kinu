@@ -4822,6 +4822,10 @@ if (import.meta.main) {
 
   if (report !== '' && drove.length > 0) recordMarkAt(report, 'traffic', Math.max(...drove));
 
+  // The phase ran to its verdict, green or red: a runner that ends without this mark (a signal, a crash) may have left a
+  // row unreported, whatever it recorded before (deploy.sh `phase_ended`).
+  if (report !== '' && deployPhase !== undefined) recordMarkAt(report, `${deployPhase.join(',')}-ended`, Date.now());
+
   finish();
 
   if (caching) {
