@@ -2,6 +2,10 @@
 // transcript enforces once per state across restarts. Ports OMP's `TodoTracker.checkCompletion`, minus its user-force
 // skip and its in-memory count; plan mode never reminds (the plan is the product).
 
+import type { SubagentRosterEntry } from '../delegation/agents-tool';
+import type { ActorReference } from '../identity/actor-handle';
+import type { BackgroundJobStore } from '../jobs/store';
+import type { SubagentRosterStore } from '../subagents/roster';
 import type { ActiveRoster } from '../types/dynamic-context';
 import type { AgentTaskTree } from '../tools/task-store';
 import type { WorkMode } from '../types/turn';
@@ -22,17 +26,42 @@ export interface TaskReminder {
 /** Scoped to the open list's state it reminds of: a second turn ending on that state finds its turn already on disk. */
 export const taskReminderIdempotencyKey = (scope: string): string => `task-reminder:${scope}`;
 
+/** What an agent is owed, as the one question whether a result is on its way to it reads it. */
+export interface OwedReads {
+  /** Its running jobs that end on their own (`BackgroundJobStore.countAwaited`). */
+  readonly awaitedJobs: () => number;
+  /** Its hires' roster rows. */
+  readonly hires: () => readonly Pick<SubagentRosterEntry, 'status' | 'currentTask' | 'origin' | 'actorReference'>[];
+  /** The same reads for one of its hires. */
+  readonly of: (hire: ActorReference) => OwedReads;
+}
+
+/** An agent's owed reads over the job store and roster `bind` opens for it, and for each of its hires in turn. */
+export function owedReadsOf(
+  bind: (reference: ActorReference) => {
+    readonly jobs: Pick<BackgroundJobStore, 'countAwaited'>;
+    readonly roster: Pick<SubagentRosterStore, 'list'>;
+  },
+  reference: ActorReference,
+): OwedReads {
+  const { jobs, roster } = bind(reference);
+
+  return { awaitedJobs: () => jobs.countAwaited(), hires: () => roster.list(), of: (hire) => owedReadsOf(bind, hire) };
+}
+
 /**
- * Whether a result owed to the agent will wake it, which a reminder would only race: a hire that has not answered its
- * assignment (its roster row `working`), or a job that ends on its own (the job store's `countAwaited`). A
- * hire that waits on the agent (`awaiting_input`) and a process started to keep running owe it nothing.
+ * Whether a result owed to the agent will wake it, which a reminder or an answer now would only race: a job of its own
+ * that ends on its own, a hire mid-turn on its assignment (`working`), or a hire whose assignment is still open while a
+ * result is on its way to it in turn: a job of its own, a hire of its own, however deep. A hire that waits on the agent
+ * (`awaiting_input`), one idle with nothing on its way, a process started to keep running, and an evolution lane's hire,
+ * which answers the runtime, owe it nothing.
  */
-export function resultOwed(hireStatuses: Iterable<string>, jobsAwaited: number): boolean {
-  if (jobsAwaited > 0) return true;
+export function resultOwed(reads: OwedReads): boolean {
+  if (reads.awaitedJobs() > 0) return true;
 
-  for (const status of hireStatuses) if (status === 'working') return true;
-
-  return false;
+  return reads.hires().some((hire) => hire.origin !== 'evolution' && (hire.status === 'working'
+    || (hire.status === 'idle' && (hire.currentTask ?? '') !== '' && hire.actorReference !== null
+      && resultOwed(reads.of(hire.actorReference)))));
 }
 
 // Awaiting-answer predicates are OMP's `todo-tracker.ts` verbatim, taking assistant text directly.

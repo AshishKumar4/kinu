@@ -6,7 +6,8 @@
 import { expect, test } from 'bun:test';
 import type { OwnerAnswer } from '@kinu.run/core';
 import { setDiagnosticsSink } from '@kinu.run/core/obs';
-import { createRecordingLogger } from '@kinu.run/test-utils';
+import { createRecordingLogger, present } from '@kinu.run/test-utils';
+import { wrapDatabase } from '@kinu.run/core/identity';
 import { actorConnectionTag } from '@kinu.run/core';
 import { asPane, joinHarnessFibers } from './helpers/agents-sdk';
 import { agentSql, agentWakes, catalogTurn, driveUntil, gatewayWorkspace, jobsOver, until, workspaceMainActor } from './helpers/actor-harness';
@@ -226,6 +227,108 @@ test('an agent waiting on its hire is not reminded until the report lands, then 
   await workspace.agent.send('Also export the ledger.', crypto.randomUUID(), []);
   await driveUntil(workspace, 'the moved list was never reminded', () => reminders(asked) > 1);
   expect(reminders(asked)).toBe(2);
+});
+
+const BUILD_JOB = 'bgjob-release-build';
+
+/**
+ * Main adds a task and hires an agent for it; the hire starts a job of its own on the assignment (a row its runner would
+ * write) and ends its turn saying so. Woken by the job's end, it answers. Main's requests, and the hire's, kept.
+ */
+function hireWithJobWorkspace(lifetime: 'durable' | 'task') {
+  const asked: string[] = [];
+  const hireStarted = Promise.withResolvers<void>();
+  const jobStarted = Promise.withResolvers<void>();
+
+  const gateway = stubAiBinding(async (run) => {
+    const { messages } = requestOf(run);
+    const sent = JSON.stringify(messages);
+    const results = messages.filter((message) => message.role === 'tool').length;
+
+    if (openingOf(run).includes('Build the release.')) {
+      hireStarted.resolve();
+      await jobStarted.promise;
+
+      return chatCompletion(run, 'Started the release build; I will report when it finishes.');
+    }
+
+    // The hire, woken by its job's end.
+    if (openingOf(run).includes(BUILD_JOB)) return chatCompletion(run, 'The release build stopped before it finished.');
+
+    asked.push(sent);
+
+    if (!openingOf(run).includes('Ship the release')) return chatCompletion(run, 'Noted.');
+
+    if (results === 0) return toolCallCompletion(run, { tool: 'tasks', args: { op: 'add', titles: ['Ship the release'] } }, 'add_0');
+
+    if (results === 1) return toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime, message: 'Build the release.' } }, 'hire_0');
+
+    return chatCompletion(run, 'Waiting on the build.');
+  });
+
+  const workspace = gatewayWorkspace(gateway);
+  const main = workspaceMainActor(workspace.db).actorId;
+
+  return {
+    asked, workspace,
+    /** The owner asks; the hire starts its job and ends its turn; every turn that owed main something has run. */
+    hireRunsItsJob: async () => {
+      await workspace.agent.send('Ship the release.', crypto.randomUUID(), []);
+      await hireStarted.promise;
+
+      const [hire] = wrapDatabase(workspace.db).sql<{ actorId: string; name: string }>`
+        SELECT actor_id AS actorId, name FROM workspace_actors WHERE parent_actor_id = ${main}`;
+
+      const hired = present(hire, 'the hired agent');
+
+      jobsOver(workspace.db, hired.actorId).create({ id: BUILD_JOB, kind: 'shell', workMode: 'build', label: 'bun run build:release', now: Date.now() });
+      jobStarted.resolve();
+      await until(() => agentSql(workspace, hired.actorId)<{ x: number }>`SELECT 1 AS x FROM run_events WHERE type = 'run_end'`.length > 0, "the hire's turn never ended");
+      await workspace.agent.terminalRetryPass();
+      await joinHarnessFibers();
+
+      return hired;
+    },
+  };
+}
+
+// The owner, 2026-10-24: "what about if the agent has a subagent that has a background job and isn't technically
+// waiting on it, and thus isn't working but still the main agent shouldnt be reminded right?" A hire that ended its turn
+// on a job of its own is still working for its hirer: its answer comes when the job ends.
+test("an agent whose hire ended its turn on a job of its own is not reminded until that work ends", async () => {
+  const { asked, workspace, hireRunsItsJob } = hireWithJobWorkspace('durable');
+  const hired = await hireRunsItsJob();
+
+  // The hire's turn-end words reached main, which ended its own turn on them: no reminder while the job runs.
+  expect(asked.some((sent) => sent.includes('Started the release build'))).toBe(true);
+  expect(reminders(asked)).toBe(0);
+
+  // The job ends (the owner's cancel); the hire, woken, says so; then the open task is reminded, once.
+  expect(await workspace.agent.cancelBackgroundJob(BUILD_JOB, hired.name)).toEqual({ ok: true });
+  await driveUntil(workspace, 'the open task was never reminded after the hire answered', () => reminders(asked) > 0);
+  await workspace.agent.terminalRetryPass();
+
+  expect({
+    answeredFirst: asked.findIndex((sent) => sent.includes('stopped before it finished')) < asked.findIndex((sent) => reminders([sent]) > 0),
+    reminders: reminders(asked),
+  }).toEqual({ answeredFirst: true, reminders: 1 });
+});
+
+// A task hire's reply is its one answer: one sent while a job of its own runs on the question was its last word on it,
+// and the job's result never reached the agent that asked.
+test("a task hire's words while a job of its own runs are not its answer; its answer comes when the job ends", async () => {
+  const { asked, workspace, hireRunsItsJob } = hireWithJobWorkspace('task');
+  const hired = await hireRunsItsJob();
+
+  expect({ interim: asked.some((sent) => sent.includes('Started the release build')), reminders: reminders(asked) })
+    .toEqual({ interim: false, reminders: 0 });
+
+  expect(await workspace.agent.cancelBackgroundJob(BUILD_JOB, hired.name)).toEqual({ ok: true });
+  await driveUntil(workspace, "the hire's answer never reached main", () => asked.some((sent) => sent.includes('stopped before it finished')));
+  await driveUntil(workspace, 'the open task was never reminded after the answer', () => reminders(asked) > 0);
+
+  expect({ interim: asked.some((sent) => sent.includes('Started the release build')), reminders: reminders(asked) })
+    .toEqual({ interim: false, reminders: 1 });
 });
 
 // A process started to keep running owes the agent nothing: a preview server beside an open task, unrelated to it,

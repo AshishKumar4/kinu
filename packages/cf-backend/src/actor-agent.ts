@@ -100,6 +100,7 @@ import {
   pricedModelCallEvent,
   type FactsStore,
   createAgentStores, type AgentConfigStore, type SetModelDeps, collectDynamicContext, dynamicReads, type DynamicReads, subagentDelegatesOf,
+  owedReadsOf, type OwedReads, type SubagentRosterEntry,
   agentArtifactDirectory, agentHome, MAIN_AGENT,
   type SessionTranscript,
   type SqlExecutor,
@@ -3768,7 +3769,11 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Each agent's dynamic-block reads and its delegates, held across its turns' preparation, binding, tool answers and
    *  open work ({@link held}). One per agent, whichever store bundle asks first: a hold names its tables, not its store. */
-  private readonly heldDynamic = new Map<string, { readonly reads: DynamicReads; readonly delegates: () => readonly DynamicDelegate[] }>();
+  private readonly heldDynamic = new Map<string, {
+    readonly reads: DynamicReads;
+    readonly hires: () => readonly SubagentRosterEntry[];
+    readonly delegates: () => readonly DynamicDelegate[];
+  }>();
 
   private heldDynamicOf(reference: ActorReference) {
     const known = this.heldDynamic.get(reference.actorId);
@@ -3776,16 +3781,27 @@ export abstract class ActorAgent extends Agent<Env> {
     if (known !== undefined) return known;
     // Over its store binding, which outlives its seat: a seat released between turns would revoke what it held.
     const { handle, stores } = this.actorHost().bindStores(reference);
+    // Every SubagentRosterStore writes over `watchedExec`, the directory's origins over `sql`.
+    const hires = this.held.hold(['actor_subagents', 'workspace_actors'], () => new SubagentRosterStore(this.watchedExec, handle).list());
 
     const held = {
       reads: dynamicReads(stores, this.boundSql, handle, this.held),
-      // Every SubagentRosterStore writes over `watchedExec`, the directory's origins over `sql`.
-      delegates: this.held.hold(['actor_subagents', 'workspace_actors'], () => subagentDelegatesOf(new SubagentRosterStore(this.watchedExec, handle).list())),
+      hires,
+      delegates: this.held.hold(['actor_subagents', 'workspace_actors'], () => subagentDelegatesOf(hires())),
     };
 
     this.heldDynamic.set(reference.actorId, held);
 
     return held;
+  }
+
+  /** What an agent is owed, over its held reads and each hire's in turn: what `resultOwed` reads. */
+  protected owedReadsOf(reference: ActorReference): OwedReads {
+    return owedReadsOf((agent) => {
+      const held = this.heldDynamicOf(agent);
+
+      return { jobs: { countAwaited: held.reads.awaitedJobs }, roster: { list: held.hires } };
+    }, reference);
   }
 
   protected dynamicReadsOf(reference: ActorReference): DynamicReads {

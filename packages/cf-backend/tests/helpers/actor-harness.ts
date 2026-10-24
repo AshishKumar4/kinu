@@ -938,9 +938,9 @@ export async function wakeForDelegatedTask(
   await workspace.agent.observeHirerRuntime(actorId).assign(workspace.agent.agentOf(actorId).name, { body: task, mode: 'build' });
 }
 
-/** Core's background-job journal over the object's stored rows. */
-export function jobsOver(db: Database): BackgroundJobStore {
-  return new BackgroundJobStore(wrapDatabase(db).sql, workspaceMainActor(db));
+/** Core's background-job journal over the object's stored rows: main's, or the agent `actorId`'s. */
+export function jobsOver(db: Database, actorId?: string): BackgroundJobStore {
+  return new BackgroundJobStore(wrapDatabase(db).sql, actorId === undefined ? workspaceMainActor(db) : actorOver(db, actorId));
 }
 
 /** The owner's words through the public send, resolved once the turn they open has run, as the CLI's send resolves:

@@ -1758,8 +1758,8 @@ export {
 export { withTaskPlan, bindTaskPlan, type TaskPlan, type TaskPlanContext } from './tools/task-plan-scope';
 
 export {
-  taskReminderOf, resultOwed, TASK_REMINDER_EVENT,
-  taskReminderIdempotencyKey,
+  taskReminderOf, resultOwed, owedReadsOf, TASK_REMINDER_EVENT,
+  taskReminderIdempotencyKey, type OwedReads,
 } from './tasks/reminder';
 
 export { cardWords, TASK_REMINDER_OPEN_KEY } from './read-models/event-summary';

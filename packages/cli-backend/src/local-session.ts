@@ -59,6 +59,7 @@ import { ActorSession, type ActorTurnLease,
   inheritedContextFromTranscript,
   ModelCatalogSession, resolveEffectiveModelSpec,
   TerminalTransitions, initTerminalEffectTable, chatTurnParts, declareTerminalRoster, missionOf, SleepTimeLane, initSleepTimeTables, resultOwed,
+  owedReadsOf, type OwedReads, SubagentRosterStore,
   toolsBehindBoundary, type ToolBoundary, assembleActorTurn, driveSeatedRun, preparedHeadRun, withCompactionTrigger, conversationKey, vfsTurnSkills, actorTurnSources, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources, type RunTurnSources,
   branchesTerminalEffect, chatTerminalEffects, actorTerminalEffects,
   type OwedReport, type SubagentReportStatus, type TurnReportFacts,
@@ -553,7 +554,7 @@ export class LocalAgentSession {
         openWork: async () => ({
           tasks: this.taskList.listOpen(),
           state: this.taskList.openState(),
-          resultOwed: resultOwed((await this.teamDeps?.list() ?? []).map((hire) => hire.status), this.jobs.countAwaited()),
+          resultOwed: resultOwed(this.owed()),
         }),
         terminal: () => this.terminal,
         driverGate: () => this.driverGate?.() ?? null,
@@ -625,6 +626,16 @@ export class LocalAgentSession {
     this.chat.measureSessionStart({ restored: this.chat.restoreWorkingHistory(), measure: !this.oneShot });
     this.ensureModelState();
     this.rearmLocalAlarm();
+  }
+
+  /** What this agent is owed, and each of its hires in turn, over the tree's database: what `resultOwed` reads. */
+  owed(): OwedReads {
+    return owedReadsOf((agent) => {
+      const { handle, stores } = agent.actorId === this.rt.actor.actorId
+        ? { handle: this.rt.actor, stores: this.stores } : this.actorHost.bindStores(agent);
+
+      return { jobs: stores.jobs, roster: new SubagentRosterStore(makeSqlExec(this.db), handle) };
+    }, actorReferenceOf(this.rt.actor));
   }
 
   toolNames(): string[] {

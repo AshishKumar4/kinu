@@ -9,6 +9,7 @@ import { settle } from '../obs/effect';
 import { KinuError, renderCauseChain, toKinuError, type ErrorCode } from '../obs/error';
 import type { SubagentRosterStore } from './roster';
 import type { SubagentRuntime } from './support';
+import { resultOwed, type OwedReads } from '../tasks/reminder';
 import { admitSubagentBirth, type SubagentBirthRequest } from './birth';
 import { codenameFor } from '../identity/naming';
 import type { ActorReference } from '../identity/actor-handle';
@@ -27,14 +28,14 @@ export const SUBAGENT_LIFETIMES = ['durable', 'task'] as const;
 
 export type SubagentLifetime = (typeof SUBAGENT_LIFETIMES)[number];
 
-/** Later while a hire works, input is queued, or a settled hire's report waits unread. An evolution subagent an earlier
- *  build hired answers the runtime, never this turn, so it holds nothing. */
+/** Later while a result is on its way to it (a job of its own, a hire's work: {@link resultOwed}), input is queued, or
+ *  a settled hire's report waits unread. */
 export function taskAnswerIsLater(input: {
-  readonly roster: SubagentRosterStore;
+  readonly owed: OwedReads;
   readonly log: EventLog;
   readonly turnTaskId?: string;
 }): boolean {
-  return input.roster.list().some((hire) => hire.status === 'working' && hire.origin !== 'evolution')
+  return resultOwed(input.owed)
     || input.log.pending({ variant: 'subagent_task' }).some((row) => row.id !== input.turnTaskId)
     // Delivered to it and not yet answered by a turn of its own: its answer is that turn's.
     || input.log.openAssignments().some((id) => id !== input.turnTaskId)

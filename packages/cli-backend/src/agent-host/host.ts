@@ -1040,7 +1040,7 @@ export class LocalAgentHost {
 
         return await hireTurnSettled({
           hirer: { roster: parent.roster, announce: () => { parent.tree.liveReads.moved(ROSTER_READS); } },
-          hire: { record: child.actor.record, roster: child.roster, log: child.eventLog },
+          hire: { record: child.actor.record, owed: child.session.owed(), log: child.eventLog },
           // With no relay state the roster still moves, and nothing is owed.
           turn: { reports: child.relay ?? { spoke: false, settled: true }, ownerDriven: turn.ownerDriven, taskId: turn.taskId }, ended: turn,
         });

@@ -29,6 +29,7 @@ import {
   type ReportDeps,
   type SubagentIngressDeps,
   hireTurnSettled,
+  type OwedReads,
   type SerializedMessage,
   type SqlExec,
   type SubagentDelivery,
@@ -996,15 +997,16 @@ describe('the owner talking to a subagent does not wake its parent', () => {
     return {
       roster,
       async turnEnds(input: { ownerDriven: boolean; assistantText: string; reportedThisTurn?: boolean }) {
-        // A durable hire's answered turn, as either backend ends one; the hire itself has hired no one.
+        // A durable hire's answered turn, as either backend ends one; the hire itself has hired no one and runs no job.
         const hire = makeWorld();
         initEventsHubTables(hire.sql);
         const own = new SubagentRosterStore(hire.sql, hire.actor);
         own.ensureSchema();
+        const idle: OwedReads = { awaitedJobs: () => 0, hires: () => own.list(), of: () => idle };
 
         const owed = await hireTurnSettled({
           hirer: { roster, announce: () => {} },
-          hire: { record: { name: 'researcher', lifetime: 'durable' }, roster: own, log: new EventLog(hire.sql, hire.actor) },
+          hire: { record: { name: 'researcher', lifetime: 'durable' }, owed: idle, log: new EventLog(hire.sql, hire.actor) },
           turn: { reports: { spoke: input.reportedThisTurn ?? false, settled: false }, ownerDriven: input.ownerDriven, taskId: null },
           ended: { ending: 'answered', assistantText: input.assistantText, narration: [] },
         });

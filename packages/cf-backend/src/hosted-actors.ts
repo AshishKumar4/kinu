@@ -3,7 +3,7 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 
 import { actorPolicy, hireLifecycle, type HireLifecyclePorts, type SeatedHire, publishSubagentReport, type OwedAdmission, type ConversationRecall, type HeadReport, type SubagentReportLedger, type CodemodeBuilder, type SeatedActor, type ServedStores, type TierId } from '@kinu.run/core';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
-import { EventLog, titleActorFromMessage, spawnSeatedHead, receiveSubagentEvent, subagentForkContext, type SubagentInheritedContext, inheritedAsModelMessage, explorationActorKey, reclaimSettledRunActors, actorReferenceOf, registeredParent, terminalTaskReport, hireTurnSettled, defaultLoopOrigin, type ActorHost, type ActorReference, type BoundActor, type HeadId, type HeadInput, type RunInference, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubagentEventResult, type SubagentReportOrigin, type SubagentReportHandoff, type SubagentReportStatus, type SubagentRosterStore, type SubagentRuntime, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
+import { EventLog, titleActorFromMessage, spawnSeatedHead, receiveSubagentEvent, subagentForkContext, type SubagentInheritedContext, inheritedAsModelMessage, explorationActorKey, reclaimSettledRunActors, actorReferenceOf, registeredParent, terminalTaskReport, hireTurnSettled, defaultLoopOrigin, type OwedReads, type ActorHost, type ActorReference, type BoundActor, type HeadId, type HeadInput, type RunInference, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubagentEventResult, type SubagentReportOrigin, type SubagentReportHandoff, type SubagentReportStatus, type SubagentRosterStore, type SubagentRuntime, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
 import { attempt, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import type {
   AgentToolDescriptor, ArtifactOverrides, DiscoverOpts, DynamicReads, ExecutionKey, ExecutionLane, FrozenAuthority, HeadCapture, HeadSeat, JsonObject, OperationProfile, OwedReport, PreparedAgentTurn,
@@ -117,6 +117,8 @@ export interface HostedActorSeams {
   transaction<Result>(body: () => Result): Result;
   /** Scoped to the actor, so a subagent manages only its own subtree. */
   roster(actor: BoundActor): SubagentRosterStore;
+  /** What an agent is owed, and each of its hires in turn: whether its answer is a later turn's. */
+  owed(reference: ActorReference): OwedReads;
   conversations(reference: ActorReference): ConversationRecall;
   vfs(): VFS;
   /** The same profile authority actor chat uses, so role restrictions narrow a hire identically. */
@@ -410,7 +412,7 @@ export function hostedOwedReport(
 
     return yield* Effect.promise(() => hireTurnSettled({
       hirer: { roster: seams.roster(hirer), announce: () => { seams.announce(hirer); } },
-      hire: { record: actor.record, roster: seams.roster(actor), log: new EventLog(seams.exec, actor.handle) },
+      hire: { record: actor.record, owed: seams.owed(actor.reference), log: new EventLog(seams.exec, actor.handle) },
       turn, ended,
     }));
   }));

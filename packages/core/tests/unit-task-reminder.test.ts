@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { resultOwed, taskReminderOf } from '../src/tasks/reminder';
+import { resultOwed, taskReminderOf, type OwedReads } from '../src/tasks/reminder';
 import type { AgentTaskTree } from '../src/tools/task-store';
 import type { ActiveRoster } from '../src/types/dynamic-context';
 import { createTestRuntime, present } from '@kinu.run/test-utils';
@@ -64,10 +64,30 @@ test('a result owed to the agent holds the reminder, whatever is open', () => {
   expect(decideAt([tree({ title: 'x' })], { resultOwed: true })).toBeNull();
 });
 
-test("what is owed: a hire's open assignment or a job that ends on its own, not a hire waiting on the agent", () => {
-  expect(resultOwed(['working'], 0)).toBe(true);
-  expect(resultOwed([], 1)).toBe(true);
-  expect(resultOwed(['awaiting_input', 'idle'], 0)).toBe(false);
+/** An agent's reads: its own awaited jobs and hires, each hire with its own reads by actor id. */
+function owed(jobs: number, hires: readonly (readonly [OwedHire['status'], string | null, string, OwedReads?])[]): OwedReads {
+  const children = new Map(hires.map(([, , id, reads]) => [id, reads ?? owed(0, [])]));
+
+  return {
+    awaitedJobs: () => jobs,
+    hires: () => hires.map(([status, currentTask, id]) => ({ status, currentTask, origin: 'agent' as const, actorReference: { actorId: id, workspaceId: 'w', parentActorId: 'main' } })),
+    of: (hire) => children.get(hire.actorId) ?? owed(0, []),
+  };
+}
+
+type OwedHire = ReturnType<OwedReads['hires']>[number];
+
+test("what is owed: a job of its own, a hire mid-assignment, or a hire still owed a result on its own assignment", () => {
+  expect(resultOwed(owed(0, [['working', 'Tally the ledger.', 'a']]))).toBe(true);
+  expect(resultOwed(owed(1, []))).toBe(true);
+  // Waiting on the agent, or idle with nothing on its way: the agent's own move is next.
+  expect(resultOwed(owed(0, [['awaiting_input', 'Tally the ledger.', 'a'], ['idle', 'Tally the ledger.', 'b']]))).toBe(false);
+  // Its hire ended its turn with a job of its own running on the assignment: its report is on the way.
+  expect(resultOwed(owed(0, [['idle', 'Build the release.', 'a', owed(1, [])]]))).toBe(true);
+  // ...and as deep as the hiring goes.
+  expect(resultOwed(owed(0, [['idle', 'Build the release.', 'a', owed(0, [['idle', 'Run the suite.', 'b', owed(1, [])]])]]))).toBe(true);
+  // A hire with no assignment open (the owner's own chat with it) owes the agent nothing, whatever it runs.
+  expect(resultOwed(owed(0, [['idle', null, 'a', owed(1, [])]]))).toBe(false);
 });
 
 test('the awaiting-answer skip ports the OMP line-shape predicates', () => {

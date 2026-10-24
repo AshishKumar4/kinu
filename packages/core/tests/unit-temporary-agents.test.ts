@@ -6,7 +6,7 @@ import { Database } from 'bun:sqlite';
 import { asSchema, type ModelMessage } from 'ai';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { DELEGATION_MAX_DEPTH, delegationExhausted, SubagentRosterStore, TEMPORARY_LIFETIME, EventLog, TASK_TURN_ENDINGS, agentsActionsFor, initEventsHubTables, terminalTaskReport, createAgentsCodemodeProvider, createTeamToolDeps, createTemporaryAgentPort, taskAnswerIsLater, delegationDepthRefusal, receiveSubagentEvent, type SubagentEventResult, type SubagentReportHandoff, TOOL_REACH, type AgentsToolDeps, type AgentsProfileContext, type SubagentHandoff, type SubagentRuntime, type TemporaryAgentPort, type WorkMode, type AgentsOp, type CodemodeResult, callOperation, BUILTIN_PROFILE_CATALOG, profileCatalogDigest, DEFAULT_WORKERS_AI_MODEL_SPEC, recoverSubagentLifecycles, codemodeFunction, failedToolOutcome, successfulToolOutcome, withCodemodeProgram } from '../src/index';
+import { DELEGATION_MAX_DEPTH, delegationExhausted, SubagentRosterStore, TEMPORARY_LIFETIME, EventLog, TASK_TURN_ENDINGS, agentsActionsFor, initEventsHubTables, terminalTaskReport, createAgentsCodemodeProvider, createTeamToolDeps, createTemporaryAgentPort, taskAnswerIsLater, type OwedReads, delegationDepthRefusal, receiveSubagentEvent, type SubagentEventResult, type SubagentReportHandoff, TOOL_REACH, type AgentsToolDeps, type AgentsProfileContext, type SubagentHandoff, type SubagentRuntime, type TemporaryAgentPort, type WorkMode, type AgentsOp, type CodemodeResult, callOperation, BUILTIN_PROFILE_CATALOG, profileCatalogDigest, DEFAULT_WORKERS_AI_MODEL_SPEC, recoverSubagentLifecycles, codemodeFunction, failedToolOutcome, successfulToolOutcome, withCodemodeProgram } from '../src/index';
 import { createAgentsTool } from '../src/delegation/agents-operations';
 import { createMemoryVfs, seedFiles } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw, makeSqlExec } from './helpers';
@@ -406,20 +406,27 @@ describe('a task-lifetime hire returns at once and its answer arrives as a messa
     expect(scene.roster.list()).toEqual([]);
   });
 
+  /** What the scene's hirer is owed: its roster's hires, no jobs; a hire with nothing on its way. */
+  const hirerOwed = (roster: SubagentRosterStore): OwedReads => {
+    const idle: OwedReads = { awaitedJobs: () => 0, hires: () => [], of: () => idle };
+
+    return { awaitedJobs: () => 0, hires: () => roster.list(), of: () => idle };
+  };
+
   // Review P1 (integration/0963): the hire had settled and left the roster, but its answer was still unread on the
   // hirer's rail, and a task hirer answered from the turn it spent on something else.
   test('a task hirer\'s answer is a later turn\'s while a hire\'s report waits unread on its rail', async () => {
     const scene = makeScene();
     await startRun(scene, { role: 'auditor', message: 'Audit the ledger.' });
-    expect(taskAnswerIsLater({ roster: scene.roster, log: scene.log })).toBe(true);
+    expect(taskAnswerIsLater({ owed: hirerOwed(scene.roster), log: scene.log })).toBe(true);
 
     await scene.report({ content: 'Totals reconcile.' });
     expect(scene.roster.list()).toEqual([]);
-    expect(taskAnswerIsLater({ roster: scene.roster, log: scene.log })).toBe(true);
+    expect(taskAnswerIsLater({ owed: hirerOwed(scene.roster), log: scene.log })).toBe(true);
 
     // Read by the turn that takes it up: nothing is owed any more.
     for (const row of scene.log.pending({ variant: 'subagent_report' })) scene.log.markConsumed(row.id, 'turn-read', 0, NOW);
-    expect(taskAnswerIsLater({ roster: scene.roster, log: scene.log })).toBe(false);
+    expect(taskAnswerIsLater({ owed: hirerOwed(scene.roster), log: scene.log })).toBe(false);
   });
 
   // Review P1 (integration/0963): the durable-only guard was the waiter's, and it kept the owner from deleting one.

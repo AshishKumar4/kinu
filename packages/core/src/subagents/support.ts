@@ -27,6 +27,7 @@ import type {
 } from '../delegation/agents-tool';
 import { TEMPORARY_LIFETIME, taskAnswerIsLater, terminalTaskReport, type OwedReport, type SubagentLifetime, type TaskTurnEnding, type TemporaryAgentPort } from './temporary';
 import { KinuError, renderThrownChain } from '../obs/index';
+import type { OwedReads } from '../tasks/reminder';
 import type { SubagentInheritedContext } from '../types/subagents';
 import type { ModelMessage } from 'ai';
 import { inheritedContextFromHistory } from '../orchestrator/heads-support';
@@ -259,11 +260,11 @@ async function owedSubagentTurnReport(input: {
 
 /**
  * A hire's settled turn, as its hirer is told of it on either backend: the hirer's roster first (announced when it
- * moved), then the report the turn owes ({@link owedSubagentTurnReport}), read against the hire's own roster and log.
+ * moved), then the report the turn owes ({@link owedSubagentTurnReport}), read against what the hire is owed and its log.
  */
 export async function hireTurnSettled(input: {
   readonly hirer: { readonly roster: Pick<SubagentRosterStore, 'finishTurn'>; announce(): void };
-  readonly hire: { readonly record: Pick<WorkspaceActor, 'name' | 'lifetime'>; readonly roster: SubagentRosterStore; readonly log: EventLog };
+  readonly hire: { readonly record: Pick<WorkspaceActor, 'name' | 'lifetime'>; readonly owed: OwedReads; readonly log: EventLog };
   readonly turn: { readonly reports: { readonly spoke: boolean; readonly settled: boolean }; readonly ownerDriven: boolean; readonly taskId: string | null };
   readonly ended: { readonly ending: TaskTurnEnding; readonly assistantText: string; readonly narration: readonly string[] };
 }): Promise<OwedReport | null> {
@@ -272,7 +273,7 @@ export async function hireTurnSettled(input: {
   return await owedSubagentTurnReport({
     lifetime: input.hire.record.lifetime, ending: input.ended.ending, assistantText: input.ended.assistantText,
     narration: async () => input.ended.narration, reports: input.turn.reports, ownerDriven: input.turn.ownerDriven,
-    delegating: taskAnswerIsLater({ roster: input.hire.roster, log: input.hire.log, ...(input.turn.taskId !== null && { turnTaskId: input.turn.taskId }) }),
+    delegating: taskAnswerIsLater({ owed: input.hire.owed, log: input.hire.log, ...(input.turn.taskId !== null && { turnTaskId: input.turn.taskId }) }),
   });
 }
 

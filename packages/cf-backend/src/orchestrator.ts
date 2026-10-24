@@ -1540,6 +1540,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       infer: (reference, input, inference) => this.agentTurns.run(reference, input, inference),
       transaction: (body) => this.ctx.storage.transactionSync(body),
       roster: (actor) => new SubagentRosterStore(this.watchedExec, actor.handle),
+      owed: (reference) => this.owedReadsOf(reference),
       conversations: (reference) => this.agentStores(reference.actorId).conversations(),
       vfs: () => this.rt.storage.vfs,
       // The hire's own role, not the root's: a delegated turn's prompt and advertised tool
@@ -3197,7 +3198,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return {
       tasks: reads.openTasks(),
       state: reads.openTaskState(),
-      resultOwed: resultOwed(this.delegatesOf(reference).map((hire) => hire.phase), reads.awaitedJobs()),
+      resultOwed: resultOwed(this.owedReadsOf(reference)),
     };
   }
 
