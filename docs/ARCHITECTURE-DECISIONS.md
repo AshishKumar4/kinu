@@ -2111,9 +2111,9 @@ holds the token, the web asks it to sign in (`chatgptSignIn` returns the URL
 for a browser on that machine), and each `api.openai.com` call rides the
 existing device relay (`relayModelCall`, the Codex relay generalized to a
 provider), with the daemon attaching its own token and rotating it on a 401.
-With no machine connected, the entry offers the Codex device code as before
-(`codex.ts`, `codex-oauth.ts`, the relay and the egress container), which
-stays until OpenAI approves hosted use. The CLI's Codex device-code login is
+With no machine connected, the entry offers signing in here and pasting back
+the address the sign-in lands on (`codex.ts`, `codex-oauth.ts`, the relay and
+the egress container), which stays until OpenAI approves hosted use. The CLI's Codex device-code login is
 deleted: SIWC serves every CLI use it had. The web kept it for that one case
 until 2e701da3a (2026-10-05) replaced it with signing in here and pasting back
 the landing address; its routes and flow table went on 2026-10-13.
