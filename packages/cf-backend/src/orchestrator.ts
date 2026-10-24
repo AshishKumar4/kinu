@@ -175,11 +175,11 @@ import {
   SleepTimeLane, initSleepTimeTables,
   // Core owns the ingress gates; this actor owns the transports in front of them
   // (DO alarm, Worker webhook + email routes, cross-DO RPC).
-  acceptWebhookDelivery, registerDurableWebhook, createWebhookSecretStore,
+  acceptWebhookDelivery, registerDurableWebhook, createWebhookSecretStore, forgetClaims,
   acceptContainerEvent, type ContainerEventResult,
   initWebhookIngressTables,
   type WebhookDelivery, type WebhookDeliveryResult, type WebhookSecretStore,
-  createTimerTrigger, cancelTrigger, listTriggers, fireDueTriggers, retimeDailyTrigger, type TrustLevel,
+  createTimerTrigger, cancelTrigger, gitHubPushOf, listTriggers, fireDueTriggers, retimeDailyTrigger, type TrustLevel,
   WatchClaims, watchProviders, checkAnswerOf, type WatchOutcome, type WatchCheck,
   type TriggerView,
   type MailAdmission, type MailArrival, type HandedMail, handedMailSignal, spillEventContent, unreadMailForTurn, MailTriageLane, triageMail,
@@ -276,6 +276,7 @@ import type { RestoreStatus, SessionRecord, StartAdmission, TerminalSession } fr
 import type { BoxSize } from "@kinu.run/devbox/sizes";
 import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY, type ComputerSizeState } from "./computer-size";
 import { readOutgoing } from "./mail/parse";
+import { createPushWatcher, deletePushHook, parkPushWatchers, resumePushWatchers, type PushWatcherHost } from "./github-push-watchers";
 import type { ComputerSize } from "@kinu.run/core";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { forgetSandboxPreviews, sandboxPreviewExposures } from "@kinu.run/core";
@@ -3540,8 +3541,26 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       armCompactNow: async () => { await this.mainCall((isolate, snapshot) => isolate.armCompaction(snapshot)); },
       createWorkspace: (input) => createAgentWorkspace(this.agentWorkspaceDeps(), input),
       ownerWaits: this.ownerWaitsOf(this.actorHandle().actorId, true),
+      createPushWatcher: (opts) => createPushWatcher(this.pushWatcherHost(), opts),
     });
   }
+
+  /** Push watchers' part of the workspace: its triggers and secrets, and the owner's account that makes their hooks. */
+  private pushWatcherHost(): PushWatcherHost {
+    return {
+      registry: this.triggerRegistry, secrets: this.webhookSecrets, workspace: this.name,
+      routeSecret: webhookRouteSecret(this.env), origin: this.env.CLI_PUBLIC_ORIGIN,
+      account: {
+        hookCreate: async (ask) => await this.requireOwnerUserDO().githubHookCreate(await this.userCaller(), { ...ask, events: [...ask.events] }),
+        hookDelete: async (repo, hookId) => { await this.requireOwnerUserDO().githubHookDelete(await this.userCaller(), repo, hookId); },
+      },
+      revoke: async (triggerId) => { await this.cancelTrigger(triggerId, 'owner'); },
+      forgetClaims: (triggerId) => { forgetClaims(this.ctx.storage.sql, triggerId); },
+    };
+  }
+
+  /** The resume running now: a second notice while it runs waits on it rather than making hooks twice. */
+  private pushResume: Promise<number> | null = null;
 
   /**
    * Whether an agent may hold an armed wait on its owner (read-models/owner-waits.ts): unknown (null) at start, so the
@@ -4213,6 +4232,19 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** The owner changed this workspace's secrets (`user/secrets.ts`): its commands read them again. Never `@callable`. */
   async secretsMoved(): Promise<void> {
     this.account.secretsMoved();
+  }
+
+  /** GitHub was disconnected from the owner's account: this workspace's push watchers park on it. Never `@callable`. */
+  async githubPushGone(): Promise<number> {
+    return parkPushWatchers(this.pushWatcherHost(), Date.now());
+  }
+
+  /** GitHub was connected again: push watchers parked on it check again, each with a new hook. How many are still
+   *  parked on it, which the account asks again about. Never `@callable`. */
+  async githubPushBack(): Promise<number> {
+    this.pushResume ??= resumePushWatchers(this.pushWatcherHost(), Date.now()).finally(() => { this.pushResume = null; });
+
+    return await this.pushResume;
   }
 
   /** By the agent a workspace process acted for, where its egress named one; a container's names nobody. Never `@callable`. */
@@ -7456,7 +7488,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Revoke a trigger and delete its plaintext secret in the same host call.
    * `caller` has no default: operator route and model's `agent.cancelSchedule` differ in authority. */
   async cancelTrigger(trigger_id: string, caller: TrustLevel) {
-    return cancelTrigger({ registry: this.triggerRegistry, trigger_id, now: Date.now(), caller, secrets: this.webhookSecrets });
+    const trigger = this.triggerRegistry.get(trigger_id);
+    const push = trigger === null ? null : gitHubPushOf(trigger);
+    const cancelled = await cancelTrigger({ registry: this.triggerRegistry, trigger_id, now: Date.now(), caller, secrets: this.webhookSecrets });
+
+    // What its secret signed is forgotten with it; a push watcher's hook goes too, so GitHub stops delivering where
+    // nothing listens.
+    if (cancelled.changed) forgetClaims(this.ctx.storage.sql, trigger_id);
+
+    if (push !== null && cancelled.changed) await deletePushHook(this.pushWatcherHost(), push);
+
+    return cancelled;
   }
 
   async createTimerTrigger(opts: Parameters<typeof createTimerTrigger>[1]): Promise<{

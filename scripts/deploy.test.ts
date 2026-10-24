@@ -43,16 +43,15 @@ function armadaBuild(environment: string, ...options: string[]): string {
   return ["bun scripts/release-build.ts", environment, "testsha", ...options].join(" ");
 }
 
-/** The build starts beside the upload gates, and the source phase once they pass, so where their events fall among the
- *  others is a race: the events without them, whether the build started after the preflight, and whether the source
- *  phase ran after the upload gates. */
+/** The build and the source phase start beside the upload gates, so where their events fall among the others is a
+ *  race: the events without them, whether the build started after the preflight, and whether the source phase ran. */
 function besideTheBuild(events: readonly string[], build: string) {
   const source = phaseRun("source");
 
   return {
     events: events.filter((event) => event !== build && event !== source),
     started: events.indexOf(build) > events.indexOf(phaseRun("preflight")),
-    source: events.indexOf(source) > events.indexOf(phaseRun("upload")),
+    source: events.indexOf(source) > events.indexOf(phaseRun("preflight")),
   };
 }
 
@@ -116,6 +115,22 @@ fi
 if [[ "$1" == */scripts/reset.ts ]] && [ "$2" = "stamps" ] && [ "$KINU_STAMPS_MOVED" = "1" ]; then
   echo 'account'
   exit 3
+fi
+# KINU_OVERLAP: the upload gates wait for the source phase to start, and the source phase for the telemetry read, each
+# saying so when it never comes, so a deploy that runs them one after another names it.
+await_mark() {
+  for _ in $(seq 1 200); do [ -e "$KINU_DEPLOY_ROOT/$1" ] && return 0; sleep 0.1; done
+  printf '%s\n' "$2" >> "$KINU_DEPLOY_GATE_LOG"
+}
+if [ "$KINU_OVERLAP" = "1" ] && [ "$1" = "scripts/ladder.ts" ] && [ "$2" = "--deploy-phase=upload" ]; then
+  await_mark source-started 'the upload gates ended before the source phase started'
+fi
+if [ "$KINU_OVERLAP" = "1" ] && [ "$1" = "scripts/ladder.ts" ] && [ "$2" = "--deploy-phase=source" ]; then
+  touch "$KINU_DEPLOY_ROOT/source-started"
+  await_mark telemetry-started 'the source phase ended before the telemetry read started'
+fi
+if [ "$KINU_OVERLAP" = "1" ] && [[ "$1" == */scripts/prod-logs.ts ]] && [ "$2" = "version" ]; then
+  touch "$KINU_DEPLOY_ROOT/telemetry-started"
 fi
 if [[ "$1" == */scripts/prod-logs.ts ]] && [ "$2" = "version" ] && [ "$KINU_TELEMETRY_RED" = "1" ]; then
   echo 'kinu-staging version 9b1f: object a woke 3 time(s) with nothing to watch'
@@ -238,6 +253,8 @@ interface DeployRun {
   readonly retires?: boolean;
   /** The telemetry read of the published version ends red (prod-logs.ts version). */
   readonly telemetryRed?: boolean;
+  /** The upload gates wait for the source phase, and it for the telemetry read (KINU_OVERLAP in the stub). */
+  readonly overlap?: boolean;
   /** The reset the environment is still in: its placeholder serves and its build never uploaded. */
   readonly pendingReset?: string;
   /** A KINU_RESET_RECORD already on the environment, which must never soften a deploy nobody asked to reset. */
@@ -398,6 +415,7 @@ async function runDeploy({
   stampsMoved = false,
   retires = false,
   telemetryRed = false,
+  overlap = false,
   pendingReset = "none",
   ambientRecord = "",
   account,
@@ -514,6 +532,7 @@ exit 87
       KINU_STAMPS_MOVED: flag(stampsMoved),
       KINU_RETIRES: flag(retires),
       KINU_TELEMETRY_RED: flag(telemetryRed),
+      KINU_OVERLAP: flag(overlap),
       XDG_RUNTIME_DIR: fixture,
     }),
   });
@@ -571,6 +590,18 @@ describe("deploy gate", () => {
 
     expect({ status: run.status, events: run.events, ci: run.ci, said: run.stdout.includes(said), refused: run.stdout.includes('armada has no green verdict for testsha') })
       .toEqual({ status: 1, events: [phaseRun('preflight')], ci: ['bun scripts/ladder.ts --ci-verdict=testsha'], said: true, refused: true });
+  });
+
+  // m1929a, the deploy's wall (staging 8f6ccf7fb, 2026-10-23): the source phase waited 52 s on the upload gates, and the
+  // telemetry read's settle 370 s past the wave. The source phase starts beside the build; the telemetry read starts
+  // once the traffic ends, beside the wave's last rows.
+  test('the source phase runs beside the upload gates, and the telemetry read beside the source phase', async () => {
+    const run = await runDeploy({ uploadRuns: [{ says: 'success', status: 0 }], overlap: true });
+
+    expect({
+      unmet: run.events.filter((event) => event.endsWith('before the source phase started') || event.endsWith('before the telemetry read started')),
+      read: run.events.some((event) => event.startsWith('bun scripts/prod-logs.ts version')),
+    }).toEqual({ unmet: [], read: true });
   });
 
   // Ledger 1019-am: once every refusal before the upload passed, the deploy mints the tokens its deployment needs; a

@@ -488,8 +488,8 @@ reported_red() {
 }
 # The build started beside the upload gates (see THE BUILD below), cancelled when the deploy ends before it is awaited.
 KINU_BUILD_PID=""
-# The source phase, started once the upload gates pass (see THE SOURCE PHASE below), cancelled when the deploy ends
-# before it is joined.
+# The source phase, started beside the build (see THE SOURCE PHASE below), cancelled when the deploy ends before it is
+# joined.
 KINU_SOURCE_PID=""
 cancel_source() {
   [ -n "$KINU_SOURCE_PID" ] || return 0
@@ -508,6 +508,32 @@ join_source() {
   cat "$KINU_DEPLOY_REPORT/logs/source.log"
   phase_ended source "$status"
 }
+# The telemetry read of the published version (Step 5b), started once the traffic ends, beside the wave's last rows,
+# and joined before the record; cancelled when the deploy ends before it is joined.
+KINU_TELEMETRY_PID=""
+start_telemetry() {
+  [ "$KINU_ENV" = "staging" ] && [ "${DEPLOY_PUBLISHED:-0}" = "1" ] && [ -n "$KINU_VERSION" ] || return 0
+  KINU_TRAFFIC_ENDED="$(report when traffic)" || KINU_TRAFFIC_ENDED=""
+  setsid -w bun "$KINU_ROOT/scripts/prod-logs.ts" version "$KINU_VERSION" --worker "$KINU_WORKER" --since "$KINU_LIVE_AT" \
+    ${KINU_TRAFFIC_ENDED:+--until "$KINU_TRAFFIC_ENDED"} --keep-windows "$KINU_ENV" >"$KINU_DEPLOY_REPORT/logs/telemetry.log" 2>&1 </dev/null &
+  KINU_TELEMETRY_PID=$!
+}
+cancel_telemetry() {
+  [ -n "$KINU_TELEMETRY_PID" ] || return 0
+  kill -TERM -- "-$KINU_TELEMETRY_PID" 2>/dev/null || kill -TERM "$KINU_TELEMETRY_PID" 2>/dev/null
+  wait "$KINU_TELEMETRY_PID" 2>/dev/null
+  KINU_TELEMETRY_PID=""
+}
+# join_telemetry: the read's output, and a notice when it found something; it holds nothing.
+join_telemetry() {
+  local status
+  [ -n "$KINU_TELEMETRY_PID" ] || return 0
+  wait "$KINU_TELEMETRY_PID"
+  status=$?
+  KINU_TELEMETRY_PID=""
+  cat "$KINU_DEPLOY_REPORT/logs/telemetry.log"
+  [ "$status" = "0" ] || report notice telemetry "the telemetry read" "scripts/prod-logs.ts found something; each finding is a notice here, and none holds the deploy"
+}
 cancel_build() {
   [ -n "$KINU_BUILD_PID" ] || return 0
   kill -TERM -- "-$KINU_BUILD_PID" 2>/dev/null || kill -TERM "$KINU_BUILD_PID" 2>/dev/null
@@ -518,6 +544,7 @@ cancel_build() {
 finish() {
   cancel_build
   cancel_source
+  cancel_telemetry
   mark end
   # The verdict is the report's: a deploy red here names a red there, the budget's included once the end is marked, or
   # the report says that no step named one.
@@ -649,6 +676,15 @@ if [ "$KINU_GATES_ONLY" != "1" ]; then
   setsid -w bun "$KINU_ROOT/scripts/release-build.ts" "${KINU_BUILD_ARGS[@]}" >"$KINU_BUILD_LOG" 2>&1 </dev/null &
   KINU_BUILD_PID=$!
 fi
+# THE SOURCE PHASE, started beside the build and joined at the wave: no row of it reads the deployment (ladder.ts
+# `readsDeployment`), so it waits out neither the upload gates nor the build and the publish. Its longest row, the
+# devbox contracts (635-692 s), sets every staging deploy's wave: begun after the upload gates it ended at 726 s,
+# their 52 s included (m1929a, staging 8f6ccf7fb, 2026-10-23). A red upload gate cancels it (finish). A promotion runs
+# no source phase, and `--gates-only` runs it after the upload gates, below.
+if [ "$KINU_PROMOTE" != "1" ] && [ "$KINU_GATES_ONLY" != "1" ]; then
+  setsid -w bun scripts/ladder.ts --deploy-phase=source >"$KINU_DEPLOY_REPORT/logs/source.log" 2>&1 </dev/null &
+  KINU_SOURCE_PID=$!
+fi
 # THE ONLY GATES THAT HOLD THE UPLOAD, and the only phase besides the preflight
 # whose red ends the deploy: the account gate, which proves the ACCOUNT is
 # deployable for the environment and in the phase KINU_INFRA_ENVIRONMENT and
@@ -678,15 +714,6 @@ if [ "$KINU_GATES_ONLY" = "1" ]; then
   mark source
   echo "Gates only: stopping before the build, as asked."
   finish
-fi
-
-# THE SOURCE PHASE, started here and joined at the wave: no row of it reads the deployment (ladder.ts
-# `readsDeployment`), so it need not wait out the build and the publish. Its longest row, the devbox contracts
-# (635-692 s), set every staging deploy's wave, and it waited about 85 s past the build for the publish to end
-# (m1929a, staging 8769744f6, c423b5989, 613467d1a and 887cd238e, 2026-10-23). A promotion runs no source phase.
-if [ "$KINU_PROMOTE" != "1" ]; then
-  setsid -w bun scripts/ladder.ts --deploy-phase=source >"$KINU_DEPLOY_REPORT/logs/source.log" 2>&1 </dev/null &
-  KINU_SOURCE_PID=$!
 fi
 
 # ── Steps 2 to 4: build, upload, and prove the deployment serves it ──
@@ -1332,6 +1359,7 @@ else
   else
     skip_phase post-publish "$KINU_TIERS_WHY"
   fi
+  start_telemetry
   join_source
   mark wave
 fi
@@ -1379,22 +1407,19 @@ fi
 # often as the product calls a wake loop, an alarm with nothing to watch. Each
 # is a notice of this deploy, in the report under `telemetry`, and holds
 # nothing (the owner, 2026-10-23: "Monitors don't block"); so is telemetry it
-# cannot read, and telemetry whose reads still disagree after an hour. Its window ends when the wave's last row that
-# drove the deployment did (the ladder's `traffic` mark), not at its verdict:
-# 99.96% of a window's rows have landed three minutes after its end
-# (`SETTLE_HOLD_MS`), so the first read then that agrees with the one before it
-# settles it. The rest are read by later deploys: this one keeps its window in
-# the releases bucket and reads again every window earlier deploys kept, so a
-# row that landed late is a red of this report, named for its version
+# cannot read. Its window ends when the wave's last row that drove the deployment
+# did (the ladder's `traffic` mark), and it is read once, then, beside the wave's
+# last rows (start_telemetry): a monitor that holds nothing waits for no settle.
+# It settled on reads 2 min apart, 370 s past the wave of staging 8f6ccf7fb
+# (2026-10-23). What lands later is read by later deploys: this one keeps its
+# window in the releases bucket and reads again every window earlier deploys
+# kept, so a row that landed late is named for its version in a later report
 # (scripts/telemetry-windows.ts). With no row that drove the deployment, the
-# window ends now.
-if [ "$KINU_ENV" = "staging" ] && [ "${DEPLOY_PUBLISHED:-0}" = "1" ] && [ -n "$KINU_VERSION" ]; then
+# window ends at the post-publish phase's end.
+if [ -n "$KINU_TELEMETRY_PID" ]; then
   echo ""
   echo -e "${BOLD}Step 5b: What version $KINU_VERSION did on staging${NC}"
-  KINU_TRAFFIC_ENDED="$(report when traffic)" || KINU_TRAFFIC_ENDED=""
-  bun "$KINU_ROOT/scripts/prod-logs.ts" version "$KINU_VERSION" --worker "$KINU_WORKER" --since "$KINU_LIVE_AT" \
-    ${KINU_TRAFFIC_ENDED:+--until "$KINU_TRAFFIC_ENDED"} --keep-windows "$KINU_ENV" \
-    || report notice telemetry "the telemetry read" "scripts/prod-logs.ts found something; each finding is a notice here, and none holds the deploy"
+  join_telemetry
 fi
 
 # ── Step 6: The record, or the history and the evals ─────────────

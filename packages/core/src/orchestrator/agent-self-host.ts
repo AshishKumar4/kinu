@@ -25,6 +25,8 @@ export interface AgentSelfPorts {
   readonly createWorkspace?: AgentSelfHost['createWorkspace'];
   /** What waits on the owner, as the workspace's own agent reads it (read-models/owner-waits.ts `ownerWaitsHost`). */
   readonly ownerWaits: AgentSelfHost['ownerWaits'];
+  /** The cloud's push watchers, whose hooks GitHub delivers to; a local session has none. */
+  readonly createPushWatcher?: AgentSelfHost['createPushWatcher'];
 }
 
 export function agentSelfHost(ports: AgentSelfPorts): AgentSelfHost {
@@ -51,5 +53,9 @@ export function agentSelfHost(ports: AgentSelfPorts): AgentSelfHost {
     ownerWaits: ports.ownerWaits,
   };
 
-  return ports.createWorkspace === undefined ? host : { ...host, createWorkspace: ports.createWorkspace };
+  return {
+    ...host,
+    ...(ports.createWorkspace !== undefined && { createWorkspace: ports.createWorkspace }),
+    ...(ports.createPushWatcher !== undefined && { createPushWatcher: ports.createPushWatcher }),
+  };
 }

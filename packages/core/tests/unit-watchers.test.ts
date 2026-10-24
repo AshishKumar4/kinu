@@ -6,7 +6,7 @@ import { createTestActorsOver, present } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { TriggerRegistry, buildDrainBatch, initEventsHubTables, type AlarmScheduler } from '../src/events/hub/index';
 import {
-  EventLog, WatchClaims, checkAnswerOf, checkWatcher, createTimerTrigger, fireDueTriggers,
+  EventLog, WatchClaims, checkAnswerOf, checkWatcher, createTimerTrigger, fireDueTriggers, parkWatcher, resumeWatcher,
   type WatchOutcome, type JsonValue, type RunCheck,
 } from '../src/index';
 import { makeSqlExec } from './helpers';
@@ -33,7 +33,9 @@ function watchers(run: RunCheck) {
   return {
     registry, log, claims,
     fire: (now: number) => fireDueTriggers({ registry, log, watch: { run, claims } }, now),
-    check: (id: string, at: number, input?: JsonValue) => checkWatcher({ registry, log, run, claims }, id, { at, timer: false, ...(input !== undefined && { input }) }, () => NOW),
+    check: (id: string, at: number, input?: JsonValue, delivery?: string) => checkWatcher(
+      { registry, log, run, claims }, id, { at, timer: false, ...(input !== undefined && { input }), ...(delivery !== undefined && { delivery }) }, () => NOW,
+    ),
     fired: () => log.pending({ variant: 'timer' }).map((event) => v.parse(v.looseObject({ watch_brief: v.optional(v.string()) }), event.payload)),
     state: (id: string) => watchOf(present(registry.get(id), 'the watcher')),
   };
@@ -54,6 +56,22 @@ async function watcher(registry: TriggerRegistry) {
 
   return { id: created.id, at: present(created.nextFireAt, 'its first firing') };
 }
+
+describe('a watcher its source delivers to', () => {
+  test("a verified delivery fires once; another fires again, whatever id the sender gives it", async () => {
+    let n = 0;
+    const t = watchers(async () => answered({ fire: true, brief: 'A push to main.', state: { n: (n += 1) } }));
+    const { id } = await watcher(t.registry);
+
+    await t.check(id, NOW + 1, { event: 'push', delivery: 'd-1', payload: {} }, 'signed-1');
+    await t.check(id, NOW + 2, { event: 'push', delivery: 'd-1', payload: {} }, 'signed-1');
+    expect(t.fired()).toHaveLength(1);
+
+    // The id in its input is the sender's word: one naming a delivery that fired is a fire of its own.
+    await t.check(id, NOW + 3, { event: 'push', delivery: 'd-1', payload: {} }, 'signed-2');
+    expect(t.fired()).toHaveLength(2);
+  });
+});
 
 describe('a watcher', () => {
   test('a quiet check wakes nothing and keeps its cursor; one that found something fires with its brief', async () => {
@@ -203,4 +221,31 @@ describe('a watcher', () => {
     expect(checkAnswerOf({ fire: 'yes', brief: 'x' })).toBeNull();
     expect(checkAnswerOf({ fire: false, state: { historyId: '123' } })).toEqual({ fire: false, state: { historyId: '123' } });
   });
+});
+
+describe('a watcher its source stops and starts', () => {
+  test('parked on its cause it keeps its state, and resumes only on that cause', async () => {
+    const t = watchers(async () => answered({ fire: false, state: { cursor: 4 } }));
+    const { id, at } = await watcher(t.registry);
+
+    await t.check(id, at);
+    expect(parkWatcher(t.registry, id, { reason: 'connection', detail: 'GitHub was disconnected' }, NOW)).toBe(true);
+    expect(t.registry.get(id)?.state).toBe('paused');
+    expect(t.state(id)).toEqual({ state: { cursor: 4 }, parked: { reason: 'connection', at: NOW, detail: 'GitHub was disconnected' } });
+
+    expect(await resumeWatcher(t.registry, id, 'program', NOW)).toBe(false);
+    expect(await resumeWatcher(t.registry, id, 'connection', NOW + 1)).toBe(true);
+    expect(t.registry.get(id)?.state).toBe('active');
+    expect(t.state(id)).toEqual({ state: { cursor: 4 } });
+  });
+
+  test('one its owner paused is not resumed by its source', async () => {
+    const t = watchers(async () => answered({ fire: false }));
+    const { id } = await watcher(t.registry);
+
+    t.registry.pause(id, NOW);
+    expect(await resumeWatcher(t.registry, id, 'connection', NOW)).toBe(false);
+    expect(t.registry.get(id)?.state).toBe('paused');
+  });
+
 });

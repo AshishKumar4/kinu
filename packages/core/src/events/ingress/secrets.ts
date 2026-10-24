@@ -8,6 +8,8 @@ export interface WebhookSecretStore extends SecretStore {
   put(secretId: string, triggerId: string, secret: string): void;
   /** Revocation calls this in the same host call that closes the trigger. */
   deleteByTrigger(triggerId: string): void;
+  /** The trigger's secret replaced in place: what the old one signed no longer verifies. False where it holds none. */
+  replace(secretId: string, triggerId: string, secret: string): boolean;
 }
 
 const SecretRowSchema = v.object({ secret: v.string() });
@@ -44,6 +46,13 @@ export function createWebhookSecretStore(sql: SqlExec): WebhookSecretStore {
     },
     deleteByTrigger(triggerId) {
       sql.exec(`DELETE FROM webhook_secrets WHERE trigger_id = ?`, triggerId);
+    },
+    replace(secretId, triggerId, secret) {
+      const held = sql.exec(`SELECT 1 FROM webhook_secrets WHERE secret_id = ? AND trigger_id = ?`, secretId, triggerId).toArray().length > 0;
+
+      if (held) sql.exec(`UPDATE webhook_secrets SET secret = ? WHERE secret_id = ? AND trigger_id = ?`, secret, secretId, triggerId);
+
+      return held;
     },
   };
 }

@@ -83,7 +83,7 @@ import WorkspacePage from "@/pages/WorkspacePage";
 import { ConversationSkeleton, EmptyConversation, turnEndNotices } from "@/components/ChatColumn";
 import { useChatThread } from "@/hooks/use-chat-thread";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
-import { useTheme } from "@/hooks/use-theme";
+import { startTheme, useTheme } from "@/hooks/use-theme";
 import { WorkspaceRosterProvider, useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { CreateWebhookModal, NewWebhookCard } from "@/components/WorkspaceAutomations";
 import { AddServerCard } from "@/components/account/McpServersPanel";
@@ -8285,7 +8285,7 @@ async function mount() {
   const root = document.getElementById("root");
 
   if (root === null) throw new Error("gallery root is missing");
-
+  startTheme();
   createRoot(root).render(
     <StrictMode>
       <ErrorBoundary label="gallery">

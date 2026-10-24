@@ -18,10 +18,12 @@
   "movable packages/cf-backend/src/egress/model-relay-route.ts",
   "movable packages/cf-backend/src/egress/send-out.ts",
   "movable packages/cf-backend/src/gallery-deploy-fixture.ts",
+  "movable packages/cf-backend/src/github-push-watchers.ts",
   "movable packages/cf-backend/src/lib/part-bridge.ts",
   "movable packages/cf-backend/src/lib/sign-in.ts",
   "movable packages/cf-backend/src/slates/sources.ts",
   "movable packages/cf-backend/src/user/binding-completions.ts",
+  "movable packages/cf-backend/src/user/github-hooks.ts",
   "movable packages/cf-backend/src/user/mcp-oauth-storage.ts",
   "movable packages/cf-backend/src/user/workspace-fork.ts",
   "movable packages/cf-backend/src/viewer-pass.ts"

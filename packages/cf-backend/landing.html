@@ -8,16 +8,7 @@
     <title>Kinu · the self-evolving agent platform</title>
     <link rel="preload" href="/assets/fonts/inter-latin-opsz.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="/assets/fonts/fragmentmono-latin.woff2" as="font" type="font/woff2" crossorigin />
-    <script>
-      (() => {
-        const saved = localStorage.getItem('theme');
-        const mode = saved === 'light' || saved === 'dark'
-          ? saved
-          : matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-        document.documentElement.dataset.mode = mode;
-        document.documentElement.style.colorScheme = mode;
-      })();
-    </script>
+    <!-- The pre-paint mode script is core's MODE_BOOT, injected by vite-theme.ts. -->
   </head>
   <body>
     <div id="landing-root"></div>

@@ -1,5 +1,6 @@
 /** Authored-facing `kinu:slate` modules: `server.js` under `/usr/lib/kinu/slate/`, `client.js` at `/__kinu/slate.js`. */
 
+import { PREFERS_LIGHT } from '../utils/color-mode';
 import { SLATE_BRIDGE_ATTRIBUTE, SLATE_HOST_CONTEXT_MESSAGE, SLATE_QUERY_PARAM, SLATE_SIZE_CHANGED_MESSAGE } from './host-context';
 
 /** The prototype marker lets the runner verify the contract without importing this module twice. Client-only names throw on the server. */
@@ -39,7 +40,7 @@ import { createRoot } from "react-dom/client";
 import { newMessagePortRpcSession, newWebSocketRpcSession, RpcTarget } from "capnweb";
 
 function defaultTheme() {
-  return typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  return typeof matchMedia === "function" && matchMedia(${JSON.stringify(PREFERS_LIGHT)}).matches ? "light" : "dark";
 }
 
 const DEFAULT_CONTEXT = { theme: defaultTheme(), styles: { variables: {} }, containerDimensions: {}, display: "pane" };

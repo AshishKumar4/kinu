@@ -3,6 +3,7 @@
  * runner for an HTML page and a React client alike: zero-specificity defaults for the elements a page draws, and the
  * scheme its host asked for, set before the first paint. A page's own styles override any of it.
  */
+import { PREFERS_LIGHT } from '../utils/color-mode';
 import { SLATE_QUERY_PARAM } from './host-context';
 
 /**
@@ -34,4 +35,4 @@ export const SLATE_PAGE_STYLE = [
 /** Run as the head is parsed, so the first paint is already in the host's scheme: the module that follows applies the
  *  rest of the context. A page opened on its own takes the reader's scheme. */
 export const SLATE_SCHEME_SCRIPT = `(()=>{const r=document.documentElement;let t;try{t=JSON.parse(new URLSearchParams(location.search).get(${JSON.stringify(SLATE_QUERY_PARAM)})).theme}catch{}`
-  + 'if(t!=="dark"&&t!=="light")t=matchMedia("(prefers-color-scheme: light)").matches?"light":"dark";r.dataset.mode=t;r.style.colorScheme=t;})()';
+  + `if(t!=="dark"&&t!=="light")t=matchMedia(${JSON.stringify(PREFERS_LIGHT)}).matches?"light":"dark";r.dataset.mode=t;r.style.colorScheme=t;})()`;

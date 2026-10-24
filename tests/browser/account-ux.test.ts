@@ -1352,3 +1352,99 @@ describe('Settings → Memory', () => {
     });
   });
 });
+
+// The page's head and the theme store read one rule (core's `modeFor`), and the store draws what it holds as it opens.
+// When the system turned between the head's paint and the store's opening, the page stayed dark while the store held
+// light, so the toggle drew dark again while it offered the other face (the sweep, 2026-10-23).
+describe("the page's mode", () => {
+  const shownOn = async (page: Page): Promise<string | undefined> => page.evaluate(() => document.documentElement.dataset.mode);
+
+  // A media query's change is reported in the page's next rendering update, before that update's animation frames.
+  const systemTurns = async (page: Page, system: 'dark' | 'light'): Promise<string | undefined> => {
+    await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: system }]);
+    await page.evaluate(() => new Promise<void>((done) => { requestAnimationFrame(() => { done(); }); }));
+
+    return shownOn(page);
+  };
+
+  test('is the system\'s even when it turned while the page loaded, follows it both ways, and toggles to the face it does not show', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      const shown = async (): Promise<string | undefined> => shownOn(page);
+
+      // The toggle sets the mode in its own press, so the page is read straight after it.
+      const toggled = async (): Promise<string | undefined> => {
+        if (await page.$('aside [data-mode-toggle]') === null) await page.click('aside [data-account-menu]');
+        await page.waitForSelector('aside [data-mode-toggle]');
+        await page.click('aside [data-mode-toggle]');
+
+        return shown();
+      };
+
+      // Every script is held until the system has turned: the head paints dark, and no module runs before the turn.
+      const held: HTTPRequest[] = [];
+      let turned = false;
+
+      await page.setRequestInterception(true);
+      page.on('request', (request) => {
+        if (!turned && request.resourceType() === 'script') {
+          held.push(request);
+
+          return;
+        }
+
+        detach(Effect.promise(() => request.continue()));
+      });
+
+      try {
+        await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'dark' }]);
+        const loading = page.goto(`${origin}/gallery.html?frame=shell`, { waitUntil: 'networkidle0' });
+
+        await page.waitForFunction(() => document.documentElement.dataset.mode === 'dark');
+        await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'light' }]);
+        turned = true;
+
+        for (const request of held.splice(0)) await request.continue();
+        await loading;
+        await page.waitForSelector('aside [data-account-menu]');
+        const loaded = await shown();
+
+        expect({ loaded, chosen: await toggled() }).toEqual({ loaded: 'light', chosen: 'dark' });
+
+        // The reader's choice forgotten, the page follows the system again, each way it turns.
+        await page.evaluate(() => { localStorage.clear(); });
+        const followed = [await systemTurns(page, 'dark'), await systemTurns(page, 'light'), await systemTurns(page, 'dark')];
+
+        expect({ followed, last: await toggled() }).toEqual({ followed: ['dark', 'light', 'dark'], last: 'light' });
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  // A part's frame wears the scheme its slate names (`?scheme=`), whatever the system does. It runs inside the slate's
+  // page, where its storage can refuse to be read, and draws all the same (review of the one rule, 2026-10-23).
+  test("in a part's frame is the slate's while the system turns, and draws where storage is refused", async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      try {
+        await page.evaluateOnNewDocument(() => {
+          Object.defineProperty(window, 'localStorage', { get: () => { throw new DOMException('storage is off', 'SecurityError'); } });
+        });
+        // The system turns away from the mode the page opened in and back, more than once: each turn the page reports is
+        // one the slate's scheme must outlast.
+        await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'light' }]);
+        await page.goto(`${origin}/gallery.html?frame=part-frame&part=standup&scheme=dark`, { waitUntil: 'networkidle0' });
+        await page.waitForSelector('[data-part-outside]');
+        const worn = [await shownOn(page)];
+
+        for (const system of ['dark', 'light', 'dark', 'light'] as const) worn.push(await systemTurns(page, system));
+
+        expect(worn).toEqual(['dark', 'dark', 'dark', 'dark', 'dark']);
+      } finally {
+        await page.close();
+      }
+    });
+  });
+});

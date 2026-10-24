@@ -9,7 +9,7 @@ import { stripVTControlCharacters } from 'node:util';
 import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 import { copyPinnedTools, uploadPinnedTools } from './devbox-tools';
-import { requireEqual, tierIdentity } from './fixtures/devbox-e2e/oracle';
+import { joinedFailure, requireEqual, tierIdentity } from './fixtures/devbox-e2e/oracle';
 import { completeTeardown } from './fixtures/devbox-e2e/teardown';
 import { CONTRACT_TEARDOWN_BUCKET, ContractTeardownSchema, contractLedger, contractOwner, contractOwnerEnded, recoverAbandoned } from './fixtures/devbox-e2e/ledger';
 import { dropLease, fixtureNames, takeLease } from './fixtures/devbox-e2e/fixture';
@@ -77,9 +77,8 @@ async function contractsRun({ ask, step, productContracts }: {
   };
 
   const ended = await Promise.allSettled([process.argv.includes('--disk') ? Promise.resolve() : productContracts(), diskContracts()]);
-  const failed = ended.find((outcome) => outcome.status === 'rejected');
 
-  if (failed !== undefined) throw failed.reason;
+  if (ended.some((outcome) => outcome.status === 'rejected')) throw joinedFailure(ended, (reason) => reason instanceof PlatformStall);
 }
 
 /**
@@ -1070,236 +1069,257 @@ print('exact' if json.load(open('${BOX_CHROMIUM_POLICY}'))['CACertificates'] == 
   /** The container's contracts, the desktop through the product routes, and the product's own chain. */
   const productContracts = async () => {
     /**
-     * A session comes back from the box's stop as it was (D97): its screen, a rule that it restarted, and the line it
-     * was running offered at the prompt, which runs only on the person's Enter, once. CRIU cannot run here (no kcmp,
-     * no ns_last_pid on this kernel, measured), so no process survives; the line is the person's to run again.
+     * Each box's contracts in order, the boxes' at once, all to their end before a failure is reported, as the disk
+     * chain's beside these: one after another they took 229 s of staging 8f6ccf7fb's 652 s devbox row, the longest box's
+     * 62 s (m1929a, 2026-10-23).
      */
-    await step('resurrect', async () => {
-      const name = names[7] ?? '';
-      // What the line's whole run leaves: the marker its `$()` touched, then one count.
-      const files = () => shell(`test -e ${RESURRECT_MARKER} && echo marker; cat ${RESURRECT_COUNT} 2>/dev/null | wc -l`, name);
-      const ranOnce = async () => (await files()) === 'marker\n1';
-      // Only the screen saved before the stop can show this on the new socket.
-      const seen = `kinu-screen-${crypto.randomUUID().slice(0, 8)}`;
-      const before = await openSession(name);
+    const onRevived = async () => {
+      /**
+       * A session comes back from the box's stop as it was (D97): its screen, a rule that it restarted, and the line it
+       * was running offered at the prompt, which runs only on the person's Enter, once. CRIU cannot run here (no kcmp,
+       * no ns_last_pid on this kernel, measured), so no process survives; the line is the person's to run again.
+       */
+      await step('resurrect', async () => {
+        const name = names[7] ?? '';
+        // What the line's whole run leaves: the marker its `$()` touched, then one count.
+        const files = () => shell(`test -e ${RESURRECT_MARKER} && echo marker; cat ${RESURRECT_COUNT} 2>/dev/null | wc -l`, name);
+        const ranOnce = async () => (await files()) === 'marker\n1';
+        // Only the screen saved before the stop can show this on the new socket.
+        const seen = `kinu-screen-${crypto.randomUUID().slice(0, 8)}`;
+        const before = await openSession(name);
 
-      await waitFor(() => /[#$]\s*$/u.test(before.screen()), "the shell's prompt");
-      before.type(`echo ${seen}\r`);
-      await waitFor(() => before.screen().includes(seen), 'the screen to show what the stop must keep');
-      before.type(`${RESURRECT_LINE}\r`);
-      await waitFor(ranOnce, 'the typed line to run once');
-      await shell(`rm -f ${RESURRECT_MARKER} ${RESURRECT_COUNT}`, name);
-      before.close();
-      requireEqual((await call('/stop', Commit, undefined, name)).kind, 'committed');
+        await waitFor(() => /[#$]\s*$/u.test(before.screen()), "the shell's prompt");
+        before.type(`echo ${seen}\r`);
+        await waitFor(() => before.screen().includes(seen), 'the screen to show what the stop must keep');
+        before.type(`${RESURRECT_LINE}\r`);
+        await waitFor(ranOnce, 'the typed line to run once');
+        await shell(`rm -f ${RESURRECT_MARKER} ${RESURRECT_COUNT}`, name);
+        before.close();
+        requireEqual((await call('/stop', Commit, undefined, name)).kind, 'committed');
 
-      const after = await openSession(name);
+        const after = await openSession(name);
 
-      // The saved screen, then the restart's rule, and under it the line twice: as what was running, and at the prompt.
-      const offered = () => {
-        const shown = after.screen();
-        const rule = shown.indexOf('restarted');
+        // The saved screen, then the restart's rule, and under it the line twice: as what was running, and at the prompt.
+        const offered = () => {
+          const shown = after.screen();
+          const rule = shown.indexOf('restarted');
 
-        return rule > shown.indexOf(seen) && shown.includes(seen) && shown.slice(rule).split(`echo "it's`).length > 2;
-      };
+          return rule > shown.indexOf(seen) && shown.includes(seen) && shown.slice(rule).split(`echo "it's`).length > 2;
+        };
 
-      await waitFor(offered, 'the saved screen, the rule, and the line at the prompt');
-      await delay(RESURRECT_SETTLE_MS);
-      const waiting = await files();
+        await waitFor(offered, 'the saved screen, the rule, and the line at the prompt');
+        await delay(RESURRECT_SETTLE_MS);
+        const waiting = await files();
 
-      if (waiting !== '0') throw new Error(`before Enter the box held ${JSON.stringify(waiting)}: the offered line ran on its own`);
-      after.type('\r');
-      await waitFor(ranOnce, 'the line to run on Enter');
-      await delay(RESURRECT_SETTLE_MS);
-      const ran = await files();
-      after.close();
+        if (waiting !== '0') throw new Error(`before Enter the box held ${JSON.stringify(waiting)}: the offered line ran on its own`);
+        after.type('\r');
+        await waitFor(ranOnce, 'the line to run on Enter');
+        await delay(RESURRECT_SETTLE_MS);
+        const ran = await files();
+        after.close();
 
-      if (ran !== 'marker\n1') throw new Error(`after one Enter the box held ${JSON.stringify(ran)}, not the line's one run`);
+        if (ran !== 'marker\n1') throw new Error(`after one Enter the box held ${JSON.stringify(ran)}, not the line's one run`);
 
-      return { beforeEnter: waiting, afterEnter: ran, screen: after.screen().slice(-400) };
-    });
+        return { beforeEnter: waiting, afterEnter: ran, screen: after.screen().slice(-400) };
+      });
+    };
 
-    /**
-     * The box answers to the name its class gives it, as one DNS label, and that name resolves at once to the box's own
-     * addresses (D96). The platform's 64-character name broke `python3 -m http.server` on every computer (staging
-     * 7591e6fec), and a renamed kernel with nothing to answer for it waited on DNS for an address that is not the box.
-     */
-    await step('box-name', async () => {
-      const named = new Map((await shell(BOX_NAME_READ)).split('\n').map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]));
-      const [lookupMs, ...looked] = (named.get('lookup') ?? '').split(' ');
-      const own = (named.get('own') ?? '').split(' ').filter((address) => address !== '');
+    const onNamed = async () => {
+      /**
+       * An agent's job runs in a terminal session of its own (D95): stopped at a prompt, the job reads "waiting for input"
+       * with its last line, its session reads needs input, an answer typed into the session reaches it, and its log has
+       * what it wrote. Stopping it takes its session.
+       */
+      await step('agent-job', async () => {
+        const Row = v.looseObject({ processId: v.string(), status: v.string(), waiting: v.optional(v.string()), session: v.optional(v.string()) });
+        const Session = v.looseObject({ id: v.string(), name: v.string(), needsInput: v.boolean(), job: v.optional(v.string()) });
+        const { processId } = await call('/job-start', v.object({ processId: v.string() }), { command: JOB_PROMPT }, names[1]);
+        const rowOf = async () => (await call('/job-list', v.array(Row), {}, names[1])).find((row) => row.processId === processId);
+        let row = await rowOf();
 
-      process.stdout.write(`[${run}] box name ${JSON.stringify(Object.fromEntries(named))}\n`);
+        for (let asked = 0; row?.status !== 'waiting for input' && asked < JOB_READS; asked++) { await delay(JOB_READ_MS); row = await rowOf(); }
 
-      if (named.get('kernel') !== BOX_NAME) throw new Error(`the box answers to ${named.get('kernel') ?? 'nothing'}, not ${BOX_NAME}`);
+        if (row?.status !== 'waiting for input' || row.waiting?.trim() !== 'Your name?' || row.session === undefined) {
+          throw new Error(`a job at its prompt read ${JSON.stringify(row)}, not waiting for input at "Your name?"`);
+        }
 
-      if (named.get('prompt')?.includes(`@${BOX_NAME}`) !== true) throw new Error(`a shell's prompt reads ${named.get('prompt') ?? 'nothing'}, not ${BOX_NAME}`);
+        const session = row.session;
+        const listed = (await call('/sessions', v.array(Session), {}, names[1])).find((candidate) => candidate.id === session);
 
-      if (Number(lookupMs) > NAME_LOOKUP_MS || own.length === 0) {
-        throw new Error(`its own name resolved in ${lookupMs ?? '?'} ms to ${looked.join(' ')}, not at once to an address of the box itself`);
+        if (listed?.needsInput !== true || listed.job !== processId) throw new Error(`its session read ${JSON.stringify(listed)}, not the job's, needing input`);
+
+        await shell(`tmux send-keys -t '=${session}:' Ada Enter`, names[1]);
+
+        for (let asked = 0; row?.status !== 'completed' && asked < JOB_READS; asked++) { await delay(JOB_READ_MS); row = await rowOf(); }
+
+        if (row?.status !== 'completed') throw new Error(`the answered job read ${JSON.stringify(row)}, not completed`);
+        const log = await shell(`cat /var/tmp/devbox/processes/${processId}/stdout.log`, names[1]);
+
+        if (!log.includes('hi Ada')) throw new Error(`the job's log holds ${JSON.stringify(log.slice(-300))}, not its answer`);
+        await call(`/job-stop?id=${processId}`, v.object({ stopped: v.boolean() }), {}, names[1]);
+        const after = await call('/sessions', v.array(Session), {}, names[1]);
+
+        if (after.some((candidate) => candidate.id === session)) throw new Error('a stopped job left its session listed');
+
+        return { processId, session, waiting: listed.needsInput, log: log.slice(-120) };
+      });
+
+      /**
+       * A person's terminal session reads as it is on a real box (D90): open, its folder, the port its server listens
+       * on. Staging 7591e6fec read every session closed: tmux printed the read's tab separators as `_`.
+       */
+      await step('terminal-sessions', async () => {
+        const Session = v.looseObject({ id: v.string(), open: v.boolean(), cwd: v.string(), ports: v.array(v.number()) });
+
+        await shell(`tmux new-session -d -s shell -c /workspace && tmux send-keys -t '=shell:' -l ${`'${SESSION_SERVER.replaceAll("'", String.raw`'\''`)}'`} && tmux send-keys -t '=shell:' Enter`, names[1]);
+        let shell$ = (await call('/sessions', v.array(Session), {}, names[1])).find((session) => session.id === 'shell');
+
+        for (let asked = 0; !(shell$?.cwd === SESSION_FOLDER && shell$.ports.includes(SESSION_PORT)) && asked < SESSION_READS; asked++) {
+          await delay(SESSION_READ_MS);
+          shell$ = (await call('/sessions', v.array(Session), {}, names[1])).find((session) => session.id === 'shell');
+        }
+
+        const read = shell$?.open === true && shell$.cwd === SESSION_FOLDER && shell$.ports.includes(SESSION_PORT);
+
+        // On a miss, what the box holds: the pane's screen, its processes, and the read's own rows.
+        const seen = read ? '' : await shell(
+          `tmux capture-pane -p -t '=shell:' | grep -v '^$' | tail -5; tmux list-panes -a -F '#{pane_pid} #{pane_current_command}'; ps -eo pid,ppid,pgid,comm | tail -12; true`,
+          names[1],
+        );
+
+        await shell("tmux kill-session -t '=shell' 2>/dev/null; true", names[1]);
+
+        if (!read) throw new Error(`a session running a server in ${SESSION_FOLDER} on :${String(SESSION_PORT)} read ${JSON.stringify(shell$)}; the box: ${seen}`);
+
+        return shell$;
+      });
+
+      await step('file-metadata', async () => {
+        const measured = await call('/file-contract', Json, {}, names[1]);
+        process.stdout.write(`[${run}] file metadata ${JSON.stringify(measured)}\n`);
+
+        return measured;
+      });
+
+      for (const kind of CONTAINER_CONTRACTS) await step(kind, () => call(`/contract?kind=${kind}`, Json, {}, names[1]));
+    };
+
+    const onParked = async () => {
+      /**
+       * A start that fails the same way every time is refused once and arms nothing (D94): staging 7e411119d's box named
+       * itself into the read-only /etc/hostname, an uncoded failure, and re-armed its startup every second, 1,873 alarms
+       * in 30 minutes with no caller. The fixture's `-parked` box fails every start that way, on the platform's container.
+       */
+      await step('parked-start', async () => {
+        const parked = names[6] ?? '';
+        const url = new URL('/exec', origin);
+        url.searchParams.set('box', parked);
+        const asked = await fixtureFetch(url, { method: 'POST', headers: { authorization: `Bearer ${identity}`, 'content-type': 'application/json' }, body: JSON.stringify({ command: 'true' }) });
+        const said = JSON.stringify(await asked.json());
+        await delay(PARKED_WATCH_MS);
+        const armed = await call('/armed', v.record(v.string(), v.number()), undefined, parked);
+        const state = await call('/state', v.looseObject({ incidents: v.looseObject({ total: v.number() }) }), undefined, parked);
+        const seen = { status: asked.status, said: said.slice(-400), startupArms: armed['devboxStartup'] ?? 0, incidents: state.incidents.total, watchedMs: PARKED_WATCH_MS };
+
+        process.stdout.write(`[${run}] parked start ${JSON.stringify(seen)}\n`);
+
+        if (asked.ok || !said.includes('nothing retries it')) throw new Error(`the parked box was not refused: ${JSON.stringify(seen)}`);
+
+        if (seen.startupArms > 1 || seen.incidents !== 1) throw new Error(`a start refused the same way kept asking: ${JSON.stringify(seen)}`);
+
+        return seen;
+      });
+    };
+
+    // `--headless`: everything but the desktop's client, which drives a browser on this host. The desktops' contracts
+    // run one after another: beside the browser of the client's, the agent's typed text drew past its 30 s (armada,
+    // 2026-10-24).
+    const onDesktop = async () => {
+      if (!process.argv.includes('--headless')) {
+        await desktopClient();
+        await browserTrust();
       }
 
-      if (named.get('fqdn') !== BOX_NAME) throw new Error(`getfqdn answered ${named.get('fqdn') ?? 'nothing'}`);
+      await desktopAgent();
+    };
 
-      if (named.get('http')?.startsWith('200') !== true) throw new Error(`python3 -m http.server answered ${named.get('http') ?? 'nothing'}`);
+    const onOwn = async () => {
+      /**
+       * The box answers to the name its class gives it, as one DNS label, and that name resolves at once to the box's own
+       * addresses (D96). The platform's 64-character name broke `python3 -m http.server` on every computer (staging
+       * 7591e6fec), and a renamed kernel with nothing to answer for it waited on DNS for an address that is not the box.
+       */
+      await step('box-name', async () => {
+        const named = new Map((await shell(BOX_NAME_READ)).split('\n').map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]));
+        const [lookupMs, ...looked] = (named.get('lookup') ?? '').split(' ');
+        const own = (named.get('own') ?? '').split(' ').filter((address) => address !== '');
 
-      return Object.fromEntries(named);
-    });
+        process.stdout.write(`[${run}] box name ${JSON.stringify(Object.fromEntries(named))}\n`);
 
-    /**
-     * An agent's job runs in a terminal session of its own (D95): stopped at a prompt, the job reads "waiting for input"
-     * with its last line, its session reads needs input, an answer typed into the session reaches it, and its log has
-     * what it wrote. Stopping it takes its session.
-     */
-    await step('agent-job', async () => {
-      const Row = v.looseObject({ processId: v.string(), status: v.string(), waiting: v.optional(v.string()), session: v.optional(v.string()) });
-      const Session = v.looseObject({ id: v.string(), name: v.string(), needsInput: v.boolean(), job: v.optional(v.string()) });
-      const { processId } = await call('/job-start', v.object({ processId: v.string() }), { command: JOB_PROMPT }, names[1]);
-      const rowOf = async () => (await call('/job-list', v.array(Row), {}, names[1])).find((row) => row.processId === processId);
-      let row = await rowOf();
+        if (named.get('kernel') !== BOX_NAME) throw new Error(`the box answers to ${named.get('kernel') ?? 'nothing'}, not ${BOX_NAME}`);
 
-      for (let asked = 0; row?.status !== 'waiting for input' && asked < JOB_READS; asked++) { await delay(JOB_READ_MS); row = await rowOf(); }
+        if (named.get('prompt')?.includes(`@${BOX_NAME}`) !== true) throw new Error(`a shell's prompt reads ${named.get('prompt') ?? 'nothing'}, not ${BOX_NAME}`);
 
-      if (row?.status !== 'waiting for input' || row.waiting?.trim() !== 'Your name?' || row.session === undefined) {
-        throw new Error(`a job at its prompt read ${JSON.stringify(row)}, not waiting for input at "Your name?"`);
-      }
+        if (Number(lookupMs) > NAME_LOOKUP_MS || own.length === 0) {
+          throw new Error(`its own name resolved in ${lookupMs ?? '?'} ms to ${looked.join(' ')}, not at once to an address of the box itself`);
+        }
 
-      const session = row.session;
-      const listed = (await call('/sessions', v.array(Session), {}, names[1])).find((candidate) => candidate.id === session);
+        if (named.get('fqdn') !== BOX_NAME) throw new Error(`getfqdn answered ${named.get('fqdn') ?? 'nothing'}`);
 
-      if (listed?.needsInput !== true || listed.job !== processId) throw new Error(`its session read ${JSON.stringify(listed)}, not the job's, needing input`);
+        if (named.get('http')?.startsWith('200') !== true) throw new Error(`python3 -m http.server answered ${named.get('http') ?? 'nothing'}`);
 
-      await shell(`tmux send-keys -t '=${session}:' Ada Enter`, names[1]);
+        return Object.fromEntries(named);
+      });
 
-      for (let asked = 0; row?.status !== 'completed' && asked < JOB_READS; asked++) { await delay(JOB_READ_MS); row = await rowOf(); }
+      await step('disk-chain', async () => {
+        await shell('set -e; cd /workspace; mkdir -p private gone/sub src empty node_modules/pkg; chmod 700 private; '
+          + 'echo secret >private/key; echo gone >gone/sub/f; echo old >src/f; ln -s src/f link; '
+          + 'head -c 8388608 /dev/urandom >db.bin; echo excluded >node_modules/pkg/f; echo noise >build.log; touch -d 2020-01-01 src/f');
+        requireEqual((await call('/checkpoint?kind=tick', Commit, {})).kind, 'committed');
+        const base = (await call('/state', State)).chain?.base.key;
 
-      if (row?.status !== 'completed') throw new Error(`the answered job read ${JSON.stringify(row)}, not completed`);
-      const log = await shell(`cat /var/tmp/devbox/processes/${processId}/stdout.log`, names[1]);
+        for (const command of [
+          "python3 -c \"import os; f=os.open('/workspace/db.bin',os.O_WRONLY); os.pwrite(f,b'A'*4096,100000); os.close(f)\"; echo first >>/workspace/src/f; rm -rf /workspace/gone",
+          'truncate -s 9437184 /workspace/db.bin; echo new >/workspace/new; rm /workspace/link; ln -s private /workspace/link',
+          "python3 -c \"import os; f=os.open('/workspace/db.bin',os.O_WRONLY); os.pwrite(f,b'B'*20,100100); os.close(f)\"; truncate -s 6291456 /workspace/db.bin",
+        ]) {
+          await shell(command);
+          await delay(2_000);
+          const saved = await call('/checkpoint?kind=tick', Commit, {});
+          requireEqual(saved.kind, 'committed');
 
-      if (!log.includes('hi Ada')) throw new Error(`the job's log holds ${JSON.stringify(log.slice(-300))}, not its answer`);
-      await call(`/job-stop?id=${processId}`, v.object({ stopped: v.boolean() }), {}, names[1]);
-      const after = await call('/sessions', v.array(Session), {}, names[1]);
+          if ((saved.movedBytes ?? Infinity) >= 256 * 1024) throw new Error('an in-place edit sent the whole file');
+          requireEqual((await call('/state', State)).chain?.base.key, base);
+        }
 
-      if (after.some((candidate) => candidate.id === session)) throw new Error('a stopped job left its session listed');
+        const digest = "cd /workspace; find . -xdev \\( -name node_modules -o -name '*.log' \\) -prune -o ! -path . -printf '%P %y %m %l\\n' | LC_ALL=C sort; "
+          + "find . -xdev \\( -name node_modules -o -name '*.log' \\) -prune -o -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum";
 
-      return { processId, session, waiting: listed.needsInput, log: log.slice(-120) };
-    });
-
-    /**
-     * A person's terminal session reads as it is on a real box (D90): open, its folder, the port its server listens
-     * on. Staging 7591e6fec read every session closed: tmux printed the read's tab separators as `_`.
-     */
-    await step('terminal-sessions', async () => {
-      const Session = v.looseObject({ id: v.string(), open: v.boolean(), cwd: v.string(), ports: v.array(v.number()) });
-
-      await shell(`tmux new-session -d -s shell -c /workspace && tmux send-keys -t '=shell:' -l ${`'${SESSION_SERVER.replaceAll("'", String.raw`'\''`)}'`} && tmux send-keys -t '=shell:' Enter`, names[1]);
-      let shell$ = (await call('/sessions', v.array(Session), {}, names[1])).find((session) => session.id === 'shell');
-
-      for (let asked = 0; !(shell$?.cwd === SESSION_FOLDER && shell$.ports.includes(SESSION_PORT)) && asked < SESSION_READS; asked++) {
-        await delay(SESSION_READ_MS);
-        shell$ = (await call('/sessions', v.array(Session), {}, names[1])).find((session) => session.id === 'shell');
-      }
-
-      const read = shell$?.open === true && shell$.cwd === SESSION_FOLDER && shell$.ports.includes(SESSION_PORT);
-
-      // On a miss, what the box holds: the pane's screen, its processes, and the read's own rows.
-      const seen = read ? '' : await shell(
-        `tmux capture-pane -p -t '=shell:' | grep -v '^$' | tail -5; tmux list-panes -a -F '#{pane_pid} #{pane_current_command}'; ps -eo pid,ppid,pgid,comm | tail -12; true`,
-        names[1],
-      );
-
-      await shell("tmux kill-session -t '=shell' 2>/dev/null; true", names[1]);
-
-      if (!read) throw new Error(`a session running a server in ${SESSION_FOLDER} on :${String(SESSION_PORT)} read ${JSON.stringify(shell$)}; the box: ${seen}`);
-
-      return shell$;
-    });
-
-    await step('file-metadata', async () => {
-      const measured = await call('/file-contract', Json, {}, names[1]);
-      process.stdout.write(`[${run}] file metadata ${JSON.stringify(measured)}\n`);
-
-      return measured;
-    });
-
-    for (const kind of CONTAINER_CONTRACTS) await step(kind, () => call(`/contract?kind=${kind}`, Json, {}, names[1]));
-
-    // `--headless`: everything but the desktop's client, which drives a browser on this host.
-    /**
-     * A start that fails the same way every time is refused once and arms nothing (D94): staging 7e411119d's box named
-     * itself into the read-only /etc/hostname, an uncoded failure, and re-armed its startup every second, 1,873 alarms
-     * in 30 minutes with no caller. The fixture's `-parked` box fails every start that way, on the platform's container.
-     */
-    await step('parked-start', async () => {
-      const parked = names[6] ?? '';
-      const url = new URL('/exec', origin);
-      url.searchParams.set('box', parked);
-      const asked = await fixtureFetch(url, { method: 'POST', headers: { authorization: `Bearer ${identity}`, 'content-type': 'application/json' }, body: JSON.stringify({ command: 'true' }) });
-      const said = JSON.stringify(await asked.json());
-      await delay(PARKED_WATCH_MS);
-      const armed = await call('/armed', v.record(v.string(), v.number()), undefined, parked);
-      const state = await call('/state', v.looseObject({ incidents: v.looseObject({ total: v.number() }) }), undefined, parked);
-      const seen = { status: asked.status, said: said.slice(-400), startupArms: armed['devboxStartup'] ?? 0, incidents: state.incidents.total, watchedMs: PARKED_WATCH_MS };
-
-      process.stdout.write(`[${run}] parked start ${JSON.stringify(seen)}\n`);
-
-      if (asked.ok || !said.includes('nothing retries it')) throw new Error(`the parked box was not refused: ${JSON.stringify(seen)}`);
-
-      if (seen.startupArms > 1 || seen.incidents !== 1) throw new Error(`a start refused the same way kept asking: ${JSON.stringify(seen)}`);
-
-      return seen;
-    });
-
-    if (!process.argv.includes('--headless')) {
-      await desktopClient();
-      await browserTrust();
-    }
-
-    await desktopAgent();
-
-    await step('disk-chain', async () => {
-      await shell('set -e; cd /workspace; mkdir -p private gone/sub src empty node_modules/pkg; chmod 700 private; '
-        + 'echo secret >private/key; echo gone >gone/sub/f; echo old >src/f; ln -s src/f link; '
-        + 'head -c 8388608 /dev/urandom >db.bin; echo excluded >node_modules/pkg/f; echo noise >build.log; touch -d 2020-01-01 src/f');
-      requireEqual((await call('/checkpoint?kind=tick', Commit, {})).kind, 'committed');
-      const base = (await call('/state', State)).chain?.base.key;
-
-      for (const command of [
-        "python3 -c \"import os; f=os.open('/workspace/db.bin',os.O_WRONLY); os.pwrite(f,b'A'*4096,100000); os.close(f)\"; echo first >>/workspace/src/f; rm -rf /workspace/gone",
-        'truncate -s 9437184 /workspace/db.bin; echo new >/workspace/new; rm /workspace/link; ln -s private /workspace/link',
-        "python3 -c \"import os; f=os.open('/workspace/db.bin',os.O_WRONLY); os.pwrite(f,b'B'*20,100100); os.close(f)\"; truncate -s 6291456 /workspace/db.bin",
-      ]) {
-        await shell(command);
+        const expected = await shell(digest);
+        requireEqual((await call('/stop', Commit, {})).kind, 'skipped');
+        await collectSnapshots(box);
+        requireEqual(await shell(digest), expected);
+        requireEqual(await shell('cat /workspace/node_modules/pkg/f'), 'excluded');
+        requireEqual((await call('/stop', Commit, {})).kind, 'skipped');
+        await collectSnapshots(box);
+        requireEqual((await call('/lose-snapshot', v.object({ ok: v.boolean() }), {})).ok, true);
+        requireEqual(await shell(digest), expected);
+        requireEqual(await shell('test ! -e /workspace/node_modules && test ! -e /workspace/build.log && echo excluded'), 'excluded');
+        await shell('echo recovered >>/workspace/src/f; rm /workspace/new; mkdir -p /workspace/later; echo later >/workspace/later/f');
         await delay(2_000);
-        const saved = await call('/checkpoint?kind=tick', Commit, {});
-        requireEqual(saved.kind, 'committed');
+        requireEqual((await call('/checkpoint?kind=tick', Commit, {})).kind, 'committed');
+        const later = await shell(digest);
+        await call('/stop', Commit, {});
+        await collectSnapshots(box);
+        requireEqual(await shell(digest), later);
 
-        if ((saved.movedBytes ?? Infinity) >= 256 * 1024) throw new Error('an in-place edit sent the whole file');
-        requireEqual((await call('/state', State)).chain?.base.key, base);
-      }
+        return { base, recoveryExact: true, afterRecoveryExact: true, state: await call('/state', State) };
+      });
+    };
 
-      const digest = "cd /workspace; find . -xdev \\( -name node_modules -o -name '*.log' \\) -prune -o ! -path . -printf '%P %y %m %l\\n' | LC_ALL=C sort; "
-        + "find . -xdev \\( -name node_modules -o -name '*.log' \\) -prune -o -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum";
+    const ended = await Promise.allSettled([onRevived(), onNamed(), onParked(), onDesktop(), onOwn()]);
 
-      const expected = await shell(digest);
-      requireEqual((await call('/stop', Commit, {})).kind, 'skipped');
-      await collectSnapshots(box);
-      requireEqual(await shell(digest), expected);
-      requireEqual(await shell('cat /workspace/node_modules/pkg/f'), 'excluded');
-      requireEqual((await call('/stop', Commit, {})).kind, 'skipped');
-      await collectSnapshots(box);
-      requireEqual((await call('/lose-snapshot', v.object({ ok: v.boolean() }), {})).ok, true);
-      requireEqual(await shell(digest), expected);
-      requireEqual(await shell('test ! -e /workspace/node_modules && test ! -e /workspace/build.log && echo excluded'), 'excluded');
-      await shell('echo recovered >>/workspace/src/f; rm /workspace/new; mkdir -p /workspace/later; echo later >/workspace/later/f');
-      await delay(2_000);
-      requireEqual((await call('/checkpoint?kind=tick', Commit, {})).kind, 'committed');
-      const later = await shell(digest);
-      await call('/stop', Commit, {});
-      await collectSnapshots(box);
-      requireEqual(await shell(digest), later);
-
-      return { base, recoveryExact: true, afterRecoveryExact: true, state: await call('/state', State) };
-    });
+    if (ended.some((outcome) => outcome.status === 'rejected')) throw joinedFailure(ended, (reason) => reason instanceof PlatformStall);
   };
 
   try {

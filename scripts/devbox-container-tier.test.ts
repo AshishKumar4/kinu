@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { runToExit } from '@kinu.run/test-utils';
-import { requireEqual, tierIdentity } from './fixtures/devbox-e2e/oracle';
+import { joinedFailure, requireEqual, tierIdentity } from './fixtures/devbox-e2e/oracle';
 import { completeTeardown } from './fixtures/devbox-e2e/teardown';
 import { contractLedger, contractOwner, contractOwnerEnded, contractRunEnded, recoverAbandoned } from './fixtures/devbox-e2e/ledger';
 import type { ContractOwner, ContractTeardown } from './fixtures/devbox-e2e/ledger';
@@ -245,4 +245,14 @@ test('a direct invocation outside armada refuses before fixture authority or res
   expect(run.exitCode).toBe(1);
   expect(run.stdout).toBe('');
   expect(run.stderr).toContain('armada map --connection=');
+});
+
+// The boxes' contracts run at once (m1929a): one box's platform stall, a notice, never hides another box's own red.
+test('contracts run at once report a contract\'s own failure before a platform stall, and the stall when it is alone', () => {
+  const stall = new Error('/exec on box-7 was never answered: the container\'s disk vdb stopped answering reads');
+  const red = new Error('the typed text: the screen still said ""');
+  const settled = (...reasons: unknown[]): PromiseSettledResult<unknown>[] => [{ status: 'fulfilled', value: 1 }, ...reasons.map((reason) => ({ status: 'rejected' as const, reason }))];
+  const joined = (...reasons: unknown[]) => joinedFailure(settled(...reasons), (reason) => reason === stall);
+
+  expect([joined(stall, red), joined(stall), joined('said nothing').message]).toEqual([red, stall, 'said nothing']);
 });
