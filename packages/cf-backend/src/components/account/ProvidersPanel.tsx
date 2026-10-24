@@ -362,17 +362,14 @@ function ClaudeConnect({ onChanged }: { onChanged: () => void }) {
   // and goes to Claude once the sign-in's address is had. A popup refused, or closed before then, leaves step 1's link; a
   // failed start closes it, and so does leaving the card, which alone could take the code back.
   const start = () => {
-    const reserved = signInWindow.reserve();
+    signInWindow.reserve();
 
     return run(Effect.gen(function* () {
       const { url } = yield* Effect.promise(() => startClaudeSignIn());
-      const open = reserved !== null && !reserved.closed;
 
       setAuthorizeUrl(url);
       setCode('');
-
-      if (open) reserved.location.href = url;
-      setOpened(open);
+      setOpened(signInWindow.send(url));
     }).pipe(Effect.onError(() => Effect.sync(() => signInWindow.close()))));
   };
 
