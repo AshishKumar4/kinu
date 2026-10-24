@@ -18,6 +18,7 @@ import { indexWorkspace, type IndexFeedEnv } from '../control-plane/index-feed';
 import type { OrchestratorAgent } from '../orchestrator';
 import { isOwnedByAnotherAccount } from './workspace-ownership';
 import type { ObjectNamespace } from '@kinu.run/core';
+import type { WorkspacePlacement } from './workspace-placement';
 
 export interface CloudWorkspaceRegistry extends UserCredentialClient {
   /** The account's `default` tier is the single source of the default model, for new workspaces
@@ -68,13 +69,15 @@ export interface CreateCloudWorkspaceRequest<Id> {
   soul?: string;
   /** What a blueprint seeds before the first turn: its layout, its main agent's name, its schedules. */
   seed?: WorkspaceSeed;
+  /** The region the workspace's object runs in (`placementFor`). */
+  placement: WorkspacePlacement;
 }
 
 export function createCloudWorkspaceForUser<Id>(
   request: CreateCloudWorkspaceRequest<Id>,
 ): Promise<WorkspaceEntry> {
   return settle(Effect.gen(function* () {
-    const { env, userId, userDO, caller, input, soul, seed } = request;
+    const { env, userId, userDO, caller, input, soul, seed, placement } = request;
     const trimmedPurpose = input.purpose?.trim() ?? '';
     const purpose = trimmedPurpose === '' ? undefined : trimmedPurpose;
 
@@ -113,7 +116,7 @@ export function createCloudWorkspaceForUser<Id>(
     return yield* Effect.catchCause(Effect.gen(function* () {
       const initialization: InitializeOrchestratorInput<Id> = {
         env, userId, userDO, agentName: entry.name, displayName: entry.displayName,
-        nameOrigin: identity.nameOrigin, model: input.model,
+        nameOrigin: identity.nameOrigin, model: input.model, placement,
       };
 
       if (purpose) initialization.mission = purpose;
@@ -255,19 +258,21 @@ interface InitializeOrchestratorInput<Id> {
   model?: string;
   reasoningEffort?: ReasoningEffort;
   role?: string;
+  placement: WorkspacePlacement;
 }
 
 async function initializeOrchestrator<Id>(input: InitializeOrchestratorInput<Id>): Promise<void> {
   const {
     env, userId, userDO, agentName, displayName, nameOrigin,
-    mission, soul, seed, model, reasoningEffort, role,
+    mission, soul, seed, model, reasoningEffort, role, placement,
   } = input;
 
+  // The first call to reach the object places it, and it never moves (`workspace-placement.ts`).
   const orchestrator = env.OrchestratorAgent.get(
-    env.OrchestratorAgent.idFromName(agentName),
+    env.OrchestratorAgent.idFromName(agentName), { locationHint: placement },
   );
 
-  const claim = await orchestrator.claimOwner(userId);
+  const claim = await orchestrator.claimOwner(userId, placement);
   // First: a new workspace may run turns without being opened, and each needs its identity
   // to reach the owner's UserDO.
   await userDO.ensureWorkspaceCapability(agentName, claim.capabilityHash);
