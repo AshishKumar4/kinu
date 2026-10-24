@@ -3240,6 +3240,14 @@ const GALLERY_AGENTS: PanelAgent[] = [
 const NO_GALLERY_FIGURES = { activeMs: 0, cacheEma: null };
 
 /** Main, the page's chats, and the fixture's agents when asked for. */
+/** Whether `&jobs=running`'s job runs: a `gallery:jobs` event (`{ running }`) settles or starts it, and says so. */
+const JOBS_RUNNING = { at: true };
+
+window.addEventListener("gallery:jobs", (event) => {
+  JOBS_RUNNING.at = v.parse(v.object({ running: v.boolean() }), event instanceof CustomEvent ? event.detail : null).running;
+  galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listBackgroundJobs"] }));
+});
+
 /** Agents a `gallery:agent-rested` event brought to rest (`{ key }`), as the next read of the list has them. */
 const RESTED_AGENTS = new Set<string>();
 
@@ -3469,8 +3477,8 @@ function heldJob(at: number, label: string | undefined): WorkspaceAnswer<"listBa
  * `label` or fails with `failed`. Otherwise there are none.
  */
 async function galleryJobsRead(): Promise<WorkspaceAnswer<"listBackgroundJobs">> {
-  // `&jobs=running`: Main's jobs as the Work tab's own frame has them, one of them running.
-  if (new URLSearchParams(location.search).get("jobs") === "running") return BACKGROUND_JOBS;
+  // `&jobs=running`: the jobs as the Work tab's own frame has them, one of them running, until `gallery:jobs` says.
+  if (new URLSearchParams(location.search).get("jobs") === "running") return JOBS_RUNNING.at ? BACKGROUND_JOBS : BACKGROUND_JOBS.filter((job) => job.status !== "running");
 
   if (new URLSearchParams(location.search).get("jobs") !== "held") return [];
   const root = document.documentElement.dataset;

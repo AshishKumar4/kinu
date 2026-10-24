@@ -10,10 +10,9 @@ import { CaretRightIcon, ClockIcon, TerminalWindowIcon } from "@phosphor-icons/r
 import { jobPhase, type AgentActivity, type BackgroundJob, type PanelAgent } from "@kinu.run/core";
 import { AgentStatusMark } from "@/components/AgentStatus";
 import { ChatMascot } from "@/components/ui/Marks";
+import { Popover } from "@/components/ui/Popover";
 import { Pressable } from "@/components/ui/Pressable";
-import { Surface } from "@/components/ui/Surface";
 import { useMascotOf } from "@/hooks/use-chat-mascot";
-import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
 
 /** What a row says of its agent, and the order the sheet keeps: what needs the person first. */
 type Shown = "waiting" | "failed" | "working" | "finished";
@@ -35,7 +34,8 @@ function shownOf(activity: AgentActivity, finished: boolean): Shown | null {
   return finished ? "finished" : null;
 }
 
-/** Each agent the sheet shows, its helpers under it, busiest first: Main is the chat itself and never a row. */
+/** Each agent the sheet shows, its helpers under it: Main is the chat itself and never a row. A branch stands where its
+ *  most pressing agent would, so a helper that needs the person lifts its whole branch to the top. */
 function rowsOf(agents: readonly PanelAgent[], finished: ReadonlySet<string>): Row[] {
   const shown = new Map(agents.flatMap((agent) => {
     const state = agent.category === "main" ? null : shownOf(agent.activity, finished.has(agent.key));
@@ -43,17 +43,20 @@ function rowsOf(agents: readonly PanelAgent[], finished: ReadonlySet<string>): R
     return state === null ? [] : [[agent.key, state] as const];
   }));
 
-  const rank = (agent: PanelAgent): number => ORDER.indexOf(shown.get(agent.key) ?? "finished");
-  const listed = agents.filter((agent) => shown.has(agent.key)).sort((a, b) => rank(a) - rank(b));
+  const listed = agents.filter((agent) => shown.has(agent.key));
+  const children = (key: string): PanelAgent[] => listed.filter((each) => each.parent === key);
+
+  const rank = (agent: PanelAgent): number => Math.min(ORDER.indexOf(shown.get(agent.key) ?? "finished"), ...children(agent.key).map(rank));
+  const byRank = (list: PanelAgent[]): PanelAgent[] => list.map((agent) => ({ agent, at: rank(agent) })).sort((a, b) => a.at - b.at).map(({ agent }) => agent);
   const rows: Row[] = [];
 
   const add = (agent: PanelAgent, depth: number): void => {
     rows.push({ agent, shown: shown.get(agent.key) ?? "finished", depth });
 
-    for (const child of listed.filter((each) => each.parent === agent.key)) add(child, depth + 1);
+    for (const child of byRank(children(agent.key))) add(child, depth + 1);
   };
 
-  for (const agent of listed.filter((each) => !shown.has(each.parent ?? ""))) add(agent, 0);
+  for (const agent of byRank(listed.filter((each) => !shown.has(each.parent ?? "")))) add(agent, 0);
 
   return rows;
 }
@@ -113,12 +116,15 @@ export function BackgroundWork({ workspace, agents, jobs, open, openWork }: {
   const rows = useMemo(() => rowsOf(agents, finished), [agents, finished]);
   const now = Date.now();
   const running = jobs.filter((job) => jobPhase(job, now) !== "settled");
-  const ref = useRef<HTMLDivElement>(null);
   const look = useMascotOf(workspace);
+  const idle = rows.length === 0 && running.length === 0;
 
-  useCloseOnOutsideClick(sheet, ref, () => setSheet(false));
+  // The sheet goes with the last thing it listed, so work that comes after opens a closed pill.
+  useEffect(() => {
+    if (idle) setSheet(false);
+  }, [idle]);
 
-  if (rows.length === 0 && running.length === 0) return null;
+  if (idle) return null;
   const count = (state: Shown): number => rows.filter((row) => row.shown === state).length;
   const needs = count("waiting");
   const failed = count("failed");
@@ -134,10 +140,18 @@ export function BackgroundWork({ workspace, agents, jobs, open, openWork }: {
 
   const mark = markOf(needs, failed);
 
+  const pill = (
+    <Pressable className="p-background-pill" aria-label={`Work in the background: ${parts.join(", ")}`}
+      data-background-pill data-needs={needs} data-failed={failed} data-working={working} data-finished={count("finished")} data-jobs={running.length}>
+      {(needs > 0 || failed > 0 || working > 0) && <AgentStatusMark activity={mark} />}
+      <span className="t-meta">{parts.join(" · ")}</span>
+    </Pressable>
+  );
+
   return (
-    <div ref={ref} className="p-background-work" data-background-work>
-      {sheet && (
-        <Surface look="panel" className="p-background-sheet p-shadow-menu" role="dialog" aria-label="Work in the background" data-background-sheet>
+    <div className="p-background-work" data-background-work>
+      <Popover trigger={pill} open={sheet} onOpenChange={setSheet} side="top" align="end" label="Work in the background" className="p-background-sheet">
+        <div data-background-sheet>
           {rows.length > 0 && (
             <section aria-label="Agents">
               <h3 className="t-meta p-text-3 px-2 pb-1 pt-1">Agents</h3>
@@ -147,7 +161,7 @@ export function BackgroundWork({ workspace, agents, jobs, open, openWork }: {
 
                   return (
                     <li key={agent.key}>
-                      <Pressable className="p-background-row" style={{ paddingLeft: `${String(8 + depth * 14)}px` }} data-background-agent={agent.key}
+                      <Pressable className="p-background-row" data-depth={Math.min(depth, 3)} data-background-agent={agent.key}
                         data-shown={shown} onClick={() => { setSheet(false); open(agent); }}>
                         <ChatMascot seed={face.seed} colour={face.colour} activity={agent.activity} />
                         <span className="flex min-w-0 flex-1 flex-col">
@@ -182,14 +196,8 @@ export function BackgroundWork({ workspace, agents, jobs, open, openWork }: {
               </ul>
             </section>
           )}
-        </Surface>
-      )}
-      <Pressable className="p-background-pill" aria-expanded={sheet} aria-label={`Work in the background: ${parts.join(", ")}`}
-        data-background-pill data-needs={needs} data-failed={failed} data-working={working} data-finished={count("finished")} data-jobs={running.length}
-        onClick={() => setSheet((shown) => !shown)}>
-        {(needs > 0 || failed > 0 || working > 0) && <AgentStatusMark activity={mark} />}
-        <span className="t-meta">{parts.join(" · ")}</span>
-      </Pressable>
+        </div>
+      </Popover>
     </div>
   );
 }

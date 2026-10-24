@@ -80,6 +80,85 @@ describe('work in the background', () => {
     });
   });
 
+  test('opens from the keyboard into its rows, and Escape gives focus back to the pill', async () => {
+    await withGallery(async (gallery) => {
+      const page = await workspace(gallery, '&agents=panel&jobs=running');
+
+      try {
+        await page.waitForSelector(PILL);
+        await page.focus(PILL);
+        await page.keyboard.press('Enter');
+        await page.waitForFunction(() => document.activeElement?.closest('[data-background-sheet], [role="dialog"]') !== null);
+        await page.keyboard.press('Tab');
+        const inSheet = await page.evaluate(() => document.activeElement?.closest('[role="dialog"]') !== null);
+
+        await page.keyboard.press('Escape');
+        await page.waitForFunction(() => document.querySelector('[data-background-sheet]') === null);
+
+        expect({ inSheet, back: await page.evaluate(() => document.activeElement?.hasAttribute('data-background-pill') ?? false) }).toEqual({ inSheet: true, back: true });
+      } finally { await page.close(); }
+    });
+  });
+
+  test('a helper that needs the person lifts its whole branch to the top', async () => {
+    await withGallery(async (gallery) => {
+      const page = await workspace(gallery, '&agents=panel&jobs=running');
+
+      try {
+        await page.waitForSelector(PILL);
+        await page.click(PILL);
+        await page.waitForSelector(SHEET);
+        const shown = await page.$$eval('[data-background-agent]', (list) => list.map((row) => row.getAttribute('data-shown')));
+        const lastNeed = shown.lastIndexOf('waiting');
+
+        // Every row before the last that needs the person is one that does, or the branch it stands in.
+        expect(shown.slice(0, lastNeed + 1).every((state) => state === 'waiting' || state === 'working')).toBe(true);
+        expect(shown.slice(lastNeed + 1).includes('waiting')).toBe(false);
+      } finally { await page.close(); }
+    });
+  });
+
+  test('closes with the last thing it listed, so work that comes after opens a closed pill', async () => {
+    await withGallery(async (gallery) => {
+      const page = await workspace(gallery, '&jobs=running');
+
+      try {
+        await page.waitForSelector(PILL);
+        await page.click(PILL);
+        await page.waitForSelector(SHEET);
+        await page.evaluate(() => { window.dispatchEvent(new CustomEvent('gallery:jobs', { detail: { running: false } })); });
+        await page.waitForFunction(() => document.querySelector('[data-background-pill]') === null);
+        await page.evaluate(() => { window.dispatchEvent(new CustomEvent('gallery:jobs', { detail: { running: true } })); });
+        await page.waitForSelector(PILL);
+
+        expect(await page.$(SHEET)).toBeNull();
+      } finally { await page.close(); }
+    });
+  });
+
+  // A short phone with a grown message: the room above the pill is less than any fixed share of the window.
+  test('on a short phone the sheet keeps to the room above its pill', async () => {
+    await withGallery(async (gallery) => {
+      const page = await workspace(gallery, '&agents=panel&jobs=running', { width: 390, height: 420 });
+
+      try {
+        await page.waitForSelector(PILL);
+        await page.type('[data-composer-root] textarea', 'one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten');
+        await page.click(PILL);
+        await page.waitForSelector(SHEET);
+
+        const room = await page.evaluate(() => {
+          const sheet = document.querySelector('[data-background-sheet]')?.closest('[role="dialog"]')?.getBoundingClientRect();
+          const pill = document.querySelector('[data-background-pill]')?.getBoundingClientRect();
+
+          return { top: Math.round(sheet?.top ?? -1), bottom: Math.round(sheet?.bottom ?? 1e9), pill: Math.round(pill?.top ?? 0) };
+        });
+
+        expect(room.top >= 0 && room.bottom <= room.pill).toBe(true);
+      } finally { await page.close(); }
+    });
+  });
+
   test('an agent that came to rest out of sight shows as finished until the person has seen the sheet', async () => {
     await withGallery(async (gallery) => {
       const page = await workspace(gallery, '&agents=panel');
