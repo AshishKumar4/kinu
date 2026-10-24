@@ -3,6 +3,7 @@
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
+import * as v from 'valibot';
 import {
   EventLog, TriggerRegistry,
   acceptWebhookDelivery, createWebhookSecretStore, hmacSha256Hex,
@@ -368,7 +369,7 @@ describe('a GitHub repository hook', () => {
         await gate;
       }
 
-      const n = state !== null && typeof state === 'object' && !Array.isArray(state) && typeof state['n'] === 'number' ? state['n'] : 0;
+      const n = v.is(v.object({ n: v.number() }), state) ? state.n : 0;
 
       return { kind: 'answered', answer: present(checkAnswerOf({ fire: true, brief: 'main moved', state: { n: n + 1 } }), 'a fire') };
     };
@@ -383,7 +384,7 @@ describe('a GitHub repository hook', () => {
 
     expect(checks).toBe(2);
     expect(h.log.pending({ variant: 'timer' })).toHaveLength(1);
-    expect(present(h.triggers.get(trigger_id), 'the watcher').spec['watch']).toEqual({ state: { n: 1 } });
+    expect(v.parse(v.looseObject({ watch: v.unknown() }), present(h.triggers.get(trigger_id), 'the watcher').spec).watch).toEqual({ state: { n: 1 } });
   });
 
   test('a fresh delivery naming the id of one that fired is a fire of its own: the id is GitHub\'s word, not proof', async () => {
