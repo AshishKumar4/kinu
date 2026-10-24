@@ -27,6 +27,8 @@ import { Cause, Effect } from 'effect';
 import { createCFRuntime, type CFRuntime, type CFRuntimeHooks, type WorkspaceBoxUse } from './runtime';
 import type { AdoptsJobs, CommandEnvironment, LiveRead } from '@kinu.run/core';
 import type { HostedBox, HostedWorkspace } from './workspace-host';
+import type { ProvidersLane } from './owned-model-services';
+import type { AgentProviderRegistry } from './providers/agent-registry';
 
 /** The root agents-SDK members a hosted actor's runtime borrows; projected from `Agent` so upstream drift fails to compile. */
 type HostRootAgent = Pick<Agent<Env>, 'name' | 'sql'>;
@@ -37,7 +39,9 @@ export interface WorkspaceHostSeams {
   readonly ctx: AgentContext;
   readonly agent: HostRootAgent;
   holdLane<T>(body: () => Promise<T>): Promise<T>;
-  currentTurn(reference: ActorReference): string | null;
+  /** The owner's providers as `actor`'s lanes call them (`OwnedModelServices.registryOver`), its provider's waits and
+   *  attempts recorded in its own log. */
+  providers(lane: ProvidersLane, actor: BoundActor): AgentProviderRegistry;
   /** The root's own runtime: inheriting children read the retained program from it. */
   rootRuntime(): AgentRuntime;
   /**
@@ -197,7 +201,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost<C
       const hooks: CFRuntimeHooks = {
         reportModelCall: (report) => { seams.reportModelCall(report); },
         modelOperations: seams.modelOperations,
-        currentTurn: (reference) => seams.currentTurn(reference),
+        providers: (lane) => seams.providers(lane, bound),
         // Its lanes call on the account its chat does: its own choice, else the workspace's, else the catalog's.
         accounts: () => providerAccounts({
           actor: bound.handle.config.getProviderAccounts(), workspace: seams.directory.main().config.getProviderAccounts(),

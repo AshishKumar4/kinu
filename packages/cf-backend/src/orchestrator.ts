@@ -1456,7 +1456,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       ctx: this.ctx,
       agent: this,
       holdLane: (body) => this.holdLane(body),
-      currentTurn: (reference) => this.currentTurnOf(reference),
+      providers: (lane, actor) => this.ownedModelServices.registryOver({ ...lane, told: this.providerToldFor(actor) }),
       exec: this.watchedExec,
       sql: this.boundSql,
       directory: this.workspaceActors(),

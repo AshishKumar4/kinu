@@ -14,6 +14,7 @@ import { makeEnv } from './actor-harness';
 import { makeCtx } from './platform-context';
 import { createWorkspaceActorHost, HostedActorHomes, type WorkspaceHostSeams } from '../../src/actor-hosting';
 import { createHostedWorkspace } from '../../src/workspace-host';
+import { createAgentProviderRegistry } from '../../src/providers/agent-registry';
 import { HELD_NIMBUS_TASKS } from './programmatic-host';
 import { wrapDatabase } from '@kinu.run/core/identity';
 import { createRecordingTracer, NO_JOBS } from '@kinu.run/test-utils';
@@ -138,7 +139,7 @@ export async function hostedWorkspace(
     reportModelCall: () => undefined,
     // Nothing changes the owner's model settings under this fixture.
     refusals: (actor) => tierRefusals({ sql, actor, config: actor.config, now: Date.now, settings: 'Settings > Models', changes: () => 0 }),
-    currentTurn: () => null,
+    providers: (lane) => createAgentProviderRegistry({ env, userDO: lane.credentials, appTitle: lane.appTitle, accountFor: (provider) => lane.accounts?.()[provider] }),
     liveReadsMoved: () => undefined,
     // No box records serving here: the fixture's box exposes nothing.
     servingMoved: () => Promise.resolve(),
