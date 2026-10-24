@@ -379,8 +379,8 @@ test("an answer's page saved twice at once becomes one slate", async () => {
   initSlateUsageTable(tree.execRaw);
   const page = 'a-page/notes';
   const project = parseSlateProject({ slate: { title: 'Notes' } });
-  // Every await a save makes yields first, as the object's own RPC does, so two saves interleave.
-  const later = <T>(value: T): Promise<T> => new Promise((done) => { setTimeout(() => { done(value); }, 0); });
+  // Every await a save makes yields to the other first, as the object's own RPC does, so two saves interleave.
+  const later = async <T>(value: T): Promise<T> => await Promise.resolve(value);
 
   const controller = new SlateController({
     workspace: 'save-test', sql: makeSqlExec(tree.db), builds: new SlateBuilds(makeSqlExec(tree.db)), transaction: (body) => tree.db.transaction(body)(),

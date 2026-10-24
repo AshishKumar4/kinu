@@ -830,13 +830,13 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
     if (caller.path.length > 0) return settle(Effect.fail(new KinuError('denied', 'Only the workspace root keeps an answer\'s page as a slate')));
 
     // Two saves of one page at once are one: each would find no slate of it yet, and write one.
-    return this.saving(page, () => this.keptPage(caller, page));
+    return this.saving(page, () => settle(this.keptPage(caller, page)));
   }
 
   private readonly saving = joining<string, SlateCallResult>();
 
-  private keptPage(caller: SlateCaller, page: string): Promise<SlateCallResult> {
-    return settle(Effect.gen({ self: this }, function* () {
+  private keptPage(caller: SlateCaller, page: string): Effect.Effect<SlateCallResult, KinuError> {
+    return Effect.gen({ self: this }, function* () {
       if (ephemeralSlateAddress(page) === null) return yield* new KinuError('bad_input', `${page} names no answer's page`);
       const source = yield* Effect.promise(async () => this.ports.resolve(caller.cred, page));
 
@@ -855,7 +855,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
       if (source.server !== null) files.writeFile(`${SLATES_ROOT}/${id}/server.js`, source.server);
 
       return answered({ value: { id, title } });
-    }));
+    });
   }
 
   /**
