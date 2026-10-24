@@ -9,7 +9,7 @@
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import { blueprintSeed, kinuBlueprint, type GitHubAnswer, type GitHubRead, type GoogleAnswer, type GoogleCall, type JsonValue } from '@kinu.run/core';
-import { fireSoonestWake, orchestratorHarness, until, type RecordedUserPlaneCalls, type StartedHarness } from './helpers/actor-harness';
+import { eventsOver, fireSoonestWake, orchestratorHarness, until, type RecordedUserPlaneCalls, type StartedHarness } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 import { answeringGateway, GATEWAY_MODEL, requestOf, type RecordedGatewayRun, type StubbedAiBinding } from './helpers/platform-gateway';
 import { isRuntimeContext, present } from '@kinu.run/test-utils';
@@ -62,6 +62,13 @@ function askedOf(run: RecordedGatewayRun): string {
 const turnsOn = (gateway: StubbedAiBinding, asked: string) => gateway.runs.filter((run) => askedOf(run).includes(asked));
 
 const ModelSchema = v.object({ model: v.string() });
+
+/** A schedule's fire as the event log keeps it: what its check found. */
+const FireSchema = v.looseObject({ watch_brief: v.optional(v.string()) });
+
+/** Each time a check woke the agent, as the workspace's event log keeps it: a turn may ask its model more than once. */
+const firesOf = (workspace: StartedHarness) => eventsOver(workspace.db).query({ variant: 'timer' })
+  .filter((event) => v.parse(FireSchema, event.payload).watch_brief !== undefined);
 
 /** A seeded schedule's trigger spec, as the owner's trigger list shows it. */
 const ScheduleSpecSchema = v.object({ cron: v.string(), tier: v.optional(v.string()), check: v.optional(v.unknown()), payload: v.unknown() });
@@ -123,7 +130,7 @@ describe("the assistant's GitHub check", () => {
 
     const woke = turnsOn(gateway, 'New GitHub notifications for Ashish');
 
-    expect(woke.length).toBe(1);
+    expect(firesOf(workspace).length).toBe(1);
     expect(askedOf(present(woke[0], 'the woken turn'))).toContain('review requested: kinu/ledger "Ledger 7" https://github.com/kinu/ledger/pull/7');
     expect(askedOf(present(woke[0], 'the woken turn'))).not.toContain('Ledger 8');
     expect(FAST_MODEL.endsWith(v.parse(ModelSchema, present(woke[0], 'the woken turn').query).model)).toBe(true);
@@ -134,7 +141,7 @@ describe("the assistant's GitHub check", () => {
     await nextCheck(workspace, checked);
     github.state.modified = 'Fri, 24 Oct 2026 10:50:00 GMT';
     await nextCheck(workspace, checked);
-    expect({ turns: turnsOn(gateway, 'New GitHub notifications').length, modelCalls: gateway.runs.length - calls }).toEqual({ turns: 1, modelCalls: 0 });
+    expect({ fires: firesOf(workspace).length, modelCalls: gateway.runs.length - calls }).toEqual({ fires: 1, modelCalls: 0 });
 
     // One that came in at the edge, a second before the newest seen, is still news.
     github.state.inbox = [...github.state.inbox, { id: '9', reason: 'mention', updated_at: new Date(Date.parse(at) - 500).toISOString() }];
@@ -156,16 +163,17 @@ describe("the assistant's GitHub check", () => {
     github.state.modified = 'Fri, 24 Oct 2026 10:40:00 GMT';
     setSystemTime(new Date(at + 120_000));
 
-    const told = () => turnsOn(gateway, 'New GitHub notifications').map(askedOf).join('\n');
+    // What the agent was woken with: each fire's brief, as the workspace's event log keeps it.
+    const told = () => eventsOver(workspace.db).query({ variant: 'timer' }).map((event) => v.parse(FireSchema, event.payload).watch_brief ?? '').join('\n');
+    const unsaid = () => github.state.inbox.filter(({ id }) => !told().includes(`"Ledger ${id}"`));
 
-    for (let check = 0; check < 20 && !told().includes('"Ledger 100"'); check += 1) {
-      await nextCheck(workspace, checked);
-      await until(() => true, 'the woken turn');
-    }
+    // Each check wakes the agent with what one brief holds, until none waits.
+    for (let check = 0; check < 20 && unsaid().length > 0; check += 1) await nextCheck(workspace, checked);
+    await until(() => turnsOn(gateway, '"Ledger 100"').length > 0, 'the last brief never reached a turn');
 
     const named = github.state.inbox.map(({ id }) => id).filter((id) => told().split(`"Ledger ${id}"`).length - 1 !== 1);
 
-    // Both pages were read, every one named exactly once, the last brief saying none waits.
+    // Both pages were read, every one named in exactly one fire, and the last of them reached a turn.
     expect({ secondPage: github.reads.some(({ query }) => query?.page === 2), unnamedOrTwice: named }).toEqual({ secondPage: true, unnamedOrTwice: [] });
   });
 });
@@ -216,7 +224,7 @@ describe("the assistant's Gmail check", () => {
 
     const woke = turnsOn(gateway, "New mail in Ashish's inbox");
 
-    expect(woke.length).toBe(1);
+    expect(firesOf(workspace).length).toBe(1);
     expect(askedOf(present(woke[0], 'the woken turn'))).toContain('New in the inbox:\\nAna <ana@example.com>: "Invoice m1" (m1)');
     expect(askedOf(present(woke[0], 'the woken turn'))).not.toContain('m2');
     expect(FAST_MODEL.endsWith(v.parse(ModelSchema, present(woke[0], 'the woken turn').query).model)).toBe(true);
@@ -224,7 +232,7 @@ describe("the assistant's Gmail check", () => {
     const after = gateway.runs.length;
 
     for (let check = 0; check < 3; check += 1) await nextCheck(workspace, checked);
-    expect({ turns: turnsOn(gateway, 'New mail in').length, modelCalls: gateway.runs.length - after }).toEqual({ turns: 1, modelCalls: 0 });
+    expect({ fires: firesOf(workspace).length, modelCalls: gateway.runs.length - after }).toEqual({ fires: 1, modelCalls: 0 });
 
     // A history id Gmail no longer keeps starts again from now: what came before it is not news, what comes after is.
     historyId = 300;
@@ -234,15 +242,14 @@ describe("the assistant's Gmail check", () => {
     historyId = 301;
     records.push({ id: 301, message: 'm4', labels: ['INBOX'] });
     await nextCheck(workspace, checked);
-    await until(() => turnsOn(gateway, 'New mail in').length > 1, 'the mail after the restart never woke the assistant');
-    expect(askedOf(present(turnsOn(gateway, 'New mail in').at(-1), 'the turn after the restart'))).toContain('(m4)');
-    expect(turnsOn(gateway, 'New mail in').map(askedOf).join('\n')).not.toContain('(m3)');
+    await until(() => turnsOn(gateway, '(m4)').length > 0, 'the mail after the restart never woke the assistant');
+    expect({ fires: firesOf(workspace).length, m3: turnsOn(gateway, '(m3)').length }).toEqual({ fires: 2, m3: 0 });
 
     // Another mailbox connected starts again from its own now, and wakes nothing.
     mailbox = 'ashish@work.example';
     historyId = 5;
     await nextCheck(workspace, checked);
-    expect(turnsOn(gateway, 'New mail in').length).toBe(2);
+    expect(firesOf(workspace).length).toBe(2);
   });
 });
 

@@ -4,7 +4,7 @@ import { JsonValueSchema, type JsonValue } from '../utils/json';
 import { defineOperation, described } from './operation';
 
 /** A path on api.github.com, with no host, query or fragment of its own: `/notifications`, `/repos/{owner}/{repo}/pulls`. */
-export const GitHubPathSchema = v.pipe(v.string(), v.regex(/^\/(?!\/)[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$/), v.check((path) => !path.split('/').includes('..'), 'a path never climbs (`..`)'));
+const GitHubPathSchema = v.pipe(v.string(), v.regex(/^\/(?!\/)[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$/), v.check((path) => !path.split('/').includes('..'), 'a path never climbs (`..`)'));
 
 export const GitHubReadSchema = v.object({
   path: GitHubPathSchema,
