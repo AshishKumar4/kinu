@@ -58,7 +58,7 @@ import { ActorSession, type ActorTurnLease,
   steerSkillsBlock,
   inheritedContextFromTranscript,
   ModelCatalogSession, resolveEffectiveModelSpec,
-  TerminalTransitions, initTerminalEffectTable, chatTurnParts, declareTerminalRoster, missionOf, SleepTimeLane, initSleepTimeTables,
+  TerminalTransitions, initTerminalEffectTable, chatTurnParts, declareTerminalRoster, missionOf, SleepTimeLane, initSleepTimeTables, resultOwed,
   toolsBehindBoundary, type ToolBoundary, assembleActorTurn, driveSeatedRun, preparedHeadRun, withCompactionTrigger, conversationKey, vfsTurnSkills, actorTurnSources, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources, type RunTurnSources,
   branchesTerminalEffect, chatTerminalEffects, actorTerminalEffects,
   type OwedReport, type SubagentReportStatus, type TurnReportFacts,
@@ -549,8 +549,12 @@ export class LocalAgentSession {
         // The owner's decision as an intent delivers it, as their own decision here decides it.
         decidePlan: (verdict) => this.planActions.decideAndHandOff(verdict, (turn) => this.enqueueTurn(turn)),
         owedTerminalEffects: (input) => this.owedTerminalEffects(input),
-        // A running job's settle wakes the session; a reminder would race it.
-        openWork: async () => ({ tasks: this.taskList.listOpen(), asyncWakePending: this.jobs.listRunning(1).total > 0 }),
+        // A hire's report or a job's settle wakes the session; a reminder would race it.
+        openWork: async () => ({
+          tasks: this.taskList.listOpen(),
+          state: this.taskList.openState(),
+          resultOwed: resultOwed((await this.teamDeps?.list() ?? []).map((hire) => hire.status), this.jobs.countAwaited()),
+        }),
         terminal: () => this.terminal,
         driverGate: () => this.driverGate?.() ?? null,
         releaseForeground: (executing) => this.jobRunner.releaseForeground(executing),

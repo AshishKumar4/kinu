@@ -16,7 +16,7 @@ import { connectedPath, connectEndedOf, mainPanelAgent, restoredRows, sharedBuil
 import { delegatedTaskMetadata, followJobOutput, summarizeSteps, SIGNALS_SEEN_METADATA_KEY, TURN_END_METADATA_KEY, TURN_FAILURE_METADATA_KEY, JOB_OUTPUT_EVENT, type JobOutputTail } from "@kinu.run/core";
 import {
   COMPLETION_GATE_EVENT, FORK_INTERRUPTED_SIGNAL, OUTPUT_CONTINUATION_EVENT, OUTPUT_CONTINUATION_TEXT, OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
-  OWNER_ANSWER_SIGNAL, TASK_REMINDER_EVENT, TASK_REMINDER_OPEN_KEY, TaskReminders,
+  OWNER_ANSWER_SIGNAL, TASK_REMINDER_EVENT, TASK_REMINDER_OPEN_KEY, taskReminderOf,
 } from "@kinu.run/core";
 
 /** The two liveness values a static frame photographs. */
@@ -2537,9 +2537,9 @@ const PAGE_THREAD: UIMessage[] = [
 ];
 
 /** The owner's reminder as core writes it: its text the agent's, its open task's title the card's. */
-const OWNER_REMINDER = new TaskReminders().decide({
+const OWNER_REMINDER = taskReminderOf({
   open: { items: [{ id: "t1", parentId: null, title: "Store the full export in account-level memory", status: "open", updatedAt: 0, note: null, subtasks: [] }], total: 1 },
-  assistantText: "The export is in exports/settings.json.", workMode: "build", completed: true, asyncWakePending: false,
+  state: "1-gallery", assistantText: "The export is in exports/settings.json.", workMode: "build", completed: true, resultOwed: false,
 });
 
 const harnessTurn = (id: string, metadata: JsonObject, text: string) => msg({ id, role: "user", metadata: { kinuAuthor: "harness", ...metadata }, parts: [{ type: "text", text }] });

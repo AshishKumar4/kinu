@@ -6,6 +6,16 @@ import type { Restoration } from './restoration';
 import type { DiskChainState } from './disk-chain';
 import type { BoxSize } from './sizes';
 import type { AttachOutcome } from './storage';
+import type { RestorePhaseStamps } from './durability/contracts';
+import type { ToolsRefresh } from './golden';
+
+/** One restore as the box kept it: when it opened, each phase reached (ms after), its tools refresh, and its settling. */
+export interface LastRestore {
+  readonly openedAt: number;
+  readonly stamps: RestorePhaseStamps;
+  readonly tools: ToolsRefresh | undefined;
+  readonly settledMs: number;
+}
 
 /** `delivered` separates a failure the host already saw from one it never did. */
 export interface IncidentReasonRow {
@@ -62,6 +72,9 @@ export interface DevboxReport {
   readonly snapshot: { readonly id: string; readonly image: string; readonly chainRev: number; readonly takenAt: number } | null;
   /** Durable: an eviction between the start and the question would erase the only evidence. */
   readonly lastAttach: AttachOutcome | undefined;
+  /** The last restore's phases, ms after it opened, its tools refresh, and how long it took to settle: the box's own
+   *  record, which no telemetry loss can drop (ledger 1024-h). A phase it never reached is absent. */
+  readonly lastRestore: LastRestore | undefined;
   /** A `lastTick.at` far in the past means the box stopped ticking; the row says what
    *  the last tick saw. */
   readonly lastTick: HeartbeatTick | undefined;

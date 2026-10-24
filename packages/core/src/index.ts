@@ -1752,7 +1752,7 @@ export {
 export { withTaskPlan, bindTaskPlan, type TaskPlan, type TaskPlanContext } from './tools/task-plan-scope';
 
 export {
-  TaskReminders, TASK_REMINDER_EVENT,
+  taskReminderOf, resultOwed, TASK_REMINDER_EVENT,
   taskReminderIdempotencyKey,
 } from './tasks/reminder';
 
