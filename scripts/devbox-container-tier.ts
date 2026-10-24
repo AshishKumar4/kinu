@@ -903,6 +903,10 @@ print('exact' if json.load(open('${BOX_CHROMIUM_POLICY}'))['CACertificates'] == 
 
       const first = await judged('first');
 
+      // Chromium writes its profile's Preferences on its own write timer, seconds after it changes, and a stop before
+      // then left none for the start to mark clean (staging 85ceeb6b2, 2026-10-24: its browser-trust read no file). The
+      // check below is of that file, so the stop waits for it.
+      await shell(`timeout 60 sh -c 'until test -s ${CHROMIUM_PROFILES}/Default/Preferences; do sleep 0.5; done' || { ls -la ${CHROMIUM_PROFILES}/Default; exit 1; } >&2`, name);
       requireEqual((await call('/stop', Commit, undefined, name)).kind, 'committed');
       // An agent's look opens the desktop again on the new start, as the person's first open would.
       const looked = await call('/agent-desktop', AgentAnswer, { driver: 'trust', member: 'screenshot', args: '[]' }, name);
