@@ -23,7 +23,7 @@ import { Card, Choice, Field } from "@/components/ui/form";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { BrandMark, providerBrand } from "@/components/ui/BrandMark";
-import { ChatGptConnect, ChatGptPlanUsage, ChatGptWelcome } from "@/components/account/ChatGptConnect";
+import { ChatGptAccountSignIn, ChatGptConnect, ChatGptPlanUsage, ChatGptWelcome } from "@/components/account/ChatGptConnect";
 import { SignInOpen, SignInPaste, SignInRisk, SignInStep, SignInSteps } from "@/components/account/SubscriptionSignIn";
 import { useProviderWindow } from "@/hooks/use-provider-window";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
@@ -132,6 +132,9 @@ export function ProvidersPanel({ framed = true }: { framed?: boolean }) {
                               onChanged={reloadAll}
                               connect={<ChatGptConnect plan={plan} onSignedIn={(first) => { reloadAll(); setChatgptWelcome(first); }} />}>
                               {planSignedIn && <ChatGptPlanUsage />}
+                              <AnotherAccount name="ChatGPT" baseKey={CHATGPT_CRED_KEY} keys={held}>
+                                {(account, done) => <ChatGptAccountSignIn account={account} onDone={() => { done(); reloadAll(); }} />}
+                              </AnotherAccount>
                             </ProviderEntry>
                           );
                         }}
@@ -143,7 +146,11 @@ export function ProvidersPanel({ framed = true }: { framed?: boolean }) {
                     detail={loginEnds(credentials, CLAUDE_CRED_KEY)}
                     disconnect={async () => { await deleteCredential(CLAUDE_CRED_KEY, false); }}
                     onChanged={reloadAll}
-                    connect={<ClaudeConnect onChanged={reloadAll} />} />
+                    connect={<ClaudeConnect onChanged={reloadAll} />}>
+                    <AnotherAccount name="Claude" baseKey={CLAUDE_CRED_KEY} keys={held}>
+                      {(account, done) => <ClaudeConnect account={account} onChanged={() => { done(); reloadAll(); }} />}
+                    </AnotherAccount>
+                  </ProviderEntry>
                   <CardSlot resource={catalog.resource} what="the provider catalog" onRetry={reloadAll}>
                     {(providers) => storedEntries(credentials, providers).map((entry) => (
                       <ProviderEntry key={entry.key} provider={entry.provider} name={entry.name} method={entry.method}
@@ -175,7 +182,66 @@ export function ProvidersPanel({ framed = true }: { framed?: boolean }) {
   );
 }
 
-const SUBSCRIPTION_NAMES = new Map([[CODEX_CRED_KEY, 'ChatGPT (Codex)'], [CLAUDE_CRED_KEY, 'Claude']]);
+const SUBSCRIPTION_NAMES = new Map([[CODEX_CRED_KEY, 'ChatGPT (Codex)'], [CHATGPT_CRED_KEY, 'ChatGPT'], [CLAUDE_CRED_KEY, 'Claude']]);
+
+/** The provider each subscription's calls are made as, whose default account a profile names. */
+const SUBSCRIPTION_PROVIDERS = new Map([[CODEX_CRED_KEY, 'codex'], [CHATGPT_CRED_KEY, 'chatgpt'], [CLAUDE_CRED_KEY, 'claude']]);
+
+/** The provider a stored key's account is chosen under: a subscription's, else the catalog's. */
+function accountProviderOfKey(key: string): string | null {
+  return SUBSCRIPTION_PROVIDERS.get(baseCredentialKey(key)) ?? catalogProviderOfKey(key);
+}
+
+/** Why `named` cannot name a second login of `name`, or null when it can (blank is not yet a name). */
+function accountNameProblem({ name, baseKey, keys, named }: { name: string; baseKey: string; keys: ReadonlySet<string>; named: string }): string | null {
+  if (named === '') return null;
+
+  if (!isAccountName(named) || named === MAIN_ACCOUNT) return 'Use a-z, 0-9 and dashes, up to 32 characters; "main" is the first login.';
+
+  return keys.has(accountCredentialKey(baseKey, named)) ? `${name} already holds an account named ${named}.` : null;
+}
+
+/**
+ * A second login of a connected subscription, under a name: asked for once the first is connected, and handed to the
+ * sign-in that seals it as `<key>@<name>`.
+ */
+function AnotherAccount({ name, baseKey, keys, children }: {
+  name: string;
+  baseKey: string;
+  keys: ReadonlySet<string>;
+  children: (account: string, done: () => void) => ReactNode;
+}) {
+  const [asking, setAsking] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [account, setAccount] = useState<string | null>(null);
+  const named = draft.trim().toLowerCase();
+  const problem = accountNameProblem({ name, baseKey, keys, named });
+
+  const done = () => { setAsking(false); setDraft(''); setAccount(null); };
+
+  if (account !== null) {
+    return (
+      <div className="space-y-3" data-another-account={account}>
+        <p className="t-meta p-text-2">Signing in a second {name} account, named <b className="p-text">{account}</b>.</p>
+        {children(account, done)}
+        <Button variant="ghost" size="sm" onClick={done}>Cancel</Button>
+      </div>
+    );
+  }
+
+  if (!asking) return <Button variant="ghost" size="sm" onClick={() => setAsking(true)}>Add another {name} account</Button>;
+
+  return (
+    <Field label={`Name the second ${name} account`}>
+      <div className="flex flex-wrap items-center gap-2" data-another-account="">
+        <TextInput value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="work" aria-label={`${name} account name`} />
+        <Button variant="primary" size="sm" disabled={named === '' || problem !== null} onClick={() => setAccount(named)}>Continue</Button>
+        <Button variant="ghost" size="sm" onClick={done}>Cancel</Button>
+      </div>
+      {problem !== null && <p role="alert" className="t-meta p-danger">{problem}</p>}
+    </Field>
+  );
+}
 
 /** Every stored key the fixed entries above do not show: API keys, endpoints, and named subscription accounts. */
 function storedEntries(creds: readonly CredentialSummary[], catalog: readonly ProviderCatalogEntry[]) {
@@ -343,7 +409,8 @@ function CloudflareGatewaySection({ status, onChanged }: {
  * which shows a code with its Copy, and the code is pasted back here. A refused code says why, in Claude's words. Its
  * page opens in a popup this page closes once the code connects (the owner's rule, 2026-10-21).
  */
-function ClaudeConnect({ onChanged }: { onChanged: () => void }) {
+/** `account` names a second login; without it, the main one. */
+function ClaudeConnect({ onChanged, account }: { onChanged: () => void; account?: string }) {
   const signInWindow = useProviderWindow('claude-sign-in');
   const [authorizeUrl, setAuthorizeUrl] = useState<string | null>(null);
   const [opened, setOpened] = useState(false);
@@ -359,7 +426,7 @@ function ClaudeConnect({ onChanged }: { onChanged: () => void }) {
   });
 
   const start = () => run(Effect.gen(function* () {
-    setAuthorizeUrl((yield* Effect.promise(() => startClaudeSignIn())).url);
+    setAuthorizeUrl((yield* Effect.promise(() => startClaudeSignIn(account))).url);
     setOpened(false);
     setCode('');
   }));
@@ -514,7 +581,7 @@ function formKey(baseKey: string, name: string): string | null {
 }
 
 async function forgetDefaultAccount(key: string): Promise<void> {
-  const provider = catalogProviderOfKey(key);
+  const provider = accountProviderOfKey(key);
 
   if (provider === null || accountOf(key) === MAIN_ACCOUNT) return;
   const envelope = await getProfileCatalog();
@@ -528,8 +595,10 @@ function DefaultAccounts({ keys, catalog }: { keys: readonly string[]; catalog: 
   const profile = useAsyncResource(getProfileCatalog);
   const [saving, setSaving] = useState(false);
 
-  const held = catalog.flatMap((entry) => {
-    const provider = catalogProviderOfKey(entry.credKey);
+  const subscriptions = [...SUBSCRIPTION_NAMES].map(([credKey, name]) => ({ credKey, name }));
+
+  const held = [...subscriptions, ...catalog].flatMap((entry) => {
+    const provider = accountProviderOfKey(entry.credKey);
     const accounts = storedAccounts(entry.credKey, keys);
 
     return provider === null || accounts.length < 2 ? [] : [{ name: entry.name, provider, accounts }];

@@ -51,11 +51,29 @@ export function ChatGptWelcome({ onClose }: { onClose: () => void }) {
   );
 }
 
+/** A sign-in's failure, said under it, and the handler that says it. */
+function useShownFailure() {
+  const [error, setError] = useState<string | null>(null);
+  const shown = useCallback((failure: { readonly cause?: unknown }) => Effect.sync(() => { setError(renderThrownChain({ cause: failure.cause ?? failure })); }), []);
+
+  return { error, setError, shown };
+}
+
+/** A second ChatGPT login, named `account`, signed in here and pasted back: the account holds it, as the main one. */
+export function ChatGptAccountSignIn({ account, onDone }: { account: string; onDone: () => void }) {
+  const { error, shown } = useShownFailure();
+
+  return (
+    <div className="space-y-3" data-chatgpt-account={account}>
+      <SignInHere account={account} onDone={onDone} onFailed={shown} />
+      {error && <p role="alert" className="t-meta p-danger">{error}</p>}
+    </div>
+  );
+}
+
 export function ChatGptConnect({ plan, onSignedIn }: { plan: ChatGptPlan; onSignedIn: (first: boolean) => void }) {
   const [way, setWay] = useState<Way | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const shown = useCallback((failure: { readonly cause?: unknown }) => Effect.sync(() => { setError(renderThrownChain({ cause: failure.cause ?? failure })); }), []);
+  const { error, setError, shown } = useShownFailure();
 
   const finished = useCallback((first: boolean) => {
     setWay(null);
@@ -184,7 +202,8 @@ function OnYourPc({ plan, onDone, onGaveUp, onFailed }: {
  * (2026-10-23) read what to do with it only once it was gone: so it is said, and drawn, before OpenAI opens, in a tab of
  * its own that stays on that page; back here, the paste step is what the card shows.
  */
-function SignInHere({ onDone, onFailed }: { onDone: (first: boolean) => void; onFailed: Failed }) {
+/** `account` names a second login; without it, the main one. */
+function SignInHere({ onDone, onFailed, account }: { onDone: (first: boolean) => void; onFailed: Failed; account?: string }) {
   const [started, setStarted] = useState<{ authorizeUrl: string; redirectUri: string } | null>(null);
   const [opened, setOpened] = useState(false);
   const [pasted, setPasted] = useState("");
@@ -197,11 +216,11 @@ function SignInHere({ onDone, onFailed }: { onDone: (first: boolean) => void; on
     setOpened(false);
     setPasted("");
     setProblem(null);
-    detach(attempt({ doing: "starting the ChatGPT sign-in", otherwise: "io" }, startChatGptPaste).pipe(
+    detach(attempt({ doing: "starting the ChatGPT sign-in", otherwise: "io" }, () => startChatGptPaste(account)).pipe(
       Effect.map(setStarted),
       Effect.catch(onFailed),
     ));
-  }, [onFailed]);
+  }, [onFailed, account]);
 
   useEffect(begin, [begin]);
 

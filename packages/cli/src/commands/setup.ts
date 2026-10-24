@@ -30,8 +30,9 @@ export function connectOptions(opts: {
   readonly origin?: string;
   readonly model?: string;
   readonly local?: boolean;
-}): { readonly origin?: string; readonly model?: string; readonly local: boolean } {
-  const base = { local: opts.local ?? false };
+  readonly cloud?: boolean;
+}): { readonly origin?: string; readonly model?: string; readonly local: boolean; readonly cloud: boolean } {
+  const base = { local: opts.local ?? false, cloud: opts.cloud ?? false };
   const withOrigin = opts.origin === undefined ? base : { ...base, origin: opts.origin };
 
   return opts.model === undefined ? withOrigin : { ...withOrigin, model: opts.model };

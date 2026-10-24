@@ -317,7 +317,7 @@ export function holdsAccounts(id: string): id is ApiKeyProviderId | 'chatgpt' | 
 export function connectProvider(
   id: ProviderConnectId,
   port: ProviderConnectPort,
-  opts: { readonly origin?: string; readonly model?: string; readonly local?: boolean; readonly account?: string } = {},
+  opts: { readonly origin?: string; readonly model?: string; readonly local?: boolean; readonly cloud?: boolean; readonly account?: string } = {},
 ): Promise<ProviderConnectOutcome> {
   return settle(Effect.gen(function* () {
     const account = opts.account ?? MAIN_ACCOUNT;
@@ -328,8 +328,14 @@ export function connectProvider(
 
     switch (id) {
       case 'cloudflare': return yield* Effect.promise(async () => connectCloudflare(port, opts.origin));
-      case 'claude': return yield* Effect.promise(async () => connectClaude(port, opts.model, account));
-      case 'chatgpt': return yield* Effect.promise(async () => connectChatGpt(port, opts.model, account));
+      case 'claude': return yield* Effect.promise(async () => (opts.cloud === true ? connectClaudeToAccount(port, account) : connectClaude(port, opts.model, account)));
+      case 'chatgpt':
+        // A ChatGPT sign-in made here is registered to this machine; the account's own sign-in registers the account.
+        if (opts.cloud === true) {
+          return { kind: 'blocked', reason: 'A ChatGPT sign-in made here belongs to this machine, so it cannot be moved to your Kinu account.', hint: 'Add a ChatGPT account to Kinu in Settings > Model providers: Add another ChatGPT account.' };
+        }
+
+        return yield* Effect.promise(async () => connectChatGpt(port, opts.model, account));
       case 'opencode': return yield* connectOpenCode(port, opts.model);
       case 'openai':
       case 'openrouter':
@@ -405,6 +411,25 @@ async function connectClaude(port: ProviderConnectPort, requestedModel: string |
   if (answered === null) return { kind: 'connected', summary: `Connected the Claude account ${account}`, detail: accountDetail('claude', account) };
 
   return { kind: 'connected', summary: 'Connected your Claude subscription', detail: await defaultModelDetail(`claude/${answered.replace(/^claude\//, '')}`) };
+}
+
+/**
+ * A Claude sign-in made here, kept in the Kinu account as `claude.oauth[@account]` for its cloud workspaces. This
+ * machine keeps no copy: a login refreshed in two places spends the other's refresh token.
+ */
+async function connectClaudeToAccount(port: ProviderConnectPort, account: string): Promise<ProviderConnectOutcome> {
+  const cloud = resolveCloudSession();
+
+  if (!cloud) return { kind: 'blocked', reason: 'This machine is not signed in to Kinu, so the sign-in has no account to go to.', hint: 'Run kinu auth, then connect again.' };
+  const credential = await runClaudeSignIn(port);
+
+  await setCloudCredential(cloud.origin, cloud.token, accountCredentialKey(CLAUDE_CRED_KEY, account), decodeJsonValue({ value: { kind: 'oauth', ...credential } }));
+
+  return {
+    kind: 'connected',
+    summary: `Kept the Claude account ${account} in your Kinu account`,
+    detail: account === MAIN_ACCOUNT ? 'Its cloud workspaces use it for claude/<model>.' : `Its cloud workspaces use it for claude@${account}/<model>.`,
+  };
 }
 
 /** The browser returns to this machine; where it cannot, the person pastes what Claude showed them. */

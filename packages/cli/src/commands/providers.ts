@@ -43,7 +43,7 @@ export function providersCommand(
   actionOrProvider: string | undefined,
   providerArg: string | undefined,
   accountArg: string | undefined,
-  opts: { origin?: string; model?: string; local?: boolean; revoke?: boolean },
+  opts: { origin?: string; model?: string; local?: boolean; cloud?: boolean; revoke?: boolean },
 ): Promise<void> {
   return settle(Effect.gen(function* () {
     const { action, provider, raw, account } = yield* parseArgs(actionOrProvider, providerArg, accountArg);
