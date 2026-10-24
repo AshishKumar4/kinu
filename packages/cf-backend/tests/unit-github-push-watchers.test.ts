@@ -29,6 +29,7 @@ function workspace(refuse = false) {
   const made: Array<{ readonly repo: string; readonly url: string; readonly events: readonly string[] }> = [];
   const deleted: Array<readonly [string, number]> = [];
   const forgotten: string[] = [];
+  const resumed: string[] = [];
 
   const account: PushHookAccount = {
     hookCreate: async (ask) => {
@@ -44,9 +45,10 @@ function workspace(refuse = false) {
     registry, secrets, workspace: 'shop', routeSecret: 'route-secret', origin: 'https://kinu.example.com', account,
     revoke: async (id) => { await cancelTrigger({ registry, trigger_id: id, now: NOW, caller: 'owner', secrets }); },
     forgetClaims: (id) => { forgotten.push(id); },
+    resumeDeliveries: async (id) => { resumed.push(id); },
   };
 
-  return { registry, secrets, host, made, deleted, forgotten };
+  return { registry, secrets, host, made, deleted, forgotten, resumed };
 }
 
 const pushOf = (w: ReturnType<typeof workspace>, id: string) => gitHubPushOf(present(w.registry.get(id), 'the watcher'));
@@ -95,6 +97,8 @@ describe('a push watcher', () => {
     // A hook GitHub never deleted as it went signs with the old secret, which no longer verifies; its claims go with it.
     expect(await secretOf()).not.toBe(before);
     expect(w.forgotten).toEqual([watcher.id]);
+    // What GitHub delivered before it went is checked now, with no delivery sent again.
+    expect(w.resumed).toEqual([watcher.id]);
   });
 
   test('one GitHub will not hook again stays parked, and is counted so the account asks again', async () => {

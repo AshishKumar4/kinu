@@ -54,6 +54,7 @@ import { AgentIsolateSlots } from "./dynamic-worker-slots";
 import { providerBindingsOf, routedModelReads, userCredentials } from "./providers/agent-registry";
 import { AgentTurns } from "./agent-turns";
 import { AgentWakes } from "./agent-wakes";
+import { PendingDeliveries } from "./pending-deliveries";
 import type { AgentTurnActivity, AgentSnapshot, ChatWindow, RunEventRecorder, StoredRow } from '@kinu.run/core';
 import type { SerializedMessage, WebSearchProvider } from '@kinu.run/core';
 import { serveNodeProgramCall, type NodeProgramAnswer } from './node-program';
@@ -175,7 +176,7 @@ import {
   SleepTimeLane, initSleepTimeTables,
   // Core owns the ingress gates; this actor owns the transports in front of them
   // (DO alarm, Worker webhook + email routes, cross-DO RPC).
-  acceptWebhookDelivery, registerDurableWebhook, createWebhookSecretStore, forgetClaims,
+  acceptWebhookDelivery, checkPendingDelivery, registerDurableWebhook, createWebhookSecretStore, forgetClaims,
   acceptContainerEvent, type ContainerEventResult,
   initWebhookIngressTables,
   type WebhookDelivery, type WebhookDeliveryResult, type WebhookSecretStore,
@@ -461,10 +462,22 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       () => this.wakeAgent(actorId, { recover: true }), { workspace: this.name, actor: actorId }));
   }, () => { this.liveReadsMoved(['listWorkspaceAgents']); });
 
+  /** A watcher's verified deliveries, each kept by its own job until its check consumes it (pending-deliveries.ts). A
+   *  workspace being deleted checks none: its triggers are fenced with its admission. */
+  private readonly pendingDeliveries = new PendingDeliveries(async (pending) => {
+    if (this.admitting.signal.aborted) return { kind: 'done' };
+
+    return await checkPendingDelivery({
+      triggers: this.triggerRegistry, log: this.eventLog, sql: this.ctx.storage.sql, watch: this.watching,
+      onAdmitted: () => { this.armDurableWake(); },
+    }, pending);
+  });
+
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
     this.lifecycle.use(this.nimbusTasks);
     this.lifecycle.use(this.agentWakes);
+    this.lifecycle.use(this.pendingDeliveries);
     const name = ctx.id.name ?? this.recordedName();
 
     if (name === undefined) {
@@ -2633,7 +2646,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * wall. Its answer decides whether the agent wakes (watch.ts); a program that throws, answers off its shape or runs
    * past the wall parks the watcher until its code changes.
    */
-  private async watchCheck(check: WatchCheck, state: JsonValue | undefined, input: JsonValue | undefined): Promise<WatchOutcome> {
+  protected async watchCheck(check: WatchCheck, state: JsonValue | undefined, input: JsonValue | undefined): Promise<WatchOutcome> {
     const began = Date.now();
     // Read as its role reads in Plan: a check reaches nothing its agent's own programs could not.
     const namespaces = this.ownNamespaces('plan');
@@ -3556,6 +3569,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
       revoke: async (triggerId) => { await this.cancelTrigger(triggerId, 'owner'); },
       forgetClaims: (triggerId) => { forgetClaims(this.ctx.storage.sql, triggerId); },
+      resumeDeliveries: (triggerId) => this.pendingDeliveries.resume(triggerId),
     };
   }
 
@@ -7492,11 +7506,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const push = trigger === null ? null : gitHubPushOf(trigger);
     const cancelled = await cancelTrigger({ registry: this.triggerRegistry, trigger_id, now: Date.now(), caller, secrets: this.webhookSecrets });
 
-    // What its secret signed is forgotten with it; a push watcher's hook goes too, so GitHub stops delivering where
-    // nothing listens.
+    // What its secret signed is forgotten with it; a push watcher's kept deliveries and its hook go too, so GitHub stops
+    // delivering where nothing listens.
     if (cancelled.changed) forgetClaims(this.ctx.storage.sql, trigger_id);
 
-    if (push !== null && cancelled.changed) await deletePushHook(this.pushWatcherHost(), push);
+    if (push !== null && cancelled.changed) {
+      await this.pendingDeliveries.forget(trigger_id);
+      await deletePushHook(this.pushWatcherHost(), push);
+    }
 
     return cancelled;
   }
@@ -7538,7 +7555,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       secrets: this.webhookSecrets,
       sql: this.ctx.storage.sql,
       onAdmitted: () => { this.armDurableWake(); },
-      watch: this.watching,
+      keep: (pending) => this.pendingDeliveries.keep(pending),
     }, opts);
   }
 

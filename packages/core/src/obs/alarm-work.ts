@@ -27,6 +27,8 @@ export const ALARM_WORK = {
   WakeJobs: [],
   // Wakes an agent's isolate for what it owes; what the isolate runs is read by its tail.
   AgentWakes: [],
+  // Checks a watcher's kept delivery (cf-backend `pending-deliveries.ts`).
+  PendingDeliveries: ['watch.checked'],
   // Nimbus's hosted-runtime tasks, each re-armed from the activity it watches.
   NimbusTasks: [],
   // Dispatch their capabilities' jobs above, and the fibers that hold running work.

@@ -131,6 +131,26 @@ export class WakeJobs extends LifecycleCapability {
   }
 }
 
+/** What each job {@link retriedUnlessRefused} answers for logs as it fails, and what it was doing. */
+const JOB_FAILURES = {
+  workspaceDeletion: { event: 'workspace.deletion_failed', doing: 'finishing a workspace deletion that has not landed', otherwise: 'unavailable' },
+  pendingDelivery: { event: 'watch.delivery_check_failed', doing: "checking a watcher's kept delivery", otherwise: 'io' },
+} as const;
+
+/** A job that failed every retry comes back a lap later, as {@link retriedLater}, unless no retry can mend its failure (a
+ *  refusal's class): that one ends, its failure logged with `refused`. */
+export function retriedUnlessRefused(kind: keyof typeof JOB_FAILURES): NonNullable<DurableObjectCapability['onJobError']> {
+  return ({ job }, cause) => {
+    const failing = JOB_FAILURES[kind];
+    const failure = toKinuError({ doing: failing.doing, cause, otherwise: failing.otherwise });
+    const refused = CODE_IS_REFUSAL[failure.code];
+
+    diagnostics.failure(failing.event, failure, { job: job.id, refused });
+
+    return refused ? undefined : { rescheduleAt: Date.now() + RECOVERY_BACKOFF_CEILING_MS };
+  };
+}
+
 /** A job that failed every retry comes back a lap later rather than ending: what it was for is still stored. */
 export function retriedLater(doing: string): NonNullable<DurableObjectCapability['onJobError']> {
   return ({ job }, cause) => {

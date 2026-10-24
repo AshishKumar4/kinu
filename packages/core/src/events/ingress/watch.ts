@@ -161,7 +161,7 @@ export interface WatchAsk {
   /** The verified delivery that asked, which keys its fire: what its signature proves, never an id the sender names. */
   readonly delivery?: string;
   /** Takes the delivery's claim in the commit of what its check found, with its state and its fire; false when another
-   *  commit took it. A reset during the check leaves it untaken, so the sender's redelivery is checked again. */
+   *  commit took it. A reset during the check leaves it untaken, so the kept delivery is checked again. */
   readonly claim?: () => boolean;
 }
 
@@ -276,12 +276,12 @@ async function commitCheck(deps: Pick<WatchDeps, 'registry' | 'log'>, checked: {
   const { answer } = outcome;
   const next = answer.state === undefined ? read : answer.state;
 
+  // The delivery is spent here, in the same synchronous run as its state and its fire, so a reset cannot part them; an
+  // answer that found nothing new spends it too. A redelivery that was checked again while this one ran answers for it.
+  if (claim !== undefined && !claim()) return 'dropped';
+
   // A cursor that moved back is a check that saw less than the one before it: nothing it found is new.
   if (movesBack(read, next)) return 'quiet';
-
-  // The delivery is spent here, in the same synchronous run as its state and its fire, so a reset cannot part them. A
-  // redelivery that was checked again while this one ran answers for it already.
-  if (claim !== undefined && !claim()) return 'dropped';
 
   // An answer is the watcher checking again: a `parked` an owner's resume left behind goes with the old state.
   if (stableStringify(next ?? null) !== stableStringify(read ?? null) || watch.parked !== undefined) {

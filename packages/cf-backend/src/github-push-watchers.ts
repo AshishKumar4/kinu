@@ -28,6 +28,8 @@ export interface PushWatcherHost {
   readonly revoke: (triggerId: string) => Promise<void>;
   /** Every replay claim of the trigger forgotten, its secret rotated. */
   readonly forgetClaims: (triggerId: string) => void;
+  /** The deliveries kept while the trigger was parked, checked now that it checks again. */
+  readonly resumeDeliveries: (triggerId: string) => Promise<void>;
 }
 
 const PARKED_ON_GITHUB = 'GitHub was disconnected from this account; connect it again in Settings > Connections and this watcher resumes.';
@@ -135,7 +137,10 @@ export function resumePushWatchers(host: PushWatcherHost, now: number): Promise<
       }
 
       host.forgetClaims(parked.id);
-      yield* Effect.promise(() => resumeWatcher(host.registry, parked.id, 'connection', now));
+
+      if (yield* Effect.promise(() => resumeWatcher(host.registry, parked.id, 'connection', now))) {
+        yield* Effect.promise(() => host.resumeDeliveries(parked.id));
+      }
     }
 
     return parkedOnConnection(host.registry).length;

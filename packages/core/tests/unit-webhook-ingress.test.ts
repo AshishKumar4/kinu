@@ -3,12 +3,12 @@
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
-import * as v from 'valibot';
 import {
   EventLog, TriggerRegistry,
   acceptWebhookDelivery, createWebhookSecretStore, hmacSha256Hex,
   initEventsHubTables, initWebhookIngressTables, registerDurableWebhook, cancelTrigger,
-  WatchClaims, checkAnswerOf, type JsonValue, type RunCheck, type SqlExec, type WebhookDelivery,
+  WatchClaims, checkAnswerOf, checkPendingDelivery, type JsonValue, type PendingDelivery, type RunCheck, type SqlExec,
+  type WebhookDelivery,
 } from '../src/index';
 import type { WebhookTriggerSpec } from '../src/events/ingress/webhook';
 import { createMemoryVfs, createTestActors, filesIn, present } from '@kinu.run/test-utils';
@@ -294,28 +294,26 @@ describe('a GitHub repository hook', () => {
       .toMatchObject({ status: 'admitted', admitted: true });
   });
 
-  test("a push watcher's check reads GitHub's event and delivery id beside the payload", async () => {
-    const h = hub();
-    const inputs: (JsonValue | undefined)[] = [];
+  /** A watcher's deliveries kept as its host keeps them, each then checked as its job checks it. */
+  function kept(h: ReturnType<typeof hub>, run: RunCheck) {
+    const pending: PendingDelivery[] = [];
 
-    const run: RunCheck = async (_check, _state, input) => {
-      inputs.push(input);
+    const keep = async (delivery: PendingDelivery) => {
+      pending.push(delivery);
 
-      return { kind: 'answered', answer: present(checkAnswerOf({ fire: false }), 'a quiet answer') };
+      return true;
     };
 
-    const deps = { ...h.deps, watch: { claims: new WatchClaims(), run } };
+    const deps = { ...h.deps, keep };
+    const watch = { claims: new WatchClaims(), run };
 
-    const trigger_id = await gitHubTrigger(h, { code: 'return { fire: false };' });
-
-    await acceptWebhookDelivery(deps, {
-      trigger_id, method: 'POST', body_text: BODY, cf_mtls_verified: false, delivery_id: null, hmac_signature: null, hmac_timestamp: null,
-      bearer_header: null, content_type: 'application/json', now: NOW,
-      headers: { 'x-hub-signature-256': await signed(BODY), 'x-github-event': 'push', 'x-github-delivery': 'd-1' },
-    });
-
-    expect(inputs).toEqual([{ event: 'push', delivery: 'd-1', payload: { ref: 'refs/heads/main', after: 'abc123', repository: { full_name: 'Owner/Repo' } } }]);
-  });
+    return {
+      deps,
+      checkAll: async () => {
+        for (const delivery of pending.splice(0)) await checkPendingDelivery({ ...h.deps, watch }, delivery);
+      },
+    };
+  }
 
   /** A push watcher's delivery as GitHub sends it, through `deps`. */
   const pushed = async (deps: Parameters<typeof acceptWebhookDelivery>[0], trigger_id: string, body = BODY) => acceptWebhookDelivery(deps, {
@@ -324,78 +322,34 @@ describe('a GitHub repository hook', () => {
     headers: { 'x-hub-signature-256': await signed(body), 'x-github-event': 'push', 'x-github-delivery': 'd-1' },
   });
 
-  test('a reset during its check spends nothing: the same signed delivery, sent again, fires once', async () => {
+  test("a push watcher's check reads GitHub's event and delivery id beside the payload", async () => {
     const h = hub();
-    const trigger_id = await gitHubTrigger(h, { code: 'return { fire: true, brief: "main moved" };' });
-    const fire: RunCheck = async () => ({ kind: 'answered', answer: present(checkAnswerOf({ fire: true, brief: 'main moved' }), 'a fire') });
+    const inputs: (JsonValue | undefined)[] = [];
 
-    // The activation dies while its check runs: the check never answers, and what it held in memory goes with it.
-    let checking = (): void => undefined;
-    const reached = new Promise<void>((resolve) => { checking = resolve; });
+    const w = kept(h, async (_check, _state, input) => {
+      inputs.push(input);
 
-    const never: RunCheck = () => {
-      checking();
+      return { kind: 'answered', answer: present(checkAnswerOf({ fire: false }), 'a quiet answer') };
+    });
 
-      return new Promise<never>(() => undefined);
-    };
+    const trigger_id = await gitHubTrigger(h, { code: 'return { fire: false };' });
 
-    const abandoned = pushed({ ...h.deps, watch: { claims: new WatchClaims(), run: never } }, trigger_id);
+    expect(await pushed(w.deps, trigger_id)).toEqual({ status: 'admitted', admitted: true });
+    expect(inputs).toEqual([]);
+    await w.checkAll();
 
-    await reached;
-    expect(h.claims()).toEqual([]);
-
-    const revived = { ...h.deps, watch: { claims: new WatchClaims(), run: fire } };
-
-    expect(await pushed(revived, trigger_id)).toMatchObject({ admitted: true });
-    expect(await pushed(revived, trigger_id)).toMatchObject({ admitted: false });
-    expect(h.log.pending({ variant: 'timer' })).toHaveLength(1);
-    expect(Bun.peek.status(abandoned)).toBe('pending');
-  });
-
-  test('a redelivery folded into the running check commits nothing of its own once that check took the claim', async () => {
-    const h = hub();
-    const trigger_id = await gitHubTrigger(h, { code: 'return { fire: true, brief: "main moved", state: { n: 1 } };' });
-    let open = (): void => undefined;
-    let checking = (): void => undefined;
-    const gate = new Promise<void>((resolve) => { open = resolve; });
-    const reached = new Promise<void>((resolve) => { checking = resolve; });
-    let checks = 0;
-
-    const run: RunCheck = async (_check, state) => {
-      checks += 1;
-
-      if (checks === 1) {
-        checking();
-        await gate;
-      }
-
-      const n = v.is(v.object({ n: v.number() }), state) ? state.n : 0;
-
-      return { kind: 'answered', answer: present(checkAnswerOf({ fire: true, brief: 'main moved', state: { n: n + 1 } }), 'a fire') };
-    };
-
-    const deps = { ...h.deps, watch: { claims: new WatchClaims(), run } };
-    const first = pushed(deps, trigger_id);
-
-    await reached;
-    expect(await pushed(deps, trigger_id)).toMatchObject({ admitted: false });
-    open();
-    expect(await first).toMatchObject({ admitted: true });
-
-    expect(checks).toBe(2);
-    expect(h.log.pending({ variant: 'timer' })).toHaveLength(1);
-    expect(v.parse(v.looseObject({ watch: v.unknown() }), present(h.triggers.get(trigger_id), 'the watcher').spec).watch).toEqual({ state: { n: 1 } });
+    expect(inputs).toEqual([{ event: 'push', delivery: 'd-1', payload: { ref: 'refs/heads/main', after: 'abc123', repository: { full_name: 'Owner/Repo' } } }]);
   });
 
   test('a fresh delivery naming the id of one that fired is a fire of its own: the id is GitHub\'s word, not proof', async () => {
     const h = hub();
-    const run: RunCheck = async () => ({ kind: 'answered', answer: present(checkAnswerOf({ fire: true, brief: 'main moved' }), 'a fire') });
-    const deps = { ...h.deps, watch: { claims: new WatchClaims(), run } };
+    const w = kept(h, async () => ({ kind: 'answered', answer: present(checkAnswerOf({ fire: true, brief: 'main moved' }), 'a fire') }));
     const trigger_id = await gitHubTrigger(h, { code: 'return { fire: true, brief: "main moved" };' });
     const next = '{"ref":"refs/heads/main","after":"def456","repository":{"full_name":"owner/repo"}}';
 
-    expect(await pushed(deps, trigger_id)).toMatchObject({ admitted: true });
-    expect(await pushed(deps, trigger_id, next)).toMatchObject({ admitted: true });
+    expect(await pushed(w.deps, trigger_id)).toMatchObject({ admitted: true });
+    expect(await pushed(w.deps, trigger_id, next)).toMatchObject({ admitted: true });
+    await w.checkAll();
     expect(h.log.pending({ variant: 'timer' })).toHaveLength(2);
   });
 });

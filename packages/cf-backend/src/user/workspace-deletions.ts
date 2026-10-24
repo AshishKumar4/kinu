@@ -5,9 +5,10 @@
  * stayed marked, nothing read its account again, and the workspace woke its agent about once a minute for six hours.
  */
 import * as v from 'valibot';
-import { LifecycleCapability, type DurableObjectCapability, type LifecycleJobContext, type LifecycleJobOutcome } from 'agents/lifecycle';
+import { LifecycleCapability, type LifecycleJobContext, type LifecycleJobOutcome } from 'agents/lifecycle';
 import { RECOVERY_BACKOFF_CEILING_MS } from '@kinu.run/core';
-import { CODE_IS_REFUSAL, diagnostics, hold, logged, toKinuError } from '@kinu.run/core/obs';
+import { hold, logged } from '@kinu.run/core/obs';
+import { retriedUnlessRefused } from '../wake-jobs';
 
 const DELETION_JOB = 'workspace-deletion';
 
@@ -69,14 +70,7 @@ export class WorkspaceDeletionJobs extends LifecycleCapability {
    * it. One refused answers the same until something it read changes, so it parks, its row still marked, until its
    * account's next start, which a deploy brings, arms it again.
    */
-  readonly onJobError: NonNullable<DurableObjectCapability['onJobError']> = ({ job }, cause) => {
-    const failure = toKinuError({ doing: 'finishing a workspace deletion that has not landed', cause, otherwise: 'unavailable' });
-    const parked = CODE_IS_REFUSAL[failure.code];
-
-    diagnostics.failure('workspace.deletion_failed', failure, { job: job.id, parked });
-
-    return parked ? undefined : { rescheduleAt: Date.now() + RECOVERY_BACKOFF_CEILING_MS };
-  };
+  readonly onJobError = retriedUnlessRefused('workspaceDeletion');
 }
 
 function jobId(workspace: string): string {
