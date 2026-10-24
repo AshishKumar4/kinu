@@ -87,14 +87,14 @@ In the chat a slate is as tall as its content, like the text around it. Never si
 
 For a view with nothing to remember, write the page into your answer on lines of its own, never in a code fence:
 
-<slate-ui name="funnel">
-<title>Checkout funnel</title>
-<p id="total"></p>
-<button id="retry">Retry the import</button>
+<slate-ui name="inbox">
+<title>Mail that needs you</title>
+<p id="summary"></p>
+<button id="draft">Draft the replies</button>
 <script type="module">
   import { workspace } from "kinu:slate";
-  document.getElementById("total").textContent = await workspace.fs.text("/home/main/funnel.txt");
-  document.getElementById("retry").onclick = () => workspace.agent.send({ text: "Retry the import." });
+  document.getElementById("summary").textContent = await workspace.fs.text("/home/main/inbox-summary.md");
+  document.getElementById("draft").onclick = () => workspace.agent.send({ text: "Draft replies to the mail that needs me." });
 </script>
 </slate-ui>
 
