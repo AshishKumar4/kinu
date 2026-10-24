@@ -4,7 +4,7 @@
  */
 import { Effect } from 'effect';
 import { Button } from "@/components/ui/Button";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { CheckIcon } from "@phosphor-icons/react";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
 import {
@@ -358,11 +358,22 @@ function ClaudeConnect({ onChanged }: { onChanged: () => void }) {
     return Effect.ensuring(Effect.catchCause(step, showing(setError)), Effect.sync(() => setBusy(false)));
   });
 
-  const start = () => run(Effect.gen(function* () {
-    setAuthorizeUrl((yield* Effect.promise(() => startClaudeSignIn())).url);
-    setOpened(false);
-    setCode('');
-  }));
+  // One click (the owner, 2026-10-24): the popup opens at the click, before the await a blocker would count against it,
+  // and goes to Claude once the sign-in's address is had. A popup refused, or closed before then, leaves step 1's link; a
+  // failed start closes it, and so does leaving the card, which alone could take the code back.
+  const start = () => {
+    signInWindow.reserve();
+
+    return run(Effect.gen(function* () {
+      const { url } = yield* Effect.promise(() => startClaudeSignIn());
+
+      setAuthorizeUrl(url);
+      setCode('');
+      setOpened(signInWindow.send(url));
+    }).pipe(Effect.onError(() => Effect.sync(() => signInWindow.close()))));
+  };
+
+  useEffect(() => () => signInWindow.close(), [signInWindow]);
 
   const finish = () => run(Effect.gen(function* () {
     const result = yield* Effect.promise(() => finishClaudeSignIn(code.trim()));
