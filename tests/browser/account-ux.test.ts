@@ -1359,10 +1359,19 @@ describe('Settings → Memory', () => {
 describe("the page's mode", () => {
   const shownOn = async (page: Page): Promise<string | undefined> => page.evaluate(() => document.documentElement.dataset.mode);
 
-  // A media query's change is reported in the page's next rendering update, before that update's animation frames.
+  // The turn is heard as the page hears it: its media query's change, which reaches every listener of that query in one
+  // dispatch, then the frame after it (tiers, 2026-10-24: a frame alone could run before the change was reported).
   const systemTurns = async (page: Page, system: 'dark' | 'light'): Promise<string | undefined> => {
+    await page.evaluate(() => {
+      const root = document.documentElement;
+
+      delete root.dataset.turnHeard;
+      matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
+        requestAnimationFrame(() => { root.dataset.turnHeard = '1'; });
+      }, { once: true });
+    });
     await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: system }]);
-    await page.evaluate(() => new Promise<void>((done) => { requestAnimationFrame(() => { done(); }); }));
+    await page.waitForFunction(() => document.documentElement.dataset.turnHeard === '1');
 
     return shownOn(page);
   };
