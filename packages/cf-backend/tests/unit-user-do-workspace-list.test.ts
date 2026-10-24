@@ -414,10 +414,12 @@ describe('a deletion that could not finish', () => {
 });
 
 // Production, 2026-10-22: a destroy ends its activation after the wipe, which can cut its answer with any error, and
-// not only the SDK's 'destroyed'. The workspace's own read decides, not the error's text (`confirmedDeletion`).
-describe("a workspace's deletion, confirmed by reading it", () => {
-  test('lands where the wipe did, whatever cut its answer, and fails where the workspace still stands', async () => {
-    const converged = async (error: string, wiped: boolean) => {
+// not only the SDK's 'destroyed'. An answer, or the SDK's 'destroyed' (raised only once its `deleteAll` returned), is the
+// wipe done; any other failure is read again, and the workspace's own read decides (`confirmedDeletion`). Production
+// 2026-10-24: that read started the emptied object again, 6.7 s of a 27 s delete, after an answer that already said so.
+describe("a workspace's deletion, confirmed by its answer or by reading it", () => {
+  test('lands where the wipe did, whatever cut its answer, reading it only where nothing said', async () => {
+    const converged = async (error: string | undefined, wiped: boolean) => {
       const harness = createTestUserDO({ durableObjectId: USER_ID, destroyWorkspaceError: error, destroyWorkspaceWiped: wiped });
       const owner = await testOwner();
       await harness.userDO.registerWorkspace(owner, 'cut');
@@ -426,15 +428,19 @@ describe("a workspace's deletion, confirmed by reading it", () => {
 
       harness.close();
 
-      return { removed: removed.status, pending };
+      return { removed: removed.status, pending, reads: harness.destroyReads.length };
     };
 
     expect({
+      answered: await converged(undefined, true),
+      endedItself: await converged('destroyed', true),
       cutOtherwise: await converged('Network connection lost.', true),
-      abortedUnwiped: await converged('destroyed', false),
+      cutUnwiped: await converged('Network connection lost.', false),
     }).toEqual({
-      cutOtherwise: { removed: 'fulfilled', pending: 0 },
-      abortedUnwiped: { removed: 'rejected', pending: 1 },
+      answered: { removed: 'fulfilled', pending: 0, reads: 0 },
+      endedItself: { removed: 'fulfilled', pending: 0, reads: 0 },
+      cutOtherwise: { removed: 'fulfilled', pending: 0, reads: 1 },
+      cutUnwiped: { removed: 'rejected', pending: 1, reads: 1 },
     });
   });
 });

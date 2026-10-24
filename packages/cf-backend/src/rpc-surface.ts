@@ -160,6 +160,7 @@ const USER_DO_METHODS = [
   'relayModelCall',
   'releaseWorkspaceReservation',
   'removeWorkspace',
+  'requestWorkspaceRemoval',
   'renameDevice',
   'renameDeviceSession',
   'renewWorkspaceReservation',

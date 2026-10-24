@@ -37,7 +37,7 @@ function account() {
 
       return { unrevoked: revoke ? 'the provider refused the revoke' : null };
     },
-    async removeWorkspace(_caller: UserCaller, name: string) { asked.removed.push(name); },
+    async requestWorkspaceRemoval(_caller: UserCaller, name: string) { asked.removed.push(name); },
   };
 
   const web = userAccount({

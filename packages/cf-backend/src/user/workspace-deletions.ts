@@ -49,6 +49,12 @@ export class WorkspaceDeletionJobs extends LifecycleCapability {
       .then(() => undefined);
   }
 
+  /** `workspace`'s deletion runs now, from the account's alarm: a person's delete, answered once this returns. A job
+   *  already standing, or one running, is brought to now; one running reads its row again as it ends (`applyOutcome`). */
+  async dueNow(workspace: string): Promise<void> {
+    await this.lifecycle.jobs.push({ id: jobId(workspace), fn: DELETION_JOB, time: Date.now(), payload: { workspace } });
+  }
+
   /** `workspace`'s deletion landed. */
   async ended(workspace: string): Promise<void> {
     await this.lifecycle.jobs.cancel(jobId(workspace));

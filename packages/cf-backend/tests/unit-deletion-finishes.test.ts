@@ -5,10 +5,14 @@
  * minute for six hours (426 starts, 687 owed reports, 2,102 calls into its isolate).
  */
 import { expect, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
+import { sandboxIdForWorkspace } from '@kinu.run/core';
 import { setDiagnosticsSink } from '@kinu.run/core/obs';
 import { createRecordingLogger, type RecordingLogger } from '@kinu.run/test-utils';
 import { createTestUserDO, testOwner, type TestUserDO } from './helpers/user-do';
-import { agentWakes, gatewayWorkspace, orchestratorHarness, wakeForDelegatedTask, workspaceMainActor, type StartedHarness } from './helpers/actor-harness';
+import { agentWakes, gatewayWorkspace, orchestratorHarness, until, wakeForDelegatedTask, workspaceMainActor, type StartedHarness } from './helpers/actor-harness';
+import { memoryBucket } from './helpers/r2';
+import { pictureKey } from '../src/slates/pictures';
 import { cutNextDelivery, loseNextInterrupt } from './helpers/agent-facets';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 import { chatCompletion, stubAiBinding } from './helpers/platform-gateway';
@@ -124,4 +128,83 @@ test("a deletion ends every agent's wake as it begins, and its agents arm none a
   await Promise.allSettled([wakeForDelegatedTask(harness, hired.actorId, 'Tally the chargebacks.')]);
 
   expect(agentWakes(db)).toEqual([]);
+});
+
+// Production 2026-10-24, mossy-quarry-62346247: the person's DELETE waited 27 s on the teardown, 15.6 s of it its devbox
+// listing an empty R2 prefix and 6.7 s reading the destroyed workspace again. The delete answers once it is durable and
+// the list drops the workspace at once; the deletion's own job lands the teardown, its devbox's backups and its
+// pictures in R2 included, even when the account's object reset with that job running.
+test("a person's delete answers before its teardown, which its own job lands across a reset", async () => {
+  const storage = new Database(':memory:');
+  const backups = memoryBucket();
+  const pictures = memoryBucket();
+  const box = sandboxIdForWorkspace('ledger');
+  const boxCalls: string[] = [];
+  // The first teardown's devbox cleanup never answers: its activation ends under it.
+  const cleanups: Array<() => Promise<void>> = [() => new Promise<void>(() => {})];
+  let workspace: StartedHarness | null = null;
+
+  const account = () => createTestUserDO({
+    durableObjectId: OWNER, storage, slatePictures: pictures,
+    quietWorkspaceGate: async (_name, owner) => { await workspace?.agent.quietForDeletion(owner); },
+    destroyWorkspaceGate: async (_name, owner) => { await workspace?.agent.destroyAgent(owner); },
+  });
+
+  const first = account();
+  const owner = await testOwner();
+
+  await first.userDO.registerWorkspace(owner, 'ledger');
+  await first.userDO.registerWorkspace(owner, 'kept');
+  backups.objects.set(`boxes/${box}/backups/0001.tar.zst`, new Uint8Array([1]));
+  pictures.objects.set(pictureKey('ledger', 'board', 'a'.repeat(64)), new Uint8Array([1]));
+
+  workspace = orchestratorHarness(undefined, {
+    workspace: 'ledger', ownerUserId: OWNER, container: true, boxCalls,
+    box: (name) => ({
+      discardState: async () => {
+        boxCalls.push(`${name}.discardState`);
+        await (cleanups.shift() ?? (async () => {}))();
+
+        for (const { key } of (await backups.list({ prefix: `boxes/${name}/backups/` })).objects) await backups.delete(key);
+      },
+      destroy: async () => { boxCalls.push(`${name}.destroy`); },
+    }),
+  });
+
+  await first.userDO.requestWorkspaceRemoval(owner, 'ledger', OWNER);
+
+  // Answered with nothing torn down, and gone from the person's list.
+  expect({ box: boxCalls, destroyed: first.destroyedWorkspaces, listed: (await first.userDO.listWorkspaces(owner)).entries.map((entry) => entry.name) })
+    .toEqual({ box: [], destroyed: [], listed: ['kept'] });
+
+  // Its job runs from the alarm, and the account's object resets with the teardown in its devbox's cleanup.
+  const firstEnded: string[] = [];
+
+  first.userDO.alarm().then(() => { firstEnded.push('answered'); }, () => { firstEnded.push('failed'); });
+  await until(() => boxCalls.length > 0, 'the deletion job never reached the devbox');
+  expect(first.db.query<{ running: number }, []>("SELECT running FROM cf_agents_jobs WHERE id = 'workspace-deletion:ledger'").all()).toEqual([{ running: 1 }]);
+
+  const second = account();
+
+  await second.userDO.alarm();
+
+  expect({
+    box: boxCalls,
+    backups: (await backups.list({ prefix: `boxes/${box}/` })).objects,
+    pictures: (await pictures.list({ prefix: 'slate-pictures/ledger/' })).objects,
+    tables: workspace.tableNames().filter((name) => name !== 'sqlite_sequence'),
+    marked: second.db.query<{ name: string }, []>('SELECT name FROM user_workspaces WHERE delete_pending = 1').all(),
+    listed: (await second.userDO.listWorkspaces(owner)).entries.map((entry) => entry.name),
+    reads: second.destroyReads,
+  }).toEqual({
+    box: [`${box}.discardState`, `${box}.discardState`, `${box}.destroy`],
+    backups: [],
+    pictures: [],
+    tables: [],
+    marked: [],
+    listed: ['kept'],
+    reads: [],
+  });
+  // The first activation's teardown never answered: the second's job landed it on its own.
+  expect(firstEnded).toEqual([]);
 });

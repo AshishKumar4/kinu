@@ -121,6 +121,7 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'workspaces.write', name: 'publishWorkspaceReservation', run: (u, c) => u.publishWorkspaceReservation(c, 'reserved', 1, null) },
   { capability: 'workspaces.write', name: 'touchWorkspace', run: (u, c) => u.touchWorkspace(c, WORKSPACE) },
   { capability: 'workspaces.write', name: 'removeWorkspace', run: (u, c) => u.removeWorkspace(c, OTHER_WORKSPACE, USER_ID) },
+  { capability: 'workspaces.write', name: 'requestWorkspaceRemoval', run: (u, c) => u.requestWorkspaceRemoval(c, OTHER_WORKSPACE, USER_ID) },
 
   { capability: 'workspaces.rename_self', name: 'setWorkspaceDisplayName', run: (u, c) => u.setWorkspaceDisplayName(c, WORKSPACE, 'Renamed', 'user') },
   { capability: 'workspaces.rename_self', name: 'setWorkspaceLogo', run: (u, c) => u.setWorkspaceLogo(c, WORKSPACE, '<svg viewBox="0 0 8 8"><circle r="3"/></svg>') },

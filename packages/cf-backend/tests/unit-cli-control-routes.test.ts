@@ -85,7 +85,7 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
       return name === 'jarvis';
     },
     async ensureWorkspaceCapability() {},
-    async removeWorkspace(_caller: UserCaller, name: string, ownerUserId: string) {
+    async requestWorkspaceRemoval(_caller: UserCaller, name: string, ownerUserId: string) {
       calls.push(`workspace:remove:${name}:${ownerUserId}`);
     },
     async issueCliAgentConnectTicket(_caller: UserCaller, input: { userId: string; agentName: string; cliTokenHash: string }) {
