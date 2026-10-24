@@ -489,7 +489,8 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
       return result.ok ? JSON.stringify(result.value) : `${result.reason}: ${result.error}`;
     };
 
-    seen.push(await saved(), await saved(), JSON.stringify((await this.listSlates()).slates));
+    // Two at once, as a double click sends them, then one more once they are done.
+    seen.push(...await Promise.all([saved(), saved()]), await saved(), JSON.stringify((await this.listSlates()).slates));
 
     return seen;
   }

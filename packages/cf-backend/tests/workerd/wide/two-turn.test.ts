@@ -278,7 +278,7 @@ describe('two real turns over the HTTP model seam', () => {
 
     expect(seen).toEqual([
       '0 {"rows":[{"n":0}],"rowsAffected":0}', '1 {"rows":[{"n":1}],"rowsAffected":0}', '2 {"rows":[{"n":2}],"rowsAffected":0}',
-      kept, kept, '[{"id":"notes","title":"notes","page":"a-data/notes"}]',
+      kept, kept, kept, '[{"id":"notes","title":"notes","page":"a-data/notes"}]',
     ]);
   });
 

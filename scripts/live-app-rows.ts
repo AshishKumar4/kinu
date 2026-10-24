@@ -1995,7 +1995,9 @@ async function measurePageData(newPage: LiveApp['newPage'], origin: string): Pro
     await named('the reload', () => page.reload({ waitUntil: 'load' }));
     frame = await frameAt(page, drawn, 'the notes page, reloaded');
     const reloaded = await pageDataReading(frame, 'opened', 'the notes page, reloaded');
-    const stillSaved = await page.$eval(PAGE_DATA_CARD, (card) => card.querySelector('button[data-slate-saved]')?.getAttribute('data-slate-saved') ?? null);
+    // The card learns it was saved from the workspace's slate list, which the page opens beside the transcript.
+    const again = await named('the reloaded card, saved', () => page.waitForSelector(`${PAGE_DATA_CARD} button[data-slate-saved]`, { timeout: 60_000 }));
+    const stillSaved = await again?.evaluate((button) => button.getAttribute('data-slate-saved')) ?? null;
 
     return { opened, added, saved: savedAs, kept, keptAdded, reloaded, stillSaved };
   } finally {
