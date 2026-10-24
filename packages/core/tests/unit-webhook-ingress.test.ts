@@ -315,6 +315,24 @@ describe('a GitHub repository hook', () => {
 
     expect(inputs).toEqual([{ event: 'push', delivery: 'd-1', payload: { ref: 'refs/heads/main', after: 'abc123', repository: { full_name: 'Owner/Repo' } } }]);
   });
+
+  test('a fresh delivery naming the id of one that fired is a fire of its own: the id is GitHub\'s word, not proof', async () => {
+    const h = hub();
+    const run: RunCheck = async () => ({ kind: 'answered', answer: present(checkAnswerOf({ fire: true, brief: 'main moved' }), 'a fire') });
+    const deps = { ...h.deps, watch: { claims: new WatchClaims(), run } };
+    const trigger_id = await gitHubTrigger(h, { code: 'return { fire: true, brief: "main moved" };' });
+    const next = '{"ref":"refs/heads/main","after":"def456","repository":{"full_name":"owner/repo"}}';
+
+    const deliver = async (body: string) => acceptWebhookDelivery(deps, {
+      trigger_id, method: 'POST', body_text: body, cf_mtls_verified: false, delivery_id: null, hmac_signature: null, hmac_timestamp: null,
+      bearer_header: null, content_type: 'application/json', now: NOW,
+      headers: { 'x-hub-signature-256': await signed(body), 'x-github-event': 'push', 'x-github-delivery': 'd-1' },
+    });
+
+    expect(await deliver(BODY)).toMatchObject({ admitted: true });
+    expect(await deliver(next)).toMatchObject({ admitted: true });
+    expect(h.log.pending({ variant: 'timer' })).toHaveLength(2);
+  });
 });
 
 describe('webhook ingress refuses everything else', () => {

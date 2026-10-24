@@ -158,6 +158,8 @@ export interface WatchAsk {
   readonly at: number;
   readonly timer: boolean;
   readonly input?: JsonValue;
+  /** The verified delivery that asked, which keys its fire: what its signature proves, never an id the sender names. */
+  readonly delivery?: string;
 }
 
 /**
@@ -168,15 +170,14 @@ export interface WatchAsk {
 export async function checkWatcher(deps: WatchDeps, triggerId: string, asked: WatchAsk, now: () => number): Promise<boolean> {
   let fired = false;
 
-  await deps.claims.run(triggerId, asked, async ({ at, timer, input }) => {
+  await deps.claims.run(triggerId, asked, async ({ at, timer, input, delivery }) => {
     const trigger = deps.registry.get(triggerId);
     const check = trigger === null || trigger.state !== 'active' ? null : watchCheckOf(trigger);
 
     if (trigger === null || check === null) return;
     const read = watchOf(trigger).state;
     const outcome = await deps.run(check, read, input);
-    const delivery = deliveryOf(input);
-    const committed = await commitCheck(deps, { triggerId, read, outcome, scheduledAt: at, now: now(), ...(delivery !== null && { delivery }) });
+    const committed = await commitCheck(deps, { triggerId, read, outcome, scheduledAt: at, now: now(), ...(delivery !== undefined && { delivery }) });
 
     // A check is the cost a watcher pays for the turns it spares: each is counted, with why one stopped.
     diagnostics.event('watch.checked', {
@@ -189,14 +190,6 @@ export async function checkWatcher(deps: WatchDeps, triggerId: string, asked: Wa
   });
 
   return fired;
-}
-
-/** The provider's delivery id a push source hands its check as `input.delivery`, or null. */
-function deliveryOf(input: JsonValue | undefined): string | null {
-  if (input === null || typeof input !== 'object' || Array.isArray(input)) return null;
-  const delivery = input['delivery'];
-
-  return typeof delivery === 'string' && delivery.length > 0 ? delivery : null;
 }
 
 /**
@@ -247,7 +240,7 @@ async function commitCheck(deps: Pick<WatchDeps, 'registry' | 'log'>, checked: {
   readonly outcome: WatchOutcome;
   /** The firing that asked for the check, which keys its fire. */
   readonly scheduledAt: number;
-  /** The provider's delivery it answered, which keys its fire instead. */
+  /** The verified delivery it answered, which keys its fire instead. */
   readonly delivery?: string;
   readonly now: number;
 }): Promise<WatchCommit> {

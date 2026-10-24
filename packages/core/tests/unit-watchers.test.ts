@@ -33,7 +33,9 @@ function watchers(run: RunCheck) {
   return {
     registry, log, claims,
     fire: (now: number) => fireDueTriggers({ registry, log, watch: { run, claims } }, now),
-    check: (id: string, at: number, input?: JsonValue) => checkWatcher({ registry, log, run, claims }, id, { at, timer: false, ...(input !== undefined && { input }) }, () => NOW),
+    check: (id: string, at: number, input?: JsonValue, delivery?: string) => checkWatcher(
+      { registry, log, run, claims }, id, { at, timer: false, ...(input !== undefined && { input }), ...(delivery !== undefined && { delivery }) }, () => NOW,
+    ),
     fired: () => log.pending({ variant: 'timer' }).map((event) => v.parse(v.looseObject({ watch_brief: v.optional(v.string()) }), event.payload)),
     state: (id: string) => watchOf(present(registry.get(id), 'the watcher')),
   };
@@ -56,16 +58,17 @@ async function watcher(registry: TriggerRegistry) {
 }
 
 describe('a watcher its source delivers to', () => {
-  test("a provider's redelivery fires once; another delivery fires again", async () => {
+  test("a verified delivery fires once; another fires again, whatever id the sender gives it", async () => {
     let n = 0;
     const t = watchers(async () => answered({ fire: true, brief: 'A push to main.', state: { n: (n += 1) } }));
     const { id } = await watcher(t.registry);
 
-    await t.check(id, NOW + 1, { event: 'push', delivery: 'd-1', payload: {} });
-    await t.check(id, NOW + 2, { event: 'push', delivery: 'd-1', payload: {} });
+    await t.check(id, NOW + 1, { event: 'push', delivery: 'd-1', payload: {} }, 'signed-1');
+    await t.check(id, NOW + 2, { event: 'push', delivery: 'd-1', payload: {} }, 'signed-1');
     expect(t.fired()).toHaveLength(1);
 
-    await t.check(id, NOW + 3, { event: 'push', delivery: 'd-2', payload: {} });
+    // The id in its input is the sender's word: one naming a delivery that fired is a fire of its own.
+    await t.check(id, NOW + 3, { event: 'push', delivery: 'd-1', payload: {} }, 'signed-2');
     expect(t.fired()).toHaveLength(2);
   });
 });

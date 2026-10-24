@@ -351,10 +351,12 @@ function gitHubInput(push: GitHubPush | null, opts: WebhookDelivery, payload: Js
   return { event: push?.event ?? null, delivery: opts.headers['x-github-delivery'] ?? null, payload };
 }
 
-/** A delivery a check answers, or GitHub's ping that nothing answers; null for one published as an event. */
+/** A delivery a check answers, or GitHub's ping that nothing answers; null for one published as an event. `claimed` is
+ *  what its signature proved, which keys a fire; a delivery none proved is keyed by its arrival. */
 async function checkedDelivery(
-  deps: WebhookIngressDeps, trigger: TriggerRow, opts: WebhookDelivery, body: JsonValue,
+  deps: WebhookIngressDeps, trigger: TriggerRow, opts: WebhookDelivery, delivered: { body: JsonValue; claimed: string | undefined },
 ): Promise<WebhookDeliveryResult | null> {
+  const { body, claimed } = delivered;
   const github = trigger.spec['auth_mode'] === 'github';
 
   // GitHub's ping when a hook is made, known by its signed body: answered, and nothing to check.
@@ -362,18 +364,20 @@ async function checkedDelivery(
 
   if (deps.watch === undefined || watchCheckOf(trigger) === null) return null;
 
-  return watchedDelivery(deps, trigger.id, opts.now, github ? gitHubInput(gitHubPushOf(trigger), opts, body) : body);
+  const input = github ? gitHubInput(gitHubPushOf(trigger), opts, body) : body;
+
+  return watchedDelivery(deps, trigger.id, { at: opts.now, input, ...(claimed !== undefined && { delivery: claimed }) });
 }
 
 /**
  * A watcher's delivery is its check's input, and only what the check found is published. Answered once the check
  * committed: a deliverer that gave up and sends again is folded into the running check's re-check.
  */
-async function watchedDelivery(deps: WebhookIngressDeps, triggerId: string, at: number, input: JsonValue): Promise<WebhookDeliveryResult> {
+async function watchedDelivery(deps: WebhookIngressDeps, triggerId: string, asked: { at: number; input: JsonValue; delivery?: string }): Promise<WebhookDeliveryResult> {
   const { watch } = deps;
 
   if (watch === undefined) return { status: 'rejected', http_status: 503, reason: 'this workspace runs no checks' };
-  const fired = await checkWatcher({ registry: deps.triggers, log: deps.log, ...watch }, triggerId, { at, timer: false, input }, Date.now);
+  const fired = await checkWatcher({ registry: deps.triggers, log: deps.log, ...watch }, triggerId, { ...asked, timer: false }, Date.now);
 
   if (fired) deps.onAdmitted();
 
@@ -427,7 +431,7 @@ export function acceptWebhookDelivery(
       return { status: 'admitted', event_id: held.event_id ?? undefined, admitted: false };
     }
 
-    const checked = yield* Effect.promise(() => checkedDelivery(deps, trigger, opts, decodeJsonValue({ value: parsedBody ?? null })));
+    const checked = yield* Effect.promise(() => checkedDelivery(deps, trigger, opts, { body: decodeJsonValue({ value: parsedBody ?? null }), claimed: auth.claim?.key }));
 
     if (checked !== null) return checked;
 
