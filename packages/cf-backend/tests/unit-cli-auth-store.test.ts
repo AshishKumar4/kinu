@@ -86,7 +86,7 @@ function startAuth(env: CliRoutesEnv<string>, origin: string, deviceName: string
   return startCliAuth(env, { origin, approvalOrigin: origin, deviceName, clientKey });
 }
 
-/** A store outage must reach the response as an outage, not be read as a code collision. */
+/** KV that keeps no count: each write refused, as an outage or its own limit refuses it. */
 function brokenKv(): KvStore {
   return {
     async get() { return null; },
@@ -113,6 +113,15 @@ function resettingOnce(when: 'before' | 'after') {
 
     throw storageReset();
   };
+}
+
+/** Sign-in objects whose storage is gone for good: every call refused, with nothing a retry could pass. */
+function goneObjects(): CliAuthObjects {
+  const gone = async (): Promise<never> => { throw new Error('object storage is gone'); };
+
+  const object: CliAuthObject = { claimCode: gone, deviceOf: gone, open: gone, read: gone, approve: gone, collect: gone };
+
+  return { held: new Map(), idFromName: (name) => name, get: () => object };
 }
 
 const EVERY_CALL = new Set(['claimCode', 'deviceOf', 'open', 'read', 'approve', 'collect']);
@@ -371,11 +380,17 @@ describe('CLI auth approval replay', () => {
 });
 
 describe('CLI auth error propagation', () => {
-  test('startCliAuth surfaces real store failures instead of retrying as collisions', async () => {
+  test('a rate count KV refuses to keep fails no start: the sign-in is its objects\'', async () => {
     const env = testEnv(brokenKv(), unreachableNamespace('UserDO'));
+    const started = await startAuth(env, 'https://o.example', 't');
 
-    await expect(startAuth(env, 'https://o.example', 't'))
-      .rejects.toThrow(/namespace unavailable/i);
+    expect(await inspectCliAuth(env, started.userCode)).toMatchObject({ status: 'pending', deviceName: 't' });
+  });
+
+  test('startCliAuth surfaces its objects\' failures instead of retrying them as code collisions', async () => {
+    const env = testEnv(makeKv(), unreachableNamespace('UserDO'), goneObjects());
+
+    await expect(startAuth(env, 'https://o.example', 't')).rejects.toThrow(/object storage is gone/i);
   });
 
   test('rate limiting throws the typed RateLimitError', async () => {
@@ -422,11 +437,11 @@ describe('CLI auth route status mapping', () => {
   });
 
   test('infra failure during start → 500, not 429', async () => {
-    const env = testEnv(brokenKv(), unreachableNamespace('UserDO'));
+    const env = testEnv(makeKv(), unreachableNamespace('UserDO'), goneObjects());
 
     const res = handled(await cli(startRequest(), env));
     expect(res.status).toBe(500);
-    expect(v.parse(ErrorResponseSchema, await res.json()).error).not.toMatch(/namespace unavailable/i);
+    expect(v.parse(ErrorResponseSchema, await res.json()).error).not.toMatch(/object storage is gone/i);
   });
 
   test('an object the platform resets past every retry → 503, try again, not 500', async () => {

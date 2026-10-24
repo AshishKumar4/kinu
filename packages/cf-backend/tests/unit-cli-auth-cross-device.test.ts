@@ -8,11 +8,12 @@ import * as v from 'valibot';
 import { present } from '@kinu.run/test-utils';
 import type { UserCaller } from '@kinu.run/core';
 import { CLI_APPROVAL_CSRF_COOKIE_NAME } from '../src/auth/cookies';
-import { cliPageRoutes, cliRoutes, type CliRoutesEnv } from '../src/cli/routes';
+import { cliPageRoutes, cliRoutes, type CliRoutesAuthority, type CliRoutesEnv } from '../src/cli/routes';
 import { serveFamily } from './helpers/api';
 import { bootstrappedProfile, cliAccount, unreachableAssets, unreachableNamespace } from './helpers/bindings';
 import { cliAuthObjects } from './helpers/cli-auth';
-import { locatedKv } from './helpers/kv';
+import { locatedKv, makeKv } from './helpers/kv';
+import type { KvStore } from '@kinu.run/agent-utils';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 
 /** Loopback, where the dev identity stands for the signed-in browser. */
@@ -49,6 +50,49 @@ function twoLocations() {
   });
 
   return { terminal: at('pc'), laptop: at('laptop') };
+}
+
+/** `kv` as Workers KV keeps a key, one write a second, the next refused with 429, for a test whose every write lands
+ *  within one second: each key's first write is kept and every later one refused. */
+function oneWriteASecond(kv: KvStore): KvStore {
+  const written = new Set<string>();
+
+  return {
+    get: async (key) => kv.get(key),
+    delete: async (key) => kv.delete(key),
+    put: async (key, value, options) => {
+      if (written.has(key)) throw new Error('KV PUT failed: 429 Too Many Requests');
+      written.add(key);
+      await kv.put(key, value, options);
+    },
+  };
+}
+
+/** `kv` whose `kind` of rate count (`approve`, `start`, …) is spent for as long as there is time. */
+function spent(kv: KvStore, kind: string): KvStore {
+  return {
+    get: async (key) => (key.startsWith(`cli-auth-rate:${kind}:`) ? JSON.stringify({ count: Number.MAX_SAFE_INTEGER, resetAt: Number.MAX_SAFE_INTEGER }) : kv.get(key)),
+    delete: async (key) => kv.delete(key),
+    put: async (key, value, options) => kv.put(key, value, options),
+  };
+}
+
+/** One account's sign-ins from one terminal, at `kv` and `account`: the same rate counts each time. */
+function oneTerminal(kv: KvStore, account: CliRoutesAuthority = cliAccount({
+  async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
+  async mintCliToken(_caller: UserCaller, userId: string) {
+    return { token: `ptc_${userId}_terminal`, tokenHash: 'hash', expiresAt: Date.now() + 60_000 };
+  },
+})): CliRoutesEnv<string> {
+  return {
+    AUTH_KV: kv,
+    CliAuthDO: cliAuthObjects(),
+    UserDO: { idFromName: (name) => name, get: () => account },
+    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    ASSETS: unreachableAssets(),
+    OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
+    DEV_USER_EMAIL: 'owner@example.com',
+  };
 }
 
 function postJson(path: string, body: string): Request {
@@ -105,5 +149,43 @@ describe('a sign-in approved on another device', () => {
     } finally {
       setSystemTime();
     }
+  });
+});
+
+// Staging 69e0baee5: one approval among dozens from one address answered 400, its rate count refused by KV (429).
+describe('a sign-in its counts or its account refuse mid-way', () => {
+  test('signs in twice in a second from one terminal, though KV keeps one of its counts a second', async () => {
+    const env = oneTerminal(oneWriteASecond(makeKv()));
+
+    const signIn = async (): Promise<number[]> => {
+      const start = present(await api(postJson('/api/cli/auth/start', JSON.stringify({ deviceName: 'pc' })), env), 'the start');
+      const started = v.parse(StartedSchema, await start.clone().json());
+      const approval = await approveInBrowser(env, started.userCode);
+      const poll = present(await api(postJson('/api/cli/auth/poll', JSON.stringify({ deviceToken: started.deviceToken })), env), 'a poll');
+
+      expect(v.parse(PolledSchema, await poll.clone().json())).toMatchObject({ status: 'approved' });
+
+      return [start.status, approval.status, poll.status];
+    };
+
+    expect([await signIn(), await signIn()]).toEqual([[200, 200, 200], [200, 200, 200]]);
+  });
+
+  test("an approval its account cannot take is answered as the service's failure, never as the person's 400", async () => {
+    const env = oneTerminal(makeKv(), cliAccount({
+      async ensureProfile() { throw new Error('the account store is gone'); },
+    }));
+
+    const started = v.parse(StartedSchema, await present(await api(postJson('/api/cli/auth/start', JSON.stringify({ deviceName: 'pc' })), env), 'the start').json());
+
+    expect((await approveInBrowser(env, started.userCode)).status).toBe(500);
+  });
+
+  test('an approval over its ceiling is told so, as a limit (429), not as the person\'s 400', async () => {
+    const env = oneTerminal(spent(makeKv(), 'approve'));
+
+    const started = v.parse(StartedSchema, await present(await api(postJson('/api/cli/auth/start', JSON.stringify({ deviceName: 'pc' })), env), 'the start').json());
+
+    expect((await approveInBrowser(env, started.userCode)).status).toBe(429);
   });
 });

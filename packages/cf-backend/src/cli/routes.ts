@@ -12,7 +12,7 @@ import {
   CLI_DIST_PATHS, CLI_RUNTIME_PATH, CLI_VERSION_PATH, fetchDeployedAsset, type AssetFetcher,
 } from '@kinu.run/core';
 import { RELEASE_ARTIFACT_NAME, RELEASE_MANIFEST_PATH } from '@kinu.run/core/deploy';
-import { err, escapeHtml, json, safeJson, DEVICE_KEY_MALFORMED, DeviceReplacementSchema, isDevicePublicKey } from '@kinu.run/core';
+import { err, ERROR_STATUS, escapeHtml, json, publicText, safeJson, DEVICE_KEY_MALFORMED, DeviceReplacementSchema, isDevicePublicKey } from '@kinu.run/core';
 import { randomToken } from '@kinu.run/core';
 import type { OrchestratorAgent } from '../orchestrator';
 import { webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE, type WebhookRouteEnv } from '@kinu.run/core';
@@ -552,7 +552,9 @@ function approveFromBrowser<Id>(request: Request, env: CliRoutesEnv<Id>): Effect
       const error = authoredRefusal({ doing: 'approving this sign-in', cause: Cause.squash(failed) });
       diagnostics.failure('cli.approval_failed', error);
 
-      return html('Connect the Kinu CLI', `<p>${escapeHtml(renderThrownChain({ cause: error }))}</p>`, 400);
+      // The person's own mistake (a code unknown, expired or used) is theirs to fix; anything else is ours, said so, in
+      // words that quote nothing of what failed underneath.
+      return html('Connect the Kinu CLI', `<p>${escapeHtml(publicText(error))}</p>`, error instanceof RateLimitError ? 429 : ERROR_STATUS[error.code]);
     }));
   });
 }

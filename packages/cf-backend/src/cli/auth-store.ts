@@ -9,7 +9,7 @@ import type { CliAuthDO } from './auth-do';
 import type { ObjectNamespace } from '@kinu.run/core';
 import { objectNamed, randomToken, sha256Hex } from '@kinu.run/core';
 import { readKvJson, writeKvJson, type KvStore } from '@kinu.run/agent-utils';
-import { KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 import { parseAccessTokenUserId, type AccessTokenScope } from '@kinu.run/core';
 import { ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';
 import { idempotent } from '@nimbus-sh/fabric/do-calls.js';
@@ -369,24 +369,35 @@ function approvalOf(record: CliAuthRecord | null, identity: AuthIdentity, now: n
 }
 
 /**
- * Abuse ceiling per client key and window. It stays in KV, whose reads are cached per location: a count read stale
- * there loosens the limit for a while, which a ceiling can afford, and no sign-in waits on it.
+ * Abuse ceiling per client key and window. It stays in KV, whose reads are cached per location and which keeps at
+ * most one write a second to a key: a count read stale there, or one it refuses to read or keep (staging, 2026-10-23:
+ * 429 on one approval among dozens from one address), loosens the limit for a while, which a ceiling can afford, and
+ * fails no sign-in.
  */
 function rateLimit(kv: KvStore, key: string, limit: number, now: number): Effect.Effect<void, RateLimitError> {
   return Effect.gen(function* () {
     const bucketKey = `cli-auth-rate:${key}`;
-    const bucket = yield* Effect.promise(() => readKvJson(kv, bucketKey, RateBucketSchema));
+    const bucket = yield* counted(key, () => readKvJson(kv, bucketKey, RateBucketSchema), null);
 
     if (!bucket || bucket.resetAt <= now) {
       const resetAt = now + RATE_WINDOW_MS;
-      yield* Effect.promise(() => writeKvJson(kv, bucketKey, { count: 1, resetAt }, RATE_WINDOW_MS));
+      yield* counted(key, () => writeKvJson(kv, bucketKey, { count: 1, resetAt }, RATE_WINDOW_MS), undefined);
 
       return;
     }
 
     if (bucket.count >= limit) return yield* new RateLimitError();
-    yield* Effect.promise(() => writeKvJson(kv, bucketKey, { count: bucket.count + 1, resetAt: bucket.resetAt }, bucket.resetAt - now));
+    yield* counted(key, () => writeKvJson(kv, bucketKey, { count: bucket.count + 1, resetAt: bucket.resetAt }, bucket.resetAt - now), undefined);
   });
+}
+
+/** One read or write of a rate count; one KV refuses leaves `instead`, and says which count it was. */
+function counted<A>(key: string, work: () => Promise<A>, instead: A): Effect.Effect<A> {
+  return Effect.tryPromise({ try: work, catch: (cause) => cause }).pipe(Effect.catch((cause) => Effect.sync(() => {
+    diagnostics.failure('cli.rate_uncounted', toKinuError({ doing: "keeping a CLI sign-in's rate count", cause, otherwise: 'io' }), { count: key.split(':')[0] ?? key });
+
+    return instead;
+  })));
 }
 
 /** The request object a user code names; null for a code no live sign-in holds. */
