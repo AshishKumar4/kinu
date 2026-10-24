@@ -160,6 +160,7 @@ test('an agent waiting on its hire is not reminded until the report lands, then 
   const working = Promise.withResolvers<void>();
   const started = Promise.withResolvers<void>();
   let atReport = -1;
+  let exportAdded = false;
 
   const gateway = stubAiBinding(async (run) => {
     const { messages } = requestOf(run);
@@ -180,8 +181,10 @@ test('an agent waiting on its hire is not reminded until the report lands, then 
 
     if (sent.includes('412 rows') && atReport < 0) atReport = asked.length - 1;
 
-    // The owner's later words: one leaves the list as it was, one adds to it.
-    if (sent.includes('Also export the ledger.') && !sent.includes('add_export')) {
+    // The owner's later words: one leaves the list as it was, one adds to it, once (the call's id is not the model's).
+    if (sent.includes('Also export the ledger.') && !exportAdded) {
+      exportAdded = true;
+
       return toolCallCompletion(run, { tool: 'tasks', args: { op: 'add', titles: ['Export the ledger'] } }, 'add_export');
     }
 
