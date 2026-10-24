@@ -117,6 +117,14 @@ async function serveControl(browserPage: Page, fixture: Fixture): Promise<Probe>
     }
 
     const { status, body } = await routeAnswer(url);
+
+    // A redirect is Access's own: to its sign-in, on its origin.
+    if (status >= 300 && status < 400) {
+      await request.respond({ status, headers: { location: v.parse(v.string(), body) } });
+
+      return;
+    }
+
     await request.respond({
       status, contentType: 'application/json', body: JSON.stringify(body),
     });
@@ -389,6 +397,49 @@ describe('the control plane in a browser', () => {
         [...document.querySelectorAll('a')].map((a) => a.getAttribute('href')));
 
       expect(href).toContain('/login');
+      await browserPage.close();
+    });
+  });
+
+  // Cloudflare Access fronts the control plane. Once its sign-in lapses, a read is redirected to Access's own origin,
+  // which a fetch cannot follow: the page said "Failed to fetch" (the owner, 2026-10-24). It is a page load back in.
+  test('a lapsed Access sign-in is a page load back in, not "Failed to fetch"', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const browserPage = await newPage();
+
+      await serveControl(browserPage, {
+        overview: page(302, 'https://kinu.cloudflareaccess.com/cdn-cgi/access/login/kinu.run?redirect_url=%2Fapi%2Fcontrol%2Foverview'),
+      });
+      await openControl(browserPage, origin);
+      const link = await browserPage.waitForSelector('[data-access-sign-in]');
+
+      // This page's own address, loaded whole: Access answers it with its sign-in, then the page again.
+      const here = new URL(browserPage.url());
+
+      expect({
+        href: await link?.evaluate((anchor) => anchor.getAttribute('href')),
+        failed: await browserPage.evaluate(() => document.body.innerText.includes('Failed to fetch')),
+      }).toEqual({ href: here.pathname + here.search, failed: false });
+      await browserPage.close();
+    });
+  });
+
+  // The account menu's Control plane loads the page whole, so Access can sign the person in on the way.
+  test("the account menu's Control plane is a full page load", async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const browserPage = await newPage();
+
+      await browserPage.goto(`${origin}/gallery.html?frame=shell&operator=1`, { waitUntil: 'networkidle0' });
+      await browserPage.click('aside [data-account-menu]');
+      const entry = await browserPage.waitForSelector('[data-account-panel] a[href="/control"]');
+
+      // The browser itself asks the server for /control, as Access sees it; the app's own router would ask nothing.
+      const [asked] = await Promise.all([
+        browserPage.waitForRequest((request) => request.isNavigationRequest() && new URL(request.url()).pathname === '/control'),
+        entry?.click(),
+      ]);
+
+      expect(asked.resourceType()).toBe('document');
       await browserPage.close();
     });
   });

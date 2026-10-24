@@ -109,8 +109,11 @@ export type ControlAnswer<Value> =
   | { status: 'ok'; value: Value }
   | { status: 'forbidden'; reason: string }
   | { status: 'stale-auth'; reason: string }
+  | { status: 'access-expired'; reason: string }
   | { status: 'unconfigured'; reason: string }
   | { status: 'failed'; reason: string };
+
+const ACCESS_EXPIRED = 'Your Access sign-in expired: sign in again';
 
 function control<Schema extends v.GenericSchema>(
   schema: Schema,
@@ -120,7 +123,11 @@ function control<Schema extends v.GenericSchema>(
   const url = `/api/control${path}`;
 
   return Effect.gen(function* () {
-    const response = yield* respond(url, asked);
+    // Cloudflare Access fronts this route: once its sign-in lapses it redirects to its own origin, which a fetch may not
+    // follow ("Failed to fetch"). Held, the redirect is the answer, and only a page load can sign in again.
+    const response = yield* respond(url, { ...asked, redirect: 'manual' });
+
+    if (response.type === 'opaqueredirect') return { status: 'access-expired', reason: ACCESS_EXPIRED };
 
     if (!response.ok) {
       const { message: reason } = yield* refusal(response, asked.method ?? 'GET', url);

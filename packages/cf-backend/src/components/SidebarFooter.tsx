@@ -72,7 +72,8 @@ export function AccountMenu({ onClose, className }: { onClose: () => void; class
       </div>
       <PressableLink to={APP_ROUTES.userSettings} onClick={onClose} className={MENU_ROW}><GearIcon size={14} /><span>Settings</span></PressableLink>
       {profile?.controlPlane === true && (
-        <PressableLink to={APP_ROUTES.control} onClick={onClose} className={MENU_ROW}><ShieldCheckIcon size={14} /><span>Control plane</span></PressableLink>
+        // A full load, not the app's own navigation: Cloudflare Access fronts the control plane and signs a person in there.
+        <PressableAnchor href={APP_ROUTES.control} onClick={onClose} className={MENU_ROW}><ShieldCheckIcon size={14} /><span>Control plane</span></PressableAnchor>
       )}
       <ModeToggle />
       <FeedbackButton />

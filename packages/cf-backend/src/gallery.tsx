@@ -220,7 +220,8 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
   "/api/user/profile": {
     email: "ashish@example.com", displayName: "Ashish",
     createdAt: NOW - 90 * 864e5, lastSeenAt: NOW, onboardedAt: NOW - 90 * 864e5,
-    workspaceCount: GALLERY_ROSTER.total, controlPlane: false,
+    // `&operator=1`: an operator's account, whose menu offers the control plane.
+    workspaceCount: GALLERY_ROSTER.total, controlPlane: new URLSearchParams(location.search).get("operator") === "1",
   },
   // A ModelMenu, not a bare array.
   "/api/user/models": { models: MODEL_STUBS(), failures: [] },

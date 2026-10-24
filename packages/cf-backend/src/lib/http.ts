@@ -21,6 +21,8 @@ export interface HttpRequest {
   readonly signal?: AbortSignal;
   /** Told how many bytes of `body` have gone, as they go: an upload's progress. */
   readonly sent?: (bytes: number) => void;
+  /** `manual`: a redirect answers as itself (`opaqueredirect`), for a route behind a sign-in that redirects elsewhere. */
+  readonly redirect?: RequestRedirect;
 }
 
 /** Answers with no body, which a `Response` refuses one for. */
@@ -63,6 +65,7 @@ export function respond(url: string, asked: HttpRequest = {}): Effect.Effect<Res
     method,
     ...(asked.json !== undefined && { headers: { 'content-type': 'application/json' }, body: JSON.stringify(asked.json) }),
     ...(asked.body !== undefined && { body: asked.body }),
+    ...(asked.redirect !== undefined && { redirect: asked.redirect }),
     signal: asked.signal ?? (read ? AbortSignal.timeout(DEFAULT_CALL_TIMEOUT_MS) : undefined),
   })) : watched(url, method, asked, asked.sent);
 
