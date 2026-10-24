@@ -314,13 +314,17 @@ export const signOutChatGpt = (revoke: boolean) => settle(api(DisconnectOutcomeS
 export const cancelChatGptSignIn = () => settle(api(v.object({ cancelled: v.boolean() }), 'DELETE', '/chatgpt/sign-in'));
 
 /** The browser that opens `authorizeUrl` lands on `redirectUri`; that address is pasted back. */
-export const startChatGptPaste = () => settle(api(v.object({ authorizeUrl: v.string(), redirectUri: v.string() }), 'POST', '/chatgpt/paste/start'));
+/** `account` names a second login (`chatgpt.oauth@<account>`); without it, the main one. */
+export const startChatGptPaste = (account?: string) =>
+  settle(api(v.object({ authorizeUrl: v.string(), redirectUri: v.string() }), 'POST', '/chatgpt/paste/start', account === undefined ? undefined : { account }));
 
 export const finishChatGptPaste = (url: string) => settle(api(
   v.object({ outcome: v.picklist(['signed_in', 'declined', 'plan_declined']), email: v.nullable(v.string()) }), 'POST', '/chatgpt/paste/finish', { url },
 ));
 
-export const startClaudeSignIn = () => settle(api(v.object({ url: v.string() }), 'POST', '/claude/start'));
+/** `account` names a second login (`claude.oauth@<account>`); without it, the main one. */
+export const startClaudeSignIn = (account?: string) =>
+  settle(api(v.object({ url: v.string() }), 'POST', '/claude/start', account === undefined ? undefined : { account }));
 
 /** `code` is what Claude showed: the code, or the address it sent the browser to. */
 export const finishClaudeSignIn = (code: string) => settle(api(PollResultSchema, 'POST', '/claude/finish', { code }));

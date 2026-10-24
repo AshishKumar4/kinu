@@ -40,13 +40,18 @@ async function runStore(home: string, opts: { local: boolean; origin?: string; e
     await connectProvider(${JSON.stringify(provider)}, port, { ...${JSON.stringify(model)}, local: ${opts.local} });
   `;
 
+  return await spawnRunner(home, runner, opts.origin);
+}
+
+/** `runner` in a child process, so KINU_HOME is read fresh and the developer's ~/.kinu is untouched. */
+async function spawnRunner(home: string, runner: string, origin: string | undefined) {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     KINU_HOME: home, NO_COLOR: '1',
     OPENROUTER_API_KEY: '', KINU_TOKEN: '',
   };
 
-  if (opts.origin) env.KINU_ORIGIN = opts.origin;
+  if (origin) env.KINU_ORIGIN = origin;
   else delete env.KINU_ORIGIN;
 
   const proc = Bun.spawn({
@@ -80,6 +85,86 @@ function accountStore(status = 201) {
 
   return { received, server, origin: `http://127.0.0.1:${server.port}` };
 }
+
+/**
+ * `kinu provider connect <provider> <account> --cloud` in a child process. Claude's token endpoint answers a token
+ * here, and the browser wait is skipped, so the code is the pasted one.
+ */
+async function runSubscription(home: string, opts: { provider: 'claude' | 'chatgpt'; account: string }) {
+  const runner = `
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (input, init) => String(input instanceof Request ? input.url : input) === 'https://api.anthropic.com/v1/oauth/token'
+      ? Response.json({ access_token: 'claude-at', refresh_token: 'claude-rt', expires_in: 3600 })
+      : realFetch(input, init);
+    const { connectProvider } = await import('./packages/cli/src/commands/provider-connect.ts');
+    const port = { report: () => {}, ask: async () => 'the-code', skippable: async () => null };
+    const outcome = await connectProvider(${JSON.stringify(opts.provider)}, port, { cloud: true, account: ${JSON.stringify(opts.account)} });
+    console.log(JSON.stringify(outcome));
+  `;
+
+  return await spawnRunner(home, runner, undefined);
+}
+
+describe('a subscription sign-in kept in the Kinu account (--cloud)', () => {
+  test('Claude\'s goes to the account under its name, and never lands on this disk', async () => {
+    const { received, server, origin } = accountStore();
+    const home = kinuHome({ origin, accessToken: 'ptc_test_token' });
+
+    try {
+      const res = await runSubscription(home, { provider: 'claude', account: 'work' });
+
+      expect(res.exitCode, res.stdout).toBe(0);
+      expect(received).toMatchObject([{ path: '/api/cli/credentials/claude.oauth%40work', method: 'POST', body: { kind: 'oauth', accessToken: 'claude-at', refreshToken: 'claude-rt' } }]);
+      expect(JSON.stringify(storedConfig(home))).not.toContain('claude-rt');
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test('signed out, Claude\'s has no account to go to and says how to get one', async () => {
+    const res = await runSubscription(kinuHome({}), { provider: 'claude', account: 'work' });
+
+    expect(res.exitCode, res.stdout).toBe(0);
+    expect(res.stdout).toContain('"kind":"blocked"');
+    expect(res.stdout).toContain('Run kinu auth');
+  });
+
+  test('disconnecting that Claude account removes it from the account, where it was kept', async () => {
+    const seen: string[] = [];
+
+    const server = Bun.serve({
+      port: 0, hostname: '127.0.0.1',
+      fetch(request) {
+        seen.push(`${request.method} ${new URL(request.url).pathname}`);
+
+        return request.method === 'GET' ? Response.json([{ key: 'claude.oauth@work', kind: 'oauth' }]) : Response.json({ ok: true });
+      },
+    });
+
+    const home = kinuHome({ origin: `http://127.0.0.1:${server.port}`, accessToken: 'ptc_test_token' });
+
+    try {
+      const res = await spawnRunner(home, `
+        const { providersCommand } = await import('./packages/cli/src/commands/providers.ts');
+        await providersCommand('disconnect', 'claude', 'work', {});
+      `, undefined);
+
+      expect(res.exitCode, res.stdout).toBe(0);
+      expect(seen).toContain('DELETE /api/cli/credentials/claude.oauth%40work');
+      expect(res.stdout).toContain('Removed the claude work account from your Kinu account');
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test('ChatGPT\'s belongs to this machine, so it is refused and the web sign-in named', async () => {
+    const res = await runSubscription(kinuHome({ origin: 'http://127.0.0.1:1', accessToken: 'ptc_test_token' }), { provider: 'chatgpt', account: 'work' });
+
+    expect(res.exitCode, res.stdout).toBe(0);
+    expect(res.stdout).toContain('belongs to this machine');
+    expect(res.stdout).toContain('Add another ChatGPT account');
+  });
+});
 
 describe('where a provider secret is written', () => {
   test('signed in, it goes to the account and never lands on this disk', async () => {

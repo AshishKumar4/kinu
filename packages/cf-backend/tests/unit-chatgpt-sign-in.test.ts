@@ -63,12 +63,12 @@ function openaiAuth(answer: (form: URLSearchParams) => Promise<Response> | Respo
 }
 
 /** The token answer for a sign-in whose authorize address was `authorize`. */
-async function tokens(authorize: URL, overrides: { scope?: string; nonce?: string; expiresIn?: number; access?: string; refresh?: string } = {}): Promise<Response> {
+async function tokens(authorize: URL, overrides: { scope?: string; nonce?: string; expiresIn?: number; access?: string; refresh?: string; subject?: string; email?: string } = {}): Promise<Response> {
   return Response.json({
     access_token: overrides.access ?? 'at-1',
     refresh_token: overrides.refresh ?? 'rt-1',
     id_token: await idToken({
-      iss: 'https://auth.openai.com', aud: [ISSUED], exp: Math.floor(Date.now() / 1000) + 3600, sub: 'user-sub', email: 'owner@example.com',
+      iss: 'https://auth.openai.com', aud: [ISSUED], exp: Math.floor(Date.now() / 1000) + 3600, sub: overrides.subject ?? 'user-sub', email: overrides.email ?? 'owner@example.com',
       nonce: overrides.nonce ?? authorize.searchParams.get('nonce') ?? '',
     }),
     token_type: 'Bearer',
@@ -173,6 +173,27 @@ describe('ChatGPT sign-in by paste-back', () => {
     expect(await storedKeys(harness)).toEqual([named]);
     const workspace = { workspaceToken: await provisionTestWorkspace(harness, 'jarvis') };
     expect(await harness.userDO.getAuthHeaders(workspace, named)).toEqual({ Authorization: 'Bearer at-reviewer' });
+    harness.close();
+  });
+
+  test('a second account is another ChatGPT person: it signs in beside the first, each with its own registration', async () => {
+    const harness = createTestUserDO();
+    const web = routes(harness);
+    const main = await web.start();
+
+    openaiAuth(() => tokens(main));
+    expect(v.parse(FinishedSchema, await (await web.finish(web.returned(main))).json()).outcome).toBe('signed_in');
+
+    const work = await web.start('work');
+
+    openaiAuth(() => tokens(work, { subject: 'work-sub', email: 'work@example.com', access: 'at-work' }));
+    expect(v.parse(FinishedSchema, await (await web.finish(web.returned(work))).json())).toEqual({ outcome: 'signed_in', email: 'work@example.com' });
+    expect((await storedKeys(harness)).sort()).toEqual([CHATGPT_CRED_KEY, accountCredentialKey(CHATGPT_CRED_KEY, 'work')]);
+    // The main person's registration is theirs still: had the second overwritten it, signing them in again is refused.
+    const again = await web.start();
+
+    openaiAuth(() => tokens(again, { access: 'at-main-2' }));
+    expect(v.parse(FinishedSchema, await (await web.finish(web.returned(again))).json()).outcome).toBe('signed_in');
     harness.close();
   });
 

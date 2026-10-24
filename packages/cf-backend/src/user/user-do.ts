@@ -745,8 +745,8 @@ export class UserDO extends Agent<Env> {
     return this.credentials.selectCloudflareAccount(caller, accountId);
   }
 
-  startClaudeSignIn(caller: UserCaller): ReturnType<UserCredentials['startClaudeSignIn']> {
-    return this.credentials.startClaudeSignIn(caller);
+  startClaudeSignIn(caller: UserCaller, account?: string): ReturnType<UserCredentials['startClaudeSignIn']> {
+    return this.credentials.startClaudeSignIn(caller, account);
   }
 
   finishClaudeSignIn(caller: UserCaller, returned: string): ReturnType<UserCredentials['finishClaudeSignIn']> {

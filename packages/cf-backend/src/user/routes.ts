@@ -427,17 +427,25 @@ userRoutes.delete('/api/user/chatgpt/sign-in', async (c) => {
   return json({ body: { cancelled: true } });
 });
 
-userRoutes.post('/api/user/chatgpt/paste/start', (c) => settle(Effect.tryPromise({
-  try: async () => {
-    const body = await c.req.text();
-    const named = v.safeParse(v.object({ account: v.optional(v.string()) }), body === '' ? {} : safeJsonParse(body));
+/**
+ * A subscription sign-in's start: the account its body names (empty, or `{ account }`; the main one when none), handed
+ * to `start`. A refusal from the account across RPC keeps its own words, as a bad name's.
+ */
+function signInStarted<Body>(
+  c: UserContext, doing: string, start: (stub: UserRoutesAuthority, owner: UserCaller, account: string | undefined) => Promise<Body>,
+): Effect.Effect<Response, KinuError> {
+  return Effect.tryPromise({
+    try: async () => {
+      const body = await c.req.text();
+      const named = v.safeParse(v.object({ account: v.optional(v.string()) }), body === '' ? {} : safeJsonParse(body));
 
-    if (!named.success) return err(400, 'Body must be empty or { account }');
+      return named.success ? json({ body: await start(c.get('stub'), c.get('owner'), named.output.account) }) : err(400, 'Body must be empty or { account }');
+    },
+    catch: (cause) => authoredRefusal({ doing, cause }),
+  });
+}
 
-    return json({ body: await c.get('stub').startChatGptPasteSignIn(c.get('owner'), named.output.account) });
-  },
-  catch: (cause) => toKinuError({ doing: 'starting the ChatGPT sign-in', cause, otherwise: 'unavailable' }),
-})));
+userRoutes.post('/api/user/chatgpt/paste/start', (c) => settle(signInStarted(c, 'starting the ChatGPT sign-in', (stub, owner, account) => stub.startChatGptPasteSignIn(owner, account))));
 
 // A paste the account refuses says why in its own words: across RPC its refusal is no KinuError, so `routeError`
 // would answer only its class's ("The request is not valid.", production 2026-10-23).
@@ -462,7 +470,7 @@ userRoutes.delete('/api/user/chatgpt', async (c) => {
   return json({ body: signedOut });
 });
 
-userRoutes.post('/api/user/claude/start', async (c) => json({ body: await c.get('stub').startClaudeSignIn(c.get('owner')) }));
+userRoutes.post('/api/user/claude/start', (c) => settle(signInStarted(c, 'starting the Claude sign-in', (stub, owner, account) => stub.startClaudeSignIn(owner, account))));
 
 userRoutes.post('/api/user/claude/finish', (c) => settle(Effect.tryPromise({
   try: async () => {

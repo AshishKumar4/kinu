@@ -2,6 +2,7 @@ import { Effect } from 'effect';
 import {
   KeptProviderListingSchema, type ProviderListing, safeJsonParse, type Credential, CLAUDE_CRED_KEY, CODEX_CRED_KEY, baseCredentialKey, CLAUDE_OAUTH_CALLBACK_PORT, claudeCodeFrom, claudeSignInRefusal, createClaudeOAuthClient, startClaudeSignIn, subscriptionIssuer, renewableLogin, rotateLogin, usableLogin, type LoginRenewal, type SubscriptionIssuer, decodeCodexAccountId, type JsonValue, type OAuthCredential, parseJsonValue, ownerCaller, type UserCaller, type ResolvedCaller, credentialToHeaders, refusedLogin, type AuthRequest, type AuthResolution, validateCredential, validateCredentialKey, createCredentialCipher, type CredentialCipher, revocationEndpointFor, revokeOAuthGrant, type DisconnectOutcome, isModelInferenceCredentialKey, CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, accountIdFromCloudflareCredential, cloudflareAIGatewayId, cloudflareAccountsFromCredential, cloudflareWorkersAIBaseURL, fetchCloudflareAIGateways, isCloudflareAIGatewayId, isCloudflareCredentialExpiring, isCloudflareCredentialUsable, refreshCloudflareCredential, withCloudflareAccount, type CloudflareAccount, type CloudflareAIGatewaySummary, type CredentialSummary, CLOUDFLARE_WEB_SEARCH_CRED_KEY, grantsWebSearch, storedCredentialKey,
   GOOGLE_OAUTH_CRED_KEY, googleCredentialExpiring, googleGrantOf, refreshGoogleCredential, type GoogleGrant,
+  MAIN_ACCOUNT, accountCredentialKey,
 } from '@kinu.run/core';
 import { attempt, authoredRefusal, diagnostics, joining, KinuError, renderThrownChain, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -46,6 +47,8 @@ const CLAUDE_SIGN_IN_KEY = 'claude.sign-in';
 const ClaudeSignInSchema = v.object({
   url: v.string(), state: v.string(), verifier: v.string(), revision: v.number(),
   redirectUri: v.optional(v.string(), `http://localhost:${String(CLAUDE_OAUTH_CALLBACK_PORT)}/callback`),
+  /** The login it seals, `<key>@<account>`; a sign-in held from before accounts was the main one's. */
+  key: v.optional(v.string(), CLAUDE_CRED_KEY),
 });
 
 export interface CodexStatus {
@@ -696,12 +699,15 @@ export class UserCredentials {
   }
 
   /** One Claude sign-in at a time; its PKCE verifier stays in this object, as the CLI's stays on the machine. Claude
-   *  returns the browser to Anthropic's own page, which shows the code to paste back: nothing lands on a page that fails. */
-  async startClaudeSignIn(caller: UserCaller): Promise<{ readonly url: string }> {
+   *  returns the browser to Anthropic's own page, which shows the code to paste back: nothing lands on a page that fails.
+   *  `account` names the login it seals, `<key>@<account>`; the main one is the bare key. */
+  async startClaudeSignIn(caller: UserCaller, account: string = MAIN_ACCOUNT): Promise<{ readonly url: string }> {
     await this.host.requireTier(caller, 'subscription_auth');
+    // Refuses a name that is not an account's before a sign-in is held for it.
+    const key = accountCredentialKey(CLAUDE_CRED_KEY, account);
     const signIn = await startClaudeSignIn('code-page');
 
-    this.host.ctx.storage.kv.put(CLAUDE_SIGN_IN_KEY, { ...signIn, revision: this.credentialRevision(CLAUDE_CRED_KEY) });
+    this.host.ctx.storage.kv.put(CLAUDE_SIGN_IN_KEY, { ...signIn, key, revision: this.credentialRevision(key) });
 
     return { url: signIn.url };
   }
@@ -734,11 +740,11 @@ export class UserCredentials {
 
       if ('error' in exchanged) return { connected: false, error: exchanged.error };
       const { credential } = exchanged;
-      const sealed = yield* attempt({ doing: 'sealing the Claude credential', otherwise: 'io' }, () => this.sealCredential(CLAUDE_CRED_KEY, credential));
+      const sealed = yield* attempt({ doing: 'sealing the Claude credential', otherwise: 'io' }, () => this.sealCredential(signIn.key, credential));
       const current = v.safeParse(ClaudeSignInSchema, this.host.ctx.storage.kv.get(CLAUDE_SIGN_IN_KEY));
 
       if (!current.success || current.output.state !== signIn.state
-        || !this.commitCredential({ key: CLAUDE_CRED_KEY, kind: credential.kind, sealed, expectRevision: signIn.revision })) {
+        || !this.commitCredential({ key: signIn.key, kind: credential.kind, sealed, expectRevision: signIn.revision })) {
         return { connected: false, error: 'That Claude sign-in was superseded before it completed: start it again.' };
       }
 

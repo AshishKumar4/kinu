@@ -47,7 +47,7 @@ function routes(harness: TestUserDO) {
     async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
     async userMcp_warmConnections() { return { servers: 0 }; },
     async listActiveWorkspaces() { return [{ name: 'jarvis', displayName: 'Jarvis', createdAt: 1, lastVisited: 1, nameOrigin: 'user' as const }]; },
-    startClaudeSignIn: (caller: UserCaller) => harness.userDO.startClaudeSignIn(caller),
+    startClaudeSignIn: (caller: UserCaller, account?: string) => harness.userDO.startClaudeSignIn(caller, account),
     // As production calls it: across RPC, where the object's refusal arrives as no KinuError.
     finishClaudeSignIn: (caller: UserCaller, code: string) => acrossRpc((pasted: string) => harness.userDO.finishClaudeSignIn(caller, pasted))(code),
   });
@@ -61,7 +61,7 @@ function routes(harness: TestUserDO) {
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   };
 
-  const call = async (path: string, body?: { code: string }) => {
+  const call = async (path: string, body?: { code: string } | { account: string }) => {
     const response = await serveFamily(userRoutes, { identity: IDENTITY, ctx: { waitUntil(promise: Promise<unknown>) { pending.push(promise); } } })(
       new Request(`https://kinu.example.com/api/user${path}`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}),
@@ -74,7 +74,8 @@ function routes(harness: TestUserDO) {
     return response;
   };
 
-  const start = async () => new URL(v.parse(v.object({ url: v.string() }), await (await call('/claude/start')).json()).url);
+  const start = async (account?: string) =>
+    new URL(v.parse(v.object({ url: v.string() }), await (await call('/claude/start', account === undefined ? undefined : { account })).json()).url);
 
   return { call, start, settled: () => Promise.all(pending) };
 }
@@ -127,6 +128,44 @@ describe('Claude sign-in on the web', () => {
       expect(await storedKeys(harness)).toEqual([CLAUDE_CRED_KEY]);
       // The sign-in is spent: the same code cannot land twice.
       expect((await web.call('/claude/finish', { code: `the-code#${state}` })).status).toBe(404);
+    } finally {
+      harness.close();
+    }
+  });
+
+  test('a second Claude account signs in under its name, beside the first', async () => {
+    const harness = createTestUserDO();
+    const web = routes(harness);
+
+    claudeTokenEndpoint(() => Response.json({ access_token: 'at', refresh_token: 'rt', expires_in: 3600, account: { email_address: 'owner@example.com' } }));
+
+    try {
+      for (const account of [undefined, 'work']) {
+        const state = (await web.start(account)).searchParams.get('state') ?? '';
+
+        expect(v.parse(FinishedSchema, await (await web.call('/claude/finish', { code: `the-code#${state}` })).json())).toEqual({ connected: true });
+      }
+
+      expect((await storedKeys(harness)).sort()).toEqual([CLAUDE_CRED_KEY, `${CLAUDE_CRED_KEY}@work`]);
+      await web.settled();
+    } finally {
+      harness.close();
+    }
+  });
+
+  test('a name that is no account\'s is refused before a sign-in is held', async () => {
+    const harness = createTestUserDO();
+    const web = routes(harness);
+    const seen = claudeTokenEndpoint(() => Response.json({ access_token: 'at', refresh_token: 'rt' }));
+
+    try {
+      const refused = await web.call('/claude/start', { account: 'Work Laptop' });
+
+      expect(refused.status).toBe(400);
+      expect(v.parse(RefusalSchema, await refused.json()).error).toContain('is not an account name');
+      // Nothing held: a code pasted now has no sign-in to finish.
+      expect((await web.call('/claude/finish', { code: 'the-code#state' })).status).toBe(404);
+      expect([seen, await storedKeys(harness)]).toEqual([[], []]);
     } finally {
       harness.close();
     }
