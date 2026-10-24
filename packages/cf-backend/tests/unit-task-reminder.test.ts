@@ -8,7 +8,7 @@ import type { OwnerAnswer } from '@kinu.run/core';
 import { setDiagnosticsSink } from '@kinu.run/core/obs';
 import { createRecordingLogger } from '@kinu.run/test-utils';
 import { actorConnectionTag } from '@kinu.run/core';
-import { asPane } from './helpers/agents-sdk';
+import { asPane, joinHarnessFibers } from './helpers/agents-sdk';
 import { agentSql, agentWakes, catalogTurn, driveUntil, gatewayWorkspace, jobsOver, until, workspaceMainActor } from './helpers/actor-harness';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 
@@ -156,8 +156,9 @@ const reminders = (asked: readonly string[]) => asked.filter((sent) => sent.last
 // minutes). It is reminded once the report lands and the task is still open, and once only.
 test('an agent waiting on its hire is not reminded until the report lands, then once', async () => {
   const asked: string[] = [];
-  let release!: () => void;
-  const working = new Promise<void>((resolve) => { release = resolve; });
+  const working = Promise.withResolvers<void>();
+  const started = Promise.withResolvers<void>();
+  let atReport = -1;
 
   const gateway = stubAiBinding(async (run) => {
     const { messages } = requestOf(run);
@@ -166,7 +167,8 @@ test('an agent waiting on its hire is not reminded until the report lands, then 
 
     // The hire's own run, opened by its assignment; main's requests name the assignment too, in the hire's call.
     if (openingOf(run).includes('Tally the ledger.')) {
-      await working;
+      started.resolve();
+      await working.promise;
 
       return chatCompletion(run, 'The ledger tallies to 412 rows.');
     }
@@ -174,6 +176,8 @@ test('an agent waiting on its hire is not reminded until the report lands, then 
     asked.push(sent);
 
     if (!openingOf(run).includes('Plan the ledger migration')) return chatCompletion(run, 'Noted.');
+
+    if (sent.includes('412 rows') && atReport < 0) atReport = asked.length - 1;
 
     if (results === 0) return toolCallCompletion(run, { tool: 'tasks', args: { op: 'add', titles: ['Migrate the ledger to integer cents'] } }, 'add_0');
 
@@ -183,21 +187,24 @@ test('an agent waiting on its hire is not reminded until the report lands, then 
   });
 
   const workspace = gatewayWorkspace(gateway);
-  const id = crypto.randomUUID();
+  const main = workspaceMainActor(workspace.db).actorId;
 
-  await workspace.agent.harnessAdmitMain('Plan the ledger migration and start on it.', id, undefined);
-  await workspace.agent.harnessMainLanding(id);
-  await until(() => asked.some((sent) => sent.includes('Waiting on the tally.')) || workspace.agent.harnessUnansweredModelCalls().length > 0, 'the hire never started');
+  await workspace.agent.send('Plan the ledger migration and start on it.', crypto.randomUUID(), []);
+  await started.promise;
+  // Main's turn ended, its hire still working: whatever it owed has had its laps to run.
+  await until(() => agentSql(workspace, main)<{ x: number }>`SELECT 1 AS x FROM run_events WHERE type = 'run_end'`.length > 0, "main's turn never ended");
   await workspace.agent.terminalRetryPass();
+  await joinHarnessFibers();
 
   expect(reminders(asked)).toBe(0);
 
-  release();
+  working.resolve();
   await driveUntil(workspace, 'the open task was never reminded after the report', () => reminders(asked) > 0);
-  await workspace.agent.harnessAgentsIdle();
   await workspace.agent.terminalRetryPass();
 
-  expect(reminders(asked)).toBe(1);
+  // The report reached main before its reminder did, and the list left again owes no second one.
+  expect({ reportFirst: atReport >= 0 && atReport < asked.findIndex((sent) => reminders([sent]) > 0), reminders: reminders(asked) })
+    .toEqual({ reportFirst: true, reminders: 1 });
 });
 
 // A process started to keep running owes the agent nothing: a preview server beside an open task, unrelated to it,
@@ -205,12 +212,19 @@ test('an agent waiting on its hire is not reminded until the report lands, then 
 test('a long-running preview server does not hold the reminder of an unrelated open task', async () => {
   const { asked, workspace } = openTaskWorkspace();
   const jobs = jobsOver(workspace.db);
+  const runningAtReminder: string[][] = [];
 
+  // Its agent started first: a job its start finds running is one an earlier activation lost, which it ends.
+  await catalogTurn(workspace.agent, 'Note the preview port.');
   jobs.create({ id: 'bgjob-preview', kind: 'startProcess', workMode: 'build', now: Date.now(), label: 'preview: bun run dev' });
-  expect(jobs.countAwaited()).toBe(0);
 
   await catalogTurn(workspace.agent, 'Plan the ledger migration and start on it.');
-  await driveUntil(workspace, 'the open task was never reminded beside the preview server', () => reminders(asked) > 0);
+  await driveUntil(workspace, 'the open task was never reminded beside the preview server', () => {
+    if (reminders(asked) === 0) return false;
+    runningAtReminder.push(jobs.listRunning().items.map((job) => job.id));
 
-  expect(jobs.listRunning().items.map((job) => job.id)).toEqual(['bgjob-preview']);
+    return true;
+  });
+
+  expect(runningAtReminder).toEqual([['bgjob-preview']]);
 });
