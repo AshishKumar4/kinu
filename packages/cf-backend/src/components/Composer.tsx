@@ -290,11 +290,13 @@ interface ComposerProps {
   textareaRef?: React.Ref<HTMLTextAreaElement>;
   /** What waits on the owner's answer, attached to the prompt box's top edge (`AttentionStack`). */
   attention?: ReactNode;
+  /** Floats just above the composer, over the transcript's faded end, and moves nothing. */
+  float?: ReactNode;
 }
 
 export function Composer({
   value, onValueChange, onSend, placeholder, disabled, liveness, onStop, onRecover,
-  notices, mode, attachments, modelPicker, onBranch, textareaRef, attention,
+  notices, mode, attachments, modelPicker, onBranch, textareaRef, attention, float,
 }: ComposerProps) {
   const empty = value.trim() === "" && (attachments?.parts.length ?? 0) === 0;
   const streaming = liveness.kind === "live";
@@ -312,10 +314,11 @@ export function Composer({
 
   return (
     // @container: the action row collapses to icons in a narrow chat column.
-    <div data-composer-root className="@container mx-auto w-full max-w-[var(--layout-composer)] px-3 pb-3 sm:px-5 sm:pb-4"
+    <div data-composer-root className="@container relative mx-auto w-full max-w-[var(--layout-composer)] px-3 pb-3 sm:px-5 sm:pb-4"
       onPaste={(e) => {
         if (attachments) pasteAttachments(e, attachments, (text) => onValueChange(value === "" ? text : `${value}\n${text}`));
       }}>
+      {float}
       {notices && <Notices notices={notices} />}
 
       {attention}

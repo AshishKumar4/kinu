@@ -24,6 +24,7 @@ import { usePendingAttachments } from "@/hooks/use-pending-attachments";
 import { useFileDrop } from "@/hooks/use-file-drop";
 import { useFocusLine } from "@/hooks/use-focus-line";
 import { ActivityView } from "@/components/workspaces/ActivityView";
+import { BackgroundWork } from "@/components/BackgroundWork";
 import { DESKTOP_LANDING, useWorkbenchSurfaces } from "@/hooks/use-workbench-surfaces";
 import NotFoundPage from "@/pages/NotFoundPage";
 import { useTurnAnnotations } from "@/hooks/use-turn-annotations";
@@ -989,6 +990,10 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
               empty={<EmptyConversation mission={as?.mission ?? ""} />}
               asked={asked} answerSlates={WORKSPACE_CHAT} layout={{ startFirst: true, padClass: "pt-6 pb-12" }}
               extras={{
+                float: agentId === undefined ? undefined : (
+                  <BackgroundWork workspace={agentId} agents={agentsPanel.list} jobs={state.backgroundJobs}
+                    open={(agent) => { detach(Effect.promise(async () => agentsPanel.open(agent))); }} openWork={() => show("Work")} />
+                ),
                 before: (i) => placed.before.get(i),
                 row: (msg, i) => {
                   const takes = takesByTurn[msg.id];

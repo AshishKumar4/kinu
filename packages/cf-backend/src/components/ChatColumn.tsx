@@ -49,6 +49,8 @@ interface ChatColumnExtras {
   readonly onBranch?: () => void;
   /** Sends the message a new chat was opened with (`useOpeningMessage`), as a press of Send would. */
   readonly opening?: true;
+  /** Floats over the transcript's end above the composer, and moves nothing: what works out of sight (1024-l). */
+  readonly float?: ReactNode;
 }
 
 export function EmptyConversation({ mission }: { mission: string }) {
@@ -275,6 +277,7 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
           onStop={stop}
           {...(extras.onBranch !== undefined && { onBranch: secretGuard.guarded("branch", extras.onBranch) })}
           attention={<>{secretGuard.offer}{attention}</>}
+          float={extras.float}
           mode={{ value: ui.mode, onChange: ui.setMode }}
           {...(attachments !== undefined && { attachments: { parts: [...attachments.parts], onAdd: attachments.add, onRemove: attachments.remove } })}
           modelPicker={<ConnectedModelPicker value={as?.model.model ?? ""} onChange={pickModel} size="xs"

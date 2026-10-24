@@ -3240,6 +3240,14 @@ const GALLERY_AGENTS: PanelAgent[] = [
 const NO_GALLERY_FIGURES = { activeMs: 0, cacheEma: null };
 
 /** Main, the page's chats, and the fixture's agents when asked for. */
+/** Agents a `gallery:agent-rested` event brought to rest (`{ key }`), as the next read of the list has them. */
+const RESTED_AGENTS = new Set<string>();
+
+window.addEventListener("gallery:agent-rested", (event) => {
+  RESTED_AGENTS.add(v.parse(v.object({ key: v.string() }), event instanceof CustomEvent ? event.detail : null).key);
+  galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listWorkspaceAgents"] }));
+});
+
 function galleryWorkspaceAgents(): PanelAgent[] {
   const created = GALLERY_SUBS.map((sub, index): PanelAgent => ({
     colour: index + 1, key: sub.actorId, label: sub.displayName || codenameFor(sub.name), category: "user", activity: "idle", parent: "main",
@@ -3248,7 +3256,9 @@ function galleryWorkspaceAgents(): PanelAgent[] {
 
   const main = mainPanelAgent({ label: GALLERY_MAIN_TITLE.value, activity: "idle", figures: NO_GALLERY_FIGURES });
 
-  return AGENTS_PANEL ? [...GALLERY_AGENTS, ...created.filter((agent) => !GALLERY_AGENTS.some((fixed) => fixed.key === agent.key))] : [main, ...created];
+  const listed = AGENTS_PANEL ? [...GALLERY_AGENTS, ...created.filter((agent) => !GALLERY_AGENTS.some((fixed) => fixed.key === agent.key))] : [main, ...created];
+
+  return listed.map((agent) => (RESTED_AGENTS.has(agent.key) ? { ...agent, activity: "idle" } : agent));
 }
 
 const GALLERY_MAIN_TITLE = { value: "Main" };
@@ -3459,6 +3469,9 @@ function heldJob(at: number, label: string | undefined): WorkspaceAnswer<"listBa
  * `label` or fails with `failed`. Otherwise there are none.
  */
 async function galleryJobsRead(): Promise<WorkspaceAnswer<"listBackgroundJobs">> {
+  // `&jobs=running`: Main's jobs as the Work tab's own frame has them, one of them running.
+  if (new URLSearchParams(location.search).get("jobs") === "running") return BACKGROUND_JOBS;
+
   if (new URLSearchParams(location.search).get("jobs") !== "held") return [];
   const root = document.documentElement.dataset;
 
