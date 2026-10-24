@@ -174,6 +174,7 @@ describe('cloud agent ownership safety', () => {
     try {
       const entry = await createCloudWorkspaceForUser({
         env,
+        placement: 'weur',
         userId: USER_ID,
         userDO: env.UserDO.get(),
         caller: await testOwner(),
@@ -198,6 +199,7 @@ describe('cloud agent ownership safety', () => {
 
       const purposeless = await createCloudWorkspaceForUser({
         env,
+        placement: 'weur',
         userId: USER_ID,
         userDO: env.UserDO.get(),
         caller: await testOwner(),
@@ -209,6 +211,7 @@ describe('cloud agent ownership safety', () => {
 
       const explicitlyTitled = await createCloudWorkspaceForUser({
         env,
+        placement: 'weur',
         userId: USER_ID,
         userDO: env.UserDO.get(),
         caller: await testOwner(),
@@ -282,6 +285,7 @@ describe('cloud agent ownership safety', () => {
     try {
       await expect(createCloudWorkspaceForUser({
         env,
+        placement: 'weur',
         userId: USER_ID,
         userDO: env.UserDO.get(),
         caller: await testOwner(),
@@ -338,6 +342,7 @@ describe('cloud agent ownership safety', () => {
     try {
       await expect(createCloudWorkspaceForUser({
         env,
+        placement: 'weur',
         userId: USER_ID,
         userDO: env.UserDO.get(),
         caller: await testOwner(),
@@ -396,6 +401,7 @@ describe('cloud agent ownership safety', () => {
     try {
       await expect(createCloudWorkspaceForUser({
         env,
+        placement: 'weur',
         userId: USER_ID,
         userDO: env.UserDO.get(),
         caller: await testOwner(),
@@ -477,6 +483,7 @@ describe('cloud agent ownership safety', () => {
     try {
       await createCloudWorkspaceForUser({
         env,
+        placement: 'weur',
         userId: USER_ID,
         userDO: env.UserDO.get(),
         caller: await testOwner(),
@@ -540,6 +547,7 @@ describe('cloud agent ownership safety', () => {
     try {
       first = await createCloudWorkspaceForUser({
         env,
+        placement: 'weur',
         userId: USER_ID,
         userDO: env.UserDO.get(),
         caller: await testOwner(),
@@ -550,6 +558,7 @@ describe('cloud agent ownership safety', () => {
       // An idempotent create is a stable answer, not merely a non-destructive one.
       second = await createCloudWorkspaceForUser({
         env,
+        placement: 'weur',
         userId: USER_ID,
         userDO: env.UserDO.get(),
         caller: await testOwner(),
@@ -624,6 +633,7 @@ describe('cloud agent ownership safety', () => {
     try {
       await createCloudWorkspaceForUser({
         env,
+        placement: 'weur',
         userId: USER_ID,
         userDO: env.UserDO.get(),
         caller: await testOwner(),

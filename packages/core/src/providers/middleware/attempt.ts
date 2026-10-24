@@ -8,6 +8,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { LanguageModelV4, LanguageModelV4CallOptions } from '@ai-sdk/provider';
 import { asFetchFunction } from '../fetch-shim';
+import { withRegionReason } from './region-refusal';
 import type { JsonObject } from '../../utils/json';
 
 export interface Attempt {
@@ -45,10 +46,11 @@ export function attemptBound(model: LanguageModelV4): LanguageModelV4 {
   };
 }
 
-/** A transport whose answers report each arriving chunk to the attempt that sent them. */
+/** A transport whose answers report each arriving chunk to the attempt that sent them; a provider's region refusal is
+ *  said with where the call came from (`withRegionReason`). */
 export function heardFetch(fetch: typeof globalThis.fetch): typeof globalThis.fetch {
   return asFetchFunction(async (input, init) => {
-    const response = await fetch(input, init);
+    const response = await withRegionReason(await fetch(input, init));
     const body = heardBody(response.body);
 
     return body === null ? response : new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
