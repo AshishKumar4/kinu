@@ -330,9 +330,9 @@ describe('the providers list', () => {
       // The start answered, and the frame after it ran whatever its answer set going.
       await page.waitForFunction(() => document.documentElement.dataset.galleryClaudeStarted === '1');
       await page.evaluate(() => new Promise<void>((done) => { requestAnimationFrame(() => { done(); }); }));
-      const { window, at, closed } = await signInWindowSeen(page);
+      const { window: opened, at, closed } = await signInWindowSeen(page);
 
-      expect({ window, at, closed }).toEqual({ window: POPUP, at: null, closed: true });
+      expect({ opened, at, closed }).toEqual({ opened: POPUP, at: null, closed: true });
       await page.close();
     });
   });

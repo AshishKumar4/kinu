@@ -459,6 +459,17 @@ const CLAUDE_START = new URLSearchParams(location.search).get("claude");
 
 const claudeStartReleased = new Promise<void>((done) => { window.addEventListener("gallery:claude-start", () => { done(); }, { once: true }); });
 
+async function claudeStartFixture(): Promise<Response> {
+  if (CLAUDE_START === "down") return fixtureJson({ error: "Claude's sign-in could not start" }, 503);
+
+  if (CLAUDE_START === "held") {
+    await claudeStartReleased;
+    document.documentElement.dataset.galleryClaudeStarted = "1";
+  }
+
+  return fixtureJson({ url: "https://claude.ai/oauth/authorize?redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&state=gallery" });
+}
+
 /** Workers AI's models, which an account offers only once Cloudflare is connected. */
 const WORKERS_AI_MODELS = CLOUDFLARE_OFF ? [] : [{ spec: "workers-ai/llama-4", label: "Llama 4", provider: "workers-ai", reasoningEfforts: [] }];
 
@@ -592,16 +603,7 @@ async function settingsSectionsFixture(path: string, method: string, body: BodyI
     return fixtureJson({ ok: !settingsSavedCredentials.has(key), unrevoked: null });
   }
 
-  if (path === "/api/user/claude/start" && method === "POST") {
-    if (CLAUDE_START === "down") return fixtureJson({ error: "Claude's sign-in could not start" }, 503);
-
-    if (CLAUDE_START === "held") {
-      await claudeStartReleased;
-      document.documentElement.dataset.galleryClaudeStarted = "1";
-    }
-
-    return fixtureJson({ url: "https://claude.ai/oauth/authorize?redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&state=gallery" });
-  }
+  if (path === "/api/user/claude/start" && method === "POST") return await claudeStartFixture();
 
   // `good-code` connects; any other code is refused as the account words Claude's refusal (claudeSignInRefusal).
   if (path === "/api/user/claude/finish" && method === "POST") {
