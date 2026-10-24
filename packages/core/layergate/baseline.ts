@@ -36,7 +36,7 @@ export const LOCKED_BASELINE: Baseline = {
   'delegation/no-delegation-is-zero-not-absent': '25306cd556abca42',
   'delegation/render-duration-units': 'e21e0553dcdc7ae2',
   'delegation/tool-call-counts': 'fa9a223b12be04a5',
-  'event-drain/batch-text': '320b547813b7ba2b',
+  'event-drain/batch-text': 'a83b54a591a9347a',
   'event-drain/event-render': 'd7de371c229d2e9b',
   'event-drain/peer-reply-route': 'd4f3b28be8fdccbd',
   'event-drain/self-emitted-never-wakes': '663707efc71111d9',

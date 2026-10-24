@@ -104,9 +104,16 @@ export interface BlueprintBirth {
   readonly seed: WorkspaceSeed;
 }
 
-/** The owner as a blueprint's text names them: their name, else their address's first part. */
-export function blueprintOwnerName(profile: { readonly displayName?: string | null; readonly email: string } | null): string {
-  return [profile?.displayName?.trim(), profile?.email.split('@')[0]].find((called) => called !== undefined && called !== '') ?? 'you';
+/** What the person is called: their name, else their address's first part; none, '' (setup and Home's mascot read it). */
+export function personName(profile: { readonly displayName?: string | null; readonly email: string } | null): string {
+  return [profile?.displayName?.trim(), profile?.email.split('@')[0]].find((called) => called !== undefined && called !== '') ?? '';
+}
+
+/** The owner as a blueprint's text names them, `you` where they are called nothing. */
+export function blueprintOwnerName(profile: Parameters<typeof personName>[0]): string {
+  const called = personName(profile);
+
+  return called === '' ? 'you' : called;
 }
 
 /** The soul and the seed a blueprint installs as, for this owner and what they chose. */

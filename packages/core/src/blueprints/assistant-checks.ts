@@ -34,9 +34,9 @@ const fresh = items.filter((item) => NEEDS[item.reason] !== undefined
   && (item.updated_at > seen.since || (item.updated_at === seen.since && !(seen.ids ?? []).includes(item.id))));
 if (fresh.length === 0) return { fire: false, state: next };
 const link = (item) => String(item.subject.url ?? '').replace('https://api.github.com/repos/', 'https://github.com/').replace('/pulls/', '/pull/');
-const title = (item) => (item.subject.title.length > 70 ? item.subject.title.slice(0, 69) + '…' : item.subject.title);
+const title = (item) => (item.subject.title.length > 70 ? item.subject.title.slice(0, 69) + '...' : item.subject.title);
 const lines = fresh.slice(0, 4).map((item) => NEEDS[item.reason] + ': ' + item.repository.full_name + ' "' + title(item) + '" ' + link(item));
-const more = fresh.length > 4 ? '\\n…and ' + (fresh.length - 4) + ' more' : '';
+const more = fresh.length > 4 ? '\\n...and ' + (fresh.length - 4) + ' more' : '';
 return { fire: true, brief: lines.join('\\n') + more, state: next };`,
 };
 
@@ -86,6 +86,6 @@ for (const id of added.slice(0, 4)) {
   const header = (name) => (message.body?.payload?.headers ?? []).find((each) => each.name === name)?.value ?? '';
   if (message.status === 200) lines.push(header('From') + ': "' + header('Subject').slice(0, 80) + '" (' + id + ')');
 }
-const more = added.length > 4 ? '\\n…and ' + (added.length - 4) + ' more' : '';
+const more = added.length > 4 ? '\\n...and ' + (added.length - 4) + ' more' : '';
 return { fire: true, brief: added.length + ' new in the inbox:\\n' + lines.join('\\n') + more, state: { cursor } };`,
 };

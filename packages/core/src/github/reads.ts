@@ -3,29 +3,12 @@
 // paces by (`Last-Modified`, `X-Poll-Interval`, `Retry-After`); an agent's operation says a refusal in GitHub's words
 // (`tools/github-operations.ts`). docs.github.com/rest/activity/notifications, read 2026-10-24.
 import { Effect } from 'effect';
-import * as v from 'valibot';
 import { KinuError, settle, tolerate } from '../obs/index';
-import { GitHubPathSchema } from '../operations/github';
+import type { GitHubAnswer, GitHubRead } from '../operations/github';
 import { plainFetch } from '../providers/fetch-shim';
 import { parseJsonValue, type JsonValue } from '../utils/json';
 
 const API = 'https://api.github.com';
-
-export const GitHubReadSchema = v.object({
-  path: GitHubPathSchema,
-  query: v.optional(v.record(v.string(), v.union([v.string(), v.number(), v.boolean()]))),
-  /** A conditional read: GitHub answers 304 with no body while nothing changed since. */
-  ifModifiedSince: v.optional(v.string()),
-});
-
-export type GitHubRead = v.InferOutput<typeof GitHubReadSchema>;
-
-/** GitHub's answer to one read, whatever its status: its JSON (or its text, where it sent none), and its pacing. */
-export interface GitHubAnswer {
-  readonly status: number;
-  readonly body: JsonValue;
-  readonly headers: { readonly lastModified?: string; readonly pollInterval?: number; readonly retryAfter?: string };
-}
 
 const NOT_CONNECTED = 'GitHub is not connected to this account. Its owner connects it in Settings > Connections; then call again.';
 

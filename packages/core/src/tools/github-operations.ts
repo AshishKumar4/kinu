@@ -4,8 +4,7 @@ import * as v from 'valibot';
 import type { CodemodeProvider } from '../types/codemode';
 import { KinuError } from '../obs/index';
 import { serve } from '../operations/operation';
-import { GITHUB } from '../operations/github';
-import type { GitHubAnswer, GitHubRead } from '../github/reads';
+import { GITHUB, type GitHubAnswer, type GitHubRead } from '../operations/github';
 import { codemodeNamespace } from './operation-surfaces';
 
 export interface GitHubDeps {

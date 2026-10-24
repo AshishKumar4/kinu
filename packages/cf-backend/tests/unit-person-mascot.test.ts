@@ -5,7 +5,7 @@
 import './helpers/ui-module-globals';
 import { describe, expect, test } from 'bun:test';
 import { mascotAccessory, personMascot } from '../src/components/ui/Marks';
-import { personName } from '../src/hooks/use-chat-mascot';
+import { personName } from '@kinu.run/core';
 
 const NAMES = ['Ada Lovelace', 'Ashish', 'Lucía Ferreira', 'kai', 'Owner', '李雷'];
 

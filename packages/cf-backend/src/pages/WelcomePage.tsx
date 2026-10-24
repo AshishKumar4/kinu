@@ -9,7 +9,7 @@ import {
   type Icon as PhosphorIcon,
 } from "@phosphor-icons/react";
 import {
-  APP_ROUTES, ONBOARDING_STEPS, PERSONAL_ASSISTANT_ID, suggestedMailUsername,
+  APP_ROUTES, ONBOARDING_STEPS, PERSONAL_ASSISTANT_ID, personName, suggestedMailUsername,
 } from "@kinu.run/core";
 import { renderThrownChain, settle, showing, detach } from "@kinu.run/core/obs";
 import { KinuLogo } from "@/components/ui/KinuLogo";
@@ -18,7 +18,6 @@ import { ProvidersPanel } from "@/components/account/ProvidersPanel";
 import { DefaultModelField } from "@/components/account/DefaultModelField";
 import { WebSearchSettings } from "@/components/account/WebSearchSettings";
 import { AssistantStep, DEFAULT_ASSISTANT, type AssistantChoice } from "@/components/assistant/AssistantStep";
-import { personName } from "@/hooks/use-chat-mascot";
 import { McpServersSection } from "@/components/account/McpServersPanel";
 import { completeOnboarding, setDisplayName } from "@/lib/user-api";
 import { installBlueprint } from "@/lib/explore-api";

@@ -51,6 +51,9 @@ const turnsOn = (gateway: StubbedAiBinding, asked: string) => gateway.runs.filte
 
 const ModelSchema = v.object({ model: v.string() });
 
+/** A seeded schedule's trigger spec, as the owner's trigger list shows it. */
+const ScheduleSpecSchema = v.object({ cron: v.string(), tier: v.optional(v.string()), check: v.optional(v.unknown()), payload: v.unknown() });
+
 describe("the assistant's GitHub check", () => {
   test('reads GitHub at no model call while nothing new needs the owner, then wakes once for a review asked of them, on the fast model', async () => {
     let modified = 'Fri, 24 Oct 2026 09:00:00 GMT';
@@ -196,15 +199,16 @@ test("an assistant installed at version 1 has its GitHub and Gmail checks replac
   await nextCheck(workspace, () => reads.length);
   const after = await triggers();
   const github = present(after.get('GitHub check'), 'the GitHub check');
+  const spec = v.parse(ScheduleSpecSchema, github.spec);
 
   // In place: the same trigger, its schedule kept, its check and tier the blueprint's; read by its program, no turn.
-  expect({ id: github.id, cron: github.spec['cron'], tier: github.spec['tier'], reads: reads.length, modelCalls: gateway.runs.length })
+  expect({ id: github.id, cron: spec.cron, tier: spec.tier, reads: reads.length, modelCalls: gateway.runs.length })
     .toEqual({ id: present(before.get('GitHub check'), 'the v1 GitHub check').id, cron: '*/15 * * * *', tier: 'fast', reads: 1, modelCalls: 0 });
-  expect(github.spec['check']).toEqual(present(kinuBlueprint('personal-assistant'), 'the blueprint').automations.find(({ label }) => label === 'GitHub check')?.check);
-  expect(github.spec['payload']).toEqual({ prompt: expect.stringContaining('New GitHub notifications for ashish') });
+  expect(spec.check).toEqual(present(kinuBlueprint('personal-assistant'), 'the blueprint').automations.find(({ label }) => label === 'GitHub check')?.check);
+  expect(spec.payload).toEqual({ prompt: expect.stringContaining('New GitHub notifications for ashish') });
   expect(after.get('Daily brief')).toEqual(before.get('Daily brief'));
 
   // Gmail's, kept unarmed while Google is not held, is armed as version 2's once it is.
   await workspace.agent.connectionsChanged(['github', 'google']);
-  expect(present((await triggers()).get('Gmail check'), 'the Gmail check').spec['check']).toMatchObject({ reads: ['google'] });
+  expect(v.parse(ScheduleSpecSchema, present((await triggers()).get('Gmail check'), 'the Gmail check').spec).check).toMatchObject({ reads: ['google'] });
 });

@@ -6,11 +6,7 @@ import { lastValue } from "@/hooks/use-async-resource";
 import { useAccountIfAny } from "@/hooks/use-account";
 import { useWorkspaceRosterIfAny } from "@/hooks/use-workspace-roster";
 import { mascotColour, mascotSeed, personMascot, type MascotLook } from "@/components/ui/Marks";
-
-/** What the person is called, as the assistant's look reads it: their name, else their address's first part (as its soul names them). */
-export function personName(profile: { readonly displayName?: string | null; readonly email: string } | null): string {
-  return [profile?.displayName?.trim(), profile?.email.split("@")[0]].find((called) => called !== undefined && called !== "") ?? "";
-}
+import { personName } from "@kinu.run/core";
 
 /** Each chat's look in `workspace`: `chat` its key, `rank` its place among the workspace's agents. */
 export function useMascotOf(workspace: string): (chat: string, rank: number) => MascotLook {

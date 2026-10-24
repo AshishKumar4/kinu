@@ -1,10 +1,26 @@
 /** GitHub's REST API through the account's GitHub connection, reading only: a watcher's check reads it as a program does. */
 import * as v from 'valibot';
-import { JsonValueSchema } from '../utils/json';
+import { JsonValueSchema, type JsonValue } from '../utils/json';
 import { defineOperation, described } from './operation';
 
 /** A path on api.github.com, with no host, query or fragment of its own: `/notifications`, `/repos/{owner}/{repo}/pulls`. */
 export const GitHubPathSchema = v.pipe(v.string(), v.regex(/^\/(?!\/)[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$/), v.check((path) => !path.split('/').includes('..'), 'a path never climbs (`..`)'));
+
+export const GitHubReadSchema = v.object({
+  path: GitHubPathSchema,
+  query: v.optional(v.record(v.string(), v.union([v.string(), v.number(), v.boolean()]))),
+  /** A conditional read: GitHub answers 304 with no body while nothing changed since. */
+  ifModifiedSince: v.optional(v.string()),
+});
+
+export type GitHubRead = v.InferOutput<typeof GitHubReadSchema>;
+
+/** GitHub's answer to one read, whatever its status: its JSON (or its text, where it sent none), and its pacing. */
+export interface GitHubAnswer {
+  readonly status: number;
+  readonly body: JsonValue;
+  readonly headers: { readonly lastModified?: string; readonly pollInterval?: number; readonly retryAfter?: string };
+}
 
 export const GITHUB = {
   read: defineOperation({

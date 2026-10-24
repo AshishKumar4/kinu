@@ -118,7 +118,9 @@ export { callGoogle, GoogleCallSchema, type GoogleAnswer, type GoogleCall, type 
 
 export { createGitHubCodemodeProvider, type GitHubDeps } from './tools/github-operations';
 
-export { readGitHub, GitHubReadSchema, type GitHubAnswer, type GitHubRead } from './github/reads';
+export { readGitHub } from './github/reads';
+
+export { GitHubReadSchema, type GitHubAnswer, type GitHubRead } from './operations/github';
 
 export { googleBaseUrls, type GoogleRequest } from './google/catalog';
 
@@ -2133,7 +2135,7 @@ export { agentStatusFacts, chatSeed, getAgentStatus, getChatHistoryPage, getTool
 export { WorkspaceLayoutSchema, type WorkspaceLayout } from './config/workspace-layout';
 
 export {
-  blueprintOwnerName, blueprintPage, blueprintSeed,
+  blueprintOwnerName, blueprintPage, blueprintSeed, personName,
   type BlueprintInstall, type BlueprintWhen, type WorkspaceBlueprint, type WorkspaceSeed,
 } from './blueprints/workspace';
 

@@ -11,7 +11,7 @@
 import * as v from 'valibot';
 import type { EventLog } from '../hub/log';
 import type { TriggerRegistry } from '../hub/triggers';
-import type { TriggerRow } from '../hub/types';
+import type { TimerPayload, TriggerRow } from '../hub/types';
 import { runWorkModeInvocation } from '../../execution/work-mode';
 import { diagnostics } from '../../obs/index';
 import { stableStringify } from '../../safety/argument-digest';
@@ -290,7 +290,6 @@ async function commitCheck(deps: Pick<WatchDeps, 'registry' | 'log'>, checked: {
   }
 
   if (!answer.fire) return 'quiet';
-  const label = trigger.spec['label'];
 
   deps.log.publish({
     descriptor: {
@@ -299,10 +298,7 @@ async function commitCheck(deps: Pick<WatchDeps, 'registry' | 'log'>, checked: {
       payload: {
         trigger_id: triggerId,
         scheduled_fire_at: scheduledAt,
-        ...(typeof label === 'string' && { label }),
-        ...(trigger.spec['payload'] !== undefined && { user_payload: trigger.spec['payload'] }),
-        ...(typeof trigger.spec['mission_label'] === 'string' && { mission_label: trigger.spec['mission_label'] }),
-        ...(v.is(ScheduleTierSchema, trigger.spec['tier']) && { tier: trigger.spec['tier'] }),
+        ...scheduleOf(trigger),
         watch_brief: answer.brief,
         ...(delivery !== undefined && { watch_delivery: delivery }),
       },
@@ -312,4 +308,23 @@ async function commitCheck(deps: Pick<WatchDeps, 'registry' | 'log'>, checked: {
   });
 
   return 'fired';
+}
+
+/** A field its spec holds off its shape reads as absent, as it always has: a fire never fails on one. */
+const lenient = <Schema extends v.GenericSchema>(schema: Schema) => v.fallback(v.optional(schema), undefined);
+
+const FiredScheduleSchema = v.object({
+  label: lenient(v.string()), payload: lenient(JsonValueSchema), mission_label: lenient(v.string()), tier: lenient(ScheduleTierSchema),
+});
+
+/** What a fire tells the turn it wakes of the schedule that fired: its label, its payload, its mission and its tier. */
+function scheduleOf(trigger: Pick<TriggerRow, 'spec'>): Pick<TimerPayload, 'label' | 'user_payload' | 'mission_label' | 'tier'> {
+  const { label, payload, mission_label, tier } = v.parse(FiredScheduleSchema, trigger.spec);
+
+  return {
+    ...(label !== undefined && { label }),
+    ...(payload !== undefined && { user_payload: payload }),
+    ...(mission_label !== undefined && { mission_label }),
+    ...(tier !== undefined && { tier }),
+  };
 }
