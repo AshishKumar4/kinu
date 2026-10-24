@@ -15,7 +15,7 @@ import { buildSystemPromptParts, renderUnverifiedInstructions, systemPromptText,
 import type { AgentsMdSources } from '../prompting/agents-md';
 import type { MediaModality } from '../prompting/attachment-sanitizer';
 import type { PromptBackend, PromptIdentity } from '../prompting/surface';
-import { withOperationProfile, type OperationProfile } from '../profiles/operation';
+import { captureOperationProfile, withOperationProfile, type OperationProfile } from '../profiles/operation';
 import { bindRoute } from '../profiles/model-lane';
 import { effectiveRoleCatalog } from '../profiles/catalog';
 import { ownProfileChoices, resolveTurnProfile, type PinnedProfile, type ProfileAuthorityInputs, type ResolvedTurnProfile } from '../profiles/resolve';
@@ -25,7 +25,7 @@ import { reasoningEffortOptions } from '../providers/effort';
 import { KinuError, settleSync } from '../obs/index';
 import type { CountableRequest, InputTokenCount } from '../providers/input-tokens';
 import { parseModelSpec, type CacheRetention } from '../providers/types';
-import type { ModelCallSpend, ModelOperationSink } from '../events/model-call';
+import type { ModelCallSink, ModelCallSpend, ModelOperationSink } from '../events/model-call';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ActiveSkillSet } from '../skills/types';
 import type { DiscoverOpts } from '../skills/discover';
@@ -37,6 +37,12 @@ import type { HarnessMode } from '../config/harness-mode';
 import { BUILTIN_TOOL_NAMES, type BuiltinToolName } from '../tools/registry';
 import type { AgentsOp } from '../operations/agents';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import { readMemoryTail } from '../memory/note';
+import { artifactOverrides, currentArtifacts } from '../evolution/artifacts';
+import { actorPolicy } from '../delegation/actor-policy';
+import { CHAT_SESSION_ID } from '../session/transcript-schema';
+import type { SeatedActor } from '../state/actor-host';
+import type { SqlExecutor } from '../types/primitives';
 import type { InstructionTrustResolver } from '../types/instruction-trust';
 import { callableToolNames, toolsForInvocation } from '../execution/work-mode';
 import type { WorkMode } from '../types/turn';
@@ -138,6 +144,51 @@ function advisorReads(offered: TurnTools): AdvisorReadTools {
 
 /** A one-shot run brings its tools and brief; the actor brings the rest. */
 export type RunTurnSources = Omit<TurnAssemblySources, 'toolset' | 'externalTools' | 'wiredToolNames' | 'codemodeCapabilities' | 'brief'>;
+
+/** What a backend brings to a seated actor's turn sources; the rest is read off the actor ({@link actorTurnSources}). */
+export type ActorTurnParts = Pick<RunTurnSources,
+  'backend' | 'harnessMode' | 'models' | 'profileInputs' | 'choices' | 'ancestors' | 'agentsActions' | 'temporaryAsk' | 'soul' | 'agentsMd'
+  | 'budget' | 'observeStream' | 'operations' | 'attachmentBudget' | 'extensions' | 'dynamic' | 'accountFacts' | 'mail'> & {
+  /** The workspace's identity: its own agent speaks as it, any other as a named agent of it. */
+  readonly workspaceIdentity: () => Promise<PromptIdentity>;
+  readonly instructionTrust: InstructionTrustResolver;
+  /** What its skills' reader is told ({@link vfsTurnSkills}). */
+  readonly skillReads?: Pick<DiscoverOpts, 'hides' | 'shared'>;
+  /** Where its promoted artifacts are read, where the turn does not hold them already. */
+  readonly artifacts: { readonly sql: SqlExecutor; readonly held?: ReturnType<TurnAssemblySources['artifacts']> };
+  /** The prompt cache its conversations are routed under (`actorAffinity`), which keys its extensions' state. */
+  readonly affinity: string;
+  /** Where the scaffold's model calls are reported. */
+  readonly report: ModelCallSink;
+  /** The run and turn its operations are captured under. */
+  readonly run: { readonly runId: string; readonly turnId: string | null };
+};
+
+/** A seated actor's turn sources on any backend: its own runtime, stores and lineage, with what the backend brings. */
+export function actorTurnSources(actor: SeatedActor, parts: ActorTurnParts): RunTurnSources {
+  const { workspaceIdentity, instructionTrust, skillReads, artifacts, affinity, report, run, ...brought } = parts;
+  const { runtime, stores, handle, record } = actor;
+  const workspace = actorPolicy(record).workspaceAgent;
+
+  return {
+    ...brought,
+    rt: runtime,
+    executors: () => runtime.executionRouter?.listExecutors() ?? [],
+    config: stores.config,
+    skills: vfsTurnSkills(runtime.storage.vfs, stores.config, instructionTrust, skillReads),
+    identity: async () => {
+      const identity = await workspaceIdentity();
+
+      return workspace ? identity : { ...identity, agent: stores.config.getDisplayName() ?? record.name };
+    },
+    memoryTail: () => readMemoryTail(runtime.memory),
+    artifacts: () => artifacts.held ?? artifactOverrides(currentArtifacts(artifacts.sql, handle)),
+    taskPlan: () => null,
+    conversationKey: () => conversationKey(affinity, workspace ? CHAT_SESSION_ID : record.actorId),
+    scaffoldSpend: { source: 'scaffold', report, operations: parts.operations },
+    operation: (profile, inputs) => captureOperationProfile({ actor: handle, profile, inputs, runId: run.runId, turnId: run.turnId }),
+  };
+}
 
 /** `hides`: the skills this turn's reader does not index yet (`dreamSkillsHidden`); `shared`: the shared Drive's root as
  *  its opening listed it. */

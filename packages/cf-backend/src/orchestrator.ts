@@ -1,5 +1,5 @@
 import { exists as nimbusExists } from '@nimbus-sh/core/vfs/vfs.js';
-import { objectNamed, ownerCaller, GitHubFactSchema, McpToolSurfaceSchema, actorPolicy, AgentDeliveries, AgentStops, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, effectiveRoleCatalog, narrowToolSurface, storeRevision, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type Fact, AGENT_CONFIG_KEYS, turnAttemptOf, readMemoryTail } from '@kinu.run/core';
+import { objectNamed, ownerCaller, GitHubFactSchema, McpToolSurfaceSchema, actorPolicy, AgentDeliveries, AgentStops, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, effectiveRoleCatalog, narrowToolSurface, storeRevision, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type Fact, AGENT_CONFIG_KEYS, turnAttemptOf } from '@kinu.run/core';
 import { preapproveSlateEffect, ROOT_SLATE_CALLER, slateAnswer, slateRevision as builtRevision, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateCaller, type SlateCallFrom } from '@kinu.run/core/slates';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
@@ -21,9 +21,9 @@ import {
   explorationActorKey, writesSnapshotRows,
   HeadController, REAL_CLOCK, runHeadSplit, SubagentRosterStore,
   EventLog, actorReferenceOf, stoppedBelow, stopAgentsBelow,
-  artifactOverrides, currentArtifacts,
+  artifactOverrides,
   agentsActionsFor, agentsProfileContext, betaSwarms, buildActorTools, BACKGROUNDABLE_TOOLS,
-  vfsTurnSkills, listSharedSkills, type SharedSkillsListing, conversationKey, captureOperationProfile, type RunTurnSources,
+  actorTurnSources, listSharedSkills, type SharedSkillsListing, type RunTurnSources,
   describeAgentTools, inTurnSurface, turnLedgers, type TurnLedgers, surfaceReach, turnArtifacts, withToolText,
   BUILTIN_TOOL_NAMES, codemodeCapabilitiesFor, agentRoleSwitch, currentOperationProfile,
   ownProfileChoices, pruneTurnReceipts, remoteReceipts, type SeatedActor, type SettledRun, type SurfaceReach, type ExecutionLane, type OperationProfile, type CodemodeSurface,
@@ -2072,11 +2072,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   protected async actorSources(
     actor: CFSeat, reach: ActorReach, turn: SourcesTurn | null, planes = this.sourcePlanes(actor, reach, turn !== null),
   ): Promise<RunTurnSources> {
-    const { runtime } = actor;
     const trust = this.instructionTrust();
     const providers = this.providerRegistry();
     const driving = turn?.surface.item.metadata ?? {};
-    const workspace = actorPolicy(actor.record).workspaceAgent;
 
     // Precondition of the workspace agent's turn, and its soul as the turn reads it.
     if (reach.kind === 'workspace') {
@@ -2109,12 +2107,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const identity = await this.promptIdentity();
     const team = this.actorTeam(actor, reach);
 
-    return {
-      rt: runtime,
+    return actorTurnSources(actor, {
       backend: 'cf',
-      executors: () => runtime.executionRouter?.listExecutors() ?? [],
-      config: actor.stores.config,
       harnessMode: () => this.config.getHarnessMode(),
+      instructionTrust: trust,
       models: {
         catalog: this.modelCatalog,
         normalize: (spec) => providers.normalizeSpecSync(spec),
@@ -2122,9 +2118,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         resolve: (spec) => (reach.kind === 'workspace' ? this.turnModel(spec) : this.ownedModelServices.resolveModel(spec)),
         routed: routedModelReads(providers),
       },
-      skills: vfsTurnSkills(runtime.storage.vfs, actor.stores.config, trust, {
-        ...(turn?.hidesSkills !== undefined && { hides: turn.hidesSkills }), ...(planes.sharedSkills !== null && { shared: planes.sharedSkills }),
-      }),
+      skillReads: { ...(turn?.hidesSkills !== undefined && { hides: turn.hidesSkills }), ...(planes.sharedSkills !== null && { shared: planes.sharedSkills }) },
       profileInputs: async () => inputs,
       choices,
       ancestors: () => this.ancestorProfiles(actor.handle) ?? [],
@@ -2132,24 +2126,19 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       temporaryAsk: () => team?.temporary !== undefined,
       soul: async () => (reach.kind === 'workspace' ? this.getSoulText() : await this.loadSoulText()),
       agentsMd: (window) => this.workspaceAgentsMd(window, trust),
-      // Presentation from the policy: the workspace agent speaks as the workspace, any other as a named agent of it.
-      identity: async () => (workspace ? identity : { ...identity, agent: actor.stores.config.getDisplayName() ?? actor.record.name }),
-      memoryTail: () => readMemoryTail(runtime.memory),
-      artifacts: () => turn?.artifacts ?? artifactOverrides(currentArtifacts(this.boundSql, actor.handle)),
-      taskPlan: () => null,
-      conversationKey: () => conversationKey(this.ownedModelServices.affinityKey, workspace ? CHAT_SESSION_ID : actor.record.actorId),
+      workspaceIdentity: async () => identity,
+      artifacts: { sql: this.boundSql, held: turn?.artifacts },
+      affinity: this.ownedModelServices.affinityKey,
       ...(reach.kind === 'workspace' && { budget: this.budget, observeStream: (chunks) => this.chatTransport.observe(chunks) }),
       operations: this.modelOperations,
-      scaffoldSpend: { source: 'scaffold', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
+      report: (report) => this.reportModelCall(report),
       attachmentBudget: turn?.surface.ledgers.context ?? turnLedgers().context,
       extensions: () => (reach.kind === 'workspace' ? this.extensions.list() : []),
       accountFacts: () => planes.facts ?? this.account.factsForTurn(),
       mail: () => planes.unreadMail ?? this.unreadMailOf(actor, Promise.resolve(ownerMail)),
       dynamic: (reads) => (profile, tools) => this.actorDynamicContext(actor, reach, { profile, tools, reads, surface: turn?.surface ?? null }),
-      operation: (profile, operationInputs) => captureOperationProfile({
-        actor: actor.handle, profile, inputs: operationInputs, runId: turn?.surface.key.runId ?? WORKSPACE_RUN_ID, turnId: turn?.surface.key.turnId ?? null,
-      }),
-    };
+      run: turn?.surface.key ?? { runId: WORKSPACE_RUN_ID, turnId: null },
+    });
   }
 
   /** The workspace journal keeps split ancestry and step reports together. */
