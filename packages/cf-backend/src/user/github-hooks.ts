@@ -14,7 +14,8 @@ const GitHubHookAskSchema = v.object({
   url: v.pipe(v.string(), v.url()),
   /** What GitHub signs each delivery with (`X-Hub-Signature-256`). */
   secret: v.pipe(v.string(), v.minLength(32)),
-  events: v.pipe(v.array(v.pipe(v.string(), v.regex(/^[a-z_*]+$/u))), v.minLength(1), v.maxLength(20)),
+  /** One event: a signature covers the body alone, so a hook delivering one event is what says which a body is. */
+  events: v.pipe(v.array(v.pipe(v.string(), v.regex(/^[a-z_]{1,64}$/u))), v.length(1)),
 });
 
 export type GitHubHookAsk = v.InferOutput<typeof GitHubHookAskSchema>;
@@ -101,11 +102,15 @@ export class GitHubHooks {
         return yield* new KinuError(answer.status === 422 ? 'bad_input' : 'denied', `GitHub would not make a hook on ${ask.repo}: ${saidBy(answer)}${admin}`);
       }
 
-      // GitHub went while the hook was made: no disconnect will delete it, so it is deleted now, with the token it was made with.
+      // GitHub went while the hook was made: no disconnect will delete it, so it is deleted now, with the token it was
+      // made with, and kept as stale first, so one GitHub will not delete is deleted again on reconnect.
       if (gone()) {
-        yield* askGitHub(token, 'DELETE', `/repos/${ask.repo}/hooks/${made.output.id}`);
+        const late: KeptHook = { repo: ask.repo, hookId: made.output.id, workspace, stale: true };
 
-        return yield* new KinuError('denied', `GitHub was disconnected while the hook on ${ask.repo} was made, so it is deleted. ${NOT_CONNECTED}`);
+        yield* Effect.promise(() => host.storage.put(keyOf(late), late));
+        yield* deleteHook(host, token, late);
+
+        return yield* new KinuError('denied', `GitHub was disconnected while the hook on ${ask.repo} was made, so it is not kept. ${NOT_CONNECTED}`);
       }
 
       const kept: KeptHook = { repo: ask.repo, hookId: made.output.id, workspace };
@@ -138,8 +143,8 @@ export class GitHubHooks {
   }
 
   /** Every hook made, deleted while the connection's token still holds: called as the GitHub connection goes. One GitHub
-   *  will not delete is kept as stale, deleted again by {@link connected} once a token holds. The workspaces they
-   *  delivered to. */
+   *  will not delete is kept as stale, deleted again once GitHub is connected ({@link connectionsMoved}). The workspaces
+   *  they delivered to. */
   deleteAll(): Promise<readonly string[]> {
     this.generation += 1;
     this.closing = true;
@@ -147,11 +152,17 @@ export class GitHubHooks {
     return settle(this.deleteKept(() => true));
   }
 
-  /** A GitHub token holds again: hooks may be made, and those GitHub would not delete as it went are deleted first. */
-  connected(): Promise<void> {
-    this.closing = false;
+  /**
+   * The account's connections changed, and a GitHub token is `held` or not; whether hooks may be made now. None held ends
+   * a disconnect. One held while GitHub is still going (another connection moved meanwhile) changes nothing; otherwise the
+   * hooks GitHub would not delete as it went are deleted first.
+   */
+  connectionsMoved(held: boolean): Promise<boolean> {
+    if (!held) this.closing = false;
 
-    return settle(Effect.asVoid(this.deleteKept((hook) => hook.stale === true)));
+    if (!held || this.closing) return Promise.resolve(false);
+
+    return settle(Effect.as(this.deleteKept((hook) => hook.stale === true), true));
   }
 
   private deleteKept(which: (hook: KeptHook) => boolean): Effect.Effect<readonly string[]> {
@@ -164,21 +175,27 @@ export class GitHubHooks {
       if (kept.length === 0) return [];
       const token = yield* Effect.promise(() => host.token());
 
-      for (const hook of kept) {
-        const answer = token === null ? null : yield* askGitHub(token, 'DELETE', `/repos/${hook.repo}/hooks/${hook.hookId}`);
-
-        if (answer === null || (answer.status !== 204 && answer.status !== 404)) {
-          diagnostics.event('github.hook_not_deleted', { repo: hook.repo, hookId: hook.hookId, workspace: hook.workspace, said: answer === null ? 'no token' : saidBy(answer) });
-          yield* Effect.promise(() => host.storage.put(keyOf(hook), { ...hook, stale: true }));
-          continue;
-        }
-
-        yield* Effect.promise(() => host.storage.delete(keyOf(hook)));
-      }
+      for (const hook of kept) yield* deleteHook(host, token, hook);
 
       return [...new Set(kept.map((hook) => hook.workspace))];
     });
   }
+}
+
+/** A kept hook deleted at GitHub, then forgotten; one GitHub will not delete, or with no token, is kept as stale. */
+function deleteHook(host: GitHubHooksHost, token: string | null, hook: KeptHook): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    const answer = token === null ? null : yield* askGitHub(token, 'DELETE', `/repos/${hook.repo}/hooks/${hook.hookId}`);
+
+    if (answer !== null && (answer.status === 204 || answer.status === 404)) {
+      yield* Effect.promise(() => host.storage.delete(keyOf(hook)));
+
+      return;
+    }
+
+    diagnostics.event('github.hook_not_deleted', { repo: hook.repo, hookId: hook.hookId, workspace: hook.workspace, said: answer === null ? 'no token' : saidBy(answer) });
+    yield* Effect.promise(() => host.storage.put(keyOf(hook), { ...hook, stale: true }));
+  });
 }
 
 /** The workspace a hook may deliver to: this deployment's signed webhook route, of the workspace that asks. */

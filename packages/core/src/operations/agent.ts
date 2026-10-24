@@ -68,14 +68,14 @@ export const AGENT = {
       + 'the program runs first, reading only the namespaces `reads` names (their observing members) and `state`, what it '
       + 'last answered, and returns { fire: false, state? } or { fire: true, brief, state? }; only a fire starts the turn, '
       + 'with `brief` in it, and a check costs no model call. With `push: { github: "owner/repo" }` in place of `cron`/`atMs`, '
-      + 'it runs on each delivery GitHub sends for that repository (`events` default ["push"]): the check\'s input is '
-      + '{ event, delivery, payload }. The account\'s GitHub connection makes the repository\'s hook, so it needs admin '
-      + 'rights there; cancelling deletes the hook.',
+      + 'it runs on each delivery GitHub sends for that repository of one `event` (default "push"; one watcher per event): '
+      + 'the check\'s input is { event, delivery, payload }. The account\'s GitHub connection makes the repository\'s hook, '
+      + 'so it needs admin rights there; cancelling deletes the hook.',
     input: v.strictObject({
       cron: v.optional(v.pipe(v.string(), v.nonEmpty())), atMs: v.optional(v.pipe(v.number(), v.finite())),
       push: v.optional(v.strictObject({
         github: v.pipe(v.string(), v.nonEmpty()),
-        events: v.optional(v.pipe(v.array(v.pipe(v.string(), v.nonEmpty())), v.minLength(1), v.maxLength(20))),
+        event: v.optional(v.pipe(v.string(), v.regex(/^[a-z_]{1,64}$/, 'a GitHub event name, as `push` or `pull_request`'))),
       })),
       label: v.optional(v.string()), payload: v.optional(JsonObjectSchema),
       budgetUsd: v.optional(v.number()), budgetTokens: v.optional(v.number()), budgetLabel: v.optional(v.string()),

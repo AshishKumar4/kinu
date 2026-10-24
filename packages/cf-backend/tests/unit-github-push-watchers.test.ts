@@ -58,11 +58,11 @@ describe('a push watcher', () => {
 
   test('is a GitHub-signed webhook trigger with its check, whose hook delivers to its own signed route', async () => {
     const w = workspace();
-    const watcher = await Effect.runPromise(createPushWatcher(w.host, { repo: 'owner/repo', events: ['push'], label: 'pushes', check: CHECK }));
+    const watcher = await Effect.runPromise(createPushWatcher(w.host, { repo: 'owner/repo', event: 'push', label: 'pushes', check: CHECK }));
     const trigger = present(w.registry.get(watcher.id), 'its trigger');
 
     expect(watcher).toEqual({ id: watcher.id, kind: 'webhook_durable', repo: 'owner/repo', hookId: 41 });
-    expect(trigger.spec).toMatchObject({ auth_mode: 'github', label: 'pushes', check: CHECK, push: { source: 'github-repo', repo: 'owner/repo', events: ['push'], hookId: 41 } });
+    expect(trigger.spec).toMatchObject({ auth_mode: 'github', label: 'pushes', check: CHECK, push: { source: 'github-repo', repo: 'owner/repo', event: 'push', hookId: 41 } });
     expect(w.made).toEqual([{ repo: 'owner/repo', url: expect.stringMatching(new RegExp(`^https://kinu\\.example\\.com/api/workspaces/shop/webhook/${watcher.id}/`, 'u')), events: ['push'] }]);
     const secretId = trigger.spec['secret_id'];
 
@@ -71,7 +71,7 @@ describe('a push watcher', () => {
 
   test('one GitHub will not hook leaves no trigger, and says GitHub\'s words', async () => {
     const w = workspace(true);
-    const made = await Effect.runPromiseExit(createPushWatcher(w.host, { repo: 'owner/repo', events: ['push'], check: CHECK }));
+    const made = await Effect.runPromiseExit(createPushWatcher(w.host, { repo: 'owner/repo', event: 'push', check: CHECK }));
 
     expect(Exit.isFailure(made) && String(made.cause)).toContain('needs admin rights on it');
     expect(w.registry.list({ kind: 'webhook_durable', state: 'active' })).toEqual([]);
@@ -79,7 +79,7 @@ describe('a push watcher', () => {
 
   test('parks while GitHub is disconnected, and resumes with a new hook and a new secret once it is connected again', async () => {
     const w = workspace();
-    const watcher = await Effect.runPromise(createPushWatcher(w.host, { repo: 'owner/repo', events: ['push'], check: CHECK }));
+    const watcher = await Effect.runPromise(createPushWatcher(w.host, { repo: 'owner/repo', event: 'push', check: CHECK }));
     const secretId = present(w.registry.get(watcher.id), 'the watcher').spec['secret_id'];
     const secretOf = async () => (typeof secretId === 'string' ? await w.secrets.get(secretId) : null);
     const before = await secretOf();
@@ -99,7 +99,7 @@ describe('a push watcher', () => {
 
   test('one GitHub will not hook again stays parked, and is counted so the account asks again', async () => {
     const w = workspace();
-    await Effect.runPromise(createPushWatcher(w.host, { repo: 'owner/repo', events: ['push'], check: CHECK }));
+    await Effect.runPromise(createPushWatcher(w.host, { repo: 'owner/repo', event: 'push', check: CHECK }));
     parkPushWatchers(w.host, NOW);
 
     const refusing: PushWatcherHost = { ...w.host, account: { ...w.host.account, hookCreate: async () => { throw new Error('GitHub would not make a hook'); } } };
@@ -124,7 +124,7 @@ describe('a push watcher', () => {
       },
     };
 
-    const made = await Effect.runPromiseExit(createPushWatcher(cancelling, { repo: 'owner/repo', events: ['push'], check: CHECK }));
+    const made = await Effect.runPromiseExit(createPushWatcher(cancelling, { repo: 'owner/repo', event: 'push', check: CHECK }));
 
     expect(Exit.isFailure(made) && String(made.cause)).toContain('cancelled while its hook was made');
     expect(w.deleted).toEqual([['owner/repo', 41]]);
@@ -132,7 +132,7 @@ describe('a push watcher', () => {
 
   test('one its owner paused is neither parked again nor resumed by GitHub coming back', async () => {
     const w = workspace();
-    const watcher = await Effect.runPromise(createPushWatcher(w.host, { repo: 'owner/repo', events: ['push'], check: CHECK }));
+    const watcher = await Effect.runPromise(createPushWatcher(w.host, { repo: 'owner/repo', event: 'push', check: CHECK }));
 
     w.registry.pause(watcher.id, NOW);
 

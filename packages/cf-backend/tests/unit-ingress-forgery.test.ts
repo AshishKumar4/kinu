@@ -307,6 +307,21 @@ describe('a webhook delivery nobody could sign reaches no event log', () => {
   });
 });
 
+describe('a cancelled webhook', () => {
+  test('forgets every delivery it claimed, with its secret', async () => {
+    const ws = workspace();
+    const hook = await ws.harness.agent.createDurableWebhook({ label: 'ci', auth_mode: 'hmac', secret: HOOK_SECRET });
+    const now = Date.now();
+    const claims = () => ws.harness.db.query('SELECT claim FROM webhook_replay_claims WHERE trigger_id = ?').all(hook.trigger_id);
+
+    await worker.fetch(delivery(hook.url, { signature: await signed(now), timestamp: String(now) }), ws.env, ws.ctx);
+    expect(claims()).toHaveLength(1);
+
+    await ws.harness.agent.cancelTrigger(hook.trigger_id, 'owner');
+    expect(claims()).toEqual([]);
+  });
+});
+
 describe('hostile mail reaches no event log', () => {
   test('the owner\'s address in From, with the owner\'s envelope too, wakes nothing when Cloudflare did not pass it', async () => {
     const ws = workspace();

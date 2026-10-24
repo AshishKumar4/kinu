@@ -51,18 +51,18 @@ function routeOf(host: PushWatcherHost, triggerId: string): Effect.Effect<string
  */
 function hooked(
   host: PushWatcherHost, triggerId: string,
-  push: { readonly repo: string; readonly events: readonly string[]; readonly secret: string },
+  push: { readonly repo: string; readonly event: string; readonly secret: string },
   keep: (hookId: number) => boolean,
 ): Effect.Effect<number, KinuError> {
   return Effect.gen(function* () {
     const url = yield* routeOf(host, triggerId);
 
     const made = yield* attempt({ doing: `making a hook on ${push.repo}`, otherwise: 'unavailable' }, () => host.account.hookCreate({
-      repo: push.repo, url, secret: push.secret, events: push.events,
+      repo: push.repo, url, secret: push.secret, events: [push.event],
     }));
 
     if (keep(made.hookId)) return made.hookId;
-    yield* Effect.promise(() => deletePushHook(host, { source: 'github-repo', repo: push.repo, events: [...push.events], hookId: made.hookId }));
+    yield* Effect.promise(() => deletePushHook(host, { source: 'github-repo', repo: push.repo, event: push.event, hookId: made.hookId }));
 
     return yield* new KinuError('missing', `The watcher of ${push.repo} was cancelled while its hook was made, so the hook is deleted.`);
   });

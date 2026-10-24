@@ -240,7 +240,7 @@ describe('a GitHub repository hook', () => {
       kind: 'webhook_durable',
       spec: {
         label: 'push to owner/repo', auth_mode: 'github', secret_id, accepted_content_type: 'application/json',
-        push: { source: 'github-repo', repo: 'owner/repo', events: ['push'] }, ...(check !== undefined && { check }),
+        push: { source: 'github-repo', repo: 'owner/repo', event: 'push' }, ...(check !== undefined && { check }),
       },
       creator_trust: 'self',
     }, NOW);

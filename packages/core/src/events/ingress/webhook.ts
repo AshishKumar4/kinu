@@ -29,7 +29,7 @@ const HMAC_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
 export type WebhookAuthMode = 'hmac' | 'bearer' | 'mtls' | 'github';
 
 /** A GitHub signature covers no time, so a claimed one is held as long as its secret can verify it: a replay, ever, is a
- *  duplicate. A rotated secret forgets its claims ({@link forgetClaims}); a revoked trigger's can no longer verify. */
+ *  duplicate. A rotated secret, or a revoked trigger, forgets its claims ({@link forgetClaims}). */
 const GITHUB_CLAIM_KEPT = Number.MAX_SAFE_INTEGER;
 
 /** What GitHub signs when a hook is made (its ping), and what every delivery of a repository hook signs it names. */
@@ -117,7 +117,7 @@ function webhookSecretOrMinted(provided: string | undefined): string {
 
 /** A push watcher's own part of its trigger: the repository whose deliveries it checks, and the hook made for it. */
 const GitHubPushSchema = v.object({
-  source: v.literal('github-repo'), repo: v.string(), events: v.array(v.string()), hookId: v.optional(v.number()),
+  source: v.literal('github-repo'), repo: v.string(), event: v.string(), hookId: v.optional(v.number()),
 });
 
 export type GitHubPush = v.InferOutput<typeof GitHubPushSchema>;
@@ -139,7 +139,8 @@ export interface PushWatcher {
 
 export interface PushWatcherOpts {
   readonly repo: string;
-  readonly events: readonly string[];
+  /** The one event its hook delivers: a signature covers the body alone, so one event per hook is what says which it is. */
+  readonly event: string;
   readonly label?: string;
   readonly payload?: JsonObject;
   readonly missionLabel?: string;
@@ -160,7 +161,7 @@ export function registerPushWatcher(
 
     const spec: JsonObject = {
       auth_mode: 'github', secret_id, accepted_content_type: 'application/json',
-      push: { source: 'github-repo', repo: opts.repo, events: [...opts.events] },
+      push: { source: 'github-repo', repo: opts.repo, event: opts.event },
       ...(opts.label !== undefined && { label: opts.label }),
       ...(opts.payload !== undefined && { payload: opts.payload }),
       ...(opts.missionLabel !== undefined && { mission_label: opts.missionLabel }),
@@ -304,8 +305,8 @@ function verifyWebhookAuth(
 
 /**
  * Why a signed body is not one the watcher asked for, or null when it is: it names another repository, or GitHub calls it
- * an event the hook was not made for. A ping, known by its body, is asked for. The event header is not signed, so it only
- * narrows: a body cannot be passed off as an event the hook does not deliver.
+ * another event than the one its hook delivers. A ping, known by its body, is asked for. The event header is not signed,
+ * but the hook delivers one event alone, so a signed body is of that one, and a header naming another is refused.
  */
 function notWatched(push: GitHubPush | null, body: JsonValue, event: string | undefined): string | null {
   if (v.is(GitHubPingSchema, body)) return null;
@@ -313,7 +314,7 @@ function notWatched(push: GitHubPush | null, body: JsonValue, event: string | un
 
   if (push === null || !named.success || named.output.repository.full_name.toLowerCase() !== push.repo.toLowerCase()) return 'the delivery names another repository';
 
-  if (!push.events.includes('*') && (event === undefined || !push.events.includes(event))) return 'the delivery is of an event the watcher did not ask for';
+  if (event !== push.event) return 'the delivery is of an event the watcher did not ask for';
 
   return null;
 }
@@ -344,10 +345,10 @@ function verifyGitHubDelivery(deps: WebhookIngressDeps, spec: Partial<WebhookTri
   });
 }
 
-/** A repository hook's delivery as its check reads it: GitHub's event name and delivery id beside the payload. The
- *  payload alone is signed; the two headers are GitHub's word, as sent. */
-function gitHubInput(opts: WebhookDelivery, payload: JsonValue): JsonValue {
-  return { event: opts.headers['x-github-event'] ?? null, delivery: opts.headers['x-github-delivery'] ?? null, payload };
+/** A repository hook's delivery as its check reads it: the one event its hook delivers, and GitHub's delivery id beside
+ *  the payload. The id is not signed: it is GitHub's word, as sent. */
+function gitHubInput(push: GitHubPush | null, opts: WebhookDelivery, payload: JsonValue): JsonValue {
+  return { event: push?.event ?? null, delivery: opts.headers['x-github-delivery'] ?? null, payload };
 }
 
 /** A delivery a check answers, or GitHub's ping that nothing answers; null for one published as an event. */
@@ -361,7 +362,7 @@ async function checkedDelivery(
 
   if (deps.watch === undefined || watchCheckOf(trigger) === null) return null;
 
-  return watchedDelivery(deps, trigger.id, opts.now, github ? gitHubInput(opts, body) : body);
+  return watchedDelivery(deps, trigger.id, opts.now, github ? gitHubInput(gitHubPushOf(trigger), opts, body) : body);
 }
 
 /**

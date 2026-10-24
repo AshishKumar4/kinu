@@ -29,8 +29,9 @@ function github(...answers: Response[]): Array<{ method: string; url: string; au
   return asked;
 }
 
-/** GitHub holding its answer to the first `method` asked of it until released; every other request is answered 204. */
-function heldGitHub(method: string, answer: Response) {
+/** GitHub holding its answer to the first `method` asked of it until released; every other request it is asked is
+ *  answered by `otherwise`. What was asked of it, as method and path. */
+function heldGitHub(method: string, answer: Response, otherwise = () => new Response(null, { status: 204 })) {
   const asked: string[] = [];
   let release = (): void => undefined;
   let reach = (): void => undefined;
@@ -40,10 +41,12 @@ function heldGitHub(method: string, answer: Response) {
 
   globalThis.fetch = asFetchFunction(async (input, init) => {
     const request = new Request(input, init);
+    const url = new URL(request.url);
 
-    asked.push(`${request.method} ${new URL(request.url).pathname}`);
+    if (url.host !== 'api.github.com') return new Response(null, { status: 404 });
+    asked.push(`${request.method} ${url.pathname}`);
 
-    if (!holding || request.method !== method) return new Response(null, { status: 204 });
+    if (!holding || request.method !== method) return otherwise();
     holding = false;
     reach();
     await held;
@@ -130,12 +133,29 @@ describe('a push watcher\'s repository hook', () => {
     await harness.userDO.userMcp_remove(harness.owner, harness.serverId);
     gitHub.release();
 
-    await expect(making).rejects.toThrow('GitHub was disconnected while the hook on owner/repo was made, so it is deleted');
+    await expect(making).rejects.toThrow('GitHub was disconnected while the hook on owner/repo was made, so it is not kept');
     expect(gitHub.asked).toEqual(['POST /repos/owner/repo/hooks', 'DELETE /repos/owner/repo/hooks/44']);
     harness.close();
   });
 
-  test('no hook is made while the connection is going', async () => {
+  test('one made while the connection goes that GitHub will not delete is kept, and deleted again once GitHub is connected', async () => {
+    const harness = await connected();
+    const gitHub = heldGitHub('POST', Response.json({ id: 44 }, { status: 201 }), () => Response.json({ message: 'Server Error' }, { status: 500 }));
+    const making = harness.userDO.githubHookCreate(harness.shop, { repo: 'owner/repo', url: await routeOf('shop'), secret: SECRET, events: ['push'] });
+
+    await gitHub.reached;
+    await harness.userDO.userMcp_remove(harness.owner, harness.serverId);
+    gitHub.release();
+    await expect(making).rejects.toThrow('so it is not kept');
+
+    const retried = github(new Response(null, { status: 204 }));
+
+    await harness.userDO.userMcp_add(harness.owner, { presetId: 'github', headers: { Authorization: 'Bearer gho_connection0123456789' } }, 'https://kinu.example');
+    expect(retried.map((ask) => `${ask.method} ${ask.url}`)).toEqual(['DELETE https://api.github.com/repos/owner/repo/hooks/44']);
+    harness.close();
+  });
+
+  test('no hook is made while the connection is going, though another connection changes meanwhile', async () => {
     const harness = await connected();
 
     github(Response.json({ id: 42 }, { status: 201 }));
@@ -145,12 +165,15 @@ describe('a push watcher\'s repository hook', () => {
     const removing = harness.userDO.userMcp_remove(harness.owner, harness.serverId);
 
     await gitHub.reached;
+    await harness.userDO.userMcp_add(harness.owner, { name: 'Notes', serverUrl: 'https://notes.example/mcp', headers: { Authorization: 'Bearer n' } }, 'https://kinu.example');
     await expect(harness.userDO.githubHookCreate(harness.shop, { repo: 'owner/other', url: await routeOf('shop'), secret: SECRET, events: ['push'] }))
       .rejects.toThrow('GitHub is not connected to this account');
     gitHub.release();
     await removing;
 
     expect(gitHub.asked).toEqual(['DELETE /repos/owner/repo/hooks/42']);
+    // What GitHub's going parks is not resumed by another connection's change while it goes.
+    expect(harness.githubPush).toEqual(['gone:shop']);
     harness.close();
   });
 

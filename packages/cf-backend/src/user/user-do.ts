@@ -589,8 +589,8 @@ export class UserDO extends Agent<Env> {
 
   /** GitHub connected again: each workspace whose push watchers were parked on it resumes them, each with a new hook. */
   private async githubPushBack(): Promise<void> {
-    if (await this.mcpServers.githubGitToken() === null) return;
-    await this.githubHooks.connected();
+    // Not while GitHub is still going: a watcher parked by it is resumed once it is connected again.
+    if (!await this.githubHooks.connectionsMoved(await this.mcpServers.githubGitToken() !== null)) return;
     const parked = await this.parkedPushWorkspaces();
 
     if (parked.length === 0) return;

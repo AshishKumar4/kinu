@@ -144,7 +144,7 @@ function schedulePush(host: AgentSelfHost, opts: ScheduleOpts & { readonly push:
     const { missionLabel, budget } = declaredBudget(host, opts);
 
     const watcher = yield* host.createPushWatcher({
-      repo: opts.push.github, events: opts.push.events ?? ['push'],
+      repo: opts.push.github, event: opts.push.event ?? 'push',
       ...(opts.label !== undefined && { label: opts.label }), ...(opts.payload !== undefined && { payload: opts.payload }),
       ...(missionLabel !== undefined && { missionLabel }), check: opts.check,
     });

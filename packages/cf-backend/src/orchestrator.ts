@@ -7477,7 +7477,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const push = trigger === null ? null : gitHubPushOf(trigger);
     const cancelled = await cancelTrigger({ registry: this.triggerRegistry, trigger_id, now: Date.now(), caller, secrets: this.webhookSecrets });
 
-    // A push watcher's hook goes with it, so GitHub stops delivering where nothing listens.
+    // What its secret signed is forgotten with it; a push watcher's hook goes too, so GitHub stops delivering where
+    // nothing listens.
+    if (cancelled.changed) forgetClaims(this.ctx.storage.sql, trigger_id);
+
     if (push !== null && cancelled.changed) await deletePushHook(this.pushWatcherHost(), push);
 
     return cancelled;
