@@ -14,7 +14,7 @@ import { snapshotRegistry, type SnapshotRegistry } from './snapshot-registry';
 import { DISK_PROBE, DISK_STALL_RESTARTED, DISK_STALLED, diskStallOf, type DiskStall } from './disk-stall';
 import { Snapshots } from './snapshots';
 import {
-  GOLDEN_BASE, GOLDEN_ENTRYPOINT, GOLDEN_NAME, GOLDEN_REFRESH_MS, GoldenStateSchema, buildGolden, goldenFor, pipeParts, refreshTools,
+  GOLDEN_BASE, GOLDEN_ENTRYPOINT, GOLDEN_NAME, GOLDEN_REFRESH_MS, GoldenStateSchema, buildGolden, goldenFor, pipeParts, refreshTools, type ToolsRefresh,
   type GoldenAnswer, type GoldenPorts, type GoldenState,
 } from './golden';
 import artifact from '../block-lower/upstream.json';
@@ -79,7 +79,7 @@ import {
   type RecoveryClaim, type RestoreAdmission, type RestoreClockPhase, type RestoreReadiness, type RestoreStatus,
   type Restoration, type SettledRestoration, type StampOutcome, type StartInputs,
 } from './restoration';
-import type { DevboxReport, HeartbeatTick, IncidentReasonRow, SupervisedProcessRow } from './report';
+import type { DevboxReport, HeartbeatTick, IncidentReasonRow, LastRestore, SupervisedProcessRow } from './report';
 import {
   deliverIncidents, INCIDENT_PREFIX, INCIDENT_REASON_MAX_CHARS, incidentTotals, recordIncident,
   type IncidentRow,
@@ -229,6 +229,9 @@ const PORT_SPEC_PREFIX = 'devbox:port:';
 
 const LAST_ATTACH_KEY = 'devbox:last-attach';
 
+/** The last restore's phases and tools refresh (`LastRestore`), written as it settles. */
+const LAST_RESTORE_KEY = 'devbox:last-restore';
+
 /** One container identity's recovery progress, written only by the ladder, deleted on the first attach. */
 const ATTACH_RECOVERY_KEY = 'devbox:attach-recovery';
 
@@ -362,6 +365,8 @@ function previewUrl(port: number, site: PreviewSite, token: string): string {
 interface RestoreClock {
   readonly openedAt: number;
   stamps: RestorePhaseStamps;
+  /** What its tools refresh did, once it has. */
+  tools?: ToolsRefresh;
 }
 
 
@@ -688,8 +693,20 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   readonly #goldenTurns = Semaphore.makeUnsafe(1);
 
+  /** The attach's first step: the box's tools brought to the pin, its record kept on the restore's clock and traced. */
   #refreshTools(): Effect.Effect<void, DevboxError> {
-    return refreshTools({ pin: this.toolsPin, exec: (command) => this.#rawExec(command, DEVBOX_RUNTIME_DIR), pipe: (key, path) => this.#pipeParts(key, path) });
+    const bucket = this.#bucket();
+
+    return refreshTools({
+      pin: this.toolsPin, exec: (command) => this.#rawExec(command, DEVBOX_RUNTIME_DIR), pipe: (key, path) => this.#pipeParts(key, path),
+      read: async (key) => await (await bucket?.get(`${key}.0`))?.text() ?? null, now: () => Date.now(),
+    }).pipe(Effect.map((refresh) => {
+      const clock = this.#phaseClock;
+
+      if (clock !== undefined) clock.tools = refresh;
+      this.#stampPhase('tools');
+      this.#trace('restore.tools', { ...refresh, pin: this.toolsPin });
+    }));
   }
 
   #pipeParts(key: string, path: string): Effect.Effect<void, DevboxError> {
@@ -869,7 +886,13 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   #settleClock(clock: RestoreClock): void {
     if (this.#phaseClock !== clock) return;
     this.#phaseClock = undefined;
-    this.onRestorePhase('settled', Date.now() - clock.openedAt);
+    const settledMs = Date.now() - clock.openedAt;
+    const record: LastRestore = { openedAt: clock.openedAt, stamps: clock.stamps, tools: clock.tools, settledMs };
+
+    // The box's own record of where a restore's time went, which a lost telemetry row cannot take (ledger 1024-h).
+    this.ctx.storage.kv.put(LAST_RESTORE_KEY, record);
+    this.#trace('restore.phases', { ...clock.stamps, settledMs, tools: clock.tools?.mode, toolsMs: clock.tools?.ms });
+    this.onRestorePhase('settled', settledMs);
   }
 
   /** A benchmark box turns them off, so no ambient tick pre-empts the driver's own. */
@@ -2789,6 +2812,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         chain: parsedOrNull(DiskChainStateSchema, this.ctx.storage.kv.get<StoredValue>(DISK_STATE_KEY)),
         snapshot: this.#snapshots.record,
         lastAttach: await this.ctx.storage.get<AttachOutcome>(LAST_ATTACH_KEY),
+        lastRestore: this.ctx.storage.kv.get<LastRestore>(LAST_RESTORE_KEY),
         lastTick: await this.ctx.storage.get<HeartbeatTick>(LAST_TICK_KEY),
         bootId: await this.ctx.storage.get<string>(BOOT_ID_KEY),
         replacedCount: await this.ctx.storage.get<number>(REPLACED_COUNT_KEY) ?? 0,

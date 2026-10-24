@@ -5279,6 +5279,39 @@ Not measured: whether the runtime's hold changes the PTY pump's cost. The probe'
 message. A hibernated object would lose its terminal map, but an attached terminal's pump keeps the object awake while
 it runs.
 
+D110. A start whose box holds an older pin's tools fetches only the files the pin changed, by the pin's manifest, and
+installs the tarball whole only when it must, saying why (2026-10-24, P0, ledger 1024-h; amends D66's refresh). D66
+measured a refresh at 3.5 to 5.0 s with the pipe from R2 when the tarball was 100.8 MB; at 358 MB (D70's desktop,
+chromium alone 121 MB) the pipe is the refresh. Production, the week to 10-23: every re-pin changed one binary of 0.7 to
+3.8 MB (2932a11c to 334f3712 the shim; then the block lower twice), and each box a pin behind took 12.2 to 24.3 s from
+`hook.open` to its first step; the owner's box was cut at the 25 s cap, 25,872 ms with 0 ms of CPU, inside the install.
+
+The tarball has carried `usr/local/lib/devbox/tools.sha256` since D66 (`tools-build.sh`), and the full install leaves it
+on the box. `devbox-tools.ts publish` now also puts each of the tarball's files in the store by its sha256
+(`devbox-tools/files/<sha256>.0`, shared across pins, so a re-pin uploads what changed) and the manifest last
+(`devbox-tools/<pin>.sha256.0`), so a store that holds the manifest holds every file it names; the tier's and the
+release channel's copies carry them the same way. A start reads the pin's manifest and its own, fetches each file whose
+sha256 moved, checks every one before placing any, places each beside its target and renames it over it (a running
+binary keeps its own), removes what the pin dropped, and writes the manifest and the stamp last, only after every file
+is placed, so a start cut short moves the same files again. A full install extracts the new manifest before apt runs,
+so it marks the box from its extraction to its stamp (`tools-installing`). The tarball installs whole when the store
+holds no manifest for the pin, when the box holds none or carries that mark, or when the pin changes the package
+repository: that repository is the download-only closure of `wanted`
+against an empty dpkg status, base packages included at the archive's versions, which the full install's apt leaves
+alone where the box holds them; a changed .deb installed by itself would downgrade or upgrade what that install never
+touches. A snapshot day or a new package is rare; every re-pin measured changed none.
+
+The box keeps where each restore's time went, which no lost telemetry row can take: the restore clock gains a `tools`
+phase, and as a restore settles the box stores its phases, its tools record (`current`, `incremental` with files, bytes
+and ms, or `full` with the reason and the install's own extract and apt times) and how long it took to settle
+(`devbox:last-restore`, in the report as `lastRestore`), and traces `restore.tools` and `restore.phases`. Measured as
+root on `cloudflare/debian-trixie` (armada job `20261024124912-317ee87d`), the real install of 0c6dd2b8 from the release
+channel (fetch 17.4 s, extract 3.6 s, apt 31.5 s for 266 packages), then the box turned into the previous pin (another
+block lower, running, and a tool the pin dropped): the delta was the block lower and the dropped tool, no package; the
+apply took 40 ms for 709,208 bytes, the old binary kept running, and every file outside the repository checked against
+the manifest. The container tier's `tools` contract runs `refreshTools` itself on a box the same way, then cuts a full
+install short at apt and requires the next refresh to install whole.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

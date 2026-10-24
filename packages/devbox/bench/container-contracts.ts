@@ -1,12 +1,13 @@
 /** D72: these contracts run on a throwaway Cloudflare container, never a local image. */
 import { Files, SandboxFileError } from '@cloudflare/sandbox';
 import * as v from 'valibot';
-import { settle } from '../src/errors';
+import { attempt, settle } from '../src/errors';
 import { describeThrown } from '../src/lifecycle';
 import { listFiles } from '../src/file-listing';
 import { Processes, boxEnv, TRUST } from '../src/processes';
 import { readExec } from '../src/exec-stream';
-import { TOOLS_STAMP, toolsInstallCommand } from '../src/tools';
+import { TOOLS_INSTALLING, TOOLS_MANIFEST, TOOLS_STAMP, toolsInstallCommand, toolsManifestKey } from '../src/tools';
+import { refreshTools } from '../src/golden';
 import { DESKTOP_CHECK, DESKTOP_PORT } from '../src/desktop';
 import type { Devbox } from '../src/devbox';
 
@@ -29,6 +30,62 @@ async function native(container: Container, command: string): Promise<string> {
 const ROOT = '/var/tmp/devbox/processes';
 
 const SCRATCH = '/var/tmp/devbox-contracts';
+
+/**
+ * A start's tools refresh (D110) on this box, from a store of the staged archive's files under their sha256 and its
+ * manifest, as `devbox-tools.ts publish` fills one: a box a pin behind places the changed file alone, while the old
+ * binary runs on, and drops what the pin dropped; a full install cut short leaves the box marked, and the next refresh
+ * installs whole. It runs before the reinstall below, which spends the archive.
+ */
+async function toolsRefresh(container: Container, pin: string): Promise<void> {
+  const store = `${SCRATCH}/store`;
+  const lower = '/usr/local/bin/devbox-block-lower';
+  const dropped = '/usr/local/bin/devbox-old-tool';
+
+  const run = async (command: string) => {
+    const ran = await (await container.exec(['/bin/bash', '-c', command])).output();
+
+    return { stdout: text(ran.stdout), exitCode: ran.exitCode };
+  };
+
+  const ports = {
+    pin, exec: run, now: () => Date.now(),
+    pipe: (key: string, path: string) => attempt('io', async () => {
+      await native(container, `cp ${store}/${key} ${path}`);
+    }),
+    read: async (key: string) => {
+      const read = await run(`cat ${store}/${key}`);
+
+      return read.exitCode === 0 ? read.stdout : null;
+    },
+  };
+
+  await native(container, `set -e; rm -rf ${store}; mkdir -p ${store}/x ${store}/devbox-tools/files; tar -C ${store}/x -xzf ${SCRATCH}/tools.tgz usr/local/bin; `
+    + `for f in ${store}/x/usr/local/bin/*; do cp "$f" ${store}/devbox-tools/files/$(sha256sum < "$f" | cut -c1-64); done; `
+    + `cp ${TOOLS_MANIFEST} ${store}/${toolsManifestKey(pin)}; ln -s ${SCRATCH}/tools.tgz ${store}/devbox-tools/${pin}.tgz`);
+
+  // The previous pin's box: another binary as the block lower, running, and a tool this pin dropped.
+  const running = await native(container, `set -e; cp /usr/bin/sleep ${lower}.old; mv -f ${lower}.old ${lower}; printf 'old\n' > ${dropped}; `
+    + `(${lower} 600 </dev/null >/dev/null 2>&1 &); printf previous > ${TOOLS_STAMP}; old=$(sha256sum < ${lower} | cut -c1-64); `
+    + `sed -i "s|^[0-9a-f]\\{64\\}  usr/local/bin/devbox-block-lower$|$old  usr/local/bin/devbox-block-lower|" ${TOOLS_MANIFEST}; `
+    + `echo "$(sha256sum < ${dropped} | cut -c1-64)  usr/local/bin/devbox-old-tool" >> ${TOOLS_MANIFEST}; sleep 0.2; pgrep -fx '${lower} 600'`);
+
+  const behind = await settle(refreshTools(ports));
+
+  equal({ mode: behind.mode, files: behind.files, removed: behind.removed }, { mode: 'incremental', files: 1, removed: 1 });
+  equal(await native(container, `kill -0 ${running} && echo running; cat ${TOOLS_STAMP}; echo; test -e ${dropped} || echo dropped; `
+    + `(cd / && grep -v ' usr/local/lib/devbox/debs/' ${TOOLS_MANIFEST.slice(1)} | sha256sum -c --quiet) && echo verified; kill ${running} 2>/dev/null; true`), `running\n${pin}\ndropped\nverified`);
+  // A full install whose apt fails after the archive is extracted, the extracted manifest naming this pin.
+  await native(container, `set -e; mkdir -p ${SCRATCH}/no-apt; printf '#!/bin/sh\\nexit 100\\n' > ${SCRATCH}/no-apt/apt-get; chmod +x ${SCRATCH}/no-apt/apt-get; printf previous > ${TOOLS_STAMP}`);
+  const cut = await run(`PATH=${SCRATCH}/no-apt:$PATH\n${toolsInstallCommand(`${SCRATCH}/tools.tgz`, pin)}`);
+
+  equal({ cut: cut.exitCode, marked: await native(container, `test -e ${TOOLS_INSTALLING} && echo marked; true`) }, { cut: 1, marked: 'marked' });
+  const retried = await settle(refreshTools(ports));
+
+  equal({ mode: retried.mode, reason: retried.reason, changed: retried.changed, after: await native(container, `cat ${TOOLS_STAMP}; test -e ${TOOLS_INSTALLING} && echo marked; true`) },
+    { mode: 'full', reason: 'the box\'s last full install did not finish', changed: 0, after: pin });
+  await native(container, `rm -rf ${store} ${SCRATCH}/no-apt`);
+}
 
 async function tools(container: Container, pin: string): Promise<void> {
   equal(await native(container, `. /etc/os-release; printf '%s %s' "$ID" "$VERSION_ID"`), 'debian 13');
@@ -53,6 +110,7 @@ async function tools(container: Container, pin: string): Promise<void> {
   const refused = await (await container.exec(['/bin/bash', '-c', toolsInstallCommand(`${SCRATCH}/incomplete.tgz`, pin)])).output();
   equal(refused.exitCode, 1);
   equal(await native(container, `cat ${TOOLS_STAMP}`), pin);
+  await toolsRefresh(container, pin);
   const reinstalled = await native(container, toolsInstallCommand(archive, pin));
   equal(/changed=(\d+)/u.exec(reinstalled)?.[1], '0');
   equal(await native(container, `cat ${TOOLS_STAMP}`), pin);
