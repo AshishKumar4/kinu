@@ -230,7 +230,7 @@ describe('webhook ingress admits a verified delivery', () => {
 // X-GitHub-Event, and pings once when the hook is made.
 describe('a GitHub repository hook', () => {
   const SECRET = 'hook-secret';
-  const BODY = '{"ref":"refs/heads/main","after":"abc123"}';
+  const BODY = '{"ref":"refs/heads/main","after":"abc123","repository":{"full_name":"Owner/Repo"}}';
   const signed = async (body: string) => `sha256=${await hmacSha256Hex(SECRET, body)}`;
 
   async function gitHubTrigger(h: ReturnType<typeof hub>, check?: { readonly code: string }): Promise<string> {
@@ -238,7 +238,10 @@ describe('a GitHub repository hook', () => {
 
     const id = await h.triggers.register({
       kind: 'webhook_durable',
-      spec: { label: 'push to owner/repo', auth_mode: 'github', secret_id, accepted_content_type: 'application/json', ...(check !== undefined && { check }) },
+      spec: {
+        label: 'push to owner/repo', auth_mode: 'github', secret_id, accepted_content_type: 'application/json',
+        push: { source: 'github-repo', repo: 'owner/repo', events: ['push'] }, ...(check !== undefined && { check }),
+      },
       creator_trust: 'self',
     }, NOW);
 
@@ -247,7 +250,7 @@ describe('a GitHub repository hook', () => {
     return id;
   }
 
-  test('a delivery signed over its body is admitted once; a replay of it is a duplicate, held for three days', async () => {
+  test('a delivery signed over its body is admitted once; a replay of it is a duplicate for as long as its secret verifies', async () => {
     const h = hub();
     const trigger_id = await gitHubTrigger(h);
     const headers = { 'x-hub-signature-256': await signed(BODY), 'x-github-event': 'push', 'x-github-delivery': 'd-1' };
@@ -255,10 +258,20 @@ describe('a GitHub repository hook', () => {
     expect(await h.deliver({ trigger_id, body_text: BODY, headers })).toMatchObject({ status: 'admitted', admitted: true });
     // Its delivery id is not signed: a replay under another is the same signature, a duplicate.
     expect(await h.deliver({ trigger_id, body_text: BODY, headers: { ...headers, 'x-github-delivery': 'd-2' } })).toMatchObject({ status: 'admitted', admitted: false });
-    expect(h.claims().map((claim) => claim.expires_at)).toEqual([NOW + 3 * 24 * 60 * 60 * 1000]);
+    expect(h.claims().map((claim) => claim.expires_at)).toEqual([Number.MAX_SAFE_INTEGER]);
   });
 
-  test('a wrong or missing signature is 401, and GitHub\'s ping is answered with nothing published', async () => {
+  test('a signed delivery for another repository is refused before it is claimed', async () => {
+    const h = hub();
+    const trigger_id = await gitHubTrigger(h);
+    const elsewhere = '{"ref":"refs/heads/main","repository":{"full_name":"owner/other"}}';
+
+    expect(await h.deliver({ trigger_id, body_text: elsewhere, headers: { 'x-hub-signature-256': await signed(elsewhere), 'x-github-event': 'push' } }))
+      .toEqual({ status: 'rejected', http_status: 401, reason: 'the delivery names another repository' });
+    expect(h.claims()).toEqual([]);
+  });
+
+  test('a wrong or missing signature is 401; GitHub\'s ping, known by its signed body, is answered with nothing published', async () => {
     const h = hub();
     const trigger_id = await gitHubTrigger(h);
 
@@ -269,9 +282,15 @@ describe('a GitHub repository hook', () => {
 
     const ping = '{"zen":"Keep it logically awesome.","hook_id":7}';
 
-    expect(await h.deliver({ trigger_id, body_text: ping, headers: { 'x-hub-signature-256': await signed(ping), 'x-github-event': 'ping' } }))
+    expect(await h.deliver({ trigger_id, body_text: ping, headers: { 'x-hub-signature-256': await signed(ping) } }))
       .toEqual({ status: 'admitted', admitted: false });
     expect(h.log.pending({ variant: 'webhook' })).toEqual([]);
+
+    // The event header is not signed: calling a push another event refuses it unclaimed, rather than spending it as a ping.
+    expect(await h.deliver({ trigger_id, body_text: BODY, headers: { 'x-hub-signature-256': await signed(BODY), 'x-github-event': 'ping' } }))
+      .toEqual({ status: 'rejected', http_status: 401, reason: 'the delivery is of an event the watcher did not ask for' });
+    expect(await h.deliver({ trigger_id, body_text: BODY, headers: { 'x-hub-signature-256': await signed(BODY), 'x-github-event': 'push' } }))
+      .toMatchObject({ status: 'admitted', admitted: true });
   });
 
   test("a push watcher's check reads GitHub's event and delivery id beside the payload", async () => {
@@ -294,7 +313,7 @@ describe('a GitHub repository hook', () => {
       headers: { 'x-hub-signature-256': await signed(BODY), 'x-github-event': 'push', 'x-github-delivery': 'd-1' },
     });
 
-    expect(inputs).toEqual([{ event: 'push', delivery: 'd-1', payload: { ref: 'refs/heads/main', after: 'abc123' } }]);
+    expect(inputs).toEqual([{ event: 'push', delivery: 'd-1', payload: { ref: 'refs/heads/main', after: 'abc123', repository: { full_name: 'Owner/Repo' } } }]);
   });
 });
 

@@ -28,9 +28,14 @@ const HMAC_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
 
 export type WebhookAuthMode = 'hmac' | 'bearer' | 'mtls' | 'github';
 
-/** GitHub keeps a delivery to redeliver for 3 days (docs.github.com/webhooks/testing-and-troubleshooting-webhooks/
- *  redelivering-webhooks); its signature covers no time, so one is held that long and a replay within it is a duplicate. */
-const GITHUB_CLAIM_MS = 3 * 24 * 60 * 60 * 1000;
+/** A GitHub signature covers no time, so a claimed one is held as long as its secret can verify it: a replay, ever, is a
+ *  duplicate. A rotated secret forgets its claims ({@link forgetClaims}); a revoked trigger's can no longer verify. */
+const GITHUB_CLAIM_KEPT = Number.MAX_SAFE_INTEGER;
+
+/** What GitHub signs when a hook is made (its ping), and what every delivery of a repository hook signs it names. */
+const GitHubPingSchema = v.object({ zen: v.string(), hook_id: v.number() });
+
+const GitHubRepositorySchema = v.object({ repository: v.object({ full_name: v.string() }) });
 
 export interface SecretStore {
   get(secretId: string): Promise<string | null>;
@@ -95,7 +100,8 @@ export interface RegisteredWebhook {
   secret: string | null;
 }
 
-function freshWebhookSecret(): string {
+/** A new webhook secret: 32 random bytes as hex. */
+export function freshWebhookSecret(): string {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
 
@@ -137,7 +143,7 @@ export interface PushWatcherOpts {
   readonly label?: string;
   readonly payload?: JsonObject;
   readonly missionLabel?: string;
-  readonly check?: WatchCheck;
+  readonly check: WatchCheck;
 }
 
 /**
@@ -158,7 +164,7 @@ export function registerPushWatcher(
       ...(opts.label !== undefined && { label: opts.label }),
       ...(opts.payload !== undefined && { payload: opts.payload }),
       ...(opts.missionLabel !== undefined && { mission_label: opts.missionLabel }),
-      ...(opts.check !== undefined && { check: v.parse(WatchCheckSchema, opts.check) }),
+      check: v.parse(WatchCheckSchema, opts.check),
     };
 
     const trigger_id = yield* Effect.promise(() => registry.register({ kind: 'webhook_durable', spec, creator_trust: 'authenticated' }, now));
@@ -240,6 +246,7 @@ function verifyWebhookAuth(
   deps: WebhookIngressDeps,
   spec: Partial<WebhookTriggerSpec>,
   opts: WebhookDelivery,
+  push: GitHubPush | null,
 ): Effect.Effect<WebhookAuth, WebhookRefusal> {
   return Effect.gen(function* () {
     if (spec.auth_mode === 'hmac') {
@@ -270,7 +277,7 @@ function verifyWebhookAuth(
       };
     }
 
-    if (spec.auth_mode === 'github') return yield* verifyGitHubDelivery(deps, spec, opts);
+    if (spec.auth_mode === 'github') return yield* verifyGitHubDelivery(deps, spec, opts, push);
 
     if (spec.auth_mode === 'bearer') {
       const secretId = spec.secret_id;
@@ -295,8 +302,27 @@ function verifyWebhookAuth(
   });
 }
 
-/** A delivery from a repository hook Kinu made: signed over its body alone, so its signature is what is claimed once. */
-function verifyGitHubDelivery(deps: WebhookIngressDeps, spec: Partial<WebhookTriggerSpec>, opts: WebhookDelivery): Effect.Effect<WebhookAuth, WebhookRefusal> {
+/**
+ * Why a signed body is not one the watcher asked for, or null when it is: it names another repository, or GitHub calls it
+ * an event the hook was not made for. A ping, known by its body, is asked for. The event header is not signed, so it only
+ * narrows: a body cannot be passed off as an event the hook does not deliver.
+ */
+function notWatched(push: GitHubPush | null, body: JsonValue, event: string | undefined): string | null {
+  if (v.is(GitHubPingSchema, body)) return null;
+  const named = v.safeParse(GitHubRepositorySchema, body);
+
+  if (push === null || !named.success || named.output.repository.full_name.toLowerCase() !== push.repo.toLowerCase()) return 'the delivery names another repository';
+
+  if (!push.events.includes('*') && (event === undefined || !push.events.includes(event))) return 'the delivery is of an event the watcher did not ask for';
+
+  return null;
+}
+
+/**
+ * A delivery from a repository hook Kinu made: signed over its body alone, so its signature is what is claimed once, and
+ * it must be one the watcher asked for ({@link notWatched}) before it is claimed.
+ */
+function verifyGitHubDelivery(deps: WebhookIngressDeps, spec: Partial<WebhookTriggerSpec>, opts: WebhookDelivery, push: GitHubPush | null): Effect.Effect<WebhookAuth, WebhookRefusal> {
   return Effect.gen(function* () {
     const secretId = spec.secret_id;
 
@@ -310,12 +336,16 @@ function verifyGitHubDelivery(deps: WebhookIngressDeps, spec: Partial<WebhookTri
     const expected = `sha256=${yield* Effect.promise(() => hmacSha256Hex(secret, opts.body_text))}`;
 
     if (!timingSafeEqual(expected, presented)) return yield* refused('signature mismatch');
+    const unasked = notWatched(push, safeJsonParse(opts.body_text), opts.headers['x-github-event']);
 
-    return { ingress: 'webhook_hmac', claim: { key: `github:${sha256Hex(presented, 32)}`, expiresAt: opts.now + GITHUB_CLAIM_MS } };
+    if (unasked !== null) return yield* refused(unasked);
+
+    return { ingress: 'webhook_hmac', claim: { key: `github:${sha256Hex(presented, 32)}`, expiresAt: GITHUB_CLAIM_KEPT } };
   });
 }
 
-/** A repository hook's delivery as its check reads it: GitHub's event name and delivery id beside the payload. */
+/** A repository hook's delivery as its check reads it: GitHub's event name and delivery id beside the payload. The
+ *  payload alone is signed; the two headers are GitHub's word, as sent. */
 function gitHubInput(opts: WebhookDelivery, payload: JsonValue): JsonValue {
   return { event: opts.headers['x-github-event'] ?? null, delivery: opts.headers['x-github-delivery'] ?? null, payload };
 }
@@ -326,8 +356,8 @@ async function checkedDelivery(
 ): Promise<WebhookDeliveryResult | null> {
   const github = trigger.spec['auth_mode'] === 'github';
 
-  // GitHub's ping when a hook is made: answered, and nothing to check.
-  if (github && opts.headers['x-github-event'] === 'ping') return { status: 'admitted', admitted: false };
+  // GitHub's ping when a hook is made, known by its signed body: answered, and nothing to check.
+  if (github && v.is(GitHubPingSchema, body)) return { status: 'admitted', admitted: false };
 
   if (deps.watch === undefined || watchCheckOf(trigger) === null) return null;
 
@@ -374,7 +404,7 @@ export function acceptWebhookDelivery(
       return { status: 'rejected', http_status: 415, reason: `expected ${spec.accepted_content_type}` };
     }
 
-    const verified = yield* Effect.result(verifyWebhookAuth(deps, spec, opts));
+    const verified = yield* Effect.result(verifyWebhookAuth(deps, spec, opts, gitHubPushOf(trigger)));
 
     if (Result.isFailure(verified)) return { status: 'rejected', http_status: 401, reason: verified.failure.reason };
     const auth = verified.success;
@@ -483,6 +513,11 @@ function claimSignedDelivery(
   );
 
   return null;
+}
+
+/** Every claim of a trigger forgotten: its secret rotated, no signature it claimed can verify again. */
+export function forgetClaims(sql: SqlExec, triggerId: string): void {
+  sql.exec(`DELETE FROM webhook_replay_claims WHERE trigger_id = ?`, triggerId);
 }
 
 function bindClaimedDelivery(sql: SqlExec, triggerId: string, claim: string, eventId: string): void {

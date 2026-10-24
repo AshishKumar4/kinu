@@ -175,7 +175,7 @@ import {
   SleepTimeLane, initSleepTimeTables,
   // Core owns the ingress gates; this actor owns the transports in front of them
   // (DO alarm, Worker webhook + email routes, cross-DO RPC).
-  acceptWebhookDelivery, registerDurableWebhook, createWebhookSecretStore,
+  acceptWebhookDelivery, registerDurableWebhook, createWebhookSecretStore, forgetClaims,
   acceptContainerEvent, type ContainerEventResult,
   initWebhookIngressTables,
   type WebhookDelivery, type WebhookDeliveryResult, type WebhookSecretStore,
@@ -3555,8 +3555,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         hookDelete: async (repo, hookId) => { await this.requireOwnerUserDO().githubHookDelete(await this.userCaller(), repo, hookId); },
       },
       revoke: async (triggerId) => { await this.cancelTrigger(triggerId, 'owner'); },
+      forgetClaims: (triggerId) => { forgetClaims(this.ctx.storage.sql, triggerId); },
     };
   }
+
+  /** The resume running now: a second notice while it runs waits on it rather than making hooks twice. */
+  private pushResume: Promise<number> | null = null;
 
   /**
    * Whether an agent may hold an armed wait on its owner (read-models/owner-waits.ts): unknown (null) at start, so the
@@ -4235,9 +4239,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return parkPushWatchers(this.pushWatcherHost(), Date.now());
   }
 
-  /** GitHub was connected again: push watchers parked on it check again, each with a new hook. Never `@callable`. */
+  /** GitHub was connected again: push watchers parked on it check again, each with a new hook. How many are still
+   *  parked on it, which the account asks again about. Never `@callable`. */
   async githubPushBack(): Promise<number> {
-    return await resumePushWatchers(this.pushWatcherHost(), Date.now());
+    this.pushResume ??= resumePushWatchers(this.pushWatcherHost(), Date.now()).finally(() => { this.pushResume = null; });
+
+    return await this.pushResume;
   }
 
   /** By the agent a workspace process acted for, where its egress named one; a container's names nobody. Never `@callable`. */

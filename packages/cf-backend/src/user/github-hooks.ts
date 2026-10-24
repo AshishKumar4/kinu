@@ -19,7 +19,8 @@ const GitHubHookAskSchema = v.object({
 
 export type GitHubHookAsk = v.InferOutput<typeof GitHubHookAskSchema>;
 
-const KeptHookSchema = v.object({ repo: v.string(), hookId: v.number(), workspace: v.string() });
+/** A hook made, by where it delivers; `stale` once deleting it failed as GitHub went, to be deleted again on reconnect. */
+const KeptHookSchema = v.object({ repo: v.string(), hookId: v.number(), workspace: v.string(), stale: v.optional(v.literal(true)) });
 
 type KeptHook = v.InferOutput<typeof KeptHookSchema>;
 
@@ -67,16 +68,23 @@ function saidBy(answer: GitHubAnswer): string {
 }
 
 export class GitHubHooks {
+  /** Moves each time the GitHub connection goes: a hook GitHub made while it went is deleted, not kept. */
+  private generation = 0;
+  /** From the connection starting to go until a token holds again: no hook is made meanwhile. */
+  private closing = false;
+
   constructor(private readonly host: GitHubHooksHost) {}
 
   /** A hook on `repo` delivering `events` to the asking workspace's own signed route; its id. */
   create(caller: ResolvedCaller, asked: GitHubHookAsk): Promise<{ readonly hookId: number }> {
-    const { host } = this;
+    const { host, closing } = this;
+    const started = this.generation;
+    const gone = () => this.generation !== started;
 
     return settle(Effect.gen(function* () {
       const ask = v.parse(GitHubHookAskSchema, asked);
       const workspace = yield* deliveredTo(host.origin, caller, ask.url);
-      const token = yield* Effect.promise(() => host.token());
+      const token = closing ? null : yield* Effect.promise(() => host.token());
 
       if (token === null) return yield* new KinuError('denied', NOT_CONNECTED);
 
@@ -91,6 +99,13 @@ export class GitHubHooks {
         const admin = answer.status === 404 ? ' (the GitHub connection needs admin rights on it)' : '';
 
         return yield* new KinuError(answer.status === 422 ? 'bad_input' : 'denied', `GitHub would not make a hook on ${ask.repo}: ${saidBy(answer)}${admin}`);
+      }
+
+      // GitHub went while the hook was made: no disconnect will delete it, so it is deleted now, with the token it was made with.
+      if (gone()) {
+        yield* askGitHub(token, 'DELETE', `/repos/${ask.repo}/hooks/${made.output.id}`);
+
+        return yield* new KinuError('denied', `GitHub was disconnected while the hook on ${ask.repo} was made, so it is deleted. ${NOT_CONNECTED}`);
       }
 
       const kept: KeptHook = { repo: ask.repo, hookId: made.output.id, workspace };
@@ -123,13 +138,28 @@ export class GitHubHooks {
   }
 
   /** Every hook made, deleted while the connection's token still holds: called as the GitHub connection goes. One GitHub
-   *  refuses is logged and forgotten, since no token will reach it again. The workspaces they delivered to. */
+   *  will not delete is kept as stale, deleted again by {@link connected} once a token holds. The workspaces they
+   *  delivered to. */
   deleteAll(): Promise<readonly string[]> {
+    this.generation += 1;
+    this.closing = true;
+
+    return settle(this.deleteKept(() => true));
+  }
+
+  /** A GitHub token holds again: hooks may be made, and those GitHub would not delete as it went are deleted first. */
+  connected(): Promise<void> {
+    this.closing = false;
+
+    return settle(Effect.asVoid(this.deleteKept((hook) => hook.stale === true)));
+  }
+
+  private deleteKept(which: (hook: KeptHook) => boolean): Effect.Effect<readonly string[]> {
     const { host } = this;
 
-    return settle(Effect.gen(function* () {
+    return Effect.gen(function* () {
       const listed = yield* Effect.promise(() => host.storage.list({ prefix: HOOK_KEY }));
-      const kept = [...listed.values()].map((value) => v.parse(KeptHookSchema, value));
+      const kept = [...listed.values()].map((value) => v.parse(KeptHookSchema, value)).filter(which);
 
       if (kept.length === 0) return [];
       const token = yield* Effect.promise(() => host.token());
@@ -139,13 +169,15 @@ export class GitHubHooks {
 
         if (answer === null || (answer.status !== 204 && answer.status !== 404)) {
           diagnostics.event('github.hook_not_deleted', { repo: hook.repo, hookId: hook.hookId, workspace: hook.workspace, said: answer === null ? 'no token' : saidBy(answer) });
+          yield* Effect.promise(() => host.storage.put(keyOf(hook), { ...hook, stale: true }));
+          continue;
         }
 
         yield* Effect.promise(() => host.storage.delete(keyOf(hook)));
       }
 
       return [...new Set(kept.map((hook) => hook.workspace))];
-    }));
+    });
   }
 }
 

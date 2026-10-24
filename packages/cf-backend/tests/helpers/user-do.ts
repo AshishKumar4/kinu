@@ -768,7 +768,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
         async githubPushBack() {
           githubPush.push(`back:${name}`);
 
-          return 1;
+          return 0;
         },
       }),
     },

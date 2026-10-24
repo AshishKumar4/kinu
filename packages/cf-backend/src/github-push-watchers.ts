@@ -4,7 +4,7 @@
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import {
-  gitHubPushOf, keepPushHook, parkWatcher, registerPushWatcher, resumeWatcher, webhookRoutePath,
+  freshWebhookSecret, gitHubPushOf, keepPushHook, parkWatcher, registerPushWatcher, resumeWatcher, webhookRoutePath,
   type GitHubPush, type PushWatcher, type PushWatcherOpts, type TriggerRegistry, type WebhookSecretStore,
 } from '@kinu.run/core';
 import { attempt, diagnostics, KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
@@ -26,6 +26,8 @@ export interface PushWatcherHost {
   readonly account: PushHookAccount;
   /** The trigger revoked with its secret, as cancelling it would. */
   readonly revoke: (triggerId: string) => Promise<void>;
+  /** Every replay claim of the trigger forgotten, its secret rotated. */
+  readonly forgetClaims: (triggerId: string) => void;
 }
 
 const PARKED_ON_GITHUB = 'GitHub was disconnected from this account; connect it again in Settings > Connections and this watcher resumes.';
@@ -43,18 +45,26 @@ function routeOf(host: PushWatcherHost, triggerId: string): Effect.Effect<string
   });
 }
 
-/** The account makes a trigger's hook at GitHub, and the trigger keeps its id. */
-function hooked(host: PushWatcherHost, triggerId: string, push: { readonly repo: string; readonly events: readonly string[] }, secret: string): Effect.Effect<number, KinuError> {
+/**
+ * The account makes a trigger's hook at GitHub, signed with `secret`, and `keep` records it on the trigger. A trigger
+ * that cannot keep it (cancelled while GitHub made it) has it deleted again, so GitHub delivers nowhere unheard.
+ */
+function hooked(
+  host: PushWatcherHost, triggerId: string,
+  push: { readonly repo: string; readonly events: readonly string[]; readonly secret: string },
+  keep: (hookId: number) => boolean,
+): Effect.Effect<number, KinuError> {
   return Effect.gen(function* () {
     const url = yield* routeOf(host, triggerId);
 
     const made = yield* attempt({ doing: `making a hook on ${push.repo}`, otherwise: 'unavailable' }, () => host.account.hookCreate({
-      repo: push.repo, url, secret, events: push.events,
+      repo: push.repo, url, secret: push.secret, events: push.events,
     }));
 
-    keepPushHook(host.registry, triggerId, made.hookId);
+    if (keep(made.hookId)) return made.hookId;
+    yield* Effect.promise(() => deletePushHook(host, { source: 'github-repo', repo: push.repo, events: [...push.events], hookId: made.hookId }));
 
-    return made.hookId;
+    return yield* new KinuError('missing', `The watcher of ${push.repo} was cancelled while its hook was made, so the hook is deleted.`);
   });
 }
 
@@ -63,7 +73,9 @@ export function createPushWatcher(host: PushWatcherHost, opts: PushWatcherOpts):
   return Effect.gen(function* () {
     const { trigger_id, secret } = yield* Effect.promise(() => registerPushWatcher(host.registry, host.secrets, opts, Date.now()));
 
-    const hookId = yield* Effect.catch(hooked(host, trigger_id, opts, secret), (refused) => Effect.andThen(
+    const keep = (made: number) => keepPushHook(host.registry, trigger_id, made);
+
+    const hookId = yield* Effect.catch(hooked(host, trigger_id, { ...opts, secret }, keep), (refused) => Effect.andThen(
       Effect.promise(() => host.revoke(trigger_id)),
       Effect.fail(refused),
     ));
@@ -94,29 +106,38 @@ export function parkPushWatchers(host: PushWatcherHost, now: number): number {
 
 const ParkedOnConnectionSchema = v.object({ watch: v.object({ parked: v.object({ reason: v.literal('connection') }) }) });
 
-/** Every push watcher parked on its connection checking again, each with a new hook: GitHub connected once more. One
- *  GitHub will not hook stays parked, and says so in the log. How many resumed. */
-export function resumePushWatchers(host: PushWatcherHost, now: number): Promise<number> {
-  return settle(Effect.gen(function* () {
-    let resumed = 0;
-
-    for (const trigger of host.registry.list({ kind: 'webhook_durable', state: 'paused' })) {
+/** The push watchers parked on their connection. */
+function parkedOnConnection(registry: TriggerRegistry) {
+  return registry.list({ kind: 'webhook_durable', state: 'paused' })
+    .flatMap((trigger) => {
       const push = gitHubPushOf(trigger);
       const secretId = trigger.spec['secret_id'];
 
-      if (push === null || typeof secretId !== 'string' || !v.is(ParkedOnConnectionSchema, trigger.spec)) continue;
-      const secret = yield* Effect.promise(() => host.secrets.get(secretId));
+      return push === null || typeof secretId !== 'string' || !v.is(ParkedOnConnectionSchema, trigger.spec) ? [] : [{ id: trigger.id, push, secretId }];
+    });
+}
 
-      const made = secret === null ? null : yield* Effect.result(hooked(host, trigger.id, push, secret));
+/**
+ * Every push watcher parked on its connection checking again, GitHub connected once more: each with a new hook and a
+ * new secret, so a hook GitHub never deleted as it went cannot sign for it again. One GitHub will not hook stays parked,
+ * and says so in the log. How many are still parked on it.
+ */
+export function resumePushWatchers(host: PushWatcherHost, now: number): Promise<number> {
+  return settle(Effect.gen(function* () {
+    for (const parked of parkedOnConnection(host.registry)) {
+      const secret = freshWebhookSecret();
+      const keep = (hookId: number) => host.secrets.replace(parked.secretId, parked.id, secret) && keepPushHook(host.registry, parked.id, hookId);
+      const made = yield* Effect.result(hooked(host, parked.id, { ...parked.push, secret }, keep));
 
-      if (made === null || made._tag === 'Failure') {
-        diagnostics.event('github.push_watcher_not_resumed', { triggerId: trigger.id, repo: push.repo, cause: made === null ? 'its secret is gone' : made.failure.message });
+      if (made._tag === 'Failure') {
+        diagnostics.event('github.push_watcher_not_resumed', { triggerId: parked.id, repo: parked.push.repo, cause: made.failure.message });
         continue;
       }
 
-      if (yield* Effect.promise(() => resumeWatcher(host.registry, trigger.id, 'connection', now))) resumed += 1;
+      host.forgetClaims(parked.id);
+      yield* Effect.promise(() => resumeWatcher(host.registry, parked.id, 'connection', now));
     }
 
-    return resumed;
+    return parkedOnConnection(host.registry).length;
   }));
 }

@@ -29,6 +29,31 @@ function github(...answers: Response[]): Array<{ method: string; url: string; au
   return asked;
 }
 
+/** GitHub holding its answer to the first `method` asked of it until released; every other request is answered 204. */
+function heldGitHub(method: string, answer: Response) {
+  const asked: string[] = [];
+  let release = (): void => undefined;
+  let reach = (): void => undefined;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const reached = new Promise<void>((resolve) => { reach = resolve; });
+  let holding = true;
+
+  globalThis.fetch = asFetchFunction(async (input, init) => {
+    const request = new Request(input, init);
+
+    asked.push(`${request.method} ${new URL(request.url).pathname}`);
+
+    if (!holding || request.method !== method) return new Response(null, { status: 204 });
+    holding = false;
+    reach();
+    await held;
+
+    return answer;
+  });
+
+  return { asked, reached, release: () => { release(); } };
+}
+
 async function connected(): Promise<TestUserDO & { owner: UserCaller; shop: UserCaller; serverId: string }> {
   const harness = createTestUserDO();
   const owner = await testOwner();
@@ -93,6 +118,54 @@ describe('a push watcher\'s repository hook', () => {
     ]);
     // Forgotten: the next disconnect has nothing to delete.
     await expect(harness.userDO.githubHookDelete(harness.owner, 'owner/repo', 42)).rejects.toThrow('No hook 42 on owner/repo');
+    harness.close();
+  });
+
+  test('a hook GitHub makes while the connection goes is deleted, not kept delivering', async () => {
+    const harness = await connected();
+    const gitHub = heldGitHub('POST', Response.json({ id: 44 }, { status: 201 }));
+    const making = harness.userDO.githubHookCreate(harness.shop, { repo: 'owner/repo', url: await routeOf('shop'), secret: SECRET, events: ['push'] });
+
+    await gitHub.reached;
+    await harness.userDO.userMcp_remove(harness.owner, harness.serverId);
+    gitHub.release();
+
+    await expect(making).rejects.toThrow('GitHub was disconnected while the hook on owner/repo was made, so it is deleted');
+    expect(gitHub.asked).toEqual(['POST /repos/owner/repo/hooks', 'DELETE /repos/owner/repo/hooks/44']);
+    harness.close();
+  });
+
+  test('no hook is made while the connection is going', async () => {
+    const harness = await connected();
+
+    github(Response.json({ id: 42 }, { status: 201 }));
+    await harness.userDO.githubHookCreate(harness.shop, { repo: 'owner/repo', url: await routeOf('shop'), secret: SECRET, events: ['push'] });
+
+    const gitHub = heldGitHub('DELETE', new Response(null, { status: 204 }));
+    const removing = harness.userDO.userMcp_remove(harness.owner, harness.serverId);
+
+    await gitHub.reached;
+    await expect(harness.userDO.githubHookCreate(harness.shop, { repo: 'owner/other', url: await routeOf('shop'), secret: SECRET, events: ['push'] }))
+      .rejects.toThrow('GitHub is not connected to this account');
+    gitHub.release();
+    await removing;
+
+    expect(gitHub.asked).toEqual(['DELETE /repos/owner/repo/hooks/42']);
+    harness.close();
+  });
+
+  test('a hook GitHub will not delete as it goes is kept, and deleted again once GitHub is connected', async () => {
+    const harness = await connected();
+
+    github(Response.json({ id: 42 }, { status: 201 }), Response.json({ message: 'Server Error' }, { status: 500 }));
+    await harness.userDO.githubHookCreate(harness.shop, { repo: 'owner/repo', url: await routeOf('shop'), secret: SECRET, events: ['push'] });
+    await harness.userDO.userMcp_remove(harness.owner, harness.serverId);
+
+    const retried = github(new Response(null, { status: 204 }));
+
+    await harness.userDO.userMcp_add(harness.owner, { presetId: 'github', headers: { Authorization: 'Bearer gho_connection0123456789' } }, 'https://kinu.example');
+    expect(retried.map((ask) => `${ask.method} ${ask.url}`)).toEqual(['DELETE https://api.github.com/repos/owner/repo/hooks/42']);
+    expect(harness.githubPush).toEqual(['gone:shop', 'back:shop']);
     harness.close();
   });
 

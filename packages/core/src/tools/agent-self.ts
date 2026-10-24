@@ -134,6 +134,9 @@ function schedulePush(host: AgentSelfHost, opts: ScheduleOpts & { readonly push:
 
     if (!GITHUB_REPOSITORY.test(opts.push.github)) return yield* new KinuError('bad_input', 'agent.schedule: push.github names a repository as owner/repo.');
 
+    // A push watcher's check is what keeps a repository's content from waking a turn of its own (Plan, budget, parking).
+    if (opts.check === undefined) return yield* new KinuError('bad_input', 'agent.schedule: a push watcher needs a check, which reads each delivery and decides whether it fires.');
+
     if (host.createPushWatcher === undefined) {
       return yield* new KinuError('unsupported', 'agent.schedule: a push watcher needs the cloud workspace, where GitHub can reach it; this session has none.');
     }
@@ -143,7 +146,7 @@ function schedulePush(host: AgentSelfHost, opts: ScheduleOpts & { readonly push:
     const watcher = yield* host.createPushWatcher({
       repo: opts.push.github, events: opts.push.events ?? ['push'],
       ...(opts.label !== undefined && { label: opts.label }), ...(opts.payload !== undefined && { payload: opts.payload }),
-      ...(missionLabel !== undefined && { missionLabel }), ...(opts.check !== undefined && { check: opts.check }),
+      ...(missionLabel !== undefined && { missionLabel }), check: opts.check,
     });
 
     return budget === undefined ? watcher : { ...watcher, budget };

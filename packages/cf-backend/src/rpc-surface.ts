@@ -305,6 +305,9 @@ const ORCHESTRATOR_METHODS = [
   // A Node program's namespace call, from its principal's egress (`node-program.ts`).
   'nodeProgramCall',
   'secretsMoved',
+  // The account, DO-to-DO, as the GitHub connection goes and comes back (`user/user-do.ts`): push watchers park and resume.
+  'githubPushGone',
+  'githubPushBack',
   'recordGitHubEgress',
   // Never `@callable`.
   'admitBlueprint',

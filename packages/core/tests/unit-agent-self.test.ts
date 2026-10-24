@@ -224,8 +224,9 @@ describe("createAgentSelfProvider — delegation + validation", () => {
     expect(await schedule({ push: { github: "owner/repo" }, check, label: "pushes" })).toEqual({ id: "t1", kind: "webhook_durable", repo: "owner/repo", hookId: 42 });
     expect(asked).toEqual([{ repo: "owner/repo", events: ["push"], label: "pushes", check }]);
     expect(await schedule({ push: { github: "owner/repo" }, cron: "0 * * * *" })).toEqual(refused("give it no cron"));
+    expect(await schedule({ push: { github: "owner/repo" } })).toEqual(refused("needs a check"));
     expect(await schedule({ push: { github: "not a repo" }, check })).toEqual(refused("owner/repo"));
-    expect(await called(createAgentSelfProvider(fakeHost()), "schedule")({ push: { github: "owner/repo" } })).toMatchObject({ success: false, reason: "unsupported" });
+    expect(await called(createAgentSelfProvider(fakeHost()), "schedule")({ push: { github: "owner/repo" }, check })).toMatchObject({ success: false, reason: "unsupported" });
     expect(host.calls).toEqual([]);
   });
 

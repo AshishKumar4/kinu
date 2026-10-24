@@ -589,19 +589,20 @@ export class UserDO extends Agent<Env> {
 
   /** GitHub connected again: each workspace whose push watchers were parked on it resumes them, each with a new hook. */
   private async githubPushBack(): Promise<void> {
+    if (await this.mcpServers.githubGitToken() === null) return;
+    await this.githubHooks.connected();
     const parked = await this.parkedPushWorkspaces();
 
-    if (parked.length === 0 || await this.mcpServers.githubGitToken() === null) return;
+    if (parked.length === 0) return;
     const told = new Set<string>();
 
     for (const workspace of parked) {
       await settleLogged('github.push_watchers_not_resumed', { doing: `resuming ${workspace}'s push watchers`, otherwise: 'unavailable' }, async () => {
-        await objectNamed(this.env.OrchestratorAgent, workspace).githubPushBack();
-        told.add(workspace);
+        if (await objectNamed(this.env.OrchestratorAgent, workspace).githubPushBack() === 0) told.add(workspace);
       }, { workspace });
     }
 
-    // One that did not answer is told at the next change of connections.
+    // One that did not answer, or kept a watcher parked (GitHub would not hook it), is asked at the next change of connections.
     const left = parked.filter((workspace) => !told.has(workspace));
 
     await (left.length === 0 ? this.ctx.storage.delete(PUSH_PARKED_KEY) : this.ctx.storage.put(PUSH_PARKED_KEY, left));
