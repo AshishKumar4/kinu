@@ -258,6 +258,17 @@ async function owedSubagentTurnReport(input: {
     : null;
 }
 
+/** A hire's settled turn as its report is decided on it: what it told so far, who drove it, and what waits for it. */
+export interface HiredTurn {
+  readonly reports: { readonly spoke: boolean; readonly settled: boolean };
+  readonly ownerDriven: boolean;
+  /** The assignment this turn answers, if one opened it. */
+  readonly taskId: string | null;
+  /** Input waits for a later turn of its, read as its report is decided: queued in its chat, or owed it and not yet
+   *  taken. A job's end can reach it between its turn's commit and its report. */
+  readonly queued: boolean;
+}
+
 /**
  * A hire's settled turn, as its hirer is told of it on either backend: the hirer's roster first (announced when it
  * moved), then the report the turn owes ({@link owedSubagentTurnReport}), read against what the hire is owed and its log.
@@ -265,7 +276,7 @@ async function owedSubagentTurnReport(input: {
 export async function hireTurnSettled(input: {
   readonly hirer: { readonly roster: Pick<SubagentRosterStore, 'finishTurn'>; announce(): void };
   readonly hire: { readonly record: Pick<WorkspaceActor, 'name' | 'lifetime'>; readonly owed: OwedReads; readonly log: EventLog };
-  readonly turn: { readonly reports: { readonly spoke: boolean; readonly settled: boolean }; readonly ownerDriven: boolean; readonly taskId: string | null };
+  readonly turn: HiredTurn;
   readonly ended: { readonly ending: TaskTurnEnding; readonly assistantText: string; readonly narration: readonly string[] };
 }): Promise<OwedReport | null> {
   if (input.hirer.roster.finishTurn(input.hire.record.name, input.ended.ending, Date.now())) input.hirer.announce();
@@ -273,7 +284,9 @@ export async function hireTurnSettled(input: {
   return await owedSubagentTurnReport({
     lifetime: input.hire.record.lifetime, ending: input.ended.ending, assistantText: input.ended.assistantText,
     narration: async () => input.ended.narration, reports: input.turn.reports, ownerDriven: input.turn.ownerDriven,
-    delegating: taskAnswerIsLater({ owed: input.hire.owed, log: input.hire.log, ...(input.turn.taskId !== null && { turnTaskId: input.turn.taskId }) }),
+    delegating: taskAnswerIsLater({
+      owed: input.hire.owed, log: input.hire.log, queued: input.turn.queued, ...(input.turn.taskId !== null && { turnTaskId: input.turn.taskId }),
+    }),
   });
 }
 

@@ -721,6 +721,7 @@ export {
   readSubagentLiveStatus,
   subagentDescriptorSource,
   hireTurnSettled,
+  type HiredTurn,
   type SubagentReportOrigin,
   type SubagentRuntime,
 } from './subagents/support';

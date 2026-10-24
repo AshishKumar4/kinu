@@ -64,12 +64,13 @@ test('a result owed to the agent holds the reminder, whatever is open', () => {
   expect(decideAt([tree({ title: 'x' })], { resultOwed: true })).toBeNull();
 });
 
-/** An agent's reads: its own awaited jobs and hires, each hire with its own reads by actor id. */
-function owed(jobs: number, hires: readonly (readonly [OwedHire['status'], string | null, string, OwedReads?])[]): OwedReads {
+/** An agent's reads: its own awaited jobs and hires, each hire with its own reads by actor id, and whether it works. */
+function owed(jobs: number, hires: readonly (readonly [OwedHire['status'], string | null, string, OwedReads?])[], working = false): OwedReads {
   const children = new Map(hires.map(([, , id, reads]) => [id, reads ?? owed(0, [])]));
 
   return {
     awaitedJobs: () => jobs,
+    working: () => working,
     hires: () => hires.map(([status, currentTask, id]) => ({ status, currentTask, origin: 'agent' as const, actorReference: { actorId: id, workspaceId: 'w', parentActorId: 'main' } })),
     of: (hire) => children.get(hire.actorId) ?? owed(0, []),
   };
@@ -86,8 +87,12 @@ test("what is owed: a job of its own, a hire mid-assignment, or a hire still owe
   expect(resultOwed(owed(0, [['idle', 'Build the release.', 'a', owed(1, [])]]))).toBe(true);
   // ...and as deep as the hiring goes.
   expect(resultOwed(owed(0, [['idle', 'Build the release.', 'a', owed(0, [['idle', 'Run the suite.', 'b', owed(1, [])]])]]))).toBe(true);
+  // Its job ended and woke it: the turn it runs on the result is the report's way.
+  expect(resultOwed(owed(0, [['idle', 'Build the release.', 'a', owed(0, [], true)]]))).toBe(true);
+  // ...but the agent's own turn is not read: it is the one ending.
+  expect(resultOwed(owed(0, [], true))).toBe(false);
   // A hire with no assignment open (the owner's own chat with it) owes the agent nothing, whatever it runs.
-  expect(resultOwed(owed(0, [['idle', null, 'a', owed(1, [])]]))).toBe(false);
+  expect(resultOwed(owed(0, [['idle', null, 'a', owed(1, [], true)]]))).toBe(false);
 });
 
 test('the awaiting-answer skip ports the OMP line-shape predicates', () => {

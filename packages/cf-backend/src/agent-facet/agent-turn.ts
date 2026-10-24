@@ -5,7 +5,7 @@ import {
   type AuthRequest, type AuthResolution, type HandedOffTurn, type SettledRun, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type JsonValue, type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind, type AgentSignal, type SendOutcome,
   turnSourcesFromBundle, captureOperationProfile, currentOperationProfile, recordModelOperations, PROVIDER_WAIT_PART, type ModelCallReport, type ModelOperationSink, type ProviderWaitInfo,
   type AgentFigures, type AgentReport, type HostedActor, type SerializedMessage, type SessionEvent, type TurnEndEvent,
-  type SubagentReportLedger, type SubagentReportStatus, type TaskTurnEnding, type WorkMode, type ResolvedTurnProfile,
+  type HiredTurn, type SubagentReportStatus, type TaskTurnEnding, type WorkMode, type ResolvedTurnProfile,
   type RemoteReceipt, type ReplyToCommentToolDeps, type StoredRow, type SubmitPlanToolDeps, type TurnCraftLedger,
   providerAccounts,
 } from '@kinu.run/core';
@@ -75,8 +75,7 @@ export interface AgentWorkspace {
    *  answer committed: `turn`, what it told so far; `relay`, its dedupe key and mode. Answers the relay's disposition, or
    *  `none` where it owed none. */
   turnReport(
-    /** `taskId`: the assignment this turn answers, if one opened it. */
-    turn: { readonly reports: SubagentReportLedger; readonly ownerDriven: boolean; readonly taskId: string | null },
+    turn: HiredTurn,
     ended: { readonly ending: TaskTurnEnding; readonly assistantText: string; readonly narration: readonly string[] },
     relay: { readonly sequenceId: string; readonly mode: WorkMode },
   ): Promise<string>;

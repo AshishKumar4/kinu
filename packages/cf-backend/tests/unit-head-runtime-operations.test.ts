@@ -78,6 +78,7 @@ const neverHost: HostedActorSeams = {
   get directory(): never { throw new Error('mergeLLM read the actor directory'); },
   transaction() { throw new Error('mergeLLM opened a transaction'); },
   roster() { throw new Error('mergeLLM read a roster'); },
+  owed() { throw new Error("mergeLLM read what an agent is owed"); },
   conversations() { throw new Error('mergeLLM read a conversation'); },
   vfs() { throw new Error('mergeLLM read the file plane'); },
   surface() { throw new Error("mergeLLM built an agent's turn surface"); },

@@ -171,6 +171,8 @@ interface LocalHostedSession {
   readonly wakeHire?: (actorId: string, signal: AgentSignal) => Effect.Effect<void, KinuError>;
   /** Every job a session of this workspace drives now, the tree's one set, shared with the root and every hire. */
   readonly jobsDriven: Set<string>;
+  /** Whether an agent of this tree runs a turn or has one queued: its session's {@link LocalAgentSession.pumping}. */
+  readonly pumping: (actorId: string) => boolean;
 }
 
 /** The jobs a session's runners drive: its host tree's set, or, for a session outside a host, its own. */
@@ -628,13 +630,27 @@ export class LocalAgentSession {
     this.rearmLocalAlarm();
   }
 
-  /** What this agent is owed, and each of its hires in turn, over the tree's database: what `resultOwed` reads. */
+  /** Input waits for a later turn of this agent: queued in its chat, or owed it and not yet taken. */
+  inputWaits(): boolean {
+    return this.chat.turnQueued || new AgentDeliveries(this.rt.storage.sql).owes(this.rt.actor.actorId);
+  }
+
+  /** What this agent is owed, and each of its hires in turn, over the tree's database: what `resultOwed` reads. A hire
+   *  works from a delivery owed it to its rest, as a cloud agent's isolate reports itself working. */
   owed(): OwedReads {
+    const deliveries = new AgentDeliveries(this.rt.storage.sql);
+
     return owedReadsOf((agent) => {
       const { handle, stores } = agent.actorId === this.rt.actor.actorId
         ? { handle: this.rt.actor, stores: this.stores } : this.actorHost.bindStores(agent);
 
-      return { jobs: stores.jobs, roster: new SubagentRosterStore(makeSqlExec(this.db), handle) };
+      const roster = new SubagentRosterStore(makeSqlExec(this.db), handle);
+
+      return {
+        awaitedJobs: () => stores.jobs.countAwaited(),
+        working: () => deliveries.owes(agent.actorId) || (this.hostedHere?.pumping(agent.actorId) ?? false),
+        hires: () => roster.list(),
+      };
     }, actorReferenceOf(this.rt.actor));
   }
 

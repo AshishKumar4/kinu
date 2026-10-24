@@ -493,6 +493,8 @@ export class ChatSession {
 
   get pumpPromise(): Promise<void> | null { return this.activePump; }
   get turnOwed(): boolean { return this.pumpActive || this.queue.length > 0; }
+  /** A turn waits behind the one running: once a turn has committed, what it left unread is queued here too. */
+  get turnQueued(): boolean { return this.queue.length > 0; }
 
   /** What its wake waits on: a turn runs, or one queued may. One a question to the owner holds is parked until they close
    *  it, and wakes nothing meanwhile; a Stop still finds it owed and cancels it. */

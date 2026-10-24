@@ -456,8 +456,9 @@ export function scriptConversationModel(conversation: string, model: (() => Lang
 export interface InProcessAgentFacets {
   open(placement: AgentFacetPlacement, workspace: AgentWorkspaceHost): Promise<AgentFacetCalls>;
   drop(storageKey: string): void;
-  /** Every open agent's chat runs nothing, its settled turns' effects have closed, and it told its workspace so. */
-  idle(): Promise<void>;
+  /** Every open agent's chat runs nothing, its settled turns' effects have closed, and it told its workspace so; or only
+   *  the agent `storageKey` names, while another's turn is held. */
+  idle(storageKey?: string): Promise<void>;
   reset(storageKey: string): void;
   /** Every live-output call an agent's isolate made to the workspace, in order: each is an RPC in production. */
   traceCalls(): readonly string[];
@@ -540,7 +541,9 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
       opening.delete(storageKey);
     },
     traceCalls: () => traceCalls,
-    idle: async () => { await Promise.all([...live.values()].map(({ facet }) => facet.idle())); },
+    idle: async (storageKey) => {
+      await Promise.all([...live].filter(([key]) => storageKey === undefined || key === storageKey).map(([, { facet }]) => facet.idle()));
+    },
     drop: (storageKey) => {
       live.delete(storageKey);
       opening.delete(storageKey);

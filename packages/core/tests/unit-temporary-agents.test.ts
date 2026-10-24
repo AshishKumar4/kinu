@@ -408,9 +408,9 @@ describe('a task-lifetime hire returns at once and its answer arrives as a messa
 
   /** What the scene's hirer is owed: its roster's hires, no jobs; a hire with nothing on its way. */
   const hirerOwed = (roster: SubagentRosterStore): OwedReads => {
-    const idle: OwedReads = { awaitedJobs: () => 0, hires: () => [], of: () => idle };
+    const idle: OwedReads = { awaitedJobs: () => 0, working: () => false, hires: () => [], of: () => idle };
 
-    return { awaitedJobs: () => 0, hires: () => roster.list(), of: () => idle };
+    return { awaitedJobs: () => 0, working: () => false, hires: () => roster.list(), of: () => idle };
   };
 
   // Review P1 (integration/0963): the hire had settled and left the roster, but its answer was still unread on the
@@ -418,15 +418,15 @@ describe('a task-lifetime hire returns at once and its answer arrives as a messa
   test('a task hirer\'s answer is a later turn\'s while a hire\'s report waits unread on its rail', async () => {
     const scene = makeScene();
     await startRun(scene, { role: 'auditor', message: 'Audit the ledger.' });
-    expect(taskAnswerIsLater({ owed: hirerOwed(scene.roster), log: scene.log })).toBe(true);
+    expect(taskAnswerIsLater({ owed: hirerOwed(scene.roster), log: scene.log, queued: false })).toBe(true);
 
     await scene.report({ content: 'Totals reconcile.' });
     expect(scene.roster.list()).toEqual([]);
-    expect(taskAnswerIsLater({ owed: hirerOwed(scene.roster), log: scene.log })).toBe(true);
+    expect(taskAnswerIsLater({ owed: hirerOwed(scene.roster), log: scene.log, queued: false })).toBe(true);
 
     // Read by the turn that takes it up: nothing is owed any more.
     for (const row of scene.log.pending({ variant: 'subagent_report' })) scene.log.markConsumed(row.id, 'turn-read', 0, NOW);
-    expect(taskAnswerIsLater({ owed: hirerOwed(scene.roster), log: scene.log })).toBe(false);
+    expect(taskAnswerIsLater({ owed: hirerOwed(scene.roster), log: scene.log, queued: false })).toBe(false);
   });
 
   // Review P1 (integration/0963): the durable-only guard was the waiter's, and it kept the owner from deleting one.

@@ -181,7 +181,7 @@ import {
   initWebhookIngressTables,
   type WebhookDelivery, type WebhookDeliveryResult, type WebhookSecretStore,
   createTimerTrigger, cancelTrigger, gitHubPushOf, listTriggers, fireDueTriggers, retimeDailyTrigger, type TrustLevel,
-  WatchClaims, watchProviders, checkAnswerOf, resultOwed, type WatchOutcome, type WatchCheck,
+  WatchClaims, watchProviders, checkAnswerOf, resultOwed, owedReadsOf, type OwedReads, type WatchOutcome, type WatchCheck,
   type TriggerView,
   type MailAdmission, type MailArrival, type HandedMail, handedMailSignal, spillEventContent, unreadMailForTurn, MailTriageLane, triageMail,
   PeerHub, type PeerMessage, type ReceiveResult,
@@ -1175,7 +1175,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         if (actorPolicy(this.agentOf(actorId)).hirer === null) return 'none';
 
         const actor = this.agentBound(actorId);
-        const report = await hostedOwedReport(this.hostedSeams(), actor, turn, ended);
+        // Its chat's queue, and what is owed it here and has not crossed yet.
+        const report = await hostedOwedReport(this.hostedSeams(), actor, { ...turn, queued: turn.queued || this.deliveriesOwed(actorId) }, ended);
 
         return report === null ? 'none' : await hostedParentReport(this.hostedSeams(), actor, {
           text: report.content, status: report.status, mode: relay.mode, sequenceId: relay.sequenceId, ...(report.quiet === true && { quiet: true as const }),
@@ -3189,6 +3190,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * all: each such agent's wake, armed while it works, tells again.
    */
   private readonly agentsWorking = new Set<string>();
+
+  /** What an agent is owed, over its held reads and each hire's in turn: what `resultOwed` reads. A hire works from a
+   *  delivery owed it to its rest. */
+  private owedReadsOf(reference: ActorReference): OwedReads {
+    return owedReadsOf((agent) => ({
+      awaitedJobs: this.dynamicReadsOf(agent).awaitedJobs,
+      working: () => this.deliveriesOwed(agent.actorId) || this.agentsWorking.has(agent.actorId),
+      hires: () => this.hiresOf(agent),
+    }), reference);
+  }
 
   /** An agent's open work: its tasks tool, its jobs and its hires' roster rows are here, main's as any agent's. */
   private openWorkOf(actorId: string): OpenWork {

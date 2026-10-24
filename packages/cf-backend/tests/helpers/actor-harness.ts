@@ -221,8 +221,9 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   }
 
   /** Every agent's isolate at rest, as each answers for itself. */
-  async harnessAgentsIdle(): Promise<void> {
-    await this.harnessAgentFacets.idle();
+  /** Every agent at rest, or only `actorId`. */
+  async harnessAgentsIdle(actorId?: string): Promise<void> {
+    await this.harnessAgentFacets.idle(actorId === undefined ? undefined : this.agentOf(actorId).storageKey);
   }
 
   harnessResetAgentIsolate(storageKey: string): void {

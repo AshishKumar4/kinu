@@ -1002,12 +1002,12 @@ describe('the owner talking to a subagent does not wake its parent', () => {
         initEventsHubTables(hire.sql);
         const own = new SubagentRosterStore(hire.sql, hire.actor);
         own.ensureSchema();
-        const idle: OwedReads = { awaitedJobs: () => 0, hires: () => own.list(), of: () => idle };
+        const idle: OwedReads = { awaitedJobs: () => 0, working: () => false, hires: () => own.list(), of: () => idle };
 
         const owed = await hireTurnSettled({
           hirer: { roster, announce: () => {} },
           hire: { record: { name: 'researcher', lifetime: 'durable' }, owed: idle, log: new EventLog(hire.sql, hire.actor) },
-          turn: { reports: { spoke: input.reportedThisTurn ?? false, settled: false }, ownerDriven: input.ownerDriven, taskId: null },
+          turn: { reports: { spoke: input.reportedThisTurn ?? false, settled: false }, ownerDriven: input.ownerDriven, taskId: null, queued: false },
           ended: { ending: 'answered', assistantText: input.assistantText, narration: [] },
         });
 

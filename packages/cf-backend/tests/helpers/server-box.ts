@@ -1,6 +1,6 @@
 /**
- * A sandbox box whose one command, `node server.js`, serves for a while on a hand clock: what a long command that
- * outruns its call's window looks like to the job lane.
+ * A sandbox box whose commands run for a while on a hand clock: what a long command that outruns its call's window looks
+ * like to the job lane. `node server.js` serves a port meanwhile; any other command (a build) holds none.
  */
 import { JOB_STAMP_ENV } from '@kinu.run/core';
 import { execRecords } from '@kinu.run/devbox';
@@ -8,11 +8,13 @@ import type { HandClock } from '@kinu.run/test-utils';
 
 export const SERVING = 'serving on :3000\n';
 
-/** How long `node server.js` serves before it exits, on the job clock: past the 30 s window. */
+/** How long a command runs before it exits, on the job clock: past the 30 s window. */
 export const SERVES_MS = 60_000;
 
 /** The box's exposed port while `node server.js` serves, held by the command the job's stamp names. */
 const SERVED_PORT = 3000;
+
+const SERVER = 'node server.js';
 
 /** A command's options as the lane hands them to the box: the job's stamp rides in its environment. */
 interface BoxExec {
@@ -21,24 +23,29 @@ interface BoxExec {
 }
 
 /**
- * The box: `node server.js` prints its line at once and exits SERVES_MS on, or at the kill that ends it first. While it
- * runs it listens on SERVED_PORT, which the box exposes and names its listener by the stamp the command ran under.
+ * The box: a command prints its line at once and exits SERVES_MS on, or at the kill that ends it first. While
+ * `node server.js` runs it listens on SERVED_PORT, which the box exposes and names its listener by the stamp the command
+ * ran under.
  */
 export function serverBox(clock: HandClock, killed: string[] = []) {
   const running = new Map<string, (exitCode: number) => void>();
   const stamps = new Map<string, string | null>();
+  const listening = new Set<string>();
   const waiting: { readonly count: number; readonly resolve: () => void }[] = [];
   let served = 0;
 
-  const serve = ({ execId, env }: BoxExec, exit: (exitCode: number) => void): void => {
+  const serve = (command: string, { execId, env }: BoxExec, exit: (exitCode: number) => void): void => {
     const once = (exitCode: number): void => {
       stamps.delete(execId);
+      listening.delete(execId);
 
       if (running.delete(execId)) exit(exitCode);
     };
 
     running.set(execId, once);
     stamps.set(execId, env?.[JOB_STAMP_ENV] ?? null);
+
+    if (command === SERVER) listening.add(execId);
     clock.after(SERVES_MS, () => { once(0); });
     served += 1;
 
@@ -68,21 +75,21 @@ export function serverBox(clock: HandClock, killed: string[] = []) {
     listFiles: async () => ({ files: [] }),
     configureEgress: async () => {},
     restoreStatus: async () => ({ restoring: false, refused: undefined }),
-    getExposedPorts: async () => (stamps.size === 0 ? [] : [{ port: SERVED_PORT, name: undefined, url: `https://${String(SERVED_PORT)}-box-token.preview.test` }]),
-    portListeners: async () => [...stamps.values()].map((stamp) => ({ port: SERVED_PORT, pid: 1, stamp, command: 'node server.js' })),
+    getExposedPorts: async () => (listening.size === 0 ? [] : [{ port: SERVED_PORT, name: undefined, url: `https://${String(SERVED_PORT)}-box-token.preview.test` }]),
+    portListeners: async () => [...listening].map((execId) => ({ port: SERVED_PORT, pid: 1, stamp: stamps.get(execId) ?? null, command: SERVER })),
     // The box's processes outlive the workspace's activations: a restart of the workspace leaves them running.
     stampedProcesses: async (_stamp: string, value: string) => [...stamps.values()].flatMap((stamp, at) => (stamp === value ? [at + 1] : [])),
     // Whole, as the runtime answers a call that streams nothing.
-    exec: (_command: string, exec: BoxExec) => new Promise((resolve) => {
-      serve(exec, (exitCode) => { resolve({ stdout: SERVING, stderr: '', exitCode }); });
+    exec: (command: string, exec: BoxExec) => new Promise((resolve) => {
+      serve(command, exec, (exitCode) => { resolve({ stdout: SERVING, stderr: '', exitCode }); });
     }),
-    execStream: async (_command: string, exec: BoxExec) => {
+    execStream: async (command: string, exec: BoxExec) => {
       const exitCode = Promise.withResolvers<number>();
 
       const stdout = new ReadableStream<Uint8Array>({
         start(controller) {
           controller.enqueue(new TextEncoder().encode(SERVING));
-          serve(exec, (code) => {
+          serve(command, exec, (code) => {
             controller.close();
             exitCode.resolve(code);
           });

@@ -100,7 +100,7 @@ import {
   pricedModelCallEvent,
   type FactsStore,
   createAgentStores, type AgentConfigStore, type SetModelDeps, collectDynamicContext, dynamicReads, type DynamicReads, subagentDelegatesOf,
-  owedReadsOf, type OwedReads, type SubagentRosterEntry,
+  type SubagentRosterEntry,
   agentArtifactDirectory, agentHome, MAIN_AGENT,
   type SessionTranscript,
   type SqlExecutor,
@@ -3795,22 +3795,13 @@ export abstract class ActorAgent extends Agent<Env> {
     return held;
   }
 
-  /** What an agent is owed, over its held reads and each hire's in turn: what `resultOwed` reads. */
-  protected owedReadsOf(reference: ActorReference): OwedReads {
-    return owedReadsOf((agent) => {
-      const held = this.heldDynamicOf(agent);
-
-      return { jobs: { countAwaited: held.reads.awaitedJobs }, roster: { list: held.hires } };
-    }, reference);
-  }
-
   protected dynamicReadsOf(reference: ActorReference): DynamicReads {
     return this.heldDynamicOf(reference).reads;
   }
 
-  /** The agents it hired, as its dynamic block lists them: each roster row's phase is its status. */
-  protected delegatesOf(reference: ActorReference): readonly DynamicDelegate[] {
-    return this.heldDynamicOf(reference).delegates();
+  /** Its hires' roster rows, held as its dynamic block's delegates are. */
+  protected hiresOf(reference: ActorReference): readonly SubagentRosterEntry[] {
+    return this.heldDynamicOf(reference).hires();
   }
 
   /**

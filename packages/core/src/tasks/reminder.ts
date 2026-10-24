@@ -4,8 +4,6 @@
 
 import type { SubagentRosterEntry } from '../delegation/agents-tool';
 import type { ActorReference } from '../identity/actor-handle';
-import type { BackgroundJobStore } from '../jobs/store';
-import type { SubagentRosterStore } from '../subagents/roster';
 import type { ActiveRoster } from '../types/dynamic-context';
 import type { AgentTaskTree } from '../tools/task-store';
 import type { WorkMode } from '../types/turn';
@@ -30,38 +28,39 @@ export const taskReminderIdempotencyKey = (scope: string): string => `task-remin
 export interface OwedReads {
   /** Its running jobs that end on their own (`BackgroundJobStore.countAwaited`). */
   readonly awaitedJobs: () => number;
+  /** Whether a turn of its own is owed it or running. Read of a hire only: the agent asking is ending its own turn. */
+  readonly working: () => boolean;
   /** Its hires' roster rows. */
   readonly hires: () => readonly Pick<SubagentRosterEntry, 'status' | 'currentTask' | 'origin' | 'actorReference'>[];
   /** The same reads for one of its hires. */
   readonly of: (hire: ActorReference) => OwedReads;
 }
 
-/** An agent's owed reads over the job store and roster `bind` opens for it, and for each of its hires in turn. */
-export function owedReadsOf(
-  bind: (reference: ActorReference) => {
-    readonly jobs: Pick<BackgroundJobStore, 'countAwaited'>;
-    readonly roster: Pick<SubagentRosterStore, 'list'>;
-  },
-  reference: ActorReference,
-): OwedReads {
-  const { jobs, roster } = bind(reference);
-
-  return { awaitedJobs: () => jobs.countAwaited(), hires: () => roster.list(), of: (hire) => owedReadsOf(bind, hire) };
+/** An agent's owed reads as `bind` answers them for it, and for each of its hires in turn. */
+export function owedReadsOf(bind: (reference: ActorReference) => Omit<OwedReads, 'of'>, reference: ActorReference): OwedReads {
+  return { ...bind(reference), of: (hire) => owedReadsOf(bind, hire) };
 }
 
 /**
  * Whether a result owed to the agent will wake it, which a reminder or an answer now would only race: a job of its own
- * that ends on its own, a hire mid-turn on its assignment (`working`), or a hire whose assignment is still open while a
- * result is on its way to it in turn: a job of its own, a hire of its own, however deep. A hire that waits on the agent
- * (`awaiting_input`), one idle with nothing on its way, a process started to keep running, and an evolution lane's hire,
- * which answers the runtime, owe it nothing.
+ * that ends on its own, a hire mid-turn on its assignment (`working`), or a hire whose assignment is still open while it
+ * runs a turn of its own (its job's wake) or a result is on its way to it in turn: a job of its own, a hire of its own,
+ * however deep. A hire that waits on the agent (`awaiting_input`), one idle with nothing on its way, a process started
+ * to keep running, and an evolution lane's hire, which answers the runtime, owe it nothing.
  */
 export function resultOwed(reads: OwedReads): boolean {
   if (reads.awaitedJobs() > 0) return true;
 
-  return reads.hires().some((hire) => hire.origin !== 'evolution' && (hire.status === 'working'
-    || (hire.status === 'idle' && (hire.currentTask ?? '') !== '' && hire.actorReference !== null
-      && resultOwed(reads.of(hire.actorReference)))));
+  return reads.hires().some((hire) => {
+    if (hire.origin === 'evolution') return false;
+
+    if (hire.status === 'working') return true;
+
+    if (hire.status !== 'idle' || (hire.currentTask ?? '') === '' || hire.actorReference === null) return false;
+    const its = reads.of(hire.actorReference);
+
+    return its.working() || resultOwed(its);
+  });
 }
 
 // Awaiting-answer predicates are OMP's `todo-tracker.ts` verbatim, taking assistant text directly.

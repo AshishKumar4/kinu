@@ -34,8 +34,11 @@ export function taskAnswerIsLater(input: {
   readonly owed: OwedReads;
   readonly log: EventLog;
   readonly turnTaskId?: string;
+  /** Input waits for a later turn of its: queued in its chat, or owed it and not yet taken. */
+  readonly queued: boolean;
 }): boolean {
-  return resultOwed(input.owed)
+  return input.queued
+    || resultOwed(input.owed)
     || input.log.pending({ variant: 'subagent_task' }).some((row) => row.id !== input.turnTaskId)
     // Delivered to it and not yet answered by a turn of its own: its answer is that turn's.
     || input.log.openAssignments().some((id) => id !== input.turnTaskId)

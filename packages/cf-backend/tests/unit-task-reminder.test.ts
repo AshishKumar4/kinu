@@ -6,12 +6,14 @@
 import { expect, test } from 'bun:test';
 import type { OwnerAnswer } from '@kinu.run/core';
 import { setDiagnosticsSink } from '@kinu.run/core/obs';
-import { createRecordingLogger, present } from '@kinu.run/test-utils';
+import { createRecordingLogger, handClock, present } from '@kinu.run/test-utils';
 import { wrapDatabase } from '@kinu.run/core/identity';
 import { actorConnectionTag } from '@kinu.run/core';
 import { asPane, joinHarnessFibers } from './helpers/agents-sdk';
 import { agentSql, agentWakes, catalogTurn, driveUntil, gatewayWorkspace, jobsOver, until, workspaceMainActor } from './helpers/actor-harness';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
+import { SERVES_MS, serverBox } from './helpers/server-box';
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 
 /** A main agent that adds one task, starts on it and stops; every request it is sent, kept. */
 function openTaskWorkspace() {
@@ -229,31 +231,36 @@ test('an agent waiting on its hire is not reminded until the report lands, then 
   expect(reminders(asked)).toBe(2);
 });
 
-const BUILD_JOB = 'bgjob-release-build';
+const BUILD = 'bun run build:release';
 
 /**
- * Main adds a task and hires an agent for it; the hire starts a job of its own on the assignment (a row its runner would
- * write) and ends its turn saying so. Woken by the job's end, it answers. Main's requests, and the hire's, kept.
+ * Main adds a task and hires an agent for it, which runs the release build on the computer: the build outruns its call's
+ * window into a job of the hire's own, and the hire ends its turn saying it started. Woken by the job's end, it answers.
+ * `lastStep` runs as the hire writes its words on the started build; `woken` as it writes its answer. Main's requests,
+ * kept. Its waits join no fiber: the build's job is one, and runs until the clock moves.
  */
-function hireWithJobWorkspace(lifetime: 'durable' | 'task') {
+function hireWithJobWorkspace(lifetime: 'durable' | 'task', hooks: { lastStep?: () => Promise<void>; woken?: () => Promise<void> } = {}) {
   const asked: string[] = [];
-  const hireStarted = Promise.withResolvers<void>();
-  const jobStarted = Promise.withResolvers<void>();
+  const clock = handClock(Date.now());
 
   const gateway = stubAiBinding(async (run) => {
     const { messages } = requestOf(run);
     const sent = JSON.stringify(messages);
     const results = messages.filter((message) => message.role === 'tool').length;
 
+    // The hire, woken by its job's end, in the conversation its assignment opened.
+    if (sent.includes('Background shell job')) {
+      await hooks.woken?.();
+
+      return chatCompletion(run, 'The release build finished.');
+    }
+
     if (openingOf(run).includes('Build the release.')) {
-      hireStarted.resolve();
-      await jobStarted.promise;
+      if (results === 0) return toolCallCompletion(run, { tool: 'shell', args: { command: BUILD, runtime: 'computer' } }, 'call_build');
+      await hooks.lastStep?.();
 
       return chatCompletion(run, 'Started the release build; I will report when it finishes.');
     }
-
-    // The hire, woken by its job's end.
-    if (openingOf(run).includes(BUILD_JOB)) return chatCompletion(run, 'The release build stopped before it finished.');
 
     asked.push(sent);
 
@@ -266,70 +273,117 @@ function hireWithJobWorkspace(lifetime: 'durable' | 'task') {
     return chatCompletion(run, 'Waiting on the build.');
   });
 
-  const workspace = gatewayWorkspace(gateway);
+  // One box, whichever agent's runtime asks for it, as one workspace has.
+  const box = serverBox(clock);
+  const workspace = gatewayWorkspace(gateway, { container: true, box: () => box, jobClock: clock });
   const main = workspaceMainActor(workspace.db).actorId;
+  // The owner's egress vault is read before a sandbox command runs.
+  workspace.agent.harnessDeclareEnv({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
+
+  const hire = () => present(
+    wrapDatabase(workspace.db).sql<{ actorId: string }>`SELECT actor_id AS actorId FROM workspace_actors WHERE parent_actor_id = ${main}`[0]?.actorId,
+    'the hire',
+  );
 
   return {
-    asked, workspace,
-    /** The owner asks; the hire starts its job and ends its turn; every turn that owed main something has run. */
-    hireRunsItsJob: async () => {
+    asked, clock, workspace, main, hire,
+    /** The owner asks; the hire's build outruns its call's window once the box runs it. */
+    shipRelease: async () => {
       await workspace.agent.send('Ship the release.', crypto.randomUUID(), []);
-      await hireStarted.promise;
-
-      const [hire] = wrapDatabase(workspace.db).sql<{ actorId: string; name: string }>`
-        SELECT actor_id AS actorId, name FROM workspace_actors WHERE parent_actor_id = ${main}`;
-
-      const hired = present(hire, 'the hired agent');
-
-      jobsOver(workspace.db, hired.actorId).create({ id: BUILD_JOB, kind: 'shell', workMode: 'build', label: 'bun run build:release', now: Date.now() });
-      jobStarted.resolve();
-      await until(() => agentSql(workspace, hired.actorId)<{ x: number }>`SELECT 1 AS x FROM run_events WHERE type = 'run_end'`.length > 0, "the hire's turn never ended");
+      // The call's window, armed ahead of the box reaching the command, then the build's life on the box.
+      await clock.whenArmed(2);
+      clock.tick();
+    },
+    /** Every agent at rest, or only `actorId`, with what their settled turns owed run. */
+    settled: async (actorId?: string) => {
+      await workspace.agent.harnessAgentsIdle(actorId);
       await workspace.agent.terminalRetryPass();
-      await joinHarnessFibers();
-
-      return hired;
+      await workspace.agent.harnessAgentsIdle(actorId);
     },
   };
 }
 
 // The owner, 2026-10-24: "what about if the agent has a subagent that has a background job and isn't technically
 // waiting on it, and thus isn't working but still the main agent shouldnt be reminded right?" A hire that ended its turn
-// on a job of its own is still working for its hirer: its answer comes when the job ends.
-test("an agent whose hire ended its turn on a job of its own is not reminded until that work ends", async () => {
-  const { asked, workspace, hireRunsItsJob } = hireWithJobWorkspace('durable');
-  const hired = await hireRunsItsJob();
+// on a job of its own is still working for its hirer, and so is the turn its job's end wakes: its answer comes after.
+test("an agent whose hire ended its turn on a job of its own is not reminded until the hire answers", async () => {
+  const woken = Promise.withResolvers<void>();
+  const answer = Promise.withResolvers<void>();
 
-  // The hire's turn-end words reached main, which ended its own turn on them: no reminder while the job runs.
-  expect(asked.some((sent) => sent.includes('Started the release build'))).toBe(true);
+  const { asked, clock, workspace, main, shipRelease, settled } = hireWithJobWorkspace('durable', {
+    woken: async () => {
+      woken.resolve();
+      await answer.promise;
+    },
+  });
+
+  await shipRelease();
+  // The hire's turn-end words reached main, which ended its own turn on them: no reminder while the build runs.
+  await driveUntil(workspace, "the hire's words never reached main", () => asked.some((sent) => sent.includes('Started the release build')));
+  await settled();
   expect(reminders(asked)).toBe(0);
 
-  // The job ends (the owner's cancel); the hire, woken, says so; then the open task is reminded, once.
-  expect(await workspace.agent.cancelBackgroundJob(BUILD_JOB, hired.name)).toEqual({ ok: true });
+  // The build ends and wakes the hire; the owner speaks to main while the hire writes its answer: still none.
+  clock.advance(SERVES_MS);
+  await woken.promise;
+  await workspace.agent.send('Any news?', crypto.randomUUID(), []);
+  await driveUntil(workspace, 'the owner was never heard', () => asked.some((sent) => sent.includes('Any news?')));
+  await settled(main);
+  expect(reminders(asked)).toBe(0);
+
+  // The hire answers; then the open task is reminded, once.
+  answer.resolve();
   await driveUntil(workspace, 'the open task was never reminded after the hire answered', () => reminders(asked) > 0);
-  await workspace.agent.terminalRetryPass();
+  await settled();
 
   expect({
-    answeredFirst: asked.findIndex((sent) => sent.includes('stopped before it finished')) < asked.findIndex((sent) => reminders([sent]) > 0),
+    answeredFirst: asked.findIndex((sent) => sent.includes('The release build finished')) < asked.findIndex((sent) => reminders([sent]) > 0),
     reminders: reminders(asked),
   }).toEqual({ answeredFirst: true, reminders: 1 });
 });
 
-// A task hire's reply is its one answer: one sent while a job of its own runs on the question was its last word on it,
-// and the job's result never reached the agent that asked.
-test("a task hire's words while a job of its own runs are not its answer; its answer comes when the job ends", async () => {
-  const { asked, workspace, hireRunsItsJob } = hireWithJobWorkspace('task');
-  const hired = await hireRunsItsJob();
+// A task hire's reply is its one answer: one sent while a job of its own runs on the question, or as the job ends during
+// its last step, was its last word, and the job's result never reached the agent that asked.
+for (const ends of ['after its turn', 'during its last step'] as const) {
+  test(`a task hire's words on a job of its own are not its answer; its answer comes once the job ends ${ends}`, async () => {
+    const lastStep = Promise.withResolvers<void>();
 
-  expect({ interim: asked.some((sent) => sent.includes('Started the release build')), reminders: reminders(asked) })
-    .toEqual({ interim: false, reminders: 0 });
+    const scene = hireWithJobWorkspace('task', ends === 'after its turn' ? {} : {
+      lastStep: async () => {
+        scene.clock.advance(SERVES_MS);
 
-  expect(await workspace.agent.cancelBackgroundJob(BUILD_JOB, hired.name)).toEqual({ ok: true });
-  await driveUntil(workspace, "the hire's answer never reached main", () => asked.some((sent) => sent.includes('stopped before it finished')));
-  await driveUntil(workspace, 'the open task was never reminded after the answer', () => reminders(asked) > 0);
+        while (jobsOver(scene.workspace.db, scene.hire()).listRunning().items.length > 0) await new Promise((resolve) => { setImmediate(resolve); });
+        lastStep.resolve();
+      },
+    });
 
-  expect({ interim: asked.some((sent) => sent.includes('Started the release build')), reminders: reminders(asked) })
-    .toEqual({ interim: false, reminders: 1 });
-});
+    const { asked, workspace } = scene;
+    const interim = () => asked.some((sent) => sent.includes('Started the release build'));
+
+    await scene.shipRelease();
+
+    // Its model call is the suite's until the build has ended under it.
+    if (ends === 'during its last step') await lastStep.promise;
+
+    if (ends === 'after its turn') {
+      await driveUntil(workspace, "the hire's turn never ended", () => agentSql(workspace, scene.hire())<{ x: number }>`
+        SELECT 1 AS x FROM run_events WHERE type = 'run_end'`.length > 0);
+      await scene.settled();
+      expect({ interim: interim(), reminders: reminders(asked) }).toEqual({ interim: false, reminders: 0 });
+      scene.clock.advance(SERVES_MS);
+    }
+
+    await driveUntil(workspace, "the hire's answer never reached main", () => asked.some((sent) => sent.includes('The release build finished')));
+    await driveUntil(workspace, 'the open task was never reminded after the answer', () => reminders(asked) > 0);
+    await scene.settled();
+
+    expect({
+      interim: interim(),
+      answeredFirst: asked.findIndex((sent) => sent.includes('The release build finished')) < asked.findIndex((sent) => reminders([sent]) > 0),
+      reminders: reminders(asked),
+    }).toEqual({ interim: false, answeredFirst: true, reminders: 1 });
+  });
+}
 
 // A process started to keep running owes the agent nothing: a preview server beside an open task, unrelated to it,
 // must not silence the reminder however long it runs.

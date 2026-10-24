@@ -6,7 +6,7 @@ import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
 import { EventLog, titleActorFromMessage, spawnSeatedHead, receiveSubagentEvent, subagentForkContext, type SubagentInheritedContext, inheritedAsModelMessage, explorationActorKey, reclaimSettledRunActors, actorReferenceOf, registeredParent, terminalTaskReport, hireTurnSettled, defaultLoopOrigin, type OwedReads, type ActorHost, type ActorReference, type BoundActor, type HeadId, type HeadInput, type RunInference, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubagentEventResult, type SubagentReportOrigin, type SubagentReportHandoff, type SubagentReportStatus, type SubagentRosterStore, type SubagentRuntime, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
 import { attempt, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import type {
-  AgentToolDescriptor, ArtifactOverrides, DiscoverOpts, DynamicReads, ExecutionKey, ExecutionLane, FrozenAuthority, HeadCapture, HeadSeat, JsonObject, OperationProfile, OwedReport, PreparedAgentTurn,
+  AgentToolDescriptor, ArtifactOverrides, DiscoverOpts, DynamicReads, ExecutionKey, ExecutionLane, FrozenAuthority, HeadCapture, HeadSeat, HiredTurn, JsonObject, OperationProfile, OwedReport, PreparedAgentTurn,
   ReceiptExecution, ReportDeps, RunTurnSources, TaskPlan, TurnAssemblySources, TurnLedgers,
   TurnOpening, TurnSurface,
 } from '@kinu.run/core';
@@ -404,7 +404,7 @@ export function hostedRetryTools(seams: HostedActorSeams, reference: ActorRefere
 export function hostedOwedReport(
   seams: HostedActorSeams,
   actor: BoundActor,
-  turn: { readonly reports: SubagentReportLedger; readonly ownerDriven: boolean; readonly taskId: string | null },
+  turn: HiredTurn,
   ended: { readonly ending: TaskTurnEnding; readonly assistantText: string; readonly narration: readonly string[] },
 ): Promise<OwedReport | null> {
   return settle(Effect.gen(function* () {

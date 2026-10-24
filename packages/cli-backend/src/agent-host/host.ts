@@ -631,6 +631,7 @@ export class LocalAgentHost {
         host: input.tree.host,
         orchestration,
         jobsDriven: input.tree.jobsDriven,
+        pumping: (actorId) => this.byActor.get(actorId)?.session.pumping() ?? false,
         // One queue per workspace: a hire parks on its root's, and the root's wakes the hire it answers.
         ...(input.parentKey === null
           ? { wakeHire: (actorId: string, signal: AgentSignal) => this.wakeHire(input.tree, actorId, signal) }
@@ -1042,7 +1043,8 @@ export class LocalAgentHost {
           hirer: { roster: parent.roster, announce: () => { parent.tree.liveReads.moved(ROSTER_READS); } },
           hire: { record: child.actor.record, owed: child.session.owed(), log: child.eventLog },
           // With no relay state the roster still moves, and nothing is owed.
-          turn: { reports: child.relay ?? { spoke: false, settled: true }, ownerDriven: turn.ownerDriven, taskId: turn.taskId }, ended: turn,
+          turn: { reports: child.relay ?? { spoke: false, settled: true }, ownerDriven: turn.ownerDriven, taskId: turn.taskId, queued: child.session.inputWaits() },
+          ended: turn,
         });
       },
       sequenceId: (messageId) => `${child.key}:turn-end:${messageId}`,
