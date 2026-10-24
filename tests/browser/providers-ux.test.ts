@@ -165,13 +165,10 @@ describe('the providers list', () => {
       await page.waitForSelector(CLAUDE);
 
 
-      // Not connected, its one button is the sign-in; its page opens, then its code is pasted back.
+      // Not connected, its one button is the sign-in: its page opens with that click, then its code is pasted back.
       await rigSignInWindows(page);
       await page.click(`${CLAUDE} button`);
-      const authorize = await page.waitForSelector(`${CLAUDE} [data-sign-in-open][href^="https://claude.ai/oauth/authorize"]`);
-      expect(authorize).not.toBeNull();
-      await page.click(`${CLAUDE} [data-sign-in-open]`);
-
+      await page.waitForSelector(`${CLAUDE} [data-sign-in-paste] input`);
       await page.type(`${CLAUDE} [data-sign-in-paste] input`, 'stale-code');
       await page.keyboard.press('Enter');
       await page.waitForFunction(() => (document.querySelector('[data-provider="Claude"]')?.textContent ?? '').includes('Invalid authorization code'));
@@ -237,7 +234,9 @@ describe('the providers list', () => {
     });
   });
 
-  test("Claude's sign-in opens in its popup, which closes once the pasted code connects", async () => {
+  // The owner, 2026-10-24: "why do i have to click twice on the claude button?" One click opens the popup, at Claude's
+  // address once the sign-in has it, and the page goes straight to the code.
+  test("Claude's sign-in opens in its popup at one click, which closes once the pasted code connects", async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       await page.setViewport({ width: 1280, height: 1100 });
@@ -246,8 +245,7 @@ describe('the providers list', () => {
       await rigSignInWindows(page);
 
       await page.click(`${CLAUDE} button`);
-      await page.waitForSelector(`${CLAUDE} [data-sign-in-open]`);
-      await page.click(`${CLAUDE} [data-sign-in-open]`);
+      await page.waitForSelector(`${CLAUDE} [data-sign-in-paste] input`);
       const opened = await signInWindowSeen(page);
 
       await page.type(`${CLAUDE} [data-sign-in-paste] input`, 'good-code');
@@ -257,7 +255,7 @@ describe('the providers list', () => {
       expect({ opened, ended: (await signInWindowSeen(page)).closed }).toEqual({
         opened: {
           window: POPUP, at: 'https://claude.ai/oauth/authorize?redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&state=gallery',
-          closed: false, linkOpensTab: 'false',
+          closed: false, linkOpensTab: null,
         },
         ended: true,
       });
@@ -275,10 +273,33 @@ describe('the providers list', () => {
       await page.waitForSelector(CLAUDE);
       await rigSignInWindows(page, true);
       await page.click(`${CLAUDE} button`);
-      await page.waitForSelector(`${CLAUDE} [data-sign-in-open]`);
+      const link = await page.waitForSelector(`${CLAUDE} [data-sign-in-open]`);
+      const href = await link?.evaluate((open) => open.getAttribute('href'));
+
       await page.click(`${CLAUDE} [data-sign-in-open]`);
 
-      expect(await signInWindowSeen(page)).toEqual({ window: null, at: null, closed: false, linkOpensTab: 'true' });
+      expect({ href, seen: await signInWindowSeen(page) }).toEqual({
+        href: expect.stringMatching(/^https:\/\/claude\.ai\/oauth\/authorize\?/u), seen: { window: null, at: null, closed: false, linkOpensTab: 'true' },
+      });
+      await page.close();
+    });
+  });
+
+  // A sign-in that could not start closes the popup its click opened, and says why where it began.
+  test("Claude's sign-in that cannot start closes its popup and says so", async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      await page.setViewport({ width: 1280, height: 1100 });
+      await page.goto(`${origin}/gallery.html?frame=usersettingsstate&section=providers&claude=down`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector(CLAUDE);
+      await rigSignInWindows(page);
+      await page.click(`${CLAUDE} button`);
+      await page.waitForSelector(`${CLAUDE} [data-claude-connect="start"] [role="alert"]`);
+
+      expect({ seen: await signInWindowSeen(page), steps: await page.$(`${CLAUDE} [data-claude-connect="paste"]`) }).toEqual({
+        seen: { window: POPUP, at: null, closed: true, linkOpensTab: null }, steps: null,
+      });
       await page.close();
     });
   });
