@@ -208,3 +208,26 @@ test("a person's delete answers before its teardown, which its own job lands acr
   // The first activation's teardown never answered: the second's job landed it on its own.
   expect(firstEnded).toEqual([]);
 });
+
+// A teardown calls into its workspace, which calls back into the account, and an alarm's work went on from inside that
+// call: one alarm that ran a burst of deletions went a call deeper with each, and the deepest failed "Subrequest depth
+// limit exceeded" (staging 0e47a6958, 2026-10-24: three of 37). Each alarm tears down one; the next is due at once.
+test("a burst of a person's deletes is torn down one per alarm, each alarm the next one's", async () => {
+  const user = createTestUserDO({ durableObjectId: OWNER });
+  const owner = await testOwner();
+  const names = ['ledger', 'drafts', 'archive'];
+
+  for (const name of names) await user.userDO.registerWorkspace(owner, name);
+
+  for (const name of names) await user.userDO.requestWorkspaceRemoval(owner, name, OWNER);
+
+  const torn: number[] = [];
+
+  for (const _ of names) {
+    await user.userDO.alarm();
+    torn.push(user.destroyedWorkspaces.length);
+  }
+
+  expect({ torn, destroyed: [...user.destroyedWorkspaces].sort(), jobs: user.db.query<{ id: string }, []>("SELECT id FROM cf_agents_jobs WHERE id LIKE 'workspace-deletion:%'").all() })
+    .toEqual({ torn: [1, 2, 3], destroyed: ['archive', 'drafts', 'ledger'], jobs: [] });
+});

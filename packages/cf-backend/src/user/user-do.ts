@@ -1372,6 +1372,12 @@ export class UserDO extends Agent<Env> {
     .notFound(async (c) => super.fetch(c.req.raw))
     .onError(rethrow);
 
+  /** Each alarm tears down at most one workspace (`WorkspaceDeletionJobs.alarmBegins`). */
+  override async alarm(): Promise<void> {
+    this.workspaceDeletions.alarmBegins();
+    await super.alarm();
+  }
+
   /** Storage a release's tables step has not reached answers every socket and request with why, as every RPC does. */
   override async fetch(request: Request): Promise<Response> {
     if (this.storageRefusal !== undefined) return Response.json(refusalOf(this.storageRefusal), { status: ERROR_STATUS[this.storageRefusal.code] });
