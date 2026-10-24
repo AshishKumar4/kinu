@@ -456,12 +456,19 @@ describe('account panels', () => {
       try {
         await page.waitForSelector('[role="dialog"]');
         await settleAccountFixture(page);
+        // Its popup, opened at the one click and sent to Anthropic's page once the sign-in has its address.
+        await page.evaluate(() => {
+          const popup = { opener: null, closed: false, location: { set href(at: string) { document.documentElement.dataset.claudeAt = at; } }, close() {} };
+
+          // SAFETY: constructed above with every member `openProviderWindow` and its callers use of a window: `opener`,
+          // `closed`, `location.href` and `close`.
+          window.open = () => popup as Window;
+        });
         await page.click('[data-provider="Claude"] button');
-        await page.waitForSelector(`${claude}[data-claude-connect="paste"] [data-sign-in-open]`);
-        expect(new URL(await page.$eval(`${claude} [data-sign-in-open]`, (open) => open.getAttribute('href') ?? '')).searchParams.get('redirect_uri'))
+        await page.waitForSelector(CLAUDE_CODE);
+        expect(new URL(await page.evaluate(() => document.documentElement.dataset.claudeAt ?? '')).searchParams.get('redirect_uri'))
           .toBe('https://platform.claude.com/oauth/code/callback');
 
-        await pressOpen(page, claude);
         await page.type(CLAUDE_CODE, 'bad-code#gallery');
         await page.keyboard.press('Enter');
         await page.waitForSelector(`${claude} [data-sign-in-paste] [role="alert"]`);
@@ -538,8 +545,8 @@ describe('account panels', () => {
         await pressOpen(page, '[data-chatgpt-way="here"]');
         await page.waitForSelector(CHATGPT_ADDRESS);
         await page.type(CHATGPT_ADDRESS, 'http://127.0.0.1:1455/auth/callback?code=abc&state=xyz');
+        // One click opens Claude's page and its code field.
         await page.click('[data-provider="Claude"] button');
-        await pressOpen(page, '[data-claude-connect]');
         await page.waitForSelector(code);
         await page.type(code, 'good-code');
 
