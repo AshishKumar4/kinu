@@ -4,13 +4,14 @@
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  asFetchFunction, BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest,
+  asFetchFunction, BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest, sandboxIdForWorkspace,
   type ProfileCatalog, type ProfileCatalogEnvelope,
 } from '@kinu.run/core';
 import { handleCreateWorkspaceRequest, type CreateWorkspaceEnv } from '../src/user/workspace-access';
 import { createTestUserDO, provisionTestWorkspace, TEST_CREDENTIAL_ENCRYPTION_KEY, testOwner } from './helpers/user-do';
 import { acrossRpc } from './helpers/jsrpc-stub';
 import { createCloudWorkspaceForUser, type CloudWorkspaceRegistry } from '../src/user/workspace-create';
+import { placementFor } from '../src/user/workspace-placement';
 import { Hono } from 'hono';
 import type { FamilyEnv } from '../src/api/context';
 import { serveFamily } from './helpers/api';
@@ -58,6 +59,7 @@ async function postCreate(
     async ensureWorkspaceCapability() {},
     async registerWorkspace(caller: UserCaller, name: string, displayName?: string, options?: Parameters<CloudWorkspaceRegistry['registerWorkspace']>[3]) {
       registered.push(name);
+      calls.push('registered');
 
       if (register !== undefined) return await register(caller, name, displayName, options);
 
@@ -71,7 +73,16 @@ async function postCreate(
   });
 
   const orchestrator = workspaceObject({
-    async claimOwner(userId: string) { return { owner: userId, capabilityHash: null }; },
+    async storedWorkspace() {
+      calls.push('read');
+
+      return 0;
+    },
+    async claimOwner(userId: string, placement?: string) {
+      calls.push(`claimed:${String(placement)}`);
+
+      return { owner: userId, capabilityHash: null };
+    },
     async setInitialDisplayName(displayName: string, nameOrigin: NameOrigin) { return { displayName, nameOrigin }; },
     async setSoul(soul: string) { return { soul, purpose: '' }; },
     async resetWorkspaceBaseline() { return { ok: true as const, capturedAt: 0, cleanupFailures: [] }; },
@@ -101,7 +112,23 @@ async function postCreate(
 
   const env: CreateWorkspaceEnv<string> = {
     UserDO: { idFromName: (name) => name, get: () => userDO },
-    OrchestratorAgent: { idFromName: (name) => name, get: () => orchestrator },
+    OrchestratorAgent: {
+      idFromName: (name) => name,
+      get: (_id, options) => {
+        calls.push(`reached:${String(options?.locationHint)}`);
+
+        return orchestrator;
+      },
+    },
+    KinuDevbox: {
+      getByName: (name, options) => ({
+        boxSize: async () => {
+          calls.push(`computer:${name}:${String(options?.locationHint)}`);
+
+          return { size: 'small' as const, chosen: undefined, running: undefined, startRefused: undefined, stalled: undefined };
+        },
+      }),
+    },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   };
 
@@ -114,11 +141,15 @@ async function postCreate(
     const family = new Hono<FamilyEnv<CreateWorkspaceEnv<string>, object>>()
       .post('/api/user/workspaces', async (c) => handleCreateWorkspaceRequest({ request: c.req.raw, env: c.env, userId: USER_ID, userDO }));
 
-    const response = present(await serveFamily(family)(new Request('https://kinu.run/api/user/workspaces', {
+    const request = new Request('https://kinu.run/api/user/workspaces', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
-    }), env), 'an answer');
+    });
+
+    // Where Cloudflare read the owner's create from (kinu.run, 2026-10-24: Delhi).
+    Object.defineProperty(request, 'cf', { value: { continent: 'AS', longitude: '77.21' } });
+    const response = present(await serveFamily(family)(request, env), 'an answer');
 
     const error = response.ok ? null : v.parse(v.object({ error: v.string() }), await response.json()).error;
 
@@ -184,7 +215,7 @@ describe('a workspace that hires a new workspace', () => {
           OrchestratorAgent: { idFromName: (name) => name, get: () => born },
           CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
         },
-        userId: USER_ID, userDO, caller: hirer, input: { purpose: 'Draft the launch notes.' },
+        userId: USER_ID, userDO, caller: hirer, input: { purpose: 'Draft the launch notes.' }, placement: 'weur',
       });
 
       expect((await harness.userDO.listActiveWorkspaces(await testOwner())).map((workspace) => workspace.name)).toContain(entry.name);
@@ -192,6 +223,27 @@ describe('a workspace that hires a new workspace', () => {
       globalThis.fetch = originalFetch;
       harness.close();
     }
+  });
+});
+
+describe('where a new workspace runs', () => {
+  test('one made from Asia, and its computer, are first reached in western Europe before anything else can reach them', async () => {
+    // From Delhi, with no hint, the owner's workspace ran in Hong Kong, where Anthropic refuses every call.
+    const created = await postCreate({ name: AGENT, purpose: 'Review the checkout flow.' });
+
+    expect(created.status).toBe(201);
+    // Placed by a read before its row is published, then claimed with where it was placed, then its computer placed.
+    expect(created.calls.slice(0, 6)).toEqual(['reached:weur', 'read', 'registered', 'reached:weur', 'claimed:weur', `computer:${sandboxIdForWorkspace(AGENT)}:weur`]);
+    expect(created.calls.at(-1)).toBe('genesis');
+  });
+
+  test('a maker\'s continent picks a region the model providers serve', () => {
+    expect([
+      placementFor({ continent: 'NA', longitude: '-122.42' }), placementFor({ continent: 'NA', longitude: '-74.01' }),
+      placementFor({ continent: 'SA', longitude: '-46.63' }), placementFor({ continent: 'EU', longitude: '2.35' }),
+      placementFor({ continent: 'AF', longitude: '3.38' }), placementFor({ continent: 'AS', longitude: '114.17' }),
+      placementFor({ continent: 'OC', longitude: '151.21' }), placementFor(undefined),
+    ]).toEqual(['wnam', 'enam', 'enam', 'weur', 'weur', 'weur', 'oc', 'weur']);
   });
 });
 

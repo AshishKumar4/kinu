@@ -299,6 +299,8 @@ export function workspaceObject<Built extends Partial<CliAgentTarget>>(built: Bu
     createDurableWebhook: refuse('createDurableWebhook'),
     requestOverviewPush: refuse('requestOverviewPush'),
     previewAccess: refuse('previewAccess'),
+    // A create reaches every new workspace first with this read, to place it: none is stored yet.
+    storedWorkspace: async () => 0,
     ...built,
   };
 }

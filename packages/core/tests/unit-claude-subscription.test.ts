@@ -439,6 +439,19 @@ describe('the Claude subscription wire', () => {
     expect(recorded.emitted.filter((line) => line.event === 'provider.claude_usage_limit').map((line) => [line.code, line.fields])).toEqual([['budget', { model: 'claude-opus-4-7', account: 'work' }]]);
   });
 
+  test('a workspace in a region Anthropic refuses is told so in Anthropic\'s words, with where the call came from', async () => {
+    // As api.anthropic.com answered a Durable Object in HKG (2026-10-24): no `type: 'error'` envelope, so the SDK saw `Forbidden`.
+    const refused = () => new Response('{\n  "error": {\n    "type": "forbidden",\n    "message": "Request not allowed"\n  }\n}', {
+      status: 403, statusText: 'Forbidden', headers: { 'content-type': 'application/json', 'cf-ray': 'a4f8eb9cec2e03b7-HKG' },
+    });
+
+    const { sent, fetchFn } = wire([refused]);
+
+    await expect(turn(createClaudeProvider(), deps(fetchFn, [login('t')])))
+      .rejects.toThrow('Request not allowed: Anthropic does not serve its API in the country or region this call came from (Cloudflare\'s HKG data center).');
+    expect(sent.length).toBe(1);
+  });
+
   test('a subscription whose included usage is used up is a budget failure in the provider\'s words', async () => {
     const credits = () => new Response(JSON.stringify({ type: 'error', error: { type: 'rate_limit_error', message: 'Usage credits are required for this model.', details: { error_code: 'credits_required' } } }), {
       status: 429,
