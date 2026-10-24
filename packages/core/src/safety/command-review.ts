@@ -4,12 +4,17 @@
  * line's text where that reading cannot see what runs (`followed: false`), where a word of one of its programs expands,
  * and always for a deny. Under both stands the text review this one replaced ({@link scanCommand}): a reading that
  * misses an act, as lifo misreads a few constructs bash runs, leaves the line judged as it was, never weaker.
+ *
+ * What the reading cannot resolve fails closed: a word it cannot know may be any word, so a rule it may trip asks the
+ * owner, as does a line whose commands it cannot know at all (`unresolved`). A path it cannot know may be the user's.
  */
 
 import type { ShellCwd, ShellSession } from '../execution/shell-session';
 import { machinePath } from '../vfs/resolve';
 import { workspacePath } from '../vfs/workspace-path';
-import { commandsRun, programOf, readShell, wordRuns, type CommandRun, type ShellCommand, type ShellWord } from './shell-reading';
+import {
+  commandsRun, joinedWords, programOf, readShell, UNRESOLVED, wordRuns, type CommandRun, type CommandsRun, type ShellCommand, type ShellWord,
+} from './shell-reading';
 
 export type ApprovalDecision = 'allow' | 'warn' | 'gate' | 'deny';
 
@@ -43,8 +48,9 @@ interface Rule {
   name: string;
   why: string;
   harm: ApprovalHarm;
-  /** The rule over the commands the line runs; absent for one that is its signature wherever it appears. */
-  fires?: (runs: readonly CommandRun[]) => boolean;
+  /** The rule over the commands the line runs, `may` taking each word it cannot know as whatever trips it; absent for
+   *  one that is its signature wherever it appears. */
+  fires?: (runs: readonly CommandRun[], may: boolean) => boolean;
   /** The act in the line's text, read where the shell's reading does not see what runs. */
   signature: RegExp;
   /** The programs whose expanding words leave the rule to its signature too. */
@@ -52,13 +58,15 @@ interface Rule {
 }
 
 /** A rule over the commands the line runs. */
-const running = (test: (run: CommandRun) => boolean) => (runs: readonly CommandRun[]): boolean => runs.some(test);
+const running = (test: (run: CommandRun, may: boolean) => boolean) => (runs: readonly CommandRun[], may: boolean): boolean => runs.some((run) => test(run, may));
 
 /** A command's arguments, read as getopt reads them: short flags, long option names, and the operands. */
 interface Arguments {
   readonly short: ReadonlySet<string>;
   readonly long: ReadonlySet<string>;
   readonly operands: readonly ShellWord[];
+  /** A word the shell expands, which may be any flags and operands. */
+  readonly open: boolean;
 }
 
 function argumentsOf(words: readonly ShellWord[]): Arguments {
@@ -77,24 +85,30 @@ function argumentsOf(words: readonly ShellWord[]): Arguments {
     else for (const ch of flag.slice(1)) short.add(ch);
   }
 
-  return { short, long, operands };
+  return { short, long, operands, open: words.some((word) => word.literal === null) };
 }
 
 const argumentsAfter = (command: ShellCommand): Arguments => argumentsOf(command.words.slice(1));
 
 const literals = (words: readonly ShellWord[]): string[] => words.flatMap((word) => (word.literal === null ? [] : [word.literal]));
 
+/** Whether `word` is one `test` accepts; under `may`, a word the shell expands is. */
+const could = (word: ShellWord | undefined, may: boolean, test: (literal: string) => boolean): boolean => word !== undefined && (word.literal === null ? may : test(word.literal));
+
+const holds = (words: readonly ShellWord[], may: boolean, test: (literal: string) => boolean): boolean => words.some((word) => could(word, may, test));
+
 /** git's global options that take the next word as their value (git.c). */
 const GIT_VALUE_OPTIONS: ReadonlySet<string> = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--super-prefix']);
 
-/** A `git` command's subcommand and the words after it, past any number of global options. */
-function gitSubcommand(command: ShellCommand): { readonly name: string; readonly words: readonly ShellWord[] } | null {
+/** A `git` command's subcommand and the words after it, past any number of global options; under `may`, a word the
+ *  shell expands before it may be any subcommand (null). */
+function gitSubcommand(command: ShellCommand, may: boolean): { readonly name: string | null; readonly words: readonly ShellWord[] } | null {
   if (programOf(command) !== 'git') return null;
 
   for (let at = 1; at < command.words.length; at++) {
     const word = command.words[at]?.literal ?? null;
 
-    if (word === null) return null;
+    if (word === null) return may ? { name: null, words: command.words.slice(at) } : null;
 
     if (!word.startsWith('-')) return { name: word, words: command.words.slice(at + 1) };
 
@@ -104,15 +118,48 @@ function gitSubcommand(command: ShellCommand): { readonly name: string; readonly
   return null;
 }
 
-const gitRunning = (name: string, test: (words: readonly ShellWord[]) => boolean) => running(({ command }) => {
-  const sub = gitSubcommand(command);
+const gitRunning = (name: string, test: (words: readonly ShellWord[], may: boolean) => boolean) => running(({ command }, may) => {
+  const sub = gitSubcommand(command, may);
 
-  return sub !== null && sub.name === name && test(sub.words);
+  return sub !== null && (sub.name === name || sub.name === null) && test(sub.words, may);
 });
 
-const recursive = ({ short, long }: Arguments): boolean => short.has('r') || short.has('R') || long.has('recursive');
+const recursive = ({ short, long, open }: Arguments, may: boolean): boolean => short.has('r') || short.has('R') || long.has('recursive') || (may && open);
 
-const forced = ({ short, long }: Arguments): boolean => short.has('f') || long.has('force');
+const forced = ({ short, long, open }: Arguments, may: boolean): boolean => short.has('f') || long.has('force') || (may && open);
+
+/** The words a tool's subcommand may be, each with an operand that may follow it. Its first operand, and each later one
+ *  while the word before it may have taken it as a value (`npm --registry <url> publish`); a word the shell expands may
+ *  be none, or an option and its value, so it ends nothing, and past one the next operand may be the next known one. */
+function subcommands(command: ShellCommand): (readonly [ShellWord, ShellWord | undefined])[] {
+  const words = command.words.slice(1);
+  const flags = words.map(({ text }) => text.startsWith('-') && text !== '-');
+  const takes = words.map(({ literal, text }, at) => literal === null || (flags[at] === true && text !== '--' && !text.includes('=')));
+  const operands = words.flatMap((word, at) => (flags[at] === true ? [] : [{ word, at }]));
+  // From each operand on, the first known one: an expansion reads like any other, so one pair past a run of them stands
+  // for the run.
+  const known: (ShellWord | undefined)[] = [];
+
+  for (let at = operands.length - 1; at >= 0; at--) {
+    const word = operands[at]?.word;
+
+    known[at] = word?.literal === null ? known[at + 1] : word;
+  }
+
+  const candidates: (readonly [ShellWord, ShellWord | undefined])[] = [];
+
+  for (const [index, { word, at }] of operands.entries()) {
+    const next = operands[index + 1]?.word;
+
+    candidates.push([word, next]);
+
+    if (next?.literal === null && known[index + 1] !== undefined) candidates.push([word, known[index + 1]]);
+
+    if (word.literal !== null && takes[at - 1] !== true) break;
+  }
+
+  return candidates;
+}
 
 const is = (command: ShellCommand, ...programs: string[]): boolean => programs.includes(programOf(command) ?? '');
 
@@ -156,39 +203,64 @@ const PUBLISHERS = [
   'npm', 'pnpm', 'yarn', 'bun', 'cargo', 'poetry', 'uv', 'flit', 'hatch', 'twine', 'gem', 'mvn', 'gradle', 'gradlew', 'dotnet', 'python', 'python3',
 ];
 
-/** A registry publish, per ecosystem: each tool's subcommand, its first operand past its options. */
-function publishes(command: ShellCommand): boolean {
-  const words = literals(command.words.slice(1));
-  const [sub, next] = literals(argumentsAfter(command).operands);
+/** A registry publish, per ecosystem: each tool's subcommand, an operand its options may leave first. */
+function publishes(command: ShellCommand, may: boolean): boolean {
+  const words = command.words.slice(1);
   const program = programOf(command) ?? '';
 
-  if (program === 'yarn' && sub === 'npm') return next === 'publish';
+  const sub = (name: string, next?: string) => subcommands(command).some(([word, after]) => could(word, may, (literal) => literal === name)
+    && (next === undefined || could(after, may, (literal) => literal === next)));
 
-  if (['npm', 'pnpm', 'yarn', 'bun', 'cargo', 'poetry', 'uv', 'flit', 'hatch'].includes(program)) return sub === 'publish';
+  if (program === 'yarn' && sub('npm', 'publish')) return true;
 
-  if (program === 'twine') return sub === 'upload';
+  if (['npm', 'pnpm', 'yarn', 'bun', 'cargo', 'poetry', 'uv', 'flit', 'hatch'].includes(program)) return sub('publish');
 
-  if (program === 'gem') return sub === 'push';
+  if (program === 'twine') return sub('upload');
+
+  if (program === 'gem') return sub('push');
 
   // The `deploy` phase, or a goal of the deploy plugin by prefix or coordinates (`deploy:deploy-file`).
-  if (program === 'mvn') return words.some((word) => word === 'deploy' || word.startsWith('deploy:') || /(?:^|:)maven-deploy-plugin(?::|$)/u.test(word));
+  if (program === 'mvn') return holds(words, may, (word) => word === 'deploy' || word.startsWith('deploy:') || /(?:^|:)maven-deploy-plugin(?::|$)/u.test(word));
 
-  if (program === 'gradle' || program === 'gradlew') return words.some((word) => word.split(':').some((task) => task.startsWith('publish')));
+  if (program === 'gradle' || program === 'gradlew') return holds(words, may, (word) => word.split(':').some((task) => task.startsWith('publish')));
 
-  if (program === 'dotnet') return sub === 'nuget' && next === 'push';
+  if (program === 'dotnet') return sub('nuget', 'push');
 
-  if (program === 'python' || program === 'python3') return words.join(' ').includes('-m twine') && words.includes('upload');
+  if (program === 'python' || program === 'python3') {
+    if (literals(words).join(' ').includes('-m twine') && literals(words).includes('upload')) return true;
+    // Its options end at `-c`, `-m` or a script: a word before them the shell expands may be `-m twine upload`.
+    const end = words.findIndex(({ literal }) => literal !== null && (literal === '-c' || literal === '-m' || !literal.startsWith('-')));
+    const module = words[end]?.literal === '-m' ? words.slice(end + 1) : [];
+
+    return may && (words.slice(0, end === -1 ? undefined : end).some(({ literal }) => literal === null)
+      || (could(module[0], may, (literal) => literal === 'twine') && holds(module.slice(1), may, (literal) => literal === 'upload')));
+  }
 
   return false;
 }
 
 /** A recursive delete: `-r`, `-R` or `--recursive`, wherever among the flags. */
-const deletesRecursively = (command: ShellCommand): boolean => is(command, 'rm') && recursive(argumentsAfter(command));
+const deletesRecursively = (command: ShellCommand, may: boolean): boolean => is(command, 'rm') && recursive(argumentsAfter(command), may);
+
+const METADATA_IP = /\b169\.254\.169\.254\b/u;
+
+const GCP_METADATA = /\bmetadata\.google\.internal\b/u;
+
+/** A rule over every word a command the line runs holds, its quotes joined, wherever the line has it run. */
+const naming = (target: RegExp) => running(({ command }) => [...command.words, ...command.redirects.map(({ target: file }) => file)].some((word) => target.test(word.text)));
 
 /** Default rules, resolved by {@link reviewCommand}. `harm: 'local'`: damage stops at the machine. */
 const RULES: Rule[] = [
   {
-    fires: running(({ command }) => deletesRecursively(command) && argumentsAfter(command).operands.some((word) => ROOT_TARGET.test(word.text))),
+    fires: running(({ command }, may) => deletesRecursively(command, may) && command.words.slice(1).some((word) => {
+      if (ROOT_TARGET.test(word.text)) return true;
+
+      if (!may || word.literal !== null) return false;
+      // A word the shell expands may be `/`, unless it is a glob under a directory it names (`dist/*`, `/tmp/*`).
+      const directory = globDirectory(word, '/', '/');
+
+      return directory === null || (directory === '' && word.text.startsWith('/'));
+    })),
     decision: 'deny',
     name: 'rm-rf-root',
     signature: /\brm\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*(?:\s+(?:--[^\s]+|-[a-zA-Z]+))*\s+\/+(?=\s|$|[;&|])/,
@@ -203,9 +275,9 @@ const RULES: Rule[] = [
     harm: 'local',
   },
   {
-    fires: running(({ command }) => is(command, 'dd')
-      && literals(command.words).some((word) => /^if=\/dev\/(?:zero|urandom)$/iu.test(word))
-      && literals(command.words).some((word) => /^of=\/dev\/(?:sd[a-z]|nvme)/iu.test(word))),
+    fires: running(({ command }, may) => is(command, 'dd')
+      && holds(command.words, may, (word) => /^if=\/dev\/(?:zero|urandom)$/iu.test(word))
+      && holds(command.words, may, (word) => /^of=\/dev\/(?:sd[a-z]|nvme)/iu.test(word))),
     decision: 'deny',
     name: 'dd-overwrite-disk',
     signature: /\bdd\b(?=[^;|&\n]*if=\/dev\/(?:zero|urandom)\b)(?=[^;|&\n]*of=\/dev\/(?:sd[a-z]|nvme[^\s;|&]*))/i,
@@ -213,7 +285,7 @@ const RULES: Rule[] = [
     harm: 'local',
   },
   {
-    fires: running(({ command }) => /^mkfs(?:\.[a-z0-9]+)?$/iu.test(programOf(command) ?? '') && literals(command.words).some((word) => /^\/dev\/sd[a-z]/iu.test(word))),
+    fires: running(({ command }, may) => /^mkfs(?:\.[a-z0-9]+)?$/iu.test(programOf(command) ?? '') && holds(command.words, may, (word) => /^\/dev\/sd[a-z]/iu.test(word))),
     decision: 'deny',
     name: 'mkfs-physical-disk',
     signature: /\bmkfs(?:\.[a-z0-9]+)?\b[^;|&]*\/dev\/sd[a-z]/i,
@@ -256,7 +328,7 @@ const RULES: Rule[] = [
     harm: 'local',
   },
   {
-    fires: running(({ command }) => is(command, 'chmod') && literals(command.words.slice(1)).some((word) => word.split(',').some((mode) => SETUID_MODE.test(mode)))),
+    fires: running(({ command }, may) => is(command, 'chmod') && holds(command.words.slice(1), may, (word) => word.split(',').some((mode) => SETUID_MODE.test(mode)))),
     decision: 'gate',
     name: 'chmod-setuid',
     binaries: ['chmod'],
@@ -265,7 +337,11 @@ const RULES: Rule[] = [
     harm: 'local',
   },
   {
-    fires: running(({ command }) => is(command, 'chown', 'chgrp') && /^(?:root|0)(?:[:.]|$)/iu.test(argumentsAfter(command).operands[0]?.text ?? '')),
+    fires: running(({ command }, may) => {
+      const args = argumentsAfter(command);
+
+      return is(command, 'chown', 'chgrp') && (/^(?:root|0)(?:[:.]|$)/iu.test(args.operands[0]?.text ?? '') || (may && args.open));
+    }),
     decision: 'gate',
     name: 'chown-root',
     binaries: ['chown', 'chgrp'],
@@ -274,7 +350,7 @@ const RULES: Rule[] = [
     harm: 'local',
   },
   {
-    fires: running(({ command }) => deletesRecursively(command)),
+    fires: running(({ command }, may) => deletesRecursively(command, may)),
     decision: 'gate',
     name: 'rm-recursive',
     binaries: ['rm'],
@@ -283,7 +359,7 @@ const RULES: Rule[] = [
     harm: 'local',
   },
   {
-    fires: gitRunning('reset', (words) => literals(words).includes('--hard')),
+    fires: gitRunning('reset', (words, may) => holds(words, may, (word) => word === '--hard')),
     decision: 'gate',
     name: 'git-reset-hard',
     binaries: ['git'],
@@ -292,12 +368,12 @@ const RULES: Rule[] = [
     harm: 'local',
   },
   {
-    fires: (runs) => gitRunning('checkout', (words) => literals(words).some((word) => word === '--' || word === '.'))(runs)
+    fires: (runs, may) => gitRunning('checkout', (words) => holds(words, may, (word) => word === '--' || word === '.'))(runs, may)
       || gitRunning('restore', (words) => {
-        const { short, long } = argumentsOf(words);
+        const { short, long, open } = argumentsOf(words);
 
-        return !(short.has('S') || long.has('staged')) || short.has('W') || long.has('worktree');
-      })(runs),
+        return !(short.has('S') || long.has('staged')) || short.has('W') || long.has('worktree') || (may && open);
+      })(runs, may),
     decision: 'gate',
     name: 'git-discard-changes',
     binaries: ['git'],
@@ -306,7 +382,7 @@ const RULES: Rule[] = [
     harm: 'local',
   },
   {
-    fires: gitRunning('clean', (words) => forced(argumentsOf(words))),
+    fires: gitRunning('clean', (words, may) => forced(argumentsOf(words), may)),
     decision: 'gate',
     name: 'git-clean',
     binaries: ['git'],
@@ -315,7 +391,7 @@ const RULES: Rule[] = [
     harm: 'local',
   },
   {
-    fires: running(({ command }) => is(command, 'find') && literals(command.words).includes('-delete')),
+    fires: running(({ command }, may) => is(command, 'find') && holds(command.words, may, (word) => word === '-delete')),
     decision: 'gate',
     name: 'find-delete',
     binaries: ['find'],
@@ -324,7 +400,7 @@ const RULES: Rule[] = [
     harm: 'local',
   },
   {
-    fires: running(({ command }) => is(command, 'rsync') && literals(command.words).some((word) => word.startsWith('--del'))),
+    fires: running(({ command }, may) => is(command, 'rsync') && holds(command.words, may, (word) => word.startsWith('--del'))),
     decision: 'gate',
     name: 'rsync-delete',
     binaries: ['rsync'],
@@ -333,11 +409,12 @@ const RULES: Rule[] = [
     harm: 'local',
   },
   {
-    fires: running(({ command }) => {
-      const [sub, next] = literals(argumentsAfter(command).operands);
+    fires: running(({ command }, may) => {
+      const removes = forced(argumentsAfter(command), may);
 
-      return is(command, 'docker')
-        && ((sub === 'rm' && forced(argumentsAfter(command))) || (sub === 'container' && next === 'rm' && forced(argumentsAfter(command))) || (sub === 'system' && next === 'prune'));
+      return is(command, 'docker') && subcommands(command).some(([sub, next]) => (could(sub, may, (word) => word === 'rm') && removes)
+        || (could(sub, may, (word) => word === 'container') && could(next, may, (word) => word === 'rm') && removes)
+        || (could(sub, may, (word) => word === 'system') && could(next, may, (word) => word === 'prune')));
     }),
     decision: 'gate',
     name: 'docker-destructive',
@@ -347,10 +424,10 @@ const RULES: Rule[] = [
     harm: 'local',
   },
   {
-    fires: gitRunning('push', (words) => {
+    fires: gitRunning('push', (words, may) => {
       const pushed = argumentsOf(words);
 
-      return pushed.short.has('f') || [...pushed.long].some((name) => name.startsWith('force')) || pushed.operands.some((word) => word.text.startsWith('+'));
+      return pushed.short.has('f') || [...pushed.long].some((name) => name.startsWith('force')) || pushed.operands.some((word) => word.text.startsWith('+')) || (may && pushed.open);
     }),
     decision: 'gate',
     name: 'git-force-push',
@@ -360,7 +437,7 @@ const RULES: Rule[] = [
     harm: 'reaches_out',
   },
   {
-    fires: running(({ command }) => publishes(command)),
+    fires: running(({ command }, may) => publishes(command, may)),
     decision: 'gate',
     name: 'package-publish',
     binaries: PUBLISHERS,
@@ -370,14 +447,16 @@ const RULES: Rule[] = [
   },
 
   {
-    signature: /\b169\.254\.169\.254\b/,
+    fires: naming(METADATA_IP),
+    signature: METADATA_IP,
     decision: 'deny',
     name: 'cloud-metadata-ip',
     why: 'AWS/GCP/Azure cloud-metadata endpoint: common SSRF target.',
     harm: 'reaches_out',
   },
   {
-    signature: /\bmetadata\.google\.internal\b/,
+    fires: naming(GCP_METADATA),
+    signature: GCP_METADATA,
     decision: 'deny',
     name: 'gcp-metadata',
     why: 'GCP metadata endpoint.',
@@ -439,6 +518,39 @@ function underRoots(path: string, roots: readonly string[]): boolean {
   return roots.some((root) => path === root || path.startsWith(`${root}/`));
 }
 
+/** Expansions whose value is a number: an exit status, a count, a process id, arithmetic. */
+const NUMERIC = /\$[?#$!]|\$\(\((?:[^()]|\([^()]*\))*\)\)/gu;
+
+/** The directory every path a word the shell expands may name lies in, `..` resolved ('' for the root): a glob's, before
+ *  its first pattern. Null where it may be anywhere: a parameter, a substitution, a brace bash expands, a part of a glob
+ *  that may match `..`, another account's home. */
+function globDirectory(word: ShellWord, cwd: string, home: string): string | null {
+  const written = word.text.replace(NUMERIC, '0');
+
+  if (/[$`{]/u.test(written) || written.split('/').some((part) => /[*?[]/u.test(part) && /^[.[]/u.test(part))) return null;
+  const path = shellPath(written, cwd, home);
+
+  if (path === null) return null;
+  const glob = path.search(/[*?[]/u);
+
+  return path.slice(0, path.lastIndexOf('/', glob === -1 ? path.length : glob));
+}
+
+/** Whether a word may name a path under `roots`, read from `cwd`: a known one by its path, unless it is an option (whose
+ *  value `namesRoot` reads); one the shell expands by every path it may match. */
+function mayReach(word: ShellWord, cwd: string, home: string, roots: readonly string[]): boolean {
+  if (word.literal === null) {
+    const directory = globDirectory(word, cwd, home);
+
+    return directory === null || underRoots(directory, roots) || roots.some((root) => root.startsWith(`${directory}/`));
+  }
+
+  if (word.literal.startsWith('-')) return false;
+  const path = shellPath(word.literal, cwd, home);
+
+  return path === null || underRoots(path, roots);
+}
+
 /** On a user mount, by its first segment or once `..` resolves. */
 export function onUserRoots(path: string, roots: readonly string[]): boolean {
   return path.startsWith('/') && (roots.includes(`/${path.split('/')[1] ?? ''}`) || underRoots(workspacePath(path, '/'), roots));
@@ -462,14 +574,17 @@ function cdTarget(run: readonly ShellWord[], cwd: string, home: string): string 
  *  a line of n of them reaches 2^n; past this many the line's paths are unknown. */
 const CWD_BOUND = 64;
 
-/** `cwds` with each `cd` in `words` taken from every one of them, or null past {@link CWD_BOUND}. */
+/** `cwds` with each `cd` in `words` taken from every one of them, or null where one goes somewhere unknown, or past
+ *  {@link CWD_BOUND}. */
 function movedThrough(cwds: ReadonlySet<string>, words: readonly ShellWord[], home: string): Set<string> | null {
   const next = new Set(cwds);
 
   for (const cwd of cwds) {
     const moved = cdTarget(words, cwd, home);
 
-    if (moved !== undefined && moved !== null) next.add(moved);
+    if (moved === null) return null;
+
+    if (moved !== undefined) next.add(moved);
   }
 
   return next.size > CWD_BOUND ? null : next;
@@ -502,9 +617,7 @@ function commandFilesOwner(executor: GatedExecutor, command: string, session: Sh
 
   for (const { words } of runs) {
     for (const cwd of cwds) {
-      const reached = words.map(({ literal }) => (literal?.startsWith('-') ? null : shellPath(literal, cwd, session.home)));
-
-      if (reached.some((path) => path !== null && underRoots(path, roots))) return 'user';
+      if (words.some((word) => mayReach(word, cwd, session.home, roots))) return 'user';
     }
 
     cwds = movedThrough(cwds, words, session.home);
@@ -516,39 +629,39 @@ function commandFilesOwner(executor: GatedExecutor, command: string, session: Sh
 }
 
 /** A `mv` or `cp` destination: `-t`'s, else the last argument. */
-function copyTarget(step: ShellCommand): string | null | undefined {
-  const [verb, ...args] = step.words.map((word) => word.literal);
-
-  if (verb !== 'mv' && verb !== 'cp') return undefined;
-  const flag = args.indexOf('-t');
+function copyTarget(step: ShellCommand): ShellWord | undefined {
+  if (!is(step, 'mv', 'cp')) return undefined;
+  const args = step.words.slice(1);
+  const flag = args.findIndex((arg) => arg.literal === '-t');
 
   if (flag !== -1) return args[flag + 1];
-  const long = args.find((arg) => arg?.startsWith('--target-directory=') === true);
+  const long = args.find((arg) => arg.text.startsWith('--target-directory='));
 
-  return long === undefined ? args.at(-1) : long?.slice('--target-directory='.length) ?? null;
+  return long === undefined ? args.at(-1) : { literal: long.literal?.slice('--target-directory='.length) ?? null, text: long.text.slice('--target-directory='.length) };
 }
 
-/** Files a `>` or `&>` truncates; `>>` appends. */
-function redirectTargets(step: ShellCommand): Array<string | null> {
-  return step.redirects.flatMap((redirect) => (redirect.truncates ? [redirect.target.literal] : []));
-}
-
-function overwritesUserFiles(executor: GatedExecutor, command: string, session: ShellCwd | undefined, owner: FilesOwner): boolean {
+function overwritesUserFiles(executor: GatedExecutor, read: CommandsRun | null, session: ShellCwd | undefined, owner: FilesOwner): boolean {
   const roots = executor.shellSession?.userRoots() ?? [];
   const home = session?.home ?? '/';
 
   if (roots.length === 0) return false;
-  const reading = readShell(command);
 
   // A line whose writes this reading cannot see, that reaches the user's files, may replace one.
-  if (reading === null) return owner === 'user';
+  if (read === null) return owner === 'user';
   // As ownership reads a line: each `cd` kept beside the directory before it. Every command the line runs, a shell's
   // script's and a wrapper's included, is one that may write.
   let cwds: Set<string> | null = new Set([session?.cwd ?? '/']);
+  let writes = false;
+  let linked = false;
 
-  for (const { command: step } of commandsRun(reading).runs) {
-    const targets = [...redirectTargets(step), copyTarget(step)].filter((target): target is string | null => target !== undefined);
-    const relative = targets.some((target) => target === null || !/^[/~]/u.test(target));
+  for (const { command: step } of read.runs) {
+    // Files a `>` or `&>` truncates (`>>` appends), and where a move or copy lands.
+    const targets = [...step.redirects.flatMap((redirect) => (redirect.truncates ? [redirect.target] : [])), copyTarget(step)]
+      .filter((target): target is ShellWord => target !== undefined);
+
+    const relative = targets.some(({ literal }) => literal === null || !/^[/~]/u.test(literal));
+
+    writes ||= targets.length > 0;
 
     // From a directory that may be the user's, a relative write may land there; from one past those tracked, it may on
     // a line that reaches the user's files.
@@ -557,13 +670,15 @@ function overwritesUserFiles(executor: GatedExecutor, command: string, session: 
     if (relative && cwds === null) return owner === 'user';
 
     for (const cwd of cwds ?? [home]) {
-      if (targets.map((target) => shellPath(target, cwd, home)).some((path) => path !== null && underRoots(path, roots))) return true;
+      if (targets.some((target) => mayReach(target, cwd, home, roots))) return true;
+      // A link the line makes to the user's files may carry any write it makes there.
+      linked ||= is(step, 'ln', 'link') && step.words.slice(1).some((word) => mayReach(word, cwd, home, roots));
     }
 
     if (cwds !== null) cwds = movedThrough(cwds, step.words, home);
   }
 
-  return false;
+  return writes && linked;
 }
 
 const OVERWRITE: ApprovalRuleHit = {
@@ -572,10 +687,11 @@ const OVERWRITE: ApprovalRuleHit = {
 
 /** The rule table for whose files a command reaches, and any overwrite onto the user's mounts. */
 export function reviewShellCommand(executor: GatedExecutor, command: string, session: ShellCwd | undefined): ApprovalResult {
+  const line = lineRead(command);
   const owner = commandFilesOwner(executor, command, session);
-  const review = reviewCommand(command, owner);
+  const review = judged(line, owner);
 
-  if (!overwritesUserFiles(executor, command, session, owner)) return review;
+  if (!overwritesUserFiles(executor, line.read, session, owner)) return review;
   const hits = [...review.hits, OVERWRITE];
 
   return { decision: dominant(hits), hits };
@@ -692,34 +808,70 @@ function scanCommand(command: string): CommandScan {
   return { invoked, unquoted, opaque: [...invoked].some((program) => INLINE_INTERPRETERS.has(program)) };
 }
 
-/** No default owner: no caller silently picks a trust tier. */
-export function reviewCommand(command: string, filesOwner: FilesOwner): ApprovalResult {
-  const scan = scanCommand(command);
+/** A line as each reading of it a rule may be judged by holds it, read once per review. */
+interface LineRead {
+  readonly command: string;
+  readonly scan: CommandScan;
+  readonly read: CommandsRun | null;
+  /** The line as written, and as the shell joins its words (`169.254.169.''254`): what a signature reads. */
+  readonly texts: readonly string[];
+  /** Programs a word of which the shell expands. */
+  readonly expanding: ReadonlySet<string>;
+}
+
+function lineRead(command: string): LineRead {
   const reading = readShell(command);
   const read = reading === null ? null : commandsRun(reading);
-  const expanding = new Set(read?.runs.flatMap(({ command: run }) => (run.words.some((word) => word.literal === null) ? programOf(run) ?? [] : [])));
-  const agentsOwn = filesOwner === 'agent';
+  const joined = joinedWords(command);
 
+  return {
+    command, scan: scanCommand(command), read, texts: joined === null ? [command] : [command, joined],
+    expanding: new Set(read?.runs.flatMap(({ command: run }) => (run.words.some((word) => word.literal === null) ? programOf(run) ?? [] : []))),
+  };
+}
+
+/** Whether `r` trips on the line, may trip by a word the shell expands, or neither. */
+function tripped(r: Rule, { command, scan, read, texts, expanding }: LineRead): 'trips' | 'may' | null {
+  const fires = r.fires !== undefined && read !== null && r.fires(read.runs, false);
+
+  // The signature where the reading cannot see what runs, where a word of one of the rule's programs expands, and
+  // always for a deny or a rule that is only its signature.
+  const textToo = r.fires === undefined || r.decision === 'deny' || read === null || !read.followed
+    || (r.binaries?.some((binary) => expanding.has(binary)) ?? false);
+
+  const scanned = r.binaries !== undefined && !scan.opaque
+    ? r.binaries.some((binary) => scan.invoked.has(binary)) && r.signature.test(scan.unquoted)
+    : r.signature.test(command);
+
+  if (fires || scanned || (textToo && texts.some((text) => r.signature.test(text)))) return 'trips';
+
+  return r.fires !== undefined && read !== null && r.fires(read.runs, true) ? 'may' : null;
+}
+
+/** No default owner: no caller silently picks a trust tier. */
+export function reviewCommand(command: string, filesOwner: FilesOwner): ApprovalResult {
+  return judged(lineRead(command), filesOwner);
+}
+
+function judged(line: LineRead, filesOwner: FilesOwner): ApprovalResult {
   const hits: ApprovalRuleHit[] = [];
 
   for (const r of RULES) {
-    const fires = r.fires !== undefined && read !== null && r.fires(read.runs);
-
-    // The signature where the reading cannot see what runs, where a word of one of the rule's programs expands, and
-    // always for a deny or a rule that is only its signature.
-    const textToo = r.fires === undefined || r.decision === 'deny' || read === null || !read.followed
-      || (r.binaries?.some((binary) => expanding.has(binary)) ?? false);
-
-    const scanned = r.binaries !== undefined && !scan.opaque
-      ? r.binaries.some((binary) => scan.invoked.has(binary)) && r.signature.test(scan.unquoted)
-      : r.signature.test(command);
-
-    if (!fires && !scanned && !(textToo && r.signature.test(command))) continue;
+    const trip = tripped(r, line);
 
     // Local harm to the agent's own files is not gated; 'deny' is exempt.
-    if (agentsOwn && r.harm === 'local' && r.decision !== 'deny') continue;
-    hits.push({ decision: r.decision, rule: r.name, explanation: r.why });
+    if (trip === null || (filesOwner === 'agent' && r.harm === 'local' && r.decision !== 'deny')) continue;
+
+    // A deny a word the shell expands may trip is the owner's to answer.
+    hits.push(trip === 'trips'
+      ? { decision: r.decision, rule: r.name, explanation: r.why }
+      : { decision: r.decision === 'deny' ? 'gate' : r.decision, rule: r.name, explanation: `${r.why} (Possibly: part of it is known only when it runs.)` });
   }
+
+  const unresolved = line.read === null ? [UNRESOLVED.parse] : line.read.unresolved;
+
+  // What runs that the reading cannot know may be anything, on any executor.
+  if (unresolved.length > 0) hits.push({ decision: 'gate', rule: 'unresolved', explanation: `Not known before it runs: ${unresolved.join('; ')}.` });
 
   return { decision: dominant(hits), hits };
 }
