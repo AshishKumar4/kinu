@@ -453,8 +453,11 @@ const MODELS_FAIL = new URLSearchParams(location.search).get("models") === "fail
 /** `&cloudflare=off`: an account that has not connected Cloudflare, so its providers offer the connect. */
 const CLOUDFLARE_OFF = new URLSearchParams(location.search).get("cloudflare") === "off";
 
-/** `&claude=down`: Claude's sign-in cannot start. */
-const CLAUDE_DOWN = new URLSearchParams(location.search).get("claude") === "down";
+/** `&claude=down`: Claude's sign-in cannot start. `&claude=held`: it starts once `gallery:claude-start` releases it, so a
+ *  test sees what the click did before the start answered. */
+const CLAUDE_START = new URLSearchParams(location.search).get("claude");
+
+const claudeStartReleased = new Promise<void>((done) => { window.addEventListener("gallery:claude-start", () => { done(); }, { once: true }); });
 
 /** Workers AI's models, which an account offers only once Cloudflare is connected. */
 const WORKERS_AI_MODELS = CLOUDFLARE_OFF ? [] : [{ spec: "workers-ai/llama-4", label: "Llama 4", provider: "workers-ai", reasoningEfforts: [] }];
@@ -590,7 +593,12 @@ async function settingsSectionsFixture(path: string, method: string, body: BodyI
   }
 
   if (path === "/api/user/claude/start" && method === "POST") {
-    if (CLAUDE_DOWN) return fixtureJson({ error: "Claude's sign-in could not start" }, 503);
+    if (CLAUDE_START === "down") return fixtureJson({ error: "Claude's sign-in could not start" }, 503);
+
+    if (CLAUDE_START === "held") {
+      await claudeStartReleased;
+      document.documentElement.dataset.galleryClaudeStarted = "1";
+    }
 
     return fixtureJson({ url: "https://claude.ai/oauth/authorize?redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&state=gallery" });
   }

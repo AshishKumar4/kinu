@@ -14,7 +14,11 @@ const CHATGPT = '[data-provider="ChatGPT"]';
 async function rigSignInWindows(page: Page, refused = false): Promise<void> {
   await page.evaluate((refusing) => {
     const seen = document.documentElement.dataset;
-    const popup = { opener: null, location: { set href(at: string) { seen.signInAt = at; } }, close() { seen.signInClosed = 'yes'; } };
+
+    const popup = {
+      opener: null, location: { set href(at: string) { seen.signInAt = at; } },
+      get closed() { return seen.signInClosed === 'yes'; }, close() { seen.signInClosed = 'yes'; },
+    };
 
     window.open = (_url, _target, features) => {
       if (refusing) return null;
@@ -234,19 +238,24 @@ describe('the providers list', () => {
     });
   });
 
-  // The owner, 2026-10-24: "why do i have to click twice on the claude button?" One click opens the popup, at Claude's
-  // address once the sign-in has it, and the page goes straight to the code.
+  // The owner, 2026-10-24: "why do i have to click twice on the claude button?" One click opens the popup, at the click
+  // and before the sign-in's start answers, then sends it to Claude's address, and the page goes straight to the code.
   test("Claude's sign-in opens in its popup at one click, which closes once the pasted code connects", async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       await page.setViewport({ width: 1280, height: 1100 });
-      await page.goto(`${origin}/gallery.html?frame=usersettingsstate&section=providers`, { waitUntil: 'networkidle0' });
+      await page.goto(`${origin}/gallery.html?frame=usersettingsstate&section=providers&claude=held`, { waitUntil: 'networkidle0' });
       await page.waitForSelector(CLAUDE);
       await rigSignInWindows(page);
 
       await page.click(`${CLAUDE} button`);
+      const atClick = await signInWindowSeen(page);
+
+      await page.evaluate(() => { window.dispatchEvent(new Event('gallery:claude-start')); });
       await page.waitForSelector(`${CLAUDE} [data-sign-in-paste] input`);
       const opened = await signInWindowSeen(page);
+
+      expect(atClick).toEqual({ window: POPUP, at: null, closed: false, linkOpensTab: null });
 
       await page.type(`${CLAUDE} [data-sign-in-paste] input`, 'good-code');
       await page.keyboard.press('Enter');
@@ -281,6 +290,49 @@ describe('the providers list', () => {
       expect({ href, seen: await signInWindowSeen(page) }).toEqual({
         href: expect.stringMatching(/^https:\/\/claude\.ai\/oauth\/authorize\?/u), seen: { window: null, at: null, closed: false, linkOpensTab: 'true' },
       });
+      await page.close();
+    });
+  });
+
+  // A popup the person closed before the start answered: step 1 offers its link again, at Claude's address.
+  test("Claude's popup closed before its start answered leaves the link to open it again", async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      await page.setViewport({ width: 1280, height: 1100 });
+      await page.goto(`${origin}/gallery.html?frame=usersettingsstate&section=providers&claude=held`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector(CLAUDE);
+      await rigSignInWindows(page);
+      await page.click(`${CLAUDE} button`);
+      await page.evaluate(() => { document.documentElement.dataset.signInClosed = 'yes'; window.dispatchEvent(new Event('gallery:claude-start')); });
+      const link = await page.waitForSelector(`${CLAUDE} [data-sign-in-open]`);
+
+      expect({ href: await link?.evaluate((open) => open.getAttribute('href')), at: (await signInWindowSeen(page)).at }).toEqual({
+        href: expect.stringMatching(/^https:\/\/claude\.ai\/oauth\/authorize\?/u), at: null,
+      });
+      await page.close();
+    });
+  });
+
+  // Leaving the card while the start is out: the popup closes, as nothing is left to take its code back.
+  test("Claude's popup closes when its card goes before the start answered", async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      await page.setViewport({ width: 1280, height: 1100 });
+      await page.goto(`${origin}/gallery.html?frame=usersettingsstate&section=providers&claude=held`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector(CLAUDE);
+      await rigSignInWindows(page);
+      await page.click(`${CLAUDE} button`);
+      await page.click('[data-settings-section="models"]');
+      await page.waitForFunction(() => document.querySelector('[data-provider="Claude"]') === null);
+      await page.evaluate(() => { window.dispatchEvent(new Event('gallery:claude-start')); });
+      // The start answered, and the frame after it ran whatever its answer set going.
+      await page.waitForFunction(() => document.documentElement.dataset.galleryClaudeStarted === '1');
+      await page.evaluate(() => new Promise<void>((done) => { requestAnimationFrame(() => { done(); }); }));
+      const { window, at, closed } = await signInWindowSeen(page);
+
+      expect({ window, at, closed }).toEqual({ window: POPUP, at: null, closed: true });
       await page.close();
     });
   });
