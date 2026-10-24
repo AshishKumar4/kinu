@@ -10,6 +10,7 @@ import {
   type CloudWorkspaceBirth, type CloudWorkspaceRegistry, type CreateCloudWorkspaceEnv,
   CreateCloudWorkspaceInputSchema,
 } from './workspace-create';
+import { placementFor } from './workspace-placement';
 import { objectNamed, err, json, safeJson } from '@kinu.run/core';
 import { ownerCaller } from '@kinu.run/core';
 import { authoredRefusal, diagnostics, toKinuError, settle } from '@kinu.run/core/obs';
@@ -39,7 +40,7 @@ export function handleCreateWorkspaceRequest<Id>(call: CreateWorkspaceRequest<Id
 
     return yield* Effect.catchCause(Effect.gen(function* () {
       const entry = yield* Effect.promise(async () => createCloudWorkspaceForUser({
-        env, userId, userDO, caller: await ownerCaller(env), input,
+        env, userId, userDO, caller: await ownerCaller(env), input, placement: placementFor(request.cf),
       }));
 
       return json({ body: entry }, { status: 201 });

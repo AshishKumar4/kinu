@@ -26,5 +26,6 @@
   "movable packages/cf-backend/src/user/github-hooks.ts",
   "movable packages/cf-backend/src/user/mcp-oauth-storage.ts",
   "movable packages/cf-backend/src/user/workspace-fork.ts",
+  "movable packages/cf-backend/src/user/workspace-placement.ts",
   "movable packages/cf-backend/src/viewer-pass.ts"
 ]
