@@ -796,8 +796,16 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return registry === undefined ? undefined : snapshotRegistry({ ...registry, fetch: (input, init) => fetch(input, init) });
   }
 
+  /**
+   * How long the box's own snapshot may take to be admitted before the box gives it up and wakes from its backup, which
+   * keeps the workspace and loses the rest of the root (D111). A snapshot the platform no longer holds is refused at once
+   * ("not found", D64) and the box wakes from the backup then; one still on its way is waited for. 199 quick restarts (a
+   * stop, then a start at once) on real boxes were admitted p50 1.64 s, p90 7.12 s, max 32.3 s, and the slowest wake on
+   * record took 53 s; at 10 s it discarded seven snapshots still on their way in the week to 2026-10-24. The wait is the
+   * admission's, before the start gate, so no start hook's budget holds it.
+   */
   protected get snapshotWakeCutoverMs(): number {
-    return 10_000;
+    return 60_000;
   }
 
   /**
@@ -1018,8 +1026,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   /**
-   * A snapshot start that fails falls back to the next source and the chain, and so does the box's own snapshot that
-   * misses the cutover: the chain's lazy wake is the faster way in (D64). A golden has nothing faster behind it, so its
+   * A snapshot start that fails falls back to the next source and the chain, and so does the box's own snapshot not
+   * admitted within {@link snapshotWakeCutoverMs}, past which it is taken for lost (D111). A golden has nothing faster behind it, so its
    * start has the golden object's own bound to be admitted before it is reported lost: at the cutover, a slow golden was
    * retired and every waiting box held for a rebuild (staging 99a13686c, 2026-10-23).
    */

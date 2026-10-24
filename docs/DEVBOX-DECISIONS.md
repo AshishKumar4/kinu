@@ -5312,6 +5312,34 @@ apply took 40 ms for 709,208 bytes, the old binary kept running, and every file 
 the manifest. The container tier's `tools` contract runs `refreshTools` itself on a box the same way, then cuts a full
 install short at apt and requires the next refresh to install whole.
 
+D111. A box waits for its own snapshot while it is on its way, up to 60 s, and wakes from its backup only when the
+snapshot is refused or does not come (2026-10-24, ledger 1024-s; amends the 10 s cutover of the 2026-10-02
+measurements and D64). The owner's design makes the full-disk snapshot the wake and the backup the fallback for a
+snapshot really lost: the backup holds the workspace and nothing else of the root, so a wake from it loses what a person
+installed or changed outside `/workspace`, and the terminals' saved screens and lines (D97, on the root).
+
+The 10 s came from the 2026-10-02 measurements: 4 of 59 wakes at 10 GiB took 30 to 53 s, so a wake not admitted in
+10 s was cut over to the chain's lazy wake, worst case about 15 s. It was never measured on a start right after a stop,
+which is when it fires. In the week to 2026-10-24 (telemetry of the contracts fixture, staging and production), 523
+own-snapshot wakes started a container: those within 10 s of their stop's commit were admitted p50 1.57 s, p90 2.54 s,
+p99 9.71 s, max 15.05 s, those a minute or more after it in under 0.6 s, and the 10 s timer cut over seven, every one
+3.6 to 4.5 s after the stop's commit, each snapshot then marked for deletion and its box woken from the backup. A start
+can tell such a snapshot from a lost one: the platform refuses a lost snapshot's start at once ("Snapshot ... was not
+found", D64; 86 that week, each cut over at once and rightly), while one on its way is not yet answered. Uncensored, on
+armada (job `20261024145302-e4353cf8`, the contracts fixture with no cutover): 199 quick restarts, each box written on
+its root, stopped and asked at once, all woke from their own snapshot, admitted p50 1.64 s, p90 7.12 s, p99 10.55 s,
+max 32.3 s; 37 took over 5 s and two over 10 s.
+
+So `snapshotWakeCutoverMs` is 60 s: past the 32.3 s measured and the 53 s on record. The wait is the admission's,
+before the start gate (`#startNative`): no start hook's 25 s budget holds it, and a caller meanwhile is told the box is
+starting, as before. A refused snapshot still cuts over at once, and a golden start keeps its own bound
+(`GOLDEN_ADMISSION_MS`). The container tier's `resurrect` writes the root before its stop and requires it after the
+start at once, so a quick restart that wakes from the backup is red by name.
+
+The `resurrect` reds of 10-22 (4ef540964), 10-24 01:14 (9334c6bb9) and 14:12 (4492cc12c) were each this cutover: the
+stop returned in about 6 s, the start's snapshot was not admitted in 10 s, the box woke from its backup, and the saved
+screen, on the root, was gone.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

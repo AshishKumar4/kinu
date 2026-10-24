@@ -244,6 +244,10 @@ const RESURRECT_COUNT = '/var/tmp/kinu-resurrect-count';
 const RESURRECT_LINE = `echo "it's $(touch ${RESURRECT_MARKER}; echo ok)"; printf 'a;b\\n'; echo 1 >> ${RESURRECT_COUNT}; echo "two
 lines"; sleep 600`;
 
+/** Written on the box's root before its stop: read back after the start at once, it says the box woke from its own
+ *  snapshot, not its backup, which keeps only the workspace (D111). */
+const QUICK_RESTART_ROOT = '/etc/kinu-quick-restart';
+
 /** After the prompt shows, how long the step waits before reading the files: long enough for a line to have run. */
 const RESURRECT_SETTLE_MS = 2_000;
 
@@ -1097,11 +1101,15 @@ print('exact' if json.load(open('${BOX_CHROMIUM_POLICY}'))['CACertificates'] == 
         await waitFor(() => before.screen().includes(seen), 'the screen to show what the stop must keep');
         before.type(`${RESURRECT_LINE}\r`);
         await waitFor(ranOnce, 'the typed line to run once');
-        await shell(`rm -f ${RESURRECT_MARKER} ${RESURRECT_COUNT}`, name);
+        await shell(`rm -f ${RESURRECT_MARKER} ${RESURRECT_COUNT} && echo ${seen} > ${QUICK_RESTART_ROOT}`, name);
         before.close();
         requireEqual((await call('/stop', Commit, undefined, name)).kind, 'committed');
+        const stopped = Date.now();
 
         const after = await openSession(name);
+        const root = await shell(`cat ${QUICK_RESTART_ROOT} 2>/dev/null || echo none`, name);
+
+        if (root !== seen) throw new Error(`the start at once after the stop woke from the backup, not the box's own snapshot: its root held ${JSON.stringify(root)} at ${QUICK_RESTART_ROOT}`);
 
         // The saved screen, then the restart's rule, and under it the line twice: as what was running, and at the prompt.
         const offered = () => {
@@ -1112,6 +1120,8 @@ print('exact' if json.load(open('${BOX_CHROMIUM_POLICY}'))['CACertificates'] == 
         };
 
         await waitFor(offered, 'the saved screen, the rule, and the line at the prompt');
+        const shownMs = Date.now() - stopped;
+
         await delay(RESURRECT_SETTLE_MS);
         const waiting = await files();
 
@@ -1124,7 +1134,7 @@ print('exact' if json.load(open('${BOX_CHROMIUM_POLICY}'))['CACertificates'] == 
 
         if (ran !== 'marker\n1') throw new Error(`after one Enter the box held ${JSON.stringify(ran)}, not the line's one run`);
 
-        return { beforeEnter: waiting, afterEnter: ran, screen: after.screen().slice(-400) };
+        return { beforeEnter: waiting, afterEnter: ran, rootKept: true, shownMs, screen: after.screen().slice(-400) };
       });
     };
 

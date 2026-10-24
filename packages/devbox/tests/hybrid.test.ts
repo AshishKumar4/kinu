@@ -16,35 +16,47 @@ class Registry {
 
 const registry = new Registry();
 
+/** The registry the boxes here delete their dead snapshots through. */
+function fakeRegistry(): SnapshotRegistry {
+  return {
+    delete: async (id) => {
+      const refused = registry.refuse;
+      const left = registry.left;
+      registry.refuse = undefined;
+      registry.left = undefined;
+
+      if (refused !== undefined) return left === undefined ? { kind: 'refused', reason: refused } : { kind: 'refused', reason: refused, left };
+      registry.deleted.push(id);
+
+      return { kind: 'deleted' };
+    },
+    // A box never deletes an application's snapshots; the fixtures and reset do.
+    deleteApplication: async () => { throw new Error('a box deleted an application\'s snapshots'); },
+  };
+}
+
 class HybridBox extends ChainTestBox {
   protected override get snapshotWakeCutoverMs(): number {
     return 50;
   }
 
   protected override get snapshotRegistry(): SnapshotRegistry {
-    return {
-      delete: async (id) => {
-        const refused = registry.refuse;
-        const left = registry.left;
-        registry.refuse = undefined;
-        registry.left = undefined;
+    return fakeRegistry();
+  }
+}
 
-        if (refused !== undefined) return left === undefined ? { kind: 'refused', reason: refused } : { kind: 'refused', reason: refused, left };
-        registry.deleted.push(id);
-
-        return { kind: 'deleted' };
-      },
-      // A box never deletes an application's snapshots; the fixtures and reset do.
-      deleteApplication: async () => { throw new Error('a box deleted an application\'s snapshots'); },
-    };
+/** A box on the product's own cutover, as a person's quick restart meets it. */
+class QuickRestartBox extends ChainTestBox {
+  protected override get snapshotRegistry(): SnapshotRegistry {
+    return fakeRegistry();
   }
 }
 
 /** A box that was started, used and rested once. */
-async function rested() {
+async function rested(Box: typeof ChainTestBox = HybridBox) {
   asked.length = 0;
   registry.deleted.length = 0;
-  const arm = chainBox(HybridBox);
+  const arm = chainBox(Box);
   await arm.box.devboxStartup();
   const rest = await arm.box.quiesce();
 
@@ -92,6 +104,56 @@ test('a snapshot wake that is not admitted within the cutover starts from the go
   }).toEqual({
     starts: ['golden', 'snapshot-1', 'golden'], asked: ['attach from image', 'commit quiesce', 'attach from image'], destroyed: 1, snapshotKept: false,
     notices: ['recovered'], restoredTo: true,
+  });
+});
+
+// Ledger 1024-s: a quick restart's own snapshot is still on its way. 199 stop-then-start-at-once wakes on real boxes were
+// admitted p50 1.64 s, p90 7.12 s, max 32.3 s (armada, 2026-10-24); the 10 s cutover discarded seven in flight in the week
+// to 10-24 and woke them from the backup, the root's packages and the terminals' saved screens lost.
+test('a quick restart whose own snapshot is admitted after 32 s still wakes from it, its root kept', async () => {
+  const { box, container, rows } = await rested(QuickRestartBox);
+  container.snapshots.set('snapshot-1', 'late');
+  jest.useFakeTimers();
+
+  try {
+    const starting = box.devboxStartup();
+
+    await container.lateStart.reached;
+    jest.advanceTimersByTime(32_300);
+    container.lateStart.release();
+    await starting;
+  } finally {
+    jest.useRealTimers();
+  }
+
+  expect({ starts: container.startOptions.map(startedFrom), snapshotKept: rows.has('devbox:snapshot'), notices: (await box.devboxIncidentReasons()).map(row => row.stage) })
+    .toEqual({ starts: ['golden', 'snapshot-1'], snapshotKept: true, notices: [] });
+});
+
+/** A quick restart whose own snapshot is admitted `admittedAfterMs` after its start began, or never: where it woke from. */
+async function quickRestart(admittedAfterMs: number | null): Promise<readonly (string | undefined)[]> {
+  const { box, container } = await rested(QuickRestartBox);
+  container.snapshots.set('snapshot-1', 'late');
+  jest.useFakeTimers();
+
+  try {
+    const starting = box.devboxStartup();
+
+    await container.lateStart.reached;
+    jest.advanceTimersByTime(admittedAfterMs ?? 60_000);
+
+    if (admittedAfterMs !== null) container.lateStart.release();
+    await starting;
+  } finally {
+    jest.useRealTimers();
+  }
+
+  return container.startOptions.map(startedFrom);
+}
+
+test('an own snapshot is waited for a minute: admitted at 59.9 s it is the wake, never admitted the box wakes from its backup', async () => {
+  expect({ admitted: await quickRestart(59_900), never: await quickRestart(null) }).toEqual({
+    admitted: ['golden', 'snapshot-1'], never: ['golden', 'snapshot-1', 'golden'],
   });
 });
 
