@@ -358,11 +358,21 @@ function ClaudeConnect({ onChanged }: { onChanged: () => void }) {
     return Effect.ensuring(Effect.catchCause(step, showing(setError)), Effect.sync(() => setBusy(false)));
   });
 
-  const start = () => run(Effect.gen(function* () {
-    setAuthorizeUrl((yield* Effect.promise(() => startClaudeSignIn())).url);
-    setOpened(false);
-    setCode('');
-  }));
+  // One click (the owner, 2026-10-24): the popup opens at the click, before the await a blocker would count against it,
+  // and goes to Claude once the sign-in's address is had. A refused popup leaves step 1's link; a failed start closes it.
+  const start = () => {
+    const reserved = signInWindow.reserve();
+
+    return run(Effect.gen(function* () {
+      const { url } = yield* Effect.promise(() => startClaudeSignIn());
+
+      setAuthorizeUrl(url);
+      setCode('');
+
+      if (reserved !== null) reserved.location.href = url;
+      setOpened(reserved !== null);
+    }).pipe(Effect.onError(() => Effect.sync(() => signInWindow.close()))));
+  };
 
   const finish = () => run(Effect.gen(function* () {
     const result = yield* Effect.promise(() => finishClaudeSignIn(code.trim()));

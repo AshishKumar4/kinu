@@ -5,6 +5,9 @@ import { openProviderWindow } from "@/lib/connect-window";
 interface ProviderWindow {
   /** The link's click, taken into the sign-in's popup; a click asking for a tab, or a refused popup, is left to it. */
   open: (event: MouseEvent<HTMLAnchorElement>) => void;
+  /** The sign-in's popup, opened now at a button's click and blank until its caller sends it on (`location.href`) once
+   *  the sign-in's address is had; null when the browser refused it. */
+  reserve: () => Window | null;
   /** Closes the popup, once the page learned the sign-in ended. */
   close: () => void;
 }
@@ -25,6 +28,12 @@ export function useProviderWindow(flow: string): ProviderWindow {
       opened.current = openProviderWindow(`kinu-${flow}-${crypto.randomUUID()}`, event.currentTarget.href);
 
       if (opened.current !== null) event.preventDefault();
+    },
+    reserve() {
+      opened.current?.close();
+      opened.current = openProviderWindow(`kinu-${flow}-${crypto.randomUUID()}`);
+
+      return opened.current;
     },
     close() {
       opened.current?.close();
