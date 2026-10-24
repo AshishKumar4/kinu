@@ -266,6 +266,8 @@ export type CompactOutcome = 'folded' | 'armed' | 'nothing';
 /** What an agent still has to do as a turn of its settles. */
 export interface OpenWork {
   readonly tasks: ActiveRoster<AgentTaskTree>;
+  /** The whole open list's state (`TaskListStore.openState`), which a reminder is owed once for. */
+  readonly state: string;
   /** A result owed to the agent will wake it (`resultOwed`, tasks/reminder.ts): no reminder races it. */
   readonly resultOwed: boolean;
 }
@@ -2124,6 +2126,7 @@ export class ChatSession {
         ? null
         : taskReminderOf({
           open: openWork.tasks,
+          state: openWork.state,
           assistantText: input.assistantText,
           workMode: this.actorSession.workMode,
           completed: runError === null,

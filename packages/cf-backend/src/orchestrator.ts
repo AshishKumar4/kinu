@@ -3187,7 +3187,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const reference = actorReferenceOf(this.actingAgentOf(actorId));
     const reads = this.dynamicReadsOf(reference);
 
-    return { tasks: reads.openTasks(), resultOwed: resultOwed(this.delegatesOf(reference).map((hire) => hire.phase), reads.awaitedJobs()) };
+    return {
+      tasks: reads.openTasks(),
+      state: reads.openTaskState(),
+      resultOwed: resultOwed(this.delegatesOf(reference).map((hire) => hire.phase), reads.awaitedJobs()),
+    };
   }
 
   private async agentOwes(actorId: string, { seq, next, holds, report }: AgentOwes): Promise<void> {

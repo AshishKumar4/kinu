@@ -2,7 +2,8 @@ import { expect, test } from 'bun:test';
 import { resultOwed, taskReminderOf } from '../src/tasks/reminder';
 import type { AgentTaskTree } from '../src/tools/task-store';
 import type { ActiveRoster } from '../src/types/dynamic-context';
-import { present } from '@kinu.run/test-utils';
+import { createTestRuntime, present } from '@kinu.run/test-utils';
+import { initAllTables, initTaskListTable, TaskListStore } from '../src/index';
 
 function tree(over: Partial<AgentTaskTree> & { title: string }): AgentTaskTree {
   return {
@@ -21,6 +22,7 @@ function roster(items: AgentTaskTree[]): ActiveRoster<AgentTaskTree> {
 }
 
 function decideAt(open: AgentTaskTree[], over: {
+  state?: string;
   assistantText?: string;
   workMode?: 'plan' | 'build';
   completed?: boolean;
@@ -28,6 +30,7 @@ function decideAt(open: AgentTaskTree[], over: {
 } = {}) {
   return taskReminderOf({
     open: roster(open),
+    state: over.state ?? 'state-1',
     assistantText: over.assistantText ?? 'All done.',
     workMode: over.workMode ?? 'build',
     completed: over.completed ?? true,
@@ -47,13 +50,8 @@ test('a turn that settles with open tasks owes a reminder naming the open ones',
   expect(decision.titles).toEqual(['ship the feature', 'write the test']);
 });
 
-test('one state of the list is one reminder: the same list owes the same one, a moved task a new one', () => {
-  const open = [tree({ id: 't1', title: 'x' }), tree({ id: 't2', title: 'y' })];
-  const first = present(decideAt(open), 'the first reminder').state;
-
-  expect(present(decideAt(open), 'the same list').state).toBe(first);
-  expect(present(decideAt([tree({ id: 't1', title: 'x', status: 'active' }), tree({ id: 't2', title: 'y' })]), 'a status moved').state).not.toBe(first);
-  expect(present(decideAt([tree({ id: 't2', title: 'y' })]), 'a task closed').state).not.toBe(first);
+test("a reminder is owed for the whole list's state, its ledger key, whatever page it shows", () => {
+  expect(present(decideAt([tree({ title: 'x' })], { state: '201-ab12' }), 'the reminder').state).toBe('201-ab12');
 });
 
 test('an empty list, an errored turn and a plan owe nothing', () => {
@@ -89,4 +87,19 @@ test('the awaiting-answer skip ports the OMP line-shape predicates', () => {
   for (const assistantText of ['I finished the refactor. Shall I continue?', 'All tasks are complete.', '   ']) {
     expect(decideAt(open, { assistantText })).not.toBeNull();
   }
+});
+
+test('the open list has one state per set of open rows and their statuses, past any page', () => {
+  const { rt, testSql } = createTestRuntime();
+
+  initAllTables(testSql.execRaw, testSql.sql);
+  initTaskListTable(testSql.execRaw);
+  const store = new TaskListStore(rt.storage.sql, rt.actor, rt.storage.transactionSync.bind(rt.storage));
+  const { added } = store.add(Array.from({ length: 202 }, (_, at) => `task ${String(at)}`), null, 1);
+  const first = store.openState();
+
+  expect(store.openState()).toBe(first);
+  // The 202nd task is past the page a reminder shows; its move is still a new state.
+  store.update(present(added.at(-1), 'the last task').id, { status: 'active' }, 2);
+  expect(store.openState()).not.toBe(first);
 });

@@ -114,7 +114,7 @@ export async function sessionFixture(input: {
       },
       owedTerminalEffects: () => [], terminal: () => terminal,
       driverGate: () => null,
-      openWork: async () => ({ tasks: actor.stores.taskList.listOpen(), resultOwed: false }),
+      openWork: async () => ({ tasks: actor.stores.taskList.listOpen(), state: actor.stores.taskList.openState(), resultOwed: false }),
       steerSkills: async () => null, stillOwed: () => true,
       // No tool here runs as a job.
       releaseForeground: () => false,

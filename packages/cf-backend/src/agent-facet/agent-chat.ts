@@ -152,11 +152,13 @@ export class FacetChat {
         owed: () => { workspace.work(); },
         quiet: () => { this.atRest(); },
         // Its tasks tool and its jobs run in the workspace.
-        // What the turn's preparation and its tools last answered: a turn that never prepared asks.
+        // What the turn's preparation and its tools last answered: a turn that never prepared asks, and one whose answer
+        // held a result owed asks again, since a report spliced in after its last tool can have settled it.
         openWork: async () => {
           const live = this.liveTurn;
+          const cached = live !== null && live.turnId === this.session.currentTurnId ? live.live.openWork : null;
 
-          return live !== null && live.turnId === this.session.currentTurnId && live.live.openWork !== null ? live.live.openWork : await workspace.openWork();
+          return cached !== null && !cached.resultOwed ? cached : await workspace.openWork();
         },
         // The lane that keeps its prompt cache warm is the workspace's, which holds the provider keys and the wake.
         cacheWarming: {

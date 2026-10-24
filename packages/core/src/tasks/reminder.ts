@@ -5,7 +5,6 @@
 import type { ActiveRoster } from '../types/dynamic-context';
 import type { AgentTaskTree } from '../tools/task-store';
 import type { WorkMode } from '../types/turn';
-import { fnv1a32Hex } from '../utils/fnv1a';
 import { SYSTEM_REMINDER_TAG } from '../utils/prompt-sections';
 
 /** Admit pre-flight drops a signal once the ledger no longer owes its reminder row. */
@@ -16,20 +15,12 @@ export interface TaskReminder {
   readonly text: string;
   /** Each open task's and subtask's title, in the list's order: as many as the text counts. */
   readonly titles: readonly string[];
-  /** The open list's state ({@link openListState}): its terminal effect's scope, so one state is reminded once. */
+  /** The open list's state (`TaskListStore.openState`): its terminal effect's scope, so one state is reminded once. */
   readonly state: string;
 }
 
 /** Scoped to the open list's state it reminds of: a second turn ending on that state finds its turn already on disk. */
 export const taskReminderIdempotencyKey = (scope: string): string => `task-reminder:${scope}`;
-
-/** The open list as the agent last left it: each open task's and subtask's id and status. A new task, a closed one or a
- *  status moved is a new state, reminded once more; the same list left again is not. */
-function openListState(open: ActiveRoster<AgentTaskTree>): string {
-  const entries = open.items.map((tree) => [tree, ...tree.subtasks].map((task) => `${task.id}=${task.status}`).join(','));
-
-  return `${String(open.total)}-${fnv1a32Hex(entries.join(';'))}`;
-}
 
 /**
  * Whether a result owed to the agent will wake it, which a reminder would only race: a hire that has not answered its
@@ -105,6 +96,8 @@ function isAwaitingUserAnswer(assistantText: string): boolean {
  *  agent will wake it, and none for a turn that asked the person something. The list is read at commit, never captured. */
 export function taskReminderOf(input: {
   readonly open: ActiveRoster<AgentTaskTree>;
+  /** The whole open list's state, beyond the page `open` shows (`TaskListStore.openState`). */
+  readonly state: string;
   readonly assistantText: string;
   readonly workMode: WorkMode;
   readonly completed: boolean;
@@ -119,7 +112,7 @@ export function taskReminderOf(input: {
   // A finished task stays listed while a subtask under it is open; only what is open counts, and is named.
   const titles = groups.flatMap((tree) => [...(tree.status === 'open' || tree.status === 'active' ? [tree.title] : []), ...tree.subtasks.map((subtask) => subtask.title)]);
 
-  return { text: renderTaskReminder(groups, titles.length), titles, state: openListState(input.open) };
+  return { text: renderTaskReminder(groups, titles.length), titles, state: input.state };
 }
 
 /** OMP's shape narrowed to one level of nesting. */

@@ -552,6 +552,7 @@ export class LocalAgentSession {
         // A hire's report or a job's settle wakes the session; a reminder would race it.
         openWork: async () => ({
           tasks: this.taskList.listOpen(),
+          state: this.taskList.openState(),
           resultOwed: resultOwed((await this.teamDeps?.list() ?? []).map((hire) => hire.status), this.jobs.countAwaited()),
         }),
         terminal: () => this.terminal,

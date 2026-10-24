@@ -153,8 +153,9 @@ const reminders = (asked: readonly string[]) => asked.filter((sent) => sent.last
 
 // An agent that hired help and ended its turn on a task the hire works on is parked on a result owed to it: reminding
 // it raced the hire's report, every time the hire spoke (hearthlit-field-04d5879b, 10-24: five reminders in eleven
-// minutes). It is reminded once the report lands and the task is still open, and once only.
-test('an agent waiting on its hire is not reminded until the report lands, then once', async () => {
+// minutes). It is reminded once the report lands and the task is still open, once for that list however many turns end
+// on it, and once more when the list moves.
+test('an agent waiting on its hire is not reminded until the report lands, then once per state of its list', async () => {
   const asked: string[] = [];
   const working = Promise.withResolvers<void>();
   const started = Promise.withResolvers<void>();
@@ -179,6 +180,11 @@ test('an agent waiting on its hire is not reminded until the report lands, then 
 
     if (sent.includes('412 rows') && atReport < 0) atReport = asked.length - 1;
 
+    // The owner's later words: one leaves the list as it was, one adds to it.
+    if (sent.includes('Also export the ledger.') && !sent.includes('add_export')) {
+      return toolCallCompletion(run, { tool: 'tasks', args: { op: 'add', titles: ['Export the ledger'] } }, 'add_export');
+    }
+
     if (results === 0) return toolCallCompletion(run, { tool: 'tasks', args: { op: 'add', titles: ['Migrate the ledger to integer cents'] } }, 'add_0');
 
     if (results === 1) return toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime: 'task', message: 'Tally the ledger.' } }, 'hire_0');
@@ -202,9 +208,21 @@ test('an agent waiting on its hire is not reminded until the report lands, then 
   await driveUntil(workspace, 'the open task was never reminded after the report', () => reminders(asked) > 0);
   await workspace.agent.terminalRetryPass();
 
-  // The report reached main before its reminder did, and the list left again owes no second one.
+  // The report reached main before its reminder did.
   expect({ reportFirst: atReport >= 0 && atReport < asked.findIndex((sent) => reminders([sent]) > 0), reminders: reminders(asked) })
     .toEqual({ reportFirst: true, reminders: 1 });
+
+  // Another turn ends on the same list: owed nothing again, though the owner spoke.
+  await workspace.agent.send('Any news?', crypto.randomUUID(), []);
+  await until(() => asked.some((sent) => sent.includes('Any news?')), 'the owner was never heard');
+  await workspace.agent.terminalRetryPass();
+  await joinHarnessFibers();
+  expect(reminders(asked)).toBe(1);
+
+  // A task added is a new list: reminded once more.
+  await workspace.agent.send('Also export the ledger.', crypto.randomUUID(), []);
+  await driveUntil(workspace, 'the moved list was never reminded', () => reminders(asked) > 1);
+  expect(reminders(asked)).toBe(2);
 });
 
 // A process started to keep running owes the agent nothing: a preview server beside an open task, unrelated to it,

@@ -2538,7 +2538,7 @@ const PAGE_THREAD: UIMessage[] = [
 /** The owner's reminder as core writes it: its text the agent's, its open task's title the card's. */
 const OWNER_REMINDER = taskReminderOf({
   open: { items: [{ id: "t1", parentId: null, title: "Store the full export in account-level memory", status: "open", updatedAt: 0, note: null, subtasks: [] }], total: 1 },
-  assistantText: "The export is in exports/settings.json.", workMode: "build", completed: true, resultOwed: false,
+  state: "1-gallery", assistantText: "The export is in exports/settings.json.", workMode: "build", completed: true, resultOwed: false,
 });
 
 const harnessTurn = (id: string, metadata: JsonObject, text: string) => msg({ id, role: "user", metadata: { kinuAuthor: "harness", ...metadata }, parts: [{ type: "text", text }] });
