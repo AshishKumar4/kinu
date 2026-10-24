@@ -126,5 +126,5 @@ test('a deletion logs the destroy it landed, naming the workspace and its object
   const { log } = await deletedDuringNaming(async () => {});
 
   expect(log.emitted.filter((line) => line.event === 'workspace.destroyed').map((line) => line.fields))
-    .toEqual([{ workspace: 'ledger', object: expect.stringMatching(/^\S+$/u) }]);
+    .toEqual([{ workspace: 'ledger', object: expect.stringMatching(/^\S+$/u), proof: 'answered' }]);
 });

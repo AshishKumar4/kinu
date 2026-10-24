@@ -42,12 +42,14 @@ export interface SubagentEventResult {
  * are distinct: a `progress` note speaks without settling, and conflating them suppressed the terminal report of an ask.
  */
 export interface SubagentReportLedger {
+  /** A report that answers the turn went: a completion or a blocker, which its turn's end does not repeat. */
   spoke: boolean;
   settled: boolean;
 }
 
 /** The one report publisher: both report sources, its report tool and its turn's end, carry the admitted turn's mode
- *  and update the same ledger. */
+ *  and update the same ledger. A progress report answers nothing: the answer the turn ends with still reaches the hirer
+ *  (the report tool's own help), and wakes it, whose open tasks wait on it. */
 export async function publishSubagentReport(
   turn: { readonly mode: WorkMode; readonly reports: SubagentReportLedger | null },
   report: Omit<SubagentEventInput, 'fromSubagent' | 'mode'>,
@@ -56,7 +58,7 @@ export async function publishSubagentReport(
   const result = await send({ ...report, mode: turn.mode });
 
   if (turn.reports !== null) {
-    turn.reports.spoke = true;
+    turn.reports.spoke ||= report.status !== 'progress';
     turn.reports.settled ||= temporaryRunSettles({ status: report.status, origin: report.origin });
   }
 

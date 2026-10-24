@@ -4,7 +4,7 @@ import * as v from 'valibot';
 import { DevboxError, attempt } from './errors';
 import { OwedSchema, SNAPSHOT_LIFE_MS, payDebt, type SnapshotDeletion } from './snapshot-registry';
 import { shellPath } from './stream-archive';
-import { TOOLS_STAMP, toolsInstallCommand } from './tools';
+import { manifestDelta, packagePaths, TOOLS_INSTALLING, TOOLS_MANIFEST, TOOLS_STAGED, TOOLS_STAMP, toolsApplyCommand, toolsFileKey, toolsInstallCommand, toolsManifestKey } from './tools';
 import { containerExec } from './processes';
 
 export const GOLDEN_BASE = 'cloudflare/debian-trixie';
@@ -218,18 +218,87 @@ export function pipeParts(
   });
 }
 
+/**
+ * What a start's tools refresh did (ledger 1024-h), the box's own record of it: `current`, the box already at the pin;
+ * `incremental`, the files the pin's manifest names anew fetched by sha256 and placed; `full`, the whole tarball
+ * installed, `reason` saying why the delta could not be. Each count and time is the install's own (`toolsApplyCommand`,
+ * `toolsInstallCommand`).
+ */
+export interface ToolsRefresh {
+  readonly mode: 'current' | 'incremental' | 'full';
+  readonly ms: number;
+  readonly reason?: string;
+  readonly files?: number;
+  readonly removed?: number;
+  readonly bytes?: number;
+  readonly filesMs?: number;
+  readonly extractMs?: number;
+  readonly installMs?: number;
+  /** Packages apt set up. */
+  readonly changed?: number;
+}
+
+/** Why a refresh installs the tarball whole, or undefined when the files the pin changed are enough. */
+function wholeReason(at: { readonly pin: string; readonly published: boolean; readonly unfinished: boolean; readonly held: boolean; readonly packages: number }): string | undefined {
+  if (!at.published) return `the store holds no ${toolsManifestKey(at.pin)}.0`;
+
+  if (at.unfinished) return 'the box\'s last full install did not finish';
+
+  if (!at.held) return 'the box holds no tools manifest';
+
+  return at.packages === 0 ? undefined : `the pin changes ${String(at.packages)} package files`;
+}
+
+/** The `name=number` pairs an install prints on its last line. */
+function installCounts(stdout: string): Record<string, number> {
+  return Object.fromEntries([...stdout.matchAll(/\b(\w+)=(\d+)\b/gu)].map((match) => [match[1] ?? '', Number(match[2])]));
+}
+
+/**
+ * Brings a starting box's tools to `pin`, inside its start (D66): a box at the pin reads its stamp and is done. Every
+ * re-pin from 2026-10-21 to 10-23 changed one binary of 0.7 to 3.8 MB in a 358 MB tarball, and the box fetched and
+ * installed all of it, 12 to 24 s of its 25 s (production, ledger 1024-h): a box that holds its manifest and finds the
+ * pin's in the store fetches only the files the two differ on. One with no manifest (the image, never installed), a
+ * store with none for the pin, or a pin that changes a package (`packagePaths`) installs the tarball whole, and says why.
+ */
 export function refreshTools(ports: {
   readonly pin: string;
   readonly exec: (command: string) => Promise<{ readonly stdout: string; readonly exitCode: number }>;
   readonly pipe: (key: string, path: string) => Effect.Effect<void, DevboxError>;
-}): Effect.Effect<void, DevboxError> {
+  /** A one-part store object's text, null when the store holds none. */
+  readonly read: (key: string) => Promise<string | null>;
+  readonly now: () => number;
+}): Effect.Effect<ToolsRefresh, DevboxError> {
   return Effect.gen(function* () {
+    const since = ports.now();
     const held = yield* attempt('io', () => ports.exec(TOOLS_STAMP_COMMAND));
 
-    if (held.stdout.trim() === ports.pin) return;
-    yield* ports.pipe(toolsKey(ports.pin), ARCHIVE);
-    const installed = yield* attempt('io', () => ports.exec(toolsInstallCommand(ARCHIVE, ports.pin)));
+    if (held.stdout.trim() === ports.pin) return { mode: 'current', ms: ports.now() - since } satisfies ToolsRefresh;
+    const next = yield* attempt('io', () => ports.read(toolsManifestKey(ports.pin)));
+    const box = next === null ? undefined : yield* attempt('io', () => ports.exec(`[ -e ${TOOLS_INSTALLING} ] && exit 3; cat ${TOOLS_MANIFEST} 2>/dev/null || true`));
+    const installed = box?.exitCode === 0 ? box.stdout : '';
+    const delta = manifestDelta(installed, next ?? '');
+    const reason = wholeReason({ pin: ports.pin, published: next !== null, unfinished: box?.exitCode === 3, held: installed.trim() !== '', packages: packagePaths(delta).length });
 
-    if (installed.exitCode !== 0) return yield* Effect.fail(new DevboxError('io', `installing the pinned tools exited ${String(installed.exitCode)}: ${installed.stdout.slice(-600)}`));
+    if (reason !== undefined) {
+      yield* ports.pipe(toolsKey(ports.pin), ARCHIVE);
+      const whole = yield* attempt('io', () => ports.exec(toolsInstallCommand(ARCHIVE, ports.pin)));
+
+      if (whole.exitCode !== 0) return yield* Effect.fail(new DevboxError('io', `installing the pinned tools exited ${String(whole.exitCode)}: ${whole.stdout.slice(-600)}`));
+      const counts = installCounts(whole.stdout);
+
+      return { mode: 'full', reason, extractMs: counts['extractMs'], installMs: counts['installMs'], changed: counts['changed'], ms: ports.now() - since } satisfies ToolsRefresh;
+    }
+
+    yield* attempt('io', () => ports.exec(`mkdir -p ${TOOLS_STAGED}`));
+
+    for (const sha256 of new Set(delta.changed.map((file) => file.sha256))) yield* ports.pipe(toolsFileKey(sha256), `${TOOLS_STAGED}/${sha256}`);
+    yield* ports.pipe(toolsManifestKey(ports.pin), `${TOOLS_STAGED}/manifest`);
+    const applied = yield* attempt('io', () => ports.exec(toolsApplyCommand(delta, ports.pin)));
+
+    if (applied.exitCode !== 0) return yield* Effect.fail(new DevboxError('io', `moving the tools to ${ports.pin} exited ${String(applied.exitCode)}: ${applied.stdout.slice(-600)}`));
+    const counts = installCounts(applied.stdout);
+
+    return { mode: 'incremental', files: counts['files'], removed: counts['removed'], bytes: counts['bytes'], filesMs: counts['filesMs'], ms: ports.now() - since } satisfies ToolsRefresh;
   });
 }

@@ -39,7 +39,7 @@ const CheckpointSchema = v.array(v.object({ key: v.string(), sealed: v.string() 
 export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   UserDO,
   'ensureProfile' | 'userMcp_warmConnections' | 'getProfile' | 'setDisplayName' | 'getProfileCatalog' | 'putProfileCatalog'
-  | 'fetch' | 'listWorkspaces' | 'touchWorkspace' | 'removeWorkspace' | 'hasWorkspace'
+  | 'fetch' | 'listWorkspaces' | 'touchWorkspace' | 'removeWorkspace' | 'requestWorkspaceRemoval' | 'hasWorkspace'
   | 'listDevices' | 'issueDeviceJoin' | 'acknowledgeUnstoppedDevice' | 'revokeDevice' | 'renameDevice' | 'listDeviceConsents'
   | 'setDeviceTier' | 'grantDeviceConsent' | 'revokeDeviceConsent'
   | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'googleConnection' | 'checkpointCredentials' | 'restoreCredentials' | 'listActiveWorkspaces' | 'getAuthHeaders' | 'getAuth'

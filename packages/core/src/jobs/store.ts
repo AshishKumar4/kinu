@@ -310,6 +310,15 @@ export class BackgroundJobStore {
       WHERE actor_id=${this.actorId} AND status='running' ORDER BY created_at ASC`.map((r) => r.id);
   }
 
+  /** This actor's running jobs that end on their own, each owing it a result. A process started to keep running (a
+   *  server, a watcher: `startProcess`) owes none, however long it runs. */
+  countAwaited(): number {
+    this.actor.assertCurrent();
+
+    return this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM background_jobs
+      WHERE actor_id=${this.actorId} AND status='running' AND kind != 'startProcess'`[0]?.n ?? 0;
+  }
+
   /** This actor's running jobs, newest first; `total` is the true count beyond `limit`. */
   listRunning(limit = 20): ActiveRoster<BackgroundJob> {
     this.actor.assertCurrent();

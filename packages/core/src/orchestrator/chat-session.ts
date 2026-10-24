@@ -69,7 +69,7 @@ import type { ContextSelection } from '../session/context';
 import { subagentTurnContext } from '../subagents/support';
 import { taskTurnEnding } from '../subagents/temporary';
 import { SIGNALS_SEEN_METADATA_KEY, TURN_END_METADATA_KEY, TURN_FAILURE_METADATA_KEY, type SeenSplice } from '../read-models/background-event';
-import { TaskReminders, TASK_REMINDER_EVENT, type TaskReminder } from '../tasks/reminder';
+import { taskReminderOf, TASK_REMINDER_EVENT, type TaskReminder } from '../tasks/reminder';
 import type { AgentTaskTree } from '../tools/task-store';
 import type { ActiveRoster } from '../types/dynamic-context';
 import { inheritedAsModelMessage } from '../heads/head-inference';
@@ -266,7 +266,10 @@ export type CompactOutcome = 'folded' | 'armed' | 'nothing';
 /** What an agent still has to do as a turn of its settles. */
 export interface OpenWork {
   readonly tasks: ActiveRoster<AgentTaskTree>;
-  readonly asyncWakePending: boolean;
+  /** The whole open list's state (`TaskListStore.openState`), which a reminder is owed once for. */
+  readonly state: string;
+  /** A result owed to the agent will wake it (`resultOwed`, tasks/reminder.ts): no reminder races it. */
+  readonly resultOwed: boolean;
 }
 
 /** Each port is asked per call, never captured. */
@@ -416,7 +419,6 @@ export class ChatSession {
   private messageId = '';
   /** Armed only by a one-shot task turn (completion-gate.ts). */
   readonly completionGate = new CompletionGate();
-  private readonly taskReminders = new TaskReminders();
   /** Drained by a single serialized pump so turns never interleave. */
   private readonly queue: QueueItem[] = [];
 
@@ -1074,9 +1076,6 @@ export class ChatSession {
     this.refuseUnusableId(opts.id);
     const card = 'metadata' in opts ? opts : undefined;
     const { text, files } = normalizePromptInput(input);
-
-    // The operator spoke: the reminder count starts over.
-    this.taskReminders.noteUserPrompt();
 
     // Empty and unattached is refused at the door.
     if (text.trim() === '' && (files === undefined || files.length === 0)) {
@@ -1933,7 +1932,6 @@ export class ChatSession {
       },
       onEvent: (event) => {
         // Any tool result is progress on the last reminder.
-        if (event.type === 'tool-result') this.taskReminders.noteToolResult();
 
         recordExecutionEvent(this.eventRecorder, this.runId, event);
 
@@ -2126,12 +2124,13 @@ export class ChatSession {
 
       const taskReminder = openWork === null
         ? null
-        : this.taskReminders.decide({
+        : taskReminderOf({
           open: openWork.tasks,
+          state: openWork.state,
           assistantText: input.assistantText,
           workMode: this.actorSession.workMode,
           completed: runError === null,
-          asyncWakePending: openWork.asyncWakePending,
+          resultOwed: openWork.resultOwed,
         });
 
       // No answer row: the roster's contract is an empty id.

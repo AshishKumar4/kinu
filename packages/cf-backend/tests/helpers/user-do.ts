@@ -109,6 +109,8 @@ export interface TestUserDO {
   /** Capability tokens the UserDO delivered, per workspace. */
   installed: Map<string, string>;
   destroyedWorkspaces: string[];
+  /** Each workspace a deletion read again after its destroy, which starts the emptied object (`confirmedDeletion`). */
+  destroyReads: string[];
   /** What the account's delete reached beyond its own object: its mailbox and labels, its control-plane forget. */
   accountDeleted: string[];
   /** Reasons passed to `ctx.abort`: an account delete completes only once `destroy()` raises 'destroyed'. */
@@ -432,6 +434,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   const destroyedWorkspaces: string[] = [];
   /** Workspaces whose storage a destroy wiped, whatever its call answered. */
   const wipedWorkspaces = new Set<string>();
+  const destroyReads: string[] = [];
   const accountDeleted: string[] = [];
   const accountOf = options.accounts;
 
@@ -703,7 +706,11 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
           destroyedWorkspaces.push(name);
         },
         // A workspace stands until its destroy wiped it (`storedWorkspace`).
-        storedWorkspace: async () => (wipedWorkspaces.has(name) ? 0 : 1),
+        storedWorkspace: async () => {
+          destroyReads.push(name);
+
+          return wipedWorkspaces.has(name) ? 0 : 1;
+        },
         async installWorkspaceCapability(token: string) {
           installed.set(name, token);
 
@@ -806,7 +813,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   };
 
   return {
-    userDO, db, sql, installed, destroyedWorkspaces, accountDeleted, aborted, revokedSocketPushes,
+    userDO, db, sql, installed, destroyedWorkspaces, destroyReads, accountDeleted, aborted, revokedSocketPushes,
     abortRaised: () => aborts.until((reasons) => reasons.length > 0),
     revokedSessionPushes, connectionsChanged, overviewNudges, secretsMoved, githubPush,
     pendingConsents: (workspace) => registryFor(workspace).list(),

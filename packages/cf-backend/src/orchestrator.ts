@@ -181,7 +181,7 @@ import {
   initWebhookIngressTables,
   type WebhookDelivery, type WebhookDeliveryResult, type WebhookSecretStore,
   createTimerTrigger, cancelTrigger, gitHubPushOf, listTriggers, fireDueTriggers, retimeDailyTrigger, type TrustLevel,
-  WatchClaims, watchProviders, checkAnswerOf, type WatchOutcome, type WatchCheck,
+  WatchClaims, watchProviders, checkAnswerOf, resultOwed, type WatchOutcome, type WatchCheck,
   type TriggerView,
   type MailAdmission, type MailArrival, type HandedMail, handedMailSignal, spillEventContent, unreadMailForTurn, MailTriageLane, triageMail,
   PeerHub, type PeerMessage, type ReceiveResult,
@@ -3186,11 +3186,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    */
   private readonly agentsWorking = new Set<string>();
 
-  /** An agent's open work: its tasks tool and its jobs run here, over its own rows, main's as any agent's. */
+  /** An agent's open work: its tasks tool, its jobs and its hires' roster rows are here, main's as any agent's. */
   private openWorkOf(actorId: string): OpenWork {
-    const reads = this.dynamicReadsOf(actorReferenceOf(this.actingAgentOf(actorId)));
+    const reference = actorReferenceOf(this.actingAgentOf(actorId));
+    const reads = this.dynamicReadsOf(reference);
 
-    return { tasks: reads.openTasks(), asyncWakePending: reads.runningJobs().total > 0 };
+    return {
+      tasks: reads.openTasks(),
+      state: reads.openTaskState(),
+      resultOwed: resultOwed(this.delegatesOf(reference).map((hire) => hire.phase), reads.awaitedJobs()),
+    };
   }
 
   private async agentOwes(actorId: string, { seq, next, holds, report }: AgentOwes): Promise<void> {
