@@ -482,8 +482,10 @@ export class UserWorkspaces {
     if (!/^[a-f0-9]{32}$/.test(ownerUserId)) throw new KinuError('bad_input', 'invalid owner user id');
 
     if (this.host.sqlx(`UPDATE user_workspaces SET delete_pending = 1 WHERE name = ? RETURNING name`, name).length === 0) return;
-    this.rosterChanged(name);
     await this.host.deletions.dueNow(name);
+    // Durable before anyone is told: a page that cannot take the frame does not undo an accepted deletion.
+    await settleLogged('workspace.roster_push_failed', { doing: "telling the account's open lists a workspace is going", otherwise: 'io' },
+      async () => { this.rosterChanged(name); }, { workspace: name });
   }
 
   /**

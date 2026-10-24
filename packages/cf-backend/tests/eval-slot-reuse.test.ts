@@ -35,7 +35,12 @@ test('trial preparation preserves a live slot, deletes stale workspaces and refu
       requests.push({ method: request.method, path: new URL(request.url).pathname,
         secret: request.headers.get(DEV_IDENTITY_HEADER), account: request.headers.get(DEV_IDENTITY_ACCOUNT_HEADER) });
 
-      return await account(request, accountEnv) ?? await user(request, userEnv) ?? new Response(null, { status: 404 });
+      const answered = await account(request, accountEnv) ?? await user(request, userEnv) ?? new Response(null, { status: 404 });
+
+      // A delete answers before its teardown, which the account's alarm runs, as the platform's would.
+      if (request.method === 'DELETE') pending.push(harness.userDO.alarm());
+
+      return answered;
     },
   });
 

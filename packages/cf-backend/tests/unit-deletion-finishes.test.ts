@@ -178,9 +178,11 @@ test("a person's delete answers before its teardown, which its own job lands acr
     .toEqual({ box: [], destroyed: [], listed: ['kept'] });
 
   // Its job runs from the alarm, and the account's object resets with the teardown in its devbox's cleanup.
-  const dying = first.userDO.alarm();
+  const firstEnded: string[] = [];
 
+  first.userDO.alarm().then(() => { firstEnded.push('answered'); }, () => { firstEnded.push('failed'); });
   await until(() => boxCalls.length > 0, 'the deletion job never reached the devbox');
+  expect(first.db.query<{ running: number }, []>("SELECT running FROM cf_agents_jobs WHERE id = 'workspace-deletion:ledger'").all()).toEqual([{ running: 1 }]);
 
   const second = account();
 
@@ -204,5 +206,5 @@ test("a person's delete answers before its teardown, which its own job lands acr
     reads: [],
   });
   // The first activation's teardown never answered: the second's job landed it on its own.
-  expect(await Promise.race([dying.then(() => 'answered'), Promise.resolve('unanswered')])).toBe('unanswered');
+  expect(firstEnded).toEqual([]);
 });

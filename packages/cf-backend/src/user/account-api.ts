@@ -23,7 +23,7 @@ import { rawParam, type FamilyEnv } from '../api/context';
 /** Every UserDO call these routes make. */
 type AccountApiAuthority = CloudWorkspaceRegistry & Pick<
   UserDO,
-  'listCredentials' | 'setCredential' | 'deleteCredential' | 'removeWorkspace' | 'listDevices'
+  'listCredentials' | 'setCredential' | 'deleteCredential' | 'requestWorkspaceRemoval' | 'listDevices'
   | 'listSecrets' | 'putSecrets' | 'setSecretDestination' | 'deleteSecret' | 'grantSecret' | 'revokeSecretGrant'
   | 'listActiveWorkspaces' | 'getAuthHeaders' | 'relayDevice' | 'relayModelCall' | 'cancelModelRelay' | 'slateAiSpend'
   | 'getConfig' | 'setConfig' | 'claimConfig' | 'getProfile' | 'userMcp_connectedPresets'
