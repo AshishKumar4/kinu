@@ -39,7 +39,7 @@ import { assertMeasured, finding } from './gate-ratchet';
 import { plantedInputs, readCensusLock } from './census-plants';
 import { DEADLINE_BLIND_SPOTS, DEADLINE_EXIT_CODE, ROW_NOTICES_ENV, runUnderDeadline, writeFully } from './deadline';
 import { rowNotices } from './row-verdicts';
-import { recordMarkAt, recordNotice, recordRed, recordSkipped, recordStep, recordTiming } from './deploy-report';
+import { deployRowsOf, recordMarkAt, recordNotice, recordRed, recordSkipped, recordStep, recordTiming } from './deploy-report';
 import { openDeployLive } from './deploy-live';
 import {
   CACHE_BLIND_SPOTS, cacheEnabled, gateEnvironment, gateEnvNames, keyFor, planGate, recordGreen, pathNodeVersion, storeAt, toolVersions,
@@ -3335,16 +3335,26 @@ export function armadaUnits(gate: Gate): Gate[] {
     : [gate];
 }
 
+/** The rows of `only` no unit of `phases` runs: a rerun that names one would run less than it was asked and pass on it. */
+export function unrunRows(phases: readonly DeployPhase[], only: readonly string[]): string[] {
+  const runs = new Set(phaseWave(phases).flatMap(({ gate }) => armadaUnits(gate)).map((unit) => unit.run));
+
+  return only.filter((run) => !runs.has(run));
+}
+
 /** A row's own secrets as one name (`--deploy-secrets=`): the armada job it runs in. Empty for a row that names none. */
 export function secretGroup(gate: Gate): string {
   return [...gate.secrets ?? []].sort((left, right) => left.localeCompare(right)).join(',');
 }
 
 /** The matrix of a deploy phase's armada rows whose own secrets are `group` (`armada run <sha> -- --deploy-phase=<phase>
- *  --deploy-secrets=<group>`), weighed by their declared seconds so the longest start first. */
-function armadaPlan(phases: readonly DeployPhase[], origin: string | undefined, group: string, fixture?: string): CIMatrix {
+ *  --deploy-secrets=<group>`), weighed by their declared seconds so the longest start first; `only`, the rows a deploy
+ *  runs again (`--deploy-rows`), when it names some. */
+export function armadaPlan(phases: readonly DeployPhase[], { origin, group, fixture, only }: {
+  readonly origin?: string; readonly group: string; readonly fixture?: string; readonly only?: readonly string[];
+}): CIMatrix {
   return {
-    include: armadaPhaseRows(phases).filter((gate) => secretGroup(gate) === group).flatMap(armadaUnits).map((gate) => {
+    include: armadaPhaseRows(phases).filter((gate) => secretGroup(gate) === group).flatMap(armadaUnits).filter((unit) => only === undefined || only.includes(unit.run)).map((gate) => {
       const entry: CIMatrixEntry = { name: armadaTaskName(gate), row: gate.run, weight: Math.round(gate.seconds), rows: [gate.label] };
 
       if (readsDeployment(gate) && origin !== undefined) entry.origin = origin;
@@ -4004,7 +4014,7 @@ export function recordArmadaRow(report: string, gate: Gate, verdict: ArmadaRow |
  * the source rows, so the job's end is when the deployment's traffic ended. Answers the rows that are not green: red,
  * or never graded because the run could not grade them.
  */
-async function armadaPhase(rows: readonly Gate[], report: string): Promise<PhaseJob> {
+async function armadaPhase(rows: readonly Gate[], report: string, only?: string): Promise<PhaseJob> {
   const groups = new Map<string, Gate[]>();
 
   for (const gate of rows) {
@@ -4013,7 +4023,7 @@ async function armadaPhase(rows: readonly Gate[], report: string): Promise<Phase
     groups.set(key, [...groups.get(key) ?? [], gate]);
   }
 
-  const jobs = await Promise.all([...groups.values()].map(async (group) => armadaPhaseJob([group[0]?.phase ?? 'source'], group, report)));
+  const jobs = await Promise.all([...groups.values()].map(async (group) => armadaPhaseJob([group[0]?.phase ?? 'source'], group, report, only)));
   const drove = jobs.flatMap((job) => (job.drove === undefined ? [] : [job.drove]));
 
   return { failed: jobs.flatMap((job) => job.failed), drove: drove.length === 0 ? undefined : Math.max(...drove) };
@@ -4025,11 +4035,11 @@ interface PhaseJob {
   readonly drove: number | undefined;
 }
 
-/** One armada job of a phase's rows that share their own secrets. */
-async function armadaPhaseJob(phases: readonly DeployPhase[], rows: readonly Gate[], report: string): Promise<PhaseJob> {
+/** One armada job of a phase's rows that share their own secrets; `only`, a `--deploy-rows` its plan narrows to. */
+async function armadaPhaseJob(phases: readonly DeployPhase[], rows: readonly Gate[], report: string, only?: string): Promise<PhaseJob> {
   const sha = fullRevision();
   const phase = phases.join(',');
-  const argv = armadaPhaseRun(phase, rows, sha);
+  const argv = [...armadaPhaseRun(phase, rows, sha), ...only === undefined ? [] : [`--deploy-rows=${only}`]];
 
   console.log(`\n── armada: ${String(rows.length)} row(s) of ${phase} at ${sha.slice(0, 12)}, as one job: ${argv.slice(1).join(' ')}`);
   const { answered, said } = await echoed(argv);
@@ -4039,7 +4049,11 @@ async function armadaPhaseJob(phases: readonly DeployPhase[], rows: readonly Gat
 
   if (report !== '' && graded !== undefined && graded.job !== null) recordNotice(report, { phase: phases[0] ?? 'source', what: `armada job ${graded.job}`, notice: `the ${phase} rows armada ran, at ${sha}: their logs and outputs are in that job` });
 
-  const failed = armadaRowVerdicts(rows, graded).filter(({ gate, verdict, green, found }) => !recordArmadaRow(report, gate, verdict, { green, found, reproduce, said, kept: graded?.artifacts[armadaTaskName(gate)] }))
+  // A narrowed job's plan named those units alone, so only they are graded.
+  const named = only === undefined ? undefined : deployRowsOf(only);
+
+  const failed = armadaRowVerdicts(rows, graded).filter(({ gate }) => named === undefined || named.includes(gate.run))
+    .filter(({ gate, verdict, green, found }) => !recordArmadaRow(report, gate, verdict, { green, found, reproduce, said, kept: graded?.artifacts[armadaTaskName(gate)] }))
     .map(({ gate }) => gate.run);
 
   return { failed, drove: jobDrove(rows, graded, returned) };
@@ -4116,6 +4130,7 @@ function ciVerdict(asked: string, sha: string, report: string): number {
 const LADDER_OPTIONS = {
   'ci-plan': { type: 'boolean' }, 'ci-verdict': { type: 'string' }, 'ci-costs': { type: 'string' }, 'ci-row': { type: 'string' },
   'deploy-phase': { type: 'string' }, 'deploy-origin': { type: 'string' }, 'deploy-secrets': { type: 'string' }, 'deploy-fixture': { type: 'string' },
+  'deploy-rows': { type: 'string' },
   tier: { type: 'string' }, gate: { type: 'string' }, changed: { type: 'string' }, verdicts: { type: 'string' },
   artifacts: { type: 'string' }, skip: { type: 'string' }, 'no-cache': { type: 'boolean' }, serial: { type: 'boolean' },
   matrix: { type: 'boolean' }, costs: { type: 'boolean' }, 'install-hooks': { type: 'boolean' }, 'audit-closure': { type: 'boolean' },
@@ -4144,7 +4159,9 @@ async function ciCommand(cli: LadderArgs): Promise<number | undefined> {
   if (cli['ci-plan'] === true) {
     const phases = phasesNamed(cli['deploy-phase']);
 
-    console.log(JSON.stringify(phases === undefined ? ciPlan(ciPlanCosts(cli['ci-costs'])) : armadaPlan(phases, cli['deploy-origin'], cli['deploy-secrets'] ?? '', cli['deploy-fixture'])));
+    const only = cli['deploy-rows'] === undefined ? undefined : deployRowsOf(cli['deploy-rows']);
+
+    console.log(JSON.stringify(phases === undefined ? ciPlan(ciPlanCosts(cli['ci-costs'])) : armadaPlan(phases, { origin: cli['deploy-origin'], group: cli['deploy-secrets'] ?? '', fixture: cli['deploy-fixture'], only })));
 
     return 0;
   }
@@ -4368,7 +4385,17 @@ if (import.meta.main) {
   }
 
   const repo = repoAt(root, (run, files) => claims(run, files));
-  const phaseRows = deployPhase === undefined ? undefined : phaseWave(deployPhase, withResourceCosts(readCosts(), deployOrder().filter(readsDeployment).map((gate) => gate.run)));
+  // `--deploy-rows`: a deploy runs those rows of the phase again, once (the owner: "Flakes: rerun, don't chase").
+  const onlyRows = cli['deploy-rows'] === undefined ? undefined : deployRowsOf(cli['deploy-rows']);
+  const unrun = deployPhase === undefined || onlyRows === undefined ? [] : unrunRows(deployPhase, onlyRows);
+
+  if (unrun.length > 0) {
+    console.error(`ladder --deploy-rows: ${deployPhase?.join(',') ?? ''} runs no row ${unrun.join('; ')}, so none is run again`);
+    process.exit(2);
+  }
+
+  const phaseRows = deployPhase === undefined ? undefined : phaseWave(deployPhase, withResourceCosts(readCosts(), deployOrder().filter(readsDeployment).map((gate) => gate.run)))
+    .filter(({ gate }) => onlyRows === undefined || armadaUnits(gate).some((unit) => onlyRows.includes(unit.run)));
 
   const phaseGates = phaseRows === undefined ? tierRun(tier) : localDeployGates(phaseRows.map(({ gate }) => gate));
   // A deploy phase's armada rows run there, as one job at this exact SHA; only what measures this machine runs here.
@@ -4709,7 +4736,7 @@ if (import.meta.main) {
   };
 
   // The phase's armada job runs beside the rows here, and its reds join theirs before the phase ends.
-  const armadaJob = armadaRows.length === 0 ? undefined : armadaPhase(armadaRows, report);
+  const armadaJob = armadaRows.length === 0 ? undefined : armadaPhase(armadaRows, report, cli['deploy-rows']);
 
   if (phaseRows !== undefined) {
     // A deploy phase is one wave of its plan rows: the phase's barrier is this process ending.

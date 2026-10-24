@@ -1538,7 +1538,8 @@ async function perMinute(t: Telemetry, filters: readonly Filter[], by: { readonl
 }
 
 /**
- * How long after a window's end a deploy waits before its read can settle: the lag within which 99.96% of rows land.
+ * How long after a window's end a read by hand waits before it can settle: the lag within which 99.96% of rows land. A
+ * deploy's own read is read once and waits for none: its monitors hold nothing, and later deploys read its window again.
  * Measured on staging 2026-10-14, 03:15-04:34Z, a fixed window's per-minute counts read every minute across deploy
  * 7591e6fec's wave: of 58,950 rows that landed after the first read, 98.4% were in the first read after their minute
  * ended, 99.96% within 3 min and all but 2 within 8.5 min; those 2 landed 37 to 41 min late, as 2026-10-08's 22 to 151
@@ -1726,6 +1727,31 @@ function noticeLines(dir: string, notices: readonly VersionFinding[]): string[] 
   return [...notices.map((notice) => `  notice: ${notice.finding}`), ...VERSION_BLIND_SPOTS.map((spot) => `  blind: ${spot}`)];
 }
 
+/** A version read's answer, and how many rows its window held. */
+interface OwnAnswer {
+  readonly read: VersionRead;
+  readonly rows: number;
+}
+
+/** A deploy's own read (`snapshot`, `--keep-windows`) is read once: it holds nothing, and every later deploy reads its
+ *  kept window again. A read by hand settles on the work window's end: its last alarms are judged by the minutes after. */
+async function ownRead(once: () => Promise<OwnAnswer>, { snapshot, windowEnd }: { readonly snapshot: boolean; readonly windowEnd: number }): Promise<SettledRead<OwnAnswer>> {
+  if (snapshot) return { settled: true, value: await once(), reads: 1, lateRows: 0 };
+
+  return await settledRead({
+    read: once,
+    fingerprint: ({ read: value }) => JSON.stringify([versionFindings(value), versionNotices(value), value.effects.terminal]),
+    rows: ({ rows }) => rows,
+    now: () => Date.now(), sleep: (ms) => Bun.sleep(ms), windowEnd, pollMs: SETTLE_POLL_MS, holdMs: SETTLE_HOLD_MS, capMs: SETTLE_CAP_MS,
+  });
+}
+
+/** The signals a window keeps as its counts. A snapshot's idle wakes are provisional, as the work beside an alarm may
+ *  land after it: kept, one raised later would never read as grown (telemetry-windows.ts keeps each count's largest). */
+function keptSignals(signals: readonly WindowSignal[], snapshot: boolean): WindowSignal[] {
+  return signals.filter((signal) => !snapshot || !signal.key.startsWith('idle:'));
+}
+
 async function versionCommand(args: Args): Promise<number> {
   const subject = args.target ?? '';
   const ownEnded = Promise.withResolvers<void>();
@@ -1743,13 +1769,9 @@ async function versionCommand(args: Args): Promise<number> {
     const t = new Telemetry(token, args);
     const around = { ...args, ...workWindow(args) };
 
-    // Settled on the work window's end: its last alarms are judged by the minutes after them.
-    const read = await settledRead({
-      read: async () => ({ read: await versionRead(t, new Telemetry(token, around), subject), rows: await windowRows(t, subject) }),
-      fingerprint: ({ read: value }) => JSON.stringify([versionFindings(value), versionNotices(value), value.effects.terminal]),
-      rows: ({ rows }) => rows,
-      now: () => Date.now(), sleep: (ms) => Bun.sleep(ms), windowEnd: around.to, pollMs: SETTLE_POLL_MS, holdMs: SETTLE_HOLD_MS, capMs: SETTLE_CAP_MS,
-    });
+    const once = async () => ({ read: await versionRead(t, new Telemetry(token, around), subject), rows: await windowRows(t, subject) });
+    const snapshot = args.keepWindows !== null;
+    const read = await ownRead(once, { snapshot, windowEnd: around.to });
 
     sampling = t.sampling;
     const late = `${String(read.lateRows)} row(s) landed after the first of ${String(read.reads)} reads`;
@@ -1758,8 +1780,8 @@ async function versionCommand(args: Args): Promise<number> {
       terminal = read.value.read.effects.terminal;
       findings = versionFindings(read.value.read);
       notices = versionNotices(read.value.read);
-      settled = versionSignals(read.value.read);
-      settledNote = `settled: ${late}`;
+      settled = keptSignals(versionSignals(read.value.read), snapshot);
+      settledNote = snapshot ? 'read once: later deploys read this window again' : `settled: ${late}`;
     } else {
       findings = [{ what: 'the telemetry', finding: `${args.worker}'s telemetry for version ${subject} is unsettled: no two reads `
         + `${String(SETTLE_POLL_MS / MINUTE_MS)} min apart agreed in ${String(SETTLE_CAP_MS / MINUTE_MS)} min of reads, the later `

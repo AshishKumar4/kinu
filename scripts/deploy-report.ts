@@ -181,6 +181,53 @@ export function externalOnly(summary: ReportSummary): { readonly promote: true; 
   return { promote: true, listed: summary.reds.map((red) => `${red}: ${external.get(red) ?? ''}`).join('; ') };
 }
 
+/** The phases whose rows a ladder runs, each of which a deploy may run again once (the owner: "Flakes: rerun, don't
+ *  chase"). */
+const RERUN_PHASES: ReadonlySet<string> = new Set(['source', 'post-publish']);
+
+/**
+ * The reds of a report a deploy may run again once against the same build, by phase, each a ladder row's command; an
+ * external one ({@link externalCause}) is left as it is. Any other red (a step's, one of another phase, one with no
+ * command) holds the deploy as before, and so does a report with no red at all.
+ */
+export function flakyRows(entries: readonly ReportEntry[]): {
+  readonly rerun: readonly { readonly phase: string; readonly commands: readonly string[] }[]; readonly names: readonly string[];
+} | { readonly held: readonly string[] } {
+  const rows: { phase: string; command: string; name: string }[] = [];
+  const held: string[] = [];
+
+  for (const entry of deployReds(entries)) {
+    if (entry.kind === 'red' && entry.external !== undefined) continue;
+
+    if (entry.kind === 'red' && entry.command !== undefined && RERUN_PHASES.has(entry.phase)) rows.push({ phase: entry.phase, command: entry.command, name: `${entry.phase}: ${entry.what}` });
+    else held.push(identity(entry) ?? '');
+  }
+
+  if (rows.length === 0 || held.length > 0) return { held };
+  const phases = [...new Set(rows.map(({ phase }) => phase))];
+
+  return { rerun: phases.map((phase) => ({ phase, commands: rows.filter((row) => row.phase === phase).map(({ command }) => command) })), names: rows.map(({ name }) => name) };
+}
+
+/** The last report of `sha` in `environment`'s index, if it has one. */
+function lastSummary(environment: string, sha: string): ReportSummary | undefined {
+  const index = join(REPORTS, environment, 'index.jsonl');
+
+  if (!existsSync(index)) return undefined;
+
+  return readFileSync(index, 'utf8').split('\n').filter((line) => line !== '').map((line) => v.parse(SummarySchema, JSON.parse(line))).filter((each) => each.sha === sha).at(-1);
+}
+
+/** A ladder's `--deploy-rows`: the rows' commands, as one argument any shell and armada pass whole. */
+export function deployRowsArgument(commands: readonly string[]): string {
+  return Buffer.from(JSON.stringify(commands)).toString('base64url');
+}
+
+/** The commands a `--deploy-rows` argument names. */
+export function deployRowsOf(argument: string): string[] {
+  return v.parse(v.array(v.string()), JSON.parse(Buffer.from(argument, 'base64url').toString('utf8')));
+}
+
 /** A red row of a ladder phase: its verdict, the command that reproduces it, its output's tail, and its whole output
  *  in a log of its own. */
 export function recordRed(dir: string, red: {
@@ -587,15 +634,27 @@ if (import.meta.main) {
   // `external <environment> <sha>`: exit 0, listing them, when every red of the last report of `sha` there is a
   // provider's refusal ({@link externalOnly}); exit 1, naming what holds it, otherwise.
   if (command === 'external' && rest.length === 1) {
-    const index = join(REPORTS, first, 'index.jsonl');
-
-    const last = existsSync(index) ? readFileSync(index, 'utf8').split('\n').filter((line) => line !== '').map((line) => v.parse(SummarySchema, JSON.parse(line)))
-      .filter((each) => each.sha === rest[0]).at(-1) : undefined;
-
+    const last = lastSummary(first, rest[0] ?? '');
     const verdict: ReturnType<typeof externalOnly> = last === undefined ? { promote: false, held: [`no ${first} report of ${rest[0] ?? ''}`] } : externalOnly(last);
 
     console.log(verdict.promote ? verdict.listed : `held by: ${verdict.held.join('; ')}`);
     process.exit(verdict.promote ? 0 : 1);
+  }
+
+  // `reruns <environment> <sha>`: exit 0 when every red but the external of the last report of `sha` there is a ladder
+  // row's ({@link flakyRows}), printing their names on a line, then each phase and its rows' `--deploy-rows`, tab apart;
+  // exit 1, naming what holds it, otherwise.
+  if (command === 'reruns' && rest.length === 1) {
+    const last = lastSummary(first, rest[0] ?? '');
+    const rerun = last === undefined ? { held: [`no ${first} report of ${rest[0] ?? ''}`] } : flakyRows(entriesOf(last.dir));
+
+    if ('held' in rerun) {
+      console.log(`held by: ${rerun.held.join('; ') || 'no red to run again'}`);
+      process.exit(1);
+    }
+
+    console.log([rerun.names.join('; '), ...rerun.rerun.map(({ phase, commands }) => `${phase}\t${deployRowsArgument(commands)}`)].join('\n'));
+    process.exit(0);
   }
 
   if (command === 'budget' && rest.length === 1) {
@@ -630,6 +689,6 @@ if (import.meta.main) {
     process.exit(summary.reds.length === 0 ? 0 : 1);
   }
 
-  console.error('usage: bun scripts/deploy-report.ts open|note|dispatched|startup|mark|when|holds-red|external|budget|render …');
+  console.error('usage: bun scripts/deploy-report.ts open|note|dispatched|startup|mark|when|holds-red|external|reruns|budget|render …');
   process.exit(2);
 }

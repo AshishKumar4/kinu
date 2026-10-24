@@ -134,6 +134,8 @@ export const TimerPayloadSchema = v.object({
   mission_label: v.optional(v.string()),
   /** What a watcher's check found, which is why it fired (watch.ts): read from outside, never an instruction. */
   watch_brief: v.optional(v.string()),
+  /** The provider's delivery a watcher's check answered (`input.delivery`), which keys its fire: a redelivery fires once. */
+  watch_delivery: v.optional(v.string()),
 });
 
 export type TimerPayload = v.InferOutput<typeof TimerPayloadSchema>;

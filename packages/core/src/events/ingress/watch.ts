@@ -158,6 +158,11 @@ export interface WatchAsk {
   readonly at: number;
   readonly timer: boolean;
   readonly input?: JsonValue;
+  /** The verified delivery that asked, which keys its fire: what its signature proves, never an id the sender names. */
+  readonly delivery?: string;
+  /** Takes the delivery's claim in the commit of what its check found, with its state and its fire; false when another
+   *  commit took it. A reset during the check leaves it untaken, so the sender's redelivery is checked again. */
+  readonly claim?: () => boolean;
 }
 
 /**
@@ -168,14 +173,15 @@ export interface WatchAsk {
 export async function checkWatcher(deps: WatchDeps, triggerId: string, asked: WatchAsk, now: () => number): Promise<boolean> {
   let fired = false;
 
-  await deps.claims.run(triggerId, asked, async ({ at, timer, input }) => {
+  await deps.claims.run(triggerId, asked, async ({ at, timer, input, delivery, claim }) => {
     const trigger = deps.registry.get(triggerId);
     const check = trigger === null || trigger.state !== 'active' ? null : watchCheckOf(trigger);
 
     if (trigger === null || check === null) return;
     const read = watchOf(trigger).state;
     const outcome = await deps.run(check, read, input);
-    const committed = await commitCheck(deps, { triggerId, read, outcome, scheduledAt: at, now: now() });
+    const signed = { ...(delivery !== undefined && { delivery }), ...(claim !== undefined && { claim }) };
+    const committed = await commitCheck(deps, { triggerId, read, outcome, scheduledAt: at, now: now(), ...signed });
 
     // A check is the cost a watcher pays for the turns it spares: each is counted, with why one stopped.
     diagnostics.event('watch.checked', {
@@ -190,6 +196,45 @@ export async function checkWatcher(deps: WatchDeps, triggerId: string, asked: Wa
   return fired;
 }
 
+/**
+ * A watcher stopped until `cause` clears, as a check that failed on it stops: a connection its source lost, say. False
+ * where it is no live watcher.
+ */
+export function parkWatcher(registry: TriggerRegistry, triggerId: string, cause: { readonly reason: WatchParkReason; readonly detail: string }, now: number): boolean {
+  const trigger = registry.get(triggerId);
+
+  if (trigger === null || trigger.state !== 'active' || watchCheckOf(trigger) === null) return false;
+  parked(registry, trigger, cause, now);
+
+  return true;
+}
+
+/**
+ * A watcher parked on `reason` checking again, that cause cleared: the reason dropped, its state kept, its firings
+ * resumed. One parked on another cause, or paused by its owner, stays as it is.
+ */
+export async function resumeWatcher(registry: TriggerRegistry, triggerId: string, reason: WatchParkReason, now: number): Promise<boolean> {
+  const trigger = registry.get(triggerId);
+
+  if (trigger === null || trigger.state !== 'paused' || watchCheckOf(trigger) === null) return false;
+  const watch = watchOf(trigger);
+
+  if (watch.parked?.reason !== reason) return false;
+  registry.amendSpec(triggerId, { ...trigger.spec, watch: watch.state === undefined ? {} : { state: watch.state } });
+
+  return await registry.resume(triggerId, now);
+}
+
+/** Its state kept, its reason written, its firings paused. */
+function parked(registry: TriggerRegistry, trigger: TriggerRow, cause: { readonly reason: WatchParkReason; readonly detail: string }, now: number): void {
+  const watching: JsonObject = { parked: { reason: cause.reason, at: now, detail: cause.detail } };
+  const { state } = watchOf(trigger);
+
+  if (state !== undefined) watching['state'] = state;
+  registry.amendSpec(trigger.id, { ...trigger.spec, watch: watching });
+  registry.pause(trigger.id, now);
+}
+
 /** Its writes made in one synchronous section over the row read again: nothing else of this object runs between the read
  *  and the writes, so a revoke, a pause or another commit lands wholly before or wholly after. */
 async function commitCheck(deps: Pick<WatchDeps, 'registry' | 'log'>, checked: {
@@ -199,9 +244,13 @@ async function commitCheck(deps: Pick<WatchDeps, 'registry' | 'log'>, checked: {
   readonly outcome: WatchOutcome;
   /** The firing that asked for the check, which keys its fire. */
   readonly scheduledAt: number;
+  /** The verified delivery it answered, which keys its fire instead. */
+  readonly delivery?: string;
+  /** The delivery's claim, taken with the answer's state and fire ({@link WatchAsk.claim}). */
+  readonly claim?: () => boolean;
   readonly now: number;
 }): Promise<WatchCommit> {
-  const { triggerId, read, outcome, scheduledAt, now } = checked;
+  const { triggerId, read, outcome, scheduledAt, delivery, claim, now } = checked;
   const trigger = deps.registry.get(triggerId);
 
   if (trigger === null || trigger.state !== 'active') return 'dropped';
@@ -219,11 +268,7 @@ async function commitCheck(deps: Pick<WatchDeps, 'registry' | 'log'>, checked: {
   }
 
   if (outcome.kind === 'parked') {
-    const watching: JsonObject = { parked: { reason: outcome.reason, at: now, detail: outcome.detail } };
-
-    if (read !== undefined) watching['state'] = read;
-    deps.registry.amendSpec(triggerId, { ...trigger.spec, watch: watching });
-    deps.registry.pause(triggerId, now);
+    parked(deps.registry, trigger, { reason: outcome.reason, detail: outcome.detail }, now);
 
     return 'parked';
   }
@@ -233,6 +278,10 @@ async function commitCheck(deps: Pick<WatchDeps, 'registry' | 'log'>, checked: {
 
   // A cursor that moved back is a check that saw less than the one before it: nothing it found is new.
   if (movesBack(read, next)) return 'quiet';
+
+  // The delivery is spent here, in the same synchronous run as its state and its fire, so a reset cannot part them. A
+  // redelivery that was checked again while this one ran answers for it already.
+  if (claim !== undefined && !claim()) return 'dropped';
 
   // An answer is the watcher checking again: a `parked` an owner's resume left behind goes with the old state.
   if (stableStringify(next ?? null) !== stableStringify(read ?? null) || watch.parked !== undefined) {
@@ -253,6 +302,7 @@ async function commitCheck(deps: Pick<WatchDeps, 'registry' | 'log'>, checked: {
         ...(trigger.spec['payload'] !== undefined && { user_payload: trigger.spec['payload'] }),
         ...(typeof trigger.spec['mission_label'] === 'string' && { mission_label: trigger.spec['mission_label'] }),
         watch_brief: answer.brief,
+        ...(delivery !== undefined && { watch_delivery: delivery }),
       },
       trigger_creator_trust: trigger.creator_trust,
     },

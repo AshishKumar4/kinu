@@ -2,16 +2,20 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Webhook ingress. hmac: `X-Kinu-Signature` = HMAC-SHA256(secret, `<ts>.<body>`), timestamp within
  * ±5 min, signature claimed once for that window. bearer: constant-time compare. mtls: edge-verified.
+ * github: a repository hook Kinu made, `X-Hub-Signature-256` = `sha256=` HMAC-SHA256(secret, body)
+ * (docs.github.com/webhooks/using-webhooks/validating-webhook-deliveries), claimed once for the days GitHub keeps a
+ * delivery to redeliver; its `ping` is answered and checks nothing.
  */
 
 import * as v from 'valibot';
 import type { EventLog } from '../hub/log';
 import type { TriggerRegistry } from '../hub/triggers';
+import type { TriggerRow } from '../hub/types';
 import { spillEventContent } from '../hub/content-spill';
 import { Effect, Result } from 'effect';
 import { settle, settleSync } from '../../obs/index';
-import { decodeJsonValue, safeJsonParse, type JsonValue } from '../../utils/json';
-import { checkWatcher, watchCheckOf, type WatchDeps } from './watch';
+import { decodeJsonValue, safeJsonParse, type JsonObject, type JsonValue } from '../../utils/json';
+import { checkWatcher, watchCheckOf, WatchCheckSchema, type WatchAsk, type WatchCheck, type WatchDeps } from './watch';
 import type { SqlExec } from '../../types/primitives';
 import { hmacSha256Hex, timingSafeEqual } from '../../utils/crypto';
 import {
@@ -22,7 +26,16 @@ import type { WebhookSecretStore } from './secrets';
 
 const HMAC_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
 
-export type WebhookAuthMode = 'hmac' | 'bearer' | 'mtls';
+export type WebhookAuthMode = 'hmac' | 'bearer' | 'mtls' | 'github';
+
+/** A GitHub signature covers no time, so a claimed one is held as long as its secret can verify it: a replay, ever, is a
+ *  duplicate. A rotated secret, or a revoked trigger, forgets its claims ({@link forgetClaims}). */
+const GITHUB_CLAIM_KEPT = Number.MAX_SAFE_INTEGER;
+
+/** What GitHub signs when a hook is made (its ping), and what every delivery of a repository hook signs it names. */
+const GitHubPingSchema = v.object({ zen: v.string(), hook_id: v.number() });
+
+const GitHubRepositorySchema = v.object({ repository: v.object({ full_name: v.string() }) });
 
 export interface SecretStore {
   get(secretId: string): Promise<string | null>;
@@ -87,7 +100,8 @@ export interface RegisteredWebhook {
   secret: string | null;
 }
 
-function freshWebhookSecret(): string {
+/** A new webhook secret: 32 random bytes as hex. */
+export function freshWebhookSecret(): string {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
 
@@ -99,6 +113,75 @@ function webhookSecretOrMinted(provided: string | undefined): string {
   const trimmed = provided?.trim() ?? '';
 
   return trimmed === '' ? freshWebhookSecret() : trimmed;
+}
+
+/** A push watcher's own part of its trigger: the repository whose deliveries it checks, and the hook made for it. */
+const GitHubPushSchema = v.object({
+  source: v.literal('github-repo'), repo: v.string(), event: v.string(), hookId: v.optional(v.number()),
+});
+
+export type GitHubPush = v.InferOutput<typeof GitHubPushSchema>;
+
+/** The trigger's push watch; null for one that is none. */
+export function gitHubPushOf(trigger: Pick<TriggerRow, 'spec'>): GitHubPush | null {
+  const push = v.safeParse(GitHubPushSchema, trigger.spec['push']);
+
+  return push.success ? push.output : null;
+}
+
+/** A push watcher as its agent reads it back. */
+export interface PushWatcher {
+  readonly id: string;
+  readonly kind: 'webhook_durable';
+  readonly repo: string;
+  readonly hookId: number;
+}
+
+export interface PushWatcherOpts {
+  readonly repo: string;
+  /** The one event its hook delivers: a signature covers the body alone, so one event per hook is what says which it is. */
+  readonly event: string;
+  readonly label?: string;
+  readonly payload?: JsonObject;
+  readonly missionLabel?: string;
+  readonly check: WatchCheck;
+}
+
+/**
+ * A watcher GitHub's deliveries for `opts.repo` run rather than a clock: a webhook trigger an agent made, whose deliveries
+ * are signed with the secret minted here (`auth_mode: 'github'`). Its hook is made next, at GitHub, and kept by
+ * {@link keepPushHook}; a secret that cannot be stored leaves no trigger.
+ */
+export function registerPushWatcher(
+  registry: TriggerRegistry, secrets: Pick<WebhookSecretStore, 'put' | 'deleteByTrigger'>, opts: PushWatcherOpts, now: number,
+): Promise<{ readonly trigger_id: string; readonly secret: string }> {
+  return settle(Effect.gen(function* () {
+    const secret_id = `webhook_secret_${Math.random().toString(36).slice(2, 12)}`;
+    const secret = freshWebhookSecret();
+
+    const spec: JsonObject = {
+      auth_mode: 'github', secret_id, accepted_content_type: 'application/json',
+      push: { source: 'github-repo', repo: opts.repo, event: opts.event },
+      ...(opts.label !== undefined && { label: opts.label }),
+      ...(opts.payload !== undefined && { payload: opts.payload }),
+      ...(opts.missionLabel !== undefined && { mission_label: opts.missionLabel }),
+      check: v.parse(WatchCheckSchema, opts.check),
+    };
+
+    const trigger_id = yield* Effect.promise(() => registry.register({ kind: 'webhook_durable', spec, creator_trust: 'authenticated' }, now));
+
+    yield* storedSecret({ registry, secrets, trigger_id, secret_id, secret, now }, `the watcher of ${opts.repo}`);
+
+    return { trigger_id, secret };
+  }));
+}
+
+/** The hook made at GitHub for a push watcher, kept in its push watch; false for a trigger that is no push watcher. */
+export function keepPushHook(registry: TriggerRegistry, triggerId: string, hookId: number): boolean {
+  const trigger = registry.get(triggerId);
+  const push = trigger === null ? null : gitHubPushOf(trigger);
+
+  return trigger !== null && push !== null && registry.amendSpec(triggerId, { ...trigger.spec, push: { ...push, hookId } });
 }
 
 /** A failed secret write revokes the trigger: an hmac trigger without a secret can never receive. */
@@ -128,21 +211,39 @@ export async function registerDurableWebhook(
 
   if (secret === null) return registered;
 
-  return settleSync(Effect.try({ try: () => secrets.put(secret_id, trigger_id, secret), catch: (cause) => ({ cause }) }).pipe(
+  return settleSync(storedSecret({ registry, secrets, trigger_id, secret_id, secret, now }, `webhook "${opts.label}"`).pipe(Effect.as(registered)));
+}
+
+/** A new trigger's secret stored, or the trigger revoked: one that cannot verify a delivery can never receive. */
+function storedSecret(
+  held: {
+    readonly registry: TriggerRegistry; readonly secrets: Pick<WebhookSecretStore, 'put' | 'deleteByTrigger'>;
+    readonly trigger_id: string; readonly secret_id: string; readonly secret: string; readonly now: number;
+  },
+  what: string,
+): Effect.Effect<void> {
+  const { registry, secrets, trigger_id, secret_id, secret, now } = held;
+
+  return Effect.try({ try: () => secrets.put(secret_id, trigger_id, secret), catch: (cause) => ({ cause }) }).pipe(
     Effect.tapError(() => Effect.sync(() => {
       registry.revoke(trigger_id, now);
       secrets.deleteByTrigger(trigger_id);
     })),
-    Effect.catch((failed) => Effect.die(new Error(`webhook "${opts.label}" was not created: its secret could not be stored`, { cause: failed.cause }))),
-    Effect.as(registered),
-  ));
+    Effect.catch((failed) => Effect.die(new Error(`${what} was not created: its secret could not be stored`, { cause: failed.cause }))),
+  );
 }
 
 interface WebhookRefusal { readonly reason: string }
 
+/** What a delivery's proof lets it spend once: its key, and until when the proof would verify again. */
+interface SignedClaim {
+  readonly key: string;
+  readonly expiresAt: number;
+}
+
 interface WebhookAuth {
   readonly ingress: 'webhook_hmac' | 'webhook_bearer' | 'webhook_mtls';
-  readonly claim?: { key: string; expiresAt: number };
+  readonly claim?: SignedClaim;
 }
 
 const refused = (reason: string): Effect.Effect<never, WebhookRefusal> => Effect.fail({ reason });
@@ -152,6 +253,7 @@ function verifyWebhookAuth(
   deps: WebhookIngressDeps,
   spec: Partial<WebhookTriggerSpec>,
   opts: WebhookDelivery,
+  push: GitHubPush | null,
 ): Effect.Effect<WebhookAuth, WebhookRefusal> {
   return Effect.gen(function* () {
     if (spec.auth_mode === 'hmac') {
@@ -182,6 +284,8 @@ function verifyWebhookAuth(
       };
     }
 
+    if (spec.auth_mode === 'github') return yield* verifyGitHubDelivery(deps, spec, opts, push);
+
     if (spec.auth_mode === 'bearer') {
       const secretId = spec.secret_id;
 
@@ -206,14 +310,86 @@ function verifyWebhookAuth(
 }
 
 /**
+ * Why a signed body is not one the watcher asked for, or null when it is: it names another repository, or GitHub calls it
+ * another event than the one its hook delivers. A ping, known by its body, is asked for. The event header is not signed,
+ * but the hook delivers one event alone, so a signed body is of that one, and a header naming another is refused.
+ */
+function notWatched(push: GitHubPush | null, body: JsonValue, event: string | undefined): string | null {
+  if (v.is(GitHubPingSchema, body)) return null;
+  const named = v.safeParse(GitHubRepositorySchema, body);
+
+  if (push === null || !named.success || named.output.repository.full_name.toLowerCase() !== push.repo.toLowerCase()) return 'the delivery names another repository';
+
+  if (event !== push.event) return 'the delivery is of an event the watcher did not ask for';
+
+  return null;
+}
+
+/**
+ * A delivery from a repository hook Kinu made: signed over its body alone, so its signature is what is claimed once, and
+ * it must be one the watcher asked for ({@link notWatched}) before it is claimed.
+ */
+function verifyGitHubDelivery(deps: WebhookIngressDeps, spec: Partial<WebhookTriggerSpec>, opts: WebhookDelivery, push: GitHubPush | null): Effect.Effect<WebhookAuth, WebhookRefusal> {
+  return Effect.gen(function* () {
+    const secretId = spec.secret_id;
+
+    if (!secretId) return yield* refused('no github secret configured');
+    const secret = yield* Effect.promise(() => deps.secrets.get(secretId));
+
+    if (!secret) return yield* refused('secret revoked');
+    const presented = opts.headers['x-hub-signature-256'];
+
+    if (presented === undefined || !presented.startsWith('sha256=')) return yield* refused('missing X-Hub-Signature-256');
+    const expected = `sha256=${yield* Effect.promise(() => hmacSha256Hex(secret, opts.body_text))}`;
+
+    if (!timingSafeEqual(expected, presented)) return yield* refused('signature mismatch');
+    const unasked = notWatched(push, safeJsonParse(opts.body_text), opts.headers['x-github-event']);
+
+    if (unasked !== null) return yield* refused(unasked);
+
+    return { ingress: 'webhook_hmac', claim: { key: `github:${sha256Hex(presented, 32)}`, expiresAt: GITHUB_CLAIM_KEPT } };
+  });
+}
+
+/** A repository hook's delivery as its check reads it: the one event its hook delivers, and GitHub's delivery id beside
+ *  the payload. The id is not signed: it is GitHub's word, as sent. */
+function gitHubInput(push: GitHubPush | null, opts: WebhookDelivery, payload: JsonValue): JsonValue {
+  return { event: push?.event ?? null, delivery: opts.headers['x-github-delivery'] ?? null, payload };
+}
+
+/** Whether a check answers the trigger's deliveries, rather than each being published as an event. */
+function watchesDeliveries(deps: WebhookIngressDeps, trigger: TriggerRow): boolean {
+  return deps.watch !== undefined && watchCheckOf(trigger) !== null;
+}
+
+/** A delivery a check answers, or GitHub's ping that nothing answers; null for one published as an event. `claim` is
+ *  what its signature proved, which keys a fire and is taken with it; a delivery none proved is keyed by its arrival. */
+async function checkedDelivery(
+  deps: WebhookIngressDeps, trigger: TriggerRow, opts: WebhookDelivery, delivered: { body: JsonValue; claim: SignedClaim | undefined },
+): Promise<WebhookDeliveryResult | null> {
+  const { body, claim } = delivered;
+  const github = trigger.spec['auth_mode'] === 'github';
+
+  // GitHub's ping when a hook is made, known by its signed body: answered, and nothing to check.
+  if (github && v.is(GitHubPingSchema, body)) return { status: 'admitted', admitted: false };
+
+  if (!watchesDeliveries(deps, trigger)) return null;
+
+  const input = github ? gitHubInput(gitHubPushOf(trigger), opts, body) : body;
+  const signed = claim === undefined ? {} : { delivery: claim.key, claim: () => claimSignedDelivery(deps.sql, trigger.id, claim, opts.now) === null };
+
+  return watchedDelivery(deps, trigger.id, { at: opts.now, input, ...signed });
+}
+
+/**
  * A watcher's delivery is its check's input, and only what the check found is published. Answered once the check
  * committed: a deliverer that gave up and sends again is folded into the running check's re-check.
  */
-async function watchedDelivery(deps: WebhookIngressDeps, triggerId: string, at: number, input: JsonValue): Promise<WebhookDeliveryResult> {
+async function watchedDelivery(deps: WebhookIngressDeps, triggerId: string, asked: Omit<WatchAsk, 'timer'>): Promise<WebhookDeliveryResult> {
   const { watch } = deps;
 
   if (watch === undefined) return { status: 'rejected', http_status: 503, reason: 'this workspace runs no checks' };
-  const fired = await checkWatcher({ registry: deps.triggers, log: deps.log, ...watch }, triggerId, { at, timer: false, input }, Date.now);
+  const fired = await checkWatcher({ registry: deps.triggers, log: deps.log, ...watch }, triggerId, { ...asked, timer: false }, Date.now);
 
   if (fired) deps.onAdmitted();
 
@@ -245,7 +421,7 @@ export function acceptWebhookDelivery(
       return { status: 'rejected', http_status: 415, reason: `expected ${spec.accepted_content_type}` };
     }
 
-    const verified = yield* Effect.result(verifyWebhookAuth(deps, spec, opts));
+    const verified = yield* Effect.result(verifyWebhookAuth(deps, spec, opts, gitHubPushOf(trigger)));
 
     if (Result.isFailure(verified)) return { status: 'rejected', http_status: 401, reason: verified.failure.reason };
     const auth = verified.success;
@@ -260,14 +436,18 @@ export function acceptWebhookDelivery(
     const parsedBody: unknown = receivedCT.includes('json') ? safeJsonParse(opts.body_text) : opts.body_text;
 
     // Spend the claim before anything durable: freshness alone admits a replay across a dedupe
-    // bucket boundary. A held claim answers as a duplicate, never a rejection.
-    const held = auth.claim ? claimSignedDelivery(deps.sql, opts.trigger_id, auth.claim, opts.now) : null;
+    // bucket boundary. A held claim answers as a duplicate, never a rejection. A watched delivery's
+    // claim is only read here: its check's commit takes it, with what the check found.
+    const spend = watchesDeliveries(deps, trigger) ? heldClaim : claimSignedDelivery;
+    const held = auth.claim === undefined ? null : spend(deps.sql, opts.trigger_id, auth.claim, opts.now);
 
     if (held !== null) {
       return { status: 'admitted', event_id: held.event_id ?? undefined, admitted: false };
     }
 
-    if (deps.watch !== undefined && watchCheckOf(trigger) !== null) return yield* Effect.promise(() => watchedDelivery(deps, trigger.id, opts.now, decodeJsonValue({ value: parsedBody ?? null })));
+    const checked = yield* Effect.promise(() => checkedDelivery(deps, trigger, opts, { body: decodeJsonValue({ value: parsedBody ?? null }), claim: auth.claim }));
+
+    if (checked !== null) return checked;
 
     const delivery_id = opts.delivery_id ?? `${opts.now}-${Math.random().toString(36).slice(2, 10)}`;
 
@@ -330,14 +510,8 @@ export function initWebhookIngressTables(sql: SqlExec): void {
   `);
 }
 
-/** Null when this delivery took the claim. No await between read and insert: a DO's input gate
- *  does not reopen inside a synchronous run. */
-function claimSignedDelivery(
-  sql: SqlExec,
-  triggerId: string,
-  claim: { key: string; expiresAt: number },
-  now: number,
-): { event_id: string | null } | null {
+/** The delivery that holds `claim` already, or null when none does; expired claims go first. */
+function heldClaim(sql: SqlExec, triggerId: string, claim: SignedClaim, now: number): { event_id: string | null } | null {
   sql.exec(`DELETE FROM webhook_replay_claims WHERE expires_at <= ?`, now);
 
   const held = v.safeParse(ClaimRowSchema, sql.exec(
@@ -345,13 +519,26 @@ function claimSignedDelivery(
     triggerId, claim.key,
   ).toArray()[0]);
 
-  if (held.success) return { event_id: held.output.event_id };
+  return held.success ? { event_id: held.output.event_id } : null;
+}
+
+/** Null when this delivery took the claim. No await between read and insert: a DO's input gate
+ *  does not reopen inside a synchronous run. */
+function claimSignedDelivery(sql: SqlExec, triggerId: string, claim: SignedClaim, now: number): { event_id: string | null } | null {
+  const held = heldClaim(sql, triggerId, claim, now);
+
+  if (held !== null) return held;
   sql.exec(
     `INSERT INTO webhook_replay_claims (trigger_id, claim, event_id, expires_at) VALUES (?, ?, NULL, ?)`,
     triggerId, claim.key, claim.expiresAt,
   );
 
   return null;
+}
+
+/** Every claim of a trigger forgotten: its secret rotated, no signature it claimed can verify again. */
+export function forgetClaims(sql: SqlExec, triggerId: string): void {
+  sql.exec(`DELETE FROM webhook_replay_claims WHERE trigger_id = ?`, triggerId);
 }
 
 function bindClaimedDelivery(sql: SqlExec, triggerId: string, claim: string, eventId: string): void {

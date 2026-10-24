@@ -5,12 +5,12 @@ import * as v from 'valibot';
 import { childEnv, runToExit, scratchDir } from '@kinu.run/test-utils';
 import { measurePromptUsage, type Assertion } from '../evals/src/results';
 import {
-  externalCause, externalOnly, markInstant, previousSummary, recordMarkAt, recordRed, recordRunner, renderReport, type ReportEntry, type ReportSummary,
+  externalCause, externalOnly, flakyRows, markInstant, previousSummary, recordMarkAt, recordRed, recordRunner, renderReport, type ReportEntry, type ReportSummary,
 } from './deploy-report';
 
 const META = { environment: 'staging', mode: 'deploy', sha: 'bbbbbbbbbbbbbbbb', startedAt: '2026-09-30T20:00:00.000Z' };
 
-const red = (phase: string, command: string, external?: string): ReportEntry => ({
+const red = (phase: string, command: string, external?: string): Extract<ReportEntry, { kind: 'red' }> => ({
   kind: 'red', phase, what: command, command, verdict: 'exit 1', finding: `${command} went red`, reproduce: command,
   log: `/logs/${command}.log`, tail: ['(fail) one test'], external,
 });
@@ -302,5 +302,34 @@ describe('a red that is a provider\'s refusal, not the build\'s (owner, 2026-10-
       own: { promote: false, held: ['post-publish: bun run gate:first-run'] },
       green: { promote: false, held: [] },
     });
+  });
+});
+
+// The owner: "Flakes: rerun, don't chase". Staging 69e0baee5: first-run's web search 402 (external), agent-return's
+// "Connection closed" mid-flow and panel's mint 400, the two a ladder row's each, run again once against the same build.
+describe('the reds a deploy may run again once', () => {
+  const run = (phase: string, command: string, what = command): ReportEntry => ({ ...red(phase, command), what });
+
+  test('each red a ladder row of a phase named, by phase; an external one stays listed and is not run again', () => {
+    expect(flakyRows([
+      run('post-publish', 'bash scripts/product-flows-tier.sh --flow=agent-return', 'agent-return'),
+      run('post-publish', 'bash scripts/product-flows-tier.sh --flow=panel', 'panel'),
+      red('post-publish', 'bun run gate:first-run', `${CREDITS}, in 1 failed test(s)`),
+      run('source', 'bun run gate:devbox-e2e', 'Devbox contracts'),
+    ])).toEqual({
+      rerun: [
+        { phase: 'post-publish', commands: ['bash scripts/product-flows-tier.sh --flow=agent-return', 'bash scripts/product-flows-tier.sh --flow=panel'] },
+        { phase: 'source', commands: ['bun run gate:devbox-e2e'] },
+      ],
+      names: ['post-publish: agent-return', 'post-publish: panel', 'source: Devbox contracts'],
+    });
+  });
+
+  test('a red no ladder row named, or none at all, is run again by nothing: the deploy holds as before', () => {
+    const verdict: ReportEntry = { kind: 'step', phase: 'deploy', what: 'the verdict', finding: 'this deploy went red' };
+    const provision: ReportEntry = { ...red('provision', 'credential-checkpoint'), command: undefined };
+
+    expect([flakyRows([verdict, run('post-publish', 'bash scripts/product-flows-tier.sh --flow=panel')]), flakyRows([provision]), flakyRows([])])
+      .toEqual([{ held: ['deploy: the verdict'] }, { held: ['provision: credential-checkpoint'] }, { held: [] }]);
   });
 });

@@ -27,10 +27,11 @@ import {
   GATE_DEADLINE_SECONDS, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
   DEPLOY_PHASES, browserModules, deployOrder, deployPlan, gatesFor, liveTierTargets, packageScripts, phaseWave,
   localDeployGates, reportCIVerdicts, runnableArgv, sharedBrowserModules, sharedOf, tierRun, tierSchedule, tierWave, trackedTestFiles, waveCaps, type WaveRow,
-  HAMMER_PARTS, HAMMER_REPEATS, HAMMER_ROW_LABEL, ciUnits, changedTestGate, splitCIGate, type Gate, type ArmadaReport, armadaPhaseRows, armadaPhaseRun, armadaReport, armadaReproduce, armadaRowVerdicts, jobDrove, onArmada, secretGroup, recordArmadaRow,
+  HAMMER_PARTS, HAMMER_REPEATS, HAMMER_ROW_LABEL, ciUnits, changedTestGate, splitCIGate, type Gate, type ArmadaReport, armadaPhaseRows, armadaPhaseRun, armadaPlan, armadaReport, unrunRows, armadaReproduce, armadaRowVerdicts, jobDrove, onArmada, secretGroup, recordArmadaRow,
 } from './ladder';
 import { ANTI_SLOP_ROOT, isAntiSlopRuleSuite, isAntiSlopSuite, isBunDiscoverableSuite, isParseable, isPythonSuite, isVitestEvalSuite, readMatching } from './sources';
 import { REPO_ROOT as root } from './repo-root';
+import { deployRowsArgument, deployRowsOf } from './deploy-report';
 import { fixtureWorker } from './fixtures/devbox-e2e/fixture';
 import { parseJUnit, SKIP_RATCHET_TARGETS } from './skip-ratchet';
 import { declaredName, parse, walk } from './syntax';
@@ -763,6 +764,29 @@ describe('a deploy row with secrets of its own', () => {
     expect(() => armadaPhaseRun('source', rows, sha, 'https://staging.kinu.run')).toThrow('different secrets');
     // The OAuth client's check is a job of its own too: its token is in no other container.
     expect(secretsOf(client)).toEqual(['KINU_OAUTH_CLIENT_TOKEN']);
+  });
+
+  // The owner: "Flakes: rerun, don't chase". A deploy runs its red rows again once, those alone, in the job of their
+  // secrets, as `--deploy-rows` narrows the plan.
+  test('a plan narrowed to some rows names those alone, each in the job of its own secrets', () => {
+    const rows = ['bash scripts/product-flows-tier.sh --flow=panel', 'bun run gate:first-run'];
+    const group = armadaPhaseRows(['post-publish']).find((gate) => gate.run === 'bun run gate:first-run');
+    const names = (plan: ReturnType<typeof armadaPlan>) => plan.include.map((entry) => entry.row);
+
+    expect({
+      shared: names(armadaPlan(['post-publish'], { group: '', only: deployRowsOf(deployRowsArgument(rows)) })),
+      own: names(armadaPlan(['post-publish'], { group: group === undefined ? '' : secretGroup(group), only: rows })),
+      whole: names(armadaPlan(['post-publish'], { group: '' })).length > 1,
+    }).toEqual({ shared: ['bash scripts/product-flows-tier.sh --flow=panel'], own: ['bun run gate:first-run'], whole: true });
+  });
+
+  // Review of c4f1033e2: a command the phase runs no row of was dropped, and the rest passing passed it too.
+  test('a rerun naming a command the phase runs no row of is refused, and one naming flow units is not', () => {
+    expect({
+      unknown: unrunRows(['post-publish'], ['bash scripts/product-flows-tier.sh --flow=panel', 'bun scripts/gone.ts']),
+      flows: unrunRows(['post-publish'], ['bash scripts/product-flows-tier.sh --flow=panel', 'bun run gate:first-run']),
+      wrongPhase: unrunRows(['source'], ['bun run gate:first-run']),
+    }).toEqual({ unknown: ['bun scripts/gone.ts'], flows: [], wrongPhase: ['bun run gate:first-run'] });
   });
 
   // The report's reproduce line kept only the plan's arguments, so a pasted line ran with none of the row's secrets.
