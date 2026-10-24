@@ -115,10 +115,11 @@ async function tryAgain(page: Page): Promise<void> {
 }
 
 /** Either the route rendered or its boundary caught. Waiting for the SETTLED
- *  state rather than for one outcome is what lets a failure report which it was. */
+ *  state rather than for one outcome is what lets a failure report which it was. The page reloads
+ *  itself to recover, and the wait is asked again of each new document as it starts, before it has a body. */
 async function chunkSettled(page: Page): Promise<void> {
   await page.waitForFunction(() => document.querySelector('[data-lazy-loaded]') !== null
-    || (document.body.textContent ?? '').includes('This view crashed'));
+    || (document.body?.textContent ?? '').includes('This view crashed'));
 }
 
 async function readAttempt(page: Page, which: 'lazyStaleAttempts' | 'lazyHealthyAttempts'): Promise<number> {
