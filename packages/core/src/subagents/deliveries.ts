@@ -368,6 +368,7 @@ export function pendingEventsDelivery(eventLog: EventLog, now: number): Delivery
   const metadata: JsonObject = {
     ...turnMetadata({ kind: 'event_drain', text: batch.text, replyTurnId: turnId }),
     ...(batch.mode !== null && { kinuMode: batch.mode }),
+    ...(batch.tier !== null && { profile_tier: batch.tier }),
     ...(batch.missions.length > 0 && { [MISSION_LABELS_METADATA_KEY]: batch.missions }),
   };
 

@@ -177,6 +177,7 @@ const USER_DO_METHODS = [
   'cancelDeviceRequestsForBackgroundJob',
   'githubHookCreate',
   'githubHookDelete',
+  'githubRead',
   'googleCall',
   'googleConnection',
   'googleToken',

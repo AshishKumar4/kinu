@@ -43,6 +43,11 @@ const TIER_ID_MAX_LEN = 32;
 
 export const TierIdSchema = v.pipe(v.string(), v.regex(TIER_ID_RE), v.maxLength(TIER_ID_MAX_LEN));
 
+/** The tier a schedule's turns run at: `fast`, the workspace's fast model where it has one, else its default. */
+export const ScheduleTierSchema = v.literal('fast');
+
+export type ScheduleTier = v.InferOutput<typeof ScheduleTierSchema>;
+
 /** Well-formedness only (durable rows may come from another build); existence is checked at resolve time. */
 export function isTierId(value: string): value is TierId {
   return v.safeParse(TierIdSchema, value).success;

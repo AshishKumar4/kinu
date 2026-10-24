@@ -8,7 +8,7 @@ import { Cause, Effect } from 'effect';
 import * as v from 'valibot';
 import { attempt, authoredRefusal, diagnostics, KinuError, settle } from '@kinu.run/core/obs';
 import {
-  blueprintSeed, ClockSchema, err, fallbackWorkspaceIdentity, json, kinuBlueprint, knownTimeZone, objectNamed, PERSONAL_ASSISTANT_ID, safeJson,
+  blueprintOwnerName, blueprintSeed, ClockSchema, err, fallbackWorkspaceIdentity, json, kinuBlueprint, knownTimeZone, objectNamed, PERSONAL_ASSISTANT_ID, safeJson,
   type UserCaller, type WorkspaceEntry,
 } from '@kinu.run/core';
 import type { UserDO } from './user-do';
@@ -72,8 +72,7 @@ function installBlueprint<Id>(request: InstallRequest<Id>): Effect.Effect<Worksp
 
     // A schedule that watches a connection is armed now only if the owner holds it; the account arms it later on connect.
     const [profile, connected] = yield* Effect.promise(async () => Promise.all([userDO.getProfile(owner), userDO.userMcp_connectedPresets(owner)]));
-    // The owner as the soul names them: their name, else their address's first part.
-    const ownerName = [profile?.displayName?.trim(), profile?.email.split('@')[0]].find((called) => called !== undefined && called !== '') ?? 'you';
+    const ownerName = blueprintOwnerName(profile);
 
     const { soul, seed } = blueprintSeed(blueprint, {
       timeZone: body.timeZone, owner: ownerName, connected,

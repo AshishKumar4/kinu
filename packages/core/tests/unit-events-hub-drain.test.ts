@@ -23,10 +23,10 @@ function internal(id: string, ingress: Extract<IngressKind, 'self_emit' | 'compu
   };
 }
 
-function timer(id: string): KinuEvent {
+function timer(id: string, tier?: 'fast'): KinuEvent {
   return {
     ...EVENT_BASE, id, ingress: 'timer_alarm', variant: 'timer', payload_visibility: 'full',
-    payload: { trigger_id: 'trg-daily', scheduled_fire_at: 0, label: 'daily' },
+    payload: { trigger_id: 'trg-daily', scheduled_fire_at: 0, label: 'daily', ...(tier !== undefined && { tier }) },
   };
 }
 
@@ -108,6 +108,16 @@ describe('buildDrainBatch', () => {
     const batch = present(buildDrainBatch([assignment('as1'), webhook('wh1')]), 'the drain batch');
     expect(batch.ids).toEqual(['wh1']);
     expect(batch.text).not.toContain('[subagent_task]');
+  });
+});
+
+// A schedule that names its tier (the assistant's checks: `fast`) runs its turn there, only where the whole turn is its.
+describe('buildDrainBatch — a schedule\'s tier', () => {
+  test('a turn of schedules that all name the fast tier runs on it; one beside other work runs on the default', () => {
+    expect(present(buildDrainBatch([timer('t1', 'fast'), timer('t2', 'fast')]), 'the fast schedules').tier).toBe('fast');
+    expect(present(buildDrainBatch([timer('t1', 'fast'), timer('t2')]), 'a fast schedule beside a plain one').tier).toBeNull();
+    expect(present(buildDrainBatch([timer('t1', 'fast'), webhook('wh1')]), 'a fast schedule beside a webhook').tier).toBeNull();
+    expect(present(buildDrainBatch([timer('t1')]), 'a plain schedule').tier).toBeNull();
   });
 });
 

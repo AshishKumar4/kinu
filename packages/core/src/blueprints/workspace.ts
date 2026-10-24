@@ -7,6 +7,8 @@ import * as v from 'valibot';
 import { ExploreNeedSchema, GALLERY_CATEGORIES, type BlueprintPage, type WorkspaceCard } from '../slates/gallery-api';
 import { WORKSPACE_LAYOUTS, type WorkspaceLayout } from '../config/workspace-layout';
 import type { BlueprintSchedule } from '../types/blueprint-schedule';
+import { ScheduleTierSchema } from '../types/profile';
+import { WatchCheckSchema } from '../types/watch';
 
 /** `HH:MM`, 24-hour: a daily schedule's time, and the brief time an install chooses. */
 export const ClockSchema = v.pipe(v.string(), v.regex(/^([01]\d|2[0-3]):[0-5]\d$/));
@@ -21,7 +23,9 @@ export type BlueprintWhen = v.InferOutput<typeof WhenSchema>;
 
 /** A schedule the new workspace holds: its main agent wakes with `prompt` each time it runs. `brief`: the one the
  *  installer's brief time moves. `connection`: the connection (an MCP preset id) it watches, armed only while the
- *  owner holds it, since without it each run is a turn that finds nothing. */
+ *  owner holds it, since without it each run is a turn that finds nothing. `check`: a watcher's program, which runs
+ *  first and wakes the agent only with what it found, at no model call (`events/ingress/watch.ts`). `tier`: the
+ *  tier the turns it wakes run at. */
 const AutomationSchema = v.strictObject({
   label: v.pipe(v.string(), v.nonEmpty()),
   /** What it does, as the blueprint's page says it. */
@@ -30,6 +34,8 @@ const AutomationSchema = v.strictObject({
   prompt: v.pipe(v.string(), v.nonEmpty()),
   brief: v.optional(v.boolean()),
   connection: v.optional(v.string()),
+  check: v.optional(WatchCheckSchema),
+  tier: v.optional(ScheduleTierSchema),
 });
 
 export const WorkspaceBlueprintSchema = v.strictObject({
@@ -98,6 +104,11 @@ export interface BlueprintBirth {
   readonly seed: WorkspaceSeed;
 }
 
+/** The owner as a blueprint's text names them: their name, else their address's first part. */
+export function blueprintOwnerName(profile: { readonly displayName?: string | null; readonly email: string } | null): string {
+  return [profile?.displayName?.trim(), profile?.email.split('@')[0]].find((called) => called !== undefined && called !== '') ?? 'you';
+}
+
 /** The soul and the seed a blueprint installs as, for this owner and what they chose. */
 export function blueprintSeed(blueprint: WorkspaceBlueprint, install: BlueprintInstall): BlueprintBirth {
   const named = install.agent?.trim();
@@ -110,13 +121,15 @@ export function blueprintSeed(blueprint: WorkspaceBlueprint, install: BlueprintI
       blueprint: blueprint.id,
       layout: blueprint.layout,
       agent,
-      schedules: blueprint.automations.map(({ label, when, prompt, brief, connection }) => ({
+      schedules: blueprint.automations.map(({ label, when, prompt, brief, connection, check, tier }) => ({
         label,
         ...(when.kind === 'every'
           ? { cron: everyCron(when.minutes) }
           : { cron: dailyCron(brief === true ? install.brief ?? when.at : when.at), timeZone: install.timeZone }),
         ...(connection !== undefined && { connection }),
         prompt: fill(prompt),
+        ...(check !== undefined && { check }),
+        ...(tier !== undefined && { tier }),
       })),
       connected: install.connected,
     },

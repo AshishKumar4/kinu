@@ -68,6 +68,7 @@ function actorWith(input: { executors?: ExecutorProviderSurface[]; roleSwitch?: 
     ownerWaits: null,
     mail: null,
     google: null,
+    github: null,
   };
 }
 

@@ -36,6 +36,9 @@ const WORKSPACE_CAPABILITY_TIERS = {
   /** A repository hook for a push watcher, made with the GitHub connection's token, delivering only to the asking
    *  workspace's own signed route (`user/github-hooks.ts`). */
   'github.hooks': 'workspace',
+  /** A GET of GitHub's REST API with the GitHub connection's token, made by the account; the token never leaves it
+   *  (`github/reads.ts`). */
+  'github.read': 'workspace',
   /** The Google connection's access token itself. Owner-only: a workspace holding it would act at Google as the owner,
    *  with no approval between. */
   'google.token': 'owner_only',

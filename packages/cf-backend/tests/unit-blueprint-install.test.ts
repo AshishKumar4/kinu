@@ -176,8 +176,15 @@ describe('installing a workspace blueprint', () => {
       blueprint: 'personal-assistant', layout: 'focus', agent: 'Jarvis',
       schedules: [
         { label: 'Daily brief', cron: '30 8 * * *', timeZone: 'Europe/Berlin', prompt: expect.stringContaining("Write Ashish's brief for today") },
-        { label: 'GitHub check', cron: '*/15 * * * *', connection: 'github', prompt: expect.stringContaining('GitHub tools') },
-        { label: 'Gmail check', cron: '*/15 * * * *', connection: 'google', prompt: expect.stringContaining("Ashish's Gmail") },
+        // Watchers: a check program reads each connection, and only what it found wakes the agent, on its fast model.
+        {
+          label: 'GitHub check', cron: '*/15 * * * *', connection: 'github', prompt: expect.stringContaining('New GitHub notifications for Ashish'),
+          check: expect.objectContaining({ reads: ['github'] }), tier: 'fast',
+        },
+        {
+          label: 'Gmail check', cron: '*/15 * * * *', connection: 'google', prompt: expect.stringContaining("New mail in Ashish's inbox"),
+          check: expect.objectContaining({ reads: ['google'] }), tier: 'fast',
+        },
       ],
       // The account holds GitHub as it installs: its check is armed at the seed, Gmail's when the owner connects it.
       connected: ['github'],

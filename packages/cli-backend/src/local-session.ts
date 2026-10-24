@@ -2558,6 +2558,7 @@ export class LocalAgentSession {
       agents: () => this.agentsToolDeps(mode),
       mail: null,
       google: null,
+      github: null,
     }), SURFACE_POLICY.program, reported);
   }
 
@@ -2586,6 +2587,7 @@ export class LocalAgentSession {
       // Mail is the cloud account's (docs/MAIL.md §3); a local session has none.
       mail: null,
       google: null,
+      github: null,
     };
   }
 

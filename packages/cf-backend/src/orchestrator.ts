@@ -41,7 +41,7 @@ import {
   type PlanReview, actorReadHandle, ownerLaneDeclarations, type IntentResult, type OwedIntent, type OwedOwnerIntent,
   createEmailThreadDispatcher,
 } from "@kinu.run/core";
-import { PROJECT_OWNER_CRED, bookmarkNow, censusOf, missingBytes, requireOps, restartedForRestore, restoreArmed, type ArmedRestore, type MissingBytes, type RestoreTarget, WorkspaceLayoutSchema, type BlueprintSchedule, type OpsCaller, type TablesAnswer, type WorkspaceLayout, type WorkspaceSeed } from '@kinu.run/core';
+import { PROJECT_OWNER_CRED, blueprintOwnerName, blueprintSeed, kinuBlueprint, stableStringify, bookmarkNow, censusOf, missingBytes, requireOps, restartedForRestore, restoreArmed, type ArmedRestore, type MissingBytes, type RestoreTarget, WorkspaceLayoutSchema, type BlueprintSchedule, type OpsCaller, type TablesAnswer, type WorkspaceLayout, type WorkspaceSeed } from '@kinu.run/core';
 import { createHostedWorkspace, type HostedBox, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import { WorkspaceExecutors, type ExecutorFileChunkRead, type ExecutorFileChunkWrite } from "./workspace-executors";
 import { HeldRead } from "./account-reads";
@@ -1624,7 +1624,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     actor: SeatedActor, runtime: CFRuntime,
     held: { readonly search: WebSearchProvider; readonly stores: ServedStores; readonly agents?: () => AgentsToolDeps },
   ): SurfaceActor {
-    return this.hostedSurface({ ...actor, runtime }, { ...held, ownerWaits: this.hireOwnerWaits(actor), google: this.googleFor(actor.handle.actorId, actor.record.name), mail: this.mailFor(actor.handle.actorId, actor.record.name) });
+    return this.hostedSurface({ ...actor, runtime }, {
+      ...held, ownerWaits: this.hireOwnerWaits(actor), google: this.googleFor(actor.handle.actorId, actor.record.name), github: this.githubReads(),
+      mail: this.mailFor(actor.handle.actorId, actor.record.name),
+    });
   }
 
   /**
@@ -4839,6 +4842,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     await this.tracing.invocation('alarm', 'tick', async (tick) => {
       // A phase's failure is `fail`ed on its span, not rethrown: the tick continues to the next phase.
       await tick.span('alarm.due_triggers', (span) => settle(Effect.catchCause(Effect.gen({ self: this }, function* () {
+        // An installed check its blueprint has replaced is replaced before it fires again; one that cannot be fires as it was.
+        yield* Effect.promise(() => settleLogged('blueprint.watchers_unreplaced', { doing: "replacing the installed checks its blueprint has replaced", otherwise: 'unavailable' },
+          async () => { await this.currentBlueprintWatchers(); }, { workspace: this.name }));
         const { fired } = yield* Effect.promise(() => fireDueTriggers({ registry: this.triggerRegistry, log: this.eventLog, watch: this.watching }, now));
         span.setAttribute('kinu.triggers_fired', fired);
       }), phaseFailed(span, { doing: 'firing the triggers due on this wake', otherwise: 'io' }, (failure) => {
@@ -6758,16 +6764,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * kept watcher of a connection the owner now holds, and cancels each of one they no longer hold, by its label.
    */
   async connectionsChanged(connected: readonly string[]): Promise<void> {
-    const armed = new Map(listTriggers(this.triggerRegistry).triggers.flatMap((trigger) => {
-      const labelled = v.safeParse(v.object({ label: v.string() }), trigger.spec);
-      const owners = trigger.kind === 'timer_cron' && trigger.state === 'active' && trigger.creator_trust === 'owner';
+    const armed = this.armedBlueprintSchedules();
 
-      return owners && labelled.success ? [[labelled.output.label, trigger.id] as const] : [];
-    }));
-
-    for (const watcher of this.actorHandle().config.getBlueprintWatchers()) {
+    for (const watcher of await this.currentBlueprintWatchers()) {
       const held = watcher.connection !== undefined && connected.includes(watcher.connection);
-      const id = armed.get(watcher.label);
+      const id = armed.get(watcher.label)?.id;
 
       if (held && id === undefined) await this.armSchedule(watcher);
 
@@ -6775,9 +6776,68 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
   }
 
+  /** The owner's own schedules standing, by label: a watcher its check parked stands too, and is never armed twice. */
+  private armedBlueprintSchedules(): Map<string, TriggerView> {
+    return new Map(listTriggers(this.triggerRegistry).triggers.flatMap((trigger) => {
+      const labelled = v.safeParse(v.object({ label: v.string() }), trigger.spec);
+      const owners = trigger.kind === 'timer_cron' && (trigger.state === 'active' || trigger.state === 'paused') && trigger.creator_trust === 'owner';
+
+      return owners && labelled.success ? [[labelled.output.label, trigger] as const] : [];
+    }));
+  }
+
+  /**
+   * The kept connection watchers as the blueprint holds them now. One installed before its blueprint gave it a check (the
+   * Personal assistant's GitHub and Gmail checks before version 2, a model turn every 15 minutes each) is replaced by the
+   * blueprint's, matched by its label and connection, and so is its standing trigger, in place. Only these change: the
+   * soul, the layout and the daily brief stay as installed (docs/HOME-EXPLORE.md §4). The owner asked for it, 2026-10-23.
+   */
+  private async currentBlueprintWatchers(): Promise<readonly BlueprintSchedule[]> {
+    const { config } = this.actorHandle();
+    const kept = config.getBlueprintWatchers();
+    const blueprint = kinuBlueprint(config.getBlueprint() ?? '');
+    const now = (watcher: BlueprintSchedule) => blueprint?.automations.find(({ label, connection }) => label === watcher.label && connection === watcher.connection);
+
+    const moved = kept.filter((watcher) => {
+      const automation = now(watcher);
+
+      return automation?.check !== undefined && (stableStringify(automation.check) !== stableStringify(watcher.check ?? null) || automation.tier !== watcher.tier);
+    });
+
+    if (blueprint === undefined || moved.length === 0) return kept;
+    // Filled as the install filled it: the owner's name as their account says it now, the agent's as this chat is titled.
+    const profile = await this.requireOwnerUserDO().getProfile(await this.userCaller());
+    const { seed } = blueprintSeed(blueprint, { owner: blueprintOwnerName(profile), agent: config.getChatTitle() ?? blueprint.agent, connected: [], timeZone: 'UTC' });
+    const replaced = kept.map((watcher) => (moved.includes(watcher) ? seed.schedules.find(({ label }) => label === watcher.label) ?? watcher : watcher));
+    const armed = this.armedBlueprintSchedules();
+
+    config.setBlueprintWatchers(replaced);
+
+    for (const watcher of replaced.filter((each) => !kept.includes(each))) {
+      const standing = armed.get(watcher.label);
+
+      if (standing === undefined) continue;
+
+      // Its next firing kept, it checks from then on; a cron of its own moved is armed anew.
+      if (standing.spec['cron'] === watcher.cron && standing.spec['time_zone'] === watcher.timeZone) {
+        this.triggerRegistry.amendSpec(standing.id, {
+          ...standing.spec, payload: { prompt: watcher.prompt }, ...(watcher.check !== undefined && { check: watcher.check }), ...(watcher.tier !== undefined && { tier: watcher.tier }),
+        });
+      } else {
+        await this.cancelTrigger(standing.id, 'owner');
+        await this.armSchedule(watcher);
+      }
+    }
+
+    diagnostics.event('blueprint.watchers_replaced', { blueprint: blueprint.id, version: blueprint.version, watchers: moved.map(({ label }) => label).join(', ') });
+
+    return replaced;
+  }
+
   private async armSchedule(schedule: BlueprintSchedule): Promise<void> {
     await this.createTimerTrigger({
       cron: schedule.cron, ...(schedule.timeZone !== undefined && { timeZone: schedule.timeZone }), label: schedule.label, payload: { prompt: schedule.prompt }, trust: 'owner',
+      ...(schedule.check !== undefined && { check: schedule.check }), ...(schedule.tier !== undefined && { tier: schedule.tier }),
     });
   }
 

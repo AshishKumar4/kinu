@@ -116,6 +116,10 @@ export { createGoogleCodemodeProvider, type GoogleDeps, type GoogleWriteApproval
 
 export { callGoogle, GoogleCallSchema, type GoogleAnswer, type GoogleCall, type GoogleTokenRead } from './google/calls';
 
+export { createGitHubCodemodeProvider, type GitHubDeps } from './tools/github-operations';
+
+export { readGitHub, GitHubReadSchema, type GitHubAnswer, type GitHubRead } from './github/reads';
+
 export { googleBaseUrls, type GoogleRequest } from './google/catalog';
 
 export { GOOGLE_VERBS } from './google/table';
@@ -2129,7 +2133,7 @@ export { agentStatusFacts, chatSeed, getAgentStatus, getChatHistoryPage, getTool
 export { WorkspaceLayoutSchema, type WorkspaceLayout } from './config/workspace-layout';
 
 export {
-  blueprintPage, blueprintSeed,
+  blueprintOwnerName, blueprintPage, blueprintSeed,
   type BlueprintInstall, type BlueprintWhen, type WorkspaceBlueprint, type WorkspaceSeed,
 } from './blueprints/workspace';
 

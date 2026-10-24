@@ -18,6 +18,7 @@ import { stableStringify } from '../../safety/argument-digest';
 import type { CodemodeProvider } from '../../types/codemode';
 import type { ResolvedProvider } from '../../types/primitives';
 import { WatchCheckSchema, type WatchCheck } from '../../types/watch';
+import { ScheduleTierSchema } from '../../types/profile';
 import { decodeJsonValue, JsonValueSchema, type JsonObject, type JsonValue } from '../../utils/json';
 
 export { WatchCheckSchema, type WatchCheck } from '../../types/watch';
@@ -301,6 +302,7 @@ async function commitCheck(deps: Pick<WatchDeps, 'registry' | 'log'>, checked: {
         ...(typeof label === 'string' && { label }),
         ...(trigger.spec['payload'] !== undefined && { user_payload: trigger.spec['payload'] }),
         ...(typeof trigger.spec['mission_label'] === 'string' && { mission_label: trigger.spec['mission_label'] }),
+        ...(v.is(ScheduleTierSchema, trigger.spec['tier']) && { tier: trigger.spec['tier'] }),
         watch_brief: answer.brief,
         ...(delivery !== undefined && { watch_delivery: delivery }),
       },

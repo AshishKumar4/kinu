@@ -5,6 +5,7 @@
  */
 import * as v from 'valibot';
 import { WorkspaceBlueprintSchema, type WorkspaceBlueprint } from './workspace';
+import { GITHUB_NOTIFICATIONS_CHECK, GMAIL_INBOX_CHECK } from './assistant-checks';
 import type { KinuListing } from '../slates/gallery';
 
 export const PERSONAL_ASSISTANT_ID = 'personal-assistant';
@@ -14,7 +15,8 @@ const EXTERNAL = `Ask {{owner}} first, in one line, before anything that leaves 
 
 const PERSONAL_ASSISTANT: WorkspaceBlueprint = {
   id: PERSONAL_ASSISTANT_ID,
-  version: '1',
+  // 2: its GitHub and Gmail checks are watchers, a check program that wakes it only with what is new.
+  version: '2',
   title: 'Personal assistant',
   line: 'Reads your mail, GitHub and Google for you, briefs you each day, and runs bigger work in workspaces of its own.',
   category: 'work',
@@ -50,17 +52,21 @@ When this workspace starts, introduce yourself in a few lines: what you can reac
     },
     {
       label: 'GitHub check',
-      about: 'Reviews requested of you, mentions, and failing checks; it speaks only when one needs you.',
+      about: 'Reviews requested of you, mentions, and failing checks; it reads GitHub every 15 minutes and wakes only when one is new.',
       when: { kind: 'every', minutes: 15 },
       connection: 'github',
-      prompt: `Check GitHub with your GitHub tools for what is new since your last check: reviews requested of {{owner}}, mentions, and failing checks on their pull requests. Tell {{owner}} only what needs them, in a line or two each. If nothing does, or you hold no GitHub tools, end without a message.`,
+      check: GITHUB_NOTIFICATIONS_CHECK,
+      tier: 'fast',
+      prompt: `New GitHub notifications for {{owner}} are listed below: reviews requested of them, mentions, and failing checks. Tell {{owner}} about each in a line or two, what it is and what it asks of them, reading more with your GitHub tools where the line is not enough. If none needs them after all, end without a message.`,
     },
     {
       label: 'Gmail check',
-      about: 'Mail that needs you, with a reason and a draft reply; it speaks only when one does.',
+      about: 'Mail that needs you, with a reason and a draft reply; it reads Gmail every 15 minutes and wakes only for new mail.',
       when: { kind: 'every', minutes: 15 },
       connection: 'google',
-      prompt: `Check {{owner}}'s Gmail through google.* (google.search finds the method) for mail since your last check. Tell {{owner}} about the mail that needs them, a line on why each, and draft a reply where one is due. If nothing needs them, or Google is not connected, end without a message.`,
+      check: GMAIL_INBOX_CHECK,
+      tier: 'fast',
+      prompt: `New mail in {{owner}}'s inbox is listed below. Read each through google.* (gmail.users.messages.get), decide which needs {{owner}}, and tell them about those, a line on why each, with a draft reply where one is due. If none needs them, end without a message.`,
     },
   ],
   needs: [

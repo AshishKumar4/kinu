@@ -17,7 +17,7 @@ It is a workspace, installed from the first-party blueprint `personal-assistant`
 | Reads mail and marks what matters, with one line on why | The workspace's mail address (`<name>@kinu.run`, Mission Inbox, `email_route` trigger) and the Google connection (`google.*`); Mail's Important view and its reason line (feat/mail, `ImportantMailRow`) |
 | Drafts replies; sending waits for the owner | A draft lands in Mail's Drafts; a send it asks for is a Needs-you card (`mail_send`, feat/mail's `MailSendBody`) |
 | Briefs the owner each weekday at the time they chose | A cron trigger (`agent.schedule`) whose turn writes the brief into its chat |
-| Watches GitHub and Cloudflare | Cron triggers that read through the GitHub and Cloudflare MCP presets the owner connected; each firing is a turn, quiet unless it found something |
+| Watches GitHub and Gmail | Watchers: every 15 minutes a check program reads GitHub's notifications and Gmail's inbox history through the owner's connections, at no model call, and wakes the assistant only with what is new |
 | Creates and coordinates workspaces | Workspace proposals (Needs-you, Create / Decline, its soul shown on the card); peer messages to a workspace's main agent; each workspace's overview tile for how far it has come |
 | Real work | Kinu's tools, its computer and devices, as any workspace has them |
 | Asks before acting | The existing approval queue: deferred actions, standing approvals, workspace proposals, device consent. Defaults are read-only: sending mail, creating a workspace, starting work in another workspace, writing to GitHub and deploying each wait for a card |
@@ -222,6 +222,7 @@ Published as `home-explore` on the review server: `/live/home-explore/gallery.ht
 ## 11. Settled since the first draft
 
 - Kinu's blueprints never update an installed workspace: installing makes a workspace of your own, and later versions leave it as it is.
+  One exception, the owner's (2026-10-23): an installed Personal assistant's GitHub and Gmail checks become the watchers its version 2 seeds, matched by label and connection; its soul, layout and daily brief stay as installed.
 
 ## 12. Not settled
 

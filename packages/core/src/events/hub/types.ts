@@ -3,6 +3,7 @@
 import { Data } from 'effect';
 import * as v from 'valibot';
 import { WorkModeSchema } from '../../types/turn';
+import { ScheduleTierSchema } from '../../types/profile';
 import { SubagentInheritedContextSchema } from '../../types/subagents';
 import { JsonValueSchema, type JsonObject, type JsonValue } from '../../utils/json';
 import type { MailWoke } from '../../mail/mailbox-api';
@@ -136,6 +137,8 @@ export const TimerPayloadSchema = v.object({
   watch_brief: v.optional(v.string()),
   /** The provider's delivery a watcher's check answered (`input.delivery`), which keys its fire: a redelivery fires once. */
   watch_delivery: v.optional(v.string()),
+  /** The tier its schedule's turns run at (`agent.schedule`'s, a blueprint's). */
+  tier: v.optional(ScheduleTierSchema),
 });
 
 export type TimerPayload = v.InferOutput<typeof TimerPayloadSchema>;

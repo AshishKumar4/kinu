@@ -3,6 +3,7 @@
 import * as v from 'valibot';
 import type { KinuEvent } from './types';
 import { WorkModeSchema, type WorkMode } from '../../types/turn';
+import type { ScheduleTier } from '../../types/profile';
 import { renderForLLM } from './visibility';
 import { JsonObjectSchema } from '../../utils/json';
 import { MID_TURN_DELIVERY_OPENING } from '../../utils/prompt-sections';
@@ -16,6 +17,8 @@ export interface DrainBatch {
   readonly missions: string[];
   /** Null keeps the event's cron/background/chat classification. */
   readonly mode: WorkMode | null;
+  /** The tier the woken turn runs at, where every event it answers is a schedule's that names it; else null. */
+  readonly tier: ScheduleTier | null;
 }
 
 export type InternalEventTest = (event: KinuEvent) => boolean;
@@ -41,6 +44,13 @@ function delegatedEventMode(event: KinuEvent): WorkMode | null {
   const mode = v.safeParse(WorkModeSchema, payload.output.kinu_mode);
 
   return mode.success ? mode.output : null;
+}
+
+/** A schedule's tier, where `event` is a firing of one that names it. */
+function scheduleTierOf(event: KinuEvent): ScheduleTier | null {
+  if (event.variant !== 'timer' || (event.payload_visibility !== 'full' && event.payload_visibility !== 'redact')) return null;
+
+  return event.payload.tier ?? null;
 }
 
 /** Escapes CR/LF so an untrusted field cannot forge an extra drain entry. */
@@ -96,10 +106,14 @@ export function buildDrainBatch(events: KinuEvent[], internal?: InternalEventTes
     }),
   )];
 
+  const tiers = new Set(drainable.map(scheduleTierOf));
+  const [tier = null] = tiers.size === 1 ? tiers : [];
+
   return {
     ids: drainable.map((e) => e.id),
     missions,
     mode,
+    tier,
     text: `${count} arrived while you were idle. Act on each as appropriate, then stop:\n${listing}`,
     midTurnText: `${count} ${MID_TURN_DELIVERY_OPENING}\n${listing}`,
   };

@@ -15,7 +15,7 @@ import { convertArrayToReadableStream, MockLanguageModelV4 } from 'ai/test';
 import type { PreparedRequest, ScriptedAnswer, ScriptedCall, SettledTurn, TurnHarness } from './turn-harness';
 import type { ComputerSize, UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, Clock, ModelInfo, ModelRouteResolution, ActorToolsets, SeatedActor, SurfaceReach } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
-import type { ObjectNamespace, WorkspaceOverview } from '@kinu.run/core';
+import type { GitHubAnswer, GitHubRead, GoogleAnswer, GoogleCall, ObjectNamespace, WorkspaceOverview } from '@kinu.run/core';
 import type { GalleryListingSync } from '@kinu.run/core/slates';
 import type { ControlCaller } from '@kinu.run/core/control-plane';
 import { OwnedModelServices } from '../../src/owned-model-services';
@@ -1671,6 +1671,11 @@ export interface RecordedUserPlaneCalls {
   refuseOverviews?: Error[];
   /** Set to hold every push until it settles. */
   holdOverviews?: Promise<void>;
+  /** The owner's GitHub connection: each read the account makes for this workspace is recorded and answered by `answer`;
+   *  unset, a read is unreachable. */
+  github?: { readonly reads: GitHubRead[]; readonly answer: (read: GitHubRead) => GitHubAnswer };
+  /** The owner's Google connection, likewise, for each call the account makes to Google's APIs. */
+  google?: { readonly calls: GoogleCall[]; readonly answer: (call: GoogleCall) => GoogleAnswer };
 }
 
 /** A real user plane: `userDO` is bound at `env.UserDO`; `workspace` is the DO name
@@ -1705,6 +1710,8 @@ export interface HarnessActorWorld {
   box?: (name: string) => object;
   /** `PREVIEW_HOST_SUFFIX` as the deployment names it from the start: with it, the sandbox lists its exposed ports. */
   previewHostSuffix?: string;
+  /** The deployment holds a Google client (`MCP_GOOGLE_CLIENT_ID`), so its agents reach `google.*`. */
+  googleClient?: boolean;
   /** Every method this object served over its own namespace's stub, in call order. */
   rpcServed?: string[];
   /** This activation's isolate stops once in its terminal sequence, at that effect, before or after
@@ -1756,6 +1763,7 @@ export function makeEnv(
     }),
     ...world?.analytics,
     ...(world?.previewHostSuffix !== undefined && { PREVIEW_HOST_SUFFIX: world.previewHostSuffix }),
+    ...(world?.googleClient === true && { MCP_GOOGLE_CLIENT_ID: 'harness-google-client', MCP_GOOGLE_CLIENT_SECRET: 'harness-google-secret' }),
     ...(world?.container === true && {
       KinuDevbox: {
         getByName: (name: string) => world.box?.(name) ?? new Proxy({}, {
@@ -1814,6 +1822,18 @@ export function makeEnv(
             userPlane.mcp.calls.push({ tool: call.name, args: call.args });
 
             return JSON.stringify(userPlane.mcp.answer);
+          },
+          githubRead: async (_caller: UserCaller, read: GitHubRead): Promise<GitHubAnswer> => {
+            if (userPlane?.github === undefined) throw new Error('harness UserDO: no GitHub connection is served');
+            userPlane.github.reads.push(read);
+
+            return userPlane.github.answer(read);
+          },
+          googleCall: async (_caller: UserCaller, call: GoogleCall): Promise<GoogleAnswer> => {
+            if (userPlane?.google === undefined) throw new Error('harness UserDO: no Google connection is served');
+            userPlane.google.calls.push(call);
+
+            return userPlane.google.answer(call);
           },
           getProfile: async (): Promise<UserProfile | null> => {
             const profile = userPlane?.profile ?? null;

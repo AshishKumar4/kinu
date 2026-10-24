@@ -10,6 +10,7 @@ import { JsonObjectSchema, type JsonObject } from '../../utils/json';
 import { Effect } from 'effect';
 import { KinuError, settleSync } from '../../obs/index';
 import { checkWatcher, watchCheckOf, WatchCheckSchema, type WatchCheck, type WatchDeps } from './watch';
+import { ScheduleTierSchema, type ScheduleTier } from '../../types/profile';
 
 export interface TimerTriggerOpts {
   cron?: string;
@@ -22,6 +23,8 @@ export interface TimerTriggerOpts {
   missionLabel?: string;
   /** Makes it a watcher: the check runs at each firing, and only what it found wakes the agent (watch.ts). */
   check?: WatchCheck;
+  /** The tier the turns it wakes run at. */
+  tier?: ScheduleTier;
 }
 
 export interface TimerTrigger {
@@ -36,6 +39,7 @@ const TimerSpecSchema = v.object({
   label: v.optional(v.string()),
   payload: v.optional(JsonObjectSchema),
   mission_label: v.optional(v.string()),
+  tier: v.optional(ScheduleTierSchema),
 });
 
 type TimerSpec = v.InferOutput<typeof TimerSpecSchema>;
@@ -67,6 +71,8 @@ export async function createTimerTrigger(
   if (opts.missionLabel !== undefined) Object.assign(triggerSpec, { mission_label: opts.missionLabel });
 
   if (opts.check !== undefined) Object.assign(triggerSpec, { check: v.parse(WatchCheckSchema, opts.check) });
+
+  if (opts.tier !== undefined) Object.assign(triggerSpec, { tier: opts.tier });
 
   const id = await registry.register({
     kind,
@@ -260,6 +266,7 @@ export async function fireDueTriggers(deps: TimerFireDeps, now: number) {
           label: spec.label,
           user_payload: spec.payload,
           mission_label: spec.mission_label,
+          tier: spec.tier,
         },
         trigger_creator_trust: trigger.creator_trust,
       },

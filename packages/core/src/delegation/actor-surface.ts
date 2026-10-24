@@ -20,6 +20,7 @@ import { createTasksCodemodeProvider } from '../tools/tasks-operations';
 import { createWebCodemodeProvider } from '../tools/web-operations';
 import { createMailCodemodeProvider, type MailDeps } from '../tools/mail-codemode';
 import { createGoogleCodemodeProvider, type GoogleDeps } from '../tools/google-operations';
+import { createGitHubCodemodeProvider, type GitHubDeps } from '../tools/github-operations';
 import { createAgentsCodemodeProvider } from './agents-operations';
 import type { AgentsToolDeps } from './agents-tool';
 
@@ -49,6 +50,8 @@ export interface SurfaceActor {
   readonly mail: MailDeps | null;
   /** Its `google.*` through the account's Google connection; null where the deployment has no Google client. */
   readonly google: GoogleDeps | null;
+  /** Its `github.*` reads through the account's GitHub connection; null where it has no account. */
+  readonly github: GitHubDeps | null;
 }
 
 /** How a caller's namespaces differ from the actor's own programs'. */
@@ -131,6 +134,7 @@ export function actorNamespaces(actor: SurfaceActor, policy: SurfacePolicy, call
     // The agent's own mail, never a slate's or a share's viewer's; the account's Google likewise.
     ...(policy.private && actor.mail !== null ? [createMailCodemodeProvider(actor.mail)] : []),
     ...(policy.private && actor.google !== null ? [createGoogleCodemodeProvider(actor.google)] : []),
+    ...(policy.private && actor.github !== null ? [createGitHubCodemodeProvider(actor.github)] : []),
     webFor(actor.web, policy),
     // Every machine's `fs` is the actor's own `file` operations, on that machine's root in its plane; a process starts
     // on the machine its cwd is on.
@@ -151,6 +155,7 @@ export function hostedSurfaceActor(
     readonly agents?: () => AgentsToolDeps;
     readonly mail: MailDeps | null;
     readonly google: GoogleDeps | null;
+    readonly github: GitHubDeps | null;
   },
 ): SurfaceActor {
   const { runtime, stores } = actor;
@@ -165,5 +170,6 @@ export function hostedSurfaceActor(
     ownerWaits: inputs.ownerWaits,
     mail: inputs.mail,
     google: inputs.google,
+    github: inputs.github,
   };
 }

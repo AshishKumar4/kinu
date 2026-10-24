@@ -20,7 +20,7 @@ import {
   isSubagentOrigin, WORKSPACE_ROOT, PLATFORM_CATALOG, ProgramsInFlight, type OwedIntent, type OwedOwnerIntent, cardWords,
   specProvider, WORKERS_AI_PROVIDER_ID,
 } from '@kinu.run/core';
-import type { EnqueueTurnResult, GoogleDeps, MailDeps, OwnerWaitsHost, PanelAgent, ProgrammaticTurn, RecordedTurn, SendState, SubagentInspectionRequest, SubagentInspectionResult } from '@kinu.run/core';
+import type { EnqueueTurnResult, GitHubDeps, GoogleDeps, MailDeps, OwnerWaitsHost, PanelAgent, ProgrammaticTurn, RecordedTurn, SendState, SubagentInspectionRequest, SubagentInspectionResult } from '@kinu.run/core';
 import type { SubagentActivityEvent } from '@kinu.run/core';
 import type { Fact } from '@kinu.run/core';
 import type { SubagentView } from '@kinu.run/core/protocol';
@@ -2880,6 +2880,7 @@ export abstract class ActorAgent extends Agent<Env> {
           ownerWaits: this.hireOwnerWaits(hosted),
           mail: this.mailFor(hosted.handle.actorId, hosted.record.name),
           google: this.googleFor(hosted.handle.actorId, hosted.record.name),
+          github: this.githubReads(),
         });
 
         const providers = actorNamespaces(surface.actor, SURFACE_POLICY.operations);
@@ -2959,6 +2960,7 @@ export abstract class ActorAgent extends Agent<Env> {
       ownerWaits: null,
       mail: this.mailFor(this.rt.actor.actorId, 'main'),
       google: this.googleFor(this.rt.actor.actorId, 'main'),
+      github: this.githubReads(),
     };
   }
 
@@ -2970,6 +2972,13 @@ export abstract class ActorAgent extends Agent<Env> {
   /** `google.*` for one of this workspace's agents through its owner's Google connection; null where there is none. */
   protected googleFor(_actorId: string, _name: string): GoogleDeps | null {
     return null;
+  }
+
+  /** `github.*` reads through its owner's GitHub connection, the account making each; null with no owner. */
+  protected githubReads(): GitHubDeps | null {
+    if (this.getOwnerUserId() === null) return null;
+
+    return { read: async (request) => await this.requireOwnerUserDO().githubRead(await this.userCaller(), request) };
   }
 
   /** The workspace agent's eval programs: crafted tools saved mid-turn still work because craftStore is re-read per call. */
@@ -3403,7 +3412,10 @@ export abstract class ActorAgent extends Agent<Env> {
    * own turn runs, never the workspace actor's (pinned by `tests/unit-slate-composition.test.ts`).
    */
   protected hostedActorSurface(
-    actor: SeatedActor, reach: { readonly account: boolean; readonly ownerWaits: OwnerWaitsHost | null; readonly mail?: MailDeps | null; readonly google?: GoogleDeps | null },
+    actor: SeatedActor, reach: {
+      readonly account: boolean; readonly ownerWaits: OwnerWaitsHost | null; readonly mail?: MailDeps | null; readonly google?: GoogleDeps | null;
+      readonly github?: GitHubDeps | null;
+    },
   ) {
     // `ActorHostDeps.runtimeFor` is `createCFRuntime` on this backend; core only narrows the type.
     const { runtime } = actor;
@@ -3419,7 +3431,10 @@ export abstract class ActorAgent extends Agent<Env> {
     const webSearch = this.ownedModelServices.getWebSearchProvider();
     // Served once: the slate's `tools.*` and its named namespaces run the same operations.
     const stores = builtinStores(inputs);
-    const surface = this.hostedSurface({ ...actor, runtime }, { search: webSearch, stores, ownerWaits: reach.ownerWaits, mail: reach.mail ?? null, google: reach.google ?? null });
+
+    const surface = this.hostedSurface({ ...actor, runtime }, {
+      search: webSearch, stores, ownerWaits: reach.ownerWaits, mail: reach.mail ?? null, google: reach.google ?? null, github: reach.github ?? null,
+    });
 
     return { actor: surface, native: buildBuiltinTools({ ...inputs, webSearch }, stores) };
   }
@@ -3429,7 +3444,7 @@ export abstract class ActorAgent extends Agent<Env> {
     actor: CFSeat,
     held: {
       readonly search: WebSearchProvider; readonly stores: ServedStores; readonly ownerWaits: OwnerWaitsHost | null; readonly mail: MailDeps | null;
-      readonly google: GoogleDeps | null; readonly agents?: () => AgentsToolDeps;
+      readonly google: GoogleDeps | null; readonly github: GitHubDeps | null; readonly agents?: () => AgentsToolDeps;
     },
   ): SurfaceActor {
     const { search, ...reached } = held;
