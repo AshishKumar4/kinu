@@ -15,7 +15,8 @@ const AnthropicRegionSchema = v.object({ error: v.object({ type: v.literal('forb
 /** OpenAI's, by its documented text (developers.openai.com/api/docs/guides/error-codes). */
 const OpenAIRegionSchema = v.objectWithRest({ error: v.objectWithRest({ message: v.literal('Country, region, or territory not supported') }, JsonValueSchema) }, JsonValueSchema);
 
-/** The data center a Cloudflare-fronted host heard the call at, from its `cf-ray` (`<id>-<colo>`). */
+/** The data center a Cloudflare-fronted host heard the call at, from its `cf-ray` (`<id>-<colo>`). A gateway passing the
+ *  refusal on heard it at the same one: it calls from where its caller runs. */
 function coloOf(response: Response): string | null {
   const colo = response.headers.get('cf-ray')?.split('-')[1];
 
@@ -32,17 +33,26 @@ function answered(refused: Response, body: JsonObject): Response {
   return new Response(JSON.stringify(body), { status: refused.status, statusText: refused.statusText, headers });
 }
 
-/** `refused` as it came, unless it is a provider's region refusal: then in the provider's envelope, its words and why. */
-export async function withRegionReason(url: string, refused: Response): Promise<Response> {
+/** Why `provider` refused: the country or region the call came from, and the data center it came through. */
+function why(provider: string, refused: Response): string {
+  const colo = coloOf(refused);
+
+  return `${provider} does not serve its API in the country or region this call came from${colo === null ? '' : ` (Cloudflare's ${colo} data center)`}.`;
+}
+
+/**
+ * `refused` as it came, unless it is a provider's region refusal: then in the provider's envelope, its words and why. The
+ * provider is known by its refusal's own shape, since a call routed through a gateway or a named endpoint is sent to a
+ * host that is not the provider's.
+ */
+export async function withRegionReason(refused: Response): Promise<Response> {
   if (refused.status !== 403) return refused;
   const text = await refused.clone().text();
   const body = tolerate(() => parseJsonValue(text), 'malformed-input');
-  const colo = coloOf(refused);
-  const why = `${new URL(url).host} does not serve the country or region this call came from${colo === null ? '' : ` (Cloudflare's ${colo} data center)`}.`;
 
-  if (v.is(AnthropicRegionSchema, body)) return answered(refused, { type: 'error', error: { type: 'forbidden', message: `Request not allowed: ${why}` } });
+  if (v.is(AnthropicRegionSchema, body)) return answered(refused, { type: 'error', error: { type: 'forbidden', message: `Request not allowed: ${why('Anthropic', refused)}` } });
 
-  if (v.is(OpenAIRegionSchema, body)) return answered(refused, { ...body, error: { ...body.error, message: `${body.error.message}: ${why}` } });
+  if (v.is(OpenAIRegionSchema, body)) return answered(refused, { ...body, error: { ...body.error, message: `${body.error.message}: ${why('OpenAI', refused)}` } });
 
   return refused;
 }

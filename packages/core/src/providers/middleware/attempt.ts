@@ -50,8 +50,7 @@ export function attemptBound(model: LanguageModelV4): LanguageModelV4 {
  *  said with where the call came from (`withRegionReason`). */
 export function heardFetch(fetch: typeof globalThis.fetch): typeof globalThis.fetch {
   return asFetchFunction(async (input, init) => {
-    const url = input instanceof Request ? input.url : input.toString();
-    const response = await withRegionReason(url, await fetch(input, init));
+    const response = await withRegionReason(await fetch(input, init));
     const body = heardBody(response.body);
 
     return body === null ? response : new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });

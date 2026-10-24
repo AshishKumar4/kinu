@@ -2435,9 +2435,7 @@ export const PLATFORM_CATALOG = {
     date: '2026-10-24',
     trigger: 'a workspace object first reached from Asia with no hint, or with `apac`',
     onBreach: 'it runs in HKG, and every Anthropic and OpenAI call it makes is refused for its region (provider.region.served)',
-    observable: [
-      { context: 'api.anthropic.com from a Durable Object in HKG', message: '{"error":{"type":"forbidden","message":"Request not allowed"}}' },
-    ],
+    observable: [],
     firstPartySignal: false,
     measurements: [
       { scenario: '`apac`-hinted objects that ran in HKG, of 40 (the rest: SIN 22, NRT 5, KIX 4, ICN 4)', value: 5, unit: 'count' },
@@ -2463,7 +2461,7 @@ export const PLATFORM_CATALOG = {
       { context: 'api.anthropic.com, 403', message: '{"error":{"type":"forbidden","message":"Request not allowed"}}' },
       { context: 'api.openai.com, 403', message: 'Country, region, or territory not supported' },
     ],
-    firstPartySignal: false,
+    firstPartySignal: true,
     notes:
       'OpenAI: https://developers.openai.com/api/docs/supported-countries, its 403 text from '
       + 'https://developers.openai.com/api/docs/guides/error-codes. Anthropic\'s list says "Any country or region not listed is '

@@ -448,7 +448,7 @@ describe('the Claude subscription wire', () => {
     const { sent, fetchFn } = wire([refused]);
 
     await expect(turn(createClaudeProvider(), deps(fetchFn, [login('t')])))
-      .rejects.toThrow('Request not allowed: api.anthropic.com does not serve the country or region this call came from (Cloudflare\'s HKG data center).');
+      .rejects.toThrow('Request not allowed: Anthropic does not serve its API in the country or region this call came from (Cloudflare\'s HKG data center).');
     expect(sent.length).toBe(1);
   });
 

@@ -8,14 +8,15 @@ import {
   type ProfileCatalogEnvelope,
   type ReasoningEffort, type WorkspaceEntry,
 } from '@kinu.run/core';
-import { carriesCauseCode, diagnostics, KinuError, logged, toKinuError, settle, type ErrorCode } from '@kinu.run/core/obs';
+import { carriesCauseCode, diagnostics, KinuError, logged, toKinuError, settle, settleLogged, type ErrorCode } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import type { UserCredentialClient } from '../providers/agent-registry';
-import type { UserCaller, WorkspaceSeed } from '@kinu.run/core';
+import { sandboxIdForWorkspace, type UserCaller, type WorkspaceSeed } from '@kinu.run/core';
 import { listAvailableModels, type AvailableModelsEnv } from './available-models';
 import type { WorkspaceRegistration, WorkspaceRegistrationSource } from './workspaces';
 import { indexWorkspace, type IndexFeedEnv } from '../control-plane/index-feed';
 import type { OrchestratorAgent } from '../orchestrator';
+import type { KinuDevbox } from '../kinu-devbox';
 import { isOwnedByAnotherAccount } from './workspace-ownership';
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { WorkspacePlacement } from './workspace-placement';
@@ -52,10 +53,19 @@ export type CloudWorkspaceBirth = Pick<
   OrchestratorAgent,
   'claimOwner' | 'setInitialDisplayName' | 'setSoul' | 'resetWorkspaceBaseline'
   | 'setModel' | 'setReasoningEffort' | 'setRole' | 'beginGenesisTurn' | 'seedBlueprint' | 'readOwnerMail'
->;
+> & {
+  /** Whether a workspace is already born there: the read a create reaches it first with, over RPC or in process. */
+  storedWorkspace(): number | Promise<number>;
+};
+
+/** The workspace's computer, as its birth reaches it: a read that starts nothing. */
+interface ComputerPlacing {
+  getByName(name: string, options?: { readonly locationHint?: string }): Pick<KinuDevbox, 'boxSize'>;
+}
 
 export interface CreateCloudWorkspaceEnv<Id> extends AvailableModelsEnv<Id>, IndexFeedEnv<Id> {
   OrchestratorAgent: ObjectNamespace<Id, CloudWorkspaceBirth>;
+  KinuDevbox?: ComputerPlacing;
 }
 
 export interface CreateCloudWorkspaceRequest<Id> {
@@ -96,6 +106,10 @@ export function createCloudWorkspaceForUser<Id>(
     }
 
     const identity = yield* createInitialCloudAgentIdentity(input, purpose);
+
+    // The first call to reach a workspace's object places it, and it never moves: reached here, with its hint and by a
+    // read that makes nothing, before its row is published and anything else can reach it (`workspace-placement.ts`).
+    yield* Effect.promise(async () => env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(identity.name), { locationHint: placement }).storedWorkspace());
 
     // Only this call knows whether the title is the owner's choice or the mission's first line.
     const registered = yield* Effect.promise(async () => userDO.registerWorkspace(
@@ -276,6 +290,9 @@ async function initializeOrchestrator<Id>(input: InitializeOrchestratorInput<Id>
   // First: a new workspace may run turns without being opened, and each needs its identity
   // to reach the owner's UserDO.
   await userDO.ensureWorkspaceCapability(agentName, claim.capabilityHash);
+  // Its computer is placed with it, before any turn can reach it unhinted.
+  await settleLogged('workspace.computer_unplaced', { doing: "placing the workspace's computer", otherwise: 'unavailable' },
+    async () => { await env.KinuDevbox?.getByName(sandboxIdForWorkspace(agentName), { locationHint: placement }).boxSize(); }, { workspace: agentName });
   await orchestrator.setInitialDisplayName(displayName, nameOrigin);
   await orchestrator.setSoul(soul ?? renderSoulMarkdown({ name: displayName, mission }));
 

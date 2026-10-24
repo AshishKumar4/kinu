@@ -4,7 +4,7 @@
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  asFetchFunction, BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest,
+  asFetchFunction, BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest, sandboxIdForWorkspace,
   type ProfileCatalog, type ProfileCatalogEnvelope,
 } from '@kinu.run/core';
 import { handleCreateWorkspaceRequest, type CreateWorkspaceEnv } from '../src/user/workspace-access';
@@ -59,6 +59,7 @@ async function postCreate(
     async ensureWorkspaceCapability() {},
     async registerWorkspace(caller: UserCaller, name: string, displayName?: string, options?: Parameters<CloudWorkspaceRegistry['registerWorkspace']>[3]) {
       registered.push(name);
+      calls.push('registered');
 
       if (register !== undefined) return await register(caller, name, displayName, options);
 
@@ -72,6 +73,11 @@ async function postCreate(
   });
 
   const orchestrator = workspaceObject({
+    async storedWorkspace() {
+      calls.push('read');
+
+      return 0;
+    },
     async claimOwner(userId: string, placement?: string) {
       calls.push(`claimed:${String(placement)}`);
 
@@ -113,6 +119,15 @@ async function postCreate(
 
         return orchestrator;
       },
+    },
+    KinuDevbox: {
+      getByName: (name, options) => ({
+        boxSize: async () => {
+          calls.push(`computer:${name}:${String(options?.locationHint)}`);
+
+          return { size: 'small' as const, chosen: undefined, running: undefined, startRefused: undefined, stalled: undefined };
+        },
+      }),
     },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   };
@@ -212,12 +227,14 @@ describe('a workspace that hires a new workspace', () => {
 });
 
 describe('where a new workspace runs', () => {
-  test('one made from Asia is first reached in western Europe, never Asia-Pacific, and keeps where it was placed', async () => {
+  test('one made from Asia, and its computer, are first reached in western Europe before anything else can reach them', async () => {
     // From Delhi, with no hint, the owner's workspace ran in Hong Kong, where Anthropic refuses every call.
     const created = await postCreate({ name: AGENT, purpose: 'Review the checkout flow.' });
 
     expect(created.status).toBe(201);
-    expect(created.calls.slice(0, 2)).toEqual(['reached:weur', 'claimed:weur']);
+    // Placed by a read before its row is published, then claimed with where it was placed, then its computer placed.
+    expect(created.calls.slice(0, 6)).toEqual(['reached:weur', 'read', 'registered', 'reached:weur', 'claimed:weur', `computer:${sandboxIdForWorkspace(AGENT)}:weur`]);
+    expect(created.calls.at(-1)).toBe('genesis');
   });
 
   test('a maker\'s continent picks a region the model providers serve', () => {

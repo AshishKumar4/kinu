@@ -6647,23 +6647,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     await this.requireOwnerUserDO().closeDeviceSession(await this.userCaller(), this.workspaceName(), device, id);
   }
 
-  /** The workspace's computer, where this deployment binds one: placed as this workspace was, when it was. */
+  /** The workspace's computer, where this deployment binds one (placed at its birth, `createCloudWorkspaceForUser`). */
   private computerBox(): SandboxBox | undefined {
-    const placed = this.placedAt();
-
-    return this.env.KinuDevbox?.getByName(sandboxIdForWorkspace(this.name), placed === null ? {} : { locationHint: placed });
+    return this.env.KinuDevbox?.getByName(sandboxIdForWorkspace(this.name));
   }
 
-  /** The region this workspace's object was placed in at birth; null for one born before placement was chosen. */
-  private placedAt(): WorkspacePlacement | null {
-    const kept = v.safeParse(WorkspacePlacementSchema, this.ctx.storage.kv.get(PLACEMENT_KEY));
-
-    return kept.success ? kept.output : null;
-  }
-
-  /** Where a workspace this one makes is placed: as this one was, else where an unknown maker's goes. */
+  /** Where a workspace this one makes is placed: as this one was at birth, else where an unknown maker's goes. */
   private placement(): WorkspacePlacement {
-    return this.placedAt() ?? UNPLACED;
+    return v.parse(v.fallback(WorkspacePlacementSchema, UNPLACED), this.ctx.storage.kv.get(PLACEMENT_KEY));
   }
 
   /** The box keeps the account default its next start uses, so every read and change pushes the owner's current one. */
