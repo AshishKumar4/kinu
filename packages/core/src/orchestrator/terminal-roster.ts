@@ -202,11 +202,11 @@ function followUpTurns(messageId: string, parts: Pick<TerminalTurnParts, 'overfl
   // Mutually exclusive with the retry; `completed` decides which.
   if (parts.outputContinuation) owed.push({ name: 'output_continuation', scope: messageId, lane: 'inline', input: {} });
 
-  // No open tasks, no row.
+  // No open tasks, no row. Scoped to the list's state, not this turn: a later turn ending on it owes none again.
   if (parts.taskReminder) {
-    const { text, titles } = parts.taskReminder;
+    const { text, titles, state } = parts.taskReminder;
 
-    owed.push({ name: 'task_reminder', scope: messageId, lane: 'inline', input: { text, titles: [...titles] } });
+    owed.push({ name: 'task_reminder', scope: state, lane: 'inline', input: { text, titles: [...titles] } });
   }
 
   return owed;

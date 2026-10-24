@@ -1,26 +1,48 @@
-// Stop-time reminder for open tasks, queued as a terminal effect so the ledger enforces the once. Ports OMP's
-// `TodoTracker.checkCompletion`, minus its user-force skip; plan mode never reminds (the plan is the product).
+// Stop-time reminder for open tasks, queued as a terminal effect keyed on the open list's state, so the agent's
+// transcript enforces once per state across restarts. Ports OMP's `TodoTracker.checkCompletion`, minus its user-force
+// skip and its in-memory count; plan mode never reminds (the plan is the product).
 
 import type { ActiveRoster } from '../types/dynamic-context';
 import type { AgentTaskTree } from '../tools/task-store';
 import type { WorkMode } from '../types/turn';
+import { fnv1a32Hex } from '../utils/fnv1a';
 import { SYSTEM_REMINDER_TAG } from '../utils/prompt-sections';
 
 /** Admit pre-flight drops a signal once the ledger no longer owes its reminder row. */
 export const TASK_REMINDER_EVENT = 'task_reminder';
 
-/** A reminder the agent is owed: its text, and what it names, kept for the person's card. */
+/** A reminder the agent is owed: its text, what it names (kept for the person's card), and the state it was owed for. */
 export interface TaskReminder {
   readonly text: string;
   /** Each open task's and subtask's title, in the list's order: as many as the text counts. */
   readonly titles: readonly string[];
+  /** The open list's state ({@link openListState}): its terminal effect's scope, so one state is reminded once. */
+  readonly state: string;
 }
 
-/** Scoped to the turn that owed the reminder. */
+/** Scoped to the open list's state it reminds of: a second turn ending on that state finds its turn already on disk. */
 export const taskReminderIdempotencyKey = (scope: string): string => `task-reminder:${scope}`;
 
-/** OMP's `todo.remindersMax` is 3; a second identical reminder tells the model nothing new. */
-const TASK_REMINDER_MAX_ATTEMPTS = 2;
+/** The open list as the agent last left it: each open task's and subtask's id and status. A new task, a closed one or a
+ *  status moved is a new state, reminded once more; the same list left again is not. */
+function openListState(open: ActiveRoster<AgentTaskTree>): string {
+  const entries = open.items.map((tree) => [tree, ...tree.subtasks].map((task) => `${task.id}=${task.status}`).join(','));
+
+  return `${String(open.total)}-${fnv1a32Hex(entries.join(';'))}`;
+}
+
+/**
+ * Whether a result owed to the agent will wake it, which a reminder would only race: a hire that has not answered its
+ * assignment (its roster row `working`), or a job that ends on its own (the job store's `countAwaited`). A
+ * hire that waits on the agent (`awaiting_input`) and a process started to keep running owe it nothing.
+ */
+export function resultOwed(hireStatuses: Iterable<string>, jobsAwaited: number): boolean {
+  if (jobsAwaited > 0) return true;
+
+  for (const status of hireStatuses) if (status === 'working') return true;
+
+  return false;
+}
 
 // Awaiting-answer predicates are OMP's `todo-tracker.ts` verbatim, taking assistant text directly.
 const MARKDOWN_PROMPT_PREFIX_RE = /^(?:>\s*)?(?:(?:[-*+]|\d+[.)])\s+)*/;
@@ -79,63 +101,29 @@ function isAwaitingUserAnswer(assistantText: string): boolean {
   return lastLine !== undefined && (isQuestionPromptLine(lastLine) || isResponseCueLine(lastLine));
 }
 
-/** A fired reminder that earned no tool result blocks the next one; operator words reset the count. */
-export class TaskReminders {
-  private attempts = 0;
-  private awaitingProgress = false;
+/** What a settled turn owes of its open tasks: a reminder once per state of the list, none while a result owed to the
+ *  agent will wake it, and none for a turn that asked the person something. The list is read at commit, never captured. */
+export function taskReminderOf(input: {
+  readonly open: ActiveRoster<AgentTaskTree>;
+  readonly assistantText: string;
+  readonly workMode: WorkMode;
+  readonly completed: boolean;
+  readonly resultOwed: boolean;
+}): TaskReminder | null {
+  if (!input.completed || input.workMode === 'plan') return null;
 
-  /** Resets count and latch, like OMP's `resetCycle`; read on a user turn's admission. */
-  noteUserPrompt(): void {
-    this.attempts = 0;
-    this.awaitingProgress = false;
-  }
-  /** Any tool result is progress on the last reminder. */
-  noteToolResult(): void {
-    this.awaitingProgress = false;
-  }
+  const groups = input.open.items;
 
-  /** The open list is read at commit, never captured. */
-  decide(input: {
-    readonly open: ActiveRoster<AgentTaskTree>;
-    readonly assistantText: string;
-    readonly workMode: WorkMode;
-    readonly completed: boolean;
-    readonly asyncWakePending: boolean;
-  }): TaskReminder | null {
-    if (!input.completed) return null;
+  if (groups.length === 0 || input.resultOwed || isAwaitingUserAnswer(input.assistantText)) return null;
 
-    if (input.workMode === 'plan') return null;
+  // A finished task stays listed while a subtask under it is open; only what is open counts, and is named.
+  const titles = groups.flatMap((tree) => [...(tree.status === 'open' || tree.status === 'active' ? [tree.title] : []), ...tree.subtasks.map((subtask) => subtask.title)]);
 
-    // Read the list before the latch: a clean list closes the last reminder's question.
-    const groups = input.open.items;
-
-    if (groups.length === 0) {
-      this.attempts = 0;
-      this.awaitingProgress = false;
-
-      return null;
-    }
-
-    if (this.awaitingProgress) return null;
-
-    if (this.attempts >= TASK_REMINDER_MAX_ATTEMPTS) return null;
-
-    // A finished task stays listed while a subtask under it is open; only what is open counts, and is named.
-    const titles = groups.flatMap((tree) => [...(tree.status === 'open' || tree.status === 'active' ? [tree.title] : []), ...tree.subtasks.map((subtask) => subtask.title)]);
-
-    if (isAwaitingUserAnswer(input.assistantText)) return null;
-
-    if (input.asyncWakePending) return null;
-
-    this.attempts += 1;
-    this.awaitingProgress = true;
-
-    return { text: renderTaskReminder(groups, titles.length, this.attempts), titles };
-  }
+  return { text: renderTaskReminder(groups, titles.length), titles, state: openListState(input.open) };
 }
 
 /** OMP's shape narrowed to one level of nesting. */
-function renderTaskReminder(groups: readonly AgentTaskTree[], incomplete: number, attempt: number): string {
+function renderTaskReminder(groups: readonly AgentTaskTree[], incomplete: number): string {
   const todoList = groups.map((tree) => {
     const lines = [`- ${tree.title}`];
 
@@ -147,6 +135,5 @@ function renderTaskReminder(groups: readonly AgentTaskTree[], incomplete: number
   return `<${SYSTEM_REMINDER_TAG}>\n`
     + `You stopped with ${incomplete} open task(s):\n${todoList}\n\n`
     + 'Continue working on these tasks or mark them done if finished.\n'
-    + `(Reminder ${attempt}/${TASK_REMINDER_MAX_ATTEMPTS})\n`
     + `</${SYSTEM_REMINDER_TAG}>`;
 }

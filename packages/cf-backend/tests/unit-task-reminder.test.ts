@@ -9,10 +9,11 @@ import { setDiagnosticsSink } from '@kinu.run/core/obs';
 import { createRecordingLogger } from '@kinu.run/test-utils';
 import { actorConnectionTag } from '@kinu.run/core';
 import { asPane } from './helpers/agents-sdk';
-import { agentSql, agentWakes, catalogTurn, driveUntil, gatewayWorkspace, workspaceMainActor } from './helpers/actor-harness';
-import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
+import { agentSql, agentWakes, catalogTurn, driveUntil, gatewayWorkspace, jobsOver, until, workspaceMainActor } from './helpers/actor-harness';
+import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 
-test('a root turn that stops with its tasks open is reminded of them', async () => {
+/** A main agent that adds one task, starts on it and stops; every request it is sent, kept. */
+function openTaskWorkspace() {
   const asked: string[] = [];
 
   const gateway = stubAiBinding((run) => {
@@ -28,7 +29,11 @@ test('a root turn that stops with its tasks open is reminded of them', async () 
       : toolCallCompletion(run, { tool: 'tasks', args: { op: 'add', titles: ['Migrate the ledger to integer cents'] } }, 'add_0');
   });
 
-  const workspace = gatewayWorkspace(gateway);
+  return { asked, workspace: gatewayWorkspace(gateway) };
+}
+
+test('a root turn that stops with its tasks open is reminded of them', async () => {
+  const { asked, workspace } = openTaskWorkspace();
 
   await catalogTurn(workspace.agent, 'Plan the ledger migration and start on it.');
   await driveUntil(workspace, 'the open task was never reminded', () => asked.some((sent) => sent.includes('open task(s)')));
@@ -142,3 +147,70 @@ for (const isolate of ['alive', 'ended'] as const) {
     expect(await status()).toEqual(['dismissed']);
   });
 }
+
+/** Requests whose newest message is a task reminder: one per reminder the agent was sent. */
+const reminders = (asked: readonly string[]) => asked.filter((sent) => sent.lastIndexOf('open task(s)') > sent.lastIndexOf('"role":"assistant"')).length;
+
+// An agent that hired help and ended its turn on a task the hire works on is parked on a result owed to it: reminding
+// it raced the hire's report, every time the hire spoke (hearthlit-field-04d5879b, 10-24: five reminders in eleven
+// minutes). It is reminded once the report lands and the task is still open, and once only.
+test('an agent waiting on its hire is not reminded until the report lands, then once', async () => {
+  const asked: string[] = [];
+  let release!: () => void;
+  const working = new Promise<void>((resolve) => { release = resolve; });
+
+  const gateway = stubAiBinding(async (run) => {
+    const { messages } = requestOf(run);
+    const sent = JSON.stringify(messages);
+    const results = messages.filter((message) => message.role === 'tool').length;
+
+    // The hire's own run, opened by its assignment; main's requests name the assignment too, in the hire's call.
+    if (openingOf(run).includes('Tally the ledger.')) {
+      await working;
+
+      return chatCompletion(run, 'The ledger tallies to 412 rows.');
+    }
+
+    asked.push(sent);
+
+    if (!openingOf(run).includes('Plan the ledger migration')) return chatCompletion(run, 'Noted.');
+
+    if (results === 0) return toolCallCompletion(run, { tool: 'tasks', args: { op: 'add', titles: ['Migrate the ledger to integer cents'] } }, 'add_0');
+
+    if (results === 1) return toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime: 'task', message: 'Tally the ledger.' } }, 'hire_0');
+
+    return chatCompletion(run, 'Waiting on the tally.');
+  });
+
+  const workspace = gatewayWorkspace(gateway);
+  const id = crypto.randomUUID();
+
+  await workspace.agent.harnessAdmitMain('Plan the ledger migration and start on it.', id, undefined);
+  await workspace.agent.harnessMainLanding(id);
+  await until(() => asked.some((sent) => sent.includes('Waiting on the tally.')) || workspace.agent.harnessUnansweredModelCalls().length > 0, 'the hire never started');
+  await workspace.agent.terminalRetryPass();
+
+  expect(reminders(asked)).toBe(0);
+
+  release();
+  await driveUntil(workspace, 'the open task was never reminded after the report', () => reminders(asked) > 0);
+  await workspace.agent.harnessAgentsIdle();
+  await workspace.agent.terminalRetryPass();
+
+  expect(reminders(asked)).toBe(1);
+});
+
+// A process started to keep running owes the agent nothing: a preview server beside an open task, unrelated to it,
+// must not silence the reminder however long it runs.
+test('a long-running preview server does not hold the reminder of an unrelated open task', async () => {
+  const { asked, workspace } = openTaskWorkspace();
+  const jobs = jobsOver(workspace.db);
+
+  jobs.create({ id: 'bgjob-preview', kind: 'startProcess', workMode: 'build', now: Date.now(), label: 'preview: bun run dev' });
+  expect(jobs.countAwaited()).toBe(0);
+
+  await catalogTurn(workspace.agent, 'Plan the ledger migration and start on it.');
+  await driveUntil(workspace, 'the open task was never reminded beside the preview server', () => reminders(asked) > 0);
+
+  expect(jobs.listRunning().items.map((job) => job.id)).toEqual(['bgjob-preview']);
+});

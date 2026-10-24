@@ -29,6 +29,7 @@ export interface DynamicReads {
   readonly recoveryFindings: () => string[];
   readonly toolLessons: (tools: readonly string[]) => ShownLesson[];
   readonly runningJobs: AgentStores['jobs']['listRunning'];
+  readonly awaitedJobs: AgentStores['jobs']['countAwaited'];
   readonly openTasks: AgentStores['taskList']['listOpen'];
   readonly liveHeadRuns: AgentStores['headJournal']['listLive'];
 }
@@ -53,6 +54,7 @@ export function dynamicReads(stores: AgentStores, sql: SqlExecutor, actor: Actor
     toolLessons: (tools) => lessons(tools.join('\n')),
     // BackgroundJobStore's create, settle, fail, cancel, reclaim, deferResume, dismiss and clear.
     runningJobs: holds.holdEach(['background_jobs'], (limit: number | undefined) => stores.jobs.listRunning(limit)),
+    awaitedJobs: holds.hold(['background_jobs'], () => stores.jobs.countAwaited()),
     // TaskListStore's add and updates.
     openTasks: holds.holdEach(['agent_tasks'], (limit: number | undefined) => stores.taskList.listOpen(limit)),
     // HeadJournal's split, spawn, report, interrupt, abandon and merge.
