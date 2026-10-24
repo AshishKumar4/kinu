@@ -14,7 +14,7 @@
  *   bun scripts/deploy-report.ts dispatched <dir> <what> <url>          work the deploy started and does not wait for
  *   bun scripts/deploy-report.ts mark <dir> <mark> <seconds>            when the deploy reached <mark>
  *   bun scripts/deploy-report.ts runner <dir> <phase> <exit>             a phase's runner's exit: a red when it said none
- *   bun scripts/deploy-report.ts render <dir> [after-soak]              write report.md; print its path; exit 1 on a red
+ *   bun scripts/deploy-report.ts render <dir> [after-soak]              write report.md; print its path; exit 3 on a red
  */
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -172,13 +172,26 @@ export function externalCause(colored: string): string | undefined {
 
 /** Whether production takes `summary`'s build past its reds: only when there are some and every one is a provider's
  *  refusal, listed (owner, 2026-10-23, "Promote, list them"). Any other red holds it for Main. */
-export function externalOnly(summary: ReportSummary): { readonly promote: true; readonly listed: string } | { readonly promote: false; readonly held: readonly string[] } {
-  const external = new Map((summary.external ?? []).map((each) => [each.red, each.cause]));
-  const held = summary.reds.filter((red) => !external.has(red));
+export function externalOnly(summary: ReportSummary): ExternalVerdict {
+  return externalVerdict(summary.reds, new Map((summary.external ?? []).map((each) => [each.red, each.cause])));
+}
 
-  if (summary.reds.length === 0 || held.length > 0) return { promote: false, held };
+/** {@link externalOnly} of a report's entries as they stand, before its render: a production promotion's at its record
+ *  (deploy.sh), a rerun's after it (stage.sh). */
+export function externalOnlyEntries(entries: readonly ReportEntry[]): ExternalVerdict {
+  const reds = deployReds(entries);
 
-  return { promote: true, listed: summary.reds.map((red) => `${red}: ${external.get(red) ?? ''}`).join('; ') };
+  return externalVerdict(reds.map((entry) => identity(entry) ?? ''), new Map(reds.flatMap((entry) => (entry.kind === 'red' && entry.external !== undefined ? [[identity(entry) ?? '', entry.external]] : []))));
+}
+
+type ExternalVerdict = { readonly promote: true; readonly listed: string } | { readonly promote: false; readonly held: readonly string[] };
+
+function externalVerdict(reds: readonly string[], external: ReadonlyMap<string, string>): ExternalVerdict {
+  const held = reds.filter((red) => !external.has(red));
+
+  if (reds.length === 0 || held.length > 0) return { promote: false, held };
+
+  return { promote: true, listed: reds.map((red) => `${red}: ${external.get(red) ?? ''}`).join('; ') };
 }
 
 /** The phases whose rows a ladder runs, each of which a deploy may run again once (the owner: "Flakes: rerun, don't
@@ -641,6 +654,15 @@ if (import.meta.main) {
     process.exit(verdict.promote ? 0 : 1);
   }
 
+  // `externals <dir>`: exit 0, listing them, when every red the report in `dir` holds so far is a provider's refusal
+  // ({@link externalOnlyEntries}); exit 1, naming what holds it, otherwise.
+  if (command === 'externals' && rest.length === 0) {
+    const verdict = externalOnlyEntries(entriesOf(first));
+
+    console.log(verdict.promote ? verdict.listed : `held by: ${verdict.held.join('; ') || 'no red'}`);
+    process.exit(verdict.promote ? 0 : 1);
+  }
+
   // `reruns <environment> <sha>`: exit 0 when every red but the external of the last report of `sha` there is a ladder
   // row's ({@link flakyRows}), printing their names on a line, then each phase and its rows' `--deploy-rows`, tab apart;
   // exit 1, naming what holds it, otherwise.
@@ -686,9 +708,10 @@ if (import.meta.main) {
     if (rest.length === 0) appendFileSync(index, `${JSON.stringify(summary)}\n`);
 
     console.log(`deploy report: ${join(first, 'report.md')} — ${String(summary.reds.length)} red, ${String(summary.skipped)} not run`);
-    process.exit(summary.reds.length === 0 ? 0 : 1);
+    // 3, not 1: a render that throws exits 1, and a deploy tells a written red report from one it never wrote.
+    process.exit(summary.reds.length === 0 ? 0 : 3);
   }
 
-  console.error('usage: bun scripts/deploy-report.ts open|note|dispatched|startup|mark|when|holds-red|external|reruns|budget|render …');
+  console.error('usage: bun scripts/deploy-report.ts open|note|dispatched|startup|mark|when|holds-red|external|externals|reruns|budget|render …');
   process.exit(2);
 }

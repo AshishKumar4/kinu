@@ -437,12 +437,13 @@ phase_ended() {
   if [ "$status" -eq 0 ]; then return 0; fi
   KINU_REDS=1
   echo -e "${RED}❌ the $1 phase failed (exit $status).${NC}"
-  # A red the ladder found is in the report already. A runner that names none
-  # ended without its verdict: a signal (the OOM killer's 137), or a crash, which
-  # also exits 1 (staging e8837b133, 2026-10-22: an armada report the ladder could
-  # not parse), so the exit status alone cannot say. The report says, and names the
-  # phase when it holds none of its reds.
-  if ! reported_red "$1"; then
+  # A red the ladder found is in the report already, and a phase that ran to its
+  # verdict marks its end (`<phase>-ended`). A runner without that mark ended before
+  # its verdict: a signal (the OOM killer's 137), or a crash, which also exits 1
+  # (staging e8837b133, 2026-10-22: an armada report the ladder could not parse), so
+  # the exit status alone cannot say, and a row it had not reported on may be red
+  # behind whatever it recorded first, a provider's refusal among them.
+  if ! report when "$1-ended" > /dev/null 2>&1; then
     report note "$1" "the $1 phase's runner" "it ended with exit $status and no verdict of its own, so a row it had not reported on may be red and unnamed"
   fi
   return 1
@@ -551,7 +552,12 @@ finish() {
   if [ "$KINU_REDS" != "0" ] && ! reported_red; then
     report note deploy "the verdict" "this deploy went red and no step named a red in this report; its output says which step failed"
   fi
-  report render || KINU_REDS=1
+  # The render answers 3 for a report it wrote that holds a red, anything else nonzero for one it could not write.
+  report render
+  KINU_RENDERED=$?
+  [ "$KINU_RENDERED" = "0" ] || KINU_REDS=1
+  # Production's history took a promotion whose every red is a provider's refusal (Step 6): it serves, and is no red.
+  if [ "${KINU_HISTORY_TOOK:-0}" = "1" ] && [ "$KINU_RENDERED" = "3" ]; then KINU_REDS=0; fi
   # A red run that published keeps staging's built record, the one an owner's override names (promote.ts withdraw).
   if [ "$KINU_ENV" = "staging" ] && [ "${DEPLOY_PUBLISHED:-0}" = "1" ] && [ "$KINU_REDS" != "0" ]; then
     bun "$KINU_ROOT/scripts/promote.ts" withdraw || KINU_REDS=1
@@ -1433,11 +1439,22 @@ fi
 #
 # ON PRODUCTION, THE HISTORY: the build it took, which a later rollback may
 # return to. Its evals ran before it was promoted, against the build production
-# served then.
+# served then. A promotion whose every red is a provider's refusal serves its
+# build (the owner, 2026-10-23: "Promote, list them"), so the history takes it
+# and it ends green, the refusals listed; production 78daea8d6 and 36673551b,
+# red on those alone, were in no history, and no rollback had a target.
 report budget "$SECONDS" || KINU_REDS=1
 echo ""
 if [ "$KINU_REDS" != "0" ] && [ "$KINU_ENV" = "staging" ]; then
   echo -e "${RED}❌ This deploy has a red, so no record is written: $KINU_SHA cannot be promoted.${NC}"
+  finish
+elif [ "$KINU_REDS" != "0" ] && KINU_EXTERNAL_REDS="$(report externals)"; then
+  echo -e "${BOLD}Every red of this promotion is a provider's refusal ($KINU_EXTERNAL_REDS): production's history takes $KINU_SHA.${NC}"
+  if bun "$KINU_ROOT/scripts/promote.ts" promoted ${KINU_OVERRIDE:+--override} "${KINU_VERSION:-}" "${KINU_RECORD_ARGS[@]}"; then
+    KINU_HISTORY_TOOK=1
+  else
+    step_red record "production's history" "production serves $KINU_SHA, and its history does not hold it, so no rollback can return to it"
+  fi
   finish
 elif [ "$KINU_REDS" != "0" ]; then
   echo -e "${RED}❌ This promotion has a red, so production's history does not take $KINU_SHA.${NC}"
