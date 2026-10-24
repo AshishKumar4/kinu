@@ -14,8 +14,11 @@ import type { TriggerRow } from '../hub/types';
 import { spillEventContent } from '../hub/content-spill';
 import { Effect, Result } from 'effect';
 import { settle, settleSync } from '../../obs/index';
-import { decodeJsonValue, safeJsonParse, type JsonObject, type JsonValue } from '../../utils/json';
-import { checkWatcher, watchCheckOf, WatchCheckSchema, type WatchAsk, type WatchCheck, type WatchDeps } from './watch';
+import { decodeJsonValue, JsonValueSchema, safeJsonParse, type JsonObject, type JsonValue } from '../../utils/json';
+import {
+  checkWatcher, watchCheckOf, WatchCheckSchema, type RunCheck, type WatchCheck, type WatchDeps, type WatchOutcome,
+} from './watch';
+import { RECOVERY_BACKOFF_CEILING_MS } from '../../utils/recovery-backoff';
 import type { SqlExec } from '../../types/primitives';
 import { hmacSha256Hex, timingSafeEqual } from '../../utils/crypto';
 import {
@@ -78,9 +81,21 @@ export interface WebhookIngressDeps {
   secrets: SecretStore;
   sql: SqlExec;
   onAdmitted(): void;
-  /** Where a watcher's check runs; absent, a watcher's delivery publishes as any webhook's does. */
-  watch?: Pick<WatchDeps, 'run' | 'claims'>;
+  /** Keeps a watcher's verified delivery until its check commits, answering false for one it keeps already; absent, a
+   *  watcher's delivery publishes as any webhook's does. Its keeping is written before it answers. */
+  keep?: (delivery: PendingDelivery) => Promise<boolean>;
 }
+
+/** A watcher's verified delivery, kept until its check commits: what its signature proved, which keys its fire, and the
+ *  check's input. */
+export const PendingDeliverySchema = v.object({
+  trigger: v.string(),
+  at: v.number(),
+  input: JsonValueSchema,
+  claim: v.object({ key: v.string(), expiresAt: v.number() }),
+});
+
+export type PendingDelivery = v.InferOutput<typeof PendingDeliverySchema>;
 
 export interface RegisterWebhookOpts {
   label: string;
@@ -357,43 +372,77 @@ function gitHubInput(push: GitHubPush | null, opts: WebhookDelivery, payload: Js
   return { event: push?.event ?? null, delivery: opts.headers['x-github-delivery'] ?? null, payload };
 }
 
-/** Whether a check answers the trigger's deliveries, rather than each being published as an event. */
-function watchesDeliveries(deps: WebhookIngressDeps, trigger: TriggerRow): boolean {
-  return deps.watch !== undefined && watchCheckOf(trigger) !== null;
-}
-
-/** A delivery a check answers, or GitHub's ping that nothing answers; null for one published as an event. `claim` is
- *  what its signature proved, which keys a fire and is taken with it; a delivery none proved is keyed by its arrival. */
-async function checkedDelivery(
+/**
+ * A delivery answered before anything is published: one its claim says was seen already, GitHub's ping that nothing
+ * answers, or a push watcher's delivery, kept and answered at once with its check run after (GitHub counts an answer
+ * slower than 10 s as failed and never sends it again by itself:
+ * docs.github.com/webhooks/using-webhooks/handling-failed-webhook-deliveries). Null for one published as an event, its
+ * claim spent first: freshness alone admits a replay across a dedupe bucket boundary. A kept delivery's claim is only
+ * read here; its check's commit takes it ({@link checkPendingDelivery}).
+ */
+async function answeredDelivery(
   deps: WebhookIngressDeps, trigger: TriggerRow, opts: WebhookDelivery, delivered: { body: JsonValue; claim: SignedClaim | undefined },
 ): Promise<WebhookDeliveryResult | null> {
   const { body, claim } = delivered;
   const github = trigger.spec['auth_mode'] === 'github';
+  const keep = github && watchCheckOf(trigger) !== null ? deps.keep : undefined;
+  const held = claim === undefined ? null : (keep === undefined ? claimSignedDelivery : heldClaim)(deps.sql, trigger.id, claim, opts.now);
+
+  // A held claim answers as a duplicate, never a rejection.
+  if (held !== null) return { status: 'admitted', event_id: held.event_id ?? undefined, admitted: false };
 
   // GitHub's ping when a hook is made, known by its signed body: answered, and nothing to check.
   if (github && v.is(GitHubPingSchema, body)) return { status: 'admitted', admitted: false };
 
-  if (!watchesDeliveries(deps, trigger)) return null;
+  if (keep === undefined || claim === undefined) return null;
+  const kept = await keep({ trigger: trigger.id, at: opts.now, input: gitHubInput(gitHubPushOf(trigger), opts, body), claim });
 
-  const input = github ? gitHubInput(gitHubPushOf(trigger), opts, body) : body;
-  const signed = claim === undefined ? {} : { delivery: claim.key, claim: () => claimSignedDelivery(deps.sql, trigger.id, claim, opts.now) === null };
-
-  return watchedDelivery(deps, trigger.id, { at: opts.now, input, ...signed });
+  return { status: 'admitted', admitted: kept };
 }
 
+/** What a kept delivery's job does next: end once its fire or no-fire committed or its watcher went, wait while its
+ *  watcher is parked (its resume brings it back), or run again at `at`. */
+export type PendingCheck = { readonly kind: 'done' } | { readonly kind: 'parked' } | { readonly kind: 'again'; readonly at: number };
+
 /**
- * A watcher's delivery is its check's input, and only what the check found is published. Answered once the check
- * committed: a deliverer that gave up and sends again is folded into the running check's re-check.
+ * A kept delivery's check. Its fire or no-fire takes the delivery's claim in its commit, so a run again after that
+ * commit (a reset before the job's row went) finds it spent and checks nothing. A check that failed on the network or a
+ * provider is run again a lap on, or when the provider said.
  */
-async function watchedDelivery(deps: WebhookIngressDeps, triggerId: string, asked: Omit<WatchAsk, 'timer'>): Promise<WebhookDeliveryResult> {
-  const { watch } = deps;
+export async function checkPendingDelivery(
+  deps: Pick<WebhookIngressDeps, 'triggers' | 'log' | 'sql' | 'onAdmitted'> & { readonly watch: Pick<WatchDeps, 'run' | 'claims'> },
+  pending: PendingDelivery,
+): Promise<PendingCheck> {
+  const { trigger, at, input, claim } = pending;
+  const outcomes: WatchOutcome[] = [];
 
-  if (watch === undefined) return { status: 'rejected', http_status: 503, reason: 'this workspace runs no checks' };
-  const fired = await checkWatcher({ registry: deps.triggers, log: deps.log, ...watch }, triggerId, { ...asked, timer: false }, Date.now);
+  if (heldClaim(deps.sql, trigger, claim, at) === null) {
+    const run: RunCheck = async (check, state, given) => {
+      const outcome = await deps.watch.run(check, state, given);
 
-  if (fired) deps.onAdmitted();
+      outcomes.push(outcome);
 
-  return { status: 'admitted', event_id: undefined, admitted: fired };
+      return outcome;
+    };
+
+    const fired = await checkWatcher({ registry: deps.triggers, log: deps.log, claims: deps.watch.claims, run }, trigger, {
+      at, timer: false, input, delivery: claim.key, claim: () => claimSignedDelivery(deps.sql, trigger, claim, at) === null,
+    }, Date.now);
+
+    if (fired) deps.onAdmitted();
+  }
+
+  if (heldClaim(deps.sql, trigger, claim, at) !== null) return { kind: 'done' };
+  const watcher = deps.triggers.get(trigger);
+
+  if (watcher === null || watcher.state === 'revoked' || watchCheckOf(watcher) === null) return { kind: 'done' };
+
+  if (watcher.state === 'paused') return { kind: 'parked' };
+
+  const ran = outcomes.at(-1);
+
+  // A network or provider failure, or a commit that met a state another wrote: checked again a lap on.
+  return { kind: 'again', at: ran?.kind === 'deferred' ? ran.until : Date.now() + RECOVERY_BACKOFF_CEILING_MS };
 }
 
 export function acceptWebhookDelivery(
@@ -435,19 +484,9 @@ export function acceptWebhookDelivery(
     // Unparseable JSON is kept as raw text; other failures propagate.
     const parsedBody: unknown = receivedCT.includes('json') ? safeJsonParse(opts.body_text) : opts.body_text;
 
-    // Spend the claim before anything durable: freshness alone admits a replay across a dedupe
-    // bucket boundary. A held claim answers as a duplicate, never a rejection. A watched delivery's
-    // claim is only read here: its check's commit takes it, with what the check found.
-    const spend = watchesDeliveries(deps, trigger) ? heldClaim : claimSignedDelivery;
-    const held = auth.claim === undefined ? null : spend(deps.sql, opts.trigger_id, auth.claim, opts.now);
+    const answered = yield* Effect.promise(() => answeredDelivery(deps, trigger, opts, { body: decodeJsonValue({ value: parsedBody ?? null }), claim: auth.claim }));
 
-    if (held !== null) {
-      return { status: 'admitted', event_id: held.event_id ?? undefined, admitted: false };
-    }
-
-    const checked = yield* Effect.promise(() => checkedDelivery(deps, trigger, opts, { body: decodeJsonValue({ value: parsedBody ?? null }), claim: auth.claim }));
-
-    if (checked !== null) return checked;
+    if (answered !== null) return answered;
 
     const delivery_id = opts.delivery_id ?? `${opts.now}-${Math.random().toString(36).slice(2, 10)}`;
 

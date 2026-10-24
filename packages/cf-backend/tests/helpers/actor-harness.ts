@@ -25,7 +25,7 @@ import type { CFSeat } from '../../src/actor-hosting';
 import type { ChatWireTransport } from '../../src/chat-transport';
 import type { AgentTurns } from '../../src/agent-turns';
 import type { PictureBucket } from '../../src/slates/pictures';
-import { isWorkMode, turnTags, type UserProfile } from '@kinu.run/core';
+import { isWorkMode, turnTags, type RunCheck, type UserProfile, type WatchCheck, type WatchOutcome } from '@kinu.run/core';
 import { ActorClaimStore, agentArtifactDirectory, prepareOutput, agentHome, CHAT_SESSION_ID, EventLog, SubagentRosterStore, MAIN_AGENT, openWorkspaceMainActor, SessionHistory, TerminalTransitions, WorkspaceActorDirectory } from '@kinu.run/core';
 import { answeredAs, present, admitTestClaim } from '@kinu.run/test-utils';
 import {
@@ -189,6 +189,13 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   /** The instant this activation's alarm is set for, as its job queue last projected it; null when none is set. */
   async harnessAlarm(): Promise<number | null> {
     return await this.ctx.storage.getAlarm();
+  }
+
+  /** How each watcher check this object runs ends, in place of its program; null runs the program. */
+  harnessWatchChecks: RunCheck | null = null;
+
+  protected override async watchCheck(check: WatchCheck, state: JsonValue | undefined, input: JsonValue | undefined): Promise<WatchOutcome> {
+    return this.harnessWatchChecks === null ? await super.watchCheck(check, state, input) : await this.harnessWatchChecks(check, state, input);
   }
 
   /** An isolate the loader refuses to open, for the agents it names. */
