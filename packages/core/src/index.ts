@@ -32,7 +32,7 @@ export {
 export { SleepTimeLane, initSleepTimeTables } from './orchestrator/sleep-time-lane';
 
 export {
-  assembleActorTurn, withCompactionTrigger, conversationKey, vfsTurnSkills, materializeTurnSources, turnSourcesFromBundle,
+  assembleActorTurn, withCompactionTrigger, conversationKey, vfsTurnSkills, materializeTurnSources, turnSourcesFromBundle, actorTurnSources,
   type RunTurnSources, type TurnSourcesBundle, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources,
   type TurnReads, type TurnTools,
 } from './orchestrator/turn-assembly';

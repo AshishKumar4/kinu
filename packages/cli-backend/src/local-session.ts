@@ -59,7 +59,7 @@ import { ActorSession, type ActorTurnLease,
   inheritedContextFromTranscript,
   ModelCatalogSession, resolveEffectiveModelSpec,
   TerminalTransitions, initTerminalEffectTable, chatTurnParts, declareTerminalRoster, missionOf, SleepTimeLane, initSleepTimeTables,
-  toolsBehindBoundary, type ToolBoundary, assembleActorTurn, driveSeatedRun, preparedHeadRun, withCompactionTrigger, conversationKey, vfsTurnSkills, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources, type RunTurnSources,
+  toolsBehindBoundary, type ToolBoundary, assembleActorTurn, driveSeatedRun, preparedHeadRun, withCompactionTrigger, conversationKey, vfsTurnSkills, actorTurnSources, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources, type RunTurnSources,
   branchesTerminalEffect, chatTerminalEffects, actorTerminalEffects,
   type OwedReport, type SubagentReportStatus, type TurnReportFacts,
   terminalEffect,
@@ -2713,7 +2713,7 @@ export class LocalAgentSession {
       seat: {
         actor,
         runId,
-        sources: this.runActorSources(actor, runId, { extension: compaction.extension, models, report, operations }),
+        sources: this.runActorSources(actor, runId, { extension: compaction.extension, models, report, operations, affinity: affinity.sessionAffinity }),
         // Driven as a delivered run, so its chat holds what it was asked and its answer, as a cloud run actor's does.
         infer: (input, inference) => {
           const run = preparedHeadRun(input, { ...inference, actor, compaction: compaction.trigger });
@@ -2742,15 +2742,15 @@ export class LocalAgentSession {
 
   /** Where a run actor's turns are assembled from: its own stores, pins and lineage, this workspace's
    *  instruction files and skills. It delegates nothing, so it advertises no agents actions. */
-  private runActorSources(actor: HostedActor, runId: string, compaction: { extension: CompactionExtension; models: TurnModelSources; report: ModelCallSink; operations: ModelOperationSink }): RunTurnSources {
-    return {
-      rt: actor.runtime,
+  private runActorSources(
+    actor: HostedActor, runId: string,
+    own: { extension: CompactionExtension; models: TurnModelSources; report: ModelCallSink; operations: ModelOperationSink; affinity: string },
+  ): RunTurnSources {
+    return actorTurnSources(actor, {
       backend: 'cli-local',
-      executors: () => actor.runtime.executionRouter?.listExecutors() ?? [],
-      config: actor.stores.config,
       harnessMode: () => this.workspaceConfig().getHarnessMode(),
-      skills: vfsTurnSkills(actor.runtime.storage.vfs, actor.stores.config, this.instructionTrust),
-      models: compaction.models,
+      instructionTrust: this.instructionTrust,
+      models: own.models,
       profileInputs: () => this.profiles().inputs(),
       ancestors: () => ancestorPins(actor.handle.parentActorId, { actorId: this.rt.actor.actorId, pins: this.config }, (id) => {
         const parent = this.actorHost.describe(id);
@@ -2762,20 +2762,17 @@ export class LocalAgentSession {
       // The workspace's SOUL.md as its agents left it; a missing one renders the default.
       soul: async () => soulIn(this.rt.space) ?? undefined,
       agentsMd: (window) => discoverAgentsMd(this.cwd, window, this.instructionTrust),
-      // Addressed as a named agent of this workspace, not the workspace's own chat.
-      identity: async () => ({ ...(await this.promptIdentity()), agent: actor.stores.config.getDisplayName() ?? actor.record.name }),
-      memoryTail: () => readMemoryTail(actor.runtime.memory),
-      artifacts: () => artifactOverrides(currentArtifacts(this.rt.storage.sql, actor.handle)),
-      taskPlan: () => null,
-      conversationKey: () => conversationKey(actorAffinity(actor.record).sessionAffinity, actor.record.actorId),
-      operations: compaction.operations,
-      scaffoldSpend: { source: 'scaffold', report: compaction.report, operations: compaction.operations },
+      workspaceIdentity: async () => this.promptIdentity(),
+      artifacts: { sql: this.rt.storage.sql },
+      affinity: own.affinity,
+      operations: own.operations,
+      report: own.report,
       attachmentBudget: actor.session.orchestrator.acc.ledgers.context,
-      extensions: () => [compaction.extension],
+      extensions: () => [own.extension],
       // The turn's own reads, read once by core (turn-assembly), as the chat's and the cloud's actors take them.
       dynamic: ({ memoryTail, activeSkills }) => (profile, tools) => this.actorDynamicContext(actor, profile, tools, { memoryTail, activeSkills }),
-      operation: (profile, inputs) => captureOperationProfile({ actor: actor.handle, profile, inputs, runId, turnId: null }),
-    };
+      run: { runId, turnId: null },
+    });
   }
 
   /** Per-step context from the hosted actor's own stores, never this session's, with the reads its turn made. */

@@ -23,7 +23,8 @@ import {
 } from "@kinu.run/core";
 import type { DeviceFileScope, LiveRead, SandboxHandle } from "@kinu.run/core";
 import { JOB_STAMP_ENV, withCommandEnvironment, withHostedNodeExecution, WORKSPACE_ROOT, type CommandEnvironment, type Holds, type PortHolders, cloudPlanes, holdConfig } from '@kinu.run/core';
-import type { ActorReference, AdoptsJobs, HostedNodeHome, InvocationSurface, ProviderAccounts, TierRefusals } from '@kinu.run/core';
+import type { AdoptsJobs, HostedNodeHome, InvocationSurface, ProviderAccounts, TierRefusals } from '@kinu.run/core';
+import type { ProvidersLane } from './owned-model-services';
 
 export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
@@ -48,7 +49,6 @@ import {
   type HubDeviceTransportOpts,
 } from "@kinu.run/core";
 import {
-  createAgentProviderRegistry,
   decisionRunOf,
   type AgentProviderRegistry,
   type UserCredentialClient,
@@ -187,12 +187,9 @@ interface RootApprovalClient {
 
 function userCredentialSourceFor(env: Env, actor: ActorRuntimeIdentity): UserCredentialSource | null {
   const userId = actor.ownerUserId();
-
-  if (!userId) return null;
   const namespace: RuntimeUserDONamespace = env.UserDO;
-  const userObject = namespace.idFromName(userId);
 
-  return userCredentials(() => namespace.get(userObject), () => userCallerFor(actor));
+  return userId ? userCredentials(() => objectNamed(namespace, userId), () => userCallerFor(actor)) : null;
 }
 
 export type CFRuntime = AgentRuntime & {
@@ -242,7 +239,8 @@ export interface CFRuntimeHooks {
   reportModelCall: ModelCallSink;
   modelOperations: ModelOperationSink;
   resolveProfile?: () => Promise<ResolvedTurnProfile>;
-  currentTurn?: (actor: ActorReference) => string | null;
+  /** The owner's providers as its lanes call them (`OwnedModelServices.registryOver`). */
+  providers: (lane: ProvidersLane) => AgentProviderRegistry;
   /** The actor's account per provider (`providerAccounts`): its lanes call on the account its chat does. */
   accounts?: () => ProviderAccounts;
   /** The actor's one notice state for its object's life; the root's titling and settings changes use it too. */
@@ -302,7 +300,7 @@ export function createCFRuntime(
 
   // One binding for every lane of this actor; each call reads its route, the judge's, the fast tier's or reflection's.
   const modelLanes = profileLaneComponents({
-    agent, env, actor, resolveProfile: hooks.resolveProfile, report: hooks.reportModelCall, currentTurn: hooks.currentTurn, accounts: hooks.accounts,
+    agent, env, actor, resolveProfile: hooks.resolveProfile, report: hooks.reportModelCall, providers: hooks.providers, accounts: hooks.accounts,
     refusals: hooks.refusals,
     modelOperations: hooks.modelOperations,
   });
@@ -659,20 +657,6 @@ function buildVectorStore(
 
 
 
-/** Resolved at call time so a newly connected provider applies without redeploy; not via
- * `OwnedModelServices`, which memoizes under one fixed title. */
-function actorProviderRegistry(lane: Pick<ProfileLaneOptions, 'env' | 'actor' | 'currentTurn' | 'accounts'>, title: string): AgentProviderRegistry {
-  const { env, actor, currentTurn, accounts } = lane;
-
-  return createAgentProviderRegistry({
-    ...(currentTurn !== undefined && { currentTurn }),
-    env,
-    userDO: userCredentialSourceFor(env, actor),
-    appTitle: title,
-    accountFor: (provider) => accounts?.()[provider],
-  });
-}
-
 /** Where the owner changes a tier's model, as a refusal notice names it. */
 export const MODEL_SETTINGS = 'Settings > Models';
 
@@ -684,7 +668,7 @@ interface ProfileLaneOptions {
   readonly resolveProfile: (() => Promise<ResolvedTurnProfile>) | undefined;
   readonly report: ModelCallSink;
   readonly modelOperations: ModelOperationSink;
-  readonly currentTurn: ((reference: ActorReference) => string | null) | undefined;
+  readonly providers: (lane: ProvidersLane) => AgentProviderRegistry;
   readonly accounts: (() => ProviderAccounts) | undefined;
   readonly refusals: TierRefusals;
 }
@@ -698,14 +682,15 @@ function profileLaneComponents(options: ProfileLaneOptions): ModelLaneComponents
   return {
     resolveProfile,
     refusals,
-    // Which credential pays a spec; the app title a registry sends is no part of it.
+    // Which credential pays a spec; the app title a registry sends is no part of it. Each call builds its registry, so
+    // a provider connected since applies.
     attemptOf: (spec) => {
-      const agent = actorProviderRegistry(options, 'Kinu');
+      const agent = options.providers({ credentials: userCredentialSourceFor(options.env, options.actor), appTitle: 'Kinu', accounts: options.accounts });
 
       return agent.registry.attemptFor(agent.normalizeSpecSync(spec), agent.deps);
     },
     llm: (route) => routedLlm((serving) => {
-      const registry = actorProviderRegistry(options, `Kinu (${route.source})`);
+      const registry = options.providers({ credentials: userCredentialSourceFor(options.env, options.actor), appTitle: `Kinu (${route.source})`, accounts: options.accounts });
 
       return bindRoute({
         normalize: (spec) => registry.normalizeSpecSync(spec),

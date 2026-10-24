@@ -5,7 +5,7 @@ import {
   actorAffinity, parseModelSpec, reasoningEffortOptions,
   providerSnapshotOf, providerListingKey, providerListingOf, ProviderListingCache,
   type ModelAffinity, type ProviderListing, type StoredProviderListing, type ProviderSnapshotRead, type ReasoningEffort,
-  type ModelAttemptInfo, type ProviderWaitInfo,
+  type ModelAttemptInfo, type ProviderWaitInfo, type ProviderAccounts, objectNamed,
   type WebSearchProvider, type WebSearchChain,
   type ProviderEnv, type WorkersAIBinding,
 } from '@kinu.run/core';
@@ -14,7 +14,7 @@ import { buildCfWebSearchProvider, type BrowserRunQuickActions } from '@kinu.run
 import {
   createAgentProviderRegistry,
   userCredentials,
-  type AgentProviderRegistry, type UserCredentialClient,
+  type AgentProviderRegistry, type UserCredentialClient, type UserCredentialSource,
 } from './providers/agent-registry';
 import type { ActorReference, ModelCallSink, UserCaller } from '@kinu.run/core';
 import type { LabelSignerEnv, ObjectNamespace, PreviewSuffixEnv } from '@kinu.run/core';
@@ -66,6 +66,16 @@ export interface OwnedModelServicesOptions<Id> {
   readonly reportModelCall: ModelCallSink;
   /** The owner's search chain, read per search from their profile catalog. */
   readonly webSearchChain: () => Promise<WebSearchChain>;
+}
+
+/** What a caller of the owner's providers names for itself: its own way to the owner's credentials (null: none), the
+ *  title its calls carry, each provider's account it chose, and where its provider's waits and attempts are told (absent:
+ *  where the services' own are). */
+export interface ProvidersLane {
+  readonly credentials: UserCredentialSource | null;
+  readonly appTitle: string;
+  readonly accounts: (() => ProviderAccounts) | undefined;
+  readonly told?: Pick<OwnedModelServicesOptions<unknown>, 'onProviderWait' | 'onModelAttempt'>;
 }
 
 export class OwnedModelServices<Id = DurableObjectId> {
@@ -127,22 +137,34 @@ export class OwnedModelServices<Id = DurableObjectId> {
         return yield* Effect.die(new Error('Agent has no owner_user_id yet: Worker must call claimOwner before any model use.'));
       }
 
-      const userObject = userId
-        ? this.options.env.UserDO.idFromName(userId)
-        : null;
+      const { env, getUserCaller } = this.options;
 
-      this.providerRegistryCache = createAgentProviderRegistry({
-        env: this.options.env,
-        userDO: userObject === null ? null : userCredentials(() => this.options.env.UserDO.get(userObject), this.options.getUserCaller),
+      this.providerRegistryCache = this.registryOver({
+        credentials: userId ? userCredentials(() => objectNamed(env.UserDO, userId), getUserCaller) : null,
         appTitle: this.options.appTitle,
-        onProviderWait: this.options.onProviderWait,
-        onModelAttempt: this.options.onModelAttempt,
-        accountFor: (provider) => this.options.accounts?.()[provider],
-        ...(this.options.currentTurn !== undefined && { currentTurn: this.options.currentTurn }),
+        accounts: this.options.accounts,
       });
 
       return this.providerRegistryCache;
     }));
+  }
+
+  /**
+   * The owner's providers as `lane` calls them, their waits and attempts told where this object's are. Built anew, so a
+   * provider the account connected since is in it; {@link providerRegistry} keeps one, under this object's own lane.
+   */
+  registryOver(lane: ProvidersLane): AgentProviderRegistry {
+    const told = lane.told ?? this.options;
+
+    return createAgentProviderRegistry({
+      env: this.options.env,
+      userDO: lane.credentials,
+      appTitle: lane.appTitle,
+      onProviderWait: told.onProviderWait,
+      onModelAttempt: told.onModelAttempt,
+      accountFor: (provider) => lane.accounts?.()[provider],
+      ...(this.options.currentTurn !== undefined && { currentTurn: this.options.currentTurn }),
+    });
   }
 
   /** Memoized on the normalized spec: heads ask once per step. `invalidate()` drops it. */

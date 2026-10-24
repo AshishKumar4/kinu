@@ -175,7 +175,7 @@ import { codemodeLauncher, jobContextAnswers, type ProgramLaunch } from "./codem
 import { createHeadRuntime } from "./head-runtime";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
 import { initSlateUsageTable, slateAiAnswer } from '@kinu.run/core/slates';
-import { OwnedModelServices } from "./owned-model-services";
+import { OwnedModelServices, type ProvidersLane } from "./owned-model-services";
 import { AgentStoreBroker } from "./agent-facets";
 import type { AgentFacetCalls } from "./agent-facet/agent-facet";
 import type { AgentSnapshot } from "@kinu.run/core";
@@ -430,6 +430,12 @@ function mcpMissing(offered: McpToolSurface, server: string, tool: string): stri
   }
 
   return `${server} offers no tool ${tool} to this actor`;
+}
+
+/** Where an actor's provider words (`provider_wait`, `model_attempt`) are recorded: its log, and the run they belong to. */
+interface ProviderLog {
+  readonly recorder: RunEventRecorder;
+  runId(): string;
 }
 
 export abstract class ActorAgent extends Agent<Env> {
@@ -1929,22 +1935,29 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Records a provider-mandated wait to the ledger (`provider_wait`), and tells the windows of the turn it holds: a call
    *  a turn's tool made here. A call no turn made (a title, a logo, upkeep) holds no turn, so no window hears it.
    *  Recorder faults are contained so a ledger write never kills the sleep. */
-  /** The run a provider's word belongs to: the operation's in flight, else the actor's current run. */
-  private providerRunId(): string {
-    return currentOperationProfile(this.actorHandle())?.runId ?? (this._currentRunId || WORKSPACE_RUN_ID);
+  /** Where this actor's provider words are recorded: its own log, under the operation in flight, else its current run. */
+  private ownProviderLog(): ProviderLog {
+    return { recorder: this.eventRecorder, runId: () => currentOperationProfile(this.actorHandle())?.runId ?? (this._currentRunId || WORKSPACE_RUN_ID) };
   }
 
-  private noteModelAttempt(info: ModelAttemptInfo): void {
+  /** A hosted actor's lanes' provider words, recorded in its own log under the operation it is in. */
+  protected providerToldFor(actor: BoundActor): NonNullable<ProvidersLane['told']> {
+    const log: ProviderLog = { recorder: actor.stores.eventRecorder, runId: () => currentOperationProfile(actor.handle)?.runId ?? WORKSPACE_RUN_ID };
+
+    return { onProviderWait: (info) => { this.noteProviderWait(info, log); }, onModelAttempt: (info) => { this.noteModelAttempt(info, log); } };
+  }
+
+  private noteModelAttempt(info: ModelAttemptInfo, log = this.ownProviderLog()): void {
     settleLoggedSync('event.model_attempt_emit_failed', { doing: 'recording a model_attempt run event', otherwise: 'io' }, () => {
-      this.eventRecorder.emit(this.providerRunId(), { type: 'model_attempt', ...info });
+      log.recorder.emit(log.runId(), { type: 'model_attempt', ...info });
     }, { provider: info.provider });
   }
 
-  private noteProviderWait(info: ProviderWaitInfo): void {
-    const runId = this.providerRunId();
+  private noteProviderWait(info: ProviderWaitInfo, log = this.ownProviderLog()): void {
+    const runId = log.runId();
 
     settleLoggedSync('event.provider_wait_emit_failed', { doing: 'recording a provider_wait run event', otherwise: 'io' }, () => {
-      this.eventRecorder.emit(runId, { type: 'provider_wait', ...info });
+      log.recorder.emit(runId, { type: 'provider_wait', ...info });
     }, { provider: info.provider });
 
     const turn = activeOperationProfile();
@@ -2420,7 +2433,7 @@ export abstract class ActorAgent extends Agent<Env> {
         servingMoved: () => this.servingMoved(),
         boxUse: this.boxUse,
         resolveProfile: () => this.routingProfile(),
-        currentTurn: (reference) => this.currentTurnOf(reference),
+        providers: (lane) => this.ownedModelServices.registryOver(lane),
         accounts: () => this.providerAccounts(),
         refusals: this.tierRefusals,
         jobs: () => this.jobRunner,
