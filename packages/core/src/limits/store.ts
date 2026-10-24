@@ -98,11 +98,19 @@ export class AccountLimitsStore {
     this.sql.exec('UPDATE account_standing SET suspended_at = NULL, suspended_reason = NULL, suspended_by = NULL, updated_at = ? WHERE id = 1', now);
   }
 
-  /** The account's computers running now; a row whose ticks stopped long ago is forgotten first. */
+  /**
+   * The account's computers running now; a row whose ticks stopped long ago is forgotten first. Deleted only when one
+   * is stale: a write statement commits and holds the object's replies even when it changes nothing, and every turn's
+   * admission reads this (staging 3831d571d: its replies held 0.8-7.5 s behind a no-op DELETE).
+   */
   running(now: number): readonly RunningComputer[] {
-    this.sql.exec('DELETE FROM account_computer_running WHERE last_tick_at < ?', now - RUNNING_STALE_MS);
+    const current = rows(RunningRow, this.sql.exec('SELECT workspace, size, started_at, last_tick_at FROM account_computer_running'));
+    const stale = now - RUNNING_STALE_MS;
 
-    return rows(RunningRow, this.sql.exec('SELECT workspace, size, started_at, last_tick_at FROM account_computer_running'));
+    if (current.every((row) => row.last_tick_at >= stale)) return current;
+    this.sql.exec('DELETE FROM account_computer_running WHERE last_tick_at < ?', stale);
+
+    return current.filter((row) => row.last_tick_at >= stale);
   }
 
   /** `workspace`'s computer started at `size`: it holds a place until it stops. */

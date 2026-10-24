@@ -141,6 +141,32 @@ describe("the account's own counts", () => {
     close();
   });
 
+  test('reading the running computers runs no write unless one is stale, which it forgets', () => {
+    const db = new Database(':memory:');
+    const sql = makeSqlExec(db);
+    const statements: string[] = [];
+
+    initAccountLimitTables(sql);
+
+    const store = new AccountLimitsStore({
+      exec: (query, ...bindings) => {
+        statements.push(query.trim().split(/\s+/u)[0] ?? '');
+
+        return sql.exec(query, ...bindings);
+      },
+    });
+
+    store.started('w', 'small', NOW);
+    statements.length = 0;
+    // A turn's admission reads this: a write statement here, even one that changes nothing, holds the object's every
+    // reply until it commits.
+    expect(store.running(NOW + 60_000).map((row) => row.workspace)).toEqual(['w']);
+    expect(statements).toEqual(['SELECT']);
+    expect(store.running(NOW + 6 * 60_000)).toEqual([]);
+    expect(statements).toEqual(['SELECT', 'SELECT', 'DELETE']);
+    db.close();
+  });
+
   test("stored bytes are each store's last reading, a removed one forgotten; tokens count to their UTC day", () => {
     const { store, close } = fresh();
 
