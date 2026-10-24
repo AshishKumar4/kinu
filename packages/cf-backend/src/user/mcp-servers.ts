@@ -290,6 +290,8 @@ export interface UserMcpServersHost extends Pick<UserObjectHost, 'ctx' | 'env' |
   readonly vault: Pick<UserCredentials, 'sealMcpHeaders' | 'openMcpHeaders' | 'getAuthHeaders'>;
   /** Told when a connection came or went, so each workspace reads its connection-held secrets again. */
   readonly connectionsMoved?: () => Promise<void>;
+  /** Told before the GitHub connection's row goes, while its token still holds: what was made with it is undone. */
+  readonly githubGoing?: () => Promise<void>;
 }
 
 /** Where a sign-in keeps the run it was begun for: under the exact OAuth state the SDK minted for it, which its callback
@@ -859,6 +861,7 @@ export class UserMcpServers {
     if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) throw new KinuError('bad_input', 'Invalid server id.');
     await this.activationSettled();
 
+    if (this.host.sqlx(`SELECT 1 FROM user_mcp_servers WHERE id = ? AND preset_id = ?`, id, GITHUB_MCP_PRESET).length > 0) await this.host.githubGoing?.();
     await this.retire(id);
     await this.assistantConnectionsChanged();
   }
