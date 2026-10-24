@@ -301,11 +301,6 @@ export const REVIEWED_ADVISORIES = {
       + 'server. Fixed in 1.19.15, inside the SDK\'s range — a lockfile refresh clears it.',
     ids: [1139322],
   },
-  'body-parser': {
-    reason: 'transitive: express 5.2.1 <- @modelcontextprotocol/sdk. DoS when an invalid limit '
-      + 'silently disables size enforcement; this repository mounts no express app.',
-    ids: [1123976],
-  },
   'extract-zip': {
     reason: 'TRANSITIVE: @cloudflare/puppeteer 1.4.0 (the slate-picture capture) pins @puppeteer/browsers '
       + '2.2.4, which requires it. The Worker imports the package\'s workers entry, '
