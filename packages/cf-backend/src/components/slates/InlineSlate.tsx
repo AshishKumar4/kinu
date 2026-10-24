@@ -122,7 +122,8 @@ function usePainted(): boolean {
 }
 
 /** An answer's page kept as a slate of the workspace's own, under its title: once kept, the control opens it. `kept`:
- *  the slate the workspace's list says it became, on any visit after the one that saved it. */
+ *  the slate the workspace's list says it became. It is the record: the save's own answer stands only until the list
+ *  has it, so a slate renamed or removed later shows as the list says. */
 function SaveControl({ name, save, open, kept }: {
   name: string;
   save: () => Promise<SlateCallResult>;
@@ -130,7 +131,9 @@ function SaveControl({ name, save, open, kept }: {
   kept: { readonly id: string; readonly title: string } | null;
 }) {
   const [justSaved, setSaved] = useState<{ id: string; title: string } | null>(null);
-  const saved = justSaved ?? kept;
+
+  if (justSaved !== null && kept !== null) setSaved(null);
+  const saved = kept ?? justSaved;
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
 
