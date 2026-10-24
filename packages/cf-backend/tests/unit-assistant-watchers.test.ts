@@ -9,10 +9,10 @@
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import { blueprintSeed, kinuBlueprint, type GitHubAnswer, type GitHubRead, type GoogleAnswer, type GoogleCall, type JsonValue } from '@kinu.run/core';
-import { present } from '@kinu.run/test-utils';
 import { fireSoonestWake, orchestratorHarness, until, type RecordedUserPlaneCalls, type StartedHarness } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
-import { answeringGateway, GATEWAY_MODEL, openingOf, type StubbedAiBinding } from './helpers/platform-gateway';
+import { answeringGateway, GATEWAY_MODEL, requestOf, type RecordedGatewayRun, type StubbedAiBinding } from './helpers/platform-gateway';
+import { isRuntimeContext, present } from '@kinu.run/test-utils';
 
 const FAST_MODEL = 'ai-gateway/workers-ai/@cf/harness/fast';
 
@@ -40,69 +40,133 @@ async function nextCheck(workspace: StartedHarness, checked: () => number): Prom
   const before = checked();
 
   for (let wakes = 0; checked() === before; wakes += 1) {
-    if (wakes === 10) throw new Error('ten wakes and no check');
+    // A woken turn arms wakes of its own (its cache's warming, its terminal effects) that come due before the check.
+    if (wakes === 40) throw new Error('forty wakes and no check');
     await fireSoonestWake(workspace.agent, workspace.db);
     await joinHarnessFibers();
   }
 }
 
-/** The model requests a check's turn made: those opened by `asked`. */
-const turnsOn = (gateway: StubbedAiBinding, asked: string) => gateway.runs.filter((run) => openingOf(run).includes(asked));
+const UserTextSchema = v.union([
+  v.string(), v.pipe(v.array(v.looseObject({ text: v.optional(v.string()) })), v.transform((parts) => parts.map((part) => part.text ?? '').join(''))),
+]);
+
+/** What a request asked last: its newest user message that is not Kinu's runtime context. */
+function askedOf(run: RecordedGatewayRun): string {
+  const asked = requestOf(run).messages.filter((message) => message.role === 'user').map((message) => v.parse(UserTextSchema, message.content));
+
+  return asked.filter((text) => !isRuntimeContext(text)).at(-1) ?? '';
+}
+
+/** The model requests a check's fire asked: each newest message `asked` (every later turn of the chat opens with it). */
+const turnsOn = (gateway: StubbedAiBinding, asked: string) => gateway.runs.filter((run) => askedOf(run).includes(asked));
 
 const ModelSchema = v.object({ model: v.string() });
 
 /** A seeded schedule's trigger spec, as the owner's trigger list shows it. */
 const ScheduleSpecSchema = v.object({ cron: v.string(), tier: v.optional(v.string()), check: v.optional(v.unknown()), payload: v.unknown() });
 
+/** A notification as the fake keeps it; the rest of GitHub's shape is drawn from it. */
+interface Notification {
+  readonly id: string;
+  readonly reason: string;
+  readonly updated_at: string;
+}
+
+/** The owner's GitHub notifications now, and when they last changed. */
+interface GitHubInboxState {
+  modified: string;
+  inbox: Notification[];
+}
+
+/** GitHub as it answers /notifications: a 304 while unchanged since `If-Modified-Since`, else newest first, after
+ *  `since` (exclusive, as GitHub reads it), a page of `per_page` at a time. */
+function gitHubInbox() {
+  const state: GitHubInboxState = { modified: 'Fri, 24 Oct 2026 09:00:00 GMT', inbox: [] };
+  const reads: GitHubRead[] = [];
+
+  const answer = (read: GitHubRead): GitHubAnswer => {
+    if (read.ifModifiedSince === state.modified) return { status: 304, body: null, headers: { lastModified: state.modified } };
+    const { since, page = 1, per_page: per = 50 } = v.parse(NotificationsQuerySchema, read.query ?? {});
+    const listed = state.inbox.filter(({ updated_at }) => since === undefined || updated_at > since).sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+
+    const body = listed.slice((page - 1) * per, page * per).map((item) => ({
+      ...item, unread: true, repository: { full_name: 'kinu/ledger' },
+      subject: { title: `Ledger ${item.id}`, url: `https://api.github.com/repos/kinu/ledger/pulls/${item.id}`, type: 'PullRequest' },
+    }));
+
+    return { status: 200, body, headers: { lastModified: state.modified } };
+  };
+
+  return { state, reads, answer };
+}
+
+const NotificationsQuerySchema = v.object({ since: v.optional(v.string()), page: v.optional(v.number()), per_page: v.optional(v.number()) });
+
 describe("the assistant's GitHub check", () => {
   test('reads GitHub at no model call while nothing new needs the owner, then wakes once for a review asked of them, on the fast model', async () => {
-    let modified = 'Fri, 24 Oct 2026 09:00:00 GMT';
-    let inbox: JsonValue[] = [];
-    const reads: GitHubRead[] = [];
-
-    // GitHub as it answers /notifications: unchanged since `If-Modified-Since`, a 304; `since` read inclusively here,
-    // so the newest one seen comes back and is not news twice.
-    const answer = (read: GitHubRead): GitHubAnswer => {
-      if (read.ifModifiedSince === modified) return { status: 304, body: null, headers: { lastModified: modified } };
-      const since = read.query?.['since'];
-
-      return { status: 200, body: inbox.filter((item) => since === undefined || String(v.parse(v.object({ updated_at: v.string() }), item).updated_at) >= String(since)), headers: { lastModified: modified } };
-    };
-
-    const { gateway, workspace } = await assistant(['GitHub check'], { github: { reads, answer } });
-    const checked = () => reads.length;
+    const github = gitHubInbox();
+    const { gateway, workspace } = await assistant(['GitHub check'], { github });
+    const checked = () => github.reads.length;
 
     // The first check marks where to start; the next five find nothing changed.
     for (let check = 0; check < 6; check += 1) await nextCheck(workspace, checked);
-    expect({ checks: reads.length, modelCalls: gateway.runs.length, paths: [...new Set(reads.map(({ path }) => path))] })
+    expect({ checks: github.reads.length, modelCalls: gateway.runs.length, paths: [...new Set(github.reads.map(({ path }) => path))] })
       .toEqual({ checks: 6, modelCalls: 0, paths: ['/notifications'] });
 
     const at = new Date().toISOString();
 
-    const notification = (id: string, reason: string) => ({
-      id, reason, updated_at: at, unread: true, repository: { full_name: 'kinu/ledger' },
-      subject: { title: `Ledger ${id}`, url: `https://api.github.com/repos/kinu/ledger/pulls/${id}`, type: 'PullRequest' },
-    });
-
-    inbox = [notification('7', 'review_requested'), notification('8', 'subscribed')];
-    modified = 'Fri, 24 Oct 2026 10:40:00 GMT';
+    github.state.inbox = [{ id: '7', reason: 'review_requested', updated_at: at }, { id: '8', reason: 'subscribed', updated_at: at }];
+    github.state.modified = 'Fri, 24 Oct 2026 10:40:00 GMT';
     await nextCheck(workspace, checked);
     await until(() => turnsOn(gateway, 'New GitHub notifications').length > 0, 'the check never woke the assistant');
 
     const woke = turnsOn(gateway, 'New GitHub notifications for Ashish');
 
     expect(woke.length).toBe(1);
-    expect(openingOf(present(woke[0], 'the woken turn'))).toContain('review requested: kinu/ledger "Ledger 7" https://github.com/kinu/ledger/pull/7');
-    expect(openingOf(present(woke[0], 'the woken turn'))).not.toContain('Ledger 8');
+    expect(askedOf(present(woke[0], 'the woken turn'))).toContain('review requested: kinu/ledger "Ledger 7" https://github.com/kinu/ledger/pull/7');
+    expect(askedOf(present(woke[0], 'the woken turn'))).not.toContain('Ledger 8');
     expect(FAST_MODEL.endsWith(v.parse(ModelSchema, present(woke[0], 'the woken turn').query).model)).toBe(true);
 
-    // Unchanged, then changed with nothing new in it: neither wakes it again.
+    // Unchanged, then changed with nothing new in it (its read reaches back a second, past the edge): neither wakes it.
     const calls = gateway.runs.length;
 
     await nextCheck(workspace, checked);
-    modified = 'Fri, 24 Oct 2026 10:50:00 GMT';
+    github.state.modified = 'Fri, 24 Oct 2026 10:50:00 GMT';
     await nextCheck(workspace, checked);
     expect({ turns: turnsOn(gateway, 'New GitHub notifications').length, modelCalls: gateway.runs.length - calls }).toEqual({ turns: 1, modelCalls: 0 });
+
+    // One that came in at the edge, a second before the newest seen, is still news.
+    github.state.inbox = [...github.state.inbox, { id: '9', reason: 'mention', updated_at: new Date(Date.parse(at) - 500).toISOString() }];
+    github.state.modified = 'Fri, 24 Oct 2026 11:00:00 GMT';
+    await nextCheck(workspace, checked);
+    await until(() => turnsOn(gateway, 'New GitHub notifications').length > 1, 'the edge notification never woke the assistant');
+    expect(askedOf(present(turnsOn(gateway, 'New GitHub notifications').at(-1), 'the edge turn'))).toContain('mentioned: kinu/ledger "Ledger 9"');
+  });
+
+  test('a burst of more than a page and more than a brief holds reaches the owner whole, across checks, each once', async () => {
+    const github = gitHubInbox();
+    const { gateway, workspace } = await assistant(['GitHub check'], { github });
+    const checked = () => github.reads.length;
+
+    await nextCheck(workspace, checked);
+    const at = Date.now() + 60_000;
+
+    github.state.inbox = Array.from({ length: 60 }, (_, index) => ({ id: String(100 + index), reason: 'review_requested', updated_at: new Date(at + index * 1000).toISOString() }));
+    github.state.modified = 'Fri, 24 Oct 2026 10:40:00 GMT';
+    setSystemTime(new Date(at + 120_000));
+
+    const told = () => turnsOn(gateway, 'New GitHub notifications').map(askedOf).join('\n');
+
+    for (let check = 0; check < 20 && !told().includes('"Ledger 100"'); check += 1) {
+      await nextCheck(workspace, checked);
+      await until(() => true, 'the woken turn');
+    }
+
+    const named = github.state.inbox.map(({ id }) => id).filter((id) => told().split(`"Ledger ${id}"`).length - 1 !== 1);
+
+    // Both pages were read, every one named exactly once, the last brief saying none waits.
+    expect({ secondPage: github.reads.some(({ query }) => query?.page === 2), unnamedOrTwice: named }).toEqual({ secondPage: true, unnamedOrTwice: [] });
   });
 });
 
@@ -111,6 +175,7 @@ describe("the assistant's Gmail check", () => {
     // Gmail's history: each record a message added, with its labels; a history id is the newest record's.
     const records: { readonly id: number; readonly message: string; readonly labels: readonly string[] }[] = [];
     let historyId = 100;
+    let mailbox = 'ashish@example.com';
     // Gmail keeps history for a while only: a start before this is a 404.
     let kept = 0;
     const calls: GoogleCall[] = [];
@@ -119,7 +184,7 @@ describe("the assistant's Gmail check", () => {
     const answer = (call: GoogleCall): GoogleAnswer => {
       const url = new URL(call.url);
 
-      if (url.pathname.endsWith('/profile')) return ok({ emailAddress: 'ashish@example.com', historyId: String(historyId) });
+      if (url.pathname.endsWith('/profile')) return ok({ emailAddress: mailbox, historyId: String(historyId) });
 
       if (url.pathname.endsWith('/history')) {
         const from = Number(url.searchParams.get('startHistoryId'));
@@ -136,10 +201,12 @@ describe("the assistant's Gmail check", () => {
     };
 
     const { gateway, workspace } = await assistant(['Gmail check'], { google: { calls, answer } });
-    const checked = () => calls.filter((call) => call.url.endsWith('/profile') || call.url.includes('/history')).length;
+    const checked = () => calls.filter((call) => call.url.endsWith('/profile')).length;
+    const histories = () => calls.filter((call) => call.url.includes('/history')).length;
 
+    // A quiet inbox: its profile's history id unmoved, so not even its history is read.
     for (let check = 0; check < 6; check += 1) await nextCheck(workspace, checked);
-    expect(gateway.runs.length).toBe(0);
+    expect({ modelCalls: gateway.runs.length, histories: histories() }).toEqual({ modelCalls: 0, histories: 0 });
 
     // One letter to the inbox, and one the owner sent: only the letter is news.
     historyId = 102;
@@ -150,7 +217,8 @@ describe("the assistant's Gmail check", () => {
     const woke = turnsOn(gateway, "New mail in Ashish's inbox");
 
     expect(woke.length).toBe(1);
-    expect(openingOf(present(woke[0], 'the woken turn'))).toContain('1 new in the inbox:\\nAna <ana@example.com>: "Invoice m1" (m1)');
+    expect(askedOf(present(woke[0], 'the woken turn'))).toContain('New in the inbox:\\nAna <ana@example.com>: "Invoice m1" (m1)');
+    expect(askedOf(present(woke[0], 'the woken turn'))).not.toContain('m2');
     expect(FAST_MODEL.endsWith(v.parse(ModelSchema, present(woke[0], 'the woken turn').query).model)).toBe(true);
 
     const after = gateway.runs.length;
@@ -158,13 +226,23 @@ describe("the assistant's Gmail check", () => {
     for (let check = 0; check < 3; check += 1) await nextCheck(workspace, checked);
     expect({ turns: turnsOn(gateway, 'New mail in').length, modelCalls: gateway.runs.length - after }).toEqual({ turns: 1, modelCalls: 0 });
 
-    // A history id Gmail no longer keeps starts again from now: nothing before it is news, and nothing wakes.
+    // A history id Gmail no longer keeps starts again from now: what came before it is not news, what comes after is.
     historyId = 300;
     kept = 200;
     records.push({ id: 250, message: 'm3', labels: ['INBOX'] });
     await nextCheck(workspace, checked);
+    historyId = 301;
+    records.push({ id: 301, message: 'm4', labels: ['INBOX'] });
     await nextCheck(workspace, checked);
-    expect({ turns: turnsOn(gateway, 'New mail in').length, last: calls.at(-1)?.url }).toEqual({ turns: 1, last: expect.stringContaining('startHistoryId=300') });
+    await until(() => turnsOn(gateway, 'New mail in').length > 1, 'the mail after the restart never woke the assistant');
+    expect(askedOf(present(turnsOn(gateway, 'New mail in').at(-1), 'the turn after the restart'))).toContain('(m4)');
+    expect(turnsOn(gateway, 'New mail in').map(askedOf).join('\n')).not.toContain('(m3)');
+
+    // Another mailbox connected starts again from its own now, and wakes nothing.
+    mailbox = 'ashish@work.example';
+    historyId = 5;
+    await nextCheck(workspace, checked);
+    expect(turnsOn(gateway, 'New mail in').length).toBe(2);
   });
 });
 

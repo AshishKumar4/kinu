@@ -6764,11 +6764,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * kept watcher of a connection the owner now holds, and cancels each of one they no longer hold, by its label.
    */
   async connectionsChanged(connected: readonly string[]): Promise<void> {
-    const armed = this.armedBlueprintSchedules();
+    // A replacement that cannot be made now leaves the kept ones to reconcile: a connection gone still cancels its check.
+    let watchers: readonly BlueprintSchedule[] = this.actorHandle().config.getBlueprintWatchers();
 
-    for (const watcher of await this.currentBlueprintWatchers()) {
+    await settleLogged('blueprint.watchers_unreplaced', { doing: "replacing the installed checks its blueprint has replaced", otherwise: 'unavailable' },
+      async () => { watchers = await this.currentBlueprintWatchers(); }, { workspace: this.name });
+
+    for (const watcher of watchers) {
       const held = watcher.connection !== undefined && connected.includes(watcher.connection);
-      const id = armed.get(watcher.label)?.id;
+      // Read as it is acted on, in the same synchronous run as the trigger it arms: another notice cannot arm it twice.
+      const id = this.armedBlueprintSchedules().get(watcher.label)?.id;
 
       if (held && id === undefined) await this.armSchedule(watcher);
 
