@@ -121,9 +121,16 @@ function usePainted(): boolean {
   return painted;
 }
 
-/** An answer's page kept as a slate of the workspace's own, under its title: once kept, the control opens it. */
-function SaveControl({ name, save, open }: { name: string; save: () => Promise<SlateCallResult>; open?: (id: string) => void }) {
-  const [saved, setSaved] = useState<{ id: string; title: string } | null>(null);
+/** An answer's page kept as a slate of the workspace's own, under its title: once kept, the control opens it. `kept`:
+ *  the slate the workspace's list says it became, on any visit after the one that saved it. */
+function SaveControl({ name, save, open, kept }: {
+  name: string;
+  save: () => Promise<SlateCallResult>;
+  open?: (id: string) => void;
+  kept: { readonly id: string; readonly title: string } | null;
+}) {
+  const [justSaved, setSaved] = useState<{ id: string; title: string } | null>(null);
+  const saved = justSaved ?? kept;
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
 
@@ -206,7 +213,7 @@ export function SlateCard({ id, block, measure, save, children }: {
         {folded && <code className="t-meta t-mono p-text-3 truncate">{name}</code>}
         {why !== null && <span className="t-meta ml-auto shrink-0 pl-2 p-text-3">{why}</span>}
       </Pressable>
-      {save !== undefined && <SaveControl name={name} save={save} open={openSlate} />}
+      {save !== undefined && <SaveControl name={name} save={save} open={openSlate} kept={inline?.savedAs?.(id) ?? null} />}
       {openSlate !== undefined && (
         <Button variant="ghost" size="sm" icon={<ArrowSquareOutIcon size={14} />} className="shrink-0" onClick={() => openSlate(id)} aria-label={`Open ${name} in the work surface`} title="Open in the work surface" />
       )}

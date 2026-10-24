@@ -893,7 +893,8 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
   const slateInline = useMemo(() => ({
     rpc: state.rpc,
     openSlate: (id: string): void => show(`${SLATE_PREFIX}${id}`),
-  }), [state.rpc, show]);
+    savedAs: (page: string) => state.slates.find((slate) => slate.page === page) ?? null,
+  }), [state.rpc, state.slates, show]);
 
   // The slate the inspector shows beside the chat folds its chat previews; a phone never shows both.
   const panelSlate = (control: InspectorControl): string | null =>

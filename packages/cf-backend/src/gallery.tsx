@@ -2489,7 +2489,7 @@ const ERRORS_PAGE = [
   '<script type="module">',
   'import { onPush, slate, workspace } from "kinu:slate";',
   'onPush((data) => { document.getElementById("pushed").textContent = "pushed " + JSON.stringify(data); });',
-  'const counted = await workspace.db.count({ table: "errors" }).catch((refused) => "refused: " + refused.message);',
+  'const counted = await workspace.db.count("errors").catch((refused) => "refused: " + refused.message);',
   'document.getElementById("counted").textContent = "counted " + JSON.stringify(counted);',
   'document.getElementById("served").textContent = "served " + await slate.word("errors").catch((refused) => "refused: " + refused.message);',
   '</script>',
@@ -2955,7 +2955,12 @@ const PAGE_TABLE_ANSWERS: WorkspaceAnswers = {
       return asked.method === "word" ? { ok: true, value: `${String(asked.args[0])} by route` } : { ok: false, ...refusalOf(new KinuError("bad_input", `no method ${asked.method}`)) };
     }
 
-    return asked.path.join(".") === "db.count" ? { ok: true, value: { id, count: 12 } } : { ok: false, ...refusalOf(new KinuError("denied", `${asked.path.join(".")} is not answered here`)) };
+    if (asked.path.join(".") !== "db.count") return { ok: false, ...refusalOf(new KinuError("denied", `${asked.path.join(".")} is not answered here`)) };
+
+    // Its arguments as the workspace's own db takes them, a program's: the table by name (`db.count(table, where)`).
+    return asked.args.length === 1 && asked.args[0] === "errors"
+      ? { ok: true, value: { id, count: 12 } }
+      : { ok: false, ...refusalOf(new KinuError("bad_input", "db.count: \"table\": Invalid type. It takes: table, where.")) };
   },
   // Keeping an answer's page: the kept slate is listed under the page's title, and the listing moves.
   slate: (asked) => {
