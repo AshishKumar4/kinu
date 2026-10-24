@@ -68,8 +68,8 @@ You can use it for:
   UI and editors that speak the Agent Client Protocol all open the same cloud
   workspace. Connect a machine of yours and every cloud workspace you grant can
   use it.
-- Bring your subscriptions. Sign in with Cloudflare for Workers AI. Connect your
-  ChatGPT Codex subscription with a device code, or your OpenAI, Anthropic and
+- Bring your subscriptions. Sign in with Cloudflare for Workers AI. Sign in
+  with your Claude or ChatGPT subscription, or add your OpenAI, Anthropic and
   OpenRouter keys, and cloud workspaces use them. On your machine a local
   workspace can also drive your Claude Code or opencode login.
 

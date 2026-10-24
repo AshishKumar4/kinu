@@ -4,7 +4,8 @@ import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contr
 import { SlateId } from '@agent-core/core/slates';
 import { createTestWorkspace, makeSqlExec } from './helpers';
 import { sha256Hex } from '../src/safety/argument-digest';
-import { SlateController } from '../src/slates/controller';
+import { SlateController, type SlateClassProcess, type SlateControllerPorts } from '../src/slates/controller';
+import type { RunnableSlateSource } from '../src/slates/processes';
 import { initSlateBuildTable, SlateBuilds } from '../src/slates/builds';
 import { slateAuthority } from '../src/slates/authority';
 import { ROOT_SLATE_CALLER } from '../src/slates/caller';
@@ -231,6 +232,14 @@ test('a later rollback write failure rolls back earlier restorations and keeps t
   expect(marks.editMark('board')?.editor).toBe('pat@example.test');
 });
 
+/** A slate's build and process, as tests that never run one have them. */
+const IDLE_PROCESSES = {
+  digest: async () => 'source',
+  build: async () => ({ modules: {}, inputs: [] }),
+  launch: async () => ({ id: 'test', port: null, methods: [], isRunning: async () => true, stop: async () => {} }),
+  call: async () => ({ ok: true, value: null }),
+} satisfies Pick<SlateControllerPorts<RunnableSlateSource, SlateClassProcess>, 'digest' | 'build' | 'launch' | 'call'>;
+
 async function controlledTree(catalog: () => Promise<{ mcp: never[]; slates: string[] }> = async () => ({ mcp: [], slates: ['board'] })) {
   const tree = await editorTree();
   initSlateBuildTable(tree.execRaw);
@@ -242,10 +251,8 @@ async function controlledTree(catalog: () => Promise<{ mcp: never[]; slates: str
     workspace: 'writer-test', sql: makeSqlExec(tree.db), builds, transaction: (body) => tree.db.transaction(body)(),
     session: async () => tree.session, catalog, shareEntry: () => null,
     apps: { ensure: async () => ({ port: 3100, capability: 'test' }), remove: async () => ({ removed: true, port: 3100 }), url: async () => ({ url: 'https://example.test' }), owners: async () => new Map() },
-    resolve: async () => ({ kind: 'files' as const, root: tree.root, project }), digest: async () => 'source',
-    build: async () => ({ modules: {}, inputs: [] }),
-    launch: async () => ({ id: 'test', port: null, methods: [], isRunning: async () => true, stop: async () => {} }),
-    call: async () => ({ ok: true, value: null }),
+    resolve: async () => ({ kind: 'files' as const, root: tree.root, project }),
+    ...IDLE_PROCESSES,
   });
 
   const content = tree.session.vfs.withTransaction(() => new WorkspaceSlateContentStore(tree.kernel));
@@ -362,4 +369,30 @@ test('a no-op rollback cannot change a later pending edit mark', async () => {
 
   expect(rollback(noop)).toEqual({ restored: [], conflicts: [] });
   expect(marks.editMark('board')?.editor).toBe('sam');
+});
+
+// An answer's page saved twice at once (a double click) is one slate: each save would otherwise find no slate of the
+// page yet across its awaits, and write one (review of the saved-page fix, 2026-10-24).
+test("an answer's page saved twice at once becomes one slate", async () => {
+  const tree = await editorTree();
+  initSlateBuildTable(tree.execRaw);
+  initSlateUsageTable(tree.execRaw);
+  const page = 'a-page/notes';
+  const project = parseSlateProject({ slate: { title: 'Notes' } });
+  // Every await a save makes yields to the other first, as the object's own RPC does, so two saves interleave.
+  const later = async <T>(value: T): Promise<T> => await Promise.resolve(value);
+
+  const controller = new SlateController({
+    workspace: 'save-test', sql: makeSqlExec(tree.db), builds: new SlateBuilds(makeSqlExec(tree.db)), transaction: (body) => tree.db.transaction(body)(),
+    session: async () => later(tree.session), catalog: async () => ({ mcp: [], slates: [] }), shareEntry: () => null,
+    apps: { ensure: async () => ({ port: 3100, capability: 'test' }), remove: async () => ({ removed: true, port: 3100 }), url: async () => ({ url: 'https://example.test' }), owners: async () => later(new Map()) },
+    resolve: async () => later({ kind: 'message' as const, project, root: '/answers/a-page/notes', author: ROOT_SLATE_CALLER, html: '<p>notes</p>', server: null }),
+    ...IDLE_PROCESSES,
+  });
+
+  const saved = await Promise.all([controller.savePage(ROOT_SLATE_CALLER, page), controller.savePage(ROOT_SLATE_CALLER, page)]);
+  const listed = await controller.list(ROOT_SLATE_CALLER);
+
+  expect(saved).toEqual([{ ok: true, value: { id: 'notes', title: 'Notes' } }, { ok: true, value: { id: 'notes', title: 'Notes' } }]);
+  expect(listed.slates).toEqual([{ id: 'notes', title: 'Notes', page }]);
 });

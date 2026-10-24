@@ -10,7 +10,7 @@
  */
 
 import { Effect } from 'effect';
-import type { Page, Target } from 'puppeteer';
+import type { Frame, Page, Target } from 'puppeteer';
 import * as v from 'valibot';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -25,7 +25,7 @@ import { createWorkspace, listWorkspaces, LOOPBACK_IDENTITY } from '../evals/src
 import { CHAT_COMPOSER_LIVE, CHATS, INSPECTOR_PANEL, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, OPEN_NAMES, countRpc, frameLedger, named, openInspector, PAGE_TABS, painted, pressSend, pressUntil, recordRenderTasks, rendered, sendInChat, settled, settledAfter, until, waitOn, type ControlAttempt, type RpcCounter } from './browser-page';
 import { rowVerdicts, type RowVerdicts } from './row-verdicts';
 import { registerScriptedModel, startScriptedModel } from './scripted-model';
-import { KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_FIRST_TURN_MISSION, PHASED_FIRST_TURN_MISSION, PHASED_TURN_ANSWER, phasedFirstTurn, PACED_TURN_ANSWER, ANSWERED_TURN_ASK, CLEARED_TURN_ASK, OBSERVED_TURN_ASK, PACED_TURN_ASK, RECONNECT_STEPS, RECONNECT_TURN_ASK, SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNANSWERED_PROBE_TURN_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK, laterReconnectTurn, toldBackTurn, unsentFirstTurn, DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, type HeldCall, LOGO_WAITED_MISSION, MINUTE_LIMITED_ASK, MINUTE_WAITED_OUT, ProviderWaitProbe, providerWaitTurn, WAITED_TURN_ASK, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, PLAN_TASK_TITLES, planTasksProbe, STOPPED_ASK, STOPPED_ANSWER, HANDED_BACK_ASK, StopProbe, FOLLOW_UP_ASK, FOLLOW_UP_ANSWER, OPENING_ASK, OPENING_ANSWER, stopProbeTurn, SLATE_ID, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, SLATE_UI_CLICKED, slateUiTurn, SLATE_ASK_ID, SLATE_ASK_PROBE, SlateAskProbe, slateAskTurn } from './live-app-scripts';
+import { KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_FIRST_TURN_MISSION, PHASED_FIRST_TURN_MISSION, PHASED_TURN_ANSWER, phasedFirstTurn, PACED_TURN_ANSWER, ANSWERED_TURN_ASK, CLEARED_TURN_ASK, OBSERVED_TURN_ASK, PACED_TURN_ASK, RECONNECT_STEPS, RECONNECT_TURN_ASK, SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNANSWERED_PROBE_TURN_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK, laterReconnectTurn, toldBackTurn, unsentFirstTurn, DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, type HeldCall, LOGO_WAITED_MISSION, MINUTE_LIMITED_ASK, MINUTE_WAITED_OUT, ProviderWaitProbe, providerWaitTurn, WAITED_TURN_ASK, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, PLAN_TASK_TITLES, planTasksProbe, STOPPED_ASK, STOPPED_ANSWER, HANDED_BACK_ASK, StopProbe, FOLLOW_UP_ASK, FOLLOW_UP_ANSWER, OPENING_ASK, OPENING_ANSWER, stopProbeTurn, SLATE_ID, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, SLATE_UI_CLICKED, slateUiTurn, PAGE_DATA, PAGE_DATA_ASK, pageDataTurn, SLATE_ASK_ID, SLATE_ASK_PROBE, SlateAskProbe, slateAskTurn } from './live-app-scripts';
 import { FALLBACK_ANSWER, type ScriptedRequest } from './scripted-protocol';
 import { openPublicSocket } from '../tests/first-run/public-socket';
 import { drivePlanReview, type WalkthroughVerdict } from './plan-demo-film';
@@ -218,6 +218,7 @@ export interface TierVerdicts {
   stopThenSend: StopThenSendVerdict | null;
   newChatStop: NewChatStopVerdict | null;
   slateUi: SlateUiVerdict | null;
+  pageData: PageDataVerdict | null;
   slateAsk: SlateAskVerdict | null;
   providerWait: ProviderWaitVerdict | null;
   workspaceViews: WorkspaceViewsVerdict | null;
@@ -1920,6 +1921,91 @@ async function measureSlateUi(newPage: LiveApp['newPage'], origin: string, heard
   }
 }
 
+/** What the page-data page shows: its notes counted typed and in SQL, its server's word, its ping and what it pushed. */
+export interface PageDataReading {
+  readonly typed: string;
+  readonly sql: string;
+  readonly served: string;
+  readonly pinged: string;
+  readonly pushed: string;
+}
+
+export interface PageDataVerdict {
+  /** As drawn, then once its Add wrote a note typed and one in SQL. */
+  readonly opened: PageDataReading;
+  readonly added: PageDataReading;
+  /** The slate Save kept it as, and as the work surface draws it there, then once its own Add wrote two more. */
+  readonly saved: string;
+  readonly kept: PageDataReading;
+  readonly keptAdded: PageDataReading;
+  /** After a reload: the page drawn again in its answer, and what its card says it was kept as. */
+  readonly reloaded: PageDataReading;
+  readonly stillSaved: string | null;
+}
+
+const PAGE_DATA_CARD = `[data-slate-ui="${PAGE_DATA.name}"]`;
+
+/** The page in `frame`, once it has read what `stage` names. */
+async function pageDataReading(frame: Frame, stage: 'opened' | 'added', what: string): Promise<PageDataReading> {
+  await named(`${what}, ${stage}`, () => frame.waitForFunction((want) => document.body.dataset['read'] === want, { timeout: 60_000 }, stage));
+
+  return await frame.evaluate(() => {
+    const said = (id: string) => document.getElementById(id)?.textContent ?? '';
+
+    return { typed: said('typed'), sql: said('sql'), served: said('served'), pinged: said('pinged'), pushed: said('pushed') };
+  });
+}
+
+async function frameAt(page: Page, selector: string, what: string): Promise<Frame> {
+  const handle = await named(what, () => page.waitForSelector(selector, { timeout: 60_000 }));
+  const frame = await handle?.contentFrame();
+
+  if (frame === null || frame === undefined) throw new Error(`${what} has no document`);
+
+  return frame;
+}
+
+/** An answer's page end to end (1023-ac): its notes in `workspace.db`, typed and in SQL, its server's answer and its
+ *  push; then Save, the slate it became in the work surface, and a reload. */
+async function measurePageData(newPage: LiveApp['newPage'], origin: string): Promise<PageDataVerdict> {
+  const workspace = await createWorkspace(origin, LOOPBACK_IDENTITY, { name: `live-row-page-data-${RUN_ID}`, purpose: 'page data probe', model: SCRIPTED_MODEL_SPEC });
+  const page = await openRecorded(newPage, origin, workspace);
+  const drawn = `${PAGE_DATA_CARD} iframe[data-slate-drawn="page"]`;
+
+  try {
+    await sendInChat(page, PAGE_DATA_ASK);
+    await until(page, 'the notes page drawn', `document.querySelector(${JSON.stringify(drawn)}) !== null && !(${STOP_OFFERED})`);
+    let frame = await frameAt(page, drawn, 'the notes page');
+    const opened = await pageDataReading(frame, 'opened', 'the notes page');
+
+    await frame.click('#add');
+    const added = await pageDataReading(frame, 'added', 'the notes page');
+
+    await page.$eval(`${PAGE_DATA_CARD} button[data-slate-save]`, (save) => { if (save instanceof HTMLElement) save.click(); });
+    const saved = await named('the notes page saved', () => page.waitForSelector(`${PAGE_DATA_CARD} button[data-slate-saved]`, { timeout: 60_000 }));
+    const savedAs = await saved?.evaluate((button) => button.getAttribute('data-slate-saved') ?? '') ?? '';
+
+    await saved?.evaluate((button) => { if (button instanceof HTMLElement) button.click(); });
+    const pane = await frameAt(page, '#inspector iframe.p-slate-frame', 'the saved slate in the work surface');
+    const kept = await pageDataReading(pane, 'opened', 'the saved slate');
+
+    await pane.click('#add');
+    const keptAdded = await pageDataReading(pane, 'added', 'the saved slate');
+
+    await named('the reload', () => page.reload({ waitUntil: 'load' }));
+    frame = await frameAt(page, drawn, 'the notes page, reloaded');
+    const reloaded = await pageDataReading(frame, 'opened', 'the notes page, reloaded');
+    // The card learns it was saved from the workspace's slate list, which the page opens beside the transcript.
+    const again = await named('the reloaded card, saved', () => page.waitForSelector(`${PAGE_DATA_CARD} button[data-slate-saved]`, { timeout: 60_000 }));
+    const stillSaved = await again?.evaluate((button) => button.getAttribute('data-slate-saved')) ?? null;
+
+    return { opened, added, saved: savedAs, kept, keptAdded, reloaded, stillSaved };
+  } finally {
+    await shoot(page, 'page-data-settled');
+    await page.close();
+  }
+}
+
 /** The statuses an MCP server's row shows while it is still connecting, which its page reads again. */
 const UNSETTLED_MCP = ['connecting', 'discovering'] as const;
 
@@ -2567,7 +2653,7 @@ async function measureState(app: LiveApp): Promise<StateVerdict> {
 export const LIVE_ROWS = [
   'live-indicator', 'opened-mid-turn', 'reconnect', 'observed-reconnect', 'unanswered-probe', 'slept', 'watched-slept', 'answered',
   'unsent-answer', 'controls', 'walkthrough', 'own-server', 'kept-tab', 'chat-scroll', 'mid-thought', 'dropped-file', 'cleared', 'plan-tasks',
-  'stop-then-send', 'new-chat-stop', 'slate-ui', 'slate-ask', 'provider-wait', 'connect', 'workspace-views', 'turn-drawn', 'state',
+  'stop-then-send', 'new-chat-stop', 'slate-ui', 'page-data', 'slate-ask', 'provider-wait', 'connect', 'workspace-views', 'turn-drawn', 'state',
 ] as const;
 
 export type LiveRow = (typeof LIVE_ROWS)[number];
@@ -2588,7 +2674,7 @@ export interface LiveRows extends Pick<RowVerdicts, 'verdictOf'> {
 export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
   const observed: TierVerdicts = {
     liveIndicator: null, openedMidTurn: null, reconnect: null, observedReconnect: null, unansweredProbe: null, slept: null, watchedSlept: null, answered: null,
-    unsentAnswer: null, bootFailure: null, slateAsk: null, connect: null,
+    unsentAnswer: null, bootFailure: null, slateAsk: null, pageData: null, connect: null,
     controls: null, walkthrough: null, ownServer: null, keptTab: null, chatScroll: null, midThought: null, turnDrawn: null, droppedFile: null, cleared: null, planTasks: null, stopThenSend: null, newChatStop: null, slateUi: null, providerWait: null, workspaceViews: null, state: null,
   };
 
@@ -2626,7 +2712,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
       ?? reconnectTurn(request, UNANSWERED_PROBE_TURN_ASK, probeWaitHeld)
       ?? reconnectTurn(request, SLEPT_TURN_ASK, sleptHeld) ?? reconnectTurn(request, WATCHED_SLEPT_TURN_ASK, watchedSleptHeld, true)
       ?? unsentFirstTurn(request, unsentHeld) ?? reconnectTurn(request, CLEARED_TURN_ASK, clearedHeld)
-      ?? keptTabProbe(request) ?? thinkingTurn(request) ?? planTasksProbe(request) ?? stopProbeTurn(request, stopProbe, openingHeld) ?? slateUiTurn(request, slateHeard.resolve, slateClicked) ?? slateAskTurn(request, askProbe) ?? planWalkthrough(request));
+      ?? keptTabProbe(request) ?? thinkingTurn(request) ?? planTasksProbe(request) ?? stopProbeTurn(request, stopProbe, openingHeld) ?? slateUiTurn(request, slateHeard.resolve, slateClicked) ?? pageDataTurn(request) ?? slateAskTurn(request, askProbe) ?? planWalkthrough(request));
 
     await withLiveApp(async (app) => {
       const { newPage, origin } = app;
@@ -2668,6 +2754,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
             slateClicked.release();
           }
         },
+        'page-data': async () => { observed.pageData = await attempt('page-data', () => measurePageData(newPage, origin)); },
         'slate-ask': async () => { observed.slateAsk = await attempt('slate-ask', () => measureSlateAsk(newPage, origin, askProbe)); },
         'connect': async () => { observed.connect = await attempt('connect', () => measureConnect(newPage, origin)); },
         'provider-wait': async () => { observed.providerWait = await attempt('provider-wait', () => measureProviderWait(newPage, origin, waitProbe)); },

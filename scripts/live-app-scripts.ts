@@ -354,6 +354,59 @@ export function slateUiTurn(request: ScriptedRequest, heard: (request: ScriptedR
   };
 }
 
+/* ── An answer's page keeping data ─────────────────────────────────────── */
+
+/** The page-data row's ask, and the page its answer draws (1023-ac): `workspace.db` typed and in SQL, its block's own
+ *  server, and a push from that server, each read back on the page. */
+export const PAGE_DATA_ASK = 'Page data probe: keep notes in a page.';
+
+export const PAGE_DATA = { name: 'notes', title: 'Notes probe', table: 'probe_notes' } as const;
+
+function pageDataPage(): string {
+  const table = PAGE_DATA.table;
+
+  return [
+    `<!doctype html><html><head><title>${PAGE_DATA.title}</title></head><body>`,
+    '<p id="typed"></p><p id="sql"></p><p id="served"></p><p id="pinged"></p><p id="pushed"></p><button id="add">Add</button>',
+    '<script type="module">',
+    'import { onPush, slate, workspace } from "kinu:slate";',
+    'const say = (id, text) => { document.getElementById(id).textContent = text; };',
+    'const why = (refused) => "refused: " + String(refused && refused.message);',
+    'onPush((data) => say("pushed", JSON.stringify(data)));',
+    'async function read() {',
+    `  say("typed", JSON.stringify(await workspace.db.count(${JSON.stringify(table)}).catch(why)));`,
+    `  say("sql", await workspace.db.sql("SELECT count(*) AS n FROM app_${table}", []).then((answer) => JSON.stringify(answer.rows), why));`,
+    '}',
+    `await workspace.db.createTable({ name: ${JSON.stringify(table)}, scope: "workspace", columns: [{ name: "note", type: "text" }] }).catch(why);`,
+    'await read();',
+    'say("served", await slate.shout("hello").catch(why));',
+    'document.body.dataset.read = "opened";',
+    'document.getElementById("add").onclick = async () => {',
+    `  await workspace.db.insert(${JSON.stringify(table)}, [{ note: "typed" }]).catch(why);`,
+    `  await workspace.db.sql("INSERT INTO app_${table} (note) VALUES (?)", ["sql"]).catch(why);`,
+    '  say("pinged", await slate.ping(7).catch(why));',
+    '  await read();',
+    '  document.body.dataset.read = "added";',
+    '};',
+    '</script>',
+    '<script type="slate/server">',
+    'import { SlateObject } from "kinu:slate";',
+    'export class Slate extends SlateObject {',
+    '  shout(text) { return text.toUpperCase(); }',
+    '  async ping(n) { await this.push({ n }); return "sent"; }',
+    '}',
+    '</script>',
+    '</body></html>',
+  ].join('\n');
+}
+
+/** The page-data row's answer: its page, whole. */
+export function pageDataTurn(request: ScriptedRequest): ScriptedAnswer | null {
+  if (request.available.length === 0 || request.userTexts.at(-1) !== PAGE_DATA_ASK) return null;
+
+  return { text: ['Here.', '', `<slate-ui name="${PAGE_DATA.name}">`, pageDataPage(), '</slate-ui>'].join('\n') };
+}
+
 /* ── A slate asking the agent ─────────────────────────────────────────── */
 
 /** The slate-ask row's ask: the agent writes a slate whose method asks the agent, then runs it from its own program. */

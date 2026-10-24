@@ -27,13 +27,13 @@ Calendar is not in it: Kinu has no calendar connection, and the design adds none
 
 ### Home with the assistant
 
-`/` renders the assistant's workspace page in the focus layout, with Today above its chat (wireframe `assistant-home`).
+`/` renders the assistant's workspace page in the focus layout: one conversation under its bar, with nothing above it (wireframe `assistant-home`). A first design put a Today strip of four tiles above the chat; it was removed when Home became one conversation (`1c58cfce0`).
 
-- **The bar** says who you are talking to and what it is doing: its mascot, its name, and a line ("Watching 4 · brief tomorrow 08:00", or what it is working on). Its agents, settings and inspector sit at the bar's end, as on every workspace.
-- **Today** is four tiles, each one glance and a list beneath when opened: Needs you (the assistant's own asks, and each workspace with decisions waiting), Important (unread Important mail, the reason on each row), Workspaces (the ones it runs, each with its status and how far its plan has come), Watching (each trigger, what it last found, when it next looks). Hide folds it to one line.
+- **The bar** says who you are talking to and what it is doing: its mascot, its name, and a line ("Watching 4 · Daily brief tomorrow 8:00 AM", or the step a live turn is on). Its agents, settings and inspector sit at the bar's end, as on every workspace.
 - **The chat** carries the brief, mail arrivals as event pills, and its answers. Its Needs-you cards sit in the composer's stack, as in any workspace.
+- **Activity** (`/workspace/:id/activity`, from the bar's identity) lists what it did, by day, and what is Upcoming (`97fddb653`).
 
-Today is built from reads Kinu keeps: the roster's tiles (`workspace_overviews`), the assistant's pending actions (`ownerAsks`), Mail's Important (`GET /api/user/mail/important`), and the assistant's triggers (`listTriggers`) with the line each one's last turn wrote as its finding (`last_finding`, §9.3). One addition: a workspace's tile carries its active plan's title and done/total (`plan` in the overview JSON), which is how a workspace pursuing a goal shows its progress.
+A workspace's overview tile carries its active plan's title and done/total (`plan` in the overview JSON), which is how a workspace pursuing a goal shows its progress.
 
 ### First run
 
@@ -41,8 +41,8 @@ Setup's new step "A personal assistant" opens with Yes chosen, so Next installs 
 
 ### Progress
 
-- A **workspace** it runs: status dot, its headline (Working, Needs you · n, Last run failed), its plan's title and a done/total bar, in Today's Workspaces; the brief names what each did overnight.
-- A **watch**: its last finding in a line, checked and next times, in Today's Watching; a firing that found something becomes a turn in the chat, opened by its event pill.
+- A **workspace** it runs: status dot, its headline (Working, Needs you · n, Last run failed), its plan's title and a done/total bar, on its Workspaces tile; the brief names what each did overnight.
+- A **watch**: the bar counts what it watches and names the next one due, and Activity lists each under Upcoming; a firing that found something becomes a turn in the chat, opened by its event pill.
 
 ### Held to Muse's bar
 
@@ -53,13 +53,13 @@ approvals) describe the patterns below. Each one is mapped to what Kinu has.
 | Muse | Kinu |
 | --- | --- |
 | One conversation, like messaging a person ("just like messaging another person") | Home is the assistant's chat, with nothing above it (`1c58cfce0`) |
-| A status at the top in plain words ("Is working", "Making something", "Is updating memory") | Home's bar names the step a live turn is on, in its call's own words ("Running bun test", "Writing"), not a generic "Working" (`focus-line.ts`, this change) |
-| Upcoming: its scheduled tasks and reminders | At rest, the bar counts what it watches and names the next one due, from its own triggers ("Watching 4 · Daily brief tomorrow 8:00 AM"), where it said "Idle" (this change) |
+| A status at the top in plain words ("Is working", "Making something", "Is updating memory") | Home's bar names the step a live turn is on, in its call's own words ("Running bun test", "Writing"), not a generic "Working" (`focus-line.ts`, `1681b1c64`) |
+| Upcoming: its scheduled tasks and reminders | At rest, the bar counts what it watches and names the next one due, from its own triggers ("Watching 4 · Daily brief tomorrow 8:00 AM"), where it said "Idle" (`1681b1c64`) |
 | Asks before sensitive actions: allow once, always, or deny | The approval stack's Approve, Always and Deny, and standing approvals under Settings |
 | Keeps working after you leave, and comes back when something changes or needs you | Turns run without the page; owner alerts chime and notify when something waits on you |
 | Remembers, and forgets what you tell it to | Account and workspace memory, each fact forgettable in Settings › Memory and the Agent tab |
 | "Name it, shape how it talks, and make it your own" | Setup names it, and its face comes from your name (`355bd2e55`); its soul sets how it talks |
-| A full activity log of what it did and plans to do | Not built as one view. The Agent tab's Changelog and Work hold its parts; tapping the assistant could open them as Muse's does, which is next |
+| A full activity log of what it did and plans to do | Activity, opened from the bar's identity: Upcoming, then what it did each day (`97fddb653`) |
 
 ## 3. The focus layout
 
@@ -105,13 +105,13 @@ Nav: Home, Workspaces, Drive, Explore, Plugins (Plugins stays, by the owner's wo
 | `GET /api/explore/workspaces/:id` | The blueprint page: card, about, inside, asks, version |
 | `POST /api/explore/workspaces/:id/install` | `{ name, brief? }` → `{ workspace }` |
 | `POST /api/explore/workspaces/:id/star`, `/report` | As the Gallery's |
-| `GET /api/user/mail/important?limit=` | Mail lane's; the footer badge and Today |
+| `GET /api/user/mail/important?limit=` | Mail lane's; the footer badge |
 
 ## 8. Removals and replacements, for the owner's approval
 
 Each is a change to something that exists; none lands without approval.
 
-1. **Home** (`/`): with the assistant installed, Home is its chat and Today, in place of "What do you wanna work on?", the Setup card and Recent. Without it, Home is unchanged.
+1. **Home** (`/`): with the assistant installed, Home is its chat, in place of "What do you wanna work on?", the Setup card and Recent. Without it, Home is unchanged.
 2. **New workspace** (the pencil beside the mark): today it goes to Home's mission prompt. With the assistant installed it opens that prompt on the Workspaces page instead.
 3. **The assistant's workspace in the sidebar**: not listed among Workspaces, because it is Home.
 4. **Gallery in the nav** becomes Explore. A listed slate's page `/gallery/:workspace/:slate` is unchanged. The Gallery's list page is deleted (owner, 2026-10-20: "why keep gallery page if we are getting explore now?"): `/gallery` redirects to `/explore?kind=app`, and `/api/gallery` answers only a listed slate's page, its picture, its star and its report.
@@ -121,7 +121,6 @@ Each is a change to something that exists; none lands without approval.
 8. **The swarm explorer's route key** is renamed `explore` → `swarm` in `APP_ROUTES`, so `explore` can name Explore. Its path `/swarm/:agentId` is unchanged.
 9. **The Gallery's tables** (`gallery_listings`, `gallery_stars`, `gallery_reports`) take a `kind` and become Explore's one store for apps and workspaces; `slate` is renamed `item`, which drops today's Gallery stars and reports on repair; `gallery_listings` gains `maker`, `needs` and `installs`, and `gallery_installs` is new (§9.1).
 10. **The workspace bar** shows the focus bar in a focus-layout workspace; workbench workspaces are unchanged.
-11. **`triggers`** gains `last_finding`, the line Today shows under each watch (§9.3).
 
 ## 9. DDL
 
@@ -201,13 +200,6 @@ CREATE TABLE workspace_blueprint_shares (
 
 `manifest` is the §4 manifest as JSON, its slates as publication ids of this workspace; `picture` a capture's digest, kept as slate pictures are. A listed share is synced into `gallery_listings` as `kind = 'workspace'`, as a listed live share is as `kind = 'app'`.
 
-### 9.3 A trigger's last finding
-
-```sql
--- triggers (each workspace): what the watch's last firing found, in a line, written by the turn it began.
-last_finding TEXT
-```
-
 ### No DDL
 
 - The installed assistant: `user_config` key `assistant` (its workspace's name).
@@ -220,8 +212,7 @@ Published as `home-explore` on the review server: `/live/home-explore/gallery.ht
 
 | Frame | Shows |
 | --- | --- |
-| `assistant-home&roster=assistant` | Home with the assistant: Today, the brief, mail, the workspace proposal |
-| `…&today=workspaces` / `mail` / `watching` / `needs` | A Today tile opened: goal progress, Important, watches |
+| `assistant-home&roster=assistant` | Home with the assistant: the brief, mail, the workspace proposal |
 | `…&moment=firstrun` | The first minute after setup |
 | `focus-workspace&roster=assistant&transcript=asked` | A workspace (API Worker) in the focus layout |
 | `explore&roster=assistant` | Explore |
@@ -230,7 +221,6 @@ Published as `home-explore` on the review server: `/live/home-explore/gallery.ht
 
 ## 11. Settled since the first draft
 
-- A watch's last finding is a field its turn writes (`triggers.last_finding`), not read back out of the transcript.
 - Kinu's blueprints never update an installed workspace: installing makes a workspace of your own, and later versions leave it as it is.
 
 ## 12. Not settled

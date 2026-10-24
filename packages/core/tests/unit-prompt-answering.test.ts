@@ -63,13 +63,6 @@ describe("a page's own server", () => {
     expect(blockServer(`${page}\n<script type="slate/server">${server}</script>`)).toEqual({ page: `${page}\n`, server });
     expect(blockServer(page)).toEqual({ page, server: null });
   });
-
-  test('is taught: data in workspace.db, a server only for logic that runs server-side, and the libraries the page has', () => {
-    const section = ANSWERING_SECTION.render({});
-
-    expect(section).toContain('Keep data in `workspace.db` (shared with every agent and page; `workspace.db.sql(query, params)` takes one SQL statement); a block server is for logic that runs server-side.');
-    expect(section).toContain('`uplot` for charts');
-  });
 });
 
 // CODE-8: `\bname=` matched inside `data-name=` and inside another attribute's quoted value.

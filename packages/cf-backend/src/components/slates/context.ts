@@ -55,5 +55,7 @@ export class SlatePreviews {
 export const SlateInlineContext = createContext<{
   rpc: WorkspaceRpc;
   openSlate?: (id: string) => void;
+  /** The slate an answer's page was saved as, by the workspace's slate list; none until it is saved. */
+  savedAs?: (page: string) => { readonly id: string; readonly title: string } | null;
   chat?: { readonly previews: SlatePreviews; readonly shownInPanel: string | null };
 } | null>(null);

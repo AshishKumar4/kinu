@@ -21,7 +21,7 @@ Nimbus runtime. Current requirements are `PR-SHARE-NIMBUS-001` through `PR-SHARE
    Alice", with one button, "Ask Alice".
 5. Removing someone, stopping the link or switching off a lend takes effect at once, for calls already under way too,
    and switching it back on does not revive them.
-6. A fork carries no lend, grant, person or data, and listing a slate in the Gallery grants nothing.
+6. A fork carries no lend, grant, person or data, and listing a slate in Explore grants nothing.
 
 These were the goals of the retired room design. Its former proof and attack corpus is not registered evidence
 for the Nimbus design.
@@ -138,7 +138,7 @@ re-run when its inputs change. Private input works the other way: input meant fo
 | Change the code (with their own AI) | yes | yes | no | no | no |
 | Lend own connections to a function | yes | yes (v7 interface: owner only) | no | no | no |
 | Connect own sources, show them | yes | yes | yes | yes | no |
-| Add people, the link, the Gallery | yes | no | no | no | no |
+| Add people, the link, Explore | yes | no | no | no | no |
 | Fork | yes | yes | yes | yes | sign in first |
 
 Removing someone ends every session they hold on the slate, through membership and through the link: removal re-keys

@@ -121,9 +121,15 @@ function usePainted(): boolean {
   return painted;
 }
 
-/** An answer's page kept as a slate of the workspace's own, under its title: once kept, the control opens it. */
-function SaveControl({ name, save, open }: { name: string; save: () => Promise<SlateCallResult>; open?: (id: string) => void }) {
-  const [saved, setSaved] = useState<{ id: string; title: string } | null>(null);
+/** An answer's page kept as a slate of the workspace's own, under its title: once kept, the control opens it. `kept`:
+ *  the slate the workspace's list says it became. It is the record: the save's own answer stands only until the list
+ *  has it, so a slate renamed or removed later shows as the list says. */
+function SaveControl({ name, page, save, open }: { name: string; page: string; save: () => Promise<SlateCallResult>; open?: (id: string) => void }) {
+  const kept = useContext(SlateInlineContext)?.savedAs?.(page) ?? null;
+  const [justSaved, setSaved] = useState<{ id: string; title: string } | null>(null);
+
+  if (justSaved !== null && kept !== null) setSaved(null);
+  const saved = kept ?? justSaved;
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
 
@@ -206,7 +212,7 @@ export function SlateCard({ id, block, measure, save, children }: {
         {folded && <code className="t-meta t-mono p-text-3 truncate">{name}</code>}
         {why !== null && <span className="t-meta ml-auto shrink-0 pl-2 p-text-3">{why}</span>}
       </Pressable>
-      {save !== undefined && <SaveControl name={name} save={save} open={openSlate} />}
+      {save !== undefined && <SaveControl name={name} page={id} save={save} open={openSlate} />}
       {openSlate !== undefined && (
         <Button variant="ghost" size="sm" icon={<ArrowSquareOutIcon size={14} />} className="shrink-0" onClick={() => openSlate(id)} aria-label={`Open ${name} in the work surface`} title="Open in the work surface" />
       )}
