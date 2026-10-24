@@ -603,6 +603,39 @@ describe('codemode calls on a workspace over the user\'s mounts', () => {
     expect(ran).toEqual([python]);
   });
 
+  // A third review's lines (2026-10-24), each read past as harmless where its reading was unsure.
+  const thirdReview = [
+    { row: '5, a script piped to a shell', command: "printf 'printf replacement >/pc/laptop/important.txt' | bash" },
+    { row: '5, a script held in a variable', command: "s='printf replacement >/pc/laptop/important.txt'; bash -c \"$s\"" },
+    { row: '5, a script read through a redirect', command: "bash < <(printf 'printf replacement >/pc/laptop/important.txt')" },
+    { row: '6, a redirect to a variable', command: 'd=/pc/laptop/important.txt; printf replacement > "$d"' },
+    { row: '6, a copy to a variable', command: 'd=/pc/laptop/important.txt; cp source "$d"' },
+    { row: '7, a cd to a variable', command: 'd=/pc/laptop/proj; cd "$d" && printf replacement > important.txt' },
+    { row: '8, a glob', command: 'rm -rf /p[c]/laptop/proj' },
+    { row: '8, a brace', command: 'rm -rf /p{c,c}/laptop/proj' },
+    { row: '13, a link the line makes', command: 'ln -s /pc/laptop/proj /tmp/kinu-review-link && printf replacement >/tmp/kinu-review-link/important.txt' },
+  ];
+
+  for (const { row, command } of thirdReview) {
+    test(`a change to the user's files the reading cannot rule out asks: row ${row}`, async () => {
+      const { shell, asked, ran } = gatedWorkspaceShell();
+
+      expect((await shell.exec(command)).refusal).toMatchObject(DENIED);
+      expect(asked.map((request) => request.command)).toEqual([command]);
+      expect(ran).toEqual([]);
+    });
+  }
+
+  test('expansions that name no path, a glob in the agent\'s home and a link made elsewhere stay the agent\'s', async () => {
+    const { shell, asked, ran } = gatedWorkspaceShell();
+    const runs = ['rm -rf build/* && echo "rm: $?"', 'cp notes/*.md /tmp/ && ls', 'ln -s /home/main/slates /slates && echo hi > /slates/x'];
+
+    for (const command of runs) expect((await shell.exec(command)).refusal).toBeUndefined();
+
+    expect(asked).toEqual([]);
+    expect(ran).toEqual(runs);
+  });
+
   test('a move, copy or redirect onto the user\'s device or Drive asks, while the same write in the agent\'s home runs', async () => {
     const { router, asked } = askingRouter();
     const { provider, ran } = mountedWorkspaceProvider();
