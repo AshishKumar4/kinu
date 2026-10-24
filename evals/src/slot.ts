@@ -130,6 +130,26 @@ export async function trialInheritedRows(target: EvalTarget): Promise<{ inherite
   }) };
 }
 
+/** How long a trial waits for the deletions it asked for to land. */
+const DELETIONS_LAND_MS = 180_000;
+
+/**
+ * A workspace's delete answers once it is durable, and its teardown runs in the account's own job, which keeps the
+ * workspace's row and that job until it lands: a trial reads the account once they went, or once its wait ends, and
+ * reports what stayed.
+ */
+async function deletionsLanded(target: EvalTarget, deleted: boolean): Promise<Awaited<ReturnType<typeof trialInheritedRows>>> {
+  const deadline = Date.now() + DELETIONS_LAND_MS;
+
+  for (;;) {
+    const read = await trialInheritedRows(target);
+    const pending = !('why' in read) && (read.inherited.user_workspaces !== undefined || read.inherited.cf_agents_jobs !== undefined);
+
+    if (!deleted || !pending || Date.now() > deadline) return read;
+    await Bun.sleep(1_000);
+  }
+}
+
 /**
  * Make `target`'s trial account its trial's own before the trial opens on it. A live workspace named for this trial
  * (`subject`) is its own earlier attempt, which armada ran again once it lost it: the account is the trial's alone in
@@ -150,7 +170,7 @@ export async function prepareTrialAccount(target: EvalTarget, now: number, trial
   for (const { name } of workspaces) await deleteWorkspace(target.origin, target.identity, name);
 
   if (trial.sequence) return;
-  const read = await trialInheritedRows(target);
+  const read = await deletionsLanded(target, workspaces.length > 0);
 
   if ('why' in read) throw new Error(`${accountOf(target)}: ${read.why}`);
   const inherited = Object.entries(read.inherited);

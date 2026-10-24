@@ -243,6 +243,7 @@ export function cliAccount<Built extends Partial<CliRoutesAuthority>>(built: Bui
     putProfileCatalog: refuse('putProfileCatalog'),
     registerWorkspace: refuse('registerWorkspace'),
     removeWorkspace: refuse('removeWorkspace'),
+    requestWorkspaceRemoval: refuse('requestWorkspaceRemoval'),
     releaseWorkspaceReservation: refuse('releaseWorkspaceReservation'),
     ensureWorkspaceCapability: refuse('ensureWorkspaceCapability'),
     hasWorkspace: refuse('hasWorkspace'),
@@ -298,6 +299,8 @@ export function workspaceObject<Built extends Partial<CliAgentTarget>>(built: Bu
     createDurableWebhook: refuse('createDurableWebhook'),
     requestOverviewPush: refuse('requestOverviewPush'),
     previewAccess: refuse('previewAccess'),
+    // A create reaches every new workspace first with this read, to place it: none is stored yet.
+    storedWorkspace: async () => 0,
     ...built,
   };
 }
@@ -340,6 +343,7 @@ export function userAccount<Built extends Partial<UserRoutesAuthority>>(
     touchWorkspace: refuse('touchWorkspace'),
     registerWorkspace: refuse('registerWorkspace'),
     removeWorkspace: refuse('removeWorkspace'),
+    requestWorkspaceRemoval: refuse('requestWorkspaceRemoval'),
     releaseWorkspaceReservation: refuse('releaseWorkspaceReservation'),
     ensureWorkspaceCapability: refuse('ensureWorkspaceCapability'),
     listDevices: refuse('listDevices'),

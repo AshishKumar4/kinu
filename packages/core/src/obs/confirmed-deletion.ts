@@ -15,29 +15,51 @@ interface Deletable {
   remains(): Promise<number>;
 }
 
-/**
- * Deletes the object `object` opens, then reads it again through a new stub (`object` is called once for each): none of
- * its own data left is the deletion done, whatever came back. Where some is left, the deletion's own failure is the
- * reason, or, if it answered, the data it left. The read must create nothing it counts. `ended` names a read the object
- * answers itself as its deletion ends it, which it gives only once its storage went (the Agents SDK aborts with
- * `destroyed` after `deleteAll`, and local workerd sends the read to that dying object): such a read holds nothing.
- */
-export async function confirmedDeletion(object: () => Deletable, what: string, ended?: (failure: Error) => boolean): Promise<void> {
-  return settle(Effect.gen(function* () {
-    // Its outcome is the read's to say: an answer cut by the activation's end fails here with the storage gone.
-    const deleting = yield* Effect.match(Effect.tryPromise({
-      try: async () => object().destroy(), catch: (cause) => toKinuError({ doing: `deleting ${what}`, cause, otherwise: 'io' }),
-    }), { onFailure: (failure): KinuError | null => failure, onSuccess: () => null });
+/** What a deletion's object says of its own end, where it says anything certain. */
+interface DeletionEnd {
+  /** A failure the object raises only once its storage went (the Agents SDK aborts with `destroyed` after
+   *  `deleteAll`): as the deletion's answer, or as the read's, it holds nothing. */
+  readonly ended?: (failure: Error) => boolean;
+  /** The deletion answers only once its storage went, as a workspace's does once its wipe returned. */
+  readonly answerProves?: boolean;
+}
 
+/** A deletion's failure: what it threw, and whether that is its object's own end. */
+interface DeletionFailure {
+  readonly cause: unknown;
+  readonly ended: boolean;
+}
+
+/** How a deletion was known to land: its answer, its object's own end, or a read of the object after it. */
+export type DeletionProof = 'answered' | 'ended' | 'read';
+
+/**
+ * Deletes the object `object` opens. Where its answer or its failure says the storage went (`end`), that is the
+ * deletion done; otherwise it reads the object again through a new stub (`object` is called once for each), which
+ * starts it: none of its own data left is the deletion done, whatever came back. Where some is left, the deletion's own
+ * failure is the reason, or, if it answered, the data it left. The read must create nothing it counts.
+ */
+export async function confirmedDeletion(object: () => Deletable, what: string, end: DeletionEnd = {}): Promise<DeletionProof> {
+  return settle(Effect.gen(function* () {
+    // The deletion's failure, as its cause and as the error it reads as; null where it answered.
+    const deleting = yield* Effect.match(Effect.tryPromise({
+      try: async () => object().destroy(), catch: (cause) => cause,
+    }), { onFailure: (cause): DeletionFailure => ({ cause, ended: cause instanceof Error && end.ended?.(cause) === true }), onSuccess: () => null });
+
+    if (deleting === null && end.answerProves === true) return 'answered' as const;
+
+    if (deleting?.ended === true) return 'ended' as const;
+
+    // Its outcome is the read's to say: an answer cut by the activation's end fails here with the storage gone.
     const held = yield* Effect.tryPromise({ try: async () => object().remains(), catch: (cause) => cause }).pipe(
-      Effect.catch((cause) => (cause instanceof Error && ended?.(cause) === true
+      Effect.catch((cause) => (cause instanceof Error && end.ended?.(cause) === true
         ? Effect.succeed(0)
         : Effect.fail(toKinuError({ doing: `reading ${what} after its deletion`, cause, otherwise: 'io' })))),
     );
 
-    if (held === 0) return;
+    if (held === 0) return 'read' as const;
 
-    if (deleting !== null) return yield* Effect.fail(deleting);
+    if (deleting !== null) return yield* Effect.fail(toKinuError({ doing: `deleting ${what}`, cause: deleting.cause, otherwise: 'io' }));
 
     return yield* Effect.fail(new KinuError('io', `${what} still holds ${String(held)} of its own after its deletion answered`));
   }));

@@ -2422,6 +2422,51 @@ export const PLATFORM_CATALOG = {
       'Kitesurf takes no keep_alive at all ("Options not supported with browser=kitesurf: keep_alive"): its session '
       + 'is created on connect and ends with the connection, so web/browser-sessions.ts records Chrome sessions only.',
   },
+
+  'do.placement.location_hint': {
+    subject:
+      'A Durable Object runs where it is first reached and never moves; a location hint keeps it inside the hinted region, '
+      + 'and `apac` includes Hong Kong',
+    limit: null,
+    origin: 'platform',
+    bounds: null,
+    evidence: 'proven-by-probe',
+    provenance: 'local://do-placement-2026-10-24.md §2',
+    date: '2026-10-24',
+    trigger: 'a workspace object first reached from Asia with no hint, or with `apac`',
+    onBreach: 'it runs in HKG, and every Anthropic and OpenAI call it makes is refused for its region (provider.region.served)',
+    observable: [],
+    firstPartySignal: false,
+    measurements: [
+      { scenario: '`apac`-hinted objects that ran in HKG, of 40 (the rest: SIN 22, NRT 5, KIX 4, ICN 4)', value: 5, unit: 'count' },
+      { scenario: 'wnam-, enam-, weur- and oc-hinted objects that ran in HKG, of 24 (each inside its own region)', value: 0, unit: 'count' },
+    ],
+    notes:
+      'With no hint an object runs near its first caller: mossy-quarry-62346247, made from Delhi, runs in HKG and '
+      + 'hearthlit-field-04d5879b in SIN. AI Gateway calls the provider from the caller\'s data center: through it, the same '
+      + '403 from HKG. New workspaces take a hint by their maker\'s continent (cf-backend user/workspace-placement.ts).',
+  },
+
+  'provider.region.served': {
+    subject: 'Anthropic and OpenAI serve their APIs only in the countries and regions they list; Hong Kong is on neither',
+    limit: null,
+    origin: 'platform',
+    bounds: null,
+    evidence: 'documented',
+    provenance: 'https://www.anthropic.com/supported-countries',
+    date: '2026-10-24',
+    trigger: 'a call reaching api.anthropic.com or api.openai.com from a data center in a country they do not list',
+    onBreach: 'HTTP 403 for every call, whatever the model or login; Kinu says it with where the call came from (region-refusal.ts)',
+    observable: [
+      { context: 'api.anthropic.com, 403', message: '{"error":{"type":"forbidden","message":"Request not allowed"}}' },
+      { context: 'api.openai.com, 403', message: 'Country, region, or territory not supported' },
+    ],
+    firstPartySignal: true,
+    notes:
+      'OpenAI: https://developers.openai.com/api/docs/supported-countries, its 403 text from '
+      + 'https://developers.openai.com/api/docs/guides/error-codes. Anthropic\'s list says "Any country or region not listed is '
+      + 'unsupported". OpenAI answers an unauthenticated call 401 before it reads the region.',
+  },
 } as const satisfies Readonly<Record<string, PlatformFact>>;
 
 export type PlatformFactId = keyof typeof PLATFORM_CATALOG;

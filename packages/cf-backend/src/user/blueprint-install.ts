@@ -14,6 +14,7 @@ import {
 import type { UserDO } from './user-do';
 import { ASSISTANT_CONFIG_KEY } from './roster';
 import { createCloudWorkspaceForUser, isCreateConflict, type CloudWorkspaceRegistry, type CreateCloudWorkspaceEnv } from './workspace-create';
+import { placementFor, type WorkspacePlacement } from './workspace-placement';
 
 const InstallBodySchema = v.strictObject({
   /** The workspace's title; absent, the blueprint's. */
@@ -49,12 +50,14 @@ export interface InstallRequest<Id> {
   readonly body: InstallBody;
   /** Counts the install on its Explore listing. */
   readonly counted: (blueprint: string) => Promise<void>;
+  /** The region the workspace's object runs in (`placementFor`). */
+  readonly placement: WorkspacePlacement;
 }
 
 /** The new workspace, or the assistant the owner already has. */
 function installBlueprint<Id>(request: InstallRequest<Id>): Effect.Effect<WorkspaceEntry | { readonly name: string }, KinuError> {
   return Effect.gen(function* () {
-    const { env, userId, userDO, owner, id, body } = request;
+    const { env, userId, userDO, owner, id, body, placement } = request;
     const blueprint = kinuBlueprint(id);
 
     if (blueprint === undefined) return yield* Effect.fail(new KinuError('missing', `No workspace blueprint "${id}".`));
@@ -79,7 +82,7 @@ function installBlueprint<Id>(request: InstallRequest<Id>): Effect.Effect<Worksp
 
     // A claimed name not yet listed is made here; an install making it meanwhile answers it as it is (`registerWorkspace`).
     const entry = yield* Effect.promise(async () => createCloudWorkspaceForUser({
-      env, userId, userDO, caller: owner, input: { name, displayName: body.displayName ?? blueprint.title, purpose: blueprint.line }, soul, seed,
+      env, userId, userDO, caller: owner, input: { name, displayName: body.displayName ?? blueprint.title, purpose: blueprint.line }, soul, seed, placement,
     }));
 
     // Home reads the owner's own mail (docs/MAIL.md §7), once they have an address; a failed hand-over is said, not the install undone.
@@ -99,14 +102,14 @@ function installBlueprint<Id>(request: InstallRequest<Id>): Effect.Effect<Worksp
 }
 
 /** POST /api/user/blueprints/:id/install → 201 the workspace | 404 no such blueprint | 409 a name taken. */
-export function handleInstallRequest<Id>(call: Omit<InstallRequest<Id>, 'body'> & { readonly request: Request }): Promise<Response> {
+export function handleInstallRequest<Id>(call: Omit<InstallRequest<Id>, 'body' | 'placement'> & { readonly request: Request }): Promise<Response> {
   return settle(Effect.gen(function* () {
     const body = yield* Effect.promise(async () => safeJson(call.request, InstallBodySchema));
 
     if (body === null) return err(400, 'Body must be { displayName?, agent?, brief?, timeZone, home? }.');
 
     return yield* Effect.catchCause(
-      Effect.map(installBlueprint({ ...call, body }), (workspace) => json({ body: { workspace: workspace.name } }, { status: 201 })),
+      Effect.map(installBlueprint({ ...call, body, placement: placementFor(call.request.cf) }), (workspace) => json({ body: { workspace: workspace.name } }, { status: 201 })),
       (failed) => Effect.gen(function* () {
         const cause = Cause.squash(failed);
         const error = authoredRefusal({ doing: 'installing this workspace', cause });

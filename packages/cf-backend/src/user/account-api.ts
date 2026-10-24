@@ -23,7 +23,7 @@ import { rawParam, type FamilyEnv } from '../api/context';
 /** Every UserDO call these routes make. */
 type AccountApiAuthority = CloudWorkspaceRegistry & Pick<
   UserDO,
-  'listCredentials' | 'setCredential' | 'deleteCredential' | 'removeWorkspace' | 'listDevices'
+  'listCredentials' | 'setCredential' | 'deleteCredential' | 'requestWorkspaceRemoval' | 'listDevices'
   | 'listSecrets' | 'putSecrets' | 'setSecretDestination' | 'deleteSecret' | 'grantSecret' | 'revokeSecretGrant'
   | 'listActiveWorkspaces' | 'getAuthHeaders' | 'relayDevice' | 'relayModelCall' | 'cancelModelRelay' | 'slateAiSpend'
   | 'getConfig' | 'setConfig' | 'claimConfig' | 'getProfile' | 'userMcp_connectedPresets'
@@ -195,13 +195,14 @@ accountApi.post('/blueprints/:id/install', async (c) => handleInstallRequest({
 /** The workspace Home opens on: the owner's Personal assistant, while it is theirs. */
 accountApi.get('/assistant', async (c) => json({ body: { workspace: await installedAssistant(c.get('account').stub, c.get('owner')) } }));
 
-/** Answers ok for a workspace already gone: a delete repeated, or raced by another, is done (staging df49f4cc5, nine
- *  DELETEs of one workspace in 2 ms, eight answered 500; kinu-logs/evals-fast/FINDINGS.md F11). */
+/** Answered once the deletion is durable, its teardown left to its own job (`UserWorkspaces.requestRemoval`); ok for a
+ *  workspace already gone: a delete repeated, or raced by another, is done (staging df49f4cc5, nine DELETEs of one
+ *  workspace in 2 ms, eight answered 500; kinu-logs/evals-fast/FINDINGS.md F11). */
 accountApi.delete('/workspaces/:name', (c) => settle(Effect.tryPromise({
   try: async () => {
     const { stub, userId } = c.get('account');
 
-    await stub.removeWorkspace(c.get('owner'), decodeURIComponent(rawParam(c, 'name')), userId);
+    await stub.requestWorkspaceRemoval(c.get('owner'), decodeURIComponent(rawParam(c, 'name')), userId);
 
     return json({ body: { ok: true } });
   },

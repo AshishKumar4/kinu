@@ -174,6 +174,7 @@ describe('cloud agent ownership safety', () => {
     try {
       const entry = await createCloudWorkspaceForUser({
         env,
+        placement: 'weur',
         userId: USER_ID,
         userDO: env.UserDO.get(),
         caller: await testOwner(),
@@ -198,6 +199,7 @@ describe('cloud agent ownership safety', () => {
 
       const purposeless = await createCloudWorkspaceForUser({
         env,
+        placement: 'weur',
         userId: USER_ID,
         userDO: env.UserDO.get(),
         caller: await testOwner(),
@@ -209,6 +211,7 @@ describe('cloud agent ownership safety', () => {
 
       const explicitlyTitled = await createCloudWorkspaceForUser({
         env,
+        placement: 'weur',
         userId: USER_ID,
         userDO: env.UserDO.get(),
         caller: await testOwner(),
@@ -282,6 +285,7 @@ describe('cloud agent ownership safety', () => {
     try {
       await expect(createCloudWorkspaceForUser({
         env,
+        placement: 'weur',
         userId: USER_ID,
         userDO: env.UserDO.get(),
         caller: await testOwner(),
@@ -338,6 +342,7 @@ describe('cloud agent ownership safety', () => {
     try {
       await expect(createCloudWorkspaceForUser({
         env,
+        placement: 'weur',
         userId: USER_ID,
         userDO: env.UserDO.get(),
         caller: await testOwner(),
@@ -396,6 +401,7 @@ describe('cloud agent ownership safety', () => {
     try {
       await expect(createCloudWorkspaceForUser({
         env,
+        placement: 'weur',
         userId: USER_ID,
         userDO: env.UserDO.get(),
         caller: await testOwner(),
@@ -477,6 +483,7 @@ describe('cloud agent ownership safety', () => {
     try {
       await createCloudWorkspaceForUser({
         env,
+        placement: 'weur',
         userId: USER_ID,
         userDO: env.UserDO.get(),
         caller: await testOwner(),
@@ -540,6 +547,7 @@ describe('cloud agent ownership safety', () => {
     try {
       first = await createCloudWorkspaceForUser({
         env,
+        placement: 'weur',
         userId: USER_ID,
         userDO: env.UserDO.get(),
         caller: await testOwner(),
@@ -550,6 +558,7 @@ describe('cloud agent ownership safety', () => {
       // An idempotent create is a stable answer, not merely a non-destructive one.
       second = await createCloudWorkspaceForUser({
         env,
+        placement: 'weur',
         userId: USER_ID,
         userDO: env.UserDO.get(),
         caller: await testOwner(),
@@ -624,6 +633,7 @@ describe('cloud agent ownership safety', () => {
     try {
       await createCloudWorkspaceForUser({
         env,
+        placement: 'weur',
         userId: USER_ID,
         userDO: env.UserDO.get(),
         caller: await testOwner(),
@@ -768,7 +778,7 @@ describe('cloud agent ownership safety', () => {
         idFromName: (name: string) => name,
         get: () => userAccount({
           async ensureProfile() { return bootstrappedProfile('owner@example.com'); },
-          async removeWorkspace(_caller: UserCaller, name: string, ownerUserId: string) {
+          async requestWorkspaceRemoval(_caller: UserCaller, name: string, ownerUserId: string) {
             removed.push({ name, ownerUserId });
           },
         }),
@@ -806,10 +816,13 @@ describe('cloud agent ownership safety', () => {
   test('a workspace whose create died before its owner claim is deleted: roster row and object storage go together', async () => {
     // Registered on the user, never claimed by the object: no owner to compare.
     const halfBorn = unstartedOrchestratorHarness({ workspace: 'jarvis' });
-    const { userDO, remove } = await deletesReaching(halfBorn);
+    const { userDO } = await deletesReaching(halfBorn);
+    const owner = await testOwner();
 
-    // The second reaches the instance the first wiped, as a concurrent one does.
-    expect([(await remove())?.status, (await remove())?.status]).toEqual([200, 200]);
+    // The second reaches the instance the first wiped, as its deletion's job does after a cut answer.
+    await userDO.userDO.removeWorkspace(owner, 'jarvis', USER_ID);
+    await userDO.userDO.registerWorkspace(owner, 'jarvis');
+    await userDO.userDO.removeWorkspace(owner, 'jarvis', USER_ID);
     expect(userDO.destroyedWorkspaces).toEqual(['jarvis', 'jarvis']);
     expect(halfBorn.tableNames().filter((name) => name !== 'sqlite_sequence')).toEqual([]);
     // Out of the registry, not parked `delete_pending`.
@@ -827,6 +840,8 @@ describe('cloud agent ownership safety', () => {
 
     expect(await Promise.all(answers.map(async (answer) => `${String(answer?.status)} ${await answer?.text() ?? ''}`)))
       .toEqual(['200 {"ok":true}', '200 {"ok":true}']);
+    // One deletion's job, however many asked for it.
+    await userDO.userDO.alarm();
     expect(workspace.tableNames().filter((name) => name !== 'sqlite_sequence')).toEqual([]);
     expect(userDO.sql.exec(`SELECT name FROM user_workspaces`).toArray()).toEqual([]);
   });
@@ -841,6 +856,7 @@ describe('cloud agent ownership safety', () => {
     userDO.sql.exec(`INSERT INTO device_notice_pending (agent_name) VALUES ('jarvis')`);
 
     expect((await remove())?.status).toBe(200);
+    await userDO.userDO.alarm();
 
     const left = WORKSPACE_KEYED_ROWS.filter(({ removal }) => removal === 'before-destroy' || removal === 'after-destroy')
       .filter(({ table, column }) => userDO.sql.exec(`SELECT 1 FROM ${table} WHERE ${column} = 'jarvis'`).toArray().length > 0)
@@ -850,12 +866,15 @@ describe('cloud agent ownership safety', () => {
   });
 
   test('a healthy workspace whose owner does not match is still refused, row and storage intact', async () => {
-    // The unclaimed skip must not widen: a claimed workspace with another owner is not destroyed.
+    // The unclaimed skip must not widen: a claimed workspace with another owner is not destroyed. The person's delete is
+    // taken; its job's destroy is refused, and parks rather than runs again.
     const healthy = orchestratorHarness(undefined, { workspace: 'jarvis', ownerUserId: 'b'.repeat(32) });
-    const { remove } = await deletesReaching(healthy);
+    const { userDO, remove } = await deletesReaching(healthy);
 
-    expect((await remove())?.status).toBe(403);
+    expect((await remove())?.status).toBe(200);
+    await userDO.userDO.alarm();
     expect(healthy.tableNames()).toContain('workspace_identity');
+    expect(userDO.sql.exec(`SELECT name FROM user_workspaces WHERE delete_pending = 1`).toArray()).toEqual([{ name: 'jarvis' }]);
   });
 });
 

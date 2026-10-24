@@ -543,6 +543,10 @@ export class UserDO extends Agent<Env> {
     return this.workspaces.removeWorkspace(caller, name, ownerUserId);
   }
 
+  requestWorkspaceRemoval(caller: UserCaller, name: string, ownerUserId: string): Promise<void> {
+    return this.workspaces.requestRemoval(caller, name, ownerUserId);
+  }
+
   setWorkspaceDisplayName(caller: UserCaller, name: string, displayName: string, origin: NameOrigin): ReturnType<UserWorkspaces['setWorkspaceDisplayName']> {
     return this.workspaces.setWorkspaceDisplayName(caller, name, displayName, origin);
   }
