@@ -264,6 +264,7 @@ import type { MctsSearchRunSummary, SubagentInspectionRequest, SubagentInspectio
 import { Cause, Effect, Exit, Result } from 'effect';
 import { attempt, attemptInItsWords, authoredRefusal, CODE_IS_REFUSAL, diagnostics, flight, hold, joining, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
+import { UNPLACED, WorkspacePlacementSchema, type WorkspacePlacement } from "./user/workspace-placement";
 import type { NameOrigin } from "@kinu.run/core";
 import { deliverCloudFork, type ForkFrameAck } from "./user/workspace-fork";
 import { WorkspaceEmail } from "./workspace-email";
@@ -361,6 +362,9 @@ export type RecentEventRow = Pick<
 /** agents 0.26's Lifecycle reads this back when `ctx.id` has no name; it outlives `destroy()`, so an alarm still owed builds the object. */
 /** The terminals the person opened beside the workspace's own (`listWorkspaceSessions`): their keys and names. */
 const WORKSPACE_SESSIONS_KEY = 'kinu:workspace-sessions';
+
+/** The region the creating call placed this workspace's object in (`workspace-placement.ts`). */
+const PLACEMENT_KEY = 'kinu:workspace-placement';
 
 const PERSISTED_NAME_KEY = '__ps_name';
 
@@ -3513,7 +3517,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         if (!agentName || !(await userDO.hasWorkspace(caller, agentName))) {
           const workspaceInput = { name: agentName === '' ? undefined : agentName, purpose };
-          const entry = await createCloudWorkspaceForUser({ env: this.env, userId, userDO, caller, input: workspaceInput });
+          const entry = await createCloudWorkspaceForUser({ env: this.env, userId, userDO, caller, input: workspaceInput, placement: this.placement() });
 
           this.recordAgentWorkspace({ workspace: entry.name, name: entry.displayName, brief: purpose });
           agentName = entry.name;
@@ -3617,8 +3621,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.email.ownerNotification(subject, body);
   }
 
-  /** Called by the Worker on every authenticated request before any other RPC; 403s on cross-user collision. */
-  claimOwner(userId: string): Promise<{ owner: string; capabilityHash: string | null }> {
+  /** Called by the Worker on every authenticated request before any other RPC; 403s on cross-user collision. The
+   *  `placement` the creating call placed this object with is kept, for what it makes after (`placement`). */
+  claimOwner(userId: string, placement?: WorkspacePlacement): Promise<{ owner: string; capabilityHash: string | null }> {
     return settle(Effect.gen({ self: this }, function* () {
       if (!userId) return yield* new KinuError('bad_input', 'userId required');
 
@@ -3631,6 +3636,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         if (exists.length === 0) {
           this.bearWorkspace(this.name, userId);
+
+          if (placement !== undefined) this.ctx.storage.kv.put(PLACEMENT_KEY, placement);
         } else {
           this.actorHandle();
           void this.sql`UPDATE workspace_identity SET owner_user_id = ${userId}`;
@@ -4388,7 +4395,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       create: async ({ displayName, purpose, soul }) => {
         const { stub: userDO, caller } = await this.userHub();
 
-        return createCloudWorkspaceForUser({ env: this.env, userId: this.requireOwner(), userDO, caller, input: { displayName, purpose }, soul });
+        return createCloudWorkspaceForUser({ env: this.env, userId: this.requireOwner(), userDO, caller, input: { displayName, purpose }, soul, placement: this.placement() });
       },
       made: ({ workspace, name, brief }) => { this.recordAgentWorkspace({ workspace, name, brief }); },
       link: (workspace) => `${this.env.CLI_PUBLIC_ORIGIN ?? ''}/workspace/${encodeURIComponent(workspace)}`,
@@ -6640,9 +6647,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     await this.requireOwnerUserDO().closeDeviceSession(await this.userCaller(), this.workspaceName(), device, id);
   }
 
-  /** The workspace's computer, where this deployment binds one. */
+  /** The workspace's computer, where this deployment binds one (placed at its birth, `createCloudWorkspaceForUser`). */
   private computerBox(): SandboxBox | undefined {
     return this.env.KinuDevbox?.getByName(sandboxIdForWorkspace(this.name));
+  }
+
+  /** Where a workspace this one makes is placed: as this one was at birth, else where an unknown maker's goes. */
+  private placement(): WorkspacePlacement {
+    return v.parse(v.fallback(WorkspacePlacementSchema, UNPLACED), this.ctx.storage.kv.get(PLACEMENT_KEY));
   }
 
   /** The box keeps the account default its next start uses, so every read and change pushes the owner's current one. */

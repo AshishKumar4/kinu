@@ -72,7 +72,8 @@ interface PcUserStub {
 /** A Durable Object namespace port, generic in the id so callers minting their own names satisfy it. */
 export interface ObjectNamespace<Id, Stub> {
   idFromName(name: string): Id;
-  get(id: Id): Stub;
+  /** `locationHint`: the region the object runs in when this call first reaches it; it never moves after. */
+  get(id: Id, options?: { readonly locationHint?: string }): Stub;
 }
 
 /** The object `name` names in `namespace`: the platform's `getByName`, spelled over the two calls every namespace port
