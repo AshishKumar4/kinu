@@ -11,7 +11,7 @@ import { Effect } from 'effect';
 import * as v from 'valibot';
 import { requireWorkModePermission } from '../execution/work-mode';
 import { classifyErrorCode, KinuError, type Refusal } from '../obs/error';
-import { refusing, settle, settleSync } from '../obs/effect';
+import { joining, refusing, settle, settleSync } from '../obs/effect';
 import { sha256Hex } from '../safety/argument-digest';
 import type { MissionGovernor } from '../mission-budget';
 import type { SqlExec } from '../types/primitives';
@@ -826,10 +826,17 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
    *  as the slate's class, under the page's title. Its data is in `workspace.db`, which the slate reads as the page did.
    *  A page saved before is the slate it became: saving it again answers that slate, and writes no copy. */
   savePage(caller: SlateCaller, page: string): Promise<SlateCallResult> {
-    return settle(Effect.gen({ self: this }, function* () {
-      // The owner's choice to keep it, as publishing is; an agent writes a slate's files itself.
-      if (caller.path.length > 0) return yield* new KinuError('denied', 'Only the workspace root keeps an answer\'s page as a slate');
+    // The owner's choice to keep it, as publishing is; an agent writes a slate's files itself.
+    if (caller.path.length > 0) return settle(Effect.fail(new KinuError('denied', 'Only the workspace root keeps an answer\'s page as a slate')));
 
+    // Two saves of one page at once are one: each would find no slate of it yet, and write one.
+    return this.saving(page, () => this.keptPage(caller, page));
+  }
+
+  private readonly saving = joining<string, SlateCallResult>();
+
+  private keptPage(caller: SlateCaller, page: string): Promise<SlateCallResult> {
+    return settle(Effect.gen({ self: this }, function* () {
       if (ephemeralSlateAddress(page) === null) return yield* new KinuError('bad_input', `${page} names no answer's page`);
       const source = yield* Effect.promise(async () => this.ports.resolve(caller.cred, page));
 
