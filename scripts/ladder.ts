@@ -2487,6 +2487,22 @@ export const LADDER: readonly Gate[] = [
     inputs: LIVE_APP_INPUTS,
   },
   {
+    run: 'bun test --timeout=0 tests/browser/live-app-page-data.test.ts',
+    label: 'Live app in a browser: an answer\'s page keeps its data, hears its server, and is saved once',
+    ciExempt: LIVE_APP_AT_CI,
+    tier: 'deploy',
+    // Measured 2026-10-24 on armada: the row 55 s, with the dev server's boot.
+    seconds: 150,
+    catches: 'the shipped workspace page as it runs, on `vite dev` in cf-backend (workerd with real Durable Objects '
+      + 'behind the real client) in Chrome. Its row (1023-ac): an answer\'s page keeps notes in workspace.db, typed '
+      + 'and in SQL, and reads each back after its writes; its block\'s server answers it and pushes to it; Save '
+      + 'keeps it as a slate with that server and the same data, whose own writes land; and after a reload its card '
+      + 'still says which slate it was saved as, so a second Save writes no copy.',
+    blind: 'one page, one model: a scripted SSE server, so a real model writing the page is unmeasured. A LOCAL dev '
+      + 'server: `vite dev`\'s workerd is not the production isolate.',
+    inputs: LIVE_APP_INPUTS,
+  },
+  {
     run: 'bun test --timeout=0 tests/browser/live-app-layout.test.ts',
     label: 'Live app in a browser: the inspector column\'s layout',
     ciExempt: LIVE_APP_AT_CI,

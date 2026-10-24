@@ -109,6 +109,7 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   agentSlateUi(): Promise<AgentSlateUi>;
   answerPageModesIn(): Promise<AnswerPageModes>;
   answerPageServerIn(): Promise<AnswerPageServer>;
+  answerPageDataIn(): Promise<readonly string[]>;
   screenshotChatIn(): Promise<ScreenshotChat>;
   cutRecordingWorkspace(phase: 'before' | 'after'): Promise<{ readonly workspace: string; readonly cut: TerminalState }>;
   recoverRecording(workspace: string, cut?: { readonly name: 'turn_record'; readonly phase: 'before' | 'after' }): Promise<TerminalState>;

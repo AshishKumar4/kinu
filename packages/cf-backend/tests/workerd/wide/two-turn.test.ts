@@ -269,6 +269,19 @@ describe('two real turns over the HTTP model seam', () => {
     expect(modes).toEqual({ auto: 'ok', plan: 'denied', autoAgain: 'ok', planner: 'denied' });
   });
 
+  // 1023-ac, against the deployed path's own calls: an answer's page keeps its notes in workspace.db, typed and in SQL,
+  // and reads each back; saved, it is one slate, which its card knows on any later visit (staging, 2026-10-24: a reload
+  // offered Save again, and saving again wrote a second copy).
+  it("an answer's page keeps its notes typed and in SQL, and saving it again opens the one slate it became", async () => {
+    const seen = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('page-data-driver')).answerPageDataIn();
+    const kept = '{"id":"notes","title":"notes"}';
+
+    expect(seen).toEqual([
+      '0 {"rows":[{"n":0}],"rowsAffected":0}', '1 {"rows":[{"n":1}],"rowsAffected":0}', '2 {"rows":[{"n":2}],"rowsAffected":0}',
+      kept, kept, '[{"id":"notes","title":"notes","page":"a-data/notes"}]',
+    ]);
+  });
+
   // 1023-ac: an answer's block may carry its own server, which the page drawn in the chat calls through its workspace:
   // built from the block, run as the answer's author, kept from state of its own (a page's data is workspace.db).
   it("an answer's page's own server runs its methods from the block, and keeps no state of its own", async () => {
