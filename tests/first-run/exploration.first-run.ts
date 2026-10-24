@@ -63,6 +63,13 @@ const PanelAgentSchema = v.looseObject({
   open: v.looseObject({ kind: v.string() }),
 });
 
+/**
+ * The wait this case is in, said when its budget ends: production a82830815 (2026-10-24 13:07Z) spent the 300 s budget
+ * with the wake turn closed 2 s after the ask and every node settled, and no record of which of the waits after it
+ * (the canvas read, the panel's socket read, or the page's unclocked waits) never ended.
+ */
+const progress = { waitingOn: 'the workspace room to open' };
+
 interface OpenedWorker {
   readonly stream: string;
   readonly composer: boolean;
@@ -70,6 +77,7 @@ interface OpenedWorker {
 }
 
 async function openWorkerFromPanel(browser: TestChrome, plan: SignIn, workspace: string, key: string): Promise<OpenedWorker> {
+  progress.waitingOn = 'the signed-in page to load the workspace';
   const page = await signedInPage(browser.browser, plan);
   await page.goto(`${plan.origin}/workspace/${encodeURIComponent(workspace)}`, { waitUntil: 'domcontentloaded' });
   // Each click is a locator's: it waits until its target stands still. The Agents pane slides in over 280 ms, and a
@@ -77,14 +85,17 @@ async function openWorkerFromPanel(browser: TestChrome, plan: SignIn, workspace:
   // to open never ended (staging 7e411119d, 2026-10-14, 4 of 16 runs). Swarm workers sit in their own group, folded
   // until asked for, and unfold over a transition the row's click waits out the same way. No wait here has a clock:
   // a wait that never ends is ended by the runner, whose stop names the case.
+  progress.waitingOn = 'the Agents counter, then the folded Swarms group, to take a click';
   await page.locator('[data-agents-counter]').click();
   await page.locator('section[aria-label="Swarms"] [aria-expanded="false"]').click();
+  progress.waitingOn = 'the Swarms group to open and stand still';
   // A folded group keeps its rows in the page, inert: the row is clicked once the group is open and still.
   await page.waitForFunction(() => {
     const fold = document.querySelector('section[aria-label="Swarms"] .p-fold');
 
     return fold !== null && !fold.hasAttribute('data-folded') && fold.getAnimations({ subtree: true }).length === 0;
   });
+  progress.waitingOn = `the worker row ${key} to take a click, then its pane to draw its task`;
   await page.locator(`section[aria-label="Swarms"] [data-agent-row="${key}"]`).click();
   const pane = `[data-agent-pane="node/${key}"]`;
   await page.waitForFunction((selector: string) => (document.querySelector(selector)?.textContent ?? '').includes('Task'), {}, pane);
@@ -132,7 +143,12 @@ async function swarmWakeClosed(session: FirstRunSession, socket: PublicSocket, j
     return wakes.length > 0 && wakes.every((wake) => events.some((end) => end.type === 'run_end' && end.runId === wake.runId));
   };
 
-  for (let next = socket.turnClosed(); !(await closed()); next = socket.turnClosed()) {
+  for (let next = socket.turnClosed(); ; next = socket.turnClosed()) {
+    progress.waitingOn = `the ledger read for the wake turn naming ${job}`;
+
+    if (await closed()) return;
+    progress.waitingOn = `the wake turn naming ${job} to close`;
+
     if (!(await next)) return;
   }
 }
@@ -140,6 +156,7 @@ async function swarmWakeClosed(session: FirstRunSession, socket: PublicSocket, j
 /** The Agents panel lists every node, and one opens in the chat column read-only. */
 async function panelSubgoal({ socket, opened }: { socket: PublicSocket; opened: boolean }, plan: Parameters<typeof openWorkerFromPanel>[1], workspace: string, nodes: number): Promise<EvalSubgoal> {
   if (!opened) return { what: 'panel-opens-a-worker-read-only', reached: false, detail: 'the workspace socket never opened' };
+  progress.waitingOn = 'listWorkspaceAgents on the room';
   const listed = await ask(socket, 'listWorkspaceAgents', []);
   const agents = listed.ok ? v.safeParse(v.array(PanelAgentSchema), listed.value) : null;
   const rows = agents?.success === true ? agents.output : [];
@@ -148,6 +165,7 @@ async function panelSubgoal({ socket, opened }: { socket: PublicSocket; opened: 
   let browser: TestChrome | null = null;
 
   try {
+    progress.waitingOn = 'the browser to launch';
     browser = await openBrowser();
     const drawn = worker === undefined ? null : await openWorkerFromPanel(browser, plan, workspace, worker.key);
 
@@ -183,10 +201,14 @@ describe(SUITE, () => {
         // arrives as a wake turn whose done frame this tab must be there to see.
         const socket = openPublicSocket(plan.origin, plan.identity, `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(session.workspace)}`, budget);
 
+        budget.addEventListener('abort', () => { console.warn(`    [first-run] ${CASE}: the budget ended waiting on ${progress.waitingOn}`); }, { once: true });
+
         try {
           const opened = await socket.opened;
 
+          progress.waitingOn = 'the ask\'s turn to close';
           await session.prompt(ASK);
+          progress.waitingOn = 'the ledger read after the ask';
 
           const swarms = (await session.runEvents())
             .filter((event): event is ToolCallEnd => event.type === 'tool_call_end' && event.name === 'agents')
@@ -204,6 +226,7 @@ describe(SUITE, () => {
 
           if (opened && isBackgroundHandle(answered?.result)) await swarmWakeClosed(session, socket, answered.result.jobId);
 
+          progress.waitingOn = 'getExplorationCanvas on the room';
           const answer = opened ? await ask(socket, 'getExplorationCanvas', []) : null;
           const canvas = answer?.ok === true ? v.safeParse(CanvasSchema, answer.value) : null;
           const [entry] = canvas?.success === true ? canvas.output.items : [];
@@ -231,6 +254,7 @@ describe(SUITE, () => {
 
           subgoals.push(await panelSubgoal({ socket, opened }, plan, session.workspace, heads.length));
 
+          progress.waitingOn = 'the transcript read';
           const reply = (await session.history()).filter((row) => row.role === 'assistant').at(-1)?.text.toLowerCase() ?? '';
           const named = [...new Set(heads.flatMap((head) => wordsOf(head.summary ?? '')))].filter((word) => !ASKED.has(word));
           const used = named.filter((word) => wordsOf(reply).includes(word));

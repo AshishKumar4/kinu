@@ -26,6 +26,7 @@
  * eval asserts over them.
  */
 import { existsSync, rmSync } from 'node:fs';
+import { isDeepStrictEqual } from 'node:util';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import * as v from 'valibot';
@@ -248,26 +249,48 @@ export const CONSENT_PARKED = /NOT RUN: using .* waits on the owner's consent/;
 const CONSENT_WAKE = 'device_consent';
 
 /**
- * Whether the run an owner's consent answer woke has ended, which is when the call that answer let through has been
- * re-issued and its result is in the ledger. The wake opens that run once the answer lands, so the ledger is read again
- * at each turn `room` sees close, from `closed`, the room's wait registered before the answer; the run, once there, is
- * followed to its end. Waited on, never sent into: a send would land in that run and be the ask it answers. False when
- * the room or the case budget ends first.
+ * Whether the run that re-issued the call an owner's consent answer let through has ended, its result in the ledger.
+ * An answer given after the parked call's turn ended opens a wake run for it; one given while that turn still runs is
+ * read by the turn itself, which re-issues the call there, and no wake run ever opens (`answeredRun`). The ledger is read
+ * again at each turn `room` sees close, from `closed`, the room's wait registered before the answer; the run, once
+ * there, is followed to its end. Waited on, never sent into: a send would land in that run and be the ask it answers.
+ * False when the room or the case budget ends first.
  */
 export async function consentWakeEnded(
-  session: Pick<KinuPublicSession, 'runEvents' | 'followRun'>, room: PublicSocket, closed: Promise<boolean>,
+  session: Pick<KinuPublicSession, 'runEvents' | 'followRun'>, room: Pick<PublicSocket, 'turnClosed'>, closed: Promise<boolean>,
 ): Promise<boolean> {
   let next = closed;
 
   for (;;) {
     const events = await session.runEvents();
-    const woken = events.find((event) => event.type === 'run_start' && event.caused_by === CONSENT_WAKE)?.runId;
+    const answered = answeredRun(events);
 
-    if (woken !== undefined) return await runEnded(session, woken, events);
+    if (answered !== undefined) return await runEnded(session, answered, events);
 
     if (!(await next)) return false;
     next = room.turnClosed();
   }
+}
+
+type ToolCallEnd = Extract<RunEvent, { type: 'tool_call_end' }>;
+
+const isToolCallEnd = (event: RunEvent): event is ToolCallEnd => event.type === 'tool_call_end';
+
+/**
+ * The run that re-issued a parked device call once its answer came: the wake run the answer opened, or the parked
+ * call's own run when it read the answer itself and ran the same call again there (production, 2026-10-24: four
+ * machine-consent runs ran `[PARKED, ok]` in one turn, and the wait for a wake run spent their budgets). A re-issue that
+ * parked again is not one.
+ */
+function answeredRun(events: readonly RunEvent[]): string | undefined {
+  const woken = events.find((event) => event.type === 'run_start' && event.caused_by === CONSENT_WAKE)?.runId;
+
+  if (woken !== undefined) return woken;
+  const calls = events.filter(isToolCallEnd);
+  const parked = calls.find((call) => CONSENT_PARKED.test(call.error ?? ''));
+  const same = (call: ToolCallEnd) => call.name === parked?.name && isDeepStrictEqual(call.args, parked.args);
+
+  return parked === undefined ? undefined : calls.find((call) => call.runId === parked.runId && call.eventIndex > parked.eventIndex && same(call) && call.error === undefined)?.runId;
 }
 
 /** Whether `runId` reached its `run_end`: in `events` already, or on its own stream from the last of them. */
