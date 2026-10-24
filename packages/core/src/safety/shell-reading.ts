@@ -21,6 +21,9 @@ export interface ShellWord {
   readonly literal: string | null;
   /** Quotes removed, expansions as written: what a rule reads of a word it cannot know. */
   readonly text: string;
+  /** A pattern every value the word takes matches, each expansion that is one part of a path name, never a `/` nor a
+   *  `..` (a number, a loop's word), as `*`: where a path it names may be. Null where an expansion may hold anything. */
+  readonly pattern: string | null;
 }
 
 interface ShellRedirect {
@@ -93,7 +96,13 @@ const SUBSTITUTES_PROCESS = /[<>]\(/u;
  *  nothing. */
 const runsUnread = (part: WordPart): boolean => part.quoted !== 'single' && part.commandSubstitution === undefined && RUNS_WHEN_EXPANDED.test(part.text);
 
-function wordOf(written: readonly WordPart[]): ShellWord {
+/** Expansions whose value is a number: an exit status, a count, a process id, arithmetic. */
+const NUMERIC = /\$[?#$!]|\$\(\((?:[^()]|\([^()]*\))*\)\)/gu;
+
+const PARAMETER = /\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)/gu;
+
+/** `loops`: the variables a loop around the word confines to one part of a path name ({@link confines}). */
+function wordOf(written: readonly WordPart[], loops: ReadonlySet<string>): ShellWord {
   // `$"…"`, a locale quote, which lifo reads as a `$` before a quoted string, is that string where no catalog
   // translates it, as under `LC_ALL=C`.
   const parts = written.map((part, at) => (part.quoted === 'none' && part.text.endsWith('$') && written[at + 1]?.quoted === 'double'
@@ -111,7 +120,13 @@ function wordOf(written: readonly WordPart[]): ShellWord {
 
   const expands = parts.some((part) => part.commandSubstitution !== undefined) || EXPANDS.test(open.join(''));
 
-  return { literal: expands ? null : text, text };
+  if (!expands) return { literal: text, text, pattern: text };
+
+  const pattern = parts.map((part) => (part.quoted === 'single'
+    ? part.text
+    : part.text.replace(NUMERIC, '*').replace(PARAMETER, (ref, braced?: string, bare?: string) => (loops.has(braced ?? bare ?? '') ? '*' : ref)))).join('');
+
+  return { literal: null, text, pattern: /[$`]/u.test(pattern) ? null : pattern };
 }
 
 /** The most words a brace may expand one word into before the reading leaves it unexpanded, and so unknown: each
@@ -140,14 +155,42 @@ function braceProduct(parts: readonly WordPart[]): number {
 
 /** The words one written word is, its braces expanded as Nimbus expands them, or one unknown word past
  *  {@link BRACE_WORDS}. */
-function wordsOf(parts: readonly WordPart[]): ShellWord[] {
-  if (braceProduct(parts) > BRACE_WORDS) return [{ literal: null, text: parts.map((part) => part.text).join('') }];
+function wordsOf(parts: readonly WordPart[], loops: ReadonlySet<string>): ShellWord[] {
+  if (braceProduct(parts) > BRACE_WORDS) return [{ literal: null, text: parts.map((part) => part.text).join(''), pattern: null }];
 
-  return expandBraceWord([...parts]).map(wordOf);
+  return expandBraceWord([...parts]).map((alternative) => wordOf(alternative, loops));
+}
+
+/** A loop's word that is one part of a path name: no `/`, `..`, glob or blank, and no leading `.`, `-` or `~`. */
+const NAME_PART = /^(?!.*\.\.)[\w@%+=:,][\w@%+=:,.-]*$/u;
+
+/** A loop's word every value of which is a whole number: `$(seq …)` of literal numbers. */
+const SEQUENCE = /^\$\(\s*seq(?:\s+\d+){1,3}\s*\)$/u;
+
+/** Builtins that set a variable an expansion may name, and `printf -v`. */
+const SETS_NAMED = /(?<![\w-])(?:declare|typeset|local|export|readonly|read|mapfile|readarray|getopts|let|unset|wait)(?![\w-])[^;&|\n]*\$|(?<![\w-])printf(?![\w-])[^;&|\n]*\s-[A-Za-z]*v/u;
+
+/**
+ * Whether `for name in list` confines `name` in its body to one part of a path name, so a path built from it keeps its
+ * directory: every list word a {@link NAME_PART} or a {@link SEQUENCE}, and `text`, the whole line, giving `name` no
+ * other value: one such header, and the name nowhere but there and in its expansions. A glob's values stay unknown: one
+ * may be a link.
+ */
+function confines(name: string, list: readonly ShellWord[], text: string): boolean {
+  if (list.length === 0 || !list.every(({ literal, text: written }) => (literal === null ? SEQUENCE.test(written) : NAME_PART.test(literal)))) return false;
+  const header = String.raw`(?<![\w-])for\s+${name}(?!\w)`;
+  const rest = text.replace(new RegExp(String.raw`\$\{${name}\}|\$${name}(?!\w)|${header}`, 'gu'), '');
+
+  return text.match(new RegExp(header, 'gu'))?.length === 1 && !SETS_NAMED.test(rest)
+    && !new RegExp(String.raw`(?<![\w-])${name}(?!\w)|(?<![\w-])(?:read|wait|mapfile|readarray)(?![\w-])[^;&|\n]*\s-[A-Za-z]*${name}(?!\w)`, 'u').test(rest);
 }
 
 /** What the walk collects: each pipeline, and whether every stage was a command it holds. */
 interface Walk {
+  /** The whole line, where {@link confines} looks for a variable's other values. */
+  readonly text: string;
+  /** The loop variables {@link confines} in the commands being read. */
+  loops: ReadonlySet<string>;
   readonly pipelines: ShellPipeline[];
   followed: boolean;
   readonly unresolved: string[];
@@ -187,7 +230,7 @@ export function readShell(text: string): ShellReading | null {
   if (HEREDOC_MISREAD.test(text)) return null;
 
   return settleSync(lexed((): ShellReading | null => {
-    const walk: Walk = { pipelines: [], followed: true, unresolved: [], functions: [], misread: false, depth: 0 };
+    const walk: Walk = { text, loops: new Set(), pipelines: [], followed: true, unresolved: [], functions: [], misread: false, depth: 0 };
     const tokens = lex(text);
     let read = text;
 
@@ -276,13 +319,13 @@ function readSimple(node: SimpleCommandNode, stage: ShellCommand[], walk: Walk):
 
   // Bash joins an unquoted heredoc's continued lines before it looks for the delimiter; lifo looks line by line.
   if (node.redirections.some(({ heredoc }) => heredoc !== undefined && !heredoc.quoted && heredoc.body.includes('\\\n'))) walk.misread = true;
-  stage.push(stageOf(node.words, node.redirections));
+  stage.push(stageOf(node.words, node.redirections, walk.loops));
 }
 
-function stageOf(words: readonly WordPart[][], redirections: readonly RedirectionNode[]): ShellCommand {
+function stageOf(words: readonly WordPart[][], redirections: readonly RedirectionNode[], loops: ReadonlySet<string>): ShellCommand {
   return {
-    words: words.flatMap(wordsOf),
-    redirects: redirections.flatMap(redirectOf),
+    words: words.flatMap((parts) => wordsOf(parts, loops)),
+    redirects: redirections.flatMap((redirect) => redirectOf(redirect, loops)),
     heredocs: redirections.flatMap((redirect) => (redirect.heredoc === undefined ? [] : [redirect.heredoc.body])),
   };
 }
@@ -303,10 +346,18 @@ function readCompound(node: CompoundCommandNode, stage: ShellCommand[], walk: Wa
     case 'if':
       readLists([...node.clauses.flatMap((clause) => [...clause.condition, ...clause.body]), ...node.elseBody ?? []], walk);
       break;
-    case 'for':
+    case 'for': {
+      const outer = walk.loops;
+      const list = node.words?.flatMap((parts) => wordsOf(parts, outer)) ?? [];
+
       for (const parts of node.words ?? []) readSubstitutions(parts, walk);
+
+      if (node.variableError === undefined && confines(node.variable, list, walk.text)) walk.loops = new Set([...outer, node.variable]);
       readLists(node.body, walk);
+      walk.loops = outer;
       break;
+    }
+
     case 'while':
     case 'until':
       readLists([...node.condition, ...node.body], walk);
@@ -333,16 +384,16 @@ function readCompound(node: CompoundCommandNode, stage: ShellCommand[], walk: Wa
 
   for (const redirect of node.redirections) readSubstitutions(redirect.target, walk);
 
-  if (node.redirections.length > 0) stage.push(stageOf([], node.redirections));
+  if (node.redirections.length > 0) stage.push(stageOf([], node.redirections, walk.loops));
 }
 
-function redirectOf(redirect: RedirectionNode): ShellRedirect[] {
+function redirectOf(redirect: RedirectionNode, loops: ReadonlySet<string>): ShellRedirect[] {
   if (redirect.operator === 'heredoc' || redirect.operator === 'dupOutput' || redirect.operator === 'dupInput') return [];
 
   return [{
     truncates: redirect.operator === 'write' || redirect.operator === 'writeAll',
     reads: redirect.operator === 'read' || redirect.operator === 'readWrite',
-    target: wordOf(redirect.target),
+    target: wordOf(redirect.target, loops),
   }];
 }
 
@@ -373,10 +424,20 @@ export function wordRuns(text: string): WordRun[] | null {
     const runs: WordRun[] = [];
     let whole = true;
 
-    const read = (tokens: readonly Token[], depth: number, scoped: boolean) => {
+    const read = (tokens: readonly Token[], depth: number, scoped: boolean, loops: ReadonlySet<string>) => {
       let words: ShellWord[] = [];
+      // Each `do` opens a body, which a `for` header ended just before confines its variable in; `done` closes it.
+      const bodies: ReadonlySet<string>[] = [];
+      let header: ReadonlySet<string> | null = null;
+      const scope = () => bodies.at(-1) ?? loops;
 
       const end = () => {
+        const [verb, name, keyword] = words.map((word) => word.literal);
+
+        if (verb === 'for' && keyword === 'in' && typeof name === 'string' && /^[A-Za-z_]\w*$/u.test(name) && confines(name, words.slice(3), text)) {
+          header = new Set([...scope(), name]);
+        }
+
         if (words.length > 0) runs.push({ words, scoped });
         words = [];
       };
@@ -386,28 +447,34 @@ export function wordRuns(text: string): WordRun[] | null {
         else if (token.kind === TokenKind.HeredocBody) {
           // Its words are a script's when a shell reads it, text when another program does: read either way.
           if (depth >= SUBSTITUTION_DEPTH) whole = false;
-          else read(lex(token.value), depth + 1, true);
+          else read(lex(token.value), depth + 1, true, scope());
         } else if (token.kind === TokenKind.Word) {
           const parts = token.parts ?? [];
+          const reserved = words.length === 0 && parts.length === 1 && parts[0]?.quoted === 'none' ? parts[0].text : null;
+
+          if (reserved === 'do') bodies.push(header ?? scope());
+          else if (reserved === 'done') bodies.pop();
+
+          header = null;
 
           for (const part of parts) {
             if (part.commandSubstitution === undefined) continue;
 
             if (depth >= SUBSTITUTION_DEPTH) whole = false;
-            else read(lex(part.commandSubstitution), depth + 1, true);
+            else read(lex(part.commandSubstitution), depth + 1, true, scope());
           }
 
           const array = ARRAY_LITERAL.exec(token.source ?? token.value);
 
-          if (array === null) words.push(...wordsOf(parts));
-          else read(lexArrayElements(array[1] ?? ''), depth + 1, scoped);
+          if (array === null) words.push(...wordsOf(parts, scope()));
+          else read(lexArrayElements(array[1] ?? ''), depth + 1, scoped, scope());
         }
       }
 
       end();
     };
 
-    read(lex(text), 0, false);
+    read(lex(text), 0, false, new Set());
 
     return whole ? runs : null;
   }));
@@ -416,7 +483,7 @@ export function wordRuns(text: string): WordRun[] | null {
 /** The line as the shell reads its words, quotes joined and braces expanded, its operators as written: what a rule's
  *  signature reads where a word is written in pieces and no grammar reads the line. Null where the lexer reads none. */
 export function joinedWords(text: string): string | null {
-  return settleSync(lexed(() => lex(text).map((token) => (token.kind === TokenKind.Word ? wordsOf(token.parts ?? []).map((word) => word.text).join(' ') : token.value)).join(' ')));
+  return settleSync(lexed(() => lex(text).map((token) => (token.kind === TokenKind.Word ? wordsOf(token.parts ?? [], new Set()).map((word) => word.text).join(' ') : token.value)).join(' ')));
 }
 
 /** One word as a shell reads it, its quotes and backslash escapes undone (a path a terminal pasted: `my\\ shot.png`,
@@ -454,7 +521,9 @@ function laterScripts(program: string, command: ShellCommand): ShellWord[][] {
   if (program === 'trap') return [words.slice(0, 1)];
 
   if (program === 'alias') {
-    return words.flatMap(({ literal, text }) => (text.includes('=') ? [[{ literal: literal?.slice(literal.indexOf('=') + 1) ?? null, text: text.slice(text.indexOf('=') + 1) }]] : []));
+    return words.flatMap(({ literal, text, pattern }) => (text.includes('=') ? [[{
+      literal: literal?.slice(literal.indexOf('=') + 1) ?? null, text: text.slice(text.indexOf('=') + 1), pattern: pattern?.slice(pattern.indexOf('=') + 1) ?? null,
+    }]] : []));
   }
 
   return [];

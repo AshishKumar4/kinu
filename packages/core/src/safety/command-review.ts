@@ -518,16 +518,13 @@ function underRoots(path: string, roots: readonly string[]): boolean {
   return roots.some((root) => path === root || path.startsWith(`${root}/`));
 }
 
-/** Expansions whose value is a number: an exit status, a count, a process id, arithmetic. */
-const NUMERIC = /\$[?#$!]|\$\(\((?:[^()]|\([^()]*\))*\)\)/gu;
-
-/** The directory every path a word the shell expands may name lies in, `..` resolved ('' for the root): a glob's, before
- *  its first pattern. Null where it may be anywhere: a parameter, a substitution, a brace bash expands, a part of a glob
- *  that may match `..`, another account's home. */
+/** The directory every path a word the shell expands may name lies in, `..` resolved ('' for the root): its pattern's,
+ *  before its first glob. Null where it may be anywhere: an expansion that may hold anything, a brace bash expands, a
+ *  part of a glob that may match `..`, another account's home. */
 function globDirectory(word: ShellWord, cwd: string, home: string): string | null {
-  const written = word.text.replace(NUMERIC, '0');
+  const written = word.pattern;
 
-  if (/[$`{]/u.test(written) || written.split('/').some((part) => /[*?[]/u.test(part) && /^[.[]/u.test(part))) return null;
+  if (written === null || written.includes('{') || written.split('/').some((part) => /[*?[]/u.test(part) && /^[.[]/u.test(part))) return null;
   const path = shellPath(written, cwd, home);
 
   if (path === null) return null;
@@ -636,8 +633,9 @@ function copyTarget(step: ShellCommand): ShellWord | undefined {
 
   if (flag !== -1) return args[flag + 1];
   const long = args.find((arg) => arg.text.startsWith('--target-directory='));
+  const after = (written: string) => written.slice('--target-directory='.length);
 
-  return long === undefined ? args.at(-1) : { literal: long.literal?.slice('--target-directory='.length) ?? null, text: long.text.slice('--target-directory='.length) };
+  return long === undefined ? args.at(-1) : { literal: long.literal === null ? null : after(long.literal), text: after(long.text), pattern: long.pattern === null ? null : after(long.pattern) };
 }
 
 function overwritesUserFiles(executor: GatedExecutor, read: CommandsRun | null, session: ShellCwd | undefined, owner: FilesOwner): boolean {

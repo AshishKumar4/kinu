@@ -274,6 +274,13 @@
       "decision": "safety"
     },
     {
+      "file": "packages/core/src/safety/shell-reading.ts",
+      "kind": "regex-literal",
+      "owner": "SETS_NAMED",
+      "sourceSha256": "7698a3bfbc87a93eac65d153e775df405da23586e1bf055f829cd3d2cfe08b6b",
+      "decision": "safety"
+    },
+    {
       "file": "packages/core/src/session/message-codec.ts",
       "kind": "hand-parser",
       "owner": "decodeValue",

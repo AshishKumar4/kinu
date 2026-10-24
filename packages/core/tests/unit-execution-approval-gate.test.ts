@@ -610,6 +610,12 @@ describe('codemode calls on a workspace over the user\'s mounts', () => {
     { row: '5, a script read through a redirect', command: "bash < <(printf 'printf replacement >/pc/laptop/important.txt')" },
     { row: '6, a redirect to a variable', command: 'd=/pc/laptop/important.txt; printf replacement > "$d"' },
     { row: '6, a copy to a variable', command: 'd=/pc/laptop/important.txt; cp source "$d"' },
+    { row: '6, a loop over a path', command: 'for d in /pc/laptop; do printf replacement > "$d/important.txt"; done' },
+    { row: '6, a loop word that climbs', command: 'for d in a ..; do printf replacement > "out/$d/../../pc/laptop/important.txt"; done' },
+    { row: '6, a loop word that names the mount', command: 'for d in pc; do printf replacement > "/$d/laptop/important.txt"; done' },
+    { row: '6, a loop over a glob, which may be a link', command: 'for f in *; do printf replacement > "$f/important.txt"; done' },
+    { row: '6, a loop variable set again in its body', command: 'for i in 1 2; do i=/pc/laptop/important.txt; printf replacement > "$i"; done' },
+    { row: '6, a loop variable read after its loop', command: 'for i in 1 2; do :; done; printf replacement > "$i"' },
     { row: '7, a cd to a variable', command: 'd=/pc/laptop/proj; cd "$d" && printf replacement > important.txt' },
     { row: '8, a glob', command: 'rm -rf /p[c]/laptop/proj' },
     { row: '8, a brace', command: 'rm -rf /p{c,c}/laptop/proj' },
@@ -626,9 +632,18 @@ describe('codemode calls on a workspace over the user\'s mounts', () => {
     });
   }
 
-  test('expansions that name no path, a glob in the agent\'s home and a link made elsewhere stay the agent\'s', async () => {
+  // Loops and xargs that write or delete in the agent's own tree, the storm flow's among them (staging, 2026-10-24).
+  test('expansions that name no path, a glob in the agent\'s home, a loop over plain words and a link made elsewhere stay the agent\'s', async () => {
     const { shell, asked, ran } = gatedWorkspaceShell();
-    const runs = ['rm -rf build/* && echo "rm: $?"', 'cp notes/*.md /tmp/ && ls', 'ln -s /home/main/slates /slates && echo hi > /slates/x'];
+
+    const runs = [
+      'rm -rf build/* && echo "rm: $?"', 'cp notes/*.md /tmp/ && ls', 'ln -s /home/main/slates /slates && echo hi > /slates/x',
+      'mkdir -p storm && for i in $(seq 1 50); do echo $i > storm/f$i.txt; done',
+      'for name in alpha beta gamma; do echo "# $name" > "notes/${name}.md"; done',
+      'for i in 1 2 3; do cp template.txt "out/copy-$i.txt" && rm -rf "build/run-$i"; done',
+      'for n in $(seq 3); do for m in a b; do mv "tmp/$n-$m.json" "data/$n/$m.json"; done; done',
+      "seq 1 5 | xargs -I{} sh -c 'echo {} > out/f{}.txt'", 'ls *.md | xargs -I % cp % backup/',
+    ];
 
     for (const command of runs) expect((await shell.exec(command)).refusal).toBeUndefined();
 
