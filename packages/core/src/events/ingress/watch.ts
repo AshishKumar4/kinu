@@ -160,6 +160,9 @@ export interface WatchAsk {
   readonly input?: JsonValue;
   /** The verified delivery that asked, which keys its fire: what its signature proves, never an id the sender names. */
   readonly delivery?: string;
+  /** Takes the delivery's claim in the commit of what its check found, with its state and its fire; false when another
+   *  commit took it. A reset during the check leaves it untaken, so the sender's redelivery is checked again. */
+  readonly claim?: () => boolean;
 }
 
 /**
@@ -170,14 +173,15 @@ export interface WatchAsk {
 export async function checkWatcher(deps: WatchDeps, triggerId: string, asked: WatchAsk, now: () => number): Promise<boolean> {
   let fired = false;
 
-  await deps.claims.run(triggerId, asked, async ({ at, timer, input, delivery }) => {
+  await deps.claims.run(triggerId, asked, async ({ at, timer, input, delivery, claim }) => {
     const trigger = deps.registry.get(triggerId);
     const check = trigger === null || trigger.state !== 'active' ? null : watchCheckOf(trigger);
 
     if (trigger === null || check === null) return;
     const read = watchOf(trigger).state;
     const outcome = await deps.run(check, read, input);
-    const committed = await commitCheck(deps, { triggerId, read, outcome, scheduledAt: at, now: now(), ...(delivery !== undefined && { delivery }) });
+    const signed = { ...(delivery !== undefined && { delivery }), ...(claim !== undefined && { claim }) };
+    const committed = await commitCheck(deps, { triggerId, read, outcome, scheduledAt: at, now: now(), ...signed });
 
     // A check is the cost a watcher pays for the turns it spares: each is counted, with why one stopped.
     diagnostics.event('watch.checked', {
@@ -242,9 +246,11 @@ async function commitCheck(deps: Pick<WatchDeps, 'registry' | 'log'>, checked: {
   readonly scheduledAt: number;
   /** The verified delivery it answered, which keys its fire instead. */
   readonly delivery?: string;
+  /** The delivery's claim, taken with the answer's state and fire ({@link WatchAsk.claim}). */
+  readonly claim?: () => boolean;
   readonly now: number;
 }): Promise<WatchCommit> {
-  const { triggerId, read, outcome, scheduledAt, delivery, now } = checked;
+  const { triggerId, read, outcome, scheduledAt, delivery, claim, now } = checked;
   const trigger = deps.registry.get(triggerId);
 
   if (trigger === null || trigger.state !== 'active') return 'dropped';
@@ -272,6 +278,10 @@ async function commitCheck(deps: Pick<WatchDeps, 'registry' | 'log'>, checked: {
 
   // A cursor that moved back is a check that saw less than the one before it: nothing it found is new.
   if (movesBack(read, next)) return 'quiet';
+
+  // The delivery is spent here, in the same synchronous run as its state and its fire, so a reset cannot part them. A
+  // redelivery that was checked again while this one ran answers for it already.
+  if (claim !== undefined && !claim()) return 'dropped';
 
   // An answer is the watcher checking again: a `parked` an owner's resume left behind goes with the old state.
   if (stableStringify(next ?? null) !== stableStringify(read ?? null) || watch.parked !== undefined) {

@@ -316,6 +316,76 @@ describe('a GitHub repository hook', () => {
     expect(inputs).toEqual([{ event: 'push', delivery: 'd-1', payload: { ref: 'refs/heads/main', after: 'abc123', repository: { full_name: 'Owner/Repo' } } }]);
   });
 
+  /** A push watcher's delivery as GitHub sends it, through `deps`. */
+  const pushed = async (deps: Parameters<typeof acceptWebhookDelivery>[0], trigger_id: string, body = BODY) => acceptWebhookDelivery(deps, {
+    trigger_id, method: 'POST', body_text: body, cf_mtls_verified: false, delivery_id: null, hmac_signature: null, hmac_timestamp: null,
+    bearer_header: null, content_type: 'application/json', now: NOW,
+    headers: { 'x-hub-signature-256': await signed(body), 'x-github-event': 'push', 'x-github-delivery': 'd-1' },
+  });
+
+  test('a reset during its check spends nothing: the same signed delivery, sent again, fires once', async () => {
+    const h = hub();
+    const trigger_id = await gitHubTrigger(h, { code: 'return { fire: true, brief: "main moved" };' });
+    const fire: RunCheck = async () => ({ kind: 'answered', answer: present(checkAnswerOf({ fire: true, brief: 'main moved' }), 'a fire') });
+
+    // The activation dies while its check runs: the check never answers, and what it held in memory goes with it.
+    let checking = (): void => undefined;
+    const reached = new Promise<void>((resolve) => { checking = resolve; });
+
+    const never: RunCheck = () => {
+      checking();
+
+      return new Promise<never>(() => undefined);
+    };
+
+    const abandoned = pushed({ ...h.deps, watch: { claims: new WatchClaims(), run: never } }, trigger_id);
+
+    await reached;
+    expect(h.claims()).toEqual([]);
+
+    const revived = { ...h.deps, watch: { claims: new WatchClaims(), run: fire } };
+
+    expect(await pushed(revived, trigger_id)).toMatchObject({ admitted: true });
+    expect(await pushed(revived, trigger_id)).toMatchObject({ admitted: false });
+    expect(h.log.pending({ variant: 'timer' })).toHaveLength(1);
+    expect(Bun.peek.status(abandoned)).toBe('pending');
+  });
+
+  test('a redelivery folded into the running check commits nothing of its own once that check took the claim', async () => {
+    const h = hub();
+    const trigger_id = await gitHubTrigger(h, { code: 'return { fire: true, brief: "main moved", state: { n: 1 } };' });
+    let open = (): void => undefined;
+    let checking = (): void => undefined;
+    const gate = new Promise<void>((resolve) => { open = resolve; });
+    const reached = new Promise<void>((resolve) => { checking = resolve; });
+    let checks = 0;
+
+    const run: RunCheck = async (_check, state) => {
+      checks += 1;
+
+      if (checks === 1) {
+        checking();
+        await gate;
+      }
+
+      const n = state !== null && typeof state === 'object' && !Array.isArray(state) && typeof state['n'] === 'number' ? state['n'] : 0;
+
+      return { kind: 'answered', answer: present(checkAnswerOf({ fire: true, brief: 'main moved', state: { n: n + 1 } }), 'a fire') };
+    };
+
+    const deps = { ...h.deps, watch: { claims: new WatchClaims(), run } };
+    const first = pushed(deps, trigger_id);
+
+    await reached;
+    expect(await pushed(deps, trigger_id)).toMatchObject({ admitted: false });
+    open();
+    expect(await first).toMatchObject({ admitted: true });
+
+    expect(checks).toBe(2);
+    expect(h.log.pending({ variant: 'timer' })).toHaveLength(1);
+    expect(present(h.triggers.get(trigger_id), 'the watcher').spec['watch']).toEqual({ state: { n: 1 } });
+  });
+
   test('a fresh delivery naming the id of one that fired is a fire of its own: the id is GitHub\'s word, not proof', async () => {
     const h = hub();
     const run: RunCheck = async () => ({ kind: 'answered', answer: present(checkAnswerOf({ fire: true, brief: 'main moved' }), 'a fire') });
@@ -323,14 +393,8 @@ describe('a GitHub repository hook', () => {
     const trigger_id = await gitHubTrigger(h, { code: 'return { fire: true, brief: "main moved" };' });
     const next = '{"ref":"refs/heads/main","after":"def456","repository":{"full_name":"owner/repo"}}';
 
-    const deliver = async (body: string) => acceptWebhookDelivery(deps, {
-      trigger_id, method: 'POST', body_text: body, cf_mtls_verified: false, delivery_id: null, hmac_signature: null, hmac_timestamp: null,
-      bearer_header: null, content_type: 'application/json', now: NOW,
-      headers: { 'x-hub-signature-256': await signed(body), 'x-github-event': 'push', 'x-github-delivery': 'd-1' },
-    });
-
-    expect(await deliver(BODY)).toMatchObject({ admitted: true });
-    expect(await deliver(next)).toMatchObject({ admitted: true });
+    expect(await pushed(deps, trigger_id)).toMatchObject({ admitted: true });
+    expect(await pushed(deps, trigger_id, next)).toMatchObject({ admitted: true });
     expect(h.log.pending({ variant: 'timer' })).toHaveLength(2);
   });
 });

@@ -15,7 +15,7 @@ import { spillEventContent } from '../hub/content-spill';
 import { Effect, Result } from 'effect';
 import { settle, settleSync } from '../../obs/index';
 import { decodeJsonValue, safeJsonParse, type JsonObject, type JsonValue } from '../../utils/json';
-import { checkWatcher, watchCheckOf, WatchCheckSchema, type WatchCheck, type WatchDeps } from './watch';
+import { checkWatcher, watchCheckOf, WatchCheckSchema, type WatchAsk, type WatchCheck, type WatchDeps } from './watch';
 import type { SqlExec } from '../../types/primitives';
 import { hmacSha256Hex, timingSafeEqual } from '../../utils/crypto';
 import {
@@ -235,9 +235,15 @@ function storedSecret(
 
 interface WebhookRefusal { readonly reason: string }
 
+/** What a delivery's proof lets it spend once: its key, and until when the proof would verify again. */
+interface SignedClaim {
+  readonly key: string;
+  readonly expiresAt: number;
+}
+
 interface WebhookAuth {
   readonly ingress: 'webhook_hmac' | 'webhook_bearer' | 'webhook_mtls';
-  readonly claim?: { key: string; expiresAt: number };
+  readonly claim?: SignedClaim;
 }
 
 const refused = (reason: string): Effect.Effect<never, WebhookRefusal> => Effect.fail({ reason });
@@ -351,29 +357,35 @@ function gitHubInput(push: GitHubPush | null, opts: WebhookDelivery, payload: Js
   return { event: push?.event ?? null, delivery: opts.headers['x-github-delivery'] ?? null, payload };
 }
 
-/** A delivery a check answers, or GitHub's ping that nothing answers; null for one published as an event. `claimed` is
- *  what its signature proved, which keys a fire; a delivery none proved is keyed by its arrival. */
+/** Whether a check answers the trigger's deliveries, rather than each being published as an event. */
+function watchesDeliveries(deps: WebhookIngressDeps, trigger: TriggerRow): boolean {
+  return deps.watch !== undefined && watchCheckOf(trigger) !== null;
+}
+
+/** A delivery a check answers, or GitHub's ping that nothing answers; null for one published as an event. `claim` is
+ *  what its signature proved, which keys a fire and is taken with it; a delivery none proved is keyed by its arrival. */
 async function checkedDelivery(
-  deps: WebhookIngressDeps, trigger: TriggerRow, opts: WebhookDelivery, delivered: { body: JsonValue; claimed: string | undefined },
+  deps: WebhookIngressDeps, trigger: TriggerRow, opts: WebhookDelivery, delivered: { body: JsonValue; claim: SignedClaim | undefined },
 ): Promise<WebhookDeliveryResult | null> {
-  const { body, claimed } = delivered;
+  const { body, claim } = delivered;
   const github = trigger.spec['auth_mode'] === 'github';
 
   // GitHub's ping when a hook is made, known by its signed body: answered, and nothing to check.
   if (github && v.is(GitHubPingSchema, body)) return { status: 'admitted', admitted: false };
 
-  if (deps.watch === undefined || watchCheckOf(trigger) === null) return null;
+  if (!watchesDeliveries(deps, trigger)) return null;
 
   const input = github ? gitHubInput(gitHubPushOf(trigger), opts, body) : body;
+  const signed = claim === undefined ? {} : { delivery: claim.key, claim: () => claimSignedDelivery(deps.sql, trigger.id, claim, opts.now) === null };
 
-  return watchedDelivery(deps, trigger.id, { at: opts.now, input, ...(claimed !== undefined && { delivery: claimed }) });
+  return watchedDelivery(deps, trigger.id, { at: opts.now, input, ...signed });
 }
 
 /**
  * A watcher's delivery is its check's input, and only what the check found is published. Answered once the check
  * committed: a deliverer that gave up and sends again is folded into the running check's re-check.
  */
-async function watchedDelivery(deps: WebhookIngressDeps, triggerId: string, asked: { at: number; input: JsonValue; delivery?: string }): Promise<WebhookDeliveryResult> {
+async function watchedDelivery(deps: WebhookIngressDeps, triggerId: string, asked: Omit<WatchAsk, 'timer'>): Promise<WebhookDeliveryResult> {
   const { watch } = deps;
 
   if (watch === undefined) return { status: 'rejected', http_status: 503, reason: 'this workspace runs no checks' };
@@ -424,14 +436,16 @@ export function acceptWebhookDelivery(
     const parsedBody: unknown = receivedCT.includes('json') ? safeJsonParse(opts.body_text) : opts.body_text;
 
     // Spend the claim before anything durable: freshness alone admits a replay across a dedupe
-    // bucket boundary. A held claim answers as a duplicate, never a rejection.
-    const held = auth.claim ? claimSignedDelivery(deps.sql, opts.trigger_id, auth.claim, opts.now) : null;
+    // bucket boundary. A held claim answers as a duplicate, never a rejection. A watched delivery's
+    // claim is only read here: its check's commit takes it, with what the check found.
+    const spend = watchesDeliveries(deps, trigger) ? heldClaim : claimSignedDelivery;
+    const held = auth.claim === undefined ? null : spend(deps.sql, opts.trigger_id, auth.claim, opts.now);
 
     if (held !== null) {
       return { status: 'admitted', event_id: held.event_id ?? undefined, admitted: false };
     }
 
-    const checked = yield* Effect.promise(() => checkedDelivery(deps, trigger, opts, { body: decodeJsonValue({ value: parsedBody ?? null }), claimed: auth.claim?.key }));
+    const checked = yield* Effect.promise(() => checkedDelivery(deps, trigger, opts, { body: decodeJsonValue({ value: parsedBody ?? null }), claim: auth.claim }));
 
     if (checked !== null) return checked;
 
@@ -496,14 +510,8 @@ export function initWebhookIngressTables(sql: SqlExec): void {
   `);
 }
 
-/** Null when this delivery took the claim. No await between read and insert: a DO's input gate
- *  does not reopen inside a synchronous run. */
-function claimSignedDelivery(
-  sql: SqlExec,
-  triggerId: string,
-  claim: { key: string; expiresAt: number },
-  now: number,
-): { event_id: string | null } | null {
+/** The delivery that holds `claim` already, or null when none does; expired claims go first. */
+function heldClaim(sql: SqlExec, triggerId: string, claim: SignedClaim, now: number): { event_id: string | null } | null {
   sql.exec(`DELETE FROM webhook_replay_claims WHERE expires_at <= ?`, now);
 
   const held = v.safeParse(ClaimRowSchema, sql.exec(
@@ -511,7 +519,15 @@ function claimSignedDelivery(
     triggerId, claim.key,
   ).toArray()[0]);
 
-  if (held.success) return { event_id: held.output.event_id };
+  return held.success ? { event_id: held.output.event_id } : null;
+}
+
+/** Null when this delivery took the claim. No await between read and insert: a DO's input gate
+ *  does not reopen inside a synchronous run. */
+function claimSignedDelivery(sql: SqlExec, triggerId: string, claim: SignedClaim, now: number): { event_id: string | null } | null {
+  const held = heldClaim(sql, triggerId, claim, now);
+
+  if (held !== null) return held;
   sql.exec(
     `INSERT INTO webhook_replay_claims (trigger_id, claim, event_id, expires_at) VALUES (?, ?, NULL, ?)`,
     triggerId, claim.key, claim.expiresAt,
