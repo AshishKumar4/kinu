@@ -113,7 +113,7 @@ export type ControlAnswer<Value> =
   | { status: 'unconfigured'; reason: string }
   | { status: 'failed'; reason: string };
 
-export const ACCESS_EXPIRED = 'Your Access sign-in expired: sign in again';
+const ACCESS_EXPIRED = 'Your Access sign-in expired: sign in again';
 
 function control<Schema extends v.GenericSchema>(
   schema: Schema,
