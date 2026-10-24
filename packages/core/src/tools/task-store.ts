@@ -1,6 +1,7 @@
 // The agent's own task list, written only by the `tasks` tool; deliberately one level deep, not a workflow
 // engine. Ids `t1`, `t2`, … come from the owning actor's sequence; lists are private per actor (manifest.ts).
 
+import { fnv1a32Hex } from '../utils/fnv1a';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import * as v from 'valibot';
@@ -234,6 +235,15 @@ export class TaskListStore {
     }
 
     return { items, total };
+  }
+
+  /** The open list's state over every open row, however long the list: each task's and subtask's id and status, in the
+   *  list's order, hashed. A task added, closed or moved is a new state; the same list left again is not. */
+  openState(): string {
+    const open = this.listOpen(Number.POSITIVE_INFINITY);
+    const entries = open.items.map((tree) => [tree, ...tree.subtasks].map((task) => `${task.id}=${task.status}`).join(','));
+
+    return `${String(open.total)}-${fnv1a32Hex(entries.join(';'))}`;
   }
 
   count(): number {

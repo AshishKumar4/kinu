@@ -3777,6 +3777,11 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.heldDynamicOf(reference).reads;
   }
 
+  /** The agents it hired, as its dynamic block lists them: each roster row's phase is its status. */
+  protected delegatesOf(reference: ActorReference): readonly DynamicDelegate[] {
+    return this.heldDynamicOf(reference).delegates();
+  }
+
   /**
    * The live state of an agent, read for one model step, the same for every agent; its store rows are held until a write
    * moves them. The workspace's planes (its external tools' gaps, its approvals, its failing slates) only where its reach
