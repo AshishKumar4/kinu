@@ -11,7 +11,8 @@ import type { LogEventName } from './log';
 export const ALARM_WORK = {
   // Tears down an eval workspace a lease after its run's last mark (cf-backend `user/eval-leases.ts`).
   EvalLeaseJobs: ['workspace.destroyed'],
-  // Runs again a workspace's deletion that has not landed, a lap after it began (cf-backend `user/workspace-deletions.ts`).
+  // Runs a workspace's deletion: a person's at once, one that has not landed a lap after it began, one per alarm
+  // (cf-backend `user/workspace-deletions.ts`).
   WorkspaceDeletionJobs: ['workspace.destroyed'],
   // Drops or expires a deploy run nobody finished, an hour after its last call (cf-backend `deploy/deploy-do.ts`).
   DeployRunDO: ['deploy.run_dropped', 'deploy.run_expired'],
@@ -33,6 +34,8 @@ export const ALARM_WORK = {
   NimbusTasks: [],
   // Dispatch their capabilities' jobs above, and the fibers that hold running work.
   ActorAgent: [],
+  // Dispatches its capabilities' jobs above, one workspace's teardown at most.
+  UserDO: [],
   OrchestratorAgent: [],
 } as const satisfies Readonly<Record<string, readonly LogEventName[]>>;
 

@@ -32,6 +32,20 @@ export class WorkspaceDeletionJobs extends LifecycleCapability {
   /** Never awaited: its account's start may not await (`scripts/do-init-gate.ts`), and each arming logs its own failure. */
   #arming: Promise<unknown> = Promise.resolve();
 
+  /** Whether this alarm has torn a workspace down already (`alarmBegins`). */
+  #toreDown = false;
+
+  /**
+   * Its account's alarm begins: it tears down one workspace, and the deletions due behind it wait for the next alarm,
+   * which the queue arms at once. A teardown calls into the workspace, which calls back into the account, and the
+   * alarm's work went on from inside that call, so each teardown in one alarm began a call deeper. Staging 0e47a6958,
+   * 2026-10-24 13:43: one alarm ran 37 due deletions; three failed "Subrequest depth limit exceeded" and landed on their
+   * next lap, two minutes on.
+   */
+  alarmBegins(): void {
+    this.#toreDown = false;
+  }
+
   /** At its account's start, each marked row holds its job: one an earlier build marked, or one a refusal parked, holds
    *  none. */
   adoptMarked(): void {
@@ -60,12 +74,16 @@ export class WorkspaceDeletionJobs extends LifecycleCapability {
     await this.lifecycle.jobs.cancel(jobId(workspace));
   }
 
-  /** A deletion came due: run again, unless its row is no longer marked. */
+  /** A deletion came due: run again, unless its row is no longer marked, or wait for the next alarm once this alarm
+   *  has torn one down (`alarmBegins`). */
   async onJob({ job }: LifecycleJobContext): Promise<LifecycleJobOutcome> {
     if (job.fn !== DELETION_JOB) return undefined;
     const { workspace } = v.parse(DeletionSchema, job.payload);
 
     if (!this.#deps.marked().includes(workspace)) return undefined;
+
+    if (this.#toreDown) return 'yield';
+    this.#toreDown = true;
     await this.#deps.tearDown(workspace);
 
     return undefined;
