@@ -46,7 +46,7 @@ export interface UserWorkspacesHost extends Pick<UserObjectHost, 'ctx' | 'env' |
   /** An eval run's workspaces' leases, moved by each mark and ended by the teardown. */
   readonly evalLeases: Pick<EvalLeaseJobs, 'marked' | 'ended'>;
   /** Each workspace's deletion, run again by its own job until it lands. */
-  readonly deletions: Pick<WorkspaceDeletionJobs, 'begun' | 'ended'>;
+  readonly deletions: Pick<WorkspaceDeletionJobs, 'begun' | 'dueNow' | 'ended'>;
   /** Brings a workspace's share recipients to the shares its overview names. */
   readonly shareCards: Pick<ShareCardJobs, 'reconcile'>;
   nudgeUnreported(): void;
@@ -56,8 +56,8 @@ export interface UserWorkspacesHost extends Pick<UserObjectHost, 'ctx' | 'env' |
   readonly limits: Pick<UserLimits, 'admitWorkspace' | 'forgetStore' | 'refreshStorage'>;
 }
 
-/** A read the destroyed workspace answers itself with the Agents SDK's own abort (`Agent.destroy`), which it raises only
- *  once its wipe has finished (`confirmedDeletion`'s `ended`). */
+/** The Agents SDK's own abort (`Agent.destroy`), which it raises only once its `deleteAll` returned: as the destroy's
+ *  answer or the read's, the wipe went (`confirmedDeletion`'s `ended`). */
 const destroyedItself = (failure: Error): boolean => failure.message === 'destroyed';
 
 /** The account's workspaces. */
@@ -470,8 +470,26 @@ export class UserWorkspaces {
   }
 
   /**
+   * The person's delete: answered once it is durable, the row marked and its own job due now, which runs the teardown
+   * and runs it again until it lands (`WorkspaceDeletionJobs`). Its list drops it as it is marked; what the teardown
+   * meets is logged, never waited on (production 2026-10-24, mossy-quarry-62346247: 27 s, 15.6 s of it an empty R2
+   * listing in its devbox's cleanup). A name with no row is already gone.
+   */
+  async requestRemoval(caller: UserCaller, name: string, ownerUserId: string): Promise<void> {
+    await this.host.requireTier(caller, 'workspaces.write');
+    validateWorkspaceName(name);
+
+    if (!/^[a-f0-9]{32}$/.test(ownerUserId)) throw new KinuError('bad_input', 'invalid owner user id');
+
+    if (this.host.sqlx(`UPDATE user_workspaces SET delete_pending = 1 WHERE name = ? RETURNING name`, name).length === 0) return;
+    this.rosterChanged(name);
+    await this.host.deletions.dueNow(name);
+  }
+
+  /**
    * Row is marked before teardown and removed after, so a failed teardown is run again by its own
-   * job (`WorkspaceDeletionJobs`); `destroyAgent` is idempotent.
+   * job (`WorkspaceDeletionJobs`); `destroyAgent` is idempotent. Answered once it landed, for a caller that goes on to
+   * reuse the name or account for it (a rollback, the control plane).
    */
   async removeWorkspace(caller: UserCaller, name: string, ownerUserId: string): Promise<void> {
     await this.host.requireTier(caller, 'workspaces.write');
@@ -515,18 +533,19 @@ export class UserWorkspaces {
     // An assistant removed is no longer the owner's: the next install makes a new one (`blueprint-install.ts`).
     this.host.sqlx(`DELETE FROM user_config WHERE key = ? AND value = ?`, ASSISTANT_CONFIG_KEY, name);
 
-    // The Agents SDK's destroy ends its activation after the wipe, which can cut its answer (`confirmedDeletion`): a
-    // new stub reads whether the workspace is still there.
-    await confirmedDeletion(() => {
+    // The Agents SDK's destroy ends its activation after the wipe, which can cut its answer (`confirmedDeletion`). An
+    // answer, or the SDK's own `destroyed`, is the wipe done; any other failure is read again through a new stub, which
+    // starts the emptied object (production 2026-10-24: 6.7 s).
+    const proof = await confirmedDeletion(() => {
       const opened = this.host.env.OrchestratorAgent.get(object);
 
       return { destroy: async () => { await opened.destroyAgent(ownerUserId); }, remains: async () => opened.storedWorkspace() };
-    }, `the workspace ${name}`, destroyedItself);
+    }, `the workspace ${name}`, { ended: destroyedItself, answerProves: true });
 
     // Written here, where the destroy landed: the destroyed object's own rows of it can be missing from telemetry
     // (staging f9c17ac7b, 2026-10-14: none of 7d3e6921's quiet, destroy or abort rows were stored), and a deploy's
     // report reads what a deleted workspace still owed as ended by this.
-    diagnostics.event('workspace.destroyed', { workspace: name, object: object.toString() });
+    diagnostics.event('workspace.destroyed', { workspace: name, object: object.toString(), proof });
 
     if (this.host.env.SLATE_PICTURES !== undefined) await deletePictures(this.host.env.SLATE_PICTURES, picturePrefix(name));
     this.deleteWorkspaceRows(name, 'after-destroy');
