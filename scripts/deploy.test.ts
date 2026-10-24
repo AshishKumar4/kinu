@@ -150,6 +150,22 @@ fi
 if [ "\${1##*/}" = "deploy-report.ts" ] && [ "$2" = "note" ]; then
   printf '%s\\n' "$4" >> "$KINU_DEPLOY_ROOT/reds"
 fi
+# Whether every red the report holds is a provider's refusal (\`externals\`), as KINU_EXTERNAL_ONLY says.
+if [ "\${1##*/}" = "deploy-report.ts" ] && [ "$2" = "externals" ]; then
+  [ "$KINU_EXTERNAL_ONLY" = "1" ] && { echo 'post-publish: bun run gate:first-run: credit balance is zero'; exit 0; }
+  echo 'held by: post-publish: bash scripts/product-flows-tier.sh --flow=panel'
+  exit 1
+fi
+# The render answers 3 for a report holding a red, as scripts/deploy-report.ts does.
+if [ "\${1##*/}" = "deploy-report.ts" ] && [ "$2" = "render" ]; then
+  [ -s "$KINU_DEPLOY_ROOT/reds" ] && exit 3
+  exit 0
+fi
+# A phase's runner that ran to its verdict marks its end (\`when <phase>-ended\`): a recorded red does, a crash does not.
+if [ "\${1##*/}" = "deploy-report.ts" ] && [ "$2" = "when" ] && [[ "$4" == *-ended ]]; then
+  grep -qx "\${4%-ended}" "$KINU_DEPLOY_ROOT/ended" 2>/dev/null && exit 0
+  exit 1
+fi
 if [ "\${1##*/}" = "deploy-report.ts" ] && [ "$2" = "holds-red" ]; then
   [ -f "$KINU_DEPLOY_ROOT/reds" ] || exit 1
   [ -z "$4" ] && exit 0
@@ -160,6 +176,7 @@ fi
 # having recorded nothing.
 if [ "$KINU_DEPLOY_FAIL" = "recorded:$command_line" ]; then
   printf '%s\\n' "\${2#--deploy-phase=}" >> "$KINU_DEPLOY_ROOT/reds"
+  printf '%s\\n' "\${2#--deploy-phase=}" >> "$KINU_DEPLOY_ROOT/ended"
   exit 1
 fi
 if [ "$KINU_DEPLOY_FAIL" = "crashed:$command_line" ]; then
@@ -255,6 +272,8 @@ interface DeployRun {
   readonly telemetryRed?: boolean;
   /** The upload gates wait for the source phase, and it for the telemetry read (KINU_OVERLAP in the stub). */
   readonly overlap?: boolean;
+  /** Every red the report holds is a provider's refusal (`deploy-report.ts externals`). */
+  readonly externalOnly?: boolean;
   /** The reset the environment is still in: its placeholder serves and its build never uploaded. */
   readonly pendingReset?: string;
   /** A KINU_RESET_RECORD already on the environment, which must never soften a deploy nobody asked to reset. */
@@ -353,7 +372,9 @@ mock.module(${JSON.stringify(cloudflare)}, () => ({
 /** The runtime catalog the fixture build pins (NIMBUS_RUNTIME_CATALOG_SHA256). */
 const FIXTURE_CATALOG = 'c'.repeat(64);
 
-function uploadFixture(fixture: string, uploadRuns: readonly UploadRun[] | undefined, validation: UploadRun = { says: 'success', status: 0 }, buildBinds: readonly string[] = []): void {
+function uploadFixture(fixture: string, uploadRuns: readonly UploadRun[] | undefined, { validation = { says: 'success', status: 0 }, buildBinds = [], promote = false }: {
+  readonly validation?: UploadRun; readonly buildBinds?: readonly string[]; readonly promote?: boolean;
+} = {}): void {
   if (uploadRuns === undefined) return;
   const build = join(fixture, 'packages', 'cf-backend', 'dist');
   const downloads = join(build, 'client', 'downloads');
@@ -370,7 +391,7 @@ function uploadFixture(fixture: string, uploadRuns: readonly UploadRun[] | undef
   };
 
   writeFileSync(join(build, 'kinu', 'wrangler.json'), JSON.stringify({
-    targetEnvironment: 'staging', name: 'kinu-staging', vars: { CLI_PUBLIC_ORIGIN: 'https://fixture.invalid', NIMBUS_RUNTIME_CATALOG_SHA256: FIXTURE_CATALOG },
+    targetEnvironment: promote ? 'production' : 'staging', name: promote ? 'kinu' : 'kinu-staging', vars: { CLI_PUBLIC_ORIGIN: 'https://fixture.invalid', NIMBUS_RUNTIME_CATALOG_SHA256: FIXTURE_CATALOG },
     r2_buckets: [
       { binding: 'RELEASES_BUCKET', bucket_name: 'fixture-releases' }, { binding: 'BACKUP_BUCKET', bucket_name: 'fixture-backups' },
       { binding: 'NIMBUS_RUNTIME_CACHE', bucket_name: 'fixture-runtime-cache' },
@@ -416,6 +437,7 @@ async function runDeploy({
   retires = false,
   telemetryRed = false,
   overlap = false,
+  externalOnly,
   pendingReset = "none",
   ambientRecord = "",
   account,
@@ -449,7 +471,7 @@ async function runDeploy({
 
   if (existsSync(uploadHelper)) writeFileSync(join(fixture, 'scripts', 'deploy-upload.sh'), readFileSync(uploadHelper));
 
-  uploadFixture(fixture, uploadRuns, validation, buildBinds);
+  uploadFixture(fixture, uploadRuns, { validation, buildBinds, promote: option === "--promote" });
 
   executable(join(fixture, "node_modules", ".bin", "bun"), commandStub("bun"));
   executable(join(fixture, "bash"), commandStub("bash"));
@@ -533,6 +555,7 @@ exit 87
       KINU_RETIRES: flag(retires),
       KINU_TELEMETRY_RED: flag(telemetryRed),
       KINU_OVERLAP: flag(overlap),
+      KINU_EXTERNAL_ONLY: flag(externalOnly === true),
       XDG_RUNTIME_DIR: fixture,
     }),
   });
@@ -703,6 +726,23 @@ describe("deploy gate", () => {
       source: false,
     });
     expect(run.infraEnvironment).toBe("production");
+  });
+
+  // Production 78daea8d6 and 36673551b (2026-10-24): promotions red only on a provider's refusal served the build, and
+  // the history never took them, so production's rollback had no target past its reset. Step 6's wiring, for a promotion
+  // red after its publish (here the fixture's smoke): the history and the verdict follow the report's own reading of its
+  // reds (`deploy-report.ts externals`, externalOnlyEntries in deploy-report.test.ts).
+  test("a promotion whose report reads every red as a provider's refusal enters production's history and ends green; another does neither", async () => {
+    const promote = (externalOnly: boolean) => runDeploy({ option: "--promote", uploadRuns: [{ says: 'success', status: 0 }], externalOnly });
+
+    const [external, real] = await Promise.all([promote(true), promote(false)]);
+    const recorded = (run: Awaited<ReturnType<typeof promote>>) => run.events.some((event) => event.startsWith("bun scripts/promote.ts promoted"));
+    const deployed = (run: Awaited<ReturnType<typeof promote>>) => run.events.some((event) => event.startsWith("MUTATE npx wrangler deploy"));
+
+    expect({
+      external: { status: external.status, deployed: deployed(external), recorded: recorded(external) },
+      real: { status: real.status, deployed: deployed(real), recorded: recorded(real) },
+    }).toEqual({ external: { status: 0, deployed: true, recorded: true }, real: { status: 1, deployed: true, recorded: false } });
   });
 
   test("a promotion of a build staging never verified builds nothing", async () => {

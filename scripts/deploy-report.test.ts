@@ -5,7 +5,7 @@ import * as v from 'valibot';
 import { childEnv, runToExit, scratchDir } from '@kinu.run/test-utils';
 import { measurePromptUsage, type Assertion } from '../evals/src/results';
 import {
-  externalCause, externalOnly, flakyRows, markInstant, previousSummary, recordMarkAt, recordRed, recordRunner, renderReport, type ReportEntry, type ReportSummary,
+  externalCause, externalOnly, externalOnlyEntries, flakyRows, markInstant, previousSummary, recordMarkAt, recordRed, recordRunner, renderReport, type ReportEntry, type ReportSummary,
 } from './deploy-report';
 
 const META = { environment: 'staging', mode: 'deploy', sha: 'bbbbbbbbbbbbbbbb', startedAt: '2026-09-30T20:00:00.000Z' };
@@ -331,5 +331,24 @@ describe('the reds a deploy may run again once', () => {
 
     expect([flakyRows([verdict, run('post-publish', 'bash scripts/product-flows-tier.sh --flow=panel')]), flakyRows([provision]), flakyRows([])])
       .toEqual([{ held: ['deploy: the verdict'] }, { held: ['provision: credential-checkpoint'] }, { held: [] }]);
+  });
+});
+
+// Staging 9334c6bb9, 2026-10-24: its two product rows passed on their one rerun and first-run's credit failures stayed,
+// so the rerun exited red and held the build; production's promotions of 78daea8d6 and 36673551b, red only on those
+// refusals, never reached its history, and no rollback had a target.
+describe('a report whose reds, as they stand, are every one a provider\'s refusal', () => {
+  const credits = red('post-publish', 'bun run gate:first-run', `${CREDITS}, in 3 failed test(s)`);
+
+  test('a rerun whose flake passed and whose credit failures remain is external alone; one with a real red is held', () => {
+    expect({
+      flakePassed: externalOnlyEntries([credits]),
+      flakeStayed: externalOnlyEntries([credits, red('post-publish', 'bash scripts/product-flows-tier.sh --flow=panel')]),
+      allPassed: externalOnlyEntries([]),
+    }).toEqual({
+      flakePassed: { promote: true, listed: `post-publish: bun run gate:first-run: ${CREDITS}, in 3 failed test(s)` },
+      flakeStayed: { promote: false, held: ['post-publish: bash scripts/product-flows-tier.sh --flow=panel'] },
+      allPassed: { promote: false, held: [] },
+    });
   });
 });
