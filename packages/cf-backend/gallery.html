@@ -8,23 +8,15 @@
     <link rel="icon" href="/assets/kinu-icon.svg" />
     <link rel="preload" href="/assets/fonts/inter-latin-opsz.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="/assets/fonts/fragmentmono-latin.woff2" as="font" type="font/woff2" crossorigin />
-    <!-- Same pre-paint resolution as index.html. The browser gates drive the
-         mode through `prefers-color-scheme`, so it has to be read here. The
-         gallery stands in for the server, which names an account's theme on
-         the root: `?look=warm` names it here. -->
+    <!-- The mode is painted by core's MODE_BOOT, which vite-theme.ts injects into every page, this one too. The
+         gallery stands in for the server, which names an account's theme on the root: `?look=warm` names it here. -->
     <script>
       (() => {
-        const stored = localStorage.getItem("theme");
-        const mode = stored === "light" || stored === "dark"
-          ? stored
-          : (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
         const look = new URLSearchParams(location.search).get("look");
         // `&background=quiet|none`: the new-workspace page's field under review (AppBackground.tsx).
         const background = new URLSearchParams(location.search).get("background");
-        document.documentElement.setAttribute("data-mode", mode);
         if (look !== null) document.documentElement.setAttribute("data-theme", look);
         if (background !== null) document.documentElement.setAttribute("data-background", background);
-        document.documentElement.style.colorScheme = mode;
       })();
     </script>
   </head>

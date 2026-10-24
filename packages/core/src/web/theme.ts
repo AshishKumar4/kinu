@@ -3,10 +3,12 @@
  * pages alike. The app's stylesheet takes `THEME_CSS` through `virtual:kinu-theme.css` (cf-backend/vite-theme.ts);
  * public and slate pages inline it. Graphite is the default and what a signed-out page wears; an account may choose
  * Warm, which the server names on `<html data-theme>` before the page paints. The mode is the device's own choice, on
- * `data-mode`.
+ * `data-mode`, by the one rule in `utils/color-mode.ts`.
  */
 
-export type Mode = 'dark' | 'light';
+import type { Mode } from '../utils/color-mode';
+
+export type { Mode };
 
 export const THEME_NAMES = ['graphite', 'warm'] as const;
 

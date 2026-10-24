@@ -10,7 +10,7 @@ import { PaletteIcon, XIcon } from "@phosphor-icons/react";
 import { Effect } from "effect";
 import * as v from "valibot";
 import { detach } from "@kinu.run/core/obs";
-import { APP_ROUTES, DEFAULT_THEME, THEME_NAMES, type ThemeName } from "@kinu.run/core";
+import { APP_ROUTES, DEFAULT_THEME, modeFor, PREFERS_LIGHT, THEME_NAMES, type ThemeName } from "@kinu.run/core";
 import { setMode, wearTheme, type ThemeMode } from "@/hooks/use-theme";
 import { CHAT_FACES, CHAT_FACE_NAMES, FACE_SCOPES, installChatFaces, type ChatFaceName, type FaceScope } from "@/gallery-chat-fonts";
 import { DEPLOY_FIXTURE_STATES, deployStateHref } from "@/gallery-deploy-fixture";
@@ -39,7 +39,7 @@ function oneOf<T extends string>(said: string | null, options: readonly T[], fal
 }
 
 function preferredMode(): ThemeMode {
-  return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+  return modeFor(null, window.matchMedia(PREFERS_LIGHT).matches);
 }
 
 function readDesign(): Design {

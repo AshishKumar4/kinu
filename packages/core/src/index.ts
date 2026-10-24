@@ -2352,6 +2352,8 @@ export {
   mark, markDocument, publicFooter, publicPage,
 } from './http/public-shell';
 
+export { MODE_BOOT, MODE_KEY, modeFor, PREFERS_LIGHT } from './utils/color-mode';
+
 export {
   accountTheme, avatarGround, DEFAULT_THEME, ILLUSTRATION, REDACTION_FILL, terminalPalette, THEME_CONFIG_KEY, THEME_CSS, THEME_NAMES, THEME_TOKENS, themeNamed,
   type ColourToken, type Mode, type TerminalPalette, type ThemeName,

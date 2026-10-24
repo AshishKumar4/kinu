@@ -12,6 +12,7 @@ import { JsonValueSchema, safeJsonParse, type PartRunAnswer } from "@kinu.run/co
 import { detach } from "@kinu.run/core/obs";
 import { PartOutsideItsSlate, PartView, SealedContent, shownMarkup } from "@/components/sharing/PartView";
 import { connectPartBridge, type PartBridge } from "@/lib/part-bridge";
+import { holdMode } from "@/hooks/use-theme";
 
 /**
  * A part's frame sits inside the slate's own page: it shows that page through it, not the app's background, and takes
@@ -24,10 +25,7 @@ function useSlateScheme(scheme: string | null): void {
     root.style.background = "transparent";
     document.body.style.background = "transparent";
 
-    if (scheme !== "light" && scheme !== "dark") return;
-
-    root.setAttribute("data-mode", scheme);
-    root.style.colorScheme = scheme;
+    if (scheme === "light" || scheme === "dark") holdMode(scheme);
   }, [scheme]);
 }
 

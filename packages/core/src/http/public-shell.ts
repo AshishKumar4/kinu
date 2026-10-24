@@ -1,19 +1,8 @@
 /** The HTML shell every signed-out page is built from, in the app's own palette (`web/theme.ts`). */
 
 import { escapeHtml } from './http';
+import { MODE_BOOT } from '../utils/color-mode';
 import { DEFAULT_THEME, THEME_CSS, THEME_TOKENS } from '../web/theme';
-
-/** Runs before first paint, so it ships as text; the test evaluates this exact text. Matches `index.html`'s bootstrap. */
-const THEME_BOOT = `(() => {
-  var root = document.documentElement;
-  var stored = null;
-  try { stored = localStorage.getItem('theme'); } catch (e) {}
-  var mode = stored === 'light' || stored === 'dark'
-    ? stored
-    : (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
-  root.setAttribute('data-mode', mode);
-  root.style.colorScheme = mode;
-})();`;
 
 /**
  * The mark is the Fold: a rounded square of silk cut by one soft wave. Outlines on a 24-unit grid, filled, so a page
@@ -263,7 +252,7 @@ export function publicPage(options: PublicPageOptions): string {
 ${description ? `<meta name="description" content="${escapeHtml(description)}" />\n` : ''}<link rel="icon" type="image/svg+xml" href="/assets/kinu-icon.svg" />
 <link rel="preload" href="${UI_FONT_PATH}" as="font" type="font/woff2" crossorigin />
 <link rel="preload" href="${MONO_FONT_PATH}" as="font" type="font/woff2" crossorigin />
-<script>${THEME_BOOT}</script>
+<script>${MODE_BOOT}</script>
 <style>${THEME_CSS}${SHELL_CSS}${options.styles ?? ''}</style>
 </head>
 <body>
