@@ -80,6 +80,13 @@ export function Panel<Value>(
           {answer.reason} <a className="underline" href="/login">Sign in again</a>.
         </Notice>
       );
+    case 'access-expired':
+      // A full load of this page, which Access answers with its own sign-in and then this page again.
+      return (
+        <Notice tone="warn" icon={<WarningIcon size={14} />}>
+          <a className="underline" href={location.pathname + location.search} data-access-sign-in>{answer.reason}</a>.
+        </Notice>
+      );
     case 'unconfigured':
       return <Notice tone="muted" icon={<WarningIcon size={14} />}>{answer.reason}</Notice>;
     case 'failed':
