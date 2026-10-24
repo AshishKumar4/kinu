@@ -7,7 +7,7 @@ import { ACCENT, DIM, OK, WARN } from '../display';
 import { holdsAccounts, readProviderConnections } from './provider-connect';
 import { canonicalProviderName, connectOptions, connectProviderOnConsole } from './setup';
 import * as v from 'valibot';
-import { MAIN_ACCOUNT, accountCredentialKey, catalogCredKey, isAccountName } from '@kinu.run/core';
+import { CLAUDE_CRED_KEY, MAIN_ACCOUNT, accountCredentialKey, catalogCredKey, isAccountName } from '@kinu.run/core';
 import { KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
 import { signOutChatGptLogin } from '@kinu.run/cli-backend';
 
@@ -162,16 +162,16 @@ function disconnectAccount(provider: ProviderName, account: string, revoke: bool
     }
 
     if (removed) console.log(`${OK('✓')} Removed the ${ACCENT(`${provider} ${account}`)} account from this machine.`);
-    const cloud = provider === 'chatgpt' || provider === 'claude' ? null : resolveCloudSession();
+    // A ChatGPT sign-in made here is this machine's alone; Claude's may be the account's (`connect claude --cloud`).
+    const credKey = provider === 'chatgpt' ? null : accountCredentialKey(provider === 'claude' ? CLAUDE_CRED_KEY : API_KEY_PROVIDERS[provider], account);
+    const cloud = credKey === null ? null : resolveCloudSession();
 
-    if (cloud && provider !== 'chatgpt' && provider !== 'claude') {
-      const credKey = accountCredentialKey(API_KEY_PROVIDERS[provider], account);
+    const held = cloud !== null && credKey !== null && (yield* Effect.promise(async () => listCloudCredentials(cloud.origin, cloud.token))).some((c) => c.key === credKey);
 
-      if ((yield* Effect.promise(async () => listCloudCredentials(cloud.origin, cloud.token))).some((c) => c.key === credKey)) {
-        yield* Effect.promise(async () => deleteCloudCredential(cloud.origin, cloud.token, credKey));
-        console.log(`${OK('✓')} Removed the ${ACCENT(`${provider} ${account}`)} account from your Kinu account.`);
-        removed = true;
-      }
+    if (held) {
+      yield* Effect.promise(async () => deleteCloudCredential(cloud.origin, cloud.token, credKey));
+      console.log(`${OK('✓')} Removed the ${ACCENT(`${provider} ${account}`)} account from your Kinu account.`);
+      removed = true;
     }
 
     if (!removed) console.log(`${WARN('!')} No ${provider} account named ${account} was connected. Nothing to remove.`);
@@ -201,6 +201,8 @@ async function signOutChatGpt(account: string, revoke: boolean): Promise<boolean
 const LOCAL_CREDENTIALS = new Map<ProviderName, LocalCredential>([
   ['claude', {
     clear: (p) => deleteMain(p, 'claude'),
+    // Where `connect claude --cloud` keeps it.
+    credKey: CLAUDE_CRED_KEY,
     envVars: [],
   }],
   ['openai', {

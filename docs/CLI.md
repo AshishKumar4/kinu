@@ -113,6 +113,7 @@ Also: `kinu providers`
 | `--origin <url>` | Kinu app origin |
 | `--model <id>` | Default model for the selected provider |
 | `--local` | Keep the provider key on this machine instead of your Kinu account |
+| `--cloud` | With connect claude: keep the sign-in in your Kinu account, for its cloud workspaces, instead of this machine |
 | `--revoke` | With disconnect chatgpt: also revoke the sign-in at OpenAI, not only remove Kinu's copy |
 
 ```bash

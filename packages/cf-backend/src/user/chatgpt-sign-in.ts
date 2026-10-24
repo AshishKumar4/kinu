@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 import {
-  accountCredentialKey, DeviceChatGptStatusSchema, CHATGPT_CRED_KEY, CHATGPT_PASTE_REDIRECT, MAIN_ACCOUNT, ChatGptPasteSignInSchema, ChatGptRegistrationSchema, chatgptHostId, chatgptRegistrationOf, finishChatGptPasteSignIn, startChatGptPasteSignIn, type ChatGptPasteOutcome, type DeviceChatGptStatus, type DisconnectOutcome, nanoid, type UserCaller, DEVICE_METHOD,
+  accountCredentialKey, accountOf, DeviceChatGptStatusSchema, CHATGPT_CRED_KEY, CHATGPT_PASTE_REDIRECT, MAIN_ACCOUNT, ChatGptPasteSignInSchema, ChatGptRegistrationSchema, chatgptHostId, chatgptRegistrationOf, finishChatGptPasteSignIn, startChatGptPasteSignIn, type ChatGptPasteOutcome, type DeviceChatGptStatus, type DisconnectOutcome, nanoid, type UserCaller, DEVICE_METHOD,
 } from '@kinu.run/core';
 import { attempt, attemptInItsWords, KinuError, logged, renderThrownChain, settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -18,6 +18,12 @@ const CHATGPT_PASTE_SIGN_IN_KEY = 'chatgpt.paste-sign-in';
 const CHATGPT_REGISTRATION_KEY = 'chatgpt.registration';
 
 const ChatGptKnownRegistrationSchema = v.object({ registration: ChatGptRegistrationSchema, planDeclined: v.boolean() });
+
+/** Where the registration of the login `key` seals is kept: each account is its own ChatGPT person, with its own issued
+ *  client; the main one's is where it always was. */
+function registrationKeyOf(key: string): string {
+  return key === CHATGPT_CRED_KEY ? CHATGPT_REGISTRATION_KEY : `${CHATGPT_REGISTRATION_KEY}@${accountOf(key)}`;
+}
 
 /** The paste-back in progress, and the credential it seals: `chatgpt.oauth@<account>`, the main one the bare key. */
 const ChatGptPasteHeldSchema = v.object({ ...ChatGptPasteSignInSchema.entries, key: v.string(), revision: v.number() });
@@ -174,7 +180,7 @@ export class UserChatGptSignIn {
     await this.host.requireTier(caller, 'subscription_auth');
     // Refuses a name that is not an account's before a sign-in is held for it.
     const key = accountCredentialKey(CHATGPT_CRED_KEY, account);
-    const known = v.safeParse(ChatGptKnownRegistrationSchema, this.host.ctx.storage.kv.get(CHATGPT_REGISTRATION_KEY));
+    const known = v.safeParse(ChatGptKnownRegistrationSchema, this.host.ctx.storage.kv.get(registrationKeyOf(key)));
 
     const { url, held } = await startChatGptPasteSignIn({
       hostId: await chatgptHostId((this.host.env.CREDENTIAL_ENCRYPTION_KEY ?? '').trim()),
@@ -223,7 +229,7 @@ export class UserChatGptSignIn {
         return yield* Effect.fail(superseded);
       }
 
-      this.host.ctx.storage.kv.put(CHATGPT_REGISTRATION_KEY, { registration, planDeclined: finished.outcome === 'plan_declined' });
+      this.host.ctx.storage.kv.put(registrationKeyOf(held.key), { registration, planDeclined: finished.outcome === 'plan_declined' });
       this.host.ctx.storage.kv.delete(CHATGPT_PASTE_SIGN_IN_KEY);
 
       return { outcome: finished.outcome, email: registration.email };

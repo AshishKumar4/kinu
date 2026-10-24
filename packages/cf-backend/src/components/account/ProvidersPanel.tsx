@@ -4,7 +4,7 @@
  */
 import { Effect } from 'effect';
 import { Button } from "@/components/ui/Button";
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { CheckIcon } from "@phosphor-icons/react";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
 import {
@@ -214,17 +214,22 @@ function AnotherAccount({ name, baseKey, keys, children }: {
   const [asking, setAsking] = useState(false);
   const [draft, setDraft] = useState('');
   const [account, setAccount] = useState<string | null>(null);
+  // Each sign-in is its own attempt: one cancelled while it finished answers into the attempt it was, not a newer one.
+  const attempt = useRef(0);
   const named = draft.trim().toLowerCase();
   const problem = accountNameProblem({ name, baseKey, keys, named });
 
-  const done = () => { setAsking(false); setDraft(''); setAccount(null); };
+  const reset = () => { attempt.current += 1; setAsking(false); setDraft(''); setAccount(null); };
 
   if (account !== null) {
+    const mine = attempt.current;
+    const done = () => { if (attempt.current === mine) reset(); };
+
     return (
       <div className="space-y-3" data-another-account={account}>
         <p className="t-meta p-text-2">Signing in a second {name} account, named <b className="p-text">{account}</b>.</p>
         {children(account, done)}
-        <Button variant="ghost" size="sm" onClick={done}>Cancel</Button>
+        <Button variant="ghost" size="sm" onClick={reset}>Cancel</Button>
       </div>
     );
   }
@@ -235,8 +240,8 @@ function AnotherAccount({ name, baseKey, keys, children }: {
     <Field label={`Name the second ${name} account`}>
       <div className="flex flex-wrap items-center gap-2" data-another-account="">
         <TextInput value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="work" aria-label={`${name} account name`} />
-        <Button variant="primary" size="sm" disabled={named === '' || problem !== null} onClick={() => setAccount(named)}>Continue</Button>
-        <Button variant="ghost" size="sm" onClick={done}>Cancel</Button>
+        <Button variant="primary" size="sm" disabled={named === '' || problem !== null} onClick={() => { attempt.current += 1; setAccount(named); }}>Continue</Button>
+        <Button variant="ghost" size="sm" onClick={reset}>Cancel</Button>
       </div>
       {problem !== null && <p role="alert" className="t-meta p-danger">{problem}</p>}
     </Field>
