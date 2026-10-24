@@ -809,7 +809,8 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
 
         if (read._tag === 'Success') {
           const port = held.get(entry.name);
-          const summary: SlateSummary = { id: entry.name, title: slateTitle(read.value, entry.name), ...(port !== undefined && { port }) };
+          const page = read.value.slate.page;
+          const summary: SlateSummary = { id: entry.name, title: slateTitle(read.value, entry.name), ...(port !== undefined && { port }), ...(page !== undefined && { page }) };
 
           slates.push(summary);
         } else {
@@ -822,7 +823,8 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
   }
 
   /** An answer's page kept as a slate of the workspace's own: its HTML as the slate's page, its server (when it has one)
-   *  as the slate's class, under the page's title. Its data is in `workspace.db`, which the slate reads as the page did. */
+   *  as the slate's class, under the page's title. Its data is in `workspace.db`, which the slate reads as the page did.
+   *  A page saved before is the slate it became: saving it again answers that slate, and writes no copy. */
   savePage(caller: SlateCaller, page: string): Promise<SlateCallResult> {
     return settle(Effect.gen({ self: this }, function* () {
       // The owner's choice to keep it, as publishing is; an agent writes a slate's files itself.
@@ -832,12 +834,15 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
       const source = yield* Effect.promise(async () => this.ports.resolve(caller.cred, page));
 
       if (source.kind !== 'message') return yield* new KinuError('bad_input', `${page} names no answer's page`);
+      const kept = (yield* Effect.promise(async () => this.list(caller))).slates.find((slate) => slate.page === page);
+
+      if (kept !== undefined) return answered({ value: { id: kept.id, title: kept.title } });
       const files = (yield* Effect.promise(async () => this.ports.session())).vfs.as(caller.cred);
       const title = slateTitle(source.project, page);
       const id = slateIdFor(title, (taken) => files.exists(`${SLATES_ROOT}/${taken}`));
 
       files.mkdir(`${SLATES_ROOT}/${id}`, { recursive: true });
-      files.writeFile(`${SLATES_ROOT}/${id}/package.json`, `${JSON.stringify({ browser: 'index.html', ...(source.server !== null && { main: 'server.js' }), slate: { title } }, null, 2)}\n`);
+      files.writeFile(`${SLATES_ROOT}/${id}/package.json`, `${JSON.stringify({ browser: 'index.html', ...(source.server !== null && { main: 'server.js' }), slate: { title, page } }, null, 2)}\n`);
       files.writeFile(`${SLATES_ROOT}/${id}/index.html`, source.html);
 
       if (source.server !== null) files.writeFile(`${SLATES_ROOT}/${id}/server.js`, source.server);

@@ -18,6 +18,8 @@ const SlateMetadata = v.strictObject({
   runtime: v.optional(v.literal('worker', NODE_ELSEWHERE), 'worker'),
   port: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(65535))),
   title: v.optional(Name),
+  /** The answer's page this slate was saved from (`savePage`): saving that page again opens this slate, not a copy. */
+  page: v.optional(Name),
   /** Each function's input contract: what its one argument may be when it runs with someone's lend (`codec.ts`). */
   functions: v.optional(v.record(Name, v.strictObject({ input: CodecSchema }))),
   /** Each personal part: computed confined, as each viewer, and drawn by Kinu (`personal-parts.ts`). */

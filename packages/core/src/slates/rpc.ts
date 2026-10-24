@@ -155,6 +155,8 @@ export interface SlateSummary {
   readonly title: string;
   /** The port its application holds, so the preview listing does not show the slate a second time. */
   readonly port?: number;
+  /** The answer's page it was saved from, which the chat then draws as saved. */
+  readonly page?: string;
 }
 
 export interface SlateProblem extends Refusal {
