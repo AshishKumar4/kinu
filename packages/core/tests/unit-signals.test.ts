@@ -2,14 +2,18 @@
 // queues it as a turn of its own (design v2 §1). What a turn leaves unread re-delivers as a turn of its own.
 import { describe, test, expect } from 'bun:test';
 import type { ModelMessage } from 'ai';
-import * as v from 'valibot';
 import { Inbox, type LandedEventRow } from '../src/orchestrator/inbox';
 import { DeliveryInbox, deliveredSignal } from '../src/subagents/deliveries';
 import type { BackendHost, BroadcastEvent, ProgrammaticTurn } from '../src/types/backend-host';
 import { USER_MESSAGE_SIGNAL_KIND, type AgentSignal, type SignalCardEvent } from '../src/types/signals';
-import { SignalCardEventSchema } from '../src/read-models/background-event';
+import { parseSignalCardEvent } from '../src/read-models/background-event';
 import { WORKSPACE_CREATED_EVENT, workspaceGenesisSignal } from '../src/identity/soul';
 import { present } from '@kinu.run/test-utils';
+
+/** A broadcast that keeps each card it is sent, as the chat reads it; a person's words move no card. */
+const recordCards = (cards: SignalCardEvent[]) => (event: BroadcastEvent): void => {
+  if (event.type === 'signal_card') cards.push(present(parseSignalCardEvent({ value: event }), 'a card the inbox broadcast'));
+};
 
 const user = (text: string): ModelMessage => ({ role: 'user', content: text });
 
@@ -31,8 +35,7 @@ function setup(opts: {
   const held: Array<() => void> = [];
 
   const host: BackendHost = {
-    // A person's words move no card: only cards are recorded.
-    broadcast: (event: BroadcastEvent) => { if (event.type === 'signal_card') cards.push(v.parse(SignalCardEventSchema, event)); },
+    broadcast: recordCards(cards),
     enqueueTurn: async (turn) => {
       queued.push(turn);
 
@@ -351,7 +354,7 @@ describe('Inbox — what the agent has seen', () => {
 
     const sender = new DeliveryInbox({
       deliver: async (delivery) => (delivery.input.kind === 'turn' && inbox.landMidTurn(deliveredSignal(delivery.id, delivery.input)) ? 'taken' : null),
-      broadcast: (event) => { if (event.type === 'signal_card') cards.push(v.parse(SignalCardEventSchema, event)); },
+      broadcast: recordCards(cards),
     });
 
     inbox.beginTurn(undefined);

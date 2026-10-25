@@ -12,10 +12,10 @@ import type { UserSteer, UserWords } from '../src/orchestrator/inbox';
 import type {
   BackendHost, BroadcastEvent, ProgrammaticTurn, PromptFile,
 } from '../src/types/backend-host';
-import type { AgentSignal, UserSignalIdentity } from '../src/types/signals';
+import type { AgentSignal, SignalCardEvent, UserSignalIdentity } from '../src/types/signals';
 // The production constant, so a rename breaks the import.
 import { USER_MESSAGE_SIGNAL_KIND as USER_MESSAGE_KIND } from '../src/types/signals';
-import { SignalCardEventSchema } from '../src/read-models/background-event';
+import { parseSignalCardEvent } from '../src/read-models/background-event';
 import type { WorkMode } from '../src/types/turn';
 
 /** A prepareStep context: what the step pipeline hands an extension. */
@@ -30,7 +30,7 @@ const HISTORY: ModelMessage[] = [
 
 /** Every wire event the seam can emit here: signal cards and steer statuses. */
 const BroadcastSchema = v.union([
-  SignalCardEventSchema,
+  v.custom<SignalCardEvent>((value) => parseSignalCardEvent({ value }) !== null),
   v.object({
     type: v.literal('steer_status'),
     status: v.picklist(['queued', 'landed', 'returned', 'turn']),
@@ -433,7 +433,7 @@ describe('Inbox — the user kind beside the event kind', () => {
         metadata: { kinuAuthor: 'harness', kinuEvent: 'event_drain' }, text: 'an event arrived',
       },
       // Cards move before steers announce: 'shown' first, then 'landed'.
-      { type: 'signal_card', id: expect.any(String), state: 'shown' },
+      { type: 'signal_card', id: expect.any(String), state: 'shown', atStep: 0 },
       { type: 'steer_status', status: 'landed', steerId: 's1', text: 'the user said this', atStep: 0 },
     ]);
   });

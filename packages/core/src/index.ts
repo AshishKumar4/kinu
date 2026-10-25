@@ -2389,7 +2389,7 @@ export {
 export {
   classifyProgrammaticTurn, systemEventTurn, delegatedTaskMetadata, messageSignalId, isSteeredMessage, endedMidWork, TURN_END_METADATA_KEY, turnFailure, TURN_FAILURE_METADATA_KEY, slatesChanged, SLATES_CHANGED_METADATA_KEY, slatesToPreview, applySignalCard,
   splicesSeenOn, SIGNALS_SEEN_METADATA_KEY, type SeenSplice,
-  parseSignalCardEvent, SignalCardEventSchema, parseDrainedEvents, eventVariantLabel, eventSourceLabel,
+  parseSignalCardEvent, parseDrainedEvents, eventVariantLabel, eventSourceLabel,
   metadataBroadcastEvent,
   type ClassifiedProgrammaticTurn, type SignalCard, type DrainedEvent,
 } from './read-models/background-event';

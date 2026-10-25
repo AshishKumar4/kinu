@@ -52,7 +52,7 @@ function cardField(value: string | undefined, fallback: string): string {
   return value === undefined || value === '' ? fallback : value;
 }
 
-export const SignalCardEventSchema = v.variant('state', [
+const SignalCardEventSchema = v.variant('state', [
   v.object({ type: v.literal('signal_card'), id: v.string(), state: v.literal('shown'), atStep: v.optional(v.number()) }),
   v.object({ type: v.literal('signal_card'), id: v.string(), state: v.picklist(['seen', 'undelivered']) }),
   v.object({

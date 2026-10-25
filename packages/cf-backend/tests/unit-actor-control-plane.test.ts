@@ -6,7 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import type { UIMessage } from 'ai';
-import { actorConnectionTag, CHAT_REWOUND_EVENT, classifyProgrammaticTurn, TURN_AUTHOR_METADATA_KEY } from '@kinu.run/core';
+import { actorConnectionTag, CHAT_REWOUND_EVENT, classifyProgrammaticTurn, RECORDED_AT_METADATA_KEY, TURN_AUTHOR_METADATA_KEY } from '@kinu.run/core';
 import {
   hostedSubagentHarness, orchestratorHarness, chatSessionTurns, storedChat, type HarnessOrchestratorAgent,
   type RecordedUserPlaneCalls, workspaceMainActor,
@@ -65,7 +65,7 @@ describe('the workspace root answers the actor control plane', () => {
     const opened = (await storedChat(harness)).find((message) => message.role === 'user');
     expect(opened?.parts).toEqual([{ type: 'text', text: 'use the other parser' }]);
     expect(v.parse(v.looseObject({ metadata: v.optional(v.unknown()) }), opened).metadata)
-      .toEqual({ [TURN_AUTHOR_METADATA_KEY]: 'operator', kinuMode: 'build' });
+      .toEqual({ [TURN_AUTHOR_METADATA_KEY]: 'operator', kinuMode: 'build', [RECORDED_AT_METADATA_KEY]: expect.any(Number) });
   });
 
   test('cancelling with nothing running is a settled no-op, not a failure', async () => {
