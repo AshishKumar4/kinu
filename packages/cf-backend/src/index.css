@@ -2454,6 +2454,12 @@ tr[data-opens]:hover { background: var(--c-hover); }
 }
 .p-icon-control-inline { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; padding: 4px; border-radius: var(--r-inner); }
 .p-icon-control:is([aria-current="page"], [aria-pressed="true"]) { color: var(--c-text); }
+/* Icon sizes by place (docs/DESIGN-SYSTEM.md §1.4.1): a Phosphor icon (its 256 viewBox) that is a control's own, or sits
+   in a text role, takes that place's size whatever its call site passed. A caret or a chip's × sits in a wrapper and
+   keeps its own. */
+:is(.p-button-sm, .p-icon-control-tab, .p-icon-control-inline, .p-icon-control-pill, .p-nav-row-sm, .t-meta, .t-status) > svg[viewBox="0 0 256 256"] { width: 14px; height: 14px; }
+:is(.p-button-md, .p-button-lg, .p-icon-control-bar, .p-nav-row-md, .p-nav-row-icon, .p-nav-row-icon-sm, .p-rail-item, .p-tabs-tab, .p-row-action, .p-tool, .p-choice-icon, .t-body, .t-item) > svg[viewBox="0 0 256 256"] { width: 16px; height: 16px; }
+:is(.p-icon-control-composer, .p-composer-send) > svg[viewBox="0 0 256 256"] { width: 18px; height: 18px; }
 .p-bar-trailing { display: flex; flex-shrink: 0; align-items: center; gap: 2px; padding: 0 10px 0 6px; }
 .p-bar-outline { position: absolute; top: 8px; bottom: 0; left: 0; pointer-events: none; }
 .p-bar-outline > span { position: absolute; bottom: 0; border: 0 solid var(--bar-line); }

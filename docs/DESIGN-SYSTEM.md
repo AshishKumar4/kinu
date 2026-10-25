@@ -234,6 +234,23 @@ read one definition: someone not yet in the app reads at the public pages' size,
   (`under-icon`, `file-meta`, `mark-row-inset`), and a few heights and widths with their reason (`welcome-step`,
   `questions`, `preview-pane`). A new one goes there, never into a class.
 
+### 1.4.1 Icon sizes by place
+
+An icon takes the size of the place it sits in, not the size its call site passed (the owner, 2026-10-25: sizes
+differed across the mail compose modal, the sidebar and the inspector). `index.css` applies it to every Phosphor icon
+that is a control's own or sits in a text role, so a call site's `size` only matters where no place below applies.
+
+| place | px |
+|---|---|
+| a small control: `Button size="sm"`, an IconControl in a tab, inline or on a pill, a small nav row (the Drive tree); beside `t-meta` or `t-status` text | 14 |
+| a regular control: `Button size="md"` or `"lg"`, an IconControl in the bar, a nav row, a rail item, a tab, a row action, an inspector tool, a choice's icon; beside `t-body` or `t-item` text | 16 |
+| the composer's controls (32 circles) | 18 |
+| a page header's icon | 20 |
+| an empty state's icon | 24 |
+
+A disclosure caret and a chip's remove × are glyphs, not icons: they stay 10 bold beside their text, and no rule above
+reaches them (they sit inside a wrapper, never as a control's own icon).
+
 ### 1.5 Radii (`RADII` in `theme.ts`)
 
 | token | px | for |

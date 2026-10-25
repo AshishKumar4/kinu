@@ -137,7 +137,7 @@ function FailedTurnRow({ message, live, onRetry }: { message: UIMessage; live: b
         <InlineAction quiet className="shrink-0" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? "Hide" : "Details"}</InlineAction>
         {onRetry !== undefined && (
           <InlineAction quiet onClick={onRetry} className="inline-flex shrink-0 items-center gap-1">
-            <ArrowClockwiseIcon size={11} aria-hidden />Retry
+            <ArrowClockwiseIcon size={14} aria-hidden />Retry
           </InlineAction>
         )}
       </div>
@@ -182,23 +182,23 @@ function toolLabel(toolName: string): string {
 }
 
 function toolIcon(toolName: string): ReactNode {
-  if (toolName === "shell") return <TerminalWindowIcon size={15} />;
+  if (toolName === "shell") return <TerminalWindowIcon size={16} />;
 
-  if (toolName === "eval") return <LightningIcon size={15} />;
+  if (toolName === "eval") return <LightningIcon size={16} />;
 
-  if (toolName === "file") return <FileTextIcon size={15} />;
+  if (toolName === "file") return <FileTextIcon size={16} />;
 
-  if (toolName === "agents") return <UsersThreeIcon size={15} />;
+  if (toolName === "agents") return <UsersThreeIcon size={16} />;
 
-  if (toolName === "memory") return <BrainIcon size={15} />;
+  if (toolName === "memory") return <BrainIcon size={16} />;
 
-  if (toolName === "tasks") return <ListChecksIcon size={15} />;
+  if (toolName === "tasks") return <ListChecksIcon size={16} />;
 
-  if (toolName === "web") return <GlobeIcon size={15} />;
+  if (toolName === "web") return <GlobeIcon size={16} />;
 
-  if (toolName === "report") return <ChartLineUpIcon size={15} />;
+  if (toolName === "report") return <ChartLineUpIcon size={16} />;
 
-  return <DotsThreeCircleIcon size={15} />;
+  return <DotsThreeCircleIcon size={16} />;
 }
 
 /** Where a one-question subagent's chat opens, relative to the chat its `agents` call sits in; null draws no link. */
@@ -754,11 +754,11 @@ function MessageFeedback({
     <div className={`flex items-center gap-1 transition-opacity ${current === null ? 'opacity-0 group-hover/msg:opacity-100 focus-within:opacity-100' : ''}`} data-message-feedback>
       <IconControl place="inline" onClick={() => toggle('positive')} disabled={busy} aria-pressed={current === 'positive'}
         title="Mark this response helpful. Feeds evolution scoring." aria-label="Mark this response helpful">
-        <ThumbsUpIcon size={12} weight={current === 'positive' ? 'fill' : 'regular'} />
+        <ThumbsUpIcon size={14} weight={current === 'positive' ? 'fill' : 'regular'} />
       </IconControl>
       <IconControl place="inline" onClick={() => toggle('negative')} disabled={busy} aria-pressed={current === 'negative'}
         title="Mark this response poor. Feeds evolution scoring." aria-label="Mark this response poor">
-        <ThumbsDownIcon size={12} weight={current === 'negative' ? 'fill' : 'regular'} />
+        <ThumbsDownIcon size={14} weight={current === 'negative' ? 'fill' : 'regular'} />
       </IconControl>
       {failed && <span className="t-status p-danger">Could not save. Try again.</span>}
     </div>
