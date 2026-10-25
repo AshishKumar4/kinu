@@ -7,9 +7,8 @@ import { PlugIcon, PlusIcon, TrashIcon, ArrowSquareOutIcon, ArrowClockwiseIcon }
 import type { ConnectEnded, McpTransport } from "@kinu.run/core";
 import { beginConnect, signInMcpServer } from "@/lib/connect-window";
 import { addMcpServer, reconnectSaying, removeMcpServer } from "@/lib/user-api";
-import { McpPresetCards } from "@/components/plugins/McpPresetCards";
-import { GoogleConnectionCard } from "@/components/account/GoogleConnectionCard";
-import { Status } from "@/components/ui/Status";
+import { McpPresetCards, PluginStatusText } from "@/components/plugins/McpPresetCards";
+import { GoogleConnectionRow } from "@/components/plugins/GoogleConnectionRow";
 import { mcpServerStatus } from "@/components/plugins/mcp-status";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -60,7 +59,7 @@ export function McpServersPanel({ mcp }: { mcp: McpServers }) {
     <div className="space-y-4">
       {dialog}
       <div className="space-y-px">
-        <GoogleConnectionCard google={mcp.google} />
+        <GoogleConnectionRow google={mcp.google} />
         <McpPresetCards servers={servers} availability={lastValue(presets.resource) ?? undefined} onChanged={reload} onConnected={connected} />
       </div>
 
@@ -97,7 +96,7 @@ export function McpServersPanel({ mcp }: { mcp: McpServers }) {
               <div key={s.id} className="px-4 py-3" data-mcp-server={s.id} data-mcp-status={s.status}>
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-2">
                   <span className="t-item p-text">{s.name}</span>
-                  <Status tone={mcpServerStatus(s.status).tone}>{mcpServerStatus(s.status).label}</Status>
+                  <PluginStatusText shown={mcpServerStatus(s.status)} />
                   <div className="ml-auto flex items-center gap-2">
                     {s.signIn && (
                       <Button size="sm" icon={<ArrowSquareOutIcon size={14} />} data-mcp-sign-in onClick={() => detach(Effect.promise(async () => {

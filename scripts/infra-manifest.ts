@@ -838,7 +838,7 @@ export const SUPPLY = new Map<string, Supply>([
   ['MCP_GOOGLE_CLIENT_ID', {
     handling: 'out-of-band',
     required: false,
-    absent: 'the Google connection is not offered: its card is not rendered and no agent holds google.*.',
+    absent: 'the Google connection is not offered: its row is not rendered and no agent holds google.*.',
     source: 'https://console.cloud.google.com — OAuth 2.0 client with '
       + '`<origin>/api/user/mcp/callback` among its authorized redirect URIs, and the Gmail, Calendar, Drive, Docs, '
       + 'Sheets, Slides and People APIs enabled; then `wrangler secret put`. See docs/DEPLOYMENT.md.',

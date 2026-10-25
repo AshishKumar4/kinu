@@ -386,13 +386,41 @@ describe('MCP presets', () => {
     });
   });
 
+  // The owner (2026-10-25): the Google connection drew a card of its own above both lists, not a row of them.
+  test('the Google connection is a row: Connected while held, and under Add once disconnected, with why it was not revoked', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'plugins&mcp-preset=connected&google=connected', 'light', 'mobile');
+      const row = '[data-plugin-source="google"]';
+
+      try {
+        await page.waitForSelector(`section[aria-label="Connected"] ${row}[data-plugin-state="Connected"]`);
+        const held = await connectedList(page);
+
+        await pressRowMenu(page, row, '[data-plugin-disconnect]');
+        await page.$$eval('[role="dialog"] button', (buttons) => buttons.find((button) => button.textContent === 'Disconnect and revoke at Google')?.click());
+        await page.waitForSelector(`section[aria-label="Add"] ${row}[data-plugin-state="Not added"] [data-plugin-error]`);
+
+        // Google's own reason, as the disconnect answered it, on the row in its new list.
+        const said = await page.$eval(`${row} [data-plugin-error]`, (node) => node.textContent ?? '');
+
+        expect({ held, said: said.includes('Google did not answer the revocation.'), connected: await connectedList(page) }).toEqual({
+          held: ['Google', 'GitHub', 'Cloudflare', 'Linear', 'Notion'],
+          said: true,
+          connected: ['GitHub', 'Cloudflare', 'Linear', 'Notion'],
+        });
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
   test('the preset row renders in the account modal and on the plugins page at both widths in both themes', async () => {
     await withGallery(async (gallery) => {
       
 
       for (const theme of ['dark', 'light'] as const) {
         for (const viewport of ['desktop', 'mobile'] as const) {
-          const modal = await freshPage(gallery, 'setupmodal&panel=mcp&mcp-preset=connected', theme, viewport);
+          const modal = await freshPage(gallery, 'setupmodal&panel=mcp&mcp-preset=connected&google=connected', theme, viewport);
 
           try {
             await modal.waitForSelector('[role="dialog"]');
@@ -406,10 +434,8 @@ describe('MCP presets', () => {
             expect(text).toContain('Needs sign-in');
             expect(text).toContain('Add custom server');
 
-            // Google is one connection, not a preset: its card offers the one
-            // control that connects it.
-            expect(await modal.$('[data-google-connection="absent"] [data-connect-google]')).not.toBeNull();
-            
+            // Google is one connection, not a preset, drawn as a row like theirs.
+            await modal.waitForSelector('[role="dialog"] [data-plugin-source="google"][data-plugin-state="Connected"]');
           } finally {
             await modal.close();
           }
@@ -428,13 +454,14 @@ describe('MCP presets', () => {
             // preset's add.
             const drawn = await drawnRows(plugins);
 
+            // Google, offered and not held, is the one row under Add.
             expect(drawn.filter((row) => row.preset).map((row) => row.name))
-              .toEqual(['GitHub', 'Cloudflare']);
+              .toEqual(['GitHub', 'Cloudflare', 'Google']);
             // Services only, skills being in the Drive: what the account holds,
             // then what it can add. The failed server is among them, so its line
             // (a failure, where the endpoint used to be) is under the same rule.
             // A server of its own on a known service's host takes that service's mark and name.
-            expect(drawn.map((row) => row.name)).toEqual(['GitHub', 'Cloudflare', 'Linear', 'Notion']);
+            expect(drawn.map((row) => row.name)).toEqual(['GitHub', 'Cloudflare', 'Linear', 'Notion', 'Google']);
 
             for (const row of drawn) {
               expect(row.text).not.toContain('http');
@@ -442,9 +469,9 @@ describe('MCP presets', () => {
             }
 
             // What the account holds, once each: both connected presets and both
-            // servers of its own; the catalog has nothing left to add.
+            // servers of its own; the catalog has only Google left to add.
             expect(await connectedList(plugins)).toEqual(['GitHub', 'Cloudflare', 'Linear', 'Notion']);
-            expect(await plugins.$$eval('section[aria-label="Add"] [data-plugin]', (nodes) => nodes.map((node) => node.getAttribute('data-plugin')))).toEqual([]);
+            expect(await plugins.$$eval('section[aria-label="Add"] [data-plugin]', (nodes) => nodes.map((node) => node.getAttribute('data-plugin')))).toEqual(['Google']);
             
           } finally {
             await plugins.close();

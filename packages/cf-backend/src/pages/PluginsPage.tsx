@@ -11,10 +11,10 @@ import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { removeMcpServer } from "@/lib/user-api";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { Row, RowTile } from "@/components/ui/Row";
-import { addablePresets, hostBrand, McpPresetCards, presetOf, PresetRow, ServerStatus, usePresetErrors, type PresetAvailability, type PresetErrors } from "@/components/plugins/McpPresetCards";
+import { addablePresets, hostBrand, McpPresetCards, presetOf, PresetRow, PluginStatusText, useRowErrors, type PresetAvailability, type RowErrors } from "@/components/plugins/McpPresetCards";
 import { Menu } from "@/components/ui/Menu";
 import { AccountPanelModal } from "@/components/account/AccountPanelModal";
-import { GoogleConnectionCard } from "@/components/account/GoogleConnectionCard";
+import { GoogleConnectionRow, googleList } from "@/components/plugins/GoogleConnectionRow";
 import { Page } from "@/components/ui/PageHeader";
 
 function serverLine(server: McpServerSummary): string {
@@ -30,6 +30,7 @@ function CustomServerRow({ server, onChanged }: { server: McpServerSummary; onCh
   const { ask, dialog } = useConfirmation();
   const brand = hostBrand(server);
   const name = brand === undefined ? server.name : brandTitle(brand);
+  const shown = mcpServerStatus(server.status);
 
   const remove = () => ask({
     title: `Remove "${name}"?`, body: "All workspaces will lose access to its tools.", action: "Remove", failed: "Could not remove it",
@@ -39,9 +40,9 @@ function CustomServerRow({ server, onChanged }: { server: McpServerSummary; onCh
   return (
     <>
       {dialog}
-      <Row attributes={{ "data-plugin": name, "data-plugin-state": mcpServerStatus(server.status).label }} title={name} meta={serverLine(server)}
+      <Row attributes={{ "data-plugin": name, "data-plugin-state": shown.label }} title={name} meta={serverLine(server)}
         tile={brand === undefined ? <RowTile icon={PlugsConnectedIcon} /> : <BrandMark brand={brand} size={18} />}
-        status={<ServerStatus status={server.status} />}
+        status={<PluginStatusText shown={shown} />}
         action={<Menu name={name} items={[{ label: "Remove", icon: <TrashIcon size={16} />, onSelect: remove, danger: true }]} />} />
     </>
   );
@@ -49,7 +50,7 @@ function CustomServerRow({ server, onChanged }: { server: McpServerSummary; onCh
 
 /** Everything the account holds, in the order it added it, each once with its status; a catalog server keeps its row,
  *  one added by its URL included. */
-function connectedRows(servers: readonly McpServerSummary[], availability: PresetAvailability, onChanged: () => void, errors: PresetErrors): ReactNode[] {
+function connectedRows(servers: readonly McpServerSummary[], availability: PresetAvailability, onChanged: () => void, errors: RowErrors): ReactNode[] {
   return servers.map((server) => {
     const preset = presetOf(server);
 
@@ -63,21 +64,25 @@ function connectedRows(servers: readonly McpServerSummary[], availability: Prese
   });
 }
 
-/** A group of rows under its label; a group with nothing in it is not drawn. */
-function PluginSection({ title, rows, onRetry, what }: {
+/** A group of rows under its label; a group with nothing in it is not drawn. `google` is the Google row where it stands
+ *  in this list, null elsewhere: a read of its own, drawn whatever the servers' read is doing. */
+function PluginSection({ title, google, rows, onRetry, what }: {
   title: string;
+  google: ReactNode;
   rows: AsyncResource<readonly ReactNode[]>;
   onRetry: () => void;
   what: string;
 }) {
-  if (rows.status === "ready" && rows.value.length === 0) return null;
+  const ready = rows.status === "ready" ? rows.value : [];
+
+  if (google === null && rows.status === "ready" && ready.length === 0) return null;
 
   return (
     <section aria-label={title} className="space-y-2">
       <h2 className="t-label">{title}</h2>
+      {(google !== null || ready.length > 0) && <div className="-mx-2 grid gap-x-6 gap-y-px sm:grid-cols-2">{google}{ready}</div>}
       {rows.status === "loading" && <div className="flex justify-center py-4"><Loader size="sm" /></div>}
       {rows.status === "error" && <LoadFailure what={what} message={rows.message} onRetry={onRetry} />}
-      {rows.status === "ready" && <div className="-mx-2 grid gap-x-6 gap-y-px sm:grid-cols-2">{rows.value}</div>}
     </section>
   );
 }
@@ -88,17 +93,18 @@ export default function PluginsPage() {
   const { servers, presets } = mcp;
   const [managing, setManaging] = useState(false);
   const availability = lastValue(presets.resource) ?? undefined;
-  const errors = usePresetErrors();
+  const errors = useRowErrors();
+  // Google is a connection of its own, not a server: its row stands in whichever list its state puts it.
+  const google = googleList(mcp.google);
+  const googleRow = <GoogleConnectionRow google={mcp.google} errors={errors} />;
 
   return (
     <>
       <Page icon={<PuzzlePieceIcon size={22} />} title="Plugins" actions={<Button variant="secondary" onClick={() => setManaging(true)}>Manage</Button>}>
-        {/* One connection for all of Google, where this deployment offers it: not an MCP server. */}
-        <GoogleConnectionCard google={mcp.google} />
-        <PluginSection title="Connected" onRetry={servers.reload} what="your MCP servers"
+        <PluginSection title="Connected" google={google === "connected" ? googleRow : null} onRetry={servers.reload} what="your MCP servers"
           rows={mapResource(servers.resource, (rows) => connectedRows(rows, availability, servers.reload, errors))} />
 
-        <PluginSection title="Add" onRetry={servers.reload} what="the catalog"
+        <PluginSection title="Add" google={google === "add" ? googleRow : null} onRetry={servers.reload} what="the catalog"
           rows={mapResource(servers.resource, (rows) => (addablePresets(rows, availability).length === 0 ? [] : [
             <McpPresetCards key="presets" servers={rows} availability={availability} onChanged={servers.reload} errors={errors} unadded />,
           ]))} />
