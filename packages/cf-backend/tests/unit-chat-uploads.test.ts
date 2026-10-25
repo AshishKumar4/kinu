@@ -6,7 +6,7 @@
  */
 import { expect, test } from 'bun:test';
 import { gatewayWorkspace, sentTurn, workspaceFiles } from './helpers/actor-harness';
-import { chatCompletion, requestOf, stubAiBinding } from './helpers/platform-gateway';
+import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 
 const PROFILE = '# Ashish\n\nBuilds Kinu.\n';
 
@@ -62,4 +62,41 @@ test('an upload keeps its own name in /uploads: the context names it, the Files 
 
   expect(await text('/uploads/ashish profile.md')).toBe(PROFILE);
   expect(await text('/uploads/ashish profile (2).md')).toBe(NEWER);
+});
+
+/**
+ * #124 (2026-10-25): a macOS screenshot's name holds a narrow no-break space before its AM, which reads as a space. The
+ * agent typed the saved path back as it read it, and every open failed ENOENT while `ls` listed the file.
+ */
+test('an upload opens by the path its agent was told, typed as it reads', async () => {
+  const name = 'Screenshot 2026-10-23 at 10.38.05\u202FAM.txt';
+  const bytes = 'x'.repeat(9_000);
+  const answers: string[] = [];
+
+  const gateway = stubAiBinding((run) => {
+    const { messages, tools } = requestOf(run);
+    const answered = messages.filter((message) => message.role === 'tool');
+
+    if (tools.length === 0) return chatCompletion(run, 'Screenshot');
+
+    if (answered.length > 0) {
+      answers.push(JSON.stringify(answered));
+
+      return chatCompletion(run, 'Read it.');
+    }
+
+    const told = /saved to (\/uploads\/[^(]+) \(/u.exec(JSON.stringify(messages))?.[1] ?? '';
+    // What a model reads as a space it writes as one.
+    const typed = told.replace(/\p{Z}/gu, ' ');
+
+    return toolCallCompletion(run, { tool: 'shell', args: { command: `wc -c < "${typed}"` } }, 'call_open');
+  });
+
+  const workspace = gatewayWorkspace(gateway);
+
+  await sentTurn(workspace.agent, 'What does this show?', crypto.randomUUID(), {
+    files: [{ filename: name, mediaType: 'text/plain', url: `data:text/plain;base64,${Buffer.from(bytes).toString('base64')}` }],
+  });
+
+  expect(answers.join('\n')).toContain(String(bytes.length));
 });
