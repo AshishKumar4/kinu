@@ -101,6 +101,13 @@ describe('a first session with the CLI', () => {
     expect(text(run.stderr)).toContain('kinu create <name>');
   });
 
+  test('`kinu logout` with nobody signed in says so, and how to sign in, rather than that it signed out', async () => {
+    const run = await runCli(['logout'], scratchDir('first-run-logout'));
+
+    expect({ exitCode: run.exitCode, said: text(run.stdout) }).toMatchObject({ exitCode: 0, said: expect.stringContaining('kinu auth') });
+    expect(text(run.stdout)).not.toContain('Signed out');
+  });
+
   test('deleting with no terminal to confirm names the command that confirms it', async () => {
     const run = await runCli(['workspace', 'delete', 'demo'], cloudHome());
 

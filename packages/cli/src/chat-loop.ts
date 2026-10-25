@@ -490,8 +490,12 @@ function ask(rl: readline.Interface, prompt: string, signal?: AbortSignal, prefi
 
       if (prefill) rl.write(prefill);
     } catch (error) {
-      // Stdin hit EOF. Stderr, because stdout carries only the conversation.
-      process.stderr.write(`note: readline closed before the prompt: ${renderThrownChain({ cause: error })}\n`);
+      // Readline refuses a question once stdin has ended (ERR_USE_AFTER_CLOSE): piped input that ran out ends the chat,
+      // which says goodbye. Anything else is said on stderr, as stdout carries only the conversation.
+      if (!(error instanceof Error && 'code' in error && error.code === 'ERR_USE_AFTER_CLOSE')) {
+        process.stderr.write(`note: readline refused the prompt: ${renderThrownChain({ cause: error })}\n`);
+      }
+
       settle(null);
     }
   });

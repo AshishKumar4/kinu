@@ -88,34 +88,38 @@ export function logoutCommand(opts: { origin?: string }): Promise<void> {
     const asked = defaultOrigin(opts);
     const token = config.accessToken;
 
-    if (token && new URL(asked).origin !== new URL(origin).origin) {
+    if (!token) {
+      console.log(DIM('Not signed in, so there is nothing to sign out of. Sign in with: kinu auth'));
+
+      return;
+    }
+
+    if (new URL(asked).origin !== new URL(origin).origin) {
       return yield* Effect.fail(new KinuError('bad_input', `Signed in to ${origin}, not ${asked}: run kinu logout without --origin or KINU_ORIGIN to sign out of ${origin}.`));
     }
 
-    if (token) {
-      const revoked = yield* Effect.catchCause(Effect.as(Effect.promise(() => logout(origin, token)), true), (failed) => Effect.gen(function* () {
-        // The raw token is the only copy (the server stores a hash); deleting it would orphan a live 180-day bearer,
-        // so it stays pending for the next logout or `kinu auth revoke --all`.
-        const reason = renderThrownChain({ cause: Cause.squash(failed) });
-        console.error(`${WARN('!')} Could not revoke the session at ${origin} (${reason}); it may still be valid.`);
-        yield* Effect.promise(() => updateConfigFile((current) => {
-          current.pendingRevocation = {
-            token,
-            origin,
-            at: Date.now(),
-          };
-        }));
-
-        return false;
+    const revoked = yield* Effect.catchCause(Effect.as(Effect.promise(() => logout(origin, token)), true), (failed) => Effect.gen(function* () {
+      // The raw token is the only copy (the server stores a hash); deleting it would orphan a live 180-day bearer,
+      // so it stays pending for the next logout or `kinu auth revoke --all`.
+      const reason = renderThrownChain({ cause: Cause.squash(failed) });
+      console.error(`${WARN('!')} Could not revoke the session at ${origin} (${reason}); it may still be valid.`);
+      yield* Effect.promise(() => updateConfigFile((current) => {
+        current.pendingRevocation = {
+          token,
+          origin,
+          at: Date.now(),
+        };
       }));
 
-      if (!revoked) {
-        yield* Effect.promise(() => bumpProviderRevision());
-        console.log(`${WARN('!')} Not signed out: the session is still valid, and this PC keeps its token so a later logout can revoke it.`);
-        console.log(DIM(`Run \`kinu logout\` again once ${origin} is reachable, or end it with \`kinu auth revoke --all\` from any PC.`));
+      return false;
+    }));
 
-        return;
-      }
+    if (!revoked) {
+      yield* Effect.promise(() => bumpProviderRevision());
+      console.log(`${WARN('!')} Not signed out: the session is still valid, and this PC keeps its token so a later logout can revoke it.`);
+      console.log(DIM(`Run \`kinu logout\` again once ${origin} is reachable, or end it with \`kinu auth revoke --all\` from any PC.`));
+
+      return;
     }
 
     yield* Effect.promise(() => updateConfigFile((current) => {
