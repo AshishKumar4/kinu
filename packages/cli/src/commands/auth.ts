@@ -74,8 +74,8 @@ export async function authCommand(opts: { origin?: string }): Promise<void> {
 /** The session every other command uses: `KINU_TOKEN` first, else the stored, unexpired one. */
 export function whoamiCommand(opts: { origin?: string }): Promise<void> {
   return settle(Effect.gen(function* () {
-    const { token } = requireAuthConfig();
-    const result = yield* Effect.promise(async () => whoami(defaultOrigin(opts), token));
+    const { origin, token } = requireAuthConfig(opts);
+    const result = yield* Effect.promise(async () => whoami(origin, token));
     console.log(`${ACCENT(result.user.email)} ${DIM(result.user.id)}`);
   }));
 }
@@ -141,12 +141,8 @@ export function authSessionsCommand(
   action: string, session: string | undefined, opts: { origin?: string; all?: boolean },
 ): Promise<void> {
   return settle(Effect.gen(function* () {
-    const auth = requireAuthConfig();
-
     // The sessions listed and ended are the signed-in deployment's: a different --origin is refused, never ignored.
-    if (opts.origin !== undefined && new URL(defaultOrigin(opts)).origin !== new URL(auth.origin).origin) {
-      return yield* Effect.fail(new KinuError('bad_input', `Signed in to ${auth.origin}, not ${opts.origin}: sign in there first with kinu auth --origin ${opts.origin}`));
-    }
+    const auth = requireAuthConfig(opts);
 
     if (action === 'revoke') {
       if (opts.all === true && session === undefined) {
