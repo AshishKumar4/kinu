@@ -137,4 +137,33 @@ describe('the owner\'s questions', () => {
 
     expect({ requests, events }).toEqual({ requests: 0, events: ['done'] });
   });
+
+  // A first-run session on staging, 2026-10-25: a question carrying a key no question takes was refused as
+  // "It takes: questions" alone, naming nothing to mend, and the model sent it again until it gave up asking.
+  test('an ask carrying a field its question does not take is refused naming that field, and the model reads which', async () => {
+    const questions = store();
+    const prompts: string[] = [];
+
+    const model = scriptedTurnModel({ doGenerate: ({ prompt }) => {
+      const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } };
+
+      prompts.push(JSON.stringify(prompt));
+
+      if (prompt.some((message) => message.role === 'tool')) {
+        return { content: [{ type: 'text', text: 'Going with cents.' }], finishReason: { unified: 'stop', raw: undefined }, warnings: [], usage };
+      }
+
+      return {
+        content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'ask_owner', input: JSON.stringify({ questions: [{ ...UNITS, multiSelect: false }] }) }],
+        finishReason: { unified: 'tool-calls', raw: undefined }, warnings: [], usage,
+      };
+    } });
+
+    for await (const _event of runChat({
+      modelSpec: 'test/model', model, system: 'Migrate.', history: [{ role: 'user', content: 'Migrate the ledger.' }],
+      tools: ownerLaneTools({ askOwner: true }), waitsOn: (call) => questions.waitsOn(call),
+    })) { /* the turn runs to its end */ }
+
+    expect({ requests: prompts.length, named: prompts.at(-1)?.includes('questions.0.multiSelect') }).toEqual({ requests: 2, named: true });
+  });
 });
