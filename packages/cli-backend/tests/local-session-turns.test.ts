@@ -17,7 +17,7 @@ import type { SessionEvent } from '@kinu.run/core';
 import { LocalAgentSession } from '../src/local-session';
 import { type LocalModelResolver } from '../src/model-resolver';
 import { resolverRest, namedSpec, textStream, type PromptMessage, fakeModel, historyCapturingModel, systemCapturingModel, workspaceRuntime, transcript, setup, setupWithResolver, kinds, turnStarts, isDynamicBlock, isWorkspaceInstructions, writeFocusedSkill, messageText, } from './helpers/local-session';
-import { CHAT_REWOUND_EVENT, keptMediaName } from '@kinu.run/core';
+import { keptMediaName, rowText } from '@kinu.run/core';
 
 test('parallel native calls retain their SDK identities after reverse completion', async () => {
   const { db, rt } = workspaceRuntime();
@@ -243,6 +243,11 @@ test('an answer cut at the output limit on both calls is continued by one more t
     expect(turnStarts(events).map((turn) => turn.event ?? 'user')).toEqual(['user', OUTPUT_CONTINUATION_EVENT]);
   } finally { await session.end(); }
 });
+
+/** What the person's chat holds after a rewind: the agent's notice is never one of its rows. */
+async function chatAfterRewind(rt: CLIRuntime): Promise<string[]> {
+  return (await getChatHistoryPage(rt.stores.history.transcript(CHAT_SESSION_ID), {}, keptMediaName)).items.map((row) => rowText(row));
+}
 
 describe('LocalAgentSession.send — a user turn', () => {
   test('streams text, persists the exchange, and ends the turn', async () => {
@@ -701,10 +706,7 @@ describe('LocalAgentSession — the walk-back', () => {
 
     if (second === undefined) throw new Error('the fixture recorded no user entry');
     await session.revertConversation(second.id, { chatOnly: true });
-    const notice = (await getChatHistoryPage(rt.stores.history.transcript(CHAT_SESSION_ID), {}, keptMediaName)).items.at(-1);
-
-    expect(v.parse(v.looseObject({ rewoundPaths: v.array(v.string()), rewoundCommands: v.number(), rewoundPrograms: v.number() }), notice?.metadata))
-      .toMatchObject({ rewoundPaths: ['notes/plan.md'], rewoundCommands: 1, rewoundPrograms: 1 });
+    expect(await chatAfterRewind(rt)).toEqual(['first ask', 'answered']);
 
     await session.send('what changed?', { id: crypto.randomUUID() });
     await session.end();
@@ -748,16 +750,14 @@ describe('LocalAgentSession — the walk-back', () => {
 
     await session.revertConversation(second.id, { chatOnly: true });
     expect(prompts).toHaveLength(asked);
-    const notice = (await getChatHistoryPage(rt.stores.history.transcript(CHAT_SESSION_ID), {}, keptMediaName)).items.at(-1);
-
-    expect(v.parse(v.looseObject({ kinuEvent: v.string(), rewoundPaths: v.array(v.string()) }), notice?.metadata))
-      .toMatchObject({ kinuEvent: CHAT_REWOUND_EVENT, rewoundPaths: ['notes/plan.md'] });
-    expect(notice?.metadata).not.toHaveProperty('exposedPorts');
+    expect(await chatAfterRewind(rt)).toEqual(['first ask', 'answered']);
 
     await session.send('what changed?', { id: crypto.randomUUID() });
     await session.end();
 
     expect(prompts.at(-1)).toContain('notes/plan.md');
+    // The CLI's host reads no computer: the notice says nothing of one.
+    expect(prompts.at(-1)).not.toContain('Ports exposed now');
   });
 
   test('a turn in flight refuses the walk-back and keeps the conversation', async () => {

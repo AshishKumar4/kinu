@@ -563,29 +563,28 @@ export async function attachmentIsReadAndShown(target: FlowTarget): Promise<Atta
 export interface RewindVerdict {
   /** The asks the chat offers to walk back to once the rewind answered: the first, and not the one walked back past. */
   readonly sentAfter: readonly string[];
-  /** The row that told the agent what the rewound turn left, as the person sees it once the rewind answered: its
-   *  words, or null when no such row shows. */
-  readonly notice: string | null;
-  /** The same row after a reload, from the stored transcript. */
-  readonly noticeAfterReload: string | null;
+  /** What the composer holds once the rewind answered: the ask walked back past, to send again or change. */
+  readonly composer: string;
+  /** The harness's rows the chat shows once the rewind answered, and after a reload: the agent's notice is not one. */
+  readonly systemRows: number;
+  readonly systemRowsAfterReload: number;
 }
 
 const REWIND_KEPT = 'Flow rewind: the ask that stays.';
 
 const REWIND_CUT = 'Flow rewind: the ask walked back past.';
 
-/** A chat-only rewind's row (`chat_rewound`), shown: its words, or null. */
-const REWIND_NOTICE = `(() => {
-  const row = document.querySelector('#chat [data-system-event="chat_rewound"]');
-  return row instanceof HTMLElement && row.offsetParent !== null ? row.innerText : null;
-})()`;
+/** The rows the harness wrote that the chat shows: none in this flow's chat but a rewind's notice could be one. */
+const SYSTEM_ROWS = `[...document.querySelectorAll('#chat [data-system-event]')].filter((row) => row instanceof HTMLElement && row.offsetParent !== null).length`;
+
+const COMPOSER_TEXT = `(() => { const area = [...document.querySelectorAll('#chat textarea')].find((each) => !each.disabled); return area instanceof HTMLTextAreaElement ? area.value : ''; })()`;
 
 /**
  * Row: a person walks the chat back to before a message, the conversation alone (REWIND-0924). The chat ends before
  * it, and the row that tells the agent what its rewound turn left shows where the walk-back cut, live and after a
  * reload.
  */
-export async function chatOnlyRewindIsShown(target: FlowTarget): Promise<RewindVerdict> {
+export async function chatOnlyRewindReturnsTheAsk(target: FlowTarget): Promise<RewindVerdict> {
   const workspace = await createFlowWorkspace(target, 'rewind');
 
   try {
@@ -615,17 +614,18 @@ export async function chatOnlyRewindIsShown(target: FlowTarget): Promise<RewindV
     }
 
     const sentAfter = v.parse(v.array(v.string()), await page.evaluate(SENT_MESSAGES));
-    const notice = v.parse(v.nullable(v.string()), await page.evaluate(REWIND_NOTICE));
+    const composer = v.parse(v.string(), await page.evaluate(COMPOSER_TEXT));
+    const systemRows = v.parse(v.number(), await page.evaluate(SYSTEM_ROWS));
 
     await page.reload({ waitUntil: 'load' });
     await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
     await until(page, 'the kept ask in the stored transcript', `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(REWIND_KEPT)})`);
     await painted(page);
-    const noticeAfterReload = v.parse(v.nullable(v.string()), await page.evaluate(REWIND_NOTICE));
+    const systemRowsAfterReload = v.parse(v.number(), await page.evaluate(SYSTEM_ROWS));
 
     await page.close();
 
-    return { sentAfter, notice, noticeAfterReload };
+    return { sentAfter, composer, systemRows, systemRowsAfterReload };
   } finally {
     await removeFlowWorkspace(target, workspace);
   }

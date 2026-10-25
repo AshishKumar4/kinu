@@ -6,7 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import type { UIMessage } from 'ai';
-import { actorConnectionTag, CHAT_REWOUND_EVENT, classifyProgrammaticTurn, RECORDED_AT_METADATA_KEY, TURN_AUTHOR_METADATA_KEY } from '@kinu.run/core';
+import { actorConnectionTag, RECORDED_AT_METADATA_KEY, TURN_AUTHOR_METADATA_KEY } from '@kinu.run/core';
 import {
   hostedSubagentHarness, orchestratorHarness, chatSessionTurns, storedChat, type HarnessOrchestratorAgent,
   type RecordedUserPlaneCalls, workspaceMainActor,
@@ -211,20 +211,9 @@ describe('the workspace root answers the walk-back', () => {
 
       if (before === undefined) throw new Error('the harness recorded no user message');
       await agent.revertConversation(before.id, { chatOnly: true });
-      const kept = await storedChat(harness);
-      const notice = kept.at(-1);
 
-      expect(lines(kept).slice(0, 2)).toEqual(['first ask', 'ok']);
-      expect(kept).toHaveLength(3);
-      // The harness wrote it, so the chat draws it as `system`; the model reads it as the user row it is stored as.
-      expect(notice?.role).toBe('system');
-
-      const card = classifyProgrammaticTurn({ metadata: notice?.metadata });
-
-      // A card of its own, from the notice's fields: the file written, and the command that ran.
-      expect(card?.kind === 'system_event' ? card.event : card?.kind).toBe(CHAT_REWOUND_EVENT);
-      expect(v.parse(v.looseObject({ rewoundPaths: v.array(v.string()), rewoundCommands: v.number(), rewoundPrograms: v.number() }), notice?.metadata))
-        .toMatchObject({ rewoundPaths: ['notes/plan.md'], rewoundCommands: 1, rewoundPrograms: 1 });
+      // The person's chat ends where they rewound it; the notice is the agent's alone (owner, 2026-10-25).
+      expect(lines(await storedChat(harness))).toEqual(['first ask', 'ok']);
 
       const next = await turns.prepare({ messages: [{ role: 'user', content: 'what changed?' }] });
       const read = JSON.stringify(next.prompt);

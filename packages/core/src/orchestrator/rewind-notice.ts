@@ -7,15 +7,11 @@
  */
 import * as v from 'valibot';
 import { JsonValueSchema, safeJsonParse, type JsonObject, type JsonValue } from '../utils/json';
-import { authoredTurnMetadata } from '../types/turn-metadata';
 import { FILE } from '../operations/file';
 import { SHELL } from '../operations/shell';
 import { BUILTIN_TOOL_SPECS } from '../tools/registry';
 import { EVAL_PROGRAM } from '../tools/sandbox-contract';
 import { programEffectsOf, type ProgramEffects } from '../execution/call-effects';
-
-/** The `kinuEvent` of a rewind's notice row. */
-export const CHAT_REWOUND_EVENT = 'chat_rewound';
 
 /** The computer as a chat-only rewind finds it: read, never woken. `processes` is null when it could not be read
  *  without waking it, with `unread` saying why. */
@@ -156,8 +152,6 @@ export function rewoundWork(parts: readonly JsonObject[]): RewoundWork {
   return { files, commands, programs: { ...programs, operations } };
 }
 
-/** The most paths the card names; it counts the rest. */
-const CARD_PATHS = 12;
 
 /** The most of the changes' text the notice carries; past it, each file is named and its changes are left to read. */
 const CHANGES_MAX_CHARS = 6000;
@@ -227,36 +221,17 @@ function computerText(computer: RewindComputer): string[] {
   return [...processes, ...ports];
 }
 
-/** A rewind's notice: its words for the agent, and the fields its card says it by. */
-export interface RewindNotice {
-  readonly text: string;
-  readonly metadata: JsonObject;
-}
-
 /** The notice owed, or null when it would say nothing: the rewound turns did nothing, and no computer was read. */
-export function rewindNotice(work: RewoundWork, computer: RewindComputer | undefined): RewindNotice | null {
+export function rewindNotice(work: RewoundWork, computer: RewindComputer | undefined): string | null {
   const files = [...work.files.keys()];
 
   if (computer === undefined && files.length === 0 && work.commands.length === 0 && work.programs.ran === 0) return null;
 
-  const text = [
+  return [
     'The person rewound this conversation to before one of its messages. Your turns after it are gone from the chat, '
       + 'but what they did stands. Read a file again before you rely on what you remember of it.',
     files.length === 0 ? 'Files your rewound turns changed: none.' : `Files your rewound turns changed:\n\n${changesText(work)}`,
     ranText(work),
     ...(computer === undefined ? [] : [computerText(computer).join('\n')]),
   ].join('\n\n');
-
-  return {
-    text,
-    metadata: authoredTurnMetadata({ kind: 'programmatic', metadata: {
-      kinuEvent: CHAT_REWOUND_EVENT,
-      rewoundFiles: files.length,
-      rewoundPaths: files.slice(0, CARD_PATHS),
-      rewoundCommands: work.commands.length,
-      rewoundPrograms: work.programs.ran,
-      ...(computer !== undefined && computer.processes !== null && { runningProcesses: computer.processes.length }),
-      ...(computer !== undefined && { exposedPorts: computer.ports.map((row) => row.port) }),
-    } }),
-  };
 }

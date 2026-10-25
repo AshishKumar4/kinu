@@ -1938,6 +1938,8 @@ describe('the walk-back at the actual WorkspacePage boundary', () => {
       expect(body).toContain('Add the missing-binding regression test');
       expect(body).not.toContain('so none reads the binding itself');
       expect(body).not.toContain('File history is unavailable');
+      // The ask walked back past is back in the composer, to send again or change (owner, 2026-10-25).
+      expect(await page.$eval('#chat textarea', (area) => (area instanceof HTMLTextAreaElement ? area.value : ''))).toContain('Now move the webhook routes');
       await page.close();
     });
   });

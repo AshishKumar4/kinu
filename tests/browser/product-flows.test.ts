@@ -22,7 +22,7 @@ import {
   driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState, openWaitsNamed, slateOpensFromSlates,
   slateSharesReachingNothing, slateShowsItsPreview, workspaceGetsFirstAnswer, writtenFileShowsInFilesAndChanges, changesStormStaysBounded,
   openMemoryFollowsItsWriter, computerDesktopSurvivesAResize, computerSwitchKeepsItsScreens, reopenedWorkspaceRunsTheDeployedBuild,
-  computerSessionsComeBackByName, agentJobIsAnsweredInItsSession, attachmentIsReadAndShown, chatOnlyRewindIsShown, activityIsShown, slatePicturesFollowMode, claudeCodePageExchanges, type AgentPlanVerdict, type AgentReturnVerdict,
+  computerSessionsComeBackByName, agentJobIsAnsweredInItsSession, attachmentIsReadAndShown, chatOnlyRewindReturnsTheAsk, activityIsShown, slatePicturesFollowMode, claudeCodePageExchanges, type AgentPlanVerdict, type AgentReturnVerdict,
   type ApprovalStackVerdict, type HireApprovalVerdict, type AgentWorkspaceVerdict, type AccountMemoryVerdict, type StackMemoryVerdict,
   type SpliceVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict,
   type FirstAnswerVerdict, type PanelVerdict, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict,
@@ -578,11 +578,11 @@ describe(productFlowTestName('attachment', 'a file dropped on the chat is read a
   });
 });
 
-describe(productFlowTestName('rewind', 'a chat-only rewind tells the agent, and the person sees the row that did'), () => {
+describe(productFlowTestName('rewind', 'a chat-only rewind puts the ask back in the composer, and shows no row of its own'), () => {
   let observed: RewindVerdict | null = null;
 
   beforeAll(async () => {
-    observed = await flowRow('rewind', chatOnlyRewindIsShown);
+    observed = await flowRow('rewind', chatOnlyRewindReturnsTheAsk);
   });
 
   test('the chat ends before the message walked back past', () => {
@@ -591,10 +591,13 @@ describe(productFlowTestName('rewind', 'a chat-only rewind tells the agent, and 
     expect([sent.some((text) => text.includes('the ask that stays')), sent.some((text) => text.includes('walked back past'))]).toEqual([true, false]);
   });
 
-  test('the row that told the agent shows where the walk-back cut, and after a reload', () => {
+  // The owner, 2026-10-25: "if I revert a message, the message itself gets back to the prompt box, and I shouldn't see
+  // a 'rewound' pill". The agent is still told what the rewound turn left (the unit flows read its next prompt).
+  test('the ask walked back past is in the composer, and no row says the rewind, before or after a reload', () => {
     const rewound = verdictOf(observed, 'rewind');
 
-    expect([rewound.notice !== null, rewound.noticeAfterReload !== null]).toEqual([true, true]);
+    expect({ composer: rewound.composer, rows: rewound.systemRows, rowsAfterReload: rewound.systemRowsAfterReload })
+      .toEqual({ composer: 'Flow rewind: the ask walked back past.', rows: 0, rowsAfterReload: 0 });
   });
 });
 

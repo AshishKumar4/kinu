@@ -12,7 +12,7 @@ import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   newestOpener, ownerAsks, planSurface,
 } from "@kinu.run/core";
-import { APP_ROUTES, liveStep, threadLiveTail, type OwedOwnerIntent, type PlanReview, type SignalCard, type WorkspaceLayout } from "@kinu.run/core";
+import { APP_ROUTES, liveStep, rowText, threadLiveTail, type OwedOwnerIntent, type PlanReview, type SignalCard, type WorkspaceLayout } from "@kinu.run/core";
 import type { UIMessage } from "ai";
 import type { SubagentView } from "@kinu.run/core/protocol";
 import { useActorChat, useKinu } from "@/hooks/use-kinu";
@@ -61,7 +61,7 @@ import { WorkspaceOverview } from "@/components/workspaces/WorkspaceOverview";
 import { WorkspaceSettings } from "@/pages/SettingsPage";
 import { useLayoutDrawer, useWorkspaceArea } from "@/components/layout";
 import { workspaceDisplayTitle, workspaceTitleDraft } from "@kinu.run/core";
-import { settleLogged, showing, detach, settle } from "@kinu.run/core/obs";
+import { attempt, renderThrownChain, settleLogged, showing, detach, settle, type KinuError } from "@kinu.run/core/obs";
 import { TextInput } from "@/components/ui/Field";
 import { WorkbenchPanels, type InspectorControl, type WorkbenchHandle } from "@/components/WorkbenchPanels";
 import { useCarriedAttachments } from "@/components/workspaces/NewChatView";
@@ -636,6 +636,24 @@ interface WorkspacePageProps {
   readonly layout?: WorkspaceLayout;
 }
 
+/** A message's files, read back from where the chat shows them and given to the composer as dropped files are. */
+function reattached(message: UIMessage, add: (files: FileList) => void): Effect.Effect<void, KinuError> {
+  const files = message.parts.flatMap((part) => (part.type === "file" ? [part] : []));
+
+  if (files.length === 0) return Effect.void;
+
+  return Effect.gen(function* () {
+    const transfer = new DataTransfer();
+
+    for (const part of files) {
+      const blob = yield* attempt({ doing: "reading a reverted message's file back", otherwise: 'unavailable' }, async () => (await fetch(part.url)).blob());
+      transfer.items.add(new File([blob], part.filename ?? "attachment", { type: part.mediaType }));
+    }
+
+    add(transfer.files);
+  });
+}
+
 export default function WorkspacePage(props: WorkspacePageProps = {}) {
   const routed = useParams().agentId;
   const agentId = props.workspace ?? routed;
@@ -892,6 +910,22 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
   const [revertFor, setRevertFor] = useState<string | null>(null);
   const [restoreNotice, setRestoreNotice] = useState<string | null>(null);
 
+  // The reverted message goes back to the composer, its words and its files, as it was sent (owner, 2026-10-25). The
+  // paged history resets with the revert: an in-flight first page would otherwise restore the removed messages.
+  const returnReverted = useCallback(() => {
+    const message = threadMessages.find((each) => each.id === revertFor);
+
+    history.reset();
+
+    if (message === undefined) return;
+    const words = rowText(message);
+
+    ui.updateDraft((current) => (current.trim() === "" ? words : `${words}\n\n${current}`));
+    detach(Effect.catchCause(reattached(message, attachments.add), (failed) => Effect.sync(() => {
+      setRestoreNotice(`The reverted message's files did not come back to the composer: ${renderThrownChain({ cause: Cause.squash(failed) })}`);
+    })));
+  }, [threadMessages, revertFor, history, ui, attachments.add]);
+
   const slateInline = useMemo(() => ({
     rpc: state.rpc,
     openSlate: (id: string): void => show(`${SLATE_PREFIX}${id}`),
@@ -1132,8 +1166,7 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
         onClear={async () => { await state.clearConversation(); history.reset(); }} />
 
       <TurnRevert messageId={revertFor} rpc={state.rpc} onClose={() => setRevertFor(null)}
-        // Reset with the revert: an in-flight first page would otherwise restore the removed messages.
-        onReverted={history.reset} onNotice={setRestoreNotice} />
+        onReverted={returnReverted} onNotice={setRestoreNotice} />
 
     </div>
     </ChatImageContext.Provider></FileLinkContext.Provider></SlateInlineContext.Provider>
