@@ -18,6 +18,7 @@ import { tolerate } from "../obs/index";
 import { type JsonObject, type JsonValue } from '../utils/json';
 import { extractPreviewUrl } from '../preview/preview-origin';
 import { ongoing, phaseTitle } from './tool-phase-title';
+import { drawnText } from './message-live-tail';
 
 /** The tool a program runs under. */
 const EVAL_PROGRAM_TOOL = BUILTIN_TOOL_SPECS.eval.name;
@@ -50,9 +51,13 @@ function isRunCall(part: Part): part is AnyToolPart {
     && extractPreviewUrl(partOutput(part)) === null;
 }
 
-/** Words or thinking that draw nothing: a run goes on across them. */
-function blank(part: Part): boolean {
-  return (part.type === "text" || part.type === "reasoning") && part.text.trim() === "";
+/** A part the chat draws nothing of, which a run goes on across: blank words or thinking, a step marker, a source, a
+ *  data part (#125: each ended a phase, so one call a step drew a row a step). The chat draws a call's row, a file, and
+ *  words or thinking with something in them. */
+function drawsNothing(part: Part): boolean {
+  if (part.type === "text" || part.type === "reasoning") return drawnText(part) === null;
+
+  return !isToolUIPart(part) && part.type !== "file";
 }
 
 /** Thinking onto the end of `list`: joined to the thinking it ends on, or its own block after it. */
@@ -102,8 +107,7 @@ export function groupMessageParts(parts: readonly Part[]): PartBlock[] {
   };
 
   for (const part of parts) {
-    // Step markers draw nothing and would split a run.
-    if (part.type === "step-start" || blank(part)) continue;
+    if (drawsNothing(part)) continue;
 
     if (isRunCall(part)) run.push({ kind: "tool", part });
     else if (part.type === "reasoning") addThought(run, part);

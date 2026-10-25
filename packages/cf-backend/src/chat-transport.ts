@@ -222,9 +222,6 @@ function transcriptFrame(window: ChatWindow): string {
   return JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: window.messages, older: window.older });
 }
 
-/** A turn's end with no window to show: the tab keeps what it has. */
-const NO_WINDOW: ChatWindow = { messages: [], older: null };
-
 /** `owed`: an owner's intent the request carried, on its way to the agent's wake. */
 function doneFrame(requestId: string, extra: { landed?: SendLanding; error?: string; owed?: string }): string {
   return JSON.stringify({
@@ -648,9 +645,11 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     if (this.live === null) this.wire.broadcast(transcriptFrame(window));
   }
 
-  /** A turn whose agent did not live to tell its end: its window read from the agent's transcript. */
+  /** A turn whose agent did not live to tell its end: its window read from the agent's transcript. Every window a tab is
+   *  sent is a seed, so an empty one is an empty chat. */
   async closeLostTurn(turnId: string): Promise<void> {
-    this.closeTurn(turnId, this.live?.turnId === turnId ? await this.wire.seed() : NO_WINDOW);
+    if (this.live === null) this.quiet();
+    else if (this.live.turnId === turnId) this.closeTurn(turnId, await this.wire.seed());
   }
 
   async deliver(event: SessionEvent): Promise<void> {

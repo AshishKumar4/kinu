@@ -60,6 +60,11 @@ export interface UserWorkspacesHost extends Pick<UserObjectHost, 'ctx' | 'env' |
  *  answer or the read's, the wipe went (`confirmedDeletion`'s `ended`). */
 const destroyedItself = (failure: Error): boolean => failure.message === 'destroyed';
 
+/** A workspace its account's registry holds open: the hash of the capability it last issued it, null before one. */
+export interface WorkspaceAdmission {
+  readonly capabilityHash: string | null;
+}
+
 /** The account's workspaces. */
 export class UserWorkspaces {
   constructor(private readonly host: UserWorkspacesHost) {}
@@ -699,7 +704,13 @@ export class UserWorkspaces {
     return this.workspaceRegistered(name);
   }
 
-  /** Ungated; callers (`hasWorkspace`, ticket flows) are gated at their own entry points. */
+  async workspaceAdmission(caller: UserCaller, name: string): Promise<WorkspaceAdmission | null> {
+    await this.host.requireTier(caller, 'workspaces.read');
+
+    return this.workspaceRegistered(name) ? { capabilityHash: workspaceCapabilityHash(this.host.ctx.storage.sql, name) } : null;
+  }
+
+  /** Ungated; callers (`hasWorkspace`, `workspaceAdmission`, ticket flows) are gated at their own entry points. */
   workspaceRegistered(name: string): boolean {
     validateWorkspaceName(name);
 

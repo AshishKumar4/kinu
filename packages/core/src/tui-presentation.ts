@@ -31,7 +31,7 @@ export const TUI_COMPOSER_PLACEHOLDER = 'Send a message…';
 /** The first-run pty case waits on this text as proof a submitted draft went out. */
 export const TUI_COMPOSER_STEERING_PLACEHOLDER = 'Type to steer the running turn';
 
-/** Shared by the changelog overlay, the console event stream, and the landing page's journal. */
+/** Shared by the changelog overlay and the console event stream. */
 export const CHANGE_KIND_GLYPH = {
   scaffold: '⟳',
   fact: '✦',
@@ -40,29 +40,6 @@ export const CHANGE_KIND_GLYPH = {
   refinement: '⌁',
   workspace: '⊞',
 } satisfies Record<ChangelogEntryKind, string>;
-
-/** The CLI preset imports these, so an advertised hint can only change with its binding. */
-export const TUI_ADVERTISED_PRESET_BINDINGS = {
-  'palette.toggle': 'ctrl+k',
-  'workspace.toggle': 'alt+w',
-  'hub.agents': 'alt+a',
-  'tier.quick': 'alt+p',
-} as const;
-
-/** Any token that is not a modifier is a key name, shown upper-case. */
-const TUI_HINT_MODIFIERS = new Map<string, string>([['ctrl', 'Ctrl'], ['alt', 'Alt']]);
-
-const tuiHintKey = (binding: string): string => binding
-  .split('+')
-  .map((part) => TUI_HINT_MODIFIERS.get(part) ?? part.toUpperCase())
-  .join('+');
-
-export const TUI_ADVERTISED_HINTS = [
-  { action: 'palette.toggle', keys: tuiHintKey(TUI_ADVERTISED_PRESET_BINDINGS['palette.toggle']), label: 'commands' },
-  { action: 'workspace.toggle', keys: tuiHintKey(TUI_ADVERTISED_PRESET_BINDINGS['workspace.toggle']), label: 'workspaces' },
-  { action: 'hub.agents', keys: tuiHintKey(TUI_ADVERTISED_PRESET_BINDINGS['hub.agents']), label: 'agents' },
-  { action: 'tier.quick', keys: tuiHintKey(TUI_ADVERTISED_PRESET_BINDINGS['tier.quick']), label: 'tiers' },
-] as const;
 
 const COMPOSER_MAX_ROWS = 8;
 

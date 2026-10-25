@@ -21,10 +21,9 @@ import {
   type StoredInspectorLayout,
 } from "@kinu.run/core/web/inspector-layout";
 
-/** One document may hold several workbenches (landing mounts three), so later groups scope their panel ids. */
-const panelId = (panel: "chat" | "inspector", scope: string | undefined): string => (
-  scope === undefined ? panel : `${panel}-${scope}`
-);
+const CHAT_PANEL_ID = "chat";
+
+const INSPECTOR_PANEL_ID = "inspector";
 
 type InspectorPanelProps = Pick<
   PanelProps,
@@ -89,13 +88,10 @@ export function useInspectorLayout(input: {
   readonly desktopPanels: boolean;
   readonly mobileDefault: string;
   readonly workspace: string | undefined;
-  readonly scope: string | undefined;
   /** Only consulted while this workspace carries no stored open/close choice. */
   readonly needsUser: boolean;
 }): InspectorLayout {
-  const { desktopPanels, mobileDefault, workspace, scope, needsUser } = input;
-  const chatPanelId = panelId("chat", scope);
-  const inspectorPanelId = panelId("inspector", scope);
+  const { desktopPanels, mobileDefault, workspace, needsUser } = input;
 
   const widePanels = useMediaQuery(INSPECTOR_WIDE_QUERY);
 
@@ -146,7 +142,7 @@ export function useInspectorLayout(input: {
 
   // A nameless workbench needs its own identity: the machine reads `undefined` as the ungestured
   // key, so the first decision would read as a user choice and nothing would open.
-  const identity = workspace ?? `sample:${scope ?? ""}`;
+  const identity = workspace ?? "sample:";
 
   const mountDecision = desktopPanels && widePanels ? decideInspector(readLayout(), needsUser) : null;
 
@@ -231,14 +227,14 @@ export function useInspectorLayout(input: {
     commitsRef.current += 1;
     groupElementRef.current?.setAttribute("data-inspector-commits", String(commitsRef.current));
 
-    const share = layout[inspectorPanelId];
+    const share = layout[INSPECTOR_PANEL_ID];
     const collapsedNow = share !== undefined && share <= 0;
 
     const now: InspectorTarget = {
       // A collapsed report carries no width: the remembered expansion width is the last open one.
       collapsed: collapsedNow,
       widthPx: collapsedNow ? machineRef.current.widthPx : Math.max(INSPECTOR_MIN_PX, committedWidthPx(
-        layout, inspectorPanelId, groupElementRef.current,
+        layout, INSPECTOR_PANEL_ID, groupElementRef.current,
         () => Math.round(panelRef.current?.getSize().inPixels ?? 0),
       )),
     };
@@ -249,7 +245,7 @@ export function useInspectorLayout(input: {
     apply(commitInspectorLayout(machineRef.current, {
       now, marked: mark !== null, workspace: identity, panelPresent: panelRef.current !== null,
     }));
-  }, [desktopPanels, inspectorPanelId, panelRef, identity, apply]);
+  }, [desktopPanels, panelRef, identity, apply]);
 
   // Capture phase runs before the library's bubble keydown and document pointer handlers, and the
   // commit reports synchronously in the same dispatch, so the mark is always there to read.
@@ -316,7 +312,7 @@ export function useInspectorLayout(input: {
 
   const panelProps: InspectorPanelProps = desktopPanels
     ? {
-      id: inspectorPanelId,
+      id: INSPECTOR_PANEL_ID,
       minSize: `${String(INSPECTOR_MIN_PX)}px`,
       defaultSize: `${String(widthPx)}px`,
       collapsible: true,
@@ -324,7 +320,7 @@ export function useInspectorLayout(input: {
       panelRef,
       className: collapsed ? "overflow-hidden" : undefined,
     }
-    : { id: inspectorPanelId, minSize: "0%", defaultSize: mobileDefault };
+    : { id: INSPECTOR_PANEL_ID, minSize: "0%", defaultSize: mobileDefault };
 
   // Ref callbacks run in the mutation phase, before the library's commit, so a new element resets
   // measurement first. Detach passes through null; only a different element means a new tree.
@@ -340,7 +336,7 @@ export function useInspectorLayout(input: {
   const groupProps: InspectorGroupProps = {
     // Applied in the group's own first pass: an imperative collapse could be clobbered by that pass.
     defaultLayout: mountDecision?.collapsed === true
-      ? { [chatPanelId]: 1, [inspectorPanelId]: 0 }
+      ? { [CHAT_PANEL_ID]: 1, [INSPECTOR_PANEL_ID]: 0 }
       : undefined,
     onLayoutChanged,
     elementRef: groupRef,
@@ -363,6 +359,6 @@ export function useInspectorLayout(input: {
     panelProps,
     groupProps,
     separatorProps,
-    chatPanelId,
+    chatPanelId: CHAT_PANEL_ID,
   };
 }

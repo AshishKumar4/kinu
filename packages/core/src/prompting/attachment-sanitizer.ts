@@ -354,10 +354,14 @@ export function saveUploads(message: ModelMessage, files: Pick<AttachmentPolicy,
   }));
 }
 
-/** Its own name, with no folder, separator or control character left in it, cut to fit; `upload.<ext>` when nothing is. */
+/**
+ * Its own name spelled as it reads, so the path its agent types back opens it: composed, each space a plain space (a
+ * macOS screenshot's narrow one before its AM was typed back as one, #124), with no folder, separator, control or
+ * invisible character left in it, cut to fit; `upload.<ext>` when nothing is.
+ */
 function uploadName(filename: string | undefined, mediaType: string): string {
   const last = (filename ?? '').split(/[/\\]/u).at(-1) ?? '';
-  const name = Array.from(last).filter((character) => (character.codePointAt(0) ?? 0) > 0x1f && character !== '\u007f').join('').trim();
+  const name = last.normalize('NFC').replace(/[\p{Cc}\p{Cf}]/gu, '').replace(/\p{Z}/gu, ' ').trim();
 
   if (name === '' || name === '.' || name === '..') return `upload.${extensionFor(mediaType)}`;
   const encoder = new TextEncoder();

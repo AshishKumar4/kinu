@@ -4,7 +4,8 @@
  */
 import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from './user-do';
-import { ERROR_STATUS, ownerCaller, PLATFORM_CATALOG, type OwnerCapabilityEnv } from '@kinu.run/core';
+import type { WorkspaceAdmission } from './workspaces';
+import { ERROR_STATUS, ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';
 import { idempotent } from '@nimbus-sh/fabric/do-calls.js';
 import { classifyDoCall, isRetryableDoCall } from '@nimbus-sh/platform/oom-classify.js';
 import { logDoCallRetry } from '../obs/do-call-retry';
@@ -12,7 +13,13 @@ import type { ObjectNamespace } from '@kinu.run/core';
 import { Effect, Result } from 'effect';
 import { carriesCauseCode, diagnostics, KinuError, settle, toKinuError } from '@kinu.run/core/obs';
 
-export type WorkspaceRegistry = Pick<UserDO, 'hasWorkspace' | 'ensureWorkspaceCapability'>;
+export type WorkspaceRegistry = Pick<UserDO, 'workspaceAdmission' | 'ensureWorkspaceCapability'>;
+
+/** The workspace a request names, as its account's registry admitted it in the request's session check. */
+export interface AdmittedWorkspace {
+  readonly name: string;
+  readonly admission: WorkspaceAdmission | null;
+}
 
 /** The two refusals read here across DO RPC, told apart by a code in their cause, which RPC keeps. */
 const OWNED_BY_ANOTHER_ACCOUNT = 'owned_by_another_account';
@@ -46,49 +53,27 @@ export type OwnedWorkspaceResult<Agent> = Result.Result<Agent, OwnershipRefusal>
 
 const refused = <Agent>(status: number, error: string): OwnedWorkspaceResult<Agent> => Result.fail({ status, error });
 
-/** Per-isolate proofs of registry membership; a proof skips only the registry read, never
- * claimOwner. Evicted when `ensureWorkspaceCapability`'s re-check contradicts it. */
-const membershipProven = new Set<string>();
-
-/** One proof's heap: a 32-hex user id and a 64-character name keyed in the set, measured in Bun on 2026-10-14. */
-const PROOF_BYTES = 182;
-
-/** The proofs hold at most a hundredth of the isolate's memory (`worker.isolate.memory`), about 7,300; overflow drops
- * all of them, which costs only registry reads. */
-const MEMBERSHIP_PROOF_LIMIT = Math.floor(PLATFORM_CATALOG['worker.isolate.memory'].limit.value / 100 / PROOF_BYTES);
-
-function forgetWorkspaceMembership(userId: string, workspaceName: string): void {
-  membershipProven.delete(`${userId}\u0000${workspaceName}`);
-}
-
 /** 404 when not in the caller's registry (probes must not create workspaces); 403 for a
- * cross-user collision; otherwise the failure's class: 503 for a dropped or refused platform call. */
+ * cross-user collision; otherwise the failure's class: 503 for a dropped or refused platform call. `admitted`: what the
+ * request's session check already read of the registry, which saves asking it again. */
 export function claimOwnedWorkspace<Id, Agent extends WorkspaceOwnerClaim>(
   env: WorkspaceOwnershipEnv<Id, Agent>,
   userId: string,
   workspaceName: string,
+  admitted?: AdmittedWorkspace,
 ): Promise<OwnedWorkspaceResult<Agent>> {
   return settle(Effect.gen(function* () {
     const userObject = env.UserDO.idFromName(userId);
     // Every call below is idempotent, so platform-dropped connections are retried.
     const owner = yield* Effect.promise(() => ownerCaller(env));
-    // Order is the security property: hasWorkspace must answer before claimOwner for anyone
-    // unproven, or a crafted name wakes an arbitrary OrchestratorAgent.
-    const membershipKey = `${userId}\u0000${workspaceName}`;
 
-    if (!membershipProven.has(membershipKey)) {
-      const member = yield* Effect.promise(() => idempotent('hasWorkspace', () => env.UserDO.get(userObject),
-        (stub) => stub.hasWorkspace(owner, workspaceName), { onRetry: logDoCallRetry }));
+    // Order is the security property: the registry must admit the name before claimOwner, or a crafted name wakes an
+    // arbitrary OrchestratorAgent. Read fresh for every request, never kept, so a removal holds at once everywhere.
+    const admission = admitted?.name === workspaceName ? admitted.admission : yield* Effect.promise(() => idempotent('workspaceAdmission',
+      () => env.UserDO.get(userObject), (stub) => stub.workspaceAdmission(owner, workspaceName), { onRetry: logDoCallRetry }));
 
-      if (!member) {
-        // A fresh removal answer outranks a concurrent request's proof.
-        membershipProven.delete(membershipKey);
-
-        return refused<Agent>(404, `Workspace ${workspaceName} not in your registry. Create it via POST /api/user/workspaces first.`);
-      }
-
-      if (membershipProven.size >= MEMBERSHIP_PROOF_LIMIT) membershipProven.clear();
-      membershipProven.add(membershipKey);
+    if (admission === null) {
+      return refused<Agent>(404, `Workspace ${workspaceName} not in your registry. Create it via POST /api/user/workspaces first.`);
     }
 
     const workspaceObject = env.OrchestratorAgent.idFromName(workspaceName);
@@ -115,7 +100,12 @@ export function claimOwnedWorkspace<Id, Agent extends WorkspaceOwnerClaim>(
       return refused<Agent>(ERROR_STATUS[failure.code], `Could not reach workspace ${workspaceName}; try again.`);
     }
 
-    // The UserDO serializes this reconcile; it returns immediately once both sides agree.
+    // Both sides hold the same capability: the reconcile would answer at once, so it is not asked.
+    if (claimed.success.capabilityHash !== null && claimed.success.capabilityHash === admission.capabilityHash) {
+      return Result.succeed(env.OrchestratorAgent.get(workspaceObject));
+    }
+
+    // The UserDO serializes this reconcile; a mismatch is repaired by minting anew.
     const provisioned = yield* Effect.result(Effect.tryPromise({
       // Replay replaces the single current hash and installed token; the prior token is no longer live.
       try: () => idempotent('ensureWorkspaceCapability', () => env.UserDO.get(userObject),
@@ -126,13 +116,8 @@ export function claimOwnedWorkspace<Id, Agent extends WorkspaceOwnerClaim>(
     if (Result.isFailure(provisioned)) {
       const e = provisioned.failure.cause;
 
-      // Registry contradiction refutes a cached proof; evict so deletion sticks without
-      // cross-isolate invalidation.
-      if (carriesCauseCode({ cause: e }, NOT_IN_REGISTRY)) {
-        forgetWorkspaceMembership(userId, workspaceName);
-
-        return refused<Agent>(404, `Workspace ${workspaceName} is not in your registry.`);
-      }
+      // Removed since the admission was read.
+      if (carriesCauseCode({ cause: e }, NOT_IN_REGISTRY)) return refused<Agent>(404, `Workspace ${workspaceName} is not in your registry.`);
 
       const transient = classifyDoCall(e);
 

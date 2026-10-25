@@ -478,8 +478,12 @@ export class FakeSandbox {
 
   /** Thrown by the next `snapshotContainer`, as a refused snapshot is. */
   snapshotFault: Error | undefined;
-  /** Holds the next `snapshotContainer` until `release` settles, telling `entered` it began: a snapshot under way. */
-  snapshotHold: { readonly entered: () => void; readonly release: Promise<void> } | undefined;
+  /** Holds the next `snapshotContainer` until `release` settles, telling `entered` it began: a snapshot under way. With
+   *  `finishesAtStop`, a stop meanwhile finishes it and answers it before the container ends, as the platform does (D51:
+   *  a stop 1 s into a save waits for it); without, the stop ends the container and the take stays unanswered. */
+  snapshotHold: { readonly entered: () => void; readonly release: Promise<void>; readonly finishesAtStop?: boolean } | undefined;
+  /** The save a stop finishes first, while one is under way. */
+  #savingAtStop: { readonly finish: () => void; readonly answered: Promise<void> } | undefined;
   readonly files = new Map<string, string>();
   /** Files whose bytes are not UTF-8 text, which `files` cannot hold; the SDK's file reads serve them as bytes. */
   readonly binaryFiles = new Map<string, Uint8Array>();
@@ -881,10 +885,23 @@ export class FakeSandbox {
     const fault = this.stopFault;
 
     if (fault !== undefined) return Promise.reject(fault);
-    this.running.running = false;
-    this.#loseContainerLocalState();
+    const saving = this.#savingAtStop;
+
+    if (saving !== undefined) {
+      saving.finish();
+
+      // The container's end is told after the take's answer, as the platform tells it a task later.
+      return saving.answered.then(() => new Promise<void>((told) => { setImmediate(told); })).then(() => { this.#halt(); });
+    }
+
+    this.#halt();
 
     return Promise.resolve();
+  }
+
+  #halt(): void {
+    this.running.running = false;
+    this.#loseContainerLocalState();
   }
 
   activityRenewals = 0;
@@ -962,15 +979,24 @@ export class FakeSandbox {
 
         if (fault !== undefined) throw fault;
 
+        const disk = { files: new Map(this.files), binaryFiles: new Map(this.binaryFiles), directories: new Set(this.directories) };
+        const answered = Promise.withResolvers<void>();
+
         if (hold !== undefined) {
+          const finished = Promise.withResolvers<void>();
+
+          if (hold.finishesAtStop === true) this.#savingAtStop = { finish: finished.resolve, answered: answered.promise };
           hold.entered();
-          await hold.release;
+          await Promise.race([hold.release, finished.promise]);
+          this.#savingAtStop = undefined;
         }
 
         this.#snapshotsTaken += 1;
         const id = `snapshot-${String(this.#snapshotsTaken)}`;
         this.snapshots.set(id, 'ok');
-        this.#snapshotDisks.set(id, { files: new Map(this.files), binaryFiles: new Map(this.binaryFiles), directories: new Set(this.directories) });
+        // As the disk was when the take began: a point in time, whatever the box wrote while it ran (D51).
+        this.#snapshotDisks.set(id, disk);
+        queueMicrotask(answered.resolve);
 
         return { id, size: 1, name: options?.name };
       },

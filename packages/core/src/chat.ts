@@ -53,7 +53,7 @@ import { compactionTriggerOptions, isServerCompaction, serverCompactionOptions, 
 import { describeProviderError, toProviderError } from './providers/util';
 import { ChatRelay } from './chat-relay';
 import { repairToolCall } from './tools/repair-tool-call';
-import { renderToolResult, synthesizeToolFallback } from './utils/evidence-window';
+import { renderToolResult } from './utils/evidence-window';
 import * as v from 'valibot';
 import { JsonObjectSchema, projectJsonValue, type JsonObject, type JsonValue } from './utils/json';
 import { answeredPromptTokens, normalizeUsage, usageReported, type Usage } from './usage';
@@ -737,6 +737,8 @@ function attemptCachePlan(opts: ChatOptions, route: PromptCacheRoute, turnMessag
   });
 }
 
+/** The words the turn said, and nothing when it said none: a stand-in summary of its tool output drew as its answer, was
+ *  mailed as its reply and relayed as a child's progress (#119). */
 function turnText(streamed: string, steps: readonly StepResult<ToolSet>[], answer: string | null): string {
   let allText = answer ?? streamed;
 
@@ -746,12 +748,6 @@ function turnText(streamed: string, steps: readonly StepResult<ToolSet>[], answe
 
       if (text.trim()) allText += text;
     }
-  }
-
-  if (!allText.trim()) {
-    const fallback = synthesizeToolFallback(steps);
-
-    if (fallback) allText = fallback;
   }
 
   return allText;

@@ -7,15 +7,8 @@ import { lazy, Suspense, type ReactElement } from 'react';
 
 import { useHydrated } from '@/hooks/use-hydrated';
 import { useMediaQuery } from '@/hooks/use-media-query';
-import type { LandingFrameKind } from './LandingWorkspaceFrame';
 
 const LandingWorkspaceFrame = lazy(() => import('./LandingWorkspaceFrame'));
-
-const WINDOW_TITLE = {
-  work: 'Kinu · Workspace',
-  plan: 'Kinu · Plan mode',
-  slate: 'Kinu · Slate',
-} satisfies Record<LandingFrameKind, string>;
 
 /** Hidden under `prefers-reduced-motion`, where there is no playback to restart. */
 function LandingMovieReplay(): ReactElement | null {
@@ -29,14 +22,14 @@ function LandingMovieReplay(): ReactElement | null {
       onClick={() => window.__kinuLandingMovie?.play()}
       className="font-sans text-xs font-semibold p-accent-fg"
     >
-      Replay the walkthrough →
+      Replay
     </button>
   );
 }
 
-export function LandingFrame({ kind, caption }: { kind: LandingFrameKind; caption: string }): ReactElement {
+export function LandingFrame(): ReactElement {
   const hydrated = useHydrated();
-  const waiting = <div aria-busy="true" className="h-[760px] rounded-b-2xl border p-border p-surface" />;
+  const waiting = <div aria-busy="true" className="h-[620px] rounded-b-2xl border p-border p-surface md:h-[760px]" />;
 
   return (
     <div>
@@ -46,16 +39,12 @@ export function LandingFrame({ kind, caption }: { kind: LandingFrameKind; captio
           <span className="size-2.5 rounded-full bg-[var(--c-warning)] opacity-70" />
           <span className="size-2.5 rounded-full bg-[var(--c-success)] opacity-70" />
         </span>
-        <span className="uppercase tracking-[.12em]">{WINDOW_TITLE[kind]}</span>
-        <span className="ml-auto flex items-center gap-4">
-          <span className="hidden sm:inline" data-landing-caption>{caption}</span>
-          {kind === 'plan' && <LandingMovieReplay />}
-        </span>
+        <span className="uppercase tracking-[.12em]">Kinu · Sample workspace</span>
+        <span className="ml-auto"><LandingMovieReplay /></span>
       </div>
       <Suspense fallback={waiting}>
-        {hydrated ? <LandingWorkspaceFrame kind={kind} /> : waiting}
+        {hydrated ? <LandingWorkspaceFrame /> : waiting}
       </Suspense>
-      <p className="px-1 pt-3 text-[11px] leading-relaxed p-text-3 sm:hidden">{caption}</p>
     </div>
   );
 }

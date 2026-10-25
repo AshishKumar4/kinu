@@ -155,16 +155,6 @@ describe('the reply channel at its edges', () => {
       .toEqual({ delivered: 0, pending: false });
     expect(sent).toHaveLength(0);
   });
-
-  test('empty answers are not emailed', async () => {
-    const { log, replies, sent } = setup();
-    const eventId = await admitOwnerEmail(log, replies);
-    log.markConsumed(eventId, 'evt-turn-4', 0);
-    expect(await dispatchEmailRepliesForTurn({ log, replies }, 'evt-turn-4', '   ', 2_000))
-      .toEqual({ delivered: 0, pending: true });
-    expect(sent).toHaveLength(0);
-    expect(replies.findOpenByEvent(eventId)).not.toBeNull();  // still open
-  });
 });
 
 describe('sendOwnerEmail — changelog digests + job completions', () => {

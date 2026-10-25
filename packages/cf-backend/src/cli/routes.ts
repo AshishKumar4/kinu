@@ -62,7 +62,7 @@ export type CliRoutesAuthority = CliAuthAuthority & SessionAuthority & CloudWork
   'revokeCliTokenHash' | 'listCliTokens' | 'revokeAllCliTokens'
   | 'listAccessTokens' | 'mintAccessToken' | 'revokeAccessToken'
   | 'issueCliAgentConnectTicket' | 'registerDevice'
-  | 'hasWorkspace' | 'requestWorkspaceRemoval' | 'listDevices' | 'listActiveWorkspaces'
+  | 'hasWorkspace' | 'workspaceAdmission' | 'requestWorkspaceRemoval' | 'listDevices' | 'listActiveWorkspaces'
   | 'getProfileCatalog' | 'putProfileCatalog'
   | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'getAuthHeaders' | 'getCredentialEndpoint'
   | 'slateAiSpend'

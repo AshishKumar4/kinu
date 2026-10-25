@@ -32,10 +32,10 @@ function account(holds: readonly string[]) {
     UserDO: {
       idFromName: (name: string) => name,
       get: () => ({
-        async hasWorkspace(_caller: { readonly workspaceToken?: string }, name: string) {
+        async workspaceAdmission(_caller: { readonly workspaceToken?: string }, name: string) {
           asked.push(`member:${name}`);
 
-          return holds.includes(name);
+          return holds.includes(name) ? { capabilityHash: null } : null;
         },
         async ensureWorkspaceCapability() {},
         // The page's shell names the account's theme; this account chose none.

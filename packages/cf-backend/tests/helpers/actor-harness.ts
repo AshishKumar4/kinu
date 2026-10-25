@@ -1787,6 +1787,7 @@ export function makeEnv(
           },
           listActiveWorkspaces: async () => (userPlane?.workspaces ?? []).map((workspace) => ({ ...workspace, createdAt: 1, lastVisited: 1, nameOrigin: 'user' as const })),
           hasWorkspace: async (_caller: UserCaller, name: string) => (userPlane?.workspaces ?? []).some((workspace) => workspace.name === name),
+          workspaceAdmission: async (_caller: UserCaller, name: string) => ((userPlane?.workspaces ?? []).some((workspace) => workspace.name === name) ? { capabilityHash: null } : null),
           userMcp_toolDescriptors: async (): Promise<McpToolSurface> => {
             if (userPlane) userPlane.descriptorReads = (userPlane.descriptorReads ?? 0) + 1;
 

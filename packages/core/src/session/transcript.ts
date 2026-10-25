@@ -199,7 +199,7 @@ function drawnParts(parts: readonly JsonObject[], role: ConversationEntry['role'
 
   for (const [at, part] of parts.entries()) {
     // The provider's compaction summary and its own records (a `custom` part: Anthropic's message_start each step) are
-    // for the model, not the owner; a record left in would end the run of calls around it.
+    // for the model, not the owner.
     if (part.type === 'custom' || isServerCompaction(part.providerOptions)) continue;
     const name = media?.(at);
 

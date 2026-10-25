@@ -4,7 +4,6 @@ import type { ToolSet, TypedToolResult } from 'ai';
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import { renderThrownChain, settleSync } from '../obs/index';
-import { EVIDENCE_BUDGETS } from '../types/evidence';
 import { headEnd, tailStart } from './text';
 
 export { EVIDENCE_BUDGETS } from '../types/evidence';
@@ -23,7 +22,7 @@ export function evidenceWindow(text: string, maxChars: number): string {
   return `${head}\n[... ${omitted} chars omitted from the middle ...]\n${tail}`;
 }
 
-/** Renders a tool result for trajectory/trace/fallback; objects serialize as JSON, never "[object Object]". */
+/** Renders a tool result for a trajectory or a trace; objects serialize as JSON, never "[object Object]". */
 export function renderToolResult(raw: TypedToolResult<ToolSet>['output']): string {
   const text = v.safeParse(v.string(), raw);
 
@@ -34,24 +33,4 @@ export function renderToolResult(raw: TypedToolResult<ToolSet>['output']): strin
   return settleSync(Effect.try({ try: () => JSON.stringify(raw) ?? String(raw), catch: (cause) => ({ cause }) }).pipe(
     Effect.catch((failed) => Effect.succeed(`unserializable value: ${renderThrownChain(failed)}`)),
   ));
-}
-
-/** Turn text when a turn ends on tool calls with no prose; shared by streaming and generateText paths. */
-export function synthesizeToolFallback(
-  steps: ReadonlyArray<{
-    readonly toolResults: ReadonlyArray<{
-      readonly toolName: string;
-      readonly output: TypedToolResult<ToolSet>['output'];
-    }>;
-  }>,
-): string {
-  const lines: string[] = [];
-
-  for (const step of steps) {
-    for (const result of step.toolResults) {
-      lines.push(`[${result.toolName}] ${evidenceWindow(renderToolResult(result.output), EVIDENCE_BUDGETS.toolFallbackSummary)}`);
-    }
-  }
-
-  return lines.join('\n');
 }

@@ -186,3 +186,50 @@ test('an email the Mailbox cannot take fails as a classified error, logged by na
   restore();
   expect(logs.emitted.filter((line) => line.event === 'email.delivery_failed').map((line) => line.code)).toEqual(['io']);
 });
+
+// #119 (2026-10-25): a turn that ended without a word replied with a summary of its tool output, `[file] {"path":…}`,
+// mailed to the sender; and one with nothing to summarize left its reply owed, waking the workspace once a minute.
+test('an email whose turn ends without a word is answered by its receipt alone, and wakes nothing after', async () => {
+  const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } };
+  const listed = { type: 'tool-call', toolCallId: 'c1', toolName: 'file', input: JSON.stringify({ op: 'list', path: '/' }) } as const;
+
+  for (const works of [true, false]) {
+    const sent: Sent[] = [];
+
+    async function send(message: EmailMessage): Promise<EmailSendResult>;
+    async function send(message: Parameters<SendEmail['send']>[0]): Promise<EmailSendResult>;
+    async function send(message: EmailMessage | Parameters<SendEmail['send']>[0]): Promise<EmailSendResult> {
+      sent.push(v.parse(SentSchema, message));
+
+      return { messageId: `<out-${String(sent.length)}@${DOMAIN}>` };
+    }
+
+    const { agent, db } = orchestratorHarness({ titles: [], profile: { email: 'owner@example.com' } }, { email: { send } });
+
+    agent.harnessHoldsCapability('harness-token');
+    agent.modelFactory = () => scriptedTurnModel({ doGenerate: (options) => (works && !options.prompt.some((message) => message.role === 'tool')
+      ? { content: [listed], finishReason: { unified: 'tool-calls', raw: undefined }, usage, warnings: [] }
+      : { content: [], finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [] }) });
+
+    const mailbox = mailboxFor(agent.name, 'actor-main');
+
+    const env = Object.assign(Object.create(null), {
+      EMAIL_DOMAIN: DOMAIN, OrchestratorAgent: { idFromName: (name: string) => name, get: () => agent },
+      MAILNAME: { idFromName: (label: string) => label, get: () => ({ lookup: () => Promise.resolve(CLAIM) }) },
+      MAILBOX: { idFromName: (userId: string) => userId, get: () => mailbox },
+    });
+
+    await handleInboundMail(inbound(mailbox.address, { subject: 'Check the deploy', messageId: '<abc@mail.example.com>', body: 'Is staging green?' }), env);
+
+    // Every wake the turn and its reply arm, until none is left: one owed each minute would never end.
+    let wakes = 0;
+
+    for (; wakes < 10 && db.query("SELECT 1 FROM cf_agents_jobs WHERE capability IN ('kinu-wakes', 'kinu-agent-wakes')").get() !== null; wakes++) {
+      await fireSoonestWake(agent, db);
+      await agent.harnessAgentsIdle();
+    }
+
+    expect({ works, mailed: sent.map((mail) => mail.text?.includes('has your message') === true ? 'receipt' : mail.text), settled: wakes < 10 })
+      .toEqual({ works, mailed: ['receipt'], settled: true });
+  }
+});
