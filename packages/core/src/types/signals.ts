@@ -78,6 +78,8 @@ export type SignalCardEvent =
     readonly metadata: Readonly<JsonObject>;
     /** The signal exactly as this delivery presents it to the model. */
     readonly text: string;
+    /** When it was delivered, on the server's clock that records the chat's messages. */
+    readonly at: number;
   }
   | {
     readonly type: 'signal_card';

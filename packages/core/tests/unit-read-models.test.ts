@@ -24,6 +24,7 @@ import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { getRunTimeline } from '../src/read-models/timeline';
 import { getRunEvents, getRunSummaries, listRuns } from '../src/read-models/runs';
 import { chatSeed, getAgentStatus, getChatHistoryPage, getToolList, type ChatHistoryPage } from '../src/read-models/status';
+import { RECORDED_AT_METADATA_KEY } from '../src/session/transcript';
 import { keptMediaName } from '../src/session/chat-media';
 import { SessionHistory } from '../src/session/history';
 import { stampTurnAuthor } from '../src/types/turn-metadata';
@@ -349,7 +350,7 @@ describe('agent status', () => {
     if (recorded === null) throw new Error('the seeded user entry must be in the transcript');
     expect(await getChatHistoryPage(transcript, {}, keptMediaName)).toEqual({
       status: 'end',
-      items: [{ id: 'a', position: 0, role: 'user', turnId: recorded.turnId, runId: recorded.runId, parts: [{ type: 'text', text: 'hel' }, { type: 'text', text: 'lo' }], createdAt: recorded.recordedAt }],
+      items: [{ id: 'a', position: 0, role: 'user', turnId: recorded.turnId, runId: recorded.runId, parts: [{ type: 'text', text: 'hel' }, { type: 'text', text: 'lo' }], createdAt: recorded.recordedAt, metadata: { [RECORDED_AT_METADATA_KEY]: recorded.recordedAt } }],
     });
     w.db.close();
   });
@@ -375,7 +376,7 @@ describe('agent status', () => {
     expect((await getChatHistoryPage(transcript, {}, keptMediaName)).items).toEqual([{
       id, position: 0, role: 'system', turnId: id, runId: recorded.runId,
       parts: [{ type: 'text', text: '9 head(s) across 1 fork run(s)…' }], createdAt: recorded.recordedAt,
-      metadata: { kinuEvent: 'fork_interrupted', heads: 9, kinuAuthor: 'harness' },
+      metadata: { kinuEvent: 'fork_interrupted', heads: 9, kinuAuthor: 'harness', [RECORDED_AT_METADATA_KEY]: recorded.recordedAt },
     }]);
     w.db.close();
   });

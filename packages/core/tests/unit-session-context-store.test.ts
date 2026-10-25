@@ -15,6 +15,7 @@ import { rowText } from '../src/utils/ui-message';
 import { SessionHistory } from '../src/session/history';
 import { CHAT_SESSION_ID, initSessionTranscriptTables } from '../src/session/transcript-schema';
 import { chatSeed, getChatHistoryPage } from '../src/read-models/status';
+import { RECORDED_AT_METADATA_KEY } from '../src/session/transcript';
 import { keptMediaName } from '../src/session/chat-media';
 import { answersForDrainTurns } from '../src/identity/conversation-store';
 import { inheritedContextFromTranscript } from '../src/orchestrator/heads-support';
@@ -399,7 +400,7 @@ test('read-only transcript authorization is checked again after payload access',
       return s.rt.storage.vfs;
     });
 
-    expect((await chatSeed(reader, keptMediaName)).messages).toEqual([{ id: 'public-input', role: 'user', parts: [{ type: 'text', text }] }]);
+    expect((await chatSeed(reader, keptMediaName)).messages).toEqual([{ id: 'public-input', role: 'user', parts: [{ type: 'text', text }], metadata: { [RECORDED_AT_METADATA_KEY]: expect.any(Number) } }]);
     revokeDuringRead = true;
     await expect(chatSeed(reader, keptMediaName)).rejects.toThrow('read grant revoked');
   } finally { s.testSql.close(); }

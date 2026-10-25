@@ -14,7 +14,7 @@ import { galleryPicture } from "@/gallery-pictures";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { FileUIPart, UIMessage } from "ai";
 import { connectedPath, connectEndedOf, mainPanelAgent, restoredRows, sharedBuildRefusal, threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl, type ModelMenuEntry, type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry } from "@kinu.run/core";
-import { delegatedTaskMetadata, followJobOutput, summarizeSteps, SIGNALS_SEEN_METADATA_KEY, TURN_END_METADATA_KEY, TURN_FAILURE_METADATA_KEY, JOB_OUTPUT_EVENT, type JobOutputTail } from "@kinu.run/core";
+import { delegatedTaskMetadata, followJobOutput, RECORDED_AT_METADATA_KEY, summarizeSteps, SIGNALS_SEEN_METADATA_KEY, TURN_END_METADATA_KEY, TURN_FAILURE_METADATA_KEY, JOB_OUTPUT_EVENT, type JobOutputTail } from "@kinu.run/core";
 import {
   COMPLETION_GATE_EVENT, FORK_INTERRUPTED_SIGNAL, OUTPUT_CONTINUATION_EVENT, OUTPUT_CONTINUATION_TEXT, OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
   OWNER_ANSWER_SIGNAL, TASK_REMINDER_EVENT, TASK_REMINDER_OPEN_KEY, taskReminderOf,
@@ -1923,6 +1923,8 @@ const GalleryPushFrameSchema = v.object({
   steerId: v.optional(v.string()),
   status: v.optional(v.string()),
   atStep: v.optional(v.number()),
+  // When a card's signal was delivered, on the server's clock.
+  at: v.optional(v.number()),
   // An agent given work or reporting on it (`subagent_event`), at the time it happened.
   subagent: v.optional(v.string()),
   content: v.optional(v.string()),
@@ -3160,8 +3162,10 @@ window.addEventListener("gallery:live-window", (event: Event) => {
 // The seeded rows follow the stored ones.
 if (HISTORY_ROWS > 0) galleryChatStartsAt("", { before: HISTORY_ROWS });
 
-/** A stored row as the page reader draws a text-only one: its words as its one part. */
-const textEntry = ({ content, ...entry }: Omit<ChatHistoryEntry, "parts"> & { readonly content: string }): ChatHistoryEntry => ({ ...entry, parts: [{ type: "text", text: content }] });
+/** A stored row as the page reader draws a text-only one: its words as its one part, its time in its metadata too. */
+const textEntry = ({ content, ...entry }: Omit<ChatHistoryEntry, "parts"> & { readonly content: string }): ChatHistoryEntry => ({
+  ...entry, parts: [{ type: "text", text: content }], metadata: { ...entry.metadata, [RECORDED_AT_METADATA_KEY]: entry.createdAt },
+});
 
 function historyRow(index: number): ChatHistoryEntry {
   const id = `hist-${String(index).padStart(5, "0")}`;
@@ -3428,7 +3432,7 @@ function galleryDecideDeferred(args?: unknown[]): WorkspaceAnswer<"decideDeferre
     galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listPendingActions"] }));
     // The decision reaches the agent as its inbox wakes it (core safety/deferred-approval.ts `decide`).
     galleryServerPush(JSON.stringify({
-      type: "signal_card", id: `sig-${ids.join("-")}`, state: "pending", text: `Your owner answered ${String(ids.length)} queued command(s): ${decision}.`,
+      type: "signal_card", id: `sig-${ids.join("-")}`, state: "pending", at: Date.now(), text: `Your owner answered ${String(ids.length)} queued command(s): ${decision}.`,
       metadata: { kinuEvent: "deferred_approval", decision, count: ids.length, ids },
     }));
   });

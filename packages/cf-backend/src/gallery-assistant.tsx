@@ -12,7 +12,7 @@ import {
   APP_ROUTES, buildDrainBatch, mainPanelAgent, PositionPageRequestSchema, workspaceGenesisSignal,
   type ChatHistoryEntry, type JsonObject, type JsonValue, type KinuEvent, type RosterEntry, type WorkspaceOverview,
 } from "@kinu.run/core";
-import { JsonObjectSchema } from "@kinu.run/core";
+import { JsonObjectSchema, RECORDED_AT_METADATA_KEY } from "@kinu.run/core";
 import Layout from "@/components/layout";
 import WorkspacePage from "@/pages/WorkspacePage";
 import { seedGalleryChat, serveGalleryRpc } from "@/gallery-agent-stub";
@@ -209,13 +209,13 @@ function historyPage(args: readonly unknown[] | undefined): JsonValue {
   const asked = v.parse(PositionPageRequestSchema, args?.[0] ?? {});
 
   const rows = ASSISTANT_THREAD.map((message, position) => {
-    const row: ChatHistoryEntry = {
-      id: message.id, position, role: message.role, turnId: null, parts: v.parse(v.array(JsonObjectSchema), message.parts), createdAt: message.createdAt ?? NOW,
-    };
+    const createdAt = message.createdAt ?? NOW;
 
-    if (message.metadata !== undefined) row.metadata = v.parse(JsonObjectSchema, message.metadata);
-
-    return row;
+    // As the server pages a stored row: its time is the row's field and its drawn message's metadata both.
+    return {
+      id: message.id, position, role: message.role, turnId: null, parts: v.parse(v.array(JsonObjectSchema), message.parts), createdAt,
+      metadata: { ...v.parse(v.optional(JsonObjectSchema, {}), message.metadata), [RECORDED_AT_METADATA_KEY]: createdAt },
+    } satisfies ChatHistoryEntry;
   });
 
   const end = asked.cursor?.before ?? rows.length;
