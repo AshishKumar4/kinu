@@ -9,7 +9,7 @@ import {
 } from '../prompting/volatile-context';
 import type { MailInContext } from '../mail/in-context';
 import type { ActiveRoster, ShownLesson } from '../types/dynamic-context';
-import { renderFactsForTurn } from '../orchestrator/turn-surface';
+import { renderMemoryForTurn } from '../orchestrator/turn-surface';
 import { listRecoveryFindings } from '../evolution/recovery';
 import { listToolLessons, MAX_TOOL_LESSONS, shownLesson } from '../evolution/struggles';
 import { craftedToolDeclarations, externalToolDeclarations, runnableSandbox } from '../tools/sandbox-contract';
@@ -19,13 +19,14 @@ import type { ActiveSkillSet } from '../skills/types';
 import type { TurnReason } from '../types/turn';
 import type { ToolSet } from 'ai';
 import type { Fact, FactsStore } from '../memory/facts';
+import type { RecalledMemory } from '../memory/turn-recall';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { ASKED, type Holds } from '../utils/held-reads';
 
 /** The rows a dynamic block reads from its agent's stores. */
 export interface DynamicReads {
-  readonly facts: Pick<FactsStore, 'recentTopK' | 'all'>;
+  readonly facts: Pick<FactsStore, 'recentTopK' | 'all' | 'recall'>;
   readonly recoveryFindings: () => string[];
   readonly toolLessons: (tools: readonly string[]) => ShownLesson[];
   readonly runningJobs: AgentStores['jobs']['listRunning'];
@@ -49,6 +50,7 @@ export function dynamicReads(stores: AgentStores, sql: SqlExecutor, actor: Actor
     facts: {
       recentTopK: holds.holdEach(['agent_facts'], (k: number) => stores.facts.recentTopK(k)),
       all: holds.hold(['agent_facts'], () => stores.facts.all()),
+      recall: holds.holdEach(['agent_facts'], (key: string) => stores.facts.recall(key)),
     },
     // recordLesson.
     recoveryFindings: holds.hold(['lessons'], () => listRecoveryFindings(sql, actor)),
@@ -80,6 +82,8 @@ export interface DynamicContextInput {
   readonly memoryTail: string | undefined;
   /** The account's facts, read once per turn by the caller; absent where no account is wired. */
   readonly accountFacts?: readonly Fact[];
+  /** What the turn's words recalled of memory, read once per turn by the caller. */
+  readonly recalled?: readonly RecalledMemory[];
   readonly missingCapabilities: readonly MissingCapability[];
   /** Down MCP servers (`server` null: the catalog), noted only where `eval` reaches MCP tools. */
   readonly unavailableMcp?: readonly { readonly server: string | null; readonly reason: string }[];
@@ -125,7 +129,9 @@ export function collectDynamicContext(input: DynamicContextInput): DynamicContex
     // With crafting off the section stays silent: no tool is offered, and none is asked for.
     ...(rt.actor.config.getCrafting() && { craftedTools: craftedToolDeclarations(input.tools, profile) }),
     externalTools: externalToolDeclarations(input.tools, input.externalTools ?? {}, profile),
-    factsBlock: renderFactsForTurn(reads.facts, input.accountFacts),
+    // A note MEMORY.md's tail shows already is not shown twice, unless a fact has since changed what it says.
+    factsBlock: renderMemoryForTurn(reads.facts, input.accountFacts, input.recalled?.filter((memory) => memory.kind === 'fact' || memory.supersededBy !== null
+      || input.memoryTail?.includes(memory.text.trim()) !== true)),
     memoryTail: input.memoryTail,
     recoveryFindings: reads.recoveryFindings(),
     toolLessons: reads.toolLessons(Object.keys(input.tools)),

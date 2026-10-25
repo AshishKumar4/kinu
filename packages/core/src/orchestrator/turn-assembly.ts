@@ -8,6 +8,7 @@ import { Effect } from 'effect';
 import type { ModelWindow } from '../context-window';
 import type { KinuExtension } from '../extension';
 import type { Fact } from '../memory/facts';
+import type { RecalledMemory } from '../memory/turn-recall';
 import type { MailInContext } from '../mail/in-context';
 import type { ActiveRoster } from '../types/dynamic-context';
 import type { SpendGate } from '../mission-budget';
@@ -68,6 +69,8 @@ export interface TurnReads {
   readonly activeSkills: ActiveSkillSet | null;
   readonly accountFacts?: readonly Fact[];
   readonly mail?: ActiveRoster<MailInContext>;
+  /** What the turn's words recalled of memory. */
+  readonly recalled?: readonly RecalledMemory[];
 }
 
 export interface TurnAssemblySources {
@@ -118,6 +121,10 @@ export interface TurnAssemblySources {
   mail?(): Promise<ActiveRoster<MailInContext> | undefined>;
   /** MEMORY.md's tail, read once per turn so every step renders the same block. */
   memoryTail(): Promise<string | undefined>;
+  /** What the turn's words match in its memory and in `accountFacts`, the account's as the turn read them
+   *  (`recallForTurn`), read once per turn beside its other reads; it never rejects: a failed search is logged and answers
+   *  none, as a failed read of the account's facts does. */
+  recall?(question: string, accountFacts: readonly Fact[] | undefined): Promise<readonly RecalledMemory[]>;
   operation(profile: ResolvedTurnProfile, inputs: ProfileAuthorityInputs): OperationProfile;
   /** Binds the resolved profile; `toolset` is read again after it. */
   settle?(profile: ResolvedTurnProfile, inputs: ProfileAuthorityInputs): void | Promise<void>;
@@ -148,7 +155,7 @@ export type RunTurnSources = Omit<TurnAssemblySources, 'toolset' | 'externalTool
 /** What a backend brings to a seated actor's turn sources; the rest is read off the actor ({@link actorTurnSources}). */
 export type ActorTurnParts = Pick<RunTurnSources,
   'backend' | 'harnessMode' | 'models' | 'profileInputs' | 'choices' | 'ancestors' | 'agentsActions' | 'temporaryAsk' | 'soul' | 'agentsMd'
-  | 'budget' | 'observeStream' | 'operations' | 'attachmentBudget' | 'extensions' | 'dynamic' | 'accountFacts' | 'mail'> & {
+  | 'budget' | 'observeStream' | 'operations' | 'attachmentBudget' | 'extensions' | 'dynamic' | 'accountFacts' | 'mail' | 'recall'> & {
   /** The workspace's identity: its own agent speaks as it, any other as a named agent of it. */
   readonly workspaceIdentity: () => Promise<PromptIdentity>;
   readonly instructionTrust: InstructionTrustResolver;
@@ -291,16 +298,38 @@ function resolvedTurnProfile(sources: TurnAssemblySources, turn: Pick<TurnDraft,
 }
 
 /** Effect-free: a measure between turns assembles too. */
-/** What every step of the turn renders the same bytes of: MEMORY.md's tail, the account's facts and the agent's mail. */
-async function readTurnOnce(sources: TurnAssemblySources, activeSkills: ActiveSkillSet | undefined): Promise<TurnReads> {
-  const [memoryTail, accountFacts, mail] = await Promise.all([sources.memoryTail(), sources.accountFacts?.(), sources.mail?.()]);
+/** The turn's reads started as its preparation begins: the account's facts, and the search for what `question` recalls
+ *  among them and the agent's own memory, none where its sources recall nothing. */
+interface StartedReads {
+  readonly accountFacts: Promise<readonly Fact[]> | undefined;
+  readonly recalled: Promise<readonly RecalledMemory[]> | undefined;
+}
 
-  return { memoryTail, activeSkills: activeSkills ?? null, ...(accountFacts !== undefined && { accountFacts }), ...(mail !== undefined && { mail }) };
+function startReads(sources: TurnAssemblySources, question: string): StartedReads {
+  const accountFacts = sources.accountFacts?.();
+
+  if (sources.recall === undefined) return { accountFacts, recalled: undefined };
+
+  return { accountFacts, recalled: (async () => await sources.recall?.(question, await accountFacts) ?? [])() };
+}
+
+/** What every step of the turn renders the same bytes of: MEMORY.md's tail, the account's facts, the agent's mail and
+ *  what its words recalled, started as its preparation began (`started`). */
+async function readTurnOnce(sources: TurnAssemblySources, activeSkills: ActiveSkillSet | undefined, started: StartedReads): Promise<TurnReads> {
+  const [memoryTail, accountFacts, mail, recalled] = await Promise.all([sources.memoryTail(), started.accountFacts, sources.mail?.(), started.recalled]);
+
+  return {
+    memoryTail, activeSkills: activeSkills ?? null,
+    ...(accountFacts !== undefined && { accountFacts }), ...(mail !== undefined && { mail }), ...(recalled !== undefined && { recalled }),
+  };
 }
 
 export async function assembleActorTurn(sources: TurnAssemblySources, request: TurnAssemblyRequest): Promise<AssembledTurn> {
   const { models } = sources;
   const { frozen } = request;
+  // Started first and taken last, so the search runs beside every wait of the turn's preparation.
+  const started = startReads(sources, request.userText);
+
   // The tier never depends on the tools, so the drafted model is the served one; a frozen execution's is the one it froze.
   const { profileInputs, choices, roleSkills, drafted, served: spec, limits } = await draftTurn(sources, request);
 
@@ -329,7 +358,7 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
   const { pinned, invoked } = splitTurnSkills(activeSkills);
 
   const [window, agentsMd, soul, identity, reads] = await Promise.all([
-    models.catalog.windowFor(spec), sources.agentsMd(limits), sources.soul(), sources.identity(), readTurnOnce(sources, activeSkills),
+    models.catalog.windowFor(spec), sources.agentsMd(limits), sources.soul(), sources.identity(), readTurnOnce(sources, activeSkills, started),
     models.catalog.warm(profile.tier.fallbacks.map((fallback) => fallback.model)),
   ]);
 

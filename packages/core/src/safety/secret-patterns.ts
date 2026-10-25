@@ -184,18 +184,37 @@ const REDACTION_PASSES = [...SECRET_PATTERNS, ...REDACTION_ONLY_PATTERNS].map((p
  *  pass masks only the header and would leave the key's body. */
 const PRIVATE_KEY_BLOCK = /-----BEGIN[^-\n]*PRIVATE KEY[^-\n]*-----[\s\S]*?(?:-----END[^-\n]*PRIVATE KEY[^-\n]*-----|$)/g;
 
-/** Masks each private key whole, then applies `SECRET_PATTERNS` and `REDACTION_ONLY_PATTERNS` per line (a match that is
- *  itself a pattern's `benign` form stays), with `<redacted>`, the marker every redacted line carries. */
-export function redactSecrets(text: string): string {
-  return text.replaceAll(PRIVATE_KEY_BLOCK, '<redacted>').split('\n').map((line) => {
+/** Each private key masked whole, then `passes` per line (a match that is itself a pattern's `benign` form stays), each
+ *  match as `marker` names its pattern's kind. */
+function masked(text: string, passes: typeof REDACTION_PASSES, marker: (id: string) => string): string {
+  return text.replaceAll(PRIVATE_KEY_BLOCK, marker('private-key')).split('\n').map((line) => {
     let redacted = line;
 
-    for (const { pattern, one } of REDACTION_PASSES) {
+    for (const { pattern, one } of passes) {
+      const mark = marker(pattern.id);
+
       // `benign` judges the match, not the line: prose beside a live key never spares it.
       redacted = redacted.replaceAll(pattern.regex, (match) =>
-        pattern.benign?.test(match) === true ? match : match.replace(one, pattern.mask ?? '<redacted>'));
+        pattern.benign?.test(match) === true ? match : match.replace(one, pattern.mask?.replace('<redacted>', mark) ?? mark));
     }
 
     return redacted;
   }).join('\n');
+}
+
+/** `SECRET_PATTERNS` and `REDACTION_ONLY_PATTERNS` masked with `<redacted>`, the marker every redacted line carries. */
+export function redactSecrets(text: string): string {
+  return masked(text, REDACTION_PASSES, () => '<redacted>');
+}
+
+/** The credential shapes: a citation the public repo bars is the owner's to keep. */
+const CREDENTIAL_PASSES = REDACTION_PASSES.filter(({ pattern }) => pattern.regex !== CF_INTERNAL_REFERENCE);
+
+/**
+ * Every credential masked as `<redacted:<kind>>`, the form memory keeps (`memory/scrub.ts`): the kind (`openai-key`,
+ * `provider-secret`, `private-key`) tells a later turn what was there without the value. Not a vault reference: `$NAME`
+ * names a secret the owner saved and granted, and one said in chat may be neither.
+ */
+export function scrubSecrets(text: string): string {
+  return masked(text, CREDENTIAL_PASSES, (id) => `<redacted:${id}>`);
 }

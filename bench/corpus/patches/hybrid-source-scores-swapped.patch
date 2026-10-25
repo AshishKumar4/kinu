@@ -1,10 +1,11 @@
 diff --git a/packages/core/src/memory/hybrid-search.ts b/packages/core/src/memory/hybrid-search.ts
 --- a/packages/core/src/memory/hybrid-search.ts
 +++ b/packages/core/src/memory/hybrid-search.ts
-@@ -216,8 +216,8 @@
+@@ -218,9 +218,9 @@
        rrfScore: m.rrfScore,
        sources,
        ...hitScope(f, n),
+       ...(f !== undefined && { factKey: f.key }),
 -      lexicalScore: l?.score,
 -      semanticScore: s?.score,
 +      lexicalScore: s?.score,

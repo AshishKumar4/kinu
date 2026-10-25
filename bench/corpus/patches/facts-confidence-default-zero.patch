@@ -1,12 +1,12 @@
 diff --git a/packages/core/src/memory/facts.ts b/packages/core/src/memory/facts.ts
 --- a/packages/core/src/memory/facts.ts
 +++ b/packages/core/src/memory/facts.ts
-@@ -172,7 +172,7 @@
+@@ -178,7 +178,7 @@
      upsert(key, value, opts = {}) {
        authorize();
        const canonical = normalizeFactKey(key);
 -      const conf = unit(opts.confidence, 1);
 +      const conf = unit(opts.confidence, 0);
        const src = opts.source ?? null;
-       const valueJson = JSON.stringify(value);
-       const origin = opts.origin === undefined ? null : JSON.stringify(opts.origin);
+       // Every writer of a fact reaches this: its value is kept scrubbed (`memory/scrub.ts`).
+       const valueJson = JSON.stringify(scrubMemoryValue(value));

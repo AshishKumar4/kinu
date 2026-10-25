@@ -13,6 +13,7 @@ import { settle } from '../obs/effect';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { SessionTranscriptReader } from '../session/transcript';
+import { scrubSecrets } from '../safety/secret-patterns';
 
 /** A default, not a ceiling: scroll honours the caller's max_chars. */
 const MAX_MESSAGE_CHARS = 700;
@@ -261,7 +262,8 @@ export class ConversationSearchStore implements ConversationRecall {
         for (const row of rows) {
           const projected = yield* Effect.promise(() => this.transcriptFor(row.session_id).project(row.id));
 
-          if (projected !== null) projections.push({ row, content: projected.content });
+          // The index is memory: what the conversation said, kept scrubbed (`memory/scrub.ts`).
+          if (projected !== null) projections.push({ row, content: scrubSecrets(projected.content) });
         }
 
         let committed = false;

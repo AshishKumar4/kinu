@@ -11,6 +11,8 @@ import { markStoreChanged } from '@kinu.run/agent-utils';
 import { JsonValueSchema, parseJsonValue, type JsonValue } from '../utils/json';
 import { KinuError, settleSync } from '../obs/index';
 import { nanoid } from '../utils/nanoid';
+import { scrubSecrets } from '../safety/secret-patterns';
+import { scrubMemoryValue } from './scrub';
 import { expandedTokenGroups, lexicalGroupRelevance, minimumRelevance } from './lexical-recall';
 import {
   ACCOUNT_FACTS_ACTOR, createFactsStore, FactOriginSchema, FactRevisionSchema, FactSchema, initFactsTable, normalizeFactKey,
@@ -194,7 +196,9 @@ export class AccountMemoryStore {
    * already filed whatever became of it. `workspace` is where it was said.
    */
   propose(filing: AccountProposalFiling, workspace: string | null): string {
-    const proposal = v.parse(AccountProposalSchema, filing.proposal);
+    const filed = v.parse(AccountProposalSchema, filing.proposal);
+    // Kept scrubbed (`memory/scrub.ts`): an accepted proposal is written as it was filed.
+    const proposal = filed.kind === 'fact' ? { ...filed, value: scrubMemoryValue(filed.value) } : { ...filed, content: scrubSecrets(filed.content) };
     const proposer = v.parse(AccountProposerSchema, filing.proposer);
     const delivered = filing.delivery === undefined ? undefined : this.sql<{ id: string }>`SELECT id FROM account_memory_proposals WHERE delivery = ${filing.delivery}`[0];
 

@@ -101,6 +101,8 @@ export interface SharedBackend {
   readonly holdTurn: (text: string, mode: WorkMode) => Promise<HeldTurn>;
   /** Each call the main actor's model was asked, in order, as the provider is sent it. */
   readonly requests: () => readonly ScriptedTurnOptions[];
+  /** The main actor's next model calls answer these, in order; every call after them answers 'done'. */
+  readonly answers: (...results: readonly ScriptedTurnResult[]) => void;
   /** Ends what opening the backend started, so no work it tracks outlives the case. */
   readonly end?: () => Promise<void>;
 }
@@ -118,11 +120,13 @@ const DONE_ANSWER = {
     outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
 } satisfies ScriptedTurnResult;
 
-/** The main actor's model on both backends: it answers 'done', or parks a held turn's call until release. */
+/** The main actor's model on both backends: it answers what a case queued, else 'done', or parks a held turn's call
+ *  until release. */
 function turnGate() {
   let held: { readonly arrived: ReturnType<typeof Promise.withResolvers<void>>; readonly released: ReturnType<typeof Promise.withResolvers<void>> } | null = null;
 
   const requests: ScriptedTurnOptions[] = [];
+  const queued: ScriptedTurnResult[] = [];
 
   const model = scriptedTurnModel({ doGenerate: async (options) => {
     requests.push(options);
@@ -134,12 +138,13 @@ function turnGate() {
       await hold.released.promise;
     }
 
-    return DONE_ANSWER;
+    return queued.shift() ?? DONE_ANSWER;
   } });
 
   return {
     model,
     requests: () => requests,
+    answers: (...results: readonly ScriptedTurnResult[]) => { queued.push(...results); },
     /** Starts `open`, a turn that resolves once it has ended, and resolves once that turn reaches the model. */
     async hold(open: () => Promise<void>): Promise<HeldTurn> {
       const hold = { arrived: Promise.withResolvers<void>(), released: Promise.withResolvers<void>() };
@@ -185,6 +190,7 @@ async function cloudflare(opens: BackendOpening): Promise<SharedBackend> {
     chat: { sql: wrapDatabase(mainDatabase(harness)).sql, actor: main.actor },
     snapshot: (dir, turn) => daemon.snapshot({ agent: WORKSPACE, dir, ...turn }),
     requests: gate.requests,
+    answers: gate.answers,
     holdTurn: (text, mode) => gate.hold(() => sentTurn(agent, text, crypto.randomUUID(), { mode })),
     sleepTime: (answer, enabled) => {
       const prompts = scriptedSleepTime(agent, answer);
@@ -325,6 +331,7 @@ async function cli(opens: BackendOpening): Promise<SharedBackend> {
       await checkpoints.ensureCheckpoint(dir);
     },
     requests: gate.requests,
+    answers: gate.answers,
     holdTurn: (text, mode) => gate.hold(async () => { await session.send(text, { id: crypto.randomUUID(), mode }); }),
     sleepTime: (answer, enabled) => {
       const prompts: string[] = [];

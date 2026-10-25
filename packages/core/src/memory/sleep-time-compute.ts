@@ -12,6 +12,8 @@ import type { ConversationProjection } from '../session/transcript';
 import { jsonObjectOnlyInstruction } from '../providers/structured';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { JsonValueSchema, type JsonValue } from '../utils/json';
+import { scrubSecrets } from '../safety/secret-patterns';
+import { scrubMemoryValue } from './scrub';
 import { SLEEP_TIME_PROMPT_OPENING } from '../utils/prompt-sections';
 
 export const SLEEP_TIME_CADENCE = {
@@ -220,7 +222,16 @@ export async function runSleepTimeCompute(
   judge: Pick<RoutedLLM, 'object'>,
   input: SleepTimeInput,
 ): Promise<SleepTimeUpdate> {
-  return await judge.object(PROMPT(input), SleepTimeUpdateSchema);
+  const update = await judge.object(PROMPT(input), SleepTimeUpdateSchema);
+
+  // Kept scrubbed (`memory/scrub.ts`): the answer is stored for a replay, and its values become facts and proposals.
+  return {
+    ...update,
+    upserts: update.upserts.map((upsert) => ({ ...upsert, value: scrubMemoryValue(upsert.value), rationale: scrubSecrets(upsert.rationale) })),
+    ...(update.account !== undefined && {
+      account: update.account.map((fact) => ({ ...fact, value: scrubMemoryValue(fact.value), rationale: scrubSecrets(fact.rationale) })),
+    }),
+  };
 }
 
 export function applySleepTimeUpdate(

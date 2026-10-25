@@ -7,6 +7,7 @@ import { sqlCheckList } from '../utils/sql';
 import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
 import { parseJsonValue } from '../utils/json';
+import { scrubSecrets } from '../safety/secret-patterns';
 
 /** Lesson sources in canonical order; the table's CHECK constraint derives from
  *  this list. `execution_recovery` is bound to no turn, so it is never corroborated;
@@ -64,7 +65,7 @@ export function recordLesson(sql: SqlExecutor, actor: ActorHandle, input: {
   const id = input.key === undefined ? `lsn-${nanoid()}` : `lsn-${input.key}`;
   const now = input.now ?? nowMs();
   void sql`INSERT INTO lessons (actor_id, id, turn_ids, text, source, created_at, corroborated_at)
-      VALUES (${actor.actorId}, ${id}, ${JSON.stringify(input.turnIds)}, ${input.text}, ${input.source},
+      VALUES (${actor.actorId}, ${id}, ${JSON.stringify(input.turnIds)}, ${scrubSecrets(input.text)}, ${input.source},
               ${now}, ${input.status === 'corroborated' ? now : null})
       ON CONFLICT(actor_id, id) DO NOTHING`;
 
