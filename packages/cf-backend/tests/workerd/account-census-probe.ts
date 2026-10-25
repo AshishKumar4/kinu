@@ -170,8 +170,13 @@ export class CensusAccountDO extends UserDO {
     };
   }
 
+  /** The person's delete, then the account's alarms until its jobs have landed it, as the platform runs them. */
   async deleteThis(): Promise<{ ok: true; workspaces: number }> {
-    return this.deleteAccount(await ownerCaller(this.env), this.name);
+    const answer = await this.deleteAccount(await ownerCaller(this.env), this.name);
+
+    for (let lap = 0; lap < 8 && this.ctx.storage.kv.get('account:deleting') !== undefined; lap += 1) await this.alarm();
+
+    return answer;
   }
 
   async signInCensus(person: Person): Promise<number> {

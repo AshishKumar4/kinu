@@ -488,6 +488,20 @@ export class UserWorkspaces {
       async () => { this.rosterChanged(name); }, { workspace: name });
   }
 
+  /** Every workspace marked for deletion in one write with `intent`, so no reset between them leaves one unmarked; the
+   *  account's next start arms each marked one's job (`WorkspaceDeletionJobs.adoptMarked`). Their names, in order. */
+  markEveryForDeletion(intent: () => void): string[] {
+    const names = this.host.ctx.storage.transactionSync(() => {
+      intent();
+
+      return this.host.sqlx<{ name: string }>(`UPDATE user_workspaces SET delete_pending = 1 RETURNING name`).map((row) => row.name).sort();
+    });
+
+    for (const name of names) this.rosterChanged(name);
+
+    return names;
+  }
+
   /**
    * Row is marked before teardown and removed after, so a failed teardown is run again by its own
    * job (`WorkspaceDeletionJobs`); `destroyAgent` is idempotent. Answered once it landed, for a caller that goes on to

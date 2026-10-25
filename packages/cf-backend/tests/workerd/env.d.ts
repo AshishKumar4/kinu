@@ -293,7 +293,7 @@ interface AccountResetProbeRpc extends Rpc.DurableObjectBranded {
   pendingDeletes(): Promise<string[]>;
   receivedFrom(): Promise<string[]>;
   ownerDeleted(ownerUserId: string): Promise<void>;
-  resetRefused(): Promise<string>;
+  lap(): Promise<void>;
 }
 
 /** A person, as `account-census-probe.ts` seeds and counts them. */

@@ -231,3 +231,31 @@ test("a burst of a person's deletes is torn down one per alarm, each alarm the n
   expect({ torn, destroyed: [...user.destroyedWorkspaces].sort(), jobs: user.db.query<{ id: string }, []>("SELECT id FROM cf_agents_jobs WHERE id LIKE 'workspace-deletion:%'").all() })
     .toEqual({ torn: [1, 2, 3], destroyed: ['archive', 'drafts', 'ledger'], jobs: [] });
 });
+
+// An account's delete writes its intent and every workspace's mark in one transaction, so a reset at any later point
+// leaves an account the next activation finishes: each workspace, then the account (review, 2026-10-25: a reset between
+// per-workspace marks left one unmarked, and the account's job would never run).
+test("an account's delete reset after its write is finished by the next activation, every workspace and then itself", async () => {
+  const storage = new Database(':memory:');
+  // The deployment's sign-in directory answers beside the account; it has no share recipients here.
+  const account = () => createTestUserDO({ durableObjectId: OWNER, storage, accounts: (id) => { throw new Error(`no share recipient ${id}`); } });
+  const first = account();
+  const owner = await testOwner();
+
+  for (const name of ['ledger', 'drafts']) await first.userDO.registerWorkspace(owner, name);
+
+  expect(await first.userDO.deleteAccount(owner, OWNER)).toEqual({ ok: true, workspaces: 2 });
+  // The first activation ends here, none of its jobs run: the answer came with nothing torn down.
+  expect({ destroyed: first.destroyedWorkspaces, marked: first.db.query<{ name: string }, []>('SELECT name FROM user_workspaces WHERE delete_pending = 1 ORDER BY name').all() })
+    .toEqual({ destroyed: [], marked: [{ name: 'drafts' }, { name: 'ledger' }] });
+
+  const second = account();
+
+  // An alarm a workspace, one for the account's clearing, one that destroys it; its abort comes a tick after.
+  for (let lap = 0; lap < 4 && second.accountDeleted.length < 2; lap += 1) await second.userDO.alarm();
+  await second.userDO.alarm();
+  await second.abortRaised();
+
+  expect({ destroyed: [...second.destroyedWorkspaces].sort(), reached: [...second.accountDeleted].sort(), aborted: second.aborted })
+    .toEqual({ destroyed: ['drafts', 'ledger'], reached: [`mailbox:${OWNER}`, `sign-in:${OWNER}`], aborted: ['destroyed'] });
+});

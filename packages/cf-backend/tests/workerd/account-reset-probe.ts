@@ -5,7 +5,6 @@
  */
 import { getAgentByName, type AgentContext } from 'agents';
 import { ownerCaller, type UserProfile } from '@kinu.run/core';
-import { renderThrownChain } from '@kinu.run/core/obs';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { USER_DO_RPC_SURFACE } from '../../src/rpc-surface';
 import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
@@ -44,7 +43,7 @@ export class OrchestratorAgent extends ProductionOrchestrator {
   }
 }
 
-const PROBE_METHODS = ['seed', 'counts', 'hashes', 'reset', 'freshProfile', 'refuseTeardownOf', 'pendingDeletes', 'receivedFrom', 'ownerDeleted', 'resetRefused'];
+const PROBE_METHODS = ['seed', 'counts', 'hashes', 'reset', 'freshProfile', 'refuseTeardownOf', 'pendingDeletes', 'receivedFrom', 'ownerDeleted', 'lap'];
 
 const ACCOUNT_TABLE_PREFIXES = ['user_', 'device_', 'cli_', 'codex_'];
 
@@ -130,15 +129,9 @@ export class AccountResetProbeDO extends UserDO {
     await this.sharesReceived_forget(await ownerCaller(this.env), ownerUserId);
   }
 
-  /** A delete a workspace refuses, answered as its thrown chain: a rejection crossing to the runner is reported unhandled. */
-  async resetRefused(): Promise<string> {
-    try {
-      await this.reset();
-
-      return 'deleted';
-    } catch (cause) {
-      return renderThrownChain({ cause });
-    }
+  /** One of the account's alarms, as the platform runs it when a job comes due. */
+  async lap(): Promise<void> {
+    await this.alarm();
   }
 
   async reset(): Promise<{ ok: true; workspaces: number }> {

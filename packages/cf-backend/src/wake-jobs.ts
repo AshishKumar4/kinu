@@ -134,6 +134,7 @@ export class WakeJobs extends LifecycleCapability {
 /** What each job {@link retriedUnlessRefused} answers for logs as it fails, and what it was doing. */
 const JOB_FAILURES = {
   workspaceDeletion: { event: 'workspace.deletion_failed', doing: 'finishing a workspace deletion that has not landed', otherwise: 'unavailable' },
+  accountDeletion: { event: 'account.deletion_failed', doing: 'finishing an account deletion that has not landed', otherwise: 'unavailable' },
   pendingDelivery: { event: 'watch.delivery_check_failed', doing: "checking a watcher's kept delivery", otherwise: 'io' },
 } as const;
 
