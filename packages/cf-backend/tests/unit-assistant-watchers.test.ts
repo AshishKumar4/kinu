@@ -87,15 +87,17 @@ interface GitHubInboxState {
 }
 
 /** GitHub as it answers /notifications: a 304 while unchanged since `If-Modified-Since`, else newest first, after
- *  `since` (exclusive, as GitHub reads it), a page of `per_page` at a time. */
+ *  `since` and before `before` (both exclusive, as GitHub reads them), a page of `per_page` at a time. */
 function gitHubInbox() {
   const state: GitHubInboxState = { modified: 'Fri, 24 Oct 2026 09:00:00 GMT', inbox: [] };
   const reads: GitHubRead[] = [];
 
   const answer = (read: GitHubRead): GitHubAnswer => {
     if (read.ifModifiedSince === state.modified) return { status: 304, body: null, headers: { lastModified: state.modified } };
-    const { since, page = 1, per_page: per = 50 } = v.parse(NotificationsQuerySchema, read.query ?? {});
-    const listed = state.inbox.filter(({ updated_at }) => since === undefined || updated_at > since).sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+    const { since, before, page = 1, per_page: per = 50 } = v.parse(NotificationsQuerySchema, read.query ?? {});
+
+    const listed = state.inbox.filter(({ updated_at }) => (since === undefined || updated_at > since) && (before === undefined || updated_at < before))
+      .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
 
     const body = listed.slice((page - 1) * per, page * per).map((item) => ({
       ...item, unread: true, repository: { full_name: 'kinu/ledger' },
@@ -108,7 +110,9 @@ function gitHubInbox() {
   return { state, reads, answer };
 }
 
-const NotificationsQuerySchema = v.object({ since: v.optional(v.string()), page: v.optional(v.number()), per_page: v.optional(v.number()) });
+const NotificationsQuerySchema = v.object({
+  since: v.optional(v.string()), before: v.optional(v.string()), page: v.optional(v.number()), per_page: v.optional(v.number()),
+});
 
 describe("the assistant's GitHub check", () => {
   test('reads GitHub at no model call while nothing new needs the owner, then wakes once for a review asked of them, on the fast model', async () => {
@@ -151,7 +155,9 @@ describe("the assistant's GitHub check", () => {
     expect(askedOf(present(turnsOn(gateway, 'New GitHub notifications').at(-1), 'the edge turn'))).toContain('mentioned: kinu/ledger "Ledger 9"');
   });
 
-  test('a burst of more than a page and more than a brief holds reaches the owner whole, across checks, each once', async () => {
+  // A check reads ten pages. Past them, it once moved `since` over what it never read, so a burst of more than 500 lost
+  // the rest (review, 2026-10-24). Here the oldest one that needs the owner is on the twelfth page.
+  test('a burst of more pages than one check reads and more than a brief holds reaches the owner whole, across checks, each once', async () => {
     const github = gitHubInbox();
     const { gateway, workspace } = await assistant(['GitHub check'], { github });
     const checked = () => github.reads.length;
@@ -159,22 +165,26 @@ describe("the assistant's GitHub check", () => {
     await nextCheck(workspace, checked);
     const at = Date.now() + 60_000;
 
-    github.state.inbox = Array.from({ length: 60 }, (_, index) => ({ id: String(100 + index), reason: 'review_requested', updated_at: new Date(at + index * 1000).toISOString() }));
+    github.state.inbox = Array.from({ length: 600 }, (_, index) => ({
+      id: String(100 + index), reason: index % 10 === 0 ? 'review_requested' : 'subscribed', updated_at: new Date(at + index * 1000).toISOString(),
+    }));
     github.state.modified = 'Fri, 24 Oct 2026 10:40:00 GMT';
-    setSystemTime(new Date(at + 120_000));
+    setSystemTime(new Date(at + 700_000));
 
     // What the agent was woken with: each fire's brief, as the workspace's event log keeps it.
     const told = () => eventsOver(workspace.db).query({ variant: 'timer' }).map((event) => v.parse(FireSchema, event.payload).watch_brief ?? '').join('\n');
-    const unsaid = () => github.state.inbox.filter(({ id }) => !told().includes(`"Ledger ${id}"`));
+    const needed = github.state.inbox.filter(({ reason }) => reason === 'review_requested').map(({ id }) => id);
+    const unsaid = () => needed.filter((id) => !told().includes(`"Ledger ${id}"`));
 
     // Each check wakes the agent with what one brief holds, until none waits.
-    for (let check = 0; check < 20 && unsaid().length > 0; check += 1) await nextCheck(workspace, checked);
+    for (let check = 0; check < 30 && unsaid().length > 0; check += 1) await nextCheck(workspace, checked);
     await until(() => turnsOn(gateway, '"Ledger 100"').length > 0, 'the last brief never reached a turn');
 
-    const named = github.state.inbox.map(({ id }) => id).filter((id) => told().split(`"Ledger ${id}"`).length - 1 !== 1);
-
-    // Both pages were read, every one named in exactly one fire, and the last of them reached a turn.
-    expect({ secondPage: github.reads.some(({ query }) => query?.page === 2), unnamedOrTwice: named }).toEqual({ secondPage: true, unnamedOrTwice: [] });
+    // Every one that needs the owner named in exactly one fire, none read past named, and the oldest reached a turn.
+    expect({
+      unnamedOrTwice: needed.filter((id) => told().split(`"Ledger ${id}"`).length - 1 !== 1),
+      readPast: github.state.inbox.filter(({ reason, id }) => reason === 'subscribed' && told().includes(`"Ledger ${id}"`)).length,
+    }).toEqual({ unnamedOrTwice: [], readPast: 0 });
   });
 });
 

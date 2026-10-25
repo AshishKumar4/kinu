@@ -30,6 +30,8 @@ const BATCH = `const batched = (pending, opening, waiting) => {
  * 304 at no cost to the rate limit, and every page of what changed. `since` is exclusive at GitHub, so the read reaches
  * a second back and what was seen at its edge is known by id and update. Fires on a review asked of the owner, a mention
  * of them or their team, or Actions failing on their work (`ci_activity`); each other reason is read past.
+ * A check reads ten pages, so it ends inside the alarm's wall; what they could not reach, below the oldest they did,
+ * waits as `below`, and the next check reads on from there (GitHub's `before`) until it is through and `since` moves.
  * docs.github.com/rest/activity/notifications, read 2026-10-24.
  */
 export const GITHUB_NOTIFICATIONS_CHECK: WatchCheck = {
@@ -38,32 +40,53 @@ export const GITHUB_NOTIFICATIONS_CHECK: WatchCheck = {
 const NEEDS = { review_requested: 'review requested', mention: 'mentioned', team_mention: 'team mentioned', ci_activity: 'checks failed' };
 const seen = state ?? {};
 const edge = (at) => new Date(Date.parse(at) - 1000).toISOString();
+const below = seen.below;
 const items = [];
 let modified = seen.modified;
-for (let page = 1; page <= 10; page += 1) {
+let cut = null;
+const first = below?.page ?? 1;
+// The first check only marks where to start, and the newest comes first.
+const last = seen.since === undefined ? 1 : first + 9;
+for (let page = first; page <= last; page += 1) {
   const read = await github.read('/notifications', {
-    query: { all: false, per_page: 50, page, ...(seen.since === undefined ? {} : { since: edge(seen.since) }) },
-    ...(page === 1 && seen.modified !== undefined ? { ifModifiedSince: seen.modified } : {}),
+    query: {
+      all: false, per_page: 50, page, ...(seen.since === undefined ? {} : { since: edge(seen.since) }),
+      // Exclusive too: a second past the oldest the last read reached, whose own are known by key.
+      ...(below === undefined ? {} : { before: new Date(Date.parse(below.before) + 1000).toISOString() }),
+    },
+    ...(page === 1 && below === undefined && seen.modified !== undefined ? { ifModifiedSince: seen.modified } : {}),
   });
   if (page === 1 && read.status === 304) break;
   // Refused or not understood: read again at the next check, from the same place.
   if (read.status !== 200 || !Array.isArray(read.body)) return { fire: false };
-  if (page === 1 && read.lastModified !== undefined) modified = read.lastModified;
+  if (page === 1 && below === undefined && read.lastModified !== undefined) modified = read.lastModified;
   items.push(...read.body);
   if (read.body.length < 50) break;
+  if (page === last && seen.since !== undefined) cut = page + 1;
 }
 const key = (item) => item.id + '@' + item.updated_at;
-const newest = items.reduce((at, item) => (item.updated_at > at ? item.updated_at : at), seen.since ?? '');
-const since = newest === '' ? new Date().toISOString() : newest;
+const stamps = items.map((item) => item.updated_at).sort();
+const top = [below?.top ?? '', stamps.at(-1) ?? ''].reduce((at, each) => (each > at ? each : at), seen.since ?? '');
+// Cut short: \`since\` stays until the read below is through. It goes on below the oldest read, from its first page; by
+// page only where every one read shares that second, which a \`before\` cannot pass.
+const next_below = cut === null ? undefined : { before: stamps[0], top, page: stamps[0] === below?.before ? cut : 1 };
+const since = next_below !== undefined ? seen.since : top === '' ? new Date().toISOString() : top;
+const marks = [since, next_below?.before, next_below?.top].filter((mark) => mark !== undefined);
 const known = seen.keys ?? [];
-const keys = [...new Set([...known, ...items.map(key)])].filter((each) => each.slice(each.indexOf('@') + 1) >= edge(since));
+const keys = [...new Set([...known, ...items.map(key)])].filter((each) => {
+  const at = each.slice(each.indexOf('@') + 1);
+  return marks.some((mark) => at >= edge(mark) && at <= mark);
+});
 const link = (item) => String(item.subject.url ?? '').replace('https://api.github.com/repos/', 'https://github.com/').replace('/pulls/', '/pull/');
 const title = (item) => (item.subject.title.length > 70 ? item.subject.title.slice(0, 67) + '...' : item.subject.title);
 const fresh = seen.since === undefined ? [] : items.filter((item) => NEEDS[item.reason] !== undefined && !known.includes(key(item)));
 const pending = [...(seen.pending ?? []), ...fresh.map((item) => NEEDS[item.reason] + ': ' + item.repository.full_name + ' "' + title(item) + '" ' + link(item))];
 const { lines, brief } = batched(pending, '', 0);
 const rest = pending.slice(lines.length);
-const next = { since, keys, ...(modified === undefined ? {} : { modified }), ...(rest.length > 0 ? { pending: rest } : {}) };
+const next = {
+  since, keys, ...(modified === undefined ? {} : { modified }), ...(next_below === undefined ? {} : { below: next_below }),
+  ...(rest.length > 0 ? { pending: rest } : {}),
+};
 return lines.length === 0 ? { fire: false, state: next } : { fire: true, brief, state: next };`,
 };
 
