@@ -52,14 +52,16 @@ import { createRequire } from 'node:module';
 import { dirname, extname, join } from 'node:path';
 import type { Browser } from 'puppeteer';
 import { renderThrownChain } from '@kinu.run/core/obs';
+import { present } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
-  build, type BuildEnvironmentOptions, type InlineConfig, type Plugin,
+  createBuilder, type BuildEnvironmentOptions, type InlineConfig, type Plugin,
 } from 'vite';
 
 // The build under test, from the config the deploy path uses, resolved as
 // `vite build` resolves it. Imported rather than named by path: see `buildClient`.
 import clientConfigFor from '../../packages/cf-backend/vite.config';
+import { PUBLIC_PAGES } from '../../packages/cf-backend/vite-public-pages';
 import { withTestChrome } from '../../scripts/test-chrome';
 import { REPO_ROOT as REPO } from '../../scripts/repo-root';
 
@@ -110,6 +112,14 @@ interface Artifact {
   readonly scannedBytes: number;
 }
 
+/** The two builds a browser loads, each with its own chunk graph: the app's, and the public pages'. */
+interface Builds {
+  readonly app: Artifact;
+  readonly pages: Artifact;
+}
+
+const BROWSER_BUILDS = ['client', PUBLIC_PAGES] as const;
+
 /** What the browser reported about React's identity in one page. */
 interface RuntimeFacts {
   readonly renderers: readonly ReactRendererFacts[];
@@ -126,6 +136,8 @@ interface RuntimeFacts {
   readonly reads: number;
   readonly commits: number;
   readonly resources: readonly string[];
+  /** The scripts the page fetched before its document was parsed: its first load. */
+  readonly firstScripts: readonly string[];
   readonly pageErrors: readonly string[];
 }
 
@@ -281,12 +293,16 @@ const MARKERS = developmentMarkers();
  * runtime-asset directory that no module in the graph imports. The JS this probe
  * measures is byte-identical either way.
  */
-async function buildClient(outDir: string, forceDevelopmentReact: boolean): Promise<Artifact> {
-  const chunks: Chunk[] = [];
+async function buildClient(outDir: string, forceDevelopmentReact: boolean): Promise<Builds> {
+  const built = new Map<string, Chunk[]>();
 
   const observer: Plugin = {
     name: 'kinu:react-runtime-identity-observer',
     generateBundle(_options, bundle) {
+      const chunks = built.get(this.environment.name) ?? [];
+
+      built.set(this.environment.name, chunks);
+
       for (const [fileName, output] of Object.entries(bundle)) {
         if (output.type !== 'chunk') continue;
         chunks.push({
@@ -321,17 +337,18 @@ async function buildClient(outDir: string, forceDevelopmentReact: boolean): Prom
     overrides.define = { ...clientConfig.define, 'process.env.NODE_ENV': '"development"' };
   }
 
+  // The deploy's own builds of what a browser loads: the app, then the public pages beside it. The Worker's are not built.
   try {
-    await build({
+    const builder = await createBuilder({
       ...overrides,
       plugins: [...(clientConfig.plugins ?? []), observer],
       build: buildOptions,
     });
+
+    for (const name of BROWSER_BUILDS) await builder.build(present(builder.environments[name], `the ${name} build`));
   } finally {
     if (inherited !== undefined) process.env.NODE_ENV = inherited;
   }
-
-  if (chunks.length === 0) throw new Error(`${outDir}: the build emitted no chunk`);
 
   // The marker scan's own extent, carried as a measured fact rather than left
   // implicit. `developmentMarkers: []` reads identically for "no development
@@ -345,6 +362,16 @@ async function buildClient(outDir: string, forceDevelopmentReact: boolean): Prom
 
   const emitted = scanned.join('\n');
 
+  const scan = { developmentMarkers: MARKERS.filter((marker) => emitted.includes(marker)), scannedFiles: scanned.length, scannedBytes: emitted.length };
+
+  return {
+    app: artifactOf(present(built.get('client'), `${outDir}: the app's build emitted no chunk`), scan),
+    pages: artifactOf(present(built.get(PUBLIC_PAGES), `${outDir}: the public pages' build emitted no chunk`), scan),
+  };
+}
+
+/** One build's React files, from its own chunk graph. */
+function artifactOf(chunks: readonly Chunk[], scan: Pick<Artifact, 'developmentMarkers' | 'scannedFiles' | 'scannedBytes'>): Artifact {
   const reactModules: string[] = [];
   const reactChunks: string[] = [];
   const agentsChunks: string[] = [];
@@ -374,9 +401,7 @@ async function buildClient(outDir: string, forceDevelopmentReact: boolean): Prom
     developmentModules: reactModules.filter((id) => id.endsWith('.development.js')),
     reactChunks,
     agentsChunks,
-    developmentMarkers: MARKERS.filter((marker) => emitted.includes(marker)),
-    scannedFiles: scanned.length,
-    scannedBytes: emitted.length,
+    ...scan,
   };
 }
 
@@ -565,6 +590,8 @@ async function readRuntime(browser: Browser, origin: string, path: string): Prom
 
     const measured = await page.evaluate(() => {
       const state = globalThis.__kinuReactProbe;
+      const navigation = performance.getEntriesByType('navigation')[0];
+      const parsedAt = navigation instanceof PerformanceNavigationTiming ? navigation.domContentLoadedEventStart : Number.POSITIVE_INFINITY;
 
       if (state === undefined) throw new Error('the probe hook never installed');
 
@@ -577,6 +604,8 @@ async function readRuntime(browser: Browser, origin: string, path: string): Prom
         reads: state.reads,
         commits: state.commits,
         resources: performance.getEntriesByType('resource').map((entry) => entry.name),
+        firstScripts: performance.getEntriesByType('resource')
+          .filter((entry) => entry.name.endsWith('.js') && entry.startTime < parsedAt).map((entry) => entry.name),
       };
     });
 
@@ -606,9 +635,9 @@ const WORKSPACE = '/workspace/react-runtime-identity-probe';
 
 const LANDING = '/landing.html';
 
-let production: Artifact;
+let production: Builds;
 
-let developmentBuild: Artifact;
+let developmentBuild: Builds;
 
 let home: RuntimeFacts;
 
@@ -656,52 +685,59 @@ afterAll(() => {
   }
 });
 
-describe('the shipped client artifact holds one React runtime', () => {
+describe('each build a browser loads holds one React runtime', () => {
+  const builds = (): readonly [string, Artifact][] => [['app', production.app], ['public pages', production.pages]];
+
   test('exactly one React runtime module is emitted, and it is the production build', () => {
-    const runtimes = production.reactModules.filter((id) => /^react\/cjs\/react\.[a-z]+\.js$/.test(id));
-    expect(runtimes).toEqual(['react/cjs/react.production.js']);
-    expect(production.reactChunks.length).toBe(1);
+    for (const [name, build] of builds()) {
+      const runtimes = build.reactModules.filter((id) => /^react\/cjs\/react\.[a-z]+\.js$/.test(id));
+      expect({ name, runtimes, chunks: build.reactChunks.length }).toEqual({ name, runtimes: ['react/cjs/react.production.js'], chunks: 1 });
+    }
   });
 
   test('every React-package module in the graph is a production file', () => {
-    expect(production.developmentModules).toEqual([]);
-    expect([...production.reactModules].sort()).toEqual([
-      'react-dom/cjs/react-dom-client.production.js',
-      'react-dom/cjs/react-dom.production.js',
-      'react-dom/client.js',
-      'react-dom/index.js',
-      'react/cjs/react-jsx-runtime.production.js',
-      'react/cjs/react.production.js',
-      'react/index.js',
-      'react/jsx-runtime.js',
-      'scheduler/cjs/scheduler.production.js',
-      'scheduler/index.js',
-    ]);
+    for (const [name, build] of builds()) {
+      expect({ name, development: build.developmentModules }).toEqual({ name, development: [] });
+      expect([...build.reactModules].sort()).toEqual([
+        'react-dom/cjs/react-dom-client.production.js',
+        'react-dom/cjs/react-dom.production.js',
+        'react-dom/client.js',
+        'react-dom/index.js',
+        'react/cjs/react-jsx-runtime.production.js',
+        'react/cjs/react.production.js',
+        'react/index.js',
+        'react/jsx-runtime.js',
+        'scheduler/cjs/scheduler.production.js',
+        'scheduler/index.js',
+      ]);
+    }
   });
 
   test('one react-dom reconciler is emitted, so one renderer can exist', () => {
-    const reconcilers = production.reactModules.filter((id) => id.startsWith('react-dom/cjs/react-dom-client.'));
-    expect(reconcilers).toEqual(['react-dom/cjs/react-dom-client.production.js']);
+    for (const [name, build] of builds()) {
+      const reconcilers = build.reactModules.filter((id) => id.startsWith('react-dom/cjs/react-dom-client.'));
+      expect({ name, reconcilers }).toEqual({ name, reconcilers: ['react-dom/cjs/react-dom-client.production.js'] });
+    }
   });
 
   test('React\'s own development-only texts do not survive into the emitted JS', () => {
     // The scan's extent is asserted beside its result. Without this, a scan that
     // read no bytes and a bundle that shipped no development text are the same
     // observable, and this arm would pass forever on either.
-    expect(production.scannedFiles).toBeGreaterThan(0);
-    expect(production.scannedBytes).toBeGreaterThan(100_000);
-    expect(production.developmentMarkers).toEqual([]);
+    expect(production.app.scannedFiles).toBeGreaterThan(0);
+    expect(production.app.scannedBytes).toBeGreaterThan(100_000);
+    expect(production.app.developmentMarkers).toEqual([]);
   });
 });
 
 describe('the application and the Agents UI share that one runtime', () => {
   test('the Agents UI hook module is bundled and reaches React by static import', () => {
-    expect(production.agentsChunks.length).toBeGreaterThan(0);
-    const reactChunk = production.reactChunks[0];
+    expect(production.app.agentsChunks.length).toBeGreaterThan(0);
+    const reactChunk = production.app.reactChunks[0];
     expect(reactChunk).toBeDefined();
 
-    for (const fileName of production.agentsChunks) {
-      const chunk = production.chunks.find((candidate) => candidate.fileName === fileName);
+    for (const fileName of production.app.agentsChunks) {
+      const chunk = production.app.chunks.find((candidate) => candidate.fileName === fileName);
       expect(chunk).toBeDefined();
       // Either the Agents module sits in the React chunk itself, or it imports
       // it statically. Both share one module instance; a dynamic boundary or a
@@ -711,22 +747,24 @@ describe('the application and the Agents UI share that one runtime', () => {
     }
   });
 
-  test('every entry chunk reaches the same React chunk', () => {
-    const reactChunk = production.reactChunks[0] ?? '';
-    const entries = production.chunks.filter((chunk) => chunk.isEntry);
-    expect(entries.length).toBeGreaterThan(1);
+  test("every entry chunk reaches its own build's one React chunk", () => {
+    for (const build of [production.app, production.pages]) {
+      const reactChunk = build.reactChunks[0] ?? '';
+      const entries = build.chunks.filter((chunk) => chunk.isEntry);
+      expect(entries.length).toBeGreaterThan(0);
 
-    for (const entry of entries) {
-      const reached = new Set<string>();
-      const pending = [...entry.imports];
+      for (const entry of entries) {
+        const reached = new Set<string>([entry.fileName]);
+        const pending = [...entry.imports];
 
-      for (let file = pending.pop(); file !== undefined; file = pending.pop()) {
-        if (reached.has(file)) continue;
-        reached.add(file);
-        pending.push(...(production.chunks.find((chunk) => chunk.fileName === file)?.imports ?? []));
+        for (let file = pending.pop(); file !== undefined; file = pending.pop()) {
+          if (reached.has(file)) continue;
+          reached.add(file);
+          pending.push(...(build.chunks.find((chunk) => chunk.fileName === file)?.imports ?? []));
+        }
+
+        expect([...reached]).toContain(reactChunk);
       }
-
-      expect([...reached]).toContain(reactChunk);
     }
   });
 
@@ -817,20 +855,35 @@ describe('the browser installs one production dispatcher', () => {
 
   test('the Agents UI hooks really ran: the workspace opened an agent socket', () => {
     expect(agentSockets.length).toBeGreaterThan(0);
-    const chunk = production.agentsChunks[0] ?? '';
+    const chunk = production.app.agentsChunks[0] ?? '';
     expect(workspace.resources.some((url) => url.endsWith(chunk))).toBe(true);
+  });
+});
+
+/**
+ * Each first-load script is a request the Worker runs before the asset binding answers it (`run_worker_first`). Left to
+ * rolldown's own splitting, a module the app shared with some lazy route got a chunk of its own: the app's first load
+ * was 164 scripts in a build of its own, 82 beside the public pages, 220 once a top-level await anywhere in the build
+ * turned that splitting's merging off (rolldown 1.2.14, 2026-10-25). vite.config.ts makes it one chunk.
+ */
+describe("the app's first load", () => {
+  test('is its one chunk and the bundler runtime, and the landing loads none of it', () => {
+    expect(workspace.firstScripts.length).toBeGreaterThan(0);
+    expect(workspace.firstScripts.length).toBeLessThanOrEqual(2);
+    const appOnly = production.app.chunks.filter((chunk) => !production.pages.chunks.some((page) => page.fileName === chunk.fileName));
+    expect(landing.resources.filter((url) => appOnly.some((chunk) => url.endsWith(`/${chunk.fileName}`)))).toEqual([]);
   });
 });
 
 describe('the probe rejects a development artifact', () => {
   test('the development build emits React\'s development files', () => {
-    expect(developmentBuild.developmentModules.length).toBeGreaterThan(0);
-    const runtimes = developmentBuild.reactModules.filter((id) => /^react\/cjs\/react\.[a-z]+\.js$/.test(id));
+    expect(developmentBuild.app.developmentModules.length).toBeGreaterThan(0);
+    const runtimes = developmentBuild.app.reactModules.filter((id) => /^react\/cjs\/react\.[a-z]+\.js$/.test(id));
     expect(runtimes).toEqual(['react/cjs/react.development.js']);
   });
 
   test('the development build carries React\'s development-only texts', () => {
-    expect(developmentBuild.developmentMarkers.length).toBeGreaterThan(0);
+    expect(developmentBuild.app.developmentMarkers.length).toBeGreaterThan(0);
   });
 
   test('the development build reports bundleType 1 at runtime', () => {

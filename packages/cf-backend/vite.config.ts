@@ -18,6 +18,7 @@ import { workerLoadCost } from './vite-worker-bundle';
 import { agentBundle } from './vite-agent-bundle';
 import { ASSETS_HOSTS } from './src/assets-hosts';
 import { DEV_PREVIEW_SUFFIX, devPreviewPort, devPreviewTlsDir, devPreviewZone } from './vite-preview-zone';
+import { isBrowserEnvironment, PUBLIC_PAGES, publicPages } from './vite-public-pages';
 
 /** Nimbus loads its runtime artifacts from `env.ASSETS` `/_assets/*`; symlink the pinned package's tree
  *  into `public/` so dev and build carry it and a version bump re-points it. The link is relative, so a checkout
@@ -51,7 +52,7 @@ const stubClientNodeBuiltins = {
   name: "kinu:stub-client-node-builtins",
   enforce: "pre" as const,
   resolveId(this: { environment?: { name: string } }, source: string): string | null {
-    if (this.environment !== undefined && this.environment.name !== "client") return null;
+    if (this.environment !== undefined && !isBrowserEnvironment(this.environment.name)) return null;
 
     if (
       source === "node:crypto" ||
@@ -66,26 +67,31 @@ const stubClientNodeBuiltins = {
 
 /**
  * Worker-only source maps: wrangler's `no_bundle` deploy reads each module's `sourceMappingURL` for
- * `upload_source_maps`. Selected as not-`client` so a worker rename cannot drop them; the client is
+ * `upload_source_maps`. Selected as not a browser's so a worker rename cannot drop them; the browser builds are
  * excluded so TypeScript is not served publicly.
  */
 const workerSourceMaps = {
   name: "kinu:worker-source-maps",
   configEnvironment(name: string) {
-    if (name === "client") return null;
+    if (isBrowserEnvironment(name)) return null;
 
     return { build: { sourcemap: true } };
   },
 };
 
-/** vgpu's WGSL loader, scoped to the client environment; the Worker build never sees a shader. */
+/** vgpu's WGSL loader, scoped to the browser builds; the Worker build never sees a shader. */
 const wgslClientOnly = {
   ...wgslVitePlugin(),
   name: "kinu:wgsl-client",
   applyToEnvironment(environment: { name: string }): boolean {
-    return environment.name === "client";
+    return isBrowserEnvironment(environment.name);
   },
 };
+
+/** A font is always a file of this origin, never a `data:` URL: under Vite's 4 KB default KaTeX_Size3-Regular.woff2 (3.6 KB)
+ *  was inlined into the CSS every page shares, and the public pages' CSP, which allows fonts from `'self'` alone, refused
+ *  it on every landing load (rc29 walkthrough F3). */
+const assetsInlineLimit = (file: string) => (/\.(?:woff2?|ttf|otf|eot)$/u.test(file) ? false : undefined);
 
 /**
  * Dev persistence directory for DOs, KV and R2. The shared default `.wrangler/state` keeps pre-migration
@@ -109,7 +115,7 @@ export default defineConfig(({ command }) => ({
   // checkout at a time (SHARED_RESOURCES in scripts/ladder.ts).
   cacheDir: process.env.KINU_DEV_CACHE_DIR ?? '.vite',
   plugins: [
-    kinuTheme(), kinuIcon(), iconWeights(), promptText(), slateVendor(), slatePageModules(), agentBundle(), stubClientNodeBuiltins, workerSourceMaps, workerLoadCost(), wgslClientOnly, agents(), react(),
+    kinuTheme(), kinuIcon(), iconWeights(), promptText(), slateVendor(), slatePageModules(), agentBundle(), stubClientNodeBuiltins, workerSourceMaps, workerLoadCost(), wgslClientOnly, publicPages(), agents(), react(),
     cloudflare({
       persistState: devStateDir === undefined ? true : { path: devStateDir },
       // A harness boot opens no Workers inspector. The plugin's default takes 9229, or the next port it finds free
@@ -161,18 +167,28 @@ export default defineConfig(({ command }) => ({
   environments: {
     client: {
       build: {
-        // A font is always a file of this origin, never a `data:` URL: under Vite's 4 KB default KaTeX_Size3-Regular.woff2
-        // (3.6 KB) was inlined into the CSS every page shares, and the public pages' CSP, which allows fonts from `'self'`
-        // alone, refused it on every landing load (rc29 walkthrough F3).
-        assetsInlineLimit: (file: string) => (/\.(?:woff2?|ttf|otf|eot)$/u.test(file) ? false : undefined),
+        assetsInlineLimit,
         rolldownOptions: {
-          input: {
-            app: resolve(__dirname, "index.html"),
-            landing: resolve(__dirname, "landing.html"),
-            legal: resolve(__dirname, "legal.html"),
-          },
+          input: { app: resolve(__dirname, "index.html") },
+          // The app's first load is one chunk: left to rolldown, a module the app shares with some lazy route was a chunk
+          // of its own, 164 files, 96 under 2 KB, each a request the Worker runs first (rolldown 1.2.14, 2026-10-25).
+          // Lazy routes keep their own chunks.
+          output: { codeSplitting: { groups: [{ name: "app", tags: ["$initial"] }] } },
         },
       },
     },
+    ...(command === "build" && {
+      [PUBLIC_PAGES]: {
+        consumer: "client",
+        build: {
+          assetsInlineLimit,
+          emptyOutDir: false,
+          copyPublicDir: false,
+          rolldownOptions: {
+            input: { landing: resolve(__dirname, "landing.html"), legal: resolve(__dirname, "legal.html") },
+          },
+        },
+      },
+    }),
   },
 }));
