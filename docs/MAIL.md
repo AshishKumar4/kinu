@@ -87,7 +87,7 @@ There is one mail domain per deployment, `EMAIL_DOMAIN`, and every address sits 
 
 **The Mission Inbox form `<workspace>@D` retires.** No deployment ever received mail through it: kinu.run has no MX, and self-hosting needs a manual onboarding that the docs record as not done. If a self-host turns out to have onboarded, a one-time import keeps its workspace addresses as aliases.
 
-**Who gets an address (the owner, 2026-10-19):** the deployment's owner gets their username address, with their workspaces' and agents' addresses under it. Other accounts get none until the owner sets the deployment's `MAIL_ACCOUNTS` var to `everyone` (§11). It is `operators` by default, on kinu.run and on every self-host.
+**Who gets an address (the owner, 2026-10-19; invited accounts 2026-10-25):** the deployment's owner gets their username address, with their workspaces' and agents' addresses under it, and so does every account an operator invited (the control plane's Invite). Other accounts get none until the owner sets the deployment's `MAIL_ACCOUNTS` var to `everyone` (§11). It is `operators` by default, on kinu.run and on every self-host.
 
 ## 2. Where mail lives and who owns it
 
@@ -445,6 +445,7 @@ consolidation until something writes them.
 **Who may have an address:**
 
 - The deployment's operator (`CONTROL_PLANE_ADMINS`) always.
+- An account an operator invited (its class `invited`, from the control plane's Invite or a redeemed invite link) always, at 100 sends a day.
 - Any other account only while the deployment's `MAIL_ACCOUNTS` var is `everyone`. It is `operators` by default.
 
 ### `Mailbox`: one per account (`idFromName(user_id)`)
@@ -572,7 +573,7 @@ Deployment-level settings already live in the Worker's `vars`, for example `SIGN
 **The setting joins them:**
 
 - **`MAIL_ACCOUNTS`:** `operators` or `everyone`.
-  - `operators`: only the deployment's operators (`CONTROL_PLANE_ADMINS`) may have an address.
+  - `operators`: only the deployment's operators (`CONTROL_PLANE_ADMINS`) and the accounts they invited may have an address.
   - `everyone`: any account may have one, at 100 sends a day.
 - **Policy `derived`:**
   - kinu.run and staging: `"operators"` in `wrangler.jsonc`. The owner turns it on with a config change and a release.

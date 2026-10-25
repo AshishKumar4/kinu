@@ -83,6 +83,13 @@ export class UserLimits {
     return accountClassOf({ email, operator: isListedOperator(this.host.env, email), devEmail: this.host.env.DEV_USER_EMAIL ?? '', standing: this.store.standing() });
   }
 
+  /** The account's class alone: what a gate reads, without the storage reading a report makes. */
+  async accountClass(caller: UserCaller): Promise<AccountClass> {
+    await this.host.requireTier(caller, 'limits');
+
+    return this.klass();
+  }
+
   private use(now: number): AccountUse {
     return {
       workspaces: this.host.workspaceCount(),
