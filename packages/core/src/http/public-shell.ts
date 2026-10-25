@@ -115,8 +115,8 @@ min-height:38px;padding:0 15px;border:1px solid var(--c-field-border);border-rad
 background:transparent;color:var(--c-text);font:inherit;font-size:var(--t-public-control);font-weight:600;
 white-space:nowrap;cursor:pointer;transition:background 150ms var(--ease),border-color 150ms var(--ease)}
 .btn:hover{background:var(--c-fill)}
-.btn.solid{border-color:transparent;background:var(--c-accent);color:var(--c-accent-on)}
-.btn.solid:hover{background:color-mix(in oklab,var(--c-accent) 90%,var(--c-text))}
+.btn.solid{border-color:transparent;background:var(--c-accent-fill);color:var(--c-accent-on)}
+.btn.solid:hover{background:var(--c-accent-hover)}
 
 /* Mono, letterspaced, small: labels name the thing beside them and never
    compete with it. The one typographic device carried through every section. */

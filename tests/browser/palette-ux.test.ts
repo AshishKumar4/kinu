@@ -30,7 +30,10 @@ const TEXT_ROLES = [
 ] as const;
 
 const FILLS: readonly (readonly [ink: string, fill: string, what: string])[] = [
-  ['--c-accent-on', '--c-accent', 'primary button label on brass'],
+  // The owner, 2026-10-25: "the black font in light mode over the orange/sand buttons blends too much". Every state.
+  ['--c-accent-on', '--c-accent-fill', 'primary button label on brass'],
+  ['--c-accent-on', '--c-accent-hover', 'primary button label on brass, hovered'],
+  ['--c-accent-on', '--c-accent-active', 'primary button label on brass, pressed'],
   ['--c-danger-on', '--c-danger', 'destructive button label on danger'],
   ['--c-text', '--c-button-bg', 'secondary button label on its fill'],
   ['--c-danger', '--c-button-bg', 'danger button label on its fill'],
