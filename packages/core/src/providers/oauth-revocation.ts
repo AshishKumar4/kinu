@@ -82,7 +82,7 @@ function revokeOne(input: Parameters<typeof revokeOAuthGrant>[0], token: string,
   const submitted = [credential.accessToken, credential.refreshToken ?? '', ...clientSecrets, ...Object.values(endpoint.client.headers).flatMap(authorizationSecrets)];
 
   const sent = attempt({ doing: `revoking the ${hint} at ${endpoint.provider}`, otherwise: 'unavailable' }, async () => {
-    const response = await plainFetch(input.fetch)(endpoint.url, { method: 'POST', headers, body, redirect: 'error' });
+    const response = await plainFetch(input.fetch)(endpoint.url, { method: 'POST', headers, body, redirect: 'manual' });
 
     if (response.ok) return null;
     const text = await response.text();

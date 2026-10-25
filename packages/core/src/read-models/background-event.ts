@@ -57,7 +57,7 @@ const SignalCardEventSchema = v.variant('state', [
   v.object({ type: v.literal('signal_card'), id: v.string(), state: v.picklist(['seen', 'undelivered']) }),
   v.object({
     type: v.literal('signal_card'), id: v.string(), state: v.literal('pending'),
-    metadata: JsonObjectSchema, text: v.string(),
+    metadata: JsonObjectSchema, text: v.string(), at: v.number(),
   }),
 ]);
 
@@ -214,12 +214,10 @@ const MAX_LIVE_CARDS = 50;
  * Reduce the `signal_card` stream to the live card list. A transition for an unseen id is
  * ignored: the client connected mid-flight and its history already shows the message.
  */
-export function applySignalCard(
-  cards: readonly SignalCard[], event: SignalCardEvent, now: number,
-): readonly SignalCard[] {
+export function applySignalCard(cards: readonly SignalCard[], event: SignalCardEvent): readonly SignalCard[] {
   if (event.state === "pending") {
     const card: SignalCard = {
-      id: event.id, metadata: event.metadata, text: event.text, state: "pending", at: now,
+      id: event.id, metadata: event.metadata, text: event.text, state: "pending", at: event.at,
     };
 
     const existing = cards.findIndex((c) => c.id === card.id);
@@ -329,6 +327,7 @@ export function metadataBroadcastEvent(
     readonly steerId?: string;
     readonly atStep?: number;
     readonly jobId?: string;
+    readonly at?: number;
   },
 ): BroadcastEvent {
   return { type, metadata, ...fields };

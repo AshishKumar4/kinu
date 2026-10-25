@@ -332,7 +332,7 @@ export class DeliveryInbox implements AgentInbox {
     const cardId = signalCardId(key);
     const metadata: JsonObject = { ...turnMetadata(signal), [SIGNAL_ID_METADATA_KEY]: cardId };
 
-    this.deps.broadcast(metadataBroadcastEvent('signal_card', metadata, { id: cardId, state: 'pending', text: signal.text }));
+    this.deps.broadcast(metadataBroadcastEvent('signal_card', metadata, { id: cardId, state: 'pending', text: signal.text, at: Date.now() }));
 
     const answer = await this.deps.deliver({
       id: key,

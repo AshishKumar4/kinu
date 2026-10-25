@@ -323,7 +323,8 @@ async function sandboxAttach(sandbox: TerminalSandbox, call: TerminalCall, ctx: 
   if (request.signal.aborted) return abandonedAttach(surface);
 
   try {
-    await sandbox.noteTerminalActivity();
+    // The box answers the upgrade at once and readies itself under it, stamping its lease as a caller (D109): a wait
+    // here held a restoring box's pane at a blank handshake until its restore ended (hearthlit-field, 2026-10-25: 20 s).
     const url = new URL(request.url);
     url.pathname = `/_devbox/${surface}`;
     const size = paneWindow(call.url);

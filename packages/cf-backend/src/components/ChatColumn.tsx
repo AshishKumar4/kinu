@@ -6,7 +6,7 @@ import { ArrowsClockwiseIcon, PaperclipIcon } from "@phosphor-icons/react";
 import type { UIMessage } from "ai";
 import { isPlaceholderMission, liveTailRow, threadLiveTail, turnFailure, turnFailureFacts, type WorkspaceNotice } from "@kinu.run/core";
 import { detach } from "@kinu.run/core/obs";
-import { useParams } from "react-router-dom";
+import { useOpenWorkspace } from "@/hooks/use-open-workspace";
 import { usePastedSecretGuard } from "@/components/secrets/PasteOffer";
 import { limitRefusalOf } from "@/lib/limits-api";
 import { AskedQuestionsContext } from "@/components/QuestionCard";
@@ -224,8 +224,8 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
 
   useOpeningMessage(extras.opening === true && state.connectionStatus === "connected", sendWords);
 
-  // The route's workspace: a secret moved out of a draft here is allowed here.
-  const secretGuard = usePastedSecretGuard({ draft: ui.draft, setDraft: ui.setDraft, workspace: useParams().agentId });
+  // This chat's workspace: a secret moved out of a draft here is allowed there.
+  const secretGuard = usePastedSecretGuard({ draft: ui.draft, setDraft: ui.setDraft, workspace: useOpenWorkspace() ?? undefined });
 
   const pickModel = useCallback((spec: string) => detach(Effect.promise(async () => state.setModel(spec))), [state]);
   const pickEffort = useCallback((effort: Parameters<typeof state.setReasoningEffort>[0]) => detach(Effect.promise(async () => state.setReasoningEffort(effort))), [state]);

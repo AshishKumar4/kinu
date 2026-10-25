@@ -502,7 +502,7 @@ export type { SessionFilePlane } from './session/payload';
 
 export type { MessageReference, MessagePartReference, ActorReadAuthority } from './session/messages';
 
-export { drawnStep, SessionTranscript, SessionTranscriptReader, readSessionTranscript, type ConversationEntry, type ConversationProjection, type PreparedConversationEntry } from './session/transcript';
+export { drawnStep, RECORDED_AT_METADATA_KEY, SessionTranscript, SessionTranscriptReader, readSessionTranscript, type ConversationEntry, type ConversationProjection, type PreparedConversationEntry } from './session/transcript';
 
 export { encodeModelMessageValues, decodeModelMessageValues } from './session/message-codec';
 

@@ -383,7 +383,8 @@ export class ActorClaimStore {
   turns(limit = 100): readonly StoredActorClaim[] {
     this.actor.assertCurrent();
 
-    return this.sql<ClaimRow>`SELECT turn_id,run_id,epoch,work_mode,phase,program_kind,program_version,program_digest,program_build,outcome,claimed_at,withdrawn_through,answered FROM actor_turn_claims WHERE actor_id=${this.actorId} ORDER BY claimed_at DESC LIMIT ${limit}`.map(row => this.claimOf(row));
+    // By epoch, the agent's one sequence: two claims in one millisecond still have an order.
+    return this.sql<ClaimRow>`SELECT turn_id,run_id,epoch,work_mode,phase,program_kind,program_version,program_digest,program_build,outcome,claimed_at,withdrawn_through,answered FROM actor_turn_claims WHERE actor_id=${this.actorId} ORDER BY epoch DESC LIMIT ${limit}`.map(row => this.claimOf(row));
   }
   latestTurn(): StoredActorClaim | null { return this.turns(1)[0] ?? null; }
   unsettled(limit?: number): readonly StoredActorClaim[] {

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { UIMessage } from "ai";
 import * as v from "valibot";
-import { openingListOf, WORK_TAB_JOBS, type PositionCursor } from "@kinu.run/core";
+import { JsonObjectSchema, openingListOf, RECORDED_AT_METADATA_KEY, WORK_TAB_JOBS, type PositionCursor } from "@kinu.run/core";
 
 interface GalleryConnectionError {
 	readonly code: number;
@@ -81,8 +81,16 @@ async function galleryOpening(rpc: GalleryRpc): Promise<string> {
 /** Each chat's transcript by socket path ("" the workspace's), sent on connect as the chat room does. */
 const seededChats = new Map<string, readonly UIMessage[]>();
 
-export function seedGalleryChat(messages: readonly UIMessage[], path = ""): void {
-	seededChats.set(path, messages);
+/** A fixture's message, its time given as a field for brevity. */
+export type GalleryChatMessage = UIMessage & { readonly createdAt?: number };
+
+/** As the server draws a stored row: its time in its metadata (core `RECORDED_AT_METADATA_KEY`), never a field. */
+function drawnAsStored({ createdAt, ...message }: GalleryChatMessage): UIMessage {
+	return createdAt === undefined ? message : { ...message, metadata: { ...v.parse(v.optional(JsonObjectSchema, {}), message.metadata), [RECORDED_AT_METADATA_KEY]: createdAt } };
+}
+
+export function seedGalleryChat(messages: readonly GalleryChatMessage[], path = ""): void {
+	seededChats.set(path, messages.map(drawnAsStored));
 }
 
 export function seededGalleryChatRows(): number {
@@ -113,7 +121,9 @@ const windows = new Map<string, Set<(messages: readonly UIMessage[]) => void>>()
 
 /** As the server's `cf_agent_chat_messages` frame lands: every window on the chat at `path` now shows `messages`, which
  *  `older` says where the rows before them read on from (null: they reach the chat's start). */
-export function galleryChatWindow(path: string, messages: readonly UIMessage[], older: PositionCursor | null): void {
+export function galleryChatWindow(path: string, window: readonly GalleryChatMessage[], older: PositionCursor | null): void {
+	const messages = window.map(drawnAsStored);
+
 	for (const show of windows.get(path) ?? []) show(messages);
 
 	for (const agent of live) if (agent.path === path) agent.deliver(JSON.stringify({ type: "cf_agent_chat_messages", messages, older }));

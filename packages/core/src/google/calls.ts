@@ -46,7 +46,8 @@ export function callGoogle(asked: GoogleCall, token: GoogleTokenRead, fetchFn: t
         ...(asked.body !== undefined && { 'content-type': 'application/json' }), ...(asked.ifNoneMatch !== undefined && { 'if-none-match': asked.ifNoneMatch }),
       },
       ...(asked.body !== undefined && { body: asked.body }),
-      redirect: 'error',
+      // Never followed, so the token goes nowhere else; workerd refuses 'error' (follow or manual only).
+      redirect: 'manual',
     }));
 
     const held = yield* Effect.promise(() => token(false));

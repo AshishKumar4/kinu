@@ -110,6 +110,9 @@ interface StoredUiMessage {
   metadata?: JsonValue;
 }
 
+/** A drawn message's metadata key for when its row was recorded. */
+export const RECORDED_AT_METADATA_KEY = 'kinuRecordedAt';
+
 /** The trailing text parts `answer` is made of, last first. */
 function answeredTexts(parts: readonly JsonObject[], answer: string): number[] {
   const covered: number[] = [];
@@ -555,11 +558,18 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
   private async drawnEntry(entry: ConversationEntry, media: MediaUrl, parts: Map<string, readonly StoredPart[]>): Promise<DrawnEntry> {
     if (this.unreadable(entry)) return { entry, message: null };
 
-    return { entry, message: await this.materializeEntry(entry, parts, (at) => (index) => {
+    const message = await this.materializeEntry(entry, parts, (at) => (index) => {
       const ref = entry.parts[at];
 
       return media({ messageId: ref?.messageId ?? '', partNo: ref?.partNo ?? 0, index });
-    }) };
+    });
+
+    // The SDK's message has no time, and the chat places what happened beside it by one: the seed and every page carry it.
+    const own = v.safeParse(JsonObjectSchema, message.metadata);
+    const metadata: JsonObject = own.success ? { ...own.output } : {};
+    metadata[RECORDED_AT_METADATA_KEY] = entry.recordedAt;
+
+    return { entry, message: { ...message, metadata } };
   }
 
   /** Entries and their messages in one statement each, however many entries. */

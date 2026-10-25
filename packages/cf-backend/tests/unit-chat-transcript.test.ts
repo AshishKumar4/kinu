@@ -7,9 +7,12 @@ import {
   type JsonObject, type MessagePartReference,
 } from '@kinu.run/core';
 import { claimFences } from '@kinu.run/core';
-import { authoredTurnMetadata, chatSeed, getChatHistoryPage, keptMediaName, newestOpener } from '@kinu.run/core';
+import { authoredTurnMetadata, chatSeed, getChatHistoryPage, keptMediaName, newestOpener, RECORDED_AT_METADATA_KEY } from '@kinu.run/core';
+import * as v from 'valibot';
 
 const databases: Database[] = [];
+
+const RecordedSchema = v.looseObject({ [RECORDED_AT_METADATA_KEY]: v.number() });
 
 afterEach(() => { for (const db of databases.splice(0)) db.close(); });
 
@@ -71,6 +74,13 @@ describe('the CF public transcript over canonical references', () => {
 
     expect(seed.map((message) => [message.id, message.role])).toEqual([['ask', 'user'], ['programmatic:report', 'system']]);
     expect(page.items.map((entry) => [entry.id, entry.role])).toEqual(seed.map((message) => [message.id, message.role]));
+    // Each carries when its row was recorded, which the chat places what happened beside it by (ledger 1008-r: with no
+    // time on any message the server sent, every card collected above the composer).
+    const recorded = t.store.entries().map((entry) => entry.recordedAt);
+    expect({
+      seed: seed.map((message) => v.parse(RecordedSchema, message.metadata)[RECORDED_AT_METADATA_KEY]),
+      page: page.items.map((entry) => v.parse(RecordedSchema, entry.metadata)[RECORDED_AT_METADATA_KEY]),
+    }).toEqual({ seed: recorded, page: recorded });
     // The model is still sent the row as the person's turn it opened, and a Retry of that turn names it.
     expect(t.store.newestUserId()).toBe('programmatic:report');
     expect(newestOpener(seed)).toBe('programmatic:report');

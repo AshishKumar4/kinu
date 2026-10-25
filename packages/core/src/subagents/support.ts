@@ -264,9 +264,9 @@ export interface HiredTurn {
   readonly ownerDriven: boolean;
   /** The assignment this turn answers, if one opened it. */
   readonly taskId: string | null;
-  /** Input waits for a later turn of its, read as its report is decided: queued in its chat, or owed it and not yet
-   *  taken. A job's end can reach it between its turn's commit and its report. */
-  readonly queued: boolean;
+  /** A later turn of its has begun, waits in its chat, or is owed it and not yet taken, read as this turn's report is
+   *  decided, a replay of it included: that turn answers. A job's end can reach it after this turn's commit. */
+  readonly later: boolean;
 }
 
 /**
@@ -285,7 +285,7 @@ export async function hireTurnSettled(input: {
     lifetime: input.hire.record.lifetime, ending: input.ended.ending, assistantText: input.ended.assistantText,
     narration: async () => input.ended.narration, reports: input.turn.reports, ownerDriven: input.turn.ownerDriven,
     delegating: taskAnswerIsLater({
-      owed: input.hire.owed, log: input.hire.log, queued: input.turn.queued, ...(input.turn.taskId !== null && { turnTaskId: input.turn.taskId }),
+      owed: input.hire.owed, log: input.hire.log, later: input.turn.later, ...(input.turn.taskId !== null && { turnTaskId: input.turn.taskId }),
     }),
   });
 }

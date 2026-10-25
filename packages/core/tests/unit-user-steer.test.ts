@@ -15,7 +15,7 @@ import type {
 import type { AgentSignal, SignalCardEvent, UserSignalIdentity } from '../src/types/signals';
 // The production constant, so a rename breaks the import.
 import { USER_MESSAGE_SIGNAL_KIND as USER_MESSAGE_KIND } from '../src/types/signals';
-import { JsonObjectSchema } from '../src/utils/json';
+import { parseSignalCardEvent } from '../src/read-models/background-event';
 import type { WorkMode } from '../src/types/turn';
 
 /** A prepareStep context: what the step pipeline hands an extension. */
@@ -28,24 +28,9 @@ const HISTORY: ModelMessage[] = [
   { role: 'assistant', content: 'starting' },
 ];
 
-const SignalCardEventSchema: v.GenericSchema<SignalCardEvent> = v.variant('state', [
-  v.object({
-    type: v.literal('signal_card'),
-    id: v.string(),
-    state: v.literal('pending'),
-    metadata: JsonObjectSchema,
-    text: v.string(),
-  }),
-  v.object({
-    type: v.literal('signal_card'),
-    id: v.string(),
-    state: v.picklist(['shown', 'undelivered']),
-  }),
-]);
-
 /** Every wire event the seam can emit here: signal cards and steer statuses. */
 const BroadcastSchema = v.union([
-  SignalCardEventSchema,
+  v.custom<SignalCardEvent>((value) => parseSignalCardEvent({ value }) !== null),
   v.object({
     type: v.literal('steer_status'),
     status: v.picklist(['queued', 'landed', 'returned', 'turn']),
@@ -444,11 +429,11 @@ describe('Inbox — the user kind beside the event kind', () => {
     expect(broadcasts).toEqual([
       { type: 'steer_status', status: 'queued', steerId: 's1', text: 'the user said this' },
       {
-        type: 'signal_card', id: expect.any(String), state: 'pending',
+        type: 'signal_card', id: expect.any(String), state: 'pending', at: expect.any(Number),
         metadata: { kinuAuthor: 'harness', kinuEvent: 'event_drain' }, text: 'an event arrived',
       },
       // Cards move before steers announce: 'shown' first, then 'landed'.
-      { type: 'signal_card', id: expect.any(String), state: 'shown' },
+      { type: 'signal_card', id: expect.any(String), state: 'shown', atStep: 0 },
       { type: 'steer_status', status: 'landed', steerId: 's1', text: 'the user said this', atStep: 0 },
     ]);
   });

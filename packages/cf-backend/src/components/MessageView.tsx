@@ -37,7 +37,7 @@ import {
   type AnyToolPart, type PartBlock,
 } from "@kinu.run/core";
 import { drawnText, toolCallRunning, type LiveTail } from "@kinu.run/core";
-import { redactPayload, redactSecrets, segmentBySteers, splicesSeenOn, type SeenSplice, type SignalCard } from "@kinu.run/core";
+import { RECORDED_AT_METADATA_KEY, redactPayload, redactSecrets, segmentBySteers, splicesSeenOn, type SeenSplice, type SignalCard } from "@kinu.run/core";
 import { classifyProgrammaticTurn, endedMidWork, isSteeredMessage, systemEventTurn, turnFailure, turnFailureFacts } from "@kinu.run/core";
 import { EventRow, foldRepeats, ProgrammaticTurnCard, type CardState } from "@/components/ProgrammaticTurnCard";
 import { useToggledSet } from "@/hooks/use-toggled-set";
@@ -53,28 +53,14 @@ import { IconControl } from "@/components/ui/IconControl";
 import { InlineAction } from "@/components/ui/InlineAction";
 import { Surface } from "@/components/ui/Surface";
 
-const MessageCreatedAtSchema = v.looseObject({
-  createdAt: v.optional(v.union([v.string(), v.number(), v.instance(Date)])),
-});
+const RecordedAtSchema = v.looseObject({ [RECORDED_AT_METADATA_KEY]: v.number() });
 
-
-/** The SDK's message type declares no timestamp; the transport's stamp is read off the value. */
-function messageCreatedAt(message: UIMessage): string | number | Date | undefined {
-  const parsed = v.safeParse(MessageCreatedAtSchema, message);
-
-  return parsed.success ? parsed.output.createdAt : undefined;
-}
-
-/** When the message was written, in ms since the epoch; undefined when the transport did not stamp it. */
+/** When the message's row was recorded, in ms since the epoch; undefined for one the store has not drawn yet (a turn's
+ *  live answer, a message only just sent). */
 export function messageTime(message: UIMessage): number | undefined {
-  const at = messageCreatedAt(message);
+  const parsed = v.safeParse(RecordedAtSchema, message.metadata);
 
-  if (at === undefined) return undefined;
-
-  if (at instanceof Date) return at.getTime();
-  const ms = typeof at === "number" ? at : Date.parse(at);
-
-  return Number.isFinite(ms) ? ms : undefined;
+  return parsed.success ? parsed.output[RECORDED_AT_METADATA_KEY] : undefined;
 }
 
 /** What a turn nobody typed draws as, to fold the same one in a row; null for a turn a person wrote. */
@@ -93,13 +79,10 @@ function FilePartView({ part }: { part: FileUIPart }) {
     : <AttachmentChip part={part} />;
 }
 
-function MessageTimestamp({ createdAt }: { createdAt?: string | number | Date }) {
-  if (!createdAt) return null;
-  const d = createdAt instanceof Date ? createdAt : new Date(createdAt);
+function MessageTimestamp({ at }: { at: number | undefined }) {
+  if (at === undefined) return null;
 
-  if (isNaN(d.getTime())) return null;
-
-  return <span className="t-meta t-mono p-text-3 mt-1 block">{clockTime(d)}</span>;
+  return <span className="t-meta t-mono p-text-3 mt-1 block">{clockTime(new Date(at))}</span>;
 }
 
 // A settled call takes a line's gap, prose and grouped cards a section's. The block carries
@@ -557,10 +540,8 @@ export const MessageView = memo(function MessageView({
   const sentNotes = isUser ? changeNotesCard({ metadata: message.metadata }) : null;
 
   if (sentNotes !== null) {
-    const createdAt = messageCreatedAt(message);
-
     return (
-      <FeedbackCard card={sentNotes} sentAt={createdAt === undefined ? Date.now() : new Date(createdAt).getTime()} now={Date.now()}
+      <FeedbackCard card={sentNotes} sentAt={messageTime(message) ?? Date.now()} now={Date.now()}
         {...(onOpenChangeNote !== undefined && { onOpen: (anchor: DiffAnchor | undefined) => onOpenChangeNote(sentNotes.source, anchor) })} />
     );
   }
@@ -585,7 +566,7 @@ export const MessageView = memo(function MessageView({
           )}
         </Bubble>
         {isSteeredMessage({ metadata: message.metadata }) && <SteeredMark state="landed" />}
-        <MessageTimestamp createdAt={messageCreatedAt(message)} />
+        <MessageTimestamp at={messageTime(message)} />
       </div>
     );
   }
@@ -722,7 +703,7 @@ export const MessageView = memo(function MessageView({
       {!isLive && <ChangedSlates message={message} />}
       {!isLive && (
         <div className="flex items-center gap-2">
-          <MessageTimestamp createdAt={messageCreatedAt(message)} />
+          <MessageTimestamp at={messageTime(message)} />
           {takesChip}
           {message.id && onFeedback && (
             <MessageFeedback

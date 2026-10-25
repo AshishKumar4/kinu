@@ -854,7 +854,7 @@ export class Inbox {
   /** Same `kinuEvent` metadata as a queued signal's message; `text` is this delivery's rendering. */
   private openCard(signal: DeliveredSignal, text: string): void {
     this.host.broadcast(metadataBroadcastEvent(
-      'signal_card', turnMetadata(signal), { id: signal.cardId, state: 'pending', text },
+      'signal_card', turnMetadata(signal), { id: signal.cardId, state: 'pending', text, at: Date.now() },
     ));
   }
 

@@ -166,7 +166,7 @@ function serveAgents(deps: () => AgentsToolDeps): readonly Served[] {
   }
 
   if (offers.has('reply')) {
-    served.push(serve(agentsOp('reply', 'Answer an incoming agent message.', true, {
+    served.push(serve(agentsOp('reply', 'Answer an agent message that awaits your answer; its event names the eventId.', true, {
       eventId: described(v.pipe(v.string(), v.nonEmpty()), 'The incoming agent message you are answering.'),
       message: text(20000, 'Your answer.'),
     }), (fields, call) => dispatched({ op: 'reply', fields }, call)));

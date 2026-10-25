@@ -430,7 +430,7 @@ export class FacetChat {
           },
           // Decided where its hirer's roster is; what it told so far is its own, kept where the turn ran.
           report: (owed) => workspace.turnReport(
-            { reports: this.deps.database.reports(owed.turnId), ownerDriven: owed.ownerDriven, taskId: owed.taskId, queued: this.session.turnQueued },
+            { reports: this.deps.database.reports(owed.turnId), ownerDriven: owed.ownerDriven, taskId: owed.taskId, later: this.session.turnAfter(owed.turnId) },
             { ending: owed.ending, assistantText: owed.assistantText, narration: owed.narration },
             { sequenceId: owed.sequenceId, mode: owed.mode },
           ),

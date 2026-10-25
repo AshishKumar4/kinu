@@ -5,7 +5,7 @@
  */
 import { useEffect, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { useParams } from "react-router-dom";
+import { useOpenWorkspace } from "@/hooks/use-open-workspace";
 import { Effect } from "effect";
 import { detach, renderThrownChain, settle } from "@kinu.run/core/obs";
 import type { PartRunAnswer } from "@kinu.run/core";
@@ -129,7 +129,7 @@ export function WorkspacePartHost({ slate, titled, slateFrame }: {
   titled: { readonly title?: string } | null;
   slateFrame: RefObject<HTMLIFrameElement | null>;
 }) {
-  const { agentId = null } = useParams();
+  const agentId = useOpenWorkspace();
   const decision = usePartHost({ workspace: agentId, slate, title: titled?.title ?? slate, slateFrame });
 
   return decision === null ? null : createPortal(decision, document.body);

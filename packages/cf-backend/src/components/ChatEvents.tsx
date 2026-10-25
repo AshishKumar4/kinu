@@ -28,7 +28,7 @@ interface EventPlacement {
 const drawRun = (run: readonly PlacedEvent[]): ReactNode => foldRepeats(run, (event) => event.fold)
   .map(({ item, count }) => <Fragment key={item.key}>{item.draw(count)}</Fragment>);
 
-/** Each event before the first message written after it; a message with no time of its own moves none. */
+/** Each event before the first message recorded after it; a message the store has not drawn yet moves none. */
 export function placeEvents(messages: readonly UIMessage[], events: readonly PlacedEvent[]): EventPlacement {
   const ordered = [...events].sort((a, b) => a.at - b.at);
   const before = new Map<number, ReactNode>();

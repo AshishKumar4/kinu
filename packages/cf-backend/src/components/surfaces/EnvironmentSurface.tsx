@@ -6,7 +6,7 @@
  */
 import { Suspense, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { Button } from "@/components/ui/Button";
-import { useParams } from "react-router-dom";
+import { useOpenWorkspace } from "@/hooks/use-open-workspace";
 import {
   ArrowsInIcon, ArrowsOutIcon, DesktopIcon, DesktopTowerIcon, FolderOpenIcon, GitForkIcon, LockSimpleIcon, PlugIcon, PlusIcon,
   SplitHorizontalIcon, SquaresFourIcon, XIcon, type Icon,
@@ -216,7 +216,7 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
   const [tabs, setTabs] = useState<Readonly<Record<string, string>>>({});
   const [split, setSplit] = useState<string | null>(null);
   // The terminal socket is addressed by workspace name.
-  const workspaceName = useParams().agentId ?? "";
+  const workspaceName = useOpenWorkspace() ?? "";
   const frame = useRef<HTMLDivElement>(null);
   const wide = useWideColumn(frame);
 
