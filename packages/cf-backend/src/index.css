@@ -268,7 +268,7 @@ html, body, #root {
   --color-kumo-fill-hover: var(--c-button-bg-hover);
   --color-kumo-line: var(--c-button-line);
   --color-kumo-hairline: var(--c-field-border);
-  --color-kumo-brand: var(--c-accent);
+  --color-kumo-brand: var(--c-accent-fill);
   --color-kumo-brand-hover: var(--c-accent-hover);
   --color-kumo-danger: var(--c-danger);
   --color-kumo-success: var(--c-success);
@@ -717,7 +717,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 }
 .p-drop-hint[data-flush] { inset: 0; }
 .p-drop-hint-words {
-  display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: var(--r-pill); background: var(--c-accent);
+  display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: var(--r-pill); background: var(--c-accent-fill);
   color: var(--c-accent-on); box-shadow: var(--shadow-menu);
 }
 
@@ -770,9 +770,9 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-surface-screen { background: var(--c-screen); }
 /* Count (ui/Badge.tsx): a count over a mark, at its top right. */
 .p-count { position: absolute; top: -1px; right: -1px; display: flex; min-width: 16px; height: 16px; align-items: center; justify-content: center; padding: 0 4px; border-radius: var(--r-pill); text-align: center; }
-.p-count-accent { background: var(--c-accent); color: var(--c-accent-on); box-shadow: 0 0 0 2px var(--c-sidebar); }
+.p-count-accent { background: var(--c-accent-fill); color: var(--c-accent-on); box-shadow: 0 0 0 2px var(--c-sidebar); }
 .p-count-quiet { min-width: 14px; height: auto; padding: 0 3px; background: var(--c-fill); color: var(--c-text-2); }
-.p-count-bar { min-width: 14px; height: auto; padding: 0 3px; background: var(--c-accent); color: var(--c-accent-on); box-shadow: 0 0 0 1.5px var(--c-bg); }
+.p-count-bar { min-width: 14px; height: auto; padding: 0 3px; background: var(--c-accent-fill); color: var(--c-accent-on); box-shadow: 0 0 0 1.5px var(--c-bg); }
 /* ProgressBar (ui/Meter.tsx): a run's steps, one thin bar on the fill, the accent's part growing. */
 .p-progress { height: 4px; width: 100%; overflow: hidden; border-radius: var(--r-pill); background: var(--c-fill); }
 .p-progress-fill { height: 100%; border-radius: var(--r-pill); background: var(--c-accent); transition: width var(--dur-fold) ease-out; }
@@ -914,7 +914,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-button-secondary:is(:hover, [data-force="hover"]) { background: var(--c-button-bg-hover); }
 .p-button-secondary:is(:active, [data-force="active"]) { background: var(--c-button-bg-active); box-shadow: none; }
 
-.p-button-primary { background: var(--c-accent); color: var(--c-accent-on); font-weight: 600; box-shadow: var(--shadow-primary); }
+.p-button-primary { background: var(--c-accent-fill); color: var(--c-accent-on); font-weight: 600; box-shadow: var(--shadow-primary); }
 .p-button-primary:is(:hover, [data-force="hover"]) { background: var(--c-accent-hover); }
 .p-button-primary:is(:active, [data-force="active"]) { background: var(--c-accent-active); box-shadow: none; }
 
@@ -1546,8 +1546,8 @@ body { background: var(--c-bg); color: var(--c-text); }
   cursor: pointer;
   transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out, opacity var(--dur-state) ease-out;
 }
-.p-composer-send { background: var(--c-accent); color: var(--c-accent-on); }
-.p-composer-send:hover:not(:disabled) { background: color-mix(in srgb, var(--c-accent) 90%, var(--c-text)); }
+.p-composer-send { background: var(--c-accent-fill); color: var(--c-accent-on); }
+.p-composer-send:hover:not(:disabled) { background: var(--c-accent-hover); }
 .p-composer-send:disabled { background: var(--c-hover); color: var(--c-text-3); cursor: default; }
 .p-composer-send[data-stop] { background: var(--c-text); color: var(--c-bg); }
 /* Model and effort read as quiet text with a chevron, like the rest of the row. */
@@ -1807,13 +1807,13 @@ body > .annotation-toolbar {
   --card-foreground: var(--c-text);
   --popover: var(--c-overlay);
   --popover-foreground: var(--c-text);
-  --primary: var(--c-accent);
+  --primary: var(--c-accent-fill);
   --primary-foreground: var(--c-accent-on);
   --secondary: var(--c-fill);
   --secondary-foreground: var(--c-text);
   --muted: var(--c-fill);
   --muted-foreground: var(--c-text-2);
-  --accent: var(--c-accent);
+  --accent: var(--c-accent-fill);
   --accent-foreground: var(--c-accent-on);
   --destructive: var(--c-danger);
   --destructive-foreground: var(--c-text);
@@ -2541,7 +2541,7 @@ tr[data-opens]:hover { background: var(--c-hover); }
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
-.p-tool-count[data-accent] { background: var(--c-accent); color: var(--c-accent-on); }
+.p-tool-count[data-accent] { background: var(--c-accent-fill); color: var(--c-accent-on); }
 .p-tool:not([aria-current="true"]):has(.p-tool-count) { gap: 4px; padding: 0 6px; }
 @container (max-width: 300px) { .p-tool[aria-current="true"] > .p-tool-name { display: none; } }
 /* A narrow column gives the pages the room a closed tool's number takes: the number becomes a dot, and the tool's

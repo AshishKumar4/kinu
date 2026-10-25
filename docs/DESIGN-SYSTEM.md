@@ -77,7 +77,9 @@ Define every role for all four looks in `theme.ts`. Each value below is today's 
 
 | role | use | Graphite light | Graphite dark | Warm light | Warm dark |
 |---|---|---|---|---|---|
-| `--c-accent` | brass fill: primary button, switch on, active tab bar | `#BE7D1D` | `#E0A458` | `#B17513` | `#E0A458` |
+| `--c-accent` | brass as a mark or edge: switch on, check, active tab bar, progress | `#BE7D1D` | `#E0A458` | `#B17513` | `#E0A458` |
+| `--c-accent-fill` **new** | brass filled with text on it: primary button, send, counts; dark ink clears 7:1 (AAA) | `#DD9222` | `#E0A458` | `#E69819` | `#E0A458` |
+| `--c-accent-hover` / `-active` | that fill hovered and pressed; dark ink clears 4.5:1 on each | `#D08920` / `#C5821E` | `#E3AD69` / `#CE9751` | `#D88F17` / `#CD8716` | `#E3AD69` / `#CE9751` |
 | `--c-accent-fg` | brass as text or icon on a ground | `#865713` | `#E6D3AC` | `#7A5514` | `#E3D2AE` |
 | `--c-accent-on` | text on a brass fill | `#1F1306` | `#1F1306` | `#1F1503` | `#1A1408` |
 | `--c-focus` **new** | focus ring | `#9D691C` | `#E0A458` | `#936212` | `#E0A458` |

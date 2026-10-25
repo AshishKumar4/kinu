@@ -34,7 +34,7 @@ export type ColourToken =
   | '--c-hover' | '--c-pressed' | '--c-selected'
   | '--c-border' | '--c-border-strong' | '--c-field-border' | '--c-dash'
   | '--c-text' | '--c-text-2' | '--c-text-3'
-  | '--c-accent' | '--c-accent-fg' | '--c-accent-on' | '--c-accent-mark' | '--c-focus'
+  | '--c-accent' | '--c-accent-fill' | '--c-accent-fg' | '--c-accent-on' | '--c-accent-mark' | '--c-focus'
   | '--c-success' | '--c-warning' | '--c-danger' | '--c-info'
   | '--c-success-tint' | '--c-warning-tint' | '--c-danger-tint' | '--c-info-tint' | '--c-danger-on'
   | '--c-button-bg' | '--c-button-bg-hover' | '--c-button-bg-active' | '--c-button-line'
@@ -72,6 +72,7 @@ const GRAPHITE_DARK = {
   '--c-text-3': '#9D9C99',
   '--c-accent': '#E0A458',
   '--c-accent-fg': '#E6D3AC',
+  '--c-accent-fill': 'var(--c-accent)',
   '--c-accent-on': '#1F1306',
   '--c-selected': 'rgba(224, 164, 88, 0.12)',
   '--c-accent-mark': 'var(--c-accent)',
@@ -106,8 +107,8 @@ const GRAPHITE_DARK = {
   '--c-danger-on': '#1A0B08',
   // The focus ring: 3:1 on every ground (brass itself is too light on the light grounds).
   '--c-focus': '#E0A458',
-  // A filled control pressed or hovered (a step darker on light grounds, lighter on dark), and the lifts a filled
-  // button and a raised tab carry.
+  // A filled control pressed or hovered (a step darker on light grounds, lighter on dark; dark ink clears AA on each),
+  // and the lifts a filled button and a raised tab carry.
   '--c-accent-hover': '#E3AD69',
   '--c-accent-active': '#CE9751',
   '--c-danger-hover': '#D77267',
@@ -132,6 +133,8 @@ const GRAPHITE_LIGHT = {
   '--c-text-3': '#615F5D',
   '--c-accent': '#BE7D1D',
   '--c-accent-fg': '#865713',
+  // Filled with text on it (a primary button, the send button, a count): light enough for dark ink to clear AAA.
+  '--c-accent-fill': '#DD9222',
   '--c-accent-on': '#1F1306',
   '--c-selected': 'rgba(190, 125, 29, 0.12)',
   '--c-accent-mark': 'var(--c-accent-fg)',
@@ -166,10 +169,10 @@ const GRAPHITE_LIGHT = {
   '--c-danger-on': '#FFFFFF',
   // The focus ring: 3:1 on every ground (brass itself is too light on the light grounds).
   '--c-focus': '#9D691C',
-  // A filled control pressed or hovered (a step darker on light grounds, lighter on dark), and the lifts a filled
-  // button and a raised tab carry.
-  '--c-accent-hover': '#AF731B',
-  '--c-accent-active': '#A36B19',
+  // A filled control pressed or hovered (a step darker on light grounds, lighter on dark; dark ink clears AA on each),
+  // and the lifts a filled button and a raised tab carry.
+  '--c-accent-hover': '#D08920',
+  '--c-accent-active': '#C5821E',
   '--c-danger-hover': '#9A3C30',
   '--shadow-primary': 'inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 1px 2px rgba(25, 24, 22, 0.06)',
   '--shadow-destructive': 'inset 0 1px 0 rgba(255, 255, 255, 0.12)',
@@ -192,6 +195,7 @@ const WARM_DARK = {
   '--c-text-3': '#9C9184',
   '--c-accent': '#E0A458',
   '--c-accent-fg': '#E3D2AE',
+  '--c-accent-fill': 'var(--c-accent)',
   '--c-accent-on': '#1A1408',
   '--c-selected': 'rgba(224, 164, 88, 0.12)',
   '--c-accent-mark': 'var(--c-accent)',
@@ -226,8 +230,8 @@ const WARM_DARK = {
   '--c-danger-on': '#1A0B08',
   // The focus ring: 3:1 on every ground (brass itself is too light on the light grounds).
   '--c-focus': '#E0A458',
-  // A filled control pressed or hovered (a step darker on light grounds, lighter on dark), and the lifts a filled
-  // button and a raised tab carry.
+  // A filled control pressed or hovered (a step darker on light grounds, lighter on dark; dark ink clears AA on each),
+  // and the lifts a filled button and a raised tab carry.
   '--c-accent-hover': '#E3AD69',
   '--c-accent-active': '#CE9751',
   '--c-danger-hover': '#B56F60',
@@ -252,6 +256,8 @@ const WARM_LIGHT = {
   '--c-text-3': '#5E5344',
   '--c-accent': '#B17513',
   '--c-accent-fg': '#7A5514',
+  // Filled with text on it (a primary button, the send button, a count): light enough for dark ink to clear AAA.
+  '--c-accent-fill': '#E69819',
   '--c-accent-on': '#1F1503',
   '--c-selected': 'rgba(216, 154, 68, 0.16)',
   '--c-accent-mark': 'var(--c-accent-fg)',
@@ -286,10 +292,10 @@ const WARM_LIGHT = {
   '--c-danger-on': '#FFFFFF',
   // The focus ring: 3:1 on every ground (brass itself is too light on the light grounds).
   '--c-focus': '#936212',
-  // A filled control pressed or hovered (a step darker on light grounds, lighter on dark), and the lifts a filled
-  // button and a raised tab carry.
-  '--c-accent-hover': '#A36C11',
-  '--c-accent-active': '#986510',
+  // A filled control pressed or hovered (a step darker on light grounds, lighter on dark; dark ink clears AA on each),
+  // and the lifts a filled button and a raised tab carry.
+  '--c-accent-hover': '#D88F17',
+  '--c-accent-active': '#CD8716',
   '--c-danger-hover': '#873B28',
   '--shadow-primary': 'inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 1px 2px rgba(43, 26, 4, 0.07)',
   '--shadow-destructive': 'inset 0 1px 0 rgba(255, 255, 255, 0.12)',
