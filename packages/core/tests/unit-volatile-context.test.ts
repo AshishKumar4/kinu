@@ -551,6 +551,22 @@ describe('agentDynamicContext (the one plane set both backends assemble)', () =>
     expect('secrets' in agentDynamicContext({ ...sources, secrets: { granted: [], withheld: 0 } })).toBe(false);
   });
 
+  // quiet-cove, production 2026-10-25: the GitHub connection's git credential, named only by its host and header, was sent
+  // to api.github.com, where it is a placeholder, and the agent reported the owner's token broken.
+  test('a secret that names what it is for is told by that, in place of its host and position', () => {
+    const binding = { name: 'KINU_GITHUB_TOKEN', hosts: ['github.com'], position: { kind: 'authorization' }, reveal: false } as const;
+    const use = 'git over HTTPS to its host, never the REST API';
+
+    const line = (granted: SecretsInContext['granted']) => present(
+      present(renderDynamicContextBlock(agentDynamicContext({ ...sources, secrets: { granted, withheld: 0 } })), 'dynamic context block')
+        .split('\n').find((row) => row.startsWith('- $KINU_GITHUB_TOKEN')),
+      'its line',
+    );
+
+    expect(line([{ ...binding, use }])).toBe(`- $KINU_GITHUB_TOKEN: ${use}`);
+    expect(line([binding])).not.toContain(use);
+  });
+
   test('an absent plane is omitted, not rendered empty', () => {
     // renderDynamicContextBlock returns null for an empty block; an empty roster must not render headings.
     const ctx = agentDynamicContext(sources);
