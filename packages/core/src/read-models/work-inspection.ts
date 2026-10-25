@@ -74,7 +74,9 @@ const UNKNOWN_EFFECT = 'finishing work another version of Kinu started';
 /** What a person can know of an effect this build cannot run: an update finishes it, nothing they do will. */
 const EFFECT_BLOCKED = 'this version of Kinu cannot finish it; an update will';
 
-const EFFECT_PARKED = 'waits for your answer to its question';
+/** A parked effect waits on the person: a follow-up behind their open question, or a model call its model or spending
+ *  settings refused (`OWNER_FIXABLE_REFUSALS`); the row keeps no record of which. */
+const EFFECT_PARKED = 'waiting on you: answer its question, or check its model and spending settings';
 
 /** A job as its own list reports it; the page's copy may omit when it resumes. */
 export function jobPhase(job: { readonly status: BackgroundJobStatus; readonly resumeAfter?: number | null }, now: number): WorkPhase {
