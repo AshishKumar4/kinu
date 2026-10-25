@@ -868,8 +868,11 @@ function judged(line: LineRead, filesOwner: FilesOwner): ApprovalResult {
 
   const unresolved = line.read === null ? [UNRESOLVED.parse] : line.read.unresolved;
 
-  // What runs that the reading cannot know may be anything, on any executor.
-  if (unresolved.length > 0) hits.push({ decision: 'gate', rule: 'unresolved', explanation: `Not known before it runs: ${unresolved.join('; ')}.` });
+  // What runs that the reading cannot know may be anything: asked where the files are the owner's. On the agent's own
+  // machine only what a known word reaches out to asks (owner, 2026-10-25: "computer is their stuff").
+  if (unresolved.length > 0 && filesOwner === 'user') {
+    hits.push({ decision: 'gate', rule: 'unresolved', explanation: `Not known before it runs: ${unresolved.join('; ')}.` });
+  }
 
   return { decision: dominant(hits), hits };
 }
