@@ -4,7 +4,7 @@ import {
   useCallback, useEffect, useMemo, useRef, useState,
   type KeyboardEvent as ReactKeyboardEvent, type ReactNode,
 } from "react";
-import { useParams } from "react-router-dom";
+import { useOpenWorkspace } from "@/hooks/use-open-workspace";
 import { Loader } from "@/components/ui/Loader";
 import {
   ArrowsClockwiseIcon, ArrowUpIcon, CaretDownIcon,
@@ -305,7 +305,7 @@ function folderCount(folders: number, files: number, more: boolean): string {
 
 
 export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSurfaceProps) {
-  const agentName = useParams().agentId ?? "";
+  const agentName = useOpenWorkspace() ?? "";
   const [path, setPath] = useState("/");
   const [notice, setNotice] = useState<string | null>(null);
   const [filter, setFilter] = useState("");

@@ -5,6 +5,7 @@
 import type { SessionRecord, TerminalSession } from "@kinu.run/devbox";
 import { Effect, Result } from 'effect';
 import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { OpenWorkspaceProvider } from "@/hooks/use-open-workspace";
 import { createRoot } from "react-dom/client";
 import { answerPictures } from "@kinu.run/core/web/picture-src";
 import { SystemFrame } from "@/gallery-system";
@@ -7763,7 +7764,7 @@ async function updatesFrame(): Promise<{ node: React.ReactNode; entries: string[
   };
 }
 
-/** Routed: FilesSurface reads `agentId` for the raw-bytes route. `&offline=device` shows the disconnected row, `&wide=1` the ≥64rem side-panel preview,
+/** FilesSurface reads the open workspace for the raw-bytes route. `&offline=device` shows the disconnected row, `&wide=1` the ≥64rem side-panel preview,
  *  `&narrow=1` the column at whatever width the viewport gives it, as a phone does, `&inspector=340|480` the inspector's
  *  default width and one dragged wider. */
 interface MountedFrame { node: React.ReactNode; entries: string[] }
@@ -7788,12 +7789,12 @@ function driveFrame(frameName: "environment" | "files"): MountedFrame {
     node: (
       <Routes>
         <Route path="/workspace/:agentId"
-          element={<DriveFrame
+          element={<OpenWorkspaceProvider value={DRIVE_WORKSPACE}><DriveFrame
             initialSurface={frameName === "files" ? "Files" : "Environment"}
             offlineDevice={params.get("offline") === "device"}
             width={driveColumn(params, column)}
             deferPreview={params.get("deferpreview") === "1"}
-          />} />
+          /></OpenWorkspaceProvider>} />
       </Routes>
     ),
   };
