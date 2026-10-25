@@ -7,7 +7,7 @@ import { liveRows, STOPPED_BY } from '../../scripts/live-app-rows';
 
 const { observed, verdictOf, boot } = liveRows('live-app-turns', [
   'live-indicator', 'opened-mid-turn', 'reconnect', 'answered', 'unsent-answer', 'dropped-file', 'cleared', 'stop-then-send', 'new-chat-stop',
-  'turn-drawn', 'state',
+  'turn-drawn', 'silent-turn', 'state',
 ]);
 
 /** An answer keeps each step's text where it streamed: its steps drawn while it waits, the same blocks and then the
@@ -182,5 +182,16 @@ describe('a turn a signal opened draws live while it runs, and settles once it e
     expect(focus.steering).toMatchObject({ outline: 'none', inComposer: true });
     expect(focus.idle).toMatchObject({ outline: 'none', inComposer: true });
     expect(focus.next.outline).not.toBe('none');
+  });
+});
+
+// The owner, 2026-10-24: a timer turn that ran programs and ended without a message drew their raw output as its answer.
+describe('a turn that ends without a word draws its work and no answer', () => {
+  test('its phase is drawn and no answer text, as it ends and once the page loads again', () => {
+    const { ended, reloaded } = verdictOf(observed.silentTurn, 'silent-turn');
+
+    expect(ended.phases).toBeGreaterThan(0);
+    expect(reloaded.phases).toBe(ended.phases);
+    expect({ ended: ended.said, reloaded: reloaded.said }).toEqual({ ended: [], reloaded: [] });
   });
 });

@@ -6,7 +6,6 @@ import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import { z } from 'zod';
 import { runChat, ExtensionHost, createAgentsTool, createAgentsCodemodeProvider, type ChatEvent, type KinuExtension, type Usage } from '../src/index';
-import { synthesizeToolFallback } from '../src/utils/evidence-window';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { createTestRuntime, conversationsFor } from './helpers';
 import { hostedSeatsOver } from './helpers-actor-host';
@@ -350,16 +349,5 @@ describe('ChatEvent usage fidelity', () => {
     });
 
     expect(usage).toBeUndefined();
-  });
-});
-
-describe('tool-only no-text fallback', () => {
-  test('a long tool result keeps its tail, and a missing output stays empty', () => {
-    const body = `OPENING${'-'.repeat(2000)}CLOSING`;
-    const text = synthesizeToolFallback([{ toolResults: [{ toolName: 'read', output: body }] }]);
-    expect(text.startsWith('[read] OPENING')).toBe(true);
-    expect(text.endsWith('CLOSING')).toBe(true);
-    expect(text).toContain('chars omitted from the middle');
-    expect(synthesizeToolFallback([{ toolResults: [{ toolName: 't', output: null }] }])).toBe('[t] ');
   });
 });

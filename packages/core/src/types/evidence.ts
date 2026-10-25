@@ -30,9 +30,6 @@ export const EVIDENCE_BUDGETS = {
   takeChosen: 8_000,
   taskEcho: 800,
 
-  /** Per-result lines of the no-prose turn-summary fallback, stored as assistantResponse. */
-  toolFallbackSummary: 800,
-
   inheritedMessage: 1_600,
 
   /** Half the stored ceiling per turn: a refiner reads a whole batch in one child's window. */
