@@ -171,3 +171,14 @@ describe('a private temp directory with nothing in it', () => {
     expect(assertMeasured('preflight', measuredCounts(empty))).toContain('free inodes');
   });
 });
+
+describe('a temp filesystem that counts no inodes', () => {
+  test('is judged by its space and its write probe, not refused as a scan that measured nothing', () => {
+    // #123 (2026-10-25): the Kinu Computer's btrfs answers statfs with 0 of 0 inodes, and every push from it was refused.
+    const uncounted = { ...HEALTHY, freeInodes: null };
+
+    expect(judge(uncounted)).toEqual([]);
+    expect(() => assertMeasured('preflight', measuredCounts(uncounted))).not.toThrow();
+    expect(judge({ ...uncounted, writeProbe: { ok: false, code: 'ENOSPC' } })).toHaveLength(1);
+  });
+});

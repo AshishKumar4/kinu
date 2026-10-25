@@ -227,7 +227,9 @@ export function engineBoundsTempWalk(source: string): boolean {
 export interface Environment {
   readonly bun: { readonly actual: string; readonly pinned: string };
   readonly temp: string;
-  readonly freeInodes: number;
+  /** Null where the filesystem allocates inodes as it needs them and counts none: statfs answers 0 of 0 (btrfs, and
+   *  the Kinu Computer's overlay over it, #123; a tmpfs with `nr_inodes=0`). */
+  readonly freeInodes: number | null;
   readonly freeBytes: number;
   /** Whether this user can write under the temp directory right now. `freeBytes`
    *  is the filesystem's answer; a per-user quota refuses a write while it
@@ -345,7 +347,7 @@ export function observe(): Environment {
       pinned: Bun.spawnSync([join(repo, 'node_modules/.bin/bun'), '-e', 'process.stdout.write(Bun.revision)'], { stdout: 'pipe', stderr: 'pipe' }).stdout.toString().trim(),
     },
     temp,
-    freeInodes: fs.ffree,
+    freeInodes: fs.files === 0 ? null : fs.ffree,
     freeBytes: fs.bavail * fs.bsize,
     writeProbe: probeWrite(temp),
     markedAncestors: unboundedWorkdirsAbove(temp, process.env.HOME ?? '/root'),
@@ -376,7 +378,7 @@ export function judge(env: Environment): string[] {
     }));
   }
 
-  if (env.freeInodes < MIN_FREE_INODES) {
+  if (env.freeInodes !== null && env.freeInodes < MIN_FREE_INODES) {
     problems.push(finding({
       at: env.temp,
       invariant: `the temp filesystem keeps at least ${String(MIN_FREE_INODES)} free inodes `
@@ -503,10 +505,11 @@ export function reclaim(temp: string, olderThanMs: number): ReclaimResult {
  *  statfs, and the markers each ancestor is probed for. Not the temp
  *  directory's entries: a private one (every lane's TMPDIR since 2026-09-24)
  *  is legitimately empty, and a temp root that is not there fails `statfsSync`
- *  before anything is counted. */
+ *  before anything is counted. A filesystem that counts no inodes is read by its
+ *  free space alone. */
 export function measuredCounts(env: Environment): readonly (readonly [string, number])[] {
   return [
-    ['free inodes', env.freeInodes],
+    env.freeInodes === null ? ['free bytes, on a filesystem that counts no inodes', env.freeBytes] : ['free inodes', env.freeInodes],
     ['project markers probed per ancestor', PROJECT_MARKERS.length],
   ];
 }
@@ -523,7 +526,7 @@ if (import.meta.main) {
     console.log(
       `preflight: reclaimed ${String(removed)} scratch entries (kept ${String(kept)} younger `
       + `than 2h); ended ${String(browsers)} orphaned test browser(s) and removed ${String(profiles)} abandoned `
-      + `scratch root(s) in ${BROWSER_PROFILE_PARENT}; free inodes ${String(env.freeInodes)} → ${String(after.freeInodes)}`,
+      + `scratch root(s) in ${BROWSER_PROFILE_PARENT}; free inodes ${String(env.freeInodes ?? 'uncounted')} → ${String(after.freeInodes ?? 'uncounted')}`,
     );
     process.exit(0);
   }
