@@ -6,7 +6,9 @@
  * since changed what it says.
  */
 
+import { Cause, Exit } from 'effect';
 import type { Memory } from '../types/primitives';
+import { attempt, diagnostics, hold, toKinuError } from '../obs/index';
 import type { VectorStore } from './vector-store';
 import { renderFactValue, type FactsStore, type MemoryScope } from './facts';
 import type { AccountMemory } from './account';
@@ -74,11 +76,24 @@ function supersedingFact(facts: FactsStore, keys: readonly string[], text: strin
   }) ?? null;
 }
 
-/** What `question` matches in memory, best first; none for a turn that asks nothing. */
+/** What `question` matches in memory, best first; none for a turn that asks nothing, and none where the search fails,
+ *  which is logged: the turn goes on without it, as it does without the account's facts. */
 export async function recallForTurn(sources: RecallSources, question: string): Promise<readonly RecalledMemory[]> {
   if (question.trim() === '') return [];
   const { facts, account } = sources;
-  const { hits } = await searchMemoryHits(sources.memory, sources.vectorStore, question, { limit: RECALLED, facts, ...(account !== undefined && { account }) });
+  const doing = "searching the memory a turn's words match";
+
+  const searched = await hold(attempt({ doing, otherwise: 'io' }, () => searchMemoryHits(sources.memory, sources.vectorStore, question, {
+    limit: RECALLED, facts, ...(account !== undefined && { account }),
+  })));
+
+  if (Exit.isFailure(searched)) {
+    diagnostics.failure('memory.turn_recall_failed', toKinuError({ doing, cause: Cause.squash(searched.cause), otherwise: 'io' }));
+
+    return [];
+  }
+
+  const { hits } = searched.value;
   const matchedKeys = hits.flatMap((hit) => (hit.factKey !== undefined && hit.scope === 'workspace' ? [hit.factKey] : []));
 
   return hits.map((hit): RecalledMemory => {
