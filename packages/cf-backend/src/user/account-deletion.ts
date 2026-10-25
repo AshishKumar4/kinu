@@ -12,6 +12,9 @@ import { retriedUnlessRefused } from '../wake-jobs';
 
 const ACCOUNT_DELETION_JOB = 'account-deletion';
 
+/** The account is being deleted, and by whom: it admits nothing new (`UserLimits`), and its jobs finish it. */
+export const ACCOUNT_DELETING_KEY = 'account:deleting';
+
 export interface AccountDeletionDeps {
   /** Whether the account is marked for deletion. */
   readonly marked: () => boolean;

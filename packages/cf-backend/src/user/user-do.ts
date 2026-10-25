@@ -75,7 +75,7 @@ import type { AccountSpend, SlateSurfaceValue } from '@kinu.run/core';
 import { ShareCardJobs, type HeldShare, type ReceivedShare } from './share-cards';
 import { EvalLeaseJobs } from './eval-leases';
 import { WorkspaceDeletionJobs } from './workspace-deletions';
-import { AccountDeletionJob } from './account-deletion';
+import { ACCOUNT_DELETING_KEY, AccountDeletionJob } from './account-deletion';
 import { accountIdFor } from '../auth/store';
 import type { SqlRow, UserObjectHost } from './user-host';
 
@@ -99,9 +99,6 @@ export interface AccountSettingsRevision {
 
 /** When the account was deleted: the one thing its object keeps after, until a sign-in makes it an account again. */
 const ACCOUNT_DELETED_KEY = 'account:deleted-at';
-
-/** The account is being deleted, and by whom: its workspaces' jobs tear them down, then its own finishes it. */
-const ACCOUNT_DELETING_KEY = 'account:deleting';
 
 const AccountDeletingSchema = v.object({ ownerUserId: v.string() });
 
