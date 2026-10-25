@@ -1538,7 +1538,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       this.#refused = undefined;
       this.ctx.storage.kv.delete(START_REFUSED_KEY);
-      this.#trace('startup.admit.exit', { generation, ms: Date.now() - since, admitted: true, owned: this.#owns(generation) });
+      // `golden` means the box's own snapshot was missing: its restore rebuilds from the backup, the slow start.
+      this.#trace('startup.admit.exit', { generation, ms: Date.now() - since, admitted: true, owned: this.#owns(generation), source: source?.kind ?? 'running' });
     } catch (thrown) {
       await this.#refuseAdmission({ generation, since, startsContainer, inputs }, { cause: thrown });
     }
@@ -2143,6 +2144,15 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     this.stampInteraction();
 
     return { admission: readiness, container };
+  }
+
+  /** Starts a box that has run before, as a person opens its workspace, so its computer is ready by the time they ask;
+   *  one that never ran stays unstarted until something asks for it (owner, 2026-10-25). */
+  warm(): Promise<void> {
+    return settle(attempt('io', async () => {
+      if (this.ctx.storage.kv.get(DISK_STATE_KEY) === undefined) return;
+      await this.#armStartup();
+    }));
   }
 
   /** Stamps the lease for a caller on a lane it cannot see, e.g. a terminal; the host calls
