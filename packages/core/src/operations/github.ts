@@ -25,7 +25,7 @@ export interface GitHubAnswer {
 export const GITHUB = {
   read: defineOperation({
     ns: 'github', slate: false, name: 'read', impact: 'observe',
-    help: 'GET a path of GitHub\'s REST API (docs.github.com/rest) as the owner\'s GitHub connection. Its answer is GitHub\'s JSON, with `lastModified` to send back as `ifModifiedSince`: an unchanged answer is a 304 with no body, at no cost to the rate limit.',
+    help: 'GET a path of GitHub\'s REST API (docs.github.com/rest) as the owner\'s GitHub connection. Its answer is GitHub\'s JSON, with `lastModified` to send back as `ifModifiedSince`: an unchanged answer is a 304 with no body, at no cost to the rate limit. It only reads: to open an issue, comment, or open a pull request, call the GitHub server\'s tools (`codemode.search("create issue")`).',
     input: v.strictObject({
       path: described(GitHubPathSchema, 'As `/notifications`, or `/repos/{owner}/{repo}/pulls/{number}`.'),
       query: v.optional(described(v.record(v.string(), v.union([v.string(), v.number(), v.boolean()])), 'Its query parameters: `{ per_page: 50, since: "2026-10-24T00:00:00Z" }`.')),

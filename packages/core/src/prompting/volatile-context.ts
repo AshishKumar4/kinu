@@ -36,6 +36,8 @@ import { compareCodeUnits, oneLineClip } from '../utils/text';
 import type { ActiveRoster, DelegationChoices, DynamicApproval, MissingCapability, ShownLesson } from '../types/dynamic-context';
 import { MAX_MAIL_IN_CONTEXT, type MailInContext } from '../mail/in-context';
 import { renderCraftedToolsDeclaration, type CraftedDeclaration, type ExternalToolDeclaration } from '../tools/sandbox-contract';
+import type { ConnectedServer } from '../tools/mcp-discovery';
+import { mcpPresetById } from '../mcp/presets';
 import { formatByteCap } from '../utils/format';
 
 export type { DynamicApproval, MissingCapability } from '../types/dynamic-context';
@@ -83,6 +85,8 @@ export interface DynamicContext {
   /** Empty renders a "none yet" line: the model checks `workspace.listTools()` before building. */
   craftedTools?: readonly CraftedDeclaration[];
   externalTools?: readonly ExternalToolDeclaration[];
+  /** The owner's connected MCP servers this turn's programs reach, which no other line names. */
+  connections?: readonly ConnectedServer[];
   factsBlock?: string;
   memoryTail?: string;
   /** Re-read per step; facts and the memory tail freeze at turn assembly. */
@@ -112,7 +116,9 @@ export interface DynamicContext {
 }
 
 export interface SecretsInContext {
-  readonly granted: readonly { readonly name: string; readonly hosts: readonly string[]; readonly position: SecretPosition; readonly reveal: boolean }[];
+  readonly granted: readonly {
+    readonly name: string; readonly hosts: readonly string[]; readonly position: SecretPosition; readonly reveal: boolean; readonly use?: string;
+  }[];
   readonly withheld: number;
 }
 
@@ -151,6 +157,7 @@ export interface DynamicContextSources {
   readonly activeSkills?: ActiveSkillSet;
   readonly craftedTools?: readonly CraftedDeclaration[];
   readonly externalTools?: readonly ExternalToolDeclaration[];
+  readonly connections?: readonly ConnectedServer[];
   readonly factsBlock: string | undefined;
   /** Read once per turn (the plane's only await); callers close over it. */
   readonly memoryTail: string | undefined;
@@ -204,6 +211,8 @@ export function agentDynamicContext(sources: DynamicContextSources): DynamicCont
   };
 
   if (sources.devices !== undefined && sources.devices.length > 0) context.devices = sources.devices;
+
+  if (sources.connections !== undefined && sources.connections.length > 0) context.connections = sources.connections;
 
   if (sources.activeSkills !== undefined && sources.activeSkills.active.length > 0) {
     context.skills = [...sources.activeSkills.active].sort((a, b) => compareCodeUnits(a.name, b.name))
@@ -464,6 +473,7 @@ const DYNAMIC_SECTION_TITLES = {
   skills: '## Active skills (why each is on)',
   craftedTools: '## Crafted tools available through eval',
   externalTools: '## MCP and extension tools available through eval (call them there; they are not native tools)',
+  connections: '## Connected services (the owner\'s accounts: you act as the owner. In eval, `codemode.search("what to do")` finds a tool and `tools.<name>(input)` calls it)',
   factsBlock: '## World model (facts you remembered)',
   memoryTail: '## Memory (newest MEMORY.md lessons and reflections)',
   recoveries: '## Proven by execution (environment evidence: calls that kept failing until a changed call ran clean)',
@@ -491,7 +501,7 @@ function secretsSection(secrets: SecretsInContext | undefined): RenderedSection 
 
   return { text: [
     DYNAMIC_SECTION_TITLES.secrets,
-    ...secrets.granted.map((secret) => `- $${secret.name}: to ${secret.hosts.join(', ')}, in ${positionWords(secret.position)}`
+    ...secrets.granted.map((secret) => `- $${secret.name}: ${secret.use ?? `to ${secret.hosts.join(', ')}, in ${positionWords(secret.position)}`}`
       + (secret.reveal ? '; readable: the value itself on the computer and in eval, a placeholder in the workspace shell' : '')),
     ...withheld,
   ].join('\n') };
@@ -530,12 +540,27 @@ function delegationSection(choices: DelegationChoices | undefined): RenderedSect
   return { text: `${DYNAMIC_SECTION_TITLES.delegation}\nRoles: ${choices.roles.join('; ') || 'none'}\nTiers: ${choices.tiers.join(', ')}` };
 }
 
-/** What `eval` reaches beyond the builtins: the turn's MCP and extension tools, then the crafted ones. */
+/**
+ * One server: what it covers, and how many of its tools change things, which a turn would otherwise not know it holds
+ * (quiet-cove, 2026-10-25: 53 GitHub tools served, none ever called, and the owner told GitHub was read-only).
+ */
+function connectionLine(connected: ConnectedServer): string {
+  const covers = connected.presetId === undefined ? undefined : mcpPresetById(connected.presetId)?.description.toLowerCase();
+  const head = `- ${connected.server}${covers === undefined ? '' : ` (${covers})`}: ${String(connected.tools)} tools`;
+
+  return connected.changing === 0 ? `${head}, every one reading only` : `${head}, ${String(connected.changing)} of them creating or changing things`;
+}
+
+/** What `eval` reaches beyond the builtins: the turn's MCP and extension tools, its connected servers, then crafted ones. */
 function addToolPlanes(ctx: DynamicContext, add: (key: keyof DynamicContext, section: RenderedSection | null) => void): void {
   add('externalTools', rosterSection(
     DYNAMIC_SECTION_TITLES.externalTools, { items: ctx.externalTools ?? [], total: (ctx.externalTools ?? []).length },
     { cap: Infinity, keyed: true },
     (tool) => `- tools[${JSON.stringify(tool.name)}](input): ${tool.description}${tool.inputSchema === undefined ? '' : `. Input schema: ${tool.inputSchema}`}`,
+  ));
+  add('connections', rosterSection(
+    DYNAMIC_SECTION_TITLES.connections, { items: ctx.connections ?? [], total: (ctx.connections ?? []).length },
+    { cap: Infinity, keyed: false }, connectionLine,
   ));
 
   if (ctx.craftedTools !== undefined) {

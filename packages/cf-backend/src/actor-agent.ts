@@ -3821,7 +3821,7 @@ export abstract class ActorAgent extends Agent<Env> {
       memoryTail,
       ...(accountFacts !== undefined && { accountFacts }),
       ...(recalled !== undefined && { recalled }),
-      ...(secrets !== undefined && { secrets: { granted: secrets.granted.map(({ name, hosts, position, reveal }) => ({ name, hosts, position, reveal })), withheld: secrets.withheld } }),
+      ...(secrets !== undefined && { secrets: { granted: secrets.granted.map(({ name, hosts, position, reveal, use }) => ({ name, hosts, position, reveal, ...(use !== undefined && { use }) })), withheld: secrets.withheld } }),
       ...(reach.kind === 'workspace' && { unavailableMcp: this._mcpUnavailable }),
       missingCapabilities: extras.extraMissingCapabilities?.() ?? [],
       subagentDelegates: held.delegates,

@@ -23,7 +23,9 @@ function refusalOf(answer: GitHubAnswer): KinuError {
 }
 
 export function createGitHubCodemodeProvider(deps: GitHubDeps): CodemodeProvider {
-  return codemodeNamespace('github', 'GitHub\'s REST API through the account\'s GitHub connection, reading only.', [
+  // Its summary never calls the connection read-only: the connection writes through its MCP server's tools, which the
+  // turn's Connected services names (quiet-cove, 2026-10-25: "reading only" here was read as "GitHub is read-only").
+  return codemodeNamespace('github', 'Reads GitHub\'s REST API as the owner\'s GitHub connection; that connection\'s own tools, under Connected services, create and change things.', [
     // A 304 is an answer: nothing changed since `ifModifiedSince`.
     serve(GITHUB.read, (asked) => Effect.flatMap(Effect.promise(() => deps.read(asked)), (answer) => (
       (answer.status >= 200 && answer.status < 300) || answer.status === 304

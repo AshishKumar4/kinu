@@ -27,6 +27,15 @@ const GITHUB_GIT_PLACEHOLDER_KEY = 'secrets:github-git-placeholder';
  *  (`connectionEnvironment`), and `GIT_TOKEN` carries it for Nimbus's git where the owner set none. */
 const GITHUB_GIT_SECRET = 'KINU_GITHUB_TOKEN';
 
+/**
+ * What it serves, told the agent in place of its host and header: git over HTTPS to github.com, where git sends it
+ * itself. GitHub's REST API (api.github.com) is another host, which gets only the placeholder: production 2026-10-25, an
+ * agent told "to github.com, in the Authorization header" sent it there with Bearer and token, got 401 both ways, and
+ * reported the token broken.
+ */
+const GITHUB_GIT_USE = 'git over HTTPS to github.com (clone, fetch, push), which git sends itself; never GitHub\'s REST API at '
+  + 'api.github.com, which receives only its placeholder. To read or write GitHub itself, use the GitHub connection\'s tools.';
+
 export class UserSecrets {
   constructor(private readonly host: UserObjectHost, private readonly github: GitHubGitSource | null = null) {}
 
@@ -40,7 +49,7 @@ export class UserSecrets {
 
     if (placeholder !== kept) this.host.ctx.storage.kv.put(GITHUB_GIT_PLACEHOLDER_KEY, placeholder);
 
-    return { name: GITHUB_GIT_SECRET, hosts: ['github.com'], position: { kind: 'authorization' }, placeholder, elsewhere: 'withheld' };
+    return { name: GITHUB_GIT_SECRET, hosts: ['github.com'], position: { kind: 'authorization' }, placeholder, elsewhere: 'withheld', use: GITHUB_GIT_USE };
   }
 
   /** The connection-held secrets a request may carry: the GitHub connection's, which is refused clearly once it is gone. */
