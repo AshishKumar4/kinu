@@ -15,7 +15,7 @@ import * as v from 'valibot';
 import { CommandResultSchema } from '../execution/exec-result';
 import { attempt, diagnostics, KinuError, renderThrownChain, settle, tolerate, type ErrorCode } from '../obs/index';
 import { shellQuote } from '../utils/shell';
-import { SHARED_ROOTS, WORKSPACE_ROOT } from '../vfs/workspace-path';
+import { SHARED_ROOTS, UPLOADS_ROOT, WORKSPACE_ROOT } from '../vfs/workspace-path';
 
 /**
  * A side past this is listed as large, without a body (a write's preview too). Nimbus's diff does not say whether it
@@ -45,9 +45,13 @@ function reviewed(name: string): boolean {
   return !name.startsWith('.') && !DEPENDENCY_TREES.has(name);
 }
 
-/** Under the store's root the change-set reviews every agent's home and the shared roots, and nothing else (owner,
- *  2026-09-25). */
-const REVIEWED_UNDER_ROOT = ['home', ...SHARED_ROOTS.map((root) => root.slice(1))];
+/**
+ * Under the store's root the change-set reviews every agent's home and the shared roots, and nothing else (owner,
+ * 2026-09-25), but the person's own uploads: Changes is the agents' work (owner, 2026-10-25). An upload an agent edits
+ * in place is not listed either: the change-set knows what moved since the review, not who moved it, and an upload saved
+ * after the review reads exactly as an agent's write there.
+ */
+const REVIEWED_UNDER_ROOT = ['home', ...SHARED_ROOTS.filter((root) => root !== UPLOADS_ROOT).map((root) => root.slice(1))];
 
 /** Where the change-set names a path relative to the working directory, as the shell starting there does. */
 const WORKING_DIRECTORY = `${WORKSPACE_ROOT.slice(1)}/`;
