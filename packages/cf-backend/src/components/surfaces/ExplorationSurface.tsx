@@ -3,7 +3,8 @@
  * `search_nodes` and `head_journal`, so rows report `hasSearchTree` and `hasNodeTranscripts`.
  */
 import { useState, useCallback, useMemo } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link } from "react-router-dom";
+import { useOpenWorkspace } from "@/hooks/use-open-workspace";
 import { Loader } from "@/components/ui/Loader";
 import { Button, buttonClass } from "@/components/ui/Button";
 import {
@@ -53,7 +54,7 @@ export interface ExplorationSurfaceProps {
 export function ExplorationSurface({
   liveTrees, isStreaming, backgroundJobs, rpc, headActivity, headDeltas,
 }: ExplorationSurfaceProps) {
-  const { agentId } = useParams();
+  const agentId = useOpenWorkspace();
   const [focusedRunId, setFocusedRunId] = useState<string | null>(null);
   /** Null means nothing opened; below `@6xl` the pane replaces the canvas only once set. */
   const [inspect, setInspect] = useState<{ runId: string; nodeId: string | null } | null>(null);

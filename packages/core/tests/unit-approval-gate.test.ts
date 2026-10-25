@@ -471,8 +471,8 @@ describe('gateExec', () => {
   ] as const;
 
   for (const { row, command, refused } of thirdReview) {
-    test(`a line the reading cannot fully resolve asks, and one it resolves to a deny is refused, on every executor: row ${row}`, async () => {
-      for (const executor of [WORKSPACE, DEVICE]) {
+    test(`a line the reading cannot fully resolve asks on the owner's machine, and one it resolves to a deny is refused everywhere: row ${row}`, async () => {
+      for (const executor of refused ? [WORKSPACE, DEVICE] : [DEVICE]) {
         const asked: string[] = [];
 
         const h = harness(executor, {
@@ -490,6 +490,27 @@ describe('gateExec', () => {
       }
     });
   }
+
+  // hearthlit-field-04d5879b, 2026-10-25: the agent's git read on its own computer, a script built from an expansion,
+  // waited on the owner. On the agent's own machine a line the reading cannot know runs; what it reaches out to still asks.
+  test("on the agent's own machine a line the reading cannot know runs unasked, and a known reach-out still asks", async () => {
+    const asked: string[] = [];
+
+    const h = harness(WORKSPACE, {
+      mode: () => 'strict',
+      requestApproval: async (req) => {
+        asked.push(req.command);
+
+        return 'deny';
+      },
+    });
+
+    const unknowable = `export S='git -C "$1" diff HEAD'; sh -c "$S" _ /workspace/kinu`;
+    const pushed = 'git push --force origin HEAD:main';
+
+    expect({ unknowable: await h.run(unknowable), pushed: await h.run(pushed), asked })
+      .toEqual({ unknowable: `ran:${unknowable}`, pushed: expect.stringMatching(/^blocked:denied:/), asked: [pushed] });
+  });
 
   test('what the agent runs every day stays unasked: a glob in its home, an exit status, a process substitution, arithmetic', async () => {
     const h = harness(WORKSPACE, { mode: () => 'strict' });

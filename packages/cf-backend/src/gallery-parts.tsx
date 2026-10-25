@@ -27,6 +27,7 @@ import {
   type PartRunAnswer, type PartRunRequest, type SharePreapproval, type SlateConsent, type SlatePreapprovals,
 } from "@kinu.run/core";
 import { InlineSlate } from "@/components/slates/InlineSlate";
+import { OpenWorkspaceProvider } from "@/hooks/use-open-workspace";
 import { SlateInlineContext } from "@/components/slates/context";
 import { PartView, SealedContent, shownMarkup } from "@/components/sharing/PartView";
 import { SLATE_GALLERY_URL } from "@/gallery-slate-fallback";
@@ -270,7 +271,7 @@ export function PartPreviewsFrame() {
   return (
     <Routes>
       <Route path={APP_ROUTES.workspace} element={
-        <SlateInlineContext.Provider value={{ rpc: previewRpc }}>
+        <OpenWorkspaceProvider value={WORKSPACE}><SlateInlineContext.Provider value={{ rpc: previewRpc }}>
           <div className="grid h-dvh grid-cols-2 gap-4 p-bg p-4 p-text">
             <section data-slate-preview-display="pane" className="flex min-h-0 flex-col">
               <InlineSlate id={SLATE} rpc={previewRpc} display="pane" />
@@ -279,7 +280,7 @@ export function PartPreviewsFrame() {
               <p>Here is the board.<span className="block my-2"><InlineSlate id={SLATE} rpc={previewRpc} display="inline" /></span></p>
             </section>
           </div>
-        </SlateInlineContext.Provider>
+        </SlateInlineContext.Provider></OpenWorkspaceProvider>
       } />
     </Routes>
   );

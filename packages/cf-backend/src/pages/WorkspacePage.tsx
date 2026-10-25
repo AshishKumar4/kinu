@@ -68,6 +68,7 @@ import { useCarriedAttachments } from "@/components/workspaces/NewChatView";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Notice } from "@/components/ui/Notice";
 import { IconControl } from "@/components/ui/IconControl";
+import { OpenWorkspaceProvider } from "@/hooks/use-open-workspace";
 
 /** The mission is shown as the standing brief, not sent as an opening message
  *  the agent would then try to carry out. */
@@ -939,6 +940,7 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
 
 
   return (
+    <OpenWorkspaceProvider value={agentId}>
     <SlateInlineContext.Provider value={slateInline}><FileLinkContext.Provider value={fileLinks}><ChatImageContext.Provider value={chatImages}>
     <div className="h-full flex flex-col" data-workbench>
       {/* The chat stays mounted through reconnect so the in-flight turn survives. */}
@@ -1135,6 +1137,7 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
 
     </div>
     </ChatImageContext.Provider></FileLinkContext.Provider></SlateInlineContext.Provider>
+    </OpenWorkspaceProvider>
   );
 }
 

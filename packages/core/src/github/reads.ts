@@ -30,7 +30,8 @@ export function readGitHub(asked: GitHubRead, token: () => Promise<string | null
         authorization: `Bearer ${held}`, accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28', 'user-agent': 'Kinu',
         ...(asked.ifModifiedSince !== undefined && { 'if-modified-since': asked.ifModifiedSince }),
       },
-      redirect: 'error',
+      // Never followed, so the token goes nowhere else; workerd refuses 'error' (follow or manual only).
+      redirect: 'manual',
     }));
 
     const text = yield* Effect.promise(() => response.text());
