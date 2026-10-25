@@ -193,6 +193,15 @@ describe('a person creates their address once, as the deployment allows', () => 
     expect((await call(PRIYA, { method: 'POST', path: '/api/user/mail/address', body: { username: 'priya' } })).body).toMatchObject({ error: 'Addresses on this deployment are for its operators and the people they invite.' });
   });
 
+  // Review, 2026-10-25: with invited accounts holding addresses, one could create `ashish`, the name privacy@kinu.run
+  // reaches while its operator has not yet, and read the deployment's own mail.
+  test("the name a deployment address reaches is its operators' only: an invited account cannot take it, and its mail never reaches them", async () => {
+    expect((await call(SAM, { method: 'GET', path: '/api/user/mail/address?username=ashish' })).body).toMatchObject({ available: false, refusal: 'reserved' });
+    expect(await call(SAM, { method: 'POST', path: '/api/user/mail/address', body: { username: 'ashish' } })).toMatchObject({ status: 400, body: { error: 'That name is kept for mail systems.' } });
+    expect(claims.get('ashish')).toBeUndefined();
+    expect(await call(ASHISH, { method: 'POST', path: '/api/user/mail/address', body: { username: 'ashish' } })).toMatchObject({ status: 200, body: { address: 'ashish@kinu.run' } });
+  });
+
   test('a taken, reserved or malformed username is refused with why', async () => {
     await call(ASHISH, { method: 'POST', path: '/api/user/mail/address', body: { username: 'ashish' } });
     expect(await call(PRIYA, { method: 'POST', path: '/api/user/mail/address', body: { username: 'ashish' }, accounts: 'everyone' })).toMatchObject({ status: 403, body: { error: 'That name is taken.' } });

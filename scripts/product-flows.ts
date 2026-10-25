@@ -864,6 +864,10 @@ export interface AgentReturnVerdict {
 const CHAT_FROM_ITS_BEGINNING = `[...document.querySelectorAll('#chat [data-scroll-edge]')]
   .some((edge) => edge.textContent?.includes('Beginning of the conversation') === true)`;
 
+/** An empty chat drawn as empty: its connect frame said so, and no page is read for it. */
+const CHAT_DRAWN_EMPTY = `document.querySelector('#chat')?.textContent?.includes('Send the first message to start.') === true
+  && document.querySelector('#chat [data-testid="conversation-skeleton"]') === null`;
+
 export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentReturnVerdict> {
   const workspace = await createFlowWorkspace(target, 'agent-return');
   const elsewhere = await createFlowWorkspace(target, 'agent-elsewhere');
@@ -923,8 +927,9 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
     // Back to the workspace, the way a person returns: its own page, not the agent's.
     await back.goto(`${target.origin}/workspace/${encodeURIComponent(workspace)}`, { waitUntil: 'load' });
     // The agents list arrives on the opening read (`getWorkspaceOpening`), not on its own; the workspace's own chat is
-    // empty here, and an empty pane always reads its newest page.
-    await settledAfter(back, ledger, 'getWorkspaceOpening', 'getChatHistoryPage');
+    // empty here, which its connect frame says, so it is drawn empty with no page read.
+    await settledAfter(back, ledger, 'getWorkspaceOpening');
+    await until(back, "the workspace's own chat, drawn empty", CHAT_DRAWN_EMPTY);
     // The sidebar's workspaces arrive over HTTP once the roster socket opens, which the ledger does not see.
     await until(back, "the sidebar's workspace list", SIDEBAR_LISTED);
     await back.click(AGENTS_COUNTER);
