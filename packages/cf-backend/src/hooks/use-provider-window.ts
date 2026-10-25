@@ -2,7 +2,7 @@
 import { useMemo, useRef, type MouseEvent } from "react";
 import { openProviderWindow } from "@/lib/connect-window";
 
-interface ProviderWindow {
+export interface ProviderWindow {
   /** The link's click, taken into the sign-in's popup; a click asking for a tab, or a refused popup, is left to it. */
   open: (event: MouseEvent<HTMLAnchorElement>) => void;
   /** Opens the sign-in's popup now, at a button's click, blank until `send` names its address. */

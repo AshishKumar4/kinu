@@ -214,16 +214,18 @@ describe('the providers list', () => {
     });
   });
 
-  // The owner, 2026-10-23, over the rule above for this one sign-in: its page ends on an address to copy, so it opens in a
-  // tab of its own, which the page leaves open, and what to copy is not read only once a popup has closed.
-  test("ChatGPT's sign-in pasted back opens in a tab of its own, which the page leaves open", async () => {
+  // The owner, 2026-10-25: "chatgpt is the odd one out". Pasted back too, its sign-in opens in the popup every provider's
+  // does, the address to copy is in that popup's address bar, and the page closes it once the address connects.
+  test("ChatGPT's sign-in pasted back opens in its popup, which closes once the pasted address connects", async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
 
       await chatGptEntry(page, origin, '');
       await rigSignInWindows(page);
       await page.$$eval(`${CHATGPT} button`, (buttons) => buttons.find((button) => button.textContent?.includes('Sign in here'))?.click());
-      await page.waitForSelector(`${CHATGPT} [data-chatgpt-way="here"] [data-sign-in-open]`);
+      const link = await page.waitForSelector(`${CHATGPT} [data-chatgpt-way="here"] [data-sign-in-open]`);
+      const href = await link?.evaluate((open) => open.getAttribute('href'));
+
       await page.click(`${CHATGPT} [data-chatgpt-way="here"] [data-sign-in-open]`);
       const opened = await signInWindowSeen(page);
 
@@ -232,7 +234,7 @@ describe('the providers list', () => {
       await page.waitForSelector(`${CHATGPT} button[aria-label="Disconnect ChatGPT"]`);
 
       expect({ opened, ended: (await signInWindowSeen(page)).closed }).toEqual({
-        opened: { window: null, at: null, closed: false, linkOpensTab: 'true' }, ended: false,
+        opened: { window: POPUP, at: href ?? 'no link', closed: false, linkOpensTab: 'false' }, ended: true,
       });
       await page.close();
     });

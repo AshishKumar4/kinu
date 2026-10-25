@@ -1,10 +1,10 @@
 /** Connect a ChatGPT plan two ways: through a machine running Kinu, which keeps the sign-in, or here, by pasting back
  *  the local address the sign-in lands on. */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Button, buttonClass } from "@/components/ui/Button";
+import { Button } from "@/components/ui/Button";
 import { Loader } from "@/components/ui/Loader";
 import { Effect } from "effect";
-import { ArrowSquareOutIcon, DesktopTowerIcon, GlobeIcon } from "@phosphor-icons/react";
+import { DesktopTowerIcon, GlobeIcon } from "@phosphor-icons/react";
 import { attempt, renderThrownChain, detach } from "@kinu.run/core/obs";
 import { CHATGPT_USAGE_URL } from "@kinu.run/core";
 import {
@@ -17,7 +17,7 @@ import { Modal } from "@/components/ui/Modal";
 import { Pressable } from "@/components/ui/Pressable";
 import { CopyField } from "@/components/ui/CopyField";
 import { useProviderWindow } from "@/hooks/use-provider-window";
-import { DeadPage, SignInOpen, SignInPaste, SignInRisk, SignInStep, SignInSteps, useReturned } from "@/components/account/SubscriptionSignIn";
+import { CopyAddressHint, SignInOpen, SignInPaste, SignInRisk, SignInStep, SignInSteps } from "@/components/account/SubscriptionSignIn";
 
 /** How often a waiting sign-in is read. */
 const SIGN_IN_POLL_MS = 2_000;
@@ -176,9 +176,7 @@ function OnYourPc({ plan, onDone, onGaveUp, onFailed }: {
       <div className="space-y-2" data-chatgpt-way="pc" data-chatgpt-state="open">
         <p className="t-meta p-text-2">Sign in from a browser on <span className="p-text">{signIn.device.label}</span>. The sign-in comes back to that machine.</p>
         <div className="flex flex-wrap items-center gap-2">
-          <a href={signIn.authorizeUrl} target="_blank" rel="noopener noreferrer" onClick={signInWindow.open} className={buttonClass({ size: "sm" })}>
-            <ArrowSquareOutIcon size={12} /> Open ChatGPT sign-in
-          </a>
+          <SignInOpen href={signIn.authorizeUrl} label="Open ChatGPT sign-in" signInWindow={signInWindow} />
           <CopyButton variant="secondary" value={signIn.authorizeUrl} what="the sign-in link" />
         </div>
         <p className="t-meta flex items-center gap-2 p-text-3"><Loader size="sm" /> Waiting for the sign-in to finish on {signIn.device.label}…</p>
@@ -198,20 +196,20 @@ function OnYourPc({ plan, onDone, onGaveUp, onFailed }: {
 }
 
 /**
- * Signs in here; the address the browser lands on is pasted back. The page it lands on does not load, and the owner
- * (2026-10-23) read what to do with it only once it was gone: so it is said, and drawn, before OpenAI opens, in a tab of
- * its own that stays on that page; back here, the paste step is what the card shows.
+ * Signs in here, in the sign-in's popup as every provider's is (the owner, 2026-10-25); the address it lands on is pasted
+ * back. That page does not load, so the steps say so before OpenAI opens, and the popup closes once the address connects.
  */
 /** `account` names a second login; without it, the main one. */
 function SignInHere({ onDone, onFailed, account }: { onDone: (first: boolean) => void; onFailed: Failed; account?: string }) {
+  const signInWindow = useProviderWindow("chatgpt-sign-in");
   const [started, setStarted] = useState<{ authorizeUrl: string; redirectUri: string } | null>(null);
   const [opened, setOpened] = useState(false);
   const [pasted, setPasted] = useState("");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
-  const returned = useReturned(opened);
 
   const begin = useCallback(() => {
+    signInWindow.close();
     setStarted(null);
     setOpened(false);
     setPasted("");
@@ -220,56 +218,47 @@ function SignInHere({ onDone, onFailed, account }: { onDone: (first: boolean) =>
       Effect.map(setStarted),
       Effect.catch(onFailed),
     ));
-  }, [onFailed, account]);
+  }, [onFailed, account, signInWindow]);
 
   useEffect(begin, [begin]);
+  // Leaving the card leaves nothing to paste the address into.
+  useEffect(() => () => signInWindow.close(), [signInWindow]);
 
   const finish = useCallback(() => {
     setBusy(true);
     setProblem(null);
     detach(Effect.tryPromise({ try: () => finishChatGptPaste(pasted.trim()), catch: (cause) => cause }).pipe(
       Effect.map((answer) => {
-        if (answer.outcome === "signed_in") onDone(true);
-        else setProblem(PASTE_OUTCOME[answer.outcome]);
+        if (answer.outcome === "signed_in") {
+          signInWindow.close();
+          onDone(true);
+        } else setProblem(PASTE_OUTCOME[answer.outcome]);
       }),
       // The address refused says what was wrong with it, under the field it was pasted into.
       Effect.catch((cause) => Effect.sync(() => { setProblem(renderThrownChain({ cause })); })),
       Effect.ensuring(Effect.sync(() => setBusy(false))),
     ));
-  }, [pasted, onDone]);
+  }, [pasted, onDone, signInWindow]);
 
   if (started === null) return <p className="t-meta flex items-center gap-2 p-text-3" data-chatgpt-way="here"><Loader size="sm" /> Preparing the sign-in…</p>;
 
-  const landing = new URL(started.redirectUri);
-  const host = `${landing.host}${landing.pathname}`;
-  const page = <DeadPage host={host} rest="?code=ac_…&scope=…&state=…" />;
+  const landing = new URL(started.redirectUri).hostname;
 
   return (
     <div className="space-y-3" data-chatgpt-way="here" data-chatgpt-step={opened ? "paste" : "before"}>
       <SignInSteps>
-        <SignInStep n={1} state={opened ? "done" : "now"} title="Sign in at OpenAI, in a new tab">
-          {!opened && (
-            <>
-              <p className="t-body p-text-2">
-                After you approve, OpenAI sends that tab to a page that won&apos;t load. <b className="p-text">That&apos;s expected.</b> Leave it open, copy its
-                whole address, and come back to this tab.
-              </p>
-              {page}
-              {/* A tab of its own, never the popup (the owner, 2026-10-23): the page it ends on stays until it is copied. */}
-              <SignInOpen href={started.authorizeUrl} label="Got it, open OpenAI" onOpen={() => setOpened(true)} />
-            </>
-          )}
+        <SignInStep n={1} state={opened ? "done" : "now"} title="Sign in at OpenAI">
+          {!opened && <SignInOpen href={started.authorizeUrl} label="Open OpenAI" signInWindow={signInWindow} onOpen={() => setOpened(true)} />}
         </SignInStep>
-        <SignInStep n={2} state={opened ? "now" : "next"} title="Copy the address of the page that didn't load">
-          {opened && !returned && page}
-        </SignInStep>
-        <SignInStep n={3} state={opened ? "now" : "next"} title="Paste it here">
+        <SignInStep n={2} state={opened ? "now" : "next"} title="After you approve, OpenAI opens a page that doesn't load. That's expected." />
+        <SignInStep n={3} state={opened ? "now" : "next"} title="Copy that page's whole address and paste it here">
           {opened && (
-            <div className={returned ? "space-y-3" : undefined} data-paste-returned={returned ? "" : undefined}>
-              {returned && page}
+            <>
+              <p className="t-body p-text-2">The address starts with <span className="t-mono p-text">{landing}</span>.</p>
+              <CopyAddressHint />
               <SignInPaste label="The address you copied" placeholder={`${started.redirectUri}?code=…`} value={pasted} onChange={setPasted}
                 onSubmit={finish} busy={busy} problem={problem} action="Finish" />
-            </div>
+            </>
           )}
         </SignInStep>
       </SignInSteps>

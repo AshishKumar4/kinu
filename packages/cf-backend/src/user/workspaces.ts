@@ -487,6 +487,7 @@ export class UserWorkspaces {
     if (!/^[a-f0-9]{32}$/.test(ownerUserId)) throw new KinuError('bad_input', 'invalid owner user id');
 
     if (this.host.sqlx(`UPDATE user_workspaces SET delete_pending = 1 WHERE name = ? RETURNING name`, name).length === 0) return;
+    this.releaseAssistant(name);
     await this.host.deletions.dueNow(name);
     // Durable before anyone is told: a page that cannot take the frame does not undo an accepted deletion.
     await settleLogged('workspace.roster_push_failed', { doing: "telling the account's open lists a workspace is going", otherwise: 'io' },
@@ -520,6 +521,15 @@ export class UserWorkspaces {
     await this.tearDownWorkspace(name, ownerUserId);
   }
 
+  /**
+   * An assistant marked for deletion is no longer the owner's, from that mark on: the next install makes a new one
+   * (`blueprint-install.ts`). Freed later, at the teardown's end, a reinstall claimed the dying name and its create
+   * waited out the teardown, which waits for the old workspace's turn to go quiet (staging 2026-10-25: 43 s).
+   */
+  private releaseAssistant(name: string): void {
+    this.host.sqlx(`DELETE FROM user_config WHERE key = ? AND value = ?`, ASSISTANT_CONFIG_KEY, name);
+  }
+
   /** The teardown running for each name: its DELETE, its deletion's job, a create that needs the name, an eval lease and
    *  the account's deletion join it, since a second one's cleanup, keyed by the name alone, would land on a workspace
    *  recreated after the first. */
@@ -536,6 +546,7 @@ export class UserWorkspaces {
    */
   private async tearDownOnce(name: string, ownerUserId: string): Promise<void> {
     this.host.sqlx(`UPDATE user_workspaces SET delete_pending = 1 WHERE name = ?`, name);
+    this.releaseAssistant(name);
     // With the mark's commit: a teardown that fails or dies on the way is run again a lap later, read or no read.
     await this.host.deletions.begun(name);
     const object = this.host.env.OrchestratorAgent.idFromName(name);
@@ -551,8 +562,6 @@ export class UserWorkspaces {
     await this.host.shareCards.reconcile(name, []);
     // Grants are read by name, so a surviving row would grant full_filesystem to a same-name recreate.
     this.deleteWorkspaceRows(name, 'before-destroy');
-    // An assistant removed is no longer the owner's: the next install makes a new one (`blueprint-install.ts`).
-    this.host.sqlx(`DELETE FROM user_config WHERE key = ? AND value = ?`, ASSISTANT_CONFIG_KEY, name);
 
     // The Agents SDK's destroy ends its activation after the wipe, which can cut its answer (`confirmedDeletion`). An
     // answer, or the SDK's own `destroyed`, is the wipe done; any other failure is read again through a new stub, which

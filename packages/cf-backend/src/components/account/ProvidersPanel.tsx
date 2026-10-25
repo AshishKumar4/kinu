@@ -470,7 +470,7 @@ function ClaudeConnect({ onChanged, account }: { onChanged: () => void; account?
     <div className="space-y-3" data-claude-connect="paste">
       <SignInSteps>
         <SignInStep n={1} state={opened ? 'done' : 'now'} title="Sign in at Anthropic">
-          {!opened && <SignInOpen href={authorizeUrl} label="Open claude.ai" onOpen={(event) => { signInWindow.open(event); setOpened(true); }} />}
+          {!opened && <SignInOpen href={authorizeUrl} label="Open claude.ai" signInWindow={signInWindow} onOpen={() => setOpened(true)} />}
         </SignInStep>
         <SignInStep n={2} state={opened ? 'now' : 'next'} title="Claude shows a code with a Copy button: copy it" />
         <SignInStep n={3} state={opened ? 'now' : 'next'} title="Paste it here">

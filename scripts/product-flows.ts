@@ -1241,10 +1241,20 @@ export async function eachPaneKeepsItsTranscript(target: FlowTarget): Promise<St
 const WELCOME_OFFERED = `[...document.querySelectorAll('button')]
   .some((b) => !b.disabled && b.getClientRects().length > 0 && ['Next', 'Finish setup'].includes((b.textContent ?? '').trim()))`;
 
+// Finish's click is read in the page: whether the address left setup within the click's own task, and whether Home said
+// the assistant was being set up before its chat opened.
 const WELCOME_FORWARD = `(() => {
   const offered = [...document.querySelectorAll('button')].filter((b) => !b.disabled && b.getClientRects().length > 0);
   const finish = offered.find((b) => (b.textContent ?? '').trim() === 'Finish setup');
-  if (finish !== undefined) { finish.click(); return 'finish'; }
+  if (finish !== undefined) {
+    const seen = { home: false, arriving: false };
+    window.__kinuFinish = seen;
+    new MutationObserver(() => { if (document.querySelector('[data-assistant-arriving]') !== null) seen.arriving = true; })
+      .observe(document.body, { childList: true, subtree: true });
+    finish.click();
+    seen.home = location.pathname !== '/welcome';
+    return 'finish';
+  }
   const next = offered.find((b) => (b.textContent ?? '').trim() === 'Next');
   if (next !== undefined) { next.click(); return 'next'; }
   return 'none';
@@ -1264,6 +1274,10 @@ export interface WelcomeVerdict {
   readonly landedAt: string;
   /** Home is the Personal assistant's chat, which setup's default choice installs, rather than a new workspace's mission. */
   readonly assistantHome: boolean;
+  /** Finish setup went Home within its click, before anything it starts had answered; null where setup was not shown. */
+  readonly homeAtClick: boolean | null;
+  /** Home said the assistant was being set up while its install ran; null where setup was not shown. */
+  readonly arrivingSaid: boolean | null;
 }
 
 /**
@@ -1294,8 +1308,9 @@ export async function reachesHome(target: FlowTarget): Promise<WelcomeVerdict> {
 
     const landedAt = v.parse(v.string(), await page.evaluate('location.pathname'));
     const assistantHome = v.parse(v.boolean(), await page.evaluate(`document.querySelector('#workspace-mission') === null`));
+    const finish = v.parse(v.nullable(v.object({ home: v.boolean(), arriving: v.boolean() })), await page.evaluate('window.__kinuFinish ?? null'));
 
-    return { welcomed, landedAt, assistantHome };
+    return { welcomed, landedAt, assistantHome, homeAtClick: finish?.home ?? null, arrivingSaid: finish?.arriving ?? null };
   } finally {
     await page.close();
   }
