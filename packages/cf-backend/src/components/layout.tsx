@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { LimitBanner } from "@/components/limits/LimitBanner";
+import { SetupFinishBar } from "@/components/account/SetupFinishBar";
 import { LimitRefusalProvider } from "@/components/limits/LimitRefusal";
 import { Link, Outlet, useLocation, useMatch } from "react-router-dom";
 import { ListIcon } from "@phosphor-icons/react";
@@ -102,6 +103,7 @@ function Shell() {
       <main className="flex min-h-0 flex-1 min-w-0 flex-col overflow-hidden">
         {/* The account's near limit, one bar above every page (core limits/): its own slot, never inside a page. */}
         <LimitBanner />
+        <SetupFinishBar />
         {/* The page's own box, which a desktop that fills the area covers: below the bar, so the bar stays seen. */}
         <div ref={setMain} className="relative min-h-0 flex-1 overflow-hidden">
           <DrawerContext.Provider value={() => setDrawerOpen(true)}>

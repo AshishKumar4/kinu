@@ -8,6 +8,7 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { APP_ROUTES, needsOnboarding, pageIsVisitors } from "@kinu.run/core";
 import { settingsPath } from "./components/SettingsRail";
 import { AccountProvider, useAccount } from "@/hooks/use-account";
+import { setupFinishing } from "@/lib/setup-finish";
 import { lastValue } from "./hooks/use-async-resource";
 import { lazyRoute } from "./lazy-route";
 import { Loader } from "@/components/ui/Loader";
@@ -114,7 +115,8 @@ function OnboardingGate() {
 
   if (profile.status === "loading" && matchPath(`${APP_ROUTES.workspace}/*`, at) === null) return <LazyFallback />;
 
-  if (at !== APP_ROUTES.welcome && needsOnboarding(lastValue(profile))) {
+  // A finish this page began is let through while its stamp is saved (`setupFinishing`).
+  if (at !== APP_ROUTES.welcome && needsOnboarding(lastValue(profile)) && !setupFinishing()) {
     return <Navigate to={APP_ROUTES.welcome} replace />;
   }
 

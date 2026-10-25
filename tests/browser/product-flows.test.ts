@@ -94,12 +94,15 @@ describe(productFlowTestName('welcome', 'the product reaches its home page'), ()
   });
 
   // Setup's default installs the Personal assistant, and Home is its chat (389aac88a); an account set up before keeps
-  // the Home it chose.
+  // the Home it chose. The owner, 2026-10-25, on Finish setup: "not snappy". It goes Home within its click, and Home
+  // says the assistant is being set up until its install answers.
   test('through setup onto the assistant\'s chat when the account has not done it, and straight there when it has', () => {
     const welcome = verdictOf(observed, 'welcome');
 
     expect(welcome.landedAt).toBe('/');
     expect(!welcome.welcomed || welcome.assistantHome).toBe(true);
+    expect(welcome.welcomed ? { homeAtClick: welcome.homeAtClick, arrivingSaid: welcome.arrivingSaid } : null)
+      .toEqual(welcome.welcomed ? { homeAtClick: true, arrivingSaid: true } : null);
   });
 });
 

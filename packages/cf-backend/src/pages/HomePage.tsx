@@ -13,6 +13,8 @@ import { WORKSPACE_MISSION_ID } from "@/components/workspaces/NewWorkspaceButton
 import { usePendingAttachments } from "@/hooks/use-pending-attachments";
 import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES } from "@kinu.run/core";
 import { useInstalledAssistant } from "@/hooks/use-installed-assistant";
+import { useSetupFinish } from "@/lib/setup-finish";
+import { Loader } from "@/components/ui/Loader";
 import WorkspacePage from "./WorkspacePage";
 import { Surface } from "@/components/ui/Surface";
 
@@ -20,6 +22,16 @@ import { Surface } from "@/components/ui/Surface";
  *  its own page (`NewWorkspacePage`). A read that fails shows the mission too, so Home never waits on it. */
 export default function HomePage() {
   const assistant = useInstalledAssistant();
+  const arriving = useSetupFinish()?.assistant;
+
+  // Setup just finished, its assistant still being made: Home says so, then opens its chat.
+  if (arriving?.state === "installing") {
+    return (
+      <div className="flex h-full items-center justify-center px-6" data-assistant-arriving>
+        <p className="t-body flex items-center gap-2 p-text-2"><Loader size="sm" /> Setting up {arriving.name}, your assistant…</p>
+      </div>
+    );
+  }
 
   if (assistant.status === "loading") return null;
 

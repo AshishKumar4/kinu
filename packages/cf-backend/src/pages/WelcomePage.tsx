@@ -9,9 +9,9 @@ import {
   type Icon as PhosphorIcon,
 } from "@phosphor-icons/react";
 import {
-  APP_ROUTES, ONBOARDING_STEPS, PERSONAL_ASSISTANT_ID, personName, suggestedMailUsername,
+  APP_ROUTES, ONBOARDING_STEPS, personName, suggestedMailUsername,
 } from "@kinu.run/core";
-import { renderThrownChain, settle, showing, detach } from "@kinu.run/core/obs";
+import { renderThrownChain, settle, detach } from "@kinu.run/core/obs";
 import { KinuLogo } from "@/components/ui/KinuLogo";
 import { DisplayNameField } from "@/components/account/DisplayNameField";
 import { ProvidersPanel } from "@/components/account/ProvidersPanel";
@@ -19,8 +19,8 @@ import { DefaultModelField } from "@/components/account/DefaultModelField";
 import { WebSearchSettings } from "@/components/account/WebSearchSettings";
 import { AssistantStep, DEFAULT_ASSISTANT, type AssistantChoice } from "@/components/assistant/AssistantStep";
 import { McpServersSection } from "@/components/account/McpServersPanel";
-import { completeOnboarding, setDisplayName } from "@/lib/user-api";
-import { installBlueprint } from "@/lib/explore-api";
+import { setDisplayName } from "@/lib/user-api";
+import { finishSetup } from "@/lib/setup-finish";
 import { useAccount } from "@/hooks/use-account";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { signedInWith } from "@/lib/shared-api";
@@ -161,26 +161,16 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
   const named = displayName.trim() || (profile?.email ?? '');
   const letter = (named === '' ? '?' : named)[0].toUpperCase();
 
-  const finish = useCallback(() => detach(Effect.gen(function* () {
-    setBusy(true);
-    setError(null);
+  // Home at once (the owner, 2026-10-25: "not snappy"): the stamp and the assistant's install finish behind it
+  // (`finishSetup`), Home shows the assistant arriving, and a failure is said on the page the person is on.
+  const finish = useCallback(() => {
+    const current = lastValue(account.profile);
 
-    return yield* Effect.catchCause(Effect.gen(function* () {
-      // The assistant first: Home is its chat the moment setup ends.
-      // Its brief keeps the blueprint's 08:00 in the person's own time zone; the time is changed in its settings.
-      if (assistant.install) yield* Effect.promise(async () => installBlueprint(PERSONAL_ASSISTANT_ID, { displayName: assistant.name, agent: assistant.name, home: true }));
-      const { onboardedAt } = yield* Effect.promise(async () => completeOnboarding());
-      const current = lastValue(account.profile);
-
-      // Publish the stamp before navigating so the gate doesn't bounce back to /welcome.
-      if (current !== null) account.set({ ...current, onboardedAt });
-      account.reload();
-      yield* Effect.promise(async () => navigate(APP_ROUTES.home, { replace: true }));
-    }), showing((chain) => {
-      setError(chain);
-      setBusy(false);
-    }));
-  })), [account, navigate, assistant]);
+    // Stamped here as the server will stamp it, so the gate lets Home through; the server's own replaces it.
+    if (current !== null && current.onboardedAt === null) account.set({ ...current, onboardedAt: Date.now() });
+    detach(finishSetup(assistant.install ? assistant.name : null, () => account.reload()));
+    detach(Effect.promise(async () => navigate(APP_ROUTES.home, { replace: true })));
+  }, [account, navigate, assistant]);
 
   const next = useCallback(() => settle(Effect.gen(function* () {
     setError(null);
@@ -316,9 +306,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
                 </Button>
               </div>
             ) : (
-              <Button variant="primary" size="md" disabled={busy} onClick={finish}>
-                {busy && <Loader size="sm" />} Finish setup
-              </Button>
+              <Button variant="primary" size="md" disabled={busy} onClick={finish}>Finish setup</Button>
             )}
           </div>
         </Surface>
