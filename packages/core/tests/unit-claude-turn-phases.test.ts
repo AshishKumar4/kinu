@@ -128,3 +128,21 @@ test("reloaded, the stored steps draw the same one phase", async () => {
   expect(drawn.map((part) => part.type)).not.toContain('custom');
   expect(runs(message?.parts ?? [])).toEqual([CALLS.length]);
 });
+
+// #125 (2026-10-25): any part the chat draws nothing of ended a phase, as the provider's record did above; a source or
+// a data part between one-call steps split the phase into rows the same way.
+test("a part the chat draws nothing of, between one-call steps, leaves them one phase", async () => {
+  const { parts } = await claudeTurn();
+  const message = await shownLive(parts);
+
+  const between: UIMessage['parts'] = [
+    { type: 'source-url', sourceId: 's', url: 'https://example.com' },
+    { type: 'data-kinu-note', data: { at: 1 } },
+  ];
+
+  const spliced = message.parts.flatMap((part) => (part.type === 'step-start' ? [...between, part] : [part]));
+
+  expect(runs(spliced)).toEqual([CALLS.length]);
+  // The phase, then the answer: nothing of its own for either part.
+  expect(groupMessageParts(spliced).map((block) => block.kind)).toEqual(['run', 'part']);
+});

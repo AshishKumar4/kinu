@@ -110,8 +110,7 @@ export class ChatRelay {
     if ((chunk.type === 'text-start' || chunk.type === 'text-delta' || chunk.type === 'text-end') && this.#summaries.has(chunk.id)) return;
 
     // A provider's own record (Anthropic's message_start each step, with its id, model and opening usage; a compaction
-    // marker) is the model's, not the owner's: the chat draws nothing for it, and as a part of the answer it ended the
-    // run of calls around it, so each call of a Claude turn drew as its own row (production, 2026-10-23).
+    // marker) is the model's, not the owner's: the chat draws nothing for it, and no reader of the answer reads it.
     if (chunk.type === 'custom') return;
     this.#queue.push(chunk);
     this.#wake?.();
