@@ -12,7 +12,7 @@ import { deployFixture } from "@/gallery-deploy-fixture";
 import { galleryPicture } from "@/gallery-pictures";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { FileUIPart, UIMessage } from "ai";
-import { connectedPath, connectEndedOf, mainPanelAgent, restoredRows, sharedBuildRefusal, threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl, type ModelMenuEntry, type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry } from "@kinu.run/core";
+import { connectedPath, connectEndedOf, GOOGLE_OAUTH_CRED_KEY, mainPanelAgent, restoredRows, sharedBuildRefusal, threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl, type ModelMenuEntry, type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry } from "@kinu.run/core";
 import { delegatedTaskMetadata, followJobOutput, summarizeSteps, SIGNALS_SEEN_METADATA_KEY, TURN_END_METADATA_KEY, TURN_FAILURE_METADATA_KEY, JOB_OUTPUT_EVENT, type JobOutputTail } from "@kinu.run/core";
 import {
   COMPLETION_GATE_EVENT, FORK_INTERRUPTED_SIGNAL, OUTPUT_CONTINUATION_EVENT, OUTPUT_CONTINUATION_TEXT, OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
@@ -965,9 +965,20 @@ function welcomeMailFixture(path: string, method: string, body: BodyInit | null 
   return null;
 }
 
-/** The Google connection, offered and not yet connected: its card's way in. */
-function googleConnectionFixture(path: string): Response | null {
-  return path === "/api/user/google" ? fixtureJson({ available: true, connection: null }) : null;
+/** `&google=connected`: the account holds the Google connection until a disconnect, whose revocation Google refuses;
+ *  else it is offered and not yet connected. */
+let galleryGoogleHeld = new URLSearchParams(location.search).get("google") === "connected";
+
+function googleConnectionFixture(path: string, method: string): Response | null {
+  if (path.startsWith(`/api/user/credentials/${GOOGLE_OAUTH_CRED_KEY}`) && method === "DELETE") {
+    galleryGoogleHeld = false;
+
+    return fixtureJson({ ok: true, unrevoked: path.endsWith("?revoke=1") ? "Google did not answer the revocation." : null });
+  }
+
+  if (path !== "/api/user/google") return null;
+
+  return fixtureJson({ available: true, connection: galleryGoogleHeld ? { account: "owner.account@gmail.com", scopes: ["gmail.modify"] } : null });
 }
 
 /** Built-in sign-in off, as on an account with an OAuth app: the invite card stays away. */

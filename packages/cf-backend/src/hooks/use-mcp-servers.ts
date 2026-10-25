@@ -10,7 +10,7 @@ export type GoogleConnectionRead = Awaited<ReturnType<typeof googleConnection>>;
 export interface McpServers {
   readonly servers: AsyncResourceControl<McpServerSummary[]>;
   readonly presets: AsyncResourceControl<McpPresetAvailability[]>;
-  /** The Google connection, one read for every card of it on the page: a change in one shows in each. */
+  /** The Google connection, one read for every row of it on the page: a change in one shows in each. */
   readonly google: AsyncResourceControl<GoogleConnectionRead>;
   /** Reads them all again: after a change made here. */
   readonly refresh: () => void;

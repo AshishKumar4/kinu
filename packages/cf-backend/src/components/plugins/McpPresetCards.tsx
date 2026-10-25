@@ -15,7 +15,7 @@ import { BrandMark, type BrandName } from "@/components/ui/BrandMark";
 import { Row, RowAction } from "@/components/ui/Row";
 import { Status } from "@/components/ui/Status";
 import { Menu, type MenuItem } from "@/components/ui/Menu";
-import { mcpServerStatus } from "@/components/plugins/mcp-status";
+import { mcpServerStatus, NOT_ADDED, type PluginStatus } from "@/components/plugins/mcp-status";
 import { renderThrownChain, detach } from "@kinu.run/core/obs";
 import { TextInput } from "@/components/ui/Field";
 import { Button } from "@/components/ui/Button";
@@ -62,10 +62,8 @@ export function hostBrand(server: McpServerSummary): BrandName | undefined {
   return host === null ? undefined : HOST_BRANDS.find(([domain]) => host === domain || host.endsWith(`.${domain}`))?.[1];
 }
 
-/** A connected row's status cell: the plain `Status` its tone and words name, as every view reads them. */
-export function ServerStatus({ status }: { status: McpServerSummary['status'] }) {
-  const shown = mcpServerStatus(status);
-
+/** A held connection's status: the plain `Status` its tone and words name, as every view reads them. */
+export function PluginStatusText({ shown }: { shown: PluginStatus }) {
   return <Status tone={shown.tone}>{shown.label}</Status>;
 }
 
@@ -94,15 +92,16 @@ function ConnectedMenu({ server, title, docsUrl, signInAgain, reconnect, remove 
   );
 }
 
-/** Each row's last sign-in failure, held above the rows: on Plugins a row moves from Add to Connected as it is added, a
- *  new row in another list, and the failure its sign-in ends with must still show on it. */
-export interface PresetErrors {
-  readonly of: (id: McpPresetId) => string | null;
-  readonly set: (id: McpPresetId, error: string | null) => void;
+/** Each row's last failure, by its connection (a preset's id, or `GOOGLE_CONNECTION`), held above the rows: on Plugins a
+ *  row moves between Add and Connected as it is added or removed, a new row in another list, and the failure its sign-in
+ *  or removal ends with must still show on it. */
+export interface RowErrors {
+  readonly of: (connection: string) => string | null;
+  readonly set: (connection: string, error: string | null) => void;
 }
 
-export function usePresetErrors(): PresetErrors {
-  const [errors, setErrors] = useState<ReadonlyMap<McpPresetId, string>>(new Map());
+export function useRowErrors(): RowErrors {
+  const [errors, setErrors] = useState<ReadonlyMap<string, string>>(new Map());
 
   return useMemo(() => ({
     of: (id) => errors.get(id) ?? null,
@@ -126,7 +125,7 @@ export function PresetRow({ preset, server, appConfigured, onChanged, onConnecte
   /** Hears how a sign-in ended, beside the reread `onChanged` runs. */
   onConnected?: (ended: ConnectEnded) => void;
   /** Where the rows keep their failures, when a row moves between lists; else the row keeps its own. */
-  errors?: PresetErrors;
+  errors?: RowErrors;
 }) {
   const [openToken, setOpenToken] = useState(false);
   const [token, setToken] = useState('');
@@ -217,6 +216,7 @@ export function PresetRow({ preset, server, appConfigured, onChanged, onConnecte
   };
 
   const asking = openToken && !added;
+  const shown = server === undefined ? undefined : mcpServerStatus(server.status);
 
   let trailing: ReactNode;
 
@@ -240,10 +240,10 @@ export function PresetRow({ preset, server, appConfigured, onChanged, onConnecte
   return (
     <>
     {dialog}
-    <Row attributes={{ "data-plugin": preset.title, "data-plugin-source": preset.id, "data-plugin-state": server === undefined ? 'Not added' : mcpServerStatus(server.status).label }}
+    <Row attributes={{ "data-plugin": preset.title, "data-plugin-source": preset.id, "data-plugin-state": shown?.label ?? NOT_ADDED }}
       title={preset.title} meta={preset.description}
       tile={<BrandMark brand={brand} size={18} />}
-      status={server === undefined ? undefined : <ServerStatus status={server.status} />}
+      status={shown === undefined ? undefined : <PluginStatusText shown={shown} />}
       action={trailing}
       below={asking || err !== null || server?.error ? (
         <div className="space-y-1">
@@ -291,7 +291,7 @@ export function McpPresetCards({ servers, availability, onChanged, onConnected, 
   onChanged: () => void;
   /** Hears how a preset's sign-in ended, beside the reread `onChanged` runs. */
   onConnected?: (ended: ConnectEnded) => void;
-  errors?: PresetErrors;
+  errors?: RowErrors;
   unadded?: boolean;
 }) {
   const addable = addablePresets(servers, availability);
