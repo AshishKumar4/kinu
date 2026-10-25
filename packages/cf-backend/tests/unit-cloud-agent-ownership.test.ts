@@ -667,7 +667,7 @@ describe('cloud agent ownership safety', () => {
       };
 
       const userDO = {
-        async hasWorkspace() { return true; },
+        async workspaceAdmission() { return { capabilityHash: null }; },
         async ensureWorkspaceCapability(name: string, presentedHash: string | null) {
           calls.push(`ensure:${name}:${presentedHash ?? 'none'}`);
 

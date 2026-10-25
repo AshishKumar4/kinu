@@ -15,6 +15,7 @@ import type { ObjectNamespace } from '@kinu.run/core';
 import type { OwnerCapabilityEnv } from '@kinu.run/core';
 import type { SignInDeclarationEnv } from '@kinu.run/core/identity';
 import type { AccessTokenScope } from '@kinu.run/core';
+import type { AdmittedWorkspace } from '../user/workspace-ownership';
 
 
 export interface AuthIdentity {
@@ -34,6 +35,8 @@ export interface AuthIdentity {
   cliScopes?: AccessTokenScope[];
   /** Connect tickets only; persisted on the socket so revocation survives hibernation. */
   cliBearer?: { tokenHash: string; generation: number };
+  /** Cookie path only: the workspace the request names, as the session's own check read it from the registry. */
+  workspace?: AdmittedWorkspace;
 }
 
 const STEP_UP_WINDOW_MS = 5 * 60 * 1000;
@@ -71,8 +74,9 @@ export interface AuthEnv<Id = DurableObjectId> extends OwnerCapabilityEnv, SignI
 /** `[::1]` keeps its brackets because `URL.hostname` does. */
 const LOOPBACK_HOSTS: readonly string[] = ['localhost', '127.0.0.1', '[::1]', '0.0.0.0'];
 
-export function authenticateRequest<Id>(request: Request, env: AuthEnv<Id>): Promise<AuthIdentity> {
-  return settle(Effect.flatMap(sessionIdentity(request, env), (identity) => identity === null
+/** `workspace`: the one the request names, admitted in the same read when a session holds it. */
+export function authenticateRequest<Id>(request: Request, env: AuthEnv<Id>, workspace?: string): Promise<AuthIdentity> {
+  return settle(Effect.flatMap(sessionIdentity(request, env, workspace), (identity) => identity === null
     ? Effect.die(new AuthError(401, readSessionToken(request) ? 'Kinu session expired. Sign in again.' : 'No Kinu session in request'))
     : Effect.succeed(identity)));
 }
@@ -83,7 +87,7 @@ export function requestIdentity<Id>(request: Request, env: AuthEnv<Id>): Promise
 }
 
 /** The session's identity; null for none or an expired one. Every other failure dies as its `AuthError`. */
-function sessionIdentity<Id>(request: Request, env: AuthEnv<Id>): Effect.Effect<AuthIdentity | null> {
+function sessionIdentity<Id>(request: Request, env: AuthEnv<Id>, workspace?: string): Effect.Effect<AuthIdentity | null> {
   return Effect.gen(function* () {
     const sessionToken = readSessionToken(request);
 
@@ -92,7 +96,7 @@ function sessionIdentity<Id>(request: Request, env: AuthEnv<Id>): Effect.Effect<
         return yield* Effect.die(new AuthError(500, `${env.AUTH_KV ? 'UserDO' : 'AUTH_KV'} binding is not configured`));
       }
 
-      const identity = yield* Effect.catchCause(Effect.promise(() => verifySession(env, sessionToken)), (failed) => {
+      const identity = yield* Effect.catchCause(Effect.promise(() => verifySession(env, sessionToken, workspace)), (failed) => {
         const e = Cause.squash(failed);
 
         if (!(e instanceof SessionAuthorityUnavailableError)) return Effect.failCause(failed);
@@ -178,9 +182,9 @@ export function crossSiteRejection(request: Request): Response | null {
  * The one session gate every signed-in surface passes: who asks, then the cross-site rule. No one signed in is refused
  * in `err()`'s rendering, except a page a browser asked for, which is sent to sign-in and back.
  */
-export function sessionGate<Id>(request: Request, env: AuthEnv<Id>): Effect.Effect<AuthIdentity | Response> {
+export function sessionGate<Id>(request: Request, env: AuthEnv<Id>, workspace?: string): Effect.Effect<AuthIdentity | Response> {
   return Effect.gen(function* () {
-    const identity = yield* Effect.catchCause(Effect.promise(() => authenticateRequest(request, env)), (failed) => {
+    const identity = yield* Effect.catchCause(Effect.promise(() => authenticateRequest(request, env, workspace)), (failed) => {
       const refused = Cause.squash(failed);
 
       return refused instanceof AuthError ? Effect.succeed(authRefusal(request, refused)) : Effect.failCause(failed);

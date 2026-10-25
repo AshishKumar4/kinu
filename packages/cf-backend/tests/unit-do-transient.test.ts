@@ -33,10 +33,13 @@ function answers<T>(...values: T[]) {
 
 describe('claimOwnedWorkspace — the gate on every authenticated workspace request', () => {
   function envWith(opts: {
-    dropHasWorkspace?: number;
+    dropAdmission?: number;
     membershipError?: Error;
     membershipAnswers?: boolean[];
     registryReads?: string[];
+    /** The capability hash the registry admits the workspace with; the workspace's own is `h`. */
+    registeredHash?: string;
+    reconciled?: string[];
     claimError?: Error;
     capabilityError?: Error;
         /** Reconciles that succeed before `capabilityError` applies. Default 0: always throws. */
@@ -45,18 +48,19 @@ describe('claimOwnedWorkspace — the gate on every authenticated workspace requ
   }): WorkspaceOwnershipEnv<string, WorkspaceOwnerClaim> {
     const membership = opts.membershipAnswers
       ? answers(...opts.membershipAnswers)
-      : flaky(opts.dropHasWorkspace ?? 0, opts.membershipError ?? new Error(CONNECTION_LOST), true);
+      : flaky(opts.dropAdmission ?? 0, opts.membershipError ?? new Error(CONNECTION_LOST), true);
 
     let reconciles = 0;
 
     const registry: WorkspaceRegistry = {
-      async hasWorkspace(_owner, name) {
+      async workspaceAdmission(_owner, name) {
         opts.registryReads?.push(name);
 
-        return await membership.call();
+        return await membership.call() ? { capabilityHash: opts.registeredHash ?? null } : null;
       },
-      async ensureWorkspaceCapability() {
+      async ensureWorkspaceCapability(name) {
         reconciles += 1;
+        opts.reconciled?.push(name);
 
         if (opts.capabilityError && reconciles > (opts.capabilitySucceeds ?? 0)) {
           throw opts.capabilityError;
@@ -86,13 +90,13 @@ describe('claimOwnedWorkspace — the gate on every authenticated workspace requ
   }
 
   test('one dropped membership read does not fail the request', async () => {
-    const result = await claimOwnedWorkspace(envWith({ dropHasWorkspace: 1 }), USER, 'drop-retry');
+    const result = await claimOwnedWorkspace(envWith({ dropAdmission: 1 }), USER, 'drop-retry');
     expect(Result.isSuccess(result)).toBe(true);
   });
 
   test('a live storage reset recovers the authenticated workspace request', async () => {
     const result = await claimOwnedWorkspace(envWith({
-      dropHasWorkspace: 1,
+      dropAdmission: 1,
       membershipError: new Error('Internal error in Durable Object storage caused object to be reset; reference = abc'),
     }), USER, 'live-storage-retry');
 
@@ -101,7 +105,7 @@ describe('claimOwnedWorkspace — the gate on every authenticated workspace requ
 
   test('a platform retryable flag is honored whatever the message says', async () => {
     const result = await claimOwnedWorkspace(envWith({
-      dropHasWorkspace: 1,
+      dropAdmission: 1,
       membershipError: Object.assign(new Error('refused'), { retryable: true }),
     }), USER, 'flagged-retryable');
 
@@ -127,7 +131,7 @@ describe('claimOwnedWorkspace — the gate on every authenticated workspace requ
   test('a scalar cause is not a platform signal for another registry read', async () => {
     // A second read would succeed: the request fails because none is made.
     await expect(claimOwnedWorkspace(envWith({
-      dropHasWorkspace: 1,
+      dropAdmission: 1,
       membershipError: new Error('registry read failed', { cause: CONNECTION_LOST }),
     }), USER, 'scalar-cause')).rejects.toBeInstanceOf(Error);
   });
@@ -145,10 +149,10 @@ describe('claimOwnedWorkspace — the gate on every authenticated workspace requ
 
           return {
             [Symbol.dispose]() { live = false; },
-            async hasWorkspace() {
+            async workspaceAdmission() {
               if (!live || number === 1) throw new Error(CONNECTION_LOST);
 
-              return true;
+              return { capabilityHash: null };
             },
             async ensureWorkspaceCapability() {
               if (!live) throw new Error('disposed registry stub');
@@ -217,13 +221,28 @@ describe('claimOwnedWorkspace — the gate on every authenticated workspace requ
     expect(await claimFailure('claim-overloaded', 'Durable Object is overloaded.')).toMatchObject({ failure: { status: 503 } });
   });
 
-  test('a warm request skips the registry read', async () => {
+  test('a request its session check admitted reads the registry no more, and skips a reconcile both sides agree on', async () => {
     const reads: string[] = [];
-    const env = envWith({ membershipAnswers: [true], registryReads: reads });
-    expect(Result.isSuccess(await claimOwnedWorkspace(env, USER, 'warm-cache'))).toBe(true);
-    expect(reads).toEqual(['warm-cache']);
-    expect(Result.isSuccess(await claimOwnedWorkspace(env, USER, 'warm-cache'))).toBe(true);
-    expect(reads).toEqual(['warm-cache']);
+    const reconciled: string[] = [];
+    const env = envWith({ membershipAnswers: [true], registryReads: reads, reconciled });
+
+    expect(Result.isSuccess(await claimOwnedWorkspace(env, USER, 'admitted', { name: 'admitted', admission: { capabilityHash: 'h' } }))).toBe(true);
+    expect({ reads, reconciled }).toEqual({ reads: [], reconciled: [] });
+    // Admitted under another hash: the two sides disagree, so the reconcile repairs it.
+    expect(Result.isSuccess(await claimOwnedWorkspace(env, USER, 'admitted', { name: 'admitted', admission: { capabilityHash: 'old' } }))).toBe(true);
+    expect({ reads, reconciled }).toEqual({ reads: [], reconciled: ['admitted'] });
+    // Another name's admission is not this one's.
+    expect(Result.isSuccess(await claimOwnedWorkspace(env, USER, 'other', { name: 'admitted', admission: { capabilityHash: 'h' } }))).toBe(true);
+    expect(reads).toEqual(['other']);
+  });
+
+  test('a session check that found no such workspace refuses before the agent wakes', async () => {
+    const claims: string[] = [];
+
+    const result = await claimOwnedWorkspace(envWith({ membershipAnswers: [true], claims }), USER, 'gone', { name: 'gone', admission: null });
+
+    expect(result).toMatchObject({ failure: { status: 404 } });
+    expect(claims).toEqual([]);
   });
 
   test('an unproven caller is membership-checked before the agent wakes', async () => {
@@ -236,22 +255,19 @@ describe('claimOwnedWorkspace — the gate on every authenticated workspace requ
     expect(claims).toEqual([]);
   });
 
-  test('a removed workspace evicts the proof and reports 404', async () => {
+  test('a removed workspace reports 404 on the very next request', async () => {
     const reads: string[] = [];
+    const claims: string[] = [];
+    const env = envWith({ membershipAnswers: [true, false], registryReads: reads, claims });
 
-    const env = envWith({
-      membershipAnswers: [true, false],
-      registryReads: reads,
-      capabilityError: notInRegistry('evicted-404 left the registry'),
-      capabilitySucceeds: 1,
-    });
+    expect(Result.isSuccess(await claimOwnedWorkspace(env, USER, 'removed-404'))).toBe(true);
+    await expect(claimOwnedWorkspace(env, USER, 'removed-404')).resolves.toMatchObject({ failure: { status: 404 } });
+    expect({ reads, claims }).toEqual({ reads: ['removed-404', 'removed-404'], claims: [USER] });
+  });
 
-    expect(Result.isSuccess(await claimOwnedWorkspace(env, USER, 'evicted-404'))).toBe(true);
-    // The UserDO's registry re-check contradicts the stale proof: 404, proof discarded.
-    await expect(claimOwnedWorkspace(env, USER, 'evicted-404'))
-      .resolves.toMatchObject({ failure: { status: 404 } });
-    await expect(claimOwnedWorkspace(env, USER, 'evicted-404'))
-      .resolves.toMatchObject({ failure: { status: 404 } });
-    expect(reads).toEqual(['evicted-404', 'evicted-404']);
+  test('a workspace removed between its admission and its reconcile reports 404', async () => {
+    const env = envWith({ membershipAnswers: [true], capabilityError: notInRegistry('raced-404 left the registry') });
+
+    await expect(claimOwnedWorkspace(env, USER, 'raced-404')).resolves.toMatchObject({ failure: { status: 404 } });
   });
 });

@@ -247,6 +247,7 @@ export function cliAccount<Built extends Partial<CliRoutesAuthority>>(built: Bui
     releaseWorkspaceReservation: refuse('releaseWorkspaceReservation'),
     ensureWorkspaceCapability: refuse('ensureWorkspaceCapability'),
     hasWorkspace: refuse('hasWorkspace'),
+    workspaceAdmission: refuse('workspaceAdmission'),
     listActiveWorkspaces: refuse('listActiveWorkspaces'),
     revokeCliTokenHash: refuse('revokeCliTokenHash'),
     listCliTokens: refuse('listCliTokens'),
@@ -274,6 +275,7 @@ export function mcpAccount<Built extends Partial<McpAuthority>>(built: Built): M
     verifyBrowserSession: refuse('verifyBrowserSession'),
     revokeBrowserSession: refuse('revokeBrowserSession'),
     hasWorkspace: refuse('hasWorkspace'),
+    workspaceAdmission: refuse('workspaceAdmission'),
     ensureWorkspaceCapability: refuse('ensureWorkspaceCapability'),
     ...built,
   };
