@@ -16,6 +16,7 @@ import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { parseJsonValue } from '../utils/json';
 import { nowMs } from '../utils/date';
 import { jsonObjectOnlyInstruction } from '../providers/structured';
+import { scrubSecrets } from '../safety/secret-patterns';
 
 /** The steering triggers, plus an input its tool's schema refused before the tool ran. */
 const STRUGGLE_KINDS = [
@@ -182,7 +183,8 @@ export function applyStruggleLesson(sql: SqlExecutor, actor: ActorHandle, input:
   readonly answer: v.InferOutput<typeof StruggleLessonSchema>;
 }): string {
   const now = nowMs();
-  const text = input.answer.text.slice(0, LESSON_MAX_CHARS);
+  // A lesson is memory a later turn reads: kept scrubbed (`memory/scrub.ts`).
+  const text = scrubSecrets(input.answer.text).slice(0, LESSON_MAX_CHARS);
 
   const [row] = input.answer.update === null ? [] : sql<ToolLessonRow>`
     SELECT id, revision, tool, text, helpful, harmful, turn_ids FROM tool_lessons

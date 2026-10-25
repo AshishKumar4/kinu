@@ -12,6 +12,7 @@ import type { CheckpointFiles, Memory, VfsWriteReport } from '../types/primitive
 import type { TurnContextBudget } from '../context-budget';
 import { ensureDir, vfsDirname } from '../utils/vfs-helpers';
 import { memoryIndexPath } from '../memory/note';
+import { scrubSecrets } from '../safety/secret-patterns';
 import { applyFileEdits, formatFileSlice, FILE_READ_LINE_CHARS, FILE_READ_LINES, FILE_READ_MAX_CHARS, FILE_REFUSAL_REASONS, type FileEdit } from './file-edit';
 import { FileRefusalError } from '../types/file-edits';
 import { readFileHead, scanFileWindow, type ScannedFile } from './file-scan';
@@ -433,9 +434,6 @@ function fileOps(deps: FileDeps) {
     }),
     write: async (path: string, written: string, encoding: 'utf8' | 'base64' = 'utf8') => {
       requireBuild('file.write');
-      // The bytes to write exactly, or the text; the ledger reads either as the text a read of it shows.
-      const content = encoding === 'base64' ? base64ToBytes(written) : written;
-      const shown = typeof content === 'string' ? content : decodedText(content);
       let target: Landing;
       let existing: string | null;
       let observed: ObservedFile;
@@ -448,6 +446,12 @@ function fileOps(deps: FileDeps) {
 
         return failure(vfsFail.reason, vfsFail.error);
       }
+
+      // A memory note's text is kept scrubbed (`memory/scrub.ts`).
+      const kept = target.note === null ? written : scrubSecrets(written);
+      // The bytes to write exactly, or the text; the ledger reads either as the text a read of it shows.
+      const content = encoding === 'base64' ? base64ToBytes(written) : kept;
+      const shown = typeof content === 'string' ? content : decodedText(content);
 
       if (existing !== null) {
         const { refusal, reason } = gate(path, existing, 'overwrite');
@@ -511,7 +515,8 @@ function fileOps(deps: FileDeps) {
         return failure(reason, refusal);
       }
 
-      const outcome = applyFileEdits(current, edits, path);
+      // What an edit writes into a memory note is kept scrubbed (`memory/scrub.ts`).
+      const outcome = applyFileEdits(current, target.note === null ? edits : edits.map((edit) => ({ ...edit, newText: scrubSecrets(edit.newText) })), path);
 
       if (!outcome.ok) {
         ledger.recordEdit(path, outcome.reason);

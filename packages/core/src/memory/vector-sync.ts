@@ -10,6 +10,7 @@ import { type VectorStore } from './vector-store';
 
 import { readTailWithVfsOps } from '../vfs/mounts';
 import { MEMORY_DIR } from './note';
+import { scrubSecrets } from '../safety/secret-patterns';
 import type { MemoryStore, NoteStamp } from "@kinu.run/agent-utils/memory";
 import { diagnostics, settle, toKinuError } from "../obs/index";
 
@@ -75,8 +76,9 @@ export function adaptMemory(
 
   const memory: Memory = {
     chunk: async (id) => (await store.chunksByIds([id]))[0] ?? null,
-    write: (path, content) => store.writeFile(path, content),
-    append: (path, content) => store.appendToFile(path, content),
+    // Memory text is kept scrubbed (`memory/scrub.ts`).
+    write: (path, content) => store.writeFile(path, scrubSecrets(content)),
+    append: (path, content) => store.appendToFile(path, scrubSecrets(content)),
     index(path) {
       return settle(Effect.gen(function* () {
         const note = yield* Effect.promise(() => settledNote(store, files, path));

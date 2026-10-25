@@ -9,6 +9,7 @@ import type { ActorHandle } from '../identity/actor-handle';
 import * as v from 'valibot';
 import { coversQuery, expandedTokenGroups, lexicalGroupRelevance, minimumRelevance } from './lexical-recall';
 import { JsonValueSchema, safeJsonParse, type JsonValue } from '../utils/json';
+import { scrubMemoryValue } from './scrub';
 
 
 /** The actor id the account's facts are kept under, in the user object. */
@@ -179,7 +180,8 @@ export function createFactsStore(sql: SqlExecutor, actor: Pick<ActorHandle, 'act
       const canonical = normalizeFactKey(key);
       const conf = unit(opts.confidence, 1);
       const src = opts.source ?? null;
-      const valueJson = JSON.stringify(value);
+      // Every writer of a fact reaches this: its value is kept scrubbed (`memory/scrub.ts`).
+      const valueJson = JSON.stringify(scrubMemoryValue(value));
       const origin = opts.origin === undefined ? null : JSON.stringify(opts.origin);
 
       const existing = sql<{ value_json: string; last_observed_at: number; importance: number; veracity: string }>`
