@@ -3,12 +3,13 @@
  * source text for lazy compilation, and a module with one character above U+00FF is stored two bytes
  * per character. Measured 2026-09-26 on main abbd2c74b5 in workerd (used heap after claim and setup):
  * 76.4 MB as built unminified, 58.1 MB minified, 48.7 MB minified with ASCII-only output, against the
- * isolate's 128 MB. The client environment is untouched.
+ * isolate's 128 MB. The browser builds are untouched.
  */
 import remapping from "@jridgewell/remapping";
 import MagicString from "magic-string";
 import * as v from "valibot";
 import type { Plugin } from "vite";
+import { isBrowserEnvironment } from "./vite-public-pages";
 
 const EncodedMapSchema = v.object({ mappings: v.string(), names: v.array(v.string()) });
 
@@ -32,7 +33,7 @@ export function workerLoadCost(): Plugin {
   return {
     name: "kinu:worker-load-cost",
     configEnvironment(name) {
-      if (name === "client") return null;
+      if (isBrowserEnvironment(name)) return null;
 
       return {
         build: {
@@ -49,7 +50,7 @@ export function workerLoadCost(): Plugin {
     },
     // After minification, which prints escapes back as raw characters; the chunk's map is composed through the edit.
     generateBundle(_options, bundle) {
-      if (this.environment.name === "client") return;
+      if (isBrowserEnvironment(this.environment.name)) return;
 
       for (const chunk of Object.values(bundle)) {
         if (chunk.type !== "chunk") continue;

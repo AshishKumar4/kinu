@@ -1,4 +1,5 @@
 import type { Plugin } from 'vite';
+import { isBrowserEnvironment } from './vite-public-pages';
 
 /**
  * Phosphor defines each icon in six weights, and an icon's import carries all six (~4 KB). The app draws four, so the
@@ -17,7 +18,7 @@ const ASKS_CUT_WEIGHT = new RegExp(`weight(?:=\\{?|:\\s*)["'](?:${CUT_WEIGHTS.jo
 export function iconWeights(): Plugin {
   return {
     name: 'kinu:icon-weights',
-    applyToEnvironment: (environment) => environment.name === 'client',
+    applyToEnvironment: (environment) => isBrowserEnvironment(environment.name),
     transform(code, id) {
       if (id.includes('/src/') && !id.includes('/node_modules/') && ASKS_CUT_WEIGHT.test(code)) {
         this.error(`${id} draws an icon in a weight the build cuts (${CUT_WEIGHTS.join(', ')}): add it to DRAWN_WEIGHTS`);
