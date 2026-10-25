@@ -35,10 +35,14 @@ function drawnPolicy(look: DrawnPageLook): string {
   ].join('; ');
 }
 
-/** The page's height, told to its host whenever it changes, measured as `kinu:slate`'s `fit` measures it. */
-const SIZE_SCRIPT = `(()=>{const r=document.documentElement;let q=false;new ResizeObserver(()=>{if(q)return;q=true;`
-  + `requestAnimationFrame(()=>{q=false;parent.postMessage({kinu:${JSON.stringify(SLATE_SIZE_CHANGED_MESSAGE)},`
-  + `height:Math.ceil(r.getBoundingClientRect().height)},"*")})}).observe(r)})()`;
+/**
+ * The page's height, told to its host whenever it changes, measured as `kinu:slate`'s `fit` measures it, and once as it
+ * loads: Chrome renders nothing in a hidden frame of another origin, so no observer fires before its host shows it, and
+ * its host shows it at the height it was told (2026-10-25: every slate of an answer stayed hidden in the owner's Chrome).
+ */
+const SIZE_SCRIPT = `(()=>{const r=document.documentElement;const t=()=>parent.postMessage({kinu:${JSON.stringify(SLATE_SIZE_CHANGED_MESSAGE)},`
+  + `height:Math.ceil(r.getBoundingClientRect().height)},"*");let q=false;new ResizeObserver(()=>{if(q)return;q=true;`
+  + `requestAnimationFrame(()=>{q=false;t()})}).observe(r);addEventListener("load",t)})()`;
 
 /** A streaming frame takes the markup written so far from its own host only, never from a frame beside it. Set as the
  *  body's markup, its scripts do not run: they run once the block is closed and the page itself is opened. */
