@@ -216,7 +216,6 @@ export function PresetRow({ preset, server, appConfigured, onChanged, onConnecte
   };
 
   const asking = openToken && !added;
-  const shown = server === undefined ? undefined : mcpServerStatus(server.status);
 
   let trailing: ReactNode;
 
@@ -240,10 +239,10 @@ export function PresetRow({ preset, server, appConfigured, onChanged, onConnecte
   return (
     <>
     {dialog}
-    <Row attributes={{ "data-plugin": preset.title, "data-plugin-source": preset.id, "data-plugin-state": shown?.label ?? NOT_ADDED }}
+    <Row attributes={{ "data-plugin": preset.title, "data-plugin-source": preset.id, "data-plugin-state": server === undefined ? NOT_ADDED : mcpServerStatus(server.status).label }}
       title={preset.title} meta={preset.description}
       tile={<BrandMark brand={brand} size={18} />}
-      status={shown === undefined ? undefined : <PluginStatusText shown={shown} />}
+      status={server === undefined ? undefined : <PluginStatusText shown={mcpServerStatus(server.status)} />}
       action={trailing}
       below={asking || err !== null || server?.error ? (
         <div className="space-y-1">

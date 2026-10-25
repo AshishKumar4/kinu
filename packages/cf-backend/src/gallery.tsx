@@ -974,7 +974,7 @@ function googleConnectionFixture(path: string, method: string): Response | null 
   if (path.startsWith(`/api/user/credentials/${GOOGLE_OAUTH_CRED_KEY}`) && method === "DELETE") {
     galleryGoogleHeld = false;
 
-    return fixtureJson({ ok: true, unrevoked: path.endsWith("?revoke=1") ? "Google did not answer the revocation." : null });
+    return fixtureJson({ unrevoked: path.endsWith("?revoke=1") ? "Google did not answer the revocation." : null });
   }
 
   if (path !== "/api/user/google") return null;
