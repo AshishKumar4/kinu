@@ -2644,10 +2644,12 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
 
   /** An in-flight restore writes nothing durable after this, and no tick publishes after the
-   *  discard; a stopped box never starts an instance to clean. */
+   *  discard; a stopped box never starts an instance to clean. Every caller tears the box down. */
   discardState(): Promise<void> {
     return settle(attempt('io', async () => {
+      this.#close();
       this.#invalidateGeneration();
+      await this.#endAdmissions();
       await this.#requireStorage().discard();
       await this.#snapshots.sweep();
       // The attach evidence describes the discarded bytes, so it is deleted with them.
@@ -2661,22 +2663,36 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
    */
   destroy(): Promise<void> {
     return settle(attempt('io', async () => {
-      this.#closed = true;
-      this.#teardowns += 1;
+      this.#close();
       this.#invalidateGeneration();
-      const admissions = [...this.#admissions];
-
-      for (const admission of admissions) admission.abort();
-      await Promise.allSettled(admissions.map((admission) => admission.settled));
-      this.#awaitingGolden = undefined;
-
-      for (const callback of CONTAINER_CALLBACKS) this.#deleteSchedule(callback);
+      await this.#endAdmissions();
       await this.#destroyContainer();
       await this.#snapshots.keepingOwed(async () => {
         await this.ctx.storage.deleteAlarm();
         await this.ctx.storage.deleteAll();
       });
     }));
+  }
+
+  /**
+   * A teardown's first step, before it touches the generation: the box takes no wake of its own from here, so no heartbeat
+   * or startup due meanwhile restores the container it tears down (lanes fixture, 2026-10-25: a clear's heartbeat found
+   * the container unstarted and restored it again). A caller's ask reopens it (D36).
+   */
+  #close(): void {
+    this.#closed = true;
+    this.#teardowns += 1;
+
+    for (const callback of CONTAINER_CALLBACKS) this.#deleteSchedule(callback);
+  }
+
+  /** A start in flight ends with the teardown that closed the box (D36). */
+  async #endAdmissions(): Promise<void> {
+    const admissions = [...this.#admissions];
+
+    for (const admission of admissions) admission.abort();
+    await Promise.allSettled(admissions.map((admission) => admission.settled));
+    this.#awaitingGolden = undefined;
   }
 
   /** Totals say how many failures were filed; only these reasons say what they were.
