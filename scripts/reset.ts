@@ -599,8 +599,26 @@ function lossAcceptable(): Record<string, string> {
   return v.parse(v.record(v.string(), v.string()), JSON.parse(fileAt(process.cwd(), 'HEAD', 'scripts/schema-loss.json')));
 }
 
+/**
+ * Whether the deployment's live version binds no Durable Object class, as Cloudflare's API reads it: then it holds no
+ * rows a release could retire, move or change, and the deploy that provisions its classes (`--bootstrap`) needs no
+ * served build. Production, 2026-10-25: the Worker was deleted with its classes, and every read of its served build
+ * refused the one deploy that could bring it back.
+ */
+function bindsNoClass(environment: InfraEnvironment): boolean {
+  const live = deployment(environment);
+
+  return live.state === 'absent' || (live.state === 'deployed' && servingOf(live.versionId, live.bindings).bound.size === 0);
+}
+
 /** Exit 3 when the candidate moves a class's stamp: every database of that class repairs itself at first contact. */
 async function stampsMoved(environment: InfraEnvironment): Promise<number> {
+  if (bindsNoClass(environment)) {
+    console.log('none');
+
+    return 0;
+  }
+
   const sha = (await servedHealth(origin(plan(environment).config))).build?.sha;
   const served = sha === undefined ? undefined : stampsAt(sha);
   const candidate = stampsAt('HEAD') ?? {};
@@ -614,11 +632,7 @@ async function stampsMoved(environment: InfraEnvironment): Promise<number> {
 /** Exit 1 when the candidate retires a class the deployment's served build exports and, in production, the owner's words
  *  (`KINU_LOSS_OVERRIDE`) do not name it: its namespace and every row in it go with the deploy. Elsewhere it is said. */
 async function retirementsOf(environment: InfraEnvironment): Promise<number> {
-  const live = deployment(environment);
-
-  // A Worker that binds no class, or none at all, has no rows a release could retire: the bootstrap after its classes
-  // went with it (production, 2026-10-25, the owner deleted the Worker) serves no build to read, and needs none.
-  if (live.state === 'absent' || (live.state === 'deployed' && servingOf(live.versionId, live.bindings).bound.size === 0)) {
+  if (bindsNoClass(environment)) {
     console.error(`retirements: ${environment} binds no Durable Object class, so this release retires none`);
 
     return 0;
@@ -652,6 +666,12 @@ async function retirementsOf(environment: InfraEnvironment): Promise<number> {
 /** What this release does to the tables of the build the deployment serves (`schemaChange`): exit 0 for none, 4 for
  *  additive, 5 for a change; a deployment whose build it cannot read is an error, never taken as unchanged. */
 async function schemaChangeOf(environment: InfraEnvironment): Promise<number> {
+  if (bindsNoClass(environment)) {
+    console.log('none');
+
+    return 0;
+  }
+
   const sha = (await servedHealth(origin(plan(environment).config))).build?.sha;
 
   if (sha === undefined) throw new Error(`${environment} serves no build stamp, so what this release changes is unknown`);
