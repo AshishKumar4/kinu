@@ -20,6 +20,7 @@ import { TextArea } from "@/components/ui/Field";
 import { IconControl } from "@/components/ui/IconControl";
 import { PillButton } from "@/components/ui/Pill";
 import { ChromeButton } from "@/components/ui/ChromeButton";
+import { SlashMenu, type SlashMenuControl } from "@/components/SlashMenu";
 
 const CHAT_MODES: readonly WorkMode[] = ["build", "plan"];
 
@@ -292,11 +293,13 @@ interface ComposerProps {
   attention?: ReactNode;
   /** Floats just above the composer, over the transcript's faded end, and moves nothing. */
   float?: ReactNode;
+  /** The slash commands this chat runs, over the field (`SlashMenu`); a sent draft naming one is the send's to run. */
+  slash?: SlashMenuControl;
 }
 
 export function Composer({
   value, onValueChange, onSend, placeholder, disabled, liveness, onStop, onRecover,
-  notices, mode, attachments, modelPicker, onBranch, textareaRef, attention, float,
+  notices, mode, attachments, modelPicker, onBranch, textareaRef, attention, float, slash,
 }: ComposerProps) {
   const empty = value.trim() === "" && (attachments?.parts.length ?? 0) === 0;
   const streaming = liveness.kind === "live";
@@ -311,6 +314,7 @@ export function Composer({
   useEffect(() => { if (!stranded) setRecovering(false); }, [stranded]);
   // Enter while a turn runs steers it; it is never a no-op.
   const submit = onSend;
+  const menu = slash?.highlighted === undefined ? undefined : slash;
 
   return (
     // @container: the action row collapses to icons in a narrow chat column.
@@ -323,16 +327,28 @@ export function Composer({
 
       {attention}
 
-      <div className="p-composer">
+      <div className="p-composer relative">
+        {menu !== undefined && <SlashMenu menu={menu} />}
         {attachments && <AttachmentTray attachments={attachments} />}
 
         {/* Shift+Enter is the field's own line break; Enter alone sends. */}
         <TextArea bare data-composer-field ref={textareaRef} value={value} onChange={(e) => onValueChange(e.target.value)}
+          {...slash !== undefined && { role: "combobox", "aria-autocomplete": "list", "aria-expanded": menu !== undefined, "aria-controls": slash.listId }}
+          aria-activedescendant={menu?.highlighted === undefined ? undefined : menu.optionId(menu.highlighted)}
           onKeyDown={(e) => {
-            if (e.key !== "Enter" || e.shiftKey || composing(e.nativeEvent)) return;
+            if (composing(e.nativeEvent)) return;
+            const answered = slash?.onKey(e) ?? null;
 
-            e.preventDefault();
-            submit?.();
+            if (answered === null) {
+              if (e.key !== "Enter" || e.shiftKey) return;
+
+              e.preventDefault();
+              submit();
+
+              return;
+            }
+
+            detach(answered);
           }}
           placeholder={placeholder} disabled={disabled} rows={1} className="t-composer max-h-56 overflow-y-auto" />
 
@@ -369,7 +385,7 @@ export function Composer({
               </ChromeButton>
             )}
             <SendControls streaming={streaming} empty={empty} blocked={disabled} stopping={stopping}
-              onSend={onSend} onStop={() => { setStopping(true); onStop(); }} />
+              onSend={submit} onStop={() => { setStopping(true); onStop(); }} />
           </div>
         </div>
       </div>

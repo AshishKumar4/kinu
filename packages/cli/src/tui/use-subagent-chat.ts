@@ -2,7 +2,8 @@
 import { useEffect, useState } from 'react';
 import { Effect } from 'effect';
 import { detach, renderThrownChain } from '@kinu.run/core/obs';
-import { readConversation, type AgentClient } from '../agent-client';
+import { readConversation } from '@kinu.run/core';
+import type { AgentClient } from '../agent-client';
 import type { TuiSubagentChat } from './hubs';
 
 /** The subagent an open surface names: by its path, or by its actor once it has one. */

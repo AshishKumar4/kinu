@@ -11,10 +11,10 @@ import { answerPictures } from "@kinu.run/core/web/picture-src";
 import { SystemFrame } from "@/gallery-system";
 import { deployFixture } from "@/gallery-deploy-fixture";
 import { galleryPicture } from "@/gallery-pictures";
-import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import type { FileUIPart, UIMessage } from "ai";
 import { connectedPath, connectEndedOf, GOOGLE_OAUTH_CRED_KEY, mainPanelAgent, restoredRows, sharedBuildRefusal, threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl, type ModelMenuEntry, type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry } from "@kinu.run/core";
-import { delegatedTaskMetadata, followJobOutput, RECORDED_AT_METADATA_KEY, summarizeSteps, SIGNALS_SEEN_METADATA_KEY, TURN_END_METADATA_KEY, TURN_FAILURE_METADATA_KEY, JOB_OUTPUT_EVENT, type JobOutputTail } from "@kinu.run/core";
+import { delegatedTaskMetadata, followJobOutput, RECORDED_AT_METADATA_KEY, summarizeSteps, SIGNALS_SEEN_METADATA_KEY, TURN_END_METADATA_KEY, TURN_FAILURE_METADATA_KEY, JOB_OUTPUT_EVENT, type JobOutputTail, type BranchTurnResult } from "@kinu.run/core";
 import {
   COMPLETION_GATE_EVENT, FORK_INTERRUPTED_SIGNAL, OUTPUT_CONTINUATION_EVENT, OUTPUT_CONTINUATION_TEXT, OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
   OWNER_ANSWER_SIGNAL, TASK_REMINDER_EVENT, TASK_REMINDER_OPEN_KEY, taskReminderOf,
@@ -34,7 +34,7 @@ import "virtual:kinu-theme.css";
 import "./index.css";
 import { markDocument, codenameFor, mintAgentName, WorkspaceTerminalInputSchema } from "@kinu.run/core";
 import { ephemeralSlateAddress, hostedActorSocketPath, SLATE_PUSH_EVENT, type SlateCallResult, mcpPresetById, type McpPreset, READS_CHANGED_EVENT, readsWrittenBy, seededRandom, SLATES_CHANGED_METADATA_KEY } from "@kinu.run/core";
-import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT, OwnerAnswersSchema, PositionCursorSchema, sanitizeWorkspaceLogoSvg } from "@kinu.run/core";
+import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT, OwnerAnswersSchema, PositionPageRequestSchema, sanitizeWorkspaceLogoSvg } from "@kinu.run/core";
 import type { AlternateTakeSet, AskingAgent, OwedOwnerIntent, OwnerAnswer, ParkedWriteReview, ReasoningEffort, TakePickOutcome } from "@kinu.run/core";
 import { OwedOwnerIntentSchema } from "@kinu.run/core";
 import {
@@ -3200,8 +3200,9 @@ function galleryReadFault(flag: string | undefined, message = "Network connectio
 }
 
 async function galleryHistoryPage(args?: unknown[]): Promise<ChatHistoryPage> {
-  const request = v.parse(v.tuple([v.object({ cursor: v.optional(PositionCursorSchema), limit: v.number() })]), args);
-  const { cursor, limit } = request[0];
+  const request = v.parse(v.tuple([PositionPageRequestSchema]), args);
+  // A read naming no limit takes a whole drawn page, as the product's does (session/transcript.ts `DRAWN_PAGE_ROWS`).
+  const { cursor, limit = 200 } = request[0];
   const asks = document.documentElement.dataset;
 
   asks.historyAsks = String(Number(asks.historyAsks ?? 0) + 1);
@@ -3310,9 +3311,21 @@ function rosterMoved(): void {
 async function galleryRevert(args?: unknown[]): Promise<void> {
   // The choice the dialog sent: a chat-only rewind tells the agent what its turns left on the computer.
   const chosen = v.safeParse(v.object({ chatOnly: v.boolean() }), args?.[1]);
+  const id = v.parse(v.string(), args?.[0]);
 
   document.documentElement.dataset.galleryRevertChatOnly = chosen.success ? String(chosen.output.chatOnly) : "unsaid";
-  galleryRevertConversation(v.parse(v.string(), args?.[0]));
+  document.documentElement.dataset.galleryRevertedTo = id;
+  galleryRevertConversation(id);
+}
+
+/** A branch beside the live turn: the words it was asked with are kept; `data-gallery-branch-refuses` makes the agent
+ *  refuse it, as one already running beside the turn does. */
+function galleryBranch(args?: unknown[]): BranchTurnResult {
+  const flags = document.documentElement.dataset;
+
+  flags.galleryBranched = v.parse(v.string(), args?.[0]);
+
+  return flags.galleryBranchRefuses === "1" ? { accepted: false, reason: "a branch already runs beside this turn" } : { accepted: true, branchId: "gallery-branch" };
 }
 
 /** The first `name` event whose detail parses as `schema` and is `mine`. */
@@ -3640,6 +3653,7 @@ const ASYNC_PAGE_ANSWERS: WorkspaceAnswers = {
   getChatHistoryPage: (...args) => (HISTORY_ROWS > 0 ? galleryHistoryPage(args) : { status: "end", items: [] }),
   savePlanReviewAnnotations: (...args) => galleryAnnotationSave(args),
   revertConversation: (...args) => galleryRevert(args),
+  branchTurn: (...args) => galleryBranch(args),
   clearConversation: galleryClearConversation,
   send: (...args) => galleryMidTurnSend(args),
   awaitSend: galleryAwaitSend,
@@ -7948,12 +7962,14 @@ function previewTabsFrame(): MountedFrame {
   return { entries: ["/"], node: <PreviewTabsGallery /> };
 }
 
+/** Lets a test move the frame's router, and read where it is: the MemoryRouter never moves the address bar. */
 function GalleryNavigator() {
   const navigate = useNavigate();
+  const { pathname, hash } = useLocation();
 
   useEffect(() => {
-    Object.assign(window, { galleryNavigate: async (path: string) => { await navigate(path); } });
-  }, [navigate]);
+    Object.assign(window, { galleryNavigate: async (path: string) => { await navigate(path); }, galleryPath: `${pathname}${hash}` });
+  }, [navigate, pathname, hash]);
 
   return null;
 }

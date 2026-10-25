@@ -1,6 +1,6 @@
 /** Slash commands shared by the TUI and classic REPL; outcomes are presentation-neutral. */
 
-import { fmtUsd, limitLines, MAIN_ACCOUNT, SERVER_COMPACTION_MIN_TOKENS, specWithoutAccount, usageTotal, type CompactOutcome } from '@kinu.run/core';
+import { conversationMarkdown, fmtUsd, lastAnswer, limitLines, MAIN_ACCOUNT, SERVER_COMPACTION_MIN_TOKENS, slashCommand, specWithoutAccount, usageTotal, type CompactOutcome, type SlashCommandInfo } from '@kinu.run/core';
 import { ADVISOR_SEVERITIES, DEFAULT_ROLE_ID, REASONING_EFFORTS, offeredReasoningEfforts, formatPlanWithLineNumbers, planHandoffShortfall, planTitle, type PlanReview, type RefinementListing, type RefinementRequestView, type RefinementRoute, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type AskingAgent, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu.run/core';
 import type { AgentChangelogView, AgentClient, AgentClientStatus } from './agent-client';
 import type { InstructionSourceRow } from '@kinu.run/core';
@@ -8,19 +8,16 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 import { loadActiveProfile, updateDefaultAccount } from './default-model';
 import { readAllAccountUsage } from './account-usage';
 import { effortRunsAs, plural, renderAccountSpendLines, renderSearchTreeLines } from './display';
-import { conversationMarkdown, lastAnswer } from './conversation-export';
 import { listLocalAgentNames } from './agent-list';
 import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-export interface SlashCommandInfo {
-  name: string;
-  description: string;
-  usage?: string;
+/** A command as this CLI offers it. */
+export interface OfferedCommand extends SlashCommandInfo {
   /** Only offered when the client exposes this capability surface. */
-  requires?: 'localControls' | 'consents' | 'checkpoints' | 'rename' | 'plans' | 'questions';
+  readonly requires?: 'localControls' | 'consents' | 'checkpoints' | 'rename' | 'plans' | 'questions';
   /** The phase line while it runs. */
-  working?: string;
+  readonly working?: string;
 }
 
 interface SlashContext {
@@ -33,10 +30,8 @@ interface SlashContext {
   readonly rest: readonly string[];
 }
 
-interface SlashCommand extends SlashCommandInfo {
+interface SlashCommand extends OfferedCommand {
   readonly run: (context: SlashContext) => Promise<SlashOutcome> | SlashOutcome;
-  /** Names that reach this handler without a palette row of their own. */
-  readonly aliases?: readonly string[];
   /** Dispatchable and never offered: no palette row, no help line. */
   readonly hidden?: true;
 }
@@ -44,48 +39,48 @@ interface SlashCommand extends SlashCommandInfo {
 const ACCOUNTS_USAGE = '/accounts [use <provider> <account|default>] [default <provider> <account>]';
 
 const SLASH_COMMANDS: readonly SlashCommand[] = [
-  { name: '/help', description: 'List commands and keys', run: helpCommand },
-  { name: '/status', description: 'Show this agent\'s mission, model and counts', run: statusCommand },
-  { name: '/tools', description: 'List the tools this agent can use', run: toolsCommand },
-  { name: '/model', description: 'Show or set this workspace\'s model', usage: '/model [spec]', run: modelCommand },
-  { name: '/effort', description: 'Show or set this workspace\'s reasoning effort', usage: '/effort [level]', run: effortCommand },
-  { name: '/stats', description: 'Show each provider account\'s limits and what is left, then usage and API-equivalent cost', usage: '/stats [refresh]', aliases: ['/usage', '/cost'], run: statsCommand },
-  { name: '/accounts', description: 'Show each provider\'s accounts; choose this workspace\'s or the default', usage: ACCOUNTS_USAGE, run: accountsCommand },
-  { name: '/role', description: 'Show or choose this agent\'s role', usage: '/role [id]', run: roleCommand },
-  { name: '/rename', description: 'Rename this agent. Kinu never renames over a name you chose', usage: '/rename <name>', requires: 'rename', run: renameCommand },
-  { name: '/settings', description: 'Open interactive settings', run: settingsCommand },
-  { name: '/theme', description: 'Choose the TUI theme', run: themeCommand },
-  { name: '/models', description: 'List configured model providers', requires: 'localControls', run: modelsCommand },
-  { name: '/memory', description: 'Show the agent\'s memory', run: memoryCommand },
-  { name: '/changelog', description: 'Review what the agent changed about itself; revert one by number', usage: '/changelog [revert <n>]', run: changelogCommand },
-  { name: '/refine', description: 'Dreams over rated turns, and what each changed', usage: '/refine [now]', run: refineCommand },
-  { name: '/takes', description: 'Compare the latest alternate takes; pick one by number', usage: '/takes [n]', run: takesCommand },
-  { name: '/tree', description: 'Show the swarm search tree', run: treeCommand },
-  { name: '/jobs', description: 'List background jobs', run: jobsCommand },
-  { name: '/connect', description: 'Connect this PC so the agent can run commands on it', requires: 'consents', run: connectCommand },
-  { name: '/stop', description: 'Stop the running turn', run: stopCommand },
-  { name: '/copy', description: 'Copy the last answer to the clipboard', run: copyCommand },
-  { name: '/export', description: 'Write this conversation to a Markdown file', usage: '/export [path]', run: exportCommand },
-  { name: '/resume', description: 'Open another workspace and continue its conversation', run: resumeCommand },
-  { name: '/compact', description: 'Fold this conversation into a summary now, keeping its last exchanges', requires: 'localControls', working: 'summarizing the conversation', run: compactCommand },
-  { name: '/clear', description: 'Start a new conversation in this workspace; files and memory stay', aliases: ['/new'], requires: 'localControls', run: clearCommand },
-  { name: '/queue', description: 'Send a message after the running turn ends', usage: '/queue <text>', run: queueCommand },
-  { name: '/branch', description: 'Try another direction alongside the running turn', usage: '/branch <text>', run: branchCommand },
-  { name: '/plan', description: 'Have the agent draft a plan, then approve it, send it back or dismiss it', usage: '/plan [<text>|show|approve [notes]|changes <feedback>|dismiss]', requires: 'plans', run: planCommand },
-  { name: '/fork', description: 'Walk back: restart the conversation just before an earlier message', usage: '/fork [number]', run: forkCommand },
-  { name: '/undo', description: 'Restore files to how they were n turns back, then offer to walk back the chat', usage: '/undo [n]', requires: 'checkpoints', run: undoCommand },
-  { name: '/answer', description: 'Answer the questions the agent is waiting on', requires: 'questions', run: answerCommand },
-  { name: '/approval', description: 'Show or set when shell commands need your approval', usage: '/approval strict|allow_all|deny_all', requires: 'localControls', run: approvalCommand },
-  { name: '/instructions', description: 'Approve which AGENTS.md and skill files the agent follows', usage: '/instructions [page <cursor>|read <page> <n>|approve <page> <n> <digest>|revoke <page> <n>]', requires: 'localControls', run: instructionsCommand },
-  { name: '/always', description: 'Choose skills that are always active', usage: '/always <name...|none>', requires: 'localControls', run: alwaysCommand },
-  { name: '/advisor', description: 'Turn the advisor on or off, or set what it reports. On, it reviews every step, with a model call or more each', usage: '/advisor [on|off|severity <nit|concern|blocker>]', run: advisorCommand },
-  { name: '/exit', description: 'Leave the chat', aliases: ['/quit'], run: exitCommand },
-  { name: '/cancel', description: 'Close the open overlay', hidden: true, run: cancelCommand },
+  { ...slashCommand('/help'), run: helpCommand },
+  { ...slashCommand('/status'), run: statusCommand },
+  { ...slashCommand('/tools'), run: toolsCommand },
+  { ...slashCommand('/model', '/model [spec]'), run: modelCommand },
+  { ...slashCommand('/effort', '/effort [level]'), run: effortCommand },
+  { ...slashCommand('/stats', '/stats [refresh]'), run: statsCommand },
+  { ...slashCommand('/accounts', ACCOUNTS_USAGE), run: accountsCommand },
+  { ...slashCommand('/role', '/role [id]'), run: roleCommand },
+  { ...slashCommand('/rename', '/rename <name>'), requires: 'rename', run: renameCommand },
+  { ...slashCommand('/settings'), run: settingsCommand },
+  { ...slashCommand('/theme'), run: themeCommand },
+  { ...slashCommand('/models'), requires: 'localControls', run: modelsCommand },
+  { ...slashCommand('/memory'), run: memoryCommand },
+  { ...slashCommand('/changelog', '/changelog [revert <n>]'), run: changelogCommand },
+  { ...slashCommand('/refine', '/refine [now]'), run: refineCommand },
+  { ...slashCommand('/takes', '/takes [n]'), run: takesCommand },
+  { ...slashCommand('/tree'), run: treeCommand },
+  { ...slashCommand('/jobs'), run: jobsCommand },
+  { ...slashCommand('/connect'), requires: 'consents', run: connectCommand },
+  { ...slashCommand('/stop'), run: stopCommand },
+  { ...slashCommand('/copy'), run: copyCommand },
+  { ...slashCommand('/export', '/export [path]'), run: exportCommand },
+  { ...slashCommand('/resume'), run: resumeCommand },
+  { ...slashCommand('/compact'), requires: 'localControls', working: 'summarizing the conversation', run: compactCommand },
+  { ...slashCommand('/clear'), requires: 'localControls', run: clearCommand },
+  { ...slashCommand('/queue', '/queue <text>'), run: queueCommand },
+  { ...slashCommand('/branch', '/branch <text>'), run: branchCommand },
+  { ...slashCommand('/plan', '/plan [<text>|show|approve [notes]|changes <feedback>|dismiss]'), requires: 'plans', run: planCommand },
+  { ...slashCommand('/fork', '/fork [number]'), run: forkCommand },
+  { ...slashCommand('/undo', '/undo [n]'), requires: 'checkpoints', run: undoCommand },
+  { ...slashCommand('/answer'), requires: 'questions', run: answerCommand },
+  { ...slashCommand('/approval', '/approval strict|allow_all|deny_all'), requires: 'localControls', run: approvalCommand },
+  { ...slashCommand('/instructions', '/instructions [page <cursor>|read <page> <n>|approve <page> <n> <digest>|revoke <page> <n>]'), requires: 'localControls', run: instructionsCommand },
+  { ...slashCommand('/always', '/always <name...|none>'), requires: 'localControls', run: alwaysCommand },
+  { ...slashCommand('/advisor', '/advisor [on|off|severity <nit|concern|blocker>]'), run: advisorCommand },
+  { ...slashCommand('/exit'), run: exitCommand },
+  { ...slashCommand('/cancel'), hidden: true, run: cancelCommand },
 ];
 
 export function commandsForClient(
   client: Pick<AgentClient, 'localControls' | 'consents' | 'checkpoints' | 'rename' | 'plans' | 'questions'>,
-): SlashCommandInfo[] {
+): OfferedCommand[] {
   return SLASH_COMMANDS.filter((command) => {
     if (command.hidden) return false;
 
@@ -118,62 +113,6 @@ function instructionState(row: InstructionSourceRow): string {
     case 'revoked': return 'refused';
     case 'none': return 'not decided';
   }
-}
-
-/** Lower sorts first; null drops the command. */
-function matchRank(query: string, name: string, description: string): number | null {
-  if (query === '') return 3;
-
-  if (name === query) return 0;
-
-  if (name.startsWith(query)) return 1;
-
-  if (description.includes(query)) return 2;
-
-  return fuzzySubsequence(query, name) ? 3 : null;
-}
-
-export function filterCommands(commands: readonly SlashCommandInfo[], draft: string): SlashCommandInfo[] {
-  const token = draft.trimStart();
-
-  if (!token.startsWith('/')) return [];
-  const query = token.slice(1).split(/\s+/, 1)[0]?.toLowerCase() ?? '';
-
-  return commands
-    .map((command, index) => {
-      const name = command.name.slice(1).toLowerCase();
-      const description = command.description.toLowerCase();
-
-      return { command, index, rank: matchRank(query, name, description) };
-    })
-    .filter((candidate): candidate is { command: SlashCommandInfo; index: number; rank: number } =>
-      candidate.rank !== null)
-    .sort((left, right) => left.rank - right.rank || left.index - right.index)
-    .map(({ command }) => command);
-}
-
-function fuzzySubsequence(query: string, target: string): boolean {
-  let queryIndex = 0;
-
-  for (const character of target) {
-    if (character === query[queryIndex]) queryIndex += 1;
-
-    if (queryIndex === query.length) return true;
-  }
-
-  return query.length === 0;
-}
-
-export function resolveCommandDraft(commands: readonly SlashCommandInfo[], draft: string): string {
-  const trimmed = draft.trim();
-
-  if (!trimmed.startsWith('/') || /\s/.test(trimmed)) return trimmed;
-  const exact = commands.find((command) => command.name === trimmed);
-
-  if (exact) return trimmed;
-  const matches = filterCommands(commands, trimmed);
-
-  return matches.length === 1 ? matches[0].name : trimmed;
 }
 
 export type SlashOutcome =

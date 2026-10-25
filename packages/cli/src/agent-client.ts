@@ -17,7 +17,7 @@ import type {
 } from '@kinu.run/core';
 import type { ShellApprovalHandler } from '@kinu.run/cli-backend';
 import type { CliSession } from './session';
-import { isSteeredMessage, rowText, type AgentModelMenu, type CompactOutcome, type FileLinks, type JobOutputTail, type PathPlanes } from '@kinu.run/core';
+import { rowText, type AgentModelMenu, type CompactOutcome, type FileLinks, type JobOutputTail, type PathPlanes } from '@kinu.run/core';
 import type { KinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
@@ -149,27 +149,6 @@ export interface AgentForkResult {
   /** Callers switch and close the old client when a different instance is returned. */
   client: AgentClient;
   label: string;
-}
-
-/** A durable conversation, oldest first, over either backend's `getChatHistoryPage`. Never capped: a fork
- *  pivot past a cap would read as not found. */
-export async function readConversation(
-  page: (request: PositionPageRequest) => Promise<Page<ChatHistoryEntry, PositionCursor>>,
-): Promise<AgentTranscriptMessage[]> {
-  const messages: AgentTranscriptMessage[] = [];
-  let request: PositionPageRequest = {};
-
-  for (;;) {
-    const read = await page(request);
-    messages.unshift(...read.items.map(({ id, role, parts, metadata }) => {
-      const content = rowText({ role, parts });
-
-      return isSteeredMessage({ metadata }) ? { id, role, content, metadata, steered: true } : { id, role, content, metadata };
-    }));
-
-    if (read.status === 'end') return messages;
-    request = { cursor: read.next };
-  }
 }
 
 /** The answer turn `turnId` recorded, read from the newest page back; null when it recorded none (a Stop before any

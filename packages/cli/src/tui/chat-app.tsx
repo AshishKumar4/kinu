@@ -28,21 +28,19 @@ import {
 } from '../agent-client';
 import {
   commandsForClient,
-  type SlashCommandInfo,
+  type OfferedCommand,
   describeBranchStatus,
   describeTakePick,
   executeSlashCommand,
-  filterCommands,
   isBranchStatusEvent,
   renderPlanReview,
   performUndo,
-  resolveCommandDraft,
   type SlashOutcome,
 } from '../slash-commands';
 import { describePromptAttachment, resolvePromptAttachments } from '../attachments';
 import { listSidebarAgents } from '../agent-list';
 import { watchDeviceConsents } from '../consent-watch';
-import { ASK_OWNER_TOOL, contextWindowForSpec, describeProviderError, EMPTY_MODEL_MENU, specWithoutAccount, turnFailure, type AgentModelEntry, type AgentModelMenu, type AskingAgent, type OwnerAnswer } from '@kinu.run/core';
+import { ASK_OWNER_TOOL, contextWindowForSpec, describeProviderError, EMPTY_MODEL_MENU, filterCommands, resolveCommandDraft, specWithoutAccount, turnFailure, type AgentModelEntry, type AgentModelMenu, type AskingAgent, type OwnerAnswer } from '@kinu.run/core';
 import { requireInteractiveTerminal, TUI_EXIT_SIGNALS } from '../prompt';
 import { canonicalProjectRoot } from '../config';
 import { openBrowser } from '../commands/auth';
@@ -2133,7 +2131,7 @@ function countStreamed(meter: TurnMeter | null, delta: string): void {
   if (meter) meter.streamedChars += delta.length;
 }
 
-function commandWorking(commands: readonly SlashCommandInfo[], submitted: string): string | null {
+function commandWorking(commands: readonly OfferedCommand[], submitted: string): string | null {
   const name = submitted.split(/\s/u)[0]?.toLowerCase();
 
   return commands.find((command) => command.name === name)?.working ?? null;

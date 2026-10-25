@@ -45,12 +45,11 @@ import {
 import { CloudTurnStream, jsonErrorMessage } from './cloud-turn-stream';
 import { SessionRecorder } from './session-recorder';
 import { cloudFileLinks, JOB_OUTPUT_EVENT, READS_CHANGED_EVENT, TERMINAL_TURN_KEY, WorkspaceBroadcastSchema, type WorkspaceBroadcast, type AgentModelMenu, type AgentRpcMethod, type FileLinks } from '@kinu.run/core';
-import { hostedWindowCalls, positionPageSchema, SubagentInspectionRequestSchema, SubagentInspectionResultSchema, WorkspaceWorkSchema, type WorkspaceWork, type SubagentInspectionRequest, type SubagentInspectionResult } from '@kinu.run/core';
+import { hostedWindowCalls, positionPageSchema, readConversation, SubagentInspectionRequestSchema, SubagentInspectionResultSchema, WorkspaceWorkSchema, type WorkspaceWork, type SubagentInspectionRequest, type SubagentInspectionResult } from '@kinu.run/core';
 import type { AlternateTakeSet, BranchStatusEvent, SendMetadata, ChangelogRevertResult, RefinementListing, EvolutionConfigView, ReasoningEffort, TakePickOutcome } from '@kinu.run/core';
 import {
   createUserUiMessage,
   findForkPivot,
-  readConversation,
   recordedAnswer,
   promptFiles,
   promptText,

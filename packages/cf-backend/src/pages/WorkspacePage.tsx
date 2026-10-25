@@ -31,6 +31,7 @@ import { useTurnAnnotations } from "@/hooks/use-turn-annotations";
 import { touchWorkspace } from "@/lib/user-api";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import { readFailureText } from "@kinu.run/core";
+import { workspaceCommands } from "@/lib/workspace-commands";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { Modal } from "@/components/ui/Modal";
 import { TurnRevert } from "@/components/RevertTurnDialog";
@@ -817,7 +818,6 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
 
   usePlanApprovedMode(subName === undefined ? state.activePlan : null, ui.setMode);
 
-  const chatInput = ui.draft;
   const [forkFor, setForkFor] = useState<string | null>(null);
 
   // `state.messages` is the SDK's newest window with streamed messages; older history pages from storage.
@@ -851,19 +851,17 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
   // Steer-as-Branch: runs the draft as a parallel head while the live turn continues.
   const [branchNotice, setBranchNotice] = useState<string | null>(null);
 
-  const handleBranch = useCallback(() => {
-    const t = chatInput.trim();
-
+  const handleBranch = useCallback((t: string, draft: string) => {
     if (!t || !live || ui.mode === "plan") return;
     setBranchNotice(null);
     // Clear the draft only once the branch is accepted, and only if it was not edited meanwhile.
     startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
       const result = yield* Effect.promise(async () => state.rpc("branchTurn", [t]));
 
-      if (result.accepted) ui.updateDraft((current) => current.trim() === t ? "" : current);
+      if (result.accepted) ui.updateDraft((current) => current.trim() === draft ? "" : current);
       else setBranchNotice(result.reason ?? "Branching is unavailable right now.");
     }), showing(setBranchNotice))));
-  }, [chatInput, ui.mode, live, state]);
+  }, [ui.mode, live, state]);
 
   // Identity-stable handlers so memo(MessageView) holds across stream ticks.
   const onForkMessage = useCallback((mid: string) => setForkFor(mid), []);
@@ -1067,6 +1065,13 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
                 attachments,
                 drop: chatDrop,
                 onBranch: handleBranch,
+                commands: agentId === undefined ? undefined : (say) => workspaceCommands({
+                  workspace: agentId, say, clear: () => { setClearingMain(true); }, show, go: (path) => Effect.promise(async () => navigate(path)),
+                  history: chat.readAll,
+                  walkBack: setRevertFor,
+                  rename: (name) => Effect.catchCause(Effect.asVoid(Effect.promise(async () => state.rpc("renameMainChat", [name]))),
+                    (failed) => Effect.sync(() => { say(`Could not rename this chat: ${readFailureText({ cause: Cause.squash(failed) })}`); })),
+                }),
                 notices: [
                   ...SIDE_SOURCES.flatMap(({ source, label }) => {
                     const message = sideErrors[source];
@@ -1077,7 +1082,7 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
                           onDismiss: () => reportSide(source, null) }]
                       : [];
                   }),
-                  ...(branchNotice ? [{ id: "branch", tone: "warning" as const,
+                  ...(branchNotice ? [{ id: "branch", tone: "warning" as const, hooks: { "data-branch-notice": "" },
                     text: `Branch unavailable: ${branchNotice}`, onDismiss: () => setBranchNotice(null) }] : []),
                   ...(restoreNotice ? [{ id: "restore", tone: "neutral" as const, text: restoreNotice,
                     onDismiss: () => setRestoreNotice(null) }] : []),

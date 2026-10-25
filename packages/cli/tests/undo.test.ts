@@ -7,7 +7,8 @@ import { join } from 'node:path';
 import { createHostCheckpoints } from '@kinu.run/cli-backend';
 import { DEFAULT_ADVISOR_MIN_SEVERITY } from '@kinu.run/core';
 import type { EvolutionConfigView, FileCheckpointEntry, FileRestoreChange } from '@kinu.run/core';
-import { commandsForClient, executeSlashCommand, filterCommands, performUndo } from '../src/slash-commands';
+import { filterCommands } from '@kinu.run/core';
+import { commandsForClient, executeSlashCommand, performUndo } from '../src/slash-commands';
 import type { AgentClient, FileCheckpointSurface } from '../src/agent-client';
 import { fakeAgentClient } from './helpers/agent-client';
 

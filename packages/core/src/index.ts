@@ -2640,6 +2640,12 @@ export {
 } from './read-models/app-routes';
 
 export {
+  filterCommands, resolveCommandDraft, slashCommand, type SlashCommandInfo,
+} from './read-models/slash-commands';
+
+export { conversationMarkdown, lastAnswer, readConversation, type ConversationMessage, type ConversationRow } from './read-models/conversation';
+
+export {
   needsOnboarding,
   ONBOARDING_STEPS,
   type OnboardingStepId,

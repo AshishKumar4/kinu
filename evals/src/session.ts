@@ -107,7 +107,7 @@ import { subagentAddress, ROOT, type SubagentAddress } from './subagent-address'
 
 import {
   EVAL_WORKSPACE_BEAT_MS, hostedActorSocketPath, JOB_OUTPUT_EVENT, JsonValueSchema, ORCHESTRATOR_AGENT_SLUG,
-  RunEventSchema, SendStateSchema, STEER_STEP_METADATA_KEY, ChatHistoryEntrySchema, positionPageSchema, renderSoulMarkdown, CommandResultSchema,
+  RunEventSchema, SendStateSchema, STEER_STEP_METADATA_KEY, ChatHistoryEntrySchema, positionPageSchema, readConversation, renderSoulMarkdown, CommandResultSchema,
   type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type PositionPageRequest, type RunEvent, type SendState,
   type SubagentInspectionRequest, type WorkMode, type WorkspaceSpend,
   QualityDaySchema, type QualityDay, betaSwarms,
@@ -119,7 +119,7 @@ import {
   type PublicResponseFrame, type PublicSendResult, type PublicTurn, type PublicTurnRecorder, type SocketPayload,
 } from './session-protocol';
 import { ActivitySpendSchema } from '../../packages/cli/src/cloud-api';
-import { readConversation, recordedAnswer } from '../../packages/cli/src/agent-client';
+import { recordedAnswer } from '../../packages/cli/src/agent-client';
 import {
   absorbingRunId, compareRunEventOrder, DeploymentAnswer, evalNameSlug, evalTargetVerdict,
   evalWorkspaceName, INFRA_FAILURE_MARKER, infraBoundary, liveModelTarget, resolveEvalBackend,

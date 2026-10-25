@@ -2,7 +2,8 @@ import type { SelectOption, SelectRenderable } from '@opentui/core';
 import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { describeExecutionContext, executorLabel, filterModels, OTHER_OPTION, formatContextWindow, formatModelSpec, modelTestText, parseModelSpec, specWithoutAccount, takeEvidence, type AgentModelEntry, type AlternateTakeCandidate, type AlternateTakeSet, type AskingAgent, type ChangelogEntry, type OwnerAnswer, type ModelTestResult, type ProviderFailure, type ShellApprovalRequest } from '@kinu.run/core';
 import { CHANGE_KIND_GLYPH, TUI_COMPOSER_PLACEHOLDER, TUI_MARKS, clipText, literalText, SPINNER_FRAMES, meterText, type TurnMeter } from '@kinu.run/core/tui';
-import { filterCommands, type SlashCommandInfo } from '../slash-commands';
+import { filterCommands } from '@kinu.run/core';
+import type { OfferedCommand } from '../slash-commands';
 import type { AgentChangelogView, ForkPoint } from '../agent-client';
 import type { DeviceConnectPromptState } from './use-device-connect';
 import type { ApprovalPrompt } from './use-approvals';
@@ -32,7 +33,7 @@ function selectAt<T>(items: readonly T[], onSelect: (item: T) => void): (index: 
 }
 
 interface CommandHintProps {
-  commands: readonly SlashCommandInfo[];
+  commands: readonly OfferedCommand[];
   terminal: OverlayGeometry;
 }
 
@@ -189,9 +190,9 @@ function SearchablePalette<T>({ title, frame, hint, placeholder, onFilter, items
 }
 
 interface CommandPaletteProps {
-  commands: readonly SlashCommandInfo[];
+  commands: readonly OfferedCommand[];
   terminal: OverlayGeometry;
-  onSelect: (command: SlashCommandInfo) => void;
+  onSelect: (command: OfferedCommand) => void;
 }
 
 export function CommandPaletteOverlay({ commands, terminal, onSelect }: CommandPaletteProps) {
