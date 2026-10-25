@@ -180,9 +180,8 @@ describe('attaching a terminal', () => {
     const response = await terminalRequest(attachRequest('executor=computer&cols=120&rows=40'), deps);
     expect(response?.status).toBe(200);
     expect(await response?.text()).toBe('pty-socket');
-    // Preflight (egress, /workspace) settles before the PTY exists, and the lease is stamped before the socket
-    // is handed over, or the first heartbeat can stop the container under it.
-    expect(trace.calls).toEqual(["prepareTerminal:computer", "noteTerminalActivity", "terminal"]);
+    // Preflight (egress, /workspace) settles before the PTY exists; the box stamps its own lease as it attaches.
+    expect(trace.calls).toEqual(["prepareTerminal:computer", "terminal"]);
   });
 
 
@@ -368,7 +367,7 @@ describe('opening the desktop (D70)', () => {
     });
 
     expect((await terminalRequest(request, deps))?.status).toBe(200);
-    expect(trace.calls).toEqual(['prepareTerminal:computer', 'noteTerminalActivity', 'terminal']);
+    expect(trace.calls).toEqual(['prepareTerminal:computer', 'terminal']);
     expect(new URL(trace.request?.url ?? '').pathname).toBe('/_devbox/desktop');
     expect([...trace.request?.headers.keys() ?? []].sort()).toEqual(['connection', 'sec-websocket-protocol', 'sec-websocket-version', 'upgrade']);
   });
