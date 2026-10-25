@@ -36,9 +36,10 @@ function holding(stores: SqlExecutor, chat: SqlExecutor, text: string) {
   };
 }
 
-/** The memory block a model call was sent last: its step's own, after the blocks of the steps before it. */
+/** The memory block a model call was sent last: its step's own, after the blocks of the steps before it, up to the
+ *  blank line or the block's end after it. */
 function memoryBlockOf(request: string): string {
-  const shown = [...request.matchAll(/## World model \(facts you remembered\)\\n([\s\S]*?)(?:\\n\\n|<\/dynamic_context>)/gu)].at(-1)?.[1] ?? '';
+  const shown = [...request.matchAll(/## World model \(facts you remembered\)\\n([\s\S]*?)\\n(?:\\n|<)/gu)].at(-1)?.[1] ?? '';
 
   return shown.replaceAll('\\n', '\n');
 }

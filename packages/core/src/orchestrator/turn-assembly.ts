@@ -296,6 +296,13 @@ function resolvedTurnProfile(sources: TurnAssemblySources, turn: Pick<TurnDraft,
 }
 
 /** Effect-free: a measure between turns assembles too. */
+/** What `question` recalls of the turn's memory, held so it is taken where the turn reads it; none without recall. */
+function startRecall(sources: TurnAssemblySources, question: string): Promise<Exit.Exit<readonly RecalledMemory[], KinuError>> | undefined {
+  if (sources.recall === undefined) return undefined;
+
+  return hold(attempt({ doing: "recalling the memory a turn's words match", otherwise: 'io' }, async () => await sources.recall?.(question) ?? []));
+}
+
 /** What every step of the turn renders the same bytes of: MEMORY.md's tail, the account's facts, the agent's mail and
  *  what its words recalled, started as its preparation began (`recalling`). */
 async function readTurnOnce(
@@ -314,11 +321,8 @@ async function readTurnOnce(
 export async function assembleActorTurn(sources: TurnAssemblySources, request: TurnAssemblyRequest): Promise<AssembledTurn> {
   const { models } = sources;
   const { frozen } = request;
-
   // Started first and taken last, so the search runs beside every wait of the turn's preparation.
-  const recalling = sources.recall === undefined
-    ? undefined
-    : hold(attempt({ doing: "recalling the memory a turn's words match", otherwise: 'io' }, async () => await sources.recall?.(request.userText) ?? []));
+  const recalling = startRecall(sources, request.userText);
 
   // The tier never depends on the tools, so the drafted model is the served one; a frozen execution's is the one it froze.
   const { profileInputs, choices, roleSkills, drafted, served: spec, limits } = await draftTurn(sources, request);
