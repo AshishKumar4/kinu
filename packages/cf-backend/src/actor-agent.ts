@@ -18,7 +18,7 @@ import {
   durableStamps, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp, LiveWorkers, type Repair,
   type RunEventInput, type SubagentInspectionAuthority, type ConversationRecall,
   isSubagentOrigin, WORKSPACE_ROOT, PLATFORM_CATALOG, ProgramsInFlight, type OwedIntent, type OwedOwnerIntent, cardWords,
-  specProvider, WORKERS_AI_PROVIDER_ID,
+  specProvider, WORKERS_AI_PROVIDER_ID, type CompactOutcome,
 } from '@kinu.run/core';
 import type { EnqueueTurnResult, GitHubDeps, GoogleDeps, MailDeps, OwnerWaitsHost, PanelAgent, ProgrammaticTurn, RecordedTurn, SendState, SubagentInspectionRequest, SubagentInspectionResult } from '@kinu.run/core';
 import type { SubagentActivityEvent } from '@kinu.run/core';
@@ -1427,6 +1427,9 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** The owner's Clear of main's chat; answers why the emptied request went unmeasured, if it did. */
   protected abstract clearMainConversation(): Promise<string | null>;
+
+  /** The owner's compaction of main's chat, in its own isolate. */
+  protected abstract compactMainConversation(): Promise<CompactOutcome>;
 
   /** One of main's answers whole, from its own isolate; null for an id that names none. */
   protected abstract mainAnswer(messageId: string): Promise<AgentAnswer | null>;
@@ -3721,6 +3724,13 @@ export abstract class ActorAgent extends Agent<Env> {
     // The clear stands without its measure; the failure is recorded where the operator's diagnostics read it.
     if (unmeasured !== null) diagnostics.failure('context.clear_measure_failed', new KinuError('unavailable', unmeasured), { workspace: this.name });
     this.broadcastToActor(null, JSON.stringify({ type: MessageType.CF_AGENT_CHAT_CLEAR }));
+  }
+
+  /** Main's compaction, at the owner's ask: folded into a summary now, or its provider armed to fold it with the next
+   *  request; refused while a turn runs. */
+  @callable()
+  async compactConversation(): Promise<CompactOutcome> {
+    return this.compactMainConversation();
   }
 
   /** The one override point for a harness to script a turn's model. */

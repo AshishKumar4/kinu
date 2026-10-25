@@ -302,6 +302,9 @@ function harness(options: World = {}): Harness {
     async hasWorkspace(_caller: UserCaller, name: string) {
       return (rosters.get(userId) ?? []).some((row) => row.name === name);
     },
+    async workspaceAdmission(_caller: UserCaller, name: string) {
+      return (rosters.get(userId) ?? []).some((row) => row.name === name) ? { capabilityHash: null } : null;
+    },
     async ensureWorkspaceCapability(name: string, _hash: string | null) {
       if (!(rosters.get(userId) ?? []).some((row) => row.name === name)) {
         throw new Error(`Workspace ${name} not in your registry`);

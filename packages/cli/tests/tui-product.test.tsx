@@ -4,7 +4,6 @@ import { createTestRenderer } from '@opentui/core/testing';
 import { createRoot, flushSync } from '@opentui/react';
 import { describe, expect, test } from 'bun:test';
 import { present, scratchDir } from '@kinu.run/test-utils';
-import { TUI_ADVERTISED_HINTS } from '@kinu.run/core/tui';
 
 import {
   KEYMAP_PRESET_IDS,
@@ -129,17 +128,9 @@ describe('TUI product registries', () => {
     expect(resolve(registry, key('a', { alt: true }), EDITING)).toBe('hub.agents');
     expect(resolve(registry, key('l', { ctrl: true }), EDITING)).toBe('model.open');
     expect(resolve(registry, key('w', { alt: true }), EDITING)).toBe('workspace.toggle');
+    expect(registry.hint('palette.toggle')).toBe('Ctrl+K');
     expect(resolve(registry, key('tab'), EDITING)).not.toBe('queue.add');
     expect(resolve(registry, key('b', { ctrl: true }), EDITING)).not.toBe('conversation.branch');
-  });
-
-  test('the advertised hints resolve on the default keymap exactly as stated', () => {
-    // TUI_ADVERTISED_HINTS is what the landing page's terminal demo prints: the default preset must bind them.
-    const registry = createKeybindingRegistry({ presetId: 'pi-omp' });
-
-    for (const { action, keys } of TUI_ADVERTISED_HINTS) {
-      expect(registry.hint(action)).toBe(keys);
-    }
   });
 
   test('running and idle agents remain distinguishable in the navigator', async () => {

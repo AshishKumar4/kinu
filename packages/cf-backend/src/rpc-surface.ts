@@ -121,6 +121,7 @@ const USER_DO_METHODS = [
   'getProfileCatalog',
   'getWorkspaceProfileCatalog',
   'hasWorkspace',
+  'workspaceAdmission',
   'heldRows',
   'issueCliAgentConnectTicket',
   'issueDeviceConnectChallenge',

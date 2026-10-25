@@ -7,7 +7,9 @@ const WEB = 'packages/cf-backend/src/components/Chip.tsx';
 
 const CLI = 'packages/cli/src/display.ts';
 
-const none = { web: new Set<string>(), terminalPackages: [] };
+const TUI = 'packages/core/src/tui/format.ts';
+
+const none = { web: new Set<string>(), terminal: new Set<string>(), terminalPackages: [] };
 
 const noAsset = (file: string): string => { throw new Error(`no asset ${file}`); };
 
@@ -31,15 +33,16 @@ describe('model-text: red in every direction it claims', () => {
     expect(found).toEqual([{ file: 'packages/core/src/prompts/lead.md', line: 2, character: '\u2014' }]);
   });
 
-  test('the web client, a terminal package and an @opentui module are the two renderers, and only those', () => {
+  test('the web client, the terminal client\'s modules, a terminal package and an @opentui module are the two renderers, and only those', () => {
     const sources = new Map([
       [WEB, "export const arrow = '\u2192';"],
       [CLI, "export const tick = '\u2713';"],
       ['packages/core/src/tui/view.tsx', "import { Box } from '@opentui/react';\nexport const bullet = '\u25cf';"],
+      [TUI, "export const spinner = '\u280b';"],
       [WORKER, "export const tick = '\u2713';"],
     ]);
 
-    expect(findWideText(sources, { web: new Set([WEB]), terminalPackages: ['packages/cli/'] }, noAsset).map((each) => each.file)).toEqual([WORKER]);
+    expect(findWideText(sources, { web: new Set([WEB]), terminal: new Set([TUI]), terminalPackages: ['packages/cli/'] }, noAsset).map((each) => each.file)).toEqual([WORKER]);
   });
 
   test('a terminal package is one whose manifest declares a bin', () => {

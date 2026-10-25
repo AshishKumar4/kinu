@@ -143,7 +143,7 @@ export class ReplyChannelStore {
     })));
   }
 
-  /** Closes an open channel no reply will travel: its event was a duplicate. */
+  /** Closes an open channel no reply will travel: its event was a duplicate, or its turn ended without a word. */
   abort(id: ReplyChannelId): void {
     this.actor.assertCurrent();
     this.sql.exec(`UPDATE reply_channels SET state = 'aborted' WHERE actor_id = ? AND id = ? AND state = 'open'`, this.actorId, id);
@@ -170,7 +170,8 @@ export interface EmailReplyDispatchResult {
 
 /**
  * A settled turn's reply to the mail that started it: sent on every open `email_thread` channel its events opened, each
- * attempt audited as a `reply_attempt` row. Empty text sends nothing and only reports what is still owed.
+ * attempt audited as a `reply_attempt` row. A turn that ended without a word answered with silence: its channels close
+ * with nothing sent, as an open one owed the reply each wake, once a minute for as long as it stood.
  */
 export async function dispatchEmailRepliesForTurn(
   deps: { log: EventLog; replies: ReplyChannelStore },
@@ -181,10 +182,13 @@ export async function dispatchEmailRepliesForTurn(
   const events = deps.log.query({ turn_id: drainTurnId, variant: 'email' });
 
   if (!replyText.trim()) {
-    return {
-      delivered: 0,
-      pending: events.some((event) => deps.replies.findOpenByEvent(event.id, 'email_thread') !== null),
-    };
+    for (const event of events) {
+      const channel = deps.replies.findOpenByEvent(event.id, 'email_thread');
+
+      if (channel !== null) deps.replies.abort(channel.id);
+    }
+
+    return { delivered: 0, pending: false };
   }
 
   let delivered = 0;

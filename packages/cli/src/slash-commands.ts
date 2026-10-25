@@ -1,6 +1,6 @@
 /** Slash commands shared by the TUI and classic REPL; outcomes are presentation-neutral. */
 
-import { conversationMarkdown, fmtUsd, lastAnswer, limitLines, MAIN_ACCOUNT, SERVER_COMPACTION_MIN_TOKENS, slashCommand, specWithoutAccount, usageTotal, type CompactOutcome, type SlashCommandInfo } from '@kinu.run/core';
+import { COMPACTED, conversationMarkdown, fmtUsd, lastAnswer, limitLines, MAIN_ACCOUNT, slashCommand, specWithoutAccount, usageTotal, type SlashCommandInfo } from '@kinu.run/core';
 import { ADVISOR_SEVERITIES, DEFAULT_ROLE_ID, REASONING_EFFORTS, offeredReasoningEfforts, formatPlanWithLineNumbers, planHandoffShortfall, planTitle, type PlanReview, type RefinementListing, type RefinementRequestView, type RefinementRoute, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type AskingAgent, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu.run/core';
 import type { AgentChangelogView, AgentClient, AgentClientStatus } from './agent-client';
 import type { InstructionSourceRow } from '@kinu.run/core';
@@ -414,12 +414,6 @@ function resumeCommand(): SlashOutcome {
     workspaces: true,
   };
 }
-
-const COMPACTED: Readonly<Record<CompactOutcome, string>> = {
-  folded: 'Folded this conversation into a summary; its last exchanges stay as they were.',
-  armed: 'Your next message asks the model\'s provider to fold this conversation into a summary; its last exchanges stay as they were.',
-  nothing: `This conversation is under the ${SERVER_COMPACTION_MIN_TOKENS.toLocaleString('en-US')} tokens its model's provider folds; nothing to fold yet.`,
-};
 
 async function compactCommand({ client, command }: SlashContext): Promise<SlashOutcome> {
   if (!client.localControls) return { kind: 'unknown', command };

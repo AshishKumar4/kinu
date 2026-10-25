@@ -67,7 +67,7 @@ describe("a chat's slash commands", () => {
       await draft(page, '/');
       const all = (await menu(page)).offered;
 
-      expect({ web: ['/stop', '/model', '/clear', '/tree', '/settings', '/stats', '/fork'].filter((name) => !all.includes(name)), cli: all.filter((name) => ['/exit', '/always', '/instructions', '/compact', '/cancel'].includes(name)) })
+      expect({ web: ['/stop', '/model', '/clear', '/compact', '/tree', '/settings', '/stats', '/fork'].filter((name) => !all.includes(name)), cli: all.filter((name) => ['/exit', '/always', '/instructions', '/cancel'].includes(name)) })
         .toEqual({ web: [], cli: [] });
 
       // A word narrows the list, best first; the arrows move the highlight, and Enter runs it.
@@ -88,6 +88,14 @@ describe("a chat's slash commands", () => {
       await page.waitForSelector('[role="dialog"]');
       await page.keyboard.press('Escape');
       await page.waitForFunction(() => document.querySelector('[role="dialog"]') === null);
+
+      // The owner's compaction reaches main's chat, and says what it did.
+      await draft(page, '/compact');
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('[data-command-notice]');
+      expect(await flag(page, 'galleryCompacted')).toBe('folded');
+      await page.click('[data-command-notice] button[aria-label="Dismiss"]');
+      await page.waitForFunction(() => document.querySelector('[data-command-notice]') === null);
 
       // A command whose words it cannot use says so in the chat's notices, and sends nothing.
       await draft(page, '/effort sideways');

@@ -1066,7 +1066,7 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
                 drop: chatDrop,
                 onBranch: handleBranch,
                 commands: agentId === undefined ? undefined : (say) => workspaceCommands({
-                  workspace: agentId, say, clear: () => { setClearingMain(true); }, show, go: (path) => Effect.promise(async () => navigate(path)),
+                  workspace: agentId, say, clear: () => { setClearingMain(true); }, compact: async () => state.rpc("compactConversation", []), show, go: (path) => Effect.promise(async () => navigate(path)),
                   history: chat.readAll,
                   walkBack: setRevertFor,
                   rename: (name) => Effect.catchCause(Effect.asVoid(Effect.promise(async () => state.rpc("renameMainChat", [name]))),

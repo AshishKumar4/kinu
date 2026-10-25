@@ -3,7 +3,7 @@
  * surfaces beside it, and the settings it runs by. Each opens what the page already offers for it.
  */
 import { Cause, Effect } from "effect";
-import { APP_ROUTES, slashCommand, type ConversationMessage, type SurfaceKind } from "@kinu.run/core";
+import { APP_ROUTES, COMPACTED, slashCommand, type CompactOutcome, type ConversationMessage, type SurfaceKind } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import type { ComposerCommand } from "@/components/SlashMenu";
 import { settingsPath } from "@/components/SettingsRail";
@@ -15,13 +15,16 @@ export interface WorkspaceCommandHandles {
   readonly history: (() => Promise<readonly ConversationMessage[]>) | null;
   /** Asks to start a new conversation, as the chat's Clear does. */
   readonly clear: () => void;
+  /** Folds the conversation into a summary, or arms its provider to; refused while a turn runs. */
+  readonly compact: () => Promise<CompactOutcome>;
   /** Renames the chat's agent, as its tab's Rename does, saying why where it cannot. */
   readonly rename: (name: string) => Effect.Effect<void>;
   /** Asks to walk the chat back to just before message `id`, as its row's Revert does. */
   readonly walkBack: (id: string) => void;
   readonly show: (surface: SurfaceKind) => void;
   readonly go: (path: string) => Effect.Effect<void>;
-  readonly say: (words: string) => void;
+  /** Says what a command did, or why it did nothing (the default). */
+  readonly say: (words: string, tone?: "info") => void;
 }
 
 export function workspaceCommands(at: WorkspaceCommandHandles): ComposerCommand[] {
@@ -33,6 +36,13 @@ export function workspaceCommands(at: WorkspaceCommandHandles): ComposerCommand[
 
   return [
     { ...slashCommand("/clear"), run: () => Effect.sync(at.clear) },
+    {
+      ...slashCommand("/compact"),
+      run: () => Effect.matchCause(Effect.promise(at.compact), {
+        onSuccess: (outcome) => { at.say(COMPACTED[outcome], outcome === "nothing" ? undefined : "info"); },
+        onFailure: (failed) => { at.say(`Could not compact this conversation: ${renderThrownChain({ cause: Cause.squash(failed) })}`); },
+      }),
+    },
     { ...slashCommand("/rename", "/rename <name>"), run: at.rename },
     {
       ...slashCommand("/fork", "/fork [n]"),

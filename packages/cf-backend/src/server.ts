@@ -46,7 +46,7 @@ import { APP_FONTS_PATH, appFontFile, containPreviewResponse, hostOf, isPreviewH
 import { parseCliAgentConnectTicketUserId } from "./user/sessions";
 import { accountTheme, DEFAULT_THEME, ownerCaller, THEME_CONFIG_KEY, type ThemeName } from "@kinu.run/core";
 import { claimOwnedWorkspace } from "./user/workspace-ownership";
-import { ownedWorkspace } from "./api/workspace";
+import { addressedWorkspace, ownedWorkspace } from "./api/workspace";
 import { err } from "@kinu.run/core";
 import { controlPlaneAccess } from "./control-plane/admin-caller";
 import { CONTROL_PLANE_UI_ROUTE } from "./control-plane/access-gate";
@@ -420,7 +420,7 @@ worker.use('*', (c, next) => settle(Effect.gen(function* () {
 
   if (cliAgentTicket instanceof Response) return cliAgentTicket;
   // A CLI ticket is its own credential; the cross-site rule still holds over it.
-  const identity = cliAgentTicket === null ? yield* sessionGate(request, c.env) : (crossSiteRejection(request) ?? cliAgentTicket.identity);
+  const identity = cliAgentTicket === null ? yield* sessionGate(request, c.env, addressedWorkspace(request)) : (crossSiteRejection(request) ?? cliAgentTicket.identity);
 
   if (identity instanceof Response) return identity;
   const routed = cliAgentTicket?.request ?? request;
@@ -472,7 +472,7 @@ const workspacePage = async (c: Context<WorkerEnv>): Promise<Response> => {
 
   if (workspace !== undefined) {
     c.executionCtx.waitUntil(settleLogged('workspace.page_wake_failed', { doing: "waking a workspace for its page", otherwise: 'unavailable' },
-      async () => { await claimOwnedWorkspace(c.env, c.get('identity').userId, workspace); }));
+      async () => { await claimOwnedWorkspace(c.env, c.get('identity').userId, workspace, c.get('identity').workspace); }));
   }
 
   return await accountShell(c);

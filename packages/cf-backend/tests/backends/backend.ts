@@ -56,7 +56,7 @@ type SameCall =
   | 'getActivePlanReview' | 'savePlanReviewAnnotations' | 'decidePlanReview' | 'dismissPlanReview'
   | 'checkpointStatus' | 'listFileCheckpoints' | 'planFileRestore' | 'restoreFileCheckpoint'
   | 'listRefinements' | 'recordedTurns'
-  | 'revertConversation' | 'clearConversation' | 'branchTurn' | 'sendState' | 'awaitSend';
+  | 'revertConversation' | 'clearConversation' | 'compactConversation' | 'branchTurn' | 'sendState' | 'awaitSend';
 
 /** The cf signature, answered asynchronously: the CLI's synchronous answers are awaited the same way. */
 type Answer<K extends SameCall> = OrchestratorAgent[K] extends (...args: infer A) => infer R
@@ -239,6 +239,7 @@ async function cloudflare(opens: BackendOpening): Promise<SharedBackend> {
       requestRefinement: (opts) => agent.requestRefinement(opts),
       revertConversation: (entryId) => agent.revertConversation(entryId),
       clearConversation: () => agent.clearConversation(),
+      compactConversation: () => agent.compactConversation(),
       send: (text, id) => sentTurn(agent, text, id ?? crypto.randomUUID()),
       sendState: (id) => agent.sendState(id),
       awaitSend: (id) => agent.awaitSend(id),
@@ -393,6 +394,7 @@ async function cli(opens: BackendOpening): Promise<SharedBackend> {
       revertConversation: (entryId) => session.revertConversation(entryId),
       // The clear's answer is the emptied request's measure, which cf records instead of returning.
       clearConversation: async () => { await session.clearConversation(); },
+      compactConversation: () => session.compact(),
       send: async (text, id) => { await session.send(text, { id: id ?? crypto.randomUUID() }); },
       sendState: async (id) => session.sendState(id),
       awaitSend: (id) => session.awaitSend(id),

@@ -15,7 +15,7 @@ import {
 import * as v from 'valibot';
 import { StepPacer } from './step-pacer';
 import { openAgentDatabase, repairAgentDatabase, type AgentDatabase } from './agent-database';
-import { censusOf, type ChatWindow, type MediaRef, type Repair, type RewindTold, type StoreCensus, type StoredImage } from '@kinu.run/core';
+import { censusOf, type ChatWindow, type CompactOutcome, type MediaRef, type Repair, type RewindTold, type StoreCensus, type StoredImage } from '@kinu.run/core';
 import { createAgentProviderRegistry, type AgentProviderDeps, type AgentProviderRegistry } from '../providers/agent-registry';
 import { FacetChat } from './agent-chat';
 import { workspaceClient, type AgentWorkspaceCalls } from './workspace-rpc';
@@ -67,6 +67,8 @@ export interface AgentFacetCalls {
   revertTo(snapshot: AgentSnapshot, entryId: string, told?: RewindTold): Promise<void>;
   /** The owner's Clear; answers why the emptied request went unmeasured, if it did. */
   clearConversation(snapshot: AgentSnapshot): Promise<string | null>;
+  /** The owner's compaction: the chat folded into a summary, or its provider armed to fold it; refused while a turn runs. */
+  compact(snapshot: AgentSnapshot): Promise<CompactOutcome>;
   owed(snapshot: AgentSnapshot): Promise<boolean>;
   /** Its own turns and effects still owed, as the workspace's work read reports them. */
   owedWork(snapshot: AgentSnapshot): Promise<readonly InspectedWork[]>;
@@ -334,6 +336,10 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async clearConversation(snapshot: AgentSnapshot): Promise<string | null> {
     return await settle(this.withChat(snapshot, async (chat) => (await chat.clear())?.message ?? null));
+  }
+
+  async compact(snapshot: AgentSnapshot): Promise<CompactOutcome> {
+    return await settle(this.withChat(snapshot, async (chat) => chat.session.compact()));
   }
 
   async activePlanReview(snapshot: AgentSnapshot): Promise<PlanReview | null> {

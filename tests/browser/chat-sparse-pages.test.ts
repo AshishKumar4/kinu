@@ -127,6 +127,27 @@ async function liveWindow(page: Page, detail: { rows: number[]; edited?: number;
   await paint(page);
 }
 
+test('a chat the room seeds empty, with nothing before it, says so at once and reads no page; with rows before, it reads them', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await page.setViewport({ width: 1280, height: 860 });
+    await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+    await page.waitForFunction((selector) => document.querySelector(selector)?.textContent?.includes('Send the first message to start.'), {}, CHAT);
+    await paint(page);
+    expect(await asks(page)).toBe(0);
+    await page.close();
+
+    // An empty window whose stored rows come before it: what it says is where to read from, never that the chat is empty.
+    const stored = await newPage();
+    await stored.setViewport({ width: 1280, height: 860 });
+    await stored.goto(`${origin}/gallery.html?frame=workspacepage&history=400`, { waitUntil: 'networkidle0' });
+    await stored.waitForFunction((selector) => document.querySelector(selector)?.textContent?.includes('Answer 399.'), {}, CHAT);
+    expect(await stored.$eval(CHAT, (el) => el.textContent ?? '')).not.toContain('Send the first message to start.');
+    expect(await asks(stored)).toBe(1);
+    await stored.close();
+  });
+});
+
 test('the live window slides without losing or repeating a row, pages older rows only at the top, and a clear empties both', async () => {
   await withGallery(async ({ newPage, origin }) => {
     const page = await newPage();

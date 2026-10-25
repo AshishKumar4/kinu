@@ -924,6 +924,7 @@ export function facetCallsThrough(isolate: AgentFacetCalls, through: <A>(call: (
     modelSettingsChanged: (...args) => settle(through(() => isolate.modelSettingsChanged(...args))),
     revertTo: (...args) => settle(through(() => isolate.revertTo(...args))),
     clearConversation: (...args) => settle(through(() => isolate.clearConversation(...args))),
+    compact: (...args) => settle(through(() => isolate.compact(...args))),
     owed: (...args) => settle(through(() => isolate.owed(...args))),
     owedWork: (...args) => settle(through(() => isolate.owedWork(...args))),
     answerTexts: (...args) => settle(through(() => isolate.answerTexts(...args))),

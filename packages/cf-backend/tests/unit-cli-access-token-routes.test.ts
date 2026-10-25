@@ -125,6 +125,9 @@ function setupEnv(opts: { sessionMintedAt?: number } = {}) {
     async hasWorkspace(_caller: UserCaller, name: string) {
       return name === 'jarvis';
     },
+    async workspaceAdmission(_caller: UserCaller, name: string) {
+      return name === 'jarvis' ? { capabilityHash: null } : null;
+    },
     async ensureWorkspaceCapability() {},
     async issueCliAgentConnectTicket(_caller: UserCaller, input: { cliTokenHash: string }) {
       calls.push(`connect-ticket:${input.cliTokenHash}`);

@@ -41,10 +41,10 @@ export interface ChatThread {
 
 const NO_IDS: ReadonlySet<string> = new Set();
 
-/** Where a window the room sent reads on from: `from` is its first row, `older` the cursor of the rows before it, null
- *  when it reaches the chat's start. */
+/** Where a window the room sent reads on from: `from` is its first row (null: the window is empty), `older` the cursor of
+ *  the rows before it, null when it reaches the chat's start. */
 export interface SeedEdge {
-  readonly from: string;
+  readonly from: string | null;
   readonly older: PositionCursor | null;
 }
 
@@ -128,21 +128,23 @@ export function useChatThread({
   // Each window's start, kept: the rows shown first may be an earlier window's, slid up as newer ones came.
   const edges = useRef(new Map<string, PositionCursor | null>());
 
-  if (seedEdge !== null) edges.current.set(seedEdge.from, seedEdge.older);
-  // Undefined while the window shown first has not said where it starts.
-  const older = live.length === 0 ? undefined : edges.current.get(live[0]?.id ?? "");
+  if (seedEdge !== null && seedEdge.from !== null) edges.current.set(seedEdge.from, seedEdge.older);
+  // Undefined while the window shown first has not said where it starts. No rows shown start where the room's newest
+  // window, empty too, said it does.
+  const emptyStart = seedEdge?.from === null ? seedEdge.older : undefined;
+  const older = live.length === 0 ? emptyStart : edges.current.get(live[0]?.id ?? "");
   const liveStart = older === undefined ? undefined : older?.before ?? 0;
 
   const startable = actor !== null && (live.length > 0 || seeded);
   const liveEdge = liveGap(segments, total, live.length, liveStart)?.end;
 
-  // The first page back: from where the rows shown begin. With none shown it is the newest; with rows whose start is not
-  // said yet, it waits for it; with rows that reach the chat's start, there is none.
+  // The first page back: from where the rows shown begin. With none shown and no start said it is the newest; with rows
+  // whose start is not said yet, it waits for it; with rows, or none, that reach the chat's start, there is none.
   const readNewest = useCallback((urgent: boolean) => {
     const size = Math.min(MAX_PAGE, sizeFor(urgent));
 
-    if (live.length === 0) load(size, { limit: size });
-    else if (older !== undefined && older !== null) load(size, { cursor: older, limit: size });
+    if (older !== undefined && older !== null) load(size, { cursor: older, limit: size });
+    else if (older === undefined && live.length === 0) load(size, { limit: size });
   }, [load, sizeFor, live.length, older]);
 
   const loadMore = useCallback((urgent = false) => {

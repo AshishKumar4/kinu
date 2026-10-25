@@ -84,6 +84,9 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
     async hasWorkspace(_caller: UserCaller, name: string) {
       return name === 'jarvis';
     },
+    async workspaceAdmission(_caller: UserCaller, name: string) {
+      return name === 'jarvis' ? { capabilityHash: null } : null;
+    },
     async ensureWorkspaceCapability() {},
     async requestWorkspaceRemoval(_caller: UserCaller, name: string, ownerUserId: string) {
       calls.push(`workspace:remove:${name}:${ownerUserId}`);
@@ -218,6 +221,7 @@ function tokenHolderUserDO(): ObjectNamespace<string, CliRoutesAuthority> {
       return { ok: token === TOKEN, tokenHash: 'hash', user: { id: USER_ID, email: 'a@example.com', displayName: null } };
     },
     async hasWorkspace(_caller: UserCaller) { return true; },
+    async workspaceAdmission(_caller: UserCaller) { return { capabilityHash: null }; },
     async ensureWorkspaceCapability() {},
   });
 

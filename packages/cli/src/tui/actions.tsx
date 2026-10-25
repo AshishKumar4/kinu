@@ -1,7 +1,6 @@
 import { createContext, useContext, type ReactNode } from 'react';
 import { Effect } from 'effect';
 import { settleSync } from '@kinu.run/core/obs';
-import { TUI_ADVERTISED_PRESET_BINDINGS } from '@kinu.run/core/tui';
 
 export const KEYMAP_PRESET_IDS = ['pi-omp', 'kinu', 'opencode'] as const;
 
@@ -162,10 +161,10 @@ const PRESET_BINDINGS = {
     'effort.cycle': ['shift+tab'],
     'tier.cycle': ['ctrl+p'],
     'tier.cycle-reverse': ['shift+ctrl+p'],
-    'tier.quick': [TUI_ADVERTISED_PRESET_BINDINGS['tier.quick']],
-    'palette.toggle': [TUI_ADVERTISED_PRESET_BINDINGS['palette.toggle']],
-    'workspace.toggle': [TUI_ADVERTISED_PRESET_BINDINGS['workspace.toggle']],
-    'hub.agents': [TUI_ADVERTISED_PRESET_BINDINGS['hub.agents']],
+    'tier.quick': ['alt+p'],
+    'palette.toggle': ['ctrl+k'],
+    'workspace.toggle': ['alt+w'],
+    'hub.agents': ['alt+a'],
     'tool.toggle': ['ctrl+o'],
     'conversation.branch': ['alt+b'],
     'queue.add': ['alt+return'],

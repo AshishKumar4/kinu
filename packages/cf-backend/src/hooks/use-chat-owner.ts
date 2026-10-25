@@ -555,9 +555,8 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
     if (msg.type === "cf_agent_chat_messages") {
       setTranscriptSeeded(true);
       setStored(new Set(msg.messages?.map((message) => message.id)));
-      const from = msg.messages?.[0]?.id;
 
-      if (from !== undefined && msg.older !== undefined) setSeedEdge({ from, older: msg.older });
+      if (msg.older !== undefined) setSeedEdge({ from: msg.messages?.[0]?.id ?? null, older: msg.older });
     } else if (msg.type === "model_fallback") {
       setModelFallbacks((prev) => [...prev, msg.message]);
     } else if (msg.type === "steer_status") {

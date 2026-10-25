@@ -54,7 +54,7 @@ import {
 import { UserCredentials, type CheckpointedCredential, type CredentialEndpoint, type CodexStatus } from './credentials';
 import { UserSecrets } from './secrets';
 import { GitHubHooks, type GitHubHookAsk } from './github-hooks';
-import { UserWorkspaces, type WorkspaceRegistration, type WorkspaceRegistrationSource } from './workspaces';
+import { UserWorkspaces, type WorkspaceAdmission, type WorkspaceRegistration, type WorkspaceRegistrationSource } from './workspaces';
 import { UserProfileStore, type ProfileCatalogWriteResult } from './profile';
 import { accountSlateAi, addSlateAiSpend, slateAiSpendOf } from './slate-ai-account';
 import {
@@ -88,6 +88,11 @@ function isTextWebSocketMessage(
 export interface AccountSettingsRevision {
   readonly catalog: number;
   readonly credentials: number;
+}
+
+/** A live session; a check that named a workspace carries its admission too, null where the registry holds it not. */
+export interface AdmittedBrowserSession extends LiveBrowserSession {
+  readonly admission?: WorkspaceAdmission | null;
 }
 
 /** When the account was deleted: the one thing its object keeps after, until a sign-in makes it an account again. */
@@ -580,6 +585,10 @@ export class UserDO extends Agent<Env> {
     return this.workspaces.hasWorkspace(caller, name);
   }
 
+  workspaceAdmission(caller: UserCaller, name: string): Promise<WorkspaceAdmission | null> {
+    return this.workspaces.workspaceAdmission(caller, name);
+  }
+
   listCredentials(caller: UserCaller): Promise<CredentialSummary[]> {
     return this.credentials.listCredentials(caller);
   }
@@ -795,8 +804,13 @@ export class UserDO extends Agent<Env> {
     return this.sessions.registerBrowserSession(caller, tokenHash, expiresAt, identity);
   }
 
-  verifyBrowserSession(caller: UserCaller, tokenHash: string): Promise<LiveBrowserSession | null> {
-    return this.sessions.verifyBrowserSession(caller, tokenHash);
+  /** The cookie's session, and with it, when the request names a workspace, its admission: one read for both. */
+  async verifyBrowserSession(caller: UserCaller, tokenHash: string, workspace?: string): Promise<AdmittedBrowserSession | null> {
+    const live = await this.sessions.verifyBrowserSession(caller, tokenHash);
+
+    if (live === null || workspace === undefined) return live;
+
+    return { ...live, admission: await this.workspaces.workspaceAdmission(caller, workspace) };
   }
 
   builtinHasOwner(caller: UserCaller): Promise<boolean> {

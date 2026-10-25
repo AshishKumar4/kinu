@@ -194,6 +194,9 @@ self-host as of 2026-09-13; it depends on model use, storage and containers.
 - Measure evolution's lift on the sealed bench and publish the number.
 - Close the container storage decision with a full live acceptance on deployed Containers ([docs/DEVBOX-DECISIONS.md](docs/DEVBOX-DECISIONS.md), O1).
 - Seed the hosted runtime catalog so a fresh self-host gets Python without a manual step.
+- Scrub secrets from every memory write at one point. Today a note, a fact or a sleep-time write keeps a secret said in chat as it was said.
+- Give each turn the memories that match what it asks, within a token budget, marked where they may be stale and kept out of the transcript. Today every turn gets the workspace's newest 20 facts, whatever it asks.
+- Hand the agent an oversized tool result as a handle it can search and extract from. Today the result is cut to its head and tail, and the rest waits in a file.
 
 ## Architecture
 

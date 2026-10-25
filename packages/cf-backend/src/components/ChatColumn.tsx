@@ -54,9 +54,9 @@ interface ChatColumnExtras {
   readonly opening?: true;
   /** Floats over the transcript's end above the composer, and moves nothing: what works out of sight (1024-l). */
   readonly float?: ReactNode;
-  /** The workspace's own slash commands, after the ones every chat runs (`chatCommands`); `say` tells why one did
-   *  nothing, in the column's notices. */
-  readonly commands?: (say: (words: string) => void) => readonly ComposerCommand[];
+  /** The workspace's own slash commands, after the ones every chat runs (`chatCommands`); `say` tells what one did, or
+   *  why it did nothing, in the column's notices. */
+  readonly commands?: (say: (words: string, tone?: "info") => void) => readonly ComposerCommand[];
 }
 
 export function EmptyConversation({ mission }: { mission: string }) {

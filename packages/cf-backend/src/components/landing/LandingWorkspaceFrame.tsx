@@ -1,4 +1,4 @@
-/** Product components fed fixture state; loaded lazily so the landing first paint skips the workspace renderers. */
+/** The landing walkthrough: product components fed fixture state, loaded lazily so the landing first paint skips the workspace renderers. */
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { flushSync } from 'react-dom';
 import { MemoryRouter } from 'react-router-dom';
@@ -6,6 +6,7 @@ import type { UIMessage } from 'ai';
 import { threadLiveTail, type AgentStatus, type PlanReview } from '@kinu.run/core';
 
 import { Composer } from '@/components/Composer';
+import { DESKTOP_QUERY, useMediaQuery } from '@/hooks/use-media-query';
 import type { WorkMode } from '@kinu.run/core';
 import { ChatLiveTail, MessageView } from '@/components/MessageView';
 import { ModelPicker } from '@/components/ModelPicker';
@@ -13,23 +14,21 @@ import { PreviewAddress } from '@/components/PreviewFrame';
 import { SidebarRail } from '@/components/SidebarRail';
 import { WorkspaceHeader } from '@/components/WorkspaceHeader';
 import { WorkSurface } from '@/components/surfaces/WorkSurface';
-import { InspectorToggle, WorkbenchPanels, type InspectorControl } from '@/components/WorkbenchPanels';
-import { SLATE_PREFIX, type SurfaceKind } from '@kinu.run/core';
+import { InspectorToggle, WorkbenchPanels, type InspectorControl, type WorkbenchHandle } from '@/components/WorkbenchPanels';
+import type { SurfaceKind } from '@kinu.run/core';
 import { AccountProvider } from '@/hooks/use-account';
 import { usePlanApprovedMode } from '@/hooks/use-conversation-ui-state';
 import { WorkspaceRosterProvider } from '@/hooks/use-workspace-roster';
 import type { ForkNode } from '@kinu.run/core';
 
 import {
-  WORKER_MESSAGES, LANDING_AGENT, LANDING_CHATS, LANDING_EXECUTORS, LANDING_MEMORY, LANDING_MEMORY_FILE, LANDING_TERMINALS, LANDING_MODEL, LANDING_MODELS, LANDING_TAB_PRESENCE, LANDING_WORKSPACE,
-  SLATE_MESSAGES, SLATE_PREVIEW_URL, SLATE_SUMMARY,
-  workerWorkFixture, planRpc,
+  LANDING_AGENT, LANDING_CHATS, LANDING_EXECUTORS, LANDING_MEMORY, LANDING_MEMORY_FILE, LANDING_TERMINALS, LANDING_MODEL, LANDING_MODELS, LANDING_TAB_PRESENCE, LANDING_WORKSPACE,
+  LANDING_PLAN, SLATE_PREVIEW_URL, planRpc,
 } from './landing-fixtures';
 import { MOVIE_CUES, MOVIE_END, type LandingMovieHandle } from '@kinu.run/core';
 import {
   CURSOR_ENTER_AT,
   composerTextAt, cueCountAt, cursorAt, discreteAt,
-  MOVIE_PLAN,
   type MovieTarget,
 } from './landing-movie-timeline';
 import { SlateDashboard } from './SlateDashboard';
@@ -51,28 +50,14 @@ function useCountedReads(rpc: WorkspaceRpc): readonly [WorkspaceRpc, number] {
   return [counted, pending];
 }
 
-export type LandingFrameKind = 'work' | 'plan' | 'slate';
-
 const EMPTY_TREES: ReadonlyMap<string, ForkNode> = new Map();
 
 const NO_HEAD_ACTIVITY: ReadonlyMap<string, number> = new Map();
 
-interface FrameSpec {
-  readonly title: string;
-  readonly surface: SurfaceKind;
-  readonly mode: WorkMode;
-}
+const TITLE = 'API Worker';
 
-const FRAME = {
-  work: { title: 'API Worker', surface: 'Work', mode: 'build' },
-  plan: { title: 'API Worker', surface: 'Work', mode: 'plan' },
-  slate: { title: 'Support queue', surface: `${SLATE_PREFIX}${SLATE_SUMMARY.id}`, mode: 'build' },
-} satisfies Record<LandingFrameKind, FrameSpec>;
-
-const STATIC_MESSAGES = {
-  work: WORKER_MESSAGES,
-  slate: SLATE_MESSAGES,
-} as const;
+/** Share of the frame on screen that starts the story: in the hero, the first view already shows that much. */
+const START_RATIO = 0.15;
 
 function SlateBody(): ReactElement {
   return (
@@ -106,11 +91,10 @@ const Transcript = memo(function Transcript(
   );
 });
 
-export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind }): ReactElement {
-  const frame = FRAME[kind];
-  const isMovie = kind === 'plan';
+export default function LandingWorkspaceFrame(): ReactElement {
   const [reduced] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
-  const tRef = useRef(reduced && isMovie ? MOVIE_END : 0);
+  const desktop = useMediaQuery(DESKTOP_QUERY);
+  const tRef = useRef(reduced ? MOVIE_END : 0);
   const cueRef = useRef(cueCountAt(tRef.current));
   const [cueCount, setCueCount] = useState(cueRef.current);
   const [playing, setPlaying] = useState(false);
@@ -124,14 +108,12 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
   const pressedRef = useRef<HTMLElement | null>(null);
 
   const discrete = useMemo(() => discreteAt(tRef.current), [cueCount]);
-  const messages = kind === 'plan' ? discrete.messages : STATIC_MESSAGES[kind];
-  const streaming = isMovie && discrete.streaming;
+  const { messages, streaming } = discrete;
+  const workbenchRef = useRef<WorkbenchHandle | null>(null);
 
   const [inspectorControl, setInspectorControl] = useState<InspectorControl | null>(null);
 
-  const [surface, setSurface] = useState<SurfaceKind>(
-    reduced && isMovie ? discreteAt(MOVIE_END).surface : frame.surface,
-  );
+  const [surface, setSurface] = useState<SurfaceKind>(discrete.surface);
 
   const [draft, setDraft] = useState('');
   const [model, setModel] = useState(LANDING_MODEL);
@@ -139,32 +121,28 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
   // The movie's decision flows through the real `decidePlanReview` rpc; the decided plan then
   // overrides the timeline's pending one.
   const [decided, setDecided] = useState<PlanReview | null>(() => (
-    reduced && isMovie
-      ? { ...MOVIE_PLAN, status: 'approved', feedback: null, handoffAccepted: true, updatedAt: Date.now() }
+    reduced
+      ? { ...LANDING_PLAN, status: 'approved', feedback: null, handoffAccepted: true, updatedAt: Date.now() }
       : null
   ));
 
   // The rpc serves this same plan, so a workspace with no submitted plan answers [].
-  const plan = isMovie ? (decided ?? discrete.plan) : null;
+  const plan = decided ?? discrete.plan;
   const decidePlan = useMemo(() => planRpc(setDecided, plan), [plan]);
-  const [, setWorkVersion] = useState(0);
-  const work = useMemo(() => workerWorkFixture(() => setWorkVersion((version) => version + 1)), []);
-  const [rpc, readsPending] = useCountedReads(kind === 'plan' ? decidePlan : work.rpc);
-  const [mode, setMode] = useState<WorkMode>(frame.mode);
+  const [rpc, readsPending] = useCountedReads(decidePlan);
+  const [mode, setMode] = useState<WorkMode>('plan');
   usePlanApprovedMode(plan, setMode);
   useEffect(() => {
-    if (isMovie) setSurface(discrete.surface);
-  }, [isMovie, discrete.surface]);
+    setSurface(discrete.surface);
+  }, [discrete.surface]);
+  // A phone shows one pane: the story's beat picks it, as the toggle would.
+  useEffect(() => {
+    if (desktop) return;
+
+    if (discrete.phonePane === 'workspace') workbenchRef.current?.reveal();
+    else workbenchRef.current?.showChat();
+  }, [desktop, discrete.phonePane]);
   const onSurface = useCallback((next: SurfaceKind) => setSurface(next), []);
-
-  const slates = useMemo(
-    () => {
-      if (isMovie) return discrete.slates;
-
-      return kind === 'slate' ? [SLATE_SUMMARY] : [];
-    },
-    [isMovie, discrete.slates, kind],
-  );
 
   const slateBody = useCallback(() => <SlateBody />, []);
   const transcript = useRef<HTMLDivElement>(null);
@@ -222,7 +200,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
   const syncFrame = (): void => {
     const stage = stageRef.current;
 
-    if (stage === null || !isMovie) return;
+    if (stage === null) return;
     const t = tRef.current;
     stage.dataset.movieT = String(Math.round(t));
     const cursor = cursorAt(t);
@@ -295,7 +273,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
   };
 
   useEffect(() => {
-    if (!isMovie || reduced || !playing) return;
+    if (reduced || !playing) return;
     let raf = 0;
     let last = performance.now();
 
@@ -337,7 +315,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
     raf = requestAnimationFrame(step);
 
     return () => cancelAnimationFrame(raf);
-  }, [isMovie, reduced, playing]);
+  }, [reduced, playing]);
 
   useLayoutEffect(() => {
     syncFrame();
@@ -345,7 +323,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
 
   // Plays once when visible; scrolling away and back never restarts it.
   useEffect(() => {
-    if (!isMovie || reduced) return;
+    if (reduced) return;
     const stage = stageRef.current;
 
     if (stage === null) return;
@@ -354,7 +332,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
       if (startedRef.current) return;
 
       for (const entry of entries) {
-        if (entry.intersectionRatio >= 0.3) {
+        if (entry.intersectionRatio >= START_RATIO) {
           startedRef.current = true;
           setPlaying(true);
           observer.disconnect();
@@ -362,16 +340,14 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
           return;
         }
       }
-    }, { threshold: [0.3] });
+    }, { threshold: [START_RATIO] });
 
     observer.observe(stage);
 
     return () => observer.disconnect();
-  }, [isMovie, reduced]);
+  }, [reduced]);
 
   useEffect(() => {
-    if (!isMovie) return;
-
     const nextFrame = (): Promise<void> => {
       const { promise, resolve } = Promise.withResolvers<void>();
       requestAnimationFrame(() => resolve());
@@ -477,29 +453,28 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
       <WorkspaceRosterProvider live={null}>
       <div
         ref={stageRef}
-        data-landing-frame={kind}
+        data-landing-frame="walkthrough"
         data-reads-pending={readsPending}
-        {...(isMovie
-          ? { 'data-movie-phase': discrete.phase, 'data-movie-settled': discrete.settled ? 'true' : 'false' }
-          : {})}
-        aria-label={kind === 'work' ? 'Kinu workspace interface preview' : `Kinu ${kind} interface preview`}
+        data-movie-phase={discrete.phase}
+        data-movie-settled={discrete.settled ? 'true' : 'false'}
+        aria-label="Kinu workspace interface preview"
         className="p-workbench relative flex flex-col overflow-hidden rounded-b-2xl border p-border p-bg p-text text-left shadow-[0_40px_110px_-50px_rgba(0,0,0,.95)] md:flex-row"
       >
         {/* Below md the app summons a drawer from its header; the frame has no header, so no rail there. */}
         <SidebarRail folded={false} />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <WorkspaceHeader
-          workspace={{ name: LANDING_WORKSPACE, title: frame.title, to: `/workspace/${LANDING_WORKSPACE}`, editValue: frame.title, rename: async () => {}, remove: () => {} }}
+          workspace={{ name: LANDING_WORKSPACE, title: TITLE, to: `/workspace/${LANDING_WORKSPACE}`, editValue: TITLE, rename: async () => {}, remove: () => {} }}
           chats={LANDING_CHATS.map((agent) => ({ agent, to: `/workspace/${LANDING_WORKSPACE}`, rename: async () => {} }))}
           active="main"
           newChat={`/workspace/${LANDING_WORKSPACE}`}
           trailing={inspectorControl && <InspectorToggle control={inspectorControl} />}
         />
-          <div data-workspace-panel="run" className="flex h-[620px] min-h-0 flex-col md:h-[760px]">
+          <div data-workspace-panel="run" className="flex h-[620px] min-h-0 flex-col md:h-[680px]">
             <WorkbenchPanels
-              scope={kind}
+              ref={workbenchRef}
               workspace={undefined}
-              contents={{ pendingActions: isMovie ? [] : work.pending(), pendingConsents: [], activePlan: plan, ownerQuestions: [] }}
+              contents={{ pendingActions: [], pendingConsents: [], activePlan: plan, ownerQuestions: [] }}
               onInspector={setInspectorControl}
               chat={() => <>
                 <div className="@container flex min-h-0 flex-1 flex-col">
@@ -529,11 +504,11 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
                   pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}}
                   plan={plan} planRpc={rpc}
                   snapshot={LANDING_SNAPSHOT} onRetryLoad={() => {}} memory={LANDING_MEMORY} memoryContent={LANDING_MEMORY_FILE} onSearchMemory={() => {}}
-                  mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={isMovie ? streaming : kind === 'work'}
+                  mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={streaming}
                   executors={LANDING_EXECUTORS} executorOutputs={new Map()} onExecute={async () => ({})}
-                  backgroundJobs={isMovie ? [] : work.jobs()} inspectedWork={[]} onRefreshJobs={() => setWorkVersion((version) => version + 1)}
-                  pendingActions={isMovie ? [] : work.pending()}
-                  slates={slates} slateBody={slateBody}
+                  backgroundJobs={[]} inspectedWork={[]} onRefreshJobs={() => {}}
+                  pendingActions={[]}
+                  slates={discrete.slates} slateBody={slateBody}
                   tabPresence={LANDING_TAB_PRESENCE}
                   rpc={rpc}
                 />
@@ -542,7 +517,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
             />
           </div>
         </div>
-        {isMovie && !reduced && (
+        {!reduced && (
           <div aria-hidden className="pointer-events-none absolute inset-0 z-30">
             <div
               ref={rippleRef}

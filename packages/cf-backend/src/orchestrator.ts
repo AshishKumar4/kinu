@@ -164,7 +164,7 @@ import {
   STEER_BRANCH_RUN_ID_PREFIX,
   type PendingBranch, type BranchStatusEvent,
   readWorkspaceWork, hasWorkspaceWork, WORK_TAB_JOBS, type WorkspaceWork, inspectWork, type InspectedWork, addressedBlock, type EphemeralSlateAddress,
-  measuredAt, readWorkspaceAgents, recordAgentFigures, reportedAgentFigures, type AgentFigures, type AgentAnswer, type ConversationTurnPair, type PanelAgent, type AgentConfigStore, type AskingAgent,
+  measuredAt, readWorkspaceAgents, recordAgentFigures, reportedAgentFigures, type AgentFigures, type AgentAnswer, type CompactOutcome, type ConversationTurnPair, type PanelAgent, type AgentConfigStore, type AskingAgent,
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, turnTags,
   missionOf, summarizeSoul, workspaceGenesisSignal, isPlaceholderMission, drawWorkspaceLogo,
@@ -3320,6 +3320,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return await this.mainCall((isolate, snapshot) => isolate.clearConversation(snapshot));
   }
 
+  protected override async compactMainConversation(): Promise<CompactOutcome> {
+    return await this.mainCall((isolate, snapshot) => isolate.compact(snapshot));
+  }
+
   /**
    * One Stop for every agent (design v3 C): what it is owed and its open run are cancelled in one workspace commit, its
    * port refuses the turn from here, then its isolate's cutoff hands its unread words back to their composer and cancels
@@ -4963,14 +4967,19 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   async getAgentStatus() {
     return settle(Effect.gen({ self: this }, function* () {
-      // A workspace not yet holding its capability cannot read the catalog; it reports only its pins.
-      const profile = yield* attempt({ doing: 'resolving the profile the next turn runs on', otherwise: 'unavailable' }, () => this.currentProfile()).pipe(
-        Effect.catch((failure) => Effect.sync(() => {
-          diagnostics.failure('actor.status_profile_unresolved', failure);
+      // Read at once, none waiting on another. Main's conversation and its measure are its own isolate's.
+      const [profile, displayName, standing] = yield* Effect.all([
+        // A workspace not yet holding its capability cannot read the catalog; it reports only its pins.
+        attempt({ doing: 'resolving the profile the next turn runs on', otherwise: 'unavailable' }, () => this.currentProfile()).pipe(
+          Effect.catch((failure) => Effect.sync(() => {
+            diagnostics.failure('actor.status_profile_unresolved', failure);
 
-          return null;
-        })),
-      );
+            return null;
+          })),
+        ),
+        Effect.promise(async () => await this.workspaceTitle()),
+        Effect.promise(async () => await this.mainStanding({ fresh: true })),
+      ], { concurrency: 'unbounded' });
 
       const status = yield* Effect.promise(async () => getAgentStatus({
         sql: this.boundSql,
@@ -4979,12 +4988,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         model: this.effectiveModelSpec(),
         reasoningEffort: profile?.tier.reasoningEffort ?? this.config.getReasoningEffort(),
         name: this.name,
-        displayName: await this.workspaceTitle() ?? '',
+        displayName: displayName ?? '',
         layout: this.config.getLayout(),
       }));
-
-      // Main's conversation and its measure are its own isolate's.
-      const standing = yield* Effect.promise(async () => await this.mainStanding({ fresh: true }));
 
       return {
         ...status,
