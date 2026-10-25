@@ -2004,7 +2004,11 @@ export class ChatSession {
 
     const end = classifyRunEnd(facts);
 
-    const finalText = execution.claim === null ? execution.finalTextReference
+    // A turn that said nothing carries a summary of its tool output as `fullText`, for its machine readers only: the
+    // transcript draws only words the model said, its selected answer or a text part it streamed.
+    const said = execution.answer !== null || execution.finalTextReference !== null;
+
+    const finalText = execution.claim === null || !said ? execution.finalTextReference
       : await this.actorSession.recordTranscriptText(execution.claim, 'answer', fullText, execution.outputReferences);
 
     // A failed turn re-queues what it absorbed (`Inbox.settle`), so only a turn without error keeps its splices.

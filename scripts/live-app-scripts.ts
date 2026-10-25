@@ -206,6 +206,24 @@ export function phasedFirstTurn(request: ScriptedRequest, phase: HeldCall): Scri
   return { text: PHASED_TURN_ANSWER, pace: { firstTokenMs: 0, lead: '', leadMs: 0, hold: phase.hold(), reasoning: PHASED_THOUGHT } };
 }
 
+/* ── A turn that ends without a word ───────────────────────────────────── */
+
+/** A workspace made with this mission takes its first turn in silence, as a timer turn told to end without a message
+ *  does when nothing needs the owner: two programs, then an end with no text. */
+export const SILENT_TURN_MISSION = 'Take the first turn in silence: run two programs, then end without a message.';
+
+/** The silent turn: two `eval` programs, then a model call held until its row releases it, which ends the turn with no
+ *  text. Null for any other request, a titling call's among them. */
+export function silentFirstTurn(request: ScriptedRequest, end: HeldCall): ScriptedAnswer | null {
+  if (!request.system.includes(SILENT_TURN_MISSION) || !request.available.includes('eval')) return null;
+
+  const ran = request.askTurn.filter((call) => call.name === 'eval').length;
+
+  if (ran < 2) return { toolCall: { name: 'eval', arguments: { code: `// Check the inbox\nreturn { checked: ${String(ran + 1)} };` } } };
+
+  return { pace: { firstTokenMs: 0, lead: '', leadMs: 0, hold: end.hold() } };
+}
+
 /* ── The reconnect turn ───────────────────────────────────────────────── */
 
 /** The words that ask for the reconnect turn: one per row, since each row's turn waits on a call of its own. */
