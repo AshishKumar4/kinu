@@ -124,6 +124,8 @@ kinu provider connect openrouter
 
 Sign in to your Kinu account, or list its CLI sessions with `sessions` and end them with `revoke`.
 
+Also: `kinu login`
+
 | Option | What it does |
 | --- | --- |
 | `--origin <url>` | Kinu app origin |

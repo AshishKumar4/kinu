@@ -262,8 +262,14 @@ export function whoami(origin: string, token: string): Promise<{ user: { id: str
   return settle(cloudJson(WhoamiSchema, origin, '/api/cli/me', { token }));
 }
 
-export function logout(origin: string, token: string): Promise<{ ok: boolean }> {
-  return settle(cloudJson(OkSchema, origin, '/api/cli/logout', { method: 'POST', token }));
+/** Ends the session `token` holds. A 401 is the server's word that it holds no live session for the token (revoked,
+ *  expired, or gone with a reset of its store): nothing is left to revoke, so that ends it too. */
+export function logout(origin: string, token: string): Promise<void> {
+  return settle(Effect.gen(function* () {
+    const { status, body } = yield* Effect.promise(async () => cloudRequest(origin, '/api/cli/logout', { method: 'POST', token }));
+
+    if (status !== 401) yield* assertCloudOk(status, body);
+  }));
 }
 
 const CloudCliSessionSchema = v.object({

@@ -5,7 +5,7 @@ import {
   defaultOrigin, listCliSessions, logout, pollCliAuth, revokeCliSessionByHash, revokeAllCliSessions, startCliAuth, whoami,
   type CliAuthPoll,
 } from '../cloud-api';
-import { bumpProviderRevision, loadConfigFile, requireAuthConfig, updateConfigFile } from '../config';
+import { bumpProviderRevision, loadConfigFile, requireAuthConfig, storedSessionOrigin, updateConfigFile } from '../config';
 import { ACCENT, DIM, formatWhen, OK, WARN } from '../display';
 import { KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
 import { waitForAnswer } from '@kinu.run/core';
@@ -83,8 +83,14 @@ export function whoamiCommand(opts: { origin?: string }): Promise<void> {
 export function logoutCommand(opts: { origin?: string }): Promise<void> {
   return settle(Effect.gen(function* () {
     const config = loadConfigFile();
-    const origin = defaultOrigin(opts);
+    // The stored token is its own deployment's: sent elsewhere it is leaked, and that deployment's 401 would read as ended.
+    const origin = storedSessionOrigin(config);
+    const asked = defaultOrigin(opts);
     const token = config.accessToken;
+
+    if (token && new URL(asked).origin !== new URL(origin).origin) {
+      return yield* Effect.fail(new KinuError('bad_input', `Signed in to ${origin}, not ${asked}: run kinu logout without --origin or KINU_ORIGIN to sign out of ${origin}.`));
+    }
 
     if (token) {
       const revoked = yield* Effect.catchCause(Effect.as(Effect.promise(() => logout(origin, token)), true), (failed) => Effect.gen(function* () {
@@ -106,7 +112,7 @@ export function logoutCommand(opts: { origin?: string }): Promise<void> {
       if (!revoked) {
         yield* Effect.promise(() => bumpProviderRevision());
         console.log(`${WARN('!')} Not signed out: the session is still valid, and this PC keeps its token so a later logout can revoke it.`);
-        console.log(DIM(`Run \`kinu logout\` again once ${origin} is reachable, or revoke it with \`kinu auth revoke\` from any PC.`));
+        console.log(DIM(`Run \`kinu logout\` again once ${origin} is reachable, or end it with \`kinu auth revoke --all\` from any PC.`));
 
         return;
       }
