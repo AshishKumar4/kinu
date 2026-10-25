@@ -614,6 +614,16 @@ async function stampsMoved(environment: InfraEnvironment): Promise<number> {
 /** Exit 1 when the candidate retires a class the deployment's served build exports and, in production, the owner's words
  *  (`KINU_LOSS_OVERRIDE`) do not name it: its namespace and every row in it go with the deploy. Elsewhere it is said. */
 async function retirementsOf(environment: InfraEnvironment): Promise<number> {
+  const live = deployment(environment);
+
+  // A Worker that binds no class, or none at all, has no rows a release could retire: the bootstrap after its classes
+  // went with it (production, 2026-10-25, the owner deleted the Worker) serves no build to read, and needs none.
+  if (live.state === 'absent' || (live.state === 'deployed' && servingOf(live.versionId, live.bindings).bound.size === 0)) {
+    console.error(`retirements: ${environment} binds no Durable Object class, so this release retires none`);
+
+    return 0;
+  }
+
   const sha = (await servedHealth(origin(plan(environment).config))).build?.sha;
 
   if (sha === undefined) throw new Error(`${environment} serves no build stamp, so which classes this release retires is unknown`);
