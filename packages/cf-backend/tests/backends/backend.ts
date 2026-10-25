@@ -83,6 +83,8 @@ export interface SharedBackend {
   readonly actor: ActorHandle;
   /** The workspace's own files named by their `vfs://` path, as core names a skill or a slate. */
   readonly files: VFS;
+  /** The plane the main actor's memory reads and writes its notes on (`AgentRuntime.agentStateVfs`). */
+  readonly memoryFiles: VFS;
   /** The main actor's conversation store, as each backend records its turns. */
   readonly history: SessionHistory;
   /** Where the main actor's conversation, its context, its plans and its turns' runs are kept: its own isolate's database
@@ -186,6 +188,7 @@ async function cloudflare(opens: BackendOpening): Promise<SharedBackend> {
     sql: wrapDatabase(db).sql,
     actor,
     files: workspaceFiles(agent),
+    memoryFiles: agent.observeRuntime().agentStateVfs,
     history: main.history,
     chat: { sql: wrapDatabase(mainDatabase(harness)).sql, actor: main.actor },
     snapshot: (dir, turn) => daemon.snapshot({ agent: WORKSPACE, dir, ...turn }),
@@ -324,6 +327,7 @@ async function cli(opens: BackendOpening): Promise<SharedBackend> {
     sql: rt.storage.sql,
     actor: rt.actor,
     files: rt.ownFiles,
+    memoryFiles: rt.agentStateVfs,
     history: rt.stores.history,
     chat: { sql: rt.storage.sql, actor: rt.actor },
     snapshot: async (dir, turn) => {

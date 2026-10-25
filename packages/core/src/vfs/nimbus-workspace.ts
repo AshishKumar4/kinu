@@ -45,8 +45,8 @@ export { WORKSPACE_ROOT, workspacePath } from './workspace-path';
  * `open`'s files with relative paths from `cwd`, each `..` the store's walk to take, after a link; a write makes its
  * parent directories first, as the same credential.
  */
-function workspaceFiles(open: () => Promise<WorkspaceFiles>, cwd: string): WorkspaceFiles {
-  const at = <T>(path: string, syscall: string, call: (files: WorkspaceFiles, absolute: string) => Awaitable<T>): Promise<T> => {
+function workspaceFiles(open: () => Promise<SqliteFiles>, cwd: string): WorkspaceFiles & Required<Pick<VFS, 'writeFileIfRevision'>> {
+  const at = <T>(path: string, syscall: string, call: (files: SqliteFiles, absolute: string) => Awaitable<T>): Promise<T> => {
     const absolute = walkedPath(path, cwd);
 
     return atVfsPath(absolute, syscall, async () => call(await open(), absolute));
@@ -67,6 +67,9 @@ function workspaceFiles(open: () => Promise<WorkspaceFiles>, cwd: string): Works
     removeRecursive: (path) => at(path, 'rm', (files, absolute) => files.removeRecursive(absolute)),
     rename: (oldPath, newPath) => at(oldPath, 'rename', (files, absolute) => files.rename(absolute, walkedPath(newPath, cwd))),
     readRange: (path, offset, length) => at(path, 'read', (files, absolute) => files.readRange(absolute, offset, length)),
+    // The store's own compare-and-write: a write over what was read lands only if nothing moved the file since
+    // (`writeConditionally`); without it, every conditioned write on this plane was refused as unchecked.
+    writeFileIfRevision: (path, data, expected) => at(path, 'open', (files, absolute) => files.writeFileIfRevision(absolute, data, expected)),
   };
 }
 

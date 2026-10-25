@@ -1,6 +1,6 @@
 /** Sleep-time compute: a settled conversation compresses into the actor's facts on the lane's cadence. */
 import { expect } from 'bun:test';
-import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { exists, readText, writeText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { CHAT_SESSION_ID, chatSeed, createFactsStore, keptMediaName, type ActorHandle, type SqlExecutor } from '@kinu.run/core';
 import type { ScriptedTurnResult } from '@kinu.run/test-utils';
 import type { SharedCase } from '../cases';
@@ -46,7 +46,97 @@ function memoryBlockOf(request: string): string {
 
 const DAY_MS = 86_400_000;
 
+/** Another writer's move placed between memory's read of a note and its write: whether it ran, and its undoing. */
+interface Interleaved {
+  readonly ran: () => boolean;
+  readonly undo: () => void;
+}
+
+/**
+ * `concurrently` once, as another writer of `note` (a shell) would, just after memory's read of the note settled and
+ * before anything it writes: the instant a write-back of what it read would land over what this one wrote. Undone by
+ * the returned function. The memory's own plane is the seam: the read and its stat are its calls on it.
+ */
+function betweenReadAndWrite(plane: VFS, note: string, concurrently: () => Promise<void>): Interleaved {
+  const readFile = plane.readFile.bind(plane);
+  const stat = plane.stat.bind(plane);
+  // A plane may hold its methods as its own properties: undoing puts back what was there.
+  const own = { readFile: Object.getOwnPropertyDescriptor(plane, 'readFile'), stat: Object.getOwnPropertyDescriptor(plane, 'stat') };
+  let read = false;
+  let ran = false;
+
+  Reflect.set(plane, 'readFile', async (...args: Parameters<VFS['readFile']>) => {
+    const answer = await readFile(...args);
+
+    read ||= args[0].endsWith(note);
+
+    return answer;
+  });
+  Reflect.set(plane, 'stat', async (...args: Parameters<VFS['stat']>) => {
+    const answer = await stat(...args);
+
+    if (read && !ran && args[0].endsWith(note)) {
+      ran = true;
+      await concurrently();
+    }
+
+    return answer;
+  });
+
+  const restore = (name: 'readFile' | 'stat'): void => {
+    const was = own[name];
+
+    if (was === undefined) Reflect.deleteProperty(plane, name);
+    else Reflect.defineProperty(plane, name, was);
+  };
+
+  return { ran: () => ran, undo: () => { restore('readFile'); restore('stat'); } };
+}
+
+/** The note at `path` on `files`, or null where none is. */
+async function noteAt(files: VFS, path: string): Promise<string | null> {
+  return await exists(files, path) ? await readText(files, path) : null;
+}
+
 export const MEMORY_CASES: readonly SharedCase[] = [
+  {
+    // Review, 2026-10-25: memory wrote a note it scrubbed back over the file unconditionally, so a line a shell appended
+    // between memory's read and that write was lost, and a note deleted meanwhile came back.
+    title: 'a note scrubbed as memory takes it in keeps a line appended meanwhile, and one deleted meanwhile stays deleted',
+    async run({ surface, answers, settled, files, memoryFiles }) {
+      const kept = '/home/main/memory/notes.md';
+      const gone = '/home/main/memory/old.md';
+
+      await writeText(files, kept, `Deploy with ${KEY} on Fridays.\n`);
+      await writeText(files, gone, `The old key was ${KEY}.\n`);
+
+      const appended = betweenReadAndWrite(memoryFiles, 'memory/notes.md', async () => {
+        await writeText(files, kept, `${await readText(files, kept)}Rotate it monthly.\n`);
+      });
+
+      const deleted = betweenReadAndWrite(memoryFiles, 'memory/old.md', async () => { await files.unlink(gone); });
+
+      try {
+        answers(called('memory', { op: 'search', query: 'deploy key' }));
+        await surface.send('Where do we deploy from?');
+        await settled();
+      } finally {
+        appended.undo();
+        deleted.undo();
+      }
+
+      // The next search takes the note that moved in again, as it is now.
+      answers(called('memory', { op: 'search', query: 'rotate' }));
+      await surface.send('How often do we rotate it?');
+      await settled();
+
+      expect({ interleaved: [appended.ran(), deleted.ran()], kept: await noteAt(files, kept), gone: await noteAt(files, gone) }).toEqual({
+        interleaved: [true, true],
+        kept: 'Deploy with <redacted:provider-secret> on Fridays.\nRotate it monthly.\n',
+        gone: null,
+      });
+    },
+  },
   {
     // Roadmap, 2026-10-25: each turn was shown its newest twenty facts whatever it asked, so a fact older than them was
     // never in its block.
