@@ -1,6 +1,6 @@
 /** Sleep-time compute: a settled conversation compresses into the actor's facts on the lane's cadence. */
 import { expect } from 'bun:test';
-import { readText } from '@nimbus-sh/core/vfs/vfs.js';
+import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { CHAT_SESSION_ID, chatSeed, createFactsStore, keptMediaName, type ActorHandle, type SqlExecutor } from '@kinu.run/core';
 import type { ScriptedTurnResult } from '@kinu.run/test-utils';
 import type { SharedCase } from '../cases';
@@ -89,7 +89,9 @@ export const MEMORY_CASES: readonly SharedCase[] = [
   },
   {
     // Roadmap, 2026-10-25: a note, a fact or a sleep-time write kept a secret said in chat as it was said.
-    title: 'a key said in chat reaches no note, fact, sleep-time fact or search index, each keeping the kind it was',
+    // Review, 2026-10-25: a note a shell wrote beside the memory tool reached the index, its embeddings and the memory
+    // block as written.
+    title: 'a key said in chat, or written to a note beside the memory tool, reaches no note, fact, sleep-time fact, search index or memory block',
     async run({ surface, answers, sleepTime, settled, sql, actor, chat, files, requests }) {
       sleepTime({ upserts: [{ key: 'openai.access', value: `the owner's key is ${KEY}`, confidence: 0.9, rationale: `said ${KEY}` }], decay: [] }, true);
       answers(called('memory', { op: 'note', content: `The owner's OpenAI key is ${KEY}.` }), called('memory', { op: 'remember', key: 'openai_key', value: KEY }));
@@ -99,11 +101,20 @@ export const MEMORY_CASES: readonly SharedCase[] = [
         await settled();
       }
 
+      // Written beside the memory tool, as a shell's `echo … >> memory/notes.md` writes to the file plane.
+      await writeText(files, '/home/main/memory/notes.md', `Deploy with ${KEY} on Fridays.\n`);
+      await writeText(files, '/home/main/memory/MEMORY.md', `${await readText(files, '/home/main/memory/MEMORY.md')}\nThe deploy key is ${KEY}.\n`);
+
       answers(called('memory', { op: 'searchConversations', query: 'OpenAI key' }), called('memory', { op: 'search', query: KEY }));
       await surface.send('Where is that key?');
       await settled();
 
-      const note = await readText(files, '/home/main/memory/MEMORY.md');
+      const note = await readText(files, '/home/main/memory/MEMORY.md') + await readText(files, '/home/main/memory/notes.md');
+
+      // Each memory block the last call was sent, a later one carrying only the lines appended since.
+      const shown = [...JSON.stringify(requests().at(-1)?.prompt).matchAll(/## Memory \(newest MEMORY\.md lessons and reflections\)(?: \(appended\))?\\n([\s\S]*?)(?=\\n## |\\n<)/gu)]
+        .map(([, tail]) => tail ?? '');
+
       const kept = Object.fromEntries(sql<{ key: string; value: string }>`SELECT key, value_json AS value FROM agent_facts WHERE actor_id = ${actor.actorId}`.map((row) => [row.key, row.value]));
       // What the two searches answered, the newest tool results the last call was sent.
       const answered = (requests().at(-1)?.prompt.filter((message) => message.role === 'tool').map((message) => JSON.stringify(message.content)) ?? []).slice(-2);
@@ -114,12 +125,14 @@ export const MEMORY_CASES: readonly SharedCase[] = [
         facts: { openai_key: kept.openai_key, sleeps: kept['openai.access']?.includes('<redacted:provider-secret>') },
         indexed: holding(sql, chat.sql, KEY),
         found: answered.length === 2 && answered.every((result) => !result.includes(KEY)),
+        block: shown.every((tail) => !tail.includes(KEY)) && shown.some((tail) => tail.includes('The deploy key is <redacted:provider-secret>')),
       }).toEqual({
         said: true,
         note: true,
         facts: { openai_key: '"<redacted:provider-secret>"', sleeps: true },
         indexed: { agent_facts: 0, agent_fact_history: 0, prepared_outputs: 0, memory_note_chunks_fts: 0, conversation_fts: 0 },
         found: true,
+        block: true,
       });
       expect(chat.sql<{ n: number }>`SELECT COUNT(*) AS n FROM conversation_fts WHERE content LIKE '%<redacted:provider-secret>%'`[0]?.n).toBeGreaterThan(0);
     },

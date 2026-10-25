@@ -81,7 +81,7 @@ export function adaptMemory(
     append: (path, content) => store.appendToFile(path, scrubSecrets(content)),
     index(path) {
       return settle(Effect.gen(function* () {
-        const note = yield* Effect.promise(() => settledNote(store, files, path));
+        const note = yield* Effect.promise(() => keptNote(store, files, path));
         // A note that is gone, or is no file, leaves the index with its chunks; an emptied one indexes to none.
         yield* Effect.promise(() => (note === null ? store.forgetFile(path) : store.indexFile(path, note.content, note.stamp)));
 
@@ -105,14 +105,19 @@ export function adaptMemory(
 
       return store.search(query, limit, async (path) => memory.index(path));
     },
+    // A note that moved is taken in before it is read, as a search takes it in.
     async read(path) {
-      const content = await store.readFile(path);
-
       if (await stale(files, path, store.stampOf(path))) await memory.index(path);
 
-      return content;
+      return await store.readFile(path);
     },
-    tail: (path, bytes) => readTailWithVfsOps(files, path, bytes),
+    // A turn reads the window alone, never the whole note: what a writer beside the memory tool left in it is scrubbed here
+    // until the index takes the note in.
+    async tail(path, bytes) {
+      const window = await readTailWithVfsOps(files, path, bytes);
+
+      return window === null ? null : scrubSecrets(window);
+    },
   };
 
   return memory;
@@ -162,6 +167,24 @@ async function settledNote(store: MemoryStore, files: VFS, path: string): Promis
 
     if (attempt === SETTLE_ATTEMPTS) return content === null ? null : { content, stamp: null };
   }
+}
+
+/**
+ * The note as memory takes it in (`memory/scrub.ts`): one a writer beside the memory tool left a secret in (a shell's
+ * `echo … >> memory/notes.md`) is written back scrubbed first, so its file, its index, its embeddings and the memory
+ * block hold one text, and a search's snippet, read off the file, matches the chunk it found. A write landing between
+ * the read and the write back is lost, as one between `appendToFile`'s read and write is.
+ */
+async function keptNote(store: MemoryStore, files: VFS, path: string): Promise<{ readonly content: string; readonly stamp: NoteStamp } | null> {
+  const note = await settledNote(store, files, path);
+  const kept = note === null ? null : scrubSecrets(note.content);
+
+  if (note === null || kept === null || kept === note.content) return note;
+  await store.writeFile(path, kept);
+  const rewritten = await settledNote(store, files, path);
+
+  // Written again meanwhile: indexed scrubbed and unstamped, so the next read takes the file in again.
+  return rewritten === null || rewritten.content === kept ? rewritten : { content: scrubSecrets(rewritten.content), stamp: null };
 }
 
 /** Every markdown note under the memory directory, by its relative path. */

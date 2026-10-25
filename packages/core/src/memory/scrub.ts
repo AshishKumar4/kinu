@@ -1,7 +1,8 @@
 /**
  * What memory keeps of what it is handed: every credential the one detector finds leaves as a marker naming its kind
  * (`scrubSecrets`, `<redacted:openai-key>`). Each store that keeps memory text writes through it: a memory file's write
- * and append (`adaptMemory`: a note, the scaffold, the MCP's note), a file write or edit under `memory/`, a fact's value
+ * and append (`adaptMemory`: a note, the scaffold, the MCP's note), a file write or edit under `memory/`, a note the
+ * index takes in however it was written (a shell's, written back scrubbed before it is indexed), a fact's value
  * (`FactsStore.upsert`: the agent, the owner, a dream, an import, sleep-time), the sleep-time answer kept for a replay,
  * an account proposal, a lesson, and the conversation index. A secret said in chat then reaches none of them; the
  * conversation itself keeps what was said.
