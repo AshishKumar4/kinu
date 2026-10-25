@@ -186,8 +186,6 @@ interface ShellFact {
   readonly widthOnPlan: number;
   /** The reopen handle a collapsed column leaves behind. */
   readonly expandAtStart: boolean;
-  /** Every mounted workbench's panel element ids, in document order. */
-  readonly panelIds: readonly string[];
 }
 
 
@@ -223,16 +221,14 @@ interface Facts {
   /** Which renderer the hero mount landed on, and the canvas's own answer. */
   heroMount?: { renderer?: string; canvasRenderer?: string };
   workspace?: SurfaceFact;
-  tui?: SurfaceFact;
   cli?: SurfaceFact;
-  interactions?: { workspace: boolean; decision: boolean; plan: boolean; slate: boolean; tui: boolean; cli: boolean; evolution: boolean };
+  interactions?: { workspace: boolean; plan: boolean; evolution: boolean };
   command?: string;
   copied?: boolean;
   rail?: RailFact;
   movie?: MovieFact;
   shell?: ShellFact;
   movieReduced?: MovieReducedFact;
-  heroA11y?: { label: string; phrases: string[] };
   heroTreeText?: { treeHidden: boolean; text: string };
   homeLink?: { visible: boolean; hasGraphic: boolean };
   deploy?: { button: string | null; guide: string | null };
@@ -302,7 +298,7 @@ function linksToSamples(page: Page, frame: string): Promise<string[]> {
  * page with no session (rc28). Every tab is pressed, and its reads awaited.
  */
 async function visitLandingTabs(): Promise<NonNullable<Facts['landingTabs']>> {
-  const page = await openLanding(DESKTOP);
+  const page = await openLanding(DESKTOP, false, holdWalkthrough);
   const visited: string[] = [];
   const failures: string[] = [];
   const asked: string[] = [];
@@ -315,7 +311,7 @@ async function visitLandingTabs(): Promise<NonNullable<Facts['landingTabs']>> {
     if (url.pathname.startsWith('/api/')) asked.push(`${request.method()} ${url.pathname}`);
   });
 
-  for (const frame of ['work', 'plan', 'slate'] as const) {
+  for (const frame of ['walkthrough'] as const) {
     const tabs = `[data-landing-frame="${frame}"] nav[aria-label="Workspace"] button`;
 
     await page.waitForSelector(tabs);
@@ -382,6 +378,24 @@ async function openLanding(
   return page;
 }
 
+/**
+ * The walkthrough plays once it is in view, and the hero's frame is in view at load. A drive that seeks it beat by beat
+ * starts and stops it through its own handle as the handle lands, before the first view can play it, so the first beat
+ * the drive reads is the story's start. Only the first handle: the frame re-installs it per render, deleting the last.
+ */
+async function holdWalkthrough(page: Page): Promise<void> {
+  await page.evaluateOnNewDocument(() => {
+    Object.defineProperty(window, '__kinuLandingMovie', {
+      configurable: true,
+      set(handle: LandingMovieHandle) {
+        Object.defineProperty(window, '__kinuLandingMovie', { configurable: true, writable: true, value: handle });
+        handle.play();
+        handle.pause();
+      },
+    });
+  });
+}
+
 async function openPublic(
   frame: string,
   theme: Theme,
@@ -411,6 +425,7 @@ beforeAll(async () => {
       const hydrationFaults: string[] = [];
 
       const page = await openLanding(DESKTOP, false, async (landing) => {
+        await holdWalkthrough(landing);
         // React reports a hydration mismatch as a recoverable error: a console error, or an uncaught one.
         landing.on('console', (message) => { if (message.type() === 'error' || message.type() === 'warn') hydrationFaults.push(message.text()); });
         landing.on('pageerror', (error) => { hydrationFaults.push(error instanceof Error ? error.message : String(error)); });
@@ -438,22 +453,6 @@ beforeAll(async () => {
         renderer: window.__kinuSearchTree?.renderer(),
         canvasRenderer: document.querySelector('canvas')?.dataset.renderer,
       }));
-      const headline = await page.$eval('h1', (element) => ({ height: element.getBoundingClientRect().height, label: element.getAttribute('aria-label') }));
-      const phrase = await page.$eval('[data-typewriter]', (element) => element.textContent);
-      await page.waitForFunction((previous) => document.querySelector('[data-typewriter]')?.textContent !== previous, {}, phrase);
-      expect(await page.$eval('h1', (element) => ({ height: element.getBoundingClientRect().height, label: element.getAttribute('aria-label') }))).toEqual(headline);
-      // The heading animates one phrase at a time, so its accessible name is
-      // the only place a screen reader gets the whole rotation. The sizers
-      // carry every visible phrase; the label must contain each of them.
-      facts.heroA11y = await page.evaluate(() => ({
-        label: document.querySelector('h1')?.getAttribute('aria-label') ?? '',
-        phrases: [...document.querySelectorAll('h1 span.invisible')].map((sizer) => sizer.textContent ?? ''),
-      }));
-      await page.$eval('#platform', (element) => element.scrollIntoView());
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      const offscreen = await page.$eval('[data-typewriter]', (element) => element.textContent);
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      expect(await page.$eval('[data-typewriter]', (element) => element.textContent)).toBe(offscreen);
 
       const surfaces = await page.evaluate(() => {
         const measure = (element: Element | null): SurfaceFact => {
@@ -467,27 +466,19 @@ beforeAll(async () => {
 
         return {
           workspace: measure(document.querySelector('[aria-label="Kinu workspace interface preview"]')),
-          tui: measure(document.querySelector('[aria-label="Kinu terminal interface preview"]')),
           cli: measure(document.querySelector('[aria-label="Kinu command line preview"]')),
         };
       });
 
       facts.workspace = surfaces.workspace;
-      facts.tui = surfaces.tui;
       facts.cli = surfaces.cli;
-      // The frames are the product's own components, loaded as their own
+      // The frame is the product's own components, loaded as its own
       // chunk; `networkidle0` has fetched it, this proves it mounted.
-      await page.waitForSelector('[data-landing-frame="work"] textarea');
-      // The plan frame is the walkthrough movie, driven through its own
-      // handle: at load it holds the story's start (an empty composer), and
-      // each beat below seeks it before asserting that beat's DOM.
+      await page.waitForSelector('[data-landing-frame="walkthrough"] textarea');
+      // The frame is the walkthrough movie, driven through its own handle:
+      // held at the story's start (an empty composer), and each beat below
+      // seeks it before asserting that beat's DOM.
       await page.waitForFunction(() => window.__kinuLandingMovie !== undefined);
-      await page.waitForSelector('[data-landing-frame="slate"] [data-slate-dashboard]');
-      await page.waitForSelector('[data-landing-frame="work"] button[aria-label="Retry"]');
-      await page.click('[data-landing-frame="work"] button[aria-label="Retry"]');
-      await page.waitForFunction(
-        () => document.querySelector('[data-landing-frame="work"]')?.textContent?.includes('Retried as') === true,
-      );
 
       // Only the cue table crosses the boundary — the handle's methods are
       // not serializable, so asking for it would read a lie.
@@ -501,7 +492,7 @@ beforeAll(async () => {
         await window.__kinuLandingMovie?.seek(seekTo);
       }, at);
 
-      // The rail rides every workspace frame, populated through the real
+      // The rail rides the workspace frame, populated through the real
       // roster transport, marked on the frame's own workspace. `SidebarRail`
       // is the app's own lane, so the measurement is the lane, not a class
       // string that says nothing about what the reader sees.
@@ -529,7 +520,7 @@ beforeAll(async () => {
       // workspace with nothing to inspect is shut — a measured zero, before any
       // seek moves the story on.
       const readShell = () => page.evaluate(() => {
-        const frame = document.querySelector('[data-landing-frame="plan"]');
+        const frame = document.querySelector('[data-landing-frame="walkthrough"]');
         const column = frame?.querySelector('[data-panel][id^="inspector"]');
 
         return {
@@ -538,7 +529,6 @@ beforeAll(async () => {
             .filter((label) => label.length > 0),
           width: Math.round(column?.getBoundingClientRect().width ?? -1),
           expand: frame?.querySelector('[data-inspector-expand]') !== null,
-          panelIds: [...document.querySelectorAll('[data-panel]')].map((panel) => panel.id),
         };
       });
 
@@ -546,12 +536,12 @@ beforeAll(async () => {
       // The request types into the real composer before anything else exists.
       await seek((cues.typeStart + cues.sent) / 2);
       await page.waitForFunction(() => {
-        const area = document.querySelector('[data-landing-frame="plan"] textarea');
+        const area = document.querySelector('[data-landing-frame="walkthrough"] textarea');
 
         return area instanceof HTMLTextAreaElement && area.value.length > 0;
       });
 
-      const typing = await page.$eval('[data-landing-frame="plan"] textarea', (area) => (
+      const typing = await page.$eval('[data-landing-frame="walkthrough"] textarea', (area) => (
         area instanceof HTMLTextAreaElement ? area.value : ''
       ));
 
@@ -562,7 +552,7 @@ beforeAll(async () => {
       await seek(cues.searchDone + 100);
 
       const noPlanYet = await page.evaluate(() => {
-        const frame = document.querySelector('[data-landing-frame="plan"]');
+        const frame = document.querySelector('[data-landing-frame="walkthrough"]');
 
         return {
           status: frame?.querySelector('[data-plan-status]')?.textContent ?? null,
@@ -575,16 +565,16 @@ beforeAll(async () => {
       // on a row the product stopped rendering never ended: `[data-tool-group]` went with the activity
       // card on 2026-09-23 (7d471135f) and this suite hung on it from then on.
       const tools = await page.evaluate(() => ({
-        rows: document.querySelectorAll('[data-landing-frame="plan"] [data-tool-state]').length,
-        read: document.querySelector('[data-landing-frame="plan"]')?.textContent?.includes('src/db.ts') === true,
+        rows: document.querySelectorAll('[data-landing-frame="walkthrough"] [data-tool-state]').length,
+        read: document.querySelector('[data-landing-frame="walkthrough"]')?.textContent?.includes('src/db.ts') === true,
       }));
 
       // The plan pops up in the right-hand panel with Approve live: the movie
       // submits a clean plan, so Request changes stays disabled.
       await seek(cues.planReady + 200);
-      await page.waitForSelector('[data-landing-frame="plan"] [data-plan-decisions]');
+      await page.waitForSelector('[data-landing-frame="walkthrough"] [data-plan-decisions]');
 
-      const decisions = await page.$$eval('[data-landing-frame="plan"] [data-plan-decisions] button', (buttons) => (
+      const decisions = await page.$$eval('[data-landing-frame="walkthrough"] [data-plan-decisions] button', (buttons) => (
         buttons.map((button) => ({ label: button.textContent?.trim() ?? '', disabled: button.disabled }))
       ));
 
@@ -592,7 +582,7 @@ beforeAll(async () => {
       // product opens it on. Awaited, not sampled: the decision lands on a
       // committed layout.
       await page.waitForFunction(() => {
-        const column = document.querySelector('[data-landing-frame="plan"] [data-panel][id^="inspector"]');
+        const column = document.querySelector('[data-landing-frame="walkthrough"] [data-panel][id^="inspector"]');
 
         return column !== null && column.getBoundingClientRect().width > 0;
       });
@@ -604,20 +594,19 @@ beforeAll(async () => {
         widthAtStart: shellAtStart.width,
         widthOnPlan: shellOnPlan.width,
         expandAtStart: shellAtStart.expand,
-        panelIds: shellAtStart.panelIds,
       };
 
       // The cursor's click approves through the product's own decision path.
       await seek(cues.approve + 200);
       await page.waitForFunction(() => (
-        document.querySelector('[data-landing-frame="plan"] [data-plan-status]')?.textContent === 'Approved'
+        document.querySelector('[data-landing-frame="walkthrough"] [data-plan-status]')?.textContent === 'Approved'
       ));
 
       // The build lands a slate, opened in its own tab: the settled state.
       await seek(cues.end);
-      await page.waitForSelector('[data-landing-frame="plan"] [data-slate-dashboard]');
+      await page.waitForSelector('[data-landing-frame="walkthrough"] [data-slate-dashboard]');
 
-      const settled = await page.$eval('[data-landing-frame="plan"]', (frame) => (
+      const settled = await page.$eval('[data-landing-frame="walkthrough"]', (frame) => (
         frame.getAttribute('data-movie-settled') === 'true'
       ));
 
@@ -626,8 +615,8 @@ beforeAll(async () => {
       // on the cleared prop, so the empty answer is awaited, not sampled.
       await seek(0);
       await page.waitForFunction(() => (
-        document.querySelector('[data-landing-frame="plan"] [data-plan-status]') === null
-        && document.querySelector('[data-landing-frame="plan"] [data-work-plans]') === null
+        document.querySelector('[data-landing-frame="walkthrough"] [data-plan-status]') === null
+        && document.querySelector('[data-landing-frame="walkthrough"] [data-work-plans]') === null
       ));
 
       const cleared = { status: null, plansList: false };
@@ -638,10 +627,10 @@ beforeAll(async () => {
       // the product's Approve runs decidePlanReview again.
       await seek(cues.planReady + 200);
       await page.waitForSelector(
-        '[data-landing-frame="plan"] [data-plan-decisions] button:not([disabled])',
+        '[data-landing-frame="walkthrough"] [data-plan-decisions] button:not([disabled])',
       );
       await page.evaluate(() => {
-        const stage = document.querySelector('[data-landing-frame="plan"]');
+        const stage = document.querySelector('[data-landing-frame="walkthrough"]');
 
         const approve = [...(stage?.querySelectorAll<HTMLButtonElement>('[data-plan-decisions] button') ?? [])]
           .find((button) => !button.disabled && /approve/i.test(button.textContent ?? ''));
@@ -649,7 +638,7 @@ beforeAll(async () => {
         approve?.click();
       });
       await page.waitForFunction(() => (
-        document.querySelector('[data-landing-frame="plan"] [data-plan-status]')?.textContent === 'Approved'
+        document.querySelector('[data-landing-frame="walkthrough"] [data-plan-status]')?.textContent === 'Approved'
       ));
 
       facts.movie = {
@@ -662,63 +651,6 @@ beforeAll(async () => {
         noPlanYet,
         cleared,
       };
-      expect(await page.evaluate(() => {
-        const pinned = document.querySelector('[aria-label="Pinned workspaces"]');
-        const trigger = document.querySelector('[aria-controls="landing-tui-workspaces"]');
-        const user = document.querySelector('[data-tui-role="user"]');
-        const assistant = document.querySelector('[data-tui-role="assistant"]');
-        const buttons = [...(pinned?.querySelectorAll<HTMLButtonElement>('button') ?? [])];
-
-        return {
-          pinned: (pinned?.getClientRects().length ?? 0) > 0,
-          trigger: (trigger?.getClientRects().length ?? 0) > 0,
-          userLabel: user?.textContent?.includes('YOU') === true,
-          assistantLabel: assistant?.querySelector('span')?.textContent ?? null,
-          adaptiveHint: document.querySelector('[data-tui-agent]')?.textContent?.includes('Alt+W workspaces') === true,
-          groupHeader: buttons.some((button) => button.textContent?.replace(/\s+/gu, ' ').includes('api-worker · 2') === true),
-          subagent: pinned?.textContent?.includes('└ reviewer · auditor') === true,
-          cloudCollapsedHidesJarvis: buttons.every((button) => button.textContent?.includes('Jarvis') !== true),
-        };
-      })).toEqual({
-        pinned: true,
-        trigger: false,
-        userLabel: true,
-        assistantLabel: null,
-        adaptiveHint: true,
-        groupHeader: true,
-        subagent: true,
-        cloudCollapsedHidesJarvis: true,
-      });
-      // Expanding the collapsed cloud section reveals the remote workspace;
-      // selecting the agent, not the section, swaps the surface.
-      await page.evaluate(() => {
-        const pinned = document.querySelector('[aria-label="Pinned workspaces"]');
-
-        const cloud = [...(pinned?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
-          .find((button) => button.getAttribute('aria-expanded') === 'false' && button.textContent?.includes('Cloud') === true);
-
-        cloud?.click();
-      });
-      await page.waitForFunction(() => {
-        const pinned = document.querySelector('[aria-label="Pinned workspaces"]');
-
-        return [...(pinned?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
-          .some((button) => button.textContent?.includes('Jarvis') === true);
-      });
-      expect(await page.evaluate(() => document.querySelector('[data-tui-agent]')?.getAttribute('data-tui-agent'))).toBe('audit');
-      await page.evaluate(() => {
-        const pinned = document.querySelector('[aria-label="Pinned workspaces"]');
-
-        const jarvis = [...(pinned?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
-          .find((button) => button.textContent?.includes('Jarvis') === true);
-
-        jarvis?.click();
-      });
-      await page.waitForFunction(
-        () => document.querySelector('[data-tui-agent]')?.getAttribute('data-tui-agent') === 'jarvis',
-      );
-      await page.click('[data-cli-mode] [role="tab"][aria-selected="false"]');
-      await page.waitForSelector('[data-cli-mode="ci"]');
       await page.evaluate(() => {
         const stages = [...document.querySelectorAll<HTMLButtonElement>('#evolution button[aria-pressed]')];
         stages[1]?.click();
@@ -727,12 +659,8 @@ beforeAll(async () => {
         () => document.getElementById('evolution')?.getAttribute('data-evolution-stage') === '1',
       );
       facts.interactions = await page.evaluate(() => ({
-        workspace: document.querySelector('[data-landing-frame="work"] [data-workspace-panel="run"] textarea') !== null,
-        decision: document.querySelector('[data-landing-frame="work"]')?.textContent?.includes('Retried as') === true,
-        plan: document.querySelector('[data-landing-frame="plan"] [data-plan-status]')?.textContent === 'Approved',
-        slate: document.querySelectorAll('[data-landing-frame="slate"] [data-slate-dashboard] .landing-draw').length === 2,
-        tui: document.querySelector('[data-tui-agent="jarvis"]') !== null,
-        cli: document.querySelector('[data-cli-mode="ci"] pre')?.textContent?.includes('kinu exec --workspace') === true,
+        workspace: document.querySelector('[data-landing-frame="walkthrough"] [data-workspace-panel="run"] textarea') !== null,
+        plan: document.querySelector('[data-landing-frame="walkthrough"] [data-plan-status]')?.textContent === 'Approved',
         evolution: document.getElementById('evolution')?.getAttribute('data-evolution-stage') === '1',
       }));
 
@@ -761,9 +689,9 @@ beforeAll(async () => {
           ['hero body', '#top p'],
           ['cloud title', '#platform article h3'],
           ['cloud body', '#platform article p'],
-          ['local heading', '[data-showcase="tui"] h2'],
-          ['workspace body', '[data-landing-frame="work"] [data-workspace-panel] p'],
-          ['terminal body', '[data-showcase="tui"] p'],
+          ['local heading', '#platform article:last-child h3'],
+          ['workspace body', '[data-landing-frame="walkthrough"] [data-workspace-panel] p'],
+          ['CI body', '#ci p'],
           ['section title', '#platform h2'],
           ['section body', '#platform p'],
           ['primary action', '#top a[href="/login"]'],
@@ -819,17 +747,17 @@ beforeAll(async () => {
       // below is wall-clock on purpose: only the platform clock can prove a
       // rAF-driven movie did not advance, and fake timers cannot reach the
       // browser's frame loop from this process.
-      await page.waitForSelector('[data-landing-frame="plan"][data-movie-settled="true"] [data-slate-dashboard]');
+      await page.waitForSelector('[data-landing-frame="walkthrough"][data-movie-settled="true"] [data-slate-dashboard]');
       const movieT0 = await page.evaluate(() => window.__kinuLandingMovie?.state());
       await new Promise((resolve) => setTimeout(resolve, 1200));
       const movieT1 = await page.evaluate(() => window.__kinuLandingMovie?.state());
 
       const reducedBits = await page.evaluate(() => ({
-        settled: document.querySelector('[data-landing-frame="plan"]')?.getAttribute('data-movie-settled') === 'true',
-        cursor: document.querySelector('[data-landing-frame="plan"] [data-movie-cursor]') !== null,
-        slate: document.querySelector('[data-landing-frame="plan"] [data-slate-dashboard]') !== null,
+        settled: document.querySelector('[data-landing-frame="walkthrough"]')?.getAttribute('data-movie-settled') === 'true',
+        cursor: document.querySelector('[data-landing-frame="walkthrough"] [data-movie-cursor]') !== null,
+        slate: document.querySelector('[data-landing-frame="walkthrough"] [data-slate-dashboard]') !== null,
         // The slate is shown; the decided plan is a card in Work, behind it.
-        decided: document.querySelector('[data-landing-frame="plan"] [data-plan-card]')?.textContent?.includes('approved') === true,
+        decided: document.querySelector('[data-landing-frame="walkthrough"] [data-plan-card]')?.textContent?.includes('approved') === true,
       }));
 
       facts.movieReduced = {
@@ -853,9 +781,6 @@ beforeAll(async () => {
 
         return [
           document.querySelector('[aria-label="Kinu workspace interface preview"]'),
-          document.querySelector('[data-landing-frame="plan"]'),
-          document.querySelector('[data-landing-frame="slate"]'),
-          document.querySelector('[aria-label="Kinu terminal interface preview"]'),
           document.querySelector('[aria-label="Kinu command line preview"]'),
         ].every((element) => {
           const box = element?.getBoundingClientRect();
@@ -940,6 +865,7 @@ beforeAll(async () => {
       const held: (() => Promise<void>)[] = [];
 
       const page = await openLanding(DESKTOP, false, async (target) => {
+        await holdWalkthrough(target);
         await target.setRequestInterception(true);
         target.on('request', (request) => detach(Effect.promise(async () => {
           if (!/PlanReviewView-/u.test(request.url())) {
@@ -964,7 +890,7 @@ beforeAll(async () => {
         window.__kinuLandingMovie?.seek(at).then(
           () => {
             window.__lateChunk = {
-              decisions: document.querySelector('[data-landing-frame="plan"] [data-plan-decisions]') !== null,
+              decisions: document.querySelector('[data-landing-frame="walkthrough"] [data-plan-decisions]') !== null,
             };
           },
           () => { window.__lateChunk = { decisions: false }; },
@@ -1044,26 +970,21 @@ describe('the standalone landing runs', () => {
     expect(reduced.animations).toBe(0);
   });
 
-  test('the workspace, terminal, and CLI are visible and distinct', () => {
+  test('the workspace and CLI previews are visible and distinct', () => {
     const workspace = required(facts.workspace, 'workspace preview');
-    const tui = required(facts.tui, 'terminal preview');
     const cli = required(facts.cli, 'CLI preview');
 
-    for (const surface of [workspace, tui, cli]) {
+    for (const surface of [workspace, cli]) {
       expect(surface.present).toBeTrue();
       expect(surface.drawn).toBeTrue();
     }
 
   });
 
-  test('workspace, plan, slate, TUI, CLI, and evolution controls change their surfaces', () => {
+  test('workspace, plan, and evolution controls change their surfaces', () => {
     const interactions = required(facts.interactions, 'landing interactions');
     expect(interactions.workspace).toBeTrue();
-    expect(interactions.decision).toBeTrue();
     expect(interactions.plan).toBeTrue();
-    expect(interactions.slate).toBeTrue();
-    expect(interactions.tui).toBeTrue();
-    expect(interactions.cli).toBeTrue();
     expect(interactions.evolution).toBeTrue();
   });
 
@@ -1226,11 +1147,11 @@ describe('the landing demonstration leads with its result', () => {
 });
 
 describe('every landing frame tab renders', () => {
-  test('each tab of each workspace frame renders its answers, none failing', () => {
+  test('each tab of the workspace frame renders its answers, none failing', () => {
     const { visited, failures } = required(facts.landingTabs, 'the landing tabs');
 
-    // Work, Files, Agent, Environment and Activity, in each of the three frames.
-    expect(visited.length).toBeGreaterThanOrEqual(15);
+    // Work, Files, Agent, Environment and Activity.
+    expect(visited.length).toBeGreaterThanOrEqual(5);
     expect(failures).toEqual([]);
   });
 
@@ -1248,10 +1169,10 @@ describe('every landing frame tab renders', () => {
   });
 });
 
-describe('the landing frames reuse the app rail', () => {
-  test('every workspace frame shows the app rail populated at desktop width', () => {
+describe('the landing frame reuses the app rail', () => {
+  test('the workspace frame shows the app rail populated at desktop width', () => {
     const rail = required(facts.rail, 'frame rail');
-    expect(rail.frames).toBe(3);
+    expect(rail.frames).toBe(1);
 
     for (const lane of rail.lanes) {
       expect(lane).toBe(RAIL_LANE_PX);
@@ -1262,12 +1183,12 @@ describe('the landing frames reuse the app rail', () => {
     expect(rail.account).toBeTrue();
   });
 
-  test('the frames read their roster from the page and open no socket', () => {
+  test('the frame reads its roster from the page and opens no socket', () => {
     expect(required(facts.landingSockets, 'landing sockets')).toEqual([]);
   });
 });
 
-describe('the landing frames mount the product shell', () => {
+describe('the landing frame mounts the product shell', () => {
 
   test('the inspector column is shut until the plan arrives, then opens at the policy width', () => {
     const shell = required(facts.shell, 'plan frame shell');
@@ -1275,15 +1196,9 @@ describe('the landing frames mount the product shell', () => {
     expect(shell.expandAtStart).toBeTrue();
     expect(shell.widthOnPlan).toBeGreaterThan(0);
   });
-
-  test("each frame's workbench owns its own panel elements", () => {
-    const ids = required(facts.shell, 'plan frame shell').panelIds;
-    expect(ids).toHaveLength(6);
-    expect(new Set(ids).size).toBe(ids.length);
-  });
 });
 
-describe('the plan frame walks through the session', () => {
+describe('the workspace frame walks through the session', () => {
   test('the request types into the composer before anything else exists', () => {
     expect(required(facts.movie, 'walkthrough').typing).toBeTrue();
   });
@@ -1330,18 +1245,6 @@ describe('the plan frame walks through the session', () => {
       required(facts.lateChunk, 'the late plan chunk').decisionsOnReturn,
       'the seek resolved on a plan beat with no decisions on screen',
     ).toBeTrue();
-  });
-});
-
-describe('the hero heading names its rotation', () => {
-  test('the h1 accessible name contains every visible phrase', () => {
-    const hero = required(facts.heroA11y, 'hero heading');
-    expect(hero.phrases.length).toBeGreaterThan(1);
-
-    for (const phrase of hero.phrases) {
-      expect(phrase.length).toBeGreaterThan(0);
-      expect(hero.label).toContain(phrase.replace(/\.$/, ''));
-    }
   });
 });
 
