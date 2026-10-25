@@ -2145,6 +2145,15 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return { admission: readiness, container };
   }
 
+  /** Starts a box that has run before, as a person opens its workspace, so its computer is ready by the time they ask;
+   *  one that never ran stays unstarted until something asks for it (owner, 2026-10-25). */
+  warm(): Promise<void> {
+    return settle(attempt('io', async () => {
+      if (this.ctx.storage.kv.get(DISK_STATE_KEY) === undefined) return;
+      await this.#armStartup();
+    }));
+  }
+
   /** Stamps the lease for a caller on a lane it cannot see, e.g. a terminal; the host calls
    *  this only from its caller entry points. Refuses while unready, like every operation. */
   noteTerminalActivity(): Promise<void> {

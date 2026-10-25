@@ -3897,6 +3897,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.overviewChanged();
     this.watchDeviceStatus(true);
     this.recheckSandboxRestore();
+    this.warmComputer();
+  }
+
+  /** A computer this workspace has used starts as the workspace is opened; one it never used is not started. */
+  private warmComputer(): void {
+    const box = this.computerBox();
+
+    if (box === undefined) return;
+    this.detachOwned(logged('computer.warm_failed', { doing: 'starting the computer as its workspace opens', otherwise: 'unavailable' }, async () => {
+      await box.warm();
+    }, { workspace: this.name }));
   }
 
   /** A sandbox that died mid-restore sends no settle. */
