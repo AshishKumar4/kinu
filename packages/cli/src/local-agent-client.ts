@@ -23,10 +23,9 @@ import {
   type CliSessionOptions,
 } from './session';
 import { SessionRecorder } from './session-recorder';
-import { MEMORY_PATH, normalizeModelMenu, type AgentModelMenu } from '@kinu.run/core';
+import { MEMORY_PATH, normalizeModelMenu, readConversation, type AgentModelMenu } from '@kinu.run/core';
 import {
   findForkPivot,
-  readConversation,
   promptFiles,
   promptText,
 } from './agent-client';

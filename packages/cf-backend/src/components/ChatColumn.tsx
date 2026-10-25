@@ -13,6 +13,8 @@ import { AskedQuestionsContext } from "@/components/QuestionCard";
 import { foldEventTurns } from "@/components/ChatEvents";
 import { ChatLiveTail, MessageView, ModelFallbackRows, SteerBubble } from "@/components/MessageView";
 import { Composer, useProviderWaitNotice, workspaceLoadNotice, type ComposerNotice } from "@/components/Composer";
+import type { ComposerCommand } from "@/components/SlashMenu";
+import { useChatCommands } from "@/hooks/use-chat-commands";
 import { ConnectedModelPicker } from "@/components/ModelPicker";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { TranscriptViewport } from "@/components/TranscriptViewport";
@@ -46,11 +48,15 @@ interface ChatColumnExtras {
   readonly notices?: readonly ComposerNotice[];
   readonly attachments?: ReturnType<typeof usePendingAttachments>;
   readonly drop?: ReturnType<typeof useFileDrop>;
-  readonly onBranch?: () => void;
+  /** Runs `words` beside the running turn, clearing `draft` from the field once the branch is taken. */
+  readonly onBranch?: (words: string, draft: string) => void;
   /** Sends the message a new chat was opened with (`useOpeningMessage`), as a press of Send would. */
   readonly opening?: true;
   /** Floats over the transcript's end above the composer, and moves nothing: what works out of sight (1024-l). */
   readonly float?: ReactNode;
+  /** The workspace's own slash commands, after the ones every chat runs (`chatCommands`); `say` tells why one did
+   *  nothing, in the column's notices. */
+  readonly commands?: (say: (words: string) => void) => readonly ComposerCommand[];
 }
 
 export function EmptyConversation({ mission }: { mission: string }) {
@@ -214,7 +220,7 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
   useAutogrow(inputRef, ui.draft);
 
   const { notice: steerNotice, send, sendWords, stop } = useSteerActions({
-    sendChat: (text, files) => state.sendChat(text, [...files], ui.mode),
+    sendChat: (text, files, mode = ui.mode) => state.sendChat(text, [...files], mode),
     abortChat: state.abortChat,
     draft: ui.draft,
     setDraft: ui.updateDraft,
@@ -228,6 +234,16 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
   const secretGuard = usePastedSecretGuard({ draft: ui.draft, setDraft: ui.setDraft, workspace: useOpenWorkspace() ?? undefined });
 
   const pickModel = useCallback((spec: string) => detach(Effect.promise(async () => state.setModel(spec))), [state]);
+
+  const commands = useChatCommands({
+    draft: ui.draft, own: extras.commands, send,
+    chat: {
+      history: chat.readAll, name: as?.displayName, label, stop, draft: ui.draft.trim(),
+      setModel: state.setModel, setEffort: state.setReasoningEffort, mode: ui.mode, setMode: ui.setMode, setDraft: ui.setDraft,
+      send: (words, mode) => sendWords(words, [], mode), live, branchBeside: extras.onBranch,
+    },
+  });
+
   const pickEffort = useCallback((effort: Parameters<typeof state.setReasoningEffort>[0]) => detach(Effect.promise(async () => state.setReasoningEffort(effort))), [state]);
 
   // An admitted turn with the operator's message last has no assistant row to ask, so the
@@ -269,16 +285,18 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
           textareaRef={inputRef}
           value={ui.draft}
           onValueChange={ui.setDraft}
-          onSend={secretGuard.guarded("send", send)}
+          // A draft naming a command runs it, once the guard has seen its words, as a message would be.
+          onSend={secretGuard.guarded("send", commands.submit)}
           placeholder={placeholder}
           disabled={state.connectionStatus !== "connected"}
           liveness={state.liveness}
           onRecover={state.recoverTurn}
           onStop={stop}
-          {...(extras.onBranch !== undefined && { onBranch: secretGuard.guarded("branch", extras.onBranch) })}
+          {...(extras.onBranch !== undefined && { onBranch: secretGuard.guarded("branch", () => { extras.onBranch?.(ui.draft.trim(), ui.draft.trim()); }) })}
           attention={<>{secretGuard.offer}{attention}</>}
           float={extras.float}
           mode={{ value: ui.mode, onChange: ui.setMode }}
+          slash={commands.slash}
           {...(attachments !== undefined && { attachments: { parts: [...attachments.parts], onAdd: attachments.add, onRemove: attachments.remove } })}
           modelPicker={<ConnectedModelPicker value={as?.model.model ?? ""} onChange={pickModel} size="xs"
             effort={{ value: as?.reasoningEffort ?? null, onChange: pickEffort }} />}
@@ -286,6 +304,7 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
             ...loadNotices(state.error, state.retryLoad),
             ...(state.newerDeployedBuild ? [VERSION_NOTICE] : []),
             ...(attachments?.refusal ? [{ id: "attach", tone: "warning" as const, text: attachments.refusal }] : []),
+            ...commands.notices,
             ...(extras.notices ?? []),
             ...turnEndNotices({
               newest, live, retryOwed, dismissed: dismissedFailure, chatError: state.chatError,

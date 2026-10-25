@@ -1215,6 +1215,8 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-composer:focus-within { border-color: var(--c-composer-line-focus); }
 /* The approved composer's field: its text 18 in from the edge, the action row close under it. */
 .p-composer [data-composer-field] { padding: 12px 18px 4px; }
+/* The slash commands a draft matches (SlashMenu.tsx), over the composer's top edge, its width, scrolling past ten rows. */
+.p-slash-menu { position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); z-index: 20; max-height: 336px; overflow-y: auto; }
 
 /* The attention stack: what waits on the owner, attached to the composer's top
    edge. The open card is the composer's own surface, inset so it reads as a

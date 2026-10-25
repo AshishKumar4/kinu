@@ -1,6 +1,6 @@
 /** Staged derivation: a streamed token re-folds only the live window. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { EMPTY_TRANSCRIPT_FOLD, extendTranscript, restoredRows, sealTranscript, type ChatHistoryEntry, type InlineSteer, type PositionCursor, type PositionPageRequest, type Transcript } from "@kinu.run/core";
+import { EMPTY_TRANSCRIPT_FOLD, extendTranscript, readConversation, restoredRows, sealTranscript, type ChatHistoryEntry, type ConversationMessage, type InlineSteer, type PositionCursor, type PositionPageRequest, type Transcript } from "@kinu.run/core";
 import type { UIMessage } from "ai";
 
 import { MAX_PAGE, useHistoryPages, type HistorySegment } from "@/hooks/use-paged-scroll";
@@ -30,6 +30,9 @@ interface ChatReserves {
 
 export interface ChatThread {
   readonly history: ChatHistory;
+  /** The whole conversation, oldest first, read from its history pages, never the window the tab holds; null while the
+   *  chat's agent is not known yet. */
+  readonly readAll: (() => Promise<ConversationMessage[]>) | null;
   readonly transcript: readonly UIMessage[];
   readonly thread: Transcript;
   readonly reserves: ChatReserves;
@@ -106,12 +109,14 @@ export function useChatThread({
     () => current.slid.length === 0 ? frame : [...current.slid, ...frame],
     [current.slid, frame]);
 
-  const pages = useHistoryPages(useCallback(
+  const readPage = useCallback(
     (request: PositionPageRequest) => rpc("getChatHistoryPage", [
       actor === undefined || actor === null ? request : { ...request, actor },
     ]),
     [rpc, actor],
-  ), CHAT_PAGE_SIZE);
+  );
+
+  const pages = useHistoryPages(readPage, CHAT_PAGE_SIZE);
 
   const { segments, busy, sizeFor, load, reset } = pages;
   const reading = useRef<ReserveRange | null>(null);
@@ -270,5 +275,7 @@ export function useChatThread({
     loadMore, read, retry: pages.retry, reset,
   };
 
-  return { history, transcript, thread, reserves, positions };
+  const readAll = useMemo(() => (actor === null ? null : async () => readConversation(readPage)), [actor, readPage]);
+
+  return { history, readAll, transcript, thread, reserves, positions };
 }

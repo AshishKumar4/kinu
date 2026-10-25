@@ -6,7 +6,7 @@ import { startTransition, useCallback, useMemo, useState } from "react";
 import type { FileUIPart } from "ai";
 import { readFailureText } from "@kinu.run/core";
 import type { ComposerNotice } from "@/components/Composer";
-import type { InlineSteer } from "@kinu.run/core";
+import type { InlineSteer, WorkMode } from "@kinu.run/core";
 import { Cause, Effect } from "effect";
 import { KinuError, settle } from "@kinu.run/core/obs";
 import type { SendAdmission } from "@/hooks/use-chat-owner";
@@ -15,8 +15,9 @@ import type { SendAdmission } from "@/hooks/use-chat-owner";
 const NOTICE_ID = "steer";
 
 export interface SteerActionsDeps {
-  /** The actor decides atomically in its turn queue whether a mid-turn message splices or runs next, so this hook never re-sends. */
-  sendChat: (text: string, files: readonly FileUIPart[]) => SendAdmission;
+  /** The actor decides atomically in its turn queue whether a mid-turn message splices or runs next, so this hook never
+   *  re-sends. `mode` is the chat's own unless a send names another. */
+  sendChat: (text: string, files: readonly FileUIPart[], mode?: WorkMode) => SendAdmission;
   abortChat: () => Promise<void>;
   draft: string;
   setDraft: (update: (current: string) => string) => void;
@@ -27,8 +28,8 @@ export interface SteerActionsDeps {
 interface SteerActions {
   notice: ComposerNotice | null;
   send: () => void;
-  /** Words sent as the draft's are, such as a new chat's opening. */
-  sendWords: (text: string, files: readonly FileUIPart[]) => boolean;
+  /** Words sent as the draft's are, such as a new chat's opening; in `mode` where one is named (`/plan <text>`). */
+  sendWords: (text: string, files: readonly FileUIPart[], mode?: WorkMode) => boolean;
   stop: () => void;
 }
 
@@ -45,9 +46,9 @@ export function useSteerActions(deps: SteerActionsDeps): SteerActions {
   const notice = useMemo(() => settled ?? queuedSteerNotice(steerRuns), [settled, steerRuns]);
 
   /** Sends `text`, and puts it back in the draft if no turn read it; false when the press was not taken. */
-  const sendWords = useCallback((text: string, files: readonly FileUIPart[]): boolean => {
+  const sendWords = useCallback((text: string, files: readonly FileUIPart[], mode?: WorkMode): boolean => {
     // `sendChat` owns admission.
-    const landing = sendChat(text, files);
+    const landing = sendChat(text, files, mode);
 
     if (landing === null) return false;
     setSettled(null);
