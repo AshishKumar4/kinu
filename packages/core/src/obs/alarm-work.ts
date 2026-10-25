@@ -14,6 +14,9 @@ export const ALARM_WORK = {
   // Runs a workspace's deletion: a person's at once, one that has not landed a lap after it began, one per alarm
   // (cf-backend `user/workspace-deletions.ts`).
   WorkspaceDeletionJobs: ['workspace.destroyed'],
+  // Clears what a marked account holds outside its storage once its workspaces are gone (cf-backend
+  // `user/account-deletion.ts`); the alarm after it destroys the account.
+  AccountDeletionJob: ['account.cleared'],
   // Drops or expires a deploy run nobody finished, an hour after its last call (cf-backend `deploy/deploy-do.ts`).
   DeployRunDO: ['deploy.run_dropped', 'deploy.run_expired'],
   // Deletes a CLI sign-in's object at the end of its retention (cf-backend `cli/auth-do.ts`).
