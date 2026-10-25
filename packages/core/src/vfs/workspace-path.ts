@@ -17,7 +17,7 @@ export const SCRATCH_ROOT = '/scratch';
 
 /**
  * The workspace's shared roots beside the homes, every agent's: the one list a host settles as group-shared, an archive
- * carries whole, a change-set reviews and a local archive stages.
+ * carries whole, a change-set reviews (the uploads aside, the person's own) and a local archive stages.
  */
 export const SHARED_ROOTS: readonly string[] = [SLATES_ROOT, UPLOADS_ROOT, SCRATCH_ROOT];
 

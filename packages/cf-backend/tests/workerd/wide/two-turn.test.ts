@@ -200,8 +200,8 @@ describe('two real turns over the HTTP model seam', () => {
     expect(held).toBeNull();
     expect([settled === null, settled === 'missing', settled === 'indeterminate']).toEqual([false, false, false]);
     // The work read follows the same claim: running while this activation holds it, and owed no more once settled.
-    expect(heldWork.map(({ kind, phase, attempt, blocked }) => ({ kind, phase, attempt, blocked })))
-      .toEqual([{ kind: 'turn', phase: 'running', attempt: 1, blocked: null }]);
+    expect(heldWork.map(({ kind, phase, attempt, why }) => ({ kind, phase, attempt, why })))
+      .toEqual([{ kind: 'turn', phase: 'running', attempt: 1, why: null }]);
     expect(settledWork).toEqual([]);
   });
 
@@ -334,7 +334,7 @@ describe('two real turns over the HTTP model seam', () => {
 
     // Main's stranded turn is its own isolate's, reported after what the workspace holds itself.
     expect(brief(work.stranded), JSON.stringify(work)).toEqual([...left, { kind: 'turn', id: 'turn-stranded', phase: 'blocked', attempt: 2 }]);
-    expect(work.stranded.map((row) => row.blocked === null)).toEqual([false, false, false]);
+    expect(work.stranded.map((row) => row.why === null)).toEqual([false, false, false]);
     expect(work.shown).toBe(true);
     expect(work.recovered).not.toBe('none');
     expect(brief(work.after)).toEqual(left);
