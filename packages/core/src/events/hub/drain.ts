@@ -53,6 +53,16 @@ function scheduleTierOf(event: KinuEvent): ScheduleTier | null {
   return event.payload.tier ?? null;
 }
 
+/** How a peer's message is answered: the agent's chat is its owner's, and never reaches the sender (hearthlit-field,
+ *  2026-10-25: a peer answered a question in its chat and the asker never heard it). */
+function peerAnswerRoute(event: KinuEvent): string {
+  if ((event.payload_visibility !== 'full' && event.payload_visibility !== 'redact') || event.variant !== 'peer_agent') return '';
+
+  return event.payload.reply_expected
+    ? ` [the sender awaits your answer: answer it with agents({op:'reply', eventId:'${event.id}', message:...})]`
+    : ` [your chat does not reach the sender: to answer, agents({op:'message', agent:'${oneLine(event.payload.from_agent_name)}', message:...})]`;
+}
+
 /** Escapes CR/LF so an untrusted field cannot forge an extra drain entry. */
 function oneLine(value: string): string {
   return value.replace(/\r\n|\r|\n/g, '\\n');
@@ -80,15 +90,7 @@ export function buildDrainBatch(events: KinuEvent[], internal?: InternalEventTes
   const lines = drainable.map((e) => {
     const r = renderForLLM(e);
 
-    const replyHint = (
-      (e.payload_visibility === 'full' || e.payload_visibility === 'redact')
-      && e.variant === 'peer_agent'
-      && e.payload.reply_expected
-    )
-      ? ` [the sender awaits your answer: answer it with agents({op:'reply', eventId:'${e.id}', message:...})]`
-      : '';
-
-    return `- [${r.variant}] from ${oneLine(r.triggered_by)}: ${oneLine(r.brief)}${replyHint}`;
+    return `- [${r.variant}] from ${oneLine(r.triggered_by)}: ${oneLine(r.brief)}${peerAnswerRoute(e)}`;
   });
 
   const count = `${drainable.length} event${drainable.length === 1 ? '' : 's'}`;
