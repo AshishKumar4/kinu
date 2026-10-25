@@ -3,8 +3,10 @@
  * frees it, and the two ways on that need nothing freed: the person's own model (for the model cap), and their own
  * Kinu at /deploy, with Move my data in Settings to bring their data. A refusal is a `budget` KinuError: work that never began.
  */
+import { Effect } from 'effect';
 import * as v from 'valibot';
 import { KinuError } from '../obs/error';
+import { attemptInItsWords, settle } from '../obs/index';
 import { ADMISSION_REFUSAL_MARK } from '../turn-failure';
 import { COMPUTER_SIZE_ORDER, isLimited, LIMIT_IDS, type AccountClass, type ComputerSize, type FreeTier } from './policy';
 import { periodEnd, type RunningComputer } from './store';
@@ -94,6 +96,18 @@ export function admitComputerStart({ klass, tier, use, now }: Admission, workspa
   }
 
   return null;
+}
+
+/**
+ * A computer's start as its owner's limits answer it (`limits_admitComputerStart`, asked by `ask`): the size it starts
+ * at, or the refusal in their words. Only the limits' own answer refuses; limits that could not be asked do not hold the
+ * computer down.
+ */
+export async function computerStartAnswer(ask: () => Promise<ComputerSize>, size: ComputerSize): Promise<{ readonly size: ComputerSize } | { readonly refused: string }> {
+  return await settle(Effect.match(attemptInItsWords('unavailable', ask), {
+    onSuccess: (runs) => ({ size: runs }),
+    onFailure: (refusal) => (refusal.code === 'budget' || refusal.code === 'denied' ? { refused: refusal.message } : { size }),
+  }));
 }
 
 /**
