@@ -14,7 +14,7 @@ import { chatCommand } from './chat';
 import { ensureLocalDaemonRunning } from './daemon';
 import { resolvePromptAttachments } from '../attachments';
 import { watchHeadlessConsents, watchTerminalConsents, type ConsentWatcher } from '../consent-watch';
-import { DIM, ERR, formatFailure, printFailure, printStepCut, printToolCall, printToolResult } from '../display';
+import { createTurnStatus, DIM, ERR, formatFailure, printFailure, printStepCut, printToolCall, printToolResult } from '../display';
 import { numberField, oneOfFlag, stringField, webhookTriggerInput } from '../options';
 import {
   executeLocalExecutor,
@@ -182,7 +182,7 @@ async function turnOnClient(client: AgentClient, rawPrompt: string, run: OneShot
 
   for (const problem of prompt.errors) console.error(`${ERR('error')} ${problem}`);
 
-  const render = run.json ? createJsonEventWriter(client) : renderRunEvent;
+  const render = run.json ? createJsonEventWriter(client) : runEventRenderer(client.agentName);
 
   const unsubscribe = client.subscribe((event) => {
     if (event.type === 'error') run.failure ??= describeProviderError({ cause: event.message });
@@ -530,6 +530,34 @@ function printQuestions(args: JsonObject): void {
   }
 
   console.log(DIM('It waits for your answer, which this command cannot give: answer it in the web app, or in `kinu chat` with /answer.'));
+}
+
+/**
+ * A one-shot run's output, with chat's status line on a terminal: a new workspace's first prompt waited 148 s on staging
+ * (2026-10-25) behind its setup turn and the model, and printed nothing until its answer. The line names only the state
+ * an event put the turn in, and is cleared before anything prints in its place.
+ */
+function runEventRenderer(agentName: string): (event: AgentClientEvent) => void {
+  const status = createTurnStatus();
+  const waiting = `waiting for ${agentName}`;
+  let shown = false;
+
+  const show = (label: string) => {
+    status.show(label);
+    shown = true;
+  };
+
+  return (event) => {
+    if (shown && event.type !== 'reasoning-delta' && event.type !== 'run-event' && event.type !== 'step-finish') {
+      status.clear();
+      shown = false;
+    }
+
+    renderRunEvent(event);
+
+    if (event.type === 'turn-start' || event.type === 'tool-result') show(waiting);
+    else if (event.type === 'tool-call') show(`calling ${event.toolName}`);
+  };
 }
 
 function renderRunEvent(event: AgentClientEvent): void {

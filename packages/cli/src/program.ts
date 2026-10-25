@@ -3,7 +3,7 @@
 import { Effect } from 'effect';
 import { Command, Option } from 'commander';
 import { ACCESS_TOKEN_SCOPES } from '@kinu.run/core';
-import { settleSync } from '@kinu.run/core/obs';
+import { KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { MODEL_OPTION_FLAG } from './options';
 import { createCommand } from './commands/create';
 import { acpCommand } from './commands/acp';
@@ -138,6 +138,7 @@ export function buildProgram(): Command {
 
   program
     .command('list')
+    .aliases(['ls', 'workspaces'])
     .helpGroup(WORKSPACES)
     .description('List your workspaces')
     .action(listCommand);
@@ -157,6 +158,13 @@ export function buildProgram(): Command {
     .description('Delete a cloud workspace for good')
     .option('-y, --yes', 'Skip the confirmation prompt')
     .action(workspaceDeleteCommand);
+
+  // Deleting is reached for at the top; it says where it lives instead of "unknown command".
+  program
+    .command('delete [args...]', { hidden: true })
+    .aliases(['rm', 'remove'])
+    .allowUnknownOption()
+    .action(() => settle(Effect.fail(new KinuError('bad_input', 'Delete a cloud workspace with: kinu workspace delete <name>'))));
 
   program
     .command('export <name>')

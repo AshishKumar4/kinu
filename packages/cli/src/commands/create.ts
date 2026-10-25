@@ -22,7 +22,7 @@ export async function createCommand(name: string | undefined, opts: {
 
   const named = name ?? (interactive ? await ask('Workspace name', 'jarvis') : undefined);
 
-  if (named === undefined || named === '') throw new Error('Workspace name required.');
+  if (named === undefined || named === '') throw new Error('Name the workspace: kinu create <name> --purpose "what it is for"');
   const mode = await resolveMode(opts.mode, interactive);
   const purpose = opts.purpose ?? `A helpful AI assistant named ${named}.`;
 

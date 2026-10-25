@@ -34,10 +34,13 @@ if (topLevelArgs.length === 0) {
   process.exit(0);
 }
 
-if (topLevelArgs.length === 1 && (topLevelArgs[0] === '--help' || topLevelArgs[0] === '-h')) {
+if (topLevelArgs.length === 1 && ['--help', '-h', 'help'].includes(topLevelArgs[0] ?? '')) {
   printHelp(program);
   process.exit(0);
 }
+
+// `kinu help <command>`, as git and npm take it: that command's own help.
+if (topLevelArgs[0] === 'help') process.argv.splice(2, topLevelArgs.length, ...topLevelArgs.slice(1), '--help');
 
 // Under --json a parse error is the run's one JSON error line, as every other failure of a --json run is.
 const jsonRequested = topLevelArgs.includes('--json') || topLevelArgs.includes('--mode=json')
