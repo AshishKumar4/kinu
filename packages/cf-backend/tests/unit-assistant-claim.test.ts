@@ -29,3 +29,18 @@ test("removing the assistant frees its claim, and removing another workspace lea
   expect(await userDO.getConfig(owner, 'assistant')).toBeNull();
   expect(await userDO.claimConfig(owner, 'assistant', 'kinu-b')).toBe('kinu-b');
 });
+
+// Staging 2026-10-25: an assistant deleted and installed again within the minute claimed the dying name, and the install's
+// create waited 39 s for that workspace's teardown. The person's delete frees the claim with its mark, before the job runs.
+test("a deletion the person asks for frees the assistant's claim at once, so a reinstall makes a new workspace", async () => {
+  const { userDO } = createTestUserDO({ durableObjectId: OWNER });
+  const owner = await testOwner();
+
+  await userDO.registerWorkspace(owner, 'kinu-a');
+  await userDO.claimConfig(owner, 'assistant', 'kinu-a');
+  await userDO.requestWorkspaceRemoval(owner, 'kinu-a', OWNER);
+
+  expect(await userDO.getConfig(owner, 'assistant')).toBeNull();
+  expect(await userDO.claimConfig(owner, 'assistant', 'kinu-b')).toBe('kinu-b');
+  expect((await userDO.registerWorkspace(owner, 'kinu-b')).status).toBe('created');
+});

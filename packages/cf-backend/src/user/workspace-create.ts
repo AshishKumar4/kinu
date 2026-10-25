@@ -91,15 +91,15 @@ export function createCloudWorkspaceForUser<Id>(
     const trimmedPurpose = input.purpose?.trim() ?? '';
     const purpose = trimmedPurpose === '' ? undefined : trimmedPurpose;
 
-    const menu = yield* Effect.promise(async () => listAvailableModels(env, userId, caller));
+    // The menu and the account's default model, read side by side.
+    const [menu, model] = yield* Effect.promise(async () => Promise.all([
+      listAvailableModels(env, userId, caller),
+      input.model ?? userDO.getWorkspaceProfileCatalog(caller).then((read) => read.catalog.tiers.default.model),
+    ]));
 
     // Refused when no first turn could run (`defaultSpecFor`). Only a named model is pinned: an unpinned workspace
     // follows the account's default tier, as on the CLI. The error copy is surface-specific.
-    const servable = defaultSpecFor(
-      input.model ?? (yield* Effect.promise(async () => userDO.getWorkspaceProfileCatalog(caller))).catalog.tiers.default.model,
-      menu.models.map((entry) => entry.spec),
-      new Set(menu.failures.map((failure) => failure.provider)),
-    );
+    const servable = defaultSpecFor(model, menu.models.map((entry) => entry.spec), new Set(menu.failures.map((failure) => failure.provider)));
 
     if (!servable) {
       return yield* createConflict('unavailable', 'Cloudflare Workers AI is not connected. Reconnect Cloudflare with Workers AI permissions, or choose a default model in your user settings, then create the workspace again.');
@@ -109,7 +109,13 @@ export function createCloudWorkspaceForUser<Id>(
 
     // The first call to reach a workspace's object places it, and it never moves: reached here, with its hint and by a
     // read that makes nothing, before its row is published and anything else can reach it (`workspace-placement.ts`).
-    yield* Effect.promise(async () => env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(identity.name), { locationHint: placement }).storedWorkspace());
+    // Its computer is placed with it, side by side: each is a new object's first start, about a second on staging
+    // (2026-10-25), and one after the other they held the install's answer for both.
+    yield* Effect.promise(async () => Promise.all([
+      env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(identity.name), { locationHint: placement }).storedWorkspace(),
+      settleLogged('workspace.computer_unplaced', { doing: "placing the workspace's computer", otherwise: 'unavailable' },
+        async () => { await env.KinuDevbox?.getByName(sandboxIdForWorkspace(identity.name), { locationHint: placement }).boxSize(); }, { workspace: identity.name }),
+    ]));
 
     // Only this call knows whether the title is the owner's choice or the mission's first line.
     const registered = yield* Effect.promise(async () => userDO.registerWorkspace(
@@ -288,11 +294,8 @@ async function initializeOrchestrator<Id>(input: InitializeOrchestratorInput<Id>
 
   const claim = await orchestrator.claimOwner(userId, placement);
   // First: a new workspace may run turns without being opened, and each needs its identity
-  // to reach the owner's UserDO.
+  // to reach the owner's UserDO. Its computer was placed with it, before its row was published.
   await userDO.ensureWorkspaceCapability(agentName, claim.capabilityHash);
-  // Its computer is placed with it, before any turn can reach it unhinted.
-  await settleLogged('workspace.computer_unplaced', { doing: "placing the workspace's computer", otherwise: 'unavailable' },
-    async () => { await env.KinuDevbox?.getByName(sandboxIdForWorkspace(agentName), { locationHint: placement }).boxSize(); }, { workspace: agentName });
   await orchestrator.setInitialDisplayName(displayName, nameOrigin);
   await orchestrator.setSoul(soul ?? renderSoulMarkdown({ name: displayName, mission }));
 

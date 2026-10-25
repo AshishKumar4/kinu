@@ -84,17 +84,18 @@ function installBlueprint<Id>(request: InstallRequest<Id>): Effect.Effect<Worksp
       env, userId, userDO, caller: owner, input: { name, displayName: body.displayName ?? blueprint.title, purpose: blueprint.line }, soul, seed, placement,
     }));
 
-    // Home reads the owner's own mail (docs/MAIL.md §7), once they have an address; a failed hand-over is said, not the install undone.
-    if (home) {
-      yield* attempt({ doing: 'giving the assistant the owner\'s mail', otherwise: 'unavailable' }, async () => objectNamed(env.OrchestratorAgent, entry.name).readOwnerMail()).pipe(
-        Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('mail.assistant_unlinked', failure, { workspace: entry.name }); })),
-      );
-    }
-
-    // The workspace is the person's either way: a count Explore missed is said, not their install undone.
-    yield* attempt({ doing: `counting an install of ${id} on Explore`, otherwise: 'unavailable' }, async () => request.counted(id)).pipe(
-      Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('explore.install_uncounted', failure, { blueprint: id }); })),
-    );
+    // Side by side, each said if it fails rather than the install undone. Home reads the owner's own mail (docs/MAIL.md
+    // §7), once they have an address; and the workspace is the person's whether or not Explore counted it.
+    yield* Effect.all([
+      home
+        ? attempt({ doing: 'giving the assistant the owner\'s mail', otherwise: 'unavailable' }, async () => objectNamed(env.OrchestratorAgent, entry.name).readOwnerMail()).pipe(
+          Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('mail.assistant_unlinked', failure, { workspace: entry.name }); })),
+        )
+        : Effect.void,
+      attempt({ doing: `counting an install of ${id} on Explore`, otherwise: 'unavailable' }, async () => request.counted(id)).pipe(
+        Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('explore.install_uncounted', failure, { blueprint: id }); })),
+      ),
+    ], { concurrency: 'unbounded', discard: true });
 
     return entry;
   });

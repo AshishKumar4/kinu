@@ -232,8 +232,8 @@ describe('where a new workspace runs', () => {
     const created = await postCreate({ name: AGENT, purpose: 'Review the checkout flow.' });
 
     expect(created.status).toBe(201);
-    // Placed by a read before its row is published, then claimed with where it was placed, then its computer placed.
-    expect(created.calls.slice(0, 6)).toEqual(['reached:weur', 'read', 'registered', 'reached:weur', 'claimed:weur', `computer:${sandboxIdForWorkspace(AGENT)}:weur`]);
+    // Placed by a read, and its computer beside it, before its row is published; then claimed with where it was placed.
+    expect(created.calls.slice(0, 6)).toEqual(['reached:weur', 'read', `computer:${sandboxIdForWorkspace(AGENT)}:weur`, 'registered', 'reached:weur', 'claimed:weur']);
     expect(created.calls.at(-1)).toBe('genesis');
   });
 
