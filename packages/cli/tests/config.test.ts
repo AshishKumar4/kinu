@@ -480,16 +480,19 @@ describe("a logout the server could not be told about", () => {
     return v.parse(JsonObjectSchema, parseJsonValue(readFileSync(join(home, "config.json"), "utf8")));
   }
 
-  async function runLogout(home: string, origin: string) {
+  async function runLogout(home: string, origin: string, via: "flag" | "environment" = "flag") {
     const script = `
       const { logoutCommand } = await import('./packages/cli/src/commands/auth.ts');
-      await logoutCommand({ origin: ${JSON.stringify(origin)} });
+      await logoutCommand(${via === "flag" ? JSON.stringify({ origin }) : "{}"}).catch((failure) => { console.error(String(failure?.message ?? failure)); });
     `;
+
+    const { KINU_ORIGIN: _ambient, ...inherited } = process.env;
+    const named: Record<string, string> = via === "environment" ? { KINU_ORIGIN: origin } : {};
 
     const proc = Bun.spawn({
       cmd: [process.execPath, "-e", script],
       cwd: resolve(__dirname, "../../.."),
-      env: { ...process.env, KINU_HOME: home, NO_COLOR: "1", KINU_TOKEN: "" },
+      env: { ...inherited, KINU_HOME: home, NO_COLOR: "1", KINU_TOKEN: "", ...named },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -540,6 +543,57 @@ describe("a logout the server could not be told about", () => {
       expect(after.pendingRevocation).toBeUndefined();
     } finally {
       await server.stop(true);
+    }
+  });
+
+  // The owner, 2026-10-25: after a reset of the deployment's sign-in store, `kinu logout` answered "invalid token" and
+  // kept the token, saying the session "is still valid".
+  test("a token the server no longer holds is signed out at once, with nothing left pending", async () => {
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch: (request) => (new URL(request.url).pathname === "/api/cli/logout"
+        ? Response.json({ error: "invalid token" }, { status: 401 })
+        : new Response("no", { status: 404 })),
+    });
+
+    const origin = `http://127.0.0.1:${server.port}`;
+    const home = logoutHome(origin);
+
+    try {
+      expect(await runLogout(home, origin)).toContain("Signed out");
+      expect(storedConfig(home)).not.toHaveProperty("accessToken");
+      expect(storedConfig(home)).not.toHaveProperty("pendingRevocation");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  // Review, 2026-10-25: logout sent the stored token to whatever --origin named, and that deployment's 401 now reads as
+  // ended, so the token was dropped while its own session stayed live.
+  test("a logout naming another deployment, by --origin or KINU_ORIGIN, sends it nothing and keeps the session signed in", async () => {
+    const asked: string[] = [];
+
+    const elsewhere = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch: (request) => {
+        asked.push(request.headers.get("authorization") ?? "");
+
+        return Response.json({ error: "invalid token" }, { status: 401 });
+      },
+    });
+
+    const home = logoutHome("https://kinu.example");
+
+    try {
+      for (const via of ["flag", "environment"] as const) {
+        expect(await runLogout(home, `http://127.0.0.1:${elsewhere.port}`, via)).toContain("Signed in to https://kinu.example");
+      }
+
+      expect({ asked, kept: storedConfig(home).accessToken }).toEqual({ asked: [], kept: TOKEN });
+    } finally {
+      await elsewhere.stop(true);
     }
   });
 });
