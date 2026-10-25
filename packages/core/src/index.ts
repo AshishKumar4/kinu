@@ -1342,6 +1342,8 @@ export {
 
 export { searchMemoryHits, type MemorySearchScope } from './memory/memory-search';
 
+export { recallForTurn, type RecalledMemory, type RecallSources } from './memory/turn-recall';
+
 // Memory writes
 export { memoryBytes } from './memory/note';
 
@@ -1355,7 +1357,7 @@ export {
 
 // Top-K recent agent_facts render into the system prompt every turn.
 export {
-  initFactsTable, createFactsStore, renderFactsBlock, searchFacts, normalizeFactKey, unifiedFacts,
+  initFactsTable, createFactsStore, factLine, renderMemoryBlock, searchFacts, normalizeFactKey, unifiedFacts,
   ACCOUNT_FACTS_ACTOR, FactOriginSchema, FactRevisionSchema, FactSchema, VERACITIES,
   type Fact, type FactsStore, type FactSearchHit, type FactOrigin,
   type MemoryScope, type Veracity,
@@ -1888,7 +1890,7 @@ export {
 
 export {
   resolveTurnSkills, steerSkillsBlock, splitTurnSkills, activatedSkillsBlock, filterToolSetBySkills,
-  renderFactsForTurn, type TurnSkillsConfig, type TurnSkillSurface,
+  renderMemoryForTurn, type TurnSkillsConfig, type TurnSkillSurface,
 } from './orchestrator/turn-surface';
 
 export { ModelCatalogSession, resolveEffectiveModelSpec, type ModelCatalogRead } from './orchestrator/model-catalog';

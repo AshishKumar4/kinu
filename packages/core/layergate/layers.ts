@@ -405,7 +405,8 @@ export const LAYERS: readonly Layer[] = Object.freeze([
     subjects: [
       'renderDynamicContextBlock',
       'DynamicContextLedger',
-      'renderFactsBlock',
+      'renderMemoryBlock',
+      'factLine',
     ],
     probes: [
       {
@@ -539,14 +540,16 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'volatile-context/facts-budget',
-        asserts: 'the facts block stops at its char budget rather than truncating mid-fact, and discloses the count it dropped',
-        observe: (s) => s.renderFactsBlock(
-          [
-            { key: 'deploy_target', value: 'staging' },
-            { key: 'notes', value: 'x'.repeat(80) },
-            { key: 'owner', value: { name: 'ashish' } },
-          ],
-          { maxChars: 60 },
+        asserts: 'the memory block keeps to its char budget: a line that does not fit is passed over whole, never cut, and counted',
+        observe: (s) => s.renderMemoryBlock(
+          [{
+            lines: [
+              { key: 'deploy_target', value: 'staging' },
+              { key: 'notes', value: 'x'.repeat(80) },
+              { key: 'owner', value: { name: 'ashish' } },
+            ].map((fact) => s.factLine(fact)),
+          }],
+          60,
         ),
       },
     ],

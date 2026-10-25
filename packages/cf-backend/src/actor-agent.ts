@@ -366,13 +366,15 @@ async function slateMember(
   return null;
 }
 
-/** What one turn read once for every step's dynamic context: MEMORY.md's tail, its skills, the account's facts, its mail. */
+/** What one turn read once for every step's dynamic context: MEMORY.md's tail, its skills, the account's facts, its mail,
+ *  what its words recalled. */
 interface TurnMemoryReads {
   readonly memoryTail: string | undefined;
   /** Absent: the actor's own active skills for the turn. */
   readonly activeSkills?: ActiveSkillSet | null;
   readonly accountFacts?: readonly Fact[];
   readonly mail?: TurnReads['mail'];
+  readonly recalled?: TurnReads['recalled'];
 }
 
 /** What a slate binding call runs with: the mode its actor's role leaves it, and that role's tool reach. */
@@ -3796,7 +3798,7 @@ export abstract class ActorAgent extends Agent<Env> {
     readonly reads: TurnMemoryReads;
     readonly surface: TurnSurface | null;
   }): DynamicContext {
-    const { memoryTail, accountFacts, activeSkills, mail } = step.reads;
+    const { memoryTail, accountFacts, activeSkills, mail, recalled } = step.reads;
     const held = this.heldDynamicOf(actor.reference);
     const extras = reach.kind === 'workspace' ? this.extraDynamicContext() : {};
     // The workspace's own agent is told why its turn runs and what its model holds; a hire, its model's name.
@@ -3818,6 +3820,7 @@ export abstract class ActorAgent extends Agent<Env> {
       ...(activeSkills !== null && activeSkills !== undefined && { activeSkills }),
       memoryTail,
       ...(accountFacts !== undefined && { accountFacts }),
+      ...(recalled !== undefined && { recalled }),
       ...(secrets !== undefined && { secrets: { granted: secrets.granted.map(({ name, hosts, position, reveal }) => ({ name, hosts, position, reveal })), withheld: secrets.withheld } }),
       ...(reach.kind === 'workspace' && { unavailableMcp: this._mcpUnavailable }),
       missingCapabilities: extras.extraMissingCapabilities?.() ?? [],

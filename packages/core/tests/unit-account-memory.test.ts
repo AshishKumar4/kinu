@@ -8,14 +8,14 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { createMemoryVfs, createTestFactsStore, createTestRuntime } from '@kinu.run/test-utils';
 import {
-  accountProposals, actorNamespaces, callOperation, initEffectTombstoneTable, initFactsTable, initSleepTimeTables, listOperations, renderFactsBlock,
+  accountProposals, actorNamespaces, callOperation, initEffectTombstoneTable, initFactsTable, initSleepTimeTables, listOperations, factLine, renderMemoryBlock,
   searchFacts, SleepTimeLane, sleepTimeWindow, SURFACE_POLICY, TurnContextBudget,
   unifiedFacts, WORKSPACE_ROOT,
   type AccountMemory, type AccountProposal, type ConversationProjection, type Fact, type JsonObject, type SurfaceActor,
 } from '../src/index';
 import { TurnFileLedger } from '../src/vfs/file-ledger';
 import { expandedTokenGroups, lexicalGroupRelevance } from '../src/memory/lexical-recall';
-import { renderFactsForTurn } from '../src/orchestrator/turn-surface';
+import { renderMemoryForTurn } from '../src/orchestrator/turn-surface';
 import { conversationsFor } from './helpers';
 
 const fact = (key: string, value: Fact['value'], extra: Partial<Fact> = {}): Fact => ({
@@ -72,12 +72,12 @@ describe('both scopes as one list', () => {
 
     expect(unified.map((each) => [each.key, each.scope])).toEqual([['owner_name', 'account'], ['reply_language', 'workspace']]);
 
-    const block = renderFactsBlock(unified);
+    const block = renderMemoryBlock([{ lines: unified.map((each) => factLine(each)) }], 4000);
 
     expect(block).toContain('Ashish');
     expect(block).toContain('English for this client');
     expect(block).not.toContain('Hindi');
-    expect(renderFactsBlock(unifiedFacts([...workspace], [...account]))).toBe(block);
+    expect(renderMemoryBlock([{ lines: unifiedFacts([...workspace], [...account]).map((each) => factLine(each)) }], 4000)).toBe(block);
   });
 });
 
@@ -107,7 +107,7 @@ describe("each step's memory block, as the prompt cache sees it", () => {
 
     for (let index = 0; index < 25; index += 1) facts.upsert(`note_${String(index)}`, String(index));
 
-    const block = renderFactsForTurn(facts, [fact('reply_language', 'Hindi')]) ?? '';
+    const block = renderMemoryForTurn(facts, [fact('reply_language', 'Hindi')]) ?? '';
 
     expect(block).not.toContain('Hindi');
   });
@@ -118,14 +118,14 @@ describe("each step's memory block, as the prompt cache sees it", () => {
     const account = [fact('owner_name', 'Ashish', { importance: 0.9 })];
 
     facts.upsert('deploy_target', 'staging');
-    const steps = [renderFactsForTurn(facts, account), renderFactsForTurn(facts, account), renderFactsForTurn(facts, account)];
+    const steps = [renderMemoryForTurn(facts, account), renderMemoryForTurn(facts, account), renderMemoryForTurn(facts, account)];
 
     expect(new Set(steps).size).toBe(1);
     expect(steps[0]).toContain('Ashish');
 
     // A fact the step wrote changes the block once, and it holds again after.
     facts.upsert('deploy_target', 'production');
-    const after = [renderFactsForTurn(facts, account), renderFactsForTurn(facts, account)];
+    const after = [renderMemoryForTurn(facts, account), renderMemoryForTurn(facts, account)];
 
     expect(after[0]).not.toBe(steps[0]);
     expect(after[1]).toBe(after[0]);

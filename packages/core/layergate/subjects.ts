@@ -11,7 +11,7 @@ import {
   DynamicContextLedger,
   renderDynamicContextBlock,
 } from '../src/prompting/volatile-context';
-import { renderFactsBlock } from '../src/memory/facts';
+import { factLine, renderMemoryBlock } from '../src/memory/facts';
 import { composePrepareStep } from '../src/prompting/prepare-step';
 import { pruneStepToolOutputs } from '../src/prompting/step-prune';
 import {
@@ -67,7 +67,8 @@ export interface PipelineSubjects {
 
   readonly renderDynamicContextBlock: typeof renderDynamicContextBlock;
   readonly DynamicContextLedger: typeof DynamicContextLedger;
-  readonly renderFactsBlock: typeof renderFactsBlock;
+  readonly renderMemoryBlock: typeof renderMemoryBlock;
+  readonly factLine: typeof factLine;
 
   readonly composePrepareStep: typeof composePrepareStep;
   readonly pruneStepToolOutputs: typeof pruneStepToolOutputs;
@@ -142,7 +143,8 @@ export const SUBJECT_SOURCE = {
 
   renderDynamicContextBlock: 'prompting/volatile-context.ts',
   DynamicContextLedger: 'prompting/volatile-context.ts',
-  renderFactsBlock: 'memory/facts.ts',
+  renderMemoryBlock: 'memory/facts.ts',
+  factLine: 'memory/facts.ts',
 
   composePrepareStep: 'prompting/prepare-step.ts',
   pruneStepToolOutputs: 'prompting/step-prune.ts',
@@ -216,7 +218,8 @@ export function createPipelineSubjects(rt: AgentRuntime): PipelineSubjects {
 
     renderDynamicContextBlock,
     DynamicContextLedger,
-    renderFactsBlock,
+    renderMemoryBlock,
+    factLine,
 
     composePrepareStep,
     pruneStepToolOutputs,

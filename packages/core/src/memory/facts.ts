@@ -362,27 +362,49 @@ export interface RenderedFact {
   readonly scope?: MemoryScope;
 }
 
-/** YAML-ish so the model treats it as data; an account fact is marked `# account`. */
-export function renderFactsBlock(facts: readonly RenderedFact[], opts: { maxChars?: number } = {}): string {
-  const max = opts.maxChars ?? 4000;
+/** A fact as the memory block shows it, YAML-ish so the model treats it as data: an account fact marked `# account`,
+ *  and `note` beside it. */
+export function factLine(fact: RenderedFact, note?: string): string {
+  const notes = [...(fact.scope === 'account' ? ['account'] : []), ...(note === undefined ? [] : [note])];
 
-  if (facts.length === 0) return '';
+  return `${fact.key}: ${renderFactValue(fact.value)}${notes.length === 0 ? '' : `  # ${notes.join(', ')}`}`;
+}
+
+/** Lines of the memory block under a heading; none, the block's first. */
+export interface MemorySection {
+  readonly heading?: string;
+  readonly lines: readonly string[];
+}
+
+/**
+ * `sections` within `maxChars`: a line that does not fit is passed over for the next, so one long line crowds out none
+ * after it, never cut mid-line; a heading is shown with its first line that fits; what was passed over is counted.
+ */
+export function renderMemoryBlock(sections: readonly MemorySection[], maxChars: number): string {
   const lines: string[] = [];
-  let shown = 0;
   let used = 0;
+  let passed = 0;
 
-  for (const f of facts) {
-    const line = `${f.key}: ${renderFactValue(f.value)}${f.scope === 'account' ? '  # account' : ''}`;
+  const fits = (text: string): boolean => used + text.length + 1 <= maxChars;
 
-    if (used + line.length + 1 > max) break;
-    lines.push(line);
-    used += line.length + 1;
-    shown++;
+  for (const { heading, lines: candidates } of sections) {
+    let headed = heading === undefined;
+
+    for (const line of candidates) {
+      const shown = headed ? line : `${heading ?? ''}\n${line}`;
+
+      if (!fits(shown)) {
+        passed += 1;
+        continue;
+      }
+
+      lines.push(shown);
+      used += shown.length + 1;
+      headed = true;
+    }
   }
 
-  if (shown < facts.length) {
-    lines.push(`# ...and ${facts.length - shown} more facts not shown: memory recall reads any key`);
-  }
+  if (passed > 0) lines.push(`# ...and ${String(passed)} more not shown: memory recall and search read the rest`);
 
   return lines.join('\n');
 }

@@ -4,10 +4,11 @@ import type { ServedStores } from '../tools/actor-stores';
 import { advisorReadTools, type AdvisorReadTools } from '../advisor/advisor-ports';
 import type { ModelAttemptIdentity } from '../providers/attempt-identity';
 import type { LanguageModel, ToolSet } from 'ai';
-import { Effect } from 'effect';
+import { Effect, type Exit } from 'effect';
 import type { ModelWindow } from '../context-window';
 import type { KinuExtension } from '../extension';
 import type { Fact } from '../memory/facts';
+import type { RecalledMemory } from '../memory/turn-recall';
 import type { MailInContext } from '../mail/in-context';
 import type { ActiveRoster } from '../types/dynamic-context';
 import type { SpendGate } from '../mission-budget';
@@ -22,7 +23,7 @@ import { ownProfileChoices, resolveTurnProfile, type PinnedProfile, type Profile
 import type { FrozenAuthority } from './turn-facts';
 import type { TierId } from '../types/profile';
 import { reasoningEffortOptions } from '../providers/effort';
-import { KinuError, settleSync } from '../obs/index';
+import { attempt, hold, KinuError, settle, settleSync } from '../obs/index';
 import type { CountableRequest, InputTokenCount } from '../providers/input-tokens';
 import { parseModelSpec, type CacheRetention } from '../providers/types';
 import type { ModelCallSink, ModelCallSpend, ModelOperationSink } from '../events/model-call';
@@ -68,6 +69,8 @@ export interface TurnReads {
   readonly activeSkills: ActiveSkillSet | null;
   readonly accountFacts?: readonly Fact[];
   readonly mail?: ActiveRoster<MailInContext>;
+  /** What the turn's words recalled of memory. */
+  readonly recalled?: readonly RecalledMemory[];
 }
 
 export interface TurnAssemblySources {
@@ -118,6 +121,8 @@ export interface TurnAssemblySources {
   mail?(): Promise<ActiveRoster<MailInContext> | undefined>;
   /** MEMORY.md's tail, read once per turn so every step renders the same block. */
   memoryTail(): Promise<string | undefined>;
+  /** What the turn's words match in its memory (`recallForTurn`), read once per turn beside its other reads. */
+  recall?(question: string): Promise<readonly RecalledMemory[]>;
   operation(profile: ResolvedTurnProfile, inputs: ProfileAuthorityInputs): OperationProfile;
   /** Binds the resolved profile; `toolset` is read again after it. */
   settle?(profile: ResolvedTurnProfile, inputs: ProfileAuthorityInputs): void | Promise<void>;
@@ -148,7 +153,7 @@ export type RunTurnSources = Omit<TurnAssemblySources, 'toolset' | 'externalTool
 /** What a backend brings to a seated actor's turn sources; the rest is read off the actor ({@link actorTurnSources}). */
 export type ActorTurnParts = Pick<RunTurnSources,
   'backend' | 'harnessMode' | 'models' | 'profileInputs' | 'choices' | 'ancestors' | 'agentsActions' | 'temporaryAsk' | 'soul' | 'agentsMd'
-  | 'budget' | 'observeStream' | 'operations' | 'attachmentBudget' | 'extensions' | 'dynamic' | 'accountFacts' | 'mail'> & {
+  | 'budget' | 'observeStream' | 'operations' | 'attachmentBudget' | 'extensions' | 'dynamic' | 'accountFacts' | 'mail' | 'recall'> & {
   /** The workspace's identity: its own agent speaks as it, any other as a named agent of it. */
   readonly workspaceIdentity: () => Promise<PromptIdentity>;
   readonly instructionTrust: InstructionTrustResolver;
@@ -291,16 +296,30 @@ function resolvedTurnProfile(sources: TurnAssemblySources, turn: Pick<TurnDraft,
 }
 
 /** Effect-free: a measure between turns assembles too. */
-/** What every step of the turn renders the same bytes of: MEMORY.md's tail, the account's facts and the agent's mail. */
-async function readTurnOnce(sources: TurnAssemblySources, activeSkills: ActiveSkillSet | undefined): Promise<TurnReads> {
-  const [memoryTail, accountFacts, mail] = await Promise.all([sources.memoryTail(), sources.accountFacts?.(), sources.mail?.()]);
+/** What every step of the turn renders the same bytes of: MEMORY.md's tail, the account's facts, the agent's mail and
+ *  what its words recalled, started as its preparation began (`recalling`). */
+async function readTurnOnce(
+  sources: TurnAssemblySources, activeSkills: ActiveSkillSet | undefined, recalling: Promise<Exit.Exit<readonly RecalledMemory[], KinuError>> | undefined,
+): Promise<TurnReads> {
+  const [memoryTail, accountFacts, mail, recalled] = await Promise.all([
+    sources.memoryTail(), sources.accountFacts?.(), sources.mail?.(), recalling === undefined ? undefined : settle(Effect.flatten(Effect.promise(() => recalling))),
+  ]);
 
-  return { memoryTail, activeSkills: activeSkills ?? null, ...(accountFacts !== undefined && { accountFacts }), ...(mail !== undefined && { mail }) };
+  return {
+    memoryTail, activeSkills: activeSkills ?? null,
+    ...(accountFacts !== undefined && { accountFacts }), ...(mail !== undefined && { mail }), ...(recalled !== undefined && { recalled }),
+  };
 }
 
 export async function assembleActorTurn(sources: TurnAssemblySources, request: TurnAssemblyRequest): Promise<AssembledTurn> {
   const { models } = sources;
   const { frozen } = request;
+
+  // Started first and taken last, so the search runs beside every wait of the turn's preparation.
+  const recalling = sources.recall === undefined
+    ? undefined
+    : hold(attempt({ doing: "recalling the memory a turn's words match", otherwise: 'io' }, async () => await sources.recall?.(request.userText) ?? []));
+
   // The tier never depends on the tools, so the drafted model is the served one; a frozen execution's is the one it froze.
   const { profileInputs, choices, roleSkills, drafted, served: spec, limits } = await draftTurn(sources, request);
 
@@ -329,7 +348,7 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
   const { pinned, invoked } = splitTurnSkills(activeSkills);
 
   const [window, agentsMd, soul, identity, reads] = await Promise.all([
-    models.catalog.windowFor(spec), sources.agentsMd(limits), sources.soul(), sources.identity(), readTurnOnce(sources, activeSkills),
+    models.catalog.windowFor(spec), sources.agentsMd(limits), sources.soul(), sources.identity(), readTurnOnce(sources, activeSkills, recalling),
     models.catalog.warm(profile.tier.fallbacks.map((fallback) => fallback.model)),
   ]);
 

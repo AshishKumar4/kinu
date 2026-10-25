@@ -86,6 +86,8 @@ interface OpenTurn {
   mail?: TurnReads['mail'];
   /** MEMORY.md's tail, read with its sources for the same reason. */
   memoryTail?: string;
+  /** What the turn's words recalled of memory, read with the facts for the same reason. */
+  recalled?: TurnReads['recalled'];
   /** The opening the workspace's fence admitted for it: what it offers and closes must still be that one. */
   readonly fenced?: OpenedAt;
   /** A run's end, which its agent tells with a report (`runEnded`). */
@@ -419,6 +421,7 @@ export class AgentTurns {
     const reads: TurnReads = {
       memoryTail: turn.memoryTail, activeSkills: null,
       ...(turn.accountFacts !== undefined && { accountFacts: turn.accountFacts }), ...(turn.mail !== undefined && { mail: turn.mail }),
+      ...(turn.recalled !== undefined && { recalled: turn.recalled }),
     };
 
     // The surface holds the profile its isolate bound, once bound, else the one it resolved.
@@ -529,7 +532,8 @@ export class AgentTurns {
     const mode = this.mode(turn, prepared);
     const { explicitTier, frozen } = turn.request;
 
-    const sources = await materializeTurnSources(
+    // What the turn's words recall is searched beside the reading of its sources.
+    const [recalled, sources] = await Promise.all([surface.sources.recall?.(input.task), materializeTurnSources(
       { ...surface.sources, toolset: () => ({ tools: surface.offered, stores: surface.stores }), externalTools: async () => ({}) },
       {
         userText: input.task, workMode: mode,
@@ -537,7 +541,9 @@ export class AgentTurns {
         // A recovered execution's model bundle is the one it froze, whatever the tier says now.
         ...(frozen !== undefined && { frozen }),
       },
-    );
+    )]);
+
+    turn.recalled = recalled;
 
     turn.memoryTail = sources.memoryTail ?? undefined;
     const advisorTools = await this.advisorTools(turn, surface.stores);

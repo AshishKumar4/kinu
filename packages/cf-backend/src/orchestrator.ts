@@ -151,7 +151,7 @@ import {
   type RunEvent, type RunEventQuery, type StoredRunEvent,
 
   listProposedTasks, updateProposedTaskStatus,
-  searchMemoryHits, type HybridHit,
+  searchMemoryHits, recallForTurn, type HybridHit, type RecallSources,
   type BackgroundJob, type ListedBackgroundJob, TriggerRegistry, ReplyChannelStore, dispatchEmailRepliesForTurn,
   type ReasoningEffort, type ShellApprovalMode,
   type AlarmScheduler,
@@ -1797,19 +1797,26 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * its delegation, receipted under the execution `scope` names, over the ledgers it gives. The workspace's planes (its
    * jobs, its role switch, its external tools, its program namespaces) only where its reach names them.
    */
-  /** What an actor's builtins read its stores from (`builtinStores`): its native tools, and a slate's call as it. */
-  private storeInputs(actor: CFSeat, reach: ActorReach, ledgers: Pick<TurnLedgers, 'files' | 'context'>, profile: () => OperationProfile | null): BuiltinStoreInputs {
-    const { runtime } = actor;
+  /** The memory an actor's search reads, its turn's recall as its `memory` tool: its notes, its facts, the account's. */
+  private recallSources(actor: CFSeat, reach: ActorReach): RecallSources {
     // The workspace's own agent reads the account's memory whoever owns it; a hire, only once it is owned.
     const proposer = { by: 'agent', agent: actor.record.name } as const;
     const account = reach.kind === 'workspace' ? this.account.memory(proposer) : this.account.ownedMemory(proposer);
 
+    // Rows are `actor_id`-scoped, so a hire's `remember` cannot overwrite what the workspace observed under the same words.
+    return { memory: actor.runtime.memory, vectorStore: actor.runtime.vectorStore, facts: actor.stores.facts, ...(account !== undefined && { account }) };
+  }
+
+  /** What an actor's builtins read its stores from (`builtinStores`): its native tools, and a slate's call as it. */
+  private storeInputs(actor: CFSeat, reach: ActorReach, ledgers: Pick<TurnLedgers, 'files' | 'context'>, profile: () => OperationProfile | null): BuiltinStoreInputs {
+    const { runtime } = actor;
+    const { vectorStore, facts, account } = this.recallSources(actor, reach);
+
     return {
       rt: runtime,
       conversations: this.agentStores(actor.handle.actorId).conversations(),
-      // Rows are `actor_id`-scoped, so a hire's `remember` cannot overwrite what the workspace observed under the same words.
-      vectorStore: runtime.vectorStore,
-      facts: actor.stores.facts,
+      vectorStore,
+      facts,
       ...(account !== undefined && { account }),
       contextBudget: ledgers.context,
       fileLedger: ledgers.files,
@@ -2145,6 +2152,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       extensions: () => (reach.kind === 'workspace' ? this.extensions.list() : []),
       accountFacts: () => planes.facts ?? this.account.factsForTurn(),
       mail: () => planes.unreadMail ?? this.unreadMailOf(actor, Promise.resolve(ownerMail)),
+      recall: (question) => recallForTurn(this.recallSources(actor, reach), question),
       dynamic: (reads) => (profile, tools) => this.actorDynamicContext(actor, reach, { profile, tools, reads, surface: turn?.surface ?? null }),
       run: turn?.surface.key ?? { runId: WORKSPACE_RUN_ID, turnId: null },
     });

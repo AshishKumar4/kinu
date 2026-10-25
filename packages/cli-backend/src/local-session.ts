@@ -149,7 +149,7 @@ import { discoverAgentsMd } from './agents-md';
 import { osLeaseProcess } from './agent-host/lease-process';
 import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
 import { createCLIHeadRuntime, hostedCodemodeTool, type CLIHeadRuntimeDeps } from './head-runtime';
-import { detectOrphanedFibers, readMemoryTail } from '@kinu.run/core';
+import { detectOrphanedFibers, readMemoryTail, recallForTurn } from '@kinu.run/core';
 import { connectMcpServers, type McpServerConfig } from './mcp';
 import type { LocalModelResolver } from './model-resolver';
 import {
@@ -1842,6 +1842,8 @@ export class LocalAgentSession {
       agentsMd: (window) => discoverAgentsMd(this.cwd, window, this.instructionTrust),
       identity: async () => this.promptIdentity(),
       memoryTail: () => readMemoryTail(this.rt.memory),
+      // No semantic index here: the notes are matched by FTS5, the facts by their words.
+      recall: (question) => recallForTurn({ memory: this.rt.memory, vectorStore: null, facts: this.factsStore }, question),
       artifacts: () => this.currentTurnArtifacts(),
       // A turn the owner's approval started implements that revision: the tasks it makes are the plan's, written through the
       // store the builtins open over this runtime's own SQL (core withTaskPlan).
@@ -1856,7 +1858,7 @@ export class LocalAgentSession {
       scaffoldSpend: { source: 'scaffold', report: this.modelCallSink, operations: this.modelOperations },
       attachmentBudget: this.actorSession.orchestrator.acc.ledgers.context,
       extensions: () => [this.compactionExtension],
-      dynamic: ({ memoryTail, activeSkills }) => (profile, tools) => this.dynamicContextSnapshot(memoryTail, profile, tools, { turn, activeSkills: activeSkills ?? undefined }),
+      dynamic: ({ memoryTail, activeSkills, recalled }) => (profile, tools) => this.dynamicContextSnapshot({ memoryTail, recalled }, profile, tools, { turn, activeSkills: activeSkills ?? undefined }),
       operation: (profile, inputs) => captureOperationProfile({
         actor: this.rt.actor, profile, inputs, runId: lease?.runId ?? this.chat.currentRunId ?? WORKSPACE_RUN_ID, turnId: lease?.turnId ?? null,
       }),
@@ -2309,7 +2311,7 @@ export class LocalAgentSession {
   /** Live state for one model step (DO dynamicContextSnapshot peer). Nothing clock-derived: a
    *  wall-clock field would re-fingerprint the block every request. */
   private dynamicContextSnapshot(
-    memoryTail: string | undefined, profile: ResolvedTurnProfile, tools: ToolSet,
+    { memoryTail, recalled }: Pick<TurnReads, 'memoryTail' | 'recalled'>, profile: ResolvedTurnProfile, tools: ToolSet,
     turnOf: { readonly turn: TurnReason; readonly activeSkills: ActiveSkillSet | undefined },
   ): DynamicContext {
     return collectDynamicContext({
@@ -2322,6 +2324,7 @@ export class LocalAgentSession {
       turn: turnOf.turn,
       ...(turnOf.activeSkills !== undefined && { activeSkills: turnOf.activeSkills }),
       memoryTail,
+      ...(recalled !== undefined && { recalled }),
       unavailableMcp: this.mcpUnavailable,
       missingCapabilities: [],
       subagentDelegates: () => subagentDelegatesOf(this.teamDeps?.snapshot() ?? []),
@@ -2802,14 +2805,15 @@ export class LocalAgentSession {
       report: own.report,
       attachmentBudget: actor.session.orchestrator.acc.ledgers.context,
       extensions: () => [own.extension],
+      recall: (question) => recallForTurn({ memory: actor.runtime.memory, vectorStore: null, facts: actor.stores.facts }, question),
       // The turn's own reads, read once by core (turn-assembly), as the chat's and the cloud's actors take them.
-      dynamic: ({ memoryTail, activeSkills }) => (profile, tools) => this.actorDynamicContext(actor, profile, tools, { memoryTail, activeSkills }),
+      dynamic: ({ memoryTail, activeSkills, recalled }) => (profile, tools) => this.actorDynamicContext(actor, profile, tools, { memoryTail, activeSkills, ...(recalled !== undefined && { recalled }) }),
       run: { runId, turnId: null },
     });
   }
 
   /** Per-step context from the hosted actor's own stores, never this session's, with the reads its turn made. */
-  private actorDynamicContext(actor: HostedActor, profile: ResolvedTurnProfile, tools: ToolSet, reads: Pick<TurnReads, 'memoryTail' | 'activeSkills'>): DynamicContext {
+  private actorDynamicContext(actor: HostedActor, profile: ResolvedTurnProfile, tools: ToolSet, reads: Pick<TurnReads, 'memoryTail' | 'activeSkills' | 'recalled'>): DynamicContext {
     return collectDynamicContext({
       rt: actor.runtime,
       stores: actor.stores,
@@ -2818,6 +2822,7 @@ export class LocalAgentSession {
       runtime: this.runtimeFacts(profile),
       ...(reads.activeSkills !== null && { activeSkills: reads.activeSkills }),
       memoryTail: reads.memoryTail,
+      ...(reads.recalled !== undefined && { recalled: reads.recalled }),
       missingCapabilities: [],
       subagentDelegates: () => [],
       approvals: () => ({ items: [], total: 0 }),

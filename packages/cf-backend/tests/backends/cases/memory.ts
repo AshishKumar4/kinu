@@ -1,7 +1,7 @@
 /** Sleep-time compute: a settled conversation compresses into the actor's facts on the lane's cadence. */
 import { expect } from 'bun:test';
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
-import type { ActorHandle, SqlExecutor } from '@kinu.run/core';
+import { CHAT_SESSION_ID, chatSeed, createFactsStore, keptMediaName, type ActorHandle, type SqlExecutor } from '@kinu.run/core';
 import type { ScriptedTurnResult } from '@kinu.run/test-utils';
 import type { SharedCase } from '../cases';
 
@@ -36,7 +36,56 @@ function holding(stores: SqlExecutor, chat: SqlExecutor, text: string) {
   };
 }
 
+/** The memory block a model call was sent last: its step's own, after the blocks of the steps before it. */
+function memoryBlockOf(request: string): string {
+  const shown = [...request.matchAll(/## World model \(facts you remembered\)\\n([\s\S]*?)(?:\\n\\n|<\/dynamic_context>)/gu)].at(-1)?.[1] ?? '';
+
+  return shown.replaceAll('\\n', '\n');
+}
+
+const DAY_MS = 86_400_000;
+
 export const MEMORY_CASES: readonly SharedCase[] = [
+  {
+    // Roadmap, 2026-10-25: each turn was shown its newest twenty facts whatever it asked, so a fact older than them was
+    // never in its block.
+    title: "a turn's block holds the old fact and note its words match, dated, before the newest facts, and none of it is kept",
+    async run({ surface, answers, sql, actor, history, requests }) {
+      // Written before any turn reads them, as a turn's own writes are seen by the next.
+      const store = createFactsStore(sql, actor);
+      const old = Date.now() - 40 * DAY_MS;
+
+      store.upsert('deploy_region', 'us-east-1');
+      store.upsert('deploy_region', 'eu-west-3');
+      void sql`UPDATE agent_facts SET last_observed_at = ${old} WHERE actor_id = ${actor.actorId} AND key = 'deploy_region'`;
+
+      for (let index = 0; index < 30; index += 1) store.upsert(`reading_list_${String(index)}`, `chapter ${String(index)} of the parser book, `.repeat(4));
+
+      answers(called('memory', { op: 'note', content: 'We deploy to us-east-1 for now.' }));
+      await surface.send('Remember where we deploy.');
+      await surface.send('Which region do we deploy to?');
+
+      const block = memoryBlockOf(JSON.stringify(requests().at(-1)?.prompt));
+      const lines = block.split('\n');
+      const kept = (await chatSeed(history.transcript(CHAT_SESSION_ID), keptMediaName)).messages.flatMap((message) => message.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])));
+
+      expect({
+        matched: lines.find((line) => line.startsWith('deploy_region:')),
+        note: lines.find((line) => line.includes('us-east-1 for now'))?.includes('superseded by fact deploy_region'),
+        first: lines.findIndex((line) => line.startsWith('deploy_region:')) < lines.findIndex((line) => line.startsWith('reading_list_')),
+        newest: lines.some((line) => line.startsWith('reading_list_')),
+        within: block.length <= 2000 + 100,
+        kept: kept.some((text) => text.includes('deploy_region') || text.includes('World model')),
+      }).toEqual({
+        matched: `deploy_region: eu-west-3  # as of ${new Date(old).toISOString().slice(0, 10)}`,
+        note: true,
+        first: true,
+        newest: true,
+        within: true,
+        kept: false,
+      });
+    },
+  },
   {
     // Roadmap, 2026-10-25: a note, a fact or a sleep-time write kept a secret said in chat as it was said.
     title: 'a key said in chat reaches no note, fact, sleep-time fact or search index, each keeping the kind it was',

@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { renderFactsBlock } from '../src/memory/facts';
+import { factLine, renderMemoryBlock } from '../src/memory/facts';
 import { createTestFactsStore } from '@kinu.run/test-utils';
 
 describe('agent_facts', () => {
@@ -83,14 +83,17 @@ describe('agent_facts', () => {
     expect(top[1].key).toBe('b');
   });
 
-  test('renderFactsBlock truncates at maxChars and DISCLOSES what it dropped', () => {
+  test('the memory block keeps to maxChars, passes over a line that does not fit for the next, and DISCLOSES what it dropped', () => {
     const { facts } = createTestFactsStore();
 
     for (let i = 0; i < 100; i++) facts.upsert(`k${i}`, `v${i}`.repeat(20));
-    const block = renderFactsBlock(facts.recentTopK(50), { maxChars: 200 });
+    const block = renderMemoryBlock([{ lines: facts.recentTopK(50).map((fact) => factLine(fact)) }], 200);
     const [disclosure, ...factLines] = block.split('\n').reverse();
     expect(factLines.join('\n').length).toBeLessThanOrEqual(200);
-    expect(disclosure).toMatch(/\.\.\.and \d+ more facts not shown/);
+    expect(disclosure).toMatch(/\.\.\.and \d+ more not shown/);
+
+    // A line too long to fit leaves room for one after it.
+    expect(renderMemoryBlock([{ lines: ['a: 1', `b: ${'x'.repeat(300)}`, 'c: 3'] }], 200).split('\n').slice(0, 2)).toEqual(['a: 1', 'c: 3']);
   });
 
   test('confidence outside 0..1 clamps at upsert', () => {

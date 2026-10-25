@@ -28,6 +28,8 @@ export interface HybridHit {
   /** Display override for `path:start-end`: `fact: <key>`, `account fact: <key>` or `account note: <id>`. */
   readonly label?: string;
   readonly scope: MemoryScope;
+  /** A fact hit's key. */
+  readonly factKey?: string;
   readonly lexicalScore?: number;
   readonly semanticScore?: number;
 }
@@ -214,6 +216,7 @@ function fused({ lexical, semantic, factArm, accountNotes, finalK, rrfK }: FuseI
       rrfScore: m.rrfScore,
       sources,
       ...hitScope(f, n),
+      ...(f !== undefined && { factKey: f.key }),
       lexicalScore: l?.score,
       semanticScore: s?.score,
     };
