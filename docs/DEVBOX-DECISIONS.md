@@ -5340,6 +5340,52 @@ The `resurrect` reds of 10-22 (4ef540964), 10-24 01:14 (9334c6bb9) and 14:12 (44
 stop returned in about 6 s, the start's snapshot was not admitted in 10 s, the box woke from its backup, and the saved
 screen, on the root, was gone.
 
+D112. A rest keeps its snapshot whenever the take lands before the container has stopped; only a take still unanswered
+then is given up (2026-10-25, ledger "cutting the computer's start time"; amends D108). D108's 60 s stays as how long
+the stop waits for the take, not as a verdict on it.
+
+What was measured.
+- Production, hearthlit-field (`a9dc0e0a…`): its rests of 10-24 13:05:59, 10-25 04:54:32 and 07:06:08 took 62.1, 104.0
+  and 66.6 s from the commit's `checkpoint.bytes` to the heartbeat's end. Each gave the take up at 60 s, and its stop
+  then took 2.1, 44.0 and 6.6 s more: the stop waits for a save under way (D51). Each next start came from the golden
+  and the backup (`attach … lazy`): 20.2, 11.7 and 15.0 s, of which mounting the layers took 6.8, 8.7 and 12.0 s.
+  After the first loss every recovery's copy put the whole workspace on the root, so the box never woke from a snapshot
+  again.
+- Every rest in the week to 10-25 (telemetry, 1,079): commit to the box's next line p50 3.5 s and p99 83 s on
+  production (57), p50 3.3 s and p99 48.6 s on staging (228), p50 3.9 s on the contracts fixture (522), max 146 s
+  (lanes fixture, 60 s and then an 86 s stop). Five rests, all before D108, four of them on staging, logged nothing
+  within 150 s of their commit; the one read further (`f2c8ab7b`, 10-21 13:44) logged nothing for 15 min, until its
+  object reset.
+- What a take costs, staging 2026-10-25, one box per row resting from Medium, a resize resting and starting it: with
+  one file of 0.5 to 3 GiB on the root, commit to the next start took 12 to 24 s and the take was kept; with 200,000
+  files of 4 KiB, about 55 s from the resize's call to the next start; with 400,000 files under
+  `/workspace/node_modules`, 66 s, past the wait. That box woke from the golden and its backup, and `node_modules`,
+  which the backup leaves out, was gone; on the recovered box, writing the same files through the overlay took 437 s
+  against 78 s on the disk. A take's time grows with the files on the root far more than with their bytes.
+
+What follows.
+- The rest waits up to `restSnapshotWaitMs` for its take, then stops the container. A take that lands before the stop
+  ends is the next wake, as a take within the wait is; one still unanswered once the container has stopped is owed for
+  deletion and the rest says so in words that name the stop. Each rest traces `rest.snapshot` (`taken`, `refused` or
+  `abandoned`, the take's own ms, the rest's ms, and whether the wait ran out).
+- A start traces `startup.admitted` when the platform has admitted the container and `configured` with the
+  configuration's parts (routes, the name's read, the naming), so an admission's time divides between the platform and
+  the box.
+
+Not measured yet: whether the platform answers a take before it tells the box the container ended. The fixture models it
+so (`devbox-harness.ts`, `finishesAtStop`); `rest.snapshot` on staging says which.
+
+D113. The wake that makes a recovery plain moves each directory the copy lacks in one rename (2026-10-25). With D112 a
+recovered box's rest keeps its snapshot however many files its root holds, so the next wake merges the overlay's upper
+into the copy inside the start's 25 s budget, and an install made after the recovery (all of `node_modules`) is in that
+upper. Measured on staging, Medium, one real fuse-overlayfs upper holding 300,000 new files in 3,000 directories, 100
+edited files, a deletion, a replaced directory and a symlink: the merge one file at a time took 17.8 s, the merge that
+moves new directories whole 0.9 s, and the two trees matched by name, type, mode, link and content, with no `.wh.` entry
+and no opaque xattr left. fuse-overlayfs marks every directory it makes opaque (`trusted.overlay.opaque`, a
+`.wh..wh..opq` file and a `.wh..opq` device; measured the same day), so a moved directory has those removed and its
+times kept. The container tier's `blocks` contract makes such a tree through the recovery's overlay and requires it
+plain and unmarked after the wake.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

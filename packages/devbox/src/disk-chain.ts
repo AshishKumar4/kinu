@@ -575,12 +575,18 @@ for at in range(0, len(rest), 3):
         sys.exit(3)
 `;
 
-/** Applies an overlay upper to a plain tree on the same filesystem. */
+/**
+ * Applies an overlay upper to a plain tree on the same filesystem, inside the start's budget. A directory the tree lacks
+ * moves in one rename, so a tree a recovered box made (an install) costs its directories, not its files: 300,000 files
+ * made through fuse-overlayfs merged in 17.8 s one by one and in 0.9 s moved whole, the trees alike (Medium, staging,
+ * 2026-10-25). fuse-overlayfs marks every directory it makes opaque, with xattrs and `.wh.` entries; those go.
+ */
 const MERGE_UPPER = `
 import os, shutil, stat, sys
 upper, tree = sys.argv[1], sys.argv[2]
+OPAQUE = ('trusted.overlay.opaque', 'user.overlay.opaque', 'user.fuseoverlayfs.opaque')
 def opaque(path):
-    for name in ('trusted.overlay.opaque', 'user.overlay.opaque', 'user.fuseoverlayfs.opaque'):
+    for name in OPAQUE:
         try:
             if os.getxattr(path, name, follow_symlinks=False) in (b'y', b'Y'):
                 return True
@@ -592,6 +598,30 @@ def remove(path):
         shutil.rmtree(path)
     elif os.path.lexists(path):
         os.unlink(path)
+def marker(entry):
+    if entry.name.startswith('.wh.'):
+        return True
+    if entry.is_dir(follow_symlinks=False) or entry.is_file(follow_symlinks=False) or entry.is_symlink():
+        return False
+    info = entry.stat(follow_symlinks=False)
+    return stat.S_ISCHR(info.st_mode) and info.st_rdev == 0
+def unmark(top):
+    pending = [top]
+    while pending:
+        here = pending.pop()
+        info = os.lstat(here)
+        for name in OPAQUE:
+            try:
+                os.removexattr(here, name, follow_symlinks=False)
+            except OSError:
+                pass
+        with os.scandir(here) as entries:
+            for entry in entries:
+                if marker(entry):
+                    os.unlink(entry.path)
+                elif entry.is_dir(follow_symlinks=False):
+                    pending.append(entry.path)
+        os.utime(here, ns=(info.st_atime_ns, info.st_mtime_ns))
 dirs = []
 for here, subdirs, files in os.walk(upper):
     rel = os.path.relpath(here, upper)
@@ -601,6 +631,11 @@ for here, subdirs, files in os.walk(upper):
             remove(target)
         os.makedirs(target, exist_ok=True)
         dirs.append((here, target))
+    moved = {name for name in subdirs if not os.path.islink(os.path.join(here, name)) and not os.path.lexists(os.path.join(target, name))}
+    for name in moved:
+        os.rename(os.path.join(here, name), os.path.join(target, name))
+        unmark(os.path.join(target, name))
+    subdirs[:] = [name for name in subdirs if name not in moved]
     for name in subdirs + files:
         source = os.path.join(here, name)
         if name in subdirs and not os.path.islink(source):

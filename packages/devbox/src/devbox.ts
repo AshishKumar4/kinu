@@ -809,10 +809,10 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   /**
-   * How long a rest waits for the platform's snapshot of its container. The snapshot only speeds the next wake (D51):
-   * the rest committed the chain before it. A save took 4.1-9.5 s on Medium (D51), and the snapshot and stop after a
-   * rest's commit took 0.15-6.1 s in each of the 40 rests on staging and the contracts in the week to 2026-10-22; one
-   * take on f44999 never answered (D108), and the box refused every terminal for the 14 minutes it waited.
+   * How long a rest's stop waits for the platform's snapshot of its container; a take that lands while the container
+   * stops is still kept (D112). A save took 4.1-9.5 s on Medium (D51), and the snapshot and stop after a rest's commit
+   * took 0.15-6.1 s in each of the 40 rests on staging and the contracts in the week to 2026-10-22; one take on f44999
+   * never answered (D108), and the box refused every terminal for the 14 minutes it waited.
    */
   protected get restSnapshotWaitMs(): number {
     return 60_000;
@@ -969,6 +969,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       if (!await this.#admit(container, cancel.signal, inputs)) return;
 
       if (!this.#owns(generation) || this.#closed) return;
+      // The platform's part of the admission ends here; the configuration's runs to the hook's open.
+      this.#trace('startup.admitted', { generation, source: wasRunning ? 'running' : this.#started?.kind });
       // The configuration and the restore run in one block, so nothing reaches the container before it is ready (R1,
       // D104). A configuration refused is answered outside it, where its throw fails the start and resets nothing.
       let configuring = Promise.resolve();
@@ -2593,30 +2595,51 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       return outcome;
     }
 
-    await this.#restSnapshot();
-    this.#invalidateGeneration();
-    await this.#stopContainer();
-    await this.#awaitContainerStopped();
+    await this.#snapshotAndStop();
     await this.#snapshots.sweep();
 
     return outcome;
   }
 
-  /** The rest's snapshot, given up after {@link restSnapshotWaitMs}: the box stops without it, and a take that lands
-   *  later is owed for deletion. A box that waited on it refused every request while it waited. */
-  async #restSnapshot(): Promise<void> {
-    const saving = this.#snapshots.save();
-    const waitMs = this.restSnapshotWaitMs;
+  /**
+   * The rest's snapshot, then the stop. The stop waits for the take up to {@link restSnapshotWaitMs}, and the take is the
+   * next wake whenever it lands before the container has stopped: the platform finishes a save before it ends the
+   * container (D51), and a take's time grows with the files on the root. Only a take still under way once the container
+   * has stopped is given up, owed for deletion (D108's take that never answered).
+   */
+  async #snapshotAndStop(): Promise<void> {
+    const began = Date.now();
+    const taking = Promise.allSettled([this.#snapshots.save()]).then(([taken]) => ({ taken, takeMs: Date.now() - began }));
     const late = Symbol('late');
-    const [taken] = await Promise.allSettled([Promise.race([saving, scheduler.wait(waitMs).then(() => late)])]);
+    const waited = await Promise.race([taking, scheduler.wait(this.restSnapshotWaitMs).then(() => late)]);
 
-    if (taken.status === 'fulfilled' && taken.value === late) {
-      this.#snapshots.abandon();
-      unawaited(Promise.allSettled([saving]), 'a rest snapshot given up');
-      await this.#record('quiesce', `the rest took no snapshot: the platform had not answered in ${String(waitMs / 1000)} s, so the next wake recovers from the backup`);
-    } else if (taken.status === 'rejected') {
+    try {
+      this.#invalidateGeneration();
+      await this.#stopContainer();
+      await this.#awaitContainerStopped();
+    } finally {
+      // Already settled, the take wins the race: a settled promise's reaction runs before a later one's.
+      const settled = await Promise.race([taking, Promise.resolve(late)]);
+      const at = { restMs: Date.now() - began, waitedOut: waited === late };
+
+      await (settled === late ? this.#restSnapshotAbandoned(at) : this.#restSnapshotSettled(settled, at));
+    }
+  }
+
+  async #restSnapshotSettled(
+    { taken, takeMs }: { readonly taken: PromiseSettledResult<void>; readonly takeMs: number }, at: { readonly restMs: number; readonly waitedOut: boolean },
+  ): Promise<void> {
+    this.#trace('rest.snapshot', { outcome: taken.status === 'fulfilled' ? 'taken' : 'refused', takeMs, ...at });
+
+    if (taken.status === 'rejected') {
       await this.#record('quiesce', `the rest took no snapshot, so the next wake recovers from the backup: ${describe({ cause: taken.reason })}`);
     }
+  }
+
+  async #restSnapshotAbandoned(at: { readonly restMs: number; readonly waitedOut: boolean }): Promise<void> {
+    this.#trace('rest.snapshot', { outcome: 'abandoned', ...at });
+    this.#snapshots.abandon();
+    await this.#record('quiesce', `the rest took no snapshot: the platform had not answered when the container stopped, ${String(Math.round(at.restMs / 1000))} s after it began, so the next wake recovers from the backup`);
   }
 
 
@@ -3508,16 +3531,22 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   protected async configureContainer(reused = this.#reused()): Promise<void> {
+    const began = Date.now();
     await this.#routes().configure(await this.outboundPolicy(), this.store, reused);
+    const routed = Date.now();
     this.#renewContainer();
     await this.#forgetClosedSessions();
     const name = await this.hostname();
+    const read = Date.now();
 
     // The kernel keeps a name for the boot alone, so each start names the box again (D83, D96).
-    if (name === undefined) return;
-    const naming = await nameBox(this.#container(), name);
+    if (name !== undefined) {
+      const naming = await nameBox(this.#container(), name);
 
-    if (!naming.named) this.#trace('name.unresolved', { name, detail: naming.detail });
+      if (!naming.named) this.#trace('name.unresolved', { name, detail: naming.detail });
+    }
+
+    this.#trace('configured', { routesMs: routed - began, nameReadMs: read - routed, namingMs: Date.now() - read });
   }
 
   getExposedPorts() {

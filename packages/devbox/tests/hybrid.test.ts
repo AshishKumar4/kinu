@@ -253,11 +253,31 @@ test('a rest whose snapshot never answers stops without it, says why, and a requ
 
   expect({
     during, rest: ended.kind, stopped, after: after.kind, starts: container.startOptions.map(startedFrom),
-    said: reasons.some(reason => reason.includes('the platform had not answered in 0.05 s')), snapshot: rows.has('devbox:snapshot'),
+    said: reasons.some(reason => reason.includes('the platform had not answered when the container stopped')), snapshot: rows.has('devbox:snapshot'),
   }).toEqual({
     during: { kind: 'pending', reason: 'the computer is saving its work and stopping; it starts again as soon as that is done', quiescing: true },
     rest: 'committed', stopped: false, after: 'restored', starts: ['golden', 'golden'], said: true, snapshot: false,
   });
+});
+
+// hearthlit-field, production 2026-10-24/25: three rests in a row took 62, 104 and 67 s from their commit to the end of
+// the stop. Each gave its take up at 60 s, and its stop then took 2 to 44 s more while the platform finished the save
+// (D51), so every wake came from the golden and the backup, 12 to 20 s, without what the backup leaves out. On staging
+// (2026-10-25) a rest over 400,000 files under node_modules took 70 s, and its wake had no node_modules.
+test('a rest whose snapshot lands while its container stops keeps it: the next wake starts from it, its root kept', async () => {
+  asked.length = 0;
+  const { box, container, rows } = chainBox(ImpatientBox);
+  await box.devboxStartup();
+  await box.writeFile('/root/.cache/kept', 'packages the backup leaves out');
+  container.snapshotHold = { entered: () => undefined, release: new Promise<void>(() => undefined), finishesAtStop: true };
+  const rest = await box.quiesce();
+  await box.devboxStartup();
+  const kept = await box.exists('/root/.cache/kept');
+
+  expect({
+    rest: rest.kind, starts: container.startOptions.map(startedFrom), snapshot: rows.has('devbox:snapshot'), kept: kept.exists,
+    notices: (await box.devboxIncidentReasons()).map(row => row.stage),
+  }).toEqual({ rest: 'committed', starts: ['golden', 'snapshot-1'], snapshot: true, kept: true, notices: [] });
 });
 
 test('a discard empties the box\'s store whether it holds no object or more than one listing of them', async () => {
