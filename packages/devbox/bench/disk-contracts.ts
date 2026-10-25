@@ -163,11 +163,16 @@ export async function diskContract(kind: DiskContract, input: DiskContractInput)
       equal(await sh(TREE), expected);
       await copied();
       await poke(2_000_000, 1, 'D');
+      // A tree made through the recovery's overlay, which marks each directory it makes opaque: it moves whole, unmarked.
+      await sh(`set -e; cd ${WD}; mkdir -p fresh/a/b node_modules/made/lib; echo c >fresh/a/b/c; echo t >fresh/t; rm fresh/t; `
+        + 'ln -s ../src fresh/link; chmod 711 fresh/a; echo m >node_modules/made/lib/m.js');
       small(await save());
       const later = await sh(TREE);
       await sh(UNMOUNT);
       equal((await attach(true)).detail, 'recovery made plain');
       equal(await sh(TREE), later);
+      equal(await sh(`cat ${WD}/node_modules/made/lib/m.js; find ${WD} -name '.wh.*' | wc -l; python3 -c "import os
+print(sum(1 for here, _, _ in os.walk('${WD}') for name in os.listxattr(here, follow_symlinks=False) if name.endswith('opaque')))"`), 'm\n0\n0');
       equal((await exec(`mountpoint -q ${WD}`)).exitCode !== 0, true);
       await reset();
       await attach();

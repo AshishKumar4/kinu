@@ -5375,6 +5375,17 @@ What follows.
 Not measured yet: whether the platform answers a take before it tells the box the container ended. The fixture models it
 so (`devbox-harness.ts`, `finishesAtStop`); `rest.snapshot` on staging says which.
 
+D113. The wake that makes a recovery plain moves each directory the copy lacks in one rename (2026-10-25). With D112 a
+recovered box's rest keeps its snapshot however many files its root holds, so the next wake merges the overlay's upper
+into the copy inside the start's 25 s budget, and an install made after the recovery (all of `node_modules`) is in that
+upper. Measured on staging, Medium, one real fuse-overlayfs upper holding 300,000 new files in 3,000 directories, 100
+edited files, a deletion, a replaced directory and a symlink: the merge one file at a time took 17.8 s, the merge that
+moves new directories whole 0.9 s, and the two trees matched by name, type, mode, link and content, with no `.wh.` entry
+and no opaque xattr left. fuse-overlayfs marks every directory it makes opaque (`trusted.overlay.opaque`, a
+`.wh..wh..opq` file and a `.wh..opq` device; measured the same day), so a moved directory has those removed and its
+times kept. The container tier's `blocks` contract makes such a tree through the recovery's overlay and requires it
+plain and unmarked after the wake.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean
