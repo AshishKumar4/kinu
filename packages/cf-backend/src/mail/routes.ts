@@ -115,7 +115,10 @@ async function usernameRefusal(c: MailContext, username: string): Promise<'inval
   if (aliases === 'malformed' || aliases.has(username)) return 'reserved';
   const holder = await objectNamed(c.env.MAILNAME, username).lookup();
 
-  return holder !== null && holder.user_id !== c.get('identity').userId ? 'taken' : null;
+  if (holder !== null) return holder.user_id === c.get('identity').userId ? null : 'taken';
+
+  // The name an address reaches (`privacy` → `ashish`) is its operators' to hold: anyone holding it reads the deployment's mail.
+  return [...aliases.values()].includes(username) && !isListedOperator(c.env, c.get('identity').email) ? 'reserved' : null;
 }
 
 /** A refused username, in its status and words. */
