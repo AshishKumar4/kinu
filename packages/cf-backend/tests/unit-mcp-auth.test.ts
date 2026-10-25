@@ -30,7 +30,7 @@ function mcpWorkspace() {
         ? { ok: true, tokenHash: 'hash', user: { id: USER_ID, email: 'a@example.com', displayName: null } }
         : { ok: false, error: 'invalid token' };
     },
-    async hasWorkspace(_caller, name: string) { return name === 'jarvis'; },
+    async workspaceAdmission(_caller, name: string) { return name === 'jarvis' ? { capabilityHash: null } : null; },
     async ensureWorkspaceCapability() {},
   });
 

@@ -66,7 +66,7 @@ function env(assets: string[], documents: ReadonlyMap<string, string> = new Map(
   Object.assign(reached, {
     AUTH_KV: makeKv(),
     UserDO: objects({
-      async hasWorkspace(_caller: UserCaller, name: string) { return name === OWNED; },
+      async workspaceAdmission(_caller: UserCaller, name: string) { return name === OWNED ? { capabilityHash: null } : null; },
       async ensureWorkspaceCapability() {},
       // No OAuth app is configured, so /login asks whether the deployment has its first account.
       async builtinHasOwner() { return false; },

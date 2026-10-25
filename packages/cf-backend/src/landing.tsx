@@ -5,9 +5,7 @@ import { requestUrl } from '@kinu.run/core';
 import { LANDING_ACCOUNT_READS } from '@/components/landing/landing-fixtures';
 import { LandingPage } from '@/components/landing/LandingPage';
 import type { ConfigRow } from '@/lib/user-api';
-import { startTheme } from '@/hooks/use-theme';
-import "virtual:kinu-theme.css";
-import './index.css';
+import { publicRoot } from './public-page';
 
 // The static landing serves no `/api/`: its real components' account reads are answered here, and nothing under it
 // reaches a server, which would only refuse a page without a session.
@@ -39,11 +37,7 @@ function answerAccount(path: string, method: string, body: () => Promise<string>
   return Promise.resolve(Response.json({ error: `The sample answers no ${method} ${path}.` }, { status: 404 }));
 }
 
-const mount = document.getElementById('landing-root') ?? document.getElementById('legal-root');
-
-if (mount === null) throw new Error('public page root is missing');
-
-if (mount.id === 'landing-root') window.fetch = Object.assign(
+window.fetch = Object.assign(
   (input: RequestInfo | URL, init?: Parameters<typeof window.fetch>[1]): Promise<Response> => {
     const parsedRequest = v.safeParse(v.instance(Request), input);
     const url = requestUrl(input);
@@ -60,21 +54,8 @@ if (mount.id === 'landing-root') window.fetch = Object.assign(
   { preconnect: realFetch.preconnect },
 );
 
-async function publicPage(root: HTMLElement) {
-  if (root.id === 'legal-root') {
-    const { default: LegalDocument } = await import('./legal');
+const root = publicRoot('landing-root');
 
-    return <LegalDocument />;
-  }
-
-  return <LandingPage />;
-}
-
-const page = await publicPage(mount);
-
-// The head painted the mode (core's MODE_BOOT); from here the store holds it and follows the system.
-startTheme();
-
-// scripts/prerender-landing.ts fills the built public documents; dev templates keep an empty root.
-if (mount.firstElementChild === null) createRoot(mount).render(page);
-else hydrateRoot(mount, page);
+// scripts/prerender-landing.ts fills the built document; a dev template keeps its root empty.
+if (root?.firstElementChild === null) createRoot(root).render(<LandingPage />);
+else if (root !== null) hydrateRoot(root, <LandingPage />);

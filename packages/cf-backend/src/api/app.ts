@@ -35,7 +35,7 @@ import { activationRoutes } from './activations-route';
 import { filesRoutes } from '../files-routes';
 import { terminalRouteDeps, terminalRoutes } from '../terminal-route';
 import { routeError, apiPath, beneath, familyMount, type FamilyEnv } from './context';
-import { workspaceGate, type ClaimedWorkspace } from './workspace';
+import { addressedWorkspace, workspaceGate, type ClaimedWorkspace } from './workspace';
 
 const app = new Hono<FamilyEnv<Env>>({ getPath: apiPath });
 
@@ -89,7 +89,7 @@ app.use(CLIENT_ERROR_ENDPOINT, async (c, next) => {
 mount(clientErrorRoutes);
 
 app.use('/api/*', (c, next) => settle(Effect.gen(function* () {
-  const identity = yield* sessionGate(c.req.raw, c.env);
+  const identity = yield* sessionGate(c.req.raw, c.env, addressedWorkspace(c.req.raw));
 
   if (identity instanceof Response) return identity;
   // After the cross-site check: cross-site requests never feed the index.

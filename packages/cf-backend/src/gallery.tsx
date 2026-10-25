@@ -3204,6 +3204,9 @@ async function galleryHistoryPage(args?: unknown[]): Promise<ChatHistoryPage> {
 
   asks.historyAsks = String(Number(asks.historyAsks ?? 0) + 1);
   asks.historyReads = `${asks.historyReads ?? ""} ${cursor === undefined ? "newest" : `${String(cursor.before - limit)}-${String(cursor.before)}`}`;
+
+  // With no `&history=N` the seed is the whole conversation: a read of it is counted, and ends at once.
+  if (HISTORY_ROWS === 0) return { status: "end", items: [] };
   const stored = asks.historyCleared === "1" ? 0 : HISTORY_ROWS;
   const held = Math.min(cursor?.before ?? stored, stored);
   const from = Math.max(0, held - limit);
@@ -3653,8 +3656,7 @@ async function galleryClearConversation(): Promise<void> {
 /** The page's conversation writes, and the reads the gallery answers only after a wait it controls. */
 /** The page's answers that wait on the page: a held read, a release, a decision arriving. */
 const ASYNC_PAGE_ANSWERS: WorkspaceAnswers = {
-  // `&history=N` pages its stored rows; otherwise the seed is the whole conversation, so the walk is exhausted at once.
-  getChatHistoryPage: (...args) => (HISTORY_ROWS > 0 ? galleryHistoryPage(args) : { status: "end", items: [] }),
+  getChatHistoryPage: (...args) => galleryHistoryPage(args),
   savePlanReviewAnnotations: (...args) => galleryAnnotationSave(args),
   revertConversation: (...args) => galleryRevert(args),
   branchTurn: (...args) => galleryBranch(args),

@@ -31,11 +31,13 @@ interface LiveSession {
 }
 
 /** What a double answers: whatever a gate needs to let a request by, and nothing a family could render. */
-type ProbeAnswer = boolean | null | readonly never[] | LiveSession | { readonly owner: string; readonly capabilityHash: null };
+type ProbeAnswer = boolean | null | readonly never[] | LiveSession | { readonly owner: string; readonly capabilityHash: null } | { readonly capabilityHash: null };
 
 /** What the gates need to let a request by; any listing is empty, anything else `null`. */
 function gateAnswer(method: string): ProbeAnswer {
   if (method === 'hasWorkspace') return true;
+
+  if (method === 'workspaceAdmission') return { capabilityHash: null };
 
   if (method.startsWith('list')) return [];
 

@@ -12,8 +12,8 @@ import { Cause, Data, Effect } from 'effect';
 import type { AuthIdentity } from './session';
 import type { OAuthProviderId } from '@kinu.run/core/identity';
 import { builtinSignInOn, type SignInDeclarationEnv } from '@kinu.run/core/identity';
-import type { UserDO } from '../user/user-do';
-import type { BrowserSessionIdentity, LiveBrowserSession } from '../user/sessions';
+import type { AdmittedBrowserSession, UserDO } from '../user/user-do';
+import type { BrowserSessionIdentity } from '../user/sessions';
 import type { ObjectNamespace } from '@kinu.run/core';
 import { objectNamed, randomToken, sha256Hex } from '@kinu.run/core';
 import { readKvJson, writeKvJson, type KvStore } from '@kinu.run/agent-utils';
@@ -222,7 +222,7 @@ export class SessionAuthorityUnavailableError extends Data.TaggedError('SessionA
 
 /** Null when not signed in; throws {@link SessionAuthorityUnavailableError} when the answer cannot be
  *  obtained. The account's session row is liveness and identity both; revocation deletes it. */
-export function verifySession<Id>(env: AuthStoreEnv<Id>, token: string): Promise<AuthIdentity | null> {
+export function verifySession<Id>(env: AuthStoreEnv<Id>, token: string, workspace?: string): Promise<AuthIdentity | null> {
   return settle(Effect.gen(function* () {
     const userId = parseSessionTokenUserId(token);
 
@@ -232,8 +232,8 @@ export function verifySession<Id>(env: AuthStoreEnv<Id>, token: string): Promise
     // Outside the catch: a missing owner secret is a misconfiguration, not an unreachable DO.
     const caller = yield* Effect.promise(() => ownerCaller(env));
 
-    const live: LiveBrowserSession | null = yield* Effect.catchCause(
-      Effect.promise(() => sessionAuthority(env, userId).verifyBrowserSession(caller, tokenHash)),
+    const live: AdmittedBrowserSession | null = yield* Effect.catchCause(
+      Effect.promise(() => sessionAuthority(env, userId).verifyBrowserSession(caller, tokenHash, workspace)),
       (failed) => Effect.die(new SessionAuthorityUnavailableError({ cause: Cause.squash(failed) })),
     );
 
@@ -255,6 +255,8 @@ export function verifySession<Id>(env: AuthStoreEnv<Id>, token: string): Promise
       // Lets a later logout reach websockets tagged with this session.
       sessionTokenHash: tokenHash,
     };
+
+    if (workspace !== undefined && live.admission !== undefined) identity.workspace = { name: workspace, admission: live.admission };
 
     return identity;
   }));

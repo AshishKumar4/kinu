@@ -35,7 +35,6 @@
     "packages/cf-backend/src/hooks/use-copy.ts#promise-rejection": 1,
     "packages/cf-backend/src/hooks/use-workspace-reads.ts#catch": 5,
     "packages/cf-backend/src/index.tsx#throw": 1,
-    "packages/cf-backend/src/landing.tsx#throw": 1,
     "packages/cf-backend/src/orchestrator.ts#catch": 2,
     "packages/cf-backend/src/orchestrator.ts#result-literal": 1,
     "packages/cf-backend/src/orchestrator.ts#throw": 6,

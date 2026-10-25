@@ -61,7 +61,7 @@ function harness(email: string, owned: readonly string[]) {
   const userDO = {
     idFromName: (name: string) => name,
     get: () => ({
-      async hasWorkspace(_caller: UserCaller, name: string) { return owned.includes(name); },
+      async workspaceAdmission(_caller: UserCaller, name: string) { return owned.includes(name) ? { capabilityHash: null } : null; },
       async ensureWorkspaceCapability() { /* the two sides already agree */ },
     }),
   };

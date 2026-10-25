@@ -193,7 +193,7 @@ export type ActionTarget = Pick<OrchestratorAgent,
 >;
 
 export type ActionRegistry = Pick<UserDO,
-  'hasWorkspace' | 'ensureWorkspaceCapability' | 'removeWorkspace' | 'limits_setClass' | 'limits_suspend' | 'limits_unsuspend' | 'limits'
+  'hasWorkspace' | 'workspaceAdmission' | 'ensureWorkspaceCapability' | 'removeWorkspace' | 'limits_setClass' | 'limits_suspend' | 'limits_unsuspend' | 'limits'
 >;
 
 /** The control plane as the account actions reach it: its index feed, and the accounts list's mirror and invite links. */
