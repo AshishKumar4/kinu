@@ -1675,6 +1675,7 @@ export class UserDO extends Agent<Env> {
     if (builtinSignInOn(this.env)) await objectNamed(this.env.UserDO, BUILTIN_ACCOUNTS_OBJECT).builtinRemoveAccount(caller, person);
 
     this.ctx.storage.kv.put(ACCOUNT_CLEARED_KEY, true);
+    diagnostics.event('account.cleared', { owner: ownerUserId });
   }
 
   /** The account itself, at an alarm's start: outside the job runner, whose own table its destroy drops. */

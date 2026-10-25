@@ -251,8 +251,8 @@ test("an account's delete reset after its write is finished by the next activati
 
   const second = account();
 
-  // An alarm a workspace, one for the account's clearing, one that destroys it; its abort comes a tick after.
-  for (let lap = 0; lap < 4 && second.accountDeleted.length < 2; lap += 1) await second.userDO.alarm();
+  // An alarm a workspace, then one for the account's clearing; the alarm after it destroys it, its abort a tick on.
+  while (second.accountDeleted.length < 2) await second.userDO.alarm();
   await second.userDO.alarm();
   await second.abortRaised();
 
@@ -278,7 +278,7 @@ test("a workspace that hires another while its account is being deleted is refus
   expect(hired.map((each) => (each.status === 'rejected' ? renderThrownChain({ cause: each.reason }) : 'admitted')))
     .toEqual([expect.stringContaining('This account is being deleted.'), expect.stringContaining('This account is being deleted.')]);
 
-  for (let lap = 0; lap < 4 && harness.accountDeleted.length < 2; lap += 1) await harness.userDO.alarm();
+  while (harness.accountDeleted.length < 2) await harness.userDO.alarm();
   await harness.userDO.alarm();
   await harness.abortRaised();
 

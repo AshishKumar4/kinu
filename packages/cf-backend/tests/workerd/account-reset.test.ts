@@ -8,9 +8,9 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 
 const OWNER_ID = '0123456789abcdef0123456789abcdef';
 
-/** The account's alarm, at most `laps` times, while the account is still there; one the destroy cut off counts as run. */
-async function runAlarms(probe: () => { lap: () => Promise<void>; counts: () => Promise<Record<string, number>> }, laps: number): Promise<void> {
-  for (let lap = 0; lap < laps; lap += 1) {
+/** The account's alarms until it is gone; one the destroy cut off counts as run. */
+async function runAlarms(probe: () => { lap: () => Promise<void>; counts: () => Promise<Record<string, number>> }): Promise<void> {
+  for (;;) {
     try {
       if ((await probe().counts()).user_profile === 0) return;
       await probe().lap();
@@ -44,7 +44,7 @@ describe('deleting an account on real workerd', () => {
       .toEqual({ pending: ['ws-alpha', 'ws-beta'], profile: 1 });
 
     // Its jobs land it: one workspace an alarm, then the account, whose destroy aborts the object a tick on.
-    await runAlarms(probe, 6);
+    await runAlarms(probe);
 
     // A call in that tick meets the dying object (answering as the empty account) or is cut off
     // and retried on the fresh one; either way every count is zero.
