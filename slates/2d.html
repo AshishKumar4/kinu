@@ -1,0 +1,73 @@
+<slate-ui name="diffusion-2d">
+<title>2 · Reverse process: generating by denoising, step by step</title>
+<p style="margin:0 0 .75rem;color:var(--c-text-2)">The toy dataset is 2-D points on a spiral. <b>Forward</b> pushes them into a Gaussian blob. <b>Reverse</b> starts from pure noise and at each step asks the denoiser where a point came from (x̂₀), then takes a small step toward that answer. The denoiser here is the exact optimal one for this dataset. A real model trains a neural net to approximate it.</p>
+<div style="display:flex;flex-wrap:wrap;gap:1rem;align-items:flex-start">
+  <canvas id="c" width="480" height="480" style="width:100%;max-width:420px;aspect-ratio:1;border:1px solid var(--c-border);border-radius:.5rem;background:var(--c-surface)"></canvas>
+  <div style="flex:1;min-width:14rem;display:flex;flex-direction:column;gap:.6rem">
+    <button id="fwd">▶ Forward: noise the data</button>
+    <button id="rev">▶ Reverse: generate from noise</button>
+    <label>Sampler <select id="smp"><option value="ddpm">DDPM (stochastic)</option><option value="ddim">DDIM (deterministic)</option></select></label>
+    <label>Steps <input id="ks" type="range" min="5" max="200" value="60"> <span id="kv">60</span></label>
+    <label><input type="checkbox" id="pred"> Show each particle's predicted x̂₀</label>
+    <label><input type="checkbox" id="fld" checked> Show denoising direction field</label>
+    <div id="st" style="font-family:ui-monospace,monospace;padding:.5rem;border:1px solid var(--c-border);border-radius:.5rem"></div>
+    <p style="color:var(--c-text-2);margin:0;font-size:.9em">Turn on x̂₀ and run Reverse. At high noise every particle predicts roughly the <i>average</i> of the data, near the centre. As the noise drops, predictions commit to specific arms of the spiral, so coarse structure appears first and fine detail last. With 5 steps, DDIM still works but DDPM gets blurry.</p>
+  </div>
+</div>
+<script type="module">
+const cv=document.getElementById('c'),ctx=cv.getContext('2d'),W=480,H=480,R=3,S=W/(2*R);
+const px=x=>(x+R)*S, py=y=>(R-y)*S;
+const css=(n,fb)=>getComputedStyle(document.body).getPropertyValue(n).trim()||fb;
+const M=300,mx=new Float64Array(M),my=new Float64Array(M);
+for(let i=0;i<M;i++){const u=i/(M-1),th=0.8+u*3*Math.PI,r=0.3+1.5*u;mx[i]=r*Math.cos(th);my[i]=r*Math.sin(th);}
+const sd=0.04, sd2=sd*sd;
+const s=0.008,f=t=>Math.cos((t+s)/(1+s)*Math.PI/2)**2,ab=t=>Math.min(1,Math.max(0,f(t)/f(0)));
+let seed=7;
+const rnd=()=>{seed=seed+0x6D2B79F5|0;let t=Math.imul(seed^seed>>>15,1|seed);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296};
+const gauss=()=>{let u=0;while(!u)u=rnd();return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*rnd())};
+const P=500,X=new Float64Array(P),Y=new Float64Array(P),X0=new Float64Array(P),Y0=new Float64Array(P),EX=new Float64Array(P),EY=new Float64Array(P);
+const wb=new Float64Array(M);
+function denoise(x,y,a){const sa=Math.sqrt(a),v=a*sd2+1-a;let mv=-Infinity;
+  for(let i=0;i<M;i++){const dx=x-sa*mx[i],dy=y-sa*my[i],l=-(dx*dx+dy*dy)/(2*v);wb[i]=l;if(l>mv)mv=l;}
+  let Z=0,ax=0,ay=0;for(let i=0;i<M;i++){const e=Math.exp(wb[i]-mv);Z+=e;ax+=e*mx[i];ay+=e*my[i];}
+  ax/=Z;ay/=Z;const k=sa*sd2/v;return [ax+k*(x-sa*ax),ay+k*(y-sa*ay)];}
+function sampleData(){for(let p=0;p<P;p++){const i=Math.floor(rnd()*M);X0[p]=mx[i]+sd*gauss();Y0[p]=my[i]+sd*gauss();X[p]=X0[p];Y[p]=Y0[p];}}
+sampleData();
+let mode='idle',k=0,K=60,tcur=0,last=0;
+const el=id=>document.getElementById(id);
+el('ks').oninput=e=>{el('kv').textContent=e.target.value;};
+el('fwd').onclick=()=>{K=+el('ks').value;sampleData();for(let p=0;p<P;p++){EX[p]=gauss();EY[p]=gauss();}mode='fwd';k=0;tcur=0;};
+el('rev').onclick=()=>{K=+el('ks').value;for(let p=0;p<P;p++){X[p]=gauss();Y[p]=gauss();}mode='rev';k=K;tcur=1;};
+el('pred').onchange=draw; el('fld').onchange=draw;
+
+function step(){
+  if(mode==='fwd'){k++;tcur=k/K;const a=ab(tcur),sa=Math.sqrt(a),sn=Math.sqrt(1-a);
+    for(let p=0;p<P;p++){X[p]=sa*X0[p]+sn*EX[p];Y[p]=sa*Y0[p]+sn*EY[p];} if(k>=K) mode='idle';}
+  else if(mode==='rev'){const t=k/K,t2=(k-1)/K,a=ab(t),a2=ab(t2),ddim=el('smp').value==='ddim';
+    for(let p=0;p<P;p++){const [hx,hy]=denoise(X[p],Y[p],a);
+      if(ddim){const ex=(X[p]-Math.sqrt(a)*hx)/Math.sqrt(1-a),ey=(Y[p]-Math.sqrt(a)*hy)/Math.sqrt(1-a);
+        X[p]=Math.sqrt(a2)*hx+Math.sqrt(1-a2)*ex;Y[p]=Math.sqrt(a2)*hy+Math.sqrt(1-a2)*ey;}
+      else{const beta=1-a/a2,c0=Math.sqrt(a2)*beta/(1-a),ct=Math.sqrt(a/a2)*(1-a2)/(1-a),sg=Math.sqrt(Math.max(0,(1-a2)/(1-a)*beta));
+        X[p]=c0*hx+ct*X[p]+sg*gauss();Y[p]=c0*hy+ct*Y[p]+sg*gauss();}}
+    k--;tcur=t2;if(k<=0)mode='idle';}
+}
+function arrow(x1,y1,x2,y2){ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);const an=Math.atan2(y2-y1,x2-x1);
+  ctx.lineTo(x2-4*Math.cos(an-0.5),y2-4*Math.sin(an-0.5));ctx.moveTo(x2,y2);ctx.lineTo(x2-4*Math.cos(an+0.5),y2-4*Math.sin(an+0.5));ctx.stroke();}
+function draw(){ctx.clearRect(0,0,W,H);const a=ab(tcur),sa=Math.sqrt(a);
+  const ct=css('--c-text','#222'),c2=css('--c-text-2','#888'),ca=css('--c-accent','#4a7dff'),cw=css('--c-warning','#e0a030');
+  if(el('fld').checked&&tcur>0){ctx.strokeStyle=c2;ctx.globalAlpha=.55;ctx.lineWidth=1;const n=17;
+    for(let i=0;i<n;i++)for(let j=0;j<n;j++){const x=-R+(i+.5)*2*R/n,y=-R+(j+.5)*2*R/n,[hx,hy]=denoise(x,y,a);
+      const dx=sa*hx-x,dy=sa*hy-y,m=Math.hypot(dx,dy);if(m<1e-6)continue;const L=Math.min(13,m*S*0.35);
+      arrow(px(x),py(y),px(x)+dx/m*L,py(y)-dy/m*L);}}
+  ctx.globalAlpha=.35;ctx.fillStyle=c2;for(let i=0;i<M;i++){ctx.beginPath();ctx.arc(px(mx[i]),py(my[i]),1.6,0,7);ctx.fill();}
+  if(el('pred').checked&&tcur>0){ctx.globalAlpha=.18;ctx.strokeStyle=cw;ctx.fillStyle=cw;
+    for(let p=0;p<P;p+=2){const [hx,hy]=denoise(X[p],Y[p],a);ctx.beginPath();ctx.moveTo(px(X[p]),py(Y[p]));ctx.lineTo(px(hx),py(hy));ctx.stroke();
+      ctx.globalAlpha=.6;ctx.fillRect(px(hx)-1.5,py(hy)-1.5,3,3);ctx.globalAlpha=.18;}}
+  ctx.globalAlpha=.9;ctx.fillStyle=ca;for(let p=0;p<P;p++){ctx.beginPath();ctx.arc(px(X[p]),py(Y[p]),2,0,7);ctx.fill();}
+  ctx.globalAlpha=1;
+  const lbl=mode==='fwd'?'forward ▶':mode==='rev'?'reverse ◀':'idle';
+  el('st').innerHTML=`t = ${tcur.toFixed(3)} &nbsp; ᾱₜ = ${a.toFixed(3)}<br>step ${mode==='idle'?'—':(mode==='fwd'?k:K-k)+' / '+K} &nbsp; ${lbl}`;}
+function loop(now){const iv=3500/K;if(mode!=='idle'&&now-last>=iv){last=now;step();draw();}requestAnimationFrame(loop);}
+draw();requestAnimationFrame(loop);
+</script>
+</slate-ui>

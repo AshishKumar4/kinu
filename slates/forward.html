@@ -1,0 +1,75 @@
+<slate-ui name="diffusion-forward">
+<title>1 · Forward process: gradually destroying an image</title>
+<p style="margin:0 0 .75rem;color:var(--c-text-2)">Each step mixes in a little Gaussian noise. A closed form lets you jump straight to any step: <b>xₜ = √ᾱₜ · x₀ + √(1−ᾱₜ) · ε</b>, with ε ~ N(0, I). Drag the slider.</p>
+<div style="display:flex;flex-wrap:wrap;gap:1rem;align-items:flex-start">
+  <canvas id="big" width="64" height="64" style="width:240px;height:240px;max-width:100%;image-rendering:pixelated;border-radius:.5rem;border:1px solid var(--c-border)"></canvas>
+  <div style="flex:1;min-width:15rem;display:flex;flex-direction:column;gap:.5rem">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:.5rem;align-items:center">
+      <span>Timestep <b id="tv">0</b> / 1000</span>
+      <span><select id="sch"><option value="linear">Linear schedule (DDPM)</option><option value="cosine">Cosine schedule</option></select> <button id="rs">New noise</button></span>
+    </div>
+    <input id="t" type="range" min="0" max="1000" value="0" style="width:100%">
+    <div id="eq" style="font-family:ui-monospace,monospace;padding:.5rem;border:1px solid var(--c-border);border-radius:.5rem;background:var(--c-surface)"></div>
+    <canvas id="sc" width="440" height="170" style="width:100%;max-width:440px"></canvas>
+  </div>
+</div>
+<div id="strip" style="display:flex;flex-wrap:wrap;gap:.5rem;margin-top:.75rem"></div>
+<p style="margin:.5rem 0 0;color:var(--c-text-2);font-size:.9em">Try the cosine schedule: it keeps more signal at mid timesteps, while the linear one wipes out the image well before t = 1000.</p>
+<script type="module">
+const T=1000, N=64;
+const abLin=new Float64Array(T+1); abLin[0]=1;
+for(let t=1;t<=T;t++){const b=1e-4+(0.02-1e-4)*(t-1)/(T-1); abLin[t]=abLin[t-1]*(1-b);}
+const s=0.008, f=t=>Math.cos((t/T+s)/(1+s)*Math.PI/2)**2;
+const abCos=new Float64Array(T+1); for(let t=0;t<=T;t++) abCos[t]=Math.max(0,f(t)/f(0));
+let sched='linear'; const A=()=>sched==='linear'?abLin:abCos;
+const css=(n,fb)=>getComputedStyle(document.body).getPropertyValue(n).trim()||fb;
+
+const off=document.createElement('canvas'); off.width=off.height=N; const g=off.getContext('2d');
+const sky=g.createLinearGradient(0,0,0,N); sky.addColorStop(0,'#3b6fd8'); sky.addColorStop(1,'#f3b27a');
+g.fillStyle=sky; g.fillRect(0,0,N,N);
+g.fillStyle='#ffe066'; g.beginPath(); g.arc(45,18,8,0,7); g.fill();
+g.fillStyle='#2f4858'; g.beginPath(); g.moveTo(0,50); g.lineTo(17,27); g.lineTo(31,43); g.lineTo(45,29); g.lineTo(64,49); g.lineTo(64,64); g.lineTo(0,64); g.fill();
+g.fillStyle='#3a7d44'; g.fillRect(0,55,64,9);
+const src=g.getImageData(0,0,N,N).data;
+const x0=new Float32Array(N*N*3), eps=new Float32Array(N*N*3);
+let seed=12345;
+const rnd=()=>{seed=seed+0x6D2B79F5|0;let t=Math.imul(seed^seed>>>15,1|seed);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296};
+const gauss=()=>{let u=0;while(!u)u=rnd();return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*rnd())};
+for(let i=0,j=0;i<src.length;i+=4) for(let c=0;c<3;c++,j++) x0[j]=src[i+c]/127.5-1;
+const newNoise=()=>{for(let j=0;j<eps.length;j++) eps[j]=gauss();}; newNoise();
+
+function render(cv,t){const a=A()[t],sa=Math.sqrt(a),sn=Math.sqrt(1-a),ctx=cv.getContext('2d'),im=ctx.createImageData(N,N);
+  for(let i=0,j=0;i<im.data.length;i+=4){for(let c=0;c<3;c++,j++){const v=sa*x0[j]+sn*eps[j];im.data[i+c]=Math.max(0,Math.min(255,(v+1)*127.5));}im.data[i+3]=255;}
+  ctx.putImageData(im,0,0);}
+
+const sc=document.getElementById('sc');
+function plot(t){const c=sc.getContext('2d'),w=sc.width,h=sc.height,p=30;c.clearRect(0,0,w,h);
+  const tx=v=>p+v/T*(w-p-10), ty=v=>h-p-v*(h-p-12);
+  c.strokeStyle=css('--c-border','#888');c.lineWidth=1;c.beginPath();c.moveTo(p,8);c.lineTo(p,h-p);c.lineTo(w-6,h-p);c.stroke();
+  c.fillStyle=css('--c-text-2','#888');c.font='11px sans-serif';
+  c.fillText('1',p-12,ty(1)+4);c.fillText('0',p-12,ty(0)+4);c.fillText('0',p-3,h-p+14);c.fillText('T',w-14,h-p+14);c.fillText('timestep t',w/2-25,h-6);
+  const ab=A();
+  const curve=(fn,col)=>{c.strokeStyle=col;c.lineWidth=2;c.beginPath();for(let k=0;k<=T;k+=5){const X=tx(k),Y=ty(fn(ab[k]));k?c.lineTo(X,Y):c.moveTo(X,Y);}c.stroke();};
+  const ca=css('--c-accent','#4a7dff'), cw=css('--c-warning','#e0a030');
+  curve(a=>Math.sqrt(a),ca); curve(a=>Math.sqrt(1-a),cw);
+  c.fillStyle=ca;c.fillRect(w-150,12,10,3);c.fillText('signal  √ᾱₜ',w-135,17);
+  c.fillStyle=cw;c.fillRect(w-150,28,10,3);c.fillText('noise  √(1−ᾱₜ)',w-135,33);
+  c.strokeStyle=css('--c-text','#000');c.setLineDash([3,3]);c.beginPath();c.moveTo(tx(t),8);c.lineTo(tx(t),h-p);c.stroke();c.setLineDash([]);}
+
+const strip=document.getElementById('strip'), ts=[0,50,100,200,400,600,1000], thumbs=[];
+const tS=document.getElementById('t');
+for(const t of ts){const d=document.createElement('div');d.style.cssText='text-align:center;cursor:pointer;font-size:.8em;color:var(--c-text-2)';
+  const cv=document.createElement('canvas');cv.width=cv.height=N;cv.style.cssText='width:72px;height:72px;image-rendering:pixelated;border-radius:.35rem;border:1px solid var(--c-border);display:block';
+  d.append(cv,'t='+t);d.onclick=()=>{tS.value=t;update();};strip.append(d);thumbs.push([cv,t]);}
+
+function update(){const t=+tS.value,a=A()[t];document.getElementById('tv').textContent=t;
+  render(document.getElementById('big'),t);
+  const snr=a>=1?'∞':(a/(1-a)).toPrecision(3);
+  document.getElementById('eq').innerHTML=`xₜ = <b style="color:var(--c-accent)">${Math.sqrt(a).toFixed(3)}</b>·x₀ + <b style="color:var(--c-warning)">${Math.sqrt(1-a).toFixed(3)}</b>·ε<br>ᾱₜ = ${a.toFixed(4)} &nbsp; SNR = ${snr}`;
+  plot(t); for(const [cv,tt] of thumbs) render(cv,tt);}
+tS.oninput=update;
+document.getElementById('sch').onchange=e=>{sched=e.target.value;update();};
+document.getElementById('rs').onclick=()=>{newNoise();update();};
+update();
+</script>
+</slate-ui>
