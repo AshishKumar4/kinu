@@ -27,6 +27,7 @@ import {
   SUBAGENT_REPORT_STATUSES,
   HeadCapture,
   bindActorHandle,
+  PEER_REPLY_TOPIC,
   READS_CHANGED_EVENT,
   JsonValueSchema,
   programEffectsOf,
@@ -643,6 +644,18 @@ function makeHost(
  * Event rows in the agent log. `pending` matches `EventLog.pending()`, not `consumed_at IS NULL`:
  * that column is the recovery lease, which an answered delivery closes while keeping its binding.
  */
+/** The topics of the peer messages an agent received, in order. */
+function peerTopics(dbPath: string): string[] {
+  const db = new Database(dbPath, { readonly: true });
+
+  try {
+    return db.query<{ topic: string }, []>(`SELECT json_extract(payload, '$.topic') AS topic FROM agent_log WHERE kind = 'event' AND variant = 'peer_agent' ORDER BY received_at`)
+      .all().map((row) => row.topic);
+  } finally {
+    db.close();
+  }
+}
+
 function eventCount(dbPath: string, kind: 'peer' | 'pending'): number {
   const db = new Database(dbPath, { readonly: true });
 
@@ -733,9 +746,11 @@ function pendingOutboxRows(dbPath: string): Array<{ id: string; state: string; a
  * Answers a peer ask via the real `agents` tool, citing the event id from the drain's hint in its own prompt.
  * Each id is answered once; the hint stays in history forever.
  */
+/** Answers each ask through its reply route, and the first plain message by messaging its sender, as its event says. */
 function replyingModel(answer: string) {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   const answered = new Set<string>();
+  let messagedBack = false;
 
   const model = new TestLanguageModelV2({
     provider: 'fake',
@@ -743,10 +758,13 @@ function replyingModel(answer: string) {
     // Without this, every peer turn reports `orchestrator.detached_work_failed`.
     doGenerate: async () => textAnswer(answer, usage),
     doStream: async (options) => {
-      const eventId = askedEventId(options.prompt);
+      const eventId = answerRoute(options.prompt, ASKED);
       const replyTo = eventId !== null && !answered.has(eventId) ? eventId : null;
+      const sender = replyTo === null && !messagedBack ? answerRoute(options.prompt, MESSAGED) : null;
 
       if (replyTo) answered.add(replyTo);
+
+      if (sender !== null) messagedBack = true;
 
       return {
         stream: new ReadableStream({
@@ -760,6 +778,11 @@ function replyingModel(answer: string) {
                 toolName: 'agents',
                 input: JSON.stringify({ op: 'reply', eventId: replyTo, message: answer }),
               });
+            } else if (sender !== null) {
+              controller.enqueue({
+                type: 'tool-call', toolCallId: 'message-back', toolName: 'agents',
+                input: JSON.stringify({ op: 'message', agent: sender, message: answer }),
+              });
             } else {
               controller.enqueue({ type: 'text-start', id: '0' });
               controller.enqueue({ type: 'text-delta', id: '0', delta: answer });
@@ -768,7 +791,7 @@ function replyingModel(answer: string) {
 
             controller.enqueue({
               type: 'finish',
-              finishReason: replyTo ? 'tool-calls' : 'stop',
+              finishReason: replyTo !== null || sender !== null ? 'tool-calls' : 'stop',
               usage,
             });
             controller.close();
@@ -782,12 +805,16 @@ function replyingModel(answer: string) {
   return { model, replies: () => answered.size };
 }
 
-function askedEventId(prompt: LanguageModelV2CallOptions['prompt']): string | null {
-  const matches = [...renderPromptText(prompt)
-    .matchAll(/the sender awaits your answer[\s\S]*?eventId:'([^']+)'/gu)];
+/** The newest answer route of a kind the prompt's peer events name: an ask's event id, or a plain message's sender. */
+function answerRoute(prompt: LanguageModelV2CallOptions['prompt'], route: RegExp): string | null {
+  const matches = [...renderPromptText(prompt).matchAll(route)];
 
   return matches[matches.length - 1]?.[1] ?? null;
 }
+
+const ASKED = /the sender awaits your answer[\s\S]*?eventId:'([^']+)'/gu;
+
+const MESSAGED = /your chat does not reach the sender[\s\S]*?agent:'([^']+)'/gu;
 
 describe('LocalAgentHost', () => {
   test('the daemon-owned conversation continues after its client disconnects', async () => {
@@ -2535,7 +2562,7 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
     }
   });
 
-  test('peer mail: a send reaches the peer, and an ask is answered through the real reply action', async () => {
+  test('peer mail: a send reaches the peer and is answered by message, and an ask through the real reply action', async () => {
     const { state, project } = makeRoots();
     const alphaDb = await seedAgent(state, 'alpha');
     const betaDb = await seedAgent(state, 'beta');
@@ -2573,7 +2600,9 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
       // Beta's post-turn drain is scheduled, not awaited by the reply path.
       await host.tick('beta', Date.now());
       expect(pendingOutboxRows(alphaDb).map((row) => row.state)).toEqual(['sent', 'sent']);
-      expect(pendingOutboxRows(betaDb).map((row) => row.state)).toEqual(['sent']);
+      // Beta answered the send by messaging alpha, as its event told it; its chat would have reached no one.
+      expect(pendingOutboxRows(betaDb).map((row) => row.state)).toEqual(['sent', 'sent']);
+      expect(peerTopics(alphaDb)).toEqual(['message', PEER_REPLY_TOPIC]);
     } finally {
       await host.close();
     }
