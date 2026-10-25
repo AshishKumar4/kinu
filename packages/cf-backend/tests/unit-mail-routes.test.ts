@@ -24,6 +24,9 @@ const ASHISH = { userId: 'u-ashish', email: 'me@ashishkumarsingh.com' };
 
 const PRIYA = { userId: 'u-priya', email: 'priya@raman.dev' };
 
+/** An account an operator invited (the control plane's Invite): its class is `invited`. */
+const SAM = { userId: 'u-sam', email: 'sam@example.org' };
+
 let claims: Map<string, MailNameClaim>;
 
 let stores: Map<string, MailStore>;
@@ -83,6 +86,7 @@ function env(accounts: 'operators' | 'everyone' = 'operators'): MailRoutesEnv {
       get: (userId: string) => ({
         getConfig: (_caller: UserCaller, key: string) => Promise.resolve(key === 'assistant' ? assistants.get(userId) ?? null : null),
         listActiveWorkspaces: () => Promise.resolve([...assistants.values()].map((name) => ({ name, displayName: 'Kinu', createdAt: 7, lastVisited: 7 }))),
+        limits_class: () => Promise.resolve(userId === SAM.userId ? 'invited' : 'free'),
       }),
     },
     OrchestratorAgent: {
@@ -180,6 +184,13 @@ describe('a person creates their address once, as the deployment allows', () => 
   test('while addresses are the operators\' only, another account is refused; opened to everyone, it may create one', async () => {
     expect((await call(PRIYA, { method: 'POST', path: '/api/user/mail/address', body: { username: 'priya' } })).status).toBe(403);
     expect(await call(PRIYA, { method: 'POST', path: '/api/user/mail/address', body: { username: 'priya' }, accounts: 'everyone' })).toMatchObject({ status: 200, body: { address: 'priya@kinu.run' } });
+  });
+
+  // The owner, 2026-10-25: "I want invited users to be able to get kinu.run email accounts."
+  test('an account an operator invited may create its address while addresses are the operators\' only', async () => {
+    expect((await call(SAM, { method: 'GET', path: '/api/user/mail/boxes' })).body).toMatchObject({ address: null, canCreate: true });
+    expect(await call(SAM, { method: 'POST', path: '/api/user/mail/address', body: { username: 'sam' } })).toMatchObject({ status: 200, body: { address: 'sam@kinu.run' } });
+    expect((await call(PRIYA, { method: 'POST', path: '/api/user/mail/address', body: { username: 'priya' } })).body).toMatchObject({ error: 'Addresses on this deployment are for its operators and the people they invite.' });
   });
 
   test('a taken, reserved or malformed username is refused with why', async () => {

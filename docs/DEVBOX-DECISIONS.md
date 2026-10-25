@@ -5386,6 +5386,17 @@ and no opaque xattr left. fuse-overlayfs marks every directory it makes opaque (
 times kept. The container tier's `blocks` contract makes such a tree through the recovery's overlay and requires it
 plain and unmarked after the wake.
 
+D114. A teardown closes the box before it discards anything (2026-10-25; extends D36). The workspace's deletion and the
+contract fixture's clear call `discardState` and then `destroy`, and only `destroy` closed the box: the discard turned
+the running container's generation over, so a heartbeat due meanwhile found the container unrestored and armed a
+startup, and the startup restored it again. Seen on the lanes fixture (2026-10-25, box `b62fd2dd…`): its clear began
+19:14:21, the heartbeat came at 19:14:23.9, and the startup restored the container at 19:14:24.9 ("the snapshot holds
+the workspace") while the discard deleted the store; the same race shows in the passing run of 16:33. Both now begin
+with one close: no wake of the box's own is armed or run, its startup, heartbeat and checkpoint rows go, and a start in
+flight is aborted, before the generation turns over. `hybrid.test.ts` delivers a heartbeat mid-discard: red before
+(a startup armed and a second restore), green after. That clear also ended "Network connection lost." after 107 s: its
+object reset mid-clear, before `destroy` began, with no deploy and 13 ms of CPU; what reset it is not measured.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

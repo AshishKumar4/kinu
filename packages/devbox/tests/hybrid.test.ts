@@ -12,6 +12,8 @@ class Registry {
   refuse: string | undefined;
   /** The digest the next refusal says it left, its tags gone. */
   left: string | undefined;
+  /** Holds the next deletion until `release` settles, telling `entered` it began. */
+  hold: { readonly entered: () => void; readonly release: Promise<void> } | undefined;
 }
 
 const registry = new Registry();
@@ -22,8 +24,15 @@ function fakeRegistry(): SnapshotRegistry {
     delete: async (id) => {
       const refused = registry.refuse;
       const left = registry.left;
+      const hold = registry.hold;
       registry.refuse = undefined;
       registry.left = undefined;
+      registry.hold = undefined;
+
+      if (hold !== undefined) {
+        hold.entered();
+        await hold.release;
+      }
 
       if (refused !== undefined) return left === undefined ? { kind: 'refused', reason: refused } : { kind: 'refused', reason: refused, left };
       registry.deleted.push(id);
@@ -365,6 +374,30 @@ test('a destroyed box keeps nothing of its workspace but the snapshots still owe
 
   expect({ kept: [...rows.keys()], owed: rows.get('devbox:dead-snapshots') }).toEqual({ kept: ['devbox:dead-snapshots'], owed });
   expect(owed).toHaveLength(1);
+});
+
+// Lanes fixture, 2026-10-25: a clear's discard turned the running box's generation over, its heartbeat came due while the
+// discard deleted the box's store, found the box unrestored, and armed a startup that restored it again a second later.
+test('a heartbeat due while the box is torn down restores nothing and arms nothing', async () => {
+  const { box, container, rows } = await rested();
+  await box.devboxStartup();
+  const before = asked.length;
+  const deleting = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  registry.hold = { entered: deleting.resolve, release: release.promise };
+  const clearing = box.discardState();
+
+  await deleting.promise;
+  await box.devboxHeartbeat();
+  const armed = container.scheduleRows.map(row => row.callback);
+  setSystemTime(Date.now() + 5_000);
+  await box.alarm();
+  release.resolve();
+  await clearing;
+  await box.destroy();
+
+  expect({ armed, restored: asked.slice(before), running: container.running.running, kept: [...rows.keys()] })
+    .toEqual({ armed: [], restored: [], running: false, kept: [] });
 });
 
 // Review finding 11: a rest's snapshot that finished after a discard was published as the next wake.

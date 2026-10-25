@@ -253,6 +253,7 @@ const USER_DO_METHODS = [
   'drive_abortDownload',
   'limits',
   'limits_account',
+  'limits_class',
   'limits_nearNote',
   'limits_admitStoredBytes',
   'limits_storageSampled',

@@ -3,8 +3,8 @@
  * the request names; its Mailbox is reached by the Worker alone. Mounted behind the session gate, ahead of
  * `userRoutes`' catch-all.
  *
- * A person creates their address once, in setup or where Mail would show their mailbox: the deployment's operators
- * always, anyone else once `MAIL_ACCOUNTS` is `everyone`. The person reads, sends from any of their boxes and keeps
+ * A person creates their address once, in setup or where Mail would show their mailbox: the deployment's operators and
+ * the accounts they invited always, anyone else once `MAIL_ACCOUNTS` is `everyone`. The person reads, sends from any of their boxes and keeps
  * drafts; Important is the assistant's pick, set through its `mail.update`, so the person cannot set it here. A thread
  * they send to one of their workspaces goes there behind the workspace gate, which proves they own it. Their own box
  * is read by their Personal assistant: it is handed over when they create their address if they have one, and at its
@@ -36,7 +36,7 @@ export interface MailRoutesEnv extends OwnerCapabilityEnv {
   readonly CONTROL_PLANE_ADMINS?: string;
   readonly MAILNAME: ObjectNamespace<unknown, Pick<MailNameDO, 'lookup' | 'claim'>>;
   readonly MAILBOX: ObjectNamespace<unknown, MailboxReach>;
-  readonly UserDO: ObjectNamespace<unknown, Pick<UserDO, 'getConfig' | 'listActiveWorkspaces'>>;
+  readonly UserDO: ObjectNamespace<unknown, Pick<UserDO, 'getConfig' | 'listActiveWorkspaces' | 'limits_class'>>;
   readonly OrchestratorAgent: ObjectNamespace<unknown, Pick<OrchestratorAgent, 'readOwnerMail'>>;
 }
 
@@ -62,11 +62,14 @@ const Wake = v.object({
   allow: v.optional(v.pipe(v.array(MailAddress), v.maxLength(200))),
 });
 
-/** Whether the signed-in person may hold an address on this deployment (docs/MAIL.md §1). */
-function mayCreate(env: MailRoutesEnv, email: string): boolean {
-  if (env.MAIL_ACCOUNTS === 'everyone') return true;
+/** Whether the signed-in person may hold an address on this deployment (docs/MAIL.md §1): its operators and the accounts
+ *  they invited always, anyone once `MAIL_ACCOUNTS` is `everyone`. */
+async function mayCreate(c: MailContext): Promise<boolean> {
+  const { email, userId } = c.get('identity');
 
-  return isListedOperator(env, email);
+  if (c.env.MAIL_ACCOUNTS === 'everyone' || isListedOperator(c.env, email)) return true;
+
+  return await objectNamed(c.env.UserDO, userId).limits_class(await ownerCaller(c.env)) === 'invited';
 }
 
 const mailbox = (c: MailContext): MailboxReach => objectNamed(c.env.MAILBOX, c.get('identity').userId);
@@ -96,7 +99,7 @@ mailRoutes.get('/api/user/mail/boxes', async (c) => {
   if (!mailOn(c)) return json({ body: { enabled: false, domain: null, address: null, canCreate: false, boxes: [] } });
 
   const address = await addressOf(c);
-  const canCreate = address === null && mayCreate(c.env, c.get('identity').email);
+  const canCreate = address === null && await mayCreate(c);
 
   return json({ body: { enabled: true, domain: c.env.EMAIL_DOMAIN ?? '', address, canCreate, boxes: address === null ? [] : await mailbox(c).boxes() } });
 });
@@ -132,7 +135,7 @@ async function createAddress(c: MailContext): Promise<{ address: string } | Resp
 
   if (body === null || named !== null) return refused(named ?? 'invalid');
 
-  if (!mayCreate(c.env, identity.email)) return err(403, 'Addresses on this deployment are its operators\' only.');
+  if (!await mayCreate(c)) return err(403, 'Addresses on this deployment are for its operators and the people they invite.');
 
   const held = await addressOf(c);
 
