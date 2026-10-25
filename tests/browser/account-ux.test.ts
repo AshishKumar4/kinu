@@ -107,21 +107,25 @@ declare global {
 
 const CLAUDE_FINISH = 'POST /api/user/claude/finish';
 
-/** Presses a sign-in's Open link as a person does, the provider's tab kept from loading: the card hears the click. */
+/** Presses a sign-in's Open link as a person does, the provider's page kept from loading in a popup or a tab: the card
+ *  hears the click. */
 async function pressOpen(page: Page, scope: string): Promise<void> {
   const link = `${scope} [data-sign-in-open]`;
 
   await page.waitForSelector(link);
-  await page.$eval(link, (open) => { open.addEventListener('click', (event) => { event.preventDefault(); }); });
-  await page.click(link);
-}
+  await page.$eval(link, (open) => {
+    const opens = window.open;
 
-/** The person leaves this tab for the provider's and comes back. */
-async function leaveAndReturn(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    window.dispatchEvent(new Event('blur'));
-    window.dispatchEvent(new Event('focus'));
+    // Refused once, for this press: the next window asked for opens as it would.
+    window.open = () => {
+      window.open = opens;
+
+      return null;
+    };
+
+    open.addEventListener('click', (event) => { event.preventDefault(); }, { once: true });
   });
+  await page.click(link);
 }
 
 const CHATGPT_ADDRESS = '[data-chatgpt-way="here"] [data-sign-in-paste] input';
@@ -416,9 +420,9 @@ describe('account panels', () => {
     });
   });
 
-  // The owner, 2026-10-23: what to do with the page that won't load was read only once it was gone, after the popup had
-  // closed. It is said and drawn before OpenAI opens, in a tab of its own; back here, the paste step shows it again.
-  test("ChatGPT here: the page that won't load is shown before OpenAI opens, again when the person is back, and a wrong paste says what it was", async () => {
+  // The owner, 2026-10-25: the drawn "This site can't be reached" page read as the flow failing. The steps say the page
+  // won't load before OpenAI opens, and the paste step names the address to copy and how, with no page drawn.
+  test("ChatGPT here: the steps say the landing page won't load, the paste step names the address to copy, and a wrong paste says what it was", async () => {
     await withGallery(async (gallery) => {
       const page = await freshPage(gallery, 'setupmodal&panel=providers', 'light', 'desktop');
       const here = '[data-chatgpt-way="here"]';
@@ -427,16 +431,14 @@ describe('account panels', () => {
         await page.waitForSelector('[role="dialog"]');
         await settleAccountFixture(page);
         await clickByText(page, '[data-chatgpt-connect] button', 'Sign in here', '[data-chatgpt-connect]');
-        await page.waitForSelector(`${here}[data-chatgpt-step="before"] [data-dead-page]`);
+        await page.waitForSelector(`${here}[data-chatgpt-step="before"] [data-sign-in-open]`);
         expect(await page.$(CHATGPT_ADDRESS)).toBeNull();
-        expect(await page.$eval(`${here} [data-sign-in-open]`, (open) => ({ target: open.getAttribute('target'), rel: open.getAttribute('rel') })))
-          .toEqual({ target: '_blank', rel: 'noopener noreferrer' });
+        expect(await page.$eval(`${here} [data-sign-in-step="2"]`, (step) => step.textContent ?? '')).toContain("doesn't load. That's expected.");
 
         await pressOpen(page, here);
         await page.waitForSelector(`${here}[data-chatgpt-step="paste"] [data-sign-in-paste] input`);
-        expect(await page.$(`${here} [data-paste-returned]`)).toBeNull();
-        await leaveAndReturn(page);
-        await page.waitForSelector(`${here} [data-paste-returned] [data-dead-page]`);
+        expect(await page.$eval(`${here} [data-sign-in-step="3"]`, (step) => ({ starts: step.textContent?.includes('starts with 127.0.0.1') === true, hint: step.querySelector('[data-copy-hint]') !== null })))
+          .toEqual({ starts: true, hint: true });
 
         await page.type(CHATGPT_ADDRESS, 'https://auth.openai.com/api/accounts/authorize?client_id=x');
         await clickByText(page, `${here} button`, 'Finish', here);
