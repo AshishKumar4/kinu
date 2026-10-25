@@ -3457,6 +3457,11 @@ function owedRows(page: Page): Promise<string[]> {
   return page.$$eval('[data-inspected]', (rows) => rows.map((row) => `${row.getAttribute('data-inspected') ?? ''} ${row.getAttribute('data-phase') ?? ''}`));
 }
 
+/** Now's turn rows as a person reads them. */
+function turnRowTexts(page: Page): Promise<string[]> {
+  return page.$$eval('[data-inspected="turn"]', (rows) => rows.map((row) => row.textContent ?? ''));
+}
+
 /**
  * Work → Now lists every turn and effect still owed as the workspace's one work read reports it: blocked first, since
  * nothing in flight will move it, then what runs, then what waits. Recovering the stranded turn settles its claim, and
@@ -3470,9 +3475,18 @@ describe('Now lists what is still owed, by the phase its store records', () => {
       await page.goto(`${origin}/gallery.html?frame=workspacepage&owed=all`, { waitUntil: 'networkidle0' });
       await page.click('nav[aria-label="Workspace"] button[aria-label="Work"]');
       await page.waitForSelector('[data-inspected]');
-      const owed = ['effect blocked', 'turn running', 'effect running', 'effect waiting', 'effect waiting'];
+      const owed = ['effect blocked', 'turn running', 'effect running', 'effect waiting', 'effect waiting', 'turn waiting'];
 
       expect(await owedRows(page)).toEqual(['turn blocked', ...owed]);
+      // The owner, 2026-10-25: a running agent's row read "build turn · blocked · no activation is running it". Each row
+      // now says what the agent does, and where it is not running, what it waits on or what the person can do.
+      const [stuck, running, resuming] = await turnRowTexts(page);
+
+      expect([stuck, running]).toEqual([
+        'working on a request · stopped part-way and nothing will pick it up again: use Recover this turn in its chat · try 3',
+        'working on a request',
+      ]);
+      expect(resuming).toMatch(/^quiet-cove-f8c76035 · working on a request · stopped by a restart; it picks up again on its own · next try in \d+s$/u);
 
       await claimIs(page, { kind: 'stranded', turnId: 'turn-stranded', claimedAt: 1 });
       // The pushed claim renders on the page's next commit, not within the dispatch.

@@ -397,7 +397,7 @@ export interface OwedWorkRow {
   readonly id: string;
   readonly phase: string;
   readonly attempt: number | null;
-  readonly blocked: string | null;
+  readonly why: string | null;
 }
 
 /** A held turn's claim under the alarm's recovery, and the work read while it is held and once it has settled. */

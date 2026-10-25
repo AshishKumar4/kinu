@@ -64,7 +64,7 @@ test("an agent's refused title waits with no wake through laps and a reset isola
   // Owed with no wake, it is still the workspace's owed work: Work → Now lists it under the agent, waiting.
   const owed = (await workspace.agent.inspectWork()).filter((row) => row.actor !== null);
 
-  expect(owed.map(({ kind, label, phase }) => ({ kind, label, phase }))).toEqual([{ kind: 'effect', label: 'auto_title', phase: 'waiting' }]);
+  expect(owed.map(({ kind, label, phase }) => ({ kind, label, phase }))).toEqual([{ kind: 'effect', label: 'naming the chat', phase: 'waiting' }]);
   await lapLater(workspace);
   workspace.agent.harnessResetAgentIsolate(workspace.agent.agentOf(actorId).storageKey);
   await lapLater(workspace);

@@ -13,6 +13,7 @@ import { renderMemoryForTurn } from '../orchestrator/turn-surface';
 import { listRecoveryFindings } from '../evolution/recovery';
 import { listToolLessons, MAX_TOOL_LESSONS, shownLesson } from '../evolution/struggles';
 import { craftedToolDeclarations, externalToolDeclarations, runnableSandbox } from '../tools/sandbox-contract';
+import { connectedServers } from '../tools/mcp-discovery';
 import type { ResolvedTurnProfile } from '../profiles/resolve';
 import { SUBMIT_PLAN_TOOL } from '../tools/registry';
 import type { ActiveSkillSet } from '../skills/types';
@@ -129,6 +130,8 @@ export function collectDynamicContext(input: DynamicContextInput): DynamicContex
     // With crafting off the section stays silent: no tool is offered, and none is asked for.
     ...(rt.actor.config.getCrafting() && { craftedTools: craftedToolDeclarations(input.tools, profile) }),
     externalTools: externalToolDeclarations(input.tools, input.externalTools ?? {}, profile),
+    // What `codemode.list` answers in this turn's programs: none where the turn cannot run one.
+    connections: runnableSandbox(input.tools, profile) === undefined ? [] : connectedServers(input.externalTools ?? {}),
     // A note MEMORY.md's tail shows already is not shown twice, unless a fact has since changed what it says.
     factsBlock: renderMemoryForTurn(reads.facts, input.accountFacts, input.recalled?.filter((memory) => memory.kind === 'fact' || memory.supersededBy !== null
       || input.memoryTail?.includes(memory.text.trim()) !== true)),

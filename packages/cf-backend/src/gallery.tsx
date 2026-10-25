@@ -3602,7 +3602,8 @@ const OWED_EFFECT = { name: null, scope: "turn", seq: 0, input: "{}", blocked: n
 const OWED_TURNS = [{ claim: { ...OWED_CLAIM, turnId: "turn-live", epoch: 1 }, attempt: 1 }, { claim: { ...OWED_CLAIM, turnId: "turn-stranded", epoch: 3 }, attempt: 3 }];
 
 /** `&owed=all`'s work read: one turn this activation runs and one it stranded on its third attempt until a recovery
- *  settles it, and effects owed each way, folded by core's own projection as the workspace's read folds its stores. */
+ *  settles it, an agent's turn a restart cut that its isolate picks up again on its wake, and effects owed each way,
+ *  folded by core's own projection as the workspace's read and the agent's own fold their stores. */
 function galleryOwedWork(): readonly InspectedWork[] {
   if (new URLSearchParams(location.search).get("owed") !== "all") return [];
   const recovered = document.documentElement.dataset.galleryRecoveries !== undefined;
@@ -3620,6 +3621,10 @@ function galleryOwedWork(): readonly InspectedWork[] {
         actor: null,
       },
     ],
+    reported: inspectWork({
+      claims: [{ claim: { ...OWED_CLAIM, turnId: "turn-resuming", epoch: 2 }, actor: "quiet-cove-f8c76035", attempt: 1 }],
+      agentTurns: [], executing: new Set(), resuming: { at: NOW + 20e3 }, effects: [], now: NOW,
+    }),
     now: NOW,
   });
 }

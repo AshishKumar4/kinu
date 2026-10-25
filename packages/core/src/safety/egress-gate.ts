@@ -52,6 +52,8 @@ export interface EgressSecretBinding {
    * anonymous read there still works. An owner's secret sent there is refused.
    */
   readonly elsewhere?: 'withheld';
+  /** What it is for, told the agent in place of its hosts and position where those alone invite a use it cannot serve. */
+  readonly use?: string;
 }
 
 /**

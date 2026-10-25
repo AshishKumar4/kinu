@@ -63,18 +63,24 @@ function timeUntil(ms: number): string {
   return `in ${Math.ceil(seconds / 60)}m`;
 }
 
+/** What the row's phase says to a person, beside what it is; a running row says nothing more. */
+const PHASE_WORDS: Readonly<Record<InspectedWork["phase"], string | null>> = { running: null, waiting: "waiting", blocked: "stuck" };
+
 /** A turn or effect still owed, as its own store records it: what it is, how it stands, and why or until when. */
+
 export function InspectedRow({ work, now }: { work: InspectedWork; now: number }) {
   const notes = [
-    work.phase,
-    work.attempt !== null && work.attempt > 1 ? `attempt ${String(work.attempt)}` : null,
-    work.blocked,
+    work.why ?? PHASE_WORDS[work.phase],
+    work.attempt !== null && work.attempt > 1 ? `try ${String(work.attempt)}` : null,
     work.until !== null && work.until > now ? `next try ${timeUntil(work.until - now)}` : null,
   ].filter((note) => note !== null);
 
   return (
     <div className="flex items-start gap-2 py-1" data-inspected={work.kind} data-phase={work.phase}>
-      <span className="t-body">{work.actor === null ? work.label : `${work.actor} · ${work.label}`} <span className="p-text-3">· {notes.join(" · ")}</span></span>
+      <span className="t-body">
+        {work.actor === null ? work.label : `${work.actor} · ${work.label}`}
+        {notes.length > 0 && <span className="p-text-3"> · {notes.join(" · ")}</span>}
+      </span>
     </div>
   );
 }

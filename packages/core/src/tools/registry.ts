@@ -385,8 +385,9 @@ export function renderCodemodeDescription(all: readonly DescribedProvider[], sub
   return [
     BUILTIN_TOOL_DESCRIPTIONS.eval,
     `- ${SANDBOX_RUNS[substrate]}`,
-    'MCP tools: `codemode.list()` lists servers and `codemode.list(server)` their tools; `codemode.search("intent")` finds '
-      + 'tools; `codemode.describe(path)` gives one\'s input schema. Call the `tools.<name>(input)` path it returns.',
+    'MCP tools, of the servers Connected services names: `codemode.list()` lists servers and `codemode.list(server)` their '
+      + 'tools; `codemode.search("intent")` finds tools; `codemode.describe(path)` gives one\'s input schema. Call the '
+      + '`tools.<name>(input)` path it returns.',
     ...(shown === undefined ? [] : [`Namespaces are globals, not under \`tools\`: call a member as ${shown}.`]),
     'Each namespace, with its members\' call forms (positional arguments, then one options object):',
     ...listed,

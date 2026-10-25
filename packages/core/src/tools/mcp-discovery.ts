@@ -11,13 +11,45 @@ export function registerMcpDescriptors(tools: ToolSet, descriptors: readonly Ser
   for (const descriptor of descriptors) descriptorsBySchema.set(asSchema(tools[descriptor.toolKey].inputSchema), descriptor);
 }
 
-/** Discovery describes only the callable, policy-narrowed surface. Calls still enter the original Kinu tools. */
-export function mcpDiscoveryProvider(tools: ToolSet): CodemodeProvider {
-  const entries = Object.entries(tools).flatMap(([name, entry]) => {
+/** The MCP tools among `tools`, each by the key a program calls it under and its server's descriptor. */
+function mcpEntries(tools: ToolSet): { readonly name: string; readonly descriptor: SerializableToolDescriptor }[] {
+  return Object.entries(tools).flatMap(([name, entry]) => {
     const descriptor = descriptorsBySchema.get(asSchema(entry.inputSchema));
 
     return descriptor === undefined ? [] : [{ name, descriptor }];
   });
+}
+
+/** A connected MCP server as a turn holds it: how many tools, and how many its server does not mark read-only. */
+export interface ConnectedServer {
+  readonly server: string;
+  readonly presetId?: string;
+  readonly tools: number;
+  readonly changing: number;
+}
+
+/**
+ * What `codemode.list()` answers, with what its server marks read-only: the same narrowed surface, so a turn is told only
+ * what its programs reach. Counts, never the tools: their catalog stays inside `eval`, however many a server serves.
+ */
+export function connectedServers(tools: ToolSet): readonly ConnectedServer[] {
+  const servers = new Map<string, { presetId?: string; tools: number; changing: number }>();
+
+  for (const { descriptor } of mcpEntries(tools)) {
+    const held = servers.get(descriptor.serverName) ?? { ...(descriptor.presetId !== undefined && { presetId: descriptor.presetId }), tools: 0, changing: 0 };
+
+    held.tools += 1;
+
+    if (descriptor.readOnly !== true) held.changing += 1;
+    servers.set(descriptor.serverName, held);
+  }
+
+  return [...servers].map(([server, held]) => ({ server, ...held }));
+}
+
+/** Discovery describes only the callable, policy-narrowed surface. Calls still enter the original Kinu tools. */
+export function mcpDiscoveryProvider(tools: ToolSet): CodemodeProvider {
+  const entries = mcpEntries(tools);
 
   const descriptions: ConnectorDescription[] = [{
     name: 'tools',

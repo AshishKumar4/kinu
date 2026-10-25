@@ -605,6 +605,8 @@ export class FacetChat {
       claims: actor.stores.claims.unsettled().map((claim) => ({ claim, actor: name, attempt: turnAttemptOf(actor.runtime.storage.sql, claim) })),
       agentTurns: [],
       executing: new Set(running === undefined ? [] : [running]),
+      // A turn its session owes runs, or resumes what a restart cut, on its own: on the wake it last told the workspace.
+      ...(this.session.turnOwed && { resuming: { at: this.namedWake } }),
       effects: ledger.pendingSequences().flatMap((sequence) => ledger.owed(sequence)).map((effect) => ({ effect, actor: name })),
       now: Date.now(),
     });
