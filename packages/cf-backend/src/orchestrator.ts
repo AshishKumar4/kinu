@@ -262,7 +262,7 @@ import {
 } from "@kinu.run/core";
 import type { MctsSearchRunSummary, SubagentInspectionRequest, SubagentInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
 import { Cause, Effect, Exit, Result } from 'effect';
-import { attempt, attemptInItsWords, authoredRefusal, CODE_IS_REFUSAL, diagnostics, flight, hold, joining, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
+import { attempt, authoredRefusal, CODE_IS_REFUSAL, diagnostics, flight, hold, joining, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import { UNPLACED, WorkspacePlacementSchema, type WorkspacePlacement } from "./user/workspace-placement";
 import type { NameOrigin } from "@kinu.run/core";
@@ -274,12 +274,11 @@ import {
   type SandboxLifecycleIncidentResult,
 } from "./sandbox-lifecycle";
 
-import type { RestoreStatus, SessionRecord, StartAdmission, TerminalSession } from "@kinu.run/devbox";
+import type { RestoreStatus, SessionRecord, TerminalSession } from "@kinu.run/devbox";
 import type { BoxSize } from "@kinu.run/devbox/sizes";
 import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY, type ComputerSizeState } from "./computer-size";
 import { readOutgoing } from "./mail/parse";
 import { createPushWatcher, deletePushHook, parkPushWatchers, resumePushWatchers, type PushWatcherHost } from "./github-push-watchers";
-import type { ComputerSize } from "@kinu.run/core";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { forgetSandboxPreviews, sandboxPreviewExposures } from "@kinu.run/core";
 import type { ExposedPortList } from "@kinu.run/core";
@@ -3951,32 +3950,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     })));
   }
 
+  /** Its computer stopped: the restore notice it showed is cleared. The owner's limits hear the stop from the box. */
   async sandboxStopped(): Promise<void> {
     await this.sandboxRestore({ restoring: false, refused: undefined });
-    // Its running time stops counting, and its place is free for another of the owner's computers.
-    const { stub, caller } = await this.userHub();
-    await stub.limits_computerStopped(caller, this.name);
-  }
-
-  /**
-   * Whether this workspace's computer, set to `size`, may start from stopped (KinuDevbox `admitStart`): its owner's limits
-   * answer the size it starts at (a free account's at most small), or a refusal in their words. Admitted, it holds the
-   * owner's place until `sandboxStopped`.
-   */
-  async computerStartAdmitted(size: ComputerSize): Promise<StartAdmission> {
-    const { stub, caller } = await this.userHub();
-
-    return settle(Effect.match(attemptInItsWords('unavailable', () => stub.limits_admitComputerStart(caller, this.name, size)), {
-      onSuccess: (runs): StartAdmission => ({ size: runs }),
-      // Only the limits' own answer refuses a start; a limits object that could not be asked does not hold the box down.
-      onFailure: (refusal): StartAdmission => (refusal.code === 'budget' || refusal.code === 'denied' ? { refused: refusal.message } : { size }),
-    }));
-  }
-
-  /** This workspace's computer seen running (KinuDevbox heartbeat): its running time counts to the owner's month. */
-  async computerRunningTick(size: ComputerSize): Promise<void> {
-    const { stub, caller } = await this.userHub();
-    await stub.limits_computerTick(caller, this.name, size);
   }
 
   async sandboxRestore(status: RestoreStatus): Promise<void> {

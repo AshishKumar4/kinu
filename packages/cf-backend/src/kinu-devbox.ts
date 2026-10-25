@@ -9,8 +9,9 @@ import {
   type IncidentDisposition, type RestoreClockPhase,
 } from "@kinu.run/devbox";
 import { getAgentByName } from "agents";
-import { settleLogged } from "@kinu.run/core/obs";
-import { markDocument, previewHostSuffix, workspaceHostLabel } from '@kinu.run/core';
+import { Effect } from 'effect';
+import { attemptInItsWords, settle, settleLogged } from "@kinu.run/core/obs";
+import { markDocument, objectNamed, ownerCaller, previewHostSuffix, workspaceHostLabel, type ComputerSize, type UserCaller } from '@kinu.run/core';
 import type { OrchestratorAgent } from "./orchestrator";
 import { lifecycleIncident, restoreNotices } from "./sandbox-lifecycle";
 import {
@@ -32,10 +33,14 @@ interface KinuState extends DevboxState {
 }
 
 /** Type-only, so nothing here reaches orchestrator code at runtime. */
-type SandboxRootClient = Pick<
-  OrchestratorAgent,
-  "acceptSandboxLifecycleIncident" | "sandboxStopped" | "sandboxRestore" | "workspaceTitle" | "computerStartAdmitted" | "computerRunningTick"
->;
+type SandboxRootClient = Pick<OrchestratorAgent, "acceptSandboxLifecycleIncident" | "sandboxStopped" | "sandboxRestore" | "workspaceTitle">;
+
+/** What the box asks its owner's limits, as narrow as the egress's vault client: its start, its running time, its stop. */
+interface ComputerLimitsClient {
+  limits_admitComputerStart(caller: UserCaller, workspace: string, size: ComputerSize): Promise<ComputerSize>;
+  limits_computerTick(caller: UserCaller, workspace: string, size: ComputerSize): Promise<void>;
+  limits_computerStopped(caller: UserCaller, workspace: string): Promise<void>;
+}
 
 export class KinuDevbox extends Devbox<Env> {
   readonly #nativeExports: KinuState['exports'];
@@ -91,20 +96,42 @@ export class KinuDevbox extends Devbox<Env> {
     this.#restoreNotice(phase);
   }
 
-  /** A start from stopped is the owning workspace's owner's to admit (core limits/): asked of its root agent. */
+  /**
+   * A start from stopped is the owning workspace's owner's to admit (core limits/): its answer is the size it starts at,
+   * or a refusal in its words. Only the limits' own answer refuses; an owner's object that could not be asked does not
+   * hold the box down.
+   */
   protected override async admitStart(size: BoxSize): Promise<StartAdmission> {
-    return await (await this.#rootAgent())?.computerStartAdmitted(size) ?? { size };
+    const limits = await this.#ownerLimits();
+
+    if (limits === null) return { size };
+    const { owner, caller, workspace } = limits;
+
+    return settle(Effect.match(attemptInItsWords('unavailable', () => owner.limits_admitComputerStart(caller, workspace, size)), {
+      onSuccess: (runs): StartAdmission => ({ size: runs }),
+      onFailure: (refusal): StartAdmission => (refusal.code === 'budget' || refusal.code === 'denied' ? { refused: refusal.message } : { size }),
+    }));
   }
 
-  /** Each heartbeat the box is seen running counts to its owner's month; an uncounted tick is logged, never the beat's. */
+  /** Each heartbeat the box is seen running counts to its owner's month, told the owner and not the workspace, whose
+   *  object a beat would otherwise start once a minute; an uncounted tick is logged, never the beat's. */
   protected override async onRunningTick(size: BoxSize): Promise<void> {
     await settleLogged('computer.tick_unrecorded', { doing: "counting the computer's running time", otherwise: 'unavailable' }, async () => {
-      await (await this.#rootAgent())?.computerRunningTick(size);
+      const limits = await this.#ownerLimits();
+
+      await limits?.owner.limits_computerTick(limits.caller, limits.workspace, size);
     });
   }
 
   override async onStop(): Promise<void> {
     await super.onStop();
+
+    // Its running time stops counting, and its place is free for another of the owner's computers.
+    await settleLogged('computer.stop_uncounted', { doing: "telling the owner's limits the computer stopped", otherwise: 'unavailable' }, async () => {
+      const limits = await this.#ownerLimits();
+
+      await limits?.owner.limits_computerStopped(limits.caller, limits.workspace);
+    });
 
     await settleLogged("computer.stop_notice_failed", { doing: "telling the workspace its computer stopped", otherwise: "unavailable" }, async () => {
       await (await this.#rootAgent())?.sandboxStopped();
@@ -144,6 +171,17 @@ export class KinuDevbox extends Devbox<Env> {
   /** The values a supervised job its owner started may read, asked at each of its launches (`revealedForJob`). */
   protected override async revealedEnv(): Promise<Readonly<Record<string, string>>> {
     return await revealedForJob(this.env, await this.ctx.storage.get<KinuEgressParams>(EGRESS_CONFIG_KEY));
+  }
+
+  /** The owner's limits as this box reaches them, by the owner capability its egress already holds (`send-out.ts`), and
+   *  the workspace its configuration names; null before the owning workspace configured it. */
+  async #ownerLimits(): Promise<{ readonly owner: ComputerLimitsClient; readonly caller: UserCaller; readonly workspace: string } | null> {
+    const params = await this.ctx.storage.get<KinuEgressParams>(EGRESS_CONFIG_KEY);
+
+    if (params === undefined) return null;
+    const owner: ComputerLimitsClient = objectNamed(this.env.UserDO, params.ownerUserId);
+
+    return { owner, caller: await ownerCaller(this.env), workspace: params.workspaceName };
   }
 
   async #rootAgent(): Promise<SandboxRootClient | null> {

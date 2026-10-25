@@ -77,8 +77,8 @@ export class ContractBox extends Devbox<Env> {
    * /etc/hostname, which the platform mounts read-only, and the failure carries no code. Every other box configures as
    * KinuDevbox does.
    */
-  protected override async configureContainer(reused?: boolean): Promise<void> {
-    await super.configureContainer(reused);
+  protected override async configureContainer(reused?: boolean, naming?: boolean): Promise<void> {
+    await super.configureContainer(reused, naming);
     const name: unknown = this.ctx.id.name;
     const container = this.ctx.container;
 

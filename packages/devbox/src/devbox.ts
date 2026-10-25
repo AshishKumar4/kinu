@@ -3538,28 +3538,32 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return container?.running === true && this.#quiescing === undefined && this.#admission() !== undefined ? container : undefined;
   }
 
-  /** Applies a changed outbound policy to the running container once it is adopted (D102); a stopped one takes it at its
-   *  start. */
+  /** Applies a changed outbound policy to the running container once it is adopted (D102), and the name its host gives
+   *  it now, which a rename moved (D91); a stopped one takes both at its start. */
   protected async reconfigure(): Promise<void> {
     await this.#adopted();
 
-    if (this.ctx.container?.running === true) await this.configureContainer();
+    if (this.ctx.container?.running === true) await this.configureContainer(this.#reused(), true);
   }
 
-  protected async configureContainer(reused = this.#reused()): Promise<void> {
+  /**
+   * The routes over a container, and its name where `naming`: a container that boots takes its name (the kernel keeps
+   * one for the boot alone, D96), and one a box adopts or starts over already carries it, so its name is not read again
+   * (D115: each adoption asked the host, which woke the workspace once a minute).
+   */
+  protected async configureContainer(reused = this.#reused(), naming = !reused): Promise<void> {
     const began = Date.now();
     await this.#routes().configure(await this.outboundPolicy(), this.store, reused);
     const routed = Date.now();
     this.#renewContainer();
     await this.#forgetClosedSessions();
-    const name = await this.hostname();
+    const name = naming ? await this.hostname() : undefined;
     const read = Date.now();
 
-    // The kernel keeps a name for the boot alone, so each start names the box again (D83, D96).
     if (name !== undefined) {
-      const naming = await nameBox(this.#container(), name);
+      const named = await nameBox(this.#container(), name);
 
-      if (!naming.named) this.#trace('name.unresolved', { name, detail: naming.detail });
+      if (!named.named) this.#trace('name.unresolved', { name, detail: named.detail });
     }
 
     this.#trace('configured', { routesMs: routed - began, nameReadMs: read - routed, namingMs: Date.now() - read });

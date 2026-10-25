@@ -23,9 +23,9 @@ class ParkingBox extends TestDevbox<unknown> {
 
   protected override get workerVersion(): string { return deployed; }
 
-  protected override async configureContainer(reused?: boolean): Promise<void> {
+  protected override async configureContainer(reused?: boolean, naming?: boolean): Promise<void> {
     this.configures += 1;
-    await super.configureContainer(reused);
+    await super.configureContainer(reused, naming);
 
     if (failure !== undefined) throw failure;
   }

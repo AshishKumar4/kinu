@@ -5397,6 +5397,27 @@ flight is aborted, before the generation turns over. `hybrid.test.ts` delivers a
 (a startup armed and a second restore), green after. That clear also ended "Network connection lost." after 107 s: its
 object reset mid-clear, before `destroy` began, with no deploy and 13 ms of CPU; what reset it is not measured.
 
+D115. A running box's beat wakes nothing but its owner's limits, and an adoption reads no name (2026-10-25; narrows D91
+and D102). Production, eeaaa480: the owner's workspace quiet-cove-f8c76035 started a new activation every ~61 s from
+20:45 to 22:30Z (105 by 22:30), and nothing else of it ran: every startup came from its box, a3b8bd7d…, whose heartbeat
+alarm found a fresh object each minute. Each beat called the workspace twice: its adoption's `configureContainer` read the
+workspace's title to name the kernel (D91), and its running tick (core limits, 40676597d) went to the owner through the
+workspace (`computerRunningTick`); Workers Logs show both RPCs, and `actor.startup` under the first, at each beat. The
+startups stopped when the box rested at 22:30:30. Staging 0d69657a9, an eval workspace whose computer ran one command and
+then sat idle 8 minutes (22:41 to 22:49Z): 7 workspace startups, one a minute.
+
+Two causes. The kernel keeps its name for the boot (D96), so naming a container the box adopted or started over asks for
+a name it already carries; D102 adopted "as a start's admission would", naming included. And the box's three limits calls
+(start, tick, stop) went through the workspace, though the box already reaches its owner's object with the owner
+capability for its egress (`send-out.ts`). Now `configureContainer` reads the name only for a container that boots, or
+when its host configures it again (`reconfigure`, which a rename reaches at the workspace's next first use, as D91 had
+it); and `KinuDevbox` asks the owner's limits itself, by the owner and workspace its egress configuration names. The
+workspace keeps `sandboxStopped` for its own restore notice; `computerStartAdmitted` and `computerRunningTick` are gone.
+
+`cf-backend/tests/unit-computer-tick.test.ts` beats a running box ten times, a fresh object each beat: red before (ten
+title reads and ten running ticks into the workspace, none to the owner), green after (none into the workspace, ten ticks
+to the owner, each naming the workspace and the size).
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean
