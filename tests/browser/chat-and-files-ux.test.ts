@@ -1267,12 +1267,12 @@ describe('a hosted actor’s cards stay out of the workspace’s own chat', () =
       // absence below is read after the socket has certainly been heard.
       await page.evaluate(() => {
         window.dispatchEvent(new CustomEvent('gallery:push-frame', { detail: {
-          type: 'signal_card', id: 'sig-refiner', state: 'pending', actorId: 'actor-refiner',
+          type: 'signal_card', id: 'sig-refiner', state: 'pending', at: Date.now(), actorId: 'actor-refiner',
           metadata: { kinuEvent: 'event_drain' },
           text: '- [refinement] from refiner (self-review): reviewed 3 graded turns and changed nothing',
         } }));
         window.dispatchEvent(new CustomEvent('gallery:push-frame', { detail: {
-          type: 'signal_card', id: 'sig-workspace', state: 'pending',
+          type: 'signal_card', id: 'sig-workspace', state: 'pending', at: Date.now(),
           metadata: { kinuEvent: 'event_drain' },
           text: '- [webhook] from stripe: a payout of 240.00 settled',
         } }));
@@ -1356,7 +1356,7 @@ function pushFrames(page: Page, frames: JsonObject[]): Promise<void> {
 }
 
 const webhookCard = (id: string, brief: string, state = 'pending') => ({
-  type: 'signal_card', id, state, metadata: { kinuEvent: 'event_drain' }, text: `- [webhook] from stripe: ${brief}`,
+  type: 'signal_card', id, state, at: Date.now(), metadata: { kinuEvent: 'event_drain' }, text: `- [webhook] from stripe: ${brief}`,
 });
 
 /**
@@ -1403,7 +1403,7 @@ describe('an event spliced into a running answer', () => {
       await page.waitForSelector('.p-thread-column');
       const text = `Events arrived while you were working:\n- [webhook] from lilt: ${SPLICE.brief}`;
 
-      await pushFrames(page, [{ type: 'signal_card', id: 'sig-lilt', state: 'pending', metadata: { kinuEvent: 'event_drain', kinuAuthor: 'harness' }, text }]);
+      await pushFrames(page, [{ type: 'signal_card', id: 'sig-lilt', state: 'pending', at: Date.now(), metadata: { kinuEvent: 'event_drain', kinuAuthor: 'harness' }, text }]);
       await page.waitForFunction(() => document.querySelector('.p-thread-column [data-signal-card] [data-delivery="pending"]') !== null);
       expect(await spliceDelivery(page)).toEqual({ state: 'pending', tone: 'p-warning' });
 
@@ -1458,17 +1458,21 @@ describe('a chat\'s events', () => {
         agentReport('rep-after', now + 60e3, 'after every answer'),
         agentReport('rep-twice-1', now + 120e3, 'the same report'),
         agentReport('rep-twice-2', now + 121e3, 'the same report'),
-        { type: 'signal_card', id: 'sig-lilt', state: 'pending', metadata: { kinuEvent: 'event_drain' },
+        { type: 'signal_card', id: 'sig-lilt', state: 'pending', at: now - 7 * 60e3 + 1, metadata: { kinuEvent: 'event_drain' },
           text: '- [webhook] from lilt: New Lilt chat activity\n- [webhook] from lilt: New Lilt chat activity' },
       ]);
       await page.waitForFunction(() => document.querySelector('.p-thread-column')?.textContent?.includes('New Lilt chat activity') === true);
 
-      const [first, between, second, after] = await readingOrder(page, [
-        'Add the missing-binding regression test', 'between the two asks', 'Now move the webhook routes onto openDb', 'after every answer',
+      const [first, between, card, second, after] = await readingOrder(page, [
+        'Add the missing-binding regression test', 'between the two asks', 'New Lilt chat activity', 'Now move the webhook routes onto openDb', 'after every answer',
       ]);
 
-      expect({ between: (first ?? 0) < (between ?? 0) && (between ?? 0) < (second ?? 0), after: (second ?? 0) < (after ?? 0) })
-        .toEqual({ between: true, after: true });
+      // A card of the server's, like an approval answered, sits where it was delivered as a report does.
+      expect({
+        between: (first ?? 0) < (between ?? 0) && (between ?? 0) < (second ?? 0),
+        card: (first ?? 0) < (card ?? 0) && (card ?? 0) < (second ?? 0),
+        after: (second ?? 0) < (after ?? 0),
+      }).toEqual({ between: true, card: true, after: true });
 
       const drawn = await page.evaluate(() => ({
         reports: [...document.querySelectorAll('[data-subagent-event]')].filter((row) => row.textContent?.includes('the same report'))

@@ -7,7 +7,7 @@ import { Inbox, type LandedEventRow } from '../src/orchestrator/inbox';
 import { DeliveryInbox, deliveredSignal } from '../src/subagents/deliveries';
 import type { BackendHost, BroadcastEvent, ProgrammaticTurn } from '../src/types/backend-host';
 import { USER_MESSAGE_SIGNAL_KIND, type AgentSignal, type SignalCardEvent } from '../src/types/signals';
-import { JsonObjectSchema } from '../src/utils/json';
+import { SignalCardEventSchema } from '../src/read-models/background-event';
 import { WORKSPACE_CREATED_EVENT, workspaceGenesisSignal } from '../src/identity/soul';
 import { present } from '@kinu.run/test-utils';
 
@@ -16,27 +16,6 @@ const user = (text: string): ModelMessage => ({ role: 'user', content: text });
 const assistant = (text: string): ModelMessage => ({ role: 'assistant', content: text });
 
 const texts = (messages: ReadonlyArray<ModelMessage>) => messages.map((m) => m.content);
-
-const SignalCardEventSchema: v.GenericSchema<SignalCardEvent> = v.variant('state', [
-  v.object({
-    type: v.literal('signal_card'),
-    id: v.string(),
-    state: v.literal('pending'),
-    metadata: JsonObjectSchema,
-    text: v.string(),
-  }),
-  v.object({
-    type: v.literal('signal_card'),
-    id: v.string(),
-    state: v.literal('shown'),
-    atStep: v.optional(v.number()),
-  }),
-  v.object({
-    type: v.literal('signal_card'),
-    id: v.string(),
-    state: v.picklist(['seen', 'undelivered']),
-  }),
-]);
 
 function setup(opts: {
   turnInFlight?: boolean;

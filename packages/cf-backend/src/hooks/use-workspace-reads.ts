@@ -380,7 +380,7 @@ export function useWorkspaceReads(link: ChatLink) {
     } else if (msg.type === "signal_card") {
       const card = parseSignalCardEvent({ value: msg });
 
-      if (card) setSignalCards((current) => applySignalCard(current, card, Date.now()));
+      if (card) setSignalCards((current) => applySignalCard(current, card));
     } else if (msg.type === 'workspace_plan_updated') {
       const key = JSON.stringify(msg.reference);
 

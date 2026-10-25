@@ -502,7 +502,7 @@ export type { SessionFilePlane } from './session/payload';
 
 export type { MessageReference, MessagePartReference, ActorReadAuthority } from './session/messages';
 
-export { drawnStep, SessionTranscript, SessionTranscriptReader, readSessionTranscript, type ConversationEntry, type ConversationProjection, type PreparedConversationEntry } from './session/transcript';
+export { drawnStep, RECORDED_AT_METADATA_KEY, SessionTranscript, SessionTranscriptReader, readSessionTranscript, type ConversationEntry, type ConversationProjection, type PreparedConversationEntry } from './session/transcript';
 
 export { encodeModelMessageValues, decodeModelMessageValues } from './session/message-codec';
 
@@ -2389,7 +2389,7 @@ export {
 export {
   classifyProgrammaticTurn, systemEventTurn, delegatedTaskMetadata, messageSignalId, isSteeredMessage, endedMidWork, TURN_END_METADATA_KEY, turnFailure, TURN_FAILURE_METADATA_KEY, slatesChanged, SLATES_CHANGED_METADATA_KEY, slatesToPreview, applySignalCard,
   splicesSeenOn, SIGNALS_SEEN_METADATA_KEY, type SeenSplice,
-  parseSignalCardEvent, parseDrainedEvents, eventVariantLabel, eventSourceLabel,
+  parseSignalCardEvent, SignalCardEventSchema, parseDrainedEvents, eventVariantLabel, eventSourceLabel,
   metadataBroadcastEvent,
   type ClassifiedProgrammaticTurn, type SignalCard, type DrainedEvent,
 } from './read-models/background-event';
