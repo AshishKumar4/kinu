@@ -16,14 +16,15 @@ export interface ChatCommandsControl {
 
 export function useChatCommands(input: {
   readonly chat: Omit<ChatCommandHandles, "say">;
-  /** The workspace's own, told how to say why one did nothing. */
-  readonly own: ((say: (words: string) => void) => readonly ComposerCommand[]) | undefined;
+  /** The workspace's own, told how to say what one did or why it did nothing. */
+  readonly own: ((say: (words: string, tone?: "info") => void) => readonly ComposerCommand[]) | undefined;
   readonly draft: string;
   readonly send: () => void;
 }): ChatCommandsControl {
-  const [said, setSaid] = useState<string | null>(null);
+  const [said, setSaid] = useState<{ readonly words: string; readonly tone: "info" | "warning" } | null>(null);
+  const say = (words: string, tone: "info" | "warning" = "warning"): void => { setSaid({ words, tone }); };
 
-  const commands = [...chatCommands({ ...input.chat, say: setSaid }), ...input.own?.(setSaid) ?? []]
+  const commands = [...chatCommands({ ...input.chat, say }), ...input.own?.(say) ?? []]
     .map((command): ComposerCommand => ({ ...command, run: (argument) => Effect.andThen(Effect.sync(() => { setSaid(null); }), command.run(argument)) }));
 
   const slash = useSlashMenu({ commands, draft: input.draft, setDraft: input.chat.setDraft });
@@ -44,6 +45,6 @@ export function useChatCommands(input: {
   return {
     slash,
     submit,
-    notices: said === null ? [] : [{ id: "command", tone: "warning", text: said, onDismiss: () => { setSaid(null); }, hooks: { "data-command-notice": "" } }],
+    notices: said === null ? [] : [{ id: "command", tone: said.tone, text: said.words, onDismiss: () => { setSaid(null); }, hooks: { "data-command-notice": "" } }],
   };
 }

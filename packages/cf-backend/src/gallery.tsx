@@ -14,7 +14,7 @@ import { galleryPicture } from "@/gallery-pictures";
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import type { FileUIPart, UIMessage } from "ai";
 import { connectedPath, connectEndedOf, GOOGLE_OAUTH_CRED_KEY, mainPanelAgent, restoredRows, sharedBuildRefusal, threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl, type ModelMenuEntry, type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry } from "@kinu.run/core";
-import { delegatedTaskMetadata, followJobOutput, RECORDED_AT_METADATA_KEY, summarizeSteps, SIGNALS_SEEN_METADATA_KEY, TURN_END_METADATA_KEY, TURN_FAILURE_METADATA_KEY, JOB_OUTPUT_EVENT, type JobOutputTail, type BranchTurnResult } from "@kinu.run/core";
+import { delegatedTaskMetadata, followJobOutput, RECORDED_AT_METADATA_KEY, summarizeSteps, SIGNALS_SEEN_METADATA_KEY, TURN_END_METADATA_KEY, TURN_FAILURE_METADATA_KEY, JOB_OUTPUT_EVENT, type JobOutputTail, type BranchTurnResult, type CompactOutcome } from "@kinu.run/core";
 import {
   COMPLETION_GATE_EVENT, FORK_INTERRUPTED_SIGNAL, OUTPUT_CONTINUATION_EVENT, OUTPUT_CONTINUATION_TEXT, OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
   OWNER_ANSWER_SIGNAL, TASK_REMINDER_EVENT, TASK_REMINDER_OPEN_KEY, taskReminderOf,
@@ -3315,6 +3315,13 @@ async function galleryRevert(args?: unknown[]): Promise<void> {
   galleryRevertConversation(id);
 }
 
+/** The owner's compaction, folded at once as a model with no server compaction folds it. */
+function galleryCompact(): CompactOutcome {
+  document.documentElement.dataset.galleryCompacted = "folded";
+
+  return "folded";
+}
+
 /** A branch beside the live turn: the words it was asked with are kept; `data-gallery-branch-refuses` makes the agent
  *  refuse it, as one already running beside the turn does. */
 function galleryBranch(args?: unknown[]): BranchTurnResult {
@@ -3651,6 +3658,7 @@ const ASYNC_PAGE_ANSWERS: WorkspaceAnswers = {
   savePlanReviewAnnotations: (...args) => galleryAnnotationSave(args),
   revertConversation: (...args) => galleryRevert(args),
   branchTurn: (...args) => galleryBranch(args),
+  compactConversation: () => galleryCompact(),
   clearConversation: galleryClearConversation,
   send: (...args) => galleryMidTurnSend(args),
   awaitSend: galleryAwaitSend,

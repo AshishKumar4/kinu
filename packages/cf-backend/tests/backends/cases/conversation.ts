@@ -2,7 +2,7 @@ import { seedTranscriptEntry } from '@kinu.run/test-utils';
 /** The conversation itself: what the owner sends, and taking it back. */
 import { expect } from 'bun:test';
 import { Effect } from 'effect';
-import { CHAT_SESSION_ID, CLEAR_NEEDS_IDLE, type ActorHandle, type SessionHistory, type SqlExecutor } from '@kinu.run/core';
+import { CHAT_SESSION_ID, CLEAR_NEEDS_IDLE, COMPACT_NEEDS_IDLE, type ActorHandle, type SessionHistory, type SqlExecutor } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import type { SharedCase } from '../cases';
 import { chatSeed, keptMediaName } from '@kinu.run/core';
@@ -85,6 +85,23 @@ export const CONVERSATION_CASES: readonly SharedCase[] = [
 
       await surface.clearConversation();
       expect(await spoken(history)).toEqual([]);
+    },
+  },
+  // The owner, 2026-10-25: "why left out compact?" The web's /compact reaches main's chat as the CLI's does a local one.
+  {
+    title: 'a compaction while a turn runs is refused and keeps the conversation; once idle the owner\'s compaction runs',
+    async run({ surface, history, holdTurn }) {
+      await exchange(history, 'q-1', 'Name the release.', 'Aurora.');
+      const running = await holdTurn('Shorter.', 'build');
+
+      try {
+        await expect(surface.compactConversation()).rejects.toThrow(COMPACT_NEEDS_IDLE);
+        expect((await spoken(history)).slice(0, 2)).toEqual([['user', 'Name the release.'], ['assistant', 'Aurora.']]);
+      } finally {
+        await running.release();
+      }
+
+      expect(await surface.compactConversation()).toBe('folded');
     },
   },
   {

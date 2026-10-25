@@ -1811,7 +1811,7 @@ export {
   EvolutionLanes, evolutionPassOpen, recordedTurn, type EvolutionLanesDeps, type TurnContinuity,
 } from './orchestrator/evolution-lanes';
 
-export { ActorSession, CLEAR_NEEDS_IDLE, type ActorSessionOptions, type ActorTurnLease, type ActorExecutionInput, type ActorExecutionResult } from './orchestrator/actor-session';
+export { ActorSession, CLEAR_NEEDS_IDLE, COMPACT_NEEDS_IDLE, type ActorSessionOptions, type ActorTurnLease, type ActorExecutionInput, type ActorExecutionResult } from './orchestrator/actor-session';
 
 export {
   ChatSession, type ChatSessionPorts, type OpenWork, type CompactOutcome, type ComposedRequest, type ChatTransport, type ChatTurnInput,
@@ -2640,7 +2640,7 @@ export {
 } from './read-models/app-routes';
 
 export {
-  filterCommands, resolveCommandDraft, slashCommand, type SlashCommandInfo,
+  COMPACTED, filterCommands, resolveCommandDraft, slashCommand, type SlashCommandInfo,
 } from './read-models/slash-commands';
 
 export { conversationMarkdown, lastAnswer, readConversation, type ConversationMessage, type ConversationRow } from './read-models/conversation';

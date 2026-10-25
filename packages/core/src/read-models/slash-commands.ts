@@ -3,6 +3,9 @@
  * binds the ones it can run and parses their arguments itself; a command means the same thing wherever it is offered.
  */
 
+import type { CompactOutcome } from '../orchestrator/chat-session';
+import { SERVER_COMPACTION_MIN_TOKENS } from '../providers/server-compaction';
+
 interface SlashCommandSpec {
   readonly description: string;
   /** Other names that reach the same command, offered by no row of their own. */
@@ -63,6 +66,13 @@ export interface SlashCommandInfo {
 export function slashCommand(name: SlashCommandName, usage?: string): SlashCommandInfo {
   return { name, ...SLASH_COMMANDS[name], ...usage !== undefined && { usage } };
 }
+
+/** What `/compact` did, as each surface says it. */
+export const COMPACTED: Readonly<Record<CompactOutcome, string>> = {
+  folded: 'Folded this conversation into a summary; its last exchanges stay as they were.',
+  armed: 'Your next message asks the model\'s provider to fold this conversation into a summary; its last exchanges stay as they were.',
+  nothing: `This conversation is under the ${SERVER_COMPACTION_MIN_TOKENS.toLocaleString('en-US')} tokens its model's provider folds; nothing to fold yet.`,
+};
 
 /** What a palette ranks: a command's name and what it does. */
 interface Ranked {
