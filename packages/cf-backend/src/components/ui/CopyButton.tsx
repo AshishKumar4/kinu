@@ -36,7 +36,7 @@ export function CopyText({ value, className }: { value: string; className?: stri
   return (
     <button onClick={() => copy(value)} type="button"
       className={`flex shrink-0 cursor-pointer items-center gap-1 transition-colors ${status === "failed" ? "p-danger" : "hover:p-text"}${className === undefined ? "" : ` ${className}`}`}>
-      <CopyIcon size={12} />{copyLabel(status)}
+      <CopyIcon size={14} />{copyLabel(status)}
     </button>
   );
 }

@@ -42,7 +42,7 @@ function TaskRow({ task, depth, owner, onOpenOwner }: { task: AgentTask; depth: 
       data-task-depth={depth}
     >
       <Icon
-        size={13}
+        size={14}
         weight={meta.weight}
         className={`${meta.tone} shrink-0 mt-px`}
       />
