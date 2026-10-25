@@ -51,6 +51,8 @@ export interface GrowingScrollOptions {
   /** A pixel offset applies only inside the loaded content, else the newest edge: never a fetch (2026-09-26). */
   initialScroll?: ConversationScroll | undefined;
   onScrollPosition?: ((position: ConversationScroll) => void) | undefined;
+  /** Changes each time the owner sends: the view goes to the newest row and follows the reply, however far up it was. */
+  sent?: number | undefined;
 }
 
 type Anchor =
@@ -157,7 +159,7 @@ function findAnchor(node: GrowingScrollHost): Anchor | null {
 
 export function useGrowingScroll({
   grows, content, fetched, loading = false, settled = true,
-  onReachEdge, onReserve, initialScroll, onScrollPosition,
+  onReachEdge, onReserve, initialScroll, onScrollPosition, sent,
 }: GrowingScrollOptions) {
   const el = useRef<GrowingScrollHost | null>(null);
   const pinned = useRef(grows === "up");
@@ -181,6 +183,7 @@ export function useGrowingScroll({
   const written = useRef<number | null>(null);
   const lastLoading = useRef(loading);
   const lastFetched = useRef(fetched);
+  const lastSent = useRef(sent);
 
   const writeTop = useCallback((node: GrowingScrollHost, top: number) => {
     node.scrollTop = top;
@@ -354,6 +357,19 @@ export function useGrowingScroll({
       fetchStarted.current = null;
     }
   }, [loading]);
+
+  // The owner's send pins the view, before the rows it brings are laid out: they and the reply land at the bottom.
+  useLayoutEffect(() => {
+    const node = el.current;
+
+    if (sent === lastSent.current || node === null || grows !== "up") return;
+    lastSent.current = sent;
+    pendingRestore.current = null;
+    pinned.current = true;
+    anchor.current = null;
+    writeTop(node, node.scrollHeight);
+    reportPosition.current?.("pinned");
+  }, [sent, grows, writeTop]);
 
   useLayoutEffect(() => {
     const node = el.current;

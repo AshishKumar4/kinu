@@ -218,9 +218,18 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
   const repeats = useMemo(() => foldEventTurns(thread.entries.map(({ message }) => message)), [thread.entries]);
 
   useAutogrow(inputRef, ui.draft);
+  // Every message the owner sends, by Enter, Send, a steer, a command or a queued line, brings the transcript to its
+  // newest row and follows the reply (the owner, 2026-10-25): its one way into the scroller (`useGrowingScroll`'s `sent`).
+  const [sent, setSent] = useState(0);
 
   const { notice: steerNotice, send, sendWords, stop } = useSteerActions({
-    sendChat: (text, files, mode = ui.mode) => state.sendChat(text, [...files], mode),
+    sendChat: (text, files, mode = ui.mode) => {
+      const landing = state.sendChat(text, [...files], mode);
+
+      if (landing !== null) setSent((count) => count + 1);
+
+      return landing;
+    },
     abortChat: state.abortChat,
     draft: ui.draft,
     setDraft: ui.updateDraft,
@@ -229,6 +238,14 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
   });
 
   useOpeningMessage(extras.opening === true && state.connectionStatus === "connected", sendWords);
+
+  // A branch beside the running turn is the owner's send too.
+  const { onBranch } = extras;
+
+  const branch = useMemo(() => (onBranch === undefined ? undefined : (words: string, draft: string) => {
+    setSent((count) => count + 1);
+    onBranch(words, draft);
+  }), [onBranch]);
 
   // This chat's workspace: a secret moved out of a draft here is allowed there.
   const secretGuard = usePastedSecretGuard({ draft: ui.draft, setDraft: ui.setDraft, workspace: useOpenWorkspace() ?? undefined });
@@ -240,7 +257,7 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
     chat: {
       history: chat.readAll, name: as?.displayName, label, stop, draft: ui.draft.trim(),
       setModel: state.setModel, setEffort: state.setReasoningEffort, mode: ui.mode, setMode: ui.setMode, setDraft: ui.setDraft,
-      send: (words, mode) => sendWords(words, [], mode), live, branchBeside: extras.onBranch,
+      send: (words, mode) => sendWords(words, [], mode), live, branchBeside: branch,
     },
   });
 
@@ -258,7 +275,7 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
       <ErrorBoundary label={label}>
         <AskedQuestionsContext.Provider value={asked}><PhaseLinesAsk.Provider value={askLines}>
           <TranscriptViewport chat={chat} live={live} startFirst={layout.startFirst} padClass={layout.padClass}
-            scroll={{ initialScroll: ui.savedScroll, onScrollPosition: ui.rememberScroll, settled: state.transcriptSeeded }}
+            scroll={{ initialScroll: ui.savedScroll, onScrollPosition: ui.rememberScroll, settled: state.transcriptSeeded, sent }}
             pending={<ConversationSkeleton />}
             empty={empty}
             rows={(before) => thread.entries.map(({ message: msg, steers, landed }, i) => (
@@ -292,7 +309,7 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
           liveness={state.liveness}
           onRecover={state.recoverTurn}
           onStop={stop}
-          {...(extras.onBranch !== undefined && { onBranch: secretGuard.guarded("branch", () => { extras.onBranch?.(ui.draft.trim(), ui.draft.trim()); }) })}
+          {...(branch !== undefined && { onBranch: secretGuard.guarded("branch", () => { branch(ui.draft.trim(), ui.draft.trim()); }) })}
           attention={<>{secretGuard.offer}{attention}</>}
           float={extras.float}
           mode={{ value: ui.mode, onChange: ui.setMode }}

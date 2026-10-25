@@ -16,10 +16,10 @@ import { withGallery } from '../../scripts/gallery-harness';
 const SCROLLER = '[data-testid="chat-scroll"]';
 
 /** How far the scroller sits above its bottom, after the page has painted what it was given. */
-async function gapBelow(page: Page): Promise<number> {
+async function gapBelow(page: Page, scroller = SCROLLER): Promise<number> {
   await page.evaluate(() => new Promise<void>((resolve) => { requestAnimationFrame(() => { requestAnimationFrame(() => { resolve(); }); }); }));
 
-  return page.$eval(SCROLLER, (node) => node.scrollHeight - node.scrollTop - node.clientHeight);
+  return page.$eval(scroller, (node) => node.scrollHeight - node.scrollTop - node.clientHeight);
 }
 
 async function stream(page: Page, chunks: number): Promise<void> {
@@ -51,6 +51,53 @@ describe('a dropped file goes out with the message', () => {
       await page.waitForFunction(() => document.documentElement.dataset.galleryChatSent !== undefined);
 
       expect(JSON.parse(await page.evaluate(() => document.documentElement.dataset.galleryChatSent ?? '[]'))).toEqual(['file:errors.csv', 'text:Check these errors']);
+      await page.close();
+    });
+  });
+});
+
+// The owner, 2026-10-25: "when users type and enter something in the chat, it should auto scroll to latest/bottom
+// right?" A send goes to the newest row from wherever the reader was, and the rows it brings follow there.
+describe('sending brings the chat to its newest row and follows the reply', () => {
+  test('scrolled up a long chat, Enter takes the view to the bottom, and the message and its reply land in view', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      const pane = '[data-agent-pane="api-worker/main"]';
+      const chat = `${pane} .p-thread-column.overflow-y-auto`;
+
+      const below = (): Promise<number> => gapBelow(page, chat);
+
+      // The socket's live window, moved to history rows as the server's transcript frame moves it.
+      const window = async (rows: number[], edited?: number): Promise<void> => {
+        await page.evaluate((detail) => { globalThis.dispatchEvent(new CustomEvent('gallery:live-window', { detail })); }, { rows, ...(edited !== undefined && { edited }) });
+        await below();
+      };
+
+      const rows = (from: number, to: number): number[] => Array.from({ length: to - from + 1 }, (_, offset) => from + offset);
+
+      await page.setViewport({ width: 1280, height: 860 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&history=200`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector(`${pane} textarea:not([disabled])`);
+      await window(rows(170, 199));
+
+      await page.$eval(chat, (node) => { node.scrollTop = Math.max(0, node.scrollTop - 1600); node.dispatchEvent(new Event('scroll')); });
+      const scrolledUp = await below();
+
+      await page.type(`${pane} textarea`, 'Ship the fix to staging.');
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() => document.documentElement.dataset.galleryChatSends === '1');
+      const afterSend = await below();
+
+      // The server's next frames: the owner's message, then the reply, then the reply growing.
+      await window(rows(170, 200));
+      const afterMessage = await below();
+      await window(rows(170, 201));
+      const afterReply = await below();
+      await window(rows(170, 201), 201);
+      const afterGrowth = await below();
+
+      expect(scrolledUp).toBeGreaterThan(1000);
+      expect(Math.max(afterSend, afterMessage, afterReply, afterGrowth)).toBeLessThanOrEqual(2);
       await page.close();
     });
   });

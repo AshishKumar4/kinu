@@ -13,7 +13,7 @@ export function TranscriptViewport({ chat, live, startFirst = false, padClass, p
   padClass: string;
   pending: ReactNode;
   empty: ReactNode;
-  scroll?: Pick<GrowingScrollOptions, "initialScroll" | "onScrollPosition" | "settled">;
+  scroll?: Pick<GrowingScrollOptions, "initialScroll" | "onScrollPosition" | "settled" | "sent">;
   rows: (before: (id: string) => ReactNode) => ReactNode;
   children?: ReactNode;
 }) {
