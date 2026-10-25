@@ -253,6 +253,13 @@ that is a control's own or sits in a text role, so a call site's `size` only mat
 A disclosure caret and a chip's remove × are glyphs, not icons: they stay 10 bold beside their text, and no rule above
 reaches them (they sit inside a wrapper, never as a control's own icon).
 
+### 1.4.2 One height to a row of actions
+
+Buttons that share an action row share one height, the largest control's on the scale (sm 28, md 32, lg 38): a small
+button beside a regular one stands regular, as Save draft and Discard beside Send. `index.css` applies it to buttons
+that are children of the same parent, so a call site's `size` holds only where its row has nothing larger. A tab
+strip with an action at its end is not an action row.
+
 ### 1.5 Radii (`RADII` in `theme.ts`)
 
 | token | px | for |
