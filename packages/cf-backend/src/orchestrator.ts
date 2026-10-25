@@ -1175,8 +1175,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         if (actorPolicy(this.agentOf(actorId)).hirer === null) return 'none';
 
         const actor = this.agentBound(actorId);
-        // Its chat's queue, and what is owed it here and has not crossed yet.
-        const report = await hostedOwedReport(this.hostedSeams(), actor, { ...turn, queued: turn.queued || this.deliveriesOwed(actorId) }, ended);
+        // A later turn its chat holds, and what is owed it here and has not crossed yet.
+        const report = await hostedOwedReport(this.hostedSeams(), actor, { ...turn, later: turn.later || this.deliveriesOwed(actorId) }, ended);
 
         return report === null ? 'none' : await hostedParentReport(this.hostedSeams(), actor, {
           text: report.content, status: report.status, mode: relay.mode, sequenceId: relay.sequenceId, ...(report.quiet === true && { quiet: true as const }),

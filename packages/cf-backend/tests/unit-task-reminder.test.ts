@@ -5,12 +5,12 @@
  */
 import { expect, test } from 'bun:test';
 import type { OwnerAnswer } from '@kinu.run/core';
-import { setDiagnosticsSink } from '@kinu.run/core/obs';
+import { KinuError, setDiagnosticsSink } from '@kinu.run/core/obs';
 import { createRecordingLogger, handClock, present } from '@kinu.run/test-utils';
 import { wrapDatabase } from '@kinu.run/core/identity';
 import { actorConnectionTag } from '@kinu.run/core';
 import { asPane, joinHarnessFibers } from './helpers/agents-sdk';
-import { agentSql, agentWakes, catalogTurn, driveUntil, gatewayWorkspace, jobsOver, until, workspaceMainActor } from './helpers/actor-harness';
+import { agentSql, agentWakes, catalogTurn, driveUntil, fireSoonestWake, gatewayWorkspace, jobsOver, until, workspaceMainActor } from './helpers/actor-harness';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 import { SERVES_MS, serverBox } from './helpers/server-box';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
@@ -384,6 +384,62 @@ for (const ends of ['after its turn', 'during its last step'] as const) {
     }).toEqual({ interim: false, answeredFirst: true, reminders: 1 });
   });
 }
+
+// A task hire's report whose relay failed is owed, and replays later: it replayed while the turn its job's end woke was
+// still writing, read the job as over, and made "started" the answer, so the woken turn's answer reached no one (review
+// of 7bfb11155). Whether a later turn answers is read against the report's own turn.
+test("a task hire's owed report, replayed while its job's turn runs, is not its answer: that turn's is", async () => {
+  const woken = Promise.withResolvers<void>();
+  const answer = Promise.withResolvers<void>();
+
+  const scene = hireWithJobWorkspace('task', {
+    woken: async () => {
+      woken.resolve();
+      await answer.promise;
+    },
+  });
+
+  const { asked, workspace, main } = scene;
+  const open = workspace.agent.agentWorkspace.bind(workspace.agent);
+  let tried = 0;
+
+  // The hire's first report fails as a relay can: owed, and tried again at its next wake.
+  Object.assign(workspace.agent, {
+    agentWorkspace: async (id: string) => {
+      const port = await open(id);
+
+      if (id === main) return port;
+      const report = port.turnReport.bind(port);
+
+      port.turnReport = async (...args) => {
+        tried += 1;
+
+        if (tried === 1) throw new KinuError('unavailable', 'the relay dropped');
+
+        return await report(...args);
+      };
+
+      return port;
+    },
+  });
+
+  await scene.shipRelease();
+  await driveUntil(workspace, "the hire's report was never tried", () => tried > 0);
+
+  // The build ends and wakes the hire, its answer held; its owed report replays meanwhile.
+  scene.clock.advance(SERVES_MS);
+  await woken.promise;
+
+  for (let wakes = 0; tried < 2; wakes += 1) {
+    if (wakes === 20) throw new Error("the hire's owed report never replayed");
+    await fireSoonestWake(workspace.agent, workspace.db);
+  }
+
+  answer.resolve();
+  await driveUntil(workspace, "the hire's answer never reached main", () => asked.some((sent) => sent.includes('The release build finished')));
+
+  expect(asked.some((sent) => sent.includes('Started the release build'))).toBe(false);
+});
 
 // A process started to keep running owes the agent nothing: a preview server beside an open task, unrelated to it,
 // must not silence the reminder however long it runs.

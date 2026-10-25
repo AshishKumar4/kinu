@@ -630,9 +630,9 @@ export class LocalAgentSession {
     this.rearmLocalAlarm();
   }
 
-  /** Input waits for a later turn of this agent: queued in its chat, or owed it and not yet taken. */
-  inputWaits(): boolean {
-    return this.chat.turnQueued || new AgentDeliveries(this.rt.storage.sql).owes(this.rt.actor.actorId);
+  /** A turn of this agent after `turnId` has begun, waits in its chat, or is owed it and not yet taken. */
+  turnAfter(turnId: string): boolean {
+    return this.chat.turnAfter(turnId) || new AgentDeliveries(this.rt.storage.sql).owes(this.rt.actor.actorId);
   }
 
   /** What this agent is owed, and each of its hires in turn, over the tree's database: what `resultOwed` reads. A hire

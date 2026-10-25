@@ -1007,7 +1007,7 @@ describe('the owner talking to a subagent does not wake its parent', () => {
         const owed = await hireTurnSettled({
           hirer: { roster, announce: () => {} },
           hire: { record: { name: 'researcher', lifetime: 'durable' }, owed: idle, log: new EventLog(hire.sql, hire.actor) },
-          turn: { reports: { spoke: input.reportedThisTurn ?? false, settled: false }, ownerDriven: input.ownerDriven, taskId: null, queued: false },
+          turn: { reports: { spoke: input.reportedThisTurn ?? false, settled: false }, ownerDriven: input.ownerDriven, taskId: null, later: false },
           ended: { ending: 'answered', assistantText: input.assistantText, narration: [] },
         });
 

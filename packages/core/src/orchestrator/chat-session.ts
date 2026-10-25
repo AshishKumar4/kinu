@@ -493,8 +493,11 @@ export class ChatSession {
 
   get pumpPromise(): Promise<void> | null { return this.activePump; }
   get turnOwed(): boolean { return this.pumpActive || this.queue.length > 0; }
-  /** A turn waits behind the one running: once a turn has committed, what it left unread is queued here too. */
-  get turnQueued(): boolean { return this.queue.length > 0; }
+  /** Whether a turn after `turnId` has begun (its claim, kept across restarts) or waits here: that turn, not this one,
+   *  answers for what `turnId` left open. Once a turn has committed, what it left unread is queued here too. */
+  turnAfter(turnId: string): boolean {
+    return this.queue.length > 0 || (this.actorSession.claims.latestTurn()?.turnId ?? turnId) !== turnId;
+  }
 
   /** What its wake waits on: a turn runs, or one queued may. One a question to the owner holds is parked until they close
    *  it, and wakes nothing meanwhile; a Stop still finds it owed and cancels it. */
