@@ -94,6 +94,7 @@ export function buildProgram(): Command {
 
   program
     .command('auth [action] [session]')
+    .alias('login')
     .helpGroup(ACCOUNT)
     .description('Sign in to your Kinu account, or list its CLI sessions with `sessions` and end them with `revoke`')
     .option('--origin <url>', 'Kinu app origin')

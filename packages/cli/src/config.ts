@@ -269,7 +269,10 @@ export async function bumpProviderRevision(): Promise<number> {
 }
 
 export function resolveCloudOrigin(opts?: { origin?: string }): string {
-  return (opts?.origin ?? process.env.KINU_ORIGIN ?? loadConfigFile().origin ?? DEFAULT_ORIGIN).replace(/\/+$/, '');
+  // An empty `KINU_ORIGIN` is no origin, as an unset one.
+  const environment = process.env.KINU_ORIGIN === '' ? undefined : process.env.KINU_ORIGIN;
+
+  return (opts?.origin ?? environment ?? loadConfigFile().origin ?? DEFAULT_ORIGIN).replace(/\/+$/, '');
 }
 
 export function requireAuthConfig(): LocalCloudSession {
@@ -280,19 +283,33 @@ export function requireStoredAuthConfig(): LocalCloudSession {
   return storedAuthConfig('No interactive CLI session found. Run: kinu auth');
 }
 
+/** The deployment a stored sign-in was made at (`kinu auth` saves it), which alone may receive its token. */
+export function storedSessionOrigin(config: KinuConfig): string {
+  return (config.origin ?? DEFAULT_ORIGIN).replace(/\/+$/, '');
+}
+
+/** The stored session, refused where `KINU_ORIGIN` names another deployment: its token goes to its own alone. */
 function storedAuthConfig(missingTokenMessage: string): LocalCloudSession {
   const config = loadConfigFile();
   const token = config.accessToken;
+  const origin = storedSessionOrigin(config);
 
-  if (!token) {
-    throw new Error(missingTokenMessage);
-  }
+  if (!token) throw new Error(missingTokenMessage);
+  const refusal = storedSessionRefusal(config, origin);
 
-  if (sessionExpired(config)) {
-    throw new Error('Your Kinu CLI session has expired. Run: kinu auth');
-  }
+  if (refusal !== null) throw new Error(refusal);
 
-  return { origin: resolveCloudOrigin(), token };
+  return { origin, token };
+}
+
+/** Why the stored session cannot be used here: it expired, or `KINU_ORIGIN` names another deployment; null when it can. */
+function storedSessionRefusal(config: KinuConfig, origin: string): string | null {
+  if (sessionExpired(config)) return 'Your Kinu CLI session has expired. Run: kinu auth';
+  const asked = resolveCloudOrigin();
+
+  if (new URL(asked).origin === new URL(origin).origin) return null;
+
+  return `Signed in to ${origin}, but KINU_ORIGIN names ${asked}: sign in there with kinu auth --origin ${asked}, or unset KINU_ORIGIN.`;
 }
 
 export function sessionExpired(config: KinuConfig): boolean {
@@ -309,9 +326,8 @@ export function resolveCloudSession(): LocalCloudSession | null {
 
   if (envToken) return { origin: resolveCloudOrigin(), token: envToken };
   const config = loadConfigFile();
-  const token = config.accessToken;
 
-  return token && !sessionExpired(config) ? { origin: resolveCloudOrigin(), token } : null;
+  return config.accessToken && !sessionExpired(config) ? storedAuthConfig('') : null;
 }
 
 export function resolveAgentRef(input: string): KinuAgentConfig | null {
