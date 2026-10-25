@@ -1538,7 +1538,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       this.#refused = undefined;
       this.ctx.storage.kv.delete(START_REFUSED_KEY);
-      this.#trace('startup.admit.exit', { generation, ms: Date.now() - since, admitted: true, owned: this.#owns(generation) });
+      // `golden` means the box's own snapshot was missing: its restore rebuilds from the backup, the slow start.
+      this.#trace('startup.admit.exit', { generation, ms: Date.now() - since, admitted: true, owned: this.#owns(generation), source: source?.kind ?? 'running' });
     } catch (thrown) {
       await this.#refuseAdmission({ generation, since, startsContainer, inputs }, { cause: thrown });
     }
