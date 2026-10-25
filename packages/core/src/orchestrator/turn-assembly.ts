@@ -121,9 +121,10 @@ export interface TurnAssemblySources {
   mail?(): Promise<ActiveRoster<MailInContext> | undefined>;
   /** MEMORY.md's tail, read once per turn so every step renders the same block. */
   memoryTail(): Promise<string | undefined>;
-  /** What the turn's words match in its memory (`recallForTurn`), read once per turn beside its other reads; it never
-   *  rejects: a failed search is logged and answers none, as a failed read of the account's facts does. */
-  recall?(question: string): Promise<readonly RecalledMemory[]>;
+  /** What the turn's words match in its memory and in `accountFacts`, the account's as the turn read them
+   *  (`recallForTurn`), read once per turn beside its other reads; it never rejects: a failed search is logged and answers
+   *  none, as a failed read of the account's facts does. */
+  recall?(question: string, accountFacts: readonly Fact[] | undefined): Promise<readonly RecalledMemory[]>;
   operation(profile: ResolvedTurnProfile, inputs: ProfileAuthorityInputs): OperationProfile;
   /** Binds the resolved profile; `toolset` is read again after it. */
   settle?(profile: ResolvedTurnProfile, inputs: ProfileAuthorityInputs): void | Promise<void>;
@@ -297,17 +298,25 @@ function resolvedTurnProfile(sources: TurnAssemblySources, turn: Pick<TurnDraft,
 }
 
 /** Effect-free: a measure between turns assembles too. */
-/** The search for what `question` recalls, started; none where the turn's sources recall nothing. */
-function recallStarted(sources: TurnAssemblySources, question: string): Promise<readonly RecalledMemory[]> | undefined {
-  return sources.recall?.(question);
+/** The turn's reads started as its preparation begins: the account's facts, and the search for what `question` recalls
+ *  among them and the agent's own memory, none where its sources recall nothing. */
+interface StartedReads {
+  readonly accountFacts: Promise<readonly Fact[]> | undefined;
+  readonly recalled: Promise<readonly RecalledMemory[]> | undefined;
+}
+
+function startReads(sources: TurnAssemblySources, question: string): StartedReads {
+  const accountFacts = sources.accountFacts?.();
+
+  if (sources.recall === undefined) return { accountFacts, recalled: undefined };
+
+  return { accountFacts, recalled: (async () => await sources.recall?.(question, await accountFacts) ?? [])() };
 }
 
 /** What every step of the turn renders the same bytes of: MEMORY.md's tail, the account's facts, the agent's mail and
- *  what its words recalled, started as its preparation began (`recalling`). */
-async function readTurnOnce(
-  sources: TurnAssemblySources, activeSkills: ActiveSkillSet | undefined, recalling: Promise<readonly RecalledMemory[]> | undefined,
-): Promise<TurnReads> {
-  const [memoryTail, accountFacts, mail, recalled] = await Promise.all([sources.memoryTail(), sources.accountFacts?.(), sources.mail?.(), recalling]);
+ *  what its words recalled, started as its preparation began (`started`). */
+async function readTurnOnce(sources: TurnAssemblySources, activeSkills: ActiveSkillSet | undefined, started: StartedReads): Promise<TurnReads> {
+  const [memoryTail, accountFacts, mail, recalled] = await Promise.all([sources.memoryTail(), started.accountFacts, sources.mail?.(), started.recalled]);
 
   return {
     memoryTail, activeSkills: activeSkills ?? null,
@@ -319,7 +328,7 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
   const { models } = sources;
   const { frozen } = request;
   // Started first and taken last, so the search runs beside every wait of the turn's preparation.
-  const recalling = recallStarted(sources, request.userText);
+  const started = startReads(sources, request.userText);
 
   // The tier never depends on the tools, so the drafted model is the served one; a frozen execution's is the one it froze.
   const { profileInputs, choices, roleSkills, drafted, served: spec, limits } = await draftTurn(sources, request);
@@ -349,7 +358,7 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
   const { pinned, invoked } = splitTurnSkills(activeSkills);
 
   const [window, agentsMd, soul, identity, reads] = await Promise.all([
-    models.catalog.windowFor(spec), sources.agentsMd(limits), sources.soul(), sources.identity(), readTurnOnce(sources, activeSkills, recalling),
+    models.catalog.windowFor(spec), sources.agentsMd(limits), sources.soul(), sources.identity(), readTurnOnce(sources, activeSkills, started),
     models.catalog.warm(profile.tier.fallbacks.map((fallback) => fallback.model)),
   ]);
 

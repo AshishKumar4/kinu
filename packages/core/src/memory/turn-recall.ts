@@ -1,7 +1,8 @@
 /**
  * What a turn's question recalls of memory, read once as the turn is prepared and shown in every step's block outside the
  * cached prefix (`renderMemoryForTurn`): the one hybrid search (`searchMemoryHits`: the notes' FTS5, Vectorize where
- * bound, both scopes' facts, the account's notes) keyed on what the turn asks. A fact is named by its key, so each step
+ * bound, the workspace's facts and the account's the turn read) keyed on what the turn asks. The account's notes are the
+ * memory tool's to search: each would cross to the account's object once more a turn. A fact is named by its key, so each step
  * shows its value as it then is; a note keeps the words that matched, with when it was written and whether a fact has
  * since changed what it says.
  */
@@ -10,8 +11,7 @@ import { Cause, Exit } from 'effect';
 import type { Memory } from '../types/primitives';
 import { attempt, diagnostics, hold, toKinuError } from '../obs/index';
 import type { VectorStore } from './vector-store';
-import { renderFactValue, type FactsStore, type MemoryScope } from './facts';
-import type { AccountMemory } from './account';
+import { renderFactValue, type Fact, type FactsStore, type MemoryScope } from './facts';
 import { searchMemoryHits } from './memory-search';
 
 export type RecalledMemory =
@@ -32,7 +32,8 @@ export interface RecallSources {
   /** Null where none is bound (the CLI): the notes are matched by FTS5 alone. */
   readonly vectorStore: VectorStore | null;
   readonly facts: FactsStore;
-  readonly account?: AccountMemory;
+  /** The account's facts as the turn read them (`TurnAssemblySources.accountFacts`); absent where it has none. */
+  readonly accountFacts?: readonly Fact[];
 }
 
 /** The hybrid search's own default page: what the block's budget then chooses among. */
@@ -80,11 +81,11 @@ function supersedingFact(facts: FactsStore, keys: readonly string[], text: strin
  *  which is logged: the turn goes on without it, as it does without the account's facts. */
 export async function recallForTurn(sources: RecallSources, question: string): Promise<readonly RecalledMemory[]> {
   if (question.trim() === '') return [];
-  const { facts, account } = sources;
+  const { facts, accountFacts } = sources;
   const doing = "searching the memory a turn's words match";
 
   const searched = await hold(attempt({ doing, otherwise: 'io' }, () => searchMemoryHits(sources.memory, sources.vectorStore, question, {
-    limit: RECALLED, facts, ...(account !== undefined && { account }),
+    limit: RECALLED, facts, ...(accountFacts !== undefined && { account: { facts: async () => accountFacts } }),
   })));
 
   if (Exit.isFailure(searched)) {

@@ -6,10 +6,11 @@ import type { FactsStore } from './facts';
 import type { AccountMemory } from './account';
 import { hybridSearch, memorySnippetRehydrator, type HybridHit, type LexicalSearchFn } from './hybrid-search';
 
-/** What a memory search reaches beyond the workspace's notes: its facts, and the account's facts and notes. Absent, not. */
+/** What a memory search reaches beyond the workspace's notes: its facts, and the account's facts, and its notes where
+ *  it names them. Absent, not. */
 export interface MemorySearchScope {
   readonly facts?: FactsStore;
-  readonly account?: AccountMemory;
+  readonly account?: Pick<AccountMemory, 'facts'> & Partial<Pick<AccountMemory, 'searchNotes'>>;
 }
 
 /**
@@ -31,7 +32,8 @@ export async function searchMemoryHits(
     finalK: opts.limit, rehydrate: memorySnippetRehydrator(memory),
     ...(facts !== undefined && { facts: () => facts.all() }),
     // The account is read inside its arms, so a user object that does not answer costs the account's hits, never the search.
-    ...(account !== undefined && { accountFacts: async () => await account.facts(), accountNotes: async (q: string, k: number) => await account.searchNotes(q, k) }),
+    ...(account !== undefined && { accountFacts: async () => await account.facts() }),
+    ...(account?.searchNotes !== undefined && { accountNotes: async (q: string, k: number) => await account.searchNotes?.(q, k) ?? [] }),
   });
 
   return { semantic: index.available, hits };

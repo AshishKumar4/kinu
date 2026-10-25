@@ -533,7 +533,7 @@ export class AgentTurns {
     const { explicitTier, frozen } = turn.request;
 
     // What the turn's words recall is searched beside the reading of its sources.
-    const [recalled, sources] = await Promise.all([surface.sources.recall?.(input.task), materializeTurnSources(
+    const [recalled, sources] = await Promise.all([surface.sources.recall?.(input.task, turn.accountFacts), materializeTurnSources(
       { ...surface.sources, toolset: () => ({ tools: surface.offered, stores: surface.stores }), externalTools: async () => ({}) },
       {
         userText: input.task, workMode: mode,
