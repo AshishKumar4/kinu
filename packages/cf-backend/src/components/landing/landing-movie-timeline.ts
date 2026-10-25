@@ -8,7 +8,7 @@ import type { UIMessage } from 'ai';
 
 import type { PlanReview, SlateSummary, JsonObject, JsonValue } from '@kinu.run/core';
 import { MOVIE_CUES, MOVIE_END } from '@kinu.run/core';
-import { LANDING_OWNER, PLAN_FIXTURE, SLATE_PREVIEW_URL, SLATE_SUMMARY } from './landing-fixtures';
+import { LANDING_OWNER, LANDING_PLAN, SLATE_PREVIEW_URL, SLATE_SUMMARY } from './landing-fixtures';
 import { SLATE_PREFIX, planSurface, type PlanSurfaceKind, type SlateSurfaceKind } from '@kinu.run/core';
 
 type MovieSurface = 'Work' | PlanSurfaceKind | SlateSurfaceKind;
@@ -91,7 +91,7 @@ export function cursorAt(t: number): MovieCursor {
 }
 
 const MOVIE_ASK
-  = 'The api Worker answers 500 since the last deploy. Plan the fix, then build the support-queue dashboard.';
+  = 'The api Worker answers 500 since the last deploy. Plan the fix, then build a dashboard of the support queue.';
 
 const PLAN_REASONING
   = 'Plan mode: I can read the Worker and its config, but not edit them. I need the name each environment binds the sessions database by.';
@@ -100,17 +100,10 @@ const PLAN_READY_TEXT
   = 'The plan is ready for review. Approve it, or mark the lines that need to change.';
 
 const APPROVED_TEXT
-  = 'Plan r1 approved. Writing the support-queue slate now.';
+  = 'Plan approved. Fixing `openDb` first, then the dashboard.';
 
 const SLATE_DONE_TEXT
-  = 'The dashboard is open in the Support queue tab. It reads issues through the ISSUES binding, which only reaches `list_issues` on your GitHub connection.';
-
-/** No annotations, so Approve is the live affordance. */
-export const MOVIE_PLAN: PlanReview = {
-  ...PLAN_FIXTURE,
-  id: 'landing-movie-plan',
-  annotations: [],
-};
+  = '`openDb` now reads `SESSIONS_DB`. The dashboard is open in the Support queue tab, and it can only call `list_issues` on your GitHub connection.';
 
 export function composerTextAt(t: number): string {
   if (t <= MOVIE_CUES.typeStart || t >= MOVIE_CUES.sent) return '';
@@ -121,6 +114,9 @@ export function composerTextAt(t: number): string {
 
 type MoviePhase = 'asking' | 'investigating' | 'plan-review' | 'implementing' | 'done';
 
+/** The one pane a phone shows: the plan while it waits for review, the app once it opens, else the chat. */
+type PhonePane = 'chat' | 'workspace';
+
 export interface MovieDiscrete {
   readonly phase: MoviePhase;
   readonly phaseLabel: string;
@@ -129,6 +125,7 @@ export interface MovieDiscrete {
   /** Null until the plan beat. */
   readonly plan: PlanReview | null;
   readonly surface: MovieSurface;
+  readonly phonePane: PhonePane;
   readonly slates: readonly SlateSummary[];
   readonly streaming: boolean;
   readonly settled: boolean;
@@ -200,7 +197,7 @@ function messagesAt(t: number): UIMessage[] {
   if (t >= MOVIE_CUES.submitted) {
     investigation.push({
       type: 'tool-submit_plan', toolCallId: 'movie-submit', state: 'output-available',
-      input: { edits: [{ start: 1, content: MOVIE_PLAN.content }] },
+      input: { edits: [{ start: 1, content: LANDING_PLAN.content }] },
       output: { ok: true, revision: 1, status: 'pending', message: 'Plan submitted and awaiting review. Do not implement or produce a preview; end this turn now.' },
     });
     investigation.push({ type: 'text', text: PLAN_READY_TEXT });
@@ -214,18 +211,18 @@ function messagesAt(t: number): UIMessage[] {
 
   if (t >= MOVIE_CUES.approvedText) build.push({ type: 'text', text: APPROVED_TEXT });
 
-  for (const [id, path, startAt, doneAt] of [
-    ['movie-manifest', '/slates/support-queue/package.json', MOVIE_CUES.manifestStart, MOVIE_CUES.manifestDone],
-    ['movie-server', '/slates/support-queue/server.ts', MOVIE_CUES.serverStart, MOVIE_CUES.serverDone],
-    ['movie-client', '/slates/support-queue/client.tsx', MOVIE_CUES.clientStart, MOVIE_CUES.clientDone],
+  for (const [id, op, path, startAt, doneAt] of [
+    ['movie-fix', 'edit', 'workers/api/src/db.ts', MOVIE_CUES.fixStart, MOVIE_CUES.fixDone],
+    ['movie-server', 'write', '/slates/support-queue/server.ts', MOVIE_CUES.serverStart, MOVIE_CUES.serverDone],
+    ['movie-client', 'write', '/slates/support-queue/client.tsx', MOVIE_CUES.clientStart, MOVIE_CUES.clientDone],
   ] as const) {
-    const write = toolPart(t, {
+    const edit = toolPart(t, {
       tool: 'file', id, startAt, doneAt,
-      input: { op: 'write', path },
+      input: { op, path },
       output: 'ok',
     });
 
-    if (write !== null) build.push(write);
+    if (edit !== null) build.push(edit);
   }
 
   const preview = toolPart(t, {
@@ -267,7 +264,7 @@ function phaseAt(t: number): MoviePhaseLabel {
 function surfaceAt(t: number): MovieSurface {
   if (t >= MOVIE_CUES.slateOpen) return `${SLATE_PREFIX}${SLATE_SUMMARY.id}`;
 
-  return t >= MOVIE_CUES.planReady ? planSurface({ owner: LANDING_OWNER.name, id: MOVIE_PLAN.id, revision: MOVIE_PLAN.revision }) : 'Work';
+  return t >= MOVIE_CUES.planReady ? planSurface({ owner: LANDING_OWNER.name, id: LANDING_PLAN.id, revision: LANDING_PLAN.revision }) : 'Work';
 }
 
 export function discreteAt(t: number): MovieDiscrete {
@@ -278,8 +275,9 @@ export function discreteAt(t: number): MovieDiscrete {
     phaseLabel: label,
     composerText: composerTextAt(t),
     messages: messagesAt(t),
-    plan: t >= MOVIE_CUES.planReady ? MOVIE_PLAN : null,
+    plan: t >= MOVIE_CUES.planReady ? LANDING_PLAN : null,
     surface: surfaceAt(t),
+    phonePane: (t >= MOVIE_CUES.planReady && t < MOVIE_CUES.approvedText) || t >= MOVIE_CUES.slateOpen ? 'workspace' : 'chat',
     slates: t >= MOVIE_CUES.previewDone ? [SLATE_SUMMARY] : [],
     streaming: (t >= MOVIE_CUES.reasoning && t < MOVIE_CUES.submitted)
       || (t >= MOVIE_CUES.approvedText && t < MOVIE_CUES.finalText),

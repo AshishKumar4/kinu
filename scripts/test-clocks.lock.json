@@ -1,6 +1,6 @@
 {
-  "measuredAt": "2026-10-15",
-  "total": 85,
+  "measuredAt": "2026-10-25",
+  "total": 83,
   "files": {
     "packages/cf-backend/tests/helpers/actor-harness.ts": {
       "lap-poll": 1
@@ -97,7 +97,7 @@
       "sleep": 2
     },
     "tests/browser/public-pages.test.ts": {
-      "sleep": 4
+      "sleep": 2
     },
     "tests/first-run/background-settle.first-run.ts": {
       "sleep": 1

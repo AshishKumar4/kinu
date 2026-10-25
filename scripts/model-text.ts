@@ -8,7 +8,8 @@
  * model reads them, and they are design:
  *   - the web client: every module a client entry loads and the Worker's entry does not, by the walk
  *     `gate:client-graph` makes; a module both load is the Worker's, so its text may reach a model;
- *   - the terminal client: modules that import `@opentui/*`, and the package whose manifest declares a `bin`.
+ *   - the terminal client: modules that import `@opentui/*`, the package whose manifest declares a `bin`, and
+ *     core's `./tui` export with what it loads and the Worker's entry does not, the presentation that package draws.
  * Two characters are admitted. U+FEFF is a byte-order mark, which a reader strips and never sends. U+FFFD
  * stands in for a character that was already wide, so it never widens a request.
  */
@@ -29,6 +30,10 @@ const WIDE = /[\u{100}-\u{fefe}\u{ff00}-\u{fffc}\u{fffe}-\u{10ffff}]/u;
 
 const BinManifestSchema = v.object({ bin: v.record(v.string(), v.string()) });
 
+const CORE_MANIFEST = 'packages/core/package.json';
+
+const TuiExportSchema = v.object({ exports: v.object({ './tui': v.string() }) });
+
 export interface WideText {
   readonly file: string;
   readonly line: number;
@@ -38,6 +43,8 @@ export interface WideText {
 export interface Renderers {
   /** Every module a client entry loads and the Worker's entry does not. */
   readonly web: ReadonlySet<string>;
+  /** Every module core's `./tui` export loads and the Worker's entry does not. */
+  readonly terminal: ReadonlySet<string>;
   /** Package directories (`packages/cli/`) whose manifest declares a `bin`. */
   readonly terminalPackages: readonly string[];
 }
@@ -54,7 +61,7 @@ export function findWideText(sources: ReadonlyMap<string, string>, renderers: Re
   const assets = new Set<string>();
 
   for (const [file, text] of sources) {
-    if (renderers.web.has(file) || renderers.terminalPackages.some((directory) => file.startsWith(directory))) continue;
+    if (renderers.web.has(file) || renderers.terminal.has(file) || renderers.terminalPackages.some((directory) => file.startsWith(directory))) continue;
 
     const parsed = parse(file, text);
     const edges = moduleEdges(parsed).edges;
@@ -104,10 +111,13 @@ if (import.meta.main) {
   if (main === undefined) throw new Error(`${GATE}: wrangler.jsonc names no Worker entry`);
   const worker = runtimeModules(sources, [`packages/cf-backend/${main}`]);
   const web = new Set([...runtimeModules(sources, await clientEntries(readMatching(isClientDocument)))].filter((file) => !worker.has(file)));
-  const terminal = terminalPackages(readMatching(isManifest));
+  const manifests = readMatching(isManifest);
+  const packages = terminalPackages(manifests);
+  const tui = v.parse(TuiExportSchema, JSON.parse(manifests.get(CORE_MANIFEST) ?? '{}')).exports['./tui'];
+  const terminal = new Set([...runtimeModules(sources, [collapsePath(`packages/core/${tui}`)])].filter((file) => !worker.has(file)));
   const tracked = new Set(trackedFiles());
 
-  const found = findWideText(sources, { web, terminalPackages: terminal }, (file) => {
+  const found = findWideText(sources, { web, terminal, terminalPackages: packages }, (file) => {
     if (!tracked.has(file)) throw new Error(`${GATE}: ${file} is imported as text and is not a tracked file`);
 
     return readRepositoryFile(root, file);
@@ -117,7 +127,8 @@ if (import.meta.main) {
     ['product source files', sources.size],
     ['Worker modules', worker.size],
     ['web client modules excluded', web.size],
-    ['terminal packages excluded', terminal.length],
+    ['terminal client modules excluded', terminal.size],
+    ['terminal packages excluded', packages.length],
   ]);
 
   if (found.length > 0) {

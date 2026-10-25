@@ -12,7 +12,6 @@ import { IconControl } from "@/components/ui/IconControl";
 interface WorkbenchPanelsProps {
   /** `undefined` for a sample workbench: the policy decides on every mount. */
   readonly workspace: string | undefined;
-  readonly scope?: string;
   readonly contents: PersonAsks;
   readonly chat: (inspector: InspectorControl) => ReactNode;
   readonly inspector: ReactNode;
@@ -54,7 +53,7 @@ export function InspectorToggle({ control }: { control: InspectorControl }) {
   );
 }
 
-export function WorkbenchPanels({ ref, workspace, scope, contents, chat, inspector, onInspector, quiet = false }: WorkbenchPanelsProps) {
+export function WorkbenchPanels({ ref, workspace, contents, chat, inspector, onInspector, quiet = false }: WorkbenchPanelsProps) {
   const [mobilePane, setMobilePane] = useState<"chat" | "workspace">("chat");
 
   const desktopPanels = useMediaQuery(DESKTOP_QUERY);
@@ -62,7 +61,6 @@ export function WorkbenchPanels({ ref, workspace, scope, contents, chat, inspect
   const layout = useInspectorLayout({
     desktopPanels,
     workspace,
-    scope,
     mobileDefault: mobilePane === "workspace" ? "100%" : "0%",
     needsUser: !quiet && needsTheUser(contents),
   });
