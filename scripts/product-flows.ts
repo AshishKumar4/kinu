@@ -446,8 +446,9 @@ export async function agentCreatesAWorkspace(target: FlowTarget): Promise<AgentW
     await sendAndSettle(page, AGENT_WORKSPACE_ASK);
     await until(page, "the agent's reply with the new workspace's link",
       `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(AGENT_WORKSPACE_REPLY)})`);
-    const said = v.parse(v.string(), await page.evaluate(`document.querySelector('#chat')?.textContent ?? ''`));
-    const link = /https?:\/\/\S+?\/workspace\/[a-z0-9-]+/u.exec(said.slice(said.lastIndexOf(AGENT_WORKSPACE_REPLY)))?.[0] ?? '';
+    // The reply's link as the chat drew it, never read out of the chat's joined text: a message's clock time follows its
+    // last word with no space between, so a link that ends the reply read as `…/workspace/name06:40` (2026-10-25).
+    const link = v.parse(v.string(), await page.evaluate(`[...document.querySelectorAll('#chat a[href*="/workspace/"]')].at(-1)?.href ?? ''`));
 
     await page.evaluate(OPEN_FOLDS);
     await page.evaluate(OPEN_FOLDS);
