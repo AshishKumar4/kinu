@@ -205,7 +205,7 @@ describe('turn-pipeline correctness wiring', () => {
     };
 
     const unreachable = orchestratorHarness({
-      warmConnections: [], failWarm: null, titles: [],
+      titles: [],
       failDescriptors: new Error('socket hang up'),
     });
 
@@ -214,7 +214,7 @@ describe('turn-pipeline correctness wiring', () => {
     expect(config?.system ?? '').toContain('You are Vesta. Answer on the tools you hold.');
 
     const denied = orchestratorHarness({
-      warmConnections: [], failWarm: null, titles: [],
+      titles: [],
       failDescriptors: new KinuError('denied', 'the caller holds no capability'),
     });
 
@@ -481,7 +481,7 @@ describe('turn-pipeline correctness wiring', () => {
       answer: { id: 'ISSUE-7' },
     };
 
-    const userPlane: RecordedUserPlaneCalls = { warmConnections: [], failWarm: null, titles: [], agentCancels: [], mcp };
+    const userPlane: RecordedUserPlaneCalls = { titles: [], agentCancels: [], mcp };
     const { agent } = orchestratorHarness(userPlane);
     const key = 'mcp_tracker_find_issue';
     const prepared = await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'find the login issue' }] });

@@ -1564,28 +1564,6 @@ export abstract class ActorAgent extends Agent<Env> {
     })));
   }
 
-  /**
-   * Warm this user's MCP connections for the next turn, detached, via `userMcp_warmConnections`. Covers
-   * alarm/email/post-eviction turns the HTTP warmup misses. Failures are dropped and a warm lost to eviction is not
-   * resumed: the next settled turn warms again, so it is held by `keepAliveWhile`, not a `cf_agents_runs` row.
-   */
-  protected _mcpWarmTask: AsyncTaskOwner | null = null;
-
-  protected warmUserMcpInBackground(): void {
-    // Same gate as `buildUserMcpTools`: no capability token yet is an ordinary state, not a failure.
-    if (!this.getOwnerUserId() || !this.workspaceCapabilityToken() || this._mcpWarmTask !== null) return;
-    const owner: AsyncTaskOwner = { promise: null };
-    this._mcpWarmTask = owner;
-    owner.promise = hold(Effect.ensuring(Effect.catchCause(Effect.promise(() => this.keepAliveWhile(async () => {
-      const { stub, caller } = await this.userHub();
-      await stub.userMcp_warmConnections(caller);
-    })), recording({ doing: 'establishing the user MCP connections after a settled turn', otherwise: 'unavailable' }, (failure) => {
-      diagnostics.failure('mcp.settle_warmup_failed', failure);
-    })), Effect.sync(() => {
-      if (this._mcpWarmTask === owner) this._mcpWarmTask = null;
-    })));
-  }
-
   /** This activation's start of the workspace's node, once: its runtime is compiled once per object (ask 71). */
   private _nodeWarm: Promise<unknown> | null = null;
 
@@ -2637,14 +2615,7 @@ export abstract class ActorAgent extends Agent<Env> {
         case 'mcp': {
           // The role admits MCP tools by descriptor key, same as `toolAllowed(d.toolKey)` in native turns.
           const { stub, caller } = yield* Effect.promise(async () => this.userHub());
-          const surface = async (): Promise<McpToolSurface> => v.parse(McpToolSurfaceSchema, await stub.userMcp_toolDescriptors(caller));
-          let offered = yield* Effect.promise(surface);
-
-          // A slate call is not a turn opening: a server the user object is still dialling is waited for, once.
-          if (offered.unavailable.some((row) => row.server === route.server)) {
-            yield* Effect.promise(async () => stub.userMcp_warmConnections(caller));
-            offered = yield* Effect.promise(surface);
-          }
+          const offered = v.parse(McpToolSurfaceSchema, yield* Effect.promise(async () => stub.userMcp_toolDescriptors(caller)));
 
           // A server is named as the actor's programs name it, so a fork reaches its forker's server of that name.
           const descriptor = offered.descriptors.find((d) => d.serverName === route.server && d.name === route.tool);

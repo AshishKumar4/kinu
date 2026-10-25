@@ -45,7 +45,6 @@ function routes(harness: TestUserDO) {
 
   const stub = userAccount({
     async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
-    async userMcp_warmConnections() { return { servers: 0 }; },
     async listActiveWorkspaces() { return [{ name: 'jarvis', displayName: 'Jarvis', createdAt: 1, lastVisited: 1, nameOrigin: 'user' as const }]; },
     startClaudeSignIn: (caller: UserCaller, account?: string) => harness.userDO.startClaudeSignIn(caller, account),
     // As production calls it: across RPC, where the object's refusal arrives as no KinuError.

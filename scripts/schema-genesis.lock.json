@@ -1648,9 +1648,18 @@
   ],
   "user_mcp_servers@packages/core/src/state/user-schema.ts": [
     "id TEXT PRIMARY KEY",
+    "name TEXT NOT NULL",
+    "server_url TEXT NOT NULL",
+    "transport TEXT NOT NULL",
     "headers TEXT",
     "allowed_tools TEXT",
-    "preset_id TEXT"
+    "preset_id TEXT",
+    "callback_url TEXT NOT NULL",
+    "oauth_client_id TEXT",
+    "session TEXT",
+    "status TEXT NOT NULL",
+    "status_error TEXT",
+    "tools TEXT"
   ],
   "user_profile@packages/core/src/state/user-schema.ts": [
     "id INTEGER PRIMARY KEY CHECK (id = 1)",

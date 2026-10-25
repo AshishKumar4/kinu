@@ -79,7 +79,7 @@ const PLANNING = 'Plan the ledger repair.';
 describe("a workspace's tile on its owner's home", () => {
   test('an idle settings-wait tile follows real agent owed reports and parked durable refusals, not a cached fold', async () => {
     const tiles = new AwaitedList<WorkspaceOverview>();
-    const owner: RecordedUserPlaneCalls = { warmConnections: [], failWarm: null, titles: [], overviews: tiles, refuseOverviews: [] };
+    const owner: RecordedUserPlaneCalls = { titles: [], overviews: tiles, refuseOverviews: [] };
     const workspace = orchestratorHarness(owner);
     const { agent, db } = workspace;
     const main = workspaceMainActor(db).actorId;
@@ -129,7 +129,7 @@ describe("a workspace's tile on its owner's home", () => {
     const tiles = new AwaitedList<WorkspaceOverview>();
     const overviews = tiles.items;
     const refusals: Error[] = [UNAVAILABLE()];
-    const owner: RecordedUserPlaneCalls = { warmConnections: [], failWarm: null, titles: [], overviews: tiles, refuseOverviews: refusals };
+    const owner: RecordedUserPlaneCalls = { titles: [], overviews: tiles, refuseOverviews: refusals };
     // The children's model: each one's turn holds until the suite answers it.
     const scoutAsked = Promise.withResolvers<void>();
     const scoutAnswer = Promise.withResolvers<void>();
@@ -289,7 +289,7 @@ describe("a workspace's tile on its owner's home", () => {
     const hold = Promise.withResolvers<void>();
 
     const owner: RecordedUserPlaneCalls = {
-      warmConnections: [], failWarm: null, titles: [], overviews, refuseOverviews: [UNAVAILABLE()], holdOverviews: Promise.resolve(),
+      titles: [], overviews, refuseOverviews: [UNAVAILABLE()], holdOverviews: Promise.resolve(),
     };
 
     const { agent, db } = orchestratorHarness(owner);

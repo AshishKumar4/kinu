@@ -8,7 +8,8 @@ import { accountRoutes, type AccountRoutesEnv } from '../src/user/account-routes
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
 import type { AuthIdentity } from '../src/auth/session';
 import { serveFamily } from './helpers/api';
-import { createTestUserDO, provisionTestWorkspace, testOwner, TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
+import { createTestUserDO, provisionTestWorkspace, sqlExec, testOwner, TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
+import { storedMcpServer } from './helpers/mcp-server';
 import { unreachableNamespace } from './helpers/bindings';
 
 test('trial preparation preserves a live slot, deletes stale workspaces and refuses inherited account rows', async () => {
@@ -77,7 +78,7 @@ test('trial preparation preserves a live slot, deletes stale workspaces and refu
       },
       {
         table: 'user_mcp_servers',
-        put: async () => { db.run("INSERT INTO user_mcp_servers (id) VALUES ('srv-1')"); },
+        put: async () => { storedMcpServer(sqlExec(db), { id: 'srv-1', name: 'srv', url: 'https://srv.example/mcp', tools: [] }); },
         clear: () => harness.userDO.userMcp_remove(owner, 'srv-1'),
       },
       {

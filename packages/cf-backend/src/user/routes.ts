@@ -9,7 +9,7 @@ import { connectedPath, GOOGLE_OAUTH_CRED_KEY, FILES_VIEW_CONFIG_KEY, filesViewN
 import { BOX_SIZE_ORDER } from '@kinu.run/devbox/sizes';
 import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY } from '../computer-size';
 import { DEVICE_TIERS, JsonValueSchema } from '@kinu.run/core';
-import { diagnostics, authoredRefusal, renderThrownChain, toKinuError, settle, type KinuError } from '@kinu.run/core/obs';
+import { diagnostics, authoredRefusal, renderThrownChain, settle, type KinuError } from '@kinu.run/core/obs';
 import { isEvalServiceIdentity } from '../eval/abort-route';
 import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '@kinu.run/core';
 import { listProviderCatalog } from './available-models';
@@ -38,7 +38,7 @@ const CheckpointSchema = v.array(v.object({ key: v.string(), sealed: v.string() 
 /** Every UserDO call `/api/user/*` makes: one gate holds one stub. */
 export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   UserDO,
-  'ensureProfile' | 'userMcp_warmConnections' | 'getProfile' | 'setDisplayName' | 'getProfileCatalog' | 'putProfileCatalog'
+  'ensureProfile' | 'getProfile' | 'setDisplayName' | 'getProfileCatalog' | 'putProfileCatalog'
   | 'fetch' | 'listWorkspaces' | 'touchWorkspace' | 'removeWorkspace' | 'requestWorkspaceRemoval' | 'hasWorkspace'
   | 'listDevices' | 'issueDeviceJoin' | 'acknowledgeUnstoppedDevice' | 'revokeDevice' | 'renameDevice' | 'listDeviceConsents'
   | 'setDeviceTier' | 'grantDeviceConsent' | 'revokeDeviceConsent'
@@ -72,10 +72,6 @@ interface UserVariables extends ApiVariables, AccountApiVariables {
 }
 
 type UserContext = Context<FamilyEnv<UserRoutesEnv<unknown>, UserVariables>>;
-
-/** Users whose MCP warm-up already started in this isolate; warm once per process so a cold
- *  UserDO reconnects in parallel with the first orchestrator turn, not on its critical path. */
-const warmedMcpUsers = new Set<string>();
 
 const RosterBucketSchema = v.optional(v.picklist(['needs', 'working', 'idle']));
 
@@ -160,21 +156,6 @@ userRoutes.use('/api/user/*', ownerGate(), async (c, next) => {
   await idempotent('ensureProfile', () => c.env.UserDO.get(userObject),
     (stub) => stub.ensureProfile(owner, identity.email, identity.displayName ?? undefined), { onRetry: logDoCallRetry });
   const stub = c.env.UserDO.get(userObject);
-
-  // waitUntil is a no-op only in a DO (`do.wait_until.no_op`). A failed warm removes the user from
-  // the set so the next request retries.
-  if (!warmedMcpUsers.has(identity.userId)) {
-    warmedMcpUsers.add(identity.userId);
-
-    c.executionCtx.waitUntil(settle(Effect.catchCause(Effect.promise(() => stub.userMcp_warmConnections(owner)), (failed) => Effect.sync(() => {
-      warmedMcpUsers.delete(identity.userId);
-      diagnostics.failure('user.bootstrap_failed', toKinuError({
-        doing: 'bootstrapping the user on first hit in this isolate',
-        cause: Cause.squash(failed),
-        otherwise: 'unavailable',
-      }), { step: 'mcp_warm', userId: identity.userId });
-    }))));
-  }
 
   c.set('stub', stub);
   c.set('account', { stub, userId: identity.userId });

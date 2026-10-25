@@ -1,7 +1,8 @@
 /**
- * The Agents SDK keeps an MCP server's OAuth tokens, client registration and PKCE state in the storage its provider is
- * handed (`agents/mcp/do-oauth-client-provider`). Handed this, each value is sealed with the credential cipher as it
- * lands and opened as it is read, so a stored login carries the same envelope as every other credential.
+ * An account MCP server's OAuth provider (`mcp-oauth-provider.ts`, over the Agents SDK's
+ * `agents/mcp/do-oauth-client-provider`) keeps its tokens, client registration and PKCE state in the storage it is
+ * handed. Handed this, each value is sealed with the credential cipher as it lands and opened as it is read, so a stored
+ * login carries the same envelope as every other credential.
  */
 import { Effect } from 'effect';
 import { createCredentialCipher, parseJsonValue, type CredentialEncryptionEnv, type JsonValue } from '@kinu.run/core';
@@ -11,9 +12,8 @@ import { attempt, diagnostics, KinuError, settle, tolerate } from '@kinu.run/cor
 type SealedMember = 'get' | 'put' | 'list';
 
 /**
- * The account object's storage as every OAuth provider of its MCP servers is handed it, the SDK's restore included
- * (`UserDO.createMcpOAuthProvider`). The AAD names the object and never the key: the SDK's `migrateServerId` copies
- * values between keys over the raw storage, and a value it moved must still open.
+ * The account object's storage as every OAuth provider of its MCP servers is handed it. The AAD names the object and
+ * never the key, so a value opens under whichever key holds it.
  */
 export function mcpOAuthStorage(ctx: { readonly storage: DurableObjectStorage; readonly id: DurableObjectId }, env: CredentialEncryptionEnv): DurableObjectStorage {
   const sealed = new SealedValues(ctx.storage, env, `${ctx.id.toString()}:mcp-oauth`);
@@ -58,8 +58,8 @@ class SealedValues implements Record<SealedMember, (...args: never[]) => Promise
   }
 
   /**
-   * A value that does not open (stored before logins were sealed, or under another key) reads as no value: to the SDK
-   * that is a server with no login, which it shows as needing sign-in, with the link to sign in again.
+   * A value that does not open reads as no value: a server with no login, which a request it is refused for marks as
+   * needing a sign-in.
    */
   private open(key: string, stored: JsonValue): Effect.Effect<JsonValue | undefined> {
     const { env, aad } = this;

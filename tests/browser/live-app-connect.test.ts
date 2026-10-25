@@ -14,7 +14,7 @@ afterAll(() => {
 // a stand-in, one that asks the person.
 describe('an MCP sign-in through the Worker, against a provider that asks the person', () => {
   test('run in the tab itself from setup, it comes back to the step it left, reached by Next, connected', () => {
-    expect(verdictOf(observed.connect, 'connect').sameTab).toEqual({ back: '/welcome?step=tools', status: 'ready' });
+    expect(verdictOf(observed.connect, 'connect').sameTab).toEqual({ back: '/welcome?step=tools', status: 'connected' });
   });
 
   test('a finish page for another run neither closes the waiting sign-in nor speaks to its page', () => {
@@ -26,6 +26,6 @@ describe('an MCP sign-in through the Worker, against a provider that asks the pe
   });
 
   test('signed in again and approved, the server connects', () => {
-    expect(verdictOf(observed.connect, 'connect').retried).toEqual({ said: 'connected', status: 'ready' });
+    expect(verdictOf(observed.connect, 'connect').retried).toEqual({ said: 'connected', status: 'connected' });
   });
 });

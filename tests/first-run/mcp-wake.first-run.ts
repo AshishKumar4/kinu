@@ -47,7 +47,7 @@ const Answered = v.object({ ok: v.literal(true), value: JsonValueSchema });
 
 const Exec = v.object({ stdout: v.optional(v.string()), exitCode: v.optional(v.number()), error: v.optional(v.string()) });
 
-const McpConnection = v.object({ id: v.string(), authUrl: v.nullable(v.string()) });
+const McpConnection = v.object({ id: v.string(), signIn: v.boolean() });
 
 const McpAnswer = v.object({
   content: v.tuple([v.object({ type: v.literal('text'), text: v.pipe(v.string(), v.parseJson(), SessionAnswerSchema) })]),
@@ -95,7 +95,7 @@ END`));
         const connectedText = await connected.text();
         const connection = connected.ok ? v.safeParse(v.pipe(v.string(), v.parseJson(), McpConnection), connectedText) : undefined;
 
-        if (connection?.success !== true || connection.output.authUrl !== null) {
+        if (connection?.success !== true || connection.output.signIn) {
           throw new Error(`Could not connect the probe server: ${String(connected.status)} ${connectedText.slice(0, 200)}`);
         }
 

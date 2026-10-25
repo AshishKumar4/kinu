@@ -260,7 +260,7 @@ test('a job\'s wake queued for Main reads working before its turn claims, and th
 
 // An email to Main is held for the drain its delivery armed: Main owes it a turn from the delivery on.
 test('an email delivered to Main reads working until its drain takes it, and the delivery names the Agents panel', async () => {
-  const { agent } = orchestratorHarness({ warmConnections: [], failWarm: null, titles: [], profile: { email: 'owner@example.com' } });
+  const { agent } = orchestratorHarness({ titles: [], profile: { email: 'owner@example.com' } });
   const named = namedReads(agent);
   await agent.getWorkspaceSnapshot();
   endTick(agent);

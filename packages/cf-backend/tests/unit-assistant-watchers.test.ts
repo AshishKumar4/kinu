@@ -22,7 +22,7 @@ afterEach(() => { setSystemTime(); });
 async function assistant(labels: readonly string[], plane: Pick<RecordedUserPlaneCalls, 'github' | 'google' | 'profile'>) {
   setSystemTime(new Date('2026-10-24T09:00:00.000Z'));
   const gateway = answeringGateway('Noted.');
-  const workspace = orchestratorHarness({ warmConnections: [], failWarm: null, titles: [], ...plane }, { aiGateway: gateway, googleClient: true });
+  const workspace = orchestratorHarness({ titles: [], ...plane }, { aiGateway: gateway, googleClient: true });
 
   workspace.agent.harnessInstallCatalog({
     tiers: { default: { model: GATEWAY_MODEL }, deep: { model: GATEWAY_MODEL }, fast: { model: FAST_MODEL } }, availableModels: [GATEWAY_MODEL, FAST_MODEL],
@@ -272,7 +272,7 @@ test("an assistant installed at version 1 has its GitHub and Gmail checks replac
   const gateway = answeringGateway('Noted.');
 
   const workspace = orchestratorHarness(
-    { warmConnections: [], failWarm: null, titles: [], profile: { email: 'ashish@example.com' }, github: { reads, answer: () => ({ status: 200, body: [], headers: {} }) } },
+    { titles: [], profile: { email: 'ashish@example.com' }, github: { reads, answer: () => ({ status: 200, body: [], headers: {} }) } },
     { aiGateway: gateway, googleClient: true },
   );
 

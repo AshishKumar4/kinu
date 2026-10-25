@@ -123,7 +123,7 @@ const gateway = stubAiBinding((run) => {
 
 /** A workspace whose agent has used its sandbox, with a server job and a build job running. */
 async function workspaceWithJobs() {
-  const userPlane: RecordedUserPlaneCalls = { warmConnections: [], failWarm: null, titles: [] };
+  const userPlane: RecordedUserPlaneCalls = { titles: [] };
   const world = { container: true, aiGateway: gateway };
 
   const harnessed = orchestratorHarness(userPlane, world, {

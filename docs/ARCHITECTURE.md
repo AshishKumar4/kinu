@@ -435,38 +435,37 @@ token, which exists only for a workspace this user's registry issued one to and
 dies with it, so there is nothing to spoof. A second in-SQL check covers server
 membership plus `allowed_tools`.
 
-Connecting and reading descriptors are separate jobs. The UserDO's `onStart`
-reconciles the SDK's server rows with `user_mcp_servers` (orphans removed,
-credentialed rows moved onto the closure transport) and starts every dial,
-awaiting none (`UserMcpServers.start`). The object hibernates within seconds of
-going idle, so this runs often, and every MCP request joins that one activation
-instead of starting its own. `userMcp_warmConnections` waits for the dials and
-reads tool lists, always off the turn. Two triggers reach it: the first
-`/api/user` hit per isolate, under the Worker's `ctx.waitUntil`, and every
-settled turn, from `ActorAgent.warmUserMcpInBackground`. `userMcp_toolDescriptors`
-runs on the turn's critical path, so it starts no network work and waits for
-none. It reads the current connection snapshot and returns. A configured server
-that is not connected yet is reported through `unavailable`, and the next turn
-installs it once the connection completes. `userMcp_callTool` makes its server
-callable first: it waits for a dial still in flight, redials a failed or closed
-connection once, and refuses with the connection's state otherwise. The SDK's
-client refuses a request on an unconnected transport before sending it, so the
-redial repeats nothing the server saw.
+Each server is one row of `user_mcp_servers`: its endpoint, transport, sealed
+headers, OAuth client, the session and protocol era its last connection found,
+its status, and the tools its last listing gave. Its OAuth login lives beside it
+in sealed storage (`mcpOAuthStorage`). Nothing is dialled when the object wakes.
+`userMcp_toolDescriptors` runs on the turn's critical path and reads the rows
+alone, so a turn after a wake offers every server's kept tools with no request.
+`userMcp_callTool` builds the server's client from its row at the first call that
+needs it (`UserMcpServers.client`), resuming a legacy session with no request,
+and keeps it while the object is awake. A call the server never saw goes out
+once more on a new client: the server ended its session (HTTP 404), or the
+transport had closed ("Not connected").
 
-Every change of a connection's observed state is logged as
-`mcp.connection_changed` (`serverId`, `from`, `to`, the event that prompted the
-look). Every failed call is logged as `mcp.call_failed` with a `kind` decided by
-error class (`classifyMcpFailure`): `auth`, `not_connected`,
+A server's status is `connected`, `needs_sign_in` or `failed`, written when
+something learns it: an add, a sign-in's callback or a Reconnect connects and
+lists afresh; a connect a call makes that the server refuses or cannot complete
+marks it; a call that answers clears `failed`. An OAuth login is renewed by its
+refresh token a minute before its access token expires, and when the server
+refuses it, one renewal per server at a time. A renewal that fails for now
+leaves the login and the status as they were; one the issuer refuses marks the
+server `needs_sign_in`.
+
+Every status change is logged as `mcp.status_changed` (`serverId`, `from`, `to`,
+`error`). Every failed call is logged as `mcp.call_failed` with a `kind` decided
+by error class (`classifyMcpFailure`): `auth`, `not_connected`,
 `connection_closed`, `timeout`, `http`, `server_error`, `protocol`,
 `send_failed`, `cancelled`, `refused`, or `unknown`; a server's own `isError`
 answer is `tool_error`.
 
-A server name addresses its tools (`mcp_<server>_<tool>`), so names are unique.
-`userMcp_add` seals and validates first, then claims the
-canonical `lower(name)` and writes inside one `ctx.storage.transactionSync`. No
-await sits inside that boundary, so two concurrent adds cannot both pass, and a
-refusal names the taken name. `initUserTables` builds a `UNIQUE` index over
-`lower(name)` unconditionally, so no write path leaves a duplicate behind.
+A server name addresses its tools (`mcp_<server>_<tool>`), so names are unique
+in any case. `userMcp_add` checks the name against the rows and the adds still
+connecting, and claims it, in one step with no wait between.
 
 ## The UserDO caller boundary
 

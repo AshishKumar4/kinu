@@ -88,7 +88,6 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'mcp.manage', name: 'userMcp_presets', run: (u, c) => u.userMcp_presets(c) },
   { capability: 'mcp.manage', name: 'userMcp_add', run: (u, c) => u.userMcp_add(c, { name: 'x', serverUrl: 'https://x' }, 'https://app') },
   { capability: 'mcp.manage', name: 'userMcp_remove', run: (u, c) => u.userMcp_remove(c, 'srv') },
-  { capability: 'mcp.manage', name: 'userMcp_warmConnections', run: (u, c) => u.userMcp_warmConnections(c) },
   { capability: 'mcp.manage', name: 'userMcp_handleOAuthCallback', run: (u, c) => u.userMcp_handleOAuthCallback(c, 'https://app/api/user/mcp/callback') },
 
   { capability: 'device.rpc', name: 'deviceName', run: (u, c) => u.deviceName(c, 'dev-none') },

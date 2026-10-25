@@ -2,8 +2,9 @@
 // of the workspace that asks, kept by name, and deleted while the token still holds when the GitHub connection goes.
 // GitHub is faked at api.github.com; the account is real.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { asFetchFunction, webhookRoutePath, type JsonValue, type UserCaller } from '@kinu.run/core';
+import { asFetchFunction, webhookRoutePath, type JsonObject, type JsonValue, type UserCaller } from '@kinu.run/core';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
+import { GITHUB_MCP_URL, servedMcp } from './helpers/mcp-server';
 
 const realFetch = globalThis.fetch;
 
@@ -19,6 +20,9 @@ function github(...answers: Response[]): Array<{ method: string; url: string; au
 
   globalThis.fetch = asFetchFunction(async (input, init) => {
     const request = new Request(input, init);
+
+    // Another host is no GitHub's: the connection's MCP client may still be closing its own stream to its server.
+    if (new URL(request.url).host !== 'api.github.com') return new Response(null, { status: 404 });
     const text = await request.text();
 
     asked.push({ method: request.method, url: request.url, authorization: request.headers.get('authorization'), body: text === '' ? null : JSON.parse(text) });
@@ -57,13 +61,22 @@ function heldGitHub(method: string, answer: Response, otherwise = () => new Resp
   return { asked, reached, release: () => { release(); } };
 }
 
+/** The owner's GitHub connection, by its token, or another server beside it, added as the owner adds one. */
+async function added(harness: TestUserDO, server: 'github' | 'notes'): Promise<string> {
+  const input: JsonObject = server === 'github'
+    ? { presetId: 'github', headers: { Authorization: 'Bearer gho_connection0123456789' } }
+    : { name: 'Notes', serverUrl: 'https://notes.example/mcp', headers: { Authorization: 'Bearer n' } };
+
+  return (await servedMcp([GITHUB_MCP_URL, 'https://notes.example/mcp'], async () => harness.userDO.userMcp_add(await testOwner(), input, 'https://kinu.example'))).id;
+}
+
 async function connected(): Promise<TestUserDO & { owner: UserCaller; shop: UserCaller; serverId: string }> {
   const harness = createTestUserDO();
   const owner = await testOwner();
   const shop = { workspaceToken: await provisionTestWorkspace(harness, 'shop') };
-  const added = await harness.userDO.userMcp_add(owner, { presetId: 'github', headers: { Authorization: 'Bearer gho_connection0123456789' } }, 'https://kinu.example');
+  const serverId = await added(harness, 'github');
 
-  return Object.assign(harness, { owner, shop, serverId: added.id });
+  return Object.assign(harness, { owner, shop, serverId });
 }
 
 const routeOf = async (workspace: string, trigger = '01JBDQ6Z8G4V0F3QK2X5N7M9P1') => `${ORIGIN}${await webhookRoutePath('route-secret', { workspaceName: workspace, triggerId: trigger })}`;
@@ -150,7 +163,7 @@ describe('a push watcher\'s repository hook', () => {
 
     const retried = github(new Response(null, { status: 204 }));
 
-    await harness.userDO.userMcp_add(harness.owner, { presetId: 'github', headers: { Authorization: 'Bearer gho_connection0123456789' } }, 'https://kinu.example');
+    await added(harness, 'github');
     expect(retried.map((ask) => `${ask.method} ${ask.url}`)).toEqual(['DELETE https://api.github.com/repos/owner/repo/hooks/44']);
     harness.close();
   });
@@ -165,7 +178,7 @@ describe('a push watcher\'s repository hook', () => {
     const removing = harness.userDO.userMcp_remove(harness.owner, harness.serverId);
 
     await gitHub.reached;
-    await harness.userDO.userMcp_add(harness.owner, { name: 'Notes', serverUrl: 'https://notes.example/mcp', headers: { Authorization: 'Bearer n' } }, 'https://kinu.example');
+    await added(harness, 'notes');
     await expect(harness.userDO.githubHookCreate(harness.shop, { repo: 'owner/other', url: await routeOf('shop'), secret: SECRET, events: ['push'] }))
       .rejects.toThrow('GitHub is not connected to this account');
     gitHub.release();
@@ -186,7 +199,7 @@ describe('a push watcher\'s repository hook', () => {
 
     const retried = github(new Response(null, { status: 204 }));
 
-    await harness.userDO.userMcp_add(harness.owner, { presetId: 'github', headers: { Authorization: 'Bearer gho_connection0123456789' } }, 'https://kinu.example');
+    await added(harness, 'github');
     expect(retried.map((ask) => `${ask.method} ${ask.url}`)).toEqual(['DELETE https://api.github.com/repos/owner/repo/hooks/42']);
     expect(harness.githubPush).toEqual(['gone:shop', 'back:shop']);
     harness.close();
@@ -201,8 +214,8 @@ describe('a push watcher\'s repository hook', () => {
     expect(harness.githubPush).toEqual(['gone:shop']);
 
     // Connected again: the parked workspace is told once, and a later change tells it nothing.
-    await harness.userDO.userMcp_add(harness.owner, { presetId: 'github', headers: { Authorization: 'Bearer gho_connection0123456789' } }, 'https://kinu.example');
-    await harness.userDO.userMcp_add(harness.owner, { name: 'Notes', serverUrl: 'https://notes.example/mcp', headers: { Authorization: 'Bearer n' } }, 'https://kinu.example');
+    await added(harness, 'github');
+    await added(harness, 'notes');
     expect(harness.githubPush).toEqual(['gone:shop', 'back:shop']);
     harness.close();
   });

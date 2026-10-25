@@ -218,7 +218,6 @@ const USER_DO_METHODS = [
   'userMcp_presets',
   'userMcp_remove',
   'userMcp_toolDescriptors',
-  'userMcp_warmConnections',
   'verifyAccessToken',
   'verifyBrowserSession',
   'verifyCliAgentConnectTicket',

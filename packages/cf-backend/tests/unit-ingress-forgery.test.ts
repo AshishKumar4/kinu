@@ -65,7 +65,7 @@ interface Workspace {
 /** The owner's address comes from the recording user plane, so the email gate never refuses "owner email unknown". */
 function workspace(): Workspace {
   const userPlane: RecordedUserPlaneCalls = {
-    warmConnections: [], failWarm: null, titles: [], profile: { email: OWNER_EMAIL },
+    titles: [], profile: { email: OWNER_EMAIL },
   };
 
   const harness = orchestratorHarness(userPlane);

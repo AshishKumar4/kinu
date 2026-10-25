@@ -7,6 +7,7 @@ import {
 } from '@kinu.run/core';
 import { USER_DO_RPC_SURFACE } from '../src/rpc-surface';
 import { createTestUserDO, provisionTestWorkspace, sqlExec, testOwner, type TestUserDO } from './helpers/user-do';
+import { GITHUB_MCP_URL, servedMcp } from './helpers/mcp-server';
 
 const SECRET = ['sk_live_', '0123456789abcdefghij'].join('');
 
@@ -285,7 +286,7 @@ describe("the GitHub connection is every workspace's git credential, never its v
 
   async function connected(): Promise<Awaited<ReturnType<typeof account>> & { id: string }> {
     const harness = await account();
-    const added = await harness.userDO.userMcp_add(harness.owner, { presetId: 'github', headers: { Authorization: 'Bearer gho_connection0123456789' } }, 'https://kinu.example');
+    const added = await servedMcp([GITHUB_MCP_URL], async () => harness.userDO.userMcp_add(harness.owner, { presetId: 'github', headers: { Authorization: 'Bearer gho_connection0123456789' } }, 'https://kinu.example'));
 
     return Object.assign(harness, { id: added.id });
   }

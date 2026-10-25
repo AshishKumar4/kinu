@@ -7,7 +7,7 @@ import { consentRoutes, type ConsentRoutesEnv } from '../src/slates/consent-rout
 import { serveFamily } from './helpers/api';
 import { appProbe, PROBE_ORIGIN } from './helpers/app-probe';
 import { createTestUserDO, testOwner, TEST_CREDENTIAL_ENCRYPTION_KEY, type TestUserDO } from './helpers/user-do';
-import { resetRecordedMcp, seedConfiguredMcpServer, seedMcpTools } from './helpers/agents-sdk';
+import { storedMcpServer } from './helpers/mcp-server';
 
 const { api } = await import('../src/api/app');
 
@@ -27,7 +27,6 @@ const users: TestUserDO[] = [];
 afterEach(() => {
   for (const user of users) user.close();
   users.length = 0;
-  resetRecordedMcp();
 });
 
 function fixture() {
@@ -131,13 +130,12 @@ describe('the viewer\'s slate consent routes', () => {
   });
 
   test('an approval decision reaches only this viewer\'s pending effect, and can approve or decline', async () => {
-    resetRecordedMcp();
     const { serve, env, viewer, selected } = fixture();
     const caller = await testOwner();
-    await viewer.userDO.userMcp_list(caller);
-    seedConfiguredMcpServer(viewer.sql, 'viewer-connection', { name: 'github', url: 'https://viewer-github.example/sse', transport: 'auto', presetId: 'github' });
-    await viewer.userDO.userMcp_list(caller);
-    seedMcpTools('viewer-connection', [{ name: 'add_issue_comment', inputSchema: { type: 'object' } }]);
+    storedMcpServer(viewer.sql, {
+      id: 'viewer-connection', name: 'github', url: 'https://viewer-github.example/sse', presetId: 'github',
+      tools: [{ name: 'add_issue_comment', inputSchema: { type: 'object' } }],
+    });
     await viewer.userDO.consentSlate(caller, CONSENT);
     const effect = { ...CONSENT, tool: 'add_issue_comment', args: [{ ...CONSENT.root, title: 'one effect' }] };
     const answer = await viewer.userDO.slatePartTool(caller, effect);

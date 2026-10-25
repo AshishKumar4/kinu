@@ -86,7 +86,6 @@ function routes(harness: TestUserDO) {
 
   const stub = userAccount({
     async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
-    async userMcp_warmConnections() { return { servers: 0 }; },
     async listActiveWorkspaces() { return []; },
     startChatGptPasteSignIn: (caller: UserCaller, account?: string) => harness.userDO.startChatGptPasteSignIn(caller, account),
     // As production calls it: across RPC, where the object's refusal arrives as no KinuError.

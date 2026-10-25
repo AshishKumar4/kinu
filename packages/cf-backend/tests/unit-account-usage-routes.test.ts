@@ -67,7 +67,6 @@ describe('the owner\'s usage per account, across workspaces', () => {
 
     const stub = userAccount({
       async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
-      async userMcp_warmConnections() { return { servers: 0 }; },
       async listActiveWorkspaces() { return WORKSPACES; },
       async listCredentials() { return held(['anthropic.bearer@work', 'openrouter.bearer', 'openrouter.bearer@team']); },
       async getAuthHeaders(_caller: UserCaller, key: string) { return { Authorization: `Bearer ${key}` }; },
@@ -122,7 +121,6 @@ describe('the owner\'s usage per account, across workspaces', () => {
 
     const stub = userAccount({
       async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
-      async userMcp_warmConnections() { return { servers: 0 }; },
       async listActiveWorkspaces() { return WORKSPACES; },
       async listCredentials() { return held([]); },
       async slateAiSpend() { return [inRooms]; },

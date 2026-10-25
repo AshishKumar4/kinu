@@ -43,7 +43,6 @@ function account() {
   const web = userAccount({
     ...members,
     async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
-    async userMcp_warmConnections() { return { servers: 0 }; },
   });
 
   const cli = cliAccount({

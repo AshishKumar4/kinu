@@ -13,7 +13,7 @@ afterEach(() => { globalThis.fetch = realFetch; });
 describe("a row's Reconnect", () => {
   test('back again says nothing; a refusal, a dropped connection or a server still failing each say why', async () => {
     const answers = [
-      () => Response.json({ status: 'ready', error: null }),
+      () => Response.json({ status: 'connected', error: null }),
       () => Response.json({ error: 'This account has no such MCP server.' }, { status: 404 }),
       () => { throw new TypeError('Failed to fetch'); },
       () => Response.json({ status: 'failed', error: 'Gmail refused its tool list: HTTP 403' }),

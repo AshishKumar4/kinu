@@ -96,7 +96,6 @@ describe('a route whose object throws answers without the chain', () => {
   function storeCredential(failure: Error): Promise<Response | null> {
     const stub = userAccount({
       async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
-      async userMcp_warmConnections() { return { servers: 0 }; },
       async setCredential() { throw failure; },
     });
 

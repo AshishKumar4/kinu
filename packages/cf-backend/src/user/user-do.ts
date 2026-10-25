@@ -14,12 +14,6 @@ import {
   ownerCaller, callGoogle, GoogleCallSchema, type GoogleAnswer, type GoogleCall, readGitHub, GitHubReadSchema, type GitHubAnswer, type GitHubRead, type GoogleGrant, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type SecretSummary, type SecretInput, type SecretDestination, type GrantedSecrets, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, type RosterPage, type CredentialSummary, type WorkspaceEntry, type UserProfile, DEVICE_FRAMES, DEVICE_SCREEN_PATH, screenFromSocket, readScreenData, statementText,   bookmarkNow, restartedForRestore, restoreArmed, type ArmedRestore, type RestoreTarget,
 } from '@kinu.run/core';
 
-import { DurableObjectOAuthClientProvider, type AgentMcpOAuthProvider } from 'agents/mcp/do-oauth-client-provider';
-
-// Re-exported for tests: the provider binds `agents/mcp/*` at load, so tests must import it
-// via user-do (after the stub lands), not mcp.ts directly.
-export { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
-
 import { diagnostics, KinuError, refusalOf, settle, settleLogged, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import {
@@ -50,7 +44,7 @@ import {
 import { UserTerminals } from './terminals';
 import { UserScreens } from './screens';
 import { UserChatGptSignIn, type ChatGptMachineSignIn, type ChatGptPlanStatus } from './chatgpt-sign-in';
-import { UserMcpServers, USER_MCP_CLIENT_NAME, type McpToolCall, type McpToolSurface } from './mcp-servers';
+import { UserMcpServers, type McpToolCall, type McpToolSurface } from './mcp-servers';
 import { UserAccountMemory } from './account-memory';
 import type { AccountMemoryView, AccountNoteHit, AccountProposal, AccountProposer, Fact, InvocationSurface, SqlValue } from '@kinu.run/core';
 import {
@@ -60,7 +54,6 @@ import {
 import { UserCredentials, type CheckpointedCredential, type CredentialEndpoint, type CodexStatus } from './credentials';
 import { UserSecrets } from './secrets';
 import { GitHubHooks, type GitHubHookAsk } from './github-hooks';
-import { mcpOAuthStorage } from './mcp-oauth-storage';
 import { UserWorkspaces, type WorkspaceRegistration, type WorkspaceRegistrationSource } from './workspaces';
 import { UserProfileStore, type ProfileCatalogWriteResult } from './profile';
 import { accountSlateAi, addSlateAiSpend, slateAiSpendOf } from './slate-ai-account';
@@ -132,6 +125,14 @@ export class UserDO extends Agent<Env> {
     }, `account ${ctx.id.toString()}`);
 
     if (this.schemaRepair?.refused != null) this.storageRefusal = new StoragePredatesReleaseError('account', this.schemaRepair.refused);
+
+    // An earlier build kept a copy of each MCP server in the Agents SDK's own catalog, which the SDK dials at every start:
+    // reset with the servers, before that start.
+    if (this.schemaRepair?.dropped.includes('user_mcp_servers') === true
+      && storage.sql.exec(`SELECT 1 FROM sqlite_master WHERE name = 'cf_agents_mcp_servers'`).toArray().length > 0) {
+      storage.sql.exec('DELETE FROM cf_agents_mcp_servers');
+    }
+
     const gate = new ActivationGate(() => this.storageRefusal);
     this.lifecycle.use(gate);
     this.lifecycle.use(this.shareCards);
@@ -154,10 +155,9 @@ export class UserDO extends Agent<Env> {
   /** What this activation's repair did, for the deploy's walk; null where the storage was at this build. */
   private readonly schemaRepair: Repair | null;
 
-  /** Every gated RPC waits for this (`startBeforeRpc`); the MCP dials it starts are not awaited. */
+  /** Every gated RPC waits for this (`startBeforeRpc`). */
   override onStart(): void {
     if (this.storageRefusal !== undefined) return;
-    this.mcpServers.start();
     this.workspaceDeletions.adoptMarked();
     this.accountDeletion.adopt();
   }
@@ -187,7 +187,7 @@ export class UserDO extends Agent<Env> {
   });
 
   private readonly mcpServers: UserMcpServers = new UserMcpServers({
-    ...this.host, mcp: this.mcp, vault: this.credentials,
+    ...this.host, vault: this.credentials,
     connectionsMoved: async () => {
       await this.secrets.connectionsMoved();
       await this.githubPushBack();
@@ -931,10 +931,6 @@ export class UserDO extends Agent<Env> {
     return this.sessions.verifyCliAgentConnectTicket(caller, ticket, expected);
   }
 
-  userMcp_warmConnections(caller: UserCaller): ReturnType<UserMcpServers['userMcp_warmConnections']> {
-    return this.mcpServers.userMcp_warmConnections(caller);
-  }
-
   userMcp_connectedPresets(caller: UserCaller): Promise<string[]> {
     return this.mcpServers.userMcp_connectedPresets(caller);
   }
@@ -1020,7 +1016,8 @@ export class UserDO extends Agent<Env> {
 
   /**
    * Eval-only: ends this account's activation as the platform's hibernation does, so the next request is a fresh wake
-   * that dials every MCP server again. Sealed in `rpc-surface.ts`, eval-service identity only (`eval/abort-route.ts`).
+   * whose first MCP call builds its server's client from its row. Sealed in `rpc-surface.ts`, eval-service identity only
+   * (`eval/abort-route.ts`).
    */
   async evalAbortActivation(): Promise<void> {
     this.ctx.abort('eval-service: the account activation was aborted on request');
@@ -1284,11 +1281,6 @@ export class UserDO extends Agent<Env> {
 
   limits_inviteRedeemed(caller: UserCaller, by: string): Promise<void> {
     return this.accountLimits.inviteRedeemed(caller, by);
-  }
-
-  /** Keyed by {@link USER_MCP_CLIENT_NAME}, not this object's name: every stored grant uses that key, sealed. */
-  override createMcpOAuthProvider(callbackUrl: string): AgentMcpOAuthProvider {
-    return new DurableObjectOAuthClientProvider(mcpOAuthStorage(this.ctx, this.env), USER_MCP_CLIENT_NAME, callbackUrl);
   }
 
   /**

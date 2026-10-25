@@ -98,7 +98,7 @@ describe('the workspace root answers the actor control plane', () => {
 
   /** Stop is an agent's own (#68): a hire's reaches its commands on the owner's machine, any turn's, and main's runs on. */
   test("a hire's Stop sweeps its own device commands and leaves main's running", async () => {
-    const userPlane: RecordedUserPlaneCalls = { warmConnections: [], failWarm: null, titles: [], agentCancels: [] };
+    const userPlane: RecordedUserPlaneCalls = { titles: [], agentCancels: [] };
     const orchestrator = orchestratorHarness(userPlane);
 
     await orchestrator.agent.setSoul('# Purpose\n\nKeep the coast notes.');

@@ -722,7 +722,7 @@ describe('the workspace keeps exactly one wake per job', () => {
     const refusals: string[] = [];
 
     const { agent, db } = orchestratorHarness(
-      { warmConnections: [], failWarm: null, titles: [], profile: { email: 'owner@example.com' } },
+      { titles: [], profile: { email: 'owner@example.com' } },
       {
         email: {
           send: async () => {

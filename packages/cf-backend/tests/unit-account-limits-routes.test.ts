@@ -30,7 +30,6 @@ function world() {
 
   const account = (userId: string) => userAccount({
     async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
-    async userMcp_warmConnections() { return { servers: 0 }; },
     async limits(): Promise<LimitsReport> { return invitedBy.has(userId) ? { ...FREE, class: 'invited', computerSizeCap: null } : FREE; },
     async limits_inviteRedeemed(_caller: UserCaller, by: string) { invitedBy.set(userId, by); },
   });

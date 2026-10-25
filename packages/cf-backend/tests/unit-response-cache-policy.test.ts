@@ -22,7 +22,6 @@ const IDENTITY: AuthIdentity = {
 function userEnv(): UserRoutesEnv<string> {
   const stub = userAccount({
     async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
-    async userMcp_warmConnections() { return { servers: 0 }; },
     async listCredentials() { return []; },
   });
 

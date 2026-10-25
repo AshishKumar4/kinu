@@ -430,8 +430,8 @@ test('a production turn runs no more statements than it was measured at, and ask
  * (`host.prepareChat`) and the delivery (`facet.admit`). The close: its answer's slates and narration
  * (`host.answerMetadata`), the warming it arms, its open tasks for the reminder (`host.openWork`), its operation
  * record, its end (`host.turnEnded`) and handoff (`host.turnSettled`), its two reports (running, rest), the tile twice,
- * the title's registry read (`account.getWorkspaceTitle`) and the MCP warm (`account.userMcp_warmConnections`), and the
- * sleep-time pass's read of main's transcript (`facet.newestFirst`).
+ * the title's registry read (`account.getWorkspaceTitle`), and the sleep-time pass's read of main's transcript
+ * (`facet.newestFirst`).
  * 16 at the open on e8826816c: the profile the isolate assembled on rides its first step's pace (`host.bindProfile`,
  * gone), and its report of the input it took rides its admission's answer (`host.owes`, one of two gone).
  * 15 at the close on fba94afab: the transcript window rides the turn's end (`facet.history`, gone).
@@ -451,10 +451,12 @@ test('a production turn runs no more statements than it was measured at, and ask
  * 17 at the open on feat/account-limits (2026-10-23): the owner's limits admit each turn (`account.limits_admitTurn`),
  * so a suspended account starts none and a turn on the platform's own models is bounded by the day's tokens; the
  * near-limit note rides the facts read (`account.accountMemory_turnFacts`, which replaces `accountMemory_facts`).
+ * 12 at the close on feat/mcp-lazy-clients (2026-10-25): an account's MCP server is connected by the call that needs it,
+ * so a settled turn warms none (`account.userMcp_warmConnections`, gone).
  */
 /** The budget per place, as measured (the history above): no crossing runs once per step beyond a step's own, nor once
  *  per earlier step. */
-const CROSSINGS = { open: 17, step: 2, close: 13 } as const;
+const CROSSINGS = { open: 17, step: 2, close: 12 } as const;
 
 /**
  * The planted calls (`ObservedOrchestrator.plantCrossings`), each counted once where it lands, and nothing else: the

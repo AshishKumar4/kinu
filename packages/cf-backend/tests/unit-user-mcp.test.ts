@@ -1,7 +1,7 @@
-/** Per-user MCP: UserDO + MCPClientManager need the Worker runtime, so this covers the pure helpers and the orchestrator adapter. */
+/** Per-user MCP's pure helpers: input validation, the tool surface, and the fetch every server's requests run on. */
 import { describe, test, expect } from 'bun:test';
 import { KinuError } from '@kinu.run/core/obs';
-import { mapConnectionStatus, mcpCredentialTransport } from '@kinu.run/core';
+import { mcpCredentialFetch } from '@kinu.run/core';
 import {
   validateMcpServerInput, parseMcpHeaders,
   mcpToolKey, describeMcpTool, omitEmptyOptionalArgs,
@@ -263,13 +263,6 @@ describe('mcpToolKey', () => {
   });
 });
 
-describe('mapConnectionStatus', () => {
-  test('unknown / undefined falls through to "unknown"', () => {
-    expect(mapConnectionStatus(undefined)).toBe('unknown');
-    expect(mapConnectionStatus('not-a-real-state')).toBe('unknown');
-  });
-});
-
 describe('parseMcpHeaders', () => {
   test('parses a valid flat string→string map', () => {
     expect(parseMcpHeaders('{"Authorization":"Bearer x"}')).toEqual({ Authorization: 'Bearer x' });
@@ -284,14 +277,14 @@ describe('parseMcpHeaders', () => {
   });
 });
 
-describe('mcpCredentialTransport', () => {
+describe('mcpCredentialFetch', () => {
   const CREDENTIAL = { Authorization: 'Bearer live-secret' };
 
   test('a request to the server carries the credential', async () => {
     const seen: Headers[] = [];
     await withFetch((_url, init) => { seen.push(new Headers(init?.headers)); }, async () => {
-      const opts = mcpCredentialTransport('https://mcp.example/sse', async () => CREDENTIAL);
-      await opts.fetch('https://mcp.example/sse', { headers: { accept: 'text/event-stream' } });
+      const send = mcpCredentialFetch('https://mcp.example/sse', async () => CREDENTIAL, () => undefined);
+      await send('https://mcp.example/sse', { headers: { accept: 'text/event-stream' } });
     });
     expect(seen[0]?.get('authorization')).toBe('Bearer live-secret');
     expect(seen[0]?.get('accept')).toBe('text/event-stream');
@@ -300,9 +293,9 @@ describe('mcpCredentialTransport', () => {
   test('a request to ANY other origin does not — that is the OAuth metadata path', async () => {
     const seen: Headers[] = [];
     await withFetch((_url, init) => { seen.push(new Headers(init?.headers)); }, async () => {
-      const opts = mcpCredentialTransport('https://mcp.example/sse', async () => CREDENTIAL);
-      await opts.fetch('https://idp.elsewhere/.well-known/oauth-authorization-server');
-      await opts.fetch('https://mcp.example.evil/sse');
+      const send = mcpCredentialFetch('https://mcp.example/sse', async () => CREDENTIAL, () => undefined);
+      await send('https://idp.elsewhere/.well-known/oauth-authorization-server');
+      await send('https://mcp.example.evil/sse');
     });
     expect(seen).toHaveLength(2);
 
@@ -312,8 +305,8 @@ describe('mcpCredentialTransport', () => {
   test('a credentialed request never follows a redirect', async () => {
     const inits: (RequestInit | undefined)[] = [];
     await withFetch((_url, init) => { inits.push(init); }, async () => {
-      const opts = mcpCredentialTransport('https://mcp.example/sse', async () => CREDENTIAL);
-      await opts.fetch('https://mcp.example/sse');
+      const send = mcpCredentialFetch('https://mcp.example/sse', async () => CREDENTIAL, () => undefined);
+      await send('https://mcp.example/sse');
     });
     expect(inits[0]?.redirect).toBe('manual');
   });
@@ -324,12 +317,12 @@ describe('mcpCredentialTransport', () => {
     await withFetch((_url, init) => {
       seen.push(new Headers(init?.headers).get('authorization') ?? 'none');
     }, async () => {
-      const opts = mcpCredentialTransport('https://mcp.example/sse', async () => stored);
-      await opts.fetch('https://mcp.example/sse');
+      const send = mcpCredentialFetch('https://mcp.example/sse', async () => stored, () => undefined);
+      await send('https://mcp.example/sse');
       stored = { Authorization: 'Bearer rotated' };
-      await opts.fetch('https://mcp.example/sse');
+      await send('https://mcp.example/sse');
       stored = null;
-      await opts.fetch('https://mcp.example/sse');
+      await send('https://mcp.example/sse');
     });
     expect(seen).toEqual(['Bearer first', 'Bearer rotated', 'none']);
   });
@@ -352,10 +345,10 @@ describe('mcpCredentialTransport', () => {
     globalThis.fetch = Object.assign(answer, { preconnect: real.preconnect });
 
     try {
-      const opts = mcpCredentialTransport('https://mcp.example/mcp', async () => CREDENTIAL, 'when-asked', (refusal) => { refusals.push(refusal); });
+      const send = mcpCredentialFetch('https://mcp.example/mcp', async () => CREDENTIAL, (refusal) => { refusals.push(refusal); });
       const listing = { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 0, method: 'tools/list' }) };
-      const statuses = [(await opts.fetch('https://mcp.example/mcp', listing)).status, (await opts.fetch('https://mcp.example/said')).status];
-      await opts.fetch('https://idp.elsewhere/token', { method: 'POST' });
+      const statuses = [(await send('https://mcp.example/mcp', listing)).status, (await send('https://mcp.example/said')).status];
+      await send('https://idp.elsewhere/token', { method: 'POST' });
 
       expect(statuses).toEqual([403, 401]);
       expect(refusals).toEqual([

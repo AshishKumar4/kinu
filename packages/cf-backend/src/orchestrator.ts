@@ -3797,8 +3797,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       ],
     });
     this.turnBranches.retire(settled.turnId);
-    // For the next turn, which an alarm, an email or a wake after an eviction opens without the page's warmup.
-    this.warmUserMcpInBackground();
   }
 
   /** Built per use: the actor handle and the fast lane are this activation's. Main's conversation is its isolate's. */

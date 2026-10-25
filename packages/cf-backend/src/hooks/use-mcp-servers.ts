@@ -21,19 +21,15 @@ export interface McpServers {
 /** How often a read is asked again while there is reason to. */
 const CADENCE_MS = 5000;
 
-/** A server still signing in or connecting, which can finish in another tab. */
-const unsettled = (rows: McpServerSummary[] | null): boolean =>
-  rows?.some((s) => s.status === "authenticating" || s.status === "connecting" || s.status === "discovering") === true;
-
 /**
  * Each read's one cadence is chosen here, armed once per answer: every few seconds while a manager watches, so a
- * sign-in or a rotated app credential elsewhere shows; otherwise only while a server is unsettled, or while the
- * deployment's apps have never answered, so a card that needs the app's credential can still offer it.
+ * sign-in or a rotated app credential elsewhere shows; otherwise only while the deployment's apps have never answered,
+ * so a card that needs the app's credential can still offer it.
  */
 export function useMcpServers(): McpServers {
   const [watchers, setWatchers] = useState(0);
   const watched = watchers > 0;
-  const serversCadence = useCallback((rows: McpServerSummary[] | null) => (watched || unsettled(rows) ? CADENCE_MS : null), [watched]);
+  const serversCadence = useCallback(() => (watched ? CADENCE_MS : null), [watched]);
   const presetsCadence = useCallback((rows: McpPresetAvailability[] | null) => (watched || rows === null ? CADENCE_MS : null), [watched]);
   const servers = useAsyncResource(listMcpServers, serversCadence);
   const presets = useAsyncResource(listMcpPresets, presetsCadence);
@@ -69,6 +65,6 @@ export function useConnectedPreset(): (connection: string) => boolean | null {
   return (connection) => {
     if (connection === GOOGLE_CONNECTION) return google === null ? null : google.connection !== null;
 
-    return servers === null ? null : servers.some((server) => server.presetId === connection && (server.status === "ready" || server.status === "connected"));
+    return servers === null ? null : servers.some((server) => server.presetId === connection && server.status === "connected");
   };
 }

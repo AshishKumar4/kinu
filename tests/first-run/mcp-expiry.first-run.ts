@@ -38,7 +38,7 @@ const Answered = v.object({ ok: v.literal(true), value: JsonValueSchema });
 
 const Exec = v.object({ stdout: v.optional(v.string()), exitCode: v.optional(v.number()), error: v.optional(v.string()) });
 
-const McpConnection = v.object({ id: v.string(), authUrl: v.nullable(v.string()) });
+const McpConnection = v.object({ id: v.string(), signIn: v.boolean() });
 
 const ToolAnswer = v.looseObject({ content: v.array(v.looseObject({ type: v.string(), text: v.optional(v.string()) })), isError: v.optional(v.boolean()) });
 
@@ -135,8 +135,8 @@ END`));
           const connection = connected.ok ? v.safeParse(v.pipe(v.string(), v.parseJson(), McpConnection), text) : undefined;
           let cause: string | null = connection?.success === true ? null : `connect ${String(connected.status)}: ${causeOf(text)}`;
 
-          // An add that answers a sign-in link waits for one; the person signs in from its row.
-          if (connection?.success === true && connection.output.authUrl !== null) cause = await signIn(connection.output.id);
+          // An add that waits for a sign-in: the person signs in from its row.
+          if (connection?.success === true && connection.output.signIn) cause = await signIn(connection.output.id);
 
           if (cause !== null) tallies.connect.failed(cause);
 

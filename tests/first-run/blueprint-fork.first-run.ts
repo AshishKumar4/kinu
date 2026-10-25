@@ -39,7 +39,7 @@ const Exec = v.object({ stdout: v.optional(v.string()), exitCode: v.optional(v.n
 
 const PublishedLink = v.object({ id: v.string(), share: v.string() });
 
-const McpConnection = v.object({ id: v.string(), authUrl: v.nullable(v.string()) });
+const McpConnection = v.object({ id: v.string(), signIn: v.boolean() });
 
 const McpAnswer = v.object({
   content: v.array(v.object({ type: v.literal('text'), text: v.string() })),
@@ -176,7 +176,7 @@ END`));
 
           goals.push({
             what: 'own-mcp-server-answers',
-            reached: connection.authUrl === null && reached !== undefined && reached.problem === undefined
+            reached: !connection.signIn && reached !== undefined && reached.problem === undefined
               && answer.success && answer.output.isError !== true
               && answer.output.content.some((part) => part.text.includes('developers.cloudflare.com')),
             detail: JSON.stringify({ server: mcpName, problem: reached?.problem, called: docs.success, answered: answer.success }),

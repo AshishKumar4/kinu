@@ -79,7 +79,6 @@ test.each(CHANGES)('when $what, a sleep-time compute parked on a refusal the own
   const env: UserRoutesEnv<string> = {
     UserDO: { idFromName: (name) => name, get: () => userAccount({
       async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
-      async userMcp_warmConnections() { return { servers: 0 }; },
       async setCredential() {},
       async deleteCredential() { return { unrevoked: null }; },
       async disconnectCodex() { return { unrevoked: null }; },

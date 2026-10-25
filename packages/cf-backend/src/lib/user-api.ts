@@ -460,7 +460,7 @@ export const listMcpServers = () => settle(api(v.array(McpServerSummarySchema), 
 export const listMcpPresets = () => settle(api(v.array(McpPresetAvailabilitySchema), 'GET', '/mcp/presets'));
 
 export const addMcpServer   = (input: McpServerInput) =>
-  settle(api(v.object({ id: v.string(), authUrl: v.nullable(v.string()) }), 'POST', '/mcp/servers', input));
+  settle(api(v.object({ id: v.string(), signIn: v.boolean() }), 'POST', '/mcp/servers', input));
 
 /** An MCP server's sign-in begun for `run`: its sign-in address, which its callback ends with that run. */
 export const beginMcpConnect = (id: string, run: string) =>

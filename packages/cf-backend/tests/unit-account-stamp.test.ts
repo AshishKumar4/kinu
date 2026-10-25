@@ -99,3 +99,26 @@ test('the builtin sign-in directory drops its changed passkeys table as producti
     directory.close();
   }
 });
+
+// The MCP redesign (ledger 1025-mcp): an earlier build kept a copy of each server in the Agents SDK's own catalog
+// (`cf_agents_mcp_servers`), which the SDK dials at every start. The reset that drops the servers drops those copies.
+test('an account an earlier build left with MCP servers is reset with them, the Agents SDK\'s copies included', async () => {
+  const storage = new Database(':memory:');
+  const owner = await testOwner();
+
+  createTestUserDO({ storage }).close();
+  storage.exec(`DROP TABLE user_mcp_servers; CREATE TABLE user_mcp_servers (id TEXT PRIMARY KEY, headers TEXT, allowed_tools TEXT, preset_id TEXT);
+    INSERT INTO user_mcp_servers VALUES ('srv-1', NULL, NULL, 'github')`);
+  storage.exec(`CREATE TABLE cf_agents_mcp_servers (id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, server_url TEXT NOT NULL, callback_url TEXT NOT NULL,
+    client_id TEXT, auth_url TEXT, server_options TEXT); INSERT INTO cf_agents_mcp_servers VALUES ('srv-1', 'GitHub', 'https://api.githubcopilot.com/mcp/',
+    'https://kinu.example/api/user/mcp/callback', NULL, NULL, '{"transport":{"type":"streamable-http"}}')`);
+  kvOf(storage).set('kinu.schema_stamp', 1);
+  const woken = createTestUserDO({ storage });
+
+  try {
+    expect((await woken.userDO.opsTables(await ops())).repair?.dropped).toContain('user_mcp_servers');
+    expect({ servers: await woken.userDO.userMcp_list(owner), copies: storage.query('SELECT id FROM cf_agents_mcp_servers').all() }).toEqual({ servers: [], copies: [] });
+  } finally {
+    woken.close();
+  }
+});

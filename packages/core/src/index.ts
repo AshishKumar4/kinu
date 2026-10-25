@@ -2765,12 +2765,11 @@ export {
 export { MCP_PRESETS, mcpPresetById, type McpPreset, type McpPresetId } from './mcp/presets';
 
 export {
-  CALLABLE_MCP_STATES, mapConnectionStatus, mcpCredentialTransport, mcpListingRefusals, McpTransitionLog, observedMcpState,
-  type McpCredentialTransport, type McpFailureKind, type McpObservedConnection, type McpObservedState, type McpRefusal, type McpToolListing,
+  mcpCredentialFetch, mcpListingRefusals, type McpFailureKind, type McpFetch, type McpRefusal, type McpToolListing,
 } from './mcp/client';
 
 export {
-  validateMcpServerInput, readAllowedTools, parseMcpHeaders, McpPresetAvailabilitySchema,
+  validateMcpServerInput, readAllowedTools, parseMcpHeaders, McpPresetAvailabilitySchema, McpConnectionStatusSchema,
   McpServerSummarySchema, McpTransportSchema, type McpConnectionStatus, type McpPresetAvailability, type McpServerInput,
   type McpServerSummary, type McpTransport,
 } from './mcp/servers';

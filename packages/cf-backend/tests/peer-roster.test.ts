@@ -7,7 +7,7 @@ test('a workspace listing its team sees the account\'s other workspaces and not 
   const gateway = scriptedGateway([{ tool: 'agents', args: { op: 'list' } }]);
 
   const userPlane: RecordedUserPlaneCalls = {
-    warmConnections: [], failWarm: null, titles: [],
+    titles: [],
     workspaces: [{ name: 'harness-parent', displayName: 'Jarvis' }, { name: 'scout-a1b2c3', displayName: 'Scout' }],
   };
 

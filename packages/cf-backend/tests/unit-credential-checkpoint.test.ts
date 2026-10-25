@@ -42,7 +42,6 @@ async function checkpointRoute(harness: TestUserDO, identity: AuthIdentity, body
 
   const stub = userAccount({
     async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
-    async userMcp_warmConnections() { return { servers: 0 }; },
     async listActiveWorkspaces() { return []; },
     checkpointCredentials: (caller: UserCaller, account: string) => {
       asked += 1;

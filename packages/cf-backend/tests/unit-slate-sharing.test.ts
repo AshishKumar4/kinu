@@ -6,7 +6,7 @@ import {
 } from '@kinu.run/core';
 import { orchestratorHarness, workspaceFiles } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
-import { resetRecordedMcp, seedConfiguredMcpServer } from './helpers/agents-sdk';
+import { storedMcpServer } from './helpers/mcp-server';
 import { ROOT_SLATE_CALLER, type SlateCaller } from '@kinu.run/core/slates';
 
 /** A slate's process as its bindings name it, started before any share of it: its sharing's first generation. */
@@ -44,7 +44,6 @@ async function authorIssuesSlate(files: AgentRuntime['storage']['vfs'], extra: R
 }
 
 test('a blueprint admits with every requirement unsatisfied and carries nothing of the owner\'s (S8)', async () => {
-  resetRecordedMcp();
   const ownerUserId = '0123456789abcdef0123456789abcdef';
   const user = createTestUserDO({ durableObjectId: ownerUserId });
   const forkerUser = createTestUserDO({ durableObjectId: 'fedcba9876543210fedcba9876543210' });
@@ -56,10 +55,8 @@ test('a blueprint admits with every requirement unsatisfied and carries nothing 
     const caller = await testOwner();
     // MCP header, provider key and vault secret: none is in the slate tree, and none may reach the forker.
     const mcpHeader = 'Bearer owner-mcp-header-' + 'a1b2c3d4e5f6';
-    await user.userDO.userMcp_list(caller);
-    seedConfiguredMcpServer(user.sql, 'connection-id', {
-      name: 'github', url: 'https://github.example/sse', transport: 'auto', headers: JSON.stringify({ authorization: mcpHeader }),
-    });
+    storedMcpServer(user.sql, { id: 'connection-id', name: 'github', url: 'https://github.example/sse', tools: [] });
+    user.sql.exec(`UPDATE user_mcp_servers SET headers = ? WHERE id = 'connection-id'`, JSON.stringify({ authorization: mcpHeader }));
     const providerKey = ['sk-ant-', 'owner-provider-key-0123456789'].join('');
     await user.userDO.setCredential(caller, 'anthropic', { kind: 'bearer', token: providerKey });
     const vaultSecret = 'owner-vault-secret-' + '9f8e7d6c';
@@ -129,7 +126,6 @@ test('a blueprint admits with every requirement unsatisfied and carries nothing 
   } finally {
     user.close();
     forkerUser.close();
-    resetRecordedMcp();
   }
 });
 

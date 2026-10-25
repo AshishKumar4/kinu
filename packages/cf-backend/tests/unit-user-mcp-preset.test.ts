@@ -1,181 +1,188 @@
-// Preset adds on the real UserDO; `queueMcpAuthUrl` stands in for the authorization redirect the harness cannot perform.
-import { Database } from 'bun:sqlite';
+// Preset adds on the real UserDO, each preset's endpoint served by a test MCP server in this process.
 import * as v from 'valibot';
-import { describe, expect, test } from 'bun:test';
-import { asFetchFunction, createCredentialCipher, GOOGLE_OAUTH_CRED_KEY, mcpPresetById, type OAuthCredential, type JsonObject, type JsonValue } from '@kinu.run/core';
+import { afterEach, describe, expect, test } from 'bun:test';
+import { createCredentialCipher, GOOGLE_OAUTH_CRED_KEY, mcpPresetById, type JsonObject, type JsonValue, type OAuthCredential } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
-import {
-  createTestUserDO, provisionTestWorkspace, sqlExec, testOwner, TEST_CREDENTIAL_ENCRYPTION_KEY,
-  type TestUserDO, type TestUserDOOptions,
-} from './helpers/user-do';
-import {
-  inheritedMcpManager, lastOAuthStorage, liveMcpTransport, queueMcpAuthUrl, recordedMcpServers, resetRecordedMcp, seedMcpAnswer, seedMcpTools, seedSdkMcpServer,
-} from './helpers/agents-sdk';
-import { kvOf, makeCtx } from './helpers/platform-context';
-import { auth } from '@modelcontextprotocol/client';
+import { createTestUserDO, provisionTestWorkspace, sqlExec, testOwner, TEST_CREDENTIAL_ENCRYPTION_KEY, type TestUserDO, type TestUserDOOptions } from './helpers/user-do';
+import { mcpTestServer, type McpTestServer } from './helpers/mcp-server';
 
+const GITHUB_URL = present(mcpPresetById('github'), 'the GitHub preset').serverUrl;
 
-// Imported after `mockAgentsSdk` registers: mcp.ts binds the provider class at load.
-const { RegisteredAppOAuthClientProvider } = await import('../src/user/user-do');
+const CLOUDFLARE_URL = present(mcpPresetById('cloudflare'), 'the Cloudflare preset').serverUrl;
 
-/** A server's name, endpoint and transport, where they live: the SDK's catalog row. */
-function catalogOf(id: string): { name: string; serverUrl: string; transport: string | undefined } | undefined {
-  const row = recordedMcpServers().find((server) => server.id === id);
+const realFetch = globalThis.fetch;
 
-  return row === undefined ? undefined : { name: row.name, serverUrl: row.url, transport: row.transport.type };
+afterEach(() => { globalThis.fetch = realFetch; });
+
+/** The network as the account reaches it: each preset endpoint `served` names answered by its test server, every other
+ *  address by `elsewhere`, and every address asked for recorded. */
+function network(served: Readonly<Record<string, McpTestServer>>, elsewhere: (url: string, init?: RequestInit) => Promise<Response> = realFetch) {
+  const asked: string[] = [];
+
+  globalThis.fetch = Object.assign(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = input instanceof Request ? input.url : input.toString();
+    const server = served[url];
+
+    asked.push(url);
+
+    return server === undefined ? elsewhere(url, init) : realFetch(server.url, init);
+  }, { preconnect: realFetch.preconnect });
+
+  return asked;
 }
 
-function harness(options?: TestUserDOOptions): TestUserDO {
-  resetRecordedMcp();
-
-  return createTestUserDO(options);
+async function add(h: TestUserDO, input: JsonObject): Promise<{ id: string; signIn: boolean }> {
+  return h.userDO.userMcp_add(await testOwner(), input, 'https://kinu.example');
 }
 
-describe("an MCP server's login is kept sealed in the account's storage", () => {
-  test('the storage an added server\'s provider and the SDK\'s restored provider are handed seals every value', async () => {
-    const h = harness();
-    const token = { access_token: ['gho_', 'sealed0123456789abcdefghijklmnopq'].join(''), token_type: 'bearer' };
-    queueMcpAuthUrl('https://mcp.cloudflare.com/authorize?test');
+/** Runs `body` with a fresh account and a server answering the GitHub preset's endpoint, and lets both go. */
+async function withGitHub(body: (h: TestUserDO, server: McpTestServer) => Promise<void>, options: TestUserDOOptions = {}): Promise<void> {
+  const server = mcpTestServer({ tools: [{ name: 'get_file_contents', inputSchema: { type: 'object' } }] });
+  const h = createTestUserDO(options);
 
-    await h.userDO.userMcp_add(await testOwner(), { presetId: 'cloudflare' }, 'https://kinu.example');
-    await lastOAuthStorage().put('/kinu-user-mcp/server-1/client-1/token', token);
+  network({ [GITHUB_URL]: server });
 
-    const stored = kvOf(h.db).get('/kinu-user-mcp/server-1/client-1/token');
-    expect(typeof stored === 'string' && stored.startsWith('pce1.')).toBe(true);
-    expect(JSON.stringify(stored)).not.toContain(token.access_token);
-
-    h.userDO.createMcpOAuthProvider('https://kinu.example/api/user/mcp/callback');
-    expect(await lastOAuthStorage().get<JsonValue>('/kinu-user-mcp/server-1/client-1/token')).toEqual(token);
+  try {
+    await body(h, server);
+  } finally {
+    await server.stop();
     h.close();
-  });
-});
+  }
+}
 
 describe('an MCP preset add', () => {
-  test('an oauth preset stores preset_id and returns the authorize URL', async () => {
-    const h = harness();
-    queueMcpAuthUrl('https://mcp.cloudflare.com/authorize?test');
+  test('an oauth preset asks for its sign-in at add; the catalog names its endpoint, and its row claims the preset', async () => {
+    const server = mcpTestServer();
+    const h = createTestUserDO();
+    const owner = await testOwner();
 
-    const added = await h.userDO.userMcp_add(
-      await testOwner(), { presetId: 'cloudflare' }, 'https://kinu.example',
-    );
+    server.bearer = 'a login the account does not have';
+    network({ [CLOUDFLARE_URL]: server });
 
-    expect(added.authUrl).toBe('https://mcp.cloudflare.com/authorize?test');
+    try {
+      const added = await add(h, { presetId: 'cloudflare', name: 'x', serverUrl: 'https://attacker.example/mcp' });
 
-    const [row] = sqlExec(h.db).exec(`SELECT preset_id FROM user_mcp_servers WHERE id = ?`, added.id).toArray();
+      expect({ added: added.signIn, listed: (await h.userDO.userMcp_list(owner)).map((s) => [s.presetId, s.name, s.serverUrl, s.transport, s.status, s.signIn]) })
+        .toEqual({ added: true, listed: [['cloudflare', 'Cloudflare', CLOUDFLARE_URL, 'streamable-http', 'needs_sign_in', true]] });
+    } finally {
+      await server.stop();
+      h.close();
+    }
+  });
 
-    expect(row?.preset_id).toBe('cloudflare');
-    expect(catalogOf(added.id)).toMatchObject({ serverUrl: 'https://mcp.cloudflare.com/mcp', transport: 'streamable-http' });
+  // Gmail's MCP answered anyone's initialize and tools/list, so it connected unsigned on staging (2026-10-19) and would
+  // have refused the first call of some turn. A registered app's server is not reached unsigned: its sign-in starts.
+  test("a registered app's server waits for its sign-in from its add, which sends it no request", async () => {
+    const h = createTestUserDO({ mcpAppCredentials: ['github'] });
+    const asked = network({});
 
-    const [listed] = await h.userDO.userMcp_list(await testOwner());
-    expect(listed?.presetId).toBe('cloudflare');
-    expect(listed?.status).toBe('authenticating');
-    expect(listed?.signIn).toBe(true);
-    h.close();
+    try {
+      const added = await add(h, { presetId: 'github' });
+
+      expect({ signIn: added.signIn, asked, listed: (await h.userDO.userMcp_list(await testOwner())).map((s) => [s.status, s.signIn]) })
+        .toEqual({ signIn: true, asked: [], listed: [['needs_sign_in', true]] });
+    } finally {
+      h.close();
+    }
+  });
+
+  test('a token preset carries its credential sealed for its own server, tagged with the preset, and connects by it', async () => {
+    await withGitHub(async (h, server) => {
+      server.bearer = 'ghp_test';
+      const added = await add(h, { presetId: 'github', headers: { Authorization: 'Bearer ghp_test' } });
+      const [row] = sqlExec(h.db).exec(`SELECT preset_id, headers FROM user_mcp_servers WHERE id = ?`, added.id).toArray();
+      const { preset_id: preset, headers: sealed } = v.parse(v.object({ preset_id: v.string(), headers: v.string() }), row);
+      const cipher = await createCredentialCipher({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
+
+      expect({ signIn: added.signIn, preset, inTheClear: sealed.includes('ghp_test') }).toEqual({ signIn: false, preset: 'github', inTheClear: false });
+      expect(JSON.parse(await cipher.open(`test-user-do:mcp:${added.id}`, sealed))).toEqual({ Authorization: 'Bearer ghp_test' });
+      await expect(cipher.open('test-user-do:mcp:another', sealed)).rejects.toThrow('failed to decrypt');
+      expect((await h.userDO.userMcp_list(await testOwner())).map((s) => [s.presetId, s.status, s.toolsCount])).toEqual([['github', 'connected', 1]]);
+    });
   });
 
   // Sol-round review (2026-10-23): a token preset holds the deployment's app client id too, and a failed connection then
   // offered Authorize, which its token never needs.
-  test('a token preset whose connection is refused offers no sign-in, though the deployment holds its app', async () => {
-    const h = harness({ mcpAppCredentials: ['github'] });
-    const owner = await testOwner();
-    const added = await h.userDO.userMcp_add(owner, { presetId: 'github', headers: { Authorization: 'Bearer ghp_test' } }, 'https://kinu.example');
+  test('a token preset whose token is refused reads failed and offers no sign-in, though the deployment holds its app', async () => {
+    await withGitHub(async (h, server) => {
+      server.bearer = 'ghp_test';
+      const added = await add(h, { presetId: 'github', headers: { Authorization: 'Bearer ghp_test' } });
 
-    const connection = inheritedMcpManager(h.userDO).mcpConnections[added.id];
+      server.bearer = 'a token the account does not hold';
+      const reconnected = await h.userDO.userMcp_reconnect(await testOwner(), added.id);
+      const listed = (await h.userDO.userMcp_list(await testOwner())).find((s) => s.id === added.id);
 
-    // Its token refused: the connection fails, as the vendor fails it, holding the app's client all the same.
-    if (connection === undefined) throw new Error('the token preset holds no connection');
-    connection.connectionState = 'failed';
-    const listed = (await h.userDO.userMcp_list(owner)).find((server) => server.id === added.id);
-
-    expect({ status: listed?.status, signIn: listed?.signIn }).toEqual({ status: 'failed', signIn: false });
-    h.close();
+      expect({ reconnected: reconnected.status, status: listed?.status, signIn: listed?.signIn }).toEqual({ reconnected: 'failed', status: 'failed', signIn: false });
+    }, { mcpAppCredentials: ['github'] });
   });
 
-  test('a token preset carries its credential sealed, tagged with the preset', async () => {
-    const h = harness();
+  test('an oauth-app preset with no app and no token is refused before a row exists; so are an unknown preset and a second one', async () => {
+    await withGitHub(async (h) => {
+      await expect(add(h, { presetId: 'github' })).rejects.toMatchObject({ code: 'bad_input' });
+      await expect(add(h, { presetId: 'gitlab' })).rejects.toMatchObject({ code: 'bad_input' });
+      expect(sqlExec(h.db).exec(`SELECT id FROM user_mcp_servers`).toArray()).toEqual([]);
 
-    const added = await h.userDO.userMcp_add(
-      await testOwner(),
-      { presetId: 'github', headers: { Authorization: 'Bearer ghp_test' } },
-      'https://kinu.example',
-    );
-
-    expect(added.authUrl).toBeNull();
-
-    const [row] = sqlExec(h.db).exec(
-      `SELECT preset_id, headers FROM user_mcp_servers WHERE id = ?`,
-      added.id,
-    ).toArray();
-
-    expect(row?.preset_id).toBe('github');
-    const sealed = v.parse(v.string(), row?.headers);
-    expect(sealed).not.toContain('ghp_test');
-    // Sealed for this server: it opens under its own id and under no other.
-    const cipher = await createCredentialCipher({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
-    expect(JSON.parse(await cipher.open(`test-user-do:mcp:${added.id}`, sealed))).toEqual({ Authorization: 'Bearer ghp_test' });
-    await expect(cipher.open('test-user-do:mcp:another', sealed)).rejects.toThrow('failed to decrypt');
-
-    const [listed] = await h.userDO.userMcp_list(await testOwner());
-    expect(listed?.presetId).toBe('github');
-    expect(listed?.status).not.toBe('authenticating');
-    h.close();
+      await add(h, { presetId: 'github', headers: { Authorization: 'Bearer a' } });
+      await expect(add(h, { presetId: 'github', headers: { Authorization: 'Bearer b' } })).rejects.toMatchObject({ code: 'bad_input' });
+      expect(sqlExec(h.db).exec(`SELECT id FROM user_mcp_servers`).toArray()).toHaveLength(1);
+    });
   });
 
+  test('userMcp_presets reports which oauth-app presets the deployment carries', async () => {
+    const h = createTestUserDO({ mcpAppCredentials: ['github'] });
+
+    expect(await h.userDO.userMcp_presets(await testOwner())).toEqual([{ id: 'github', appConfigured: true }, { id: 'cloudflare', appConfigured: true }]);
+    h.close();
+  });
+});
+
+describe("the owner's assistant learns the connections the account holds", () => {
   // The rc27 review: the assistant's GitHub and Gmail checks ran every 15 minutes whether or not either was connected.
-  test("connecting and removing a connection tells the owner's assistant which it now holds, and no other workspace", async () => {
-    const h = harness();
-    const owner = await testOwner();
+  test('connecting and removing a connection tells the assistant which it now holds, and no other workspace', async () => {
+    await withGitHub(async (h) => {
+      const owner = await testOwner();
+      const added = await add(h, { presetId: 'github', headers: { Authorization: 'Bearer ghp_test' } });
 
-    const added = await h.userDO.userMcp_add(owner, { presetId: 'github', headers: { Authorization: 'Bearer ghp_test' } }, 'https://kinu.example');
+      // No assistant yet: nothing to tell.
+      expect(h.connectionsChanged).toEqual([]);
+      expect(await h.userDO.userMcp_connectedPresets(owner)).toEqual(['github']);
+      await h.userDO.userMcp_remove(owner, added.id);
+      await h.userDO.claimConfig(owner, 'assistant', 'kinu-home');
 
-    // No assistant yet: nothing to tell.
-    expect(h.connectionsChanged).toEqual([]);
-    expect(await h.userDO.userMcp_connectedPresets(owner)).toEqual(['github']);
-    await h.userDO.userMcp_remove(owner, added.id);
-    await h.userDO.claimConfig(owner, 'assistant', 'kinu-home');
+      const again = await add(h, { presetId: 'github', headers: { Authorization: 'Bearer ghp_test' } });
 
-    const again = await h.userDO.userMcp_add(owner, { presetId: 'github', headers: { Authorization: 'Bearer ghp_test' } }, 'https://kinu.example');
-
-    await h.userDO.userMcp_remove(owner, again.id);
-    expect(h.connectionsChanged).toEqual(['kinu-home:github', 'kinu-home:']);
-    h.close();
+      await h.userDO.userMcp_remove(owner, again.id);
+      expect(h.connectionsChanged).toEqual(['kinu-home:github', 'kinu-home:']);
+    });
   });
 
   // Review, 2026-10-23: a wake dials no server, and a server it had not dialled read as not connected, so removing one
   // connection after a wake told the assistant it held none and cancelled the other's watchers.
-  test('after a wake, removing one connection keeps the watchers of another the wake has not dialled', async () => {
-    const h = harness();
-    const owner = await testOwner();
-    seedMcpTools('srv-none', []);
-    await h.userDO.claimConfig(owner, 'assistant', 'kinu-home');
-    const github = await h.userDO.userMcp_add(owner, { presetId: 'github', headers: { Authorization: 'Bearer ghp_test' } }, 'https://kinu.example');
-    const other = await h.userDO.userMcp_add(owner, { name: 'tracker', serverUrl: 'https://tracker.example/mcp', headers: { Authorization: 'Bearer t' } }, 'https://kinu.example');
+  test('after a wake, which dials nothing, the presets held are named, and removing one keeps the watchers of another', async () => {
+    const tracker = mcpTestServer();
 
-    const woken = createTestUserDO({ storage: h.db });
-    await woken.userDO.userMcp_remove(owner, other.id);
+    await withGitHub(async (h) => {
+      const owner = await testOwner();
 
-    expect({ presets: await woken.userDO.userMcp_connectedPresets(owner), told: woken.connectionsChanged.at(-1) }).toEqual({ presets: ['github'], told: 'kinu-home:github' });
-    expect(github.id).not.toBe(other.id);
-    woken.close();
-    h.close();
-  });
+      await h.userDO.claimConfig(owner, 'assistant', 'kinu-home');
+      await add(h, { presetId: 'github', headers: { Authorization: 'Bearer ghp_test' } });
+      const other = await add(h, { name: 'tracker', serverUrl: tracker.url });
+      const woken = createTestUserDO({ storage: h.db });
 
-  test('the first read after a wake names the presets it holds, though it has dialled none', async () => {
-    const h = harness();
-    const owner = await testOwner();
-    await h.userDO.userMcp_add(owner, { presetId: 'github', headers: { Authorization: 'Bearer ghp_test' } }, 'https://kinu.example');
-    await h.userDO.userMcp_list(owner);
-
-    const woken = createTestUserDO({ storage: h.db });
-
-    expect(await woken.userDO.userMcp_connectedPresets(owner)).toEqual(['github']);
-    woken.close();
-    h.close();
+      try {
+        expect(await woken.userDO.userMcp_connectedPresets(owner)).toEqual(['github']);
+        await woken.userDO.userMcp_remove(owner, other.id);
+        expect({ presets: await woken.userDO.userMcp_connectedPresets(owner), told: woken.connectionsChanged.at(-1) }).toEqual({ presets: ['github'], told: 'kinu-home:github' });
+      } finally {
+        woken.close();
+        await tracker.stop();
+      }
+    });
   });
 
   // The Google connection replaced the Gmail preview preset (ledger 1023-n): the assistant's Gmail check keys on it.
   test('the Google connection is a connection the assistant is told of as it comes and goes', async () => {
-    const h = harness();
+    const h = createTestUserDO();
     const owner = await testOwner();
     const credential: OAuthCredential = { kind: 'oauth', accessToken: 'ya29.held', refreshToken: '1//refresh', expiresAt: Date.now() + 3_600_000, metadata: { account: 'owner@gmail.com', scopes: [] } };
 
@@ -190,260 +197,21 @@ describe('an MCP preset add', () => {
     expect(h.secretsMoved).toEqual([]);
     h.close();
   });
-
-  test('a server from the retired Gmail preset goes at the next wake, with everything kept of it, and the assistant is told', async () => {
-    const h = harness();
-    const owner = await testOwner();
-    const gmail = await h.userDO.userMcp_add(owner, { name: 'Gmail', serverUrl: 'https://gmailmcp.googleapis.com/mcp/v1', headers: { Authorization: 'Bearer t' } }, 'https://kinu.example');
-    const unopenable = `/kinu-user-mcp/${gmail.id}/client-1/token`;
-
-    await h.userDO.claimConfig(owner, 'assistant', 'kinu-home');
-    sqlExec(h.db).exec(`UPDATE user_mcp_servers SET preset_id = 'google' WHERE id = ?`, gmail.id);
-
-    // OAuth values sealed for no key this object holds, more than one delete takes: the SDK's own clearing passes them
-    // by, as it cannot open them.
-    for (let n = 0; n < 130; n += 1) kvOf(h.db).set(`${unopenable}-${n}`, 'not-a-sealed-value');
-
-    const woken = createTestUserDO({ storage: h.db });
-
-    expect(await woken.userDO.userMcp_list(owner)).toEqual([]);
-    expect(catalogOf(gmail.id)).toBeUndefined();
-    expect([...kvOf(h.db).keys()].filter((key) => key.startsWith(unopenable))).toEqual([]);
-
-    // The wake told no workspace, and evicted before any warm, the next wake still owes the assistant its notice: the
-    // first warm arms its watchers for what the account still holds, once.
-    expect(woken.connectionsChanged).toEqual([]);
-
-    // The first warm's notice fails: it stays owed, and the next warm tells it, once.
-    const later = createTestUserDO({ storage: h.db, connectionsChangedFails: 1 });
-
-    await later.userDO.userMcp_warmConnections(owner);
-    await later.userDO.userMcp_warmConnections(owner);
-    await later.userDO.userMcp_warmConnections(owner);
-    expect(later.connectionsChanged).toEqual(['kinu-home:']);
-    later.close();
-    woken.close();
-    h.close();
-  });
-
-  test('the catalog is the authority: a presetId add cannot smuggle its own endpoint', async () => {
-    const h = harness({ mcpAppCredentials: ['github'] });
-
-    const added = await h.userDO.userMcp_add(
-      await testOwner(),
-      { presetId: 'github', name: 'x', serverUrl: 'https://attacker.example/mcp' },
-      'https://kinu.example',
-    );
-
-    expect(catalogOf(added.id)?.serverUrl).toBe('https://api.githubcopilot.com/mcp/');
-    h.close();
-  });
-
-  test('an oauth-app preset with no app and no token is refused before a row exists', async () => {
-    const h = harness();
-
-    await expect(
-      h.userDO.userMcp_add(await testOwner(), { presetId: 'github' }, 'https://kinu.example'),
-    ).rejects.toMatchObject({ code: 'bad_input' });
-
-    const rows = sqlExec(h.db).exec(`SELECT id FROM user_mcp_servers`).toArray();
-    expect(rows.length).toBe(0);
-    h.close();
-  });
-
-  // Gmail's MCP answered anyone's initialize and tools/list, so it connected unsigned on staging (2026-10-19) and would
-  // have refused the first call of some turn. A registered app's server is not reached unsigned: its sign-in starts.
-  test("a registered app's server is answered 401 until signed in, without a request leaving, so its sign-in starts at add", async () => {
-    const h = harness({ mcpAppCredentials: ['github'] });
-    const added = await h.userDO.userMcp_add(await testOwner(), { presetId: 'github' }, 'https://kinu.example');
-    const send = present(liveMcpTransport(added.id)?.fetch, "the server's transport fetch");
-    const network = globalThis.fetch;
-    const left: string[] = [];
-
-    globalThis.fetch = asFetchFunction(async (input) => {
-      left.push(new Request(input).url);
-
-      return new Response(null, { status: 200 });
-    });
-
-    try {
-      const unsigned = await send(present(mcpPresetById('github'), 'the GitHub preset').serverUrl, { method: 'POST', body: '{}' });
-
-      expect({ status: unsigned.status, challenge: unsigned.headers.get('www-authenticate'), left }).toEqual({ status: 401, challenge: 'Bearer', left: [] });
-    } finally {
-      globalThis.fetch = network;
-      h.close();
-    }
-  });
-
-  test('an oauth-app add runs under the registered client, and the row still claims the preset', async () => {
-    const h = harness({ mcpAppCredentials: ['github'] });
-    queueMcpAuthUrl('https://github.com/login/oauth/authorize?test');
-
-    const added = await h.userDO.userMcp_add(
-      await testOwner(), { presetId: 'github' }, 'https://kinu.example',
-    );
-
-    expect(added.authUrl).toBe('https://github.com/login/oauth/authorize?test');
-
-    const [row] = sqlExec(h.db).exec(
-      `SELECT preset_id FROM user_mcp_servers WHERE id = ?`, added.id,
-    ).toArray();
-
-    expect(row?.preset_id).toBe('github');
-
-    const provider = liveMcpTransport(added.id)?.authProvider;
-    expect(provider instanceof RegisteredAppOAuthClientProvider).toBe(true);
-
-    if (provider instanceof RegisteredAppOAuthClientProvider) {
-      // Registered already, which makes `auth()` skip the /register call.
-      expect(await provider.clientInformation()).toMatchObject({
-        client_id: 'test-github-client-id',
-        client_secret: 'test-github-client-secret',
-      });
-      expect(provider.clientMetadata.scope).toBe('repo read:org read:user');
-    }
-
-    // Names the registered app, so a restore after eviction keeps the same registration.
-    expect(recordedMcpServers().find((s) => s.id === added.id)?.clientId)
-      .toBe('test-github-client-id');
-
-    h.close();
-  });
-
-  test('adding the same preset twice is refused by the name claim', async () => {
-    const h = harness();
-
-    await h.userDO.userMcp_add(
-      await testOwner(), { presetId: 'github', headers: { Authorization: 'Bearer a' } },
-      'https://kinu.example',
-    );
-    await expect(
-      h.userDO.userMcp_add(
-        await testOwner(), { presetId: 'github', headers: { Authorization: 'Bearer b' } },
-        'https://kinu.example',
-      ),
-    ).rejects.toMatchObject({ code: 'bad_input' });
-
-    const rows = sqlExec(h.db).exec(`SELECT id FROM user_mcp_servers`).toArray();
-    expect(rows.length).toBe(1);
-    h.close();
-  });
-
-  test('an unknown preset id is refused, a custom add stores a NULL preset_id', async () => {
-    const h = harness();
-
-    await expect(
-      h.userDO.userMcp_add(await testOwner(), { presetId: 'gitlab' }, 'https://kinu.example'),
-    ).rejects.toMatchObject({ code: 'bad_input' });
-
-    const added = await h.userDO.userMcp_add(
-      await testOwner(), { name: 'linear', serverUrl: 'https://mcp.linear.example/sse' },
-      'https://kinu.example',
-    );
-
-    const [row] = sqlExec(h.db).exec(
-      `SELECT preset_id
-         FROM user_mcp_servers
-        WHERE id = ?`, added.id,
-    ).toArray();
-
-    // The join's NULL is the "no preset" answer, not a stored NULL.
-    expect(row?.preset_id).toBeNull();
-    const [listed] = await h.userDO.userMcp_list(await testOwner());
-    expect(listed?.presetId).toBeNull();
-    h.close();
-  });
-
-  test('userMcp_presets reports which oauth-app presets the deployment carries', async () => {
-    const h = harness({ mcpAppCredentials: ['github'] });
-
-    const rows = await h.userDO.userMcp_presets(await testOwner());
-
-    expect(rows).toEqual([
-      { id: 'github', appConfigured: true },
-      { id: 'cloudflare', appConfigured: true },
-    ]);
-    h.close();
-  });
-});
-
-describe('a cold activation over a preset row', () => {
-  test('a rewritten oauth-app row restores with the registered-app provider', async () => {
-    const first = harness({ mcpAppCredentials: ['github'] });
-    await first.userDO.userMcp_add(
-      await testOwner(),
-      { presetId: 'github', headers: { Authorization: 'Bearer pat' } },
-      'https://kinu.example',
-    );
-
-    const [row] = sqlExec(first.db).exec(`SELECT id FROM user_mcp_servers`).toArray();
-    const id = v.parse(v.string(), row?.id);
-    const added = catalogOf(id);
-
-    seedSdkMcpServer(id, {
-      type: 'streamable-http',
-      requestInit: { headers: { Authorization: 'Bearer stale' } },
-    }, {
-      callbackUrl: 'https://kinu.example/api/user/mcp/callback',
-      clientId: 'stale-dcr-client',
-      ...(added !== undefined && { name: added.name, url: added.serverUrl }),
-    });
-
-    const woken = createTestUserDO({ storage: first.db, mcpAppCredentials: ['github'] });
-    await woken.userDO.userMcp_list(await testOwner());
-
-    const provider = liveMcpTransport(id)?.authProvider;
-    expect(provider instanceof RegisteredAppOAuthClientProvider).toBe(true);
-
-    if (provider instanceof RegisteredAppOAuthClientProvider) {
-      expect(await provider.clientInformation()).toMatchObject({
-        client_id: 'test-github-client-id',
-        client_secret: 'test-github-client-secret',
-      });
-    }
-
-    woken.close();
-    first.close();
-  });
-
-  // Only a row with headers was rebuilt at activation; an app row signed in by OAuth alone was restored by the SDK with
-  // the agent's default provider, which holds no client secret, so its next refresh or sign-in reached the vendor as an
-  // unknown client, and Google's hour-long tokens expire well inside one idle account's life.
-  test('an oauth-app row with no headers restores with the registered-app provider', async () => {
-    const first = harness({ mcpAppCredentials: ['github'] });
-    const added = await first.userDO.userMcp_add(await testOwner(), { presetId: 'github' }, 'https://kinu.example');
-
-    const woken = createTestUserDO({ storage: first.db, mcpAppCredentials: ['github'] });
-    await woken.userDO.userMcp_list(await testOwner());
-
-    const provider = liveMcpTransport(added.id)?.authProvider;
-    expect(provider instanceof RegisteredAppOAuthClientProvider).toBe(true);
-
-    if (provider instanceof RegisteredAppOAuthClientProvider) {
-      expect(await provider.clientInformation()).toMatchObject({ client_id: 'test-github-client-id', client_secret: 'test-github-client-secret' });
-    }
-
-    woken.close();
-    first.close();
-  });
 });
 
 describe("a GitHub answer that a repository was not reached", () => {
   /** A GitHub tool's error as its MCP server words it (github/github-mcp-server pkg/errors, `message: err`). */
   async function answered(text: string): Promise<string> {
-    const h = harness({ mcpAppCredentials: ['github'] });
-    queueMcpAuthUrl('https://github.com/login/oauth/authorize?test');
-    const added = await h.userDO.userMcp_add(await testOwner(), { presetId: 'github' }, 'https://kinu.example');
+    let answer = '';
 
-    seedMcpTools(added.id, [{ name: 'get_file_contents', inputSchema: { type: 'object' } }]);
-    seedMcpAnswer({ isError: true, content: [{ type: 'text', text }] });
+    await withGitHub(async (h, server) => {
+      const added = await add(h, { presetId: 'github', headers: { Authorization: 'Bearer ghp_test' } });
 
-    try {
-      return await h.userDO.userMcp_callTool(await testOwner(), { serverId: added.id, name: 'get_file_contents', args: {}, id: crypto.randomUUID() });
-    } finally {
-      h.close();
-    }
+      server.answer = () => ({ isError: true, content: [{ type: 'text', text }] });
+      answer = await h.userDO.userMcp_callTool(await testOwner(), { serverId: added.id, name: 'get_file_contents', args: {}, id: crypto.randomUUID() });
+    }, { mcpAppCredentials: ['github'] });
+
+    return answer;
   }
 
   // A 404 or 403 from GitHub does not say which account, app or policy kept the repository out of reach, so the agent is
@@ -460,128 +228,84 @@ describe("a GitHub answer that a repository was not reached", () => {
   test('an error that is not a repository out of reach is passed on as GitHub worded it, and nothing more', async () => {
     const words = 'failed to create issue: POST https://api.github.com/repos/kinu-run/billing-worker/issues: GitHub API rate limit exceeded. Wait before retrying.';
 
-    expect(JSON.parse(await answered(words))).toEqual({ isError: true, content: [{ type: 'text', text: words }] });
+    expect(JSON.parse(await answered(words))).toMatchObject({ isError: true, content: [{ type: 'text', text: words }] });
   });
 });
 
-describe('the registered-app provider against the real SDK auth flow', () => {
-  /** Advertises a registration endpoint the flow must never reach, as GitHub's does. */
-  test('the flow skips registration and the token call authenticates the app', async () => {
-    interface SeenCall {
-      url: string;
-      body?: URLSearchParams;
-      authHeader?: string | null;
-    }
+/** GitHub's discovery documents as measured on 2026-10-19, and its token endpoint, which records what each exchange
+ *  sent. Its authorization server lists no registration endpoint; one asked for is recorded, never answered. */
+function github() {
+  const exchanges: URLSearchParams[] = [];
 
-    const seen: SeenCall[] = [];
+  const resource: JsonValue = {
+    resource: 'https://api.githubcopilot.com/mcp/', authorization_servers: ['https://github.com/login/oauth'],
+    scopes_supported: ['repo', 'read:org', 'read:user', 'user:email', 'read:packages', 'write:packages', 'read:project', 'project', 'gist', 'notifications'],
+    bearer_methods_supported: ['header'], resource_name: 'GitHub MCP Server',
+  };
 
-    const fetchFn = async (url: string | URL, init?: RequestInit): Promise<Response> => {
-      const entry: SeenCall = { url: String(url) };
+  const documents = new Map<string, JsonValue>([
+    ['https://api.githubcopilot.com/.well-known/oauth-protected-resource/mcp/', resource],
+    ['https://api.githubcopilot.com/.well-known/oauth-protected-resource/mcp', resource],
+    ['https://github.com/.well-known/oauth-authorization-server/login/oauth', {
+      issuer: 'https://github.com/login/oauth', authorization_endpoint: 'https://github.com/login/oauth/authorize',
+      token_endpoint: 'https://github.com/login/oauth/access_token', response_types_supported: ['code'],
+      grant_types_supported: ['authorization_code', 'refresh_token', 'urn:ietf:params:oauth:grant-type:device_code'],
+      code_challenge_methods_supported: ['S256'], authorization_response_iss_parameter_supported: true, scopes_supported: ['offline_access'],
+    }],
+  ]);
 
-      seen.push(entry);
+  const elsewhere = async (url: string, init?: RequestInit): Promise<Response> => {
+    const document = documents.get(url);
 
-      if (entry.url === 'https://mcp.example/.well-known/oauth-authorization-server') {
-        return new Response(JSON.stringify({
-          issuer: 'https://mcp.example',
-          authorization_endpoint: 'https://mcp.example/authorize',
-          token_endpoint: 'https://mcp.example/token',
-          registration_endpoint: 'https://mcp.example/register',
-          response_types_supported: ['code'],
-          token_endpoint_auth_methods_supported: ['client_secret_post'],
-        }), { status: 200, headers: { 'content-type': 'application/json' } });
-      }
+    if (document !== undefined) return Response.json(document);
 
-      if (entry.url === 'https://mcp.example/register') {
-        // Reaching here would mean the flow tried DCR, so the reach is recorded rather than answered.
-        return new Response('should not be called', { status: 500 });
-      }
+    if (url !== 'https://github.com/login/oauth/access_token') return new Response('not found', { status: 404 });
+    exchanges.push(new URLSearchParams(await new Request(url, init).text()));
 
-      if (entry.url === 'https://mcp.example/token') {
-        entry.body = new URLSearchParams(await new Request(url, init).text());
-        entry.authHeader = new Headers(init?.headers).get('authorization');
+    return Response.json({ access_token: 'gho_signed', token_type: 'bearer', scope: 'repo,read:org,read:user' });
+  };
 
-        return new Response(JSON.stringify({
-          access_token: 'at-test', token_type: 'Bearer', refresh_token: 'rt-test',
-        }), { status: 200, headers: { 'content-type': 'application/json' } });
-      }
+  return { elsewhere, exchanges };
+}
 
-      return new Response('not found', { status: 404 });
-    };
-
-    const provider = new RegisteredAppOAuthClientProvider({
-      storage: makeCtx(new Database(':memory:')).storage,
-      clientName: 'test-client',
-      baseRedirectUrl: 'https://kinu.example/api/user/mcp/callback',
-      clientId: 'test-github-client-id',
-      clientSecret: 'test-github-client-secret',
-      scope: 'repo read:user',
-    });
-
-    provider.serverId = 'srv';
-
-    const redirect = await auth(provider, {
-      serverUrl: 'https://mcp.example/mcp', fetchFn,
-    });
-
-    expect(redirect).toBe('REDIRECT');
-    const authUrl = new URL(provider.authUrl ?? '');
-    expect(authUrl.searchParams.get('client_id')).toBe('test-github-client-id');
-    expect(authUrl.searchParams.get('scope')).toBe('repo read:user');
-    expect(authUrl.searchParams.get('redirect_uri'))
-      .toBe('https://kinu.example/api/user/mcp/callback');
-
-    const exchanged = await auth(provider, {
-      serverUrl: 'https://mcp.example/mcp', authorizationCode: 'code-test', fetchFn,
-    });
-
-    expect(exchanged).toBe('AUTHORIZED');
-
-    const token = seen.find((call) => call.url === 'https://mcp.example/token');
-    expect(token?.body?.get('client_id')).toBe('test-github-client-id');
-    expect(token?.body?.get('client_secret')).toBe('test-github-client-secret');
-
-    expect(seen.some((call) => call.url === 'https://mcp.example/register')).toBe(false);
-  });
+describe("a registered app's sign-in, through the account's own begin and callback", () => {
   // Staging, 2026-10-19: the owner's GitHub app was asked for every scope GitHub's MCP lists (write:packages, gist,
-  // project...), the SDK preferring the server's protected-resource scopes_supported to the preset's own. Modelled on
-  // GitHub's answers as measured that day.
-  test("GitHub's sign-in asks for the scope the preset declares, not every scope the server lists", async () => {
-    const github: JsonObject = {
-      'https://api.githubcopilot.com/.well-known/oauth-protected-resource/mcp/': {
-        resource: 'https://api.githubcopilot.com/mcp/', authorization_servers: ['https://github.com/login/oauth'],
-        scopes_supported: ['repo', 'read:org', 'read:user', 'user:email', 'read:packages', 'write:packages', 'read:project', 'project', 'gist', 'notifications'],
-        bearer_methods_supported: ['header'], resource_name: 'GitHub MCP Server',
-      },
-      'https://github.com/.well-known/oauth-authorization-server/login/oauth': {
-        issuer: 'https://github.com/login/oauth', authorization_endpoint: 'https://github.com/login/oauth/authorize',
-        token_endpoint: 'https://github.com/login/oauth/access_token', response_types_supported: ['code'],
-        grant_types_supported: ['authorization_code', 'refresh_token', 'urn:ietf:params:oauth:grant-type:device_code'],
-        code_challenge_methods_supported: ['S256'], authorization_response_iss_parameter_supported: true, scopes_supported: ['offline_access'],
-      },
-    };
-
-    const fetchFn = async (url: string | URL): Promise<Response> => {
-      const answer = github[String(url)];
-
-      return answer === undefined ? new Response('not found', { status: 404 }) : Response.json(answer);
-    };
-
+  // project...), the SDK preferring the server's protected-resource scopes_supported to the preset's own.
+  test("asks for the preset's scope as the registered app, registers nothing, and the code's exchange authenticates the app", async () => {
+    const server = mcpTestServer({ tools: [{ name: 'get_me', inputSchema: { type: 'object' } }] });
+    const h = createTestUserDO({ mcpAppCredentials: ['github'] });
+    const owner = await testOwner();
+    const issuer = github();
+    const asked = network({ [GITHUB_URL]: server }, issuer.elsewhere);
     const preset = present(mcpPresetById('github'), 'the GitHub preset');
 
-    const provider = new RegisteredAppOAuthClientProvider({
-      storage: makeCtx(new Database(':memory:')).storage, clientName: 'test-client', baseRedirectUrl: 'https://kinu.example/api/user/mcp/callback',
-      clientId: 'test-github-client-id', clientSecret: 'test-github-client-secret', scope: preset.scope,
-    });
+    server.bearer = 'gho_signed';
 
-    provider.serverId = 'srv';
+    try {
+      const added = await add(h, { presetId: 'github' });
+      const run = crypto.randomUUID();
+      const authUrl = new URL((await h.userDO.userMcp_beginConnect(owner, added.id, run)).authUrl);
+      // `offline_access` asks the server for a refresh token, which the SDK adds where the server lists it.
+      const scope = authUrl.searchParams.get('scope')?.split(' ').filter((each) => each !== 'offline_access');
 
-    expect(await auth(provider, {
-      serverUrl: preset.serverUrl, fetchFn,
-      resourceMetadataUrl: new URL('https://api.githubcopilot.com/.well-known/oauth-protected-resource/mcp/'),
-    })).toBe('REDIRECT');
-    // `offline_access` asks the server for a refresh token, which the SDK adds where the server lists it.
-    const asked = new URL(provider.authUrl ?? '').searchParams.get('scope')?.split(' ').filter((scope) => scope !== 'offline_access');
+      expect({ client: authUrl.searchParams.get('client_id'), scope, redirect: authUrl.searchParams.get('redirect_uri') })
+        .toEqual({ client: 'test-github-client-id', scope: preset.scope?.split(' '), redirect: 'https://kinu.example/api/user/mcp/callback' });
 
-    expect(asked).toEqual(preset.scope?.split(' '));
+      const callback = new URL('https://kinu.example/api/user/mcp/callback');
+
+      callback.searchParams.set('code', 'code-test');
+      callback.searchParams.set('state', authUrl.searchParams.get('state') ?? '');
+      callback.searchParams.set('iss', 'https://github.com/login/oauth');
+      expect(await h.userDO.userMcp_handleOAuthCallback(owner, callback.toString())).toEqual({ run, service: 'GitHub', error: null });
+
+      expect(issuer.exchanges.map((form) => [form.get('grant_type'), form.get('client_id'), form.get('client_secret')]))
+        .toEqual([['authorization_code', 'test-github-client-id', 'test-github-client-secret']]);
+      expect(asked.some((url) => url.includes('register'))).toBe(false);
+      expect((await h.userDO.userMcp_list(owner)).map((s) => [s.status, s.toolsCount])).toEqual([['connected', 1]]);
+      expect(server.calls).toEqual([]);
+    } finally {
+      await server.stop();
+      h.close();
+    }
   });
 });

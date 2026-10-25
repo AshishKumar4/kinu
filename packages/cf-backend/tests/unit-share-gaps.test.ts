@@ -14,7 +14,7 @@ import {
 import type { ControlCaller } from '@kinu.run/core/control-plane';
 import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent, until, workspaceFiles } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner, TEST_USER_ENV, type TestUserDO } from './helpers/user-do';
-import { resetRecordedMcp, seedConfiguredMcpServer, seedMcpTools } from './helpers/agents-sdk';
+import { mcpTestServer, storedMcpServer } from './helpers/mcp-server';
 import { ROOT_SLATE_CALLER, type GalleryListingSync } from '@kinu.run/core/slates';
 import { makeKv } from './helpers/kv';
 import { sharedPublicRoutes, sharedRoutes } from '../src/shared/routes';
@@ -82,12 +82,13 @@ interface World {
   readonly viewerUser: TestUserDO;
   /** Each workspace object the edge acquired, by name. */
   readonly acquired: string[];
-  readonly close: () => void;
+  readonly close: () => Promise<void>;
 }
 
 /** Each account by id, as every account's own `env.UserDO` resolves it: a share's card goes to the account its email names. */
 async function userWorld(
-  account: { readonly userId: string; readonly email: string }, workspace: string, kv: ReturnType<typeof makeKv>, accounts: ReadonlyMap<string, TestUserDO>,
+  account: { readonly userId: string; readonly email: string; readonly github: { readonly url: string; readonly tools: readonly JsonValue[] } },
+  workspace: string, kv: ReturnType<typeof makeKv>, accounts: ReadonlyMap<string, TestUserDO>,
 ): Promise<{ user: TestUserDO; agent: ActorHarness<HarnessOrchestratorAgent> }> {
   const { userId } = account;
   const user = createTestUserDO({ durableObjectId: userId, accounts: (id) => present(accounts.get(id), `the account ${id}`).userDO });
@@ -102,26 +103,31 @@ async function userWorld(
   const caller = await testOwner();
 
   await user.userDO.ensureProfile(caller, account.email);
-  await user.userDO.userMcp_list(caller);
-  seedConfiguredMcpServer(user.sql, 'connection-id', { name: 'github', url: 'https://github.example/sse', transport: 'auto' });
+  storedMcpServer(user.sql, { id: 'connection-id', name: 'github', url: account.github.url, tools: account.github.tools });
 
   return { user, agent };
 }
 
 /** The `OrchestratorAgent`/`UserDO` stubs dispatch on name, as `workspaceOwner` and `claimOwnedWorkspace` resolve in production. */
 async function twoUserWorld(): Promise<World> {
-  resetRecordedMcp();
   // One KV behind the edge route and every workspace object, as AUTH_KV in production.
   const kv = makeKv();
   const users = new Map<string, TestUserDO>();
-  const ownerSide = await userWorld({ userId: OWNER_ID, email: 'owner@example.test' }, 'issues-owner', kv, users);
+  const server = mcpTestServer();
 
-  // Seeded on the newest MCP manager, so before the viewer's account builds its own: these are the owner's tools.
-  seedMcpTools('connection-id', [
-    { name: 'read_issue', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } },
-    { name: 'create_issue', inputSchema: { type: 'object' } },
-  ]);
-  const viewerSide = await userWorld({ userId: VIEWER_ID, email: 'pat@example.test' }, 'viewer-home', kv, users);
+  // The owner's GitHub lists these tools; the viewer's, of the same name, lists none.
+  const ownerSide = await userWorld({
+    userId: OWNER_ID, email: 'owner@example.test',
+    github: {
+      url: server.url,
+      tools: [
+        { name: 'read_issue', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } },
+        { name: 'create_issue', inputSchema: { type: 'object' } },
+      ],
+    },
+  }, 'issues-owner', kv, users);
+
+  const viewerSide = await userWorld({ userId: VIEWER_ID, email: 'pat@example.test', github: { url: server.url, tools: [] } }, 'viewer-home', kv, users);
 
   const agents = new Map<string, HarnessOrchestratorAgent>([
     ['issues-owner', ownerSide.agent.agent],
@@ -161,7 +167,7 @@ async function twoUserWorld(): Promise<World> {
 
   return {
     env, owner: ownerSide.agent, viewer: viewerSide.agent, ownerUser: ownerSide.user, viewerUser: viewerSide.user, acquired,
-    close: () => { ownerSide.user.close(); viewerSide.user.close(); resetRecordedMcp(); },
+    close: async () => { ownerSide.user.close(); viewerSide.user.close(); await server.stop(); },
   };
 }
 
@@ -171,12 +177,12 @@ const sharedRequest = (env: Env, identity: AuthIdentity, request: Request) =>
 const jsonBody = async <Schema extends v.GenericSchema>(res: Response, schema: Schema): Promise<v.InferOutput<Schema>> =>
   v.parse(schema, await res.json());
 
-const cleanups: (() => void)[] = [];
+const cleanups: (() => void | Promise<void>)[] = [];
 
-afterEach(() => {
+afterEach(async () => {
   setSystemTime();
 
-  for (const cleanup of cleanups.splice(0)) cleanup();
+  for (const cleanup of cleanups.splice(0)) await cleanup();
 });
 
 const sharePublic = (world: World, visibility: 'users' | 'public', fork?: boolean) => world.owner.agent.slate({

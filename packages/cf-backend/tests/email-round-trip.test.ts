@@ -78,7 +78,7 @@ test('an email opens a turn whose answer threads back to the sender; a refused s
   const sent: Sent[] = [];
   let refusing = false;
 
-  const userPlane: RecordedUserPlaneCalls = { warmConnections: [], failWarm: null, titles: [], profile: { email: 'owner@example.com' } };
+  const userPlane: RecordedUserPlaneCalls = { titles: [], profile: { email: 'owner@example.com' } };
 
   /** The `send_email` binding: each message it is handed, read at that boundary. */
   async function send(message: EmailMessage): Promise<EmailSendResult>;

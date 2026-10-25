@@ -59,7 +59,7 @@ const { TEST_CREDENTIAL_ENCRYPTION_KEY } = await import('./helpers/user-do');
 /** A workspace with a container and previews, whose sandbox the person has used: an idle sandbox is not asked. */
 async function usedSandbox() {
   readiness = async () => ({ kind: 'restored' });
-  const userPlane: RecordedUserPlaneCalls = { warmConnections: [], failWarm: null, titles: [] };
+  const userPlane: RecordedUserPlaneCalls = { titles: [] };
   const world = { container: true };
 
   const { agent } = orchestratorHarness(userPlane, world, {

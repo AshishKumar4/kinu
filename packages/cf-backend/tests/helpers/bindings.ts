@@ -322,7 +322,6 @@ export function userAccount<Built extends Partial<UserRoutesAuthority>>(
     getProfileCatalog: refuse('getProfileCatalog'),
     getWorkspaceProfileCatalog: refuse('getWorkspaceProfileCatalog'),
     putProfileCatalog: refuse('putProfileCatalog'),
-    userMcp_warmConnections: refuse('userMcp_warmConnections'),
     accountMemory_view: refuse('accountMemory_view'),
     accountMemory_decide: refuse('accountMemory_decide'),
     accountMemory_put: refuse('accountMemory_put'),

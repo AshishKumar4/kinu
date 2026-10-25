@@ -26,7 +26,6 @@ function pictureRoute() {
 
   const stub = userAccount({
     async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
-    async userMcp_warmConnections() { return { servers: 0 }; },
     async hasWorkspace(_caller: UserCaller, name: string) { return name === 'ledger'; },
   });
 

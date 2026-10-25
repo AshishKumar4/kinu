@@ -4,7 +4,7 @@ import { AwaitedList } from '@kinu.run/test-utils';
 import { boundAsTheObjectBinds } from './platform-context';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import type { AgentContext } from 'agents';
-import { joinHarnessFibers, mockAgentsSdk, rememberMcpManager, inheritedMcpManager } from './agents-sdk';
+import { joinHarnessFibers, mockAgentsSdk } from './agents-sdk';
 import { sha256Hex, DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES, deviceIdFromSocket, type WorkspaceEntry } from '@kinu.run/core';
 import { isJsonObject } from '../../../core/src/utils/json';
 import { ownerCaller, type UserCaller } from '@kinu.run/core';
@@ -802,7 +802,6 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   // credential key and OrchestratorAgent binding in this harness.
   const userEnv = partialEnv as Env;
   const userDO = options.drive === undefined ? new UserDO(agentContext, userEnv) : new DriveHarnessUserDO(agentContext, userEnv, options.drive);
-  rememberMcpManager(inheritedMcpManager(userDO));
   hub.current = userDO;
 
   // The harness's sockets skip the connect, which keeps the served build its HELLO is pushed against (the

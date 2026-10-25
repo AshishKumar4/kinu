@@ -157,16 +157,29 @@ export function initUserTables(sql: SqlExec): void {
     )
   `);
 
-  // Kinu's half of each MCP server: what the Agents SDK cannot hold. Its name, endpoint and transport live in the SDK's
-  // own catalog (`cf_agents_mcp_servers`, read through `listServers`), under the same id; OAuth tokens live in separate
-  // DO storage keys. `headers` is sealed at rest like a credential.
+  // Each MCP server of the account, whole: a call after a wake builds its client from this row alone. Its OAuth login is
+  // kept apart, sealed, under its id (`mcpOAuthStorage`); `headers` is sealed at rest like a credential.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_mcp_servers (
-      id            TEXT PRIMARY KEY,
-      headers       TEXT,
-      allowed_tools TEXT,
+      id              TEXT PRIMARY KEY,
+      name            TEXT NOT NULL,
+      server_url      TEXT NOT NULL,
+      -- 'auto', 'sse' or 'streamable-http', as the server was added.
+      transport       TEXT NOT NULL,
+      headers         TEXT,
+      allowed_tools   TEXT,
       -- The MCP_PRESETS entry the server was added from; null for a custom server.
-      preset_id     TEXT
+      preset_id       TEXT,
+      -- Where its sign-ins return, and the OAuth client a dynamic registration gave it.
+      callback_url    TEXT NOT NULL,
+      oauth_client_id TEXT,
+      -- JSON: the transport and protocol era its last connection found, and the session it may resume.
+      session         TEXT,
+      -- 'connected', 'needs_sign_in' or 'failed', with why, from the last time it was reached.
+      status          TEXT NOT NULL,
+      status_error    TEXT,
+      -- JSON: the tools its last listing gave, and the entries that listing refused.
+      tools           TEXT
     )
   `);
 

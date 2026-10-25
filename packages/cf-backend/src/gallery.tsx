@@ -284,12 +284,12 @@ const GalleryMcpAddSchema = v.object({
 const GALLERY_CUSTOM_MCP: readonly McpServerSummary[] = [
   {
     id: "srv-github", name: "github", serverUrl: "https://mcp.github.example/v1",
-    transport: "auto", status: "ready", toolsCount: 14, allowedTools: null,
+    transport: "auto", status: "connected", toolsCount: 14, allowedTools: null,
     signIn: false, error: null, presetId: null,
   },
   {
     id: "srv-linear", name: "linear", serverUrl: "https://mcp.linear.app/sse",
-    transport: "sse", status: "authenticating", toolsCount: 0,
+    transport: "sse", status: "needs_sign_in", toolsCount: 0,
     allowedTools: ["create_issue"], signIn: true,
     error: null, presetId: null,
   },
@@ -316,12 +316,12 @@ if (mcpPresetVariant === "connected") {
   galleryMcpRows = [
     {
       id: "srv-preset-github", name: "GitHub", serverUrl: "https://api.githubcopilot.com/mcp/",
-      transport: "streamable-http", status: "ready", toolsCount: 21, allowedTools: null,
+      transport: "streamable-http", status: "connected", toolsCount: 21, allowedTools: null,
       signIn: false, error: null, presetId: "github",
     },
     {
       id: "srv-preset-cloudflare", name: "Cloudflare", serverUrl: "https://mcp.cloudflare.com/mcp",
-      transport: "streamable-http", status: "authenticating", toolsCount: 0, allowedTools: null,
+      transport: "streamable-http", status: "needs_sign_in", toolsCount: 0, allowedTools: null,
       signIn: true, error: null,
       presetId: "cloudflare",
     },
@@ -775,9 +775,6 @@ function mcpServersFixture(path: string, method: string, body: BodyInit | null |
 
     const id = `srv-add-${String(galleryMcpRows.length + 1)}`;
 
-    // On this origin, so a tab sent to the sign-in loads nothing from a provider.
-    const authUrl = signIn ? `${location.origin}/gallery-sign-in/${id}` : null;
-
     // Exposed so the gate can check the posted payload.
     localStorage.setItem("gallery-mcp-add", JSON.stringify(addBody.output));
 
@@ -785,14 +782,14 @@ function mcpServersFixture(path: string, method: string, body: BodyInit | null |
       id, name,
       serverUrl: preset?.serverUrl ?? addBody.output.serverUrl ?? "",
       transport: preset?.transport ?? addBody.output.transport ?? "auto",
-      status: authUrl === null ? "ready" : "authenticating",
-      toolsCount: authUrl === null ? 21 : 0,
+      status: signIn ? "needs_sign_in" : "connected",
+      toolsCount: signIn ? 0 : 21,
       allowedTools: addBody.output.allowedTools ?? null,
-      signIn: authUrl !== null, error: null,
+      signIn, error: null,
       presetId: preset?.id ?? null,
     }];
 
-    return fixtureJson({ id, authUrl }, 201);
+    return fixtureJson({ id, signIn }, 201);
   }
 
   if (path === "/api/user/mcp/servers") {

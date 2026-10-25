@@ -9,8 +9,11 @@ const MCP_TRANSPORTS = ['auto', 'sse', 'streamable-http'] as const;
 
 export type McpTransport = (typeof MCP_TRANSPORTS)[number];
 
-/** Re-derived at read time from `MCPClientManager.mcpConnections[id].connectionState`. */
-const MCP_CONNECTION_STATUSES = ['connecting', 'authenticating', 'connected', 'ready', 'discovering', 'failed', 'unknown'] as const;
+/** What a server's row says of the last time it was reached: it answered, it asks for a sign-in its login cannot
+ *  renew, or it could not be connected to. Nothing is ever on its way: a connection is made when a call needs it. */
+const MCP_CONNECTION_STATUSES = ['connected', 'needs_sign_in', 'failed'] as const;
+
+export const McpConnectionStatusSchema = v.picklist(MCP_CONNECTION_STATUSES);
 
 export type McpConnectionStatus = (typeof MCP_CONNECTION_STATUSES)[number];
 
@@ -21,7 +24,7 @@ export const McpServerSummarySchema = v.object({
   name: v.string(),
   serverUrl: v.string(),
   transport: v.picklist(MCP_TRANSPORTS),
-  status: v.picklist(MCP_CONNECTION_STATUSES),
+  status: McpConnectionStatusSchema,
   error: v.nullable(v.string()),
   toolsCount: v.number(),
   /** It signs in with OAuth and is not connected: a sign-in is begun for a run of the page's own

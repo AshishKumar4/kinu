@@ -1,6 +1,7 @@
 // Credential store encryption at rest: sealed envelopes bound to their credential and deployment key,
 // canonical encodings, and no key is a refusal, never a plaintext fallback.
 import { testOwner } from './helpers/user-do';
+import { storedMcpServer } from './helpers/mcp-server';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
@@ -197,7 +198,8 @@ describe("only an envelope sealed under this deployment's key opens", () => {
       `INSERT INTO user_credentials (key, kind, value) VALUES (?, ?, ?)`,
       'openai.bearer', 'bearer', plaintext,
     );
-    sqlExec(first.db).exec(`INSERT INTO user_mcp_servers (id, headers, allowed_tools) VALUES (?, ?, NULL)`, 'planted', plainHeaders);
+    storedMcpServer(sqlExec(first.db), { id: 'planted', name: 'planted', url: 'https://planted.example/mcp', tools: [] });
+    sqlExec(first.db).exec(`UPDATE user_mcp_servers SET headers = ? WHERE id = 'planted'`, plainHeaders);
 
     await expect(first.userDO.getAuthHeaders(await testOwner(), 'openai.bearer'))
       .rejects.toThrow('opening the stored credential openai.bearer');

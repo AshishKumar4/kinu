@@ -162,7 +162,7 @@ export function PresetRow({ preset, server, appConfigured, onChanged, onConnecte
     try {
       const result = await addMcpServer(input);
 
-      if (result.authUrl && connect !== undefined) {
+      if (result.signIn && connect !== undefined) {
         const failed = await signInMcpServer(connect, result.id, ended);
 
         if (failed !== null) setErr(failed);

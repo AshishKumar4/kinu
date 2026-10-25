@@ -149,7 +149,7 @@ describe('a head forks its parent workspace', () => {
 
   test('an owner vault that cannot be read does not stop the container being configured: only a secret needs it', async () => {
     const { rt } = await hostedHead({}, 'head-vault', {
-      warmConnections: [], failWarm: null, titles: [], failVault: new Error('the owner object reset mid-call'),
+      titles: [], failVault: new Error('the owner object reset mid-call'),
     });
 
     const handle = rt.sandboxHandle;

@@ -1640,21 +1640,15 @@ export async function fireAlarm(agent: HarnessOrchestratorAgent): Promise<void> 
 
 /** A recording owner-UserDO binding, in place of the refusing default. */
 export interface RecordedUserPlaneCalls {
-  warmConnections: UserCaller[];
   /** The account's settings revision a turn's open reads; unchanged (0, 0) unless a suite moves it. */
   settingsRevision?: { readonly catalog: number; readonly credentials: number };
   /** The account's active workspaces, this one among them, as the peers tool reads them. */
   workspaces?: readonly { readonly name: string; readonly displayName: string }[];
-  /** Set to make `userMcp_warmConnections` reject. */
-  failWarm: Error | null;
   /** Set to make `userMcp_toolDescriptors` reject with this error; unset, the read is unreachable. */
   failDescriptors?: Error;
-  /** The owner's MCP tools, served as the UserDO serves them; each call is recorded and answered by `answerMcp`.
-   *  `cold`: the UserDO isolate holds no connection until a warm succeeds, and until then names the server
-   *  unavailable as `user/mcp-servers.ts` does, so only a warmed turn is offered its tools. */
+  /** The owner's MCP tools, served as the UserDO serves them; each call is recorded and answered by `answerMcp`. */
   mcp?: {
     readonly descriptors: readonly SerializableToolDescriptor[]; readonly calls: Array<{ tool: string; args: JsonValue }>; readonly answer: JsonValue;
-    cold?: boolean;
   };
   /** How many times the object asked for its tool descriptors. */
   descriptorReads?: number;
@@ -1793,23 +1787,8 @@ export function makeEnv(
           },
           listActiveWorkspaces: async () => (userPlane?.workspaces ?? []).map((workspace) => ({ ...workspace, createdAt: 1, lastVisited: 1, nameOrigin: 'user' as const })),
           hasWorkspace: async (_caller: UserCaller, name: string) => (userPlane?.workspaces ?? []).some((workspace) => workspace.name === name),
-          userMcp_warmConnections: async (caller: UserCaller): Promise<{ servers: number }> => {
-            userPlane?.warmConnections.push(caller);
-
-            if (userPlane?.failWarm) throw userPlane.failWarm;
-
-            if (userPlane?.mcp !== undefined) userPlane.mcp.cold = false;
-
-            return { servers: 1 };
-          },
           userMcp_toolDescriptors: async (): Promise<McpToolSurface> => {
             if (userPlane) userPlane.descriptorReads = (userPlane.descriptorReads ?? 0) + 1;
-
-            if (userPlane?.mcp?.cold === true) {
-              const servers = [...new Set(userPlane.mcp.descriptors.map((tool) => tool.serverName))];
-
-              return { descriptors: [], unavailable: servers.map((server) => ({ server, reason: 'not connected when this turn opened' })) };
-            }
 
             if (userPlane?.mcp !== undefined && userPlane.failDescriptors === undefined) {
               return { descriptors: [...userPlane.mcp.descriptors], unavailable: [] };
