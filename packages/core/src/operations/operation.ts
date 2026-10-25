@@ -160,7 +160,9 @@ function inputRefusal(op: Operation, input: JsonValue, issues: readonly v.BaseIs
   const said = [...unknown.map((field) => retiredField(operationId(op), field) ?? `unknown field "${field}"`), ...issues.flatMap((issue) => {
     const field = v.getDotPath(issue) ?? '';
 
-    if (issue.type === 'strict_object' && issue.expected === 'never') return [];
+    // A key no schema takes: a top-level one is named above, with its successor where it was retired; one inside a field
+    // is named here by its path, or the refusal names nothing the caller can mend.
+    if (issue.type === 'strict_object' && issue.expected === 'never') return field.includes('.') ? [`unknown field "${field}"`] : [];
 
     return issue.received === 'undefined' ? [`"${field}" is required`] : [`"${field}": ${issue.message}`];
   })];
