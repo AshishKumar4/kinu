@@ -11,7 +11,7 @@ import { type ActorHandle, type SleepTimeUpdate, type CheckpointTurnMeta, type E
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { answeredAs, scratchDir, scratchPath, scriptedTurnModel, type ScriptedTurnOptions, type ScriptedTurnResult, workspaceDatabase } from '@kinu.run/test-utils';
 import {
-  actorOverWorkspace, agentHistory, mainDatabase, orchestratorHarness, scriptedSleepTime, sentTurn, workspaceFiles, workspaceMainActor,
+  actorOverWorkspace, agentHistory, mainDatabase, memoryFiles, orchestratorHarness, scriptedSleepTime, sentTurn, workspaceFiles, workspaceMainActor,
 } from '../helpers/actor-harness';
 import { deviceHarness, WORKSPACE } from '../helpers/device-harness';
 import { pcAgentDaemon } from '../helpers/pc-agent-daemon';
@@ -188,7 +188,7 @@ async function cloudflare(opens: BackendOpening): Promise<SharedBackend> {
     sql: wrapDatabase(db).sql,
     actor,
     files: workspaceFiles(agent),
-    memoryFiles: agent.observeRuntime().agentStateVfs,
+    memoryFiles: memoryFiles(agent),
     history: main.history,
     chat: { sql: wrapDatabase(mainDatabase(harness)).sql, actor: main.actor },
     snapshot: (dir, turn) => daemon.snapshot({ agent: WORKSPACE, dir, ...turn }),

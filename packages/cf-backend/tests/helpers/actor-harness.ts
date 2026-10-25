@@ -806,6 +806,11 @@ export function workspaceFiles(agent: HarnessOrchestratorAgent): VFS {
   return agent.observeFiles();
 }
 
+/** The plane the workspace's memory reads and writes its notes on (`AgentRuntime.agentStateVfs`). */
+export function memoryFiles(agent: HarnessOrchestratorAgent): VFS {
+  return agent.observeRuntime().agentStateVfs;
+}
+
 /** A command in the workspace's own shell, as a test seeds or reads its state. */
 export function runInWorkspaceShell(agent: HarnessOrchestratorAgent, command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return agent.runInWorkspace(command);
