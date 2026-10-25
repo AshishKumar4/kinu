@@ -75,6 +75,7 @@ import type { AccountSpend, SlateSurfaceValue } from '@kinu.run/core';
 import { ShareCardJobs, type HeldShare, type ReceivedShare } from './share-cards';
 import { EvalLeaseJobs } from './eval-leases';
 import { WorkspaceDeletionJobs } from './workspace-deletions';
+import { ACCOUNT_DELETING_KEY, AccountDeletionJob } from './account-deletion';
 import { accountIdFor } from '../auth/store';
 import type { SqlRow, UserObjectHost } from './user-host';
 
@@ -98,6 +99,11 @@ export interface AccountSettingsRevision {
 
 /** When the account was deleted: the one thing its object keeps after, until a sign-in makes it an account again. */
 const ACCOUNT_DELETED_KEY = 'account:deleted-at';
+
+const AccountDeletingSchema = v.object({ ownerUserId: v.string() });
+
+/** What the account held outside its own storage is gone: the next alarm destroys the account itself. */
+const ACCOUNT_CLEARED_KEY = 'account:cleared';
 
 
 /** The workspaces whose push watchers are parked on the GitHub connection, to resume once it is connected again. */
@@ -131,6 +137,7 @@ export class UserDO extends Agent<Env> {
     this.lifecycle.use(this.shareCards);
     this.lifecycle.use(this.evalLeases);
     this.lifecycle.use(this.workspaceDeletions);
+    this.lifecycle.use(this.accountDeletion);
     startBeforeRpc(this, USER_DO_STARTED_RPC, () => gate.ready());
     // A DO is its own isolate, so the Worker's diagnostics sink must be installed here too.
     installAnalyticsDiagnostics(this.env);
@@ -152,6 +159,7 @@ export class UserDO extends Agent<Env> {
     if (this.storageRefusal !== undefined) return;
     this.mcpServers.start();
     this.workspaceDeletions.adoptMarked();
+    this.accountDeletion.adopt();
   }
 
   private readonly host: UserObjectHost = {
@@ -219,7 +227,16 @@ export class UserDO extends Agent<Env> {
 
   private readonly workspaceDeletions = new WorkspaceDeletionJobs({
     marked: () => this.workspaces.markedForDeletion(),
-    tearDown: (workspace) => this.workspaces.tearDownWorkspace(workspace, this.name),
+    tearDown: async (workspace) => {
+      await this.workspaces.tearDownWorkspace(workspace, this.name);
+      await this.accountDeletion.due();
+    },
+  });
+
+  private readonly accountDeletion = new AccountDeletionJob({
+    marked: () => this.ctx.storage.kv.get(ACCOUNT_DELETING_KEY) !== undefined,
+    workspacesLeft: () => this.sqlx<{ n: number }>(`SELECT COUNT(*) AS n FROM user_workspaces`)[0]?.n ?? 0,
+    clear: () => this.clearAccountElsewhere(),
   });
 
   private readonly workspaces = new UserWorkspaces({
@@ -770,6 +787,11 @@ export class UserDO extends Agent<Env> {
   }
 
   registerBrowserSession(caller: UserCaller, tokenHash: string, expiresAt: number, identity: BrowserSessionIdentity & { credentialGeneration?: number }): Promise<void> {
+    // A sign-in while its deletion runs would open an account about to be gone.
+    if (this.ctx.storage.kv.get(ACCOUNT_DELETING_KEY) !== undefined) {
+      return settle(Effect.fail(new KinuError('unavailable', 'This account is being deleted. Sign in again once it is gone, in a minute or two.')));
+    }
+
     return this.sessions.registerBrowserSession(caller, tokenHash, expiresAt, identity);
   }
 
@@ -1380,8 +1402,15 @@ export class UserDO extends Agent<Env> {
     .notFound(async (c) => super.fetch(c.req.raw))
     .onError(rethrow);
 
-  /** Each alarm tears down at most one workspace (`WorkspaceDeletionJobs.alarmBegins`). */
+  /** Each alarm tears down at most one workspace (`WorkspaceDeletionJobs.alarmBegins`); a cleared account is destroyed
+   *  before any job runs. */
   override async alarm(): Promise<void> {
+    if (this.ctx.storage.kv.get(ACCOUNT_CLEARED_KEY) !== undefined) {
+      await this.destroyAccount();
+
+      return;
+    }
+
     this.workspaceDeletions.alarmBegins();
     await super.alarm();
   }
@@ -1594,6 +1623,11 @@ export class UserDO extends Agent<Env> {
    * mail and mail names, its Drive, its place in the fleet's index and Gallery, its built-in sign-in, then this object.
    * A step that fails stops it before this object goes, so a retry still has every index here; each step is idempotent.
    */
+  /**
+   * The person's delete: answered once it is durable. Its shares are withdrawn first, so no card lands after; then the
+   * account and each workspace are marked, and each workspace's own job tears it down while the person is signed out.
+   * The account's job finishes the rest once none is left (`AccountDeletionJob`).
+   */
   async deleteAccount(caller: UserCaller, ownerUserId: string): Promise<{ ok: true; workspaces: number }> {
     await this.requireTier(caller, 'account');
 
@@ -1607,24 +1641,24 @@ export class UserDO extends Agent<Env> {
 
     await forgetSharesReceived(this.env, person, caller, cards.map((card) => ({ ownerUserId: card.owner_user_id, workspace: card.workspace })));
 
-    // By name: the first teardown refused stops the sweep, so which went first must not be the query planner's choice.
-    const workspaces = this.sqlx<{ name: string }>(`SELECT name FROM user_workspaces ORDER BY name`);
+    const workspaces = this.workspaces.markEveryForDeletion(() => { this.ctx.storage.kv.put(ACCOUNT_DELETING_KEY, { ownerUserId }); });
 
-    for (const { name } of workspaces) {
-      await this.workspaces.tearDownWorkspace(name, ownerUserId);
-    }
+    for (const name of workspaces) await this.workspaceDeletions.dueNow(name);
+    await this.accountDeletion.due();
+    await this.sessions.endEverySession(caller);
 
-    const devices = this.sqlx<{ id: string }>(`SELECT id FROM user_devices WHERE revoked_at IS NULL`);
+    return { ok: true, workspaces: workspaces.length };
+  }
 
-    for (const { id } of devices) {
-      await this.devices.revokeDevice(caller, id);
-    }
+  /** What a marked account holds outside its own storage, once its workspaces are gone; each step reads what is left. */
+  private async clearAccountElsewhere(): Promise<void> {
+    const { ownerUserId } = v.parse(AccountDeletingSchema, this.ctx.storage.kv.get(ACCOUNT_DELETING_KEY));
+    const caller = await ownerCaller(this.env);
+    const person = { userId: ownerUserId, email: (this.sqlx<{ email: string }>(`SELECT email FROM user_profile WHERE id = 1`)[0]?.email ?? '').trim().toLowerCase() };
 
-    const servers = this.sqlx<{ id: string }>(`SELECT id FROM user_mcp_servers`);
+    for (const { id } of this.sqlx<{ id: string }>(`SELECT id FROM user_devices WHERE revoked_at IS NULL`)) await this.devices.revokeDevice(caller, id);
 
-    for (const { id } of servers) {
-      await this.mcpServers.userMcp_remove(caller, id);
-    }
+    for (const { id } of this.sqlx<{ id: string }>(`SELECT id FROM user_mcp_servers`)) await this.mcpServers.userMcp_remove(caller, id);
 
     // Each grant revoked at its provider where it can be; a provider that refuses is logged, and the grant goes here.
     for (const { key } of this.sqlx<{ key: string }>(`SELECT key FROM user_credentials`)) await this.credentials.disconnectCredential(key, true);
@@ -1638,8 +1672,13 @@ export class UserDO extends Agent<Env> {
       await controlPlaneStub({ ControlPlaneDO }).forgetUser(await internalCaller(this.env), person);
     }
 
-    if (builtinSignInOn(this.env)) await objectNamed(this.env.UserDO, BUILTIN_ACCOUNTS_OBJECT).builtinRemoveAccount(await ownerCaller(this.env), person);
+    if (builtinSignInOn(this.env)) await objectNamed(this.env.UserDO, BUILTIN_ACCOUNTS_OBJECT).builtinRemoveAccount(caller, person);
 
+    this.ctx.storage.kv.put(ACCOUNT_CLEARED_KEY, true);
+  }
+
+  /** The account itself, at an alarm's start: outside the job runner, whose own table its destroy drops. */
+  private async destroyAccount(): Promise<void> {
     await this.destroy();
     // The isolate abort is a tick away, and a request can land in that tick: it meets the tables made
     // again, empty, and answers as the new account. They are this build's, so they carry its stamp. The
@@ -1647,8 +1686,6 @@ export class UserDO extends Agent<Env> {
     this.initTables();
     writeStamp(durableStamps(this.ctx.storage.kv), 'account');
     this.ctx.storage.kv.put(ACCOUNT_DELETED_KEY, Date.now());
-
-    return { ok: true, workspaces: workspaces.length };
   }
 
   userMcp_githubRefresh(caller: UserCaller, ask: GitHubRefreshAsk): Promise<GitHubRefreshAnswer> {

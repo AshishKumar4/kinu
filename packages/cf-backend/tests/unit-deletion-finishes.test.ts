@@ -7,9 +7,9 @@
 import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { sandboxIdForWorkspace } from '@kinu.run/core';
-import { setDiagnosticsSink } from '@kinu.run/core/obs';
+import { renderThrownChain, setDiagnosticsSink } from '@kinu.run/core/obs';
 import { createRecordingLogger, type RecordingLogger } from '@kinu.run/test-utils';
-import { createTestUserDO, testOwner, type TestUserDO } from './helpers/user-do';
+import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
 import { agentWakes, gatewayWorkspace, orchestratorHarness, until, wakeForDelegatedTask, workspaceMainActor, type StartedHarness } from './helpers/actor-harness';
 import { memoryBucket } from './helpers/r2';
 import { pictureKey } from '../src/slates/pictures';
@@ -230,4 +230,57 @@ test("a burst of a person's deletes is torn down one per alarm, each alarm the n
 
   expect({ torn, destroyed: [...user.destroyedWorkspaces].sort(), jobs: user.db.query<{ id: string }, []>("SELECT id FROM cf_agents_jobs WHERE id LIKE 'workspace-deletion:%'").all() })
     .toEqual({ torn: [1, 2, 3], destroyed: ['archive', 'drafts', 'ledger'], jobs: [] });
+});
+
+// An account's delete writes its intent and every workspace's mark in one transaction, so a reset at any later point
+// leaves an account the next activation finishes: each workspace, then the account (review, 2026-10-25: a reset between
+// per-workspace marks left one unmarked, and the account's job would never run).
+test("an account's delete reset after its write is finished by the next activation, every workspace and then itself", async () => {
+  const storage = new Database(':memory:');
+  // The deployment's sign-in directory answers beside the account; it has no share recipients here.
+  const account = () => createTestUserDO({ durableObjectId: OWNER, storage, accounts: (id) => { throw new Error(`no share recipient ${id}`); } });
+  const first = account();
+  const owner = await testOwner();
+
+  for (const name of ['ledger', 'drafts']) await first.userDO.registerWorkspace(owner, name);
+
+  expect(await first.userDO.deleteAccount(owner, OWNER)).toEqual({ ok: true, workspaces: 2 });
+  // The first activation ends here, none of its jobs run: the answer came with nothing torn down.
+  expect({ destroyed: first.destroyedWorkspaces, marked: first.db.query<{ name: string }, []>('SELECT name FROM user_workspaces WHERE delete_pending = 1 ORDER BY name').all() })
+    .toEqual({ destroyed: [], marked: [{ name: 'drafts' }, { name: 'ledger' }] });
+
+  const second = account();
+
+  // An alarm a workspace, one for the account's clearing, one that destroys it; its abort comes a tick after.
+  for (let lap = 0; lap < 4 && second.accountDeleted.length < 2; lap += 1) await second.userDO.alarm();
+  await second.userDO.alarm();
+  await second.abortRaised();
+
+  expect({ destroyed: [...second.destroyedWorkspaces].sort(), reached: [...second.accountDeleted].sort(), aborted: second.aborted })
+    .toEqual({ destroyed: ['drafts', 'ledger'], reached: [`mailbox:${OWNER}`, `sign-in:${OWNER}`], aborted: ['destroyed'] });
+});
+
+// A workspace still holds its capability while its account is being deleted. One it hires then would be a row the delete
+// never marked, so the account's job would wait on it forever and the person could never sign in again (review,
+// 2026-10-25). The account admits nothing new once its deletion is marked, and the deletion still lands.
+test("a workspace that hires another while its account is being deleted is refused, and the deletion lands", async () => {
+  const harness = createTestUserDO({ durableObjectId: OWNER, accounts: (id) => { throw new Error(`no share recipient ${id}`); } });
+  const owner = await testOwner();
+  const live = { workspaceToken: await provisionTestWorkspace(harness, 'ledger', 'Ledger') };
+
+  expect(await harness.userDO.deleteAccount(owner, OWNER)).toEqual({ ok: true, workspaces: 1 });
+
+  const hired = await Promise.allSettled([
+    harness.userDO.registerWorkspace(live, 'ledger-helper'),
+    harness.userDO.reserveWorkspace(live, 'ledger-fork', 'Ledger fork'),
+  ]);
+
+  expect(hired.map((each) => (each.status === 'rejected' ? renderThrownChain({ cause: each.reason }) : 'admitted')))
+    .toEqual([expect.stringContaining('This account is being deleted.'), expect.stringContaining('This account is being deleted.')]);
+
+  for (let lap = 0; lap < 4 && harness.accountDeleted.length < 2; lap += 1) await harness.userDO.alarm();
+  await harness.userDO.alarm();
+  await harness.abortRaised();
+
+  expect({ destroyed: harness.destroyedWorkspaces, aborted: harness.aborted }).toEqual({ destroyed: ['ledger'], aborted: ['destroyed'] });
 });

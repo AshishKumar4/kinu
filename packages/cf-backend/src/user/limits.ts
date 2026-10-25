@@ -4,6 +4,7 @@
  */
 import { Effect } from 'effect';
 import { attempt, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
+import { ACCOUNT_DELETING_KEY } from './account-deletion';
 import {
   accountClassOf, admitComputerStart, admitPlatformTurn, admitStoredBytes, admitWorkspace, AccountLimitsStore, dayOf,
   freeTierOf, isLimited, limitReadings, startSize, limitsReport, monthOf, type AccountClass, type AccountLimits, type AccountUse, type Admission,
@@ -101,6 +102,9 @@ export class UserLimits {
       const { suspended } = this.store.standing();
 
       if (suspended !== null) return yield* new KinuError('denied', `This account is suspended: ${suspended.reason}`);
+
+      // Read in the asker's own turn, as its write is: a workspace hired after the delete's mark would never be torn down.
+      if (this.host.ctx.storage.kv.get(ACCOUNT_DELETING_KEY) !== undefined) return yield* new KinuError('denied', 'This account is being deleted.');
       const tier = yield* this.tier();
 
       if (tier === null) return;
