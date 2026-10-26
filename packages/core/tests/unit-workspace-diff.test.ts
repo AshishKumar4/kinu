@@ -15,10 +15,11 @@ import {
   type WorkspaceDiffResult,
   bodyMaxBytes,
 } from '../src/read-models/workspace-diff';
-import type { ExecutorProvider, ExecutionRouter } from '../src/execution/types';
+import { commandTool, type ExecutorProvider, type ExecutionRouter } from '../src/execution/types';
 import { MAX_LINES_PER_FILE } from '../src/vfs/diff';
 import { createTestRuntime } from './helpers';
-import { commandResultAt, type CommandResult } from '../src/execution/exec-result';
+import { CommandResultSchema, commandResultAt, type CommandResult } from '../src/execution/exec-result';
+import { DefaultExecutionRouter } from '../src/execution/router';
 import { agentCred, provisionAgentHome, actorHomeName } from '../src/vfs/agent-home';
 import { withMountTable } from '../src/vfs/mounts';
 import type { WorkspaceBundle } from '../src/vfs/nimbus-workspace';
@@ -53,29 +54,35 @@ const ONE_MILLISECOND = Date.parse('2026-09-24T00:00:00.000Z');
 
 /** A sandbox executor whose shell is `/bin/sh` in `cwd` (dash here, as the CLI runs it), in the clean git environment:
  *  under a git hook the inherited GIT_DIR points at the developer's checkout. */
-function shellIn(cwd: string): ExecutionRouter {
-  const provider: ExecutorProvider = {
-    name: 'computer', kind: 'computer', capabilities: new Set(['git']), filesOwner: 'agent',
+/** A machine whose shell runs in `cwd`, its files the agent's or, on a connected one, the owner's. */
+function shellProvider(cwd: string, filesOwner: ExecutorProvider['filesOwner'] = 'agent'): ExecutorProvider {
+  return {
+    name: 'computer', kind: 'computer', capabilities: new Set(['git']), filesOwner,
     homeDir: async () => '/workspace',
     isAvailable: () => true, connect: async () => {}, disconnect: async () => {},
     tools: {
-      exec: {
-        description: 'test shell',
-        execute: async (...args) => {
-          const [command] = v.parse(v.tuple([v.string()]), args);
-          const result = await runToExit(['/bin/sh', '-lc', command], { cwd, env: gitEnv() });
+      // A command member as a real machine's is: it says what a call runs, which the approval gate reviews.
+      exec: commandTool('test shell', (args) => {
+        const [command] = v.parse(v.tuple([v.string()]), args);
 
-          return commandResultAt({ stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode ?? undefined }, false);
-        },
-      },
+        return {
+          call: { text: command, context: {} },
+          run: async () => {
+            const result = await runToExit(['/bin/sh', '-lc', command], { cwd, env: gitEnv() });
+
+            return commandResultAt({ stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode ?? undefined }, false);
+          },
+        };
+      }),
     },
   };
+}
 
-  return {
-    register: () => {}, unregister: () => {},
-    getProvider: (name) => name === 'computer' ? provider : undefined,
-    getProviders: () => [], listExecutors: () => [],
-  };
+function shellIn(cwd: string): ExecutionRouter {
+  const provider = shellProvider(cwd);
+  const named = (name: string) => name === 'computer' ? provider : undefined;
+
+  return { register: () => {}, unregister: () => {}, getProvider: named, ungatedProvider: named, getProviders: () => [], listExecutors: () => [] };
 }
 
 describe('workspace diff lifecycle', () => {
@@ -618,11 +625,8 @@ describe('workspace diff lifecycle', () => {
       },
     };
 
-    const router: ExecutionRouter = {
-      register: () => {}, unregister: () => {},
-      getProvider: (name) => name === 'computer' ? provider : undefined,
-      getProviders: () => [], listExecutors: () => [],
-    };
+    const named = (name: string) => name === 'computer' ? provider : undefined;
+    const router: ExecutionRouter = { register: () => {}, unregister: () => {}, getProvider: named, ungatedProvider: named, getProviders: () => [], listExecutors: () => [] };
 
     const { rt } = createTestRuntime();
     rt.executionRouter = router;
@@ -631,6 +635,24 @@ describe('workspace diff lifecycle', () => {
 
     expect(result.files).toEqual([]);
     expect(result.error).toContain('index corrupt');
+  });
+
+  // #121: on a connected machine, whose files are the owner's, the scan read as a script no review could know, so the
+  // owner was asked to approve the Changes tab's own read, and asked again on each refresh.
+  test("the Changes scan of the owner's machine asks nothing, while an agent's unknown script still asks", async () => {
+    const repo = scratchDir('workspace-diff');
+    await initRepo(repo);
+    writeFileSync(join(repo, 'notes.md'), 'draft\n');
+    const router = new DefaultExecutionRouter();
+    router.register(shellProvider(repo, 'user'));
+    const { rt } = createTestRuntime();
+    rt.executionRouter = router;
+
+    const read = await getExecutorDiff(rt, 'computer', noWorkspace);
+    const agent = v.parse(CommandResultSchema, await router.getProvider('computer')?.tools.exec?.execute('sh -c "$SCRIPT"'));
+
+    expect({ files: read.files.map((file) => file.path), error: read.error, agentRefused: typeof agent !== 'string' })
+      .toEqual({ files: [`${basename(repo)}/notes.md`], error: undefined, agentRefused: true });
   });
 
   test('repeated git diff reads include untracked work without changing the real index, measured from HEAD', async () => {

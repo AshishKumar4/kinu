@@ -270,6 +270,12 @@ export interface ExecutionRouter {
 
   getProvider(name: string): ExecutorProvider | undefined;
 
+  /**
+   * The executor outside the approval gate, for the product's own fixed reads on it (the Changes tab's scan): no agent
+   * chose those commands, so nobody is asked about them (#121). Every agent's call takes {@link getProvider}.
+   */
+  ungatedProvider(name: string): ExecutorProvider | undefined;
+
   /** The executors attached and available now, as programs reach them: createExecuteTool's `providers`. */
   getProviders(): ExecutorProviderSurface[];
 
