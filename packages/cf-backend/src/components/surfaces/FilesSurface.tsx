@@ -8,7 +8,7 @@ import { useOpenWorkspace } from "@/hooks/use-open-workspace";
 import { Loader } from "@/components/ui/Loader";
 import {
   ArrowsClockwiseIcon, ArrowUpIcon, CaretDownIcon,
-  DownloadSimpleIcon, EyeIcon, FileIcon, FolderIcon, FolderOpenIcon, HouseIcon, ListIcon,
+  DownloadSimpleIcon, EyeIcon, FileIcon, FolderIcon, FolderOpenIcon, FolderSimpleIcon, HouseIcon, ListIcon,
   MagnifyingGlassIcon, PencilSimpleIcon, PlugIcon, SquaresFourIcon, TrashIcon, UploadSimpleIcon,
   WarningIcon, XIcon,
 } from "@phosphor-icons/react";
@@ -19,6 +19,7 @@ import {
 import { renderThrownChain, showing, settle, detach } from "@kinu.run/core/obs";
 import { executorLabel, type ExecutorInfo } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
+import { Empty } from "@/components/ui/Empty";
 import { Menu, type MenuItem } from "@/components/ui/Menu";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { useMounts } from "@/hooks/use-mounts";
@@ -44,7 +45,7 @@ import { TextInput } from "@/components/ui/Field";
 function ReplacePrompt({ name, onReplace, onKeep }: { name: string; onReplace: () => void; onKeep: () => void }) {
   return (
     <div role="alertdialog" aria-label={`Replace ${name}?`} className="flex min-w-0 flex-1 items-center gap-2" data-upload-replace>
-      <WarningIcon size={12} className="p-warning shrink-0" />
+      <WarningIcon size={14} className="p-warning shrink-0" />
       <span className="p-text-2 truncate">Replace <span className="p-text">{name}</span>?</span>
       <span className="p-text-3 hidden @[30rem]:inline truncate">A file with this name is already here.</span>
       <span className="ml-auto flex shrink-0 gap-1">
@@ -522,7 +523,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
         </div>
 
         <div className="px-3 py-1 border-b p-border flex items-center gap-2 shrink-0">
-          <MagnifyingGlassIcon size={12} className="p-text-3 shrink-0" />
+          <MagnifyingGlassIcon size={14} className="p-text-3 shrink-0" />
           <TextInput bare data-files-filter className="t-meta flex-1" value={filter}
             onChange={(e) => { setFilter(e.currentTarget.value); setSelected(0); }} placeholder="Filter this folder…" />
           {filter && (
@@ -535,7 +536,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
         )}
         {notice && (
           <div data-files-notice className="t-meta px-3 py-1 p-danger border-b p-border flex items-start gap-2">
-            <WarningIcon size={13} className="shrink-0 mt-px" />
+            <WarningIcon size={14} className="shrink-0 mt-px" />
             <span className="break-words min-w-0">{notice}</span>
             <Button variant="ghost" size="sm" icon={<XIcon size={14} />} className="ml-auto shrink-0" onClick={() => setNotice(null)} aria-label="Dismiss" />
           </div>
@@ -568,7 +569,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
                 </div>
               );
             })}
-            {loading && <div className="p-text-3 px-3 py-1">Loading…</div>}
+            {loading && <p className="flex items-center gap-2 px-3 py-3 p-text-3" data-files-loading><Loader size="sm" /> Loading…</p>}
             {!loading && !atRoot && (
               <EntryButton data-files-up-row onClick={() => setPath(parentDir(path))} className={`grid ${COLUMNS} ${ROW_HEIGHT}`}>
                 <ArrowUpIcon size={16} /><span className="t-body">..</span>
@@ -605,11 +606,13 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
               </div>
             )}
             {!loading && <MoreRow next={folder.next} more={() => run(Effect.promise(folder.more))} />}
+            {/* The same Empty as Drive's, so both file managers say "nothing here" one way. */}
             {!loading && filtered.length === 0 && offline.length === 0 && entries.length > 0 && (
-              <div className="p-text-3 italic px-3 py-1">Nothing here matches "{filter}".</div>
+              <Empty icon={MagnifyingGlassIcon} title={`Nothing here matches "${filter}"`}
+                action={<Button variant="secondary" size="sm" onClick={() => setFilter("")}>Clear filter</Button>} />
             )}
             {!loading && entries.length === 0 && offline.length === 0 && !err && (
-              <div className="p-text-3 italic px-3 py-1">This folder is empty. Drop files here to upload.</div>
+              <Empty icon={FolderSimpleIcon} title="This folder is empty">Drop files here, or use Upload.</Empty>
             )}
             {!loading && filtered.length > 0 && (
               <div className="t-meta px-3 pt-1 pb-1 p-text-3 border-t p-border mt-1">

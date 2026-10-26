@@ -907,6 +907,11 @@ body { background: var(--c-bg); color: var(--c-text); }
 /* A page's header actions are md whatever a call site asks: one height on every header row (PageHeader). */
 .p-page-actions .p-button { height: 32px; padding: 0 14px; }
 .p-page-actions .p-button.p-button-icon { width: 32px; padding: 0; }
+/* A row of actions shares one height, its largest control's (docs/DESIGN-SYSTEM.md §1.4.2): a small button beside a
+   regular one, as Save draft beside Send, stands regular. The row is the buttons' own parent. */
+:has(> .p-button-md) > .p-button-sm { height: 32px; padding: 0 14px; }
+:has(> .p-button-md) > .p-button-sm.p-button-icon { width: 32px; padding: 0; }
+:has(> .p-button-lg) > :is(.p-button-sm, .p-button-md) { height: 38px; }
 /* A button is known by its label and its fill step: a quiet edge and lift (A4), never an input's 3:1 outline. Pressed is
    the darker fill alone; a shrink on a 28 px button reads as jitter. */
 .p-button-secondary { background: var(--c-button-bg); border-color: var(--c-button-line); color: var(--c-text); box-shadow: var(--shadow-button); }

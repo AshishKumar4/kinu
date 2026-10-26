@@ -258,7 +258,7 @@ function Crumbs({ path }: { path: string }) {
       <Link to={APP_ROUTES.drive} state={{ chosen: true }} data-drive-crumb className="shrink-0 p-text-3 transition-colors hover:p-text">My stuff</Link>
       {segments.map((segment, index) => (
         <span key={index} className="flex min-w-0 items-center gap-2">
-          <CaretRightIcon size={12} className="shrink-0 p-text-3" />
+          <CaretRightIcon size={14} className="shrink-0 p-text-3" />
           <Link to={folderHref(`/${segments.slice(0, index + 1).join("/")}`)} data-drive-crumb
             className={`truncate ${index === segments.length - 1 ? "p-text" : "p-text-3 hover:p-text"}`}>
             {index === 0 && `/${segment}` === DRIVE_SKILLS_DIR ? "Skills" : segment}
@@ -425,8 +425,8 @@ function VisibilityGlyph({ visibility }: { visibility: LiveShareVisibility | und
   if (visibility === undefined) return null;
 
   return visibility === "public"
-    ? <GlobeIcon size={13} className="shrink-0 p-text-3" aria-label="Anyone with the link" />
-    : <UsersIcon size={13} className="shrink-0 p-text-3" aria-label="Shared with people" />;
+    ? <GlobeIcon size={14} className="shrink-0 p-text-3" aria-label="Anyone with the link" />
+    : <UsersIcon size={14} className="shrink-0 p-text-3" aria-label="Shared with people" />;
 }
 
 function whyUnused(refusal: SkillFileRefusal): string {
