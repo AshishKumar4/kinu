@@ -481,9 +481,9 @@ export class FakeSandbox {
   /** Holds the next `snapshotContainer` until `release` settles, telling `entered` it began: a snapshot under way. A
    *  stop meanwhile ends the container and the take never answers, as on staging (D116: 17 of 17 such takes). */
   snapshotHold: { readonly entered: () => void; readonly release: Promise<void> } | undefined;
-  /** The files the container's root holds, as its filesystem counts them (`df -i`): the image's own by default; null
-   *  when the count never answers, as on a disk that stopped answering (D89). */
-  rootFiles: number | null = 43_000;
+  /** The files the container's root holds, as the box walks them: a fresh box's by default; null when the walk never
+   *  answers, as on a disk that stopped answering (D89). */
+  rootFiles: number | null = 22_000;
   readonly files = new Map<string, string>();
   /** Files whose bytes are not UTF-8 text, which `files` cannot hold; the SDK's file reads serve them as bytes. */
   readonly binaryFiles = new Map<string, Uint8Array>();

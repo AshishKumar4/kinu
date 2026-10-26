@@ -5421,16 +5421,18 @@ to the owner, each naming the workspace and the size).
 D116. A rest waits for its take as long as the root's files cost it, and a take under way when the stop begins is gone
 (2026-10-26; reverses D112's premise, keeps D108's bound). Hypothesis until the staging run below reads it.
 
-What was measured. Staging 2026-10-25, D112's after-run: 4 boxes x 5 rests, each over a root of 343,000 files (`df`:
-the image's 43,000 plus 300,000 written). 3 of 20 kept their snapshot, each answering inside the 60 s wait (53-59 s);
+What was measured. Staging 2026-10-25, D112's after-run: 4 boxes x 5 rests, each over a root of 343,000 files (a fresh
+box's 22,000, 20,000 in `/workspace` and 300,000 written). 3 of 20 kept their snapshot, each answering inside the 60 s wait (53-59 s);
 the other 17 ran out the wait, and none of their takes had answered when the stop ended, 62-75 s in. D112's premise,
 that a take abandoned at the wait still lands before the container stops (the harness's `finishesAtStop`), held in none:
 a take still under way when the stop begins never answers. D112's own "Not measured yet" is this reading. The before
 run of the same shape kept 7 of 20. A root of one large file (0.5-3 GiB) was back up 12-24 s after the commit, take
 kept; D108's 40 rests over the image's files alone took 0.15-6.1 s. A take costs about 0.21 ms per file on the root.
 
-What follows. The rest reads the root's file count from its filesystem (`df -Pi /`, which answers at once; a walk costs
-what the take does) and waits for the take `0.45 ms` per file, twice the measured rate, never less than D108's 60 s and
+What follows. The rest counts the root's files (`find / -xdev | wc -l`; the root is btrfs, whose `df -i` reads 0: a
+first build read that and waited 60 s for every root, 6 of 7 rests lost, 2026-10-26 02:55-02:58Z; the walk took 0.6 s
+over 22,000 files and 0.2 s warm, 4.6 s cold, over 322,500) and waits for the take `0.45 ms` per file, twice the
+measured rate, never less than D108's 60 s and
 never more than 10 minutes, D108's take that never answered and held the box 14 minutes. A root of 343,000 files waits
 154 s, the image's own 60 s. The take and the count start together and the 60 s runs from the take's start: a count
 that answers within it extends the wait, and one that does not (a disk that stopped answering, D89) extends nothing, so

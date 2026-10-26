@@ -96,9 +96,9 @@ import {
 /** What a rest traces of its take's timing (`rest.snapshot`). */
 interface RestTiming { readonly restMs: number; readonly waitedOut: boolean; readonly files: number | undefined; readonly waitMs: number }
 
-/** The files the container's root holds, from its filesystem's own count: `df` answers at once, where a walk of the
- *  root costs what the take does. */
-const ROOT_FILES = "df -Pi / | awk 'NR == 2 { print $3 }'";
+/** The files the container's root holds. Its btrfs counts no inodes (`df -i` reads 0), so they are walked: 22,000 on a
+ *  fresh box in 0.6 s, 322,500 in 0.2 s warm and 4.6 s cold (staging, 2026-10-26, D116). */
+const ROOT_FILES = 'find / -xdev 2>/dev/null | wc -l';
 
 /** Bounded wait for `running` to clear after an acknowledged stop: an unbounded wait pins the
  *  attempt, and `#armStartup` early-returns on a pinned attempt, so nothing re-arms. */
@@ -825,8 +825,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return 60_000;
   }
 
-  /** What a take costs per file on the root (D116): 300,000 files past the image's 43,000 took 53-75 s on staging,
-   *  about 0.21 ms a file, which the wait doubles. */
+  /** What a take costs per file on the root (D116): 343,000 files took 53-75 s on staging, about 0.21 ms a file,
+   *  which the wait doubles. */
   protected get restSnapshotMsPerFile(): number {
     return 0.45;
   }
