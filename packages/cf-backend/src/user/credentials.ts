@@ -6,6 +6,7 @@ import {
 } from '@kinu.run/core';
 import { attempt, authoredRefusal, diagnostics, joining, KinuError, renderThrownChain, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
+import { getOAuthProvider } from '../auth/providers';
 import type { UserObjectHost } from './user-host';
 
 /** A stored credential sealed for its account rather than its object, so it outlives a reset that recreates the object. */
@@ -575,13 +576,18 @@ export class UserCredentials {
     webSearch: boolean;
     /** The login is past its expiry with no refresh left (Cloudflare refused it): only signing in again restores it. */
     signInExpired: boolean;
+    /** This deployment has the Cloudflare sign-in to connect with: a self-host has none (its Workers AI is its own). */
+    connectable: boolean;
   }> {
     await this.host.requireTier(caller, 'ai_gateway.admin');
     const cred = await this.readCredential(CLOUDFLARE_OAUTH_CRED_KEY);
+    // The very check the sign-in's start makes (auth/routes.ts `startOAuth`): what is offered here can start there.
+    const connectable = getOAuthProvider(this.host.env, 'cloudflare') !== null;
 
-    if (cred?.kind !== 'oauth') return { connected: false, selectedId: null, accounts: [], webSearch: false, signInExpired: false };
+    if (cred?.kind !== 'oauth') return { connected: false, selectedId: null, accounts: [], webSearch: false, signInExpired: false, connectable };
 
     return {
+      connectable,
       connected: true,
       selectedId: accountIdFromCloudflareCredential(cred),
       accounts: cloudflareAccountsFromCredential(cred),

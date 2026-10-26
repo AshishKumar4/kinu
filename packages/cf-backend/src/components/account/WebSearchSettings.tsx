@@ -179,8 +179,11 @@ function SearchChoice({ place, envelope, credentials, saved, onKeySaved, payer }
   );
 }
 
-/** Said only where a search through Cloudflare is not paid through the person's own account: then this deployment pays. */
+/** Said only where a search through Cloudflare is not paid through the person's own account: then this deployment pays.
+ *  A deployment with no Cloudflare sign-in (a self-host) offers none: its searches are its owner's to pay. */
 function Payer({ status, onConnected }: { status: CloudflareAccountStatus; onConnected: () => void }) {
+  if (!status.connectable) return null;
+
   if (!status.connected) {
     return <CloudflareAIConnectNotice onConnected={onConnected} action="Connect Cloudflare"
       message="No Cloudflare account is connected, so Kinu pays for these searches for now." />;

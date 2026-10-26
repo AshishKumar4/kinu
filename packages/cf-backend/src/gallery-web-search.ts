@@ -27,8 +27,8 @@ export function galleryWebSearchChain(): WebSearchRoute[] | undefined {
 /** Cloudflare's account read, as `listCloudflareAccounts` reads it. */
 export function galleryCloudflareAccounts(): CloudflareAccountStatus {
   return GALLERY_CLOUDFLARE === "off"
-    ? { connected: false, selectedId: null, accounts: [], webSearch: false, signInExpired: false }
-    : { connected: true, selectedId: "acct-1", accounts: [{ id: "acct-1", name: "Primary" }], webSearch: GALLERY_CLOUDFLARE === "granted", signInExpired: false };
+    ? { connected: false, selectedId: null, accounts: [], webSearch: false, signInExpired: false, connectable: true }
+    : { connected: true, selectedId: "acct-1", accounts: [{ id: "acct-1", name: "Primary" }], webSearch: GALLERY_CLOUDFLARE === "granted", signInExpired: false, connectable: true };
 }
 
 const TestBodySchema = v.object({ query: v.string(), limit: v.number(), route: WebSearchRouteSchema });

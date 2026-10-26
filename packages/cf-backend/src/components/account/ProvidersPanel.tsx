@@ -101,7 +101,9 @@ export function ProvidersPanel({ framed = true }: { framed?: boolean }) {
                       : undefined}
                     revokesAt={revokingProviderOf(CLOUDFLARE_OAUTH_CRED_KEY)}
                     onChanged={reloadAll}
-                    connect={<CloudflareAIConnectNotice onConnected={reloadAll} message="Connect Cloudflare to use your Workers AI quota and AI Gateway." />}>
+                    connect={lastValue(accounts.resource)?.connectable === true
+                      ? <CloudflareAIConnectNotice onConnected={reloadAll} message="Connect Cloudflare to use your Workers AI quota and AI Gateway." />
+                      : undefined}>
                     {/* Asked first: the account decides which gateway is reachable. */}
                     <CardSlot resource={accounts.resource} what="your Cloudflare accounts" onRetry={reloadAll}>
                       {(status) => (status.signInExpired
