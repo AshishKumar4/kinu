@@ -29,7 +29,7 @@ export function LandingFooter(): ReactElement {
   return (
     <footer className="border-t p-border p-sunken">
       <div className="landing-shell flex flex-wrap items-center gap-5 py-7">
-        <div className="flex items-center gap-2.5"><KinuLogo compact /><span className="text-xs p-text-3">絹 · the self-evolving agent platform</span></div>
+        <div className="flex items-center gap-2.5"><KinuLogo compact /><span className="text-xs p-text-3">絹 · open-source agents</span></div>
         <nav className="ml-auto flex flex-wrap gap-5 text-[13px] p-text-3">
           <a href={REPOSITORY}>GitHub</a>
           <a href={`${REPOSITORY}/blob/main/QUICKSTART.md`}>Quickstart</a>

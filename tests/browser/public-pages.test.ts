@@ -222,7 +222,7 @@ interface Facts {
   heroMount?: { renderer?: string; canvasRenderer?: string };
   workspace?: SurfaceFact;
   cli?: SurfaceFact;
-  interactions?: { workspace: boolean; plan: boolean; evolution: boolean };
+  interactions?: { workspace: boolean; plan: boolean };
   command?: string;
   copied?: boolean;
   rail?: RailFact;
@@ -651,17 +651,9 @@ beforeAll(async () => {
         noPlanYet,
         cleared,
       };
-      await page.evaluate(() => {
-        const stages = [...document.querySelectorAll<HTMLButtonElement>('#evolution button[aria-pressed]')];
-        stages[1]?.click();
-      });
-      await page.waitForFunction(
-        () => document.getElementById('evolution')?.getAttribute('data-evolution-stage') === '1',
-      );
       facts.interactions = await page.evaluate(() => ({
         workspace: document.querySelector('[data-landing-frame="walkthrough"] [data-workspace-panel="run"] textarea') !== null,
         plan: document.querySelector('[data-landing-frame="walkthrough"] [data-plan-status]')?.textContent === 'Approved',
-        evolution: document.getElementById('evolution')?.getAttribute('data-evolution-stage') === '1',
       }));
 
       facts.command = await page.$eval(
@@ -981,11 +973,10 @@ describe('the standalone landing runs', () => {
 
   });
 
-  test('workspace, plan, and evolution controls change their surfaces', () => {
+  test('workspace and plan controls change their surfaces', () => {
     const interactions = required(facts.interactions, 'landing interactions');
     expect(interactions.workspace).toBeTrue();
     expect(interactions.plan).toBeTrue();
-    expect(interactions.evolution).toBeTrue();
   });
 
   test('a device loss mid-run swaps the mount to Canvas2D and keeps the clock', async () => {
