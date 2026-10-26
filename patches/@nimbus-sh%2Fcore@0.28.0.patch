@@ -1,5 +1,5 @@
 diff --git a/dist/node-compat/fs.js b/dist/node-compat/fs.js
-index e58cf64276ba6db4e44ba5d13226f5707410b802..7bff5a14d2992b0e3bf0ee412937f0d202f8a9ba 100644
+index e58cf64..7bff5a1 100644
 --- a/dist/node-compat/fs.js
 +++ b/dist/node-compat/fs.js
 @@ -229,9 +229,14 @@ export function createNodeFs(faces, { cwd, stdin, reachStreams }) {
@@ -37,7 +37,7 @@ index e58cf64276ba6db4e44ba5d13226f5707410b802..7bff5a14d2992b0e3bf0ee412937f0d2
      const streamPath = (path) => (path === null || path === undefined ? undefined : resolvePath(cwd, path));
      // A stream given no fs of its own (none, undefined or null, which Node's
 diff --git a/dist/runtime/session-protocol.d.ts b/dist/runtime/session-protocol.d.ts
-index e2e45cf26533e9bf1a97f5cdf9dc85a0a9227113..6b8b050598de58b64f61f0364139242e9438a13f 100644
+index 2fbd1b8..74c30ba 100644
 --- a/dist/runtime/session-protocol.d.ts
 +++ b/dist/runtime/session-protocol.d.ts
 @@ -1,5 +1,6 @@
@@ -47,7 +47,7 @@ index e2e45cf26533e9bf1a97f5cdf9dc85a0a9227113..6b8b050598de58b64f61f0364139242e
  import type { ProcessTerminalSize } from './process-io-protocol.js';
  /** The process a process starts again, and why (ProcessEntry.restartedFrom). */
  export declare const ProcessRestartSchema: z.ZodDiscriminatedUnion<[z.ZodObject<{
-@@ -733,6 +734,8 @@ export interface SessionRpc {
+@@ -809,6 +810,8 @@ export interface SessionRpc {
      _rpcReadFile(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'readFile'>>;
      _rpcReadFileBytes(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'readFileBytes'>>;
      _rpcWriteFile(path: string, content: string | Uint8Array, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'writeFile'>>;
@@ -57,10 +57,10 @@ index e2e45cf26533e9bf1a97f5cdf9dc85a0a9227113..6b8b050598de58b64f61f0364139242e
      _rpcLstat(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'lstat'>>;
      _rpcReadlink(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'readlink'>>;
 diff --git a/dist/vfs/sqlite-vfs.js b/dist/vfs/sqlite-vfs.js
-index 93284d156b35ddddcf98291265eb0e5f81ccf562..9a5d675e344afb1938b29a10d3b320002fcb5c81 100644
+index 8a4472c..c37350d 100644
 --- a/dist/vfs/sqlite-vfs.js
 +++ b/dist/vfs/sqlite-vfs.js
-@@ -2228,7 +2228,9 @@ export class SqliteVFS {
+@@ -2230,7 +2230,9 @@ export class SqliteVFS {
       * its umask cannot refuse. Sticky only restricts others and is kept.
       */
      creationMode(requested, cred) {
@@ -71,7 +71,7 @@ index 93284d156b35ddddcf98291265eb0e5f81ccf562..9a5d675e344afb1938b29a10d3b32000
      }
      /**
       * What a new entry at storage key `key` is made with, from its parent (a
-@@ -4995,6 +4997,11 @@ export class SqliteVFS {
+@@ -5001,6 +5003,11 @@ export class SqliteVFS {
          if (perms !== null && (!Number.isSafeInteger(perms) || perms < 0 || perms > 0o777)) {
              throw vfsError('EINVAL', `default ACL ${String(perms)}`);
          }
@@ -84,7 +84,7 @@ index 93284d156b35ddddcf98291265eb0e5f81ccf562..9a5d675e344afb1938b29a10d3b32000
          this.publishMetadata(inode, { defaultAcl: perms });
      }
 diff --git a/dist/workspace/supervisor-op.js b/dist/workspace/supervisor-op.js
-index 525e645cf0e8a0960f10f53238b44e85378ea409..47cd4fa7047b6317575d11f793b9f6d9477ba41a 100644
+index 4e368c5..f4fefc9 100644
 --- a/dist/workspace/supervisor-op.js
 +++ b/dist/workspace/supervisor-op.js
 @@ -6,6 +6,7 @@ import { traced } from '@nimbus-sh/platform/tracing.js';
@@ -95,7 +95,7 @@ index 525e645cf0e8a0960f10f53238b44e85378ea409..47cd4fa7047b6317575d11f793b9f6d9
  import { RuntimeFsPathSchema as FsPath } from '../runtime/filesystem-path.js';
  import { readDirectoryBatch } from '../runtime/read-directory-batch.js';
  import { sendRemoval } from '../runtime/filesystem-methods.js';
-@@ -310,6 +311,27 @@ const NATIVE_OPS = {
+@@ -314,6 +315,27 @@ const NATIVE_OPS = {
      fsReadRangeUncached: (e, t) => readRange(e, t, { cached: false }),
      fsRevision: (e, t) => fsFor(e, t).revision(e.args?.[0] === undefined ? undefined : stringArg(e, 0)),
      writeFile: (e, t) => fsFor(e, t).writeFile(FsPath.parse(e.args?.[0]), contentArg(e, 1), WriteFileOptions.parse(e.args?.[2])),
@@ -124,19 +124,19 @@ index 525e645cf0e8a0960f10f53238b44e85378ea409..47cd4fa7047b6317575d11f793b9f6d9
      // process keeps that stat for its sync view, and asked for it in a second
      // call before (node-shims _writeFileAsync). The write is committed before
 diff --git a/dist/workspace/supervisor-ops.d.ts b/dist/workspace/supervisor-ops.d.ts
-index 35597dedbcd30ab8a6f9bc9511c6a36468c2687b..7e717352c28b5156b01c7e59a1baa1150ac05dc1 100644
+index 9696ebf..63a3c9b 100644
 --- a/dist/workspace/supervisor-ops.d.ts
 +++ b/dist/workspace/supervisor-ops.d.ts
 @@ -22,6 +22,7 @@ export declare const SUPERVISOR_OP_TABLE: {
-     readonly readFileBytes: "joined";
-     readonly writeFile: "once";
-     readonly writeFileStat: "once";
-+    readonly writeFileIfRevision: "once";
-     readonly stat: "joined";
-     readonly lstat: "joined";
-     readonly utimes: "once";
+     readonly readFileBytes: 'joined';
+     readonly writeFile: 'once';
+     readonly writeFileStat: 'once';
++    readonly writeFileIfRevision: 'once';
+     readonly stat: 'joined';
+     readonly lstat: 'joined';
+     readonly utimes: 'once';
 diff --git a/dist/workspace/supervisor-ops.js b/dist/workspace/supervisor-ops.js
-index 4d395cc08b5e91ec1e09d8254fccbe577e17e009..9266a76c128372453a7b3ce5a0751371e1c1838a 100644
+index a03b0c9..50de8b8 100644
 --- a/dist/workspace/supervisor-ops.js
 +++ b/dist/workspace/supervisor-ops.js
 @@ -22,6 +22,8 @@ export const SUPERVISOR_OP_TABLE = {
@@ -149,7 +149,7 @@ index 4d395cc08b5e91ec1e09d8254fccbe577e17e009..9266a76c128372453a7b3ce5a0751371
      lstat: 'joined',
      utimes: 'once',
 diff --git a/src/node-compat/fs.ts b/src/node-compat/fs.ts
-index 5ebc0b5bc45614c0fd42679bec36b1c1cc438565..d2fc29c96f07f6fe0808143c2405ae3706f945db 100644
+index 5ebc0b5..d2fc29c 100644
 --- a/src/node-compat/fs.ts
 +++ b/src/node-compat/fs.ts
 @@ -334,9 +334,14 @@ export function createNodeFs(faces: NodeFaces, { cwd, stdin, reachStreams }: Nod
@@ -185,7 +185,7 @@ index 5ebc0b5bc45614c0fd42679bec36b1c1cc438565..d2fc29c96f07f6fe0808143c2405ae37
    const streamPath = (path: string | URL | null | undefined): string | undefined => (path === null || path === undefined ? undefined : resolvePath(cwd, path));
    // A stream given no fs of its own (none, undefined or null, which Node's
 diff --git a/src/runtime/session-protocol.ts b/src/runtime/session-protocol.ts
-index 66452b29e191e1591acd3d632b76089f5116b942..bdfc9e8c667468b841ef340f974470ca9165f876 100644
+index 85f126c..b0761bd 100644
 --- a/src/runtime/session-protocol.ts
 +++ b/src/runtime/session-protocol.ts
 @@ -1,5 +1,6 @@
@@ -195,7 +195,7 @@ index 66452b29e191e1591acd3d632b76089f5116b942..bdfc9e8c667468b841ef340f974470ca
  import type { ProcessTerminalSize } from './process-io-protocol.js';
  import { ExecOutputSchema } from './exec-stream.js';
  
-@@ -344,6 +345,8 @@ export interface SessionRpc {
+@@ -405,6 +406,8 @@ export interface SessionRpc {
    _rpcReadFile(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'readFile'>>;
    _rpcReadFileBytes(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'readFileBytes'>>;
    _rpcWriteFile(path: string, content: string | Uint8Array, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'writeFile'>>;
@@ -205,10 +205,10 @@ index 66452b29e191e1591acd3d632b76089f5116b942..bdfc9e8c667468b841ef340f974470ca
    _rpcLstat(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'lstat'>>;
    _rpcReadlink(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'readlink'>>;
 diff --git a/src/vfs/sqlite-vfs.ts b/src/vfs/sqlite-vfs.ts
-index d064532dbd6439dbaa8a1711458907778c104ec3..d3c0ab7cbead5c5feeb40efd21c54d218a9b9132 100644
+index e7abe5b..8bcd973 100644
 --- a/src/vfs/sqlite-vfs.ts
 +++ b/src/vfs/sqlite-vfs.ts
-@@ -3195,7 +3195,9 @@ export class SqliteVFS {
+@@ -3197,7 +3197,9 @@ export class SqliteVFS {
     * its umask cannot refuse. Sticky only restricts others and is kept.
     */
    private creationMode(requested: number, cred: Pick<VfsCred, 'uid' | 'umask'>): number {
@@ -219,7 +219,7 @@ index d064532dbd6439dbaa8a1711458907778c104ec3..d3c0ab7cbead5c5feeb40efd21c54d21
    }
  
    /**
-@@ -6022,6 +6024,11 @@ export class SqliteVFS {
+@@ -6028,6 +6030,11 @@ export class SqliteVFS {
      if (perms !== null && (!Number.isSafeInteger(perms) || perms < 0 || perms > 0o777)) {
        throw vfsError('EINVAL', `default ACL ${String(perms)}`);
      }
@@ -232,7 +232,7 @@ index d064532dbd6439dbaa8a1711458907778c104ec3..d3c0ab7cbead5c5feeb40efd21c54d21
      this.publishMetadata(inode, { defaultAcl: perms });
    }
 diff --git a/src/workspace/supervisor-op.ts b/src/workspace/supervisor-op.ts
-index 301efdcfc0cb191b34bfc89675f9176e9df6b9da..6ae7becbb5f91be68ca1baf59865d463d6ee84e0 100644
+index 1d7ce23..2e251e3 100644
 --- a/src/workspace/supervisor-op.ts
 +++ b/src/workspace/supervisor-op.ts
 @@ -9,6 +9,8 @@ import { traced, type SpanRecorder } from '@nimbus-sh/platform/tracing.js';
@@ -244,7 +244,7 @@ index 301efdcfc0cb191b34bfc89675f9176e9df6b9da..6ae7becbb5f91be68ca1baf59865d463
  import { RuntimeFsPathSchema as FsPath } from '../runtime/filesystem-path.js';
  import { readDirectoryBatch } from '../runtime/read-directory-batch.js';
  import { sendRemoval } from '../runtime/filesystem-methods.js';
-@@ -481,6 +483,24 @@ const NATIVE_OPS = {
+@@ -485,6 +487,24 @@ const NATIVE_OPS = {
    fsReadRangeUncached: (e, t) => readRange(e, t, { cached: false }),
    fsRevision: (e, t) => fsFor(e, t).revision(e.args?.[0] === undefined ? undefined : stringArg(e, 0)),
    writeFile: (e, t) => fsFor(e, t).writeFile(FsPath.parse(e.args?.[0]), contentArg(e, 1), WriteFileOptions.parse(e.args?.[2])),
@@ -270,7 +270,7 @@ index 301efdcfc0cb191b34bfc89675f9176e9df6b9da..6ae7becbb5f91be68ca1baf59865d463
    // process keeps that stat for its sync view, and asked for it in a second
    // call before (node-shims _writeFileAsync). The write is committed before
 diff --git a/src/workspace/supervisor-ops.ts b/src/workspace/supervisor-ops.ts
-index abc539a68ebb58b4471e6672b651075620ff94ac..1c476f39f5a7c3a5f254d7e66d1128cf8cff137d 100644
+index 7e98e39..5cca99b 100644
 --- a/src/workspace/supervisor-ops.ts
 +++ b/src/workspace/supervisor-ops.ts
 @@ -22,6 +22,8 @@ export const SUPERVISOR_OP_TABLE = {

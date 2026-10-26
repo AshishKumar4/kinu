@@ -1,5 +1,5 @@
 diff --git a/dist/hosted/runtime.d.ts b/dist/hosted/runtime.d.ts
-index 53dd6961be290fd6ac4ca28b0b8f578929274953..dce425cc909646ebb03dc7748351187c66625df6 100644
+index c1a0033..8d7f28b 100644
 --- a/dist/hosted/runtime.d.ts
 +++ b/dist/hosted/runtime.d.ts
 @@ -36,6 +36,12 @@ export interface HostedRuntimeOptions {
@@ -16,7 +16,7 @@ index 53dd6961be290fd6ac4ca28b0b8f578929274953..dce425cc909646ebb03dc7748351187c
      origin?: string;
  }
 diff --git a/dist/hosted/runtime.js b/dist/hosted/runtime.js
-index 73cd76f571b6e4eab9f111367f075c7f1f31e7d1..7629f6161642648362bde9fd3bbb4d7e668df253 100644
+index e779245..80b4ea1 100644
 --- a/dist/hosted/runtime.js
 +++ b/dist/hosted/runtime.js
 @@ -75,7 +75,10 @@ class RuntimeOwner {
@@ -32,7 +32,7 @@ index 73cd76f571b6e4eab9f111367f075c7f1f31e7d1..7629f6161642648362bde9fd3bbb4d7e
          this.supervisorDeliveries = openSupervisorDeliveries(options.ctx);
          const exports = Reflect.get(options.ctx, 'exports');
 diff --git a/dist/hosted/session.d.ts b/dist/hosted/session.d.ts
-index f5d78a440d68863a96bfb048d84233d64f8ae801..717bca9b0c6543dad42ea9dcb2f3c2cc0a21bae1 100644
+index 5c6e973..862aef2 100644
 --- a/dist/hosted/session.d.ts
 +++ b/dist/hosted/session.d.ts
 @@ -18,6 +18,7 @@
@@ -41,9 +41,9 @@ index f5d78a440d68863a96bfb048d84233d64f8ae801..717bca9b0c6543dad42ea9dcb2f3c2cc
  import { RpcTarget } from 'cloudflare:workers';
 +import type { VfsCasResult } from '@nimbus-sh/core/vfs/vfs.js';
  import { type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
- import type { SessionRpc, SessionRouterRpc, SessionReadyOptions, SessionExecOptions, SessionRunCodeOptions, SessionExposeOptions, SessionDurableAppOptions, SessionRuntimeInstallOptions, SessionTerminalSize, SessionProcessLogsOptions, SessionAppTarget, SessionStartProgramOptions, SessionFollowOptions, SessionMkdirOptions } from '@nimbus-sh/core/runtime/session-protocol.js';
+ import type { SessionRpc, SessionRouterRpc, SessionReadyOptions, SessionExecOptions, SessionRunCodeOptions, SessionRunnerOptions, SessionRunnerRunOptions, SessionExposeOptions, SessionDurableAppOptions, SessionRuntimeInstallOptions, SessionTerminalSize, SessionProcessLogsOptions, SessionAppTarget, SessionStartProgramOptions, SessionFollowOptions, SessionMkdirOptions } from '@nimbus-sh/core/runtime/session-protocol.js';
  import * as rpc from '../session/rpc.js';
-@@ -92,6 +93,8 @@ export declare class HostedSession extends RpcTarget implements SessionRpc, Pick
+@@ -108,6 +109,8 @@ export declare class HostedSession extends RpcTarget implements SessionRpc, Pick
      _rpcReadFile(path: string, _pid?: undefined, cred?: VfsCred): Promise<string | null>;
      _rpcReadFileBytes(path: string, _pid?: undefined, cred?: VfsCred): Promise<Uint8Array | null>;
      _rpcWriteFile(path: string, content: string | Uint8Array, _pid?: undefined, cred?: VfsCred): Promise<number>;
@@ -53,10 +53,10 @@ index f5d78a440d68863a96bfb048d84233d64f8ae801..717bca9b0c6543dad42ea9dcb2f3c2cc
          type: string;
          size: number;
 diff --git a/dist/hosted/session.js b/dist/hosted/session.js
-index 0c6e7e4b972cd1b5fe9612b2c0c57ba21e9edd8c..5b5e18ad9f1e767e0f3ecfdbd61e054c1fd3b736 100644
+index 6c2de25..aa66005 100644
 --- a/dist/hosted/session.js
 +++ b/dist/hosted/session.js
-@@ -89,6 +89,10 @@ export class HostedSession extends RpcTarget {
+@@ -99,6 +99,10 @@ export class HostedSession extends RpcTarget {
      async _rpcWriteFile(path, content, _pid, cred) {
          return rpc._rpcWriteFile(this.#client(), path, content, undefined, this.#cred(cred));
      }
@@ -68,22 +68,22 @@ index 0c6e7e4b972cd1b5fe9612b2c0c57ba21e9edd8c..5b5e18ad9f1e767e0f3ecfdbd61e054c
      async _rpcLstat(path, _pid, cred) { return rpc._rpcLstat(this.#client(), path, undefined, this.#cred(cred)); }
      async _rpcReadlink(path, _pid, cred) { return rpc._rpcReadlink(this.#client(), path, undefined, this.#cred(cred)); }
 diff --git a/dist/node-shims-artifact.generated.js b/dist/node-shims-artifact.generated.js
-index 62a83e3ed0e6a41dfe78e8e83e0e1e1f8f79cc5f..eed5a89df0f2fbe71b8b507f4baf15b33ec31c64 100644
+index b7183a2..10c179e 100644
 --- a/dist/node-shims-artifact.generated.js
 +++ b/dist/node-shims-artifact.generated.js
 @@ -10,8 +10,8 @@
   */
  /** dist/runtime/node-shims.js generateShimsCode() */
- export const NODE_SHIMS_ENTRY = "/_assets/runtime/node-shims-df298aa46ab0bb20.js";
--export const NODE_SHIMS_BUILD_ID = "df298aa46ab0bb20";
--export const NODE_SHIMS_SHA256 = "df298aa46ab0bb20157e07e777f9f9908d33645dfeb866c5176f307b4186ff34";
-+export const NODE_SHIMS_BUILD_ID = "6e18322dfa7f9575";
-+export const NODE_SHIMS_SHA256 = "6e18322dfa7f9575f17ea76472d81e8e03df574165b412e07947ba35cf397199";
+ export const NODE_SHIMS_ENTRY = "/_assets/runtime/node-shims-a9c9bd840bafa87d.js";
+-export const NODE_SHIMS_BUILD_ID = "a9c9bd840bafa87d";
+-export const NODE_SHIMS_SHA256 = "a9c9bd840bafa87d4840f1e86951ddd5bc82e6d950dcc89b77f3551700a7b08a";
++export const NODE_SHIMS_BUILD_ID = "6be58818db296d54";
++export const NODE_SHIMS_SHA256 = "6be58818db296d54d18896832aeb4550099b8ea6161050eb32373b24b0ad9a1d";
  /** @nimbus-sh/core dist/_shared/vfs-write-ledger.js VFS_WRITE_LEDGER_SOURCE */
- export const VFS_WRITE_LEDGER_ENTRY = "/_assets/runtime/vfs-write-ledger-f7b8d03b5040098e.js";
- export const VFS_WRITE_LEDGER_BUILD_ID = "f7b8d03b5040098e";
+ export const VFS_WRITE_LEDGER_ENTRY = "/_assets/runtime/vfs-write-ledger-f13794cbb3db645f.js";
+ export const VFS_WRITE_LEDGER_BUILD_ID = "f13794cbb3db645f";
 diff --git a/dist/session/nimbus-session.d.ts b/dist/session/nimbus-session.d.ts
-index e46cbf093df62cb27ce1cc30e8c68562ed2f947e..dfe60bdf2fda6b2ae15b025916aef7be12e6479d 100644
+index 995923f..a2f54a4 100644
 --- a/dist/session/nimbus-session.d.ts
 +++ b/dist/session/nimbus-session.d.ts
 @@ -59,6 +59,7 @@ import { type ProcessEnvHooks } from './process-env.js';
@@ -104,7 +104,7 @@ index e46cbf093df62cb27ce1cc30e8c68562ed2f947e..dfe60bdf2fda6b2ae15b025916aef7be
      _rpcStat(path: string, pid?: number, cred?: VfsCred): Promise<SessionFileStat | null>;
      _rpcLstat(path: string, pid?: number, cred?: VfsCred): Promise<SessionFileStat | null>;
 diff --git a/dist/session/nimbus-session.js b/dist/session/nimbus-session.js
-index c854b2111ae5a7ef043acb06d7e5df978235e585..3e473a73c64b40f037dde4e588d22ba7b67c963a 100644
+index 6b51b0c..8ccbae5 100644
 --- a/dist/session/nimbus-session.js
 +++ b/dist/session/nimbus-session.js
 @@ -786,6 +786,8 @@ export class NimbusSession extends CloudflareDurableObject {
@@ -117,7 +117,7 @@ index c854b2111ae5a7ef043acb06d7e5df978235e585..3e473a73c64b40f037dde4e588d22ba7
          return _rpc._rpcWriteProtectedRootFile(this, rootPath, path, content);
      }
 diff --git a/dist/session/rpc.d.ts b/dist/session/rpc.d.ts
-index 8ed53e4d7acec0901e6401766dd3f38ea41eef67..02c50b205ea9d185bb2ce0109036100562be27c5 100644
+index 7f786ff..9ccef13 100644
 --- a/dist/session/rpc.d.ts
 +++ b/dist/session/rpc.d.ts
 @@ -23,6 +23,7 @@
@@ -128,7 +128,7 @@ index 8ed53e4d7acec0901e6401766dd3f38ea41eef67..02c50b205ea9d185bb2ce01090361005
  import { type FanoutShardOptions } from '@nimbus-sh/fabric/fanout.js';
  import { type SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
  import { PeerHost, type HostedHttpRequest, type HostedHttpResponse, type HostedReply } from '@nimbus-sh/fabric/peer-host.js';
-@@ -106,6 +107,8 @@ export declare function _rpcD1Query(self: {
+@@ -108,6 +109,8 @@ export declare function _rpcD1Query(self: {
      readonly ctx: DurableObjectState;
  }, target: StorageTarget, queries: D1QuerySql[]): Promise<D1QueryResponse>;
  export declare function _rpcWriteFile(self: RpcHost, path: string, content: string | Uint8Array, pid?: number, cred?: VfsCred): Promise<number>;
@@ -138,10 +138,10 @@ index 8ed53e4d7acec0901e6401766dd3f38ea41eef67..02c50b205ea9d185bb2ce01090361005
   * Write one host-governed file at a session root and let ordinary Unix
   * permissions keep it that way: the root becomes a sticky 1777 directory owned
 diff --git a/dist/session/rpc.js b/dist/session/rpc.js
-index 273d39485cd21a3dacc1ab244592906a235aad35..db26461833e165b9b7797fe4afdf9315e8c1ff59 100644
+index f5e36a4..9393b65 100644
 --- a/dist/session/rpc.js
 +++ b/dist/session/rpc.js
-@@ -281,6 +281,10 @@ export async function _rpcWriteFile(self, path, content, pid, cred) {
+@@ -305,6 +305,10 @@ export async function _rpcWriteFile(self, path, content, pid, cred) {
      // clone.
      return self.supervisorOp({ op: 'writeFile', args: [path, content], pid, cred });
  }
@@ -153,7 +153,7 @@ index 273d39485cd21a3dacc1ab244592906a235aad35..db26461833e165b9b7797fe4afdf9315
   * Write one host-governed file at a session root and let ordinary Unix
   * permissions keep it that way: the root becomes a sticky 1777 directory owned
 diff --git a/dist/workspace-host.d.ts b/dist/workspace-host.d.ts
-index 6821f50a141cbfab4fc91fdb137585b58e36e4fc..db51268faf36ad7fb2c9896a12f09fa0cd7bf6ac 100644
+index 6821f50..db51268 100644
 --- a/dist/workspace-host.d.ts
 +++ b/dist/workspace-host.d.ts
 @@ -2,6 +2,7 @@ export { composeFacetManager, type FacetManagerDeps, type FacetManagerHostHooks,
@@ -165,7 +165,7 @@ index 6821f50a141cbfab4fc91fdb137585b58e36e4fc..db51268faf36ad7fb2c9896a12f09fa0
  export { runtimeCatalogSource } from './runtime/runtime-catalog.js';
  export { SupervisorRPC } from './session/supervisor-rpc.js';
 diff --git a/dist/workspace-host.js b/dist/workspace-host.js
-index 4eb846f3c429bd4bd6557fb920c387f4c4448ab4..121edda7f9dde6bb9f0e4c03ee28396b7d4c1b4c 100644
+index 4eb846f..121edda 100644
 --- a/dist/workspace-host.js
 +++ b/dist/workspace-host.js
 @@ -1,6 +1,7 @@
@@ -176,10 +176,10 @@ index 4eb846f3c429bd4bd6557fb920c387f4c4448ab4..121edda7f9dde6bb9f0e4c03ee28396b
  export { collectExecStream, decodeExecStream, encodeExecStream } from '@nimbus-sh/core/runtime/exec-stream.js';
  export { runtimeCatalogSource } from './runtime/runtime-catalog.js';
  export { SupervisorRPC } from './session/supervisor-rpc.js';
-diff --git a/public/_assets/runtime/node-shims-df298aa46ab0bb20.js b/public/_assets/runtime/node-shims-df298aa46ab0bb20.js
-index 703aa3ae4c7ae507ac0f19889d639ce02c21352c..0994d098c181d0f4d64f070643a5442a06b2976b 100644
---- a/public/_assets/runtime/node-shims-df298aa46ab0bb20.js
-+++ b/public/_assets/runtime/node-shims-df298aa46ab0bb20.js
+diff --git a/public/_assets/runtime/node-shims-a9c9bd840bafa87d.js b/public/_assets/runtime/node-shims-a9c9bd840bafa87d.js
+index 0773c5a..cb6fb61 100644
+--- a/public/_assets/runtime/node-shims-a9c9bd840bafa87d.js
++++ b/public/_assets/runtime/node-shims-a9c9bd840bafa87d.js
 @@ -1510,6 +1510,18 @@ function __nimbusNetworkGate() {
  // or not the process wrote anything yet, and the socket opens once the session
  // answered and what the process wrote before it is published
@@ -218,7 +218,7 @@ index 703aa3ae4c7ae507ac0f19889d639ce02c21352c..0994d098c181d0f4d64f070643a5442a
        if (globalThis.__nimbusEgress === true) {
          const socket = this;
          let state = __egressSocketHolds.get(socket);
-@@ -13370,6 +13394,85 @@ const __tlsMod = (() => {
+@@ -13407,6 +13431,85 @@ const __tlsMod = (() => {
    const notImplemented = (option, why) => {
      return nodeError(Error, 'ERR_OPTION_NOT_IMPLEMENTED', 'The ' + option + ' option is not implemented: ' + why);
    };
@@ -304,7 +304,7 @@ index 703aa3ae4c7ae507ac0f19889d639ce02c21352c..0994d098c181d0f4d64f070643a5442a
    const patchStartTls = (native) => {
      if (startTlsPatched || !native) return;
      startTlsPatched = true;
-@@ -13377,6 +13480,7 @@ const __tlsMod = (() => {
+@@ -13414,6 +13517,7 @@ const __tlsMod = (() => {
      const original = proto.startTls;
      Object.defineProperty(proto, 'startTls', { configurable: true, writable: true, value: function startTls(options) {
        const token = tokens.get(this);
@@ -312,7 +312,7 @@ index 703aa3ae4c7ae507ac0f19889d639ce02c21352c..0994d098c181d0f4d64f070643a5442a
        if (token === undefined) return Reflect.apply(original, this, arguments);
        const self = this;
        // workerd's TLSSocket has released the carrier's writer and reader and
-@@ -13483,11 +13587,40 @@ const __tlsMod = (() => {
+@@ -13520,11 +13624,40 @@ const __tlsMod = (() => {
      };
      return socket;
    };
