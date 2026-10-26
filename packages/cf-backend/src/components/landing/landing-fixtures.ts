@@ -213,6 +213,7 @@ export function planRpc(onDecide: (plan: PlanReview) => void, plan: PlanReview |
     listComputerSessions: () => null,
     getComputerSize: () => null,
     getExecutorDiff: () => ({ files: [], mode: 'vfs-baseline' }),
+    getExecutorChangeCount: () => ({ files: 0 }),
     getExposedPorts: () => ({ ports: [] }),
     getEvolutionChangelog: () => ({ seenAt: NOW, unseenCount: 0, entries: [] }),
     listScaffoldVersions: () => [],

@@ -536,6 +536,29 @@ test('a wide pane shows every file expanded beside the tree, with no expand butt
   });
 });
 
+// Production, 2026-10-26: a workspace with a cloned repository sent its whole listing, 17.5 MB, on every open, for a
+// count, and held every other reply on the socket behind it for 5.5 s. The tab counts from a count; its listing is read
+// once it is shown.
+test('an unseen Changes tab reads its count, never its listing, until it is shown', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    const reads = () => page.evaluate(() => document.documentElement.dataset.galleryDiffReads ?? '');
+
+    try {
+      await page.setViewport({ width: 1280, height: 850 });
+      await page.goto(`${origin}/gallery.html?frame=previewtabs`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector(inspectorPageListed('Dashboard'));
+      await page.click('[data-add-diff]');
+      await page.waitForSelector('[aria-label="Changes"]');
+      await page.evaluate(() => { window.dispatchEvent(new Event('focus')); });
+      const unseen = await reads();
+      await page.click('[aria-label="Changes"]');
+      await page.waitForSelector('[data-changes]');
+      expect({ unseen, shown: (await reads()).split(' ').includes('workspace') }).toEqual({ unseen: '', shown: true });
+    } finally { await page.close(); }
+  });
+});
+
 // Changes opens on the machine doing the work: a connected machine before the workspace, and never a sandbox that is
 // asleep, which a read would wake.
 test('Changes opens on a connected machine, and never reads a sandbox that is asleep', async () => {

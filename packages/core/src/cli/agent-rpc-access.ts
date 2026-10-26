@@ -126,6 +126,7 @@ export const AGENT_RPC_ACCESS = {
   getActorSnapshot: 'interactive',
   getAlwaysActiveSkills: 'interactive',
   getExecutorDiff: 'interactive',
+  getExecutorChangeCount: 'interactive',
   getExecutorFiles: 'interactive',
   getExposedPorts: 'interactive',
   // Who can open a preview of the computer: the owner's own decision, never a token's.

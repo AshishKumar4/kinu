@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-10-22",
-  "files": 3770,
-  "functions": 99102,
+  "measuredAt": "2026-10-26",
+  "files": 3933,
+  "functions": 103881,
   "ceiling": 87,
   "line": 25,
   "inventory": [
@@ -254,10 +254,6 @@
       "complexity": 26
     },
     {
-      "key": "packages/cf-backend/src/components/surfaces/ChangesSurface.tsx#ChangesSurface",
-      "complexity": 26
-    },
-    {
       "key": "packages/cf-backend/src/components/surfaces/FilesSurface.tsx#FilesSurface",
       "complexity": 26
     },
@@ -358,6 +354,10 @@
       "complexity": 25
     },
     {
+      "key": "packages/cf-backend/src/components/surfaces/ChangesSurface.tsx#ChangesSurface",
+      "complexity": 25
+    },
+    {
       "key": "packages/cf-backend/src/components/surfaces/WorkSurface.tsx#WorkSurface",
       "complexity": 25
     },
@@ -422,20 +422,8 @@
       "complexity": 25
     },
     {
-      "key": "packages/devbox/tests/snapshot-registry.test.ts#platform>fetcher",
-      "complexity": 24
-    },
-    {
-      "key": "scripts/devbox-container-tier.ts#main",
-      "complexity": 23
-    },
-    {
       "key": "scripts/ladder.ts#runPending",
       "complexity": 25
-    },
-    {
-      "key": "scripts/reset.ts#tablesCommand",
-      "complexity": 20
     },
     {
       "key": "scripts/syntax.ts#importUses>bindVariable",
