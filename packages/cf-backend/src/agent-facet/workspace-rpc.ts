@@ -130,6 +130,8 @@ class WorkspaceSession implements NimbusSessionSurface {
   _rpcStartProgram(...args: Parameters<NimbusSessionSurface['_rpcStartProgram']>) { return settle(this.call(session => session._rpcStartProgram(...args), true)); }
   _rpcWaitProgram(...args: Parameters<NimbusSessionSurface['_rpcWaitProgram']>) { return settle(this.call(session => session._rpcWaitProgram(...args))); }
   _rpcRunCode(...args: Parameters<NimbusSessionSurface['_rpcRunCode']>) { return settle(this.call(session => session._rpcRunCode(...args))); }
+  _rpcRunnerRun(...args: Parameters<NimbusSessionSurface['_rpcRunnerRun']>) { return settle(this.call(session => session._rpcRunnerRun(...args))); }
+  _rpcRunnerClose(...args: Parameters<NimbusSessionSurface['_rpcRunnerClose']>) { return settle(this.call(session => session._rpcRunnerClose(...args))); }
   _rpcReadFile(...args: Parameters<NimbusSessionSurface['_rpcReadFile']>) { return settle(this.call(session => session._rpcReadFile(...args))); }
   _rpcReadFileBytes(...args: Parameters<NimbusSessionSurface['_rpcReadFileBytes']>) { return settle(this.call(session => session._rpcReadFileBytes(...args))); }
   _rpcWriteFile(...args: Parameters<NimbusSessionSurface['_rpcWriteFile']>) { return settle(this.call(session => session._rpcWriteFile(...args))); }

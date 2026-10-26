@@ -555,7 +555,7 @@ graph TB
     subgraph ext["External"]
         Agents["agents (Agents SDK) ^0.29.0"]
         AISDK["ai (Vercel AI SDK) 7.0.148"]
-        Nimbus["@nimbus-sh/core 0.27.0: the workspace filesystem"]
+        Nimbus["@nimbus-sh/core 0.28.0: the workspace filesystem"]
         Sandbox["@cloudflare/sandbox 1.0.2 (Files and S3Mount, under packages/devbox)"]
     end
 
