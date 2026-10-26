@@ -339,6 +339,7 @@ const RADII = {
 export const ILLUSTRATION = {
   teal: '#1F7A72', tealLight: '#2FA39A', blue: '#3366B5', ink: '#4A4366', sky: '#4C86E0', lilac: '#8C86A3',
   berry: '#C94F88', red: '#E0524F', pink: '#EC6FA8', rose: '#F07FAE', gold: '#F2BE45',
+  felt: '#B4814C', feltShade: '#7E5229', feltDeep: '#5C3A1B', brass: '#E0A458',
 } as const;
 
 /**

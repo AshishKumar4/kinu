@@ -88,9 +88,9 @@ const INK = ILLUSTRATION.ink;
 const GOLD = ILLUSTRATION.gold;
 
 /** Main's cowboy hat: brown felt shaded top to bottom, and a brass band (the owner's pick, 2026-10-26). */
-const FELT = ["#B4814C", "#7E5229", "#5C3A1B"] as const;
+const FELT = [ILLUSTRATION.felt, ILLUSTRATION.feltShade, ILLUSTRATION.feltDeep] as const;
 
-const BRASS = "#E0A458";
+const BRASS = ILLUSTRATION.brass;
 
 /** Drawn on the tile's 32-unit grid: its top edge runs at y 4 and its eyes at x 12 and 20. Hats sit left of centre,
  *  away from the waiting dot at the top right, which is drawn over anything that reaches it. */
