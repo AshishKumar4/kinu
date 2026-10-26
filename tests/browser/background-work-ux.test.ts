@@ -70,8 +70,9 @@ describe('work in the background', () => {
         await page.click(PILL);
         await page.click('[data-background-job]');
         await page.waitForSelector('nav[aria-label="Workspace"] button[aria-label="Work"][aria-current="true"]');
-
-        expect(await page.$(SHEET)).toBeNull();
+        // Kumo's popover animates out (`data-ending-style`) and stays mounted until it has: a look the frame the tab
+        // switched found it still closing (UI gate, 2026-10-26, twice). Still red if it never closes.
+        await page.waitForFunction((sheet) => document.querySelector(sheet) === null, {}, SHEET);
 
         await page.click(PILL);
         await page.click('[data-background-agent="actor-docs"]');
