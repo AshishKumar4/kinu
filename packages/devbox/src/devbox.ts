@@ -805,18 +805,6 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   /**
-   * How long the box's own snapshot may take to be admitted before the box gives it up and wakes from its backup, which
-   * keeps the workspace and loses the rest of the root (D111). A snapshot the platform no longer holds is refused at once
-   * ("not found", D64) and the box wakes from the backup then; one still on its way is waited for. 199 quick restarts (a
-   * stop, then a start at once) on real boxes were admitted p50 1.64 s, p90 7.12 s, max 32.3 s, and the slowest wake on
-   * record took 53 s; at 10 s it discarded seven snapshots still on their way in the week to 2026-10-24. The wait is the
-   * admission's, before the start gate, so no start hook's budget holds it.
-   */
-  protected get snapshotWakeCutoverMs(): number {
-    return 60_000;
-  }
-
-  /**
    * The least a rest's stop waits for the platform's snapshot of its container. A save took 4.1-9.5 s on Medium (D51),
    * and the snapshot and stop after a rest's commit took 0.15-6.1 s in each of the 40 rests on staging and the
    * contracts in the week to 2026-10-22.
@@ -1066,10 +1054,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   /**
-   * A snapshot start that fails falls back to the next source and the chain, and so does the box's own snapshot not
-   * admitted within {@link snapshotWakeCutoverMs}, past which it is taken for lost (D111). A golden has nothing faster behind it, so its
-   * start has the golden object's own bound to be admitted before it is reported lost: at the cutover, a slow golden was
-   * retired and every waiting box held for a rebuild (staging 99a13686c, 2026-10-23).
+   * A snapshot start that fails falls back to the next source and the chain. The box's own snapshot is never given up on a
+   * clock: the platform refuses one it no longer holds at once ("not found", D64), so one not yet admitted is on its way
+   * however long the platform takes, and a wake from the backup would lose the root it holds (D117). A golden has nothing
+   * faster behind it, so its start has the golden object's own bound to be admitted before it is reported lost: at the
+   * cutover, a slow golden was retired and every waiting box held for a rebuild (staging 99a13686c, 2026-10-23).
    */
   async #admit(container: Container, signal: AbortSignal, inputs: StartInputs): Promise<boolean> {
     const started = this.#started;
@@ -1077,16 +1066,15 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     if (started !== undefined) {
       // Cleared once settled: a later abort killed the image's container (D64).
       const cutover = new AbortController();
-
-      const [bound, missed] = started.kind === 'own'
-        ? [this.snapshotWakeCutoverMs, 'the snapshot start was not admitted within the cutover']
-        : [GOLDEN_ADMISSION_MS, `the golden start was not admitted in ${String(GOLDEN_ADMISSION_MS / 1000)} s`];
-
-      const timer = setTimeout(() => { cutover.abort(new DevboxError('io', missed)); }, bound);
+      const missed = `the golden start was not admitted in ${String(GOLDEN_ADMISSION_MS / 1000)} s`;
+      const timer = started.kind === 'golden' ? setTimeout(() => { cutover.abort(new DevboxError('io', missed)); }, GOLDEN_ADMISSION_MS) : undefined;
       const [woke] = await Promise.allSettled([firstExec(container, AbortSignal.any([signal, cutover.signal]))]);
       clearTimeout(timer);
 
       if (woke.status === 'fulfilled') return true;
+
+      // A start its caller stopped waiting for is no verdict on its source.
+      if (signal.aborted) return false;
 
       // No room is no verdict on the snapshot: it stays the source, and the exec below fails in the platform's words, so
       // the admission retries (staging, 2026-10-08).

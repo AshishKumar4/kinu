@@ -5451,6 +5451,24 @@ it started from the golden and the backup, admitted after 201 s. A rest over suc
 call to the next start, where a lost one took about 67 s and then a 5 s recovery that dropped what the backup leaves
 out. Runs: /mnt/local/kinu/tmp/computer-start/d116b-*.out and `devbox.rest.snapshot` on kinu-staging.
 
+D117. A box's own snapshot is never given up on a clock; only the platform's refusal of it does (2026-10-26; reverses
+D111's 60 s cutover, keeps its premise and the owner's design it cites: the backup is the fallback for a snapshot really
+lost). D111 found that a start can tell a lost snapshot from a slow one: the platform refuses a start from a snapshot it
+no longer holds at once ("not found", D64), while one on its way is not yet answered. Every cutover on a clock in the
+record was a snapshot on its way. At 10 s, seven in the week to 2026-10-24 (D111). At 60 s, staging 222eb284e on
+2026-10-26: five boxes started at once in D116's run, one box's snapshot (kept by its rest) was not admitted within 60 s,
+the box gave it up, deleted it (`#cutOver` supersedes and sweeps), and woke from the golden and the backup, admitted 201
+s after its start began, its root's 300,000 files lost. The golden it cut over to waited 137 s for the same capacity, so
+the clock bought nothing and cost the root. Under no clock, D111's own uncensored run had 199 quick restarts, all woken
+from their own snapshot (armada `20261024145302-e4353cf8`, max 32.3 s).
+
+So the own start waits for the platform's answer, however long it takes; a refusal (not found, or a start that fails)
+cuts over as before; no room is still no verdict (staging, 2026-10-08); and a start its caller stopped waiting for (a
+teardown aborting its admission) is no verdict either, so it neither retires the snapshot nor starts the golden. The
+golden keeps `GOLDEN_ADMISSION_MS`. `hybrid.test.ts` holds a quick restart's own snapshot 10 minutes unadmitted, then
+admits it: red on the 60 s cutover (woke from the golden, a recovery notice, the snapshot gone), green after (still
+waiting at 10 minutes with the snapshot kept, then woken from it, no notice).
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

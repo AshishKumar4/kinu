@@ -45,10 +45,6 @@ function fakeRegistry(): SnapshotRegistry {
 }
 
 class HybridBox extends ChainTestBox {
-  protected override get snapshotWakeCutoverMs(): number {
-    return 50;
-  }
-
   protected override get snapshotRegistry(): SnapshotRegistry {
     return fakeRegistry();
   }
@@ -99,10 +95,10 @@ test('a snapshot wake refused for room after its admission probe answered keeps 
   expect({ starts: container.startOptions.map(startedFrom), snapshotKept: rows.has('devbox:snapshot') }).toEqual({ starts: ['golden', 'snapshot-1'], snapshotKept: true });
 });
 
-test('a snapshot wake that is not admitted within the cutover starts from the golden and tells the agent when it restored to', async () => {
+test('a snapshot wake the platform refuses starts from the golden and tells the agent when it restored to', async () => {
   setSystemTime(new Date('2026-09-30T00:00:00Z'));
   const { box, container, rows } = await rested();
-  container.snapshots.set('snapshot-1', 'hang');
+  container.snapshots.delete('snapshot-1');
   const destroys = container.destroys;
   await box.devboxStartup();
   const notices = await box.devboxIncidentReasons();
@@ -139,31 +135,30 @@ test('a quick restart whose own snapshot is admitted after 32 s still wakes from
     .toEqual({ starts: ['golden', 'snapshot-1'], snapshotKept: true, notices: [] });
 });
 
-/** A quick restart whose own snapshot is admitted `admittedAfterMs` after its start began, or never: where it woke from. */
-async function quickRestart(admittedAfterMs: number | null): Promise<readonly (string | undefined)[]> {
-  const { box, container } = await rested(QuickRestartBox);
+// Staging 222eb284e, 2026-10-26: five boxes started at once, and one's own snapshot, kept by its rest, was not admitted
+// in the 60 s cutover; the box gave the snapshot up, deleted it, and woke from the golden and the backup 201 s after its
+// start began, the root's 300,000 files lost (D117).
+test('an own snapshot is waited for however long the platform takes to admit it, and no clock retires it', async () => {
+  const { box, container, rows } = await rested(QuickRestartBox);
   container.snapshots.set('snapshot-1', 'late');
   jest.useFakeTimers();
+  let woke = false;
 
   try {
-    const starting = box.devboxStartup();
+    const starting = box.devboxStartup().then(() => { woke = true; });
 
     await container.lateStart.reached;
-    jest.advanceTimersByTime(admittedAfterMs ?? 60_000);
-
-    if (admittedAfterMs !== null) container.lateStart.release();
+    jest.advanceTimersByTime(600_000);
+    const waiting = { woke, starts: container.startOptions.map(startedFrom), kept: rows.has('devbox:snapshot'), deleted: [...registry.deleted] };
+    container.lateStart.release();
     await starting;
+
+    expect({ waiting, woke: container.startOptions.map(startedFrom), notices: (await box.devboxIncidentReasons()).map(row => row.stage) }).toEqual({
+      waiting: { woke: false, starts: ['golden', 'snapshot-1'], kept: true, deleted: [] }, woke: ['golden', 'snapshot-1'], notices: [],
+    });
   } finally {
     jest.useRealTimers();
   }
-
-  return container.startOptions.map(startedFrom);
-}
-
-test('an own snapshot is waited for a minute: admitted at 59.9 s it is the wake, never admitted the box wakes from its backup', async () => {
-  expect({ admitted: await quickRestart(59_900), never: await quickRestart(null) }).toEqual({
-    admitted: ['golden', 'snapshot-1'], never: ['golden', 'snapshot-1', 'golden'],
-  });
 });
 
 test('a snapshot the platform no longer has starts from the golden at once, and leaves no exec to abort later', async () => {

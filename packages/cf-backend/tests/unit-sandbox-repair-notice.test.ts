@@ -59,10 +59,6 @@ class RepairBox extends ChainTestBox {
     return filesChain(ports);
   }
 
-  protected override get snapshotWakeCutoverMs(): number {
-    return 50;
-  }
-
   // What KinuDevbox does with an incident, minus the lookup of its workspace.
   protected override async onIncident(incident: DevboxIncident, attempt: number): Promise<IncidentDisposition> {
     if (workspace === undefined) return 'rejected';

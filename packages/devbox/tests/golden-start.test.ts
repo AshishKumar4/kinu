@@ -34,10 +34,6 @@ class GoldenBox extends ChainTestBox {
   protected override get toolsPin(): string {
     return PIN;
   }
-
-  protected override get snapshotWakeCutoverMs(): number {
-    return 50;
-  }
 }
 
 const startedFrom = (options: { readonly image?: string; readonly containerSnapshot?: { readonly id: string } } | undefined) =>
