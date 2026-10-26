@@ -14,7 +14,6 @@ import {
   type DeployAddress, type DeployInputs,
 } from './inputs';
 import type { DeployPhaseId, DeployRunViewState } from './phases';
-import type { ApiTokensState } from './pkce';
 import { CloudflareWordsSchema, DeployNeedSchema, causeWords, heard, judgeRefusal, type CloudflareWords, type DeployNeed } from './refusals';
 import { HealthAnswerSchema, UpdateOfferSchema, updateOffer, type UpdateBuild, type UpdateOffer } from './update';
 
@@ -54,8 +53,6 @@ export interface DeployPreflight {
   /** The plan first, and blocking; a run starts only on an account with none (deploy/routes.ts `beginRun`). */
   readonly needs: readonly DeployNeed[];
   readonly checkedAt: string;
-  /** The sign-in's, added by the route that answers it (`apiTokensState`). */
-  readonly apiTokens?: ApiTokensState;
 }
 
 /** "yours": a zone of this account. "elsewhere": not one, so a run adds it as a zone and waits for its nameservers.
@@ -85,7 +82,6 @@ export const DeployPreflightSchema: v.GenericSchema<DeployPreflight> = v.object(
   zones: v.array(v.object({ id: v.string(), name: v.string(), status: ZoneStatusSchema })),
   needs: v.array(DeployNeedSchema),
   checkedAt: v.string(),
-  apiTokens: v.optional(v.picklist(['granted', 'missing', 'missing-after-reconsent'])),
 });
 
 export const DeployDomainsSchema: v.GenericSchema<readonly DeployDomain[]> = v.array(v.object({
@@ -101,8 +97,6 @@ export interface DeploySession {
   readonly deployments: readonly DeployedKinu[];
   /** Accounts whose Kinus Cloudflare would not list, in its words. */
   readonly unreadable: readonly { readonly account: string; readonly words: CloudflareWords }[];
-  /** Whether this sign-in can mint the computer's registry token (`apiTokensState`). */
-  readonly apiTokens: ApiTokensState;
 }
 
 export const DeploySessionSchema: v.GenericSchema<DeploySession> = v.object({
@@ -117,7 +111,6 @@ export const DeploySessionSchema: v.GenericSchema<DeploySession> = v.object({
   })),
   deployments: v.array(v.object({ account: v.string(), name: v.string(), url: v.string(), update: UpdateOfferSchema })),
   unreadable: v.array(v.object({ account: v.string(), words: CloudflareWordsSchema })),
-  apiTokens: v.picklist(['granted', 'missing', 'missing-after-reconsent']),
 });
 
 const DOMAIN = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}$/u;
@@ -286,15 +279,18 @@ export function workersPlan(transport: CloudflareTransport, account: string): Ef
 /** The checklist of § 4, read together; none of it writes. A need is said once however many reads met it. */
 export function preflight(transport: CloudflareTransport, account: string, now: number): Effect.Effect<DeployPreflight, KinuError> {
   return Effect.gen(function* () {
-    const subdomain = yield* needOr(workersSubdomain(transport, account), account);
-    const names = yield* needOr(workerNames(transport, account), account);
+    // Five reads of one account, none waiting on another: asked at once, the page's check takes the slowest one's time.
+    const { subdomain, names, r2, zones, planRead } = yield* Effect.all({
+      subdomain: needOr(workersSubdomain(transport, account), account),
+      names: needOr(workerNames(transport, account), account),
+      r2: needOr(Effect.promise(async () => cloudflareResult(
+        transport, { method: 'GET', path: `/accounts/${account}/r2/buckets?per_page=1` }, v.unknown(),
+      )), account),
+      zones: needOr(zonesOf(transport, account), account),
+      planRead: workersPlan(transport, account),
+    }, { concurrency: 'unbounded' });
 
-    const r2 = yield* needOr(Effect.promise(async () => cloudflareResult(
-      transport, { method: 'GET', path: `/accounts/${account}/r2/buckets?per_page=1` }, v.unknown(),
-    )), account);
-
-    const zones = yield* needOr(zonesOf(transport, account), account);
-    const { plan, need: planNeed } = yield* workersPlan(transport, account);
+    const { plan, need: planNeed } = planRead;
     const needs = new Map<string, DeployNeed>();
 
     // A Free account is told first: nothing else it is asked to do lets Kinu run there.

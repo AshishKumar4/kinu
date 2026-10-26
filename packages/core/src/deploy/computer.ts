@@ -29,6 +29,7 @@ export function computerToolsStep(manifest: ReleaseManifest): DeployStep {
   return {
     id: 'computer-tools',
     title: "Copy the computer's tools",
+    after: ['r2'],
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.gen(function* () {
         const skipped = absent(context, manifest);
@@ -80,6 +81,7 @@ export function computerTokenStep(manifest: ReleaseManifest): DeployStep {
   return {
     id: 'computer-token',
     title: "Mint the computer's registry token",
+    after: ['account'],
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.gen(function* () {
         const skipped = absent(context, manifest);
@@ -108,6 +110,7 @@ export function computerStep(manifest: ReleaseManifest): DeployStep {
   return {
     id: 'computer',
     title: 'Set up the computer',
+    after: ['upload', 'computer-tools'],
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.gen(function* () {
         const skipped = absent(context, manifest);

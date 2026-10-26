@@ -197,6 +197,7 @@ export function mailRoutingStep(inputs: DeployInputs): DeployStep {
   return {
     id: 'mail-routing',
     title: "Mint the mail's routing token",
+    after: ['account'],
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.gen(function* () {
         const domain = inputs.mailDomain ?? '';
@@ -313,6 +314,7 @@ export function mailRoutingRetiredStep(inputs: DeployInputs): DeployStep {
   return {
     id: 'mail-routing-retired',
     title: 'Retire the mail routing this version replaced',
+    after: ['promote'],
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.promise(async () => {
         const [zone = '', domain = ''] = (context.facts.get(FACT_MAIL_BEFORE) ?? '').split(' ');
@@ -336,6 +338,7 @@ export function mailStep(inputs: DeployInputs) {
   return {
     id: 'mail',
     title: 'Onboard the mail domain',
+    after: ['address'],
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.promise(async () => {
         const domain = inputs.mailDomain ?? '';

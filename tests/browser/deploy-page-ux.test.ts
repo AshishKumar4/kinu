@@ -350,33 +350,17 @@ describe('the deploy page', () => {
     });
   });
 
-  test('the computer without API Tokens asks to sign in again and tick it; given, Deploy can go', async () => {
+  // Review, 2026-10-26: API Tokens is required at the consent (core deploy/pkce.ts), so turning the computer on asks
+  // for nothing more; the run is asked for it.
+  test('the computer turned on lets Deploy go, and the run asks for it', async () => {
     await withGallery(async (gallery) => {
-      const page = await opened(gallery, 'tokens-missing');
+      const page = await opened(gallery, 'ready');
 
       await page.waitForSelector('[role="switch"]', SOON);
       await page.click('[role="switch"]');
-      await page.waitForSelector('[data-deploy-api-tokens="missing"] [data-deploy-tip]', SOON);
-      expect(await page.$('[data-deploy-go][disabled]')).not.toBeNull();
-      await pressNamed(page, 'Sign in again');
-      await page.waitForFunction(() => document.querySelector('[data-deploy-api-tokens]') === null, SOON);
-      expect((await asked(page)).find((each) => each.route === 'signin')?.body).toMatchObject({ end: 'helper', for: 'api-tokens' });
-      await page.waitForSelector('[data-deploy-go]:not([disabled])', SOON);
-      expect(await page.$eval('[role="switch"]', (box) => box.getAttribute('aria-checked'))).toBe('true');
-    });
-  });
-
-  test('API Tokens left out again offers the deploy without the computer', async () => {
-    await withGallery(async (gallery) => {
-      const page = await opened(gallery, 'tokens-refused');
-
-      await page.waitForSelector('[role="switch"]', SOON);
-      await page.click('[role="switch"]');
-      await page.waitForSelector('[data-deploy-api-tokens="refused"]', SOON);
-      await pressNamed(page, 'Deploy without it');
       await page.waitForSelector('[data-deploy-go]:not([disabled])', SOON);
       await press(page, '[data-deploy-go]');
-      expect(await runAsked(page)).toMatchObject({ kind: 'new', computer: false });
+      expect(await runAsked(page)).toMatchObject({ kind: 'new', computer: true });
     });
   });
 });

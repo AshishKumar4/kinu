@@ -29,7 +29,7 @@ import {
 } from '@kinu.run/core';
 import * as v from 'valibot';
 import { Cause, Effect } from 'effect';
-import { attemptInItsWords, KinuError, renderThrownChain } from '@kinu.run/core/obs';
+import { attemptInItsWords, diagnostics, KinuError, renderThrownChain } from '@kinu.run/core/obs';
 import { DEPLOY_SESSION_COOKIE_NAME, DEPLOY_STATE_COOKIE_NAME, readCookie, setCookie } from '../auth/cookies';
 import { beneath, noHead, type FamilyEnv } from '../api/context';
 import type { DeployRunDO } from './deploy-do';
@@ -126,11 +126,14 @@ deployRoutes.post(`${DEPLOY_API}/signin`, async (c) => signIn(c.req.raw, c.env))
 
 deployRoutes.get(`${DEPLOY_API}/session`, noHead<FamilyEnv<Env, DeployVariables>>((c) => sessionAnswer(c.req.raw, c.env)));
 
-deployRoutes.get(`${DEPLOY_API}/preflight`, noHead<FamilyEnv<Env, DeployVariables>>((c) => accountRead(c.req.raw, c.env, c.req.query('account') ?? '', (transport, account, session) => Effect.gen(function* () {
-  const checked = yield* preflight(transport, account, Date.now());
-  const apiTokens = yield* Effect.promise(async () => session.apiTokens());
+deployRoutes.get(`${DEPLOY_API}/preflight`, noHead<FamilyEnv<Env, DeployVariables>>((c) => accountRead(c.req.raw, c.env, c.req.query('account') ?? '', (transport, account) => Effect.map(preflight(transport, account, Date.now()), (checked) => {
+  // What Cloudflare said of each lack, while a person waits on it: a plan that stayed Free after an upgrade (owner,
+  // 2026-10-26) left nothing to read but the page's polls.
+  for (const need of checked.needs) {
+    diagnostics.event('deploy.preflight_need', { need: need.id, status: need.details?.status ?? 0, code: need.details?.code ?? 0, message: need.details?.message ?? '' });
+  }
 
-  return v.parse(DeployPreflightSchema, { ...checked, apiTokens });
+  return v.parse(DeployPreflightSchema, checked);
 }))));
 
 deployRoutes.get(`${DEPLOY_API}/domains`, noHead<FamilyEnv<Env, DeployVariables>>((c) => accountRead(c.req.raw, c.env, c.req.query('account') ?? '', (transport, account) => Effect.map(domainsMatching(transport, account, c.req.query('q') ?? ''), (body) => v.parse(DeployDomainsSchema, body)))));
@@ -401,11 +404,9 @@ function burnt(response: Response): Response {
 
 /** `helper`: the leg runs in a helper window and ends on the shared finish page, which tells the tab whose connect run
  *  (`run`, from `beginConnect`) it names. `tab` (the default): it ends back on `/deploy`. */
-// `for: 'api-tokens'`: the page's computer row asked the person to sign in again and tick API Tokens.
 const SignInAskSchema = v.object({
   end: v.optional(v.picklist(['helper', 'tab']), 'tab'),
   run: v.optional(v.pipe(v.string(), v.uuid())),
-  for: v.optional(v.picklist(['api-tokens'])),
 });
 
 /** The page's sign-in leg. A fresh sign-in object each time, named by a new cookie; the old one's hour runs out alone. */
@@ -421,7 +422,7 @@ async function signIn(request: Request, env: Env): Promise<Response> {
   const pkce = await createPkcePair();
 
   await session.openSession();
-  const state = await session.holdSignIn(pkce.verifier, { end: asked.end, run: asked.run ?? null, forApiTokens: asked.for === 'api-tokens' });
+  const state = await session.holdSignIn(pkce.verifier, { end: asked.end, run: asked.run ?? null });
   const redirectUri = new URL(DEPLOY_CALLBACK_PATH, new URL(request.url).origin).href;
 
   const handoff = json({
@@ -455,7 +456,7 @@ async function signedIn(request: Request, env: Env): Promise<SignedIn | null> {
   return { session, user, token: await session.readToken() ?? '' };
 }
 
-const SIGNED_OUT: DeploySession = { signedIn: false, email: '', accounts: [], resume: null, deployments: [], unreadable: [], apiTokens: 'granted' };
+const SIGNED_OUT: DeploySession = { signedIn: false, email: '', accounts: [], resume: null, deployments: [], unreadable: [] };
 
 /** Nobody signed in: the page offers "Continue with Cloudflare". */
 function signInFirst(): Response {
@@ -497,11 +498,11 @@ function accountRead<A>(
   request: Request,
   env: Env,
   account: string,
-  read: (transport: CloudflareTransport, account: string, session: DurableObjectStub<DeployRunDO>) => Effect.Effect<A, KinuError>,
+  read: (transport: CloudflareTransport, account: string) => Effect.Effect<A, KinuError>,
 ): Effect.Effect<Response, KinuError> {
   if (!v.is(CloudflareIdSchema, account)) return Effect.succeed(err(400, 'That is not a Cloudflare account id.'));
 
-  return pageRead(request, env, (transport, _user, session) => read(transport, account, session));
+  return pageRead(request, env, (transport) => read(transport, account));
 }
 
 /** Our own refusals stay ours; Cloudflare's arrive in its words through the catalog. */
@@ -545,7 +546,6 @@ function sessionAnswer(request: Request, env: Env): Effect.Effect<Response, Kinu
       deployments: kinus.flatMap(({ found }) => ('answer' in found ? found.answer : [])),
       // An account whose Kinus could not be read is not one without Kinus: it is named, in Cloudflare's words.
       unreadable: kinus.flatMap(({ account, found }) => ('words' in found ? [{ account, words: found.words }] : [])),
-      apiTokens: yield* Effect.promise(async () => held.session.apiTokens()),
     };
 
     // Held to the page's contract before it leaves.

@@ -141,7 +141,7 @@ Decisions of 2026-10-21, from the free-plan run on the owner's free account (doc
   and Cloudflare refuses that binding on Free (10195, "In order to use Dynamic Workers, you must switch to a paid
   plan"). The plan is read before anything is made, by preflight and again by the run's first step; on Free it is the
   first need and it blocks: "Kinu runs on Cloudflare's Workers Paid plan, $5 a month." The computer is part of that
-  baseline, gated only by the sign-in's API Tokens permission and the person's own choice.
+  baseline, and on only by the person's own choice.
 - **Analytics Engine is skipped where the account has it off.** No API turns it on, and a version that binds a dataset
   is refused while it is off (10089). Its datasets are Kinu's own operational telemetry: the only readers are the
   control plane's metrics view and the monitor's fleet sampling, both operators' and neither the person's. So the
@@ -167,9 +167,11 @@ has been exercised yet.
 
 The OAuth client asks only for what its steps use, in the catalog's ids. The list, and which scopes are optional, is
 `CLOUDFLARE_DEPLOY_CLIENT` in core `deploy/pkce.ts`. The client's registration is synced from it, and the deploy checks
-it (`scripts/deploy-oauth-client.ts`). The required scopes are the Worker's, its storage's and the zone's. The optional
-ones are mail's (`email-routing-rule.write`, `email-sending.write`) and the computer's (`containers.write`,
-`account-api-tokens.write`), which the person may decline. Two scopes are left out:
+it (`scripts/deploy-oauth-client.ts`). The required scopes are the Worker's, its storage's, the zone's and API Tokens
+(`account-api-tokens.write`, which the computer's registry token is minted with). Cloudflare's consent shows an optional
+scope unticked, and API Tokens was easy to miss, so it is required (owner, 2026-10-26). The optional ones are mail's
+(`email-routing-rule.write`, `email-sending.write`) and the computer's container (`containers.write`), which the person
+may decline. Two scopes are left out:
 - `zone-settings.write`, which enabling Email Routing needs. Cloudflare refused it at the owner's consent as
   `zonesettings.write` (f44999, 2026-10-21), so the mail step asks the person to enable routing in the dashboard.
 - `registrar-domains.admin`, which no step uses yet.

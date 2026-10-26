@@ -31,6 +31,8 @@ import { computerStep, computerTokenStep, computerToolsStep } from './computer';
 export interface DeployStep {
   readonly id: string;
   readonly title: string;
+  /** The steps it needs done first, each earlier in the plan: what they make, or what they settle, it uses. */
+  readonly after: readonly string[];
   run(context: DeployContext): Effect.Effect<string, KinuError>;
 }
 
@@ -111,6 +113,7 @@ function accountStep(manifest: ReleaseManifest): DeployStep {
   return {
     id: 'account',
     title: 'Read the account',
+    after: [],
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.gen(function* () {
         // Before anything is made: a run that would stop at its secrets must not leave storage behind it.
@@ -167,6 +170,7 @@ function kvStep(manifest: ReleaseManifest): DeployStep {
   return {
     id: 'kv',
     title: 'Create the session store',
+    after: ['account'],
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.gen(function* () {
         const wanted = manifest.bindings.filter((binding) => binding.kind === 'kv');
@@ -208,6 +212,7 @@ function bucketStep(manifest: ReleaseManifest): DeployStep {
   return {
     id: 'r2',
     title: 'Create the buckets',
+    after: ['account'],
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.gen(function* () {
         const wanted = manifest.bindings.filter((binding) => binding.kind === 'r2');
@@ -248,6 +253,7 @@ function vectorizeStep(manifest: ReleaseManifest): DeployStep {
   return {
     id: 'vectorize',
     title: 'Create the memory index',
+    after: ['account'],
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.gen(function* () {
         const base = `/accounts/${context.inputs.accountId}/vectorize/v2/indexes`;
@@ -299,6 +305,7 @@ function gatewayStep(): DeployStep {
   return {
     id: 'ai-gateway',
     title: 'Create the AI gateway',
+    after: ['account'],
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.gen(function* () {
         const accountId = context.inputs.accountId;
@@ -338,6 +345,7 @@ function seedStep(manifest: ReleaseManifest): DeployStep {
   return {
     id: 'seed',
     title: 'Seed the runtime cache',
+    after: ['r2'],
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.gen(function* () {
         const seed = manifest.seed;
@@ -390,6 +398,7 @@ function secretsStep(): DeployStep {
   return {
     id: 'secrets',
     title: 'Mint the deployment secrets',
+    after: ['account'],
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.gen(function* () {
         // Runs before the upload: secrets are bindings of a version.
@@ -445,6 +454,7 @@ function uploadStep(manifest: ReleaseManifest): DeployStep {
   return {
     id: 'upload',
     title: 'Upload the Worker',
+    after: ['computer-token', 'mail-routing', 'kv', 'r2', 'vectorize', 'ai-gateway', 'seed', 'secrets'],
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.gen(function* () {
         const accountId = context.inputs.accountId;
@@ -533,6 +543,7 @@ function addressStep(inputs: DeployInputs): DeployStep {
   return {
     id: 'address',
     title: 'Bind the address',
+    after: ['computer'],
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.gen(function* () {
         const accountId = context.inputs.accountId;
@@ -612,6 +623,7 @@ function smokeStep(): DeployStep {
   return {
     id: 'smoke',
     title: 'Check it answers',
+    after: ['mail'],
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.gen(function* () {
         const address = context.facts.get(FACT_ADDRESS);
@@ -649,6 +661,7 @@ function promoteStep(): DeployStep {
   return {
     id: 'promote',
     title: 'Send it all traffic',
+    after: ['smoke'],
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.gen(function* () {
         const version = context.facts.get(FACT_VERSION_ID);
@@ -667,6 +680,7 @@ function handoverStep(manifest: ReleaseManifest): DeployStep {
   return {
     id: 'handover',
     title: 'Hand the deployment its own key',
+    after: ['mail-routing-retired'],
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.gen(function* () {
         const accountId = context.inputs.accountId;

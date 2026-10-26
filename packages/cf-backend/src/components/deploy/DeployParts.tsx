@@ -105,7 +105,7 @@ export function Lack({ name, done, title, copy, action, waiting }: {
         <div className="min-w-0">
           <div className="t-public-item">{title}</div>
           <div className="t-meta">{done ? "Done" : copy}</div>
-          {!done && waiting && <p className="mt-1 inline-flex items-center gap-2 t-meta"><Loader size="sm" />Waiting for Cloudflare. This ticks off as soon as it's done.</p>}
+          {!done && waiting && <p className="mt-1 inline-flex items-center gap-2 t-meta"><Loader size="sm" />Waiting for Cloudflare…</p>}
         </div>
         {!done && <div className="shrink-0">{action}</div>}
       </div>
@@ -237,8 +237,6 @@ export function KinuFace({ activity, live = false }: { activity: "working" | "wa
 export interface RefusalActions {
   readonly signingIn: boolean;
   readonly onSignIn: () => void;
-  /** Signs in again for API Tokens, which the computer needs; the screen stays as it is. */
-  readonly onApiTokens: () => void;
   readonly onHandedOff: (need: string) => void;
 }
 

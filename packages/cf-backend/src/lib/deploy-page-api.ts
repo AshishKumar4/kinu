@@ -53,10 +53,10 @@ const HandoffSchema = v.object({ location: v.string() });
 
 /**
  * Begins the page's sign-in for the connect run `run` (`beginConnect`): the answer is Cloudflare's consent page, whose
- * end the shared finish page tells this tab. `apiTokens`: asked again for the computer, to tick API Tokens.
+ * end the shared finish page tells this tab.
  */
-export function beginSignIn(run: string, apiTokens: boolean): Promise<DeployHeard<v.InferOutput<typeof HandoffSchema>>> {
-  return settle(heard(HandoffSchema, "/signin", { method: "POST", json: { end: "helper", run, for: apiTokens ? "api-tokens" : undefined } }));
+export function beginSignIn(run: string): Promise<DeployHeard<v.InferOutput<typeof HandoffSchema>>> {
+  return settle(heard(HandoffSchema, "/signin", { method: "POST", json: { end: "helper", run } }));
 }
 
 export function readSession(): Promise<DeployHeard<DeploySession>> {

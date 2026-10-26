@@ -126,8 +126,9 @@ describe('a guided self-deployment', () => {
       holds: true, lifetimeWithinAnHour: true,
     });
 
-    // Retried, then killed inside the next create: the redelivered alarm carries on, looking before it creates.
-    await env.DEPLOY_FAKE.stallOnce({ method: 'POST', path: `/accounts/${DEPLOY_FAKE_ACCOUNT}/ai-gateway/gateways` });
+    // Retried, then killed inside its create: the redelivered alarm runs the step again (a third attempt), which looks
+    // before it creates. The steps beside it in storage finished in the first run, which ran them at once.
+    await env.DEPLOY_FAKE.stallOnce({ method: 'POST', path: `/accounts/${DEPLOY_FAKE_ACCOUNT}/r2/buckets` });
     await stub.retry('r2');
     await env.DEPLOY_FAKE.stallReached();
     await expect(stub.abort('probe: the object died mid-plan')).rejects.toThrow();
@@ -149,7 +150,7 @@ describe('a guided self-deployment', () => {
       rowsHoldSecrets: [await runKeyDigest(run.runKey), run.runKey, DEPLOY_FAKE_ACCESS_TOKEN, DEPLOY_FAKE_REFRESH_TOKEN].some((secret) => rows.includes(secret)),
       rowsNameAddress: rows.includes(ADDRESS),
     }).toEqual({
-      state: 'done', address: ADDRESS, version: DEPLOY_FAKE_VERSION, allDone: true, r2Attempts: 2,
+      state: 'done', address: ADDRESS, version: DEPLOY_FAKE_VERSION, allDone: true, r2Attempts: 3,
       createdTwice: [], uploads: 1, namespaces: ['kinu-auth-kv'],
       refreshes: 1, expiredCalls: 0, refreshSecret: DEPLOY_FAKE_ROTATED_REFRESH,
       held: [], rowsHoldSecrets: false, rowsNameAddress: true,
@@ -476,7 +477,7 @@ describe('the deploy page', () => {
       sessionHolds: await signInObject(cookie).heldCredentials(),
       runHolds: await run.heldCredentials(),
     }).toEqual({
-      session: { signedIn: true, email: DEPLOY_FAKE_OWNER, unreadable: [], accounts: [{ id: DEPLOY_FAKE_ACCOUNT, name: 'Probe Account' }], resume: null, deployments: [], apiTokens: 'granted' },
+      session: { signedIn: true, email: DEPLOY_FAKE_OWNER, unreadable: [], accounts: [{ id: DEPLOY_FAKE_ACCOUNT, name: 'Probe Account' }], resume: null, deployments: [] },
       begun: 200,
       checklist: { r2: 'off', needs: ['r2'], name: 'kinu', subdomain: DEPLOY_FAKE_SUBDOMAIN, plan: 'unknown' },
       paused: { state: 'paused', phase: 'storage', need: 'r2', href: `https://dash.cloudflare.com/${DEPLOY_FAKE_ACCOUNT}/r2/overview`, code: 10_042 },

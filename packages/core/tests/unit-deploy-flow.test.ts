@@ -4,7 +4,7 @@ import * as v from 'valibot';
 import { Effect } from 'effect';
 import {
   ACCESS_TOKEN_KEY, DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET, DEPLOY_CLIENT_ID_KEY,
-  CLOUDFLARE_DEPLOY_CLIENT, CLOUDFLARE_DEPLOY_SCOPES, apiTokensState, deployClientDrift, FIRST_OWNER_LINK_MS, FIRST_OWNER_LINK_SECRET,
+  CLOUDFLARE_DEPLOY_CLIENT, CLOUDFLARE_DEPLOY_SCOPES, deployClientDrift, FIRST_OWNER_LINK_MS, FIRST_OWNER_LINK_SECRET,
   HeldBytes, LOCAL_PORT, LocalConfigSchema, MINTED_SECRETS, promptedSecrets,
   FACT_VERSION_ID, REFRESH_TOKEN_KEY, deployDoor, deployPlan, deployRunView, domainsMatching, factsFrom,
   judgeRefusal, localLayout, mailHostPreview, parseReleaseManifest, plannedRun, preflight, releaseDir,
@@ -949,6 +949,24 @@ describe('a guided run', () => {
       clientId: 'deploy-client-id',
     });
     expect(progress.at(-1)).toEqual({ kind: 'run-done', address: 'kinu.acme.workers.dev' });
+  });
+
+  // The owner, 2026-10-26: "are they parallelized to make them as fast as possible?" They were not: each step waited on
+  // the one before it, though the storage steps need nothing of each other.
+  test('steps that need nothing of each other ask Cloudflare at once, and the upload waits for them all', async () => {
+    const rows = await run();
+    const at = (match: (call: Recorded) => boolean) => cloudflare.calls.findIndex(match);
+    const bucketsAsked = at((call) => call.path.includes('/r2/buckets'));
+    const namespaceMade = at((call) => call.method === 'POST' && call.path.endsWith('/storage/kv/namespaces'));
+
+    const lastStorage = cloudflare.calls.reduce((last, call, index) => (
+      ['/storage/kv/namespaces', '/r2/buckets', '/vectorize/v2/indexes', '/ai-gateway/gateways'].some((path) => call.path.includes(path)) ? index : last
+    ), -1);
+
+    const uploaded = at((call) => call.path.endsWith('/workers/scripts/kinu'));
+
+    expect({ done: rows.every((row) => row.state === 'done'), atOnce: bucketsAsked < namespaceMade, uploadAfter: uploaded > lastStorage })
+      .toEqual({ done: true, atOnce: true, uploadAfter: true });
   });
 
   test('a random secret is minted, never asked of a person', () => {
@@ -2025,15 +2043,6 @@ describe('what the page reads of an account', () => {
     const judged = judgeRefusal(words, ACCOUNT);
 
     expect('need' in judged ? [judged.need.id, judged.need.sentence] : judged).toEqual(['plan', 'Kinu runs on Cloudflare\'s Workers Paid plan, $5 a month.']);
-  });
-
-  test('a sign-in\'s API Tokens state: granted, left out, or left out again after a sign-in made to grant it', () => {
-    expect([
-      apiTokensState(['account-api-tokens.write', 'offline_access'], false),
-      apiTokensState(['offline_access'], false),
-      apiTokensState(['offline_access'], true),
-      apiTokensState(null, true),
-    ]).toEqual(['granted', 'missing', 'missing-after-reconsent', 'granted']);
   });
 
   test('the computer refused on Workers Free is the plan need, in Cloudflare\'s words', () => {

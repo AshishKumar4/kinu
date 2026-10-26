@@ -100,8 +100,6 @@ export default function DeployPage() {
   const [attempt, setAttempt] = useState(0);
   // Arrived again: a sign-in in Cloudflare's window ended, so the page reads its session and lands anew.
   const [arrivals, setArrivals] = useState(0);
-  // The sign-in for API Tokens ended: Ready's session is read again, Ready kept as it is.
-  const [tokenReads, setTokenReads] = useState(0);
   // The sign-in Cloudflare's window ended without, in its words: shown on Start as a declined consent is.
   const [ended, setEnded] = useState<DeclinedSignIn | null>(null);
 
@@ -185,23 +183,9 @@ export default function DeployPage() {
     return () => { here = false; };
   }, [arrive, arrivals]);
 
-  // Ready keeps what was chosen, with the session read again for what this sign-in can do now.
-  useEffect(() => {
-    if (tokenReads === 0) return undefined;
-    let here = true;
-
-    detach(Effect.gen(function* () {
-      const heard = yield* Effect.promise(async () => readSession());
-
-      if (here && "answer" in heard) setStage((now) => (now.kind === "ready" ? { ...now, session: heard.answer } : now));
-    }));
-
-    return () => { here = false; };
-  }, [tokenReads]);
-
   // A sign-in in Cloudflare's window ended. Refused there, Start shows Cloudflare's words as a declined consent and any
-  // other screen its refusal; for API Tokens, Ready reads its session again; otherwise the page lands anew.
-  const signedIn = useCallback((end: ConnectEnded, apiTokens: boolean) => {
+  // other screen its refusal; otherwise the page lands anew.
+  const signedIn = useCallback((end: ConnectEnded) => {
     setSigningIn(false);
 
     if (end.error !== null) {
@@ -209,13 +193,12 @@ export default function DeployPage() {
       setRefusal({ error: `Cloudflare didn't give Kinu access: ${end.error}`, status: 0, need: null, refused: null });
     }
 
-    if (apiTokens) setTokenReads((count) => count + 1);
-    else if (end.error === null) setArrivals((count) => count + 1);
+    if (end.error === null) setArrivals((count) => count + 1);
   }, []);
 
   // Signs in to Cloudflare in its own window (`beginConnect`, opened at the click), this page waiting until its end
   // (`signedIn`). A refused window runs it in this tab, and the finish page brings the tab back here.
-  const signIn = useCallback((apiTokens: boolean) => {
+  const signIn = useCallback(() => {
     const connect = beginConnect();
 
     setSigningIn(true);
@@ -223,7 +206,7 @@ export default function DeployPage() {
     setEnded(null);
 
     return Effect.gen(function* () {
-      const heard = yield* Effect.promise(async () => beginSignIn(connect.id, apiTokens));
+      const heard = yield* Effect.promise(async () => beginSignIn(connect.id));
 
       if ("refusal" in heard) {
         connect.cancel();
@@ -233,12 +216,11 @@ export default function DeployPage() {
         return;
       }
 
-      connect.start(heard.answer.location, (end) => signedIn(end, apiTokens));
+      connect.start(heard.answer.location, signedIn);
     });
   }, [signedIn]);
 
-  const onSignIn = useCallback(() => detach(signIn(false)), [signIn]);
-  const onApiTokens = useCallback(() => detach(signIn(true)), [signIn]);
+  const onSignIn = useCallback(() => detach(signIn()), [signIn]);
 
   const asked = stage.kind === "run" ? stage.asked : null;
 
@@ -306,7 +288,7 @@ export default function DeployPage() {
     go("answer" in heard && heard.answer.signedIn ? { kind: "manage", session: heard.answer } : { kind: "start" });
   });
 
-  const refusalActions: RefusalActions = { signingIn, onSignIn, onApiTokens, onHandedOff: setHandedOff };
+  const refusalActions: RefusalActions = { signingIn, onSignIn, onHandedOff: setHandedOff };
 
   if (stage.kind === "loading") {
     return (

@@ -32,8 +32,6 @@ export const DEPLOY_FIXTURE_STATES = [
   { id: "no-account", label: "New login: no Cloudflare account behind it" },
   { id: "free", label: "Free account: Workers Paid and R2 to do" },
   { id: "upgrading", label: "Free account: upgraded on Cloudflare, ticked off when read again" },
-  { id: "tokens-missing", label: "Ready: the computer, API Tokens not granted" },
-  { id: "tokens-refused", label: "Ready: the computer, API Tokens left out again" },
   { id: "checking", label: "Ready: checking the account" },
   { id: "ready", label: "Ready" },
   { id: "two-accounts", label: "Ready: two accounts" },
@@ -67,9 +65,6 @@ export type DeployFixtureState = (typeof DEPLOY_FIXTURE_STATES)[number]["id"];
 /** Where a sign-in in Cloudflare's window left the review: its end told the page, which reads the door again. */
 let signedInAs: DeployFixtureState | null = null;
 
-/** The API Tokens a sign-in asked again for them gave. */
-let tokensGiven = false;
-
 /** How often the account was read: an upgrade on Cloudflare shows on the read after the first. */
 let preflightReads = 0;
 
@@ -78,9 +73,6 @@ function stateNow(): DeployFixtureState {
 
   return signedInAs ?? DEPLOY_FIXTURE_STATES.find((each) => each.id === said)?.id ?? "start";
 }
-
-/** The states whose sign-in has not given the computer's API Tokens yet: not ticked, or left out again. */
-const TOKENS: Partial<Record<DeployFixtureState, "missing" | "missing-after-reconsent">> = { "tokens-missing": "missing", "tokens-refused": "missing-after-reconsent" };
 
 /** Cloudflare's consent, in the gallery: given at once, so its window goes straight to the shared finish page. */
 function consentGiven(run: string): string {
@@ -254,18 +246,17 @@ function runNow(state: DeployFixtureState): DeployRunView | null {
 /** A finished run is a Kinu the session lists; an unfinished one, or one live with a domain still moving, is resumed. */
 function sessionOf(state: DeployFixtureState): DeploySession {
   if (state === "start" || state === "declined" || state === "unconfigured") {
-    return { signedIn: false, email: "", accounts: [], resume: null, deployments: [], unreadable: [], apiTokens: "granted" };
+    return { signedIn: false, email: "", accounts: [], resume: null, deployments: [], unreadable: [] };
   }
 
   const accounts = state === "two-accounts" || state === "manage-two" || state === "unreadable" ? ACCOUNTS : [ACCOUNTS[0]];
-  const tokens = tokensGiven ? "granted" : TOKENS[state] ?? "granted";
   const run = runNow(state);
   const finished = run !== null && run.state === "live" && run.live?.pending === undefined;
   const resume = run === null || finished ? null : { runId: run.runId, account: run.account, phase: run.phase.id, state: run.state };
   const listed = finished && run.live !== undefined ? [kinu(new URL(run.live.url).hostname, LATEST, LATEST)] : LISTED[state] ?? [];
   const unreadable = state === "unreadable" ? [{ account: SECOND_ACCOUNT, words: { message: "Authentication error", code: 10_000, status: 403, endpoint: `/accounts/${SECOND_ACCOUNT}/workers/scripts` } }] : [];
 
-  return { signedIn: true, email: "ada@lovelace.dev", accounts: state === "no-account" ? [] : accounts, resume, deployments: listed, unreadable, apiTokens: tokens };
+  return { signedIn: true, email: "ada@lovelace.dev", accounts: state === "no-account" ? [] : accounts, resume, deployments: listed, unreadable };
 }
 
 // ── Reads ──────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -383,10 +374,9 @@ export function deployFixture(path: string, method: string, body: string | null)
   if (route === "signin" && method === "POST") {
     if (state === "unconfigured") return Promise.resolve(json({ error: "This Kinu has no Cloudflare OAuth client configured, so it cannot deploy to Cloudflare." }, 503));
 
-    const asked = v.parse(v.object({ run: v.string(), for: v.optional(v.literal("api-tokens")) }), JSON.parse(body ?? "{}"));
+    const asked = v.parse(v.object({ run: v.string() }), JSON.parse(body ?? "{}"));
 
-    if (asked.for === "api-tokens") tokensGiven = true;
-    else signedInAs = signedInFrom(state);
+    signedInAs = signedInFrom(state);
 
     return Promise.resolve(json({ location: consentGiven(asked.run) }));
   }

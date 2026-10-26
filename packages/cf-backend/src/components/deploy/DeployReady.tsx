@@ -14,7 +14,7 @@ import { RadioGroup } from "@/components/ui/Check";
 import { Loader } from "@/components/ui/Loader";
 import { Select } from "@/components/ui/Select";
 import {
-  CloudflareButton, DeployShell, Disclosure, Extra, HandOff, Lack, Line, NeedBox, OnCloudflare, Refused, Unreadable, WhatGetsMade, type RefusalActions,
+  DeployShell, Disclosure, Extra, HandOff, Lack, Line, NeedBox, Refused, Unreadable, WhatGetsMade, type RefusalActions,
 } from "@/components/deploy/DeployParts";
 import { DeployDomain, type PickedDomain } from "@/components/deploy/DeployDomain";
 import { useDeployRead, type Reading } from "@/components/deploy/use-deploy-read";
@@ -22,7 +22,6 @@ import { readMailPreview, readPreflight, type DeployRefused } from "@/lib/deploy
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Card } from "@/components/ui/Card";
 import { Group } from "@/components/ui/Group";
-import { Callout } from "@/components/ui/Callout";
 
 /** How often the account is read again while a hand-off to Cloudflare is open. */
 const RECHECK_MS = 5000;
@@ -168,7 +167,7 @@ function BeforeDeploying({ preflight, seen, waitingOn, onHandedOff }: {
     <div data-deploy-before>
       <Card title="Before deploying">
       <p className="t-public-body">
-        {left === 0 ? "All done. You can deploy." : `Your account needs ${things} first. Each ticks off here as soon as it's done.`}
+        {left === 0 ? "All done. You can deploy." : `Your account needs ${things} first.`}
       </p>
       <Group list>
         {seen.map((id) => {
@@ -201,34 +200,6 @@ function NoAccount() {
         </Group>
       </Card>
     </div>
-  );
-}
-
-/** The API Tokens hand-off, said above the button and again on Cloudflare's window: the permission starts unticked. */
-const TICK_TOKENS = "On Cloudflare's screen, tick API Tokens. It starts unticked.";
-
-/** The computer, on: whether this sign-in can make its registry token, and what to do where it cannot. */
-function ApiTokens({ session, actions, onOff }: { session: DeploySession; actions: ReadyActions; onOff: () => void }) {
-  if (actions.signingIn) return <OnCloudflare doing="Sign in there again." tip={TICK_TOKENS} onAgain={actions.onApiTokens} />;
-
-  if (session.apiTokens === "missing") {
-    return (
-      <Callout data-deploy-api-tokens="missing">
-        <p className="t-public-body">The computer needs Cloudflare's API Tokens permission.</p>
-        <p data-deploy-tip className="mt-1 t-public-item">{TICK_TOKENS}</p>
-        <div className="mt-3"><CloudflareButton secondary onClick={actions.onApiTokens}>Sign in again</CloudflareButton></div>
-      </Callout>
-    );
-  }
-
-  return (
-    <Callout data-deploy-api-tokens="refused">
-      <p className="t-public-body">Cloudflare didn't grant API Tokens, so the computer stays off. Sign in again and tick it, or deploy without the computer.</p>
-      <div className="mt-3 flex flex-wrap gap-2">
-        <CloudflareButton secondary onClick={actions.onApiTokens}>Sign in again</CloudflareButton>
-        <Button variant="ghost" size="sm" onClick={onOff}>Deploy without it</Button>
-      </div>
-    </Callout>
   );
 }
 
@@ -364,8 +335,7 @@ function ForAccount({ session, actions, onDeploy, onBack }: { session: DeploySes
   const kept = actions.refusal;
   const met = preflight !== null && handedOff !== null && !preflight.needs.some((need) => need.id === handedOff);
   const seen = useSeenLacks(preflight);
-  const askTokens = choices.computer && session.apiTokens !== "granted";
-  const blocked = preflight === null || preflight.needs.length > 0 || askTokens || name === "" || (choices.mail !== null && !mailReady);
+  const blocked = preflight === null || preflight.needs.length > 0 || name === "" || (choices.mail !== null && !mailReady);
 
   // The need the hand-off was for is met: stop reading the account every few seconds.
   useEffect(() => {
@@ -397,9 +367,7 @@ function ForAccount({ session, actions, onDeploy, onBack }: { session: DeploySes
             <p className="t-meta">Optional</p>
             <Extra Icon={CpuIcon} title="Should your agents get their own computers?" on={choices.computer}
               copy="Each can run code, builds and a browser. Part of Workers Paid."
-              onChange={(computer) => setChoices((held) => ({ ...held, computer }))}>
-              {askTokens ? <ApiTokens session={session} actions={actions} onOff={() => setChoices((held) => ({ ...held, computer: false }))} /> : undefined}
-            </Extra>
+              onChange={(computer) => setChoices((held) => ({ ...held, computer }))} />
             <MailExtra account={account} domain={choices.domain} mail={choices.mail} onMail={onMail} onReady={setMailReady} onDomain={() => setChoosingDomain(true)} />
           </div>
           <div className="sm:hidden"><Line label="Cost"><span className="t-public-body p-text">{COST}</span></Line></div>
