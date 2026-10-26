@@ -5419,7 +5419,7 @@ title reads and ten running ticks into the workspace, none to the owner), green 
 to the owner, each naming the workspace and the size).
 
 D116. A rest waits for its take as long as the root's files cost it, and a take under way when the stop begins is gone
-(2026-10-26; reverses D112's premise, keeps D108's bound). Hypothesis until the staging run below reads it.
+(2026-10-26, 3cd5036f9 and 222eb284e; reverses D112's premise, keeps D108's bound).
 
 What was measured. Staging 2026-10-25, D112's after-run: 4 boxes x 5 rests, each over a root of 343,000 files (a fresh
 box's 22,000, 20,000 in `/workspace` and 300,000 written). 3 of 20 kept their snapshot, each answering inside the 60 s wait (53-59 s);
@@ -5441,8 +5441,15 @@ no read holds the rest past its floor. `hybrid.test.ts` rests a box whose count 
 box over 343,000 files whose take answers after the 50 ms floor: red before (the take given up, the wake from the golden
 and the backup, the root lost), green after (the wake from the snapshot, the root kept).
 
-To be measured: the same 4 x 5 run on staging with this build, and one box at 600,000 files, reading each take's ms
-against its count; the rate and the factor are set from that run, and this entry records it.
+Measured on staging 222eb284e, 2026-10-26 03:20-03:39Z, the same 4 boxes x 5 rests over 343,000 root files and one
+box over 643,000: 20 of 20 bulk takes kept (D112's after-run 3 of 20, before it 7 of 20), each in 55.4-102.5 s, so
+0.16-0.30 ms a file, under the wait's 0.45 with 1.5x to spare; the 643,000-file take kept in 103.2 s against a 289 s
+wait; the two fresh boxes' rests over 22,000 files took 3.0-3.3 s. 19 of the 20 next wakes started from their own
+snapshot with the root's 300,000 files in place (before 7, after D112 3); the one that did not had its snapshot kept,
+but the platform did not admit the start from it within the 60 s cutover while five boxes ran at once on staging, so
+it started from the golden and the backup, admitted after 201 s. A rest over such a root now takes 58-107 s from the
+call to the next start, where a lost one took about 67 s and then a 5 s recovery that dropped what the backup leaves
+out. Runs: /mnt/local/kinu/tmp/computer-start/d116b-*.out and `devbox.rest.snapshot` on kinu-staging.
 
 ## Open
 
