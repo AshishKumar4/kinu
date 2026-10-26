@@ -16,7 +16,7 @@ export function workspaceDeleteCommand(name: string, opts: { yes?: boolean }): P
 
     if (!opts.yes) {
       if (!canPrompt()) {
-        return yield* Effect.die(new Error('Workspace deletion requires confirmation. Re-run with --yes in a non-interactive environment.'));
+        return yield* Effect.die(new Error(`Deleting a workspace is permanent, and no terminal is here to confirm it. Run: kinu workspace delete ${name} --yes`));
       }
 
       console.log(DIM(`Deletion is permanent. Keep a copy first: kinu export ${target.cloudName}`));

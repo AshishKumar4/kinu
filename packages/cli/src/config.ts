@@ -275,8 +275,14 @@ export function resolveCloudOrigin(opts?: { origin?: string }): string {
   return (opts?.origin ?? environment ?? loadConfigFile().origin ?? DEFAULT_ORIGIN).replace(/\/+$/, '');
 }
 
-export function requireAuthConfig(): LocalCloudSession {
-  return resolveCloudSession() ?? storedAuthConfig('Not authenticated. Run: kinu auth (or set KINU_TOKEN)');
+/** The session a command sends with. A `--origin` naming another deployment is refused, never sent the token: a token
+ *  goes to the deployment it belongs to alone. */
+export function requireAuthConfig(opts: { origin?: string } = {}): LocalCloudSession {
+  const session = resolveCloudSession() ?? storedAuthConfig('Not authenticated. Run: kinu auth (or set KINU_TOKEN)');
+
+  if (opts.origin === undefined || new URL(resolveCloudOrigin(opts)).origin === new URL(session.origin).origin) return session;
+
+  return settleSync(Effect.fail(new KinuError('bad_input', `Signed in to ${session.origin}, not ${opts.origin}: sign in there first with kinu auth --origin ${opts.origin}`)));
 }
 
 export function requireStoredAuthConfig(): LocalCloudSession {

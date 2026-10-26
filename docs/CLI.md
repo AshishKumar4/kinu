@@ -195,6 +195,8 @@ kinu create jarvis --mode local --purpose "Keep this repo's tests green"
 
 List your workspaces.
 
+Also: `kinu ls`, `kinu workspaces`
+
 ```bash
 kinu list
 ```

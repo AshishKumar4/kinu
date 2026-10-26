@@ -74,8 +74,8 @@ export async function authCommand(opts: { origin?: string }): Promise<void> {
 /** The session every other command uses: `KINU_TOKEN` first, else the stored, unexpired one. */
 export function whoamiCommand(opts: { origin?: string }): Promise<void> {
   return settle(Effect.gen(function* () {
-    const { token } = requireAuthConfig();
-    const result = yield* Effect.promise(async () => whoami(defaultOrigin(opts), token));
+    const { origin, token } = requireAuthConfig(opts);
+    const result = yield* Effect.promise(async () => whoami(origin, token));
     console.log(`${ACCENT(result.user.email)} ${DIM(result.user.id)}`);
   }));
 }
@@ -88,34 +88,38 @@ export function logoutCommand(opts: { origin?: string }): Promise<void> {
     const asked = defaultOrigin(opts);
     const token = config.accessToken;
 
-    if (token && new URL(asked).origin !== new URL(origin).origin) {
+    if (!token) {
+      console.log(DIM('Not signed in, so there is nothing to sign out of. Sign in with: kinu auth'));
+
+      return;
+    }
+
+    if (new URL(asked).origin !== new URL(origin).origin) {
       return yield* Effect.fail(new KinuError('bad_input', `Signed in to ${origin}, not ${asked}: run kinu logout without --origin or KINU_ORIGIN to sign out of ${origin}.`));
     }
 
-    if (token) {
-      const revoked = yield* Effect.catchCause(Effect.as(Effect.promise(() => logout(origin, token)), true), (failed) => Effect.gen(function* () {
-        // The raw token is the only copy (the server stores a hash); deleting it would orphan a live 180-day bearer,
-        // so it stays pending for the next logout or `kinu auth revoke --all`.
-        const reason = renderThrownChain({ cause: Cause.squash(failed) });
-        console.error(`${WARN('!')} Could not revoke the session at ${origin} (${reason}); it may still be valid.`);
-        yield* Effect.promise(() => updateConfigFile((current) => {
-          current.pendingRevocation = {
-            token,
-            origin,
-            at: Date.now(),
-          };
-        }));
-
-        return false;
+    const revoked = yield* Effect.catchCause(Effect.as(Effect.promise(() => logout(origin, token)), true), (failed) => Effect.gen(function* () {
+      // The raw token is the only copy (the server stores a hash); deleting it would orphan a live 180-day bearer,
+      // so it stays pending for the next logout or `kinu auth revoke --all`.
+      const reason = renderThrownChain({ cause: Cause.squash(failed) });
+      console.error(`${WARN('!')} Could not revoke the session at ${origin} (${reason}); it may still be valid.`);
+      yield* Effect.promise(() => updateConfigFile((current) => {
+        current.pendingRevocation = {
+          token,
+          origin,
+          at: Date.now(),
+        };
       }));
 
-      if (!revoked) {
-        yield* Effect.promise(() => bumpProviderRevision());
-        console.log(`${WARN('!')} Not signed out: the session is still valid, and this PC keeps its token so a later logout can revoke it.`);
-        console.log(DIM(`Run \`kinu logout\` again once ${origin} is reachable, or end it with \`kinu auth revoke --all\` from any PC.`));
+      return false;
+    }));
 
-        return;
-      }
+    if (!revoked) {
+      yield* Effect.promise(() => bumpProviderRevision());
+      console.log(`${WARN('!')} Not signed out: the session is still valid, and this PC keeps its token so a later logout can revoke it.`);
+      console.log(DIM(`Run \`kinu logout\` again once ${origin} is reachable, or end it with \`kinu auth revoke --all\` from any PC.`));
+
+      return;
     }
 
     yield* Effect.promise(() => updateConfigFile((current) => {
@@ -137,12 +141,8 @@ export function authSessionsCommand(
   action: string, session: string | undefined, opts: { origin?: string; all?: boolean },
 ): Promise<void> {
   return settle(Effect.gen(function* () {
-    const auth = requireAuthConfig();
-
     // The sessions listed and ended are the signed-in deployment's: a different --origin is refused, never ignored.
-    if (opts.origin !== undefined && new URL(defaultOrigin(opts)).origin !== new URL(auth.origin).origin) {
-      return yield* Effect.fail(new KinuError('bad_input', `Signed in to ${auth.origin}, not ${opts.origin}: sign in there first with kinu auth --origin ${opts.origin}`));
-    }
+    const auth = requireAuthConfig(opts);
 
     if (action === 'revoke') {
       if (opts.all === true && session === undefined) {

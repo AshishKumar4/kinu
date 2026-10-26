@@ -596,4 +596,38 @@ describe("a logout the server could not be told about", () => {
       await elsewhere.stop(true);
     }
   });
+
+  // Review, 2026-10-25: `kinu whoami --origin <other>` sent the stored token to that other deployment.
+  test("whoami naming another deployment sends it nothing", async () => {
+    const asked: string[] = [];
+
+    const elsewhere = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch: (request) => {
+        asked.push(request.headers.get("authorization") ?? "");
+
+        return Response.json({ user: { id: "u", email: "someone@else.example" } });
+      },
+    });
+
+    const home = logoutHome("https://kinu.example");
+
+    const script = `
+      const { whoamiCommand } = await import('./packages/cli/src/commands/auth.ts');
+      await whoamiCommand({ origin: ${JSON.stringify(`http://127.0.0.1:${elsewhere.port}`)} }).catch((failure) => { console.error(String(failure?.message ?? failure)); });
+    `;
+
+    const { KINU_ORIGIN: _ambient, ...inherited } = process.env;
+
+    try {
+      const proc = Bun.spawn({ cmd: [process.execPath, "-e", script], cwd: resolve(__dirname, "../../.."), env: { ...inherited, KINU_HOME: home, NO_COLOR: "1", KINU_TOKEN: "" }, stdout: "pipe", stderr: "pipe" });
+      const said = await new Response(proc.stderr).text();
+
+      await proc.exited;
+      expect({ asked, said: said.includes("Signed in to https://kinu.example") }).toEqual({ asked: [], said: true });
+    } finally {
+      await elsewhere.stop(true);
+    }
+  });
 });
