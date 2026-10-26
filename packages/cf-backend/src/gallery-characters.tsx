@@ -1,6 +1,6 @@
 /**
  * `?frame=characters`: every chat mascot's colour and what it wears, in every state its eyes carry, at the sizes the
- * app draws them. The first is Main, in the crown; then one agent in each accessory, then agents as their seeds fall.
+ * app draws them. The first is Main, in its cowboy hat; then one agent in each accessory, then agents as their seeds fall.
  */
 import type { AgentActivity } from "@kinu.run/core";
 import { ChatMascot, mascotAccessory, mascotColour, mascotSeed, type MascotAccessory } from "@/components/ui/Marks";

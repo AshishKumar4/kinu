@@ -1,6 +1,6 @@
 /**
  * 2026-10-20, the owner on setup's assistant: "why a pink agent with a crown? maybe use the user's name". The assistant
- * wears a look drawn from the person's name, the same wherever it is drawn, and never Main's crown.
+ * wears a look drawn from the person's name, the same wherever it is drawn, and never Main's cowboy hat.
  */
 import './helpers/ui-module-globals';
 import { describe, expect, test } from 'bun:test';
@@ -15,8 +15,8 @@ describe("a person's assistant", () => {
       .toEqual(['person:ada lovelace', 'person:ada lovelace', 'person:ada lovelace']);
   });
 
-  test("never wears Main's crown, and two people's assistants differ", () => {
-    expect(NAMES.map((name) => mascotAccessory(personMascot(name).seed)).filter((worn) => worn === 'crown')).toEqual([]);
+  test("never wears Main's cowboy hat, and two people's assistants differ", () => {
+    expect(NAMES.map((name) => mascotAccessory(personMascot(name).seed)).filter((worn) => worn === 'cowboy')).toEqual([]);
     expect(new Set(NAMES.map((name) => JSON.stringify(personMascot(name)))).size).toBe(NAMES.length);
   });
 

@@ -25,7 +25,7 @@ export interface MascotLook {
 
 /**
  * The look of a person's own assistant, from the person's name: its hue and what it wears are the name's, the same on
- * every page it appears on, and never Main's crown (a workspace's main chat), which means nothing to them.
+ * every page it appears on, and never Main's cowboy hat (a workspace's main chat), which means nothing to them.
  */
 export function personMascot(name: string): MascotLook {
   const seed = `person:${name.trim().toLowerCase()}`;
@@ -63,19 +63,19 @@ function Eyes({ face }: { face: Face }) {
 }
 
 /** What a mascot wears; `null`, nothing. */
-export type MascotAccessory = "crown" | "party" | "beanie" | "tophat" | "cap" | "bow" | "headphones" | "glasses" | "flower";
+export type MascotAccessory = "cowboy" | "party" | "beanie" | "tophat" | "cap" | "bow" | "headphones" | "glasses" | "flower";
 
-/** The accessories worn by chance; the crown is Main's alone. A few agents wear nothing, so a strip stays calm. */
+/** The accessories worn by chance; the cowboy hat is Main's alone. A few agents wear nothing, so a strip stays calm. */
 const WORN: readonly (MascotAccessory | null)[] = [
   "party", "beanie", "tophat", "cap", "bow", "headphones", "glasses", "flower", null, null, null,
 ];
 
 /**
  * What an agent wears, from its seed: the same on every reload and device, and apart from its colour, which its
- * workspace and birth rank pick. Main, whose seed is `<workspace>/main`, wears the crown.
+ * workspace and birth rank pick. Main, whose seed is `<workspace>/main`, wears the cowboy hat.
  */
 export function mascotAccessory(seed: string): MascotAccessory | null {
-  if (seed.endsWith("/main")) return "crown";
+  if (seed.endsWith("/main")) return "cowboy";
 
   return WORN[(hashOf(seed) >>> 20) % WORN.length] ?? null;
 }
@@ -87,16 +87,31 @@ const INK = ILLUSTRATION.ink;
 
 const GOLD = ILLUSTRATION.gold;
 
+/** Main's cowboy hat: brown felt shaded top to bottom, and a brass band (the owner's pick, 2026-10-26). */
+const FELT = ["#B4814C", "#7E5229", "#5C3A1B"] as const;
+
+const BRASS = "#E0A458";
+
 /** Drawn on the tile's 32-unit grid: its top edge runs at y 4 and its eyes at x 12 and 20. Hats sit left of centre,
  *  away from the waiting dot at the top right, which is drawn over anything that reaches it. */
-function Accessory({ kind }: { kind: MascotAccessory }) {
+function Accessory({ kind, id }: { kind: MascotAccessory; id: string }) {
   switch (kind) {
-    case "crown":
+    case "cowboy":
       return (
-        <g {...RING}>
-          <path d="M9.6 6.8 9 -0.4l3.5 3 3.5-5 3.5 5 3.5-3-.6 7.2z" fill={GOLD} strokeLinejoin="round" />
-          <circle cx={16} cy={4.2} r={1.2} fill={ILLUSTRATION.red} stroke="none" />
-        </g>
+        <>
+          <defs>
+            <linearGradient id={`${id}hf`} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={FELT[0]} /><stop offset="1" stopColor={FELT[1]} /></linearGradient>
+            <linearGradient id={`${id}hb`} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={FELT[1]} /><stop offset="1" stopColor={FELT[2]} /></linearGradient>
+          </defs>
+          <g transform="rotate(-7 16 5)">
+            <path {...RING} strokeLinejoin="round" fill={`url(#${id}hb)`} d="M3.6 6.2Q4.6 3.8 8 4.9Q16 7 24 4.9Q27.4 3.8 28.4 6.2Q27.4 9 16 8.8Q4.6 9 3.6 6.2Z" />
+            <path {...RING} strokeLinejoin="round" fill={`url(#${id}hf)`} d="M9.6 6.4Q9.1 0.6 11.3 -1.5Q13.2 -2.9 14.5 -1.1Q16 -2.3 17.5 -1.1Q18.8 -2.9 20.7 -1.5Q22.9 0.6 22.4 6.4Q16 7.6 9.6 6.4Z" />
+            <path d="M9.7 3.9Q16 5.1 22.3 3.9L22.4 5.7Q16 6.9 9.6 5.7Z" fill={BRASS} />
+            <path d="M14.5 -1.1Q15.3 1.4 16 3.6M17.5 -1.1Q16.8 1.4 16 3.6" stroke={FELT[2]} strokeWidth={0.6} fill="none" opacity={0.7} />
+            <path d="M11 0.6Q11 -0.8 12 -1.3" stroke="#fff" strokeWidth={0.8} strokeLinecap="round" fill="none" opacity={0.45} />
+            <path d="M5.2 6.3Q9 7.9 16 7.8" stroke="#fff" strokeWidth={0.6} strokeLinecap="round" fill="none" opacity={0.25} />
+          </g>
+        </>
       );
     case "party":
       return (
@@ -202,7 +217,7 @@ export function ChatMascot({ seed, colour, activity, size = 16 }: { seed: string
         )}
         <path d="M9 8.6q4-2.4 9-1.6" stroke="#fff" strokeWidth={1.6} strokeLinecap="round" opacity={0.45} fill="none" />
         <Eyes face={face} />
-        {accessory !== null && <Accessory kind={accessory} />}
+        {accessory !== null && <Accessory kind={accessory} id={id} />}
       </g>
       {face === "waiting" && <circle className="p-mascot-badge" cx={26.4} cy={5.6} r={4} fill="var(--c-danger)" stroke="var(--mascot-ring, var(--c-bg))" strokeWidth={1.6} />}
     </svg>
