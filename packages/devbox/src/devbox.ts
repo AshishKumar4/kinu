@@ -1054,8 +1054,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   /**
-   * A snapshot start that fails falls back to the next source and the chain. The box's own snapshot is never given up on a
-   * clock: the platform refuses one it no longer holds at once ("not found", D64), so one not yet admitted is on its way
+   * A snapshot start the platform refuses, or whose probe runs and fails, falls back to the next source and the chain; an
+   * exec the platform said nothing about, its connection lost, is no verdict on the source (D118). The box's own snapshot
+   * is never given up on a clock: the platform refuses one it no longer holds at once ("not found", D64), so one not yet admitted is on its way
    * however long the platform takes, and a wake from the backup would lose the root it holds (D117). A golden has nothing
    * faster behind it, so its start has the golden object's own bound to be admitted before it is reported lost: at the
    * cutover, a slow golden was retired and every waiting box held for a rebuild (staging 99a13686c, 2026-10-23).
@@ -1068,17 +1069,19 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       const cutover = new AbortController();
       const missed = `the golden start was not admitted in ${String(GOLDEN_ADMISSION_MS / 1000)} s`;
       const timer = started.kind === 'golden' ? setTimeout(() => { cutover.abort(new DevboxError('io', missed)); }, GOLDEN_ADMISSION_MS) : undefined;
-      const [woke] = await Promise.allSettled([firstExec(container, AbortSignal.any([signal, cutover.signal]))]);
+      const failed = await admissionFailureOf(container, AbortSignal.any([signal, cutover.signal]));
       clearTimeout(timer);
 
-      if (woke.status === 'fulfilled') return true;
+      if (failed === undefined) return true;
 
       // A start its caller stopped waiting for is no verdict on its source.
       if (signal.aborted) return false;
 
-      // No room is no verdict on the snapshot: it stays the source, and the exec below fails in the platform's words, so
-      // the admission retries (staging, 2026-10-08).
-      if (!isCapacityRefusal({ cause: woke.reason }) && !await this.#cutOver(container, inputs, woke.reason, started)) return false;
+      // Nor is an exec the platform did not answer (D118), or no room (staging, 2026-10-08): the source stays, and the exec
+      // below asks again, failing the start in its own words if it fails again, so the admission retries.
+      const verdict = (failed.answered || cutover.signal.aborted) && !isCapacityRefusal({ cause: failed.failure });
+
+      if (verdict && !await this.#cutOver(container, inputs, failed.failure, started)) return false;
     }
 
     await firstExec(container, signal);
@@ -4288,27 +4291,33 @@ function keepStartRefusal(container: Container): void {
   }), 'keeping a start refusal');
 }
 
-/** The platform's refusal of the last start, else what the exec itself failed with. */
-function admissionFailure(container: Container, failed: LateStartFailure): Error {
-  const cause = startRefusals.get(container) ?? failed.cause;
-
-  return cause instanceof Error ? cause : new Error(describe({ cause }));
+/** Why the first exec after a start failed: the platform's refusal of the start, else the exec's own failure. Answered
+ *  when the platform refused the start or the probe ran and failed; an exec that failed while the platform said nothing
+ *  of the start, its connection lost, answers nothing about what the box started from (D118). */
+interface AdmissionFailure {
+  readonly failure: Error;
+  readonly answered: boolean;
 }
 
 /** Why the first exec after a start failed, or nothing when it ran clean. */
-async function admissionFailureOf(container: Container, signal: AbortSignal): Promise<Error | undefined> {
+async function admissionFailureOf(container: Container, signal: AbortSignal): Promise<AdmissionFailure | undefined> {
   // Its output is the exec's too: a container that answered and then went is read against the start's refusal as well.
   const [admitted] = await Promise.allSettled([containerExec(container, ['/bin/true'], { signal }).then(async (process) => await process.output())]);
 
-  if (admitted?.status !== 'fulfilled') return admissionFailure(container, { cause: admitted?.reason });
+  if (admitted?.status !== 'fulfilled') {
+    const refused = startRefusals.has(container);
+    const cause = refused ? startRefusals.get(container) : admitted?.reason;
 
-  return admitted.value.exitCode === 0 ? undefined : new DevboxError('io', `native container admission exited ${String(admitted.value.exitCode)}`);
+    return { failure: cause instanceof Error ? cause : new Error(describe({ cause })), answered: refused };
+  }
+
+  return admitted.value.exitCode === 0 ? undefined : { failure: new DevboxError('io', `native container admission exited ${String(admitted.value.exitCode)}`), answered: true };
 }
 
 async function firstExec(container: Container, signal: AbortSignal): Promise<void> {
   const failed = await admissionFailureOf(container, signal);
 
-  if (failed !== undefined) throw failed;
+  if (failed !== undefined) throw failed.failure;
 }
 
 /** A locale that reads text as UTF-8; the C one the box starts in reads a byte past ASCII as an invalid sequence. */

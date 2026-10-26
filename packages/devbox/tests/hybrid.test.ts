@@ -95,6 +95,25 @@ test('a snapshot wake refused for room after its admission probe answered keeps 
   expect({ starts: container.startOptions.map(startedFrom), snapshotKept: rows.has('devbox:snapshot') }).toEqual({ starts: ['golden', 'snapshot-1'], snapshotKept: true });
 });
 
+// Review, 2026-10-26: a probe that failed while the platform said nothing of the start, its connection lost, was read as a
+// verdict on the snapshot; the box gave its own snapshot up and woke from the golden and the backup, its root lost (D118).
+test('a snapshot wake whose admission probe loses its connection keeps its own snapshot and wakes from it, its root kept', async () => {
+  asked.length = 0;
+  registry.deleted.length = 0;
+  const { box, container, rows } = chainBox(HybridBox);
+  await box.devboxStartup();
+  await box.writeFile('/root/.cache/kept', 'packages the backup leaves out');
+  await box.quiesce();
+  container.admissionLoss = { lost: new Error('Network connection lost.') };
+  await box.devboxStartup();
+  const kept = await box.exists('/root/.cache/kept');
+
+  expect({
+    starts: container.startOptions.map(startedFrom), snapshot: rows.has('devbox:snapshot'), deleted: [...registry.deleted], kept: kept.exists,
+    notices: (await box.devboxIncidentReasons()).map(row => row.stage),
+  }).toEqual({ starts: ['golden', 'snapshot-1'], snapshot: true, deleted: [], kept: true, notices: [] });
+});
+
 test('a snapshot wake the platform refuses starts from the golden and tells the agent when it restored to', async () => {
   setSystemTime(new Date('2026-09-30T00:00:00Z'));
   const { box, container, rows } = await rested();

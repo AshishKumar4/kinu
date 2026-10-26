@@ -395,9 +395,10 @@ export class FakeSandbox {
   readonly openStdin: string[] = [];
   /** Thrown by the next close of an exec's stdin, as by a connection lost after the exec answered. */
   stdinCloseFault: Error | undefined;
-  /** The next admission probe (`/bin/true`) answers, then its output rejects with `lost` and the start's `monitor()` with
-   *  `refusal`: a container refused after the probe was sent. */
-  admissionLoss: { readonly lost: Error; readonly refusal: Error } | undefined;
+  /** The next admission probe (`/bin/true`) answers, then its output rejects with `lost`, and the start's `monitor()` with
+   *  `refusal` when one is given: a container refused after the probe was sent. With none, the container runs on and only
+   *  the probe's connection was lost. */
+  admissionLoss: { readonly lost: Error; readonly refusal?: Error } | undefined;
   /** Each signal the box asked the platform to send, a task nobody awaits too. */
   readonly platformSignals: number[] = [];
   /** Stands in for what `/proc/mounts` reports for paths the box's `mountBucket` holds mounted. */
@@ -1221,7 +1222,8 @@ export class FakeSandbox {
 
       if (loss !== undefined) {
         this.admissionLoss = undefined;
-        this.#ended.reject(loss.refusal);
+
+        if (loss.refusal !== undefined) this.#ended.reject(loss.refusal);
 
         return processResult(new Promise<ExecResult>((_, reject) => { setImmediate(() => { reject(loss.lost); }); }), pid);
       }

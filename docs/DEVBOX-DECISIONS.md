@@ -5469,6 +5469,19 @@ golden keeps `GOLDEN_ADMISSION_MS`. `hybrid.test.ts` holds a quick restart's own
 admits it: red on the 60 s cutover (woke from the golden, a recovery notice, the snapshot gone), green after (still
 waiting at 10 minutes with the snapshot kept, then woken from it, no notice).
 
+D118. An admission exec the platform did not answer is no verdict on the snapshot (2026-10-26; narrows D117's "a start
+that fails"). `#admit` cut over on any first exec that failed outside the platform's words for no room. The probe's
+helper folded the start's refusal, recorded from `monitor()`, and the exec's own failure into one error, so a probe whose
+connection was lost ("Network connection lost.", which failed execs on staging rc23 and rc29, `processes.ts`) read as a
+refused snapshot: the cutover superseded and swept the box's own snapshot, and the box woke from the golden and the
+backup, its root lost. The probe now says whether its failure was answered: the platform refused the start (D64's "not
+found"), or the probe ran and failed. Only an answer, or the golden's admission bound, cuts over. An exec it did not
+answer leaves the source as no room does, and the exec after it asks again; if that fails too, the start fails in its
+words and D94 decides whether it re-arms. A hypothesis on the platform: staging's two cutovers from 2026-10-19 to 10-26
+were both D111's clock, and production had none. `hybrid.test.ts` loses the probe's connection with no refusal: red on
+8e350f4f3 (woke from the golden, `snapshot-1` deleted, the root's file lost, a recovery notice), green after (woke from
+its own snapshot, the root kept, no notice).
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean
