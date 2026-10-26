@@ -2,23 +2,34 @@
 // does, describe one as TypeScript, and build the request a call makes. No method has code of its own.
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import generated from './methods.generated.json';
 import { GoogleApiSchema, type GoogleApi, type GoogleMethod, type GoogleProperty } from './table';
 import { KinuError } from '../obs/index';
 import type { JsonValue } from '../utils/json';
 
-type ApiName = keyof typeof generated;
+/** The whole table, half a megabyte most turns never ask for: imported on its first use, so no Worker's startup links
+ *  it (L27). */
+const importTable = async () => (await import('./methods.generated.json')).default;
 
-function isApiName(name: string): name is ApiName {
-  return Object.hasOwn(generated, name);
+type Table = Awaited<ReturnType<typeof importTable>>;
+
+type ApiName = keyof Table;
+
+let imported: Promise<Table> | undefined;
+
+function pinnedTable(): Effect.Effect<Table> {
+  return Effect.promise(() => (imported ??= importTable()));
+}
+
+function isApiName(table: Table, name: string): name is ApiName {
+  return Object.hasOwn(table, name);
 }
 
 const read = new Map<string, GoogleApi>();
 
-/** An API's table, checked on first use: the whole table is half a megabyte, most of it never asked for. */
-function apiNamed(name: string): GoogleApi | null {
-  if (!isApiName(name)) return null;
-  const held = read.get(name) ?? v.parse(GoogleApiSchema, generated[name]);
+/** An API's table, checked on first use. */
+function apiNamed(table: Table, name: string): GoogleApi | null {
+  if (!isApiName(table, name)) return null;
+  const held = read.get(name) ?? v.parse(GoogleApiSchema, table[name]);
 
   read.set(name, held);
 
@@ -26,8 +37,8 @@ function apiNamed(name: string): GoogleApi | null {
 }
 
 /** Where each pinned API answers: the only addresses the connection's token is sent to. */
-export function googleBaseUrls(): string[] {
-  return Object.values(generated).map((api) => api.baseUrl);
+export function googleBaseUrls(): Effect.Effect<string[]> {
+  return Effect.map(pinnedTable(), (table) => Object.values(table).map((api) => api.baseUrl));
 }
 
 /** A method as the catalog holds it, with the API it belongs to. */
@@ -38,8 +49,8 @@ export interface GoogleMethodRef {
 }
 
 /** `gmail.users.messages.list` and the like; null for an id no reached API has. */
-function googleMethod(id: string): GoogleMethodRef | null {
-  const api = apiNamed(id.split('.')[0] ?? '');
+function googleMethod(table: Table, id: string): GoogleMethodRef | null {
+  const api = apiNamed(table, id.split('.')[0] ?? '');
   const method = api?.methods[id];
 
   return api === null || method === undefined ? null : { id, api, method };
@@ -57,10 +68,14 @@ export interface GoogleFound {
 }
 
 /** Methods for what `query` asks, best first: each of its words found in a method's id counts twice its description. */
-export function searchGoogle(query: string, limit: number): GoogleFound[] {
+export function searchGoogle(query: string, limit: number): Effect.Effect<GoogleFound[]> {
+  return Effect.map(pinnedTable(), (table) => ranked(table, query, limit));
+}
+
+function ranked(table: Table, query: string, limit: number): GoogleFound[] {
   const words = query.toLowerCase().split(/[^a-z0-9]+/u).filter((word) => word.length > 1);
 
-  const scored = Object.keys(generated).flatMap((name) => Object.entries(apiNamed(name)?.methods ?? {}).map(([id, method]) => {
+  const scored = Object.keys(table).flatMap((name) => Object.entries(apiNamed(table, name)?.methods ?? {}).map(([id, method]) => {
     const said = (method.d ?? '').toLowerCase();
     const named = id.toLowerCase();
 
@@ -127,14 +142,14 @@ function interfaceOf(api: GoogleApi, name: string): string[] {
 }
 
 /** The types `roots` reach, nearest first, the first `DESCRIBED_TYPES` written out and the rest named. */
-function typesFrom(api: GoogleApi, roots: readonly string[]): string[] {
+function typesFrom(table: Table, api: GoogleApi, roots: readonly string[]): string[] {
   const seen = [...new Set(roots)];
 
   for (let at = 0; at < seen.length && seen.length < DESCRIBED_TYPES * 4; at += 1) {
     for (const ref of Object.values(api.schemas[seen[at] ?? '']?.props ?? {}).flatMap(refsOf)) if (!seen.includes(ref)) seen.push(ref);
   }
 
-  const apiName = Object.keys(generated).find((name) => apiNamed(name) === api) ?? '';
+  const apiName = Object.keys(table).find((name) => apiNamed(table, name) === api) ?? '';
   const named = seen.slice(DESCRIBED_TYPES);
 
   return [
@@ -143,7 +158,7 @@ function typesFrom(api: GoogleApi, roots: readonly string[]): string[] {
   ];
 }
 
-function methodDeclaration(found: GoogleMethodRef): string {
+function methodDeclaration(table: Table, found: GoogleMethodRef): string {
   const { api, method } = found;
   const writes = googleWrites(method);
   // Required first, as a reader fills them in.
@@ -164,19 +179,21 @@ function methodDeclaration(found: GoogleMethodRef): string {
     writes
       ? `}): Promise<{ status: 'done'; answer: ${answer} } | { status: 'asked' | 'denied'; approval: string }>;`
       : `}): Promise<${answer}>;`,
-    ...typesFrom(api, [method.request, method.response].filter((name) => name !== undefined)),
+    ...typesFrom(table, api, [method.request, method.response].filter((name) => name !== undefined)),
   ].join('\n');
 }
 
 /** A method as TypeScript, or one of an API's types named `api.Type` (`gmail.Message`); null for neither. */
-export function describeGoogle(name: string): string | null {
-  const found = googleMethod(name);
+export function describeGoogle(name: string): Effect.Effect<string | null> {
+  return Effect.map(pinnedTable(), (table) => {
+    const method = googleMethod(table, name);
 
-  if (found !== null) return methodDeclaration(found);
-  const [apiName = '', type = ''] = name.split('.', 2);
-  const api = apiNamed(apiName);
+    if (method !== null) return methodDeclaration(table, method);
+    const [apiName = '', type = ''] = name.split('.', 2);
+    const api = apiNamed(table, apiName);
 
-  return api === null || api.schemas[type] === undefined ? null : typesFrom(api, [type]).join('\n').trim();
+    return api === null || api.schemas[type] === undefined ? null : typesFrom(table, api, [type]).join('\n').trim();
+  });
 }
 
 /** A call as it goes to Google. */
@@ -237,7 +254,7 @@ export function googleRequest(
   id: string, params: Readonly<Record<string, JsonValue>>, body: JsonValue | undefined,
 ): Effect.Effect<{ readonly found: GoogleMethodRef; readonly request: GoogleRequest }, KinuError> {
   return Effect.gen(function* () {
-    const found = googleMethod(id);
+    const found = googleMethod(yield* pinnedTable(), id);
 
     if (found === null) return yield* new KinuError('missing', `No Google method is named ${id}. Find one with google.search.`);
     const { method } = found;

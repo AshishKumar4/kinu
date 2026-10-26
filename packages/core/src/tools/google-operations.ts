@@ -119,12 +119,10 @@ function serveGoogle(deps: GoogleDeps): readonly Served[] {
   ));
 
   return [
-    serve(GOOGLE.search, ({ query, limit }) => Effect.succeed(searchGoogle(query, limit ?? 8))),
-    serve(GOOGLE.describe, ({ name }) => {
-      const declared = describeGoogle(name);
-
-      return declared === null ? Effect.fail(new KinuError('missing', `No Google method or type is named ${name}. Find one with google.search.`)) : Effect.succeed(declared);
-    }),
+    serve(GOOGLE.search, ({ query, limit }) => searchGoogle(query, limit ?? 8)),
+    serve(GOOGLE.describe, ({ name }) => Effect.flatMap(describeGoogle(name), (declared) => (declared === null
+      ? Effect.fail(new KinuError('missing', `No Google method or type is named ${name}. Find one with google.search.`))
+      : Effect.succeed(declared)))),
     serve(GOOGLE.read, ({ method, params }) => Effect.gen(function* () {
       const { found, request } = yield* googleRequest(method, params ?? {}, undefined);
 
