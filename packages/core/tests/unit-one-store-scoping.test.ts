@@ -144,7 +144,7 @@ function runtimeFor(w: World, actor: ActorHandle, vfs: VFS = createMemoryVfs().v
     },
     executionRouter: {
       register: () => {}, unregister: () => {}, listExecutors: () => [],
-      getProvider: () => undefined, getProviders: () => [],
+      getProvider: () => undefined, ungatedProvider: () => undefined, getProviders: () => [],
     },
   };
 }

@@ -456,7 +456,8 @@ function gitView(output: string): Effect.Effect<GitView, KinuError> {
 }
 
 function getGitDiff(rt: AgentRuntime, executorId: string): Effect.Effect<ExecutorDiffResult> {
-  const provider = rt.executionRouter?.getProvider(executorId);
+  // The scan is the product's own fixed read, not an agent's command, so the owner is never asked to approve it (#121).
+  const provider = rt.executionRouter?.ungatedProvider(executorId);
 
   if (!provider) return Effect.succeed({ files: [], mode: 'git', error: `Executor "${executorId}" not found` });
   const execTool = provider.tools.exec;

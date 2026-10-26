@@ -14,19 +14,27 @@ import { STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/ap
 export class DefaultExecutionRouter implements ExecutionRouter {
   private readonly providers = new Map<string, ExecutorProvider>();
 
+  private readonly ungated = new Map<string, ExecutorProvider>();
+
   /** Every provider is gated once with this policy on register; default is strict with no channel. */
   constructor(private readonly approvalPolicy: ShellApprovalPolicy = STRICT_NO_CHANNEL_POLICY) {}
 
   register(provider: ExecutorProvider): void {
     this.providers.set(provider.name, gateProviderExec(provider, this.approvalPolicy));
+    this.ungated.set(provider.name, provider);
   }
 
   unregister(name: string): void {
     this.providers.delete(name);
+    this.ungated.delete(name);
   }
 
   getProvider(name: string): ExecutorProvider | undefined {
     return this.providers.get(name);
+  }
+
+  ungatedProvider(name: string): ExecutorProvider | undefined {
+    return this.ungated.get(name);
   }
 
   getProviders(): ExecutorProviderSurface[] {
