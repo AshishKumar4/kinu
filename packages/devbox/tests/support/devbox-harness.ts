@@ -478,12 +478,12 @@ export class FakeSandbox {
 
   /** Thrown by the next `snapshotContainer`, as a refused snapshot is. */
   snapshotFault: Error | undefined;
-  /** Holds the next `snapshotContainer` until `release` settles, telling `entered` it began: a snapshot under way. With
-   *  `finishesAtStop`, a stop meanwhile finishes it and answers it before the container ends, as the platform does (D51:
-   *  a stop 1 s into a save waits for it); without, the stop ends the container and the take stays unanswered. */
-  snapshotHold: { readonly entered: () => void; readonly release: Promise<void>; readonly finishesAtStop?: boolean } | undefined;
-  /** The save a stop finishes first, while one is under way. */
-  #savingAtStop: { readonly finish: () => void; readonly answered: Promise<void> } | undefined;
+  /** Holds the next `snapshotContainer` until `release` settles, telling `entered` it began: a snapshot under way. A
+   *  stop meanwhile ends the container and the take never answers, as on staging (D116: 17 of 17 such takes). */
+  snapshotHold: { readonly entered: () => void; readonly release: Promise<void> } | undefined;
+  /** The files the container's root holds, as its filesystem counts them (`df -i`): the image's own by default; null
+   *  when the count never answers, as on a disk that stopped answering (D89). */
+  rootFiles: number | null = 43_000;
   readonly files = new Map<string, string>();
   /** Files whose bytes are not UTF-8 text, which `files` cannot hold; the SDK's file reads serve them as bytes. */
   readonly binaryFiles = new Map<string, Uint8Array>();
@@ -885,15 +885,6 @@ export class FakeSandbox {
     const fault = this.stopFault;
 
     if (fault !== undefined) return Promise.reject(fault);
-    const saving = this.#savingAtStop;
-
-    if (saving !== undefined) {
-      saving.finish();
-
-      // The container's end is told after the take's answer, as the platform tells it a task later.
-      return saving.answered.then(() => new Promise<void>((told) => { setImmediate(told); })).then(() => { this.#halt(); });
-    }
-
     this.#halt();
 
     return Promise.resolve();
@@ -980,15 +971,10 @@ export class FakeSandbox {
         if (fault !== undefined) throw fault;
 
         const disk = { files: new Map(this.files), binaryFiles: new Map(this.binaryFiles), directories: new Set(this.directories) };
-        const answered = Promise.withResolvers<void>();
 
         if (hold !== undefined) {
-          const finished = Promise.withResolvers<void>();
-
-          if (hold.finishesAtStop === true) this.#savingAtStop = { finish: finished.resolve, answered: answered.promise };
           hold.entered();
-          await Promise.race([hold.release, finished.promise]);
-          this.#savingAtStop = undefined;
+          await hold.release;
         }
 
         this.#snapshotsTaken += 1;
@@ -996,7 +982,6 @@ export class FakeSandbox {
         this.snapshots.set(id, 'ok');
         // As the disk was when the take began: a point in time, whatever the box wrote while it ran (D51).
         this.#snapshotDisks.set(id, disk);
-        queueMicrotask(answered.resolve);
 
         return { id, size: 1, name: options?.name };
       },
@@ -1120,6 +1105,12 @@ export class FakeSandbox {
   readonly #live = new Map<number, ExecProcess>();
 
   #nativeProtocol(args: string[], options: ContainerExecOptions): Promise<ExecProcess> | ExecProcess | undefined {
+    if (args[3] === 'devbox-root-files') {
+      const files = this.rootFiles;
+
+      return processResult(files === null ? new Promise<never>(() => undefined) : Promise.resolve({ stdout: `${String(files)}\n`, stderr: '', exitCode: 0 }), this.#pid++);
+    }
+
     if (args[3] === 'devbox-incarnation-read') {
       const fault = this.bootReadFaults.shift();
 

@@ -93,8 +93,16 @@ import {
   type StoredValue,
 } from './storage';
 
+/** What a rest traces of its take's timing (`rest.snapshot`). */
+interface RestTiming { readonly restMs: number; readonly waitedOut: boolean; readonly files: number | undefined; readonly waitMs: number }
+
+/** The files the container's root holds, from its filesystem's own count: `df` answers at once, where a walk of the
+ *  root costs what the take does. */
+const ROOT_FILES = "df -Pi / | awk 'NR == 2 { print $3 }'";
+
 /** Bounded wait for `running` to clear after an acknowledged stop: an unbounded wait pins the
  *  attempt, and `#armStartup` early-returns on a pinned attempt, so nothing re-arms. */
+
 const CONTAINER_STOP_ATTEMPTS = 50;
 
 interface RunningExec {
@@ -809,13 +817,43 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   /**
-   * How long a rest's stop waits for the platform's snapshot of its container; a take that lands while the container
-   * stops is still kept (D112). A save took 4.1-9.5 s on Medium (D51), and the snapshot and stop after a rest's commit
-   * took 0.15-6.1 s in each of the 40 rests on staging and the contracts in the week to 2026-10-22; one take on f44999
-   * never answered (D108), and the box refused every terminal for the 14 minutes it waited.
+   * The least a rest's stop waits for the platform's snapshot of its container. A save took 4.1-9.5 s on Medium (D51),
+   * and the snapshot and stop after a rest's commit took 0.15-6.1 s in each of the 40 rests on staging and the
+   * contracts in the week to 2026-10-22.
    */
   protected get restSnapshotWaitMs(): number {
     return 60_000;
+  }
+
+  /** What a take costs per file on the root (D116): 300,000 files past the image's 43,000 took 53-75 s on staging,
+   *  about 0.21 ms a file, which the wait doubles. */
+  protected get restSnapshotMsPerFile(): number {
+    return 0.45;
+  }
+
+  /** The most a rest waits for its take: one on f44999 never answered (D108), and the box refused every terminal for
+   *  the 14 minutes it waited. */
+  protected get restSnapshotWaitCeilingMs(): number {
+    return 600_000;
+  }
+
+  /** The files the container's root holds, or none where it cannot say. */
+  async #rootFiles(): Promise<number | undefined> {
+    const container = this.ctx.container;
+
+    if (container?.running !== true) return undefined;
+    const [read] = await Promise.allSettled([(async () => (await containerExec(container, ['/bin/sh', '-c', ROOT_FILES, 'devbox-root-files'])).output())()]);
+    const counted = read.status === 'fulfilled' ? Number.parseInt(new TextDecoder().decode(read.value.stdout).trim(), 10) : Number.NaN;
+
+    return Number.isSafeInteger(counted) && counted >= 0 ? counted : undefined;
+  }
+
+  /** How long a rest over `files` waits for its take: what they cost (D116), never less than the floor nor more than the
+   *  ceiling. A root with no count waits the floor. */
+  #restSnapshotWaitFor(files: number | undefined): number {
+    const scaled = files === undefined ? 0 : files * this.restSnapshotMsPerFile;
+
+    return Math.min(this.restSnapshotWaitCeilingMs, Math.max(this.restSnapshotWaitMs, scaled));
   }
 
   protected get policy(): DevboxPolicy {
@@ -2602,16 +2640,27 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   /**
-   * The rest's snapshot, then the stop. The stop waits for the take up to {@link restSnapshotWaitMs}, and the take is the
-   * next wake whenever it lands before the container has stopped: the platform finishes a save before it ends the
-   * container (D51), and a take's time grows with the files on the root. Only a take still under way once the container
-   * has stopped is given up, owed for deletion (D108's take that never answered).
+   * The rest's snapshot, then the stop. A take's time grows with the files on the root, and one still under way when
+   * the stop begins never answers (D116, measured: 17 of 17 on staging), so the stop waits for the take as long as the
+   * root's files cost ({@link #restSnapshotWaitFor}). The floor's wait runs from the take's start: a count still
+   * unanswered by then waits nothing more, as a disk that stopped answering (D89) never extends it. Only a take still
+   * unanswered when the wait ends is given up, owed for deletion (D108's take that never answered).
    */
   async #snapshotAndStop(): Promise<void> {
     const began = Date.now();
     const taking = Promise.allSettled([this.#snapshots.save()]).then(([taken]) => ({ taken, takeMs: Date.now() - began }));
     const late = Symbol('late');
-    const waited = await Promise.race([taking, scheduler.wait(this.restSnapshotWaitMs).then(() => late)]);
+    const counted = Promise.race([this.#rootFiles(), scheduler.wait(this.restSnapshotWaitMs).then(() => undefined)]);
+    const waitMs = counted.then((files) => this.#restSnapshotWaitFor(files));
+
+    const waitedOut = waitMs.then(async (ms) => {
+      await scheduler.wait(Math.max(0, ms - (Date.now() - began)));
+
+      return late;
+    });
+
+    const waited = await Promise.race([taking, waitedOut]);
+    const files = await Promise.race([counted, Promise.resolve(undefined)]);
 
     try {
       this.#invalidateGeneration();
@@ -2620,14 +2669,14 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     } finally {
       // Already settled, the take wins the race: a settled promise's reaction runs before a later one's.
       const settled = await Promise.race([taking, Promise.resolve(late)]);
-      const at = { restMs: Date.now() - began, waitedOut: waited === late };
+      const at = { restMs: Date.now() - began, waitedOut: waited === late, files, waitMs: this.#restSnapshotWaitFor(files) };
 
       await (settled === late ? this.#restSnapshotAbandoned(at) : this.#restSnapshotSettled(settled, at));
     }
   }
 
   async #restSnapshotSettled(
-    { taken, takeMs }: { readonly taken: PromiseSettledResult<void>; readonly takeMs: number }, at: { readonly restMs: number; readonly waitedOut: boolean },
+    { taken, takeMs }: { readonly taken: PromiseSettledResult<void>; readonly takeMs: number }, at: RestTiming,
   ): Promise<void> {
     this.#trace('rest.snapshot', { outcome: taken.status === 'fulfilled' ? 'taken' : 'refused', takeMs, ...at });
 
@@ -2636,7 +2685,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }
   }
 
-  async #restSnapshotAbandoned(at: { readonly restMs: number; readonly waitedOut: boolean }): Promise<void> {
+  async #restSnapshotAbandoned(at: RestTiming): Promise<void> {
     this.#trace('rest.snapshot', { outcome: 'abandoned', ...at });
     this.#snapshots.abandon();
     await this.#record('quiesce', `the rest took no snapshot: the platform had not answered when the container stopped, ${String(Math.round(at.restMs / 1000))} s after it began, so the next wake recovers from the backup`);

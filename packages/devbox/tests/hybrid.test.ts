@@ -231,9 +231,21 @@ test('a rest whose snapshot is refused still rests, says why, and the next wake 
 });
 
 /** A hybrid box that gives up its rest's snapshot after 50 ms. */
+/** A box whose rest waits 50 ms for its take, whatever its root holds. */
 class ImpatientBox extends HybridBox {
   protected override get restSnapshotWaitMs(): number {
     return 50;
+  }
+
+  protected override get restSnapshotMsPerFile(): number {
+    return 0;
+  }
+}
+
+/** A box whose floor is 50 ms and whose root costs 1 ms per 1,000 files: 343 ms for 343,000. */
+class ScaledBox extends ImpatientBox {
+  protected override get restSnapshotMsPerFile(): number {
+    return 0.001;
   }
 }
 
@@ -270,16 +282,24 @@ test('a rest whose snapshot never answers stops without it, says why, and a requ
 });
 
 // hearthlit-field, production 2026-10-24/25: three rests in a row took 62, 104 and 67 s from their commit to the end of
-// the stop. Each gave its take up at 60 s, and its stop then took 2 to 44 s more while the platform finished the save
-// (D51), so every wake came from the golden and the backup, 12 to 20 s, without what the backup leaves out. On staging
-// (2026-10-25) a rest over 400,000 files under node_modules took 70 s, and its wake had no node_modules.
-test('a rest whose snapshot lands while its container stops keeps it: the next wake starts from it, its root kept', async () => {
+// the stop, each giving its take up at 60 s, so every wake came from the golden and the backup without what the backup
+// leaves out. On staging (2026-10-25) a take still under way when the stop began never answered (17 of 17), and a root of
+// 343,000 files took 53-75 s to take (D116).
+test('a rest over a root of many files waits for its take as long as those files cost: it is the next wake, its root kept', async () => {
   asked.length = 0;
-  const { box, container, rows } = chainBox(ImpatientBox);
+  const { box, container, rows } = chainBox(ScaledBox);
+  // Its clock: a box of the same 50 ms floor over the image's files alone, whose take never answers, gives its take up
+  // once that floor has passed.
+  const clock = chainBox(ImpatientBox);
   await box.devboxStartup();
+  await clock.box.devboxStartup();
   await box.writeFile('/root/.cache/kept', 'packages the backup leaves out');
-  container.snapshotHold = { entered: () => undefined, release: new Promise<void>(() => undefined), finishesAtStop: true };
-  const rest = await box.quiesce();
+  container.rootFiles = 343_000;
+  const answered = Promise.withResolvers<void>();
+  container.snapshotHold = { entered: () => undefined, release: answered.promise };
+  clock.container.snapshotHold = { entered: () => undefined, release: new Promise<void>(() => undefined) };
+  // The take answers past the floor, within what the root's files cost.
+  const [rest] = await Promise.all([box.quiesce(), clock.box.quiesce().then(() => { answered.resolve(); })]);
   await box.devboxStartup();
   const kept = await box.exists('/root/.cache/kept');
 
@@ -287,6 +307,18 @@ test('a rest whose snapshot lands while its container stops keeps it: the next w
     rest: rest.kind, starts: container.startOptions.map(startedFrom), snapshot: rows.has('devbox:snapshot'), kept: kept.exists,
     notices: (await box.devboxIncidentReasons()).map(row => row.stage),
   }).toEqual({ rest: 'committed', starts: ['golden', 'snapshot-1'], snapshot: true, kept: true, notices: [] });
+});
+
+// Review, 2026-10-26: the rest read the root's count before arming the take's wait, so a count that never answered would
+// have held the box in its rest for ever, as D108's take did.
+test('a rest whose root count never answers still waits only its floor for a take that never answers, and stops', async () => {
+  const { box, container } = chainBox(ScaledBox);
+  await box.devboxStartup();
+  container.rootFiles = null;
+  container.snapshotHold = { entered: () => undefined, release: new Promise<void>(() => undefined) };
+  const rest = await box.quiesce();
+
+  expect({ rest: rest.kind, running: container.running.running }).toEqual({ rest: 'committed', running: false });
 });
 
 test('a discard empties the box\'s store whether it holds no object or more than one listing of them', async () => {
