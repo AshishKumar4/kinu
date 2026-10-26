@@ -1,9 +1,9 @@
 import { Effect, Cause } from 'effect';
 import { detach } from '@kinu.run/core/obs';
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { executorLabel, executorSortKey, isActiveExecutionDevice, keepUnchanged, oneAtATime, pickDefaultExecutor, workspacePath, WORKSPACE_ROOT, type ChangeNotesResult, type ChangeSet, type ExecutorDiffResult, type ExecutorInfo } from "@kinu.run/core";
+import { executorLabel, executorSortKey, isActiveExecutionDevice, keepUnchanged, oneAtATime, pickDefaultExecutor, workspacePath, WORKSPACE_ROOT, type ChangeNotesResult, type ChangeSet, type ExecutorChangeCount, type ExecutorDiffResult, type ExecutorInfo } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import { lastValue, useAsyncResource, type AsyncResource } from "@/hooks/use-async-resource";
 import { readFailureText } from "@kinu.run/core";
 import { Loader } from "@/components/ui/Loader";
 import { lazyRoute } from "@/lazy-route";
@@ -67,13 +67,27 @@ interface Read {
   readonly unreadable: boolean;
 }
 
-/** Null hides the tab; 0 shows it unnumbered. */
-function countOf(read: Read | null, failed: boolean, shown: number): number | null {
-  if (read === null) return failed ? 0 : null;
+/** Each source's count, read while the listing is not shown (`getExecutorChangeCount`). */
+type Counts = ReadonlyMap<string, ExecutorChangeCount>;
 
-  if (read.sets.some((set) => set.files.length > 0)) return shown;
+/** Null hides the tab; 0 shows it unnumbered. The count is the shown source's: the picked one, else the first, as the listing shows. */
+function countOf(counts: Counts | null, failed: boolean, source: string): number | null {
+  if (counts === null) return failed ? 0 : null;
 
-  return read.unreadable ? 0 : null;
+  const each = [...counts.values()];
+
+  if (each.some((one) => one.files > 0)) return (counts.get(source) ?? each[0])?.files ?? 0;
+
+  return each.some((one) => one.error !== undefined) ? 0 : null;
+}
+
+const loading = <div className="flex h-full items-center justify-center"><Loader size="sm" /></div>;
+
+/** The listing before its first read: its failure, or a loader while Changes is shown. */
+function ListingPending({ resource, active, onRetry }: { resource: AsyncResource<Read | null>; active: boolean; onRetry: () => void }) {
+  if (resource.status === "error") return <div className="p-4"><LoadFailure what="the change-set" message={resource.message} onRetry={onRetry} /></div>;
+
+  return active ? loading : null;
 }
 
 /** `on`: the listing reviewed over (null while the reset runs); `undone`: the listing Undo left. */
@@ -157,11 +171,23 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = nul
 
   const visible = useDocumentVisible();
   const seen = active && visible;
+  const seenNow = useRef(seen);
+  seenNow.current = seen;
+  // The listing is read only while it is shown: unseen, a reload keeps the last listing, and the counts stand for it.
+  // A cloned repository's listing was 17.5 MB on every open (production, 2026-10-26).
+  const serialLoad = useMemo(() => oneAtATime(load), [load]);
+  const listing = useCallback(async (): Promise<Read | null> => (seenNow.current ? await serialLoad() : live.current.read), [serialLoad]);
   // Unseen, it reads only when the workspace says its change-set moved, a turn closes, it comes into view or the
   // window takes focus.
   const revalidate = useCallback(() => (seen ? 2_000 : null), [seen]);
-  const serialLoad = useMemo(() => oneAtATime(load), [load]);
-  const { resource, reload } = useAsyncResource(serialLoad, revalidate);
+  const { resource, reload: reloadListing } = useAsyncResource(listing, revalidate);
+
+  const counting = useCallback(async (): Promise<Counts> => new Map(await Promise.all(sourceKey.split("\n").map(async (name) =>
+    [name, await rpc("getExecutorChangeCount", [name])] as const))), [rpc, sourceKey]);
+
+  const serialCount = useMemo(() => oneAtATime(counting), [counting]);
+  const { resource: counted, reload: recount } = useAsyncResource(serialCount);
+  const reload = useCallback(() => { reloadListing(); recount(); }, [reloadListing, recount]);
   const wasLive = useRef(turnLive);
   const wasSeen = useRef(seen);
   const wasMoved = useRef(moved);
@@ -190,8 +216,8 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = nul
   const read = lastValue(resource);
   const sets = read?.sets ?? null;
   // Read after an await: the listing and reload of now, not of the click.
-  const live = useRef({ sets, reload });
-  live.current = { sets, reload };
+  const live = useRef({ read, sets, reload });
+  live.current = { read, sets, reload };
   const shown = sets?.find((set) => set.source === source) ?? sets?.[0];
   const shownSource = shown?.source ?? null;
 
@@ -201,7 +227,7 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = nul
   const shownFiles = shown?.files.length ?? 0;
   // Mark reviewed moves the workspace's baseline; a machine's changes are measured from its own commit.
   const reviewedAt = shown?.mode === "vfs-baseline" ? reviewedAtOf(reviewed, sets, shownFiles) : null;
-  const count = countOf(read, resource.status === "error", shownFiles);
+  const count = countOf(lastValue(counted), counted.status === "error", source);
 
   useEffect(() => { onCount(count); }, [count, onCount]);
 
@@ -249,9 +275,7 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = nul
     live.current.reload();
   })), [rpc]);
 
-  if (sets === null || shown === undefined) {
-    return resource.status === "error" ? <div className="p-4"><LoadFailure what="the change-set" message={resource.message} onRetry={reload} /></div> : null;
-  }
+  if (sets === null || shown === undefined) return <ListingPending resource={resource} active={active} onRetry={reload} />;
 
   const openInFiles = shown.mode === "vfs-baseline" ? (path: string): void => onOpenFile(workspacePath(path, WORKSPACE_ROOT)) : null;
 
@@ -259,7 +283,7 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = nul
 
   return (
     <ShownOnce active={active}>
-      <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader size="sm" /></div>}>
+      <Suspense fallback={loading}>
         <ChangesView key={shown.source} notes={{ baseline: shown.baseline ?? "", files: shown.files, store, now: Date.now }} panelKey={focus?.nonce ?? 0}
           banner={<>
             {failure !== null && <Notice tone="danger" className="mx-3 mt-3">{failure}</Notice>}

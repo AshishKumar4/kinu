@@ -128,6 +128,11 @@ export function PreviewTabsGallery() {
 
       return executor === MACHINE.name ? MACHINE_DIFF : { mode: 'vfs-baseline', trackedSince: Date.now() - 36e5, files: edited ?? [] };
     },
+    getExecutorChangeCount: (executor) => {
+      if (broken) return { files: 0, error: 'the change-set read failed' };
+
+      return { files: executor === MACHINE.name ? MACHINE_DIFF.files.length : (edited ?? []).length };
+    },
     getChangeNotes: () => [...keptNotes.current],
     saveChangeNotes: (_executor, notes) => {
       keptNotes.current = notes;

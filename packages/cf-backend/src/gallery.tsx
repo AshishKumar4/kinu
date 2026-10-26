@@ -2092,6 +2092,7 @@ const GALLERY_ANSWERS: WorkspaceAnswers = {
   getExposedPorts: () => ({ ports: [] }),
   // `ExecutorDiffResult` (core read-models/workspace-diff.ts) always carries `files`; `vfs-baseline` is the answer for an empty `executors` prop.
   getExecutorDiff: () => ({ files: [], mode: "vfs-baseline" }),
+  getExecutorChangeCount: () => ({ files: 0 }),
   getExecutorFiles: (_executor, path) => ({ path, entries: [] }),
   getExecutors: () => [],
   listMounts: () => [],

@@ -201,8 +201,8 @@ import {
   type TurnRequestIndex, type TurnRequestPage,
   decodeRecordedTurns, type RecordedTurn,
   LiveReadsNotice, readsMovedByFiles, readsOfTables, readsWrittenBy, ROSTER_READS, sameDeviceStatus, type LiveRead,
-  CHANGES_MOVED_EVENT, ChangeSetCache, getWorkspaceDiff, getExecutorDiff, resetWorkspaceBaseline, restoreWorkspaceBaseline,
-  type ExecutorDiffResult, type WorkspaceBaselines, type WorkspaceDiffResult, type WorkspaceReviewResult,
+  CHANGES_MOVED_EVENT, ChangeSetCache, getWorkspaceDiff, getExecutorChangeCount, getExecutorDiff, resetWorkspaceBaseline, restoreWorkspaceBaseline,
+  type ExecutorChangeCount, type ExecutorDiffResult, type WorkspaceBaselines, type WorkspaceDiffResult, type WorkspaceReviewResult,
   initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes, deliverOwedChangeNotes, owesChangeNotes, type ChangeNotesChat,
   initTurnBranchesTable, TurnBranchesStore, branchHeadId, TurnSurface, authoredTurnMetadata, type ActorReach, type ChatTurnInput,
   type ChangeNote, type ChangeNotesResult, type NotedChanges,
@@ -5424,6 +5424,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable()
   async getExecutorDiff(executorId: string): Promise<ExecutorDiffResult> {
     return getExecutorDiff(this.rt, executorId, () => this.getWorkspaceDiff());
+  }
+
+  /** How many files the listing holds, its bodies left here: the Changes tab's count before it is shown. */
+  @callable()
+  async getExecutorChangeCount(executorId: string): Promise<ExecutorChangeCount> {
+    return getExecutorChangeCount(this.rt, executorId, () => this.getWorkspaceDiff());
   }
 
   @callable()

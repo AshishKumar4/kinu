@@ -547,6 +547,23 @@ export class ChangeSetCache {
 }
 
 /** An executor's change-set: the workspace's own, read by `workspace`, and any other executor's by git. */
+/** How many files a source's change-set lists, and why it could not be read: what a page shows before it shows the
+ *  listing, so the listing's bodies never cross the socket for a count (17.5 MB for a cloned repository on
+ *  production, 2026-10-26, held behind every other reply on the socket for 5.5 s). */
+export interface ExecutorChangeCount {
+  readonly files: number;
+  readonly error?: string;
+}
+
+/** The listing's own read, its bodies left here: the workspace's change-set is the cached one the listing reads. */
+export async function getExecutorChangeCount(
+  rt: AgentRuntime, executorId: string, workspaceDiff: () => Promise<WorkspaceDiffResult>,
+): Promise<ExecutorChangeCount> {
+  const diff = await getExecutorDiff(rt, executorId, workspaceDiff);
+
+  return { files: diff.files.length, ...(diff.error !== undefined && { error: diff.error }) };
+}
+
 export async function getExecutorDiff(
   rt: AgentRuntime, executorId: string, workspace: () => Promise<WorkspaceDiffResult>,
 ): Promise<ExecutorDiffResult> {
