@@ -342,6 +342,21 @@ export class ContractBox extends Devbox<Env> {
   }
 }
 
+/** A call the platform lost on its way, which it says may be asked again: `retryable`, and not `overloaded`. */
+const LostCallSchema = v.object({ retryable: v.literal(true), overloaded: v.optional(v.literal(false)) });
+
+/**
+ * A box's clear, asked once more on a new stub when the platform lost the call, as Durable Objects' error handling
+ * advises for an idempotent request, which a clear is. On 2026-10-26 a run's agent box never received its clear: the call
+ * failed "Network connection lost." 70 s later, and the run counted the box as left behind.
+ */
+async function cleared(env: Env, name: string) {
+  const first = env.Box.getByName(name).clear();
+  const [settled] = await Promise.allSettled([first]);
+
+  return settled?.status === 'rejected' && v.is(LostCallSchema, settled.reason) ? await env.Box.getByName(name).clear() : await first;
+}
+
 const Body = v.object({
   command: v.optional(v.string()), driver: v.optional(v.string()), member: v.optional(v.string()), args: v.optional(v.string()), stop: v.optional(v.string()),
 });
@@ -429,7 +444,6 @@ async function lifecycleRoute(url: URL, box: DurableObjectStub<ContractBox>): Pr
     case '/stop': return Response.json(await box.quiesce());
     case '/lose-snapshot': return Response.json({ ok: await box.loseSnapshot() });
     case '/snapshots': return Response.json(await box.snapshots());
-    case '/cleanup': return Response.json(await box.clear());
     default: return null;
   }
 }
@@ -481,6 +495,8 @@ async function answer(request: Request, env: Env, ctx: ExecutionContext): Promis
   try {
     // The box's terminal sessions as the Environment tab reads them (D90).
     if (url.pathname === '/sessions') return Response.json(await box.terminalSessions());
+
+    if (url.pathname === '/cleanup') return Response.json(await cleared(env, name));
 
     return await contractRoute(url, name, box, body);
   } catch (cause) { return Response.json({ error: describeThrown({ cause }) }, { status: 500 }); }
