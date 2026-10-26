@@ -420,7 +420,7 @@ export type CloudflareAccountStatus = v.InferOutput<typeof CloudflareAccountStat
 const CloudflareAccountStatusSchema = v.object({
   connected: v.boolean(), selectedId: v.nullable(v.string()),
   accounts: v.array(v.object({ id: v.string(), name: v.string() })),
-  webSearch: v.boolean(), signInExpired: v.boolean(),
+  webSearch: v.boolean(), signInExpired: v.boolean(), connectable: v.boolean(),
 });
 
 export const listCloudflareAccounts = () =>

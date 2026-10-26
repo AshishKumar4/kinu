@@ -18,6 +18,7 @@ const AccountStatusSchema = v.object({
   accounts: v.array(v.object({ id: v.string(), name: v.string() })),
   webSearch: v.boolean(),
   signInExpired: v.boolean(),
+  connectable: v.boolean(),
 });
 
 const PERSONAL = { id: 'aaa111aaa111aaa111aaa111aaa111aa', name: 'Personal' };
@@ -52,11 +53,26 @@ function stubGatewayNetwork(): () => void {
 }
 
 describe('Cloudflare account selection', () => {
-  test('no Cloudflare credential means nothing to pick', async () => {
-    const harness = createTestUserDO();
-    expect(await harness.userDO.listCloudflareAccounts(await testOwner()))
-      .toEqual({ connected: false, selectedId: null, accounts: [], webSearch: false, signInExpired: false });
-    harness.close();
+  // The owner, 2026-10-26: a self-deployed Kinu offered "Connect Cloudflare", whose sign-in it has not, and its start
+  // answered "Sign in unavailable". The deployment's own sign-in decides whether the connect is offered at all.
+  test('no Cloudflare credential means nothing to pick, and the connect is offered only where its sign-in exists', async () => {
+    const offered = async (options: Parameters<typeof createTestUserDO>[0]) => {
+      const harness = createTestUserDO(options);
+
+      try {
+        return await harness.userDO.listCloudflareAccounts(await testOwner());
+      } finally {
+        harness.close();
+      }
+    };
+
+    expect({
+      selfHost: await offered({}),
+      kinuRun: (await offered({ cloudflareOAuthClientId: 'cf-client', cloudflareOAuthClientSecret: 'cf-secret' })).connectable,
+    }).toEqual({
+      selfHost: { connected: false, selectedId: null, accounts: [], webSearch: false, signInExpired: false, connectable: false },
+      kinuRun: true,
+    });
   });
 
   test('the accounts a login can see are listed with the one in use', async () => {
@@ -71,6 +87,7 @@ describe('Cloudflare account selection', () => {
         accounts: [PERSONAL, EMPLOYER],
         webSearch: false,
         signInExpired: false,
+        connectable: false,
       });
       expect(await harness.userDO.getCredentialEndpoint(await testOwner(), CLOUDFLARE_OAUTH_CRED_KEY))
         .toEqual({ baseURL: `https://api.cloudflare.com/client/v4/accounts/${PERSONAL.id}/ai/v1` });
@@ -91,7 +108,7 @@ describe('Cloudflare account selection', () => {
         metadata: { accountId: PERSONAL.id },
       });
       expect(await harness.userDO.listCloudflareAccounts(owner)).toEqual({
-        connected: true, selectedId: PERSONAL.id, accounts: [], webSearch: false, signInExpired: false,
+        connected: true, selectedId: PERSONAL.id, accounts: [], webSearch: false, signInExpired: false, connectable: false,
       });
       await expect(harness.userDO.selectCloudflareAccount(owner, PERSONAL.id)).rejects.toMatchObject({ code: 'bad_input' });
       expect(await harness.userDO.getCredentialEndpoint(owner, CLOUDFLARE_OAUTH_CRED_KEY))
@@ -182,7 +199,7 @@ function routeHarness(selectFails = false) {
       return [{ name: 'jarvis', displayName: 'Jarvis', createdAt: 1, lastVisited: 1, nameOrigin: 'user' as const }];
     },
     async listCloudflareAccounts() {
-      return { connected: true, selectedId: PERSONAL.id, accounts: [PERSONAL, EMPLOYER], webSearch: true, signInExpired: false };
+      return { connected: true, selectedId: PERSONAL.id, accounts: [PERSONAL, EMPLOYER], webSearch: true, signInExpired: false, connectable: true };
     },
     async selectCloudflareAccount(_caller: UserCaller, id: string) {
       if (selectFails) throw new KinuError('bad_input', 'That Cloudflare account is not one this login can see.');
@@ -326,7 +343,7 @@ describe('the account selector is reachable over HTTP', () => {
     const res = await call('/cloudflare/accounts', 'GET');
     expect(res?.status).toBe(200);
     expect(v.parse(AccountStatusSchema, await res?.json())).toEqual({
-      connected: true, selectedId: PERSONAL.id, accounts: [PERSONAL, EMPLOYER], webSearch: true, signInExpired: false,
+      connected: true, selectedId: PERSONAL.id, accounts: [PERSONAL, EMPLOYER], webSearch: true, signInExpired: false, connectable: true,
     });
   });
 

@@ -77,7 +77,7 @@ A provider appears on `/login` only when both its client id and its client secre
 https://<your-host>/auth/<provider>/callback
 ```
 
-Client ids are plain vars in `wrangler.jsonc`. Client secrets are Wrangler secrets, and provisioning prompts for them. The Cloudflare provider is the one worth having: signing in with it also connects the user's own Workers AI, so their chat bills their account rather than yours. The exact scopes and grant types are in [DEPLOYMENT.md](DEPLOYMENT.md#oauth-setup).
+Client ids are plain vars in `wrangler.jsonc`. Client secrets are Wrangler secrets, and provisioning prompts for them. Workers AI needs no sign-in: with `WORKERS_AI_VIA_BINDING` on (the default), every user's Workers AI runs on this deployment's own `AI` binding and bills your account. Unset it, and each user connects their own Workers AI by signing in with the Cloudflare provider, which needs its client configured here. The exact scopes and grant types are in [DEPLOYMENT.md](DEPLOYMENT.md#oauth-setup).
 
 ## What works when
 

@@ -147,6 +147,12 @@ describe('what a stranger\'s deployment is given', () => {
     expect(MANIFEST.vars.filter((entry) => entry.policy === 'ours').every((entry) => entry.value === undefined)).toBe(true);
   });
 
+  // The owner, 2026-10-26: a self-deployed Kinu had no Workers AI, and Settings offered a Cloudflare sign-in it has not.
+  test('a self-host runs Workers AI on its own binding, as kinu.run does', () => {
+    expect(MANIFEST.vars.find((entry) => entry.name === 'WORKERS_AI_VIA_BINDING')).toEqual({ name: 'WORKERS_AI_VIA_BINDING', policy: 'carried', value: 'on' });
+    expect(MANIFEST.bindings.find((binding) => binding.binding === 'AI')).toMatchObject({ kind: 'ai' });
+  });
+
   test('a carried var carries its value and a derived one carries none', () => {
     const carried = MANIFEST.vars.filter((entry) => entry.policy === 'carried');
     const derived = MANIFEST.vars.filter((entry) => entry.policy === 'derived');

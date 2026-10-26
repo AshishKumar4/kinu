@@ -78,8 +78,10 @@ export const VAR_POLICY = {
   // its operators and those it invites).
   ACCOUNT_LIMITS: 'ours',
   DEV_USER_EMAIL: 'ours',
-  // kinu.run's inference on its own account; a self-host routes each user's Workers AI through that user's credential.
-  WORKERS_AI_VIA_BINDING: 'ours',
+  // Every Kinu runs Workers AI on its own binding, billed to the account it is deployed in (docs/SELF-DEPLOY.md, Models).
+  // Kinu.run's alone, a self-host had no Workers AI at all: no binding to run on, and no Cloudflare sign-in of its own
+  // to reach a user's (owner, 2026-10-26).
+  WORKERS_AI_VIA_BINDING: 'carried',
   OPS_ALERT_EMAIL: 'ours',
   // The domain a self-host's owner onboarded for mail, or '' for none: a deploy answer, like MAIL_ACCOUNTS.
   EMAIL_DOMAIN: 'derived',
