@@ -2039,6 +2039,13 @@ interleaved, 06:56 to 07:13Z:
 
 The MCP cut's refusal came in round 11, where the slate-host build read 303 ms.
 
+2026-10-26: the closure had grown back to 8,054 KiB, and staging refused 8386a6b06's startup (10021). Of it, 595 KiB
+was the Google API table (`google/methods.generated.json`), emitted as string literals and parsed at load, and agent-core
+was linked again: rolldown keeps a module for its side effects when a module that imports it is shaken out, and
+agent-core declared none, though its modules' top-level work only builds values of their own (a scan of `dist`, the same
+day). The table and the markdown grammar of `web/provider.ts` now load on first use, and agent-core declares
+`sideEffects: false`. The closure fell to 6,960 KiB (`vite build` at 8a201ada0 and with the change, gcp-vm).
+
 L28. `--reset-tables` drops exactly the tables the genesis-lock diff names and makes them anew empty; no row is carried
 over (the owner's decision, 2026-10-20: "Drop changed tables"). It replaces the row-preserving repair of 5e999c1e7
 (2026-10-15), which rebuilt each stale table, copied the rows both shapes held back with their rowids, refilled a table

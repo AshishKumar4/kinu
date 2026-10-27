@@ -1552,9 +1552,10 @@ export interface ChangesStormVerdict {
 }
 
 /**
- * Three tabs hold one workspace's Changes pane open while one shell command writes a burst of files. Every tab ends
- * up listing the whole burst, having read the change-set a bounded number of times, not once per file; and once the
- * burst settles, the open panes read nothing more while another tab works.
+ * Three tabs hold one workspace's Changes pane open while one shell command writes a burst of files. Every tab lists
+ * the whole burst once a person looks at it, having read the change-set a bounded number of times, not once per file;
+ * and once the burst settles, the open panes read nothing more while another tab works. A tab behind another reads
+ * its listing only when brought to the front: a cloned repository's listing was 17.5 MB (production, 2026-10-26).
  */
 export async function changesStormStaysBounded(target: FlowTarget): Promise<ChangesStormVerdict> {
   const workspace = await createFlowWorkspace(target, 'changes-storm');
@@ -1568,6 +1569,7 @@ export async function changesStormStaysBounded(target: FlowTarget): Promise<Chan
     await sendAndSettle(sender, STORM_SEED_ASK);
 
     for (const page of tabs) {
+      await page.bringToFront();
       await openInspector(page);
       await until(page, 'the Changes tab the seed raised', stripHas('Changes'));
       await page.evaluate(stripTab('Changes'));
@@ -1578,7 +1580,11 @@ export async function changesStormStaysBounded(target: FlowTarget): Promise<Chan
 
     await sendAndSettle(sender, STORM_ASK);
 
-    for (const page of tabs) await until(page, 'the whole burst in the change-set', `${STORM_LISTED} === ${String(STORM_FILES)}`);
+    for (const page of tabs) {
+      await page.bringToFront();
+      await until(page, 'the whole burst in the change-set', `${STORM_LISTED} === ${String(STORM_FILES)}`);
+    }
+
     const burst = counters.map((counter) => counter.counts());
 
     await worker.evaluate(stripTab('Files'));

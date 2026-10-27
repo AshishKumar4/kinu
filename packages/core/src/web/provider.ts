@@ -7,7 +7,6 @@ import * as v from 'valibot';
 import { refusedResolution, assertSafeUrl, UnsafeUrlError, type HostResolver } from './url-safety';
 import { htmlToMarkdown as localHtmlToMarkdown, looksLikeHtml, stripBase64Images } from './markdown';
 import { readHtml } from '../utils/html';
-import { fromMarkdown } from 'mdast-util-from-markdown';
 import { MarkdownFrontmatterError, parseMarkdownFrontmatter } from '../utils/markdown-frontmatter';
 import { quickAction, type BrowserRunAccess, type QuickActionEngine, type QuickActionTransport } from './browser-run';
 import type { WebSearchProviderId } from '../providers/web-search';
@@ -360,13 +359,17 @@ function markdownTitle(md: string): Effect.Effect<string> {
   return Effect.try({ try: () => parseMarkdownFrontmatter(md), catch: (cause) => cause }).pipe(
     Effect.catchIf((cause) => cause instanceof MarkdownFrontmatterError, () => Effect.succeed(null)),
     Effect.catch((cause) => Effect.die(cause)),
-    Effect.map((front) => {
+    Effect.flatMap((front) => {
       const named = front?.frontmatter['title'];
 
-      if (typeof named === 'string' && named.trim() !== '') return named.trim().slice(0, 300);
-      const heading = fromMarkdown(front?.body ?? md).children.find((node) => node.type === 'heading' && node.depth === 1);
+      if (typeof named === 'string' && named.trim() !== '') return Effect.succeed(named.trim().slice(0, 300));
 
-      return heading === undefined ? '' : phrasingText(heading).trim().slice(0, 300);
+      // The grammar is imported by the first page that needs it, never by a startup (L27).
+      return Effect.map(Effect.promise(() => import('mdast-util-from-markdown')), ({ fromMarkdown }) => {
+        const heading = fromMarkdown(front?.body ?? md).children.find((node) => node.type === 'heading' && node.depth === 1);
+
+        return heading === undefined ? '' : phrasingText(heading).trim().slice(0, 300);
+      });
     }),
   );
 }

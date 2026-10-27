@@ -35,7 +35,7 @@ const NOT_CONNECTED = 'Google is not connected to this account. Its owner connec
 
 export function callGoogle(asked: GoogleCall, token: GoogleTokenRead, fetchFn: typeof fetch = fetch): Promise<GoogleAnswer> {
   return settle(Effect.gen(function* () {
-    if (!googleBaseUrls().some((base) => asked.url.startsWith(base))) {
+    if (!(yield* googleBaseUrls()).some((base) => asked.url.startsWith(base))) {
       return yield* new KinuError('denied', 'The Google connection reaches only Google\'s own APIs.');
     }
 
