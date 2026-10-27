@@ -1090,6 +1090,21 @@ describe('a guided run', () => {
     });
   });
 
+  // Only Cloudflare's 404 says the account has no Worker under the front's name: a guess could overwrite another's.
+  test('a front whose settings cannot be read is never taken for absent', async () => {
+    cloudflare.serveExisting(PRIOR_VERSION);
+    cloudflare.frontExists = true;
+    cloudflare.frontBindings = [{ type: 'service', name: 'MAIN', service: 'blog' }];
+    cloudflare.refuseOnce = { method: 'GET', path: `/accounts/${INPUTS.accountId}/workers/scripts/kinu-front/settings`, status: 503, code: 10_013, message: 'internal error' };
+
+    const rows = await run({ ...INPUTS, address: { kind: 'zone', hostname: 'kinu.example.com', zoneId: EXAMPLE_ZONE } });
+
+    expect({
+      address: rows.find((row) => row.id === 'address')?.state,
+      uploaded: cloudflare.calls.some((call) => call.method === 'PUT' && call.path.endsWith('/workers/scripts/kinu-front')),
+    }).toEqual({ address: 'failed', uploaded: false });
+  });
+
   test('a random secret is minted, never asked of a person', () => {
     expect(promptedSecrets(MANIFEST)).toEqual([]);
   });

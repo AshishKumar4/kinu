@@ -748,19 +748,22 @@ function frontStep(manifest: ReleaseManifest, front: ReleaseModules, address: De
   };
 }
 
-/** Whether the account's Worker named as this deployment's front is it: one that binds this deployment's main Worker. */
+/**
+ * Whether the account's Worker named as this deployment's front is it: one that binds this deployment's main Worker.
+ * Only Cloudflare's 404 says there is none; any other failure to read it fails the step, since a guess could overwrite
+ * a Worker that is not this deployment's.
+ */
 function frontHeld(context: DeployContext): Effect.Effect<'ours' | 'absent' | 'foreign', KinuError> {
   return Effect.gen(function* () {
     const { accountId, instanceName } = context.inputs;
-    const front = frontWorkerName(instanceName);
+    const path = `/accounts/${accountId}/workers/scripts/${frontWorkerName(instanceName)}/settings`;
+    const response = yield* Effect.promise(async () => context.transport.request({ method: 'GET', path }));
 
-    if (!(yield* Effect.promise(async () => scriptExists(context.transport, accountId, front)))) return 'absent';
+    if (response.status === 404) return 'absent';
 
-    const { bindings } = yield* Effect.promise(async () => cloudflareResult(
-      context.transport,
-      { method: 'GET', path: `/accounts/${accountId}/workers/scripts/${front}/settings` },
-      v.object({ bindings: v.array(v.looseObject({ type: v.string(), name: v.string(), service: v.optional(v.string()) })) }),
-    ));
+    const { bindings } = readEnvelope(path, response, v.object({
+      bindings: v.array(v.looseObject({ type: v.string(), name: v.string(), service: v.optional(v.string()) })),
+    }));
 
     return bindings.some((binding) => binding.type === 'service' && binding.name === MAIN_SERVICE_BINDING && binding.service === instanceName)
       ? 'ours'
