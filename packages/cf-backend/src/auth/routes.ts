@@ -148,7 +148,7 @@ function renderLogin<Id>(request: Request, env: AuthRoutesEnv<Id>): Effect.Effec
     if (signedIn && prompt === null) return redirect(new URL(returnTo, url.origin).toString());
 
     if (builtinSignInOn(env)) {
-      return new Response(loginDocument([], yield* builtinSignIn(env, url, returnTo)), {
+      return new Response(loginDocument([], { ...yield* builtinSignIn(env, url, returnTo), instance: url.host }), {
         headers: { ...publicHtmlHeaders(), 'cache-control': 'no-store' },
       });
     }
@@ -168,7 +168,7 @@ function renderLogin<Id>(request: Request, env: AuthRoutesEnv<Id>): Effect.Effec
   });
 }
 
-function builtinSignIn<Id>(env: AuthRoutesEnv<Id>, url: URL, returnTo: string): Effect.Effect<BuiltinSignIn, KinuError> {
+function builtinSignIn<Id>(env: AuthRoutesEnv<Id>, url: URL, returnTo: string): Effect.Effect<Omit<BuiltinSignIn, 'instance'>, KinuError> {
   return Effect.gen(function* () {
     const invite = url.searchParams.get('invite');
 
@@ -210,6 +210,15 @@ function builtinSignIn<Id>(env: AuthRoutesEnv<Id>, url: URL, returnTo: string): 
     if (hasOwner) return { mode: 'sign-in', returnTo };
 
     if ((env.KINU_SETUP_TOKEN ?? '').trim() !== '') return { mode: 'owner', returnTo };
+
+    // A Kinu the deploy flow made: its owner account is made through the setup link its deploy page showed.
+    if ((env.KINU_FIRST_OWNER_LINK ?? '').trim() !== '') {
+      return {
+        mode: 'setup', returnTo,
+        notice: `${url.host} has no owner yet. Open the setup link the deploy page showed when it made this Kinu. `
+          + 'If the link ran out, get a new one at kinu.run/deploy.',
+      };
+    }
 
     return {
       mode: 'setup', returnTo,

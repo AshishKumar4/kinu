@@ -1,4 +1,4 @@
-/** `/` for a visitor with no session: streams the built landing asset. */
+/** `/` for a visitor with no session: the product's landing, or an instance's own sign-in. */
 
 import { Effect, Cause } from 'effect';
 import { settle } from '@kinu.run/core/obs';
@@ -7,8 +7,14 @@ import { AuthError, authenticateRequest, type AuthEnv } from './auth/session';
 import { publicHtmlHeaders } from '@kinu.run/core';
 import type { FamilyEnv } from './api/context';
 
+/** What a deployment shows a visitor with no session: the product's landing where it deploys Kinus for others (its
+ *  deploy door is open, kinu.run alone), else its own sign-in, as every Kinu the deploy flow made is one. */
+export type LandingEnv = Pick<Env, 'ASSETS' | 'CLOUDFLARE_DEPLOY_CLIENT_ID'>;
+
 /** The landing page, for a request known to carry no session. */
-export function landingPage(request: Request, env: Pick<Env, 'ASSETS'>): Promise<Response> {
+export function landingPage(request: Request, env: LandingEnv): Promise<Response> {
+  if ((env.CLOUDFLARE_DEPLOY_CLIENT_ID ?? '').trim() === '') return Promise.resolve(Response.redirect(new URL('/login', request.url).href, 302));
+
   return settle(Effect.gen(function* () {
     const headers = new Headers(publicHtmlHeaders());
 
@@ -32,7 +38,7 @@ export function landingPage(request: Request, env: Pick<Env, 'ASSETS'>): Promise
 }
 
 /** `/` with a credential that may no longer hold: the landing page when it does not, else the account's page. */
-export const landingRoutes = new Hono<FamilyEnv<AuthEnv & Pick<Env, 'ASSETS'>, object>>();
+export const landingRoutes = new Hono<FamilyEnv<AuthEnv & LandingEnv, object>>();
 
 landingRoutes.get('/', (c, next) => {
   return settle(Effect.gen(function* () {

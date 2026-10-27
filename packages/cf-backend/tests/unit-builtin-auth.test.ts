@@ -242,6 +242,19 @@ describe('the first-owner setup link', () => {
     expect(spent).not.toContain(OWNER_EMAIL);
   });
 
+  // Owner, 2026-10-27: a fresh Kinu shows how its owner account is made, under its own name, and what it runs on.
+  test('before it is used, the page names the Kinu, offers no form, and sends its owner to the deploy page\'s link', async () => {
+    const { page } = firstOwnerDeployment();
+    const fresh = await page('/login');
+
+    expect({
+      form: (await builtinForm(fresh)).mode,
+      named: fresh.includes(new URL(ORIGIN).host),
+      runsOn: fresh.includes('href="https://kinu.run"'),
+      policies: fresh.includes('href="/privacy"'),
+    }).toEqual({ form: null, named: true, runsOn: true, policies: false });
+  });
+
   test('it admits a passkey registration through the same owner-only grant', async () => {
     const { env, post } = firstOwnerDeployment();
     const authenticator = await Authenticator.create();

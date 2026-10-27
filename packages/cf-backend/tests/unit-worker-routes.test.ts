@@ -44,6 +44,8 @@ function env(assets: string[], documents: ReadonlyMap<string, string> = new Map(
 
   const reached: Partial<Env> = {
     CLI_PUBLIC_ORIGIN: `https://${APP_HOST}`,
+    // kinu.run's own door: a visitor with no session lands on the product's page (landing-route.ts).
+    CLOUDFLARE_DEPLOY_CLIENT_ID: 'kinu-run-deploy-client',
     PREVIEW_HOST_SUFFIX: APP_HOST,
     DEV_USER_EMAIL: 'routes@example.com',
     DEV_IDENTITY_SECRET: DEV_SECRET,

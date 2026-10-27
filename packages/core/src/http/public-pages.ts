@@ -21,10 +21,16 @@ export interface BuiltinSignIn {
   readonly email?: string;
   readonly notice?: string;
   readonly returnTo: string;
+  /** The instance's own address, its name to a visitor: built-in sign-in is a Kinu of its owner's, never kinu.run. */
+  readonly instance: string;
 }
 
 export function loginDocument(providers: readonly LoginProvider[], builtin: BuiltinSignIn | null = null): string {
-  if (builtin !== null) return authDocument('Sign in to Kinu', builtinBody(builtin), builtin.mode === 'setup' ? undefined : BUILTIN_SCRIPT);
+  if (builtin !== null) {
+    const title = builtin.mode === 'owner' || builtin.mode === 'setup' ? 'Create the owner account' : `Sign in to ${builtin.instance}`;
+
+    return authDocument(title, builtinBody(builtin), builtin.mode === 'setup' ? undefined : BUILTIN_SCRIPT, builtin.instance);
+  }
 
   const body = providers.length === 0
     ? '<p class="lede">Sign-in is unavailable.</p><p>This deployment declares an OAuth provider whose client id or secret is missing, so no one can sign in until it is fixed. Built-in sign-in stays off while any provider is declared.</p><div class="providers"><a class="provider" href="/install">Run Kinu locally</a></div>'
@@ -36,8 +42,9 @@ export function loginDocument(providers: readonly LoginProvider[], builtin: Buil
 }
 
 const BUILTIN_COPY = {
+  // Its lede names the instance (`builtinBody`).
   owner: {
-    lede: 'Create the first account. It becomes the owner of this deployment.',
+    lede: null,
     password: 'Create account', passkey: 'Create account with a passkey',
   },
   invite: { lede: 'You were invited. Create your account for this address.', password: 'Create account', passkey: 'Create account with a passkey' },
@@ -64,10 +71,10 @@ const OWNER_RECOVERY = `<details class="recovery">
     </form>
   </details>`;
 
-function builtinBody({ mode, invite, reset, setup, email, notice, returnTo }: BuiltinSignIn): string {
+function builtinBody({ mode, invite, reset, setup, email, notice, returnTo, instance }: BuiltinSignIn): string {
   const copy = BUILTIN_COPY[mode];
   const registering = mode !== 'sign-in';
-  const lede = notice ?? copy.lede;
+  const lede = notice ?? (mode === 'owner' ? `It runs ${instance}, and invites everyone else.` : copy.lede);
   const setupField = setup === undefined ? SETUP_FIELD : `<input type="hidden" name="setup" value="${escapeHtml(setup)}" />`;
 
   if (mode === 'setup') return `<p class="lede">${escapeHtml(lede ?? '')}</p>`;
@@ -83,7 +90,7 @@ function builtinBody({ mode, invite, reset, setup, email, notice, returnTo }: Bu
   <div class="or" aria-hidden="true">or</div>
   <div class="providers"><button type="button" class="provider" id="passkey">${copy.passkey}</button></div>
   <p class="status" id="status" role="alert" aria-live="assertive"></p>
-  ${registering ? '' : `<p class="muted">New here? Ask the owner of this deployment for an invite link.</p>
+  ${registering ? '' : `<p class="muted">New here? Ask this Kinu's owner for an invite link.</p>
   ${OWNER_RECOVERY}`}`;
 }
 
@@ -165,16 +172,19 @@ if (recovery) {
   });
 }`;
 
-export function authDocument(title: string, body: string, script?: string): string {
+/** `instance`: the page is a Kinu's own front door, which says what it runs on in place of kinu.run's policies. */
+export function authDocument(title: string, body: string, script?: string, instance?: string): string {
   return publicPage({
-    title: title.includes('Kinu') ? title : `${title} - Kinu.run`,
+    title: title.includes('Kinu') || instance !== undefined ? title : `${title} - Kinu.run`,
     styles: CARD_CSS,
     nav: `<a class="quiet" href="/install">Install CLI</a><a class="icon" href="${REPO_URL}" target="_blank" rel="noopener noreferrer" aria-label="Kinu on GitHub">${GITHUB_ICON}</a>`,
     body: `<main class="gate"><section class="card" role="dialog" aria-modal="true" aria-labelledby="auth-title">
-  <a class="modal-close" href="/" aria-label="Close sign in">×</a>
+  ${instance === undefined ? '<a class="modal-close" href="/" aria-label="Close sign in">×</a>' : ''}
   <h1 id="auth-title">${escapeHtml(title)}</h1>
   ${body}
-  <p class="muted"><a href="/privacy">Privacy Policy</a> · <a href="/terms">Terms of Service</a></p>
+  <p class="muted">${instance === undefined
+    ? '<a href="/privacy">Privacy Policy</a> · <a href="/terms">Terms of Service</a>'
+    : 'Runs on <a href="https://kinu.run" target="_blank" rel="noopener noreferrer">Kinu</a>'}</p>
 </section></main>\n`,
     ...(script !== undefined && { script }),
   });

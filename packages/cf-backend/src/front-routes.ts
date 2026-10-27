@@ -12,14 +12,15 @@ import {
   ACCESS_TOKEN_SCOPES, APP_ROUTES, err, extractOrchestratorAgentName, HOSTED_ACTOR_ID_HEADER, isForeignAgentNamespacePath, markDocument,
   objectNamed, serveApp,
 } from '@kinu.run/core';
-import { landingPage } from './landing-route';
+import { landingPage, type LandingEnv } from './landing-route';
 import { ROSTER_SOCKET_ROUTE } from './user/roster-socket';
 import { cliAgentTicketOf, withoutCliAgentTicket } from './auth/cli-agent-ticket';
 import { appendIdentityHeaders } from './cli/rpc-gate';
 import { beneath, rawPath, type FamilyEnv } from './api/context';
 import type { RequestAccount } from './auth/session';
 
-export type FrontRoutesEnv = Pick<Env, 'ASSETS' | 'UserDO' | 'OrchestratorAgent' | 'CLI_PUBLIC_ORIGIN' | 'PREVIEW_HOST_SUFFIX' | 'PREVIEW_HOST_PORT'>;
+export type FrontRoutesEnv = Pick<Env, 'ASSETS' | 'UserDO' | 'OrchestratorAgent' | 'CLI_PUBLIC_ORIGIN' | 'PREVIEW_HOST_SUFFIX' | 'PREVIEW_HOST_PORT'>
+  & LandingEnv;
 
 /** The account's object answers these for a request whose credential names it. A trailing wildcard matches the
  *  workspace's page itself as well. */

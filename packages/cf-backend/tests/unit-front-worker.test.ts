@@ -91,6 +91,8 @@ async function seam(): Promise<Front> {
   Object.assign(frontEnv, {
     UserDO, OrchestratorAgent, ASSETS: { fetch: assets },
     CLI_PUBLIC_ORIGIN: ORIGIN, PREVIEW_HOST_SUFFIX: PREVIEW_SUFFIX, CF_VERSION_METADATA: { id: 'front-v', tag: '', timestamp: '' },
+    // kinu.run's front carries its main Worker's vars, its deploy door among them (front-config.ts).
+    CLOUDFLARE_DEPLOY_CLIENT_ID: 'kinu-run-deploy-client',
     MAIN: {
       fetch: async (input: RequestInfo | URL) => {
         main.push(new Request(input).url);

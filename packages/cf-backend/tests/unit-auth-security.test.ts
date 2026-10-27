@@ -63,9 +63,12 @@ const OWNER_IDENTITY: AuthIdentity = {
   userId: '0123456789abcdef0123456789abcdef', email: 'owner@example.com', sub: 'sub', provider: 'test', authTime: 1,
 };
 
+/** kinu.run's own: its deploy door is open, so a visitor with no session lands on the product's page. */
+const KINU_RUN: Partial<Env> = { CLOUDFLARE_DEPLOY_CLIENT_ID: 'kinu-run-deploy-client' };
+
 /** One signed-out request through the Worker's entry, with only the bindings these routes read. */
-function served(url: string, headers: Record<string, string> = {}): Promise<Response> {
-  const env: Partial<Env> = {};
+function served(url: string, headers: Record<string, string> = {}, deployment: Partial<Env> = KINU_RUN): Promise<Response> {
+  const env: Partial<Env> = { ...deployment };
   Object.assign(env, {
     AUTH_KV: makeKv(),
     CLI_PUBLIC_ORIGIN: APP,
@@ -786,6 +789,13 @@ async function cloudflareSignInSteps(
     expect(app.headers.get('location')).toStartWith(`${APP}/login?`);
   });
 
+
+  // Owner, 2026-10-27: a Kinu the deploy flow made is its owner's, so its front door is its own sign-in.
+  test('a Kinu of its owner\'s answers its root with its own sign-in, never the product\'s landing', async () => {
+    const root = await served(`${APP}/`, { accept: 'text/html' }, {});
+
+    expect({ status: root.status, location: root.headers.get('location') }).toEqual({ status: 302, location: `${APP}/login` });
+  });
 
   test('browser install page is HTML while the terminal installer stays raw shell', async () => {
     const installPage = await cliPages(new Request('https://kinu.example.com/install'), PUBLIC_ROUTE_ENV);

@@ -18,7 +18,7 @@ import { observeIdentity } from '../control-plane/index-feed';
 import { addressedWorkspace, ownedWorkspace } from '../api/workspace';
 import { claimOwnedWorkspace, type WorkspaceOwnershipEnv } from './workspace-ownership';
 import { ROSTER_SOCKET_ROUTE, rosterSocket, type RosterSocketEnv } from './roster-socket';
-import { landingRoutes } from '../landing-route';
+import { landingRoutes, type LandingEnv } from '../landing-route';
 import { appShell, type AgentSocketAdmission } from '../front-routes';
 import { familyMount, ownerGate, rawPath, routeError, type FamilyEnv } from '../api/context';
 import type { AuthEnv, AuthIdentity } from '../auth/session';
@@ -26,7 +26,7 @@ import type { IndexFeedEnv } from '../control-plane/index-feed';
 import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from './user-do';
 
-type AccountShellEnv<Id> = Pick<Env, 'ASSETS' | 'PREVIEW_HOST_SUFFIX' | 'PREVIEW_HOST_PORT'> & OwnerCapabilityEnv & {
+type AccountShellEnv<Id> = Pick<Env, 'ASSETS' | 'PREVIEW_HOST_SUFFIX' | 'PREVIEW_HOST_PORT'> & LandingEnv & OwnerCapabilityEnv & {
   readonly UserDO: ObjectNamespace<Id, Pick<UserDO, 'getConfig'>>;
 };
 

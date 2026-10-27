@@ -131,6 +131,8 @@ describe(SUITE, () => {
           };
 
           await page.goto(`${plan.origin}/`);
+          // A Kinu of its owner's opens on its own sign-in (landing-route.ts); the product's page links to it.
+          const home = new URL(page.url()).pathname;
           const linked = await page.$$eval('a[href="/login"], a[href^="/login?"]', (links) => links.map((link) => (link.textContent ?? '').trim()));
 
           await page.goto(`${plan.origin}/login`);
@@ -138,7 +140,7 @@ describe(SUITE, () => {
           const form = v.parse(v.object({ mode: v.nullable(v.string()), setup: v.boolean() }), await page.evaluate(FORM));
 
           const offered = [
-            { what: 'home-links-sign-in', reached: linked.length > 0, detail: JSON.stringify({ linked }) },
+            { what: 'home-links-sign-in', reached: linked.length > 0 || home === '/login', detail: JSON.stringify({ home, linked }) },
             { what: 'sign-in-offers-a-way-in', reached: ways.includes('password') || ways.includes('passkey') || ways.some((way) => way.startsWith('/auth/')), detail: JSON.stringify({ ways }) },
           ];
 
