@@ -4,7 +4,10 @@
  * top-up is set, on its dashboard (AI Gateway › Credits Available › Manage), with a 5% fee on each purchase (Cloudflare's
  * Unified Billing docs and API reference, read 2026-10-27).
  */
+import { Effect } from 'effect';
 import * as v from 'valibot';
+import { NIMBUS_CLOUDFLARE_API as CLOUDFLARE_API } from '@nimbus-sh/sdk/oauth';
+import { attempt, KinuError } from '../obs/index';
 
 export interface GatewayCredits {
   /** US dollars; below zero once spending ran past them. */
@@ -41,6 +44,36 @@ export function creditsOf(read: v.InferOutput<typeof CreditBalanceSchema>): Gate
 /** Readable with AI Gateway Read or Write, and with the `aig.write` OAuth scope. */
 export function creditBalancePath(account: string): string {
   return `/accounts/${account}/ai-gateway/billing/credit-balance`;
+}
+
+const CreditsEnvelopeSchema = v.object({
+  success: v.boolean(),
+  result: v.nullish(CreditBalanceSchema),
+  errors: v.optional(v.array(v.object({ message: v.string() })), []),
+});
+
+/** `account`'s credits, read with `token`; a refusal fails in Cloudflare's words. */
+export function fetchGatewayCredits(account: string, token: string, fetchImpl: typeof fetch = fetch): Effect.Effect<GatewayCredits, KinuError> {
+  return Effect.gen(function* () {
+    const doing = { doing: "reading this account's AI credits", otherwise: 'unavailable' } as const;
+
+    const response = yield* attempt(doing, (signal) => fetchImpl(`${CLOUDFLARE_API}${creditBalancePath(account)}`, {
+      headers: { accept: 'application/json', authorization: `Bearer ${token}` }, signal,
+    }));
+
+    const read = v.safeParse(CreditsEnvelopeSchema, yield* attempt(doing, async () => response.json()));
+
+    if (!read.success) return yield* new KinuError('unavailable', `Cloudflare answered the AI credits read with HTTP ${String(response.status)} in a shape Kinu does not know.`);
+    const { result, errors } = read.output;
+
+    if (!response.ok || result === null || result === undefined) {
+      const said = errors.map((error) => error.message).join('; ') || `HTTP ${String(response.status)}`;
+
+      return yield* new KinuError(response.status === 401 || response.status === 403 ? 'denied' : 'unavailable', `Cloudflare refused reading the AI credits: ${said}.`);
+    }
+
+    return creditsOf(result);
+  });
 }
 
 /** Where `account`'s credits are bought and its auto top-up is set. */

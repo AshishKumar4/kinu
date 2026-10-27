@@ -61,8 +61,7 @@ export * from './cloudflare-oauth';
 export * from './google-connection';
 
 export {
-  CreditBalanceSchema, GatewayCreditsReadSchema, GatewayCreditsSchema, creditBalancePath, creditsOf, gatewayCreditsUrl,
-  type GatewayCredits, type GatewayCreditsRead,
+  GatewayCreditsReadSchema, fetchGatewayCredits, gatewayCreditsUrl, type GatewayCredits, type GatewayCreditsRead,
 } from './gateway-credits';
 
 export {

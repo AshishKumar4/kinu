@@ -247,7 +247,8 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
   const [dismissedFailure, setDismissedFailure] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const providerWait = useProviderWaitNotice(state.providerWait);
-  const searchCredits = useSearchCreditsNotice(thread.entries.at(-1)?.message);
+  const newest = thread.entries.at(-1)?.message;
+  const searchCredits = useSearchCreditsNotice(newest);
   const { attachments, drop } = extras;
   const repeats = useMemo(() => foldEventTurns(thread.entries.map(({ message }) => message)), [thread.entries]);
 
@@ -301,7 +302,6 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
   // live indicator is decided here. See `threadLiveTail`.
   const tail = threadLiveTail({ last: thread.entries.at(-1)?.message, liveness: state.liveness });
   const liveRow = liveTailRow({ rows: thread.entries.map(({ message }) => message), liveness: state.liveness, stored: state.stored });
-  const newest = thread.entries.at(-1)?.message;
 
   return (
     <div className="@container relative flex flex-col flex-1 min-h-0" data-agent-pane={pane} {...drop?.handlers}>

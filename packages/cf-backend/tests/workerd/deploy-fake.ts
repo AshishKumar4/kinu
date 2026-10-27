@@ -693,10 +693,6 @@ async function api(url: URL, request: Request): Promise<Response> {
 
   if (stored !== undefined) return stored;
 
-  const tokened = tokenApi(path, request, named);
-
-  if (tokened !== undefined) return tokened;
-
   if (path.endsWith('/workers/subdomain')) return envelope({ subdomain: SUBDOMAIN });
 
   if (path.endsWith('/subdomain')) return envelope({ enabled: true });
@@ -708,7 +704,8 @@ async function api(url: URL, request: Request): Promise<Response> {
   throw new Error(`the deploy fake has no answer for ${request.method} ${path}`);
 }
 
-/** The run's storage: KV namespaces, buckets, Vectorize indexes and the AI Gateway, each listed or made. */
+/** The run's storage: KV namespaces, buckets, Vectorize indexes and the AI Gateway, each listed or made; then the
+ *  account's tokens. */
 function storageApi(path: string, request: Request, named: (key: string) => string, config: { readonly dimensions: number; readonly metric: string } | null): Response | undefined {
   if (path.endsWith('/storage/kv/namespaces?per_page=100')) {
     return envelope(held.namespaces.map((title) => ({ id: `id-${title}`, title })));
@@ -755,7 +752,7 @@ function storageApi(path: string, request: Request, named: (key: string) => stri
     return envelope({ id: named('id') });
   }
 
-  return undefined;
+  return tokenApi(path, request, named);
 }
 
 /** The account's tokens: a permission group by the name asked, each token listed, minted and rolled (`instance-token.ts`). */

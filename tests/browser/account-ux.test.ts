@@ -402,7 +402,7 @@ describe('account panels', () => {
       try {
         await page.waitForSelector('[data-web-search-credits="empty"] [data-web-search-credits-open]');
         await page.click('[data-web-search-credits-open]');
-        await page.waitForSelector('[data-web-search-credits="held"]', { timeout: 15_000 });
+        await page.waitForSelector('[data-web-search-credits="held"]');
 
         expect({
           opened: await page.evaluate(() => document.documentElement.dataset.creditsAt),
@@ -422,9 +422,9 @@ describe('account panels', () => {
       try {
         await page.waitForSelector('[data-search-credits="empty"]');
         await page.evaluate(() => {
-          [...document.querySelectorAll('[data-search-credits] button')].find((button) => button.textContent?.includes('Add credits'))?.click();
+          [...document.querySelectorAll<HTMLButtonElement>('[data-search-credits] button')].find((button) => button.textContent?.includes('Add credits'))?.click();
         });
-        await page.waitForSelector('[data-search-credits="held"]', { timeout: 15_000 });
+        await page.waitForSelector('[data-search-credits="held"]');
 
         expect({
           opened: await page.evaluate(() => document.documentElement.dataset.creditsAt),
