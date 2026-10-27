@@ -152,15 +152,28 @@ async function seam(options: {
   const device = new Map<string, string>(Object.entries(options.deviceFiles ?? { [DEVICE_FILE]: 'hello' }));
   const ownerUserId = await accountIdFor(OAUTH_DEPLOYMENT, OWNER_EMAIL);
   const strangerUserId = await accountIdFor(OAUTH_DEPLOYMENT, STRANGER_EMAIL);
-  const user = createTestUserDO({ deviceResponder: daemon(device), durableObjectId: ownerUserId });
-  const stranger = createTestUserDO({ durableObjectId: strangerUserId });
+  const actors = new Map<string, ActorHarness<HarnessOrchestratorAgent>>();
+  const kv = makeKv();
+
+  const workspaceActor = (name: string) => {
+    const actor = actors.get(name);
+
+    if (!actor) throw new Error(`no workspace actor named ${name}`);
+
+    return actor.agent;
+  };
+
+  // The account answers its pages and admits its agent sockets (account-pages.ts) over the deployment's sign-in store
+  // and workspaces, as the Worker would reach them.
+  const pages = { AUTH_KV: kv, workspace: workspaceActor };
+
+  const user = createTestUserDO({ deviceResponder: daemon(device), durableObjectId: ownerUserId, pages });
+  const stranger = createTestUserDO({ durableObjectId: strangerUserId, pages });
   const owner = await testOwner();
   const { deviceId } = await registerTestDevice(user.userDO, 'ashish@studio', owner);
   user.attachDevice(deviceId);
   // Without the reported cwd the file view reaches nothing (F2's rule), which is not what these tests are about.
   await user.sendDeviceHello({ ...CAPABLE_HELLO, root: DEVICE_HOME, home: DEVICE_HOME });
-
-  const actors = new Map<string, ActorHarness<HarnessOrchestratorAgent>>();
 
   for (const workspace of options.workspaces) {
     const token = await provisionTestWorkspace(user, workspace, workspace);
@@ -176,7 +189,6 @@ async function seam(options: {
   }
 
   const users = new Map([[ownerUserId, user], [strangerUserId, stranger]]);
-  const kv = makeKv();
 
   const bindings = {
     ...OAUTH_DEPLOYMENT,
@@ -193,16 +205,7 @@ async function seam(options: {
         return harness.userDO;
       },
     },
-    OrchestratorAgent: {
-      idFromName: (name: string) => name,
-      get: (name: string) => {
-        const actor = actors.get(name);
-
-        if (!actor) throw new Error(`no workspace actor named ${name}`);
-
-        return actor.agent;
-      },
-    },
+    OrchestratorAgent: { idFromName: (name: string) => name, get: workspaceActor },
   };
 
   const partial: Partial<Env> = {};

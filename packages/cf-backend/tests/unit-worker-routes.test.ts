@@ -9,7 +9,7 @@ import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 import { CLI_VERSION_PATH, DEV_IDENTITY_HEADER, VISITOR_PAGE_ATTRIBUTE, type UserCaller } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
-import { workerContext, workerEnv } from './helpers/bindings';
+import { accountPagesFetch, workerContext, workerEnv } from './helpers/bindings';
 import { makeKv } from './helpers/kv';
 
 mockAgentsSdk();
@@ -39,7 +39,7 @@ interface Answer {
   readonly visitor: boolean;
 }
 
-function env(assets: string[], documents: ReadonlyMap<string, string> = new Map()): Env {
+function env(assets: string[], documents: ReadonlyMap<string, string> = new Map(), ctx: ExecutionContext = workerContext()): Env {
   const objects = <Stub>(stub: Stub) => ({ idFromName: (name: string) => name, get: () => stub });
 
   const reached: Partial<Env> = {
@@ -72,6 +72,8 @@ function env(assets: string[], documents: ReadonlyMap<string, string> = new Map(
       async builtinHasOwner() { return false; },
       // A signed-in page's shell names the account's theme; this account chose none.
       async getConfig() { return null; },
+      // The account's object answers its pages and admits its agent sockets itself.
+      fetch: accountPagesFetch(() => built, ctx),
     }),
     OrchestratorAgent: objects({
       async claimOwner() { return { owner: 'owner', capabilityHash: null }; },
@@ -80,7 +82,9 @@ function env(assets: string[], documents: ReadonlyMap<string, string> = new Map(
     ControlPlaneDO: objects({ async observeUser() {}, async observeWorkspace() {}, async touchWorkspace() {} }),
   });
 
-  return workerEnv(reached);
+  const built = workerEnv(reached);
+
+  return built;
 }
 
 async function send(caller: Caller, method: string, path: string): Promise<Answer> {
@@ -93,7 +97,8 @@ async function send(caller: Caller, method: string, path: string): Promise<Answe
 
   if (caller === 'signed-in') headers[DEV_IDENTITY_HEADER] = DEV_SECRET;
   const origin = caller === 'localhost' ? 'http://localhost:8787' : `https://${APP_HOST}`;
-  const response = await worker.fetch(new Request(`${origin}${path}`, { method, headers }), env(assets), workerContext());
+  const context = workerContext();
+  const response = await worker.fetch(new Request(`${origin}${path}`, { method, headers }), env(assets, new Map(), context), context);
   let visitor = false;
 
   await new HTMLRewriter().on('html', { element(element) { visitor = element.hasAttribute(VISITOR_PAGE_ATTRIBUTE); } }).transform(response).text();
@@ -240,7 +245,8 @@ const ROWS: readonly (readonly [Caller, string, string, Partial<Answer>])[] = [
   ['fetch', 'GET', '/settings', { status: 302, assets: [], location: `https://${APP_HOST}/login?return_to=%2Fsettings` }],
   ['signed-in', 'GET', '/settings', shell('/settings')],
   ['page', 'GET', '/agents/orchestrator-agent/ws', door(401)],
-  ['anon', 'GET', '/agents/user-d-o/victim', door(401)],
+  // Refused before any session is read: no object but the workspace's is reachable here.
+  ['anon', 'GET', '/agents/user-d-o/victim', door(404)],
   ['signed-in', 'GET', '/agents/user-d-o/victim', door(404)],
   ['signed-in', 'GET', '/agents/', door(404)],
   ['signed-in', 'GET', '/agents/orchestrator-agent/ws/sub/x', door(404)],

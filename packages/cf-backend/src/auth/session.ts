@@ -6,7 +6,7 @@ import {
   DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, EVAL_ACCOUNTS, EVAL_TRIAL_ACCOUNTS, err, evalAccountEmail, json, parseEvalAccount, timingSafeEqual,
 } from '@kinu.run/core';
 import {
-  SessionAuthorityUnavailableError, accountIdFor, verifySession,
+  SessionAuthorityUnavailableError, accountIdFor, parseSessionTokenUserId, verifySession,
   type AuthStoreEnv, type SessionAuthority,
 } from './store';
 import { readCookie, SESSION_COOKIE_NAME } from './cookies';
@@ -74,6 +74,41 @@ export interface AuthEnv<Id = DurableObjectId> extends OwnerCapabilityEnv, SignI
 /** `[::1]` keeps its brackets because `URL.hostname` does. */
 const LOOPBACK_HOSTS: readonly string[] = ['localhost', '127.0.0.1', '[::1]', '0.0.0.0'];
 
+function isLoopback(request: Request): boolean {
+  return LOOPBACK_HOSTS.includes(new URL(request.url).hostname);
+}
+
+/** Whose account a request is, as far as the Worker reading it can tell: the id its credential names, `none` for no
+ *  credential, or `main` for the dev identity, whose secret only the main Worker holds. Whether the credential holds is
+ *  the account's object's to check (user/account-pages.ts). */
+export type RequestAccount = { readonly id: string } | 'none' | 'main';
+
+/** Read with no secret: the session cookie names its account in itself. A cookie that names none is no credential, as
+ *  `sessionIdentity` reads it, never the dev identity. */
+export function sessionAccount(request: Request): RequestAccount {
+  const token = readSessionToken(request);
+
+  if (token !== null) {
+    const id = parseSessionTokenUserId(token);
+
+    return id === null ? 'none' : { id };
+  }
+
+  return isLoopback(request) || request.headers.has(DEV_IDENTITY_HEADER) ? 'main' : 'none';
+}
+
+/** {@link sessionAccount}, the dev identity read too. */
+export function requestAccount<Id>(request: Request, env: AuthEnv<Id>): Promise<RequestAccount> {
+  return settle(Effect.gen(function* () {
+    const read = sessionAccount(request);
+
+    if (read !== 'main') return read;
+    const email = yield* devIdentityEmail(request, env);
+
+    return email === null ? 'none' : { id: yield* Effect.promise(() => accountIdFor(env, email)) };
+  }));
+}
+
 /** `workspace`: the one the request names, admitted in the same read when a session holds it. */
 export function authenticateRequest<Id>(request: Request, env: AuthEnv<Id>, workspace?: string): Promise<AuthIdentity> {
   return settle(Effect.flatMap(sessionIdentity(request, env, workspace), (identity) => identity === null
@@ -135,7 +170,7 @@ export function devIdentityEmail(request: Request, env: Pick<AuthEnv, 'DEV_USER_
   if (env.DEV_USER_EMAIL === undefined || env.DEV_USER_EMAIL === '') return Effect.succeed(null);
   const presented = request.headers.get(DEV_IDENTITY_HEADER);
 
-  const held = LOOPBACK_HOSTS.includes(new URL(request.url).hostname)
+  const held = isLoopback(request)
     || (env.DEV_IDENTITY_SECRET !== undefined
       && presented !== null
       && timingSafeEqual(presented, env.DEV_IDENTITY_SECRET));

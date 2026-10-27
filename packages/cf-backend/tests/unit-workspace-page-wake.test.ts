@@ -4,14 +4,14 @@
  * connection rather than after them. A name the account does not hold wakes nothing.
  */
 import { describe, expect, test } from 'bun:test';
-import { workerContext } from './helpers/bindings';
+import { accountPagesFetch, workerContext } from './helpers/bindings';
 import { makeKv } from './helpers/kv';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 
 // Dynamic: the entry's graph reaches `cloudflare:email` and `cloudflare:workers` through `agents`.
 const { default: worker } = await import('../src/server');
 
-function account(holds: readonly string[]) {
+function account(holds: readonly string[], context: ExecutionContext) {
   const asked: string[] = [];
 
   const workspace = (name: string) => ({
@@ -40,21 +40,25 @@ function account(holds: readonly string[]) {
         async ensureWorkspaceCapability() {},
         // The page's shell names the account's theme; this account chose none.
         async getConfig() { return null; },
+        // The account's object answers its pages itself.
+        fetch: accountPagesFetch(() => built, context),
       }),
     },
     OrchestratorAgent: { idFromName: (name: string) => name, get: (name: string) => workspace(name) },
   });
 
   // SAFETY: every member a workspace page's document and its claim read is constructed above.
-  return { env: env as Env, asked };
+  const built = env as Env;
+
+  return { env: built, asked };
 }
 
 describe("a workspace's page", () => {
   // Each case its own name: an isolate keeps the membership it proved, and asks the account once.
   for (const [workspace, path] of [['jarvis', '/workspace/jarvis'], ['friday', '/workspace/friday/agents/researcher']] as const) {
     test(`${path} wakes the workspace as its document is answered`, async () => {
-      const { env, asked } = account([workspace]);
       const context = workerContext();
+      const { env, asked } = account([workspace], context);
 
       // The loopback host is where the dev identity signs the request in.
       const answer = await worker.fetch(new Request(`http://localhost${path}`), env, context);
@@ -67,8 +71,8 @@ describe("a workspace's page", () => {
   }
 
   test('of a name the account does not hold wakes nothing', async () => {
-    const { env, asked } = account([]);
     const context = workerContext();
+    const { env, asked } = account([], context);
 
     const answer = await worker.fetch(new Request('http://localhost/workspace/someone-elses'), env, context);
 

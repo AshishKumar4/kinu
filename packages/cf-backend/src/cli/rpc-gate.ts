@@ -97,7 +97,7 @@ export const SESSION_AUTHORITY_REVOKED = 'This session has been signed out. Sign
 export const CLI_AUTHORITY_REVOKED = 'This CLI authorization is invalid. Sign in again with: kinu auth';
 
 /** Every identity header is rewritten from the verified identity: none can be smuggled or stripped. */
-export function appendIdentityHeaders(h: Headers, identity: AuthIdentity): Headers {
+export function appendIdentityHeaders(h: Headers, identity: Pick<AuthIdentity, 'userId' | 'cliScopes' | 'cliBearer' | 'sessionTokenHash'>): Headers {
   const next = new Headers(h);
   // The object reads the identity below, never the credential.
   next.delete(DEV_IDENTITY_HEADER);

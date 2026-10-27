@@ -16,6 +16,8 @@ import { slateVendor } from './slate-vendor';
 import { slatePageModules } from './vite-slate-page-modules';
 import { workerLoadCost } from './vite-worker-bundle';
 import { agentBundle } from './vite-agent-bundle';
+import { frontWorker } from './vite-front-worker';
+import { mainRoutes } from './front-config';
 import { ASSETS_HOSTS } from './src/assets-hosts';
 import { DEV_PREVIEW_SUFFIX, devPreviewPort, devPreviewTlsDir, devPreviewZone } from './vite-preview-zone';
 import { isBrowserEnvironment, PUBLIC_PAGES, publicPages } from './vite-public-pages';
@@ -115,7 +117,7 @@ export default defineConfig(({ command }) => ({
   // checkout at a time (SHARED_RESOURCES in scripts/ladder.ts).
   cacheDir: process.env.KINU_DEV_CACHE_DIR ?? '.vite',
   plugins: [
-    kinuTheme(), kinuIcon(), iconWeights(), promptText(), slateVendor(), slatePageModules(), agentBundle(), stubClientNodeBuiltins, workerSourceMaps, workerLoadCost(), wgslClientOnly, publicPages(), agents(), react(),
+    kinuTheme(), kinuIcon(), iconWeights(), promptText(), slateVendor(), slatePageModules(), agentBundle(), stubClientNodeBuiltins, workerSourceMaps, workerLoadCost(), frontWorker(), wgslClientOnly, publicPages(), agents(), react(),
     cloudflare({
       persistState: devStateDir === undefined ? true : { path: devStateDir },
       // A harness boot opens no Workers inspector. The plugin's default takes 9229, or the next port it finds free
@@ -125,9 +127,9 @@ export default defineConfig(({ command }) => ({
       // never finishes "Establishing remote connection" without one). Its turns run on the scripted model; a
       // developer's `bun run dev` keeps the plugin's remote bindings.
       remoteBindings: offline ? false : undefined,
-      // `vite dev` serves its own preview zone (vite-preview-zone.ts); a build keeps the deployed zone. A harness
-      // boot binds the Drive's JWT_SECRET here, as a var: wrangler reads secrets from packages/cf-backend/.dev.vars
-      // alone when the checkout has one, and a .dev.vars JWT_SECRET still overrides this.
+      // `vite dev` serves its own preview zone (vite-preview-zone.ts) and the app's host, with no front Worker; a build
+      // keeps the deployed zone. A harness boot binds the Drive's JWT_SECRET here, as a var: wrangler reads secrets from
+      // packages/cf-backend/.dev.vars alone when the checkout has one, and a .dev.vars JWT_SECRET still overrides this.
       config: command === "serve"
         ? (worker) => {
           const vars = { ...worker.vars, PREVIEW_HOST_SUFFIX: DEV_PREVIEW_SUFFIX, PREVIEW_HOST_PORT: String(previewPort) };
@@ -144,7 +146,9 @@ export default defineConfig(({ command }) => ({
             ...(offline && { ai: undefined, vectorize: [] }),
           };
         }
-        : undefined,
+        // A build's app host is its front Worker's (front-config.ts), and the main Worker keeps the preview hosts'. Set,
+        // not returned: the plugin merges a returned array into the one it has.
+        : (worker) => { worker.routes = mainRoutes(worker); },
     }),
     devPreviewZone(devPreviewTlsDir(__dirname), previewPort),
     tailwindcss(),

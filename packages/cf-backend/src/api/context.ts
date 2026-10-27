@@ -19,9 +19,9 @@ export interface FamilyEnv<Bindings extends object, Variables extends object = A
   Variables: Variables;
 }
 
-/** Mounts each route family on `host` at its root, checking the bindings the family declares against `Env`. */
+/** Mounts each route family on `host` at its root, checking the bindings the family declares against the host's. */
 export function familyMount<HostEnv extends HonoEnv>(host: Hono<HostEnv>) {
-  return <Bindings extends object, Variables extends object>(family: Hono<FamilyEnv<Bindings, Variables>> & (Env extends Bindings ? unknown : never)): void => {
+  return <Bindings extends object, Variables extends object>(family: Hono<FamilyEnv<Bindings, Variables>> & (HostEnv['Bindings'] extends Bindings ? unknown : never)): void => {
     host.route('/', family);
   };
 }

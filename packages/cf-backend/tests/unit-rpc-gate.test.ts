@@ -189,9 +189,7 @@ describe('the edge rewrites identity headers from the verified identity', () => 
       [HOSTED_ACTOR_ID_HEADER]: 'actor-of-someone-else',
     });
 
-    const browser = appendIdentityHeaders(forged, {
-      userId: 'user-1', email: 'owner@example.com', sub: 'sub', authTime: 5, sessionTokenHash: 'session-1',
-    });
+    const browser = appendIdentityHeaders(forged, { userId: 'user-1', sessionTokenHash: 'session-1' });
 
     expect(browser.get(SESSION_BEARER_HEADER)).toBe('session-1');
     expect(browser.has(CLI_SCOPES_HEADER)).toBe(false);
@@ -199,8 +197,7 @@ describe('the edge rewrites identity headers from the verified identity', () => 
     expect(browser.has(HOSTED_ACTOR_ID_HEADER)).toBe(false);
 
     const ticket = appendIdentityHeaders(forged, {
-      userId: 'user-1', email: 'owner@example.com', sub: 'cli', authTime: 5,
-      cliScopes: ['workspace.read'], cliBearer: { tokenHash: 'token-1', generation: 2 },
+      userId: 'user-1', cliScopes: ['workspace.read'], cliBearer: { tokenHash: 'token-1', generation: 2 },
     });
 
     expect(ticket.get(CLI_SCOPES_HEADER)).toBe('workspace.read');

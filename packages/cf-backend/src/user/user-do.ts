@@ -20,8 +20,9 @@ import {
   censusOf, durableStamps, ERROR_STATUS, mcpPresetById, readStamp, repairSchema, SCHEMA_TABLES, requireOps, StoragePredatesReleaseError, writeStamp,
   type OpsCaller, type Repair, type TablesAnswer, type ComputerSize, type StoredClass,
 } from '@kinu.run/core';
-import { Hono } from 'hono';
-import { rawPath, rethrow } from '../api/context';
+import { Hono, type ExecutionContext as HonoExecutionContext } from 'hono';
+import { rawPath, rethrow, type FamilyEnv } from '../api/context';
+import { accountPages, type AccountPagesEnv } from './account-pages';
 import { destroyDriveTenant, driveStoredBytes, tenantDrive } from '../drive/tenant';
 import { forgetSharesGiven, forgetSharesReceived } from './shares-given';
 import { internalCaller } from '@kinu.run/core/control-plane';
@@ -1399,8 +1400,22 @@ export class UserDO extends Agent<Env> {
     this.nudges = Promise.all([this.nudges, ...Array.from({ length: Math.min(ROSTER_NUDGE_LANES, queue.length) }, lane)]);
   }
 
-  /** A WebSocket cannot cross RPC; the Worker forwards these upgrades. */
-  private readonly _sockets = new Hono({ getPath: rawPath })
+  /** The env this account's pages are answered with (account-pages.ts): the session check, theme and profile they ask
+   *  of the account's object are this object's own, answered in-process. */
+  private readonly pagesEnv: AccountPagesEnv = {
+    ...this.env,
+    UserDO: {
+      idFromName: (name) => (name === this.ctx.id.name ? this.ctx.id : this.env.UserDO.idFromName(name)),
+      get: (id) => (id === this.ctx.id ? this : this.env.UserDO.get(id)),
+    },
+  };
+
+  /** A page's background work (its workspace's wake, the identity index) is best effort: a pending promise runs while the
+   *  object lives, which `waitUntil` would not change in an object. An object has no origin to pass an exception to. */
+  private readonly pagesCtx: HonoExecutionContext = { waitUntil: () => undefined, passThroughOnException: () => undefined, props: {} };
+
+  /** A WebSocket cannot cross RPC; the Worker forwards these upgrades, and a page open's requests as they came. */
+  private readonly _sockets = new Hono<FamilyEnv<AccountPagesEnv, object>>({ getPath: rawPath })
     .all(DEVICE_CONNECT_PATH, async (c) => this.devices.acceptDeviceSocket(c.req.raw))
     .all(DEVICE_TERMINAL_PATH, async (c) => this.terminals.acceptTerminalSocket(c.req.raw, new URL(c.req.url)))
     .all(DEVICE_SCREEN_PATH, async (c) => this.screens.acceptScreenSocket(c.req.raw, new URL(c.req.url)))
@@ -1409,6 +1424,7 @@ export class UserDO extends Agent<Env> {
       this.accountMemory.pendingMoved([socket]);
       sendForeground([socket], rosterSockets(this.ctx), this.sessions.sessionStands);
     }))
+    .route('/', accountPages())
     .notFound(async (c) => super.fetch(c.req.raw))
     .onError(rethrow);
 
@@ -1429,7 +1445,7 @@ export class UserDO extends Agent<Env> {
   override async fetch(request: Request): Promise<Response> {
     if (this.storageRefusal !== undefined) return Response.json(refusalOf(this.storageRefusal), { status: ERROR_STATUS[this.storageRefusal.code] });
 
-    return await this._sockets.fetch(request);
+    return await this._sockets.fetch(request, this.pagesEnv, this.pagesCtx);
   }
 
   /* These hibernation handlers are declared here, so `Lifecycle.installHandlers` skips them and there

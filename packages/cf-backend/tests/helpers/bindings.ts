@@ -50,6 +50,19 @@ export function unreachableAssets(): AssetFetcher {
   };
 }
 
+/**
+ * A fake account object's `fetch`, answering a page open's requests as the real one does (user/account-pages.ts): the
+ * account's pages over `env`, whose `UserDO` hands back this same fake for the account. Imported at the first request,
+ * after a suite's module mocks.
+ */
+export function accountPagesFetch(env: () => Env, ctx: ExecutionContext): (request: Request) => Promise<Response> {
+  return async (request) => {
+    const { accountPages } = await import('../../src/user/account-pages');
+
+    return await accountPages().fetch(request, env(), ctx);
+  };
+}
+
 /** The whole deployment `Env` the Worker entry takes; bindings not in `reached` refuse on first touch. */
 export function workerEnv(reached: Partial<Env> = {}): Env {
   return {

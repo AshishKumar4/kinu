@@ -2307,7 +2307,7 @@ export {
 export {
   DRAWN_SANDBOX, PREVIEW_SANDBOX, containPreviewResponse, extractPreviewUrl, hostOf, isPreviewHostRequest,
   isPreviewUrl, previewHostSuffix, previewPortSuffix, previewSuffixMetaName, sandboxPreviewLabelOf,
-  type PreviewPortEnv, type PreviewSuffixEnv,
+  type PreviewHostEnv, type PreviewPortEnv, type PreviewSuffixEnv,
 } from './preview/preview-origin';
 
 export {

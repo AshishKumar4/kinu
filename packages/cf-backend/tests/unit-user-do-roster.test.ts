@@ -8,10 +8,12 @@
  */
 import * as v from 'valibot';
 import { describe, expect, setSystemTime, test } from 'bun:test';
-import { WS_OPEN, type UserCaller, type WorkspaceOverview } from '@kinu.run/core';
+import { Hono } from 'hono';
+import { WS_OPEN, type OwnerCapabilityEnv, type UserCaller, type WorkspaceOverview } from '@kinu.run/core';
 import type { AuthIdentity } from '../src/auth/session';
 import { SESSION_BEARER_HEADER } from '../src/cli/rpc-gate';
-import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
+import { ROSTER_SOCKET_ROUTE, rosterSocket, type RosterSocketEnv } from '../src/user/roster-socket';
+import { ownerGate, type FamilyEnv } from '../src/api/context';
 import { libraryTiles } from '../src/user/roster';
 import { serveFamily } from './helpers/api';
 import { nextTurn, until } from './helpers/actor-harness';
@@ -563,15 +565,18 @@ describe("the roster socket the edge hands the owner's object", () => {
       },
     });
 
-    const env: UserRoutesEnv<string> = {
+    const env: RosterSocketEnv<string> & OwnerCapabilityEnv = {
       UserDO: { idFromName: (name) => name, get: () => stub },
-      OrchestratorAgent: { idFromName: (name) => name, get: () => { throw new Error('a roster upgrade asked a workspace'); } },
       CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     };
 
     const verified: AuthIdentity = { userId: USER_ID, email: 'owner@example.com', sub: 'sub', provider: 'test', authTime: Date.now(), sessionTokenHash: SESSION_A };
 
-    const answer = await serveFamily(userRoutes, { identity: verified, ctx: { waitUntil() {} } })(
+    // The route as the account's pages serve it behind their session gate (user/account-pages.ts).
+    const roster = new Hono<FamilyEnv<RosterSocketEnv<string> & OwnerCapabilityEnv, { identity: AuthIdentity; owner: UserCaller }>>()
+      .get(ROSTER_SOCKET_ROUTE, ownerGate(), rosterSocket());
+
+    const answer = await serveFamily(roster, { identity: verified, ctx: { waitUntil() {} } })(
       new Request('https://kinu.example.com/api/user/workspaces/live', { headers: { Upgrade: 'websocket', [SESSION_BEARER_HEADER]: SESSION_B } }), env,
     );
 

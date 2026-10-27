@@ -15,26 +15,35 @@ const EMAIL = 'owner@example.com';
 const SHELL = '<!doctype html><html lang="en"><head></head><body><div id="root"></div></body></html>';
 
 /**
- * The signed-in owner on this machine, through the Worker's own entry: the dev identity stands for the browser. With
- * `unreadable`, the account's store fails every config read, as an unreachable object does.
+ * The signed-in owner on this machine, through the Worker's own entry: the dev identity stands for the browser, and the
+ * account's object answers its own pages (user/account-pages.ts). With `unreadable`, the account's store fails every
+ * config read.
  */
 async function account(unreadable = false) {
-  const harness = createTestUserDO({ durableObjectId: await accountIdFor({}, EMAIL) });
+  const kv = makeKv();
+
+  const harness = createTestUserDO({
+    durableObjectId: await accountIdFor({}, EMAIL), devUserEmail: EMAIL,
+    pages: { AUTH_KV: kv, workspace: (name) => { throw new Error(`the workspace ${name} is not reached here`); } },
+  });
+
   const env: Partial<Env> = {};
-  const store = unreadable ? Object.assign(Object.create(harness.userDO), { getConfig: async () => { throw new Error('the account object is unreachable'); } }) : harness.userDO;
+  const context = workerContext();
+
+  if (unreadable) Object.assign(harness.userDO, { getConfig: async () => { throw new Error('the account object is unreachable'); } });
 
   Object.assign(env, {
-    AUTH_KV: makeKv(),
+    AUTH_KV: kv,
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     DEV_USER_EMAIL: EMAIL,
-    UserDO: { idFromName: (name: string) => name, get: () => store },
+    UserDO: { idFromName: (name: string) => name, get: () => harness.userDO },
     OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
     ASSETS: { fetch: async () => new Response(SHELL, { headers: { 'content-type': 'text/html; charset=utf-8' } }) },
   });
 
   // SAFETY: every binding the page and config routes read is constructed above; the loopback host is where the dev
   // identity signs the request in.
-  const fetch = async (path: string, init: RequestInit = {}) => worker.fetch(new Request(`http://localhost${path}`, init), env as Env, workerContext());
+  const fetch = async (path: string, init: RequestInit = {}) => worker.fetch(new Request(`http://localhost${path}`, init), env as Env, context);
 
   const owner = async (path: string): Promise<{ status: number; theme: string | null }> => {
     let theme: string | null = null;

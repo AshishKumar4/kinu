@@ -9,6 +9,8 @@ import { sha256Hex, DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES, deviceIdFromSocket
 import { isJsonObject } from '../../../core/src/utils/json';
 import { ownerCaller, type UserCaller } from '@kinu.run/core';
 import type { IndexFeedSink } from '../../src/control-plane/index-feed';
+import type { OrchestratorAgent } from '../../src/orchestrator';
+import type { KvStore } from '@kinu.run/agent-utils';
 import type { ControlPlaneDO } from '../../src/control-plane/control-plane-do';
 import type { MailboxDO } from '../../src/mail/mailbox-do';
 import { BUILTIN_ACCOUNTS_OBJECT } from '@kinu.run/core/identity';
@@ -240,6 +242,12 @@ export interface TestUserDOOptions {
   devUserEmail?: string;
   /** The control plane the account's index feed reaches; absent, the deployment has none and the registry feeds nothing. */
   controlPlane?: IndexFeedSink;
+  /** What a page open's requests reach through the account (account-pages.ts): the deployment's sign-in store, and its
+   *  workspaces' claim and hosted routes; absent, the account answers no page. */
+  pages?: {
+    readonly AUTH_KV: KvStore;
+    readonly workspace: (name: string) => Pick<OrchestratorAgent, 'claimOwner' | 'resolveHostedActorRoute'>;
+  };
 }
 
 /** The control plane's namespace, binding `sink` for every name; none when there is no sink. */
@@ -315,7 +323,7 @@ function servedAsset(pathname: string, build: TestUserDOOptions['servedBuild']):
     return new Response(`${checksum}  ${pathname.slice('/downloads/'.length, -'.sha256'.length)}\n`);
   }
 
-  return new Response('<!doctype html><title>Kinu</title>', { status: 200, headers: { 'content-type': 'text/html' } });
+  return new Response('<!doctype html><html lang="en"><head><title>Kinu</title></head><body></body></html>', { status: 200, headers: { 'content-type': 'text/html' } });
 }
 
 interface TestUserEnvironment {
@@ -327,6 +335,7 @@ interface TestUserEnvironment {
   SLATE_PICTURES?: PictureBucket;
   CLI_PUBLIC_ORIGIN?: string;
   ASSETS?: { fetch(input: Request): Promise<Response> };
+  AUTH_KV?: KvStore;
   CLOUDFLARE_OAUTH_CLIENT_ID?: string;
   MCP_GITHUB_CLIENT_ID?: string;
   MCP_GITHUB_CLIENT_SECRET?: string;
@@ -334,7 +343,7 @@ interface TestUserEnvironment {
   MCP_GOOGLE_CLIENT_SECRET?: string;
   OrchestratorAgent: {
     idFromName(name: string): string;
-    get(name: string): {
+    get(name: string): Pick<OrchestratorAgent, 'claimOwner' | 'resolveHostedActorRoute'> & {
       destroyAgent(ownerUserId: string): Promise<void>;
       installWorkspaceCapability(token: string): Promise<{ readonly ok: true }>;
       getWorkspaceCapabilityHash(): Promise<string | null>;
@@ -610,6 +619,8 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
 
   const kv = kvOf(db);
 
+  const retained: Promise<unknown>[] = [];
+
   const ctx = {
     // Sealed values are bound to the DO id; fixed so a DB written in one test opens in another.
     id: {
@@ -655,6 +666,8 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
       },
     },
     abort: (reason: string): void => { aborts.push(reason); },
+    // The platform keeps the object alive for it; a test awaits it through `retained`.
+    waitUntil: (work: Promise<unknown>): void => { retained.push(work); },
     // The SDK's Lifecycle starts inside it; nothing else runs concurrently in a test.
     blockConcurrencyWhile: <Result,>(fn: () => Promise<Result>): Promise<Result> => fn(),
     // Tag-filtered like the platform.
@@ -676,6 +689,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     // The deployment's sign-in directory answers beside the accounts: a deleted account's sign-in is removed there.
     ...(accountOf !== undefined && { UserDO: { idFromName: (name: string) => name, get: (id: string) => (id === BUILTIN_ACCOUNTS_OBJECT ? directory : accountOf(id)) } }),
     ASSETS: { fetch: async (input: Request) => servedAsset(new URL(input.url).pathname, options.servedBuild) },
+    ...(options.pages !== undefined && { AUTH_KV: options.pages.AUTH_KV }),
     SLATE_PICTURES: options.slatePictures,
     ControlPlaneDO: controlPlaneNamespace(options.controlPlane, accountDeleted),
     // No mail here: the box answers no labels, and its delete is recorded.
@@ -690,6 +704,16 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     OrchestratorAgent: {
       idFromName: (name: string) => name,
       get: (name: string) => ({
+        claimOwner: async (userId: string) => {
+          if (options.pages === undefined) throw new Error(`${name}.claimOwner: the account answers no page in this test`);
+
+          return await options.pages.workspace(name).claimOwner(userId);
+        },
+        resolveHostedActorRoute: async (target: string) => {
+          if (options.pages === undefined) throw new Error(`${name}.resolveHostedActorRoute: the account answers no page in this test`);
+
+          return await options.pages.workspace(name).resolveHostedActorRoute(target);
+        },
         async quietForDeletion(ownerUserId: string) {
           await options.quietWorkspaceGate?.(name, ownerUserId);
         },

@@ -180,8 +180,8 @@ export function consumeOAuthState(
   }));
 }
 
-/** The id is in the token, so a check or a logout reaches the account's object with no lookup. */
-function parseSessionTokenUserId(token: string): string | null {
+/** The id is in the token, so a check, a logout or a page reaches the account's object with no lookup. */
+export function parseSessionTokenUserId(token: string): string | null {
   const match = /^ps_([a-f0-9]{32})_[A-Za-z0-9_-]{64,}$/.exec(token);
 
   return match?.[1] ?? null;

@@ -2,8 +2,7 @@
 import { Cause, Effect } from 'effect';
 import { Hono, type Context } from 'hono';
 import type { UserDO } from './user-do';
-import { ROSTER_SOCKET_PATH } from './roster';
-import { appendIdentityHeaders } from '../cli/rpc-gate';
+import { accountObject } from './roster-socket';
 import { pictureKey, PictureAddressSchema, readPictureInMode, type PictureBucket } from '../slates/pictures';
 import { connectedPath, GOOGLE_OAUTH_CRED_KEY, FILES_VIEW_CONFIG_KEY, filesViewNamed, PROFILE_CATALOG_CONFIG_KEY, THEME_CONFIG_KEY, THEME_NAMES, themeNamed, USER_WEB_SEARCH_TEST_PATH } from '@kinu.run/core';
 import { BOX_SIZE_ORDER } from '@kinu.run/devbox/sizes';
@@ -17,8 +16,6 @@ import { notifyWorkspacesModelSettingsChanged, type CreateWorkspaceEnv } from '.
 import type { CloudWorkspaceRegistry } from './workspace-create';
 import type { ObjectNamespace } from '@kinu.run/core';
 import { displayNameProblem, err, json, safeJson, safeJsonParse } from '@kinu.run/core';
-import { idempotent } from '@nimbus-sh/fabric/do-calls.js';
-import { logDoCallRetry } from '../obs/do-call-retry';
 import type { UserCaller } from '@kinu.run/core';
 import { isControlPlaneOperator, type AdminGateEnv } from '../control-plane/admin-caller';
 import { completeGoogleConnect, GOOGLE_CONNECT_STATE_PREFIX, googleConnectable, startGoogleConnect, type GoogleConnectEnv } from './google-connect';
@@ -149,13 +146,7 @@ export const userRoutes = new Hono<FamilyEnv<UserRoutesEnv<unknown>, UserVariabl
 
 userRoutes.use('/api/user/*', ownerGate(), async (c, next) => {
   const identity = c.get('identity');
-  const owner = c.get('owner');
-  const userObject = c.env.UserDO.idFromName(identity.userId);
-  // Every /api/user route passes through this upsert; it is idempotent, so transient
-  // DO failures are retried rather than failing the request.
-  await idempotent('ensureProfile', () => c.env.UserDO.get(userObject),
-    (stub) => stub.ensureProfile(owner, identity.email, identity.displayName ?? undefined), { onRetry: logDoCallRetry });
-  const stub = c.env.UserDO.get(userObject);
+  const stub = await accountObject(c.env.UserDO, identity, c.get('owner'));
 
   c.set('stub', stub);
   c.set('account', { stub, userId: identity.userId });
@@ -234,12 +225,6 @@ userRoutes.get('/api/user/cli', async (c) => {
 });
 
 userRoutes.get('/api/user/workspaces', (c) => settle(listWorkspaceRoster(c)));
-
-// A socket cannot cross RPC; its upgrade request can. The object learns the browser session from the headers the edge
-// rewrites from the verified identity, never from the page's own, and keeps it on the socket so logout can close it.
-userRoutes.get('/api/user/workspaces/live', async (c) => c.get('stub').fetch(new Request(new URL(ROSTER_SOCKET_PATH, c.req.url), new Request(c.req.raw, {
-  headers: appendIdentityHeaders(c.req.raw.headers, c.get('identity')),
-}))));
 
 // The owner's own pictures: admitted by the roster. Their private preview's, so never a Gallery card's.
 userRoutes.get('/api/user/pictures/:workspace/:slate/:digest', async (c) => {

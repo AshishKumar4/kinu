@@ -1,11 +1,10 @@
 /**
- * Worker entry: exports every DO class and routes, in order: HTTPS upgrade, preview hosts, `/api/`
- * (api/app.ts), /pc, Access (/control*), public routes, auth, CSRF, agent sockets.
+ * The main Worker's entry: exports every DO class and routes, in order: HTTPS upgrade, preview hosts, what the front
+ * Worker answers too (front-routes.ts), `/api/` (api/app.ts), /pc, Access (/control*), public routes, auth.
  */
 
-import { Hono, type Context, type MiddlewareHandler } from "hono";
-import { Cause, Effect, Result } from "effect";
-import { getAgentByName, routeAgentRequest } from "agents";
+import { Hono, type MiddlewareHandler } from "hono";
+import { getAgentByName } from "agents";
 import { exports, tracing, WorkerEntrypoint } from 'cloudflare:workers';
 import type { EgressStreams, EgressTlsTarget } from '@nimbus-sh/core/_shared/workspace-network.js';
 import { adoptTracing } from '@nimbus-sh/platform/tracing.js';
@@ -16,13 +15,8 @@ import {
 import { forwardEgress, githubRecorder } from './egress/policy';
 import { forwardNodeProgramCall, NODE_PROGRAM_HOST } from './node-program';
 import type { OrchestratorAgent } from './orchestrator';
-import { objectNamed, APP_ROUTES, ERROR_STATUS, PREVIEW_ENTRY_PATH, WORKER_VERSION_HEADER } from "@kinu.run/core";
-import { diagnostics, settle, toKinuError, type KinuError, settleLogged } from "@kinu.run/core/obs";
-import {
-  extractOrchestratorAgentName,
-  extractTicketOrchestratorAgentName,
-  isForeignAgentNamespacePath, hostedActorRoute, HOSTED_ACTOR_ID_HEADER,
-} from "@kinu.run/core";
+import { objectNamed, APP_ROUTES, PREVIEW_ENTRY_PATH } from "@kinu.run/core";
+import { diagnostics, settleLogged } from "@kinu.run/core/obs";
 import { releaseArtifact, releaseArtifactHead } from "@kinu.run/core";
 import { DEPLOY_PAGE_PATH, DEVBOX_TOOLS_PART, RELEASE_ARTIFACT_NAME } from "@kinu.run/core/deploy";
 import { servePreviewRequest } from "./preview-proxy";
@@ -31,30 +25,25 @@ import { mcpAgentResolver, mcpRoutes } from "./mcp-server";
 import { cliPageRoutes } from "./cli/routes";
 import { deployCallbackRoutes } from "./deploy/routes";
 import { authPageRoutes } from "./auth/routes";
-import { landingRoutes } from "./landing-route";
 import { pcRoutes } from "./pc-routes";
 import { opsRoutes } from "./ops-routes";
 import { handleInboundMail } from "./mail/handler";
 import { MONITOR_SINGLETON } from "./monitor/monitor-do";
 import { handleSlateShareHostRequest } from "./slate-share-route";
 import { handleNimbusPreviewHostRequest, previewEntry } from "./nimbus-route";
-import {
-  crossSiteRejection, requestIdentity, sessionGate,
-  type AuthIdentity,
-} from "./auth/session";
+import { requestAccount, requestIdentity } from "./auth/session";
+import { sessionRouteGate } from "./auth/request-gate";
 import { APP_FONTS_PATH, appFontFile, containPreviewResponse, hostOf, isPreviewHostRequest, mailHostRedirect, serveApp, SLATE_FONTS_PATH, VISITOR_SHELL } from "@kinu.run/core";
-import { parseCliAgentConnectTicketUserId } from "./user/sessions";
-import { accountTheme, DEFAULT_THEME, ownerCaller, THEME_CONFIG_KEY, type ThemeName } from "@kinu.run/core";
-import { claimOwnedWorkspace } from "./user/workspace-ownership";
-import { addressedWorkspace, ownedWorkspace } from "./api/workspace";
 import { err } from "@kinu.run/core";
 import { controlPlaneAccess } from "./control-plane/admin-caller";
 import { CONTROL_PLANE_UI_ROUTE } from "./control-plane/access-gate";
-import { observeIdentity } from "./control-plane/index-feed";
 import { installAnalyticsDiagnostics } from "@kinu.run/core/analytics";
 import { api } from "./api/app";
 import { beneath, familyMount, rawParam, rawPath, routeError, type ApiVariables, type FamilyEnv } from "./api/context";
 import { keepDevboxGolden } from './devbox-golden';
+import { appShell, frontRoutes } from './front-routes';
+import { accountShell } from './user/account-pages';
+import { httpsUpgrade, isPublishedHost, published } from './published';
 
 const RELEASE_ARTIFACT_PATH = `/downloads/:artifact{${RELEASE_ARTIFACT_NAME}}`;
 
@@ -139,66 +128,6 @@ export { SupervisorRPC } from "@nimbus-sh/worker/session/supervisor-rpc";
 // Without it Nimbus records no span: only its own Worker entry adopts.
 adoptTracing(tracing);
 
-function authenticateCliAgentTicketRequest(
-  request: Request,
-  env: Env,
-): Effect.Effect<{ identity: AuthIdentity; request: Request } | Response | null, KinuError> {
-  const url = new URL(request.url);
-  const agentName = extractTicketOrchestratorAgentName(url.pathname);
-  const ticket = url.searchParams.get('ticket');
-
-  if (!agentName || !ticket) return Effect.succeed(null);
-
-  if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') {
-    return Effect.succeed(err(400, 'CLI agent tickets are only valid for WebSocket connections.'));
-  }
-
-  const userId = parseCliAgentConnectTicketUserId(ticket);
-
-  if (!userId) {
-    return Effect.succeed(err(401, 'Invalid CLI agent connect ticket.'));
-  }
-
-  return Effect.catchCause(Effect.gen(function* () {
-    const userDO = objectNamed(env.UserDO, userId);
-
-    const verified = yield* Effect.promise(async () => userDO.verifyCliAgentConnectTicket(await ownerCaller(env), ticket, {
-      userId,
-      agentName,
-    }));
-
-    if (!verified.ok || !verified.user) {
-      return err(401, verified.error ?? 'Invalid CLI agent connect ticket.');
-    }
-
-    url.searchParams.delete('ticket');
-
-    const identity: AuthIdentity = {
-        userId: verified.user.id,
-        email: verified.user.email,
-        displayName: verified.user.displayName,
-        sub: 'cli',
-        provider: 'cli',
-        authTime: Date.now(),
-    };
-
-    if (verified.scopes) identity.cliScopes = verified.scopes;
-
-    // Persisted on the connection so revocation can name the socket.
-    if (verified.tokenHash && verified.authGeneration !== undefined) {
-      identity.cliBearer = { tokenHash: verified.tokenHash, generation: verified.authGeneration };
-    }
-
-    return {
-      identity,
-      request: new Request(url.toString(), request),
-    };
-  }), (failed) => Effect.fail(
-    // A failure here is infrastructure, not a bad ticket: the router's `onError` answers its class, not 401.
-    toKinuError({ doing: 'verifying a CLI agent connect ticket', cause: Cause.squash(failed), otherwise: 'io' }),
-  ));
-}
-
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     // Per isolate: repeat in `scheduled` and every DO activation, which run in other isolates.
@@ -245,46 +174,6 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-/** Dev hosts (localhost, LAN) match neither and stay on plain HTTP. */
-function isPublishedHost(url: URL, env: Env): boolean {
-  if (isPreviewHostRequest(url, env)) return true;
-
-  return url.hostname.toLowerCase() === hostOf(env.CLI_PUBLIC_ORIGIN);
-}
-
-/** Nothing upstream redirects: measured 2026-08-16, plain HTTP reached the Worker
- *  and `url.protocol` is the client-facing scheme (no `CF-Visitor` needed). */
-function httpsUpgrade(url: URL, env: Env): Response | null {
-  if (url.protocol !== 'http:' || !isPublishedHost(url, env)) return null;
-
-  // Drop the port: other plaintext ports have no TLS counterpart on this zone.
-  return Response.redirect(`https://${url.hostname}${url.pathname}${url.search}`, 301);
-}
-
-const HSTS = 'max-age=31536000; includeSubDomains';
-
-/** What every response a published host serves carries: HSTS, and the version that answered. `includeSubDomains`
- *  deliberately covers preview hosts (the zone cert has the wildcard); no `preload`. A new version reaches the edge
- *  over seconds, so the version a deploy's smoke test reads is the one that answered it, not the one it just uploaded
- *  (2026-10-08: 23 s after the deploy of b8340eebf, one of its requests was answered by the reset placeholder before
- *  it). 101 passes untouched: handshake headers are immutable. */
-function published(response: Response, url: URL, env: Env): Response {
-  if (url.protocol !== 'https:' || response.status === 101 || !isPublishedHost(url, env)) {
-    return response;
-  }
-
-  const headers = new Headers(response.headers);
-  headers.set('strict-transport-security', HSTS);
-
-  if (env.CF_VERSION_METADATA !== undefined) headers.set(WORKER_VERSION_HEADER, env.CF_VERSION_METADATA.id);
-
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  });
-}
-
 /** Preview hosts serve only previews: no session is minted there. Share labels first, so neither parser sees the other's. */
 const previewHost = new Hono<FamilyEnv<Env, object>>({ getPath: rawPath });
 
@@ -312,12 +201,7 @@ previewHost.all('*', async (c) => await servePreviewRequest(c.req.raw, c.env));
 
 previewHost.onError(routeError);
 
-/** `request`: a CLI ticket stripped. */
-interface WorkerVariables extends ApiVariables {
-  request: Request;
-}
-
-type WorkerEnv = FamilyEnv<Env, WorkerVariables>;
+type WorkerEnv = FamilyEnv<Env, ApiVariables>;
 
 /** Registration order is dispatch order. */
 const worker = new Hono<WorkerEnv>({ getPath: rawPath });
@@ -325,29 +209,12 @@ const worker = new Hono<WorkerEnv>({ getPath: rawPath });
 /** Each family mounts at the root, its declared bindings checked against `Env`. */
 const mount = familyMount(worker);
 
-const appShell = async (c: Context<WorkerEnv>): Promise<Response> => serveApp(c.req.raw, c.env);
-
-/**
- * Behind sign-in: the page names the account's theme, so it paints in it on any device it opens on. The theme is only
- * a look: a read that fails is logged and the page is served in the default, never refused.
- */
-const accountShell = async (c: Context<WorkerEnv>): Promise<Response> => serveApp(c.req.raw, c.env, {
-  theme: async () => {
-    let theme: ThemeName = DEFAULT_THEME;
-
-    await settleLogged('app.theme_read_failed', { doing: "reading the account's theme for its page", otherwise: 'unavailable' }, async () => {
-      const account = objectNamed(c.env.UserDO, c.get('identity').userId);
-
-      theme = accountTheme(await account.getConfig(await ownerCaller(c.env), THEME_CONFIG_KEY));
-    });
-
-    return theme;
-  },
-});
-
 worker.use('*', async (c, next) => (isPreviewHostRequest(new URL(c.req.url), c.env)
   ? await previewHost.fetch(c.req.raw, c.env, c.executionCtx)
   : await next()));
+
+// Ahead of every family: the front Worker answers these itself (front.ts), so both Workers answer them alike.
+mount(frontRoutes<Env>(requestAccount));
 
 worker.all('/api/*', beneath<WorkerEnv>('/api', async (c) => api.fetch(c.req.raw, c.env, c.executionCtx)));
 
@@ -360,8 +227,6 @@ mount(opsRoutes);
 worker.use(CONTROL_PLANE_UI_ROUTE, controlPlaneAccess);
 
 mount(authPageRoutes);
-
-mount(landingRoutes);
 
 mount(cliPageRoutes);
 
@@ -402,7 +267,7 @@ worker.get('/gallery', (c) => c.redirect(`${APP_ROUTES.explore}?kind=app`));
 // its session expired must still reach it, tell the page that began it and close, not land on sign-in.
 for (const path of ['/login', '/logout', DEPLOY_PAGE_PATH, APP_ROUTES.connected, '/privacy', '/terms']) worker.all(path, appShell);
 
-for (const prefix of ['/auth', '/assets', '/shared/blueprint', '/shared/live', '/gallery', '/s']) worker.all(`${prefix}/*`, beneath<WorkerEnv>(prefix, appShell));
+for (const prefix of ['/auth', '/shared/blueprint', '/shared/live', '/gallery', '/s']) worker.all(`${prefix}/*`, beneath<WorkerEnv>(prefix, appShell));
 
 /**
  * Explore is public. Signed out, its page is marked a visitor's, which the app draws under the public bar, reading nothing
@@ -414,73 +279,10 @@ const exploreShell: MiddlewareHandler<WorkerEnv> = async (c, next) =>
 
 for (const path of [APP_ROUTES.explore, `${APP_ROUTES.explore}/*`]) worker.get(path, exploreShell);
 
-worker.use('*', (c, next) => settle(Effect.gen(function* () {
-  const request = c.req.raw;
-  const cliAgentTicket = yield* authenticateCliAgentTicketRequest(request, c.env);
-
-  if (cliAgentTicket instanceof Response) return cliAgentTicket;
-  // A CLI ticket is its own credential; the cross-site rule still holds over it.
-  const identity = cliAgentTicket === null ? yield* sessionGate(request, c.env, addressedWorkspace(request)) : (crossSiteRejection(request) ?? cliAgentTicket.identity);
-
-  if (identity instanceof Response) return identity;
-  const routed = cliAgentTicket?.request ?? request;
-
-  // After CSRF so cross-site requests never feed the index; workspaces are
-  // indexed only after the ownership check below.
-  observeIdentity(c.env, identity, { retain: c.executionCtx });
-  c.set('identity', identity);
-  c.set('request', routed);
-  yield* Effect.promise(() => next());
-})));
+worker.use('*', sessionRouteGate());
 
 // Behind sign-in: a preview's owner is sent on to it with a ticket for its host, anyone else told it is not theirs.
 worker.get(PREVIEW_ENTRY_PATH, async (c) => await previewEntry(c.req.raw, c.env, c.get('identity').userId));
-
-worker.all('/agents/*', async (c, next) => {
-  // Refuse any namespace/facet path outside the public actor grammar before SDK routing.
-  if (isForeignAgentNamespacePath(c.req.path)) return err(404, 'Not found');
-
-  const agentName = extractOrchestratorAgentName(c.req.path);
-
-  if (!agentName) return next();
-
-  // routeAgentRequest maps every DO binding by slug; the rejection above keeps
-  // UserDO and KinuDevbox unreachable.
-  const owned = await ownedWorkspace(c, c.get('identity'), agentName, c.get('request'));
-
-  if (Result.isFailure(owned)) return owned.failure;
-  const { agent, request } = owned.success;
-  const hosted = hostedActorRoute(c.req.path);
-
-  if (hosted === null) return (await routeAgentRequest(request, c.env)) ?? next();
-  const target = await agent.resolveHostedActorRoute(hosted.name);
-
-  if ('reason' in target) return Response.json(target, { status: ERROR_STATUS[target.reason] });
-  const headers = new Headers(request.headers);
-
-  headers.set(HOSTED_ACTOR_ID_HEADER, target.actorId);
-
-  return (await routeAgentRequest(new Request(request, { headers }), c.env)) ?? next();
-});
-
-// A workspace's page wakes its object while the document, the app and its socket are still on the way: the claim
-// the socket makes a moment later then finds it constructed. Cold, that construction measured 725 ms of a 3.2 s
-// load (cmp-kinu-ux1, 2026-10-13). The socket's own claim, so a name the account does not hold wakes nothing; a
-// failure is the socket's to answer, and here is only logged.
-const workspacePage = async (c: Context<WorkerEnv>): Promise<Response> => {
-  const workspace = c.req.param('agentId');
-
-  if (workspace !== undefined) {
-    c.executionCtx.waitUntil(settleLogged('workspace.page_wake_failed', { doing: "waking a workspace for its page", otherwise: 'unavailable' },
-      async () => { await claimOwnedWorkspace(c.env, c.get('identity').userId, workspace, c.get('identity').workspace); }));
-  }
-
-  return await accountShell(c);
-};
-
-worker.get(APP_ROUTES.workspace, workspacePage);
-
-worker.get(`${APP_ROUTES.workspace}/*`, workspacePage);
 
 worker.notFound(accountShell);
 

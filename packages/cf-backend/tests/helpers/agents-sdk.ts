@@ -214,6 +214,10 @@ export const HARNESS_AGENT = Symbol('kinu.test.harness-agent');
  * bun keeps one mock per specifier (first registration wins); call before importing the module under test.
  */
 export function mockAgentsSdk(): void {
+  const getAgentByName = async (namespace: DurableObjectNamespace, name: string) => namespace.get(namespace.idFromName(name));
+  /** Undefined is the SDK's "not my path", which drops the request to the SPA fallback. */
+  const routeAgentRequest = async (): Promise<Response | undefined> => undefined;
+
   registerSynchronousMock('agents', () => ({
     /** Also the real base for DO classes a test instantiates directly (UserDO), hence the ctx/env assignment. */
     Agent: class extends workersModule.DurableObject<Env> {
@@ -596,11 +600,11 @@ export function mockAgentsSdk(): void {
     },
     // A harness call has no connection, as a route's or a stub's has none, unless the suite opens one as a pane would.
     getCurrentAgent: () => ({ agent: undefined, connection: paneConnection, request: undefined, email: undefined }),
-    getAgentByName: async (namespace: DurableObjectNamespace, name: string) =>
-      namespace.get(namespace.idFromName(name)),
-    /** Undefined is the SDK's "not my path", which drops the request to the SPA fallback. */
-    routeAgentRequest: async (): Promise<Response | undefined> => undefined,
+    getAgentByName,
+    routeAgentRequest,
   }));
+  // The routes a page open takes reach the SDK's router by its own entry (front-routes.ts).
+  registerSynchronousMock('agents/routing', () => ({ getAgentByName, routeAgentRequest }));
   // Spread the preload's boundary stub (`scripts/test-preload.ts`) whole: a named import the mock
   // lacks (sandbox 0.12.0 imports `tracing`) is a SyntaxError at load for every suite reaching it.
   // Recording at `tracing.enterSpan` keeps everything above it production code.

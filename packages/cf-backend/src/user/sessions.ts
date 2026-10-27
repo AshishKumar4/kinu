@@ -1,4 +1,5 @@
 import { parseCliTokenUserId } from '../cli/auth-store';
+import { parseCliAgentConnectTicketUserId } from '../auth/cli-agent-ticket';
 import {
   objectNamed,
   getActiveAccessTokenScopes, listAccessTokens as listAccessTokenRows, mintAccessToken as mintAccessTokenRow, revokeAccessToken as revokeAccessTokenRow, verifyAccessToken as verifyAccessTokenRow, type AccessTokenMint, type AccessTokenRecord, type AccessTokenScope, nanoid, ownerCaller, type UserCaller, validateWorkspaceName, randomToken, sha256Hex, type UserProfile,
@@ -64,12 +65,6 @@ export interface BrowserSessionIdentity {
 /** A revoked or lapsed session has no row and reads as null. */
 export interface LiveBrowserSession {
   identity: BrowserSessionIdentity;
-}
-
-export function parseCliAgentConnectTicketUserId(ticket: string): string | null {
-  const match = /^pat_([a-f0-9]{32})_[A-Za-z0-9_-]{24,}$/.exec(ticket);
-
-  return match?.[1] ?? null;
 }
 
 function cleanCliTokenLabel(label?: string): string {

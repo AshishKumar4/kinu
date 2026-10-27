@@ -1,16 +1,14 @@
 /** `/api/*` as one Hono app: registration order is dispatch order, so this file's order is the gate order. */
 import { Hono, type ExecutionContext as HonoExecutionContext } from 'hono';
-import { Effect } from 'effect';
-import { settle } from '@kinu.run/core/obs';
 import { getAgentByName } from 'agents';
 import type { OrchestratorAgent } from '../orchestrator';
 import { CLIENT_ERROR_ENDPOINT, healthResponse, REAL_CLOCK, serveApp } from '@kinu.run/core';
-import { crossSiteRejection, requestIdentity, sessionGate } from '../auth/session';
+import { crossSiteRejection, requestIdentity } from '../auth/session';
+import { sessionRouteGate } from '../auth/request-gate';
 import { authApiRoutes } from '../auth/routes';
 import { builtinAccountRoutes, builtinAuthRoutes } from '../auth/builtin';
 import { CONTROL_PLANE_API_ROUTE } from '../control-plane/access-gate';
 import { controlPlaneAccess } from '../control-plane/admin-caller';
-import { observeIdentity } from '../control-plane/index-feed';
 import { controlRoutes } from '../control-plane/routes';
 import { cliRoutes } from '../cli/routes';
 import { aiProxyRoutes } from '../user/ai-proxy';
@@ -35,7 +33,7 @@ import { activationRoutes } from './activations-route';
 import { filesRoutes } from '../files-routes';
 import { terminalRouteDeps, terminalRoutes } from '../terminal-route';
 import { routeError, apiPath, beneath, familyMount, type FamilyEnv } from './context';
-import { addressedWorkspace, workspaceGate, type ClaimedWorkspace } from './workspace';
+import { workspaceGate, type ClaimedWorkspace } from './workspace';
 
 const app = new Hono<FamilyEnv<Env>>({ getPath: apiPath });
 
@@ -88,15 +86,7 @@ app.use(CLIENT_ERROR_ENDPOINT, async (c, next) => {
 
 mount(clientErrorRoutes);
 
-app.use('/api/*', (c, next) => settle(Effect.gen(function* () {
-  const identity = yield* sessionGate(c.req.raw, c.env, addressedWorkspace(c.req.raw));
-
-  if (identity instanceof Response) return identity;
-  // After the cross-site check: cross-site requests never feed the index.
-  observeIdentity(c.env, identity, { retain: c.executionCtx });
-  c.set('identity', identity);
-  yield* Effect.promise(() => next());
-})));
+app.use('/api/*', sessionRouteGate());
 
 mount(feedbackRoutes);
 

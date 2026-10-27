@@ -2,8 +2,8 @@
 import type { MiddlewareHandler } from 'hono';
 import { Result } from 'effect';
 import { err, extractOrchestratorAgentName, isWorkspaceName } from '@kinu.run/core';
-import { claimOwnedWorkspace } from '../user/workspace-ownership';
-import { observeWorkspaceUse } from '../control-plane/index-feed';
+import { claimOwnedWorkspace, type WorkspaceOwnerClaim, type WorkspaceOwnershipEnv } from '../user/workspace-ownership';
+import { observeWorkspaceUse, type IndexFeedEnv, type RetainWork } from '../control-plane/index-feed';
 import { appendIdentityHeaders } from '../cli/rpc-gate';
 import { rawParam, type ApiVariables, type FamilyEnv } from './context';
 import type { AuthIdentity } from '../auth/session';
@@ -44,12 +44,12 @@ export type WorkspaceEnv = FamilyEnv<Env, WorkspaceVariables>;
  * The one ownership gate a workspace's routes pass, the API's and the agent socket's: the caller's claim on `name`,
  * then its use noted, and `request` rewritten to carry who asks. A refusal is the claim's own answer.
  */
-export async function ownedWorkspace(
-  c: { readonly env: Env; readonly executionCtx: Pick<ExecutionContext, 'waitUntil'> },
+export async function ownedWorkspace<Id, Agent extends WorkspaceOwnerClaim>(
+  c: { readonly env: WorkspaceOwnershipEnv<Id, Agent> & IndexFeedEnv<Id>; readonly executionCtx: RetainWork },
   identity: AuthIdentity,
   name: string,
   request: Request,
-): Promise<Result.Result<{ readonly agent: ClaimedWorkspace; readonly request: Request }, Response>> {
+): Promise<Result.Result<{ readonly agent: Agent; readonly request: Request }, Response>> {
   const claim = await claimOwnedWorkspace(c.env, identity.userId, name, identity.workspace);
 
   if (Result.isFailure(claim)) return Result.fail(err(claim.failure.status, claim.failure.error));
