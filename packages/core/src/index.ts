@@ -2307,7 +2307,7 @@ export {
 export {
   DRAWN_SANDBOX, PREVIEW_SANDBOX, containPreviewResponse, extractPreviewUrl, hostOf, isPreviewHostRequest,
   isPreviewUrl, previewHostSuffix, previewPortSuffix, previewSuffixMetaName, sandboxPreviewLabelOf,
-  type PreviewHostEnv, type PreviewPortEnv, type PreviewSuffixEnv,
+  type PreviewPortEnv, type PreviewSuffixEnv,
 } from './preview/preview-origin';
 
 export {
@@ -2332,6 +2332,8 @@ export { PRIVATE_NO_STORE, publicHtmlHeaders, withAppSecurityHeaders } from './h
 export { desktopClientUrl } from './http/desktop-client';
 
 export { serveApp, VISITOR_SHELL } from './http/app-shell';
+
+export { httpsUpgrade, isPublishedHost, published } from './http/published';
 
 export { ingressAdmission, ingressAdmitted, ingressDenied, peerIp } from './http/ingress-budget';
 

@@ -219,7 +219,9 @@ describe('the worker release tarball, adopted', () => {
 });
 
 describe('a rollback', () => {
-  const promotion = (version: string): Promotion => ({ sha: `sha-${version}`, version, front: `front-${version}`, at: '2026-09-26T00:00:00.000Z', downloads: {} });
+  const promotion = (version: string): Promotion & { readonly front: string } => ({
+    sha: `sha-${version}`, version, front: `front-${version}`, at: '2026-09-26T00:00:00.000Z', downloads: {},
+  });
 
   const withdrawn = (version: string, withdrawnAt: string): Promotion => ({ ...promotion(version), withdrawnAt });
 

@@ -801,6 +801,13 @@ function zoneApi(path: string, request: Request, named: (key: string) => string)
 
   if (zone !== undefined) return held.zones.has(zone) ? envelope(zoneOf(zone)) : refusal(404, 1001, 'Invalid zone identifier');
 
+  // The Worker a hostname is bound to, as the run asks before it binds one (steps.ts `bindDomain`).
+  if (path.includes('/workers/domains?hostname=') && request.method === 'GET') {
+    const host = new URLSearchParams(path.slice(path.indexOf('?') + 1)).get('hostname');
+
+    return envelope(held.domains.filter((hostname) => hostname === host).map((hostname) => ({ hostname, service: 'kinu' })));
+  }
+
   // A Workers custom domain makes the host's record and serves the Worker on it.
   if (path.endsWith('/workers/domains') && request.method === 'PUT') {
     held.domains.push(named('hostname'));

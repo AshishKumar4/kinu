@@ -131,6 +131,7 @@
           "src/gallery-agent-stub.ts!",
           "src/landing.tsx!",
           "src/legal.tsx!",
+          "src/front.ts!",
           "vite.config.ts!",
           "tests/**/*.test.ts"
         ]

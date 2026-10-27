@@ -33,7 +33,7 @@ import { handleSlateShareHostRequest } from "./slate-share-route";
 import { handleNimbusPreviewHostRequest, previewEntry } from "./nimbus-route";
 import { requestAccount, requestIdentity } from "./auth/session";
 import { sessionRouteGate } from "./auth/request-gate";
-import { APP_FONTS_PATH, appFontFile, containPreviewResponse, hostOf, isPreviewHostRequest, mailHostRedirect, serveApp, SLATE_FONTS_PATH, VISITOR_SHELL } from "@kinu.run/core";
+import { APP_FONTS_PATH, appFontFile, containPreviewResponse, hostOf, httpsUpgrade, isPreviewHostRequest, isPublishedHost, mailHostRedirect, published, serveApp, SLATE_FONTS_PATH, VISITOR_SHELL } from "@kinu.run/core";
 import { err } from "@kinu.run/core";
 import { controlPlaneAccess } from "./control-plane/admin-caller";
 import { CONTROL_PLANE_UI_ROUTE } from "./control-plane/access-gate";
@@ -43,7 +43,6 @@ import { beneath, familyMount, rawParam, rawPath, routeError, type ApiVariables,
 import { keepDevboxGolden } from './devbox-golden';
 import { appShell, frontRoutes } from './front-routes';
 import { accountShell } from './user/account-pages';
-import { httpsUpgrade, isPublishedHost, published } from './published';
 
 const RELEASE_ARTIFACT_PATH = `/downloads/:artifact{${RELEASE_ARTIFACT_NAME}}`;
 

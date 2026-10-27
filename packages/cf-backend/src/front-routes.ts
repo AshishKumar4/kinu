@@ -22,11 +22,11 @@ import type { RequestAccount } from './auth/session';
 export type FrontRoutesEnv = Pick<Env, 'ASSETS' | 'UserDO' | 'OrchestratorAgent' | 'CLI_PUBLIC_ORIGIN' | 'PREVIEW_HOST_SUFFIX' | 'PREVIEW_HOST_PORT'>;
 
 /** The account's object answers these for a request whose credential names it. */
-export const ACCOUNT_PAGES = ['/', APP_ROUTES.workspace, `${APP_ROUTES.workspace}/*`, ROSTER_SOCKET_ROUTE] as const;
+const ACCOUNT_PAGES = ['/', APP_ROUTES.workspace, `${APP_ROUTES.workspace}/*`, ROSTER_SOCKET_ROUTE] as const;
 
 /** The account's object's answer to a Worker that asks whether an agent socket may open (user/account-pages.ts): who
  *  asks, and the hosted actor the socket is for. */
-export const AgentSocketAdmissionSchema = v.object({
+const AgentSocketAdmissionSchema = v.object({
   userId: v.string(),
   sessionTokenHash: v.optional(v.string()),
   cliScopes: v.optional(v.array(v.picklist(ACCESS_TOKEN_SCOPES))),

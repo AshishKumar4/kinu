@@ -10,7 +10,7 @@ import {
   accountTheme, APP_ROUTES, DEFAULT_THEME, ERROR_STATUS, err, extractOrchestratorAgentName, hostedActorRoute, objectNamed, ownerCaller,
   THEME_CONFIG_KEY, serveApp, type ObjectNamespace, type OwnerCapabilityEnv, type ThemeName, type UserCaller,
 } from '@kinu.run/core';
-import { settle, settleLogged } from '@kinu.run/core/obs';
+import { settle, settleLogged, type KinuError } from '@kinu.run/core/obs';
 import { sessionRouteGate } from '../auth/request-gate';
 import { crossSiteRejection, sessionGate } from '../auth/session';
 import { authenticateCliAgentTicketRequest, type CliAgentTicketEnv } from '../auth/cli-agent-ticket';
@@ -79,8 +79,8 @@ async function workspacePage(c: AccountPagesContext): Promise<Response> {
  * the cross-site rule, the caller's claim on the workspace, then its hosted actor's route. The answer is who asks, which
  * the Worker writes over the socket's identity headers; a refusal is the Worker's answer too.
  */
-function admitAgentSocket(c: AccountPagesContext): Promise<Response> {
-  return settle(Effect.gen(function* () {
+function admitAgentSocket(c: AccountPagesContext): Effect.Effect<Response, KinuError> {
+  return Effect.gen(function* () {
     const request = c.req.raw;
     const cliAgentTicket = yield* authenticateCliAgentTicketRequest(request, c.env);
 
@@ -108,7 +108,7 @@ function admitAgentSocket(c: AccountPagesContext): Promise<Response> {
     };
 
     return Response.json(admission);
-  }));
+  });
 }
 
 /** Registration order is dispatch order. */
@@ -128,7 +128,7 @@ export function accountPages() {
   // HEAD is the app shell's, as on every `/api` path (api/app.ts).
   pages.get(ROSTER_SOCKET_ROUTE, async (c, next) => (c.req.method === 'HEAD' ? appShell(c) : next()), sessionRouteGate(), ownerGate(), rosterSocket());
 
-  pages.all('/agents/*', admitAgentSocket);
+  pages.all('/agents/*', (c) => settle(admitAgentSocket(c)));
 
   pages.onError(routeError);
 

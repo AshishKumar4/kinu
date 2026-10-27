@@ -1,5 +1,6 @@
 /** What every response a published host serves carries, from whichever of the deployment's Workers answered it. */
-import { hostOf, isPreviewHostRequest, WORKER_VERSION_HEADER, type PreviewHostEnv } from '@kinu.run/core';
+import { hostOf, isPreviewHostRequest, type PreviewHostEnv } from '../preview/preview-origin';
+import { WORKER_VERSION_HEADER } from '../cloud-wire';
 
 export interface PublishedEnv extends PreviewHostEnv {
   readonly CF_VERSION_METADATA?: { readonly id: string };

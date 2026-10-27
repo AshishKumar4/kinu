@@ -4,12 +4,11 @@
  * Object and whose start each new connection waited for (L29).
  */
 import { Hono } from 'hono';
-import { hostOf, isPreviewHostRequest, mailHostRedirect } from '@kinu.run/core';
+import { hostOf, httpsUpgrade, isPreviewHostRequest, mailHostRedirect, published } from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
 import { frontRoutes, type FrontRoutesEnv } from './front-routes';
 import { sessionAccount } from './auth/session';
 import { MAIN_SERVICE_BINDING } from '@kinu.run/core/deploy';
-import { httpsUpgrade, published } from './published';
 import { familyMount, rawPath, routeError, type FamilyEnv } from './api/context';
 
 export interface FrontEnv extends FrontRoutesEnv, Pick<Env, 'CF_VERSION_METADATA' | 'AGENT_METRICS' | 'FEEDBACK_MARKERS' | 'CONTROL_PLANE_OPS'> {

@@ -2,7 +2,7 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { builtinModules } from 'node:module';
 import { resolve } from 'node:path';
-import { build } from 'esbuild';
+import { build, stop } from 'esbuild';
 import type { Plugin } from 'vite';
 import { unstable_readConfig } from 'wrangler';
 import { FRONT_DIRECTORY, FRONT_ENTRY, frontConfig } from './front-config';
@@ -31,6 +31,8 @@ export function frontWorker(): Plugin {
         external: ['cloudflare:*', 'node:*'],
       });
       writeFileSync(resolve(out, 'wrangler.json'), JSON.stringify(frontConfig(main)));
+      // A build leaves esbuild's service process running for the life of the process that ran it, as vite-agent-bundle.ts says.
+      await stop();
     },
   };
 }
