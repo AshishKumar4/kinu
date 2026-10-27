@@ -14,7 +14,7 @@ export { FRONT_OBJECTS, MAIN_SERVICE_BINDING, frontWorkerName } from './front';
 export { GatewayCreditsSchema, gatewayCreditsUrl, type GatewayCredits } from '../providers/gateway-credits';
 
 export {
-  DEPLOY_API, DEPLOY_CALLBACK_PATH, DEPLOY_PAGE_PATH,
+  DEPLOY_API, DEPLOY_CALLBACK_PATH, DEPLOY_GITHUB_PATH, DEPLOY_PAGE_PATH,
 } from './paths';
 
 export { fetchReleaseArtifact, fetchReleaseManifest } from './channel';
@@ -44,7 +44,7 @@ export {
 
 export {
   ACCESS_TOKEN_KEY, COMPUTER_SECRETS, MAIL_ROUTING_SECRET, DEFAULT_INSTANCE_NAME, DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET,
-  DEPLOY_CLIENT_ID_KEY, DeployInputsSchema, DeploymentRecordSchema, FIRST_OWNER_LINK_MS, FIRST_OWNER_LINK_SECRET, MINTED_SECRETS,
+  DEPLOY_CLIENT_ID_KEY, DeployInputsSchema, DeploymentRecordSchema, FIRST_OWNER_LINK_MS, FIRST_OWNER_LINK_SECRET, INSTANCE_NAME, MINTED_SECRETS,
   REFRESH_TOKEN_KEY, promptedSecrets,
   type DeployAddress, type DeployAddressKind, type DeployInputs, type DeploymentRecord,
 } from './inputs';
@@ -61,6 +61,8 @@ export { deployPlan, type DeployStep } from './steps';
 export { MailPreviewSchema, mailHostPreview, type MailPreview, type MailPurpose, type MailRecord, type MailZone } from './mail';
 
 export { mailRoutesOf, type MailRoutes, type MailRoutingEnv } from './mail-rules';
+
+export { GITHUB_APP_NEW, bindGithubApp, convertedGithubApp, githubAppManifest, kinuOrigin, type GithubApp } from './github-app';
 
 export {
   DeployDomainsSchema, DeployPreflightSchema, DeployRunPlanSchema, DeployRunRequestSchema, DeploySessionSchema, accountChoices, cloudflareUser, deployedKinus,

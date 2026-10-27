@@ -23,6 +23,9 @@ export const DEPLOY_FAKE_SUBDOMAIN = SUBDOMAIN;
 
 export const DEPLOY_FAKE_CHANNEL = 'https://channel.invalid';
 
+/** The code GitHub hands back once it made a Kinu's app from its manifest. */
+export const DEPLOY_FAKE_GITHUB_CODE = 'probe-github-code';
+
 export const DEPLOY_FAKE_CLIENT_ID = 'probe-deploy-client';
 
 export const DEPLOY_FAKE_ACCESS_TOKEN = 'probe-access-token';
@@ -1190,6 +1193,11 @@ export async function deployOutbound(request: Request): Promise<Response> {
     // The product's own body: the stamp under `build`, beside the version that
     // answered (core/src/http/health-route.ts).
     return Response.json({ ok: true, build, versionId: version });
+  }
+
+  // GitHub's manifest conversion (core deploy/github-app.ts): the app made for the code it handed back.
+  if (url.host === 'api.github.com' && url.pathname === `/app-manifests/${DEPLOY_FAKE_GITHUB_CODE}/conversions` && request.method === 'POST') {
+    return Response.json({ id: 1, slug: 'kinu-probe', client_id: 'Iv23-probe', client_secret: 'probe-github-secret', pem: 'probe-key', webhook_secret: 'probe-hook' });
   }
 
   throw new Error(`the deploy probe reached an unnamed network: ${request.method} ${request.url}`);

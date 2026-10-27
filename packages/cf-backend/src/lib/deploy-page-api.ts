@@ -91,3 +91,29 @@ export function readRun(): Promise<DeployHeard<DeployRunView | null>> {
 export function continueRun(): Promise<DeployHeard<DeployRunView | null>> {
   return settle(heard(v.nullable(DeployRunViewSchema), "/runs/current/continue", { method: "POST" }));
 }
+
+const GithubFormSchema = v.object({ action: v.string(), manifest: v.string() });
+
+/**
+ * Hands this tab to GitHub, which shows the app it would make for the Kinu `name` and makes it on one click, then
+ * returns to the page (`?github=<app>` or `?github_error=`). A refusal stays on the page.
+ */
+export function makeGithubApp(account: string, name: string): Effect.Effect<DeployRefused | null> {
+  return Effect.map(heard(GithubFormSchema, "/github", { method: "POST", json: { account, name } }), (asked) => {
+    if ("refusal" in asked) return asked.refusal;
+    // GitHub takes a manifest only as a posted form field.
+    const form = document.createElement("form");
+    const manifest = document.createElement("input");
+
+    form.method = "post";
+    form.action = asked.answer.action;
+    manifest.type = "hidden";
+    manifest.name = "manifest";
+    manifest.value = asked.answer.manifest;
+    form.appendChild(manifest);
+    document.body.appendChild(form);
+    form.submit();
+
+    return null;
+  });
+}

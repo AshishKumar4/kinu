@@ -1,9 +1,12 @@
 /**
  * An existing Kinu (`session.deployments`): where it lives, whether an update is out, and the changes it can have here
- * (a domain, mail, a new setup link). Several Kinus are listed first, each opening its own changes.
+ * (a domain, mail, a GitHub App of its own, a new setup link). Several Kinus are listed first, each opening its own changes.
  */
 import { useState } from "react";
-import { ArrowsClockwiseIcon, CaretRightIcon, CheckIcon, EnvelopeSimpleIcon, GlobeHemisphereWestIcon, LinkIcon, type Icon as PhosphorIcon } from "@phosphor-icons/react";
+import {
+  ArrowSquareOutIcon, ArrowsClockwiseIcon, CaretRightIcon, CheckIcon, EnvelopeSimpleIcon, GithubLogoIcon, GlobeHemisphereWestIcon, LinkIcon,
+  type Icon as PhosphorIcon,
+} from "@phosphor-icons/react";
 import type { DeployChoice, DeployedKinu, DeploySession, UpdateBuild } from "@kinu.run/core/deploy";
 import { Button } from "@/components/ui/Button";
 import { Pressable } from "@/components/ui/Pressable";
@@ -13,7 +16,27 @@ import type { DeployRefused } from "@/lib/deploy-page-api";
 import { IconTile } from "@/components/ui/IconTile";
 
 /** What a change asks of the page, for the Kinu it is about. */
-export type KinuChange = "update" | "domain" | "mail" | "link";
+export type KinuChange = "update" | "domain" | "mail" | "github" | "link";
+
+/** GitHub's return to the page once it made a Kinu's app: the app, for the Kinu named, or GitHub's or Cloudflare's words. */
+export type GithubReturn = { readonly made: string; readonly kinu: string } | { readonly error: string };
+
+/** The app GitHub just made, and the one step left: installing it where its agents may work. */
+function GithubMade({ app }: { app: string }) {
+  return (
+    <li data-deploy-github="made" className="flex items-center gap-3 py-3">
+      <IconTile size="xl"><CheckIcon size={16} className="p-success" /></IconTile>
+      <span className="min-w-0 flex-1">
+        <span className="block t-public-item">Its GitHub App is made</span>
+        <span className="mt-px block t-meta">Install it on the repositories its agents may work in.</span>
+      </span>
+      <a href={`https://github.com/apps/${encodeURIComponent(app)}/installations/new`} target="_blank" rel="noopener noreferrer"
+        className="inline-flex shrink-0 items-center gap-1 t-public-item p-accent-fg hover:underline">
+        Install<ArrowSquareOutIcon size={14} />
+      </a>
+    </li>
+  );
+}
 
 /** A build's day, as a person says it ("20 October"); the stamp itself when it is not a date. */
 function dayOf(build: UpdateBuild): string {
@@ -72,7 +95,13 @@ function UpdateChange({ kinu, onPick }: { kinu: DeployedKinu; onPick: () => void
     : <Change change="update" Icon={ArrowsClockwiseIcon} title="An update is out" copy={`${versions} ${reason}`} disabled onPick={onPick} />;
 }
 
-function KinuChanges({ kinu, accounts, onChange }: { kinu: DeployedKinu; accounts: readonly DeployChoice[]; onChange: (change: KinuChange) => void }) {
+function KinuChanges({ kinu, accounts, madeApp, onChange }: {
+  kinu: DeployedKinu;
+  accounts: readonly DeployChoice[];
+  /** The GitHub App GitHub returned from making for this Kinu, when it did. */
+  madeApp: string | null;
+  onChange: (change: KinuChange) => void;
+}) {
   const domain = onOwnDomain(kinu);
   const host = URL.canParse(kinu.url) ? new URL(kinu.url).hostname : kinu.url;
 
@@ -85,23 +114,33 @@ function KinuChanges({ kinu, accounts, onChange }: { kinu: DeployedKinu; account
           copy={domain ? "Move it to another address of your own." : "Move it to an address of your own. This one keeps working."} onPick={() => onChange("domain")} />
         <Change change="mail" Icon={EnvelopeSimpleIcon} title="Add mail" copy={domain ? "An inbox for you and your agents at your domain." : "Needs a domain first."}
           disabled={!domain} onPick={() => onChange("mail")} />
+        {madeApp === null
+          ? (
+            <Change change="github" Icon={GithubLogoIcon} title={kinu.github ? "Make a new GitHub App" : "Add GitHub"}
+              copy={kinu.github ? "It has an app of its own on GitHub. A new one replaces it." : "An app of your own on GitHub, so its agents work in your repositories."}
+              onPick={() => onChange("github")} />
+          )
+          : <GithubMade app={madeApp} />}
         <Change change="link" Icon={LinkIcon} title="Get a new setup link" copy="If the first one ran out or went missing." onPick={() => onChange("link")} />
       </ul>
     </>
   );
 }
 
-export function DeployManage({ session, starting, refusal, refusalActions, onChange, onDeployAnother }: {
+export function DeployManage({ session, starting, refusal, refusalActions, github, onChange, onDeployAnother }: {
   session: DeploySession;
   /** An update or a new link asked for and not yet begun. */
   starting: boolean;
   refusal: DeployRefused | null;
   refusalActions: RefusalActions;
+  /** GitHub's return, when this page was arrived at from it. */
+  github: GithubReturn | null;
   onChange: (kinu: DeployedKinu, change: KinuChange) => void;
   onDeployAnother: () => void;
 }) {
   const { deployments, accounts } = session;
-  const [picked, setPicked] = useState<DeployedKinu | null>(deployments.length === 1 ? deployments[0] ?? null : null);
+  const returnedTo = github !== null && "made" in github ? deployments.find((kinu) => kinu.name === github.kinu) : undefined;
+  const [picked, setPicked] = useState<DeployedKinu | null>(returnedTo ?? (deployments.length === 1 ? deployments[0] ?? null : null));
 
   // Back only from one Kinu to the list of several: the list is where a signed-in person starts.
   return (
@@ -115,6 +154,7 @@ export function DeployManage({ session, starting, refusal, refusalActions, onCha
       <Unreadable session={session} />
       {starting && <p className="mb-4 inline-flex items-center gap-2 t-meta"><Loader size="sm" />Starting…</p>}
       {refusal !== null && <div className="mb-4"><Refused refusal={refusal} actions={refusalActions} /></div>}
+      {github !== null && "error" in github && <p role="alert" className="mb-4 t-public-body p-danger" data-deploy-github="refused">Couldn't add GitHub: {github.error}</p>}
       {picked === null
         ? (
           <ul className="space-y-1">
@@ -124,7 +164,8 @@ export function DeployManage({ session, starting, refusal, refusalActions, onCha
             ))}
           </ul>
         )
-        : <KinuChanges kinu={picked} accounts={accounts} onChange={(change) => onChange(picked, change)} />}
+        : <KinuChanges kinu={picked} accounts={accounts} madeApp={picked === returnedTo && github !== null && "made" in github ? github.made : null}
+          onChange={(change) => onChange(picked, change)} />}
     </DeployShell>
   );
 }

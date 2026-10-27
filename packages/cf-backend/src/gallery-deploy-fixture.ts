@@ -7,7 +7,7 @@
  */
 import * as v from "valibot";
 import {
-  DeployRunRequestSchema, FACT_ADDRESS, SIGN_IN_AGAIN_NEED, deployRunView, judgeRefusal, updateOffer,
+  DEPLOY_GITHUB_PATH, DeployRunRequestSchema, FACT_ADDRESS, GITHUB_APP_NEW, SIGN_IN_AGAIN_NEED, deployRunView, githubAppManifest, judgeRefusal, updateOffer,
   type CloudflareWords, type DeployDomain, type DeployedKinu, type DeployNeed, type DeployPreflight, type DeployRefusal, type DeployRunView, type DeploySession,
   type DeployStepRow, type DeployZone, type MailPreview, type UpdateBuild,
 } from "@kinu.run/core/deploy";
@@ -107,7 +107,7 @@ const LATEST: UpdateBuild = { version: "0.1.0+694e257", sha: "694e257", builtAt:
 
 /** A Kinu the session lists: core's offer for its build against the channel's, and every listed Kinu is the account's. */
 function kinu(host: string, current: UpdateBuild, available: UpdateBuild | null, account: string = ACCOUNT): DeployedKinu {
-  return { account, name: "kinu", url: `https://${host}`, update: updateOffer({ current, available, channelOrigin: "https://kinu.run", owned: true }) };
+  return { account, name: "kinu", url: `https://${host}`, update: updateOffer({ current, available, channelOrigin: "https://kinu.run", owned: true }), github: false };
 }
 
 const LISTED: Partial<Record<DeployFixtureState, readonly DeployedKinu[]>> = {
@@ -340,6 +340,7 @@ function goingFor(body: string | null): Going {
 /** What the door answers: its reads, a run begun, a hand-off, or a refusal in words. */
 type DoorAnswer =
   | DeploySession | DeployPreflight | readonly DeployDomain[] | MailPreview | DeployRunView | null | { readonly runId: string } | { readonly location: string }
+  | { readonly action: string; readonly manifest: string }
   | { readonly error: string; readonly need?: DeployNeed; readonly refused?: DeployRefusal };
 
 function json(body: DoorAnswer, status = 200): Response {
@@ -415,6 +416,13 @@ export function deployFixture(path: string, method: string, body: string | null)
   }
 
   if (route === "runs/current/continue" && method === "POST") return Promise.resolve(carryOn(state));
+
+  // The form the page hands its tab to: GitHub's, with the app for the Kinu asked.
+  if (route === "github") {
+    const manifest = githubAppManifest(`https://${WORKERS}`, new URL(DEPLOY_GITHUB_PATH, location.origin).href);
+
+    return Promise.resolve(json({ action: `${GITHUB_APP_NEW}?state=gallery`, manifest: JSON.stringify(manifest) }));
+  }
 
   return Promise.resolve(json({ error: "No such deploy route." }, 404));
 }

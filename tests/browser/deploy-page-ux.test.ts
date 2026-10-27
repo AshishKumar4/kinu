@@ -6,7 +6,9 @@
 import { describe, expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
 import * as v from 'valibot';
+import { Effect } from 'effect';
 import { DeployRunRequestSchema, judgeRefusal } from '@kinu.run/core/deploy';
+import { detach } from '@kinu.run/core/obs';
 
 import { withGallery, type Gallery } from '../../scripts/gallery-harness';
 
@@ -276,6 +278,44 @@ describe('the deploy page', () => {
       expect(await runAsked(relink)).toEqual({ kind: 'change', account: ACCOUNT, name: 'kinu', setupLink: true });
       await screenBecomes(relink, 'live');
       expect(await relink.$('[data-deploy-open][href*="/setup#"]')).not.toBeNull();
+    });
+  });
+
+  // Owner, 2026-10-27: GitHub in the self-deploy flow, one click. The tab goes to GitHub's own form with the Kinu's
+  // manifest; GitHub's return names the app to install.
+  test('Add GitHub posts the Kinu\'s app manifest to GitHub, and the return offers that app to install', async () => {
+    await withGallery(async (gallery) => {
+      const page = await opened(gallery, 'manage');
+      const posted = Promise.withResolvers<{ readonly url: string; readonly body: string }>();
+
+      await page.setRequestInterception(true);
+      // GitHub's form, as it takes the post: what was sent, and nothing loaded.
+      page.on('request', (request) => detach(Effect.promise(async () => {
+        if (!request.url().startsWith('https://github.com/')) return request.continue();
+        posted.resolve({ url: request.url(), body: request.postData() ?? '' });
+
+        return request.respond({ status: 200, contentType: 'text/html', body: '<p>GitHub</p>' });
+      })));
+      await page.waitForSelector('[data-deploy-change="github"]');
+      await page.click('[data-deploy-change="github"]');
+      const sent = await posted.promise;
+
+      const manifest = v.parse(v.object({ url: v.string(), callback_urls: v.array(v.string()), setup_url: v.string(), redirect_url: v.string() }),
+        JSON.parse(new URLSearchParams(sent.body).get('manifest') ?? '{}'));
+
+      const back = await opened(gallery, 'manage', '/deploy?github=kinu-ada&kinu=kinu');
+
+      await back.waitForSelector('[data-deploy-github="made"] a');
+
+      expect({
+        to: sent.url.split('?')[0],
+        manifest: { url: manifest.url, callbacks: manifest.callback_urls, setup: manifest.setup_url, back: new URL(manifest.redirect_url).pathname },
+        install: await back.$eval('[data-deploy-github="made"] a', (link) => link.getAttribute('href')),
+      }).toEqual({
+        to: 'https://github.com/settings/apps/new',
+        manifest: { url: 'https://kinu.ada.workers.dev', callbacks: ['https://kinu.ada.workers.dev/api/user/mcp/callback'], setup: 'https://kinu.ada.workers.dev/plugins', back: '/deploy/github' },
+        install: 'https://github.com/apps/kinu-ada/installations/new',
+      });
     });
   });
 

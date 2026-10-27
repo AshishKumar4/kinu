@@ -13,11 +13,11 @@ import { Loader } from "@/components/ui/Loader";
 import { beginConnect } from "@/lib/connect-window";
 import { CloudflareSaid, DeployShell, type RefusalActions } from "@/components/deploy/DeployParts";
 import { DeployStart, type DeclinedSignIn } from "@/components/deploy/DeployStart";
-import { DeployManage, type KinuChange } from "@/components/deploy/DeployManage";
+import { DeployManage, type GithubReturn, type KinuChange } from "@/components/deploy/DeployManage";
 import { DeployReady, type ReadyFor } from "@/components/deploy/DeployReady";
 import { DeployLive, DeployRunning, type RunAsked } from "@/components/deploy/DeployRun";
 import {
-  beginRun, beginSignIn, continueRun, readRun, readSession, type DeployHeard, type DeployRefused,
+  beginRun, beginSignIn, continueRun, makeGithubApp, readRun, readSession, type DeployHeard, type DeployRefused,
 } from "@/lib/deploy-page-api";
 
 /** How often a followed run is read again, by where it stands: it goes on in Cloudflare whether or not this page reads. */
@@ -35,6 +35,16 @@ function declinedOf(params: URLSearchParams): DeclinedSignIn | null {
   const error = params.get("error") ?? "";
 
   return error === "" ? null : { error, description: params.get("error_description") ?? "" };
+}
+
+/** GitHub's return from making a Kinu's app (`/deploy/github`): the app made for the Kinu named, or why not. */
+function githubOf(params: URLSearchParams): GithubReturn | null {
+  const app = params.get("github") ?? "";
+  const error = params.get("github_error") ?? "";
+
+  if (app !== "") return { made: app, kinu: params.get("kinu") ?? "" };
+
+  return error === "" ? null : { error };
 }
 
 /** A run that waits on a sign-in to carry on: one paused past its grant, or one whose domain is ready to move onto. */
@@ -90,6 +100,7 @@ function Failed({ refusal }: { refusal: DeployRefused }) {
 export default function DeployPage() {
   const [params] = useSearchParams();
   const declined = useRef(declinedOf(params)).current;
+  const github = useRef(githubOf(params)).current;
   const [stage, setStage] = useState<Stage>({ kind: "loading" });
   const [signingIn, setSigningIn] = useState(false);
   const [deploying, setDeploying] = useState(false);
@@ -275,6 +286,19 @@ export default function DeployPage() {
 
     if (picked === "link") return deploy({ kind: "change", account: kinu.account, name: kinu.name, setupLink: true }, "change");
 
+    // The tab goes to GitHub, and comes back here once the app is made.
+    if (picked === "github") {
+      return Effect.gen(function* () {
+        setDeploying(true);
+        setRefusal(null);
+        const refused = yield* makeGithubApp(kinu.account, kinu.name);
+
+        if (refused === null) return;
+        setDeploying(false);
+        setRefusal(refused);
+      });
+    }
+
     return Effect.sync(() => go({ kind: "ready", session, readyFor: { kind: picked, kinu } }));
   };
 
@@ -306,7 +330,7 @@ export default function DeployPage() {
     const { session } = stage;
 
     return (
-      <DeployManage session={session} starting={deploying} refusal={refusal} refusalActions={refusalActions}
+      <DeployManage session={session} starting={deploying} refusal={refusal} refusalActions={refusalActions} github={github}
         onChange={(kinu, picked) => detach(change(session, kinu, picked))} onDeployAnother={() => go({ kind: "ready", session, readyFor: { kind: "new" } })} />
     );
   }

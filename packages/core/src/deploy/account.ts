@@ -12,7 +12,7 @@ import type { HttpGet } from './context';
 import type { DeployChoice } from './door';
 import {
   DEFAULT_INSTANCE_NAME, DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET, DeployInputsSchema, FIRST_OWNER_LINK_SECRET,
-  CREDITS_TOKEN_SECRET, INSTANCE_NAME, MAIL_ROUTING_SECRET, MINTED_SECRETS,
+  CREDITS_TOKEN_SECRET, GITHUB_APP_SECRETS, INSTANCE_NAME, MAIL_ROUTING_SECRET, MINTED_SECRETS,
   type DeployAddress, type DeployInputs,
 } from './inputs';
 import type { DeployPhaseId, DeployRunViewState } from './phases';
@@ -75,6 +75,8 @@ export interface DeployedKinu {
   readonly name: string;
   readonly url: string;
   readonly update: UpdateOffer;
+  /** Whether its GitHub plugin has a client of its own (`github-app.ts`). */
+  readonly github: boolean;
 }
 
 const ZoneStatusSchema = v.picklist(['active', 'pending']);
@@ -115,7 +117,7 @@ export const DeploySessionSchema: v.GenericSchema<DeploySession> = v.object({
     phase: v.picklist(['prepare', 'storage', 'upload', 'address', 'mail', 'check', 'live']),
     state: v.picklist(['running', 'paused', 'refused', 'live']),
   })),
-  deployments: v.array(v.object({ account: v.string(), name: v.string(), url: v.string(), update: UpdateOfferSchema })),
+  deployments: v.array(v.object({ account: v.string(), name: v.string(), url: v.string(), update: UpdateOfferSchema, github: v.boolean() })),
   unreadable: v.array(v.object({ account: v.string(), words: CloudflareWordsSchema })),
 });
 
@@ -391,13 +393,21 @@ export function deployedKinus(
   return Effect.gen(function* () {
     const names = yield* workerNames(transport, account);
     const settings = yield* Effect.forEach(names, (name) => scriptBindings(transport, account, name), { concurrency: 4 });
-    const made = names.flatMap((name, at) => (madeByARun(settings[at] ?? []) ? [{ name, url: varsOf(settings[at] ?? []).get('CLI_PUBLIC_ORIGIN') ?? '' }] : []));
+
+    const made = names.flatMap((name, at) => {
+      const bindings = settings[at] ?? [];
+
+      return madeByARun(bindings)
+        ? [{ name, url: varsOf(bindings).get('CLI_PUBLIC_ORIGIN') ?? '', github: bindings.some((binding) => binding.name === GITHUB_APP_SECRETS.id) }]
+        : [];
+    });
 
     return yield* Effect.forEach(made, (kinu) => Effect.map(servedBuild(channel.http, kinu.url), (current): DeployedKinu => ({
       account,
       name: kinu.name,
       url: kinu.url,
       update: updateOffer({ current, available: channel.available, channelOrigin: channel.origin, owned: true }),
+      github: kinu.github,
     })), { concurrency: 4 });
   });
 }

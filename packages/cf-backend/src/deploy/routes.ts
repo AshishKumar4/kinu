@@ -9,17 +9,17 @@
  * The CLI (and the old page) hold a run key: never in a URL, a Bearer header or the upgrade's second subprotocol,
  * since query strings reach browser history and invocation logs.
  *
- * Either OAuth leg is bound to its browser by the `__Host-kinu_deploy_state` cookie holding the `state` digest, as
- * `auth/session.ts` does for sign-in.
+ * Either OAuth leg, and GitHub's return from making a Kinu's app, is bound to its browser by the
+ * `__Host-kinu_deploy_state` cookie holding the `state` digest, as `auth/session.ts` does for sign-in.
  */
 import { Hono, type Context, type Next } from 'hono';
 import { ownRequest } from '../nimbus-route';
 import {
-  CLOUDFLARE_DEPLOY_SCOPES, DEPLOY_API, DEPLOY_CALLBACK_PATH, DEPLOY_PAGE_PATH, DEPLOY_RUN_ID, DEPLOY_SESSION_STATE,
-  DEPLOY_SOCKET_PROTOCOL, DeployDomainsSchema, DeployInputsSchema, DeployPreflightSchema, DeployRunRequestSchema, DeployRunViewSchema,
+  CLOUDFLARE_DEPLOY_SCOPES, DEPLOY_API, DEPLOY_CALLBACK_PATH, DEPLOY_GITHUB_PATH, DEPLOY_PAGE_PATH, DEPLOY_RUN_ID, DEPLOY_SESSION_STATE,
+  DEPLOY_SOCKET_PROTOCOL, DeployDomainsSchema, DeployInputsSchema, GITHUB_APP_NEW, INSTANCE_NAME, DeployPreflightSchema, DeployRunRequestSchema, DeployRunViewSchema,
   DeploySessionSchema, MailPreviewSchema, RELEASE_MANIFEST_PATH, SIGN_IN_AGAIN_NEED,
-  accountChoices, authorizeUrl, bearerTransport, buildOf, causeWords, deployedKinus, domainsMatching, fetchReleaseManifest, heard,
-  judgeRefusal, mailHostPreview, mintDeployRun, parseReleaseManifest, plannedRun, preflight, promptedSecrets, runKeyDigest,
+  accountChoices, authorizeUrl, bearerTransport, bindGithubApp, buildOf, causeWords, convertedGithubApp, deployedKinus, domainsMatching,
+  fetchReleaseManifest, githubAppManifest, heard, judgeRefusal, kinuOrigin, mailHostPreview, mintDeployRun, parseReleaseManifest, plannedRun, preflight, promptedSecrets, runKeyDigest,
   type CloudflareTransport, type CloudflareUser, type CloudflareWords, type DeployChoice, type DeployOptions, type DeployRunView,
   type DeploySession,
   type UpdateBuild,
@@ -101,6 +101,8 @@ export const deployCallbackRoutes = new Hono<FamilyEnv<Env, object>>();
 
 deployCallbackRoutes.all(DEPLOY_CALLBACK_PATH, noHead<FamilyEnv<Env, object>>((c) => callback(c.req.raw, c.env, new URL(c.req.url))));
 
+deployCallbackRoutes.get(DEPLOY_GITHUB_PATH, noHead<FamilyEnv<Env, object>>((c) => githubMade(c.req.raw, c.env, new URL(c.req.url))));
+
 export const deployRoutes = new Hono<FamilyEnv<Env, DeployVariables>>();
 
 deployRoutes.all(`${DEPLOY_API}/options`, async (c) => options(c.req.raw, c.env));
@@ -119,7 +121,7 @@ async function fromThePage(c: Context<FamilyEnv<Env, DeployVariables>>, next: Ne
   return undefined;
 }
 
-for (const path of ['signin', 'session', 'preflight', 'domains', 'mail', 'runs', 'runs/current', 'runs/current/*']) deployRoutes.use(`${DEPLOY_API}/${path}`, fromThePage);
+for (const path of ['signin', 'session', 'preflight', 'domains', 'mail', 'github', 'runs', 'runs/current', 'runs/current/*']) deployRoutes.use(`${DEPLOY_API}/${path}`, fromThePage);
 
 // The page's door: its sign-in, the reads it shows, and the run it follows.
 deployRoutes.post(`${DEPLOY_API}/signin`, async (c) => signIn(c.req.raw, c.env));
@@ -142,6 +144,8 @@ deployRoutes.get(`${DEPLOY_API}/domains`, noHead<FamilyEnv<Env, DeployVariables>
 deployRoutes.get(`${DEPLOY_API}/mail`, noHead<FamilyEnv<Env, DeployVariables>>((c) => accountRead(c.req.raw, c.env, c.req.query('account') ?? '', (transport, account) => (
   Effect.map(mailHostPreview(transport, account, (c.req.query('host') ?? '').toLowerCase()), (body) => v.parse(MailPreviewSchema, body))
 ))));
+
+deployRoutes.post(`${DEPLOY_API}/github`, noHead<FamilyEnv<Env, DeployVariables>>((c) => githubManifest(c.req.raw, c.env)));
 
 // A JSON body is the page's run; the CLI's mint carries none and is answered a run key, as before.
 deployRoutes.post(`${DEPLOY_API}/runs`, noHead<FamilyEnv<Env, DeployVariables>>((c) => (
@@ -385,6 +389,60 @@ function toPage(params: Readonly<Record<string, string>>): Response {
     status: 302,
     headers: { location: query === '' ? DEPLOY_PAGE_PATH : `${DEPLOY_PAGE_PATH}?${query}`, 'cache-control': 'no-store' },
   });
+}
+
+const GithubAskSchema = v.object({ account: CloudflareIdSchema, name: v.pipe(v.string(), v.regex(INSTANCE_NAME)) });
+
+/**
+ * The manifest of the GitHub App for a Kinu of this sign-in's account, and GitHub's form the page posts it to. Its
+ * `state` names the Kinu, and only this browser may bring it back (`githubMade`).
+ */
+function githubManifest(request: Request, env: Env): Effect.Effect<Response, KinuError> {
+  return Effect.gen(function* () {
+    const asked = yield* Effect.promise(async () => safeJson(request, GithubAskSchema));
+
+    if (asked === null) return err(400, 'That is not a Kinu this page can add GitHub to.');
+    const state = `${asked.account}.${asked.name}.${randomToken(SESSION_TOKEN_BYTES)}`;
+    const back = new URL(DEPLOY_GITHUB_PATH, new URL(request.url).origin).href;
+
+    const answer = yield* pageRead(request, env, (transport) => Effect.map(kinuOrigin(transport, asked.account, asked.name), (origin) => ({
+      action: `${GITHUB_APP_NEW}?state=${encodeURIComponent(state)}`,
+      manifest: JSON.stringify(githubAppManifest(origin, back)),
+    })));
+
+    if (answer.ok) answer.headers.append('set-cookie', setCookie(DEPLOY_STATE_COOKIE_NAME, sha256Hex(state), STATE_TTL_MS));
+    answer.headers.set('cache-control', 'no-store');
+
+    return answer;
+  });
+}
+
+/**
+ * GitHub's return once it made the app: the code traded for the app's client, which the Kinu its `state` names keeps
+ * as its GitHub plugin's, with the sign-in's grant. Back on the page with the app to install, or with why not.
+ */
+function githubMade(request: Request, env: Env, url: URL): Effect.Effect<Response, KinuError> {
+  const state = url.searchParams.get('state') ?? '';
+  const code = url.searchParams.get('code') ?? '';
+  const [account = '', name = ''] = state.split('.');
+  const bound = readCookie(request, DEPLOY_STATE_COOKIE_NAME) ?? '';
+
+  if (code === '' || bound === '' || !timingSafeEqual(bound, sha256Hex(state))) return Effect.succeed(burnt(err(400, 'This browser did not start making that GitHub App.')));
+
+  return Effect.gen(function* () {
+    const held = yield* Effect.promise(async () => signedIn(request, env));
+
+    if (held === null) return toPage({ github_error: 'The sign-in with Cloudflare ended. Sign in again, then add GitHub once more.' });
+    const app = yield* convertedGithubApp(code);
+
+    yield* bindGithubApp(bearerTransport(held.token), account, name, app);
+    diagnostics.event('deploy.github_app_bound', { account, name, slug: app.slug });
+
+    return toPage({ github: app.slug, kinu: name });
+  }).pipe(
+    Effect.catchCause((failed) => Effect.succeed(toPage({ github_error: causeWords(failed).message }))),
+    Effect.map(burnt),
+  );
 }
 
 /** Cloudflare's refusal of a read in its own words (its path, code and message), never a bare route error. */

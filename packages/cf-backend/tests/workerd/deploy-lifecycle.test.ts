@@ -16,7 +16,8 @@ import {
 } from '@kinu.run/core/deploy';
 import {
   DEPLOY_FAKE_ACCESS_TOKEN, DEPLOY_FAKE_ACCOUNT, DEPLOY_FAKE_CHANNEL_BUILD, DEPLOY_FAKE_CLIENT_ID, DEPLOY_FAKE_OLDER_BUILD, DEPLOY_FAKE_OWNER,
-  DEPLOY_FAKE_REFRESH_TOKEN, DEPLOY_FAKE_ROTATED_REFRESH, DEPLOY_FAKE_SUBDOMAIN, DEPLOY_FAKE_USER, DEPLOY_FAKE_VERSION, deployFakeZoneId,
+  DEPLOY_FAKE_GITHUB_CODE, DEPLOY_FAKE_REFRESH_TOKEN, DEPLOY_FAKE_ROTATED_REFRESH, DEPLOY_FAKE_SUBDOMAIN, DEPLOY_FAKE_USER, DEPLOY_FAKE_VERSION,
+  deployFakeZoneId,
 } from './deploy-fake';
 
 /** Spelled rather than imported: the name is part of what the browser is promised. */
@@ -555,6 +556,39 @@ describe('the deploy page', () => {
       // The version it uploaded before the pause is the one that went live.
       live: { runId, state: 'live', uploads: 1 },
       gone: { object: true, current: 404 },
+    });
+  });
+
+  // Owner, 2026-10-27: GitHub in the self-deploy flow, one click. GitHub's return binds the app's client to the Kinu its
+  // state names, and only in the browser that asked.
+  it('makes a Kinu its own GitHub App: the manifest names its address, and only the asking browser\'s return binds it', async () => {
+    await env.DEPLOY_FAKE.reset();
+    await env.DEPLOY_FAKE.existing();
+
+    const cookie = await signedInPage();
+    const asked = await page(cookie, 'POST', '/api/deploy/github', JSON.stringify({ account: DEPLOY_FAKE_ACCOUNT, name: 'kinu' }));
+    const form = v.parse(v.object({ action: v.string(), manifest: v.string() }), JSON.parse(asked.body));
+    const manifest = v.parse(v.object({ url: v.string(), callback_urls: v.array(v.string()), redirect_url: v.string() }), JSON.parse(form.manifest));
+    const state = new URL(form.action).searchParams.get('state') ?? '';
+    const bound = asked.setCookie.find((each) => each.startsWith(`${DEPLOY_STATE_COOKIE}=`))?.split(';')[0] ?? '';
+    const back = async (cookies: string) => env.DEPLOY_DOOR_PROBE.hit('GET', `/deploy/github?code=${DEPLOY_FAKE_GITHUB_CODE}&state=${encodeURIComponent(state)}`, { cookie: cookies });
+
+    const stranger = await back(cookie);
+    const made = await back(`${bound}; ${cookie}`);
+    const { secrets } = await env.DEPLOY_FAKE.state();
+
+    expect({
+      manifest: { url: manifest.url, callbacks: manifest.callback_urls, back: manifest.redirect_url },
+      stranger: stranger.status,
+      made: { status: made.status, location: made.location },
+      bound: [secrets.MCP_GITHUB_CLIENT_ID, secrets.MCP_GITHUB_CLIENT_SECRET],
+      listed: (await sessionOf(cookie)).deployments.map((kinu) => kinu.github),
+    }).toEqual({
+      manifest: { url: `https://${ADDRESS}`, callbacks: [`https://${ADDRESS}/api/user/mcp/callback`], back: 'https://kinu.probe.workers.dev/deploy/github' },
+      stranger: 400,
+      made: { status: 302, location: '/deploy?github=kinu-probe&kinu=kinu' },
+      bound: ['Iv23-probe', 'probe-github-secret'],
+      listed: [true],
     });
   });
 
