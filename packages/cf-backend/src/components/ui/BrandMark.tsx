@@ -1,5 +1,6 @@
 /** Brand hexes do not theme: marks sit on white unless their hex is unreadable there, then on ink. */
 import { CloudflareLogo } from "@cloudflare/kumo";
+import { GOOGLE_CONNECTION, mcpPresetById, type McpPresetId } from "@kinu.run/core";
 import {
   siAnthropic, siCloudflare, siDeepmind, siDeepseek, siGithub, siGoogle,
   siGooglecloud, siHuggingface, siKimi, siMetaai, siMinimax, siMistralai,
@@ -101,6 +102,22 @@ export function providerBrand(provider: string): BrandName | undefined {
     case "vercel": return "vercel";
     default: return undefined;
   }
+}
+
+/** Each plugin preset's mark. */
+export const PRESET_MARK: Record<McpPresetId, BrandName> = {
+  github: "github",
+  cloudflare: "cloudflare",
+  composio: "composio",
+};
+
+/** A connection a blueprint names: a preset's id, which the catalog resolves (`preset_id` is any string on the wire), or
+ *  the Google connection. */
+export function presetBrand(connection: string | null): BrandName | undefined {
+  if (connection === GOOGLE_CONNECTION) return "google";
+  const preset = connection === null ? undefined : mcpPresetById(connection);
+
+  return preset === undefined ? undefined : PRESET_MARK[preset.id];
 }
 
 export function BrandMark({ brand, size = 16, bare = false, className }: {

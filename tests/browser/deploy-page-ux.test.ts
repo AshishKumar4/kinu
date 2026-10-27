@@ -297,6 +297,12 @@ describe('the deploy page', () => {
         return request.respond({ status: 200, contentType: 'text/html', body: '<p>GitHub</p>' });
       })));
       await page.waitForSelector('[data-deploy-connector="github"] button');
+
+      // Every plugin is listed; one that needs no app of the Kinu's own is connected in the Kinu itself.
+      const listed = await page.$$eval('[data-deploy-connector]', (rows) => rows.map((row) => [
+        row.getAttribute('data-deploy-connector'), row.querySelector('a')?.getAttribute('href') ?? null,
+      ]));
+
       await page.click('[data-deploy-connector="github"] button');
       const sent = await posted.promise;
 
@@ -308,10 +314,15 @@ describe('the deploy page', () => {
       await back.waitForSelector('[data-deploy-connector="github"] a');
 
       expect({
+        listed,
         to: sent.url.split('?')[0],
         manifest: { url: manifest.url, callbacks: manifest.callback_urls, setup: manifest.setup_url, back: new URL(manifest.redirect_url).pathname },
         install: await back.$eval('[data-deploy-connector="github"] a', (link) => link.getAttribute('href')),
       }).toEqual({
+        listed: [
+          ['github', null], ['google', null],
+          ['cloudflare', 'https://kinu.ada.workers.dev/plugins'], ['composio', 'https://kinu.ada.workers.dev/plugins'],
+        ],
         to: 'https://github.com/settings/apps/new',
         manifest: { url: 'https://kinu.ada.workers.dev', callbacks: ['https://kinu.ada.workers.dev/api/user/mcp/callback'], setup: 'https://kinu.ada.workers.dev/plugins', back: '/deploy/github' },
         install: 'https://github.com/apps/kinu-ada/installations/new',

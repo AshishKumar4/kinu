@@ -5,13 +5,13 @@ import {
   ArrowClockwiseIcon, ArrowSquareOutIcon, PlusIcon, SignInIcon, TrashIcon, XIcon,
 } from "@phosphor-icons/react";
 import {
-  GOOGLE_CONNECTION, MCP_PRESETS, mcpPresetById, type ConnectEnded, type McpPreset, type McpPresetId, type McpServerSummary,
+  GOOGLE_CONNECTION, MCP_PRESETS, mcpPresetById, type ConnectEnded, type McpPreset, type McpServerSummary,
 } from "@kinu.run/core";
 import { addMcpServer, reconnectSaying, removeMcpServer, type McpServerInput } from "@/lib/user-api";
 import { beginConnect, signInMcpServer, type ConnectRun } from "@/lib/connect-window";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { SECRET_REGION } from "@/components/ui/SecretValue";
-import { BrandMark, type BrandName } from "@/components/ui/BrandMark";
+import { BrandMark, PRESET_MARK, type BrandName } from "@/components/ui/BrandMark";
 import { Row, RowAction } from "@/components/ui/Row";
 import { Status } from "@/components/ui/Status";
 import { Menu, type MenuItem } from "@/components/ui/Menu";
@@ -19,21 +19,6 @@ import { mcpServerStatus, NOT_ADDED, type PluginStatus } from "@/components/plug
 import { renderThrownChain, detach } from "@kinu.run/core/obs";
 import { TextInput } from "@/components/ui/Field";
 import { Button } from "@/components/ui/Button";
-
-const PRESET_MARK: Record<McpPresetId, BrandName> = {
-  github: "github",
-  cloudflare: "cloudflare",
-  composio: "composio",
-};
-
-/** A connection a blueprint names: a preset's id, which the catalog resolves (`preset_id` is any string on the wire), or
- *  the Google connection. */
-export function presetBrand(connection: string | null): BrandName | undefined {
-  if (connection === GOOGLE_CONNECTION) return "google";
-  const preset = connection === null ? undefined : mcpPresetById(connection);
-
-  return preset === undefined ? undefined : PRESET_MARK[preset.id];
-}
 
 /** What a blueprint's connection is called: its preset's title, or Google; a name nothing resolves, as it is. */
 export function connectionTitle(connection: string): string {

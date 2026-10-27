@@ -1,14 +1,15 @@
 /**
- * A Kinu's connectors (core deploy/connectors.ts): GitHub and Google, the two that need an app of the Kinu's own, each
- * connected by its own steps. Every other plugin needs nothing here; people connect them in the Kinu's Plugins.
+ * A Kinu's connectors (core deploy/connectors.ts): GitHub and Google, which need an app of the Kinu's own, each connected
+ * by its own steps; then every other plugin of the catalog, which needs nothing here and is connected in the Kinu itself.
  */
 import { useState, type ReactNode } from "react";
 import { Effect } from "effect";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react";
+import { APP_ROUTES, MCP_PRESETS } from "@kinu.run/core";
 import { GOOGLE_SETUP, googleRedirect, type DeployedKinu } from "@kinu.run/core/deploy";
 import { detach } from "@kinu.run/core/obs";
 import { Button } from "@/components/ui/Button";
-import { BrandMark } from "@/components/ui/BrandMark";
+import { BrandMark, PRESET_MARK, type BrandName } from "@/components/ui/BrandMark";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { IconTile } from "@/components/ui/IconTile";
 import { TextInput } from "@/components/ui/Field";
@@ -20,11 +21,11 @@ export type GithubReturn = { readonly made: string; readonly kinu: string } | { 
 /** Where an owner's GitHub Apps are listed, each with its installations. */
 const GITHUB_APPS = "https://github.com/settings/apps";
 
-function Connector({ brand, title, copy, action, children }: {
-  brand: "github" | "google"; title: string; copy: ReactNode; action: ReactNode; children?: ReactNode;
+function Connector({ id, brand, title, copy, action, children }: {
+  id: string; brand: BrandName; title: string; copy: ReactNode; action: ReactNode; children?: ReactNode;
 }) {
   return (
-    <li data-deploy-connector={brand} className="py-3">
+    <li data-deploy-connector={id} className="py-3">
       <div className="flex items-center gap-3">
         <IconTile size="xl"><BrandMark brand={brand} size={18} /></IconTile>
         <span className="min-w-0 flex-1">
@@ -49,17 +50,17 @@ function External({ href, children }: { href: string; children: ReactNode }) {
 function GitHubConnector({ kinu, made, busy, onConnect }: { kinu: DeployedKinu; made: string | null; busy: boolean; onConnect: () => void }) {
   if (made !== null) {
     return (
-      <Connector brand="github" title="GitHub" copy="Connected. Install it on the repositories its agents may use."
+      <Connector id="github" brand="github" title="GitHub" copy="Connected. Install it on the repositories its agents may use."
         action={<External href={`https://github.com/apps/${encodeURIComponent(made)}/installations/new`}>Install on GitHub</External>} />
     );
   }
 
   if (kinu.connectors.github) {
-    return <Connector brand="github" title="GitHub" copy="Connected through its own GitHub app." action={<External href={GITHUB_APPS}>Manage on GitHub</External>} />;
+    return <Connector id="github" brand="github" title="GitHub" copy="Connected through its own GitHub app." action={<External href={GITHUB_APPS}>Manage on GitHub</External>} />;
   }
 
   return (
-    <Connector brand="github" title="GitHub" copy="Lets its agents work in your repositories. GitHub makes the app in one click."
+    <Connector id="github" brand="github" title="GitHub" copy="Lets its agents work in your repositories. GitHub makes the app in one click."
       action={<Button size="sm" variant="secondary" disabled={busy} onClick={onConnect}>Connect</Button>} />
   );
 }
@@ -142,7 +143,7 @@ function GoogleConnector({ kinu, onChanged }: { kinu: DeployedKinu; onChanged: (
     });
 
     return (
-      <Connector brand="google" title="Google" copy="Connected through your own Google app."
+      <Connector id="google" brand="google" title="Google" copy="Connected through your own Google app."
         action={<Button size="sm" variant="ghost" onClick={() => detach(composio())}>Use Composio instead</Button>}>
         {refused !== null && <p role="alert" className="t-meta p-danger">{refused}</p>}
       </Connector>
@@ -150,7 +151,7 @@ function GoogleConnector({ kinu, onChanged }: { kinu: DeployedKinu; onChanged: (
   }
 
   return (
-    <Connector brand="google" title="Google" copy="Works through Composio: each person connects Gmail, Drive and Calendar in Kinu's Plugins."
+    <Connector id="google" brand="google" title="Google" copy="Works through Composio: each person connects Gmail, Drive and Calendar in Kinu's Plugins."
       action={!open && <Button size="sm" variant="secondary" onClick={() => setOpen(true)}>Use your own app</Button>}>
       {open ? <GoogleClientSteps kinu={kinu} onSaved={onChanged} onCancel={() => setOpen(false)} /> : undefined}
     </Connector>
@@ -174,6 +175,11 @@ export function DeployConnectors({ kinu, github, busy, onConnectGithub, onChange
       <ul className="mt-1">
         <GitHubConnector kinu={kinu} made={made} busy={busy} onConnect={onConnectGithub} />
         <GoogleConnector kinu={kinu} onChanged={onChanged} />
+        {MCP_PRESETS.filter((preset) => preset.auth !== "oauth-app").map((preset) => (
+          <Connector key={preset.id} id={preset.id} brand={PRESET_MARK[preset.id]} title={preset.title}
+            copy={`${preset.description}. Ready: each person connects it in Kinu's Plugins.`}
+            action={<External href={`${kinu.url}${APP_ROUTES.plugins}`}>Connect in Kinu</External>} />
+        ))}
       </ul>
     </section>
   );
