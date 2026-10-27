@@ -3,11 +3,13 @@
  * `welcome&step=3`. `&cloudflare=` names the account's Cloudflare login (`granted`, the default; `stale`, a sign-in from
  * before web search; `off`, none), `&searchtest=refused` has Test refused in Cloudflare's words, `&chain=` starts the
  * account on a chosen chain (`linkup-cloudflare,exa-cloudflare`), `&keys=` names the keys it holds (gallery.tsx), and
- * `&credits=` its AI credits (`held`, the default; `none`; `bought`, none until Add credits is pressed).
+ * `&credits=` its AI credits (`held`, the default; `none`; `bought`, none until Add credits opens Cloudflare's page).
+ * `&transcript=search-unpaid` is a chat whose newest search was refused.
  */
 import * as v from "valibot";
 import { WEB, WebSearchRouteSchema, USER_WEB_SEARCH_TEST_PATH, type GatewayCreditsRead, type WebSearchRoute } from "@kinu.run/core";
 import type { CloudflareAccountStatus } from "@/lib/user-api";
+import type { GalleryChatMessage } from "@/gallery-agent-stub";
 
 const query = new URLSearchParams(location.search);
 
@@ -27,13 +29,17 @@ export function galleryWebSearchChain(): WebSearchRoute[] | undefined {
 
 const GALLERY_CREDITS = v.parse(v.picklist(["held", "none", "bought"]), query.get("credits") ?? "held");
 
-/** Whether the person has pressed Add credits, and so bought them on the page it opened. */
+/** Whether Cloudflare's page was opened, and the person bought credits there. */
 let bought = false;
 
 if (GALLERY_CREDITS === "bought") {
-  document.addEventListener("click", (event) => {
-    if (event.target instanceof Element && event.target.closest("[data-web-search-credits-open]") !== null) bought = true;
-  }, true);
+  const opens = window.open.bind(window);
+
+  window.open = (url, target, features) => {
+    bought ||= target === "kinu-ai-credits";
+
+    return opens(url, target, features);
+  };
 }
 
 /** The credits read, as `readGatewayCredits` reads it: the person's own account's, where its login grants web search. */
@@ -82,3 +88,22 @@ export async function galleryWebSearchTest(path: string, method: string, body: B
     results: RESULTS.slice(0, asked.limit).map((result, at) => ({ ...result, position: at + 1 })),
   }));
 }
+
+const NOW = Date.now();
+
+/** A turn whose web search Cloudflare refused for want of AI credits, in the words the search chain ends with. */
+export const SEARCH_UNPAID_THREAD: readonly GalleryChatMessage[] = [
+  { id: "su-u1", role: "user", createdAt: NOW - 2 * 60e3, parts: [{ type: "text", text: "What changed in Durable Objects alarms this year?" }] },
+  {
+    id: "su-a1", role: "assistant", createdAt: NOW - 2 * 60e3,
+    parts: [
+      { type: "step-start" },
+      {
+        type: "tool-web", toolCallId: "su-c1", state: "output-error", input: { op: "search", query: "Durable Objects alarms changes 2026" },
+        errorText: "Exa through Cloudflare: Cloudflare answered 402: Your AI Gateway credit balance is zero. "
+          + "To search again, add credits to your AI Gateway in Cloudflare, or a search key in Settings > Web search.",
+      },
+      { type: "text", state: "done", text: "I couldn't search the web: Cloudflare refused the search because your AI Gateway has no credits left." },
+    ],
+  },
+];

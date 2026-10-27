@@ -50,7 +50,7 @@ import { WorkspaceBarActions, WorkspaceHeader, type ChatTab } from "@/components
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { BranchRunChip } from "@/components/AlternateTakes";
 import { PreviewTabsGallery, CompactPreviewGallery } from "./gallery-preview-tabs";
-import { galleryCloudflareAccounts, galleryGatewayCredits, galleryWebSearchChain, galleryWebSearchTest } from "./gallery-web-search";
+import { galleryCloudflareAccounts, galleryGatewayCredits, galleryWebSearchChain, galleryWebSearchTest, SEARCH_UNPAID_THREAD } from "./gallery-web-search";
 import { ASSISTANT_ROSTER, assistantHomeFrame, focusWorkspaceFrame } from "./gallery-assistant";
 import { galleryUsername } from "./gallery-mail-address";
 import { exploreFrame } from "./gallery-explore";
@@ -678,8 +678,6 @@ async function settingsSectionsFixture(path: string, method: string, body: BodyI
   }
 
   if (path === "/api/user/cloudflare/accounts") return Response.json(galleryCloudflareAccounts());
-
-  if (path === "/api/user/cloudflare/credits") return Response.json(galleryGatewayCredits());
 
   if (path === "/api/user/cloudflare/gateways") {
     await SETTINGS_GATEWAY_HOLD.promise;
@@ -1389,6 +1387,9 @@ function userFixture(path: string, method: string, body: BodyInit | null | undef
   const decided = galleryMemoryDecision(path, method, body);
 
   if (decided !== null) return Promise.resolve(decided);
+
+  // Read by Settings › Web search and by a chat whose search was refused, in any frame.
+  if (path === "/api/user/cloudflare/credits") return Promise.resolve(Response.json(galleryGatewayCredits()));
 
   if (ACCOUNT_FIXTURE_FRAMES.has(frame) && path.startsWith("/api/user/")) return userSettingsFixture(path, method, body);
 
@@ -2763,6 +2764,8 @@ function seedFrameTranscript(transcript: string | null): void {
   if (transcript === "refused") seedGalleryChat(REFUSED_THREAD);
 
   if (transcript === "refused-provider") seedGalleryChat(PROVIDER_REFUSED_THREAD);
+
+  if (transcript === "search-unpaid") seedGalleryChat(SEARCH_UNPAID_THREAD);
 
   if (transcript === "pictures") seedGalleryChat(PICTURES_THREAD);
 

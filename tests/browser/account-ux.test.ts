@@ -24,6 +24,26 @@ async function freshPage(gallery: Gallery, query: string, theme: 'dark' | 'light
   return page;
 }
 
+/** Where Add credits sends the gallery's account. */
+const CREDITS_PAGE = 'https://dash.cloudflare.com/acct-1/ai/ai-gateway';
+
+/** `query`'s frame with Cloudflare's page stood in for before the gallery loads: where it is sent, and nothing loaded. */
+async function creditsPage(gallery: Gallery, query: string): Promise<Page> {
+  const page = await gallery.newPage();
+
+  await page.setViewport(VIEWPORTS.desktop);
+  await page.evaluateOnNewDocument(() => {
+    const opens = window.open.bind(window);
+    const popup = { opener: null, closed: false, location: { set href(at: string) { document.documentElement.dataset.creditsAt = at; } }, close() {} };
+
+    // SAFETY: constructed above with every member `openProviderWindow` uses of a window: `opener` and `location.href`.
+    window.open = (url, target, features) => (target === 'kinu-ai-credits' ? popup as Window : opens(url, target, features));
+  });
+  await page.goto(`${gallery.origin}/gallery.html?frame=${query}`, { waitUntil: 'load' });
+
+  return page;
+}
+
 const dialogText = (page: Page) => page.$eval('[role="dialog"]', (element) => element.textContent ?? '');
 
 /** What the page shows a reader when a step stops: the open dialog's name and words, any alert, and where focus is. */
@@ -377,24 +397,39 @@ describe('account panels', () => {
   // reads them again until they change, so the person sees the purchase land without reloading.
   test('web search with no AI credits offers Cloudflare\'s page, and credits bought there show once read again', async () => {
     await withGallery(async (gallery) => {
-      const page = await freshPage(gallery, 'usersettingsstate&section=search&credits=bought', 'light', 'desktop');
+      const page = await creditsPage(gallery, 'usersettingsstate&section=search&credits=bought');
 
       try {
         await page.waitForSelector('[data-web-search-credits="empty"] [data-web-search-credits-open]');
-        // Cloudflare's page, as the helper window takes it: where it is sent, and nothing loaded.
-        await page.evaluate(() => {
-          const popup = { opener: null, closed: false, location: { set href(at: string) { document.documentElement.dataset.creditsAt = at; } }, close() {} };
-
-          // SAFETY: constructed above with every member `openProviderWindow` uses of a window: `opener` and `location.href`.
-          window.open = () => popup as Window;
-        });
         await page.click('[data-web-search-credits-open]');
         await page.waitForSelector('[data-web-search-credits="held"]', { timeout: 15_000 });
 
         expect({
           opened: await page.evaluate(() => document.documentElement.dataset.creditsAt),
           said: await page.$eval('[data-web-search-credits]', (node) => node.textContent ?? ''),
-        }).toEqual({ opened: 'https://dash.cloudflare.com/acct-1/ai/ai-gateway', said: expect.stringContaining('$25.00 left') });
+        }).toEqual({ opened: CREDITS_PAGE, said: expect.stringContaining('$25.00 left') });
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  // The same purchase where the first search was refused: the notice above the prompt box, once that search failed.
+  test('a search refused for want of AI credits offers them above the prompt box, and says when they land', async () => {
+    await withGallery(async (gallery) => {
+      const page = await creditsPage(gallery, 'workspacepage&transcript=search-unpaid&credits=bought');
+
+      try {
+        await page.waitForSelector('[data-search-credits="empty"]');
+        await page.evaluate(() => {
+          [...document.querySelectorAll('[data-search-credits] button')].find((button) => button.textContent?.includes('Add credits'))?.click();
+        });
+        await page.waitForSelector('[data-search-credits="held"]', { timeout: 15_000 });
+
+        expect({
+          opened: await page.evaluate(() => document.documentElement.dataset.creditsAt),
+          said: await page.$eval('[data-search-credits]', (node) => node.textContent ?? ''),
+        }).toEqual({ opened: CREDITS_PAGE, said: expect.stringContaining('$25.00 left') });
       } finally {
         await page.close();
       }

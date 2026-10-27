@@ -2,11 +2,12 @@
 import { Effect } from "effect";
 import { Fragment, useCallback, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { PhaseLinesAsk, phaseLinesAsker } from "@/components/ChatDisclosure";
-import { ArrowsClockwiseIcon, PaperclipIcon } from "@phosphor-icons/react";
-import type { UIMessage } from "ai";
-import { isPlaceholderMission, liveTailRow, threadLiveTail, turnFailure, turnFailureFacts, type WorkspaceNotice } from "@kinu.run/core";
+import { ArrowSquareOutIcon, ArrowsClockwiseIcon, PaperclipIcon } from "@phosphor-icons/react";
+import { getToolName, isToolUIPart, type UIMessage } from "ai";
+import { fmtUsd, isPlaceholderMission, liveTailRow, partInput, threadLiveTail, turnFailure, turnFailureFacts, type WorkspaceNotice } from "@kinu.run/core";
 import { detach } from "@kinu.run/core/obs";
 import { useOpenWorkspace } from "@/hooks/use-open-workspace";
+import { useGatewayCredits } from "@/hooks/use-gateway-credits";
 import { usePastedSecretGuard } from "@/components/secrets/PasteOffer";
 import { limitRefusalOf } from "@/lib/limits-api";
 import { AskedQuestionsContext } from "@/components/QuestionCard";
@@ -175,6 +176,38 @@ const VERSION_NOTICE: ComposerNotice = {
   action: { label: "Reload", icon: <ArrowsClockwiseIcon size={11} />, onClick: () => window.location.reload() },
 };
 
+/** Whether `message` holds a web search that was refused. */
+function searchRefused(message: UIMessage): boolean {
+  return message.parts.some((part) => isToolUIPart(part) && getToolName(part) === "web" && part.state === "output-error" && partInput(part)?.op === "search");
+}
+
+/**
+ * Once the newest answer's web search was refused while searches through Cloudflare have no AI credits: the way to buy
+ * them, then the purchase landing (`useGatewayCredits`). Nothing where credits are held, or Kinu has none of the
+ * person's to read.
+ */
+function useSearchCreditsNotice(newest: UIMessage | undefined): ComposerNotice[] {
+  const refused = newest !== undefined && searchRefused(newest);
+  const { read, empty, waiting, changed, buy } = useGatewayCredits(refused);
+  const [dismissed, setDismissed] = useState<string | null>(null);
+  const answer = newest?.id ?? null;
+
+  if (!refused || read === null || dismissed === answer) return [];
+  const notice = { id: "search-credits", title: "Web search", onDismiss: () => setDismissed(answer) };
+
+  if (waiting) return [{ ...notice, tone: "progress", text: "Waiting for Cloudflare…", hooks: { "data-search-credits": "waiting" } }];
+
+  if (empty) {
+    return [{
+      ...notice, tone: "warning", text: "Out of AI credits.",
+      detail: { summary: "Cloudflare sells AI credits on its own page, which opens beside this one. A search key of your own, in Settings › Web search, pays for searches instead." },
+      action: { label: "Add credits", icon: <ArrowSquareOutIcon size={11} />, onClick: buy }, hooks: { "data-search-credits": "empty" },
+    }];
+  }
+
+  return changed ? [{ ...notice, tone: "success", text: `AI credits added: ${fmtUsd(read.credits.balance)} left. Ask again to search.`, hooks: { "data-search-credits": "held" } }] : [];
+}
+
 /** Files hovering over the column. */
 function DropOverlay() {
   return (
@@ -214,6 +247,7 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
   const [dismissedFailure, setDismissedFailure] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const providerWait = useProviderWaitNotice(state.providerWait);
+  const searchCredits = useSearchCreditsNotice(thread.entries.at(-1)?.message);
   const { attachments, drop } = extras;
   const repeats = useMemo(() => foldEventTurns(thread.entries.map(({ message }) => message)), [thread.entries]);
 
@@ -327,6 +361,7 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
               newest, live, retryOwed, dismissed: dismissedFailure, chatError: state.chatError,
               retry: state.retryLastMessage, dismiss: setDismissedFailure, clearChatError: state.clearChatError,
             }),
+            ...searchCredits,
             ...providerWait,
             ...(steerNotice ? [steerNotice] : []),
           ]}
