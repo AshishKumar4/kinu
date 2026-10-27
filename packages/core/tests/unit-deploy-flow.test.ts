@@ -329,6 +329,9 @@ class FakeCloudflare implements CloudflareTransport {
   /** Other Workers the account runs, beside the one a run uploads. */
   readonly otherScripts: string[] = [];
 
+  /** Whether the front Worker's script exists, as a run that put it in place leaves it. */
+  frontExists = false;
+
   /** Null: the account has no workers.dev subdomain yet, which the API answers 404. */
   subdomain: string | null = 'acme';
 
@@ -337,6 +340,28 @@ class FakeCloudflare implements CloudflareTransport {
 
   /** Zones added by `POST /zones`, not active until their nameservers are set. */
   readonly pendingZones = new Set<string>();
+
+  /** Each custom domain's Worker. A bound hostname moves only with `override_existing_origin`, as the account refused
+   *  one without it on 2026-10-27 (100116). */
+  readonly domains = new Map<string, string>();
+
+  private domainCall(call: CloudflareCall): CloudflareHttpResponse | null {
+    if (!call.path.includes('/workers/domains')) return null;
+    const asked = new URLSearchParams(call.path.slice(call.path.indexOf('?') + 1)).get('hostname');
+
+    if (call.method === 'GET') return this.ok([...this.domains].filter(([hostname]) => hostname === asked).map(([hostname, service]) => ({ hostname, service })));
+    const body = call.body ?? {};
+    const hostname = bodyText(body, 'hostname');
+    const held = this.domains.get(hostname);
+
+    if (held !== undefined && held !== bodyText(body, 'service') && body.override_existing_origin !== true) {
+      return { status: 409, body: { success: false, errors: [{ code: 100_116, message: `Hostname '${hostname}' already in use by other custom domain.` }], result: null } };
+    }
+
+    this.domains.set(hostname, bodyText(body, 'service'));
+
+    return this.ok({ id: `domain-${hostname}` });
+  }
 
   /** The account, its user and its Workers, as the page reads them. */
   private accountCall(call: CloudflareCall): CloudflareHttpResponse | null {
@@ -347,7 +372,7 @@ class FakeCloudflare implements CloudflareTransport {
 
     if (call.path.includes('/email/sending/suppressions')) return this.ok(this.suppressions);
 
-    if (scripts) return this.ok([...this.scriptExists ? [INPUTS.instanceName] : [], ...this.otherScripts].map((id) => ({ id })));
+    if (scripts) return this.ok([...this.scriptExists ? [INPUTS.instanceName] : [], ...this.frontExists ? [frontWorkerName(INPUTS.instanceName)] : [], ...this.otherScripts].map((id) => ({ id })));
 
     if (call.path.includes('/versions?deployable=true')) return this.ok({ items: this.versions.map((id) => ({ id, annotations: { 'workers/tag': this.tags.get(id) ?? '' } })) });
 
@@ -446,12 +471,16 @@ class FakeCloudflare implements CloudflareTransport {
       return { status: 200, body: { result: { jwt: 'session-token', buckets: [['1'.repeat(32), '2'.repeat(32)]] }, success: true, errors: null, messages: null } };
     }
 
-    const read = this.accountCall(call);
+    const read = this.accountCall(call) ?? this.domainCall(call);
 
     if (read !== null) return read;
 
     // Another Worker of the account: no deployment record among its bindings.
     if (this.otherScripts.some((name) => call.path.endsWith(`/workers/scripts/${name}/settings`))) return this.ok({ bindings: [{ type: 'plain_text', name: 'GREETING', text: 'hi' }] });
+
+    if (call.path.endsWith(`/workers/scripts/${frontWorkerName(INPUTS.instanceName)}/settings`)) {
+      return this.frontExists ? this.ok({ bindings: [] }) : { status: 404, body: { success: false, errors: [{ code: 10007, message: 'workers.api.error.script_not_found' }], result: null } };
+    }
 
     // How the flow tells a first deployment from an update.
     if (call.path.endsWith('/settings') && !this.scriptExists) {
@@ -601,6 +630,8 @@ class FakeCloudflare implements CloudflareTransport {
 
     // The front Worker: its own script, deployed as it is uploaded, beside the main Worker's versions.
     if (upload.path.endsWith(`/workers/scripts/${frontWorkerName(INPUTS.instanceName)}`)) {
+      this.frontExists = true;
+
       return { status: 200, body: { success: true, errors: [], result: { id: frontWorkerName(INPUTS.instanceName) } } };
     }
 
@@ -1009,6 +1040,23 @@ describe('a guided run', () => {
     cloudflare = new FakeCloudflare();
     await run();
     expect(cloudflare.calls.some((call) => call.path.includes('kinu-front'))).toBe(false);
+  });
+
+  // The smoke reaches the version under test through the front (an override is carried to the Worker it names through
+  // a service binding: kinu-ovr-front and kinu-ovr-main, 3 of 3, 2026-10-27).
+  test('an update of a deployment its front answers keeps the domain on the front', async () => {
+    updating = true;
+    cloudflare.serveExisting(PRIOR_VERSION);
+    cloudflare.frontExists = true;
+    cloudflare.domains.set('kinu.example.com', 'kinu-front');
+
+    const rows = await run({ ...INPUTS, address: { kind: 'zone', hostname: 'kinu.example.com', zoneId: EXAMPLE_ZONE } });
+
+    expect({
+      done: rows.every((row) => row.state === 'done'),
+      bound: cloudflare.calls.filter((call) => call.method === 'PUT' && call.path.endsWith('/workers/domains')).map((call) => call.body?.service),
+      domains: cloudflare.domains,
+    }).toEqual({ done: true, bound: ['kinu-front', 'kinu-front'], domains: new Map([['kinu.example.com', 'kinu-front']]) });
   });
 
   test('a random secret is minted, never asked of a person', () => {

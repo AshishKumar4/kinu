@@ -76,7 +76,11 @@ Each line is a read; none writes. They run together as soon as an account is cho
   taken by then takes the next free one itself and says so in its first phase.
 - **A domain already on Cloudflare**: pick the zone (only this account's), type the host (`kinu.example.com` or the apex).
   The run binds it as a Workers custom domain, which writes the DNS record. An existing record there is shown, with
-  "Use another host" as the fix; the page never overwrites one.
+  "Use another host" as the fix; the page never overwrites one. A domain of its own is answered by a front Worker
+  (`<name>-front`, docs/DEPLOYMENT.md § The front Worker), put in place once the new version serves all traffic, so a
+  new front never stands before an older main Worker; until it exists, the main Worker answers the domain itself. A
+  bound hostname moves only with `override_existing_origin` (measured 2026-10-27), and the run moves it only between
+  its own two Workers. A workers.dev address is its Worker's own name, so a deployment there has no front.
 - **A domain registered elsewhere**: the page adds it as a zone (`POST /zones`), shows the two nameservers to set at
   their registrar with copy buttons, and watches the zone become active (`GET /zones/{z}`). Meanwhile the deploy goes
   ahead on workers.dev and moves to the domain when the zone is active; the person is told so, and can leave.

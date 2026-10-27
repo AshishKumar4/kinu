@@ -2113,6 +2113,11 @@ describe("worker release artifact", () => {
     mkdirSync(join(dist, "kinu", ".vite"), { recursive: true });
     writeFileSync(join(dist, "kinu", ".vite", "manifest.json"), "{}\n");
     writeFileSync(join(dist, "kinu", "assets", "esbuild-abc.wasm"), new Uint8Array([0, 0x61, 0x73, 0x6d]));
+    // The front Worker's build (front-config.ts): its one module, its source map and its derived config.
+    mkdirSync(join(dist, "front"), { recursive: true });
+    writeFileSync(join(dist, "front", "index.js"), "export default { fetch() { return new Response('f'); } };\n");
+    writeFileSync(join(dist, "front", "index.js.map"), "{}\n");
+    writeFileSync(join(dist, "front", "wrangler.json"), "{}\n");
     writeFileSync(join(dist, "client", "index.html"), "<!doctype html><title>k</title>\n");
     writeFileSync(join(dist, "client", "assets", "app.js"), "console.log('app');\n");
     writeFileSync(join(dist, "client", "downloads", "kinu-cli-linux-x64.tar.gz"), "not really a tarball\n");
@@ -2149,6 +2154,7 @@ describe("worker release artifact", () => {
 
     expect(entries).toContain("worker/index.js");
     expect(entries).toContain("worker/assets/esbuild-abc.wasm");
+    expect(entries).toContain("front/index.js");
     expect(entries).toContain("client/index.html");
     expect(entries.some((entry) => entry.endsWith(".map"))).toBe(false);
     // The build stamp rides along (it is what `/api/health` answers `build`
@@ -2172,6 +2178,7 @@ describe("worker release artifact", () => {
     const manifest = parseReleaseManifest(readFileSync(join(dist, "client", "downloads", "release.json"), "utf8"));
 
     expect([...manifest.worker.modules].sort()).toEqual(["assets/chunk.js", "assets/esbuild-abc.wasm", "index.js"]);
+    expect(manifest.front?.modules).toEqual(["index.js"]);
     expect(manifest.files.map((file) => file.path).filter((path) => path.startsWith("worker/")).sort())
       .toEqual(["worker/assets/chunk.js", "worker/assets/esbuild-abc.wasm", "worker/index.js"]);
   });
@@ -2188,7 +2195,7 @@ describe("worker release artifact", () => {
     const listed = await runToExit(["tar", "-tzf", join(dist, "worker-release", ARTIFACT)]);
     const entries = listed.stdout.split("\n").filter((line) => line.trim() !== "");
     const lastAsset = entries.reduce((last, entry, at) => (entry.startsWith("client/") ? at : last), -1);
-    const firstModule = entries.findIndex((entry) => entry.startsWith("worker/"));
+    const firstModule = entries.findIndex((entry) => entry.startsWith("worker/") || entry.startsWith("front/"));
 
     expect(lastAsset).toBeGreaterThan(-1);
     expect(firstModule).toBeGreaterThan(lastAsset);

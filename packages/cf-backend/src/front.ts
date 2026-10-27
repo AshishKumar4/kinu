@@ -1,8 +1,7 @@
 /**
  * The front Worker: it owns the app's host and answers what a page open needs (front-routes.ts) from code that starts
  * within a connection's TLS handshake, and passes every other request to the main Worker, which holds every Durable
- * Object. Each new connection to the main Worker alone waited for its 8 MB to start: a median of 615 ms over 25, up to
- * 1.6 s, against 71 ms for a front of 251 KB (production and a scratch Worker, 2026-10-26).
+ * Object and whose start each new connection waited for (L29).
  */
 import { Hono } from 'hono';
 import { hostOf, isPreviewHostRequest, mailHostRedirect } from '@kinu.run/core';

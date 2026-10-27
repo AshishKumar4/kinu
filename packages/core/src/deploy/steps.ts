@@ -101,7 +101,7 @@ export function deployPlan(manifest: ReleaseManifest, inputs: DeployInputs): rea
     uploadStep(manifest),
     // On the namespace the upload made, before the address sends anyone to it.
     computerStep(manifest),
-    addressStep(inputs),
+    addressStep(manifest, inputs),
     // After the address: the catch-all names the Worker the upload made, and a failure here leaves it answering.
     mailStep(inputs),
     smokeStep(),
@@ -544,7 +544,7 @@ function uploadVersion(
   });
 }
 
-function addressStep(inputs: DeployInputs): DeployStep {
+function addressStep(manifest: ReleaseManifest, inputs: DeployInputs): DeployStep {
   return {
     id: 'address',
     title: 'Bind the address',
@@ -565,16 +565,12 @@ function addressStep(inputs: DeployInputs): DeployStep {
             v.object({ enabled: v.optional(v.boolean()) }),
           ));
         } else {
-          // A Workers custom domain creates the proxied DNS record itself.
-          yield* Effect.promise(async () => cloudflareResult(
-            context.transport,
-            {
-              method: 'PUT',
-              path: `/accounts/${accountId}/workers/domains`,
-              body: { hostname: inputs.address.hostname, zone_id: inputs.address.zoneId, service: script, environment: 'production' },
-            },
-            v.object({ id: v.optional(v.string()) }),
-          ));
+          // The front answers once it exists, and the smoke reaches the version under test through it; on a first run
+          // the main Worker answers until the front step puts its front in place.
+          const front = frontWorkerName(script);
+          const fronted = manifest.front !== null && (yield* Effect.promise(async () => scriptExists(context.transport, accountId, front)));
+
+          yield* bindDomain(context, inputs.address, fronted ? front : script);
         }
 
         const version = context.facts.get(FACT_VERSION_ID);
@@ -737,21 +733,44 @@ function frontStep(manifest: ReleaseManifest, front: ReleaseModules, address: De
         context.artifact.held.release(carried.bytes * 2);
         readEnvelope(path, response, NamedSchema);
 
-        // The domain moves from the main Worker to the front in place: a hostname has one Worker.
-        yield* Effect.promise(async () => cloudflareResult(
-          context.transport,
-          {
-            method: 'PUT',
-            path: `/accounts/${accountId}/workers/domains`,
-            body: { hostname: address.hostname, zone_id: address.zoneId, service: script, environment: 'production' },
-          },
-          v.object({ id: v.optional(v.string()) }),
-        ));
+        yield* bindDomain(context, address, script);
 
         return `${script} answers ${address.hostname}.`;
       });
     },
   };
+}
+
+/**
+ * `address` bound to `service`, as a Workers custom domain, which creates its proxied DNS record itself. A hostname has
+ * one Worker, and moves only with `override_existing_origin`, while a bind to the Worker that holds it changes nothing
+ * (measured on the account, 2026-10-27). It moves between the deployment's own two Workers; one another Worker of the
+ * account holds is refused in Cloudflare's words.
+ */
+function bindDomain(context: DeployContext, address: DeployAddress, service: string): Effect.Effect<void, KinuError> {
+  return Effect.gen(function* () {
+    const accountId = context.inputs.accountId;
+    const main = context.inputs.instanceName;
+
+    const bound = yield* Effect.promise(async () => cloudflareResult(
+      context.transport,
+      { method: 'GET', path: `/accounts/${accountId}/workers/domains?hostname=${encodeURIComponent(address.hostname)}` },
+      v.array(v.object({ service: v.string() })),
+    ));
+
+    const holder = bound[0]?.service;
+    const ours = holder !== undefined && holder !== service && [main, frontWorkerName(main)].includes(holder);
+
+    yield* Effect.promise(async () => cloudflareResult(
+      context.transport,
+      {
+        method: 'PUT',
+        path: `/accounts/${accountId}/workers/domains`,
+        body: { hostname: address.hostname, zone_id: address.zoneId, service, environment: 'production', ...(ours && { override_existing_origin: true }) },
+      },
+      v.object({ id: v.optional(v.string()) }),
+    ));
+  });
 }
 
 function handoverStep(manifest: ReleaseManifest): DeployStep {

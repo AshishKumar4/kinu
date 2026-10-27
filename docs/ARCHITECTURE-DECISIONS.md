@@ -2082,6 +2082,35 @@ tables, with no migrations and no compatibility code.
 - Proof: each database's census carries a digest of every table's rows (`/ops/tables`), so a census before the upload and
   one after show exactly the tables the reset dropped and every other table byte for byte.
 
+L29. A deployment on its own domain answers its app host from a front Worker (`src/front.ts`) that starts within a
+connection's TLS handshake; the main Worker keeps every object and every other host. Measured from gcp-vm, 25 new
+connections each (time to first byte less TLS, 2026-10-26): a hello-world Worker 69 ms median, a 251 KB front with the
+real page and socket routes 71 ms, Kinu 615 ms (up to 1.6 s), and a Worker that spends about 0.5 s at its top level
+609 ms. On the 2026-10-26 big-workspace open the agent socket alone took 2.0 s of the 3.8 s to a ready chat.
+- The front holds no secret (the owner's decision, 2026-10-27: "Objects check"). A self-host's Update cannot carry one,
+  since Cloudflare never shows a secret again. So the front routes each page-open request to the object it belongs to:
+  the account's pages and roster socket to the account's object, which checks the session itself, and an agent socket
+  to the workspace's object once the account's object has admitted it (`user/account-pages.ts`). The main Worker mounts
+  the same routes (`front-routes.ts`), so either Worker serves a page.
+- A workers.dev address is its Worker's own name, so a deployment there has no front (the owner's decision,
+  2026-10-27: "No front there"); moving it would rename the main Worker and move its objects.
+- The front's config is derived from the main Worker's (`front-config.ts`; core `deploy/front.ts` for a self-host).
+  Promotion records both Workers' versions and a rollback returns both; a build from before the front answered its host
+  itself, so no rollback returns to one.
+- A self-host's front comes after its main Worker serves all traffic, so a new front never stands before an older main
+  Worker. Measured on the account (2026-10-27): a bound custom domain moves to another Worker only with
+  `override_existing_origin` (100116 without it), and a bind to the Worker that holds it changes nothing; a
+  `Cloudflare-Workers-Version-Overrides` header naming the main Worker reaches its staged version through the front's
+  service binding (3 of 3, kinu-ovr-front and kinu-ovr-main), so the smoke of an update goes through the front.
+- Service bindings: Cloudflare's docs say both Workers run on the same thread of the same server, with no added latency
+  (Service bindings page, read 2026-10-27). On scratch Workers (kinu-ovr-front before kinu-ovr-main, 2026-10-27), 29
+  warm requests a round, server time median: direct 28.9 and 26.3 ms, through the front 28.3 and 34.7 ms. A client that
+  leaves aborts the main Worker's request signal through the front as it does directly (3 of 3 each, about 1.9 s after
+  the request began with curl's 2 s bound), which the terminal and desktop attach and the run event stream rely on.
+- Staging's app host is a zone route as well as a custom domain (§ One origin per environment in DEPLOYMENT.md).
+  wrangler does not move a zone route between Workers ("already assigned to another worker"), so staging's first front
+  deploy needs `staging.kinu.run/*` removed from `kinu-staging` first, by hand, once.
+
 ## Providers
 
 P1. The ChatGPT plan is Sign in with ChatGPT's open-source token sharing
