@@ -239,6 +239,13 @@ export function mockAgentsSdk(): void {
       }
       /** The SDK base's default: nothing to start. */
       onStart(): void | Promise<void> {}
+      /** The SDK base's fetch as a caller sees it: partyserver opens any handshake it is handed as a socket of this
+       *  agent's own, and nothing else here is the agent's. A test cannot construct the 101, so it answers 200 and says so. */
+      async fetch(request: Request): Promise<Response> {
+        if (request.headers.get('upgrade')?.toLowerCase() === 'websocket') return new Response(null, { headers: { 'x-harness-agent': 'socket opened' } });
+
+        return new Response('Not found', { status: 404 });
+      }
       /** Drives due jobs as `Agent.alarm()` does; the platform alarm is workerd's (`tests/workerd/do-alarm.test.ts`). */
       async alarm(): Promise<void> {
         await this.lifecycle.alarm();

@@ -171,6 +171,19 @@ describe('the front Worker', () => {
     }).toEqual({ page: [200, true], signedOut: [302, '/login'], main: [] });
   });
 
+  // The account's object is an Agent, whose own fetch would take any handshake as a socket of its own: on 2026-10-27 a
+  // page's agent socket, asked of an account object still on the build before the front (the deploy of ec37304a3,
+  // 03:58Z), was opened on it, and the page never reconnected. A Worker retries a refusal; a socket on the wrong object
+  // it keeps.
+  test('the account\'s object refuses a handshake on a path it does not route', async () => {
+    const seen = await seam();
+    const handshake = { upgrade: 'websocket', 'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==', 'sec-websocket-version': '13' };
+    // A route an object of another build may not have, as the agent socket's admission once was.
+    const stray = await seen.user.userDO.fetch(new Request(`${ORIGIN}/a-path-no-build-routes`, { headers: handshake }));
+
+    expect([stray.status, stray.headers.get('x-harness-agent')]).toEqual([404, null]);
+  });
+
   test('an agent socket reaches its workspace only through the account\'s admission, as the identity it verified', async () => {
     const seen = await seam();
     const socket = `/agents/orchestrator-agent/${WORKSPACE}`;

@@ -10,7 +10,7 @@ import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from '../activation-gate';
 
 import {
-  isEvalAccountEmail, objectNamed,
+  err, isEvalAccountEmail, objectNamed,
   ownerCaller, callGoogle, GoogleCallSchema, type GoogleAnswer, type GoogleCall, readGitHub, GitHubReadSchema, type GitHubAnswer, type GitHubRead, type GoogleGrant, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type SecretSummary, type SecretInput, type SecretDestination, type GrantedSecrets, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, type RosterPage, type CredentialSummary, type WorkspaceEntry, type UserProfile, DEVICE_FRAMES, DEVICE_SCREEN_PATH, screenFromSocket, readScreenData, statementText,   bookmarkNow, restartedForRestore, restoreArmed, type ArmedRestore, type RestoreTarget,
 } from '@kinu.run/core';
 
@@ -1425,7 +1425,10 @@ export class UserDO extends Agent<Env> {
       sendForeground([socket], rosterSockets(this.ctx), this.sessions.sessionStands);
     }))
     .route('/', accountPages())
-    .notFound(async (c) => super.fetch(c.req.raw))
+    // The Agent base opens any handshake it is handed as a socket of this object's own, which a Worker then keeps for good:
+    // on 2026-10-27 a page's agent socket, asked of an account object still on the build before the front (the deploy of
+    // ec37304a3, 03:58Z), was opened here, and the page never reconnected. A refusal it retries.
+    .notFound(async (c) => (c.req.header('upgrade')?.toLowerCase() === 'websocket' ? err(404, 'Not found') : super.fetch(c.req.raw)))
     .onError(rethrow);
 
   /** Each alarm tears down at most one workspace (`WorkspaceDeletionJobs.alarmBegins`); a cleared account is destroyed
