@@ -6,7 +6,7 @@ import {
   ACCESS_TOKEN_KEY, DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET, DEPLOY_CLIENT_ID_KEY,
   CLOUDFLARE_DEPLOY_CLIENT, CLOUDFLARE_DEPLOY_SCOPES, deployClientDrift, FIRST_OWNER_LINK_MS, FIRST_OWNER_LINK_SECRET,
   HeldBytes, LOCAL_PORT, LocalConfigSchema, MINTED_SECRETS, promptedSecrets,
-  FACT_VERSION_ID, REFRESH_TOKEN_KEY, deployDoor, deployPlan, deployRunView, domainsMatching, factsFrom,
+  FACT_VERSION_ID, REFRESH_TOKEN_KEY, deployDoor, deployPlan, deployRunView, domainsMatching, factsFrom, frontWorkerName,
   judgeRefusal, localLayout, mailHostPreview, parseReleaseManifest, plannedRun, preflight, releaseDir,
   renderLocalConfig, renderWorkerdConfig, runDeployPlan, unhostedBindings, workerdDirectories,
 } from '../src/deploy/index';
@@ -36,6 +36,7 @@ const MANIFEST: ReleaseManifest = {
     assets: 'client',
     crons: ['*/15 * * * *'],
   },
+  front: { mainModule: 'index.js', modules: ['index.js'], modulesPath: 'front' },
   bindings: [
     { binding: 'AUTH_KV', kind: 'kv', resource: 'kinu-auth-kv', required: true },
     { binding: 'BACKUP_BUCKET', kind: 'r2', resource: 'kinu-backups', required: false },
@@ -69,6 +70,7 @@ const MANIFEST: ReleaseManifest = {
   files: [
     { path: 'worker/index.js', sha256: 'a'.repeat(64), size: 12, assetHash: null },
     { path: 'worker/chunk.js', sha256: 'b'.repeat(64), size: 8, assetHash: null },
+    { path: 'front/index.js', sha256: 'e'.repeat(64), size: 9, assetHash: null },
     { path: 'client/index.html', sha256: 'c'.repeat(64), size: 5, assetHash: '1'.repeat(32) },
     { path: 'client/app.js', sha256: 'd'.repeat(64), size: 7, assetHash: '2'.repeat(32) },
   ],
@@ -597,6 +599,11 @@ class FakeCloudflare implements CloudflareTransport {
       return { status: 200, body: { success: true, errors: [], result: null } };
     }
 
+    // The front Worker: its own script, deployed as it is uploaded, beside the main Worker's versions.
+    if (upload.path.endsWith(`/workers/scripts/${frontWorkerName(INPUTS.instanceName)}`)) {
+      return { status: 200, body: { success: true, errors: [], result: { id: frontWorkerName(INPUTS.instanceName) } } };
+    }
+
     this.scriptExists = true;
     this.uploads += 1;
     const version = `version-${String(this.uploads)}`;
@@ -827,6 +834,8 @@ const UploadedBindingSchema = v.object({
   namespace_id: v.optional(v.string()),
   bucket_name: v.optional(v.string()),
   class_name: v.optional(v.string()),
+  script_name: v.optional(v.string()),
+  service: v.optional(v.string()),
 });
 
 function uploadedBindings(call: Recorded | undefined): readonly v.InferOutput<typeof UploadedBindingSchema>[] {
@@ -967,6 +976,39 @@ describe('a guided run', () => {
 
     expect({ done: rows.every((row) => row.state === 'done'), atOnce: bucketsAsked < namespaceMade, uploadAfter: uploaded > lastStorage })
       .toEqual({ done: true, atOnce: true, uploadAfter: true });
+  });
+
+  // A workers.dev address is its Worker's own name, so only a deployment on its own domain has a front (front.ts).
+  test('a deployment on its own domain is answered from a front once its main Worker serves all traffic', async () => {
+    const own = { ...INPUTS, address: { kind: 'zone' as const, hostname: 'kinu.example.com', zoneId: EXAMPLE_ZONE } };
+    const rows = await run(own);
+    const at = (match: (call: Recorded) => boolean) => cloudflare.calls.findIndex(match);
+    const front = cloudflare.calls.find((call) => call.path.endsWith('/workers/scripts/kinu-front'));
+    const bindings = uploadedBindings(front);
+    const domains = cloudflare.calls.filter((call) => call.path.endsWith('/workers/domains')).map((call) => call.body?.service);
+    const promoted = at((call) => call.path.endsWith('/workers/scripts/kinu/deployments') && JSON.stringify(call.body ?? {}).includes('"percentage":100}]'));
+
+    expect({
+      done: rows.every((row) => row.state === 'done'),
+      afterPromote: at((call) => call === front) > promoted,
+      objects: bindings.filter((binding) => binding.type === 'durable_object_namespace').map((binding) => [binding.name, binding.script_name]),
+      main: bindings.find((binding) => binding.type === 'service'),
+      secrets: bindings.filter((binding) => binding.type === 'secret_text').length,
+      origin: bindings.find((binding) => binding.name === 'CLI_PUBLIC_ORIGIN')?.text,
+      domains,
+    }).toEqual({
+      done: true,
+      afterPromote: true,
+      objects: [['UserDO', 'kinu'], ['OrchestratorAgent', 'kinu']],
+      main: { type: 'service', name: 'MAIN', service: 'kinu' },
+      secrets: 0,
+      origin: 'https://kinu.example.com',
+      domains: ['kinu', 'kinu-front'],
+    });
+
+    cloudflare = new FakeCloudflare();
+    await run();
+    expect(cloudflare.calls.some((call) => call.path.includes('kinu-front'))).toBe(false);
   });
 
   test('a random secret is minted, never asked of a person', () => {
@@ -1670,7 +1712,7 @@ describe('a release manifest a channel publishes', () => {
     }
 
     expect(parseReleaseManifest(manifestWith({})).files.map((file) => file.path))
-      .toEqual(['worker/index.js', 'worker/chunk.js', 'client/index.html', 'client/app.js']);
+      .toEqual(['worker/index.js', 'worker/chunk.js', 'front/index.js', 'client/index.html', 'client/app.js']);
   });
 
   test('refuses a version that is not a path segment, and a module that escapes', () => {

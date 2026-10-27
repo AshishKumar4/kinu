@@ -3,11 +3,13 @@ export {
   DEVBOX_TOOLS_PART, RELEASE_ARTIFACT_NAME, RELEASE_MANIFEST_PATH, ReleaseManifestSchema, devboxToolsPath, parseReleaseManifest,
   workerArtifactPath,
   type BindingKind, type ReleaseBinding, type ReleaseComputer, type ReleaseFile, type ReleaseManifest, type ReleaseToolsPart,
-  type ReleaseMigration, type ReleaseSecret, type ReleaseSeed, type ReleaseVar,
+  type ReleaseMigration, type ReleaseModules, type ReleaseSecret, type ReleaseSeed, type ReleaseVar,
   type ReleaseVectorIndex, type ReleaseWorker, type SecretHandling, type VarPolicy,
 } from './manifest';
 
 export { HeldBytes, TarArtifact, type ArtifactMember } from './artifact';
+
+export { FRONT_OBJECTS, MAIN_SERVICE_BINDING, frontWorkerName } from './front';
 
 export {
   DEPLOY_API, DEPLOY_CALLBACK_PATH, DEPLOY_PAGE_PATH,

@@ -28,6 +28,7 @@ const MANIFEST = buildReleaseManifest({
   builtAt: '2026-09-17T00:00:00.000Z',
   files: [{ path: 'worker/index.js', sha256: 'a'.repeat(64), size: 10, assetHash: null }],
   modules: ['index.js'],
+  frontModules: ['index.js'],
   seed: null,
   tools: { sha256: 'c'.repeat(64), bytes: 300 * 1024 * 1024 },
 });

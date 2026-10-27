@@ -10,6 +10,7 @@
  *
  *   release.json      what this build IS (scripts/release-manifest.ts)
  *   worker/           the Worker's modules; `worker/index.js` is main
+ *   front/            the front Worker's modules (`dist/front`); `front/index.js` is main
  *   client/           the static assets, exactly what `assets.directory` holds
  *
  * WHAT IS LEFT OUT, and why. Source maps: they exist so Cloudflare can remap
@@ -74,9 +75,11 @@ function walk(root: string, base = ''): readonly string[] {
 
 const workerDir = join(dist, 'kinu');
 
+const frontDir = join(dist, 'front');
+
 const clientDir = join(dist, 'client');
 
-for (const directory of [workerDir, clientDir]) {
+for (const directory of [workerDir, frontDir, clientDir]) {
   if (!statSync(directory, { throwIfNoEntry: false })?.isDirectory()) {
     console.error(`build-worker-release: ${directory} is not a directory — run the client and worker build first`);
     process.exit(1);
@@ -87,7 +90,29 @@ const staging = mkdtempSync(join(tmpdir(), 'kinu-worker-release-'));
 
 const files: ReleaseFile[] = [];
 
-const modules: string[] = [];
+/** A Worker's modules from its build directory into `into/` of the artifact, main module first. */
+function carryModules(from: string, into: string): string[] {
+  const carried: string[] = [];
+
+  for (const path of walk(from)) {
+    if (!isWorkerModule(path)) continue;
+    const bytes = readFileSync(join(from, path));
+
+    mkdirSync(join(staging, into, path, '..'), { recursive: true });
+    writeFileSync(join(staging, into, path), bytes);
+    files.push({
+      path: `${into}/${path}`,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+      size: bytes.length,
+      assetHash: null,
+    });
+
+    if (path === 'index.js') carried.unshift(path);
+    else carried.push(path);
+  }
+
+  return carried;
+}
 
 /** A worker member is what the runtime LOADS: an ES module or a compiled
  *  WebAssembly module. Everything else the Vite plugin writes beside them is
@@ -105,22 +130,9 @@ function isWorkerModule(path: string): boolean {
 }
 
 // Modules, and only modules.
-for (const path of walk(workerDir)) {
-  if (!isWorkerModule(path)) continue;
-  const bytes = readFileSync(join(workerDir, path));
+const modules = carryModules(workerDir, 'worker');
 
-  mkdirSync(join(staging, 'worker', path, '..'), { recursive: true });
-  writeFileSync(join(staging, 'worker', path), bytes);
-  files.push({
-    path: `worker/${path}`,
-    sha256: createHash('sha256').update(bytes).digest('hex'),
-    size: bytes.length,
-    assetHash: null,
-  });
-
-  if (path === 'index.js') modules.unshift(path);
-  else modules.push(path);
-}
+const frontModules = carryModules(frontDir, 'front');
 
 if (modules[0] !== 'index.js') {
   console.error(`build-worker-release: ${workerDir} carries no index.js entry module`);
@@ -171,6 +183,7 @@ const manifest = v.parse(ReleaseManifestSchema, buildReleaseManifest({
   builtAt,
   files,
   modules,
+  frontModules,
   // Published once per Nimbus release and referenced by digest. Nothing
   // publishes one yet, and a manifest that claimed one would send every
   // deployment at a URL that answers 404.
@@ -195,7 +208,7 @@ const artifact = `kinu-worker-${version}.tar.gz`;
 // because a version is one multipart request. In this order the compressed
 // archive is let go of before the module set is held, and the peak inside the
 // Durable Object is set by the largest member rather than by the release.
-const tar = Bun.spawnSync(['tar', '-czf', join(artifactDir, artifact), '-C', staging, 'release.json', 'client', 'worker']);
+const tar = Bun.spawnSync(['tar', '-czf', join(artifactDir, artifact), '-C', staging, 'release.json', 'client', 'worker', 'front']);
 
 if (tar.exitCode !== 0) {
   console.error(`build-worker-release: tar failed — ${new TextDecoder().decode(tar.stderr)}`);

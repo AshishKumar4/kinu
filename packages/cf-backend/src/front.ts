@@ -9,7 +9,7 @@ import { hostOf, isPreviewHostRequest, mailHostRedirect } from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
 import { frontRoutes, type FrontRoutesEnv } from './front-routes';
 import { sessionAccount } from './auth/session';
-import { MAIN_SERVICE_BINDING } from './front-bindings';
+import { MAIN_SERVICE_BINDING } from '@kinu.run/core/deploy';
 import { httpsUpgrade, published } from './published';
 import { familyMount, rawPath, routeError, type FamilyEnv } from './api/context';
 

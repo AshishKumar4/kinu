@@ -44,6 +44,7 @@ const STEP_PHASES = {
   mail: 'mail',
   smoke: 'check',
   promote: 'live',
+  front: 'live',
   handover: 'live',
 } satisfies Record<string, DeployPhaseId>;
 

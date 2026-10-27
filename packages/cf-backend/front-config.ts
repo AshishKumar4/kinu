@@ -5,7 +5,7 @@
  * holds no secret.
  */
 import type { Unstable_Config } from 'wrangler';
-import { FRONT_OBJECTS, MAIN_SERVICE_BINDING } from './src/front-bindings';
+import { FRONT_OBJECTS, MAIN_SERVICE_BINDING, frontWorkerName } from '../core/src/deploy/front';
 
 /** The front's build: its bundle and the config `wrangler deploy -c` publishes, beside the main Worker's `dist/kinu`. */
 export const FRONT_DIRECTORY = 'dist/front';
@@ -13,10 +13,6 @@ export const FRONT_DIRECTORY = 'dist/front';
 export const FRONT_ENTRY = 'src/front.ts';
 
 type Route = NonNullable<Unstable_Config['routes']>[number];
-
-export function frontName(main: string): string {
-  return `${main}-front`;
-}
 
 function appHost(main: Pick<Unstable_Config, 'name' | 'vars'>): string {
   const origin = main.vars['CLI_PUBLIC_ORIGIN'];
@@ -50,7 +46,7 @@ export function frontConfig(main: Unstable_Config) {
   }
 
   return {
-    name: frontName(name),
+    name: frontWorkerName(name),
     ...(main.account_id !== undefined && { account_id: main.account_id }),
     main: 'index.js',
     no_bundle: true,

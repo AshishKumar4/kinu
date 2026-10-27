@@ -28,6 +28,8 @@ function dist(files: Readonly<Record<string, string>>): string {
 const BUILD = {
   'kinu/index.js': 'export default {}',
   'kinu/wrangler.json': '{"name":"kinu"}',
+  'front/index.js': 'export default {}',
+  'front/wrangler.json': '{"name":"kinu-front"}',
   'client/index.html': '<html></html>',
   'client/downloads/kinu-version.json': '{"sha":"abc"}',
 };
@@ -42,10 +44,12 @@ test('production may run only the container images staging ran', () => {
 });
 
 describe('the artifact digest', () => {
-  test('is the Worker and client, not the environment\'s config nor the downloads promotion copies', () => {
+  test('is the Workers and client, not the environment\'s configs nor the downloads promotion copies', () => {
     const production = artifactDigest(dist(BUILD));
 
     expect(artifactDigest(dist({ ...BUILD, 'kinu/wrangler.json': '{"name":"kinu-staging"}' }))).toBe(production);
+    expect(artifactDigest(dist({ ...BUILD, 'front/wrangler.json': '{"name":"kinu-staging-front"}' }))).toBe(production);
+    expect(artifactDigest(dist({ ...BUILD, 'front/index.js': 'export default { fetch() {} }' }))).not.toBe(production);
     expect(artifactDigest(dist({ ...BUILD, 'client/downloads/kinu-version.json': '{"sha":"def"}' }))).toBe(production);
     expect(artifactDigest(dist({ ...BUILD, 'kinu/index.js': 'export default { fetch() {} }' }))).not.toBe(production);
     expect(artifactDigest(dist({ ...BUILD, 'client/landing.html': '' }))).not.toBe(production);
@@ -215,7 +219,7 @@ describe('the worker release tarball, adopted', () => {
 });
 
 describe('a rollback', () => {
-  const promotion = (version: string): Promotion => ({ sha: `sha-${version}`, version, at: '2026-09-26T00:00:00.000Z', downloads: {} });
+  const promotion = (version: string): Promotion => ({ sha: `sha-${version}`, version, front: `front-${version}`, at: '2026-09-26T00:00:00.000Z', downloads: {} });
 
   const withdrawn = (version: string, withdrawnAt: string): Promotion => ({ ...promotion(version), withdrawnAt });
 
@@ -236,6 +240,13 @@ describe('a rollback', () => {
     expect(planRollback(left, 'v3', 'now', undefined)).toMatchObject({ target: promotion('v1') });
     expect(planRollback([...left, promotion('v4')], 'v4', 'now', undefined)).toMatchObject({ target: promotion('v3') });
     expect(planRollback(HISTORY, 'v1', 'now', undefined)).toEqual({ refused: expect.stringContaining('holds no build older than version v1') });
+  });
+
+  // Its host's custom domain is the front's, and a rollback returns both Workers: a build from before the front has none.
+  test('refuses to return to a build from before the front Worker', () => {
+    const { front: _, ...before } = promotion('v1');
+
+    expect(planRollback([before, promotion('v2')], 'v2', 'now', undefined)).toEqual({ refused: expect.stringContaining('before its front Worker') });
   });
 
   const reset = (at: string): Reset => ({

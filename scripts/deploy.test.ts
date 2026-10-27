@@ -390,6 +390,9 @@ function uploadFixture(fixture: string, uploadRuns: readonly UploadRun[] | undef
     exports: Object.fromEntries(buildBinds.map((name) => [name, { type: 'durable-object', storage: 'sqlite' }])),
   };
 
+  mkdirSync(join(build, 'front'), { recursive: true });
+  writeFileSync(join(build, 'front', 'wrangler.json'), JSON.stringify({ name: `${promote ? 'kinu' : 'kinu-staging'}-front` }));
+
   writeFileSync(join(build, 'kinu', 'wrangler.json'), JSON.stringify({
     targetEnvironment: promote ? 'production' : 'staging', name: promote ? 'kinu' : 'kinu-staging', vars: { CLI_PUBLIC_ORIGIN: 'https://fixture.invalid', NIMBUS_RUNTIME_CATALOG_SHA256: FIXTURE_CATALOG },
     r2_buckets: [
@@ -455,6 +458,7 @@ async function runDeploy({
   const recordLog = join(fixture, "infra-record.log");
   const infraStatusLog = join(fixture, "infra-status.log");
   const uploadArgv = join(fixture, "upload-argv.log");
+  const frontArgv = join(fixture, "front-argv.log");
 
   mkdirSync(join(fixture, "scripts"));
   mkdirSync(join(fixture, "node_modules", ".bin"), { recursive: true });
@@ -507,6 +511,13 @@ if [ "$KINU_DEPLOY_UPLOAD_FIXTURE" = "1" ]; then
     cat "$KINU_DEPLOY_ROOT/validate.out"
     exit "$(cat "$KINU_DEPLOY_ROOT/validate.status")"
   fi
+  # The front Worker's deploy, its own config named (deploy.sh Step 3a).
+  if [ "$2" = "deploy" ] && [ "$3" = "-c" ]; then
+    printf '%s\\0' "$@" >> "$KINU_DEPLOY_FRONT_ARGV"
+    printf '\\n' >> "$KINU_DEPLOY_FRONT_ARGV"
+    echo "Version ID: f00d"
+    exit 0
+  fi
   if [ "$2" = "deploy" ]; then
     printf '%s\\0' "$@" >> "$KINU_DEPLOY_UPLOAD_ARGV"
     printf '\\n' >> "$KINU_DEPLOY_UPLOAD_ARGV"
@@ -542,6 +553,7 @@ exit 87
       KINU_DEPLOY_INFRA_STATUS_LOG: infraStatusLog,
       KINU_DEPLOY_UPLOAD_FIXTURE: flag(uploadRuns !== undefined),
       KINU_DEPLOY_UPLOAD_ARGV: uploadArgv,
+      KINU_DEPLOY_FRONT_ARGV: frontArgv,
       // Always set, so the assertion that the script overrides it is about the
       // script rather than about whichever shell ran the suite.
       KINU_INFRA_PHASE: ambientPhase,
@@ -599,6 +611,7 @@ exit 87
     infraRecord: existsSync(recordLog) ? readFileSync(recordLog, "utf8").trim() : null,
     infraStatuses: fixtureLogLines(infraStatusLog).map(Number),
     uploads: fixtureLogLines(uploadArgv).map((line) => line.split('\0').slice(0, -1)),
+    fronts: fixtureLogLines(frontArgv).map((line) => line.split('\0').slice(0, -1)),
   };
 }
 
@@ -2301,6 +2314,8 @@ describe('the upload runs again once, and only when wrangler asks for it', () =>
       ['wrangler', 'deploy', '--tag', 'testsha', '--message', 'kinu staging testsha'],
       ['wrangler', 'deploy', '--tag', 'testsha', '--message', 'kinu staging testsha'],
     ]);
+    // Its front once the main Worker it binds is up, from the config its build derived.
+    expect(replayed.fronts).toEqual([['wrangler', 'deploy', '-c', expect.stringMatching(/\/dist\/front\/wrangler\.json$/u), '--tag', 'testsha', '--message', 'kinu staging testsha']]);
     expect(replayed.events).toContain('bun scripts/infra-verify.ts --phase=post-deploy');
   });
 
@@ -2310,6 +2325,7 @@ describe('the upload runs again once, and only when wrangler asks for it', () =>
     ] });
 
     expect(refused.uploads).toHaveLength(2);
+    expect(refused.fronts).toEqual([]);
     expect(refused.status).not.toBe(0);
     expect(refused.events).not.toContain('bun scripts/infra-verify.ts --phase=post-deploy');
   });

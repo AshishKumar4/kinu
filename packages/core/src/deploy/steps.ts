@@ -15,7 +15,7 @@ import {
 import {
   COMPUTER_SECRETS, DEPLOYMENT_RECORD_SECRET, MAIL_ROUTING_SECRET, DEPLOYMENT_REFRESH_SECRET, DEPLOY_CLIENT_ID_KEY, FIRST_OWNER_LINK_MS,
   FIRST_OWNER_LINK_SECRET, MINTED_SECRETS, REFRESH_TOKEN_KEY, resourceName,
-  type DeployInputs, type DeploymentRecord,
+  type DeployAddress, type DeployInputs, type DeploymentRecord,
 } from './inputs';
 import { HealthAnswerSchema, type UpdateBuild } from './update';
 import type { ArtifactMember, HeldBytes } from './artifact';
@@ -24,7 +24,8 @@ import { bytesToBase64 } from '../utils/base64';
 import { randomToken } from '../utils/crypto';
 import { PLATFORM_CATALOG } from '../platform-catalog';
 import { firstOwnerLinkSecret } from '../identity/builtin-sign-in';
-import { releaseModuleKind, type ReleaseBinding, type ReleaseManifest } from './manifest';
+import { releaseModuleKind, type ReleaseBinding, type ReleaseManifest, type ReleaseModules } from './manifest';
+import { FRONT_OBJECTS, MAIN_SERVICE_BINDING, frontWorkerName } from './front';
 import { mailRoutingRetiredStep, mailRoutingStep, mailStep, mailZoneVar } from './mail';
 import { computerStep, computerTokenStep, computerToolsStep } from './computer';
 
@@ -83,6 +84,8 @@ const BASE64_ALPHABET = new TextEncoder()
   .encode('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/');
 
 export function deployPlan(manifest: ReleaseManifest, inputs: DeployInputs): readonly DeployStep[] {
+  const { address } = inputs;
+
   return [
     accountStep(manifest),
     computerTokenStep(manifest),
@@ -103,6 +106,8 @@ export function deployPlan(manifest: ReleaseManifest, inputs: DeployInputs): rea
     mailStep(inputs),
     smokeStep(),
     promoteStep(),
+    // A workers.dev address belongs to the main Worker's name, so only a deployment on its own domain has a front.
+    ...(address.kind === 'zone' && manifest.front !== null ? [frontStep(manifest, manifest.front, address)] : []),
     // Once this version is live: the running one kept its token and rules until now.
     mailRoutingRetiredStep(inputs),
     handoverStep(manifest),
@@ -518,7 +523,7 @@ function uploadVersion(
 ): Effect.Effect<{ readonly response: CloudflareHttpResponse; readonly carried: CarriedRelease }, KinuError> {
   return Effect.gen(function* () {
     const session = yield* openAssetSession(context, manifest, context.inputs.instanceName);
-    const carried = yield* carryArtifact(context, manifest, session);
+    const carried = yield* carryArtifact(context, manifest.worker, session);
     const metadata = yield* Effect.promise(async () => versionMetadata(context, manifest, carried.token, exists));
 
     // The transport copies every part, so the module set is held twice in flight.
@@ -676,6 +681,79 @@ function promoteStep(): DeployStep {
   };
 }
 
+/**
+ * The front Worker its own domain is answered from (front.ts), once the main Worker it binds serves all traffic. Until
+ * then the address step binds the domain to the main Worker, which answers every route itself, so a new front never
+ * stands before an older main Worker. A front holds no secret: it binds the main Worker's objects and the main Worker.
+ */
+function frontStep(manifest: ReleaseManifest, front: ReleaseModules, address: DeployAddress): DeployStep {
+  return {
+    id: 'front',
+    title: 'Put the front in place',
+    after: ['promote'],
+    run(context: DeployContext): Effect.Effect<string, KinuError> {
+      return Effect.gen(function* () {
+        const accountId = context.inputs.accountId;
+        const main = context.inputs.instanceName;
+        const script = frontWorkerName(main);
+        const session = yield* openAssetSession(context, manifest, script);
+        const carried = yield* carryArtifact(context, front, session);
+        const analytics: JsonValue[] = [];
+
+        for (const binding of manifest.bindings) {
+          if (binding.kind !== 'analytics-engine') continue;
+          const wire = yield* Effect.promise(async () => wireBinding(context, manifest, binding));
+
+          if (wire !== null) analytics.push(wire);
+        }
+
+        const metadata: JsonObject = {
+          main_module: front.mainModule,
+          compatibility_date: manifest.worker.compatibilityDate,
+          compatibility_flags: [...manifest.worker.compatibilityFlags],
+          bindings: [
+            ...FRONT_OBJECTS.map((name) => ({ type: 'durable_object_namespace', name, class_name: name, script_name: main })),
+            { type: 'service', name: MAIN_SERVICE_BINDING, service: main },
+            { type: 'assets', name: 'ASSETS' },
+            { type: 'version_metadata', name: 'CF_VERSION_METADATA' },
+            ...analytics,
+            ...varBindings(context, manifest),
+          ],
+          observability: { enabled: true },
+          annotations: { [VERSION_TAG]: context.tag },
+          ...assetsMetadata(carried.token),
+        };
+
+        const path = `/accounts/${accountId}/workers/scripts/${script}`;
+
+        context.artifact.held.hold(carried.bytes);
+
+        const response = yield* Effect.promise(async () => context.transport.upload({
+          method: 'PUT',
+          path,
+          parts: [{ name: 'metadata', contentType: 'application/json', body: JSON.stringify(metadata) }, ...carried.modules],
+        }));
+
+        context.artifact.held.release(carried.bytes * 2);
+        readEnvelope(path, response, NamedSchema);
+
+        // The domain moves from the main Worker to the front in place: a hostname has one Worker.
+        yield* Effect.promise(async () => cloudflareResult(
+          context.transport,
+          {
+            method: 'PUT',
+            path: `/accounts/${accountId}/workers/domains`,
+            body: { hostname: address.hostname, zone_id: address.zoneId, service: script, environment: 'production' },
+          },
+          v.object({ id: v.optional(v.string()) }),
+        ));
+
+        return `${script} answers ${address.hostname}.`;
+      });
+    },
+  };
+}
+
 function handoverStep(manifest: ReleaseManifest): DeployStep {
   return {
     id: 'handover',
@@ -779,11 +857,11 @@ interface CarriedRelease {
 /** `scripts/build-worker-release.ts` orders assets before modules to lower the peak; either order installs. */
 function carryArtifact(
   context: DeployContext,
-  manifest: ReleaseManifest,
+  worker: ReleaseModules,
   session: AssetSession,
 ): Effect.Effect<CarriedRelease> {
   return Effect.gen(function* () {
-    const walked = yield* Effect.promise(() => walkArtifact(context, manifest, session));
+    const walked = yield* Effect.promise(() => walkArtifact(context, worker, session));
 
     if (walked.misencoded !== null) return yield* Effect.die(new Error(walked.misencoded));
 
@@ -791,8 +869,8 @@ function carryArtifact(
       return yield* Effect.die(new Error(`Cloudflare asked for ${String(session.wanted.size)} asset(s) and the release artifact carries ${String(walked.uploaded)}`));
     }
 
-    if (walked.modules.length !== manifest.worker.modules.length) {
-      return yield* Effect.die(new Error(`the release artifact carries ${String(walked.modules.length)} of the ${String(manifest.worker.modules.length)} module(s) the manifest names`));
+    if (walked.modules.length !== worker.modules.length) {
+      return yield* Effect.die(new Error(`the release artifact carries ${String(walked.modules.length)} of the ${String(worker.modules.length)} module(s) the manifest names`));
     }
 
     context.note(`${walked.uploaded} asset(s) uploaded, ${walked.modules.length} module(s) held for the version.`);
@@ -810,10 +888,10 @@ interface WalkedArtifact {
   readonly misencoded: string | null;
 }
 
-async function walkArtifact(context: DeployContext, manifest: ReleaseManifest, session: AssetSession): Promise<WalkedArtifact> {
+async function walkArtifact(context: DeployContext, worker: ReleaseModules, session: AssetSession): Promise<WalkedArtifact> {
   const held = context.artifact.held;
-  const prefix = `${manifest.worker.modulesPath}/`;
-  const named = new Set(manifest.worker.modules);
+  const prefix = `${worker.modulesPath}/`;
+  const named = new Set(worker.modules);
   const modules: UploadPart[] = [];
   let moduleBytes = 0;
   let batch: UploadPart[] = [];
@@ -1030,12 +1108,7 @@ async function versionMetadata(
     if (wire !== null) bindings.push(wire);
   }
 
-  for (const declared of manifest.vars) {
-    if (declared.policy === 'ours') continue;
-    const value = declared.policy === 'carried' ? declared.value ?? '' : derivedVar(context, declared.name);
-
-    if (value !== null) bindings.push({ type: 'plain_text', name: declared.name, text: value });
-  }
+  bindings.push(...varBindings(context, manifest));
 
   for (const name of [...MINTED_SECRETS, FIRST_OWNER_LINK_SECRET, ...COMPUTER_SECRETS, MAIL_ROUTING_SECRET, ...context.inputs.providerKeyNames]) {
     const value = await context.vault.read(name);
@@ -1061,16 +1134,26 @@ async function versionMetadata(
   // The class's container, as Wrangler declares one with no image; the computer step makes its application.
   if (context.inputs.sandbox && manifest.computer !== null) metadata.containers = [{ class_name: manifest.computer.className }];
 
-  if (assetsToken === '') {
-    metadata.keep_assets = true;
-  } else {
-    metadata.assets = {
-      jwt: assetsToken,
-      config: { not_found_handling: 'single-page-application', run_worker_first: true },
-    };
-  }
+  Object.assign(metadata, assetsMetadata(assetsToken));
 
   return metadata;
+}
+
+/** The release's vars, as both Workers hold them. */
+function varBindings(context: DeployContext, manifest: ReleaseManifest): JsonValue[] {
+  return manifest.vars.flatMap((declared) => {
+    if (declared.policy === 'ours') return [];
+    const value = declared.policy === 'carried' ? declared.value ?? '' : derivedVar(context, declared.name);
+
+    return value === null ? [] : [{ type: 'plain_text', name: declared.name, text: value }];
+  });
+}
+
+/** Empty token: the assets the Worker holds already (`keep_assets`). Every request reaches the Worker before its assets. */
+function assetsMetadata(token: string): JsonObject {
+  return token === ''
+    ? { keep_assets: true }
+    : { assets: { jwt: token, config: { not_found_handling: 'single-page-application', run_worker_first: true } } };
 }
 
 // Null for the container (the computer's own step binds it, with its user registry) and bindings turned off.

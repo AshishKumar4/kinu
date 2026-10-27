@@ -569,8 +569,9 @@ export function deployment(environment: InfraEnvironment): Deployment {
  * found" for seconds (staging, 2026-10-14: the reset's placeholder deployed at 13:43:32, the deployment named it at
  * 13:43:38, and `versions view` of it answered 404 at 13:43:39).
  */
-export function deployedVersion(environment: InfraEnvironment): { readonly state: 'deployed'; readonly versionId: string } | Exclude<Deployment, { state: 'deployed' }> {
-  const status = wrangler(['deployments', 'status', '--json', ...environmentArgs(environment)]);
+/** `script` names a Worker the environment's config does not, as its front (front-config.ts). */
+export function deployedVersion(environment: InfraEnvironment, script?: string): { readonly state: 'deployed'; readonly versionId: string } | Exclude<Deployment, { state: 'deployed' }> {
+  const status = wrangler(['deployments', 'status', '--json', ...(script === undefined ? environmentArgs(environment) : ['--name', script])]);
 
   if (!status.ok) {
     const complaint = why(status);

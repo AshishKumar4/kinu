@@ -38,7 +38,8 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative } from 'node:path';
 import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { deployment, environmentArgs, r2Text, why, wrangler } from './infra-cloudflare';
+import { deployedVersion, deployment, environmentArgs, r2Text, why, wrangler } from './infra-cloudflare';
+import { frontWorkerName } from '../packages/core/src/deploy/front';
 import { REPORTS } from './deploy-report';
 import { type InfraEnvironment, deriveInfrastructure } from './infra-manifest';
 import { type Reset, ResetSchema, latestReset } from './reset';
@@ -76,6 +77,7 @@ const HEALTH_ATTEMPTS = 8;
  *  config and the downloads, which promotion copies rather than rebuilds. */
 const ARTIFACT_PARTS: readonly (readonly [string, (path: string) => boolean])[] = [
   ['kinu', (path) => path === 'wrangler.json'],
+  ['front', (path) => path === 'wrangler.json'],
   ['client', (path) => path === 'downloads' || path.startsWith('downloads/')],
 ];
 
@@ -497,6 +499,8 @@ export const PromotionSchema = v.object({
   downloads: DownloadsSchema,
   withdrawnAt: v.optional(v.string()),
   reset: v.optional(ResetSchema),
+  /** Its front Worker's version (front-config.ts); none for a build from before the front, which answered its host itself. */
+  front: v.optional(v.string()),
   /** A build the owner promoted without staging's verification: owner override, unverified. */
   override: v.optional(v.object({ verdict: v.literal('UNVERIFIED'), words: v.string(), reds: v.array(v.string()) })),
 });
@@ -613,12 +617,19 @@ export function planRollback(
   serving: string,
   at: string,
   latest: Reset | undefined,
-): { readonly refused: string } | { readonly target: Promotion; readonly history: readonly Promotion[] } {
+): { readonly refused: string } | { readonly target: Promotion & { readonly front: string }; readonly history: readonly Promotion[] } {
   const position = history.map((entry) => entry.version).lastIndexOf(serving);
   const older = position === -1 ? history : history.slice(0, position);
   const target = [...older].reverse().find((entry) => entry.withdrawnAt === undefined);
 
   if (target === undefined) return { refused: `production's history holds no build older than version ${serving} to return to` };
+
+  const { front } = target;
+
+  if (front === undefined) {
+    return { refused: `${target.sha} answered production's host itself, before its front Worker; no rollback moves the host back. Deploy forward instead.` };
+  }
+
   const later = history.slice(history.indexOf(target) + 1).find((entry) => entry.reset !== undefined)?.reset;
   const crossed = later ?? (latest !== undefined && latest.at > target.at ? latest : undefined);
 
@@ -629,7 +640,7 @@ export function planRollback(
     };
   }
 
-  return { target, history: history.map((entry, index) => index === position ? { ...entry, withdrawnAt: at } : entry) };
+  return { target: { ...target, front }, history: history.map((entry, index) => index === position ? { ...entry, withdrawnAt: at } : entry) };
 }
 
 /**
@@ -762,6 +773,21 @@ async function servedAs(origin: string, sha: string, downloads: Downloads): Prom
 }
 
 /** The version production's Worker serves. */
+function productionFront(): string {
+  return frontWorkerName(deriveInfrastructure('production').worker.workerName);
+}
+
+/** The version production's front Worker serves, which a promotion records beside the main Worker's. */
+function servingFront(): string {
+  const serving = deployedVersion('production', productionFront());
+
+  if (serving.state !== 'deployed') {
+    throw new Error(`production's front serves no version: ${serving.state === 'unknown' ? serving.reason : 'it has no deployment'}`);
+  }
+
+  return serving.versionId;
+}
+
 function servingVersion(): string {
   const serving = deployment('production');
 
@@ -994,13 +1020,16 @@ async function promotedCommand({ sha, origins, buckets, production, records }: C
 
   if (!/^[0-9a-f-]{36}$/u.test(version)) throw new Error(`'${version}' is not a Worker version id, so no rollback could return to it`);
   const owner = overridden ? v.parse(OverrideSchema, adoptedRecord(records, sha, true)) : undefined;
-  const promotion: Promotion = { sha, version, at: new Date().toISOString(), downloads: downloadsIn(DOWNLOADS), ...resetIn(reset) };
-
-  if (owner !== undefined) promotion.override = { verdict: owner.verdict, words: owner.words, reds: owner.reds };
-
   const serving = servingVersion();
 
   if (serving !== version) throw new Error(`production serves version ${serving}, not ${version}`);
+
+  const promotion: Promotion = {
+    sha, version, front: servingFront(), at: new Date().toISOString(), downloads: downloadsIn(DOWNLOADS), ...resetIn(reset),
+  };
+
+  if (owner !== undefined) promotion.override = { verdict: owner.verdict, words: owner.words, reds: owner.reds };
+
   await servedAs(origins.production, sha, promotion.downloads);
 
   production.put(HISTORY_KEY, JSON.stringify([...promotions(buckets.production), promotion]), 'application/json');
@@ -1016,9 +1045,13 @@ async function rollbackCommand({ origins, buckets, production }: Context): Promi
   if ('refused' in plan) throw new Error(plan.refused);
   const { target } = plan;
 
-  const run = wrangler(['rollback', target.version, '--message', `Rollback to ${target.sha}`, '--yes', ...environmentArgs('production')], { timeoutMs: 600_000 });
+  // The main Worker first: the front it then returns to was built against it.
+  for (const [version, script] of [[target.version, environmentArgs('production')], [target.front, ['--name', productionFront()]]] as const) {
+    const run = wrangler(['rollback', version, '--message', `Rollback to ${target.sha}`, '--yes', ...script], { timeoutMs: 600_000 });
 
-  if (!run.ok) throw new Error(`wrangler rollback ${target.version} failed: ${why(run)}`);
+    if (!run.ok) throw new Error(`wrangler rollback ${version} failed: ${why(run)}`);
+  }
+
   production.put(HISTORY_KEY, JSON.stringify(plan.history), 'application/json');
   await verifyServing(origins.production, target);
   console.log(`promote: production serves ${target.sha} again (version ${target.version}), its downloads byte for byte`);

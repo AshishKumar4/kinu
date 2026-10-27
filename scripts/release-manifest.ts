@@ -223,6 +223,8 @@ export interface ReleaseBuild {
   readonly builtAt: string;
   readonly files: readonly ReleaseFile[];
   readonly modules: readonly string[];
+  /** The front Worker's (`dist/front`), main module first. */
+  readonly frontModules: readonly string[];
   readonly seed: ReleaseSeed | null;
   readonly tools: Tools;
 }
@@ -265,6 +267,7 @@ export function buildReleaseManifest(build: ReleaseBuild, configPath = WRANGLER_
       assets: 'client',
       crons: config.triggers?.crons ?? [],
     },
+    front: { mainModule: build.frontModules[0] ?? 'index.js', modules: build.frontModules, modulesPath: 'front' },
     bindings: releaseBindings(config, optional),
     vectorIndexes: indexes,
     migrations,

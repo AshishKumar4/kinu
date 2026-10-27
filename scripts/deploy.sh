@@ -340,8 +340,9 @@ else
   export KINU_INFRA_PHASE="full"
 fi
 
-# Captured during deploy for final summary
+# Captured during deploy for final summary: the main Worker's version, and its front's (Step 3a).
 KINU_VERSION=""
+KINU_FRONT_VERSION=""
 # The one directory wrangler publishes as static assets (see header).
 KINU_ASSETS_DIR="$KINU_ROOT/packages/cf-backend/dist/client"
 # build-cli-dist.sh stamps this sha into the built CLI, the published
@@ -361,11 +362,13 @@ KINU_WRANGLER_ARGS+=(--tag "$KINU_SHA" --message "kinu $KINU_ENV $KINU_SHA")
 # Temp log file — trap cleans up on any exit. A promotion that fails after its
 # upload leaves production serving the red build, and says how to undo it.
 KINU_DEPLOY_LOG=""
+KINU_FRONT_LOG=""
 # The reset record the deploy's record names, once step 2b's reset has started.
 KINU_RECORD_ARGS=()
 cleanup() {
   local status=$?
   [ -n "$KINU_DEPLOY_LOG" ] && rm -f "$KINU_DEPLOY_LOG"
+  [ -n "$KINU_FRONT_LOG" ] && rm -f "$KINU_FRONT_LOG"
   if [ "$status" -ne 0 ] && [ "${DEPLOY_PUBLISHED:-0}" = "1" ] && [ "$KINU_PROMOTE" = "1" ]; then
     echo -e "${RED}Production serves this red promotion. Return it to the build it took before: bun run deploy --rollback${NC}"
   fi
@@ -1014,6 +1017,24 @@ else
   echo "   .wrangler/deploy/config.json redirect, and this script's header."
   return 1
 fi
+
+# ── Step 3a: The front Worker ─────────────────────────────────
+# The app's host is answered by a Worker that starts within a connection's TLS handshake (src/front.ts): a page, its
+# files and its two sockets, each passed to the object it belongs to; every other request goes on to the Worker above,
+# whose objects and service it binds, so it deploys after it. Its config is the build's, derived from that Worker's
+# (front-config.ts). wrangler moves the host's custom domain to it (`override_existing_origin`, a non-interactive deploy).
+KINU_FRONT_CONFIG="$KINU_ROOT/packages/cf-backend/dist/front/wrangler.json"
+KINU_FRONT_WORKER="$(json_field name < "$KINU_FRONT_CONFIG")"
+KINU_FRONT_LOG="$(mktemp -t kinu-front.XXXXXX.log)"
+echo ""
+echo -e "${BOLD}Step 3a: Deploying $KINU_FRONT_WORKER, which answers $KINU_URL${NC}"
+echo "Running: npx wrangler deploy -c $KINU_FRONT_CONFIG ${KINU_WRANGLER_ARGS[*]} (log → $KINU_FRONT_LOG)"
+if ! upload "$KINU_FRONT_LOG" npx wrangler deploy -c "$KINU_FRONT_CONFIG" "${KINU_WRANGLER_ARGS[@]}"; then
+  publish_red "$(startup_refusal "$KINU_FRONT_LOG")the front Worker's deploy failed; its log is $KINU_FRONT_LOG"
+  return 1
+fi
+KINU_FRONT_VERSION="$(grep -oE 'Version ID:[[:space:]]*[a-f0-9-]+' "$KINU_FRONT_LOG" | head -1 | awk '{print $NF}')"
+echo -e "${GREEN}✅ $KINU_FRONT_WORKER deployed as version ${KINU_FRONT_VERSION:-<unnamed>}${NC}"
 
 cd "$KINU_ROOT" || { publish_red "cannot cd to $KINU_ROOT"; return 1; }
 
