@@ -131,17 +131,29 @@ interface Side {
 /** A link's contents are its target text, told apart from a file holding the same text, so a swap is a change. */
 const LINK_TAG = new TextEncoder().encode('symlink\0');
 
+/** What a side of a path is before its bytes are read. */
+type Present = NonNullable<ReturnType<CredentialedVfs['statIfPresent']>>;
+
+/** Gone between its stat and its read, as unreadable: neither is in the snapshot. */
+function unlessGone<A>(read: () => A): A | undefined {
+  return tolerate(() => tolerate(read, 'enoent'), 'eacces');
+}
+
 /**
  * `path` as `files` holds it, a symbolic link not followed. Undefined for a directory, and when it is not there or this
  * principal may not read it: a snapshot of a file that is gone does not contain it.
  */
-function sideOf(files: CredentialedVfs, path: string): Side | undefined {
-  const read = (): Side | undefined => {
+function presentIn(files: CredentialedVfs, path: string): Present | undefined {
+  return unlessGone(() => {
     const stat = files.statIfPresent(path, false);
 
-    if (stat === null || stat.type === 'directory') return undefined;
-    const { type, size } = stat;
+    return stat === null || stat.type === 'directory' ? undefined : stat;
+  });
+}
 
+/** A present side's bytes, a link's its target text. */
+function sideOf(files: CredentialedVfs, path: string, { type, size }: Present): Side | undefined {
+  return unlessGone((): Side => {
     if (type === 'symlink') {
       const target = files.readlink(path);
       const text = new TextEncoder().encode(target);
@@ -153,10 +165,7 @@ function sideOf(files: CredentialedVfs, path: string): Side | undefined {
     const bytes = files.readFile(path);
 
     return { bytes, text: bytes.includes(0) ? null : new TextDecoder().decode(bytes), size };
-  };
-
-  // Gone between its stat and its read, as unreadable: neither is in the snapshot.
-  return tolerate(() => tolerate(read, 'enoent'), 'eacces');
+  });
 }
 
 function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
@@ -182,13 +191,72 @@ async function capture(rt: WorkspaceBaselineRuntime, store: WorkspaceBaselineSto
   return store.snapshot(`${reviewPrefix(rt)}${nanoid()}`);
 }
 
-/** Cumulative change-set since the baseline: only the paths the store wrote since the review are examined. */
-export async function getWorkspaceDiff(rt: WorkspaceBaselineRuntime, baselines: WorkspaceBaselines): Promise<WorkspaceDiffResult> {
-  const { store, cred } = baselines;
-  // Without a baseline, tracking starts now: the same capture a new workspace takes at creation.
+/**
+ * A path the change-set lists: how it moved since the review, and its sides, read only as asked. A path both sides hold
+ * was read to compare, and is listed only if its bytes differ.
+ */
+interface Moved {
+  readonly path: string;
+  readonly status: FileStatus;
+  readonly was: () => Side | undefined;
+  readonly is: () => Side | undefined;
+}
+
+/**
+ * Each reviewed path that moved since the baseline, in path order: only the paths the store wrote since the review are
+ * examined, and a side's bytes are read only to compare two it holds.
+ */
+function* movedSince(store: WorkspaceBaselineStore, baseline: string, then: CredentialedVfs, now: CredentialedVfs): Generator<Moved> {
+  for (let after: string | undefined, more = true; more;) {
+    const page = store.diff(baseline, null, after === undefined ? {} : { after });
+
+    for (const entry of page.entries) {
+      const path = reviewedPath(entry.path);
+
+      if (path === null) continue;
+      // A side that is a directory is no file: a file replaced by a folder reads as removed.
+      const was = entry.change === 'added' ? undefined : presentIn(then, entry.path);
+      const is = entry.change === 'removed' ? undefined : presentIn(now, entry.path);
+
+      if (was !== undefined && is !== undefined) {
+        const compared = compare(sideOf(then, entry.path, was), sideOf(now, entry.path, is));
+
+        if (compared !== null) yield { path, ...compared };
+      } else if (is !== undefined) {
+        yield { path, status: 'added', was: () => undefined, is: () => sideOf(now, entry.path, is) };
+      } else if (was !== undefined) {
+        yield { path, status: 'removed', was: () => sideOf(then, entry.path, was), is: () => undefined };
+      }
+    }
+
+    more = page.next !== null;
+    after = page.next ?? undefined;
+  }
+}
+
+/** Two sides a path held, as read: null when it is as it was, or both were gone by the read. */
+function compare(before: Side | undefined, after: Side | undefined): Omit<Moved, 'path'> | null {
+  const sides = { was: () => before, is: () => after };
+
+  if (before === undefined) return after === undefined ? null : { status: 'added', ...sides };
+
+  if (after === undefined) return { status: 'removed', ...sides };
+
+  const same = before.bytes !== null && after.bytes !== null && sameBytes(before.bytes, after.bytes);
+
+  return same ? null : { status: 'changed', ...sides };
+}
+
+/** The baseline the change-set reads against, and both trees: without one, tracking starts now, as at creation. */
+async function againstBaseline(rt: WorkspaceBaselineRuntime, { store, cred }: WorkspaceBaselines) {
   const baseline = reviews(rt, store).at(-1) ?? await capture(rt, store);
-  const then = store.at(baseline.name, cred);
-  const now = store.as(cred);
+
+  return { baseline, moved: () => movedSince(store, baseline.name, store.at(baseline.name, cred), store.as(cred)) };
+}
+
+/** Cumulative change-set since the baseline. */
+export async function getWorkspaceDiff(rt: WorkspaceBaselineRuntime, baselines: WorkspaceBaselines): Promise<WorkspaceDiffResult> {
+  const { baseline, moved } = await againstBaseline(rt, baselines);
   const files: FileDiff[] = [];
   let bodyChars = 0;
 
@@ -211,36 +279,39 @@ export async function getWorkspaceDiff(rt: WorkspaceBaselineRuntime, baselines: 
     files.push(fileDiff(path, status, d));
   };
 
-  for (let after: string | undefined, more = true; more;) {
-    const page = store.diff(baseline.name, null, after === undefined ? {} : { after });
+  // A side the walk saw and this read did not was gone between the two.
+  for (const { path, status, was, is } of moved()) {
+    const before = was();
+    const after = is();
 
-    for (const entry of page.entries) {
-      const path = reviewedPath(entry.path);
-
-      if (path === null) continue;
-      // A side that is a directory is no file: a file replaced by a folder reads as removed.
-      const was = entry.change === 'added' ? undefined : sideOf(then, entry.path);
-      const is = entry.change === 'removed' ? undefined : sideOf(now, entry.path);
-
-      if (was === undefined && is === undefined) continue;
-
-      if (was === undefined) {
-        admit(path, 'added', { before: '', after: is?.text ?? null, omitted: unread(is?.size ?? 0) });
-      } else if (is === undefined) {
-        admit(path, 'removed', { before: was.text, after: '', omitted: unread(was.size) });
-      } else if (was.bytes === null || is.bytes === null || !sameBytes(was.bytes, is.bytes)) {
-        admit(path, 'changed', { before: was.text, after: is.text, omitted: unread(Math.max(was.size, is.size)) });
-      }
+    if (status === 'added' && after !== undefined) {
+      admit(path, status, { before: '', after: after.text, omitted: unread(after.size) });
+    } else if (status === 'removed' && before !== undefined) {
+      admit(path, status, { before: before.text, after: '', omitted: unread(before.size) });
+    } else if (status === 'changed' && before !== undefined && after !== undefined) {
+      admit(path, status, { before: before.text, after: after.text, omitted: unread(Math.max(before.size, after.size)) });
     }
-
-    more = page.next !== null;
-    after = page.next ?? undefined;
   }
 
   files.sort((a, b) => a.path.localeCompare(b.path));
 
   // The review's own id: notes name the snapshot they were written on by its first characters.
   return { files, trackedSince: baseline.createdAt, baseline: baseline.name.slice(reviewPrefix(rt).length) };
+}
+
+/**
+ * How many files the change-set lists, read by the same walk with no side read but two the store holds: what a page
+ * shows before it shows the listing. Over 1,500 cloned files the listing read 531-640 ms and 13 MB, the count 17-41 ms
+ * (gcp-vm, 2026-10-27, three rounds each); on production the first change-set read after the workspace's object woke ran
+ * 1.5 s of its CPU (05:18Z), and every call it was asked meanwhile waited on it.
+ */
+export async function countWorkspaceChanges(rt: WorkspaceBaselineRuntime, baselines: WorkspaceBaselines): Promise<number> {
+  const { moved } = await againstBaseline(rt, baselines);
+  let count = 0;
+
+  for (const _ of moved()) count += 1;
+
+  return count;
 }
 
 export interface WorkspaceReviewResult {
@@ -487,15 +558,41 @@ function reviewsPath(path: string): boolean {
 /** The frame a workspace sends its pages when its change-set moved: Changes reads again, shown or not. */
 export const CHANGES_MOVED_EVENT = 'changes_moved';
 
+/** One read of the change-set, held for the generation it read: every read waits on the one walk running. */
+class HeldRead<A> {
+  private held: { readonly generation: number; readonly result: A } | null = null;
+  private walk: Promise<void> | null = null;
+
+  /** The read as of `generation` or later; `walked` once a walk settles, at the generation it read. */
+  async read(generation: () => number, load: () => Promise<A>, walked: (at: number) => void): Promise<A> {
+    const wanted = generation();
+
+    for (;;) {
+      if (this.held !== null && this.held.generation >= wanted) return this.held.result;
+      this.walk ??= this.walkAt(generation(), load, walked);
+      await this.walk;
+    }
+  }
+
+  private async walkAt(generation: number, load: () => Promise<A>, walked: (at: number) => void): Promise<void> {
+    try {
+      this.held = { generation, result: await load() };
+    } finally {
+      this.walk = null;
+      walked(generation);
+    }
+  }
+}
+
 /**
  * The workspace's change-set, read again only after something it reviews moved: a file event on a reviewed path, or
- * a baseline that Mark reviewed or Undo moved. A poll while nothing moved walks nothing.
+ * a baseline that Mark reviewed or Undo moved. A poll while nothing moved walks nothing. Its listing and its count are
+ * each one read, the count's walk reading no side the listing reads ({@link countWorkspaceChanges}).
  */
 export class ChangeSetCache {
   private generation = 0;
-  private held: { readonly generation: number; readonly result: WorkspaceDiffResult } | null = null;
-  /** The one walk running; every read waits on it rather than starting its own. */
-  private walk: Promise<void> | null = null;
+  private readonly listing = new HeldRead<WorkspaceDiffResult>();
+  private readonly count = new HeldRead<number>();
   /** A frame went out and no walk has finished since: each finished walk earns at most one more. */
   private announced = false;
 
@@ -513,26 +610,20 @@ export class ChangeSetCache {
   }
 
   /** The change-set as of this call or later, from the walk running if it started after the last move. */
-  async read(load: () => Promise<WorkspaceDiffResult>): Promise<WorkspaceDiffResult> {
-    const wanted = this.generation;
-
-    for (;;) {
-      if (this.held !== null && this.held.generation >= wanted) return this.held.result;
-      this.walk ??= this.walkAt(this.generation, load);
-      await this.walk;
-    }
+  read(load: () => Promise<WorkspaceDiffResult>): Promise<WorkspaceDiffResult> {
+    return this.listing.read(() => this.generation, load, this.walked);
   }
 
-  private async walkAt(generation: number, load: () => Promise<WorkspaceDiffResult>): Promise<void> {
-    try {
-      this.held = { generation, result: await load() };
-    } finally {
-      this.walk = null;
-      this.announced = false;
-
-      if (this.generation !== generation) this.tell();
-    }
+  /** How many files it lists, as {@link read}. */
+  readCount(load: () => Promise<number>): Promise<number> {
+    return this.count.read(() => this.generation, load, this.walked);
   }
+
+  private readonly walked = (at: number): void => {
+    this.announced = false;
+
+    if (this.generation !== at) this.tell();
+  };
 
   private move(): void {
     this.generation += 1;
@@ -546,7 +637,6 @@ export class ChangeSetCache {
   }
 }
 
-/** An executor's change-set: the workspace's own, read by `workspace`, and any other executor's by git. */
 /** How many files a source's change-set lists, and why it could not be read: what a page shows before it shows the
  *  listing, so the listing's bodies never cross the socket for a count (17.5 MB for a cloned repository on
  *  production, 2026-10-26, held behind every other reply on the socket for 5.5 s). */
@@ -555,15 +645,17 @@ export interface ExecutorChangeCount {
   readonly error?: string;
 }
 
-/** The listing's own read, its bodies left here: the workspace's change-set is the cached one the listing reads. */
+/** The listing's count, its bodies left here: the workspace's from its own walk ({@link countWorkspaceChanges}), a machine's
+ *  from its git view. */
 export async function getExecutorChangeCount(
-  rt: AgentRuntime, executorId: string, workspaceDiff: () => Promise<WorkspaceDiffResult>,
+  rt: AgentRuntime, executorId: string, workspaceCount: () => Promise<number>,
 ): Promise<ExecutorChangeCount> {
-  const diff = await getExecutorDiff(rt, executorId, workspaceDiff);
+  if (executorId === 'workspace') return { files: await workspaceCount() };
 
-  return { files: diff.files.length, ...(diff.error !== undefined && { error: diff.error }) };
+  return settle(Effect.map(getGitDiff(rt, executorId), (diff) => ({ files: diff.files.length, ...(diff.error !== undefined && { error: diff.error }) })));
 }
 
+/** An executor's change-set: the workspace's own, read by `workspace`, and any other executor's by git. */
 export async function getExecutorDiff(
   rt: AgentRuntime, executorId: string, workspace: () => Promise<WorkspaceDiffResult>,
 ): Promise<ExecutorDiffResult> {

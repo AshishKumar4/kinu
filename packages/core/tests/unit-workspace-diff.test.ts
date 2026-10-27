@@ -7,6 +7,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import {
   ChangeSetCache,
+  countWorkspaceChanges,
   getExecutorDiff,
   getWorkspaceDiff,
   resetWorkspaceBaseline,
@@ -335,6 +336,47 @@ describe('workspace diff lifecycle', () => {
     await rt.storage.vfs.unlink('alias.md');
     await writeText(rt.storage.vfs, 'alias.md', 'notes.md');
     expect((await getWorkspaceDiff(rt, baselines)).files.map((file) => `${file.status} ${file.path}`)).toEqual(['changed alias.md']);
+  });
+
+  // A page shows the count before the listing, from a walk that reads no side but two the store holds.
+  test('the count is the listing\'s length, whatever moved: bytes, kinds, links, modes, hidden and installed files', async () => {
+    const { rt, workspace } = createTestRuntime();
+    const baselines = await baselinesOf(rt, workspace);
+    const user = (await workspace.session()).vfs.as(CRED_SESSION_USER);
+    const past = bodyMaxBytes() + 1;
+
+    await rt.storage.vfs.writeFile('logo.png', PNG);
+    await rt.storage.vfs.writeFile('old.png', PNG);
+    await writeText(rt.storage.vfs, 'run.sh', 'echo hi\n');
+    await writeText(rt.storage.vfs, 'notes.md', 'one\n');
+    await writeText(rt.storage.vfs, 'big.log', 'x'.repeat(past));
+    await rt.storage.vfs.mkdir('was-a-folder', { recursive: true });
+    await writeText(rt.storage.vfs, 'was-a-folder/inside.md', 'in\n');
+    await resetWorkspaceBaseline(rt, baselines);
+    setSystemTime(Date.now() + 1000);
+
+    await rt.storage.vfs.writeFile('logo.png', PNG);
+    await rt.storage.vfs.writeFile('chart.png', PNG);
+    await rt.storage.vfs.unlink('old.png');
+    user.chmod(`${WORKSPACE_ROOT}/run.sh`, 0o744);
+    await writeText(rt.storage.vfs, 'notes.md', 'two\n');
+    await writeText(rt.storage.vfs, 'big.log', 'y'.repeat(past + 1));
+    await rt.storage.vfs.unlink('was-a-folder/inside.md');
+    user.rmdir(`${WORKSPACE_ROOT}/was-a-folder`);
+    await writeText(rt.storage.vfs, 'was-a-folder', 'a file now\n');
+    user.symlink('notes.md', `${WORKSPACE_ROOT}/alias.md`);
+    await rt.storage.vfs.mkdir('.cache', { recursive: true });
+    await writeText(rt.storage.vfs, '.cache/state.json', '{}');
+    await rt.storage.vfs.mkdir('node_modules/pkg', { recursive: true });
+    await writeText(rt.storage.vfs, 'node_modules/pkg/index.js', 'installed\n');
+
+    const listed = (await getWorkspaceDiff(rt, baselines)).files.map((file) => `${file.status} ${file.path}`);
+
+    expect(listed).toEqual([
+      'added alias.md', 'changed big.log', 'added chart.png', 'changed notes.md', 'removed old.png', 'added was-a-folder',
+      'removed was-a-folder/inside.md',
+    ]);
+    expect(await countWorkspaceChanges(rt, baselines)).toBe(listed.length);
   });
 
   test('a slates/ folder the working directory holds after the move stays its own', async () => {

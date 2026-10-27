@@ -2015,7 +2015,7 @@ export type {
 } from './read-models/tool-failures';
 
 export {
-  CHANGES_MOVED_EVENT, ChangeSetCache, getExecutorChangeCount, getExecutorDiff, getWorkspaceDiff, resetWorkspaceBaseline,
+  CHANGES_MOVED_EVENT, ChangeSetCache, countWorkspaceChanges, getExecutorChangeCount, getExecutorDiff, getWorkspaceDiff, resetWorkspaceBaseline,
   restoreWorkspaceBaseline, type ExecutorChangeCount,
 } from './read-models/workspace-diff';
 
