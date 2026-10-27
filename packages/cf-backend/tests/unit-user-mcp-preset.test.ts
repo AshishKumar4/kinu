@@ -131,7 +131,7 @@ describe('an MCP preset add', () => {
   test('userMcp_presets reports which oauth-app presets the deployment carries', async () => {
     const h = createTestUserDO({ mcpAppCredentials: ['github'] });
 
-    expect(await h.userDO.userMcp_presets(await testOwner())).toEqual([{ id: 'github', appConfigured: true }, { id: 'cloudflare', appConfigured: true }]);
+    expect(await h.userDO.userMcp_presets(await testOwner())).toEqual([{ id: 'github', appConfigured: true }, { id: 'cloudflare', appConfigured: true }, { id: 'composio', appConfigured: true }]);
     h.close();
   });
 });
