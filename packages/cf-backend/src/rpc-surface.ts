@@ -153,6 +153,7 @@ const USER_DO_METHODS = [
   'putSecrets',
   'putProfileCatalog',
   'putWorkspaceOverview',
+  'readGatewayCredits',
   'registerBrowserSession',
   'registerDevice',
   'recordDeviceUpdateRefusal',

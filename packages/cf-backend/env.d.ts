@@ -133,6 +133,8 @@ declare global {
     KINU_MAIL_ZONE?: string;
     /** Mail on a subdomain: the token that may edit that zone's routing rules, minted by the deploy run. */
     KINU_MAIL_ROUTING_TOKEN?: string;
+    /** AI Gateway Read on its own account, minted by every self-deploy (core deploy/credits-token.ts). */
+    KINU_AI_CREDITS_TOKEN?: string;
     /** The one identity usable without OAuth; off localhost it also needs `DEV_IDENTITY_SECRET`. */
     DEV_USER_EMAIL?: string;
     /** `on`: every user's Workers AI goes through this Worker's `AI` binding. */

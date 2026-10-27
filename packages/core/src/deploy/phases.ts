@@ -31,6 +31,7 @@ const PHASE_WORDS: Record<DeployPhaseId, string> = {
 const STEP_PHASES = {
   account: 'prepare',
   'computer-token': 'prepare',
+  'credits-token': 'prepare',
   kv: 'storage',
   r2: 'storage',
   vectorize: 'storage',

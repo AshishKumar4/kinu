@@ -12,7 +12,7 @@ import type { HttpGet } from './context';
 import type { DeployChoice } from './door';
 import {
   DEFAULT_INSTANCE_NAME, DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET, DeployInputsSchema, FIRST_OWNER_LINK_SECRET,
-  INSTANCE_NAME, MAIL_ROUTING_SECRET, MINTED_SECRETS,
+  CREDITS_TOKEN_SECRET, INSTANCE_NAME, MAIL_ROUTING_SECRET, MINTED_SECRETS,
   type DeployAddress, type DeployInputs,
 } from './inputs';
 import type { DeployPhaseId, DeployRunViewState } from './phases';
@@ -414,7 +414,7 @@ function servedBuild(http: HttpGet, url: string): Effect.Effect<UpdateBuild | nu
 }
 
 /** Names a run binds for itself; any other secret on the Worker is a provider key its owner gave. */
-const RUN_SECRETS: readonly string[] = [...MINTED_SECRETS, FIRST_OWNER_LINK_SECRET, DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET, MAIL_ROUTING_SECRET];
+const RUN_SECRETS: readonly string[] = [...MINTED_SECRETS, FIRST_OWNER_LINK_SECRET, DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET, MAIL_ROUTING_SECRET, CREDITS_TOKEN_SECRET];
 
 /**
  * A deployment's answers, read back from the account rather than from its record (a secret, which Cloudflare never

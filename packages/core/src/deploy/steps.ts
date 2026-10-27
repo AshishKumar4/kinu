@@ -13,7 +13,7 @@ import {
   FACT_UPLOAD_PEAK, FACT_VERSION_ID, FACT_WORKERS_SUBDOMAIN, kvFact, type DeployContext,
 } from './context';
 import {
-  COMPUTER_SECRETS, DEPLOYMENT_RECORD_SECRET, MAIL_ROUTING_SECRET, DEPLOYMENT_REFRESH_SECRET, DEPLOY_CLIENT_ID_KEY, FIRST_OWNER_LINK_MS,
+  COMPUTER_SECRETS, CREDITS_TOKEN_SECRET, DEPLOYMENT_RECORD_SECRET, MAIL_ROUTING_SECRET, DEPLOYMENT_REFRESH_SECRET, DEPLOY_CLIENT_ID_KEY, FIRST_OWNER_LINK_MS,
   FIRST_OWNER_LINK_SECRET, MINTED_SECRETS, REFRESH_TOKEN_KEY, resourceName,
   type DeployAddress, type DeployInputs, type DeploymentRecord,
 } from './inputs';
@@ -28,6 +28,7 @@ import { releaseModuleKind, type ReleaseBinding, type ReleaseManifest, type Rele
 import { FRONT_OBJECTS, MAIN_SERVICE_BINDING, frontWorkerName } from './front';
 import { mailRoutingRetiredStep, mailRoutingStep, mailStep, mailZoneVar } from './mail';
 import { computerStep, computerTokenStep, computerToolsStep } from './computer';
+import { creditsTokenStep } from './credits-token';
 
 export interface DeployStep {
   readonly id: string;
@@ -91,6 +92,7 @@ export function deployPlan(manifest: ReleaseManifest, inputs: DeployInputs): rea
   return [
     accountStep(manifest),
     computerTokenStep(manifest),
+    creditsTokenStep(),
     // Before the upload, which binds what it mints.
     mailRoutingStep(inputs),
     kvStep(manifest),
@@ -461,7 +463,7 @@ function uploadStep(manifest: ReleaseManifest): DeployStep {
   return {
     id: 'upload',
     title: 'Upload the Worker',
-    after: ['computer-token', 'mail-routing', 'kv', 'r2', 'vectorize', 'ai-gateway', 'seed', 'secrets'],
+    after: ['computer-token', 'credits-token', 'mail-routing', 'kv', 'r2', 'vectorize', 'ai-gateway', 'seed', 'secrets'],
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.gen(function* () {
         const accountId = context.inputs.accountId;
@@ -1158,7 +1160,7 @@ async function versionMetadata(
 
   bindings.push(...varBindings(context, manifest));
 
-  for (const name of [...MINTED_SECRETS, FIRST_OWNER_LINK_SECRET, ...COMPUTER_SECRETS, MAIL_ROUTING_SECRET, ...context.inputs.providerKeyNames]) {
+  for (const name of [...MINTED_SECRETS, FIRST_OWNER_LINK_SECRET, ...COMPUTER_SECRETS, MAIL_ROUTING_SECRET, CREDITS_TOKEN_SECRET, ...context.inputs.providerKeyNames]) {
     const value = await context.vault.read(name);
 
     if (value !== null) bindings.push({ type: 'secret_text', name, text: value });

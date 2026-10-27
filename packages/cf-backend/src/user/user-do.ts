@@ -776,6 +776,10 @@ export class UserDO extends Agent<Env> {
     return this.credentials.listCloudflareAccounts(caller);
   }
 
+  readGatewayCredits(caller: UserCaller, deploymentShown: boolean): ReturnType<UserCredentials['readGatewayCredits']> {
+    return this.credentials.readGatewayCredits(caller, deploymentShown);
+  }
+
   selectCloudflareAccount(caller: UserCaller, accountId: string): Promise<void> {
     return this.credentials.selectCloudflareAccount(caller, accountId);
   }

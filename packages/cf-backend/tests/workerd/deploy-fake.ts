@@ -407,6 +407,8 @@ interface Held {
   /** Each index's shape, as Vectorize reports it. */
   indexConfigs: Map<string, { dimensions: number; metric: string }>;
   gateways: string[];
+  /** The account's tokens by name, each with the values it was minted and rolled to. */
+  tokens: Map<string, string[]>;
   /** Each app's Access policy names, in creation order. */
   secrets: Map<string, string>;
   uploads: number;
@@ -459,6 +461,7 @@ function fresh(): Held {
     indexes: [],
     indexConfigs: new Map(),
     gateways: [],
+    tokens: new Map(),
     secrets: new Map<string, string>(),
     uploads: 0,
     creates: [],
@@ -690,6 +693,10 @@ async function api(url: URL, request: Request): Promise<Response> {
 
   if (stored !== undefined) return stored;
 
+  const tokened = tokenApi(path, request, named);
+
+  if (tokened !== undefined) return tokened;
+
   if (path.endsWith('/workers/subdomain')) return envelope({ subdomain: SUBDOMAIN });
 
   if (path.endsWith('/subdomain')) return envelope({ enabled: true });
@@ -746,6 +753,35 @@ function storageApi(path: string, request: Request, named: (key: string) => stri
     held.creates.push(`gateway:${named('id')}`);
 
     return envelope({ id: named('id') });
+  }
+
+  return undefined;
+}
+
+/** The account's tokens: a permission group by the name asked, each token listed, minted and rolled (`instance-token.ts`). */
+function tokenApi(path: string, request: Request, named: (key: string) => string): Response | undefined {
+  const group = /\/tokens\/permission_groups\?name=([^&]+)/u.exec(path)?.[1];
+
+  if (group !== undefined) return envelope([{ id: `group-${group}`, name: decodeURIComponent(group) }]);
+
+  if (path.endsWith('/tokens?per_page=50')) return envelope([...held.tokens.keys()].map((name) => ({ id: `token-${name}`, name })));
+
+  const rolled = /\/tokens\/token-(.+)\/value$/u.exec(path)?.[1];
+
+  if (rolled !== undefined && request.method === 'PUT') {
+    const values = held.tokens.get(decodeURIComponent(rolled)) ?? [];
+    const value = `rolled-${String(values.length)}`;
+
+    values.push(value);
+
+    return envelope(value);
+  }
+
+  if (path.endsWith('/tokens') && request.method === 'POST') {
+    held.tokens.set(named('name'), ['minted-token']);
+    held.creates.push(`token:${named('name')}`);
+
+    return envelope({ id: `token-${named('name')}`, value: 'minted-token' });
   }
 
   return undefined;

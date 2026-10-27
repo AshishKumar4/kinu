@@ -2,11 +2,12 @@ import { Effect } from 'effect';
 import {
   KeptProviderListingSchema, type ProviderListing, safeJsonParse, type Credential, CLAUDE_CRED_KEY, CODEX_CRED_KEY, baseCredentialKey, CLAUDE_OAUTH_CALLBACK_PORT, claudeCodeFrom, claudeSignInRefusal, createClaudeOAuthClient, startClaudeSignIn, subscriptionIssuer, renewableLogin, rotateLogin, usableLogin, type LoginRenewal, type SubscriptionIssuer, decodeCodexAccountId, type JsonValue, type OAuthCredential, parseJsonValue, ownerCaller, type UserCaller, type ResolvedCaller, credentialToHeaders, refusedLogin, type AuthRequest, type AuthResolution, validateCredential, validateCredentialKey, createCredentialCipher, type CredentialCipher, revocationEndpointFor, revokeOAuthGrant, type DisconnectOutcome, isModelInferenceCredentialKey, CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, accountIdFromCloudflareCredential, cloudflareAIGatewayId, cloudflareAccountsFromCredential, cloudflareWorkersAIBaseURL, fetchCloudflareAIGateways, isCloudflareAIGatewayId, isCloudflareCredentialExpiring, isCloudflareCredentialUsable, refreshCloudflareCredential, withCloudflareAccount, type CloudflareAccount, type CloudflareAIGatewaySummary, type CredentialSummary, CLOUDFLARE_WEB_SEARCH_CRED_KEY, grantsWebSearch, storedCredentialKey,
   GOOGLE_OAUTH_CRED_KEY, googleCredentialExpiring, googleGrantOf, refreshGoogleCredential, type GoogleGrant,
-  MAIN_ACCOUNT, accountCredentialKey,
+  MAIN_ACCOUNT, accountCredentialKey, type GatewayCreditsRead,
 } from '@kinu.run/core';
 import { attempt, authoredRefusal, diagnostics, joining, KinuError, renderThrownChain, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { getOAuthProvider } from '../auth/providers';
+import { fetchGatewayCredits } from './gateway-credits';
 import type { UserObjectHost } from './user-host';
 
 /** A stored credential sealed for its account rather than its object, so it outlives a reset that recreates the object. */
@@ -594,6 +595,24 @@ export class UserCredentials {
       webSearch: grantsWebSearch(cred),
       signInExpired: isCloudflareCredentialExpiring(cred) && !renewableLogin(cred),
     };
+  }
+
+  /**
+   * Who pays for this account's searches through Cloudflare, and what they have left: its own connected account, where
+   * its login grants web search, else the deployment's, read with the token every deploy mints for it and shown where
+   * `deploymentShown` (the deployment's operators). Null where neither can be read.
+   */
+  async readGatewayCredits(caller: UserCaller, deploymentShown: boolean): Promise<GatewayCreditsRead | null> {
+    await this.host.requireTier(caller, 'ai_gateway.admin');
+    const cred = await this.readCredential(CLOUDFLARE_OAUTH_CRED_KEY);
+    const api = cred?.kind === 'oauth' && grantsWebSearch(cred) ? await this.cloudflareAPICredential() : null;
+    const { CLOUDFLARE_ACCOUNT_ID: own, KINU_AI_CREDITS_TOKEN: token } = this.host.env;
+
+    if (api !== null) return settle(Effect.map(fetchGatewayCredits(api.accountId, api.accessToken), (credits) => ({ payer: 'yours' as const, account: api.accountId, credits })));
+
+    if (!deploymentShown || own === undefined || own === '' || token === undefined || token === '') return null;
+
+    return settle(Effect.map(fetchGatewayCredits(own, token), (credits) => ({ payer: 'deployment' as const, account: own, credits })));
   }
 
   /** Point Workers AI at another of this login's accounts. The AI Gateway selection belongs

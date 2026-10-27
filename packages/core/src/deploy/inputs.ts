@@ -105,6 +105,9 @@ export const REGISTRY_TOKEN_SECRET = 'DEVBOX_REGISTRY_TOKEN';
 /** Minted by the computer's steps, so never asked of a person. */
 export const COMPUTER_SECRETS: readonly string[] = [REGISTRY_TOKEN_SECRET];
 
+/** The token a deployment reads its own AI Gateway credits with (`credits-token.ts`): minted by every run. */
+export const CREDITS_TOKEN_SECRET = 'KINU_AI_CREDITS_TOKEN';
+
 /** The token a deployment whose mail is on a subdomain routes each address with (`mail-rules.ts`): one per zone, minted
  *  by the run and kept while the zone is. */
 export const MAIL_ROUTING_SECRET = 'KINU_MAIL_ROUTING_TOKEN';

@@ -1,9 +1,9 @@
 // The one way a run gives its deployment a Cloudflare token of its own (docs/SELF-DEPLOY-FLOW.md § 7): minted from the
 // person's grant, never asked of them, and kept in the run's vault under the secret the upload binds.
-import { Effect } from 'effect';
+import { Cause, Effect } from 'effect';
 import * as v from 'valibot';
 import type { KinuError } from '../obs/index';
-import { cloudflareResult } from './cloudflare';
+import { CloudflareApiError, cloudflareResult } from './cloudflare';
 import type { DeployContext } from './context';
 
 const NamedSchema = v.array(v.object({ id: v.string(), name: v.string() }));
@@ -64,4 +64,11 @@ function minted(context: DeployContext, token: InstanceToken): Effect.Effect<str
 
     return answer.value;
   });
+}
+
+/** A refusal the grant's scope explains: the person did not allow minting this token, and can sign in again to. */
+export function scopeRefused(failed: Cause.Cause<KinuError>): boolean {
+  const cause = Cause.squash(failed);
+
+  return cause instanceof CloudflareApiError && (cause.status === 401 || cause.status === 403);
 }

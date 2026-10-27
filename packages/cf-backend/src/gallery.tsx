@@ -50,7 +50,7 @@ import { WorkspaceBarActions, WorkspaceHeader, type ChatTab } from "@/components
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { BranchRunChip } from "@/components/AlternateTakes";
 import { PreviewTabsGallery, CompactPreviewGallery } from "./gallery-preview-tabs";
-import { galleryCloudflareAccounts, galleryWebSearchChain, galleryWebSearchTest } from "./gallery-web-search";
+import { galleryCloudflareAccounts, galleryGatewayCredits, galleryWebSearchChain, galleryWebSearchTest } from "./gallery-web-search";
 import { ASSISTANT_ROSTER, assistantHomeFrame, focusWorkspaceFrame } from "./gallery-assistant";
 import { galleryUsername } from "./gallery-mail-address";
 import { exploreFrame } from "./gallery-explore";
@@ -678,6 +678,8 @@ async function settingsSectionsFixture(path: string, method: string, body: BodyI
   }
 
   if (path === "/api/user/cloudflare/accounts") return Response.json(galleryCloudflareAccounts());
+
+  if (path === "/api/user/cloudflare/credits") return Response.json(galleryGatewayCredits());
 
   if (path === "/api/user/cloudflare/gateways") {
     await SETTINGS_GATEWAY_HOLD.promise;

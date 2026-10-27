@@ -373,6 +373,34 @@ describe('account panels', () => {
     });
   });
 
+  // Owner, 2026-10-27: search keys made "SUPER NICE AND EASY". Credits are bought on Cloudflare's own page; the line
+  // reads them again until they change, so the person sees the purchase land without reloading.
+  test('web search with no AI credits offers Cloudflare\'s page, and credits bought there show once read again', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'usersettingsstate&section=search&credits=bought', 'light', 'desktop');
+
+      try {
+        await page.waitForSelector('[data-web-search-credits="empty"] [data-web-search-credits-open]');
+        // Cloudflare's page, as the helper window takes it: where it is sent, and nothing loaded.
+        await page.evaluate(() => {
+          const popup = { opener: null, closed: false, location: { set href(at: string) { document.documentElement.dataset.creditsAt = at; } }, close() {} };
+
+          // SAFETY: constructed above with every member `openProviderWindow` uses of a window: `opener` and `location.href`.
+          window.open = () => popup as Window;
+        });
+        await page.click('[data-web-search-credits-open]');
+        await page.waitForSelector('[data-web-search-credits="held"]', { timeout: 15_000 });
+
+        expect({
+          opened: await page.evaluate(() => document.documentElement.dataset.creditsAt),
+          said: await page.$eval('[data-web-search-credits]', (node) => node.textContent ?? ''),
+        }).toEqual({ opened: 'https://dash.cloudflare.com/acct-1/ai/ai-gateway', said: expect.stringContaining('$25.00 left') });
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
   test('the account computer size saves through its picker and survives reload', async () => {
     await withGallery(async (gallery) => {
       const control = '[aria-label="Default computer size"]';

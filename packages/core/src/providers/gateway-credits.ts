@@ -47,3 +47,17 @@ export function creditBalancePath(account: string): string {
 export function gatewayCreditsUrl(account: string): string {
   return `https://dash.cloudflare.com/${account}/ai/ai-gateway`;
 }
+
+/** Who pays for an account's searches through Cloudflare, and what they have left: its own connected account, or the
+ *  deployment's, which only the deployment's operators are shown. */
+export interface GatewayCreditsRead {
+  readonly payer: 'yours' | 'deployment';
+  readonly account: string;
+  readonly credits: GatewayCredits;
+}
+
+export const GatewayCreditsReadSchema: v.GenericSchema<GatewayCreditsRead> = v.object({
+  payer: v.picklist(['yours', 'deployment']),
+  account: v.string(),
+  credits: GatewayCreditsSchema,
+});

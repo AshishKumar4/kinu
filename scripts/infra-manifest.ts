@@ -685,6 +685,15 @@ export const SUPPLY = new Map<string, Supply>([
       + 'named "<worker> · DEVBOX_REGISTRY_TOKEN"; minted again when deleted.',
     permission: 'Workers Containers Write',
   }],
+  ['KINU_AI_CREDITS_TOKEN', {
+    handling: 'account-token',
+    required: false,
+    absent: 'Settings › Web search shows the operators no AI credits for this deployment\'s own account, which pays for '
+      + 'every search through Cloudflare a person\'s own login does not; searches run as before.',
+    source: 'minted by every deploy as an account token holding AI Gateway Read alone, named '
+      + '"<worker> · KINU_AI_CREDITS_TOKEN"; minted again when deleted. A self-deploy mints its own (core/src/deploy/credits-token.ts).',
+    permission: 'AI Gateway Read',
+  }],
   ['JWT_SECRET', {
     handling: 'prompt',
     required: true,

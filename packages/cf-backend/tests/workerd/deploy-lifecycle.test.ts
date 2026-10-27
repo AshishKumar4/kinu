@@ -548,7 +548,7 @@ describe('the deploy page', () => {
       gone: { object: await run.gone(), current: (await page(second, 'GET', '/api/deploy/runs/current')).status },
     }).toEqual({
       paused: { state: 'paused', phase: 'address', need: 'signin-again', code: 10_000 },
-      dropped: { state: 'paused', need: 'signin-again', holds: [], vault: ['CREDENTIAL_ENCRYPTION_KEY', 'JWT_SECRET', 'KINU_FIRST_OWNER_LINK', 'WEBHOOK_ROUTE_SECRET'] },
+      dropped: { state: 'paused', need: 'signin-again', holds: [], vault: ['CREDENTIAL_ENCRYPTION_KEY', 'JWT_SECRET', 'KINU_AI_CREDITS_TOKEN', 'KINU_FIRST_OWNER_LINK', 'WEBHOOK_ROUTE_SECRET'] },
       strangers: { resume: null, current: 404 },
       resume: { runId, account: DEPLOY_FAKE_ACCOUNT, phase: 'address', state: 'paused' },
       continued: 200,
@@ -573,12 +573,13 @@ describe('the deploy page', () => {
 
     expect({
       offered: offered.map((kinu) => [kinu.name, kinu.url, kinu.update.current?.version, kinu.update.available?.version, kinu.update.installable]),
-      installed: { uploads: made.uploads, serving: made.servingRelease, rootKeysBound: made.versionSecrets, live: (await current(cookie)).live?.url },
+      installed: { uploads: made.uploads, serving: made.servingRelease, secretsBound: made.versionSecrets, live: (await current(cookie)).live?.url },
       after: after.map((kinu) => [kinu.name, kinu.update.current?.sha, kinu.update.upToDate, kinu.update.installable]),
     }).toEqual({
       offered: [['kinu', `https://kinu.${DEPLOY_FAKE_SUBDOMAIN}.workers.dev`, DEPLOY_FAKE_OLDER_BUILD.version, DEPLOY_FAKE_CHANNEL_BUILD.version, true]],
-      // The same Worker, one new version, its root keys kept by Cloudflare rather than minted again.
-      installed: { uploads: 1, serving: DEPLOY_FAKE_VERSION, rootKeysBound: [], live: `https://kinu.${DEPLOY_FAKE_SUBDOMAIN}.workers.dev` },
+      // The same Worker, one new version, its root keys kept by Cloudflare rather than minted again; its credits token,
+      // which a build from before it never had, is the one secret bound.
+      installed: { uploads: 1, serving: DEPLOY_FAKE_VERSION, secretsBound: ['KINU_AI_CREDITS_TOKEN'], live: `https://kinu.${DEPLOY_FAKE_SUBDOMAIN}.workers.dev` },
       after: [['kinu', DEPLOY_FAKE_CHANNEL_BUILD.sha, true, false]],
     });
   });

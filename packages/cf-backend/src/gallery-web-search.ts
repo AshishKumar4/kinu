@@ -2,10 +2,11 @@
  * Settings › Web search and its onboarding step in the gallery: `usersettingsstate&section=search` and
  * `welcome&step=3`. `&cloudflare=` names the account's Cloudflare login (`granted`, the default; `stale`, a sign-in from
  * before web search; `off`, none), `&searchtest=refused` has Test refused in Cloudflare's words, `&chain=` starts the
- * account on a chosen chain (`linkup-cloudflare,exa-cloudflare`), and `&keys=` names the keys it holds (gallery.tsx).
+ * account on a chosen chain (`linkup-cloudflare,exa-cloudflare`), `&keys=` names the keys it holds (gallery.tsx), and
+ * `&credits=` its AI credits (`held`, the default; `none`; `bought`, none until Add credits is pressed).
  */
 import * as v from "valibot";
-import { WEB, WebSearchRouteSchema, USER_WEB_SEARCH_TEST_PATH, type WebSearchRoute } from "@kinu.run/core";
+import { WEB, WebSearchRouteSchema, USER_WEB_SEARCH_TEST_PATH, type GatewayCreditsRead, type WebSearchRoute } from "@kinu.run/core";
 import type { CloudflareAccountStatus } from "@/lib/user-api";
 
 const query = new URLSearchParams(location.search);
@@ -22,6 +23,28 @@ export function galleryWebSearchChain(): WebSearchRoute[] | undefined {
 
     return v.parse(WebSearchRouteSchema, { provider, billing });
   });
+}
+
+const GALLERY_CREDITS = v.parse(v.picklist(["held", "none", "bought"]), query.get("credits") ?? "held");
+
+/** Whether the person has pressed Add credits, and so bought them on the page it opened. */
+let bought = false;
+
+if (GALLERY_CREDITS === "bought") {
+  document.addEventListener("click", (event) => {
+    if (event.target instanceof Element && event.target.closest("[data-web-search-credits-open]") !== null) bought = true;
+  }, true);
+}
+
+/** The credits read, as `readGatewayCredits` reads it: the person's own account's, where its login grants web search. */
+export function galleryGatewayCredits(): GatewayCreditsRead | null {
+  if (GALLERY_CLOUDFLARE !== "granted") return null;
+  const none = GALLERY_CREDITS === "none" || (GALLERY_CREDITS === "bought" && !bought);
+
+  return {
+    payer: "yours", account: "acct-1",
+    credits: none ? { balance: 0, card: true, autoTopUp: null } : { balance: 25, card: true, autoTopUp: { threshold: 5, amount: 20 } },
+  };
 }
 
 /** Cloudflare's account read, as `listCloudflareAccounts` reads it. */

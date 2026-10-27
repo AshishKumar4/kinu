@@ -3,18 +3,18 @@
  * The account's chain is its profile catalog's `webSearch`, a key sits beside its other credentials, and the registry
  * (`WEB_SEARCH_PROVIDERS`) names every choice. Each choice saves at once and applies from each agent's next search.
  */
-import { useState, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import { Effect } from "effect";
 import { Loader } from "@/components/ui/Loader";
 import { Button } from "@/components/ui/Button";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react";
 import {
-  DEFAULT_WEB_SEARCH_CHAIN, WEB_SEARCH_PROVIDER_IDS, WEB_SEARCH_PROVIDERS,
-  type CredentialSummary, type ProfileCatalogEnvelope, type WebSearchBilling, type WebSearchProviderId, type WebSearchRoute,
+  DEFAULT_WEB_SEARCH_CHAIN, WEB_SEARCH_PROVIDER_IDS, WEB_SEARCH_PROVIDERS, fmtUsd, gatewayCreditsUrl,
+  type CredentialSummary, type GatewayCreditsRead, type ProfileCatalogEnvelope, type WebSearchBilling, type WebSearchProviderId, type WebSearchRoute,
 } from "@kinu.run/core";
 import { attempt, detach, renderThrownChain } from "@kinu.run/core/obs";
 import {
-  deleteCredential, getProfileCatalog, listCloudflareAccounts, listCredentials, setCredential, testWebSearch, updateProfileCatalog,
+  deleteCredential, getProfileCatalog, listCloudflareAccounts, listCredentials, readGatewayCredits, setCredential, testWebSearch, updateProfileCatalog,
   type CloudflareAccountStatus, type WebSearchAnswer,
 } from "@/lib/user-api";
 import { Choice, Field } from "@/components/ui/form";
@@ -28,6 +28,8 @@ import { TextInput } from "@/components/ui/Field";
 import { Card } from "@/components/ui/Card";
 import { Chip } from "@/components/ui/Chip";
 import { Choices, type Choice as Option } from "@/components/ui/Choices";
+import { lastValue } from "@/hooks/use-async-resource";
+import { openProviderWindow } from "@/lib/connect-window";
 
 /** What a Test searches for: a question an agent of the owner's asks. */
 const TEST_QUERY = "Cloudflare Durable Objects alarms API";
@@ -157,6 +159,7 @@ function SearchChoice({ place, envelope, credentials, saved, onKeySaved, payer }
               onChange={(provider) => detach(lead({ provider, billing: "cloudflare" }))} />
           </Field>
           {place === "settings" && payer}
+          <Credits />
         </div>
       ) : (
         <KeyEntry primary={primary} stored={stored} disabled={saving}
@@ -200,6 +203,56 @@ function Payer({ status, onConnected }: { status: CloudflareAccountStatus; onCon
   }
 
   return null;
+}
+
+/** How often the credits are read again while Cloudflare's page to buy them is open. */
+const CREDITS_RECHECK_MS = 5000;
+
+/**
+ * What searches through Cloudflare are paid from: AI credits on the person's own account, or this Kinu's, shown to its
+ * operators. Cloudflare sells them on its own page, which opens beside this one; the line reads them again every few
+ * seconds until they change, then says so. Nothing where Kinu has neither to read.
+ */
+function Credits() {
+  // The credits the purchase was opened at, as read then: any change is the purchase landing.
+  const [openedAt, setOpenedAt] = useState<string | null>(null);
+  const recheck = useCallback((read: GatewayCreditsRead | null) => (openedAt !== null && JSON.stringify(read) === openedAt ? CREDITS_RECHECK_MS : null), [openedAt]);
+  const credits = useAsyncResource<GatewayCreditsRead | null>(readGatewayCredits, recheck);
+  const read = lastValue(credits.resource);
+
+  if (read === null) return null;
+  const waiting = openedAt !== null && JSON.stringify(read) === openedAt;
+  const changed = openedAt !== null && !waiting;
+  const empty = read.credits.balance <= 0;
+
+  const open = () => {
+    setOpenedAt(JSON.stringify(read));
+    const url = gatewayCreditsUrl(read.account);
+
+    // A refused window goes there in this tab instead; the page reads the credits again when it is loaded back.
+    if (openProviderWindow("kinu-ai-credits", url) === null) window.location.assign(url);
+  };
+
+  return (
+    <div className="space-y-2" data-web-search-credits={empty ? "empty" : "held"}>
+      <Field label="AI credits" hint={creditsHint(read)} inline>
+        <Button size="sm" variant="secondary" onClick={open} data-web-search-credits-open>
+          {empty ? "Add credits" : "Manage"}<ArrowSquareOutIcon size={14} className="p-text-3" />
+        </Button>
+      </Field>
+      {waiting && <span className="inline-flex items-center gap-2 t-meta p-text-2"><Loader size="sm" />Waiting for Cloudflare…</span>}
+      {changed && !empty && <Status tone="success">Your AI credits changed: {fmtUsd(read.credits.balance)} left.</Status>}
+      {empty && !waiting && <Notice tone="warning">Searches through Cloudflare fail until credits are added. A key of your own pays for them instead.</Notice>}
+    </div>
+  );
+}
+
+function creditsHint({ payer, credits }: GatewayCreditsRead): string {
+  const whose = payer === "yours" ? "Your Cloudflare account" : "This Kinu's Cloudflare account";
+  const left = credits.balance <= 0 ? "has none" : `has ${fmtUsd(credits.balance)}`;
+  const topUp = credits.autoTopUp === null ? "" : `, topped up by ${fmtUsd(credits.autoTopUp.amount)} below ${fmtUsd(credits.autoTopUp.threshold)}`;
+
+  return `${whose} ${left}${topUp}. Cloudflare adds 5% to each purchase.`;
 }
 
 /** A provider's key: pasted, stored with the account's credentials, and then its search leads the chain. */

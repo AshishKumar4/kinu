@@ -1326,8 +1326,11 @@ describe('an empty account reaches its first deploy', () => {
       tokens: { list: async () => ({ held: [] }), mint: async () => ({ id: 'minted', value: 'a minted token' }) },
     });
 
-    expect(installed).toEqual(required);
-    expect(steps.map((step) => step.outcome)).toEqual(required.map(() => 'created'));
+    // An optional account token is minted too: minting one asks nobody.
+    const minted = [...SUPPLY.keys()].filter((name) => required.includes(name) || SUPPLY.get(name)?.handling === 'account-token');
+
+    expect(installed).toEqual(minted);
+    expect(steps.map((step) => step.outcome)).toEqual(minted.map(() => 'created'));
   });
 
   test('with the secrets on the Worker wrangler made to hold them, the first deploy has nothing to refuse', async () => {
@@ -1351,6 +1354,13 @@ describe('an empty account reaches its first deploy', () => {
 describe('a token the deploy mints itself', () => {
   const staging = { worker: deriveInfrastructure('staging').worker };
   const NAME = `${staging.worker.workerName} · DEVBOX_REGISTRY_TOKEN`;
+  const CREDITS = `${staging.worker.workerName} · KINU_AI_CREDITS_TOKEN`;
+  const BOTH = ['DEVBOX_REGISTRY_TOKEN', 'KINU_AI_CREDITS_TOKEN'];
+
+  const MINTED_BOTH = {
+    steps: ['DEVBOX_REGISTRY_TOKEN created', 'KINU_AI_CREDITS_TOKEN created'],
+    done: [`mint ${NAME} Workers Containers Write`, 'install DEVBOX_REGISTRY_TOKEN value-1', `mint ${CREDITS} AI Gateway Read`, 'install KINU_AI_CREDITS_TOKEN value-2'],
+  };
 
   /** An account whose tokens are `held` (by name and id, each active), and what the provisioning did to it. */
   function account(held: readonly { readonly id: string; readonly name: string }[], refused = false) {
@@ -1388,26 +1398,21 @@ describe('a token the deploy mints itself', () => {
   };
 
   test('absent, it is minted with its one permission, installed with no one asked, and nothing else is touched', async () => {
-    expect(await step([], [])).toEqual({
-      steps: ['DEVBOX_REGISTRY_TOKEN created'],
-      done: [`mint ${NAME} Workers Containers Write`, 'install DEVBOX_REGISTRY_TOKEN value-1'],
-    });
+    expect(await step([], [])).toEqual(MINTED_BOTH);
   });
 
   test('deleted upstream, it is minted again though the Worker names it; another active one of its name is kept, never revoked', async () => {
+    const held = [{ id: 'old', name: NAME }, { id: 'old-credits', name: CREDITS }];
+
     expect({
-      deleted: await step([], ['DEVBOX_REGISTRY_TOKEN']),
-      held: await step([{ id: 'old', name: NAME }], ['DEVBOX_REGISTRY_TOKEN']),
-      replaced: await step([{ id: 'old', name: NAME }], []),
-    }).toEqual({
-      deleted: { steps: ['DEVBOX_REGISTRY_TOKEN created'], done: [`mint ${NAME} Workers Containers Write`, 'install DEVBOX_REGISTRY_TOKEN value-1'] },
-      held: { steps: [], done: [] },
-      replaced: { steps: ['DEVBOX_REGISTRY_TOKEN created'], done: [`mint ${NAME} Workers Containers Write`, 'install DEVBOX_REGISTRY_TOKEN value-1'] },
-    });
+      deleted: await step([], BOTH),
+      held: await step(held, BOTH),
+      replaced: await step(held, []),
+    }).toEqual({ deleted: MINTED_BOTH, held: { steps: [], done: [] }, replaced: MINTED_BOTH });
   });
 
   test('where the account refuses its token list, it is refused with why, and the gate reports the secret as before', async () => {
-    expect(await step([], [], true)).toEqual({ steps: ['DEVBOX_REGISTRY_TOKEN refused'], done: [] });
+    expect(await step([], [], true)).toEqual({ steps: ['DEVBOX_REGISTRY_TOKEN refused', 'KINU_AI_CREDITS_TOKEN refused'], done: [] });
   });
 
   // The list's answer as f44999 gave it on 2026-10-23: `result_info` with `total_count`, 50 a page at most.

@@ -6,13 +6,13 @@
 // named exactly, and the deployment goes on without mail rather than failing. Paths are those wrangler 4.x calls
 // (`src/email-routing/*`) and the API reference names, read 2026-10-20: routing is enabled through its DNS (`/enable` is
 // deprecated; the apex with no name, as kinu.run's was refused one), and a sending subdomain is named by its `tag`.
-import { Cause, Effect } from 'effect';
+import { Effect } from 'effect';
 import * as v from 'valibot';
 import { KinuError } from '../obs/index';
-import { CloudflareApiError, cloudflareResult, readEnvelope, type CloudflareCall, type CloudflareTransport } from './cloudflare';
+import { cloudflareResult, readEnvelope, type CloudflareCall, type CloudflareTransport } from './cloudflare';
 import type { DeployContext } from './context';
 import { HOSTNAME, MAIL_ROUTING_SECRET, type DeployInputs } from './inputs';
-import { instanceToken } from './instance-token';
+import { instanceToken, scopeRefused } from './instance-token';
 import { scriptBindings, varsOf } from './account';
 import type { DeployStep } from './steps';
 import type { JsonObject } from '../utils/json';
@@ -143,13 +143,6 @@ async function sendingDomain(context: DeployContext, zone: string, domain: strin
 
 /** Cloudflare's name for the permission a subdomain's rules are made with (its permission groups, read 2026-10-21). */
 const EMAIL_ROUTING_RULES_WRITE = 'Email Routing Rules Write';
-
-/** A refusal the token's scope explains: the person did not grant it, and can, or can make the rules themselves. */
-const scopeRefused = (failed: Cause.Cause<KinuError>): boolean => {
-  const cause = Cause.squash(failed);
-
-  return cause instanceof CloudflareApiError && (cause.status === 401 || cause.status === 403);
-};
 
 /** The zone the mail host is in, as the routing step found it, so the mail step asks for it no second time. */
 const FACT_MAIL_ZONE = 'mail.zone';

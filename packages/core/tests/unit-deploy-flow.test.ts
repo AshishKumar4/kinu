@@ -17,6 +17,7 @@ import type {
   DeployStepSeed, HttpGet,
   DeployRunStanding, MultipartUpload, ReleaseManifest, StreamedPut, UpdateBuild,
 } from '../src/deploy/index';
+import { CREDITS_TOKEN_SECRET } from '../src/deploy/inputs';
 import { parseJsonObject, type JsonObject, type JsonValue } from '../src/utils/json';
 import { sha256Hex } from '../src/safety/argument-digest';
 import { settle } from '../src/obs/index';
@@ -77,6 +78,9 @@ const MANIFEST: ReleaseManifest = {
   seed: null,
   computer: null,
 };
+
+/** The token every run mints to read its AI credits (`credits-token.ts`). */
+const CREDITS_TOKEN = 'kinu AI credits (Kinu)';
 
 const INPUTS: DeployInputs = {
   accountId: '0'.repeat(32),
@@ -449,7 +453,8 @@ class FakeCloudflare implements CloudflareTransport {
 
   private uploads = 0;
 
-  refuseOnce: { method?: string; path: string; status: number; code: number; message: string } | null = null;
+  /** Refused once, or every time where `held`, as a grant without the permission is. */
+  refusal: { method?: string; path: string; status: number; code: number; message: string; held?: true } | null = null;
 
   /** A Worker a previous run left serving `version`. */
   serveExisting(version: string): void {
@@ -546,11 +551,11 @@ class FakeCloudflare implements CloudflareTransport {
   private tokenCall(call: CloudflareCall): CloudflareHttpResponse | null {
     const ok = (result: JsonValue): CloudflareHttpResponse => ({ status: 200, body: { success: true, errors: [], result } });
 
-    // By the name asked, as the account's permission groups answer (read 2026-10-21).
+    // By the name asked, as the account's permission groups answer (read 2026-10-21; AI Gateway Read 2026-10-27).
     if (call.path.includes('/tokens/permission_groups')) {
       const asked = decodeURIComponent(/name=([^&]+)/u.exec(call.path)?.[1] ?? '');
 
-      return ok([['group-containers-write', 'Workers Containers Write'], ['group-email-routing-rules-write', 'Email Routing Rules Write']]
+      return ok([['group-containers-write', 'Workers Containers Write'], ['group-email-routing-rules-write', 'Email Routing Rules Write'], ['group-ai-gateway-read', 'AI Gateway Read']]
         .filter(([, name]) => name === asked).map(([id, name]) => ({ id, name })));
     }
 
@@ -583,6 +588,11 @@ class FakeCloudflare implements CloudflareTransport {
     }
 
     return null;
+  }
+
+  /** The body of the mint that made the token `name`. */
+  mintedBody(name: string): JsonObject | undefined {
+    return this.calls.find((call) => call.method === 'POST' && call.path.endsWith('/tokens') && bodyText(call.body ?? {}, 'name') === name)?.body;
   }
 
   /** The computer's account: its tokens, its namespaces, its container applications (`computer.ts`). */
@@ -679,10 +689,11 @@ class FakeCloudflare implements CloudflareTransport {
   }
 
   private refusalFor(method: string, path: string): CloudflareHttpResponse | null {
-    const refusal = this.refuseOnce;
+    const refusal = this.refusal;
 
     if (refusal === null || !path.startsWith(refusal.path) || (refusal.method ?? method) !== method) return null;
-    this.refuseOnce = null;
+
+    if (refusal.held !== true) this.refusal = null;
 
     return {
       status: refusal.status,
@@ -1105,7 +1116,7 @@ describe('a guided run', () => {
     cloudflare.serveExisting(PRIOR_VERSION);
     cloudflare.frontExists = true;
     cloudflare.frontBindings = [{ type: 'service', name: 'MAIN', service: 'blog' }];
-    cloudflare.refuseOnce = { method: 'GET', path: `/accounts/${INPUTS.accountId}/workers/scripts/kinu-front/settings`, status: 503, code: 10_013, message: 'internal error' };
+    cloudflare.refusal = { method: 'GET', path: `/accounts/${INPUTS.accountId}/workers/scripts/kinu-front/settings`, status: 503, code: 10_013, message: 'internal error' };
 
     const rows = await run({ ...INPUTS, address: { kind: 'zone', hostname: 'kinu.example.com', zoneId: EXAMPLE_ZONE } });
 
@@ -1169,7 +1180,7 @@ describe('a guided run', () => {
     expect(plain.find((binding) => binding.name === 'SIGN_IN_PROVIDERS')?.text).toBe('');
     expect(plain.map((binding) => binding.name)).not.toContain('DEV_USER_EMAIL');
     expect(bindings.filter((binding) => binding.type === 'secret_text').map((binding) => binding.name).sort())
-      .toEqual([...MINTED_SECRETS, FIRST_OWNER_LINK_SECRET].sort());
+      .toEqual([...MINTED_SECRETS, FIRST_OWNER_LINK_SECRET, CREDITS_TOKEN_SECRET].sort());
   });
 
   /** The mail vars the run uploaded: EMAIL_DOMAIN, then MAIL_ACCOUNTS. */
@@ -1267,7 +1278,7 @@ describe('a guided run', () => {
       dmarc,
       { method: 'PATCH', path: '/zones/zone-raman/dns_records/record-2', body: { content: 'v=DMARC1; p=none; rua=mailto:dmarc@raman.dev' } },
     ]);
-    expect(cloudflare.calls.filter((call) => call.path.includes('/tokens'))).toEqual([]);
+    expect([...cloudflare.tokens.keys()]).toEqual([CREDITS_TOKEN]);
   });
 
   /** What the run uploaded under `name`: a plain var's text, or a secret's. */
@@ -1281,7 +1292,7 @@ describe('a guided run', () => {
     expect(rows.every((row) => row.state === 'done')).toBe(true);
     expect(cloudflare.calls.filter((call) => call.path.endsWith('/email/routing/dns')).map((call) => call.body)).toEqual([{ name: 'mail.raman.dev' }]);
     expect(cloudflare.routing.catchAll.size).toBe(0);
-    expect(cloudflare.calls.find((call) => call.method === 'POST' && call.path.endsWith('/tokens'))?.body).toEqual({
+    expect(cloudflare.mintedBody('kinu mail raman.dev (Kinu)')).toEqual({
       name: 'kinu mail raman.dev (Kinu)',
       policies: [{ effect: 'allow', resources: { 'com.cloudflare.api.account.zone.zone-raman': '*' }, permission_groups: [{ id: 'group-email-routing-rules-write' }] }],
     });
@@ -1319,7 +1330,7 @@ describe('a guided run', () => {
 
   test('a routing token Cloudflare will not mint is asked of the owner by name, and the deployment goes on', async () => {
     cloudflare.zones.set('raman.dev', 'zone-raman');
-    cloudflare.refuseOnce = { method: 'GET', path: `/accounts/${INPUTS.accountId}/tokens`, status: 403, code: 9109, message: 'Unauthorized to access requested resource' };
+    cloudflare.refusal = { method: 'GET', path: `/accounts/${INPUTS.accountId}/tokens`, status: 403, code: 9109, message: 'Unauthorized to access requested resource', held: true };
     const rows = await run({ ...INPUTS, mailDomain: 'mail.raman.dev' });
     const asked = progress.flatMap((event) => (event.kind === 'step-note' && event.id === 'mail-routing' ? [event.note] : []));
 
@@ -1364,7 +1375,7 @@ describe('a guided run', () => {
 
     expect(rows.every((row) => row.state === 'done')).toBe(true);
     expect(rows.find((row) => row.id === 'mail-routing-retired')?.detail).toBe('1 rule(s) for another domain retired, and the token for raman.dev.');
-    expect([...cloudflare.tokens.keys()]).toEqual(['kinu mail northwind.dev (Kinu)']);
+    expect([...cloudflare.tokens.keys()].sort()).toEqual([CREDITS_TOKEN, 'kinu mail northwind.dev (Kinu)']);
     expect([...cloudflare.rules.keys()]).toEqual(['rule-2']);
     expect(uploaded('KINU_MAIL_ZONE')).toBe('zone-northwind');
   });
@@ -1376,7 +1387,7 @@ describe('a guided run', () => {
 
     expect(rows.find((row) => row.id === 'smoke')?.state).toBe('failed');
     expect(cloudflare.calls.filter((call) => call.method === 'DELETE' || (call.method === 'PUT' && call.path.includes('/tokens/')))).toEqual([]);
-    expect([...cloudflare.tokens.keys()]).toEqual(['kinu mail raman.dev (Kinu)', 'kinu mail northwind.dev (Kinu)']);
+    expect([...cloudflare.tokens.keys()].sort()).toEqual([CREDITS_TOKEN, 'kinu mail northwind.dev (Kinu)', 'kinu mail raman.dev (Kinu)']);
     expect([...cloudflare.rules.keys()]).toEqual(['rule-1', 'rule-2']);
   });
 
@@ -1385,7 +1396,7 @@ describe('a guided run', () => {
     const rows = await run({ ...INPUTS, mailDomain: '' });
 
     expect(rows.find((row) => row.id === 'mail-routing-retired')?.detail).toBe('1 rule(s) for another domain retired, and the token for raman.dev.');
-    expect([...cloudflare.tokens.keys()]).toEqual([]);
+    expect([...cloudflare.tokens.keys()]).toEqual([CREDITS_TOKEN]);
     expect([...cloudflare.rules.keys()]).toEqual(['rule-2']);
   });
 
@@ -1528,8 +1539,8 @@ describe('the computer', () => {
       [`/accounts/${INPUTS.accountId}/r2/buckets/kinu-backups/objects/devbox-tools/${SHA}.tgz.0`, 5],
       [`/accounts/${INPUTS.accountId}/r2/buckets/kinu-backups/objects/devbox-tools/${SHA}.tgz.1`, 3],
     ]);
-    expect([...cloudflare.tokens]).toEqual([['kinu computer (Kinu)', ['minted-token']]]);
-    expect(cloudflare.calls.find((call) => call.method === 'POST' && call.path.endsWith('/tokens'))?.body).toEqual({
+    expect(Object.fromEntries(cloudflare.tokens)).toEqual({ 'kinu computer (Kinu)': ['minted-token'], [CREDITS_TOKEN]: ['minted-token'] });
+    expect(cloudflare.mintedBody('kinu computer (Kinu)')).toEqual({
       name: 'kinu computer (Kinu)',
       policies: [{ effect: 'allow', resources: { [`com.cloudflare.api.account.${INPUTS.accountId}`]: '*' }, permission_groups: [{ id: 'group-containers-write' }] }],
     });
@@ -1552,7 +1563,7 @@ describe('the computer', () => {
     expect(rows.every((row) => row.state === 'done')).toBe(true);
     expect(toolPuts()).toHaveLength(2);
     expect(applicationPosts()).toHaveLength(1);
-    expect([...cloudflare.tokens]).toEqual([['kinu computer (Kinu)', ['minted-token', 'rolled-1']]]);
+    expect(Object.fromEntries(cloudflare.tokens)).toEqual({ 'kinu computer (Kinu)': ['minted-token', 'rolled-1'], [CREDITS_TOKEN]: ['minted-token', 'rolled-1'] });
   });
 
   test('a deployment without it runs none of its steps and binds no container', async () => {
@@ -1561,7 +1572,8 @@ describe('the computer', () => {
 
     expect(rows.every((row) => row.state === 'done')).toBe(true);
     // The account step's one read of the plan (`workersPlan`) aside, which every run makes.
-    expect(cloudflare.calls.filter((call) => /\/tokens|\/containers\/|devbox-tools/u.test(call.path) && !(call.method === 'GET' && call.path.endsWith('/containers/applications')))).toEqual([]);
+    expect(cloudflare.calls.filter((call) => /\/containers\/|devbox-tools/u.test(call.path) && !(call.method === 'GET' && call.path.endsWith('/containers/applications')))).toEqual([]);
+    expect([...cloudflare.tokens.keys()]).toEqual([CREDITS_TOKEN]);
     expect(upload?.body?.containers).toBeUndefined();
   });
 });
@@ -1590,7 +1602,7 @@ describe('a second sitting on the same account', () => {
 describe('a refusal', () => {
   // The owner's free account, 2026-10-21: 10089 at the upload, and no API turns Analytics Engine on. Owner decision: skip it.
   test('a version refused for Analytics Engine off is uploaded once more without its datasets, and the run says so', async () => {
-    cloudflare.refuseOnce = {
+    cloudflare.refusal = {
       path: `/accounts/${INPUTS.accountId}/workers/scripts/kinu`, method: 'PUT', status: 403, code: 10_089,
       message: 'You need to enable Analytics Engine. Head to the Cloudflare Dashboard to enable: https://dash.cloudflare.com/x/workers/analytics-engine',
     };
@@ -1617,7 +1629,7 @@ describe('a refusal', () => {
   });
 
   test('stops the run at the step that refused and keeps Cloudflare\'s words', async () => {
-    cloudflare.refuseOnce = {
+    cloudflare.refusal = {
       path: `/accounts/${INPUTS.accountId}/r2/buckets`,
       status: 403,
       code: 10042,
@@ -1640,7 +1652,7 @@ describe('a refusal', () => {
   });
 
   test('is retried by running the plan again: that step, not the ones before it', async () => {
-    cloudflare.refuseOnce = {
+    cloudflare.refusal = {
       path: `/accounts/${INPUTS.accountId}/vectorize/v2/indexes`,
       status: 409,
       code: 10014,
@@ -1685,7 +1697,7 @@ describe('a refusal', () => {
 
 describe('an eviction in the middle of a step', () => {
   test('resumes from the ledger and finishes', async () => {
-    cloudflare.refuseOnce = {
+    cloudflare.refusal = {
       path: `/accounts/${INPUTS.accountId}/ai-gateway/gateways`,
       status: 500,
       code: 10000,
@@ -1703,7 +1715,7 @@ describe('an eviction in the middle of a step', () => {
   });
 
   test('facts an earlier activation established survive into the next one', async () => {
-    cloudflare.refuseOnce = {
+    cloudflare.refusal = {
       path: `/accounts/${INPUTS.accountId}/workers/scripts/kinu/subdomain`,
       status: 500,
       code: 10000,
@@ -1905,7 +1917,7 @@ describe('the workerd configuration for a local instance', () => {
 
 describe('what the address and smoke steps check', () => {
   test('a refused deployment pointer fails the address step', async () => {
-    cloudflare.refuseOnce = {
+    cloudflare.refusal = {
       method: 'POST',
       path: `/accounts/${INPUTS.accountId}/workers/scripts/kinu/deployments`,
       status: 403,
@@ -2032,7 +2044,7 @@ describe('a change that asks for a new setup link', () => {
       .filter((binding) => binding.type === 'secret_text').map((binding) => binding.name);
 
     expect({ done: rows.every((row) => row.state === 'done'), seats: seats.map((seat) => new URL(seat.link).pathname), secrets })
-      .toEqual({ done: true, seats: ['/login'], secrets: [FIRST_OWNER_LINK_SECRET] });
+      .toEqual({ done: true, seats: ['/login'], secrets: [FIRST_OWNER_LINK_SECRET, CREDITS_TOKEN_SECRET] });
   });
 });
 
@@ -2070,7 +2082,7 @@ describe('the page\'s view of a run', () => {
   });
 
   test('R2 not turned on pauses in storage with Cloudflare\'s words and the dashboard page that turns it on', async () => {
-    cloudflare.refuseOnce = R2_OFF;
+    cloudflare.refusal = R2_OFF;
     const view = viewOf(await run());
 
     expect({ state: view.state, phase: view.phase, storage: view.phases[1]?.state, paused: view.paused }).toEqual({
@@ -2086,7 +2098,7 @@ describe('the page\'s view of a run', () => {
   });
 
   test('a refusal the catalog does not name stops the run with its words and "Retry this step"', async () => {
-    cloudflare.refuseOnce = { path: `/accounts/${ACCOUNT}/vectorize/v2/indexes`, status: 400, code: 40_026, message: 'vectorize.index.invalid_config' };
+    cloudflare.refusal = { path: `/accounts/${ACCOUNT}/vectorize/v2/indexes`, status: 400, code: 40_026, message: 'vectorize.index.invalid_config' };
     const view = viewOf(await run());
 
     expect({ state: view.state, vectorize: view.phases[1]?.state, refused: view.refused }).toEqual({
@@ -2099,7 +2111,7 @@ describe('the page\'s view of a run', () => {
   });
 
   test('a run that let go of its grant asks to sign in again, whatever it stopped on', async () => {
-    cloudflare.refuseOnce = R2_OFF;
+    cloudflare.refusal = R2_OFF;
     const view = viewOf(await run(), { state: 'expired', signedOut: true });
 
     expect({ state: view.state, need: view.paused?.id, action: view.paused?.action }).toEqual({ state: 'paused', need: 'signin-again', action: { label: 'Sign in again' } });
@@ -2164,7 +2176,7 @@ describe('what the page reads of an account', () => {
     // A name is free with its front's (core deploy/front.ts).
     cloudflare.otherScripts.push('kinu-2-front');
     cloudflare.zones.set('example.com', 'zone-example');
-    cloudflare.refuseOnce = R2_OFF;
+    cloudflare.refusal = R2_OFF;
 
     expect(await settle(preflight(cloudflare, ACCOUNT, 0))).toEqual({
       workersSubdomain: null, suggestedName: 'kinu-3', r2: 'off', plan: 'paid',
@@ -2214,7 +2226,7 @@ describe('what the page reads of an account', () => {
   });
 
   test('a sign-in Cloudflare refuses is one need, however many reads met it', async () => {
-    cloudflare.refuseOnce = { path: `/accounts/${ACCOUNT}/workers/subdomain`, status: 401, code: 10_000, message: 'Authentication error' };
+    cloudflare.refusal = { path: `/accounts/${ACCOUNT}/workers/subdomain`, status: 401, code: 10_000, message: 'Authentication error' };
 
     expect((await settle(preflight(cloudflare, ACCOUNT, 0))).needs.map((need) => need.id)).toEqual(['signin-again']);
   });
@@ -2226,14 +2238,14 @@ describe('what the page reads of an account', () => {
   });
 
   test('a name is suggested only when the account\'s Workers could be listed', async () => {
-    cloudflare.refuseOnce = { path: `/accounts/${ACCOUNT}/workers/scripts`, status: 403, code: 9109, message: 'Unauthorized to access requested resource' };
+    cloudflare.refusal = { path: `/accounts/${ACCOUNT}/workers/scripts`, status: 403, code: 9109, message: 'Unauthorized to access requested resource' };
 
     expect(await settle(preflight(cloudflare, ACCOUNT, 0))).toMatchObject({ suggestedName: '', needs: [expect.objectContaining({ id: 'signin-again' })] });
   });
 
   test('a mail preview Cloudflare refuses a read of fails in its words, never as records that are not there', async () => {
     cloudflare.zones.set('raman.dev', 'zone-raman');
-    cloudflare.refuseOnce = { path: '/zones/zone-raman/email/routing/dns', status: 403, code: 10_000, message: 'Authentication error' };
+    cloudflare.refusal = { path: '/zones/zone-raman/email/routing/dns', status: 403, code: 10_000, message: 'Authentication error' };
 
     await expect(settle(mailHostPreview(cloudflare, ACCOUNT, 'raman.dev'))).rejects.toThrow('Authentication error');
   });

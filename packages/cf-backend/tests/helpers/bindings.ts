@@ -404,6 +404,7 @@ export function userAccount<Built extends Partial<UserRoutesAuthority>>(
     selectCloudflareAccount: refuse('selectCloudflareAccount'),
     listAIGateways: refuse('listAIGateways'),
     selectAIGateway: refuse('selectAIGateway'),
+    readGatewayCredits: refuse('readGatewayCredits'),
     ...built,
   };
 }

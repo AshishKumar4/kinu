@@ -2,7 +2,7 @@
 import { Cause, Effect } from 'effect';
 import {
   AccountMemoryProposalSchema, DeviceDesktopSchema, DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, DEVICE_TIERS, DEVICE_UPDATE_STATES,
-  AccountNoteSchema, AccountUsageSchema, FactRevisionSchema, FactSchema, ProfileCatalogEnvelopeSchema,
+  AccountNoteSchema, AccountUsageSchema, FactRevisionSchema, FactSchema, GatewayCreditsReadSchema, ProfileCatalogEnvelopeSchema,
   type Credential,
   type DeviceTier,
   type JsonValue,
@@ -425,6 +425,9 @@ const CloudflareAccountStatusSchema = v.object({
 
 export const listCloudflareAccounts = () =>
   settle(api(CloudflareAccountStatusSchema, 'GET', '/cloudflare/accounts'));
+
+/** What searches through Cloudflare are paid from; null where Kinu has no account of the person's to read. */
+export const readGatewayCredits = () => settle(api(v.nullable(GatewayCreditsReadSchema), 'GET', '/cloudflare/credits'));
 
 const putCloudflareSelection = (path: string, id: string | null) =>
   api(OkSchema, 'PUT', path, { id });

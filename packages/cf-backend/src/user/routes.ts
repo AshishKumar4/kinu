@@ -17,7 +17,7 @@ import type { CloudWorkspaceRegistry } from './workspace-create';
 import type { ObjectNamespace } from '@kinu.run/core';
 import { displayNameProblem, err, json, safeJson, safeJsonParse } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
-import { isControlPlaneOperator, type AdminGateEnv } from '../control-plane/admin-caller';
+import { isControlPlaneOperator, isListedOperator, type AdminGateEnv } from '../control-plane/admin-caller';
 import { completeGoogleConnect, GOOGLE_CONNECT_STATE_PREFIX, googleConnectable, startGoogleConnect, type GoogleConnectEnv } from './google-connect';
 import { controlPlaneStub, hasControlPlane } from '../control-plane/stub';
 import type { IndexFeedSink } from '../control-plane/index-feed';
@@ -44,7 +44,7 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   | 'getCodexStatus' | 'disconnectCodex' | 'startClaudeSignIn' | 'finishClaudeSignIn'
   | 'chatgptPlan' | 'startChatGptSignIn' | 'cancelChatGptSignIn' | 'startChatGptPasteSignIn' | 'finishChatGptPasteSignIn' | 'signOutChatGpt'
   | 'getConfig' | 'setConfig' | 'claimConfig'
-  | 'listCloudflareAccounts' | 'selectCloudflareAccount' | 'listAIGateways' | 'selectAIGateway'
+  | 'listCloudflareAccounts' | 'selectCloudflareAccount' | 'listAIGateways' | 'selectAIGateway' | 'readGatewayCredits'
   | 'userMcp_list' | 'userMcp_presets' | 'userMcp_add' | 'userMcp_remove' | 'userMcp_connectedPresets'
   | 'userMcp_handleOAuthCallback'
   | 'userMcp_beginConnect' | 'userMcp_reconnect' | 'evalAbortActivation'
@@ -492,6 +492,11 @@ userRoutes.get('/api/user/providers/catalog', async (c) => json({
 }));
 
 userRoutes.get('/api/user/cloudflare/accounts', async (c) => json({ body: await c.get('stub').listCloudflareAccounts(c.get('owner')) }));
+
+// What searches through Cloudflare are paid from: the deployment's own credits are its operators' to see.
+userRoutes.get('/api/user/cloudflare/credits', async (c) => json({
+  body: await c.get('stub').readGatewayCredits(c.get('owner'), isListedOperator(c.env, c.get('identity').email)),
+}));
 
 userRoutes.put('/api/user/cloudflare/account', (c) => {
   return settle(Effect.gen(function* () {
