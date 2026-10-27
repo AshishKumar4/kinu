@@ -12,8 +12,8 @@ import type { HttpGet } from './context';
 import type { DeployChoice } from './door';
 import {
   DEFAULT_INSTANCE_NAME, DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET, DeployInputsSchema, FIRST_OWNER_LINK_SECRET,
-  CREDITS_TOKEN_SECRET, GITHUB_APP_SECRETS, INSTANCE_NAME, MAIL_ROUTING_SECRET, MINTED_SECRETS,
-  type DeployAddress, type DeployInputs,
+  CONNECTOR_SECRETS, CREDITS_TOKEN_SECRET, INSTANCE_NAME, MAIL_ROUTING_SECRET, MINTED_SECRETS,
+  type Connector, type DeployAddress, type DeployInputs,
 } from './inputs';
 import type { DeployPhaseId, DeployRunViewState } from './phases';
 import { CloudflareWordsSchema, DeployNeedSchema, causeWords, heard, judgeRefusal, type CloudflareWords, type DeployNeed } from './refusals';
@@ -75,8 +75,8 @@ export interface DeployedKinu {
   readonly name: string;
   readonly url: string;
   readonly update: UpdateOffer;
-  /** Whether its GitHub plugin has a client of its own (`github-app.ts`). */
-  readonly github: boolean;
+  /** Whether it holds an app of its own for each connector (`connectors.ts`). */
+  readonly connectors: Readonly<Record<Connector, boolean>>;
 }
 
 const ZoneStatusSchema = v.picklist(['active', 'pending']);
@@ -117,7 +117,9 @@ export const DeploySessionSchema: v.GenericSchema<DeploySession> = v.object({
     phase: v.picklist(['prepare', 'storage', 'upload', 'address', 'mail', 'check', 'live']),
     state: v.picklist(['running', 'paused', 'refused', 'live']),
   })),
-  deployments: v.array(v.object({ account: v.string(), name: v.string(), url: v.string(), update: UpdateOfferSchema, github: v.boolean() })),
+  deployments: v.array(v.object({
+    account: v.string(), name: v.string(), url: v.string(), update: UpdateOfferSchema, connectors: v.object({ github: v.boolean(), google: v.boolean() }),
+  })),
   unreadable: v.array(v.object({ account: v.string(), words: CloudflareWordsSchema })),
 });
 
@@ -397,8 +399,10 @@ export function deployedKinus(
     const made = names.flatMap((name, at) => {
       const bindings = settings[at] ?? [];
 
+      const holds = (connector: Connector) => bindings.some((binding) => binding.name === CONNECTOR_SECRETS[connector].id);
+
       return madeByARun(bindings)
-        ? [{ name, url: varsOf(bindings).get('CLI_PUBLIC_ORIGIN') ?? '', github: bindings.some((binding) => binding.name === GITHUB_APP_SECRETS.id) }]
+        ? [{ name, url: varsOf(bindings).get('CLI_PUBLIC_ORIGIN') ?? '', connectors: { github: holds('github'), google: holds('google') } }]
         : [];
     });
 
@@ -407,7 +411,7 @@ export function deployedKinus(
       name: kinu.name,
       url: kinu.url,
       update: updateOffer({ current, available: channel.available, channelOrigin: channel.origin, owned: true }),
-      github: kinu.github,
+      connectors: kinu.connectors,
     })), { concurrency: 4 });
   });
 }
@@ -423,8 +427,12 @@ function servedBuild(http: HttpGet, url: string): Effect.Effect<UpdateBuild | nu
   return Effect.map(heard(read), (answered) => ('answer' in answered ? answered.answer : null));
 }
 
-/** Names a run binds for itself; any other secret on the Worker is a provider key its owner gave. */
-const RUN_SECRETS: readonly string[] = [...MINTED_SECRETS, FIRST_OWNER_LINK_SECRET, DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET, MAIL_ROUTING_SECRET, CREDITS_TOKEN_SECRET];
+/** Names the deploy flow binds itself, a run or the page's connectors; any other secret on the Worker is a provider key
+ *  its owner gave. */
+const RUN_SECRETS: readonly string[] = [
+  ...MINTED_SECRETS, FIRST_OWNER_LINK_SECRET, DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET, MAIL_ROUTING_SECRET, CREDITS_TOKEN_SECRET,
+  ...Object.values(CONNECTOR_SECRETS).flatMap(({ id, secret }) => [id, secret]),
+];
 
 /**
  * A deployment's answers, read back from the account rather than from its record (a secret, which Cloudflare never

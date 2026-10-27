@@ -2773,7 +2773,7 @@ export {
   readAllOutcome,
 } from './utils/spawned-output';
 
-export { MCP_PRESETS, mcpPresetById, type McpPreset, type McpPresetId } from './mcp/presets';
+export { MCP_OAUTH_CALLBACK_PATH, MCP_PRESETS, mcpPresetById, type McpPreset, type McpPresetId } from './mcp/presets';
 
 export {
   mcpCredentialFetch, mcpListingRefusals, type McpFailureKind, type McpFetch, type McpRefusal, type McpToolListing,

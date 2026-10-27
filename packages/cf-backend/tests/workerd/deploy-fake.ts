@@ -662,9 +662,10 @@ async function api(url: URL, request: Request): Promise<Response> {
     return refusal(401, 10_000, 'Authentication error');
   }
 
-  const body = request.method === 'GET' || request.body === null
-    ? {}
-    : v.parse(v.record(v.string(), v.unknown()), await request.json());
+  // Read only as declared: a DELETE carries no body, which reaches here as an empty stream.
+  const body = (request.headers.get('content-type') ?? '').includes('application/json')
+    ? v.parse(v.record(v.string(), v.unknown()), await request.json())
+    : {};
 
   const named = (key: string): string => v.parse(v.string(), body[key] ?? '');
 
@@ -889,6 +890,15 @@ function workerScriptApi(
     held.secrets.set(named('name'), named('text'));
 
     return envelope({ name: named('name') });
+  }
+
+  // A secret deleted by name (`DELETE …/secrets/{name}`), as a connector taken away does.
+  const deleted = /\/secrets\/([^/]+)$/u.exec(path)?.[1];
+
+  if (deleted !== undefined && request.method === 'DELETE') {
+    held.secrets.delete(decodeURIComponent(deleted));
+
+    return envelope(null);
   }
 
   if (path.endsWith('/workers/scripts')) return envelope(held.scriptExists ? [{ id: 'kinu' }] : []);

@@ -16,10 +16,10 @@ import { Hono, type Context, type Next } from 'hono';
 import { ownRequest } from '../nimbus-route';
 import {
   CLOUDFLARE_DEPLOY_SCOPES, DEPLOY_API, DEPLOY_CALLBACK_PATH, DEPLOY_GITHUB_PATH, DEPLOY_PAGE_PATH, DEPLOY_RUN_ID, DEPLOY_SESSION_STATE,
-  DEPLOY_SOCKET_PROTOCOL, DeployDomainsSchema, DeployInputsSchema, GITHUB_APP_NEW, INSTANCE_NAME, DeployPreflightSchema, DeployRunRequestSchema, DeployRunViewSchema,
+  DEPLOY_SOCKET_PROTOCOL, DeployDomainsSchema, DeployInputsSchema, GITHUB_APP_NEW, GoogleClientSchema, INSTANCE_NAME, DeployPreflightSchema, DeployRunRequestSchema, DeployRunViewSchema,
   DeploySessionSchema, MailPreviewSchema, RELEASE_MANIFEST_PATH, SIGN_IN_AGAIN_NEED,
-  accountChoices, authorizeUrl, bearerTransport, bindGithubApp, buildOf, causeWords, convertedGithubApp, deployedKinus, domainsMatching,
-  fetchReleaseManifest, githubAppManifest, heard, judgeRefusal, kinuOrigin, mailHostPreview, mintDeployRun, parseReleaseManifest, plannedRun, preflight, promptedSecrets, runKeyDigest,
+  accountChoices, authorizeUrl, bearerTransport, buildOf, causeWords, convertedGithubApp, deployedKinus, domainsMatching,
+  fetchReleaseManifest, githubAppManifest, heard, judgeRefusal, kinuOrigin, mailHostPreview, setConnector, mintDeployRun, parseReleaseManifest, plannedRun, preflight, promptedSecrets, runKeyDigest,
   type CloudflareTransport, type CloudflareUser, type CloudflareWords, type DeployChoice, type DeployOptions, type DeployRunView,
   type DeploySession,
   type UpdateBuild,
@@ -29,7 +29,7 @@ import {
 } from '@kinu.run/core';
 import * as v from 'valibot';
 import { Cause, Effect } from 'effect';
-import { attemptInItsWords, diagnostics, KinuError, renderThrownChain } from '@kinu.run/core/obs';
+import { attemptInItsWords, diagnostics, KinuError, renderThrownChain, tolerateAsync } from '@kinu.run/core/obs';
 import { DEPLOY_SESSION_COOKIE_NAME, DEPLOY_STATE_COOKIE_NAME, readCookie, setCookie } from '../auth/cookies';
 import { beneath, noHead, type FamilyEnv } from '../api/context';
 import type { DeployRunDO } from './deploy-do';
@@ -121,7 +121,9 @@ async function fromThePage(c: Context<FamilyEnv<Env, DeployVariables>>, next: Ne
   return undefined;
 }
 
-for (const path of ['signin', 'session', 'preflight', 'domains', 'mail', 'github', 'runs', 'runs/current', 'runs/current/*']) deployRoutes.use(`${DEPLOY_API}/${path}`, fromThePage);
+for (const path of ['signin', 'session', 'preflight', 'domains', 'mail', 'github', 'google', 'runs', 'runs/current', 'runs/current/*']) {
+  deployRoutes.use(`${DEPLOY_API}/${path}`, fromThePage);
+}
 
 // The page's door: its sign-in, the reads it shows, and the run it follows.
 deployRoutes.post(`${DEPLOY_API}/signin`, async (c) => signIn(c.req.raw, c.env));
@@ -146,6 +148,8 @@ deployRoutes.get(`${DEPLOY_API}/mail`, noHead<FamilyEnv<Env, DeployVariables>>((
 ))));
 
 deployRoutes.post(`${DEPLOY_API}/github`, noHead<FamilyEnv<Env, DeployVariables>>((c) => githubManifest(c.req.raw, c.env)));
+
+deployRoutes.post(`${DEPLOY_API}/google`, noHead<FamilyEnv<Env, DeployVariables>>((c) => googleClient(c.req.raw, c.env)));
 
 // A JSON body is the page's run; the CLI's mint carries none and is answered a run key, as before.
 deployRoutes.post(`${DEPLOY_API}/runs`, noHead<FamilyEnv<Env, DeployVariables>>((c) => (
@@ -391,7 +395,11 @@ function toPage(params: Readonly<Record<string, string>>): Response {
   });
 }
 
-const GithubAskSchema = v.object({ account: CloudflareIdSchema, name: v.pipe(v.string(), v.regex(INSTANCE_NAME)) });
+const KinuSchema = { account: CloudflareIdSchema, name: v.pipe(v.string(), v.regex(INSTANCE_NAME)) };
+
+const GithubAskSchema = v.object(KinuSchema);
+
+const GoogleAskSchema = v.object({ ...KinuSchema, client: v.nullable(GoogleClientSchema) });
 
 /**
  * The manifest of the GitHub App for a Kinu of this sign-in's account, and GitHub's form the page posts it to. Its
@@ -435,7 +443,7 @@ function githubMade(request: Request, env: Env, url: URL): Effect.Effect<Respons
     if (held === null) return toPage({ github_error: 'The sign-in with Cloudflare ended. Sign in again, then add GitHub once more.' });
     const app = yield* convertedGithubApp(code);
 
-    yield* bindGithubApp(bearerTransport(held.token), account, name, app);
+    yield* setConnector(bearerTransport(held.token), { account, name }, 'github', app);
     diagnostics.event('deploy.github_app_bound', { account, name, slug: app.slug });
 
     return toPage({ github: app.slug, kinu: name });
@@ -443,6 +451,19 @@ function githubMade(request: Request, env: Env, url: URL): Effect.Effect<Respons
     Effect.catchCause((failed) => Effect.succeed(toPage({ github_error: causeWords(failed).message }))),
     Effect.map(burnt),
   );
+}
+
+/** The Kinu's own Google client, made by the steps the page shows, or with none back to Composio, which needs nothing
+ *  here. A client that does not read as Google's is refused in the words the page shows beside its field. */
+function googleClient(request: Request, env: Env): Effect.Effect<Response, KinuError> {
+  return Effect.gen(function* () {
+    const asked = v.safeParse(GoogleAskSchema, yield* Effect.promise(async () => tolerateAsync(async () => request.json(), 'malformed-input')));
+
+    if (!asked.success) return err(400, asked.issues[0]?.message ?? 'That is not a Google client this page can set.');
+    const { account, name, client } = asked.output;
+
+    return yield* pageRead(request, env, (transport) => Effect.as(setConnector(transport, { account, name }, 'google', client), { google: client !== null }));
+  });
 }
 
 /** Cloudflare's refusal of a read in its own words (its path, code and message), never a bare route error. */

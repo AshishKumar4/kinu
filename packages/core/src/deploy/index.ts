@@ -44,7 +44,8 @@ export {
 
 export {
   ACCESS_TOKEN_KEY, COMPUTER_SECRETS, MAIL_ROUTING_SECRET, DEFAULT_INSTANCE_NAME, DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET,
-  DEPLOY_CLIENT_ID_KEY, DeployInputsSchema, DeploymentRecordSchema, FIRST_OWNER_LINK_MS, FIRST_OWNER_LINK_SECRET, INSTANCE_NAME, MINTED_SECRETS,
+  CONNECTOR_SECRETS, DEPLOY_CLIENT_ID_KEY, DeployInputsSchema, DeploymentRecordSchema, FIRST_OWNER_LINK_MS, FIRST_OWNER_LINK_SECRET, INSTANCE_NAME,
+  MINTED_SECRETS, type Connector,
   REFRESH_TOKEN_KEY, promptedSecrets,
   type DeployAddress, type DeployAddressKind, type DeployInputs, type DeploymentRecord,
 } from './inputs';
@@ -62,7 +63,10 @@ export { MailPreviewSchema, mailHostPreview, type MailPreview, type MailPurpose,
 
 export { mailRoutesOf, type MailRoutes, type MailRoutingEnv } from './mail-rules';
 
-export { GITHUB_APP_NEW, bindGithubApp, convertedGithubApp, githubAppManifest, kinuOrigin, type GithubApp } from './github-app';
+export {
+  GITHUB_APP_NEW, GOOGLE_SETUP, GoogleClientSchema, convertedGithubApp, githubAppManifest, googleRedirect, kinuOrigin, setConnector,
+  type GithubApp, type OAuthClient,
+} from './connectors';
 
 export {
   DeployDomainsSchema, DeployPreflightSchema, DeployRunPlanSchema, DeployRunRequestSchema, DeploySessionSchema, accountChoices, cloudflareUser, deployedKinus,

@@ -54,9 +54,10 @@ Measured on production (PersistentKite, 2026-10-20 15:43Z) and read from the cod
 
 The owner's email is their Cloudflare email; provider keys for other models are set later in the Kinu's Settings, so
 neither is asked here. Coming back to a Kinu that exists offers "Add a domain", "Add mail", "New setup link" and its
-update; each is a run of the same plan over it (§ 7). "Add GitHub" is not a run: the page posts the Kinu's app
+update; each is a run of the same plan over it (§ 7). Its Connectors are not runs. Connect GitHub posts the Kinu's app
 manifest to GitHub, GitHub makes the app on one click, and its return binds the app's OAuth client to the Worker as the
-GitHub plugin's (`core/src/deploy/github-app.ts`).
+GitHub plugin's. Google works through Composio with nothing set here; "Use your own app" walks through Google's console
+and binds the pasted client. Both write Worker secrets (`core/src/deploy/connectors.ts`).
 
 ## 4. The account checklist (step 2)
 

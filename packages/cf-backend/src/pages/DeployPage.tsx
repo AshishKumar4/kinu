@@ -13,7 +13,8 @@ import { Loader } from "@/components/ui/Loader";
 import { beginConnect } from "@/lib/connect-window";
 import { CloudflareSaid, DeployShell, type RefusalActions } from "@/components/deploy/DeployParts";
 import { DeployStart, type DeclinedSignIn } from "@/components/deploy/DeployStart";
-import { DeployManage, type GithubReturn, type KinuChange } from "@/components/deploy/DeployManage";
+import { DeployManage, type KinuChange } from "@/components/deploy/DeployManage";
+import type { GithubReturn } from "@/components/deploy/DeployConnectors";
 import { DeployReady, type ReadyFor } from "@/components/deploy/DeployReady";
 import { DeployLive, DeployRunning, type RunAsked } from "@/components/deploy/DeployRun";
 import {
@@ -304,6 +305,14 @@ export default function DeployPage() {
 
   const backTo = (session: DeploySession) => go(session.deployments.length > 0 ? { kind: "manage", session } : { kind: "start" });
 
+  // The Kinus read again in place, the one open kept open: its update offer and connectors as they are now.
+  const reread = () => Effect.gen(function* () {
+    const heard = yield* Effect.promise(async () => readSession());
+
+    if ("refusal" in heard) setRefusal(heard.refusal);
+    else if (heard.answer.signedIn) go({ kind: "manage", session: heard.answer });
+  });
+
   // Back to the Kinus this sign-in has, read again: a run just done is one of them now.
   const manage = () => Effect.gen(function* () {
     setStage({ kind: "loading" });
@@ -331,7 +340,7 @@ export default function DeployPage() {
 
     return (
       <DeployManage session={session} starting={deploying} refusal={refusal} refusalActions={refusalActions} github={github}
-        onChange={(kinu, picked) => detach(change(session, kinu, picked))} onDeployAnother={() => go({ kind: "ready", session, readyFor: { kind: "new" } })} />
+        onChange={(kinu, picked) => detach(change(session, kinu, picked))} onCheckUpdates={() => detach(reread())} />
     );
   }
 

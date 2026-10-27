@@ -58,12 +58,15 @@ function githubOutOfReach(text: string, app: { readonly clientId: string } | nul
   ].join('\n');
 }
 
+/** Where every plugin's sign-in returns, and the Google connection's: an app made for a Kinu registers this path. */
+export const MCP_OAUTH_CALLBACK_PATH = '/api/user/mcp/callback';
+
 export const MCP_PRESETS: readonly McpPreset[] = [
   {
     id: 'github',
     title: 'GitHub',
     description: 'Issues, pull requests and code',
-    // Pre-registered OAuth app with callback `<deployment-origin>/api/user/mcp/callback`.
+    // Pre-registered OAuth app with callback `<deployment-origin>` + `MCP_OAUTH_CALLBACK_PATH`.
     serverUrl: 'https://api.githubcopilot.com/mcp/',
     transport: 'streamable-http',
     auth: 'oauth-app',

@@ -281,9 +281,9 @@ describe('the deploy page', () => {
     });
   });
 
-  // Owner, 2026-10-27: GitHub in the self-deploy flow, one click. The tab goes to GitHub's own form with the Kinu's
-  // manifest; GitHub's return names the app to install.
-  test('Add GitHub posts the Kinu\'s app manifest to GitHub, and the return offers that app to install', async () => {
+  // Owner, 2026-10-27: a Connectors section, each connected by its own steps. GitHub's Connect sends the tab to GitHub's
+  // own form with the Kinu's manifest; GitHub's return names the app to install.
+  test('Connect GitHub posts the Kinu\'s app manifest to GitHub, and the return offers that app to install', async () => {
     await withGallery(async (gallery) => {
       const page = await opened(gallery, 'manage');
       const posted = Promise.withResolvers<{ readonly url: string; readonly body: string }>();
@@ -296,8 +296,8 @@ describe('the deploy page', () => {
 
         return request.respond({ status: 200, contentType: 'text/html', body: '<p>GitHub</p>' });
       })));
-      await page.waitForSelector('[data-deploy-change="github"]');
-      await page.click('[data-deploy-change="github"]');
+      await page.waitForSelector('[data-deploy-connector="github"] button');
+      await page.click('[data-deploy-connector="github"] button');
       const sent = await posted.promise;
 
       const manifest = v.parse(v.object({ url: v.string(), callback_urls: v.array(v.string()), setup_url: v.string(), redirect_url: v.string() }),
@@ -305,16 +305,55 @@ describe('the deploy page', () => {
 
       const back = await opened(gallery, 'manage', '/deploy?github=kinu-ada&kinu=kinu');
 
-      await back.waitForSelector('[data-deploy-github="made"] a');
+      await back.waitForSelector('[data-deploy-connector="github"] a');
 
       expect({
         to: sent.url.split('?')[0],
         manifest: { url: manifest.url, callbacks: manifest.callback_urls, setup: manifest.setup_url, back: new URL(manifest.redirect_url).pathname },
-        install: await back.$eval('[data-deploy-github="made"] a', (link) => link.getAttribute('href')),
+        install: await back.$eval('[data-deploy-connector="github"] a', (link) => link.getAttribute('href')),
       }).toEqual({
         to: 'https://github.com/settings/apps/new',
         manifest: { url: 'https://kinu.ada.workers.dev', callbacks: ['https://kinu.ada.workers.dev/api/user/mcp/callback'], setup: 'https://kinu.ada.workers.dev/plugins', back: '/deploy/github' },
         install: 'https://github.com/apps/kinu-ada/installations/new',
+      });
+    });
+  });
+
+  // Google works through Composio with nothing set here; its own app is the steps Google's console needs, then a paste.
+  test('Google\'s own app is set up by its steps and saved for the Kinu; a client that is not Google\'s is refused', async () => {
+    await withGallery(async (gallery) => {
+      const page = await opened(gallery, 'manage');
+      const google = '[data-deploy-connector="google"]';
+
+      await pressNamed(page, 'Use your own app');
+      await page.waitForSelector(`${google} [data-deploy-google-steps]`);
+
+      const steps = await page.$eval(google, (row) => ({
+        links: [...row.querySelectorAll('a')].map((link) => link.getAttribute('href') ?? ''),
+        redirect: row.querySelector<HTMLInputElement>('input[aria-label="Redirect URI"]')?.value ?? '',
+      }));
+
+      await page.type(`${google} input[aria-label="Client ID"]`, 'not-a-client');
+      await page.type(`${google} input[aria-label="Client secret"]`, 'GOCSPX-secret');
+      await pressNamed(page, 'Save');
+
+      await page.waitForSelector(`${google} [role="alert"]`);
+      const refused = await page.$eval(`${google} [role="alert"]`, (alert) => alert.textContent ?? '');
+
+      await page.$eval(`${google} input[aria-label="Client ID"]`, (input) => { if (input instanceof HTMLInputElement) input.select(); });
+      await page.type(`${google} input[aria-label="Client ID"]`, '123-abc.apps.googleusercontent.com');
+      await pressNamed(page, 'Save');
+      await page.waitForFunction((row) => document.querySelector(row)?.textContent?.includes('your own Google app') === true, {}, google);
+      const saved = (await asked(page)).filter((each) => each.route === 'google').map((each) => each.body);
+
+      expect({ links: steps.links.map((link) => new URL(link).pathname), redirect: steps.redirect, refused, saved }).toEqual({
+        links: ['/flows/enableapi', '/auth/audience', '/auth/clients'],
+        redirect: 'https://kinu.ada.workers.dev/api/user/mcp/callback',
+        refused: expect.stringContaining('.apps.googleusercontent.com'),
+        saved: [
+          { account: ACCOUNT, name: 'kinu', client: { clientId: 'not-a-client', clientSecret: 'GOCSPX-secret' } },
+          { account: ACCOUNT, name: 'kinu', client: { clientId: '123-abc.apps.googleusercontent.com', clientSecret: 'GOCSPX-secret' } },
+        ],
       });
     });
   });

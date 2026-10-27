@@ -9,7 +9,7 @@ import {
   DEPLOY_API, DeployDomainsSchema, DeployNeedSchema, DeployPreflightSchema, DeployRefusalSchema, DeployRunViewSchema,
   DeploySessionSchema, MailPreviewSchema,
   type DeployDomain, type DeployNeed, type DeployPreflight, type DeployRefusal, type DeployRunRequest, type DeployRunView,
-  type DeploySession, type MailPreview,
+  type DeploySession, type MailPreview, type OAuthClient,
 } from "@kinu.run/core/deploy";
 import { settle, tolerateAsync } from "@kinu.run/core/obs";
 import { respond, type HttpRequest } from "./http";
@@ -116,4 +116,9 @@ export function makeGithubApp(account: string, name: string): Effect.Effect<Depl
 
     return null;
   });
+}
+
+/** Gives the Kinu `name` the person's own Google client, or with null takes it away, back to Composio. */
+export function setGoogleClient(account: string, name: string, client: OAuthClient | null): Promise<DeployHeard<{ readonly google: boolean }>> {
+  return settle(heard(v.object({ google: v.boolean() }), "/google", { method: "POST", json: { account, name, client } }));
 }

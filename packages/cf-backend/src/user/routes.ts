@@ -7,7 +7,7 @@ import { pictureKey, PictureAddressSchema, readPictureInMode, type PictureBucket
 import { connectedPath, GOOGLE_OAUTH_CRED_KEY, FILES_VIEW_CONFIG_KEY, filesViewNamed, PROFILE_CATALOG_CONFIG_KEY, THEME_CONFIG_KEY, THEME_NAMES, themeNamed, USER_WEB_SEARCH_TEST_PATH } from '@kinu.run/core';
 import { BOX_SIZE_ORDER } from '@kinu.run/devbox/sizes';
 import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY } from '../computer-size';
-import { DEVICE_TIERS, JsonValueSchema } from '@kinu.run/core';
+import { DEVICE_TIERS, JsonValueSchema, MCP_OAUTH_CALLBACK_PATH } from '@kinu.run/core';
 import { diagnostics, authoredRefusal, renderThrownChain, settle, type KinuError } from '@kinu.run/core/obs';
 import { isEvalServiceIdentity } from '../eval/abort-route';
 import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '@kinu.run/core';
@@ -662,7 +662,7 @@ userRoutes.get('/api/user/google', async (c) => json({ body: {
 
 userRoutes.get('/api/user/google/connect', async (c) => startGoogleConnect(c.req.raw, c.env, { account: c.get('identity').userId, email: c.get('identity').email }));
 
-userRoutes.get('/api/user/mcp/callback', async (c) => {
+userRoutes.get(MCP_OAUTH_CALLBACK_PATH, async (c) => {
   // The Google connection's sign-in returns here too, its client's registered address; its state says so.
   if ((new URL(c.req.url).searchParams.get('state') ?? '').startsWith(GOOGLE_CONNECT_STATE_PREFIX)) {
     return completeGoogleConnect({

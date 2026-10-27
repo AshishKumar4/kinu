@@ -1,11 +1,11 @@
 // The Google connection's sign-in. Started from the owner's own page, it asks Google with the deployment's Workspace
-// client and ends where that client returns: its registered `/api/user/mcp/callback`, which hands a state with this
+// client and ends where that client returns: its registered `MCP_OAUTH_CALLBACK_PATH`, which hands a state with this
 // prefix here. What Google grants is kept as `google.oauth`.
 import { Effect } from 'effect';
 import * as oauth from 'oauth4webapi';
 import * as v from 'valibot';
 import {
-  connectedPath, ConnectRunSchema, GOOGLE_CONNECTION_SCOPES, googleConnectionClient, googleTokenToCredential, GoogleTokenSchema, sha256Hex,
+  connectedPath, ConnectRunSchema, GOOGLE_CONNECTION_SCOPES, MCP_OAUTH_CALLBACK_PATH, googleConnectionClient, googleTokenToCredential, GoogleTokenSchema, sha256Hex,
   type GoogleConnectionEnv, type OAuthCredential,
 } from '@kinu.run/core';
 import { diagnostics, KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
@@ -17,8 +17,6 @@ import { isListedOperator } from '../control-plane/admin-caller';
 /** A Google connect's state begins so: the callback it shares with the MCP servers' sign-ins hands it here. */
 export const GOOGLE_CONNECT_STATE_PREFIX = 'google-connect.';
 
-/** The path its client registered, shared with the MCP servers' sign-ins (`MCP_OAUTH_CALLBACK_PATH`). */
-const GOOGLE_CONNECT_CALLBACK_PATH = '/api/user/mcp/callback';
 
 /** Google's endpoints (accounts.google.com/.well-known/openid-configuration, 2026-10-23), so a connect fetches none. */
 const GOOGLE: oauth.AuthorizationServer = {
@@ -71,7 +69,7 @@ export function startGoogleConnect(request: Request, env: GoogleConnectEnv, conn
     const kv = env.AUTH_KV;
     const codeVerifier = oauth.generateRandomCodeVerifier();
     const nonce = oauth.generateRandomNonce();
-    const redirectUri = new URL(GOOGLE_CONNECT_CALLBACK_PATH, url.origin).toString();
+    const redirectUri = new URL(MCP_OAUTH_CALLBACK_PATH, url.origin).toString();
 
     const { state, binding } = yield* Effect.promise(() => createOAuthState(kv, {
       provider: 'google', codeVerifier, nonce, returnTo: '/', redirectUri, connectFor: connecting.account, connectRun: run.output, statePrefix: GOOGLE_CONNECT_STATE_PREFIX,

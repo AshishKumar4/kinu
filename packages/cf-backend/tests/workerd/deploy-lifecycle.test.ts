@@ -582,13 +582,35 @@ describe('the deploy page', () => {
       stranger: stranger.status,
       made: { status: made.status, location: made.location },
       bound: [secrets.MCP_GITHUB_CLIENT_ID, secrets.MCP_GITHUB_CLIENT_SECRET],
-      listed: (await sessionOf(cookie)).deployments.map((kinu) => kinu.github),
+      listed: (await sessionOf(cookie)).deployments.map((kinu) => kinu.connectors),
     }).toEqual({
       manifest: { url: `https://${ADDRESS}`, callbacks: [`https://${ADDRESS}/api/user/mcp/callback`], back: 'https://kinu.probe.workers.dev/deploy/github' },
       stranger: 400,
       made: { status: 302, location: '/deploy?github=kinu-probe&kinu=kinu' },
       bound: ['Iv23-probe', 'probe-github-secret'],
-      listed: [true],
+      listed: [{ github: true, google: false }],
+    });
+  });
+
+  it('gives a Kinu its own Google client, refuses one that is not Google\'s, and takes it away back to Composio', async () => {
+    await env.DEPLOY_FAKE.reset();
+    await env.DEPLOY_FAKE.existing();
+
+    const cookie = await signedInPage();
+    const set = async (client: { clientId: string; clientSecret: string } | null) => page(cookie, 'POST', '/api/deploy/google', JSON.stringify({ account: DEPLOY_FAKE_ACCOUNT, name: 'kinu', client }));
+    const refused = await set({ clientId: 'not-a-client', clientSecret: 'secret' });
+    const saved = await set({ clientId: '123-abc.apps.googleusercontent.com', clientSecret: 'GOCSPX-secret' });
+    const held = (await env.DEPLOY_FAKE.state()).secrets;
+    const listed = (await sessionOf(cookie)).deployments.map((kinu) => kinu.connectors.google);
+    const removed = await set(null);
+    const left = (await env.DEPLOY_FAKE.state()).secrets;
+
+    expect({
+      refused: refused.status, saved: saved.status, held: [held.MCP_GOOGLE_CLIENT_ID, held.MCP_GOOGLE_CLIENT_SECRET], listed,
+      removed: removed.status, left: [left.MCP_GOOGLE_CLIENT_ID, left.MCP_GOOGLE_CLIENT_SECRET], after: (await sessionOf(cookie)).deployments.map((kinu) => kinu.connectors.google),
+    }).toEqual({
+      refused: 400, saved: 200, held: ['123-abc.apps.googleusercontent.com', 'GOCSPX-secret'], listed: [true],
+      removed: 200, left: [undefined, undefined], after: [false],
     });
   });
 

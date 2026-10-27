@@ -105,8 +105,14 @@ export const REGISTRY_TOKEN_SECRET = 'DEVBOX_REGISTRY_TOKEN';
 /** Minted by the computer's steps, so never asked of a person. */
 export const COMPUTER_SECRETS: readonly string[] = [REGISTRY_TOKEN_SECRET];
 
-/** The Worker secrets the GitHub plugin signs in with (cf-backend `MCP_APP_ENV`), a Kinu's own app's (`github-app.ts`). */
-export const GITHUB_APP_SECRETS = { id: 'MCP_GITHUB_CLIENT_ID', secret: 'MCP_GITHUB_CLIENT_SECRET' } as const;
+/** The connectors a Kinu needs an app of its own for, and the Worker secrets holding that app's OAuth client
+ *  (`connectors.ts`): the GitHub plugin's (cf-backend `MCP_APP_ENV`) and the Google connection's (`googleConnectionClient`). */
+export const CONNECTOR_SECRETS = {
+  github: { id: 'MCP_GITHUB_CLIENT_ID', secret: 'MCP_GITHUB_CLIENT_SECRET' },
+  google: { id: 'MCP_GOOGLE_CLIENT_ID', secret: 'MCP_GOOGLE_CLIENT_SECRET' },
+} as const;
+
+export type Connector = keyof typeof CONNECTOR_SECRETS;
 
 /** The token a deployment reads its own AI Gateway credits with (`credits-token.ts`): minted by every run. */
 export const CREDITS_TOKEN_SECRET = 'KINU_AI_CREDITS_TOKEN';

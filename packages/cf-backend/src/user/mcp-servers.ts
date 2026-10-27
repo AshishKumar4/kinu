@@ -4,6 +4,7 @@ import {
   McpProtocolFailureSchema, type UserCaller, compareCodeUnits, type McpPresetId, type McpRefusal, type RemoteMcpTool, mcpPresetById, describeMcpTool,
   omitEmptyOptionalArgs, type SerializableToolDescriptor, validateMcpServerInput, readAllowedTools, parseMcpHeaders, McpTransportSchema, GITHUB_MCP_PRESET,
   GitHubRefreshAskSchema, refreshGitHub, type GitHubRefreshAnswer, type GitHubRefreshAsk, type McpPresetAvailability, type McpServerSummary, MCP_PRESETS,
+  MCP_OAUTH_CALLBACK_PATH,
   type McpPreset, McpConnectionStatusSchema, type McpConnectionStatus, mcpCredentialFetch, mcpListingRefusals, type McpFetch,
 } from '@kinu.run/core';
 import type { AuthProvider, CallToolResult } from '@modelcontextprotocol/client';
@@ -15,10 +16,12 @@ import type { UserCredentials } from './credentials';
 import type { UserObjectHost } from './user-host';
 import { ASSISTANT_CONFIG_KEY } from './roster';
 import type { McpEndpoint, McpLive, McpWire } from './mcp';
+import { CONNECTOR_SECRETS } from '@kinu.run/core/deploy';
 
-/** The only place these `Env` names exist; messages and the deploy doc take their wording from here. */
+/** The plugin apps' `Env` names, the deploy page's connectors' (core `CONNECTOR_SECRETS`); messages take their wording
+ *  from here. */
 const MCP_APP_ENV = {
-  github: { id: 'MCP_GITHUB_CLIENT_ID', secret: 'MCP_GITHUB_CLIENT_SECRET' },
+  github: CONNECTOR_SECRETS.github,
 } as const satisfies Partial<Record<McpPresetId, {
   readonly id: keyof Env;
   readonly secret: keyof Env;
@@ -66,9 +69,6 @@ function listMcpPresetAvailability(env: Env): McpPresetAvailability[] {
     appConfigured: preset.auth !== 'oauth-app' || mcpAppCredentials(env, preset) !== null,
   }));
 }
-
-/** Single per-user OAuth callback path; the full URL is built from the request origin at add-time. */
-const MCP_OAUTH_CALLBACK_PATH = '/api/user/mcp/callback';
 
 /** The most keys one `storage.delete` takes (developers.cloudflare.com/durable-objects/api/sqlite-storage-api/#delete). */
 const STORAGE_DELETE_KEYS = 128;

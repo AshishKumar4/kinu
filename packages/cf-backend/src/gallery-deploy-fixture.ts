@@ -7,7 +7,7 @@
  */
 import * as v from "valibot";
 import {
-  DEPLOY_GITHUB_PATH, DeployRunRequestSchema, FACT_ADDRESS, GITHUB_APP_NEW, SIGN_IN_AGAIN_NEED, deployRunView, githubAppManifest, judgeRefusal, updateOffer,
+  DEPLOY_GITHUB_PATH, DeployRunRequestSchema, FACT_ADDRESS, GITHUB_APP_NEW, GoogleClientSchema, SIGN_IN_AGAIN_NEED, deployRunView, githubAppManifest, judgeRefusal, updateOffer,
   type CloudflareWords, type DeployDomain, type DeployedKinu, type DeployNeed, type DeployPreflight, type DeployRefusal, type DeployRunView, type DeploySession,
   type DeployStepRow, type DeployZone, type MailPreview, type UpdateBuild,
 } from "@kinu.run/core/deploy";
@@ -60,6 +60,7 @@ export const DEPLOY_FIXTURE_STATES = [
   { id: "manage-unread", label: "An existing Kinu, its release channel unread" },
   { id: "manage-two", label: "Two Kinus in two accounts" },
   { id: "manage-domain", label: "An existing Kinu on its own domain" },
+  { id: "manage-connected", label: "An existing Kinu with its own GitHub and Google apps" },
 ] as const;
 
 export type DeployFixtureState = (typeof DEPLOY_FIXTURE_STATES)[number]["id"];
@@ -105,9 +106,15 @@ const BUILT: UpdateBuild = { version: "0.1.0+3c19318", sha: "3c19318", builtAt: 
 
 const LATEST: UpdateBuild = { version: "0.1.0+694e257", sha: "694e257", builtAt: "2026-10-20T16:40:00Z" };
 
+/** Whether the review gave its Kinus a Google client of their own, as Save on the deploy page does. */
+let googleOwn = false;
+
 /** A Kinu the session lists: core's offer for its build against the channel's, and every listed Kinu is the account's. */
 function kinu(host: string, current: UpdateBuild, available: UpdateBuild | null, account: string = ACCOUNT): DeployedKinu {
-  return { account, name: "kinu", url: `https://${host}`, update: updateOffer({ current, available, channelOrigin: "https://kinu.run", owned: true }), github: false };
+  return {
+    account, name: "kinu", url: `https://${host}`, update: updateOffer({ current, available, channelOrigin: "https://kinu.run", owned: true }),
+    connectors: { github: false, google: false },
+  };
 }
 
 const LISTED: Partial<Record<DeployFixtureState, readonly DeployedKinu[]>> = {
@@ -116,6 +123,7 @@ const LISTED: Partial<Record<DeployFixtureState, readonly DeployedKinu[]>> = {
   "manage-unread": [kinu(WORKERS, BUILT, null)],
   "manage-domain": [kinu(ON_DOMAIN, LATEST, LATEST)],
   "manage-two": [kinu(WORKERS, LATEST, LATEST), kinu(ON_DOMAIN, BUILT, LATEST, SECOND_ACCOUNT)],
+  "manage-connected": [{ ...kinu(WORKERS, LATEST, LATEST), connectors: { github: true, google: true } }],
 };
 
 // ── Runs ───────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -258,7 +266,9 @@ function sessionOf(state: DeployFixtureState): DeploySession {
   const listed = finished && run.live !== undefined ? [kinu(new URL(run.live.url).hostname, LATEST, LATEST)] : LISTED[state] ?? [];
   const unreadable = state === "unreadable" ? [{ account: SECOND_ACCOUNT, words: { message: "Authentication error", code: 10_000, status: 403, endpoint: `/accounts/${SECOND_ACCOUNT}/workers/scripts` } }] : [];
 
-  return { signedIn: true, email: "ada@lovelace.dev", accounts: state === "no-account" ? [] : accounts, resume, deployments: listed, unreadable };
+  const deployments = listed.map((each) => ({ ...each, connectors: { ...each.connectors, google: googleOwn || each.connectors.google } }));
+
+  return { signedIn: true, email: "ada@lovelace.dev", accounts: state === "no-account" ? [] : accounts, resume, deployments, unreadable };
 }
 
 // ── Reads ──────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -340,7 +350,7 @@ function goingFor(body: string | null): Going {
 /** What the door answers: its reads, a run begun, a hand-off, or a refusal in words. */
 type DoorAnswer =
   | DeploySession | DeployPreflight | readonly DeployDomain[] | MailPreview | DeployRunView | null | { readonly runId: string } | { readonly location: string }
-  | { readonly action: string; readonly manifest: string }
+  | { readonly action: string; readonly manifest: string } | { readonly google: boolean }
   | { readonly error: string; readonly need?: DeployNeed; readonly refused?: DeployRefusal };
 
 function json(body: DoorAnswer, status = 200): Response {
@@ -417,12 +427,23 @@ export function deployFixture(path: string, method: string, body: string | null)
 
   if (route === "runs/current/continue" && method === "POST") return Promise.resolve(carryOn(state));
 
-  // The form the page hands its tab to: GitHub's, with the app for the Kinu asked.
+  return Promise.resolve(connectorAnswer(route, body));
+}
+
+/** The connectors' routes (GitHub's form for the Kinu asked, Google's own client set or taken away), and the door's
+ *  answer to a route it has none for. */
+function connectorAnswer(route: string, body: string | null): Response {
   if (route === "github") {
     const manifest = githubAppManifest(`https://${WORKERS}`, new URL(DEPLOY_GITHUB_PATH, location.origin).href);
 
-    return Promise.resolve(json({ action: `${GITHUB_APP_NEW}?state=gallery`, manifest: JSON.stringify(manifest) }));
+    return json({ action: `${GITHUB_APP_NEW}?state=gallery`, manifest: JSON.stringify(manifest) });
   }
 
-  return Promise.resolve(json({ error: "No such deploy route." }, 404));
+  if (route !== "google") return json({ error: "No such deploy route." }, 404);
+  const asked = v.safeParse(v.object({ client: v.nullable(GoogleClientSchema) }), JSON.parse(body ?? "{}"));
+
+  if (!asked.success) return json({ error: asked.issues[0]?.message ?? "That is not a Google client." }, 400);
+  googleOwn = asked.output.client !== null;
+
+  return json({ google: googleOwn });
 }
