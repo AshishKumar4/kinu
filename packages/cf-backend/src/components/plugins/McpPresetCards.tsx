@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/Button";
 const PRESET_MARK: Record<McpPresetId, BrandName> = {
   github: "github",
   cloudflare: "cloudflare",
+  composio: "composio",
 };
 
 /** A connection a blueprint names: a preset's id, which the catalog resolves (`preset_id` is any string on the wire), or

@@ -1,6 +1,6 @@
 // One-click MCP server catalog, shared by the add surface, `preset_id` tagging, and preset validation.
 
-export type McpPresetId = 'github' | 'cloudflare';
+export type McpPresetId = 'github' | 'cloudflare' | 'composio';
 
 export interface McpPreset {
   readonly id: McpPresetId;
@@ -82,6 +82,18 @@ export const MCP_PRESETS: readonly McpPreset[] = [
     transport: 'streamable-http',
     auth: 'oauth',
     docsUrl: 'https://developers.cloudflare.com/agents/model-context-protocol/cloudflare/servers-for-cloudflare/',
+  },
+  {
+    // Google through Composio's verified app, for a deployment with no Google client: each person links their apps at
+    // Composio. Its server registered a public client for kinu.run's redirect (2026-10-27).
+    id: 'composio',
+    title: 'Composio',
+    description: 'Gmail, Drive and 1,000 more apps',
+    serverUrl: 'https://connect.composio.dev/mcp',
+    transport: 'streamable-http',
+    auth: 'oauth',
+    scope: 'openid profile email offline_access',
+    docsUrl: 'https://docs.composio.dev/docs/composio-connect',
   },
 ];
 

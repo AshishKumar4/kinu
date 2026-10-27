@@ -79,7 +79,7 @@ async function lastMcpAdd(page: Page): Promise<JsonValue> {
 }
 
 describe('MCP presets', () => {
-  test('the plugins page renders all three preset rows Not added, and the add control adds via the RPC', async () => {
+  test('the plugins page renders every preset row Not added, and the add control adds via the RPC', async () => {
     await withGallery(async (gallery) => {
       const page = await freshPage(gallery, 'plugins', 'dark', 'desktop');
 
@@ -91,6 +91,7 @@ describe('MCP presets', () => {
 
         expect(await presetStatus(page, 'github')).toBe('Not added');
         expect(await presetStatus(page, 'cloudflare')).toBe('Not added');
+        expect(await presetStatus(page, 'composio')).toBe('Not added');
 
         // Cloudflare is the OAuth preset: one click posts the add, begins its sign-in for a run of the page's own, and
         // sends a tab of its own to the address the server answered.
@@ -454,14 +455,14 @@ describe('MCP presets', () => {
             // preset's add.
             const drawn = await drawnRows(plugins);
 
-            // Google, offered and not held, is the one row under Add.
+            // Google and Composio, offered and not held, are the rows under Add.
             expect(drawn.filter((row) => row.preset).map((row) => row.name))
-              .toEqual(['GitHub', 'Cloudflare', 'Google']);
+              .toEqual(['GitHub', 'Cloudflare', 'Google', 'Composio']);
             // Services only, skills being in the Drive: what the account holds,
             // then what it can add. The failed server is among them, so its line
             // (a failure, where the endpoint used to be) is under the same rule.
             // A server of its own on a known service's host takes that service's mark and name.
-            expect(drawn.map((row) => row.name)).toEqual(['GitHub', 'Cloudflare', 'Linear', 'Notion', 'Google']);
+            expect(drawn.map((row) => row.name)).toEqual(['GitHub', 'Cloudflare', 'Linear', 'Notion', 'Google', 'Composio']);
 
             for (const row of drawn) {
               expect(row.text).not.toContain('http');
@@ -469,9 +470,9 @@ describe('MCP presets', () => {
             }
 
             // What the account holds, once each: both connected presets and both
-            // servers of its own; the catalog has only Google left to add.
+            // servers of its own; the catalog has Google and Composio left to add.
             expect(await connectedList(plugins)).toEqual(['GitHub', 'Cloudflare', 'Linear', 'Notion']);
-            expect(await plugins.$$eval('section[aria-label="Add"] [data-plugin]', (nodes) => nodes.map((node) => node.getAttribute('data-plugin')))).toEqual(['Google']);
+            expect(await plugins.$$eval('section[aria-label="Add"] [data-plugin]', (nodes) => nodes.map((node) => node.getAttribute('data-plugin')))).toEqual(['Google', 'Composio']);
             
           } finally {
             await plugins.close();
