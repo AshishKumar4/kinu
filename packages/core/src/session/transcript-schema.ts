@@ -8,8 +8,10 @@ export const CHAT_SESSION_ID = 'default';
  *  each older page it scrolls back to. Images cross as addresses (`chat-media.ts`), so this is words and calls. */
 export const CHAT_PAGE_BYTES = 1024 * 1024;
 
-/** The rows a tab is seeded with: its newest window, the rest read as it scrolls back. */
-export const CHAT_SEED_ROWS = 60;
+/** The rows a tab is seeded with: its newest window, the rest read as it scrolls back, two screens ahead of the reader.
+ *  A tab draws its whole seed before it shows the chat: 54 rows of a big workspace took ~0.5 s of the page's main thread
+ *  (production, 2026-10-27), which grows with the rows, not with what one screen shows. */
+export const CHAT_SEED_ROWS = 20;
 
 export function initSessionTranscriptTables(exec: RawSqlExec): void {
   exec(`CREATE TABLE IF NOT EXISTS conversation_entries ( /* derived from session_messages: an entry's parts are its messages */
