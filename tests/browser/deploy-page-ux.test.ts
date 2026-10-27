@@ -340,6 +340,21 @@ describe('the deploy page', () => {
     });
   });
 
+  // Owner, 2026-10-27: search keys made "SUPER NICE AND EASY", as the account setup is. No credits never blocks Deploy.
+  test('no AI credits never block Deploy, and credits bought on Cloudflare show once the page reads the account again', async () => {
+    await withGallery(async (gallery) => {
+      const page = await opened(gallery, 'credits-added');
+
+      await page.waitForSelector('[data-deploy-credits="empty"] [data-deploy-handoff]', SOON);
+      const handOff = await page.$eval('[data-deploy-credits] [data-deploy-handoff]', (button) => button.getAttribute('data-deploy-handoff'));
+
+      expect({ handOff, deploy: await page.$('[data-deploy-go]:not([disabled])') !== null })
+        .toEqual({ handOff: expect.stringMatching(/^https:\/\/dash\.cloudflare\.com\/[^/]+\/ai\/ai-gateway$/u), deploy: true });
+      await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+      await page.waitForSelector('[data-deploy-credits="held"]', SOON);
+    });
+  });
+
   test('a login with no Cloudflare account behind it is asked to make one first', async () => {
     await withGallery(async (gallery) => {
       const page = await opened(gallery, 'no-account');

@@ -60,6 +60,8 @@ export * from './cloudflare-oauth';
 
 export * from './google-connection';
 
+export { GatewayCreditsSchema, gatewayCreditsUrl, type GatewayCredits } from './gateway-credits';
+
 export {
   DEFAULT_WEB_SEARCH_CHAIN, WEB_SEARCH_PROVIDER_IDS, WEB_SEARCH_PROVIDERS, WebSearchRouteSchema,
   type WebSearchBilling, type WebSearchProviderId, type WebSearchRoute,

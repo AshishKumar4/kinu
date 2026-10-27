@@ -4,11 +4,13 @@
  * changes an existing Kinu: its Domain step, or mail at its domain.
  */
 import { useCallback, useEffect, useState } from "react";
-import { CpuIcon, EnvelopeSimpleIcon } from "@phosphor-icons/react";
+import { CpuIcon, EnvelopeSimpleIcon, MagnifyingGlassIcon } from "@phosphor-icons/react";
 import {
-  DEFAULT_INSTANCE_NAME,
-  type DeployAction, type DeployChoice, type DeployedKinu, type DeployPreflight, type DeployRunRequest, type DeploySession, type DeployZone, type MailPreview, type MailPurpose,
+  DEFAULT_INSTANCE_NAME, gatewayCreditsUrl,
+  type DeployAction, type DeployChoice, type DeployedKinu, type DeployPreflight, type DeployRunRequest, type DeploySession, type DeployZone,
+  type GatewayCredits, type MailPreview, type MailPurpose,
 } from "@kinu.run/core/deploy";
+import { fmtUsd } from "@kinu.run/core";
 import { Button } from "@/components/ui/Button";
 import { RadioGroup } from "@/components/ui/Check";
 import { Loader } from "@/components/ui/Loader";
@@ -22,6 +24,7 @@ import { readMailPreview, readPreflight, type DeployRefused } from "@/lib/deploy
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Card } from "@/components/ui/Card";
 import { Group } from "@/components/ui/Group";
+import { IconTile } from "@/components/ui/IconTile";
 
 /** How often the account is read again while a hand-off to Cloudflare is open. */
 const RECHECK_MS = 5000;
@@ -136,6 +139,40 @@ interface Choices {
 }
 
 const NO_CHOICES: Choices = { domain: null, computer: false, mail: null };
+
+/** The hand-off a credits purchase is: the account is read again until its credits change. */
+const CREDITS = "credits";
+
+/**
+ * What the deployment's web searches are paid from: AI credits on the account, how many are left, and Cloudflare's page
+ * to buy more. Never blocks Deploy: a key of the person's own pays for search as well.
+ */
+function Credits({ account, credits, waiting, onHandedOff }: { account: string; credits: GatewayCredits | null; waiting: boolean; onHandedOff: () => void }) {
+  if (credits === null) return null;
+  const empty = credits.balance <= 0;
+  const topUp = credits.autoTopUp === null ? "" : `, topped up by ${fmtUsd(credits.autoTopUp.amount)} below ${fmtUsd(credits.autoTopUp.threshold)}`;
+
+  return (
+    <div data-deploy-credits={empty ? "empty" : "held"} className="flex items-start gap-3">
+      <IconTile size="xl"><MagnifyingGlassIcon size={18} className={empty ? "p-text-3" : "p-accent-fg"} /></IconTile>
+      <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+        <div className="min-w-0">
+          <div className="t-public-item">AI credits for web search</div>
+          <div className="mt-px t-meta">
+            {empty
+              ? "Web search is paid from these. Your account has none yet, so search won't work until you add some. Cloudflare adds 5%."
+              : `${fmtUsd(credits.balance)} left${topUp}. Web search is paid from these.`}
+          </div>
+          {empty && <div className="mt-1 t-meta">Or add your own Exa key later, in your Kinu's settings.</div>}
+          {waiting && <p className="mt-1 inline-flex items-center gap-2 t-meta"><Loader size="sm" />Waiting for Cloudflare…</p>}
+        </div>
+        <div className="shrink-0">
+          <HandOff action={{ label: empty ? "Add credits" : "Manage", href: gatewayCreditsUrl(account) }} onOpened={onHandedOff} />
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /** What a Kinu costs, whatever the account already had: Workers Paid, which its agents run on. */
 const COST = "Workers Paid, $5 a month, on your Cloudflare bill";
@@ -323,6 +360,8 @@ function ForAccount({ session, actions, onDeploy, onBack }: { session: DeploySes
   const [account, setAccount] = useState(session.accounts[0]?.id ?? "");
   // The need a hand-off was opened for: the account is read again every few seconds until it is met.
   const [handedOff, setHandedOff] = useState<string | null>(null);
+  // The credits a purchase was opened at: any change to them is the purchase landing.
+  const [creditsAt, setCreditsAt] = useState<string | null>(null);
   const checked = useDeployRead(account, async () => readPreflight(account), { onFocus: true, every: handedOff === null ? null : RECHECK_MS });
   const [choosingDomain, setChoosingDomain] = useState(false);
   const [choices, setChoices] = useState<Choices>(NO_CHOICES);
@@ -333,7 +372,11 @@ function ForAccount({ session, actions, onDeploy, onBack }: { session: DeploySes
   const preflight = checked?.state === "read" ? checked.answer : null;
   const name = preflight?.suggestedName ?? "";
   const kept = actions.refusal;
-  const met = preflight !== null && handedOff !== null && !preflight.needs.some((need) => need.id === handedOff);
+
+  const met = preflight !== null && handedOff !== null && (handedOff === CREDITS
+    ? JSON.stringify(preflight.credits) !== creditsAt
+    : !preflight.needs.some((need) => need.id === handedOff));
+
   const seen = useSeenLacks(preflight);
   const blocked = preflight === null || preflight.needs.length > 0 || name === "" || (choices.mail !== null && !mailReady);
 
@@ -369,6 +412,8 @@ function ForAccount({ session, actions, onDeploy, onBack }: { session: DeploySes
               copy="Each can run code, builds and a browser. Part of Workers Paid."
               onChange={(computer) => setChoices((held) => ({ ...held, computer }))} />
             <MailExtra account={account} domain={choices.domain} mail={choices.mail} onMail={onMail} onReady={setMailReady} onDomain={() => setChoosingDomain(true)} />
+            <Credits account={account} credits={preflight.credits} waiting={handedOff === CREDITS}
+              onHandedOff={() => { setCreditsAt(JSON.stringify(preflight.credits)); handOff(CREDITS); }} />
           </div>
           <div className="sm:hidden"><Line label="Cost"><span className="t-public-body p-text">{COST}</span></Line></div>
           <WhatGetsMade name={name === "" ? DEFAULT_INSTANCE_NAME : name} domain={choices.domain?.name ?? null} computer={choices.computer} mail={choices.mail} />

@@ -329,6 +329,9 @@ class FakeCloudflare implements CloudflareTransport {
   /** Other Workers the account runs, beside the one a run uploads. */
   readonly otherScripts: string[] = [];
 
+  /** The account's AI Gateway credits as Cloudflare answers them; null refuses the read. */
+  creditBalance: JsonValue = { balance: 0, has_default_payment_method: false, topup_config: { threshold: 0, amount: 0 }, first_topup_success: false };
+
   /** Whether the front Worker's script exists, as a run that put it in place leaves it. */
   frontExists = false;
 
@@ -378,6 +381,13 @@ class FakeCloudflare implements CloudflareTransport {
     const zone = /^\/zones\/([^/?]+)$/u.exec(call.path)?.[1];
 
     if (call.path === '/user') return this.ok({ id: 'user-1', email: INPUTS.ownerEmail });
+
+    // As kinu.run's account answered it (2026-10-27); null: a sign-in this read is refused to.
+    if (call.path.endsWith('/ai-gateway/billing/credit-balance')) {
+      return this.creditBalance === null
+        ? { status: 403, body: { success: false, errors: [{ code: 10_000, message: 'Authentication error' }], result: null } }
+        : this.ok(this.creditBalance);
+    }
 
     if (call.path.includes('/email/sending/suppressions')) return this.ok(this.suppressions);
 
@@ -2160,7 +2170,21 @@ describe('what the page reads of an account', () => {
       workersSubdomain: null, suggestedName: 'kinu-3', r2: 'off', plan: 'paid',
       zones: [expect.objectContaining({ id: 'zone-example', name: 'example.com', status: 'active' })],
       needs: [expect.objectContaining({ id: 'r2', details: expect.objectContaining({ code: 10_042 }) })],
+      credits: { balance: 0, card: false, autoTopUp: null },
       checkedAt: '1970-01-01T00:00:00.000Z',
+    });
+  });
+
+  // Web search is paid from them, and a key of the person's own pays as well, so they are read and never a need.
+  test('preflight reads the AI credits, with auto top-up, and a refused read is no need', async () => {
+    cloudflare.creditBalance = { balance: 18.4, has_default_payment_method: true, topup_config: { threshold: 5, amount: 20 }, first_topup_success: true };
+    const held = await settle(preflight(cloudflare, ACCOUNT, 0));
+
+    cloudflare.creditBalance = null;
+    const refused = await settle(preflight(cloudflare, ACCOUNT, 0));
+
+    expect({ held: held.credits, refused: refused.credits, needs: refused.needs }).toEqual({
+      held: { balance: 18.4, card: true, autoTopUp: { threshold: 5, amount: 20 } }, refused: null, needs: [],
     });
   });
 

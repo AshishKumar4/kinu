@@ -4,9 +4,10 @@
 // registered elsewhere.
 import { Cause, Effect } from 'effect';
 import * as v from 'valibot';
-import { KinuError } from '../obs/index';
+import { diagnostics, KinuError } from '../obs/index';
 import { CloudflareApiError, cloudflarePages, cloudflareResult, type CloudflareTransport } from './cloudflare';
 import { frontWorkerName } from './front';
+import { CreditBalanceSchema, GatewayCreditsSchema, creditBalancePath, creditsOf, type GatewayCredits } from '../providers/gateway-credits';
 import type { HttpGet } from './context';
 import type { DeployChoice } from './door';
 import {
@@ -53,6 +54,9 @@ export interface DeployPreflight {
   readonly zones: readonly DeployZone[];
   /** The plan first, and blocking; a run starts only on an account with none (deploy/routes.ts `beginRun`). */
   readonly needs: readonly DeployNeed[];
+  /** What the deployment's web searches are paid from; null where Cloudflare would not say. Never a need: search is
+   *  one of its tools, and a key of the person's own pays for it as well. */
+  readonly credits: GatewayCredits | null;
   readonly checkedAt: string;
 }
 
@@ -82,6 +86,7 @@ export const DeployPreflightSchema: v.GenericSchema<DeployPreflight> = v.object(
   plan: v.picklist(['free', 'paid', 'unknown']),
   zones: v.array(v.object({ id: v.string(), name: v.string(), status: ZoneStatusSchema })),
   needs: v.array(DeployNeedSchema),
+  credits: v.nullable(GatewayCreditsSchema),
   checkedAt: v.string(),
 });
 
@@ -278,11 +283,25 @@ export function workersPlan(transport: CloudflareTransport, account: string): Ef
   );
 }
 
+/** The account's AI Gateway credits, or null for any refusal, as a sign-in without `aig.write` meets; its words logged. */
+function gatewayCredits(transport: CloudflareTransport, account: string): Effect.Effect<GatewayCredits | null> {
+  return Effect.promise(async () => cloudflareResult(transport, { method: 'GET', path: creditBalancePath(account) }, CreditBalanceSchema)).pipe(
+    Effect.map(creditsOf),
+    Effect.catchCause((failed) => {
+      const words = causeWords(failed);
+
+      diagnostics.event('deploy.credits_unread', { status: words.status ?? 0, code: words.code ?? 0, message: words.message });
+
+      return Effect.succeed(null);
+    }),
+  );
+}
+
 /** The checklist of § 4, read together; none of it writes. A need is said once however many reads met it. */
 export function preflight(transport: CloudflareTransport, account: string, now: number): Effect.Effect<DeployPreflight, KinuError> {
   return Effect.gen(function* () {
-    // Five reads of one account, none waiting on another: asked at once, the page's check takes the slowest one's time.
-    const { subdomain, names, r2, zones, planRead } = yield* Effect.all({
+    // Six reads of one account, none waiting on another: asked at once, the page's check takes the slowest one's time.
+    const { subdomain, names, r2, zones, planRead, credits } = yield* Effect.all({
       subdomain: needOr(workersSubdomain(transport, account), account),
       names: needOr(workerNames(transport, account), account),
       r2: needOr(Effect.promise(async () => cloudflareResult(
@@ -290,6 +309,7 @@ export function preflight(transport: CloudflareTransport, account: string, now: 
       )), account),
       zones: needOr(zonesOf(transport, account), account),
       planRead: workersPlan(transport, account),
+      credits: gatewayCredits(transport, account),
     }, { concurrency: 'unbounded' });
 
     const { plan, need: planNeed } = planRead;
@@ -310,6 +330,7 @@ export function preflight(transport: CloudflareTransport, account: string, now: 
       plan,
       zones: 'answer' in zones ? zones.answer : [],
       needs: [...needs.values()],
+      credits,
       checkedAt: new Date(now).toISOString(),
     };
   });

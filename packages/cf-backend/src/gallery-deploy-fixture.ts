@@ -38,6 +38,8 @@ export const DEPLOY_FIXTURE_STATES = [
   { id: "name-taken", label: "Ready: kinu already taken" },
   { id: "no-subdomain", label: "Ready: no workers.dev name yet" },
   { id: "r2", label: "Ready: R2 to turn on" },
+  { id: "no-credits", label: "Ready: no AI credits for web search" },
+  { id: "credits-added", label: "Ready: credits bought on Cloudflare, ticked off when read again" },
   { id: "mail-conflict", label: "Ready: a domain that gets mail elsewhere" },
   { id: "mail-conflict-both", label: "Ready: a domain and its mail subdomain both getting mail elsewhere" },
   { id: "unreadable", label: "Ready: an account whose Kinus can't be read" },
@@ -273,6 +275,9 @@ function preflightOf(state: DeployFixtureState): DeployPreflight {
     plan: free ? "free" : "paid",
     zones: ZONES,
     needs: [...free ? [needOf(PLAN_REFUSED)] : [], ...noR2 ? [needOf(R2_REFUSED)] : []],
+    credits: state === "no-credits" || (state === "credits-added" && preflightReads === 1)
+      ? { balance: 0, card: false, autoTopUp: null }
+      : { balance: 18.4, card: true, autoTopUp: { threshold: 5, amount: 20 } },
     checkedAt: "2026-10-21T08:00:00.000Z",
   };
 }
