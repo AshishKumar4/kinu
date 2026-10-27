@@ -3,7 +3,9 @@ export { SqliteSlateStore } from './store';
 
 export { WorkspaceSlateContentStore, type SlateContentFiles } from './content';
 
-export { forgetSlateFiles, SlateDirectoryName, SlateFiles, slateDirectory } from './files';
+export { forgetSlateFiles, SlateFiles, slateDirectory } from './files';
+
+export { SlateDirectoryName } from './rpc';
 
 export { WorkspaceSlates, type WorkspaceSlatesDeps } from './runtime';
 

@@ -91,7 +91,7 @@ export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'retained'> {
   sharesChanged?(): Promise<'current' | 'pending'>;
   previewed?(slate: string): void;
   /** This workspace's owner reading or changing a slate another workspace shared with them to edit (orchestrator). */
-  shared?(operation: Extract<SlateOperation, { op: 'sharedFiles' | 'sharedEdit' }>): Promise<SlateCallResult>;
+  shared?(operation: Extract<SlateOperation, { op: 'sharedFiles' | 'sharedEdit' }>): Effect.Effect<JsonValue, KinuError>;
   /** The block an ephemeral slate's id names, and the author whose authority its page runs with; refused when no stored
    *  answer holds it. */
   messageBlock?(address: EphemeralSlateAddress): Promise<MessageBlock>;
@@ -680,11 +680,9 @@ export class SlateHost {
   /** This workspace's owner reading or changing a slate another workspace shared with them to edit. */
   shared(operation: Parameters<NonNullable<SlateHostDeps['shared']>>[0]): Promise<SlateCallResult> {
     return settle(slateAnswer(`slate ${operation.workspace}/${operation.slate}`, Effect.gen({ self: this }, function* () {
-      const answered = yield* attempt({ doing: 'asking its workspace', otherwise: 'unavailable' }, async () => this.deps.shared?.(operation) ?? null);
+      if (this.deps.shared === undefined) return yield* new KinuError('unsupported', 'This workspace edits no shared slate');
 
-      if (answered === null) return yield* new KinuError('unsupported', 'This workspace edits no shared slate');
-
-      return answered.ok ? answered.value : yield* new KinuError(answered.reason, answered.error);
+      return yield* this.deps.shared(operation);
     })));
   }
 

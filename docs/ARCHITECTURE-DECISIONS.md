@@ -2046,6 +2046,14 @@ agent-core declared none, though its modules' top-level work only builds values 
 day). The table and the markdown grammar of `web/provider.ts` now load on first use, and agent-core declares
 `sideEffects: false`. The closure fell to 6,960 KiB (`vite build` at 8a201ada0 and with the change, gcp-vm).
 
+Staging refused cf9c700fe's startup too. The slate host was already loaded at first use, yet agent-core, ajv and
+fast-uri stayed linked: the workspace object wrapped its shared-slate edits with `slateAnswer` from
+`slates/controller.ts`, and the barrel exported `SlateDirectoryName` through `slates/files.ts`, so one helper and one
+re-export linked the controller, the stores and the runtime they import. The object now hands the slate host an
+effect, which the host wraps once (it wrapped the object's answer a second time before), and the barrel exports the
+name from `slates/rpc.ts`. The closure fell to 6,529 KiB. Cloudflare's validator, eight uploads of each bundle to a bindingless scratch Worker
+(`kinu-startup-probe`, interleaved, 2026-10-27): 351 to 767 ms, median 376, before; 270 to 419 ms, median 303, after.
+
 L28. `--reset-tables` drops exactly the tables the genesis-lock diff names and makes them anew empty; no row is carried
 over (the owner's decision, 2026-10-20: "Drop changed tables"). It replaces the row-preserving repair of 5e999c1e7
 (2026-10-15), which rebuilt each stale table, copied the rows both shapes held back with their rowids, refilled a table
