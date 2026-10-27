@@ -2116,8 +2116,9 @@ real page and socket routes 71 ms, Kinu 615 ms (up to 1.6 s), and a Worker that 
   leaves aborts the main Worker's request signal through the front as it does directly (3 of 3 each, about 1.9 s after
   the request began with curl's 2 s bound), which the terminal and desktop attach and the run event stream rely on.
 - Staging's app host is a zone route as well as a custom domain (§ One origin per environment in DEPLOYMENT.md).
-  wrangler does not move a zone route between Workers ("already assigned to another worker"), so staging's first front
-  deploy needs `staging.kinu.run/*` removed from `kinu-staging` first, by hand, once.
+  wrangler does not move a zone route between Workers ("already assigned to another worker"). So before staging's first
+  front deploy, `staging.kinu.run/*` was handed by hand to a `kinu-staging-front` that passed every request to
+  `kinu-staging` (2026-10-27, the zone routes API), and staging answered through it until the front replaced it.
 
 ## Providers
 
