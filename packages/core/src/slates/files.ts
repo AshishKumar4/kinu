@@ -14,7 +14,6 @@ import { removeWhole } from '../vfs/mounts';
 import type { VfsRemoval } from '@nimbus-sh/core/vfs/vfs.js';
 import type { RuntimeFsBridge } from '@nimbus-sh/core/runtime/os-contracts.js';
 
-export { SlateDirectoryName };
 
 
 export function slateDirectory(id: SlateId): string {
