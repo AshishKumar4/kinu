@@ -21,8 +21,9 @@ import type { RequestAccount } from './auth/session';
 
 export type FrontRoutesEnv = Pick<Env, 'ASSETS' | 'UserDO' | 'OrchestratorAgent' | 'CLI_PUBLIC_ORIGIN' | 'PREVIEW_HOST_SUFFIX' | 'PREVIEW_HOST_PORT'>;
 
-/** The account's object answers these for a request whose credential names it. */
-const ACCOUNT_PAGES = ['/', APP_ROUTES.workspace, `${APP_ROUTES.workspace}/*`, ROSTER_SOCKET_ROUTE] as const;
+/** The account's object answers these for a request whose credential names it. A trailing wildcard matches the
+ *  workspace's page itself as well. */
+const ACCOUNT_PAGES = ['/', `${APP_ROUTES.workspace}/*`, ROSTER_SOCKET_ROUTE] as const;
 
 /** The account's object's answer to a Worker that asks whether an agent socket may open (user/account-pages.ts): who
  *  asks, and the hosted actor the socket is for. */
@@ -80,9 +81,13 @@ export function frontRoutes<B extends FrontRoutesEnv>(accountOf: (request: Reque
     const account = ticket === null ? await accountOf(c.req.raw, c.env) : { id: ticket.userId };
 
     if (typeof account !== 'object') return next();
+
     // The account's object admits it before the workspace's object is reached, so a name the account does not hold
-    // wakes nothing (workspace-ownership.ts).
-    const admitted = await objectNamed(c.env.UserDO, account.id).fetch(c.req.raw);
+    // wakes nothing (workspace-ownership.ts). It is asked with the request's method and headers but no body, which the
+    // workspace's object still takes; a HEAD is asked as a GET, whose answer has the admission's body.
+    const admitted = await objectNamed(c.env.UserDO, account.id).fetch(new Request(c.req.url, {
+      method: c.req.method === 'HEAD' ? 'GET' : c.req.method, headers: c.req.raw.headers,
+    }));
 
     if (!admitted.ok) return admitted;
 

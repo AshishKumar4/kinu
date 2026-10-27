@@ -117,7 +117,8 @@ export function accountPages() {
 
   familyMount(pages)(landingRoutes);
 
-  for (const path of ['/', APP_ROUTES.workspace, `${APP_ROUTES.workspace}/*`]) pages.use(path, sessionRouteGate());
+  // The trailing wildcard matches the workspace's page itself as well, so one gate covers it and every path under it.
+  for (const path of ['/', `${APP_ROUTES.workspace}/*`]) pages.use(path, sessionRouteGate());
 
   pages.get('/', accountShell);
 
@@ -125,8 +126,8 @@ export function accountPages() {
 
   pages.get(`${APP_ROUTES.workspace}/*`, workspacePage);
 
-  // HEAD is the app shell's, as on every `/api` path (api/app.ts).
-  pages.get(ROSTER_SOCKET_ROUTE, async (c, next) => (c.req.method === 'HEAD' ? appShell(c) : next()), sessionRouteGate(), ownerGate(), rosterSocket());
+  // HEAD is the app shell's once the session holds, as on every `/api` path (api/app.ts).
+  pages.get(ROSTER_SOCKET_ROUTE, sessionRouteGate(), async (c, next) => (c.req.method === 'HEAD' ? appShell(c) : next()), ownerGate(), rosterSocket());
 
   pages.all('/agents/*', (c) => settle(admitAgentSocket(c)));
 

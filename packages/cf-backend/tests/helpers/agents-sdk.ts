@@ -213,10 +213,18 @@ export const HARNESS_AGENT = Symbol('kinu.test.harness-agent');
  * Stub the Agent SDK: the real `agents` dist imports workerd-only `cloudflare:*` modules.
  * bun keeps one mock per specifier (first registration wins); call before importing the module under test.
  */
+/** Each request the SDK's router was handed, as a Worker routed it to a workspace's object. */
+export const routedAgentRequests: Request[] = [];
+
 export function mockAgentsSdk(): void {
   const getAgentByName = async (namespace: DurableObjectNamespace, name: string) => namespace.get(namespace.idFromName(name));
+
   /** Undefined is the SDK's "not my path", which drops the request to the SPA fallback. */
-  const routeAgentRequest = async (): Promise<Response | undefined> => undefined;
+  const routeAgentRequest = async (request: Request): Promise<Response | undefined> => {
+    routedAgentRequests.push(request);
+
+    return undefined;
+  };
 
   registerSynchronousMock('agents', () => ({
     /** Also the real base for DO classes a test instantiates directly (UserDO), hence the ctx/env assignment. */

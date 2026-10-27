@@ -6,6 +6,7 @@ import { Cause, Effect } from 'effect';
 import * as v from 'valibot';
 import { KinuError } from '../obs/index';
 import { CloudflareApiError, cloudflarePages, cloudflareResult, type CloudflareTransport } from './cloudflare';
+import { frontWorkerName } from './front';
 import type { HttpGet } from './context';
 import type { DeployChoice } from './door';
 import {
@@ -223,10 +224,11 @@ function workerNames(transport: CloudflareTransport, account: string): Effect.Ef
 }
 
 /** `wanted`, else `wanted-2`, `wanted-3` …: the first the account does not hold. */
+/** A name free with its front's (front.ts): a deployment on its own domain is two Workers, and either may be made. */
 function freeWorkerName(names: readonly string[], wanted: string): string {
   let candidate = wanted;
 
-  for (let next = 2; names.includes(candidate); next += 1) candidate = `${wanted}-${String(next)}`;
+  for (let next = 2; names.includes(candidate) || names.includes(frontWorkerName(candidate)); next += 1) candidate = `${wanted}-${String(next)}`;
 
   return candidate;
 }

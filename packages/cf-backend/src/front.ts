@@ -25,7 +25,7 @@ front.all('*', async (c) => c.env.MAIN.fetch(c.req.raw));
 front.onError(routeError);
 
 export default {
-  async fetch(request, env, ctx) {
+  async fetch(request: Request, env: FrontEnv, ctx: ExecutionContext) {
     installAnalyticsDiagnostics(env);
     const url = new URL(request.url);
 

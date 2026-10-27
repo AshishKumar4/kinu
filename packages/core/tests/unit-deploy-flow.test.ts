@@ -332,6 +332,15 @@ class FakeCloudflare implements CloudflareTransport {
   /** Whether the front Worker's script exists, as a run that put it in place leaves it. */
   frontExists = false;
 
+  /** The bindings its script holds: this deployment's front binds its main Worker as `MAIN`. */
+  frontBindings: JsonValue = [];
+
+  /** A front a previous run of this deployment put in place. */
+  serveFront(): void {
+    this.frontExists = true;
+    this.frontBindings = [{ type: 'service', name: 'MAIN', service: INPUTS.instanceName }];
+  }
+
   /** Null: the account has no workers.dev subdomain yet, which the API answers 404. */
   subdomain: string | null = 'acme';
 
@@ -479,7 +488,7 @@ class FakeCloudflare implements CloudflareTransport {
     if (this.otherScripts.some((name) => call.path.endsWith(`/workers/scripts/${name}/settings`))) return this.ok({ bindings: [{ type: 'plain_text', name: 'GREETING', text: 'hi' }] });
 
     if (call.path.endsWith(`/workers/scripts/${frontWorkerName(INPUTS.instanceName)}/settings`)) {
-      return this.frontExists ? this.ok({ bindings: [] }) : { status: 404, body: { success: false, errors: [{ code: 10007, message: 'workers.api.error.script_not_found' }], result: null } };
+      return this.frontExists ? this.ok({ bindings: this.frontBindings }) : { status: 404, body: { success: false, errors: [{ code: 10007, message: 'workers.api.error.script_not_found' }], result: null } };
     }
 
     // How the flow tells a first deployment from an update.
@@ -631,6 +640,7 @@ class FakeCloudflare implements CloudflareTransport {
     // The front Worker: its own script, deployed as it is uploaded, beside the main Worker's versions.
     if (upload.path.endsWith(`/workers/scripts/${frontWorkerName(INPUTS.instanceName)}`)) {
       this.frontExists = true;
+      this.frontBindings = v.is(v.string(), metadataPart) ? parseJsonObject(metadataPart).bindings ?? [] : [];
 
       return { status: 200, body: { success: true, errors: [], result: { id: frontWorkerName(INPUTS.instanceName) } } };
     }
@@ -1018,10 +1028,13 @@ describe('a guided run', () => {
     const bindings = uploadedBindings(front);
     const domains = cloudflare.calls.filter((call) => call.path.endsWith('/workers/domains')).map((call) => call.body?.service);
     const promoted = at((call) => call.path.endsWith('/workers/scripts/kinu/deployments') && JSON.stringify(call.body ?? {}).includes('"percentage":100}]'));
+    const handedOver = at((call) => call.path.endsWith('/workers/scripts/kinu/secrets') && JSON.stringify(call.body ?? {}).includes(DEPLOYMENT_RECORD_SECRET));
 
     expect({
       done: rows.every((row) => row.state === 'done'),
       afterPromote: at((call) => call === front) > promoted,
+      // The run's credentials are wiped at handover, so it waits for the front, which a retry would need them for.
+      handoverLast: handedOver > at((call) => call.method === 'PUT' && call.path.endsWith('/workers/domains') && call.body?.service === 'kinu-front'),
       objects: bindings.filter((binding) => binding.type === 'durable_object_namespace').map((binding) => [binding.name, binding.script_name]),
       main: bindings.find((binding) => binding.type === 'service'),
       secrets: bindings.filter((binding) => binding.type === 'secret_text').length,
@@ -1030,6 +1043,7 @@ describe('a guided run', () => {
     }).toEqual({
       done: true,
       afterPromote: true,
+      handoverLast: true,
       objects: [['UserDO', 'kinu'], ['OrchestratorAgent', 'kinu']],
       main: { type: 'service', name: 'MAIN', service: 'kinu' },
       secrets: 0,
@@ -1047,7 +1061,7 @@ describe('a guided run', () => {
   test('an update of a deployment its front answers keeps the domain on the front', async () => {
     updating = true;
     cloudflare.serveExisting(PRIOR_VERSION);
-    cloudflare.frontExists = true;
+    cloudflare.serveFront();
     cloudflare.domains.set('kinu.example.com', 'kinu-front');
 
     const rows = await run({ ...INPUTS, address: { kind: 'zone', hostname: 'kinu.example.com', zoneId: EXAMPLE_ZONE } });
@@ -1057,6 +1071,23 @@ describe('a guided run', () => {
       bound: cloudflare.calls.filter((call) => call.method === 'PUT' && call.path.endsWith('/workers/domains')).map((call) => call.body?.service),
       domains: cloudflare.domains,
     }).toEqual({ done: true, bound: ['kinu-front', 'kinu-front'], domains: new Map([['kinu.example.com', 'kinu-front']]) });
+  });
+
+  test('another Worker under the front\'s name answers nothing of the deployment, and the front step refuses, naming it', async () => {
+    cloudflare.frontExists = true;
+    cloudflare.frontBindings = [{ type: 'service', name: 'MAIN', service: 'blog' }];
+
+    const rows = await run({ ...INPUTS, address: { kind: 'zone', hostname: 'kinu.example.com', zoneId: EXAMPLE_ZONE } });
+
+    expect({
+      front: rows.find((row) => row.id === 'front')?.state,
+      words: JSON.stringify(rows.find((row) => row.id === 'front')),
+      uploaded: cloudflare.calls.some((call) => call.method === 'PUT' && call.path.endsWith('/workers/scripts/kinu-front')),
+      domains: cloudflare.domains,
+    }).toEqual({
+      front: 'failed', words: expect.stringContaining('another Worker named kinu-front'), uploaded: false,
+      domains: new Map([['kinu.example.com', 'kinu']]),
+    });
   });
 
   test('a random secret is minted, never asked of a person', () => {
@@ -2105,7 +2136,8 @@ describe('what the page reads of an account', () => {
   test('preflight reads the checklist together and says only what needs the person', async () => {
     cloudflare.subdomain = null;
     cloudflare.serveExisting(PRIOR_VERSION);
-    cloudflare.otherScripts.push('kinu-2');
+    // A name is free with its front's (core deploy/front.ts).
+    cloudflare.otherScripts.push('kinu-2-front');
     cloudflare.zones.set('example.com', 'zone-example');
     cloudflare.refuseOnce = R2_OFF;
 

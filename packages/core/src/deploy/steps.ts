@@ -85,6 +85,8 @@ const BASE64_ALPHABET = new TextEncoder()
 
 export function deployPlan(manifest: ReleaseManifest, inputs: DeployInputs): readonly DeployStep[] {
   const { address } = inputs;
+  // A workers.dev address belongs to the main Worker's name, so only a deployment on its own domain has a front.
+  const front = address.kind === 'zone' ? manifest.front : null;
 
   return [
     accountStep(manifest),
@@ -106,11 +108,11 @@ export function deployPlan(manifest: ReleaseManifest, inputs: DeployInputs): rea
     mailStep(inputs),
     smokeStep(),
     promoteStep(),
-    // A workers.dev address belongs to the main Worker's name, so only a deployment on its own domain has a front.
-    ...(address.kind === 'zone' && manifest.front !== null ? [frontStep(manifest, manifest.front, address)] : []),
+    ...(front === null ? [] : [frontStep(manifest, front, address)]),
     // Once this version is live: the running one kept its token and rules until now.
     mailRoutingRetiredStep(inputs),
-    handoverStep(manifest),
+    // Last: it wipes the run's credentials, which a step that fails after it could no longer be retried with.
+    handoverStep(manifest, front === null ? ['mail-routing-retired'] : ['mail-routing-retired', 'front']),
   ];
 }
 
@@ -567,10 +569,10 @@ function addressStep(manifest: ReleaseManifest, inputs: DeployInputs): DeploySte
         } else {
           // The front answers once it exists, and the smoke reaches the version under test through it; on a first run
           // the main Worker answers until the front step puts its front in place.
+          const fronted = manifest.front !== null && (yield* frontHeld(context)) === 'ours';
           const front = frontWorkerName(script);
-          const fronted = manifest.front !== null && (yield* Effect.promise(async () => scriptExists(context.transport, accountId, front)));
 
-          yield* bindDomain(context, inputs.address, fronted ? front : script);
+          yield* bindDomain(context, inputs.address, fronted ? front : script, fronted ? [script, front] : [script]);
         }
 
         const version = context.facts.get(FACT_VERSION_ID);
@@ -692,6 +694,11 @@ function frontStep(manifest: ReleaseManifest, front: ReleaseModules, address: De
         const accountId = context.inputs.accountId;
         const main = context.inputs.instanceName;
         const script = frontWorkerName(main);
+
+        if ((yield* frontHeld(context)) === 'foreign') {
+          return yield* new KinuError('denied', `This account has another Worker named ${script}, which is not this deployment's front. Rename or delete it, then retry this step.`);
+        }
+
         const session = yield* openAssetSession(context, manifest, script);
         const carried = yield* carryArtifact(context, front, session);
         const analytics: JsonValue[] = [];
@@ -733,7 +740,7 @@ function frontStep(manifest: ReleaseManifest, front: ReleaseModules, address: De
         context.artifact.held.release(carried.bytes * 2);
         readEnvelope(path, response, NamedSchema);
 
-        yield* bindDomain(context, address, script);
+        yield* bindDomain(context, address, script, [main, script]);
 
         return `${script} answers ${address.hostname}.`;
       });
@@ -741,16 +748,35 @@ function frontStep(manifest: ReleaseManifest, front: ReleaseModules, address: De
   };
 }
 
+/** Whether the account's Worker named as this deployment's front is it: one that binds this deployment's main Worker. */
+function frontHeld(context: DeployContext): Effect.Effect<'ours' | 'absent' | 'foreign', KinuError> {
+  return Effect.gen(function* () {
+    const { accountId, instanceName } = context.inputs;
+    const front = frontWorkerName(instanceName);
+
+    if (!(yield* Effect.promise(async () => scriptExists(context.transport, accountId, front)))) return 'absent';
+
+    const { bindings } = yield* Effect.promise(async () => cloudflareResult(
+      context.transport,
+      { method: 'GET', path: `/accounts/${accountId}/workers/scripts/${front}/settings` },
+      v.object({ bindings: v.array(v.looseObject({ type: v.string(), name: v.string(), service: v.optional(v.string()) })) }),
+    ));
+
+    return bindings.some((binding) => binding.type === 'service' && binding.name === MAIN_SERVICE_BINDING && binding.service === instanceName)
+      ? 'ours'
+      : 'foreign';
+  });
+}
+
 /**
  * `address` bound to `service`, as a Workers custom domain, which creates its proxied DNS record itself. A hostname has
  * one Worker, and moves only with `override_existing_origin`, while a bind to the Worker that holds it changes nothing
- * (measured on the account, 2026-10-27). It moves between the deployment's own two Workers; one another Worker of the
- * account holds is refused in Cloudflare's words.
+ * (measured on the account, 2026-10-27). It moves only between the Workers this deployment `owns`; one another Worker of
+ * the account holds is refused in Cloudflare's words.
  */
-function bindDomain(context: DeployContext, address: DeployAddress, service: string): Effect.Effect<void, KinuError> {
+function bindDomain(context: DeployContext, address: DeployAddress, service: string, owns: readonly string[]): Effect.Effect<void, KinuError> {
   return Effect.gen(function* () {
     const accountId = context.inputs.accountId;
-    const main = context.inputs.instanceName;
 
     const bound = yield* Effect.promise(async () => cloudflareResult(
       context.transport,
@@ -759,7 +785,7 @@ function bindDomain(context: DeployContext, address: DeployAddress, service: str
     ));
 
     const holder = bound[0]?.service;
-    const ours = holder !== undefined && holder !== service && [main, frontWorkerName(main)].includes(holder);
+    const ours = holder !== undefined && holder !== service && owns.includes(holder);
 
     yield* Effect.promise(async () => cloudflareResult(
       context.transport,
@@ -773,11 +799,11 @@ function bindDomain(context: DeployContext, address: DeployAddress, service: str
   });
 }
 
-function handoverStep(manifest: ReleaseManifest): DeployStep {
+function handoverStep(manifest: ReleaseManifest, after: readonly string[]): DeployStep {
   return {
     id: 'handover',
     title: 'Hand the deployment its own key',
-    after: ['mail-routing-retired'],
+    after,
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.gen(function* () {
         const accountId = context.inputs.accountId;
