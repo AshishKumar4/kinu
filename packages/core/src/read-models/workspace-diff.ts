@@ -8,7 +8,7 @@ import type { CredentialedVfs, SnapshotInfo, SqliteVFS } from '@nimbus-sh/core/v
 import { Cause, Effect } from 'effect';
 import type { VfsCred } from '@nimbus-sh/core/vfs/vfs.js';
 import type { AgentRuntime } from '../types/agent-runtime';
-import { PLATFORM_CATALOG } from '../platform-catalog';
+import { PLATFORM_LIMITS } from '../platform-limits';
 import { diffLines, fileDiff, parseGitDiff, type FileDiff, type FileStatus, type Omitted } from '../vfs/diff';
 import { nanoid } from '../utils/nanoid';
 import * as v from 'valibot';
@@ -34,7 +34,7 @@ export function bodyMaxBytes(): number {
  *  reaches this module, and a module-scope catalog read ships the whole catalog to it.
  *  Files past it are listed with +/- counts and no body. */
 function maxChangesetBodyChars(): number {
-  return PLATFORM_CATALOG['do.facet.rpc_bytes'].limit.value / 4;
+  return PLATFORM_LIMITS['do.facet.rpc_bytes'].value / 4;
 }
 
 /** Installed dependency trees: installs, not work, and costly to walk. Hidden ones fall under {@link reviewed}. */

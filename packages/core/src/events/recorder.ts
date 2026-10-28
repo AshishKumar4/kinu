@@ -17,7 +17,7 @@ import { HARNESS_MODES, HARNESS_SURFACES } from '../config/harness-mode';
 import { ESCALATION_OUTCOMES } from '../execution/escalation';
 import { MODEL_ATTEMPT_OUTCOMES, PROVIDER_WAIT_SOURCES } from '../providers/types';
 import { APP_MUTATIONS, APP_TABLE_SCOPES } from '../types/app-store';
-import { PLATFORM_CATALOG } from '../platform-catalog';
+import { PLATFORM_LIMITS } from '../platform-limits';
 import {
   SPEND_SOURCES, WORKSPACE_RUN_ID,
   MODEL_OPERATION_KINDS, MODEL_OPERATION_PHASES, MODEL_OPERATION_OUTCOMES,
@@ -510,7 +510,7 @@ export class RunEventRecorder {
     const types = opts.types !== undefined && opts.types.length > 0 ? JSON.stringify(opts.types) : null;
     // Read here, not at module scope: the browser imports this module's schemas, and a module-scope read of the
     // catalog ships all of it (89 KB) to every page.
-    const pageBytes = PLATFORM_CATALOG['run_events.page_bytes'].limit.value;
+    const pageBytes = PLATFORM_LIMITS['run_events.page_bytes'].value;
 
     // The wire's event carries its envelope, set over the stored body.
     const rows = this.sql<{ event_index: number; type: string; payload: string }>`

@@ -14,7 +14,7 @@ import { sha256Hex } from '../safety/argument-digest';
 import {
   KinuError, classifyErrorCode, diagnostics, exceededSubrequests, settle, tolerate, type ErrorCode,
 } from '../obs/index';
-import { PLATFORM_CATALOG } from '../platform-catalog';
+import { PLATFORM_LIMITS } from '../platform-limits';
 
 export interface AuthedFetchOptions {
   credKey: string;
@@ -351,7 +351,7 @@ export function codeForStatus(status: number): ErrorCode | null {
 /** The platform refusing the call past the run's subrequests is no refusal of the provider's: it ends the turn in its
  *  own words, and no other provider is tried, as each is refused alike (platform-catalog.ts do.facet.subrequests). */
 function exhaustedRun(input: { readonly doing: string; readonly cause: unknown }): KinuError {
-  const limit = PLATFORM_CATALOG['do.facet.subrequests'].limit.value.toLocaleString('en-US');
+  const limit = PLATFORM_LIMITS['do.facet.subrequests'].value.toLocaleString('en-US');
   const error = new KinuError('unavailable', `${input.doing}: this turn made ${limit} calls without a pause, Cloudflare's limit for one run.`, { cause: input.cause });
 
   diagnostics.failure('platform.subrequests_exhausted', error);

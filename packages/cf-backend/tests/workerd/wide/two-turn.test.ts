@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 import * as v from 'valibot';
 import { KINU_TIMER_JOB } from '../../../src/wake-jobs';
 import { PAGE_KEEPS_NO_DATA } from '../../../src/slates/resident';
-import { PLATFORM_CATALOG } from '@kinu.run/core';
+import { PLATFORM_LIMITS } from '@kinu.run/core';
 import {
   CallRecordSchema,
   DiagnosticFailureSchema,
@@ -304,7 +304,7 @@ describe('two real turns over the HTTP model seam', () => {
   it("a long computer-use chat opens on its newest page, pages back to its start, and serves each screenshot alone", async () => {
     const seen = v.parse(ScreenshotChatSchema, await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('screens-driver')).screenshotChatIn());
     // What one crossing out of the agent's isolate carries: every read of the chat must fit it, however long the chat.
-    const crossing = PLATFORM_CATALOG['do.facet.rpc_bytes'].limit.value;
+    const crossing = PLATFORM_LIMITS['do.facet.rpc_bytes'].value;
 
     expect({ status: seen.seed.status, inline: seen.seed.inline }).toEqual({ status: 200, inline: false });
     expect(seen.seed.bytes).toBeLessThan(crossing);

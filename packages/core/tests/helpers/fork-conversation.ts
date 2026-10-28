@@ -17,7 +17,7 @@ import { SessionPayloads } from '../../src/session/payload';
 import { SessionTranscript, readSessionTranscript } from '../../src/session/transcript';
 import { writeWorkspaceSoul } from '../../src/vfs/workspace-planes';
 import type { JsonObject } from '../../src/utils/json';
-import { PLATFORM_CATALOG } from '../../src/platform-catalog';
+import { PLATFORM_LIMITS } from '../../src/platform-limits';
 import { agentArtifactDirectory, agentHome, MAIN_AGENT } from '../../src/vfs/agent-home';
 import { WORKSPACE_ROOT } from '../../src/vfs/workspace-path';
 
@@ -30,7 +30,7 @@ export const TARGET_ARTIFACTS = `${WORKSPACE_ROOT}/.kinu/fork-context`;
 
 /** A quarter of a row: past the inline bound, so it spills to a file, and inside the row whatever else it holds. A test
  *  of a spill reads the file it spilled to, so a bound that rose past this would fail it, not pass it inline. */
-export const SPILLED_BYTES = Math.floor(PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value / 4);
+export const SPILLED_BYTES = Math.floor(PLATFORM_LIMITS['do.sqlite.row_bytes'].value / 4);
 
 export class ForkConversation {
   readonly actor: ActorHandle;

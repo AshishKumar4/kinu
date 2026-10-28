@@ -4,7 +4,7 @@
  * a stop or a rest let it go.
  */
 import { expect, test } from 'bun:test';
-import { PLATFORM_CATALOG, profileCatalogDigest, resolveTurnProfile, type HarnessMode, type ProfileCatalog } from '@kinu.run/core';
+import { PLATFORM_LIMITS, profileCatalogDigest, resolveTurnProfile, type HarnessMode, type ProfileCatalog } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import { StepPacer } from '../src/agent-facet/step-pacer';
 import type { TurnBound } from '../src/agent-facet/agent-turn';
@@ -97,7 +97,7 @@ test('a step that binds the profile, a new execution and a spent budget each ask
   await pacer.pace(ws.port, BOUND, signal, null);
   await pacer.pace(ws.port, BOUND, signal, PROFILE);
   await pacer.pace(ws.port, { ...BOUND, epoch: 8 }, signal, null);
-  now = PLATFORM_CATALOG['do.facet.cpu_ms'].limit.value / 2;
+  now = PLATFORM_LIMITS['do.facet.cpu_ms'].value / 2;
   await pacer.pace(ws.port, { ...BOUND, epoch: 8 }, signal, null);
   await drained();
 
@@ -119,7 +119,7 @@ test("each step reads the workspace's harness mode as the grant it runs under ca
   read.push((await pacer.pace(ws.port, BOUND, signal, null)).harnessMode);
   ws.harness.mode = 'pi';
   read.push((await pacer.pace(ws.port, BOUND, signal, null)).harnessMode);
-  now = PLATFORM_CATALOG['do.facet.cpu_ms'].limit.value / 2;
+  now = PLATFORM_LIMITS['do.facet.cpu_ms'].value / 2;
   read.push((await pacer.pace(ws.port, BOUND, signal, null)).harnessMode);
   await drained();
 

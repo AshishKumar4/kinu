@@ -6,7 +6,7 @@ import {
 } from '@agent-core/core/slates';
 import * as v from 'valibot';
 import type { SqlExec } from '../types/primitives';
-import { PLATFORM_CATALOG } from '../platform-catalog';
+import { PLATFORM_LIMITS } from '../platform-limits';
 import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
 import { settleSync } from '../obs/effect';
@@ -24,7 +24,7 @@ interface OwnedRecord {
 }
 
 /** One RPC answer holds this many rows at the SQLite row ceiling. */
-const SLATE_HISTORY_PAGE = Math.floor(PLATFORM_CATALOG['rpc.arg_bytes'].limit.value / PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value);
+const SLATE_HISTORY_PAGE = Math.floor(PLATFORM_LIMITS['rpc.arg_bytes'].value / PLATFORM_LIMITS['do.sqlite.row_bytes'].value);
 
 function binary(bytes: Uint8Array): ArrayBuffer {
   if (bytes.buffer instanceof ArrayBuffer && bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) return bytes.buffer;

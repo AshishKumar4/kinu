@@ -28,7 +28,7 @@ import { processJobHolder } from '../src/jobs/process-holder';
 import { scratchPath } from '@kinu.run/test-utils';
 import { handClock } from '@kinu.run/test-utils/hand-clock';
 import type { Clock } from '../src/types/clock';
-import { silenceBoundMs } from '../src/platform-catalog';
+import { silenceBoundMs } from '../src/platform-limits';
 
 /** What a call moved to the background because the person wrote is told (core `jobs/threshold.ts`). */
 const RELEASED_FOR_PERSON = 'The person wrote while this ran; backgrounded: still running, not cancelled.';

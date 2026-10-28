@@ -5,7 +5,7 @@ import * as v from 'valibot';
 import { createTestRuntime, present } from '@kinu.run/test-utils';
 import { initSessionContextTables } from '../src/session/schema';
 import { SessionMessages } from '../src/session/messages';
-import { PLATFORM_CATALOG } from '../src/platform-catalog';
+import { PLATFORM_LIMITS } from '../src/platform-limits';
 import { SPILLED_BYTES } from './helpers/fork-conversation';
 import { SessionPayloads } from '../src/session/payload';
 import { SessionContext, type ContextEntry, type ContextSelection } from '../src/session/context';
@@ -93,7 +93,7 @@ test('an accumulating part never puts one row over the platform limit and seals 
 
     for (let i = 0; i < appends; i++) s.messages.streamAppend('long', 0, window);
     const widest = s.testSql.db.query<{ n: number }, []>('SELECT MAX(length(text)) AS n FROM stream_parts').get()?.n ?? -1;
-    expect(widest * 3).toBeLessThan(PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value);
+    expect(widest * 3).toBeLessThan(PLATFORM_LIMITS['do.sqlite.row_bytes'].value);
     expect(widest).toBeLessThan(300_000);
     expect(await s.messages.materialize({ messageId: 'long' })).toEqual({ role: 'assistant', content: [{ type: 'reasoning', text: window.repeat(appends) }] });
     const parts = await s.messages.openParts('long');

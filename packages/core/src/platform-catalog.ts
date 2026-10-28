@@ -1,7 +1,10 @@
 /**
- * The single copy of every Cloudflare platform number and how it was established; `scripts/platform-catalog.ts --report` renders it.
+ * How every Cloudflare platform number was established; `scripts/platform-catalog.ts --report` renders it. The numbers
+ * live in `platform-limits.ts`, so the code that obeys one loads it without this module's prose.
  * Probing rules: pin compat date/flags to production, label each claim, copy failure strings verbatim, never fill a missing half, and never trust `wrangler dev` for enforcement.
  */
+
+import { GB, MB, MiB, PLATFORM_LIMITS, type LimitUnit, type PlatformFactId, type PlatformQuantity } from './platform-limits';
 
 /** How a claim was established. Additive: never re-purpose an existing value. */
 export type EvidenceLabel =
@@ -18,14 +21,6 @@ const PROVEN_LABELS: readonly EvidenceLabel[] = [
   'proven-by-source',
   'observed-in-production',
 ];
-
-type LimitUnit = 'bytes' | 'ms' | 'count';
-
-/** Base unit only; call sites must not convert. */
-interface PlatformQuantity {
-  readonly value: number;
-  readonly unit: LimitUnit;
-}
 
 /** Copied verbatim, never paraphrased. */
 interface PlatformObservable {
@@ -46,9 +41,13 @@ interface PlatformMeasurement {
   readonly unit: LimitUnit;
 }
 
-export interface PlatformFact {
-  readonly subject: string;
+export interface PlatformFact extends PlatformEvidence {
   readonly limit: PlatformQuantity | null;
+}
+
+/** A fact as this module records it: everything but its number, which `platform-limits.ts` holds. */
+interface PlatformEvidence {
+  readonly subject: string;
   readonly origin: 'platform' | 'self-imposed';
   readonly bounds: BoundsKind | null;
   readonly evidence: EvidenceLabel;
@@ -69,15 +68,6 @@ export interface PlatformFact {
   readonly knownBreachPath?: string;
 }
 
-const KiB = 1024;
-
-const MiB = 1024 * 1024;
-
-/** Cloudflare's documented sizes are decimal (DO limits page, footnote 2); where readings differ the smaller is used. */
-const MB = 1000 * 1000;
-
-const GB = 1000 * 1000 * 1000;
-
 const CF_DO_LIMITS = 'https://developers.cloudflare.com/durable-objects/platform/limits/';
 
 const CF_DO_STATE = 'https://developers.cloudflare.com/durable-objects/api/state/';
@@ -91,7 +81,6 @@ const DOCS_READ = '2026-08-17';
 export const PLATFORM_CATALOG = {
   'container.instance.vcpu': {
     subject: 'vCPU allocated to each Kinu computer',
-    limit: { value: 2, unit: 'count' },
     origin: 'self-imposed',
     bounds: 'count',
     evidence: 'proven-by-source',
@@ -105,7 +94,6 @@ export const PLATFORM_CATALOG = {
 
   'container.instance.memory': {
     subject: 'Memory allocated to each Kinu computer',
-    limit: { value: 6_144 * MiB, unit: 'bytes' },
     origin: 'self-imposed',
     bounds: 'peak-resident',
     evidence: 'proven-by-source',
@@ -123,7 +111,6 @@ export const PLATFORM_CATALOG = {
 
   'container.instance.disk': {
     subject: 'Disk allocated to each Kinu computer',
-    limit: { value: 8_000 * MB, unit: 'bytes' },
     origin: 'self-imposed',
     bounds: 'storage',
     evidence: 'proven-by-source',
@@ -137,7 +124,6 @@ export const PLATFORM_CATALOG = {
 
   'worker.isolate.memory': {
     subject: 'Memory per V8 isolate: JavaScript heap plus WebAssembly allocations',
-    limit: { value: 128 * MB, unit: 'bytes' },
     origin: 'platform',
     bounds: 'peak-resident',
     evidence: 'documented',
@@ -176,7 +162,6 @@ export const PLATFORM_CATALOG = {
 
   'do.isolate.oom_catchable': {
     subject: 'The single-burst allocation wall for a Durable Object isolate, which throws and is catchable',
-    limit: { value: 256 * MiB, unit: 'bytes' },
     origin: 'platform',
     bounds: 'peak-resident',
     evidence: 'proven-by-probe',
@@ -204,7 +189,6 @@ export const PLATFORM_CATALOG = {
     subject:
       'The wall for memory that must SURVIVE ACROSS RPCs, past which the object is reset with '
       + 'no error on any surface',
-    limit: { value: 200 * MiB, unit: 'bytes' },
     origin: 'platform',
     bounds: 'peak-resident',
     evidence: 'proven-by-probe',
@@ -240,7 +224,6 @@ export const PLATFORM_CATALOG = {
     subject:
       'A Durable Object isolate carries a generation counter that increments on every reset, so a '
       + 'silent reset is detectable positively on the next call',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
@@ -279,7 +262,6 @@ export const PLATFORM_CATALOG = {
 
   'do.isolate.oom_reported': {
     subject: 'The wording an isolate memory reset surfaces as, when it surfaces at all',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'inferred',
@@ -309,7 +291,6 @@ export const PLATFORM_CATALOG = {
     subject:
       'Peer Durable Objects normally get their own isolate, but memory pressure between peers '
       + 'is real and NOT uniform: a peer can silently lose its retained bytes',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
@@ -341,7 +322,6 @@ export const PLATFORM_CATALOG = {
 
   'worker.memory_usage_unobservable': {
     subject: 'process.memoryUsage() returns 0 for every field inside a Durable Object class context',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-source',
@@ -369,7 +349,6 @@ export const PLATFORM_CATALOG = {
 
   'do.block_concurrency.cancel_ms': {
     subject: 'blockConcurrencyWhile() held too long is cancelled and the Durable Object is reset',
-    limit: { value: 30_000, unit: 'ms' },
     origin: 'platform',
     bounds: 'duration',
     evidence: 'proven-by-probe',
@@ -410,7 +389,6 @@ export const PLATFORM_CATALOG = {
     subject:
       'partyserver runs onStart() inside ctx.blockConcurrencyWhile(), and fetch, '
       + 'webSocketMessage, webSocketClose and alarm all await that same gate',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-source',
@@ -433,7 +411,6 @@ export const PLATFORM_CATALOG = {
     subject:
       'The Durable Object input gate closes around STORAGE operations, not around awaiting a '
       + 'network response',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
@@ -453,7 +430,6 @@ export const PLATFORM_CATALOG = {
 
   'do.cpu_ms_per_invocation': {
     subject: 'Active CPU time per Durable Object invocation (HTTP request, WebSocket message, or alarm)',
-    limit: { value: 30_000, unit: 'ms' },
     origin: 'platform',
     bounds: 'duration',
     evidence: 'documented',
@@ -480,7 +456,6 @@ export const PLATFORM_CATALOG = {
 
   'do.alarm.wall_ms': {
     subject: 'Wall-clock time for one Durable Object alarm handler invocation',
-    limit: { value: 900_000, unit: 'ms' },
     origin: 'platform',
     bounds: 'duration',
     evidence: 'documented',
@@ -499,7 +474,6 @@ export const PLATFORM_CATALOG = {
 
   'worker.wall.http_unlimited': {
     subject: 'An HTTP- or RPC-triggered Worker or Durable Object has no wall-clock limit while the caller stays connected',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'documented',
@@ -520,7 +494,6 @@ export const PLATFORM_CATALOG = {
 
   'worker.wait_until.grace_ms': {
     subject: 'How long ctx.waitUntil() extends execution past the response or client disconnect',
-    limit: { value: 30_000, unit: 'ms' },
     origin: 'platform',
     bounds: 'duration',
     evidence: 'documented',
@@ -540,7 +513,6 @@ export const PLATFORM_CATALOG = {
 
   'do.wait_until.no_op': {
     subject: 'ctx.waitUntil() has no effect inside a Durable Object',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'documented',
@@ -571,7 +543,6 @@ export const PLATFORM_CATALOG = {
 
   'do.background_task.cancelled_on_reset': {
     subject: 'What becomes of a promise still in flight when a Durable Object invocation returns',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
@@ -609,7 +580,6 @@ export const PLATFORM_CATALOG = {
 
   'date_now.frozen_between_io': {
     subject: 'Date.now() does not advance between I/O operations inside a Worker',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-source',
@@ -629,7 +599,6 @@ export const PLATFORM_CATALOG = {
 
   'rpc.arg_bytes': {
     subject: 'Largest byte payload carried as an ordinary Workers RPC argument or return value',
-    limit: { value: 32 * MiB, unit: 'bytes' },
     origin: 'platform',
     bounds: 'wire',
     evidence: 'observed-in-production',
@@ -660,7 +629,6 @@ export const PLATFORM_CATALOG = {
 
   'facet.rpc_payload_budget': {
     subject: 'Nimbus\'s self-imposed RPC payload budget, and the slice ceiling derived from it',
-    limit: { value: 28 * MiB, unit: 'bytes' },
     origin: 'self-imposed',
     bounds: 'wire',
     evidence: 'proven-by-source',
@@ -679,7 +647,6 @@ export const PLATFORM_CATALOG = {
 
   'run_events.page_bytes': {
     subject: 'Stored run-event text one page may carry out of the workspace object',
-    limit: { value: 256 * KiB, unit: 'bytes' },
     origin: 'self-imposed',
     bounds: 'response',
     evidence: 'proven-by-source',
@@ -710,7 +677,6 @@ export const PLATFORM_CATALOG = {
 
   'files.page_bytes': {
     subject: 'Listing text one Files page may carry out of the workspace object',
-    limit: { value: 256 * KiB, unit: 'bytes' },
     origin: 'self-imposed',
     bounds: 'response',
     evidence: 'proven-by-source',
@@ -740,7 +706,6 @@ export const PLATFORM_CATALOG = {
 
   'rpc.clone_refused': {
     subject: 'Values that cannot cross a worker boundary at all, at any size',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
@@ -768,7 +733,6 @@ export const PLATFORM_CATALOG = {
     subject:
       'Workers RPC resolves a method on the receiver\'s PROTOTYPE CHAIN; TypeScript `private` '
       + 'is erased and therefore reachable, and own instance properties are not reachable at all',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
@@ -795,7 +759,6 @@ export const PLATFORM_CATALOG = {
   'do.storage.wasm_module_unreadable': {
     subject:
       'ctx.storage accepts a compiled WebAssembly.Module on put() and can never read it back',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
@@ -818,7 +781,6 @@ export const PLATFORM_CATALOG = {
     subject:
       'eval, new Function(source) and WebAssembly compilation from bytes are all blocked at '
       + 'request time, in every context, by one per-isolate flag',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
@@ -848,7 +810,6 @@ export const PLATFORM_CATALOG = {
 
   'worker_loader.do_dynamic_worker_concurrency': {
     subject: 'Calls one Durable Object may have awaiting an answer from distinct Dynamic Workers at once',
-    limit: { value: 10, unit: 'count' },
     origin: 'platform',
     bounds: 'concurrency',
     evidence: 'proven-by-probe',
@@ -881,7 +842,6 @@ export const PLATFORM_CATALOG = {
     subject:
       'env.LOADER.get(name, cb) opens an unlimited number of FRESH request-time compilation '
       + 'windows, but never re-runs cb for a name already loaded',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
@@ -908,7 +868,6 @@ export const PLATFORM_CATALOG = {
     subject:
       'Atomics.wait is unavailable in every context, though SharedArrayBuffer, growable SAB, '
       + 'shared wasm memory and Atomics.waitAsync all work',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
@@ -928,7 +887,6 @@ export const PLATFORM_CATALOG = {
 
   'do.sqlite.row_bytes': {
     subject: 'Maximum size of a string, BLOB or table row in a SQLite-backed Durable Object',
-    limit: { value: 8 * MiB, unit: 'bytes' },
     origin: 'platform',
     bounds: 'row',
     evidence: 'proven-by-probe',
@@ -959,7 +917,6 @@ export const PLATFORM_CATALOG = {
 
   'do.sqlite.statement_bytes': {
     subject: 'Maximum SQL statement length in a SQLite-backed Durable Object',
-    limit: { value: 100 * KiB, unit: 'bytes' },
     origin: 'platform',
     bounds: 'query',
     evidence: 'documented',
@@ -978,7 +935,6 @@ export const PLATFORM_CATALOG = {
 
   'do.sqlite.bound_params': {
     subject: 'Maximum bound parameters per query in a SQLite-backed Durable Object',
-    limit: { value: 100, unit: 'count' },
     origin: 'platform',
     bounds: 'query',
     evidence: 'documented',
@@ -996,7 +952,6 @@ export const PLATFORM_CATALOG = {
 
   'do.sqlite.like_pattern_bytes': {
     subject: 'Maximum length of a LIKE or GLOB pattern in a SQLite-backed Durable Object',
-    limit: { value: 50, unit: 'bytes' },
     origin: 'platform',
     bounds: 'query',
     evidence: 'proven-by-probe',
@@ -1019,9 +974,8 @@ export const PLATFORM_CATALOG = {
       + '`like` operator, whose caller writes the pattern and is answered this refusal.',
   },
 
-    'do.sqlite.columns_per_table': {
+  'do.sqlite.columns_per_table': {
     subject: 'Maximum columns per table in a SQLite-backed Durable Object',
-    limit: { value: 100, unit: 'count' },
     origin: 'platform',
     bounds: 'row',
     evidence: 'documented',
@@ -1038,7 +992,6 @@ export const PLATFORM_CATALOG = {
 
   'do.storage.bytes': {
     subject: 'Storage per SQLite-backed Durable Object',
-    limit: { value: 10 * GB, unit: 'bytes' },
     origin: 'platform',
     bounds: 'storage',
     evidence: 'documented',
@@ -1099,7 +1052,6 @@ export const PLATFORM_CATALOG = {
 
   'sqlite.nomem': {
     subject: 'The storage layer refusing an allocation, distinct from an isolate OOM',
-    limit: null,
     origin: 'platform',
     bounds: 'peak-resident',
     evidence: 'inferred',
@@ -1120,7 +1072,6 @@ export const PLATFORM_CATALOG = {
 
   'do.kv.value_bytes': {
     subject: 'Key and value size for a KEY-VALUE-backed Durable Object class',
-    limit: { value: 128 * KiB, unit: 'bytes' },
     origin: 'platform',
     bounds: 'row',
     evidence: 'documented',
@@ -1140,7 +1091,6 @@ export const PLATFORM_CATALOG = {
 
   'do.isolate.transient_alloc_reset': {
     subject: 'A transient allocate-and-free of 128 MiB inside a Durable Object context resets the object',
-    limit: { value: 128 * MiB, unit: 'bytes' },
     origin: 'platform',
     bounds: 'peak-resident',
     evidence: 'proven-by-probe',
@@ -1170,7 +1120,6 @@ export const PLATFORM_CATALOG = {
     subject:
       'The memory kill is triggered by allocation BURST and pressure, not by a static capacity '
       + 'line, so the same worker dies lower under real work than under a deliberate ladder',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
@@ -1207,7 +1156,6 @@ export const PLATFORM_CATALOG = {
     subject:
       'ctx.storage.sql.databaseSize reports the CALLING object\'s own database only; the shared '
       + 'quota total is not exposed anywhere',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
@@ -1233,7 +1181,6 @@ export const PLATFORM_CATALOG = {
     subject:
       'ctx.storage.kv on a SQLite-backed Durable Object is genuinely synchronous: structured '
       + 'clone, zero awaits, with a per-value cap just under 8 MiB',
-    limit: { value: 8_388_620, unit: 'bytes' },
     origin: 'platform',
     bounds: 'row',
     // Raised with do.sqlite.row_bytes, whose SQLite holds the value; measured on local workerd, not on production.
@@ -1262,7 +1209,6 @@ export const PLATFORM_CATALOG = {
 
   'do.requests_per_second_soft': {
     subject: 'Soft request throughput for a single Durable Object instance',
-    limit: { value: 1_000, unit: 'count' },
     origin: 'platform',
     bounds: 'concurrency',
     evidence: 'documented',
@@ -1279,7 +1225,6 @@ export const PLATFORM_CATALOG = {
 
   'worker.subrequests': {
     subject: 'Subrequests per invocation: every fetch() plus every call to KV, R2, D1 or a binding',
-    limit: { value: 10_000, unit: 'count' },
     origin: 'platform',
     bounds: 'count',
     evidence: 'documented',
@@ -1300,7 +1245,6 @@ export const PLATFORM_CATALOG = {
 
   'worker.connect.private_address': {
     subject: "A Worker's connect() to a private, loopback or link-local address, or to a name that resolves to one",
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'observed-in-production',
@@ -1320,7 +1264,6 @@ export const PLATFORM_CATALOG = {
 
   'r2.etag.compressed_weak': {
     subject: "The ETag an R2 object's GET answers through the S3 API, by the encoding it is sent in",
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
@@ -1340,7 +1283,6 @@ export const PLATFORM_CATALOG = {
 
   'worker.connect.address_forms': {
     subject: "The spellings of an IP address a Worker's connect() reaches",
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'observed-in-production',
@@ -1359,7 +1301,6 @@ export const PLATFORM_CATALOG = {
 
   'worker.fetch.private_address': {
     subject: "A Worker's fetch() to a private or loopback address, or to a name that resolves to one",
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'observed-in-production',
@@ -1378,7 +1319,6 @@ export const PLATFORM_CATALOG = {
 
   'worker.fetch.chatgpt_refused': {
     subject: "A Worker's fetch() to chatgpt.com (backend-api: Codex responses, models, plan usage)",
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'observed-in-production',
@@ -1398,7 +1338,6 @@ export const PLATFORM_CATALOG = {
 
   'kv.read.cross_location_stale': {
     subject: 'A Workers KV read at a location other than the one that wrote the key',
-    limit: { value: 60_000, unit: 'ms' },
     origin: 'platform',
     bounds: 'duration',
     evidence: 'documented',
@@ -1414,7 +1353,6 @@ export const PLATFORM_CATALOG = {
 
   'worker.simultaneous_connections': {
     subject: 'Connections simultaneously waiting for response headers, per invocation',
-    limit: { value: 6, unit: 'count' },
     origin: 'platform',
     bounds: 'concurrency',
     evidence: 'documented',
@@ -1435,7 +1373,6 @@ export const PLATFORM_CATALOG = {
 
   'do.evict.no_signal': {
     subject: 'Platform-side termination of a Durable Object with nothing the object can catch',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'inferred',
@@ -1464,7 +1401,6 @@ export const PLATFORM_CATALOG = {
 
   'do.reset.transient': {
     subject: 'Durable Object resets that are safe to re-attempt, as distinct from resource resets that are not',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'observed-in-production',
@@ -1504,7 +1440,6 @@ export const PLATFORM_CATALOG = {
     subject:
       'A Durable Object request that alternated SQLite writes, awaits and a tight integer loop of tens of ms was reset '
       + 'after about a second of CPU; a turn\'s shape with JSON work did not reset',
-    limit: { value: 1_000, unit: 'ms' },
     origin: 'platform',
     bounds: 'duration',
     evidence: 'proven-by-probe',
@@ -1548,7 +1483,6 @@ export const PLATFORM_CATALOG = {
 
   'websocket.message_bytes': {
     subject: 'Maximum size of a WebSocket message a Durable Object can RECEIVE',
-    limit: { value: 32 * MiB, unit: 'bytes' },
     origin: 'platform',
     bounds: 'wire',
     evidence: 'documented',
@@ -1568,7 +1502,6 @@ export const PLATFORM_CATALOG = {
 
   'email.routing.rules_per_domain': {
     subject: 'Routing rules Cloudflare Email Routing holds for one domain',
-    limit: { value: 200, unit: 'count' },
     origin: 'platform',
     bounds: 'count',
     evidence: 'documented',
@@ -1588,7 +1521,6 @@ export const PLATFORM_CATALOG = {
   },
   'email.routing.message_bytes': {
     subject: 'Maximum size of an inbound message Cloudflare Email Routing delivers to a Worker',
-    limit: { value: 25 * MiB, unit: 'bytes' },
     origin: 'platform',
     bounds: 'wire',
     evidence: 'documented',
@@ -1608,7 +1540,6 @@ export const PLATFORM_CATALOG = {
     subject:
       'A hibernated WebSocket keeps its serialized attachment and tags; everything held in '
       + 'isolate memory is gone',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-source',
@@ -1636,7 +1567,6 @@ export const PLATFORM_CATALOG = {
     subject: 'A facet\'s memory ceiling, independent of its parent\'s residency',
     // Kinu's agent facets (loaded workers) under a turn's churn: 125 MB lived and 130 MB was reset. That is the published
     // 128 MB, and D8's 110/115 MB with a heavier base, not the 208 MiB Nimbus's plain facets measured on 2026-07-24.
-    limit: { value: 125 * MB, unit: 'bytes' },
     origin: 'platform',
     bounds: 'peak-resident',
     evidence: 'proven-by-probe',
@@ -1662,7 +1592,6 @@ export const PLATFORM_CATALOG = {
 
   'do.facet.cpu_turns_reset_parent': {
     subject: 'A Worker Loader facet whose event-loop turns each take 0.1-0.4 s of CPU resets its parent object and every sibling',
-    limit: { value: 100, unit: 'ms' },
     origin: 'platform',
     bounds: 'duration',
     evidence: 'proven-by-probe',
@@ -1697,7 +1626,6 @@ export const PLATFORM_CATALOG = {
     subject:
       'Facets of one Durable Object share a single execution thread: CPU-bound or synchronous '
       + 'work in any facet stalls every sibling and the parent for its full duration',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
@@ -1735,7 +1663,6 @@ export const PLATFORM_CATALOG = {
 
   'do.facet.cpu_ms': {
     subject: 'Active CPU time a Durable Object facet from a loaded Worker may spend: the default, whatever its parent declares',
-    limit: { value: 30_000, unit: 'ms' },
     origin: 'platform',
     bounds: 'duration',
     evidence: 'proven-by-probe',
@@ -1765,7 +1692,6 @@ export const PLATFORM_CATALOG = {
 
   'do.facet.subrequests': {
     subject: 'Subrequests a Durable Object facet from a loaded Worker may make while it stays busy, across every call into it',
-    limit: { value: 10_000, unit: 'count' },
     origin: 'platform',
     bounds: 'count',
     evidence: 'proven-by-probe',
@@ -1796,7 +1722,6 @@ export const PLATFORM_CATALOG = {
     subject:
       'ctx.facets.abort(name) rejects pending work but REUSES the same isolate, only rotating the '
       + 'loader id gives a fresh one',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
@@ -1824,7 +1749,6 @@ export const PLATFORM_CATALOG = {
 
   'do.facet.rpc_bytes': {
     subject: 'Serialized argument or return size for one facet RPC',
-    limit: { value: 32 * MiB, unit: 'bytes' },
     origin: 'platform',
     bounds: 'wire',
     evidence: 'proven-by-probe',
@@ -1850,7 +1774,6 @@ export const PLATFORM_CATALOG = {
 
   'do.facet.no_alarms': {
     subject: 'A facet cannot set an alarm; only the root object can',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
@@ -1869,7 +1792,6 @@ export const PLATFORM_CATALOG = {
 
   'do.facet.stub_local': {
     subject: 'A facet stub is coordinator-local and cannot be transferred, stored, or re-invoked indirectly',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
@@ -1893,7 +1815,6 @@ export const PLATFORM_CATALOG = {
 
   'do.facet.eviction_joint': {
     subject: 'Parent and facets evict together, and an OOM in either leaves the other intact',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
@@ -1918,7 +1839,6 @@ export const PLATFORM_CATALOG = {
 
   'do.facet.count': {
     subject: 'Facets creatable beneath one Durable Object over its lifetime',
-    limit: { value: 65_536, unit: 'count' },
     origin: 'platform',
     bounds: 'count',
     evidence: 'proven-by-source',
@@ -1948,7 +1868,6 @@ export const PLATFORM_CATALOG = {
 
   'do.facet.creation_degrades': {
     subject: 'Facet creation beneath one Durable Object slows with its count, and fails long before do.facet.count',
-    limit: { value: 31_300, unit: 'count' },
     origin: 'platform',
     bounds: 'count',
     evidence: 'proven-by-probe',
@@ -1982,7 +1901,6 @@ export const PLATFORM_CATALOG = {
     subject:
       'ctx.facets.clone accepts nonsense source names without error, and every one of them WIPES '
       + 'the destination',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
@@ -2004,7 +1922,6 @@ export const PLATFORM_CATALOG = {
 
   'do.facet.clone_cow': {
     subject: 'ctx.facets.clone is O(1) copy-on-write in time, and full-price in quota',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
@@ -2035,7 +1952,6 @@ export const PLATFORM_CATALOG = {
 
   'worker_loader.limits_no_memory': {
     subject: 'A dynamically loaded Worker\'s limits can express CPU and subrequests, and NOT memory',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-source',
@@ -2061,7 +1977,6 @@ export const PLATFORM_CATALOG = {
 
   'tracing.scoped_spans_only': {
     subject: 'Native spans are bound to their invocation, including manually ended spans',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
@@ -2078,7 +1993,6 @@ export const PLATFORM_CATALOG = {
 
   'tracing.inert_locally': {
     subject: 'Local tracing records span structure and outcomes, but not span attributes',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
@@ -2096,7 +2010,6 @@ export const PLATFORM_CATALOG = {
     subject:
       'workerd runs V8 with pointer compression, so a live JS value costs roughly a third less '
       + 'than on Node: asymptotically, once the fixed heap floor is amortised',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
@@ -2135,7 +2048,6 @@ export const PLATFORM_CATALOG = {
     subject:
       'A facet\'s ctx.id is minted from the ROOT object\'s namespace, so a Durable Object id '
       + 'cannot tell you which class is running',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
@@ -2157,7 +2069,6 @@ export const PLATFORM_CATALOG = {
 
   'do.facet.work_is_traced': {
     subject: 'Class facets have RPC span edges; loader facets expose root-side calls and native tail logs, not work spans',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
@@ -2177,7 +2088,6 @@ export const PLATFORM_CATALOG = {
 
   'worker.script_bytes': {
     subject: 'Deployed Worker size, uncompressed',
-    limit: { value: 64 * MiB, unit: 'bytes' },
     origin: 'platform',
     bounds: 'bundle',
     evidence: 'documented',
@@ -2195,7 +2105,6 @@ export const PLATFORM_CATALOG = {
 
   'worker.startup_ms': {
     subject: 'Time allowed for a Worker to evaluate its top-level module scope',
-    limit: { value: 1_000, unit: 'ms' },
     origin: 'platform',
     bounds: 'duration',
     evidence: 'documented',
@@ -2223,7 +2132,6 @@ export const PLATFORM_CATALOG = {
 
   'facet.module_text_bytes': {
     subject: 'Per-module text size a dynamically loaded Worker child can boot with',
-    limit: { value: 8 * MiB, unit: 'bytes' },
     origin: 'platform',
     bounds: 'bundle',
     evidence: 'proven-by-probe',
@@ -2260,7 +2168,6 @@ export const PLATFORM_CATALOG = {
 
   'workers_dev.fresh_route_404': {
     subject: 'A workers.dev address just bound to a script answering 404 before it serves the script',
-    limit: null,
     origin: 'platform',
     bounds: 'duration',
     evidence: 'proven-by-probe',
@@ -2283,7 +2190,6 @@ export const PLATFORM_CATALOG = {
 
   'edge.websocket_idle_reap_ms': {
     subject: 'Cloudflare\'s edge closing a WebSocket that has been idle too long',
-    limit: { value: 100_000, unit: 'ms' },
     origin: 'platform',
     bounds: 'duration',
     evidence: 'speculative',
@@ -2312,7 +2218,6 @@ export const PLATFORM_CATALOG = {
     subject:
       'The runtime answers RFC 6455 ping frames itself, without waking a hibernated Durable '
       + 'Object or invoking webSocketMessage',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'documented',
@@ -2334,7 +2239,6 @@ export const PLATFORM_CATALOG = {
 
   'facet.rpc_timeout_ms': {
     subject: 'Nimbus\'s own per-task deadline on a facet call',
-    limit: { value: 30_000, unit: 'ms' },
     origin: 'self-imposed',
     bounds: 'duration',
     evidence: 'proven-by-source',
@@ -2353,7 +2257,6 @@ export const PLATFORM_CATALOG = {
 
   'provider.stream.idle_ms': {
     subject: 'Longest a model provider\'s stream may send no byte (before its headers, before its first chunk, or between two) before the call fails',
-    limit: { value: 360_000, unit: 'ms' },
     origin: 'self-imposed',
     bounds: 'silence',
     evidence: 'observed-in-production',
@@ -2381,7 +2284,6 @@ export const PLATFORM_CATALOG = {
 
   'job.context_silence_ms': {
     subject: 'Longest the context a detached background job runs in may leave its liveness probe unanswered before the job is given up as lost',
-    limit: { value: 600_000, unit: 'ms' },
     origin: 'self-imposed',
     bounds: 'silence',
     evidence: 'observed-in-production',
@@ -2408,7 +2310,6 @@ export const PLATFORM_CATALOG = {
 
   'browser.session.keep_alive_ms': {
     subject: 'Longest a Browser Run Chrome session may sit idle, with no connection, before it closes',
-    limit: { value: 1_200_000, unit: 'ms' },
     origin: 'platform',
     bounds: 'duration',
     evidence: 'proven-by-probe',
@@ -2427,7 +2328,6 @@ export const PLATFORM_CATALOG = {
     subject:
       'A Durable Object runs where it is first reached and never moves; a location hint keeps it inside the hinted region, '
       + 'and `apac` includes Hong Kong',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
@@ -2449,7 +2349,6 @@ export const PLATFORM_CATALOG = {
 
   'provider.region.served': {
     subject: 'Anthropic and OpenAI serve their APIs only in the countries and regions they list; Hong Kong is on neither',
-    limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'documented',
@@ -2467,39 +2366,26 @@ export const PLATFORM_CATALOG = {
       + 'https://developers.openai.com/api/docs/guides/error-codes. Anthropic\'s list says "Any country or region not listed is '
       + 'unsupported". OpenAI answers an unauthenticated call 401 before it reads the region.',
   },
-} as const satisfies Readonly<Record<string, PlatformFact>>;
-
-export type PlatformFactId = keyof typeof PLATFORM_CATALOG;
+} as const satisfies Readonly<Record<PlatformFactId, PlatformEvidence>>;
 
 export interface PlatformFactEntry {
   readonly id: string;
   readonly fact: PlatformFact;
 }
 
-/** For iteration: indexing the `as const` catalog by a variable yields a union where optional fields are unaddressable. */
+/** A fact whole: its number and its evidence. For iteration too: indexing the `as const` catalog by a variable yields a
+ *  union where optional fields are unaddressable. */
 export function platformFact(id: PlatformFactId): PlatformFact {
-  return PLATFORM_CATALOG[id];
+  return { ...PLATFORM_CATALOG[id], limit: PLATFORM_LIMITS[id] };
 }
 
 export function platformFactEntries(): readonly PlatformFactEntry[] {
   return platformFactIds().map((id) => ({ id, fact: platformFact(id) }));
 }
 
-/**
- * The predicate narrows rather than casts, restoring the key union `Object.keys` loses. A function, not a module-scope
- * list: the browser imports modules that import this one, and a call at module scope ships the whole catalog to it.
- */
+/** The predicate narrows rather than casts, restoring the key union `Object.keys` loses. */
 export function platformFactIds(): readonly PlatformFactId[] {
   return Object.keys(PLATFORM_CATALOG).filter((id): id is PlatformFactId => id in PLATFORM_CATALOG);
-}
-
-/** Since the last byte, never a total. */
-export type SilenceBoundId = {
-  [Id in PlatformFactId]: (typeof PLATFORM_CATALOG)[Id]['bounds'] extends 'silence' ? Id : never;
-}[PlatformFactId];
-
-export function silenceBoundMs(id: SilenceBoundId): number {
-  return PLATFORM_CATALOG[id].limit.value;
 }
 
 /** The faults a deterministic-simulation lane may inject: the catalog filtered to proven evidence. */

@@ -3,7 +3,7 @@
  * the store compiles every statement from them against the catalogued declaration (spec §9.2).
  */
 import * as v from 'valibot';
-import { PLATFORM_CATALOG } from '../platform-catalog';
+import { PLATFORM_LIMITS } from '../platform-limits';
 import { APP_TABLE_SCOPES } from '../types/app-store';
 import { JsonValueSchema } from '../utils/json';
 import { namespace } from './operation';
@@ -32,9 +32,9 @@ export const SELECT_LIMIT_DEFAULT = 100;
 export const SELECT_LIMIT_MAX = 1000;
 
 /** What one statement binds, Durable Object SQLite's own bound. */
-export const BOUND_PARAMS_MAX = PLATFORM_CATALOG['do.sqlite.bound_params'].limit.value;
+export const BOUND_PARAMS_MAX = PLATFORM_LIMITS['do.sqlite.bound_params'].value;
 
-const STATEMENT_BYTES_MAX = PLATFORM_CATALOG['do.sqlite.statement_bytes'].limit.value;
+const STATEMENT_BYTES_MAX = PLATFORM_LIMITS['do.sqlite.statement_bytes'].value;
 
 /**
  * Re-applied in {@link quoted}, the only function that emits an identifier. No flag: JSON Schema's `pattern` carries

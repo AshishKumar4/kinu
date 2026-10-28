@@ -17,7 +17,7 @@ import {
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle,
   durableStamps, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp, LiveWorkers, type Repair,
   type RunEventInput, type SubagentInspectionAuthority, type ConversationRecall,
-  isSubagentOrigin, WORKSPACE_ROOT, PLATFORM_CATALOG, ProgramsInFlight, type OwedIntent, type OwedOwnerIntent, cardWords,
+  isSubagentOrigin, WORKSPACE_ROOT, PLATFORM_LIMITS, ProgramsInFlight, type OwedIntent, type OwedOwnerIntent, cardWords,
   specProvider, WORKERS_AI_PROVIDER_ID, type CompactOutcome,
 } from '@kinu.run/core';
 import type { EnqueueTurnResult, GitHubDeps, GoogleDeps, MailDeps, OwnerWaitsHost, PanelAgent, ProgrammaticTurn, RecordedTurn, SendState, SubagentInspectionRequest, SubagentInspectionResult } from '@kinu.run/core';
@@ -231,7 +231,7 @@ type ActorJobSeams = Pick<BackgroundJobRunnerDeps,
  * given (do.alarm.wall_ms), so the platform never ends the handler mid-wait. A handler ended at its wall resets the
  * object and closes every socket (warm-forge-4d6acc02, 2026-09-25).
  */
-export const ALARM_PROGRAM_WAIT_MS = Math.floor(PLATFORM_CATALOG['do.alarm.wall_ms'].limit.value * 9 / 10);
+export const ALARM_PROGRAM_WAIT_MS = Math.floor(PLATFORM_LIMITS['do.alarm.wall_ms'].value * 9 / 10);
 
 
 

@@ -9,7 +9,7 @@ import * as v from 'valibot';
 import type { BrowserSessions, BrowserSessionView } from './provider';
 import type { RawSqlExec, SqlExec } from '../types/primitives';
 import { attempt, KinuError, settle } from '../obs/index';
-import { PLATFORM_CATALOG } from '../platform-catalog';
+import { PLATFORM_LIMITS } from '../platform-limits';
 
 export function initBrowserSessionTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS browser_sessions (
@@ -19,7 +19,7 @@ export function initBrowserSessionTable(execRaw: RawSqlExec): void {
 }
 
 /** A session outlives its programs by as long as Browser Run lets one sit idle. */
-const IDLE_LIFETIME_MS = PLATFORM_CATALOG['browser.session.keep_alive_ms'].limit.value;
+const IDLE_LIFETIME_MS = PLATFORM_LIMITS['browser.session.keep_alive_ms'].value;
 
 const OwnedRowSchema = v.object({ session_id: v.string() });
 

@@ -5,7 +5,7 @@ import * as v from 'valibot';
 import {
   MAX_PLAN_ANNOTATIONS_BYTES,
   MAX_PLAN_CONTENT_BYTES,
-  PLATFORM_CATALOG,
+  PLATFORM_LIMITS,
   PlanReviewActions,
   PlanReviewStore,
   PlanReviewSchema,
@@ -58,7 +58,7 @@ describe('plan edit contract', () => {
 
   test('content and annotation caps fit one platform row', () => {
     expect(MAX_PLAN_CONTENT_BYTES + MAX_PLAN_ANNOTATIONS_BYTES)
-      .toBeLessThanOrEqual(PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value);
+      .toBeLessThanOrEqual(PLATFORM_LIMITS['do.sqlite.row_bytes'].value);
   });
 
   test('formats stable one-indexed line references for revision feedback', () => {

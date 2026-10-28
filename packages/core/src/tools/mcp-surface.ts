@@ -5,7 +5,7 @@ import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json
 import { mcpCallResult } from './mcp-error';
 import { KinuError, settle } from '../obs/index';
 import { permitInPlan } from '../execution/work-mode';
-import { PLATFORM_CATALOG } from '../platform-catalog';
+import { PLATFORM_LIMITS } from '../platform-limits';
 import { withClampedToolResults, type ClampToolResultOptions } from './clamp';
 import { withEffectReceipt, type EffectClaimDeps } from './effect-claim';
 import { mcpToolKey, suffixedMcpToolKey } from './mcp-naming';
@@ -276,7 +276,7 @@ export class McpToolSurfaceCache<Tools> {
  * (`do.sqlite.row_bytes`), at 8 bytes a character, past JSON's widest escape of 6, with room for the row's other
  * columns. The cut a model reads at once gave a program a cut, re-quoted text in place of the result it named.
  */
-const PROGRAM_RESULT_MAX_CHARS = PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value / 8;
+const PROGRAM_RESULT_MAX_CHARS = PLATFORM_LIMITS['do.sqlite.row_bytes'].value / 8;
 
 /** MCP catalog as a callable surface; `call` is backend-owned. Only `readOnly: true` exempts a tool
  *  from the effect claim. */

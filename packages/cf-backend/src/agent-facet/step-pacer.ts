@@ -16,10 +16,10 @@
  */
 import { Effect, Exit } from 'effect';
 import { attempt, hold, KinuError, settle, toKinuError } from '@kinu.run/core/obs';
-import { PLATFORM_CATALOG, type DynamicContext, type HarnessMode, type ResolvedTurnProfile } from '@kinu.run/core';
+import { PLATFORM_LIMITS, type DynamicContext, type HarnessMode, type ResolvedTurnProfile } from '@kinu.run/core';
 import type { AgentWorkspace, TurnBound } from './agent-turn';
 
-const RENEW_AFTER_MS = PLATFORM_CATALOG['do.facet.cpu_ms'].limit.value / 2;
+const RENEW_AFTER_MS = PLATFORM_LIMITS['do.facet.cpu_ms'].value / 2;
 
 /** A granted step: its end, which the step calls once it ended, the live block the grant carried, when the pace that
  *  asked for it bound the turn's profile, and the workspace's `harness.mode` as the grant left it. */

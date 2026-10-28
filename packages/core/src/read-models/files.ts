@@ -20,7 +20,7 @@ import { isHiddenEntry, isSystemManaged } from '../vfs/workspace-path';
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, settle, type Refusal } from '../obs/index';
-import { PLATFORM_CATALOG } from '../platform-catalog';
+import { PLATFORM_LIMITS } from '../platform-limits';
 
 export interface ExecutorFileLookup {
   getProvider(name: string): { files?: VFS & Partial<DirectoryPages>; homeDir(segment?: string): Promise<string> } | undefined;
@@ -100,7 +100,7 @@ export interface ExecutorTextFile {
 /** Peak transient footprint is ~2x the total (parts plus assembled copy), so a quarter of the
  *  `do.isolate.transient_alloc_reset` wall keeps the peak near half of it. */
 function fileTransferMaxBytes(): number {
-  return PLATFORM_CATALOG['do.isolate.transient_alloc_reset'].limit.value / 4;
+  return PLATFORM_LIMITS['do.isolate.transient_alloc_reset'].value / 4;
 }
 
 /** Read through a call marked pure: the browser reaches this module, and a bundle that never reads the bound then
@@ -335,7 +335,7 @@ const LONGEST_ENTRY: DirEntry = { name: '\u0001'.repeat(NAME_MAX_BYTES), type: '
 
 /** The most entries one listing answers, so a page's text never passes `files.page_bytes` whatever its names: a folder of
  *  any size is read and sent a page at a time. */
-export const FILES_PAGE_ENTRIES = Math.floor(PLATFORM_CATALOG['files.page_bytes'].limit.value / (JSON.stringify(LONGEST_ENTRY).length + 1));
+export const FILES_PAGE_ENTRIES = Math.floor(PLATFORM_LIMITS['files.page_bytes'].value / (JSON.stringify(LONGEST_ENTRY).length + 1));
 
 /** A page of a folder from `from`, its hidden items ({@link isHiddenEntry}) among the rest when `hidden`. */
 export interface FilesRequest {

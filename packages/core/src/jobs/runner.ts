@@ -15,7 +15,7 @@ import { newJobId, type JobAdoption } from '../types/jobs';
 import * as v from 'valibot';
 import { parseJsonValue, type JsonValue } from '../utils/json';
 import { attempt as attempted, classify, diagnostics, hold, renderThrownChain, toKinuError } from '../obs/index';
-import { silenceBoundMs } from '../platform-catalog';
+import { silenceBoundMs } from '../platform-limits';
 import { fmtSpan } from '../utils/format';
 import { executorLabel } from '../read-models/executors';
 import { programIntent } from '../tools/tool-call-summary';

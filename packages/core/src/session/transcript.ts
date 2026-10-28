@@ -14,7 +14,7 @@ import { turnTags } from '../types/turn-metadata';
 import type { Page, PositionCursor, PositionPageRequest } from './page';
 import type { ContextSelection } from './context';
 import { isServerCompaction } from '../providers/server-compaction';
-import { PLATFORM_CATALOG } from '../platform-catalog';
+import { PLATFORM_LIMITS } from '../platform-limits';
 import { attachmentImage, imagesIn, walkImages, type MediaRef, type MediaUrl, type StoredImage } from './chat-media';
 import { utf8Bytes } from '../utils/text';
 import { nextLoopTurn } from '../types/clock';
@@ -280,7 +280,7 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
       const size = outputUtf8.encode(JSON.stringify(message)).byteLength;
 
       // As on the request inspector, one oversized message still ships whole instead of losing its tool input.
-      if (messages.length > 0 && bytes + size > PLATFORM_CATALOG['run_events.page_bytes'].limit.value) break;
+      if (messages.length > 0 && bytes + size > PLATFORM_LIMITS['run_events.page_bytes'].value) break;
       messages.push(message);
       bytes += size;
     }

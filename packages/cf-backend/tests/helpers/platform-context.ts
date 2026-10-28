@@ -5,10 +5,10 @@ import { type JsonValue, type SqlValue } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
 import { makeSqlExec } from '../../../core/tests/helpers';
 import { SCRIPT_EXPORTS } from './programmatic-host';
-import { PLATFORM_CATALOG } from '../../../core/src/platform-catalog';
+import { PLATFORM_LIMITS } from '../../../core/src/platform-limits';
 
 /** The most a Durable Object's SQLite binds to one statement, which bun's would not refuse. */
-const BOUND_PARAMS = PLATFORM_CATALOG['do.sqlite.bound_params'].limit.value;
+const BOUND_PARAMS = PLATFORM_LIMITS['do.sqlite.bound_params'].value;
 
 /** A statement the platform refuses, refused here as workerd words it. */
 export function boundAsTheObjectBinds(bindings: readonly unknown[]): void {

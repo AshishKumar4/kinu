@@ -10,7 +10,7 @@ import { nanoid } from '../utils/nanoid';
 import { JsonArraySchema, type JsonObject } from '../utils/json';
 import { turnTags } from '../types/turn-metadata';
 import { renderThrownChain } from '../obs/index';
-import { PLATFORM_CATALOG } from '../platform-catalog';
+import { PLATFORM_LIMITS } from '../platform-limits';
 import { seekPage, StaleCursorError, type Page, type PageRequest } from '../session/page';
 import { boundedInt } from '../utils/bounds';
 import type {
@@ -34,7 +34,7 @@ export const MAX_PLAN_CONTENT_BYTES = 1536 * 1024;
 
 /** Read on call: the browser imports this module's schemas, and a module-scope read ships the whole catalog to it. */
 function planReviewRowBytes(): number {
-  return PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value;
+  return PLATFORM_LIMITS['do.sqlite.row_bytes'].value;
 }
 
 /** Whether a plan waits on the owner, and the agent's plans' write count: a revision a reader elsewhere compares. */

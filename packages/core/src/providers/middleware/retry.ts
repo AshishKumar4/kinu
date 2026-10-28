@@ -15,7 +15,7 @@ import { APICallError, type LanguageModelMiddleware } from 'ai';
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import { detach, diagnostics, exceededSubrequests, KinuError, settle, settleLoggedSync, tolerate, toKinuError } from '../../obs/index';
-import { silenceBoundMs } from '../../platform-catalog';
+import { silenceBoundMs } from '../../platform-limits';
 import { DEFAULT_PROVIDER_RETRIES } from '../../types/profile';
 import { fmtSpan } from '../../utils/format';
 import { retryAfterOf } from '../fallback-cooldown';

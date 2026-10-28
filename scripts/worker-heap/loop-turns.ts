@@ -22,11 +22,11 @@
  * heads, the 150-step long turn unadvised, advised and compacted against a 64k window, a failing turn, the 450-step
  * screenshot turn with its chat's seeds, twelve subagents' hires, and 40 advised steps of 50 kB results).
  */
-import { PLATFORM_CATALOG } from '../../packages/core/src/platform-catalog';
+import { PLATFORM_LIMITS } from '../../packages/core/src/platform-limits';
 import { longestBusy, pausesUnder, profileEach, profileLoop, targetIds, type BusyStretch, type EachProfiled, type HostPauses, type LoopProfile } from './inspector';
 
 /** The longest stretch an agent's isolate may hold its loop: the shortest turn the platform reset a facet for. */
-export const LOOP_TURN_BOUND_MS = PLATFORM_CATALOG['do.facet.cpu_turns_reset_parent'].limit.value;
+export const LOOP_TURN_BOUND_MS = PLATFORM_LIMITS['do.facet.cpu_turns_reset_parent'].value;
 
 export interface LoopTurn extends BusyStretch {
   /** workerd's target id: an agent's is `LOADER:kinu-agent:<bundle>:<workspace object id>:<actor id>`. */

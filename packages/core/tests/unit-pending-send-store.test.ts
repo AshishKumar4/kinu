@@ -4,7 +4,7 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { initPendingSendTables, PendingSendStore } from '../src/orchestrator/inbox';
 import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES } from '../src/cloud-wire';
-import { PLATFORM_CATALOG } from '../src/platform-catalog';
+import { PLATFORM_LIMITS } from '../src/platform-limits';
 import { makeSql, makeExecRaw } from './helpers';
 
 function setup() {
@@ -56,7 +56,7 @@ describe('PendingSendStore — the reservation', () => {
       return db.query<{ bytes: number }, []>(`SELECT MAX(${columns}) AS bytes FROM ${name}`).get()?.bytes ?? 0;
     }));
 
-    expect(widest).toBeLessThan(PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value);
+    expect(widest).toBeLessThan(PLATFORM_LIMITS['do.sqlite.row_bytes'].value);
     expect(store('actor-a').files('s-big')).toEqual(files);
   });
 

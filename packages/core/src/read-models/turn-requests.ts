@@ -2,14 +2,14 @@
 import type { StoredActorClaim } from '../orchestrator/actor-claims';
 import type { RunEvent } from '../events/types';
 import type { AgentStores } from '../state/agent-stores';
-import { PLATFORM_CATALOG } from '../platform-catalog';
+import { PLATFORM_LIMITS } from '../platform-limits';
 import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
 import { settle } from '../obs/effect';
 import type { JsonObject, JsonValue } from '../utils/json';
 import { utf8Bytes } from '../utils/text';
 
-const PAGE_BYTES = PLATFORM_CATALOG['run_events.page_bytes'].limit.value;
+const PAGE_BYTES = PLATFORM_LIMITS['run_events.page_bytes'].value;
 
 interface TurnRequestRow {
   readonly requestId: string;

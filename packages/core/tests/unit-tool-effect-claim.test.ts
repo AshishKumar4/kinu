@@ -7,7 +7,7 @@ import type { JsonObject } from '../src/utils/json';
 import { jsonSchema, tool, type ToolExecutionOptions, type ToolSet } from 'ai';
 import {
   buildMcpToolSet, claimToolEffect, initToolEffectClaimTable,
-  settleToolEffect, DEFAULT_TOOL_RESULT_MAX_CHARS, PLATFORM_CATALOG,
+  settleToolEffect, DEFAULT_TOOL_RESULT_MAX_CHARS, PLATFORM_LIMITS,
   withEffectReceipt, replayPolicyFor, settleUnpairedToolCalls, type EffectClaimDeps, type JsonValue,
   defineOperation, nativeTool, serveTransactional,
   type SerializableToolDescriptor,
@@ -335,7 +335,7 @@ describe('tool effect claims', () => {
 
       const actor = createTestActors(sql, execRaw).main;
       const { vfs } = createMemoryVfs();
-      const rowBytes = PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value;
+      const rowBytes = PLATFORM_LIMITS['do.sqlite.row_bytes'].value;
       const whole = 'x'.repeat(rowBytes + 1);
 
       const tools = buildMcpToolSet(

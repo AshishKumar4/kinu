@@ -29,7 +29,7 @@ import { keptMediaName } from '../src/session/chat-media';
 import { SessionHistory } from '../src/session/history';
 import { stampTurnAuthor } from '../src/types/turn-metadata';
 import { readSessionTranscript, type SessionTranscriptReader } from '../src/session/transcript';
-import { PLATFORM_CATALOG } from '../src/platform-catalog';
+import { PLATFORM_LIMITS } from '../src/platform-limits';
 import { CHAT_PAGE_BYTES, CHAT_SEED_ROWS, CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import { PositionPageRequestSchema, type PositionCursor } from '../src/session/page';
 import { getWorkspaceDiff, resetWorkspaceBaseline } from '../src/read-models/workspace-diff';
@@ -478,7 +478,7 @@ describe('agent status', () => {
   test('a reader with no file plane pages a spilled entry as unavailable, in its place', async () => {
     const w = workspace();
     const { history, transcript } = chatStore(w);
-    const spilled = 'x'.repeat(PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value);
+    const spilled = 'x'.repeat(PLATFORM_LIMITS['do.sqlite.row_bytes'].value);
 
     await seedTranscript(history, [
       { id: 'm1', role: 'user', content: 'before' },

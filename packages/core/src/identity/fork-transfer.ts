@@ -10,7 +10,7 @@ import * as v from 'valibot';
 import type { VfsExportChunk, VfsExportPage } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { VfsExportPageSchema } from '../vfs/export-page';
 import { KinuError } from '../obs/error';
-import { PLATFORM_CATALOG } from '../platform-catalog';
+import { PLATFORM_LIMITS } from '../platform-limits';
 import { sha256Hex, stableStringify } from '../safety/argument-digest';
 import type { SqlExecutor } from '../types/primitives';
 import { isTreeRelativePath, WORKSPACE_ROOT } from '../vfs/workspace-path';
@@ -36,7 +36,7 @@ import type { ForkStaging, ForkStagingState } from './fork-staging';
 export const FORK_TRANSFER_VERSION = 6;
 
 /** Payload bytes per frame: a quarter of `do.facet.rpc_bytes`, leaving headroom for clone metadata and envelope. */
-export const FORK_FRAME_BYTES = PLATFORM_CATALOG['do.facet.rpc_bytes'].limit.value / 4;
+export const FORK_FRAME_BYTES = PLATFORM_LIMITS['do.facet.rpc_bytes'].value / 4;
 
 export { FORK_ROW_SECTIONS, type ForkAppData, type ForkRowSection } from './fork-sections';
 

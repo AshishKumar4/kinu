@@ -6,7 +6,7 @@ import { expect, test } from 'bun:test';
 import { hostedExplorationHarness, orchestratorHarness } from './helpers/actor-harness';
 import { createTestWorkspace } from '../../core/tests/helpers';
 import { createTestActorsOver, seedTranscriptEntry } from '@kinu.run/test-utils';
-import { CHAT_SESSION_ID, PLATFORM_CATALOG, SessionHistory, WORKSPACE_ROOT, actorReferenceOf, type NimbusSandboxFiles, type StoredRow } from '@kinu.run/core';
+import { PLATFORM_LIMITS, CHAT_SESSION_ID, SessionHistory, WORKSPACE_ROOT, actorReferenceOf, type NimbusSandboxFiles, type StoredRow } from '@kinu.run/core';
 import { AgentDatabase } from '../src/agent-facet/agent-database';
 import { makeCtx } from './helpers/platform-context';
 import { claimFences } from '@kinu.run/core';
@@ -71,7 +71,7 @@ test('a retired actor keeps its spilled history readable without actor reacquisi
   const f = retainedDatabase();
 
   try {
-    const content = 'retained payload '.repeat(Math.ceil(PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value / 16));
+    const content = 'retained payload '.repeat(Math.ceil(PLATFORM_LIMITS['do.sqlite.row_bytes'].value / 16));
     await seedTranscriptEntry(f.history, CHAT_SESSION_ID, { id: 'retained', origin: 'input', message: { role: 'user', content } });
     f.actors.directory.apply(actorReferenceOf(f.actors.main), [], { action: 'retire', name: 'subagent', reference: actorReferenceOf(f.child) });
     const before = f.sql`SELECT * FROM workspace_actors`;

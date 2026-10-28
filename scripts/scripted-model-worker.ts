@@ -17,7 +17,7 @@
  * refresh grant's generation is its one state, held by `ScriptedOAuthGrants`.
  */
 import * as v from 'valibot';
-import { PLATFORM_CATALOG } from '../packages/core/src/platform-catalog';
+import { PLATFORM_LIMITS } from '../packages/core/src/platform-limits';
 import { timingSafeEqual } from '../packages/core/src/utils/crypto';
 import { SCRIPTED_MCP_PATH, scriptedMcp, type McpAnswer } from './scripted-mcp';
 import { OAUTH_AUTHORIZE_PATH, downFor, isPublicOAuthPath, scriptedOAuth, type GrantLedger } from './scripted-mcp-oauth';
@@ -124,7 +124,7 @@ function grantLedger(grants: GrantsNamespace): GrantLedger {
 const answered = (answer: McpAnswer): Response => new Response(answer.body, { status: answer.status, headers: answer.headers });
 
 /** A sixteenth of an isolate's memory: the body is read whole and parsed, so a larger one could take the isolate. */
-export const MAX_BODY_BYTES = PLATFORM_CATALOG['worker.isolate.memory'].limit.value / 16;
+export const MAX_BODY_BYTES = PLATFORM_LIMITS['worker.isolate.memory'].value / 16;
 
 const refused = (status: number, message: string): Response => Response.json({ error: { message } }, { status });
 

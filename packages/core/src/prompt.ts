@@ -54,7 +54,7 @@ import {
 import { SCRATCH_ROOT, WORKSPACE_ROOT } from './vfs/workspace-path';
 import { DEVICE_PREFIX, VFS_PREFIX, realPath, vfsReference, type PathPlanes } from './vfs/resolve';
 import { SKILLS_VIEW, WORKSPACE_SKILLS_DIR } from './skills/types';
-import { PLATFORM_CATALOG } from './platform-catalog';
+import { PLATFORM_LIMITS } from './platform-limits';
 import { sandboxSizeLabel } from './execution/sandbox';
 import type { SandboxSizes } from './execution/types';
 import { isoDate } from './utils/date';
@@ -146,7 +146,7 @@ function renderToolsSection(surface: PromptSurface, render: RenderSection): stri
 }
 
 /** From `worker.isolate.memory`, so prose cannot drift from the catalog. */
-const WORKSPACE_MEMORY_MB = PLATFORM_CATALOG['worker.isolate.memory'].limit.value / (1000 * 1000);
+const WORKSPACE_MEMORY_MB = PLATFORM_LIMITS['worker.isolate.memory'].value / (1000 * 1000);
 
 /** `Small (1 vCPU, 4 GiB), Medium (2 vCPU, 8 GiB) and Large (4 vCPU, 12 GiB)`, from the host's table. */
 function sandboxSizeSlots(sizes: SandboxSizes | undefined) {

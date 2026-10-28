@@ -6,7 +6,7 @@ import { serveFamily } from './helpers/api';
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
-  boundRunEventQuery, getRunEvents, getRunEventText, initRunEventTables, PLATFORM_CATALOG, RunEventRecorder,
+  boundRunEventQuery, getRunEvents, getRunEventText, initRunEventTables, PLATFORM_LIMITS, RunEventRecorder,
   RUN_EVENT_LIMIT_MAX, type RunEventQuery,
 } from '@kinu.run/core';
 import { testActorHandle } from '@kinu.run/test-utils';
@@ -24,7 +24,7 @@ const SEEDED_EVENTS = 700;
 
 const RUN_EVENT_LIMIT_DEFAULT = boundRunEventQuery().limit;
 
-const RUN_EVENT_PAGE_BYTES = PLATFORM_CATALOG['run_events.page_bytes'].limit.value;
+const RUN_EVENT_PAGE_BYTES = PLATFORM_LIMITS['run_events.page_bytes'].value;
 
 /** The production boundary read-models over a real recorder, with no validation added by the test. `message`
  *  sizes each event; every page the object answers is kept, as the text it carried. */

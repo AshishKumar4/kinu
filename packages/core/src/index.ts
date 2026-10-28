@@ -1576,11 +1576,12 @@ export {
   injectableFaults,
   platformFact,
   platformFactEntries,
-  silenceBoundMs,
   type EvidenceLabel,
   type PlatformFact,
   type PlatformFactEntry,
 } from './platform-catalog';
+
+export { PLATFORM_LIMITS, silenceBoundMs } from './platform-limits';
 
 // Safety
 export {
