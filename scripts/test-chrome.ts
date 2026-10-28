@@ -75,6 +75,23 @@ function endAndRemove(group: number | undefined, root: string): void {
   rmSync(root, { recursive: true, force: true });
 }
 
+/** A line a test browser wrote that names one of its processes crashing or exiting, and when this process read it. */
+export interface BrowserCrash {
+  readonly at: number;
+  readonly line: string;
+}
+
+/** A process of Chrome's that crashes cancels what it carried: the network service, every request in flight, so a
+ *  page reads as loads cancelled with nothing failing. Chrome says so only on stderr. */
+const CRASH_LINE = /crash|exited unexpectedly/iu;
+
+const crashes = new WeakMap<Browser, BrowserCrash[]>();
+
+/** What `browser`, launched here, said of its processes crashing since `since`. */
+export function browserCrashesSince(browser: Browser, since: number): readonly BrowserCrash[] {
+  return (crashes.get(browser) ?? []).filter((crash) => crash.at >= since);
+}
+
 export async function launchTestChrome(options: TestChromeOptions = {}): Promise<TestChrome> {
   const root = scratchDir('chrome', BROWSER_PROFILE_PARENT);
 
@@ -122,6 +139,12 @@ export async function launchTestChrome(options: TestChromeOptions = {}): Promise
 
   group = browser.process()?.pid;
   const launched = browser;
+  const said: BrowserCrash[] = [];
+
+  crashes.set(launched, said);
+  launched.process()?.stderr?.on('data', (chunk: Buffer) => {
+    for (const line of chunk.toString('utf8').split('\n')) if (CRASH_LINE.test(line)) said.push({ at: Date.now(), line: line.trim().slice(0, 300) });
+  });
 
   return {
     browser: launched,

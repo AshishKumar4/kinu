@@ -7,6 +7,7 @@
  * page threw `useAgentsNav requires AgentsNavProvider` and its row waited out its 480 s bound.
  */
 import type { CDPSession, Page } from 'puppeteer';
+import { browserCrashesSince } from './test-chrome';
 
 /** Records, on `window.__scriptFailures`, every script element whose load failed, and on `window.__uncaughtErrors`
  *  every error nothing caught, a promise's rejection nothing handled among them. Installed before each document's
@@ -101,13 +102,19 @@ export async function documentScriptFailures(page: Page): Promise<ScriptFailure[
   return recorded.failures.filter((failure) => failure.loader === frameTree.frame.loaderId);
 }
 
-/** The navigations `page` started since its document began, which may be what cancelled its loads. */
+/** What may have cancelled `page`'s loads since its document began: a navigation it started, or one of the browser's
+ *  processes crashing. */
 async function navigationsSince(page: Page): Promise<string> {
   const started: unknown = await page.evaluate('performance.timeOrigin');
-  const since = (scriptFailures.get(page)?.navigations ?? []).filter((navigation) => typeof started === 'number' && navigation.at >= started);
 
-  return since.length === 0 ? '; the page started no navigation since it began'
+  if (typeof started !== 'number') return '';
+  const since = (scriptFailures.get(page)?.navigations ?? []).filter((navigation) => navigation.at >= started);
+  const crashed = browserCrashesSince(page.browser(), started).map((crash) => crash.line);
+
+  const navigated = since.length === 0 ? '; the page started no navigation since it began'
     : `; since it began the page started ${since.map((navigation) => `${navigation.url} (${navigation.how})`).join(', ')}`;
+
+  return `${navigated}${crashed.length === 0 ? '; the browser reported no crash' : `; the browser said: ${crashed.join(' | ')}`}`;
 }
 
 /** In a page or any frame of it: what {@link RECORD_SCRIPT_FAILURES} recorded in that document, the errors nothing
