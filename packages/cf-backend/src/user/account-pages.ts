@@ -50,7 +50,7 @@ export const accountShell = async <Id, E extends FamilyEnv<AccountShellEnv<Id>, 
 
 export type AccountPagesEnv = AuthEnv<DurableObjectId> & IndexFeedEnv<DurableObjectId> & AccountShellEnv<DurableObjectId>
   & RosterSocketEnv<DurableObjectId> & CliAgentTicketEnv<DurableObjectId>
-  & WorkspaceOwnershipEnv<DurableObjectId, Pick<OrchestratorAgent, 'claimOwner' | 'resolveHostedActorRoute'>>;
+  & WorkspaceOwnershipEnv<DurableObjectId, Pick<OrchestratorAgent, 'claimOwner' | 'resolveHostedActorRoute' | 'openMainIsolate'>>;
 
 interface AccountPagesVariables {
   identity: AuthIdentity;
@@ -59,16 +59,23 @@ interface AccountPagesVariables {
 
 type AccountPagesContext = Context<FamilyEnv<AccountPagesEnv, AccountPagesVariables>>;
 
-// A workspace's page wakes its object while the document, the app and its socket are still on the way: the claim
-// the socket makes a moment later then finds it constructed. Cold, that construction measured 725 ms of a 3.2 s
-// load (cmp-kinu-ux1, 2026-10-13). The socket's own claim, so a name the account does not hold wakes nothing; a
-// failure is the socket's to answer, and here is only logged.
+// A workspace's page wakes its object, and main's isolate, while the document, the app and its socket are still on the
+// way: the claim the socket makes a moment later then finds the object constructed, and its chat's seed a loaded
+// isolate. Cold, that construction measured 725 ms of a 3.2 s load (cmp-kinu-ux1, 2026-10-13), and the isolate 261-342 ms
+// of the socket's open (`openMainIsolate`). The socket's own claim, so a name the account does not hold wakes nothing;
+// a failure is the socket's to answer, and here is only logged.
 async function workspacePage(c: AccountPagesContext): Promise<Response> {
   const workspace = c.req.param('agentId');
 
   if (workspace !== undefined) {
     c.executionCtx.waitUntil(settleLogged('workspace.page_wake_failed', { doing: "waking a workspace for its page", otherwise: 'unavailable' },
-      async () => { await claimOwnedWorkspace(c.env, c.get('identity').userId, workspace, c.get('identity').workspace); }));
+      async () => {
+        const owned = await claimOwnedWorkspace(c.env, c.get('identity').userId, workspace, c.get('identity').workspace);
+        // An agent's page (`APP_ROUTES.workspaceAgent`) seeds that agent's chat, not main's.
+        const mainPage = c.req.path.split('/')[3] !== 'agents';
+
+        if (mainPage && Result.isSuccess(owned)) await owned.success.openMainIsolate();
+      }));
   }
 
   return await accountShell(c);

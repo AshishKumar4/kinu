@@ -1,7 +1,8 @@
 /**
  * A workspace's page wakes its object while the page loads: the document's request makes the same claim the page's
  * socket makes a moment later, so a cold object's construction runs beside the document, the app and the socket's own
- * connection rather than after them. A name the account does not hold wakes nothing.
+ * connection rather than after them; main's page loads main's isolate too, which its socket's chat is seeded from. A
+ * name the account does not hold wakes nothing.
  */
 import { describe, expect, test } from 'bun:test';
 import { accountPagesFetch, workerContext } from './helpers/bindings';
@@ -19,6 +20,9 @@ function account(holds: readonly string[], context: ExecutionContext) {
       asked.push(`claim:${name}`);
 
       return { owner: userId, capabilityHash: 'sha' };
+    },
+    async openMainIsolate() {
+      asked.push(`isolate:${name}`);
     },
   });
 
@@ -55,7 +59,10 @@ function account(holds: readonly string[], context: ExecutionContext) {
 
 describe("a workspace's page", () => {
   // Each case its own name: an isolate keeps the membership it proved, and asks the account once.
-  for (const [workspace, path] of [['jarvis', '/workspace/jarvis'], ['friday', '/workspace/friday/agents/researcher']] as const) {
+  for (const [workspace, path, woken] of [
+    ['jarvis', '/workspace/jarvis', ['member:jarvis', 'claim:jarvis', 'isolate:jarvis']],
+    ['friday', '/workspace/friday/agents/researcher', ['member:friday', 'claim:friday']],
+  ] as const) {
     test(`${path} wakes the workspace as its document is answered`, async () => {
       const context = workerContext();
       const { env, asked } = account([workspace], context);
@@ -66,7 +73,7 @@ describe("a workspace's page", () => {
       expect(answer.status).toBe(200);
       expect(await answer.text()).toContain('<title>Kinu</title>');
       await Promise.all(context.retained);
-      expect(asked).toEqual([`member:${workspace}`, `claim:${workspace}`]);
+      expect(asked).toEqual([...woken]);
     });
   }
 

@@ -315,6 +315,8 @@ const ORCHESTRATOR_METHODS = [
   'recordGitHubEgress',
   // Never `@callable`.
   'admitBlueprint',
+  // The account, DO-to-DO, as a workspace's page loads (`user/account-pages.ts`).
+  'openMainIsolate',
   // The account's install, DO-to-DO (`workspace-create.ts`): a blueprint's layout, agent and owner schedules.
   'seedBlueprint',
   // The account, DO-to-DO, when the owner's connections change (`user/mcp-servers.ts`).
