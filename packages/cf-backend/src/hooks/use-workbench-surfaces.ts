@@ -96,9 +96,11 @@ export function useWorkbenchSurfaces({ workspace, executors, slates, search, ins
     show("Files");
   }, [show]);
 
-  // Every prefix, and each live machine's own name: `<name>://x` opens that machine's file in Files.
-  const machines = useMemo(() => executors.flatMap((executor) => executor.mounts ?? []), [executors]);
-  const fileLinks = useMemo(() => ({ roots: referencePrefixes(cloudPlanes(WORKSPACE_ROOT), machines), open: openFile }), [machines, openFile]);
+  // Every prefix, and each live machine's own name: `<name>://x` opens that machine's file in Files. Kept by the names, not
+  // by the executors read: each answer's markdown is parsed again when the links change (`MarkdownContent`), and a read
+  // naming the same machines parsed every answer of a big chat a second time on open (44 of 44 blocks, 2026-10-28).
+  const rootsKey = referencePrefixes(cloudPlanes(WORKSPACE_ROOT), executors.flatMap((executor) => executor.mounts ?? [])).join("\n");
+  const fileLinks = useMemo(() => ({ roots: rootsKey === "" ? [] : rootsKey.split("\n"), open: openFile }), [rootsKey, openFile]);
 
   const chatImages = useMemo((): ChatImageSource => ({
     src: (path, download = false) => `/api/workspaces/${encodeURIComponent(workspace)}/files`
