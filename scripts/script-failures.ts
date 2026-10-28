@@ -38,16 +38,31 @@ export interface ScriptFailure {
  *  cause. */
 export const CANCELLED = 'net::ERR_ABORTED';
 
-const scriptFailures = new WeakMap<Page, { readonly failures: ScriptFailure[]; readonly cdp: CDPSession }>();
+/** A navigation a page's frame started, committed or not: one that never commits (a 204, a download, an external
+ *  protocol) stops the document's loads all the same, which then read as cancelled with nothing failing. */
+interface StartedNavigation {
+  readonly at: number;
+  readonly url: string;
+  readonly how: string;
+}
+
+const scriptFailures = new WeakMap<Page, { readonly failures: ScriptFailure[]; readonly navigations: StartedNavigation[]; readonly cdp: CDPSession }>();
 
 /** Installs {@link RECORD_SCRIPT_FAILURES} on every document `page` loads, and records why each of its script
  *  requests failed: the page sees only that a module graph failed, the browser's network events say why. */
 export async function recordScriptFailures(page: Page): Promise<void> {
   const failures: ScriptFailure[] = [];
+  const navigations: StartedNavigation[] = [];
   const requests = new Map<string, { readonly url: string; readonly loader: string }>();
   const cdp = await page.createCDPSession();
 
-  scriptFailures.set(page, { failures, cdp });
+  scriptFailures.set(page, { failures, navigations, cdp });
+  cdp.on('Page.frameRequestedNavigation', (event) => {
+    navigations.push({ at: Date.now(), url: event.url, how: `${event.reason}, ${event.disposition}` });
+  });
+  cdp.on('Page.frameStartedNavigating', (event) => {
+    navigations.push({ at: Date.now(), url: event.url, how: event.navigationType });
+  });
 
   cdp.on('Network.requestWillBeSent', (event) => {
     if (event.type === 'Script') requests.set(event.requestId, { url: event.request.url, loader: event.loaderId });
@@ -71,6 +86,7 @@ export async function recordScriptFailures(page: Page): Promise<void> {
   });
 
   await cdp.send('Network.enable');
+  await cdp.send('Page.enable');
   await page.evaluateOnNewDocument(RECORD_SCRIPT_FAILURES);
 }
 
@@ -83,6 +99,15 @@ export async function documentScriptFailures(page: Page): Promise<ScriptFailure[
   const { frameTree } = await recorded.cdp.send('Page.getFrameTree');
 
   return recorded.failures.filter((failure) => failure.loader === frameTree.frame.loaderId);
+}
+
+/** The navigations `page` started since its document began, which may be what cancelled its loads. */
+async function navigationsSince(page: Page): Promise<string> {
+  const started: unknown = await page.evaluate('performance.timeOrigin');
+  const since = (scriptFailures.get(page)?.navigations ?? []).filter((navigation) => typeof started === 'number' && navigation.at >= started);
+
+  return since.length === 0 ? '; the page started no navigation since it began'
+    : `; since it began the page started ${since.map((navigation) => `${navigation.url} (${navigation.how})`).join(', ')}`;
 }
 
 /** In a page or any frame of it: what {@link RECORD_SCRIPT_FAILURES} recorded in that document, the errors nothing
@@ -115,7 +140,9 @@ export async function explained(page: Page, deadEnd: string): Promise<string> {
   const cancelled = failures.length - causes.length;
   const more = causes.length > shown.length ? ` and ${String(causes.length - shown.length)} more` : '';
   const alongside = causes.length > 0 && cancelled > 0 ? `, with ${String(cancelled)} cancelled (${CANCELLED})` : '';
-  const only = causes.length === 0 ? ` (${String(failures.length)} of them, every one cancelled and none failing on its own)` : '';
+
+  const only = causes.length === 0
+    ? ` (${String(failures.length)} of them, every one cancelled and none failing on its own${await navigationsSince(page)})` : '';
 
   return `${deadEnd}; its script requests failed: ${shown.join(', ')}${more}${alongside}${only}`;
 }
