@@ -12,7 +12,7 @@ import { beatWorkspace } from '../evals/src/session';
 import { signedInPage } from '../evals/src/browser';
 import { createWorkspace, deleteWorkspace, type PublicWebIdentity } from '../evals/src/workspace-roster';
 import { holdForRelease } from '../packages/test-utils/src/scratch';
-import { documentScriptFailures, explained, FAILED_APP_SCRIPT, SCRIPT_FAILED, type ScriptFailure } from './script-failures';
+import { CANCELLED, documentScriptFailures, explained, FAILED_APP_SCRIPT, SCRIPT_FAILED, type ScriptFailure } from './script-failures';
 
 /*
  * The controls both the deploy flows (scripts/product-flows.ts) and the browser UI tests (tests/browser) drive, each
@@ -95,9 +95,6 @@ export interface FlowTarget {
  *  a page's scripts stays a dead end. */
 export const HOST_NETWORK_CHANGED = 'net::ERR_NETWORK_CHANGED';
 
-/** A request the page or the browser cancelled, such as a navigation leaving: the effect of a failure, never its
- *  cause, so it neither makes nor breaks a host network change. */
-const CANCELLED = 'net::ERR_ABORTED';
 
 /** The failure that makes a failed module graph the host's network changing, or null when anything else failed
  *  too, or nothing did. */

@@ -257,14 +257,14 @@ test('a module graph a network change failed is loaded again, once, and the wait
 });
 
 test('only a module graph that the host\'s network change alone failed is the host\'s', () => {
-  const changed = { at: 1, url: 'http://127.0.0.1:1/dep.js', reason: HOST_NETWORK_CHANGED };
-  const cancelled = { at: 2, url: 'http://127.0.0.1:1/other.js', reason: 'net::ERR_ABORTED' };
+  const changed = { at: 1, url: 'http://127.0.0.1:1/dep.js', reason: HOST_NETWORK_CHANGED, loader: 'page' };
+  const cancelled = { at: 2, url: 'http://127.0.0.1:1/other.js', reason: 'net::ERR_ABORTED', loader: 'page' };
 
   expect(hostNetworkChange([changed])).toEqual(changed);
   // A request the browser cancelled is an effect of the change, not a second cause.
   expect(hostNetworkChange([cancelled, changed])).toEqual(changed);
-  expect(hostNetworkChange([changed, { at: 3, url: 'http://127.0.0.1:1/x.js', reason: 'HTTP 504' }])).toBeNull();
-  expect(hostNetworkChange([{ at: 4, url: 'http://127.0.0.1:1/x.js', reason: 'net::ERR_CONNECTION_REFUSED' }])).toBeNull();
+  expect(hostNetworkChange([changed, { at: 3, url: 'http://127.0.0.1:1/x.js', reason: 'HTTP 504', loader: 'page' }])).toBeNull();
+  expect(hostNetworkChange([{ at: 4, url: 'http://127.0.0.1:1/x.js', reason: 'net::ERR_CONNECTION_REFUSED', loader: 'page' }])).toBeNull();
   expect(hostNetworkChange([cancelled])).toBeNull();
   expect(hostNetworkChange([])).toBeNull();
 });

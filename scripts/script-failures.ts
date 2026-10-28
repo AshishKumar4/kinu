@@ -6,8 +6,7 @@
  * render that throws outside every boundary leaves React's root empty: 2026-09-30, CI run 36754331407, the landing
  * page threw `useAgentsNav requires AgentsNavProvider` and its row waited out its 480 s bound.
  */
-import type { Page } from 'puppeteer';
-import * as v from 'valibot';
+import type { CDPSession, Page } from 'puppeteer';
 
 /** Records, on `window.__scriptFailures`, every script element whose load failed, and on `window.__uncaughtErrors`
  *  every error nothing caught, a promise's rejection nothing handled among them. Installed before each document's
@@ -27,41 +26,45 @@ const RECORD_SCRIPT_FAILURES = `(() => {
 })()`;
 
 /** A script request of a page that failed: its URL, why (the browser's error text, or the status a server
- *  answered), and when this process saw it. */
+ *  answered), when this process saw it, and the document it was made for (CDP's `loaderId`). */
 export interface ScriptFailure {
   readonly at: number;
   readonly url: string;
   readonly reason: string;
+  readonly loader: string;
 }
 
-const scriptFailures = new WeakMap<Page, ScriptFailure[]>();
+/** A request the page or the browser cancelled, such as a navigation leaving: the effect of a failure, never its
+ *  cause. */
+export const CANCELLED = 'net::ERR_ABORTED';
+
+const scriptFailures = new WeakMap<Page, { readonly failures: ScriptFailure[]; readonly cdp: CDPSession }>();
 
 /** Installs {@link RECORD_SCRIPT_FAILURES} on every document `page` loads, and records why each of its script
  *  requests failed: the page sees only that a module graph failed, the browser's network events say why. */
 export async function recordScriptFailures(page: Page): Promise<void> {
   const failures: ScriptFailure[] = [];
-  const requests = new Map<string, string>();
-
-  scriptFailures.set(page, failures);
-
+  const requests = new Map<string, { readonly url: string; readonly loader: string }>();
   const cdp = await page.createCDPSession();
 
+  scriptFailures.set(page, { failures, cdp });
+
   cdp.on('Network.requestWillBeSent', (event) => {
-    if (event.type === 'Script') requests.set(event.requestId, event.request.url);
+    if (event.type === 'Script') requests.set(event.requestId, { url: event.request.url, loader: event.loaderId });
   });
   // Cancelled module responses can omit ExtraInfo, which Puppeteer's response event waits for.
   cdp.on('Network.responseReceived', (event) => {
     if (event.type !== 'Script' || event.response.status < 400) return;
 
-    failures.push({ at: Date.now(), url: event.response.url, reason: `HTTP ${String(event.response.status)}` });
+    failures.push({ at: Date.now(), url: event.response.url, reason: `HTTP ${String(event.response.status)}`, loader: event.loaderId });
     requests.delete(event.requestId);
   });
   cdp.on('Network.loadingFailed', (event) => {
-    const url = requests.get(event.requestId);
+    const request = requests.get(event.requestId);
     requests.delete(event.requestId);
 
-    if (event.type !== 'Script' || url === undefined) return;
-    failures.push({ at: Date.now(), url, reason: event.errorText });
+    if (event.type !== 'Script' || request === undefined) return;
+    failures.push({ at: Date.now(), ...request, reason: event.errorText });
   });
   cdp.on('Network.loadingFinished', (event) => {
     requests.delete(event.requestId);
@@ -71,12 +74,15 @@ export async function recordScriptFailures(page: Page): Promise<void> {
   await page.evaluateOnNewDocument(RECORD_SCRIPT_FAILURES);
 }
 
-/** Why the current document's script requests failed, as this process saw them: those since its navigation
- *  started. */
+/** Why the current document's script requests failed, as this process saw them: those made for it, by its loader. A
+ *  reload cancels the leaving document's requests, and when the browser reports that is no part of the new one's. */
 export async function documentScriptFailures(page: Page): Promise<ScriptFailure[]> {
-  const started = v.parse(v.number(), await page.evaluate('performance.timeOrigin'));
+  const recorded = scriptFailures.get(page);
 
-  return (scriptFailures.get(page) ?? []).filter((failure) => failure.at >= started);
+  if (recorded === undefined) return [];
+  const { frameTree } = await recorded.cdp.send('Page.getFrameTree');
+
+  return recorded.failures.filter((failure) => failure.loader === frameTree.frame.loaderId);
 }
 
 /** In a page or any frame of it: what {@link RECORD_SCRIPT_FAILURES} recorded in that document, the errors nothing
@@ -103,9 +109,13 @@ export async function explained(page: Page, deadEnd: string): Promise<string> {
   const failures = await documentScriptFailures(page);
 
   if (failures.length === 0) return `${deadEnd}; no script request of this document failed on the wire`;
+  // A cancelled request is the effect of a failure, so a cause is named first.
+  const causes = failures.filter((failure) => failure.reason !== CANCELLED);
+  const shown = (causes.length > 0 ? causes : failures).slice(0, 5).map((failure) => `${failure.url} (${failure.reason})`);
+  const cancelled = failures.length - causes.length;
+  const more = causes.length > shown.length ? ` and ${String(causes.length - shown.length)} more` : '';
+  const alongside = causes.length > 0 && cancelled > 0 ? `, with ${String(cancelled)} cancelled (${CANCELLED})` : '';
+  const only = causes.length === 0 ? ` (${String(failures.length)} of them, every one cancelled and none failing on its own)` : '';
 
-  const shown = failures.slice(0, 5).map((failure) => `${failure.url} (${failure.reason})`);
-  const more = failures.length > shown.length ? ` and ${String(failures.length - shown.length)} more` : '';
-
-  return `${deadEnd}; its script requests failed: ${shown.join(', ')}${more}`;
+  return `${deadEnd}; its script requests failed: ${shown.join(', ')}${more}${alongside}${only}`;
 }
