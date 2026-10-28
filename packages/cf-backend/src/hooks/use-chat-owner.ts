@@ -29,6 +29,7 @@ import {
   SNAPSHOT_SEEDED_SOURCES, type ErrorSource, type LiveRefreshAdmission, type LiveRefreshSource,
 } from "@kinu.run/core";
 import { PlanReviewSchema } from "@kinu.run/core";
+import { useRosterYield } from "@/hooks/use-workspace-roster";
 
 /** `stdout`/`stderr` are clipped by the server; `*_len` are the stored lengths, so the pane
  *  can say what it withheld. */
@@ -260,6 +261,9 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
   }
 
   const agent = useAgent(agentOptions);
+
+  // The page's other socket waits until this chat has its transcript, or its socket has closed (`useRosterYield`).
+  useRosterYield(!transcriptSeeded && (connectionStatus === "connecting" || connectionStatus === "connected"));
 
   // Whoever a frame names: a rename, stream bookkeeping, a provider wait, a turn's error.
   const everyFrame = useCallback((data: SocketFrame) => {

@@ -6,6 +6,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -67,6 +68,21 @@ interface WorkspaceRosterValue extends RosterPages {
 }
 
 const WorkspaceRosterContext = createContext<WorkspaceRosterValue | null>(null);
+
+/** Holds the roster's live socket back until the release it answers is called (`useRosterYield`). */
+const RosterYieldContext = createContext<(() => () => void) | null>(null);
+
+/**
+ * Holds the roster's live socket back while a chat is `opening`. Chromium runs one WebSocket handshake per server address
+ * at a time (the WebSocket spec's rule for a connection in the CONNECTING state), so the roster, opened first, held a
+ * workspace's chat back by its whole handshake; and its first frames re-render the sidebar, which inside the chat's
+ * first render lengthened it. A layout effect, so a chat mounted with the page holds it before the roster's first connect.
+ */
+export function useRosterYield(opening: boolean): void {
+  const hold = useContext(RosterYieldContext);
+
+  useLayoutEffect(() => (opening && hold !== null ? hold() : undefined), [opening, hold]);
+}
 
 function matchesFilter(entry: RosterEntry, filter: RosterFilter): boolean {
   const bucket = rosterBucket(entry.overview?.activity ?? null, entry.decisions);
@@ -282,6 +298,27 @@ export function WorkspaceRosterProvider({ children, live = openRosterSocket }: {
 
   const { pages, reload: refresh, edit, pending } = useRosterPages(ALL, subscribe, epoch);
 
+  // The chats connecting now (`useRosterYield`), and the connect that waits for them.
+  const holds = useRef(0);
+  const parked = useRef<(() => void) | null>(null);
+
+  const hold = useCallback((): (() => void) => {
+    holds.current += 1;
+    let held = true;
+
+    return () => {
+      if (!held) return;
+      held = false;
+      holds.current -= 1;
+      const waiting = parked.current;
+
+      if (holds.current === 0 && waiting !== null) {
+        parked.current = null;
+        waiting();
+      }
+    };
+  }, []);
+
   // A socket that cannot open still owes the page its first read.
   useEffect(() => {
     if (live === null) {
@@ -296,8 +333,13 @@ export function WorkspaceRosterProvider({ children, live = openRosterSocket }: {
     let socket: RosterSocket | null = null;
 
     const reconnect = (): void => {
-      timer = window.setTimeout(connect, Math.min(30_000, 1_000 * 2 ** attempts));
+      timer = window.setTimeout(begin, Math.min(30_000, 1_000 * 2 ** attempts));
       attempts += 1;
+    };
+
+    const begin = (): void => {
+      if (holds.current > 0) parked.current = connect;
+      else connect();
     };
 
     const connect = (): void => {
@@ -358,10 +400,11 @@ export function WorkspaceRosterProvider({ children, live = openRosterSocket }: {
       });
     };
 
-    connect();
+    begin();
 
     return () => {
       stopped = true;
+      parked.current = null;
       window.clearTimeout(timer);
       socket?.close();
     };
@@ -396,7 +439,7 @@ export function WorkspaceRosterProvider({ children, live = openRosterSocket }: {
     decideAccountProposal, accountLooking, reportForeground,
   }), [pages, pending, refresh, upsert, create, rename, remove, subscribe, epoch, accountProposals, decideAccountProposal, accountLooking, reportForeground]);
 
-  return <WorkspaceRosterContext.Provider value={value}>{children}</WorkspaceRosterContext.Provider>;
+  return <WorkspaceRosterContext.Provider value={value}><RosterYieldContext.Provider value={hold}>{children}</RosterYieldContext.Provider></WorkspaceRosterContext.Provider>;
 }
 
 /** The roster, where a page has one: a frame drawn without its provider (the landing, a gallery frame) has none. */
