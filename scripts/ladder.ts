@@ -263,6 +263,11 @@ const LIVE_APP_AT_CI = 'boots the product\'s own dev server, workerd, Chrome and
   + 'so it needs no credential (measured 2026-10-08 with none passed: every row booted).';
 
 /** What a live-app row reads: a booted dev server, Chrome, and this box's credentials, which no tree hash stands for. */
+/** Where a live-app row's dev server output lands in the deploy's report: the harness keeps it under BENCH_ARTIFACTS
+ *  when a row fails, and an armada container takes it away otherwise (live-app-turns, 2026-10-28: 300 module requests
+ *  aborted after a reload, with nothing left to say why). */
+const LIVE_APP_EVIDENCE = 'live-app';
+
 const LIVE_APP_INPUTS: Inputs = { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' };
 
 /** How every live-app row that drives the workspace page at 1440x900 opens its `catches`. */
@@ -2341,6 +2346,7 @@ export const LADDER: readonly Gate[] = [
       + 'a LOCAL dev server whose workerd and Durable Objects are not production\'s, so the edge, the deployed assets and '
       + 'the real identity belong to `gate:first-run` after the publish.',
     inputs: LIVE_APP_INPUTS,
+    evidence: LIVE_APP_EVIDENCE,
   },
   {
     run: 'bun test --timeout=0 tests/browser/live-app-slate-ask.test.ts',
@@ -2357,6 +2363,7 @@ export const LADDER: readonly Gate[] = [
       + 'is answered; an ask a share\'s viewer makes, which no turn of the owner\'s awaits. One viewport, a local scripted '
       + 'model, and a LOCAL dev server whose workerd is not production\'s.',
     inputs: LIVE_APP_INPUTS,
+    evidence: LIVE_APP_EVIDENCE,
   },
   {
     run: 'bun test --timeout=0 tests/browser/live-app-alerts.test.ts',
@@ -2376,6 +2383,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'a hidden tab is emulated (headless Chrome never hides one), and a real browser\'s autoplay and notification '
       + 'prompts are not shown: the sound is counted as played, the permission granted up front. One local scripted model.',
     inputs: LIVE_APP_INPUTS,
+    evidence: LIVE_APP_EVIDENCE,
   },
   {
     run: 'bun test --timeout=0 tests/browser/live-app-turns.test.ts',
@@ -2399,6 +2407,7 @@ export const LADDER: readonly Gate[] = [
       + 'handed back returning to the draft; and a new chat\'s opening offers Stop while its first call waits.',
     blind: LIVE_APP_BLIND,
     inputs: LIVE_APP_INPUTS,
+    evidence: LIVE_APP_EVIDENCE,
   },
   {
     run: 'bun test --timeout=0 tests/browser/live-app-connect.test.ts',
@@ -2417,6 +2426,7 @@ export const LADDER: readonly Gate[] = [
       + 'half in providers-ux); a provider that answers its consent slowly. One viewport, and a LOCAL dev server whose '
       + 'workerd is not production\'s.',
     inputs: LIVE_APP_INPUTS,
+    evidence: LIVE_APP_EVIDENCE,
   },
   {
     run: 'bun test --timeout=0 tests/browser/live-app-provider-wait.test.ts',
@@ -2435,6 +2445,7 @@ export const LADDER: readonly Gate[] = [
       + 'a real provider\'s limits, a header-stated wait, and a refusal that outlasts every retry are the unit rows\' '
       + '(`packages/core/tests/unit-model-retry.test.ts`). A LOCAL dev server, not production.',
     inputs: LIVE_APP_INPUTS,
+    evidence: LIVE_APP_EVIDENCE,
   },
   {
     run: 'bun test --timeout=0 tests/browser/live-app-sleep.test.ts',
@@ -2451,6 +2462,7 @@ export const LADDER: readonly Gate[] = [
       + 'it whole.',
     blind: LIVE_APP_BLIND,
     inputs: LIVE_APP_INPUTS,
+    evidence: LIVE_APP_EVIDENCE,
   },
   {
     run: 'bun test --timeout=0 tests/browser/live-app-plans.test.ts',
@@ -2468,6 +2480,7 @@ export const LADDER: readonly Gate[] = [
       + 'and reach the agent as their author, are drawn again after a reload, and a block a browser forges is not.',
     blind: LIVE_APP_BLIND,
     inputs: LIVE_APP_INPUTS,
+    evidence: LIVE_APP_EVIDENCE,
   },
   {
     run: 'bun test --timeout=0 tests/browser/live-app-own-server.test.ts',
@@ -2485,6 +2498,7 @@ export const LADDER: readonly Gate[] = [
       + 'LOCAL dev server: `vite dev`\'s workerd is not the production isolate, and the deployed build is the '
       + 'product flows\' subject. No pixel is compared: the row reads heights and computed colours.',
     inputs: LIVE_APP_INPUTS,
+    evidence: LIVE_APP_EVIDENCE,
   },
   {
     run: 'bun test --timeout=0 tests/browser/live-app-page-data.test.ts',
@@ -2501,6 +2515,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'one page, one model: a scripted SSE server, so a real model writing the page is unmeasured. A LOCAL dev '
       + 'server: `vite dev`\'s workerd is not the production isolate.',
     inputs: LIVE_APP_INPUTS,
+    evidence: LIVE_APP_EVIDENCE,
   },
   {
     run: 'bun test --timeout=0 tests/browser/live-app-layout.test.ts',
@@ -2518,6 +2533,7 @@ export const LADDER: readonly Gate[] = [
       + 'that tab\'s pane needs its agent facet, which `vite dev` never loads.',
     blind: LIVE_APP_BLIND,
     inputs: LIVE_APP_INPUTS,
+    evidence: LIVE_APP_EVIDENCE,
   },
   {
     run: 'bun run gate:infra',

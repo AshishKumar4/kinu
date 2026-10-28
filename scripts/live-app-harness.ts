@@ -50,10 +50,11 @@ process.once('exit', releaseScratch);
  *  a buffer nobody read. */
 const devServerOutput = new Map<string, readonly string[]>();
 
-/** Where a failing run keeps its dev server's output, one file per boot, outside the worktree beside the other runs'
- *  logs. The buffer above dies with the process: on 2026-09-30 reading why a row's agent turn failed under `vite dev`
- *  took a throwaway patch that printed it. */
-const DEV_SERVER_LOGS = evidenceDir('dev-server');
+/** Where a failing run keeps its dev server's output, one file per boot: beside the row's evidence, which the ladder
+ *  carries back from armada (`LIVE_APP_EVIDENCE`), else outside the worktree beside the other runs' logs. The buffer
+ *  above dies with the process: on 2026-09-30 reading why a row's agent turn failed under `vite dev` took a throwaway
+ *  patch that printed it. */
+const DEV_SERVER_LOGS = process.env['BENCH_ARTIFACTS'] ?? evidenceDir('dev-server');
 
 /** What the dev server said about the last failure it served. The LAST block
  *  is this request's: the harness runs one row at a time against its own
