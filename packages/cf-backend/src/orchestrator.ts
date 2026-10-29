@@ -10,7 +10,6 @@ import { Agent, callable, type AgentContext, type Connection, type ConnectionCon
 import { ORCHESTRATOR_RPC_SURFACE, ORCHESTRATOR_STARTED_RPC } from "./rpc-surface";
 import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from "./activation-gate";
-import { supervisorEsbuildService } from "@nimbus-sh/worker/facet-host";
 import { listPortReservations } from "@nimbus-sh/worker/port-capability";
 import { KINU_TIMER_JOB } from "./wake-jobs";
 import { NimbusTasks } from "./nimbus-tasks";
@@ -6086,10 +6085,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** The workspace's slates, made at their first use (workspace-slates.ts). */
   private get slateHosting(): WorkspaceSlates {
     this._slateHosting ??= new WorkspaceSlates({
-      ctx: this.ctx, workspace: this.name,
+      ctx: this.ctx, env: this.env, workspace: this.name,
       session: () => this.hostedWorkspace().bundle.session(),
       facetManager: () => this.hostedWorkspace().facetManager(),
-      bundler: (vfs) => supervisorEsbuildService(this.ctx, this.env, vfs),
       // A share's caller carries its viewer through, so what the call reaches inside itself is held to the grant.
       dispatch: (caller, route, context) => this.slateCallDispatch(caller.path, route, caller.workMode, { ...context, ...(caller.share !== undefined && { viewer: true }) }),
       browserActor: async (caller) => (caller.share === undefined ? this.slateCallerActorId(caller.path) : null),

@@ -113,10 +113,9 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     const surface: CodemodeSurface = { cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => selectInjectableCraftedTools({ list: () => [crafted] }, sql), stores: probe.stores };
 
     const host = new SlateHost({
-      ctx: this.ctx, workspace: 'binding-probe', builds: new SlateBuilds(this.ctx.storage.sql),
+      ctx: this.ctx, env: this.env, workspace: 'binding-probe', builds: new SlateBuilds(this.ctx.storage.sql),
       session: async () => ({ vfs, processes: new SessionProcessSupervisor(), filesystem: new ProcessFiles(vfs) }),
       facetManager: async () => { throw new Error('binding probe does not boot a process'); },
-      bundler: () => { throw new Error('binding probe does not bundle a slate'); },
       apps: {
         ensure: async () => { throw new Error('binding probe does not boot a process'); },
         remove: async () => { throw new Error('binding probe does not keep durable applications'); },

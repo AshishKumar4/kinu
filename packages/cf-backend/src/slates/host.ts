@@ -1,4 +1,5 @@
 import { exports } from 'cloudflare:workers';
+import { supervisorEsbuildService } from '@nimbus-sh/worker/facet-host';
 import * as v from 'valibot';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
@@ -52,8 +53,9 @@ export interface SlateDispatchContext {
   readonly admit?: () => void;
 }
 
-export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'retained'> {
+export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'retained' | 'bundler'> {
   readonly ctx: DurableObjectState;
+  readonly env: Pick<Env, 'LOADER' | 'ASSETS'>;
   readonly workspace: string;
   /** The object's slate build records, which its owner reads and moves on a file change before any host is loaded. */
   readonly builds: SlateBuilds;
@@ -191,7 +193,9 @@ export class SlateHost {
       ...(deps.shared !== undefined && { shared: async (_caller: SlateCaller, operation: Parameters<NonNullable<SlateHostDeps['shared']>>[0]) => this.shared(operation) }),
     });
     this.resident = new ResidentSlateProcesses({
-      session: deps.session, facetManager: deps.facetManager, bundler: deps.bundler, retained: () => this.controller.builds.retained(),
+      session: deps.session, facetManager: deps.facetManager,
+      bundler: (vfs) => supervisorEsbuildService(deps.ctx, deps.env, vfs),
+      retained: () => this.controller.builds.retained(),
     });
     this.slateSources = new SlateSources({
       project: (cred, id) => this.controller.project(cred, id), trees: (cred) => this.controller.slates(cred), host: deps,

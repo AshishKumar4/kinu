@@ -6,9 +6,8 @@ import { ProcessFiles } from '@nimbus-sh/core/runtime/process-files.js';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { PortRegistry, responseScope } from '@nimbus-sh/core/runtime/port-registry.js';
-import { supervisorEsbuildService } from '@nimbus-sh/worker/facet-host';
 import { probeDurableApps, probeFacetManager } from './facet-manager';
-import { SlateHost } from '../../src/slates/host';
+import { SlateHost, type SlateHostDeps } from '../../src/slates/host';
 import { initSlateBuildTable, SlateBuilds } from '@kinu.run/core/slates';
 import { ROOT_SLATE_CALLER, slateCallerKey } from '@kinu.run/core/slates';
 import { initWorkspaceSchema, type SqlValue, type WorkMode } from '@kinu.run/core';
@@ -35,7 +34,9 @@ export class Slate extends SlateObject {
   }
 }`;
 
-export class SlateEgressProbe extends Agent<Cloudflare.Env> {
+type ProbeEnv = SlateHostDeps['env'] & Parameters<typeof processes>[1];
+
+export class SlateEgressProbe extends Agent<ProbeEnv> {
   private readonly vfs = new SqliteVFS(this.ctx.storage.sql, this.ctx);
   private readonly processes = new SessionProcessSupervisor();
   private readonly ports = new PortRegistry();
@@ -45,10 +46,9 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
   });
 
   private readonly host = new SlateHost({
-    ctx: this.ctx, workspace: this.ctx.id.toString(), builds: new SlateBuilds(this.ctx.storage.sql),
+    ctx: this.ctx, env: this.env, workspace: this.ctx.id.toString(), builds: new SlateBuilds(this.ctx.storage.sql),
     session: async () => ({ vfs: this.vfs, processes: this.processes, filesystem: this.filesystem }),
     facetManager: async () => this.facets,
-    bundler: (vfs) => supervisorEsbuildService(this.ctx, this.env, vfs),
     dispatch: async () => { throw new Error('The fixture calls nothing on its surface'); },
     apps: {
       ...probeDurableApps(this.facets),

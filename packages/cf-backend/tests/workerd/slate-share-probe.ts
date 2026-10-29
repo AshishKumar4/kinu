@@ -8,7 +8,6 @@ import * as v from 'valibot';
 import { newWebSocketRpcSession } from 'capnweb';
 import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { ProcessFiles } from '@nimbus-sh/core/runtime/process-files.js';
-import { supervisorEsbuildService } from '@nimbus-sh/worker/facet-host';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { seedBaseFilesystem } from '@nimbus-sh/core/workspace';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
@@ -21,7 +20,7 @@ import {
   shareSpendLabel, type JsonValue, type ShareViewerClaim, type SlateCallResult, type SlateSurfaceResult, type SqlExec, type SqlExecutor, type SqlValue, actorHomeName } from '@kinu.run/core';
 import { SlateId } from '@agent-core/core/slates';
 import { GalleryIndex, initGalleryTables, initSlateLiveShareTables, preapproveSlateEffect, slateDirectory, SlateLiveShareStore } from '@kinu.run/core/slates';
-import { SlateHost, type SlateDispatchContext } from '../../src/slates/host';
+import { SlateHost, type SlateDispatchContext, type SlateHostDeps } from '../../src/slates/host';
 import { rosterPage } from '../../src/user/roster';
 import { initSlateBuildTable, SlateBuilds } from '@kinu.run/core/slates';
 import { ROOT_SLATE_CALLER, slateRevision, type PartRunAnswer, type PartRunRequest, type SlateCallFrom, type SlateCaller, type SlateConsent, type SlateLineage } from '@kinu.run/core/slates';
@@ -165,7 +164,7 @@ function reachedInside(context: SlateDispatchContext): string {
   }
 }
 
-export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
+export class SlateShareProbeDO extends DurableObject<SlateHostDeps['env']> {
   private readonly vfs = new SqliteVFS(this.ctx.storage.sql, this.ctx);
   private readonly filesystem = new ProcessFiles(this.vfs);
   private readonly processes = new SessionProcessSupervisor();
@@ -205,7 +204,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   /** The run the last part call named, as its process's binding sent it. */
   private lastPartRun: string | null = null;
 
-  constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
+  constructor(ctx: DurableObjectState, env: SlateHostDeps['env']) {
     super(ctx, env);
     // The tagged-template bridge mirrors `bindAgentSql` (src/runtime.ts), hosted where the Agents SDK is not.
 
@@ -244,7 +243,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     const facets = probeFacetManager({ ctx, env, processes: this.processes, portRegistry: this.ports, vfs: this.vfs, filesystem: this.filesystem });
 
     this.host = new SlateHost({
-      ctx, workspace: ctx.id.name ?? ctx.id.toString(), builds: new SlateBuilds(ctx.storage.sql),
+      ctx, env, workspace: ctx.id.name ?? ctx.id.toString(), builds: new SlateBuilds(ctx.storage.sql),
       session: async () => ({ vfs: this.vfs, processes: this.processes, filesystem: this.filesystem }),
       facetManager: async () => {
         const held = this.#launchGate;
@@ -255,7 +254,6 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
 
         return facets;
       },
-      bundler: (vfs) => supervisorEsbuildService(ctx, env, vfs),
       dispatch: async (_caller, route, context) => {
         // The actor's half of `ai.stream`: the model's text, a piece at a time, as the actor hands it over.
         if (route.kind === 'ai' && route.stream === true) return typedPieces(['Typ', 'ing ', route.prompt], this.#typing.promise);

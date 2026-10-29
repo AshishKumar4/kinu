@@ -2063,6 +2063,13 @@ observation, not a platform limit. Moving the slate bundler factory behind the e
 the closure further: Nimbus 0.26.0's supervisor imports `fsReadBatchRequestBytes` through its broad `session/rpc.js`.
 That experiment was discarded; reducing that dependency needs a change in Nimbus's source.
 
+The follow-up keeps `fsReadBatchRequestBytes` in one leaf module in the existing Nimbus worker patch.
+Both RPC sides import it there; `session/rpc.js` retains its public export. The implementation and declarations stay
+unchanged. The slate host now constructs the compiler it owns, behind its existing lazy import. Together, these
+changes reduce the startup closure from 6,435 to 5,634 KiB against 0923bf1b5. Eight alternating local startup profiles
+on gcp-vm measured 391.7 ms median before and 375.7 ms after; six pairs were faster. The range was wide, so a
+production latency improvement remains unmeasured. Nimbus 0.26.0 is still the latest release at this measurement.
+
 L28. `--reset-tables` drops exactly the tables the genesis-lock diff names and makes them anew empty; no row is carried
 over (the owner's decision, 2026-10-20: "Drop changed tables"). It replaces the row-preserving repair of 5e999c1e7
 (2026-10-15), which rebuilt each stale table, copied the rows both shapes held back with their rowids, refilled a table

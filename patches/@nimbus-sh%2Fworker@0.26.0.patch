@@ -116,6 +116,16 @@ index 6b51b0c..8ccbae5 100644
      async _rpcWriteProtectedRootFile(rootPath, path, content) {
          return _rpc._rpcWriteProtectedRootFile(this, rootPath, path, content);
      }
+diff --git a/dist/session/read-batch.js b/dist/session/read-batch.js
+new file mode 100644
+index 0000000..cd138d6
+--- /dev/null
++++ b/dist/session/read-batch.js
+@@ -0,0 +1,4 @@
++/** The file bytes a batch request may return: its range's length; an lstat, none. */
++export function fsReadBatchRequestBytes(request) {
++    return 'length' in request ? request.length : 0;
++}
 diff --git a/dist/session/rpc.d.ts b/dist/session/rpc.d.ts
 index 7f786ff..9ccef13 100644
 --- a/dist/session/rpc.d.ts
@@ -138,10 +148,19 @@ index 7f786ff..9ccef13 100644
   * Write one host-governed file at a session root and let ordinary Unix
   * permissions keep it that way: the root becomes a sticky 1777 directory owned
 diff --git a/dist/session/rpc.js b/dist/session/rpc.js
-index f5e36a4..9393b65 100644
+index f5e36a4..31c37ab 100644
 --- a/dist/session/rpc.js
 +++ b/dist/session/rpc.js
-@@ -305,6 +305,10 @@ export async function _rpcWriteFile(self, path, content, pid, cred) {
+@@ -22,6 +22,8 @@
+  */
+ import { enc, StreamTextDecoders } from '@nimbus-sh/core/_shared/bytes.js';
+ import { RuntimeStatSchema, sessionFileStatOf } from '@nimbus-sh/core/runtime/session-protocol.js';
++import { fsReadBatchRequestBytes } from './read-batch.js';
++export { fsReadBatchRequestBytes } from './read-batch.js';
+ import { isBrokenPipe } from '@nimbus-sh/core/substrate/lifo/utils/bytes-io.js';
+ import { STDIN_FILE_READ_PIECE_BYTES } from '@nimbus-sh/core/runtime/stdin-read.js';
+ import { parseProcessSignalName } from '@nimbus-sh/core/runtime/process-io-protocol.js';
+@@ -305,6 +307,10 @@ export async function _rpcWriteFile(self, path, content, pid, cred) {
      // clone.
      return self.supervisorOp({ op: 'writeFile', args: [path, content], pid, cred });
  }
@@ -152,6 +171,30 @@ index f5e36a4..9393b65 100644
  /**
   * Write one host-governed file at a session root and let ordinary Unix
   * permissions keep it that way: the root becomes a sticky 1777 directory owned
+@@ -444,10 +450,6 @@
+ const FsReadBatchArgsSchema = z.array(z.union([FsReadBatchLstatSchema, FsReadBatchRangeSchema]))
+     .min(1).max(FS_READ_BATCH_PATH_LIMIT);
+-/** The file bytes a batch request may return: its range's length; an lstat, none. */
+-export function fsReadBatchRequestBytes(request) {
+-    return 'length' in request ? request.length : 0;
+-}
+ const FsWriteRangeArgsSchema = z.object({
+     path: z.string(),
+     offset: FsRangeOffsetSchema,
+ });
+diff --git a/dist/session/supervisor-calls.js b/dist/session/supervisor-calls.js
+index 0ddc6f2..d8c470d 100644
+--- a/dist/session/supervisor-calls.js
++++ b/dist/session/supervisor-calls.js
+@@ -55,7 +55,7 @@
+ import { rpcPayloadStart, rpcPayloadEnd } from '@nimbus-sh/platform/diag-counters.js';
+ import { useRpcResource } from '@nimbus-sh/platform/rpc-dispose.js';
+ import { isSupervisorAnsweredMethod, supervisorAnswer, } from '@nimbus-sh/core/runtime/vfs-supervisor.js';
+-import { fsReadBatchRequestBytes } from './rpc.js';
++import { fsReadBatchRequestBytes } from './read-batch.js';
+ import { W7_MAX_RECORD_BYTES } from '@nimbus-sh/platform/w7-frame.js';
+ import { LOST_CALL_HEDGE_AFTER_MS, WAVE_EPOCH_TTL_MS } from '@nimbus-sh/platform/lost-call.js';
+ /**
 diff --git a/dist/workspace-host.d.ts b/dist/workspace-host.d.ts
 index 6821f50..db51268 100644
 --- a/dist/workspace-host.d.ts
