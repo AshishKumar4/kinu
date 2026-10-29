@@ -294,6 +294,8 @@ interface AccountResetProbeRpc extends Rpc.DurableObjectBranded {
   receivedFrom(): Promise<string[]>;
   ownerDeleted(ownerUserId: string): Promise<void>;
   lap(): Promise<void>;
+  held(): Promise<Record<string, number>>;
+  storeKey(): Promise<string>;
 }
 
 /** A person, as `account-census-probe.ts` seeds and counts them. */

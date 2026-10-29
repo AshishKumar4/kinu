@@ -3,7 +3,9 @@
  * table and the same id then addresses a fresh object, and that torn-down workspaces hold no capability.
  * Addressed by the owner's user id, which `deleteAccount` hands to each workspace's `destroyAgent`.
  */
+import { Effect, Result } from 'effect';
 import { getAgentByName, type AgentContext } from 'agents';
+import { attempt, renderThrownChain, settle } from '@kinu.run/core/obs';
 import { ownerCaller, type UserProfile } from '@kinu.run/core';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { USER_DO_RPC_SURFACE } from '../../src/rpc-surface';
@@ -43,7 +45,7 @@ export class OrchestratorAgent extends ProductionOrchestrator {
   }
 }
 
-const PROBE_METHODS = ['seed', 'counts', 'hashes', 'reset', 'freshProfile', 'refuseTeardownOf', 'pendingDeletes', 'receivedFrom', 'ownerDeleted', 'lap'];
+const PROBE_METHODS = ['seed', 'counts', 'hashes', 'reset', 'freshProfile', 'refuseTeardownOf', 'pendingDeletes', 'receivedFrom', 'ownerDeleted', 'lap', 'held', 'storeKey'];
 
 const ACCOUNT_TABLE_PREFIXES = ['user_', 'device_', 'cli_', 'codex_'];
 
@@ -133,6 +135,19 @@ export class AccountResetProbeDO extends UserDO {
   /** One of the account's alarms, as the platform runs it when a job comes due. */
   async lap(): Promise<void> {
     await this.alarm();
+  }
+
+  /** What the account holds, as an eval trial's reset reads it (`/api/user/held-rows`). */
+  async held(): Promise<Record<string, number>> {
+    return this.heldRows(await ownerCaller(this.env));
+  }
+
+  /** A provider key stored as an eval trial's provisioning stores one: kept, or the refusal's words. */
+  async storeKey(): Promise<string> {
+    const owner = await ownerCaller(this.env);
+    const stored = await settle(Effect.result(attempt({ doing: 'storing a key', otherwise: 'io' }, async () => this.setCredential(owner, 'opencode-go.bearer', { kind: 'bearer', token: 'probe-key' }))));
+
+    return Result.isSuccess(stored) ? 'kept' : renderThrownChain({ cause: stored.failure });
   }
 
   async reset(): Promise<{ ok: true; workspaces: number }> {

@@ -27,7 +27,7 @@ import {
 import { evalWebIdentityEnv } from '@kinu.run/test-utils';
 import { evalMatrix } from '../evals/src/config';
 import { listWorkspaces, settleCatalog, webHeaders, type CatalogNeed, type PublicWebIdentity } from '../evals/src/workspace-roster';
-import { trialInheritedRows } from '../evals/src/slot';
+import { deletionsLanded, trialInheritedRows } from '../evals/src/slot';
 import { ARMS } from '../evals/src/target';
 import { recordStep } from './deploy-report';
 import { deployedConfig, deploymentAt } from './infra-manifest';
@@ -220,6 +220,11 @@ async function readyTrialAccount(input: Provisioning & { identity: string }, acc
 
     if (!deleted.ok) return { given: false, reset: false, finding: `resetting ${account}, which holds ${rows}, answered ${String(deleted.status)}` };
     reset = true;
+    // The reset clears the account's keys in its own job: a key stored before it lands would go with them.
+    const landed = await deletionsLanded({ origin: input.origin, identity }, true);
+    const left = 'why' in landed ? landed.why : Object.keys(landed.inherited).join(', ');
+
+    if (left !== '') return { given: false, reset, finding: `resetting ${account} had not landed: ${left}` };
   }
 
   const holds = await heldKeys(input, headers, account);

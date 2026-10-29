@@ -21,7 +21,7 @@ async function runAlarms(probe: () => { lap: () => Promise<void>; counts: () => 
 }
 
 describe('deleting an account on real workerd', () => {
-  it('answers once durable, its jobs empty every store and destroy every workspace, and the next sign-in is a new account', async () => {
+  it('answers once durable, refuses a key until its jobs empty every store and destroy every workspace, and the next sign-in is a new account', async () => {
     // Re-acquired per call: a stub held across `abortAllDurableObjects()` is broken by it.
     const probe = () => env.ACCOUNT_RESET_PROBE.get(env.ACCOUNT_RESET_PROBE.idFromName(OWNER_ID));
 
@@ -42,6 +42,11 @@ describe('deleting an account on real workerd', () => {
     expect(await probe().reset()).toEqual({ ok: true, workspaces: 2 });
     expect({ pending: await probe().pendingDeletes(), profile: (await probe().counts()).user_profile })
       .toEqual({ pending: ['ws-alpha', 'ws-beta'], profile: 1 });
+
+    // Until it lands, it is held, and a key is refused rather than kept for the account's clearing to take: every
+    // eval trial account given a key after its reset answered "No API key" (staging, 2026-10-29).
+    expect({ held: (await probe().held())['account:deleting'], key: await probe().storeKey() })
+      .toEqual({ held: 1, key: expect.stringContaining('This account is being deleted') });
 
     // Its jobs land it: one workspace an alarm, then the account, whose destroy aborts the object a tick on.
     await runAlarms(probe);
@@ -73,5 +78,9 @@ describe('deleting an account on real workerd', () => {
     const profile = await probe().freshProfile();
     expect(profile?.onboardedAt).toBeNull();
     expect(profile?.displayName).toBeNull();
+
+    // Landed, the new account keeps a key, and holds no deletion.
+    expect({ key: await probe().storeKey(), credentials: (await probe().counts()).user_credentials, held: (await probe().held())['account:deleting'] })
+      .toEqual({ key: 'kept', credentials: 1, held: undefined });
   });
 });

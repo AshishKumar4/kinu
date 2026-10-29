@@ -595,6 +595,12 @@ export class UserDO extends Agent<Env> {
   }
 
   setCredential(caller: UserCaller, key: string, credentialJson: Credential | JsonValue): Promise<void> {
+    // Its deletion's own clearing would take it a moment later, with the account told it was kept: every trial account
+    // given a key after its reset answered "No API key" (staging, 2026-10-29).
+    if (this.ctx.storage.kv.get(ACCOUNT_DELETING_KEY) !== undefined) {
+      return settle(Effect.fail(new KinuError('unavailable', 'This account is being deleted. Add the key again once it is gone, in a minute or two.')));
+    }
+
     return this.credentials.setCredential(caller, key, credentialJson);
   }
 
@@ -1622,7 +1628,8 @@ export class UserDO extends Agent<Env> {
     );
 
     const indexes = tables.filter((table) => /^\s*create\s+virtual\s+table/iu.test(table.sql ?? '')).map((table) => table.name);
-    const held: Record<string, number> = {};
+    // A deletion under way is held too: whatever is written before it lands goes with it.
+    const held: Record<string, number> = this.ctx.storage.kv.get(ACCOUNT_DELETING_KEY) === undefined ? {} : { [ACCOUNT_DELETING_KEY]: 1 };
 
     for (const { name } of tables) {
       if (indexes.some((index) => name === index || name.startsWith(`${index}_`))) continue;

@@ -134,16 +134,16 @@ export async function trialInheritedRows(target: EvalTarget): Promise<{ inherite
 const DELETIONS_LAND_MS = 180_000;
 
 /**
- * A workspace's delete answers once it is durable, and its teardown runs in the account's own job, which keeps the
- * workspace's row and that job until it lands: a trial reads the account once they went, or once its wait ends, and
- * reports what stayed.
+ * A workspace's delete, and an account's, answers once it is durable, and its teardown runs in the account's own job,
+ * which keeps the workspace's row and that job, and the account's mark (`account:deleting`), until it lands: a trial
+ * reads the account once they went, or once its wait ends, and reports what stayed.
  */
-async function deletionsLanded(target: EvalTarget, deleted: boolean): Promise<Awaited<ReturnType<typeof trialInheritedRows>>> {
+export async function deletionsLanded(target: EvalTarget, deleted: boolean): Promise<Awaited<ReturnType<typeof trialInheritedRows>>> {
   const deadline = Date.now() + DELETIONS_LAND_MS;
 
   for (;;) {
     const read = await trialInheritedRows(target);
-    const pending = !('why' in read) && (read.inherited.user_workspaces !== undefined || read.inherited.cf_agents_jobs !== undefined);
+    const pending = !('why' in read) && ['user_workspaces', 'cf_agents_jobs', 'account:deleting'].some((held) => read.inherited[held] !== undefined);
 
     if (!deleted || !pending || Date.now() > deadline) return read;
     await Bun.sleep(1_000);
