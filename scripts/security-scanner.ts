@@ -295,12 +295,6 @@ export interface ReviewedPackage {
  * shrink for it either way.
  */
 export const REVIEWED_ADVISORIES = {
-  '@hono/node-server': {
-    reason: 'transitive: @modelcontextprotocol/sdk requires ^1.19.9, resolved 1.19.14. '
-      + 'Windows-only path traversal in serve-static; nothing here starts the SDK\'s Node '
-      + 'server. Fixed in 1.19.15, inside the SDK\'s range — a lockfile refresh clears it.',
-    ids: [1139322],
-  },
   'extract-zip': {
     reason: 'TRANSITIVE: @cloudflare/puppeteer 1.4.0 (the slate-picture capture) pins @puppeteer/browsers '
       + '2.2.4, which requires it. The Worker imports the package\'s workers entry, '

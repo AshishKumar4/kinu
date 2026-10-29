@@ -475,10 +475,6 @@ async function queryAdvisories(packages, endpoint = ADVISORY_ENDPOINT) {
   return { status: "reported", scanned, exposures };
 }
 var REVIEWED_ADVISORIES = {
-  "@hono/node-server": {
-    reason: "transitive: @modelcontextprotocol/sdk requires ^1.19.9, resolved 1.19.14. " + "Windows-only path traversal in serve-static; nothing here starts the SDK's Node " + "server. Fixed in 1.19.15, inside the SDK's range \u2014 a lockfile refresh clears it.",
-    ids: [1139322]
-  },
   "extract-zip": {
     reason: "TRANSITIVE: @cloudflare/puppeteer 1.4.0 (the slate-picture capture) pins @puppeteer/browsers " + "2.2.4, which requires it. The Worker imports the package's workers entry, " + "puppeteer-cloudflare.js, whose import graph reaches 116 files and never @puppeteer/browsers: only " + "the Node launchers (node/ChromeLauncher, FirefoxLauncher, ProductLauncher, PuppeteerNode) import " + "it, and nothing in this repository calls them. extract-zip's only use there is unpacking a " + "downloaded browser archive, which never happens in a Worker; worker-bundle-reach.test.ts fails " + "if either package enters the Worker bundle. No fixed release exists: 2.0.1 is its last publish.",
     ids: [1139346, 1193685]
