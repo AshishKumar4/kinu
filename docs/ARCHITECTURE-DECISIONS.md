@@ -2054,6 +2054,15 @@ effect, which the host wraps once (it wrapped the object's answer a second time 
 name from `slates/rpc.ts`. The closure fell to 6,529 KiB. Cloudflare's validator, eight uploads of each bundle to a bindingless scratch Worker
 (`kinu-startup-probe`, interleaved, 2026-10-27): 351 to 767 ms, median 376, before; 270 to 419 ms, median 303, after.
 
+2026-10-29: a deployment's smoke check loads the platform evidence when it runs. It previously calculated its retry
+duration at module evaluation, linking the whole catalog into every Worker isolate. Against de44cd43a on gcp-vm,
+the static closure fell from 6,547 to 6,435 KiB. Eight alternating `wrangler check startup` profiles per build measured
+424.9 ms median before and 423.4 ms after. That difference is within noise; a timing improvement is unproven.
+The retry duration still derives from the same observations. The observed 29-second routing delay remains an
+observation, not a platform limit. Moving the slate bundler factory behind the existing lazy host did not reduce
+the closure further: Nimbus 0.26.0's supervisor imports `fsReadBatchRequestBytes` through its broad `session/rpc.js`.
+That experiment was discarded; reducing that dependency needs a change in Nimbus's source.
+
 L28. `--reset-tables` drops exactly the tables the genesis-lock diff names and makes them anew empty; no row is carried
 over (the owner's decision, 2026-10-20: "Drop changed tables"). It replaces the row-preserving repair of 5e999c1e7
 (2026-10-15), which rebuilt each stale table, copied the rows both shapes held back with their rowids, refilled a table

@@ -22,7 +22,6 @@ import type { ArtifactMember, HeldBytes } from './artifact';
 import type { JsonObject, JsonValue } from '../utils/json';
 import { bytesToBase64 } from '../utils/base64';
 import { randomToken } from '../utils/crypto';
-import { PLATFORM_CATALOG } from '../platform-catalog';
 import { firstOwnerLinkSecret } from '../identity/builtin-sign-in';
 import { releaseModuleKind, type ReleaseBinding, type ReleaseManifest, type ReleaseModules } from './manifest';
 import { FRONT_OBJECTS, MAIN_SERVICE_BINDING, frontWorkerName } from './front';
@@ -594,13 +593,7 @@ function addressStep(manifest: ReleaseManifest, inputs: DeployInputs): DeploySte
   };
 }
 
-/** How long the smoke asks again while the address does not answer as the version under test yet, and how often.
- *  Cloudflare carries a deployment everywhere within a couple of seconds (docs, "Version overrides"), and a workers.dev
- *  address bound a moment before answers 404 for a while (platform-catalog `workers_dev.fresh_route_404`): both are a
- *  change still arriving, never the version's own answer. Four times the longest measured, as Cloudflare names no
- *  bound; past it the step fails in the last answer's words, and the run can be retried. */
-const SMOKE_PATIENCE_MS = 4 * Math.max(...PLATFORM_CATALOG['workers_dev.fresh_route_404'].measurements.map((measured) => measured.value));
-
+/** Recheck while a new address or version override is still propagating. */
 const SMOKE_INTERVAL_MS = 3_000;
 
 /** One ask of the version under test: its health, `arriving` while the address or the override is still being
@@ -637,10 +630,15 @@ function smokeStep(): DeployStep {
         if (address === undefined) return yield* Effect.die(new Error('no address was bound, so nothing can be checked'));
 
         if (version === undefined) return yield* Effect.die(new Error('no version was uploaded, so nothing can be checked'));
+
+        // L27: lazy evidence reduces startup-linked code from 6,547 to 6,435 KiB (gcp-vm, 2026-10-29).
+        const { PLATFORM_CATALOG } = yield* Effect.promise(async () => import('../platform-catalog'));
+        // No published routing bound: wait four times the longest observation, then fail in the last answer's words.
+        const patience = 4 * Math.max(...PLATFORM_CATALOG['workers_dev.fresh_route_404'].measurements.map((measured) => measured.value));
         const url = `https://${address}/api/health`;
         let answer = yield* askVersion(context, url, version);
 
-        for (let waited = 0; answer.kind === 'arriving' && waited < SMOKE_PATIENCE_MS; waited += SMOKE_INTERVAL_MS) {
+        for (let waited = 0; answer.kind === 'arriving' && waited < patience; waited += SMOKE_INTERVAL_MS) {
           yield* Effect.promise(async () => context.wait(SMOKE_INTERVAL_MS));
           answer = yield* askVersion(context, url, version);
         }

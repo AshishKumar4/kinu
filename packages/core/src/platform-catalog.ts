@@ -2184,7 +2184,7 @@ export const PLATFORM_CATALOG = {
     notes:
       'Cloudflare publishes no figure for it. A change to a deployment is carried everywhere within a couple of seconds '
       + '(the docs\' "Version overrides"); a workers.dev route newly enabled took up to the longest measured here. The '
-      + 'self-deploy smoke asks again while it lasts (core deploy/steps.ts SMOKE_PATIENCE_MS), never reading a 404 then '
+      + 'self-deploy smoke asks again while it lasts (core deploy/steps.ts smokeStep), never reading a 404 then '
       + 'as the version\'s own answer.',
   },
 
