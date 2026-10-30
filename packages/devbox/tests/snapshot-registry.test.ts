@@ -45,6 +45,24 @@ function platform(options: { readonly pageSize?: number; readonly filler?: numbe
 
   const names = () => [...before, ...[...tags.keys(), ...manifests].sort()].map((name) => [before.includes(name) ? `${ACCOUNT}/a-filler` : repository, name] as const);
 
+  const catalog = (url: URL): Response => {
+    const failing = catalogFailures.shift();
+
+    if (failing !== undefined) return new Response('{"errors":[{"code":"UNKNOWN","message":"internal server error"}]}', { status: failing });
+    const all = names();
+    const last = url.searchParams.get('last');
+    const from = last === null ? 0 : all.findIndex(([, name]) => name === last) + 1;
+    const page = all.slice(from, from + (options.pageSize ?? 1000));
+    const repositories = new Map<string, string[] | null>([[`${ACCOUNT}/other`, null]]);
+
+    for (const [repo, name] of page) repositories.set(repo, [...repositories.get(repo) ?? [], name]);
+    const more = from + page.length < all.length;
+    // The registry's own link: no angle brackets, and the cursor is the page's last name.
+    const headers = more ? { link: `https://registry.cloudflare.com/v2/_catalog?n=1000&last=${page.at(-1)?.[1] ?? ''}&tags=true; rel=next` } : undefined;
+
+    return Response.json({ repositories: Object.fromEntries(repositories) }, { headers });
+  };
+
   const fetcher = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     const method = init?.method ?? 'GET';
@@ -55,23 +73,7 @@ function platform(options: { readonly pageSize?: number; readonly filler?: numbe
 
     if (authorization !== `Basic ${btoa('v1:pw')}`) return new Response('unauthorized', { status: 401 });
 
-    if (url.pathname === '/v2/_catalog') {
-      const failing = catalogFailures.shift();
-
-      if (failing !== undefined) return new Response('{"errors":[{"code":"UNKNOWN","message":"internal server error"}]}', { status: failing });
-      const all = names();
-      const last = url.searchParams.get('last');
-      const from = last === null ? 0 : all.findIndex(([, name]) => name === last) + 1;
-      const page = all.slice(from, from + (options.pageSize ?? 1000));
-      const repositories = new Map<string, string[] | null>([[`${ACCOUNT}/other`, null]]);
-
-      for (const [repo, name] of page) repositories.set(repo, [...repositories.get(repo) ?? [], name]);
-      const more = from + page.length < all.length;
-      // The registry's own link: no angle brackets, and the cursor is the page's last name.
-      const headers = more ? { link: `https://registry.cloudflare.com/v2/_catalog?n=1000&last=${page.at(-1)?.[1] ?? ''}&tags=true; rel=next` } : undefined;
-
-      return Response.json({ repositories: Object.fromEntries(repositories) }, { headers });
-    }
+    if (url.pathname === '/v2/_catalog') return catalog(url);
 
     const ref = url.pathname.split('/manifests/')[1] ?? '';
     const named = ref.startsWith('sha256:') ? ref : tags.get(ref);
