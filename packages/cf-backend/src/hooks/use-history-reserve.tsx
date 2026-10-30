@@ -1,5 +1,5 @@
 /** Unread history's height, so the scrollbar stands for the whole chat. */
-import { useCallback, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
   HISTORY_RESERVE_ATTRIBUTE, RESERVE_END_ATTRIBUTE, RESERVE_START_ATTRIBUTE, SCROLL_EDGE_ATTRIBUTE,
   useGrowingScroll, type GrowingScrollOptions,
@@ -41,14 +41,20 @@ function useRowPitch(scroller: RefObject<Element | null>): number {
 
 export function useReservedScroll(options: GrowingScrollOptions) {
   const scroller = useRef<HTMLDivElement | null>(null);
-  const attach = useGrowingScroll(options);
+  const rowPx = useRowPitch(scroller);
+  const { content } = options;
+  // A new pitch resizes the reserve above the reader in a render of its own, which the scroll holds through as it does
+  // a page that lands. Left to its resize observer, the browser clamped the scroll first and the hook read the clamp as
+  // the reader's own move, pinning them to the bottom (chat-scroll's long chat under tall rows, 2026-10-30).
+  const held = useMemo(() => ({ content, rowPx }), [content, rowPx]);
+  const attach = useGrowingScroll({ ...options, content: held });
 
   const ref = useCallback((node: HTMLDivElement | null) => {
     scroller.current = node;
     attach(node);
   }, [attach]);
 
-  return { ref, rowPx: useRowPitch(scroller) };
+  return { ref, rowPx };
 }
 
 export function historyBoundaryError(history: ChatHistory): string | null {

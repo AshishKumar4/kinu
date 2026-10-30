@@ -370,6 +370,8 @@ interface LongChat {
   readonly stillReader: readonly (readonly LongFrame[])[];
   /** The same, over a history whose pages alternate short and long rows. */
   readonly uneven: readonly (readonly LongFrame[])[];
+  /** The same, under newest rows far taller than a page's: the reserve's pitch falls as each page lands. */
+  readonly tallTail: readonly (readonly LongFrame[])[];
   readonly fling: readonly LongFrame[];
   readonly drag: readonly LongFrame[];
   /** History pages the drag to the top asked for, and the drag's wall time until the first row painted. */
@@ -686,6 +688,7 @@ async function stillReaderLandings(newPage: Gallery['newPage'], origin: string, 
 async function measureLong(newPage: Gallery['newPage'], origin: string): Promise<LongChat> {
   const stillReader: LongFrame[][] = [];
   const uneven: LongFrame[][] = [];
+  const tallTail: LongFrame[][] = [];
   let fling: LongFrame[] = [];
   let drag: LongFrame[] = [];
   let dragAsks = 0;
@@ -696,6 +699,7 @@ async function measureLong(newPage: Gallery['newPage'], origin: string): Promise
     // Held pages: each older page lands when released, and nothing lands between a painted frame and its reading.
     await stillReaderLandings(newPage, origin, 'history=2000', stillReader);
     await stillReaderLandings(newPage, origin, 'history=2000&historyUneven=1', uneven);
+    await stillReaderLandings(newPage, origin, 'history=2000&tallTail=1', tallTail);
 
     // A fling up a long chat: every painted frame shows transcript, never the reserve, while history remains.
     const flung = await openLong(newPage, origin, 'history=2000&historyLatency=250');
@@ -756,9 +760,9 @@ async function measureLong(newPage: Gallery['newPage'], origin: string): Promise
     };
     await halfway.close();
 
-    return { refused: null, stillReader, uneven, fling, drag, dragAsks, dragMs, middle };
+    return { refused: null, stillReader, uneven, tallTail, fling, drag, dragAsks, dragMs, middle };
   } catch (err) {
-    return { refused: firstLine({ cause: err }), stillReader, uneven, fling, drag, dragAsks, dragMs, middle };
+    return { refused: firstLine({ cause: err }), stillReader, uneven, tallTail, fling, drag, dragAsks, dragMs, middle };
   }
 }
 
@@ -892,11 +896,13 @@ describe('a long workspace chat, as the reader sees it', () => {
     expect(observed.long.refused).toBeNull();
     expect(observed.long.stillReader).not.toBeEmpty();
     expect(observed.long.uneven).not.toBeEmpty();
+    expect(observed.long.tallTail).not.toBeEmpty();
   });
 
-  // 2026-09-26: a page landing moved the row being read by 344px for one painted frame.
+  // 2026-09-26: a page landing moved the row being read by 344px for one painted frame. 2026-10-30: under tall newest
+  // rows, a landing page's shorter rows shrank the reserve, and the reader was thrown to the bottom.
   test('a reader holding still sees the row they read stay put on every painted frame as older pages land', () => {
-    for (const frames of [...observed.long.stillReader, ...observed.long.uneven]) {
+    for (const frames of [...observed.long.stillReader, ...observed.long.uneven, ...observed.long.tallTail]) {
       const tops = frames.flatMap((frame) => frame.anchorTop === null ? [] : [frame.anchorTop]);
 
       expect(tops.length).toBeGreaterThan(1);

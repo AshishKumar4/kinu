@@ -2518,6 +2518,11 @@ const SLATES_THREAD: UIMessage[] = [
   msg({ id: "sb-a3", role: "assistant", createdAt: NOW - 4 * 60e3, metadata: { [SLATES_CHANGED_METADATA_KEY]: ["board"] }, parts: [{ type: "text", text: "Added a last-failure column." }] }),
 ];
 
+const TALL_TAIL: UIMessage[] = Array.from({ length: 6 }, (_, at) => msg({
+  id: `tall-${String(at)}`, role: at % 2 === 0 ? "user" : "assistant", createdAt: NOW - (12 - at) * 60e3,
+  parts: [{ type: "text", text: "A long answer that wraps across many lines of the column. ".repeat(60) }],
+}));
+
 /** Two sites a tool's output names, the first twice: its earlier preview folds behind the later one. */
 const GALLERY_SITES = ["https://8130-sandbox-aaaaaaaaaaaaaaaa.preview.example.test/", "https://8131-sandbox-bbbbbbbbbbbbbbbb.preview.example.test/"] as const;
 
@@ -2799,7 +2804,8 @@ function seedFrameTranscript(transcript: string | null): void {
 
   if (transcript === "pictures") seedGalleryChat(PICTURES_THREAD);
 
-  if (transcript === "slates") seedGalleryChat(SLATES_THREAD);
+  // `&tallTail=1`: six tall answers before the thread, so the rows a page brings measure far shorter than those seen.
+  if (transcript === "slates") seedGalleryChat(new URLSearchParams(location.search).get("tallTail") === "1" ? [...TALL_TAIL, ...SLATES_THREAD] : SLATES_THREAD);
 
   if (transcript === "sites") seedGalleryChat(SITES_THREAD);
 
