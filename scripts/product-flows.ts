@@ -34,7 +34,7 @@ import {
   JOB_ASK, JOB_NOT_STARTED, JOB_STARTED,
   APPROVALS_ASK, DECISION_HEARD, HIRE_APPROVAL_ASK, HIRE_RAN, AGENT_WORKSPACE_REPLY, AGENT_WORKSPACE_ASK, ACCOUNT_FACT, ACCOUNT_FACT_ASK,
   ACCOUNT_RECALL_ASK, ACCOUNT_RECALL_REPLY, STACK_FACT, STACK_FACT_ASK, STACK_RECALL_ASK, STACK_RECALL_REPLY,
-  SPLICE_AFTER, SPLICE_AFTER_ASK, SPLICE_HEARD, SPLICE_PAGE_ASK, SPLICE_SENT, SPLICE_STEPS, SPLICE_WORK_ASK,
+  SPLICE_HEARD, SPLICE_PAGE_ASK, SPLICE_SENT, SPLICE_STEPS, SPLICE_WORK_ASK,
   ATTACHMENT_ASK, ATTACHMENT_FILE, ATTACHMENT_REPLY, ATTACHMENT_UNREAD, ATTACHMENT_WORD, ACTIVITY_ASK, ACTIVITY_WORKSPACE, MODE_SLATE, MODE_SLATE_ASK,
 } from './flows-script';
 import { FALLBACK_ANSWER } from './scripted-protocol';
@@ -142,7 +142,8 @@ export interface SpliceCard {
 export interface SpliceReading {
   /** Each ping's card drawn, in the chat's reading order. */
   readonly cards: readonly SpliceCard[];
-  /** The reading order of each step's words, each ping's card after it, and the answer (-1: not found). */
+  /** The reading order of each step's words, each ping's card after it, the answer (-1: not found), and the later
+   *  answer once there is one. */
   readonly order: readonly number[];
   /** Whether the turn was still working. */
   readonly working: boolean;
@@ -162,8 +163,10 @@ export interface SpliceVerdict {
 /** The chat as it draws the work turn, read in the page: each ping's card by the numbered word it carries. */
 const SPLICE_READING = `(() => {
   const all = [...document.querySelectorAll('#chat *')];
-  const at = (needle) => all.findIndex((el) => (el.textContent ?? '').includes(needle)
-    && ![...el.children].some((child) => (child.textContent ?? '').includes(needle)));
+  const holds = (needle) => (el) => (el.textContent ?? '').includes(needle)
+    && ![...el.children].some((child) => (child.textContent ?? '').includes(needle));
+  const at = (needle) => all.findIndex(holds(needle));
+  const last = (needle) => all.findLastIndex(holds(needle));
   const ping = (el) => Number(new RegExp(${JSON.stringify(`${SPLICE_SENT}-(\\d+)`)}).exec(el.textContent ?? '')?.[1] ?? 0);
   const cards = [...document.querySelectorAll('#chat [data-signal-card]')].filter((el) => ping(el) > 0).map((card) => {
     const mark = card.querySelector('[data-delivery]');
@@ -182,7 +185,7 @@ const SPLICE_READING = `(() => {
     order: [
       ...steps.flatMap((step, i) => [at(step), at(${JSON.stringify(SPLICE_SENT)} + '-' + String(i + 1))]),
       at(${JSON.stringify(SPLICE_HEARD)}),
-      ...(at(${JSON.stringify(SPLICE_AFTER)}) < 0 ? [] : [at(${JSON.stringify(SPLICE_AFTER)})]),
+      ...(last(${JSON.stringify(FALLBACK_ANSWER)}) < 0 ? [] : [last(${JSON.stringify(FALLBACK_ANSWER)})]),
     ],
     working: !(${CHAT_IDLE}),
   };
@@ -236,9 +239,10 @@ export async function spliceSitsWhereItWasRead(target: FlowTarget): Promise<Spli
     const answered = await reading();
     const heard = v.parse(v.string(), await page.evaluate(`(document.querySelector('#chat')?.innerText ?? '').split('\\n').find((line) => line.includes(${JSON.stringify(SPLICE_HEARD)}))?.trim() ?? ''`));
 
-    // The page keeps the pings' cards while it is open; a later answer must not take them (quiet-cairn-da44d09f).
-    await sendAndSettle(page, SPLICE_AFTER_ASK);
-    await until(page, 'the later answer', chatHas(SPLICE_AFTER));
+    // The page keeps the pings' cards while it is open; a later answer, the model's plain one, must not take them
+    // (quiet-cairn-da44d09f).
+    await sendAndSettle(page, 'Flow splice: thanks, that is all.');
+    await until(page, 'the later answer', chatHas(FALLBACK_ANSWER));
     const followed = await reading();
 
     await page.reload({ waitUntil: 'load' });
