@@ -162,6 +162,7 @@ class StreamMember implements ArtifactMember {
     while (this.left > 0) {
       const piece = await this.next();
 
+      if (piece === null) throw new Error(`the release artifact ends inside ${this.path}`);
       this.digest.update(piece);
 
       if (this.left === 0 && this.digest.digest('hex') !== this.sha256) {
@@ -184,17 +185,18 @@ class StreamMember implements ArtifactMember {
     return whole;
   }
 
-  /** What no reader took is skipped unread: it reaches nothing, so it needs no digest. */
-  async drain(): Promise<void> {
-    while (this.left > 0) await this.next();
+  /** What no reader took is skipped unread: it reaches nothing, so it needs no digest. False when the archive ends
+   *  first. */
+  async drain(): Promise<boolean> {
+    while (this.left > 0) if (await this.next() === null) return false;
+
+    return true;
   }
 
-  private async next(): Promise<Uint8Array> {
+  private async next(): Promise<Uint8Array | null> {
     const piece = await this.cursor.some(this.left);
 
-    if (piece === null) throw new Error(`the release artifact ends inside ${this.path}`);
-
-    this.left -= piece.length;
+    if (piece !== null) this.left -= piece.length;
 
     return piece;
   }
@@ -210,11 +212,11 @@ export class TarArtifact {
 
   private readonly named: ReadonlyMap<string, ReleaseFile>;
 
-  private constructor(private readonly archive: ReadableStream<Uint8Array>, files: readonly ReleaseFile[]) {
+  private constructor(private readonly archive: ReadableStream<BufferSource>, files: readonly ReleaseFile[]) {
     this.named = new Map(files.map((file) => [file.path, file]));
   }
 
-  static open(archive: ReadableStream<Uint8Array>, files: readonly ReleaseFile[]): TarArtifact {
+  static open(archive: ReadableStream<BufferSource>, files: readonly ReleaseFile[]): TarArtifact {
     return new TarArtifact(archive, files);
   }
 
@@ -262,7 +264,7 @@ export class TarArtifact {
 
         yield member;
 
-        await member.drain();
+        if (!await member.drain()) throw new Error(`the release artifact ends inside ${path}`);
         await cursor.exact(padding);
       }
     } finally {
