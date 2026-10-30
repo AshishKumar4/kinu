@@ -3,7 +3,7 @@
 import { afterEach, expect, jest, setSystemTime, spyOn, test } from 'bun:test';
 import * as v from 'valibot';
 import { ChainTestBox, asked, chainBox } from './support/chain-box';
-import { HARNESS_GOLDEN } from './support/devbox-harness';
+import { HARNESS_GOLDEN, gate, type Gate } from './support/devbox-harness';
 import type { SnapshotRegistry } from '../src/snapshot-registry';
 
 /** The registry as the box asks it to delete a snapshot: what it deleted, and an answer to give. */
@@ -54,6 +54,24 @@ class HybridBox extends ChainTestBox {
 class QuickRestartBox extends ChainTestBox {
   protected override get snapshotRegistry(): SnapshotRegistry {
     return fakeRegistry();
+  }
+}
+
+/** A box whose next configuration waits on `held` to read its name, as a start that hangs configuring does. */
+class HeldConfigureBox extends HybridBox {
+  static held: Gate | undefined;
+
+  protected override async hostname(): Promise<string | undefined> {
+    const held = HeldConfigureBox.held;
+
+    HeldConfigureBox.held = undefined;
+
+    if (held !== undefined) {
+      held.enter();
+      await held.promise;
+    }
+
+    return undefined;
   }
 }
 
@@ -364,6 +382,27 @@ test('a rest after the object is evicted mid-session still knows its snapshot is
   await evict().quiesce();
 
   expect({ deleted: registry.deleted, current: lineage(rows) }).toEqual({ deleted: [], current: { id: 'snapshot-2', lineage: ['snapshot-1'] } });
+});
+
+// Production, 2026-10-30 (box a3b8bd7d…): a wake from the box's own snapshot hung configuring until the platform reset its
+// object. The next start found that container running, took it for a golden one, and mounted the backup of Oct 25 over the
+// workspace the snapshot held; the next rest kept both, and every wake after it was refused.
+test('a start over the container its own snapshot woke, after a reset mid-start, attaches that snapshot and recovers nothing', async () => {
+  const { box, container, evict } = await rested(HeldConfigureBox);
+  const held = gate();
+
+  asked.length = 0;
+  HeldConfigureBox.held = held;
+  const reset = box.devboxStartup();
+  await held.reached;
+  const successor = evict();
+  await successor.devboxStartup();
+  const seen = { starts: container.startOptions.map(startedFrom), asked: [...asked], notices: (await successor.devboxIncidentReasons()).map(row => row.stage) };
+  // The reset ended the first start where it waited; let go only once the successor's is read.
+  held.release();
+  await Promise.allSettled([reset]);
+
+  expect(seen).toEqual({ starts: ['golden', 'snapshot-1'], asked: ['attach from snapshot'], notices: [] });
 });
 
 test('a box re-rooted through chain recovery deletes its whole old lineage, and its next snapshot is a root', async () => {

@@ -3416,7 +3416,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     return new DiskChainStorage(this.diskChain(this.#diskChainPorts(bucket)), {
       prepare: () => this.#refreshTools(),
-      fromSnapshot: () => this.#started?.kind === 'own',
+      // Not this incarnation's memory of its start: a reset mid-start left a box mounting its backup over the
+      // workspace its own snapshot held (production, 2026-10-30).
+      fromSnapshot: () => this.#snapshots.wokeFrom() !== undefined,
       recovered: async (restoredTo) => { await this.#record('recovered', recoveryNotice(restoredTo, this.archiveExcludes)); },
       discard: async () => {
         this.ctx.storage.kv.delete(DISK_STATE_KEY);

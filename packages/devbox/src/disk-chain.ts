@@ -450,12 +450,24 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
     return { kind: 'attached', detail: `rev ${String(state.rev)}, ${String(layers.length)} layers, lazy`, recoveredTo: state.committedAt };
   });
 
-  /** A finished copy becomes the plain workspace with the upper merged in; else the overlay remounts. */
+  /**
+   * A finished copy becomes the plain workspace with the upper merged in; else the overlay remounts. A recovery is mounted
+   * over an empty workspace, so files under an unmounted one are the root's own and newer than the backup: a start that
+   * lost its source mounted the backup over a snapshot's workspace and then rested (production, 2026-10-30). That
+   * recovery is set aside, and the root serves its own files.
+   */
   const resume = (recovered: v.InferOutput<typeof RecoveryRecord>) => Effect.gen(function* () {
-    const [workspace, hydrated] = (yield* run('checking the recovery', `mountpoint -q ${shellPath(DEVBOX_WORKDIR)} && echo mounted || echo unmounted; `
-      + `[ -e ${shellPath(HYDRATED)} ] && echo done || echo copying`)).split('\n');
+    const [workspace, hydrated, under] = (yield* run('checking the recovery', `mountpoint -q ${shellPath(DEVBOX_WORKDIR)} && echo mounted || echo unmounted; `
+      + `[ -e ${shellPath(HYDRATED)} ] && echo done || echo copying; [ -z "$(ls -A ${shellPath(DEVBOX_WORKDIR)})" ] && echo empty || echo held`)).split('\n');
 
     if (workspace === 'mounted') return 'resumed';
+
+    if (under === 'held') {
+      yield* run('setting the recovery aside', `rm -rf ${[UPPER, WORK, LAYERS, LOWERS, HYDRATE, `${HYDRATE}.tmp`, RECOVERED, HYDRATED, HYDRATE_REFUSED, HYDRATING].map(shellPath).join(' ')}`);
+
+      return 'set aside: the root holds the workspace';
+    }
+
     const refused = yield* read(HYDRATE_REFUSED);
 
     // The workspace is served from layers that are not the ones published; nothing here makes them right.

@@ -47,6 +47,14 @@ export class Snapshots {
 
   started(own?: string): void { this.ports.kv.put(WOKE_FROM_KEY, own ?? ''); }
 
+  /** The own snapshot the running container was started from, none for a golden start: kept in storage, so a start over
+   *  that container after the object was reset still knows its root holds the workspace. */
+  wokeFrom(): string | undefined {
+    const own = this.ports.kv.get<string>(WOKE_FROM_KEY);
+
+    return own === undefined || own === '' ? undefined : own;
+  }
+
   /**
    * An image or golden start ends the old lineage; a wake from its own save extends it. A lineage superseded while the
    * take ran (a discard, a cutover) makes the snapshot owed for deletion, never the next wake: it holds what was
@@ -55,7 +63,7 @@ export class Snapshots {
   async save(): Promise<void> {
     const rev = this.ports.chainRev();
     const held = this.record;
-    const parent = held !== null && held.id === this.ports.kv.get(WOKE_FROM_KEY) ? held : undefined;
+    const parent = held !== null && held.id === this.wokeFrom() ? held : undefined;
     const lineage = this.#lineage;
     const snapshot = await this.ports.take();
     const takenAt = Date.now();
