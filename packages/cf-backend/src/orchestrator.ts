@@ -3650,6 +3650,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.email.ownerNotification(subject, body);
   }
 
+  /**
+   * Loads main's isolate ahead of an open (`api/wake-route.ts`): the open's socket seeds its chat from it, 261-342 ms
+   * when the isolate was cold and 20 ms warm (eval-big-10270340 on production, 2026-10-28). A read, so it starts no work.
+   */
+  async openMainIsolate(): Promise<void> {
+    await this.agentCall(this.actorHandle().actorId, async (isolate, snapshot) => isolate.messageCount(snapshot));
+  }
+
   /** Called by the Worker on every authenticated request before any other RPC; 403s on cross-user collision. The
    *  `placement` the creating call placed this object with is kept, for what it makes after (`placement`). */
   claimOwner(userId: string, placement?: WorkspacePlacement): Promise<{ owner: string; capabilityHash: string | null }> {

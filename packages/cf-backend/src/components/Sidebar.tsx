@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/Button";
 import { Pressable } from "@/components/ui/Pressable";
 import { TextInput } from "@/components/ui/Field";
 import { NavRow, NavRowButton } from "@/components/ui/NavRow";
+import { wakeAheadOf } from "@/hooks/use-wake-ahead";
 import { Surface } from "@/components/ui/Surface";
 
 function PrimaryNavRow(item: (typeof PRIMARY_NAV)[number]) {
@@ -184,7 +185,7 @@ export default function Sidebar({ onCollapse, accountOpen = false }: { onCollaps
                       onDone={() => setEditingWorkspace(null)} />
                   ) : (
                     <>
-                      <NavRow to={`/workspace/${a.name}`} current={pathname === `/workspace/${a.name}` && panel === null}
+                      <NavRow to={`/workspace/${a.name}`} current={pathname === `/workspace/${a.name}` && panel === null} {...wakeAheadOf(a.name)}
                         className="pr-12 lg:pr-3 lg:group-hover:pr-12 lg:group-focus-within:pr-12">
                         <span className="relative flex shrink-0">
                           <WorkspaceLogo title={shown} logo={a.logo} />

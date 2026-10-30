@@ -7,6 +7,7 @@ import { useMascotOf } from "@/hooks/use-chat-mascot";
 import { Status } from "@/components/ui/Status";
 import { TILE, TileShell, TypesetCover } from "@/components/ui/Tiles";
 import { workspaceStatusTone } from "@/components/workspaces/workspace-status-tone";
+import { wakeAheadOf } from "@/hooks/use-wake-ahead";
 
 
 function StatusChip({ workspace }: { workspace: RosterEntry }) {
@@ -41,7 +42,7 @@ export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
   if (variant === 'line') {
     return (
       <div className={`p-hover-row flex h-14 items-center gap-3 px-4 ${first ? "" : "border-t p-border"}`}>
-        <Link to={to} className="flex min-w-0 flex-1 items-center gap-3">
+        <Link to={to} className="flex min-w-0 flex-1 items-center gap-3" {...wakeAheadOf(workspace.name)}>
           <span className="min-w-0 flex-1">
             <span className="t-item block truncate p-text">{title}</span>
             {mission !== null && <span className="t-meta block truncate p-text-3">{mission}</span>}
@@ -60,7 +61,7 @@ export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
   );
 
   return (
-    <Link to={to} className={TILE}>
+    <Link to={to} className={TILE} {...wakeAheadOf(workspace.name)}>
       <TileShell cover={cover} title={title}>
         <span className="flex min-w-0 items-center gap-2">
           <StatusChip workspace={workspace} />

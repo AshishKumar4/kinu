@@ -30,6 +30,7 @@ import { hubRoutes, webhookDeliveryRoutes } from '../events/routes';
 import { runEventsRoutes } from '../run-events-routes';
 import { evalAbortRoutes } from '../eval/abort-route';
 import { activationRoutes } from './activations-route';
+import { wakeRoutes } from './wake-route';
 import { filesRoutes } from '../files-routes';
 import { terminalRouteDeps, terminalRoutes } from '../terminal-route';
 import { routeError, apiPath, beneath, familyMount, type FamilyEnv } from './context';
@@ -119,6 +120,8 @@ mount(runEventsRoutes<Env, ClaimedWorkspace>(REAL_CLOCK));
 mount(evalAbortRoutes);
 
 mount(activationRoutes);
+
+mount(wakeRoutes);
 
 mount(mailHandRoutes);
 

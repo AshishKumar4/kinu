@@ -1301,6 +1301,14 @@ function rosterRead(search: URLSearchParams): Promise<Response> {
   return ROSTER_READ === "held" ? rosterRelease.promise.then(answer) : Promise.resolve(answer());
 }
 
+/** POSTs the gallery answers itself, by path: WorkspacePage records a visit on mount, where a 404 is a workspace the
+ *  registry no longer holds; the shell, and a pointer resting on a workspace, wake it ahead of its open
+ *  (hooks/use-wake-ahead.ts). */
+const GALLERY_POSTS: readonly (readonly [RegExp, () => Response])[] = [
+  [/^\/api\/user\/workspaces\/[^/]+\/touch$/, () => touchFixture()],
+  [/^\/api\/workspaces\/[^/]+\/wake$/, () => new Response(null, { status: 204 })],
+];
+
 /** Every path fetched, so a gate can prove what the page did not read. */
 function touchFixture(): Response {
   const root = document.documentElement;
@@ -1444,8 +1452,9 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
     return Promise.resolve(new Response(JSON.stringify(response), { headers: { "content-type": "application/json" } }));
   }
 
-  // WorkspacePage records the visit on mount; a 404 is a workspace the registry no longer holds.
-  if (method === "POST" && /^\/api\/user\/workspaces\/[^/]+\/touch$/.test(path)) return Promise.resolve(touchFixture());
+  const posted = method === "POST" ? GALLERY_POSTS.find(([route]) => route.test(path)) : undefined;
+
+  if (posted !== undefined) return Promise.resolve(posted[1]());
 
   // Feedback and control-plane requests reach the network so the gate decides them by request interception; a stub 404 would fail every send and hide the control plane's non-ok states.
   if (path === FEEDBACK_ENDPOINT || path.startsWith('/api/control/')) return realFetch(input, init);

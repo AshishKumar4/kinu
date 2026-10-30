@@ -416,6 +416,8 @@ const ORCHESTRATOR_METHODS = [
   'isolateOutOfMemory',
   'workspaceTitle',
   'activations',
+  // Worker-only: the API's wake ahead of an open (api/wake-route.ts).
+  'openMainIsolate',
   // Eval-only. Never `@callable`; the route admits only the eval-service identity.
   'evalAbortActivation',
 ] as const satisfies readonly (keyof OrchestratorAgent)[];

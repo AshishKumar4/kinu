@@ -11,6 +11,7 @@ import { KinuLogo } from "./ui/KinuLogo";
 import { NewWorkspaceIconButton } from "./workspaces/NewWorkspaceButton";
 import { composing } from "./ui/form";
 import { WorkspaceRosterProvider } from "@/hooks/use-workspace-roster";
+import { WakeLastOpened } from "@/hooks/use-wake-ahead";
 import { OwnerAlerts } from "@/hooks/use-owner-alerts";
 import { AgentsNavProvider, useAgentsNav } from "@/hooks/use-agents-nav";
 import { DESKTOP_QUERY } from "@/hooks/use-media-query";
@@ -72,6 +73,7 @@ function Shell() {
 
   return (
     <WorkspaceRosterProvider>
+    <WakeLastOpened />
     <LimitRefusalProvider>
     <OwnerAlerts />
     <Surface look="page" className="isolate flex h-screen w-screen flex-col p-text overflow-hidden md:flex-row">

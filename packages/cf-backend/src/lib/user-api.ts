@@ -29,7 +29,7 @@ import {
 } from '@kinu.run/core';
 import { renderThrownChain, settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
-import { ApiError, request } from './http';
+import { ApiError, posted, request } from './http';
 import type { BoxSize } from '@kinu.run/devbox/sizes';
 import { accountFilesView, FILES_VIEW_CONFIG_KEY, THEME_CONFIG_KEY, type FilesView, type ThemeName } from '@kinu.run/core';
 import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY } from '../computer-size';
@@ -127,6 +127,9 @@ export function listWorkspaces(query: RosterQuery = {}) {
 // `purpose` is the initial mission; omitting `name` lets the server create the identity with the user's model.
 export const registerWorkspace  = (name?: string, purpose?: string, displayName?: string) =>
   settle(api(WorkspaceEntrySchema, 'POST', '/workspaces', { name, displayName, purpose }));
+
+/** Readies `name` ahead of its open: its object and main's isolate (`api/wake-route.ts`). */
+export const wakeWorkspace = (name: string): Effect.Effect<void> => posted(`/api/workspaces/${encodeURIComponent(name)}/wake`, {});
 
 /** Records a visit to `name`, and says whether the roster took it. A 404 is the roster no longer holding the
  *  workspace, an answer rather than a failed visit; any other failure throws. */

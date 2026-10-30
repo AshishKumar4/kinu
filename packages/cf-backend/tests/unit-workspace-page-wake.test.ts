@@ -1,7 +1,8 @@
 /**
  * A workspace's page wakes its object while the page loads: the document's request makes the same claim the page's
  * socket makes a moment later, so a cold object's construction runs beside the document, the app and the socket's own
- * connection rather than after them. A name the account does not hold wakes nothing.
+ * connection rather than after them. Ahead of an open (the app shell loading, a pointer resting on a workspace), the
+ * wake readies its object and main's isolate too. A name the account does not hold wakes nothing.
  */
 import { describe, expect, test } from 'bun:test';
 import { accountPagesFetch, workerContext } from './helpers/bindings';
@@ -19,6 +20,9 @@ function account(holds: readonly string[], context: ExecutionContext) {
       asked.push(`claim:${name}`);
 
       return { owner: userId, capabilityHash: 'sha' };
+    },
+    async openMainIsolate() {
+      asked.push(`isolate:${name}`);
     },
   });
 
@@ -79,5 +83,15 @@ describe("a workspace's page", () => {
     expect(answer.status).toBe(200);
     await Promise.all(context.retained);
     expect(asked.filter((call) => call.startsWith('claim:'))).toEqual([]);
+  });
+
+  test('woken ahead of its open readies its object and main\'s isolate; a name the account does not hold, neither', async () => {
+    const context = workerContext();
+    const { env, asked } = account(['jarvis'], context);
+    const wake = async (name: string) => (await worker.fetch(new Request(`http://localhost/api/workspaces/${name}/wake`, { method: 'POST' }), env, context)).status;
+
+    expect({ held: await wake('jarvis'), notHeld: await wake('someone-elses') }).toEqual({ held: 204, notHeld: 404 });
+    await Promise.all(context.retained);
+    expect(asked.filter((call) => !call.startsWith('member:'))).toEqual(['claim:jarvis', 'isolate:jarvis']);
   });
 });
