@@ -42,7 +42,7 @@ if (!('WebSocketRequestResponsePair' in globalThis)) {
 }
 
 // workerd's Cache API, keeping nothing: each test's own fetch answers its catalog reads (the model menu's models.dev
-// slices, cf-backend providers/catalog-shelf.ts), never a slice another test kept.
+// slices, cf-backend user/available-models.ts), never a slice another test kept.
 if (!('caches' in globalThis)) {
   Object.defineProperty(globalThis, 'caches', {
     configurable: true,

@@ -3,10 +3,9 @@
 import {
   objectNamed,
   catalogCredKey, fastCandidatesOf, listModelsDevProviders, modelsDevCompatBaseURL, testModel,
-  type ModelMenuResponse, type ModelMenuEntry, type ModelTestResult, type ModelsDevProviderInfo, type ProviderCatalogEntry,
+  type CatalogShelf, type ModelMenuResponse, type ModelMenuEntry, type ModelTestResult, type ModelsDevProviderInfo, type ProviderCatalogEntry,
 } from '@kinu.run/core';
 import { createAgentProviderRegistry, userCredentials, type UserCredentialClient } from '../providers/agent-registry';
-import { colocatedCatalogShelf } from '../providers/catalog-shelf';
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { ProviderEnv } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
@@ -14,6 +13,25 @@ import type { UserCaller } from '@kinu.run/core';
 export interface AvailableModelsEnv<Id> extends ProviderEnv {
   UserDO: ObjectNamespace<Id, UserCredentialClient>;
 }
+
+const SHELF = 'models-dev-slices';
+
+const shelfKey = (key: string): string => `https://models.dev/slices/${encodeURIComponent(key)}`;
+
+/** models.dev's slices kept in the colo's cache (the Cache API), which every isolate the colo runs reads: a Worker's
+ *  request rarely meets an isolate that read the catalog before it, so the isolate's own copy rarely holds here. */
+const colocatedCatalogShelf: CatalogShelf = {
+  async read(key) {
+    const kept = await (await caches.open(SHELF)).match(shelfKey(key));
+
+    return kept === undefined ? null : await kept.text();
+  },
+  async write(key, body, ttlSeconds) {
+    await (await caches.open(SHELF)).put(shelfKey(key), new Response(body, {
+      headers: { 'content-type': 'application/json', 'cache-control': `max-age=${String(ttlSeconds)}` },
+    }));
+  },
+};
 
 export async function listAvailableModels<Id>(
   env: AvailableModelsEnv<Id>, userId: string, caller: UserCaller,
