@@ -256,7 +256,6 @@ function manifestText(build: DeployFakeServedBuild): string {
 interface Release {
   readonly text: string;
   readonly archive: Buffer<ArrayBuffer>;
-  readonly digest: string;
   /** What the archive unpacks to, not the object's peak (`FACT_UPLOAD_PEAK`); kept so a row can compare the two. */
   readonly unpacked: number;
   /** The bound the peak should respect instead of the whole release. */
@@ -291,7 +290,6 @@ function release(): Release {
   const made: Release = {
     text,
     archive,
-    digest: sha256(archive),
     unpacked: tar.length,
     largestMember: Math.max(...carried.map(([, body]) => Buffer.byteLength(body))),
   };
@@ -306,7 +304,6 @@ function release(): Release {
  * `@cloudflare/workerd-linux-64`: `measureUserAgentSpecificMemory` undefined, `memoryUsage()` zeroes); held bytes live on `FACT_UPLOAD_PEAK`.
  */
 export interface DeployFakeFootprint {
-  readonly served: number;
   readonly unpacked: number;
   readonly largestMember: number;
   readonly assetBody: number;
@@ -339,7 +336,6 @@ export const DeployFakeStateSchema = v.object({
   versionSecrets: v.array(v.string()),
   domains: v.array(v.string()),
   footprint: v.object({
-    served: v.number(),
     unpacked: v.number(),
     largestMember: v.number(),
     assetBody: v.number(),
@@ -446,7 +442,7 @@ interface Held {
   assetsWanted: Set<string>;
   assetsUploaded: Set<string>;
   footprint: {
-    served: number; unpacked: number; largestMember: number;
+    unpacked: number; largestMember: number;
     assetBody: number; assetBatches: number; versionBody: number;
   };
 }
@@ -486,7 +482,7 @@ function fresh(): Held {
     stallOnce: null,
     assetsWanted: new Set<string>(),
     assetsUploaded: new Set<string>(),
-    footprint: { served: 0, unpacked: 0, largestMember: 0, assetBody: 0, assetBatches: 0, versionBody: 0 },
+    footprint: { unpacked: 0, largestMember: 0, assetBody: 0, assetBatches: 0, versionBody: 0 },
   };
 }
 
@@ -525,7 +521,7 @@ function reset(): void {
   held.stallOnce = null;
   held.assetsWanted = new Set<string>();
   held.assetsUploaded = new Set<string>();
-  held.footprint = { served: 0, unpacked: 0, largestMember: 0, assetBody: 0, assetBatches: 0, versionBody: 0 };
+  held.footprint = { unpacked: 0, largestMember: 0, assetBody: 0, assetBatches: 0, versionBody: 0 };
 }
 
 function snapshot(): DeployFakeState {
@@ -1171,15 +1167,10 @@ export async function deployOutbound(request: Request): Promise<Response> {
     }
 
     if (url.pathname === artifact) {
-      held.footprint.served = published.archive.length;
       held.footprint.unpacked = published.unpacked;
       held.footprint.largestMember = published.largestMember;
 
       return new Response(published.archive, { headers: { 'content-type': 'application/gzip' } });
-    }
-
-    if (url.pathname === `${artifact}.sha256`) {
-      return new Response(`${published.digest}  kinu-worker-${held.published.version}.tar.gz\n`);
     }
   }
 

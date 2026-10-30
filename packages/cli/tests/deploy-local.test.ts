@@ -141,12 +141,6 @@ async function channel(manifest: string = manifestOf()): Promise<string> {
       return;
     }
 
-    if (path === `/downloads/kinu-worker-${VERSION}.tar.gz.sha256`) {
-      response.writeHead(200).end(`${sha256(archive)}  kinu-worker-${VERSION}.tar.gz\n`);
-
-      return;
-    }
-
     response.writeHead(404).end('no such release object');
   });
 
@@ -317,5 +311,21 @@ describe('kinu deploy local', () => {
 
     expect(existsSync(join(home, 'local'))).toBe(false);
     expect(existsSync(join(home, 'escape.js'))).toBe(false);
+  });
+
+  /** The archive is read as it downloads, so each file is checked against its manifest's digest on the way. */
+  test('refuses a release whose file does not match its manifest, and installs nothing', async () => {
+    const home = scratchDir(`local-home-${randomUUID().slice(0, 8)}`);
+    const misnamed = manifestOf().replace(sha256(WORKER), sha256(`${WORKER}// another build\n`));
+
+    expect(misnamed).not.toBe(manifestOf());
+
+    const origin = await channel(misnamed);
+    const refused = await runDeploy(home, [`--origin=${origin}`, `--port=${String(await freePort())}`]);
+
+    expect(refused.exitCode).not.toBe(0);
+    expect(refused.stderr).toContain("the release artifact's worker/index.js does not match the digest its manifest names");
+    expect(existsSync(join(home, 'local/current'))).toBe(false);
+    expect(readPid(home)).toBeNull();
   });
 });

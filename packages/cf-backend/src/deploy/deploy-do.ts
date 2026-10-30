@@ -146,18 +146,12 @@ const RETAIN_MS = 7 * 24 * 3_600_000;
 const TOKEN_FLOOR_MS = 60_000;
 
 
-/** The archive is fetched when a step first walks it, so a re-check that stops before the upload downloads none of it.
- *  Its bytes are charged to `held` on arrival, as `TarArtifact` charges its own. */
+/** The archive is fetched when a step first walks it, so a re-check that stops before the upload downloads none of it. */
 function fetchedOnWalk(open: () => Promise<TarArtifact>): ArtifactSource {
-  const held = new HeldBytes();
-
   return {
-    held,
+    held: new HeldBytes(),
     async *members(): AsyncIterable<ArtifactMember> {
-      const artifact = await open();
-
-      held.hold(artifact.held.peak());
-      yield* artifact.members();
+      yield* (await open()).members();
     },
   };
 }

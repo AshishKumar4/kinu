@@ -1,6 +1,8 @@
-// Streaming .tar.gz reader, one member at a time: a DO transient allocation near 128 MiB
-// resets it (`do.isolate.transient_alloc_reset`), so the unpacked archive is never indexed.
+// Streaming .tar.gz reader, one member at a time, as the download arrives: a DO transient allocation near 128 MiB
+// resets it (`do.isolate.transient_alloc_reset`), so neither the archive nor its unpacked bytes are held whole.
 // Every holder charges `HeldBytes` for what it retains.
+import { createHash, type Hash } from 'node:crypto';
+import type { ReleaseFile } from './manifest';
 
 const BLOCK = 512;
 
@@ -69,6 +71,11 @@ class Cursor {
     this.reader = stream.getReader();
   }
 
+  /** Stops the download, as a walk that ends early leaves it. */
+  async cancel(): Promise<void> {
+    await this.reader.cancel();
+  }
+
   async exact(count: number): Promise<Uint8Array | null> {
     while (this.queued < count) {
       const next = await this.reader.read();
@@ -116,6 +123,16 @@ class Cursor {
     return this.shave(first, Math.min(first.length, count));
   }
 
+  /** Reads past `count` bytes without keeping them; an archive that ends first ends the walk at its next header. */
+  async skip(count: number): Promise<void> {
+    for (let left = count; left > 0;) {
+      const piece = await this.some(left);
+
+      if (piece === null) return;
+      left -= piece.length;
+    }
+  }
+
   private shave(head: Uint8Array, count: number): Uint8Array {
     if (head.length === count) this.queue.shift();
     else this.queue[0] = head.subarray(count);
@@ -129,21 +146,27 @@ class Cursor {
 class StreamMember implements ArtifactMember {
   private left: number;
 
+  private readonly digest: Hash = createHash('sha256');
+
   constructor(
     readonly path: string,
     readonly size: number,
+    private readonly sha256: string,
     private readonly cursor: Cursor,
   ) {
     this.left = size;
   }
 
+  /** The last piece is handed on only once the member matches its digest, so no reader finishes a corrupted file. */
   async *chunks(): AsyncIterable<Uint8Array> {
     while (this.left > 0) {
-      const piece = await this.cursor.some(this.left);
+      const piece = await this.next();
 
-      if (piece === null) throw new Error(`the release artifact ends inside ${this.path}`);
+      this.digest.update(piece);
 
-      this.left -= piece.length;
+      if (this.left === 0 && this.digest.digest('hex') !== this.sha256) {
+        throw new Error(`the release artifact's ${this.path} does not match the digest its manifest names`);
+      }
 
       yield piece;
     }
@@ -161,26 +184,38 @@ class StreamMember implements ArtifactMember {
     return whole;
   }
 
+  /** What no reader took is skipped unread: it reaches nothing, so it needs no digest. */
   async drain(): Promise<void> {
-    for await (const piece of this.chunks()) void piece;
+    while (this.left > 0) await this.next();
+  }
+
+  private async next(): Promise<Uint8Array> {
+    const piece = await this.cursor.some(this.left);
+
+    if (piece === null) throw new Error(`the release artifact ends inside ${this.path}`);
+
+    this.left -= piece.length;
+
+    return piece;
   }
 }
 
 /**
- * Walked once; a second walk is refused because the held bytes are released at its end.
- * The `.sha256` check (`channel.ts`) is integrity only; the release signature is not verified here.
+ * Walked once, as its download arrives. It hands on only the members its manifest names, each checked against the
+ * manifest's size before it is read and against its digest before its last piece is handed on. The digests are
+ * integrity only; the release signature is not verified here.
  */
 export class TarArtifact {
-  readonly held = new HeldBytes();
-
   private walked = false;
 
-  private constructor(private readonly archive: Uint8Array<ArrayBuffer>) {
-    this.held.hold(archive.length);
+  private readonly named: ReadonlyMap<string, ReleaseFile>;
+
+  private constructor(private readonly archive: ReadableStream<Uint8Array>, files: readonly ReleaseFile[]) {
+    this.named = new Map(files.map((file) => [file.path, file]));
   }
 
-  static open(archive: Uint8Array<ArrayBuffer>): TarArtifact {
-    return new TarArtifact(archive);
+  static open(archive: ReadableStream<Uint8Array>, files: readonly ReleaseFile[]): TarArtifact {
+    return new TarArtifact(archive, files);
   }
 
   /** GNU `L` long-name entries apply to the next header; hashed asset names exceed 100 chars. */
@@ -189,15 +224,7 @@ export class TarArtifact {
 
     this.walked = true;
 
-    // Not `new Blob([archive]).stream()`: a Blob copies the archive.
-    const source = new ReadableStream<BufferSource>({
-      start: (controller) => {
-        controller.enqueue(this.archive);
-        controller.close();
-      },
-    });
-
-    const cursor = new Cursor(source.pipeThrough(new DecompressionStream('gzip')));
+    const cursor = new Cursor(this.archive.pipeThrough(new DecompressionStream('gzip')));
     let pendingName: string | null = null;
 
     try {
@@ -223,12 +250,15 @@ export class TarArtifact {
 
         pendingName = null;
 
-        if (flag !== '0' && flag !== '\0') {
-          await cursor.exact(size + padding);
+        const file = this.named.get(path);
+
+        if ((flag !== '0' && flag !== '\0') || file === undefined) {
+          await cursor.skip(size + padding);
           continue;
         }
 
-        const member = new StreamMember(path, size, cursor);
+        if (size !== file.size) throw new Error(`the release artifact's ${path} is ${String(size)} bytes, and its manifest names ${String(file.size)}`);
+        const member = new StreamMember(path, size, file.sha256, cursor);
 
         yield member;
 
@@ -236,7 +266,7 @@ export class TarArtifact {
         await cursor.exact(padding);
       }
     } finally {
-      this.held.release(this.archive.length);
+      await cursor.cancel();
     }
   }
 }

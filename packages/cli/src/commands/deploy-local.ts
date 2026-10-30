@@ -100,9 +100,8 @@ function install(opts: { origin?: string; port?: string }): Effect.Effect<void> 
 
     // Member by member, through the Cloudflare door's reader, so a release never sits in memory whole
     // (docs/SELF-DEPLOY.md § What the artifact weighs).
-    const wanted = new Set(manifest.files.map((file) => file.path));
-    const laid = yield* Effect.promise(() => layMembers(artifact, wanted, dir));
-    const absent = [...wanted].filter((path) => !laid.has(path));
+    const laid = yield* Effect.promise(() => layMembers(artifact, dir));
+    const absent = manifest.files.map((file) => file.path).filter((path) => !laid.has(path));
 
     if (absent.length > 0) {
       return yield* Effect.die(new Error(`the release artifact carries no ${absent[0] ?? ''}`
@@ -126,13 +125,11 @@ function install(opts: { origin?: string; port?: string }): Effect.Effect<void> 
   });
 }
 
-/** Writes each wanted member under `dir`; answers the paths it laid. */
-async function layMembers(artifact: TarArtifact, wanted: ReadonlySet<string>, dir: string): Promise<Set<string>> {
+/** Writes each member the manifest names under `dir`; answers the paths it laid. */
+async function layMembers(artifact: TarArtifact, dir: string): Promise<Set<string>> {
   const laid = new Set<string>();
 
   for await (const member of artifact.members()) {
-    if (!wanted.has(member.path)) continue;
-
     const target = join(dir, member.path);
 
     mkdirSync(dirname(target), { recursive: true });

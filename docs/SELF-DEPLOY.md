@@ -73,12 +73,13 @@ artifact is 27.35 MiB compressed and 107.99 MiB unpacked, 118 modules and 427
 assets, biggest single member 21.5 MiB
 (`client/_assets/opencode/1.16.2/chunks.json`).
 
-The flow has to install it one member at a time. It buffers the compressed
-bytes to check the published digest, then walks the archive as a stream. Each
-asset is encoded into the body it is sent as and released when its batch
-lands. Only the module set is held to the end, because a version upload is
-one multipart request. The artifact is written assets-first for the same
-reason, so the compressed bytes are released before the module set is held.
+The flow has to install it one member at a time. It reads the archive as it
+downloads, and checks each file against the size and digest the manifest
+names before it hands on the file's last piece. Each asset is encoded into the
+body it is sent as and released when its batch lands. Only the module set is
+held to the end, because a version upload is one multipart request. The
+artifact is written assets-first for the same reason, so the last asset has
+gone before the module set is held.
 
 Cost, measured 2026-09-18 in
 `packages/cf-backend/tests/workerd/deploy-lifecycle.test.ts` against a synthetic
@@ -95,11 +96,13 @@ could not install this release until 2026-09-18; then it could, with 40 MiB to
 spare. `kinu deploy local` reads the same stream and writes each member
 straight to disk.
 
-The peak does not grow with the unpacked size, but it does grow with the
-compressed artifact and the largest member. A real run of 0.2.0+3029d96cd held
-110.32 MiB at the peak on 2026-10-30, 18 MiB under that reset; the release then
-was 853 members, 193.4 MiB unpacked and 51 MiB compressed, its largest member
-22.24 MiB (5e8a458da's artifact, the same day).
+Until 2026-10-30 the run held the compressed artifact whole to check one
+digest, so the peak grew with it. A real run of 0.2.0+3029d96cd held 110.32 MiB
+at the peak that day, 18 MiB under that reset; the release was 853 members,
+193.4 MiB unpacked and 51 MiB compressed, its largest member 22.24 MiB. Now the
+peak is the larger of the largest member's base64 twice and the module set
+twice in flight: 59.3 MiB and 28.3 MiB for 0.2.0+d9739fff8, computed from its
+manifest and not yet measured on a real run.
 
 ## The Cloudflare door
 

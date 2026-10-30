@@ -157,14 +157,15 @@ describe('a guided self-deployment', () => {
       held: [], rowsHoldSecrets: false, rowsNameAddress: true,
     });
 
-    // `do.isolate.transient_alloc_reset` (packages/core/src/platform-catalog.ts): the peak is set by the largest member
-    // and the batch bound, never by the release (measured 2026-09-18: 88.18 MiB held for a 108.46 MiB release).
+    // `do.isolate.transient_alloc_reset` (packages/core/src/platform-catalog.ts): the peak is set by the largest member's
+    // body or the module set, each twice in flight, never by the release or its download (measured 2026-09-18: 88.18 MiB
+    // held for a 108.46 MiB release, the 30.9 MiB archive held whole among it).
     const { footprint } = made;
 
     expect({
       large: footprint.unpacked > 100 * MIB && footprint.largestMember > 21 * MIB,
       peakUnderReset: peak > 0 && peak < 128 * MIB,
-      peakByMember: peak < footprint.served + 3 * footprint.largestMember,
+      peakByMember: peak < Math.max(3 * footprint.largestMember, 2 * footprint.versionBody),
       batched: footprint.assetBatches > 1 && footprint.assetBody < 2 * footprint.largestMember && footprint.versionBody < footprint.unpacked / 2,
     }).toEqual({ large: true, peakUnderReset: true, peakByMember: true, batched: true });
   });

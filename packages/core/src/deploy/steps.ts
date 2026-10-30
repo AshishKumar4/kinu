@@ -950,10 +950,21 @@ async function walkArtifact(context: DeployContext, worker: ReleaseModules, sess
   // 2026-10-21: 631 assets, 630 hashes asked for, and the run counted the second copy as an upload it was not asked for).
   const sent = new Set<string>();
 
+  const flush = async (): Promise<void> => {
+    if (batch.length === 0) return;
+    token = await sendAssets(context, batch, token, held);
+    uploaded += batch.length;
+    held.release(batchBytes);
+    batch = [];
+    batchBytes = 0;
+  };
+
   for await (const member of context.artifact.members()) {
     const moduleName = member.path.startsWith(prefix) ? member.path.slice(prefix.length) : '';
 
     if (named.has(moduleName)) {
+      // The assets come first (`scripts/build-worker-release.ts`): the last batch goes before the module set is held.
+      await flush();
       const body = await member.bytes();
 
       held.hold(body.length);
@@ -973,13 +984,7 @@ async function walkArtifact(context: DeployContext, worker: ReleaseModules, sess
     sent.add(hash);
 
     // Flush before this member joins, so an oversized member travels alone.
-    if (batchBytes > 0 && batchBytes + member.size > ASSET_BATCH_BYTES) {
-      token = await sendAssets(context, batch, token, held);
-      uploaded += batch.length;
-      held.release(batchBytes);
-      batch = [];
-      batchBytes = 0;
-    }
+    if (batchBytes + member.size > ASSET_BATCH_BYTES) await flush();
 
     const { encoded: body, at } = await base64Member(member, held);
 
@@ -991,11 +996,7 @@ async function walkArtifact(context: DeployContext, worker: ReleaseModules, sess
     batchBytes += body.length;
   }
 
-  if (batch.length > 0) {
-    token = await sendAssets(context, batch, token, held);
-    uploaded += batch.length;
-    held.release(batchBytes);
-  }
+  await flush();
 
   return { token, modules, moduleBytes, uploaded, misencoded: null };
 }
