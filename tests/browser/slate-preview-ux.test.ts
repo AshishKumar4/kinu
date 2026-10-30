@@ -803,7 +803,10 @@ describe('inline slate previews in the chat', () => {
       const page = await newPage();
 
       try {
-        await openSlateThread(page, origin, { width: 1280, height: 860 });
+        await page.setViewport({ width: 1280, height: 860 });
+        await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=sites`, { waitUntil: 'networkidle0' });
+        await page.waitForFunction(() => document.querySelectorAll('[data-site-preview]').length === 4);
+        await drawn(page);
         // The last answer's earlier preview folds too, and its call goes in with the reads around it.
         expect(await sitePreviews(page)).toEqual([
           ['8130', false, 'Updated below', false], ['8131', true, null, false], ['8130', false, 'Updated below', true], ['8130', true, null, false],

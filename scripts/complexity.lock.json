@@ -250,10 +250,6 @@
       "complexity": 26
     },
     {
-      "key": "packages/cf-backend/src/components/slates/InlineSlate.tsx#SlateCard",
-      "complexity": 26
-    },
-    {
       "key": "packages/cf-backend/src/components/surfaces/FilesSurface.tsx#FilesSurface",
       "complexity": 26
     },
