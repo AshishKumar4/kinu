@@ -47,17 +47,36 @@ interface StartedNavigation {
   readonly how: string;
 }
 
-const scriptFailures = new WeakMap<Page, { readonly failures: ScriptFailure[]; readonly navigations: StartedNavigation[]; readonly cdp: CDPSession }>();
+/** What the browser said in a page's console: an exception nothing caught, or its own error, such as a module it
+ *  refused for its MIME type, which no request reports as failed. */
+interface ConsoleError {
+  readonly at: number;
+  readonly text: string;
+}
+
+const scriptFailures = new WeakMap<Page, {
+  readonly failures: ScriptFailure[]; readonly navigations: StartedNavigation[]; readonly said: ConsoleError[]; readonly cdp: CDPSession;
+}>();
+
+/** A script the browser runs: a module answered as anything else is refused, its graph with it. */
+const JAVASCRIPT = /^(?:text|application)\/(?:javascript|ecmascript|x-javascript)$/u;
 
 /** Installs {@link RECORD_SCRIPT_FAILURES} on every document `page` loads, and records why each of its script
  *  requests failed: the page sees only that a module graph failed, the browser's network events say why. */
 export async function recordScriptFailures(page: Page): Promise<void> {
   const failures: ScriptFailure[] = [];
   const navigations: StartedNavigation[] = [];
+  const said: ConsoleError[] = [];
   const requests = new Map<string, { readonly url: string; readonly loader: string }>();
   const cdp = await page.createCDPSession();
 
-  scriptFailures.set(page, { failures, navigations, cdp });
+  scriptFailures.set(page, { failures, navigations, said, cdp });
+  cdp.on('Log.entryAdded', ({ entry }) => {
+    if (entry.level === 'error') said.push({ at: Date.now(), text: `${entry.source}: ${entry.text}${entry.url === undefined ? '' : ` (${entry.url})`}` });
+  });
+  cdp.on('Runtime.exceptionThrown', ({ exceptionDetails }) => {
+    said.push({ at: Date.now(), text: `exception: ${exceptionDetails.exception?.description ?? exceptionDetails.text}`.slice(0, 400) });
+  });
   cdp.on('Page.frameRequestedNavigation', (event) => {
     navigations.push({ at: Date.now(), url: event.url, how: `${event.reason}, ${event.disposition}` });
   });
@@ -70,9 +89,10 @@ export async function recordScriptFailures(page: Page): Promise<void> {
   });
   // Cancelled module responses can omit ExtraInfo, which Puppeteer's response event waits for.
   cdp.on('Network.responseReceived', (event) => {
-    if (event.type !== 'Script' || event.response.status < 400) return;
+    const { status, mimeType, url } = event.response;
 
-    failures.push({ at: Date.now(), url: event.response.url, reason: `HTTP ${String(event.response.status)}`, loader: event.loaderId });
+    if (event.type !== 'Script' || (status < 400 && JAVASCRIPT.test(mimeType))) return;
+    failures.push({ at: Date.now(), url, reason: status >= 400 ? `HTTP ${String(status)}` : `HTTP ${String(status)} as ${mimeType}`, loader: event.loaderId });
     requests.delete(event.requestId);
   });
   cdp.on('Network.loadingFailed', (event) => {
@@ -80,7 +100,9 @@ export async function recordScriptFailures(page: Page): Promise<void> {
     requests.delete(event.requestId);
 
     if (event.type !== 'Script' || request === undefined) return;
-    failures.push({ at: Date.now(), ...request, reason: event.errorText });
+    const blocked = event.blockedReason === undefined ? '' : `, blocked: ${event.blockedReason}`;
+
+    failures.push({ at: Date.now(), ...request, reason: `${event.errorText}${blocked}` });
   });
   cdp.on('Network.loadingFinished', (event) => {
     requests.delete(event.requestId);
@@ -88,6 +110,8 @@ export async function recordScriptFailures(page: Page): Promise<void> {
 
   await cdp.send('Network.enable');
   await cdp.send('Page.enable');
+  await cdp.send('Log.enable');
+  await cdp.send('Runtime.enable');
   await page.evaluateOnNewDocument(RECORD_SCRIPT_FAILURES);
 }
 
@@ -114,7 +138,10 @@ async function navigationsSince(page: Page): Promise<string> {
   const navigated = since.length === 0 ? '; the page started no navigation since it began'
     : `; since it began the page started ${since.map((navigation) => `${navigation.url} (${navigation.how})`).join(', ')}`;
 
-  return `${navigated}${crashed.length === 0 ? '; the browser reported no crash' : `; the browser said: ${crashed.join(' | ')}`}`;
+  const said = (scriptFailures.get(page)?.said ?? []).filter((error) => error.at >= started).slice(0, 3).map((error) => error.text);
+
+  return `${navigated}${crashed.length === 0 ? '; the browser reported no crash' : `; the browser said: ${crashed.join(' | ')}`}`
+    + (said.length === 0 ? '; its console said no error' : `; its console said: ${said.join(' | ')}`);
 }
 
 /** In a page or any frame of it: what {@link RECORD_SCRIPT_FAILURES} recorded in that document, the errors nothing
