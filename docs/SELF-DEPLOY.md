@@ -101,8 +101,8 @@ digest, so the peak grew with it. A real run of 0.2.0+3029d96cd held 110.32 MiB
 at the peak that day, 18 MiB under that reset; the release was 853 members,
 193.4 MiB unpacked and 51 MiB compressed, its largest member 22.24 MiB. Now the
 peak is the larger of the largest member's base64 twice and the module set
-twice in flight: 59.3 MiB and 28.3 MiB for 0.2.0+d9739fff8, computed from its
-manifest and not yet measured on a real run.
+twice in flight. A real run of 0.2.0+2bbd2c560 held 59.32 MiB at the peak the
+same day, against 59.3 MiB and 28.3 MiB computed from its manifest.
 
 ## The Cloudflare door
 
