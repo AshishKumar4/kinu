@@ -1,5 +1,5 @@
 /** The one model picker for every surface; groups follow server order (connected-provider preference). */
-import { useEffect, useMemo, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Badge } from "@/components/ui/Badge";
 import { ArrowsClockwiseIcon, BrainIcon, EyeIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import {
@@ -16,7 +16,7 @@ import { badgeCapabilities, groupModelMenu, modelMatchesQuery, reasoningEffortCh
 import { BrandMark, providerBrand } from "./ui/BrandMark";
 import { ChatGptPlanUsage } from "./account/ChatGptConnect";
 import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
-import { lastValue, useAsyncResource } from "../hooks/use-async-resource";
+import { lastValue, useAsyncResource, type AsyncResourceControl } from "../hooks/use-async-resource";
 import { Combobox, Select } from "@/components/ui/Select";
 import { Loader } from "@/components/ui/Loader";
 import { Button } from "@/components/ui/Button";
@@ -201,6 +201,24 @@ export function ModelPicker({
   );
 }
 
+const ModelMenuContext = createContext<AsyncResourceControl<ModelMenuResponse> | null>(null);
+
+/**
+ * The account's model menu, read as a workspace's page opens: its composer mounts only once the socket has answered,
+ * and a read started there held the composer's model on a spinner for the read's 528-742 ms (production, 2026-10-30).
+ */
+export function ModelMenuProvider({ children }: { children: ReactNode }) {
+  return <ModelMenuContext.Provider value={useAsyncResource(listAvailableModels)}>{children}</ModelMenuContext.Provider>;
+}
+
+function useModelMenu(): AsyncResourceControl<ModelMenuResponse> {
+  const menu = useContext(ModelMenuContext);
+
+  if (menu === null) throw new Error("useModelMenu requires ModelMenuProvider");
+
+  return menu;
+}
+
 /**
  * Loading, a retryable failure, or the menu; an empty menu means no provider connected.
  * Only that earns the empty-state CTA, which forces an OAuth prompt=login.
@@ -210,7 +228,7 @@ export function ConnectedModelPicker({
 }: Omit<ModelPickerProps, "models" | "test"> & {
   renderEmpty?: () => React.ReactNode;
 }) {
-  const { resource, reload } = useAsyncResource(listAvailableModels);
+  const { resource, reload } = useModelMenu();
   // Why the last Workers AI connect did not connect: its finish page closed with the only copy.
   const [connectFailed, setConnectFailed] = useState<string | null>(null);
   const menu = lastValue(resource);

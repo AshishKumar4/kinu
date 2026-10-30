@@ -37,6 +37,7 @@ import { Modal } from "@/components/ui/Modal";
 import { TurnRevert } from "@/components/RevertTurnDialog";
 import { DeviceOfflineRow, SubagentChatBase } from "@/components/MessageView";
 import { ChatColumn, EmptyConversation } from "@/components/ChatColumn";
+import { ModelMenuProvider } from "@/components/ModelPicker";
 import { ProgrammaticTurnCard } from "@/components/ProgrammaticTurnCard";
 import { AttentionStack, type AttentionStackProps } from "@/components/AttentionStack";
 import { ChatImageContext } from "@/components/ChatImages";
@@ -669,7 +670,11 @@ export default function WorkspacePage(props: WorkspacePageProps = {}) {
   if (agentId !== undefined && gone === agentId) return <GoneWorkspace />;
 
   // Unmounting closes its socket and every read it polls.
-  return <OpenWorkspace key={agentId} onGone={setGone} {...props} layout={props.layout ?? (home ? "focus" : undefined)} />;
+  return (
+    <ModelMenuProvider key={agentId}>
+      <OpenWorkspace onGone={setGone} {...props} layout={props.layout ?? (home ? "focus" : undefined)} />
+    </ModelMenuProvider>
+  );
 }
 
 /** Shown where its route is not (Home), a workspace still draws the phone's one bar. */
