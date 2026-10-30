@@ -1,8 +1,8 @@
 /**
- * A workspace's page wakes its object while the page loads: the document's request makes the same claim the page's
- * socket makes a moment later, so a cold object's construction runs beside the document, the app and the socket's own
- * connection rather than after them. Ahead of an open (the app shell loading, a pointer resting on a workspace), the
- * wake readies its object and main's isolate too. A name the account does not hold wakes nothing.
+ * A workspace's page wakes its object and main's isolate while the page loads: the document's request makes the same
+ * claim the page's socket makes a moment later, so a cold object's construction and main's isolate's load run beside
+ * the document, the app and the socket's own connection rather than after them. Ahead of an open (the app shell
+ * loading, a pointer resting on a workspace), the wake readies both too. A name the account does not hold wakes nothing.
  */
 import { describe, expect, test } from 'bun:test';
 import { accountPagesFetch, workerContext } from './helpers/bindings';
@@ -70,7 +70,7 @@ describe("a workspace's page", () => {
       expect(answer.status).toBe(200);
       expect(await answer.text()).toContain('<title>Kinu</title>');
       await Promise.all(context.retained);
-      expect(asked).toEqual([`member:${workspace}`, `claim:${workspace}`]);
+      expect(asked).toEqual([`member:${workspace}`, `claim:${workspace}`, `isolate:${workspace}`]);
     });
   }
 
@@ -82,7 +82,7 @@ describe("a workspace's page", () => {
 
     expect(answer.status).toBe(200);
     await Promise.all(context.retained);
-    expect(asked.filter((call) => call.startsWith('claim:'))).toEqual([]);
+    expect(asked.filter((call) => !call.startsWith('member:'))).toEqual([]);
   });
 
   test('woken ahead of its open readies its object and main\'s isolate; a name the account does not hold, neither', async () => {

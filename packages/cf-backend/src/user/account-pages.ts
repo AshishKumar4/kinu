@@ -50,7 +50,7 @@ export const accountShell = async <Id, E extends FamilyEnv<AccountShellEnv<Id>, 
 
 export type AccountPagesEnv = AuthEnv<DurableObjectId> & IndexFeedEnv<DurableObjectId> & AccountShellEnv<DurableObjectId>
   & RosterSocketEnv<DurableObjectId> & CliAgentTicketEnv<DurableObjectId>
-  & WorkspaceOwnershipEnv<DurableObjectId, Pick<OrchestratorAgent, 'claimOwner' | 'resolveHostedActorRoute'>>;
+  & WorkspaceOwnershipEnv<DurableObjectId, Pick<OrchestratorAgent, 'claimOwner' | 'resolveHostedActorRoute' | 'openMainIsolate'>>;
 
 interface AccountPagesVariables {
   identity: AuthIdentity;
@@ -59,16 +59,21 @@ interface AccountPagesVariables {
 
 type AccountPagesContext = Context<FamilyEnv<AccountPagesEnv, AccountPagesVariables>>;
 
-// A workspace's page wakes its object while the document, the app and its socket are still on the way: the claim
-// the socket makes a moment later then finds it constructed. Cold, that construction measured 725 ms of a 3.2 s
-// load (cmp-kinu-ux1, 2026-10-13). The socket's own claim, so a name the account does not hold wakes nothing; a
-// failure is the socket's to answer, and here is only logged.
+// A workspace's page wakes its object and main's isolate while the document, the app and its socket are still on the
+// way: the socket's claim and its chat's seed then find both loaded. Cold, the object's construction measured 725 ms
+// of a 3.2 s load (cmp-kinu-ux1, 2026-10-13), and the seed waited 751 ms on main's isolate (production, 2026-10-30).
+// The socket's own claim, so a name the account does not hold wakes nothing; a refusal or failure is the socket's to
+// answer, and here is only logged.
 async function workspacePage(c: AccountPagesContext): Promise<Response> {
   const workspace = c.req.param('agentId');
 
   if (workspace !== undefined) {
     c.executionCtx.waitUntil(settleLogged('workspace.page_wake_failed', { doing: "waking a workspace for its page", otherwise: 'unavailable' },
-      async () => { await claimOwnedWorkspace(c.env, c.get('identity').userId, workspace, c.get('identity').workspace); }));
+      async () => {
+        const claimed = await claimOwnedWorkspace(c.env, c.get('identity').userId, workspace, c.get('identity').workspace);
+
+        if (Result.isSuccess(claimed)) await claimed.success.openMainIsolate();
+      }));
   }
 
   return await accountShell(c);

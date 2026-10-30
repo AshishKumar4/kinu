@@ -3651,8 +3651,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * Loads main's isolate ahead of an open (`api/wake-route.ts`): the open's socket seeds its chat from it, 261-342 ms
-   * when the isolate was cold and 20 ms warm (eval-big-10270340 on production, 2026-10-28). A read, so it starts no work.
+   * Loads main's isolate ahead of an open (`api/wake-route.ts`, the workspace's page in `user/account-pages.ts`): the
+   * open's socket seeds its chat from it, 261-342 ms when the isolate was cold and 20 ms warm (eval-big-10270340 on
+   * production, 2026-10-28). A read, so it starts no work.
    */
   async openMainIsolate(): Promise<void> {
     await this.agentCall(this.actorHandle().actorId, async (isolate, snapshot) => isolate.messageCount(snapshot));
