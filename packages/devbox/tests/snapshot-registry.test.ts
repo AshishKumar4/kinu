@@ -20,7 +20,7 @@ const DIGEST = 'sha256:5abee7866948080f99c93170b21bb5cccddad89b903b1eb0d223f3664
 /**
  * The registry as measured on 2026-10-09: tags and digests share the catalog's names, which it pages 1000 at a time with
  * a `last` cursor; a manifest's DELETE by digest answers 204 and keeps it while a tag names it, and takes it from the
- * catalog once none does. `pageSize` pages the fake smaller; `refuseDigest` refuses the next digest delete.
+ * catalog once none does. `pageSize` pages the fake smaller; `refuseDigests` refuses every digest delete until undone.
  */
 function platform(options: { readonly pageSize?: number; readonly filler?: number; readonly mintFailures?: readonly number[]; readonly catalogFailures?: readonly number[] } = {}) {
   const mintFailures = [...options.mintFailures ?? []];
@@ -81,11 +81,8 @@ function platform(options: { readonly pageSize?: number; readonly filler?: numbe
 
     if (method === 'DELETE') {
       if (!ref.startsWith('sha256:')) tags.delete(ref);
-      else if (refuseDigest) {
-        refuseDigest = false;
-
-        return new Response('busy', { status: 503 });
-      } else if (![...tags.values()].includes(ref)) manifests.delete(ref);
+      else if (refuseDigest) return new Response('busy', { status: 503 });
+      else if (![...tags.values()].includes(ref)) manifests.delete(ref);
 
       return new Response(null, { status: 204 });
     }
@@ -93,7 +90,7 @@ function platform(options: { readonly pageSize?: number; readonly filler?: numbe
     return Response.json({ annotations: { 'io.cloudflare.cloudchamber.snapshot_set_id': SET } }, { headers: { 'docker-content-digest': digest } });
   };
 
-  return { tags, manifests, calls, fetcher, refuseNextDigest: () => { refuseDigest = true; } };
+  return { tags, manifests, calls, fetcher, refuseDigests: (refusing: boolean) => { refuseDigest = refusing; } };
 }
 
 test('a snapshot\'s two tags are deleted, then its manifest by digest, and nothing else', async () => {
@@ -119,9 +116,10 @@ test('a snapshot past the catalog\'s first page is found and deleted, not called
 
 test('a digest delete refused once the tags are gone leaves the digest, which a later delete takes', async () => {
   const fake = platform();
-  const registry = snapshotRegistry({ token: 'token-1', account: ACCOUNT, fetch: fake.fetcher });
-  fake.refuseNextDigest();
+  const registry = snapshotRegistry({ token: 'token-1', account: ACCOUNT, fetch: fake.fetcher, wait: async () => {} });
+  fake.refuseDigests(true);
   const first = await registry.delete(SNAPSHOT);
+  fake.refuseDigests(false);
   const byId = await registry.delete(SNAPSHOT);
   const byDigest = await registry.delete(DIGEST);
 
@@ -134,15 +132,16 @@ test('a digest delete refused once the tags are gone leaves the digest, which a 
 // digest before any tag goes, and owes that instead.
 test('the owner hears the manifest\'s digest before any tag goes, and the digest alone finds it once they are gone', async () => {
   const fake = platform();
-  const registry = snapshotRegistry({ token: 'token-1', account: ACCOUNT, fetch: fake.fetcher });
+  const registry = snapshotRegistry({ token: 'token-1', account: ACCOUNT, fetch: fake.fetcher, wait: async () => {} });
   const heard: string[] = [];
   const deletesBefore: number[] = [];
 
-  fake.refuseNextDigest();
+  fake.refuseDigests(true);
   await registry.delete(SNAPSHOT, (digest) => {
     heard.push(digest);
     deletesBefore.push(fake.calls.filter((call) => call.startsWith('DELETE')).length);
   });
+  fake.refuseDigests(false);
   const byDigest = await registry.delete(heard[0] ?? '');
 
   expect({ heard, deletesBefore, byDigest, manifests: [...fake.manifests] }).toEqual({ heard: [DIGEST], deletesBefore: [0], byDigest: { kind: 'deleted' }, manifests: ['sha256:other'] });
