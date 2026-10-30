@@ -5482,6 +5482,26 @@ were both D111's clock, and production had none. `hybrid.test.ts` loses the prob
 8e350f4f3 (woke from the golden, `snapshot-1` deleted, the root's file lost, a recovery notice), green after (woke from
 its own snapshot, the root kept, no notice).
 
+D119. A start over a running container reads what that container woke from in storage, never in the object's memory
+(2026-10-30; narrows D102). The storage's `fromSnapshot` read `#started`, set by the start that began the container. A
+reset mid-start forgot it, so the next start over that container took it for a golden one and recovered the backup over
+the workspace its own snapshot held. Measured on production, box `a3b8bd7d…` (the owner's main workspace): at 13:38:12
+a wake from its own snapshot was admitted after 19.4 s, configured nothing for 30 s, and its `blockConcurrencyWhile` was
+cancelled with the object reset at 13:39:02; the next start (`startup.admitted source running`) logged `attach
+attached: rev 1, 1 layers, lazy` and told the agent it was restored to Oct 25. The rest at 13:40:31 took a snapshot of a
+root holding both the snapshot's own `/workspace` and that recovery, and the wakes at 17:01, 17:02 and 17:34 were each
+refused (`rmdir: failed to remove '/workspace': Directory not empty`), the last for good. The box's checkpoints since
+Oct 25 21:12 had all been skipped as unchanged, so the backup lacked only what it excludes. `devbox:woke-from`, written
+with each start before the platform is asked, is now the one record of the source. A wake whose recovery record sits
+beside files under an unmounted `/workspace` sets that recovery aside and serves those files, since a recovery mounts
+over an empty one. `hybrid.test.ts` resets the object while a wake from its own snapshot configures: red on
+8dee848cd (attached from the image, a recovery notice), green on 4b1e765c4 (attached from the snapshot, no notice). The
+container tier's `set-aside` contract mounts a recovery over the root's own files, wakes it, saves, and recovers that
+save: green in a real container on 160d7fbcf (armada 20261030184103-9a4e9599, 6.3 s). Between the wrong recovery and
+the rest, nothing ran on the owner's box but its heartbeat, so setting the recovery aside drops no work. What held the first
+configuration for 30 s is unmeasured: no outbound call from it reached the workspace object, which answered other calls
+meanwhile.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean
