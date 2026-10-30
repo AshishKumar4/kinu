@@ -194,6 +194,14 @@ describe(productFlowTestName('splice', 'what reaches the agent while it answers 
       .toEqual({ cards: pings(3).map((ping) => ({ ping, state: 'seen', tone: 'p-success', spliced: true })), ordered: true, heard: 'PINGS HEARD: 1, 2, 3' });
   });
 
+  // quiet-cairn-da44d09f, 2026-10-30: the page drew a long turn's cards again inside every later answer.
+  test('a later answer in the same page leaves every card where it was read, drawn once', () => {
+    const { followed } = verdictOf(observed, 'splice');
+
+    expect({ cards: followed.cards, ordered: ordered(followed.order), after: followed.order.length })
+      .toEqual({ cards: pings(3).map((ping) => ({ ping, state: 'seen', tone: 'p-success', spliced: true })), ordered: true, after: 8 });
+  });
+
   test('a reload draws every card there still', () => {
     const { reloaded } = verdictOf(observed, 'splice');
 

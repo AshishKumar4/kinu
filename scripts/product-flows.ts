@@ -34,7 +34,7 @@ import {
   JOB_ASK, JOB_NOT_STARTED, JOB_STARTED,
   APPROVALS_ASK, DECISION_HEARD, HIRE_APPROVAL_ASK, HIRE_RAN, AGENT_WORKSPACE_REPLY, AGENT_WORKSPACE_ASK, ACCOUNT_FACT, ACCOUNT_FACT_ASK,
   ACCOUNT_RECALL_ASK, ACCOUNT_RECALL_REPLY, STACK_FACT, STACK_FACT_ASK, STACK_RECALL_ASK, STACK_RECALL_REPLY,
-  SPLICE_HEARD, SPLICE_PAGE_ASK, SPLICE_SENT, SPLICE_STEPS, SPLICE_WORK_ASK,
+  SPLICE_AFTER, SPLICE_AFTER_ASK, SPLICE_HEARD, SPLICE_PAGE_ASK, SPLICE_SENT, SPLICE_STEPS, SPLICE_WORK_ASK,
   ATTACHMENT_ASK, ATTACHMENT_FILE, ATTACHMENT_REPLY, ATTACHMENT_UNREAD, ATTACHMENT_WORD, ACTIVITY_ASK, ACTIVITY_WORKSPACE, MODE_SLATE, MODE_SLATE_ASK,
 } from './flows-script';
 import { FALLBACK_ANSWER } from './scripted-protocol';
@@ -151,8 +151,9 @@ export interface SpliceReading {
 export interface SpliceVerdict {
   /** Once each ping's card is drawn: what the chat showed then. */
   readonly arrivals: readonly SpliceReading[];
-  /** Once the turn ended, and again after a reload. */
+  /** Once the turn ended, once a later turn in the same page answered, and after a reload. */
   readonly answered: SpliceReading;
+  readonly followed: SpliceReading;
   readonly reloaded: SpliceReading;
   /** The answer's words: the pings the agent heard, in the order they reached it. */
   readonly heard: string;
@@ -178,7 +179,11 @@ const SPLICE_READING = `(() => {
 
   return {
     cards,
-    order: [...steps.flatMap((step, i) => [at(step), at(${JSON.stringify(SPLICE_SENT)} + '-' + String(i + 1))]), at(${JSON.stringify(SPLICE_HEARD)})],
+    order: [
+      ...steps.flatMap((step, i) => [at(step), at(${JSON.stringify(SPLICE_SENT)} + '-' + String(i + 1))]),
+      at(${JSON.stringify(SPLICE_HEARD)}),
+      ...(at(${JSON.stringify(SPLICE_AFTER)}) < 0 ? [] : [at(${JSON.stringify(SPLICE_AFTER)})]),
+    ],
     working: !(${CHAT_IDLE}),
   };
 })()`;
@@ -231,12 +236,17 @@ export async function spliceSitsWhereItWasRead(target: FlowTarget): Promise<Spli
     const answered = await reading();
     const heard = v.parse(v.string(), await page.evaluate(`(document.querySelector('#chat')?.innerText ?? '').split('\\n').find((line) => line.includes(${JSON.stringify(SPLICE_HEARD)}))?.trim() ?? ''`));
 
+    // The page keeps the pings' cards while it is open; a later answer must not take them (quiet-cairn-da44d09f).
+    await sendAndSettle(page, SPLICE_AFTER_ASK);
+    await until(page, 'the later answer', chatHas(SPLICE_AFTER));
+    const followed = await reading();
+
     await page.reload({ waitUntil: 'load' });
     await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
     await until(page, 'the answer drawn again', chatHas(SPLICE_HEARD));
     const again = await reading();
 
-    return { arrivals, answered, reloaded: again, heard };
+    return { arrivals, answered, followed, reloaded: again, heard };
   } finally {
     await removeFlowWorkspace(target, workspace);
   }

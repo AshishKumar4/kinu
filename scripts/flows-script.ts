@@ -116,6 +116,11 @@ export const SPLICE_STEPS = ['WAITING ON THE BUILD', 'STILL BUILDING', 'LINKING 
 /** The work turn's answer, before the pings it heard, in the order they reached it. */
 export const SPLICE_HEARD = 'PINGS HEARD';
 
+/** A turn after the work turn, in the same page, and its answer. */
+export const SPLICE_AFTER_ASK = 'Flow splice: one more word after the pings.';
+
+export const SPLICE_AFTER = 'AFTER THE PINGS';
+
 /** Long enough to click the page while a step waits on it, and three steps no longer than the one 25 s wait they
  *  replace: a ping is read at the step after the wait, which it does not cut short. */
 const SPLICE_SLEEP = 'sleep 8';
@@ -135,6 +140,8 @@ const SPLICE_PAGE = [
  *  turn's ask is the latest message that is neither. */
 function spliceScript(request: ScriptedRequest, latest: string): ScriptedAnswer | null {
   if (latest.includes(SPLICE_PAGE_ASK)) return { text: `Here is the page.\n\n${SPLICE_PAGE}` };
+
+  if (latest.includes(SPLICE_AFTER_ASK)) return { text: SPLICE_AFTER };
 
   if ([...request.userTexts].reverse().find((text) => !text.includes(SPLICE_SENT) && !text.includes(TURN_STEERING_HEADER))?.includes(SPLICE_WORK_ASK) !== true) return null;
   const step = SPLICE_STEPS.find((words) => !request.assistantTexts.includes(words));

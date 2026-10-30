@@ -44,7 +44,7 @@ import { ChatImageContext } from "@/components/ChatImages";
 import { placeEvents, subagentEventRow, type PlacedEvent } from "@/components/ChatEvents";
 import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { hasComparableTakes } from "@kinu.run/core";
-import { classifyProgrammaticTurn, messageSignalId, messagesUpTo, turnRows } from "@kinu.run/core";
+import { classifyProgrammaticTurn, messageSignalId, messagesUpTo, splicesSeenOn, turnRows } from "@kinu.run/core";
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
 import { SlateInlineContext } from "@/components/slates/context";
 import { ChatSlates } from "@/components/slates/InlineSlate";
@@ -618,11 +618,15 @@ function GoneWorkspace() {
   );
 }
 
-/** Live steers' rule: a card spliced into a running turn goes into the last message when that is the answer being written. */
-function useLiveSplices(entries: readonly { readonly message: UIMessage }[], cards: readonly SignalCard[]): readonly SignalCard[] {
+/**
+ * Live steers' rule: a card spliced into a running turn goes into the last message when that is the answer being
+ * written. A card the chat already draws is not live: the page keeps its cards until it closes, and three a long turn
+ * read moved into every later answer once its own had kept them (quiet-cairn-da44d09f, 2026-10-30).
+ */
+function useLiveSplices(entries: readonly { readonly message: UIMessage }[], cards: readonly SignalCard[], drawn: ReadonlySet<string>): readonly SignalCard[] {
   const answering = entries.at(-1)?.message.role === "assistant";
 
-  return useMemo(() => (answering ? cards.filter((card) => card.atStep !== undefined) : []), [answering, cards]);
+  return useMemo(() => (answering ? cards.filter((card) => card.atStep !== undefined && !drawn.has(card.id)) : []), [answering, cards, drawn]);
 }
 
 /** What the `focus` layout's bar says: the name it goes by (its agent's, else the workspace's title) and its line. */
@@ -882,18 +886,21 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
     () => new Map(state.signalCards.map((card) => [card.id, card.state])),
     [state.signalCards]);
 
-  const messageCardIds = useMemo(() => new Set(transcript.flatMap((msg) => {
-    const id = messageSignalId({ metadata: msg.metadata });
+  const drawnCardIds = useMemo(() => new Set([
+    ...transcript.flatMap((msg) => {
+      const id = messageSignalId({ metadata: msg.metadata });
 
-    return id ? [id] : [];
-  })), [transcript]);
+      return id ? [id] : [];
+    }),
+    ...thread.entries.flatMap(({ message, landed = [] }) => [...splicesSeenOn({ metadata: message.metadata }), ...landed].map((splice) => splice.id)),
+  ]), [transcript, thread.entries]);
 
-  const liveSplices = useLiveSplices(thread.entries, state.signalCards);
+  const liveSplices = useLiveSplices(thread.entries, state.signalCards, drawnCardIds);
 
   // An agent given work or reporting, and a signal with nowhere else to go, each where it happened.
   const looseEvents = useMemo((): PlacedEvent[] => [
     ...state.signalCards.flatMap((card): PlacedEvent[] => {
-      if (messageCardIds.has(card.id) || liveSplices.includes(card)) return [];
+      if (drawnCardIds.has(card.id) || liveSplices.includes(card)) return [];
       const turn = classifyProgrammaticTurn({ metadata: card.metadata });
 
       return turn ? [{
@@ -904,7 +911,7 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
       }] : [];
     }),
     ...state.subagentEvents.map((event) => subagentEventRow(event, agentId ?? "")),
-  ], [state.signalCards, state.subagentEvents, messageCardIds, liveSplices, agentId]);
+  ], [state.signalCards, state.subagentEvents, drawnCardIds, liveSplices, agentId]);
 
   const threadMessages = useMemo(() => thread.entries.map(({ message }) => message), [thread.entries]);
   const placed = useMemo(() => placeEvents(threadMessages, looseEvents), [threadMessages, looseEvents]);
