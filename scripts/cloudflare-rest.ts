@@ -125,6 +125,16 @@ export async function deleteR2Prefix(deletion: PrefixDeletion): Promise<number> 
   }
 }
 
+/** Deletes `bucket`, emptied first ({@link deleteR2Prefix}), answering the API's own words for a refusal. Through
+ *  `wrangler r2 bucket delete`, a devbox tier's cleanup ran 480 s with no answer and was killed (armada
+ *  20261030184103-9a4e9599, staging e9a04f6ac, 2026-10-30). */
+export async function deleteR2Bucket(bucket: Omit<PrefixDeletion, 'prefix'>): Promise<void> {
+  const token = bucket.token ?? restApiToken();
+
+  if (token === '') throw new Error(`the bucket ${bucket.bucket} is deleted only through the REST API, and no REST token is set (KINU_CLOUDFLARE_API_TOKEN)`);
+  await restAnswer({ method: 'DELETE', path: `/accounts/${bucket.accountId}/r2/buckets/${bucket.bucket}`, token, api: bucket.api });
+}
+
 /** `key`'s path under the REST API: each segment escaped, its slashes kept. */
 function objectPath(lookup: Omit<PrefixDeletion, 'prefix'> & { readonly key: string }): string {
   return `/accounts/${lookup.accountId}/r2/buckets/${lookup.bucket}/objects/${lookup.key.split('/').map(encodeURIComponent).join('/')}`;

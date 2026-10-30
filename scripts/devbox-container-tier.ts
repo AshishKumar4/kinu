@@ -17,7 +17,7 @@ import type { ContractLedger } from './fixtures/devbox-e2e/ledger';
 import { containerApplicationsNamed, r2, requireCloudflareAccountId } from './infra-cloudflare';
 import { deployedConfig } from './infra-manifest';
 import { r2ResiduePlane, drainBucketResidue } from './bench-devbox-fixture';
-import { deleteR2Prefix } from './cloudflare-rest';
+import { deleteR2Bucket, deleteR2Prefix } from './cloudflare-rest';
 import { restApiToken } from './cloudflare-token';
 import { runWrangler, publishTeardown, runTeardownOnce, delay } from './ephemeral-deployment';
 import { snapshotRegistry } from '../packages/devbox/src/snapshot-registry';
@@ -653,7 +653,7 @@ async function main(): Promise<void> {
       if (before.state === 'unknown') throw new Error(before.reason);
       await deleteR2Prefix({ accountId: ACCOUNT, bucket, prefix: '', token: rest });
       await drainBucketResidue(r2ResiduePlane({ accountId: ACCOUNT, accessKeyId, secretAccessKey }), bucket);
-      runWrangler(REPO, ['r2', 'bucket', 'delete', bucket]);
+      await deleteR2Bucket({ accountId: ACCOUNT, bucket, token: rest });
       const after = r2(bucket);
 
       if (after.state !== 'absent') throw new Error(`the bucket is ${after.state === 'present' ? 'still there' : after.reason} after deletion`);

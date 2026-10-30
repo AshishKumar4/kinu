@@ -22,8 +22,9 @@ const DIGEST = 'sha256:5abee7866948080f99c93170b21bb5cccddad89b903b1eb0d223f3664
  * a `last` cursor; a manifest's DELETE by digest answers 204 and keeps it while a tag names it, and takes it from the
  * catalog once none does. `pageSize` pages the fake smaller; `refuseDigest` refuses the next digest delete.
  */
-function platform(options: { readonly pageSize?: number; readonly filler?: number; readonly mintFailures?: readonly number[] } = {}) {
+function platform(options: { readonly pageSize?: number; readonly filler?: number; readonly mintFailures?: readonly number[]; readonly catalogFailures?: readonly number[] } = {}) {
   const mintFailures = [...options.mintFailures ?? []];
+  const catalogFailures = [...options.catalogFailures ?? []];
   const tags = new Map<string, string>([[SNAPSHOT_TAG, DIGEST], [SET_TAG, DIGEST], ['kept', 'sha256:other']]);
   const manifests = new Set<string>([DIGEST, 'sha256:other']);
   const calls: string[] = [];
@@ -55,6 +56,9 @@ function platform(options: { readonly pageSize?: number; readonly filler?: numbe
     if (authorization !== `Basic ${btoa('v1:pw')}`) return new Response('unauthorized', { status: 401 });
 
     if (url.pathname === '/v2/_catalog') {
+      const failing = catalogFailures.shift();
+
+      if (failing !== undefined) return new Response('{"errors":[{"code":"UNKNOWN","message":"internal server error"}]}', { status: failing });
       const all = names();
       const last = url.searchParams.get('last');
       const from = last === null ? 0 : all.findIndex(([, name]) => name === last) + 1;
@@ -160,8 +164,9 @@ test('a refusal carries the platform\'s own words', async () => {
 });
 
 // Staging 58601a8b0, 2026-10-22: the credentials endpoint answered one cleanup mint 500 while every other answered, and
-// the run's snapshot, then its bucket, stayed. A token the endpoint refuses (4xx) is not asked again.
-test('a mint the credentials endpoint refuses for itself is asked again, up to three times; a refused token is not', async () => {
+// the run's snapshot, then its bucket, stayed; staging b347e7dd4, 2026-10-30, the catalog one listing. A token the
+// endpoint refuses (4xx) is not asked again.
+test('a call an endpoint refuses for itself is asked again, up to three times; a refused token is not', async () => {
   const waits: number[] = [];
   const wait = async (ms: number) => { waits.push(ms); };
 
@@ -180,4 +185,9 @@ test('a mint the credentials endpoint refuses for itself is asked again, up to t
   expect({ gone, waited: afterDown - afterRecovering, mints: down.calls.filter((call) => call.startsWith('POST api.cloudflare.com')).length })
     .toEqual({ gone: { kind: 'refused', reason: expect.stringContaining('minting registry credentials answered 500') }, waited: 2, mints: 3 });
   expect({ denied, waited: waits.length - afterDown }).toEqual({ denied: { kind: 'refused', reason: expect.stringContaining('answered 403') }, waited: 0 });
+
+  const listing = platform({ catalogFailures: [500] });
+  const listed = await snapshotRegistry({ token: 'token-1', account: ACCOUNT, fetch: listing.fetcher, wait }).delete(SNAPSHOT);
+
+  expect({ listed, lists: listing.calls.filter((call) => call === 'GET registry.cloudflare.com/v2/_catalog').length }).toEqual({ listed: { kind: 'deleted' }, lists: 2 });
 });
