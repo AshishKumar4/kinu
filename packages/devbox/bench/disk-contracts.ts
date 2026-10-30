@@ -243,27 +243,27 @@ print(sum(1 for here, _, _ in os.walk('${WD}') for name in os.listxattr(here, fo
       break;
     }
 
-    case 'low-disk':
     // Production, 2026-10-30: a start that lost its source mounted the backup over the root's own, newer files, and rested.
     case 'set-aside': {
       await sh(`set -e; mkdir -p ${WD}/src; echo backed >${WD}/src/f`);
       equal((await save()).kind, 'committed');
       await sh(`set -e; echo newer >${WD}/src/f; echo made >${WD}/new`);
-      const own = await sh(`${TREE} cat ${WD}/src/f ${WD}/new`);
+      const own = await sh(TREE);
       await attach();
       await copied();
       await sh(UNMOUNT);
       equal((await attach(true)).detail, 'recovery set aside: the root holds the workspace');
-      equal(await sh(`${TREE} cat ${WD}/src/f ${WD}/new`), own);
+      equal(await sh(TREE), own);
       equal((await exec(`test -e ${RT}/disk-recovered.json || test -e ${RT}/disk-hydrate || test -e ${RT}/disk-upper`)).exitCode, 1);
       // What the chain saves next is the root's own files, and a recovery from it serves them.
       equal((await save()).kind, 'committed');
       await reset();
       await attach();
-      equal(await sh(`${TREE} cat ${WD}/src/f ${WD}/new`), own);
+      equal(await sh(TREE), own);
       break;
     }
 
+    case 'low-disk':
     case 'lost-inventory': {
       await sh(`head -c 50331648 /dev/urandom >${WD}/db.bin`); await save();
       const expected = await sh(TREE);
