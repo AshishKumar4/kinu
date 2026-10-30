@@ -85,15 +85,21 @@ Cost, measured 2026-09-18 in
 release of the same shape (108.46 MiB unpacked, largest member 21.50 MiB):
 **88.18 MiB at the peak**, which is the compressed artifact plus the largest
 member's base64 twice, since the transport copies a part into the multipart
-body. The peak does not grow with the release. Before the streaming change the
+body. Before the streaming change the
 same release cost 243.39 MiB (the whole unpacked archive held for the length
 of the plan, plus one 104.08 MiB asset body), and
 `do.isolate.transient_alloc_reset` in `packages/core/src/platform-catalog.ts`
 measured a Durable Object reset about 1.7 s after a transient allocate-and-free
 of 128 MiB, with the request already answered 200. So the Cloudflare door
-could not install this release until 2026-09-18; now it can, with 40 MiB to
+could not install this release until 2026-09-18; then it could, with 40 MiB to
 spare. `kinu deploy local` reads the same stream and writes each member
 straight to disk.
+
+The peak does not grow with the unpacked size, but it does grow with the
+compressed artifact and the largest member. A real run of 0.2.0+3029d96cd held
+110.32 MiB at the peak on 2026-10-30, 18 MiB under that reset; the release then
+was 853 members, 193.4 MiB unpacked and 51 MiB compressed, its largest member
+22.24 MiB (5e8a458da's artifact, the same day).
 
 ## The Cloudflare door
 
