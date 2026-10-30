@@ -3593,16 +3593,23 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
    * one for the boot alone, D96), and one a box adopts or starts over already carries it, so its name is not read again
    * (D115: each adoption asked the host, which woke the workspace once a minute).
    */
+  /** Each step says it began, so one that never ends is named: a wake from the box's own snapshot configured nothing
+   *  for 30 s, and its object was reset (production a3b8bd7d, 2026-10-30, D119). */
   protected async configureContainer(reused = this.#reused(), naming = !reused): Promise<void> {
     const began = Date.now();
+    this.#trace('configure.step', { step: 'routes' });
     await this.#routes().configure(await this.outboundPolicy(), this.store, reused);
     const routed = Date.now();
     this.#renewContainer();
+    this.#trace('configure.step', { step: 'sessions' });
     await this.#forgetClosedSessions();
+
+    if (naming) this.#trace('configure.step', { step: 'name read' });
     const name = naming ? await this.hostname() : undefined;
     const read = Date.now();
 
     if (name !== undefined) {
+      this.#trace('configure.step', { step: 'naming' });
       const named = await nameBox(this.#container(), name);
 
       if (!named.named) this.#trace('name.unresolved', { name, detail: named.detail });
