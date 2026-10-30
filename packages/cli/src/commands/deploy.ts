@@ -217,7 +217,12 @@ function printOutcome(snapshot: DeploySnapshot): void {
 
   if (snapshot.state === 'done') {
     console.log(`${OK('✓')} Your Kinu is live at ${ACCENT(`https://${snapshot.address}`)}`);
-    console.log(DIM('Sign in with the email you gave: Cloudflare Access sends a one-time PIN.'));
+
+    // Its owner account is made only through this link, which nothing else shows a CLI run.
+    if (snapshot.setupLink !== null) {
+      console.log(`${DIM('Make yourself its owner:')} ${ACCENT(snapshot.setupLink.link)}`);
+      console.log(DIM(`The link works once, until ${new Date(snapshot.setupLink.expiresAt).toLocaleString()}. If it runs out, get a new one at kinu.run/deploy.`));
+    }
 
     return;
   }
