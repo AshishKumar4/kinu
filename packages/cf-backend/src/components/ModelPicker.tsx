@@ -211,24 +211,24 @@ export function ModelMenuProvider({ children }: { children: ReactNode }) {
   return <ModelMenuContext.Provider value={useAsyncResource(listAvailableModels)}>{children}</ModelMenuContext.Provider>;
 }
 
-function useModelMenu(): AsyncResourceControl<ModelMenuResponse> {
+type ConnectedModelPickerProps = Omit<ModelPickerProps, "models" | "test"> & {
+  renderEmpty?: () => React.ReactNode;
+};
+
+/** The workspace's model, picked from the menu its page reads; a chat outside a workspace's page has none to pick. */
+export function ConnectedModelPicker(props: ConnectedModelPickerProps) {
   const menu = useContext(ModelMenuContext);
 
-  if (menu === null) throw new Error("useModelMenu requires ModelMenuProvider");
-
-  return menu;
+  return menu === null ? null : <MenuModelPicker menu={menu} {...props} />;
 }
 
 /**
  * Loading, a retryable failure, or the menu; an empty menu means no provider connected.
  * Only that earns the empty-state CTA, which forces an OAuth prompt=login.
  */
-export function ConnectedModelPicker({
-  value, onChange, size, className, clearable, placeholder, renderEmpty, disabled, effort,
-}: Omit<ModelPickerProps, "models" | "test"> & {
-  renderEmpty?: () => React.ReactNode;
-}) {
-  const { resource, reload } = useModelMenu();
+function MenuModelPicker({
+  menu: { resource, reload }, value, onChange, size, className, clearable, placeholder, renderEmpty, disabled, effort,
+}: ConnectedModelPickerProps & { menu: AsyncResourceControl<ModelMenuResponse> }) {
   // Why the last Workers AI connect did not connect: its finish page closed with the only copy.
   const [connectFailed, setConnectFailed] = useState<string | null>(null);
   const menu = lastValue(resource);
