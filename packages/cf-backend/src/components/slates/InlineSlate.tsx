@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useEffectEvent, useId, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode, type Ref, type RefObject } from "react";
+import { useCallback, useContext, useEffect, useEffectEvent, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode, type Ref, type RefObject } from "react";
 import { Loader } from "@/components/ui/Loader";
 import { ArrowSquareOutIcon, CaretRightIcon, CheckIcon, PushPinIcon } from "@phosphor-icons/react";
 import * as v from "valibot";
@@ -11,7 +11,7 @@ import {
 import { useElementSize } from "@/hooks/use-element-size";
 import { useTheme } from "@/hooks/use-theme";
 import { PreviewChrome } from "@/components/PreviewFrame";
-import { SlateInlineContext, SlatePreviews } from "./context";
+import { ChatPreviews, SlateInlineContext, usePreviewFold } from "./context";
 import { Effect } from "effect";
 import { detach, showing } from "@kinu.run/core/obs";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
@@ -97,16 +97,14 @@ export function useSlateHostContext(display: 'inline' | 'pane', width: number): 
   }), [theme.mode, theme.name, width, display]);
 }
 
-/** In the chat, a preview folds behind a later one of its slate, and while the panel shows it. */
+/** In the chat, a preview folds behind a later one of what it shows, and a slate's while the panel shows it. */
 export function ChatSlates({ shownInPanel, children }: { shownInPanel: string | null; children: ReactNode }) {
   const inline = useContext(SlateInlineContext);
-  const [previews] = useState(() => new SlatePreviews());
+  const [previews] = useState(() => new ChatPreviews());
   const value = useMemo(() => (inline === null ? null : { ...inline, chat: { previews, shownInPanel } }), [inline, previews, shownInPanel]);
 
   return <SlateInlineContext.Provider value={value}>{children}</SlateInlineContext.Provider>;
 }
-
-const UNLISTED = (): (() => void) => () => {};
 
 /** False until the card's first frame is on screen: a card that mounts folded must not fold in view. */
 function usePainted(): boolean {
@@ -170,43 +168,18 @@ export function SlateCard({ id, block, measure, save, children }: {
   children: ReactNode;
 }) {
   const inline = useContext(SlateInlineContext);
-  const previews = inline?.chat?.previews;
-  const [card, setCard] = useState<HTMLSpanElement | null>(null);
   const body = useId();
   const painted = usePainted();
-
-  const register = useCallback((element: HTMLSpanElement | null) => {
-    setCard(element);
-    const remove = element === null ? undefined : previews?.add(id, element);
-
-    return () => remove?.();
-  }, [previews, id]);
-
-  const superseded = useSyncExternalStore(previews?.subscribe ?? UNLISTED, () => previews?.superseded(id, card) ?? false, () => false);
-  const inPanel = inline?.chat?.shownInPanel === id;
-  const auto = superseded || inPanel;
-  // A fold set by hand holds until the reason for the automatic one clears.
-  const [hand, setHand] = useState<boolean | null>(null);
-  const [reason, setReason] = useState(auto);
-
-  if (reason !== auto) {
-    setReason(auto);
-
-    if (!auto) setHand(null);
-  }
-
-  const folded = hand ?? auto;
+  const { register, reason, folded, toggle } = usePreviewFold(id, inline?.chat?.shownInPanel === id ? "Shown in the work surface" : null);
   const openSlate = inline?.openSlate;
-  let why: string | null = null;
-
-  if (folded && auto) why = superseded ? "Updated below" : "Shown in the work surface";
+  const why = folded ? reason : null;
 
   const name = block ?? id;
 
 
   const tools = (
     <>
-      <Pressable look="compact" onClick={() => setHand(!folded)} aria-expanded={!folded} aria-controls={body} title={folded ? `Show ${name}` : `Fold ${name}`}
+      <Pressable look="compact" onClick={toggle} aria-expanded={!folded} aria-controls={body} title={folded ? `Show ${name}` : `Fold ${name}`}
         className="flex min-w-0 flex-1 items-center gap-2 px-1 py-px">
         <CaretRightIcon size={10} weight="bold" className={`shrink-0 p-text-3 p-fold-turn ${folded ? "" : "rotate-90"}`} />
         {folded && <code className="t-meta t-mono p-text-3 truncate">{name}</code>}

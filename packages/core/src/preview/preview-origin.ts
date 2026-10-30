@@ -177,6 +177,11 @@ export function sandboxPreviewLabelOf(url: URL, env: PreviewSuffixEnv): SandboxP
   return label === null ? null : sandboxLabel(label);
 }
 
+/** The site a preview URL shows, whatever its path: the chat keeps one live preview of each (`MessageView`). */
+export function previewSite(url: string): string {
+  return new URL(url).origin;
+}
+
 /** Tool output is agent-writable, so each candidate is validated with `isPreviewUrl`. */
 export function extractPreviewUrl(
   output: JsonValue | undefined,

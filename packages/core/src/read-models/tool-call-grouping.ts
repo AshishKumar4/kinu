@@ -3,7 +3,7 @@
  * phase, folded behind a line that says in a few words what it did or is doing. Thinking streams as it always has: a
  * thought before a phase's first call or after its last stands outside it, and only the thoughts between its calls go
  * in. What the owner reads or answers stands outside a phase and ends it: the turn's words, a question for the owner, a
- * call that started a preview, a file. A long turn rolls up once more: its earlier phases, with the thinking and words
+ * call that previews a site last, a file. A long turn rolls up once more: its earlier phases, with the thinking and words
  * among them, under one line, the newest phase open below it while it runs, and the answer under all of it once it
  * lands.
  */
@@ -16,7 +16,7 @@ import { programEffectsOf, type ProgramEffects } from '../execution/call-effects
 import { ASK_OWNER_TOOL, BUILTIN_TOOL_SPECS } from '../tools/registry';
 import { tolerate } from "../obs/index";
 import { type JsonObject, type JsonValue } from '../utils/json';
-import { extractPreviewUrl } from '../preview/preview-origin';
+import { extractPreviewUrl, previewSite } from '../preview/preview-origin';
 import { ongoing, phaseTitle } from './tool-phase-title';
 import { drawnText } from './message-live-tail';
 
@@ -45,10 +45,26 @@ export type TurnBlock = PartBlock | { kind: "turn"; blocks: PartBlock[] };
 /** The calls a run holds before it groups. */
 const RUN_MIN = 2;
 
+/**
+ * The calls among `parts` that preview a site last: each stands outside a phase, where the owner sees it. An earlier
+ * preview of the same site folds behind it in the chat, so its call is work like any other: a long turn's 35 calls
+ * named one site, and each stood outside its phases and its turn's line (quiet-cairn-da44d09f, 2026-10-30).
+ */
+function newestPreviews(parts: readonly Part[]): ReadonlySet<Part> {
+  const newest = new Map<string, Part>();
+
+  for (const part of parts) {
+    const url = isToolUIPart(part) ? extractPreviewUrl(partOutput(part)) : null;
+
+    if (url !== null) newest.set(previewSite(url), part);
+  }
+
+  return new Set(newest.values());
+}
+
 /** A call the owner neither answers nor reads as the turn's result: one a run may hold. */
-function isRunCall(part: Part): part is AnyToolPart {
-  return isToolUIPart(part) && getToolName(part) !== ASK_OWNER_TOOL && part.state !== "approval-requested"
-    && extractPreviewUrl(partOutput(part)) === null;
+function isRunCall(part: Part, previews: ReadonlySet<Part>): part is AnyToolPart {
+  return isToolUIPart(part) && getToolName(part) !== ASK_OWNER_TOOL && part.state !== "approval-requested" && !previews.has(part);
 }
 
 /** A part the chat draws nothing of, which a run goes on across: blank words or thinking, a step marker, a source, a
@@ -85,6 +101,7 @@ function addThoughts(blocks: PartBlock[], steps: readonly RunStep[]): void {
 }
 
 export function groupMessageParts(parts: readonly Part[]): PartBlock[] {
+  const previews = newestPreviews(parts);
   const blocks: PartBlock[] = [];
   let run: RunStep[] = [];
 
@@ -109,7 +126,7 @@ export function groupMessageParts(parts: readonly Part[]): PartBlock[] {
   for (const part of parts) {
     if (drawsNothing(part)) continue;
 
-    if (isRunCall(part)) run.push({ kind: "tool", part });
+    if (isRunCall(part, previews)) run.push({ kind: "tool", part });
     else if (part.type === "reasoning") addThought(run, part);
     else {
       flush();
@@ -123,13 +140,13 @@ export function groupMessageParts(parts: readonly Part[]): PartBlock[] {
 }
 
 /** A block of the turn's work: a phase, or a call on its own row. */
-function isWorkBlock(block: PartBlock): boolean {
-  return block.kind === "run" || (block.kind === "part" && isRunCall(block.part));
+function isWorkBlock(block: PartBlock, previews: ReadonlySet<Part>): boolean {
+  return block.kind === "run" || (block.kind === "part" && isRunCall(block.part, previews));
 }
 
 /** What the owner reads or answers, never rolled up: a question, a preview, a file, a call that waits on them. */
-function ownerFacing(block: PartBlock): boolean {
-  return block.kind === "part" && block.part.type !== "text" && !isWorkBlock(block);
+function ownerFacing(block: PartBlock, previews: ReadonlySet<Part>): boolean {
+  return block.kind === "part" && block.part.type !== "text" && !isWorkBlock(block, previews);
 }
 
 /** The phases a stretch holds before it rolls up: a long turn's, never an ordinary one's, which reads as it did. */
@@ -141,7 +158,13 @@ const TURN_MIN = 3;
  * after it, when it holds as many. What the owner reads or answers is never rolled up, so it splits the line in two.
  */
 export function rollUpTurn(blocks: readonly PartBlock[], live: boolean): TurnBlock[] {
-  const newest = lastIndex(blocks, isWorkBlock);
+  const previews = newestPreviews(blocks.flatMap((block): Part[] => {
+    if (block.kind === "part") return [block.part];
+
+    return block.kind === "run" ? phaseCalls(block.steps) : [];
+  }));
+
+  const newest = lastIndex(blocks, (block) => isWorkBlock(block, previews));
 
   if (newest < 0) return [...blocks];
   const opened = live && blocks[newest - 1]?.kind === "reasoning" ? newest - 1 : newest;
@@ -156,7 +179,7 @@ export function rollUpTurn(blocks: readonly PartBlock[], live: boolean): TurnBlo
   };
 
   for (const block of blocks.slice(0, tail)) {
-    if (ownerFacing(block)) {
+    if (ownerFacing(block, previews)) {
       close();
       rolled.push(block);
     }

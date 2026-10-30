@@ -725,6 +725,17 @@ test('a page with no room in the inspector bar is reachable from the bar, and op
   });
 });
 
+/** The chat's previews of sites in document order: each site's port, whether its frame is drawn, why it folded, and
+ *  whether its call is inside a run of calls. */
+function sitePreviews(page: Page): Promise<[string, boolean, string | null, boolean][]> {
+  return page.$$eval('[data-site-preview]', (cards) => cards.map((card): [string, boolean, string | null, boolean] => [
+    /^https:\/\/(\d+)-/u.exec(card.getAttribute('data-site-preview') ?? '')?.[1] ?? '',
+    card.querySelector('iframe') !== null,
+    card.querySelector('button[aria-expanded="false"] span')?.textContent ?? null,
+    card.closest('[data-tool-run]') !== null,
+  ]));
+}
+
 /** The chat's inline previews in document order: each slate's id, and whether its card is unfolded. */
 function inlinePreviews(page: Page): Promise<[string, boolean][]> {
   return page.$$eval('[data-slate-inline]', (cards) => cards.map((card): [string, boolean] => [
@@ -782,6 +793,26 @@ describe('inline slate previews in the chat', () => {
         await page.click('[data-slate-inline="notes"] button[aria-expanded]');
         await drawn(page);
         expect(await inlinePreviews(page)).toEqual([['board', true], ['notes', false], ['board', true]]);
+      } finally { await page.close(); }
+    });
+  });
+
+  // quiet-cairn-da44d09f, 2026-10-30: 35 calls of one turn named one site, and each drew it live.
+  test("a tool's preview of a site folds behind a later preview of that site, frame and all, and opens by hand", async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      try {
+        await openSlateThread(page, origin, { width: 1280, height: 860 });
+        // The last answer's earlier preview folds too, and its call goes in with the reads around it.
+        expect(await sitePreviews(page)).toEqual([
+          ['8130', false, 'Updated below', false], ['8131', true, null, false], ['8130', false, 'Updated below', true], ['8130', true, null, false],
+        ]);
+
+        await page.click('[data-site-preview] button[aria-expanded="false"]');
+        expect((await sitePreviews(page))[0]).toEqual(['8130', true, null, false]);
+        await page.click('[data-site-preview] button[aria-expanded="true"]');
+        expect((await sitePreviews(page))[0]).toEqual(['8130', false, 'Updated below', false]);
       } finally { await page.close(); }
     });
   });

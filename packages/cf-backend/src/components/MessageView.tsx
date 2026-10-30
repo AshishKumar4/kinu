@@ -1,5 +1,5 @@
 import { Effect, Cause } from 'effect';
-import { createContext, Fragment, memo, useContext, useState, useRef, useEffect, useCallback, type ReactNode } from "react";
+import { createContext, Fragment, memo, useContext, useState, useRef, useEffect, useCallback, useId, type ReactNode } from "react";
 import {
   ArrowClockwiseIcon,
   WrenchIcon, CaretRightIcon,
@@ -27,10 +27,11 @@ import { FeedbackCard } from "@/components/surfaces/changes/FeedbackCard";
 import * as v from "valibot";
 import { diagnostics, renderThrownChain, detach } from "@kinu.run/core/obs";
 import { PreviewFrame } from "@/components/PreviewFrame";
+import { usePreviewFold } from "@/components/slates/context";
 import { AnswerText, MarkdownContent, CodeBlock, SlateLink, type AnswerChat } from "@/components/surfaces/shared";
 import { AttachmentChip } from "@/components/AttachmentChip";
 import { AnswerPicturesContext, PartPictures, useAnswerPictures } from "@/components/ChatImages";
-import { extractPreviewUrl } from "@kinu.run/core";
+import { extractPreviewUrl, previewSite } from "@kinu.run/core";
 import {
   groupMessageParts, phaseCalls, phaseTitle, rollUpTurn, writtenTitles,
   partOutput, partInput, partEffect, partProgramEffects, callFailed, parseProvisionError,
@@ -379,12 +380,38 @@ function ToolCallPart({ part, expanded, onToggleExpand }: { part: AnyToolPart; e
         expanded={expanded}
         onToggleExpand={onToggleExpand}
       />
-      {previewUrl && (
-        <Surface look="outlined" className="mt-2 h-64 overflow-hidden">
-          <PreviewFrame url={previewUrl} />
-        </Surface>
-      )}
+      {previewUrl && <SitePreview url={previewUrl} />}
       <PartPictures part={part} size="thumb" />
+    </div>
+  );
+}
+
+/**
+ * A tool's preview of a site: the newest of each site's previews stays live, and an older one folds to its address. A
+ * long turn's 35 calls named one site, and each drew it live (quiet-cairn-da44d09f, 2026-10-30). A folded preview
+ * drops its frame, so the site runs once; its call joins its phase (`groupMessageParts`).
+ */
+function SitePreview({ url }: { url: string }) {
+  const { register, reason, folded, toggle } = usePreviewFold(previewSite(url), null);
+  const body = useId();
+
+  return (
+    <div ref={register} data-site-preview={url} className="mt-2">
+      {reason !== null && (
+        <Pressable look="compact" onClick={toggle} aria-expanded={!folded} aria-controls={body} title={folded ? `Show ${url}` : `Fold ${url}`}
+          className="flex w-full min-w-0 items-center gap-2 px-1 py-px">
+          <CaretRightIcon size={10} weight="bold" className={`shrink-0 p-text-3 p-fold-turn ${folded ? "" : "rotate-90"}`} />
+          <code className="t-meta t-mono p-text-3 truncate">{url}</code>
+          {folded && <span className="t-meta ml-auto shrink-0 pl-2 p-text-3">{reason}</span>}
+        </Pressable>
+      )}
+      <div id={body}>
+        {!folded && (
+          <Surface look="outlined" className="h-64 overflow-hidden">
+            <PreviewFrame url={url} />
+          </Surface>
+        )}
+      </div>
     </div>
   );
 }

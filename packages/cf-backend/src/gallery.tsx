@@ -2508,14 +2508,25 @@ const REVERT_LISTINGS = new Map<string | null, FileCheckpointListing>([
 const REVERT_LISTING: FileCheckpointListing = REVERT_LISTINGS.get(REVERT_CHECKPOINTS)
   ?? { availability: { available: false, reason: CHECKPOINTS_NO_DEVICE }, entries: [] };
 
-/* `&transcript=slates&slates=2`: the board twice, notes between, so the first board is superseded. */
+/** Two sites a tool's output names, the first twice: its earlier preview folds behind the later one. */
+const GALLERY_SITES = ["https://8130-sandbox-aaaaaaaaaaaaaaaa.preview.example.test/", "https://8131-sandbox-bbbbbbbbbbbbbbbb.preview.example.test/"] as const;
+
+const sitePart = (id: string, url: string) => ({ type: "tool-eval" as const, toolCallId: id, state: "output-available" as const, input: { code: "return await workspace.listPorts();" }, output: { url } });
+
+const readPart = (id: string) => ({ type: "tool-file" as const, toolCallId: id, state: "output-available" as const, input: { op: "read", path: "app/server.mjs" }, output: "…" });
+
+/* `&transcript=slates&slates=2`: the board twice, notes between, so the first board is superseded; the same for a site
+ * a tool's output names, which the last answer previews twice, the earlier among its reads. */
 const SLATES_THREAD: UIMessage[] = [
   msg({ id: "sb-u1", role: "user", createdAt: NOW - 9 * 60e3, parts: [{ type: "text", text: "Put this week's 500s on a board, by route." }] }),
-  msg({ id: "sb-a1", role: "assistant", createdAt: NOW - 8 * 60e3, parts: [{ type: "text", text: "Here it is, grouped by route.\n\nslate://board" }] }),
+  msg({ id: "sb-a1", role: "assistant", createdAt: NOW - 8 * 60e3, parts: [sitePart("sb-t1", GALLERY_SITES[0]), { type: "text", text: "Here it is, grouped by route.\n\nslate://board" }] }),
   msg({ id: "sb-u2", role: "user", createdAt: NOW - 7 * 60e3, parts: [{ type: "text", text: "Keep release notes beside it." }] }),
-  msg({ id: "sb-a2", role: "assistant", createdAt: NOW - 6 * 60e3, parts: [{ type: "text", text: "Started them.\n\nslate://notes" }] }),
+  msg({ id: "sb-a2", role: "assistant", createdAt: NOW - 6 * 60e3, parts: [sitePart("sb-t2", GALLERY_SITES[1]), { type: "text", text: "Started them.\n\nslate://notes" }] }),
   msg({ id: "sb-u3", role: "user", createdAt: NOW - 5 * 60e3, parts: [{ type: "text", text: "Add when each route last failed." }] }),
-  msg({ id: "sb-a3", role: "assistant", createdAt: NOW - 4 * 60e3, metadata: { [SLATES_CHANGED_METADATA_KEY]: ["board"] }, parts: [{ type: "text", text: "Added a last-failure column." }] }),
+  msg({ id: "sb-a3", role: "assistant", createdAt: NOW - 4 * 60e3, metadata: { [SLATES_CHANGED_METADATA_KEY]: ["board"] }, parts: [
+    readPart("sb-t3"), sitePart("sb-t4", GALLERY_SITES[0]), readPart("sb-t5"), sitePart("sb-t6", `${GALLERY_SITES[0]}?route=health`),
+    { type: "text", text: "Added a last-failure column." },
+  ] }),
 ];
 
 /**
