@@ -6,6 +6,7 @@ import {
   type ModelMenuResponse, type ModelMenuEntry, type ModelTestResult, type ModelsDevProviderInfo, type ProviderCatalogEntry,
 } from '@kinu.run/core';
 import { createAgentProviderRegistry, userCredentials, type UserCredentialClient } from '../providers/agent-registry';
+import { colocatedCatalogShelf } from '../providers/catalog-shelf';
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { ProviderEnv } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
@@ -21,6 +22,7 @@ export async function listAvailableModels<Id>(
     env,
     userDO: userCredentials(() => objectNamed(env.UserDO, userId), caller),
     fetch,
+    catalogShelf: colocatedCatalogShelf,
   });
 
   const menu = await registry.listAllModels(deps);
@@ -88,7 +90,10 @@ export async function testAvailableModel<Id>(input: {
   readonly signal: AbortSignal;
 }): Promise<ModelTestResult> {
   const { env, userId, caller } = input;
-  const registry = createAgentProviderRegistry({ env, userDO: userCredentials(() => objectNamed(env.UserDO, userId), caller), fetch });
+
+  const registry = createAgentProviderRegistry({
+    env, userDO: userCredentials(() => objectNamed(env.UserDO, userId), caller), fetch, catalogShelf: colocatedCatalogShelf,
+  });
 
   return testModel({ spec: input.spec, resolve: (spec, affinity) => registry.resolveModel(spec, affinity), signal: input.signal });
 }

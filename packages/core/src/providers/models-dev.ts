@@ -4,10 +4,10 @@ import type {
 import * as v from 'valibot';
 import { MODEL_INPUT_MODALITIES } from './types';
 import { positiveInteger, StaleModelList } from './util';
-import { nonEmptyString } from '../utils/json';
+import { nonEmptyString, parseJsonValue } from '../utils/json';
 import type { JsonValue } from '../utils/json';
 import { Effect } from 'effect';
-import { diagnostics, flight, KinuError, renderThrownChain, settle } from '../obs/index';
+import { attempt, diagnostics, flight, KinuError, renderThrownChain, settle } from '../obs/index';
 import type { Flight } from '../obs/effect';
 import { knownReasoningEfforts } from './reasoning-effort';
 import { sdkWire, type WireProtocol } from './wire-model';
@@ -113,6 +113,54 @@ export function withModelsDevRead<Deps extends Pick<ProviderDeps, 'fetch'>>(deps
   return { ...deps, modelsDev: flight(() => getModelsDevCatalog(deps.fetch, DEFAULT_TTL_MS)) };
 }
 
+/** What a read of one provider's slice uses: the fetch, the shelf, and the call's own catalog read if it made one. */
+type SliceDeps = Pick<ProviderDeps, 'fetch' | 'catalogShelf'> & { readonly modelsDev?: ModelsDevRead };
+
+/** A slice as a shelf holds it; null is a provider models.dev does not list. */
+const ProviderSliceSchema = v.nullable(ModelsDevProviderSchema);
+
+/** One provider's entry, its models named as their labs name them (`canonicalName`): all of the catalog a reader of
+ *  that provider needs. Null when models.dev lists no such provider. */
+function sliceOf(data: Record<string, ModelsDevProvider>, providerId: string): ModelsDevProvider | null {
+  const provider = data[providerId];
+
+  if (provider?.models === undefined) return provider ?? null;
+
+  const models = Object.fromEntries(Object.entries(provider.models)
+    .map(([key, model]) => [key, { ...model, name: canonicalName(data, model) ?? model.name }]));
+
+  return { ...provider, models };
+}
+
+/**
+ * One provider's slice, from the shelf when the deps carry one. The whole catalog is 5.9 MB (233 providers, 8,922
+ * models), and a model menu read it whole on 8 of 8 requests seconds apart, 117-340 ms of CPU each (production,
+ * 2026-10-30): each landed on an isolate that had not read it yet. A slice the shelf lacks, or holds in a shape this
+ * build does not read, is cut from the whole catalog and put back.
+ */
+function providerSlice(providerId: string, deps: SliceDeps, ttlMs: number, readMs?: number): Effect.Effect<ModelsDevProvider | null, KinuError> {
+  const cut = Effect.map(deps.modelsDev?.() ?? getModelsDevCatalog(deps.fetch, ttlMs, readMs), (data) => sliceOf(data, providerId));
+  const shelf = deps.catalogShelf;
+
+  if (shelf === undefined) return cut;
+
+  return Effect.gen(function* () {
+    const kept = yield* attempt({ doing: `reading models.dev's ${providerId} slice`, otherwise: 'unavailable' }, () => shelf.read(providerId));
+    const held = kept === null ? null : v.safeParse(ProviderSliceSchema, parseJsonValue(kept));
+
+    if (held?.success === true) return held.output;
+    const slice = yield* cut;
+
+    // The reader already holds its slice: a shelf that keeps none only costs the next isolate the whole read.
+    yield* Effect.catch(
+      attempt({ doing: `keeping models.dev's ${providerId} slice`, otherwise: 'unavailable' }, () => shelf.write(providerId, JSON.stringify(slice), Math.ceil(ttlMs / 1000))),
+      (failure) => Effect.sync(() => { diagnostics.failure('models_dev.slice_keep_failed', failure, { provider: providerId }); }),
+    );
+
+    return slice;
+  });
+}
+
 export interface ModelsDevListOptions {
   /** models.dev is the provider's only list, so naming none of its models is a failure to show, not an empty menu. */
   required?: boolean;
@@ -128,7 +176,7 @@ export interface ModelsDevListOptions {
 /** `deps.modelsDev`, when its call made one (`withModelsDevRead`), is the read it shares with the call's other listings. */
 export async function listModelsDevProviderModels(
   providerId: string,
-  deps: Pick<ProviderDeps, 'fetch'> & { readonly modelsDev?: ModelsDevRead },
+  deps: SliceDeps,
   opts: ModelsDevListOptions = {},
 ): Promise<ModelInfo[]> {
   const stale = (failure: { readonly reason: string; readonly cause?: unknown }): StaleModelList => {
@@ -138,13 +186,11 @@ export async function listModelsDevProviderModels(
   };
 
   return settle(Effect.gen(function* () {
-    const read = deps.modelsDev?.() ?? getModelsDevCatalog(deps.fetch, opts.ttlMs ?? DEFAULT_TTL_MS, opts.readMs);
-
-    const data = yield* read.pipe(
+    const slice = yield* providerSlice(providerId, deps, opts.ttlMs ?? DEFAULT_TTL_MS, opts.readMs).pipe(
       Effect.catch((failed) => Effect.fail(stale({ reason: 'models.dev could not be read', cause: failed }))),
     );
 
-    const models = data[providerId]?.models;
+    const models = slice?.models;
 
     if (!models) {
       if (opts.required !== true) return [];
@@ -156,8 +202,7 @@ export async function listModelsDevProviderModels(
 
     for (const [key, model] of Object.entries(models)) {
       const audioOrImage = model.modalities?.output?.some((modality) => modality !== 'text') ?? false;
-      const named = { ...model, name: canonicalName(data, model) ?? model.name };
-      const info = opts.textOnly === true && audioOrImage ? null : modelInfoFromModelsDev(key, named, opts.toolCallOnly ?? true);
+      const info = opts.textOnly === true && audioOrImage ? null : modelInfoFromModelsDev(key, model, opts.toolCallOnly ?? true);
 
       if (info) out.push(info);
     }
@@ -195,15 +240,10 @@ function canonicalName(data: Record<string, ModelsDevProvider>, model: ModelsDev
 /** Provider metadata, or null when not in the catalog; an unreadable catalog throws rather than returning null. */
 export function getModelsDevProvider(
   providerId: string,
-  deps: Pick<ProviderDeps, 'fetch'>,
+  deps: SliceDeps,
   ttlMs: number = DEFAULT_TTL_MS,
 ): Promise<ModelsDevProviderInfo | null> {
-  return settle(Effect.gen(function* () {
-    const data = yield* catalog(deps.fetch, ttlMs);
-    const provider = data[providerId];
-
-    return provider ? providerInfoFromModelsDev(providerId, provider) : null;
-  }));
+  return settle(Effect.map(sliceOrDie(providerId, deps, ttlMs), (provider) => (provider ? providerInfoFromModelsDev(providerId, provider) : null)));
 }
 
 /** The API a catalog model speaks: its SDK's, which a model may override. */
@@ -220,9 +260,9 @@ export interface ModelsDevModelEndpoint extends ModelsDevWire {
 export function getModelsDevModelEndpoint(
   providerId: string,
   modelId: string,
-  deps: Pick<ProviderDeps, 'fetch'>,
+  deps: SliceDeps,
 ): Promise<ModelsDevModelEndpoint | null> {
-  return settle(Effect.map(modelsDevModel(providerId, modelId, deps.fetch), (found) => {
+  return settle(Effect.map(modelsDevModel(providerId, modelId, deps), (found) => {
     if (found === null) return null;
     const baseURL = concreteAPI(found.model?.provider?.api) ?? modelsDevCompatBaseURL(found.info);
 
@@ -235,10 +275,8 @@ interface FoundModel {
   readonly model: ModelsDevModel | undefined;
 }
 
-function modelsDevModel(providerId: string, modelId: string, fetchFn: typeof fetch | undefined): Effect.Effect<FoundModel | null> {
-  return Effect.map(catalog(fetchFn, DEFAULT_TTL_MS), (data) => {
-    const provider = data[providerId];
-
+function modelsDevModel(providerId: string, modelId: string, deps: SliceDeps): Effect.Effect<FoundModel | null> {
+  return Effect.map(sliceOrDie(providerId, deps, DEFAULT_TTL_MS), (provider) => {
     if (!provider) return null;
 
     const model = Object.entries(provider.models ?? {})
@@ -346,6 +384,10 @@ function readModelsDevCatalog(fetchImpl: typeof fetch, readMs: number): Effect.E
 
 function catalog(fetchFn: typeof fetch | undefined, ttlMs: number): Effect.Effect<Record<string, ModelsDevProvider>> {
   return Effect.catch(getModelsDevCatalog(fetchFn, ttlMs), (failed) => Effect.die(failed));
+}
+
+function sliceOrDie(providerId: string, deps: SliceDeps, ttlMs: number): Effect.Effect<ModelsDevProvider | null> {
+  return Effect.catch(providerSlice(providerId, deps, ttlMs), (failed) => Effect.die(failed));
 }
 
 function providerInfoFromModelsDev(id: string, provider: ModelsDevProvider): ModelsDevProviderInfo {

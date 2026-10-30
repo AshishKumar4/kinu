@@ -176,6 +176,12 @@ export interface ModelAttemptInfo {
 
 export const MODEL_ATTEMPT_OUTCOMES = ['answered', 'broken', 'refused', 'cut', 'stall', 'failed'] as const;
 
+/** Text kept under a key for a while, readable by every isolate the host runs nearby: on a Worker, the colo's cache. */
+export interface CatalogShelf {
+  read(key: string): Promise<string | null>;
+  write(key: string, body: string, ttlSeconds: number): Promise<void>;
+}
+
 export interface ProviderDeps {
 
   env: ProviderEnv;
@@ -184,6 +190,8 @@ export interface ProviderDeps {
   /** Stored credential keys; without it the dynamic source lists nothing. */
   listCredentialKeys?: () => Promise<string[]>;
   fetch?: typeof fetch;
+  /** Where models.dev's per-provider slices are kept for the isolates beside this one (`models-dev.ts`). */
+  catalogShelf?: CatalogShelf;
   /** Called before each rate-limit sleep, including joined sibling cooldowns. */
   onProviderWait?: (info: ProviderWaitInfo) => void;
   /** Called as each request to the provider ends (`ModelAttemptInfo`). */

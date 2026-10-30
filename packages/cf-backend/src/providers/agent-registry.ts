@@ -3,7 +3,7 @@ import {
   createAIGatewayProvider, createChatGptProvider, createCodexProvider, createModelRegistry, createMyGatewayProvider,
   createWorkersAIProvider, normalizeModelSpec,
   bindingDecisionRun, restDecisionRun, type DecisionRun,
-  type ActorReference, type AuthRequest, type AuthResolution, type AuthResolver, type ModelAffinity, type ProviderDeps, type ProviderEnv,
+  type ActorReference, type AuthRequest, type AuthResolution, type AuthResolver, type CatalogShelf, type ModelAffinity, type ProviderDeps, type ProviderEnv,
   type ModelAttemptInfo, type ProviderRegistry, type ProviderWaitInfo, type SpecDefault, type UserCaller,
   accountDeps, countRequestInputTokens, parseModelSpec, type TurnModelSources, type CredentialSummary,
 } from '@kinu.run/core';
@@ -58,6 +58,7 @@ export interface AgentProviderDeps {
   /** Null for env-bound-only contexts (e.g. runtime.ts inline-branch fallback): getAuth is null, hasCredential false. */
   userDO?: UserCredentialSource | null;
   fetch?: typeof fetch;
+  catalogShelf?: CatalogShelf;
   /** Fires before a provider-mandated wait; the actor emits `provider_wait` so a rate-limited turn reads as waiting. */
   onProviderWait?: (info: ProviderWaitInfo) => void;
   /** Fires as each request to a provider ends; the actor records it as `model_attempt`. */
@@ -154,6 +155,7 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
     hasCredential: async (key: string) => (await credentialKeys()).includes(key),
     listCredentialKeys: credentialKeys,
     fetch: opts.fetch,
+    catalogShelf: opts.catalogShelf,
     onProviderWait: opts.onProviderWait,
     onModelAttempt: opts.onModelAttempt,
     accountFor: opts.accountFor,

@@ -41,6 +41,16 @@ if (!('WebSocketRequestResponsePair' in globalThis)) {
   });
 }
 
+// workerd's Cache API, keeping nothing: each test's own fetch answers its catalog reads (the model menu's models.dev
+// slices, cf-backend providers/catalog-shelf.ts), never a slice another test kept.
+if (!('caches' in globalThis)) {
+  Object.defineProperty(globalThis, 'caches', {
+    configurable: true,
+    writable: true,
+    value: { open: async () => ({ match: async () => undefined, put: async () => {} }) },
+  });
+}
+
 // A file that ends with a child still running fails, naming it, and the child
 // is ended first, so it holds no memory and writes into no released scratch.
 // Under `--parallel` this runs per file; without it, once for the run. The
