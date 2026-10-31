@@ -408,6 +408,11 @@ export async function withLiveApp<T>(body: (app: LiveApp) => Promise<T>, options
 
       page.setDefaultTimeout(0);
       page.setDefaultNavigationTimeout(0);
+      // Vite dev serves ~1,200 unbundled modules, each revalidated on a reload. On armada, Chrome dropped the app's
+      // module graph mid-reload after a 304 (233 queued loads cancelled, nothing failing on the wire, no navigation)
+      // in every run of 2026-10-30; with the cache off, 2 of 2 passed. A built Kinu serves hashed, immutable assets
+      // and revalidates no module, so that path is the dev stack's alone.
+      await page.setCacheEnabled(false);
 
       return page;
     };
