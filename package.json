@@ -229,7 +229,11 @@
   "//overrides:sharp": "sharp is pinned because every Miniflare release holds it at 0.35.4: GHSA-wq5f-xc86-pv6w (librsvg CVE-2026-96889) is fixed in 0.35.5. Delete it once Miniflare depends on 0.35.5 or later.",
   "//overrides:@cloudflare/vitest-plugin": "The vitest plugin's zod is pinned here because @cloudflare/vitest-plugin 1.3.4 depends on exactly 4.4.3, which carries GHSA-mrhx-c7xc-m3w5 (memory exhausted validating oversized constrained collections), fixed in 4.6.6. 4.6.7 is the same major and the one copy everything else resolves. Delete it once the plugin depends on 4.6.6 or later.",
   "//overrides:@modelcontextprotocol/server": "vgpu 0.4.1 (still at 0.6.0) pins 2.0.0 exactly; advisories 1242647, 1242648 and 1242666 (shared transport cross-delivery, validation memory exhaustion, foreign bearer tokens) are fixed in 2.3.0. agents 0.29.0 peers 2.3.1 itself, so only vgpu's copy is overridden. Drop once vgpu moves past 2.3.0.",
+  "//overrides:glob": "glob 10.5.0, used by @npmcli/map-workspaces and @npmcli/package-json through Nimbus, carries GHSA-3g3m-2fjr-6pw4 (AbortSignal cancellation continues traversing after rejection); no release before 14.0.2 is patched. Pin 14.0.3, whose glob function and options retain the interfaces these callers use. Remove once upstream ranges resolve a patched release without this override.",
+  "//overrides:minimatch": "minimatch 9.0.9 and 10.2.6 carry GHSA-g3hv-75wg-m249 (globparts amplification denial of service), fixed only in 11.0.1. Pin 11.0.3 for npm workspace discovery and the Pi comparison dependency; retain minimatch/match APIs and verify workspace discovery. Remove once every upstream range resolves a patched release.",
   "overrides": {
+    "glob": "14.0.3",
+    "minimatch": "11.0.3",
     "basic-ftp": "^6.2.1",
     "katex": "^0.18.11",
     "lodash-es": "^4.18.1",
