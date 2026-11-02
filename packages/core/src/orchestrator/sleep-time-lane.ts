@@ -282,6 +282,9 @@ export class SleepTimeLane {
         workspace: this.deps.workspace, upserted: summary.upserted, decayed: summary.decayed, skipped: summary.skipped,
       });
 
+      // A backlog past this batch is still owed: the next pass reads it, on the cadence a settled turn arms.
+      if (window.completedTurns - (window.lastRunTurn ?? 0) > window.turns.length) this.arm(window);
+
       if (account !== undefined) yield* this.deliver(account);
     }).pipe(Effect.tapError((failure) => Effect.sync(() => {
       if (isDefinitiveTerminalFailure(failure.code)) this.deps.transactionSync(() => { this.finish(key); });

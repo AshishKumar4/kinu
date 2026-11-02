@@ -230,9 +230,9 @@ describe('the tier model behind background memory compression', () => {
 
       const update = await runSleepTimeCompute(llm, {
         turns: [
-          { task: 'Hello', output: 'Hello back', toolCalls: [], ownerWords: 'Hello' },
-          { task: 'How are you?', output: 'Ready to help', toolCalls: [], ownerWords: 'How are you?' },
-          { task: 'Thanks', output: 'You are welcome', toolCalls: [], ownerWords: 'Thanks' },
+          { task: 'Hello', output: 'Hello back', ownerWords: 'Hello' },
+          { task: 'How are you?', output: 'Ready to help', ownerWords: 'How are you?' },
+          { task: 'Thanks', output: 'You are welcome', ownerWords: 'Thanks' },
         ],
         currentFacts: [],
       });

@@ -255,8 +255,8 @@ describe('the background pass proposes to the account from the owner\'s own word
 
   test('proposals are dropped when no owner spoke in the window, and keys are normalized', () => {
     const update = { upserts: [], decay: [], account: [{ key: 'Owner Name', value: 'Ashish', rationale: 'said so' }, { key: '  ', value: 'x', rationale: '' }] };
-    const spoke = [{ task: 't', output: 'o', toolCalls: [], ownerWords: 'I am Ashish' }];
-    const silent = [{ task: 'nightly digest', output: 'o', toolCalls: [], ownerWords: '' }];
+    const spoke = [{ task: 't', output: 'o', ownerWords: 'I am Ashish' }];
+    const silent = [{ task: 'nightly digest', output: 'o', ownerWords: '' }];
 
     expect(accountProposals(update, spoke)).toEqual([{ kind: 'fact', key: 'owner_name', value: 'Ashish' }]);
     expect(accountProposals(update, silent)).toEqual([]);

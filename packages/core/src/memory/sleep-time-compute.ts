@@ -52,7 +52,6 @@ export function sleepTimeWakeAt(arm: { readonly settledAt: number | null; readon
 export interface SleepTimeTurn {
   readonly task: string;
   readonly output: string;
-  readonly toolCalls: readonly string[];
   /** The owner's own words in the turn (its author the operator): the only source an account fact is proposed from. */
   readonly ownerWords: string;
 }
@@ -77,12 +76,12 @@ export function sleepTimeWindow(
 
   for (const row of newestFirst) if (row.role === 'assistant') completedTurns++;
   const since: Array<SleepTimeTurn & { answerId: string }> = [];
-  let current: { answerId: string; output: string; toolCalls: readonly string[]; task: string[]; owner: string[] } | null = null;
+  let current: { answerId: string; output: string; task: string[]; owner: string[] } | null = null;
   let lastRunTurn: number | null = null;
 
   const close = (): void => {
     if (current === null) return;
-    since.push({ answerId: current.answerId, task: current.task.reverse().join('\n'), output: current.output, toolCalls: current.toolCalls, ownerWords: current.owner.reverse().join('\n') });
+    since.push({ answerId: current.answerId, task: current.task.reverse().join('\n'), output: current.output, ownerWords: current.owner.reverse().join('\n') });
     current = null;
   };
 
@@ -95,7 +94,7 @@ export function sleepTimeWindow(
         break;
       }
 
-      current = { answerId: row.id, output: row.content, toolCalls: row.toolCalls, task: [], owner: [] };
+      current = { answerId: row.id, output: row.content, task: [], owner: [] };
     } else if (current !== null) {
       current.task.push(row.content);
 
@@ -104,13 +103,14 @@ export function sleepTimeWindow(
   }
 
   close();
+  // The oldest unread first: a run keyed on the newest would mark an older backlog read unread.
   const selected = since.slice(-SLEEP_TIME_CADENCE.everyTurns).reverse();
 
   return {
     completedTurns,
     lastRunTurn,
     newestId: selected.at(-1)?.answerId ?? null,
-    turns: selected.map(({ task, output, toolCalls, ownerWords }) => ({ task, output, toolCalls, ownerWords })),
+    turns: selected.map(({ task, output, ownerWords }) => ({ task, output, ownerWords })),
     inputPending: newestFirst.length > 0 && newestFirst[0].role === 'user',
   };
 }
@@ -146,16 +146,9 @@ ${i.accountFacts.map(renderFactLine).join('\n') || '  (none)'}
    name, preferences, how they want answers, standing instructions to every
    agent, and the people and projects in their life. Only from "Owner's own
    words", never from a task the harness or an agent wrote, and never what is
-   only about this workspace's project. Product defects, feature requests,
-   acceptance criteria, task-local preferences and one-off corrections are
-   project/task knowledge, not account preferences or standing instructions,
-   unless the owner explicitly generalizes them across their work. Quoting
-   their real words alone does not establish global scope. "memories display
-   raw arrays; fix this" is a workspace bug/task; "when answering me, always
-   summarize project lists as chips" is a possible standing instruction.
-   Prefer no account proposal when scope is ambiguous. Account identity and
-   preferences go to "account" and are only proposed: the owner approves each
-   before it is kept. Reuse an account key when the same subject changed;
+   only about this workspace's project. When the scope is unclear, propose
+   nothing. These go to "account" and are only proposed: the owner approves
+   each before it is kept. Reuse an account key when the same subject changed;
    skip one the account already holds as is.`);
 
 const PROMPT = (i: SleepTimeInput) => `${SLEEP_TIME_PROMPT_OPENING} Between user turns, you
@@ -174,13 +167,11 @@ explain or invent; ignore greetings, acknowledgements and one-off plans. When
 a value is corrected, keep only the latest. Preserve names, numbers, paths,
 versions, dates and the original language exactly.
 
-Keep useful issue state in workspace memory: product defects, feature
-requests, acceptance criteria, task-local preferences and one-off corrections
-are project/task knowledge. They are not personal/account standing preferences
-unless the owner explicitly generalizes them across their work. A quotation
-alone does not establish that scope. Use only the labelled task and message
-texts below; tool names, raw screenshots, hidden reasoning and system input
-are not evidence for new facts.
+A defect the owner reports, a feature they ask for, its acceptance criteria and
+a one-off correction are this workspace's work, never a standing preference of
+the owner's, unless the owner says it holds across all their work. Quoting
+their words does not make it one. The labelled texts below are the only
+evidence.
 
 Recent turns (oldest first):
 ${i.turns.map(renderTurn).join('\n\n') || '(none)'}

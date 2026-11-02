@@ -13,7 +13,7 @@ import {
 import { createTestFactsStore, createJSONLLM, createScriptedLLM, createTestRuntime, present } from '@kinu.run/test-utils';
 import type { SleepTimeTurn } from '../src/memory/sleep-time-compute';
 
-const ONE_TURN = [{ task: 't', output: 'o', toolCalls: [], ownerWords: 't' }];
+const ONE_TURN = [{ task: 't', output: 'o', ownerWords: 't' }];
 
 describe('sleepTimeDue', () => {
   test('a workspace\'s first turn never runs, whatever else is true', () => {
@@ -74,8 +74,8 @@ describe('sleepTimeWindow', () => {
     expect(window.newestId).toBe('a2');
     expect(window.inputPending).toBe(false);
     expect(window.turns).toEqual([
-      { task: 'hello', output: 'first', toolCalls: [], ownerWords: 'hello' },
-      { task: 'now deploy\nalso check the tests', output: 'second', toolCalls: ['workspace.exec'], ownerWords: 'now deploy\nalso check the tests' },
+      { task: 'hello', output: 'first', ownerWords: 'hello' },
+      { task: 'now deploy\nalso check the tests', output: 'second', ownerWords: 'now deploy\nalso check the tests' },
     ]);
   });
 
@@ -123,7 +123,7 @@ describe('sleepTimeWindow', () => {
 
     const processed = new Set<string>();
     const seen: SleepTimeTurn[] = [];
-    const turnOf = (turn: number): SleepTimeTurn => ({ task: `ask ${String(turn)}`, output: `answer ${String(turn)}`, toolCalls: [], ownerWords: `ask ${String(turn)}` });
+    const turnOf = (turn: number): SleepTimeTurn => ({ task: `ask ${String(turn)}`, output: `answer ${String(turn)}`, ownerWords: `ask ${String(turn)}` });
 
     for (const [index, batch] of [[1, 2, 3], [4, 5, 6], [7, 8]].entries()) {
       const window = sleepTimeWindow(rows, (id) => processed.has(id));
@@ -151,7 +151,7 @@ describe('Sleep-time compute', () => {
     });
 
     const update = await runSleepTimeCompute(judge, {
-      turns: [{ task: 'configure deploy', output: '...', toolCalls: ['workspace.exec'], ownerWords: 'configure deploy' }],
+      turns: [{ task: 'configure deploy', output: '...', ownerWords: 'configure deploy' }],
       currentFacts: [],
     });
 
@@ -159,42 +159,21 @@ describe('Sleep-time compute', () => {
     expect(update.decay).toEqual(['stale.fact']);
   });
 
-  test('the extractor receives chronological message text without tool-call metadata', async () => {
+  test('the prompt carries every turn of the window, oldest first, each ask before its answer', async () => {
     const judge = createScriptedLLM(['{"upserts":[],"decay":[]}']);
 
     await runSleepTimeCompute(judge, {
       turns: [
-        { task: 'first ask', output: 'first answer', toolCalls: [], ownerWords: 'first ask' },
-        { task: 'second ask', output: 'second answer', toolCalls: ['workspace.exec', 'memory.save'], ownerWords: 'second ask' },
+        { task: 'first ask', output: 'first answer', ownerWords: 'first ask' },
+        { task: 'second ask', output: 'second answer', ownerWords: 'second ask' },
       ],
       currentFacts: [],
     });
 
-    const prompt = judge.prompts[0];
-    expect(prompt).toContain('first ask');
-    expect(prompt).toContain('first answer');
-    expect(prompt).toContain('second ask');
-    expect(prompt).toContain('second answer');
-    expect(prompt.indexOf('first ask')).toBeLessThan(prompt.indexOf('first answer'));
-    expect(prompt.indexOf('first answer')).toBeLessThan(prompt.indexOf('second ask'));
-    expect(prompt.indexOf('second ask')).toBeLessThan(prompt.indexOf('second answer'));
-    expect(prompt).not.toContain('workspace.exec');
-    expect(prompt).not.toContain('memory.save');
-  });
+    const prompt = present(judge.prompts[0], 'the pass prompt');
+    const at = ['first ask', 'first answer', 'second ask', 'second answer'].map((said) => prompt.indexOf(said));
 
-  test('tool names in legitimate owner and assistant prose remain message evidence', async () => {
-    const judge = createScriptedLLM(['{"upserts":[],"decay":[]}']);
-    const task = 'Use workspace.exec to inspect the build';
-    const output = 'workspace.exec found the build; memory.save kept the decision';
-
-    await runSleepTimeCompute(judge, {
-      turns: [{ task, output, toolCalls: ['workspace.exec', 'memory.save', 'web.search'], ownerWords: task }],
-      currentFacts: [],
-    });
-
-    expect(judge.prompts[0]).toContain(task);
-    expect(judge.prompts[0]).toContain(output);
-    expect(judge.prompts[0]).not.toContain('web.search');
+    expect(at.every((index, position) => index >= 0 && (position === 0 || index > (at[position - 1] ?? 0)))).toBe(true);
   });
 
   test('prompt explicitly lists existing keys for exact reuse', async () => {
@@ -397,43 +376,29 @@ describe('an idle wake dreams first', () => {
     expect(order).toEqual(['dream', 'facts']);
   });
 
-  test('persisted backlog markers survive reopening without dropping or repeating messages', async () => {
+  test("a backlog past one batch drains on the lane's own wakes, across reopening, each turn read once and oldest first", async () => {
     const fixture = lane(8);
 
-    // Each terminal pass is explicitly invoked: this does not assert an automatic drain schedule.
+    // The settled turn's pass reads the first batch; the backlog left keeps the lane's wake armed, and each wake the next.
     await fixture.lane.runTerminal();
-    await fixture.reopen().runTerminal();
-    const remainder = fixture.reopen();
-    await remainder.runTerminal();
-    expect(fixture.order).toEqual(['facts', 'facts']);
-    expect(await remainder.runIfDue(Date.now() + SLEEP_TIME_CADENCE.idleMs + 1_000)).toBe(true);
-    expect(fixture.order).toEqual(['facts', 'facts', 'dream', 'facts']);
 
-    for (const [index, batch] of [[1, 2, 3], [4, 5, 6], [7, 8]].entries()) {
-      const prompt = present(fixture.prompts[index], 'the persisted backlog pass');
+    for (let pass = 0; pass < 2; pass++) {
+      const owed = fixture.reopen();
 
-      for (let turn = 1; turn <= 8; turn++) {
-        if (batch.includes(turn)) {
-          expect(prompt).toContain(`step ${String(turn)}`);
-          expect(prompt).toContain(`answer ${String(turn)}`);
-        } else {
-          expect(prompt).not.toContain(`step ${String(turn)}`);
-          expect(prompt).not.toContain(`answer ${String(turn)}`);
-        }
-      }
-
-      for (const [position, turn] of batch.entries()) {
-        expect(prompt.indexOf(`step ${String(turn)}`)).toBeLessThan(prompt.indexOf(`answer ${String(turn)}`));
-
-        if (position > 0) expect(prompt.indexOf(`answer ${String(batch[position - 1])}`)).toBeLessThan(prompt.indexOf(`step ${String(turn)}`));
-      }
+      await owed.wake(present(owed.nextWakeAt(), 'the wake a backlog keeps armed') + 1_000);
     }
 
-    const done = fixture.reopen();
-    await done.runTerminal();
-    expect(done.nextWakeAt()).toBeNull();
-    expect(await done.runIfDue(Date.now() + SLEEP_TIME_CADENCE.idleMs * 2)).toBe(false);
-    expect(fixture.prompts).toHaveLength(3);
+    const read = [[1, 2, 3], [4, 5, 6], [7, 8]].map((batch, index) => {
+      const prompt = present(fixture.prompts[index], 'a backlog pass');
+      const said = Array.from({ length: 8 }, (_, at) => at + 1).filter((turn) => prompt.includes(`step ${String(turn)}`) && prompt.includes(`answer ${String(turn)}`));
+      const ordered = batch.every((turn, position) => position === 0 || prompt.indexOf(`answer ${String(batch[position - 1])}`) < prompt.indexOf(`step ${String(turn)}`));
+
+      return { said, ordered };
+    });
+
+    expect({ read, wake: fixture.reopen().nextWakeAt(), passes: fixture.prompts.length }).toEqual({
+      read: [{ said: [1, 2, 3], ordered: true }, { said: [4, 5, 6], ordered: true }, { said: [7, 8], ordered: true }], wake: null, passes: 3,
+    });
   });
 
   test('an idle wake refuses pending input and includes it only after its answer completes', async () => {
