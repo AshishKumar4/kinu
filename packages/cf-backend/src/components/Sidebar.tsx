@@ -179,23 +179,24 @@ export default function Sidebar({ onCollapse, accountOpen = false }: { onCollaps
 
             return (
               <li key={a.name}>
-                <div className="group relative mx-2">
+                <div className="group p-sidebar-row mx-2" data-actions="2">
                   {editing ? (
                     <WorkspaceRenameEditor workspace={a} onSaved={(displayName) => { renameWorkspace(a.name, displayName); }}
                       onDone={() => setEditingWorkspace(null)} />
                   ) : (
                     <>
-                      <NavRow to={`/workspace/${a.name}`} current={pathname === `/workspace/${a.name}` && panel === null} {...wakeAheadOf(a.name)}
-                        className="pr-12 lg:pr-3 lg:group-hover:pr-12 lg:group-focus-within:pr-12">
+                      <NavRow to={`/workspace/${a.name}`} current={pathname === `/workspace/${a.name}` && panel === null} {...wakeAheadOf(a.name)}>
                         <span className="relative flex shrink-0">
                           <WorkspaceLogo title={shown} logo={a.logo} />
                           <span className="p-logo-badge"><WorkspaceDot entry={a} /></span>
                         </span>
                         <span className={`t-label min-w-0 flex-1 truncate ${isPlaceholderWorkspaceTitle(a.displayName, a.name) ? `italic ${isActive ? '' : 'p-text-3'}` : ''}`}>{shown}</span>
-                        {age && <span className="t-meta w-8 shrink-0 text-right tabular-nums p-text-3 opacity-0 transition-opacity lg:opacity-100 lg:group-hover:opacity-0 lg:group-focus-within:opacity-0">{age}</span>}
+                        {age && <span className="p-sidebar-age t-meta w-8 shrink-0 text-right tabular-nums p-text-3">{age}</span>}
                       </NavRow>
-                      <Button variant="ghost" size="sm" icon={<PencilSimpleIcon size={14} />} className="absolute right-6 top-1/2 -translate-y-1/2 opacity-60 transition-opacity focus-visible:opacity-100 lg:opacity-0 lg:group-hover:opacity-70" onClick={() => setEditingWorkspace(a.name)} title="Rename" aria-label={`Rename workspace ${shown}`} />
-                      <Button variant="danger" size="sm" icon={<TrashIcon size={14} />} className="absolute right-1 top-1/2 -translate-y-1/2 opacity-60 transition-opacity focus-visible:opacity-100 lg:opacity-0 lg:group-hover:opacity-70" onClick={() => setDeleteTarget(a)} title="Remove" aria-label={`Remove workspace ${shown}`} />
+                      <div className="p-sidebar-actions">
+                        <Button variant="ghost" size="sm" icon={<PencilSimpleIcon size={14} />} onClick={() => setEditingWorkspace(a.name)} title="Rename" aria-label={`Rename workspace ${shown}`} />
+                        <Button variant="danger" size="sm" icon={<TrashIcon size={14} />} onClick={() => setDeleteTarget(a)} title="Remove" aria-label={`Remove workspace ${shown}`} />
+                      </div>
                     </>
                   )}
                 </div>
@@ -257,22 +258,21 @@ function WorkspaceChats({ panel, trigger, onAgents }: { panel: WorkspaceAgentsPa
 function ChatRow({ chat, panel, onRename }: { chat: PanelAgent; panel: WorkspaceAgentsPanel; onRename: () => void }) {
   const { remove, clears = false } = panel.actions(chat);
   const look = useMascotOf(panel.workspace)(chat.key, chat.colour);
-  const reveal = "opacity-60 transition-opacity focus-visible:opacity-100 lg:opacity-0 lg:group-hover/chat:opacity-70 lg:group-focus-within/chat:opacity-70";
 
   return (
-    <div className="group/chat relative">
+    <div className="group/chat p-sidebar-row" data-actions={remove ? "2" : "1"}>
       <NavRowButton size="sm" current={panel.shown === chat.key} onClick={() => panel.open(chat)} data-workspace-chat={chat.key} data-status={chat.activity}
-        aria-current={panel.shown === chat.key ? "page" : undefined}
-        className={`p-halo relative ${remove ? "pr-12 lg:pr-3 lg:group-hover/chat:pr-12 lg:group-focus-within/chat:pr-12" : "pr-8 lg:pr-3 lg:group-hover/chat:pr-8 lg:group-focus-within/chat:pr-8"}`}>
+        aria-current={panel.shown === chat.key ? "page" : undefined} className="p-halo relative">
         <ChatMascot seed={look.seed} colour={look.colour} activity={chat.activity} />
         <span className="t-body p-status-label min-w-0 flex-1 truncate">{chat.label}</span>
       </NavRowButton>
-      <Button variant="ghost" size="sm" icon={<PencilSimpleIcon size={14} />} onClick={onRename} title="Rename" aria-label={`Rename chat ${chat.label}`}
-        className={`absolute top-1/2 -translate-y-1/2 ${remove ? "right-6" : "right-1"} ${reveal}`} />
-      {remove && (
-        <Button variant="danger" size="sm" icon={clears ? <EraserIcon size={14} /> : <TrashIcon size={14} />} onClick={remove} title={clears ? "Clear" : "Delete"}
-          aria-label={`${clears ? "Clear" : "Delete"} chat ${chat.label}`} className={`absolute right-1 top-1/2 -translate-y-1/2 ${reveal}`} />
-      )}
+      <div className="p-sidebar-actions">
+        <Button variant="ghost" size="sm" icon={<PencilSimpleIcon size={14} />} onClick={onRename} title="Rename" aria-label={`Rename chat ${chat.label}`} />
+        {remove && (
+          <Button variant="danger" size="sm" icon={clears ? <EraserIcon size={14} /> : <TrashIcon size={14} />} onClick={remove} title={clears ? "Clear" : "Delete"}
+            aria-label={`${clears ? "Clear" : "Delete"} chat ${chat.label}`} />
+        )}
+      </div>
     </div>
   );
 }

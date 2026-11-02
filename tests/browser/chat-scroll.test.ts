@@ -31,6 +31,10 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { evidenceDir } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
@@ -939,4 +943,179 @@ describe('a long workspace chat, as the reader sees it', () => {
     expect(drag.filter((frame) => frame.scrollTop !== 0)).toEqual([]);
     expect(drag.at(-1)).toMatchObject({ atStart: true, realInView: true });
   });
+});
+
+const COMPOSER_FIELD = '[data-composer-field]';
+
+const COMPOSER_ROOT = '[data-composer-root]';
+
+const COMPOSER_SHOTS = evidenceDir('chat-scroll-composer');
+
+const READING_MESSAGE = 'tall-2';
+
+/** Measure the last text line, not its row's timestamp or trailing padding. */
+async function composerPosition(page: Page, shot: string) {
+  await nextPaint(page);
+  await page.screenshot({ path: join(COMPOSER_SHOTS, shot) });
+
+  return page.$eval(LONG, (scroller, readingId: string) => {
+    const viewport = scroller.getBoundingClientRect();
+    const said = [...scroller.querySelectorAll('[data-said]')].at(-1);
+
+    if (said === undefined) throw new Error('the real transcript has no last assistant text');
+    const walker = document.createTreeWalker(said, NodeFilter.SHOW_TEXT);
+    let last: Node | null = null;
+    let next = walker.nextNode();
+
+    while (next !== null) {
+      if ((next.textContent ?? '').trim() !== '') last = next;
+      next = walker.nextNode();
+    }
+
+    const range = document.createRange();
+
+    if (last === null) throw new Error('the last assistant text is empty');
+    range.selectNodeContents(last);
+    const line = [...range.getClientRects()].at(-1);
+
+    if (line === undefined) throw new Error('the last transcript line has no rendered bounds');
+    const marker = scroller.querySelector('[data-revert-turn="' + readingId + '"]');
+    let row: Element | null = marker;
+
+    while (row !== null && row.parentElement !== scroller) row = row.parentElement;
+
+    return {
+      mode: document.documentElement.dataset.mode,
+      clientHeight: scroller.clientHeight,
+      scrollHeight: scroller.scrollHeight,
+      scrollTop: scroller.scrollTop,
+      bottomDistance: scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop,
+      lastLineTop: line.top - viewport.top,
+      lastLineBottom: line.bottom - viewport.top,
+      lastLineGap: viewport.bottom - line.bottom,
+      anchorId: marker?.getAttribute('data-revert-turn') ?? null,
+      anchorTop: row === null ? null : row.getBoundingClientRect().top - viewport.top,
+    };
+  }, READING_MESSAGE);
+}
+
+describe('composer resize preserves the transcript position', () => {
+  for (const width of [1280, 390]) {
+    for (const mode of ['light', 'dark'] as const) {
+      for (const position of ['pinned', 'reading'] as const) {
+        test('composer growth, shrink and attachments: ' + width + 'px ' + mode + ' ' + position, async () => {
+          await withGallery(async ({ newPage, origin }) => {
+            const page = await openLong(async () => {
+              const fresh = await newPage();
+
+              await fresh.evaluateOnNewDocument((theme) => { localStorage.setItem('theme', theme); }, mode);
+
+              return fresh;
+            }, origin, 'tallTail=1');
+
+            const files = mkdtempSync(join(tmpdir(), 'kinu-composer-resize-'));
+            const filename = 'composer-resize.csv';
+            const prefix = 'composer-' + String(width) + '-' + mode + '-' + position;
+
+            try {
+              mkdirSync(COMPOSER_SHOTS, { recursive: true });
+              await page.setViewport({ width, height: 860 });
+              await page.waitForSelector(COMPOSER_FIELD, { visible: true });
+              await nextPaint(page);
+              await page.$eval(LONG, (scroller, reading: boolean, id: string) => {
+                if (!reading) {
+                  scroller.scrollTop = scroller.scrollHeight;
+
+                  return;
+                }
+
+                const marker = scroller.querySelector('[data-revert-turn="' + id + '"]');
+                let row: Element | null = marker;
+
+                while (row !== null && row.parentElement !== scroller) row = row.parentElement;
+
+                if (row === null) throw new Error('the real reading message is missing: ' + id);
+                scroller.scrollTop += row.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 20;
+              }, position === 'reading', READING_MESSAGE);
+
+              const empty = await composerPosition(page, prefix + '-00-empty.png');
+
+              await page.type(COMPOSER_FIELD, 'Draft line 1');
+              const short = await composerPosition(page, prefix + '-01-short.png');
+
+              for (let line = 2; line <= 7; line++) {
+                await page.keyboard.down('Shift');
+                await page.keyboard.press('Enter');
+                await page.keyboard.up('Shift');
+                await page.keyboard.type('Draft line ' + String(line));
+              }
+
+              const multiline = await composerPosition(page, prefix + '-02-multiline.png');
+
+              await page.focus(COMPOSER_FIELD);
+              await page.keyboard.down('Control');
+              await page.keyboard.press('KeyA');
+              await page.keyboard.up('Control');
+              await page.keyboard.press('Backspace');
+              const cleared = await composerPosition(page, prefix + '-03-cleared.png');
+
+              const input = await page.$(COMPOSER_ROOT + ' input[type="file"]');
+
+              if (input === null) throw new Error('the real workspace composer has no attachment input');
+              await Bun.write(join(files, filename), 'route,total\n/api/health,20\n');
+              await input.uploadFile(join(files, filename));
+              const remove = COMPOSER_ROOT + ' button[aria-label="Remove ' + filename + '"]';
+
+              await page.waitForSelector(remove, { visible: true });
+              await page.waitForFunction((root, name) => (document.querySelector(root + ' [data-attachments]')?.textContent ?? '').includes(name), {}, COMPOSER_ROOT, filename);
+              const attached = await composerPosition(page, prefix + '-04-attached.png');
+
+              await page.click(remove);
+              await page.waitForSelector(remove, { hidden: true });
+              const removed = await composerPosition(page, prefix + '-05-removed.png');
+              const states = { empty, short, multiline, cleared, attached, removed };
+
+              console.info(prefix + ': ' + JSON.stringify(states));
+              // All six photographs are kept before a failing assertion can end this scenario.
+              expect(empty.scrollHeight).toBeGreaterThan(empty.clientHeight);
+
+              if (position === 'reading') {
+                expect(empty.anchorTop).not.toBeNull();
+                expect(empty.anchorTop ?? -Infinity).toBeGreaterThanOrEqual(0);
+                expect(empty.anchorTop ?? Infinity).toBeLessThan(empty.clientHeight);
+              }
+
+              expect(multiline.clientHeight).toBeLessThan(short.clientHeight);
+              expect(cleared.clientHeight).toBeGreaterThan(multiline.clientHeight);
+              expect(Math.abs(cleared.clientHeight - empty.clientHeight)).toBeLessThanOrEqual(1);
+              expect(attached.clientHeight).toBeLessThan(cleared.clientHeight);
+              expect(removed.clientHeight).toBeGreaterThan(attached.clientHeight);
+              expect(Math.abs(removed.clientHeight - cleared.clientHeight)).toBeLessThanOrEqual(1);
+
+              for (const [stage, state] of Object.entries(states)) {
+                const context = prefix + ' ' + stage + ': ' + JSON.stringify(state);
+
+                expect(state.mode, context).toBe(mode);
+
+                if (position === 'pinned') {
+                  expect(Math.abs(state.bottomDistance), context).toBeLessThanOrEqual(1);
+                  expect(state.lastLineTop, context).toBeGreaterThanOrEqual(0);
+                  expect(state.lastLineBottom, context).toBeLessThanOrEqual(state.clientHeight + 1);
+                  expect(Math.abs(state.lastLineGap - empty.lastLineGap), context).toBeLessThanOrEqual(1);
+                } else {
+                  expect(state.anchorId, context).toBe(READING_MESSAGE);
+                  expect(state.anchorTop, context).not.toBeNull();
+                  expect(Math.abs((state.anchorTop ?? Infinity) - (empty.anchorTop ?? -Infinity)), context).toBeLessThanOrEqual(1);
+                  expect(state.bottomDistance, context).toBeGreaterThan(40);
+                }
+              }
+            } finally {
+              await page.close();
+              rmSync(files, { recursive: true, force: true });
+            }
+          });
+        });
+      }
+    }
+  }
 });

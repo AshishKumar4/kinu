@@ -24,7 +24,6 @@ import { useMascotOf } from "@/hooks/use-chat-mascot";
 import { MAIL_ROW, mailTime } from "@/components/mail/ImportantMailRow";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource, type AsyncResource } from "@/hooks/use-async-resource";
-import * as v from "valibot";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import type { OrchestratorAgent } from "@/orchestrator";
 import { Group } from "@/components/ui/Group";
@@ -33,6 +32,7 @@ import { Chip } from "@/components/ui/Chip";
 import { Surface } from "@/components/ui/Surface";
 import { PressableLink } from "@/components/ui/Pressable";
 import { TextInput } from "@/components/ui/Field";
+import { MemoryFact } from "@/components/MemoryFact";
 
 type Fact = Awaited<ReturnType<OrchestratorAgent["getFacts"]>>[number];
 
@@ -208,9 +208,8 @@ function Knows({ read, memory, memoryContent, onSearchMemory, facts, factsResour
               {facts.map((fact) => (
                 <div key={fact.key} className="group/fact flex items-start gap-3 px-3 py-2" data-world-model-fact={fact.key}>
                   <div className="min-w-0 flex-1">
-                    <p className="t-body line-clamp-2 p-text">{v.is(v.string(), fact.value) ? fact.value : JSON.stringify(fact.value)}</p>
+                    <MemoryFact factKey={fact.key} value={fact.value} />
                     <p className="t-meta mt-px flex flex-wrap items-center gap-x-2 p-text-3">
-                      <span className="font-mono">{fact.key}</span>
                       {fact.confidence < 1 && <span className="tabular-nums">{(fact.confidence * 100).toFixed(0)}% sure</span>}
                       {fact.source !== "" && <span>from {fact.source}</span>}
                       <span>{timeAgo(fact.lastObservedAt)}</span>

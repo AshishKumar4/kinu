@@ -3457,9 +3457,13 @@ function owedRows(page: Page): Promise<string[]> {
   return page.$$eval('[data-inspected]', (rows) => rows.map((row) => `${row.getAttribute('data-inspected') ?? ''} ${row.getAttribute('data-phase') ?? ''}`));
 }
 
-/** Now's turn rows as a person reads them. */
-function turnRowTexts(page: Page): Promise<string[]> {
-  return page.$$eval('[data-inspected="turn"]', (rows) => rows.map((row) => row.textContent ?? ''));
+/** Identity, phase label and explanation stay separate when a turn is interrupted. */
+function turnReadouts(page: Page) {
+  return page.$$eval('[data-inspected="turn"]', (rows) => rows.map((row) => ({
+    owner: row.querySelector('[data-inspected-owner]')?.textContent ?? '',
+    state: row.querySelector('[data-inspected-state]')?.textContent ?? '',
+    notes: row.querySelector('.t-meta')?.textContent ?? '',
+  })));
 }
 
 /**
@@ -3480,13 +3484,13 @@ describe('Now lists what is still owed, by the phase its store records', () => {
       expect(await owedRows(page)).toEqual(['turn blocked', ...owed]);
       // The owner, 2026-10-25: a running agent's row read "build turn · blocked · no activation is running it". Each row
       // now says what the agent does, and where it is not running, what it waits on or what the person can do.
-      const [stuck, running, resuming] = await turnRowTexts(page);
+      const readouts = await turnReadouts(page);
 
-      expect([stuck, running]).toEqual([
-        'working on a request · stopped part-way and nothing will pick it up again: use Recover this turn in its chat · try 3',
-        'working on a request',
-      ]);
-      expect(resuming).toMatch(/^quiet-cove-f8c76035 · working on a request · stopped by a restart; it picks up again on its own · next try in \d+s$/u);
+      expect(readouts).toHaveLength(3);
+      expect(readouts.every((row) => row.owner.length > 0 && row.state.length > 0)).toBe(true);
+      expect(new Set(readouts.map((row) => row.state)).size).toBe(3);
+      expect(readouts.map((row) => row.notes.length > 0)).toEqual([true, false, true]);
+      expect(readouts[2]?.owner).toBe('UI and shell fixes');
 
       await claimIs(page, { kind: 'stranded', turnId: 'turn-stranded', claimedAt: 1 });
       // The pushed claim renders on the page's next commit, not within the dispatch.

@@ -18,7 +18,7 @@ export function WorkLabel({ live, failed = false, children }: { live: boolean; f
   return (
     <span className="flex min-w-0 items-center gap-2">
       <Dot tone={failed ? "danger" : "accent"} pulse={live} />
-      <span className={`t-item min-w-0 truncate${live ? " p-shimmer" : ""}`}>{children}</span>
+      <span className={`t-item p-chat-work-label min-w-0 truncate${live ? " p-shimmer" : ""}`} data-failed={failed ? '' : undefined}>{children}</span>
     </span>
   );
 }
@@ -154,7 +154,7 @@ export function ChatDisclosure({ label, after, live, failed = false, folded, fol
   else if (!open && folded === "hidden") shown = "hidden";
 
   return (
-    <div ref={root} className="t-body py-px p-text-3" {...data}>
+    <div ref={root} className="t-body p-chat-disclosure py-px" {...data}>
       {/* The whole line is the control, its chevron turning as it opens: a quiet mark, as a tool row's is. */}
       <Pressable className="group/disclosure flex items-center gap-2" onClick={() => setOpen(!open)} disabled={!canOpen} aria-expanded={canOpen ? open : undefined}>
         <span className="min-w-0" data-disclosure-label {...(live && liveIndicator !== undefined ? { "data-live-indicator": liveIndicator } : {})}>

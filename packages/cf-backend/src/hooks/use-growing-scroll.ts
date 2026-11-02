@@ -328,6 +328,7 @@ export function useGrowingScroll({
     // A test's host is no DOM element and has no rows to observe.
     if (grows === "up" && "Element" in globalThis && node instanceof Element) {
       const resize = new ResizeObserver(() => { hold(node); });
+      resize.observe(node);
 
       const rows = new MutationObserver((changes) => {
         for (const change of changes) {

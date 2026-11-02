@@ -1,6 +1,6 @@
 /** Background jobs (auto-detached >30s tool calls) as Work cards, with cancel, retry and dismiss. */
 import { Effect } from 'effect';
-import { useState, useCallback } from "react";
+import { useState, useCallback, type ReactNode } from "react";
 import { Button } from "@/components/ui/Button";
 import {
   XCircleIcon, ArrowClockwiseIcon, TrashIcon, CheckCircleIcon,
@@ -63,24 +63,32 @@ function timeUntil(ms: number): string {
   return `in ${Math.ceil(seconds / 60)}m`;
 }
 
-/** What the row's phase says to a person, beside what it is; a running row says nothing more. */
-const PHASE_WORDS: Readonly<Record<InspectedWork["phase"], string | null>> = { running: null, waiting: "waiting", blocked: "stuck" };
+const PHASE_WORDS: Readonly<Record<InspectedWork["phase"], string>> = { running: 'Running', waiting: 'Waiting', blocked: 'Blocked' };
 
 /** A turn or effect still owed, as its own store records it: what it is, how it stands, and why or until when. */
 
-export function InspectedRow({ work, now }: { work: InspectedWork; now: number }) {
+export function InspectedRow({ work, now, owner }: { work: InspectedWork; now: number; owner: ReactNode }) {
+  let state = PHASE_WORDS[work.phase];
+
+  if (work.kind === 'turn' && work.phase === 'waiting') state = 'Interrupted';
+
+  if (work.kind === 'turn' && work.phase === 'blocked') state = 'Needs recovery';
+  let retry: string | null = null;
+
+  if (work.until !== null) retry = work.until > now ? `retry scheduled ${timeUntil(work.until - now)}` : 'retry is due; waiting to resume';
+
   const notes = [
-    work.why ?? PHASE_WORDS[work.phase],
+    work.why,
     work.attempt !== null && work.attempt > 1 ? `try ${String(work.attempt)}` : null,
-    work.until !== null && work.until > now ? `next try ${timeUntil(work.until - now)}` : null,
+    retry,
+    work.kind === 'turn' && work.phase === 'waiting' ? 'No action needed from you.' : null,
   ].filter((note) => note !== null);
 
   return (
-    <div className="flex items-start gap-2 py-1" data-inspected={work.kind} data-phase={work.phase}>
-      <span className="t-body">
-        {work.actor === null ? work.label : `${work.actor} · ${work.label}`}
-        {notes.length > 0 && <span className="p-text-3"> · {notes.join(" · ")}</span>}
-      </span>
+    <div className="min-w-0 space-y-1 py-1" data-inspected={work.kind} data-phase={work.phase}>
+      <div className="t-label wrap-anywhere" data-inspected-owner>{owner}</div>
+      <div className="t-body p-text-2">{work.label} · <span data-inspected-state>{state}</span></div>
+      {notes.length > 0 && <div className="t-meta p-text-3 wrap-anywhere">{notes.join(' · ')}</div>}
     </div>
   );
 }

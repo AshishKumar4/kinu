@@ -706,6 +706,24 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-nav-row:hover { background: color-mix(in srgb, var(--c-text) 6%, transparent); color: var(--c-text); }
 .p-nav-row[data-current] { background: var(--c-selected); color: var(--c-accent-fg); }
 
+/* A sidebar row's rename and delete (Sidebar.tsx): one group over the row's right end, 28 px buttons 4 px apart, and
+   the row's name ending before the group while it shows: always at a touch, on hover or focus with a pointer. */
+.p-sidebar-row { position: relative; --sidebar-actions-room: calc(var(--sidebar-actions) * 32px + 4px); }
+.p-sidebar-row[data-actions="1"] { --sidebar-actions: 1; }
+.p-sidebar-row[data-actions="2"] { --sidebar-actions: 2; }
+.p-sidebar-actions { position: absolute; top: 50%; right: 4px; translate: 0 -50%; display: flex; align-items: center; gap: 4px; }
+.p-sidebar-actions > .p-button { opacity: 0.6; }
+.p-sidebar-row > .p-nav-row { padding-right: var(--sidebar-actions-room); }
+.p-sidebar-age { display: none; }
+@media (min-width: 64rem) {
+  .p-sidebar-row:not(:hover, :focus-within) > .p-nav-row { padding-right: 12px; }
+  .p-sidebar-age { display: block; }
+  .p-sidebar-actions > .p-button { opacity: 0; pointer-events: none; }
+  .p-sidebar-row:is(:hover, :focus-within) .p-sidebar-age { display: none; }
+  .p-sidebar-row:is(:hover, :focus-within) .p-sidebar-actions > .p-button { opacity: 0.7; pointer-events: auto; }
+}
+.p-sidebar-actions > .p-button:focus-visible { opacity: 1; }
+
 /* Covers (ui/Covers.tsx): a kind's glyph at the cover's size; a page set into its frame as a sheet of paper is. */
 .p-cover-glyph > svg { width: 34px; height: 34px; }
 .p-page-cover { padding: 5% 14% 0; }
@@ -866,6 +884,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 /* An answer's slate frame (slates/InlineSlate.tsx): in its fold at the card radius, its height easing; in the work
    surface's pane, the page's ground edge to edge. */
 .p-slate-frame { display: block; width: 100%; border: 0; border-radius: var(--r-card); transition: height var(--dur-fold) var(--ease-out-strong); }
+.p-slate-frame:is([data-slate-drawn="page"], [data-slate-drawn="streaming"]) { border-radius: 0; }
 .p-slate-frame[data-pane] { flex: 1 1 0%; min-height: 0; border-radius: 0; background: var(--c-bg); transition: none; }
 [data-fold-still] :is(.p-fold, .p-fold-turn) { transition: none; }
 @media (prefers-reduced-motion: reduce) {
@@ -1623,6 +1642,11 @@ body { background: var(--c-bg); color: var(--c-text); }
   animation: p-shimmer 1.8s linear infinite;
 }
 
+.prose-chat.p-assistant-prose { color: var(--c-text); }
+.p-chat-disclosure, .p-chat-disclosure .prose-thinking, .p-chat-work-label, .p-chat-tool-label, .p-chat-tool-summary { color: var(--c-text-2); }
+.p-chat-work-label.p-shimmer { background-image: linear-gradient(90deg, var(--c-text-3), var(--c-text-2), var(--c-text-3)); color: transparent; }
+.p-chat-work-label[data-failed], .p-chat-tool-label[data-failed] { color: var(--c-danger); }
+
 /* Streaming reasoning-text shimmer — while a reasoning part is live, the
    thinking text itself carries the light wave, not only the "Thinking"
    label. Text-clipped like .p-shimmer with a slower sweep so the words stay
@@ -2203,6 +2227,9 @@ body > .annotation-toolbar {
 .p-diff { font-variant-ligatures: none; }
 /* A terminal's inset is xterm's padding, which its fit subtracts from the room the host gives it (TerminalPane.tsx). */
 .p-terminal-host > .xterm { padding: 8px 0 0 16px; }
+/* xterm.css paints its viewport black across the inset, and loads after this sheet: the host's ground, the terminal's
+   own, shows there instead. */
+.p-terminal-host .xterm .xterm-viewport { background-color: transparent; }
 .p-terminal-host[data-on-ground] > .xterm { padding-top: 4px; }
 /* An answer's slate open in the chat: its tools float over its top right on the tile. */
 .p-slate-tools { border-radius: var(--r-inner); background: var(--c-fill); }

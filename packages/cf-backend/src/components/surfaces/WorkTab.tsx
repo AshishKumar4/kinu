@@ -3,7 +3,7 @@
  * decided twice: a parked command or a proposal in the chat's attention stack, a plan on its own page.
  * `listPendingActions` is host-owned and never a slate data source.
  */
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, type ReactNode } from "react";
 import { Badge } from "@/components/ui/Badge";
 import { Loader } from "@/components/ui/Loader";
 import {
@@ -11,7 +11,7 @@ import {
   CaretRightIcon, ShieldWarningIcon,
   NotePencilIcon,
 } from "@phosphor-icons/react";
-import { hasWorkspaceWork, jobPhase, taskTreePhase, timeAgo, type InspectedWork } from "@kinu.run/core";
+import { hasWorkspaceWork, jobPhase, taskTreePhase, timeAgo, workspaceDisplayTitle, type InspectedWork } from "@kinu.run/core";
 import type { AgentTaskTree, OwnedPlan, PanelAgent, PendingAction, PendingActionKind, PlanPageRef, WorkspaceWork, WorkspaceWorkOwner } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -26,6 +26,8 @@ import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Group } from "@/components/ui/Group";
 import { Pressable } from "@/components/ui/Pressable";
 import { Surface } from "@/components/ui/Surface";
+import { InlineAction } from "@/components/ui/InlineAction";
+import { useWorkspaceRosterIfAny } from "@/hooks/use-workspace-roster";
 
 /** Kinds the attention stack decides: their rows open its card. */
 const STACKED: ReadonlySet<PendingActionKind> = new Set(["deferred_action"]);
@@ -43,6 +45,7 @@ const PENDING_ICON = {
 } satisfies Record<PendingActionKind, typeof ClockIcon>;
 
 interface WorkTabProps {
+  workspace?: string;
   onReviewActor?: (name: string, actorId?: string) => void | Promise<void>;
   /** The column's one read of plans and tasks. */
   work: WorkspaceWorkRead;
@@ -61,10 +64,11 @@ interface WorkTabProps {
 }
 
 export function WorkTab({
-  onReviewActor, work: read, onOpenPlan, pendingActions, backgroundJobs, inspectedWork, onRefreshJobs, onOpenSurface, onOpenAsk, rpc, agents,
+  workspace, onReviewActor, work: read, onOpenPlan, pendingActions, backgroundJobs, inspectedWork, onRefreshJobs, onOpenSurface, onOpenAsk, rpc, agents,
 }: WorkTabProps) {
   const openPlan = useCallback((item: OwnedPlan) => onOpenPlan({ owner: item.owner.name, id: item.plan.id, revision: item.plan.revision }), [onOpenPlan]);
   const { work, resource: taskResource, reload: reloadTasks } = read;
+  const roster = useWorkspaceRosterIfAny();
 
   const taskRows = useMemo(() => {
     const rows = (groups: readonly { owner: WorkspaceWorkOwner; tasks: AgentTaskTree[] }[]) =>
@@ -80,6 +84,30 @@ export function WorkTab({
   const settledJobs = backgroundJobs.filter((job) => jobPhase(job, Date.now()) === "settled");
 
   const journal = useMemo(() => buildJournal(settledJobs, closedTasks), [settledJobs, closedTasks]);
+
+  const ownerFor = (owed: InspectedWork): ReactNode => {
+    const root = owed.actor === null || owed.actor === workspace;
+
+    const agent = agents?.list.find((item) => root ? item.category === 'main'
+      : item.key === owed.actor || item.actorId === owed.actor || (item.open.kind === 'chat' && item.open.path === owed.actor));
+
+    const owner = [...(work?.tasks ?? []), ...(work?.plans ?? [])].find((item) => root
+      ? item.owner.path?.length === 0 : item.owner.name === owed.actor || item.owner.actorId === owed.actor)?.owner;
+
+    const entry = roster?.entries.find((item) => item.name === (root ? workspace ?? owner?.name : owed.actor));
+
+    const title = entry === undefined ? agent?.label ?? owner?.title ?? (root ? 'This workspace' : owed.actor ?? 'Agent') : workspaceDisplayTitle(entry);
+    const label = <span title={owed.actor ?? workspace}>{title}{entry !== undefined && agent !== undefined && agent.label !== title ? ` · ${agent.label}` : ''}</span>;
+
+    if (agent !== undefined && agents !== undefined) return <InlineAction onClick={() => agents.open(agent)}>{label}</InlineAction>;
+    const path = owner?.path;
+
+    if (owner !== undefined && path !== null && path !== undefined && path.length > 0 && onReviewActor !== undefined) {
+      return <InlineAction onClick={() => void onReviewActor(path.join('/'), owner.actorId)}>{label}</InlineAction>;
+    }
+
+    return label;
+  };
 
   const nothingAtAll = work !== null && !hasWorkspaceWork({
     work, pending: pendingActions, jobs: backgroundJobs, changes: [], notes: [], owed: inspectedWork,
@@ -98,7 +126,7 @@ export function WorkTab({
     <div className="space-y-6 animate-fade-in">
       <WorkPlans work={work} onOpen={openPlan} />
       <NeedsYou pendingActions={pendingActions} onOpenAsk={onOpenAsk} onOpenSurface={onOpenSurface} onOpenPlan={onOpenPlan} />
-      <WorkNow work={work} taskRows={taskRows} openTasks={openTasks} inspected={inspectedWork} runningJobs={runningJobs} subagents={subagents} onOpenSubagent={agents?.open} resource={taskResource} onRetry={reloadTasks} onRefreshJobs={onRefreshJobs} onOpenOwner={onReviewActor} rpc={rpc} />
+      <WorkNow work={work} taskRows={taskRows} openTasks={openTasks} ownerFor={ownerFor} inspected={inspectedWork} runningJobs={runningJobs} subagents={subagents} onOpenSubagent={agents?.open} resource={taskResource} onRetry={reloadTasks} onRefreshJobs={onRefreshJobs} onOpenOwner={onReviewActor} rpc={rpc} />
       <WorkJournal journal={journal} rpc={rpc} onRefreshJobs={onRefreshJobs} onOpenOwner={onReviewActor} />
     </div>
   );
@@ -142,10 +170,11 @@ interface WorkTaskRow {
 }
 
 /** The read's tri-state gates only the work half, so a running job never waits behind the plan's spinner. */
-function WorkNow({ work, taskRows, openTasks, inspected, runningJobs, subagents, onOpenSubagent, resource, onRetry, onRefreshJobs, onOpenOwner, rpc }: {
+function WorkNow({ work, taskRows, openTasks, ownerFor, inspected, runningJobs, subagents, onOpenSubagent, resource, onRetry, onRefreshJobs, onOpenOwner, rpc }: {
   work: WorkspaceWork | null;
   taskRows: WorkTaskRow[];
   openTasks: WorkTaskRow[];
+  ownerFor: (work: InspectedWork) => ReactNode;
   /** Turns and effects still owed, by their recorded phase. */
   inspected: readonly InspectedWork[];
   runningJobs: BackgroundJob[];
@@ -172,7 +201,7 @@ function WorkNow({ work, taskRows, openTasks, inspected, runningJobs, subagents,
           resource.status !== "error" && <div className="flex justify-center py-4"><Loader size="sm" /></div>
         ) : (
           <>
-            {taskRows.length > 0 && <PlanProgress tasks={taskRows.map(({ task }) => task)} />}
+            {openTasks.length > 0 && <PlanProgress tasks={taskRows.map(({ task }) => task)} />}
             {openTasks.length > 0 && (
               <div className="space-y-2">
                 {openTasks.map(({ task, owner }) => <TaskTree key={`${owner.actorId}:${task.id}`} task={task} owner={owner} onOpenOwner={onOpenOwner} />)}
@@ -182,7 +211,7 @@ function WorkNow({ work, taskRows, openTasks, inspected, runningJobs, subagents,
         )}
         {inspected.length > 0 && (
           <div className="space-y-1">
-            {inspected.map((owed) => <InspectedRow key={`${owed.actor ?? ""}:${owed.kind}:${owed.id}`} work={owed} now={now} />)}
+            {inspected.map((owed) => <InspectedRow key={`${owed.actor ?? ""}:${owed.kind}:${owed.id}`} work={owed} now={now} owner={ownerFor(owed)} />)}
           </div>
         )}
         {runningJobs.length > 0 && (

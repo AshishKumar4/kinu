@@ -16,6 +16,7 @@ import { QuestionCard } from "@/components/QuestionCard";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Surface } from "@/components/ui/Surface";
 import { ChromeButton } from "@/components/ui/ChromeButton";
+import { MemoryFact, MemoryProvenance, memoryLabel } from "@/components/MemoryFact";
 
 type ConsentChoice = "once" | "always" | "deny";
 
@@ -56,11 +57,11 @@ function kindOf(ask: OwnerAsk): AskKind {
   return ask.kind === "action" ? ask.action.kind : ask.kind;
 }
 
-/** What an account-memory proposal would keep, in words: a fact's key and value, or a note's text. */
+/** The subject of a memory proposal; its full typed value is on the open card. */
 function remembered(memory: AccountMemoryProposal): string {
   const { proposal } = memory;
 
-  return proposal.kind === "fact" ? `${proposal.key}: ${JSON.stringify(proposal.value)}` : proposal.content;
+  return proposal.kind === "fact" ? memoryLabel(proposal.key) : proposal.content;
 }
 
 /** One line, for a card waiting behind the open one. */
@@ -164,15 +165,15 @@ function ConsentBody({ consent }: { consent: PendingConsent }) {
 }
 
 function MemoryBody({ memory }: { memory: AccountMemoryProposal }) {
-  const { origin } = memory;
-  const by = origin.by === "background" ? "Kinu, from what you said" : origin.agent;
-  const where = origin.workspace === undefined ? "" : ` in ${origin.workspace}`;
+  const { origin, proposal } = memory;
 
   return (
     <>
       <div className="t-body p-text">Remember this for every workspace?</div>
-      <Surface look="tile" as="code" className="t-code mt-1 block max-h-28 overflow-auto px-2 py-1 p-text-2 break-all whitespace-pre-wrap">{remembered(memory)}</Surface>
-      <div className="t-meta mt-1 p-text-3">{by}{where} asked {timeAgo(memory.createdAt)}. Forget it any time under Settings → Memory.</div>
+      <Surface look="tile" className="mt-1 max-h-56 overflow-auto px-2 py-2">
+        {proposal.kind === 'fact' ? <MemoryFact factKey={proposal.key} value={proposal.value} /> : <div className="t-body whitespace-pre-wrap wrap-anywhere">{proposal.content}</div>}
+      </Surface>
+      <div className="t-meta mt-1 p-text-3"><MemoryProvenance origin={origin} /> · Proposed {timeAgo(memory.createdAt)}. Forget it any time under Settings → Memory.</div>
     </>
   );
 }

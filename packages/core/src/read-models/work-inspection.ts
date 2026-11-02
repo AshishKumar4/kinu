@@ -34,9 +34,9 @@ export interface Resuming {
   readonly at: number | null;
 }
 
-const TURN_LABELS: Readonly<Record<WorkMode, string>> = { build: 'working on a request', plan: 'planning a request' };
+const TURN_LABELS: Readonly<Record<WorkMode, string>> = { build: 'Request', plan: 'Request plan' };
 
-const DELEGATED_TURN = 'working on a task it was given';
+const DELEGATED_TURN = 'Delegated task';
 
 /** A turn whose isolate was restarted under it, as a deploy or the platform's maintenance does. */
 const RESUMING_TURN = 'stopped by a restart; it picks up again on its own';

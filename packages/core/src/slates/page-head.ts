@@ -21,6 +21,7 @@ export const SLATE_PAGE_STYLE = [
   ':where(button,input,select,textarea){font:inherit;font-size:0.875rem;line-height:1.4286;color:inherit}',
   ':where(button){padding:6px 12px;border:1px solid var(--c-border-strong,ButtonBorder);border-radius:var(--r-control,6px);'
     + 'background:var(--c-fill,ButtonFace);font-weight:500;cursor:pointer}',
+  ':where(button[data-variant="primary"]){background:var(--c-accent-fill,Highlight);color:var(--c-accent-on,HighlightText);border-color:var(--c-accent,Highlight)}',
   ':where(button:hover){border-color:var(--c-accent,ButtonBorder)}',
   ':where(button:disabled){opacity:0.5;cursor:default}',
   ':where(input,select,textarea){padding:6px 10px;border:1px solid var(--c-field-border,ButtonBorder);border-radius:var(--r-control,6px);'
@@ -30,6 +31,7 @@ export const SLATE_PAGE_STYLE = [
   ':where(th,td){padding:6px 10px;border-bottom:1px solid var(--c-border,GrayText);text-align:left}',
   ':where(hr){border:0;border-top:1px solid var(--c-border,GrayText)}',
   ':root[data-display="inline"],:root[data-display="inline"] body{height:auto!important;min-height:0!important;overflow:hidden}',
+  ':root[data-display="inline"] body{box-sizing:border-box;padding:4px}',
 ].join('');
 
 /** Run as the head is parsed, so the first paint is already in the host's scheme: the module that follows applies the
