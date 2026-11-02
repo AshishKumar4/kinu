@@ -162,7 +162,7 @@ import {
   startBranchHead, newBranchId, admitBranch, type BranchTurnResult,
   STEER_BRANCH_RUN_ID_PREFIX,
   type PendingBranch, type BranchStatusEvent,
-  readWorkspaceWork, hasWorkspaceWork, WORK_TAB_JOBS, type WorkspaceWork, inspectWork, type InspectedWork, addressedBlock, type EphemeralSlateAddress,
+  readWorkspaceWork, hasWorkspaceWork, WORK_TAB_JOBS, type WorkspaceWork, inspectWork, workActorName, type InspectedWork, addressedBlock, type EphemeralSlateAddress,
   measuredAt, readWorkspaceAgents, recordAgentFigures, reportedAgentFigures, type AgentFigures, type AgentAnswer, type CompactOutcome, type ConversationTurnPair, type PanelAgent, type AgentConfigStore, type AskingAgent,
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, turnTags,
@@ -4333,11 +4333,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const host = this.actorHost();
     const turns = host.resumable();
 
-    // Named by its path from the tree's root, which names the workspace's own work.
     const actorName = (actorId: string) => {
       const record = host.describe(actorId);
 
-      return record?.parentActorId === null ? null : record?.name ?? actorId;
+      return record === null ? actorId : workActorName(record);
     };
 
 

@@ -22,8 +22,10 @@ function heldGateway() {
   return { gateway, asked, resumed };
 }
 
-const turnRows = (rows: readonly { kind: string; label: string; phase: string; why: string | null }[]) =>
-  rows.filter((row) => row.kind === 'turn').map(({ label, phase, why }) => ({ label, phase, why }));
+// Main's turn is the workspace's own, named by no agent: the owner's Work tab read "quiet-cove-f8c76035 · working on a
+// request", its id (2026-11-01).
+const turnRows = (rows: readonly { kind: string; actor: string | null; label: string; phase: string; why: string | null }[]) =>
+  rows.filter((row) => row.kind === 'turn').map(({ actor, label, phase, why }) => ({ actor, label, phase, why }));
 
 test("an owner's turn reads as the work it is while it runs, and as resuming, not stuck, while a restart has cut it", async () => {
   const { gateway, asked } = heldGateway();
@@ -32,7 +34,7 @@ test("an owner's turn reads as the work it is while it runs, and as resuming, no
   await workspace.agent.send('RUNNING_MARKER: tidy the parser.', crypto.randomUUID(), []);
   await until(() => asked.some((prompt) => prompt.includes('RUNNING_MARKER')), 'the turn never reached its model');
 
-  expect(turnRows(await workspace.agent.inspectWork())).toEqual([{ label: 'working on a request', phase: 'running', why: null }]);
+  expect(turnRows(await workspace.agent.inspectWork())).toEqual([{ actor: null, label: 'working on a request', phase: 'running', why: null }]);
 
   // The owner, 2026-10-25: an active agent's Work tab read "build turn · blocked · no activation is running it" while the
   // workspace restarted under the turn (25 startups in an hour on production).
@@ -44,7 +46,7 @@ test("an owner's turn reads as the work it is while it runs, and as resuming, no
   await next.started;
 
   expect(turnRows(await next.agent.inspectWork())).toEqual([
-    { label: 'working on a request', phase: 'waiting', why: 'stopped by a restart; it picks up again on its own' },
+    { actor: null, label: 'working on a request', phase: 'waiting', why: 'stopped by a restart; it picks up again on its own' },
   ]);
 
   // Its wake comes, and it picks the turn up again: running, on its second try.

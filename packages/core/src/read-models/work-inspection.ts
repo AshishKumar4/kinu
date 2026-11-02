@@ -7,6 +7,7 @@
  */
 import type { BackgroundJobStatus } from '../types/jobs';
 import type { WorkMode } from '../types/turn';
+import type { WorkspaceActor } from '../identity/workspace-actors';
 import type { StoredActorClaim } from '../orchestrator/actor-claims';
 import type { OwedTerminalEffect, TerminalEffectName } from '../orchestrator/terminal-effects';
 
@@ -119,6 +120,11 @@ function effectWork({ effect, actor }: OwnedEffect, now: number): InspectedWork 
   return effect.nextAttemptAt > now
     ? { ...base, phase: 'waiting', why: null, until: effect.nextAttemptAt }
     : { ...base, phase: 'running', why: null, until: null };
+}
+
+/** Who owes work, as Work names them: nobody for the workspace's own (its root's), else the agent by name. */
+export function workActorName(record: Pick<WorkspaceActor, 'parentActorId' | 'name'>): string | null {
+  return record.parentActorId === null ? null : record.name;
 }
 
 const ORDER: Readonly<Record<InspectedWork['phase'], number>> = { blocked: 0, running: 1, waiting: 2 };

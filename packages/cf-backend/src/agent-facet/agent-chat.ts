@@ -2,7 +2,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   CHAT_SESSION_ID, ChatSession, EventLog, PendingSendStore, RECOVERY_BACKOFF_CEILING_MS, TerminalTransitions,
-  PlanReviewActions, assembleActorTurn, authoredTurnMetadata, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork,
+  PlanReviewActions, assembleActorTurn, authoredTurnMetadata, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork, workActorName,
   planHandoffStillOwed, planAwaitingReply, approvedTaskPlan, missionGate, workModeUnderReview, projectJsonValue, declareHandoffRoster, HandedOffTurnSchema, runSettleEffect, SettledRunSchema, terminalEffect, turnTags, turnLane, answerDrawsPages,
   actorPolicy, actorTerminalEffects, withCompactionTrigger, type ActorPolicy,
   advisorReadsOver, bindRoute, completeOnRoute, ownProfileChoices, resolveTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle, writePhaseLines, type PhaseLinePorts,
@@ -596,11 +596,12 @@ export class FacetChat {
     return null;
   }
 
-  /** Its own turns and effects still owed, folded as the workspace's read folds the root's. */
+  /** Its own turns and effects still owed, folded and named as the workspace's read folds and names the root's: main's
+   *  are the workspace's own, never its id's (a Work row named "quiet-cove-f8c76035", 2026-11-01). */
   owedWork(): InspectedWork[] {
     const { actor } = this.deps;
     const { ledger } = this.terminal;
-    const name = actor.record.name;
+    const name = workActorName(actor.record);
     const running = actor.session.turnClaim?.turnId;
 
     return inspectWork({

@@ -2436,7 +2436,7 @@ export {
   type MctsProgress, type WorkspaceBroadcast,
 } from './read-models/workspace-broadcasts';
 
-export { inspectWork, jobPhase, type InspectedWork } from './read-models/work-inspection';
+export { inspectWork, jobPhase, workActorName, type InspectedWork } from './read-models/work-inspection';
 
 export {
   breakdownView, shareOfMeasured,
