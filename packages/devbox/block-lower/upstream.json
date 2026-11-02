@@ -16,7 +16,7 @@
   "files": {
     "Cargo.toml": "e1a269141da13953785f1fbaa6a18edb10cf644fdc9a710858ac02f31e426f83",
     "Cargo.lock": "42b0f84a3a09ad9cca1e51c35fb750d6fff123ce5c27f99996ced24c98d22109",
-    "tools-setup.sh": "cdef747ff4faafe04eed4373993af4656353cf7985b8e6e3ac03b23adbbacf1c",
+    "tools-setup.sh": "094474f184002735f40e0c59e9af2d374bd8228f9bc1597f502eaa143a01078a",
     "tools-build.sh": "3c301a53661845a20b5f8492b177c99b0ec8616855163bb676db55eb2794448f",
     "src/index.rs": "e26e54ebcc3893d7ba84470512bde960e239aec9ea7c89b05dd66992417961d7",
     "src/main.rs": "33f3e577afdc3e4d498c6a3e14e0c3e157059413c0df7f5c0ac596da117cd240",
@@ -25,8 +25,8 @@
     "src/storage.rs": "3f6bc14fa497df3e15012abac3a2e4b83d92b9d64b90ef4a65786c5b3bc278ba"
   },
   "tools": {
-    "sha256": "0c6dd2b8410179c9fe6fe8ae020849bf4cfe53cd66b3c663d9d593a6032aee7c",
-    "bytes": 358378302
+    "sha256": "e3c55a484ff4999f3c07470223d545cbf7b14a7dfbc5fb8d108847bac800f614",
+    "bytes": 359810995
   },
   "rust": {
     "version": "1.93.1",
@@ -36,6 +36,6 @@
     "base": "cloudflare/debian-trixie",
     "debian": "snapshot.debian.org 20261002T000000Z",
     "where": "armada recipe: tools-setup.sh as root, tools-build.sh as the user",
-    "job": "20261023045621-b6a86f36"
+    "job": "20261102075539-4c9cfb21"
   }
 }
