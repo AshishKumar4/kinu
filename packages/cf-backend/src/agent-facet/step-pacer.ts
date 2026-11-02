@@ -51,18 +51,18 @@ export class StepPacer {
    *  {@link release}. */
   private held: HeldGrant | null = null;
 
-  /** Told each time a step asks for a grant: from then on, its work resumes under the call that grants it. */
-  private readonly asked = new Set<() => void>();
+  /** Told each time the agent's work goes under a grant, held or asked for: from then on it runs under that call. */
+  private readonly placed = new Set<() => void>();
 
   constructor(private readonly now: () => number = () => Date.now()) {}
 
-  /** `asked` resolves at the next ask for a grant; `stop` drops the wait. */
-  nextAsk() {
+  /** `placed` resolves once the agent's work next goes under a grant; `stop` drops the wait. */
+  nextPlacement() {
     const { promise, resolve } = Promise.withResolvers<void>();
 
-    this.asked.add(resolve);
+    this.placed.add(resolve);
 
-    return { asked: promise, stop: () => { this.asked.delete(resolve); } };
+    return { placed: promise, stop: () => { this.placed.delete(resolve); } };
   }
 
   /** Resolves with the step's grant: the held one, or one a call into the facet gives. `profile`: the turn's, on the step
@@ -70,14 +70,33 @@ export class StepPacer {
   pace(workspace: Pick<AgentWorkspace, 'paceStep'>, bound: TurnBound, signal: AbortSignal, profile: ResolvedTurnProfile | null): Promise<GrantedStep> {
     const { held } = this;
 
-    if (held !== null && profile === null && !held.revoked && !signal.aborted && sameExecution(held.bound, bound) && this.now() - held.at < RENEW_AFTER_MS) {
+    this.place();
+
+    if (held !== null && profile === null && !signal.aborted && sameExecution(held.bound, bound) && this.serves(held)) {
       return Promise.resolve({ ended: () => {}, dynamic: null, harnessMode: held.harnessMode });
     }
 
-    for (const told of this.asked) told();
-    this.asked.clear();
-
     return settle(this.ask(workspace, bound, signal, profile));
+  }
+
+  /**
+   * A turn's opening runs under a grant once the workspace opened it, as its steps do: its context is assembled here, past
+   * a second of CPU on a long one. The held grant serves it whatever execution asked for it; an agent waking from rest
+   * holds none, and asks.
+   */
+  async opening(workspace: Pick<AgentWorkspace, 'paceStep'>, bound: TurnBound, signal: AbortSignal): Promise<void> {
+    if (this.held !== null && this.serves(this.held)) this.place();
+    else await this.pace(workspace, bound, signal, null);
+  }
+
+  private place(): void {
+    for (const told of this.placed) told();
+    this.placed.clear();
+  }
+
+  /** Whether a held grant still carries work: not revoked, and open less than half the budget. */
+  private serves(held: HeldGrant): boolean {
+    return !held.revoked && this.now() - held.at < RENEW_AFTER_MS;
   }
 
   /** The agent rests: no call into it is held open. */

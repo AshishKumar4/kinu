@@ -453,13 +453,15 @@ test('a production turn runs no more statements than it was measured at, and ask
  * near-limit note rides the facts read (`account.accountMemory_turnFacts`, which replaces `accountMemory_facts`).
  * 12 at the close on feat/mcp-lazy-clients (2026-10-25): an account's MCP server is connected by the call that needs it,
  * so a settled turn warms none (`account.userMcp_warmConnections`, gone).
- * 18 at the open and 11 at the close on 2026-11-02, 33 in all as before: a call into main's isolate answers only once the
- * turn it started has asked for its grant (`do.facet.cpu_after_answer`), so the tile's write as the turn starts working
- * (`account.putWorkspaceOverview`) lands before its first tool call. Against d1254be36 the same day: 17 and 12.
+ * 20 at the open and 11 at the close on 2026-11-02, 35 in all: a turn opened from rest assembles its context under a
+ * grant of its own (`host.paceStep` and `facet.step` once more), since work on a call that answered is reset past about
+ * 1 s of CPU (`do.facet.cpu_after_answer`); the call that delivered its input answers once that grant is asked, so the
+ * tile's write as the turn starts working (`account.putWorkspaceOverview`) lands before its first tool call. Against
+ * d1254be36 the same day: 17 and 12, 33 in all.
  */
 /** The budget per place, as measured (the history above): no crossing runs once per step beyond a step's own, nor once
  *  per earlier step. */
-const CROSSINGS = { open: 18, step: 2, close: 11 } as const;
+const CROSSINGS = { open: 20, step: 2, close: 11 } as const;
 
 /**
  * The planted calls (`ObservedOrchestrator.plantCrossings`), each counted once where it lands, and nothing else: the

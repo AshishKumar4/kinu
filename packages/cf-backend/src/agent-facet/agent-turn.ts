@@ -568,6 +568,8 @@ export async function deliveredRun(
     await run.trace?.flush();
     const prepared = await workspace.prepareTurn(bound);
 
+    await pacer.opening(workspace, bound, signal);
+
     run.opened = bound;
     database.prepare(bound, prepared);
     const live: LiveTurn = { dynamic: prepared.dynamic, harnessMode: 'native', openWork: null };

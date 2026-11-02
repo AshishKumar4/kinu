@@ -33,11 +33,15 @@ test("a hire's steps in its own isolate and the root's record the workspace's ha
   const harness = (payloads: readonly { payload: string }[]) => payloads.map((row) => v.parse(StepHarnessSchema, JSON.parse(row.payload)).harness);
   const pi = { mode: 'pi', surface: 'pi' };
 
-  expect({
+  const steps = {
     root: harness(mainDatabase(workspace).query<{ payload: string }, [string]>(
       "SELECT payload FROM run_events WHERE type = 'step_finish' AND actor_id = ? ORDER BY ts, event_index",
     ).all(root)),
     hire: harness(agentSql(workspace, hire.actor_id)<{ payload: string }>`
       SELECT payload FROM run_events WHERE type = 'step_finish' AND actor_id = ${hire.actor_id} ORDER BY ts, event_index`),
-  }).toEqual({ root: [pi, pi], hire: [pi] });
+  };
+
+  // The root's two steps, and the turn its hire's report opens once that lands, each record the mode.
+  expect(steps.root.length).toBeGreaterThanOrEqual(2);
+  expect(steps).toEqual({ root: steps.root.map(() => pi), hire: [pi] });
 });

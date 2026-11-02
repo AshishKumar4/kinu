@@ -1695,7 +1695,7 @@ export const PLATFORM_CATALOG = {
     origin: 'platform',
     bounds: 'duration',
     evidence: 'proven-by-probe',
-    provenance: 'kinu-facet-cpu-probe-1102 (~/kinu-logs/research/FACET-CPU-AFTER-ANSWER-1102.md); production ashen-ash-0998b2c2',
+    provenance: '~/kinu-logs/research/FACET-CPU-AFTER-ANSWER-1102.md §2',
     date: '2026-11-02',
     trigger: 'a call into the facet answers while work it started keeps running, past about 1 s of CPU',
     onBreach: 'the facet is reset: a call in flight beside it fails, and the next call is told its code was updated',

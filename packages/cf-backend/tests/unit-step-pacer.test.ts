@@ -137,7 +137,7 @@ test("a stopped turn's grant is held until a newer grant takes the work over, an
   await drained();
   const afterStop = [...ws.answered];
 
-  await pacer.pace(ws.port, { ...BOUND, turnId: 'turn-2' }, new AbortController().signal, null);
+  await pacer.pace(ws.port, { turnId: 'turn-2', runId: 'run-2', epoch: 7 }, new AbortController().signal, null);
   await drained();
   const afterNext = [...ws.answered];
 

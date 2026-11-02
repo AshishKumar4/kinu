@@ -301,6 +301,9 @@ export class FacetChat {
     });
 
     if (owes !== null) this.namedWake = owes.next;
+    // Its context is assembled under a grant: the preparation opened the turn at the workspace, which grants only an
+    // execution it opened.
+    await this.deps.pacer.opening(workspace, bound, lease.signal);
     database.prepare(bound, prepared);
     // A recovered execution assembles on what it froze as it first bound, and resolves nothing (D5).
     const { frozen } = round;
@@ -521,20 +524,22 @@ export class FacetChat {
   }
 
   /**
-   * `work`, answered once what it started has left its call: its pump asked for a grant, under which the work resumes
-   * (`StepPacer`), or it rests and has told its workspace. A call that answers sooner leaves the work on a call that
-   * answered, which resets the isolate past about 1 s of CPU (`do.facet.cpu_after_answer`). Work that finds the pump
-   * already running starts none of its own, and answers at once: a turn's own call into its chat waits on nothing.
+   * `work`, answered once what it started has left its call: its pump's work went under a grant (`StepPacer`), which its
+   * turn's opening asks for when it holds none, or it rests and has told its workspace. A call that answers sooner leaves
+   * the work on a call that answered, which resets the isolate past about 1 s of CPU (`do.facet.cpu_after_answer`). Work
+   * that finds the pump already running starts none of its own, and answers at once.
    */
   handingOff<A, E>(work: Effect.Effect<A, E>): Effect.Effect<A, E> {
-    return Effect.suspend(() => (this.session.pumpPromise === null && !this.terminal.closing
-      ? Effect.ensuring(work, Effect.promise(() => this.handedOff()))
-      : work));
+    return Effect.suspend(() => {
+      if (this.session.pumpPromise !== null || this.terminal.closing) return work;
+      // Listened for before the work runs, which can start the pump and place it at once.
+      const placement = this.deps.pacer.nextPlacement();
+
+      return Effect.ensuring(work, Effect.promise(() => this.handedOff(placement)));
+    });
   }
 
-  private async handedOff(): Promise<void> {
-    const { asked, stop } = this.deps.pacer.nextAsk();
-
+  private async handedOff({ placed, stop }: ReturnType<StepPacer['nextPlacement']>): Promise<void> {
     try {
       for (;;) {
         const working = this.session.pumpPromise ?? (this.terminal.closing ? this.terminal.idle() : null);
@@ -546,7 +551,7 @@ export class FacetChat {
           continue;
         }
 
-        if (await Promise.race([asked.then(() => true), working.then(() => false)])) return;
+        if (await Promise.race([placed.then(() => true), working.then(() => false)])) return;
       }
     } finally {
       stop();
