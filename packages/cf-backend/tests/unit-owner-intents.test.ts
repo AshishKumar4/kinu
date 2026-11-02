@@ -7,7 +7,7 @@ import { expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import type { OwnerAnswer } from '@kinu.run/core';
-import { driveUntil, gatewayWorkspace, storedChat, workspaceMainActor, type HarnessOrchestratorAgent, type StartedHarness } from './helpers/actor-harness';
+import { driveUntil, gatewayWorkspace, storedChat, until, workspaceMainActor, type HarnessOrchestratorAgent, type StartedHarness } from './helpers/actor-harness';
 import { cutNextDelivery, loseNextOpeningAnswer } from './helpers/agent-facets';
 import { socketConnection } from './helpers/bindings';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
@@ -39,8 +39,8 @@ async function answersSaying(workspace: StartedHarness, text: string): Promise<n
 }
 
 /** A model that plans, asks and answers; `ran` says whether each intent's turn reached it, and a Retry is answered in
- *  words of its own. */
-function model() {
+ *  words of its own. An approved plan's turn answers once `building` resolves, when one is given. */
+function model(building?: Promise<void>) {
   const ran = { approved: 0, resumed: 0, retried: 0 };
 
   const gateway = stubAiBinding((run) => {
@@ -51,7 +51,7 @@ function model() {
     if (said.includes('The owner approved plan')) {
       ran.approved += 1;
 
-      return chatCompletion(run, 'Building it.');
+      return building === undefined ? chatCompletion(run, 'Building it.') : building.then(() => chatCompletion(run, 'Building it.'));
     }
 
     if (openingOf(run).includes(PLANNING) && tools.includes('submit_plan')) {
@@ -235,4 +235,36 @@ test('a decision whose crossing reaches the agent is answered as a direct one wa
   expect(await workspace.agent.listOwedIntents()).toEqual([]);
   await workspace.agent.harnessAgentsIdle();
   expect(await answersSaying(workspace, 'Building it.')).toBe(1);
+});
+
+// Production, 2026-11-01 (quiet-cove-f8c76035, 17:06-17:11Z): an approval's crossing waited out the whole turn it handed
+// off, holding the agent's delivery lane for 4.3 minutes, and the owner's words behind it timed out at 30 s.
+test("a plan's approval is answered once its turn is queued, and the owner's words behind it reach the running turn", async () => {
+  const building = Promise.withResolvers<void>();
+  const { gateway } = model(building.promise);
+  const workspace = gatewayWorkspace(gateway);
+
+  await turn(workspace, PLANNING, 'plan');
+  const plan = await workspace.agent.getActivePlanReview();
+
+  if (plan === null) throw new Error('the plan was never submitted');
+
+  let decided = false;
+
+  const deciding = workspace.agent.decidePlanReview(plan.id, plan.revision, 'approve').then((outcome) => {
+    decided = true;
+
+    return outcome;
+  });
+
+  await until(() => decided && gateway.unanswered.size > 0, 'the approval answered while the turn it handed off runs');
+  await workspace.agent.onMessage(owner, ownerMessage(crypto.randomUUID(), 'Cover the lexer too.'));
+  await until(() => owed(workspace) === 0, "the owner's words behind the approval taken by the running turn");
+  const running = gateway.unanswered.size;
+
+  building.resolve();
+  await workspace.agent.harnessAgentsIdle();
+
+  expect({ running, decided: await deciding, built: await answersSaying(workspace, 'Building it.') })
+    .toMatchObject({ running: 1, decided: { ok: true, queued: true, plan: { status: 'approved' } }, built: 1 });
 });

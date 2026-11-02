@@ -800,7 +800,12 @@ export class PlanReviewActions {
     return this.announced(this.store.markHandoffAccepted(id, revision));
   }
 
-  /** The handoff is marked accepted only once the loop admits the turn; otherwise the next decision resubmits under the same key. */
+  /**
+ * The handoff is marked accepted once `enqueue` holds the turn durably; otherwise the next decision resubmits under the
+ * same key. `enqueue` answers once the turn is queued, never once it ran: a decision crosses the agent's delivery lane,
+ * and one that waited out its turn held every input behind it, the owner's words timing out at 30 s (quiet-cove-f8c76035,
+ * 2026-11-01).
+ */
   async decideAndHandOff(
     verdict: { readonly id: string; readonly revision: number; readonly decision: PlanReviewDecision; readonly feedback?: string },
     enqueue: (turn: ProgrammaticTurn) => Promise<EnqueueTurnResult>,
