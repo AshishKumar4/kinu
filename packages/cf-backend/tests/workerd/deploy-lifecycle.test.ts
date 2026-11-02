@@ -684,7 +684,7 @@ describe('the deploy page', () => {
       ready: true,
       moved: { state: 'live', url: 'https://flourandhearth.com', pending: undefined },
       // A new version for the new origin; the move's handover gives the deployment the new grant and keeps none.
-      made: { domains: ['flourandhearth.com'], uploads: 2 }, held: [],
+      made: { domains: { 'flourandhearth.com': 'kinu' }, uploads: 2 }, held: [],
     });
   });
 

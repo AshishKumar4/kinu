@@ -84,7 +84,6 @@ const BASE64_ALPHABET = new TextEncoder()
   .encode('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/');
 
 export function deployPlan(manifest: ReleaseManifest, inputs: DeployInputs): readonly DeployStep[] {
-  const { front } = manifest;
   const { address } = inputs;
 
   return [
@@ -108,11 +107,11 @@ export function deployPlan(manifest: ReleaseManifest, inputs: DeployInputs): rea
     mailStep(inputs),
     smokeStep(),
     promoteStep(),
-    ...(front === null ? [] : [frontStep(manifest, front, address)]),
+    frontStep(manifest, address),
     // Once this version is live: the running one kept its token and rules until now.
     mailRoutingRetiredStep(inputs),
     // Last: it wipes the run's credentials, which a step that fails after it could no longer be retried with.
-    handoverStep(manifest, front === null ? ['mail-routing-retired'] : ['mail-routing-retired', 'front']),
+    handoverStep(manifest, ['mail-routing-retired', 'front']),
   ];
 }
 
@@ -557,16 +556,14 @@ function addressStep(manifest: ReleaseManifest, inputs: DeployInputs): DeploySte
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.gen(function* () {
         const { main, front } = deploymentWorkers(context.inputs.instanceName);
-        const held = manifest.front === null ? 'absent' : yield* frontHeld(context);
+        const held = yield* frontHeld(context);
 
         if (inputs.address.kind === 'workers-dev') {
-          if (manifest.front === null) return yield* Effect.die(new Error('this release has no front, which a workers.dev address is answered by'));
-
           // The address is the front's own name, so the smoke can reach this version only through a front: a first run
           // puts one in place here, and a later run keeps the one it has until the front step, after the promotion.
           if (held === 'foreign') return yield* foreignFront(front);
 
-          if (held === 'absent') yield* putFront(context, manifest, manifest.front);
+          if (held === 'absent') yield* putFront(context, manifest);
           yield* workersDev(context, front, true);
           // Reached through its front alone, as kinu.run's main Worker is.
           yield* workersDev(context, main, false);
@@ -687,7 +684,7 @@ function promoteStep(): DeployStep {
  * domain to the main Worker until then; a workers.dev address is the front's own name, so its first front is put in
  * place by the address step. A front holds no secret: it binds the main Worker's objects and the main Worker.
  */
-function frontStep(manifest: ReleaseManifest, front: ReleaseModules, address: DeployAddress): DeployStep {
+function frontStep(manifest: ReleaseManifest, address: DeployAddress): DeployStep {
   return {
     id: 'front',
     title: 'Put the front in place',
@@ -695,15 +692,15 @@ function frontStep(manifest: ReleaseManifest, front: ReleaseModules, address: De
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.gen(function* () {
         const { main, front: script } = deploymentWorkers(context.inputs.instanceName);
-        const put = context.facts.get(FACT_FRONT_RELEASE) === manifest.version;
-        const held = put ? 'ours' : yield* frontHeld(context);
 
-        if (held === 'foreign') return yield* foreignFront(script);
+        if (context.facts.get(FACT_FRONT_RELEASE) !== manifest.version) {
+          if ((yield* frontHeld(context)) === 'foreign') return yield* foreignFront(script);
 
-        if (!put) yield* putFront(context, manifest, front);
+          yield* putFront(context, manifest);
+        }
 
-        // The address step bound the domain to the front where one stood, and to the main Worker until there was one.
-        if (address.kind === 'zone' && held === 'absent') yield* bindDomain(context, address, script, [main, script]);
+        // From the main Worker, which answered a domain's first run until its front stood; a retry finds it moved.
+        if (address.kind === 'zone') yield* bindDomain(context, address, script, [main, script]);
 
         return `${script} answers ${context.facts.get(FACT_ADDRESS) ?? ''}.`;
       });
@@ -725,12 +722,12 @@ function workersDev(context: DeployContext, name: string, enabled: boolean): Eff
 }
 
 /** The release's front, binding this deployment's main Worker and its objects (FRONT_OBJECTS). */
-function putFront(context: DeployContext, manifest: ReleaseManifest, front: ReleaseModules): Effect.Effect<void, KinuError> {
+function putFront(context: DeployContext, manifest: ReleaseManifest): Effect.Effect<void, KinuError> {
   return Effect.gen(function* () {
         const accountId = context.inputs.accountId;
         const { main, front: script } = deploymentWorkers(context.inputs.instanceName);
         const session = yield* openAssetSession(context, manifest, script);
-        const carried = yield* carryArtifact(context, front, session);
+        const carried = yield* carryArtifact(context, manifest.front, session);
         const analytics: JsonValue[] = [];
 
         for (const binding of manifest.bindings) {
@@ -741,7 +738,7 @@ function putFront(context: DeployContext, manifest: ReleaseManifest, front: Rele
         }
 
         const metadata: JsonObject = {
-          main_module: front.mainModule,
+          main_module: manifest.front.mainModule,
           compatibility_date: manifest.worker.compatibilityDate,
           compatibility_flags: [...manifest.worker.compatibilityFlags],
           bindings: [
@@ -798,9 +795,9 @@ function frontHeld(context: DeployContext): Effect.Effect<'ours' | 'absent' | 'f
 
 /**
  * `address` bound to `service`, as a Workers custom domain, which creates its proxied DNS record itself. A hostname has
- * one Worker, and moves only with `override_existing_origin`, while a bind to the Worker that holds it changes nothing
- * (measured on the account, 2026-10-27). It moves only between the Workers this deployment `owns`; one another Worker of
- * the account holds is refused in Cloudflare's words.
+ * one Worker, and moves only with `override_existing_origin`; a bind to the Worker that holds it changes nothing
+ * (measured on the account, 2026-10-27), so none is made. It moves only between the Workers this deployment `owns`; one
+ * another Worker of the account holds is refused in Cloudflare's words.
  */
 function bindDomain(context: DeployContext, address: DeployAddress, service: string, owns: readonly string[]): Effect.Effect<void, KinuError> {
   return Effect.gen(function* () {
@@ -813,7 +810,10 @@ function bindDomain(context: DeployContext, address: DeployAddress, service: str
     ));
 
     const holder = bound[0]?.service;
-    const ours = holder !== undefined && holder !== service && owns.includes(holder);
+
+    if (holder === service) return;
+
+    const ours = holder !== undefined && owns.includes(holder);
 
     yield* Effect.promise(async () => cloudflareResult(
       context.transport,

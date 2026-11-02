@@ -110,7 +110,7 @@ export interface ReleaseManifest {
   readonly channelOrigin: string;
   readonly worker: ReleaseWorker;
   /** The front Worker that answers a self-hosted deployment's address (front.ts); its bindings are derived. */
-  readonly front: ReleaseModules | null;
+  readonly front: ReleaseModules;
   readonly bindings: readonly ReleaseBinding[];
   readonly vectorIndexes: readonly ReleaseVectorIndex[];
   readonly migrations: readonly ReleaseMigration[];
@@ -145,8 +145,8 @@ const ReleaseFilePathSchema = v.pipe(
   ),
 );
 
-/** What a channel may publish: one published before the computer or the front could be deployed names none. */
-type PublishedManifest = Omit<ReleaseManifest, 'computer' | 'front'> & { readonly computer?: ReleaseComputer | null; readonly front?: ReleaseModules | null };
+/** What a channel may publish: one published before the computer could be deployed names none. */
+type PublishedManifest = Omit<ReleaseManifest, 'computer'> & { readonly computer?: ReleaseComputer | null };
 
 export const ReleaseManifestSchema: v.GenericSchema<PublishedManifest, ReleaseManifest> = v.object({
   version: v.pipe(v.string(), v.trim(), v.regex(RELEASE_VERSION)),
@@ -163,11 +163,11 @@ export const ReleaseManifestSchema: v.GenericSchema<PublishedManifest, ReleaseMa
     assets: ReleaseFilePathSchema,
     crons: v.array(v.string()),
   }),
-  front: v.optional(v.nullable(v.object({
+  front: v.object({
     mainModule: v.pipe(v.string(), v.minLength(1)),
     modules: v.pipe(v.array(ReleaseFilePathSchema), v.minLength(1)),
     modulesPath: ReleaseFilePathSchema,
-  })), null),
+  }),
   bindings: v.array(v.object({
     binding: v.pipe(v.string(), v.minLength(1)),
     kind: v.picklist(BINDING_KINDS),

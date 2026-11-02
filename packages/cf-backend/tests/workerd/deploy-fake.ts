@@ -15,6 +15,10 @@ const VERSION = '0.4.0+probe01';
 /** Runs settle on `<instance>.<subdomain>.workers.dev`. */
 const SUBDOMAIN = 'probe';
 
+/** The probe deployment's two Workers as the account holds them (`deploymentWorkers('kinu')` in core deploy/front.ts); the
+ *  config loads this module in Node, which can't import core's source. */
+const WORKERS = { main: 'kinu-app', front: 'kinu' } as const;
+
 export const DEPLOY_FAKE_ACCOUNT = ACCOUNT_ID;
 
 export const DEPLOY_FAKE_VERSION = VERSION;
@@ -336,7 +340,7 @@ export const DeployFakeStateSchema = v.object({
   expiredCalls: v.number(),
   r2Reads: v.number(),
   versionSecrets: v.array(v.string()),
-  domains: v.array(v.string()),
+  domains: v.record(v.string(), v.string()),
   footprint: v.object({
     unpacked: v.number(),
     largestMember: v.number(),
@@ -368,8 +372,8 @@ export interface DeployFakeState {
   readonly r2Reads: number;
   /** The secrets the last version bound itself; an update binds none of the root keys. */
   readonly versionSecrets: readonly string[];
-  /** Custom domains bound to the Worker. */
-  readonly domains: readonly string[];
+  /** Custom domains, each to the Worker it is bound to. */
+  readonly domains: Readonly<Record<string, string>>;
   /** Bytes really served and received for one release (the release footprint in `deploy-lifecycle.test.ts`). */
   readonly footprint: DeployFakeFootprint;
 }
@@ -429,7 +433,10 @@ interface Held {
   free: boolean;
   /** By zone id; a zone added by `POST /zones` is pending until the row activates it. */
   zones: Map<string, { name: string; status: string }>;
-  domains: string[];
+  /** Each custom domain's Worker. */
+  domains: Map<string, string>;
+  /** Each Worker's workers.dev route, as `…/workers/scripts/<name>/subdomain` set it. */
+  routes: Map<string, boolean>;
   refuseOnce: DeployFakeRefusal | null;
   served: DeployFakeServedBuild | null;
   /** Null serves the four small files. */
@@ -477,7 +484,8 @@ function fresh(): Held {
     r2Reads: 0,
     free: false,
     zones: new Map(),
-    domains: [],
+    domains: new Map(),
+    routes: new Map(),
     refuseOnce: null,
     served: null,
     weigh: null,
@@ -515,7 +523,8 @@ function reset(): void {
   held.r2Reads = 0;
   held.free = false;
   held.zones = new Map();
-  held.domains = [];
+  held.domains = new Map();
+  held.routes = new Map();
   held.refuseOnce = null;
   held.served = null;
   held.weigh = null;
@@ -545,7 +554,7 @@ function snapshot(): DeployFakeState {
     expiredCalls: held.expiredCalls,
     r2Reads: held.r2Reads,
     versionSecrets: held.bindings.filter((binding) => binding.type === 'secret_text').map((binding) => binding.name),
-    domains: [...held.domains],
+    domains: Object.fromEntries(held.domains),
     footprint: { ...held.footprint },
   };
 }
@@ -701,9 +710,10 @@ async function api(url: URL, request: Request): Promise<Response> {
 
   if (path.endsWith('/workers/subdomain')) return envelope({ subdomain: SUBDOMAIN });
 
-  if (path.endsWith('/subdomain')) return envelope({ enabled: true });
-
-  const scripted = workerScriptApi(path, request, named, () => v.parse(DeployedVersionsSchema, body.versions));
+  const scripted = workerScriptApi(path, request, named, {
+    versions: () => v.parse(DeployedVersionsSchema, body.versions),
+    enabled: () => v.parse(v.boolean(), body.enabled),
+  });
 
   if (scripted !== undefined) return scripted;
 
@@ -844,12 +854,12 @@ function zoneApi(path: string, request: Request, named: (key: string) => string)
   if (path.includes('/workers/domains?hostname=') && request.method === 'GET') {
     const host = new URLSearchParams(path.slice(path.indexOf('?') + 1)).get('hostname');
 
-    return envelope(held.domains.filter((hostname) => hostname === host).map((hostname) => ({ hostname, service: 'kinu' })));
+    return envelope([...held.domains].filter(([hostname]) => hostname === host).map(([hostname, service]) => ({ hostname, service })));
   }
 
   // A Workers custom domain makes the host's record and serves the Worker on it.
   if (path.endsWith('/workers/domains') && request.method === 'PUT') {
-    held.domains.push(named('hostname'));
+    held.domains.set(named('hostname'), named('service'));
 
     return envelope({ id: `domain-${named('hostname')}` });
   }
@@ -860,15 +870,34 @@ function zoneApi(path: string, request: Request, named: (key: string) => string)
 /** The Worker script's own routes: versions deployed, secrets, settings and the asset session. */
 function workerScriptApi(
   path: string, request: Request, named: (key: string) => string,
-  deployed: () => v.InferOutput<typeof DeployedVersionsSchema>,
+  read: { readonly versions: () => v.InferOutput<typeof DeployedVersionsSchema>; readonly enabled: () => boolean },
 ): Response | undefined {
+  const addressed = /\/workers\/scripts\/([^/?]+)\/([^?]+)/u.exec(path);
+
+  // A call naming a Worker answers for that Worker alone: one the account doesn't hold is Cloudflare's 404, a first
+  // upload making it aside, and the front holds its own route and none of the main Worker's versions or secrets.
+  if (addressed !== null) {
+    const [, script = '', rest = ''] = addressed;
+    const holds = new Map<string, boolean>([[WORKERS.main, held.scriptExists], [WORKERS.front, held.frontBindings !== null]]).get(script) ?? false;
+
+    if (!holds && !['assets-upload-session', 'versions'].includes(rest)) return refusal(404, 10_007, 'workers.api.error.script_not_found');
+
+    if (rest === 'subdomain') {
+      held.routes.set(script, read.enabled());
+
+      return envelope({ enabled: held.routes.get(script) ?? false });
+    }
+
+    if (script === WORKERS.front && !['settings', 'assets-upload-session'].includes(rest)) return refusal(404, 10_007, `the front holds no ${rest}`);
+  }
+
   if (path.endsWith('/deployments') && request.method === 'GET') {
     // Newest first: the reference lists the deployment serving traffic first.
     return envelope({ deployments: [...held.deployments].reverse().map((versions) => ({ versions: versions.map((entry) => ({ ...entry })) })) });
   }
 
   if (path.endsWith('/deployments')) {
-    const versions = deployed();
+    const versions = read.versions();
     const unknown = versions.find((entry) => !held.versions.has(entry.version_id));
 
     // The reference types `version_id` as the id of a version the Worker holds.
@@ -936,6 +965,19 @@ function workerScriptApi(
   }
 
   return undefined;
+}
+
+/** Whether `host` reaches the main Worker: on its own workers.dev route, or through the front its route or domain names. */
+function reachesMain(host: string): boolean {
+  const workersDev = host.endsWith('.workers.dev');
+  const worker = workersDev ? host.split('.')[0] : held.domains.get(host);
+  const routed = (name: string) => !workersDev || held.routes.get(name) === true;
+
+  if (worker === WORKERS.main) return held.scriptExists && routed(worker);
+
+  const main = (held.frontBindings ?? []).find((binding) => binding.name === 'MAIN')?.service;
+
+  return worker === WORKERS.front && routed(worker) && main === WORKERS.main && held.scriptExists;
 }
 
 /** What `frontHeld` (steps.ts) reads of the front: whom its `MAIN` service binding names. */
@@ -1114,7 +1156,8 @@ async function control(url: URL, request: Request): Promise<Response> {
   // What a self-update runs against: a Worker a previous run left serving the older build.
   if (url.pathname === '/existing') {
     held.scriptExists = true;
-    held.frontBindings = [{ type: 'service', name: 'MAIN', service: 'kinu-app' }];
+    held.frontBindings = [{ type: 'service', name: 'MAIN', service: WORKERS.main }];
+    held.routes = new Map([[WORKERS.front, true], [WORKERS.main, false]]);
     held.versions.set('version-0', DEPLOY_FAKE_OLDER_BUILD);
     held.deployments.push([{ version_id: 'version-0', percentage: 100 }]);
     // What the run that made it bound: its derived vars, its classes, and the record its handover wrote.
@@ -1201,7 +1244,9 @@ export async function deployOutbound(request: Request): Promise<Response> {
   // The deployment's own smoke check, answered as the Worker would: by the
   // version the request's override names when that one is deployed, and by
   // the serving version otherwise.
-  if (url.pathname === '/api/health' && (url.host.endsWith('.workers.dev') || held.domains.includes(url.host))) {
+  if (url.pathname === '/api/health' && (url.host.endsWith('.workers.dev') || held.domains.has(url.host))) {
+    if (!reachesMain(url.host)) return new Response('There is nothing here yet', { status: 404 });
+
     const armed = held.refuseOnce;
 
     if (armed !== null && armed.path === '/api/health') {

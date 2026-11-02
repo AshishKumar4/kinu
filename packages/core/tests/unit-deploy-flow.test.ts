@@ -354,6 +354,27 @@ class FakeCloudflare implements CloudflareTransport {
   /** Null: the account has no workers.dev subdomain yet, which the API answers 404. */
   subdomain: string | null = 'acme';
 
+  /** Each Worker's workers.dev route, as `…/workers/scripts/<name>/subdomain` set it. */
+  readonly routes = new Map<string, boolean>();
+
+  /** Secrets put on the front, which holds none of the main Worker's. */
+  readonly frontSecrets = new Map<string, string>();
+
+  /** The Worker `url` reaches, through its front when that is what answers it; null when nothing does. */
+  answers(url: string): string | null {
+    const host = new URL(url).hostname;
+    const workersDev = host.endsWith('.workers.dev');
+    const worker = workersDev ? host.split('.')[0] : this.domains.get(host);
+    const routed = (name: string) => !workersDev || this.routes.get(name) === true;
+
+    if (worker === WORKERS.main) return routed(worker) && this.scriptExists ? worker : null;
+
+    const service = v.safeParse(v.array(v.object({ name: v.string(), service: v.optional(v.string()) })), this.frontBindings);
+    const main = service.success ? service.output.find((binding) => binding.name === 'MAIN')?.service : undefined;
+
+    return worker === WORKERS.front && this.frontExists && routed(worker) && main === WORKERS.main && this.scriptExists ? main : null;
+  }
+
   /** On Workers Free, Cloudflare refuses the Containers API as it did the owner's free account (2026-10-21). */
   workersFree = false;
 
@@ -380,6 +401,39 @@ class FakeCloudflare implements CloudflareTransport {
     this.domains.set(hostname, bodyText(body, 'service'));
 
     return this.ok({ id: `domain-${hostname}` });
+  }
+
+  /**
+   * A call naming a Worker answers for that Worker alone: one the account doesn't hold is Cloudflare's 404, and the front
+   * keeps its own route and secrets and has no versions or deployments of the main Worker's.
+   */
+  private heldWorkerCall(call: CloudflareCall): CloudflareHttpResponse | null {
+    const named = /\/workers\/scripts\/([^/?]+)\/([^?]+)/u.exec(call.path);
+
+    if (named === null) return null;
+
+    const [, script = '', rest = ''] = named;
+    const missing: CloudflareHttpResponse = { status: 404, body: { success: false, errors: [{ code: 10007, message: 'workers.api.error.script_not_found' }], result: null } };
+    const holds = new Map([[WORKERS.main, this.scriptExists], [WORKERS.front, this.frontExists]]).get(script) ?? this.otherScripts.includes(script);
+
+    // A first upload makes its Worker: its asset session, its script and its first version.
+    if (!holds && !['assets-upload-session', 'versions'].includes(rest)) return missing;
+
+    if (rest === 'subdomain' && call.method === 'POST') {
+      this.routes.set(script, v.parse(v.object({ enabled: v.boolean() }), call.body).enabled);
+
+      return this.ok({ enabled: this.routes.get(script) ?? false });
+    }
+
+    if (script !== WORKERS.front) return null;
+
+    if (rest === 'secrets') {
+      this.frontSecrets.set(bodyText(call.body ?? {}, 'name'), bodyText(call.body ?? {}, 'text'));
+
+      return this.ok({ name: bodyText(call.body ?? {}, 'name') });
+    }
+
+    return ['settings', 'assets-upload-session'].includes(rest) ? null : missing;
   }
 
   /** The account, its user and its Workers, as the page reads them. */
@@ -457,7 +511,8 @@ class FakeCloudflare implements CloudflareTransport {
   private uploads = 0;
 
   /** Refused once, or every time where `held`, as a grant without the permission is. */
-  refusal: { method?: string; path: string; status: number; code: number; message: string; held?: true } | null = null;
+  /** A refusal of the next call to `path` (and `method`, and a body naming `service`, when given). */
+  refusal: { method?: string; path: string; service?: string; status: number; code: number; message: string; held?: true } | null = null;
 
   /** A Worker a previous run left serving `version`. */
   serveExisting(version: string): void {
@@ -489,7 +544,7 @@ class FakeCloudflare implements CloudflareTransport {
   async request(call: CloudflareCall): Promise<CloudflareHttpResponse> {
     this.calls.push({ method: call.method, path: call.path, body: call.body, bearer: undefined });
 
-    const refusal = this.refusalFor(call.method, call.path) ?? gatewayRefusal(call);
+    const refusal = this.refusalFor(call.method, call.path, call.body) ?? gatewayRefusal(call);
 
     if (refusal !== null) return refusal;
 
@@ -499,6 +554,10 @@ class FakeCloudflare implements CloudflareTransport {
 
       return { status: 200, body: { result: { jwt: `session-${script}`, buckets: [['1'.repeat(32), '2'.repeat(32)]] }, success: true, errors: null, messages: null } };
     }
+
+    const held = this.heldWorkerCall(call);
+
+    if (held !== null) return held;
 
     const read = this.accountCall(call) ?? this.domainCall(call);
 
@@ -695,10 +754,12 @@ class FakeCloudflare implements CloudflareTransport {
     return { status: 200, body: { success: true, errors: [], result: { id: version } } };
   }
 
-  private refusalFor(method: string, path: string): CloudflareHttpResponse | null {
+  private refusalFor(method: string, path: string, body?: JsonObject): CloudflareHttpResponse | null {
     const refusal = this.refusal;
 
     if (refusal === null || !path.startsWith(refusal.path) || (refusal.method ?? method) !== method) return null;
+
+    if (refusal.service !== undefined && body?.['service'] !== refusal.service) return null;
 
     if (refusal.held !== true) this.refusal = null;
 
@@ -948,6 +1009,8 @@ const healthFetch: HttpGet = async (url, headers) => {
 
   if (!url.endsWith('/api/health')) throw new Error(`unexpected fetch ${url}`);
 
+  if (cloudflare.answers(url) === null) return new Response('There is nothing here yet', { status: 404 });
+
   if (cloudflare.addressWarmingAsks > 0) {
     cloudflare.addressWarmingAsks -= 1;
 
@@ -1117,7 +1180,21 @@ describe('a guided run', () => {
       done: rows.every((row) => row.state === 'done'),
       bound: cloudflare.calls.filter((call) => call.method === 'PUT' && call.path.endsWith('/workers/domains')).map((call) => call.body?.service),
       domains: cloudflare.domains,
-    }).toEqual({ done: true, bound: ['kinu'], domains: new Map([['kinu.example.com', 'kinu']]) });
+    }).toEqual({ done: true, bound: [], domains: new Map([['kinu.example.com', 'kinu']]) });
+  });
+
+  // A first run on its own domain whose front step failed after the front stood: the retry moves the domain to it.
+  test('a retried front step moves the domain from the main Worker to the front it put in place', async () => {
+    const zone: DeployInputs = { ...INPUTS, address: { kind: 'zone', hostname: 'kinu.example.com', zoneId: EXAMPLE_ZONE } };
+
+    cloudflare.refusal = { path: `/accounts/${ACCOUNT}/workers/domains`, method: 'PUT', service: WORKERS.front, status: 500, code: 10_013, message: 'An unknown error has occurred' };
+    const failed = await run(zone);
+
+    cloudflare.refusal = null;
+    const rows = await run(zone);
+
+    expect({ front: failed.find((row) => row.id === 'front')?.state, done: rows.every((row) => row.state === 'done'), domains: cloudflare.domains })
+      .toEqual({ front: 'failed', done: true, domains: new Map([['kinu.example.com', WORKERS.front]]) });
   });
 
   test('another Worker under the front\'s name answers nothing of the deployment, and the front step refuses, naming it', async () => {

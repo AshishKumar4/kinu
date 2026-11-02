@@ -2178,7 +2178,7 @@ describe("worker release artifact", () => {
     const manifest = parseReleaseManifest(readFileSync(join(dist, "client", "downloads", "release.json"), "utf8"));
 
     expect([...manifest.worker.modules].sort()).toEqual(["assets/chunk.js", "assets/esbuild-abc.wasm", "index.js"]);
-    expect(manifest.front?.modules).toEqual(["index.js"]);
+    expect(manifest.front.modules).toEqual(["index.js"]);
     expect(manifest.files.map((file) => file.path).filter((path) => path.startsWith("worker/")).sort())
       .toEqual(["worker/assets/chunk.js", "worker/assets/esbuild-abc.wasm", "worker/index.js"]);
   });
