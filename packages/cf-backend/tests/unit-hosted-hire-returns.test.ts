@@ -427,9 +427,8 @@ test("a hired agent's model steps run under one call its workspace makes into it
 
   await runDelegatedTask(workspace, child.actor.handle.actorId, 'Count twice.');
 
-  // Three steps, two grants: one its opening asks from rest, before it assembles; one its first step binds the profile on
-  // and the next two share. The platform's facet CPU budget is met by a call that waits on the work, not one per step.
-  expect(workspace.agent.harnessAgentTraceCalls().filter((call) => call === 'paceStep')).toHaveLength(2);
+  // Three steps, one grant: the platform's facet CPU budget is met by a call that waits on the steps, not by one per step.
+  expect(workspace.agent.harnessAgentTraceCalls().filter((call) => call === 'paceStep')).toHaveLength(1);
   expect(agentSql(workspace, child.actor.handle.actorId)<{ n: number }>`
     SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${child.actor.handle.actorId} AND type = 'run_end'`[0]?.n).toBe(1);
 });

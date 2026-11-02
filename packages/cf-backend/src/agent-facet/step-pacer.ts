@@ -6,19 +6,13 @@
  * turn's steps run under a grant: a call the workspace makes into this facet when the facet asks for it, which stays
  * open, waiting on the steps, until the grant is let go.
  *
- * A call that has answered keeps almost no budget: work it started that runs on resets the facet once it passes about
- * 1 s of CPU (`do.facet.cpu_after_answer`), failing every call in flight. So the one grant held is let go only once a
- * newer grant took the work over, or the agent rests: a turn's end, its seal and the next turn's opening run under the
- * grant its last step ran under, and an opening from rest asks one before it assembles (`opening`). ashen-ash-0998b2c2
- * lost eight steps to it on 2026-11-01, each as the grant was let go at its turn's end or a wake answered with the
- * turn it started still assembling.
- *
  * One grant serves a turn's steps while it has budget left: a step reuses the held grant, and asks for a new one only
  * when none is held for its execution, when the held one was revoked (the workspace rejects the open call as it cuts
  * the turn, so a Stop is fenced as each step's own call fenced it), when the step binds the turn's profile, or once the
  * held grant has been open {@link RENEW_AFTER_MS}. The facet cannot read its CPU time, so the bound is wall time, which
- * CPU on one isolate never exceeds: half the budget, leaving the step after it room. A call held open keeps the
- * workspace from hibernating (#69), so the grant is let go as the agent rests (`release`).
+ * CPU on one isolate never exceeds: half the budget, leaving the step after it room. A grant is let go as its turn ends
+ * (`release`), as the turn is stopped, or as the agent rests (`releaseAll`): a call held open keeps the workspace from
+ * hibernating (#69).
  */
 import { Effect, Exit } from 'effect';
 import { attempt, hold, KinuError, settle, toKinuError } from '@kinu.run/core/obs';
@@ -48,44 +42,42 @@ interface HeldGrant {
 export class StepPacer {
   private readonly waiting = new Map<string, (granted: GrantedStep) => void>();
 
-  /** The grant the agent's work runs under: written as a grant arrives, which lets go of the one before it; dropped by
-   *  {@link release}. */
-  private held: HeldGrant | null = null;
+  /** Each turn's held grant, by its turn: written as a grant arrives, dropped by {@link release}, {@link releaseAll}, a
+   *  stop of its turn, or a newer grant of its turn. */
+  private readonly held = new Map<string, HeldGrant>();
 
   constructor(private readonly now: () => number = () => Date.now()) {}
 
   /** Resolves with the step's grant: the held one, or one a call into the facet gives. `profile`: the turn's, on the step
    *  that binds it, which always asks. */
   pace(workspace: Pick<AgentWorkspace, 'paceStep'>, bound: TurnBound, signal: AbortSignal, profile: ResolvedTurnProfile | null): Promise<GrantedStep> {
-    const { held } = this;
+    const held = this.held.get(bound.turnId);
 
-    if (held !== null && profile === null && !signal.aborted && sameExecution(held.bound, bound) && this.serves(held)) {
+    if (held !== undefined && profile === null && !held.revoked && !signal.aborted && sameExecution(held.bound, bound) && this.now() - held.at < RENEW_AFTER_MS) {
       return Promise.resolve({ ended: () => {}, dynamic: null, harnessMode: held.harnessMode });
     }
+
+    this.release(bound.turnId);
 
     return settle(this.ask(workspace, bound, signal, profile));
   }
 
-  /**
-   * A turn's opening, once the workspace opened it there (it grants only an execution it opened): its context is
-   * assembled here, past a second of CPU on a long one, under a grant as its steps are. The held grant serves it whatever
-   * execution asked for it; an agent waking from rest holds none, and asks.
-   */
-  async opening(workspace: Pick<AgentWorkspace, 'paceStep'>, bound: TurnBound, signal: AbortSignal): Promise<void> {
-    if (this.held === null || !this.serves(this.held)) await this.pace(workspace, bound, signal, null);
+  /** The turn ended: the call its steps ran under answers. */
+  release(turnId: string): void {
+    const held = this.held.get(turnId);
+
+    if (held === undefined) return;
+    this.held.delete(turnId);
+    held.letGo();
   }
 
-  /** Whether a held grant still carries work: not revoked, and open less than half the budget. */
-  private serves(held: HeldGrant): boolean {
-    return !held.revoked && this.now() - held.at < RENEW_AFTER_MS;
-  }
+  /** The agent rests: no turn of its holds a call open. */
+  releaseAll(): void {
+    const held = [...this.held.values()];
 
-  /** The agent rests: no call into it is held open. */
-  release(): void {
-    const { held } = this;
+    this.held.clear();
 
-    this.held = null;
-    held?.letGo();
+    for (const grant of held) grant.letGo();
   }
 
   private ask(workspace: Pick<AgentWorkspace, 'paceStep'>, bound: TurnBound, signal: AbortSignal, profile: ResolvedTurnProfile | null): Effect.Effect<GrantedStep, KinuError> {
@@ -126,14 +118,9 @@ export class StepPacer {
         : Effect.fail(new KinuError('unavailable', `The workspace answered turn ${turnId}'s step without granting it.`))));
 
       return Effect.raceFirst(granted, unanswered).pipe(Effect.map((step): GrantedStep => {
-        const taken = { bound, at: this.now(), letGo: step.ended, harnessMode: step.harnessMode, revoked: false };
-        const before = this.held;
-
-        holding = taken;
-        // The work resumes under this grant from here, so the one before it has no work left to carry. A stopped turn's
-        // grant is kept too: what the pump does after the stop runs under it until the next grant or the rest.
-        this.held = taken;
-        before?.letGo();
+        holding = { bound, at: this.now(), letGo: step.ended, harnessMode: step.harnessMode, revoked: false };
+        this.held.set(turnId, holding);
+        signal.addEventListener('abort', () => { this.release(turnId); }, { once: true });
 
         return { ended: () => {}, dynamic: step.dynamic, harnessMode: step.harnessMode };
       }));

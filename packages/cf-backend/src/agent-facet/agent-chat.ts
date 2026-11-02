@@ -124,6 +124,9 @@ export class FacetChat {
         deliver: (event) => {
           // Its last charge lands before its end is told: nothing the workspace reads of the turn can miss it.
           if (event.type === 'turn-end') {
+            // Its steps' grant answers: the turn ran its last.
+            deps.pacer.release(event.turnId);
+
             return this.charged().then(async () => {
               // Its room is sent the transcript's newest messages with its end: they are this isolate's to read.
               const window = await deps.database.seed();
@@ -301,8 +304,6 @@ export class FacetChat {
     });
 
     if (owes !== null) this.namedWake = owes.next;
-    // Its context is assembled under a grant, once the preparation opened the turn at the workspace (`StepPacer.opening`).
-    await this.deps.pacer.opening(workspace, bound, lease.signal);
     database.prepare(bound, prepared);
     // A recovered execution assembles on what it froze as it first bound, and resolves nothing (D5).
     const { frozen } = round;
@@ -510,15 +511,14 @@ export class FacetChat {
   }
 
   /** At rest, it tells its workspace what it owes, and then lets go of what it held open on it: an object an isolate
-   *  holds a capability into cannot hibernate (#69). The report is told under the grant the work ran under, which is let
-   *  go after it (`StepPacer`). A turn that opened meanwhile is working, and keeps it. */
+   *  holds a capability into cannot hibernate (#69). A turn that opened meanwhile is working, and keeps it. */
   private atRest(): void {
     if (this.session.pumping || this.terminal.closing) return;
+    // No turn runs: no grant is held for one.
+    this.deps.pacer.releaseAll();
     this.resting = hold(logged('agent.owed_report_failed', { doing: 'telling the workspace what an agent still owes', otherwise: 'unavailable' }, () => this.tell()))
       .then(() => {
-        if (this.session.pumping || this.terminal.closing) return;
-        this.deps.pacer.release();
-        this.deps.workspace.rest();
+        if (!this.session.pumping && !this.terminal.closing) this.deps.workspace.rest();
       });
   }
 
