@@ -6,7 +6,7 @@ import { describe, expect, spyOn, test } from 'bun:test';
 import * as v from 'valibot';
 import type { Connection } from 'agents';
 import { orchestratorHarness } from './helpers/actor-harness';
-import { WORKSPACE_TERMINAL_TAG } from '@kinu.run/core';
+import { StoragePredatesReleaseError, WORKSPACE_TERMINAL_TAG } from '@kinu.run/core';
 import type { TerminalSocket, WorkspaceTerminal } from '../src/workspace-host';
 import { socketConnection } from './helpers/bindings';
 
@@ -106,6 +106,24 @@ describe('the actor hands a terminal socket to the runtime shell', () => {
 
     expect([...opening.closed, ...typing.closed].map(({ code, reason }) => ({ code, said: reason.length > 0 })))
       .toEqual([{ code: 1011, said: true }, { code: 1011, said: true }]);
+  });
+
+  test("a workspace whose storage is refused ends a shell's socket with why, and answers a chat socket in chat", async () => {
+    const { agent, recorded } = await activated();
+
+    // The store a release cannot read: nothing reads it, and each socket is told so in its own protocol.
+    Object.defineProperty(agent, 'storageRefusal', { configurable: true, value: new StoragePredatesReleaseError('workspace', 'a newer table') });
+    const pane = connection('pane', [WORKSPACE_TERMINAL_TAG]);
+    const chat = connection('chat', []);
+
+    await agent.onConnect(pane.wire, { request: new Request('https://agent/_kinu/workspace-terminal') });
+    await agent.onConnect(chat.wire, { request: new Request('https://agent/') });
+
+    expect({
+      pane: pane.closed.map(({ code, reason }) => ({ code, said: reason.includes('storage') })),
+      attached: recorded.calls.filter((call) => call.startsWith('attach')),
+      chat: { closed: chat.closed.length, told: chat.sent.some((frame) => frame.includes('storage-refused')) },
+    }).toEqual({ pane: [{ code: 1011, said: true }], attached: [], chat: { closed: 0, told: true } });
   });
 
   test('a socket without the tag is a chat socket: the shell is never reached', async () => {

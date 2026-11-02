@@ -89,6 +89,13 @@ function answer(connection: Pick<Connection, 'id' | 'readyState' | 'send'>, fram
 /** RFC 6455 §7.4.1: the server met a condition that kept it from fulfilling the request. */
 const WEBSOCKET_INTERNAL_ERROR = 1011;
 
+/** A workspace shell's socket, ended with why its shell cannot serve it, which its pane shows (#129). */
+function endShell(connection: Pick<Connection, 'readyState' | 'close'>, failure: KinuError): void {
+  diagnostics.failure('terminal.workspace_shell_failed', failure);
+
+  if (connection.readyState === WebSocket.OPEN) connection.close(WEBSOCKET_INTERNAL_ERROR, closeReason(failure.message));
+}
+
 function shut(connection: Pick<Connection, 'readyState' | 'close'>, reason: string): void {
   if (connection.readyState === WebSocket.OPEN) connection.close(WEBSOCKET_POLICY_CLOSE, reason);
 }
@@ -214,7 +221,14 @@ class ClientSocketGate {
   private async admittedConnect(connection: Connection, ctx: ConnectionContext, base: ClientHandlers): Promise<void> {
     const storage = this.host.storageRefusal();
 
-    // Before anything reads the store.
+    // Before anything reads the store. A shell's socket speaks no chat frames: it ends with the refusal, which its pane
+    // shows.
+    if (storage !== undefined && isWorkspaceTerminal(connection.tags)) {
+      endShell(connection, storage);
+
+      return;
+    }
+
     if (storage !== undefined) {
       answer(connection, JSON.stringify({
         type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: 'storage-refused', reason: storage.code, body: storage.message, done: true, error: true,
@@ -247,11 +261,7 @@ class ClientSocketGate {
   private handled(connection: Connection, doing: string, handle: () => Promise<void>): Effect.Effect<void> {
     if (!isWorkspaceTerminal(connection.tags)) return Effect.promise(handle);
 
-    return attempt({ doing, otherwise: 'unavailable' }, handle).pipe(Effect.catch((failure) => Effect.sync(() => {
-      diagnostics.failure('terminal.workspace_shell_failed', failure);
-
-      if (connection.readyState === WebSocket.OPEN) connection.close(WEBSOCKET_INTERNAL_ERROR, closeReason(failure.message));
-    })));
+    return attempt({ doing, otherwise: 'unavailable' }, handle).pipe(Effect.catch((failure) => Effect.sync(() => { endShell(connection, failure); })));
   }
 
   async close(connection: Connection, closed: { code: number; reason: string; wasClean: boolean }, base: ClientHandlers): Promise<void> {
