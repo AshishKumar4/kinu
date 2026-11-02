@@ -89,6 +89,10 @@ interface CodePathHover {
   readonly codeBlocks: readonly string[];
   /** The display math as drawn: KaTeX's rendering, the TeX it keeps, and any link inside it. */
   readonly math: { readonly rendered: boolean; readonly tex: string | null; readonly links: number };
+  /** The plan's images, by their alt text, and whether each loaded. */
+  readonly images: readonly { readonly alt: string; readonly loaded: boolean }[];
+  /** Its `<slate-ui>` page as drawn: shown at a height, its own markup inside its frame. */
+  readonly drawnPage: { readonly visible: boolean; readonly said: string };
 }
 
 interface SettledPlan {
@@ -394,6 +398,22 @@ async function observeSettled(newPage: Gallery['newPage'], origin: string): Prom
  * from `/api/doc`, a route Kinu does not serve. Hovered, then the page's virtual time run a full second on, so every
  * timer the hover set has fired before the page is read.
  */
+/** The plan's drawn page once it has said its height: whether it shows, and what its own markup says inside it. */
+async function drawnPlanPage(page: Page): Promise<CodePathHover['drawnPage']> {
+  const selector = '[data-plan-document] iframe[data-slate-drawn="page"]';
+
+  await page.waitForFunction((at) => {
+    const frame = document.querySelector(at);
+
+    return frame !== null && frame.getBoundingClientRect().height > 0 && getComputedStyle(frame).visibility === 'visible';
+  }, {}, selector);
+  const frame = await (await page.$(selector))?.contentFrame();
+
+  if (frame === undefined || frame === null) throw new Error('the plan drew no page frame');
+
+  return { visible: true, said: await frame.$eval('#binding-layout', (layout) => layout.textContent ?? '') };
+}
+
 async function observeCodePath(newPage: Gallery['newPage'], origin: string): Promise<CodePathHover> {
   const page = await openFrame(
     newPage, origin,
@@ -427,6 +447,12 @@ async function observeCodePath(newPage: Gallery['newPage'], origin: string): Pro
         .map((block) => block.textContent?.replace(/\s+/g, '').trim() ?? '')
         .filter((text) => text.includes('Firstoperation') || text.includes('Secondoperation'))),
       codeBlocks: await page.$$eval('[data-plan-document] pre code', (blocks) => blocks.map((block) => block.textContent?.trim() ?? '')),
+      images: await page.$$eval('[data-plan-document] img', async (images) => await Promise.all(images.map(async (image) => {
+        await image.decode();
+
+        return { alt: image.getAttribute('alt') ?? '', loaded: image.naturalWidth > 0 };
+      }))),
+      drawnPage: await drawnPlanPage(page),
       math: await page.$eval('[data-plan-document] [data-math-display]', (block) => ({
         rendered: block.querySelector('.katex-html') !== null && block.querySelector('math') !== null,
         tex: block.querySelector('annotation[encoding="application/x-tex"]')?.textContent?.trim() ?? null,
@@ -642,6 +668,16 @@ describe('a plan review sends nothing of its own', () => {
   test('escaped table pipes stay in their cell and ordered-list numbering survives parsing', () => {
     expect(observed.codePath.cells).toEqual(['Separator', 'alpha|beta']);
     expect(observed.codePath.numberedItems).toEqual(['4.Firstoperation', '5.Secondoperation']);
+  });
+
+  test("a plan's screenshot shows as an image, and its slate page is drawn as an answer's is, never printed as code", () => {
+    const { images, drawnPage, codeBlocks } = observed.codePath;
+
+    expect({ images, drawnPage, codeBlocks }).toEqual({
+      images: [{ alt: 'The binding, before and after', loaded: true }],
+      drawnPage: { visible: true, said: 'DB → SESSIONS_DB' },
+      codeBlocks: ['graph TD; A-->B'],
+    });
   });
 
   test('a diagram fence remains the agent\'s code, not an executable diagram', () => {

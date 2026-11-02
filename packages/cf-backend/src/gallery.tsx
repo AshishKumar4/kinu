@@ -2391,6 +2391,12 @@ Read the binding in \`workers/api/src/db.ts:12\` by the name the config gives it
 graph TD; A-->B
 \`\`\`
 
+![The binding, before and after](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==)
+
+<slate-ui name="binding-layout">
+<div id="binding-layout">DB → SESSIONS_DB</div>
+</slate-ui>
+
 $$
 \\frac{\\text{errors}}{\\text{requests}} \\le 0.001 \\quad \\href{javascript:alert(1)}{\\text{off}}
 $$`;

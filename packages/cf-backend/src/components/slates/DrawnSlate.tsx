@@ -40,6 +40,11 @@ function useDrawnLook(): DrawnPageLook {
 /** What the page's `$workspace(path, args)` reaches: its workspace, as the page itself. */
 export type DrawnCall = (id: string, request: JsonValue) => Promise<SlateCallResult>;
 
+/** Where a page drawn with no workspace behind it calls (a plan's): each call is refused at once, `why` its reason. */
+export function refusedCalls(why: string): DrawnCall {
+  return () => settle(Effect.fail(new KinuError("denied", why)));
+}
+
 /** What a page's call answered, or its refusal, in the runner's words: its reason, then why. */
 function answeredIn(asked: () => Promise<SlateCallResult>): Effect.Effect<JsonValue, KinuError> {
   return Effect.flatMap(Effect.promise(asked), (result) => (result.ok

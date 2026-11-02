@@ -14,13 +14,13 @@ import {
   type ReviewAnnotation,
 } from "@kinu.run/core";
 import { Effect, Cause } from "effect";
-import { Viewer } from "@/components/plan-review/Viewer";
+import { PLAN_PAGE_LANGUAGE, Viewer } from "@/components/plan-review/Viewer";
 import { AnnotationPanel } from "@/components/plan-review/AnnotationPanel";
 import { CommentThread } from "@/components/plan-review/CommentThread";
 import { editorAnnotationOf } from "@/components/plan-review/notes";
 import type { Block, EditorMode } from "@plannotator/ui/types";
 import { extractFrontmatter, parseMarkdownToBlocks } from "@plannotator/ui/utils/parser";
-import { createPlanAnnotationSaveQueue } from "@kinu.run/core";
+import { createPlanAnnotationSaveQueue, slateUiSegments } from "@kinu.run/core";
 import { renderThrownChain, showing, detach } from "@kinu.run/core/obs";
 import { usePlanDecision } from "@/hooks/use-plan-decision";
 import { usePlanRepliesSeen } from "@/hooks/use-plan-replies-seen";
@@ -52,10 +52,12 @@ function looksLikeFileTree(content: string): boolean {
   return false;
 }
 
-/** Images and raw HTML are inert in plan review. The approved source remains
- * byte-for-byte in the durable plan; only the browser renderer is narrowed. */
+/**
+ * A plan's `<slate-ui>` pages are drawn as an answer's are, read-only, its images shown as written; raw HTML stays its
+ * source. A page goes to the parser as a fence it keeps whole, its language naming it (`PLAN_PAGE_LANGUAGE`).
+ */
 function planReviewBlocks(markdown: string): Block[] {
-  return parseMarkdownToBlocks(markdown).map((block) => {
+  return parseMarkdownToBlocks(fencedPages(markdown)).map((block) => {
     if (block.type === "html") return { ...block, type: "code", language: "html" };
 
     if (block.type === "code") {
@@ -67,44 +69,17 @@ function planReviewBlocks(markdown: string): Block[] {
       return plainText && looksLikeFileTree(block.content) ? { ...block, language: "tree" } : block;
     }
 
-    if (block.type === "math") return block;
-
-    return { ...block, content: omitMarkdownImages(block.content) };
+    return block;
   });
 }
 
-function omitMarkdownImages(markdown: string): string {
-  let output = "";
-  let cursor = 0;
+function fencedPages(markdown: string): string {
+  return slateUiSegments(markdown).map((segment) => {
+    if (segment.kind !== "slate") return segment.text;
+    const fence = "`".repeat(Math.max(3, ...[...segment.html.matchAll(/`+/gu)].map(([run]) => run.length + 1)));
 
-  while (cursor < markdown.length) {
-    const start = markdown.indexOf("![", cursor);
-
-    if (start < 0) return output + markdown.slice(cursor);
-    output += markdown.slice(cursor, start);
-    const labelEnd = markdown.indexOf("](", start + 2);
-
-    if (labelEnd < 0) { output += markdown.slice(start); break; }
-
-    let end = labelEnd + 2;
-    let depth = 1;
-
-    for (; end < markdown.length && depth > 0; end++) {
-      if (markdown[end] === "\\") { end++; continue; }
-
-      if (markdown[end] === "(") depth++;
-
-      if (markdown[end] === ")") depth--;
-    }
-
-    if (depth !== 0) { output += markdown.slice(start); break; }
-
-    const alt = markdown.slice(start + 2, labelEnd).trim();
-    output += alt ? `[Image omitted: ${alt}]` : "[Image omitted]";
-    cursor = end;
-  }
-
-  return output;
+    return `\n\n${fence}${PLAN_PAGE_LANGUAGE}\n${segment.html}\n${fence}\n\n`;
+  }).join("");
 }
 
 const STATUS_LABEL = {

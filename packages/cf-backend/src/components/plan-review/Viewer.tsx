@@ -10,7 +10,9 @@ import { computeListIndices, groupBlocks, type Frontmatter, type FrontmatterValu
 import { buildHeadingSlugMap } from '@plannotator/ui/utils/slugify';
 import { copyTextToClipboard } from '@plannotator/ui/utils/clipboard';
 import { useAnnotationHighlighter } from '@plannotator/ui/hooks/useAnnotationHighlighter';
-import type { GeneralNote, PassageNote } from '@kinu.run/core';
+import { blockServer, type GeneralNote, type PassageNote } from '@kinu.run/core';
+import { DrawnSlate, refusedCalls } from '@/components/slates/DrawnSlate';
+import { SlateInlineContext } from '@/components/slates/context';
 import { editorAnnotationOf, reviewNoteOf } from './notes';
 import { TextArea } from "@/components/ui/Field";
 import { Floating } from '@/components/ui/Floating';
@@ -62,9 +64,14 @@ const FrontmatterCard = ({ frontmatter }: { frontmatter: Frontmatter }) => {
   );
 };
 
-const INLINE_TAGS = ['a', 'br', 'code', 'del', 'em', 's', 'span', 'strong', 'sub', 'sup'];
+const INLINE_TAGS = ['a', 'br', 'code', 'del', 'em', 'img', 's', 'span', 'strong', 'sub', 'sup'];
 
-const INLINE_ATTRIBUTES = ['href', 'rel', 'target', 'title'];
+const INLINE_ATTRIBUTES = ['alt', 'href', 'rel', 'src', 'target', 'title'];
+
+/** A plan's `<slate-ui>` page, as the review hands it to the parser: a fence of this language (`PlanReviewView`). */
+export const PLAN_PAGE_LANGUAGE = 'kinu-slate-ui';
+
+const PLAN_PAGE_CALLS = refusedCalls("a plan's page has no workspace behind it");
 
 const escapeAttribute = (value: string): string => value
   .replace(/&/g, '&amp;')
@@ -204,6 +211,17 @@ const PlanBlock = React.memo(({
         className="math-annotatable"
         dangerouslySetInnerHTML={{ __html: html }}
       />
+    );
+  }
+
+  // Drawn as an answer's page is, with no workspace behind it: each call it makes is refused, and it opens nowhere.
+  if (block.type === 'code' && block.language === PLAN_PAGE_LANGUAGE) {
+    return (
+      <div data-block-id={block.id} className="my-4">
+        <SlateInlineContext.Provider value={null}>
+          <DrawnSlate id={`plan-${block.id}`} block={block.id} html={blockServer(block.content).page} closed call={PLAN_PAGE_CALLS} />
+        </SlateInlineContext.Provider>
+      </div>
     );
   }
 
@@ -489,6 +507,9 @@ export const Viewer = ({
     mode,
     enabled: true,
     interactive: !readOnly,
+    // A page drawn in place of its source moves the positions a note was saved at: a note is painted only where its own
+    // text still is, else found by its quote.
+    verifyRestoredContent: true,
   });
 
   useEffect(() => {
