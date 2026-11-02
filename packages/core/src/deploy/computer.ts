@@ -5,6 +5,7 @@ import * as v from 'valibot';
 import type { KinuError } from '../obs/index';
 import { cloudflareResult, readEnvelope } from './cloudflare';
 import type { DeployContext } from './context';
+import { deploymentWorkers } from './front';
 import { instanceToken } from './instance-token';
 import { REGISTRY_TOKEN_SECRET, resourceName } from './inputs';
 import { devboxToolsPath, type ReleaseComputer, type ReleaseManifest } from './manifest';
@@ -123,9 +124,10 @@ export function computerStep(manifest: ReleaseManifest): DeployStep {
           context.transport, { method: 'GET', path: `/accounts/${account}/workers/durable_objects/namespaces?per_page=1000` }, v.array(NamespaceSchema),
         ));
 
-        const namespace = namespaces.find((entry) => entry.script === context.inputs.instanceName && entry.class === className);
+        const { main } = deploymentWorkers(context.inputs.instanceName);
+        const namespace = namespaces.find((entry) => entry.script === main && entry.class === className);
 
-        if (namespace === undefined) return yield* Effect.die(new Error(`the upload made no ${className} namespace for ${context.inputs.instanceName}`));
+        if (namespace === undefined) return yield* Effect.die(new Error(`the upload made no ${className} namespace for ${main}`));
         const path = `/accounts/${account}/containers/applications`;
         const held = yield* Effect.promise(async () => context.transport.request({ method: 'GET', path: `${path}/${namespace.id}` }));
 

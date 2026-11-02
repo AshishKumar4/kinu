@@ -4,6 +4,7 @@ import { Effect } from 'effect';
 import type { KinuError } from '../obs/index';
 import { scriptBindings } from './account';
 import type { DeployContext } from './context';
+import { deploymentWorkers } from './front';
 import { CREDITS_TOKEN_SECRET } from './inputs';
 import { instanceToken, scopeRefused } from './instance-token';
 import type { DeployStep } from './steps';
@@ -22,7 +23,7 @@ export function creditsTokenStep(): DeployStep {
       return Effect.gen(function* () {
         const { accountId, instanceName } = context.inputs;
 
-        if (context.update && (yield* scriptBindings(context.transport, accountId, instanceName)).some((binding) => binding.name === CREDITS_TOKEN_SECRET)) {
+        if (context.update && (yield* scriptBindings(context.transport, accountId, deploymentWorkers(instanceName).main)).some((binding) => binding.name === CREDITS_TOKEN_SECRET)) {
           return 'The running version keeps its credits token.';
         }
 

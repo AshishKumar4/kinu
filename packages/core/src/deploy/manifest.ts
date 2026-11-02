@@ -109,7 +109,7 @@ export interface ReleaseManifest {
   readonly builtAt: string;
   readonly channelOrigin: string;
   readonly worker: ReleaseWorker;
-  /** The front Worker a deployment on its own domain answers it from (front.ts); its bindings are derived. */
+  /** The front Worker that answers a self-hosted deployment's address (front.ts); its bindings are derived. */
   readonly front: ReleaseModules | null;
   readonly bindings: readonly ReleaseBinding[];
   readonly vectorIndexes: readonly ReleaseVectorIndex[];

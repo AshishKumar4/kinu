@@ -6,7 +6,7 @@ import {
   ACCESS_TOKEN_KEY, DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET, DEPLOY_CLIENT_ID_KEY,
   CLOUDFLARE_DEPLOY_CLIENT, CLOUDFLARE_DEPLOY_SCOPES, deployClientDrift, FIRST_OWNER_LINK_MS, FIRST_OWNER_LINK_SECRET,
   HeldBytes, LOCAL_PORT, LocalConfigSchema, MINTED_SECRETS, promptedSecrets,
-  FACT_VERSION_ID, REFRESH_TOKEN_KEY, deployDoor, deployPlan, deployRunView, domainsMatching, factsFrom, frontWorkerName,
+  FACT_VERSION_ID, REFRESH_TOKEN_KEY, deployDoor, deployPlan, deployRunView, deploymentWorkers, domainsMatching, factsFrom,
   judgeRefusal, localLayout, mailHostPreview, parseReleaseManifest, plannedRun, preflight, releaseDir,
   renderLocalConfig, renderWorkerdConfig, runDeployPlan, unhostedBindings, workerdDirectories,
 } from '../src/deploy/index';
@@ -90,6 +90,8 @@ const INPUTS: DeployInputs = {
   providerKeyNames: [],
   sandbox: false,
 };
+
+const WORKERS = deploymentWorkers(INPUTS.instanceName);
 
 interface Recorded {
   readonly method: string;
@@ -345,7 +347,7 @@ class FakeCloudflare implements CloudflareTransport {
   /** A front a previous run of this deployment put in place. */
   serveFront(): void {
     this.frontExists = true;
-    this.frontBindings = [{ type: 'service', name: 'MAIN', service: INPUTS.instanceName }];
+    this.frontBindings = [{ type: 'service', name: 'MAIN', service: WORKERS.main }];
   }
 
   /** Null: the account has no workers.dev subdomain yet, which the API answers 404. */
@@ -395,7 +397,7 @@ class FakeCloudflare implements CloudflareTransport {
 
     if (call.path.includes('/email/sending/suppressions')) return this.ok(this.suppressions);
 
-    if (scripts) return this.ok([...this.scriptExists ? [INPUTS.instanceName] : [], ...this.frontExists ? [frontWorkerName(INPUTS.instanceName)] : [], ...this.otherScripts].map((id) => ({ id })));
+    if (scripts) return this.ok([...this.scriptExists ? [WORKERS.main] : [], ...this.frontExists ? [WORKERS.front] : [], ...this.otherScripts].map((id) => ({ id })));
 
     if (call.path.includes('/versions?deployable=true')) return this.ok({ items: this.versions.map((id) => ({ id, annotations: { 'workers/tag': this.tags.get(id) ?? '' } })) });
 
@@ -474,7 +476,7 @@ class FakeCloudflare implements CloudflareTransport {
   /** The version a request with these headers reaches: the override's, when it is in the live deployment. */
   answering(headers: Readonly<Record<string, string>> | undefined): string {
     const override = new Headers(headers).get('cloudflare-workers-version-overrides') ?? '';
-    const named = /^kinu="(.+)"$/u.exec(override)?.[1];
+    const named = /^kinu-app="(.+)"$/u.exec(override)?.[1];
     const late = this.overrideLateAsks > 0;
 
     if (late) this.overrideLateAsks -= 1;
@@ -502,7 +504,7 @@ class FakeCloudflare implements CloudflareTransport {
     // Another Worker of the account: no deployment record among its bindings.
     if (this.otherScripts.some((name) => call.path.endsWith(`/workers/scripts/${name}/settings`))) return this.ok({ bindings: [{ type: 'plain_text', name: 'GREETING', text: 'hi' }] });
 
-    if (call.path.endsWith(`/workers/scripts/${frontWorkerName(INPUTS.instanceName)}/settings`)) {
+    if (call.path.endsWith(`/workers/scripts/${WORKERS.front}/settings`)) {
       return this.frontExists ? this.ok({ bindings: this.frontBindings }) : { status: 404, body: { success: false, errors: [{ code: 10007, message: 'workers.api.error.script_not_found' }], result: null } };
     }
 
@@ -658,11 +660,11 @@ class FakeCloudflare implements CloudflareTransport {
     }
 
     // The front Worker: its own script, deployed as it is uploaded, beside the main Worker's versions.
-    if (upload.path.endsWith(`/workers/scripts/${frontWorkerName(INPUTS.instanceName)}`)) {
+    if (upload.path.endsWith(`/workers/scripts/${WORKERS.front}`)) {
       this.frontExists = true;
       this.frontBindings = v.is(v.string(), metadataPart) ? parseJsonObject(metadataPart).bindings ?? [] : [];
 
-      return { status: 200, body: { success: true, errors: [], result: { id: frontWorkerName(INPUTS.instanceName) } } };
+      return { status: 200, body: { success: true, errors: [], result: { id: WORKERS.front } } };
     }
 
     this.scriptExists = true;
@@ -682,7 +684,7 @@ class FakeCloudflare implements CloudflareTransport {
     if (upload.method === 'PUT') {
       this.deployments.push([{ version_id: version, percentage: 100 }]);
 
-      return { status: 200, body: { success: true, errors: [], result: { id: INPUTS.instanceName } } };
+      return { status: 200, body: { success: true, errors: [], result: { id: WORKERS.main } } };
     }
 
     return { status: 200, body: { success: true, errors: [], result: { id: version } } };
@@ -1034,28 +1036,27 @@ describe('a guided run', () => {
       ['/storage/kv/namespaces', '/r2/buckets', '/vectorize/v2/indexes', '/ai-gateway/gateways'].some((path) => call.path.includes(path)) ? index : last
     ), -1);
 
-    const uploaded = at((call) => call.path.endsWith('/workers/scripts/kinu'));
+    const uploaded = at((call) => call.path.endsWith('/workers/scripts/kinu-app'));
 
     expect({ done: rows.every((row) => row.state === 'done'), atOnce: bucketsAsked < namespaceMade, uploadAfter: uploaded > lastStorage })
       .toEqual({ done: true, atOnce: true, uploadAfter: true });
   });
 
-  // A workers.dev address is its Worker's own name, so only a deployment on its own domain has a front (front.ts).
   test('a deployment on its own domain is answered from a front once its main Worker serves all traffic', async () => {
     const own = { ...INPUTS, address: { kind: 'zone' as const, hostname: 'kinu.example.com', zoneId: EXAMPLE_ZONE } };
     const rows = await run(own);
     const at = (match: (call: Recorded) => boolean) => cloudflare.calls.findIndex(match);
-    const front = cloudflare.calls.find((call) => call.path.endsWith('/workers/scripts/kinu-front'));
+    const front = cloudflare.calls.find((call) => call.path.endsWith('/workers/scripts/kinu'));
     const bindings = uploadedBindings(front);
     const domains = cloudflare.calls.filter((call) => call.path.endsWith('/workers/domains')).map((call) => call.body?.service);
-    const promoted = at((call) => call.path.endsWith('/workers/scripts/kinu/deployments') && JSON.stringify(call.body ?? {}).includes('"percentage":100}]'));
-    const handedOver = at((call) => call.path.endsWith('/workers/scripts/kinu/secrets') && JSON.stringify(call.body ?? {}).includes(DEPLOYMENT_RECORD_SECRET));
+    const promoted = at((call) => call.path.endsWith('/workers/scripts/kinu-app/deployments') && JSON.stringify(call.body ?? {}).includes('"percentage":100}]'));
+    const handedOver = at((call) => call.path.endsWith('/workers/scripts/kinu-app/secrets') && JSON.stringify(call.body ?? {}).includes(DEPLOYMENT_RECORD_SECRET));
 
     expect({
       done: rows.every((row) => row.state === 'done'),
       afterPromote: at((call) => call === front) > promoted,
       // The run's credentials are wiped at handover, so it waits for the front, which a retry would need them for.
-      handoverLast: handedOver > at((call) => call.method === 'PUT' && call.path.endsWith('/workers/domains') && call.body?.service === 'kinu-front'),
+      handoverLast: handedOver > at((call) => call.method === 'PUT' && call.path.endsWith('/workers/domains') && call.body?.service === 'kinu'),
       objects: bindings.filter((binding) => binding.type === 'durable_object_namespace').map((binding) => [binding.name, binding.script_name]),
       main: bindings.find((binding) => binding.type === 'service'),
       secrets: bindings.filter((binding) => binding.type === 'secret_text').length,
@@ -1065,16 +1066,36 @@ describe('a guided run', () => {
       done: true,
       afterPromote: true,
       handoverLast: true,
-      objects: [['UserDO', 'kinu'], ['OrchestratorAgent', 'kinu']],
-      main: { type: 'service', name: 'MAIN', service: 'kinu' },
+      objects: [['UserDO', 'kinu-app'], ['OrchestratorAgent', 'kinu-app']],
+      main: { type: 'service', name: 'MAIN', service: 'kinu-app' },
       secrets: 0,
       origin: 'https://kinu.example.com',
-      domains: ['kinu', 'kinu-front'],
+      domains: ['kinu-app', 'kinu'],
     });
 
-    cloudflare = new FakeCloudflare();
-    await run();
-    expect(cloudflare.calls.some((call) => call.path.includes('kinu-front'))).toBe(false);
+  });
+
+  // A workers.dev address is a Worker's own name, so the front holds it and the main Worker answers only through it.
+  test('a deployment on workers.dev is answered from its front, which a first run puts in place before the smoke', async () => {
+    const rows = await run();
+    const at = (match: (call: Recorded) => boolean) => cloudflare.calls.findIndex(match);
+    const frontPut = at((call) => call.method === 'PUT' && call.path.endsWith('/workers/scripts/kinu'));
+    const smoked = at((call) => call.path.endsWith('/workers/scripts/kinu-app/deployments') && JSON.stringify(call.body ?? {}).includes('"percentage":100}]'));
+    const routes = cloudflare.calls.filter((call) => call.path.endsWith('/subdomain') && call.method === 'POST').map((call) => [call.path.split('/').at(-2), call.body?.enabled]);
+
+    expect({
+      done: rows.every((row) => row.state === 'done'),
+      beforeSmoke: frontPut >= 0 && frontPut < smoked,
+      main: uploadedBindings(cloudflare.calls[frontPut]).find((binding) => binding.type === 'service'),
+      routes,
+      address: cloudflare.calls.some((call) => call.path.endsWith('/workers/domains')),
+    }).toEqual({
+      done: true,
+      beforeSmoke: true,
+      main: { type: 'service', name: 'MAIN', service: 'kinu-app' },
+      routes: [['kinu', true], ['kinu-app', false]],
+      address: false,
+    });
   });
 
   // The smoke reaches the version under test through the front (an override is carried to the Worker it names through
@@ -1083,7 +1104,7 @@ describe('a guided run', () => {
     updating = true;
     cloudflare.serveExisting(PRIOR_VERSION);
     cloudflare.serveFront();
-    cloudflare.domains.set('kinu.example.com', 'kinu-front');
+    cloudflare.domains.set('kinu.example.com', 'kinu');
 
     const rows = await run({ ...INPUTS, address: { kind: 'zone', hostname: 'kinu.example.com', zoneId: EXAMPLE_ZONE } });
 
@@ -1091,7 +1112,7 @@ describe('a guided run', () => {
       done: rows.every((row) => row.state === 'done'),
       bound: cloudflare.calls.filter((call) => call.method === 'PUT' && call.path.endsWith('/workers/domains')).map((call) => call.body?.service),
       domains: cloudflare.domains,
-    }).toEqual({ done: true, bound: ['kinu-front', 'kinu-front'], domains: new Map([['kinu.example.com', 'kinu-front']]) });
+    }).toEqual({ done: true, bound: ['kinu', 'kinu'], domains: new Map([['kinu.example.com', 'kinu']]) });
   });
 
   test('another Worker under the front\'s name answers nothing of the deployment, and the front step refuses, naming it', async () => {
@@ -1103,11 +1124,11 @@ describe('a guided run', () => {
     expect({
       front: rows.find((row) => row.id === 'front')?.state,
       words: JSON.stringify(rows.find((row) => row.id === 'front')),
-      uploaded: cloudflare.calls.some((call) => call.method === 'PUT' && call.path.endsWith('/workers/scripts/kinu-front')),
+      uploaded: cloudflare.calls.some((call) => call.method === 'PUT' && call.path.endsWith('/workers/scripts/kinu')),
       domains: cloudflare.domains,
     }).toEqual({
       front: 'failed', words: expect.stringContaining('another Worker named kinu-front'), uploaded: false,
-      domains: new Map([['kinu.example.com', 'kinu']]),
+      domains: new Map([['kinu.example.com', 'kinu-app']]),
     });
   });
 
@@ -1116,13 +1137,13 @@ describe('a guided run', () => {
     cloudflare.serveExisting(PRIOR_VERSION);
     cloudflare.frontExists = true;
     cloudflare.frontBindings = [{ type: 'service', name: 'MAIN', service: 'blog' }];
-    cloudflare.refusal = { method: 'GET', path: `/accounts/${INPUTS.accountId}/workers/scripts/kinu-front/settings`, status: 503, code: 10_013, message: 'internal error' };
+    cloudflare.refusal = { method: 'GET', path: `/accounts/${INPUTS.accountId}/workers/scripts/kinu/settings`, status: 503, code: 10_013, message: 'internal error' };
 
     const rows = await run({ ...INPUTS, address: { kind: 'zone', hostname: 'kinu.example.com', zoneId: EXAMPLE_ZONE } });
 
     expect({
       address: rows.find((row) => row.id === 'address')?.state,
-      uploaded: cloudflare.calls.some((call) => call.method === 'PUT' && call.path.endsWith('/workers/scripts/kinu-front')),
+      uploaded: cloudflare.calls.some((call) => call.method === 'PUT' && call.path.endsWith('/workers/scripts/kinu')),
     }).toEqual({ address: 'failed', uploaded: false });
   });
 
@@ -1150,7 +1171,7 @@ describe('a guided run', () => {
   test('uploads the version with the bindings the release names', async () => {
     await run();
 
-    const upload = cloudflare.calls.find((call) => call.path.endsWith('/workers/scripts/kinu'));
+    const upload = cloudflare.calls.find((call) => call.path.endsWith('/workers/scripts/kinu-app'));
     const bindings = uploadedBindings(upload);
     const named = new Set(bindings.map((binding) => binding.name));
 
@@ -1171,7 +1192,7 @@ describe('a guided run', () => {
   test('sends the carried vars and the deployment\'s own, never kinu.run\'s', async () => {
     await run();
 
-    const upload = cloudflare.calls.find((call) => call.path.endsWith('/workers/scripts/kinu'));
+    const upload = cloudflare.calls.find((call) => call.path.endsWith('/workers/scripts/kinu-app'));
     const bindings = uploadedBindings(upload);
     const plain = bindings.filter((binding) => binding.type === 'plain_text');
 
@@ -1186,7 +1207,7 @@ describe('a guided run', () => {
   /** The mail vars the run uploaded: EMAIL_DOMAIN, then MAIL_ACCOUNTS. */
   const mailVars = async (inputs: DeployInputs): Promise<(string | undefined)[]> => {
     await run(inputs);
-    const plain = uploadedBindings(cloudflare.calls.find((call) => call.path.endsWith('/workers/scripts/kinu'))).filter((binding) => binding.type === 'plain_text');
+    const plain = uploadedBindings(cloudflare.calls.find((call) => call.path.endsWith('/workers/scripts/kinu-app'))).filter((binding) => binding.type === 'plain_text');
 
     return ['EMAIL_DOMAIN', 'MAIL_ACCOUNTS'].map((name) => plain.find((binding) => binding.name === name)?.text);
   };
@@ -1197,7 +1218,7 @@ describe('a guided run', () => {
 
     expect(rows.find((row) => row.id === 'mail')).toMatchObject({ state: 'done' });
     expect([...cloudflare.routing.enabled]).toEqual(['zone-raman']);
-    expect(cloudflare.routing.catchAll.get('zone-raman')).toMatchObject({ matchers: [{ type: 'all' }], actions: [{ type: 'worker', value: ['kinu'] }] });
+    expect(cloudflare.routing.catchAll.get('zone-raman')).toMatchObject({ matchers: [{ type: 'all' }], actions: [{ type: 'worker', value: ['kinu-app'] }] });
     // Sending wrote its bounce records and a DMARC of its own; the step leaves the records, and the DMARC is its own,
     // report-only, since the domain had none before.
     expect(cloudflare.dns.map((record) => `${record.type} ${record.name} ${record.content}`)).toEqual([
@@ -1242,7 +1263,7 @@ describe('a guided run', () => {
 
     expect(rows.find((row) => row.id === 'mail')).toMatchObject({ state: 'done', detail: expect.stringContaining('needs 2 things from you') });
     expect(rows.find((row) => row.id === 'smoke')?.state).toBe('done');
-    expect(asked.some((note) => note.includes('catch-all to "Send to a Worker: kinu"'))).toBe(true);
+    expect(asked.some((note) => note.includes('catch-all to "Send to a Worker: kinu-app"'))).toBe(true);
     expect(asked.some((note) => note.includes('TXT _dmarc.raman.dev v=DMARC1; p=none; rua=mailto:dmarc@raman.dev'))).toBe(true);
   });
 
@@ -1267,7 +1288,7 @@ describe('a guided run', () => {
       { method: 'POST', path: '/zones/zone-raman/email/routing/dns', body: {} },
       {
         method: 'PUT', path: '/zones/zone-raman/email/routing/rules/catch_all',
-        body: { enabled: true, name: 'Kinu', matchers: [{ type: 'all' }], actions: [{ type: 'worker', value: ['kinu'] }] },
+        body: { enabled: true, name: 'Kinu', matchers: [{ type: 'all' }], actions: [{ type: 'worker', value: ['kinu-app'] }] },
       },
       dmarc,
       { method: 'GET', path: '/zones/zone-raman/email/sending/subdomains' },
@@ -1282,7 +1303,7 @@ describe('a guided run', () => {
   });
 
   /** What the run uploaded under `name`: a plain var's text, or a secret's. */
-  const uploaded = (name: string) => uploadedBindings([...cloudflare.calls].reverse().find((call) => call.path.endsWith('/workers/scripts/kinu') || call.path.endsWith('/workers/scripts/kinu/versions')))
+  const uploaded = (name: string) => uploadedBindings([...cloudflare.calls].reverse().find((call) => call.path.endsWith('/workers/scripts/kinu-app') || call.path.endsWith('/workers/scripts/kinu-app/versions')))
     .find((binding) => binding.name === name)?.text;
 
   test('a subdomain is routed by its name with no catch-all, and the run mints its routing token for that zone alone', async () => {
@@ -1346,7 +1367,7 @@ describe('a guided run', () => {
     cloudflare.zones.set('raman.dev', 'zone-raman');
     cloudflare.zones.set('northwind.dev', 'zone-northwind');
     await run({ ...INPUTS, mailDomain: 'mail.raman.dev' });
-    cloudflare.rules.set('rule-1', { zone: 'zone-raman', to: 'dana@mail.raman.dev', worker: 'kinu' });
+    cloudflare.rules.set('rule-1', { zone: 'zone-raman', to: 'dana@mail.raman.dev', worker: 'kinu-app' });
     cloudflare.rules.set('rule-2', { zone: 'zone-raman', to: 'eval@staging.raman.dev', worker: 'kinu-staging' });
     cloudflare.calls.length = 0;
     ledger = new ArrayLedger();
@@ -1421,7 +1442,7 @@ describe('a guided run', () => {
 
     const session = cloudflare.calls.find((call) => call.path.endsWith('/assets-upload-session'));
     const batch = cloudflare.calls.find((call) => call.path.includes('/workers/assets/upload'));
-    const upload = cloudflare.calls.find((call) => call.path.endsWith('/workers/scripts/kinu'));
+    const upload = cloudflare.calls.find((call) => call.path.endsWith('/workers/scripts/kinu-app'));
 
     expect(session?.body?.manifest).toEqual({
       '/index.html': { hash: '1'.repeat(32), size: 5 },
@@ -1490,7 +1511,7 @@ describe('what a run asks, makes and hands over', () => {
     const [seat] = seats;
     const token = new URL(seat?.link ?? 'https://absent.invalid').searchParams.get('setup') ?? '';
 
-    const bound = uploadedBindings(cloudflare.calls.find((call) => call.path.endsWith('/workers/scripts/kinu')))
+    const bound = uploadedBindings(cloudflare.calls.find((call) => call.path.endsWith('/workers/scripts/kinu-app')))
       .find((binding) => binding.name === FIRST_OWNER_LINK_SECRET);
 
     expect(cloudflare.calls.filter((call) => call.path.includes('/access/'))).toEqual([]);
@@ -1531,7 +1552,7 @@ describe('the computer', () => {
 
   test('copies its tools, mints its registry token and makes its application on no image', async () => {
     const rows = await run(COMPUTER_INPUTS, WITH_COMPUTER);
-    const upload = cloudflare.calls.find((call) => call.path.endsWith('/workers/scripts/kinu'));
+    const upload = cloudflare.calls.find((call) => call.path.endsWith('/workers/scripts/kinu-app'));
     const bindings = uploadedBindings(upload);
 
     expect(rows.every((row) => row.state === 'done')).toBe(true);
@@ -1568,7 +1589,7 @@ describe('the computer', () => {
 
   test('a deployment without it runs none of its steps and binds no container', async () => {
     const rows = await run(INPUTS, WITH_COMPUTER);
-    const upload = cloudflare.calls.find((call) => call.path.endsWith('/workers/scripts/kinu'));
+    const upload = cloudflare.calls.find((call) => call.path.endsWith('/workers/scripts/kinu-app'));
 
     expect(rows.every((row) => row.state === 'done')).toBe(true);
     // The account step's one read of the plan (`workersPlan`) aside, which every run makes.
@@ -1603,7 +1624,7 @@ describe('a refusal', () => {
   // The owner's free account, 2026-10-21: 10089 at the upload, and no API turns Analytics Engine on. Owner decision: skip it.
   test('a version refused for Analytics Engine off is uploaded once more without its datasets, and the run says so', async () => {
     cloudflare.refusal = {
-      path: `/accounts/${INPUTS.accountId}/workers/scripts/kinu`, method: 'PUT', status: 403, code: 10_089,
+      path: `/accounts/${INPUTS.accountId}/workers/scripts/kinu-app`, method: 'PUT', status: 403, code: 10_089,
       message: 'You need to enable Analytics Engine. Head to the Cloudflare Dashboard to enable: https://dash.cloudflare.com/x/workers/analytics-engine',
     };
     const rows = await run();
@@ -1648,7 +1669,7 @@ describe('a refusal', () => {
       endpoint: `/accounts/${INPUTS.accountId}/r2/buckets?per_page=100`,
     });
     expect(rows.find((row) => row.id === 'upload')?.state).toBe('pending');
-    expect(cloudflare.calls.some((call) => call.path.endsWith('/workers/scripts/kinu'))).toBe(false);
+    expect(cloudflare.calls.some((call) => call.path.endsWith('/workers/scripts/kinu-app'))).toBe(false);
   });
 
   test('is retried by running the plan again: that step, not the ones before it', async () => {
@@ -1716,7 +1737,7 @@ describe('an eviction in the middle of a step', () => {
 
   test('facts an earlier activation established survive into the next one', async () => {
     cloudflare.refusal = {
-      path: `/accounts/${INPUTS.accountId}/workers/scripts/kinu/subdomain`,
+      path: `/accounts/${INPUTS.accountId}/workers/scripts/kinu-app/subdomain`,
       status: 500,
       code: 10000,
       message: 'internal error',
@@ -1919,7 +1940,7 @@ describe('what the address and smoke steps check', () => {
   test('a refused deployment pointer fails the address step', async () => {
     cloudflare.refusal = {
       method: 'POST',
-      path: `/accounts/${INPUTS.accountId}/workers/scripts/kinu/deployments`,
+      path: `/accounts/${INPUTS.accountId}/workers/scripts/kinu-app/deployments`,
       status: 403,
       code: 10_026,
       message: 'workers.api.error.deployment_not_permitted',
@@ -2147,7 +2168,7 @@ describe('the page\'s view of a run', () => {
 
   // f44999, 2026-10-21: one of eight uploads of one rc30 bundle refused, the same bundle passing when asked again.
   test('a startup Cloudflare refuses is a refusal in its own words, with a retry the person presses', () => {
-    const words = { message: 'Error: Script startup exceeded CPU time limit.\n', code: 10_021, status: 400, endpoint: `/accounts/${ACCOUNT}/workers/scripts/kinu/versions` };
+    const words = { message: 'Error: Script startup exceeded CPU time limit.\n', code: 10_021, status: 400, endpoint: `/accounts/${ACCOUNT}/workers/scripts/kinu-app/versions` };
 
     expect(judgeRefusal(words, ACCOUNT)).toEqual({ refused: {
       sentence: 'Cloudflare\'s check of how fast Kinu starts ran slow this time. The same release usually passes when checked again.',
@@ -2212,7 +2233,7 @@ describe('what the page reads of an account', () => {
   });
 
   test('a version refused for Dynamic Workers on Workers Free is the plan need, in Cloudflare\'s words', () => {
-    const words = { message: 'In order to use Dynamic Workers, you must switch to a paid plan at https://dash.cloudflare.com/x/workers/plans.', code: 10_195, status: 403, endpoint: `/accounts/${ACCOUNT}/workers/scripts/kinu` };
+    const words = { message: 'In order to use Dynamic Workers, you must switch to a paid plan at https://dash.cloudflare.com/x/workers/plans.', code: 10_195, status: 403, endpoint: `/accounts/${ACCOUNT}/workers/scripts/kinu-app` };
     const judged = judgeRefusal(words, ACCOUNT);
 
     expect('need' in judged ? [judged.need.id, judged.need.sentence] : judged).toEqual(['plan', 'Kinu runs on Cloudflare\'s Workers Paid plan, $5 a month.']);

@@ -10,6 +10,7 @@ import { Cause, Effect } from 'effect';
 import * as v from 'valibot';
 import { diagnostics, KinuError } from '../obs/index';
 import { CloudflareApiError, bearerTransport, cloudflarePages, cloudflareResult, type CloudflareTransport } from './cloudflare';
+import { deploymentWorkers } from './front';
 import { DeploymentRecordSchema } from './inputs';
 
 /** What the deployment holds that its routing reads. */
@@ -134,7 +135,7 @@ export function mailRoutesOf(env: MailRoutingEnv, fetchImpl: typeof fetch = fetc
 
   if (zone === '' || domain === '') return null;
   const record = v.safeParse(RecordText, env.KINU_DEPLOYMENT_RECORD ?? '');
-  const worker = record.success ? record.output.inputs.instanceName : '';
+  const worker = record.success ? deploymentWorkers(record.output.inputs.instanceName).main : '';
   const token = env.KINU_MAIL_ROUTING_TOKEN ?? '';
 
   if (worker !== '' && token !== '') return routingRules({ zone, worker, domain, token }, bearerTransport(token, fetchImpl));

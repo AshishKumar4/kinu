@@ -92,6 +92,7 @@ const FILES = {
   'worker/chunk.js': 'export const chunk = 1;\n',
   'client/index.html': '<!doctype html><title>probe</title>\n',
   'client/app.js': 'console.log("probe");\n',
+  'front/index.js': 'export default { fetch: (request, env) => env.MAIN.fetch(request) };\n',
 } satisfies Record<string, string>;
 
 /**
@@ -250,6 +251,7 @@ function manifestText(build: DeployFakeServedBuild): string {
     })),
     seed: null,
     computer: null,
+    front: { mainModule: 'index.js', modules: ['index.js'], modulesPath: 'front' },
   });
 }
 
@@ -413,6 +415,8 @@ interface Held {
   uploads: number;
   creates: string[];
   scriptExists: boolean;
+  /** The front's bindings once a run put it in place (`deploymentWorkers`: it holds the deployment's name), else null. */
+  frontBindings: v.InferOutput<typeof FrontBindingsSchema> | null;
   /** The last version's bindings as settings answer them: plain-text vars with their text, Durable Objects by class. */
   bindings: { type: string; name: string; text?: string; class_name?: string }[];
   /** Each version's `workers/tag`. */
@@ -465,6 +469,7 @@ function fresh(): Held {
     uploads: 0,
     creates: [],
     scriptExists: false,
+    frontBindings: null,
     bindings: [],
     tags: new Map<string, string>(),
     user: DEPLOY_FAKE_USER,
@@ -502,6 +507,7 @@ function reset(): void {
   held.uploads = 0;
   held.creates = empty.creates;
   held.scriptExists = false;
+  held.frontBindings = null;
   held.bindings = [];
   held.tags = new Map<string, string>();
   held.user = DEPLOY_FAKE_USER;
@@ -555,7 +561,7 @@ function servingVersion(): string {
 /** The version a request reaches: the one its override names when that one is in the live
  *  deployment (Cloudflare's version-overrides doc), and otherwise the serving one. */
 function answeringVersion(request: Request): string {
-  const named = /^kinu="(.+)"$/u.exec(request.headers.get('cloudflare-workers-version-overrides') ?? '')?.[1];
+  const named = /^kinu-app="(.+)"$/u.exec(request.headers.get('cloudflare-workers-version-overrides') ?? '')?.[1];
 
   return (held.deployments.at(-1) ?? []).find((entry) => entry.version_id === named)?.version_id ?? servingVersion();
 }
@@ -897,10 +903,14 @@ function workerScriptApi(
     return envelope(null);
   }
 
-  if (path.endsWith('/workers/scripts')) return envelope(held.scriptExists ? [{ id: 'kinu' }] : []);
+  if (path.endsWith('/workers/scripts')) return envelope([...held.scriptExists ? [{ id: 'kinu-app' }] : [], ...held.frontBindings === null ? [] : [{ id: 'kinu' }]]);
 
   if (path.includes('/versions?deployable=true')) {
     return envelope({ items: [...held.versions.keys()].map((id) => ({ id, annotations: { 'workers/tag': held.tags.get(id) ?? '' } })) });
+  }
+
+  if (path.endsWith('/workers/scripts/kinu/settings')) {
+    return held.frontBindings === null ? refusal(404, 10_007, 'workers.api.error.script_not_found') : envelope({ bindings: held.frontBindings });
   }
 
   // Bindings as settings answer them: a secret by name only, kept from version to version.
@@ -927,6 +937,9 @@ function workerScriptApi(
 
   return undefined;
 }
+
+/** What `frontHeld` (steps.ts) reads of the front: whom its `MAIN` service binding names. */
+const FrontBindingsSchema = v.array(v.object({ type: v.string(), name: v.string(), service: v.optional(v.string()) }));
 
 const VersionMetadataSchema = v.object({
   bindings: v.array(v.object({ type: v.string(), name: v.string(), text: v.optional(v.string()), class_name: v.optional(v.string()) })),
@@ -969,6 +982,16 @@ async function multipart(url: URL, request: Request): Promise<Response> {
     return missing.length === 0
       ? envelope({ jwt: 'completion-token' }, 201)
       : envelope({ uploaded: held.assetsUploaded.size }, 202);
+  }
+
+  // The front (`deploymentWorkers`: it holds the deployment's name), deployed as it is uploaded, beside the main Worker.
+  if (path.endsWith('/workers/scripts/kinu')) {
+    const form = await new Response(raw, { headers: { 'content-type': request.headers.get('content-type') ?? '' } }).formData();
+    const part = form.get('metadata');
+
+    held.frontBindings = v.parse(v.object({ bindings: FrontBindingsSchema }), JSON.parse(typeof part === 'string' ? part : await part?.text() ?? '{}')).bindings;
+
+    return envelope({ id: 'kinu' });
   }
 
   held.footprint.versionBody = Math.max(held.footprint.versionBody, sent);
@@ -1091,6 +1114,7 @@ async function control(url: URL, request: Request): Promise<Response> {
   // What a self-update runs against: a Worker a previous run left serving the older build.
   if (url.pathname === '/existing') {
     held.scriptExists = true;
+    held.frontBindings = [{ type: 'service', name: 'MAIN', service: 'kinu-app' }];
     held.versions.set('version-0', DEPLOY_FAKE_OLDER_BUILD);
     held.deployments.push([{ version_id: 'version-0', percentage: 100 }]);
     // What the run that made it bound: its derived vars, its classes, and the record its handover wrote.

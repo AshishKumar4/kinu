@@ -9,7 +9,7 @@ export {
 
 export { HeldBytes, TarArtifact, type ArtifactMember } from './artifact';
 
-export { FRONT_OBJECTS, MAIN_SERVICE_BINDING, frontWorkerName } from './front';
+export { FRONT_OBJECTS, MAIN_SERVICE_BINDING, deploymentWorkers, frontWorkerName } from './front';
 
 export { GatewayCreditsSchema, gatewayCreditsUrl, type GatewayCredits } from '../providers/gateway-credits';
 

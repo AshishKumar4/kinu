@@ -11,6 +11,7 @@ import { MCP_OAUTH_CALLBACK_PATH } from '../mcp/presets';
 import type { JsonObject } from '../utils/json';
 import { cloudflareResult, type CloudflareTransport } from './cloudflare';
 import { scriptBindings, varsOf } from './account';
+import { deploymentWorkers } from './front';
 import { CONNECTOR_SECRETS, type Connector } from './inputs';
 
 /** Where a person's own account makes an app from a manifest. */
@@ -50,7 +51,7 @@ export function githubAppManifest(origin: string, redirect: string): JsonObject 
 /** The address of the Kinu `name` a run made in `account`; refused for a Worker no run made. */
 export function kinuOrigin(transport: CloudflareTransport, account: string, name: string): Effect.Effect<string, KinuError> {
   return Effect.gen(function* () {
-    const origin = varsOf(yield* scriptBindings(transport, account, name)).get('CLI_PUBLIC_ORIGIN') ?? '';
+    const origin = varsOf(yield* scriptBindings(transport, account, deploymentWorkers(name).main)).get('CLI_PUBLIC_ORIGIN') ?? '';
 
     return URL.canParse(origin) ? origin : yield* new KinuError('missing', `This account runs no Kinu named ${name} that the deploy flow made.`);
   });
@@ -115,7 +116,7 @@ export interface KinuWorker {
  * default (GitHub's token, Google through Composio). Cloudflare deploys each secret as a version of its own.
  */
 export function setConnector(transport: CloudflareTransport, kinu: KinuWorker, connector: Connector, client: OAuthClient | null): Effect.Effect<void> {
-  const path = `/accounts/${kinu.account}/workers/scripts/${kinu.name}/secrets`;
+  const path = `/accounts/${kinu.account}/workers/scripts/${deploymentWorkers(kinu.name).main}/secrets`;
   const { id, secret } = CONNECTOR_SECRETS[connector];
   const answered = v.object({ name: v.optional(v.string()) });
 

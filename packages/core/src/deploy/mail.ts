@@ -11,6 +11,7 @@ import * as v from 'valibot';
 import { KinuError } from '../obs/index';
 import { cloudflareResult, readEnvelope, type CloudflareCall, type CloudflareTransport } from './cloudflare';
 import type { DeployContext } from './context';
+import { deploymentWorkers } from './front';
 import { HOSTNAME, MAIL_ROUTING_SECRET, type DeployInputs } from './inputs';
 import { instanceToken, scopeRefused } from './instance-token';
 import { scriptBindings, varsOf } from './account';
@@ -170,7 +171,7 @@ const routingTokenName = (inputs: DeployInputs, zoneName: string): string => `${
 
 /** What the running version routes by: its zone and mail domain, and whether it holds the routing token. */
 function routedBefore(context: DeployContext): Effect.Effect<{ readonly zone: string; readonly domain: string; readonly token: boolean }, KinuError> {
-  return Effect.map(scriptBindings(context.transport, context.inputs.accountId, context.inputs.instanceName), (bindings) => {
+  return Effect.map(scriptBindings(context.transport, context.inputs.accountId, deploymentWorkers(context.inputs.instanceName).main), (bindings) => {
     const vars = varsOf(bindings);
 
     return { zone: vars.get('KINU_MAIL_ZONE') ?? '', domain: vars.get('EMAIL_DOMAIN') ?? '', token: bindings.some((binding) => binding.name === MAIL_ROUTING_SECRET) };
@@ -262,7 +263,7 @@ async function rulesElsewhere(context: DeployContext, zone: string, inputs: Depl
   const elsewhere = listed.filter((rule) => {
     const { to, worker } = ruleOf(rule);
 
-    return to !== '' && worker === inputs.instanceName && (domain === '' || !to.endsWith(`@${domain}`));
+    return to !== '' && worker === deploymentWorkers(inputs.instanceName).main && (domain === '' || !to.endsWith(`@${domain}`));
   });
 
   for (const rule of elsewhere) {
@@ -291,7 +292,7 @@ function retiredWords(context: DeployContext, inputs: DeployInputs, left: { zone
 
   if (left.rules === null || !left.tokenGone) {
     context.note(`The mail routing this version replaced could not all be removed: in ${zoneName}, delete the Email Routing rules sending `
-      + `addresses not at ${domain} to the Worker ${inputs.instanceName}, then the token "${routingTokenName(inputs, left.name ?? left.zone)}".`);
+      + `addresses not at ${domain} to the Worker ${deploymentWorkers(inputs.instanceName).main}, then the token "${routingTokenName(inputs, left.name ?? left.zone)}".`);
   }
 
   return `${String(left.rules ?? 0)} rule(s) for another domain retired${left.tokenGone && tokenLeft ? `, and the token for ${zoneName}` : ''}.`;
@@ -356,12 +357,12 @@ export function mailStep(inputs: DeployInputs) {
 
         const catchAll = routed === null || !apex ? routed : await allowed(context.transport, {
           method: 'PUT', path: `/zones/${zone}/email/routing/rules/catch_all`,
-          body: { enabled: true, name: 'Kinu', matchers: [{ type: 'all' }], actions: [{ type: 'worker', value: [inputs.instanceName] }] },
+          body: { enabled: true, name: 'Kinu', matchers: [{ type: 'all' }], actions: [{ type: 'worker', value: [deploymentWorkers(inputs.instanceName).main] }] },
         }, v.unknown());
 
         if (routed === null || catchAll === null) {
           asks.push(apex
-            ? `In the dashboard, open ${domain}, then Email, then Email Routing: enable it, and set the catch-all to "Send to a Worker: ${inputs.instanceName}". `
+            ? `In the dashboard, open ${domain}, then Email, then Email Routing: enable it, and set the catch-all to "Send to a Worker: ${deploymentWorkers(inputs.instanceName).main}". `
               + 'Or give the deploy token the zone\'s "Email Routing Rules: Edit" and "Zone Settings: Edit".'
             : `In the dashboard, open ${zoned.name}, then Email, then Email Routing, then Settings: add ${domain} under Subdomains. `
               + 'Or give the deploy token the zone\'s "Zone Settings: Edit".');
@@ -394,7 +395,8 @@ export function mailStep(inputs: DeployInputs) {
             + 'Lift any that should get mail in the dashboard: Email, then Email Sending, then Suppression list.');
         }
 
-        const routes = apex ? `routing to ${inputs.instanceName}` : `each address routed to ${inputs.instanceName} by a rule of its own`;
+        const { main } = deploymentWorkers(inputs.instanceName);
+        const routes = apex ? `routing to ${main}` : `each address routed to ${main} by a rule of its own`;
 
         return asks.length === 0
           ? `Mail onboarded on ${domain}: ${routes}, sending, and DMARC at p=none.`

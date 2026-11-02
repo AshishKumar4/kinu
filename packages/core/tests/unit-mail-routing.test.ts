@@ -2,13 +2,16 @@
 // address is and deleted as its root is retired; and nothing ever disables a zone's Email Routing.
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { bearerTransport, mailRoutesOf, type CloudflareCall, type CloudflareHttpResponse, type MailRoutes, type MailRoutingEnv } from '../src/deploy/index';
+import { bearerTransport, deploymentWorkers, mailRoutesOf, type CloudflareCall, type CloudflareHttpResponse, type MailRoutes, type MailRoutingEnv } from '../src/deploy/index';
 import { settle } from '../src/obs/index';
 import { parseJsonObject, type JsonValue } from '../src/utils/json';
 
 const DOMAIN = 'mail.northwind.dev';
 
-const WORKER = 'kinu-raman';
+const INSTANCE = 'kinu-raman';
+
+/** The Worker its rules route to: the deployment's main Worker. */
+const WORKER = deploymentWorkers(INSTANCE).main;
 
 /** What a deployment on a subdomain holds, as the deploy run left it: its zone, its domain, its record, its token. */
 const ROUTED: MailRoutingEnv = {
@@ -16,8 +19,8 @@ const ROUTED: MailRoutingEnv = {
   EMAIL_DOMAIN: DOMAIN,
   KINU_MAIL_ROUTING_TOKEN: 'rules-token',
   KINU_DEPLOYMENT_RECORD: JSON.stringify({
-    inputs: { accountId: '0'.repeat(32), instanceName: WORKER, address: { kind: 'workers-dev', hostname: '', zoneId: '' }, ownerEmail: 'priya@raman.dev', providerKeyNames: [], sandbox: false },
-    address: `${WORKER}.raman.workers.dev`, version: '0.4.0', channelOrigin: 'https://kinu.run', clientId: 'client', deployedAt: '2026-10-21T00:00:00Z',
+    inputs: { accountId: '0'.repeat(32), instanceName: INSTANCE, address: { kind: 'workers-dev', hostname: '', zoneId: '' }, ownerEmail: 'priya@raman.dev', providerKeyNames: [], sandbox: false },
+    address: `${INSTANCE}.raman.workers.dev`, version: '0.4.0', channelOrigin: 'https://kinu.run', clientId: 'client', deployedAt: '2026-10-21T00:00:00Z',
   }),
 };
 

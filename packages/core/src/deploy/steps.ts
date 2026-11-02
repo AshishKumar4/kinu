@@ -24,7 +24,7 @@ import { bytesToBase64 } from '../utils/base64';
 import { randomToken } from '../utils/crypto';
 import { firstOwnerLinkSecret } from '../identity/builtin-sign-in';
 import { releaseModuleKind, type ReleaseBinding, type ReleaseManifest, type ReleaseModules } from './manifest';
-import { FRONT_OBJECTS, MAIN_SERVICE_BINDING, frontWorkerName } from './front';
+import { FRONT_OBJECTS, MAIN_SERVICE_BINDING, deploymentWorkers } from './front';
 import { mailRoutingRetiredStep, mailRoutingStep, mailStep, mailZoneVar } from './mail';
 import { computerStep, computerTokenStep, computerToolsStep } from './computer';
 import { creditsTokenStep } from './credits-token';
@@ -84,9 +84,8 @@ const BASE64_ALPHABET = new TextEncoder()
   .encode('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/');
 
 export function deployPlan(manifest: ReleaseManifest, inputs: DeployInputs): readonly DeployStep[] {
+  const { front } = manifest;
   const { address } = inputs;
-  // A workers.dev address belongs to the main Worker's name, so only a deployment on its own domain has a front.
-  const front = address.kind === 'zone' ? manifest.front : null;
 
   return [
     accountStep(manifest),
@@ -165,10 +164,13 @@ function accountStep(manifest: ReleaseManifest): DeployStep {
           SubdomainSchema,
         ));
 
-        context.facts.set(FACT_WORKERS_SUBDOMAIN, workers.subdomain);
-        context.facts.set(FACT_ADDRESS, `${context.inputs.instanceName}.${workers.subdomain}.workers.dev`);
+        // A workers.dev address is the name of the Worker that answers it: the deployment's front.
+        const address = `${deploymentWorkers(context.inputs.instanceName).front}.${workers.subdomain}.workers.dev`;
 
-        return `Deploying into ${name}, answering on ${context.inputs.instanceName}.${workers.subdomain}.workers.dev.`;
+        context.facts.set(FACT_WORKERS_SUBDOMAIN, workers.subdomain);
+        context.facts.set(FACT_ADDRESS, address);
+
+        return `Deploying into ${name}, answering on ${address}.`;
       });
     },
   };
@@ -466,7 +468,7 @@ function uploadStep(manifest: ReleaseManifest): DeployStep {
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.gen(function* () {
         const accountId = context.inputs.accountId;
-        const script = context.inputs.instanceName;
+        const script = deploymentWorkers(context.inputs.instanceName).main;
         const exists = yield* Effect.promise(async () => scriptExists(context.transport, accountId, script));
         // Once per run (docs/SELF-DEPLOY-FLOW.md § 7): a replay after the version landed finds it by this run's tag.
         const tagged = exists ? yield* Effect.promise(async () => taggedVersion(context, script)) : undefined;
@@ -525,7 +527,7 @@ function uploadVersion(
   context: DeployContext, manifest: ReleaseManifest, path: string, exists: boolean,
 ): Effect.Effect<{ readonly response: CloudflareHttpResponse; readonly carried: CarriedRelease }, KinuError> {
   return Effect.gen(function* () {
-    const session = yield* openAssetSession(context, manifest, context.inputs.instanceName);
+    const session = yield* openAssetSession(context, manifest, deploymentWorkers(context.inputs.instanceName).main);
     const carried = yield* carryArtifact(context, manifest.worker, session);
     const metadata = yield* Effect.promise(async () => versionMetadata(context, manifest, carried.token, exists));
 
@@ -554,26 +556,26 @@ function addressStep(manifest: ReleaseManifest, inputs: DeployInputs): DeploySte
     after: ['computer'],
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.gen(function* () {
-        const accountId = context.inputs.accountId;
-        const script = context.inputs.instanceName;
+        const { main, front } = deploymentWorkers(context.inputs.instanceName);
+        const held = manifest.front === null ? 'absent' : yield* frontHeld(context);
 
         if (inputs.address.kind === 'workers-dev') {
-          yield* Effect.promise(async () => cloudflareResult(
-            context.transport,
-            {
-              method: 'POST',
-              path: `/accounts/${accountId}/workers/scripts/${script}/subdomain`,
-              body: { enabled: true, previews_enabled: false },
-            },
-            v.object({ enabled: v.optional(v.boolean()) }),
-          ));
+          if (manifest.front === null) return yield* Effect.die(new Error('this release has no front, which a workers.dev address is answered by'));
+
+          // The address is the front's own name, so the smoke can reach this version only through a front: a first run
+          // puts one in place here, and a later run keeps the one it has until the front step, after the promotion.
+          if (held === 'foreign') return yield* foreignFront(front);
+
+          if (held === 'absent') yield* putFront(context, manifest, manifest.front);
+          yield* workersDev(context, front, true);
+          // Reached through its front alone, as kinu.run's main Worker is.
+          yield* workersDev(context, main, false);
         } else {
           // The front answers once it exists, and the smoke reaches the version under test through it; on a first run
           // the main Worker answers until the front step puts its front in place.
-          const fronted = manifest.front !== null && (yield* frontHeld(context)) === 'ours';
-          const front = frontWorkerName(script);
+          const fronted = held === 'ours';
 
-          yield* bindDomain(context, inputs.address, fronted ? front : script, fronted ? [script, front] : [script]);
+          yield* bindDomain(context, inputs.address, fronted ? front : main, fronted ? [main, front] : [main]);
         }
 
         const version = context.facts.get(FACT_VERSION_ID);
@@ -602,7 +604,7 @@ type SmokeAnswer = { readonly kind: 'answered'; readonly build: UpdateBuild | nu
 
 function askVersion(context: DeployContext, url: string, version: string): Effect.Effect<SmokeAnswer> {
   return Effect.gen(function* () {
-    const response = yield* Effect.promise(async () => context.http(url, { [VERSION_OVERRIDE_HEADER]: `${context.inputs.instanceName}="${version}"` }));
+    const response = yield* Effect.promise(async () => context.http(url, { [VERSION_OVERRIDE_HEADER]: `${deploymentWorkers(context.inputs.instanceName).main}="${version}"` }));
 
     if (response.status === 404) return { kind: 'arriving', why: `${url} answered HTTP 404` };
 
@@ -680,9 +682,10 @@ function promoteStep(): DeployStep {
 }
 
 /**
- * The front Worker its own domain is answered from (front.ts), once the main Worker it binds serves all traffic. Until
- * then the address step binds the domain to the main Worker, which answers every route itself, so a new front never
- * stands before an older main Worker. A front holds no secret: it binds the main Worker's objects and the main Worker.
+ * The front that answers the deployment's address (front.ts), put in place once the main Worker it binds serves all
+ * traffic, so a new front never stands before an older main Worker. On a domain's first run the address step binds the
+ * domain to the main Worker until then; a workers.dev address is the front's own name, so its first front is put in
+ * place by the address step. A front holds no secret: it binds the main Worker's objects and the main Worker.
  */
 function frontStep(manifest: ReleaseManifest, front: ReleaseModules, address: DeployAddress): DeployStep {
   return {
@@ -691,14 +694,37 @@ function frontStep(manifest: ReleaseManifest, front: ReleaseModules, address: De
     after: ['promote'],
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.gen(function* () {
+        const { front: script } = deploymentWorkers(context.inputs.instanceName);
+
+        if ((yield* frontHeld(context)) === 'foreign') return yield* foreignFront(script);
+        yield* putFront(context, manifest, front);
+
+        if (address.kind === 'zone') yield* bindDomain(context, address, script, [deploymentWorkers(context.inputs.instanceName).main, script]);
+
+        return `${script} answers ${context.facts.get(FACT_ADDRESS) ?? ''}.`;
+      });
+    },
+  };
+}
+
+function foreignFront(script: string): Effect.Effect<never, KinuError> {
+  return Effect.fail(new KinuError('denied', `This account has another Worker named ${script}, which is not this deployment's front. Rename or delete it, then retry this step.`));
+}
+
+/** `name`'s workers.dev route, on or off. */
+function workersDev(context: DeployContext, name: string, enabled: boolean): Effect.Effect<void> {
+  return Effect.asVoid(Effect.promise(async () => cloudflareResult(
+    context.transport,
+    { method: 'POST', path: `/accounts/${context.inputs.accountId}/workers/scripts/${name}/subdomain`, body: { enabled, previews_enabled: false } },
+    v.object({ enabled: v.optional(v.boolean()) }),
+  )));
+}
+
+/** The release's front, binding this deployment's main Worker and its objects (FRONT_OBJECTS). */
+function putFront(context: DeployContext, manifest: ReleaseManifest, front: ReleaseModules): Effect.Effect<void, KinuError> {
+  return Effect.gen(function* () {
         const accountId = context.inputs.accountId;
-        const main = context.inputs.instanceName;
-        const script = frontWorkerName(main);
-
-        if ((yield* frontHeld(context)) === 'foreign') {
-          return yield* new KinuError('denied', `This account has another Worker named ${script}, which is not this deployment's front. Rename or delete it, then retry this step.`);
-        }
-
+        const { main, front: script } = deploymentWorkers(context.inputs.instanceName);
         const session = yield* openAssetSession(context, manifest, script);
         const carried = yield* carryArtifact(context, front, session);
         const analytics: JsonValue[] = [];
@@ -739,13 +765,7 @@ function frontStep(manifest: ReleaseManifest, front: ReleaseModules, address: De
 
         context.artifact.held.release(carried.bytes * 2);
         readEnvelope(path, response, NamedSchema);
-
-        yield* bindDomain(context, address, script, [main, script]);
-
-        return `${script} answers ${address.hostname}.`;
-      });
-    },
-  };
+  });
 }
 
 /**
@@ -755,8 +775,8 @@ function frontStep(manifest: ReleaseManifest, front: ReleaseModules, address: De
  */
 function frontHeld(context: DeployContext): Effect.Effect<'ours' | 'absent' | 'foreign', KinuError> {
   return Effect.gen(function* () {
-    const { accountId, instanceName } = context.inputs;
-    const path = `/accounts/${accountId}/workers/scripts/${frontWorkerName(instanceName)}/settings`;
+    const { main, front } = deploymentWorkers(context.inputs.instanceName);
+    const path = `/accounts/${context.inputs.accountId}/workers/scripts/${front}/settings`;
     const response = yield* Effect.promise(async () => context.transport.request({ method: 'GET', path }));
 
     if (response.status === 404) return 'absent';
@@ -765,7 +785,7 @@ function frontHeld(context: DeployContext): Effect.Effect<'ours' | 'absent' | 'f
       bindings: v.array(v.looseObject({ type: v.string(), name: v.string(), service: v.optional(v.string()) })),
     }));
 
-    return bindings.some((binding) => binding.type === 'service' && binding.name === MAIN_SERVICE_BINDING && binding.service === instanceName)
+    return bindings.some((binding) => binding.type === 'service' && binding.name === MAIN_SERVICE_BINDING && binding.service === main)
       ? 'ours'
       : 'foreign';
   });
@@ -810,7 +830,7 @@ function handoverStep(manifest: ReleaseManifest, after: readonly string[]): Depl
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.gen(function* () {
         const accountId = context.inputs.accountId;
-        const script = context.inputs.instanceName;
+        const script = deploymentWorkers(context.inputs.instanceName).main;
         const refresh = yield* Effect.promise(async () => context.vault.read(REFRESH_TOKEN_KEY));
         const clientId = yield* Effect.promise(async () => context.vault.read(DEPLOY_CLIENT_ID_KEY));
 
@@ -1105,7 +1125,7 @@ async function scriptExists(transport: CloudflareTransport, accountId: string, s
 async function liveDeployment(context: DeployContext): Promise<readonly DeployedVersion[]> {
   const listed = await cloudflareResult(
     context.transport,
-    { method: 'GET', path: `/accounts/${context.inputs.accountId}/workers/scripts/${context.inputs.instanceName}/deployments` },
+    { method: 'GET', path: `/accounts/${context.inputs.accountId}/workers/scripts/${deploymentWorkers(context.inputs.instanceName).main}/deployments` },
     DeploymentsSchema,
   );
 
@@ -1127,7 +1147,7 @@ async function deploy(context: DeployContext, versions: readonly DeployedVersion
     context.transport,
     {
       method: 'POST',
-      path: `/accounts/${context.inputs.accountId}/workers/scripts/${context.inputs.instanceName}/deployments`,
+      path: `/accounts/${context.inputs.accountId}/workers/scripts/${deploymentWorkers(context.inputs.instanceName).main}/deployments`,
       body: {
         strategy: 'percentage',
         versions: versions.map((entry) => ({ version_id: entry.version_id, percentage: entry.percentage })),

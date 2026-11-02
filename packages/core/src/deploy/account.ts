@@ -6,7 +6,7 @@ import { Cause, Effect } from 'effect';
 import * as v from 'valibot';
 import { diagnostics, KinuError } from '../obs/index';
 import { CloudflareApiError, cloudflarePages, cloudflareResult, type CloudflareTransport } from './cloudflare';
-import { frontWorkerName } from './front';
+import { deploymentOfMain, deploymentWorkers } from './front';
 import { CreditBalanceSchema, GatewayCreditsSchema, creditBalancePath, creditsOf, type GatewayCredits } from '../providers/gateway-credits';
 import type { HttpGet } from './context';
 import type { DeployChoice } from './door';
@@ -232,12 +232,12 @@ function workerNames(transport: CloudflareTransport, account: string): Effect.Ef
   });
 }
 
-/** `wanted`, else `wanted-2`, `wanted-3` …: the first the account does not hold. */
-/** A name free with its front's (front.ts): a deployment on its own domain is two Workers, and either may be made. */
+/** `wanted`, else `wanted-2`, `wanted-3` …: the first whose two Workers (deploymentWorkers) the account holds neither of. */
 function freeWorkerName(names: readonly string[], wanted: string): string {
+  const taken = (name: string): boolean => Object.values(deploymentWorkers(name)).some((worker) => names.includes(worker));
   let candidate = wanted;
 
-  for (let next = 2; names.includes(candidate) || names.includes(frontWorkerName(candidate)); next += 1) candidate = `${wanted}-${String(next)}`;
+  for (let next = 2; taken(candidate); next += 1) candidate = `${wanted}-${String(next)}`;
 
   return candidate;
 }
@@ -396,12 +396,14 @@ export function deployedKinus(
     const names = yield* workerNames(transport, account);
     const settings = yield* Effect.forEach(names, (name) => scriptBindings(transport, account, name), { concurrency: 4 });
 
-    const made = names.flatMap((name, at) => {
+    // A deployment's record is on its main Worker, which names it (`deploymentWorkers`).
+    const made = names.flatMap((worker, at) => {
       const bindings = settings[at] ?? [];
+      const name = deploymentOfMain(worker);
 
       const holds = (connector: Connector) => bindings.some((binding) => binding.name === CONNECTOR_SECRETS[connector].id);
 
-      return madeByARun(bindings)
+      return name !== null && madeByARun(bindings)
         ? [{ name, url: varsOf(bindings).get('CLI_PUBLIC_ORIGIN') ?? '', connectors: { github: holds('github'), google: holds('google') } }]
         : [];
     });
@@ -441,7 +443,7 @@ const RUN_SECRETS: readonly string[] = [
  */
 function deployedInputs(transport: CloudflareTransport, account: string, name: string): Effect.Effect<DeployInputs | null, KinuError> {
   return Effect.gen(function* () {
-    const bindings = yield* scriptBindings(transport, account, name);
+    const bindings = yield* scriptBindings(transport, account, deploymentWorkers(name).main);
 
     if (!madeByARun(bindings)) return null;
     const vars = varsOf(bindings);

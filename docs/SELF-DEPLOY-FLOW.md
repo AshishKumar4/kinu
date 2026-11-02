@@ -79,11 +79,15 @@ Each line is a read; none writes. They run together as soon as an account is cho
   taken by then takes the next free one itself and says so in its first phase.
 - **A domain already on Cloudflare**: pick the zone (only this account's), type the host (`kinu.example.com` or the apex).
   The run binds it as a Workers custom domain, which writes the DNS record. An existing record there is shown, with
-  "Use another host" as the fix; the page never overwrites one. A domain of its own is answered by a front Worker
-  (`<name>-front`, docs/DEPLOYMENT.md § The front Worker), put in place once the new version serves all traffic, so a
-  new front never stands before an older main Worker; until it exists, the main Worker answers the domain itself. A
-  bound hostname moves only with `override_existing_origin` (measured 2026-10-27), and the run moves it only between
-  its own two Workers. A workers.dev address is its Worker's own name, so a deployment there has no front.
+  "Use another host" as the fix; the page never overwrites one.
+- **Two Workers**: every deployment is answered by a front Worker (docs/DEPLOYMENT.md § The front Worker), which
+  holds the deployment's name, before its main Worker, `<name>-app`, which holds its objects, secrets and mail
+  (`deploymentWorkers` in core/src/deploy/front.ts). A workers.dev address is a Worker's own name, so the front holds
+  it, and a deployment that moves from workers.dev to its domain keeps both Workers. A new front is put in place once
+  the new version serves all traffic, so it never stands before an older main Worker. On a domain's first run the main
+  Worker answers the domain until then; on workers.dev the first run puts its front in place before the smoke, which
+  reaches the version under test through it. A bound hostname moves only with `override_existing_origin` (measured
+  2026-10-27), and the run moves it only between its own two Workers.
 - **A domain registered elsewhere**: the page adds it as a zone (`POST /zones`), shows the two nameservers to set at
   their registrar with copy buttons, and watches the zone become active (`GET /zones/{z}`). Meanwhile the deploy goes
   ahead on workers.dev and moves to the domain when the zone is active; the person is told so, and can leave.
