@@ -73,8 +73,8 @@ export function PlanProgress({ tasks }: { tasks: AgentTaskTree[] }) {
   const counted = rows.filter((task) => task.status !== "dropped").length;
 
   return (
-    <div className="flex flex-wrap items-center gap-2" data-plan-progress>
-      <span className="t-status p-text-2">Planned tasks: {remaining.length} of {counted} left</span>
+    <div className="flex items-center gap-2">
+      <span className="t-status p-text-2">{remaining.length} of {counted} still to do</span>
       {active.length > 0 && <Badge>{active.length} active</Badge>}
     </div>
   );

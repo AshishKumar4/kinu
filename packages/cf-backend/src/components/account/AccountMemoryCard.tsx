@@ -10,16 +10,34 @@ import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import {
   forgetAccountFact, forgetAccountNote, getAccountMemory, putAccountFact,
-  type AccountMemoryState,
+  type AccountMemoryState, type MemoryOrigin,
 } from "../../lib/user-api";
 import { Button } from "@/components/ui/Button";
 import { Group } from "@/components/ui/Group";
 import { TextInput } from "@/components/ui/Field";
-import { MemoryFact, MemoryProvenance, MemoryValue } from "@/components/MemoryFact";
 
-/** Editing keeps JSON values structured and strings literal. */
-function editableValueText(value: JsonValue): string {
+/** "Said in Research, kept by Kinu" / "You, in Settings": where a value came from, in the owner's words. */
+function originText(origin: MemoryOrigin): string {
+  if (origin === null) return "Origin not recorded";
+  const where = origin.workspace === undefined ? "" : ` in ${origin.workspace}`;
+
+  if (origin.by === "owner") return origin.workspace === undefined ? "You, in Settings" : `You promoted it from ${origin.workspace}`;
+
+  if (origin.by === "agent") return `Said${where}, kept by ${origin.agent ?? "an agent"}`;
+
+  return origin.by === "background" ? `Noticed${where} in your own words` : `Copied${where}`;
+}
+
+/** A value as the owner reads it: a string as its words, anything else as JSON, so `null`, `3` and `true` stay what they are. */
+function valueText(value: JsonValue): string {
   return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+/** One value a fact held; a forgotten one says so, and a JSON `null` reads as one. */
+function revisionText(revision: { readonly forgotten: boolean; readonly value: JsonValue | null }): string {
+  if (revision.forgotten) return "(forgotten)";
+
+  return valueText(revision.value ?? null);
 }
 
 /**
@@ -97,10 +115,10 @@ function Pending({ pending, busy, act, decide }: Omit<SectionProps, "state"> & {
       {pending.map((item) => (
         <div key={item.id} className="px-3 py-2 space-y-1" data-account-memory-proposal={item.id}>
           <div className="t-body p-text break-words">
-            {item.proposal.kind === "fact" ? <MemoryFact factKey={item.proposal.key} value={item.proposal.value} /> : item.proposal.content}
+            {item.proposal.kind === "fact" ? <><span className="t-mono">{item.proposal.key}</span>: {valueText(item.proposal.value)}</> : item.proposal.content}
           </div>
-          <div className="t-meta p-text-3"><MemoryProvenance origin={item.origin} /></div>
-          <div className="flex flex-wrap gap-2">
+          <div className="t-meta p-text-3">{originText(item.origin)}</div>
+          <div className="flex gap-2">
             <Button variant="primary" size="sm" disabled={busy !== null}
               onClick={() => detach(act("keeping this for every workspace", () => decide(item.id, "accept")))}>Keep for every workspace</Button>
             <Button size="sm" disabled={busy !== null}
@@ -123,11 +141,11 @@ function Facts({ state, busy, act }: SectionProps) {
       {state.facts.length === 0 && <div className="t-meta p-text-3">None yet. A fact an agent proposes, or one you promote from a workspace's world model, appears here once kept.</div>}
       {state.facts.map((fact) => (
         <div key={fact.key} className="py-1 space-y-1" data-account-memory-fact={fact.key}>
-          <div className="flex flex-wrap items-start gap-2">
+          <div className="flex items-start gap-2">
             <SealCheckIcon size={14} className="p-text-3 shrink-0 mt-px" />
-            <div className="min-w-0 flex-1 basis-48">
+            <div className="min-w-0 flex-1">
               {editing?.key === fact.key ? (
-                <form className="flex flex-wrap gap-2" onSubmit={(event) => {
+                <form className="flex gap-2" onSubmit={(event) => {
                   event.preventDefault();
                   const value = editedValue(fact.value, editing.text);
 
@@ -140,21 +158,21 @@ function Facts({ state, busy, act }: SectionProps) {
                   detach(act("saving this fact", async () => { await putAccountFact(fact.key, value); }));
                   setEditing(null);
                 }}>
-                  <span className="t-body t-mono w-full wrap-anywhere">{fact.key}:</span>
+                  <span className="t-body t-mono">{fact.key}:</span>
                   <TextInput size="sm" aria-label={`Value of ${fact.key}`} invalid={editing.invalid} className="flex-1 min-w-0" value={editing.text}
                     title={editing.invalid ? "This fact holds JSON: write a number, true, false, null, a list or an object." : undefined}
                     onChange={(event) => setEditing({ key: fact.key, text: event.target.value, invalid: false })} />
                   <Button variant="primary" size="sm" type="submit" disabled={busy !== null}>Save</Button>
                 </form>
               ) : (
-                <MemoryFact factKey={fact.key} value={fact.value} />
+                <div className="t-body p-text break-words"><span className="t-mono">{fact.key}</span>: {valueText(fact.value)}</div>
               )}
-              <div className="t-meta p-text-3"><MemoryProvenance origin={fact.origin} /></div>
+              <div className="t-meta p-text-3">{originText(fact.origin)}</div>
             </div>
-            <div className="ml-auto flex gap-1 shrink-0">
+            <div className="flex gap-1 shrink-0">
               <Button variant="ghost" size="sm" icon={<ClockCounterClockwiseIcon size={14} />} aria-expanded={opened === fact.key} onClick={() => setOpened(opened === fact.key ? null : fact.key)} title="Every value it held" aria-label="Every value it held" />
               <Button variant="ghost" size="sm" disabled={busy !== null}
-                onClick={() => setEditing({ key: fact.key, text: editableValueText(fact.value), invalid: false })}>Edit</Button>
+                onClick={() => setEditing({ key: fact.key, text: valueText(fact.value), invalid: false })}>Edit</Button>
               <Button variant="danger" size="sm" disabled={busy !== null}
                 onClick={() => detach(act("forgetting this fact", async () => { await forgetAccountFact(fact.key); }))}>Forget</Button>
             </div>
@@ -162,10 +180,8 @@ function Facts({ state, busy, act }: SectionProps) {
           {opened === fact.key && (
             <ol className="ml-6 space-y-px" data-account-memory-history={fact.key}>
               {fact.history.map((revision) => (
-                <li key={revision.at} className="min-w-0 space-y-1 py-1">
-                  <div className="t-meta p-text-3">{new Date(revision.at).toLocaleString()}</div>
-                  <div className="t-body p-text-2">{revision.forgotten ? '(forgotten)' : <MemoryValue value={revision.value} />}</div>
-                  <div className="t-meta p-text-3"><MemoryProvenance origin={revision.origin} /></div>
+                <li key={revision.at} className="t-meta p-text-2">
+                  {new Date(revision.at).toLocaleString()}: {revisionText(revision)} <span className="p-text-3">({originText(revision.origin)})</span>
                 </li>
               ))}
             </ol>
@@ -186,7 +202,7 @@ function Notes({ state, busy, act }: SectionProps) {
         <div key={note.id} className="flex items-start gap-2 py-1">
           <div className="min-w-0 flex-1">
             <div className="t-body p-text whitespace-pre-wrap break-words">{note.content}</div>
-            <div className="t-meta p-text-3"><MemoryProvenance origin={note.origin} /></div>
+            <div className="t-meta p-text-3">{originText(note.origin)}</div>
           </div>
           <Button variant="danger" size="sm" className="shrink-0" disabled={busy !== null}
             onClick={() => detach(act("forgetting this note", async () => { await forgetAccountNote(note.id); }))}>Forget</Button>

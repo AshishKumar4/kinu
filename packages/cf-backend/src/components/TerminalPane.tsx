@@ -3,13 +3,13 @@
 import { Cause, Effect, type Exit } from 'effect';
 import { useContext, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react";
-import { Terminal, type IDisposable, type ITheme } from "@xterm/xterm";
+import { Terminal, type IDisposable } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import * as v from 'valibot';
 import "@xterm/xterm/css/xterm.css";
-import { readFailureText, terminalPalette, THEME_TOKENS } from "@kinu.run/core";
+import { readFailureText, terminalPalette, type TerminalPalette } from "@kinu.run/core";
 import { renderThrownChain, showing, tolerate, detach, hold } from "@kinu.run/core/obs";
-import { useTheme, type Theme } from "@/hooks/use-theme";
+import { useTheme, type Theme, type ThemeMode } from "@/hooks/use-theme";
 import {
   BUSY, LINE_MODE_LABEL, LineTerminalState, clearBusy, feedInput, terminalLane, writeOutputRow, writePrompt,
   type TerminalPaneOutput,
@@ -62,8 +62,6 @@ function TerminalFrame({ leading, state, failure, copies, action, hostRef, barOn
   action: ReactNode;
   hostRef: RefObject<HTMLDivElement | null>;
 }) {
-  const theme = useTheme();
-
   return (
     <div className="flex h-full w-full flex-col">
       <div className={`flex shrink-0 items-center gap-3 pr-3 pl-4 ${barOnGround ? "p-terminal-ground h-9" : "h-11"}`} data-terminal-bar>
@@ -82,7 +80,7 @@ function TerminalFrame({ leading, state, failure, copies, action, hostRef, barOn
       </div>
       {/* The inset is xterm's own padding (`p-terminal-host`): FitAddon takes the host's whole width as room and subtracts
           only the terminal's padding, so a host's own would size the screen past the pane's edge. */}
-      <div ref={hostRef} data-on-ground={barOnGround ? "" : undefined} style={{ backgroundColor: THEME_TOKENS[theme.name].dark['--c-bg'] }}
+      <div ref={hostRef} data-on-ground={barOnGround ? "" : undefined}
         className={`p-terminal-host p-terminal-ground min-h-0 flex-1 overflow-hidden ${barOnGround ? "" : "border-t p-border"}`} />
     </div>
   );
@@ -125,11 +123,11 @@ interface MountedPty {
 
 function mountPtyTerminal(
   host: HTMLDivElement,
-  name: Theme["name"],
+  mode: ThemeMode,
   copyOperation: { current: TerminalOperation | null },
   setFailure: (message: string | null) => void,
 ): MountedPty {
-  const term = newTerminal(name);
+  const term = newTerminal(mode);
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.open(host);
@@ -181,7 +179,7 @@ function useTerminalPalette(termRef: RefObject<Terminal | null>, theme: Theme): 
   useEffect(() => {
     const term = termRef.current;
 
-    if (term) term.options.theme = terminalTheme(theme.name);
+    if (term) term.options.theme = terminalTheme(theme.mode);
   }, [termRef, theme]);
 }
 
@@ -211,7 +209,7 @@ function PtyTerminal({ workspace, executor, session, device: machine, frame }: {
 
     if (!host) return;
 
-    const { term, dispose: disposeChrome } = mountPtyTerminal(host, theme.name, copyOperation, setFailure);
+    const { term, dispose: disposeChrome } = mountPtyTerminal(host, theme.mode, copyOperation, setFailure);
     termRef.current = term;
 
     setState("connecting");
@@ -431,7 +429,7 @@ function WorkspaceTerminal({ workspace, executor, session, frame }: { workspace:
     setState("connecting");
     setFailure(null);
 
-    const { term, dispose: disposeChrome } = mountPtyTerminal(host, theme.name, copyOperation, setFailure);
+    const { term, dispose: disposeChrome } = mountPtyTerminal(host, theme.mode, copyOperation, setFailure);
     termRef.current = term;
     const origin = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}`;
 
@@ -520,7 +518,7 @@ function LineTerminal(
     const host = hostRef.current;
 
     if (!host) return;
-    const term = newTerminal(theme.name);
+    const term = newTerminal(theme.mode);
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(host);
@@ -609,25 +607,19 @@ function LineTerminal(
 }
 
 
-function newTerminal(name: Theme["name"]): Terminal {
+function newTerminal(mode: ThemeMode): Terminal {
   return new Terminal({
     fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
     fontSize: 12,
     cursorBlink: true,
     scrollback: SCROLLBACK_LINES,
-    theme: terminalTheme(name),
+    theme: terminalTheme(mode),
   });
 }
 
-/** The terminal keeps its dark ground even when the app's chrome is light. */
-function terminalTheme(name: Theme["name"]): ITheme {
-  const tokens = THEME_TOKENS[name].dark;
+/** xterm needs concrete colours, so the palette is read off the document at theme time. */
+function terminalTheme(mode: ThemeMode): TerminalPalette {
+  const cs = getComputedStyle(document.documentElement);
 
-  return {
-    ...terminalPalette('dark', (token) => tokens[token]),
-    cursorAccent: tokens['--c-bg'],
-    selectionBackground: tokens['--c-selected'],
-    selectionInactiveBackground: tokens['--c-selected'],
-    selectionForeground: tokens['--c-text'],
-  };
+  return terminalPalette(mode, (name) => cs.getPropertyValue(name).trim());
 }

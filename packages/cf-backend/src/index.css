@@ -884,7 +884,6 @@ body { background: var(--c-bg); color: var(--c-text); }
 /* An answer's slate frame (slates/InlineSlate.tsx): in its fold at the card radius, its height easing; in the work
    surface's pane, the page's ground edge to edge. */
 .p-slate-frame { display: block; width: 100%; border: 0; border-radius: var(--r-card); transition: height var(--dur-fold) var(--ease-out-strong); }
-.p-slate-frame:is([data-slate-drawn="page"], [data-slate-drawn="streaming"]) { border-radius: 0; }
 .p-slate-frame[data-pane] { flex: 1 1 0%; min-height: 0; border-radius: 0; background: var(--c-bg); transition: none; }
 [data-fold-still] :is(.p-fold, .p-fold-turn) { transition: none; }
 @media (prefers-reduced-motion: reduce) {
@@ -1641,11 +1640,6 @@ body { background: var(--c-bg); color: var(--c-text); }
   color: transparent;
   animation: p-shimmer 1.8s linear infinite;
 }
-
-.prose-chat.p-assistant-prose { color: var(--c-text); }
-.p-chat-disclosure, .p-chat-disclosure .prose-thinking, .p-chat-work-label, .p-chat-tool-label, .p-chat-tool-summary { color: var(--c-text-2); }
-.p-chat-work-label.p-shimmer { background-image: linear-gradient(90deg, var(--c-text-3), var(--c-text-2), var(--c-text-3)); color: transparent; }
-.p-chat-work-label[data-failed], .p-chat-tool-label[data-failed] { color: var(--c-danger); }
 
 /* Streaming reasoning-text shimmer — while a reasoning part is live, the
    thinking text itself carries the light wave, not only the "Thinking"

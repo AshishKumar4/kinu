@@ -29,7 +29,6 @@ import { diagnostics, renderThrownChain, detach } from "@kinu.run/core/obs";
 import { PreviewFrame } from "@/components/PreviewFrame";
 import { usePreviewFold } from "@/components/slates/context";
 import { AnswerText, MarkdownContent, CodeBlock, SlateLink, type AnswerChat } from "@/components/surfaces/shared";
-import { VariableText } from "@/components/VariableText";
 import { AttachmentChip } from "@/components/AttachmentChip";
 import { AnswerPicturesContext, PartPictures, useAnswerPictures } from "@/components/ChatImages";
 import { extractPreviewUrl, previewSite } from "@kinu.run/core";
@@ -305,8 +304,8 @@ function ToolCallBlock({ toolName, input, output, effect, receipt, isRunning, is
           {toolIcon(toolName)}
         </span>
         <span className="flex min-w-0 items-baseline gap-2">
-          <strong className="t-item p-chat-tool-label min-w-0 truncate" data-failed={failed ? '' : undefined}>{description || toolLabel(toolName)}</strong>
-          <span className="t-meta t-mono p-chat-tool-summary min-w-0 flex-1 truncate" title={[summary, description].filter(Boolean).join(" · ")}>{summary || "Tool call"}</span>
+          <strong className="t-item min-w-0 truncate p-text-2">{description || toolLabel(toolName)}</strong>
+          <span className="t-meta t-mono min-w-0 flex-1 truncate p-text-3" title={[summary, description].filter(Boolean).join(" · ")}>{summary || "Tool call"}</span>
           {runtime && <span className="t-meta t-mono shrink-0 p-text-3">{runtime}</span>}
         </span>
         <StatePill tone={stateTone}>{stateBadge}</StatePill>
@@ -460,7 +459,7 @@ export function SteerBubble({ steer, onFork }: {
   return (
     <div className="group flex flex-col items-end animate-fade-in" data-steer={steer.state}>
       <Bubble className={USER_BUBBLE_TEXT}>
-        <VariableText text={steer.text} />
+        {steer.text}
         {onFork && steer.state === "landed" && (
           <Button variant="ghost" size="sm" icon={<GitBranchIcon size={14} />} className="absolute -left-8 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity" onClick={() => onFork(steer.id)} title="Fork the workspace from here" aria-label="Fork the workspace from here" />
         )}
@@ -585,7 +584,7 @@ export const MessageView = memo(function MessageView({
               {fileParts.map((p, i) => <FilePartView key={i} part={p} />)}
             </div>
           )}
-          <VariableText text={rowText(message)} />
+          {rowText(message)}
           {canFork && (
             <Button variant="ghost" size="sm" icon={<GitBranchIcon size={14} />} className="absolute -left-8 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity" onClick={() => onFork(message.id)} title="Fork the workspace from here" aria-label="Fork the workspace from here" />
           )}
@@ -620,7 +619,7 @@ export const MessageView = memo(function MessageView({
       return (
         <Fragment key={key}>
           <div data-said {...(isTailPart ? { "data-live-indicator": "text" } : {})}
-            className={`prose-chat p-assistant-prose${isTailPart ? " p-streaming" : ""}`}>
+            className={`prose-chat p-text${isTailPart ? " p-streaming" : ""}`}>
             <AnswerText text={t} place={{ messageId: message.id, stored: tail === null, chat: answerSlates }} />
           </div>
           <PartPictures part={part} size="full" />

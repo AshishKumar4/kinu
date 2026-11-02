@@ -309,7 +309,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
         <div className={surface === "Work" ? undefined : "hidden"}>
           <ErrorBoundary label="Work">
             {/* Keyed by workspace, never by agent: a chat-tab switch must not remount Work. */}
-            <WorkTab key="workspace" workspace={props.workspace}
+            <WorkTab key="workspace"
               work={planPages.read}
               onOpenPlan={planPages.show}
               onReviewActor={props.onReviewActor}

@@ -84,14 +84,12 @@ import WorkspacePage from "@/pages/WorkspacePage";
 import { ConversationSkeleton, EmptyConversation, turnEndNotices } from "@/components/ChatColumn";
 import { useChatThread } from "@/hooks/use-chat-thread";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
-import { startTheme, useTheme, setMode as setAppMode, wearTheme } from "@/hooks/use-theme";
+import { startTheme, useTheme } from "@/hooks/use-theme";
 import { WorkspaceRosterProvider, useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { CreateWebhookModal, NewWebhookCard } from "@/components/WorkspaceAutomations";
 import { AddServerCard } from "@/components/account/McpServersPanel";
 import { DevicesFrame, PluginsFrame, SetupModalFrame, UserMcpFrame, WelcomeFrame, WorkspacesFrame } from "@/gallery-account";
 import { CharactersFrame } from "@/gallery-characters";
-import { MEMORY_CASES, MEMORY_PROPOSAL, VARIABLE_USER_TEXT, VARIABLE_ASSISTANT_TEXT, SLATE_EDGE_HTML } from "@/gallery-ui-corpus";
-import { DrawnSlate } from "@/components/slates/DrawnSlate";
 import { AccountProvider, useAccount } from "@/hooks/use-account";
 import { DrivePageFrame, DriveRoute, installDriveFixture } from "@/gallery-drive";
 import { GalleryAppFrame, galleryEntry, installGalleryFixture } from "@/gallery-listings";
@@ -199,7 +197,7 @@ const ROSTER = new URLSearchParams(location.search).get("roster") ?? "stock";
 
 const STOCK_ROSTER = {
   entries: [
-    { name: "api-worker", displayName: new URLSearchParams(location.search).get("frame") === "coderendering" || new URLSearchParams(location.search).get("sidebar") === "long"
+    { name: "api-worker", displayName: new URLSearchParams(location.search).get("frame") === "coderendering"
       ? "Investigate intermittent 500s after the sessions binding rename and verify the release on staging"
       : "API Worker", createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3 },
     { name: "perf-audit", displayName: "Dew", createdAt: NOW - 3 * 864e5, lastVisited: NOW - 2 * 36e5 },
@@ -207,9 +205,8 @@ const STOCK_ROSTER = {
     { name: "design-sys", displayName: "Kinu website", createdAt: NOW - 864e5, lastVisited: NOW - 5 * 864e5 },
     // First-run row: titled by its first prompt, so it has no title yet, only its slug.
     { name: "handwrought-walnut-4166c321", displayName: "", createdAt: NOW - 60e3, lastVisited: NOW - 30e3 },
-    ...new URLSearchParams(location.search).has("owed") ? [{ name: "quiet-cove-f8c76035", displayName: "UI and shell fixes", createdAt: NOW - 60e3, lastVisited: NOW }] : [],
   ],
-  total: 5 + (new URLSearchParams(location.search).has("owed") ? 1 : 0),
+  total: 5,
 };
 
 // Selected once so the profile's workspaceCount matches the list endpoint; the gate reads both.
@@ -932,42 +929,12 @@ const ACCOUNT_MEMORY_FIXTURE: JsonValue = {
   notes: [{ id: "acn_1", content: "Invoices go to accounts@example.com on the first of each month.", origin: { by: "agent", workspace: "Support inbox", agent: "main" }, createdAt: NOW - 2 * 864e5 }],
 };
 
-const typedMemoryValues = new Map<string, JsonValue>(MEMORY_CASES.map(({ key, value }) => [key, value]));
-
-const typedMemoryRevisions = new Map<string, JsonValue[]>();
-
-function typedMemoryFacts(): JsonValue[] {
-  return MEMORY_CASES.map(({ key }) => {
-    const value = v.parse(JsonValueSchema, typedMemoryValues.get(key));
-    const previous = typedMemoryRevisions.get(key) ?? [];
-    const origin: JsonValue = previous.length === 0 ? { by: 'background', workspace: 'api-worker' } : { by: 'owner' };
-
-    return { key, value, importance: 0.7, veracity: 'stated', lastObservedAt: NOW, origin,
-      history: [{ forgotten: false, value, origin, at: NOW }, ...previous.map((old, index) => ({ forgotten: false, value: old, origin: { by: 'background', workspace: 'api-worker' }, at: NOW - index - 1 }))] };
-  });
-}
-
 /** The read and the roster socket answer one list of proposals, as the user object does. */
-function accountMemoryFixture(path: string, method: string, body?: BodyInit | null): Response | null {
-  const typed = new URLSearchParams(location.search).get('memory') === 'typed';
-  const key = /^\/api\/user\/memory\/facts\/([^/]+)$/u.exec(path)?.[1];
-
-  if (typed && key !== undefined && method === 'PUT') {
-    const decoded = decodeURIComponent(key);
-    const { value } = v.parse(v.object({ value: JsonValueSchema }), JSON.parse(v.parse(v.string(), body)));
-    const previous = typedMemoryValues.get(decoded);
-
-    if (previous !== undefined) typedMemoryRevisions.set(decoded, [previous, ...(typedMemoryRevisions.get(decoded) ?? [])]);
-    typedMemoryValues.set(decoded, value);
-    document.documentElement.dataset.galleryMemoryWrites = JSON.stringify({ key: decoded, value });
-
-    return fixtureJson({ key: decoded });
-  }
-
+function accountMemoryFixture(path: string, method: string): Response | null {
   if (path !== "/api/user/memory" || method !== "GET") return null;
   const memory = v.parse(v.looseObject({ facts: v.array(JsonValueSchema) }), ACCOUNT_MEMORY_FIXTURE);
 
-  return fixtureJson({ ...memory, facts: [...(typed ? typedMemoryFacts() : memory.facts), ...galleryKeptFacts], pending: galleryMemoryPending });
+  return fixtureJson({ ...memory, facts: [...memory.facts, ...galleryKeptFacts], pending: galleryMemoryPending });
 }
 
 /** `&mail=off`: setup on a deployment with no mail domain, which offers no address. */
@@ -1176,14 +1143,6 @@ const rosterSockets = new Set<EventTarget>();
 /** `&rosterSocket=refused` closes each socket unopened; `&session=expired` makes each roster read a 401. */
 const galleryQuery = new URLSearchParams(location.search);
 
-window.addEventListener('gallery:theme', (event) => {
-  if (!(event instanceof CustomEvent)) return;
-  const next = v.parse(v.object({ mode: v.picklist(['light', 'dark']), name: v.picklist(['graphite', 'warm']) }), event.detail);
-
-  wearTheme(next.name);
-  setAppMode(next.mode);
-});
-
 const ROSTER_SOCKET_REFUSED = galleryQuery.get("rosterSocket") === "refused";
 
 const SESSION_EXPIRED = galleryQuery.get("session") === "expired";
@@ -1207,7 +1166,6 @@ const MEMORY_PROPOSALS = new Map<string, JsonValue>([
     id: "amp_city", proposal: { kind: "fact", key: "owner_city", value: "Lisbon" },
     origin: { by: "agent", workspace: "api-worker", agent: "main" }, createdAt: NOW - 60_000,
   }],
-  ["typed", { id: "amp_typed", proposal: { kind: "fact", ...MEMORY_PROPOSAL }, origin: { by: "background", workspace: "api-worker" }, createdAt: NOW - 60_000 }],
   ["timezone", {
     id: "amp_1", proposal: { kind: "fact", key: "timezone", value: "Asia/Kolkata" },
     origin: { by: "background", workspace: "API Worker" }, createdAt: NOW - 36e5,
@@ -1232,7 +1190,7 @@ function galleryMemoryFrame(socket: EventTarget): void {
 let galleryKeptFacts: JsonValue[] = [];
 
 function keptFact(proposal: JsonValue): JsonValue {
-  const { proposal: fact, origin } = v.parse(v.object({ proposal: v.object({ key: v.string(), value: JsonValueSchema }), origin: JsonValueSchema }), proposal);
+  const { proposal: fact, origin } = v.parse(v.object({ proposal: v.object({ key: v.string(), value: v.string() }), origin: JsonValueSchema }), proposal);
 
   return {
     key: fact.key, value: fact.value, importance: 0.5, veracity: "stated", lastObservedAt: NOW, origin,
@@ -1445,7 +1403,7 @@ function userFixture(path: string, method: string, body: BodyInit | null | undef
 
   // The whole app: the account's own reads; the roster, profile and model menu stay the shell's.
   if (frame === "whole" && path.startsWith("/api/user/") && !/^\/api\/user\/(?:workspaces(?:\/|$)|profile$|models$)/u.test(path)) return userSettingsFixture(path, method, body);
-  const memory = accountMemoryFixture(path, method, body);
+  const memory = accountMemoryFixture(path, method);
 
   return memory === null ? null : Promise.resolve(memory);
 }
@@ -3018,7 +2976,6 @@ const PAGE_TABLE_ANSWERS: WorkspaceAnswers = {
   listWorkspaceWork: (): WorkspaceAnswer<"listWorkspaceWork"> => ({
     plans: [{ owner: PAGE_OWNER, plan: galleryAgentPlan, tasks: [] }],
     tasks: [
-      ...galleryQuery.get('tasks') === 'complete' ? [{ owner: PAGE_OWNER, plan: null, tasks: ['Investigate sidebar', 'Inspect shell palette', 'Review memory surfaces'].map((title, index) => ({ id: 'closed-' + String(index), title, parentId: null, status: 'done' as const, updatedAt: NOW, note: null, subtasks: [] })) }] : [],
       ...document.documentElement.dataset.workMoved === "1" ? [WORK_WRITTEN_IN_OUTAGE] : [],
       ...BOARD_FULL ? [WORK_BOARD] : [],
       ...AGENTS_PANEL ? AGENTS_WORK : [],
@@ -3692,14 +3649,7 @@ const OWED_TURNS = [{ claim: { ...OWED_CLAIM, turnId: "turn-live", epoch: 1 }, a
  *  settles it, an agent's turn a restart cut that its isolate picks up again on its wake, and effects owed each way,
  *  folded by core's own projection as the workspace's read and the agent's own fold their stores. */
 function galleryOwedWork(): readonly InspectedWork[] {
-  const scenario = new URLSearchParams(location.search).get('owed');
-
-  if (scenario === 'retry' || scenario === 'due' || scenario === 'nested') return inspectWork({
-    claims: [{ claim: { ...OWED_CLAIM, turnId: 'turn-resuming', epoch: 2 }, actor: scenario === 'nested' ? 'reviewer' : 'quiet-cove-f8c76035', attempt: 1 }],
-    agentTurns: [], executing: new Set(), resuming: { at: NOW + (scenario === 'due' ? -1_000 : 35_000) }, effects: [], now: NOW,
-  });
-
-  if (scenario !== "all") return [];
+  if (new URLSearchParams(location.search).get("owed") !== "all") return [];
   const recovered = document.documentElement.dataset.galleryRecoveries !== undefined;
 
   return inspectWork({
@@ -4457,9 +4407,7 @@ const EVOLUTION_ANSWERS: WorkspaceAnswers = {
   getQuality: () => QUALITY_DAYS,
   getQualityWindow: () => QUALITY_WINDOW,
   getEvolutionChangelog: () => CHANGELOG,
-  getFacts: () => new URLSearchParams(location.search).get('memory') === 'typed'
-    ? MEMORY_CASES.map(({ key, value }) => ({ key, value, confidence: 1, source: 'owner', lastObservedAt: NOW }))
-    : [
+  getFacts: () => [
     { key: "test.command", value: "bun test", confidence: 0.9, source: "project configuration", lastObservedAt: NOW - 50e5 },
     { key: "api.sessions_binding", value: "SESSIONS_DB since Tuesday", confidence: 1, source: "wrangler.jsonc", lastObservedAt: NOW - 26e5 },
   ],
@@ -7150,39 +7098,6 @@ function StreamingFrame() {
   );
 }
 
-function SlateEdgesFrame() {
-  const [closed, setClosed] = useState(false);
-
-  return <div className="p-bg p-text min-h-screen flex justify-center">
-    <div className="w-full max-w-[640px] px-4 py-5">
-      <DrawnSlate id="edge/actions" block="actions" html={SLATE_EDGE_HTML} closed={closed} />
-      <p data-after-edge>Prose after the slate stays outside its frame.</p>
-      <Button data-finish-slate onClick={() => setClosed(true)}>Finish slate</Button>
-    </div>
-  </div>;
-}
-
-function ChatPresentationFrame() {
-  const [settled, setSettled] = useState(false);
-
-  const assistant = msg({ id: 'variables-answer', role: 'assistant', metadata: { [RECORDED_AT_METADATA_KEY]: NOW }, parts: [
-    { type: 'reasoning', text: 'Check the environment reference without looking up its value.' },
-    { type: 'text', text: settled ? VARIABLE_ASSISTANT_TEXT : 'Set $CLOUDFLARE_API_' },
-  ] });
-
-  const tail = settled ? null : threadLiveTail({ last: assistant, liveness: LIVE_TURN });
-
-  return <div className="p-bg p-text min-h-screen flex justify-center">
-    <div className="@container w-full max-w-[640px] space-y-6 px-6 py-6">
-      <div data-ui-user><MessageView message={msg({ id: 'variables-user', role: 'user', parts: [{ type: 'text', text: VARIABLE_USER_TEXT }] })} /></div>
-      <div data-ui-steer><SteerBubble steer={{ id: 'variables-steer', text: 'Also inspect $HOME and $PATH.', state: 'queued', atStep: null }} /></div>
-      <div data-ui-assistant><MessageView message={assistant} liveTail={tail} /></div>
-      <Button data-ui-finish-stream onClick={() => setSettled(true)}>Finish streamed answer</Button>
-      {TOOLCALL_MESSAGES.slice(0, 2).map((message) => <div key={message.id} data-ui-call={message.id}><MessageView message={message} /></div>)}
-    </div>
-  </div>;
-}
-
 function MessageColumn({ messages }: { messages: UIMessage[] }) {
   return (
     <div className="flex justify-center p-bg p-text min-h-screen">
@@ -8461,8 +8376,6 @@ async function mount() {
   else if (frame === "errorboundary") ({ node, entries } = errorBoundaryFrame());
   else if (frame === "lazyroute") ({ node, entries } = lazyRouteFrame());
   else if (DESIGN_FRAMES.has(frame)) node = DESIGN_FRAMES.get(frame);
-  else if (frame === "slateedges") node = <SlateEdgesFrame />;
-  else if (frame === "chatpresentation") node = <ChatPresentationFrame />;
   else if (frame === "chat") node = <ChatFrame />;
   else if (frame === "chatsteer") node = <ChatSteerFrame />;
   else if (frame === "chatempty") node = <ChatEmptyFrame />;

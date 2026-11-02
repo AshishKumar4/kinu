@@ -15,7 +15,6 @@ import { Button } from "@/components/ui/Button";
 import { InlineAction } from "@/components/ui/InlineAction";
 import { CopyText } from "@/components/ui/CopyButton";
 import { Surface } from "@/components/ui/Surface";
-import { variableReferences } from "@/components/VariableText";
 
 const DIFF_LINE: Record<DiffLine["kind"], { tone: string; mark: string }> = {
   add: { tone: "p-badge-success px-3", mark: "+" },
@@ -159,7 +158,7 @@ function AnswerSegment({ segment, place }: { segment: SlateUiSegment; place: Ans
   const drawn = place.chat !== undefined;
 
   // A block never closed in a stored answer is the answer's text, as is any block where no chat draws pages.
-  if (segment.kind === "text" || (segment.kind === "open" && (place.stored || !drawn))) return <MarkdownContent content={segment.text} variables />;
+  if (segment.kind === "text" || (segment.kind === "open" && (place.stored || !drawn))) return <MarkdownContent content={segment.text} />;
 
   const address = place.chat === undefined ? null : { actorId: place.chat.actorId, messageId: place.messageId, name: segment.name };
 
@@ -183,53 +182,14 @@ function remarkFileLinks({ roots }: { readonly roots: readonly string[] }) {
   return (tree: MarkdownNode) => { linkProse(tree, find, (value) => isWholeReference(value, roots)); };
 }
 
-function remarkVariables() {
-  return (tree: MarkdownNode) => {
-    const walk = (node: MarkdownNode): void => {
-      if (['link', 'linkReference', 'image', 'imageReference', 'html', 'inlineCode', 'code'].includes(node.type)) return;
-      const children = node.children ?? [];
-
-      for (let index = 0; index < children.length; index++) {
-        const child = children[index];
-
-        if (child.type !== 'text') {
-          walk(child);
-          continue;
-        }
-
-        const value = child.value ?? '';
-        const references = variableReferences(value);
-
-        if (references.length === 0) continue;
-        const parts: MarkdownNode[] = [];
-        let from = 0;
-
-        for (const reference of references) {
-          if (reference.index > from) parts.push({ type: 'text', value: value.slice(from, reference.index) });
-          parts.push({ type: 'inlineCode', value: reference.text });
-          from = reference.index + reference.text.length;
-        }
-
-        if (from < value.length) parts.push({ type: 'text', value: value.slice(from) });
-        children.splice(index, 1, ...parts);
-        index += parts.length - 1;
-      }
-    };
-
-    walk(tree);
-  };
-}
-
 // Memoized on content: the react-markdown re-parse dominates render cost.
-export const MarkdownContent = memo(function MarkdownContent({ content, variables = false }: { content: string; variables?: boolean }) {
+export const MarkdownContent = memo(function MarkdownContent({ content }: { content: string }) {
   const files = useContext(FileLinkContext);
   const roots = files?.roots ?? [];
 
   return (
     <Markdown
-      remarkPlugins={files === null
-        ? [remarkGfm, remarkSlateLinks, ...(variables ? [remarkVariables] : [])]
-        : [remarkGfm, remarkSlateLinks, [remarkFileLinks, { roots }], ...(variables ? [remarkVariables] : [])]}
+      remarkPlugins={files === null ? [remarkGfm, remarkSlateLinks] : [remarkGfm, remarkSlateLinks, [remarkFileLinks, { roots }]]}
       urlTransform={(url) => (url.startsWith('slate://') || isWholeReference(url, roots) ? url : defaultUrlTransform(url))}
       components={{
       // An unlabelled fence has no className, same as inline code, so a fence is detected by spanning lines.
