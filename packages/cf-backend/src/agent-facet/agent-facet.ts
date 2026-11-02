@@ -263,17 +263,12 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return chat;
   }
 
-  /** `use` on its chat, on the snapshot it is called with, answered only once work the call started has left it
-   *  (`FacetChat.handingOff`). */
+  /** `use` on its chat, on the snapshot it is called with. */
   private withChat<A>(snapshot: AgentSnapshot, use: (chat: FacetChat) => A | Promise<A>): Effect.Effect<A, KinuError> {
-    return Effect.flatMap(this.chatOf(snapshot), (chat) => chat.handingOff(Effect.promise(async () => await use(chat))));
-  }
-
-  private chatOf(snapshot: AgentSnapshot): Effect.Effect<FacetChat, KinuError> {
     return Effect.suspend(() => {
       this.open(snapshot);
 
-      return this.chats(snapshot);
+      return Effect.flatMap(this.chats(snapshot), (chat) => Effect.promise(async () => await use(chat)));
     });
   }
 
@@ -289,15 +284,15 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
    * carries the report its admission makes; one of its own has no answer crossing, so that report is told.
    */
   async admit(snapshot: AgentSnapshot, delivery: OwedDelivery, producer: InputProducer = 'workspace'): Promise<AdmittedDelivery> {
-    return await settle(Effect.flatMap(this.chatOf(snapshot), (chat) => chat.handingOff(Effect.flatMap(this.admission(chat, delivery, producer), (answer) => Effect.map(
+    return await settle(Effect.flatMap(this.admission(snapshot, delivery, producer), ({ chat, answer }) => Effect.map(
       Effect.promise(() => (producer === 'self' ? chat.told() : chat.taken())), (owes) => ({ answer, owes }),
-    )))));
+    )));
   }
 
-  private admission(chat: FacetChat, delivery: OwedDelivery, producer: InputProducer): Effect.Effect<DeliveryAnswer, KinuError> {
+  private admission(snapshot: AgentSnapshot, delivery: OwedDelivery, producer: InputProducer): Effect.Effect<{ readonly chat: FacetChat; readonly answer: DeliveryAnswer }, KinuError> {
     const parsed = v.parse(DeliverySchema, delivery);
 
-    return Effect.suspend(() => (chat.session.closed
+    return Effect.flatMap(this.withChat(snapshot, (chat) => chat), (chat) => (chat.session.closed
       // Closing: owed to its next start, so the crossing fails and the workspace's wake crosses it again.
       ? Effect.fail(new KinuError('unavailable', 'The agent is closing; the delivery is owed to its next start.'))
       : attemptInItsWords('io', () => chat.session.admitDelivery(parsed, producer)).pipe(
@@ -305,6 +300,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
         // the crossing fails, and the delivery stays owed to the workspace's wake, as a closing agent's does.
         Effect.catch((refusal) => (refusal.code === 'unavailable' ? Effect.fail(refusal)
           : Effect.succeed<DeliveryAnswer>({ refused: { code: refusal.code, message: renderThrownChain({ cause: refusal }) } }))),
+        Effect.map((answer) => ({ chat, answer })),
       )));
   }
 

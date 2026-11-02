@@ -1714,8 +1714,8 @@ export const PLATFORM_CATALOG = {
       'A call that waits for work keeps its own 30 s budget (`do.facet.cpu_ms`); one that answers keeps almost none for '
       + 'what it left running. A wake answered as its pump opened a turn over a 391K-token context, and a grant was let go '
       + 'at its turn\'s end with the turn\'s seal and the next opening still to run: eight steps were lost so in three hours '
-      + 'on 2026-11-01, each beside a call that answered at 2,500 ms. So no call into an agent\'s isolate answers while work '
-      + 'it started runs on (agent-facet `FacetChat.handingOff`, `StepPacer`).',
+      + 'on 2026-11-01, each beside a call that answered at 2,500 ms. So a turn\'s opening, steps and close run under a grant '
+      + 'held until the agent rests (agent-facet `StepPacer`).',
   },
 
   'do.facet.subrequests': {

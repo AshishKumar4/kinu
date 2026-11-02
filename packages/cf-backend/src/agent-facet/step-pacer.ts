@@ -9,8 +9,9 @@
  * A call that has answered keeps almost no budget: work it started that runs on resets the facet once it passes about
  * 1 s of CPU (`do.facet.cpu_after_answer`), failing every call in flight. So the one grant held is let go only once a
  * newer grant took the work over, or the agent rests: a turn's end, its seal and the next turn's opening run under the
- * grant its last step ran under. ashen-ash-0998b2c2 lost eight steps to it on 2026-11-01, each as the grant was let go
- * at its turn's end or a wake answered with the turn it started still opening (`FacetChat.handedOff`).
+ * grant its last step ran under, and an opening from rest asks one before it assembles (`opening`). ashen-ash-0998b2c2
+ * lost eight steps to it on 2026-11-01, each as the grant was let go at its turn's end or a wake answered with the
+ * turn it started still assembling.
  *
  * One grant serves a turn's steps while it has budget left: a step reuses the held grant, and asks for a new one only
  * when none is held for its execution, when the held one was revoked (the workspace rejects the open call as it cuts
@@ -51,26 +52,12 @@ export class StepPacer {
    *  {@link release}. */
   private held: HeldGrant | null = null;
 
-  /** Told each time the agent's work goes under a grant, held or asked for: from then on it runs under that call. */
-  private readonly placed = new Set<() => void>();
-
   constructor(private readonly now: () => number = () => Date.now()) {}
-
-  /** `placed` resolves once the agent's work next goes under a grant; `stop` drops the wait. */
-  nextPlacement() {
-    const { promise, resolve } = Promise.withResolvers<void>();
-
-    this.placed.add(resolve);
-
-    return { placed: promise, stop: () => { this.placed.delete(resolve); } };
-  }
 
   /** Resolves with the step's grant: the held one, or one a call into the facet gives. `profile`: the turn's, on the step
    *  that binds it, which always asks. */
   pace(workspace: Pick<AgentWorkspace, 'paceStep'>, bound: TurnBound, signal: AbortSignal, profile: ResolvedTurnProfile | null): Promise<GrantedStep> {
     const { held } = this;
-
-    this.place();
 
     if (held !== null && profile === null && !signal.aborted && sameExecution(held.bound, bound) && this.serves(held)) {
       return Promise.resolve({ ended: () => {}, dynamic: null, harnessMode: held.harnessMode });
@@ -80,18 +67,12 @@ export class StepPacer {
   }
 
   /**
-   * A turn's opening runs under a grant once the workspace opened it, as its steps do: its context is assembled here, past
-   * a second of CPU on a long one. The held grant serves it whatever execution asked for it; an agent waking from rest
-   * holds none, and asks.
+   * A turn's opening, once the workspace opened it there (it grants only an execution it opened): its context is
+   * assembled here, past a second of CPU on a long one, under a grant as its steps are. The held grant serves it whatever
+   * execution asked for it; an agent waking from rest holds none, and asks.
    */
   async opening(workspace: Pick<AgentWorkspace, 'paceStep'>, bound: TurnBound, signal: AbortSignal): Promise<void> {
-    if (this.held !== null && this.serves(this.held)) this.place();
-    else await this.pace(workspace, bound, signal, null);
-  }
-
-  private place(): void {
-    for (const told of this.placed) told();
-    this.placed.clear();
+    if (this.held === null || !this.serves(this.held)) await this.pace(workspace, bound, signal, null);
   }
 
   /** Whether a held grant still carries work: not revoked, and open less than half the budget. */

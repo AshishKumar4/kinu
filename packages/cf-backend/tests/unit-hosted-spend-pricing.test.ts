@@ -151,11 +151,8 @@ test('a researcher hire\'s steps are priced at its fast tier\'s rate, not the ro
   expect(gateway.runs.some(onTheFastTier)).toBe(true);
   // The hire's one step: a token each way at $1.
   expect(priced(false)).toEqual([2]);
-  // The root's two steps, and the turn its hire's report opens once that lands, at its own model's $10.
-  const rootSteps = priced(true);
-
-  expect(rootSteps.length).toBeGreaterThanOrEqual(2);
-  expect(rootSteps).toEqual(rootSteps.map(() => 20));
+  // The root's two steps, at its own model's $10.
+  expect(priced(true)).toEqual([20, 20]);
 });
 
 for (const kind of ['hire', 'swarm'] as const) {
