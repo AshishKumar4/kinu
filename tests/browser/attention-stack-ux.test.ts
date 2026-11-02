@@ -212,7 +212,8 @@ test('an account-memory proposal waits in the stack as the user object sends it,
     expect(await stacked(page)).toEqual(['action:park-publish', 'memory:amp_city']);
     await page.click(attentionBehind('memory:amp_city'));
     await page.waitForFunction(() => document.querySelector('[data-attention-card]')?.getAttribute('data-attention-card') === 'memory:amp_city');
-    expect(await page.$eval(ATTENTION_CARD, (card) => card.textContent)).toContain('owner_city: "Lisbon"');
+    // The proposal reads as the fact it keeps, never as its JSON (#131).
+    expect(await page.$eval(ATTENTION_CARD, (card) => card.textContent)).toMatch(/Owner city\s*Lisbon(?!")/u);
 
     await answer(page, 'Keep for every workspace');
     await page.waitForFunction(() => document.documentElement.dataset.galleryMemoryDecisions === 'amp_city:accept ');
