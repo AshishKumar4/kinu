@@ -1,5 +1,6 @@
 /** Asks the owner about what review gates, and keeps their grants. */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { wasNotDispatched } from '@kinu.run/agent-utils';
 import { Effect } from 'effect';
 import * as v from 'valibot';
@@ -523,6 +524,17 @@ async function askLive(
   return { run: true };
 }
 
+const ownerTyped = new AsyncLocalStorage<true>();
+
+/**
+ * `run` as a command the owner typed (the Executors panel, `kinu executors`): what it awaits passes no approval gate, as
+ * the owner's own terminal passes none. The gate is the owner's say over an agent's work, and parking the owner's own
+ * command woke the main agent to run a command it never sent (the owner, 2026-11-02: "Run without approval").
+ */
+export function asOwnerCommand<A>(run: () => A): A {
+  return ownerTyped.run(true, run);
+}
+
 /** The mode/grant/channel/deferral ladder; a `run: true` from a replayed park carries a spend the caller settles.
  *  A write is shown to whoever is asked and parks bound to its bytes; `parks` false refuses an unanswered ask. */
 async function decideApproval(
@@ -536,6 +548,8 @@ async function decideApproval(
   policy: ShellApprovalPolicy,
 ): Promise<GateAnswer> {
   const { command: cmd, executor, write, parks = true } = subject;
+
+  if (ownerTyped.getStore() === true) return { run: true };
   await policy.resolve?.();
   const mode = policy.mode();
   const review = afterGrants(rawReview, policy, executor);

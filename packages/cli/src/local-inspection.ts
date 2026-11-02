@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import {
+  asOwnerCommand,
   BackgroundJobStore,
   runOnExecutor,
   BUILTIN_TOOL_DESCRIPTIONS,
@@ -455,8 +456,10 @@ export async function executeLocalExecutor(name: string, executorId: string, com
   return withLocalDbAsync(name, async (db) => {
     const { rt } = await openWorkspaceCLI(db, name, { llm: null, cwd: resolveLocalAgent(name).cwd });
 
-    const run = rt.executionRouter
-      ? await runOnExecutor(rt.executionRouter, executorId, command)
+    const router = rt.executionRouter;
+
+    const run = router
+      ? await asOwnerCommand(() => runOnExecutor(router, executorId, command))
       : { kind: 'refused' as const, error: `Workspace "${name}" has no execution router` };
 
     return run.kind === 'ran'

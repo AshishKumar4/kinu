@@ -129,6 +129,22 @@ describe('a facet holds the root set, or a subset of it', () => {
     };
   }
 
+  /** The gate is the owner's say over an agent's command; the owner's own, typed in the Executors panel or the CLI,
+   *  runs as their terminal does (the owner, 2026-11-02). Approving a parked owner command woke main to re-run it. */
+  test("the owner's own command runs unasked, where the main agent's same command parks on them", async () => {
+    const workspace = orchestratorHarness();
+    const shell = (await hostedMainActor(workspace)).actor.runtime.shell;
+
+    if (!shell) throw new Error('the main actor carries a shell');
+    const agents = await shell.exec(GATED);
+
+    // Its own words, so the queue cannot answer it with the agent's row.
+    await workspace.agent.executeInExecutor('workspace', `${GATED} --verbose`);
+    const queued = await workspace.agent.listDeferredApprovals();
+
+    expect({ agent: agents.refusal?.reason, queued: queued.map((row) => row.command) }).toEqual({ agent: 'unavailable', queued: [GATED] });
+  });
+
   test('a facet that recorded nothing inherits the whole root set — it does not re-ask', async () => {
     // `gateExec` wraps every shell boundary; the ladder resolves the root before reading a grant.
     const probe = source('strict', null);

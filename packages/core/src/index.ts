@@ -1592,7 +1592,7 @@ export {
 export { readShellWord } from './safety/shell-reading';
 
 export {
-  formatApproval, gatedGrants, formatApprovalGrant, holdsGrant, parseApprovalGrant, gateExec, grantsAreSubset,
+  asOwnerCommand, formatApproval, gatedGrants, formatApprovalGrant, holdsGrant, parseApprovalGrant, gateExec, grantsAreSubset,
   resolveInheritedGrants, createInheritedApprovalPolicy, STRICT_NO_CHANNEL_POLICY, describeExecutionContext,
   type ExecutionContext, type CommandCall, type PreparedCall, type ApprovalGrant, type ShellApprovalRequest,
   type ShellApprovalOutcome, type ShellApprovalPolicy, type DeferredApprovalChannel,

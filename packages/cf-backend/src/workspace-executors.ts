@@ -6,7 +6,7 @@
 import { Cause, Effect } from 'effect';
 import type { VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 import {
-  connectedDevices, deleteExecutorPathOp, ExecutorFileDownload, ExecutorFileUpload, getExecutorFiles, readExecutorFile, renameExecutorPathOp,
+  asOwnerCommand, connectedDevices, deleteExecutorPathOp, ExecutorFileDownload, ExecutorFileUpload, getExecutorFiles, readExecutorFile, renameExecutorPathOp,
   runOnExecutor,
   type ExecutorTextFile, type ExecutorWriteResult, type ExposedPortList, type FilesPage, type FilesRequest, type RewindComputer,
 } from '@kinu.run/core';
@@ -100,7 +100,7 @@ export class WorkspaceExecutors {
       const { router } = this;
 
       if (!router) return { error: 'no execution router' };
-      const run = yield* Effect.promise(() => runOnExecutor(router, executorId, command, device));
+      const run = yield* Effect.promise(() => asOwnerCommand(() => runOnExecutor(router, executorId, command, device)));
 
       if (run.kind === 'refused') return { error: run.error, refusal: run.refusal };
 
