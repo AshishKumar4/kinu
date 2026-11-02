@@ -5,7 +5,7 @@
  */
 import { Effect } from 'effect';
 import { connectionEnvironment } from '@kinu.run/core';
-import type { AccountMemory, AccountProposer, CommandEnvironment, Fact, GrantedSecrets, ProfileCatalogEnvelope, ProviderListing, UserCaller } from '@kinu.run/core';
+import type { AccountMemory, AccountProposer, CommandEnvironment, CommitAuthor, Fact, GrantedSecrets, ProfileCatalogEnvelope, ProviderListing, UserCaller } from '@kinu.run/core';
 import { attempt, diagnostics, settle, type KinuError } from '@kinu.run/core/obs';
 import type { UserDO } from './user/user-do';
 import type { UserDoRpcMethod } from './rpc-surface';
@@ -76,6 +76,9 @@ export class AccountReads {
 
   /** Names, hosts and placeholders only: a value this workspace's agents may read is asked for at each use. */
   private readonly heldSecrets = new HeldRead<GrantedSecrets>();
+
+  /** The account's name and email, read at the first command; none for an account with no profile. */
+  private readonly heldAuthor = new HeldRead<CommitAuthor | null>();
 
   constructor(private readonly host: AccountReadsHost) {}
 
@@ -161,12 +164,20 @@ export class AccountReads {
   commandEnvironment(...[use, caller]: Parameters<CommandEnvironment>): ReturnType<CommandEnvironment> {
     return settle(attempt({ doing: "asking the account for this workspace's secrets, without which the command was not run", otherwise: 'unavailable' }, async (): Promise<Record<string, string>> => {
       if (caller !== 'owner' || !this.host.owned()) return {};
-      const { granted } = await this.grantedSecrets();
-      const placeholders = { ...Object.fromEntries(granted.map((secret) => [secret.name, secret.placeholder])), ...connectionEnvironment(granted) };
+      const [{ granted }, author] = await Promise.all([this.grantedSecrets(), this.author()]);
+      const placeholders = { ...Object.fromEntries(granted.map((secret) => [secret.name, secret.placeholder])), ...connectionEnvironment(granted, author) };
 
       if (use === 'keep' || !granted.some((secret) => secret.reveal)) return placeholders;
 
       return { ...placeholders, ...await this.ask((stub, workspace) => stub.revealedSecrets(workspace)) };
+    }));
+  }
+
+  private author(): Promise<CommitAuthor | null> {
+    return this.heldAuthor.get(() => this.ask(async (stub, caller) => {
+      const profile = await stub.getProfile(caller);
+
+      return profile === null ? null : { name: profile.displayName ?? profile.email, email: profile.email };
     }));
   }
 

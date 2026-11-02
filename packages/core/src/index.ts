@@ -1621,7 +1621,7 @@ export {
   initEgressVaultTables, listSecrets, putSecrets, setSecretDestination, deleteSecret, grantSecret, revokeSecretGrant,
   grantedSecrets, revealedSecrets, resolveEgressInjection, mintEgressPlaceholder, connectionEnvironment,
   type SecretSummary, type SecretInput, type SecretDestination, type GrantedSecrets, type EgressInjection,
-  type EgressInjectionResult, type EgressVaultDeps, type ConnectionSecret,
+  type EgressInjectionResult, type EgressVaultDeps, type ConnectionSecret, type CommitAuthor,
 } from './safety/egress-vault';
 
 export {

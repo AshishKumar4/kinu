@@ -28,8 +28,9 @@ const AUTHORIZATION = { kind: 'authorization' } as const;
 /** Assembled, so no scanner reads a hardcoded password here. */
 const DB_VALUE = ['hunter2', 'logs', 'db'].join('-');
 
-/** What every owner's command holds besides its secrets: git's helper, which here says GitHub is not connected. */
-const GIT_HELPER = connectionEnvironment([]);
+/** What every owner's command holds besides its secrets: git's helper, which here says GitHub is not connected, and the
+ *  account's name and email as git's identity. */
+const GIT_HELPER = connectionEnvironment([], { name: 'Shop Owner', email: 'owner@shop.example' });
 
 /** The account: Cloudflare's token as a placeholder and the database password readable, both granted to `shop`. */
 async function shop() {
@@ -37,6 +38,7 @@ async function shop() {
   const owner = await testOwner();
   const workspace = { workspaceToken: await provisionTestWorkspace(harness, 'shop') };
 
+  await harness.userDO.ensureProfile(owner, 'owner@shop.example', 'Shop Owner');
   await harness.userDO.putSecrets(owner, [
     { name: 'CLOUDFLARE_API_TOKEN', hosts: ['api.cloudflare.com'], position: AUTHORIZATION, value: ['cf', 'token', 'value', '0123'].join('-') },
     { name: 'DATABASE_PASSWORD', hosts: ['logs-db.dew.dev'], position: AUTHORIZATION, value: DB_VALUE },
