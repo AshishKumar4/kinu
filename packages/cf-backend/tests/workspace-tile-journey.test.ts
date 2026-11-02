@@ -17,7 +17,7 @@ import type { Database } from 'bun:sqlite';
 import { TERMINAL_RETRY_JOB } from '../src/wake-jobs';
 import { bindAgentSql } from '../src/runtime';
 import {
-  armedWakes, chatSessionTurns, fireSoonestWake, GATEWAY_CATALOG, historyOver, ledgerOver, mainRows, nextTurn, orchestratorHarness, hostedSubagentHarness, seedMission,
+  armedWakes, chatSessionTurns, fireSoonestWake, GATEWAY_CATALOG, historyOver, hostedMainActor, ledgerOver, mainRows, nextTurn, orchestratorHarness, hostedSubagentHarness, seedMission,
   until, wakeForDelegatedTask, workspaceFiles, workspaceMainActor, type HarnessOrchestratorAgent, type RecordedUserPlaneCalls,
 } from './helpers/actor-harness';
 import { mockAgentsSdk } from './helpers/agents-sdk';
@@ -197,8 +197,11 @@ describe("a workspace's tile on its owner's home", () => {
       expect(await agent.askDeviceConsent({ deviceId: 'dev-1', deviceLabel: 'device', method: 'shell', command: 'git push', epoch: 0 })).toBe('queued');
 
       await until(() => last()?.decisionsWaiting === 1, 'the raised consent is pushed');
-      // The approval ladder parks a gated command nobody is there to answer.
-      expect(await tab('executeInExecutor', 'workspace', 'npm publish --dry-run')).toMatchObject({ refusal: { reason: 'unavailable' } });
+      // The approval ladder parks the main agent's gated command, as nobody is there to answer.
+      const shell = (await hostedMainActor(workspace)).actor.runtime.shell;
+
+      if (!shell) throw new Error('the main actor carries a shell');
+      expect(await shell.exec('npm publish --dry-run')).toMatchObject({ refusal: { reason: 'unavailable' } });
       await until(() => last()?.decisionsWaiting === 2, 'the parked command is pushed');
       // A wake folds again with nothing moved.
       await agent.terminalRetryPass();

@@ -10,7 +10,7 @@ import {
 } from '@kinu.run/core';
 import { socketConnection } from './helpers/bindings';
 import {
-  chatSessionTurns, gatewayWorkspace, hostedSubagentHarness, jobsOver, orchestratorHarness, reactivateOrchestratorHarness,
+  chatSessionTurns, gatewayWorkspace, hostedMainActor, hostedSubagentHarness, jobsOver, orchestratorHarness, reactivateOrchestratorHarness,
   type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 import { ownerMail } from './helpers/owner-mail';
@@ -132,13 +132,18 @@ test("the agent's own plan names the plan and the needs-you queue", async () => 
 });
 
 test('a command parked for approval names the needs-you queue', async () => {
-  const { agent } = orchestratorHarness();
+  const workspace = orchestratorHarness();
+  const { agent } = workspace;
+  const shell = (await hostedMainActor(workspace)).actor.runtime.shell;
+
+  if (!shell) throw new Error('the main actor carries a shell');
   const named = namedReads(agent);
   await agent.setShellApprovalMode('strict');
   endTick(agent);
   named();
 
-  await agent.executeInExecutor('workspace', 'git push --force origin main');
+  // The main agent's command: one the owner types runs unasked.
+  await shell.exec('npm publish --dry-run');
   endTick(agent);
 
   expect(named()).toContain('listPendingActions');

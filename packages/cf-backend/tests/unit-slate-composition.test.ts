@@ -678,13 +678,11 @@ test('a command the approval ladder stops answers every surface with its class, 
 
   await actor.agent.setShellApprovalMode('deny_all');
   expect(await binding()).toMatchObject({ ok: false, reason: 'denied' });
-  expect(await actor.agent.executeInExecutor('workspace', gated)).toMatchObject({ refusal: { reason: 'denied' } });
   expect(await files.stat(marker)).toBeNull();
 
   await actor.agent.setShellApprovalMode('strict');
   const parked = await binding();
   expect(parked).toMatchObject({ ok: false, reason: 'unavailable' });
-  expect(await actor.agent.executeInExecutor('workspace', gated)).toMatchObject({ refusal: { reason: 'unavailable' } });
   expect(await files.stat(marker)).toBeNull();
   const queued = await actor.agent.listDeferredApprovals();
   expect(queued).toMatchObject([{ status: 'queued', command: gated, executor: 'workspace' }]);
