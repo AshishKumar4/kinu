@@ -86,6 +86,7 @@ export const PLATFORM_LIMITS = {
   'do.facet.cpu_turns_reset_parent': { value: 100, unit: 'ms' },
   'do.facet.cpu_shared': null,
   'do.facet.cpu_ms': { value: 30_000, unit: 'ms' },
+  'do.facet.cpu_after_answer': { value: 1_000, unit: 'ms' },
   'do.facet.subrequests': { value: 10_000, unit: 'count' },
   'do.facet.abort_reuses_isolate': null,
   'do.facet.rpc_bytes': { value: 32 * MiB, unit: 'bytes' },

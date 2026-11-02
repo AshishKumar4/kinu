@@ -1690,6 +1690,34 @@ export const PLATFORM_CATALOG = {
       + 'one call that hands it over, was killed after 22 steps.',
   },
 
+  'do.facet.cpu_after_answer': {
+    subject: 'CPU a Durable Object facet may spend under a call into it that has already answered, on work the call started',
+    origin: 'platform',
+    bounds: 'duration',
+    evidence: 'proven-by-probe',
+    provenance: 'kinu-facet-cpu-probe-1102 (~/kinu-logs/research/FACET-CPU-AFTER-ANSWER-1102.md); production ashen-ash-0998b2c2',
+    date: '2026-11-02',
+    trigger: 'a call into the facet answers while work it started keeps running, past about 1 s of CPU',
+    onBreach: 'the facet is reset: a call in flight beside it fails, and the next call is told its code was updated',
+    observable: [
+      { context: 'a call into the facet in flight as it is reset (production)', message: 'Worker exceeded CPU time limit.' },
+      { context: 'the next call into the facet (probe)', message: 'Durable Object reset because its code was updated.' },
+    ],
+    firstPartySignal: true,
+    measurements: [
+      { scenario: 'work run on after its call answered, in one burst (probe): survived', value: 1_122, unit: 'ms' },
+      { scenario: 'the same, reset (probe, lowest of 7 resets)', value: 1_021, unit: 'ms' },
+      { scenario: 'the same, reset (probe, highest of 7 resets)', value: 2_296, unit: 'ms' },
+      { scenario: 'a wake that answered as its pump opened a turn, at every reset (production, 8 of 8)', value: 2_500, unit: 'ms' },
+    ],
+    notes:
+      'A call that waits for work keeps its own 30 s budget (`do.facet.cpu_ms`); one that answers keeps almost none for '
+      + 'what it left running. A wake answered as its pump opened a turn over a 391K-token context, and a grant was let go '
+      + 'at its turn\'s end with the turn\'s seal and the next opening still to run: eight steps were lost so in three hours '
+      + 'on 2026-11-01, each beside a call that answered at 2,500 ms. So no call into an agent\'s isolate answers while work '
+      + 'it started runs on (agent-facet `FacetChat.handingOff`, `StepPacer`).',
+  },
+
   'do.facet.subrequests': {
     subject: 'Subrequests a Durable Object facet from a loaded Worker may make while it stays busy, across every call into it',
     origin: 'platform',

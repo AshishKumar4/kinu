@@ -643,8 +643,6 @@ export async function deliveredRun(
       },
     });
   } finally {
-    // Its steps' grant answers: the run ran its last.
-    pacer.release(task.sequenceId);
     // Observability, told after its end committed, so no death in them runs the run again (#75), and before the end is.
     await run.trace?.flush();
     await spend.settled();

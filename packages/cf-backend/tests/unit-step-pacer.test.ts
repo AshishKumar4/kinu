@@ -1,7 +1,7 @@
 /**
  * A turn's steps run under a grant the workspace holds open into the agent's isolate (platform catalog
- * `do.facet.cpu_ms`): one grant serves the steps while it has budget, a cut of the turn revokes it, and its turn's end,
- * a stop or a rest let it go.
+ * `do.facet.cpu_ms`): one grant serves the steps while it has budget, and a cut of the turn revokes it. A call that has
+ * answered keeps almost no budget (`do.facet.cpu_after_answer`), so a grant is let go only by a newer one or the rest.
  */
 import { expect, test } from 'bun:test';
 import { PLATFORM_LIMITS, profileCatalogDigest, resolveTurnProfile, type HarnessMode, type ProfileCatalog } from '@kinu.run/core';
@@ -59,17 +59,17 @@ function grantingWorkspace(pacer: StepPacer) {
   };
 }
 
-test("a turn's steps share one grant, which its end lets go", async () => {
+test("a turn's steps share one grant, which outlives the turn until the agent rests", async () => {
   const pacer = new StepPacer();
   const ws = grantingWorkspace(pacer);
   const signal = new AbortController().signal;
 
   for (let step = 0; step < 4; step++) (await pacer.pace(ws.port, BOUND, signal, null)).ended();
+  await drained();
 
-  expect(ws.paces).toHaveLength(1);
-  expect(ws.answered).toEqual([]);
+  expect({ paces: ws.paces.length, answered: [...ws.answered] }).toEqual({ paces: 1, answered: [] });
 
-  pacer.release(BOUND.turnId);
+  pacer.release();
   await drained();
   expect(ws.answered).toEqual([BOUND.turnId]);
 });
@@ -127,18 +127,24 @@ test("each step reads the workspace's harness mode as the grant it runs under ca
   expect(read).toEqual(['auto', 'auto', 'pi']);
 });
 
-test('a stopped turn and a resting agent hold no grant', async () => {
+test("a stopped turn's grant is held until a newer grant takes the work over, and the rest lets that one go", async () => {
   const pacer = new StepPacer();
   const ws = grantingWorkspace(pacer);
   const stop = new AbortController();
 
   await pacer.pace(ws.port, BOUND, stop.signal, null);
   stop.abort(new Error('stopped'));
+  await drained();
+  const afterStop = [...ws.answered];
+
   await pacer.pace(ws.port, { ...BOUND, turnId: 'turn-2' }, new AbortController().signal, null);
-  pacer.releaseAll();
+  await drained();
+  const afterNext = [...ws.answered];
+
+  pacer.release();
   await drained();
 
-  expect(ws.answered).toEqual(['turn-1', 'turn-2']);
+  expect({ afterStop, afterNext, rested: ws.answered }).toEqual({ afterStop: [], afterNext: ['turn-1'], rested: ['turn-1', 'turn-2'] });
 });
 
 test("a Stop whose push to the isolate is lost, between a tool's answer and the next step, ends the turn before that step asks its model", async () => {
