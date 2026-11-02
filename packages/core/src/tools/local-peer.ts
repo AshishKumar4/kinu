@@ -80,20 +80,26 @@ export function peersToolDeps(hub: Pick<PeerHub, 'ask' | 'send' | 'reply'>, port
   userId(): string;
   readonly spawnWorkspace: PeersToolDeps['spawnWorkspace'];
 }): PeersToolDeps {
-  const requirePeer = (agent: string): Effect.Effect<string, KinuError> => {
+  // The peer an agent names, by its name or by the title its prompt shows a workspace by, where one peer holds that title.
+  const requirePeer = (agent: string): Effect.Effect<{ readonly agent: string; readonly userId: string }, KinuError> => {
     if (agent === ports.self) return Effect.fail(new KinuError('bad_input', 'that is this agent: pick another peer (op:"list")'));
 
-    return attempt({ doing: `checking the peer ${agent}`, otherwise: 'unavailable' }, () => ports.known(agent)).pipe(Effect.flatMap((known) => (known
-      ? Effect.sync(() => ports.userId())
-      : Effect.fail(new KinuError('missing', `unknown peer "${agent}": list the ones you can reach with op:"list"`)))));
+    return attempt({ doing: `checking the peer ${agent}`, otherwise: 'unavailable' }, async () => {
+      if (await ports.known(agent)) return agent;
+      const [titled, ...others] = (await ports.peers()).filter((peer) => peer.displayName === agent);
+
+      return titled !== undefined && others.length === 0 ? titled.name : null;
+    }).pipe(Effect.flatMap((named) => (named === null
+      ? Effect.fail(new KinuError('missing', `unknown peer "${agent}": list the ones you can reach with op:"list"`))
+      : Effect.sync(() => ({ agent: named, userId: ports.userId() })))));
   };
 
   return {
     listPeers: async () => (await ports.peers()).map((peer) => (peer.displayName === undefined ? { name: peer.name } : { name: peer.name, displayName: peer.displayName })),
-    ask: ({ agent, topic, message, mode, signal }) => settle(requirePeer(agent).pipe(Effect.flatMap((userId) => Effect.promise(() => hub.ask({
-      agent, userId, topic, message, mode, ...(signal !== undefined && { signal }),
+    ask: ({ agent, topic, message, mode, signal }) => settle(requirePeer(agent).pipe(Effect.flatMap((peer) => Effect.promise(() => hub.ask({
+      ...peer, topic, message, mode, ...(signal !== undefined && { signal }),
     }))))),
-    send: ({ agent, topic, message, mode }) => settle(requirePeer(agent).pipe(Effect.flatMap((userId) => Effect.promise(() => hub.send({ agent, userId, topic, message, mode }))))),
+    send: ({ agent, topic, message, mode }) => settle(requirePeer(agent).pipe(Effect.flatMap((peer) => Effect.promise(() => hub.send({ ...peer, topic, message, mode }))))),
     reply: async ({ eventId, message }) => hub.reply({ eventId, message }),
     spawnWorkspace: ports.spawnWorkspace,
   };

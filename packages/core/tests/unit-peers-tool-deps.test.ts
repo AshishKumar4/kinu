@@ -54,4 +54,20 @@ describe('the peers an agent reaches', () => {
     expect(asked).toEqual([{ agent: 'scout', userId: 'owner-1' }, { agent: 'scout', userId: 'owner-2' }]);
     expect(await peers.listPeers()).toEqual([{ name: 'scout', displayName: 'Scout' }]);
   });
+
+  test('a peer named by the title its workspace shows reaches that workspace; a title two peers share reaches neither', async () => {
+    const { hub, asked } = hubRecording();
+    const roster = [{ name: 'quiet-cove-f8c76035', displayName: 'Kinu' }, { name: 'ashen-ash-0998b2c2', displayName: 'UI fixes' }, { name: 'gray-fern-1a2b3c4d', displayName: 'UI fixes' }];
+
+    const peers = peersToolDeps(hub, {
+      self: 'me', peers: async () => roster, known: async (agent) => roster.some((peer) => peer.name === agent),
+      userId: () => 'owner-1', spawnWorkspace: async () => ({ agent: '', created: false, status: 'rejected', reason: 'no' }),
+    });
+
+    await peers.send({ agent: 'Kinu', topic: 'message', message: 'Research report 1/3', mode: 'build' });
+    const shared = await Promise.allSettled([peers.send({ agent: 'UI fixes', topic: 'message', message: 'hi', mode: 'build' })]);
+
+    expect({ asked, shared: shared.map((settled) => (settled.status === 'rejected' ? v.parse(FailureSchema, settled.reason).code : 'answered')) })
+      .toEqual({ asked: [{ agent: 'quiet-cove-f8c76035', userId: 'owner-1' }], shared: ['missing'] });
+  });
 });
