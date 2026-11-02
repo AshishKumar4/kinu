@@ -483,7 +483,7 @@ describe('the eval sandbox under workerd', () => {
     expect(String(result.result)).not.toContain('reached');
   });
 
-  test("a browser member's sandbox-side refusal is recorded as the program's failure, as a host member's is", async () => {
+  test("a browser member's sandbox-side refusal is recorded as the program's failure, in words naming what it takes", async () => {
     const unused = async (): Promise<never> => { throw new Error('this program reaches no web provider'); };
 
     const provider: WebSearchProvider = { search: unused, fetch: unused, render: unused, screenshot: unused };
@@ -493,18 +493,19 @@ describe('the eval sandbox under workerd', () => {
     const online = new KinuSandboxExecutor(codemodeLauncher({ kinuNode: true, egress: { principal: { as: 'viewer', workspace: 'codemode-probe', actorId: null } } }, async () => ({})));
 
     const ran = await withCodemodeProgram(() => online.execute(
-      "// reach a browser this agent did not open, then list tools on something that is no page\n"
-      + "const browser = await web.connectBrowser('not-mine'); const tools = await web.pageTools({}); return { browser, tools };",
+      // Production 2026-10-30: a program passed a browser's id where a page goes.
+      "// reach a browser this agent did not open, then list tools on its id in place of a page\n"
+      + "const browser = await web.connectBrowser('not-mine'); const tools = await web.pageTools('not-mine'); return { browser, tools };",
       [{ name: 'web', fns, prelude: web.prelude }],
     ), { call: 'call-test' });
 
     expect(ran.result).toMatchObject({
       browser: { success: false, reason: 'denied' },
-      tools: { success: false, reason: 'unavailable' },
+      tools: { success: false, reason: 'bad_input', error: expect.stringContaining('takes a page of a connectBrowser Browser') },
     });
     expect(successfulToolOutcome('eval', { output: ran })).toMatchObject({ success: true, failures: [
       { tool: 'web', op: 'connectBrowser', reason: 'denied' },
-      { tool: 'web', op: 'pageTools', reason: 'unavailable' },
+      { tool: 'web', op: 'pageTools', reason: 'bad_input' },
     ] });
   });
 

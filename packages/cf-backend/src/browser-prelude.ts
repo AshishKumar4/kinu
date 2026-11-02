@@ -45,9 +45,17 @@ export const BROWSER_PRELUDE = String.raw`
 
       return puppeteer.connect(gate, String(id));
     });
-    // Per page: one CDP session, the live tool set it reports, and each invocation's answer by id.
+    // Per page: one CDP session, the live tool set it reports, and each invocation's answer by id. A page is an object
+    // of the program's Browser: an id was passed in its place (production 2026-10-30), which failed as
+    // "page.createCDPSession is not a function".
     const __kinuWebMcp = new WeakMap();
-    const __kinuWebMcpOf = async (page) => {
+    const __kinuWebMcpOf = async (refusal, page) => {
+      if (typeof page?.createCDPSession !== 'function') {
+        refusal.reason = 'bad_input';
+        throw new Error('takes a page of a connectBrowser Browser, such as (await (await web.connectBrowser(id)).pages())[0], not '
+          + (typeof page === 'string' ? 'the string ' + JSON.stringify(page) : typeof page));
+      }
+
       const known = __kinuWebMcp.get(page);
 
       if (known !== undefined) return known;
@@ -72,10 +80,10 @@ export const BROWSER_PRELUDE = String.raw`
 
       return state;
     };
-    web.pageTools = __kinuRefusing('pageTools', async (_refusal, page) => [...(await __kinuWebMcpOf(page)).tools.values()]
+    web.pageTools = __kinuRefusing('pageTools', async (refusal, page) => [...(await __kinuWebMcpOf(refusal, page)).tools.values()]
       .map(({ name, description, inputSchema }) => ({ name, description, inputSchema })));
-    web.callPageTool = __kinuRefusing('callPageTool', async (_refusal, page, name, input) => {
-      const { cdp, tools, answerOf } = await __kinuWebMcpOf(page);
+    web.callPageTool = __kinuRefusing('callPageTool', async (refusal, page, name, input) => {
+      const { cdp, tools, answerOf } = await __kinuWebMcpOf(refusal, page);
       const tool = tools.get(name);
 
       if (tool === undefined) throw new Error('the page offers no WebMCP tool ' + name + '; it offers ' + ([...tools.keys()].join(', ') || 'none'));

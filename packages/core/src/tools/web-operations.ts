@@ -59,7 +59,7 @@ export function serveWeb({ provider, files, sessions }: WebDeps): readonly Serve
 }
 
 /** What the sandbox half of a browser member hands its host member when it fails (cf-backend `browser-prelude.ts`). */
-const SandboxRefusalSchema = v.object({ refused: v.string(), reason: v.picklist(['denied', 'unavailable']) });
+const SandboxRefusalSchema = v.object({ refused: v.string(), reason: v.picklist(['bad_input', 'denied', 'unavailable']) });
 
 /** Members a prelude defines in the sandbox, on objects that never reach the host; declared with puppeteer's types. */
 const SANDBOX_MEMBERS = {
@@ -68,10 +68,14 @@ const SANDBOX_MEMBERS = {
     call: 'connectBrowser(id)',
   },
   pageTools: {
-    full: '/** The page\'s WebMCP tools. */\npageTools(page: Page): Promise<Array<{ name: string; description: string; inputSchema: object }> | Refusal>;',
+    full: '/** The WebMCP tools of a page of a `connectBrowser` Browser, such as `(await browser.pages())[0]`; never an id. */\n'
+      + 'pageTools(page: Page): Promise<Array<{ name: string; description: string; inputSchema: object }> | Refusal>;',
     call: 'pageTools(page)',
   },
-  callPageTool: { full: 'callPageTool(page: Page, name: string, input: object): Promise<unknown>;', call: 'callPageTool(page, name, input)' },
+  callPageTool: {
+    full: '/** Calls one of `pageTools(page)` on that page. */\ncallPageTool(page: Page, name: string, input: object): Promise<unknown>;',
+    call: 'callPageTool(page, name, input)',
+  },
 } as const;
 
 /**
