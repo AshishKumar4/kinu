@@ -258,13 +258,23 @@ test("a plan's approval is answered once its turn is queued, and the owner's wor
   });
 
   await until(() => decided && gateway.unanswered.size > 0, 'the approval answered while the turn it handed off runs');
-  await workspace.agent.onMessage(owner, ownerMessage(crypto.randomUUID(), 'Cover the lexer too.'));
+  // The words are taken at once; their request lands with the running turn's next step, after its model answers.
+  const sent = workspace.agent.onMessage(owner, ownerMessage(crypto.randomUUID(), 'Cover the lexer too.'));
+
   await until(() => owed(workspace) === 0, "the owner's words behind the approval taken by the running turn");
   const running = gateway.unanswered.size;
 
   building.resolve();
+  await sent;
   await workspace.agent.harnessAgentsIdle();
 
-  expect({ running, decided: await deciding, built: await answersSaying(workspace, 'Building it.') })
-    .toMatchObject({ running: 1, decided: { ok: true, queued: true, plan: { status: 'approved' } }, built: 1 });
+  // The words reached the model inside the approved work, beside the approval that opened it.
+  const steered = gateway.runs.some((run) => {
+    const said = JSON.stringify(requestOf(run).messages);
+
+    return said.includes('The owner approved plan') && said.includes('Cover the lexer too.');
+  });
+
+  expect({ running, decided: await deciding, steered })
+    .toMatchObject({ running: 1, decided: { ok: true, queued: true, plan: { status: 'approved' } }, steered: true });
 });
