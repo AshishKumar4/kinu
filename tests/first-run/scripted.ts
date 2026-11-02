@@ -225,7 +225,9 @@ const approveClears: Script = (request) => {
   const asked = latest(request);
 
   if (asked === opening) return steps(request, commands.map((command) => call('shell', { runtime: 'device', command, why })), () => 'PARKED');
-  const [, approved = ''] = asked.split(`${APPROVED_NOT_RUN}\n`);
+  // The wake opens a turn the owner's next words can join at its first step, as the ask (staging 78618c6dd).
+  const wake = [...request.unansweredUserTexts].reverse().find((text) => text.includes(APPROVED_NOT_RUN)) ?? '';
+  const [, approved = ''] = wake.split(`${APPROVED_NOT_RUN}\n`);
 
   if (approved === '') return null;
   const listed = approved.split(/\n(?=\S)/u)[0] ?? '';

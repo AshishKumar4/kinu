@@ -358,10 +358,15 @@ describe("approve-clears: the agent parks each command it is given, and re-issue
   test("the approval's wake re-issues the approved command alone; a denial re-issues nothing", async () => {
     const opened = [{ role: 'user', content: ask }, ...parked, { role: 'assistant', content: 'PARKED' }];
 
+    const approved = { role: 'user', content: await decisionWake(present(commands[0], 'a command'), 'approved') };
+    const reissue = [expect.objectContaining({ runtime: 'device', command: commands[0] })];
+
     expect({
-      approved: await shellArgs([...opened, { role: 'user', content: await decisionWake(present(commands[0], 'a command'), 'approved') }]),
+      approved: await shellArgs([...opened, approved]),
+      // The owner's next words join the turn the wake opened, at its first step, and are its ask (staging 78618c6dd).
+      joined: await shellArgs([...opened, approved, { role: 'user', content: 'Reply with only OK.' }]),
       denied: await shellArgs([...opened, { role: 'user', content: await decisionWake(present(commands[0], 'a command'), 'denied') }]),
-    }).toEqual({ approved: [expect.objectContaining({ runtime: 'device', command: commands[0] })], denied: undefined });
+    }).toEqual({ approved: reissue, joined: reissue, denied: undefined });
   });
 });
 
