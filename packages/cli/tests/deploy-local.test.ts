@@ -42,6 +42,9 @@ export class LocalProbe { constructor(state, env) { this.state = state; this.env
 
 const INDEX_HTML = '<!doctype html><title>local probe</title>\n';
 
+/** The front a self-host's address answers with; a local deployment serves the main Worker alone. */
+const FRONT = 'export default { fetch: (request, env) => env.MAIN.fetch(request) };\n';
+
 const started: { home: string; port: number }[] = [];
 
 const servers: Server[] = [];
@@ -80,6 +83,7 @@ function manifestOf(): string {
       assets: 'client',
       crons: [],
     },
+    front: { mainModule: 'index.js', modules: ['index.js'], modulesPath: 'front' },
     bindings: [
       { binding: 'AUTH_KV', kind: 'kv', resource: 'kinu-auth-kv', required: true },
       { binding: 'LocalProbe', kind: 'durable-object', resource: 'LocalProbe', required: true },
@@ -93,6 +97,7 @@ function manifestOf(): string {
     vars: [{ name: 'SANDBOX_TRANSPORT', policy: 'carried', value: 'rpc' }],
     files: [
       { path: 'worker/index.js', sha256: sha256(WORKER), size: Buffer.byteLength(WORKER), assetHash: null },
+      { path: 'front/index.js', sha256: sha256(FRONT), size: Buffer.byteLength(FRONT), assetHash: null },
       {
         path: 'client/index.html',
         sha256: sha256(INDEX_HTML),
@@ -109,14 +114,16 @@ async function artifact(): Promise<Uint8Array> {
   const stage = scratchDir('local-release');
 
   mkdirSync(join(stage, 'worker'), { recursive: true });
+  mkdirSync(join(stage, 'front'), { recursive: true });
   mkdirSync(join(stage, 'client'), { recursive: true });
   writeFileSync(join(stage, 'release.json'), manifestOf());
   writeFileSync(join(stage, 'worker/index.js'), WORKER);
+  writeFileSync(join(stage, 'front/index.js'), FRONT);
   writeFileSync(join(stage, 'client/index.html'), INDEX_HTML);
 
   const out = join(stage, 'release.tar.gz');
 
-  const tar = await runToExit(['tar', '--format=ustar', '-czf', out, '-C', stage, 'release.json', 'worker/index.js', 'client/index.html']);
+  const tar = await runToExit(['tar', '--format=ustar', '-czf', out, '-C', stage, 'release.json', 'worker/index.js', 'front/index.js', 'client/index.html']);
 
   if (tar.exitCode !== 0) throw new Error(`tar refused: ${tar.stderr}`);
 

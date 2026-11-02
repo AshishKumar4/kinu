@@ -867,46 +867,30 @@ function zoneApi(path: string, request: Request, named: (key: string) => string)
   return undefined;
 }
 
-/** The Worker script's own routes: versions deployed, secrets, settings and the asset session. */
-function workerScriptApi(
-  path: string, request: Request, named: (key: string) => string,
-  read: { readonly versions: () => v.InferOutput<typeof DeployedVersionsSchema>; readonly enabled: () => boolean },
-): Response | undefined {
+/**
+ * A call naming a Worker answers for that Worker alone: one the account doesn't hold is Cloudflare's 404, a first upload
+ * making it aside, and the front holds its own route and none of the main Worker's versions or secrets.
+ */
+function addressedScriptApi(path: string, enabled: () => boolean): Response | undefined {
   const addressed = /\/workers\/scripts\/([^/?]+)\/([^?]+)/u.exec(path);
 
-  // A call naming a Worker answers for that Worker alone: one the account doesn't hold is Cloudflare's 404, a first
-  // upload making it aside, and the front holds its own route and none of the main Worker's versions or secrets.
-  if (addressed !== null) {
-    const [, script = '', rest = ''] = addressed;
-    const holds = new Map<string, boolean>([[WORKERS.main, held.scriptExists], [WORKERS.front, held.frontBindings !== null]]).get(script) ?? false;
+  if (addressed === null) return undefined;
+  const [, script = '', rest = ''] = addressed;
+  const holds = new Map<string, boolean>([[WORKERS.main, held.scriptExists], [WORKERS.front, held.frontBindings !== null]]).get(script) ?? false;
 
-    if (!holds && !['assets-upload-session', 'versions'].includes(rest)) return refusal(404, 10_007, 'workers.api.error.script_not_found');
+  if (!holds && !['assets-upload-session', 'versions'].includes(rest)) return refusal(404, 10_007, 'workers.api.error.script_not_found');
 
-    if (rest === 'subdomain') {
-      held.routes.set(script, read.enabled());
+  if (rest === 'subdomain') {
+    held.routes.set(script, enabled());
 
-      return envelope({ enabled: held.routes.get(script) ?? false });
-    }
-
-    if (script === WORKERS.front && !['settings', 'assets-upload-session'].includes(rest)) return refusal(404, 10_007, `the front holds no ${rest}`);
+    return envelope({ enabled: held.routes.get(script) ?? false });
   }
 
-  if (path.endsWith('/deployments') && request.method === 'GET') {
-    // Newest first: the reference lists the deployment serving traffic first.
-    return envelope({ deployments: [...held.deployments].reverse().map((versions) => ({ versions: versions.map((entry) => ({ ...entry })) })) });
-  }
+  return script === WORKERS.front && !['settings', 'assets-upload-session'].includes(rest) ? refusal(404, 10_007, `the front holds no ${rest}`) : undefined;
+}
 
-  if (path.endsWith('/deployments')) {
-    const versions = read.versions();
-    const unknown = versions.find((entry) => !held.versions.has(entry.version_id));
-
-    // The reference types `version_id` as the id of a version the Worker holds.
-    if (unknown !== undefined) return refusal(400, 10_000, `no version ${unknown.version_id}`);
-    held.deployments.push(versions);
-
-    return envelope({ id: `deployment-${String(held.deployments.length)}` });
-  }
-
+/** The main Worker's secrets: each put deploys a copy of its latest version, and one is deleted by name. */
+function secretsApi(path: string, request: Request, named: (key: string) => string): Response | undefined {
   if (path.endsWith('/secrets')) {
     const latest = [...held.versions.keys()].at(-1);
     const live = held.deployments.at(-1) ?? [];
@@ -926,10 +910,35 @@ function workerScriptApi(
   // A secret deleted by name (`DELETE …/secrets/{name}`), as a connector taken away does.
   const deleted = /\/secrets\/([^/]+)$/u.exec(path)?.[1];
 
-  if (deleted !== undefined && request.method === 'DELETE') {
-    held.secrets.delete(decodeURIComponent(deleted));
+  if (deleted === undefined || request.method !== 'DELETE') return undefined;
+  held.secrets.delete(decodeURIComponent(deleted));
 
-    return envelope(null);
+  return envelope(null);
+}
+
+/** The Worker script's own routes: versions deployed, secrets, settings and the asset session. */
+function workerScriptApi(
+  path: string, request: Request, named: (key: string) => string,
+  read: { readonly versions: () => v.InferOutput<typeof DeployedVersionsSchema>; readonly enabled: () => boolean },
+): Response | undefined {
+  const answered = addressedScriptApi(path, read.enabled) ?? secretsApi(path, request, named);
+
+  if (answered !== undefined) return answered;
+
+  if (path.endsWith('/deployments') && request.method === 'GET') {
+    // Newest first: the reference lists the deployment serving traffic first.
+    return envelope({ deployments: [...held.deployments].reverse().map((versions) => ({ versions: versions.map((entry) => ({ ...entry })) })) });
+  }
+
+  if (path.endsWith('/deployments')) {
+    const versions = read.versions();
+    const unknown = versions.find((entry) => !held.versions.has(entry.version_id));
+
+    // The reference types `version_id` as the id of a version the Worker holds.
+    if (unknown !== undefined) return refusal(400, 10_000, `no version ${unknown.version_id}`);
+    held.deployments.push(versions);
+
+    return envelope({ id: `deployment-${String(held.deployments.length)}` });
   }
 
   if (path.endsWith('/workers/scripts')) return envelope([...held.scriptExists ? [{ id: 'kinu-app' }] : [], ...held.frontBindings === null ? [] : [{ id: 'kinu' }]]);
