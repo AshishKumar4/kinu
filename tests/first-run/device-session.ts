@@ -245,25 +245,36 @@ function pause(ms: number): Promise<void> {
 /** The words a device call answers while its consent waits on the owner (`deviceConsentQueued`): NOT RUN, parked. */
 export const CONSENT_PARKED = /NOT RUN: using .* waits on the owner's consent/;
 
-/** The cause the run an owner's consent answer opens is stamped with (device-consent.ts `DEVICE_CONSENT_SIGNAL`). */
-const CONSENT_WAKE = 'device_consent';
+/** An owner's answer to a parked call: the cause the run it opens is stamped with, and what the parked call said. */
+export interface ParkedWake {
+  readonly cause: string;
+  readonly parked: RegExp;
+}
+
+/** A device consent's answer (device-consent.ts `DEVICE_CONSENT_SIGNAL`). */
+export const CONSENT_WAKE: ParkedWake = { cause: 'device_consent', parked: CONSENT_PARKED };
+
+/** A parked command's decision (deferred-approval.ts `DEFERRED_APPROVAL_SIGNAL`, `queuedActionMessage`). */
+export const APPROVAL_WAKE: ParkedWake = { cause: 'deferred_approval', parked: /^NOT RUN: queued for owner approval/ };
 
 /**
- * Whether the run that re-issued the call an owner's consent answer let through has ended, its result in the ledger.
+ * Whether the run that re-issued the call an owner's answer (`wake`) let through has ended, its result in the ledger.
  * An answer given after the parked call's turn ended opens a wake run for it; one given while that turn still runs is
  * read by the turn itself, which re-issues the call there, and no wake run ever opens (`answeredRun`). The ledger is read
  * again at each turn `room` sees close, from `closed`, the room's wait registered before the answer; the run, once
  * there, is followed to its end. Waited on, never sent into: a send would land in that run and be the ask it answers.
- * False when the room or the case budget ends first.
+ * `since`: how many events the ledger held before the answer, so an earlier answer's run is not this one's. False when
+ * the room or the case budget ends first.
  */
-export async function consentWakeEnded(
+export async function wakeEnded(
   session: Pick<KinuPublicSession, 'runEvents' | 'followRun'>, room: Pick<PublicSocket, 'turnClosed'>, closed: Promise<boolean>,
+  { wake, since = 0 }: { readonly wake: ParkedWake; readonly since?: number },
 ): Promise<boolean> {
   let next = closed;
 
   for (;;) {
-    const events = await session.runEvents();
-    const answered = answeredRun(events);
+    const events = (await session.runEvents()).slice(since);
+    const answered = answeredRun(events, wake);
 
     if (answered !== undefined) return await runEnded(session, answered, events);
 
@@ -282,12 +293,12 @@ const isToolCallEnd = (event: RunEvent): event is ToolCallEnd => event.type === 
  * machine-consent runs ran `[PARKED, ok]` in one turn, and the wait for a wake run spent their budgets). A re-issue that
  * parked again is not one.
  */
-function answeredRun(events: readonly RunEvent[]): string | undefined {
-  const woken = events.find((event) => event.type === 'run_start' && event.caused_by === CONSENT_WAKE)?.runId;
+function answeredRun(events: readonly RunEvent[], wake: ParkedWake): string | undefined {
+  const woken = events.find((event) => event.type === 'run_start' && event.caused_by === wake.cause)?.runId;
 
   if (woken !== undefined) return woken;
   const calls = events.filter(isToolCallEnd);
-  const parked = calls.find((call) => CONSENT_PARKED.test(call.error ?? ''));
+  const parked = calls.find((call) => wake.parked.test(call.error ?? ''));
   const same = (call: ToolCallEnd) => call.name === parked?.name && isDeepStrictEqual(call.args, parked.args);
 
   return parked === undefined ? undefined : calls.find((call) => call.runId === parked.runId && call.eventIndex > parked.eventIndex && same(call) && call.error === undefined)?.runId;

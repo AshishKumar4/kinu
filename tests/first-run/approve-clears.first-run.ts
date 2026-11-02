@@ -44,9 +44,11 @@ import * as v from 'valibot';
 
 import { scratchDir, workerSession, type EvalObservation, type EvalSubgoal } from '@kinu.run/test-utils';
 import type { PublicSessionPlan } from '../../evals/src/session';
-import type { DeviceAccount } from './device-session';
 import { attachMachine, detachMachine, grantDeviceConsent, type AttachedMachine } from './daemon';
 import { approvalClearsSelection, isApprovalButtonLabel } from './approval-observation';
+import { APPROVAL_WAKE, wakeEnded, type DeviceAccount } from './device-session';
+import { openPublicSocket, type PublicSocket } from './public-socket';
+import { ORCHESTRATOR_AGENT_SLUG } from '../../packages/core/src/index';
 import { parkAsk } from './asks';
 import { openBrowser, signedInPage } from '../../evals/src/browser';
 import type { TestChrome } from '../../scripts/test-chrome';
@@ -72,9 +74,6 @@ const DEFECT: FirstRunDefect = {
 /** The machine this case attaches. One is enough: the subject is the queue, and
  *  the fleet is the next case's subject. */
 const MACHINE = 'kinu-first-run-approve';
-
-/** What the case says once its decisions are made: answered after the turns the decisions woke, it is their end. */
-const SETTLE_ASK = 'The approval checks are finished. Reply with only OK. Do not run commands or use tools.';
 
 /** The most wall time the case may take once its session is open. A signed-in
  *  page has no default timeout (`signedInPage`): each wait on it ends when the
@@ -115,7 +114,12 @@ describe(SUITE, () => {
         modelCalls: 'expected',
         budgetMs: BUDGET_MS,
         purpose: 'A careful assistant working on the owner\'s own machine.',
-        async run({ session }) {
+        async run({ session, plan, budget }) {
+          // The workspace's room, where each turn's close is heard: the run a decision wakes is waited on, never sent into.
+          const room = openPublicSocket(plan.origin, plan.identity, `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(session.workspace)}`, budget);
+
+          held.room = room;
+
           const machine = await attachMachine({
             account, name: MACHINE, home: scratchDir('first-run-approve'),
           });
@@ -156,26 +160,29 @@ describe(SUITE, () => {
           const survivedTheAsk = existsSync(doomed);
 
           // ── decided ─────────────────────────────────────────────────
+          const before = (await session.runEvents()).length;
+          const closed = room.turnClosed();
           const decided = row === null ? [] : await session.decideParkedCommands([row.id], 'approved');
           const after = await session.parkedCommands();
           const stillQueued = after.some((entry) => entry.id === row?.id);
 
           // ── the effect ──────────────────────────────────────────────
-          // The decision woke the agent before it answered, and the agent re-issues the approved command: the grant is
-          // spent at the gate and the command reaches the machine. Words sent after the wake are answered once it ran.
-          await session.prompt(SETTLE_ASK);
+          // The decision wakes the agent, which re-issues the approved command: the grant is spent at the gate and the
+          // command reaches the machine. Read once that run has ended.
+          const reissued = row !== null && await wakeEnded(session, room, closed, { wake: APPROVAL_WAKE, since: before });
           const gone = !existsSync(doomed);
 
           // ── the button ──────────────────────────────────────────────
           const clickIds = (await session.parkedCommands()).filter((entry) => clickCommands.includes(entry.command)).map((entry) => entry.id);
           const browser = await openBrowser();
           held.browser = browser;
+          const beforeClick = (await session.runEvents()).length;
+          const clickClosed = room.turnClosed();
           const clicked = await approveThroughTheButton(browser.browser, PLAN, session.workspace, clickIds);
           const clickStillQueued = (await session.parkedCommands()).some((entry) => clickIds.includes(entry.id));
 
-          // The RPC/browser work can finish before genesis makes its first
-          // model call. Drain through an explicit turn before collecting spend.
-          await session.prompt(SETTLE_ASK);
+          // The run the click woke ends before spend is collected: its model calls are the case's too.
+          if (clicked.approved) await wakeEnded(session, room, clickClosed, { wake: APPROVAL_WAKE, since: beforeClick });
 
           return [
             {
@@ -211,7 +218,7 @@ describe(SUITE, () => {
               reached: gone,
               detail: gone
                 ? 'the agent, woken by the approval, re-issued the command and the directory is gone'
-                : 'the approved command still has not run once the turn the approval woke had ended: the directory is there',
+                : `the approved command still has not run ${reissued ? 'once the run the approval woke had ended' : 'and no run the approval woke has ended'}: the directory is there`,
             },
             {
               what: 'button-clears-every-box',
@@ -229,6 +236,7 @@ describe(SUITE, () => {
         },
       }, observations);
     } finally {
+      held.room?.close('the case is done');
       await held.browser?.close();
 
       if (held.machine !== null) {
@@ -246,6 +254,7 @@ describe(SUITE, () => {
 interface CaseState {
   machine: AttachedMachine | null;
   browser: TestChrome | null;
+  room?: PublicSocket;
 }
 
 /** What the click did, and what the card looked like on both sides of it. */

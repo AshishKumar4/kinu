@@ -1,4 +1,4 @@
-// consentWakeEnded returns once the call an owner's consent answer let through has run, whichever turn ran it.
+// wakeEnded returns once the call an owner's consent answer let through has run, whichever turn ran it.
 //
 // The park-and-wake contract has two landings. Answered after the parked call's turn ended, the answer opens a wake
 // run (`caused_by: device_consent`) that re-issues the call. Answered while that turn still runs, the wake is read by
@@ -8,7 +8,7 @@
 // passing run.
 import { expect, test } from 'bun:test';
 import type { RunEvent } from '../../packages/core/src/index';
-import { consentWakeEnded } from './device-session';
+import { CONSENT_WAKE, wakeEnded } from './device-session';
 
 const AT = '2026-10-24T13:20:41.000Z';
 
@@ -59,31 +59,31 @@ test('an answer the parked turn read itself, re-issuing the call there, ends the
   const inTurn = [opened('run-2', 'chat'), shell('run-2', 5, PARKED), shell('run-2', 8), ended('run-2', 14)];
 
   // The room never hears another turn close: nothing else will run.
-  expect(await consentWakeEnded(session([inTurn]), room(0), Promise.resolve(false))).toBe(true);
+  expect(await wakeEnded(session([inTurn]), room(0), Promise.resolve(false), { wake: CONSENT_WAKE })).toBe(true);
 });
 
 test('an answer after the parked turn ended is waited for until the wake run it opens has ended', async () => {
   const parked = [opened('run-2', 'chat'), shell('run-2', 5, PARKED), ended('run-2', 10)];
   const woken = [...parked, opened('run-3', 'device_consent'), shell('run-3', 4), ended('run-3', 9)];
 
-  expect(await consentWakeEnded(session([parked, woken]), room(1), Promise.resolve(true))).toBe(true);
+  expect(await wakeEnded(session([parked, woken]), room(1), Promise.resolve(true), { wake: CONSENT_WAKE })).toBe(true);
 });
 
 test('a wake run still open when found is followed from its last event to its end', async () => {
   const open = [opened('run-2', 'chat'), shell('run-2', 5, PARKED), ended('run-2', 10), opened('run-3', 'device_consent'), shell('run-3', 4)];
   const following = session([open], [ended('run-3', 9)]);
 
-  expect({ ended: await consentWakeEnded(following, room(0), Promise.resolve(false)), followed: following.followed }).toEqual({ ended: true, followed: ['run-3@4'] });
+  expect({ ended: await wakeEnded(following, room(0), Promise.resolve(false), { wake: CONSENT_WAKE }), followed: following.followed }).toEqual({ ended: true, followed: ['run-3@4'] });
 });
 
 test('the same call is the same arguments in any key order', async () => {
   const reordered = [opened('run-2', 'chat'), shell('run-2', 5, PARKED), { ...shell('run-2', 8), args: { why: HOSTNAME.why, command: 'hostname', runtime: 'device' } }, ended('run-2', 14)];
 
-  expect(await consentWakeEnded(session([reordered]), room(0), Promise.resolve(false))).toBe(true);
+  expect(await wakeEnded(session([reordered]), room(0), Promise.resolve(false), { wake: CONSENT_WAKE })).toBe(true);
 });
 
 test('a re-issue that parked again is not the answered call, and the room ending first is a false', async () => {
   const twice = [opened('run-2', 'chat'), shell('run-2', 5, PARKED), shell('run-2', 8, PARKED), ended('run-2', 12)];
 
-  expect(await consentWakeEnded(session([twice]), room(0), Promise.resolve(false))).toBe(false);
+  expect(await wakeEnded(session([twice]), room(0), Promise.resolve(false), { wake: CONSENT_WAKE })).toBe(false);
 });

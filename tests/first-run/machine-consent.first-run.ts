@@ -27,7 +27,7 @@ import * as v from 'valibot';
 import { infraBoundary, scratchDir, workerSession, type EvalObservation, type EvalSubgoal } from '@kinu.run/test-utils';
 import { webHeaders } from '../../evals/src/workspace-roster';
 import { ORCHESTRATOR_AGENT_SLUG, type JsonValue, type RunEvent } from '../../packages/core/src/index';
-import { consentWakeEnded, type DeviceAccount } from './device-session';
+import { CONSENT_WAKE, wakeEnded, type DeviceAccount } from './device-session';
 import { attachMachine, detachMachine, type AttachedMachine } from './daemon';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { openPublicSocket } from './public-socket';
@@ -208,7 +208,7 @@ describe(SUITE, () => {
 
             // The call parked NOT RUN, and the answer woke the agent, which re-issues it once (the park-and-wake contract,
             // c66751bf2): what it ran is read once that run has ended.
-            if (card !== undefined) await consentWakeEnded(session, socket, closed);
+            if (card !== undefined) await wakeEnded(session, socket, closed, { wake: CONSENT_WAKE });
 
             subgoals.push({
               what: 'consent-requested',
