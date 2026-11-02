@@ -2227,9 +2227,9 @@ body > .annotation-toolbar {
 .p-diff { font-variant-ligatures: none; }
 /* A terminal's inset is xterm's padding, which its fit subtracts from the room the host gives it (TerminalPane.tsx). */
 .p-terminal-host > .xterm { padding: 8px 0 0 16px; }
-/* xterm.css paints its viewport black across the inset, and loads after this sheet: the host's ground, the terminal's
-   own, shows there instead. */
-.p-terminal-host .xterm .xterm-viewport { background-color: transparent; }
+/* xterm.css paints its viewport black across the inset, unlayered, so it outranks this layer as Shiki's sheet does: the
+   host's ground, the terminal's own, shows there instead. */
+.p-terminal-host .xterm-viewport { background-color: transparent !important; }
 .p-terminal-host[data-on-ground] > .xterm { padding-top: 4px; }
 /* An answer's slate open in the chat: its tools float over its top right on the tile. */
 .p-slate-tools { border-radius: var(--r-inner); background: var(--c-fill); }
