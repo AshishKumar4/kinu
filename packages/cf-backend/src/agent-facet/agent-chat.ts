@@ -124,8 +124,8 @@ export class FacetChat {
         deliver: (event) => {
           // Its last charge lands before its end is told: nothing the workspace reads of the turn can miss it.
           if (event.type === 'turn-end') {
-            // Its steps' grant answers: the turn ran its last.
-            deps.pacer.release(event.turnId);
+            // Its steps' grant answers: the turn ran its last, and the next turn's opening asks its own.
+            deps.pacer.release();
 
             return this.charged().then(async () => {
               // Its room is sent the transcript's newest messages with its end: they are this isolate's to read.
@@ -304,6 +304,8 @@ export class FacetChat {
     });
 
     if (owes !== null) this.namedWake = owes.next;
+    // Its context is assembled under a grant, once the preparation opened the turn at the workspace (`StepPacer.opening`).
+    await this.deps.pacer.opening(workspace, bound, lease.signal);
     database.prepare(bound, prepared);
     // A recovered execution assembles on what it froze as it first bound, and resolves nothing (D5).
     const { frozen } = round;
@@ -515,7 +517,7 @@ export class FacetChat {
   private atRest(): void {
     if (this.session.pumping || this.terminal.closing) return;
     // No turn runs: no grant is held for one.
-    this.deps.pacer.releaseAll();
+    this.deps.pacer.release();
     this.resting = hold(logged('agent.owed_report_failed', { doing: 'telling the workspace what an agent still owes', otherwise: 'unavailable' }, () => this.tell()))
       .then(() => {
         if (!this.session.pumping && !this.terminal.closing) this.deps.workspace.rest();

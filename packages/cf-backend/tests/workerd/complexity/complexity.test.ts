@@ -453,10 +453,13 @@ test('a production turn runs no more statements than it was measured at, and ask
  * near-limit note rides the facts read (`account.accountMemory_turnFacts`, which replaces `accountMemory_facts`).
  * 12 at the close on feat/mcp-lazy-clients (2026-10-25): an account's MCP server is connected by the call that needs it,
  * so a settled turn warms none (`account.userMcp_warmConnections`, gone).
+ * 19 at the open on 2026-11-02, 35 in all: a turn opened from rest assembles its context under a grant of its own
+ * (`host.paceStep` and `facet.step` once more), since work on a call that answered is reset past about 1 s of CPU
+ * (`do.facet.cpu_after_answer`). Against d1254be36 the same day: 17 and 12, 33 in all.
  */
 /** The budget per place, as measured (the history above): no crossing runs once per step beyond a step's own, nor once
  *  per earlier step. */
-const CROSSINGS = { open: 17, step: 2, close: 12 } as const;
+const CROSSINGS = { open: 19, step: 2, close: 12 } as const;
 
 /**
  * The planted calls (`ObservedOrchestrator.plantCrossings`), each counted once where it lands, and nothing else: the
