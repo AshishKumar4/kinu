@@ -695,13 +695,15 @@ function frontStep(manifest: ReleaseManifest, front: ReleaseModules, address: De
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.gen(function* () {
         const { main, front: script } = deploymentWorkers(context.inputs.instanceName);
+        const put = context.facts.get(FACT_FRONT_RELEASE) === manifest.version;
+        const held = put ? 'ours' : yield* frontHeld(context);
 
-        if (context.facts.get(FACT_FRONT_RELEASE) !== manifest.version) {
-          if ((yield* frontHeld(context)) === 'foreign') return yield* foreignFront(script);
-          yield* putFront(context, manifest, front);
-        }
+        if (held === 'foreign') return yield* foreignFront(script);
 
-        if (address.kind === 'zone') yield* bindDomain(context, address, script, [main, script]);
+        if (!put) yield* putFront(context, manifest, front);
+
+        // The address step bound the domain to the front where one stood, and to the main Worker until there was one.
+        if (address.kind === 'zone' && held === 'absent') yield* bindDomain(context, address, script, [main, script]);
 
         return `${script} answers ${context.facts.get(FACT_ADDRESS) ?? ''}.`;
       });
