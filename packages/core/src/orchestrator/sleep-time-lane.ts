@@ -266,8 +266,16 @@ export class SleepTimeLane {
 
       const proposals = account === undefined ? [] : accountProposals(update, window.turns);
 
-      // One commit, so a replay never repeats a prefix: the workspace's facts, and the account proposals it owes.
+      // One commit, so a replay never repeats a prefix: the workspace's facts, and the account proposals it owes. A pass
+      // over the same batch that committed while this one's model call ran has applied it: a decay applied twice would
+      // weaken a fact twice.
       const summary = this.deps.transactionSync(() => {
+        if (effectsAlreadyDone(this.deps.sql, this.deps.actor, PROCESSED, [key]).has(key)) {
+          retirePreparedOutput(this.deps.sql, this.deps.actor, { scope: PROCESSED, key });
+
+          return null;
+        }
+
         const applied = applySleepTimeUpdate(this.deps.facts, update);
 
         for (const [index, proposal] of proposals.entries()) {
@@ -282,9 +290,11 @@ export class SleepTimeLane {
         return applied;
       });
 
-      diagnostics.event('memory.facts_compressed', {
-        workspace: this.deps.workspace, upserted: summary.upserted, decayed: summary.decayed, skipped: summary.skipped,
-      });
+      if (summary !== null) {
+        diagnostics.event('memory.facts_compressed', {
+          workspace: this.deps.workspace, upserted: summary.upserted, decayed: summary.decayed, skipped: summary.skipped,
+        });
+      }
 
       yield* this.owed();
 

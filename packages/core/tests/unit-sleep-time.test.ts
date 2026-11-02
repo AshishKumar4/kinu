@@ -340,8 +340,8 @@ describe('an idle wake dreams first', () => {
   ]);
 
   /** `unreadable`: how many first passes the model answers with what no update can be read from; `held`: called as the
-   *  first pass reaches its model, its answer waiting on what it returns. */
-  function lane(count: number, { unreadable = 0, held }: { readonly unreadable?: number; readonly held?: () => Promise<void> } = {}) {
+   *  first pass reaches its model, its answer waiting on what it returns; `decay`: the facts every answer decays. */
+  function lane(count: number, { unreadable = 0, held, decay = [] }: { readonly unreadable?: number; readonly held?: () => Promise<void>; readonly decay?: readonly string[] } = {}) {
     const { rt, stores, testSql } = createTestRuntime();
     initFactsTable(testSql.execRaw);
     initSleepTimeTables(testSql.execRaw);
@@ -363,7 +363,7 @@ describe('an idle wake dreams first', () => {
 
         if (prompts.length <= unreadable) throw new KinuError('bad_input', 'the fast tier answered off its schema');
 
-        return v.parse(schema, { upserts: [], decay: [] });
+        return v.parse(schema, { upserts: [], decay: [...decay] });
       } }),
       transactionSync: (write) => write(),
       armWake: () => {},
@@ -371,7 +371,7 @@ describe('an idle wake dreams first', () => {
       idle: async () => { order.push('dream'); },
     });
 
-    return { lane: reopen(), reopen, order, prompts, rows };
+    return { lane: reopen(), reopen, order, prompts, rows, facts: stores.facts };
   }
 
   test('a due idle wake runs the dream before it compresses facts, and an early one runs neither', async () => {
@@ -418,7 +418,7 @@ describe('an idle wake dreams first', () => {
       .toEqual({ first: ['bad_input'], read: [[1, 2, 3], [4, 5, 6], [7, 8]] });
   });
 
-  test('a turn that settles while a pass waits on its model is read on its own wake, though that pass ends after it', async () => {
+  test('a turn that settles while a pass waits on its model is read on its own wake, and the batch both passes read applies once', async () => {
     const [reached, answer] = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
 
     const fixture = lane(3, {
@@ -427,7 +427,10 @@ describe('an idle wake dreams first', () => {
 
         return answer.promise;
       },
+      decay: ['stale.fact'],
     });
+
+    fixture.facts.upsert('stale.fact', 'kept', { confidence: 0.9 });
 
     const waiting = fixture.lane.runTerminal();
 
@@ -444,7 +447,10 @@ describe('an idle wake dreams first', () => {
 
     const read = fixture.prompts.map((prompt) => [...prompt.matchAll(/- Task: step (\d+)\n(?:.*\n)*?- Assistant output: answer \1\b/gu)].map((said) => Number(said[1])));
 
-    expect(read.at(-1)).toEqual([4]);
+    // Each pass decays the fact once: the first batch once though two passes read it, the fourth turn's once.
+    const confidence = present(fixture.facts.recall('stale.fact'), 'the seeded fact').confidence;
+
+    expect({ last: read.at(-1), decays: Math.round((0.9 - confidence) / 0.2) }).toEqual({ last: [4], decays: 2 });
   });
 
   test('an idle wake refuses pending input and includes it only after its answer completes', async () => {
