@@ -15,8 +15,9 @@
  * when none is held for its execution, when the held one was revoked (the workspace rejects the open call as it cuts
  * the turn, so a Stop is fenced as each step's own call fenced it), when the step binds the turn's profile, or once the
  * held grant has been open {@link RENEW_AFTER_MS}. The facet cannot read its CPU time, so the bound is wall time, which
- * CPU on one isolate never exceeds: half the budget, leaving the step after it room. A grant is let go as its turn ends
- * or the agent rests (`release`): a call held open keeps the workspace from hibernating (#69).
+ * CPU on one isolate never exceeds: half the budget, leaving the step after it room. A grant is let go once a newer one
+ * takes the work over, or the agent rests (`release`): a turn's end and the next turn's opening run under the grant its
+ * last step ran under, and a call held open keeps the workspace from hibernating (#69).
  */
 import { Effect, Exit } from 'effect';
 import { attempt, hold, KinuError, settle, toKinuError } from '@kinu.run/core/obs';
@@ -85,7 +86,7 @@ export class StepPacer {
     return !held.revoked && this.now() - held.at < RENEW_AFTER_MS;
   }
 
-  /** The turn ended, or the agent rests: the call its work ran under answers. */
+  /** The agent rests, or a delivered run ended: the call its work ran under answers. */
   release(): void {
     const { held } = this;
 

@@ -645,10 +645,13 @@ export async function deliveredRun(
       },
     });
   } finally {
-    // Its steps' grant answers: the run ran its last.
-    pacer.release();
-    // Observability, told after its end committed, so no death in them runs the run again (#75), and before the end is.
-    await run.trace?.flush();
-    await spend.settled();
+    // Observability, told after its end committed, so no death in them runs the run again (#75), and before the end is,
+    // under the grant its steps ran under, which answers once they are told.
+    try {
+      await run.trace?.flush();
+      await spend.settled();
+    } finally {
+      pacer.release();
+    }
   }
 }

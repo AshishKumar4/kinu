@@ -1708,14 +1708,14 @@ export const PLATFORM_CATALOG = {
       { scenario: 'work run on after its call answered, in one burst (probe): survived', value: 1_122, unit: 'ms' },
       { scenario: 'the same, reset (probe, lowest of 7 resets)', value: 1_021, unit: 'ms' },
       { scenario: 'the same, reset (probe, highest of 7 resets)', value: 2_296, unit: 'ms' },
-      { scenario: 'a wake that answered as its pump opened a turn, at every reset (production, 8 of 8)', value: 2_500, unit: 'ms' },
+      { scenario: 'a wake that answered as its pump opened a turn, beside a reset (production, 7 of 8; the 8th beside a step)', value: 2_500, unit: 'ms' },
     ],
     notes:
       'A call that waits for work keeps its own 30 s budget (`do.facet.cpu_ms`); one that answers keeps almost none for '
       + 'what it left running. A wake answered as its pump opened a turn over a 391K-token context, and a grant was let go '
       + 'at its turn\'s end with the turn\'s seal and the next opening still to run: eight steps were lost so in three hours '
-      + 'on 2026-11-01, each beside a call that answered at 2,500 ms. So a turn\'s opening assembles its context under a '
-      + 'grant of its own, as its steps run (agent-facet `StepPacer.opening`).',
+      + 'on 2026-11-01, each beside a call that answered at 2,500 ms. So a turn\'s end and the next turn\'s '
+      + 'opening run under the grant its last step ran under, and an opening from rest asks its own (agent-facet `StepPacer`).',
   },
 
   'do.facet.subrequests': {
