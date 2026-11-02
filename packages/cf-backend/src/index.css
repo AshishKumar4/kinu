@@ -883,8 +883,10 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-disclosure .t-item { color: var(--c-text); }
 /* An answer's slate frame (slates/InlineSlate.tsx): in its fold at the card radius, its height easing; in the work
    surface's pane, the page's ground edge to edge. */
-.p-slate-frame { display: block; width: 100%; border: 0; border-radius: var(--r-card); transition: height var(--dur-fold) var(--ease-out-strong); }
-.p-slate-frame[data-pane] { flex: 1 1 0%; min-height: 0; border-radius: 0; background: var(--c-bg); transition: none; }
+/* No radius: a drawn page lies on the chat's own ground, and a rounded frame cut off whatever it drew in its corners
+   (a button at its foot, 2026-10-26). */
+.p-slate-frame { display: block; width: 100%; border: 0; transition: height var(--dur-fold) var(--ease-out-strong); }
+.p-slate-frame[data-pane] { flex: 1 1 0%; min-height: 0; background: var(--c-bg); transition: none; }
 [data-fold-still] :is(.p-fold, .p-fold-turn) { transition: none; }
 @media (prefers-reduced-motion: reduce) {
   .p-fold, .p-fold-turn, .p-slate-frame { transition: none; }
