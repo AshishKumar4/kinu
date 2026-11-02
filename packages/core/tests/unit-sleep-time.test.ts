@@ -339,8 +339,9 @@ describe('an idle wake dreams first', () => {
     { id: `u${String(turn)}`, position: 0, role: 'user' as const, turnId: null, runId: null, content: `step ${String(turn)}`, toolCalls: [], recordedAt: 0 },
   ]);
 
-  /** `unreadable`: how many first passes the model answers with what no update can be read from. */
-  function lane(count: number, unreadable = 0) {
+  /** `unreadable`: how many first passes the model answers with what no update can be read from; `held`: called as the
+   *  first pass reaches its model, its answer waiting on what it returns. */
+  function lane(count: number, { unreadable = 0, held }: { readonly unreadable?: number; readonly held?: () => Promise<void> } = {}) {
     const { rt, stores, testSql } = createTestRuntime();
     initFactsTable(testSql.execRaw);
     initSleepTimeTables(testSql.execRaw);
@@ -357,6 +358,8 @@ describe('an idle wake dreams first', () => {
       llm: () => ({ stream: () => { throw new Error('not streamed'); }, complete: () => { throw new Error('sleep-time asks for a schema'); }, object: async (prompt, schema) => {
         order.push('facts');
         prompts.push(prompt);
+
+        if (prompts.length === 1 && held !== undefined) await held();
 
         if (prompts.length <= unreadable) throw new KinuError('bad_input', 'the fast tier answered off its schema');
 
@@ -402,7 +405,7 @@ describe('an idle wake dreams first', () => {
   });
 
   test("a batch the model cannot read is consumed once, and the backlog after it still drains on the lane's own wakes", async () => {
-    const fixture = lane(8, 1);
+    const fixture = lane(8, { unreadable: 1 });
     const first = await Promise.allSettled([fixture.lane.runTerminal()]);
 
     for (let owed = fixture.reopen(), at = owed.nextWakeAt(); at !== null; owed = fixture.reopen(), at = owed.nextWakeAt()) {
@@ -413,6 +416,35 @@ describe('an idle wake dreams first', () => {
 
     expect({ first: first.map((settled) => (settled.status === 'rejected' ? v.parse(FailureSchema, settled.reason).code : 'completed')), read })
       .toEqual({ first: ['bad_input'], read: [[1, 2, 3], [4, 5, 6], [7, 8]] });
+  });
+
+  test('a turn that settles while a pass waits on its model is read on its own wake, though that pass ends after it', async () => {
+    const [reached, answer] = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+
+    const fixture = lane(3, {
+      held: () => {
+        reached.resolve();
+
+        return answer.promise;
+      },
+    });
+
+    const waiting = fixture.lane.runTerminal();
+
+    await reached.promise;
+    // The fourth turn settles, and its own pass runs while the first still waits.
+    fixture.rows.unshift(...turns(4).slice(0, 2));
+    await fixture.reopen().runTerminal();
+    answer.resolve();
+    await waiting;
+
+    for (let owed = fixture.reopen(), at = owed.nextWakeAt(); at !== null; owed = fixture.reopen(), at = owed.nextWakeAt()) {
+      await owed.wake(at + SLEEP_TIME_CADENCE.idleMs);
+    }
+
+    const read = fixture.prompts.map((prompt) => [...prompt.matchAll(/- Task: step (\d+)\n(?:.*\n)*?- Assistant output: answer \1\b/gu)].map((said) => Number(said[1])));
+
+    expect(read.at(-1)).toEqual([4]);
   });
 
   test('an idle wake refuses pending input and includes it only after its answer completes', async () => {

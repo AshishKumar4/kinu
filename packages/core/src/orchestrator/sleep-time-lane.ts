@@ -286,23 +286,25 @@ export class SleepTimeLane {
         workspace: this.deps.workspace, upserted: summary.upserted, decayed: summary.decayed, skipped: summary.skipped,
       });
 
-      this.owesPast(window);
+      yield* this.owed();
 
       if (account !== undefined) yield* this.deliver(account);
-    }).pipe(Effect.tapError((failure) => Effect.sync(() => {
-      // A batch the model cannot read is consumed, never retried; the batches after it are still owed.
-      if (isDefinitiveTerminalFailure(failure.code)) {
-        this.deps.transactionSync(() => { this.finish(key); });
-        this.owesPast(window);
-      }
-
+    }).pipe(Effect.tapError((failure) => {
       diagnostics.failure('memory.fact_compression_failed', failure);
-    })));
+
+      // A batch the model cannot read is consumed, never retried; the turns after it are still owed.
+      return isDefinitiveTerminalFailure(failure.code)
+        ? Effect.sync(() => { this.deps.transactionSync(() => { this.finish(key); }); }).pipe(Effect.andThen(this.owed()))
+        : Effect.void;
+    }));
   }
 
-  /** A backlog past this pass's batch is still owed: the next pass reads it, on the cadence a settled turn arms. */
-  private owesPast(window: SleepTimeWindow): void {
-    if (window.completedTurns - (window.lastRunTurn ?? 0) > window.turns.length) this.arm(window);
+  /**
+   * Arms the lane for what is still unread, read again once a batch is consumed: the turns past it, and any turn that
+   * settled while its model call ran, whose wake the batch's finish cleared.
+   */
+  private owed(): Effect.Effect<void, KinuError> {
+    return Effect.map(this.window(), (fresh) => { this.arm(fresh); });
   }
 
   /**
