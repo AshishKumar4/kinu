@@ -418,40 +418,49 @@ describe('an idle wake dreams first', () => {
       .toEqual({ first: ['bad_input'], read: [[1, 2, 3], [4, 5, 6], [7, 8]] });
   });
 
-  test('a turn that settles while a pass waits on its model is read on its own wake, and the batch both passes read applies once', async () => {
-    const [reached, answer] = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+  /** The turns each pass read, as its prompt lists them: each answer under the ask that opened it. */
+  const passesRead = (prompts: readonly string[]) => prompts.map((prompt) => [...prompt.matchAll(/- Task: step (\d+)\n(?:.*\n)*?- Assistant output: answer \1\b/gu)].map((said) => Number(said[1])));
 
-    const fixture = lane(3, {
-      held: () => {
-        reached.resolve();
+  for (const [opened, by] of [[3, 'a settled turn'], [2, 'an idle wake']] as const) {
+    test(`a turn that settles while ${by}'s pass waits on its model is read alone, after it, and each turn's update applies once`, async () => {
+      const [reached, answer] = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
 
-        return answer.promise;
-      },
-      decay: ['stale.fact'],
+      const fixture = lane(opened, {
+        held: () => {
+          reached.resolve();
+
+          return answer.promise;
+        },
+        decay: ['stale.fact'],
+      });
+
+      fixture.facts.upsert('stale.fact', 'kept', { confidence: 0.9 });
+
+      // Three turns are the cadence, so the settled turn's pass reads them; two are not, and the idle wake reads them.
+      const first = (async () => {
+        await fixture.lane.runTerminal();
+
+        if (opened === 2) await fixture.reopen().wake(present(fixture.reopen().nextWakeAt(), 'the idle wake') + SLEEP_TIME_CADENCE.idleMs);
+      })();
+
+      await reached.promise;
+      // The next turn settles, and its own pass starts while the first still waits on its model.
+      fixture.rows.unshift(...turns(opened + 1).slice(0, 2));
+      const settled = fixture.reopen().runTerminal();
+
+      answer.resolve();
+      await Promise.all([first, settled]);
+
+      for (let owed = fixture.reopen(), at = owed.nextWakeAt(); at !== null; owed = fixture.reopen(), at = owed.nextWakeAt()) {
+        await owed.wake(at + SLEEP_TIME_CADENCE.idleMs);
+      }
+
+      const confidence = present(fixture.facts.recall('stale.fact'), 'the seeded fact').confidence;
+      const batch = Array.from({ length: opened }, (_turn, at) => at + 1);
+
+      expect({ read: passesRead(fixture.prompts), decays: Math.round((0.9 - confidence) / 0.2) }).toEqual({ read: [batch, [opened + 1]], decays: 2 });
     });
-
-    fixture.facts.upsert('stale.fact', 'kept', { confidence: 0.9 });
-
-    const waiting = fixture.lane.runTerminal();
-
-    await reached.promise;
-    // The fourth turn settles, and its own pass runs while the first still waits.
-    fixture.rows.unshift(...turns(4).slice(0, 2));
-    await fixture.reopen().runTerminal();
-    answer.resolve();
-    await waiting;
-
-    for (let owed = fixture.reopen(), at = owed.nextWakeAt(); at !== null; owed = fixture.reopen(), at = owed.nextWakeAt()) {
-      await owed.wake(at + SLEEP_TIME_CADENCE.idleMs);
-    }
-
-    const read = fixture.prompts.map((prompt) => [...prompt.matchAll(/- Task: step (\d+)\n(?:.*\n)*?- Assistant output: answer \1\b/gu)].map((said) => Number(said[1])));
-
-    // Each pass decays the fact once: the first batch once though two passes read it, the fourth turn's once.
-    const confidence = present(fixture.facts.recall('stale.fact'), 'the seeded fact').confidence;
-
-    expect({ last: read.at(-1), decays: Math.round((0.9 - confidence) / 0.2) }).toEqual({ last: [4], decays: 2 });
-  });
+  }
 
   test('an idle wake refuses pending input and includes it only after its answer completes', async () => {
     const fixture = lane(2);

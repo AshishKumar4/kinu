@@ -1,6 +1,6 @@
 // Sleep-time compute on every backend (m1544): the `sleep_time` effect, its idle and closed-session wakes (m1435).
 
-import { Effect } from 'effect';
+import { Effect, Semaphore } from 'effect';
 import * as v from 'valibot';
 import type { AgentConfigStore } from '../config/store';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -22,6 +22,21 @@ const PROCESSED = 'sleep_time';
 const SETTLED_AT = 'settled';
 
 const CLOSED_AT = 'closed';
+
+/**
+ * One pass at a time over an actor's facts, whichever trigger starts it, each reading its window under the lock: an idle
+ * wake and a terminal pass reading one window would apply the turns they share twice, and a decay weakens a fact each
+ * time. Keyed by the facts store, the one object every lane built for the actor in an activation shares.
+ */
+const passes = new WeakMap<FactsStore, Semaphore.Semaphore>();
+
+function passLock(facts: FactsStore): Semaphore.Semaphore {
+  const held = passes.get(facts) ?? Semaphore.makeUnsafe(1);
+
+  passes.set(facts, held);
+
+  return held;
+}
 
 /** The first read: one answer past the cadence, plus steers. A backlog past it is read further back (`window`). */
 const READ_ROWS = (SLEEP_TIME_CADENCE.everyTurns + 1) * 8;
@@ -105,7 +120,7 @@ export class SleepTimeLane {
         return { status: 'completed', detail: 'the cadence is not due' } as const;
       }
 
-      yield* this.compute(window);
+      yield* this.compute();
 
       return { status: 'completed' } as const;
     }));
@@ -190,7 +205,7 @@ export class SleepTimeLane {
       const idle = this.deps.idle;
 
       if (idle !== undefined) yield* Effect.promise(() => idle());
-      yield* this.compute(window);
+      yield* this.compute();
 
       return true;
     });
@@ -231,7 +246,11 @@ export class SleepTimeLane {
   }
 
 
-  private compute(window: SleepTimeWindow): Effect.Effect<void, KinuError> {
+  private compute(): Effect.Effect<void, KinuError> {
+    return passLock(this.deps.facts).withPermits(1)(Effect.flatMap(this.window(), (window) => this.consume(window)));
+  }
+
+  private consume(window: SleepTimeWindow): Effect.Effect<void, KinuError> {
     const key = window.newestId;
 
     if (key === null) return Effect.void;
@@ -266,16 +285,8 @@ export class SleepTimeLane {
 
       const proposals = account === undefined ? [] : accountProposals(update, window.turns);
 
-      // One commit, so a replay never repeats a prefix: the workspace's facts, and the account proposals it owes. A pass
-      // over the same batch that committed while this one's model call ran has applied it: a decay applied twice would
-      // weaken a fact twice.
+      // One commit, so a replay never repeats a prefix: the workspace's facts, and the account proposals it owes.
       const summary = this.deps.transactionSync(() => {
-        if (effectsAlreadyDone(this.deps.sql, this.deps.actor, PROCESSED, [key]).has(key)) {
-          retirePreparedOutput(this.deps.sql, this.deps.actor, { scope: PROCESSED, key });
-
-          return null;
-        }
-
         const applied = applySleepTimeUpdate(this.deps.facts, update);
 
         for (const [index, proposal] of proposals.entries()) {
@@ -290,11 +301,9 @@ export class SleepTimeLane {
         return applied;
       });
 
-      if (summary !== null) {
-        diagnostics.event('memory.facts_compressed', {
-          workspace: this.deps.workspace, upserted: summary.upserted, decayed: summary.decayed, skipped: summary.skipped,
-        });
-      }
+      diagnostics.event('memory.facts_compressed', {
+        workspace: this.deps.workspace, upserted: summary.upserted, decayed: summary.decayed, skipped: summary.skipped,
+      });
 
       yield* this.owed();
 
