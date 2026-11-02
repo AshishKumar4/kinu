@@ -73,8 +73,8 @@ const DEFECT: FirstRunDefect = {
  *  the fleet is the next case's subject. */
 const MACHINE = 'kinu-first-run-approve';
 
-/** How long the agent, woken by the approval, may take to re-issue the approved command: one scripted turn. */
-const RE_ISSUE_MS = 90_000;
+/** What the case says once its decisions are made: answered after the turns the decisions woke, it is their end. */
+const SETTLE_ASK = 'The approval checks are finished. Reply with only OK. Do not run commands or use tools.';
 
 /** The most wall time the case may take once its session is open. A signed-in
  *  page has no default timeout (`signedInPage`): each wait on it ends when the
@@ -161,11 +161,9 @@ describe(SUITE, () => {
           const stillQueued = after.some((entry) => entry.id === row?.id);
 
           // ── the effect ──────────────────────────────────────────────
-          // The decision wakes the agent, which re-issues the approved command: the grant is spent at the gate and the
-          // command reaches the machine.
-          const deadline = Date.now() + RE_ISSUE_MS;
-
-          while (row !== null && existsSync(doomed) && Date.now() < deadline) await new Promise((resolve) => { setTimeout(resolve, 1000); });
+          // The decision woke the agent before it answered, and the agent re-issues the approved command: the grant is
+          // spent at the gate and the command reaches the machine. Words sent after the wake are answered once it ran.
+          await session.prompt(SETTLE_ASK);
           const gone = !existsSync(doomed);
 
           // ── the button ──────────────────────────────────────────────
@@ -177,7 +175,7 @@ describe(SUITE, () => {
 
           // The RPC/browser work can finish before genesis makes its first
           // model call. Drain through an explicit turn before collecting spend.
-          await session.prompt('The approval checks are finished. Reply with only OK. Do not run commands or use tools.');
+          await session.prompt(SETTLE_ASK);
 
           return [
             {
@@ -213,7 +211,7 @@ describe(SUITE, () => {
               reached: gone,
               detail: gone
                 ? 'the agent, woken by the approval, re-issued the command and the directory is gone'
-                : `the approved command still has not run ${String(RE_ISSUE_MS / 1000)} s after the approval: the directory is there`,
+                : 'the approved command still has not run once the turn the approval woke had ended: the directory is there',
             },
             {
               what: 'button-clears-every-box',
