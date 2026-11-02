@@ -104,6 +104,17 @@ export const SWARM_ASK = `Use your agents tool with op swarm and preset ideate, 
 export const CONSENT_ASK = 'Use the shell tool with runtime "device" to run the command `hostname` on my PC, '
   + 'even if you expect it to fail. Then reply with one line: HOST <what it printed>, or NONE if nothing ran.';
 
+/**
+ * approve-clears: the agent's own commands on the owner's PC, each of which parks on the owner (`rm-recursive`), one per
+ * line after this head. The owner's own commands run unasked, so the queue's rows are the agent's.
+ */
+export const PARK_ASK_HEAD = 'Use the shell tool with runtime "device" to run each command below on my PC, one call each, '
+  + 'in order, even if a call waits on my approval. Reply PARKED once every call has answered.\n';
+
+export function parkAsk(commands: readonly string[]): string {
+  return `${PARK_ASK_HEAD}${commands.join('\n')}`;
+}
+
 /** device-job-output: a line a second for longer than a call's foreground window, so the command detaches into a job
  *  while it is still printing. */
 export const DEVICE_JOB_TICKS = 45;

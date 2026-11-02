@@ -20,7 +20,7 @@ import {
   SEARCH_QUERY, SETTLE_ASK, SETTLE_MARKER, STANDBY_MISSION, SWARM_ASK, SWARM_TASK, TOOLS_CODEMODE_MARK, TOOLS_FACT,
   TOOLS_HEALTH_URL, TOOLS_LIST_ASK, TOOLS_PROBE_BYTES, TOOLS_PROBE_PATH, TOOLS_RUN_MARK, TOOLS_TASK_TITLE,
   TOOLS_USE_ASK, TREE_ASK, TREE_DEEP_WORD, TREE_SHALLOW_WORD, UNNAMED_MACHINE_ASK, WAKE_ASK, WAKE_STEPS,
-  NESTED_HIRE_ASK, NESTED_MISSION, NESTED_TASK_TITLE, NESTED_WORD, TAB_WORKING_ASK,
+  NESTED_HIRE_ASK, NESTED_MISSION, NESTED_TASK_TITLE, NESTED_WORD, PARK_ASK_HEAD, TAB_WORKING_ASK,
   sayWordMission,
 } from './asks';
 import { LISTING_TURN, STEER, STEER_MARKER, STEER_TURN } from './steer-observation';
@@ -210,6 +210,30 @@ const machineConsent: Script = (request) => latest(request) !== CONSENT_ASK && !
   call('shell', { runtime: 'device', command: 'hostname', why }),
 ], ([shell]) => `HOST ${oneLine(shell?.result).slice(0, 300)}`);
 
+/** The section of a decision's wake that lists what the owner approved and nothing ran yet (`decisionWakeMessage`). */
+const APPROVED_NOT_RUN = 'APPROVED, still not run: re-issue once:';
+
+/**
+ * approve-clears: each command the ask lists, one call each, which park; then, on a decision's wake, each the owner
+ * approved, re-issued once. A command is known in the wake by its first characters, as the wake clips a long one.
+ */
+const approveClears: Script = (request) => {
+  const opening = request.userTexts.find((text) => text.startsWith(PARK_ASK_HEAD));
+
+  if (opening === undefined) return null;
+  const commands = opening.slice(PARK_ASK_HEAD.length).split('\n');
+  const asked = latest(request);
+
+  if (asked === opening) return steps(request, commands.map((command) => call('shell', { runtime: 'device', command, why })), () => 'PARKED');
+  const [, approved = ''] = asked.split(`${APPROVED_NOT_RUN}\n`);
+
+  if (approved === '') return null;
+  const listed = approved.split(/\n(?=\S)/u)[0] ?? '';
+  const again = commands.filter((command) => listed.includes(command.slice(0, 120)));
+
+  return steps(request, again.map((command) => call('shell', { runtime: 'device', command, why })), () => 'RAN');
+};
+
 /** device-job-output: the one command, re-issued once the owner's answer approves it, answered with the job it detached
  *  into. */
 const deviceJob: Script = (request) => latest(request) !== DEVICE_JOB_ASK && !approvedAgain(request, DEVICE_JOB_ASK, DEVICE_JOB_COMMAND) ? null : steps(request, [
@@ -372,7 +396,7 @@ const tabWorking: Script = (request) => latest(request) !== TAB_WORKING_ASK ? nu
 
 const SCRIPTS: readonly Script[] = [
   steerCorrection, backgroundSettle, backgroundWake, capabilityIsolation, delegation, delegationTree, exploration,
-  machineConsent, deviceJob, sandboxMountWrite, sandboxExecOutput, computerDesktop, twoMachines, webSearch, workspacePanes, everyTool, codemodeCraft, helloSlate,
+  machineConsent, deviceJob, approveClears, sandboxMountWrite, sandboxExecOutput, computerDesktop, twoMachines, webSearch, workspacePanes, everyTool, codemodeCraft, helloSlate,
   jobWake, tabWorking,
   nestedChat, subagent,
 ];

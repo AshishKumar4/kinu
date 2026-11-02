@@ -16,12 +16,13 @@
  *
  * SO THIS CASE DRIVES BOTH HALVES, AGAINST ONE WORKSPACE AND ONE QUEUE:
  *
- *   THE MECHANISM, over the public plane — a real gated command parks, the
- *   queue lists it, `decideDeferredApprovals` (the RPC the button is bound to)
- *   approves it, the re-read no longer holds it, and the approved command then
- *   RUNS on the machine, which is the fact a permission is for. Permission is
- *   not an effect: the queue's own doctrine says the grant is spent when the
- *   command is re-issued, and this case re-issues it and reads the bytes.
+ *   THE MECHANISM, over the public plane — the agent's real gated command
+ *   parks (the owner's own commands run unasked), the queue lists it,
+ *   `decideDeferredApprovals` (the RPC the button is bound to) approves it, the
+ *   re-read no longer holds it, and the approved command then RUNS on the
+ *   machine, which is the fact a permission is for. Permission is not an
+ *   effect: the grant is spent when the agent, woken by the decision,
+ *   re-issues the command, and this case reads the bytes it removed.
  *
  *   THE BUTTON, in a real browser — Chrome loads the deployed workspace, the
  *   parked commands' card renders in its attention stack (where asks are
@@ -46,6 +47,7 @@ import type { PublicSessionPlan } from '../../evals/src/session';
 import type { DeviceAccount } from './device-session';
 import { attachMachine, detachMachine, grantDeviceConsent, type AttachedMachine } from './daemon';
 import { approvalClearsSelection, isApprovalButtonLabel } from './approval-observation';
+import { parkAsk } from './asks';
 import { openBrowser, signedInPage } from '../../evals/src/browser';
 import type { TestChrome } from '../../scripts/test-chrome';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
@@ -70,6 +72,9 @@ const DEFECT: FirstRunDefect = {
 /** The machine this case attaches. One is enough: the subject is the queue, and
  *  the fleet is the next case's subject. */
 const MACHINE = 'kinu-first-run-approve';
+
+/** How long the agent, woken by the approval, may take to re-issue the approved command: one scripted turn. */
+const RE_ISSUE_MS = 90_000;
 
 /** The most wall time the case may take once its session is open. A signed-in
  *  page has no default timeout (`signedInPage`): each wait on it ends when the
@@ -130,17 +135,24 @@ describe(SUITE, () => {
           writeFileSync(join(doomed, 'marker'), 'first-run\n');
           const command = `rm -r ${JSON.stringify(doomed)}`;
 
+          // Two more for the button, so the browser has something to approve that the RPC half did not already clear,
+          // and one card holds them with a box each: the stack batches two or more. Same command shape, same rule.
+          const clickCommands = ['doomed-by-click-a', 'doomed-by-click-b'].map((name) => {
+            const dir = join(machine.home, name);
+
+            mkdirSync(dir, { recursive: true });
+
+            return `rm -r ${JSON.stringify(dir)}`;
+          });
+
           // ── parked ──────────────────────────────────────────────────
-          // Through the Env tab's own RPC, which reaches the same gated
-          // boundary every other caller does: `gateProviderExec` wraps the
-          // provider at registration, so there is no path to this machine that
-          // skips the review.
-          const first = await session.execute('device', command);
-          const firstText = `${first.stdout ?? ''}${first.stderr ?? ''}${first.error ?? ''}`;
+          // The agent's own calls, each through the gated boundary every caller reaches: `gateProviderExec` wraps the
+          // provider at registration, so there is no path for an agent to this machine that skips the review.
+          const asked = await session.prompt(parkAsk([command, ...clickCommands]));
+          const firstText = JSON.stringify(asked).slice(0, 240);
           const queued = await session.parkedCommands();
           const row = queued.find((entry) => entry.command === command) ?? null;
-          // Read while parked: the approval wakes the agent and the approved
-          // command runs before the next read, so a later read cannot show this.
+          // Read while parked, before anybody decided.
           const survivedTheAsk = existsSync(doomed);
 
           // ── decided ─────────────────────────────────────────────────
@@ -149,27 +161,14 @@ describe(SUITE, () => {
           const stillQueued = after.some((entry) => entry.id === row?.id);
 
           // ── the effect ──────────────────────────────────────────────
-          // Re-issued, which is when an approved command runs: the grant is
-          // spent at the gate and the command reaches the machine.
-          const second = row === null
-            ? null
-            : await session.execute('device', command);
+          // The decision wakes the agent, which re-issues the approved command: the grant is spent at the gate and the
+          // command reaches the machine.
+          const deadline = Date.now() + RE_ISSUE_MS;
 
+          while (row !== null && existsSync(doomed) && Date.now() < deadline) await new Promise((resolve) => { setTimeout(resolve, 1000); });
           const gone = !existsSync(doomed);
 
           // ── the button ──────────────────────────────────────────────
-          // Two more parked rows, so the browser has something to approve that
-          // the RPC half did not already clear, and one card holds them with a
-          // box each: the stack batches two or more. Same command shape,
-          // different directories, same rule.
-          const clickCommands = ['doomed-by-click-a', 'doomed-by-click-b'].map((name) => {
-            const dir = join(machine.home, name);
-            mkdirSync(dir, { recursive: true });
-
-            return `rm -r ${JSON.stringify(dir)}`;
-          });
-
-          for (const clickCommand of clickCommands) await session.execute('device', clickCommand);
           const clickIds = (await session.parkedCommands()).filter((entry) => clickCommands.includes(entry.command)).map((entry) => entry.id);
           const browser = await openBrowser();
           held.browser = browser;
@@ -186,7 +185,7 @@ describe(SUITE, () => {
               reached: row !== null && row.executor === 'device',
               detail: row === null
                 ? `the gated command did not park: the queue holds ${String(queued.length)} row(s) `
-                  + `and the exec answered ${JSON.stringify(firstText.slice(0, 240))}`
+                  + `and the agent's turn answered ${firstText}`
                 : `${row.id} is parked on ${row.executor}: ${row.command}`,
             },
             {
@@ -213,9 +212,8 @@ describe(SUITE, () => {
               what: 'approved-command-ran',
               reached: gone,
               detail: gone
-                ? 'the re-issued command ran on the machine and the directory is gone'
-                : 'the approved command still has not run: the directory is there and the exec '
-                  + `answered ${JSON.stringify(String(second?.stdout ?? second?.error ?? '').slice(0, 240))}`,
+                ? 'the agent, woken by the approval, re-issued the command and the directory is gone'
+                : `the approved command still has not run ${String(RE_ISSUE_MS / 1000)} s after the approval: the directory is there`,
             },
             {
               what: 'button-clears-every-box',

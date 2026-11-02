@@ -12,6 +12,7 @@ import { createMemoryVfs } from '../../packages/test-utils/src/vfs';
 import {
   CONSENT_ASK, DELEGATION_ROSTER_ASK, DELEGATION_TASK_ASK, DELEGATION_WORD, DEVICE_JOB_ASK, DEVICE_JOB_COMMAND, HELLO_SLATE_ASK, HELLO_SLATE_ID,
   RELAY_MISSION, STANDBY_MISSION, TREE_ASK, TREE_DEEP_WORD, UNNAMED_MACHINE_ASK, delegationDismissAsk, sayWordMission,
+  parkAsk,
 } from './asks';
 import worker, { MAX_BODY_BYTES } from '../../scripts/scripted-model-worker';
 import { SCRIPTED_MCP_PATH, SCRIPTED_MCP_TOOL, SessionAnswerSchema } from '../../scripts/scripted-mcp';
@@ -332,6 +333,38 @@ async function decisionWake(command: string, answer: 'approved' | 'denied'): Pro
   return text;
 }
 
+/** The arguments of each shell call the script answers `messages` with, none when it answers in words. */
+const shellArgs = async (messages: readonly JsonObject[]) => (await reply(messages, ['shell'])).tool_calls?.map((made) => JSON.parse(made.function.arguments));
+
+// approve-clears parks the agent's own commands: the owner's own run unasked (2026-11-02).
+describe("approve-clears: the agent parks each command it is given, and re-issues once the one the owner approves", () => {
+  const commands = ['rm -r "/home/first-run/doomed"', 'rm -r "/home/doomed-by-click-a"', 'rm -r "/home/doomed-by-click-b"'];
+  const ask = parkAsk(commands);
+
+  const parkedCall = (id: string, command: string): JsonObject[] => [
+    { role: 'assistant', content: 'Calling shell.', tool_calls: [{ id, type: 'function', function: { name: 'shell', arguments: JSON.stringify({ runtime: 'device', command, why: 'asked' }) } }] },
+    { role: 'tool', tool_call_id: id, content: `NOT RUN: queued for owner approval (defer-${id}): rm-recursive on device. A decision will wake you.` },
+  ];
+
+  const parked = commands.flatMap((command, index) => parkedCall(`p${String(index)}`, command));
+
+  test('each command is one device call, in order, and the turn answers once all have', async () => {
+    const calls = await Promise.all(commands.map((_command, made) => shellArgs([{ role: 'user', content: ask }, ...parked.slice(0, made * 2)])));
+
+    expect({ calls, answered: (await reply([{ role: 'user', content: ask }, ...parked], ['shell'])).content })
+      .toEqual({ calls: commands.map((command) => [expect.objectContaining({ runtime: 'device', command })]), answered: 'PARKED' });
+  });
+
+  test("the approval's wake re-issues the approved command alone; a denial re-issues nothing", async () => {
+    const opened = [{ role: 'user', content: ask }, ...parked, { role: 'assistant', content: 'PARKED' }];
+
+    expect({
+      approved: await shellArgs([...opened, { role: 'user', content: await decisionWake(present(commands[0], 'a command'), 'approved') }]),
+      denied: await shellArgs([...opened, { role: 'user', content: await decisionWake(present(commands[0], 'a command'), 'denied') }]),
+    }).toEqual({ approved: [expect.objectContaining({ runtime: 'device', command: commands[0] })], denied: undefined });
+  });
+});
+
 describe('the approval flow acknowledges only the current unanswered decisions', () => {
   const parked = [{ role: 'user', content: APPROVALS_ASK }, { role: 'assistant', content: 'BOTH PARKED' }];
 
@@ -621,22 +654,21 @@ describe('the owner\'s consent answer wakes the agent, which re-issues the call 
     { role: 'tool', tool_call_id: id, content: parkedOn('kinu-first-run-consent') },
   ];
 
-  const reissued = async (messages: readonly JsonObject[]) => (await reply(messages, ['shell'])).tool_calls?.map((made) => JSON.parse(made.function.arguments));
 
   test('machine-consent: hostname, approved, is run again on the device', async () => {
     const wake = await consentWake('kinu-first-run-consent', 'hostname', 'once');
 
-    expect(await reissued([{ role: 'user', content: CONSENT_ASK }, ...shellCall('c1', 'hostname'), { role: 'assistant', content: 'HOST parked' }, { role: 'user', content: wake }]))
+    expect(await shellArgs([{ role: 'user', content: CONSENT_ASK }, ...shellCall('c1', 'hostname'), { role: 'assistant', content: 'HOST parked' }, { role: 'user', content: wake }]))
       .toEqual([expect.objectContaining({ runtime: 'device', command: 'hostname' })]);
     // Spliced into the turn that parked, as it lands while that turn is at work.
-    expect(await reissued([{ role: 'user', content: CONSENT_ASK }, ...shellCall('c1', 'hostname'), { role: 'user', content: wake }]))
+    expect(await shellArgs([{ role: 'user', content: CONSENT_ASK }, ...shellCall('c1', 'hostname'), { role: 'user', content: wake }]))
       .toEqual([expect.objectContaining({ runtime: 'device', command: 'hostname' })]);
   });
 
   test('device-job-output: the job command, approved, is run again on the device', async () => {
     const wake = await consentWake('kinu-first-run-devjob', DEVICE_JOB_COMMAND, 'once');
 
-    expect(await reissued([{ role: 'user', content: DEVICE_JOB_ASK }, ...shellCall('j1', DEVICE_JOB_COMMAND), { role: 'assistant', content: 'JOB NONE' }, { role: 'user', content: wake }]))
+    expect(await shellArgs([{ role: 'user', content: DEVICE_JOB_ASK }, ...shellCall('j1', DEVICE_JOB_COMMAND), { role: 'assistant', content: 'JOB NONE' }, { role: 'user', content: wake }]))
       .toEqual([expect.objectContaining({ runtime: 'device', command: DEVICE_JOB_COMMAND })]);
   });
 
@@ -644,7 +676,7 @@ describe('the owner\'s consent answer wakes the agent, which re-issues the call 
     const denied = await consentWake('kinu-first-run-consent', 'hostname', 'deny');
     const elsewhere = await consentWake('kinu-first-run-link', 'printf ok', 'once');
 
-    expect(await reissued([{ role: 'user', content: CONSENT_ASK }, ...shellCall('c1', 'hostname'), { role: 'assistant', content: 'HOST parked' }, { role: 'user', content: denied }])).toBeUndefined();
-    expect(await reissued([{ role: 'user', content: elsewhere }])).toBeUndefined();
+    expect(await shellArgs([{ role: 'user', content: CONSENT_ASK }, ...shellCall('c1', 'hostname'), { role: 'assistant', content: 'HOST parked' }, { role: 'user', content: denied }])).toBeUndefined();
+    expect(await shellArgs([{ role: 'user', content: elsewhere }])).toBeUndefined();
   });
 });
