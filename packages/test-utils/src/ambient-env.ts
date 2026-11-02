@@ -54,11 +54,13 @@ export function ambientByName(names: readonly string[]): Record<string, string |
   return Object.fromEntries(names.map((name) => [name, process.env[name]]));
 }
 
-/** The names a test's child process needs from the ambient environment (paths, home, temp, locale);
- *  spreading `process.env` would make spawning suites uncacheable by the closure walker. */
+/** The names a test's child process needs from the ambient environment (paths, home, temp, locale, the roots its TLS
+ *  trusts); spreading `process.env` would make spawning suites uncacheable by the closure walker. A Kinu computer's
+ *  egress answers with its own CA, named by `NODE_EXTRA_CA_CERTS`: without it, `bun pm scan` there failed "self signed
+ *  certificate in certificate chain" (production quiet-cove-f8c76035, 2026-11-01). */
 export const CHILD_ENV_NAMES: readonly string[] = [
   'PATH', 'HOME', 'TMPDIR', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'TZ', 'TERM',
-  'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_RUNTIME_DIR', 'KINU_HOME', 'KINU_INFLIGHT_ROOT', 'BUN_INSTALL',
+  'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_RUNTIME_DIR', 'KINU_HOME', 'KINU_INFLIGHT_ROOT', 'BUN_INSTALL', 'NODE_EXTRA_CA_CERTS',
 ];
 
 /** The environment for a child a test spawns: {@link CHILD_ENV_NAMES} by name, then `overrides`.
