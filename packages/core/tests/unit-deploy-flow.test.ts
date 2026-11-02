@@ -1117,7 +1117,7 @@ describe('a guided run', () => {
       done: rows.every((row) => row.state === 'done'),
       bound: cloudflare.calls.filter((call) => call.method === 'PUT' && call.path.endsWith('/workers/domains')).map((call) => call.body?.service),
       domains: cloudflare.domains,
-    }).toEqual({ done: true, bound: ['kinu', 'kinu'], domains: new Map([['kinu.example.com', 'kinu']]) });
+    }).toEqual({ done: true, bound: ['kinu'], domains: new Map([['kinu.example.com', 'kinu']]) });
   });
 
   test('another Worker under the front\'s name answers nothing of the deployment, and the front step refuses, naming it', async () => {
