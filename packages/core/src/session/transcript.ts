@@ -572,9 +572,21 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     return { entry, message: { ...message, metadata } };
   }
 
-  /** Entries and their messages in one statement each, however many entries. */
+  /** The newest `limit` user and assistant rows, newest first, entries and messages in one statement each: a short read
+   *  is the whole conversation. */
   async newestFirst(limit = 10_000): Promise<readonly ConversationProjection[]> {
-    const entries = [...this.entries(limit)].reverse().filter((entry) => entry.role === 'user' || entry.role === 'assistant');
+    this.actor.assertCurrent();
+    const { actorId } = this.actor;
+
+    const entries = withParts(this.sql<EntryWithPartRow>`WITH newest AS (SELECT id,position FROM conversation_entries
+        WHERE actor_id=${actorId} AND session_id=${this.sessionId} AND role IN ('user','assistant')
+        ORDER BY position DESC LIMIT ${limit})
+      SELECT e.id,e.position,e.role,e.turn_id,e.run_id,e.recorded_at,e.metadata_json,e.metadata_path,
+        e.context_id,e.context_revision,p.message_id,p.part_no,p.text_start,p.text_length
+      FROM newest CROSS JOIN conversation_entries e ON e.actor_id=${actorId} AND e.session_id=${this.sessionId} AND e.id=newest.id
+      LEFT JOIN conversation_entry_parts p ON p.actor_id=e.actor_id AND p.session_id=e.session_id AND p.entry_id=e.id
+      ORDER BY e.position DESC, p.position`);
+
     const parts = await this.messages.materializePartsOf([...new Set(entries.flatMap((entry) => entry.parts.map((part) => part.messageId)))]);
     const rows: ConversationProjection[] = [];
 

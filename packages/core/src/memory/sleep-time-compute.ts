@@ -57,7 +57,7 @@ export interface SleepTimeTurn {
 }
 
 export interface SleepTimeWindow {
-  /** Saturates at the caller's read bound. */
+  /** As far back as the caller read: at least to the last run's answer. */
   readonly completedTurns: number;
   readonly lastRunTurn: number | null;
   /** Key the run is recorded under; the next window starts after it. */

@@ -23,7 +23,7 @@ const SETTLED_AT = 'settled';
 
 const CLOSED_AT = 'closed';
 
-/** One answer past the cadence, plus steers: decides as the whole transcript would. */
+/** The first read: one answer past the cadence, plus steers. A backlog past it is read further back (`window`). */
 const READ_ROWS = (SLEEP_TIME_CADENCE.everyTurns + 1) * 8;
 
 export function initSleepTimeTables(execRaw: RawSqlExec): void {
@@ -140,14 +140,18 @@ export class SleepTimeLane {
     this.clear(CLOSED_AT);
   }
 
-  /** Bounded by the newest consumed answer, so two triggers never share turns. */
-  private window(): Effect.Effect<SleepTimeWindow, KinuError> {
-    return Effect.map(
-      attempt({ doing: 'reading the turns sleep-time compute would compress', otherwise: 'io' }, () => this.deps.transcript().newestFirst(READ_ROWS)),
-      (rows) => {
-        const processed = effectsAlreadyDone(this.deps.sql, this.deps.actor, PROCESSED, rows.flatMap((row) => (row.role === 'assistant' ? [row.id] : [])));
+  /**
+   * Bounded by the newest consumed answer, so two triggers never share turns, and read back as far as it: a window cut
+   * at a fixed tail would mark the unread turns before that tail read, as its batch is the oldest it can see.
+   */
+  private window(rows = READ_ROWS): Effect.Effect<SleepTimeWindow, KinuError> {
+    return Effect.flatMap(
+      attempt({ doing: 'reading the turns sleep-time compute would compress', otherwise: 'io' }, () => this.deps.transcript().newestFirst(rows)),
+      (read) => {
+        const processed = effectsAlreadyDone(this.deps.sql, this.deps.actor, PROCESSED, read.flatMap((row) => (row.role === 'assistant' ? [row.id] : [])));
+        const whole = read.length < rows || read.some((row) => row.role === 'assistant' && processed.has(row.id));
 
-        return sleepTimeWindow(rows, (answerId) => processed.has(answerId));
+        return whole ? Effect.succeed(sleepTimeWindow(read, (answerId) => processed.has(answerId))) : this.window(rows * 2);
       },
     );
   }

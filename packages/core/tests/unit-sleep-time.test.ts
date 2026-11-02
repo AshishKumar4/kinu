@@ -347,7 +347,8 @@ describe('an idle wake dreams first', () => {
 
     const reopen = () => new SleepTimeLane({
       sql: rt.storage.sql, actor: rt.actor, config: stores.config, facts: stores.facts,
-      transcript: () => ({ newestFirst: async () => rows }),
+      // As the transcript reads: the newest `limit` rows.
+      transcript: () => ({ newestFirst: async (limit) => rows.slice(0, limit) }),
       llm: () => ({ stream: () => { throw new Error('not streamed'); }, complete: () => { throw new Error('sleep-time asks for a schema'); }, object: async (prompt, schema) => {
         order.push('facts');
         prompts.push(prompt);
@@ -376,29 +377,21 @@ describe('an idle wake dreams first', () => {
     expect(order).toEqual(['dream', 'facts']);
   });
 
-  test("a backlog past one batch drains on the lane's own wakes, across reopening, each turn read once and oldest first", async () => {
-    const fixture = lane(8);
+  test("a backlog past the first read drains on the lane's own wakes, across reopening, each turn read once and oldest first", async () => {
+    // 20 turns are 40 rows, past the 32 a pass reads first: a pass that read only those marked the oldest 4 read unread.
+    const fixture = lane(20);
 
-    // The settled turn's pass reads the first batch; the backlog left keeps the lane's wake armed, and each wake the next.
     await fixture.lane.runTerminal();
 
-    for (let pass = 0; pass < 2; pass++) {
-      const owed = fixture.reopen();
-
-      await owed.wake(present(owed.nextWakeAt(), 'the wake a backlog keeps armed') + 1_000);
+    for (let owed = fixture.reopen(), at = owed.nextWakeAt(); at !== null; owed = fixture.reopen(), at = owed.nextWakeAt()) {
+      await owed.wake(at + SLEEP_TIME_CADENCE.idleMs);
     }
 
-    const read = [[1, 2, 3], [4, 5, 6], [7, 8]].map((batch, index) => {
-      const prompt = present(fixture.prompts[index], 'a backlog pass');
-      const said = Array.from({ length: 8 }, (_, at) => at + 1).filter((turn) => prompt.includes(`step ${String(turn)}`) && prompt.includes(`answer ${String(turn)}`));
-      const ordered = batch.every((turn, position) => position === 0 || prompt.indexOf(`answer ${String(batch[position - 1])}`) < prompt.indexOf(`step ${String(turn)}`));
+    // Each pass's turns, as its prompt lists them: each answer under the ask that opened it.
+    const read = fixture.prompts.map((prompt) => [...prompt.matchAll(/- Task: step (\d+)\n(?:.*\n)*?- Assistant output: answer \1\b/gu)].map((said) => Number(said[1])));
+    const batches = Array.from({ length: 7 }, (_batch, index) => Array.from({ length: Math.min(3, 20 - index * 3) }, (_turn, at) => index * 3 + at + 1));
 
-      return { said, ordered };
-    });
-
-    expect({ read, wake: fixture.reopen().nextWakeAt(), passes: fixture.prompts.length }).toEqual({
-      read: [{ said: [1, 2, 3], ordered: true }, { said: [4, 5, 6], ordered: true }, { said: [7, 8], ordered: true }], wake: null, passes: 3,
-    });
+    expect(read).toEqual(batches);
   });
 
   test('an idle wake refuses pending input and includes it only after its answer completes', async () => {
