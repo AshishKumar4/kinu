@@ -14,7 +14,7 @@ import type { Frame, Page, Target } from 'puppeteer';
 import * as v from 'valibot';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { ChatHistoryEntrySchema, JsonValueSchema, rowText, TurnClaimFrameSchema, type JsonValue } from '@kinu.run/core';
+import { APP_ROUTES, ChatHistoryEntrySchema, JsonValueSchema, rowText, TurnClaimFrameSchema, type JsonValue } from '@kinu.run/core';
 import { renderThrownChain, tolerate, detach } from '@kinu.run/core/obs';
 import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-spec';
 
@@ -439,6 +439,11 @@ interface WorkspaceViewsVerdict {
   readonly unknownOverview: boolean;
   /** The overview's own address still draws it. */
   readonly overviewDrawn: boolean;
+  /** Sent to Workspaces while that page's code is held: where the address stood, whether the overview it left was still
+   *  drawn there (the defect, #130), and whether Workspaces drew once its code arrived. */
+  readonly awayAt: string;
+  readonly awayOverview: boolean;
+  readonly awayArrived: boolean;
 }
 
 const OVERVIEW = `document.querySelector('[data-workspace-overview]') !== null`;
@@ -483,12 +488,30 @@ async function measureWorkspaceViews(newPage: LiveApp['newPage'], origin: string
   await until(page, 'the overview to draw', `${OVERVIEW} || ${NOT_FOUND}`);
 
   const overviewDrawn = v.parse(v.boolean(), await page.evaluate(OVERVIEW));
+  // Away from it, to a page whose code has not arrived: its address moves at once, and the page it left must go with it.
+  const arrive = Promise.withResolvers<void>();
+
+  await page.setRequestInterception(true);
+  page.on('request', (request) => detach(Effect.promise(async () => {
+    if (request.url().includes('/pages/WorkspacesPage')) await arrive.promise;
+    await request.continue();
+  })));
+  await page.click(`a[href="${APP_ROUTES.workspaces}"]`);
+  await until(page, 'the address to move to Workspaces', `location.pathname === ${JSON.stringify(APP_ROUTES.workspaces)}`);
+  await page.evaluate(() => new Promise((resolve) => { requestAnimationFrame(() => requestAnimationFrame(resolve)); }));
+  const awayAt = v.parse(v.string(), await page.evaluate('location.pathname'));
+  const awayOverview = v.parse(v.boolean(), await page.evaluate(OVERVIEW));
+
+  await shoot(page, 'f2-away-held');
+  arrive.resolve();
+  await until(page, 'Workspaces to draw once its code arrived', `document.querySelector('h1.t-page-title')?.textContent === 'Workspaces'`);
+  const awayArrived = !v.parse(v.boolean(), await page.evaluate(OVERVIEW));
 
   await page.close();
 
   return {
     desktopLandedAt: desktop.at, desktopOverview: desktop.overview, desktopEnvironment: desktop.environment, desktopMachine: desktop.machine,
-    desktopTab: desktop.tab, unknownNotFound, unknownOverview, overviewDrawn,
+    desktopTab: desktop.tab, unknownNotFound, unknownOverview, overviewDrawn, awayAt, awayOverview, awayArrived,
   };
 }
 

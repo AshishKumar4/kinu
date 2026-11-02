@@ -47,6 +47,12 @@ describe("a workspace's own addresses draw what they name", () => {
     expect(verdictOf(observed.workspaceViews, 'workspace-views').desktopTab).not.toBe('other');
   });
 
+  test("a page whose code is still arriving takes the screen at its own address, never the page left behind", () => {
+    const views = verdictOf(observed.workspaceViews, 'workspace-views');
+
+    expect({ at: views.awayAt, overview: views.awayOverview, arrived: views.awayArrived }).toEqual({ at: '/workspaces', overview: false, arrived: true });
+  });
+
   test('a view no page answers says so, and the overview still answers at its own address', () => {
     const views = verdictOf(observed.workspaceViews, 'workspace-views');
 

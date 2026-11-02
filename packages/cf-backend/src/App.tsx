@@ -90,20 +90,26 @@ function LazyFallback() {
   );
 }
 
-/** A route's page: its own error boundary, and a loader while a split page's chunk arrives. */
-function Page({ label, children }: { label: string; children: ReactNode }) {
+/**
+ * A route's page: its own error boundary, and a loader while a split page's chunk arrives. Each page mounts its own: a
+ * navigation is a transition, and one that suspends inside a boundary the last page already showed keeps that page on
+ * screen under the new address until the new one is ready (#130). `page` names it where the label does not: one
+ * workspace's routes share their boundary, so its socket stays mounted across them.
+ */
+function Page({ label, page = label, children }: { label: string; page?: string; children: ReactNode }) {
   return (
-    <ErrorBoundary label={label}>
+    <ErrorBoundary key={page} label={label}>
       <Suspense fallback={<LazyFallback />}>{children}</Suspense>
     </ErrorBoundary>
   );
 }
 
-// Remount (and reconnect useAgent) per workspace; subagent routes keep the key so the main socket stays mounted.
-function KeyedWorkspace() {
+/** A workspace's routes, each under its label, on one boundary per workspace: its page remounts (and reconnects
+ *  useAgent) per workspace, and its agent and view routes keep it, so the main socket stays mounted. */
+function WorkspaceRoute({ label }: { label: string }) {
   const { agentId } = useParams();
 
-  return <WorkspacePage key={agentId} />;
+  return <Page label={label} page={`workspace:${agentId ?? ''}`}><WorkspacePage /></Page>;
 }
 
 // An account needing setup lands on /welcome from any URL; /welcome stays open to all; a failed profile read gates nothing.
@@ -180,10 +186,10 @@ export default function App({ visitor = pageIsVisitors() }: { readonly visitor?:
             {/* Devices is a Settings section; the old address still lands there. */}
             <Route path={APP_ROUTES.devices} element={<Navigate to={settingsPath("devices")} replace />} />
             <Route path={`${APP_ROUTES.mail}/*`} element={<Page label="mail"><MailPage /></Page>} />
-            <Route path={APP_ROUTES.workspace} element={<Page label="workspace"><KeyedWorkspace /></Page>} />
-            <Route path={APP_ROUTES.workspaceAgent} element={<Page label="workspace-agent"><KeyedWorkspace /></Page>} />
-            <Route path={APP_ROUTES.workspaceAgentPath} element={<Page label="workspace-agent"><KeyedWorkspace /></Page>} />
-            <Route path={APP_ROUTES.workspaceView} element={<Page label="workspace-view"><KeyedWorkspace /></Page>} />
+            <Route path={APP_ROUTES.workspace} element={<WorkspaceRoute label="workspace" />} />
+            <Route path={APP_ROUTES.workspaceAgent} element={<WorkspaceRoute label="workspace-agent" />} />
+            <Route path={APP_ROUTES.workspaceAgentPath} element={<WorkspaceRoute label="workspace-agent" />} />
+            <Route path={APP_ROUTES.workspaceView} element={<WorkspaceRoute label="workspace-view" />} />
             <Route path={APP_ROUTES.swarm} element={<Page label="swarm-explorer"><SwarmExplorer /></Page>} />
             {EXPLORE_ROUTES}
             <Route path={APP_ROUTES.control} element={<Page label="control-plane"><ControlPage /></Page>} />
