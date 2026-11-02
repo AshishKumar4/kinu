@@ -9,7 +9,10 @@ import type { JsonValue } from '@kinu.run/core';
 
 export const MAIL_RULES_ZONE = 'zone-northwind';
 
-export const MAIL_RULES_WORKER = 'kinu-northwind';
+export const MAIL_RULES_INSTANCE = 'kinu-northwind';
+
+/** The Worker its rules route to: its main Worker (`deploymentWorkers` in core deploy/front.ts). */
+export const MAIL_RULES_WORKER = `${MAIL_RULES_INSTANCE}-app`;
 
 export const MAIL_RULES_TOKEN = 'northwind-rules-token';
 

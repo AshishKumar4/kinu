@@ -22,7 +22,7 @@ import {
   assetsOutbound, deployOutbound,
 } from './tests/workerd/deploy-fake';
 import {
-  MAIL_RULES_DOMAIN, MAIL_RULES_TOKEN, MAIL_RULES_WORKER, MAIL_RULES_ZONE, mailRulesOutbound,
+  MAIL_RULES_DOMAIN, MAIL_RULES_INSTANCE, MAIL_RULES_TOKEN, MAIL_RULES_ZONE, mailRulesOutbound,
 } from './tests/workerd/mail-rules-fake';
 import type { V4ModuleDefinition } from 'miniflare';
 import { builtinModules } from 'node:module';
@@ -405,8 +405,8 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           KINU_MAIL_ROUTING_TOKEN: MAIL_RULES_TOKEN,
           // The self-deploy record names the Worker each rule sends to.
           KINU_DEPLOYMENT_RECORD: JSON.stringify({
-            inputs: { accountId: '0'.repeat(32), instanceName: MAIL_RULES_WORKER, address: { kind: 'workers-dev', hostname: '', zoneId: '' }, ownerEmail: 'priya.raman@example.com', providerKeyNames: [], sandbox: false, mailDomain: MAIL_RULES_DOMAIN },
-            address: `${MAIL_RULES_WORKER}.northwind.workers.dev`, version: '0.4.0', channelOrigin: 'https://kinu.run', clientId: 'probe-client', deployedAt: '2026-10-21T00:00:00Z',
+            inputs: { accountId: '0'.repeat(32), instanceName: MAIL_RULES_INSTANCE, address: { kind: 'workers-dev', hostname: '', zoneId: '' }, ownerEmail: 'priya.raman@example.com', providerKeyNames: [], sandbox: false, mailDomain: MAIL_RULES_DOMAIN },
+            address: `${MAIL_RULES_INSTANCE}.northwind.workers.dev`, version: '0.4.0', channelOrigin: 'https://kinu.run', clientId: 'probe-client', deployedAt: '2026-10-21T00:00:00Z',
           }),
         },
         outboundService: mailRulesOutbound,
