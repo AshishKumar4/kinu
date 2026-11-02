@@ -11,7 +11,11 @@ import {
   type ConversationProjection,
 } from '../src/index';
 import { createTestFactsStore, createJSONLLM, createScriptedLLM, createTestRuntime, present } from '@kinu.run/test-utils';
+import { KinuError } from '../src/obs';
 import type { SleepTimeTurn } from '../src/memory/sleep-time-compute';
+
+/** A rejection's shape, as a pass's failure carries it. */
+const FailureSchema = v.object({ code: v.string() });
 
 const ONE_TURN = [{ task: 't', output: 'o', ownerWords: 't' }];
 
@@ -335,7 +339,8 @@ describe('an idle wake dreams first', () => {
     { id: `u${String(turn)}`, position: 0, role: 'user' as const, turnId: null, runId: null, content: `step ${String(turn)}`, toolCalls: [], recordedAt: 0 },
   ]);
 
-  function lane(count: number) {
+  /** `unreadable`: how many first passes the model answers with what no update can be read from. */
+  function lane(count: number, unreadable = 0) {
     const { rt, stores, testSql } = createTestRuntime();
     initFactsTable(testSql.execRaw);
     initSleepTimeTables(testSql.execRaw);
@@ -352,6 +357,8 @@ describe('an idle wake dreams first', () => {
       llm: () => ({ stream: () => { throw new Error('not streamed'); }, complete: () => { throw new Error('sleep-time asks for a schema'); }, object: async (prompt, schema) => {
         order.push('facts');
         prompts.push(prompt);
+
+        if (prompts.length <= unreadable) throw new KinuError('bad_input', 'the fast tier answered off its schema');
 
         return v.parse(schema, { upserts: [], decay: [] });
       } }),
@@ -392,6 +399,20 @@ describe('an idle wake dreams first', () => {
     const batches = Array.from({ length: 7 }, (_batch, index) => Array.from({ length: Math.min(3, 20 - index * 3) }, (_turn, at) => index * 3 + at + 1));
 
     expect(read).toEqual(batches);
+  });
+
+  test("a batch the model cannot read is consumed once, and the backlog after it still drains on the lane's own wakes", async () => {
+    const fixture = lane(8, 1);
+    const first = await Promise.allSettled([fixture.lane.runTerminal()]);
+
+    for (let owed = fixture.reopen(), at = owed.nextWakeAt(); at !== null; owed = fixture.reopen(), at = owed.nextWakeAt()) {
+      await owed.wake(at + SLEEP_TIME_CADENCE.idleMs);
+    }
+
+    const read = fixture.prompts.map((prompt) => [...prompt.matchAll(/- Task: step (\d+)\n(?:.*\n)*?- Assistant output: answer \1\b/gu)].map((said) => Number(said[1])));
+
+    expect({ first: first.map((settled) => (settled.status === 'rejected' ? v.parse(FailureSchema, settled.reason).code : 'completed')), read })
+      .toEqual({ first: ['bad_input'], read: [[1, 2, 3], [4, 5, 6], [7, 8]] });
   });
 
   test('an idle wake refuses pending input and includes it only after its answer completes', async () => {

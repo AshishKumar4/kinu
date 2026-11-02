@@ -119,10 +119,10 @@ export class SleepTimeLane {
     return settle(this.due(now));
   }
 
-  /** A failure is logged and releases the wake. */
+  /** A failure is logged and releases the wake, but for a batch the model could not read, whose backlog stays owed. */
   wake(now: number): Promise<void> {
     return settle(Effect.catch(Effect.asVoid(this.due(now)), (failure) => Effect.sync(() => {
-      this.releaseWake();
+      if (!isDefinitiveTerminalFailure(failure.code)) this.releaseWake();
       diagnostics.failure('memory.sleep_time_wake_failed', failure);
     })));
   }
@@ -286,14 +286,23 @@ export class SleepTimeLane {
         workspace: this.deps.workspace, upserted: summary.upserted, decayed: summary.decayed, skipped: summary.skipped,
       });
 
-      // A backlog past this batch is still owed: the next pass reads it, on the cadence a settled turn arms.
-      if (window.completedTurns - (window.lastRunTurn ?? 0) > window.turns.length) this.arm(window);
+      this.owesPast(window);
 
       if (account !== undefined) yield* this.deliver(account);
     }).pipe(Effect.tapError((failure) => Effect.sync(() => {
-      if (isDefinitiveTerminalFailure(failure.code)) this.deps.transactionSync(() => { this.finish(key); });
+      // A batch the model cannot read is consumed, never retried; the batches after it are still owed.
+      if (isDefinitiveTerminalFailure(failure.code)) {
+        this.deps.transactionSync(() => { this.finish(key); });
+        this.owesPast(window);
+      }
+
       diagnostics.failure('memory.fact_compression_failed', failure);
     })));
+  }
+
+  /** A backlog past this pass's batch is still owed: the next pass reads it, on the cadence a settled turn arms. */
+  private owesPast(window: SleepTimeWindow): void {
+    if (window.completedTurns - (window.lastRunTurn ?? 0) > window.turns.length) this.arm(window);
   }
 
   /**
