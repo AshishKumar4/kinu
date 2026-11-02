@@ -133,7 +133,8 @@ class FakeCloudflare implements CloudflareTransport {
   readonly calls: Recorded[] = [];
 
   /** The parts each asset batch carried, by name: an asset's is its content hash. */
-  readonly assetParts: string[] = [];
+  /** Each asset session's parts, by its token. */
+  readonly assetParts = new Map<string, string[]>();
 
   readonly namespaces: string[] = [];
 
@@ -492,9 +493,11 @@ class FakeCloudflare implements CloudflareTransport {
 
     if (refusal !== null) return refusal;
 
-    // Its errors and messages null, not empty, as f44999 answered it on 2026-10-21.
+    // Its errors and messages null, not empty, as f44999 answered it on 2026-10-21. A session's token names its Worker.
     if (call.path.endsWith('/assets-upload-session')) {
-      return { status: 200, body: { result: { jwt: 'session-token', buckets: [['1'.repeat(32), '2'.repeat(32)]] }, success: true, errors: null, messages: null } };
+      const script = /\/workers\/scripts\/([^/]+)\/assets-upload-session$/u.exec(call.path)?.[1] ?? '';
+
+      return { status: 200, body: { result: { jwt: `session-${script}`, buckets: [['1'.repeat(32), '2'.repeat(32)]] }, success: true, errors: null, messages: null } };
     }
 
     const read = this.accountCall(call) ?? this.domainCall(call);
@@ -508,8 +511,8 @@ class FakeCloudflare implements CloudflareTransport {
       return this.frontExists ? this.ok({ bindings: this.frontBindings }) : { status: 404, body: { success: false, errors: [{ code: 10007, message: 'workers.api.error.script_not_found' }], result: null } };
     }
 
-    // How the flow tells a first deployment from an update.
-    if (call.path.endsWith('/settings') && !this.scriptExists) {
+    // How the flow tells a first deployment from an update; a Worker the account does not hold has no settings.
+    if (call.path.endsWith('/settings') && (!this.scriptExists || (call.path.includes('/workers/scripts/') && !call.path.endsWith(`/workers/scripts/${WORKERS.main}/settings`)))) {
       return {
         status: 404,
         body: { success: false, errors: [{ code: 10007, message: 'workers.api.error.script_not_found' }], result: null },
@@ -605,7 +608,7 @@ class FakeCloudflare implements CloudflareTransport {
 
     if (token !== null) return token;
 
-    if (call.path.includes('/durable_objects/namespaces')) return ok([{ id: 'ns-devbox', script: 'kinu', class: 'KinuDevbox' }, { id: 'ns-other', script: 'other', class: 'KinuDevbox' }]);
+    if (call.path.includes('/durable_objects/namespaces')) return ok([{ id: 'ns-devbox', script: WORKERS.main, class: 'KinuDevbox' }, { id: 'ns-other', script: 'other', class: 'KinuDevbox' }]);
 
     if (call.path.includes('/containers/applications') && this.workersFree) {
       return { status: 401, body: { success: false, result: null, messages: [], errors: [{ code: 1000, message: '{"error":"Unauthorized: You do not have access to Cloudflare Containers. Deploying containers requires the Workers Paid plan. Upgrade your plan at https://dash.cloudflare.com/workers/plans"}' }] } };
@@ -648,7 +651,9 @@ class FakeCloudflare implements CloudflareTransport {
     if (refusal !== null) return refusal;
 
     if (upload.path.includes('/workers/assets/upload')) {
-      this.assetParts.push(...upload.parts.map((part) => part.name));
+      const session = upload.bearer ?? '';
+
+      this.assetParts.set(session, [...this.assetParts.get(session) ?? [], ...upload.parts.map((part) => part.name)]);
 
       return { status: 201, body: { success: true, errors: [], result: { jwt: 'completion-token' } } };
     }
@@ -1127,7 +1132,7 @@ describe('a guided run', () => {
       uploaded: cloudflare.calls.some((call) => call.method === 'PUT' && call.path.endsWith('/workers/scripts/kinu')),
       domains: cloudflare.domains,
     }).toEqual({
-      front: 'failed', words: expect.stringContaining('another Worker named kinu-front'), uploaded: false,
+      front: 'failed', words: expect.stringContaining('another Worker named kinu,'), uploaded: false,
       domains: new Map([['kinu.example.com', 'kinu-app']]),
     });
   });
@@ -1320,7 +1325,7 @@ describe('a guided run', () => {
     // The zone is the one new fact; the domain is EMAIL_DOMAIN's and the Worker its own.
     expect([uploaded('KINU_MAIL_ZONE'), uploaded('KINU_MAIL_ROUTING_TOKEN'), uploaded('EMAIL_DOMAIN')]).toEqual(['zone-raman', 'minted-token', 'mail.raman.dev']);
     expect(cloudflare.dns.map((record) => `${record.type} ${record.name}`)).toEqual(['MX cf-bounce.mail.raman.dev', 'TXT cf-bounce._domainkey.mail.raman.dev', 'TXT _dmarc.mail.raman.dev']);
-    expect(rows.find((row) => row.id === 'mail')?.detail).toBe('Mail onboarded on mail.raman.dev: each address routed to kinu by a rule of its own, sending, and DMARC at p=none.');
+    expect(rows.find((row) => row.id === 'mail')?.detail).toBe('Mail onboarded on mail.raman.dev: each address routed to kinu-app by a rule of its own, sending, and DMARC at p=none.');
   });
 
   // staging 2026-10-22: a test that bounced before its routing rule took effect suppressed privacy@ for a week, and
@@ -1434,7 +1439,8 @@ describe('a guided run', () => {
   test('two assets with the same bytes are uploaded once, as Cloudflare asks for their hash once', async () => {
     const twin = { path: 'client/copy.js', sha256: 'e'.repeat(64), size: 7, assetHash: '2'.repeat(32) };
     const rows = await run(INPUTS, { ...MANIFEST, files: [...MANIFEST.files, twin] });
-    expect({ upload: rows.find((row) => row.id === 'upload')?.state, sent: [...cloudflare.assetParts].sort() }).toEqual({ upload: 'done', sent: ['1'.repeat(32), '2'.repeat(32)] });
+    expect({ upload: rows.find((row) => row.id === 'upload')?.state, sent: [...cloudflare.assetParts.get('session-kinu-app') ?? []].sort() })
+      .toEqual({ upload: 'done', sent: ['1'.repeat(32), '2'.repeat(32)] });
   });
 
   test('uploads the assets with the session token, not the account token', async () => {
@@ -1448,7 +1454,7 @@ describe('a guided run', () => {
       '/index.html': { hash: '1'.repeat(32), size: 5 },
       '/app.js': { hash: '2'.repeat(32), size: 7 },
     });
-    expect(batch?.bearer).toBe('session-token');
+    expect(batch?.bearer).toBe('session-kinu-app');
     expect(upload?.body?.assets).toMatchObject({ jwt: 'completion-token' });
   });
 });
@@ -2194,8 +2200,8 @@ describe('what the page reads of an account', () => {
   test('preflight reads the checklist together and says only what needs the person', async () => {
     cloudflare.subdomain = null;
     cloudflare.serveExisting(PRIOR_VERSION);
-    // A name is free with its front's (core deploy/front.ts).
-    cloudflare.otherScripts.push('kinu-2-front');
+    // A name is free only with its main Worker's (core deploy/front.ts).
+    cloudflare.otherScripts.push('kinu-2-app');
     cloudflare.zones.set('example.com', 'zone-example');
     cloudflare.refusal = R2_OFF;
 

@@ -443,7 +443,10 @@ const RUN_SECRETS: readonly string[] = [
  */
 function deployedInputs(transport: CloudflareTransport, account: string, name: string): Effect.Effect<DeployInputs | null, KinuError> {
   return Effect.gen(function* () {
-    const bindings = yield* scriptBindings(transport, account, deploymentWorkers(name).main);
+    const { main } = deploymentWorkers(name);
+
+    if (!(yield* workerNames(transport, account)).includes(main)) return null;
+    const bindings = yield* scriptBindings(transport, account, main);
 
     if (!madeByARun(bindings)) return null;
     const vars = varsOf(bindings);

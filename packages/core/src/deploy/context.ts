@@ -71,6 +71,10 @@ export const FACT_UPLOAD_PEAK = 'worker.held_peak_bytes';
 
 export const FACT_ADDRESS = 'worker.address';
 
+/** The release whose front this run put in place: a workers.dev run's address step puts it, and the front step then has
+ *  nothing to do. */
+export const FACT_FRONT_RELEASE = 'front.release';
+
 /** Set when the account has Analytics Engine off: the version is bound without its datasets (deploy/steps.ts). */
 export const FACT_ANALYTICS_OFF = 'worker.analytics_off';
 

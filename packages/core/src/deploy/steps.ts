@@ -9,7 +9,7 @@ import { KinuError } from '../obs/index';
 import { workersPlan } from './account';
 import { CloudflareApiError, cloudflareResult, readEnvelope, type CloudflareHttpResponse, type CloudflareTransport, type UploadPart } from './cloudflare';
 import {
-  FACT_ACCOUNT_NAME, FACT_ADDRESS, FACT_ANALYTICS_OFF, FACT_GATEWAY_URL, FACT_OWNER_EMAIL,
+  FACT_ACCOUNT_NAME, FACT_ADDRESS, FACT_ANALYTICS_OFF, FACT_FRONT_RELEASE, FACT_GATEWAY_URL, FACT_OWNER_EMAIL,
   FACT_UPLOAD_PEAK, FACT_VERSION_ID, FACT_WORKERS_SUBDOMAIN, kvFact, type DeployContext,
 } from './context';
 import {
@@ -694,12 +694,14 @@ function frontStep(manifest: ReleaseManifest, front: ReleaseModules, address: De
     after: ['promote'],
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.gen(function* () {
-        const { front: script } = deploymentWorkers(context.inputs.instanceName);
+        const { main, front: script } = deploymentWorkers(context.inputs.instanceName);
 
-        if ((yield* frontHeld(context)) === 'foreign') return yield* foreignFront(script);
-        yield* putFront(context, manifest, front);
+        if (context.facts.get(FACT_FRONT_RELEASE) !== manifest.version) {
+          if ((yield* frontHeld(context)) === 'foreign') return yield* foreignFront(script);
+          yield* putFront(context, manifest, front);
+        }
 
-        if (address.kind === 'zone') yield* bindDomain(context, address, script, [deploymentWorkers(context.inputs.instanceName).main, script]);
+        if (address.kind === 'zone') yield* bindDomain(context, address, script, [main, script]);
 
         return `${script} answers ${context.facts.get(FACT_ADDRESS) ?? ''}.`;
       });
@@ -765,6 +767,7 @@ function putFront(context: DeployContext, manifest: ReleaseManifest, front: Rele
 
         context.artifact.held.release(carried.bytes * 2);
         readEnvelope(path, response, NamedSchema);
+        context.facts.set(FACT_FRONT_RELEASE, manifest.version);
   });
 }
 
