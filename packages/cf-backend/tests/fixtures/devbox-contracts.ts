@@ -449,8 +449,9 @@ async function lifecycleRoute(url: URL, box: DurableObjectStub<ContractBox>): Pr
 }
 
 /**
- * Marks every answer this fixture makes (`scripts/devbox-container-tier.ts` reads it): for a while after a deploy some
- * edges still answer the route with their own 404 page, and a driver tells those from the fixture's (#81).
+ * Marks every answer this fixture makes with the run's bucket (`scripts/devbox-container-tier.ts` reads it): for a while
+ * after a deploy some edges still answer the route with their own 404 page (#81), or with the run before's version,
+ * bound to the bucket its teardown deleted (staging 41a1f3578, 2026-11-02), and a driver tells those from this run's.
  */
 const FIXTURE_ANSWER = 'x-devbox-fixture';
 
@@ -509,7 +510,7 @@ export default {
     // A WebSocket's upgrade passes as the box made it.
     if (answered.webSocket !== null) return answered;
     const marked = new Response(answered.body, answered);
-    marked.headers.set(FIXTURE_ANSWER, '1');
+    marked.headers.set(FIXTURE_ANSWER, env.PROBE_BUCKET);
 
     return marked;
   },
