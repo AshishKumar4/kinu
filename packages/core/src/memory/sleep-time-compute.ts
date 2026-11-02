@@ -76,13 +76,13 @@ export function sleepTimeWindow(
   let completedTurns = 0;
 
   for (const row of newestFirst) if (row.role === 'assistant') completedTurns++;
-  const since: SleepTimeTurn[] = [];
-  let current: { output: string; toolCalls: readonly string[]; task: string[]; owner: string[] } | null = null;
+  const since: Array<SleepTimeTurn & { answerId: string }> = [];
+  let current: { answerId: string; output: string; toolCalls: readonly string[]; task: string[]; owner: string[] } | null = null;
   let lastRunTurn: number | null = null;
 
   const close = (): void => {
     if (current === null) return;
-    since.push({ task: current.task.reverse().join('\n'), output: current.output, toolCalls: current.toolCalls, ownerWords: current.owner.reverse().join('\n') });
+    since.push({ answerId: current.answerId, task: current.task.reverse().join('\n'), output: current.output, toolCalls: current.toolCalls, ownerWords: current.owner.reverse().join('\n') });
     current = null;
   };
 
@@ -95,7 +95,7 @@ export function sleepTimeWindow(
         break;
       }
 
-      current = { output: row.content, toolCalls: row.toolCalls, task: [], owner: [] };
+      current = { answerId: row.id, output: row.content, toolCalls: row.toolCalls, task: [], owner: [] };
     } else if (current !== null) {
       current.task.push(row.content);
 
@@ -104,13 +104,13 @@ export function sleepTimeWindow(
   }
 
   close();
-  const newest = newestFirst.find((row) => row.role === 'assistant');
+  const selected = since.slice(-SLEEP_TIME_CADENCE.everyTurns).reverse();
 
   return {
     completedTurns,
     lastRunTurn,
-    newestId: newest?.id ?? null,
-    turns: since.slice(0, SLEEP_TIME_CADENCE.everyTurns).reverse(),
+    newestId: selected.at(-1)?.answerId ?? null,
+    turns: selected.map(({ task, output, toolCalls, ownerWords }) => ({ task, output, toolCalls, ownerWords })),
     inputPending: newestFirst.length > 0 && newestFirst[0].role === 'user',
   };
 }
@@ -132,8 +132,7 @@ export interface SleepTimeUpdate {
 const renderTurn = (turn: SleepTimeTurn, index: number): string => `Turn ${index + 1}:
 - Task: ${evidenceWindow(turn.task, EVIDENCE_BUDGETS.outcomeUserMessage)}
 - Owner's own words: ${turn.ownerWords === '' ? '(none: the task came from the harness or another agent)' : evidenceWindow(turn.ownerWords, EVIDENCE_BUDGETS.outcomeUserMessage)}
-- Output: ${evidenceWindow(turn.output, EVIDENCE_BUDGETS.outcomeAssistantResponse)}
-- Tools used: ${turn.toolCalls.join(', ') || '(none)'}`;
+- Assistant output: ${evidenceWindow(turn.output, EVIDENCE_BUDGETS.outcomeAssistantResponse)}`;
 
 const renderFactLine = (fact: { key: string; value: JsonValue }): string => `  ${fact.key} = ${renderFactValue(fact.value)}`;
 
@@ -147,9 +146,17 @@ ${i.accountFacts.map(renderFactLine).join('\n') || '  (none)'}
    name, preferences, how they want answers, standing instructions to every
    agent, and the people and projects in their life. Only from "Owner's own
    words", never from a task the harness or an agent wrote, and never what is
-   only about this workspace's project. These go to "account" and are only
-   proposed: the owner approves each before it is kept. Reuse an account key
-   when the same subject changed; skip one the account already holds as is.`);
+   only about this workspace's project. Product defects, feature requests,
+   acceptance criteria, task-local preferences and one-off corrections are
+   project/task knowledge, not account preferences or standing instructions,
+   unless the owner explicitly generalizes them across their work. Quoting
+   their real words alone does not establish global scope. "memories display
+   raw arrays; fix this" is a workspace bug/task; "when answering me, always
+   summarize project lists as chips" is a possible standing instruction.
+   Prefer no account proposal when scope is ambiguous. Account identity and
+   preferences go to "account" and are only proposed: the owner approves each
+   before it is kept. Reuse an account key when the same subject changed;
+   skip one the account already holds as is.`);
 
 const PROMPT = (i: SleepTimeInput) => `${SLEEP_TIME_PROMPT_OPENING} Between user turns, you
 update the agent's persistent state so the next turn starts smarter.
@@ -167,6 +174,14 @@ explain or invent; ignore greetings, acknowledgements and one-off plans. When
 a value is corrected, keep only the latest. Preserve names, numbers, paths,
 versions, dates and the original language exactly.
 
+Keep useful issue state in workspace memory: product defects, feature
+requests, acceptance criteria, task-local preferences and one-off corrections
+are project/task knowledge. They are not personal/account standing preferences
+unless the owner explicitly generalizes them across their work. A quotation
+alone does not establish that scope. Use only the labelled task and message
+texts below; tool names, raw screenshots, hidden reasoning and system input
+are not evidence for new facts.
+
 Recent turns (oldest first):
 ${i.turns.map(renderTurn).join('\n\n') || '(none)'}
 
@@ -181,7 +196,8 @@ Decide:
    state, dates, URLs, current configuration). Upsert with high confidence
    (0.8-1.0). DON'T duplicate existing facts. "importance" (0 to 1) is how much
    it matters when recalled; "veracity" is "stated" when the turns say it
-   outright and "tool" when it was read from a tool's output.
+   outright. No raw tool output is provided here: tool names and an assistant's
+   account of tool use do not establish "tool" veracity.
 2. Which existing facts should DECAY (lower confidence) because they weren't
    re-observed in these turns and may be stale? List their keys.${ACCOUNT_PROMPT(i)}
 
