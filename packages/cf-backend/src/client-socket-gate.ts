@@ -10,7 +10,7 @@ import type { UIMessage } from 'ai';
 import { Hono, type Context } from 'hono';
 import * as v from 'valibot';
 import {
-  actorFromConnectionTags, base64ToBytes, closeReason, ERROR_STATUS, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, hostedWindowMay, JsonValueSchema, requiredRpcAccess,
+  actorFromConnectionTags, base64ToBytes, closeReason, ERROR_STATUS, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, hostedWindowMay, isWorkspaceTerminal, JsonValueSchema, requiredRpcAccess,
   rpcMovesOverview, WorkspaceTerminalInputSchema, type AgentRpcMethod, type MediaRef, type StoragePredatesReleaseError, type StoredImage, type UserCaller,
 } from '@kinu.run/core';
 import { Effect } from 'effect';
@@ -133,7 +133,7 @@ class ClientSocketGate {
 
     const goneOn = Effect.flatMap(checked, ([refused]) => (refused
       ? Effect.sync(place)
-      : Effect.promise(async () => {
+      : this.handled(connection, 'passing a frame to the workspace shell', async () => {
         if (!stop) place();
         await framePlacing.run(place, () => this.admittedMessage(connection, message, base)).finally(place);
       })));
@@ -144,7 +144,13 @@ class ClientSocketGate {
   }
 
   private async admittedMessage(connection: Connection, message: WSMessage, base: ClientHandlers): Promise<void> {
-    if (await this.shell(connection, 'passing a frame to the workspace shell', (terminal) => forwardTerminalFrame(terminal, connection, message))) return;
+    const terminal = await this.host.terminalFor(connection);
+
+    if (terminal) {
+      await forwardTerminalFrame(terminal, connection, message);
+
+      return;
+    }
 
     const rejection = rejectOutOfScopeRpc(connection.tags, message);
 
@@ -202,7 +208,7 @@ class ClientSocketGate {
 
   connect(connection: Connection, ctx: ConnectionContext, base: ClientHandlers): Promise<void> {
     return settle(Effect.flatMap(this.refuseRevokedAuthority(connection, ''),
-      (refused) => (refused ? Effect.void : Effect.promise(async () => { await this.admittedConnect(connection, ctx, base); }))));
+      (refused) => (refused ? Effect.void : this.handled(connection, 'opening the workspace shell', async () => { await this.admittedConnect(connection, ctx, base); }))));
   }
 
   private async admittedConnect(connection: Connection, ctx: ConnectionContext, base: ClientHandlers): Promise<void> {
@@ -221,7 +227,13 @@ class ClientSocketGate {
 
     await base.onConnect(connection, ctx);
 
-    if (await this.shell(connection, 'opening the workspace shell', (terminal) => terminal.attachTerminal(connection))) return;
+    const terminal = await this.host.terminalFor(connection);
+
+    if (terminal) {
+      await terminal.attachTerminal(connection);
+
+      return;
+    }
 
     // Claim frames reach only tabs connected at a change: a root tab away at the settle hears the claim here (#30).
     if (actorFromConnectionTags(connection.tags) === null) sendIfOpen(connection, this.host.turnClaimFrame());
@@ -229,25 +241,17 @@ class ClientSocketGate {
   }
 
   /**
-   * `use` on the shell a terminal socket addresses; false for any other socket. A shell that cannot be opened or take a
-   * frame ends its socket with the reason, which its pane shows: a socket left open with nothing on it reads Connecting
-   * forever (#129).
+   * A socket's handling, which on a workspace shell's socket ends it with the failure's reason: a shell that could not be
+   * opened or take a frame left its socket open and silent, its pane on Connecting forever (#129).
    */
-  private shell(connection: Connection, doing: string, use: (terminal: WorkspaceTerminal) => Promise<void>): Promise<boolean> {
-    return settle(attempt({ doing, otherwise: 'unavailable' }, async () => {
-      const terminal = await this.host.terminalFor(connection);
+  private handled(connection: Connection, doing: string, handle: () => Promise<void>): Effect.Effect<void> {
+    if (!isWorkspaceTerminal(connection.tags)) return Effect.promise(handle);
 
-      if (terminal === null) return false;
-      await use(terminal);
-
-      return true;
-    }).pipe(Effect.catch((failure) => Effect.sync(() => {
+    return attempt({ doing, otherwise: 'unavailable' }, handle).pipe(Effect.catch((failure) => Effect.sync(() => {
       diagnostics.failure('terminal.workspace_shell_failed', failure);
 
       if (connection.readyState === WebSocket.OPEN) connection.close(WEBSOCKET_INTERNAL_ERROR, closeReason(failure.message));
-
-      return true;
-    }))));
+    })));
   }
 
   async close(connection: Connection, closed: { code: number; reason: string; wasClean: boolean }, base: ClientHandlers): Promise<void> {
