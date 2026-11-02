@@ -2222,6 +2222,7 @@ body > .annotation-toolbar {
    operator reads as typed; a noted line's number is set heavier. */
 .p-diff { font-variant-ligatures: none; }
 /* A terminal's inset is xterm's padding, which its fit subtracts from the room the host gives it (TerminalPane.tsx). */
+.p-terminal-host { color-scheme: dark; }
 .p-terminal-host > .xterm { padding: 8px 0 0 16px; }
 /* xterm.css paints its viewport black across the inset, unlayered, so it outranks this layer as Shiki's sheet does: the
    host's ground, the terminal's own, shows there instead. */

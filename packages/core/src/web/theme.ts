@@ -409,22 +409,17 @@ export interface TerminalPalette {
 }
 
 /** Magenta and cyan, which no role names, pulled into the warm family. */
-const ANSI_UNTOKENED = {
-  dark: { magenta: '#c9a0c6', cyan: '#8fbdb8' },
-  light: { magenta: '#7a3f74', cyan: '#2f6660' },
-} as const satisfies Readonly<Record<Mode, { magenta: string; cyan: string }>>;
+const ANSI_UNTOKENED = { magenta: '#c9a0c6', cyan: '#8fbdb8' } as const;
 
 /**
- * A terminal's palette from a theme's tokens, every slot a program writes text in readable on its ground. The status
- * slots take their role's token, and a bright slot its plain one, as bold draws in it: xterm's own bright colours
- * (tango's #8ae234 green, 1.5:1 on the light ground) left a bold prompt nearly unreadable there (the owner,
- * 2026-10-15). On a light ground black is the ink and white a grey, as GitHub's and Solarized's light terminals have
- * them; on a dark one, black stays the recess a program paints backgrounds with.
+ * A terminal's palette from a theme's dark tokens, as a terminal is dark in either mode (the owner, 2026-11-02), every
+ * slot a program writes text in readable on its ground. The status slots take their role's token, and a bright slot its
+ * plain one, as bold draws in it: xterm's own bright colours left a bold prompt nearly unreadable (the owner,
+ * 2026-10-15). Black stays the recess a program paints backgrounds with.
  */
-export function terminalPalette(mode: Mode, token: (name: ColourToken) => string): TerminalPalette {
-  const { magenta, cyan } = ANSI_UNTOKENED[mode];
+export function terminalPalette(token: (name: ColourToken) => string): TerminalPalette {
+  const { magenta, cyan } = ANSI_UNTOKENED;
   const roles = { red: token('--c-danger'), green: token('--c-success'), yellow: token('--c-warning'), blue: token('--c-info'), magenta, cyan };
-  const light = mode === 'light';
 
   return {
     background: token('--c-bg'),
@@ -433,9 +428,9 @@ export function terminalPalette(mode: Mode, token: (name: ColourToken) => string
     ...roles,
     brightRed: roles.red, brightGreen: roles.green, brightYellow: roles.yellow, brightBlue: roles.blue,
     brightMagenta: magenta, brightCyan: cyan,
-    black: light ? token('--c-text') : token('--c-sunken'),
-    white: light ? token('--c-text-2') : token('--c-text'),
+    black: token('--c-sunken'),
+    white: token('--c-text'),
     brightBlack: token('--c-text-3'),
-    brightWhite: light ? token('--c-text-3') : token('--c-text'),
+    brightWhite: token('--c-text'),
   };
 }

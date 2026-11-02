@@ -1,6 +1,6 @@
 /**
- * The terminal's colours, every theme and mode: a slot a program writes text in reads at WCAG AA on the terminal's
- * ground. The light terminal drew a bold prompt in xterm's own bright green, 1.5:1 there (the owner, 2026-10-15).
+ * The terminal's colours, every theme, dark in either mode: a slot a program writes text in reads at WCAG AA on the
+ * terminal's ground. A bold prompt in xterm's own bright green read 1.5:1 on the old light ground (the owner, 2026-10-15).
  */
 import { describe, expect, test } from 'bun:test';
 import { terminalPalette, THEME_NAMES, THEME_TOKENS, type TerminalPalette } from '../src/web/theme';
@@ -28,14 +28,11 @@ const TEXT_SLOTS = [
 
 describe('the terminal palette', () => {
   for (const theme of THEME_NAMES) {
-    for (const mode of ['light', 'dark'] as const) {
-      test(`${theme} ${mode}: every text slot reads at 4.5:1 or more on the terminal's ground`, () => {
-        const palette = terminalPalette(mode, (name) => THEME_TOKENS[theme][mode][name]);
-        const slots = mode === 'light' ? [...TEXT_SLOTS, 'black' as const] : TEXT_SLOTS;
-        const below = slots.filter((slot) => contrast(palette[slot], palette.background) < 4.5);
+    test(`${theme}: every text slot reads at 4.5:1 or more on the terminal's ground`, () => {
+      const palette = terminalPalette((name) => THEME_TOKENS[theme].dark[name]);
+      const below = TEXT_SLOTS.filter((slot) => contrast(palette[slot], palette.background) < 4.5);
 
-        expect(below).toEqual([]);
-      });
-    }
+      expect(below).toEqual([]);
+    });
   }
 });
