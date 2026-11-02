@@ -1,14 +1,12 @@
 // The account's secrets on the real owner object, over real bun:sqlite and the real AES-GCM envelope: who may add and
 // grant them, what a workspace ever sees of them, and that a value is opened only for a workspace the owner granted.
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
   CapabilityDeniedError, connectionEnvironment, EGRESS_PLACEHOLDER_PREFIX, isEgressPlaceholder, type EgressRequestFacts, type SecretInput, type UserCaller,
 } from '@kinu.run/core';
+import { scratchDir } from '@kinu.run/test-utils';
 import { USER_DO_RPC_SURFACE } from '../src/rpc-surface';
 import { createTestUserDO, provisionTestWorkspace, sqlExec, testOwner, type TestUserDO } from './helpers/user-do';
 import { GITHUB_MCP_URL, servedMcp } from './helpers/mcp-server';
@@ -408,17 +406,13 @@ describe("a computer's own git is pointed at the GitHub connection for github.co
   });
 
   test("git run in it, with no configuration of its own, commits under the account's name and email", () => {
-    const home = mkdtempSync(join(tmpdir(), 'git-author-'));
+    const home = scratchDir('git-author');
     const environment = { PATH: process.env['PATH'] ?? '', HOME: home, GIT_CONFIG_NOSYSTEM: '1', ...connectionEnvironment([connection], { name: 'Ada Lovelace', email: 'ada@example.com' }) };
     const git = (...args: string[]) => execFileSync('git', args, { cwd: home, env: environment, encoding: 'utf8' });
 
-    try {
-      git('init', '--quiet', '.');
-      git('commit', '--quiet', '--allow-empty', '--message', 'first');
+    git('init', '--quiet', '.');
+    git('commit', '--quiet', '--allow-empty', '--message', 'first');
 
-      expect(git('log', '--format=%an <%ae> | %cn <%ce>').trim()).toBe('Ada Lovelace <ada@example.com> | Ada Lovelace <ada@example.com>');
-    } finally {
-      rmSync(home, { recursive: true, force: true });
-    }
+    expect(git('log', '--format=%an <%ae> | %cn <%ce>').trim()).toBe('Ada Lovelace <ada@example.com> | Ada Lovelace <ada@example.com>');
   });
 });

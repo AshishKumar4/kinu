@@ -150,14 +150,24 @@ export interface CommitAuthor {
   readonly email: string;
 }
 
+/** What an owner's command gets beside its secrets (`connectionEnvironment`). */
+type ConnectionEnvironment = typeof GIT_CREDENTIAL_ENVIRONMENT & {
+  readonly GIT_AUTHOR_NAME?: string;
+  readonly GIT_AUTHOR_EMAIL?: string;
+  readonly GIT_COMMITTER_NAME?: string;
+  readonly GIT_COMMITTER_EMAIL?: string;
+  readonly GIT_TOKEN?: string;
+  readonly GIT_USERNAME?: string;
+};
+
 /**
  * The variables beyond the secrets' own that an owner's command gets: the computer's git helper, always; the account's
  * name and email as the identity both gits commit under, which neither machine has of its own (the computer's git
  * refused "Committer identity unknown", production 2026-11-01); and `GIT_TOKEN` for Nimbus's git, which sends it
  * unasked, only while the GitHub connection holds a token and the owner granted no `GIT_TOKEN` of their own.
  */
-export function connectionEnvironment(granted: GrantedSecrets['granted'], author: CommitAuthor | null) {
-  const git = author === null ? GIT_CREDENTIAL_ENVIRONMENT : {
+export function connectionEnvironment(granted: GrantedSecrets['granted'], author: CommitAuthor | null): ConnectionEnvironment {
+  const git: ConnectionEnvironment = author === null ? GIT_CREDENTIAL_ENVIRONMENT : {
     ...GIT_CREDENTIAL_ENVIRONMENT,
     GIT_AUTHOR_NAME: author.name, GIT_AUTHOR_EMAIL: author.email, GIT_COMMITTER_NAME: author.name, GIT_COMMITTER_EMAIL: author.email,
   };
