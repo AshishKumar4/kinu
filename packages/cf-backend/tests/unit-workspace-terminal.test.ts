@@ -88,6 +88,26 @@ describe('the actor hands a terminal socket to the runtime shell', () => {
     expect(pane.closed).toEqual([]);
   });
 
+  test('a shell that cannot be opened or take a frame ends its socket with the reason, never leaving it silent', async () => {
+    const { agent, gate, recorded } = await activated();
+    const refusing = { ...recorded.terminal, attachTerminal: () => Promise.reject(new Error('the runtime could not start a shell')) };
+
+    Object.defineProperty(agent, 'terminalFor', { configurable: true, value: () => Promise.resolve(refusing) });
+    const opening = connection('opening', [WORKSPACE_TERMINAL_TAG]);
+
+    await agent.onConnect(opening.wire, { request: new Request('https://agent/_kinu/workspace-terminal') });
+
+    const typing = connection('typing', [WORKSPACE_TERMINAL_TAG]);
+
+    Object.defineProperty(agent, 'terminalFor', {
+      configurable: true, value: () => Promise.resolve({ ...recorded.terminal, terminalFrame: () => Promise.reject(new Error('the shell is gone')) }),
+    });
+    await gate(typing.wire, JSON.stringify({ type: 'input', data: 'ls\r' }));
+
+    expect([...opening.closed, ...typing.closed].map(({ code, reason }) => ({ code, said: reason.length > 0 })))
+      .toEqual([{ code: 1011, said: true }, { code: 1011, said: true }]);
+  });
+
   test('a socket without the tag is a chat socket: the shell is never reached', async () => {
     const { agent, recorded } = await activated();
     const chat = connection('chat', []);

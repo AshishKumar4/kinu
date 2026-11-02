@@ -419,6 +419,7 @@ function WorkspaceTerminal({ workspace, executor, session, frame }: { workspace:
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const copyOperation = useRef<TerminalOperation | null>(null);
+  const [connection, reconnect] = useState(0);
   const [state, setState] = useState<PtyState>("connecting");
   const [failure, setFailure] = useState<string | null>(null);
 
@@ -481,12 +482,19 @@ function WorkspaceTerminal({ workspace, executor, session, frame }: { workspace:
     return releaseSocketPane({
       socket, subscriptions: [shellWindow, typing], disposeChrome, copyOperation, termRef,
     });
-  }, [workspace, executor, session]);
+  }, [workspace, executor, session, connection]);
 
   useTerminalPalette(termRef, theme);
 
+  // The shell outlives its socket: a new one is handed the same shell, its screen replayed (#129).
+  const reconnectShell = state === "disconnected" ? (
+    <IconControl place="bar" className="shrink-0" aria-label="Reconnect the shell" title="Reconnect: the same shell, its screen replayed" onClick={() => { reconnect(value => value + 1); }}>
+      <ArrowCounterClockwiseIcon size={14} />
+    </IconControl>
+  ) : null;
+
   return (
-    <TerminalFrame {...frame} state={state} failure={failure} hostRef={hostRef} action={null}
+    <TerminalFrame {...frame} state={state} failure={failure} hostRef={hostRef} action={reconnectShell}
       copies={{ note: "⇧⌃C copies", title: "⌃C interrupts the running command." }} />
   );
 }

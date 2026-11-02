@@ -9,6 +9,7 @@ import { connections, type Connections } from '@nimbus-sh/fabric/connections.js'
 import { z } from 'zod/v4';
 import { diagnostics } from '../obs/log';
 import { KinuError } from '../obs/error';
+import { closeReason } from '../safety/egress-gate';
 import type { DeviceSocket, DeviceSocketCtx, DeviceSocketHub } from './device-hub';
 import { WS_OPEN } from './device-tunnel';
 import { DEVICE_FRAMES } from './device-protocol';
@@ -22,9 +23,6 @@ const SCREEN_ATTACH_WINDOW_MS = 30_000;
 /** What a screen sends before its viewer attaches: RFB's 12-byte version, then nothing until the viewer answers. A
  *  stream past this is not speaking RFB, and ends. */
 const SCREEN_HELD_BYTES = 64 * 1024;
-
-/** WebSocket close reasons are at most 123 bytes. */
-const CLOSE_REASON_BYTES = 123;
 
 const SCREEN_SESSION_UNKNOWN = "that screen is no longer open; open the Desktop tab again";
 
@@ -53,12 +51,6 @@ interface PendingScreen extends ScreenViewer {
 
 function screenTag(device: string, stream: number): string {
   return `${SCREEN_WS_TAG_PREFIX}${device}:${String(stream)}`;
-}
-
-function closeReason(text: string): string {
-  const bytes = new TextEncoder().encode(text);
-
-  return bytes.byteLength <= CLOSE_REASON_BYTES ? text : new TextDecoder().decode(bytes.slice(0, CLOSE_REASON_BYTES)).replace(/\uFFFD$/u, '');
 }
 
 function randomStream(): number {
