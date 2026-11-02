@@ -24,8 +24,16 @@ import { defineOperation, described, opaque, serve, type OperationCall, type Ser
 import { codemodeNamespace, nativeTool } from '../tools/operation-surfaces';
 import { BUILTIN_TOOL_DESCRIPTIONS } from '../tools/registry';
 import { AGENTS_IMPACTS, AGENTS_SLATE, type AgentsOp } from '../operations/agents';
+import { PLATFORM_LIMITS } from '../platform-limits';
 
-const text = (max: number, about: string) => described(v.pipe(v.string(), v.nonEmpty(), v.maxLength(max)), about);
+/**
+ * The most a brief or message may hold: it crosses whole in one row (`do.sqlite.row_bytes`), at 8 bytes a character, past
+ * JSON's widest escape of 6. A cap of 20,000 with no limit behind it split a 25,583-character report into three messages
+ * (production ashen-ash-0998b2c2, 2026-11-01).
+ */
+const TEXT_MAX_CHARS = PLATFORM_LIMITS['do.sqlite.row_bytes'].value / 8;
+
+const text = (about: string) => described(v.pipe(v.string(), v.nonEmpty(), v.maxLength(TEXT_MAX_CHARS)), about);
 
 const optional = <S extends v.GenericSchema>(schema: S) => v.optional(schema);
 
@@ -43,7 +51,7 @@ const tierField = (temporary: boolean) =>
 /** A search's fields. */
 function swarmEntries(temporary: boolean) {
   return {
-    task: text(20000, 'What the search is for, stated once for every node. The measured quantity goes in `objective`.'),
+    task: text('What the search is for, stated once for every node. The measured quantity goes in `objective`.'),
     preset: optional(described(v.picklist(SWARM_PRESETS), "The search's shape.")),
     objective: optional(described(opaque(SwarmObjectiveSchema, { type: 'object' }), 'What a verifier measures, which turns the judged sweep into a measured search. '
       + '{kind:"scalar", metric, unit, direction:"minimise"|"maximise", scale:"linear"|"log", target, verify:{kind, spec}}, optionally floor:{value, kind:"certificate", proof, best_known_honest}. '
@@ -124,7 +132,7 @@ function serveAgents(deps: () => AgentsToolDeps): readonly Served[] {
   if (team && offers.has('hire')) {
     const hire = {
       role: ROLE,
-      message: text(20000, `The brief, run as the new agent's first turn${temporary ? '; for lifetime "task", the whole question' : ''}.`),
+      message: text(`The brief, run as the new agent's first turn${temporary ? '; for lifetime "task", the whole question' : ''}.`),
       name: optional(described(v.string(), 'A name for the new agent.')),
       tier: optional(tierField(temporary)),
       context: optional(described(v.picklist(SWARM_CONTEXTS), 'fresh (default) starts from the message alone; inherit also carries your recent turns.')),
@@ -140,7 +148,7 @@ function serveAgents(deps: () => AgentsToolDeps): readonly Served[] {
 
   if (offers.has('assign')) {
     const help = 'Hand an existing agent its next workstream; a subagent reports later as a message, a peer\'s reply is awaited.';
-    const assign = { agent, message: text(20000, 'The work.') };
+    const assign = { agent, message: text('The work.') };
     const run = (fields: AgentsCallFields<'assign'>, call: OperationCall) => dispatched({ op: 'assign', fields }, call);
 
     // A deliverable is a subagent's to meet; a topic labels a peer's message.
@@ -151,15 +159,15 @@ function serveAgents(deps: () => AgentsToolDeps): readonly Served[] {
 
   if (offers.has('hireWorkspace')) {
     served.push(serve(agentsOp('hireWorkspace', 'Create or reuse a specialist workspace, send it its first task and wait for the result.', true, {
-      mission: text(20000, 'What the workspace is for.'),
-      message: text(20000, 'Its first task.'),
+      mission: text('What the workspace is for.'),
+      message: text('Its first task.'),
       agent: optional(described(v.string(), 'The workspace agent\'s name.')),
     }), (fields, call) => dispatched({ op: 'hireWorkspace', fields }, call)));
   }
 
   if (offers.has('message')) {
     const help = 'Message an agent without handing it a workstream.';
-    const message = { agent, message: text(20000, 'What you say.') };
+    const message = { agent, message: text('What you say.') };
     const run = (fields: AgentsCallFields<'message'>, call: OperationCall) => dispatched({ op: 'message', fields }, call);
 
     served.push(peers ? serve(agentsOp('message', help, true, { ...message, topic }), run) : serve(agentsOp('message', help, true, message), run));
@@ -168,7 +176,7 @@ function serveAgents(deps: () => AgentsToolDeps): readonly Served[] {
   if (offers.has('reply')) {
     served.push(serve(agentsOp('reply', 'Answer an agent message that awaits your answer; its event names the eventId.', true, {
       eventId: described(v.pipe(v.string(), v.nonEmpty()), 'The incoming agent message you are answering.'),
-      message: text(20000, 'Your answer.'),
+      message: text('Your answer.'),
     }), (fields, call) => dispatched({ op: 'reply', fields }, call)));
   }
 
