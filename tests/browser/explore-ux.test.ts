@@ -12,8 +12,6 @@ import { withGallery, type Gallery } from '../../scripts/gallery-harness';
 
 const VIEWPORTS = { desktop: { width: 1280, height: 860 }, mobile: { width: 390, height: 844 } } as const;
 
-const SOON = { timeout: 15_000 } as const;
-
 async function freshPage(gallery: Gallery, query: string, theme: 'dark' | 'light', viewport: keyof typeof VIEWPORTS): Promise<Page> {
   const page = await gallery.newPage();
 
@@ -30,7 +28,7 @@ const feedOf = (page: Page) => page.$$eval('[data-explore-item]', (cards) => car
 async function feedBecomes(page: Page, ids: readonly string[]): Promise<readonly (string | null)[]> {
   try {
     await page.waitForFunction((wanted) => JSON.stringify([...document.querySelectorAll('[data-explore-item]')].map((card) => card.getAttribute('data-explore-item'))) === wanted,
-      SOON, JSON.stringify(ids));
+      {}, JSON.stringify(ids));
   } catch (cause) {
     throw new Error(`the feed stayed ${JSON.stringify(await feedOf(page))}, never ${JSON.stringify(ids)}`, { cause });
   }
@@ -45,7 +43,7 @@ const InstalledSchema = v.object({ id: v.string(), body: v.record(v.string(), v.
 const accountReads = async (page: Page): Promise<readonly string[]> => v.parse(v.array(v.string()), JSON.parse(await page.$eval('html', (root) => root.dataset.exploreAccountReads ?? '[]')));
 
 async function installed(page: Page): Promise<v.InferOutput<typeof InstalledSchema>> {
-  await page.waitForFunction(() => document.documentElement.dataset.exploreInstalled !== undefined, SOON);
+  await page.waitForFunction(() => document.documentElement.dataset.exploreInstalled !== undefined);
 
   return v.parse(InstalledSchema, JSON.parse(await page.$eval('html', (root) => root.dataset.exploreInstalled ?? 'null')));
 }
@@ -56,7 +54,7 @@ describe('Explore', () => {
       for (const [theme, viewport] of [['dark', 'desktop'], ['light', 'mobile']] as const) {
         const page = await freshPage(gallery, 'explore', theme, viewport);
 
-        await page.waitForSelector('[data-explore-hero="personal-assistant"]', SOON);
+        await page.waitForSelector('[data-explore-hero="personal-assistant"]');
         expect(await page.$$eval('[data-explore-also]', (rows) => rows.map((row) => row.getAttribute('data-explore-also'))))
           .toEqual(['worker-on-call', 'release-manager', 'research-desk']);
         // The feed below holds everything else, Kinu's own not twice.
@@ -65,7 +63,7 @@ describe('Explore', () => {
 
         // A kind shows the feed alone, Kinu's own in it.
         await page.click('[data-explore-filters] [data-segment="workspace"]');
-        await page.waitForFunction(() => document.querySelector('[data-explore-hero]') === null, SOON);
+        await page.waitForFunction(() => document.querySelector('[data-explore-hero]') === null);
         expect(await feedBecomes(page, ['personal-assistant', 'worker-on-call', 'release-manager', 'research-desk', 'issue-triage', 'firmware-lab']))
           .toEqual(['personal-assistant', 'worker-on-call', 'release-manager', 'research-desk', 'issue-triage', 'firmware-lab']);
 
@@ -85,7 +83,7 @@ describe('Explore', () => {
         const page = await freshPage(gallery, 'explore', theme, 'desktop');
         const assistant = theme === 'light' ? 'assistant-light' : 'assistant';
 
-        await page.waitForSelector('[data-explore-hero="personal-assistant"] img[data-blueprint-picture]', SOON);
+        await page.waitForSelector('[data-explore-hero="personal-assistant"] img[data-blueprint-picture]');
         expect(await page.$eval('[data-explore-hero="personal-assistant"] img[data-blueprint-picture]', (img) => img.getAttribute('data-blueprint-picture'))).toBe(assistant);
         expect(await page.$$eval('[data-explore-also] img[data-blueprint-picture]', (images) => images.map((img) => img.getAttribute('data-blueprint-picture'))))
           .toEqual(['deploys', 'release', 'report']);
@@ -95,10 +93,10 @@ describe('Explore', () => {
           const img = document.querySelector('[data-explore-hero="personal-assistant"] img');
 
           return img instanceof HTMLImageElement && img.complete && img.naturalWidth > 0;
-        }, SOON);
+        });
 
         await page.goto(`${gallery.origin}/gallery.html?frame=explore-workspace&id=personal-assistant`, { waitUntil: 'load' });
-        await page.waitForSelector('[data-blueprint-page] img[data-blueprint-picture]', SOON);
+        await page.waitForSelector('[data-blueprint-page] img[data-blueprint-picture]');
         expect(await page.$eval('[data-blueprint-page] img[data-blueprint-picture]', (img) => img.getAttribute('data-blueprint-picture'))).toBe(assistant);
         await page.close();
       }
@@ -109,9 +107,9 @@ describe('Explore', () => {
     await withGallery(async (gallery) => {
       const assistant = await freshPage(gallery, 'explore-workspace&id=personal-assistant', 'dark', 'desktop');
 
-      await assistant.waitForSelector('[data-blueprint-install]', SOON);
+      await assistant.waitForSelector('[data-blueprint-install]');
       await assistant.click('[data-blueprint-install]');
-      await assistant.waitForSelector('[data-install-dialog="personal-assistant"]', SOON);
+      await assistant.waitForSelector('[data-install-dialog="personal-assistant"]');
       expect(await assistant.$eval('input[aria-label="Its name"]', (input) => (input instanceof HTMLInputElement ? input.value : null))).toBe('Kinu');
       await assistant.click('[data-install-confirm]');
 
@@ -120,12 +118,12 @@ describe('Explore', () => {
       // The workspace takes its assistant's name, so the roster calls Home what Home's bar does.
       expect(asked).toEqual({ id: 'personal-assistant', body: { displayName: 'Kinu', agent: 'Kinu', brief: '08:00', home: true, timeZone: expect.any(String) } });
       // Home: the fixture marks it, and draws no Home of its own.
-      await assistant.waitForSelector('[data-gallery-home]', SOON);
+      await assistant.waitForSelector('[data-gallery-home]');
       await assistant.close();
 
       const release = await freshPage(gallery, 'explore-workspace&id=release-manager&install=1', 'light', 'mobile');
 
-      await release.waitForSelector('[data-install-dialog="release-manager"]', SOON);
+      await release.waitForSelector('[data-install-dialog="release-manager"]');
       await release.click('input[aria-label="Workspace name"]', { count: 3 });
       await release.type('input[aria-label="Workspace name"]', 'API Worker v2 release');
       await release.click('[data-install-confirm]');
@@ -137,26 +135,26 @@ describe('Explore', () => {
     await withGallery(async (gallery) => {
       const page = await freshPage(gallery, 'explore-workspace&id=release-manager', 'light', 'desktop');
 
-      await page.waitForSelector('[data-blueprint-star]', SOON);
+      await page.waitForSelector('[data-blueprint-star]');
       const before = await page.$eval('[data-blueprint-star]', (button) => [button.getAttribute('aria-pressed'), button.textContent]);
 
       expect(before).toEqual(['false', 'Star702']);
       await page.click('[data-blueprint-star]');
-      await page.waitForFunction(() => document.querySelector('[data-blueprint-star]')?.getAttribute('aria-pressed') === 'true', SOON);
+      await page.waitForFunction(() => document.querySelector('[data-blueprint-star]')?.getAttribute('aria-pressed') === 'true');
       expect(await page.$eval('[data-blueprint-star]', (button) => button.textContent)).toBe('Starred703');
       expect(JSON.parse(await page.$eval('html', (root) => root.dataset.exploreStarred ?? 'null'))).toEqual({ id: 'release-manager', body: { on: true } });
       await page.close();
 
       const had = await freshPage(gallery, 'explore-workspace&id=personal-assistant&assistant=1', 'dark', 'mobile');
 
-      await had.waitForSelector('[data-blueprint-open]', SOON);
+      await had.waitForSelector('[data-blueprint-open]');
       expect(await had.$('[data-blueprint-install]')).toBeNull();
       expect(await had.$eval('[data-blueprint-open]', (link) => link.getAttribute('href'))).toBe('/');
       await had.close();
 
       const feed = await freshPage(gallery, 'explore&assistant=1', 'light', 'desktop');
 
-      await feed.waitForSelector('[data-explore-hero="personal-assistant"] [data-explore-installed]', SOON);
+      await feed.waitForSelector('[data-explore-hero="personal-assistant"] [data-explore-installed]');
     });
   });
 
@@ -165,7 +163,7 @@ describe('Explore', () => {
       const page = await freshPage(gallery, 'explore&assistant=1', 'light', 'desktop');
       const listed = () => page.$$eval('a[href^="/workspace/"]', (links) => links.map((link) => link.getAttribute('href')));
 
-      await page.waitForSelector('a[href^="/workspace/"]', SOON);
+      await page.waitForSelector('a[href^="/workspace/"]');
       expect((await listed()).length).toBeGreaterThan(0);
       expect(await listed()).not.toContain('/workspace/personal-assistant-4f2a');
       await page.close();
@@ -186,7 +184,7 @@ describe('Explore', () => {
         }).observe(document, { childList: true, subtree: true, attributeFilter: ['data-layout'] });
       });
       await opened.goto(`${gallery.origin}/gallery.html?frame=explore&assistant=1&at=assistant`, { waitUntil: 'load' });
-      await opened.waitForSelector('[data-gallery-home]', SOON);
+      await opened.waitForSelector('[data-gallery-home]');
       const drawn = (await opened.$eval('html', (root) => root.dataset.barsDrawn ?? '')).split(' ').filter((bar) => bar !== '');
 
       expect(drawn).toContain('pending');
@@ -202,16 +200,16 @@ describe('Explore', () => {
         // The sidebar's pencil on a desktop, the header's on a phone: whichever New workspace is on screen.
         const pencil = 'a[aria-label="New workspace"]';
 
-        await page.waitForFunction((selector) => [...document.querySelectorAll(selector)].some((link) => link instanceof HTMLElement && link.offsetParent !== null), SOON, pencil);
+        await page.waitForFunction((selector) => [...document.querySelectorAll(selector)].some((link) => link instanceof HTMLElement && link.offsetParent !== null), {}, pencil);
         await page.$$eval(pencil, (links) => {
           const shown = links.find((link) => link instanceof HTMLElement && link.offsetParent !== null);
 
           if (shown instanceof HTMLElement) shown.click();
         });
-        await page.waitForSelector('#workspace-mission', SOON);
+        await page.waitForSelector('#workspace-mission');
         await page.type('#workspace-mission', 'Keep the api Worker deployed and healthy.');
         await page.click('form:has(#workspace-mission) button[type="submit"]');
-        await page.waitForSelector('[data-gallery-blank]', SOON);
+        await page.waitForSelector('[data-gallery-blank]');
         expect(JSON.parse(await page.$eval('html', (root) => root.dataset.exploreCreated ?? 'null'))).toMatchObject({ purpose: 'Keep the api Worker deployed and healthy.' });
         await page.close();
       }
@@ -225,7 +223,7 @@ describe('Explore', () => {
         const feed = await freshPage(gallery, 'explore&signed=out', theme, viewport);
 
         try {
-          await feed.waitForSelector('[data-gallery-public] [data-explore-hero="personal-assistant"]', SOON);
+          await feed.waitForSelector('[data-gallery-public] [data-explore-hero="personal-assistant"]');
           expect(await feed.$('nav[aria-label="Primary"]')).toBeNull();
           expect(await accountReads(feed)).toEqual([]);
         } finally {
@@ -236,7 +234,7 @@ describe('Explore', () => {
           const page = await freshPage(gallery, 'explore-workspace&id=personal-assistant&signed=out', theme, viewport);
 
           try {
-            await page.waitForSelector('[data-gallery-public] [data-blueprint-page="personal-assistant"]', SOON);
+            await page.waitForSelector('[data-gallery-public] [data-blueprint-page="personal-assistant"]');
             // Read while the page is still the blueprint's: the press below leaves it for sign-in, and a read racing that
             // navigation finds its context gone (armada 20261020213324-3ed3be10).
             expect(await accountReads(page)).toEqual([]);
@@ -249,8 +247,8 @@ describe('Explore', () => {
 
             // The press and the navigation it causes, awaited together: nothing reads the page it leaves.
             const [login] = await Promise.all([
-              page.waitForRequest((sent) => new URL(sent.url()).pathname === '/login', SOON),
-              page.waitForNavigation({ waitUntil: 'domcontentloaded', ...SOON }),
+              page.waitForRequest((sent) => new URL(sent.url()).pathname === '/login'),
+              page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
               page.click(control),
             ]);
 

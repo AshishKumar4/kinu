@@ -9,7 +9,7 @@ import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import {
   ChatHistoryEntrySchema, ORCHESTRATOR_AGENT_SLUG, READS_CHANGED_EVENT, hostedActorSocketPath, pageSchema, positionPageSchema, workspaceSlug, type JsonValue,
 } from '@kinu.run/core';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import * as v from 'valibot';
 import { PROBE_TITLE } from '../probe-model-script';
 import { rowText } from '@kinu.run/core';
@@ -764,9 +764,9 @@ describe('a hosted actor\'s window acts only on its own actor', () => {
     // A mid-turn send from the agent's pane: the words and the turn that answers them are the agent's.
     window.send(rpcRequest('send', 'send', [SENT_MARKER, 'window-send', [], 'build']));
     await window.rpc('send', v.unknown());
-    await vi.waitFor(async () => {
-      expect(await pageText(window, `actor-page-${String(++reads)}`, actorId)).toContain(`echo:${SENT_MARKER}`);
-    }, { timeout: 20_000, interval: 250 });
+
+    // Read until the turn's answer is on the page; a turn that never answers is a hang the ladder's deadline names.
+    while (!(await pageText(window, `actor-page-${String(++reads)}`, actorId)).includes(`echo:${SENT_MARKER}`));
     window.close();
 
     const root = await openPane(rootPath);

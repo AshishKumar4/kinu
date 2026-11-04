@@ -60,7 +60,7 @@ function commandsRun(events: readonly RunEvent[]): string[] {
  * have re-driven closed — and the rows are pinned in `unit-alarm-wake-chain`.
  */
 describe(SUITE, () => {
-  liveTest(`MEASURED: ${CASE}`, { timeout: 12 * 60_000 }, async () => {
+  liveTest(`MEASURED: ${CASE}`, async () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
 
     await runFirstRunCase(PLAN, {

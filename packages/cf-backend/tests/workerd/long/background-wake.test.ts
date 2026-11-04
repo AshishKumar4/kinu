@@ -8,7 +8,7 @@ import * as v from 'valibot';
 import { WAKE_MARKER as MARKER, WakeDriveResultSchema } from '../two-turn-shapes';
 
 describe('a background job settling while the interactive turn still owns the session wakes a turn that reaches the model', () => {
-  it('the real adapter auto-detaches, queues the wake behind the held reply and reaches the model', { timeout: 240_000 }, async () => {
+  it('the real adapter auto-detaches, queues the wake behind the held reply and reaches the model', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('wake-driver-reply'));
     const drive = v.parse(WakeDriveResultSchema, await root.backgroundWakeConversation());
 

@@ -29,8 +29,9 @@
 
 import * as v from 'valibot';
 import { parseJsonc } from './jsonc';
+import { moduleEdges } from './module-edges';
 import { isParseable } from './sources';
-import { IMPORT_CANDIDATES, collapsePath } from './syntax';
+import { IMPORT_CANDIDATES, collapsePath, parse } from './syntax';
 import { workspaceGlobMatches } from './undeclared-imports';
 
 export interface PackageDir {
@@ -251,4 +252,43 @@ export function walkModules(
       pending.push({ file: edge.path, chain: [...next.chain, `${next.file}:${String(edge.line)}`] });
     }
   }
+}
+
+/** What a closure resolves against: the tracked files, the workspace, the aliases, and a reader for a file's text. */
+export interface ClosureRequest {
+  readonly universe: ReadonlySet<string>;
+  readonly workspace: ReadonlyMap<string, PackageDir>;
+  readonly aliases: readonly Alias[];
+  readonly read: (file: string) => string;
+}
+
+/** The parseable files one file loads at runtime, by value edges only: a type import is erased and a text import is
+ *  data. A local edge naming no file throws: a dropped edge shrinks a closure in silence. */
+export function runtimeImports(file: string, request: ClosureRequest): readonly { readonly path: string; readonly line: number }[] {
+  const { edges } = moduleEdges(parse(file, request.read(file)));
+
+  return edges.filter((edge) => edge.kind === 'value').flatMap((edge) => {
+    const next = resolveSpecifier({ ...request, specifier: edge.specifier, from: file });
+
+    if (next.kind === 'unresolved') throw new Error(next.why);
+
+    return next.kind === 'file' ? [{ path: next.path, line: edge.line }] : [];
+  });
+}
+
+/** Every parseable file `entries` load at runtime that `enters` admits, entries included. A file `enters` refuses is
+ *  neither held nor walked through. */
+export function runtimeClosure(
+  entries: readonly string[], request: ClosureRequest, enters: (file: string) => boolean = () => true,
+): ReadonlySet<string> {
+  const files = new Set<string>();
+
+  walkModules(entries, (file) => {
+    if (!enters(file)) return [];
+    files.add(file);
+
+    return runtimeImports(file, request);
+  });
+
+  return files;
 }

@@ -69,16 +69,13 @@ describe('test-clocks gate', () => {
     });
   });
 
-  test('every vitest config runs with no per-test clock', () => {
-    for (const config of [
-      'evals/vitest.config.ts', 'vitest.first-run.config.ts',
-      'packages/cf-backend/vitest.config.ts', 'packages/devbox/vitest.config.ts',
-    ]) {
-      const text = readFileSync(join(import.meta.dir, '..', config), 'utf8');
+  test('a vitest config that leaves either clock at its default, or sets one, is refused', () => {
+    const kinds = (body: string): readonly ClockKind[] =>
+      auditFile('packages/x/vitest.config.ts', `export default { test: { ${body} } };\n`).map((site) => site.kind);
 
-      expect(text, config).toMatch(/testTimeout: 0\b/u);
-      expect(text, config).toMatch(/hookTimeout: 0\b/u);
-    }
+    expect(kinds('testTimeout: 0, hookTimeout: 0')).toEqual([]);
+    expect(kinds('testTimeout: 0')).toEqual(['test-timeout']);
+    expect(kinds('testTimeout: 30_000, hookTimeout: 0')).toEqual(['test-timeout']);
   });
 
   test('every bun test row on the ladder runs with the per-test clock off', () => {
@@ -88,7 +85,7 @@ describe('test-clocks gate', () => {
     // covers every file, and the rows are where the deploy's invocations live.
     const rows = LADDER.filter((row) => row.run.startsWith('bun test '));
 
-    expect(rows.length).toBeGreaterThan(10);
+    expect(rows).not.toEqual([]);
 
     for (const row of rows) expect(row.run, row.label).toContain('bun test --timeout=0 ');
   });
@@ -211,18 +208,26 @@ describe('test-clocks gate', () => {
     });
   });
 
-  test('the live corpus is every test sources.ts enumerates plus the helpers tests wait through', () => {
+  test('the live corpus is every test, every vitest config, and what the tests load outside the product and the runner', () => {
     const tests = readTests();
     const corpus = readClockCorpus();
 
-    expect(tests.size).toBeGreaterThan(100);
-    // The helpers are inside the corpus: a wait moved into test-utils or the
-    // browser harness is read where it is written.
-    expect(corpus.size).toBeGreaterThan(tests.size);
-    expect(corpus.has('scripts/gallery-harness.ts')).toBe(true);
+    for (const file of tests.keys()) expect(corpus.has(file), file).toBe(true);
+
+    // Helpers a suite waits through, wherever they live: test-utils, the browser harness, the live-app rows.
+    for (const helper of ['scripts/gallery-harness.ts', 'scripts/live-app-rows.ts', 'scripts/browser-page.ts']) {
+      expect(corpus.has(helper), helper).toBe(true);
+    }
+
     expect([...corpus.keys()].some((file) => file.startsWith('packages/test-utils/src/'))).toBe(true);
-    // The census over the real tree runs, whatever it finds: a scan that
-    // silently stopped parsing would be a clean report.
-    expect(() => auditCorpus(tests)).not.toThrow();
+    expect(corpus.has('packages/cf-backend/vitest.config.ts')).toBe(true);
+
+    // What the tests measure is not test code: a runner's module, a program, a module only its own suite reads.
+    for (const subject of ['scripts/deadline.ts', 'scripts/computed-style.ts', 'scripts/tables-reset.ts', 'evals/src/verifier.ts']) {
+      expect(corpus.has(subject), subject).toBe(false);
+    }
+
+    expect([...corpus.keys()].filter((file) => !tests.has(file) && /^packages\/(?!test-utils\/)[^/]+\/src\//u.test(file))).toEqual([]);
+    expect(() => auditCorpus(corpus)).not.toThrow();
   });
 });

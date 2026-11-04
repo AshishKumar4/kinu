@@ -31,14 +31,15 @@
  *   test-timeout    a duration handed to the runner: a numeric or identifier
  *                   argument after the callback, or a `{ timeout }` option, on
  *                   `test`/`it`/`describe` and the four hooks, through any
- *                   `.only`/`.skipIf()`/`.each()` chain; or `setDefaultTimeout`
- *                   with a value other than 0. The runner side is pinned by
- *                   `test-clocks.test.ts`: `scripts/test-preload.ts` disables
- *                   bun's per-test default, and every vitest config declares
- *                   `testTimeout: 0` and `hookTimeout: 0`. A hang then surfaces
- *                   where the ladder already kills a gate — at its deploy
- *                   deadline — and names the gate, rather than as a red on
- *                   whichever test lost the race.
+ *                   `.only`/`.skipIf()`/`.each()` chain or a name bound to one
+ *                   (`const liveTest = test.skipIf(…)`); `setDefaultTimeout`
+ *                   with a value other than 0; or a vitest config that does not
+ *                   set `testTimeout` and `hookTimeout` to 0 (vitest's defaults
+ *                   are 5 s and 10 s). `scripts/test-preload.ts` disables bun's
+ *                   per-test default, and every bun row runs `--timeout=0`. A
+ *                   hang then surfaces where the ladder already kills a gate —
+ *                   at its silence deadline — and names the gate, rather than
+ *                   as a red on whichever test lost the race.
  *   lap-poll        a wait bounded by a COUNT instead of a duration: a loop
  *                   whose test compares a counter with a number (a literal, a
  *                   binding this file sets to one, a parameter defaulting to
@@ -57,15 +58,17 @@
  *                   repair for a wait. A lap is a timer, a promise made on the
  *                   spot, or a call handing nothing but callbacks.
  *   timeout-option  a duration handed to a wait written outside the corpus: a
- *                   `{ timeout }` option, other than the literal 0, on a
- *                   puppeteer wait or navigation method (`page.waitForSelector`,
- *                   `frame.waitForFunction`, `page.goto`, …) or on a bare
- *                   `child_process` call (`execFileSync`, `spawn`, …) or
- *                   `Bun.spawn`; or `page.setDefaultTimeout` with a value
- *                   other than 0. Zero is the disabled value on
- *                   both libraries (puppeteer 25.10: `if (options.timeout)`
- *                   guards every timer; node: `timeout <= 0` never kills). A
- *                   wait written INSIDE the corpus — this tree's own
+ *                   `{ timeout }` option, other than the literal 0, on a library
+ *                   wait read by its method name on any receiver (every
+ *                   `wait…` method, `vi.waitFor`, `page.goto` and the other
+ *                   navigations), or on a bare `child_process` call
+ *                   (`execFileSync`, `spawn`, …) or `Bun.spawn`, spelled inline
+ *                   or through a name bound to the options; or
+ *                   `page.setDefaultTimeout`, `locator.setTimeout` with a value
+ *                   other than 0. Zero is the disabled value on both libraries
+ *                   (puppeteer 25.10: `if (options.timeout)` guards every
+ *                   timer; node: `timeout <= 0` never kills). A wait written
+ *                   INSIDE the corpus — this tree's own
  *                   `waitForText(p, s, { timeoutMs })` helpers — is read where
  *                   it is written, as the sleep or clock-compare its body
  *                   carries, so a `timeoutMs` option handed to a subject as
@@ -94,7 +97,12 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import * as v from 'valibot';
 
 import { assertMeasured, finding, type Finding } from './gate-ratchet';
-import { isTestScaffold, readMatching, readTests } from './sources';
+import { readAliases, readWorkspace, runtimeClosure, runtimeImports } from './import-graph';
+import { REPO_ROOT } from './repo-root';
+import {
+  isManifest, isParseable, isShippedSource, isTestScaffold, isTypescriptConfig, isVitestConfig, readMatching, readRepositoryFile, readTests,
+  trackedFiles,
+} from './sources';
 import {
   identifierCalleeName, identifierText, literalText, parse, walk, type SyntaxNode,
 } from './syntax';
@@ -146,18 +154,18 @@ const NAMED_RUNNER_CALLS = { test: true, it: true, describe: true } satisfies Re
  *  value the preload writes. */
 const RUNNER_DEFAULT = 'setDefaultTimeout';
 
-/** Puppeteer methods that take a `{ timeout }` option, read as the last name
- *  of a member call (`page.waitForSelector`, `frame.goto`). Their bodies are
- *  not in the corpus, so the option is read where it is handed over; a wait
- *  written inside the corpus is read where it is written. Only the methods
- *  that take the option: `click` and `type` take none, and `exec` on a subject
- *  of this tree's own is not a puppeteer call. */
-const PUPPETEER_WAITS = {
-  waitForSelector: true, waitForFunction: true, waitForNavigation: true, waitForNetworkIdle: true,
-  waitForResponse: true, waitForRequest: true, waitForFrame: true, waitForTarget: true,
-  waitForFileChooser: true, waitForDevicePrompt: true, waitHandle: true,
-  goto: true, reload: true, goBack: true, goForward: true, setContent: true, pdf: true,
-} satisfies Record<string, true>;
+/** The keys a vitest config sets its clocks with; vitest's own defaults are 5 s and 10 s, so each must be there, 0. */
+const VITEST_CLOCKS = ['testTimeout', 'hookTimeout'] as const;
+
+/** A library wait, read by the method's own name on any receiver, chained or
+ *  not: every `wait…` method (puppeteer's `waitForSelector`, `waitHandle`,
+ *  vitest's `vi.waitFor`) and the navigations, which wait for the load. Their
+ *  bodies are not in the corpus, so the option is read where it is handed
+ *  over; a wait written inside the corpus is read where it is written. */
+const LIBRARY_WAIT = /^(?:wait[A-Z]\w*|waitFor|goto|reload|goBack|goForward|setContent)$/u;
+
+/** A receiver's own wait bound, `locator.setTimeout(n)`; on the timer globals it is a sleep, read first. */
+const RECEIVER_TIMEOUT = 'setTimeout';
 
 /** Node's `child_process` family, read as a bare imported name, and Bun's
  *  spawn by path. `{ timeout }` there kills the child on a clock; the child
@@ -208,19 +216,58 @@ function calleePath(call: SyntaxNode): string | undefined {
   return callee === undefined ? undefined : memberPath(callee);
 }
 
-/** The runner registration a chained callee resolves to: `test`, `test.skip`,
- *  `test.skipIf(cond)`, `it.each(rows)`, `describe.only`. */
-function runnerOf(call: SyntaxNode): string | undefined {
-  let [callee] = call.children;
+/** The method name of a member call, on any receiver: `waitHandle` in `page.locator(s).waitHandle()`. */
+function memberName(call: SyntaxNode): string | undefined {
+  const [callee] = call.children;
 
-  while (callee !== undefined) {
-    if (callee.raw.type === 'Identifier') return Object.hasOwn(RUNNER_CALLS, callee.raw.name) ? callee.raw.name : undefined;
+  if (callee?.raw.type !== 'MemberExpression' || callee.raw.computed) return undefined;
+  const property = callee.children[1];
 
-    if (callee.raw.type !== 'MemberExpression' && callee.raw.type !== 'CallExpression') return undefined;
-    [callee] = callee.children;
+  return property === undefined ? undefined : identifierText(property);
+}
+
+/** The runner registration an expression's chain resolves to: `test`, `test.skip`,
+ *  `test.skipIf(cond)`, `it.each(rows)`, `describe.only`, or a name this file
+ *  bound to one (`const liveTest = test.skipIf(…)`). */
+function runnerRoot(node: SyntaxNode | undefined, runners: ReadonlyMap<string, string>): string | undefined {
+  let at = node;
+
+  while (at !== undefined) {
+    if (at.raw.type === 'Identifier') return Object.hasOwn(RUNNER_CALLS, at.raw.name) ? at.raw.name : runners.get(at.raw.name);
+
+    if (at.raw.type !== 'MemberExpression' && at.raw.type !== 'CallExpression') return undefined;
+    [at] = at.children;
   }
 
   return undefined;
+}
+
+/** Names this file binds to a runner chain, in source order so an alias of an alias is found too. */
+function runnerBindings(root: SyntaxNode): ReadonlyMap<string, string> {
+  const names = new Map<string, string>();
+
+  walk(root, (node) => {
+    if (node.raw.type !== 'VariableDeclarator' || node.raw.id.type !== 'Identifier') return;
+    const runner = runnerRoot(node.children[1], names);
+
+    if (runner !== undefined) names.set(node.raw.id.name, runner);
+  });
+
+  return names;
+}
+
+/** Names this file binds to an options object carrying `timeout`: `const SOON = { timeout: 15_000 } as const`. */
+function timeoutBindings(root: SyntaxNode): ReadonlySet<string> {
+  const names = new Set<string>();
+
+  walk(root, (node) => {
+    if (node.raw.type !== 'VariableDeclarator' || node.raw.id.type !== 'Identifier') return;
+    const init = node.children[1];
+
+    if (init !== undefined && carriesTimeout(init, names)) names.add(node.raw.id.name);
+  });
+
+  return names;
 }
 
 /** The argument nodes of a call, in order. */
@@ -291,12 +338,29 @@ function clockBindings(root: SyntaxNode): ReadonlySet<string> {
   return names;
 }
 
-/** Whether an object literal carries `timeout` with a value other than the
- *  literal 0. */
-function carriesTimeout(argument: SyntaxNode): boolean {
-  if (argument.raw.type !== 'ObjectExpression') return false;
+/** Whether an options value carries `timeout` with a value other than the
+ *  literal 0: an object literal, one spread into it, or a name this file bound
+ *  to either. */
+function carriesTimeout(argument: SyntaxNode, named: ReadonlySet<string>): boolean {
+  const { raw } = argument;
+
+  if (raw.type === 'Identifier') return named.has(raw.name);
+
+  if (raw.type === 'TSAsExpression' || raw.type === 'TSSatisfiesExpression' || raw.type === 'ParenthesizedExpression') {
+    const [inner] = argument.children;
+
+    return inner !== undefined && carriesTimeout(inner, named);
+  }
+
+  if (raw.type !== 'ObjectExpression') return false;
 
   return argument.children.some((property) => {
+    if (property.raw.type === 'SpreadElement') {
+      const [spread] = property.children;
+
+      return spread !== undefined && carriesTimeout(spread, named);
+    }
+
     if (property.raw.type !== 'Property') return false;
     const [keyNode, value] = property.children;
     const key = keyNode === undefined ? undefined : identifierText(keyNode) ?? literalText(keyNode);
@@ -305,36 +369,59 @@ function carriesTimeout(argument: SyntaxNode): boolean {
   });
 }
 
-/** Whether a call is one of the outside-corpus waits: a puppeteer method by
- *  its member name, or a process spawn by its bare or `Bun.` name. */
+/** Whether a call is one of the outside-corpus waits: a library wait by its
+ *  method name on any receiver, or a process spawn by its bare or `Bun.` name. */
 function isOutsideWait(call: SyntaxNode): boolean {
   const path = calleePath(call);
 
-  if (path === undefined) return false;
+  if (path !== undefined && Object.hasOwn(PROCESS_WAITS, path)) return true;
+  const method = memberName(call);
 
-  if (Object.hasOwn(PROCESS_WAITS, path)) return true;
-
-  return path.includes('.') && Object.hasOwn(PUPPETEER_WAITS, path.slice(path.lastIndexOf('.') + 1));
+  return method !== undefined && LIBRARY_WAIT.test(method);
 }
 
-/** A trailing runner argument that is a duration: a number, a name standing
- *  for one, or an options object carrying `timeout`. */
-function isRunnerTimeout(argument: SyntaxNode): boolean {
+/** A trailing runner argument that is a duration: a number other than 0 (the disabled value), a name standing for
+ *  one, or an options object carrying `timeout`. */
+function isRunnerTimeout(argument: SyntaxNode, named: ReadonlySet<string>): boolean {
   const { raw } = argument;
 
-  if (raw.type === 'Literal') return literalNumber(argument) !== undefined;
+  if (raw.type === 'Literal') return (literalNumber(argument) ?? 0) !== 0;
 
   if (raw.type === 'Identifier') return true;
 
-  return carriesTimeout(argument);
+  return carriesTimeout(argument, named);
+}
+
+const isFunction = (node: SyntaxNode): boolean =>
+  node.raw.type === 'ArrowFunctionExpression' || node.raw.type === 'FunctionExpression';
+
+/** A registration's durations: an options object before the callback (`test(name, { timeout }, fn)`, vitest's
+ *  order) and any duration after it (`test(name, fn, 5000)`, bun's). */
+function runnerTimeouts(args: readonly SyntaxNode[], named: boolean, timeouts: ReadonlySet<string>): readonly SyntaxNode[] {
+  const start = named ? 1 : 0;
+  const found = args.findIndex((argument, index) => index >= start && isFunction(argument));
+  const callback = found === -1 ? start : found;
+
+  return [
+    ...args.slice(start, callback).filter((argument) => carriesTimeout(argument, timeouts)),
+    ...args.slice(callback + 1).filter((argument) => isRunnerTimeout(argument, timeouts)),
+  ];
+}
+
+/** What a call is judged against: the file's timer imports, clock bindings,
+ *  runner aliases and timeout-carrying option names. */
+interface CallScope {
+  readonly timers: ReadonlySet<string>;
+  readonly clocks: ReadonlySet<string>;
+  readonly runners: ReadonlyMap<string, string>;
+  readonly timeouts: ReadonlySet<string>;
 }
 
 /** Every call's clock kind, or undefined for a call that carries none. The
  *  kinds are ordered: a timer is a sleep before it is anything else, and a
  *  runner registration is inspected for its trailing argument only. */
-function callKind(
-  call: SyntaxNode, timers: ReadonlySet<string>, clocks: ReadonlySet<string>,
-): readonly (readonly [SyntaxNode, ClockKind])[] {
+function callKind(call: SyntaxNode, scope: CallScope): readonly (readonly [SyntaxNode, ClockKind])[] {
+  const { timers, clocks, runners, timeouts } = scope;
   const name = identifierCalleeName(call);
   const path = calleePath(call);
   const args = argumentsOf(call);
@@ -349,17 +436,16 @@ function callKind(
     return value !== undefined && literalNumber(value) === 0 ? [] : [[call, 'test-timeout']];
   }
 
-  const runner = runnerOf(call);
+  const runner = call.raw.type === 'CallExpression' ? runnerRoot(call.children[0], runners) : undefined;
 
   if (runner !== undefined) {
-    return args.slice(Object.hasOwn(NAMED_RUNNER_CALLS, runner) ? 2 : 1)
-      .filter(isRunnerTimeout)
-      .map((argument) => [argument, 'test-timeout'] as const);
+    return runnerTimeouts(args, Object.hasOwn(NAMED_RUNNER_CALLS, runner), timeouts).map((argument) => [argument, 'test-timeout'] as const);
   }
 
   if (name === 'expect' && args[0] !== undefined && isClockValue(args[0], clocks)) return [[call, 'clock-compare']];
+  const method = memberName(call);
 
-  if (path !== undefined && Object.hasOwn(PAGE_DEFAULTS, path.slice(path.lastIndexOf('.') + 1))) {
+  if (method !== undefined && (Object.hasOwn(PAGE_DEFAULTS, method) || method === RECEIVER_TIMEOUT)) {
     const [value] = args;
 
     return value !== undefined && literalNumber(value) === 0 ? [] : [[call, 'timeout-option']];
@@ -367,7 +453,21 @@ function callKind(
 
   if (!isOutsideWait(call)) return [];
 
-  return args.filter(carriesTimeout).map((argument) => [argument, 'timeout-option'] as const);
+  return args.filter((argument) => carriesTimeout(argument, timeouts)).map((argument) => [argument, 'timeout-option'] as const);
+}
+
+/** Every `key: value` property spelling `key`, with its value. */
+function propertiesNamed(root: SyntaxNode, key: string): readonly (readonly [SyntaxNode, SyntaxNode | undefined])[] {
+  const found: (readonly [SyntaxNode, SyntaxNode | undefined])[] = [];
+
+  walk(root, (node) => {
+    if (node.raw.type !== 'Property') return;
+    const [keyNode, value] = node.children;
+
+    if (keyNode !== undefined && (identifierText(keyNode) ?? literalText(keyNode)) === key) found.push([node, value]);
+  });
+
+  return found;
 }
 
 /** Names this file fixes to a number: `const LAPS = 40`, and a parameter defaulting to one (`laps = 1000`). A `let`
@@ -430,7 +530,7 @@ function ownNodes(node: SyntaxNode, visit: (inner: SyntaxNode) => void): void {
  *  the spot, or a call handing nothing but callbacks (`nextTurn()`, `read()`, `page.evaluate(() => …)`). A call
  *  handing the subject data (`step(orch, s)`, `backfill(store, 1)`) drives it, and a capped loop of those is a run
  *  of the subject, not a wait. */
-function isLap(awaited: SyntaxNode | undefined, timers: ReadonlySet<string>, clocks: ReadonlySet<string>): boolean {
+function isLap(awaited: SyntaxNode | undefined, scope: CallScope): boolean {
   if (awaited === undefined) return false;
   const { raw } = awaited;
 
@@ -439,7 +539,7 @@ function isLap(awaited: SyntaxNode | undefined, timers: ReadonlySet<string>, clo
   if (raw.type !== 'CallExpression') return false;
   const path = calleePath(awaited);
 
-  if (path === 'Promise.resolve' || callKind(awaited, timers, clocks).some(([, kind]) => kind === 'sleep')) return true;
+  if (path === 'Promise.resolve' || callKind(awaited, scope).some(([, kind]) => kind === 'sleep')) return true;
   const handed = argumentsOf(awaited);
 
   return handed.every((argument) => argument.raw.type === 'ArrowFunctionExpression' || argument.raw.type === 'FunctionExpression');
@@ -470,11 +570,9 @@ function clockSetters(root: SyntaxNode): ReadonlySet<string> {
   return names;
 }
 
-/** What a lap-poll is judged against: the file's numbers, timers, clock bindings and clock setters. */
-interface LapScope {
+/** What a lap-poll is judged against: a call's scope, plus the file's numbers and clock setters. */
+interface LapScope extends CallScope {
   readonly numbers: ReadonlySet<string>;
-  readonly timers: ReadonlySet<string>;
-  readonly clocks: ReadonlySet<string>;
   readonly setters: ReadonlySet<string>;
 }
 
@@ -495,7 +593,7 @@ function advancesClock(loop: SyntaxNode, setters: ReadonlySet<string>): boolean 
 /** Whether a loop is a lap-capped poll: counted, ending early on a condition, awaiting only laps, and moving no
  *  clock the test holds. */
 function isLapPoll(loop: SyntaxNode, scope: LapScope): boolean {
-  const { numbers, timers, clocks } = scope;
+  const { numbers } = scope;
   const { raw } = loop;
 
   if (raw.type !== 'ForStatement' && raw.type !== 'WhileStatement' && raw.type !== 'DoWhileStatement') return false;
@@ -517,15 +615,18 @@ function isLapPoll(loop: SyntaxNode, scope: LapScope): boolean {
     }
   });
 
-  return exits && awaited.length > 0 && awaited.every((each) => isLap(each, timers, clocks))
+  return exits && awaited.length > 0 && awaited.every((each) => isLap(each, scope))
     && !advancesClock(loop, scope.setters);
 }
 
 export function auditFile(file: string, text: string): readonly ClockSite[] {
   const { root, lineAt } = parse(file, text);
-  const timers = timerImports(root);
-  const clocks = clockBindings(root);
-  const laps: LapScope = { numbers: numberBindings(root), timers, clocks, setters: clockSetters(root) };
+
+  const calls: CallScope = {
+    timers: timerImports(root), clocks: clockBindings(root), runners: runnerBindings(root), timeouts: timeoutBindings(root),
+  };
+
+  const laps: LapScope = { ...calls, numbers: numberBindings(root), setters: clockSetters(root) };
   const sites: ClockSite[] = [];
 
   const add = (node: SyntaxNode, kind: ClockKind): void => {
@@ -538,11 +639,21 @@ export function auditFile(file: string, text: string): readonly ClockSite[] {
     });
   };
 
+  if (isVitestConfig(file)) {
+    for (const key of VITEST_CLOCKS) {
+      const set = propertiesNamed(root, key);
+
+      if (set.length === 0) add(root, 'test-timeout');
+
+      for (const [property, value] of set) if (value === undefined || literalNumber(value) !== 0) add(property, 'test-timeout');
+    }
+  }
+
   walk(root, (node) => {
     const { raw } = node;
 
     if (raw.type === 'CallExpression') {
-      for (const [at, kind] of callKind(node, timers, clocks)) add(at, kind);
+      for (const [at, kind] of callKind(node, calls)) add(at, kind);
 
       return;
     }
@@ -555,7 +666,7 @@ export function auditFile(file: string, text: string): readonly ClockSite[] {
 
     if (raw.type !== 'BinaryExpression' || !Object.hasOwn(COMPARISONS, raw.operator)) return;
 
-    if (node.children.some((side) => isClockValue(side, clocks))) add(node, 'clock-compare');
+    if (node.children.some((side) => isClockValue(side, calls.clocks))) add(node, 'clock-compare');
   });
 
   return sites;
@@ -739,22 +850,52 @@ export function writeNewKindLock(next: ClockLock, kind: ClockKind, path = LOCK):
   writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`);
 }
 
-/** Test helpers that live outside a `tests/` directory and carry no test
- *  suffix, but are read where they are written the way a `tests/helpers/`
- *  file is: the browser harness the ux suites drive Chrome through. */
-const HELPERS_OUTSIDE_TESTS: readonly string[] = ['scripts/gallery-harness.ts'];
+/** The runners, whose clocks are theirs: the ladder ends a hung gate at its silence deadline (`scripts/deadline.ts`), and
+ *  the eval harness scores a trial against a deployment by budgets that are part of its verdict. */
+const RUNNERS = ['scripts/ladder.ts', 'evals/src/harness.ts'];
 
-/** The corpus: every test file, plus the helpers the tests wait through —
- *  `packages/test-utils` and the browser harness — so a wait moved out of a
- *  suite into a helper is still read, not hidden behind the helper's name. */
+/** A program: run by name (`import.meta.main`), or a module whose default export is a Worker or a config. */
+const isProgram = (text: string): boolean => text.includes('import.meta.main') || /^export default\b/mu.test(text);
+
+/** The suite beside a module, which names it as its subject (`reset.ts` and `reset.test.ts`). */
+const ownSuites = (file: string): readonly string[] => {
+  const stem = file.replace(/\.[cm]?[jt]sx?$/u, '');
+
+  return [`${stem}.test.ts`, `${stem}.test.tsx`];
+};
+
+/** The corpus: every test file, every vitest config, and what the tests load at runtime that nothing but tests loads —
+ *  test-utils, the browser harness, the live-app rows and every other helper a suite waits through — so a wait moved out
+ *  of a suite into a helper is still read, not hidden behind the helper's name. The walk stops at what the tests
+ *  measure: shipped product source; the runner's own modules; a program; a module only its own suite imports; and every
+ *  module a program loads that no test but its own suite imports (an operator's tool, a bench, the eval runner), whose
+ *  waits are what it does. */
 export function readClockCorpus(): Map<string, string> {
   const tests = readTests();
+  const tracked = new Set(trackedFiles());
+  const read = (file: string): string => tests.get(file) ?? readRepositoryFile(REPO_ROOT, file);
 
-  for (const [file, text] of readMatching((candidate) => isTestScaffold(candidate) || HELPERS_OUTSIDE_TESTS.includes(candidate))) {
-    if (file.endsWith('.ts') || file.endsWith('.tsx')) tests.set(file, text);
+  const request = {
+    universe: tracked,
+    workspace: readWorkspace(readMatching(isManifest)),
+    aliases: readAliases(readMatching(isTypescriptConfig)),
+    read,
+  };
+
+  const importers = new Map<string, Set<string>>();
+
+  for (const suite of tests.keys()) {
+    for (const { path } of runtimeImports(suite, request)) importers.set(path, (importers.get(path) ?? new Set()).add(suite));
   }
 
-  return tests;
+  const measuredOnly = (file: string): boolean => [...importers.get(file) ?? []].every((suite) => ownSuites(file).includes(suite));
+  const programs = [...tracked].filter((file) => isParseable(file) && !tests.has(file) && !isShippedSource(file) && isProgram(read(file)));
+  const subjects = runtimeClosure([...RUNNERS, ...programs.filter(measuredOnly)], request, (file) => !isShippedSource(file));
+
+  const helpers = runtimeClosure([...tests.keys()], request, (file) => tests.has(file) || isTestScaffold(file)
+    || (!isShippedSource(file) && !subjects.has(file) && !isProgram(read(file)) && !(importers.has(file) && measuredOnly(file))));
+
+  return new Map([...helpers, ...[...tracked].filter(isVitestConfig)].sort().map((file) => [file, read(file)]));
 }
 
 async function main(): Promise<number> {
@@ -797,7 +938,7 @@ async function main(): Promise<number> {
   if (verdict.unlocked.length === 0 && verdict.raised.length === 0 && verdict.stale.length === 0) {
     console.log(`test-clocks: ok — ${summary}`);
     console.log('  blind to: a clock value reaching a comparison through a parameter or a return value; '
-      + 'a timer wrapped outside the corpus (test-utils and the browser harness are inside it) and called by the wrapper\'s name; a duration handed as a '
+      + 'a timer wrapped in product source or a dependency and called by the wrapper\'s name; a duration handed as a '
       + 'bare positional number to an unknown helper; setImmediate and queueMicrotask; a clock read '
       + 'used as a value and never compared.');
 

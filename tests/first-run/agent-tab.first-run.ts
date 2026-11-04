@@ -156,7 +156,7 @@ describe(SUITE, () => {
   // product never answers would hold the tier open with it. The case BUDGET
   // ends it — every wait above is settled by the product or by that abort —
   // and the harness retains the ledger as found, which the verdict reads.
-  liveTest(`MEASURED: ${CASE}`, { timeout: 12 * 60_000 }, async () => {
+  liveTest(`MEASURED: ${CASE}`, async () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
 
     await runFirstRunCase(PLAN, {

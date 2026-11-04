@@ -9,7 +9,7 @@
 
 import { abortAllDurableObjects, env } from 'cloudflare:test';
 import { getAgentByName } from 'agents';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import * as v from 'valibot';
 import { HOSTED_ACTOR_ID_HEADER, hostedActorSocketPath, ORCHESTRATOR_AGENT_SLUG } from '@kinu.run/core';
 import { JOB_NOTED, JOB_OUTPUT, type ActorRow } from './hire-shapes';
@@ -146,13 +146,10 @@ describe("a hired agent's job", () => {
     await probe(workspace).modelSaw(workspace, [job.id, 'failed']);
 
     // The lane row carries the re-drive until the wake it delivers has ended; then nothing is owed and no wake is armed.
-    const watch = await vi.waitFor(async () => {
-      const state = await probe(workspace).jobWatchState(workspace);
+    // Read until it holds; a re-drive that never ends is a hang the ladder's deadline names.
+    let watch = await probe(workspace).jobWatchState(workspace);
 
-      expect(state).toMatchObject({ fibers: 0, terminalRetry: false, started: true });
-
-      return state;
-    }, { timeout: 30_000, interval: 250 });
+    while (!(watch.fibers === 0 && !watch.terminalRetry && watch.started)) watch = await probe(workspace).jobWatchState(workspace);
 
     const row = watch.jobs.find((entry) => entry.id === job.id);
 

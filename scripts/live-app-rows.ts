@@ -569,21 +569,19 @@ export interface OwnServerVerdict {
 async function measureOwnServerSlate(page: Page): Promise<OwnServerVerdict> {
   const card = `#chat [data-slate-inline=${JSON.stringify(SLATE_ID)}] iframe`;
 
-  // Bounded: a card, a page or a theme that never arrives is the failure this row names, not a hang.
-  const bound = { timeout: 60_000 };
-
-  await named('the support queue drawn in its answer', () => page.waitForSelector(card, bound));
+  // A card, a page or a theme that never arrives is a hang the row's deadline ends, named by the wait it was in.
+  await named('the support queue drawn in its answer', () => page.waitForSelector(card));
   const src = await page.$eval(card, (frame) => frame.getAttribute('src') ?? '');
-  const frame = await named('the support queue frame', () => page.waitForFrame((each) => src !== '' && each.url().startsWith(new URL(src).origin), bound));
+  const frame = await named('the support queue frame', () => page.waitForFrame((each) => src !== '' && each.url().startsWith(new URL(src).origin)));
 
-  await named('the support queue page', () => frame.waitForFunction(() => document.querySelector('table') !== null, bound));
+  await named('the support queue page', () => frame.waitForFunction(() => document.querySelector('table') !== null));
 
   const read = async (scheme: 'dark' | 'light'): Promise<OwnServerReading> => {
     // The page follows the host's scheme.
-    await named(`the support queue in ${scheme}`, () => frame.waitForFunction((want) => document.documentElement.dataset['mode'] === want, bound, scheme));
+    await named(`the support queue in ${scheme}`, () => frame.waitForFunction((want) => document.documentElement.dataset['mode'] === want, {}, scheme));
     // The card is drawn once its frame has a height: a page loads inside a frame still held shut until it says its size.
     await named(`the support queue's frame drawn in ${scheme}`, () => page.waitForFunction(
-      (selector) => (document.querySelector(selector)?.getBoundingClientRect().height ?? 0) > 0, bound, card));
+      (selector) => (document.querySelector(selector)?.getBoundingClientRect().height ?? 0) > 0, {}, card));
     // Settled: the frame takes the height its page last said, and the page stops growing.
     await painted(page);
     await painted(page);
@@ -2021,7 +2019,7 @@ const PAGE_DATA_CARD = `[data-slate-ui="${PAGE_DATA.name}"]`;
 
 /** The page in `frame`, once it has read what `stage` names. */
 async function pageDataReading(frame: Frame, stage: 'opened' | 'added', what: string): Promise<PageDataReading> {
-  await named(`${what}, ${stage}`, () => frame.waitForFunction((want) => document.body.dataset['read'] === want, { timeout: 60_000 }, stage));
+  await named(`${what}, ${stage}`, () => frame.waitForFunction((want) => document.body.dataset['read'] === want, {}, stage));
 
   return await frame.evaluate(() => {
     const said = (id: string) => document.getElementById(id)?.textContent ?? '';
@@ -2031,7 +2029,7 @@ async function pageDataReading(frame: Frame, stage: 'opened' | 'added', what: st
 }
 
 async function frameAt(page: Page, selector: string, what: string): Promise<Frame> {
-  const handle = await named(what, () => page.waitForSelector(selector, { timeout: 60_000 }));
+  const handle = await named(what, () => page.waitForSelector(selector));
   const frame = await handle?.contentFrame();
 
   if (frame === null || frame === undefined) throw new Error(`${what} has no document`);
@@ -2056,7 +2054,7 @@ async function measurePageData(newPage: LiveApp['newPage'], origin: string): Pro
     const added = await pageDataReading(frame, 'added', 'the notes page');
 
     await page.$eval(`${PAGE_DATA_CARD} button[data-slate-save]`, (save) => { if (save instanceof HTMLElement) save.click(); });
-    const saved = await named('the notes page saved', () => page.waitForSelector(`${PAGE_DATA_CARD} button[data-slate-saved]`, { timeout: 60_000 }));
+    const saved = await named('the notes page saved', () => page.waitForSelector(`${PAGE_DATA_CARD} button[data-slate-saved]`));
     const savedAs = await saved?.evaluate((button) => button.getAttribute('data-slate-saved') ?? '') ?? '';
 
     await saved?.evaluate((button) => { if (button instanceof HTMLElement) button.click(); });
@@ -2070,7 +2068,7 @@ async function measurePageData(newPage: LiveApp['newPage'], origin: string): Pro
     frame = await frameAt(page, drawn, 'the notes page, reloaded');
     const reloaded = await pageDataReading(frame, 'opened', 'the notes page, reloaded');
     // The card learns it was saved from the workspace's slate list, which the page opens beside the transcript.
-    const again = await named('the reloaded card, saved', () => page.waitForSelector(`${PAGE_DATA_CARD} button[data-slate-saved]`, { timeout: 60_000 }));
+    const again = await named('the reloaded card, saved', () => page.waitForSelector(`${PAGE_DATA_CARD} button[data-slate-saved]`));
     const stillSaved = await again?.evaluate((button) => button.getAttribute('data-slate-saved')) ?? null;
 
     return { opened, added, saved: savedAs, kept, keptAdded, reloaded, stillSaved };
@@ -2079,10 +2077,6 @@ async function measurePageData(newPage: LiveApp['newPage'], origin: string): Pro
     await page.close();
   }
 }
-
-/** A wait across a page load under `vite dev`: one load took 97-102 s, cold or warm, on a box at load 13 of 24 cores
- *  (2026-10-23, /mnt/local/kinu/tmp/connect-live/warm.ts). A sign-in's end crosses two, so three loads' time. */
-const ACROSS_PAGE_LOADS_MS = 300_000;
 
 const ServerRowsSchema = v.array(v.looseObject({ id: v.string(), name: v.string(), status: v.string() }));
 
@@ -2110,14 +2104,12 @@ async function addCustomServer(page: Page, name: string, serverUrl: string): Pro
   await pressButton(page, 'button', 'Add server');
 }
 
-/** The tab `press` opens from `page`, or null where none opens within `ms`: read off the browser's targets as each is
- *  made, so a wait that ends finds nothing left listening. */
-async function opensTab(page: Page, press: () => Promise<void>, ms: number): Promise<Target | null> {
+/** The tab `press` opens from `page`: read off the browser's targets as each is made, so a wait that ends finds nothing
+ *  left listening. A press that opens none is a hang the row's deadline ends, named by the wait it was in. */
+async function opensTab(page: Page, press: () => Promise<void>): Promise<Target> {
   const browser = page.browser();
-  const { promise, resolve } = Promise.withResolvers<Target | null>();
+  const { promise, resolve } = Promise.withResolvers<Target>();
   const created = (target: Target) => { if (target.opener() === page.target()) resolve(target); };
-
-  const timer = setTimeout(() => { resolve(null); }, ms);
 
   browser.on('targetcreated', created);
 
@@ -2126,25 +2118,19 @@ async function opensTab(page: Page, press: () => Promise<void>, ms: number): Pro
 
     return await promise;
   } finally {
-    clearTimeout(timer);
     browser.off('targetcreated', created);
   }
 }
 
 /** The helper tab a click starts a sign-in in, at the provider's consent page; `closed` settles as it closes. */
 async function signInHelper(page: Page, press: () => Promise<void>): Promise<{ readonly helper: Page; readonly closed: Promise<void> }> {
-  const target = await named('the sign-in tab', async () => opensTab(page, press, ACROSS_PAGE_LOADS_MS));
-
-  if (target === null) {
-    throw new Error(`the sign-in opened no tab; its page said ${await page.evaluate(() => document.querySelector('[data-connect-ended]')?.textContent ?? 'nothing')}`);
-  }
-
+  const target = await named('the sign-in tab', async () => opensTab(page, press));
   const helper = await target.page();
 
   if (helper === null) throw new Error('the sign-in opened no tab');
   const closed = new Promise<void>((resolve) => { helper.once('close', () => { resolve(); }); });
 
-  await named('the provider\'s consent page', async () => helper.waitForSelector(`[${CONSENT_CHOICE}]`, { timeout: ACROSS_PAGE_LOADS_MS }));
+  await named('the provider\'s consent page', async () => helper.waitForSelector(`[${CONSENT_CHOICE}]`));
 
   return { helper, closed };
 }
@@ -2155,51 +2141,31 @@ async function consent(page: Page, choice: 'approve' | 'deny'): Promise<void> {
   await page.$eval(`[${CONSENT_CHOICE}="${choice}"]`, (link) => { if (link instanceof HTMLElement) link.click(); });
 }
 
-/** What a tab that never left its finish page shows, for a failure to name: where it is, the end it read, and the
- *  return its connect stored. */
-async function finishShown(page: Page): Promise<string> {
-  const shown = await page.evaluate(() => ({
-    finished: document.querySelector('[data-connect-finished]')?.getAttribute('data-connect-finished') ?? null,
-    stored: sessionStorage.getItem('kinu-connect-return'),
-    text: document.body.innerText.slice(0, 300),
-  }));
-
-  return `${page.url()} ${JSON.stringify(shown)}`;
-}
-
 /**
- * Whether `page`'s tab reaches an address starting `at` within `ms`, read off its target, which follows the tab through
- * every origin. A wait in its page stays with the document it began in: one begun on the provider's page never saw the
- * tab come back (2026-10-23, /mnt/local/kinu/tmp/connect-live/debug2.ts: back at 219 s, the wait pending till teardown).
+ * Until `page`'s tab reaches an address starting `at`, read off its target, which follows the tab through every origin.
+ * A wait in its page stays with the document it began in: one begun on the provider's page never saw the tab come back
+ * (2026-10-23, /mnt/local/kinu/tmp/connect-live/debug2.ts: back at 219 s, the wait pending till teardown).
  */
-async function reaches(page: Page, at: string, ms: number): Promise<boolean> {
+async function reaches(page: Page, at: string): Promise<void> {
   const target = page.target();
   const browser = page.browser();
-  const { promise, resolve } = Promise.withResolvers<boolean>();
-  const changed = (each: Target) => { if (each === target && each.url().startsWith(at)) resolve(true); };
-
-  const timer = setTimeout(() => { resolve(false); }, ms);
+  const { promise, resolve } = Promise.withResolvers<void>();
+  const changed = (each: Target) => { if (each === target && each.url().startsWith(at)) resolve(); };
 
   browser.on('targetchanged', changed);
   changed(target);
 
   try {
-    return await promise;
+    await promise;
   } finally {
-    clearTimeout(timer);
     browser.off('targetchanged', changed);
   }
-}
-
-/** Whether `closed` settled within the time a finish page has to load and close its tab. */
-async function closedSoon(closed: Promise<void>): Promise<boolean> {
-  return Promise.race([closed.then(() => true), new Promise<boolean>((resolve) => { setTimeout(() => { resolve(false); }, ACROSS_PAGE_LOADS_MS); })]);
 }
 
 /** A wait on setup's own page, named as `until` names its waits. Not `until`: it reads the welcome page offering Next,
  *  which every step of setup does, as an account stopped in front of the page it asked for. */
 async function onSetup(page: Page, what: string, condition: string): Promise<void> {
-  await named(what, async () => page.waitForFunction(condition, { timeout: ACROSS_PAGE_LOADS_MS, polling: 100 }));
+  await named(what, async () => page.waitForFunction(condition, { polling: 100 }));
 }
 
 /** Walks setup to its tools step by its own Next, as a person does: `?step=` is never typed in. */
@@ -2234,12 +2200,10 @@ async function measureConnect(newPage: LiveApp['newPage'], origin: string): Prom
     // A popup blocker's answer: no helper tab, so the connect runs here.
     await setup.evaluate(() => { window.open = () => null; });
     await addCustomServer(setup, 'Samehub', provider.serverUrl);
-    await named('the consent page in the setup tab', async () => setup.waitForSelector(`[${CONSENT_CHOICE}="approve"]`, { timeout: ACROSS_PAGE_LOADS_MS }));
+    await named('the consent page in the setup tab', async () => setup.waitForSelector(`[${CONSENT_CHOICE}="approve"]`));
     await consent(setup, 'approve');
 
-    const cameBack = await named('the setup tab back from its sign-in', async () => reaches(setup, `${origin}/welcome`, ACROSS_PAGE_LOADS_MS));
-
-    if (!cameBack) throw new Error(`the setup tab never came back from its sign-in: ${await finishShown(setup)}`);
+    await named('the setup tab back from its sign-in', async () => reaches(setup, `${origin}/welcome`));
     await onSetup(setup, 'setup to draw its step again', `document.querySelector('[data-welcome-step]') !== null`);
     const back = new URL(setup.url());
     const samehub = await listedServer(origin, 'Samehub');
@@ -2258,13 +2222,16 @@ async function measureConnect(newPage: LiveApp['newPage'], origin: string): Prom
 
     await named('the planted finish page to load', async () => planted.goto(`${origin}/connected?run=${crypto.randomUUID()}&service=Denyhub`, { waitUntil: 'load' }));
     await until(planted, 'the planted finish page', `document.querySelector('[data-connect-finished]') !== null`);
-    // A broadcast reaches every tab of the origin within a frame or two; a second is many.
-    await new Promise((resolve) => { setTimeout(resolve, 1000); });
+    // A broadcast reaches every tab of the origin within a frame or two: two on the panel, in front.
+    await panel.bringToFront();
+    await painted(panel);
+    await painted(panel);
     const plantedSaw = { helperOpen: !first.helper.isClosed(), said: await connectSaid(panel) };
 
     await planted.close();
     await consent(first.helper, 'deny');
-    const helperClosed = await named('the declined sign-in\'s tab to close', async () => closedSoon(first.closed));
+    await named('the declined sign-in\'s tab to close', async () => first.closed);
+    const helperClosed = first.helper.isClosed();
 
     await onSetup(panel, 'the panel to say how the sign-in ended', `document.querySelector('[data-connect-ended]') !== null`);
     const deniedSaid = await connectSaid(panel);
@@ -2280,7 +2247,7 @@ async function measureConnect(newPage: LiveApp['newPage'], origin: string): Prom
     const again = await signInHelper(panel, async () => panel.$eval(signIn, (button) => { if (button instanceof HTMLElement) button.click(); }));
 
     await consent(again.helper, 'approve');
-    await named('the approved sign-in\'s tab to close', async () => closedSoon(again.closed));
+    await named('the approved sign-in\'s tab to close', async () => again.closed);
     await onSetup(panel, 'the panel to say the sign-in connected', `document.querySelector('[data-connect-ended="connected"]') !== null`);
 
     return { sameTab, planted: plantedSaw, denied, retried: { said: await connectSaid(panel), status: (await listedServer(origin, 'Denyhub')).status } };

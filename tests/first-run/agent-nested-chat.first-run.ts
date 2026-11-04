@@ -127,7 +127,7 @@ function ownedTask(workAnswer: Awaited<ReturnType<typeof ask>>) {
 }
 
 describe(SUITE, () => {
-  liveTest(`MEASURED: ${CASE}`, { timeout: 14 * 60_000 }, async () => {
+  liveTest(`MEASURED: ${CASE}`, async () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
 
     await runFirstRunCase(PLAN, {

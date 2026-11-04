@@ -119,5 +119,5 @@ describe('Exploration evals — the agent reaches for exploration', () => {
     // delegation eval over run_events. What is asserted is the part that is not model-dependent: the turn completed and
     // produced observable tool traffic, so a zero above is the model declining rather than the harness failing to ask.
     expect(calls.length).toBeGreaterThan(0);
-  }, 0);
+  });
 });
