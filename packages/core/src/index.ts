@@ -130,7 +130,19 @@ export { mailInContext } from './mail/in-context';
 
 export { MAIL_MESSAGE_FIELDS, MailAddress, MailBoxPath, mailText } from './mail/message';
 
-export * from './limits/index';
+export {
+  AccountLimitsSchema, admitComputerStart, admitPlatformTurn, admitStoredBytes, admitWorkspace, computerStartAnswer,
+  limitReadings, limitsReport, LimitsReportSchema, nearLimitNote, refusedFor, shownBytes, startSize,
+  type AccountLimits, type AccountUse, type Admission, type LimitReading, type LimitsReport, type RefusedFor,
+} from './limits/admit';
+
+export { accountClassOf } from './limits/class';
+
+export {
+  freeTierOf, isLimited, STORED_CLASSES, type AccountClass, type ComputerSize, type FreeTier, type StoredClass,
+} from './limits/policy';
+
+export { AccountLimitsStore } from './limits/store';
 
 export { MailTriageLane, triageMail, type MailTriageDeps } from './mail/triage';
 
@@ -707,7 +719,36 @@ export {
 } from './tools/effect-claim';
 
 // Web search + fetch
-export * from './web/index';
+export { KITESURF_SESSION_ID, WEB } from './operations/web';
+
+export { createWebCodemodeProvider } from './tools/web-operations';
+
+export { restBrowserRunAccess, type BrowserRunQuickActions, type QuickActionTransport } from './web/browser-run';
+
+export {
+  browserSessions, closeWorkspaceBrowserSessions, initBrowserSessionTable, ownsBrowserSession,
+  type BrowserSessionBinding,
+} from './web/browser-sessions';
+
+export { MOVIE_CUES, MOVIE_END, type LandingMovieHandle } from './web/landing-movie-contract';
+
+export { stripBase64Images } from './web/markdown';
+
+export { buildCfWebSearchProvider } from './web/provider-factory';
+
+export {
+  createDefaultWebSearchProvider, type BrowserSessions, type WebSearchProvider, type WebSearchResponse,
+} from './web/provider';
+
+export {
+  bindingWebSearch, chainWebSearch, type DeploymentSearch, type WebSearch, type WebSearchChain,
+} from './web/search-chain';
+
+export {
+  routeWebSearch, USER_WEB_SEARCH_PATH, USER_WEB_SEARCH_TEST_PATH, WebSearchRequestSchema,
+} from './web/search-route';
+
+export { assertSafeUrl, isSafeUrl, UnsafeUrlError } from './web/url-safety';
 
 // Codemode-only, no native tool: see tools/builtins.ts.
 
@@ -1269,22 +1310,267 @@ export {
 export { contextFill, type ContextFill } from './read-models/context-fill';
 
 // EventsHub. Spec: docs/ARCHITECTURE.md "Events and ingress".
-export * from './events/hub/index';
+export { eventContentPath, spillEventContent } from './events/hub/content-spill';
 
-export * from './events/ingress/index';
+export { knownTimeZone, nextAlarmTime, nextCronFire } from './events/hub/cron';
 
-export * from './subagents/ingress';
+export { buildDrainBatch } from './events/hub/drain';
+
+export { boundEventQuery, EventLog, type QueryFilter } from './events/hub/log';
+
+export { dispatchEmailRepliesForTurn, ReplyChannelStore, type ReplyDispatcher } from './events/hub/reply-channel';
+
+export { initEventsHubTables } from './events/hub/schema';
+
+export { TriggerRegistry, type AlarmScheduler } from './events/hub/triggers';
+
+export {
+  EVENT_VARIANTS, SUBAGENT_REPORT_HANDOFF_MAX_CHARS, SUBAGENT_REPORT_STATUSES, type EventVariant,
+  type IngressDescriptor, type KinuEvent, type PeerAgentPayload, type ReplyChannelKind, type SubagentReportHandoff,
+  type SubagentReportPayload, type SubagentReportStatus, type TimerPayload, type TriggerRow, type TrustLevel,
+} from './events/hub/types';
+
+export { redactPayload, renderForLLM } from './events/hub/visibility';
+
+export { acceptContainerEvent, type ContainerEventResult } from './events/ingress/container';
+
+export {
+  admitMailArrival, boundedMessageId, boundedReferences, EMAIL_INBOUND_RATE_PER_MIN, EmailInbox,
+  inboundEmailDropNotice, planOwnerNotification, type EmailInboxDeps, type MailAdmission, type MailArrival,
+} from './events/ingress/email';
+
+export { PeerHub, type PeerMessage, type ReceiveResult } from './events/ingress/peer';
+
+export {
+  DEFAULT_RATE_LIMIT_PER_MIN, initWebhookRateLimitTables, normalizeWebhookRateLimitPerMin,
+  tryConsumeWebhookRateLimit,
+} from './events/ingress/rate-limit';
+
+export { createWebhookSecretStore, type WebhookSecretStore } from './events/ingress/secrets';
+
+export {
+  cancelTrigger, createTimerTrigger, dailyTimeOf, fireDueTriggers, listTriggers, retimeDailyTrigger,
+  type CancelTriggerResult, type TimerTrigger, type TimerTriggerOpts, type TriggerView,
+} from './events/ingress/triggers';
+
+export {
+  checkAnswerOf, checkWatcher, parkWatcher, resumeWatcher, WatchClaims, watchProviders, type RunCheck,
+  type WatchOutcome,
+} from './events/ingress/watch';
+
+export {
+  acceptWebhookDelivery, checkPendingDelivery, forgetClaims, freshWebhookSecret, gitHubPushOf,
+  initWebhookIngressTables, keepPushHook, PendingDeliverySchema, registerDurableWebhook, registerPushWatcher,
+  type GitHubPush, type PendingCheck, type PendingDelivery, type PushWatcher, type PushWatcherOpts,
+  type WebhookDelivery, type WebhookDeliveryResult,
+} from './events/ingress/webhook';
+
+export { type WatchCheck } from './types/watch';
+
+export {
+  publishSubagentReport, receiveSubagentEvent, type AdmittedSubagentReport, type SubagentEventResult,
+  type SubagentIngressDeps, type SubagentReportLedger,
+} from './subagents/ingress';
 
 // Swarm
-export * from './strategy/index';
+export { mergeProviderOptions, reasoningEffortOptions, workersAIEffortOption } from './providers/effort';
+
+export { type RatioProblem } from './strategy/exec-ratio';
+
+export { liveHead, LiveWorkers } from './strategy/live-workers';
+
+export { runNodeAgent, type HostedNodeSeat } from './strategy/node-agent';
+
+export {
+  facetHomeProvisioner, facetHomeReleaser, nodeWorkspace, type NodeHomeHost, type NodeIdentity, type NodeWorkspace,
+  type NodeWorkspaceProvisioner,
+} from './strategy/node-workspace';
+
+export { type ExplorationRecord, type Floor, type ObjectiveIdentity, type PublicationState } from './types/objective';
+
+export { NAMED_SWARM_PRESETS } from './types/swarm';
 
 // Bench harness: pure math; the runner lives in scripts/bench.ts.
-export * from './bench/index';
+export {
+  assertLongHorizonSpec, buildLongHorizonAsks, buildLongHorizonQuestions, decodeLongHorizonSpec,
+  encodeLongHorizonSpec, generateLongHorizonEntries, generateLongHorizonFiles, LONGHORIZON_ANSWER_FILE,
+  LONGHORIZON_CORPUS_DIR, longHorizonAnswerMatches, longHorizonAsksLeakAnswer, longHorizonPartDir,
+  parseLongHorizonAnswerFile, renderLongHorizonAnswerFile, scoreLongHorizonAnswers, type LongHorizonSpec,
+} from './bench/longhorizon';
 
-export * from './curriculum/proposer';
+export {
+  benchConfigHash, buildBenchReport, buildGainReport, caseIsUnstable, decideBenchOutcome, GAIN_CALIBRATION,
+  renderBenchSummary, renderGainSummary, type BenchRunConfig, type GainTaskScore,
+} from './bench/report';
+
+export {
+  DEFAULT_SEALED_FRACTION, manifestHash, partitionCorpus, promptLeaksFix, SEAL_SALT, SealedSplit, splitOf, taskHash,
+  validateWithRetries, type BenchCorpus, type PartitionOptions, type SealedScorecard, type TaskValidation,
+} from './bench/split';
+
+export {
+  binomialTwoSidedP, computeGain, DEFAULT_ALPHA, floorPValue, fmtPp, minimumDetectableEffect,
+  minimumPairsForSignificance, normalQuantile, pairedBinaryComparison, pairedBootstrapCI, requiredPairs,
+  summarizeRepeats, unitHash, type PairedOutcome,
+} from './bench/stats';
+
+export {
+  AttemptOutcomeSchema, attemptPassed, DEFAULT_ATTEMPT_BUDGET, runOrder, type AttemptBudget, type AttemptOutcome,
+  type BenchCheck, type BenchTask, type CheckOutcome, type Solver, type SolverContext, type SolverResult,
+} from './bench/types';
+
+export { listProposedTasks, updateProposedTaskStatus } from './curriculum/proposer';
 
 // Providers. Secrets stay inside UserDO and never enter the provider layer.
-export * from './providers/index';
+export { createAIGatewayProvider } from './providers/ai-gateway';
+
+export {
+  ANTHROPIC_CRED_KEY, ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_MAX_BREAKPOINTS, createAnthropicProvider,
+  listAnthropicModels,
+} from './providers/anthropic';
+
+export {
+  armedWarms, CacheWarmingLane, CacheWarmStore, initCacheWarmTable, type CacheWarmArm, type CacheWarmSeams,
+} from './providers/cache-warming';
+
+export { catalogCredKey, catalogProviderOfKey, createModelsDevCatalogSource } from './providers/catalog';
+
+export {
+  CHATGPT_PASTE_REDIRECT, chatgptHostId, chatgptLoginIssuer, ChatGptPasteSignInSchema, chatgptRegistrationOf,
+  ChatGptRegistrationSchema, finishChatGptPasteSignIn, startChatGptPasteSignIn, type ChatGptPasteOutcome,
+} from './providers/chatgpt-sign-in';
+
+export { CHATGPT_CRED_KEY, CHATGPT_DEFAULT_MODEL, CHATGPT_USAGE_URL, createChatGptProvider } from './providers/chatgpt';
+
+export {
+  CLAUDE_OAUTH_CALLBACK_PORT, claudeCodeFrom, claudeSignInRefusal, createClaudeOAuthClient, startClaudeSignIn,
+} from './providers/claude-oauth';
+
+export { CLAUDE_CRED_KEY, createClaudeProvider } from './providers/claude';
+
+export { createCloudflareAIFetch, errorResponse, mapGatewayError } from './providers/cloudflare-ai-fetch';
+
+export {
+  accountIdFromCloudflareCredential, CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY,
+  CLOUDFLARE_WEB_SEARCH_CRED_KEY, CLOUDFLARE_WORKERS_AI_SCOPES, cloudflareAccountAPIRoot,
+  cloudflareAccountsFromCredential, cloudflareAIGatewayId, cloudflareTokenToCredential, cloudflareWorkersAIBaseURL,
+  fetchCloudflareAIGateways, grantsWebSearch, isCloudflareAIGatewayId, isCloudflareCredentialExpiring,
+  isCloudflareCredentialUsable, readJsonObject, refreshCloudflareCredential, scopeList, storedCredentialKey,
+  withCloudflareAccount, type CloudflareAccount, type CloudflareAIGatewaySummary, type CloudflareTokenPayload,
+} from './providers/cloudflare-oauth';
+
+export { CODEX_TOKEN_URL, createCodexOAuthClient, decodeCodexAccountId } from './providers/codex-oauth';
+
+export { CODEX_CRED_KEY, createCodexProvider } from './providers/codex';
+
+export {
+  bindingDecisionRun, createDecisionPort, DECISION_MODELS, decisionPortOf, DEFAULT_DECISION_MODEL, restDecisionRun,
+  type DecisionRun,
+} from './providers/decision-model';
+
+export { asFetchFunction, copyHeaders, plainFetch } from './providers/fetch-shim';
+
+export { createGatewayBindingFetch, parseGatewayTarget, type GatewayTarget } from './providers/gateway-binding-fetch';
+
+export {
+  fetchGatewayCredits, GatewayCreditsReadSchema, gatewayCreditsUrl, type GatewayCreditsRead,
+} from './providers/gateway-credits';
+
+export {
+  GOOGLE_CONNECTION, GOOGLE_CONNECTION_SCOPES, GOOGLE_OAUTH_CRED_KEY, googleConnectionClient,
+  googleCredentialExpiring, googleGrantOf, GoogleTokenSchema, googleTokenToCredential, refreshGoogleCredential,
+  type GoogleConnectionEnv, type GoogleGrant,
+} from './providers/google-connection';
+
+export {
+  countRequestInputTokens, NO_COUNT_ENDPOINT, type CountableRequest, type InputTokenCount,
+} from './providers/input-tokens';
+
+export {
+  createModelRegistry, defaultSpecFor, normalizeModelSpec, specModelInfo, type SpecDefault,
+} from './providers/model-registry';
+
+export {
+  ModelTestResultSchema, modelTestText, providerName, testModel, type ModelTestResult,
+} from './providers/model-test';
+
+export {
+  getModelsDevProvider, listModelsDevProviderModels, listModelsDevProviders, modelsDevCompatBaseURL,
+  type ModelsDevProviderInfo,
+} from './providers/models-dev';
+
+export {
+  revocationEndpointFor, revokeOAuthGrant, revokingProviderOf, type DisconnectOutcome,
+} from './providers/oauth-revocation';
+
+export { OAuthTokenError } from './providers/oauth-token-error';
+
+export {
+  createNamedEndpointSource, createOpenAICompatProvider, discoverOpenAICompatibleModels,
+} from './providers/openai-compat';
+
+export { createOpenAIProvider, OPENAI_CRED_KEY, OPENAI_DEFAULT_MODEL } from './providers/openai';
+
+export { createOpenRouterProvider, OPENROUTER_CRED_KEY, OPENROUTER_DEFAULT_MODEL } from './providers/openrouter';
+
+export { ProviderPacer } from './providers/pacing';
+
+export {
+  CLOUD_PROXY_PROVIDER_IDS, cloudProxyBaseURL, createProviderProxyFetch, isProxyDeniedCredentialKey,
+  PROVIDER_PROXY_PATH, providerProxyBaseURL, providerProxyCredentialsURL, providerProxyForwardURL, PROXY_CRED_HEADER,
+  PROXY_TARGET_HEADER, proxyAuthResolution, proxyTargetAllowed, USER_AI_PROXY_PATH, USER_AI_RUN_PATH,
+  type CloudProxyProviderId,
+} from './providers/proxy';
+
+export { quotaWindowText, type CallAccount } from './providers/quota';
+
+export {
+  declaredReasoningEffort, isReasoningEffort, nextReasoningEffort, offeredReasoningEfforts, REASONING_EFFORTS,
+  ReasoningEffortSchema, type ReasoningEffort,
+} from './providers/reasoning-effort';
+
+export {
+  accountDeps, createProviderRegistry, providerAccounts, type ModelMenu, type ProviderAccounts, type ProviderFailure,
+  type ProviderRegistry,
+} from './providers/registry';
+
+export { relayRefusal } from './providers/relay-policy';
+
+export {
+  CLAUDE_LOGIN_ISSUER, heldLogin, renewableLogin, rotateLogin, subscriptionIssuer, usableLogin, type LoginRenewal,
+  type SubscriptionIssuer,
+} from './providers/subscription-login';
+
+export { isPortableToolCallId, toolCallIdFor } from './providers/tool-call-id';
+
+export {
+  formatModelSpec, parseModelSpec, refusedLogin, specOn, specProvider, specWithoutAccount, splitSpec,
+  type AuthRequest, type AuthResolution, type AuthResolver, type CacheRetention, type CatalogShelf,
+  type GatewayRunRequest, type ModelAffinity, type ModelAttemptInfo, type ModelCallDeps, type ModelInfo,
+  type ModelInputModality, type ModelPricing, type ModelProvider, type ModelSpec, type ProviderDeps,
+  type ProviderEnv, type ProviderInfo, type ProviderWaitInfo, type WorkersAIBinding, type WorkersAIRunBinding,
+  type WorkersAIRunOptions,
+} from './providers/types';
+
+export {
+  LimitCache, limitHeading, limitLines, limitReadable, limitUnreadText, limitWindowText, type LimitReport,
+  type LimitSource, type LimitWindow,
+} from './providers/usage-limits';
+
+export {
+  catalogModelInfo, describeProviderError, formatContextWindow, mapModelList, providerFailureFacts, settleModelList,
+  toProviderError,
+} from './providers/util';
+
+export {
+  DEFAULT_WEB_SEARCH_CHAIN, WEB_SEARCH_PROVIDER_IDS, WEB_SEARCH_PROVIDERS, WebSearchRouteSchema,
+  type WebSearchBilling, type WebSearchProviderId, type WebSearchRoute,
+} from './providers/web-search';
+
+export {
+  actorAffinity, DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, SESSION_AFFINITY_HEADER,
+  sessionAffinityOf, WORKERS_AI_MODEL_ID_PREFIX, WORKERS_AI_PROVIDER_ID, workersAiSpec,
+} from './providers/workers-ai';
 
 export type { Credential, OAuthCredential, OpenAICompatCredential } from './credentials/store';
 
@@ -2153,8 +2439,6 @@ export {
 } from './read-models/background-event';
 
 export { turnFailureFacts } from './read-models/turn-failure-facts';
-
-export { providerName } from './providers/model-test';
 
 export { namedImages, type ImageMachine, type NamedImage } from './read-models/chat-images';
 
