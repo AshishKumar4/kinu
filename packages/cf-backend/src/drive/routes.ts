@@ -10,7 +10,7 @@ import {
 import { KinuError } from '@kinu.run/core/obs';
 import type { UserDO } from '../user/user-do';
 import type { DriveAnswer } from '../user/drive';
-import { ownerGate, type ApiVariables, type FamilyEnv } from '../api/context';
+import { framedDownload, ownerGate, type ApiVariables, type FamilyEnv } from '../api/context';
 import { idempotent } from '@nimbus-sh/fabric/do-calls.js';
 import { logDoCallRetry } from '../obs/do-call-retry';
 
@@ -145,5 +145,5 @@ function download(ctx: DriveContext, path: string, asAttachment: boolean): Promi
       return chunk.ok ? chunk.value.bytes : new KinuError(chunk.code, chunk.error);
     },
     abort: (transferId) => ctx.object.drive_abortDownload(ctx.owner, transferId),
-  }, ({ name }) => fileResponseHeaders(`/${name}`, asAttachment || name.endsWith('.zip')));
+  }, (body, { name, size }) => framedDownload(fileResponseHeaders(`/${name}`, asAttachment || name.endsWith('.zip')), body, size));
 }

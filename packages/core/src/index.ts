@@ -2273,7 +2273,9 @@ export {
   planOfSurface,
   planSurface,
   pruneSlateReloads,
+  siteSurface,
   surfaceHasContent,
+  surfacePreviewTarget,
 } from './read-models/surface-presence';
 
 export {

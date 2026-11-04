@@ -755,7 +755,7 @@ async function openSlateThread(page: Page, origin: string, viewport: { width: nu
 
 async function openFromChat(page: Page, slate: string): Promise<void> {
   const cards = await page.$$(`[data-slate-inline="${slate}"]`);
-  const open = await cards.at(-1)?.$(`button[aria-label="Open ${slate} in the work surface"]`);
+  const open = await cards.at(-1)?.$('[data-open-inspector]');
 
   if (open === null || open === undefined) throw new Error(`the last ${slate} preview offers no way to open it`);
   await open.click();
@@ -816,6 +816,43 @@ describe('inline slate previews in the chat', () => {
         expect((await sitePreviews(page))[0]).toEqual(['8130', true, null, false]);
         await page.click('[data-site-preview] button[aria-expanded="true"]');
         expect((await sitePreviews(page))[0]).toEqual(['8130', false, 'Updated below', false]);
+      } finally { await page.close(); }
+    });
+  });
+
+  test("a site's preview opens in the inspector from its bar, and folds in the chat while the inspector shows it", async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      try {
+        // 8130 is the computer's preview, which the inspector can show; 8131 is no preview of this workspace's.
+        await page.setViewport({ width: 1280, height: 860 });
+        await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=sites`, { waitUntil: 'networkidle0' });
+        await page.evaluate(() => { document.documentElement.dataset.previewArrived = '1'; });
+        await page.waitForFunction(() => document.querySelectorAll('[data-site-preview]').length === 4);
+        // Only the live card, the newest of its site, is unfolded and offers it.
+        await page.waitForSelector('[data-site-preview] [data-open-inspector]');
+        await drawn(page);
+        const offered = await page.$$eval('[data-site-preview]', (cards) => cards.map((card) => card.querySelector('[data-open-inspector]') !== null));
+
+        const cards = await page.$$('[data-site-preview]');
+        const asked = await cards.at(-1)?.evaluate((card) => card.getAttribute('data-site-preview'));
+        await (await cards.at(-1)?.$('[data-open-inspector]'))?.click();
+        // The inspector shows the address the chat's preview showed, not its port's root.
+        const opened = await (await page.waitForSelector('iframe[title="Arrived app"]'))?.evaluate((frame) => frame.getAttribute('src'));
+        await drawn(page);
+        const shown = await sitePreviews(page);
+
+        // Moved off it, the chat's preview comes back.
+        await page.click('nav[aria-label="Workspace"] button[aria-label="Work"]');
+        await drawn(page);
+
+        expect({ offered, opened: opened === asked, shown, back: (await sitePreviews(page)).at(-1) }).toEqual({
+          offered: [false, false, false, true],
+          opened: true,
+          shown: [['8130', false, 'Updated below', false], ['8131', true, null, false], ['8130', false, 'Updated below', true], ['8130', false, 'Shown in the inspector', false]],
+          back: ['8130', true, null, false],
+        });
       } finally { await page.close(); }
     });
   });
