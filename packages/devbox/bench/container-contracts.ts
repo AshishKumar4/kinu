@@ -92,7 +92,7 @@ async function toolsRefresh(container: Container, pin: string): Promise<void> {
   await native(container, `mv ${store}/held.tgz ${store}/devbox-tools/${pin}.tgz`);
   // A package refresh whose apt fails once its files are placed leaves the box marked, as a cut-short full install does.
   await native(container, `set -e; mkdir -p ${SCRATCH}/no-apt; printf '#!/bin/sh\\nexit 100\\n' > ${SCRATCH}/no-apt/apt-get; chmod +x ${SCRATCH}/no-apt/apt-get; `
-    + `dpkg -r ripgrep >/dev/null; printf previous > ${TOOLS_STAMP}; `
+    + `printf previous > ${TOOLS_STAMP}; `
     + `sed -i -E 's#^[0-9a-f]{64}(  usr/local/lib/devbox/debs/(Packages|ripgrep_[^ ]*\\.deb))$#${'0'.repeat(64)}\\1#' ${TOOLS_MANIFEST}`);
   const halted = await hold(refreshTools({ ...ports, exec: async (command: string) => run(`PATH=${SCRATCH}/no-apt:$PATH\n${command}`) }));
 
