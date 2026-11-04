@@ -70,10 +70,10 @@ describe('the providers list', () => {
       await page.goto(`${origin}/gallery.html?frame=usersettingsstate&section=providers&cloudflare=off`, { waitUntil: 'networkidle0' });
       await page.waitForSelector(`${entry} [data-connect-cloudflare]`);
 
-      const opened = page.browser().waitForTarget((target) => target.opener() === page.target());
+      const opened = page.browser().waitForTarget((target) => target.opener() === page.target(), { timeout: 0 });
       await page.click(`${entry} [data-connect-cloudflare]`);
       const target = await opened;
-      const sent = new URL((await page.browser().waitForTarget((each) => each === target && each.url() !== 'about:blank')).url());
+      const sent = new URL((await page.browser().waitForTarget((each) => each === target && each.url() !== 'about:blank', { timeout: 0 })).url());
       const helper = await target.page();
 
       if (helper === null) throw new Error('the connect opened no tab');
@@ -104,7 +104,7 @@ describe('the providers list', () => {
       const { windowId } = await cdp.send('Browser.getWindowForTarget');
       await cdp.send('Browser.setWindowBounds', { windowId, bounds: { left: 300, top: 100, width: 1100, height: 900 } });
 
-      const opened = page.browser().waitForTarget((target) => target.opener() === page.target());
+      const opened = page.browser().waitForTarget((target) => target.opener() === page.target(), { timeout: 0 });
       await page.click(`${entry} [data-connect-cloudflare]`);
       const helper = await (await opened).page();
 

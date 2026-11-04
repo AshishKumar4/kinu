@@ -29,8 +29,9 @@
 
 import * as v from 'valibot';
 import { parseJsonc } from './jsonc';
+import { moduleEdges } from './module-edges';
 import { isParseable } from './sources';
-import { IMPORT_CANDIDATES, collapsePath } from './syntax';
+import { IMPORT_CANDIDATES, collapsePath, parse } from './syntax';
 import { workspaceGlobMatches } from './undeclared-imports';
 
 export interface PackageDir {
@@ -251,4 +252,72 @@ export function walkModules(
       pending.push({ file: edge.path, chain: [...next.chain, `${next.file}:${String(edge.line)}`] });
     }
   }
+}
+
+/** What a closure resolves against: the tracked files, the workspace, the aliases, and a reader for a file's text. */
+export interface ClosureRequest {
+  readonly universe: ReadonlySet<string>;
+  readonly workspace: ReadonlyMap<string, PackageDir>;
+  readonly aliases: readonly Alias[];
+  readonly read: (file: string) => string;
+}
+
+/** The files one module loads at runtime, each with the line naming it, and the edges it could not follow. */
+export interface RuntimeImports {
+  readonly files: readonly { readonly path: string; readonly line: number }[];
+  readonly unfollowed: readonly string[];
+}
+
+/** What a closure walk reached, and the edges it could not follow to a file. */
+export interface RuntimeGraph {
+  readonly files: ReadonlySet<string>;
+  /** `file:line specifier` for a computed import, a query the resolver does not model, or a package entered only by its
+   *  export conditions: loaded at runtime, but by no file the walk can name. */
+  readonly unfollowed: readonly string[];
+}
+
+/** The parseable files one file loads at runtime, by value edges only: a type import is erased and a text import is
+ *  data. Resolved strictly; a local edge naming no file throws, since a dropped edge shrinks a closure in silence. */
+export function runtimeImports(file: string, request: ClosureRequest): RuntimeImports {
+  const { edges, computed } = moduleEdges(parse(file, request.read(file)));
+  const unfollowed = computed.map((line) => `${file}:${String(line)} a computed import`);
+
+  const files = edges.filter((edge) => edge.kind === 'value').flatMap((edge) => {
+    const next = resolveSpecifier({ ...request, specifier: edge.specifier, from: file, strict: true });
+
+    if (next.kind === 'unresolved' && (edge.specifier.includes('?') || edge.specifier.includes('#'))) {
+      unfollowed.push(`${file}:${String(edge.line)} ${edge.specifier}`);
+
+      return [];
+    }
+
+    if (next.kind === 'unresolved') throw new Error(next.why);
+
+    if (next.kind === 'package') unfollowed.push(`${file}:${String(edge.line)} ${edge.specifier} (${next.directory})`);
+
+    return next.kind === 'file' ? [{ path: next.path, line: edge.line }] : [];
+  });
+
+  return { files, unfollowed };
+}
+
+/** Every parseable file `entries` load at runtime that `enters` admits, entries included. A file `enters` refuses is
+ *  neither held nor walked through. */
+export function runtimeClosure(
+  entries: readonly string[], request: ClosureRequest, enters: (file: string) => boolean = () => true,
+): RuntimeGraph {
+  const files = new Set<string>();
+  const unfollowed: string[] = [];
+
+  walkModules(entries, (file) => {
+    if (!enters(file)) return [];
+    files.add(file);
+    const imports = runtimeImports(file, request);
+
+    unfollowed.push(...imports.unfollowed);
+
+    return imports.files;
+  });
+
+  return { files, unfollowed };
 }

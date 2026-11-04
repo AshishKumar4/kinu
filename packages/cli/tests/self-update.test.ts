@@ -204,7 +204,7 @@ describe('refreshCliTree stages, verifies and swaps', () => {
     const platform = process.platform === 'darwin' ? 'darwin' : 'linux';
 
     // A live pid, this test's own, under a start that was never its.
-    symlinkSync(encodeLockOwner({ version: 'v1', platform, token: randomUUID(), pid: process.pid, identity: 'another-start' }), join(home, 'cli', '.refresh.lock'));
+    symlinkSync(encodeLockOwner({ version: 'v1', platform, token: randomUUID(), pid: process.pid, identity: 'another-start' }), join(home, 'cli', '.lock'));
 
     expect(await refresh(home, stub.origin)).toBeNull();
     expect(currentCli(home)).toBe(cliSource(SERVED));

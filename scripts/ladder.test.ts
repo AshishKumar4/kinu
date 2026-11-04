@@ -367,7 +367,7 @@ describe('the ladder measures something', () => {
     expect(reaching.size).toBeGreaterThan(30);
     expect(corpus.has(censusFile)).toBeTrue();
 
-    for (const file of ['tests/browser/computed-style.test.ts', 'tests/browser/provider-wait-ux.test.ts', 'tests/live-model/live-smoke.test.ts']) {
+    for (const file of ['tests/browser/computed-style.test.ts', 'tests/browser/models-section-ux.test.ts', 'tests/live-model/live-smoke.test.ts']) {
       expect(reaching.has(file), `${file} drives a browser and the closure does not reach it`).toBeTrue();
     }
 

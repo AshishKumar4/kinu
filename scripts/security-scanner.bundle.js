@@ -377,7 +377,6 @@ function installRefusal(root, command = parentCommand) {
 }
 
 var ADVISORY_ENDPOINT = "https://registry.npmjs.org/-/npm/v1/security/advisories/bulk";
-var FEED_TIMEOUT_MS = 20000;
 var REPORT_ENV = "KINU_ADVISORY_REPORT";
 var REPORT_SENTINEL = "::kinu-advisory-report::";
 var SEVERITIES = ["low", "moderate", "high", "critical"];
@@ -411,8 +410,7 @@ async function queryAdvisories(packages, endpoint = ADVISORY_ENDPOINT) {
     response = await fetch(endpoint, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(FEED_TIMEOUT_MS)
+      body: JSON.stringify(body)
     });
   } catch (error) {
     return {

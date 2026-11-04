@@ -40,11 +40,11 @@ function drawnRows(page: Page): Promise<{ name: string; text: string; buttons: n
  *  tab. The fixture's addresses are this origin's, so nothing past it loads; the tab is closed once it is sent. The
  *  sign-in itself, approved, declined and run again, runs through the Worker in live-app-connect.test.ts. */
 async function signInTab(page: Page, selector: string): Promise<string> {
-  const opened = page.browser().waitForTarget((target) => target.opener() === page.target());
+  const opened = page.browser().waitForTarget((target) => target.opener() === page.target(), { timeout: 0 });
 
   await page.click(selector);
   const target = await opened;
-  const sent = await page.browser().waitForTarget((each) => each === target && each.url() !== 'about:blank');
+  const sent = await page.browser().waitForTarget((each) => each === target && each.url() !== 'about:blank', { timeout: 0 });
 
   await (await target.page())?.close();
 
@@ -316,7 +316,7 @@ describe('MCP presets', () => {
 
       try {
         await page.waitForSelector(`${row} [data-plugin-add]`);
-        const opened = page.browser().waitForTarget((target) => target.opener() === page.target());
+        const opened = page.browser().waitForTarget((target) => target.opener() === page.target(), { timeout: 0 });
 
         await page.click(`${row} [data-plugin-add]`);
         const helper = await (await opened).page();
@@ -335,7 +335,7 @@ describe('MCP presets', () => {
         // A retry begun and abandoned (its tab closed with no end): the earlier failure stays, pending and after
         // (Sol's final review: it was cleared as the retry began).
         const signInAgain = async (runs: number) => {
-          const retryTarget = page.browser().waitForTarget((target) => target.opener() === page.target());
+          const retryTarget = page.browser().waitForTarget((target) => target.opener() === page.target(), { timeout: 0 });
 
           await pressRowMenu(page, row, '[data-plugin-sign-in]');
           const tab = await (await retryTarget).page();

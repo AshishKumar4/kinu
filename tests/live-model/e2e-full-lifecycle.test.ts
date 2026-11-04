@@ -184,7 +184,7 @@ describe('E2E Full Lifecycle', () => {
     // The extracted integer, not a substring: any '4' anywhere in the reply
     // would satisfy `toContain`, including one from the question's echo.
     expect(finalIntegerAnswer(text)).toBe(4);
-  }, 120_000);
+  });
 
   // ── Step 4: Chat turn 2 — should use eval ──────────
 
@@ -211,7 +211,7 @@ describe('E2E Full Lifecycle', () => {
     expect(said.map((line) => tolerate(() => extractJsonObject(line), 'malformed-input')))
       .toContainEqual({ 7: true, 10: false, 13: true });
     expect(finalIntegerAnswer(text)).toBe(2);
-  }, 300_000);
+  });
 
   // ── Step 5: Chat turn 3 — persist a memory note ───────────────
 
@@ -234,7 +234,7 @@ describe('E2E Full Lifecycle', () => {
       + 'holds the fact, so nothing was persisted for step 6 to find')
       .not.toBeNull();
     console.log(`  Stored via memory.${wrote === undefined ? '?' : opName(wrote.args)} in ${String(where)}`);
-  }, 120_000);
+  });
 
   // ── Step 6: Close and reopen with openWorkspaceCLI ──────────────────
 

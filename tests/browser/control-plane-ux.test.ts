@@ -271,7 +271,7 @@ function workspacesFixture(over: Record<string, JsonValue>): Answer {
  *  for the panel grid the read produces. Network idle is not readiness — the
  *  intercepted answer settles before React commits. */
 async function openWorkspaceRow(browserPage: Page): Promise<void> {
-  await browserPage.locator('tbody tr ::-p-text(api-worker)').setTimeout(15_000).click();
+  await browserPage.locator('tbody tr ::-p-text(api-worker)').click();
   // Lowercased, because `innerText` is RENDERED text and the panel titles carry
   // an `uppercase` class — the same reason the assertions below compare in lower
   // case rather than pinning a CSS transform.

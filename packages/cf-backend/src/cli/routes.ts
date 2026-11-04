@@ -882,26 +882,75 @@ die() {
   exit 1
 }
 
-# The one lock every writer of the CLI tree takes (this launcher, 'kinu
-# update' and its detached child), as a directory: mkdir creates it atomically
-# or refuses. The holder's pid is inside, so a lock a dead process left is
-# taken over rather than waited on. Released on every exit, die included.
+# The one lock every writer of the CLI tree takes (this launcher, 'kinu update'
+# and its detached child), in the record cli-backend's tryLock writes: a symlink
+# naming the protocol, platform, a token, the holder's pid and that process's
+# generation, made atomically or refused. A holder the kernel proves gone (its
+# pid absent, or running another generation) is taken over, never waited on.
 CLI_LOCK="$CLI_ROOT/.lock"
+CLI_LOCK_RECORD=""
+# A pid's generation as the CLI reads it (process-generation.ts): Linux's start
+# ticks (/proc/<pid>/stat field 22), macOS's ps lstart hashed as base64url.
+# Exits 1 for no such process and 2 where the generation cannot be read, so an
+# unreadable holder is never taken for a gone one.
+process_generation() {
+  if [ "$KINU_OS" = linux ]; then
+    [ -e "/proc/$1" ] || return 1
+    stat_line="$(cat "/proc/$1/stat" 2>/dev/null)" || { [ -e "/proc/$1" ] && return 2; return 1; }
+    set -- \${stat_line##*) }
+    [ -n "\${20}" ] || return 2
+    printf '%s' "\${20}"
+  else
+    lstart="$(LC_ALL=C LANG=C /bin/ps -p "$1" -o lstart= 2>/dev/null)"
+    case $? in 0) ;; 1) return 1 ;; *) return 2 ;; esac
+    lstart="\${lstart#"\${lstart%%[![:space:]]*}"}"
+    lstart="\${lstart%"\${lstart##*[![:space:]]}"}"
+    [ -n "$lstart" ] || return 2
+    printf '%s' "$lstart" | shasum -a 256 | cut -c1-64 | xxd -r -p | base64 | tr '+/' '-_' | tr -d '=\n'
+  fi
+}
+lock_token() {
+  if [ -r /proc/sys/kernel/random/uuid ]; then cat /proc/sys/kernel/random/uuid; else uuidgen | tr 'A-F' 'a-f'; fi
+}
 take_cli_lock() {
   mkdir -p "$CLI_ROOT"
+  own="$(process_generation $$)" || return 1
+  CLI_LOCK_RECORD="v1 $KINU_OS $(lock_token) $$ $own"
   attempt=0
   while [ "$attempt" -lt 2 ]; do
-    if mkdir "$CLI_LOCK" 2>/dev/null; then
-      echo "$$" > "$CLI_LOCK/pid"
-      trap 'rm -rf "$CLI_LOCK"' EXIT
+    attempt=$((attempt + 1))
+    # A real directory is an earlier launcher's lock (its pid inside), and ln would make the link inside it: taken
+    # over only once that pid names no process.
+    if [ -d "$CLI_LOCK" ] && [ ! -L "$CLI_LOCK" ]; then
+      old_pid="$(cat "$CLI_LOCK/pid" 2>/dev/null || true)"
+      # No pid yet (the earlier launcher writes it after making the directory) is a live holder's.
+      case "$old_pid" in ''|*[!0-9]*) return 1 ;; esac
+      process_generation "$old_pid" >/dev/null
+      [ $? -eq 1 ] || return 1
+      rm -rf "$CLI_LOCK"
+      continue
+    fi
+    if ln -s "$CLI_LOCK_RECORD" "$CLI_LOCK" 2>/dev/null; then
+      trap 'release_cli_lock' EXIT
       return 0
     fi
-    holder="$(cat "$CLI_LOCK/pid" 2>/dev/null || true)"
-    if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then return 1; fi
-    rm -rf "$CLI_LOCK"
-    attempt=$((attempt + 1))
+    held="$(readlink "$CLI_LOCK" 2>/dev/null || true)"
+    set -- $held
+    # Another platform's record, or one this reads no protocol in, is never proven abandoned.
+    [ "$#" -eq 5 ] && [ "$1" = v1 ] && [ "$2" = "$KINU_OS" ] || return 1
+    current="$(process_generation "$4")"
+    case $? in
+      1) ;;
+      0) [ "$current" = "$5" ] && return 1 ;;
+      *) return 1 ;;
+    esac
+    [ "$(readlink "$CLI_LOCK" 2>/dev/null || true)" = "$held" ] && rm -f "$CLI_LOCK"
   done
   return 1
+}
+release_cli_lock() {
+  [ "$(readlink "$CLI_LOCK" 2>/dev/null || true)" = "$CLI_LOCK_RECORD" ] && rm -f "$CLI_LOCK"
+  return 0
 }
 
 # The release manifest is SIGNED at build with a key this deployment never
@@ -979,7 +1028,7 @@ refresh_cli() {
   mkdir -p "$CLI_ROOT"
   tmp="$(mktemp -d)"
   next="$CLI_ROOT/next-$$"
-  trap 'kill $DOWNLOADS 2>/dev/null || true; rm -rf "$tmp" "$next" "$CLI_LOCK"' EXIT
+  trap 'kill $DOWNLOADS 2>/dev/null || true; rm -rf "$tmp" "$next"; release_cli_lock' EXIT
   curl -fsSL "$MANIFEST_URL" -o "$tmp/kinu-version.json" & manifest_pid=$!
   curl -fsSL "$TARBALL_URL" -o "$tmp/cli.tar.gz" & tarball_pid=$!
   curl -fsSL "$RUNTIME_URL" -o "$tmp/runtime.tar.gz" & runtime_pid=$!
@@ -1073,7 +1122,7 @@ if take_cli_lock; then
   else
     check_launch
   fi
-  rm -rf "$CLI_LOCK"
+  release_cli_lock
   trap - EXIT
 fi
 [ -n "$KINU_BUN" ] || provide_bun

@@ -276,7 +276,7 @@ describe('Live Smoke — one real turn per backend', () => {
     } finally {
       await client.close();
     }
-  }, 300_000);
+  });
 
   hostedTest('signed-in web app: create, rename, run, inspect, and use mobile panels', async () => {
     if (!HOSTED) throw new Error('unreachable: hostedTest runs only with a worker target');
@@ -442,7 +442,7 @@ describe('Live Smoke — one real turn per backend', () => {
     } finally {
       await chrome.close();
     }
-  }, 600_000);
+  });
 
   /**
    * THE DEVICE REGISTRY READ, against the deployed Worker.
@@ -480,7 +480,7 @@ describe('Live Smoke — one real turn per backend', () => {
     // checked in both directions by the parse itself.
     const devices = v.parse(v.array(DeployedDeviceSchema), JSON.parse(body));
     console.log(`    deployed devices: ${String(devices.length)} row(s)`);
-  }, 60_000);
+  });
 
   liveTest('cli backend: one real turn through the local session spine', async () => {
     const dbPath = join(TEST_DIR, 'smoke.db');
@@ -556,6 +556,6 @@ describe('Live Smoke — one real turn per backend', () => {
 
       db.close();
     }
-  }, 300_000);
+  });
 });
 
