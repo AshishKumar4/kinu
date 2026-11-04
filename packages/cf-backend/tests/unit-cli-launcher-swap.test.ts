@@ -125,16 +125,35 @@ describe('the launcher launch check', () => {
     expect(existsSync(join(home, 'cli', 'prev'))).toBe(false);
   });
 
-  test('a launcher that cannot take the tree lock runs what is installed', async () => {
+  // `kinu update` and the launcher write one tree: while a refresh holds it, a launch runs what is installed and moves
+  // nothing, so neither renames a tree the other is reading.
+  test('a launcher run while a refresh holds the tree runs what is installed and swaps nothing', async () => {
     const { home, launcher } = await launcherHome();
-    cliTree(home, 'current', '1.0.0+old');
-    mkdirSync(join(home, 'cli', '.lock'), { recursive: true });
-    writeFileSync(join(home, 'cli', '.lock', 'pid'), `${String(process.pid)}\n`);
+    cliTree(home, 'current', '2.0.0+new');
+    cliTree(home, 'prev', '1.0.0+old');
 
-    const run = await launch(home, launcher, '--version');
-    expect(run.exitCode).toBe(0);
-    expect(run.stdout).toBe('1.0.0+old');
-    expect(existsSync(join(home, 'cli', '.lock'))).toBe(true);
+    const refresh = Bun.spawn({
+      cmd: [process.execPath, '-e', [
+        `import { refreshCliTree } from ${JSON.stringify(resolve(import.meta.dir, '../../cli/src/self-update.ts'))};`,
+        // Its download never answers: the refresh holds the tree for as long as this test needs.
+        `await refreshCliTree('http://127.0.0.1:9', '3.0.0+served', { fetchImpl: () => { console.log('fetching'); return new Promise(() => {}); } });`,
+      ].join('\n')],
+      env: { HOME: home, KINU_HOME: home, PATH: process.env.PATH ?? '/usr/bin:/bin' },
+      stdout: 'pipe',
+      stderr: 'ignore',
+    });
+
+    try {
+      // The refresh has the tree once it asks for the release.
+      expect(new TextDecoder().decode((await refresh.stdout.getReader().read()).value)).toContain('fetching');
+
+      const run = await launch(home, launcher, 'list');
+      expect(run).toEqual({ stdout: 'ran 2.0.0+new list', stderr: '', exitCode: 0 });
+      expect(existsSync(join(home, 'cli', 'prev'))).toBe(true);
+    } finally {
+      refresh.kill('SIGKILL');
+      await refresh.exited;
+    }
   });
 
   test('the launcher no longer intercepts update: the installed CLI owns it', async () => {

@@ -882,26 +882,54 @@ die() {
   exit 1
 }
 
-# The one lock every writer of the CLI tree takes (this launcher, 'kinu
-# update' and its detached child), as a directory: mkdir creates it atomically
-# or refuses. The holder's pid is inside, so a lock a dead process left is
-# taken over rather than waited on. Released on every exit, die included.
+# The one lock every writer of the CLI tree takes (this launcher, 'kinu update'
+# and its detached child), in the record cli-backend's tryLock writes: a symlink
+# naming the protocol, platform, a token, the holder's pid and that process's
+# generation, made atomically or refused. A holder the kernel proves gone (its
+# pid absent, or running another generation) is taken over, never waited on.
 CLI_LOCK="$CLI_ROOT/.lock"
+CLI_LOCK_RECORD=""
+# A pid's generation as the CLI reads it: Linux's start ticks (/proc/<pid>/stat
+# field 22), macOS's ps lstart hashed as base64url; empty for no such process.
+process_generation() {
+  if [ "$KINU_OS" = linux ]; then
+    stat_line="$(cat "/proc/$1/stat" 2>/dev/null)" || return 0
+    set -- \${stat_line##*) }
+    printf '%s' "\${20}"
+  else
+    lstart="$(LC_ALL=C LANG=C /bin/ps -p "$1" -o lstart= 2>/dev/null)" || return 0
+    lstart="\${lstart#"\${lstart%%[![:space:]]*}"}"
+    lstart="\${lstart%"\${lstart##*[![:space:]]}"}"
+    [ -n "$lstart" ] || return 0
+    printf '%s' "$lstart" | shasum -a 256 | cut -c1-64 | xxd -r -p | base64 | tr '+/' '-_' | tr -d '=\n'
+  fi
+}
+lock_token() {
+  if [ -r /proc/sys/kernel/random/uuid ]; then cat /proc/sys/kernel/random/uuid; else uuidgen | tr 'A-F' 'a-f'; fi
+}
 take_cli_lock() {
   mkdir -p "$CLI_ROOT"
+  CLI_LOCK_RECORD="v1 $KINU_OS $(lock_token) $$ $(process_generation $$)"
   attempt=0
   while [ "$attempt" -lt 2 ]; do
-    if mkdir "$CLI_LOCK" 2>/dev/null; then
-      echo "$$" > "$CLI_LOCK/pid"
-      trap 'rm -rf "$CLI_LOCK"' EXIT
+    # A real directory there is no record of this protocol, and ln would make the link inside it.
+    if [ ! -d "$CLI_LOCK" ] && ln -s "$CLI_LOCK_RECORD" "$CLI_LOCK" 2>/dev/null; then
+      trap 'release_cli_lock' EXIT
       return 0
     fi
-    holder="$(cat "$CLI_LOCK/pid" 2>/dev/null || true)"
-    if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then return 1; fi
-    rm -rf "$CLI_LOCK"
+    held="$(readlink "$CLI_LOCK" 2>/dev/null || true)"
+    set -- $held
+    # Another platform's record, or one this reads no protocol in, is never proven abandoned.
+    [ "$#" -eq 5 ] && [ "$1" = v1 ] && [ "$2" = "$KINU_OS" ] || return 1
+    [ "$(process_generation "$4")" = "$5" ] && return 1
+    [ "$(readlink "$CLI_LOCK" 2>/dev/null || true)" = "$held" ] && rm -f "$CLI_LOCK"
     attempt=$((attempt + 1))
   done
   return 1
+}
+release_cli_lock() {
+  [ "$(readlink "$CLI_LOCK" 2>/dev/null || true)" = "$CLI_LOCK_RECORD" ] && rm -f "$CLI_LOCK"
+  return 0
 }
 
 # The release manifest is SIGNED at build with a key this deployment never
@@ -979,7 +1007,7 @@ refresh_cli() {
   mkdir -p "$CLI_ROOT"
   tmp="$(mktemp -d)"
   next="$CLI_ROOT/next-$$"
-  trap 'kill $DOWNLOADS 2>/dev/null || true; rm -rf "$tmp" "$next" "$CLI_LOCK"' EXIT
+  trap 'kill $DOWNLOADS 2>/dev/null || true; rm -rf "$tmp" "$next"; release_cli_lock' EXIT
   curl -fsSL "$MANIFEST_URL" -o "$tmp/kinu-version.json" & manifest_pid=$!
   curl -fsSL "$TARBALL_URL" -o "$tmp/cli.tar.gz" & tarball_pid=$!
   curl -fsSL "$RUNTIME_URL" -o "$tmp/runtime.tar.gz" & runtime_pid=$!
@@ -1073,7 +1101,7 @@ if take_cli_lock; then
   else
     check_launch
   fi
-  rm -rf "$CLI_LOCK"
+  release_cli_lock
   trap - EXIT
 fi
 [ -n "$KINU_BUN" ] || provide_bun
