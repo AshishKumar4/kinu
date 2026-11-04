@@ -522,8 +522,13 @@ export class AgentTurns {
   private async read(turn: OpenTurn): Promise<PreparedAgentTurn | null> {
     const prepared = await prepareHostedTurn(this.deps.seams(), turn.reference, turn.request);
     // Every turn is the owner's limits' to admit (a suspended account starts none, a platform model's day is bounded),
-    // asked beside the reading and joined before the turn is handed over.
-    const admission = hold(Effect.promise(() => this.deps.admitModel(prepared.model)));
+    // asked beside the rest of its reading.
+    const [read] = await Promise.all([this.readPrepared(turn, prepared), this.deps.admitModel(prepared.model)]);
+
+    return read;
+  }
+
+  private async readPrepared(turn: OpenTurn, prepared: PreparedHostedTurn): Promise<PreparedAgentTurn | null> {
     const run = turn.request.run?.inference;
     const { actor, input, surface } = prepared;
 
@@ -554,7 +559,6 @@ export class AgentTurns {
     const facts = this.offeredFacts(turn, prepared);
 
     if (facts === null) return null;
-    await settle(Effect.flatMap(Effect.promise(() => admission), (exit) => exit));
 
     return {
       input,

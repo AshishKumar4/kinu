@@ -114,8 +114,9 @@ export function listedTables(sql: SqlExec): ListedTable[] {
       : [{ name: row.name, type: row.type, withoutRowid: row.wr === 1 }]));
 }
 
+/** `PRAGMA table_info`, not its table-valued form, which a Durable Object's SQLite refuses (cf drive/mossaic-objects.ts). */
 export function columnNames(sql: SqlExec, table: string): string[] {
-  return sql.exec('SELECT name FROM pragma_table_info(?)', table).toArray().map((row) => v.parse(v.object({ name: v.string() }), row).name);
+  return sql.exec(`PRAGMA table_info(${quoteIdent(table)})`).toArray().map((row) => v.parse(v.object({ name: v.string() }), row).name);
 }
 
 export function quoteIdent(name: string): string {

@@ -501,13 +501,14 @@ export class PlanReviewStore {
     // The threads of a revision sent back carry into the next one, read-only, so its replies stay in view.
     const carried = JSON.stringify((revising?.annotations ?? []).map((note) => note.revision === undefined ? { ...note, revision: revising?.revision } : note));
 
+    const id = revising?.id ?? this.newId();
     const rowBytes = planReviewRowBytes();
 
-    if (utf8Bytes(content) + utf8Bytes(carried) > rowBytes) {
+    // The row's text whole: its content and comments, and the names it is stored under.
+    if (utf8Bytes(content) + utf8Bytes(carried) + utf8Bytes(`${this.actorId}${id}${sessionId}pending`) > rowBytes) {
       return { ok: false, error: `plan content exceeds the stored row size of ${rowBytes} bytes`, plan: current };
     }
 
-    const id = revising?.id ?? this.newId();
     const revision = revising ? revising.revision + 1 : 1;
     const now = this.now();
     void this.sql`INSERT INTO plan_reviews (
