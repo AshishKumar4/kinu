@@ -47,7 +47,6 @@ export { AgentWakeQueue } from './wake-queue';
 export {
   WorkspaceJobAuthorities,
   type JobAuthority,
-  type JobAuthorityKind,
   type WorkspaceJobAuthoritiesDeps,
 } from './authorities';
 

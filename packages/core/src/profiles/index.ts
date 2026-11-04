@@ -27,8 +27,7 @@ export type {
 
 export {
   resolveModelRoute,
-  type ModelRoutePolicy, type ProfileRoutedSource, type ModelRouteResolution,
-  type FixedTierSource,
+  type ProfileRoutedSource, type ModelRouteResolution,
 } from './model-route';
 
 export {
@@ -42,8 +41,8 @@ export { agentRoleSwitch } from './agent-role-switch';
 
 export {
   changeRoleAsOwner,
-  type RoleChangeActor, type RoleChangePolicy, type RoleChangeOutcome,
-  type RoleChangeRefusal, type RoleStateStore,
+  type RoleChangeActor, type RoleChangeOutcome,
+  type RoleStateStore,
 } from './role-change';
 
 export {
