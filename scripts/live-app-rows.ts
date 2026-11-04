@@ -2128,6 +2128,9 @@ async function signInHelper(page: Page, press: () => Promise<void>): Promise<{ r
   const helper = await target.page();
 
   if (helper === null) throw new Error('the sign-in opened no tab');
+  // A tab the page opened is not `newPage`'s: its waits take puppeteer's 30 s default until told otherwise.
+  helper.setDefaultTimeout(0);
+  helper.setDefaultNavigationTimeout(0);
   const closed = new Promise<void>((resolve) => { helper.once('close', () => { resolve(); }); });
 
   await named('the provider\'s consent page', async () => helper.waitForSelector(`[${CONSENT_CHOICE}]`));
@@ -2740,7 +2743,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
     const slateHeard = Promise.withResolvers<ScriptedRequest>();
     const slateClicked = heldCall();
     const askProbe = new SlateAskProbe();
-    const waitProbe = new ProviderWaitProbe();
+    const waitProbe = new ProviderWaitProbe(Date.now);
 
     // The watched turn follows the answered one in its conversation, so it is matched first, by the latest ask.
     const model = await startScriptedModel((request) => providerWaitTurn(request, waitProbe) ?? droppedFileTurn(request) ?? toldBackTurn(request, toldBack.resolve) ?? pacedTurn(request)

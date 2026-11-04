@@ -210,7 +210,7 @@ describe('test-clocks gate', () => {
 
   test('the live corpus is every test, every vitest config, and what the tests load outside the product and the runner', () => {
     const tests = readTests();
-    const corpus = readClockCorpus();
+    const corpus = readClockCorpus().files;
 
     for (const file of tests.keys()) expect(corpus.has(file), file).toBe(true);
 

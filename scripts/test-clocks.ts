@@ -100,7 +100,7 @@ import { assertMeasured, finding, type Finding } from './gate-ratchet';
 import { readAliases, readWorkspace, runtimeClosure, runtimeImports } from './import-graph';
 import { REPO_ROOT } from './repo-root';
 import {
-  isManifest, isParseable, isShippedSource, isTestScaffold, isTypescriptConfig, isVitestConfig, readMatching, readRepositoryFile, readTests,
+  isManifest, isShippedSource, isTestScaffold, isTypescriptConfig, isVitestConfig, readMatching, readRepositoryFile, readTests,
   trackedFiles,
 } from './sources';
 import {
@@ -340,7 +340,8 @@ function clockBindings(root: SyntaxNode): ReadonlySet<string> {
 
 /** Whether an options value carries `timeout` with a value other than the
  *  literal 0: an object literal, one spread into it, or a name this file bound
- *  to either. */
+ *  to either. Read in property order, as the object is built, so a later
+ *  `timeout: 0` disables a spread one. */
 function carriesTimeout(argument: SyntaxNode, named: ReadonlySet<string>): boolean {
   const { raw } = argument;
 
@@ -354,19 +355,19 @@ function carriesTimeout(argument: SyntaxNode, named: ReadonlySet<string>): boole
 
   if (raw.type !== 'ObjectExpression') return false;
 
-  return argument.children.some((property) => {
+  return argument.children.reduce((carried, property) => {
     if (property.raw.type === 'SpreadElement') {
       const [spread] = property.children;
 
-      return spread !== undefined && carriesTimeout(spread, named);
+      return spread !== undefined && carriesTimeout(spread, named) ? true : carried;
     }
 
-    if (property.raw.type !== 'Property') return false;
+    if (property.raw.type !== 'Property') return carried;
     const [keyNode, value] = property.children;
     const key = keyNode === undefined ? undefined : identifierText(keyNode) ?? literalText(keyNode);
 
-    return key === TIMEOUT_KEY && (value === undefined || literalNumber(value) !== 0);
-  });
+    return key === TIMEOUT_KEY ? value === undefined || literalNumber(value) !== 0 : carried;
+  }, false);
 }
 
 /** Whether a call is one of the outside-corpus waits: a library wait by its
@@ -850,9 +851,9 @@ export function writeNewKindLock(next: ClockLock, kind: ClockKind, path = LOCK):
   writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`);
 }
 
-/** The runners, whose clocks are theirs: the ladder ends a hung gate at its silence deadline (`scripts/deadline.ts`), and
- *  the eval harness scores a trial against a deployment by budgets that are part of its verdict. */
-const RUNNERS = ['scripts/ladder.ts', 'evals/src/harness.ts'];
+/** The runners, whose clocks are theirs: the ladder ends a hung gate at its silence deadline (`scripts/deadline.ts`); the
+ *  eval harness and the bench score a trial against budgets that are part of its verdict. */
+const RUNNERS = ['scripts/ladder.ts', 'evals/src/harness.ts', 'scripts/bench.ts'];
 
 /** A program: run by name (`import.meta.main`), or a module whose default export is a Worker or a config. */
 const isProgram = (text: string): boolean => text.includes('import.meta.main') || /^export default\b/mu.test(text);
@@ -864,13 +865,18 @@ const ownSuites = (file: string): readonly string[] => {
   return [`${stem}.test.ts`, `${stem}.test.tsx`];
 };
 
-/** The corpus: every test file, every vitest config, and what the tests load at runtime that nothing but tests loads —
- *  test-utils, the browser harness, the live-app rows and every other helper a suite waits through — so a wait moved out
- *  of a suite into a helper is still read, not hidden behind the helper's name. The walk stops at what the tests
- *  measure: shipped product source; the runner's own modules; a program; a module only its own suite imports; and every
- *  module a program loads that no test but its own suite imports (an operator's tool, a bench, the eval runner), whose
- *  waits are what it does. */
-export function readClockCorpus(): Map<string, string> {
+/** The corpus and what its walk could not follow. */
+export interface ClockCorpus {
+  readonly files: Map<string, string>;
+  /** Edges the walk could not resolve to a file: a computed import, or a package entered by its export conditions. */
+  readonly unfollowed: readonly string[];
+}
+
+/** The corpus: every test file, every vitest config, and what the tests load at runtime up to what they measure —
+ *  test-utils, the browser harness, the live-app rows and every other helper a suite waits through — so a wait moved
+ *  out of a suite into a helper is still read, not hidden behind the helper's name. The walk stops at shipped product
+ *  source, at a runner's modules, at a program and at a module only its own suite imports. */
+export function readClockCorpus(): ClockCorpus {
   const tests = readTests();
   const tracked = new Set(trackedFiles());
   const read = (file: string): string => tests.get(file) ?? readRepositoryFile(REPO_ROOT, file);
@@ -885,21 +891,24 @@ export function readClockCorpus(): Map<string, string> {
   const importers = new Map<string, Set<string>>();
 
   for (const suite of tests.keys()) {
-    for (const { path } of runtimeImports(suite, request)) importers.set(path, (importers.get(path) ?? new Set()).add(suite));
+    for (const { path } of runtimeImports(suite, request).files) importers.set(path, (importers.get(path) ?? new Set()).add(suite));
   }
 
-  const measuredOnly = (file: string): boolean => [...importers.get(file) ?? []].every((suite) => ownSuites(file).includes(suite));
-  const programs = [...tracked].filter((file) => isParseable(file) && !tests.has(file) && !isShippedSource(file) && isProgram(read(file)));
-  const subjects = runtimeClosure([...RUNNERS, ...programs.filter(measuredOnly)], request, (file) => !isShippedSource(file));
+  const ownSuiteOnly = (file: string): boolean => importers.has(file) && [...importers.get(file) ?? []].every((suite) => ownSuites(file).includes(suite));
+  const runners = runtimeClosure(RUNNERS, request, (file) => !isShippedSource(file));
 
   const helpers = runtimeClosure([...tests.keys()], request, (file) => tests.has(file) || isTestScaffold(file)
-    || (!isShippedSource(file) && !subjects.has(file) && !isProgram(read(file)) && !(importers.has(file) && measuredOnly(file))));
+    || (!isShippedSource(file) && !runners.files.has(file) && !isProgram(read(file)) && !ownSuiteOnly(file)));
 
-  return new Map([...helpers, ...[...tracked].filter(isVitestConfig)].sort().map((file) => [file, read(file)]));
+  return {
+    files: new Map([...helpers.files, ...[...tracked].filter(isVitestConfig)].sort().map((file) => [file, read(file)])),
+    unfollowed: helpers.unfollowed,
+  };
 }
 
 async function main(): Promise<number> {
-  const tests = readClockCorpus();
+  const corpus = readClockCorpus();
+  const tests = corpus.files;
   const sites = auditCorpus(tests);
 
   const measured = assertMeasured('test-clocks', [
@@ -940,7 +949,10 @@ async function main(): Promise<number> {
     console.log('  blind to: a clock value reaching a comparison through a parameter or a return value; '
       + 'a timer wrapped in product source or a dependency and called by the wrapper\'s name; a duration handed as a '
       + 'bare positional number to an unknown helper; setImmediate and queueMicrotask; a clock read '
-      + 'used as a value and never compared.');
+      + 'used as a value and never compared; a program\'s own body, its exports a test drives included (plan-demo-film\'s '
+      + `walkthrough, which live-app-rows calls); the runners' modules (${RUNNERS.join(', ')}) and what they load.`);
+
+    for (const edge of corpus.unfollowed) console.log(`  unfollowed: ${edge}`);
 
     return 0;
   }
