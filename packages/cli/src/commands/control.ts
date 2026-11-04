@@ -1,5 +1,5 @@
 import { requireAuthConfig } from '../config';
-import { isReasoningEffort, projectJsonValue, REASONING_EFFORTS, ReasoningEffortSchema, type JsonValue, type ModelMenu, type ReasoningEffort, type TimerTrigger, type TimerTriggerOpts } from '@kinu.run/core';
+import { isReasoningEffort, projectJsonValue, specOn, specProvider, WORKERS_AI_MODEL_ID_PREFIX, WORKERS_AI_PROVIDER_ID, REASONING_EFFORTS, ReasoningEffortSchema, type JsonValue, type ModelMenu, type ReasoningEffort, type TimerTrigger, type TimerTriggerOpts } from '@kinu.run/core';
 import { resolveAgentTarget, type AgentTarget } from '../agent-target';
 import {
   cancelLocalTrigger,
@@ -33,7 +33,8 @@ import {
   type AgentModelEntry,
   type AgentModelMenu,
 } from '@kinu.run/core';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { attempt, KinuError, renderCauseChain, settle } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
 import { cancelLocalJob } from '../local-agent-client';
 import { liveDaemonPid } from './daemon';
 
@@ -63,56 +64,59 @@ const TimerTriggerSchema = v.object({
 });
 
 
-export async function modelCommand(name: string, spec: string | undefined, opts: ControlOpts): Promise<void> {
-  const target = resolveAgentTarget(name);
-  let resolvedSpec = spec;
+export function modelCommand(name: string, spec: string | undefined, opts: ControlOpts): Promise<void> {
+  return settle(Effect.gen(function* () {
+    const target = resolveAgentTarget(name);
+    let resolvedSpec = spec;
 
-  if (spec) {
+    if (spec) {
+      if (target.mode === 'cloud') {
+        const auth = requireAuthConfig();
+        const catalog = yield* Effect.promise(() => loadModelCatalog(() => listCloudAvailableModels(auth.origin, auth.token)));
+        resolvedSpec = catalogSpec(catalog, spec);
+        yield* validateModelSelection(catalog, resolvedSpec, spec, name);
+      } else {
+        const configured = createConfiguredLocalModelResolver({
+          model: opts.model,
+          baseUrl: opts.baseUrl,
+          auth: opts.auth,
+        });
+
+        const catalog = yield* Effect.promise(() => loadModelCatalog(() => configured.resolver.listModels()));
+        resolvedSpec = configured.resolver.normalizeSpecSync(spec);
+        yield* validateModelSelection(catalog, resolvedSpec, spec, name);
+      }
+    }
+
+    const setting = resolvedSpec;
+    let stored: string | null;
+
     if (target.mode === 'cloud') {
       const auth = requireAuthConfig();
-      const catalog = await loadModelCatalog(() => listCloudAvailableModels(auth.origin, auth.token));
-      resolvedSpec = catalogSpec(catalog, spec);
-      validateModelSelection(catalog, resolvedSpec, spec, name);
+
+      stored = setting
+        ? (yield* Effect.promise(() => callAgentRpc({
+          origin: auth.origin, token: auth.token, name: target.cloudName,
+          method: 'setModel', schema: ModelSetResultSchema, args: [setting],
+        }))).spec
+        : (yield* Effect.promise(() => callAgentRpc({
+          origin: auth.origin, token: auth.token, name: target.cloudName,
+          method: 'getStoredModelSpec', schema: StoredModelSchema,
+        }))).spec;
     } else {
-      const configured = createConfiguredLocalModelResolver({
-        model: opts.model,
-        baseUrl: opts.baseUrl,
-        auth: opts.auth,
-      });
-
-      const catalog = await loadModelCatalog(() => configured.resolver.listModels());
-      resolvedSpec = configured.resolver.normalizeSpecSync(spec);
-      validateModelSelection(catalog, resolvedSpec, spec, name);
+      stored = setting
+        ? (yield* Effect.promise(() => setLocalWorkspaceModel(target.localName, setting))).spec
+        : (yield* Effect.promise(() => readLocalWorkspacePins(target.localName))).model;
     }
-  }
 
-  let stored: string | null;
+    if (spec) {
+      console.log(`${OK('set')} ${stored}`);
 
-  if (target.mode === 'cloud') {
-    const auth = requireAuthConfig();
+      return;
+    }
 
-    stored = resolvedSpec
-      ? (await callAgentRpc({
-        origin: auth.origin, token: auth.token, name: target.cloudName,
-        method: 'setModel', schema: ModelSetResultSchema, args: [resolvedSpec],
-      })).spec
-      : (await callAgentRpc({
-        origin: auth.origin, token: auth.token, name: target.cloudName,
-        method: 'getStoredModelSpec', schema: StoredModelSchema,
-      })).spec;
-  } else {
-    stored = resolvedSpec
-      ? (await setLocalWorkspaceModel(target.localName, resolvedSpec)).spec
-      : (await readLocalWorkspacePins(target.localName)).model;
-  }
-
-  if (spec) {
-    console.log(`${OK('set')} ${stored}`);
-
-    return;
-  }
-
-  console.log(`${DIM('model')} ${stored ?? `${readDefaultTier()?.model ?? 'none named'} (the default tier's)`}`);
+    console.log(`${DIM('model')} ${stored ?? `${readDefaultTier()?.model ?? 'none named'} (the default tier's)`}`);
+  }));
 }
 
 interface EffortResult {
@@ -123,7 +127,7 @@ export async function effortCommand(name: string, level: string | undefined): Pr
   const target = resolveAgentTarget(name);
 
   if (level !== undefined && !isReasoningEffort(level)) {
-    throw new Error(`Reasoning effort must be one of ${REASONING_EFFORTS.join(', ')}.`);
+    return settle(Effect.fail(new KinuError('bad_input', `Reasoning effort must be one of ${REASONING_EFFORTS.join(', ')}.`)));
   }
 
   let result: EffortResult;
@@ -187,12 +191,11 @@ async function runsAsOnItsModel(target: AgentTarget, effort: ReasoningEffort): P
 /** Validation is advisory: an unreachable catalog must say why rather than read as an empty menu. */
 type ModelCatalog = { readonly models: readonly AgentModelEntry[] } | { readonly unreadable: string };
 
-async function loadModelCatalog(load: () => Promise<ModelMenu | AgentModelMenu>): Promise<ModelCatalog> {
-  try {
-    return { models: normalizeModelMenu({ payload: await load() }).models };
-  } catch (error) {
-    return { unreadable: renderThrownChain({ cause: error }) };
-  }
+function loadModelCatalog(load: () => Promise<ModelMenu | AgentModelMenu>): Promise<ModelCatalog> {
+  return settle(Effect.match(attempt({ doing: 'reading the model catalog', otherwise: 'unavailable' }, load), {
+    onSuccess: (payload): ModelCatalog => ({ models: normalizeModelMenu({ payload }).models }),
+    onFailure: (failure): ModelCatalog => ({ unreadable: renderCauseChain(failure) }),
+  }));
 }
 
 function validateModelSelection(
@@ -200,36 +203,48 @@ function validateModelSelection(
   resolvedSpec: string,
   rawSpec: string,
   workspace: string,
-): void {
+): Effect.Effect<void, KinuError> {
+  return Effect.suspend(() => {
+    const refused = advise(catalog, resolvedSpec, rawSpec, workspace);
+
+    return refused === null ? Effect.void : Effect.fail(new KinuError('bad_input', refused));
+  });
+}
+
+/** What setting `resolvedSpec` without the catalog's word on it means, said before it is set; why it is refused, if it is. */
+function advise(
+  catalog: ModelCatalog,
+  resolvedSpec: string,
+  rawSpec: string,
+  workspace: string,
+): string | null {
   if ('unreadable' in catalog) {
     console.log(`${WARN('!')} Could not read the model catalog (${catalog.unreadable}); setting ${resolvedSpec} without catalog validation.`);
 
-    return;
+    return null;
   }
 
   if (catalog.models.length === 0) {
     console.log(`${WARN('!')} The model catalog is empty; setting ${resolvedSpec} without catalog validation.`);
 
-    return;
+    return null;
   }
 
   const explicitProvider = providerPrefix(rawSpec);
   const validation = validateModelSpec(catalog.models, explicitProvider ? rawSpec.trim() : resolvedSpec);
 
-  if (validation.status === 'known') return;
+  if (validation.status === 'known') return null;
 
   if (validation.status === 'unknown-provider') {
-    if (!explicitProvider) {
-      console.log(`${WARN('!')} ${resolvedSpec} is not in the model catalog; setting it anyway.`);
-      console.log(`  ${DIM('List models:')} run ${ACCENT(`kinu chat ${workspace}`)}, then enter ${ACCENT('/model')}.`);
-
-      return;
+    if (explicitProvider) {
+      return `Unknown model provider ${JSON.stringify(validation.provider)} in ${JSON.stringify(rawSpec)}. `
+        + `Valid providers: ${validation.providers.join(', ')}.`;
     }
 
-    throw new Error(
-      `Unknown model provider ${JSON.stringify(validation.provider)} in ${JSON.stringify(rawSpec)}. `
-      + `Valid providers: ${validation.providers.join(', ')}.`,
-    );
+    console.log(`${WARN('!')} ${resolvedSpec} is not in the model catalog; setting it anyway.`);
+    console.log(`  ${DIM('List models:')} run ${ACCENT(`kinu chat ${workspace}`)}, then enter ${ACCENT('/model')}.`);
+
+    return null;
   }
 
   console.log(`${WARN('!')} ${resolvedSpec} is not in the model catalog for ${validation.provider}; setting it anyway.`);
@@ -239,21 +254,20 @@ function validateModelSelection(
   }
 
   console.log(`  ${DIM('List models:')} run ${ACCENT(`kinu chat ${workspace}`)}, then enter ${ACCENT('/model')}.`);
+
+  return null;
 }
 
 function providerPrefix(spec: string): string | null {
   const normalized = spec.trim();
 
-  if (!normalized || normalized.startsWith('@cf/')) return null;
-  const slash = normalized.indexOf('/');
-
-  return slash > 0 ? normalized.slice(0, slash) : null;
+  return normalized.startsWith(WORKERS_AI_MODEL_ID_PREFIX) ? null : specProvider(normalized);
 }
 
 function catalogSpec(catalog: ModelCatalog, spec: string): string {
   const normalized = spec.trim();
 
-  if (normalized.startsWith('@cf/')) return `workers-ai/${normalized}`;
+  if (normalized.startsWith(WORKERS_AI_MODEL_ID_PREFIX)) return specOn(WORKERS_AI_PROVIDER_ID, normalized);
 
   if (!('models' in catalog) || normalized.includes('/')) return normalized;
   const suffixMatches = catalog.models.filter((model) => model.spec.endsWith(`/${normalized}`));
@@ -291,93 +305,96 @@ export async function toolsCommand(name: string, _opts: ControlOpts): Promise<vo
   ]);
 }
 
-export async function triggersCommand(
+export function triggersCommand(
   name: string,
   action: string | undefined,
   value: string | undefined,
   opts: ControlOpts,
 ): Promise<void> {
-  const target = resolveAgentTarget(name);
-  const normalized = action ?? 'list';
+  return settle(Effect.gen(function* () {
+    const target = resolveAgentTarget(name);
+    const normalized = action ?? 'list';
 
-  if (target.mode === 'cloud') {
-    const auth = requireAuthConfig();
+    if (target.mode === 'cloud') {
+      const auth = requireAuthConfig();
 
-    if (normalized === 'list') {
-      const { triggers } = await callAgentRpc({
-        origin: auth.origin,
-        token: auth.token,
-        name: target.cloudName,
-        method: 'listTriggers',
-        schema: CloudTriggerListSchema,
-      });
+      if (normalized === 'list') {
+        const { triggers } = yield* Effect.promise(() => callAgentRpc({
+          origin: auth.origin,
+          token: auth.token,
+          name: target.cloudName,
+          method: 'listTriggers',
+          schema: CloudTriggerListSchema,
+        }));
 
-      present(triggers, opts, (rows) => printTriggers(rows, auth.origin));
+        present(triggers, opts, (rows) => printTriggers(rows, auth.origin));
 
-      return;
+        return;
+      }
+
+      if (normalized === 'cancel') {
+        const id = yield* required(value, 'trigger id');
+        // `'owner'`: a CLI token is the account holder's, so it may close an owner-created ingress; the model's
+        // `agent.cancelSchedule` reaches the same RPC as `'self'` and may not.
+
+        const cancelled = yield* Effect.promise(() => callAgentRpc({
+          origin: auth.origin,
+          token: auth.token,
+          name: target.cloudName,
+          method: 'cancelTrigger',
+          schema: CancelTriggerSchema,
+          args: [id, 'owner'],
+        }));
+
+        present({ id, ...cancelled }, opts, () =>
+          console.log(`${OK('cancelled')} ${cancelled.changed ? id : `${id} (already inactive)`}`));
+
+        return;
+      }
+
+      if (normalized === 'webhook') {
+        const label = yield* required(value, 'webhook label');
+
+        const webhookInput = webhookTriggerInput(label, {
+          ...opts, rateLimit: opts.rateLimit === undefined ? undefined : parsePositiveInt(opts.rateLimit, 'rate limit'),
+        });
+
+        const created = yield* Effect.promise(() => createCloudWebhookTrigger(auth.origin, auth.token, target.cloudName, webhookInput));
+        present(created, opts, (webhook) => printCreatedWebhook(webhook, auth.origin));
+
+        return;
+      }
+    } else {
+      if (normalized === 'webhook') return yield* new KinuError('unsupported', 'Webhook triggers require a cloud workspace.');
+
+      if (normalized === 'list') {
+        present(listLocalTriggers(target.localName).triggers, opts, printTriggers);
+
+        return;
+      }
+
+      if (normalized === 'cancel') {
+        const id = yield* required(value, 'trigger id');
+        const cancelled = yield* Effect.promise(() => cancelLocalTrigger(target.localName, id));
+        present({ id, ...cancelled }, opts, () =>
+          console.log(`${OK('cancelled')} ${cancelled.changed ? id : `${id} (already inactive)`}`));
+
+        return;
+      }
     }
 
-    if (normalized === 'cancel') {
-      if (!value) throw new Error('trigger id required');
-      // `'owner'`: a CLI token is the account holder's, so it may close an owner-created ingress; the model's
-      // `agent.cancelSchedule` reaches the same RPC as `'self'` and may not.
+    const input = yield* timerInput(normalized, value);
 
-      const cancelled = await callAgentRpc({
-        origin: auth.origin,
-        token: auth.token,
-        name: target.cloudName,
-        method: 'cancelTrigger',
-        schema: CancelTriggerSchema,
-        args: [value, 'owner'],
-      });
+    const created = target.mode === 'cloud'
+      ? yield* Effect.promise(() => createCloudTimerTrigger(target.cloudName, input))
+      : yield* Effect.promise(() => createLocalTimerTrigger(target.localName, input));
 
-      present({ id: value, ...cancelled }, opts, () =>
-        console.log(`${OK('cancelled')} ${cancelled.changed ? value : `${value} (already inactive)`}`));
-
-      return;
-    }
-
-    if (normalized === 'webhook') {
-      if (!value) throw new Error('webhook label required');
-
-      const webhookInput = webhookTriggerInput(value, {
-        ...opts, rateLimit: opts.rateLimit === undefined ? undefined : parsePositiveInt(opts.rateLimit, 'rate limit'),
-      });
-
-      const created = await createCloudWebhookTrigger(auth.origin, auth.token, target.cloudName, webhookInput);
-      present(created, opts, (webhook) => printCreatedWebhook(webhook, auth.origin));
-
-      return;
-    }
-  } else {
-    if (normalized === 'webhook') throw new Error('Webhook triggers require a cloud workspace.');
-
-    if (normalized === 'list') {
-      present(listLocalTriggers(target.localName).triggers, opts, printTriggers);
-
-      return;
-    }
-
-    if (normalized === 'cancel') {
-      if (!value) throw new Error('trigger id required');
-      const cancelled = await cancelLocalTrigger(target.localName, value);
-      present({ id: value, ...cancelled }, opts, () =>
-        console.log(`${OK('cancelled')} ${cancelled.changed ? value : `${value} (already inactive)`}`));
-
-      return;
-    }
-  }
-
-  const created = target.mode === 'cloud'
-    ? await createCloudTimerTrigger(target.cloudName, normalized, value)
-    : await createLocalTimerTrigger(target.localName, timerInput(normalized, value));
-
-  present(created, opts, () => printScheduled(created));
+    present(created, opts, () => printScheduled(created));
+  }));
 }
 
-async function createCloudTimerTrigger(cloudName: string, action: string, value: string | undefined): Promise<TimerTrigger> {
+function createCloudTimerTrigger(cloudName: string, input: Pick<TimerTriggerOpts, 'cron' | 'atMs' | 'label'>): Promise<TimerTrigger> {
   const auth = requireAuthConfig();
-  const input = timerInput(action, value);
 
   // trust:'owner': an interactive session token is the owner.
   return callAgentRpc({
@@ -394,55 +411,62 @@ function printScheduled(trigger: { id: string; kind: string; nextFireAt: number 
   console.log(`${OK('scheduled')} ${trigger.id} ${DIM(trigger.kind)} ${formatTime(trigger.nextFireAt)}`);
 }
 
-export async function jobsCommand(name: string, action: string | undefined, id: string | undefined, opts: ControlOpts): Promise<void> {
-  const target = resolveAgentTarget(name);
-  const normalized = action ?? 'list';
+export function jobsCommand(name: string, action: string | undefined, id: string | undefined, opts: ControlOpts): Promise<void> {
+  return settle(Effect.gen(function* () {
+    const target = resolveAgentTarget(name);
+    const cancelling = (action ?? 'list') === 'cancel';
 
-  if (target.mode === 'cloud') {
-    const auth = requireAuthConfig();
+    if (target.mode === 'cloud') {
+      const auth = requireAuthConfig();
 
-    if (normalized === 'cancel') {
-      if (!id) throw new Error('job id required');
+      if (cancelling) {
+        const job = yield* required(id, 'job id');
 
-      const cancelled = await callAgentRpc({
+        const cancelled = yield* Effect.promise(() => callAgentRpc({
+          origin: auth.origin,
+          token: auth.token,
+          name: target.cloudName,
+          method: 'cancelBackgroundJob',
+          schema: CancelJobSchema,
+          args: [job],
+        }));
+
+        present({ id: job, ...cancelled }, opts, () =>
+          console.log(`${OK('cancelled')} ${cancelled.ok ? job : `${job} (not running)`}`));
+
+        return;
+      }
+
+      const jobs = yield* Effect.promise(() => callAgentRpc({
         origin: auth.origin,
         token: auth.token,
         name: target.cloudName,
-        method: 'cancelBackgroundJob',
-        schema: CancelJobSchema,
-        args: [id],
-      });
+        method: 'listBackgroundJobs',
+        schema: v.array(CloudBackgroundJobSchema),
+        args: [20],
+      }));
 
-      present({ id, ...cancelled }, opts, () =>
-        console.log(`${OK('cancelled')} ${cancelled.ok ? id : `${id} (not running)`}`));
+      present(jobs, opts, printJobs);
 
       return;
     }
 
-    const jobs = await callAgentRpc({
-      origin: auth.origin,
-      token: auth.token,
-      name: target.cloudName,
-      method: 'listBackgroundJobs',
-      schema: v.array(CloudBackgroundJobSchema),
-      args: [20],
-    });
+    if (cancelling) {
+      const job = yield* required(id, 'job id');
+      const cancelled = yield* Effect.promise(() => cancelLocalJob(target.localName, job, liveDaemonPid()));
+      present({ id: job, ...cancelled }, opts, () =>
+        console.log(`${OK('cancelled')} ${cancelled.ok ? job : `${job} (not running)`}`));
 
-    present(jobs, opts, printJobs);
+      return;
+    }
 
-    return;
-  }
+    present(listLocalJobs(target.localName), opts, printJobs);
+  }));
+}
 
-  if (normalized === 'cancel') {
-    if (!id) throw new Error('job id required');
-    const cancelled = await cancelLocalJob(target.localName, id, liveDaemonPid());
-    present({ id, ...cancelled }, opts, () =>
-      console.log(`${OK('cancelled')} ${cancelled.ok ? id : `${id} (not running)`}`));
-
-    return;
-  }
-
-  present(listLocalJobs(target.localName), opts, printJobs);
+/** A command argument its action needs, or the refusal naming it. */
+function required(value: string | undefined, what: string): Effect.Effect<string, KinuError> {
+  return value ? Effect.succeed(value) : Effect.fail(new KinuError('bad_input', `${what} required`));
 }
 
 /** Raw JSON under `--json`, human rendering otherwise; shared by every read/mutate command. */
@@ -451,20 +475,12 @@ function present<T extends JsonValue | object>(data: T, opts: ControlOpts, human
   else human(data);
 }
 
-function timerInput(action: string, value: string | undefined): Pick<TimerTriggerOpts, 'cron' | 'atMs' | 'label'> {
-  if (action === 'every') {
-    if (!value) throw new Error('cron expression required');
+function timerInput(action: string, value: string | undefined): Effect.Effect<Pick<TimerTriggerOpts, 'cron' | 'atMs' | 'label'>, KinuError> {
+  if (action === 'every') return Effect.map(required(value, 'cron expression'), (cron) => ({ cron }));
 
-    return { cron: value };
-  }
+  if (action === 'at') return Effect.map(required(value, 'time'), (time) => ({ atMs: parseTime(time, 'time') }));
 
-  if (action === 'at') {
-    if (!value) throw new Error('time required');
-
-    return { atMs: parseTime(value, 'time') };
-  }
-
-  throw new Error('trigger action must be list, every, at, webhook, or cancel');
+  return Effect.fail(new KinuError('bad_input', 'trigger action must be list, every, at, webhook, or cancel'));
 }
 
 function printTools(tools: Array<{ name: string; description?: string; group: string }>): void {

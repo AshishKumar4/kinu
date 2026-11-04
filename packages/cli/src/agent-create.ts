@@ -1,4 +1,6 @@
 import { wrapDatabase } from '@kinu.run/core/identity';
+import { KinuError, settle, settleSync } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
 import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { Database } from 'bun:sqlite';
@@ -109,7 +111,7 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   ensureAgentHome();
   const purpose = input.purpose.trim();
 
-  if (!purpose) throw new Error('Mission required.');
+  if (!purpose) return settle(Effect.fail(new KinuError('bad_input', 'Mission required.')));
 
   if (input.mode === 'cloud') {
     const auth = await resolveCloudAuth(input.origin, input.allowInteractiveAuth === true);
@@ -128,7 +130,7 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
 
   const name = input.name;
 
-  if (!name) throw new Error('Agent name required for a local workspace.');
+  if (!name) return settle(Effect.fail(new KinuError('bad_input', 'Agent name required for a local workspace.')));
   const displayName = input.displayName ?? name;
   const cwd = canonicalProjectRoot(input.cwd);
   const workspaceId = input.workspaceId ?? defaultVirtualWorkspaceId(cwd);
@@ -136,12 +138,12 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   const claimed = resolveAgentRef(name);
 
   if (claimed && claimed.mode !== 'local') {
-    throw new Error(`"${name}" is already a cloud workspace. Choose another name.`);
+    return settle(Effect.fail(new KinuError('bad_input', `"${name}" is already a cloud workspace. Choose another name.`)));
   }
 
   const dbPath = agentDbPath(name);
 
-  if (existsSync(dbPath)) throw new Error(nameTaken(name, dbPath, claimed));
+  if (existsSync(dbPath)) return settle(Effect.fail(new KinuError('bad_input', nameTaken(name, dbPath, claimed))));
   // Read before the workspace exists, so it reports who this agent JOINS.
   const peers = localWorkspaceMembers(workspaceId, cwd).map((peer) => peer.name);
   const tier = input.model === undefined ? await ensureDefaultTier() : readDefaultTier();
@@ -223,10 +225,8 @@ export async function createLocalPeerAgent(
   const purpose = inheritedPeerMission(peers);
 
   if (!purpose) {
-    throw new Error(
-      `No agent in workspace "${workspaceId}" to inherit a mission from. `
-      + 'Create the first one with: kinu create',
-    );
+    return settle(Effect.fail(new KinuError('missing',
+      `No agent in workspace "${workspaceId}" to inherit a mission from. Create the first one with: kinu create`)));
   }
 
   const created: CreateCliAgentInput = {
@@ -269,11 +269,11 @@ export function renameLocalAgent(name: string, displayName: string): RenamedLoca
   // The one title rule the cloud's rename and every editor run, so a title kept here is one the cloud keeps.
   const problem = workspaceTitleProblem(displayName);
 
-  if (problem !== null) throw new Error(problem);
+  if (problem !== null) return settleSync(Effect.fail(new KinuError('bad_input', problem)));
   const title = displayName.trim();
   const dbPath = agentDbPath(name);
 
-  if (!existsSync(dbPath)) throw new Error(`Agent "${name}" not found.`);
+  if (!existsSync(dbPath)) return settleSync(Effect.fail(new KinuError('missing', `Agent "${name}" not found.`)));
   const db = new Database(dbPath);
 
   try {
