@@ -358,7 +358,7 @@ export function WorkspaceRosterProvider({ children, live = openRosterSocket }: {
 
       opened.addEventListener("message", (event: Event) => {
         const data: unknown = event instanceof MessageEvent ? event.data : null;
-        const text = v.is(v.string(), data) ? data : "";
+        const text = typeof data === "string" ? data : "";
         const parsed: unknown = tolerate(() => JSON.parse(text), "malformed-input");
         const memory = v.safeParse(AccountMemoryFrameSchema, parsed);
 

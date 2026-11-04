@@ -12,17 +12,18 @@ import { GoogleConnectionRow } from "@/components/plugins/GoogleConnectionRow";
 import { mcpServerStatus } from "@/components/plugins/mcp-status";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { Choice, Field } from "@/components/ui/form";
+import { Select } from "@/components/ui/Select";
 import { Card } from "@/components/ui/Card";
 import { Empty } from "@/components/ui/Empty";
 import { Group } from "@/components/ui/Group";
 import { Notice } from "@/components/ui/Notice";
-import { TextArea, TextInput } from "@/components/ui/Field";
+import { TextArea, TextInput, Field } from "@/components/ui/Field";
 import { SECRET_REGION } from "@/components/ui/SecretValue";
 import { lastValue } from "@/hooks/use-async-resource";
 import { useMcpServers, useMcpWatch, type McpServers } from "@/hooks/use-mcp-servers";
 import * as v from "valibot";
-import { renderThrownChain, detach } from '@kinu.run/core/obs';
+import { renderThrownChain, detachPromise } from '@kinu.run/core/obs';
+import { useLabelledStep } from '@/hooks/use-labelled-step';
 
 /** The panel over a read of its own, where no page around it shows the same servers. */
 export function McpServersSection() {
@@ -99,19 +100,19 @@ export function McpServersPanel({ mcp }: { mcp: McpServers }) {
                   <PluginStatusText shown={mcpServerStatus(s.status)} />
                   <div className="ml-auto flex items-center gap-2">
                     {s.signIn && (
-                      <Button size="sm" icon={<ArrowSquareOutIcon size={14} />} data-mcp-sign-in onClick={() => detach(Effect.promise(async () => {
+                      <Button size="sm" icon={<ArrowSquareOutIcon size={14} />} data-mcp-sign-in onClick={() => detachPromise(async () => {
                         const failed = await signInMcpServer(beginConnect(), s.id, connected);
 
                         if (failed !== null) setSignInFailed(failed);
-                      }))}>Authorize</Button>
+                      })}>Authorize</Button>
                     )}
                     {s.status === "failed" && !s.signIn && (
-                      <Button size="sm" icon={<ArrowClockwiseIcon size={14} />} data-mcp-reconnect onClick={() => detach(Effect.promise(async () => {
+                      <Button size="sm" icon={<ArrowClockwiseIcon size={14} />} data-mcp-reconnect onClick={() => detachPromise(async () => {
                         const failed = await reconnectSaying(s.id, s.name);
 
                         if (failed !== null) setSignInFailed(failed);
                         reload();
-                      }))}>Reconnect</Button>
+                      })}>Reconnect</Button>
                     )}
                     <Button variant="danger" size="sm" icon={<TrashIcon size={14} />} onClick={() => remove(s.id, s.name)} title="Remove server">Remove</Button>
                   </div>
@@ -150,14 +151,12 @@ export function AddServerCard({ onCancel, onAdded, onConnected }: {
   const [transport, setTransport] = useState<McpTransport>('auto');
   const [headersText, setHeadersText] = useState('');
   const [allowedTools, setAllowedTools] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const { busy, error: err, run } = useLabelledStep(onAdded);
+  const saving = busy !== null;
 
-  const save = useCallback(() => detach(Effect.gen(function* () {
+  const save = (): void => {
     if (!name.trim() || !serverUrl.trim()) return;
-    setErr(null); setSaving(true);
-
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+    run('add', () => Effect.gen(function* () {
       let headers: Record<string, string> | undefined;
 
       if (headersText.trim()) {
@@ -185,17 +184,14 @@ export function AddServerCard({ onCancel, onAdded, onConnected }: {
 
         if (failed !== null) onConnected({ run: null, service: name.trim(), error: failed });
       }
-
-      onAdded();
-    }), (failed) => Effect.sync(() => {
-      const e = Cause.squash(failed); setErr(renderThrownChain({ cause: e })); })), Effect.sync(() => { setSaving(false); }));
-  })), [name, serverUrl, transport, headersText, allowedTools, onAdded, onConnected]);
+    }));
+  };
 
   return (
     <Card title="Add MCP server" actions={<Button variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>}>
       <div className="grid grid-cols-2 gap-3">
         <Field label="Name"><TextInput value={name} onChange={(e) => setName(e.target.value)} placeholder="github" /></Field>
-        <Field label="Transport"><Choice label="Transport" value={transport} onChange={setTransport} options={MCP_TRANSPORTS} /></Field>
+        <Field label="Transport"><Select label="Transport" value={transport} onChange={setTransport} options={MCP_TRANSPORTS} /></Field>
       </div>
       <Field label="Server URL">
         <TextInput value={serverUrl} onChange={(e) => setServerUrl(e.target.value)} placeholder="https://mcp.example.com/v1" />

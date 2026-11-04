@@ -7,7 +7,8 @@ import { ArrowLeftIcon, GitForkIcon, TreeStructureIcon } from "@phosphor-icons/r
 import { SwarmTree } from "@/components/swarm-tree";
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { findForkNode, terminalForkNode, treeStats, type ExplorerSelection } from "@kinu.run/core/swarm-view";
-import { EmptyState, formatScore } from "@/components/surfaces/shared";
+import { formatScore } from "@/components/surfaces/shared";
+import { Empty } from "@/components/ui/Empty";
 import {
   runStateLine, FrontierPanel, RunLivenessPanel, RunRefusalNote, SwarmConfigDisclosure, useForkRunTree,
 } from "@/components/surfaces/ExplorationSurface";
@@ -42,7 +43,7 @@ function CanvasNotice({ failure, loading, what, waiting, empty, onRetry }: {
 
   return (
     <div className="h-full flex items-center justify-center">
-      <EmptyState icon={<GitForkIcon size={28} />} title={empty} />
+      <Empty icon={GitForkIcon} title={empty} />
     </div>
   );
 }

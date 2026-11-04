@@ -9,7 +9,6 @@ import { SidebarRail } from "./SidebarRail";
 import { FeedbackButton } from "./FeedbackButton";
 import { KinuLogo } from "./ui/KinuLogo";
 import { NewWorkspaceIconButton } from "./workspaces/NewWorkspaceButton";
-import { composing } from "./ui/form";
 import { WorkspaceRosterProvider } from "@/hooks/use-workspace-roster";
 import { WakeLastOpened } from "@/hooks/use-wake-ahead";
 import { OwnerAlerts } from "@/hooks/use-owner-alerts";
@@ -18,6 +17,7 @@ import { DESKTOP_QUERY } from "@/hooks/use-media-query";
 import { AppBackground } from "./AppBackground";
 import { Button } from "@/components/ui/Button";
 import { Surface } from "@/components/ui/Surface";
+import { Drawer } from "@/components/ui/Drawer";
 
 /** The root isolates its stacking so the negative-z canvas paints above its ground and under in-flow children. */
 
@@ -61,22 +61,12 @@ function Shell() {
   const ownBar = useMatch({ path: "/workspace/:agentId", end: false }) !== null || drawsBar;
   useEffect(() => { if (entries > 0 && !window.matchMedia(DESKTOP_QUERY).matches) setDrawerOpen(true); }, [entries]);
 
-  // Dismissed as a dialog is: an Escape a field inside it took for itself stays the field's.
-  useEffect(() => {
-    if (!drawerOpen) return;
-    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape" && !event.defaultPrevented && !composing(event)) setDrawerOpen(false); };
-
-    document.addEventListener("keydown", onKey);
-
-    return () => document.removeEventListener("keydown", onKey);
-  }, [drawerOpen]);
-
   return (
     <WorkspaceRosterProvider>
     <WakeLastOpened />
     <LimitRefusalProvider>
     <OwnerAlerts />
-    <Surface look="page" className="isolate flex h-screen w-screen flex-col p-text overflow-hidden md:flex-row">
+    <Surface look="page" className="isolate flex h-dvh w-full flex-col p-text overflow-hidden md:flex-row">
       <AppBackground />
       <Surface look="chrome" as="header" className={`h-14 shrink-0 items-center justify-between border-b p-border px-3 md:hidden ${ownBar ? "hidden" : "flex"}`}>
         <div className="flex items-center gap-1">
@@ -94,12 +84,11 @@ function Shell() {
       <SidebarRail folded={filling} />
 
       {drawerOpen && (
-        <div className="fixed inset-0 z-50 animate-fade-in md:hidden">
-          <div className="p-scrim absolute inset-0" onClick={() => setDrawerOpen(false)} aria-hidden="true" />
-          <Surface look="chrome" as="aside" className="absolute inset-y-0 left-0 w-72 max-w-[var(--layout-nav-drawer)] border-r p-border p-shadow-overlay" data-drawer role="dialog" aria-modal="true" aria-label="Menu">
+        <Drawer side="left" label="Menu" onClose={() => setDrawerOpen(false)} data-drawer="">
+          <Surface look="chrome" as="aside" className="h-full border-r p-border p-shadow-overlay">
             <Sidebar />
           </Surface>
-        </div>
+        </Drawer>
       )}
 
       <main className="flex min-h-0 flex-1 min-w-0 flex-col overflow-hidden">

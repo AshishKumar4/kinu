@@ -11,8 +11,7 @@ import {
 } from "@/lib/user-api";
 import { DEVICE_UPDATE_COPY } from "@/hooks/use-device-roster";
 import { describeGpuNodes, effectiveDeviceMode } from "@kinu.run/core";
-import { renderThrownChain, showing, detach, settle } from "@kinu.run/core/obs";
-import { composing } from "@/components/ui/form";
+import { renderThrownChain, showing, detach, settle, detachPromise } from "@kinu.run/core/obs";
 import { Row, RowTile } from "@/components/ui/Row";
 import { Menu } from "@/components/ui/Menu";
 import { Chip } from "@/components/ui/Chip";
@@ -20,7 +19,7 @@ import { Switch } from "@/components/ui/Switch";
 import { Status } from "@/components/ui/Status";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { Notice } from "@/components/ui/Notice";
-import { TextInput } from "@/components/ui/Field";
+import { TextInput, composing } from "@/components/ui/Field";
 
 const WHOLE_MACHINE_COPY = "Linked from /, so the agent has this whole machine: every file you can open, and its commands "
   + "run as you. The Sandbox switch applies again once you run kinu connect in a narrower folder.";
@@ -149,7 +148,7 @@ export function DeviceRow({
   const where = [device.hostname, device.os].filter((part) => part !== null && part !== "").join(" · ");
 
   const nameField = (
-    <TextInput size="sm" className="w-52" autoFocus value={editing ?? ""} onChange={(e) => setEditing(e.target.value)} onBlur={(...args: Parameters<typeof save>) => detach(Effect.promise(async () => save(...args)))} onKeyDown={(e) => detach(Effect.promise(async () => {
+    <TextInput size="sm" className="w-52" autoFocus value={editing ?? ""} onChange={(e) => setEditing(e.target.value)} onBlur={() => detachPromise(save)} onKeyDown={(e) => detachPromise(async () => {
         if (composing(e.nativeEvent)) return;
 
         if (e.key === "Enter") {
@@ -159,7 +158,7 @@ export function DeviceRow({
         }
 
         if (e.key === "Escape") setEditing(null);
-      }))} aria-label="Device name" />
+      })} aria-label="Device name" />
   );
 
   const notes = [

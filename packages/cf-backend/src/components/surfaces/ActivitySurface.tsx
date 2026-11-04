@@ -99,10 +99,6 @@ function Source({ kind }: { kind: "API" | "local" }) {
   );
 }
 
-function Empty({ children }: { children: React.ReactNode }) {
-  return <p className="t-body p-text-3">{children}</p>;
-}
-
 function Warning({ children }: { children: React.ReactNode }) {
   return (
     <p className="t-meta flex items-start gap-2 p-warning mt-2">
@@ -126,7 +122,7 @@ function ContextBlock({ snap }: { snap: ActivitySnapshot }) {
     return (
       <section>
         <BlockHeader icon={GaugeIcon} title="Context" />
-        <Empty>Nothing has measured this conversation yet. The next turn fills this in.</Empty>
+        <p className="t-body p-text-3">Nothing has measured this conversation yet. The next turn fills this in.</p>
       </section>
     );
   }
@@ -180,9 +176,9 @@ function Breakdown({ context }: { context: ContextComposition | null }) {
   if (context === null) {
     return (
       <div className="mt-4">
-        <Empty>
+        <p className="t-body p-text-3">
           This step recorded no breakdown.
-        </Empty>
+        </p>
       </div>
     );
   }
@@ -295,9 +291,9 @@ function CostBlock({ snap }: { snap: ActivitySnapshot }) {
           </span>
         </div>
       ) : (
-        <Empty>
+        <p className="t-body p-text-3">
           No step of this agent&apos;s turns carried a catalog price.
-        </Empty>
+        </p>
       )}
 
       {telemetry.unpricedSteps > 0 && (
@@ -350,9 +346,9 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
       </div>
 
       {reported === null ? (
-        <Empty>
+        <p className="t-body p-text-3">
           No model call has reported yet. The first call fills these rows.
-        </Empty>
+        </p>
       ) : (
         <>
           <table className="w-full border-collapse">
@@ -679,10 +675,10 @@ export function CacheBlock({ cacheHit }: { cacheHit: CacheHitStats }) {
           + (cacheHit.warms > 0 ? ` · warmed ${cacheHit.warms}` : "")}
       />
       {cacheHit.samples === 0 ? (
-        <Empty>
+        <p className="t-body p-text-3">
           No step in the window reported both an input count and a cache-read count, so there is no
           hit rate.
-        </Empty>
+        </p>
       ) : (
         <>
           <dl className="mb-3">
@@ -729,9 +725,9 @@ export function LogBlock({ log }: { log: readonly ActivityLogEntry[] }) {
           : `${log.length} row${log.length === 1 ? "" : "s"} · newest first`}
       />
       {log.length === 0 ? (
-        <Empty>
+        <p className="t-body p-text-3">
           Nothing has been logged yet. The first turn starts the log.
-        </Empty>
+        </p>
       ) : (
         <Surface look="panel" as="ol" className="max-h-72 overflow-y-auto m-0 list-none p-0">
           {rows}

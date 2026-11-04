@@ -1,11 +1,10 @@
 /** The chat column, the workspace's and each agent's alike: its transcript, its live tail and its composer. */
-import { Effect } from "effect";
 import { Fragment, useCallback, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { PhaseLinesAsk, phaseLinesAsker } from "@/components/ChatDisclosure";
 import { ArrowSquareOutIcon, ArrowsClockwiseIcon, PaperclipIcon } from "@phosphor-icons/react";
 import { getToolName, isToolUIPart, type UIMessage } from "ai";
 import { fmtUsd, isPlaceholderMission, liveTailRow, partInput, threadLiveTail, turnFailure, turnFailureFacts, type WorkspaceNotice } from "@kinu.run/core";
-import { detach } from "@kinu.run/core/obs";
+import { detachPromise } from "@kinu.run/core/obs";
 import { useOpenWorkspace } from "@/hooks/use-open-workspace";
 import { useGatewayCredits } from "@/hooks/use-gateway-credits";
 import { usePastedSecretGuard } from "@/components/secrets/PasteOffer";
@@ -29,7 +28,7 @@ import type { useFileDrop } from "@/hooks/use-file-drop";
 import type { usePendingAttachments } from "@/hooks/use-pending-attachments";
 import { useSteerActions } from "@/hooks/use-steer-actions";
 import { useOpeningMessage } from "@/components/workspaces/NewChatView";
-import { Surface } from "@/components/ui/Surface";
+import { Skeleton } from "@/components/ui/Skeleton";
 import { DropHint } from "@/components/ui/FilePicker";
 
 type ChatState = ReturnType<typeof useChatOwner>["chat"];
@@ -95,8 +94,8 @@ export function ConversationSkeleton() {
       {SKELETON_ROWS.map((row, index) => (
         <div key={index} className={`flex ${row.mine ? "justify-end" : "justify-start"}`} aria-hidden>
           <div className="max-w-4/5 space-y-2" style={{ width: row.width }}>
-            <Surface look="clip" className="p-skeleton-bar h-3.5" />
-            <Surface look="clip" className="p-skeleton-bar h-3.5 w-7/10" />
+            <Skeleton />
+            <Skeleton width="70%" />
           </div>
         </div>
       ))}
@@ -285,7 +284,7 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
   // This chat's workspace: a secret moved out of a draft here is allowed there.
   const secretGuard = usePastedSecretGuard({ draft: ui.draft, setDraft: ui.setDraft, workspace: useOpenWorkspace() ?? undefined });
 
-  const pickModel = useCallback((spec: string) => detach(Effect.promise(async () => state.setModel(spec))), [state]);
+  const pickModel = useCallback((spec: string) => detachPromise(() => state.setModel(spec)), [state]);
 
   const commands = useChatCommands({
     draft: ui.draft, own: extras.commands, send,
@@ -296,7 +295,7 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
     },
   });
 
-  const pickEffort = useCallback((effort: Parameters<typeof state.setReasoningEffort>[0]) => detach(Effect.promise(async () => state.setReasoningEffort(effort))), [state]);
+  const pickEffort = useCallback((effort: Parameters<typeof state.setReasoningEffort>[0]) => detachPromise(() => state.setReasoningEffort(effort)), [state]);
 
   // An admitted turn with the operator's message last has no assistant row to ask, so the
   // live indicator is decided here. See `threadLiveTail`.

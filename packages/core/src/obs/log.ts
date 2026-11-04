@@ -222,6 +222,11 @@ export function detach(effect: Effect.Effect<void>): void {
   });
 }
 
+/** {@link detach} for a callback's promise, such as a handler's: a rejection nothing answered is a defect it logs. */
+export function detachPromise<A>(work: () => PromiseLike<A> | void): void {
+  detach(Effect.asVoid(Effect.promise(async () => work())));
+}
+
 export function settleLoggedSync<Fields>(
   event: LogEventName,
   failure: { readonly doing: string; readonly otherwise: ErrorCode },

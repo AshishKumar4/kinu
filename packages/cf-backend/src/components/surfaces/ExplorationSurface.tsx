@@ -15,7 +15,8 @@ import { shownHeadStatus } from "@kinu.run/core";
 import type { ForkRunParams, ForkRunSummary, HeadRunView } from "@kinu.run/core";
 import { SwarmTree, naturalCanvasHeight } from "@/components/swarm-tree";
 import { NodeTranscript, statusTone } from "@/components/NodeTranscript";
-import { StatusDot, type StatusTone } from "@/components/ui/Status";
+import { Dot } from "@/components/ui/Dot";
+import type { StatusTone } from "@/components/ui/Status";
 import type { HeadDeltas } from "@kinu.run/core";
 import { cleanNodeLabel, type ExplorerSelection } from "@kinu.run/core/swarm-view";
 import { explorationForkTree, type MctsRow } from "@kinu.run/core";
@@ -26,7 +27,8 @@ import { ScrollBoundary } from "@/components/ui/ScrollBoundary";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { useElementSize } from "@/hooks/use-element-size";
-import { EmptyState, formatScore } from "./shared";
+import { formatScore } from "./shared";
+import { Empty } from "@/components/ui/Empty";
 import { timeAgo } from "@kinu.run/core";
 import {
   forkParamRows, FORK_REVALIDATE_MS, judgeEnsembleLabel,
@@ -35,7 +37,6 @@ import {
 import { fanInVertices, formatEvidenceValue, nodeRationales, runLiveness, runRefusal, swarmAxisRows, swarmResolutionOf, type RunLevel, type RunLiveness, type RunRefusal, type SwarmAxis, type SwarmResolution } from "@kinu.run/core/swarm-view";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Pressable } from "@/components/ui/Pressable";
-import { Dot } from "@/components/ui/Dot";
 import { Surface } from "@/components/ui/Surface";
 
 export interface ExplorationSurfaceProps {
@@ -76,7 +77,7 @@ export function ExplorationSurface({
   }
 
   if (runs.length === 0) {
-    return <EmptyState icon={<GitForkIcon size={28} />} title="No swarms" />;
+    return <Empty icon={GitForkIcon} title="No swarms" />;
   }
 
   // Focus the newest fork on arrival only; later polls must not move the focus.
@@ -179,7 +180,7 @@ function ForkRunRow(
 ) {
   return (
     <Pressable selected={selected} className="flex items-start gap-2 px-2 py-1" onClick={onSelect} aria-current={selected ? "true" : undefined} data-fork-run={run.id}>
-      <StatusDot className="mt-1" tone={RUN_TONE[run.status]} />
+      <Dot className="mt-1" tone={RUN_TONE[run.status]} />
       <div className="min-w-0 flex-1">
         <div className="t-body p-text truncate" title={run.task}>
           {run.name}
@@ -315,7 +316,7 @@ function RunDetailView({
   return (
     <Surface look="panel" className="h-full min-h-0 flex flex-col overflow-hidden">
       <div className="shrink-0 flex items-start gap-2 border-b p-border px-3 py-2">
-        <StatusDot className="mt-2" tone={RUN_TONE[run.status]} />
+        <Dot className="mt-2" tone={RUN_TONE[run.status]} />
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-2 min-w-0">
             <span className="t-item p-text truncate" title={run.task}>{run.name}</span>
@@ -449,7 +450,7 @@ function RunNodeList({ journal, tree, activity, onOpen }: {
   if (nodes.length === 0) {
     return (
       <div className="min-h-0 flex-1 flex items-center justify-center p-4">
-        <EmptyState icon={<TreeStructureIcon size={24} />} title="No nodes yet" />
+        <Empty icon={TreeStructureIcon} title="No nodes yet" />
       </div>
     );
   }
@@ -490,8 +491,8 @@ function RunNodeRow({ node, score, moving, onOpen }: {
 
   return (
     <Pressable className="flex items-start gap-2 px-2 py-1" onClick={onOpen} data-run-node={node.id}>
-      <StatusDot className="mt-1" tone={statusTone(shownHeadStatus(node.status, node.errorMessage))}
-        {...(moving && { title: "Working now" })} />
+      <Dot className="mt-1" tone={statusTone(shownHeadStatus(node.status, node.errorMessage))}
+        {...(moving && { label: "Working now" })} />
       <div className="min-w-0 flex-1">
         <div className="t-body p-text-2 truncate" title={node.task}>
           {cleanNodeLabel(node.task, node.id)}

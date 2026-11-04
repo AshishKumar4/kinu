@@ -26,26 +26,21 @@ import { readGallerySlate, reportListing, starListing } from "@/lib/gallery-api"
 import { Group } from "@/components/ui/Group";
 import { Surface } from "@/components/ui/Surface";
 import { TextArea } from "@/components/ui/Field";
+import { useLabelledStep } from "@/hooks/use-labelled-step";
 
 function ReportDialog({ listing, onClose, onSent }: { listing: GalleryListing; onClose: () => void; onSent: () => void }) {
   const [reason, setReason] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<string | null>(null);
+  const { busy: running, error: failure, run } = useLabelledStep(onSent);
+  const busy = running !== null;
 
-  const send = useCallback(() => {
-    setBusy(true);
-    detach(Effect.ensuring(Effect.catchCause(
-      Effect.map(Effect.promise(() => reportListing({ workspace: listing.workspace, slate: listing.slate, reason: reason.trim() })), onSent),
-      showing(setFailure),
-    ), Effect.sync(() => setBusy(false))));
-  }, [listing, reason, onSent]);
+  const send = (): void => run("report", () => reportListing({ workspace: listing.workspace, slate: listing.slate, reason: reason.trim() }));
 
   return (
     <Modal title={`Report ${listing.title}`} icon={<FlagIcon size={18} className="p-accent-fg" />} onClose={onClose} busy={busy}
       footer={(
         <div className="flex justify-end gap-2">
           <Button size="sm" variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button variant="primary" size="md" disabled={reason.trim() === "" || busy} data-gallery-report-send onClick={send}>Report</Button>
+          <Button variant="primary" size="md" disabled={reason.trim() === ""} busy={busy} data-gallery-report-send onClick={send}>Report</Button>
         </div>
       )}>
       <p className="t-body p-text-2">Say what is wrong with it. The people who run Kinu read every report.</p>

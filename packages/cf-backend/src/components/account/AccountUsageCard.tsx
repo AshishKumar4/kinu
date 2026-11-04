@@ -5,7 +5,7 @@ import {
   type AccountSpend, type AccountUsage, type LimitReport, type LimitWindow,
 } from "@kinu.run/core";
 import { getAccountUsage } from "@/lib/user-api";
-import { Card } from "@/components/ui/form";
+import { Card } from "@/components/ui/Card";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import { Group } from "@/components/ui/Group";

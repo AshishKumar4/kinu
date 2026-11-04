@@ -26,7 +26,7 @@ const ANSWERED = '(window.__polls = (window.__polls ?? 0) + 1, window.__answered
 
 const UNCONFIGURED = 'This deployment is not configured to serve signed-in users: CREDENTIAL_ENCRYPTION_KEY is not set.';
 
-const OFFLINE = '<div class="p-notice-danger">Could not send to the turn: offline</div>';
+const OFFLINE = '<div role="dialog"><div class="p-notice-tone-danger">Could not send to the turn: offline</div></div>';
 
 /** A load that failed, as LoadFailure draws one. */
 const LOAD_FAILED = `<div class="p-danger"><span data-failure>Could not load this folder: ${UNCONFIGURED}</span><button>Retry</button></div>`;

@@ -7,7 +7,7 @@
  */
 import { lazy, Suspense, type ReactNode } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { APP_ROUTES } from "@kinu.run/core";
 import Layout from "@/components/layout";
 import WorkspacePage from "@/pages/WorkspacePage";

@@ -10,12 +10,14 @@ import { Effect } from "effect";
 import { KinuError, settle } from "@kinu.run/core/obs";
 import type { HeadStep, NodeTranscriptView } from "@kinu.run/core";
 import { shownHeadStatus, threadLiveTail, usageTotal, type TurnLiveness } from "@kinu.run/core";
-import { StatusDot, type StatusTone } from "@/components/ui/Status";
+import { Dot } from "@/components/ui/Dot";
+import type { StatusTone } from "@/components/ui/Status";
 import { ChatLiveTail, MessageView } from "@/components/MessageView";
 import {
   deltaAsMessage, NO_HEAD_DELTAS, type HeadDelta, type HeadDeltas,
 } from "@kinu.run/core";
-import { DetailSection, EmptyState, HistoryBoundary, MarkdownContent, Metric } from "@/components/surfaces/shared";
+import { DetailSection, HistoryBoundary, MarkdownContent, Metric } from "@/components/surfaces/shared";
+import { Empty } from "@/components/ui/Empty";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { InlineAction } from "@/components/ui/InlineAction";
 import { cleanNodeLabel, findForkNode } from "@kinu.run/core/swarm-view";
@@ -128,8 +130,7 @@ function Outcome({ view }: { view: NodeTranscriptView }) {
 function EmptyTrace({ view }: { view: NodeTranscriptView }) {
   if (view.origin === "rollout") {
     return (
-      <EmptyState icon={<GitForkIcon size={24} />} title="A rollout has no step trace"
-        hint="This branch made one proposal. The search scored it against its siblings." />
+      <Empty icon={GitForkIcon} title="A rollout has no step trace">This branch made one proposal. The search scored it against its siblings.</Empty>
     );
   }
 
@@ -145,10 +146,9 @@ function EmptyTrace({ view }: { view: NodeTranscriptView }) {
   }
 
   return (
-    <EmptyState icon={<BrainIcon size={24} />} title="This branch recorded no steps"
-      hint={view.errorMessage
+    <Empty icon={BrainIcon} title="This branch recorded no steps">{view.errorMessage
         ? "It stopped before finishing a step. The reason is above."
-        : "It stopped before finishing its first step, and reported no error."} />
+        : "It stopped before finishing its first step, and reported no error."}</Empty>
   );
 }
 
@@ -213,7 +213,7 @@ export function TranscriptBody({ view, onSelect, older, onLoadOlder, pending }: 
   return (
     <div className="min-h-0 flex-1 flex flex-col">
       <div className="shrink-0 flex items-center gap-2 px-4 py-2 border-b p-border">
-        <StatusDot tone={statusTone(shownHeadStatus(view.status, view.errorMessage))} />
+        <Dot tone={statusTone(shownHeadStatus(view.status, view.errorMessage))} />
         <span className="t-status uppercase p-text-3 shrink-0">{shownHeadStatus(view.status, view.errorMessage)}</span>
         <div className="h-3 shrink-0 border-l p-border" />
         <SearchPath view={view} onSelect={onSelect} />
@@ -392,8 +392,7 @@ export function NodeTranscript({ selection, ownerPath = null, trees, rpc, headAc
   if (selection === null) {
     return (
       <Surface look="panel" className="min-h-0 flex-1 flex items-center justify-center">
-        <EmptyState icon={<TreeStructureIcon size={28} />} title="Pick a branch"
-          hint="Select one in the tree to read its input, every step, and its answer." />
+        <Empty icon={TreeStructureIcon} title="Pick a branch">Select one in the tree to read its input, every step, and its answer.</Empty>
       </Surface>
     );
   }
@@ -415,8 +414,7 @@ export function NodeTranscript({ selection, ownerPath = null, trees, rpc, headAc
     // Null view: neither store holds this node (distinct from a node with no steps).
     body = (
       <div className="flex-1 flex items-center justify-center">
-        <EmptyState icon={<TreeStructureIcon size={28} />} title="This branch is no longer in the run"
-          hint={`Nothing is recorded for ${drawnLabel}. The search pruned it, or the run was rewritten.`} />
+        <Empty icon={TreeStructureIcon} title="This branch is no longer in the run">{`Nothing is recorded for ${drawnLabel}. The search pruned it, or the run was rewritten.`}</Empty>
       </div>
     );
   }

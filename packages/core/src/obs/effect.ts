@@ -79,8 +79,13 @@ export function recording(
   return (failed) => Effect.sync(() => { record(toKinuError({ ...failure, cause: Cause.squash(failed) })); });
 }
 
+/** A failed effect's cause, in words for its reader. */
+export function chainOf(failed: Cause.Cause<unknown>): string {
+  return renderThrownChain({ cause: Cause.squash(failed) });
+}
+
 export function showing(show: (chain: string) => void): (failed: Cause.Cause<unknown>) => Effect.Effect<void> {
-  return (failed) => Effect.sync(() => { show(renderThrownChain({ cause: Cause.squash(failed) })); });
+  return (failed) => Effect.sync(() => { show(chainOf(failed)); });
 }
 
 /** `effect` with the named failure passed as `undefined`. */

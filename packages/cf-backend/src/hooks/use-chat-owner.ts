@@ -14,7 +14,7 @@ import type { SendLanding, SendState } from "@kinu.run/core";
 import { workspaceRpc } from "@/lib/workspace-rpc";
 import type { OrchestratorAgent } from "@/orchestrator";
 import { sendLanding } from "@kinu.run/core";
-import { attemptInItsWords, detach, diagnostics, renderThrownChain, settle, toKinuError } from "@kinu.run/core/obs";
+import { attemptInItsWords, diagnostics, renderThrownChain, settle, toKinuError, detachPromise } from "@kinu.run/core/obs";
 import {
   createSessionRecovery, fetchDeployedBuildSha, isNewerDeployedBuild, pageDeployedBuildSha, reportChatStreamFailure,
   routeTemplateOf, type SessionRecovery,
@@ -376,7 +376,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
     const failed = standingStreamError;
 
     // Reported once per failure; a report that cannot be sent is a diagnostic, never the page's failure.
-    detach(Effect.promise(async () => {
+    detachPromise(async () => {
       try {
         await reportChatStreamFailure(failed, subagent === undefined ? "root" : "actor", {
           release: pageDeployedBuildSha(),
@@ -385,7 +385,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
       } catch (cause) {
         diagnostics.event("client_error.reporter_failed", { reason: renderThrownChain({ cause }) });
       }
-    }));
+    });
   }, [standingStreamError, subagent]);
 
   // Version skew: /api/health's build sha against the page's own (`pageDeployedBuildSha`), on each reconnect.
@@ -433,7 +433,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
       }
     };
 
-    const opened = () => detach(Effect.promise(onOpen));
+    const opened = () => detachPromise(onOpen);
 
     agent.addEventListener("open", opened);
 
@@ -473,7 +473,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
     let timer: ReturnType<typeof setTimeout> | undefined;
     let disposed = false;
 
-    detach(Effect.promise(() => Promise.resolve().then(async () => {
+    detachPromise(() => Promise.resolve().then(async () => {
       try {
         if (disposed) return;
 
@@ -503,7 +503,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
           otherwise: 'io',
         }));
       }
-    })));
+    }));
 
     return () => {
       disposed = true;
@@ -753,7 +753,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
 
     if (run === null) return false;
     // Its stream tells how the turn ended; a run that fails outside it is reported, never dropped.
-    detach(Effect.promise(() => run));
+    detachPromise(() => run);
 
     return true;
   }, [startTurn, messages.length, regenerate]);

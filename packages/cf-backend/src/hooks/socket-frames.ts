@@ -1,8 +1,7 @@
 import { useEffect, useRef } from "react";
 import * as v from "valibot";
 import { ChatResponseFrameSchema, PositionCursorSchema, WorkspaceBroadcastSchema } from "@kinu.run/core";
-import { Effect } from "effect";
-import { detach, tolerate } from "@kinu.run/core/obs";
+import { tolerate, detachPromise } from "@kinu.run/core/obs";
 
 /** The socket's frames: the chat transport's own, and the workspace's broadcasts as core decodes them. */
 const SocketMessageSchema = v.variant("type", [
@@ -63,7 +62,7 @@ export function useSocketFrames(socket: EventTarget, pane: () => PaneIdentity, r
   latest.current = { pane, receivers };
 
   useEffect(() => {
-    const received = (event: Event) => detach(Effect.promise(async () => {
+    const received = (event: Event) => detachPromise(async () => {
       const frame = event instanceof MessageEvent ? parseSocketMessage(event.data) : null;
 
       if (frame === null) return;
@@ -72,7 +71,7 @@ export function useSocketFrames(socket: EventTarget, pane: () => PaneIdentity, r
       now.everyFrame(frame);
 
       if (admitsActorFrame(frame, identity())) await now.paneFrame(frame);
-    }));
+    });
 
     socket.addEventListener("message", received);
 

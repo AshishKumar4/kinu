@@ -5,7 +5,7 @@
  */
 import { useState, type ReactNode } from "react";
 import { Effect } from "effect";
-import { detach } from "@kinu.run/core/obs";
+import { useLabelledStep } from "@/hooks/use-labelled-step";
 import { ProhibitIcon, UserPlusIcon } from "@phosphor-icons/react";
 import { shownBytes, timeAgo, type AccountLimits, type LimitReading } from "@kinu.run/core";
 import { runAction, type AccountRow, type ControlAction } from "@/lib/control-api";
@@ -129,7 +129,8 @@ export function AccountsTable({ rows, onOpen, onChanged }: { rows: readonly Acco
                 <tbody>
                   {shown.map((row) => (
                     <tr key={row.userId} onClick={() => onOpen(row.userId)} data-opens="" data-account={row.email} className="border-b p-border last:border-b-0">
-                      <td className="max-w-64 truncate px-3 py-3 p-text">{row.email}</td>
+                      {/* The row's keyboard path: Enter on its name is a click the row hears. */}
+                      <td className="max-w-64 px-1 py-1"><Pressable look="compact" className="max-w-full truncate px-2 py-2 text-left p-text">{row.email}</Pressable></td>
                       <td className="px-3 py-3"><ClassPill limits={row.limits} /></td>
                       {COLUMNS.map((column) => <td key={column.id} className="px-3 py-3 align-middle"><LimitCell limits={row.limits} id={column.id} /></td>)}
                       <td className="t-meta whitespace-nowrap px-3 py-3 p-text-3" title={when(row.lastSeenAt)}>{seenText(row.lastSeenAt)}</td>
@@ -189,15 +190,15 @@ async function act(action: ControlAction): Promise<Said & { readonly result?: un
 
 function InviteDialog({ onClose, onInvited }: { onClose: () => void; onInvited: () => void }) {
   const [email, setEmail] = useState("");
-  const [busy, setBusy] = useState(false);
   const [said, setSaid] = useState<Said | null>(null);
   const [link, setLink] = useState<string | null>(null);
+  const step = useLabelledStep();
+  const busy = step.busy !== null;
+  const shown = step.error === null ? said : { done: false, text: step.error };
 
-  const run = (action: ControlAction) => Effect.promise(async () => {
-    setBusy(true);
+  const run = (action: ControlAction): void => step.run(action.action, async () => {
     const answer = await act(action);
 
-    setBusy(false);
     setSaid(answer);
 
     if (!answer.done) return;
@@ -212,8 +213,8 @@ function InviteDialog({ onClose, onInvited }: { onClose: () => void; onInvited: 
       footer={(
         <>
           <Button variant="ghost" size="sm" onClick={onClose}>Close</Button>
-          <Button variant="secondary" size="sm" disabled={busy} onClick={() => detach(run({ action: "invite.link" }))}>Make a link instead</Button>
-          <Button variant="primary" size="sm" disabled={busy || email.trim() === ""} onClick={() => detach(run({ action: "invite.email", email: email.trim() }))}>Invite</Button>
+          <Button variant="secondary" size="sm" disabled={busy} onClick={() => run({ action: "invite.link" })}>Make a link instead</Button>
+          <Button variant="primary" size="sm" disabled={busy || email.trim() === ""} onClick={() => run({ action: "invite.email", email: email.trim() })}>Invite</Button>
         </>
       )}>
       <div className="space-y-3">
@@ -222,7 +223,7 @@ function InviteDialog({ onClose, onInvited }: { onClose: () => void; onInvited: 
         </Field>
         <p className="t-meta p-text-3">An invited account has no limits, from its first sign-in. A link works once, for 7 days, for whoever opens it signed in.</p>
         {link !== null && <CopyField value={link} what="the invite link" />}
-        {said !== null && <p role={said.done ? "status" : "alert"} className={`t-meta ${said.done ? "p-text-2" : "p-danger"}`}>{said.text}</p>}
+        {shown !== null && <p role={shown.done ? "status" : "alert"} className={`t-meta ${shown.done ? "p-text-2" : "p-danger"}`}>{shown.text}</p>}
       </div>
     </Modal>
   );
@@ -230,31 +231,26 @@ function InviteDialog({ onClose, onInvited }: { onClose: () => void; onInvited: 
 
 function SuspendDialog({ email, userId, onClose, onDone }: { email: string; userId: string; onClose: () => void; onDone: () => void }) {
   const [reason, setReason] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState<string | null>(null);
 
-  const suspend = () => Effect.promise(async () => {
-    setBusy(true);
-    const answer = await act({ action: "account.suspend", userId, reason: reason.trim() });
-
-    setBusy(false);
-
-    if (!answer.done) {
-      setFailed(answer.text);
-
-      return;
-    }
-
+  const { busy: running, error: failed, run } = useLabelledStep(() => {
     onDone();
     onClose();
   });
+
+  const busy = running !== null;
+
+  const suspend = (): void => run("suspend", () => Effect.gen(function* () {
+    const answer = yield* Effect.promise(async () => act({ action: "account.suspend", userId, reason: reason.trim() }));
+
+    if (!answer.done) yield* Effect.fail(answer.text);
+  }));
 
   return (
     <Modal title={`Suspend ${email}?`} icon={<ProhibitIcon size={16} className="p-danger" />} width="md" onClose={onClose} busy={busy}
       footer={(
         <>
           <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
-          <Button variant="destructive" size="sm" disabled={busy || reason.trim() === ""} onClick={() => detach(suspend())}>Suspend</Button>
+          <Button variant="destructive" size="sm" disabled={busy || reason.trim() === ""} onClick={suspend}>Suspend</Button>
         </>
       )}>
       <div className="space-y-3">
@@ -277,18 +273,18 @@ export function AccountStanding({ userId, email, seen, limits, onChanged }: {
   onChanged: () => void;
 }): ReactNode {
   const [suspending, setSuspending] = useState(false);
-  const [busy, setBusy] = useState(false);
   const [said, setSaid] = useState<Said | null>(null);
+  const step = useLabelledStep();
+  const busy = step.busy !== null;
+  const shown = step.error === null ? said : { done: false, text: step.error };
   const { report } = limits;
   // An operator's and an eval account's class is the deployment's, never set here.
   const settable = report.class === "free" || report.class === "invited";
   const stored = report.class === "invited" ? "invited" : "free";
 
-  const run = (action: ControlAction) => Effect.promise(async () => {
-    setBusy(true);
+  const run = (action: ControlAction): void => step.run(action.action, async () => {
     const answer = await act(action);
 
-    setBusy(false);
     setSaid(answer);
 
     if (answer.done) onChanged();
@@ -321,14 +317,14 @@ export function AccountStanding({ userId, email, seen, limits, onChanged }: {
         {settable && (
           <Select label="Class" size="sm" value={stored} disabled={busy}
             options={[{ value: "free", label: "Class: Free" }, { value: "invited", label: "Class: Invited" }]}
-            onChange={(chosen) => detach(run({ action: "account.class", userId, class: chosen }))} />
+            onChange={(chosen) => run({ action: "account.class", userId, class: chosen })} />
         )}
         {report.suspended === null
           ? <Button variant="danger" size="sm" icon={<ProhibitIcon size={12} />} disabled={busy} onClick={() => setSuspending(true)}>Suspend</Button>
-          : <Button variant="secondary" size="sm" disabled={busy} onClick={() => detach(run({ action: "account.unsuspend", userId }))}>Lift the suspension</Button>}
+          : <Button variant="secondary" size="sm" disabled={busy} onClick={() => run({ action: "account.unsuspend", userId })}>Lift the suspension</Button>}
       </div>
       <p className="t-meta p-text-3">Invited lifts every limit. Suspended can&apos;t sign in; their data stays until you lift it or remove the account.</p>
-      {said !== null && <p role={said.done ? "status" : "alert"} className={`t-meta ${said.done ? "p-text-2" : "p-danger"}`}>{said.text}</p>}
+      {shown !== null && <p role={shown.done ? "status" : "alert"} className={`t-meta ${shown.done ? "p-text-2" : "p-danger"}`}>{shown.text}</p>}
       {suspending && <SuspendDialog email={email} userId={userId} onClose={() => setSuspending(false)} onDone={onChanged} />}
     </section>
   );

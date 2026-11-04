@@ -32,19 +32,19 @@ import {
   type TierId, type ModelMenuResponse,
   fastAssignment,
 } from '@kinu.run/core';
-import { Effect } from 'effect';
-import { settle, showing } from '@kinu.run/core/obs';
+import { useLabelledStep } from '@/hooks/use-labelled-step';
 import { lastValue, useAsyncResource, type AsyncResource } from '@/hooks/use-async-resource';
 import { getProfileCatalog, listAvailableModels, testModel, updateProfileCatalog } from '../lib/user-api';
 import { AccountPicker, ModelPicker, specOnAccount } from './ModelPicker';
 import { reasoningEffortChoice } from './model-picker-options';
-import { Card, Choice, Field, composing } from './ui/form';
+import { Card } from './ui/Card';
+import { Select } from './ui/Select';
 import { Segmented } from './ui/Segmented';
 import { Checkbox } from "@/components/ui/Check";
 import { Chip } from "@/components/ui/Chip";
 import { Disclosure } from "@/components/ui/Disclosure";
 import { Dot } from "@/components/ui/Dot";
-import { TextArea, TextInput } from "@/components/ui/Field";
+import { Field, TextArea, TextInput, composing } from "@/components/ui/Field";
 import { Rail } from "@/components/ui/Rail";
 
 const EMPTY_MENU: ModelMenuResponse = { models: [], failures: [] };
@@ -103,8 +103,10 @@ function useCatalogEdit() {
   const envelope = lastValue(catalog.resource);
   const [draft, setDraft] = useState<ProfileCatalog | null>(null);
   const [draftOf, setDraftOf] = useState<ProfileCatalogEnvelope | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [saveError, setError] = useState<string | null>(null);
+  const { busy: running, error: saveError, run } = useLabelledStep();
+  const saving = running !== null;
+  // A draft the form refused before any save: a role or tier ID that cannot be.
+  const [invalid, setError] = useState<string | null>(null);
   const { reload: rereadCatalog, set: publish } = catalog;
   const rereadModels = models.reload;
 
@@ -115,20 +117,16 @@ function useCatalogEdit() {
 
   const dirty = envelope !== null && draft !== null && JSON.stringify(envelope.catalog) !== JSON.stringify(draft);
 
-  const save = useCallback(() => settle(Effect.gen(function* () {
-    if (!draft || !envelope || !dirty || saving) return;
-    setSaving(true);
-    setError(null);
-    yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      publish(yield* Effect.promise(() => updateProfileCatalog(draft, envelope.version)));
-    }), showing(setError)), Effect.sync(() => setSaving(false)));
-  })), [draft, envelope, dirty, saving, publish]);
+  const save = (): void => {
+    if (!draft || !envelope || !dirty) return;
+    run("save", async () => publish(await updateProfileCatalog(draft, envelope.version)));
+  };
 
   return {
     envelope, draft, setDraft, dirty, save, setError, saving,
     menu: lastValue(models.resource) ?? EMPTY_MENU,
     busy: saving || catalog.resource.status === 'loading' || models.resource.status === 'loading',
-    error: saveError ?? readFailure(catalog.resource, models.resource),
+    error: invalid ?? saveError ?? readFailure(catalog.resource, models.resource),
     load: useCallback(() => { rereadCatalog(); rereadModels(); }, [rereadCatalog, rereadModels]),
   };
 }
@@ -481,7 +479,7 @@ export function ProfileCatalogSettings() {
         </Card>
       )}
 
-      {(draft && envelope) && <SaveBar dirty={dirty} saving={saving} error={error} onDiscard={() => setDraft(envelope.catalog)} onSave={() => void save()} />}
+      {(draft && envelope) && <SaveBar dirty={dirty} saving={saving} error={error} onDiscard={() => setDraft(envelope.catalog)} onSave={save} />}
     </>
   );
 }
@@ -621,7 +619,7 @@ function RoleEditor(props: {
             onChange={(event) => set('label', event.target.value)} />
         </Field>
         <Field label="Model">
-          <Choice label="Default tier"
+          <Select label="Default tier"
             value={props.role.tier}
             options={props.tiers.map((tier) => ({ value: tier, label: `${tierWords(tier).name} model` }))}
             onChange={(tier) => set('tier', tier)} />
@@ -638,7 +636,7 @@ function RoleEditor(props: {
         label="Starts in Plan mode: it designs before it changes anything" />
       {props.swarms && (
         <Field inline label="Swarm preset">
-          <Choice label="Default swarm preset" size="sm" className="w-40"
+          <Select label="Default swarm preset" size="sm" className="w-40"
             value={props.role.preset}
             options={NAMED_SWARM_PRESETS.map((preset) => ({ value: preset, label: preset }))}
             onChange={(preset) => set('preset', preset)} />

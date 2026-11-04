@@ -2,7 +2,7 @@
 // credential, model spec `openai-compat:<name>/<modelId>`.
 import type { LanguageModel } from 'ai';
 import * as v from 'valibot';
-import { baseCredentialKey } from '../credentials/accounts';
+import { openAICompatKey, openAICompatNameOf } from '../credentials/accounts';
 import type { DynamicProviderSource } from './registry';
 import type { AuthResolution, ModelInfo, ModelProvider } from './types';
 import { keyedEndpointModel } from './catalog';
@@ -16,21 +16,11 @@ const ModelListSchema = v.object({
   })),
 });
 
-const OPENAI_COMPAT_KEY_PREFIX = 'openai-compat.';
-
-function openAICompatNameOf(key: string): string | null {
-  const base = baseCredentialKey(key);
-
-  return base.startsWith(OPENAI_COMPAT_KEY_PREFIX) ? base.slice(OPENAI_COMPAT_KEY_PREFIX.length) : null;
-}
-
 /** `openai-compat:groq` → `openai-compat.groq` */
 function credKeyFor(providerId: string): string {
-  if (providerId === 'openai-compat') return `${OPENAI_COMPAT_KEY_PREFIX}default`;
+  if (providerId === 'openai-compat') return openAICompatKey('default');
 
-  if (providerId.startsWith('openai-compat:')) {
-    return OPENAI_COMPAT_KEY_PREFIX + providerId.slice('openai-compat:'.length);
-  }
+  if (providerId.startsWith('openai-compat:')) return openAICompatKey(providerId.slice('openai-compat:'.length));
 
   return providerId;
 }

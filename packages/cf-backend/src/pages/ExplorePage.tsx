@@ -9,7 +9,7 @@ import { Effect } from "effect";
 import { Loader } from "@/components/ui/Loader";
 import { Button, buttonClass } from "@/components/ui/Button";
 import { Segmented } from "@/components/ui/Segmented";
-import { Choice } from "@/components/ui/form";
+import { Select } from "@/components/ui/Select";
 import { CheckIcon, CompassIcon, MagnifyingGlassIcon } from "@phosphor-icons/react";
 import { GALLERY_CATEGORIES, GALLERY_SORTS, PERSONAL_ASSISTANT_ID, type GalleryCategory, type GallerySort } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
@@ -113,7 +113,7 @@ function Filters({ kind, category, sort, q, choose }: {
       ))}
       <span className="ml-auto flex w-full flex-wrap items-center gap-2 sm:w-auto">
         <div className="w-40 shrink-0" data-explore-sort>
-          <Choice label="Sort" size="sm" className="!h-8" value={sort} onChange={(chosen) => choose("sort", chosen === "trending" ? null : chosen)}
+          <Select label="Sort" size="sm" className="!h-8" value={sort} onChange={(chosen) => choose("sort", chosen === "trending" ? null : chosen)}
             options={GALLERY_SORTS.map((each) => ({ value: each, label: SORT_WORDS[each] }))} />
         </div>
         <TextInput value={typed} onChange={(event) => { setTyped(event.target.value); choose("q", event.target.value); }} type="search" placeholder="Search apps and workspaces" aria-label="Search apps and workspaces" data-explore-search

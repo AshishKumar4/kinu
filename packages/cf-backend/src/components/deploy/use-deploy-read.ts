@@ -3,8 +3,7 @@
  * again when what it asks changes, after `rest` of no change, on coming back to the page, and every `every` while set.
  */
 import { useEffect, useRef, useState } from "react";
-import { Effect } from "effect";
-import { detach } from "@kinu.run/core/obs";
+import { detachPromise } from "@kinu.run/core/obs";
 import type { DeployHeard, DeployRefused } from "@/lib/deploy-page-api";
 
 export type Reading<A> =
@@ -39,14 +38,14 @@ export function useDeployRead<A>(key: string | null, read: () => Promise<DeployH
     // Reads overlap (a focus while an interval's read is out): only the last one asked may answer.
     let asked = 0;
 
-    const ask = () => detach(Effect.promise(async () => {
+    const ask = () => detachPromise(async () => {
       asked += 1;
 
       const mine = asked;
       const heard = await latest.current();
 
       if (current && mine === asked) setHeld({ key, reading: "answer" in heard ? { state: "read", answer: heard.answer } : { state: "refused", refusal: heard.refusal } });
-    }));
+    });
 
     const first = setTimeout(ask, rest);
     const again = every === null ? undefined : setInterval(ask, every);

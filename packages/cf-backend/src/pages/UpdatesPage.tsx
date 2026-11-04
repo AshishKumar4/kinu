@@ -2,46 +2,37 @@
  * `/updates` (docs/SELF-DEPLOY.md § Updates). The deployment pulls; there is no push.
  * A poll failing mid-run is expected: the Worker being replaced is the update working.
  */
-import { showing, detach } from "@kinu.run/core/obs";
+import { settle } from "@kinu.run/core/obs";
 import { Button } from "@/components/ui/Button";
 import { Effect } from "effect";
-import { useCallback, useEffect, useState } from "react";
 import { Loader } from "@/components/ui/Loader";
 import { ArrowUpIcon } from "@phosphor-icons/react";
-import {
-  DeploySnapshotSchema, UpdateOfferSchema,
-  type DeploySnapshot, type UpdateBuild, type UpdateOffer,
-} from "@kinu.run/core/deploy";
-import * as v from "valibot";
+import { DeploySnapshotSchema, UpdateOfferSchema, type DeploySnapshot, type UpdateBuild } from "@kinu.run/core/deploy";
+import type * as v from "valibot";
 import { StepRow } from "@/components/deploy/DeployStepRow";
 import { Notice } from "@/components/ui/Notice";
 import { Group } from "@/components/ui/Group";
 import { Surface } from "@/components/ui/Surface";
+import { ApiError, request, type HttpRequest } from "@/lib/http";
+import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import { useLabelledStep } from "@/hooks/use-labelled-step";
 
 const RUN_POLL_MS = 2000;
 
 /** `/api/updates` answers 404 to everyone but the deployment's owner, so a 404 here means the reader is someone else. */
 const NOT_OWNER = "Updates are installed by the person who deployed this Kinu. They see what is available here and install it.";
 
-function read<Schema extends v.GenericSchema>(
-  schema: Schema,
-  path: string,
-  init: RequestInit = {},
-): Effect.Effect<v.InferOutput<Schema>> {
-  return Effect.gen(function* () {
-    const response = yield* Effect.promise(() => fetch(path, init));
-
-    if (response.status === 404) return yield* Effect.die(new Error(NOT_OWNER));
-
-    if (!response.ok) {
-      const said = v.safeParse(v.object({ error: v.string() }), yield* Effect.promise(() => response.json()));
-
-      return yield* Effect.die(new Error(said.success ? said.output.error : `${path} answered HTTP ${String(response.status)}`));
-    }
-
-    return v.parse(schema, yield* Effect.promise(() => response.json()));
-  });
+function read<Schema extends v.GenericSchema>(schema: Schema, path: string, init?: HttpRequest): Promise<v.InferOutput<Schema>> {
+  return settle(Effect.catchDefect(request(schema, path, init), (died) => Effect.die(died instanceof ApiError && died.status === 404 ? new Error(NOT_OWNER) : died)));
 }
+
+const readOffer = () => read(UpdateOfferSchema, "/api/updates");
+
+/** `apply` answers before the first step runs, so a page opened mid-update reads the ledger. */
+const readRun = () => read(DeploySnapshotSchema, "/api/updates/run");
+
+/** A run still going is read again until it ends. */
+const pollWhileGoing = (held: DeploySnapshot | null): number | null => (held !== null && held.state !== "done" && held.state !== "failed" ? RUN_POLL_MS : null);
 
 function Build({ label, build }: { label: string; build: UpdateBuild | null }) {
   return (
@@ -53,60 +44,23 @@ function Build({ label, build }: { label: string; build: UpdateBuild | null }) {
   );
 }
 
-export default function UpdatesPage({ fixture, fixtureRun }: {
-  fixture?: UpdateOffer;
-  fixtureRun?: DeploySnapshot;
-} = {}) {
-  const live = fixture === undefined && fixtureRun === undefined;
-  const [offer, setOffer] = useState<UpdateOffer | null>(fixture ?? null);
-  const [run, setRun] = useState<DeploySnapshot | null>(fixtureRun ?? null);
-  const [err, setErr] = useState<string | null>(null);
-  /** Last poll failure, or null; held so a failure other than the restart still shows on the page. */
-  const [restarting, setRestarting] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+export default function UpdatesPage() {
+  const offerRead = useAsyncResource(readOffer);
+  // A mid-run read failure is the Worker being replaced: the run on screen stays, its cause beside the restart notice.
+  const runRead = useAsyncResource(readRun, pollWhileGoing);
+  const held = lastValue(runRead.resource);
+  const run = held !== null && held.steps.length > 0 ? held : null;
+  const offer = lastValue(offerRead.resource);
+  const restarting = runRead.resource.status === "error" && run !== null ? runRead.resource.message : null;
+  const { busy, error, run: start } = useLabelledStep();
 
-  useEffect(() => {
-    if (!live) return;
-    let mounted = true;
+  const err = (offerRead.resource.status === "error" ? offerRead.resource.message : null)
+    ?? (runRead.resource.status === "error" && held === null ? runRead.resource.message : null)
+    ?? error;
 
-    const failed = showing((chain) => { if (mounted) setErr(chain); });
+  const going = pollWhileGoing(run) !== null;
 
-    detach(Effect.all([
-      Effect.catchCause(Effect.map(read(UpdateOfferSchema, "/api/updates"), (held) => { if (mounted) setOffer(held); }), failed),
-      // `apply` answers before the first step runs, so a page opened mid-update reads the ledger.
-      Effect.catchCause(Effect.map(read(DeploySnapshotSchema, "/api/updates/run"), (held) => {
-        if (mounted && held.steps.length > 0) setRun(held);
-      }), failed),
-    ], { concurrency: 'unbounded' }));
-
-    return () => { mounted = false; };
-  }, [live]);
-
-  const going = run !== null && run.state !== "done" && run.state !== "failed";
-
-  useEffect(() => {
-    if (!live || !going) return;
-    let mounted = true;
-
-    // A mid-run read failure is the Worker being replaced; its cause shows beside the restart notice.
-    const timer = setInterval(() => detach(Effect.catchCause(Effect.map(read(DeploySnapshotSchema, "/api/updates/run"), (held) => {
-      if (!mounted) return;
-      setRestarting(null);
-      setRun(held);
-    }), showing((chain) => { if (mounted) setRestarting(chain); }))), RUN_POLL_MS);
-
-    return () => {
-      mounted = false;
-      clearInterval(timer);
-    };
-  }, [live, going]);
-
-  const apply = useCallback(() => {
-    setBusy(true);
-    setErr(null);
-
-    detach(Effect.ensuring(Effect.catchCause(Effect.map(read(DeploySnapshotSchema, "/api/updates/apply", { method: "POST" }), setRun), showing(setErr)), Effect.sync(() => setBusy(false))));
-  }, []);
+  const apply = (): void => start("apply", async () => runRead.set(await read(DeploySnapshotSchema, "/api/updates/apply", { method: "POST" })));
 
   return (
     <div className="mx-auto max-w-3xl space-y-6 px-6 py-8">
@@ -137,7 +91,7 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
             {offer.reason !== "" && <p className="t-body p-text-2">{offer.reason}</p>}
             {offer.upToDate && <p className="t-body p-text" data-updates="up-to-date">Up to date.</p>}
             {offer.installable && (
-              <Button variant="primary" size="md" onClick={apply} disabled={busy || going} >
+              <Button variant="primary" size="md" onClick={apply} busy={busy !== null} disabled={going}>
                 <ArrowUpIcon size={15} /> Install {offer.available?.version ?? ""}
               </Button>
             )}

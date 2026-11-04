@@ -33,6 +33,20 @@ export function baseCredentialKey(key: string): string {
   return splitAccount(key).base;
 }
 
+const OPENAI_COMPAT_KEY_PREFIX = 'openai-compat.';
+
+/** The credential of the OpenAI-compatible endpoint named `name`: `groq` → `openai-compat.groq`. */
+export function openAICompatKey(name: string): string {
+  return `${OPENAI_COMPAT_KEY_PREFIX}${name}`;
+}
+
+/** The endpoint a credential key names, or null for a key that is not an OpenAI-compatible endpoint's. */
+export function openAICompatNameOf(key: string): string | null {
+  const base = baseCredentialKey(key);
+
+  return base.startsWith(OPENAI_COMPAT_KEY_PREFIX) ? base.slice(OPENAI_COMPAT_KEY_PREFIX.length) : null;
+}
+
 export function accountOf(key: string): string {
   return splitAccount(key).account ?? MAIN_ACCOUNT;
 }

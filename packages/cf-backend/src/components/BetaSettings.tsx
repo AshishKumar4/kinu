@@ -1,33 +1,26 @@
 /** Settings, Beta: off until turned on, in the profile catalog both backends read. */
-import { useState } from "react";
 import { Effect } from "effect";
 import { betaSwarms, SWARMS_BETA_SETTING, type ProfileCatalogEnvelope } from "@kinu.run/core";
-import { attempt, renderThrownChain, detach } from "@kinu.run/core/obs";
-import { Card, Field } from "@/components/ui/form";
+import { attempt } from "@kinu.run/core/obs";
+import { Card } from "@/components/ui/Card";
+import { Field } from "@/components/ui/Field";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { Switch } from "@/components/ui/Switch";
 import { useAsyncResource } from "@/hooks/use-async-resource";
+import { useLabelledStep } from "@/hooks/use-labelled-step";
 import { getProfileCatalog, updateProfileCatalog } from "../lib/user-api";
 
 export function BetaSettings() {
   const { resource, reload, set } = useAsyncResource(getProfileCatalog);
-  const [failure, setFailure] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  // A refused turn reads the stored setting again, so the switch shows what holds.
+  const { busy, error: failure, run } = useLabelledStep();
+  const saving = busy !== null;
 
-  const turn = (envelope: ProfileCatalogEnvelope, on: boolean) => {
-    setSaving(true);
-    setFailure(null);
-
-    return attempt({ doing: `turning ${on ? "on" : "off"} ${SWARMS_BETA_SETTING}`, otherwise: "io" },
-      () => updateProfileCatalog({ ...envelope.catalog, betaSwarms: on }, envelope.version)).pipe(
-      Effect.map(set),
-      Effect.catch((failed) => Effect.sync(() => {
-        setFailure(renderThrownChain({ cause: failed }));
-        reload();
-      })),
-      Effect.ensuring(Effect.sync(() => { setSaving(false); })),
-    );
-  };
+  const turn = (envelope: ProfileCatalogEnvelope, on: boolean): void => run("turn", () => Effect.map(
+    Effect.tapError(attempt({ doing: `turning ${on ? "on" : "off"} ${SWARMS_BETA_SETTING}`, otherwise: "io" },
+      () => updateProfileCatalog({ ...envelope.catalog, betaSwarms: on }, envelope.version)), () => Effect.sync(reload)),
+    set,
+  ));
 
   return (
     <Card title="Swarms">
@@ -37,7 +30,7 @@ export function BetaSettings() {
 
           return (
             <Field label="Use swarms" hint={failure ?? (saving ? "Saving…" : undefined)} inline>
-              <Switch on={on} onChange={(next) => detach(turn(envelope, next))} label={SWARMS_BETA_SETTING} disabled={saving} data-beta-swarms />
+              <Switch on={on} onChange={(next) => turn(envelope, next)} label={SWARMS_BETA_SETTING} disabled={saving} data-beta-swarms />
             </Field>
           );
         }}

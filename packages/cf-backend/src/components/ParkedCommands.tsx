@@ -9,7 +9,7 @@ import { useCallback, useState, useSyncExternalStore } from "react";
 import { Loader } from "@/components/ui/Loader";
 import { Button } from "@/components/ui/Button";
 import { revealMisrepresenting, timeAgo, type Omitted, type PendingAction } from "@kinu.run/core";
-import { detach, renderThrownChain, settle } from "@kinu.run/core/obs";
+import { renderThrownChain, settle, detachPromise } from "@kinu.run/core/obs";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { FileBody } from "@/components/surfaces/changes/ChangesPanel";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
@@ -203,16 +203,16 @@ export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: {
 
       <div className="flex items-center justify-end gap-2 flex-wrap">
         <Button variant="primary" size="sm" disabled={state.busy || chosen.size === 0}
-          onClick={() => detach(Effect.promise(async () => flow.decide("approved", [...chosen])))}>
+          onClick={() => detachPromise(() => flow.decide("approved", [...chosen]))}>
           Approve {countLabel(chosen.size, actions.length)}
         </Button>
         <Button size="sm" variant="secondary" disabled={state.busy || chosen.size === 0}
-          onClick={() => detach(Effect.promise(async () => flow.decide("always", [...chosen])))}
+          onClick={() => detachPromise(() => flow.decide("always", [...chosen]))}
           title={saysAlways ? "Approve these, and allow each from now on as its row says." : "Approve these checks for this environment. Revoke under Settings → Standing approvals."}>
           {alwaysLabel(picked.length === 0 ? actions : picked, countLabel(chosen.size, actions.length))}
         </Button>
         <Button size="sm" variant="ghost" disabled={state.busy || chosen.size === 0}
-          onClick={() => detach(Effect.promise(async () => flow.decide("denied", [...chosen])))}>
+          onClick={() => detachPromise(() => flow.decide("denied", [...chosen]))}>
           Deny {countLabel(chosen.size, actions.length)}
         </Button>
       </div>

@@ -44,12 +44,12 @@ export function GitHubSection({ rpc, readMoves, agents }: { rpc: WorkspaceRpc; r
       <div className="grid gap-3 md:grid-cols-2">
         <Panel icon={<GitBranchIcon size={15} />} title="Repositories" count={github?.repos.length}>
           {github !== null && (github.repos.length === 0
-            ? <Empty text="None yet. The workspace's GitHub remotes show here, with what its agents push." />
+            ? <li className="t-meta px-4 pb-2 p-text-3">None yet. The workspace's GitHub remotes show here, with what its agents push.</li>
             : github.repos.map((repo) => <RepoRow key={repo.repo} repo={repo} />))}
         </Panel>
         <Panel icon={<GitPullRequestIcon size={15} />} title="Issues and pull requests" count={github?.items.length}>
           {github !== null && (github.items.length === 0
-            ? <Empty text="None yet. The issues and pull requests the agents open or work on show here." />
+            ? <li className="t-meta px-4 pb-2 p-text-3">None yet. The issues and pull requests the agents open or work on show here.</li>
             : github.items.map((item) => <ItemRow key={`${item.repo}#${String(item.number)}`} item={item} nameOf={nameOf} />))}
         </Panel>
       </div>
@@ -77,10 +77,6 @@ function Panel({ icon, title, count, children }: { icon: ReactNode; title: strin
       <ul className="flex flex-col pb-1">{children}</ul>
     </Surface>
   );
-}
-
-function Empty({ text }: { text: string }) {
-  return <li className="t-meta px-4 pb-2 p-text-3">{text}</li>;
 }
 
 function RepoRow({ repo }: { repo: Repo }) {

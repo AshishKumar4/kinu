@@ -16,12 +16,11 @@ import { AgentStatusMark } from "./AgentStatus";
 import { RemoveWorkspaceDialog } from "./RemoveWorkspaceDialog";
 import { useAgentsNav, useOpenAgentsPanel, type WorkspaceAgentsPanel } from "@/hooks/use-agents-nav";
 import { navActive, PRIMARY_NAV } from "./nav";
-import { composing } from "@/components/ui/form";
-import { StatusDot } from "@/components/ui/Status";
+import { Dot } from "@/components/ui/Dot";
 import { workspaceStatusTone } from "@/components/workspaces/workspace-status-tone";
 import { Button } from "@/components/ui/Button";
 import { Pressable } from "@/components/ui/Pressable";
-import { TextInput } from "@/components/ui/Field";
+import { TextInput, composing } from "@/components/ui/Field";
 import { NavRow, NavRowButton } from "@/components/ui/NavRow";
 import { wakeAheadOf } from "@/hooks/use-wake-ahead";
 import { Surface } from "@/components/ui/Surface";
@@ -114,7 +113,7 @@ function WorkspaceDot({ entry }: { entry: RosterEntry }) {
 
   if (status === "idle" || status === "unreported") return null;
 
-  return <StatusDot className="block" tone={workspaceStatusTone(status)} title={label} />;
+  return <Dot tone={workspaceStatusTone(status)} label={label} />;
 }
 
 export default function Sidebar({ onCollapse, accountOpen = false }: { onCollapse?: () => void; accountOpen?: boolean } = {}) {

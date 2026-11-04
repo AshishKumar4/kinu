@@ -8,7 +8,7 @@ import { Effect } from "effect";
 import { useSearchParams } from "react-router-dom";
 import type { ConnectEnded } from "@kinu.run/core";
 import type { DeployedKinu, DeployRunRequest, DeployRunView, DeploySession } from "@kinu.run/core/deploy";
-import { detach } from "@kinu.run/core/obs";
+import { detach, detachPromise } from "@kinu.run/core/obs";
 import { Loader } from "@/components/ui/Loader";
 import { beginConnect } from "@/lib/connect-window";
 import { CloudflareSaid, DeployShell, type RefusalActions } from "@/components/deploy/DeployParts";
@@ -76,11 +76,11 @@ function useFollow(run: DeployRunView | null, attempt: number, onHeard: (heard: 
 
     let current = true;
 
-    const timer = setTimeout(() => detach(Effect.promise(async () => {
+    const timer = setTimeout(() => detachPromise(async () => {
       const heard = await readRun();
 
       if (current) onHeard(heard);
-    })), wait);
+    }), wait);
 
     return () => {
       current = false;

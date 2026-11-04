@@ -631,8 +631,8 @@ function DriveNotices({ notice, onDismissNotice, listingPending, libraryResource
 
 function FileDrawer({ path, entry, onClose }: { path: string; entry: DriveEntry; onClose: () => void }) {
   return (
-    <Drawer onClose={onClose} data-drive-viewer="">
-      <FileViewer path={path} read={readDriveText} revision={entryRevision(entry)} rawHref={inlineUrl(path)} downloadHref={downloadUrl(path)} onClose={onClose} />
+    <Drawer label={path} onClose={onClose} data-drive-viewer="">
+      <FileViewer key={path} path={path} read={readDriveText} revision={entryRevision(entry)} rawHref={inlineUrl(path)} downloadHref={downloadUrl(path)} onClose={onClose} />
     </Drawer>
   );
 }
@@ -649,8 +649,8 @@ function BuiltinSkillDrawer({ name, onClose }: { name: string; onClose: () => vo
   const bytes = `data:text/markdown;charset=utf-8,${encodeURIComponent(BUILTIN_SKILL_FILES[name])}`;
 
   return (
-    <Drawer onClose={onClose} data-drive-viewer="">
-      <FileViewer path={skillViewPath(name)} read={readBuiltinSkill} revision="built-in" rawHref={bytes} downloadHref={bytes} onClose={onClose} />
+    <Drawer label={name} onClose={onClose} data-drive-viewer="">
+      <FileViewer key={name} path={skillViewPath(name)} read={readBuiltinSkill} revision="built-in" rawHref={bytes} downloadHref={bytes} onClose={onClose} />
     </Drawer>
   );
 }

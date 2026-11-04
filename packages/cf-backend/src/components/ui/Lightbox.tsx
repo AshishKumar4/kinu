@@ -1,8 +1,30 @@
 /**
- * Pictures at full size over the page (docs/DESIGN-SYSTEM.md §2, Dialog for media): `ShotFrame` a picture in the thread
- * that opens it, `LightboxStep` the previous or next one. Their CSS is the approved lightbox's.
+ * Pictures at full size over the page (docs/DESIGN-SYSTEM.md §2, Dialog for media): `LightboxFrame` the dialog,
+ * `ShotFrame` a picture in the thread that opens it, `LightboxStep` the previous or next one. Their CSS is the approved lightbox's.
  */
-import type { ComponentProps } from "react";
+import type { ComponentProps, KeyboardEvent, ReactNode } from "react";
+import { Dialog } from "@cloudflare/kumo/primitives/dialog";
+
+/** The lightbox over the whole window: Base UI's dialog for focus and Escape; a press on its ground closes it, and
+ *  `onKeyDown` hears the keys that step through it. Portalled above every pane, whatever transform its opener's column
+ *  carries. */
+export function LightboxFrame({ label, onClose, onKeyDown, children }: {
+  label: string;
+  onClose: () => void;
+  onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
+  children: ReactNode;
+}) {
+  return (
+    <Dialog.Root open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <Dialog.Portal>
+        <Dialog.Popup className="p-lightbox outline-none" aria-label={label} onKeyDown={onKeyDown}
+          onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+          {children}
+        </Dialog.Popup>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
 
 export function ShotFrame({ className, type = "button", ...rest }: ComponentProps<"button">) {
   return <button type={type} className={`p-shot-frame${className === undefined ? "" : ` ${className}`}`} {...rest} />;

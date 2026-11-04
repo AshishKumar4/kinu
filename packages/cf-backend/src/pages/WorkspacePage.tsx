@@ -63,7 +63,7 @@ import { WorkspaceOverview } from "@/components/workspaces/WorkspaceOverview";
 import { WorkspaceSettings } from "@/pages/SettingsPage";
 import { useLayoutDrawer, useWorkspaceArea } from "@/components/layout";
 import { workspaceDisplayTitle, workspaceTitleDraft } from "@kinu.run/core";
-import { attempt, renderThrownChain, settleLogged, showing, detach, settle, type KinuError } from "@kinu.run/core/obs";
+import { attempt, renderThrownChain, settleLogged, showing, detach, settle, type KinuError, detachPromise } from "@kinu.run/core/obs";
 import { TextInput } from "@/components/ui/Field";
 import { WorkbenchPanels, type InspectorControl, type WorkbenchHandle } from "@/components/WorkbenchPanels";
 import { useCarriedAttachments } from "@/components/workspaces/NewChatView";
@@ -71,6 +71,7 @@ import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Notice } from "@/components/ui/Notice";
 import { IconControl } from "@/components/ui/IconControl";
 import { OpenWorkspaceProvider } from "@/hooks/use-open-workspace";
+import { useLabelledStep } from "@/hooks/use-labelled-step";
 
 /** The mission is shown as the standing brief, not sent as an opening message
  *  the agent would then try to carry out. */
@@ -116,32 +117,19 @@ function ForkModal({
   onSubmit: (name: string) => Promise<void>;
 }) {
   const [name, setName] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  const submit = useCallback(() => detach(Effect.gen(function* () {
-    if (busy) return;
-    setBusy(true);
-    setErr(null);
-
-    return yield* Effect.catchCause(Effect.gen(function* () {
-      yield* Effect.promise(async () => onSubmit(name.trim()));
-    }), showing((chain) => {
-      setErr(chain);
-      setBusy(false);
-    }));
-  })), [name, busy, onSubmit]);
+  const { busy, error, run } = useLabelledStep();
+  const submit = (): void => run("fork", async () => onSubmit(name.trim()));
 
   return (
     <Modal
       title="Fork the workspace from here"
       icon={<GitBranchIcon size={18} className="p-accent-fg" />}
       onClose={onCancel}
-      busy={busy}
+      busy={busy !== null}
       footer={<>
-        <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy}>Cancel</Button>
-        <Button variant="primary" size="sm" onClick={submit} disabled={busy}>
-          {busy ? <><Loader size="sm" /><span className="ml-1">Forking…</span></> : "Fork"}
+        <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy !== null}>Cancel</Button>
+        <Button variant="primary" size="sm" onClick={submit} busy={busy !== null}>
+          {busy !== null ? "Forking…" : "Fork"}
         </Button>
       </>}
     >
@@ -162,17 +150,13 @@ function ForkModal({
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="a generated address, e.g. quiet-harbor-3f9a2c1d"
-          disabled={busy}
+          disabled={busy !== null}
           className="t-mono"
         />
         <p className="t-meta p-text-3">Lowercase letters, digits and hyphens, at most 31 characters</p>
       </div>
 
-      {err && (
-        <Notice tone="danger">
-          {err}
-        </Notice>
-      )}
+      {error !== null && <Notice tone="danger">{error}</Notice>}
     </Modal>
   );
 }
@@ -220,8 +204,8 @@ function SwarmNodeColumn({ main, ownerPath, runId, nodeId, agent }: {
           headDeltas={main.headDeltas} onSelect={() => undefined} />
       </div>
       {/* The workspace holds every running worker, whoever started the swarm; its siblings run on. */}
-      <ViewOnlyBar running={working} onStop={() => detach(Effect.promise(async () => settleLogged("agents.stop_failed", { doing: "stop a swarm worker", otherwise: "io" },
-        () => main.rpc("stopSwarmWorker", [nodeId]))))} />
+      <ViewOnlyBar running={working} onStop={() => detachPromise(() => settleLogged("agents.stop_failed", { doing: "stop a swarm worker", otherwise: "io" },
+        () => main.rpc("stopSwarmWorker", [nodeId])))} />
     </div>
   );
 }
@@ -1010,7 +994,7 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
       {bar}
 
       {view !== undefined && <WorkspaceView view={view} workspace={agentId} title={shownTitle} state={state} agents={agentsPanel.list}
-        open={(agent) => { detach(Effect.promise(async () => agentsPanel.open(agent))); }} clearMain={() => setClearingMain(true)} />}
+        open={(agent) => { detachPromise(() => agentsPanel.open(agent)); }} clearMain={() => setClearingMain(true)} />}
       {view === undefined && (
       <WorkbenchPanels
         ref={workbench}
@@ -1038,7 +1022,7 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
               extras={{
                 float: agentId === undefined ? undefined : (
                   <BackgroundWork workspace={agentId} agents={agentsPanel.list} jobs={state.backgroundJobs}
-                    open={(agent) => { detach(Effect.promise(async () => agentsPanel.open(agent))); }} openWork={() => show("Work")} />
+                    open={(agent) => { detachPromise(() => agentsPanel.open(agent)); }} openWork={() => show("Work")} />
                 ),
                 before: (i) => placed.before.get(i),
                 row: (msg, i) => {
@@ -1122,7 +1106,7 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
             pinnedPorts={state.pinnedPorts}
             previewError={state.previewError}
             previewStarting={state.previewStarting}
-            onRefreshPorts={(...args: Parameters<typeof state.refreshExposedPorts>) => detach(Effect.promise(async () => state.refreshExposedPorts(...args)))}
+            onRefreshPorts={() => detachPromise(state.refreshExposedPorts)}
             plan={visiblePlan}
             owedIntents={state.owedIntents}
             snapshot={state.snapshot}
@@ -1140,7 +1124,7 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
             onExecute={state.executeInExecutor}
             backgroundJobs={state.backgroundJobs}
             inspectedWork={state.inspectedWork}
-            onRefreshJobs={(...args: Parameters<typeof state.refreshBackgroundJobs>) => detach(Effect.promise(async () => state.refreshBackgroundJobs(...args)))}
+            onRefreshJobs={() => detachPromise(state.refreshBackgroundJobs)}
             pendingActions={state.pendingActions}
             onOpenAsk={openAsk}
             slates={state.slates}

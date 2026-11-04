@@ -6,7 +6,6 @@ import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { findPlaneReferences, isWholeReference, linkProse, MAX_LINES_PER_FILE, promoteSlateLinks, slateLinkId, type ChangelogEntry, type DiffLine, type MarkdownNode } from "@kinu.run/core";
 import { blockServer, ephemeralSlateId, slateUiSegments, type EphemeralSlateAddress, type JsonValue, type SlateUiSegment } from "@kinu.run/core";
-import { KinuMark } from "@/components/ui/KinuLogo";
 import { InlineSlate } from "@/components/slates/InlineSlate";
 import { DrawnSlate } from "@/components/slates/DrawnSlate";
 import { SlateInlineContext } from "@/components/slates/context";
@@ -222,21 +221,6 @@ export const MarkdownContent = memo(function MarkdownContent({ content }: { cont
     }}>{content}</Markdown>
   );
 });
-
-export function EmptyState({ icon, title, hint, children }: {
-  icon?: ReactNode; title: string; hint?: ReactNode; children?: ReactNode;
-}) {
-  return (
-    <div className="flex flex-col items-center justify-center py-16 text-center" data-empty>
-      <div className={`mb-3 ${icon ? "p-text-3 opacity-60" : "p-accent opacity-55"}`}>
-        {icon ?? <KinuMark size={30} />}
-      </div>
-      <p className="t-label p-text-2">{title}</p>
-      {hint && <p className="t-meta p-text-3 mt-2 max-w-xs">{hint}</p>}
-      {children}
-    </div>
-  );
-}
 
 export function Metric({ label, value }: { label: string; value: React.ReactNode }) {
   return (

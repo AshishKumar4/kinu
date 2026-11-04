@@ -314,7 +314,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
         title="Send feedback"
         onClose={onClose}
         busy={sending}
-        maxWidthClass="max-w-2xl"
+        width="lg"
         icon={<MegaphoneIcon size={16} className="p-accent-fg" />}
         footer={
           <>

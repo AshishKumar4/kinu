@@ -5,9 +5,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { WarningIcon, XIcon } from "@phosphor-icons/react";
-import { Effect } from "effect";
 import { shownBytes, type LimitReading, type LimitsReport } from "@kinu.run/core";
-import { detach } from "@kinu.run/core/obs";
+import { detachPromise } from "@kinu.run/core/obs";
 import { getLimits } from "@/lib/limits-api";
 import { Surface } from "@/components/ui/Surface";
 import { Button } from "@/components/ui/Button";
@@ -64,12 +63,12 @@ export function LimitBanner() {
   const [report, setReport] = useState<LimitsReport | null>(null);
   const [hidden, setHidden] = useState<ReadonlySet<string>>(dismissed);
 
-  const read = useCallback(() => detach(Effect.promise(async () => {
+  const read = useCallback(() => detachPromise(async () => {
     const [answer] = await Promise.allSettled([getLimits()]);
 
     // A read that failed shows nothing: the bar is a courtesy, and Settings › Usage says why it could not read.
     if (answer.status === "fulfilled") setReport(answer.value);
-  })), []);
+  }), []);
 
   useEffect(() => {
     read();

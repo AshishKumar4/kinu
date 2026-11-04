@@ -1,10 +1,9 @@
 import { Button } from "@/components/ui/Button";
-import { Effect } from "effect";
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { DesktopTowerIcon, PlugIcon, WarningIcon } from "@phosphor-icons/react";
 import { Loader } from "@/components/ui/Loader";
 import { DEVICE_CONNECT_DISCLOSURE, issuedDeviceConnected } from "@kinu.run/core";
-import { renderThrownChain, detach } from "@kinu.run/core/obs";
+import { renderThrownChain, detachPromise } from "@kinu.run/core/obs";
 import { registerDevice, type UserDevice } from "@/lib/user-api";
 import { Modal } from "@/components/ui/Modal";
 import { CopyButton } from "@/components/ui/CopyButton";
@@ -150,7 +149,7 @@ export function ConnectDevicePanel({ flow, devices, rosterError = null, workspac
         <TextInput size="sm" value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Name this machine (optional)" aria-label="Device name" disabled={state.kind === "registering"} />
         <Button variant="primary" size="md"
           data-connect-start
-          onClick={(...args: Parameters<typeof start>) => detach(Effect.promise(async () => start(...args)))}
+          onClick={() => detachPromise(start)}
           disabled={state.kind === "registering"}
           className="shrink-0"
         >
@@ -173,7 +172,7 @@ export function ConnectDeviceDialog({ workspace, onClose }: { workspace: string 
   }));
 
   return (
-    <Modal title="Connect a machine" onClose={onClose} icon={<PlugIcon size={16} className="p-accent-fg" />} maxWidthClass="max-w-lg">
+    <Modal title="Connect a machine" onClose={onClose} icon={<PlugIcon size={16} className="p-accent-fg" />} width="md">
       {resource.status === "error" && (
         <LoadFailure what="your devices" message={resource.message} onRetry={reload} />
       )}

@@ -1496,6 +1496,8 @@ export {
   accountOf,
   baseCredentialKey,
   isAccountName,
+  openAICompatKey,
+  openAICompatNameOf,
   splitAccount,
   storedAccounts,
 } from './credentials/accounts';

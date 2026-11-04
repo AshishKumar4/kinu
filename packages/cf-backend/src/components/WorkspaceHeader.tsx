@@ -5,7 +5,7 @@ import { Link } from "react-router-dom";
 import { ChatsCircleIcon, GearIcon, PencilSimpleIcon, PlusIcon, UsersThreeIcon, XIcon } from "@phosphor-icons/react";
 import { WORKSPACE_TITLE_MAX, type PanelAgent } from "@kinu.run/core";
 import { useRename } from "@/hooks/use-rename";
-import { composing } from "@/components/ui/form";
+import { composing } from "@/components/ui/Field";
 import { TabOutline, useTabOutline } from "@/components/ui/TabOutline";
 import { ChatMascot, WorkspaceLogo } from "@/components/ui/Marks";
 import { useMascotOf } from "@/hooks/use-chat-mascot";

@@ -12,7 +12,6 @@ import {
 import { Link } from "react-router-dom";
 import type { ChangelogEntry, ChangelogEntryKind } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { showing, detach } from "@kinu.run/core/obs";
 import { type AsyncResource, lastValue, useAsyncResource, useReloadWhenMoved } from "@/hooks/use-async-resource";
 import { ScaffoldVersionDiff } from "./ScaffoldLineage";
 import { changelogFactKey } from "./shared";
@@ -22,6 +21,7 @@ import { Dot } from "@/components/ui/Dot";
 import { GroupBlock } from "@/components/ui/Group";
 import { Pressable } from "@/components/ui/Pressable";
 import { Surface } from "@/components/ui/Surface";
+import { useLabelledStep } from "@/hooks/use-labelled-step";
 
 interface ChangelogView { entries: ChangelogEntry[]; unseenCount: number; seenAt: number }
 
@@ -112,27 +112,25 @@ function EntryFacts({ entry }: { entry: ChangelogEntry }) {
   return null;
 }
 
+/** A revert's outcome: the server's words, kept on the entry either way. */
 function useEntryRevert(entryId: string, rpc: WorkspaceRpc, onReverted: () => void) {
-  const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
+  const [reverted, setReverted] = useState<string | null>(null);
+  const { busy, error, run } = useLabelledStep();
 
-  const revert = useCallback(() => detach(Effect.gen(function* () {
-    setBusy(true);
-    setNotice(null);
+  const revert = (): void => run("revert", () => Effect.gen(function* () {
+    setReverted(null);
+    const r = yield* Effect.promise(async () => rpc("revertChangelogEntry", [entryId]));
 
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      const r = yield* Effect.promise(async () => rpc("revertChangelogEntry", [entryId]));
-      setNotice({ text: r.ok ? `Reverted: ${r.detail ?? "done"}` : (r.error ?? "revert failed"), ok: r.ok });
+    if (!r.ok) return yield* Effect.fail(r.error ?? "revert failed");
+    setReverted(`Reverted: ${r.detail ?? "done"}`);
+    onReverted();
+  }));
 
-      if (r.ok) onReverted();
-    }), showing((chain) => {
-      setNotice({ text: chain, ok: false });
-    })), Effect.sync(() => {
-      setBusy(false);
-    }));
-  })), [rpc, entryId, onReverted]);
+  let notice: { text: string; ink: string } | null = reverted === null ? null : { text: reverted, ink: "p-success" };
 
-  return { busy, notice, revert };
+  if (error !== null) notice = { text: error, ink: "p-danger" };
+
+  return { busy: busy !== null, notice, revert };
 }
 
 function entryHasDetails(entry: ChangelogEntry): boolean {
@@ -190,8 +188,8 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
       <Button size="sm" variant="ghost" {...{ 'shape': 'square' as const }} aria-label={`Keep: ${entry.summary}`}
         onClick={() => setKept(true)} icon={<CheckIcon size={12} />} />
       <Button size="sm" variant="ghost" {...{ 'shape': 'square' as const }} aria-label={`Revert: ${entry.summary}`}
-        disabled={busy} onClick={revert}
-        icon={busy ? <Loader size="sm" /> : <XIcon size={12} />} />
+        busy={busy} onClick={revert}
+        icon={<XIcon size={12} />} />
     </>
   ) : null;
 
@@ -240,7 +238,7 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
       </div>
 
       {notice && (
-        <div className={`t-status mt-2 ${notice.ok ? "p-success" : "p-danger"}`}>{notice.text}</div>
+        <div className={`t-status mt-2 ${notice.ink}`}>{notice.text}</div>
       )}
 
       {hasDetails && <EntryDetails entry={entry} id={detailsId} expanded={expanded} rpc={rpc} onReverted={onReverted} />}
@@ -267,7 +265,7 @@ function SubEntry({ entry, rpc, onReverted }: { entry: ChangelogEntry; rpc: Work
             </div>
           )}
           {notice && (
-            <div className={`t-status mt-2 ${notice.ok ? "p-success" : "p-danger"}`}>{notice.text}</div>
+            <div className={`t-status mt-2 ${notice.ink}`}>{notice.text}</div>
           )}
         </div>
         <div className="flex items-center gap-1 shrink-0">
@@ -276,8 +274,8 @@ function SubEntry({ entry, rpc, onReverted }: { entry: ChangelogEntry; rpc: Work
               <Button size="sm" variant="ghost" {...{ 'shape': 'square' as const }} aria-label={`Keep: ${entry.summary}`}
                 onClick={() => setKept(true)} icon={<CheckIcon size={12} />} />
               <Button size="sm" variant="ghost" {...{ 'shape': 'square' as const }} aria-label={`Revert: ${entry.summary}`}
-                disabled={busy} onClick={revert}
-                icon={busy ? <Loader size="sm" /> : <XIcon size={12} />} />
+                busy={busy} onClick={revert}
+                icon={<XIcon size={12} />} />
             </>
           )}
         </div>

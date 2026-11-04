@@ -1,12 +1,12 @@
 /** What adds to or changes the Drive: New, and the dialogs its menus open. */
 import { Effect } from 'effect';
-import { startTransition, useRef, useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { Button, ICON_ON_PHONE } from "@/components/ui/Button";
 import {
   BookOpenIcon, FileArchiveIcon, FolderPlusIcon, FolderSimpleIcon, PencilSimpleIcon, PlusIcon, UploadSimpleIcon,
 } from "@phosphor-icons/react";
 import { joinDir, type DriveEntry, type MarkedSkill, type OwnedSlate, type SharedRow } from "@kinu.run/core";
-import { showing, settle } from "@kinu.run/core/obs";
+import { settle } from "@kinu.run/core/obs";
 import {
   addSkillArchive, addSkillFolder, addSkillText, deleteEntry, makeFolder, renameEntry, type PickedFile,
 } from "@/lib/drive-api";
@@ -21,6 +21,7 @@ import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { Notice } from "@/components/ui/Notice";
 import { TextArea, TextInput } from "@/components/ui/Field";
 import { FilePicker } from "@/components/ui/FilePicker";
+import { useLabelledStep } from "@/hooks/use-labelled-step";
 
 function relativePathOf(file: File): string {
   return file.webkitRelativePath === "" ? file.name : file.webkitRelativePath;
@@ -41,29 +42,19 @@ function NameDialog({ title, icon, initial, label, action, onCommit, onClose }: 
   onCommit: (name: string) => Promise<void>; onClose: () => void;
 }) {
   const [value, setValue] = useState(initial);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const step = useLabelledStep(onClose);
+  const busy = step.busy !== null;
+  const { error } = step;
   const name = value.trim();
   const valid = name !== "" && !name.includes("/") && name !== "." && name !== "..";
 
-  const submit = (): void => {
-    if (!valid || busy) return;
-    setBusy(true);
-    setError(null);
-    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
-      yield* Effect.promise(async () => onCommit(name));
-      onClose();
-    }), showing((chain) => {
-      setError(chain);
-      setBusy(false);
-    }))));
-  };
+  const submit = (): void => { if (valid) step.run(action, () => onCommit(name)); };
 
   return (
     <Modal title={title} icon={icon} onClose={onClose} busy={busy}
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
-        <Button variant="primary" size="md" data-drive-dialog-commit onClick={submit} disabled={!valid || busy}>{busy ? `${action}…` : action}</Button>
+        <Button variant="primary" size="md" data-drive-dialog-commit onClick={submit} busy={busy} disabled={!valid}>{busy ? `${action}…` : action}</Button>
       </>}>
       <form onSubmit={(event) => { event.preventDefault(); submit(); }} className="space-y-2">
         <label className="t-meta block p-text-3" htmlFor="drive-name">{label}</label>
@@ -82,30 +73,24 @@ const DELETE_ALSO: Record<DriveEntry["kind"], string> = {
 
 function AddSkillDialog({ onAdded, onClose }: { onAdded: () => void; onClose: () => void }) {
   const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+
+  const step = useLabelledStep(() => {
+    onAdded();
+    onClose();
+  });
+
+  const busy = step.busy !== null;
+  const { error } = step;
   const folderInput = useRef<HTMLInputElement>(null);
   const zipInput = useRef<HTMLInputElement>(null);
 
-  const run = (work: () => Promise<MarkedSkill>): void => {
-    if (busy) return;
-    setBusy(true);
-    setError(null);
-    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
-      yield* Effect.promise(async () => work());
-      onAdded();
-      onClose();
-    }), showing((chain) => {
-      setError(chain);
-      setBusy(false);
-    }))));
-  };
+  const run = (work: () => Promise<MarkedSkill>): void => step.run("add", work);
 
   return (
-    <Modal title="New skill" icon={<BookOpenIcon size={18} className="p-accent-fg" />} onClose={onClose} busy={busy} maxWidthClass="max-w-lg"
+    <Modal title="New skill" icon={<BookOpenIcon size={18} className="p-accent-fg" />} onClose={onClose} busy={busy} width="md"
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
-        <Button variant="primary" size="md" data-drive-add-skill-commit onClick={() => run(() => addSkillText(text))} disabled={busy || text.trim() === ""}>
+        <Button variant="primary" size="md" data-drive-add-skill-commit onClick={() => run(() => addSkillText(text))} busy={busy} disabled={text.trim() === ""}>
           {busy ? "Adding…" : "Add"}
         </Button>
       </>}>
@@ -249,7 +234,7 @@ export function DriveDialog({ dialog, folder, onClose, onListingChanged, onShare
       );
     case "delete":
       return (
-        <ConfirmDialog title={`Delete ${dialog.entry.name}?`} action="Delete" marker="data-drive-delete-confirm" maxWidthClass="max-w-sm"
+        <ConfirmDialog title={`Delete ${dialog.entry.name}?`} action="Delete" marker="data-drive-delete-confirm"
           onConfirm={() => act(() => deleteEntry(joinDir(folder, dialog.entry.name)))} onClose={onClose}>
           <p className="t-body p-text-2">This deletes <span className="t-item">{dialog.entry.name}</span>{DELETE_ALSO[dialog.entry.kind]}. It cannot be undone.</p>
         </ConfirmDialog>
@@ -260,7 +245,7 @@ export function DriveDialog({ dialog, folder, onClose, onListingChanged, onShare
       return <DriveShareSheet slate={dialog.slate} onClose={() => { onClose(); onSharesChanged(); }} onListingPending={() => onSharesChanged("pending")} />;
     case "stop":
       return (
-        <ConfirmDialog title={`Stop sharing ${dialog.row.title}?`} action="Stop sharing" marker="data-drive-stop-confirm" maxWidthClass="max-w-sm"
+        <ConfirmDialog title={`Stop sharing ${dialog.row.title}?`} action="Stop sharing" marker="data-drive-stop-confirm"
           onConfirm={() => settle(Effect.gen(function* () {
             const workspace = dialog.row.workspace;
 

@@ -13,7 +13,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import * as v from "valibot";
 import { useNavigate } from "react-router-dom";
 import { Effect } from "effect";
-import { detach } from "@kinu.run/core/obs";
+import { detach, detachPromise } from "@kinu.run/core/obs";
 import { ownerIsAway, watchFrame, workspaceDisplayTitle, type AlertWatch, type OwnerAlert, type RosterEntry } from "@kinu.run/core";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 
@@ -207,7 +207,7 @@ function useOwnerAlerts(): void {
     shown.addEventListener("click", () => {
       window.focus();
       shown.close();
-      detach(Effect.promise(async () => navigate(opens)));
+      detachPromise(() => navigate(opens));
     });
   }, [navigate]);
 

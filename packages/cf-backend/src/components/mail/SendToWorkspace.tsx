@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/Button";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react";
 import { Modal } from "@/components/ui/Modal";
-import { useLabelledStep } from "@/components/ui/ConfirmDialog";
+import { useLabelledStep } from "@/hooks/use-labelled-step";
 import { WorkspacePicker, type ChosenWorkspace } from "@/components/secrets/SecretRows";
 import { handMailThread } from "@/lib/mail-api";
 import { Notice } from "@/components/ui/Notice";
