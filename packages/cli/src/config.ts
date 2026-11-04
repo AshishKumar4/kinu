@@ -11,7 +11,6 @@ import {
   OPENROUTER_DEFAULT_MODEL,
   accountCredentialKey, credentialToHeaders, openWorkspaceMainActor, discoverOpenAICompatibleModels, specWithoutAccount, specOn, specProvider, splitSpec,
   type LLMProviderConfig,
-  type ModelInfo,
   type OpenAICompatCredential,
   PROVIDER_KEY_ENV,
   SESSION_CREDENTIAL_ENV,
@@ -199,7 +198,7 @@ export function resolveLocalAgent(input: string): LocalAgentRef {
   const ref = resolveAgentRef(input);
 
   if (ref && ref.mode !== 'local') {
-    throw new Error(`"${input}" is a cloud workspace; this needs a local one.`);
+    return settleSync(Effect.fail(new KinuError('bad_input', `"${input}" is a cloud workspace; this needs a local one.`)));
   }
 
   const name = ref === null ? input : ref.localName;
@@ -471,7 +470,7 @@ export function resolveModelDefaults(opts?: ModelChoice): LocalModelDefaults {
 export function usableModelDefaults(opts?: ModelChoice): LocalModelDefaults {
   const defaults = resolveModelDefaults(opts);
 
-  if (defaults.missing !== null) throw new Error(defaults.missing);
+  if (defaults.missing !== null) return settleSync(Effect.fail(new KinuError('missing', defaults.missing)));
 
   return defaults;
 }
@@ -481,13 +480,14 @@ export function requireModelDefaults(opts?: Parameters<typeof resolveModelDefaul
   const defaults = usableModelDefaults(opts);
 
   if (defaults.spec !== null) return defaults;
-  throw new Error(
+
+  return settleSync(Effect.fail(new KinuError('missing',
     'No model is set up.\n' +
     '  Run kinu auth to use Workers AI in your Cloudflare account,\n' +
     '  run kinu setup to pick a model provider,\n' +
     '  run kinu provider connect claude to use your Claude subscription,\n' +
-    '  or pass --base-url and --auth to use your own endpoint.'
-  );
+    '  or pass --base-url and --auth to use your own endpoint.',
+  )));
 }
 
 export function resolveProviderCredentials(): LocalProviderCredentials {
@@ -592,24 +592,21 @@ function compatSpec(file: KinuConfig, wanted: string | undefined): string | null
   return specOn('openai-compat', wanted);
 }
 
-export async function firstOpenAiCompatModel(): Promise<string | null> {
+export function firstOpenAiCompatModel(): Promise<string | null> {
   const compat = loadConfigFile().providers?.openaiCompat?.default;
 
-  if (compat === undefined) return null;
+  if (compat === undefined) return Promise.resolve(null);
 
-  let first: ModelInfo | undefined;
+  return settle(Effect.gen(function* () {
+    const [first] = yield* attempt({ doing: `listing the models of the OpenAI-compatible endpoint at ${compat.baseURL}`, otherwise: 'unavailable' },
+      () => discoverOpenAICompatibleModels({ baseURL: compat.baseURL, headers: compatHeaders(compat) }));
 
-  try {
-    [first] = await discoverOpenAICompatibleModels({ baseURL: compat.baseURL, headers: compatHeaders(compat) });
-  } catch (cause) {
-    throw new Error(`Could not list the models of the OpenAI-compatible endpoint at ${compat.baseURL}.`, { cause });
-  }
+    if (first === undefined) {
+      return yield* new KinuError('missing', `The OpenAI-compatible endpoint at ${compat.baseURL} lists no models and none is named: run kinu provider connect openai-compatible.`);
+    }
 
-  if (first === undefined) {
-    throw new Error(`The OpenAI-compatible endpoint at ${compat.baseURL} lists no models and none is named: run kinu provider connect openai-compatible.`);
-  }
-
-  return `openai-compat/${first.id}`;
+    return `openai-compat/${first.id}`;
+  }));
 }
 
 function preferredModelFromCredentials(file: KinuConfig): string | undefined {

@@ -1,3 +1,4 @@
+import { previewSite } from "../preview/preview-origin";
 import type { PinnedPreviewPort } from "../preview/preview-ports";
 import type { ForkNode, TabPresence } from "../protocol";
 import type { SlateSummary } from "../slates/rpc";
@@ -87,6 +88,22 @@ export function landedSurface(
 
 export function openPortOf(surface: SurfaceKind, ports: readonly PinnedPreviewPort[]): PinnedPreviewPort | undefined {
 	return ports.find((port) => surface === `preview:${port.executor}:${port.port}`);
+}
+
+/** What the chat lists a preview of `surface` under (`ChatPreviews`): a slate's id, a site's origin; else null. */
+export function surfacePreviewTarget(surface: SurfaceKind, ports: readonly PinnedPreviewPort[]): string | null {
+	if (surface.startsWith(SLATE_PREFIX)) return surface.slice(SLATE_PREFIX.length);
+	const port = openPortOf(surface, ports);
+
+	return port === undefined ? null : previewSite(port.url);
+}
+
+/** The surface that shows a chat's preview of `url`: the pinned preview that serves its site, if one does. */
+export function siteSurface(url: string, ports: readonly PinnedPreviewPort[]): SurfaceKind | null {
+	const site = previewSite(url);
+	const port = ports.find((each) => previewSite(each.url) === site);
+
+	return port === undefined ? null : `preview:${port.executor}:${port.port}`;
 }
 
 export function pruneSlateReloads(

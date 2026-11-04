@@ -7,7 +7,7 @@ import * as v from 'valibot';
 import type { ExecutorFileChunkRead, ExecutorFileChunkWrite } from "./workspace-executors";
 import { KinuError } from "@kinu.run/core/obs";
 import { err, fileResponseHeaders, json } from "@kinu.run/core";
-import type { FamilyEnv } from './api/context';
+import { framedDownload, type FamilyEnv } from './api/context';
 import { LITERAL_WORKSPACE, type WorkspaceVariables } from './api/workspace';
 
 export interface FilesRouteAgent {
@@ -106,5 +106,5 @@ function download(agent: FilesRouteAgent, executorId: string, path: string, url:
       return 'error' in chunk ? new KinuError('io', chunk.error) : chunk.bytes;
     },
     abort: (transferId) => agent.abortExecutorFileDownload(transferId),
-  }, () => fileResponseHeaders(path, url.searchParams.get('download') !== null));
+  }, (body, { size }) => framedDownload(fileResponseHeaders(path, url.searchParams.get('download') !== null), body, size));
 }

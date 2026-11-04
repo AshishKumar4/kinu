@@ -1952,7 +1952,7 @@ async function pageTabs(page: Page): Promise<readonly string[]> {
 }
 
 async function openedInWorkSurface(page: Page): Promise<string> {
-  await page.$eval('[data-slate-ui="first"] button[aria-label="Open first in the work surface"]', (open) => {
+  await page.$eval('[data-slate-ui="first"] [data-open-inspector]', (open) => {
     if (open instanceof HTMLElement) open.click();
   });
 

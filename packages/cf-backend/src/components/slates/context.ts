@@ -58,8 +58,11 @@ export class ChatPreviews {
 export const SlateInlineContext = createContext<{
   rpc: WorkspaceRpc;
   openSlate?: (id: string) => void;
+  /** Shows a site's preview in the inspector; none where no preview the inspector holds serves that site. */
+  openSite?: (url: string) => (() => void) | undefined;
   /** The slate an answer's page was saved as, by the workspace's slate list; none until it is saved. */
   savedAs?: (page: string) => { readonly id: string; readonly title: string } | null;
+  /** `shownInPanel`: what the inspector beside the chat shows, as `ChatPreviews` lists it (a slate's id, a site). */
   chat?: { readonly previews: ChatPreviews; readonly shownInPanel: string | null };
 } | null>(null);
 
@@ -69,18 +72,21 @@ const UNLISTED = (): (() => void) => () => {};
 export interface PreviewFold {
   /** Its element, listed with the chat's previews while it is mounted. */
   readonly register: (element: Element | null) => () => void;
-  /** "Updated below" once a later preview shows the same target, else `elsewhere`'s words; null when neither holds. */
+  /** "Updated below" once a later preview shows the same target, else "Shown in the inspector" while the inspector
+   *  beside the chat shows it; null when neither holds. */
   readonly reason: string | null;
   readonly folded: boolean;
   readonly toggle: () => void;
 }
 
 /**
- * Folds a preview behind a later one of its target, or while `elsewhere` names another place that shows it. A fold the
- * reader set by hand holds until the reason for the automatic one clears. Outside the chat nothing folds by itself.
+ * Folds a preview behind a later one of its target, or while the inspector beside the chat shows it, whether a slate or
+ * a site. A fold the reader set by hand holds until the reason for the automatic one clears. Outside the chat nothing
+ * folds by itself.
  */
-export function usePreviewFold(target: string, elsewhere: string | null): PreviewFold {
-  const previews = useContext(SlateInlineContext)?.chat?.previews;
+export function usePreviewFold(target: string): PreviewFold {
+  const chat = useContext(SlateInlineContext)?.chat;
+  const previews = chat?.previews;
   const [card, setCard] = useState<Element | null>(null);
 
   const register = useCallback((element: Element | null) => {
@@ -91,7 +97,8 @@ export function usePreviewFold(target: string, elsewhere: string | null): Previe
   }, [previews, target]);
 
   const superseded = useSyncExternalStore(previews?.subscribe ?? UNLISTED, () => previews?.superseded(target, card) ?? false, () => false);
-  const reason = superseded ? "Updated below" : elsewhere;
+  const shown = chat?.shownInPanel === target ? "Shown in the inspector" : null;
+  const reason = superseded ? "Updated below" : shown;
   const auto = reason !== null;
   const [hand, setHand] = useState<boolean | null>(null);
   const [was, setWas] = useState(auto);

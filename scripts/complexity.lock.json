@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-10-26",
-  "files": 3933,
-  "functions": 103881,
+  "measuredAt": "2026-11-04",
+  "files": 3954,
+  "functions": 104440,
   "ceiling": 87,
   "line": 25,
   "inventory": [
@@ -260,10 +260,6 @@
     {
       "key": "packages/cf-backend/tests/workerd/fork-probe.ts#ForkSourceProbeDO.deliver",
       "complexity": 26
-    },
-    {
-      "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.constructor",
-      "complexity": 22
     },
     {
       "key": "packages/cli/src/slash-commands.ts#instructionsCommand",
