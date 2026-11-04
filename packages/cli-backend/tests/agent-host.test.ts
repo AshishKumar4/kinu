@@ -1,3 +1,4 @@
+import { wrapDatabase, sqlStorageOver } from '@kinu.run/core/identity';
 import { Effect } from 'effect';
 import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { scratchDir } from '../../test-utils/src/scratch';
@@ -50,7 +51,7 @@ import {
   type LocalAgentHostOptions,
   type LocalHostedAgent,
 } from '../src/agent-host';
-import { makeExecRaw, makeSql, makeSqlExec, makeWorkspaceSchemaSql, type CLIRuntime, workspaceHome } from '../src/runtime';
+import { makeWorkspaceSchemaSql, type CLIRuntime, workspaceHome } from '../src/runtime';
 import { AwaitedList, createMemoryVfs, gatedTools, present, readTranscriptRows, spawnTest, TURN_REACH, workspaceDatabase, admitTestClaim, servedStoresOf } from '@kinu.run/test-utils';
 import { openWorkspaceCLI } from '../src/open';
 import type { ModelInfo, ProviderDeps, SessionEvent } from '@kinu.run/core';
@@ -845,7 +846,7 @@ describe('LocalAgentHost', () => {
 
     expect(delivered).toHaveLength(deliveredBeforeDisconnect);
     const db = workspaceDatabase(dbPath);
-    const sql = makeSql(db);
+    const sql = wrapDatabase(db).sql;
     const main = openWorkspaceMainActor(sql);
 
     const sessions = sql<{ session_id: string }>`
@@ -870,7 +871,7 @@ describe('LocalAgentHost', () => {
     const refs: HostedAgentRef[] = [{ name: 'root', cwd: project, workspaceId: 'proj' }];
     const jobId = 'bgjob-restart';
     const db = workspaceDatabase(dbPath);
-    const sql = makeSql(db);
+    const sql = wrapDatabase(db).sql;
     const main = openWorkspaceMainActor(sql);
     const store = new BackgroundJobStore(sql, main);
     const now = Date.now();
@@ -900,7 +901,7 @@ describe('LocalAgentHost', () => {
     await redriven.close();
 
     const check = workspaceDatabase(dbPath);
-    const checkSql = makeSql(check);
+    const checkSql = wrapDatabase(check).sql;
     const checkActorId = openWorkspaceMainActor(checkSql).actorId;
     const wakeId = `programmatic:${backgroundJobWakeTrigger(jobId)}`;
 
@@ -991,7 +992,7 @@ describe('LocalAgentHost', () => {
     try {
       const root = await host.acquire('root');
       const db = workspaceDatabase(dbPath);
-      const sql = makeSql(db);
+      const sql = wrapDatabase(db).sql;
       const rootId = openWorkspaceMainActor(sql).actorId;
 
       await host.acquire('root/subagent');
@@ -1277,7 +1278,7 @@ describe('LocalAgentHost', () => {
       await host.settle();
     }
 
-    const open = (await root.listOwnerQuestions()).filter((question) => question.asked.status === 'open');
+    const open = (await root.questions.list()).filter((question) => question.asked.status === 'open');
     const pumping = ['root', 'root/researcher', 'root/auditor'].map((key) => host.peek(key)?.pumping());
 
     // The root asked once and has read no report: both wait behind the question.
@@ -1547,20 +1548,20 @@ describe('LocalAgentHost', () => {
 
       expect(results).toEqual([expect.stringContaining('queued for owner approval')]);
       const root = await host.acquire('root');
-      const parked = await root.listDeferredApprovals();
+      const parked = await root.approvals.list();
       const rootId = present(runtimes.get('root'), 'the root runtime').actor.actorId;
 
       expect(parked.map((action) => [action.command, action.actor === rootId])).toEqual([[gated, false]]);
 
       const woken = awaitTurns(host, 'root/courier', 1);
-      await root.decideDeferredApprovals(parked.map((action) => action.id), 'approved');
+      await root.approvals.decide(parked.map((action) => action.id), 'approved');
       await woken;
 
       // Re-issued under its own approval, the command ran: git's own refusal, not the gate's.
       expect(results).toHaveLength(2);
       expect(results[1]).not.toContain('NOT RUN');
       expect(results[1]).toContain('not a git repository');
-      expect(await root.listDeferredApprovals()).toEqual([]);
+      expect(await root.approvals.list()).toEqual([]);
     } finally {
       await host.close();
     }
@@ -1594,9 +1595,9 @@ describe('LocalAgentHost', () => {
     const interactive = new LocalAgentSession({ rt, db, model, onEvent: () => {} });
 
     try {
-      const parked = await interactive.listDeferredApprovals();
+      const parked = await interactive.approvals.list();
 
-      expect(await interactive.decideDeferredApprovals(parked.map((action) => action.id), 'approved')).toEqual({ decided: parked.map((action) => action.id) });
+      expect(await interactive.approvals.decide(parked.map((action) => action.id), 'approved')).toEqual({ decided: parked.map((action) => action.id) });
     } finally {
       await interactive.end();
       db.close();
@@ -2771,8 +2772,8 @@ function childActorId(parent: string, name: string): string {
   const db = new Database(parent, { readonly: true });
 
   try {
-    const sql = makeSql(db);
-    const reference = new SubagentRosterStore(makeSqlExec(db), openWorkspaceMainActor(sql)).get(name)?.actorReference;
+    const sql = wrapDatabase(db).sql;
+    const reference = new SubagentRosterStore(sqlStorageOver(db), openWorkspaceMainActor(sql)).get(name)?.actorReference;
 
     if (!reference) throw new Error('The child has no recorded actor identity.');
 
@@ -2803,7 +2804,7 @@ function actorLifecycle(parent: string, actorId: string): 'live' | 'retiring' | 
   const db = new Database(parent, { readonly: true });
 
   try {
-    const row = makeSql(db)<{ retiring_at: number | null; deleted_at: number | null }>`
+    const row = wrapDatabase(db).sql<{ retiring_at: number | null; deleted_at: number | null }>`
       SELECT retiring_at, deleted_at FROM workspace_actors WHERE actor_id = ${actorId}`[0];
 
     if (!row) return null;
@@ -2873,7 +2874,7 @@ async function userMessages(dbPath: string, actorId?: string): Promise<string[]>
   const db = new Database(dbPath, { readonly: true });
 
   try {
-    const sql = makeSql(db);
+    const sql = wrapDatabase(db).sql;
     const actor = actorId === undefined ? openWorkspaceMainActor(sql) : readHandle(sql, actorId);
     // A message this short is inline, so any VFS read is a spill this helper should surface.
     const rows = await readTranscriptRows(sql, actor, createMemoryVfs().vfs);
@@ -2889,7 +2890,7 @@ async function scheduleTimer(dbPath: string, label: string, atMs: number): Promi
   const db = workspaceDatabase(dbPath);
 
   try {
-    const registry = new TriggerRegistry(makeSqlExec(db), openWorkspaceMainActor(makeSql(db)), { scheduleAt: async () => {} });
+    const registry = new TriggerRegistry(sqlStorageOver(db), openWorkspaceMainActor(wrapDatabase(db).sql), { scheduleAt: async () => {} });
     await createTimerTrigger(registry, { atMs, label, trust: 'owner' }, Date.now());
   } finally {
     db.close();
@@ -2919,8 +2920,8 @@ describe('LocalAgentHost — the driver lease', () => {
 
     try {
       const hold = new DriverLeaseHold({
-        sql: makeSql(db),
-        execRaw: makeExecRaw(db),
+        sql: wrapDatabase(db).sql,
+        execRaw: wrapDatabase(db).execRaw,
         proc: osLeaseProcess(rival.pid),
       }, kind);
 
@@ -3132,7 +3133,7 @@ describe('LocalAgentHost — the driver lease', () => {
     const db = workspaceDatabase(dbPath);
 
     try {
-      const owed = new AgentDeliveries(makeSql(db));
+      const owed = new AgentDeliveries(wrapDatabase(db).sql);
 
       owed.add('gone-actor', { id: 'orphan-task', input: { kind: 'turn', text: 'brief' }, authorship: 'hirer' });
     } finally {
@@ -3150,7 +3151,7 @@ describe('LocalAgentHost — the driver lease', () => {
     const view = new Database(dbPath, { readonly: true });
 
     try {
-      expect(new AgentDeliveries(makeSql(view)).actors()).toEqual([]);
+      expect(new AgentDeliveries(wrapDatabase(view).sql).actors()).toEqual([]);
     } finally {
       view.close();
     }

@@ -4,7 +4,8 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { cleanupChats, fakeClient, mountChat } from './helpers/chat-app-fixture';
 import { deviceConsentCanApprove } from '../src/tui/overlays';
 import { executorLabel, type DeferredApproval, type DeferredApprovalAnswer, type ShellApprovalRequest, type ShellApprovalOutcome } from '@kinu.run/core';
-import type { AgentClient, WaitingApprovalSurface } from '../src/agent-client';
+import type { WaitingApprovalSurface } from '@kinu.run/core';
+import type { AgentClient } from '../src/agent-client';
 
 afterEach(cleanupChats);
 

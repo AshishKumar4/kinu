@@ -149,7 +149,7 @@ opsRoutes.post('/ops/roots', (c) => settle(Effect.gen(function* () {
 
   const dev = c.env.DEV_USER_EMAIL ?? '';
   const evalEmails = dev === '' ? [] : [dev, ...EVAL_ACCOUNTS.map((account) => evalAccountEmail(dev, account))];
-  const evals = yield* Effect.promise(() => Promise.all(evalEmails.map((email) => accountIdFor(c.env, email))));
+  const evals = evalEmails.map((email) => accountIdFor(c.env, email));
 
   return json({ body: { accounts: [...new Set([BUILTIN_ACCOUNTS_OBJECT, ...evals, ...seen])], control: bound ? [CONTROL_PLANE_SINGLETON] : [] } });
 })));
@@ -290,7 +290,7 @@ opsRoutes.post('/ops/restore', (c) => settle(Effect.gen(function* () {
 
   if ('undo' in body) return answered({ done, skipped }, yield* Effect.exit(undone(c.env, body.undo, caller, done)));
   const { object, to } = body;
-  const name = 'email' in object ? yield* Effect.promise(() => accountIdFor(c.env, object.email)) : object.name;
+  const name = 'email' in object ? accountIdFor(c.env, object.email) : object.name;
 
   if (object.class === 'UserDO' && 'bookmark' in to) return err(400, 'An account goes back by a moment ({ at }): a bookmark names one object\'s history, and an account is several.');
 

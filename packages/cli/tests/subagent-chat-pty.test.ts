@@ -2,12 +2,13 @@
  * A subagent the open agent hired shows in the Agent Hub, and its conversation opens from there, read from the local
  * workspace database the way the web reads a cloud one. Driven through `bin/cli.ts` on a real pty.
  */
+import { wrapDatabase, sqlStorageOver } from '@kinu.run/core/identity';
 import { expect, test } from 'bun:test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createAgentConfigStore, initWorkspaceSchema, SubagentRosterStore, WorkspaceActorDirectory } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
-import { makeSql, makeSqlExec, makeWorkspaceSchemaSql, workspaceHome } from '@kinu.run/cli-backend';
+import { makeWorkspaceSchemaSql, workspaceHome } from '@kinu.run/cli-backend';
 import { runToExit, scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
 
 import { placeLocalWorkspace } from './helpers/local-refs';
@@ -47,7 +48,7 @@ async function workspaceThatHired(home: string, name: string, subagent: { name: 
     const identity = db.query<{ id: string; owner_user_id: string | null }, []>('SELECT id, owner_user_id FROM workspace_identity').get();
 
     if (identity === null) throw new Error('the workspace has no identity');
-    const directory = new WorkspaceActorDirectory(makeSql(db), { workspaceId: identity.id, ownerUserId: identity.owner_user_id });
+    const directory = new WorkspaceActorDirectory(wrapDatabase(db).sql, { workspaceId: identity.id, ownerUserId: identity.owner_user_id });
     const main = directory.main();
 
     const child = directory.apply(main, [], {
@@ -55,8 +56,8 @@ async function workspaceThatHired(home: string, name: string, subagent: { name: 
     });
 
     // A born child's title lives in its own config, which is what a listing reads.
-    createAgentConfigStore(makeSql(db), child.reference.actorId, () => {}).setDisplayNameOrigin(subagent.displayName, 'user');
-    const roster = new SubagentRosterStore(makeSqlExec(db), main);
+    createAgentConfigStore(wrapDatabase(db).sql, child.reference.actorId, () => {}).setDisplayNameOrigin(subagent.displayName, 'user');
+    const roster = new SubagentRosterStore(sqlStorageOver(db), main);
     roster.ensureSchema();
 
     roster.create({

@@ -21,8 +21,6 @@ const subprocessResultSchema = v.variant('ok', [
 
 type ProviderFunction = (...args: JsonValue[]) => Promise<JsonValue | undefined>;
 
-/** A namespace as a program holds it: each member by its name, a member group (`fs.read`) as an object of its members. */
-
 const INTERPRETERS: ReadonlyMap<string, { readonly command: string; readonly extension: string }> = new Map([
   ['python', { command: 'python3', extension: '.py' }],
 ]);
@@ -104,7 +102,7 @@ async function runToCompletion(
       ...(cwd !== undefined && { cwd }),
       stdout: Bun.file(outFile),
       stderr: Bun.file(errFile),
-      env: { PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin', HOME: '/tmp' },
+      env: { PATH: process.env.PATH, HOME: tmpdir() },
     });
 
     const exitCode = await proc.exited;
@@ -122,11 +120,6 @@ async function runToCompletion(
 }
 
 async function executeInSubprocess(code: string): Promise<ExecuteResult> {
-  // A compiled binary may have no bun CLI beside it.
-  const bunBin = Bun.which('bun');
-
-  if (!bunBin) return executeInProcess(code, []);
-
   const wrapper = `
     await Bun.file(import.meta.path).delete();
     try {
@@ -139,8 +132,8 @@ async function executeInSubprocess(code: string): Promise<ExecuteResult> {
     }
   `;
 
-  // Beside its temp script, not in the project, and reading no bunfig or .env.
-  const run = await runToCompletion([bunBin, ...ISOLATED_BUN_FLAGS, 'run'], wrapper, '.mjs', tmpdir());
+  // The Bun running the CLI, which need not be on PATH; beside its temp script, reading no bunfig or .env.
+  const run = await runToCompletion([process.execPath, ...ISOLATED_BUN_FLAGS, 'run'], wrapper, '.mjs', tmpdir());
 
   if (run.exitCode !== 0) {
     return { result: undefined, error: run.stderr.trim() || `Process exited with code ${run.exitCode}` };
@@ -157,7 +150,7 @@ async function executeInSubprocess(code: string): Promise<ExecuteResult> {
   } catch (error) {
     if (classify({ cause: error }) !== 'malformed-input') throw error;
 
-    return { result: run.stdout.trim() || undefined };
+    return { result: undefined, error: 'The program exited before it returned a value' };
   }
 }
 
@@ -183,7 +176,7 @@ export async function runProgramInProcess(
   return value === undefined ? undefined : decodeJsonValue({ value });
 }
 
-/** In-process execution: tool-backed code, or JS when no subprocess runtime is on PATH. */
+/** In-process execution: tool-backed code, whose functions cannot cross a process boundary. */
 async function executeInProcess(
   code: string, providers: ResolvedProvider[],
 ): Promise<ExecuteResult> {

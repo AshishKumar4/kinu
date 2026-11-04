@@ -1,7 +1,6 @@
 /**
  * The local executor's process lifecycle: a run settles on the command's own exit, never on pipe EOF in either
- * direction; and the runtime is whatever the configured PATH resolves, falling back in-process when none is on it.
- * `Bun.which` reads the PATH the process started with, so the PATH cases run in a real child process.
+ * direction; and a program runs apart on the CLI's own runtime, whatever the PATH it was started under holds.
  */
 import { describe, expect, test } from 'bun:test';
 import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
@@ -20,7 +19,9 @@ const ProbeAnswerSchema = v.object({
 });
 
 /** Run the executor in a child bun started by absolute path (`process.execPath`), so a runtime-less PATH still starts. */
-async function executeUnderPath(PATH: string, code: string): Promise<v.InferOutput<typeof ProbeAnswerSchema>> {
+async function executeUnderPath(
+  PATH: string, code: string, env: Readonly<Record<string, string>> = {},
+): Promise<v.InferOutput<typeof ProbeAnswerSchema>> {
   const dir = scratchDir('executor-lifecycle-path');
   const probe = join(dir, 'probe.mjs');
   writeFileSync(probe, [
@@ -30,7 +31,7 @@ async function executeUnderPath(PATH: string, code: string): Promise<v.InferOutp
   ].join('\n'));
 
   const child = Bun.spawn([process.execPath, 'run', probe], {
-    env: { PATH, HOME: process.env.HOME ?? '/tmp' },
+    env: { ...env, PATH, HOME: process.env.HOME ?? '/tmp' },
     stdout: 'pipe',
     stderr: 'pipe',
   });
@@ -127,23 +128,14 @@ describe('the local executor settles on the command, not on its pipes', () => {
     )).toEqual({ result: '42' });
   });
 
-  test('spawn resolves its runtime by configured path, not the literal bun', async () => {
+  test('a program runs apart on the CLI\'s own runtime, never a bun on PATH, and reads none of the CLI\'s environment', async () => {
     const shim = runtimeShim();
+    const held = { KINU_EXECUTOR_PROBE_TOKEN: 'held-by-the-cli' };
+    const read = 'process.env.KINU_EXECUTOR_PROBE_TOKEN ?? 42';
 
-    expect(await executeUnderPath(`${shim.dir}:${process.env.PATH ?? '/usr/bin:/bin'}`, '6 * 7'))
-      .toEqual({ result: 42 });
-    expect(shim.invocations()).toBe(1);
-
-    // A path with no runtime (the compiled-binary deploy) resolves null, and the in-process executor does the work.
-    expect(await executeUnderPath('/usr/bin:/bin', '6 * 7')).toEqual({ result: 42 });
-    expect(shim.invocations()).toBe(1);
-  });
-
-  test('without bun, codemode callables run but module metadata is refused', async () => {
-    expect(await executeUnderPath('/usr/bin:/bin', 'async () => (await Promise.resolve(42)) // result'))
-      .toEqual({ result: 42 });
-    const refused = await executeUnderPath('/usr/bin:/bin', 'return import.meta.main');
-    expect(refused.result).toBeUndefined();
-    expect(refused.error).toMatch(/import\.meta/);
+    expect(await executeUnderPath(`${shim.dir}:${process.env.PATH ?? '/usr/bin:/bin'}`, read, held)).toEqual({ result: 42 });
+    expect(shim.invocations()).toBe(0);
+    // No runtime on PATH at all (a managed runtime, `kinu` run by its absolute path).
+    expect(await executeUnderPath('/usr/bin:/bin', read, held)).toEqual({ result: 42 });
   });
 });

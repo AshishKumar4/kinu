@@ -1,10 +1,11 @@
 // The agent's questions to its owner on the local backend, read from the requests the model received: the turn ends on
 // the ask, and every later request carries the answer, the dismissal or the owner's message in its place.
+import { wrapDatabase } from '@kinu.run/core/identity';
 import { describe, test, expect } from 'bun:test';
 import { gatedTools, scratchPath, scriptedTurnModel, scratchDir, TURN_REACH, workspaceDatabase } from '@kinu.run/test-utils';
 import { initWorkspaceSchema, OwnerQuestionStore, type JsonObject, type LLMProviderConfig, type OwnerAnswer } from '@kinu.run/core';
 import { settleSync } from '@kinu.run/core/obs';
-import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql } from '../src/runtime';
+import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession } from '../src/local-session';
 
 const DUMMY_LLM: LLMProviderConfig = { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' };
@@ -80,10 +81,10 @@ describe('LocalAgentSession: asking the owner', () => {
 
     try {
       await agent.send('Migrate the ledger.', { id: crypto.randomUUID(), mode: 'build' });
-      const [open] = (await agent.listOwnerQuestions()).filter((asking) => asking.asked.status === 'open');
+      const [open] = (await agent.questions.list()).filter((asking) => asking.asked.status === 'open');
 
       if (open === undefined) throw new Error('the ask left no open question');
-      await agent.answerOwnerQuestions(open.asked.id, ANSWER);
+      await agent.questions.answer(open.asked.id, ANSWER);
       await agent.settleBackgroundWork();
 
       expect(offered).toHaveLength(2);
@@ -104,10 +105,10 @@ describe('LocalAgentSession: asking the owner', () => {
     try {
       await agent.send('Migrate the ledger.', { id: crypto.randomUUID(), mode: 'build' });
       expect(requests).toHaveLength(1);
-      const [open] = (await agent.listOwnerQuestions()).filter((asking) => asking.asked.status === 'open');
+      const [open] = (await agent.questions.list()).filter((asking) => asking.asked.status === 'open');
 
       if (open === undefined) throw new Error('the ask left no open question');
-      await agent.answerOwnerQuestions(open.asked.id, ANSWER);
+      await agent.questions.answer(open.asked.id, ANSWER);
       await agent.settleBackgroundWork();
 
       const [asking, resumed] = requests;
@@ -133,11 +134,11 @@ describe('LocalAgentSession: asking the owner', () => {
     const first = session([{ call: 'ask_owner', input: ASK }], db);
 
     await first.agent.send('Migrate the ledger.', { id: crypto.randomUUID(), mode: 'build' });
-    const [open] = (await first.agent.listOwnerQuestions()).filter((asking) => asking.asked.status === 'open');
+    const [open] = (await first.agent.questions.list()).filter((asking) => asking.asked.status === 'open');
 
     if (open === undefined) throw new Error('the ask left no open question');
     // Recorded, and the process gone before the turn it owes opened.
-    settleSync(new OwnerQuestionStore(makeSql(db), first.rt.actor).answer(open.asked.id, ANSWER));
+    settleSync(new OwnerQuestionStore(wrapDatabase(db).sql, first.rt.actor).answer(open.asked.id, ANSWER));
     await first.agent.end();
 
     const second = session([{ answer: 'Storing integer cents.' }], db);
@@ -168,11 +169,11 @@ describe('LocalAgentSession: asking the owner', () => {
 
     try {
       await agent.send('Migrate the ledger.', { id: crypto.randomUUID(), mode: 'build' });
-      const [open] = (await agent.listOwnerQuestions()).filter((asking) => asking.asked.status === 'open');
+      const [open] = (await agent.questions.list()).filter((asking) => asking.asked.status === 'open');
 
       if (open === undefined) throw new Error('the ask left no open question');
       // The answer queues its turn at once; the Stop lands before the pump takes it.
-      const answered = agent.answerOwnerQuestions(open.asked.id, ANSWER);
+      const answered = agent.questions.answer(open.asked.id, ANSWER);
 
       agent.interrupt();
       await answered;
@@ -198,10 +199,10 @@ describe('LocalAgentSession: asking the owner', () => {
       await agent.settleBackgroundWork();
       expect(requests).toHaveLength(1);
 
-      const [open] = (await agent.listOwnerQuestions()).filter((asking) => asking.asked.status === 'open');
+      const [open] = (await agent.questions.list()).filter((asking) => asking.asked.status === 'open');
 
       if (open === undefined) throw new Error('the ask left no open question');
-      await agent.answerOwnerQuestions(open.asked.id, ANSWER);
+      await agent.questions.answer(open.asked.id, ANSWER);
       await held;
       await agent.settleBackgroundWork();
 
@@ -233,10 +234,10 @@ describe('LocalAgentSession: asking the owner', () => {
     try {
       second.agent.reclaimStrandedEventDeliveries();
       await second.agent.flushPendingDrains();
-      const [open] = (await second.agent.listOwnerQuestions()).filter((asking) => asking.asked.status === 'open');
+      const [open] = (await second.agent.questions.list()).filter((asking) => asking.asked.status === 'open');
 
       if (open === undefined) throw new Error('the question did not survive the restart');
-      await second.agent.answerOwnerQuestions(open.asked.id, ANSWER);
+      await second.agent.questions.answer(open.asked.id, ANSWER);
       await second.agent.settleBackgroundWork();
 
       // The answer's own turn, then the report's one turn.
@@ -258,7 +259,7 @@ describe('LocalAgentSession: asking the owner', () => {
     try {
       await agent.send('Migrate the ledger.', { id: crypto.randomUUID(), mode: 'build' });
       agent.interrupt();
-      expect((await agent.listOwnerQuestions()).map((asking) => asking.asked.status)).toEqual(['dismissed']);
+      expect((await agent.questions.list()).map((asking) => asking.asked.status)).toEqual(['dismissed']);
       expect(requests).toHaveLength(1);
 
       await agent.send('Leave it for now.', { id: crypto.randomUUID(), mode: 'build' });
@@ -287,7 +288,7 @@ describe('LocalAgentSession: asking the owner', () => {
       await held;
       await agent.settleBackgroundWork();
 
-      expect((await agent.listOwnerQuestions()).map((asking) => asking.asked.status)).toEqual(['in_chat']);
+      expect((await agent.questions.list()).map((asking) => asking.asked.status)).toEqual(['in_chat']);
       const pair = askPair(requests[1] ?? []);
 
       expect(pair.result).not.toBeNull();

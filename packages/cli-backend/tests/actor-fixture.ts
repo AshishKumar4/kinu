@@ -1,3 +1,4 @@
+import { sqlStorageOver } from '@kinu.run/core/identity';
 import type { Database } from 'bun:sqlite';
 import { withHostDeliveries } from '@kinu.run/test-utils';
 import {
@@ -10,7 +11,7 @@ import {
   type SqlExec, type SqlValue, type WriteObserver,
   DEFAULT_WORKERS_AI_MODEL_SPEC, WORKSPACE_ROOT, actorHomeName, actorScaffoldPath } from '@kinu.run/core';
 import { bindLocalActor, localActorDirectory, registerLocalActor, retireLocalActor } from '@kinu.run/core';
-import { buildLocalActorRuntime, cleanupFacetScratch, makeSqlExec, type CLIRuntime } from '../src/runtime';
+import { buildLocalActorRuntime, cleanupFacetScratch, type CLIRuntime } from '../src/runtime';
 import { modelWindow, readMemoryTail, type HeadInferenceDeps, type HeadSeat, type RunInference } from '@kinu.run/core';
 import type { LanguageModel } from 'ai';
 
@@ -110,7 +111,7 @@ export function localTestActorHost(
   broadcasts: BroadcastEvent[] = [],
   writes?: ReadonlyMap<string, WriteObserver>,
 ): ActorHost {
-  const exec = makeSqlExec(db);
+  const exec = sqlStorageOver(db);
   const { directory } = localActorDirectory(parent.actor);
 
   return createActorHost({

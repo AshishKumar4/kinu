@@ -62,7 +62,7 @@ export async function servePreviewRequest(request: Request, env: SandboxPreviewE
   }
 
   if (!exposure.public) {
-    const key = previewViewerKey(label.port, await computerPreviewHandle(label.token));
+    const key = previewViewerKey(label.port, computerPreviewHandle(label.token));
 
     if (url.pathname === VIEWER_EXCHANGE_PATH) return containPreviewResponse(await exchangePreviewTicket(request, { ...env, AUTH_KV: env.AUTH_KV }, workspace, key));
     const refused = await unadmitted(request, env, { workspace, key, port: label.port });

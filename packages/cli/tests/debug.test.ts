@@ -1,6 +1,6 @@
 // `kinu debug <name>` over a local and a stub cloud backend; a planted secret must never reach the bundle.
+import { wrapDatabase } from '@kinu.run/core/identity';
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-
 import { join, resolve } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import {
@@ -10,7 +10,7 @@ import {
   initRunEventTables, initSearchTables, recordExploration,
   type ExplorationWrite, type ObjectiveIdentity,
 } from '@kinu.run/core';
-import { makeSql } from '@kinu.run/cli-backend';
+
 import { stampSchemaGenesis } from '@kinu.run/core';
 import { scratchDir, createTestActorsOver, runToExit, workspaceDatabase } from '@kinu.run/test-utils';
 import * as v from 'valibot';
@@ -73,7 +73,7 @@ function seedInvestigationWorkspace(dbPath: string): void {
   initSearchTables(execRaw);
   initMctsSearchTable(execRaw);
   initBackgroundJobsTable(execRaw);
-  const sql = makeSql(db);
+  const sql = wrapDatabase(db).sql;
   // Rows must belong to the workspace main actor (`openWorkspaceMainActor`), so the seed registers a real identity.
   const actor = createTestActorsOver(db, { name: 'invest' }).main;
 

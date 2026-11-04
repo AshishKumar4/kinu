@@ -1,7 +1,6 @@
 import { Effect } from 'effect';
 import { settle } from '@kinu.run/core/obs';
-import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@kinu.run/core';
-import { stripProvider } from '@kinu.run/cli-backend';
+import { DEFAULT_WORKERS_AI_MODEL_SPEC, WORKERS_AI_PROVIDER_ID, specOn } from '@kinu.run/core';
 import { loadConfigFile } from '../config';
 import { isCloudAuthConfigured } from '../agent-create';
 import { adoptDefaultModel } from '../default-model';
@@ -164,7 +163,7 @@ export function setupCommand(opts: {
         return;
       }
 
-      const named = opts.model === undefined ? DEFAULT_WORKERS_AI_MODEL_SPEC : `workers-ai/${stripProvider(opts.model, 'workers-ai')}`;
+      const named = opts.model === undefined ? DEFAULT_WORKERS_AI_MODEL_SPEC : specOn(WORKERS_AI_PROVIDER_ID, opts.model);
       const current = (yield* Effect.promise(async () => adoptDefaultModel(named)))?.model;
       console.log(`${OK('✓')} Using Cloudflare Workers AI`);
 

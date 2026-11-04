@@ -210,7 +210,7 @@ export function startCliAuth<Id>(env: CliAuthEnv<Id>, request: CliAuthRequest): 
     for (let attempt = 0; attempt < 10; attempt += 1) {
       const deviceToken = randomToken(32);
       const userCode = createUserCode();
-      const deviceHash = yield* Effect.promise(async () => sha256Hex(deviceToken));
+      const deviceHash = sha256Hex(deviceToken);
 
       // The code before its record, harmlessly: nobody holds the code until this answers.
       if (!(yield* Effect.promise(() => codeObject(env, userCode).claimCode(deviceHash, until)))) continue;

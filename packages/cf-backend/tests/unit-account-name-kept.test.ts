@@ -42,7 +42,7 @@ test("a session signed in under the account's old name leaves a rename standing:
   };
 
   // The dev identity's header names the account; then a browser signs in while it is so named, by the header's exchange.
-  const header: AuthIdentity = { userId: await accountIdFor(auth, EMAIL), email: EMAIL, sub: 'dev', provider: 'dev' };
+  const header: AuthIdentity = { userId: accountIdFor(auth, EMAIL), email: EMAIL, sub: 'dev', provider: 'dev' };
 
   expect(await named(header, 'PATCH', 'Kinu first-run')).toBe('Kinu first-run');
   const browser = await createSession(auth, { provider: 'dev', providerSub: 'dev', email: EMAIL, emailVerified: true });

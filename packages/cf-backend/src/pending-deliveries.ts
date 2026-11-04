@@ -4,6 +4,7 @@
  * itself. A check a reset cut off runs again when its job does. The job's row goes only after the check's fire or
  * no-fire committed with the delivery's claim, so a job run again after that fires nothing.
  */
+import { keyedSerialQueue } from '@kinu.run/agent-utils';
 import * as v from 'valibot';
 import { LifecycleCapability, type LifecycleJobContext, type LifecycleJobOutcome } from 'agents/lifecycle';
 import { PendingDeliverySchema, type PendingCheck, type PendingDelivery } from '@kinu.run/core';
@@ -24,7 +25,7 @@ export class PendingDeliveries extends LifecycleCapability {
   readonly #check: (pending: PendingDelivery) => Promise<PendingCheck>;
 
   /** The last check of each trigger this activation began, which the next one waits for. */
-  readonly #checking = new Map<string, Promise<PendingCheck>>();
+  readonly #checking = keyedSerialQueue();
 
   constructor(check: (pending: PendingDelivery) => Promise<PendingCheck>) {
     super('kinu-pending-deliveries');
@@ -66,25 +67,11 @@ export class PendingDeliveries extends LifecycleCapability {
   async onJob({ job }: LifecycleJobContext): Promise<LifecycleJobOutcome> {
     if (job.fn !== PENDING_DELIVERY_JOB) return undefined;
     const pending = v.parse(PendingDeliverySchema, job.payload);
-    const before = this.#checking.get(pending.trigger);
+    const next = await this.#checking(pending.trigger, () => this.#check(pending));
 
-    const checked = (async () => {
-      if (before !== undefined) await Promise.allSettled([before]);
+    if (next.kind === 'done') return undefined;
 
-      return await this.#check(pending);
-    })();
-
-    this.#checking.set(pending.trigger, checked);
-
-    try {
-      const next = await checked;
-
-      if (next.kind === 'done') return undefined;
-
-      return { rescheduleAt: next.kind === 'again' ? next.at : Date.now() + PARKED_RECHECK_MS };
-    } finally {
-      if (this.#checking.get(pending.trigger) === checked) this.#checking.delete(pending.trigger);
-    }
+    return { rescheduleAt: next.kind === 'again' ? next.at : Date.now() + PARKED_RECHECK_MS };
   }
 
   /** A reset or the platform's own failure keeps the job for a fresh invocation, so what reaches here failed the check

@@ -3,6 +3,7 @@
  * A send reaching the loop while the slot is held is admitted by the loop's durable re-drive (turn-close recheck,
  * wake-time ledger drain), with both one-shot kicks dead. Red if the re-drive is removed.
  */
+import { sqlStorageOver } from '@kinu.run/core/identity';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
@@ -10,7 +11,7 @@ import { AwaitedList, scratchPath, scratchDir, workspaceDatabase } from '@kinu.r
 import { initWorkspaceSchema, type LLMProviderConfig } from '@kinu.run/core';
 import type { LanguageModelV2Usage } from '@ai-sdk/provider';
 import { EventLog } from '../../core/src/events/hub/index';
-import { createCLIRuntime, makeSqlExec, makeWorkspaceSchemaSql } from '../src/runtime';
+import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import type { SessionEvent } from '@kinu.run/core';
 import { LocalAgentSession } from '../src/local-session';
 import { TestLanguageModelV2 } from './test-language-model';
@@ -131,7 +132,7 @@ describe('the loop admits a send queued while the slot is held, with every one-s
     const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
 
     // The runner's durable retry row, left by a process gone before its debounced drain fired.
-    new EventLog(makeSqlExec(db), rt.actor).publish({
+    new EventLog(sqlStorageOver(db), rt.actor).publish({
       descriptor: {
         ingress: 'timer_alarm',
         variant: 'timer',

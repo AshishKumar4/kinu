@@ -2,7 +2,7 @@
  *  source of truth for models; models.dev for which providers a BYO key can connect. */
 import {
   objectNamed,
-  catalogCredKey, fastCandidatesOf, listModelsDevProviders, modelsDevCompatBaseURL, testModel,
+  catalogCredKey, fastCandidatesOf, formatModelSpec, listModelsDevProviders, modelsDevCompatBaseURL, testModel,
   type CatalogShelf, type ModelMenuResponse, type ModelMenuEntry, type ModelTestResult, type ModelsDevProviderInfo, type ProviderCatalogEntry,
 } from '@kinu.run/core';
 import { createAgentProviderRegistry, userCredentials, type UserCredentialClient } from '../providers/agent-registry';
@@ -46,7 +46,7 @@ export async function listAvailableModels<Id>(
   const menu = await registry.listAllModels(deps);
 
   const out = menu.models.map((model): ModelMenuEntry => ({
-    spec: `${model.provider}/${model.id}`,
+    spec: formatModelSpec({ provider: model.provider, modelId: model.id }),
     label: model.label ?? model.id,
     provider: model.provider,
     providerLabel: registry.get(model.provider)?.label,

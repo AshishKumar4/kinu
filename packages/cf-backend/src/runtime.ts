@@ -28,8 +28,7 @@ import type { ProvidersLane } from './owned-model-services';
 
 export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
-import { diagnostics, toKinuError, detach } from "@kinu.run/core/obs";
-import { Effect } from 'effect';
+import { diagnostics, toKinuError } from "@kinu.run/core/obs";
 import { BOX_SIZES, BOX_SIZE_ORDER, DEFAULT_BOX_SIZE, type BoxSize } from "@kinu.run/devbox/sizes";
 import { DESKTOP_SIZE, WATCH_SHEET } from "@kinu.run/devbox/desktop";
 import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY } from "./computer-size";
@@ -706,8 +705,6 @@ function createRealSchedule(access: Pick<CFRuntimeAccess, 'holdLane'>, sql: SqlE
   const fiber = createSqlFiber(sql, actor);
 
   return {
-    after: async (ms, fn) => { setTimeout(() => detach(Effect.promise(fn)), ms); },
-    cron: async () => {},
     // The row first: the keep-alive awaits before its body runs, and a lane is owed from the moment it is started.
     fiber: <T>(name: string, fn: (ctx: FiberCtx) => Promise<T>): Promise<T> => fiber(name, (ctx) => access.holdLane(() => fn(ctx))),
   };

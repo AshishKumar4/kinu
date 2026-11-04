@@ -59,7 +59,7 @@ function buildComponents(components: WorkspaceComponents) {
 
   const llm = bornWithoutModel();
 
-  const schedule = { after: async (_ms: number, fn: () => Promise<void>) => { await fn(); }, cron: async () => {}, fiber: createSqlFiber(sql, actor) };
+  const schedule = { fiber: createSqlFiber(sql, actor) };
 
   return buildRuntime({
     actor,

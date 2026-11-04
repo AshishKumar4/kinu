@@ -163,8 +163,8 @@ export interface VerifiedPreview {
  * The handle a computer preview's passes are keyed by: its URL token's digest, so a pass for one publication opens no
  * later one of the same port, and holding a `:`, which no workspace preview's handle (a hostname label's) can.
  */
-export async function computerPreviewHandle(token: string): Promise<string> {
-  return `computer:${(await sha256Hex(token)).slice(0, 32)}`;
+export function computerPreviewHandle(token: string): string {
+  return `computer:${sha256Hex(token, 32)}`;
 }
 
 /**
@@ -188,7 +188,7 @@ export async function verifiedPreview(env: PreviewSuffixEnv & LabelSignerEnv, ho
 
   if (computer === null || workspace === null) return null;
 
-  return { kind: 'computer', port: computer.port, workspace, handle: await computerPreviewHandle(computer.token) };
+  return { kind: 'computer', port: computer.port, workspace, handle: computerPreviewHandle(computer.token) };
 }
 
 /**

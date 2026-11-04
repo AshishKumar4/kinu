@@ -25,8 +25,8 @@ export { inspectDescendant, inspectSubagentStorage, readableActor, type AgentOwn
 
 // Backend-neutral terminal-turn state machine: the DO and the CLI supply only effect bodies and a wake.
 export {
-  chatTurnParts, declareTerminalRoster, declareHandoffRoster, HandedOffTurnSchema, runSettleEffect, SettledRunSchema,
-  type HandedOffTurn, type SettledRun, type TerminalActor, type TerminalTurnFacts, type TerminalTurnParts,
+  chatTurnParts, declareTerminalRoster, declareHandoffRoster, HandedOffTurnSchema, runSettleEffect, SettledRunSchema, turnReportSequenceId,
+  type HandedOffTurn, type SettledRun, type TerminalActor, type TerminalTurnFacts, type TerminalTurnParts, type TurnEnd,
 } from './orchestrator/terminal-roster';
 
 export { SleepTimeLane, initSleepTimeTables } from './orchestrator/sleep-time-lane';
@@ -1449,7 +1449,7 @@ export {
 } from './identity/agent-workspaces';
 
 export {
-  SECRET_PATTERNS, redactSecrets, secretProvider, type SecretPattern,
+  SECRET_PATTERNS, redactLiterals, redactSecrets, secretProvider, type SecretPattern,
 } from './safety/secret-patterns';
 
 export { parseDotenv, pastedSecrets, type PastedSecret } from './safety/pasted-secrets';
@@ -2310,6 +2310,8 @@ export {
   bunResolutionShell,
   cliPlatformShell,
 } from './cli/bun-runtime';
+
+export type { FileCheckpointSurface, OwnerQuestionSurface, PlanReviewSurface, WaitingApprovalSurface } from './cli/owner-surfaces';
 
 export {
   normalizeCliOrigin,

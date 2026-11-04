@@ -1,12 +1,13 @@
-// `makeSql`/`makeSqlExec` stand in for a Durable Object's `ctx.storage.sql`, which returns whatever rows a statement
+// `wrapDatabase(db).sql`/`sqlStorageOver` stand in for a Durable Object's `ctx.storage.sql`, which returns whatever rows a statement
 // produces: a write with RETURNING must answer its rows, not `[]` from a leading-keyword sniff.
+import { wrapDatabase, sqlStorageOver } from '@kinu.run/core/identity';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { DeferredApprovalStore, EventLog, initWorkspaceSchema, type ActorHandle } from '@kinu.run/core';
 import { createTestActors } from '@kinu.run/test-utils';
-import { makeSql, makeSqlExec, makeWorkspaceSchemaSql } from '../src/runtime';
+import { makeWorkspaceSchemaSql } from '../src/runtime';
 
-/** One workspace's schema and main actor, issued through `makeSql`: the directory's INSERT … RETURNING is the first row it must hand back. */
+/** One workspace's schema and main actor, issued through `wrapDatabase(db).sql`: the directory's INSERT … RETURNING is the first row it must hand back. */
 function mainActor(db: Database): ActorHandle {
   const schemaSql = makeWorkspaceSchemaSql(db);
   initWorkspaceSchema(schemaSql);
@@ -16,7 +17,7 @@ function mainActor(db: Database): ActorHandle {
 
 /** An approved, unspent grant: where a deferred shell approval waits for the agent. */
 function approvedGrant(db: Database): DeferredApprovalStore {
-  const store = new DeferredApprovalStore(makeSql(db), mainActor(db));
+  const store = new DeferredApprovalStore(wrapDatabase(db).sql, mainActor(db));
   store.create({
     id: 'act-1',
     command: 'rm -rf ./build',
@@ -58,7 +59,7 @@ describe('the local SQL adapter returns the rows a write produces', () => {
 
   test('a stranded event delivery is named by the reclaim that re-pends it', () => {
     const db = new Database(':memory:');
-    const log = new EventLog(makeSqlExec(db), mainActor(db));
+    const log = new EventLog(sqlStorageOver(db), mainActor(db));
 
     const { id } = log.publish({
       descriptor: {

@@ -20,7 +20,6 @@ describe('createTestRuntime refuses work it does not perform', () => {
         name: 'double', description: 'doubles', code: 'async (n) => n * 2',
       });
     }],
-    ['a delayed callback', () => rt.schedule.after(10, async () => {})],
     ['a durable fiber', async () => { await rt.schedule.fiber('work', async () => 'done'); }],
     ['a scaffold read', async () => { await rt.identity.scaffold.read(); }],
   ];

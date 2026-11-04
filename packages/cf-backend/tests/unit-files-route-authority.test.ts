@@ -150,8 +150,8 @@ async function seam(options: {
   deviceFiles?: Record<string, string>;
 }): Promise<Seam> {
   const device = new Map<string, string>(Object.entries(options.deviceFiles ?? { [DEVICE_FILE]: 'hello' }));
-  const ownerUserId = await accountIdFor(OAUTH_DEPLOYMENT, OWNER_EMAIL);
-  const strangerUserId = await accountIdFor(OAUTH_DEPLOYMENT, STRANGER_EMAIL);
+  const ownerUserId = accountIdFor(OAUTH_DEPLOYMENT, OWNER_EMAIL);
+  const strangerUserId = accountIdFor(OAUTH_DEPLOYMENT, STRANGER_EMAIL);
   const actors = new Map<string, ActorHarness<HarnessOrchestratorAgent>>();
   const kv = makeKv();
 

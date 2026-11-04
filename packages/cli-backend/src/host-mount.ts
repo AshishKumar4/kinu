@@ -13,6 +13,7 @@ import { agentHome, FOLDER_SUBTREE, MAIN_AGENT, SCRATCH_ROOT, sha256Hex, withMou
 import { CompositeVFS } from '@nimbus-sh/core/vfs/composite.js';
 import { syscallError, toVfsError, type VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { settle, tolerate, tolerateAsync } from '@kinu.run/core/obs';
+import { keyedSerialQueue } from '@kinu.run/agent-utils';
 
 /** `file` is a regular file only (Nimbus 0.15); Nimbus stats what a listing calls `unknown`. */
 function hostDirentType(entry: Dirent): VfsDirentType {
@@ -43,7 +44,7 @@ type HostFiles = VFS & Required<Pick<VFS, 'readRange' | 'rmdir' | 'rename' | 're
  * inode), so every name for it, a hard link or a link to its directory, is the same file; a name with no file yet by
  * its real directory and name.
  */
-const replacing = new Map<string, Promise<unknown>>();
+const replacing = keyedSerialQueue();
 
 async function fileKey(path: string): Promise<string> {
   const held = await tolerateAsync(() => fs.stat(path, { bigint: true }), 'enoent');
@@ -54,36 +55,18 @@ async function fileKey(path: string): Promise<string> {
   return join(directory, basename(path));
 }
 
-async function oneAtATime<T>(path: string, run: () => Promise<T>): Promise<T> {
-  const key = await fileKey(path);
-  const before = replacing.get(key);
-
-  const mine = (async () => {
-    await before;
-
-    return run();
-  })();
-
-  // What the next one waits on: this one settled, whether it landed or failed.
-  const settled = Promise.allSettled([mine]);
-
-  replacing.set(key, settled);
-
-  try {
-    return await mine;
-  } finally {
-    if (replacing.get(key) === settled) replacing.delete(key);
-  }
+async function oneWriterPerFile<T>(path: string, run: () => Promise<T>): Promise<T> {
+  return replacing(await fileKey(path), run);
 }
 
 /**
  * `data` at `path` only if its bytes still hash to `expected` (null: only if none is there), written over the file in
  * place, as a plain write does: it keeps its inode, owner, group, mode, ACLs and every other link to it, and a file this
- * user may not write is refused. Each file's compare and write run one at a time in this process (`oneAtATime`); this
+ * user may not write is refused. Each file's compare and write run one at a time in this process (`oneWriterPerFile`); this
  * host gives no lock against another process's write in between.
  */
 function replaceIfDigest(path: string, data: Uint8Array, expected: string | null): Promise<VfsDigestWrite> {
-  return oneAtATime(path, () => replaceNow(path, data, expected));
+  return oneWriterPerFile(path, () => replaceNow(path, data, expected));
 }
 
 async function replaceNow(path: string, data: Uint8Array, expected: string | null): Promise<VfsDigestWrite> {
@@ -120,7 +103,7 @@ function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefin
   };
 
   return {
-    readFile: (path) => hostIo('open', path, async () => new Uint8Array(await fs.readFile(path))),
+    readFile: (path) => hostIo('open', path, () => fs.readFile(path)),
     async writeFile(path, data) {
       await snapshot(path, 'file write');
       await hostIo('open', path, async () => {

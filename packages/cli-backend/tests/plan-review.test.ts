@@ -131,7 +131,7 @@ describe('LocalAgentSession — plan review', () => {
 
     try {
       await agent.send('Draft the ledger migration.', { id: crypto.randomUUID(), mode: 'plan' });
-      const first = await agent.getActivePlanReview();
+      const first = await agent.plans.active();
 
       expect(first).toMatchObject({ sessionId: CHAT_SESSION_ID, revision: 1, status: 'pending', content: PLAN_BODY, handoffAccepted: false });
 
@@ -142,21 +142,21 @@ describe('LocalAgentSession — plan review', () => {
       await agent.enqueueTurn({ text: '[subagent_report] done', idempotencyKey: 'drain:1' });
       await agent.settleBackgroundWork();
       expect(fileResults(events)).toMatchObject([{ success: false, reason: 'denied' }, { success: true }, { success: true }]);
-      expect(await agent.getActivePlanReview()).toMatchObject({ id: first.id, status: 'pending' });
+      expect(await agent.plans.active()).toMatchObject({ id: first.id, status: 'pending' });
 
-      expect(await agent.decidePlanReview(first.id, 1, 'request_changes', 'Say what happens to the audit trail.')).toMatchObject({ ok: true, queued: true });
+      expect(await agent.plans.decide(first.id, 1, 'request_changes', 'Say what happens to the audit trail.')).toMatchObject({ ok: true, queued: true });
       await agent.settleBackgroundWork();
-      expect(await agent.getActivePlanReview()).toMatchObject({ id: first.id, revision: 2, status: 'pending', content: '# Migration plan\n- keep the audit trail' });
+      expect(await agent.plans.active()).toMatchObject({ id: first.id, revision: 2, status: 'pending', content: '# Migration plan\n- keep the audit trail' });
 
       // The acceptance write fails once, after the loop admitted the handoff; the next decision recovers it.
       db.run(`CREATE TRIGGER lose_acceptance BEFORE UPDATE OF handoff_accepted ON plan_reviews
         WHEN NEW.handoff_accepted = 1 BEGIN SELECT RAISE(ABORT, 'interrupted after durable acceptance'); END`);
-      expect(await agent.decidePlanReview(first.id, 2, 'approve')).toMatchObject({
+      expect(await agent.plans.decide(first.id, 2, 'approve')).toMatchObject({
         ok: true, queued: false, queueError: expect.stringContaining('interrupted after durable acceptance'), plan: { status: 'approved', handoffAccepted: false },
       });
       db.run('DROP TRIGGER lose_acceptance');
       await agent.settleBackgroundWork();
-      expect(await agent.decidePlanReview(first.id, 2, 'approve')).toMatchObject({ ok: true, queued: true, plan: { status: 'approved', handoffAccepted: true } });
+      expect(await agent.plans.decide(first.id, 2, 'approve')).toMatchObject({ ok: true, queued: true, plan: { status: 'approved', handoffAccepted: true } });
       await agent.settleBackgroundWork();
 
       const states = planBroadcasts(events).map((event) => `${String(event.plan?.revision)}:${String(event.plan?.status)}`);
@@ -165,12 +165,12 @@ describe('LocalAgentSession — plan review', () => {
 
       // A second plan, dismissed: no handoff runs, and what is typed next may write.
       await agent.send('Plan the export.', { id: crypto.randomUUID(), mode: 'plan' });
-      const second = await agent.getActivePlanReview();
+      const second = await agent.plans.active();
 
       if (!second || second.id === first.id) throw new Error('the second plan was not stored as its own');
       const asked = taken.length;
 
-      expect(await agent.dismissPlanReview(second.id, 1)).toMatchObject({ ok: true, plan: { status: 'dismissed' } });
+      expect(await agent.plans.dismiss(second.id, 1)).toMatchObject({ ok: true, plan: { status: 'dismissed' } });
       await agent.settleBackgroundWork();
       expect(taken).toHaveLength(asked);
       await agent.send('Do the other thing.', { id: crypto.randomUUID() });
@@ -200,10 +200,10 @@ describe('LocalAgentSession — plan review', () => {
 
     try {
       await agent.send('Draft the ledger migration.', { id: crypto.randomUUID(), mode: 'plan' });
-      const plan = await agent.getActivePlanReview();
+      const plan = await agent.plans.active();
 
       if (!plan) throw new Error('the submitted plan was not stored');
-      expect(await agent.decidePlanReview(plan.id, 1, 'approve')).toMatchObject({ ok: true, queued: true });
+      expect(await agent.plans.decide(plan.id, 1, 'approve')).toMatchObject({ ok: true, queued: true });
       await agent.settleBackgroundWork();
 
       expect(readPlanTasks(rt.storage.sql, rt.actor, { id: plan.id, revision: 1, sessionId: CHAT_SESSION_ID }).map((task) => task.title))
@@ -225,18 +225,18 @@ describe('LocalAgentSession — plan review', () => {
 
     try {
       await agent.send('Make a plan for the ledger migration.', { id: crypto.randomUUID(), mode: 'build' });
-      const plan = await agent.getActivePlanReview();
+      const plan = await agent.plans.active();
 
       if (!plan) throw new Error('the Auto turn did not submit its plan');
       expect(requests[0]?.tools).toContain('submit_plan');
       expect(requests[0]?.tools).not.toContain('reply_to_comment');
 
-      expect(await agent.savePlanReviewAnnotations(plan.id, 1, [
+      expect(await agent.plans.saveAnnotations(plan.id, 1, [
         { id: 'cents', type: 'COMMENT', blockId: 'block-1', startOffset: 0, endOffset: 13, originalText: 'Move the ledger', text: 'Round half to even.', createdA: 1 },
         { id: 'drop', type: 'DELETION', blockId: 'block-2', startOffset: 0, endOffset: 21, originalText: 'Drop the float column', createdA: 2 },
         { id: 'all', type: 'GLOBAL_COMMENT', text: 'When does this run?', createdA: 3 },
       ])).toMatchObject({ ok: true });
-      expect(await agent.decidePlanReview(plan.id, 1, 'request_changes')).toMatchObject({ ok: true, queued: true });
+      expect(await agent.plans.decide(plan.id, 1, 'request_changes')).toMatchObject({ ok: true, queued: true });
       await agent.settleBackgroundWork();
 
       const handoff = requests[2];
@@ -246,7 +246,7 @@ describe('LocalAgentSession — plan review', () => {
       // Each comment reaches the model with the id its reply names, and what it says or quotes.
       for (const said of ['cents', 'Round half to even.', 'drop', 'Drop the float column', 'all', 'When does this run?']) expect(handoff?.prompt).toContain(said);
 
-      const revised = await agent.getActivePlanReview();
+      const revised = await agent.plans.active();
 
       expect(revised).toMatchObject({ id: plan.id, revision: 2, status: 'pending' });
       expect(revised?.annotations.find((note) => note.type === 'REPLY')).toMatchObject({
@@ -276,7 +276,7 @@ describe('LocalAgentSession — plan review', () => {
       expect(turnModes(rt)).toEqual(['plan']);
       expect(events.find((event) => event.type === 'tool-result' && event.toolName === 'submit_plan'))
         .toMatchObject({ success: false, reason: 'bad_input' });
-      expect(await agent.getActivePlanReview()).toBeNull();
+      expect(await agent.plans.active()).toBeNull();
       expect(planBroadcasts(events)).toEqual([]);
     } finally {
       await agent.end();
@@ -298,15 +298,15 @@ describe('LocalAgentSession — plan review', () => {
 
       try {
         await agent.send('Draft the ledger migration.', { id: crypto.randomUUID(), mode: 'plan' });
-        const plan = await agent.getActivePlanReview();
+        const plan = await agent.plans.active();
 
         if (!plan) throw new Error('the submitted plan was not stored');
         const other = agent.send('Meanwhile, look at the logs.', { id: crypto.randomUUID(), mode: 'build' });
         await started.promise;
         // The running turn holds the queue, so the handoff this decision enqueues waits behind it.
-        const decided = agent.decidePlanReview(plan.id, 1, decision, decision === 'approve' ? undefined : 'Say what happens to the audit trail.');
+        const decided = agent.plans.decide(plan.id, 1, decision, decision === 'approve' ? undefined : 'Say what happens to the audit trail.');
 
-        expect(await agent.dismissPlanReview(plan.id, 1)).toMatchObject({ ok: true, plan: { status: 'dismissed' } });
+        expect(await agent.plans.dismiss(plan.id, 1)).toMatchObject({ ok: true, plan: { status: 'dismissed' } });
         running.resolve();
         await other;
         await decided;
@@ -314,7 +314,7 @@ describe('LocalAgentSession — plan review', () => {
 
         expect(taken).toHaveLength(3);
         expect(turnModes(rt)).toEqual(['plan', 'build']);
-        expect(await agent.getActivePlanReview()).toMatchObject({ status: 'dismissed' });
+        expect(await agent.plans.active()).toMatchObject({ status: 'dismissed' });
       } finally {
         await agent.end();
         db.close();
@@ -337,18 +337,18 @@ describe('LocalAgentSession — plan review', () => {
 
     try {
       await agent.send('Draft the ledger migration.', { id: crypto.randomUUID(), mode: 'plan' });
-      const plan = await agent.getActivePlanReview();
+      const plan = await agent.plans.active();
 
       if (!plan) throw new Error('the submitted plan was not stored');
-      const decided = agent.decidePlanReview(plan.id, 1, 'request_changes', 'Say what happens to the audit trail.');
+      const decided = agent.plans.decide(plan.id, 1, 'request_changes', 'Say what happens to the audit trail.');
       await started.promise;
 
-      expect(await agent.dismissPlanReview(plan.id, 1)).toMatchObject({ ok: true, plan: { status: 'dismissed' } });
+      expect(await agent.plans.dismiss(plan.id, 1)).toMatchObject({ ok: true, plan: { status: 'dismissed' } });
       revising.resolve();
       await decided;
       await agent.settleBackgroundWork();
 
-      expect(await agent.getActivePlanReview()).toMatchObject({ id: plan.id, revision: 1, status: 'dismissed' });
+      expect(await agent.plans.active()).toMatchObject({ id: plan.id, revision: 1, status: 'dismissed' });
       expect(taken.length).toBeLessThanOrEqual(3);
     } finally {
       await agent.end();
@@ -368,7 +368,6 @@ describe('LocalAgentSession — plan review', () => {
     // (the cloud backend wires `submitPlan` on the orchestrator alone).
     agent.setParentRelay({
       owed: async () => null,
-      sequenceId: (messageId) => messageId,
       send: async () => 'relayed',
     });
 
@@ -381,7 +380,7 @@ describe('LocalAgentSession — plan review', () => {
 
       expect(submissions).toHaveLength(2);
       expect(submissions.every((event) => event.type === 'tool-result' && !event.success)).toBe(true);
-      expect(await agent.getActivePlanReview()).toBeNull();
+      expect(await agent.plans.active()).toBeNull();
     } finally {
       await agent.end();
       db.close();
@@ -396,17 +395,17 @@ describe('LocalAgentSession — plan review', () => {
 
     try {
       await agent.send('Draft the ledger migration.', { id: crypto.randomUUID(), mode: 'plan' });
-      const plan = await agent.getActivePlanReview();
+      const plan = await agent.plans.active();
 
       if (!plan) throw new Error('the submitted plan was not stored');
       // By the time the handoff turn is dequeued another process holds the driver lease.
       let asked = 0;
       agent.setDriverGate(() => (asked++ === 0 ? null : { success: false, reason: 'unavailable', error: 'another process is driving' }));
 
-      expect(await agent.decidePlanReview(plan.id, 1, 'approve')).toMatchObject({
+      expect(await agent.plans.decide(plan.id, 1, 'approve')).toMatchObject({
         ok: true, queued: false, plan: { status: 'approved', handoffAccepted: false },
       });
-      expect(await agent.getActivePlanReview()).toMatchObject({ status: 'approved', handoffAccepted: false });
+      expect(await agent.plans.active()).toMatchObject({ status: 'approved', handoffAccepted: false });
       expect(taken).toHaveLength(2);
     } finally {
       await agent.end();

@@ -124,8 +124,6 @@ function runtimeFor(w: World, actor: ActorHandle, vfs: VFS = createMemoryVfs().v
     executor: { languages: ['javascript'], execute: async () => ({ result: undefined }) },
     llm: createScriptedLLM([]),
     schedule: {
-      after: async (_ms, fn) => { await fn(); },
-      cron: async () => {},
       fiber: async (_name, fn) => await fn({ stash: () => {}, snapshot: null }),
     },
     identity: {

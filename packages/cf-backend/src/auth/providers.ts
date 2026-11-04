@@ -1,5 +1,5 @@
 import { Effect } from 'effect';
-import { settle } from '@kinu.run/core/obs';
+import { KinuError, settle } from '@kinu.run/core/obs';
 import * as oauth from 'oauth4webapi';
 import { CLOUDFLARE_WORKERS_AI_SCOPES } from '@kinu.run/core';
 
@@ -88,7 +88,7 @@ export function getAuthorizationServer(provider: OAuthProviderConfig): Promise<o
   return settle(Effect.gen(function* () {
     if (provider.authorizationServer) return provider.authorizationServer;
 
-    if (!provider.issuer) return yield* Effect.die(new Error(`Provider ${provider.id} has no issuer.`));
+    if (!provider.issuer) return yield* Effect.fail(new KinuError('unsupported', `Provider ${provider.id} has no issuer.`));
     const cached = discoveryCache.get(provider.issuer);
 
     if (cached && cached.expiresAt > Date.now()) return cached.as;

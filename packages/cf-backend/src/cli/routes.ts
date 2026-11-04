@@ -4,7 +4,7 @@ import {
   JsonValueSchema, RELEASE_SIGNING_PUBLIC_KEY, timingSafeEqual,
 } from '@kinu.run/core';
 import { isFreshAuthTime, sessionGate, type AuthEnv } from '../auth/session';
-import { CLI_APPROVAL_CSRF_COOKIE_NAME, readCookie } from '../auth/cookies';
+import { CLI_APPROVAL_CSRF_COOKIE_NAME, readCookie, setCookie } from '../auth/cookies';
 import { CLI_PREVIEW_ENTRY_PATH, publicHtmlHeaders, type LabelSignerEnv, type PreviewSuffixEnv } from '@kinu.run/core';
 import { previewEntry } from '../nimbus-route';
 import { approvalDocument, installDocument } from '@kinu.run/core';
@@ -1133,11 +1133,15 @@ function textField(form: FormData, name: string): string {
   return raw === null || raw instanceof Blob ? '' : raw;
 }
 
+const CLI_APPROVAL_CSRF_LIFE_MS = 600_000;
+
+const CSRF_COOKIE_SCOPE = { path: '/cli/auth', sameSite: 'Strict' } as const;
+
 function csrfCookie(value: string): string {
-  return `${CLI_APPROVAL_CSRF_COOKIE_NAME}=${value}; Path=/cli/auth; Max-Age=600; HttpOnly; Secure; SameSite=Strict`;
+  return setCookie(CLI_APPROVAL_CSRF_COOKIE_NAME, value, CLI_APPROVAL_CSRF_LIFE_MS, CSRF_COOKIE_SCOPE);
 }
 
 function clearCsrfCookie(): string {
-  return `${CLI_APPROVAL_CSRF_COOKIE_NAME}=; Path=/cli/auth; Max-Age=0; HttpOnly; Secure; SameSite=Strict`;
+  return setCookie(CLI_APPROVAL_CSRF_COOKIE_NAME, '', 0, CSRF_COOKIE_SCOPE);
 }
 

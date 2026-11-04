@@ -278,7 +278,7 @@ test('a restore the restart did not land is said loudly, never as done', async (
 // What is the person's goes back together: the account, its mailbox, its Drive's user object, then every shard.
 test('an account named by its email goes back with its mailbox and its Drive, the Drive\'s user object before its shards', async () => {
   const { env, armed } = world([`${OPS_PASS_PREFIX}${sha256Hex(PASS)}`], true, { shards: 2 });
-  const user = await accountIdFor(env, 'owner@example.com');
+  const user = accountIdFor(env, 'owner@example.com');
   const answer = await opsRoutes.fetch(restore(`Bearer ${PASS}`, { object: { class: 'UserDO', email: 'owner@example.com' }, to: { at: 7 } }), env);
 
   expect({ status: answer.status, armed }).toEqual({
@@ -292,7 +292,7 @@ test('an account named by its email goes back with its mailbox and its Drive, th
 // "This database has no history", so the restore stopped there though every byte it needed was back.
 test('an account\'s Drive goes back on the shards its restored records name; a pool shard none names is skipped, held nothing', async () => {
   const { env, armed } = world([`${OPS_PASS_PREFIX}${sha256Hex(PASS)}`], true, { shards: 3, namedShards: [1] });
-  const user = await accountIdFor(env, 'owner@example.com');
+  const user = accountIdFor(env, 'owner@example.com');
   const answer = await opsRoutes.fetch(restore(`Bearer ${PASS}`, { object: { class: 'UserDO', email: 'owner@example.com' }, to: { at: 7 } }), env);
   const read = v.parse(Restored, await answer.json());
 

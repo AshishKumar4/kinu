@@ -25,10 +25,12 @@ import {
   printStepCut, printToolCall, printToolResult, printEvolutionEvent, createTurnStatus, formatFailure,
   ACCENT, DIM, MUTED, ERR, OK, WARN, type TurnStatus,
 } from './display';
-import { renderThrownChain, detach } from '@kinu.run/core/obs';
+import { errnoCode, renderThrownChain, detach } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import { initialInputState, READS_CHANGED_EVENT, reduceInput, type InputMachineEvent, type WorkMode } from '@kinu.run/core';
 import { clipText } from '@kinu.run/core/tui';
+
+const EXIT_CLOSE_WAIT_MS = 5_000;
 
 export interface ChatLoopOpts {
   client: AgentClient;
@@ -126,9 +128,9 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     if (exiting) return;
     exiting = true;
     unsubscribe();
-    // close() flushes a partial evolution window; cap it so Ctrl+C never hangs.
+    // close() flushes a partial evolution window; Ctrl+C waits for it this long, never the drain's own grace.
     const cap = Promise.withResolvers<void>();
-    setTimeout(cap.resolve, 5000);
+    setTimeout(cap.resolve, EXIT_CLOSE_WAIT_MS);
 
     try {
       await Promise.race([client.close(), cap.promise]);
@@ -492,7 +494,7 @@ function ask(rl: readline.Interface, prompt: string, signal?: AbortSignal, prefi
     } catch (error) {
       // Readline refuses a question once stdin has ended (ERR_USE_AFTER_CLOSE): piped input that ran out ends the chat,
       // which says goodbye. Anything else is said on stderr, as stdout carries only the conversation.
-      if (!(error instanceof Error && 'code' in error && error.code === 'ERR_USE_AFTER_CLOSE')) {
+      if (!(error instanceof Error && errnoCode(error) === 'ERR_USE_AFTER_CLOSE')) {
         process.stderr.write(`note: readline refused the prompt: ${renderThrownChain({ cause: error })}\n`);
       }
 

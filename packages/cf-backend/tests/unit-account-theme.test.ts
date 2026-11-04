@@ -23,7 +23,7 @@ async function account(unreadable = false) {
   const kv = makeKv();
 
   const harness = createTestUserDO({
-    durableObjectId: await accountIdFor({}, EMAIL), devUserEmail: EMAIL,
+    durableObjectId: accountIdFor({}, EMAIL), devUserEmail: EMAIL,
     pages: { AUTH_KV: kv, workspace: (name) => { throw new Error(`the workspace ${name} is not reached here`); } },
   });
 

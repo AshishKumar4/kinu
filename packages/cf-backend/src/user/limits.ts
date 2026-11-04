@@ -7,8 +7,8 @@ import { attempt, diagnostics, KinuError, settle, settleSync } from '@kinu.run/c
 import { ACCOUNT_DELETING_KEY } from './account-deletion';
 import {
   accountClassOf, admitComputerStart, admitPlatformTurn, admitStoredBytes, admitWorkspace, AccountLimitsStore,
-  freeTierOf, isLimited, isoDate, limitReadings, startSize, limitsReport, monthOf, type AccountClass, type AccountLimits, type AccountUse, type Admission,
-  type ComputerSize, type Fact, type FreeTier, type LimitId, type LimitReading, type LimitsReport, type StoredClass, type UserCaller,
+  freeTierOf, isLimited, limitReadings, nearLimitNote, startSize, limitsReport, type AccountClass, type AccountLimits, type AccountUse,
+  type Admission, type ComputerSize, type Fact, type FreeTier, type LimitsReport, type StoredClass, type UserCaller,
 } from '@kinu.run/core';
 import { isListedOperator } from '../control-plane/admin-caller';
 import type { UserObjectHost } from './user-host';
@@ -28,23 +28,6 @@ export interface UserLimitsHost extends Pick<UserObjectHost, 'ctx' | 'env' | 're
  */
 const STORAGE_STALE_MS = 10 * 60_000;
 
-/** The note the assistant gives once a period, when a limit is near its end; a limit with none is not mentioned. */
-const NEAR_NOTE = {
-  workspaces: (shown: string) => `This account has used ${shown} of its free workspaces.`,
-  computer_hours: (shown: string) => `This account's computers have run ${shown} of their free hours this month.`,
-  stored_bytes: (shown: string) => `This account stores ${shown} of its free space.`,
-  model_tokens: (shown: string) => `Today's free model use is at ${shown}.`,
-} satisfies Partial<Record<LimitId, (shown: string) => string>>;
-
-const isNoted = (id: LimitId): id is keyof typeof NEAR_NOTE => id in NEAR_NOTE;
-
-/** The period a near limit is mentioned once in: its own for one that resets, else for as long as its number holds. */
-function noticePeriod(limit: LimitReading, now: number): string {
-  if (limit.id === 'model_tokens') return isoDate(now);
-
-  return limit.id === 'computer_hours' ? monthOf(now) : `at:${String(Math.floor(limit.limit))}`;
-}
-
 /** A suspended account's credentials are not minted: the refusal, in its operator's words; nothing for any other. */
 export function refuseSuspended(reason: string | null): void {
   if (reason === null) return;
@@ -54,9 +37,12 @@ export function refuseSuspended(reason: string | null): void {
 
 export class UserLimits {
   private readonly store: AccountLimitsStore;
+  /** The deployment's free tier, read once: an object's env does not change under it. */
+  private readonly freeTier: FreeTier | null | 'malformed';
 
   constructor(private readonly host: UserLimitsHost) {
     this.store = new AccountLimitsStore(host.ctx.storage.sql);
+    this.freeTier = freeTierOf(host.env.ACCOUNT_LIMITS);
   }
 
   private email(): string {
@@ -65,11 +51,9 @@ export class UserLimits {
 
   /** The deployment's free tier; null where it has none. A malformed one refuses every new thing, saying so. */
   private tier(): Effect.Effect<FreeTier | null, KinuError> {
-    const tier = freeTierOf(this.host.env.ACCOUNT_LIMITS);
-
-    return tier === 'malformed'
+    return this.freeTier === 'malformed'
       ? Effect.fail(new KinuError('unavailable', "This deployment's ACCOUNT_LIMITS is not an object of known limits; nothing new starts until it is mended."))
-      : Effect.succeed(tier);
+      : Effect.succeed(this.freeTier);
   }
 
   /** Why an operator suspended the account, or null. */
@@ -262,15 +246,7 @@ export class UserLimits {
     const report = await this.limits(caller);
     const now = Date.now();
 
-    const notes = report.limits.flatMap((limit) => {
-      const note = isNoted(limit.id) ? NEAR_NOTE[limit.id] : undefined;
-
-      if (note === undefined || !limit.near || !this.store.noticeOnce(limit.id, noticePeriod(limit, now), now)) return [];
-
-      return [note(`${String(Math.round((limit.used / Math.max(limit.limit, 1)) * 100))}%`)];
-    });
-
-    return notes.length === 0 ? null : `${notes.join(' ')} At the limit only new things stop; the person can see each limit in Settings under Usage.`;
+    return nearLimitNote(report.limits, now, (limit, period) => this.store.noticeOnce(limit, period, now));
   }
 
   /** The near note as a turn's account fact; none when there is nothing new, or the note could not be read (logged). */

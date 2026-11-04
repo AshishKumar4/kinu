@@ -7,8 +7,8 @@ import { Effect } from 'effect';
 import * as v from 'valibot';
 import { KinuError } from '../obs/error';
 import { attemptInItsWords, settle } from '../obs/index';
-import { COMPUTER_SIZE_ORDER, isLimited, LIMIT_IDS, type AccountClass, type ComputerSize, type FreeTier } from './policy';
-import { periodEnd, type RunningComputer } from './store';
+import { COMPUTER_SIZE_ORDER, isLimited, LIMIT_IDS, type AccountClass, type ComputerSize, type FreeTier, type LimitId } from './policy';
+import { monthOf, periodEnd, type RunningComputer } from './store';
 import { isoDate } from '../utils/date';
 
 /** What of its limits an account has used, as its object reads it now. */
@@ -195,6 +195,39 @@ export function limitReadings({ tier, use, now }: Omit<Admission, 'klass'>): Lim
     reading({ id: 'stored_bytes', used: use.storedBytes, limit: tier.storedBytes, unit: 'bytes', resetsAt: null }),
     reading({ id: 'model_tokens', used: use.tokensToday, limit: tier.modelTokensPerDay, unit: 'tokens', resetsAt: periodEnd('day', now) }),
   ];
+}
+
+/** The note the assistant gives once a period, when a limit is near its end; a limit with none is not mentioned. */
+const NEAR_NOTE = {
+  workspaces: (shown: string) => `This account has used ${shown} of its free workspaces.`,
+  computer_hours: (shown: string) => `This account's computers have run ${shown} of their free hours this month.`,
+  stored_bytes: (shown: string) => `This account stores ${shown} of its free space.`,
+  model_tokens: (shown: string) => `Today's free model use is at ${shown}.`,
+} satisfies Partial<Record<LimitId, (shown: string) => string>>;
+
+const isNoted = (id: LimitId): id is keyof typeof NEAR_NOTE => id in NEAR_NOTE;
+
+/** The period a near limit is mentioned once in: its own for one that resets, else for as long as its number holds. */
+function noticePeriod(limit: LimitReading, now: number): string {
+  if (limit.id === 'model_tokens') return isoDate(now);
+
+  return limit.id === 'computer_hours' ? monthOf(now) : `at:${String(Math.floor(limit.limit))}`;
+}
+
+/**
+ * The assistant's one note of the limits near their end that `noticeOnce` records as first said this period; null when
+ * there is nothing new to say.
+ */
+export function nearLimitNote(
+  limits: readonly LimitReading[], now: number, noticeOnce: (limit: LimitId, period: string) => boolean,
+): string | null {
+  const notes = limits.flatMap((limit) => {
+    if (!isNoted(limit.id) || !limit.near || !noticeOnce(limit.id, noticePeriod(limit, now))) return [];
+
+    return [NEAR_NOTE[limit.id](`${String(Math.round((limit.used / Math.max(limit.limit, 1)) * 100))}%`)];
+  });
+
+  return notes.length === 0 ? null : `${notes.join(' ')} At the limit only new things stop; the person can see each limit in Settings under Usage.`;
 }
 
 export function limitsReport(admission: Admission, suspended: LimitsReport['suspended']): LimitsReport {
