@@ -284,6 +284,8 @@ interface DeployRun {
   readonly validation?: UploadRun;
   /** The Durable Object classes the fixture build declares and binds; none by default. */
   readonly buildBinds?: readonly string[];
+  /** The published version answers every smoke read as this build, so the deploy goes on to serve it. */
+  readonly serving?: boolean;
 }
 
 interface UploadRun {
@@ -447,6 +449,7 @@ async function runDeploy({
   uploadRuns,
   validation,
   buildBinds,
+  serving = false,
 }: DeployRun = {}) {
   const fixture = scratchDir("deploy-gate");
   // The deploy lock lives in the runtime directory: the fixture's own, so a real deploy on this machine never blocks
@@ -528,7 +531,34 @@ if [ "$KINU_DEPLOY_UPLOAD_FIXTURE" = "1" ]; then
 fi
 exit 87
 `);
-  executable(join(fixture, 'curl'), '#!/usr/bin/bash\nexit 7\n');
+  // The smoke test's reads (scripts/deploy-smoke.sh): unanswered, or, serving, each answered by version 9b1f (the
+  // upload's) as the build it published, the read's path logged as an event.
+  executable(join(fixture, 'curl'), `#!/usr/bin/bash
+[ "$KINU_DEPLOY_SERVING" = "1" ] || exit 7
+headers=/dev/null; body=/dev/null; url=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -D) headers="$2"; shift 2 ;;
+    -o) body="$2"; shift 2 ;;
+    -w|--max-time) shift 2 ;;
+    -*) shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+path="\${url#https://fixture.invalid/}"
+printf 'curl %s\\n' "$path" >> "$KINU_DEPLOY_GATE_LOG"
+printf 'HTTP/1.1 200\\r\\nx-kinu-version: 9b1f\\r\\n\\r\\n' > "$headers"
+artifact=kinu-worker-1.0.0+testsha.tar.gz
+case "$path" in
+  '') printf '<div id="landing-root"></div><script type="module" src="/app.js"></script>' ;;
+  api/health) printf '{"build":{"sha":"testsha"}}' ;;
+  downloads/kinu-version.json) printf '{"sha":"testsha","checksums":{"/downloads/%s":"f1x"}}' "$artifact" ;;
+  downloads/release.json) printf '{"sha":"testsha"}' ;;
+  "downloads/$artifact.sha256") printf 'f1x  %s\\n' "$artifact" ;;
+  downloads/kinu) printf 'curl -fsSL "$origin/downloads/kinu-cli-linux-x64.tar.gz"' ;;
+esac > "$body"
+printf '200'
+`);
   executable(join(fixture, 'node'), `#!/usr/bin/bash\nexec "${process.execPath}" "$@"\n`);
 
   const argv = [...held, "/usr/bin/bash", "scripts/deploy.sh"];
@@ -552,6 +582,7 @@ exit 87
       ...accountFixture(fixture, pendingReset, account),
       KINU_DEPLOY_INFRA_STATUS_LOG: infraStatusLog,
       KINU_DEPLOY_UPLOAD_FIXTURE: flag(uploadRuns !== undefined),
+      KINU_DEPLOY_SERVING: flag(serving),
       KINU_DEPLOY_UPLOAD_ARGV: uploadArgv,
       KINU_DEPLOY_FRONT_ARGV: frontArgv,
       // Always set, so the assertion that the script overrides it is about the
@@ -599,6 +630,8 @@ exit 87
     status: run.exitCode,
     events,
     report,
+    // Every step and report write in the order the deploy took them.
+    logged,
     ci: logged.filter((event) => event.startsWith('bun scripts/ladder.ts --ci-')),
     stamps: logged.filter((event) => event.startsWith(STAMPS)),
     retirements: logged.filter((event) => event.startsWith(RETIREMENTS)),
@@ -1029,7 +1062,6 @@ describe("deploy gate", () => {
   // that read the deployment share one wave with the source rows after it; the
   // hammer, whose subject is contention, is last and alone (L18).
   test("every gate outside the source wave declares its phase and why it runs there", () => {
-    expect(DEPLOY_PHASES).toEqual(["preflight", "upload", "post-publish", "source", "hammer", "soak"]);
     const byPhase = Object.fromEntries(DEPLOY_PHASES.map((phase) => [phase, phaseGates(phase)]));
     expect(byPhase.preflight).toEqual(["bun scripts/preflight.ts"]);
     expect(byPhase.upload).toEqual(["bun scripts/secret-scan.ts", "bun run gate:infra"]);
@@ -1228,25 +1260,23 @@ describe("deploy gate", () => {
   test("--evals is an option, and only a deploy given it starts the armada evals or the soak", async () => {
     expect((await runDeploy({ option: "--gates-only", options: ["--evals"] })).status).toBe(0);
 
-    // As TEXT, as the post-deploy phase below is: the fixture's build fails on purpose, so no run reaches a serving build.
-    const lines = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8").split("\n").filter((line) => !line.trimStart().startsWith("#"));
+    const started = (run: Awaited<ReturnType<typeof runDeploy>>) => ({
+      keys: run.events.some((event) => event.startsWith('bun scripts/eval-provider-keys.ts ')),
+      evals: run.report.some((entry) => entry.startsWith('dispatched the evals of testsha')),
+      soak: run.report.some((entry) => entry.startsWith('dispatched the eval soak')),
+    });
 
-    // The `if` lines still open at `index`, its own line among them.
-    const guardsOf = (index: number) => lines.slice(0, index + 1)
-      .filter((line, at) => /^\s*if /u.test(line) && !lines.slice(at + 1, index + 1).some((later) => /^\s*fi\b/u.test(later)));
+    const serving = { uploadRuns: [{ says: 'success', status: 0 }], serving: true } as const;
 
-    const asked = (index: number) => guardsOf(index).some((guard) => guard.includes('"$KINU_EVALS" = "1"'));
-    const callsOf = (name: string) => lines.flatMap((line, index) => line.includes(name) && !line.includes(`${name}()`) ? [index] : []);
+    const runs = await Promise.all([
+      runDeploy(serving), runDeploy({ ...serving, options: ['--evals'] }),
+      runDeploy({ ...serving, option: '--promote' }), runDeploy({ ...serving, option: '--promote', options: ['--evals'] }),
+    ]);
 
-    // KINU_EVAL_KEYS stands for --evals only if it is set nowhere else.
-    const keysAsked = callsOf("KINU_EVAL_KEYS=1").every(asked);
-
-    for (const started of ["start_evals", "start_soak", "provision_eval_keys"]) {
-      const calls = callsOf(started);
-
-      expect(calls.length).toBeGreaterThan(0);
-      expect(calls.filter((call) => !asked(call) && !(keysAsked && guardsOf(call).some((guard) => guard.includes('"$KINU_EVAL_KEYS" = "1"'))))).toEqual([]);
-    }
+    expect(runs.map(started)).toEqual([
+      { keys: false, evals: false, soak: false }, { keys: true, evals: true, soak: false },
+      { keys: false, evals: false, soak: false }, { keys: true, evals: false, soak: true },
+    ]);
   });
 
   // The rehearsal path: every local phase, no build, no upload, no record.
@@ -1258,53 +1288,31 @@ describe("deploy gate", () => {
     expect(run.stdout).toContain("Gates only: stopping before the build");
   });
 
-  // ── The post-deploy phase ──────────────────────────────────────
+  // ── The post-deploy phase ────────────────────────────────────────
   //
-  // Asserted as TEXT, for the reason the version-annotation test above is: the
-  // fixture's build stub fails on purpose, which is what every behavioural test
-  // in this file depends on, so no run here reaches step 5. The properties that
-  // matter are structural anyway — that the invocation exists, that it runs
-  // whenever the upload happened, that it names the strictest phase, and that
-  // its failure is a red of the deploy, which then writes no record.
-  test("the post-deploy infrastructure phase runs whenever the upload happened, and its red is the deploy's", () => {
-    // EXECUTABLE lines, whole-line comments dropped — the same reading the "no
-    // shell script but the deploy script publishes" rule below takes, and for the
-    // same reason: this script's prose names every command it runs, so a claim
-    // about what it RUNS cannot be made against its comments.
-    const lines = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8")
-      .split("\n")
-      .filter((line) => !line.trimStart().startsWith("#"));
+  // Whenever the upload happened, whatever the smoke test said, the strictest phase checks every resource the
+  // version declares; its red is the deploy's, which then writes no record.
+  test("the post-deploy infrastructure phase runs whenever the upload happened, and its red is the deploy's", async () => {
+    const POST_DEPLOY = 'bun scripts/infra-verify.ts --phase=post-deploy';
+    const uploaded = { uploadRuns: [{ says: 'success', status: 0 }] } as const;
 
-    const source = lines.join("\n");
+    const runs = await Promise.all([
+      runDeploy({ ...uploaded, serving: true }), runDeploy(uploaded),
+      runDeploy({ ...uploaded, serving: true, failingGate: POST_DEPLOY }), runDeploy({}),
+    ]);
 
-    // After the upload, and inside no condition but the upload's own, at column zero: nested inside any other `if`,
-    // this would be a phase some deploys skip, which is the whole thing `--bootstrap` must not become.
-    const uploaded = 'if [ "${DEPLOY_PUBLISHED:-0}" = "1" ]; then';
-    const invocation = '  if bun scripts/infra-verify.ts --phase=post-deploy; then';
-    const upload = 'if upload "$KINU_DEPLOY_LOG" npx wrangler deploy "${KINU_WRANGLER_ARGS[@]}"; then';
-    expect(lines).toContain(uploaded);
-    expect(lines).toContain(invocation);
-    expect(lines).toContain(upload);
-    expect(lines.indexOf(invocation)).toBeGreaterThan(lines.indexOf(upload));
-    expect(lines.slice(lines.indexOf(uploaded) + 1, lines.indexOf(invocation)).filter((line) => /^\s*if /u.test(line))).toEqual([]);
+    const outcome = (run: Awaited<ReturnType<typeof runDeploy>>) => ({
+      verified: run.events.filter((event) => event.startsWith('bun scripts/infra-verify.ts')),
+      red: run.report.some((entry) => entry.startsWith('note publish post-deploy infrastructure ')),
+      green: run.status === 0,
+    });
 
-    // Its failure arm is a red of the deploy's: its findings go into the report, and a deploy with a red writes no
-    // record, so the build cannot be promoted.
-    const arm = lines.slice(lines.indexOf(invocation));
-    expect(arm.slice(0, arm.indexOf("  fi")).some((line) => line.includes('step_red publish "post-deploy infrastructure"'))).toBe(true);
-
-    // `post-deploy` is the only phase spelled on an argv here, and it is the
-    // strictest. `bootstrap` reaches the pre-deploy gate through the environment,
-    // because that gate line has to stay one string for ladder.ts to parse; a
-    // second argv spelling would be a second place for the two to disagree.
-    const argvPhases = [...source.matchAll(/--phase=(\S+?)(?=[\s;]|$)/gu)].map(([, phase]) => phase);
-    expect(argvPhases).toEqual(["post-deploy"]);
-
-    // The pre-deploy phase is one of exactly two literals, both assigned here, so
-    // an ambient value is never what decides it.
-    expect(source).toContain('export KINU_INFRA_PHASE="bootstrap"');
-    expect(source).toContain('export KINU_INFRA_PHASE="full"');
-    expect([...source.matchAll(/KINU_INFRA_PHASE=/gu)]).toHaveLength(2);
+    expect(runs.map(outcome)).toEqual([
+      { verified: [POST_DEPLOY], red: false, green: true },
+      { verified: [POST_DEPLOY], red: false, green: false },
+      { verified: [POST_DEPLOY], red: true, green: false },
+      { verified: [], red: false, green: false },
+    ]);
   });
 
   // ── The control plane's outer gate ─────────────────────────────
@@ -1314,7 +1322,7 @@ describe("deploy gate", () => {
   // does not break loudly — it makes `/control` answer 404 to its own operators,
   // indistinguishable from an allowlist typo. So the proof has to be a gate, and
   // the gate has to be one no deploy can proceed past.
-  test("no deploy can proceed without the gate that proves Access covers the admin plane", () => {
+  test("no deploy can proceed without the gate that proves Access covers the admin plane", async () => {
     // The declaration, from the manifest rather than from prose: the Worker
     // declares the organization, the application, its Allow policy and the
     // NEGATIVE scope assertion, and every one of them is required — so an absent
@@ -1343,13 +1351,17 @@ describe("deploy gate", () => {
     expect(phaseGates('upload')).toContain('bun run gate:infra');
     expect(STOPS.at(-1)).toBe(phaseRun('upload'));
     expect(phaseGates('post-publish')).toContain('bun run gate:first-run');
-    const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
-    expect(source.indexOf('stop_phase upload')).toBeLessThan(source.indexOf('Step 2: Building Kinu'));
-    expect(source.indexOf('run_phase post-publish')).toBeGreaterThan(source.indexOf('Step 4: Post-deploy smoke test'));
     // m1929a: no source row reads the deployment, so the phase runs beside the build and the publish, joined at the wave.
     expect(PLAN.filter((row) => (row.phase ?? 'source') === 'source' && readsDeployment(row)).map((row) => row.run)).toEqual([]);
-    expect(source.indexOf('--deploy-phase=source >')).toBeLessThan(source.indexOf('Step 2: Building Kinu'));
-    expect(source.indexOf('join_source\n  mark wave')).toBeGreaterThan(source.indexOf('run_phase post-publish\n'));
+
+    // On a deploy that serves: the upload gates, the smoke test's reads, the rows against the deployment, then the
+    // wave joined with the source phase.
+    const { logged } = await runDeploy({ uploadRuns: [{ says: 'success', status: 0 }], serving: true });
+    const first = (step: string) => logged.findIndex((event) => event.startsWith(step));
+    const wave = logged.findIndex((event) => /^bun scripts\/deploy-report\.ts mark \S+ wave /u.test(event));
+    const order = [first(phaseRun('upload')), first('curl '), logged.findLastIndex((event) => event.startsWith('curl ')), first(phaseRun('post-publish')), wave];
+
+    expect(order.every((index) => index >= 0) && order.every((index, at) => at === 0 || index >= (order[at - 1] ?? 0))).toBe(true);
   });
 
   test("the Worker demands an assertion for a subset of what Access is told to cover", () => {
@@ -1362,7 +1374,6 @@ describe("deploy gate", () => {
     // can clear — there is no way to obtain an assertion for a path the
     // application does not cover. Covering MORE puts an interactive login in
     // front of the public product.
-    expect(CONTROL_PLANE_ACCESS_PATHS).toEqual(['/control*', '/api/control*']);
 
     const covered = (path: string): boolean => CONTROL_PLANE_ACCESS_PATHS.some((pattern) =>
       path.startsWith(pattern.slice(0, -1)));

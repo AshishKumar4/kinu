@@ -454,7 +454,7 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, opt
     })));
 
     // Under `bun test` the preload's own listener ends the process first and the browser goes with its release
-    // (test-chrome.ts). Under a bare `bun scripts/…` run (computed-style, plan-demo-film, review-package) there is no
+    // (test-chrome.ts). Under a bare `bun scripts/…` run (computed-style, plan-demo-film) there is no
     // preload, and this listener is the whole answer.
     const endOnSignal = (): void => {
       chrome.abandon();

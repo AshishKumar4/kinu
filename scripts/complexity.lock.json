@@ -230,10 +230,6 @@
       "complexity": 27
     },
     {
-      "key": "scripts/workflow-expressions.ts#tokenize",
-      "complexity": 27
-    },
-    {
       "key": "tests/first-run/workspace-settings.first-run.ts#describe>liveTest>run",
       "complexity": 27
     },

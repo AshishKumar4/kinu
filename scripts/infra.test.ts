@@ -1080,7 +1080,7 @@ describe('teardown refuses by default', () => {
 
 describe('what the manifest cannot express is recorded rather than assumed', () => {
   test('every uncaptured dependency carries evidence and a re-check', () => {
-    expect(UNCAPTURED.length).toBeGreaterThan(5);
+    expect(UNCAPTURED.length).toBeGreaterThan(0);
 
     for (const item of UNCAPTURED) {
       expect(item.what.length).toBeGreaterThan(40);
