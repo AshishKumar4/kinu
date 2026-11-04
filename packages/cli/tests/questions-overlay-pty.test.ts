@@ -3,12 +3,13 @@
  * choice, a question that takes several is ticked and finished with "Other" in the owner's words, and the answer is
  * the one the store records. Driven through `bin/cli.ts` on a real pty.
  */
+import { wrapDatabase } from '@kinu.run/core/identity';
 import { expect, test } from 'bun:test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { initWorkspaceSchema, OwnerQuestionStore, WorkspaceActorDirectory, type JsonObject } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
-import { makeSql, makeWorkspaceSchemaSql, workspaceHome } from '@kinu.run/cli-backend';
+import { makeWorkspaceSchemaSql, workspaceHome } from '@kinu.run/cli-backend';
 import { runToExit, scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
 
 import { placeLocalWorkspace } from './helpers/local-refs';
@@ -62,9 +63,9 @@ async function workspaceThatAsked(home: string, name: string): Promise<string> {
     const identity = db.query<{ id: string; owner_user_id: string | null }, []>('SELECT id, owner_user_id FROM workspace_identity').get();
 
     if (identity === null) throw new Error('the workspace has no identity');
-    const main = new WorkspaceActorDirectory(makeSql(db), { workspaceId: identity.id, ownerUserId: identity.owner_user_id }).main();
+    const main = new WorkspaceActorDirectory(wrapDatabase(db).sql, { workspaceId: identity.id, ownerUserId: identity.owner_user_id }).main();
 
-    new OwnerQuestionStore(makeSql(db), main).ask([{ toolCallId: 'call-ask', input: ASK }], { turnId: 'turn-ask', mode: 'build', tier: null, reason: { provenance: 'chat' } });
+    new OwnerQuestionStore(wrapDatabase(db).sql, main).ask([{ toolCallId: 'call-ask', input: ASK }], { turnId: 'turn-ask', mode: 'build', tier: null, reason: { provenance: 'chat' } });
   } finally {
     db.close();
   }

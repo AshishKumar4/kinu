@@ -40,6 +40,7 @@ import { ConnectDeviceDialog } from "@/components/ConnectDevicePanel";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Surface } from "@/components/ui/Surface";
 import { Pressable } from "@/components/ui/Pressable";
+import type { PreviewAddress } from "@/hooks/use-workbench-surfaces";
 
 // A surface drawn only once it is chosen loads with its first view, outside the workspace's first chunk.
 const FilesSurface = lazyRoute<FilesSurfaceProps>(async () => {
@@ -95,6 +96,8 @@ interface WorkSurfaceProps {
   onSurface: (s: SurfaceKind) => void;
   agents?: { readonly list: readonly PanelAgent[]; readonly shown: string | null; readonly open: (agent: PanelAgent) => void };
   pinnedPorts: PinnedPort[];
+  /** The address a chat's preview opened its port's surface at; that surface shows it rather than the port's root. */
+  previewAddress?: PreviewAddress | null;
   previewError: string | null;
   previewStarting?: readonly string[];
   onRefreshPorts: () => void;
@@ -171,6 +174,11 @@ function ListingStatus({ error, starting = [], onRetry }: { error: string | null
 /** A page, and Environment's terminal and screen, fill the column edge to edge; the rest scroll inside its margins. */
 function bodyFitFor(surface: SurfaceKind | null, previewSelected: boolean): string {
   return previewSelected || surface === "Environment" ? "overflow-hidden" : "overflow-y-auto py-[var(--layout-inset)] pl-[var(--layout-inset)] pr-6";
+}
+
+/** Where a preview surface opens: at the address a chat's preview showed, if it opened this surface; else its port's. */
+function previewUrlOf(port: PinnedPort, surface: SurfaceKind | null, address: PreviewAddress | null | undefined): string {
+  return address?.surface === surface ? address.url : port.url;
 }
 
 export function WorkSurface(props: WorkSurfaceProps) {
@@ -362,7 +370,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
                 onDesktopLanded={props.onDesktopLanded}
               />
             )}
-            {openPort && <div className="p-pane"><div className="p-pane-card"><PreviewFrame url={openPort.url} label={previewPortTitle(openPort)} publicLink={publicLink} /></div></div>}
+            {openPort && <div className="p-pane"><div className="p-pane-card"><PreviewFrame url={previewUrlOf(openPort, surface, props.previewAddress)} label={previewPortTitle(openPort)} publicLink={publicLink} /></div></div>}
             <SideSurface shown={surface} rpc={props.rpc} isStreaming={props.isStreaming} />
             {openSlate !== null && <OpenSlatePanel {...props} slate={openSlate} summary={openSlateSummary} />}
           </Suspense>

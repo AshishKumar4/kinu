@@ -3,7 +3,7 @@
  * poll /dev/tty, so under `kinu setup </dev/tty` keys never arrive. No terminal raises NonInteractiveError.
  */
 import { Cause, Data, Effect } from 'effect';
-import { settleSync, settle } from '@kinu.run/core/obs';
+import { errnoCode, settleSync, settle } from '@kinu.run/core/obs';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { closeSync, openSync, readSync } from 'node:fs';
@@ -29,7 +29,9 @@ function openTerminal(): Effect.Effect<TerminalInput | null> {
     const error = Cause.squash(failed);
 
     // ENXIO: no controlling terminal; ENOENT: node missing. Anything else is real.
-    if (!(error instanceof Error && 'code' in error && (error.code === 'ENXIO' || error.code === 'ENOENT'))) return Effect.failCause(failed);
+    const code = error instanceof Error ? errnoCode(error) : null;
+
+    if (code !== 'ENXIO' && code !== 'ENOENT') return Effect.failCause(failed);
 
     return Effect.succeed(process.stdin.isTTY ? { fd: 0, close: () => {} } : null);
   });

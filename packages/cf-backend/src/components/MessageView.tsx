@@ -26,7 +26,7 @@ import { FeedbackCard } from "@/components/surfaces/changes/FeedbackCard";
 import * as v from "valibot";
 import { useLabelledStep } from "@/hooks/use-labelled-step";
 import { PreviewFrame } from "@/components/PreviewFrame";
-import { usePreviewFold } from "@/components/slates/context";
+import { SlateInlineContext, usePreviewFold } from "@/components/slates/context";
 import { AnswerText, MarkdownContent, CodeBlock, SlateLink, type AnswerChat } from "@/components/surfaces/shared";
 import { AttachmentChip } from "@/components/AttachmentChip";
 import { AnswerPicturesContext, PartPictures, useAnswerPictures } from "@/components/ChatImages";
@@ -378,7 +378,8 @@ function ToolCallPart({ part, expanded, onToggleExpand }: { part: AnyToolPart; e
  * drops its frame, so the site runs once; its call joins its phase (`groupMessageParts`).
  */
 function SitePreview({ url }: { url: string }) {
-  const { register, reason, folded, toggle } = usePreviewFold(previewSite(url), null);
+  const { register, reason, folded, toggle } = usePreviewFold(previewSite(url));
+  const inInspector = useContext(SlateInlineContext)?.openSite?.(url);
   const body = useId();
 
   return (
@@ -394,7 +395,7 @@ function SitePreview({ url }: { url: string }) {
       <div id={body}>
         {!folded && (
           <Surface look="outlined" className="h-64 overflow-hidden">
-            <PreviewFrame url={url} />
+            <PreviewFrame url={url} inInspector={inInspector} />
           </Surface>
         )}
       </div>

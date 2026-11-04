@@ -33,8 +33,6 @@ const press = (page: Page, scope: string, words: string) => page.$$eval(`${scope
 }, words);
 
 /** Every wait ends: a page that never draws what is awaited fails the test at this bound, never holds it. */
-const WAIT = { timeout: 15_000 } as const;
-
 const dialogActions = (page: Page) => page.$$eval('[role="dialog"] button, [role="dialog"] a', (nodes) => nodes.map((node) => node.textContent?.trim() ?? ''));
 
 describe('the free tier', () => {
@@ -42,7 +40,7 @@ describe('the free tier', () => {
     await withGallery(async (gallery) => {
       const page = await open(gallery, '&state=normal');
 
-      await page.waitForSelector('[data-account-limits="free"]', WAIT);
+      await page.waitForSelector('[data-account-limits="free"]');
       expect(await page.$$eval('[data-account-limits] [data-limit]', (rows) => rows.map((row) => row.getAttribute('data-limit')))).toEqual(['workspaces', 'computer_hours', 'stored_bytes', 'model_tokens']);
       expect(await text(page, '[data-limit="workspaces"]')).toContain('2 of 3');
       // Below 80% nothing is near: no bar.
@@ -50,7 +48,7 @@ describe('the free tier', () => {
 
       const invited = await open(gallery, '&state=invited');
 
-      await invited.waitForSelector('[data-account-limits="invited"]', WAIT);
+      await invited.waitForSelector('[data-account-limits="invited"]');
       expect(await text(invited, '[data-account-limits="invited"]')).toContain('no limits');
     });
   });
@@ -59,10 +57,10 @@ describe('the free tier', () => {
     await withGallery(async (gallery) => {
       const page = await open(gallery, '&state=near');
 
-      await page.waitForSelector('[data-limit-banner]', WAIT);
+      await page.waitForSelector('[data-limit-banner]');
       expect(await page.$eval('[data-limit-banner]', (bar) => bar.getAttribute('data-limit-banner'))).toBe('computer_hours');
       await page.click('[data-limit-banner] button[aria-label="Dismiss"]');
-      await page.waitForFunction(() => document.querySelector('[data-limit-banner]')?.getAttribute('data-limit-banner') === 'stored_bytes', WAIT);
+      await page.waitForFunction(() => document.querySelector('[data-limit-banner]')?.getAttribute('data-limit-banner') === 'stored_bytes');
     });
   });
 
@@ -78,7 +76,7 @@ describe('the free tier', () => {
       for (const { dialog, title, actions } of cases) {
         const page = await open(gallery, `&state=full&dialog=${dialog}`);
 
-        await page.waitForSelector('[role="dialog"]', WAIT);
+        await page.waitForSelector('[role="dialog"]');
         expect(await text(page, '[role="dialog"]')).toContain(title);
         // The dialog's own close control comes first; the footer's ways on follow it in order.
         expect((await dialogActions(page)).filter((words) => words !== '')).toEqual(expect.arrayContaining(actions));
@@ -91,7 +89,7 @@ describe('the free tier', () => {
     await withGallery(async (gallery) => {
       const page = await open(gallery, '&state=full');
 
-      await page.waitForSelector('[data-turn-limit="model_tokens"]', WAIT);
+      await page.waitForSelector('[data-turn-limit="model_tokens"]');
       expect(await text(page, '[data-turn-limit="model_tokens"]')).toContain('Use your own key');
     });
   });
@@ -100,18 +98,18 @@ describe('the free tier', () => {
     await withGallery(async (gallery) => {
       const page = await open(gallery, '&state=normal');
 
-      await page.waitForSelector('[data-accounts] table', WAIT);
+      await page.waitForSelector('[data-accounts] table');
       const shown = () => page.$$eval('[data-accounts] tbody tr', (rows) => rows.map((row) => row.getAttribute('data-account')));
 
       expect(await shown()).toHaveLength(5);
       expect(await press(page, '[data-accounts]', 'At a limit 1')).toBe(true);
-      await page.waitForFunction(() => document.querySelectorAll('[data-accounts] tbody tr').length === 1, WAIT);
+      await page.waitForFunction(() => document.querySelectorAll('[data-accounts] tbody tr').length === 1);
       expect(await shown()).toEqual(['ada@example.com']);
 
       expect(await press(page, '[data-accounts]', 'Invite')).toBe(true);
-      await page.waitForSelector('[role="dialog"]', WAIT);
+      await page.waitForSelector('[role="dialog"]');
       expect(await press(page, '[role="dialog"]', 'Make a link instead')).toBe(true);
-      await page.waitForFunction(() => document.querySelector('[role="dialog"]')?.textContent?.includes('/invite/7f3a9c') === true, WAIT);
+      await page.waitForFunction(() => document.querySelector('[role="dialog"]')?.textContent?.includes('/invite/7f3a9c') === true);
     });
   });
 
@@ -134,7 +132,7 @@ describe('the free tier', () => {
         for (const state of view.states) {
           const page = await open(gallery, `&state=${state}`, view);
 
-          await page.waitForSelector('[data-account-limits]', WAIT);
+          await page.waitForSelector('[data-account-limits]');
           await page.screenshot({ path: join(dir, `${name}-${state}.png`), fullPage: true });
           await page.close();
         }
@@ -142,7 +140,7 @@ describe('the free tier', () => {
         for (const dialog of view.dialogs) {
           const page = await open(gallery, `&state=full&dialog=${dialog}`, view);
 
-          await page.waitForSelector('[role="dialog"]', WAIT);
+          await page.waitForSelector('[role="dialog"]');
           await page.screenshot({ path: join(dir, `${name}-dialog-${dialog}.png`) });
           await page.close();
         }

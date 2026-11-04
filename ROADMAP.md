@@ -1,8 +1,19 @@
 # Roadmap
 
-What's live on [kinu.run](https://kinu.run), what's coming next, and what I'm building after that. Last updated 2026-10-24. The [changelog](CHANGELOG.md) has the detail for everything that ships.
+What's live on [kinu.run](https://kinu.run), what's coming next, and what I'm building after that. Last updated 2026-11-04. The [changelog](CHANGELOG.md) has the detail for everything that ships.
 
 ## Live now
+
+Since 2026-10-24, up to build `95904a2d6` (2026-11-04):
+
+- **Claude sign-in opens claude.ai on the first click.**
+- **A quiet indicator for background work.** A pill over the composer counts the helpers and jobs running, and its list puts what's waiting on you first.
+- **Deleting a workspace answers at once,** and the cleanup finishes in the background.
+- **Several ChatGPT or Claude subscriptions per provider,** added from the web.
+- **The computer commits as you,** and carries ripgrep.
+- **An agent no longer resets mid-turn on a long conversation,** and a Stop pressed as a turn starts ends it cleanly.
+- **The terminal stays dark,** and says why when it can't connect, with a Reconnect.
+- **Plans lead with their outcome** and show their pictures and drawn pages.
 
 The release of 2026-10-24 (build `8e8bb8c7a`):
 
@@ -18,12 +29,10 @@ The release of 2026-10-24 (build `8e8bb8c7a`):
 
 ## In progress
 
-- **Claude sign-in in one click.**
-- **A quiet indicator for background work.** It shows which helpers and jobs are running, and what's waiting on you.
 - **Workspaces placed where every model provider answers.** Anthropic refuses some regions, Hong Kong among them.
 - **Computers start fast after a tools update.** An update moves only the files that changed.
-- **Deleting a workspace answers at once,** and the cleanup finishes in the background.
-- **Several ChatGPT or Claude subscriptions per provider,** added from the web.
+- **Every chat preview copies, opens beside the chat, or opens in a tab,** and folds in the chat while it's open beside it.
+- **Connectors as an optional step before Deploy** when you run your own Kinu.
 - **Google Workspace** (Gmail, Drive, Calendar and more) through one sign-in, waiting on Google's app setup.
 
 ## Known limits

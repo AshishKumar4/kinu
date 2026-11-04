@@ -40,7 +40,8 @@ import { initCraftedToolsTables } from '../packages/agent-utils/src/stores/index
 import { createWorkspace } from '../packages/core/src/workspace-birth';
 import { createCLIHeadRuntime } from '../packages/cli-backend/src/head-runtime';
 import { LocalAgentSession } from '../packages/cli-backend/src/local-session';
-import { createCLIRuntime, makeSql, workspaceHome } from '../packages/cli-backend/src/runtime';
+import { createCLIRuntime, workspaceHome } from '../packages/cli-backend/src/runtime';
+import { wrapDatabase } from '@kinu.run/core/identity';
 
 import { benchChatModel, createBenchInferenceProxy } from './bench-inference-proxy';
 import { parsePanelWorkerInput, type WorkerOutput } from './bench-worker-protocol';
@@ -115,7 +116,7 @@ async function main(): Promise<void> {
     });
     // `initSearchTables` and `initScaffoldTables` seed the search and scaffold
     // tables for the panel arms' starting point.
-    const sql = makeSql(db);
+    const sql = wrapDatabase(db).sql;
     const execRaw = (ddl: string): void => { db.exec(ddl); };
 
     initSearchTables(execRaw);
@@ -143,7 +144,7 @@ async function main(): Promise<void> {
   // it, and the runtime writes each head's steps to it as they land.
   // Bound to the runtime's own actor: the journal is actor-private, and the
   // head runtime below writes each head's steps through the same owner.
-  const journal = new HeadJournal(makeSql(db), rt.actor);
+  const journal = new HeadJournal(wrapDatabase(db).sql, rt.actor);
 
   // Every panel member is a HEAD, and a head is its own actor of this workspace
   // — its own claim ledger, loop pointer and row set. Local head hosting is

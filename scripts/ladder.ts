@@ -3109,9 +3109,9 @@ function loadsBrowser(parsed: Parsed, { edges }: ModuleEdges): boolean {
  * puppeteer, or one that imports — however many hops out — a module that does.
  *
  * A CLOSURE AND NOT A TEXT MATCH ON THE SUITE. `SHARED_BROWSER` was one regex
- * over one file naming `./gallery-harness` or `puppeteer`, and six of the
+ * over one file naming `./gallery-harness` or `puppeteer`, and five of the
  * sixteen suites in the UI row reach Chrome through neither string:
- * `provider-wait-ux`, `models-section-ux`, `workspace-snapshot-ux`,
+ * `models-section-ux`, `workspace-snapshot-ux`,
  * `computed-style`, `plan-demo-film` and `gallery-harness`'s own self-test all
  * import a harness that imports another one. A row whose browser cost is
  * invisible to the derivation is a row the wave admits beside another browser

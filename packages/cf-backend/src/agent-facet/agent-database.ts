@@ -20,7 +20,7 @@ import {
   InProcessDeliveries, type DeliveryAnswer, type OwedDelivery, holdConfig, holdRunHeads,
   writesSnapshotRows, HeldReads, type SqlExec,
 } from '@kinu.run/core';
-import { attempt, detach, diagnostics, hold, KinuError, logged, settle, settleSync } from '@kinu.run/core/obs';
+import { attempt, detach, diagnostics, hold, KinuError, logged, settleSync } from '@kinu.run/core/obs';
 import { isDeepStrictEqual } from 'node:util';
 import { Effect } from 'effect';
 import * as v from 'valibot';
@@ -403,8 +403,6 @@ export class AgentDatabase {
       get llm() { return settleSync(refused('The reflection model lane')); },
       get craftStore() { return settleSync(refused('Crafted tools')); },
       schedule: {
-        after: () => settle(refused('A delayed schedule')),
-        cron: () => settle(refused('A cron schedule')),
         fiber: async (_name, fn) => await fn({ stash: () => undefined, snapshot: null }),
       },
       identity: {

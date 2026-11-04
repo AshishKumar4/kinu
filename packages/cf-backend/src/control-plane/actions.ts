@@ -247,7 +247,7 @@ async function accountAction<Id>(env: ActionEnv<Id>, action: AccountAction, oper
     return { outcome: 'ok', detail: `invite link made, open until ${new Date(expiresAt).toISOString()}`, reason: 'ok', result: { path: `/invite/${token}`, expiresAt } };
   }
 
-  const userId = action.action === 'invite.email' ? await accountIdFor(env, action.email) : action.userId;
+  const userId = action.action === 'invite.email' ? accountIdFor(env, action.email) : action.userId;
   const user = objectNamed(env.UserDO, userId);
 
   if (action.action === 'account.suspend') await user.limits_suspend(owner, action.reason, operator.email);

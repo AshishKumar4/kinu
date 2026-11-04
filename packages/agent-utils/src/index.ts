@@ -12,4 +12,4 @@ export { readKvJson, writeKvJson, type KvStore } from "./stores/kv";
 
 export { markStoreChanged, storeRevision } from "./stores/changes";
 
-export { abortedBeforeStart, isAbortError, raceAbort, serialQueue, wasNotDispatched } from "./core/utils";
+export { abortedBeforeStart, isAbortError, keyedSerialQueue, raceAbort, serialQueue, wasNotDispatched } from "./core/utils";

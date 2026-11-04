@@ -1,3 +1,4 @@
+import { wrapDatabase } from '@kinu.run/core/identity';
 import { existsSync, mkdirSync, realpathSync, statSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { Database } from 'bun:sqlite';
@@ -8,32 +9,18 @@ import {
   WORKERS_AI_PROVIDER_ID, WORKERS_AI_MODEL_ID_PREFIX,
   OPENAI_DEFAULT_MODEL,
   OPENROUTER_DEFAULT_MODEL,
-  accountCredentialKey, credentialToHeaders, openWorkspaceMainActor, discoverOpenAICompatibleModels, specWithoutAccount,
+  accountCredentialKey, credentialToHeaders, openWorkspaceMainActor, discoverOpenAICompatibleModels, specWithoutAccount, specOn, specProvider, splitSpec,
   type LLMProviderConfig,
-  type ModelInfo,
   type OpenAICompatCredential,
   PROVIDER_KEY_ENV,
   SESSION_CREDENTIAL_ENV,
   CLOUD_PROXY_PROVIDER_IDS,
+  ANTHROPIC_CRED_KEY, OPENAI_CRED_KEY, OPENROUTER_CRED_KEY,
 } from '@kinu.run/core';
 import { attempt, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import {
-  makeSql,
-  createFileOAuthStore,
-  KinuAgentConfigSchema,
-  OpenAiCompatConfigSchema,
-  ensureSecretDir,
-  kinuHome,
-  readConfigFile,
-  stripProvider,
-  updateConfigFile as updateConfigAt,
-  type KinuAgentConfig,
-  type KinuConfig,
-  type LocalCloudSession,
-  type LocalOAuthStore,
-  type LocalProviderCredentials,
-  type McpServerConfig,
+  createFileOAuthStore, KinuAgentConfigSchema, OpenAiCompatConfigSchema, ensureSecretDir, kinuHome, readConfigFile, endpointSpec, updateConfigFile as updateConfigAt, type KinuAgentConfig, type KinuConfig, type LocalCloudSession, type LocalOAuthStore, type LocalProviderCredentials, type McpServerConfig,
 } from '@kinu.run/cli-backend';
 import * as v from 'valibot';
 
@@ -172,7 +159,7 @@ export function readWorkspaceDisplayName(dbPath: string): string | null {
       const db = new Database(dbPath, { readwrite: true, create: false });
 
       try {
-        return openWorkspaceMainActor(makeSql(db)).config.getDisplayName();
+        return openWorkspaceMainActor(wrapDatabase(db).sql).config.getDisplayName();
       } finally {
         db.close();
       }
@@ -211,7 +198,7 @@ export function resolveLocalAgent(input: string): LocalAgentRef {
   const ref = resolveAgentRef(input);
 
   if (ref && ref.mode !== 'local') {
-    throw new Error(`"${input}" is a cloud workspace; this needs a local one.`);
+    return settleSync(Effect.fail(new KinuError('bad_input', `"${input}" is a cloud workspace; this needs a local one.`)));
   }
 
   const name = ref === null ? input : ref.localName;
@@ -297,10 +284,14 @@ export function storedSessionOrigin(config: KinuConfig): string {
 /** The stored session, refused where `KINU_ORIGIN` names another deployment: its token goes to its own alone. */
 function storedAuthConfig(missingTokenMessage: string): LocalCloudSession {
   const config = loadConfigFile();
-  const token = config.accessToken;
-  const origin = storedSessionOrigin(config);
 
-  if (!token) throw new Error(missingTokenMessage);
+  if (!config.accessToken) throw new Error(missingTokenMessage);
+
+  return storedSession(config, config.accessToken);
+}
+
+function storedSession(config: KinuConfig, token: string): LocalCloudSession {
+  const origin = storedSessionOrigin(config);
   const refusal = storedSessionRefusal(config, origin);
 
   if (refusal !== null) throw new Error(refusal);
@@ -333,7 +324,7 @@ export function resolveCloudSession(): LocalCloudSession | null {
   if (envToken) return { origin: resolveCloudOrigin(), token: envToken };
   const config = loadConfigFile();
 
-  return config.accessToken && !sessionExpired(config) ? storedAuthConfig('') : null;
+  return config.accessToken && !sessionExpired(config) ? storedSession(config, config.accessToken) : null;
 }
 
 export function resolveAgentRef(input: string): KinuAgentConfig | null {
@@ -440,11 +431,14 @@ function chosenModel(opts: ModelChoice | undefined) {
 /** An endpoint the process was given, serving `model` (Workers AI's default where none is named) as itself: named
  *  Workers AI for a named Workers AI model, else compatible, and spelled as Workers AI wherever it serves one. */
 function givenEndpoint(baseURL: string, auth: string, model: string | undefined): LocalModelDefaults {
-  const name = model?.startsWith('@cf/') ? WORKERS_AI_PROVIDER_ID : 'openai-compat';
-  const endpointModel = directEndpointModelId(model ?? DEFAULT_WORKERS_AI_MODEL_ID);
-  const served = endpointModel.startsWith('@cf/') ? WORKERS_AI_PROVIDER_ID : name;
+  const endpoint = {
+    name: model?.startsWith(WORKERS_AI_MODEL_ID_PREFIX) ? WORKERS_AI_PROVIDER_ID : 'openai-compat',
+    baseURL,
+    headers: { 'Authorization': auth },
+    model: directEndpointModelId(model ?? DEFAULT_WORKERS_AI_MODEL_ID),
+  };
 
-  return { spec: `${served}/${endpointModel}`, endpoint: { name, baseURL, headers: { 'Authorization': auth }, model: endpointModel }, missing: null };
+  return { spec: endpointSpec(endpoint), endpoint, missing: null };
 }
 
 /** The model this machine uses where none is chosen, as a result a readiness view reads; see
@@ -476,7 +470,7 @@ export function resolveModelDefaults(opts?: ModelChoice): LocalModelDefaults {
 export function usableModelDefaults(opts?: ModelChoice): LocalModelDefaults {
   const defaults = resolveModelDefaults(opts);
 
-  if (defaults.missing !== null) throw new Error(defaults.missing);
+  if (defaults.missing !== null) return settleSync(Effect.fail(new KinuError('missing', defaults.missing)));
 
   return defaults;
 }
@@ -486,13 +480,14 @@ export function requireModelDefaults(opts?: Parameters<typeof resolveModelDefaul
   const defaults = usableModelDefaults(opts);
 
   if (defaults.spec !== null) return defaults;
-  throw new Error(
+
+  return settleSync(Effect.fail(new KinuError('missing',
     'No model is set up.\n' +
     '  Run kinu auth to use Workers AI in your Cloudflare account,\n' +
     '  run kinu setup to pick a model provider,\n' +
     '  run kinu provider connect claude to use your Claude subscription,\n' +
-    '  or pass --base-url and --auth to use your own endpoint.'
-  );
+    '  or pass --base-url and --auth to use your own endpoint.',
+  )));
 }
 
 export function resolveProviderCredentials(): LocalProviderCredentials {
@@ -524,7 +519,7 @@ function compatHeaders(compat: v.InferOutput<typeof OpenAiCompatConfigSchema>) {
   return credentialToHeaders('openai-compat.default', compatCredential(compat));
 }
 
-export const API_KEY_PROVIDERS = { openai: 'openai.bearer', anthropic: 'anthropic.bearer', openrouter: 'openrouter.bearer' } as const;
+export const API_KEY_PROVIDERS = { openai: OPENAI_CRED_KEY, anthropic: ANTHROPIC_CRED_KEY, openrouter: OPENROUTER_CRED_KEY } as const;
 
 function localApiKeyAccounts(file: KinuConfig): LocalProviderCredentials['apiKeyAccounts'] {
   const keys: Record<string, string> = {};
@@ -546,6 +541,12 @@ export function resolveMcpServers(): Record<string, McpServerConfig> {
   return loadConfigFile().mcpServers ?? {};
 }
 
+/** Families the registry serves from their own login on this machine. */
+const REGISTRY_LOGIN_PROVIDERS: ReadonlySet<string> = new Set(['claude', 'opencode']);
+
+/** Providers whose model ids a raw endpoint serves as they are; any other spec (OpenRouter's `anthropic/…`) is the id. */
+const DIRECT_ENDPOINT_PROVIDERS: ReadonlySet<string> = new Set([WORKERS_AI_PROVIDER_ID, 'openai', 'openrouter', 'openai-compat', 'opencode']);
+
 /**
  * The spec `model` names on this machine's credentials, or the one they suggest where none is named: a family the
  * registry serves from its own login (Claude's, opencode's), a bare id on ChatGPT's or OpenAI's account, a spec of a
@@ -554,7 +555,7 @@ export function resolveMcpServers(): Record<string, McpServerConfig> {
 function credentialedSpec(file: KinuConfig, model: string | undefined): string | null {
   const wanted = model ?? preferredModelFromCredentials(file);
 
-  if (wanted?.startsWith('claude/') || wanted?.startsWith('opencode/')) return wanted;
+  if (wanted !== undefined && REGISTRY_LOGIN_PROVIDERS.has(specProvider(wanted) ?? '')) return wanted;
 
   return accountSpec(file, wanted) ?? keyedSpec(file, wanted) ?? compatSpec(file, wanted);
 }
@@ -566,20 +567,19 @@ function apiKeyOf(file: KinuConfig, provider: 'openai' | 'openrouter' | 'anthrop
 
 /** A bare id, or no choice, on ChatGPT's login or OpenAI's key, in that order; either's own spec too. */
 function accountSpec(file: KinuConfig, wanted: string | undefined): string | null {
-  const takes = (provider: string): boolean => !wanted || wanted.startsWith(`${provider}/`) || !wanted.includes('/');
+  const named = wanted === undefined || !wanted.includes('/') ? null : specProvider(wanted);
+  const takes = (provider: string): boolean => named === null || named === provider;
 
-  if (file.providers?.chatgpt?.accessToken !== undefined && takes('chatgpt')) {
-    return `chatgpt/${stripProvider(wanted ?? CHATGPT_DEFAULT_MODEL, 'chatgpt')}`;
-  }
+  if (file.providers?.chatgpt?.accessToken !== undefined && takes('chatgpt')) return specOn('chatgpt', wanted ?? CHATGPT_DEFAULT_MODEL);
 
-  if (apiKeyOf(file, 'openai') && takes('openai')) return `openai/${stripProvider(wanted ?? OPENAI_DEFAULT_MODEL, 'openai')}`;
+  if (apiKeyOf(file, 'openai') && takes('openai')) return specOn('openai', wanted ?? OPENAI_DEFAULT_MODEL);
 
   return null;
 }
 
 /** A spec of OpenRouter or Anthropic, whose key is connected. */
 function keyedSpec(file: KinuConfig, wanted: string | undefined): string | null {
-  return (['openrouter', 'anthropic'] as const).some((provider) => apiKeyOf(file, provider) && wanted?.startsWith(`${provider}/`))
+  return (['openrouter', 'anthropic'] as const).some((provider) => apiKeyOf(file, provider) && wanted !== undefined && specProvider(wanted) === provider)
     ? wanted ?? null
     : null;
 }
@@ -589,27 +589,24 @@ function keyedSpec(file: KinuConfig, wanted: string | undefined): string | null 
 function compatSpec(file: KinuConfig, wanted: string | undefined): string | null {
   if (!file.providers?.openaiCompat?.default || !wanted || isNativeCloudSpec(wanted)) return null;
 
-  return `openai-compat/${stripProvider(wanted, 'openai-compat')}`;
+  return specOn('openai-compat', wanted);
 }
 
-export async function firstOpenAiCompatModel(): Promise<string | null> {
+export function firstOpenAiCompatModel(): Promise<string | null> {
   const compat = loadConfigFile().providers?.openaiCompat?.default;
 
-  if (compat === undefined) return null;
+  if (compat === undefined) return Promise.resolve(null);
 
-  let first: ModelInfo | undefined;
+  return settle(Effect.gen(function* () {
+    const [first] = yield* attempt({ doing: `listing the models of the OpenAI-compatible endpoint at ${compat.baseURL}`, otherwise: 'unavailable' },
+      () => discoverOpenAICompatibleModels({ baseURL: compat.baseURL, headers: compatHeaders(compat) }));
 
-  try {
-    [first] = await discoverOpenAICompatibleModels({ baseURL: compat.baseURL, headers: compatHeaders(compat) });
-  } catch (cause) {
-    throw new Error(`Could not list the models of the OpenAI-compatible endpoint at ${compat.baseURL}.`, { cause });
-  }
+    if (first === undefined) {
+      return yield* new KinuError('missing', `The OpenAI-compatible endpoint at ${compat.baseURL} lists no models and none is named: run kinu provider connect openai-compatible.`);
+    }
 
-  if (first === undefined) {
-    throw new Error(`The OpenAI-compatible endpoint at ${compat.baseURL} lists no models and none is named: run kinu provider connect openai-compatible.`);
-  }
-
-  return `openai-compat/${first.id}`;
+    return `openai-compat/${first.id}`;
+  }));
 }
 
 function preferredModelFromCredentials(file: KinuConfig): string | undefined {
@@ -617,38 +614,32 @@ function preferredModelFromCredentials(file: KinuConfig): string | undefined {
 
   if (file.providers?.claude?.accessToken) return `claude/${ANTHROPIC_DEFAULT_MODEL}`;
 
-  if (file.providers?.openai?.apiKey || process.env.OPENAI_API_KEY) return `openai/${OPENAI_DEFAULT_MODEL}`;
+  if (apiKeyOf(file, 'openai')) return `openai/${OPENAI_DEFAULT_MODEL}`;
 
-  if (file.providers?.openrouter?.apiKey || process.env.OPENROUTER_API_KEY) return `openrouter/${OPENROUTER_DEFAULT_MODEL}`;
+  if (apiKeyOf(file, 'openrouter')) return `openrouter/${OPENROUTER_DEFAULT_MODEL}`;
 
-  if (file.providers?.anthropic?.apiKey || process.env.ANTHROPIC_API_KEY) return `anthropic/${ANTHROPIC_DEFAULT_MODEL}`;
+  if (apiKeyOf(file, 'anthropic')) return `anthropic/${ANTHROPIC_DEFAULT_MODEL}`;
 
   return undefined;
 }
 
 function workersAIModelId(model: string | undefined): string {
-  const stripped = stripProvider(model ?? '', WORKERS_AI_PROVIDER_ID);
+  const parts = model === undefined ? null : splitSpec(model);
 
-  if (stripped !== (model ?? '')) return stripped || DEFAULT_WORKERS_AI_MODEL_ID;
+  if (parts?.provider === WORKERS_AI_PROVIDER_ID) return parts.modelId || DEFAULT_WORKERS_AI_MODEL_ID;
 
   return model?.startsWith(WORKERS_AI_MODEL_ID_PREFIX) ? model : DEFAULT_WORKERS_AI_MODEL_ID;
 }
 
 function isNativeCloudSpec(model: string): boolean {
-  return model.startsWith(WORKERS_AI_MODEL_ID_PREFIX)
-    || CLOUD_PROXY_PROVIDER_IDS.some((id) => model.startsWith(`${id}/`));
+  const provider = specProvider(model);
+
+  return model.startsWith(WORKERS_AI_MODEL_ID_PREFIX) || CLOUD_PROXY_PROVIDER_IDS.some((id) => id === provider);
 }
 
+/** The id a raw endpoint is asked for: a spec of a provider whose ids the endpoint serves as they are, its model id. */
 function directEndpointModelId(model: string): string {
-  if (model.startsWith('workers-ai/')) return model.slice('workers-ai/'.length);
+  const parts = splitSpec(model);
 
-  if (model.startsWith('openai/')) return model.slice('openai/'.length);
-
-  if (model.startsWith('openrouter/')) return model.slice('openrouter/'.length);
-
-  if (model.startsWith('openai-compat/')) return model.slice('openai-compat/'.length);
-
-  if (model.startsWith('opencode/')) return model.slice('opencode/'.length);
-
-  return model;
+  return parts !== null && DIRECT_ENDPOINT_PROVIDERS.has(parts.provider) ? parts.modelId : model;
 }

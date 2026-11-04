@@ -12,7 +12,7 @@ import * as v from 'valibot';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { DEVICE_KEY_FILE, deviceReplaceMessage, isolatedBunArgs, signDeviceMessage, type DeviceReplacement } from '@kinu.run/core';
 import { classify, classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle, settleSync, tolerate, toKinuError } from '@kinu.run/core/obs';
-import { describeGpuNodes, effectiveDeviceMode, HOME_FOLDER_CONSENT, sandboxReasonFix } from '@kinu.run/core';
+import { describeGpuNodes, redactLiterals, effectiveDeviceMode, HOME_FOLDER_CONSENT, sandboxReasonFix } from '@kinu.run/core';
 import {
   claimMachine, enforceOwnerOnly, ensureSecretDir, machineProcessAlive, readMachinePid, removeMachinePid, runningMachineDaemon, runsMachineDaemon,
 } from '@kinu.run/cli-backend';
@@ -169,7 +169,7 @@ export function joinDevice(origin: string, ticket: string, account: string, opts
     const device = yield* Effect.tryPromise({
       try: () => joinCloudDevice(origin, { ticket, publicKey: key.publicKey, label: opts.label, replaces }),
       catch: (cause) => new KinuError(classifyErrorCode({ cause }) ?? 'unavailable', 'joining this machine to your Kinu account', {
-        cause: new Error(redactSecrets(renderThrownChain({ cause }), [ticket])),
+        cause: new Error(redactLiterals(renderThrownChain({ cause }), [ticket])),
       }),
     });
 
@@ -451,7 +451,7 @@ function listingFailure(auth: DeviceAuth, doing: string, { cause }: { readonly c
   return new KinuError(
     classifyErrorCode({ cause }) ?? 'unavailable',
     doing,
-    { cause: new Error(redactSecrets(renderThrownChain({ cause }), [auth.token])) },
+    { cause: new Error(redactLiterals(renderThrownChain({ cause }), [auth.token])) },
   );
 }
 
@@ -568,33 +568,13 @@ function registerDeviceForConnect(auth: DeviceAuth, ask: DeviceRegistrationAsk) 
   return Effect.tryPromise({
     try: () => registerCloudDevice(auth.origin, auth.token, ask),
     catch: (cause) => {
-      const detail = redactSecrets(renderThrownChain({ cause }), [auth.token]);
-
-      if (/\b(?:duplicate|already exists|already in use)\b/i.test(detail)) {
-        return new KinuError(
-          'bad_input',
-          'that device name is already registered; choose another name',
-          { cause: new Error(detail) },
-        );
-      }
-
       return new KinuError(
         classifyErrorCode({ cause }) ?? 'unavailable',
         'registering this device with Kinu',
-        { cause: new Error(detail) },
+        { cause: new Error(redactLiterals(renderThrownChain({ cause }), [auth.token])) },
       );
     },
   });
-}
-
-function redactSecrets(text: string, secrets: string[]): string {
-  let redacted = text;
-
-  for (const secret of secrets) {
-    if (secret.length > 0) redacted = redacted.split(secret).join('[redacted]');
-  }
-
-  return redacted;
 }
 
 const io = <A>(doing: string, run: () => A): Effect.Effect<A, KinuError> =>

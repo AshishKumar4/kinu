@@ -25,9 +25,8 @@ const CLI_PREV = join(CLI_ROOT, 'prev');
 
 const STAGED_PREFIX = 'next-';
 
-/** `mkdir`-atomic lock holding the pid, so a dead holder's lock is taken over. */
-/** The machine's resource lock (`tryLock`): one refresh lands a build at a time. */
-const CLI_LOCK = join(CLI_ROOT, '.refresh.lock');
+/** The tree's one lock (`tryLock`), the launcher's too: one writer of `cli/` at a time, a refresh or a launch. */
+const CLI_LOCK = join(CLI_ROOT, '.lock');
 
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 

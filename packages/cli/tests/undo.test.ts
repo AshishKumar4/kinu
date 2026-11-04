@@ -4,12 +4,13 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 
 import { join } from 'node:path';
-import { createHostCheckpoints } from '@kinu.run/cli-backend';
+import { createHostCheckpoints } from '../../cli-backend/src/checkpoints';
 import { DEFAULT_ADVISOR_MIN_SEVERITY } from '@kinu.run/core';
 import type { EvolutionConfigView, FileCheckpointEntry, FileRestoreChange } from '@kinu.run/core';
 import { filterCommands } from '@kinu.run/core';
 import { commandsForClient, executeSlashCommand, performUndo } from '../src/slash-commands';
-import type { AgentClient, FileCheckpointSurface } from '../src/agent-client';
+import type { FileCheckpointSurface } from '@kinu.run/core';
+import type { AgentClient } from '../src/agent-client';
 import { fakeAgentClient } from './helpers/agent-client';
 
 function inertCheckpointSurface(): FileCheckpointSurface {

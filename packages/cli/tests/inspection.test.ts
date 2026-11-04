@@ -13,7 +13,8 @@ import {
   type SpendSource, type Usage,
 } from "@kinu.run/core";
 import { createWorkspace } from "@kinu.run/core/workspace-birth";
-import { makeSql, makeWorkspaceSchemaSql } from "@kinu.run/cli-backend";
+import { makeWorkspaceSchemaSql } from "@kinu.run/cli-backend";
+import { wrapDatabase } from "@kinu.run/core/identity";
 
 /** The CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo. */
 
@@ -106,7 +107,7 @@ async function createLocalAgent(home: string, name: string): Promise<string> {
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     // `search_nodes` and `agent_log` are actor-private: seed under the main actor `createWorkspace` issued;
     // rows under any other id are silently invisible to `kinu swarm` and `kinu events`.
-    const actorId = openWorkspaceMainActor(makeSql(db)).actorId;
+    const actorId = openWorkspaceMainActor(wrapDatabase(db).sql).actorId;
     // Through the agent's own memory, so the file and its index are what a session leaves.
     await rt.memory.write(MEMORY_PATH, "# Memory\n\nhello local memory\n");
     await rt.memory.index(MEMORY_PATH);
@@ -288,7 +289,7 @@ describe("CLI inspection commands", () => {
       const db = workspaceDatabase(join(home, 'localtest', 'agent.db'));
 
       try {
-        return openWorkspaceMainActor(makeSql(db)).config.getModel();
+        return openWorkspaceMainActor(wrapDatabase(db).sql).config.getModel();
       } finally {
         db.close();
       }
@@ -372,7 +373,7 @@ describe("CLI inspection commands", () => {
     const db = workspaceDatabase(join(home, "localtest", "agent.db"));
 
     try {
-      const actorId = openWorkspaceMainActor(makeSql(db)).actorId;
+      const actorId = openWorkspaceMainActor(wrapDatabase(db).sql).actorId;
 
       const rows: Array<{
         source: SpendSource;

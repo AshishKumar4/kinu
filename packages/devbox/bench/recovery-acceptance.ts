@@ -130,12 +130,12 @@ export async function recoveryAcceptance(asked: RecoveryAcceptance, input: DiskC
       const ms: number[] = [];
       let moved = 0;
 
-      for (let at = asked.from; at < asked.from + asked.count; at++) {
-        await py(EDIT, WD, at, asked.smallFiles, asked.bigFiles, asked.bigPerSave);
+      for (let edit = asked.from; edit < asked.from + asked.count; edit++) {
+        await py(EDIT, WD, edit, asked.smallFiles, asked.bigFiles, asked.bigPerSave);
         const started = Date.now();
         const outcome = await save();
 
-        if (outcome.kind !== 'committed') throw new Error(`save ${String(at)} was not committed: ${outcome.reason ?? outcome.kind}`);
+        if (outcome.kind !== 'committed') throw new Error(`save ${String(edit)} was not committed: ${outcome.reason ?? outcome.kind}`);
         ms.push(Date.now() - started);
         moved += outcome.movedBytes ?? 0;
       }

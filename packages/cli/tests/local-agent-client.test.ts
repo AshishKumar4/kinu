@@ -1,3 +1,4 @@
+import { wrapDatabase } from '@kinu.run/core/identity';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { HIRE_FORK_REQUEST, hireForkModel } from '../../test-utils/src/hire-fork';
 import { AwaitedList, present, readTranscriptRows, workspaceDatabase } from '@kinu.run/test-utils';
@@ -16,7 +17,7 @@ import {
 import { WORKSPACE_RUN_ID } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import {
-  LocalAgentHost, makeSql, openWorkspaceCLI, workspaceHome, type CLIRuntime, type LocalModelResolver,
+  LocalAgentHost, openWorkspaceCLI, workspaceHome, type CLIRuntime, type LocalModelResolver,
 } from '@kinu.run/cli-backend';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model';
@@ -327,7 +328,7 @@ describe('LocalAgentClient', () => {
     await recorded.close();
 
     const db = workspaceDatabase(join(home, 'agent.db'));
-    const sql = makeSql(db);
+    const sql = wrapDatabase(db).sql;
     const actorId = openWorkspaceMainActor(sql).actorId;
 
     const sessions = sql<{ session_id: string }>`

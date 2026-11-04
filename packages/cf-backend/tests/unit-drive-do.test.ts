@@ -110,13 +110,13 @@ describe('the Drive on the UserDO', () => {
     const email = 'carol@example.com';
     // The id password and passkey sign-in mint: the account's object is addressed by it, and every workspace the
     // account claims records it as the owner whose tenant `/shared` opens.
-    const account = await accountIdFor({}, email);
+    const account = accountIdFor({}, email);
     const carol = await signedIn(mossaic, email, account);
 
     expect(await upload(carol, owner, '/plan.txt', [bytes('one tenant')])).toEqual({ ok: true, value: { ok: true } });
     expect([...mossaic.stores.keys()]).toEqual([account]);
     // Not the tenant an OAuth deployment gives the same address.
-    expect(mossaic.stores.has(await accountIdFor({ SIGN_IN_PROVIDERS: 'google' }, email))).toBe(false);
+    expect(mossaic.stores.has(accountIdFor({ SIGN_IN_PROVIDERS: 'google' }, email))).toBe(false);
     carol.close();
   });
 

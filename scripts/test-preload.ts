@@ -51,6 +51,33 @@ if (!('caches' in globalThis)) {
   });
 }
 
+// workerd's FixedLengthStream: a body of exactly `length` bytes, which errors on a byte past it and ends in error short of
+// it, as workerd's does (its HTTP framing, which only a real HTTP read can see, is measured in
+// unit-file-download-workerd.test.ts).
+if (!('FixedLengthStream' in globalThis)) {
+  Object.defineProperty(globalThis, 'FixedLengthStream', {
+    configurable: true,
+    writable: true,
+    value: class extends TransformStream<Uint8Array, Uint8Array> {
+      constructor(length: number) {
+        let seen = 0;
+
+        super({
+          transform(chunk, controller) {
+            seen += chunk.byteLength;
+
+            if (seen > length) throw new TypeError(`the body is longer than its ${String(length)} bytes`);
+            controller.enqueue(chunk);
+          },
+          flush() {
+            if (seen < length) throw new TypeError(`the body ended at ${String(seen)} of its ${String(length)} bytes`);
+          },
+        });
+      }
+    },
+  });
+}
+
 // A file that ends with a child still running fails, naming it, and the child
 // is ended first, so it holds no memory and writes into no released scratch.
 // Under `--parallel` this runs per file; without it, once for the run. The

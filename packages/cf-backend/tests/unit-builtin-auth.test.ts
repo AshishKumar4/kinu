@@ -99,7 +99,7 @@ const ChallengeSchema = v.object({ challenge: v.string() });
 
 async function identityOf(email: string): Promise<AuthIdentity> {
   // A built-in deployment declares no OAuth provider.
-  return { userId: await accountIdFor({}, email), email, sub: 'sub', provider: 'password', authTime: Date.now() };
+  return { userId: accountIdFor({}, email), email, sub: 'sub', provider: 'password', authTime: Date.now() };
 }
 
 describe('who may register', () => {
@@ -367,7 +367,7 @@ describe('a reset and the sessions it ends are one transition', () => {
   test("a reset whose session ending fails never leaves an old session beside the new password, and can be retried", async () => {
     const { env, post, registerOwner, unreachable } = deployment();
     const before = sessionOf(await registerOwner(OWNER));
-    const owner = await accountIdFor(env, OWNER);
+    const owner = accountIdFor(env, OWNER);
 
     unreachable.add(owner);
     const [failed] = await Promise.allSettled([reset(post, 'a brand new password')]);
@@ -385,7 +385,7 @@ describe('a reset and the sessions it ends are one transition', () => {
     const { env, objectFor, post, registerOwner } = deployment();
 
     await registerOwner(OWNER);
-    const target = objectFor(await accountIdFor(env, OWNER)).userDO;
+    const target = objectFor(accountIdFor(env, OWNER)).userDO;
     const register = target.registerBrowserSession.bind(target);
     let after: Response | null = null;
 

@@ -224,7 +224,7 @@ describe('E2E Lifecycle', () => {
     // being reported as a timeout. The green run of the same suite took
     // 1155s end to end. This is headroom over a measured ~19-minute worst
     // case, not a number picked to make a red go away.
-  }, 1_800_000);
+  });
 
   liveTest('evolution events fired', () => {
     // The session's own evolution, on as the product runs it, says what it did as `evolution` events.

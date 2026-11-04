@@ -20,7 +20,8 @@ import {
 import { initCraftedToolsTables } from '../packages/agent-utils/src/stores/index';
 import { createWorkspace } from '../packages/core/src/workspace-birth';
 import { openWorkspaceCLI, LocalAgentSession } from '../packages/cli-backend/src/index';
-import { makeSql, workspaceHome } from '../packages/cli-backend/src/runtime';
+import { workspaceHome } from '../packages/cli-backend/src/runtime';
+import { wrapDatabase } from '@kinu.run/core/identity';
 import type { SessionEvent } from '../packages/core/src/index';
 import { benchChatModel, createBenchInferenceProxy } from './bench-inference-proxy';
 import { parseAgentWorkerInput, type WorkerOutput } from './bench-worker-protocol';
@@ -51,7 +52,7 @@ async function main(): Promise<void> {
     await createWorkspace(db, { name: input.workspaceName, purpose: input.purpose, home: workspaceHome(db) });
     // `initSearchTables` and `initScaffoldTables` seed the search and scaffold
     // tables for the stateless arm's starting point.
-    const sql = makeSql(db);
+    const sql = wrapDatabase(db).sql;
     const execRaw = (ddl: string): void => { db.exec(ddl); };
 
     initSearchTables(execRaw);

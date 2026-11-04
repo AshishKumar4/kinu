@@ -14,8 +14,6 @@ import { withGallery, type Gallery } from '../../scripts/gallery-harness';
 
 const VIEWPORTS = { desktop: { width: 1280, height: 860 }, mobile: { width: 390, height: 844 } } as const;
 
-const SOON = { timeout: 15_000 } as const;
-
 const PIXEL = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
 
 /** A listed slate's picture, through the Gallery's own read: `/api/gallery/<ws>/<slate>/picture/<digest>`. */
@@ -56,7 +54,7 @@ async function askedAfter(page: Page, path: string, act: () => Promise<void>): P
 
   await act();
   await page.waitForFunction((from, wanted) => (document.documentElement.getAttribute('data-gallery-asked-paths') ?? '').split('\n').slice(from).includes(wanted),
-    SOON, before, path);
+    {}, before, path);
 
   const found = (await askedSoFar(page)).slice(before).find((each) => each.path === path);
 
@@ -72,7 +70,7 @@ describe("a listed slate's page", () => {
         const page = await freshPage(gallery, 'gallery-slate&slate=pr-board', theme, viewport);
 
         try {
-          await page.waitForSelector('[data-gallery-slate="pr-board"]', SOON);
+          await page.waitForSelector('[data-gallery-slate="pr-board"]');
           expect(await page.$('[data-gallery-hero] img[data-slate-picture]')).not.toBeNull();
           expect(await page.$eval('[data-gallery-open]', (link) => link.getAttribute('href'))).toBe('/s/ravi/pr-board?k=p8x2');
           expect(await page.$('[data-gallery-people]')).not.toBeNull();
@@ -84,25 +82,25 @@ describe("a listed slate's page", () => {
           const star = await askedAfter(page, '/api/gallery/star', () => page.click('[data-gallery-star]'));
 
           expect(JSON.parse(star.body ?? '{}')).toEqual({ workspace: 'ravi', slate: 'pr-board', on: true });
-          await page.waitForSelector(`[data-gallery-star][aria-pressed="true"][data-gallery-stars="${String(stars + 1)}"]`, SOON);
+          await page.waitForSelector(`[data-gallery-star][aria-pressed="true"][data-gallery-stars="${String(stars + 1)}"]`);
           await page.click('[data-gallery-star]');
-          await page.waitForSelector(`[data-gallery-star][aria-pressed="false"][data-gallery-stars="${String(stars)}"]`, SOON);
+          await page.waitForSelector(`[data-gallery-star][aria-pressed="false"][data-gallery-stars="${String(stars)}"]`);
 
           // What of a visitor's own it uses, each asking before it reads.
           expect(await page.$$eval('[data-gallery-need]', (rows) => rows.map((row) => row.getAttribute('data-gallery-need')))).toEqual(['github', 'ai']);
 
           // Fork picks a workspace for the copy of its code.
           await page.click('[data-gallery-fork]');
-          await page.waitForSelector('[data-fork-target]', SOON);
+          await page.waitForSelector('[data-fork-target]');
           await page.keyboard.press('Escape');
-          await page.waitForFunction(() => document.querySelector('[data-fork-target]') === null, SOON);
+          await page.waitForFunction(() => document.querySelector('[data-fork-target]') === null);
 
           await page.click('[data-gallery-report]');
           await page.type('[data-gallery-report-reason]', 'It asks for a token in its first screen.');
           const report = await askedAfter(page, '/api/gallery/report', () => page.click('[data-gallery-report-send]'));
 
           expect(JSON.parse(report.body ?? '{}')).toEqual({ workspace: 'ravi', slate: 'pr-board', reason: 'It asks for a token in its first screen.' });
-          await page.waitForSelector('[data-gallery-reported]', SOON);
+          await page.waitForSelector('[data-gallery-reported]');
         } finally {
           await page.close();
         }
@@ -112,7 +110,7 @@ describe("a listed slate's page", () => {
       const back = await freshPage(gallery, 'gallery-slate&slate=pr-board&fork=1', 'light', 'desktop');
 
       try {
-        await back.waitForSelector('[data-fork-target]', SOON);
+        await back.waitForSelector('[data-fork-target]');
       } finally {
         await back.close();
       }
@@ -121,14 +119,14 @@ describe("a listed slate's page", () => {
       const lent = await freshPage(gallery, 'gallery-slate&slate=digest', 'dark', 'desktop');
 
       try {
-        await lent.waitForSelector('[data-gallery-slate="digest"]', SOON);
+        await lent.waitForSelector('[data-gallery-slate="digest"]');
         expect(await lent.$('[data-gallery-people]')).toBeNull();
         // One that uses nothing of a visitor's says so.
         expect(await lent.$('[data-gallery-needs]')).not.toBeNull();
         expect(await lent.$('[data-gallery-need]')).toBeNull();
         expect(await lent.$('[data-gallery-forks]')).toBeNull();
         // More like it: Explore's apps of its category, never itself.
-        await lent.waitForSelector('[data-gallery-like] [data-explore-item]', SOON);
+        await lent.waitForSelector('[data-gallery-like] [data-explore-item]');
         expect(await liked(lent)).toEqual(['standup']);
       } finally {
         await lent.close();
@@ -143,13 +141,13 @@ describe("a listed slate's page", () => {
           const slate = await freshPage(gallery, 'gallery-slate&slate=pr-board&signed=out', theme, viewport);
 
           try {
-            await slate.waitForSelector('[data-gallery-public] [data-gallery-slate="pr-board"]', SOON);
+            await slate.waitForSelector('[data-gallery-public] [data-gallery-slate="pr-board"]');
             expect(await slate.$('nav[aria-label="Primary"]')).toBeNull();
             expect(await slate.$('[data-gallery-sign-in]')).not.toBeNull();
             expect(await slate.$eval('[data-gallery-open]', (link) => link.getAttribute('href'))).toBe('/s/ravi/pr-board?k=p8x2');
 
             const [login] = await Promise.all([
-              slate.waitForRequest((sent) => new URL(sent.url()).pathname === '/login', SOON),
+              slate.waitForRequest((sent) => new URL(sent.url()).pathname === '/login'),
               slate.click(control),
             ]);
 

@@ -1,16 +1,12 @@
-import { readText } from '@nimbus-sh/core/vfs/vfs.js';
-import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { sqlStorageOver, wrapDatabase } from '@kinu.run/core/identity';
-import { createMemoryVfs, createTestActorsOver } from '@kinu.run/test-utils';
+import { createTestActorsOver } from '@kinu.run/test-utils';
 import type { PlanSnapshot } from '@better-compact/core';
 import {
   compactionTranscriptPath,
   createCompactionStateStore,
-  createVfsTranscriptStore,
   type ArchiveRange,
 } from '../src/index';
 
@@ -51,27 +47,6 @@ describe('compactionTranscriptPath', () => {
     expect(compactionTranscriptPath('kinu-agent:session/../x', 'h#1')).toBe(
       '.kinu/compaction/kinu-agent_session_.._x/h_1.md',
     );
-  });
-});
-
-describe('createVfsTranscriptStore', () => {
-
-  test('a second write into the same directory tolerates mkdir EEXIST', async () => {
-    const { vfs: plane } = createMemoryVfs();
-
-    // As a backend that answers a repeated mkdir with EEXIST, recursive or not.
-    const vfs: VFS = {
-      ...plane,
-      mkdir: async (path, options) => {
-        if ((await plane.stat(path))?.type === 'directory') throw new VfsError('EEXIST', 'the directory exists', path);
-        await plane.mkdir(path, options);
-      },
-    };
-
-    const store = createVfsTranscriptStore(() => vfs);
-    await store.write(store.citablePath('a', 'h1'), 'one');
-    await store.write(store.citablePath('a', 'h2'), 'two');
-    expect(await readText(vfs, store.citablePath('a', 'h2'))).toBe('two');
   });
 });
 

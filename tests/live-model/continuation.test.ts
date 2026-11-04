@@ -223,7 +223,7 @@ describe('a real fold keeps the task', () => {
     expect([control.failure, compacted.failure]).toEqual([null, null]);
     expect(RECALL.filter((item) => !item.found(control.text)).map((item) => item.fact)).toEqual([]);
     expect(RECALL.filter((item) => !item.found(compacted.text)).map((item) => item.fact)).toEqual([]);
-  }, 600_000);
+  });
 });
 
 describe('one same-provider conversation survives every transition', () => {
@@ -300,5 +300,5 @@ describe('one same-provider conversation survives every transition', () => {
     }
 
     console.log(`[transitions]\n${outcomes.join('\n')}`);
-  }, 900_000);
+  });
 });

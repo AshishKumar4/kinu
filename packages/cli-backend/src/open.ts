@@ -1,9 +1,10 @@
+import { wrapDatabase } from '@kinu.run/core/identity';
 import { Effect } from 'effect';
 import type { LLMProviderConfig, ToolBoundary } from '@kinu.run/core';
 import {
   agentStatusFacts, initWorkspaceSchema, initActorStateSchema, memoryBytes,
 } from '@kinu.run/core';
-import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql, soulIn, waitOnSharedWrites, type CLIRuntime } from './runtime';
+import { createCLIRuntime, makeWorkspaceSchemaSql, soulIn, waitOnSharedWrites, type CLIRuntime } from './runtime';
 import type { LocalCloudSession, ProviderCredentialSource } from './model-resolver';
 import type { LocalOAuthStore } from './oauth-store';
 import type { Database } from 'bun:sqlite';
@@ -50,7 +51,7 @@ export function openWorkspaceCLI(
 ): Promise<{ rt: CLIRuntime; info: WorkspaceInfo }> {
   return settle(Effect.gen(function* () {
     waitOnSharedWrites(db);
-    const sql = makeSql(db);
+    const sql = wrapDatabase(db).sql;
 
     // A facet is the root's database bound to one of its agents: the root's check, before either's schema runs.
     requireSchemaGenesis(db, name);

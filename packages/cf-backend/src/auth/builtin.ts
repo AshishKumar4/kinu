@@ -159,7 +159,7 @@ builtinAuthRoutes.post('/api/auth/builtin/password/register', async (c) => {
   const root = c.env.CREDENTIAL_ENCRYPTION_KEY;
 
   if (!root) return refuse(NO_ROOT_SECRET, 503);
-  const userId = await accountIdFor(c.env, input.email);
+  const userId = accountIdFor(c.env, input.email);
 
   const admission = await accounts(c.env).builtinRegister(
     await ownerCaller(c.env), { ...request, userId, password: await hashPassword(root, input.password) },
@@ -205,7 +205,7 @@ builtinAuthRoutes.post('/api/auth/builtin/passkey/register/options', async (c) =
   const request = await admitted(c.env, c.req.raw, parsed.output);
 
   if (request instanceof Response) return request;
-  const userId = await accountIdFor(c.env, request.email);
+  const userId = accountIdFor(c.env, request.email);
   const url = new URL(c.req.url);
 
   const options = await (await webauthn()).generateRegistrationOptions({
@@ -377,7 +377,7 @@ async function ownerLink(c: Context<SettingsEnv>, purpose: InvitePurpose): Promi
   const expiresAt = Date.now() + INVITE_TTL_MS;
 
   const created = await accounts(c.env).builtinCreateInvite(await ownerCaller(c.env), {
-    ownerUserId: c.get('identity').userId, purpose, email: parsed.output.email, tokenHash: await sha256Hex(token), expiresAt,
+    ownerUserId: c.get('identity').userId, purpose, email: parsed.output.email, tokenHash: sha256Hex(token), expiresAt,
   });
 
   if (!created) return refuse('Only the owner makes these links: an invite for an address without an account, a reset for one with.', 403);

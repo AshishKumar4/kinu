@@ -1,7 +1,8 @@
 import {
   createExperienceLibrary, BUILTIN_PROFILE_CATALOG, profileCatalogDigest, validateProfileCatalog, type ExperienceEntry, type ExperienceKind, type ProfileCatalog, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, decodeJsonValue, PROFILE_CATALOG_CONFIG_KEY, CapabilityDeniedError, type UserCaller, type WorkspaceOverview, displayNameProblem, type UserProfile,
 } from '@kinu.run/core';
-import { authoredRefusal, KinuError, renderThrownChain } from '@kinu.run/core/obs';
+import { authoredRefusal, KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
 import * as v from 'valibot';
 import { AI_GATEWAY_CONFIG_KEY } from './credentials';
 import { libraryTiles } from './roster';
@@ -105,7 +106,7 @@ export class UserProfileStore {
     const stamped = singletonValue(this.host.sqlx, 'SELECT onboarded_at AS value FROM user_profile WHERE id = 1', v.nullable(v.number()));
 
     // The wizard runs only for an account whose profile the sign-in made.
-    if (stamped === undefined || stamped === null) throw new KinuError('io', 'the account has no profile to stamp');
+    if (stamped === undefined || stamped === null) return settle(Effect.fail(new KinuError('io', 'the account has no profile to stamp')));
 
     return { onboardedAt: stamped };
   }
@@ -115,13 +116,13 @@ export class UserProfileStore {
     const name = displayName.trim();
     const problem = displayNameProblem(name);
 
-    if (problem !== null) throw new KinuError('bad_input', problem);
+    if (problem !== null) return settle(Effect.fail(new KinuError('bad_input', problem)));
 
     this.host.sqlx(`UPDATE user_profile SET display_name = ? WHERE id = 1`, name);
 
     const profile = await this.getProfile(caller);
 
-    if (!profile) throw new KinuError('missing', 'No profile row to rename');
+    if (!profile) return settle(Effect.fail(new KinuError('missing', 'No profile row to rename')));
 
     return profile;
   }
@@ -138,7 +139,7 @@ export class UserProfileStore {
     const resolved = await this.host.requireTier(caller, 'experience.write');
 
     if (resolved.kind !== 'workspace') {
-      throw new KinuError('denied', 'Only a workspace can publish experience; it publishes under its own name.');
+      return settle(Effect.fail(new KinuError('denied', 'Only a workspace can publish experience; it publishes under its own name.')));
     }
 
     return this.experienceLibrary().publish(candidate, resolved.workspace);

@@ -37,6 +37,10 @@ interface WorkbenchSurfaces {
   readonly setSurface: (surface: SurfaceKind) => void;
   /** Picks a surface and brings the inspector into view. */
   readonly show: (surface: SurfaceKind) => void;
+  /** The address a chat's site preview opened its port's preview at, which the inspector shows for that surface. */
+  readonly previewAddress: PreviewAddress | null;
+  /** Shows the preview `surface` at `url`, the address the chat's preview showed. */
+  readonly openPreview: (surface: SurfaceKind, url: string) => void;
   readonly filesFocus: FilesFocus | null;
   readonly fileLinks: FileLinks;
   /** Where the chat reads the pictures it shows, and opens one in Files. */
@@ -48,6 +52,12 @@ interface WorkbenchSurfaces {
   /** The page opened on `?environment=desktop`: Environment shows the chosen machine's desktop, once. */
   readonly desktopLanding: boolean;
   readonly desktopLanded: () => void;
+}
+
+/** A preview surface, and the address within its site it shows. */
+export interface PreviewAddress {
+  readonly surface: SurfaceKind;
+  readonly url: string;
 }
 
 /** The landing that opens Environment on the chosen machine's desktop: what `/workspace/:id/desktop` became (D99). */
@@ -86,6 +96,13 @@ export function useWorkbenchSurfaces({ workspace, executors, slates, search, ins
     setSurface(next);
     workbench.current?.reveal();
   }, []);
+
+  const [previewAddress, setPreviewAddress] = useState<PreviewAddress | null>(null);
+
+  const openPreview = useCallback((next: SurfaceKind, url: string): void => {
+    setPreviewAddress({ surface: next, url });
+    show(next);
+  }, [show]);
 
   // A chat file link, or a `?file=<reference>` landing, opens Files on the file it names.
   const openFile = useCallback((reference: string): void => {
@@ -137,7 +154,7 @@ export function useWorkbenchSurfaces({ workspace, executors, slates, search, ins
   const desktopLanded = useCallback(() => setDesktopLanding(false), []);
 
   return {
-    workbench, surface, setSurface, show, filesFocus, fileLinks, chatImages, changesFocus, openChangeNote, forkLanding, forkLandingOpened,
+    workbench, surface, setSurface, show, previewAddress, openPreview, filesFocus, fileLinks, chatImages, changesFocus, openChangeNote, forkLanding, forkLandingOpened,
     desktopLanding, desktopLanded,
   };
 }

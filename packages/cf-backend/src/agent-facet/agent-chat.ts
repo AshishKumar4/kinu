@@ -2,7 +2,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   CHAT_SESSION_ID, ChatSession, EventLog, PendingSendStore, RECOVERY_BACKOFF_CEILING_MS, TerminalTransitions,
-  PlanReviewActions, assembleActorTurn, authoredTurnMetadata, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork, workActorName,
+  PlanReviewActions, assembleActorTurn, authoredTurnMetadata, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork, turnReportSequenceId, workActorName,
   planHandoffStillOwed, planAwaitingReply, approvedTaskPlan, missionGate, workModeUnderReview, projectJsonValue, declareHandoffRoster, HandedOffTurnSchema, runSettleEffect, SettledRunSchema, terminalEffect, turnTags, turnLane, answerDrawsPages,
   actorPolicy, actorTerminalEffects, withCompactionTrigger, type ActorPolicy,
   advisorReadsOver, bindRoute, completeOnRoute, ownProfileChoices, resolveTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle, writePhaseLines, type PhaseLinePorts,
@@ -397,9 +397,8 @@ export class FacetChat {
       evolutionEnabled: false,
     };
 
-    // An assignment's turn is keyed by it, so a re-run after a reset answers it once.
     const turnReport = input.turnEnd === null ? {} : {
-      turnReport: { ...input.turnEnd, sequenceId: input.turnEnd.taskId ?? `${this.deps.actor.record.actorId}:turn-end:${input.messageId}` },
+      turnReport: { ...input.turnEnd, sequenceId: turnReportSequenceId(input.turnEnd, this.deps.actor.record.actorId, input.messageId) },
     };
 
     // Its tools' receipts were kept in the workspace, which drops them once the run settled.

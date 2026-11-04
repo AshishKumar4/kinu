@@ -1,5 +1,6 @@
 // Resuming a workspace a previous process left mid-fork settles stale `running` head rows and tells the agent.
 // Core pins the read and wake (core/tests/integration-cancelled-fork-visibility.test.ts); this pins `recoverBackgroundJobs`.
+import { wrapDatabase } from '@kinu.run/core/identity';
 import { describe, test, expect } from 'bun:test';
 import { TestLanguageModelV2 } from './test-language-model';
 import { HeadJournal, defaultLoopOrigin, initHeadsTables, initBackgroundJobsTable } from '@kinu.run/core';
@@ -8,7 +9,6 @@ import type { LLMProviderConfig } from '@kinu.run/core';
 import { createCLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 import type { SessionEvent } from '@kinu.run/core';
 import { LocalAgentSession } from '../src/local-session';
-import { makeExecRaw, makeSql } from '../src/runtime';
 import { scratchPath, scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
@@ -49,10 +49,10 @@ function interruptedWorkspace() {
   const db = workspaceDatabase(scratchPath('local-session-fork-resume', 'agent.db'), { create: true });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
-  const execRaw = makeExecRaw(db);
+  const execRaw = wrapDatabase(db).execRaw;
   initHeadsTables(execRaw);
   initBackgroundJobsTable(execRaw);
-  const journal = new HeadJournal(makeSql(db), rt.actor);
+  const journal = new HeadJournal(wrapDatabase(db).sql, rt.actor);
   const now = Date.now();
   journal.recordSplit(ROOT, RATIONALE, now);
 

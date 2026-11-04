@@ -29,8 +29,6 @@ const COMPUTER = 'Computer';
 const TOOL_NAMES = ['Work', 'Changes', 'Files', 'Swarms', 'Agent', 'Environment', 'Activity'];
 
 /** The harness waits forever by default; a control that never comes fails here instead. */
-const SOON = { timeout: 10_000 };
-
 /** The terminal shown in the inspector, of every one it keeps open. */
 const SHOWN_TERMINAL = `[...document.querySelectorAll('#inspector .xterm-rows')].find((rows) => rows.checkVisibility({ visibilityProperty: true }))`;
 
@@ -55,7 +53,7 @@ const PC = "Ashish's MacBook";
 
 /** The control `required` names, once it has rendered: a chip or a button that arrives with a read. */
 async function waitForControl(page: Page, scope: string, role: string, name: string): Promise<ElementHandle> {
-  await page.waitForFunction((where, wanted) => [...document.querySelectorAll(`${where} button`)].some((button) => button.textContent?.trim() === wanted), SOON, scope, name);
+  await page.waitForFunction((where, wanted) => [...document.querySelectorAll(`${where} button`)].some((button) => button.textContent?.trim() === wanted), {}, scope, name);
 
   return await required(page, scope, role, name);
 }
@@ -65,9 +63,9 @@ async function openTheComputer(page: Page, origin: string): Promise<void> {
   await page.setViewport({ width: 1440, height: 900 });
   await page.goto(`${origin}/gallery.html?frame=workspaceshell&env=computer`, { waitUntil: 'networkidle0' });
   await page.click('#inspector button[aria-label="Environment"]');
-  await page.waitForFunction((name) => [...document.querySelectorAll('#inspector button')].some((chip) => chip.textContent?.trim() === name), SOON, COMPUTER);
+  await page.waitForFunction((name) => [...document.querySelectorAll('#inspector button')].some((chip) => chip.textContent?.trim() === name), {}, COMPUTER);
   await (await required(page, '#inspector', 'button', COMPUTER)).click();
-  await page.waitForSelector('#inspector .xterm-rows', SOON);
+  await page.waitForSelector('#inspector .xterm-rows');
 }
 
 /** A desktop client that says its session is up, as KasmVNC's own says it to the screen that frames it (DesktopScreen). */
@@ -142,10 +140,10 @@ describe('the inspector bar keeps the workspace in reach', () => {
         await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
         await page.goto(`${origin}/gallery.html?frame=workspacepage&slates=3`, { waitUntil: 'networkidle0' });
         await page.evaluate(() => { document.documentElement.dataset.previewArrived = '1'; });
-        await page.waitForSelector('button[aria-label="Show workspace"]', SOON);
+        await page.waitForSelector('button[aria-label="Show workspace"]');
         await page.tap('button[aria-label="Show workspace"]');
         // The app that arrived is reachable from the bar, by its tab or the bar's menu of the pages without room.
-        await openInspectorPage(page, 'Arrived app', SOON);
+        await openInspectorPage(page, 'Arrived app');
 
         const reach = await toolsInReach(page);
 
@@ -161,7 +159,7 @@ describe('the inspector bar keeps the workspace in reach', () => {
         });
 
         await page.touchscreen.tap(box.x, box.y);
-        await page.waitForSelector('button[aria-label="Environment"][aria-current="true"]', SOON);
+        await page.waitForSelector('button[aria-label="Environment"][aria-current="true"]');
       } finally { await page.close(); }
     });
   });
@@ -173,7 +171,7 @@ describe('the inspector bar keeps the workspace in reach', () => {
       try {
         await page.setViewport({ width: 1440, height: 900 });
         await page.goto(`${origin}/gallery.html?frame=workspacepage&slates=3`, { waitUntil: 'networkidle0' });
-        await page.waitForSelector(PAGES_NAV, SOON);
+        await page.waitForSelector(PAGES_NAV);
 
         const tool = await required(page, 'body', 'button', 'Environment');
 
@@ -187,7 +185,7 @@ describe('the inspector bar keeps the workspace in reach', () => {
 
         expect(await page.evaluate(named)).toBe(false);
         await tool.hover();
-        await page.waitForFunction(named, SOON);
+        await page.waitForFunction(named);
       } finally { await page.close(); }
     });
   });
@@ -201,13 +199,13 @@ describe('sharing the open Slate', () => {
       try {
         await page.setViewport({ width: 1440, height: 900 });
         await page.goto(`${origin}/gallery.html?frame=workspacepage&slates=3`, { waitUntil: 'networkidle0' });
-        await openInspectorPage(page, 'Board', SOON);
+        await openInspectorPage(page, 'Board');
 
         const share = await required(page, 'body', 'button', 'Share Board');
 
         await page.hover('button[aria-label="Board"]');
         await share.click();
-        await page.waitForSelector('[role="dialog"]', SOON);
+        await page.waitForSelector('[role="dialog"]');
       } finally { await page.close(); }
     });
   });
@@ -221,15 +219,15 @@ describe('the Environment panel', () => {
       try {
         await page.setViewport({ width: 1280, height: 1000 });
         await page.goto(`${origin}/gallery.html?frame=environment`, { waitUntil: 'networkidle0' });
-        await page.waitForSelector('[data-env-card="computer"]', SOON);
+        await page.waitForSelector('[data-env-card="computer"]');
 
         const card = await required(page, '[data-env-card="computer"]', 'button', COMPUTER);
 
         // From the keyboard: the control takes focus and Enter selects it, so its pane offers its sessions and its screen.
         await card.focus();
         await page.keyboard.press('Enter');
-        await page.waitForSelector('[data-env-card="computer"] [aria-pressed="true"]', SOON);
-        await page.waitForSelector('[role="tab"][aria-selected="true"]', SOON);
+        await page.waitForSelector('[data-env-card="computer"] [aria-pressed="true"]');
+        await page.waitForSelector('[role="tab"][aria-selected="true"]');
         expect(await control(page, 'body', 'tab', 'Desktop')).not.toBeNull();
         expect(await page.$$eval('[role="tablist"] [role="tab"]', (tabs) => tabs.length)).toBeGreaterThan(1);
       } finally { await page.close(); }
@@ -247,7 +245,7 @@ describe('the Environment panel', () => {
           await page.setViewport({ width, height: 1000 });
           await page.goto(`${origin}/gallery.html?frame=environment${query}`, { waitUntil: 'networkidle0' });
           await (await required(page, '[data-env-card]', 'button', COMPUTER)).click();
-          await page.waitForSelector('[data-session-cwd]', SOON);
+          await page.waitForSelector('[data-session-cwd]');
 
           expect(await page.evaluate(sessionLine('body'))).toMatchObject({ folder: '/workspace/api-worker' });
         }
@@ -264,13 +262,13 @@ describe('the Environment panel', () => {
         await page.setViewport({ width: 1280, height: 1000 });
         await page.goto(`${origin}/gallery.html?frame=environment&computer=asleep&resize=held`, { waitUntil: 'networkidle0' });
         await (await required(page, '[data-env-card]', 'button', COMPUTER)).click();
-        await page.waitForSelector('.xterm-rows', SOON);
+        await page.waitForSelector('.xterm-rows');
 
-        await (await page.waitForSelector(`[aria-label="${COMPUTER} size"]`, SOON))?.click();
-        await (await page.waitForSelector('[role="option"][aria-selected="false"]', SOON))?.click();
-        await page.waitForFunction(() => document.querySelector('.xterm-rows') === null, SOON);
+        await (await page.waitForSelector(`[aria-label="${COMPUTER} size"]`))?.click();
+        await (await page.waitForSelector('[role="option"][aria-selected="false"]'))?.click();
+        await page.waitForFunction(() => document.querySelector('.xterm-rows') === null);
         await page.evaluate(() => { window.__kinuEndResize?.(); });
-        await page.waitForSelector('.xterm-rows', SOON);
+        await page.waitForSelector('.xterm-rows');
       } finally { await page.close(); }
     });
   });
@@ -283,15 +281,15 @@ describe('the Environment panel', () => {
         await page.setViewport({ width: 1280, height: 1000 });
         await page.goto(`${origin}/gallery.html?frame=environment&terminalopen=held`, { waitUntil: 'networkidle0' });
         await (await required(page, '[data-env-card]', 'button', COMPUTER)).click();
-        await page.waitForSelector('.xterm-rows > div', SOON);
+        await page.waitForSelector('.xterm-rows > div');
 
         // The pane changes size while its socket still connects, as it does when a wide inspector restores its width.
         const rowsAtBirth = await page.$$eval('.xterm-rows > div', (rows) => rows.length);
 
         await page.setViewport({ width: 1280, height: 760 });
-        await page.waitForFunction((before) => document.querySelectorAll('.xterm-rows > div').length !== before, SOON, rowsAtBirth);
+        await page.waitForFunction((before) => document.querySelectorAll('.xterm-rows > div').length !== before, {}, rowsAtBirth);
         await page.evaluate(() => { window.__kinuOpenTerminals?.(); });
-        await page.waitForFunction(() => window.__kinuTerminalWindow?.rows === document.querySelectorAll('.xterm-rows > div').length, SOON);
+        await page.waitForFunction(() => window.__kinuTerminalWindow?.rows === document.querySelectorAll('.xterm-rows > div').length);
       } finally { await page.close(); }
     });
   });
@@ -306,9 +304,9 @@ describe('the Environment panel', () => {
         await page.setViewport({ width: 1100, height: 900 });
         await page.goto(`${origin}/gallery.html?frame=environment&offline=device`, { waitUntil: 'networkidle0' });
         await (await waitForControl(page, '[data-env-card="device"]', 'button', PC)).click();
-        await page.waitForFunction((name) => document.querySelector('#inspector, body')?.textContent?.includes(`${name} is offline`) === true, SOON, PC);
+        await page.waitForFunction((name) => document.querySelector('#inspector, body')?.textContent?.includes(`${name} is offline`) === true, {}, PC);
         await (await required(page, 'body', 'button', 'Connect a PC')).click();
-        await page.waitForSelector('[role="dialog"]', SOON);
+        await page.waitForSelector('[role="dialog"]');
         expect(await page.$('[data-env-card="workspace"]')).not.toBeNull();
       } finally { await page.close(); }
     });
@@ -326,7 +324,7 @@ describe('the Environment panel', () => {
         await page.click('#inspector button[aria-label="Environment"]');
         await (await waitForControl(page, '#inspector', 'button', PC)).click();
         await (await waitForControl(page, '#inspector', 'button', 'Give this workspace access')).click();
-        await page.waitForSelector('#inspector .xterm-rows', SOON);
+        await page.waitForSelector('#inspector .xterm-rows');
         expect(await page.$('#inspector [data-env-give-access]')).toBeNull();
       } finally { await page.close(); }
     });
@@ -344,7 +342,7 @@ describe('the Environment panel', () => {
         await page.evaluate(`window.__terminalLeft = ${SHOWN_TERMINAL}`);
 
         await (await required(page, '#inspector', 'tab', 'Desktop')).click();
-        await page.waitForFunction(DESKTOP_UP, SOON);
+        await page.waitForFunction(DESKTOP_UP);
         await page.evaluate(`Object.assign(${DESKTOP_WINDOW}, { __left: true })`);
 
         const shell = await page.$$eval('#inspector [role="tab"]', (tabs) => (tabs[0]?.textContent ?? '').trim());
@@ -356,11 +354,11 @@ describe('the Environment panel', () => {
         expect(await page.evaluate(`[${DESKTOP_UP}, ${DESKTOP_WINDOW}.__left === true]`)).toEqual([true, true]);
 
         await page.click('[data-desktop-expand]');
-        await page.waitForFunction(`${DESKTOP_FILL} > 0.9 && document.querySelector('[data-rail-collapsed]') !== null`, SOON);
+        await page.waitForFunction(`${DESKTOP_FILL} > 0.9 && document.querySelector('[data-rail-collapsed]') !== null`);
         expect(await page.evaluate(`${DESKTOP_WINDOW}.__left === true`)).toBe(true);
 
         await page.click(DESKTOP_RETURN);
-        await page.waitForFunction(`${DESKTOP_FILL} < 0.9 && document.querySelector('[data-rail]') !== null`, SOON);
+        await page.waitForFunction(`${DESKTOP_FILL} < 0.9 && document.querySelector('[data-rail]') !== null`);
         expect(await page.evaluate(`${DESKTOP_WINDOW}.__left === true`)).toBe(true);
       } finally { await page.close(); }
     });
@@ -375,11 +373,11 @@ describe('the Environment panel', () => {
       try {
         await openTheComputer(page, origin);
         await (await required(page, '#inspector', 'tab', 'dev server')).click();
-        await page.waitForFunction(() => document.querySelectorAll('#inspector .xterm-rows').length === 2, SOON);
+        await page.waitForFunction(() => document.querySelectorAll('#inspector .xterm-rows').length === 2);
         expect(await page.evaluate(sessionLine('#inspector'))).toEqual({ folder: '/workspace/api-worker', ports: [':5173'] });
 
         await page.click(`#inspector ${NEW_SESSION}`);
-        await page.waitForFunction(() => document.querySelectorAll('#inspector .xterm-rows').length === 3, SOON);
+        await page.waitForFunction(() => document.querySelectorAll('#inspector .xterm-rows').length === 3);
         expect(await page.evaluate(sessionLine('#inspector'))).toEqual({ folder: '/workspace', ports: [] });
       } finally { await page.close(); }
     });
@@ -396,11 +394,11 @@ describe('the Environment panel', () => {
 
         if (first === undefined || second === undefined) throw new Error('the computer has fewer than two sessions');
         await (await required(page, '#inspector', 'tab', second)).click();
-        await page.waitForFunction(() => document.querySelectorAll('#inspector .xterm-rows').length === 2, SOON);
+        await page.waitForFunction(() => document.querySelectorAll('#inspector .xterm-rows').length === 2);
         // A tab's close shows under the pointer.
         await (await required(page, '#inspector', 'tab', first)).hover();
         await (await required(page, '#inspector', 'button', `Close ${first}`)).click();
-        await page.waitForFunction(() => document.querySelectorAll('#inspector .xterm-rows').length === 1, SOON);
+        await page.waitForFunction(() => document.querySelectorAll('#inspector .xterm-rows').length === 1);
         expect(await page.evaluate(`${SHOWN_TERMINAL} !== undefined`)).toBe(true);
       } finally { await page.close(); }
     });

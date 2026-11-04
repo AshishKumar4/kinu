@@ -285,7 +285,7 @@ describe(SUITE, () => {
   // THE ROW MUST TERMINATE: the tier runs with testTimeout 0, so a read the
   // product never answers would hold the tier open with it. The case BUDGET
   // ends it — every wait below is settled by the product or by that abort.
-  liveTest(`MEASURED: ${CASE}`, { timeout: 12 * 60_000 }, async () => {
+  liveTest(`MEASURED: ${CASE}`, async () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
 
     await runFirstRunCase(PLAN, {

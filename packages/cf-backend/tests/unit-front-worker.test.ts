@@ -54,7 +54,7 @@ afterEach(async () => {
 });
 
 async function seam(): Promise<Front> {
-  const ownerUserId = await accountIdFor(OAUTH_DEPLOYMENT, OWNER_EMAIL);
+  const ownerUserId = accountIdFor(OAUTH_DEPLOYMENT, OWNER_EMAIL);
   const actors = new Map<string, ActorHarness<HarnessOrchestratorAgent>>();
   const kv = makeKv();
 

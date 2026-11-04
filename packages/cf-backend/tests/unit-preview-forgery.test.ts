@@ -210,9 +210,9 @@ describe('a preview this deployment published', () => {
   test("the owner's ticket from the app becomes this host's cookie, which then opens the page; another host's ticket does not", async () => {
     const p = probe();
     await publishExposure(p);
-    const key = previewViewerKey(PORT, await computerPreviewHandle(MINTED_TOKEN));
+    const key = previewViewerKey(PORT, computerPreviewHandle(MINTED_TOKEN));
     const ticket = await mintViewerTicket(p.env, WORKSPACE, key, OWNER);
-    const elsewhere = await mintViewerTicket(p.env, WORKSPACE, previewViewerKey(PORT, await computerPreviewHandle('p8080_other')), OWNER);
+    const elsewhere = await mintViewerTicket(p.env, WORKSPACE, previewViewerKey(PORT, computerPreviewHandle('p8080_other')), OWNER);
 
     const exchange = new URL(VIEWER_EXCHANGE_PATH, MINTED_URL);
     exchange.searchParams.set('next', '/dashboard');

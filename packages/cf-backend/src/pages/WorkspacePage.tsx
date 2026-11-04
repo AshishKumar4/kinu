@@ -50,7 +50,7 @@ import { classifyProgrammaticTurn, messageSignalId, messagesUpTo, splicesSeenOn,
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
 import { SlateInlineContext } from "@/components/slates/context";
 import { ChatSlates } from "@/components/slates/InlineSlate";
-import { SLATE_PREFIX, agentTitle, mainPanelAgent, nestedAgent, type AgentLinkIds, type ForkNode, type PanelAgent } from "@kinu.run/core";
+import { SLATE_PREFIX, agentTitle, siteSurface, surfacePreviewTarget, mainPanelAgent, nestedAgent, type AgentLinkIds, type ForkNode, type PanelAgent } from "@kinu.run/core";
 import { ViewOnlyBar } from "@/components/ViewOnlyBar";
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { FileLinkContext } from "@/components/surfaces/shared";
@@ -750,7 +750,7 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
 
   // Which surface the inspector shows, and every way the chat, the stack and a landing ask for one.
   const {
-    workbench, surface, setSurface, show, filesFocus, fileLinks, chatImages, changesFocus, openChangeNote, forkLanding, forkLandingOpened,
+    workbench, surface, setSurface, show, previewAddress, openPreview, filesFocus, fileLinks, chatImages, changesFocus, openChangeNote, forkLanding, forkLandingOpened,
     desktopLanding, desktopLanded,
   } = useWorkbenchSurfaces({
     workspace: agentId ?? "", executors: state.executors, slates: state.slates, search: location.search,
@@ -925,12 +925,17 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
   const slateInline = useMemo(() => ({
     rpc: state.rpc,
     openSlate: (id: string): void => show(`${SLATE_PREFIX}${id}`),
-    savedAs: (page: string) => state.slates.find((slate) => slate.page === page) ?? null,
-  }), [state.rpc, state.slates, show]);
+    openSite: (url: string) => {
+      const shows = siteSurface(url, state.pinnedPorts);
 
-  // The slate the inspector shows beside the chat folds its chat previews; a phone never shows both.
-  const panelSlate = (control: InspectorControl): string | null =>
-    control.beside && !control.collapsed && surface.startsWith(SLATE_PREFIX) ? surface.slice(SLATE_PREFIX.length) : null;
+      return shows === null ? undefined : () => { openPreview(shows, url); };
+    },
+    savedAs: (page: string) => state.slates.find((slate) => slate.page === page) ?? null,
+  }), [state.rpc, state.slates, state.pinnedPorts, show, openPreview]);
+
+  // What the inspector shows beside the chat, a slate or a site, folds its chat previews; a phone never shows both.
+  const panelShows = (control: InspectorControl): string | null =>
+    control.beside && !control.collapsed ? surfacePreviewTarget(surface, state.pinnedPorts) : null;
 
   const knownLayout = state.status?.layout ?? layout;
   const pending = useLayoutPending(knownLayout);
@@ -1004,7 +1009,7 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
         contents={state}
         quiet={focus !== null}
         onInspector={setInspectorControl}
-        chat={(control) => <SubagentChatBase.Provider value={{ base: `${workspaceRoute(agentId)}/agents/`, parent: null }}><ChatSlates shownInPanel={panelSlate(control)}>
+        chat={(control) => <SubagentChatBase.Provider value={{ base: `${workspaceRoute(agentId)}/agents/`, parent: null }}><ChatSlates shownInPanel={panelShows(control)}>
             {shownNode !== null && (
               <SwarmNodePane key={shownNode} main={state} node={shownNode} ownerPath={nodeOwner} agent={shownAgent} rosterLoaded={rosterLoaded} />
             )}
@@ -1106,6 +1111,7 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
             onSurface={setSurface}
             agents={agentsPanel}
             pinnedPorts={state.pinnedPorts}
+            previewAddress={previewAddress}
             previewError={state.previewError}
             previewStarting={state.previewStarting}
             onRefreshPorts={() => detachPromise(state.refreshExposedPorts)}

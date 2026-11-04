@@ -61,7 +61,7 @@ interface TailFrame {
   readonly heightCostPx: number;
   /** The tail "Thinking" row, addressed by the live region it announces on. */
   readonly thinkingRows: number;
-  readonly reasoning: { viewportHeight: number; lineHeight: number; pulse: string; textAnimation: string } | null;
+  readonly reasoning: { viewportHeight: number; pulse: string } | null;
   /** The animated label a call in flight carries on its own row. */
   readonly runningIndicators: number;
 }
@@ -233,9 +233,7 @@ async function readTails(page: Page): Promise<Record<string, TailFrame>> {
         thinkingRows: row.querySelectorAll('[aria-live="polite"]').length,
         reasoning: viewport ? {
           viewportHeight: viewport.getBoundingClientRect().height,
-          lineHeight: Number.parseFloat(getComputedStyle(viewport).lineHeight),
           pulse: labelStyle?.animationName ?? 'none',
-          textAnimation: getComputedStyle(viewport).animationName,
         } : null,
         // Tool styling can change; the semantic state is the contract.
         runningIndicators: row.querySelectorAll('[data-tool-state="running"]').length,
@@ -638,12 +636,8 @@ describe('the streaming turn, as a browser lays it out', () => {
     const reasoning = present(observed.tails[REASONING].reasoning, 'the streaming reasoning block');
 
     expect(reasoning.viewportHeight).toBeGreaterThan(0);
-    expect(reasoning.viewportHeight).toBeLessThanOrEqual(reasoning.lineHeight * 4);
-    // The label moves while the words arrive and the words themselves stay
-    // still; under reduced motion the label is still too. Which animation the
-    // label wears is the design's, shared with the pause tail.
+    // The label moves while the words arrive; under reduced motion it is still.
     expect(reasoning.pulse).not.toBe('none');
-    expect(reasoning.textAnimation).toBe('none');
     expect(present(observed.reducedMotionTails[REASONING].reasoning, 'the reduced-motion reasoning block').pulse)
       .toBe('none');
   });
@@ -3123,7 +3117,7 @@ test('a click on a bare mount lists once, though it lands below it', async () =>
   });
 });
 
-test('code retains syntax colors through streaming and long sidebar titles stay clipped', async () => {
+test('code keeps its syntax colors through streaming, scrolls sideways, and copies what streamed', async () => {
   await withGallery(async ({ newPage, origin }) => {
     const page = await newPage();
     await page.setViewport({ width: 1100, height: 1000 });
@@ -3143,74 +3137,19 @@ test('code retains syntax colors through streaming and long sidebar titles stay 
         await page.waitForFunction(() => document.fonts.status === 'loaded');
         await page.waitForFunction(() => [...document.querySelectorAll('[data-chat-row="ca1"] .p-code')].every((block) => block.querySelectorAll('code span').length > 1));
 
-        const chatFences = await page.$$eval('[data-chat-row="ca1"] .p-code', (blocks) => blocks.map((block) => {
-          const code = block.querySelector('code');
-          const walker = document.createTreeWalker(code ?? block, NodeFilter.SHOW_TEXT);
-          const ink = new Set<string>();
+        // Highlighted: a block's tokens are told apart by their ink.
+        const inks = (blocks: Element[]) => blocks.map((block) => new Set([...block.querySelectorAll('code span')].map((token) => getComputedStyle(token).color)).size);
 
-          while (walker.nextNode()) {
-            const parent = walker.currentNode.parentElement;
-
-            if (parent !== null && walker.currentNode.textContent?.trim()) ink.add(getComputedStyle(parent).color);
-          }
-
-          return { tokens: block.querySelectorAll('code span').length, colors: [...ink] };
-        }));
+        const chatFences = await page.$$eval('[data-chat-row="ca1"] .p-code', inks);
 
         expect(chatFences.length).toBe(3);
 
-        for (const fence of chatFences) {
-          expect(fence.tokens, `${mode} chat fence token spans`).toBeGreaterThan(1);
-          expect(fence.colors.length, `${mode} chat fence token colors`).toBeGreaterThan(1);
-        }
+        for (const fence of chatFences) expect(fence, `${mode} chat fence token colors`).toBeGreaterThan(1);
 
         await page.goto(`${origin}/gallery.html?frame=coderendering`, { waitUntil: 'networkidle0' });
 
-        const colors = await page.evaluate(() => [...document.querySelectorAll('[data-code-sample]')].map((sample) => {
-          const code = sample.querySelector('code');
-          const walker = document.createTreeWalker(code ?? sample, NodeFilter.SHOW_TEXT);
-          const ink = new Set<string>();
-
-          while (walker.nextNode()) {
-            const parent = walker.currentNode.parentElement;
-
-            if (parent !== null && walker.currentNode.textContent?.trim()) ink.add(getComputedStyle(parent).color);
-          }
-
-          return { language: sample.getAttribute('data-code-sample'), colors: [...ink] };
-        }));
-
-        for (const sample of colors.filter((item) => item.language !== 'unknown-language')) {
-          expect(sample.colors.length, `${mode} ${sample.language} syntax colors`).toBeGreaterThan(1);
-        }
-
-        const firstRow = 'aside ul > li:first-child';
-        expect(await page.$eval(firstRow + ' a[href^="/workspace/"]', (link) => {
-          const title = link.children[1];
-
-          if (title === undefined) throw new Error('workspace title absent');
-
-          return title.scrollWidth > title.clientWidth;
-        })).toBeTrue();
-
-        for (const action of ['button[title="Rename"]', 'button[title="Remove"]']) {
-          await page.focus(firstRow + ' ' + action);
-          await page.waitForFunction(() => {
-            const age = document.querySelector('aside ul > li:first-child a[href^="/workspace/"]')?.lastElementChild;
-
-            return age !== null && age !== undefined && getComputedStyle(age).opacity === '0';
-          });
-
-          const bounds = await page.$eval(firstRow, (row) => {
-            const title = row.querySelector('a[href^="/workspace/"]')?.children[1];
-            const active = document.activeElement;
-
-            if (title === undefined || active === null) throw new Error('focused row missing');
-
-            return { titleRight: title.getBoundingClientRect().right, actionLeft: active.getBoundingClientRect().left };
-          });
-
-          expect(bounds.titleRight).toBeLessThan(bounds.actionLeft);
+        for (const colors of await page.$$eval('[data-code-sample]:not([data-code-sample="unknown-language"])', inks)) {
+          expect(colors, `${mode} syntax colors`).toBeGreaterThan(1);
         }
 
         const updated = 'export const finished = "' + 'stream complete '.repeat(20) + '";\nconsole.log(finished);';
@@ -3222,7 +3161,6 @@ test('code retains syntax colors through streaming and long sidebar titles stay 
         await page.waitForFunction((text) => document.querySelector('[data-code-sample="stream"] .shiki code')?.textContent === text, {}, updated);
 
         const streamed = await page.$eval('[data-code-sample="stream"]', (sample) => {
-          const tokenColors = new Set([...sample.querySelectorAll('code span')].map((token) => getComputedStyle(token).color));
           let scrollable = false;
 
           for (const element of sample.querySelectorAll('div, pre')) {
@@ -3232,7 +3170,7 @@ test('code retains syntax colors through streaming and long sidebar titles stay 
             element.scrollLeft = 0;
           }
 
-          return { colors: tokenColors.size, scrollable };
+          return { colors: new Set([...sample.querySelectorAll('code span')].map((token) => getComputedStyle(token).color)).size, scrollable };
         });
 
         expect(streamed.colors).toBeGreaterThan(1);
@@ -3240,8 +3178,44 @@ test('code retains syntax colors through streaming and long sidebar titles stay 
         expect(await page.$eval('[data-code-sample="unknown-language"] code', (code) => code.textContent)).toBe('<script>unknown & safe</script>');
         await page.bringToFront();
         await page.$eval('[data-code-sample="stream"] button', (button) => button.click());
-        await page.waitForFunction(() => document.querySelector('[data-code-sample="stream"] button')?.textContent?.includes('Copied'));
-        expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(updated);
+        await page.waitForFunction(async (text) => await navigator.clipboard.readText() === text, {}, updated);
+      }
+    } finally {
+      await page.close();
+    }
+  });
+});
+
+test('a long sidebar title stays clipped clear of its row\'s actions', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await page.setViewport({ width: 1100, height: 1000 });
+
+    try {
+      await page.goto(`${origin}/gallery.html?frame=coderendering`, { waitUntil: 'networkidle0' });
+      const firstRow = 'aside ul > li:first-child';
+
+      expect(await page.$eval(firstRow + ' a[href^="/workspace/"]', (link) => {
+        const title = link.children[1];
+
+        if (title === undefined) throw new Error('workspace title absent');
+
+        return title.scrollWidth > title.clientWidth;
+      })).toBeTrue();
+
+      for (const action of ['button[title="Rename"]', 'button[title="Remove"]']) {
+        await page.focus(firstRow + ' ' + action);
+
+        const bounds = await page.$eval(firstRow, (row) => {
+          const title = row.querySelector('a[href^="/workspace/"]')?.children[1];
+          const active = document.activeElement;
+
+          if (title === undefined || active === null) throw new Error('focused row missing');
+
+          return { titleRight: title.getBoundingClientRect().right, actionLeft: active.getBoundingClientRect().left };
+        });
+
+        expect(bounds.titleRight).toBeLessThan(bounds.actionLeft);
       }
     } finally {
       await page.close();

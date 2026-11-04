@@ -23,7 +23,8 @@ import {
 } from '../../packages/core/src/index';
 import { tolerate } from '../../packages/core/src/obs';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
-import { makeSql, soulIn, type CLIRuntime } from '../../packages/cli-backend/src/runtime';
+import { soulIn, type CLIRuntime } from '../../packages/cli-backend/src/runtime';
+import { wrapDatabase } from '@kinu.run/core/identity';
 import { evalSession, scriptedEvalModel, type EvalSession } from './harness';
 import { localTargetFolder, provisionLocalTarget } from './target-local';
 import { finalIntegerAnswer,
@@ -83,7 +84,7 @@ function storedMemoryFact(db: Database, memoryFile: string | null): string | nul
   // are has to be named the way an operator names it: the workspace's MAIN
   // actor, issued through the production directory. That is the actor the
   // session above drove.
-  const sql = makeSql(db);
+  const sql = wrapDatabase(db).sql;
 
   const fact = createFactsStore(sql, openWorkspaceMainActor(sql)).all()
     .find((row) => JSON.stringify(row.value).includes(MEMORY_CODE));
@@ -183,7 +184,7 @@ describe('E2E Full Lifecycle', () => {
     // The extracted integer, not a substring: any '4' anywhere in the reply
     // would satisfy `toContain`, including one from the question's echo.
     expect(finalIntegerAnswer(text)).toBe(4);
-  }, 120_000);
+  });
 
   // ── Step 4: Chat turn 2 — should use eval ──────────
 
@@ -210,7 +211,7 @@ describe('E2E Full Lifecycle', () => {
     expect(said.map((line) => tolerate(() => extractJsonObject(line), 'malformed-input')))
       .toContainEqual({ 7: true, 10: false, 13: true });
     expect(finalIntegerAnswer(text)).toBe(2);
-  }, 300_000);
+  });
 
   // ── Step 5: Chat turn 3 — persist a memory note ───────────────
 
@@ -233,7 +234,7 @@ describe('E2E Full Lifecycle', () => {
       + 'holds the fact, so nothing was persisted for step 6 to find')
       .not.toBeNull();
     console.log(`  Stored via memory.${wrote === undefined ? '?' : opName(wrote.args)} in ${String(where)}`);
-  }, 120_000);
+  });
 
   // ── Step 6: Close and reopen with openWorkspaceCLI ──────────────────
 
