@@ -7,6 +7,7 @@ import {
   ArrowSquareOutIcon, ArrowsClockwiseIcon, CaretRightIcon, CheckIcon, EnvelopeSimpleIcon, GlobeHemisphereWestIcon, LinkIcon, type Icon as PhosphorIcon,
 } from "@phosphor-icons/react";
 import type { DeployChoice, DeployedKinu, DeploySession, UpdateBuild } from "@kinu.run/core/deploy";
+import { calendarDay } from "@kinu.run/core";
 import { Button, buttonClass } from "@/components/ui/Button";
 import { DeployConnectors, type GithubReturn } from "@/components/deploy/DeployConnectors";
 import { Pressable } from "@/components/ui/Pressable";
@@ -22,7 +23,7 @@ export type KinuChange = "update" | "domain" | "mail" | "github" | "link";
 function dayOf(build: UpdateBuild): string {
   const at = new Date(build.builtAt);
 
-  return Number.isNaN(at.getTime()) ? build.builtAt : at.toLocaleDateString(undefined, { day: "numeric", month: "long" });
+  return Number.isNaN(at.getTime()) ? build.builtAt : calendarDay(at, "long");
 }
 
 /** Whether a Kinu answers on a domain of its own rather than workers.dev: mail needs one. */

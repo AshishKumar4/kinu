@@ -11,6 +11,8 @@ import {
 import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   newestOpener, ownerAsks, planSurface,
+  countOf,
+  agentRoute, workspaceRoute,
 } from "@kinu.run/core";
 import { APP_ROUTES, liveStep, rowText, threadLiveTail, type OwedOwnerIntent, type PlanReview, type SignalCard, type WorkspaceLayout } from "@kinu.run/core";
 import type { UIMessage } from "ai";
@@ -136,7 +138,7 @@ function ForkModal({
       <div className="t-meta p-text-2 space-y-2">
         <p>Create a new workspace from <span className="font-mono p-text">{sourceName}</span>, with its own conversation and its own copy of the files.</p>
         <ul className="list-disc list-inside space-y-px p-text-3">
-          <li>Conversation: the {messagesUpToHere} message{messagesUpToHere === 1 ? "" : "s"} up to this one</li>
+          <li>Conversation: the {countOf(messagesUpToHere, "message")} up to this one</li>
           <li>Files: the project, SOUL.md and memory as they are now, not as they were at this message</li>
           <li>Also copied: learned tools and settings</li>
           <li>Starts fresh: swarm trees, evolution events, scaffold, installed runtimes</li>
@@ -266,10 +268,10 @@ function shownPanelAgent(agents: readonly PanelAgent[], node: string | null, sub
 }
 
 function agentPagePath(workspace: string, { open }: PanelAgent): string {
-  if (open.kind === "chat") return open.path === null ? `/workspace/${workspace}` : subagentBase(workspace, open.path).slice(0, -1);
+  if (open.kind === "chat") return open.path === null ? workspaceRoute(workspace) : agentRoute(workspace, open.path);
   const owner = open.owner === null ? "" : `&owner=${encodeURIComponent(open.owner)}`;
 
-  return `/workspace/${workspace}?node=${encodeURIComponent(`${open.runId}/${open.nodeId}`)}${owner}`;
+  return `${workspaceRoute(workspace)}?node=${encodeURIComponent(`${open.runId}/${open.nodeId}`)}${owner}`;
 }
 
 /** `node` is `<run>/<node>`. */
@@ -310,7 +312,7 @@ function DeleteChat({ chat, workspace, shown, dismiss, onClose }: {
     <DeleteChatDialog title={chat.title} onClose={onClose} onConfirm={async () => {
       await dismiss(chat.path, false);
 
-      if (shown === chat.path) await navigate(`/workspace/${workspace}`);
+      if (shown === chat.path) await navigate(workspaceRoute(workspace));
     }} />
   );
 }
@@ -338,7 +340,7 @@ function chatTab(workspace: string, agent: PanelAgent, actions: {
 }): ChatTab {
   const path = agent.open.kind === "chat" ? agent.open.path : null;
 
-  if (path === null) return { agent, to: `/workspace/${workspace}`, rename: actions.renameMain, remove: actions.clearMain, clears: true };
+  if (path === null) return { agent, to: workspaceRoute(workspace), rename: actions.renameMain, remove: actions.clearMain, clears: true };
 
   return {
     agent, to: subagentBase(workspace, path).slice(0, -1),
@@ -355,7 +357,7 @@ function openBarItem(view: string | undefined, shown: PanelAgent | undefined): s
 }
 
 function subagentBase(workspace: string, subName: string): string {
-  return `/workspace/${workspace}/agents/${subName.split("/").map(encodeURIComponent).join("/")}/`;
+  return `${agentRoute(workspace, subName)}/`;
 }
 
 /** A subagent below a direct child is addressed by its `/`-joined path of names, as its socket and RPCs take it. */
@@ -528,7 +530,7 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
   if (focus !== null && !tabsShown && view === undefined) {
     return (
       <FocusBar
-        workspace={{ name: workspace, title, logo, to: `/workspace/${workspace}/activity` }}
+        workspace={{ name: workspace, title, logo, to: workspaceRoute(workspace, "activity") }}
         agent={{
           label: focus.label ?? "", ...mascotOf(speaking?.key ?? "main", speaking?.colour ?? 0), activity: speaking?.activity,
         }}
@@ -545,12 +547,12 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
       <WorkspaceHeader
         workspace={{
           name: workspace,
-          title, logo, to: `/workspace/${workspace}/overview`, editValue,
+          title, logo, to: workspaceRoute(workspace, "overview"), editValue,
           rename: async (name) => { rename(workspace, (await state.rpc("setDisplayName", [name])).displayName); }, remove: () => setRemoving(true),
         }}
         chats={chats}
         active={openBarItem(view, shown)}
-        newChat={`/workspace/${workspace}/new`}
+        newChat={workspaceRoute(workspace, "new")}
         leading={menu}
         trailing={barActions}
       />
@@ -580,7 +582,7 @@ function WorkspaceView({ view, workspace, title, state, agents, open, clearMain 
   if (view === "new") return <NewChatView workspace={workspace} title={title} createChat={state.createSubagent} />;
 
   // The desktop's own page went with D99: its address lands on the desktop where it lives now, the Environment surface.
-  if (view === "desktop") return <Navigate to={`/workspace/${encodeURIComponent(workspace)}?${DESKTOP_LANDING}`} replace />;
+  if (view === "desktop") return <Navigate to={`${workspaceRoute(workspace)}?${DESKTOP_LANDING}`} replace />;
 
   // What the agent did and is doing, from its chat and its watches (1018-xao, Muse's activity log).
   if (view === "activity") return <ActivityView workspace={workspace} title={title} rpc={state.rpc} now={liveStep(threadLiveTail({ last: state.messages.at(-1), liveness: state.liveness }))} />;
@@ -792,7 +794,7 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
   const openAsk = useCallback(async (key: string): Promise<void> => {
     setAskFocus(key);
 
-    if (subName !== undefined) await navigate(`/workspace/${encodeURIComponent(agentId ?? "")}`);
+    if (subName !== undefined) await navigate(workspaceRoute(agentId ?? ""));
     workbench.current?.showChat();
   }, [subName, navigate, agentId, workbench]);
 
@@ -1002,7 +1004,7 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
         contents={state}
         quiet={focus !== null}
         onInspector={setInspectorControl}
-        chat={(control) => <SubagentChatBase.Provider value={{ base: `/workspace/${agentId}/agents/`, parent: null }}><ChatSlates shownInPanel={panelSlate(control)}>
+        chat={(control) => <SubagentChatBase.Provider value={{ base: `${workspaceRoute(agentId)}/agents/`, parent: null }}><ChatSlates shownInPanel={panelSlate(control)}>
             {shownNode !== null && (
               <SwarmNodePane key={shownNode} main={state} node={shownNode} ownerPath={nodeOwner} agent={shownAgent} rosterLoaded={rosterLoaded} />
             )}

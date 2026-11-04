@@ -379,7 +379,7 @@ interface LongChat {
   readonly dragMs: number;
   /** A drag to the middle: the first page it read (`from-to`), and the history index of the first row in view once one landed. */
   readonly middle: { readonly read: string; readonly shown: number | null };
-  /** The same, under newest rows far taller than a page's (2026-10-30: it read 4 rows short of where the reader landed). */
+  /** The same, under newest rows far taller than a page's, whose chat reads no newest page (it came with the seed). */
   readonly middleTall: { readonly read: string; readonly shown: number | null };
 }
 
@@ -690,7 +690,8 @@ async function stillReaderLandings(newPage: Gallery['newPage'], origin: string, 
 /** The scrollbar dragged to the middle of a long chat: the first page it read, and the first row in view once it landed. */
 async function middleDrag(newPage: Gallery['newPage'], origin: string, query: string): Promise<LongChat['middle']> {
   const halfway = await openLong(newPage, origin, query);
-  const readsBefore = await halfway.evaluate(() => (document.documentElement.dataset.historyReads ?? '').trim().split(' ').length);
+  // A chat whose newest page came with its seed has read nothing yet: no empty first entry is counted.
+  const readsBefore = await halfway.evaluate(() => (document.documentElement.dataset.historyReads ?? '').split(' ').filter((read) => read !== '').length);
   const rowsBefore = await halfway.$eval(LONG, (el) => el.children.length);
 
   await halfway.$eval(LONG, (el) => {
@@ -701,7 +702,7 @@ async function middleDrag(newPage: Gallery['newPage'], origin: string, query: st
   await nextPaint(halfway);
 
   const landed = {
-    read: await halfway.evaluate((skip) => (document.documentElement.dataset.historyReads ?? '').trim().split(' ')[skip] ?? '', readsBefore),
+    read: await halfway.evaluate((skip) => (document.documentElement.dataset.historyReads ?? '').split(' ').filter((read) => read !== '')[skip] ?? '', readsBefore),
     shown: await halfway.$eval(LONG, (el) => {
       const view = el.getBoundingClientRect();
       const row = [...el.children].find((child) => !child.hasAttribute('data-scroll-edge') && child.getBoundingClientRect().bottom > view.top);

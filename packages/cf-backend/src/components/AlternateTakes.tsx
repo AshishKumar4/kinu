@@ -1,5 +1,5 @@
 import { Effect } from 'effect';
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import { Loader } from "@/components/ui/Loader";
 import { Button } from "@/components/ui/Button";
 import {
@@ -60,17 +60,6 @@ function TakesComparison({ set, onPick, onClose }: {
     setIndex((i) => cycleTakeIndex(i, delta, count));
   }, [count]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "ArrowLeft") step(-1);
-      else if (e.key === "ArrowRight") step(1);
-    };
-
-    document.addEventListener("keydown", onKey);
-
-    return () => document.removeEventListener("keydown", onKey);
-  }, [step]);
-
   const useTake = (): void => {
     if (isCurrent) return;
     run("pick", () => Effect.gen(function* () {
@@ -88,6 +77,10 @@ function TakesComparison({ set, onPick, onClose }: {
       title="Alternate takes"
       icon={<GitBranchIcon size={18} className="p-accent-fg" />}
       onClose={onClose}
+      onKeyDown={(event) => {
+        if (event.key === "ArrowLeft") step(-1);
+        else if (event.key === "ArrowRight") step(1);
+      }}
       width="md"
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={busy !== null}>Keep current</Button>

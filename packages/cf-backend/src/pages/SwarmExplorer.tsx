@@ -22,6 +22,7 @@ import { useElementSize } from "@/hooks/use-element-size";
 import { runLiveness } from "@kinu.run/core/swarm-view";
 import type { ForkRunParams, ForkRunSummary } from "@kinu.run/core";
 import { Surface } from "@/components/ui/Surface";
+import { countOf, workspaceRoute } from "@kinu.run/core";
 
 function CanvasNotice({ failure, loading, what, waiting, empty, onRetry }: {
   failure: string | null;
@@ -86,7 +87,7 @@ export default function SwarmExplorer() {
   return (
     <Surface look="page" className="h-full flex flex-col">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 border-b p-border">
-        <Link to={`/workspace/${agentId}`} className="shrink-0"><Button variant="ghost" size="sm" icon={<ArrowLeftIcon size={14} />}>Back</Button></Link>
+        <Link to={workspaceRoute(agentId ?? "")} className="shrink-0"><Button variant="ghost" size="sm" icon={<ArrowLeftIcon size={14} />}>Back</Button></Link>
         <div className="hidden sm:block h-4 shrink-0 border-l p-border" />
         <GitForkIcon size={16} className="p-accent-fg shrink-0" />
         <span className="t-label p-text shrink-0">Swarm explorer</span>
@@ -202,7 +203,7 @@ function ExplorerBody({
             <span className="p-text-2">Winner: <strong className="p-success" data-tree-winner>{formatScore(winner.value)}</strong></span>
           )}
           {frontier !== null && (
-            <span className="p-text-2">Front: <strong className="p-text">{frontier.candidates.length} {frontier.candidates.length === 1 ? "candidate" : "candidates"}</strong></span>
+            <span className="p-text-2">Front: <strong className="p-text">{countOf(frontier.candidates.length, "candidate")}</strong></span>
           )}
           {run.status === "running" && (
             <span className="flex items-center gap-1 p-accent-fg">

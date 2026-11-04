@@ -10,7 +10,7 @@ import {
 import { Loader } from "@/components/ui/Loader";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { useAsyncResource, lastValue } from "@/hooks/use-async-resource";
-import { fmtTokens, fmtUsd, fmtPct, quotaWindowText, timeAgo } from "@kinu.run/core";
+import { fmtTokens, fmtUsd, fmtPct, quotaWindowText, timeAgo, countOf } from "@kinu.run/core";
 import type { ActivitySnapshot, CacheHitStats } from "@kinu.run/core";
 import { SPEND_SOURCE_DETAIL, SPEND_SOURCE_LABEL, usageTotal } from "@kinu.run/core";
 import type {
@@ -298,14 +298,14 @@ function CostBlock({ snap }: { snap: ActivitySnapshot }) {
 
       {telemetry.unpricedSteps > 0 && (
         <Warning>
-          {telemetry.unpricedSteps} step{telemetry.unpricedSteps === 1 ? "" : "s"} had no
+          {countOf(telemetry.unpricedSteps, "step")} had no
           models.dev rate and {priced ? "are excluded from the total above" : "cannot be priced"}.
         </Warning>
       )}
 
       {telemetry.stepsWithoutUsage > 0 && (
         <Warning>
-          {telemetry.stepsWithoutUsage} step{telemetry.stepsWithoutUsage === 1 ? "" : "s"} reported no
+          {countOf(telemetry.stepsWithoutUsage, "step")} reported no
           usage. The token totals below are a floor.
         </Warning>
       )}
@@ -341,7 +341,7 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
           className="t-meta ml-auto p-text-3"
           title="Every recorded call in this workspace, summed over the whole log."
         >
-          {coverage.calls} call{coverage.calls === 1 ? "" : "s"} · whole log
+          {countOf(coverage.calls, "call")} · whole log
         </span>
       </div>
 
@@ -484,7 +484,7 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
 
           <p className="t-meta p-text-3 mt-3 pt-2 border-t p-border">
             <Num className="p-text-2">{fmtPct(reported, reported === 1 ? 0 : 1)}</Num> of the{" "}
-            {coverage.calls} known call{coverage.calls === 1 ? "" : "s"} reported usage.{" "}
+            {countOf(coverage.calls, "known call")} reported usage.{" "}
             {reported === 1
               ? "Every call reported usage."
               : `The other ${coverage.calls - coverage.measured} reported none.`}
@@ -561,7 +561,7 @@ function spendCaveat(spend: WorkspaceSpend): string | null {
   }
 
   if (total.unpricedCalls > 0) {
-    clauses.push(`${total.unpricedCalls} measured call${total.unpricedCalls === 1 ? "" : "s"} carried no models.dev rate`);
+    clauses.push(`${countOf(total.unpricedCalls, "measured call")} carried no models.dev rate`);
   }
 
   return clauses.length === 0 ? null : clauses.join("; ");
@@ -671,7 +671,7 @@ export function CacheBlock({ cacheHit }: { cacheHit: CacheHitStats }) {
       <BlockHeader
         icon={LightningIcon}
         title="Prompt cache"
-        note={`${cacheHit.samples} sampled step${cacheHit.samples === 1 ? "" : "s"}`
+        note={countOf(cacheHit.samples, "sampled step")
           + (cacheHit.warms > 0 ? ` · warmed ${cacheHit.warms}` : "")}
       />
       {cacheHit.samples === 0 ? (
@@ -694,7 +694,7 @@ export function CacheBlock({ cacheHit }: { cacheHit: CacheHitStats }) {
           <p className="t-meta p-text-3 mt-2">
             Cached input over total input, per step. Cached tokens are a subset of the billed input.
             The EMA weights recent steps at α={cacheHit.emaAlpha}. The mean, p95 and p99 cover the
-            {" "}{cacheHit.samples} retained step{cacheHit.samples === 1 ? "" : "s"}
+            {" "}{countOf(cacheHit.samples, "retained step")}
             {cacheHit.warms > 0
               ? `, and exclude the ${cacheHit.warms} idle refresh${cacheHit.warms === 1 ? "" : "es"} that kept the prefix warm`
               : ""}.
@@ -722,7 +722,7 @@ export function LogBlock({ log }: { log: readonly ActivityLogEntry[] }) {
         icon={ClockCounterClockwiseIcon}
         title="Activity log"
         note={log.length === 0 ? undefined
-          : `${log.length} row${log.length === 1 ? "" : "s"} · newest first`}
+          : `${countOf(log.length, "row")} · newest first`}
       />
       {log.length === 0 ? (
         <p className="t-body p-text-3">

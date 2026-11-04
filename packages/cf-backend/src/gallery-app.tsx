@@ -12,7 +12,6 @@ import { APP_ROUTES } from "@kinu.run/core";
 import Layout from "@/components/layout";
 import WorkspacePage from "@/pages/WorkspacePage";
 import UserSettingsPage from "@/pages/UserSettingsPage";
-import { settingsPath } from "@/components/SettingsRail";
 import MailPage from "@/pages/MailPage";
 import type { SocketCall } from "@/lib/workspace-rpc";
 import { seedGalleryChat, serveGalleryRpc } from "@/gallery-agent-stub";
@@ -81,7 +80,6 @@ function Pages() {
         <Route path={APP_ROUTES.exploreWorkspace} element={loading(<ExploreWorkspacePage />)} />
         <Route path={APP_ROUTES.plugins} element={loading(<PluginsPage />)} />
         <Route path={APP_ROUTES.gallerySlate} element={loading(<GallerySlatePage />)} />
-        <Route path={APP_ROUTES.devices} element={<Navigate to={settingsPath("devices")} replace />} />
         <Route path="/mail/*" element={<MailPage />} />
         <Route path="/workspace/:agentId" element={<WorkspacePage />} />
         <Route path="/workspace/:agentId/agents/:subName" element={<WorkspacePage />} />

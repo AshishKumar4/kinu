@@ -672,7 +672,7 @@ describe('a chat\'s status, as the bar paints it', () => {
 
         const moving = (name: string) => reduce ? 'none' : name;
 
-        expect(seen.working).toEqual({ label: moving('p-shimmer'), glow: 'none', outline: 'none', mark: 'Working', eyes: moving('p-mascot-type'), tile: 'none', badge: false });
+        expect(seen.working).toEqual({ label: moving('p-status-shimmer'), glow: 'none', outline: 'none', mark: 'Working', eyes: moving('p-mascot-type'), tile: 'none', badge: false });
         expect(seen.waiting).toEqual({ label: 'none', glow: moving('p-attention'), outline: 'none', mark: 'Needs you', eyes: moving('p-mascot-blink'), tile: moving('p-mascot-pulse'), badge: true });
         expect(seen.failed).toEqual({ label: 'none', glow: 'none', outline: 'none', mark: 'Last turn failed', eyes: 'none', tile: 'none', badge: false });
         await page.close();

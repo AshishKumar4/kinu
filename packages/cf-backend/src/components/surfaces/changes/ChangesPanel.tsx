@@ -7,6 +7,7 @@ import { Segmented } from "@/components/ui/Segmented";
 import { useWidthsReached } from "@/hooks/use-element-size";
 import {
   changeBlocks, changeBody, changeNoteAnchor, inReadingOrder, vfsBasename, vfsDirname, type ChangeNote, type ChangeSet, type FileDiff,
+  countOf,
 } from "@kinu.run/core";
 import { ChangeMark, count, Counts, DiffBody, sinceLabel } from "./diff";
 import { FileTree, IconButton, MarkReviewed, Since, SourceMenu, Summary, typing } from "./parts";
@@ -14,6 +15,7 @@ import { NotesFailure, SendFeedback, useNotes } from "./notes";
 import { Button } from "@/components/ui/Button";
 import { Surface } from "@/components/ui/Surface";
 import { Pressable } from "@/components/ui/Pressable";
+import { readStored, writeStored } from "@/lib/stored";
 
 // Lazy: plannotator's panel loads only with the first note.
 const NotesPanel = lazy(() => import("./notes-panel"));
@@ -43,7 +45,7 @@ type Layout = v.InferOutput<typeof LayoutSchema>;
 const LAYOUTS = [{ id: "unified", label: "Unified" }, { id: "split", label: "Split" }] as const;
 
 function storedLayout(): Layout {
-  const parsed = v.safeParse(LayoutSchema, localStorage.getItem(LAYOUT_KEY));
+  const parsed = v.safeParse(LayoutSchema, readStored(LAYOUT_KEY));
 
   return parsed.success ? parsed.output : "split";
 }
@@ -187,7 +189,7 @@ function NotesBar({ open, onToggle }: { open: boolean; onToggle: () => void }) {
       <Pressable look="compact" onClick={onToggle} aria-expanded={open} open={open}
         className={`t-meta -ml-2 inline-flex items-center gap-2 px-1 py-1 ${open ? "p-text" : "p-text-2 hover:p-text"}`}>
         <ChatCircleDotsIcon size={14} className="p-info" />
-        {notes.notes.length} {notes.notes.length === 1 ? "note" : "notes"} for the agent
+        {countOf(notes.notes.length, "note")} for the agent
       </Pressable>
       <NotesFailure />
       <SendFeedback className="ml-auto" />
@@ -514,7 +516,7 @@ export function ChangesPanel({ sets, source, onSource, now, file: initialFile = 
   };
 
   const pickLayout = (next: Layout): void => {
-    localStorage.setItem(LAYOUT_KEY, next);
+    writeStored(LAYOUT_KEY, next);
     setLayout(next);
   };
 

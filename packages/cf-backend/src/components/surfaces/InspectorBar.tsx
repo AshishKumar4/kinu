@@ -9,7 +9,7 @@ import {
   type Icon,
 } from "@phosphor-icons/react";
 import { Tooltip } from "@/components/ui/Tooltip";
-import { ACTIVITY_SURFACE, type SURFACES, type SurfaceKind } from "@kinu.run/core";
+import { ACTIVITY_SURFACE, type SURFACES, type SurfaceKind, countOf } from "@kinu.run/core";
 import { AgentFaceIcon } from "@/components/ui/Marks";
 import { Pressable } from "@/components/ui/Pressable";
 import { ChromeButton } from "@/components/ui/ChromeButton";
@@ -156,7 +156,7 @@ function Pages({ surface, pages, choose }: { readonly surface: SurfaceKind | nul
           {/* With none beside the tools, the count says what it counts. */}
           <ChromeButton part="more" aria-expanded={menu} aria-haspopup="menu" aria-label={`${String(hidden.length)} more ${hidden.length === 1 ? "page" : "pages"}`}
             title={titles(hidden)} onClick={() => setMenu(!menu)}>
-            {shown.size === 0 ? <>{hidden.length} {hidden.length === 1 ? "page" : "pages"}<CaretDownIcon size={10} weight="bold" aria-hidden /></> : `+${String(hidden.length)}`}
+            {shown.size === 0 ? <>{countOf(hidden.length, "page")}<CaretDownIcon size={10} weight="bold" aria-hidden /></> : `+${String(hidden.length)}`}
           </ChromeButton>
           {menu && <PagesMenu pages={hidden} open={surface} choose={choose} />}
         </span>

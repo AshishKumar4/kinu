@@ -2,16 +2,17 @@
  * Exploration: every run's search tree in one list and one canvas. A run can fill both
  * `search_nodes` and `head_journal`, so rows report `hasSearchTree` and `hasNodeTranscripts`.
  */
-import { useState, useCallback, useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useOpenWorkspace } from "@/hooks/use-open-workspace";
 import { Loader } from "@/components/ui/Loader";
 import { Button, buttonClass } from "@/components/ui/Button";
+import { ClampedText } from "@/components/ui/ClampedText";
 import {
-  GitForkIcon, TreeStructureIcon, ArrowsOutIcon, ArrowLeftIcon, CaretRightIcon, CaretDownIcon,
+  GitForkIcon, TreeStructureIcon, ArrowsOutIcon, ArrowLeftIcon, CaretRightIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import { shownHeadStatus } from "@kinu.run/core";
+import { shownHeadStatus, countOf } from "@kinu.run/core";
 import type { ForkRunParams, ForkRunSummary, HeadRunView } from "@kinu.run/core";
 import { SwarmTree, naturalCanvasHeight } from "@/components/swarm-tree";
 import { NodeTranscript, statusTone } from "@/components/NodeTranscript";
@@ -324,7 +325,7 @@ function RunDetailView({
               <span className="t-meta t-mono p-text-3 shrink-0">· {runKind(resolution)}</span>
             )}
           </div>
-          <RunObjective task={run.task} />
+          <ClampedText text={run.task} />
           <div className="t-meta mt-px p-text-3 tabular-nums">
             {/* The tally is in the liveness panel; the header carries outcome and winner only. */}
             {runStateLine(run, null, refusal)}
@@ -348,28 +349,6 @@ function RunDetailView({
             headActivity={headActivity} headDeltas={headDeltas} nodeCount={journal?.heads.length ?? run.branches}
             onBack={() => onOpenBranch(null)} onOpenBranch={onOpenBranch} />}
     </Surface>
-  );
-}
-
-/** Matches `NodeTranscript`'s clamp: same kind of text in the same column. */
-const OBJECTIVE_CLAMP = 240;
-
-function RunObjective({ task }: { task: string }) {
-  const [expanded, setExpanded] = useState(false);
-  const long = task.length > OBJECTIVE_CLAMP;
-
-  return (
-    <>
-      <div className={`t-body p-text-2 break-words ${long && !expanded ? "line-clamp-2" : ""}`}>
-        {task}
-      </div>
-      {long && (
-        <Button variant="ghost" size="sm" className="mt-px" onClick={() => setExpanded(!expanded)} aria-expanded={expanded}>
-          {expanded ? <CaretDownIcon size={9} /> : <CaretRightIcon size={9} />}
-          {expanded ? "collapse" : "expand"}
-        </Button>
-      )}
-    </>
   );
 }
 
@@ -692,7 +671,7 @@ function SwarmResolutionBody(
 
   if (resolution?.kind === "preset") {
     caps = resolution.depth === 1
-      ? `flat · ${resolution.branches} ${resolution.branches === 1 ? "branch" : "branches"}`
+      ? `flat · ${countOf(resolution.branches, "branch", "branches")}`
       : `depth ${resolution.depth} · branches ${resolution.branches}`;
   }
 

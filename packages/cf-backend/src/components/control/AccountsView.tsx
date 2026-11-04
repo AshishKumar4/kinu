@@ -242,7 +242,7 @@ function SuspendDialog({ email, userId, onClose, onDone }: { email: string; user
   const suspend = (): void => run("suspend", () => Effect.gen(function* () {
     const answer = yield* Effect.promise(async () => act({ action: "account.suspend", userId, reason: reason.trim() }));
 
-    if (!answer.done) yield* Effect.fail(answer.text);
+    if (!answer.done) return yield* Effect.fail(answer.text);
   }));
 
   return (

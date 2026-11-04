@@ -5,6 +5,7 @@
 import type { CSSProperties, ReactNode } from "react";
 import { ArrowSquareOutIcon, CheckIcon, CircleIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import type { DeployPhase, DeployRunView } from "@kinu.run/core/deploy";
+import { calendarDay } from "@kinu.run/core";
 import { Button, buttonClass } from "@/components/ui/Button";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { Loader } from "@/components/ui/Loader";
@@ -129,10 +130,6 @@ function LiveMark() {
 }
 
 /** A day as a person says it ("28 October"). */
-function dayOf(at: number): string {
-  return new Date(at).toLocaleDateString(undefined, { day: "numeric", month: "long" });
-}
-
 function liveTitle(asked: RunAsked, setupLink: string): string {
   if (asked === "update") return "Your Kinu is up to date";
 
@@ -167,7 +164,7 @@ export function DeployLive({ run, asked, refusal, actions, onAddDomain }: {
           </a>
         </div>
         {setupLink !== "" && (
-          <p className="mt-3 max-w-sm t-meta">This link makes you the owner, once, and works until {dayOf(setupLinkExpiresAt)}. If you lose it, come back here for a new one.</p>
+          <p className="mt-3 max-w-sm t-meta">This link makes you the owner, once, and works until {calendarDay(setupLinkExpiresAt, "long")}. If you lose it, come back here for a new one.</p>
         )}
       </div>
 

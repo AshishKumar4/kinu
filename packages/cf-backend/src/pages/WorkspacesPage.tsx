@@ -14,6 +14,7 @@ import { Notice } from "@/components/ui/Notice";
 import { Button } from "@/components/ui/Button";
 import { TextInput } from "@/components/ui/Field";
 import { Surface } from "@/components/ui/Surface";
+import { readStored, writeStored } from "@/lib/stored";
 
 const VIEW_KEY = "kinu:workspaces-view";
 
@@ -23,7 +24,7 @@ type View = v.InferOutput<typeof ViewSchema>;
 
 /** Read once at mount: the page is the only writer, via `setView`. */
 function storedView(): View {
-  const parsed = v.safeParse(ViewSchema, localStorage.getItem(VIEW_KEY));
+  const parsed = v.safeParse(ViewSchema, readStored(VIEW_KEY));
 
   return parsed.success ? parsed.output : "tiled";
 }
@@ -89,7 +90,7 @@ export default function WorkspacesPage() {
   const total = roster.counts.all;
 
   const setView = (next: View): void => {
-    localStorage.setItem(VIEW_KEY, next);
+    writeStored(VIEW_KEY, next);
     setViewState(next);
   };
 

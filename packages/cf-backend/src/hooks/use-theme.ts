@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
-import { Result } from "effect";
 import { DEFAULT_THEME, MODE_KEY, modeFor, PREFERS_LIGHT, themeNamed, type Mode, type ThemeName } from "@kinu.run/core";
+import { readStored, writeStored } from "@/lib/stored";
+import { createStore, type Store } from "@/lib/store";
 
 /**
  * The mode follows the system until a manual toggle persists it on this device, by core's one rule (`modeFor`), which
@@ -20,22 +21,12 @@ export interface Theme {
 const SERVER_THEME: Theme = { mode: "dark", name: DEFAULT_THEME };
 
 interface ThemeStore {
-  snapshot: Theme;
+  readonly theme: Store<Theme>;
   /** A mode the page's host named (`holdMode`), which the system does not move. */
   held: boolean;
-  readonly listeners: Set<() => void>;
-  readonly mql: MediaQueryList;
 }
 
 let store: ThemeStore | null = null;
-
-/** The device's stored choice, as the head's script reads it: none where storage refuses to be read (a sandboxed
- *  frame, storage turned off), which leaves the system to decide. */
-function storedMode(): string | null {
-  const read = Result.try(() => localStorage.getItem(MODE_KEY));
-
-  return Result.isSuccess(read) ? read.success : null;
-}
 
 function apply(theme: Theme): void {
   const root = document.documentElement;
@@ -45,28 +36,29 @@ function apply(theme: Theme): void {
 }
 
 function commit(open: ThemeStore, next: Theme): void {
-  open.snapshot = next;
   apply(next);
-
-  for (const l of open.listeners) l();
+  open.theme.set(next);
 }
 
 function browserStore(): ThemeStore {
   if (store !== null) return store;
   const mql = window.matchMedia(PREFERS_LIGHT);
 
+  // The device's stored choice, as the head's script reads it: none where storage refuses to be read, which leaves the
+  // system to decide.
   const opened: ThemeStore = {
-    mql, listeners: new Set(), held: false,
-    snapshot: { mode: modeFor(storedMode(), mql.matches), name: themeNamed(document.documentElement.dataset.theme) ?? DEFAULT_THEME },
+    held: false,
+    theme: createStore({ mode: modeFor(readStored(MODE_KEY), mql.matches), name: themeNamed(document.documentElement.dataset.theme) ?? DEFAULT_THEME }),
   };
 
   // Drawn in the mode it holds from the moment it opens: the head drew the same rule, but the system may have changed
   // before this store opened, with no change left for it to hear.
-  apply(opened.snapshot);
+  apply(opened.theme.snapshot());
   mql.addEventListener("change", () => {
-    const mode = modeFor(storedMode(), mql.matches);
+    const mode = modeFor(readStored(MODE_KEY), mql.matches);
+    const now = opened.theme.snapshot();
 
-    if (!opened.held && mode !== opened.snapshot.mode) commit(opened, { ...opened.snapshot, mode });
+    if (!opened.held && mode !== now.mode) commit(opened, { ...now, mode });
   });
   store = opened;
 
@@ -83,8 +75,8 @@ export function setMode(mode: ThemeMode): void {
   const open = browserStore();
 
   // Kept on the device where its storage takes it, and for this page alone where it refuses.
-  Result.try(() => { localStorage.setItem(MODE_KEY, mode); });
-  commit(open, { ...open.snapshot, mode });
+  writeStored(MODE_KEY, mode);
+  commit(open, { ...open.theme.snapshot(), mode });
 }
 
 /** A page whose host names its mode (a part's frame, `?scheme=`): drawn in it and kept, whatever the system does, and
@@ -93,28 +85,19 @@ export function holdMode(mode: ThemeMode): void {
   const open = browserStore();
 
   open.held = true;
-  commit(open, { ...open.snapshot, mode });
+  commit(open, { ...open.theme.snapshot(), mode });
 }
 
 /** Once the account holds the choice: this page re-points to it, as the server will every page after. */
 export function wearTheme(name: ThemeName): void {
   const open = browserStore();
-  commit(open, { ...open.snapshot, name });
+  commit(open, { ...open.theme.snapshot(), name });
 }
 
 export function toggleMode(): void {
-  setMode(browserStore().snapshot.mode === "dark" ? "light" : "dark");
+  setMode(browserStore().theme.snapshot().mode === "dark" ? "light" : "dark");
 }
 
 export function useTheme(): Theme {
-  return useSyncExternalStore(
-    (cb) => {
-      const { listeners } = browserStore();
-      listeners.add(cb);
-
-      return () => listeners.delete(cb);
-    },
-    () => browserStore().snapshot,
-    () => SERVER_THEME,
-  );
+  return useSyncExternalStore((listener) => browserStore().theme.subscribe(listener), () => browserStore().theme.snapshot(), () => SERVER_THEME);
 }

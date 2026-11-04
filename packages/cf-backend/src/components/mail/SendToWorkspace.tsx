@@ -8,6 +8,7 @@ import { useLabelledStep } from "@/hooks/use-labelled-step";
 import { WorkspacePicker, type ChosenWorkspace } from "@/components/secrets/SecretRows";
 import { handMailThread } from "@/lib/mail-api";
 import { Notice } from "@/components/ui/Notice";
+import { workspaceRoute } from "@kinu.run/core";
 
 export function SendToWorkspace({ thread, onClose }: { thread: string; onClose: () => void }) {
   const [chosen, setChosen] = useState<ChosenWorkspace | null>(null);
@@ -16,7 +17,7 @@ export function SendToWorkspace({ thread, onClose }: { thread: string; onClose: 
 
   const send = (workspace: ChosenWorkspace): void => run("Sending", async () => {
     await handMailThread(workspace, thread);
-    await navigate(`/workspace/${encodeURIComponent(workspace.workspace)}`);
+    await navigate(workspaceRoute(workspace.workspace));
   });
 
   return (

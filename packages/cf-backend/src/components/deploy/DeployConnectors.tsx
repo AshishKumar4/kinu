@@ -85,7 +85,7 @@ function GoogleClientSteps({ kinu, onSaved, onCancel }: { kinu: DeployedKinu; on
   const save = (): void => run("save", () => Effect.gen(function* () {
     const heard = yield* Effect.promise(async () => setGoogleClient(kinu.account, kinu.name, { clientId, clientSecret }));
 
-    if ("refusal" in heard) yield* Effect.fail(heard.refusal.error);
+    if ("refusal" in heard) return yield* Effect.fail(heard.refusal.error);
   }));
 
   return (
@@ -132,7 +132,7 @@ function GoogleConnector({ kinu, onChanged }: { kinu: DeployedKinu; onChanged: (
     const composio = (): void => run("composio", () => Effect.gen(function* () {
       const heard = yield* Effect.promise(async () => setGoogleClient(kinu.account, kinu.name, null));
 
-      if ("refusal" in heard) yield* Effect.fail(heard.refusal.error);
+      if ("refusal" in heard) return yield* Effect.fail(heard.refusal.error);
     }));
 
     return (

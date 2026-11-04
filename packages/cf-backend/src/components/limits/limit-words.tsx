@@ -5,7 +5,7 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { ChatsIcon, CloudIcon, CpuIcon, DownloadSimpleIcon, HardDrivesIcon, KeyIcon, SquaresFourIcon } from "@phosphor-icons/react";
-import { APP_ROUTES, shownBytes, type ComputerSize, type LimitReading, type LimitsReport } from "@kinu.run/core";
+import { APP_ROUTES, calendarDay, shownBytes, type ComputerSize, type LimitReading, type LimitsReport } from "@kinu.run/core";
 import { getLimits } from "@/lib/limits-api";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { ShareBar, type ShareTone } from "@/components/ui/Meter";
@@ -21,10 +21,6 @@ export type ShownLimit = Exclude<LimitReading["id"], "computers_running">;
 const SHOWN: readonly ShownLimit[] = ["workspaces", "computer_hours", "stored_bytes", "model_tokens"];
 
 /** Short dates as the boards write them: "Nov 1". */
-function day(at: number): string {
-  return new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
 /** When the day's models start again (00:00 UTC), on the reader's own clock: "midnight" where the days turn together. */
 export function dayTurnsAt(): string {
   const next = new Date();
@@ -81,7 +77,7 @@ export function wordsOf(reading: LimitReading): LimitWords {
       return {
         icon: <CpuIcon size={16} />, name: "Computer time", percent,
         shown: `${hours(reading.used)} of ${hours(reading.limit)}`,
-        line: `1 small computer · this month · starts again ${day(reading.resetsAt ?? Date.now())}`,
+        line: `1 small computer · this month · starts again ${calendarDay(reading.resetsAt ?? Date.now())}`,
       };
     case "stored_bytes":
       return { icon: <HardDrivesIcon size={16} />, name: "Storage", percent, shown: `${shownBytes(reading.used)} of ${shownBytes(reading.limit)}`, line: "Drive, workspace files and mail" };

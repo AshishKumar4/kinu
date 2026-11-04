@@ -110,7 +110,7 @@ function LogoField({ title, logo, rpc }: { title: string; logo: string | null | 
   const redraw = (): void => run("draw", () => Effect.gen(function* () {
     const { drawn, refusal } = yield* Effect.promise(() => rpc("regenerateWorkspaceLogo", []));
 
-    if (!drawn) yield* Effect.fail(refusal ?? "The model's drawing could not be used; the monogram stays. Try again.");
+    if (!drawn) return yield* Effect.fail(refusal ?? "The model's drawing could not be used; the monogram stays. Try again.");
   }));
 
   return (
@@ -231,7 +231,7 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
       const settled = yield* Effect.promise(async () => Promise.allSettled(writes.map((each) => each.run())));
       const unsaved = settled.flatMap((result, at) => (result.status === "rejected" ? [`${writes[at]?.what ?? "a field"}: ${renderThrownChain({ cause: result.reason })}`] : []));
 
-      if (unsaved.length > 0) yield* Effect.fail(`Not saved: ${unsaved.join("; ")}`);
+      if (unsaved.length > 0) return yield* Effect.fail(`Not saved: ${unsaved.join("; ")}`);
     }));
   };
 

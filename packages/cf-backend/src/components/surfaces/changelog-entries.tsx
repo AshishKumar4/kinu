@@ -15,7 +15,7 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { type AsyncResource, lastValue, useAsyncResource, useReloadWhenMoved } from "@/hooks/use-async-resource";
 import { ScaffoldVersionDiff } from "./ScaffoldLineage";
 import { changelogFactKey } from "./shared";
-import { timeAgo } from "@kinu.run/core";
+import { timeAgo, workspaceRoute } from "@kinu.run/core";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Dot } from "@/components/ui/Dot";
 import { GroupBlock } from "@/components/ui/Group";
@@ -164,7 +164,7 @@ function EntryDetails({ entry, id, expanded, rpc, onReverted }: {
       {entry.kind === 'fact' && <div className="mb-2"><EntryFacts entry={entry} /></div>}
       {evidence && <div className="t-meta t-mono p-text-3 whitespace-pre-wrap break-words">{entry.evidence}</div>}
       {entry.workspace !== undefined && (
-        <Link to={`/workspace/${encodeURIComponent(entry.workspace)}`} className="t-meta mt-2 inline-block p-accent-fg hover:underline" data-changelog-workspace={entry.workspace}>
+        <Link to={workspaceRoute(entry.workspace)} className="t-meta mt-2 inline-block p-accent-fg hover:underline" data-changelog-workspace={entry.workspace}>
           Open the workspace
         </Link>
       )}

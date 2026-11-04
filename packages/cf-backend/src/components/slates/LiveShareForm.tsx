@@ -8,7 +8,7 @@ import {
   UsersIcon,
 } from "@phosphor-icons/react";
 import * as v from "valibot";
-import { OwnedLiveShareSchema, SlateReachSchema, SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, type LiveShareBody, type LiveShareCreated, type LiveShareVisibility, type OwnedLiveShare, type SharePreapproval, type ShareMode, type SlateCapabilityGraph, type SlateGraphNamespace, type SlateGraphMember, type SlateReach } from "@kinu.run/core";
+import { OwnedLiveShareSchema, SlateReachSchema, SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, type LiveShareBody, type LiveShareCreated, type LiveShareVisibility, type OwnedLiveShare, type SharePreapproval, type ShareMode, type SlateCapabilityGraph, type SlateGraphNamespace, type SlateGraphMember, type SlateReach, countOf } from "@kinu.run/core";
 import { showing, detach } from "@kinu.run/core/obs";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { listShare, readPreapprovals, revokeShare, setShareMode, shareLive, withdrawPreapproval } from "@/lib/shared-api";
@@ -143,11 +143,11 @@ function PrimaryAction({ reviewing, busy, canShare, canApprove, onShare, onAppro
   onShare: () => void;
   onApprove: () => void;
 }) {
-  if (reviewing) return <Button variant="primary" size="sm"  onClick={onApprove} disabled={busy || !canApprove} data-share-approve-reach>Approve the new reach</Button>;
+  if (reviewing) return <Button variant="primary" size="sm" onClick={onApprove} disabled={busy || !canApprove} data-share-approve-reach>Approve the new reach</Button>;
 
   return (
-    <Button variant="primary" size="sm"  onClick={onShare} disabled={!canShare} data-share-submit>
-      {busy ? <><Loader size="sm" /><span className="ml-1">Sharing…</span></> : "Share"}
+    <Button variant="primary" size="sm" onClick={onShare} busy={busy} disabled={!canShare} data-share-submit>
+      {busy ? "Sharing…" : "Share"}
     </Button>
   );
 }
@@ -234,7 +234,7 @@ function Reach({ graph, visibility, approved, onToggle, disabled }: {
   const names = [...new Set(graph.namespaces.filter((row) => row.slate === graph.slate).map((row) => row.title))].join(", ");
   let changes = "reading only";
 
-  if (approved.size > 0) changes = `${String(approved.size)} ${approved.size === 1 ? "change" : "changes"} allowed`;
+  if (approved.size > 0) changes = `${countOf(approved.size, "change")} allowed`;
 
   return (
     <Group>
@@ -269,7 +269,7 @@ function Reach({ graph, visibility, approved, onToggle, disabled }: {
             );
           })}
           <p className="p-text-2" data-grant-summary>
-            People get {counts.read} read-only member{counts.read === 1 ? "" : "s"}. You allowed {approved.size} of {counts.acting} change{counts.acting === 1 ? "" : "s"}.
+            People get {counts.read} read-only member{counts.read === 1 ? "" : "s"}. You allowed {approved.size} of {countOf(counts.acting, "change")}.
           </p>
         </div>
       )}

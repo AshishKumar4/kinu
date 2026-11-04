@@ -13,7 +13,7 @@ import {
   type ReactNode,
 } from "react";
 
-import { rosterBucket, rosterMatches, AccountForegroundFrameSchema, AccountMemoryFrameSchema, RosterFrameSchema, type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry } from "@kinu.run/core";
+import { rosterBucket, rosterMatches, AccountForegroundFrameSchema, AccountMemoryFrameSchema, RosterFrameSchema, type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry, rosterComesBefore } from "@kinu.run/core";
 import type { AccountMemoryProposal, ForegroundReport } from "@kinu.run/core";
 import {
   decideAccountMemory, getAccountMemory, listWorkspaces, registerWorkspace, ROSTER_SOCKET_ROUTE,
@@ -90,17 +90,13 @@ function matchesFilter(entry: RosterEntry, filter: RosterFilter): boolean {
   return (filter.bucket === undefined || bucket === filter.bucket) && rosterMatches(entry, filter.q ?? "");
 }
 
-function comesBefore(entry: RosterEntry, other: RosterEntry): boolean {
-  return entry.lastVisited > other.lastVisited || (entry.lastVisited === other.lastVisited && entry.name < other.name);
-}
-
 /** A change that falls past the loaded pages is left to the page that brings it. */
 function applyFrame(entries: readonly RosterEntry[], frame: RosterFrame, filter: RosterFilter, complete: boolean): RosterEntry[] {
   const rest = entries.filter((entry) => entry.name !== frame.name);
   const changed = frame.entry;
 
   if (changed === null || !matchesFilter(changed, filter)) return rest;
-  const at = rest.findIndex((other) => comesBefore(changed, other));
+  const at = rest.findIndex((other) => rosterComesBefore(changed, other));
 
   if (at < 0) return complete ? [...rest, changed] : rest;
 

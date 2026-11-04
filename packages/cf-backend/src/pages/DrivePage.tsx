@@ -14,9 +14,10 @@ import {
 import * as v from "valibot";
 import {
   APP_ROUTES, BUILTIN_SKILL_FILES, DRIVE_SKILLS_DIR, blueprintPagePath, compareCodeUnits, liveSharePagePath, entryRevision, formatBytes, joinDir, parseSkillFile, shortAge,
-  skillViewPath, workspaceDisplayTitle,
+  skillViewPath, textRenderOf, viewerKindOf, workspaceDisplayTitle,
   type DriveEntry, type DriveListing, type FileText, type LiveShareVisibility, type OwnedSlate, type SharedLibrary, type SharedRow,
   type SkillFileRefusal,
+  workspaceRoute,
 } from "@kinu.run/core";
 import { detach, diagnostics, showing, toKinuError, settle } from "@kinu.run/core/obs";
 import { useMediaQuery } from "@/hooks/use-media-query";
@@ -57,10 +58,8 @@ function folderHref(path: string): string {
 }
 
 function slateHref(slate: OwnedSlate): string {
-  return `/workspace/${encodeURIComponent(slate.workspace)}?slate=${encodeURIComponent(slate.id)}`;
+  return `${workspaceRoute(slate.workspace)}?slate=${encodeURIComponent(slate.id)}`;
 }
-
-const IMAGE = /\.(?:png|jpe?g|gif|webp|svg)$/iu;
 
 /** A tab or crumb press chose My stuff; a first visit lands on what holds something. */
 const ChosenState = v.object({ chosen: v.literal(true) });
@@ -285,11 +284,10 @@ function Section({ label, titled = true, heading = "quiet", rows = false, childr
   );
 }
 
+/** A cover reads a file's first lines only where they say what it is; markdown and HTML are core's kinds. */
 const TEXT = /\.(?:md|markdown|txt|csv|tsv|json|ya?ml|toml|ts|tsx|js|jsx|py|sh|css|html?)$/iu;
 
 const PROSE = /\.(?:md|markdown|txt)$/iu;
-
-const MARKDOWN = /\.(?:md|markdown)$/iu;
 
 const SHEET = /\.(?:csv|tsv)$/iu;
 
@@ -310,7 +308,7 @@ const pageLines = (markdown: string): CoverLine[] =>
 
 /** A skill's name over its description and steps, Markdown's first heading over the rest, else first lines. */
 function coverLines(text: string, name: string): [string | null, CoverLine[]] {
-  if (!MARKDOWN.test(name)) return [null, text.split("\n").slice(0, 14).map((line) => ({ text: line, heading: false }))];
+  if (textRenderOf(name) !== "markdown") return [null, text.split("\n").slice(0, 14).map((line) => ({ text: line, heading: false }))];
   const parsed = parseSkillFile(text);
 
   if (Result.isSuccess(parsed)) {
@@ -851,7 +849,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
       menu={[
         { label: "Open", icon: <ArrowSquareOutIcon size={15} />, onSelect: () => void navigate(slateHref(slate)) },
         { label: "Share…", icon: <ShareNetworkIcon size={15} />, marker: "data-drive-share-slate", onSelect: () => setDialog({ kind: "share", slate }) },
-        { label: "Go to workspace", icon: <SquaresFourIcon size={15} />, onSelect: () => void navigate(`/workspace/${encodeURIComponent(slate.workspace)}`) },
+        { label: "Go to workspace", icon: <SquaresFourIcon size={15} />, onSelect: () => void navigate(workspaceRoute(slate.workspace)) },
       ]} />
   );
 
@@ -896,7 +894,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
     return (
       <Tile key={entry.name} title={entry.name} icon={fileIcon(entry.name)} onOpen={() => show("file", entry.name)}
         picture={TEXT.test(entry.name) && entry.size > 0 ? <TextCover path={full} name={entry.name} />
-          : <FileCover name={entry.name} image={IMAGE.test(entry.name) ? inlineUrl(full) : undefined} />}
+          : <FileCover name={entry.name} image={viewerKindOf(entry.name) === "image" ? inlineUrl(full) : undefined} />}
         meta={entry.unused === undefined ? <span className="truncate">{[formatBytes(entry.size), age].filter(Boolean).join(" · ")}</span> : <NotUsed refusal={entry.unused} />}
         menu={fileMenu(entry)}
         attributes={{ "data-drive-entry": entry.name, "data-drive-kind": entry.kind, "data-drive-skill": "false" }} />

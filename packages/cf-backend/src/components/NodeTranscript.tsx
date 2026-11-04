@@ -1,8 +1,8 @@
 /** A branch rendered through `MessageView`, the main chat's renderer; user affordances are omitted by not passing them. */
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { Loader } from "@/components/ui/Loader";
 import {
-  BrainIcon, CaretDownIcon, CaretRightIcon, CheckCircleIcon, GitForkIcon,
+  BrainIcon, CheckCircleIcon, GitForkIcon,
   TreeStructureIcon, WarningCircleIcon,
 } from "@phosphor-icons/react";
 import type { UIMessage } from "ai";
@@ -28,7 +28,7 @@ import type { Page, SeekCursor } from "@kinu.run/core";
 import { fmtTokens, timeAgo } from "@kinu.run/core";
 import type { ForkNode } from "@kinu.run/core";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
-import { Button } from "@/components/ui/Button";
+import { ClampedText } from "@/components/ui/ClampedText";
 import { Surface } from "@/components/ui/Surface";
 
 
@@ -45,27 +45,12 @@ export function statusTone(status: string): StatusTone {
   return "neutral";
 }
 
-const TASK_CLAMP = 240;
-
 function TaskHeader({ task }: { task: string }) {
-  const [expanded, setExpanded] = useState(false);
-  const long = task.length > TASK_CLAMP;
-
   return (
     <Surface look="well" className="shrink-0 border-b p-border px-4 py-2">
       <div className="flex items-start gap-2">
         <div className="t-label pt-px shrink-0">Task</div>
-        <div className="min-w-0 flex-1">
-          <div className={`t-body p-text-2 whitespace-pre-wrap break-words ${long && !expanded ? "line-clamp-2" : ""}`}>
-            {task}
-          </div>
-          {long && (
-            <Button variant="ghost" size="sm" className="mt-1" onClick={() => setExpanded(!expanded)} aria-expanded={expanded}>
-              {expanded ? <CaretDownIcon size={10} /> : <CaretRightIcon size={10} />}
-              {expanded ? "collapse" : "expand"}
-            </Button>
-          )}
-        </div>
+        <div className="min-w-0 flex-1"><ClampedText text={task} /></div>
       </div>
     </Surface>
   );

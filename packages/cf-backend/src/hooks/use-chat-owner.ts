@@ -47,11 +47,6 @@ export interface KinuActorAddress {
   subagent?: string;
 }
 
-const KinuActorAddressSchema = v.object({
-  workspace: v.string(),
-  subagent: v.optional(v.string()),
-});
-
 /** Where the message landed, once its request has ended; it rejects `cancelled` when no turn took it, as when a Stop
  *  handed it back. Null: the press was not taken. */
 export type SendAdmission = Promise<SendLanding> | null;
@@ -116,13 +111,8 @@ export interface ProviderWaitShown {
 }
 
 export function useChatOwner(target: string | KinuActorAddress | undefined, extension: RefObject<WorkspaceExtension | null> | null) {
-  const targetString = v.safeParse(v.string(), target);
-  const targetAddress = v.safeParse(KinuActorAddressSchema, target);
-
-  const addressed = targetAddress.success ? targetAddress.output.workspace : undefined;
-  const workspace = targetString.success ? targetString.output : addressed;
-
-  const subagent = targetAddress.success ? targetAddress.output.subagent : undefined;
+  const workspace = typeof target === "string" ? target : target?.workspace;
+  const subagent = typeof target === "string" ? undefined : target?.subagent;
 
   const actorAddress = useMemo<KinuActorAddress>(() => {
     const address: KinuActorAddress = { workspace: workspace === undefined || workspace === "" ? "default" : workspace };

@@ -15,7 +15,7 @@ import { Effect } from "effect";
 import { attempt, detach, renderThrownChain } from "@kinu.run/core/obs";
 import { putAccountFact } from "../../lib/user-api";
 import { MarkdownContent, Section } from "./shared";
-import { timeAgo, workspaceDisplayTitle } from "@kinu.run/core";
+import { timeAgo, workspaceDisplayTitle, countOf } from "@kinu.run/core";
 import { ScaffoldLineage } from "./ScaffoldLineage";
 import { QualityView } from "./evolution-panels";
 import { ChangelogEntryCard, ChangelogFailure, useChangelog } from "./changelog-entries";
@@ -107,7 +107,7 @@ function Who({ as, workspace, address }: { as: AgentStatus; workspace: string | 
         {as.purpose !== "" && <p className="t-body p-text-2">{as.purpose}</p>}
         <div className="flex flex-wrap gap-2">
           <Label mono>{as.model}</Label>
-          <Label>{as.messageCount} {as.messageCount === 1 ? "message" : "messages"}</Label>
+          <Label>{countOf(as.messageCount, "message")}</Label>
           <Label>Prompt v{as.scaffoldVersion}</Label>
         </div>
       </div>

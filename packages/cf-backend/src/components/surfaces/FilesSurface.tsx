@@ -15,6 +15,7 @@ import {
 import {
   DEFAULT_FILES_VIEW, formatBytes, joinDir, parentDir, shortAge, MOUNT_EXECUTORS,
   type DirEntry, type EnvironmentInfo, type FilesView,
+  countOf,
 } from "@kinu.run/core";
 import { renderThrownChain, showing, settle, detachPromise } from "@kinu.run/core/obs";
 import { executorLabel, type ExecutorInfo } from "@kinu.run/core";
@@ -295,8 +296,8 @@ export interface FilesSurfaceProps {
 /** "3 folders, 2 files", naming only what the folder holds, and that more follow when they do. */
 function folderCount(folders: number, files: number, more: boolean): string {
   const said = [
-    ...(folders > 0 ? [`${String(folders)} ${folders === 1 ? "folder" : "folders"}`] : []),
-    ...(files > 0 || folders === 0 ? [`${String(files)} ${files === 1 ? "file" : "files"}`] : []),
+    ...(folders > 0 ? [countOf(folders, "folder")] : []),
+    ...(files > 0 || folders === 0 ? [countOf(files, "file")] : []),
     ...(more ? ["more below"] : []),
   ];
 

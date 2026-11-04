@@ -4,7 +4,7 @@
  * text selection that ends over the scrim is not a press. Neither dismisses while `busy`: tearing down mid-write leaves
  * the result unreported.
  */
-import type { ReactNode } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
 import { Dialog } from "@cloudflare/kumo/primitives/dialog";
 
 /** A dialog's three widths (docs/DESIGN-SYSTEM.md §2): a question, a form, a reader. */
@@ -19,15 +19,22 @@ interface ModalProps {
   width?: DialogWidth;
   /** Stops scrim and Escape dismissal; Cancel stays the caller's to offer. */
   busy?: boolean;
+  /** Keys the dialog itself answers (the arrows that step through takes): the popup keeps arrow keys from the page. */
+  onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
+  /** The page under it keeps its scroll, as the feedback dialog's capture of the whole page needs; focus stays held. */
+  pageScrolls?: boolean;
 }
 
-export function Modal({ title, onClose, icon, children, footer, width = "sm", busy = false }: ModalProps) {
+/** `data-*` marks the dialog's whole layer, its scrim included (the feedback capture's omit marker). */
+export function Modal({ title, onClose, icon, children, footer, width = "sm", busy = false, onKeyDown, pageScrolls = false, ...data }: ModalProps & Readonly<Record<`data-${string}`, string>>) {
   return (
-    <Dialog.Root open disablePointerDismissal={busy} onOpenChange={(open) => { if (!open && !busy) onClose(); }}>
-      <Dialog.Portal>
-        <Dialog.Backdrop className="p-scrim fixed inset-0 z-50" />
-        <Dialog.Viewport className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <Dialog.Popup className={`p-dialog p-dialog-${width}`} aria-label={title}>
+    <Dialog.Root open modal={pageScrolls ? "trap-focus" : true} disablePointerDismissal={busy} onOpenChange={(open) => { if (!open && !busy) onClose(); }}>
+      {/* One stacking context over the page, in the page's order, with no z-index inside it: a select or menu opened in
+          the dialog is portalled into it after the popup, so it draws above. */}
+      <Dialog.Portal className="isolate" {...data}>
+        <Dialog.Backdrop className="p-scrim fixed inset-0" />
+        <Dialog.Viewport className="fixed inset-0 flex items-center justify-center p-4">
+          <Dialog.Popup className={`p-dialog p-dialog-${width}`} aria-label={title} onKeyDown={onKeyDown}>
             <DialogFace heading={<Dialog.Title render={<h3 />} className="t-title">{title}</Dialog.Title>} icon={icon} footer={footer}>
               {children}
             </DialogFace>

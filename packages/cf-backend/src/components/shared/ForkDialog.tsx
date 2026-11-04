@@ -5,7 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { Loader } from "@/components/ui/Loader";
 import { Button } from "@/components/ui/Button";
 import { GitBranchIcon } from "@phosphor-icons/react";
-import { workspaceDisplayTitle, type BlueprintFork, type WorkspaceEntry } from "@kinu.run/core";
+import { workspaceDisplayTitle, type BlueprintFork, type WorkspaceEntry, workspaceRoute } from "@kinu.run/core";
 import { Modal } from "@/components/ui/Modal";
 import { TextInput } from "@/components/ui/Field";
 import { Choices } from "@/components/ui/Choices";
@@ -26,7 +26,7 @@ const NEW_WORKSPACE = "+new";
 function forkedSlatePath(fork: BlueprintFork): string {
   const reaches = fork.requirements.map((requirement) => requirement.name).join(",");
 
-  return `/workspace/${encodeURIComponent(fork.workspace)}?slate=${encodeURIComponent(fork.slate)}&reaches=${encodeURIComponent(reaches)}`;
+  return `${workspaceRoute(fork.workspace)}?slate=${encodeURIComponent(fork.slate)}&reaches=${encodeURIComponent(reaches)}`;
 }
 
 export function ForkDialog({ blueprint, live, title, onClose, create }: {

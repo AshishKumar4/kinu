@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import * as v from "valibot";
 import { detachPromise } from "@kinu.run/core/obs";
 import type { FileUIPart } from "ai";
-import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES } from "@kinu.run/core";
+import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES, agentRoute } from "@kinu.run/core";
 import { usePendingAttachments } from "@/hooks/use-pending-attachments";
 import { useLabelledStep } from "@/hooks/use-labelled-step";
 import { PromptCard } from "./PromptCard";
@@ -63,7 +63,7 @@ export function NewChatView({ workspace, title, createChat }: {
       const created = await createChat(opening);
       const state: Opening = { opening, attachments: [...files.parts] };
 
-      await navigate(`/workspace/${workspace}/agents/${encodeURIComponent(created.name)}`, { state });
+      await navigate(agentRoute(workspace, created.name), { state });
     });
   };
 

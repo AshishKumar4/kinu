@@ -10,6 +10,7 @@ import { Loader } from "@/components/ui/Loader";
 import { Button } from "@/components/ui/Button";
 import { revealMisrepresenting, timeAgo, type Omitted, type PendingAction } from "@kinu.run/core";
 import { renderThrownChain, settle, detachPromise } from "@kinu.run/core/obs";
+import { createStore } from "@/lib/store";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { FileBody } from "@/components/surfaces/changes/ChangesPanel";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
@@ -43,24 +44,19 @@ interface ParkedQueueSnapshot {
 
 /** A decision never re-selects what was just decided, and always re-reads the queue. */
 export class ParkedDecisionFlow {
-  #snapshot: ParkedQueueSnapshot = { selected: null, busy: false, error: null, decided: null };
-  readonly #listeners = new Set<() => void>();
+  readonly #queue = createStore<ParkedQueueSnapshot>({ selected: null, busy: false, error: null, decided: null });
   readonly #deps: ParkedDecisionDeps;
 
   constructor(deps: ParkedDecisionDeps) {
     this.#deps = deps;
   }
 
-  readonly subscribe = (listener: () => void): (() => void) => {
-    this.#listeners.add(listener);
+  readonly subscribe = this.#queue.subscribe;
 
-    return () => { this.#listeners.delete(listener); };
-  };
-
-  readonly snapshot = (): ParkedQueueSnapshot => this.#snapshot;
+  readonly snapshot = this.#queue.snapshot;
 
   chosen(allIds: readonly string[]): ReadonlySet<string> {
-    return this.#snapshot.selected ?? new Set(allIds);
+    return this.#queue.snapshot().selected ?? new Set(allIds);
   }
 
   readonly toggle = (id: string, allIds: readonly string[]): void => {
@@ -73,7 +69,7 @@ export class ParkedDecisionFlow {
   };
 
   decide(decision: ParkedDecision, ids: readonly string[]): Promise<void> {
-    if (this.#snapshot.busy || ids.length === 0) return Promise.resolve();
+    if (this.#queue.snapshot().busy || ids.length === 0) return Promise.resolve();
     this.#set({ busy: true, error: null, decided: null });
 
     return settle(Effect.catchCause(Effect.gen({ self: this }, function* () {
@@ -89,9 +85,7 @@ export class ParkedDecisionFlow {
   }
 
   #set(partial: Partial<ParkedQueueSnapshot>): void {
-    this.#snapshot = { ...this.#snapshot, ...partial };
-
-    for (const listener of this.#listeners) listener();
+    this.#queue.set({ ...this.#queue.snapshot(), ...partial });
   }
 }
 

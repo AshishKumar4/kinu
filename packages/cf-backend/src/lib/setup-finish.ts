@@ -10,6 +10,7 @@ import { PERSONAL_ASSISTANT_ID } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import { completeOnboarding } from "@/lib/user-api";
 import { installBlueprint } from "@/lib/explore-api";
+import { createStore } from "@/lib/store";
 
 type AssistantInstall =
   | { readonly state: "installing"; readonly name: string }
@@ -26,33 +27,23 @@ export interface SetupFinish {
   readonly dismissed: boolean;
 }
 
-let current: SetupFinish | null = null;
+/** This page's finish, or null while setup has not finished here. */
+const finish = createStore<SetupFinish | null>(null);
 
 /** Hears the account's own stamp once it is saved: the welcome page's, which publishes it to the account. */
 let stamped: (onboardedAt: number) => void = () => {};
 
-const listeners = new Set<() => void>();
-
 function publish(change: Partial<SetupFinish>): void {
-  current = { assistant: null, stamp: { state: "saving" }, dismissed: false, ...current, ...change };
-
-  for (const listener of listeners) listener();
+  finish.set({ assistant: null, stamp: { state: "saving" }, dismissed: false, ...finish.snapshot(), ...change });
 }
 
-function subscribe(listener: () => void): () => void {
-  listeners.add(listener);
-
-  return () => { listeners.delete(listener); };
-}
-
-/** This page's finish, or null while setup has not finished here. */
 export function useSetupFinish(): SetupFinish | null {
-  return useSyncExternalStore(subscribe, () => current);
+  return useSyncExternalStore(finish.subscribe, finish.snapshot);
 }
 
 /** Whether setup finished in this page: the gate does not send the person back while the stamp is still out. */
 export function setupFinishing(): boolean {
-  return current !== null;
+  return finish.snapshot() !== null;
 }
 
 function install(name: string): Effect.Effect<void> {
@@ -94,7 +85,7 @@ export function finishSetup(assistant: string | null, onStamped: (onboardedAt: n
 /** Runs again what failed: the stamp, the install, or both. */
 export function retrySetupFinish(): Effect.Effect<void> {
   return Effect.suspend(() => {
-    const failed = current;
+    const failed = finish.snapshot();
 
     publish({ dismissed: false });
 

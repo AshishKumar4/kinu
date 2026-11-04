@@ -66,10 +66,7 @@ export class ErrorBoundary extends Component<Props, State> {
             This view crashed{this.props.label ? ` (${this.props.label})` : ''}. Try again, or reload the page.
           </div>
           <Surface look="tile" className="t-meta t-mono p-text-3 break-words p-3 border p-border text-left">
-            <strong className="block mb-2">{this.state.error.message || String(this.state.error)}</strong>
-            {this.state.error.stack && (
-              <pre className="t-meta t-mono whitespace-pre-wrap opacity-70">{this.state.error.stack}</pre>
-            )}
+            {this.state.error.message || String(this.state.error)}
           </Surface>
           <Button variant="secondary" size="sm" onClick={this.reset}>
             Try again

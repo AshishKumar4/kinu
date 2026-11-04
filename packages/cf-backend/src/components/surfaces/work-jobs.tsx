@@ -100,7 +100,7 @@ export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) 
   const act = (method: "cancelBackgroundJob" | "retryBackgroundJob" | "dismissBackgroundJob"): void => run(method, () => Effect.gen(function* () {
     const outcome = yield* Effect.promise(async () => rpc(method, [job.id]));
 
-    if (!outcome.ok) yield* Effect.fail(("error" in outcome ? outcome.error : undefined) ?? `${method.replace("BackgroundJob", "")} was refused`);
+    if (!outcome.ok) return yield* Effect.fail(("error" in outcome ? outcome.error : undefined) ?? `${method.replace("BackgroundJob", "")} was refused`);
   }));
 
   const m = statusMeta(job.status);

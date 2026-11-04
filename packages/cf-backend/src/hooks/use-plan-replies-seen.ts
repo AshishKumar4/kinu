@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
+import { readStored, writeStored } from "@/lib/stored";
 
 const seenKey = (planId: string): string => `kinu.plan-replies-seen.${planId}`;
 
 function readSeen(planId: string | null): number {
   if (planId === null) return 0;
-  const stored = Number(localStorage.getItem(seenKey(planId)));
+  const stored = Number(readStored(seenKey(planId)));
 
   return Number.isFinite(stored) ? stored : 0;
 }
@@ -33,7 +34,7 @@ export function usePlanRepliesSeen(planId: string | null): PlanRepliesSeen {
     if (planId === null) return;
     const now = Date.now();
     setSince(readSeen(planId));
-    localStorage.setItem(seenKey(planId), String(now));
+    writeStored(seenKey(planId), String(now));
     setSeenAt(now);
   }, [planId]);
 

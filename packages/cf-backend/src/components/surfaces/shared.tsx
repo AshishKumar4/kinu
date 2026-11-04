@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/Button";
 import { InlineAction } from "@/components/ui/InlineAction";
 import { CopyText } from "@/components/ui/CopyButton";
 import { Surface } from "@/components/ui/Surface";
+import { readStored, writeStored } from "@/lib/stored";
 
 const DIFF_LINE: Record<DiffLine["kind"], { tone: string; mark: string }> = {
   add: { tone: "p-badge-success px-3", mark: "+" },
@@ -257,14 +258,14 @@ export function Section({ id, title, icon, badge, defaultOpen = true, children }
 
   // Read once on mount, write only on toggle: mirroring state would persist defaults as if chosen.
   const [open, setOpen] = useState(() => {
-    const stored = localStorage.getItem(key);
+    const stored = readStored(key);
 
     return stored === null ? defaultOpen : stored === "1";
   });
 
   const toggle = () => {
     setOpen((prev) => {
-      localStorage.setItem(key, prev ? "0" : "1");
+      writeStored(key, prev ? "0" : "1");
 
       return !prev;
     });
@@ -275,7 +276,7 @@ export function Section({ id, title, icon, badge, defaultOpen = true, children }
       <Pressable className="group/section flex items-center gap-2 py-1" onClick={toggle} aria-expanded={open}>
         <CaretRightIcon
           size={12}
-          className={`shrink-0 p-text-3 transition-transform duration-150 ${open ? "rotate-90" : ""}`}
+          className={`shrink-0 p-fold-turn p-text-3${open ? " rotate-90" : ""}`}
         />
         {icon}
         <span className="t-label" data-section-title>{title}</span>

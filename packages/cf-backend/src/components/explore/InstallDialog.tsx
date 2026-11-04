@@ -7,7 +7,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/Button";
 import { DownloadSimpleIcon, KeyIcon } from "@phosphor-icons/react";
-import { APP_ROUTES, PERSONAL_ASSISTANT_ID } from "@kinu.run/core";
+import { APP_ROUTES, PERSONAL_ASSISTANT_ID, workspaceRoute } from "@kinu.run/core";
 import { Modal } from "@/components/ui/Modal";
 import { Select } from "@/components/ui/Select";
 import { Switch } from "@/components/ui/Switch";
@@ -36,7 +36,7 @@ export function InstallDialog({ page, connected, onClose }: { page: BlueprintPag
   const install = (): void => step.run("install", async () => {
     const workspace = await installBlueprint(page.workspace.id, assistant ? { displayName: name, agent: name, brief, home } : { displayName: name });
 
-    await navigate(assistant && home ? APP_ROUTES.home : `/workspace/${encodeURIComponent(workspace)}`);
+    await navigate(assistant && home ? APP_ROUTES.home : workspaceRoute(workspace));
   });
 
   return (

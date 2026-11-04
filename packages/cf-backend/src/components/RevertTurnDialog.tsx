@@ -3,7 +3,7 @@ import { Effect } from 'effect';
 import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { ClockCounterClockwiseIcon } from "@phosphor-icons/react";
-import { deviceHistoryNote, summarizeRestorePlan, type FileCheckpointEntry, type FileRestoreChange, type FileRestorePlan } from "@kinu.run/core";
+import { deviceHistoryNote, summarizeRestorePlan, type FileCheckpointEntry, type FileRestoreChange, type FileRestorePlan, countOf } from "@kinu.run/core";
 import { showing } from "@kinu.run/core/obs";
 import { Modal } from "@/components/ui/Modal";
 import { Notice } from "@/components/ui/Notice";
@@ -106,7 +106,7 @@ export function TurnRevert({ messageId, rpc, onClose, onReverted, onNotice }: {
     if (!plan) return;
 
     for (const entry of plan.entries) yield* Effect.promise(async () => rpc("restoreFileCheckpoint", [entry.dir, entry.id]));
-    onNotice(`Restored ${String(plan.files.length)} ${plan.files.length === 1 ? "file" : "files"}. Run restore again to undo it.`);
+    onNotice(`Restored ${countOf(plan.files.length, "file")}. Run restore again to undo it.`);
     setPlan(null);
   }), showing((chain) => {
     onNotice(`Restore failed: ${chain}`);
@@ -151,7 +151,7 @@ function RestoreFilesModal({ plan, busy, onCancel, onConfirm }: {
       footer={<>
         <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy}>Cancel</Button>
         <Button variant="primary" size="md" onClick={onConfirm} busy={busy}>
-          {busy ? "Restoring…" : `Restore ${plan.files.length} file${plan.files.length === 1 ? "" : "s"}`}
+          {busy ? "Restoring…" : `Restore ${countOf(plan.files.length, "file")}`}
         </Button>
       </>}
     >

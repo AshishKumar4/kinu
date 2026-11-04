@@ -3,6 +3,7 @@ import { ArrowsClockwiseIcon } from "@phosphor-icons/react";
 import {
   fmtTokens, fmtUsd, limitHeading, limitUnreadText, limitWindowText, quotaWindowText, timeAgo, usageTotal,
   type AccountSpend, type AccountUsage, type LimitReport, type LimitWindow,
+  countOf,
 } from "@kinu.run/core";
 import { getAccountUsage } from "@/lib/user-api";
 import { Card } from "@/components/ui/Card";
@@ -100,7 +101,7 @@ function SpendTable({ usage }: { usage: AccountUsage }) {
           </Group>
         )}
       <p className="t-meta p-text-3">
-        Across {usage.workspaces} workspace{usage.workspaces === 1 ? "" : "s"}, at API rates from the models.dev catalog;
+        Across {countOf(usage.workspaces, "workspace")}, at API rates from the models.dev catalog;
         a subscription is billed by its plan instead.
       </p>
       {usage.unread.length > 0 && (

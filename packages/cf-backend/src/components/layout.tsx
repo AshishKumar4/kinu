@@ -19,8 +19,6 @@ import { Button } from "@/components/ui/Button";
 import { Surface } from "@/components/ui/Surface";
 import { Drawer } from "@/components/ui/Drawer";
 
-/** The root isolates its stacking so the negative-z canvas paints above its ground and under in-flow children. */
-
 /** Opens the phone's menu drawer, for a page that draws its own top bar; null outside the shell. */
 const DrawerContext = createContext<(() => void) | null>(null);
 

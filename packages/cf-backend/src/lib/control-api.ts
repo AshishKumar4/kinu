@@ -9,7 +9,7 @@ import {
   ControlFeedbackRowSchema, MonitorIncidentSchema, type ControlAuditRow, type ControlFeedbackRow, type ControlMetrics,
   type ControlOverview, type ControlWorkspaceRow, type MonitorIncident,
 } from '@kinu.run/core/control-plane';
-import { settle, tolerateAsync } from '@kinu.run/core/obs';
+import { diagnostics, renderThrownChain, settle, toKinuError, tolerateAsync } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import type { ControlAction } from '../control-plane/actions';
 import { refusal, respond } from './http';
@@ -122,7 +122,7 @@ function control<Schema extends v.GenericSchema>(
 ): Effect.Effect<ControlAnswer<v.InferOutput<Schema>>> {
   const url = `/api/control${path}`;
 
-  return Effect.gen(function* () {
+  const answer: Effect.Effect<ControlAnswer<v.InferOutput<Schema>>> = Effect.gen(function* () {
     // Cloudflare Access fronts this route: once its sign-in lapses it redirects to its own origin, which a fetch may not
     // follow ("Failed to fetch"). Held, the redirect is the answer, and only a page load can sign in again.
     const response = yield* respond(url, { ...asked, redirect: 'manual' });
@@ -148,6 +148,15 @@ function control<Schema extends v.GenericSchema>(
       // A body this client cannot read is page/Worker version skew; say so rather than throw a valibot path.
       : { status: 'failed', reason: 'the control plane answered in a shape this page cannot read' };
   });
+
+  // A read the transport refused (fetch itself rejecting, not an HTTP answer) is a failure in the panel, recorded once.
+  return asked.method === undefined ? Effect.catchDefect(answer, (cause) => Effect.sync((): ControlAnswer<v.InferOutput<Schema>> => {
+    const failed = toKinuError({ doing: 'run a control-plane read', cause, otherwise: 'io' });
+
+    diagnostics.failure('control.read_failed', failed);
+
+    return { status: 'failed', reason: renderThrownChain({ cause }) };
+  })) : answer;
 }
 
 function pageQuery(cursor: string | null, limit?: number): string {

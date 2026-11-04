@@ -20,9 +20,9 @@ export function Drawer({ label, onClose, side = "right", children, ...data }: {
 } & Readonly<Record<`data-${string}`, string>>) {
   return (
     <Dialog.Root open onOpenChange={(open) => { if (!open) onClose(); }}>
-      <Dialog.Portal>
-        <Dialog.Backdrop className="p-scrim fixed inset-0 z-50 animate-fade-in" />
-        <Dialog.Popup className={`fixed inset-y-0 z-50 outline-none ${SIDE[side]}`} aria-label={label} {...data}>
+      <Dialog.Portal className="isolate">
+        <Dialog.Backdrop className="p-scrim fixed inset-0 animate-fade-in" />
+        <Dialog.Popup className={`fixed inset-y-0 outline-none ${SIDE[side]}`} aria-label={label} {...data}>
           {children}
         </Dialog.Popup>
       </Dialog.Portal>

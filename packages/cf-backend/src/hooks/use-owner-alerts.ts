@@ -14,31 +14,23 @@ import * as v from "valibot";
 import { useNavigate } from "react-router-dom";
 import { Effect } from "effect";
 import { detach, detachPromise } from "@kinu.run/core/obs";
-import { ownerIsAway, watchFrame, workspaceDisplayTitle, type AlertWatch, type OwnerAlert, type RosterEntry } from "@kinu.run/core";
+import { ownerIsAway, watchFrame, workspaceDisplayTitle, type AlertWatch, type OwnerAlert, type RosterEntry, workspaceRoute } from "@kinu.run/core";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
+import { readStored, writeStored } from "@/lib/stored";
+import { createStore } from "@/lib/store";
 
 const SOUND_KEY = "alert-sound";
 
-const soundListeners = new Set<() => void>();
+/** Whether this device plays the alert's sound: on unless the owner turned it off here, which its storage keeps. */
+const alertSound = createStore(readStored(SOUND_KEY) !== "off");
 
-/** Whether this device plays the alert's sound: on unless the owner turned it off here. */
 export function useAlertSound(): boolean {
-  return useSyncExternalStore(
-    (listener) => {
-      soundListeners.add(listener);
-
-      return () => { soundListeners.delete(listener); };
-    },
-    () => localStorage.getItem(SOUND_KEY) !== "off",
-    () => true,
-  );
+  return useSyncExternalStore(alertSound.subscribe, alertSound.snapshot, () => true);
 }
 
 export function setAlertSound(on: boolean): void {
-  if (on) localStorage.removeItem(SOUND_KEY);
-  else localStorage.setItem(SOUND_KEY, "off");
-
-  for (const listener of soundListeners) listener();
+  writeStored(SOUND_KEY, on ? null : "off");
+  alertSound.set(on);
 }
 
 let audio: AudioContext | null = null;
@@ -227,7 +219,7 @@ function useOwnerAlerts(): void {
     if (watch === null) watches.current.delete(frame.name);
     else watches.current.set(frame.name, watch);
 
-    if (said !== null && frame.entry !== null) alert(workspaceDisplayTitle(frame.entry), saysOf(said, frame.entry), `/workspace/${encodeURIComponent(frame.name)}`);
+    if (said !== null && frame.entry !== null) alert(workspaceDisplayTitle(frame.entry), saysOf(said, frame.entry), workspaceRoute(frame.name));
   }), [subscribe, alert]);
 
   // An account memory a workspace proposes waits on the owner too: each one new since the first read.

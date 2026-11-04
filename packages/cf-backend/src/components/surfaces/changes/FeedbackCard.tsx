@@ -4,6 +4,7 @@ import { sinceLabel } from "./diff";
 import { placeLabel } from "./notes";
 import { Bubble, BubbleRule } from "@/components/ui/Bubble";
 import { Pressable } from "@/components/ui/Pressable";
+import { countOf } from "@kinu.run/core";
 
 type CardNote = ChangeNotesCard["notes"][number];
 
@@ -47,8 +48,8 @@ export function FeedbackCard({ card, sentAt, now, onOpen }: {
     <div className="flex justify-end" data-feedback-card>
       <Bubble notes>
         <p className="t-body flex items-baseline gap-2">
-          <strong className="p-text">{card.notes.length} {card.notes.length === 1 ? "note" : "notes"} on the changes</strong>
-          <span className="t-meta p-text-3">{files} {files === 1 ? "file" : "files"} · {sinceLabel(sentAt, now)}</span>
+          <strong className="p-text">{countOf(card.notes.length, "note")} on the changes</strong>
+          <span className="t-meta p-text-3">{countOf(files, "file")} · {sinceLabel(sentAt, now)}</span>
         </p>
         <BubbleRule className="mt-2 pt-1">
           {card.notes.map((note) => (

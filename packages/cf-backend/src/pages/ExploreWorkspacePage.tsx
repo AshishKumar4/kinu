@@ -9,7 +9,7 @@ import { Link, useParams } from "react-router-dom";
 import { Effect } from "effect";
 import { Loader } from "@/components/ui/Loader";
 import { ClockIcon, HandPalmIcon, HouseIcon, KeyIcon, LayoutIcon, RobotIcon, StarIcon, AppWindowIcon, DownloadSimpleIcon } from "@phosphor-icons/react";
-import { APP_ROUTES, PERSONAL_ASSISTANT_ID } from "@kinu.run/core";
+import { APP_ROUTES, PERSONAL_ASSISTANT_ID, countOf } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { Status } from "@/components/ui/Status";
@@ -28,7 +28,7 @@ import { Surface } from "@/components/ui/Surface";
 const ago = (at: number) => {
   const days = Math.round((Date.now() - at) / 864e5);
 
-  return days <= 0 ? "today" : `${String(days)} day${days === 1 ? "" : "s"} ago`;
+  return days <= 0 ? "today" : `${countOf(days, "day")} ago`;
 };
 
 function Section({ title, children }: { title: string; children: ReactNode }) {

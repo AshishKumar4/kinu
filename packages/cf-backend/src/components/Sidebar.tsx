@@ -7,7 +7,7 @@ import { SidebarHeader } from "./SidebarHeader";
 import { SidebarFooter } from "./SidebarFooter";
 import { useWorkspaceRpc, type ConnectionStatus } from "../hooks/use-chat-owner";
 import { useWorkspaceRoster } from "../hooks/use-workspace-roster";
-import { isPlaceholderWorkspaceTitle, rosterHeadline, shortAge, workspaceDisplayTitle, WORKSPACE_TITLE_MAX, type PanelAgent, type RosterEntry, type WorkspaceEntry } from "@kinu.run/core";
+import { isPlaceholderWorkspaceTitle, rosterHeadline, shortAge, workspaceDisplayTitle, WORKSPACE_TITLE_MAX, type PanelAgent, type RosterEntry, type WorkspaceEntry, workspaceRoute } from "@kinu.run/core";
 import { useRename } from "@/hooks/use-rename";
 import { SidebarAgents } from "./SidebarAgents";
 import { ChatMascot, WorkspaceLogo } from "@/components/ui/Marks";
@@ -184,7 +184,7 @@ export default function Sidebar({ onCollapse, accountOpen = false }: { onCollaps
                       onDone={() => setEditingWorkspace(null)} />
                   ) : (
                     <>
-                      <NavRow to={`/workspace/${a.name}`} current={pathname === `/workspace/${a.name}` && panel === null} {...wakeAheadOf(a.name)}>
+                      <NavRow to={workspaceRoute(a.name)} current={pathname === workspaceRoute(a.name) && panel === null} {...wakeAheadOf(a.name)}>
                         <span className="relative flex shrink-0">
                           <WorkspaceLogo title={shown} logo={a.logo} />
                           <span className="p-logo-badge"><WorkspaceDot entry={a} /></span>
@@ -236,7 +236,7 @@ function WorkspaceChats({ panel, trigger, onAgents }: { panel: WorkspaceAgentsPa
         </li>
       ))}
       <li>
-        <NavRow to={`/workspace/${panel.workspace}/new`} size="sm" quiet>
+        <NavRow to={workspaceRoute(panel.workspace, "new")} size="sm" quiet>
           <PlusIcon size={14} className="shrink-0" aria-hidden /> <span className="t-body">New agent</span>
         </NavRow>
       </li>

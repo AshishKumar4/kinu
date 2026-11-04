@@ -79,7 +79,7 @@
     },
     {
       "key": "packages/cf-backend/src/pages/SwarmExplorer.tsx#ExplorerBody",
-      "complexity": 32
+      "complexity": 31
     },
     {
       "key": "scripts/coverage-lcov.ts#parseLcov",
@@ -115,7 +115,7 @@
     },
     {
       "key": "packages/cf-backend/src/components/surfaces/FileViewer.tsx#FileViewer",
-      "complexity": 30
+      "complexity": 29
     },
     {
       "key": "packages/pc-agent/src/index.js#handle",

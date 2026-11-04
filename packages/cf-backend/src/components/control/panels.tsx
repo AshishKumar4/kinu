@@ -19,9 +19,9 @@ interface ControlRead<Value> {
 
 /** `read` must be stable (useCallback): it is the read's identity, as `useAsyncResource`'s `load` is. */
 export function useControlRead<Value>(read: () => Promise<ControlAnswer<Value>>): ControlRead<Value> {
+  // `control()` answers every failure of a read, the transport's included; a rejection left is a defect.
   const { resource, reload } = useAsyncResource(read);
 
-  // `control()` names HTTP failures in its answer, so a rejection is the transport: settled as `failed`.
   if (resource.status === 'loading') return { load: { phase: 'loading' }, reload };
 
   return {

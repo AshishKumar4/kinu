@@ -16,7 +16,7 @@ export function LightboxFrame({ label, onClose, onKeyDown, children }: {
 }) {
   return (
     <Dialog.Root open onOpenChange={(open) => { if (!open) onClose(); }}>
-      <Dialog.Portal>
+      <Dialog.Portal className="isolate">
         <Dialog.Popup className="p-lightbox outline-none" aria-label={label} onKeyDown={onKeyDown}
           onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
           {children}

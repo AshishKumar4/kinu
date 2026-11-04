@@ -24,6 +24,7 @@ import { useMcpServers, useMcpWatch, type McpServers } from "@/hooks/use-mcp-ser
 import * as v from "valibot";
 import { renderThrownChain, detachPromise } from '@kinu.run/core/obs';
 import { useLabelledStep } from '@/hooks/use-labelled-step';
+import { countOf } from "@kinu.run/core";
 
 /** The panel over a read of its own, where no page around it shows the same servers. */
 export function McpServersSection() {
@@ -123,7 +124,7 @@ export function McpServersPanel({ mcp }: { mcp: McpServers }) {
                   <span>{s.transport}</span>
                   <span>·</span>
                   <span>
-                    {s.toolsCount} {s.toolsCount === 1 ? 'tool' : 'tools'}
+                    {countOf(s.toolsCount, 'tool')}
                     {s.allowedTools ? ` / ${s.allowedTools.length} allowed` : ''}
                   </span>
                 </div>

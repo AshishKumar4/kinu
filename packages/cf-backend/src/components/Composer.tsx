@@ -311,7 +311,6 @@ export function Composer({
   useEffect(() => { if (!streaming) setStopping(false); }, [streaming]);
   useEffect(() => { if (!stranded) setRecovering(false); }, [stranded]);
   // Enter while a turn runs steers it; it is never a no-op.
-  const submit = onSend;
   const menu = slash?.highlighted === undefined ? undefined : slash;
 
   return (
@@ -341,7 +340,7 @@ export function Composer({
               if (e.key !== "Enter" || e.shiftKey) return;
 
               e.preventDefault();
-              submit();
+              onSend();
 
               return;
             }
@@ -383,7 +382,7 @@ export function Composer({
               </ChromeButton>
             )}
             <SendControls streaming={streaming} empty={empty} blocked={disabled} stopping={stopping}
-              onSend={submit} onStop={() => { setStopping(true); onStop(); }} />
+              onSend={onSend} onStop={() => { setStopping(true); onStop(); }} />
           </div>
         </div>
       </div>
