@@ -10,8 +10,7 @@ import {
 import { KinuError } from '@kinu.run/core/obs';
 import type { UserDO } from '../user/user-do';
 import type { DriveAnswer } from '../user/drive';
-import { ownerGate, type ApiVariables, type FamilyEnv } from '../api/context';
-import { framedDownload } from '../file-download';
+import { framedDownload, ownerGate, type ApiVariables, type FamilyEnv } from '../api/context';
 import { idempotent } from '@nimbus-sh/fabric/do-calls.js';
 import { logDoCallRetry } from '../obs/do-call-retry';
 

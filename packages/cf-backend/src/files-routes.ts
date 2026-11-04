@@ -7,8 +7,7 @@ import * as v from 'valibot';
 import type { ExecutorFileChunkRead, ExecutorFileChunkWrite } from "./workspace-executors";
 import { KinuError } from "@kinu.run/core/obs";
 import { err, fileResponseHeaders, json } from "@kinu.run/core";
-import type { FamilyEnv } from './api/context';
-import { framedDownload } from './file-download';
+import { framedDownload, type FamilyEnv } from './api/context';
 import { LITERAL_WORKSPACE, type WorkspaceVariables } from './api/workspace';
 
 export interface FilesRouteAgent {

@@ -22,7 +22,7 @@ const entry = join(dir, 'worker.ts');
 writeFileSync(entry, `
 import { serveDownload } from ${JSON.stringify(join(root, 'packages/core/src/read-models/file-transfer.ts'))};
 import { fileResponseHeaders } from ${JSON.stringify(join(root, 'packages/core/src/http/http.ts'))};
-import { framedDownload } from ${JSON.stringify(join(root, 'packages/cf-backend/src/file-download.ts'))};
+import { framedDownload } from ${JSON.stringify(join(root, 'packages/cf-backend/src/api/context.ts'))};
 
 const FILE = new TextEncoder().encode('KINU-EVERY-TOOL');
 
