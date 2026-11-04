@@ -15,8 +15,6 @@ import { withGallery, type Gallery } from '../../scripts/gallery-harness';
 
 const VIEWPORTS = { desktop: { width: 1280, height: 860 }, mobile: { width: 390, height: 1400 } } as const;
 
-const SOON = { timeout: 15_000 } as const;
-
 /**
  * In each part frame, from its first render on: every count of nested frames it held, as the slate's page can read it
  * off the frame's window, and whether a nested frame was ever taken out. A count that differs by state, or a frame
@@ -77,9 +75,9 @@ async function freshPage(gallery: Gallery, query: string, theme: 'dark' | 'light
 
 /** One part's frame inside the slate's page, once it has drawn the part's state. */
 async function partFrame(page: Page, part: string): Promise<Frame> {
-  const found = await page.waitForFrame((frame) => frame.url().includes(`frame=part-frame&part=${part}`), SOON);
+  const found = await page.waitForFrame((frame) => frame.url().includes(`frame=part-frame&part=${part}`));
 
-  await found.waitForSelector('[data-part-frame]', SOON);
+  await found.waitForSelector('[data-part-frame]');
 
   return found;
 }
@@ -87,7 +85,7 @@ async function partFrame(page: Page, part: string): Promise<Frame> {
 const stateOf = (frame: Frame) => frame.$eval('[data-part-frame]', (node) => node.getAttribute('data-part-frame'));
 
 /** Waits until the part's frame draws `state`. */
-const reaches = (frame: Frame, state: string) => frame.waitForSelector(`[data-part-frame="${state}"]`, SOON);
+const reaches = (frame: Frame, state: string) => frame.waitForSelector(`[data-part-frame="${state}"]`);
 
 const AskedSchema = v.array(v.object({ path: v.string(), body: v.nullable(v.string()) }));
 
@@ -124,11 +122,11 @@ async function serveSlatePage(page: Page, gallery: string): Promise<void> {
 
 /** The standup part's frame inside one of the owner's previews (`pane` or `inline`), once it has drawn its state. */
 async function previewPart(page: Page, display: string): Promise<Frame> {
-  const preview = await page.waitForSelector(`[data-slate-preview-display="${display}"] iframe`, SOON);
+  const preview = await page.waitForSelector(`[data-slate-preview-display="${display}"] iframe`);
   const slate = await preview?.contentFrame();
-  const found = await page.waitForFrame((frame) => frame.parentFrame() === slate && frame.url().includes('frame=part-frame&part=standup'), SOON);
+  const found = await page.waitForFrame((frame) => frame.parentFrame() === slate && frame.url().includes('frame=part-frame&part=standup'));
 
-  await found.waitForSelector('[data-part-frame]', SOON);
+  await found.waitForSelector('[data-part-frame]');
 
   return found;
 }
@@ -155,7 +153,7 @@ describe("a slate's personal parts", () => {
           // The connection by the title the viewer's account gives it.
           expect(await standup.$eval('[data-part-needs="consent"]', (node) => node.textContent ?? '')).toContain('GitHub connection');
           await standup.click('[data-part-needs="consent"] button');
-          await page.waitForSelector('[data-consent-allow]', SOON);
+          await page.waitForSelector('[data-consent-allow]');
           expect(await page.$('[data-consent-changed]')).not.toBeNull();
           await noDecisionIn(standup);
           await page.click('[data-consent-allow]');
@@ -164,16 +162,16 @@ describe("a slate's personal parts", () => {
 
           // Its own control runs it again, Kinu's and not the slate's script.
           await standup.click('[data-part-action="refresh"]');
-          await page.waitForFunction((count) => JSON.parse(document.documentElement.getAttribute('data-gallery-asked') ?? '[]').filter((each: { path: string }) => each.path.endsWith('/parts/standup/run')).length >= count, SOON, 3);
+          await page.waitForFunction((count) => JSON.parse(document.documentElement.getAttribute('data-gallery-asked') ?? '[]').filter((each: { path: string }) => each.path.endsWith('/parts/standup/run')).length >= count, {}, 3);
 
           // Show to everyone: exactly what leaves, and that it can't be taken back, before it does.
           await standup.click('[data-part-show]');
-          await page.waitForSelector('[data-show-confirm]', SOON);
+          await page.waitForSelector('[data-show-confirm]');
           expect(await page.$('[data-show-final]')).not.toBeNull();
           expect(JSON.parse(await page.$eval('[data-show-payload]', (node) => node.textContent ?? 'null'))).toEqual({ author: 'you', open: [412, 409] });
           await noDecisionIn(standup);
           await page.click('[data-show-confirm]');
-          await page.waitForFunction(() => document.querySelector('[data-show-confirm]') === null, SOON);
+          await page.waitForFunction(() => document.querySelector('[data-show-confirm]') === null);
           const shown = (await asked(page)).find((each) => each.path.endsWith('/parts/standup/show'));
 
           expect(JSON.parse(shown?.body ?? '{}')).toEqual({ revision: 'r2', label: 'Your open pull requests, as the team sees them', value: { author: 'you', open: [412, 409] } });
@@ -185,12 +183,12 @@ describe("a slate's personal parts", () => {
           await deploy.click('[data-part-action="deploy"]');
           await reaches(deploy, 'needs-consent');
           await deploy.click('[data-part-needs="consent"] button');
-          await page.waitForSelector('[data-consent-allow]', SOON);
+          await page.waitForSelector('[data-consent-allow]');
           expect(await page.$('[data-consent-changed]')).toBeNull();
           await page.click('[data-consent-allow]');
           await reaches(deploy, 'needs-approval');
           await deploy.click('[data-part-needs="approval"] button');
-          await page.waitForSelector('[data-approval-approve]', SOON);
+          await page.waitForSelector('[data-approval-approve]');
           expect(JSON.parse(await page.$eval('[data-approval-payload]', (node) => node.textContent ?? 'null'))).toEqual({ project: 'site', target: 'production', ref: 'release-7' });
           expect(await page.$eval('[data-approval-tool]', (node) => node.textContent)).toBe('Create deployment');
           await noDecisionIn(deploy);
@@ -226,12 +224,12 @@ describe("a slate's personal parts", () => {
         const team = await partFrame(page, 'team');
 
         expect(await stateOf(standup)).toBe('stub');
-        await standup.waitForSelector('[data-part-stub="signed-out"] button', SOON);
+        await standup.waitForSelector('[data-part-stub="signed-out"] button');
         expect(await stateOf(team)).toBe('failed');
-        const deploy = await page.waitForFrame((frame) => frame.url().includes('frame=part-frame&part=deploy'), SOON);
+        const deploy = await page.waitForFrame((frame) => frame.url().includes('frame=part-frame&part=deploy'));
 
         // A refusal says why in the server's own words, not as the app's internal failure.
-        expect(await (await deploy.waitForSelector('[role="alert"]', SOON))?.evaluate((node) => node.textContent)).toContain("The workspace didn't answer in time.");
+        expect(await (await deploy.waitForSelector('[role="alert"]'))?.evaluate((node) => node.textContent)).toContain("The workspace didn't answer in time.");
         expect(await deploy.$eval('[role="alert"]', (node) => node.textContent)).not.toContain('Cause(');
 
         // Refused, failed or never answered, each part frame holds the one nested frame every other state holds.
@@ -240,7 +238,7 @@ describe("a slate's personal parts", () => {
         const here = new URL(page.url());
 
         const [login] = await Promise.all([
-          page.waitForRequest((request) => new URL(request.url()).pathname === '/login', SOON),
+          page.waitForRequest((request) => new URL(request.url()).pathname === '/login'),
           standup.click('[data-part-stub="signed-out"] button'),
         ]);
 
@@ -261,12 +259,12 @@ describe("a slate's personal parts", () => {
 
         expect(await stateOf(standup)).toBe('needs-consent');
         await standup.click('[data-part-needs="consent"] button');
-        await page.waitForSelector('[data-consent-allow]', SOON);
+        await page.waitForSelector('[data-consent-allow]');
         await page.click('[data-consent-dismiss]');
-        await page.waitForFunction(() => (document.documentElement.getAttribute('data-gallery-asked') ?? '').includes('/parts/standup/release'), SOON);
+        await page.waitForFunction(() => (document.documentElement.getAttribute('data-gallery-asked') ?? '').includes('/parts/standup/release'));
 
         // Let go, the run is never resumed: the part runs afresh and asks again, for a run of its own.
-        await page.waitForFunction(() => JSON.parse(document.documentElement.getAttribute('data-gallery-asked') ?? '[]').filter((each: { path: string }) => each.path.endsWith('/parts/standup/run')).length >= 2, SOON);
+        await page.waitForFunction(() => JSON.parse(document.documentElement.getAttribute('data-gallery-asked') ?? '[]').filter((each: { path: string }) => each.path.endsWith('/parts/standup/run')).length >= 2);
         const [first, again] = await runs();
         const released = (await asked(page)).find((each) => each.path.endsWith('/parts/standup/release'));
 
@@ -276,7 +274,7 @@ describe("a slate's personal parts", () => {
         await reaches(standup, 'needs-consent');
 
         await standup.click('[data-part-needs="consent"] button');
-        await page.waitForSelector('[data-consent-allow]', SOON);
+        await page.waitForSelector('[data-consent-allow]');
         await page.click('[data-consent-allow]');
         await reaches(standup, 'shown');
         const resumed = (await runs()).at(-1)?.continuation;
@@ -295,7 +293,7 @@ describe("a slate's personal parts", () => {
         const page = await freshPage(gallery, 'shared-live', theme, viewport);
 
         try {
-          await page.waitForSelector('[data-shared-slate="team-board"]', SOON);
+          await page.waitForSelector('[data-shared-slate="team-board"]');
           expect(await page.$eval('[data-shared-title]', (node) => node.textContent)).toBe('Team board');
 
           // The slate's page is framed with its host context, as the owner's previews frame it: the app's origin its page
@@ -309,7 +307,7 @@ describe("a slate's personal parts", () => {
           const standup = await partFrame(page, 'standup');
 
           await standup.click('[data-part-needs="consent"] button');
-          await page.waitForSelector('[data-consent-allow]', SOON);
+          await page.waitForSelector('[data-consent-allow]');
           await noDecisionIn(standup);
           await page.click('[data-consent-allow]');
           await reaches(standup, 'shown');
@@ -325,11 +323,11 @@ describe("a slate's personal parts", () => {
       const page = await freshPage(gallery, 'shared-live-signed-out', 'light', 'desktop');
 
       try {
-        await page.waitForSelector('[data-shared-sign-in] button', SOON);
+        await page.waitForSelector('[data-shared-sign-in] button');
         const here = new URL(page.url());
 
         const [login] = await Promise.all([
-          page.waitForRequest((request) => new URL(request.url()).pathname === '/login', SOON),
+          page.waitForRequest((request) => new URL(request.url()).pathname === '/login'),
           page.click('[data-shared-sign-in] button'),
         ]);
 
@@ -354,7 +352,7 @@ describe("a slate's personal parts", () => {
 
           expect(await stateOf(standup)).toBe('needs-consent');
           await standup.click('[data-part-needs="consent"] button');
-          await page.waitForSelector('[data-consent-allow]', SOON);
+          await page.waitForSelector('[data-consent-allow]');
           await noDecisionIn(standup);
           await page.click('[data-consent-allow]');
           await reaches(standup, 'shown');
@@ -370,7 +368,7 @@ describe("a slate's personal parts", () => {
       const page = await freshPage(gallery, 'part-frame&part=standup', 'light', 'desktop');
 
       try {
-        await page.waitForSelector('[data-part-outside]', SOON);
+        await page.waitForSelector('[data-part-outside]');
         expect(await page.$('[data-part-frame]')).toBeNull();
         expect(await framesHeld(page.mainFrame())).toEqual(ONE_FRAME_THROUGHOUT);
       } finally {

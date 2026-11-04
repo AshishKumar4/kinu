@@ -95,8 +95,11 @@ export const MINUTE_WAITED_OUT = 'Waited out the minute.';
 const MINUTE_MS = 60_000;
 
 /** The row's side of the provider-wait script: the waited turn refused once, and the logo's refusals counted, so the
- *  row waits on the server having refused, never on a clock. */
+ *  row waits on the server having refused, never on a clock. The per-minute refusal is the provider's own window, timed
+ *  by the clock the probe is handed. */
 export class ProviderWaitProbe {
+  constructor(private readonly now: () => number) {}
+
   turnRefused = false;
 
   /** When the minute-limited turn's first call was refused. */
@@ -115,6 +118,13 @@ export class ProviderWaitProbe {
     return promise;
   }
 
+  /** Whether a call falls inside the minute the first minute-limited call began. */
+  withinMinute(): boolean {
+    this.minuteFrom ??= this.now();
+
+    return this.now() - this.minuteFrom < MINUTE_MS;
+  }
+
   refuseLogo(): ScriptedAnswer {
     this.logos += 1;
 
@@ -130,9 +140,7 @@ export function providerWaitTurn(request: ScriptedRequest, probe: ProviderWaitPr
   }
 
   if (request.streamed && (request.userTexts.at(-1) ?? '').includes(MINUTE_LIMITED_ASK)) {
-    probe.minuteFrom ??= Date.now();
-
-    return Date.now() - probe.minuteFrom < MINUTE_MS ? { rateLimited: { perMinute: true } } : { text: MINUTE_WAITED_OUT };
+    return probe.withinMinute() ? { rateLimited: { perMinute: true } } : { text: MINUTE_WAITED_OUT };
   }
 
   if (!request.streamed || !(request.userTexts.at(-1) ?? '').includes(WAITED_TURN_ASK)) return null;

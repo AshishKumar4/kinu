@@ -603,13 +603,6 @@
       "decision": "lexical"
     },
     {
-      "file": "scripts/review-package.ts",
-      "kind": "regex-literal",
-      "owner": "artifactHtml",
-      "sourceSha256": "7eb623284311613b1d5f5d089b629a265cfd2d210d9b1ee62fa659c6f51f7aa0",
-      "decision": "lexical"
-    },
-    {
       "file": "scripts/syntax.ts",
       "kind": "hand-parser",
       "owner": "parse",
@@ -622,13 +615,6 @@
       "owner": "ASSERTING_IMPORT",
       "sourceSha256": "0ddad50727f73a4801327618cad1eeba2795063680593f769b077e0d4694497f",
       "decision": "lexical"
-    },
-    {
-      "file": "scripts/workflow-expressions.ts",
-      "kind": "hand-parser",
-      "owner": "tokenize",
-      "sourceSha256": "be06a99722260c66d8daee0862a9290002ad134306b6e61d9c1dead7c422e1a3",
-      "decision": "grammar"
     },
     {
       "file": "scripts/xml.ts",

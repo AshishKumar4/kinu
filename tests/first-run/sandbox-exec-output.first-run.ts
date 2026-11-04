@@ -74,7 +74,7 @@ function programDetail(absent: boolean, jobId: string | undefined, status: strin
 }
 
 describe(SUITE, () => {
-  liveTest(`MEASURED: ${CASE}`, { timeout: 12 * 60_000 }, async () => {
+  liveTest(`MEASURED: ${CASE}`, async () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
 
     await runFirstRunCase(PLAN, {

@@ -322,6 +322,9 @@ export const isEvalTask = (file: string): boolean => isVitestEvalSuite(file) && 
  *  rather than against the discovery roots someone remembered to name. */
 export const isPythonSuite = (file: string): boolean => PYTHON_SUITE.test(file);
 
+/** A vitest config: the runner side of every suite vitest runs, where its per-test and per-hook clocks are set. */
+export const isVitestConfig = (file: string): boolean => /(?:^|\/)vitest(?:\.[\w-]+)?\.config\.[cm]?ts$/u.test(file);
+
 /**
  * A first-run suite: the post-deploy tier that drives the DEPLOYED product.
  *

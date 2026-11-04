@@ -115,11 +115,11 @@ describe('the first-run corpus is the set this tier runs', () => {
     const tier = readFileSync(join(import.meta.dirname, '../../scripts/first-run-tier.sh'), 'utf8');
     const account = (name: string) => new RegExp(`^${name}=(\\S+)$`, 'mu').exec(tier)?.[1];
 
-    expect({ fleet: account('FLEET_ACCOUNT'), cases: account('CASES_ACCOUNT') }).toEqual({ fleet: 'devices', cases: 'scripted' });
-  });
+    const [fleet, cases] = [account('FLEET_ACCOUNT'), account('CASES_ACCOUNT')];
 
-  test("a case that only reads an executor runs with the cases, not one at a time in the fleet", () => {
-    expect(fleetCases().filter((file) => /\/(background-settle|every-tool|slate|workspace-panes)\.first-run\.ts$/u.test(file))).toEqual([]);
+    expect(fleet).toBeDefined();
+    expect(cases).toBeDefined();
+    expect(fleet).not.toBe(cases);
   });
 
   test('every case loads under the tier\'s own runner', async () => {

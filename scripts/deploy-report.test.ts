@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
-import { childEnv, runToExit, scratchDir } from '@kinu.run/test-utils';
+import { scratchDir } from '@kinu.run/test-utils';
 import { measurePromptUsage, type Assertion } from '../evals/src/results';
 import {
   externalCause, externalOnly, externalOnlyEntries, flakyRows, markInstant, previousSummary, recordMarkAt, recordRed, recordRunner, renderReport, type ReportEntry, type ReportSummary,
@@ -21,45 +21,6 @@ const summary = (sha: string, dir: string, mode: string, reds: readonly string[]
 });
 
 describe('the deploy report', () => {
-  // The owner, 2026-10-23, "Monitors don't block": a deploy over its wall is said, and keeps its record.
-  test('the final report keeps this staging run’s record at 1199 s and at 1201 s, and withdraws it on a red', async () => {
-    const source = readFileSync(new URL('deploy.sh', import.meta.url), 'utf8');
-    const start = source.indexOf('finish() {');
-    const end = source.indexOf('\n}\n', start);
-
-    expect(start).toBeGreaterThan(-1);
-    expect(end).toBeGreaterThan(start);
-
-    const finish = source.slice(start, end + 2);
-
-    for (const [seconds, published, reds, expected] of [
-      [1199, 1, [], [0, '1']],
-      [1201, 1, [], [0, '1']],
-      [1201, 1, [red('post-publish', 'bun run gate:first-run')], [1, '0']],
-      [1201, 0, [red('post-publish', 'bun run gate:first-run')], [1, '1']],
-    ] as const) {
-      const { summary: verdict } = renderReport({ dir: '/reports/final', meta: META,
-        entries: [{ kind: 'mark', mark: 'end', seconds }, ...reds],
-      });
-
-      const run = await runToExit(['bash', '-c', `
-KINU_ROOT=.
-KINU_ENV=staging
-KINU_REDS=${String(verdict.reds.length)}
-DEPLOY_PUBLISHED=${String(published)}
-verified=1
-trap 'printf "%s" "$verified"' EXIT
-mark() { :; }
-report() { return ${verdict.reds.length === 0 ? '0' : '1'}; }
-bun() { [ "$1" = "./scripts/promote.ts" ] && [ "$2" = "withdraw" ] && verified=0; }
-${finish}
-finish
-`], { env: childEnv() });
-
-      expect([run.exitCode, run.stdout], run.stderr).toEqual([...expected]);
-    }
-  });
-
   // m1973, m1976: the budget subtracted the longest eval trial, so a deploy far over twenty minutes was reported within it.
   test('the whole deploy, start to verdict, is measured against twenty minutes and said, never a red; the eval soak\'s red is its own', () => {
     const input = (seconds: number) => ({

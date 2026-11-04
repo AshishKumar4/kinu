@@ -133,7 +133,7 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
     // through the session's turn throwing rather than through a low count. Raising it
     // would trade a real floor for a flake on a model wobble.
     expect(correctCount).toBeGreaterThanOrEqual(1);
-  }, 1800_000);
+  });
 
   liveTest('scorecard and evolution summary', () => {
     console.log('\n  ══════════════════════════════════════════════');

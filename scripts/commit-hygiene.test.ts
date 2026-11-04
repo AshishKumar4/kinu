@@ -28,7 +28,7 @@ import { join, resolve } from 'node:path';
 import * as v from 'valibot';
 import { git, gitEnv, initRepo, runToExit, scratchDir } from '@kinu.run/test-utils';
 import {
-  ALLOWED_PREFIXES, GENERATED_SUBJECT, MESSAGE_LINE_CEILING, NAMES_WITHOUT_CODE,
+  ALLOWED_PREFIXES, GENERATED_SUBJECT, NAMES_WITHOUT_CODE,
   ROSTER, type Rule, SUBJECT_CEILING, cleanMessage, codeIdentifierTest,
   committedIdentifierTest, inspect, sizeViolations, subjectOf, proseOnly,
   truncatedHistoryRefusal,
@@ -351,17 +351,13 @@ describe('the subject convention', () => {
       isCode)).toEqual([]);
   });
 
-  test('the ceiling is 80, from the measured p90 of 82', () => {
-    expect(SUBJECT_CEILING).toBe(80);
-    // The exemplar the convention was declared with is exactly at the ceiling.
-    const exemplar = 'docs(exploration-spec): specify agent nodes, report-tool grading, and merge-back';
-    expect(exemplar.length).toBe(80);
+  test('a subject at the ceiling passes and one past it is refused', () => {
+    const exemplar = `docs(spec): ${'x'.repeat(SUBJECT_CEILING - 'docs(spec): '.length)}`;
     expect(inspect(exemplar, isCode)).toEqual([]);
     expect(inspect(`${exemplar}s`, isCode)[0]?.rule).toBe('subject-length');
   });
 
   test('a message is the subject and at most four more lines; blank lines are free', () => {
-    expect(MESSAGE_LINE_CEILING).toBe(5);
     const four = 'fix(core): widen the bound\n\nOne.\nTwo.\nThree.\nFour.';
     expect(sizeViolations(four)).toEqual([]);
     expect(sizeViolations(`${four}\n\n\n`)).toEqual([]);

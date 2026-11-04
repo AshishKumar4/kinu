@@ -59,7 +59,7 @@ function pngSize(base64: string): { readonly width: number; readonly height: num
 }
 
 describe(SUITE, () => {
-  liveTest(`MEASURED: ${CASE}`, { timeout: 12 * 60_000 }, async () => {
+  liveTest(`MEASURED: ${CASE}`, async () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
 
     await runFirstRunCase(PLAN, {

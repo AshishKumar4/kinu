@@ -399,7 +399,7 @@ describe('Evolution Proof', () => {
     console.log(`    Answered ${String(answered)}, expected ${String(RSA_ANSWER_1)}`);
     expect(answered).toBe(RSA_ANSWER_1);
     await rateAsChecked(result.turnId);
-  }, 0);
+  });
 
   liveTest('session 1, turn 2: Dijkstra challenge (learn algorithm pattern)', async () => {
     const result = await proofTurn(session(), DIJKSTRA_CHALLENGE_1);
@@ -415,7 +415,7 @@ describe('Evolution Proof', () => {
     console.log(`    Answered ${String(answered)}, expected ${String(DIJKSTRA_ANSWER_1)}`);
     expect(answered).toBe(DIJKSTRA_ANSWER_1);
     await rateAsChecked(result.turnId);
-  }, 0);
+  });
 
   liveTest('session 1, turn 3: cipher challenge', async () => {
     const result = await proofTurn(session(), CIPHER_CHALLENGE);
@@ -443,7 +443,7 @@ describe('Evolution Proof', () => {
     const evolved = (agent?.events ?? []).flatMap((event) => (event.type === 'evolution' ? [`${event.event}: ${event.message.slice(0, 80)}`] : []));
     console.log(`    Session 1 evolution: ${evolved.join(' | ') || '(none)'}`);
     agent = undefined;
-  }, 0);
+  });
 
   // ── Verify evolution happened ────────────────────────────────
 
@@ -538,7 +538,7 @@ describe('Evolution Proof', () => {
     const answered = finalIntegerAnswer(result.text);
     console.log(`    Answered ${String(answered)}, expected ${String(RSA_ANSWER_2)}`);
     expect(answered).toBe(RSA_ANSWER_2);
-  }, 0);
+  });
 
   liveTest('session 2, turn 2: similar graph challenge with inherited artifacts', async () => {
     const result = await proofTurn(session(), DIJKSTRA_CHALLENGE_2);
@@ -553,7 +553,7 @@ describe('Evolution Proof', () => {
     const answered = finalIntegerAnswer(result.text);
     console.log(`    Answered ${String(answered)}, expected ${String(DIJKSTRA_ANSWER_2)}`);
     expect(answered).toBe(DIJKSTRA_ANSWER_2);
-  }, 0);
+  });
 
   // ── Final analysis ─────────────────────────────────────────────
 

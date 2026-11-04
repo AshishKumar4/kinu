@@ -111,7 +111,7 @@ describe(SUITE, () => {
   // owes no more of; the harness retains the ledger as found and the verdict
   // reads it. No wall clock of this row's own: no setTimeout, no Date
   // comparison, no per-test timeout beyond this shared shape.
-  liveTest(`MEASURED: ${CASE}`, { timeout: 24 * 60_000 }, async () => {
+  liveTest(`MEASURED: ${CASE}`, async () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
 
     await runFirstRunCase(PLAN, {
