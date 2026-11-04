@@ -502,10 +502,14 @@ function stopProcessMember({ handle, touch }: Computer): ExecutorTool {
         return refusalOf(new KinuError('bad_input', 'computer.stopProcess: processId must be a string'));
       }
 
-      return settle(Effect.match(Effect.tryPromise({
-        try: () => withSandboxRetry(() => touch(() => handle.stopSupervisedProcess(processId))),
-        catch: (cause) => sandboxFailure({ doing: `computer.stopProcess ${processId}`, cause }),
-      }), { onSuccess: (result) => ({ stopped: result.stopped }), onFailure: refusalOf }));
+      try {
+        const result = await withSandboxRetry(() =>
+          touch(() => handle.stopSupervisedProcess(processId)));
+
+        return { stopped: result.stopped };
+      } catch (err) {
+        return refusalOf(sandboxFailure({ doing: `computer.stopProcess ${processId}`, cause: err }));
+      }
     },
   };
 }
@@ -524,10 +528,11 @@ function logsMember({ handle, touch }: Computer): ExecutorTool {
         return refusalOf(new KinuError('bad_input', 'computer.logs: takes a process id and its limits as one object, `{ lines?, bytes? }`'));
       }
 
-      return settle(Effect.match(Effect.tryPromise({
-        try: () => withSandboxRetry(() => touch(() => handle.supervisedProcessLogs(processId, limits))),
-        catch: (cause) => sandboxFailure({ doing: `computer.logs ${processId}`, cause }),
-      }), { onSuccess: (answer) => answer, onFailure: refusalOf }));
+      try {
+        return await withSandboxRetry(() => touch(() => handle.supervisedProcessLogs(processId, limits)));
+      } catch (err) {
+        return refusalOf(sandboxFailure({ doing: `computer.logs ${processId}`, cause: err }));
+      }
     },
   };
 }
@@ -544,14 +549,17 @@ function listProcessesMember({ handle, touch }: Computer): ExecutorTool {
     execute: async () => {
       if (!handle) return notConfigured();
 
-      return settle(Effect.match(Effect.tryPromise({
-        try: () => withSandboxRetry(() => touch(async () => {
+      try {
+        const rows = await withSandboxRetry(() => touch(async () => {
           await handle.ensureReady();
 
           return handle.listSupervisedProcesses();
-        })),
-        catch: (cause) => sandboxFailure({ doing: 'computer.listProcesses', cause }),
-      }), { onSuccess: (rows) => rows.map((row) => projectJsonValue({ value: row })), onFailure: refusalOf }));
+        }));
+
+        return rows.map((row) => projectJsonValue({ value: row }));
+      } catch (err) {
+        return refusalOf(sandboxFailure({ doing: 'computer.listProcesses', cause: err }));
+      }
     },
   };
 }

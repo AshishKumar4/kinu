@@ -15,7 +15,7 @@ import { sessionRuntimeBins, workspaceCommandNotFound } from '../vfs/workspace-r
 import { shellQuote } from '../utils/shell';
 import { execIdsOf, principalExecId } from './secrets-caller';
 import { commandTool, LogLimitsSchema, type ExecutorCapability, type ExecutorProvider, type ExecutorStatus, type ExecutorTool, type PortExposureResult, type PreviewRouteCheck } from './types';
-import { attempt, detach, hold, KinuError, logged, refusalOf, renderThrownChain, settle, toKinuError, type Refusal } from '../obs/index';
+import { attempt, detach, hold, KinuError, logged, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import { Cause, Effect, Exit } from 'effect';
 import { newJobId, type AdoptsJobs } from '../types/jobs';
 import { currentWorkMode } from './work-mode';
@@ -165,13 +165,14 @@ export async function startJobProcess(
 
   if ('success' in control) return control;
   const { command, cwd, jobId } = request;
+  let pid: number;
 
-  const pid = await settle(Effect.match(Effect.tryPromise({
-    try: () => touch(() => control.startProcess(command, { ...(cwd !== undefined && { cwd }), execId: principalExecId(jobId) })),
-    catch: (cause) => toKinuError({ doing: `nimbus startProcess \`${command}\``, cause, otherwise: 'io' }),
-  }), { onSuccess: (started): number | Refusal => started.pid, onFailure: refusalOf }));
+  try {
+    pid = (await touch(() => control.startProcess(command, { ...(cwd !== undefined && { cwd }), execId: principalExecId(jobId) }))).pid;
+  } catch (err) {
+    return refusalOf(toKinuError({ doing: `nimbus startProcess \`${command}\``, cause: err, otherwise: 'io' }));
+  }
 
-  if (typeof pid !== 'number') return pid;
   const processId = String(pid);
 
   return {
@@ -250,10 +251,11 @@ function stopProcessMember({ box, touch }: NimbusReach): ExecutorTool {
 
       if (pid === undefined) return refusalOf(new KinuError('bad_input', `nimbus stopProcess: no process id ${stringifyResult({ value: args[0] })}`));
 
-      return settle(Effect.match(Effect.tryPromise({
-        try: async () => ({ stopped: v.parse(KilledSchema, await touch(() => kill(pid))).ok }),
-        catch: (cause) => toKinuError({ doing: `nimbus stopProcess ${String(pid)}`, cause, otherwise: 'io' }),
-      }), { onSuccess: (answer) => answer, onFailure: refusalOf }));
+      try {
+        return { stopped: v.parse(KilledSchema, await touch(() => kill(pid))).ok };
+      } catch (err) {
+        return refusalOf(toKinuError({ doing: `nimbus stopProcess ${String(pid)}`, cause: err, otherwise: 'io' }));
+      }
     },
   };
 }
@@ -298,10 +300,11 @@ function logsMember({ box, touch }: NimbusReach): ExecutorTool {
           `nimbus logs: takes a process id and its limits as one object, \`{ lines?, bytes? }\`; got ${stringifyResult({ value: args })}`));
       }
 
-      return settle(Effect.match(Effect.tryPromise({
-        try: async () => v.parse(LoggedSchema, await touch(() => readLogs(pid, limits))).text,
-        catch: (cause) => toKinuError({ doing: `nimbus logs ${String(pid)}`, cause, otherwise: 'io' }),
-      }), { onSuccess: (answer) => answer, onFailure: refusalOf }));
+      try {
+        return v.parse(LoggedSchema, await touch(() => readLogs(pid, limits))).text;
+      } catch (err) {
+        return refusalOf(toKinuError({ doing: `nimbus logs ${String(pid)}`, cause: err, otherwise: 'io' }));
+      }
     },
   };
 }
