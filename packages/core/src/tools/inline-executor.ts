@@ -323,15 +323,11 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     async listExposedPorts() { return []; },
   };
 
-  if (resourceLimits !== undefined) {
-    Object.assign(provider, { resourceLimits });
-  }
-
-  if (deps.unmeasured !== undefined) {
-    Object.assign(provider, { unmeasuredCapabilities: new Set(deps.unmeasured) });
-  }
-
-  return provider;
+  return {
+    ...provider,
+    ...(resourceLimits !== undefined && { resourceLimits }),
+    ...(deps.unmeasured !== undefined && { unmeasuredCapabilities: new Set(deps.unmeasured) }),
+  };
 }
 
 export interface NimbusWorkspaceExecutorOpts extends NimbusSessionOpts {

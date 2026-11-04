@@ -394,7 +394,10 @@ function workspaceOverDevice() {
 
   const asked: string[] = [];
 
-  const shellSession = createShellSession({ home: WORKSPACE_ROOT, userRoots: () => mounted.userRoots() });
+  // As the workspace wires it: a written path is read through the plane's links.
+  const shellSession = createShellSession({
+    home: WORKSPACE_ROOT, userRoots: () => mounted.userRoots(), resolve: (path) => mounted.resolve(path, { follow: true, creating: true }),
+  });
 
   const shell = withApprovalGatedShell(workspaceShell(workspace), { filesOwner: 'agent', shellSession }, {
     mode: () => 'strict',
@@ -496,6 +499,21 @@ describe('a workspace shell over the user\'s mounts', () => {
 
       expect(asked).toEqual(['rm -rf /pc/proj']);
       expect(removed).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  // 1024-p2: the link is an earlier call's, so the line that writes names only the agent's home.
+  test('a write through a link an earlier call made into /pc is asked as the user\'s file', async () => {
+    const { db, shell, asked, workspace } = workspaceOverDevice();
+    const write = `printf replacement > ${WORKSPACE_ROOT}/proj/a.txt`;
+
+    try {
+      (await workspace.session()).vfs.as(CRED_SESSION_USER).symlink('/pc/proj', `${WORKSPACE_ROOT}/proj`);
+
+      expect((await shell.exec(write)).exitCode).not.toBe(0);
+      expect(asked).toEqual([write]);
     } finally {
       db.close();
     }

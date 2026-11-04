@@ -277,13 +277,9 @@ export async function runSwarm(
     maxDepth,
     explorationWeight: resolved.config.explorationWeight,
     judgeSamples: judgeSamples ?? undefined,
+    ...(runProfile && { profile: runProfile }),
+    ...(deps.originContext && { originContext: deps.originContext }),
   };
-
-  if (runProfile) Object.assign(ledgerConfig, { profile: runProfile });
-
-  if (deps.originContext) Object.assign(ledgerConfig, {
-    originContext: deps.originContext,
-  });
 
   if (reentry) {
     searchLedger.touch(rootId, ledgerEpoch, Date.now());

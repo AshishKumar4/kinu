@@ -694,9 +694,7 @@ async function runSwarmAction({ deps, fields, mode, toolOptions, budget }: Swarm
     const label = mission.scope.labels[0];
     const snapshot = label !== undefined ? mission.governor.snapshot(label)[0] : undefined;
 
-    if (snapshot) {
-      Object.assign(output, { mission_budget: parseJsonObject(JSON.stringify(snapshot)) });
-    }
+    if (snapshot) output.mission_budget = parseJsonObject(JSON.stringify(snapshot));
   }
 
   return output;
@@ -781,17 +779,13 @@ async function hireWorkspace({ deps, fields, mode, toolOptions, spawnDepthRefusa
       + 'hire a subagent here instead, or run a search.');
   }
 
-  const request: Parameters<PeersToolDeps['spawnWorkspace']>[0] = {
+  return await peers.spawnWorkspace({
     purpose: fields.mission,
     message: fields.message,
     mode,
-  };
-
-  if (fields.agent) Object.assign(request, { name: fields.agent });
-
-  if (toolOptions?.abortSignal) Object.assign(request, { signal: toolOptions.abortSignal });
-
-  return await peers.spawnWorkspace(request);
+    ...(fields.agent !== undefined && fields.agent !== '' && { name: fields.agent }),
+    ...(toolOptions?.abortSignal && { signal: toolOptions.abortSignal }),
+  });
 }
 
 interface CreateHireCall extends Omit<AgentsActionCall<HireFields>, 'toolOptions'> {
@@ -827,18 +821,14 @@ async function hireCreate({ deps, team, fields, mode, lifetime }: CreateHireCall
 
     if ('error' in delegatedTask) return badInput(delegatedTask.error);
 
-    const request: TemporaryRunRequest = {
+    return await temporary.start({
       role: delegatedTask.resolved.role.id,
       roleLabel: fields.role,
       task: fields.message,
       mode,
-    };
-
-    if (inheritedContext !== undefined) Object.assign(request, { inheritedContext });
-
-    if (fields.name !== undefined) Object.assign(request, { name: fields.name });
-
-    return await temporary.start(request);
+      ...(inheritedContext !== undefined && { inheritedContext }),
+      ...(fields.name !== undefined && { name: fields.name }),
+    } satisfies TemporaryRunRequest);
   }
 
   const delegated = resolveDelegatedProfile(ctx, fields.role, fields.tier);
@@ -847,19 +837,14 @@ async function hireCreate({ deps, team, fields, mode, lifetime }: CreateHireCall
   // Only an explicit tier is stored; the child re-derives its role's default.
   const resolvedTier = fields.tier !== undefined ? delegated.resolved.tier : undefined;
 
-  const request: Parameters<TeamToolDeps['spawn']>[0] = {
+  return await team.spawn({
     role: delegated.resolved.role.id,
     mission: fields.message,
     mode,
-  };
-
-  if (inheritedContext !== undefined) Object.assign(request, { inheritedContext });
-
-  if (resolvedTier !== undefined) Object.assign(request, { tier: resolvedTier.id });
-
-  if (fields.name) Object.assign(request, { name: fields.name });
-
-  return await team.spawn(request);
+    ...(inheritedContext !== undefined && { inheritedContext }),
+    ...(resolvedTier !== undefined && { tier: resolvedTier.id }),
+    ...(fields.name !== undefined && fields.name !== '' && { name: fields.name }),
+  });
 }
 
 interface RosterCall {
@@ -875,11 +860,7 @@ async function assignWork(deps: AgentsToolDeps, fields: AssignFields, { mode, to
   const asked = requestedTopic(fields.topic);
 
   if (team && await isSubagent(fields.agent)) {
-    const assignment: Parameters<TeamToolDeps['assign']>[0] = { name: fields.agent, task: fields.message, mode };
-
-    if (fields.deliverable) Object.assign(assignment, { deliverable: fields.deliverable });
-
-    const handoff = await team.assign(assignment);
+    const handoff = await team.assign({ name: fields.agent, task: fields.message, mode, ...(fields.deliverable !== undefined && fields.deliverable !== '' && { deliverable: fields.deliverable }) });
 
     return {
       status: 'working',
@@ -890,11 +871,9 @@ async function assignWork(deps: AgentsToolDeps, fields: AssignFields, { mode, to
   }
 
   if (peers) {
-    const request: Parameters<PeersToolDeps['ask']>[0] = { agent: fields.agent, topic: asked.topic, message: fields.message, mode };
-
-    if (toolOptions?.abortSignal) Object.assign(request, { signal: toolOptions.abortSignal });
-
-    return await peers.ask(request);
+    return await peers.ask({
+      agent: fields.agent, topic: asked.topic, message: fields.message, mode, ...(toolOptions?.abortSignal && { signal: toolOptions.abortSignal }),
+    });
   }
 
   return badInput(`unknown agent "${fields.agent}": check the roster with op:"list"`);
@@ -931,17 +910,13 @@ async function roster(deps: AgentsToolDeps, fields: ListFields): Promise<object>
   const peerRoster = peers ? await peers.listPeers() : undefined;
   const counts = view?.counts;
   const alone = counts === undefined || counts.running + counts.waiting + counts.idle + counts.failed + counts.retired === 0;
-  const listed: UnifiedRosterResult = {};
-
-  if (view) Object.assign(listed, { tree: view.tree, counts: view.counts });
-
-  if (peerRoster) Object.assign(listed, { peers: peerRoster });
-
   const note = alone && (peerRoster?.length ?? 0) === 0 ? 'No subagents yet: create one with op:"hire".' : view?.note;
 
-  if (note !== undefined) Object.assign(listed, { note });
-
-  return listed;
+  return {
+    ...(view && { tree: view.tree, counts: view.counts }),
+    ...(peerRoster && { peers: peerRoster }),
+    ...(note !== undefined && { note }),
+  } satisfies UnifiedRosterResult;
 }
 
 /** The operations that create or wake an agent, checked against the mission cap before they run. */

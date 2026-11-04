@@ -266,9 +266,8 @@ export function localContextTree(stores: () => ActorContextStores, editor: Conte
       actor: resolved.stores.claims.actorId, contextId: selection?.contextId ?? null, revision, proposalId: pending?.proposal_id ?? null,
       version, messages: entries.length, status: headerStatus(staged, selection),
       effectiveAt: claim?.status === 'admitted' ? 'step' : 'turn', turn: claim?.status === 'admitted' ? claim.turnId : null,
+      ...(blocked !== undefined && { blocked }),
     };
-
-    if (blocked !== undefined) Object.assign(header, { blocked });
 
     return { target: resolved, selection, entries, header, modified: Math.max(head?.recorded_at ?? 0, pending?.recorded_at ?? 0) };
   };
@@ -302,9 +301,7 @@ export function localContextTree(stores: () => ActorContextStores, editor: Conte
 
     const header: ContextFileHeader = { actor, contextId, revision: version, proposalId, version: versionToken, messages: entries.length,
         status: headerStatus(stagedProposalId !== null, selection),
-        effectiveAt: status === 'admitted' ? 'step' : 'turn', turn: status === 'admitted' ? turn : null };
-
-    if (blocked !== null) Object.assign(header, { blocked });
+        effectiveAt: status === 'admitted' ? 'step' : 'turn', turn: status === 'admitted' ? turn : null, ...(blocked !== null && { blocked }) };
 
     return { target: resolved, selection, entries, modified: Math.max(metadata?.recorded_at ?? 0, proposal?.metadata.recorded_at ?? 0), header };
   };

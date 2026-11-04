@@ -1089,9 +1089,10 @@ export class ChatSession {
 
     if (card === undefined && this.turnInFlight()) {
       const { id } = opts;
-      const steer: UserSteer & { readonly id: string; readonly mode?: WorkMode } = { text, id, ...(opts.mode !== undefined && { mode: opts.mode }) };
 
-      if (files !== undefined && files.length > 0) Object.assign(steer, { files });
+      const steer: UserSteer & { readonly id: string; readonly mode?: WorkMode } = {
+        text, id, ...(opts.mode !== undefined && { mode: opts.mode }), ...(files !== undefined && files.length > 0 && { files }),
+      };
 
       if (landing !== null) this.landings.set(id, landing);
       const outcome = await this.actorSession.send(steer);

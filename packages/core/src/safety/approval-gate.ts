@@ -9,9 +9,10 @@ import { boundWriteCommand, type WriteSubject } from './bound-write';
 import { stableStringify } from './argument-digest';
 import type { JsonObject } from '../utils/json';
 import {
-  dominant, reviewFileAccess, reviewShellCommand,
+  dominant, onUserRoots, reviewFileAccess, reviewShellCommand, writtenPaths,
   type ApprovalResult, type FileAccess, type GatedExecutor,
 } from './command-review';
+import type { ShellCwd } from '../execution/shell-session';
 
 /**
  * Where and how a command runs on its executor, besides its words: part of what an approval answers, so the same words
@@ -360,8 +361,7 @@ export function gateExec<R>(
     if ('refused' in prepared) return prepared.refused;
     const { call } = prepared;
     const at = await executor.shellSession?.at(call.shell, call.cwd);
-
-    const review = reviewShellCommand(executor, call.text, at);
+    const review = reviewShellCommand(executor, call.text, at, await linkedOnUser(executor, call.text, at));
 
     const cwd = at !== undefined && !at.mayBeUsers ? at.cwd : call.cwd;
 
@@ -406,6 +406,20 @@ export function gateExec<R>(
 
     return running;
   };
+}
+
+/**
+ * Whether a file the line writes lands on the user's mounts once the plane follows its links: a link an earlier call made
+ * under the agent's home carries a write there (1024-p2). A path the plane cannot resolve may be one.
+ */
+async function linkedOnUser(executor: GatedExecutor, command: string, at: ShellCwd | undefined): Promise<boolean> {
+  const session = executor.shellSession;
+  const roots = session?.userRoots() ?? [];
+
+  if (session?.resolve === undefined || roots.length === 0) return false;
+  const landed = await Promise.allSettled(writtenPaths(command, at).map(session.resolve));
+
+  return landed.some((path) => path.status === 'rejected' || onUserRoots(path.value, roots));
 }
 
 /**

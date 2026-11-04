@@ -341,9 +341,8 @@ export class PeerHub {
       topic: queued.topic,
       body: queued.body,
       mode: queued.mode,
+      ...(queued.reply_expected === true && { reply_expected: true }),
     };
-
-    if (queued.reply_expected) Object.assign(wire, { reply_expected: true });
 
     return Effect.tryPromise({ try: () => this.deps.deliver(queued.receiver_agent_name, wire), catch: (cause) => ({ cause }) }).pipe(Effect.match({
       onFailure: (failed): OutboxDisposition => ({ status: 'retry', reason: renderThrownChain(failed) }),
