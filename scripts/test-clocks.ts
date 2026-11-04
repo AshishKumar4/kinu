@@ -157,12 +157,13 @@ const RUNNER_DEFAULT = 'setDefaultTimeout';
 /** The keys a vitest config sets its clocks with; vitest's own defaults are 5 s and 10 s, so each must be there, 0. */
 const VITEST_CLOCKS = ['testTimeout', 'hookTimeout'] as const;
 
-/** A library wait, read by the method's own name on any receiver, chained or
- *  not: every `wait…` method (puppeteer's `waitForSelector`, `waitHandle`,
- *  vitest's `vi.waitFor`) and the navigations, which wait for the load. Their
- *  bodies are not in the corpus, so the option is read where it is handed
- *  over; a wait written inside the corpus is read where it is written. */
-const LIBRARY_WAIT = /^(?:wait[A-Z]\w*|waitFor|goto|reload|goBack|goForward|setContent)$/u;
+/** A browser wait, read by the method's own name on any receiver, chained or
+ *  not: every `wait…` method (`waitForSelector`, `waitHandle`) and the
+ *  navigations, which wait for the load. Their bodies are not in the corpus, so
+ *  the option is read where it is handed over; a wait written inside the corpus
+ *  is read where it is written. Not vitest's `vi.waitFor`, whose own timeout
+ *  defaults to a second: its clock is the poll's, unread here. */
+const LIBRARY_WAIT = /^(?:wait(?!For$)[A-Z]\w*|goto|reload|goBack|goForward|setContent)$/u;
 
 /** A receiver's own wait bound, `locator.setTimeout(n)`; on the timer globals it is a sleep, read first. */
 const RECEIVER_TIMEOUT = 'setTimeout';
@@ -856,7 +857,7 @@ export function writeNewKindLock(next: ClockLock, kind: ClockKind, path = LOCK):
 const RUNNERS = ['scripts/ladder.ts', 'evals/src/harness.ts', 'scripts/bench.ts'];
 
 /** A program: run by name (`import.meta.main`), or a module whose default export is a Worker or a config. */
-const isProgram = (text: string): boolean => text.includes('import.meta.main') || /^export default\b/mu.test(text);
+const isProgram = (text: string): boolean => text.includes('import.meta.main') || text.split('\n').some((line) => line.startsWith('export default '));
 
 /** The suite beside a module, which names it as its subject (`reset.ts` and `reset.test.ts`). */
 const ownSuites = (file: string): readonly string[] => {
@@ -949,7 +950,7 @@ async function main(): Promise<number> {
     console.log('  blind to: a clock value reaching a comparison through a parameter or a return value; '
       + 'a timer wrapped in product source or a dependency and called by the wrapper\'s name; a duration handed as a '
       + 'bare positional number to an unknown helper; setImmediate and queueMicrotask; a clock read '
-      + 'used as a value and never compared; a program\'s own body, its exports a test drives included (plan-demo-film\'s '
+      + 'used as a value and never compared; vitest\'s vi.waitFor; a program\'s own body, its exports a test drives included (plan-demo-film\'s '
       + `walkthrough, which live-app-rows calls); the runners' modules (${RUNNERS.join(', ')}) and what they load.`);
 
     for (const edge of corpus.unfollowed) console.log(`  unfollowed: ${edge}`);

@@ -449,7 +449,7 @@ async function runDeploy({
   uploadRuns,
   validation,
   buildBinds,
-  serving = false,
+  serving,
 }: DeployRun = {}) {
   const fixture = scratchDir("deploy-gate");
   // The deploy lock lives in the runtime directory: the fixture's own, so a real deploy on this machine never blocks
@@ -582,7 +582,7 @@ printf '200'
       ...accountFixture(fixture, pendingReset, account),
       KINU_DEPLOY_INFRA_STATUS_LOG: infraStatusLog,
       KINU_DEPLOY_UPLOAD_FIXTURE: flag(uploadRuns !== undefined),
-      KINU_DEPLOY_SERVING: flag(serving),
+      KINU_DEPLOY_SERVING: flag(serving === true),
       KINU_DEPLOY_UPLOAD_ARGV: uploadArgv,
       KINU_DEPLOY_FRONT_ARGV: frontArgv,
       // Always set, so the assertion that the script overrides it is about the
