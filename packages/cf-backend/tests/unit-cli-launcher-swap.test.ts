@@ -156,6 +156,20 @@ describe('the launcher launch check', () => {
     }
   });
 
+  test('a directory lock an earlier launcher left behind, its pid gone, is taken over', async () => {
+    const { home, launcher } = await launcherHome();
+    cliTree(home, 'current', '2.0.0+new');
+    cliTree(home, 'prev', '1.0.0+old');
+    const gone = Bun.spawn({ cmd: ['true'] });
+    await gone.exited;
+    mkdirSync(join(home, 'cli', '.lock'));
+    writeFileSync(join(home, 'cli', '.lock', 'pid'), `${String(gone.pid)}\n`);
+
+    expect(await launch(home, launcher, 'list')).toEqual({ stdout: 'ran 2.0.0+new list', stderr: '', exitCode: 0 });
+    expect(existsSync(join(home, 'cli', 'prev'))).toBe(false);
+    expect(existsSync(join(home, 'cli', '.lock'))).toBe(false);
+  });
+
   test('the launcher no longer intercepts update: the installed CLI owns it', async () => {
     const { home, launcher } = await launcherHome();
     cliTree(home, 'current', '2.0.0+new');

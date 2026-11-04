@@ -889,18 +889,23 @@ die() {
 # pid absent, or running another generation) is taken over, never waited on.
 CLI_LOCK="$CLI_ROOT/.lock"
 CLI_LOCK_RECORD=""
-# A pid's generation as the CLI reads it: Linux's start ticks (/proc/<pid>/stat
-# field 22), macOS's ps lstart hashed as base64url; empty for no such process.
+# A pid's generation as the CLI reads it (process-generation.ts): Linux's start
+# ticks (/proc/<pid>/stat field 22), macOS's ps lstart hashed as base64url.
+# Exits 1 for no such process and 2 where the generation cannot be read, so an
+# unreadable holder is never taken for a gone one.
 process_generation() {
   if [ "$KINU_OS" = linux ]; then
-    stat_line="$(cat "/proc/$1/stat" 2>/dev/null)" || return 0
+    [ -e "/proc/$1" ] || return 1
+    stat_line="$(cat "/proc/$1/stat" 2>/dev/null)" || { [ -e "/proc/$1" ] && return 2; return 1; }
     set -- \${stat_line##*) }
+    [ -n "\${20}" ] || return 2
     printf '%s' "\${20}"
   else
-    lstart="$(LC_ALL=C LANG=C /bin/ps -p "$1" -o lstart= 2>/dev/null)" || return 0
+    lstart="$(LC_ALL=C LANG=C /bin/ps -p "$1" -o lstart= 2>/dev/null)"
+    case $? in 0) ;; 1) return 1 ;; *) return 2 ;; esac
     lstart="\${lstart#"\${lstart%%[![:space:]]*}"}"
     lstart="\${lstart%"\${lstart##*[![:space:]]}"}"
-    [ -n "$lstart" ] || return 0
+    [ -n "$lstart" ] || return 2
     printf '%s' "$lstart" | shasum -a 256 | cut -c1-64 | xxd -r -p | base64 | tr '+/' '-_' | tr -d '=\n'
   fi
 }
@@ -909,11 +914,20 @@ lock_token() {
 }
 take_cli_lock() {
   mkdir -p "$CLI_ROOT"
-  CLI_LOCK_RECORD="v1 $KINU_OS $(lock_token) $$ $(process_generation $$)"
+  own="$(process_generation $$)" || return 1
+  CLI_LOCK_RECORD="v1 $KINU_OS $(lock_token) $$ $own"
   attempt=0
   while [ "$attempt" -lt 2 ]; do
-    # A real directory there is no record of this protocol, and ln would make the link inside it.
-    if [ ! -d "$CLI_LOCK" ] && ln -s "$CLI_LOCK_RECORD" "$CLI_LOCK" 2>/dev/null; then
+    attempt=$((attempt + 1))
+    # A real directory is an earlier launcher's lock (its pid inside), and ln would make the link inside it: taken
+    # over only once that pid names no process.
+    if [ -d "$CLI_LOCK" ] && [ ! -L "$CLI_LOCK" ]; then
+      process_generation "$(cat "$CLI_LOCK/pid" 2>/dev/null || echo 0)" >/dev/null
+      [ $? -eq 1 ] || return 1
+      rm -rf "$CLI_LOCK"
+      continue
+    fi
+    if ln -s "$CLI_LOCK_RECORD" "$CLI_LOCK" 2>/dev/null; then
       trap 'release_cli_lock' EXIT
       return 0
     fi
@@ -921,9 +935,13 @@ take_cli_lock() {
     set -- $held
     # Another platform's record, or one this reads no protocol in, is never proven abandoned.
     [ "$#" -eq 5 ] && [ "$1" = v1 ] && [ "$2" = "$KINU_OS" ] || return 1
-    [ "$(process_generation "$4")" = "$5" ] && return 1
+    current="$(process_generation "$4")"
+    case $? in
+      1) ;;
+      0) [ "$current" = "$5" ] && return 1 ;;
+      *) return 1 ;;
+    esac
     [ "$(readlink "$CLI_LOCK" 2>/dev/null || true)" = "$held" ] && rm -f "$CLI_LOCK"
-    attempt=$((attempt + 1))
   done
   return 1
 }
