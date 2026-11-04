@@ -43,14 +43,10 @@ import type {
   AgentTranscriptMessage,
   AgentSendResult,
   AgentTurnResult,
-  FileCheckpointSurface,
   ForkPoint,
   LocalSessionControls,
-  PlanReviewSurface,
-  OwnerQuestionSurface,
-  WaitingApprovalSurface,
 } from './agent-client';
-
+import type { FileCheckpointSurface, OwnerQuestionSurface, PlanReviewSurface, WaitingApprovalSurface } from '@kinu.run/core';
 
 interface LocalAgentClientOptions extends LocalModelResolverOptions {
   transcript?: CliSessionOptions;
@@ -182,31 +178,10 @@ export class LocalAgentClient implements AgentClient {
         unavailableReason: provider.unavailableReason,
       })),
     };
-    // Closures read this.session so the surface survives walk-back forks.
-    this.checkpoints = {
-      list: (limit, turnId) => this.session.listFileCheckpoints(limit, turnId),
-      plan: (dir, id) => this.session.planFileRestore(dir, id),
-      restore: (dir, id) => this.session.restoreFileCheckpoint(dir, id),
-    };
-    this.approvals = {
-      list: () => this.session.listDeferredApprovals(),
-      decide: (ids, decision) => this.session.decideDeferredApprovals(ids, decision),
-    };
-    this.questions = {
-      list: () => this.session.listOwnerQuestions(),
-      // In this process: nothing crosses, so nothing is owed.
-      answer: async (id, answers) => {
-        await this.session.answerOwnerQuestions(id, answers);
-
-        return null;
-      },
-    };
-    this.plans = {
-      active: () => this.session.getActivePlanReview(),
-      saveAnnotations: (id, revision, annotations) => this.session.savePlanReviewAnnotations(id, revision, annotations),
-      decide: (id, revision, decision, feedback) => this.session.decidePlanReview(id, revision, decision, feedback),
-      dismiss: (id, revision) => this.session.dismissPlanReview(id, revision),
-    };
+    this.checkpoints = deps.session.checkpoints;
+    this.approvals = deps.session.approvals;
+    this.questions = deps.session.questions;
+    this.plans = deps.session.plans;
   }
 
   get cliSession(): CliSession {

@@ -1,3 +1,4 @@
+import { wrapDatabase } from '@kinu.run/core/identity';
 import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // createCLIHeadRuntime: a head forks the parent's host executor and files, with a private durable scratch.
 import { describe, test, expect } from 'bun:test';
@@ -23,7 +24,7 @@ import {
 } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { createCLIHeadRuntime, type CLIHeadRuntimeDeps } from '../src/head-runtime';
-import { makeSql, makeExecRaw, makeWorkspaceSchemaSql, createCLIRuntime, type CLIRuntime } from '../src/runtime';
+import { makeWorkspaceSchemaSql, createCLIRuntime, type CLIRuntime } from '../src/runtime';
 import { createHeadRuntime, headSeatFactory, localTestActorHost } from './actor-fixture';
 import { craftPreference, initToolEffectClaimTable, openLocalActor } from '@kinu.run/core';
 import { tierAuthority, toolSequenceModel } from './helpers/local-session';
@@ -75,14 +76,14 @@ function makeParent(cwd = scratchDir('head-runtime-folder')): LocalParent {
 function makeGovernor(): MissionGovernor {
   const db = new Database(':memory:');
 
-  return new MissionGovernor({ actor: createTestActorsOver(db).main, storage: { sql: makeSql(db), execRaw: makeExecRaw(db) } });
+  return new MissionGovernor({ actor: createTestActorsOver(db).main, storage: { sql: wrapDatabase(db).sql, execRaw: wrapDatabase(db).execRaw } });
 }
 
 function makeJournal(): HeadJournal {
   const db = new Database(':memory:');
-  initHeadsTables(makeExecRaw(db));
+  initHeadsTables(wrapDatabase(db).execRaw);
 
-  return new HeadJournal(makeSql(db), createTestActorsOver(db).main);
+  return new HeadJournal(wrapDatabase(db).sql, createTestActorsOver(db).main);
 }
 
 interface RouteProbe {
@@ -204,8 +205,8 @@ function fakeHeadsModel(capture?: (options: {
 
 function controllerWithCLIRuntime(model: LanguageModel, probe?: RouteProbe) {
   const db = new Database(':memory:');
-  initHeadsTables(makeExecRaw(db));
-  const journal = new HeadJournal(makeSql(db), createTestActorsOver(db).main);
+  initHeadsTables(wrapDatabase(db).execRaw);
+  const journal = new HeadJournal(wrapDatabase(db).sql, createTestActorsOver(db).main);
   const overrides = { journal: () => journal };
 
   return {
@@ -317,8 +318,8 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
   test('the merge reports its own spend as judge, and the heads report none', async () => {
     const reports: ModelCallReport[] = [];
     const db = new Database(':memory:');
-    initHeadsTables(makeExecRaw(db));
-    const journal = new HeadJournal(makeSql(db), createTestActorsOver(db).main);
+    initHeadsTables(wrapDatabase(db).execRaw);
+    const journal = new HeadJournal(wrapDatabase(db).sql, createTestActorsOver(db).main);
 
     const controller = new HeadController(
       createCLIHeadRuntime(headDeps(fakeHeadsModel(), {
@@ -940,7 +941,7 @@ describe('createCLIHeadRuntime — a fork runs the model it was given', () => {
   test('each head resolves its OWN spec; a head that named none runs on its own profile tier', async () => {
     const seen: string[] = [];
     const parent = makeParent();
-    parent.profiles?.refine({ envelope: tierAuthority(() => 'local/static') });
+    parent.profiles.refine({ envelope: tierAuthority(() => 'local/static') });
 
     const runtime = createCLIHeadRuntime(headDeps(labelledModel('session', seen), { parentRuntime: parent }, undefined, (spec) => labelledModel(spec, seen)));
 

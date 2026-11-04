@@ -207,6 +207,11 @@ export function redactSecrets(text: string): string {
   return masked(text, REDACTION_PASSES, () => '<redacted>');
 }
 
+/** `text` with each secret it holds verbatim masked as `<redacted>`, the values a caller sent and so knows. */
+export function redactLiterals(text: string, secrets: readonly string[]): string {
+  return secrets.filter((secret) => secret !== '').reduce((redacted, secret) => redacted.replaceAll(secret, '<redacted>'), text);
+}
+
 /** The credential shapes: a citation the public repo bars is the owner's to keep. */
 const CREDENTIAL_PASSES = REDACTION_PASSES.filter(({ pattern }) => pattern.regex !== CF_INTERNAL_REFERENCE);
 

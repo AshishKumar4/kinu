@@ -7,7 +7,9 @@ import { ACCENT, DIM, OK, WARN } from '../display';
 import { holdsAccounts, readProviderConnections } from './provider-connect';
 import { canonicalProviderName, connectOptions, connectProviderOnConsole } from './setup';
 import * as v from 'valibot';
-import { CLAUDE_CRED_KEY, MAIN_ACCOUNT, accountCredentialKey, catalogCredKey, isAccountName } from '@kinu.run/core';
+import {
+  CLAUDE_CRED_KEY, MAIN_ACCOUNT, PROVIDER_KEY_ENV, WORKERS_AI_MODEL_ID_PREFIX, WORKERS_AI_PROVIDER_ID, accountCredentialKey, catalogCredKey, isAccountName, specProvider,
+} from '@kinu.run/core';
 import { KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
 import { signOutChatGptLogin } from '@kinu.run/cli-backend';
 
@@ -207,18 +209,18 @@ const LOCAL_CREDENTIALS = new Map<ProviderName, LocalCredential>([
   }],
   ['openai', {
     clear: (p) => deleteMain(p, 'openai'),
-    envVars: ['OPENAI_API_KEY'],
-    credKey: 'openai.bearer',
+    envVars: [PROVIDER_KEY_ENV.openaiApiKey],
+    credKey: API_KEY_PROVIDERS.openai,
   }],
   ['anthropic', {
     clear: (p) => deleteMain(p, 'anthropic'),
-    envVars: ['ANTHROPIC_API_KEY'],
-    credKey: 'anthropic.bearer',
+    envVars: [PROVIDER_KEY_ENV.anthropicApiKey],
+    credKey: API_KEY_PROVIDERS.anthropic,
   }],
   ['openrouter', {
     clear: (p) => deleteMain(p, 'openrouter'),
-    envVars: ['OPENROUTER_API_KEY'],
-    credKey: 'openrouter.bearer',
+    envVars: [PROVIDER_KEY_ENV.openrouterApiKey],
+    credKey: API_KEY_PROVIDERS.openrouter,
   }],
   ['openai-compatible', {
     clear: (p) => deleteKey(p, 'openaiCompat'),
@@ -249,15 +251,15 @@ function deleteMain(providers: NonNullable<KinuConfig['providers']>, key: 'claud
 }
 
 /** A default left on a disconnected provider fails every unpinned turn. */
-const MODEL_SPEC_PREFIXES = new Map<ProviderName, readonly string[]>([
-  ['chatgpt', ['chatgpt/']],
-  ['openai', ['openai/']],
-  ['anthropic', ['anthropic/']],
-  ['openrouter', ['openrouter/']],
-  ['openai-compatible', ['openai-compat/', 'openai-compat:']],
-  ['claude', ['claude/']],
-  ['opencode', ['opencode/']],
-  ['cloudflare', ['workers-ai/', 'my-gateway/', 'ai-gateway/', '@cf/']],
+const MODEL_SPEC_PROVIDERS = new Map<ProviderName, readonly string[]>([
+  ['chatgpt', ['chatgpt']],
+  ['openai', ['openai']],
+  ['anthropic', ['anthropic']],
+  ['openrouter', ['openrouter']],
+  ['openai-compatible', ['openai-compat']],
+  ['claude', ['claude']],
+  ['opencode', ['opencode']],
+  ['cloudflare', [WORKERS_AI_PROVIDER_ID, 'my-gateway', 'ai-gateway']],
 ]);
 
 /** Only credentials Kinu stores; the account is `kinu logout`, and opencode owns its login. */
@@ -354,19 +356,21 @@ function disconnectAccountProvider(name: string, account: string): Effect.Effect
     yield* Effect.promise(async () => deleteCloudCredential(cloud.origin, cloud.token, credKey));
     console.log(`${OK('✓')} Removed the ${ACCENT(account === MAIN_ACCOUNT ? name : `${name} ${account}`)} credential from your Kinu account.`);
     yield* Effect.promise(async () => forgetDefaultAccount(provider, account));
-    warnDefaultModelPrefixes([`${name}/`]);
+    warnDefaultModelOn([provider]);
     yield* Effect.promise(async () => bumpProviderRevision());
   });
 }
 
 function warnDefaultModelFor(provider: ProviderName): void {
-  warnDefaultModelPrefixes(MODEL_SPEC_PREFIXES.get(provider) ?? []);
+  warnDefaultModelOn(MODEL_SPEC_PROVIDERS.get(provider) ?? []);
 }
 
-function warnDefaultModelPrefixes(prefixes: readonly string[]): void {
+function warnDefaultModelOn(providers: readonly string[]): void {
   const current = readDefaultTier()?.model;
+  // A bare `@cf/` id is Workers AI's; `openai-compat:<name>` is one of the compatible endpoints.
+  const named = current?.startsWith(WORKERS_AI_MODEL_ID_PREFIX) === true ? WORKERS_AI_PROVIDER_ID : specProvider(current ?? '')?.split(':')[0];
 
-  if (current === undefined || !prefixes.some((prefix) => current.startsWith(prefix))) return;
+  if (current === undefined || named === undefined || !providers.includes(named)) return;
   console.log(`${WARN('!')} The default model ${current} runs on it; pick another under Defaults on kinu's home screen.`);
 }
 

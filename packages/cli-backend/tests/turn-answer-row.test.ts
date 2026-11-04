@@ -1,10 +1,11 @@
 /** The durable assistant row reads as the answer `runChat` selects (chat.ts `answerFromSteps`), not narration + answer. */
+import { wrapDatabase } from '@kinu.run/core/identity';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { readTranscriptRows, scratchPath, scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
 import { CHAT_SESSION_ID, initWorkspaceSchema, readSessionTranscript, type LLMProviderConfig } from '@kinu.run/core';
 import type { LanguageModelV2Usage } from '@ai-sdk/provider';
-import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql, type CLIRuntime } from '../src/runtime';
+import { createCLIRuntime, makeWorkspaceSchemaSql, type CLIRuntime } from '../src/runtime';
 import type { SessionEvent } from '@kinu.run/core';
 import { LocalAgentSession } from '../src/local-session';
 import { TestLanguageModelV2 } from './test-language-model';
@@ -93,14 +94,14 @@ function openSession(name: string): OpenedSession {
 }
 
 async function rowsOf(session: OpenedSession, role: 'user' | 'assistant'): Promise<string[]> {
-  const rows = await readTranscriptRows(makeSql(session.db), session.rt.actor, session.rt.storage.vfs);
+  const rows = await readTranscriptRows(wrapDatabase(session.db).sql, session.rt.actor, session.rt.storage.vfs);
 
   return rows.filter((row) => row.role === role).map((row) => row.content);
 }
 
 /** Each assistant row's texts as the chat pane draws them. */
 async function drawnTexts(session: OpenedSession): Promise<string[][]> {
-  const transcript = readSessionTranscript(makeSql(session.db), session.rt.actor, CHAT_SESSION_ID, () => Promise.resolve(session.rt.storage.vfs));
+  const transcript = readSessionTranscript(wrapDatabase(session.db).sql, session.rt.actor, CHAT_SESSION_ID, () => Promise.resolve(session.rt.storage.vfs));
 
   return (await chatSeed(transcript, keptMediaName)).messages.filter((message) => message.role === 'assistant')
     .map((message) => message.parts.flatMap((part) => part.type === 'text' ? [part.text] : []));

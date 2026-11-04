@@ -224,6 +224,11 @@ export interface TurnEnd {
   readonly taskId: string | null;
 }
 
+/** The hirer's dedupe key for a turn's report: an assignment's own id, so a re-run after a restart answers it once. */
+export function turnReportSequenceId(turnEnd: Pick<TurnEnd, 'taskId'>, actorId: string, messageId: string): string {
+  return turnEnd.taskId ?? `${actorId}:turn-end:${messageId}`;
+}
+
 /** A hired actor's turn end, or null for an actor no one hired. */
 export async function turnEndOf(
   actor: Pick<ActorIdentity, 'parentActorId'>, item: ChatTurnInput, turnId: string,

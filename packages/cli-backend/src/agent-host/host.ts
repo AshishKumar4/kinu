@@ -4,6 +4,7 @@
  * Durable work stays in the existing EventLog/background_jobs/fibers/outbox_peer tables.
  */
 
+import { wrapDatabase, sqlStorageOver } from '@kinu.run/core/identity';
 import { existsSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
@@ -75,9 +76,7 @@ import { Effect, Result } from 'effect';
 import { KinuError, attempt, diagnostics, refusalOf, settle, toKinuError, settleSync, settleLogged, settleLoggedSync, detach } from '@kinu.run/core/obs';
 import { watchStatements } from '@kinu.run/core/identity';
 import {
-  createCLIRuntime, makeSql, makeExecRaw, makeSqlExec, shareLocalWorkspacePlane,
-  cleanupFacetScratch, soulOf, writeTransaction,
-  type CLIRuntime,
+  createCLIRuntime, shareLocalWorkspacePlane, cleanupFacetScratch, soulOf, writeTransaction, type CLIRuntime,
 } from '../runtime';
 import type { CLIOpenConfig } from '../open';
 import {
@@ -496,8 +495,8 @@ export class LocalAgentHost {
     liveReads: LiveReadsNotice,
   ): HostTree {
     const { directory } = localActorDirectory(ws.rt.actor);
-    const sql = makeSql(db);
-    const hubSql = makeSqlExec(db);
+    const sql = wrapDatabase(db).sql;
+    const hubSql = sqlStorageOver(db);
     const runtimes = new Map<string, CLIRuntime>([[ws.rt.actor.actorId, ws.rt]]);
     const orchestrations = new Map<string, LocalOrchestration>();
 
@@ -553,7 +552,7 @@ export class LocalAgentHost {
 
     return {
       db, root: ws.rt.actor, host, directory, runtimes, orchestrations, liveReads, driving: 0, jobsDriven: new Set(),
-      hold: new DriverLeaseHold({ sql, execRaw: makeExecRaw(db), proc: osLeaseProcess(process.pid) }, this.driverKind),
+      hold: new DriverLeaseHold({ sql, execRaw: wrapDatabase(db).execRaw, proc: osLeaseProcess(process.pid) }, this.driverKind),
     };
   }
 
@@ -609,7 +608,7 @@ export class LocalAgentHost {
     ws: LocalHostedAgent;
   }): Promise<HostEntry> {
     const config = input.ws.rt.actor.config;
-    const hubSql = makeSqlExec(input.tree.db);
+    const hubSql = sqlStorageOver(input.tree.db);
     const orchestration = input.tree.orchestrations.get(input.actor.reference.actorId);
 
     if (!orchestration) {
@@ -702,7 +701,7 @@ export class LocalAgentHost {
     this.byActor.set(input.actor.reference.actorId, entry);
     // The roster needs the session's broadcast, so deps are installed right after construction, before any turn.
     entry.session.setTeam(this.buildTeam(entry));
-    input.ws.rt.setChildContext?.(childContextResolver({
+    input.ws.rt.setChildContext(childContextResolver({
       directory: input.tree.directory,
       parent: input.actor.handle,
       tree: hostedChildTree(input.tree.host, (child) => child.stores.eventRecorder),
@@ -1047,7 +1046,6 @@ export class LocalAgentHost {
           ended: turn,
         });
       },
-      sequenceId: (messageId) => `${child.key}:turn-end:${messageId}`,
       send: async ({ text, status, mode, sequenceId, quiet }) => {
         const relayed = await publishSubagentReport({ mode, reports: child.relay }, {
           content: text, status, origin: 'turn_end', sequenceId, ...(quiet === true && { quiet }),
@@ -1125,10 +1123,10 @@ export class LocalAgentHost {
   /** The workspace's agents as the cloud's sidebar reads them (`readWorkspaceAgents`), released hires too, over this
    *  tree's one database: an agent hosted here and pumping runs, and its own session reports its chat. */
   private async workspaceAgents(tree: HostTree): Promise<PanelAgent[]> {
-    const sql = makeSql(tree.db);
+    const sql = wrapDatabase(tree.db).sql;
 
     return await readWorkspaceAgents({
-      sql, exec: makeSqlExec(tree.db), root: tree.root, actors: tree.directory.list({ retired: true }), retained: true,
+      sql, exec: sqlStorageOver(tree.db), root: tree.root, actors: tree.directory.list({ retired: true }), retained: true,
       figures: (actorIds) => readAgentFigures(sql, actorIds),
       queued: (actorId) => this.byActor.get(actorId)?.session.pumping() ?? false,
       chat: (actorId) => this.byActor.get(actorId)?.session.chatReport() ?? null,
@@ -1169,7 +1167,7 @@ export class LocalAgentHost {
   private treeRetirement(tree: HostTree): Pick<HireLifecyclePorts<LocalHire>, 'directory' | 'roster' | 'retire'> {
     return {
       directory: tree.directory,
-      roster: (hirer) => this.byActor.get(hirer.actorId)?.roster ?? new SubagentRosterStore(makeSqlExec(tree.db), tree.host.bindStores(hirer).handle),
+      roster: (hirer) => this.byActor.get(hirer.actorId)?.roster ?? new SubagentRosterStore(sqlStorageOver(tree.db), tree.host.bindStores(hirer).handle),
       retire: (owner, retirement) => this.retireHeld(tree, owner, retirement),
     };
   }
@@ -1185,7 +1183,7 @@ export class LocalAgentHost {
       asHire: async (_reference, name, body) => {
         const entry = await this.openChildEntry(parentOf(), name);
 
-        return await body({ entry, handle: entry.actor.handle, exec: makeSqlExec(entry.tree.db), turnInFlight: () => entry.session.turnInFlight() });
+        return await body({ entry, handle: entry.actor.handle, exec: sqlStorageOver(entry.tree.db), turnInFlight: () => entry.session.turnInFlight() });
       },
       // Admitted and owed to the child as one: its next pass, under the driver lease, hands it over.
       deliver: async (hire, admit) => {
@@ -1323,7 +1321,7 @@ export class LocalAgentHost {
   ): Promise<HostEntry> {
     const key = `${parent.key}/${name}`;
     const tree = parent.tree;
-    const sql = makeSql(tree.db);
+    const sql = wrapDatabase(tree.db).sql;
 
     try {
       writeTransaction(tree.db, () => {
@@ -1391,8 +1389,8 @@ export class LocalAgentHost {
 
   /** What a stopped agent was owed and had not taken: cancelled, and the work it carried dismissed with it. */
   private cancelOwed(tree: HostTree, actor: WorkspaceActor): void {
-    const log = new EventLog(makeSqlExec(tree.db), tree.host.bindStores(actorReferenceOf(actor)).handle);
-    const deliveries = new AgentDeliveries(makeSql(tree.db));
+    const log = new EventLog(sqlStorageOver(tree.db), tree.host.bindStores(actorReferenceOf(actor)).handle);
+    const deliveries = new AgentDeliveries(wrapDatabase(tree.db).sql);
 
     writeTransaction(tree.db, () => {
       for (const delivery of deliveries.cancel(actor.actorId)) {

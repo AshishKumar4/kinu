@@ -51,7 +51,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
     try {
       expect((await shell.exec('npm publish --access public')).exitCode).not.toBe(0);
-      const [parked] = await session.listDeferredApprovals();
+      const [parked] = await session.approvals.list();
 
       await session.send('What waits on me? Tell me when it is done.', { id: crypto.randomUUID() });
       const ran = events.items.find((event) => event.type === 'tool-result' && event.toolName === 'eval');
@@ -59,7 +59,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       expect(JSON.stringify(ran)).toContain('npm publish --access public');
       expect(JSON.stringify(ran)).toContain('armed');
 
-      await session.decideDeferredApprovals([present(parked, 'the parked command').id], 'denied');
+      await session.approvals.decide([present(parked, 'the parked command').id], 'denied');
       await session.flushPendingDrains();
 
       // Delivered to the agent as a signal of its own, once: its card in the chat, then the one turn it opened; the wait
@@ -100,14 +100,14 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     if (!exec) throw new Error('computer.exec is missing');
 
     const first = await shell.exec(command);
-    const [parked] = await session.listDeferredApprovals();
+    const [parked] = await session.approvals.list();
 
     if (!parked) throw new Error('unattended command was not queued');
 
     expect(first.exitCode).not.toBe(0);
     await exec.execute(command);
-    expect(await session.listDeferredApprovals()).toHaveLength(2);
-    const sandboxAction = (await session.listDeferredApprovals()).find((action) => action.executor === 'computer');
+    expect(await session.approvals.list()).toHaveLength(2);
+    const sandboxAction = (await session.approvals.list()).find((action) => action.executor === 'computer');
 
     if (!sandboxAction) throw new Error('sandbox command was not queued');
 
@@ -119,8 +119,8 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const reopened = new LocalAgentSession({ rt, db, model: fakeModel('noted'), onEvent: (event) => events.push(event) });
 
     try {
-      expect(await reopened.listDeferredApprovals()).toEqual([parked, sandboxAction]);
-      expect(await reopened.decideDeferredApprovals([parked.id, sandboxAction.id, sandboxAction.id], 'approved'))
+      expect(await reopened.approvals.list()).toEqual([parked, sandboxAction]);
+      expect(await reopened.approvals.decide([parked.id, sandboxAction.id, sandboxAction.id], 'approved'))
         .toEqual({ decided: [parked.id, sandboxAction.id] });
       // The decision wakes the agent with a turn of its own; the grant is spent after it, outside any turn.
       await reopened.flushPendingDrains();
@@ -129,7 +129,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       expect(executed).toEqual([command]);
       await exec.execute(command);
       expect(executed).toEqual([command]);
-      const [next] = await reopened.listDeferredApprovals();
+      const [next] = await reopened.approvals.list();
 
       expect(next?.id).not.toBe(parked.id);
       expect(next?.command).toBe(command);
@@ -153,15 +153,15 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
     try {
       const first = await shell.exec('rm -rf build');
-      const parked = present((await session.listDeferredApprovals())[0], 'the parked delete');
+      const parked = present((await session.approvals.list())[0], 'the parked delete');
 
       expect(first.exitCode).not.toBe(0);
       expect(existsSync(join(project, 'build'))).toBe(true);
-      expect(await session.decideDeferredApprovals([parked.id], 'always')).toEqual({ decided: [parked.id] });
+      expect(await session.approvals.decide([parked.id], 'always')).toEqual({ decided: [parked.id] });
 
       expect((await shell.exec('rm -rf dist')).exitCode).toBe(0);
       expect(existsSync(join(project, 'dist'))).toBe(false);
-      expect(await session.listDeferredApprovals()).toEqual([]);
+      expect(await session.approvals.list()).toEqual([]);
     } finally {
       await session.end();
     }
@@ -190,17 +190,17 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       // The prompt showed the ask's row, and its answer decided it: nothing waits.
       expect(shown).toHaveLength(1);
       expect(shown[0]).toBeString();
-      expect(await session.listDeferredApprovals()).toEqual([]);
+      expect(await session.approvals.list()).toEqual([]);
       detach();
       session.setShellApprovalMode('deny_all');
       expect((await shell.exec(another)).exitCode).not.toBe(0);
-      expect(await session.listDeferredApprovals()).toEqual([]);
+      expect(await session.approvals.list()).toEqual([]);
       session.setShellApprovalMode('strict');
       // The denial stands for the command it answered; another one parks for the owner.
       expect((await shell.exec(command)).exitCode).not.toBe(0);
-      expect(await session.listDeferredApprovals()).toEqual([]);
+      expect(await session.approvals.list()).toEqual([]);
       expect((await shell.exec(another)).exitCode).not.toBe(0);
-      expect(await session.listDeferredApprovals()).toHaveLength(1);
+      expect(await session.approvals.list()).toHaveLength(1);
     } finally {
       await session.end();
     }
@@ -242,7 +242,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     await session.send('complete turn A', { id: crypto.randomUUID() });
     tierModel = 'local/b';
     const seen: string[] = [];
-    rt.setModelForRoute?.(route => ({
+    rt.setModelForRoute(route => ({
       object: async () => { throw new Error('no schema is asked of this lane'); },
       complete: async () => {
         seen.push(route.model);
@@ -1556,7 +1556,7 @@ describe('LocalAgentSession — turn rating review (Hermes-style forked review)'
     }
 
     const session = new LocalAgentSession(sessionOpts);
-    rt.setModelForRoute?.(() => reviewLlm);
+    rt.setModelForRoute(() => reviewLlm);
 
     return { db, rt, session, events, completions, reviewLlm };
   }
@@ -1609,7 +1609,7 @@ describe('LocalAgentSession — turn rating review (Hermes-style forked review)'
     ).get()?.c).toBe(1);
 
     const next = new LocalAgentSession({ rt, db, model: fakeModel('here is the runbook'), onEvent: () => {} });
-    rt.setModelForRoute?.(() => reviewLlm);
+    rt.setModelForRoute(() => reviewLlm);
     await next.send('no — that summary missed the rollback step entirely', { id: crypto.randomUUID() });
     await next.end();
 

@@ -29,7 +29,7 @@ interface Sandbox {
 
 function sandbox(): Sandbox {
   const db = new Database(':memory:');
-  // Production adapters: `makeSql` decides whether a `RETURNING` write executes on this backend.
+  // Production adapters: `wrapDatabase` decides whether a `RETURNING` write executes on this backend.
   const schemaSql = makeWorkspaceSchemaSql(db);
   // The workspace's own transactions: a copied primitive would agree with production by construction.
   const transactions = inlineWorkspaceStorage(db).transactions.storage;

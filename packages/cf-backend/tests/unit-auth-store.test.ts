@@ -353,7 +353,7 @@ describe('the synthetic development identity', () => {
     }).toEqual({
       status: 200,
       attributes: `; Path=/; Max-Age=${String(30 * 24 * 60 * 60)}; HttpOnly; Secure; SameSite=Lax`,
-      users: [await accountIdFor(env, 'eval-service+devices@kinu.run'), await accountIdFor(env, 'eval-service+devices@kinu.run')],
+      users: [accountIdFor(env, 'eval-service+devices@kinu.run'), accountIdFor(env, 'eval-service+devices@kinu.run')],
       identity: { email: 'eval-service+devices@kinu.run', provider: 'dev' },
     });
   });

@@ -1,10 +1,10 @@
 // The two-process race leg lives in `agent-host.test.ts` and `packages/cli/tests/driver-lease-surfaces.test.ts`.
 // No test waits: the lease carries no timestamp, and that is the property under test.
+import { wrapDatabase } from '@kinu.run/core/identity';
 import { workspaceDatabase } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-
 import { join } from 'node:path';
 import {
   DriverLeaseHold,
@@ -13,7 +13,7 @@ import {
   type SqlExecutor,
   type SqlValue,
 } from '@kinu.run/core';
-import { makeExecRaw, makeSql } from '../src/runtime';
+
 import { osLeaseProcess } from '../src/agent-host/lease-process';
 import { leaseHolder } from './driver-lease-probe';
 
@@ -29,7 +29,7 @@ function workspace() {
 function driver(db: Database, pid: number, alive: Set<number>, kind: DriverKind): DriverLeaseHold {
   const proc: LeaseProcess = { pid, generation: '', isAlive: (holder) => alive.has(holder.pid) };
 
-  return new DriverLeaseHold({ sql: makeSql(db), execRaw: makeExecRaw(db), proc }, kind);
+  return new DriverLeaseHold({ sql: wrapDatabase(db).sql, execRaw: wrapDatabase(db).execRaw, proc }, kind);
 }
 
 describe('the local driver lease', () => {
@@ -92,7 +92,7 @@ describe('the local driver lease', () => {
         const alive = new Set([311, 312]);
         const daemon = driver(db, 311, alive, 'daemon');
         expect(daemon.acquire()).toBeNull();
-        const base = makeSql(db);
+        const base = wrapDatabase(db).sql;
         let interleaved = false;
 
         const sql: SqlExecutor = <T,>(strings: TemplateStringsArray, ...values: SqlValue[]): T[] => {
@@ -108,7 +108,7 @@ describe('the local driver lease', () => {
           return rows;
         };
 
-        const user = new DriverLeaseHold({ sql, execRaw: makeExecRaw(db), proc: { pid: 312, generation: '', isAlive: (holder) => alive.has(holder.pid) } }, 'interactive');
+        const user = new DriverLeaseHold({ sql, execRaw: wrapDatabase(db).execRaw, proc: { pid: 312, generation: '', isAlive: (holder) => alive.has(holder.pid) } }, 'interactive');
 
         expect(user.acquire()).toBeNull();
         expect(leaseHolder(db)).toEqual({ pid: 312, kind: 'interactive' });
@@ -220,7 +220,7 @@ describe('the lease asks the operating system whether its holder still runs', ()
 
   /** The lease taken in the name of `holder`, as the process it names took it. */
   function heldBy(db: Database, holder: LeaseProcess): void {
-    expect(new DriverLeaseHold({ sql: makeSql(db), execRaw: makeExecRaw(db), proc: holder }, 'interactive').acquire()).toBeNull();
+    expect(new DriverLeaseHold({ sql: wrapDatabase(db).sql, execRaw: wrapDatabase(db).execRaw, proc: holder }, 'interactive').acquire()).toBeNull();
   }
 
   test('a holder whose pid a later process now runs holds nothing: the pid was reused', async () => {
@@ -230,7 +230,7 @@ describe('the lease asks the operating system whether its holder still runs', ()
       await withSleeper((pid) => {
         heldBy(db, { ...osLeaseProcess(pid), generation: 'an-earlier-run' });
 
-        expect(new DriverLeaseHold({ sql: makeSql(db), execRaw: makeExecRaw(db), proc: osLeaseProcess(process.pid) }, 'daemon').acquire())
+        expect(new DriverLeaseHold({ sql: wrapDatabase(db).sql, execRaw: wrapDatabase(db).execRaw, proc: osLeaseProcess(process.pid) }, 'daemon').acquire())
           .toBeNull();
         expect(leaseHolder(db)).toEqual({ pid: process.pid, kind: 'daemon' });
       });
@@ -246,7 +246,7 @@ describe('the lease asks the operating system whether its holder still runs', ()
       await withSleeper((pid) => {
         heldBy(db, osLeaseProcess(pid));
 
-        const refusal = new DriverLeaseHold({ sql: makeSql(db), execRaw: makeExecRaw(db), proc: osLeaseProcess(process.pid) }, 'daemon')
+        const refusal = new DriverLeaseHold({ sql: wrapDatabase(db).sql, execRaw: wrapDatabase(db).execRaw, proc: osLeaseProcess(process.pid) }, 'daemon')
           .acquire();
 
         expect(refusal?.holder).toEqual({ pid, kind: 'interactive' });

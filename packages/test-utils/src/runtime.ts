@@ -118,8 +118,6 @@ function noExecutor(): Executor {
 
 function noSchedule(): Schedule {
   return {
-    after: async () => refuse('a delayed callback', 'opts.schedule'),
-    cron: async () => refuse('a cron schedule', 'opts.schedule'),
     fiber: async () => refuse('a durable fiber', 'opts.schedule'),
   };
 }

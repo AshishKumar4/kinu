@@ -263,7 +263,7 @@
     },
     {
       "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.constructor",
-      "complexity": 26
+      "complexity": 22
     },
     {
       "key": "packages/cli/src/slash-commands.ts#instructionsCommand",

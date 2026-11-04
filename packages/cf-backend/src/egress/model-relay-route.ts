@@ -43,17 +43,25 @@ function liveTurnOf(
   return { actor: JSON.stringify([provider, actor.workspaceId, actor.actorId, actor.parentActorId]), turn: JSON.stringify([operation.runId, operation.turnId]) };
 }
 
-function stoppedBy(signal: AbortSignal | undefined, cancel: () => Promise<void>): Promise<never> {
+/** Rejects when its signal aborts, cancelling the relayed call; `settled` stops listening once the call has ended. */
+interface RelayStop {
+  readonly promise: Promise<never>;
+  readonly settled: () => void;
+}
+
+function stoppedBy(signal: AbortSignal | undefined, cancel: () => Promise<void>): RelayStop {
   const stopped = Promise.withResolvers<never>();
 
-  signal?.addEventListener('abort', () => {
+  const onAbort = (): void => {
     stopped.reject(abortCause(signal));
     detach(Effect.catchCause(Effect.promise(cancel), (failed) => Effect.sync(() => diagnostics.failure('model_relay.cancel_failed', toKinuError({
       doing: 'cancelling a relayed model call', cause: Cause.squash(failed), otherwise: 'unavailable',
     })))));
-  }, { once: true });
+  };
 
-  return stopped.promise;
+  signal?.addEventListener('abort', onAbort, { once: true });
+
+  return { promise: stopped.promise, settled: () => { signal?.removeEventListener('abort', onAbort); } };
 }
 
 function deviceLost(failure: { readonly cause: unknown }): boolean {
@@ -128,7 +136,7 @@ export function deviceRouteFetch(input: {
       };
 
       const relaying = Effect.tryPromise({
-        try: () => Promise.race([hub.relayModelCall(who, route.id, callId, new Request(request, { ...init, signal: null })), stopped]),
+        try: () => Promise.race([hub.relayModelCall(who, route.id, callId, new Request(request, { ...init, signal: null })), stopped.promise]),
         catch: (cause) => ({ cause }),
       });
 
@@ -136,23 +144,42 @@ export function deviceRouteFetch(input: {
       const named = Effect.map(relaying, (response) => {
         const reader = response.body?.getReader();
 
-        if (reader === undefined) return stamped(response, `device ${route.id}`);
+        if (reader === undefined) {
+          stopped.settled();
+
+          return stamped(response, `device ${route.id}`);
+        }
 
         const body = new ReadableStream<Uint8Array>({
           pull: (controller) => settle(Effect.match(Effect.tryPromise({ try: () => reader.read(), catch: (cause) => ({ cause }) }), {
             onSuccess: (next) => {
-              if (next.done) controller.close();
-              else controller.enqueue(next.value);
+              if (!next.done) {
+                controller.enqueue(next.value);
+
+                return;
+              }
+
+              stopped.settled();
+              controller.close();
             },
-            onFailure: (failure) => { controller.error(deviceLost(failure) ? lostDevice(failure) : new KinuError('unavailable', `${route.label}'s device relay was interrupted: ${renderThrownChain(failure)}`, failure)); },
+            onFailure: (failure) => {
+              stopped.settled();
+              controller.error(deviceLost(failure) ? lostDevice(failure) : new KinuError('unavailable', `${route.label}'s device relay was interrupted: ${renderThrownChain(failure)}`, failure));
+            },
           })),
-          cancel: (reason) => reader.cancel(reason),
+          cancel: (reason) => {
+            stopped.settled();
+
+            return reader.cancel(reason);
+          },
         });
 
         return stamped(new Response(body, response), `device ${route.id}`);
       });
 
       return yield* Effect.catch(named, (failure) => {
+        stopped.settled();
+
         if (signal?.aborted === true) return Effect.die(failure.cause);
 
         return Effect.fail(deviceLost(failure) ? lostDevice(failure) : toKinuError({ doing: `relaying a ${name} call through the owner's machine`, cause: failure.cause, otherwise: 'unavailable' }));

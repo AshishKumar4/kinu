@@ -23,6 +23,8 @@ import {
   startClaudeSignIn,
   decodeJsonValue,
   discoverOpenAICompatibleModels,
+  splitSpec,
+  ANTHROPIC_CRED_KEY, OPENAI_CRED_KEY, OPENROUTER_CRED_KEY, CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY,
   type ModelInfo,
 } from '@kinu.run/core';
 import { renderThrownChain, tolerate, settle } from '@kinu.run/core/obs';
@@ -131,22 +133,14 @@ export const PROVIDER_CONNECTORS: readonly ProviderDescriptor[] = Object.freeze(
   },
 ] satisfies readonly ProviderDescriptor[]).map((descriptor) => Object.freeze(descriptor)));
 
-const NAMED_ACCOUNT_KEYS: Readonly<Record<string, true>> = Object.freeze({
-  'openai.bearer': true,
-  'openrouter.bearer': true,
-  'anthropic.bearer': true,
-  'openai-compat.default': true,
-  'cloudflare.oauth': true,
-  'cloudflare.ai-gateway': true,
-  'chatgpt.oauth': true,
-  'claude.oauth': true,
-});
+const NAMED_ACCOUNT_KEYS: ReadonlySet<string> = new Set([
+  OPENAI_CRED_KEY, OPENROUTER_CRED_KEY, ANTHROPIC_CRED_KEY, 'openai-compat.default',
+  CLOUDFLARE_OAUTH_CRED_KEY, CLOUDFLARE_AI_GATEWAY_CRED_KEY, CHATGPT_CRED_KEY, CLAUDE_CRED_KEY,
+]);
 
 /** A local key wins at resolution, so both stores are read before a row says "connected". */
 const ACCOUNT_CREDENTIAL_KEYS: Readonly<Record<string, string>> = Object.freeze({
-  openai: 'openai.bearer',
-  openrouter: 'openrouter.bearer',
-  anthropic: 'anthropic.bearer',
+  ...API_KEY_PROVIDERS,
   'openai-compatible': 'openai-compat.default',
 });
 
@@ -250,7 +244,7 @@ export function readProviderConnections(): Promise<ProviderConnections> {
       }
     });
 
-    const extras = [...new Set(heldKeys.map(baseCredentialKey))].filter((key) => NAMED_ACCOUNT_KEYS[key] !== true);
+    const extras = [...new Set(heldKeys.map(baseCredentialKey))].filter((key) => !NAMED_ACCOUNT_KEYS.has(key));
 
     const connections: ProviderConnections = {
       states,
@@ -294,10 +288,10 @@ function localApiKey(providers: NonNullable<KinuConfig['providers']>, id: Provid
   }
 }
 
-function currentModel(model: string | undefined, prefix: string): string | undefined {
-  if (!model?.startsWith(`${prefix}/`)) return undefined;
+function currentModel(model: string | undefined, provider: string): string | undefined {
+  const parts = model === undefined ? null : splitSpec(model);
 
-  return model.slice(prefix.length + 1);
+  return parts?.provider === provider ? parts.modelId : undefined;
 }
 
 type ApiKeyProviderId = keyof typeof API_KEY_PROVIDERS;

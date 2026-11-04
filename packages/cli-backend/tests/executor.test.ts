@@ -81,6 +81,11 @@ sys.exit(0)
     }
   });
 
+  test('a program that exits before it returns answers an error, not its printed output', async () => {
+    expect(await createSandboxedExecutor().execute('console.log("partial"); process.exit(0)', []))
+      .toMatchObject({ result: undefined, error: expect.any(String) });
+  });
+
   test('runs without provider arguments', async () => {
     const result = await createSandboxedExecutor().execute('7 * 6', []);
     expect(result).toEqual({ result: 42 });

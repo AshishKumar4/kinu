@@ -1,7 +1,7 @@
 // A provider's refusal in its own words, safe to log and show; the device daemon requires it too
 // (pc-agent/src/chatgpt.js). Parsing the body is each side's.
 import type { JsonObject, JsonValue } from '../utils/json';
-import { redactSecrets } from './secret-patterns';
+import { redactLiterals, redactSecrets } from './secret-patterns';
 import { revealMisrepresenting } from './untrusted-text';
 
 /**
@@ -19,7 +19,6 @@ export function refusalWords(input: {
   const fields: JsonObject = typeof body === 'object' && body !== null && !Array.isArray(body) ? body : {};
   const said = [fields.error_description, fields.error].find((word): word is string => typeof word === 'string' && word.trim() !== '');
   const words = said ?? `HTTP ${String(input.status)} ${input.statusText}`;
-  const masked = input.submitted.filter((secret) => secret !== '').reduce((text, secret) => text.replaceAll(secret, '<redacted>'), words);
 
-  return revealMisrepresenting(redactSecrets(masked)).replace(/\s+/gu, ' ').trim();
+  return revealMisrepresenting(redactSecrets(redactLiterals(words, input.submitted))).replace(/\s+/gu, ' ').trim();
 }

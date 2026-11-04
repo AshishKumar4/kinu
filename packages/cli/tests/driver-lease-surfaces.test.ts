@@ -36,8 +36,9 @@ async function scenario(body: string): Promise<JsonObject> {
     const { Database } = await import('bun:sqlite');
     const { createWorkspace } = await import('@kinu.run/core/workspace-birth');
     const { DriverLeaseHold, initWorkspaceSchema } = await import('@kinu.run/core');
-    const { makeExecRaw, makeSql, makeWorkspaceSchemaSql, workspaceHome } =
+    const { makeWorkspaceSchemaSql, workspaceHome } =
       await import('./packages/cli-backend/src/index.ts');
+    const { wrapDatabase } = await import('@kinu.run/core/identity');
     const { leaseHolder } = await import('./packages/cli-backend/tests/driver-lease-probe.ts');
     const { osLeaseProcess } = await import('./packages/cli-backend/src/agent-host/lease-process.ts');
     const { placeLocalWorkspace } = await import('./packages/cli/src/config.ts');
@@ -66,7 +67,7 @@ async function scenario(body: string): Promise<JsonObject> {
       const db = new Database(dbPath);
       try {
         const hold = new DriverLeaseHold({
-          sql: makeSql(db), execRaw: makeExecRaw(db),
+          sql: wrapDatabase(db).sql, execRaw: wrapDatabase(db).execRaw,
           proc: osLeaseProcess(rival.pid),
         }, kind);
         if (hold.acquire()) throw new Error('the rival could not take the lease');
@@ -168,7 +169,7 @@ describe('the interactive client and the driver lease', () => {
       const { BackgroundJobStore, openWorkspaceMainActor } = await import('@kinu.run/core');
       const seeded = new Database(dbPath);
       try {
-        const sql = makeSql(seeded);
+        const sql = wrapDatabase(seeded).sql;
         new BackgroundJobStore(sql, openWorkspaceMainActor(sql)).create({ id: 'bgjob-held', kind: 'shell', workMode: 'build', now: Date.now() });
       } finally { seeded.close(); }
       const { jobsCommand } = await import('./packages/cli/src/commands/control.ts');
@@ -195,7 +196,7 @@ describe('the interactive client and the driver lease', () => {
       const { requireAgentTarget } = await import('./packages/cli/src/local-target.ts');
       function learning() {
         const db = new Database(dbPath);
-        try { return openWorkspaceMainActor(makeSql(db)).config.getLearning(); } finally { db.close(); }
+        try { return openWorkspaceMainActor(wrapDatabase(db).sql).config.getLearning(); } finally { db.close(); }
       }
       const before = learning();
       await jobsCommand('leasebot', 'cancel', 'bgjob-missing', { json: true });

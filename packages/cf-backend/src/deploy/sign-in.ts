@@ -31,10 +31,6 @@ const SESSION_ACCOUNT_KEY = 'session.account';
 /** Where the sign-in leg ends: the tab itself, or the helper window's shared finish page. */
 const SESSION_END_KEY = 'session.end';
 
-/** The scopes the grant came with, as Cloudflare named them; absent where its answer named none. */
-
-/** Set when the person signed in again to grant API Tokens (the page's computer row asked them to). */
-
 /** The page's connect run (`connect-window.ts`), which the helper window's finish page names so its tab hears the end. */
 const SESSION_CONNECT_RUN_KEY = 'session.connect_run';
 

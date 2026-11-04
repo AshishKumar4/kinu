@@ -1,3 +1,4 @@
+import { wrapDatabase } from '@kinu.run/core/identity';
 import { seedTranscriptEntry, workspaceDatabase } from '@kinu.run/test-utils';
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -6,7 +7,7 @@ import { join, resolve } from 'node:path';
 import { CHAT_SESSION_ID, SessionHistory, WorkspaceActorDirectory, type ActorHandle } from '@kinu.run/core';
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { MEMORY_PATH } from '@kinu.run/core';
-import { createCLIRuntime, makeSql } from '@kinu.run/cli-backend';
+import { createCLIRuntime } from '@kinu.run/cli-backend';
 import { createCliAgent } from '../src/agent-create';
 import { AGENT_HOME, agentDbPath, updateConfigFile } from '../src/config';
 import { getLocalAgentState, inspectLocalSubagent, listLocalExecutors, readLocalMemory, searchLocalMemory } from '../src/local-inspection';
@@ -36,9 +37,9 @@ afterAll(async () => {
 
 async function say(db: Database, actor: ActorHandle, said: { id: string; content: string; session?: string }): Promise<void> {
   const history = new SessionHistory({
-    sql: makeSql(db), actor, transactionSync: (write) => db.transaction(write)(),
+    sql: wrapDatabase(db).sql, actor, transactionSync: (write) => db.transaction(write)(),
     files: () => Promise.reject(new Error('a short message stores no file')),
-    claims: claimFences(makeSql(db), actor),
+    claims: claimFences(wrapDatabase(db).sql, actor),
   });
 
   await seedTranscriptEntry(history, said.session ?? CHAT_SESSION_ID, { id: said.id, origin: 'input', message: { role: 'user', content: said.content } });
@@ -55,7 +56,7 @@ describe('local inspection of a subagent', () => {
     const identity = db.query<{ id: string; owner_user_id: string | null }, []>('SELECT id, owner_user_id FROM workspace_identity').get();
 
     if (identity === null) throw new Error('the created workspace has no identity row');
-    const directory = new WorkspaceActorDirectory(makeSql(db), { workspaceId: identity.id, ownerUserId: identity.owner_user_id ?? '' });
+    const directory = new WorkspaceActorDirectory(wrapDatabase(db).sql, { workspaceId: identity.id, ownerUserId: identity.owner_user_id ?? '' });
     const main = directory.main();
     const subagent = directory.create({ parent: main, name: 'ask-refiner-a1', creationId: 'lane/ask-refiner-a1', origin: 'evolution', lifetime: 'task' });
     await say(db, main, { id: 'owner-words', content: 'the owner asked' });
@@ -80,7 +81,7 @@ describe('local inspection of status', () => {
     const identity = db.query<{ id: string; owner_user_id: string | null }, []>('SELECT id, owner_user_id FROM workspace_identity').get();
 
     if (identity === null) throw new Error('the created workspace has no identity row');
-    const main = new WorkspaceActorDirectory(makeSql(db), { workspaceId: identity.id, ownerUserId: identity.owner_user_id ?? '' }).main();
+    const main = new WorkspaceActorDirectory(wrapDatabase(db).sql, { workspaceId: identity.id, ownerUserId: identity.owner_user_id ?? '' }).main();
     await say(db, main, { id: 'first', content: 'one' });
     await say(db, main, { id: 'second', content: 'two' });
     await say(db, main, { id: 'aside', content: 'kept in another session', session: 'side-session' });

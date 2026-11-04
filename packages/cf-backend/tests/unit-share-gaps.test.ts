@@ -39,11 +39,11 @@ function answered<Schema extends v.GenericSchema>(result: SlateAnswer<unknown>, 
 }
 
 /** The owner's account, named by their email as the deployment's sign-in names it. */
-const OWNER_ID = await accountIdFor({}, 'owner@example.test');
+const OWNER_ID = accountIdFor({}, 'owner@example.test');
 
 /** The account pat@example.test is on the harness's deployment, which declares no sign-in provider: a share naming
  *  pat reaches the account pat signs in to. */
-const VIEWER_ID = await accountIdFor({}, 'pat@example.test');
+const VIEWER_ID = accountIdFor({}, 'pat@example.test');
 
 const APP_ORIGIN = 'https://app.test';
 

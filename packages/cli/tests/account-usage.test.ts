@@ -1,5 +1,6 @@
 // /stats counts spend per provider account over every workspace this person holds: each local workspace on
 // this machine and, when signed in, the cloud ones. A source it cannot read is named, never counted as zero.
+import { wrapDatabase } from '@kinu.run/core/identity';
 import { describe, expect, test } from 'bun:test';
 import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -9,7 +10,7 @@ import {
   type AccountUsage, type CallAccount, type Usage,
 } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
-import { makeSql, makeWorkspaceSchemaSql, workspaceHome } from '@kinu.run/cli-backend';
+import { makeWorkspaceSchemaSql, workspaceHome } from '@kinu.run/cli-backend';
 import { scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
 import { placeLocalWorkspace } from './helpers/local-refs';
 
@@ -23,7 +24,7 @@ async function localWorkspace(home: string, name: string, calls: ReadonlyArray<{
   try {
     await createWorkspace(db, { name, purpose: 'Spend fixture', home: workspaceHome(db) });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    const actorId = openWorkspaceMainActor(makeSql(db)).actorId;
+    const actorId = openWorkspaceMainActor(wrapDatabase(db).sql).actorId;
 
     for (const [index, call] of calls.entries()) {
       const at = new Date(index * 1_000).toISOString();

@@ -186,7 +186,7 @@ function builtinSignIn<Id>(env: AuthRoutesEnv<Id>, url: URL, returnTo: string): 
     }
 
     if (invite !== null && invite !== '') {
-      const email = yield* Effect.promise(async () => accounts.builtinInvitedEmail(caller, await sha256Hex(invite)));
+      const email = yield* Effect.promise(async () => accounts.builtinInvitedEmail(caller, sha256Hex(invite)));
 
       return email === null
         ? { mode: 'sign-in', notice: 'This invite link was already used or has expired. Ask for a new one.', returnTo }
@@ -261,7 +261,7 @@ function startOAuth<Id>(request: Request, env: AuthRoutesEnv<Id>, providerId: st
 
     const as = yield* Effect.promise(async () => getAuthorizationServer(provider));
 
-    if (!as.authorization_endpoint) return yield* Effect.die(new Error(`${provider.label} OAuth metadata has no authorization endpoint.`));
+    if (!as.authorization_endpoint) return yield* Effect.fail(new KinuError('unsupported', `${provider.label} OAuth metadata has no authorization endpoint.`));
 
     const codeVerifier = oauth.generateRandomCodeVerifier();
     const codeChallenge = yield* Effect.promise(async () => oauth.calculatePKCECodeChallenge(codeVerifier));
@@ -295,7 +295,7 @@ function startOAuth<Id>(request: Request, env: AuthRoutesEnv<Id>, providerId: st
     // KV holds only the binding's hash; this cookie is what the callback proves the sign-in with, beside the bindings of
     // this browser's other starts still under way.
     const headers = new Headers({ 'cache-control': 'no-store' });
-    headers.append('set-cookie', handoffCookie(oauthStateCookieName(yield* Effect.promise(async () => sha256Hex(state))), { binding, run: run.success && connecting ? run.output : null }));
+    headers.append('set-cookie', handoffCookie(oauthStateCookieName(sha256Hex(state)), { binding, run: run.success && connecting ? run.output : null }));
 
     return redirect(authorizationUrl.toString(), { headers });
   });
@@ -323,7 +323,7 @@ function completeOAuth<Id>(
     // state expired or another provider's included.
     // This handoff's own cookie, spent with it whatever the outcome; the browser's other starts keep theirs. A connect's
     // names its run, so a callback its record no longer names (expired, already used) still ends that run.
-    const handoffName = oauthStateCookieName(yield* Effect.promise(async () => sha256Hex(state)));
+    const handoffName = oauthStateCookieName(sha256Hex(state));
     const held = readHandoff(readCookie(request, handoffName));
     const heldRun = v.safeParse(ConnectRunSchema, held?.run);
     let connecting: { readonly run: string | null } | null = heldRun.success ? { run: heldRun.output } : null;
@@ -334,7 +334,7 @@ function completeOAuth<Id>(
 
       connecting = savedState.connectFor === null ? null : { run: savedState.connectRun };
 
-      if (consumed.refusal !== null) return yield* Effect.die(new Error(consumed.refusal));
+      if (consumed.refusal !== null) return yield* Effect.fail(new KinuError('denied', consumed.refusal));
 
       stage = 'metadata';
       const as = yield* Effect.promise(async () => getAuthorizationServer(provider));
@@ -545,9 +545,9 @@ function fetchOAuthProfile(
     const email = stringClaim(userinfo?.email) ?? stringClaim(idClaims?.email);
     const emailVerified = boolClaim(userinfo?.email_verified) ?? boolClaim(idClaims?.email_verified) ?? false;
 
-    if (!sub) return yield* Effect.die(new Error(`${provider.label} did not return a stable subject.`));
+    if (!sub) return yield* Effect.fail(new KinuError('denied', `${provider.label} did not return a stable subject.`));
 
-    if (!email) return yield* Effect.die(new Error(`${provider.label} did not return an email address.`));
+    if (!email) return yield* Effect.fail(new KinuError('denied', `${provider.label} did not return an email address.`));
 
     return {
       provider: provider.id,
@@ -595,7 +595,7 @@ function cloudflareTokenJsonToResponse(body: JsonObject): Effect.Effect<oauth.To
   return Effect.gen(function* () {
     const accessToken = stringClaim(body.access_token);
 
-    if (!accessToken) return yield* Effect.die(new Error('Cloudflare token endpoint did not return an access token.'));
+    if (!accessToken) return yield* Effect.fail(new KinuError('denied', 'Cloudflare token endpoint did not return an access token.'));
 
     const tokenType = stringClaim(body.token_type)?.toLowerCase() === 'dpop' ? 'dpop' : 'bearer';
 
@@ -628,7 +628,7 @@ function cloudflareTokenJsonToResponse(body: JsonObject): Effect.Effect<oauth.To
 
 function fetchCloudflareProfile(accessToken: string | undefined): Effect.Effect<OAuthProfile, KinuError> {
   return Effect.gen(function* () {
-    if (!accessToken) return yield* Effect.die(new Error('Cloudflare token response did not include an access token.'));
+    if (!accessToken) return yield* Effect.fail(new KinuError('denied', 'Cloudflare token response did not include an access token.'));
 
     const res = yield* Effect.promise(async () => fetch('https://api.cloudflare.com/client/v4/user', {
       headers: {
@@ -637,10 +637,10 @@ function fetchCloudflareProfile(accessToken: string | undefined): Effect.Effect<
       },
     }));
 
-    if (!res.ok) return yield* Effect.die(new Error(`Cloudflare user lookup failed: ${res.status}`));
+    if (!res.ok) return yield* Effect.fail(new KinuError('unavailable', `Cloudflare user lookup failed: ${res.status}`));
     const body = v.parse(CloudflareUserEnvelopeSchema, yield* Effect.promise(async () => res.json()));
 
-    if (body.success === false) return yield* Effect.die(new Error('Cloudflare user lookup failed.'));
+    if (body.success === false) return yield* Effect.fail(new KinuError('unavailable', 'Cloudflare user lookup failed.'));
 
     return yield* cloudflareUserResultToProfile(body.result);
   });
@@ -652,9 +652,9 @@ function cloudflareUserResultToProfile(result: JsonValue | undefined): Effect.Ef
     const id = String(user.id);
     const email = user.email.trim();
 
-    if (!id) return yield* Effect.die(new Error('Cloudflare did not return a stable user id.'));
+    if (!id) return yield* Effect.fail(new KinuError('denied', 'Cloudflare did not return a stable user id.'));
 
-    if (!email) return yield* Effect.die(new Error('Cloudflare did not return an email address.'));
+    if (!email) return yield* Effect.fail(new KinuError('denied', 'Cloudflare did not return an email address.'));
 
     const firstName = stringClaim(user.first_name);
     const lastName = stringClaim(user.last_name);
@@ -681,21 +681,21 @@ function fetchGitHubProfile(accessToken: string): Effect.Effect<OAuthProfile, Ki
 
     const userRes = yield* Effect.promise(async () => fetch('https://api.github.com/user', { headers }));
 
-    if (!userRes.ok) return yield* Effect.die(new Error(`GitHub user lookup failed: ${userRes.status}`));
+    if (!userRes.ok) return yield* Effect.fail(new KinuError('unavailable', `GitHub user lookup failed: ${userRes.status}`));
     const user = v.parse(GitHubUserSchema, yield* Effect.promise(async () => userRes.json()));
 
     const emailsRes = yield* Effect.promise(async () => fetch('https://api.github.com/user/emails', { headers }));
 
-    if (!emailsRes.ok) return yield* Effect.die(new Error(`GitHub email lookup failed: ${emailsRes.status}`));
+    if (!emailsRes.ok) return yield* Effect.fail(new KinuError('unavailable', `GitHub email lookup failed: ${emailsRes.status}`));
     const emails = v.parse(v.array(GitHubEmailSchema), yield* Effect.promise(async () => emailsRes.json()));
     const verified = emails.filter((e) => e.email && e.verified);
     const primary = verified.find((e) => e.primary) ?? verified[0];
     const email = primary?.email ?? user.email ?? null;
     const emailVerified = Boolean(primary?.email) || verified.some((e) => e.email === user.email);
 
-    if (!user.id) return yield* Effect.die(new Error('GitHub did not return a stable user id.'));
+    if (!user.id) return yield* Effect.fail(new KinuError('denied', 'GitHub did not return a stable user id.'));
 
-    if (!email) return yield* Effect.die(new Error('GitHub did not return a verified email address.'));
+    if (!email) return yield* Effect.fail(new KinuError('denied', 'GitHub did not return a verified email address.'));
 
     return {
       provider: 'github',

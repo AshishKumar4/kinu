@@ -1,3 +1,4 @@
+import { wrapDatabase, sqlStorageOver } from '@kinu.run/core/identity';
 import { existsSync } from 'node:fs';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import {
@@ -82,8 +83,7 @@ import {
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { tolerateAsync } from '@kinu.run/core/obs';
 import {
-  workspaceHome, makeSql, makeSqlExec, schemaGenesisOf, createLocalProfileAuthority, hostToolchainCapabilities, inspectionFiles,
-  openWorkspaceCLI, resolverModelPlane, soulOf, workspaceMemory,
+  workspaceHome, schemaGenesisOf, createLocalProfileAuthority, hostToolchainCapabilities, inspectionFiles, openWorkspaceCLI, resolverModelPlane, soulOf, workspaceMemory,
 } from '@kinu.run/cli-backend';
 import * as v from 'valibot';
 import { agentDbPath, resolveLocalAgent } from './config';
@@ -164,7 +164,7 @@ export async function getLocalAgentState(name: string): Promise<LocalAgentState>
 /** Same read model as the cloud panel; no window, since `workspaceSpend` sums the whole log. */
 export function getLocalWorkspaceSpend(name: string): WorkspaceSpend {
   return withLocalDb(name, (db) => {
-    const sql = makeSql(db);
+    const sql = wrapDatabase(db).sql;
     const actor = openWorkspaceMainActor(sql);
 
     return workspaceSpend({ events: new RunEventRecorder(sql, actor), sql, actor });
@@ -173,7 +173,7 @@ export function getLocalWorkspaceSpend(name: string): WorkspaceSpend {
 
 export function getLocalAccountSpend(name: string): AccountSpend[] {
   return withLocalDb(name, (db) => {
-    const sql = makeSql(db);
+    const sql = wrapDatabase(db).sql;
 
     return new RunEventRecorder(sql, openWorkspaceMainActor(sql)).spendByAccount();
   });
@@ -208,7 +208,7 @@ export async function readLocalNextTurnTier(name: string, opts: LocalModelResolv
   const { defaults, resolver } = createConfiguredLocalModelResolver(opts);
 
   return withLocalDbAsync(name, async (db) => {
-    const { config } = openWorkspaceMainActor(makeSql(db));
+    const { config } = openWorkspaceMainActor(wrapDatabase(db).sql);
 
     if (envelope === null && config.getModel() === null && defaults.spec === null) return null;
 
@@ -239,7 +239,7 @@ export function listLocalEvents(name: string, opts: { variant?: string; since?: 
 
     if (opts.since) filter.since = opts.since;
 
-    return new EventLog(makeSqlExec(db), actor).query(filter);
+    return new EventLog(sqlStorageOver(db), actor).query(filter);
   });
 }
 
@@ -261,7 +261,7 @@ export function listLocalTimeline(name: string, limit = 100): JsonObject[] {
 
 function localTimeline(db: SqliteDb, limit: number): JsonObject[] {
   const actor = mainActor(db);
-  const sql = makeSql(db);
+  const sql = wrapDatabase(db).sql;
   const deps = { sql, actor, events: new RunEventRecorder(sql, actor), jobs: new BackgroundJobStore(sql, actor), currentRunId: null };
 
   // Through JSON, as the cloud's spans cross its wire: an absent field is no key.
@@ -295,13 +295,13 @@ export function listLocalMctsSearchRuns(name: string, limit = 20): MctsSearchRun
 
 /** Local peers of the three record RPCs. */
 export function listLocalRecordObjectives(name: string, limit = 20): RecordObjectiveSummary[] {
-  return withLocalDb(name, (db) => [...listRecordObjectives(makeSql(db), mainActor(db), null, limit).items]);
+  return withLocalDb(name, (db) => [...listRecordObjectives(wrapDatabase(db).sql, mainActor(db), null, limit).items]);
 }
 
 export function listLocalRecordCells(
   name: string, handle: RecordObjectiveHandle, limit = 50,
 ): RecordCellSummary[] {
-  return withLocalDb(name, (db) => [...listRecordCells(makeSql(db), mainActor(db), handle, { limit }).items]);
+  return withLocalDb(name, (db) => [...listRecordCells(wrapDatabase(db).sql, mainActor(db), handle, { limit }).items]);
 }
 
 /** Paged, because a cell's population is provably unbounded
@@ -310,11 +310,11 @@ export function listLocalRecordCells(
 export function readLocalRecordCell(
   name: string, handle: RecordCellHandle, cursor: SeekCursor | null, limit = 100,
 ): Page<ExplorationRecord> {
-  return withLocalDb(name, (db) => readRecordCell(makeSql(db), mainActor(db), handle, { cursor, limit }));
+  return withLocalDb(name, (db) => readRecordCell(wrapDatabase(db).sql, mainActor(db), handle, { cursor, limit }));
 }
 
 export function getLocalMctsNode(name: string, nodeId: string): SearchNodeDetail | null {
-  return withLocalDb(name, (db) => readSearchNodeDetail(makeSql(db), mainActor(db), nodeId));
+  return withLocalDb(name, (db) => readSearchNodeDetail(wrapDatabase(db).sql, mainActor(db), nodeId));
 }
 
 export function listLocalHeads(name: string, limit = 20): HeadRunView[] {
@@ -323,7 +323,7 @@ export function listLocalHeads(name: string, limit = 20): HeadRunView[] {
 
 export function getLocalChatHistory(name: string, limit = 100): Promise<ChatHistoryEntry[]> {
   return withLocalDbAsync(name, async (db) => {
-    const sql = makeSql(db);
+    const sql = wrapDatabase(db).sql;
     const files = inspectionFiles(db, resolveLocalAgent(name).cwd);
     const transcript = readSessionTranscript(sql, openWorkspaceMainActor(sql), CHAT_SESSION_ID, () => Promise.resolve(files));
 
@@ -339,10 +339,10 @@ export function inspectLocalSubagent(name: string, request: SubagentInspectionRe
     const directory = actorDirectory(db);
 
     if (directory === null) return missingSubagentHistory(input.path);
-    const sql = makeSql(db);
+    const sql = wrapDatabase(db).sql;
     const files = inspectionFiles(db, resolveLocalAgent(name).cwd);
 
-    const raw = makeSqlExec(db);
+    const raw = sqlStorageOver(db);
     const transcriptFor = (actor: ActorHandle) => readSessionTranscript(sql, actor, CHAT_SESSION_ID, () => Promise.resolve(files));
 
     // The file is the owner's own, so the walk needs no owner check. Every actor's rows are in it.
@@ -370,7 +370,7 @@ export function getLocalFacts(name: string, limit = 100): Array<{
 }
 
 export function getLocalQuality(name: string, days?: number): QualityDay[] {
-  return withLocalDb(name, (db) => qualitySeries(makeSql(db), mainActor(db), days === undefined ? {} : { days }));
+  return withLocalDb(name, (db) => qualitySeries(wrapDatabase(db).sql, mainActor(db), days === undefined ? {} : { days }));
 }
 
 /** The live provider's declaration over the same toolchain probe, so this listing is the row the agent is given. */
@@ -395,27 +395,27 @@ export function getLocalToolSurface(name: string): {
 
 /** Core's tool inventory over a workspace's database, opened read-only here. */
 function localCraftedTools(db: SqliteDb): Array<{ name: string; description: string }> {
-  return getToolList(makeSql(db)).crafted.map(({ name, description }) => ({ name, description }));
+  return getToolList(wrapDatabase(db).sql).crafted.map(({ name, description }) => ({ name, description }));
 }
 
 export function listLocalTriggers(name: string): { triggers: TriggerRow[] } {
   return withLocalDb(name, (db) => {
-    return { triggers: new TriggerRegistry(makeSqlExec(db), mainActor(db), NOOP_ALARM).list() };
+    return { triggers: new TriggerRegistry(sqlStorageOver(db), mainActor(db), NOOP_ALARM).list() };
   });
 }
 
 export async function cancelLocalTrigger(name: string, id: string): Promise<{ changed: boolean }> {
   return withLocalDbAsync(name, (db) => {
-    return { changed: new TriggerRegistry(makeSqlExec(db), mainActor(db), NOOP_ALARM).revoke(id, Date.now()) };
+    return { changed: new TriggerRegistry(sqlStorageOver(db), mainActor(db), NOOP_ALARM).revoke(id, Date.now()) };
   }, 'write');
 }
 
 export async function createLocalTimerTrigger(name: string, input: { cron?: string; atMs?: number; label?: string }): Promise<TimerTrigger> {
   return withLocalDbAsync(name, (db) => {
-    initEventsHubTables(makeSqlExec(db));
-    const actor = openWorkspaceMainActor(makeSql(db));
+    initEventsHubTables(sqlStorageOver(db));
+    const actor = openWorkspaceMainActor(wrapDatabase(db).sql);
 
-    return createTimerTrigger(new TriggerRegistry(makeSqlExec(db), actor, NOOP_ALARM), { ...input, trust: 'owner' }, Date.now());
+    return createTimerTrigger(new TriggerRegistry(sqlStorageOver(db), actor, NOOP_ALARM), { ...input, trust: 'owner' }, Date.now());
   }, 'write');
 }
 
@@ -423,19 +423,19 @@ export async function setLocalWorkspaceModel(name: string, spec: string): Promis
   const { resolver } = createConfiguredLocalModelResolver();
 
   return withLocalDbAsync(name, (db) => setModel({
-    config: openWorkspaceMainActor(makeSql(db)).config,
+    config: openWorkspaceMainActor(wrapDatabase(db).sql).config,
     normalize: (value) => resolver.normalizeSpecSync(value),
     onChanged: () => {},
   }, spec), 'write');
 }
 
 export async function setLocalWorkspaceReasoningEffort(name: string, effort: ReasoningEffort): Promise<{ effort: ReasoningEffort }> {
-  return withLocalDbAsync(name, (db) => setReasoningEffort(openWorkspaceMainActor(makeSql(db)).config, effort), 'write');
+  return withLocalDbAsync(name, (db) => setReasoningEffort(openWorkspaceMainActor(wrapDatabase(db).sql).config, effort), 'write');
 }
 
 export async function readLocalWorkspacePins(name: string): Promise<{ model: string | null; reasoningEffort: ReasoningEffort | null }> {
   return withLocalDbAsync(name, (db) => {
-    const config = openWorkspaceMainActor(makeSql(db)).config;
+    const config = openWorkspaceMainActor(wrapDatabase(db).sql).config;
 
     return { model: config.getModel(), reasoningEffort: config.getReasoningEffort() };
   }, 'write');
@@ -489,7 +489,7 @@ function openLocalDb(name: string, mode: DbMode): SqliteDb {
 /** A read of the main actor's own rows. */
 function readMainActor<T>(name: string, read: (sql: SqlExecutor, actor: ActorHandle) => T): T {
   return withLocalDb(name, (db) => {
-    const sql = makeSql(db);
+    const sql = wrapDatabase(db).sql;
 
     return read(sql, openWorkspaceMainActor(sql));
   });
@@ -529,7 +529,7 @@ function countOf(db: SqliteDb, sql: string, ...params: SQLQueryBindings[]): numb
  * {@link getLocalActorInfo}. A database this Kinu opens has its whole schema (`openLocalDb` holds it to its genesis).
  */
 function mainActor(db: SqliteDb): ActorHandle {
-  return openWorkspaceMainActor(makeSql(db));
+  return openWorkspaceMainActor(wrapDatabase(db).sql);
 }
 
 export interface LocalActorRow {
@@ -552,7 +552,7 @@ function actorDirectory(db: SqliteDb): WorkspaceActorDirectory | null {
 
   if (identity === undefined) return null;
 
-  return new WorkspaceActorDirectory(makeSql(db), {
+  return new WorkspaceActorDirectory(wrapDatabase(db).sql, {
     workspaceId: identity.id, ownerUserId: identity.owner_user_id ?? '',
   });
 }
@@ -587,7 +587,7 @@ export function readLocalWorkspaceWork(name: string): WorkspaceWork {
 
     return directory === null
       ? { plans: [], tasks: [] }
-      : readWorkspaceWork(makeSql(db), directory.main(), directory.list({ retired: true }));
+      : readWorkspaceWork(wrapDatabase(db).sql, directory.main(), directory.list({ retired: true }));
   });
 }
 
@@ -603,12 +603,12 @@ export function getLocalActorInfo(name: string, actorId: string): LocalAgentInfo
       if (!directory?.retained(actorId)) throw new Error(`actor ${actorId} is no longer retained in this workspace`);
     };
 
-    const config = createAgentConfigStore(makeSql(db), actorId, assertCurrent);
+    const config = createAgentConfigStore(wrapDatabase(db).sql, actorId, assertCurrent);
 
     return {
       name: row.name,
       purpose: '',
-      scaffoldVersion: getCurrentScaffoldVersion(makeSql(db), { actorId, assertCurrent }) ?? 0,
+      scaffoldVersion: getCurrentScaffoldVersion(wrapDatabase(db).sql, { actorId, assertCurrent }) ?? 0,
       searchNodeCount: countOf(db, `SELECT COUNT(*) AS c FROM search_nodes WHERE actor_id = ?`, actorId),
       createdAt: row.createdAt,
       conversationCount: countOf(db,
@@ -623,7 +623,7 @@ export function getLocalActorInfo(name: string, actorId: string): LocalAgentInfo
 /** The cloud's status fold (`agentStatusFacts`), over SOUL.md where it lies in the workspace's space. */
 function getLocalStatus(db: SqliteDb): LocalStatus {
   const actor = mainActor(db);
-  const { name, purpose, createdAt, scaffoldVersion, searchNodeCount, messageCount } = agentStatusFacts(makeSql(db), actor, soulOf(db), actor.name);
+  const { name, purpose, createdAt, scaffoldVersion, searchNodeCount, messageCount } = agentStatusFacts(wrapDatabase(db).sql, actor, soulOf(db), actor.name);
 
   return {
     name, purpose, createdAt, scaffoldVersion, searchNodeCount, messageCount,
