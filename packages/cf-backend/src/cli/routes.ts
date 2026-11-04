@@ -922,7 +922,10 @@ take_cli_lock() {
     # A real directory is an earlier launcher's lock (its pid inside), and ln would make the link inside it: taken
     # over only once that pid names no process.
     if [ -d "$CLI_LOCK" ] && [ ! -L "$CLI_LOCK" ]; then
-      process_generation "$(cat "$CLI_LOCK/pid" 2>/dev/null || echo 0)" >/dev/null
+      old_pid="$(cat "$CLI_LOCK/pid" 2>/dev/null || true)"
+      # No pid yet (the earlier launcher writes it after making the directory) is a live holder's.
+      case "$old_pid" in ''|*[!0-9]*) return 1 ;; esac
+      process_generation "$old_pid" >/dev/null
       [ $? -eq 1 ] || return 1
       rm -rf "$CLI_LOCK"
       continue
