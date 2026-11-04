@@ -10,7 +10,7 @@ export {
 } from './catalog';
 
 export type {
-  TierId, BuiltinTierId, RoleId,
+  TierId, RoleId,
   TierAssignment, TierAssignments, RoleDefinition, RoleCatalog, ProfileCatalog,
   ProfileAuthority, ProfileCatalogEnvelope,
 } from './catalog';
