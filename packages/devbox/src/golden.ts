@@ -5,7 +5,7 @@ import { DevboxError, attempt } from './errors';
 import { OwedSchema, SNAPSHOT_LIFE_MS, payDebt, type SnapshotDeletion } from './snapshot-registry';
 import { shellPath } from './stream-archive';
 import {
-  isRepositoryIndex, manifestDelta, manifestEntries, PACKAGES_INDEX, packageFiles, packagePaths, TOOLS_INSTALLING, TOOLS_MANIFEST, TOOLS_STAGED, TOOLS_STAMP, toolsApplyCommand,
+  isPackage, isRepositoryIndex, manifestDelta, manifestEntries, PACKAGES_INDEX, packageFiles, packagePaths, TOOLS_INSTALLING, TOOLS_MANIFEST, TOOLS_STAGED, TOOLS_STAMP, toolsApplyCommand,
   toolsFileKey, toolsInstallCommand, toolsManifestKey, toolsPackageInstallCommand, toolsPackagePlanCommand,
 } from './tools';
 import { containerExec } from './processes';
@@ -295,10 +295,13 @@ export function refreshTools(ports: {
 
     yield* attempt('io', () => ports.exec(`mkdir -p ${TOOLS_STAGED}`));
 
-    for (const sha256 of new Set(delta.changed.map((file) => file.sha256))) yield* ports.pipe(toolsFileKey(sha256), `${TOOLS_STAGED}/${sha256}`);
+    // A package moves only if apt reads it (`refreshPackages`): the repository's packages wait for its plan.
+    const files = delta.changed.filter(({ path }) => !isPackage(path));
+
+    for (const sha256 of new Set(files.map((file) => file.sha256))) yield* ports.pipe(toolsFileKey(sha256), `${TOOLS_STAGED}/${sha256}`);
     yield* ports.pipe(toolsManifestKey(ports.pin), `${TOOLS_STAGED}/manifest`);
 
-    if (packagePaths(delta).length > 0) return yield* refreshPackages(ports, delta, manifestEntries(next ?? ''), since);
+    if (packagePaths(delta).length > 0) return yield* refreshPackages(ports, { changed: files, removed: delta.removed }, manifestEntries(next ?? ''), since);
     const applied = yield* attempt('io', () => ports.exec(toolsApplyCommand(delta, ports.pin)));
 
     if (applied.exitCode !== 0) return yield* Effect.fail(new DevboxError('io', `moving the tools to ${ports.pin} exited ${String(applied.exitCode)}: ${applied.stdout.slice(-600)}`));
@@ -308,8 +311,9 @@ export function refreshTools(ports: {
   });
 }
 
-/** A pin that changes a package (D120): apt, asked over the repository with the pin's index, names what it would unpack;
- *  each of those files the delta did not bring is fetched by the pin's sha256 for it, and the full install's apt runs. */
+/** A pin that changes a package (D120), its files placed but its packages not: apt, asked over the repository with the
+ *  pin's index, names what it would unpack; each of those is fetched by the pin's sha256 for it, and the full install's
+ *  apt runs. */
 function refreshPackages(
   ports: Parameters<typeof refreshTools>[0], delta: ReturnType<typeof manifestDelta>, pinned: ReadonlyMap<string, string>, since: number,
 ): Effect.Effect<ToolsRefresh, DevboxError> {
@@ -318,18 +322,18 @@ function refreshPackages(
     const index = indexSha === undefined ? null : yield* attempt('io', () => ports.read(toolsFileKey(indexSha)));
 
     if (index === null) return yield* Effect.fail(new DevboxError('configuration', `the store holds no ${PACKAGES_INDEX} the pin ${ports.pin} names`));
-    const changed = new Set(delta.changed.map(({ path }) => path));
     // The box removed its repository after its last install: the index and list come back whether they changed or not.
-    const indexes = [...pinned].flatMap(([path, sha256]) => (isRepositoryIndex(path) && !changed.has(path) ? [{ sha256, path }] : []));
-    const placed = [...delta.changed, ...indexes];
+    const indexes = [...pinned].flatMap(([path, sha256]) => (isRepositoryIndex(path) ? [{ sha256, path }] : []));
+    const placed = [...delta.changed.filter(({ path }) => !isRepositoryIndex(path)), ...indexes];
 
-    for (const sha256 of new Set(indexes.map((file) => file.sha256))) yield* ports.pipe(toolsFileKey(sha256), `${TOOLS_STAGED}/${sha256}`);
+    const staged = new Set(delta.changed.map(({ path }) => path));
+
+    for (const sha256 of new Set(indexes.filter(({ path }) => !staged.has(path)).map((file) => file.sha256))) yield* ports.pipe(toolsFileKey(sha256), `${TOOLS_STAGED}/${sha256}`);
     const plan = yield* attempt('io', () => ports.exec(toolsPackagePlanCommand({ changed: placed, removed: delta.removed })));
 
     if (plan.exitCode !== 0) return yield* Effect.fail(new DevboxError('io', `planning the pinned packages exited ${String(plan.exitCode)}: ${plan.stdout.slice(-600)}`));
-    const brought = new Set(placed.map(({ path }) => path));
 
-    const fetched = packageFiles(plan.stdout, index).filter((path) => !brought.has(path)).flatMap((path) => {
+    const fetched = packageFiles(plan.stdout, index).flatMap((path) => {
       const sha256 = pinned.get(path);
 
       return sha256 === undefined ? [] : [{ sha256, path }];

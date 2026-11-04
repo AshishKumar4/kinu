@@ -70,10 +70,13 @@ export function packagePaths(delta: ToolsDelta): readonly string[] {
 }
 
 /** A path inside the offline package repository, as a manifest names it. */
-export const isPackagePath = (path: string): boolean => path.startsWith(`${REPO.slice(1)}/`);
+const isPackagePath = (path: string): boolean => path.startsWith(`${REPO.slice(1)}/`);
+
+/** A package in the repository, as a manifest names it. */
+export const isPackage = (path: string): boolean => isPackagePath(path) && path.endsWith('.deb');
 
 /** The repository's own files apt reads beside the packages: its index, and the list a full install asks for. */
-export const isRepositoryIndex = (path: string): boolean => isPackagePath(path) && !path.endsWith('.deb');
+export const isRepositoryIndex = (path: string): boolean => isPackagePath(path) && !isPackage(path);
 
 /** The repository's index, as the manifest names it. */
 export const PACKAGES_INDEX = `${REPO.slice(1)}/Packages`;

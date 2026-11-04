@@ -1,7 +1,8 @@
 /** D72: these contracts run on a throwaway Cloudflare container, never a local image. */
 import { Files, SandboxFileError } from '@cloudflare/sandbox';
+import { Exit } from 'effect';
 import * as v from 'valibot';
-import { attempt, settle } from '../src/errors';
+import { attempt, hold, settle } from '../src/errors';
 import { describeThrown } from '../src/lifecycle';
 import { listFiles } from '../src/file-listing';
 import { Processes, boxEnv, TRUST } from '../src/processes';
@@ -89,6 +90,13 @@ async function toolsRefresh(container: Container, pin: string): Promise<void> {
     + `cat ${TOOLS_STAMP}; echo; test -e ${TOOLS_INSTALLING} && echo marked; test -d /usr/local/lib/devbox/debs && echo repository; true`) },
   { mode: 'incremental', after: `installed\n${pin}` });
   await native(container, `mv ${store}/held.tgz ${store}/devbox-tools/${pin}.tgz`);
+  // A package refresh whose apt fails once its files are placed leaves the box marked, as a cut-short full install does.
+  await native(container, `set -e; mkdir -p ${SCRATCH}/no-apt; printf '#!/bin/sh\\nexit 100\\n' > ${SCRATCH}/no-apt/apt-get; chmod +x ${SCRATCH}/no-apt/apt-get; `
+    + `dpkg -r ripgrep >/dev/null; printf previous > ${TOOLS_STAMP}; `
+    + `sed -i -E 's#^[0-9a-f]{64}(  usr/local/lib/devbox/debs/(Packages|ripgrep_[^ ]*\\.deb))$#${'0'.repeat(64)}\\1#' ${TOOLS_MANIFEST}`);
+  const halted = await hold(refreshTools({ ...ports, exec: async (command: string) => run(`PATH=${SCRATCH}/no-apt:$PATH\n${command}`) }));
+
+  equal({ halted: Exit.isFailure(halted), marked: await native(container, `test -e ${TOOLS_INSTALLING} && echo marked; true`) }, { halted: true, marked: 'marked' });
   // A full install whose apt fails after the archive is extracted, the extracted manifest naming this pin.
   await native(container, `set -e; mkdir -p ${SCRATCH}/no-apt; printf '#!/bin/sh\\nexit 100\\n' > ${SCRATCH}/no-apt/apt-get; chmod +x ${SCRATCH}/no-apt/apt-get; printf previous > ${TOOLS_STAMP}`);
   const cut = await run(`PATH=${SCRATCH}/no-apt:$PATH\n${toolsInstallCommand(`${SCRATCH}/tools.tgz`, pin)}`);

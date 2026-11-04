@@ -11,9 +11,8 @@ import { manifestDelta, packagePaths, TOOLS_MANIFEST, TOOLS_STAGED, toolsApplyCo
 
 // Production, 2026-10-24 (ledger 1024-h): the owner's box restored its own snapshot under tools 334f3712 where the deploy
 // pinned 0c6dd2b8, and fetched and installed the whole 358 MB tarball inside its 25 s start, 12-24 s on every box after a
-// re-pin, for a change of one 0.7 MB binary. A start fetches the files that changed, by the pin's manifest. The 11-02
-// re-pin added ripgrep, a package, and every box installed the whole tarball again, 12 to 30 s: a pin that changes a
-// package brings back the repository files apt reads and runs the full install's apt over them (D120).
+// re-pin, for a change of one 0.7 MB binary. A start fetches the files that changed, by the pin's manifest. A pin that
+// changes a package (D120) is the container tier's `tools` contract's, which runs apt.
 
 const scratch = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}tools-refresh-`));
 
@@ -103,9 +102,6 @@ describe('the apply command, run against a scratch root', () => {
   });
 });
 
-const INDEX = ['Package: tini', 'Version: 0.19.0-2', 'Filename: ./tini_0.19.0-2_amd64.deb', '',
-  'Package: xdotool', 'Version: 1:3.2-1', 'Filename: ./xdotool_3.2-1_amd64.deb', ''].join('\n');
-
 describe('a start\'s tools refresh', () => {
   const installed = [line('lower 1', 'usr/local/bin/devbox-block-lower'), line('bun', 'usr/local/bin/bun')].join('\n');
   const next = [line('lower 2', 'usr/local/bin/devbox-block-lower'), line('bun', 'usr/local/bin/bun')].join('\n');
@@ -121,8 +117,7 @@ describe('a start\'s tools refresh', () => {
       exec: async (command: string) => {
         const kinds: readonly (readonly [boolean, string])[] = [
           [command.startsWith('cat /usr/local/lib/devbox/tools-installed'), 'stamp'], [command.includes(`cat ${TOOLS_MANIFEST}`), 'manifest'],
-          [command.includes(' -s install '), 'plan'], [command.includes('extractMs='), 'install'], [command.includes('installMs=$'), 'packages'],
-          [command.includes('filesMs='), 'apply'], [command.startsWith('mkdir'), 'mkdir'],
+          [command.includes('extractMs='), 'install'], [command.includes('filesMs='), 'apply'], [command.startsWith('mkdir'), 'mkdir'],
         ];
 
         asked.push(kinds.find(([matched]) => matched)?.[1] ?? command.slice(0, 20));
@@ -131,11 +126,7 @@ describe('a start\'s tools refresh', () => {
 
         if (command.includes(`cat ${TOOLS_MANIFEST}`)) return unfinished ? { stdout: '', exitCode: 3 } : { stdout: manifest, exitCode: 0 };
 
-        if (command.includes(' -s install ')) return { stdout: 'tini 0.19.0-2\nxdotool 1:3.2-1\n', exitCode: 0 };
-
         if (command.includes('extractMs=')) return { stdout: 'extractMs=2100 installMs=1500 changed=0\n', exitCode: 0 };
-
-        if (command.includes('installMs=$')) return { stdout: 'filesMs=30 installMs=1800 files=3 removed=0 bytes=96000 changed=2\n', exitCode: 0 };
 
         if (command.includes('filesMs=')) return { stdout: 'filesMs=40 files=1 removed=0 bytes=712000\n', exitCode: 0 };
 
@@ -144,8 +135,6 @@ describe('a start\'s tools refresh', () => {
       pipe: (key: string, path: string) => Effect.sync(() => { asked.push(`pipe ${key} -> ${path}`); }),
       read: async (key: string) => {
         asked.push(`read ${key}`);
-
-        if (key === toolsFileKey(sha(INDEX))) return INDEX;
 
         return published && key === toolsManifestKey('pin-2') ? pinned : null;
       },
@@ -173,25 +162,6 @@ describe('a start\'s tools refresh', () => {
       refresh: { mode: 'incremental', files: 1, removed: 0, bytes: 712000, filesMs: 40, ms: refresh.ms },
       asked: ['stamp', `read ${toolsManifestKey('pin-2')}`, 'manifest', 'mkdir', `pipe ${toolsFileKey(sha('lower 2'))} -> ${TOOLS_STAGED}/${sha('lower 2')}`,
         `pipe ${toolsManifestKey('pin-2')} -> ${TOOLS_STAGED}/manifest`, 'apply'],
-    });
-  });
-
-  test('a pin that changes a package fetches the changed files, the repository\'s list, and the packages apt names that the delta lacks, then runs apt', async () => {
-    const debs = 'usr/local/lib/devbox/debs';
-
-    const kept = [line('xdotool', `${debs}/xdotool_3.2-1_amd64.deb`), line('tini\nxdotool\n', `${debs}/wanted`)];
-
-    // xdotool and the list are as the box's last install had them, and that install removed the repository after it.
-    const repackaged = box({ stamp: 'pin-1', manifest: [installed, ...kept].join('\n'), published: true,
-      pinned: [next, line('tini 2', `${debs}/tini_0.19.0-2_amd64.deb`), line(INDEX, `${debs}/Packages`), ...kept].join('\n') });
-
-    const refresh = await repackaged.run();
-
-    expect({ refresh, asked: repackaged.asked.filter((step) => !step.startsWith('read')) }).toEqual({
-      refresh: { mode: 'incremental', files: 3, removed: 0, bytes: 96000, filesMs: 30, installMs: 1800, changed: 2, ms: refresh.ms },
-      asked: ['stamp', 'manifest', 'mkdir', ...[sha('lower 2'), sha('tini 2'), sha(INDEX)].map((each) => `pipe ${toolsFileKey(each)} -> ${TOOLS_STAGED}/${each}`),
-        `pipe ${toolsManifestKey('pin-2')} -> ${TOOLS_STAGED}/manifest`, `pipe ${toolsFileKey(sha('tini\nxdotool\n'))} -> ${TOOLS_STAGED}/${sha('tini\nxdotool\n')}`, 'plan',
-        `pipe ${toolsFileKey(sha('xdotool'))} -> ${TOOLS_STAGED}/${sha('xdotool')}`, 'packages'],
     });
   });
 
