@@ -136,7 +136,7 @@ import { ActorSession, type ActorTurnLease,
   type ChatTurnInput, type CompactOutcome, type ComposedRequest, type ContextFill, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
 } from '@kinu.run/core';
 import {
-  attempt, diagnostics, KinuError, renderThrownChain, settle as settleEffect, settleLogged, settleSync, tolerate, toKinuError, detach, logged, type Refusal,
+  attempt, diagnostics, KinuError, renderThrownChain, settle as settleEffect, settleLogged, settleLoggedSync, settleSync, tolerate, toKinuError, detach, logged, type Refusal,
 } from '@kinu.run/core/obs';
 import { cleanupFacetScratch, soulIn, writeTransaction, type CLIRuntime } from './runtime';
 import { createLocalActorHost } from './actor-host';
@@ -1004,9 +1004,9 @@ export class LocalAgentSession {
   }
 
   async testModel(spec: string, signal: AbortSignal): Promise<ModelTestResult> {
-    if (this.modelResolver === null) throw new KinuError('missing', 'this session has no model resolver to test through');
-
     const resolver = this.modelResolver;
+
+    if (resolver === null) return settleEffect(Effect.fail(new KinuError('missing', 'this session has no model resolver to test through')));
 
     return testModel({ spec, resolve: (named, affinity) => resolver.resolveModel(named, affinity), report: this.modelCallSink, signal });
   }
@@ -1164,16 +1164,9 @@ export class LocalAgentSession {
 
   /** Skips a window outliving the session so consumed events never bind to a dead pump's turn. */
   setTimer(fn: () => Promise<void>, ms: number): void {
-    setTimeout(() => detach(Effect.promise(async () => { if (this.chat.closed) return;
-    
-    try {
-      await fn();
-    } catch (cause) {
-      diagnostics.failure(
-        'drain.timer_callback_failed',
-        toKinuError({ doing: 'running the drain-debounce timer callback', cause, otherwise: 'io' }),
-      );
-    } })), ms);
+    setTimeout(() => detach(this.chat.closed
+      ? Effect.void
+      : logged('drain.timer_callback_failed', { doing: 'running the drain-debounce timer callback', otherwise: 'io' }, fn)), ms);
   }
 
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult> {
@@ -1672,13 +1665,9 @@ export class LocalAgentSession {
 
     if (!id) return;
 
-    try { recorder.emit(id, input); }
-    catch (err) {
-      diagnostics.failure(
-        'event.run_row_write_failed',
-        toKinuError({ doing: 'appending a row to the durable run-event log', cause: err, otherwise: 'io' }),
-      );
-    }
+    settleLoggedSync('event.run_row_write_failed', { doing: 'appending a row to the durable run-event log', otherwise: 'io' }, () => {
+      recorder.emit(id, input);
+    });
   }
 
   /** One run's durable events (DO getRunEvents peer); `since` is the SSE resume index. */
