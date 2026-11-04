@@ -9,7 +9,8 @@ import { DEFAULT_ADVISOR_MIN_SEVERITY } from '@kinu.run/core';
 import type { EvolutionConfigView, FileCheckpointEntry, FileRestoreChange } from '@kinu.run/core';
 import { filterCommands } from '@kinu.run/core';
 import { commandsForClient, executeSlashCommand, performUndo } from '../src/slash-commands';
-import type { AgentClient, FileCheckpointSurface } from '../src/agent-client';
+import type { FileCheckpointSurface } from '@kinu.run/core';
+import type { AgentClient } from '../src/agent-client';
 import { fakeAgentClient } from './helpers/agent-client';
 
 function inertCheckpointSurface(): FileCheckpointSurface {

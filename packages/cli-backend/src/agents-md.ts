@@ -4,7 +4,7 @@
  */
 
 import { Effect, Cause } from 'effect';
-import { settle } from '@kinu.run/core/obs';
+import { errnoCode, settle } from '@kinu.run/core/obs';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import {
@@ -12,7 +12,6 @@ import {
   type AgentsMdSources, type InstructionCandidate, type InstructionFileProbe, type InstructionFileRead,
   type InstructionTrustResolver, type ModelWindow,
 } from '@kinu.run/core';
-import * as v from 'valibot';
 
 /**
  * Size `<dir>/AGENTS.md` may contribute, or null. `lstatSync` first: `statSync` follows an
@@ -30,15 +29,6 @@ type Candidate =
   }
   | { readonly kind: 'unavailable'; readonly reason: string }
   | null;
-
-/** The errno a node:fs throw carries, or undefined. */
-const ERRNO_SCHEMA = v.object({ code: v.optional(v.string()) });
-
-function errnoOf(thrown: { readonly error: unknown }): string | undefined {
-  const parsed = v.safeParse(ERRNO_SCHEMA, thrown.error);
-
-  return parsed.success ? parsed.output.code : undefined;
-}
 
 /**
  * Resolve one candidate; a symlink cycle (ELOOP) or ENOENT reports unavailable instead of failing
@@ -86,9 +76,9 @@ const TARGET_MISSING: Candidate = { kind: 'unavailable', reason: 'symlink target
 function probing<A>(read: () => A, answers: Readonly<Record<string, Candidate>>): Effect.Effect<{ readonly value: A } | { readonly answer: Candidate }> {
   return Effect.catchCause(Effect.sync(() => ({ value: read() })), (failed) => {
     const error = Cause.squash(failed);
-    const code = errnoOf({ error });
+    const code = error instanceof Error ? errnoCode(error) : null;
 
-    return code !== undefined && Object.hasOwn(answers, code) ? Effect.succeed({ answer: answers[code] ?? null }) : Effect.die(error);
+    return code !== null && Object.hasOwn(answers, code) ? Effect.succeed({ answer: answers[code] ?? null }) : Effect.die(error);
   });
 }
 
@@ -121,7 +111,8 @@ function readAsSized(candidate: Extract<Candidate, { kind: 'file' }>): Effect.Ef
 
       return { kind: 'text', text: bytes.toString('utf8') };
     }), (failed) => {
-      const code = errnoOf({ error: Cause.squash(failed) });
+      const error = Cause.squash(failed);
+      const code = error instanceof Error ? errnoCode(error) : null;
 
       return code === 'ENOENT' || code === 'ELOOP'
         ? Effect.succeed(changed('file changed after containment check')) : Effect.failCause(failed);

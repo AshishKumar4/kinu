@@ -996,8 +996,6 @@ export abstract class ActorAgent extends Agent<Env> {
     this.onClose = gated.onClose;
     this.onRequest = gated.onRequest;
   }
-  /** Lazy: `actorHandle()` resolves the directory row the constructor creates, after field init. */
-
 
   // A durable turn ends once; its effects are claimed in `tool_effect_claims` keyed on the
   // durable turn id, written before the first effect and settled after the last.

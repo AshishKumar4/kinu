@@ -1,5 +1,5 @@
 /** Observability primitives; nothing here imports a backend. */
-export { classify, type ExpectedFailure } from './expected-failure';
+export { classify, errnoCode, type ExpectedFailure } from './expected-failure';
 
 export { ALARM_WORK, HOSTED_ALARM_WORK } from './alarm-work';
 

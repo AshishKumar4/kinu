@@ -1,3 +1,4 @@
+import { wrapDatabase, sqlStorageOver } from '@kinu.run/core/identity';
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { expect } from 'bun:test';
 import { AwaitedList, createTestActorsOver, createTestSql, readTranscriptRows, scratchPath, type HandClock, type TranscriptRow, scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
@@ -11,7 +12,7 @@ import type { LLMProviderConfig } from '@kinu.run/core';
 import {
   CHAT_SESSION_ID, profileCatalogDigest, EventLog, TriggerRegistry, listTriggers, type JsonObject, type ProfileCatalogEnvelope, type EventVariant, openWorkspaceMainActor, workspaceSkillPath, WORKSPACE_SKILLS_DIR,
 } from '@kinu.run/core';
-import { createCLIRuntime, makeSql, makeSqlExec, type CLIRuntime, makeWorkspaceSchemaSql } from '../../src/runtime';
+import { createCLIRuntime, type CLIRuntime, makeWorkspaceSchemaSql } from '../../src/runtime';
 import type { SessionEvent } from '@kinu.run/core';
 import { LocalAgentSession, type LocalAgentSessionOpts } from '../../src/local-session';
 import { type LocalModelResolver } from '../../src/model-resolver';
@@ -269,9 +270,9 @@ export function setup(answer = 'hello there', model?: LanguageModel, extra?: Par
 
 /** The events hub read over a second handle, as the CLI's inspection reads it; a session exposes no log reader. */
 export function hub(db: Database) {
-  const sql = makeSqlExec(db);
+  const sql = sqlStorageOver(db);
   // Both rails are actor-scoped; reading without an actor returns an empty set, a false "nothing pending".
-  const actor = openWorkspaceMainActor(makeSql(db));
+  const actor = openWorkspaceMainActor(wrapDatabase(db).sql);
   const log = new EventLog(sql, actor);
 
   return {

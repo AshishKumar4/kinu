@@ -26,6 +26,23 @@ export function serialQueue(): <T>(op: () => Promise<T>) => Promise<T> {
 	};
 }
 
+/** {@link serialQueue} per key: ops under one key run one after another, and a key with nothing queued is forgotten. */
+export function keyedSerialQueue(): <T>(key: string, op: () => Promise<T>) => Promise<T> {
+	const tails = new Map<string, Promise<unknown>>();
+
+	return async (key, op) => {
+		const run = (tails.get(key) ?? Promise.resolve()).then(op);
+		const settled = Promise.allSettled([run]);
+		tails.set(key, settled);
+
+		try {
+			return await run;
+		} finally {
+			if (tails.get(key) === settled) tails.delete(key);
+		}
+	};
+}
+
 /**
  * Run `work` but stop waiting when `signal` aborts. An already-aborted signal rejects with `message`
  * without starting work; a later abort rejects with what `terminate` resolves, or, where it resolves null (it found the

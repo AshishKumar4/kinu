@@ -10,7 +10,7 @@ import type {
   AgentRuntime, ActorHandle, BoundActor, ModelRouteResolution,
   ResolvedTurnProfile, Shell, ShellExecOptions, ShellExecResult, OutputSpill, SpillOutcome, VfsMount,
 } from '@kinu.run/core';
-import type { Memory, RoutedLLM, Schedule, SqlExec, SqlExecutor, RawSqlExec, WorkspaceSchemaSql } from '@kinu.run/core';
+import type { Memory, RoutedLLM, Schedule, SqlExecutor, WorkspaceSchemaSql } from '@kinu.run/core';
 import type { DeferredApprovalChannel, FilesOwner, RequestShellApproval, ShellApprovalPolicy } from '@kinu.run/core';
 import { spawn } from 'node:child_process';
 import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, rmSync, chmodSync, writeSync } from 'node:fs';
@@ -102,34 +102,34 @@ export interface CLIRuntime extends AgentRuntime {
   filesForActor: (actor: ActorHandle) => Promise<SessionFilePlane>;
   /** Gates shells and tool files, a head's too. */
   approvalPolicy: ShellApprovalPolicy;
-  setApprovalDeferrals?(channel: DeferredApprovalChannel | null): void;
-  setModelCallSink?(sink: ModelCallSink | null): void;
+  setApprovalDeferrals(channel: DeferredApprovalChannel | null): void;
+  setModelCallSink(sink: ModelCallSink | null): void;
   /** Lifecycle sink bound beside {@link setModelCallSink}. */
-  setModelOperations?(sink: ModelOperationSink | null): void;
+  setModelOperations(sink: ModelOperationSink | null): void;
   /** The folder it works in. See CLIRuntimeConfig.cwd. */
   cwd: string;
   space: string;
   ownFiles: VFS;
   plane: LocalPlane;
   memoryStore: MemoryStore;
-  setModelForRoute?(factory: (resolution: ModelRouteResolution) => RoutedLLM): void;
-  modelForRoute?: (resolution: ModelRouteResolution) => RoutedLLM;
+  setModelForRoute(factory: (resolution: ModelRouteResolution) => RoutedLLM): void;
+  modelForRoute: (resolution: ModelRouteResolution) => RoutedLLM;
   /** A facet's lanes share its parent's credential lookup and refusal notices. */
-  attemptOf?: (spec: string) => Promise<ModelAttemptIdentity | null>;
+  attemptOf: (spec: string) => Promise<ModelAttemptIdentity | null>;
   /** The actor's one notice state for its runtime's life; the session's titling says through it too. */
   refusals: TierRefusals;
   /**
    * Fallback turn-profile authority, so a session-less runtime (`kinu evolve`) still
    * routes. A session refines its inputs rather than installing a second resolver.
    */
-  profiles?: LocalProfileAuthority;
+  profiles: LocalProfileAuthority;
   /**
    * Override seam for harnesses (`tests/live-model/harness.ts`); `null`
    * withholds resolution so an unrouted lane says so rather than inventing a model.
    */
-  setProfileResolver?(resolve: (() => Promise<ResolvedTurnProfile>) | null): void;
+  setProfileResolver(resolve: (() => Promise<ResolvedTurnProfile>) | null): void;
   /** The issued operation's profile, or current authority for new work. */
-  ensureProfile?: () => Promise<ResolvedTurnProfile>;
+  ensureProfile: () => Promise<ResolvedTurnProfile>;
   /** The agent's own gated, checkpointed host shell; a swarm node it seats runs in it too. */
   shell: Shell;
   /** A facet's gated, checkpointed host shell with its own `HOME`/`TMPDIR`. */
@@ -140,18 +140,11 @@ export interface CLIRuntime extends AgentRuntime {
    * Late-bound: the resolver belongs to the root's ActorHost, built after this
    * runtime. Unset manages and lists nothing.
    */
-  setChildContext?(resolver: ChildContextResolver | null): void;
+  setChildContext(resolver: ChildContextResolver | null): void;
 }
 
 export type LocalDb = Database;
 
-export function makeSql(db: Database): SqlExecutor {
-  return wrapDatabase(db).sql;
-}
-
-export function makeExecRaw(db: { exec(sql: string): void }): RawSqlExec {
-  return (ddl: string) => db.exec(ddl);
-}
 
 /** Main's memory over its notes: the one its memory tool, and `kinu memory`, read and search. */
 function notesMemory(notes: ReturnType<typeof agentHomeFiles>, sql: SqlExecutor, transactionSync: (write: () => void) => void) {
@@ -163,7 +156,7 @@ function notesMemory(notes: ReturnType<typeof agentHomeFiles>, sql: SqlExecutor,
 
 /** The memory of the workspace whose database `db` is, as its memory tool reads and searches it. */
 export function workspaceMemory(db: Database): Memory {
-  return notesMemory(workspaceHome(db), makeSql(db), (write) => writeTransaction(db, write)).memory;
+  return notesMemory(workspaceHome(db), wrapDatabase(db).sql, (write) => writeTransaction(db, write)).memory;
 }
 
 /** Session payload reads for inspection, over the workspace's folder and own space. */
@@ -171,14 +164,11 @@ export function inspectionFiles(db: Database, cwd: string): Pick<VFS, 'readFile'
   return settleSync(Effect.map(ownSpaceOf(db), (space) => localFilePlane({ folder: cwd, space, views: [], checkpoints: undefined })));
 }
 
-/** Positional-binding SQL; a Durable Object's `ctx.storage.sql` is this natively. */
-export function makeSqlExec(db: Pick<Database, 'query' | 'prepare'>): SqlExec {
-  return sqlStorageOver(db);
-}
-
 /** All onto one database, so no caller can pair a DDL handle with another file's reads. */
 export function makeWorkspaceSchemaSql(db: LocalDb): WorkspaceSchemaSql {
-  return { execRaw: makeExecRaw(db), sql: makeSql(db), exec: makeSqlExec(db), transactionSync: (write) => writeTransaction(db, write) };
+  const { execRaw, sql } = wrapDatabase(db);
+
+  return { execRaw, sql, exec: sqlStorageOver(db), transactionSync: (write) => writeTransaction(db, write) };
 }
 
 /** A lock held longer than this is a hung opener, and the write fails naming the lock. */
@@ -212,8 +202,8 @@ function buildCLIRuntime(
   // WAL with NORMAL: a commit waits on no fsync. A process crash keeps every commit; a power loss can roll back the
   // last few, never corrupt the file. A rollback-journal file keeps FULL, where NORMAL could corrupt it.
   if (db.query<{ journal_mode: string }, []>('PRAGMA journal_mode').get()?.journal_mode === 'wal') db.exec('PRAGMA synchronous = NORMAL');
-  const sql = makeSql(db);
-  const execRaw = makeExecRaw(db);
+  const sql = wrapDatabase(db).sql;
+  const execRaw = wrapDatabase(db).execRaw;
 
   // A facet is the root's database bound to one of its agents, which the host binds with no open of its own: the root's
   // check, before any schema runs over it.
@@ -332,14 +322,12 @@ function buildCLIRuntime(
 
   const llm = createRoutedModelLane(actor, 'reflection', modelLanes);
 
-  const decisionEndpoint = workersAiRoute(config.llm, config.cloud)?.auth;
-
-  // `/ai/run` beside a chat model's `/ai/v1`: only Cloudflare's API and the worker's proxy serve one. Elsewhere Clef
-  // refuses as unconnected, said once, and the fast tier answers what its measured agreement trusts it with.
-  const servesRun = /\/ai\/v1\/?$/.test(decisionEndpoint?.baseURL ?? '');
+  // Where no endpoint serves `/ai/run`, Clef refuses as unconnected, said once, and the fast tier answers what its
+  // measured agreement trusts it with.
+  const decisionRoute = workersAiRoute(config.llm, config.cloud);
 
   const decide = decisionPortOf(createDecisionPort({
-    run: restDecisionRun({ getAuth: async () => (servesRun ? decisionEndpoint ?? null : null) }),
+    run: restDecisionRun({ getAuth: async () => (decisionRoute?.servesRun === true ? decisionRoute.auth : null) }),
     model: async () => (await ensureProfile()).decisionModel,
     report,
     refusals,
@@ -661,11 +649,7 @@ async function buildCLIHeadRuntime(
   }));
 
   const parentHandle: ParentWorkspaceHandle = {
-    exec: (command) => answerParentRpc('', async () => {
-      if (!parent.shell) throw new Error('the parent workspace has no shell');
-
-      return parent.shell.exec(command);
-    }),
+    exec: (command) => answerParentRpc('', async () => parent.shell.exec(command)),
   };
 
   executionRouter.register(createParentExecutor({
@@ -711,6 +695,9 @@ async function buildCLIHeadRuntime(
 /** A pipe holds at most one buffer (64KB) of unread output at exit; generous
  *  for the command, short enough that an orphaned grandchild's pipe is ignored. */
 const EXITED_COMMAND_DRAIN_MS = 250;
+
+/** How long a stopped command's group has after SIGTERM before SIGKILL. */
+const STOPPED_COMMAND_KILL_MS = 1_500;
 
 export function createHostShell(cwd: string, source: NodeJS.ProcessEnv = process.env): Shell {
   const env = unsandboxedCommandEnvironment(source, readLaunchDotenv(process.cwd(), source.NODE_ENV));
@@ -762,7 +749,7 @@ export function createHostShell(cwd: string, source: NodeJS.ProcessEnv = process
           if (!settled) {
             tolerate(() => process.kill(-pid, 'SIGKILL'), 'esrch');
           }
-        }, 1500).unref();
+        }, STOPPED_COMMAND_KILL_MS).unref();
       };
 
       if (signal?.aborted) onAbort();

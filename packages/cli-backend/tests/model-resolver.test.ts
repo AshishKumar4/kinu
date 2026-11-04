@@ -83,7 +83,7 @@ describe('createLocalModelResolver', () => {
 
     try {
       await child.session.end();
-      const lane = parent.rt.modelForRoute?.({ source: 'fast', tier: 'fast', model: `workers-ai/${llm.model}`, reasoningEffort: 'high', fallbacks: [], retries: 1 });
+      const lane = parent.rt.modelForRoute({ source: 'fast', tier: 'fast', model: `workers-ai/${llm.model}`, reasoningEffort: 'high', fallbacks: [], retries: 1 });
 
       if (lane === undefined) throw new Error('the actor must have its routed model');
       await expect(lane.complete('title this actor')).rejects.toThrow();
@@ -251,7 +251,7 @@ describe('createLocalModelResolver', () => {
 
         for (const retries of [0, 1]) {
           requests = 0;
-          const lane = rt.modelForRoute?.({ source: 'fast', tier: 'fast', model: `workers-ai/${llm.model}`, reasoningEffort: 'high', fallbacks: [], retries });
+          const lane = rt.modelForRoute({ source: 'fast', tier: 'fast', model: `workers-ai/${llm.model}`, reasoningEffort: 'high', fallbacks: [], retries });
 
           if (lane === undefined) throw new Error('the runtime must bind the fast lane');
           await expect(lane.complete('title this workspace')).rejects.toThrow();
@@ -274,7 +274,7 @@ describe('createLocalModelResolver', () => {
     const runtimes = [endpointRuntime(servedWorkersAi(server.port)), endpointRuntime({ ...servedWorkersAi(server.port), ...staleCap })];
 
     try {
-      for (const { rt } of runtimes) await rt.modelForRoute?.(route).complete('reflect');
+      for (const { rt } of runtimes) await rt.modelForRoute(route).complete('reflect');
       expect(bodies).toHaveLength(2);
 
       for (const body of bodies) {
@@ -306,14 +306,14 @@ describe('createLocalModelResolver', () => {
     });
 
     const { db, rt } = endpointRuntime(servedWorkersAi(server.port));
-    rt.setModelCallSink?.((report) => { reports.push(report); });
+    rt.setModelCallSink((report) => { reports.push(report); });
     // A bare id, as an owner types one: the row names the spec the registry spells.
     const route = { source: 'judge', tier: 'deep', model: '@cf/test/model', reasoningEffort: null, fallbacks: [], retries: 0 } as const;
 
     try {
-      expect(await rt.modelForRoute?.(route).complete('grade this')).toBe('graded');
+      expect(await rt.modelForRoute(route).complete('grade this')).toBe('graded');
       quiet = true;
-      await rt.modelForRoute?.(route).complete('grade this too');
+      await rt.modelForRoute(route).complete('grade this too');
     } finally {
       await server.stop(true);
       db.close();
@@ -334,7 +334,7 @@ describe('createLocalModelResolver', () => {
 
     try {
       for (const reasoningEffort of ['high', null] as const) {
-        await rt.modelForRoute?.({ source: 'judge', tier: 'deep', model: 'workers-ai/@cf/test/model', reasoningEffort, fallbacks: [], retries: 0 })
+        await rt.modelForRoute({ source: 'judge', tier: 'deep', model: 'workers-ai/@cf/test/model', reasoningEffort, fallbacks: [], retries: 0 })
           .complete('grade');
       }
     } finally {
@@ -363,7 +363,7 @@ describe('createLocalModelResolver', () => {
     try {
       const route = { source: 'fast', tier: 'fast', model: 'workers-ai/@cf/test/model', reasoningEffort: null, fallbacks: [], retries: 1 } as const;
 
-      await expect(rt.modelForRoute?.(route).complete('compress') ?? Promise.resolve('no lane')).rejects.toThrow();
+      await expect(rt.modelForRoute(route).complete('compress')).rejects.toThrow();
     } finally {
       await server.stop(true);
       db.close();

@@ -48,7 +48,8 @@ import { initWorkspaceSchema, openWorkspaceMainActor, type LLMProviderConfig, ty
 import { createWorkspace } from '../../packages/core/src/workspace-birth';
 import { LocalAgentSession } from '../../packages/cli-backend/src/local-session';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
-import { makeSql, makeWorkspaceSchemaSql, workspaceHome } from '../../packages/cli-backend/src/runtime';
+import { makeWorkspaceSchemaSql, workspaceHome } from '../../packages/cli-backend/src/runtime';
+import { wrapDatabase } from '@kinu.run/core/identity';
 import {
   ActivitySpendSchema, callAgentRpc, createCloudAgent, deleteCloudAgent,
 } from '../../packages/cli/src/cloud-api';
@@ -549,7 +550,7 @@ describe('Live Smoke — one real turn per backend', () => {
         // After the drain, so a background step's tokens are in the total, and
         // only when a session existed: an episode that never started must not
         // read as one that could not be measured.
-        const sql = makeSql(db);
+        const sql = wrapDatabase(db).sql;
         recordLiveModelEpisode(sql, openWorkspaceMainActor(sql));
       }
 

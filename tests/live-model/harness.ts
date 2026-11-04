@@ -566,11 +566,6 @@ export function installPreTurnProfile(rt: CLIRuntime, llm: LLMProviderConfig): v
   const config = rt.actor.config;
   const role = config.getRoleSelection();
 
-  if (!rt.setProfileResolver) {
-    throw new Error('this runtime exposes no setProfileResolver, so its model lanes cannot be '
-      + 'wired and every judge, fast and reflection call would fail before reaching a model');
-  }
-
   rt.setProfileResolver(() => Promise.resolve(resolveTurnProfile({
     envelope,
     provider,

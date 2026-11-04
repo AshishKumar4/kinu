@@ -393,7 +393,7 @@ describe('addressing the bound directory', () => {
       settle: async () => {},
     };
 
-    rt.setApprovalDeferrals?.(deferrals);
+    rt.setApprovalDeferrals(deferrals);
 
     await expect(file({ op: 'write', path: created, content: 'unattended' })).rejects.toMatchObject({ code: 'unavailable' });
     expect((await present(rt.shell, 'the placed shell').exec('rm -rf build')).stderr).toContain('NOT RUN — queued');

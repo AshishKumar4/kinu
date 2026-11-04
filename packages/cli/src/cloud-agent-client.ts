@@ -66,14 +66,14 @@ import {
   type AgentTranscriptMessage,
   type AgentSendResult,
   type DeviceConsentSurface,
-  type FileCheckpointSurface,
   type ForkPoint,
-  type PlanReviewSurface,
-  type OwnerQuestionSurface,
-  type WaitingApprovalSurface,
 } from './agent-client';
+import type { FileCheckpointSurface, OwnerQuestionSurface, PlanReviewSurface, WaitingApprovalSurface } from '@kinu.run/core';
 import * as v from 'valibot';
 
+
+/** An opening socket that neither opens nor fails, on a network that drops it silently. */
+const WEBSOCKET_OPEN_WAIT_MS = 15_000;
 
 /** Core's own `PlanReviewSchema`, so a forged annotation cannot arrive by a route the workspace UI lacks. */
 const CloudPlanReviewSchema = v.nullable(PlanReviewSchema);
@@ -792,7 +792,7 @@ export class CloudAgentClient implements AgentClient {
     ws.addEventListener('error', droppedConnection);
 
     await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('Timed out connecting to cloud workspace.')), 15_000);
+      const timeout = setTimeout(() => reject(new Error('Timed out connecting to cloud workspace.')), WEBSOCKET_OPEN_WAIT_MS);
 
       const finish = (outcome: () => void): void => {
         clearTimeout(timeout);

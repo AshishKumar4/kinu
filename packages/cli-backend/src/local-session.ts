@@ -3,9 +3,10 @@
  * orchestration through the BackendHost seam. Both CLI frontends drive one via send()/end().
  */
 
+import { sqlStorageOver } from '@kinu.run/core/identity';
 import { lookup } from 'node:dns/promises';
 import { realpathSync } from 'node:fs';
-import { ASKED, historyTurnPairs, isBuiltinSkillFile, openWorkspaceMainActor, providerAccounts, testModel, toolDescription, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
+import { ASKED, historyTurnPairs, turnReportSequenceId, isBuiltinSkillFile, openWorkspaceMainActor, providerAccounts, testModel, toolDescription, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
 import type { ActorHandle, ChatReport, DeliveryAnswer, InProcessDeliveries, JsonObject, OwedDelivery, ReceiptExecution } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { resolve } from 'node:path';
@@ -24,11 +25,10 @@ import type {
   ActiveSkillSet, FactsStore,
   HeadRuntime, HeadGrounding, SerializedMessage, AgentConfigStore, ShellApprovalMode,
   RequestShellApproval,
-  DeferredApproval, DeferredApprovalAnswer,
   AgentsSwarmDeps, AgentsToolDeps, TeamToolDeps, PeersToolDeps,
   DynamicContextInput,
   RunEvent, RunEventInput, RunEventQuery,
-  FileCheckpointListing, FileRestorePlan, FileRestoreResult,
+  FileCheckpointSurface, OwnerQuestionSurface, PlanReviewSurface, WaitingApprovalSurface,
   CheckpointAvailability,
   WorkMode,
 } from '@kinu.run/core';
@@ -131,17 +131,14 @@ import { ActorSession, type ActorTurnLease,
   defaultLoopOrigin,
   type ActorHost, type ActorSeat, type HostedActor, type LoopOrigin, type SeatedActor, type WriteObserver,
   PlanReviewActions, SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, ASK_OWNER_TOOL, workModeUnderReview, authoredTurnMetadata, planHandoffStillOwed,
-  type PlanDecisionOutcome, type PlanEdit, type PlanReview, type ReviewAnnotation, type PlanReviewDecision,
-  type PlanReviewResult,
-  type AskingAgent,
-  type OwnerAnswer,
+  type PlanEdit, type PlanReviewResult,
   ChatSession, CHAT_SESSION_ID, checkpointAvailability, fileCheckpointListing, fileRestorePlan, fileCheckpointRestore,
   type ChatTurnInput, type CompactOutcome, type ComposedRequest, type ContextFill, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
 } from '@kinu.run/core';
 import {
   attempt, diagnostics, KinuError, renderThrownChain, settle as settleEffect, settleSync, tolerate, toKinuError, detach, logged, type Refusal,
 } from '@kinu.run/core/obs';
-import { cleanupFacetScratch, makeSqlExec, soulIn, writeTransaction, type CLIRuntime } from './runtime';
+import { cleanupFacetScratch, soulIn, writeTransaction, type CLIRuntime } from './runtime';
 import { createLocalActorHost } from './actor-host';
 import { createLocalOrchestration, type LocalOrchestration } from './orchestration';
 import { localActorDirectory, nodeWorkspace, openLocalRootActor, reclaimSettledRunActors, registerLocalActor, retireLocalActor, type LocalActorBinding } from '@kinu.run/core';
@@ -154,7 +151,7 @@ import { connectMcpServers, type McpServerConfig } from './mcp';
 import type { LocalModelResolver } from './model-resolver';
 import {
   STATIC_MODEL_SPEC, resolverModelPlane, staticModelPlane,
-  type LocalProfileAuthority, type ProfileAuthorityRefinement, type ProfileEnvelopeSource,
+  type ProfileAuthorityRefinement, type ProfileEnvelopeSource,
 } from './profile-authority';
 
 /**
@@ -214,8 +211,6 @@ export interface LocalParentRelay {
    * child only for a completed, parent-driven turn with something to say and no `report` call.
    */
   readonly owed: (turn: TurnReportFacts) => Promise<OwedReport | null>;
-  /** Dedupe key on the parent's rail, so a replay cannot wake it twice. */
-  readonly sequenceId: (messageId: string) => string;
   readonly send: (report: {
     readonly text: string;
     readonly status: SubagentReportStatus;
@@ -349,7 +344,6 @@ export class LocalAgentSession {
   private scheduledAlarmAt: number | null = null;
   private readonly _headRuntime: HeadRuntime;
   private shellApprovalHandler: ShellApprovalHandler | null = null;
-  private readonly sessionId: string;
   private readonly oneShot: boolean;
   /** A one-shot process holds no conversation, so its prompt is never a verdict on the prior turn. */
   private get turnContinuity(): TurnContinuity {
@@ -414,7 +408,7 @@ export class LocalAgentSession {
       onModelAttempt: (info) => this.recordRunEvent({ type: 'model_attempt', ...info }, providerRun()),
     })
       ?? opts.modelResolver ?? null;
-    this.rt.setModelForRoute?.((resolution) => this.localRouteLlm(resolution));
+    this.rt.setModelForRoute((resolution) => this.localRouteLlm(resolution));
 
     if (!opts.model && !this.modelResolver) {
       throw new Error(
@@ -423,7 +417,7 @@ export class LocalAgentSession {
     }
 
     // Ensure every workspace table exists: the database may be untouched (benchmark harness, fresh clone).
-    const hubSql = makeSqlExec(opts.db);
+    const hubSql = sqlStorageOver(opts.db);
     initWorkspaceSchema({
       execRaw: this.rt.storage.execRaw, sql: this.rt.storage.sql, exec: hubSql, transactionSync: (write) => this.rt.storage.transactionSync(write),
     });
@@ -476,7 +470,6 @@ export class LocalAgentSession {
     this.headJournal = new LiveHeadJournal(this.rt.storage.sql, this.rt.actor, this.headActivity);
     this.mctsSearchStore = stores.mctsSearchStore;
     this.config = stores.config;
-    this.sessionId = CHAT_SESSION_ID;
 
     // Refine the runtime's profile authority rather than install a second resolver, so lanes and turns agree.
     const refinement: ProfileAuthorityRefinement = {
@@ -488,7 +481,7 @@ export class LocalAgentSession {
 
     if (opts.profileAuthority) refinement.envelope = opts.profileAuthority;
     // Not optional-chained: a runtime without an authority should fail here, not at the first lane.
-    this.profiles().refine(refinement);
+    this.rt.profiles.refine(refinement);
     this.factsStore = stores.facts;
     this.eventRecorder = stores.eventRecorder;
 
@@ -532,7 +525,7 @@ export class LocalAgentSession {
     this.compactionState = createCompactionStateStore(this.rt.storage.sql, this.rt.actor);
     this.chat = new ChatSession({
       actorSession: this.actorSession,
-      sessionId: this.sessionId,
+      sessionId: CHAT_SESSION_ID,
       transcript: this.stores.history.transcript(CHAT_SESSION_ID),
       mintAnswerId: () => crypto.randomUUID(),
       pendingSends,
@@ -582,14 +575,14 @@ export class LocalAgentSession {
     });
     this._headRuntime = createCLIHeadRuntime(this.headRuntimeOptions());
     // The runtime's judge/fast/reflection seams predate this session; a runtime holds one sink.
-    this.rt.setModelCallSink?.(this.modelCallSink);
-    this.rt.setModelOperations?.(this.modelOperations);
+    this.rt.setModelCallSink(this.modelCallSink);
+    this.rt.setModelOperations(this.modelOperations);
     // One queue per workspace (core safety/deferred-approval.ts): a hire parks on its root's, as itself.
     this.hostedHere = opts.hosted;
     this.boundary = opts.boundary;
     this.deferrals = this.workspaceQueue(opts.hosted);
 
-    this.rt.setApprovalDeferrals?.(this.deferrals.channelFor(this.rt.actor.actorId));
+    this.rt.setApprovalDeferrals(this.deferrals.channelFor(this.rt.actor.actorId));
     this.jobsDrivenHere = drivenJobs(opts.hosted);
     this.jobHolder = processJobHolder(this.rt.storage, osLeaseProcess(process.pid));
     this.jobRunner = new BackgroundJobRunner({
@@ -644,7 +637,7 @@ export class LocalAgentSession {
       const { handle, stores } = agent.actorId === this.rt.actor.actorId
         ? { handle: this.rt.actor, stores: this.stores } : this.actorHost.bindStores(agent);
 
-      const roster = new SubagentRosterStore(makeSqlExec(this.db), handle);
+      const roster = new SubagentRosterStore(sqlStorageOver(this.db), handle);
 
       return {
         awaitedJobs: () => stores.jobs.countAwaited(),
@@ -689,19 +682,12 @@ export class LocalAgentSession {
     return this.instructionDesk.revoke(path);
   }
 
-  /** File checkpoints with store reachability. Pass `turnId` rather than filtering: the limit is
-   *  global, so a self-filtered window drops turns (see FileCheckpointReads.list). */
-  async listFileCheckpoints(limit?: number, turnId?: string): Promise<FileCheckpointListing> {
-    return fileCheckpointListing(this.rt.checkpoints ?? null, { limit, turnId });
-  }
-
-  async planFileRestore(dir: string, id: string): Promise<FileRestorePlan> {
-    return fileRestorePlan(this.rt.checkpoints ?? null, dir, id);
-  }
-
-  async restoreFileCheckpoint(dir: string, id: string): Promise<FileRestoreResult> {
-    return fileCheckpointRestore(this.rt.checkpoints ?? null, dir, id);
-  }
+  /** File checkpoints with store reachability, as every client serves them. */
+  readonly checkpoints: FileCheckpointSurface = {
+    list: (limit, turnId) => fileCheckpointListing(this.rt.checkpoints ?? null, { limit, turnId }),
+    plan: (dir, id) => fileRestorePlan(this.rt.checkpoints ?? null, dir, id),
+    restore: (dir, id) => fileCheckpointRestore(this.rt.checkpoints ?? null, dir, id),
+  };
 
   checkpointStatus(): Promise<CheckpointAvailability> {
     return checkpointAvailability(this.rt.checkpoints ?? null);
@@ -739,9 +725,10 @@ export class LocalAgentSession {
   }
 
   /** The workspace's queue, from whichever of its agents is asked: the owner decides them all in one list. */
-  async listDeferredApprovals(): Promise<DeferredApproval[]> {
-    return this.deferrals.list();
-  }
+  readonly approvals: WaitingApprovalSurface = {
+    list: async () => this.deferrals.list(),
+    decide: async (ids, decision) => decideDeferredApprovals(this.deferrals, ids, decision),
+  };
 
   /** The queue a hire of this root parks on (`LocalHostedSession.approvals`). */
   get approvalQueue(): DeferredApprovalQueue {
@@ -789,7 +776,7 @@ export class LocalAgentSession {
         ? [{ actor: this.rt.actor.actorId, id: active.id, revision: active.revision, content: active.content, updatedAt: active.updatedAt }]
         : [],
       consents: [],
-      questions: ownsAsks ? await this.listOwnerQuestions() : [],
+      questions: ownsAsks ? await this.questions.list() : [],
       nameOf: (actorId) => localActorDirectory(this.rt.actor).directory.retained(actorId)?.name ?? actorId,
     });
   }
@@ -858,7 +845,7 @@ export class LocalAgentSession {
         return yield* Effect.fail(new KinuError('missing', `No live agent ${actorId} to tell of the decision.`));
       }
 
-      const log = new EventLog(makeSqlExec(this.db), this.actorHost.bindStores(actorReferenceOf(record)).handle);
+      const log = new EventLog(sqlStorageOver(this.db), this.actorHost.bindStores(actorReferenceOf(record)).handle);
       const from = this.rt.actor.name;
 
       writeTransaction(this.db, () => {
@@ -869,14 +856,6 @@ export class LocalAgentSession {
     });
   }
 
-  async decideDeferredApprovals(
-    ids: string[], decision: DeferredApprovalAnswer,
-  ): Promise<{ decided: string[] }> {
-    return decideDeferredApprovals(this.deferrals, ids, decision);
-  }
-
-  /** `allow_always` grants exactly the rules asked about on that executor, never a whole-agent
-   *  `allow_all`: one `sudo` click must not unlock every gated command everywhere. */
   getStoredModelSpec(): { spec: string | null } {
     return getStoredModelSpec(this.config);
   }
@@ -886,7 +865,7 @@ export class LocalAgentSession {
   }
 
   nextTurnTier(): Promise<ResolvedTurnProfile['tier']> {
-    return this.profiles().nextTurnTier({ workMode: this.actorSession.workMode, ancestors: this.ancestors?.() });
+    return this.rt.profiles.nextTurnTier({ workMode: this.actorSession.workMode, ancestors: this.ancestors?.() });
   }
 
   contextFill(): ContextFill | null {
@@ -909,7 +888,7 @@ export class LocalAgentSession {
   /** Takes effect on the next resolved turn (`runTurn` re-reads the selection); the running turn
    *  keeps its profile (core profiles/role-change.ts:1-5). */
   async setRole(roleId: string): Promise<{ role: string }> {
-    const envelope = await this.profiles().envelope();
+    const envelope = await this.rt.profiles.envelope();
 
     const changed = changeRoleAsOwner({ config: this.config, envelope, to: roleId, active: this.getActiveRoleId() });
     this.chat.reviseContext({ counted: true });
@@ -921,7 +900,7 @@ export class LocalAgentSession {
   setModel(spec: string): ReturnType<typeof setModel> {
     return setModel({
       config: this.config,
-      normalize: (s) => this.profiles().normalizeSpec(s),
+      normalize: (s) => this.rt.profiles.normalizeSpec(s),
       onChanged: () => {
         this.rebuildToolSurface();
         this.chat.reviseContext({ counted: true });
@@ -1075,56 +1054,41 @@ export class LocalAgentSession {
     return this.planActions.submit(edits, this.turnDriving);
   }
 
-  async getActivePlanReview(): Promise<PlanReview | null> {
-    return this.planActions.active();
-  }
+  /** The owner's half of Plan mode. A verdict is refused before it is made durable with a handoff this process
+   *  cannot run, as is an answer to a question. */
+  readonly plans: PlanReviewSurface = {
+    active: async () => this.planActions.active(),
+    saveAnnotations: async (id, revision, annotations) => this.planActions.saveAnnotations(id, revision, { value: annotations }),
+    decide: async (id, revision, decision, feedback) => {
+      const refusal = this.driverGate?.() ?? null;
 
-  async savePlanReviewAnnotations(
-    id: string,
-    revision: number,
-    annotations: ReviewAnnotation[],
-  ): Promise<PlanReviewResult> {
-    return this.planActions.saveAnnotations(id, revision, { value: annotations });
-  }
+      if (refusal) {
+        return {
+          ok: false,
+          error: `${refusal.error}. Decide this plan from the session driving the conversation.`,
+          plan: this.stores.planReviews.get(id, revision),
+        };
+      }
 
-  /** Record the verdict and hand off the owed turn. The driver lease is checked first so a verdict
-   *  is never made durable with a handoff this process cannot run. */
-  async decidePlanReview(
-    id: string,
-    revision: number,
-    decision: PlanReviewDecision,
-    feedback?: string,
-  ): Promise<PlanDecisionOutcome> {
-    const refusal = this.driverGate?.() ?? null;
+      return this.planActions.decideAndHandOff({ id, revision, decision, feedback }, (turn) => this.enqueueTurn(turn));
+    },
+    dismiss: async (id, revision) => this.planActions.dismiss(id, revision, (prefix) => { this.chat.stopIfRunning(prefix); }),
+  };
 
-    if (refusal) {
-      return {
-        ok: false,
-        error: `${refusal.error}. Decide this plan from the session driving the conversation.`,
-        plan: this.stores.planReviews.get(id, revision),
-      };
-    }
+  /** The agent's recent questions to the owner: the open ones wait in the stack. An answer becomes the asking call's
+   *  result, and the turn that continues from it is owed at once; in this process nothing crosses, so nothing is owed. */
+  readonly questions: OwnerQuestionSurface = {
+    list: async () => this.actorSession.questions.recent().map((asked) => ({ asked, agent: this.agentName(), actor: null })),
+    answer: async (id, answers) => {
+      const refusal = this.driverGate?.() ?? null;
 
-    return this.planActions.decideAndHandOff({ id, revision, decision, feedback }, (turn) => this.enqueueTurn(turn));
-  }
+      settleSync(refusal
+        ? Effect.fail(new KinuError('denied', `${refusal.error}. Answer from the session driving the conversation.`))
+        : this.chat.answerQuestions(id, answers));
 
-  /** The agent's recent questions to the owner: the open ones wait in the stack. Cloud: `ActorAgent.listOwnerQuestions`. */
-  async listOwnerQuestions(): Promise<AskingAgent[]> {
-    return this.actorSession.questions.recent().map((asked) => ({ asked, agent: this.agentName(), actor: null }));
-  }
-
-  /** The owner's answer becomes the asking call's result, and the turn that continues from it is owed at once. */
-  async answerOwnerQuestions(id: string, answers: readonly OwnerAnswer[]): Promise<void> {
-    const refusal = this.driverGate?.() ?? null;
-
-    return settleSync(refusal
-      ? Effect.fail(new KinuError('denied', `${refusal.error}. Answer from the session driving the conversation.`))
-      : this.chat.answerQuestions(id, answers));
-  }
-
-  async dismissPlanReview(id: string, revision: number): Promise<PlanReviewResult> {
-    return this.planActions.dismiss(id, revision, (prefix) => { this.chat.stopIfRunning(prefix); });
-  }
+      return null;
+    },
+  };
 
   logActivity(event: string, detail?: string): void {
     const now = Date.now();
@@ -1391,19 +1355,11 @@ export class LocalAgentSession {
     const running = this.rt.schedule.fiber(name, fn);
     // Only a fiber that could not record its own outcome (database closed at teardown) reaches here.
     this.tracked(async () => {
-      try {
-        for (const outcome of await Promise.allSettled([running])) {
-          if (outcome.status !== 'rejected') continue;
-          diagnostics.failure(
-            'fiber.settle_failed',
-            toKinuError({ doing: 'settling a durable background fiber', cause: outcome.reason, otherwise: 'io' }),
-            { fiber: name },
-          );
-        }
-      } catch (cause) {
+      for (const outcome of await Promise.allSettled([running])) {
+        if (outcome.status !== 'rejected') continue;
         diagnostics.failure(
-          'fiber.settle_observer_failed',
-          toKinuError({ doing: 'recording a durable background fiber settlement', cause, otherwise: 'io' }),
+          'fiber.settle_failed',
+          toKinuError({ doing: 'settling a durable background fiber', cause: outcome.reason, otherwise: 'io' }),
           { fiber: name },
         );
       }
@@ -1572,7 +1528,7 @@ export class LocalAgentSession {
     signal: AbortSignal,
   ) {
     // A re-drive can come before any turn: the setting is read first, as a turn reads it.
-    this.followAccountSwarms((await this.profiles().envelope()).catalog);
+    this.followAccountSwarms((await this.rt.profiles.envelope()).catalog);
 
     return await resumeBackgroundJob({
       rawTools: (resumeMode) => {
@@ -1720,7 +1676,7 @@ export class LocalAgentSession {
   }
 
   private async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease, opening: TurnOpeningAsk, round: ClaimedRound): Promise<PreparedTurn> {
-    this.rt.checkpoints?.beginTurn({ turnId: lease.turnId, sessionId: this.sessionId });
+    this.rt.checkpoints?.beginTurn({ turnId: lease.turnId, sessionId: CHAT_SESSION_ID });
 
     // Read once per turn, and moved only by a turn whose prompt cache is cold: the prompt prefix holds within a segment.
     // No warming lane keeps a local conversation's cache. A dream's skills land at the same turns.
@@ -1790,7 +1746,7 @@ export class LocalAgentSession {
 
     return {
       catalog: this.modelCatalog,
-      normalize: (spec) => this.profiles().normalizeSpec(spec),
+      normalize: (spec) => this.rt.profiles.normalizeSpec(spec),
       resolve: (spec) => (resolver ? resolver.resolveModel(spec, this.affinity()) : this.defaultModel('this static-model session')),
       ...(resolver && {
         routed: { attemptFor: (spec) => resolver.attemptFor(spec), countInputTokens: (spec, request) => resolver.countInputTokens(spec, request) },
@@ -1811,7 +1767,7 @@ export class LocalAgentSession {
       skills: vfsTurnSkills(this.rt.ownFiles, this.config, this.instructionTrust, { ...(this.turnHidesSkills !== undefined && { hides: this.turnHidesSkills }) }),
       models: this.turnModels(),
       profileInputs: async () => {
-        const inputs = await this.profiles().inputs();
+        const inputs = await this.rt.profiles.inputs();
         this.followAccountSwarms(inputs.envelope.catalog);
 
         return inputs;
@@ -1880,8 +1836,7 @@ export class LocalAgentSession {
     const root = this.rt.actor.parentActorId === null;
 
     // Decided on the live turn: `shouldGate` reads RAM a restart lacks, so the row's existence carries it.
-    const gated = this.rt.shell !== undefined
-      && this.actorSession.workMode !== 'plan'
+    const gated = this.actorSession.workMode !== 'plan'
       && this.chat.completionGate.shouldGate({
         completed: input.completed, toolCalls: this.actorSession.orchestrator.acc.toolCalls.length,
       });
@@ -1910,9 +1865,10 @@ export class LocalAgentSession {
 
     if (gated) parts.completionGate = { text: this.chat.completionGate.task };
 
-    // Decided once its answer committed, by its relay; the sequence id is the parent's dedupe key, so a replay is
-    // recognised.
-    if (input.turnEnd !== null && relay !== null) parts.turnReport = { ...input.turnEnd, sequenceId: relay.sequenceId(input.messageId) };
+    // Decided once its answer committed, by its relay.
+    if (input.turnEnd !== null && relay !== null) {
+      parts.turnReport = { ...input.turnEnd, sequenceId: turnReportSequenceId(input.turnEnd, this.rt.actor.actorId, input.messageId) };
+    }
 
     const role: TerminalActor['role'] = root
       ? { kind: 'workspace', mission: missionOf(soulIn(this.rt.space)), event: input.event ?? null }
@@ -1933,7 +1889,7 @@ export class LocalAgentSession {
       branches: branchesTerminalEffect({
         sql: this.rt.storage.sql,
         actor: this.rt.actor,
-        sessionId: this.sessionId,
+        sessionId: CHAT_SESSION_ID,
         broadcast: (event) => this.host.broadcast(event),
         pending: this.pendingBranches,
         journal: this.headJournal,
@@ -1957,10 +1913,6 @@ export class LocalAgentSession {
           }
 
           const shell = this.rt.shell;
-
-          if (shell === undefined) {
-            return { status: 'completed', detail: 'this session has no shell to observe with' };
-          }
 
           const observed = await observeCompletionState({
             exec: (command) => shell.exec(command),
@@ -2176,7 +2128,7 @@ export class LocalAgentSession {
 
   /** This session's conversation: its compaction state is kept under it. */
   private compactionKey(): string {
-    return conversationKey(this.conversation(), this.sessionId);
+    return conversationKey(this.conversation(), CHAT_SESSION_ID);
   }
 
   /** Signed in, the account's own search through its deployment; signed out, this machine's chain with its own keys.
@@ -2192,7 +2144,7 @@ export class LocalAgentSession {
         fetch: globalThis.fetch,
         getAuth,
         report: this.modelCallSink,
-        chain: async () => webSearchChainOf((await this.profiles().envelope()).catalog),
+        chain: async () => webSearchChainOf((await this.rt.profiles.envelope()).catalog),
       }),
       resolve: async (hostname) => (await lookup(hostname, { all: true, verbatim: true })).map((answer) => answer.address),
       browser: restBrowserRunAccess({ env: process.env, fetch: globalThis.fetch }),
@@ -2295,7 +2247,7 @@ export class LocalAgentSession {
   private runtimeFacts(profile: ResolvedTurnProfile, cwd?: string): RuntimeFacts {
     return {
       backend: 'cli-local',
-      model: { id: this.profiles().normalizeSpec(profile.tier.model) },
+      model: { id: this.rt.profiles.normalizeSpec(profile.tier.model) },
       cwd,
       date: currentDateForPrompt(),
     };
@@ -2444,7 +2396,7 @@ export class LocalAgentSession {
     return this.reach('build').replyToComment;
   }
 
-  /** The typed mode, under core's plan hold. Mirrors the cloud orchestrator's `workModeForMetadata`. */
+  /** The typed mode, under core's plan hold, as the cloud agent's chat applies it (`agent-facet/agent-chat.ts`). */
   private turnWorkMode(item: TurnAsked): WorkMode {
     const requested = this.actorSession.workMode;
 
@@ -2471,7 +2423,7 @@ export class LocalAgentSession {
 
   /** One routed non-turn lane as a {@link RoutedLLM}; `system` carries core-declared prompt pairs. */
   private localRouteLlm(resolution: ModelRouteResolution, system?: string): RoutedLLM {
-    const canonical = { ...resolution, model: this.profiles().normalizeSpec(resolution.model) };
+    const canonical = { ...resolution, model: this.rt.profiles.normalizeSpec(resolution.model) };
 
     return routedLlm((route) => this.bindRouteModel(route), canonical, { report: this.modelCallSink, operations: this.modelOperations }, system);
   }
@@ -2482,7 +2434,7 @@ export class LocalAgentSession {
     const { modelResolver } = this;
 
     return bindRoute({
-      normalize: (spec) => this.profiles().normalizeSpec(spec),
+      normalize: (spec) => this.rt.profiles.normalizeSpec(spec),
       resolve: (spec) => (modelResolver ? modelResolver.resolveModel(spec, this.affinity()) : this.defaultModel(`${resolution.source} model lane`)),
     }, resolution);
   }
@@ -2491,29 +2443,15 @@ export class LocalAgentSession {
   private async routingProfile(availableTools: readonly string[] = []): Promise<ResolvedTurnProfile> {
     return resolveRoutingProfile({
       actor: this.rt.actor,
-      resolve: () => this.profiles().resolvePreTurn(availableTools),
+      resolve: () => this.rt.profiles.resolvePreTurn(availableTools),
     });
-  }
-
-  /** The runtime's profile authority, refined at construction; the single source for resolution. */
-  private profiles(): LocalProfileAuthority {
-    const profiles = this.rt.profiles;
-
-    if (!profiles) {
-      throw new Error(
-        'this runtime carries no profile authority: build it with createCLIRuntime '
-        + '(openWorkspaceCLI) so its model lanes can route',
-      );
-    }
-
-    return profiles;
   }
 
   /** A static-model session answers only for its own model; other specs are refused by name. */
   private resolveModelForSpec(spec: string): LanguageModel {
     if (this.modelResolver) return this.modelResolver.resolveModel(spec, this.affinity());
 
-    if (this.profiles().normalizeSpec(spec) === STATIC_MODEL_SPEC) {
+    if (this.rt.profiles.normalizeSpec(spec) === STATIC_MODEL_SPEC) {
       return this.defaultModel(`the ${spec} model`);
     }
 
@@ -2529,7 +2467,7 @@ export class LocalAgentSession {
     return resolveEffectiveModelSpec({
       live: () => this.actorSession.profile?.tier.model,
       stored: () => this.config.getModel(),
-      normalize: (spec) => this.profiles().normalizeSpec(spec),
+      normalize: (spec) => this.rt.profiles.normalizeSpec(spec),
     });
   }
   /** The static model, or a failure naming `what` could not run. */
@@ -2551,7 +2489,7 @@ export class LocalAgentSession {
   });
 
   private ensureModelState(): LanguageModel {
-    const spec = this.actorSession.profile?.tier.model ?? this.profiles().normalizeSpec(this.config.getModel());
+    const spec = this.actorSession.profile?.tier.model ?? this.rt.profiles.normalizeSpec(this.config.getModel());
 
     if (this.cachedModel && this.cachedModelSpec === spec) return this.cachedModel;
     const model = this.modelResolver ? this.modelResolver.resolveModel(spec, this.affinity()) : this.defaultModel("this static-model session");
@@ -2718,7 +2656,7 @@ export class LocalAgentSession {
     }) ?? this.modelResolver;
 
     const affinity = actorAffinity(actor.record);
-    const normalize = (spec: string | null) => this.profiles().normalizeSpec(spec);
+    const normalize = (spec: string | null) => this.rt.profiles.normalizeSpec(spec);
 
     const catalog = new ModelCatalogSession({
       effectiveSpec: () => normalize(actor.session.profile?.tier.model ?? actor.stores.config.getModel()),
@@ -2787,7 +2725,7 @@ export class LocalAgentSession {
       harnessMode: () => this.workspaceConfig().getHarnessMode(),
       instructionTrust: this.instructionTrust,
       models: own.models,
-      profileInputs: () => this.profiles().inputs(),
+      profileInputs: () => this.rt.profiles.inputs(),
       ancestors: () => ancestorPins(actor.handle.parentActorId, { actorId: this.rt.actor.actorId, pins: this.config }, (id) => {
         const parent = this.actorHost.describe(id);
 

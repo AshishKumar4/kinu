@@ -1,3 +1,4 @@
+import { wrapDatabase } from '@kinu.run/core/identity';
 import { type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // LocalAgentSession over the real CLI runtime and a fake model: a user turn end to end.
 import { describe, test, expect } from 'bun:test';
@@ -12,7 +13,7 @@ import type { LanguageModelV2Usage, LanguageModelV2StreamPart } from '@ai-sdk/pr
 import {
   initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage, CHAT_SESSION_ID, drawnStep, type ModelInfo, type SqlExecutor, openWorkspaceMainActor, InstructionApprovalStore, instructionDigest, OUTPUT_CONTINUATION_EVENT, serializeContentForHeads, resolvePath,
 } from '@kinu.run/core';
-import { createCLIRuntime, makeExecRaw, makeSql, type CLIRuntime } from '../src/runtime';
+import { createCLIRuntime, type CLIRuntime } from '../src/runtime';
 import type { SessionEvent } from '@kinu.run/core';
 import { LocalAgentSession } from '../src/local-session';
 import { type LocalModelResolver } from '../src/model-resolver';
@@ -880,14 +881,14 @@ describe('LocalAgentSession — shadow-git checkpoint wiring', () => {
   test('the checkpoint surface degrades honestly when no engine is configured', async () => {
     const { rt, session } = setup();
     rt.checkpoints = undefined;
-    expect(await session.listFileCheckpoints()).toMatchObject({
+    expect(await session.checkpoints.list()).toMatchObject({
       availability: { available: false },
       entries: [],
     });
     expect(await session.checkpointStatus()).toMatchObject({
       available: false,
     });
-    await expect(session.restoreFileCheckpoint('/tmp', 'abcdef0')).rejects.toThrow();
+    await expect(session.checkpoints.restore('/tmp', 'abcdef0')).rejects.toThrow();
   });
 });
 
@@ -919,8 +920,8 @@ describe('LocalAgentSession — programmatic turns (reactor / background-job wak
     // Full chain with only the model faked. The row must state its author (stamp and event name): the CLI transcript
     // has no rich twin to recover provenance from.
     const { db, rt, session } = setup('ack');
-    const sql = makeSql(db);
-    initBackgroundJobsTable(makeExecRaw(db));
+    const sql = wrapDatabase(db).sql;
+    initBackgroundJobsTable(wrapDatabase(db).execRaw);
     const store = new BackgroundJobStore(sql, rt.actor);
     const now = Date.now();
     store.create({ id: JOB, kind: 'agents', workMode: 'build', now, label: 'fork: design the algorithm' });

@@ -1,3 +1,4 @@
+import { sqlStorageOver } from '@kinu.run/core/identity';
 import { Effect } from 'effect';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
@@ -6,7 +7,6 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
  */
 import { Database } from 'bun:sqlite';
 import { setSystemTime } from 'bun:test';
-import { makeSqlExec } from '../../../core/tests/helpers';
 import type { AgentContext, Connection, WSMessage } from 'agents';
 import type { LanguageModel, ModelMessage, ToolSet, UIMessage } from 'ai';
 import * as v from 'valibot';
@@ -981,12 +981,12 @@ export function sideLane(agent: HarnessOrchestratorAgent): LLM {
 
 /** The main actor's event log over the object's stored rows: `publish` is the one writer ingress admits events through. */
 export function eventsOver(db: Database): EventLog {
-  return new EventLog(makeSqlExec(db), workspaceMainActor(db));
+  return new EventLog(sqlStorageOver(db), workspaceMainActor(db));
 }
 
 /** The main actor's roster of the agents it hired, over the object's stored rows. */
 export function rosterOver(db: Database): SubagentRosterStore {
-  return new SubagentRosterStore(makeSqlExec(db), workspaceMainActor(db));
+  return new SubagentRosterStore(sqlStorageOver(db), workspaceMainActor(db));
 }
 
 const ReportPayloadSchema = v.looseObject({ content: v.string() });

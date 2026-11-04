@@ -4,12 +4,11 @@
  */
 
 import {
-  approvalKindOf, describeExecutionContext, type ApprovalKind, executorLabel, timeAgo, type DeferredApproval, type DeferredApprovalAnswer,
+  approvalKindOf, describeExecutionContext, type ApprovalKind, executorLabel, timeAgo, type DeferredApproval, type DeferredApprovalAnswer, type WaitingApprovalSurface,
 } from '@kinu.run/core';
 import { attempt, renderThrownChain, settle, type KinuError } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import { literalText } from '@kinu.run/core/tui';
-import type { WaitingApprovalSurface } from './agent-client';
 
 /** `later` leaves what is queued waiting until a turn starts or ends. */
 export type WaitingChoice = DeferredApprovalAnswer | 'later';

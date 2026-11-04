@@ -1,7 +1,7 @@
 /** CLI backend: macOS/Linux Bun runtime for the self-evolving agent. */
 
 export {
-  createCLIRuntime, makeSql, makeExecRaw, makeSqlExec, makeWorkspaceSchemaSql, inspectionFiles,
+  createCLIRuntime, makeWorkspaceSchemaSql, inspectionFiles,
   createHostShell, soulIn, soulOf, workspaceHome, workspaceMemory,
   type CLIRuntime,
 } from './runtime';
@@ -48,7 +48,7 @@ export { LocalAgentHost, type LocalAgentHostOptions, type LocalHostedAgent } fro
 
 export {
   createLocalModelResolver,
-  stripProvider,
+  endpointSpec,
   type LocalModelResolver, type LocalCloudSession,
   type LocalProviderCredentials,
 } from './model-resolver';

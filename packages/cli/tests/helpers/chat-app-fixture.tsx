@@ -11,11 +11,8 @@ import type {
   AgentClientStatus,
   DeviceConsentSurface,
   LocalSessionControls,
-  PlanReviewSurface,
-  OwnerQuestionSurface,
-  WaitingApprovalSurface,
 } from '../../src/agent-client';
-import type { AgentModelMenu } from '@kinu.run/core';
+import type { AgentModelMenu, OwnerQuestionSurface, PlanReviewSurface, WaitingApprovalSurface } from '@kinu.run/core';
 import { ChatApp, type ChatAppOpts } from '../../src/tui/chat-app';
 import type { ListedAgent } from '../../src/agent-list';
 import type { TuiHubData } from '../../src/tui/hubs';

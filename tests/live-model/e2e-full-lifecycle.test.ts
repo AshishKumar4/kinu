@@ -23,7 +23,8 @@ import {
 } from '../../packages/core/src/index';
 import { tolerate } from '../../packages/core/src/obs';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
-import { makeSql, soulIn, type CLIRuntime } from '../../packages/cli-backend/src/runtime';
+import { soulIn, type CLIRuntime } from '../../packages/cli-backend/src/runtime';
+import { wrapDatabase } from '@kinu.run/core/identity';
 import { evalSession, scriptedEvalModel, type EvalSession } from './harness';
 import { localTargetFolder, provisionLocalTarget } from './target-local';
 import { finalIntegerAnswer,
@@ -83,7 +84,7 @@ function storedMemoryFact(db: Database, memoryFile: string | null): string | nul
   // are has to be named the way an operator names it: the workspace's MAIN
   // actor, issued through the production directory. That is the actor the
   // session above drove.
-  const sql = makeSql(db);
+  const sql = wrapDatabase(db).sql;
 
   const fact = createFactsStore(sql, openWorkspaceMainActor(sql)).all()
     .find((row) => JSON.stringify(row.value).includes(MEMORY_CODE));

@@ -1,5 +1,5 @@
 import { Effect, Cause } from 'effect';
-import { requireAuthConfig, resolveCloudOrigin, resolveCloudSession } from '../config';
+import { loadConfigFile, requireAuthConfig, resolveCloudOrigin, resolveCloudSession } from '../config';
 import { whoami } from '../cloud-api';
 import {
   connectDevice,
@@ -272,15 +272,14 @@ function confirmConnect(label: string | undefined, root: string | undefined): Ef
   });
 }
 
+/** Signs in first when this machine holds no session at all; an expired or misdirected one is refused as it is. */
 function authOrLogin(): Effect.Effect<{ origin: string; token: string; user?: { id: string; email: string; displayName?: string | null } }> {
-  return Effect.catchCause(Effect.sync(() => requireAuthConfig()), (failed) => Effect.gen(function* () {
-    const err = Cause.squash(failed);
-
-    if (!/Not authenticated/.test(renderThrownChain({ cause: err }))) return yield* Effect.die(err);
-    const origin = resolveCloudOrigin();
-    console.log(`${DIM('Not signed in. Starting Kinu sign-in…')}`);
-    yield* Effect.promise(() => authCommand({ origin }));
+  return Effect.gen(function* () {
+    if (resolveCloudSession() === null && !loadConfigFile().accessToken) {
+      console.log(`${DIM('Not signed in. Starting Kinu sign-in…')}`);
+      yield* Effect.promise(() => authCommand({ origin: resolveCloudOrigin() }));
+    }
 
     return requireAuthConfig();
-  }));
+  });
 }

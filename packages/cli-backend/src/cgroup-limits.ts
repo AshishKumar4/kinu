@@ -116,9 +116,7 @@ export function readCgroupLimits(source: CgroupSource = {}): ResourceLimits | nu
 
   if (cpus !== undefined) return { cpus };
 
-  if (memBytes !== undefined) return { memBytes };
-
-  return null;
+  return { memBytes };
 }
 
 let memoized: ResourceLimits | null | undefined;

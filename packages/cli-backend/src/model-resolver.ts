@@ -2,6 +2,10 @@ import type { ModelAttemptIdentity } from '@kinu.run/core';
 import { createChatModel, routeWebSearch, WORKERS_AI_STREAMS_GENERATE, type LLMProviderConfig, type WebSearch } from '@kinu.run/core';
 import {
   DEFAULT_WORKERS_AI_MODEL_ID,
+  WORKERS_AI_MODEL_ID_PREFIX,
+  WORKERS_AI_PROVIDER_ID,
+  specOn,
+  ANTHROPIC_CRED_KEY, OPENAI_CRED_KEY, OPENROUTER_CRED_KEY,
   credentialToHeaders,
   type OpenAICompatCredential,
   normalizeModelMenu,
@@ -136,7 +140,8 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
   const authStore = buildAuthStore(localEndpoint, opts.credentials ?? (() => ({})), opts.oauthStore);
 
   const cloud = opts.cloud;
-  const defaultSpec = opts.defaultSpec !== undefined ? opts.defaultSpec : endpointSpec(localEndpoint);
+  const endpointDefault = localEndpoint === null ? null : endpointSpec(localEndpoint);
+  const defaultSpec = opts.defaultSpec !== undefined ? opts.defaultSpec : endpointDefault;
   const gateway = workersAiRoute(localEndpoint, cloud)?.gateway ?? null;
   const listings = cloud ? new LocalCloudListings(cloud, opts.fetch) : null;
 
@@ -537,33 +542,27 @@ function noDefaultModelMessage(): string {
  */
 export function workersAiRoute(
   llm: LLMProviderConfig | null, cloud: LocalCloudSession | undefined,
-): { readonly gateway: LLMProviderConfig | null; readonly auth: AuthResolution } | null {
+): { readonly gateway: LLMProviderConfig | null; readonly auth: AuthResolution; readonly servesRun: boolean } | null {
   const proxied = cloud !== undefined && llm !== null && llm.baseURL.replace(/\/+$/, '') === cloudProxyBaseURL(cloud.origin);
 
+  // `/ai/run` beside a chat model's `/ai/v1`: only Cloudflare's API and the worker's proxy serve one.
   if (llm !== null && !proxied && servesWorkersAi(llm)) {
-    return { gateway: llm, auth: { baseURL: llm.baseURL, headers: llm.headers } };
+    return { gateway: llm, auth: { baseURL: llm.baseURL, headers: llm.headers }, servesRun: /\/ai\/v1\/?$/.test(llm.baseURL) };
   }
 
   if (cloud === undefined) return null;
 
-  return { gateway: null, auth: { baseURL: cloudProxyBaseURL(cloud.origin), headers: { Authorization: `Bearer ${cloud.token}` } } };
+  return { gateway: null, auth: { baseURL: cloudProxyBaseURL(cloud.origin), headers: { Authorization: `Bearer ${cloud.token}` } }, servesRun: true };
 }
 
 /** Whether an endpoint the process was given serves Workers AI: named so, or naming a Workers AI model. */
-function servesWorkersAi(llm: LLMProviderConfig): boolean {
-  return llm.name === 'workers-ai' || llm.model.startsWith('@cf/');
+function servesWorkersAi(llm: Pick<LLMProviderConfig, 'name' | 'model'>): boolean {
+  return llm.name === WORKERS_AI_PROVIDER_ID || llm.model.startsWith(WORKERS_AI_MODEL_ID_PREFIX);
 }
 
 /** The spec an endpoint the process was given serves: its own model, as Workers AI or as an OpenAI-compatible one. */
-function endpointSpec(llm: LLMProviderConfig | null): string | null {
-  if (llm === null) return null;
-  const provider = servesWorkersAi(llm) ? 'workers-ai' : 'openai-compat';
-
-  return `${provider}/${stripProvider(llm.model, provider)}`;
-}
-
-export function stripProvider(model: string, provider: string): string {
-  return model.startsWith(`${provider}/`) ? model.slice(provider.length + 1) : model;
+export function endpointSpec(llm: Pick<LLMProviderConfig, 'name' | 'model'>): string {
+  return specOn(servesWorkersAi(llm) ? WORKERS_AI_PROVIDER_ID : 'openai-compat', llm.model);
 }
 
 interface LocalAuthStore {
@@ -588,9 +587,9 @@ function buildAuthStore(
     const store = new Map(endpoint);
 
     const apiKeys = {
-      'openai.bearer': current.openaiApiKey,
-      'anthropic.bearer': current.anthropicApiKey,
-      'openrouter.bearer': current.openrouterApiKey,
+      [OPENAI_CRED_KEY]: current.openaiApiKey,
+      [ANTHROPIC_CRED_KEY]: current.anthropicApiKey,
+      [OPENROUTER_CRED_KEY]: current.openrouterApiKey,
       ...current.apiKeyAccounts,
     };
 

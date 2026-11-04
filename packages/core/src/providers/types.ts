@@ -293,6 +293,11 @@ export function specProvider(spec: string): string | null {
   return splitSpec(spec)?.provider ?? null;
 }
 
+/** `idOrSpec` as a spec of `provider`: kept when it already names that provider, else the whole of it is the model id. */
+export function specOn(provider: string, idOrSpec: string): string {
+  return specProvider(idOrSpec) === provider ? idOrSpec : `${provider}/${idOrSpec}`;
+}
+
 export function specWithoutAccount(spec: string): string {
   const parts = splitSpec(spec);
 

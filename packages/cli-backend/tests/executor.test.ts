@@ -81,6 +81,27 @@ sys.exit(0)
     }
   });
 
+  test('a program cannot read the CLI\'s own environment, with or without a bun on PATH', async () => {
+    const saved = process.env.PATH;
+    process.env.KINU_EXECUTOR_PROBE_TOKEN = 'held-by-the-cli';
+
+    try {
+      for (const path of [saved, scratchDir('executor-no-bun')]) {
+        process.env.PATH = path;
+        expect(await createSandboxedExecutor().execute('process.env.KINU_EXECUTOR_PROBE_TOKEN ?? null', []))
+          .toEqual({ result: null });
+      }
+    } finally {
+      process.env.PATH = saved;
+      delete process.env.KINU_EXECUTOR_PROBE_TOKEN;
+    }
+  });
+
+  test('a program that exits before it returns answers an error, not its printed output', async () => {
+    expect(await createSandboxedExecutor().execute('console.log("partial"); process.exit(0)', []))
+      .toMatchObject({ result: undefined, error: expect.any(String) });
+  });
+
   test('runs without provider arguments', async () => {
     const result = await createSandboxedExecutor().execute('7 * 6', []);
     expect(result).toEqual({ result: 42 });

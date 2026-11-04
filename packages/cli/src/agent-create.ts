@@ -1,3 +1,4 @@
+import { wrapDatabase } from '@kinu.run/core/identity';
 import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { Database } from 'bun:sqlite';
@@ -13,7 +14,7 @@ import {
 import { ensureDefaultTier, loadActiveProfile } from './default-model';
 import { readDefaultTier } from './profiles';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
-import { makeSql, makeWorkspaceSchemaSql, soulIn, workspaceHome } from '@kinu.run/cli-backend';
+import { makeWorkspaceSchemaSql, soulIn, workspaceHome } from '@kinu.run/cli-backend';
 import {
   agentDbPath,
   agentDir,
@@ -276,7 +277,7 @@ export function renameLocalAgent(name: string, displayName: string): RenamedLoca
   const db = new Database(dbPath);
 
   try {
-    openWorkspaceMainActor(makeSql(db)).config.setDisplayNameOrigin(title, 'user');
+    openWorkspaceMainActor(wrapDatabase(db).sql).config.setDisplayNameOrigin(title, 'user');
   } finally {
     db.close();
   }
