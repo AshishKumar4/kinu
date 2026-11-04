@@ -4,7 +4,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 
 import { join } from 'node:path';
-import { createHostCheckpoints } from '@kinu.run/cli-backend';
+import { createHostCheckpoints } from '../../cli-backend/src/checkpoints';
 import { DEFAULT_ADVISOR_MIN_SEVERITY } from '@kinu.run/core';
 import type { EvolutionConfigView, FileCheckpointEntry, FileRestoreChange } from '@kinu.run/core';
 import { filterCommands } from '@kinu.run/core';

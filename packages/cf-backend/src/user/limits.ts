@@ -37,9 +37,12 @@ export function refuseSuspended(reason: string | null): void {
 
 export class UserLimits {
   private readonly store: AccountLimitsStore;
+  /** The deployment's free tier, read once: an object's env does not change under it. */
+  private readonly freeTier: FreeTier | null | 'malformed';
 
   constructor(private readonly host: UserLimitsHost) {
     this.store = new AccountLimitsStore(host.ctx.storage.sql);
+    this.freeTier = freeTierOf(host.env.ACCOUNT_LIMITS);
   }
 
   private email(): string {
@@ -48,11 +51,9 @@ export class UserLimits {
 
   /** The deployment's free tier; null where it has none. A malformed one refuses every new thing, saying so. */
   private tier(): Effect.Effect<FreeTier | null, KinuError> {
-    const tier = freeTierOf(this.host.env.ACCOUNT_LIMITS);
-
-    return tier === 'malformed'
+    return this.freeTier === 'malformed'
       ? Effect.fail(new KinuError('unavailable', "This deployment's ACCOUNT_LIMITS is not an object of known limits; nothing new starts until it is mended."))
-      : Effect.succeed(tier);
+      : Effect.succeed(this.freeTier);
   }
 
   /** Why an operator suspended the account, or null. */

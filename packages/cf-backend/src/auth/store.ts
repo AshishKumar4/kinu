@@ -19,7 +19,7 @@ import { objectNamed, randomToken, sha256Hex } from '@kinu.run/core';
 import { readKvJson, writeKvJson, type KvStore } from '@kinu.run/agent-utils';
 import { ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';
 import { timingSafeEqual } from '@kinu.run/core';
-import { type KinuError, settle } from '@kinu.run/core/obs';
+import { KinuError, settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { sanitizeReturnTo } from '@kinu.run/core';
 

@@ -7,7 +7,7 @@ import { type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 
 import { SPILL_DIRS, type ActorHandle, type CompactionTriggerReader, type CompactionTriggerState, type SqlExecutor } from '@kinu.run/core';
 import { settle } from '@kinu.run/core/obs';
-import { Cause, Effect } from 'effect';
+import { Effect } from 'effect';
 import type { PlanSnapshot, PlanStore, TranscriptStore } from '@better-compact/core';
 import type { ArchiveIndexStore, ArchiveRange } from './manifest';
 import * as v from 'valibot';
@@ -36,12 +36,8 @@ export function createVfsTranscriptStore(getVfs: () => VFS): VfsTranscriptStore 
       const vfs = getVfs();
       const dir = relativePath.slice(0, relativePath.lastIndexOf('/'));
 
-      yield* Effect.catchCause(Effect.promise(async () => vfs.mkdir(dir, { recursive: true })), (failed) => {
-        const err = Cause.squash(failed);
-        const msg = err instanceof Error ? err.message.toLowerCase() : '';
-
-        return msg.includes('exist') ? Effect.void : Effect.failCause(failed);
-      });
+      // A recursive mkdir of a directory that is there is a no-op on every plane.
+      yield* Effect.promise(async () => vfs.mkdir(dir, { recursive: true }));
 
       yield* Effect.promise(() => writeText(vfs, relativePath, content));
 

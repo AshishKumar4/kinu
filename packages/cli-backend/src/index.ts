@@ -6,7 +6,6 @@ export {
   type CLIRuntime,
 } from './runtime';
 
-export { createHostCheckpoints } from './checkpoints';
 
 export { createLocalProfileAuthority, resolverModelPlane } from './profile-authority';
 
@@ -16,7 +15,7 @@ export {
   writeSecretFile, enforceOwnerOnly, ensureSecretDir,
 } from './secret-file';
 
-export { openWorkspaceCLI, readWorkspaceInfo, type WorkspaceInfo } from './open';
+export { openWorkspaceCLI, readWorkspaceInfo } from './open';
 
 export { requireSchemaGenesis, schemaGenesisOf } from './schema-genesis';
 
@@ -53,7 +52,7 @@ export {
   type LocalProviderCredentials,
 } from './model-resolver';
 
-export { createFileOAuthStore, signOutChatGptLogin, type ChatGptSignOut, type LocalOAuthStore } from './oauth-store';
+export { createFileOAuthStore, signOutChatGptLogin, type LocalOAuthStore } from './oauth-store';
 
 export {
   createOpenCodeProvider, checkOpenCodeAvailability,
