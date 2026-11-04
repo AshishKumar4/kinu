@@ -4,7 +4,7 @@ import type { ModelMessage, ToolSet } from 'ai';
 import * as v from 'valibot';
 import { nanoid } from '../utils/nanoid';
 import { serialQueue } from '@kinu.run/agent-utils';
-import { INTERRUPTED_TURN, InterruptedTurn, measureTurnRequest, type ChatEvent, type ChatOptions, type StepRecord } from '../chat';
+import { INTERRUPTED_TURN, interruptedTurn, isInterruptedTurn, measureTurnRequest, type ChatEvent, type ChatOptions, type StepRecord } from '../chat';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ResolvedTurnProfile, ProfileAuthorityInputs } from '../profiles';
 import type { WorkMode } from '../types/turn';
@@ -786,7 +786,7 @@ export class ActorSession {
     active.phase = 'settling';
     const tally = newTurnTally(0);
 
-    tally.failure = new InterruptedTurn();
+    tally.failure = interruptedTurn();
     active.ended = { steps: 0, interrupted: true, failure: tally.failure };
 
     return await this.turnResult(lease, active, tally, null);
@@ -896,7 +896,7 @@ export class ActorSession {
       if (!tally.completed) this.messages.push(...this.orchestrator.inbox.recordedMessages());
       tally.failure = cause instanceof Error ? cause : new Error(renderThrownChain({ cause }), { cause });
 
-      if (!(tally.failure instanceof InterruptedTurn) && !active.abort.signal.aborted) this.orchestrator.acc.hadError = true;
+      if (!isInterruptedTurn(tally.failure) && !active.abort.signal.aborted) this.orchestrator.acc.hadError = true;
       // A Stop ends the turn in its one name, whatever threw under it (an abort before the model's stream opened).
       await emit(active.abort.signal.aborted
         ? { type: 'error', message: INTERRUPTED_TURN, interrupted: true }
@@ -1207,7 +1207,7 @@ export class ActorSession {
 
     return {
       text: said.text, answer: tally.answer, steps: tally.steps, failure: tally.failure, program, claim: active.claim,
-      interrupted: active.abort.signal.aborted || tally.failure instanceof InterruptedTurn,
+      interrupted: active.abort.signal.aborted || isInterruptedTurn(tally.failure),
       admittedMessages: tally.admittedMessages,
       outputReferences: output.messages, finalTextReference: said.reference,
       outputPartReferences: output.parts,

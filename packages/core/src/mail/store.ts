@@ -120,7 +120,7 @@ export class MailStore {
   private box(path: string): MailBox | null {
     const [row] = rows(BoxRow, this.deps.sql.exec("SELECT path, kind, workspace, actor_id, wake FROM mail_addresses WHERE path = ?", path));
 
-    return row === undefined ? null : this.boxOf(row);
+    return row === undefined ? null : this.boxOf(row, this.identity()?.username ?? '');
   }
 
   /** A box this call just wrote: its absence is a store that lost its own write, never a box to make up. */
@@ -130,10 +130,11 @@ export class MailStore {
     return box === null ? Effect.fail(new KinuError('io', `The box at "${path}" was written and cannot be read back.`)) : Effect.succeed(box);
   }
 
-  private boxOf(row: v.InferOutput<typeof BoxRow>): MailBox {
+  /** `username`: the person's, read once by the caller for every box it names. */
+  private boxOf(row: v.InferOutput<typeof BoxRow>, username: string): MailBox {
     return {
       path: row.path, kind: row.kind, workspace: row.workspace, actorId: row.actor_id, wake: row.wake,
-      address: mailAddressOf(this.identity()?.username ?? '', row.path, this.deps.domain),
+      address: mailAddressOf(username, row.path, this.deps.domain),
     };
   }
 
@@ -184,7 +185,7 @@ export class MailStore {
       'SELECT path, kind, workspace, actor_id, wake FROM mail_addresses WHERE workspace = ? AND actor_id = ? AND kind = ?', owner.workspace, owner.actorId, owner.kind,
     ));
 
-    if (held !== undefined) return { made: this.boxOf(held) };
+    if (held !== undefined) return { made: this.boxOf(held, this.identity()?.username ?? '') };
 
     const label = mailLabelOf(owner.name) ?? (owner.kind === 'workspace' ? 'workspace' : 'agent');
 
@@ -247,14 +248,20 @@ export class MailStore {
    * agent a box names as its reader (the Personal assistant's main agent, the person's) that one too.
    */
   readableBy(caller: MailCaller): MailBox[] {
+    const username = this.identity()?.username;
+
     // No box is made before the person has an address of their own: every box sits under it.
-    if (this.identity() === null) return [];
+    if (username === undefined) return [];
 
     // The workspace's box first, so an agent's address sits under the workspace's label whoever asked first.
     const [home, own = home] = this.ownersOf(caller).map((owner) => this.boxFor(owner));
 
     if (home === undefined) return [];
-    const others = this.boxes().filter((box) => box.path !== own.path && box.workspace === caller.workspace && (box.kind === 'workspace' || box.actorId === caller.actorId));
+
+    const others = rows(BoxRow, this.deps.sql.exec(
+      "SELECT path, kind, workspace, actor_id, wake FROM mail_addresses WHERE workspace = ? AND path != ? AND (kind = 'workspace' OR actor_id = ?) ORDER BY path",
+      caller.workspace, own.path, caller.actorId,
+    )).map((row) => this.boxOf(row, username));
 
     return [own, ...others];
   }
@@ -390,8 +397,15 @@ export class MailStore {
     return asked === undefined ? readable[0]?.path ?? null : readable.find((box) => box.path === asked)?.path ?? null;
   }
 
+  /** Whether the person holds an address: `open` writes it with their box, and `unopen` takes both away. */
+  holdsAddress(): boolean {
+    return this.identity() !== null;
+  }
+
   boxes(): MailBox[] {
-    return rows(BoxRow, this.deps.sql.exec('SELECT path, kind, workspace, actor_id, wake FROM mail_addresses ORDER BY path')).map((row) => this.boxOf(row));
+    const username = this.identity()?.username ?? '';
+
+    return rows(BoxRow, this.deps.sql.exec('SELECT path, kind, workspace, actor_id, wake FROM mail_addresses ORDER BY path')).map((row) => this.boxOf(row, username));
   }
 
   setWake(path: string, wake: MailWake, allow?: readonly string[]): MailBox {

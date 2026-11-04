@@ -2066,7 +2066,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const owner = this.getOwnerUserId();
 
     if ((this.env.EMAIL_DOMAIN ?? '') === '' || owner === null) return Promise.resolve(null);
-    const read = attempt({ doing: 'reading whether the owner holds a mail address', otherwise: 'unavailable' }, async () => (await objectNamed(this.env.MAILBOX, owner).boxes()).length > 0);
+    const read = attempt({ doing: 'reading whether the owner holds a mail address', otherwise: 'unavailable' }, async () => await objectNamed(this.env.MAILBOX, owner).holdsAddress());
 
     return hold(read).then((exit) => {
       if (Exit.isSuccess(exit)) return exit.value;

@@ -246,12 +246,14 @@ export interface ChatOptions {
 /** Thrown after the turn's `done` event, so the interrupted turn's history is kept but recorded as unfinished. */
 export const INTERRUPTED_TURN = 'The turn was interrupted before it finished.';
 
-/** A Stop's end of a turn, known by its class in the isolate that ran the turn: what threw under the Stop is no failure
- *  of the turn. */
-export class InterruptedTurn extends KinuError {
-  constructor() {
-    super('cancelled', INTERRUPTED_TURN);
-  }
+/** A Stop's end of a turn: `cancelled`, so what threw under the Stop is no failure of the turn. */
+export function interruptedTurn(): KinuError {
+  return new KinuError('cancelled', INTERRUPTED_TURN);
+}
+
+/** Whether a turn's failure is its cancellation, a Stop's or what a Stop cancelled under it. */
+export function isInterruptedTurn(failure: Error | null): boolean {
+  return failure instanceof KinuError && failure.code === 'cancelled';
 }
 
 /** A call's end, as the SDK's `onEnd` hands it over. */
@@ -328,7 +330,7 @@ function endedCall(call: ProviderCall, ending: {
 
   return Effect.suspend((): Effect.Effect<CallOutcome, KinuError> => {
     if (call.interrupted) {
-      operation.failed({ cause: new InterruptedTurn() });
+      operation.failed({ cause: interruptedTurn() });
 
       return Effect.succeed({ steps: call.recordedSteps, produced, finishReason: call.lastFinishReason, interrupted: true, failure: null });
     }
@@ -1285,7 +1287,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   yield { type: 'done', text, responseMessages, ...(answer !== null && { answer }), source: 'native' };
 
   // Thrown only after `done`, so the history is kept.
-  if (interrupted) throw new InterruptedTurn();
+  if (interrupted) throw interruptedTurn();
 }
 
 function parseToolArgs(raw: TypedToolCall<ToolSet>['input']): JsonObject {
