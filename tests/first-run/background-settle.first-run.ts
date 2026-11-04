@@ -57,7 +57,7 @@ describe(SUITE, () => {
   // reads it: a still-open wake is red, not unknown. (The runner's own
   // timeout, wider, retained nothing: build fddd4f9d6 timed out at 600 s with
   // an empty episode directory.)
-  liveTest(`MEASURED: ${CASE}`, { timeout: 12 * 60_000 }, async () => {
+  liveTest(`MEASURED: ${CASE}`, async () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
 
     await runFirstRunCase(PLAN, {

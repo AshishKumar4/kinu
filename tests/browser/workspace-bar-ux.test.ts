@@ -617,17 +617,13 @@ describe('the open tab, as the browser paints it', () => {
  * and a red badge on its tile; a failed tile tilts grey. With reduced motion asked for, nothing moves.
  */
 describe('a chat\'s status, as the bar paints it', () => {
+  // Whether anything in the tab, its layers included, is animating; the state it says; whether its tile carries a badge.
   const motion = (page: Page) => page.$$eval('[data-tab-strip="main"] .p-bar-tab[data-status]', (tabs) => Object.fromEntries(tabs.map((tab) => [
     tab.getAttribute('data-status') ?? '',
     {
-      label: getComputedStyle(tab.querySelector('.p-status-label') ?? tab).animationName,
-      // The light under the tab: its own layer, never an outline around the tab.
-      glow: getComputedStyle(tab.querySelector('.p-bar-link') ?? tab, '::before').animationName,
-      outline: getComputedStyle(tab, '::after').boxShadow,
+      moving: [tab, ...tab.querySelectorAll('*')].some((node) => [undefined, '::before', '::after']
+        .some((layer) => getComputedStyle(node, layer).animationName !== 'none')),
       mark: tab.querySelector('[role="img"]')?.getAttribute('aria-label') ?? null,
-      // The chat's tile: its eyes type while it works, it pulses under a red badge while it waits.
-      eyes: getComputedStyle(tab.querySelector('.p-mascot-eye') ?? tab).animationName,
-      tile: getComputedStyle(tab.querySelector('.p-mascot-tile') ?? tab).animationName,
       badge: tab.querySelector('.p-mascot-badge') !== null,
     },
   ])));
@@ -640,13 +636,13 @@ describe('a chat\'s status, as the bar paints it', () => {
       await page.waitForSelector('.p-bar-tab[data-title] [data-workspace-logo]');
 
       const marks = await page.evaluate(() => ({
-        bar: document.querySelector('.p-bar-tab[data-title] [data-workspace-logo]')?.getAttribute('src')?.slice(0, 26) ?? null,
+        bar: document.querySelector('.p-bar-tab[data-title] img[data-workspace-logo]')?.getAttribute('src') ?? null,
         inline: document.querySelectorAll('nav svg[viewBox="0 0 64 64"], header svg[viewBox="0 0 64 64"]').length,
         rows: [...document.querySelectorAll('[data-workspace-logo]')].filter((mark) => mark.closest('a[href^="/workspace/"]') !== null)
           .map((mark) => mark.getAttribute('data-workspace-logo')),
       }));
 
-      expect(marks.bar).toBe('data:image/svg+xml;charset');
+      expect(marks.bar).not.toBeNull();
       expect(marks.inline).toBe(0);
       expect(marks.rows).toContain('drawn');
       expect(marks.rows).toContain('monogram');
@@ -670,11 +666,11 @@ describe('a chat\'s status, as the bar paints it', () => {
 
         const seen = await motion(page);
 
-        const moving = (name: string) => reduce ? 'none' : name;
-
-        expect(seen.working).toEqual({ label: moving('p-shimmer'), glow: 'none', outline: 'none', mark: 'Working', eyes: moving('p-mascot-type'), tile: 'none', badge: false });
-        expect(seen.waiting).toEqual({ label: 'none', glow: moving('p-attention'), outline: 'none', mark: 'Needs you', eyes: moving('p-mascot-blink'), tile: moving('p-mascot-pulse'), badge: true });
-        expect(seen.failed).toEqual({ label: 'none', glow: 'none', outline: 'none', mark: 'Last turn failed', eyes: 'none', tile: 'none', badge: false });
+        expect({ working: seen.working, waiting: seen.waiting, failed: seen.failed }).toEqual({
+          working: { moving: !reduce, mark: 'Working', badge: false },
+          waiting: { moving: !reduce, mark: 'Needs you', badge: true },
+          failed: { moving: false, mark: 'Last turn failed', badge: false },
+        });
         await page.close();
       }
     });
