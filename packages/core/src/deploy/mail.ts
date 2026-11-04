@@ -85,7 +85,8 @@ function recordValue(record: Pick<DnsRecord, 'type' | 'content'>): string {
 
   if (record.type !== 'TXT' || !value.startsWith('"')) return value;
 
-  return [...value.matchAll(/"((?:[^"\\]|\\.)*)"/gu)].map((part) => part[1] ?? '').join('');
+  return [...value.matchAll(/"((?:[^"\\]|\\.)*)"/gu)].map((part) => (part[1] ?? '')
+    .replace(/\\(\d{3}|.)/gu, (_escape, held: string) => (held.length === 3 ? String.fromCharCode(Number(held)) : held))).join('');
 }
 
 /** Adds each record the zone does not hold yet; the records the token may not write are returned to ask for. */

@@ -15,7 +15,8 @@ const FOLDER_LIMIT = 400;
 /** Each distinct `owner/name` a config's `url =` lines name on github.com. */
 function githubReposOfGitConfig(text: string): readonly string[] {
   const repos = text.split('\n').flatMap((line) => {
-    const url = /^\s*(?:push)?url\s*=\s*(.+?)\s*$/u.exec(line)?.[1];
+    // git reads `#` and `;` as a comment's start; a remote URL holds neither.
+    const url = /^\s*(?:push)?url\s*=\s*([^\s#;]+)/u.exec(line)?.[1];
     const repo = url === undefined ? null : githubRepoOfRemote(url);
 
     return repo === null ? [] : [repo];

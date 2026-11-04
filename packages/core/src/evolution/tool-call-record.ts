@@ -48,52 +48,6 @@ function redactLeaves(value: JsonValue): JsonValue {
   return Object.keys(next).some((field) => next[field] !== value[field]) ? next : value;
 }
 
-const WRITE_PATTERNS: ReadonlyArray<RegExp> = [
-  /\b(?:file|fs)\.(?:write|edit)\s*\(\s*['"`]([^'"`]+)/g,
-  /(?:^|[|;&\n]|\s)>>?\s*(\S+)/g,
-  /(?:^|[|;&\n]|\s)tee\s+(?:-\S+\s+)*(\S+)/g,
-];
-
-const REVISIT_PATTERNS: ReadonlyArray<RegExp> = [
-  /\b(?:file|fs)\.(?:read|text)\s*\(\s*['"`]([^'"`]+)/g,
-  /(?:^|[|;&\n]|\s)(?:cat|head|tail)\s+(?:-\S+\s+)*(\S+)/g,
-  /(?:^|[|;&\n]|\s)rm\s+(?:-\S+\s+)*(\S+)/g,
-  /\bgit\s+(?:checkout\s+--|restore)\s+(\S+)/g,
-];
-
-function stringLeaves(value: JsonValue, into: string[] = []): string[] {
-  if (isJsonString(value)) into.push(value);
-  else if (Array.isArray(value)) for (const item of value) stringLeaves(item, into);
-  else if (isJsonObject(value)) {
-    for (const item of Object.values(value)) stringLeaves(item, into);
-  }
-
-  return into;
-}
-
-/** Only path-shaped tokens count, keeping English words and `>` comparisons out of the path sets. */
-function normalizePath(raw: string): string | null {
-  const path = raw.replace(/^['"`]+/, '').replace(/['"`;,)]+$/, '');
-
-  return /[/.]/.test(path) ? path : null;
-}
-
-function pathsMatching(text: ReadonlyArray<string>, patterns: ReadonlyArray<RegExp>): Set<string> {
-  const found = new Set<string>();
-
-  for (const chunk of text) {
-    for (const pattern of patterns) {
-      for (const match of chunk.matchAll(pattern)) {
-        const path = match[1] === undefined ? null : normalizePath(match[1]);
-
-        if (path) found.add(path);
-      }
-    }
-  }
-
-  return found;
-}
-
 /** `serialized`: `value`'s stable serialization, where the caller already took it; the window takes it again only for a
  *  value whose secrets it redacted. */
 function window(value: JsonValue, serialized?: string): string {
@@ -105,16 +59,7 @@ function window(value: JsonValue, serialized?: string): string {
 
 /** A call keeps only what its finished-turn readers read. */
 export function compactToolCall(call: ToolCallInput): ToolCallRecord {
-  const text = stringLeaves(call.args);
-  const written = pathsMatching(text, WRITE_PATTERNS);
-  const revisited = pathsMatching(text, REVISIT_PATTERNS);
   const op = call.args.op !== undefined && isJsonString(call.args.op) ? call.args.op : null;
-
-  if (call.name === 'file' && call.args.path !== undefined && isJsonString(call.args.path)) {
-    if (op === 'write' || op === 'edit') written.add(call.args.path);
-
-    if (op === 'read') revisited.add(call.args.path);
-  }
 
   // The arguments' stable serialization, taken once for their digest and their window.
   const serialized = stableStringify(call.args);
@@ -125,9 +70,6 @@ export function compactToolCall(call: ToolCallInput): ToolCallRecord {
     target: actionTarget(call.args),
     op: op === null ? null : detached(redactSecrets(op)),
     argsDigest: Object.keys(call.args).length === 0 ? null : fnv1a64(`${call.name}:${serialized}`),
-    // Found in the arguments as written, then kept as every other projection is: through the secret policy.
-    writtenPaths: [...written].map((path) => detached(redactSecrets(path))),
-    revisitedPaths: [...revisited].map((path) => detached(redactSecrets(path))),
   };
 
   if (call.toolCallId !== undefined) record.toolCallId = call.toolCallId;

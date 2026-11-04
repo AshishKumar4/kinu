@@ -38,8 +38,6 @@ export const CompletedTurnSchema = v.object({
     program: v.optional(v.string()),
     op: v.nullable(v.string()),
     argsDigest: v.nullable(v.string()),
-    writtenPaths: v.array(v.string()),
-    revisitedPaths: v.array(v.string()),
   })),
   /** Crafted tools this turn called, per the craft clock. Not derivable from `toolCalls`:
    *  crafted tools are codemode-only. Empty = observed none; absent = not observed. */

@@ -45,7 +45,7 @@ const WrappedSchema = v.union([
 
 /** The argument object a rewrite settles, or undefined to leave the call alone. */
 function settledArguments(raw: string): JsonObject | undefined {
-  const unfenced = raw.trim().replace(/^```(?:json)?\s*/u, '').replace(/\s*```$/u, '');
+  const unfenced = raw.trim().replace(/^```(?:json)?\s*/iu, '').replace(/\s*```$/u, '');
   const parsed = tolerate<unknown>(() => JSON.parse(unfenced === '' ? '{}' : unfenced), 'malformed-input');
   const twice = v.safeParse(DoubleEncodedSchema, parsed);
 
