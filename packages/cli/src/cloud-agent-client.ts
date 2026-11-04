@@ -21,7 +21,7 @@ import {
   type RefinementRequestView,
   type ModelTestResult,
 } from '@kinu.run/core';
-import { attempt, detach, diagnostics, renderThrownChain, settle, tolerate } from '@kinu.run/core/obs';
+import { attempt, detach, diagnostics, KinuError, renderThrownChain, settle, tolerate } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import {
   FileRestorePlanSchema, FileRestoreResultSchema, ReasoningEffortSchema, type WorkspaceSpend,
@@ -388,11 +388,11 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async fork(point: ForkPoint): Promise<AgentForkResult> {
-    if (this.activeTurns.size > 0) throw new Error('Cannot fork while a turn is running.');
+    if (this.activeTurns.size > 0) return settle(Effect.fail(new KinuError('denied', 'Cannot fork while a turn is running.')));
     const rows = await this.history();
     const pivotRow = rows[findForkPivot(rows, point)];
 
-    if (pivotRow === undefined) throw new Error("Could not locate that message in the agent's chat history.");
+    if (pivotRow === undefined) return settle(Effect.fail(new KinuError('missing', "Could not locate that message in the agent's chat history.")));
     // A walk-back leaves files as they are: the agent is told what its rewound turns left.
     await this.callRpc('revertConversation', [pivotRow.id, { chatOnly: true }]);
 
@@ -712,7 +712,7 @@ export class CloudAgentClient implements AgentClient {
 
     // Only an empty menu with no failures is an error; provider failures are reported to the picker.
     if (menu.models.length === 0 && menu.failures.length === 0) {
-      throw new Error('No cloud models are available.');
+      return settle(Effect.fail(new KinuError('missing', 'No cloud models are available.')));
     }
 
     return menu;
