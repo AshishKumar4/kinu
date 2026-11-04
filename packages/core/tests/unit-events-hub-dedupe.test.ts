@@ -26,10 +26,11 @@ function webhook(payload: Partial<WebhookPayload> = {}): IngressDescriptor {
 describe('webhook admission dedupe', () => {
   test('a redelivered body inside its window is the first event; another body, window or hook is admitted', () => {
     const log = makeLog();
-    const at = 1_700_000_000_000;
+    // On a five-minute boundary, so a redelivery three minutes on falls inside the first delivery's window.
+    const at = 1_700_000_100_000;
     const first = log.publish({ descriptor: webhook(), now: at });
 
-    expect(log.publish({ descriptor: webhook(), now: at + 1_000 })).toEqual({ id: first.id, admitted: false });
+    expect(log.publish({ descriptor: webhook(), now: at + 3 * 60_000 })).toEqual({ id: first.id, admitted: false });
     expect(log.publish({ descriptor: webhook({ body: { action: 'closed' } }), now: at }).admitted).toBe(true);
     expect(log.publish({ descriptor: webhook(), now: at + 10 * 60_000 }).admitted).toBe(true);
     expect(log.publish({ descriptor: webhook({ webhook_id: 'gh-issues' }), now: at }).admitted).toBe(true);

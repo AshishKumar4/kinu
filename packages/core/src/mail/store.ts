@@ -6,7 +6,7 @@
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import { ftsPhrases } from '@kinu.run/agent-utils/memory';
-import { KinuError, settleSync } from '../obs/index';
+import { KinuError, settle, settleSync } from '../obs/index';
 import { mailAddressOf, mailLabelNumbered, mailLabelOf, type MailRecipient } from './address';
 import { mailVerdict } from './verdict';
 import { replySubject } from './words';
@@ -734,21 +734,29 @@ export class MailStore {
     return newest === null ? outgoing : { ...outgoing, inReplyTo: `<${newest}>` };
   }
 
-  async draft(asked: MailOutgoing & { threadId?: string }): Promise<MailMessageView> {
-    const outgoing = this.answering(filedRecipients(asked));
-    const box = this.box(outgoing.path);
+  draft(asked: MailOutgoing & { threadId?: string }): Promise<MailMessageView> {
+    return settle(Effect.map(this.filed(asked, 'draft'), (filed) => filed.view));
+  }
 
-    if (box === null) return settleSync(Effect.fail(new KinuError('missing', `No box at "${outgoing.path}".`)));
+  /** `asked` filed in `state` in its box, the thread's earlier draft dropped (one per thread), and read back. */
+  private filed(asked: MailOutgoing & { threadId?: string }, state: 'draft' | 'queued'): Effect.Effect<{
+    readonly outgoing: MailOutgoing; readonly view: MailMessageView; readonly id: string; readonly threadId: string;
+  }, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const outgoing = this.answering(filedRecipients(asked));
+      const box = this.box(outgoing.path);
 
-    // One draft per thread: a new one replaces the old.
-    if (outgoing.threadId !== undefined) this.dropDrafts(outgoing.threadId);
+      if (box === null) return yield* Effect.fail(new KinuError('missing', `No box at "${outgoing.path}".`));
 
-    const { id, threadId } = this.writeOut(box, outgoing, 'draft');
-    const view = await this.messageView(threadId, id);
+      if (outgoing.threadId !== undefined) this.dropDrafts(outgoing.threadId);
 
-    if (view === null) return settleSync(Effect.fail(new KinuError('missing', `No message "${id}".`)));
+      const { id, threadId } = this.writeOut(box, outgoing, state);
+      const view = yield* Effect.promise(() => this.messageView(threadId, id));
 
-    return view;
+      if (view === null) return yield* Effect.fail(new KinuError('missing', `No message "${id}".`));
+
+      return { outgoing, view, id, threadId };
+    });
   }
 
   private dropDrafts(threadId: string): void {
@@ -768,24 +776,14 @@ export class MailStore {
 
   /** Files a message to send, the person's word already given; `outgoing` is the message as filed, which the Mailbox
    *  hands to its outbox. */
-  async queue(asked: MailOutgoing & { threadId?: string }): Promise<{
+  queue(asked: MailOutgoing & { threadId?: string }): Promise<{
     view: MailMessageView; from: string; inReplyTo: string | null; references: string | null; outgoing: MailOutgoing;
   }> {
-    const outgoing = this.answering(filedRecipients(asked));
-    const box = this.box(outgoing.path);
+    return settle(Effect.map(this.filed(asked, 'queued'), ({ outgoing, view, id, threadId }) => {
+      const inReplyTo = outgoing.inReplyTo ?? null;
 
-    if (box === null) return settleSync(Effect.fail(new KinuError('missing', `No box at "${outgoing.path}".`)));
-
-    if (outgoing.threadId !== undefined) this.dropDrafts(outgoing.threadId);
-
-    const { id, threadId } = this.writeOut(box, outgoing, 'queued');
-    const view = await this.messageView(threadId, id);
-
-    if (view === null) return settleSync(Effect.fail(new KinuError('missing', `No message "${id}".`)));
-
-    const inReplyTo = outgoing.inReplyTo ?? null;
-
-    return { view, from: view.from.address, inReplyTo, references: inReplyTo === null ? null : this.referencesOf(threadId, id, inReplyTo), outgoing };
+      return { view, from: view.from.address, inReplyTo, references: inReplyTo === null ? null : this.referencesOf(threadId, id, inReplyTo), outgoing };
+    }));
   }
 
   /** A message's state as shown: a draft is the row's; a sent message's is the outbox's, while it holds the send. */

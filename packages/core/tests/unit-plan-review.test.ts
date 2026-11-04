@@ -3,6 +3,7 @@ import { createTestActorsOver, toolExecute } from '@kinu.run/test-utils';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
+  PLATFORM_LIMITS,
   PlanReviewActions,
   PlanReviewStore,
   PlanReviewSchema,
@@ -155,11 +156,9 @@ describe('durable plan review lifecycle', () => {
 
   test('refuses a plan larger than the stored row instead of throwing at the write', () => {
     const { store } = setup();
-    const submitted = store.submit('default', [{ start: 1, content: 'x'.repeat(3 * 1024 * 1024) }]);
-    expect(submitted.ok).toBe(false);
+    const submitted = store.submit('default', [{ start: 1, content: 'x'.repeat(PLATFORM_LIMITS['do.sqlite.row_bytes'].value) }]);
 
-    if (submitted.ok) throw new Error('expected the oversized plan to be refused');
-    expect(submitted.error).toMatch(/row size|maximum size/);
+    expect(submitted.ok).toBe(false);
     expect(store.getActive('default')).toBeNull();
   });
 

@@ -324,9 +324,9 @@ export function programSurface(input: Parameters<typeof programProviders>[0] & {
   const failures: CodemodeProvider['tools'] = Object.fromEntries(input.crafted.map((entry) => [entry.name, {
     description: entry.description,
     execute: async (...args: unknown[]) => {
-      const failure = v.parse(v.object({ message: v.string(), name: v.string(), code: v.nullable(v.string()) }), args[0]);
+      const failure = v.parse(v.object({ message: v.string(), reason: v.string(), name: v.string(), code: v.nullable(v.string()) }), args[0]);
 
-      input.raised?.(entry.name, failure.message);
+      input.raised?.(entry.name, failure.reason);
 
       return settle(Effect.die(Object.assign(new Error(failure.message), { name: failure.name, code: failure.code })));
     },

@@ -245,7 +245,7 @@ export { createStructuredDecider } from './evolution/structured-decision';
 
 export {
   type EvolutionEvent,
-  type CompletedTurn,
+  type CompletedTurn, type ToolCallRecord,
 } from './evolution/types';
 
 export { QualityDaySchema, type QualityDay, type QualityWindow } from './types/quality';
@@ -268,7 +268,7 @@ export {
 
 export {
   buildChangelog, countUnseenChangelog,
-  revertChangelogEntryById, ChangelogRevertResultSchema,
+  revertChangelogEntryById, ChangelogRevertResultSchema, ChangelogEntrySchema,
   type ChangelogEntry, type ChangelogEntryKind,
   type ChangelogRevertResult,
 } from './evolution/changelog';
@@ -1055,7 +1055,7 @@ export {
 } from './execution/command-call';
 
 export {
-  commandAnswer, answeredRefusal,
+  commandAnswer, answeredRefusal, CommandResultSchema,
 } from './execution/exec-result';
 
 export {
@@ -1203,7 +1203,7 @@ export {
 
 // Top-K recent agent_facts render into the system prompt every turn.
 export {
-  initFactsTable, createFactsStore, factLine, renderMemoryBlock, searchFacts, unifiedFacts,
+  initFactsTable, createFactsStore, factLine, normalizeFactKey, renderMemoryBlock, searchFacts, unifiedFacts,
   FactRevisionSchema, FactSchema,
   type Fact, type FactsStore,
 } from './memory/facts';
@@ -1499,6 +1499,7 @@ export type {
   HeadStep, HeadRunView,
   SplitRequest,
   HeadFileChange,
+  MergeResult,
   SerializedMessage,
 } from './heads/index';
 

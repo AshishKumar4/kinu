@@ -341,15 +341,21 @@ export function defineCrafted(name, factory, reportFailure) {
   // throws while evaluating, or evaluates to something that is not a
   // function, poisons only its own name and says so on each call.
   let loaded;
+  // A body that cannot load fails every call with one error, known by identity, so a call's own throw is never taken for it.
+  let unloadable = null;
   const load = async () => {
     let impl;
     try {
       impl = await factory();
     } catch (cause) {
-      throw new Error('[crafted:' + name + '] failed to load: ' + (cause && cause.message ? cause.message : String(cause)), { cause });
+      const reason = 'failed to load: ' + (cause && cause.message ? cause.message : String(cause));
+      unloadable = { reason, error: new Error('[crafted:' + name + '] ' + reason, { cause }) };
+      throw unloadable.error;
     }
     if (typeof impl !== 'function') {
-      throw new Error('[crafted:' + name + '] is not a function: its stored source evaluates to ' + typeof impl);
+      const reason = 'is not a function: its stored source evaluates to ' + typeof impl;
+      unloadable = { reason, error: new Error('[crafted:' + name + '] ' + reason) };
+      throw unloadable.error;
     }
     return impl;
   };
@@ -359,9 +365,9 @@ export function defineCrafted(name, factory, reportFailure) {
       const impl = await loaded;
       return await impl(...args);
     } catch (cause) {
-      const marker = '[crafted:' + name + ']';
-      const error = cause instanceof Error && cause.message.startsWith(marker)
-        ? cause : new Error(marker + ' ' + (cause && cause.message ? cause.message : String(cause)), { cause });
+      const unloaded = unloadable !== null && cause === unloadable.error;
+      const reason = unloaded ? unloadable.reason : (cause && cause.message ? cause.message : String(cause));
+      const error = unloaded ? cause : new Error('[crafted:' + name + '] ' + reason, { cause });
       if (reportFailure === undefined) throw error;
       let code = null;
       let link = cause;
@@ -371,7 +377,7 @@ export function defineCrafted(name, factory, reportFailure) {
         if (typeof link.code === 'string') code ??= link.code;
         link = link.cause;
       }
-      return reportFailure({ message: error.message, name: cause && typeof cause.name === 'string' ? cause.name : 'Error', code });
+      return reportFailure({ message: error.message, reason, name: cause && typeof cause.name === 'string' ? cause.name : 'Error', code });
     }
   };
 }
