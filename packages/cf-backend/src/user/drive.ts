@@ -137,7 +137,7 @@ export class UserDrive {
     return settle(this.driveOp(caller, (drive) => Effect.gen(function* () {
       if (!transferId) return yield* new KinuError('bad_input', 'download transfer id required');
       const clean = normalizeDrivePath(path);
-      const stat = yield* Effect.promise(() => drive.stat(clean));
+      const stat = yield* Effect.promise(async () => drive.stat(clean));
 
       if (stat === null) return yield* new KinuError('missing', `no such entry: ${clean}`);
       const leaf = clean === '/' ? 'drive' : clean.slice(clean.lastIndexOf('/') + 1);
@@ -153,7 +153,7 @@ export class UserDrive {
         return yield* new KinuError('budget', `file exceeds the ${String(Math.floor(FILE_TRANSFER_MAX_BYTES / (1024 * 1024)))} MiB transfer limit`);
       }
 
-      const raw = yield* Effect.promise(() => drive.readFile(clean));
+      const raw = yield* Effect.promise(async () => drive.readFile(clean));
       const bytes = raw instanceof Uint8Array ? raw : new TextEncoder().encode(raw);
       driveDownloads.set(transferId, { path: clean, bytes });
 

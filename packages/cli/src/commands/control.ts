@@ -72,7 +72,7 @@ export function modelCommand(name: string, spec: string | undefined, opts: Contr
     if (spec) {
       if (target.mode === 'cloud') {
         const auth = requireAuthConfig();
-        const catalog = yield* Effect.promise(() => loadModelCatalog(() => listCloudAvailableModels(auth.origin, auth.token)));
+        const catalog = yield* loadModelCatalog(() => listCloudAvailableModels(auth.origin, auth.token));
         resolvedSpec = catalogSpec(catalog, spec);
         yield* validateModelSelection(catalog, resolvedSpec, spec, name);
       } else {
@@ -82,7 +82,7 @@ export function modelCommand(name: string, spec: string | undefined, opts: Contr
           auth: opts.auth,
         });
 
-        const catalog = yield* Effect.promise(() => loadModelCatalog(() => configured.resolver.listModels()));
+        const catalog = yield* loadModelCatalog(() => configured.resolver.listModels());
         resolvedSpec = configured.resolver.normalizeSpecSync(spec);
         yield* validateModelSelection(catalog, resolvedSpec, spec, name);
       }
@@ -99,10 +99,7 @@ export function modelCommand(name: string, spec: string | undefined, opts: Contr
           origin: auth.origin, token: auth.token, name: target.cloudName,
           method: 'setModel', schema: ModelSetResultSchema, args: [setting],
         }))).spec
-        : (yield* Effect.promise(() => callAgentRpc({
-          origin: auth.origin, token: auth.token, name: target.cloudName,
-          method: 'getStoredModelSpec', schema: StoredModelSchema,
-        }))).spec;
+        : yield* Effect.promise(() => storedCloudModel(auth, target.cloudName));
     } else {
       stored = setting
         ? (yield* Effect.promise(() => setLocalWorkspaceModel(target.localName, setting))).spec
@@ -117,6 +114,11 @@ export function modelCommand(name: string, spec: string | undefined, opts: Contr
 
     console.log(`${DIM('model')} ${stored ?? `${readDefaultTier()?.model ?? 'none named'} (the default tier's)`}`);
   }));
+}
+
+/** The model a cloud workspace pins, or null where it runs the default tier's. */
+async function storedCloudModel(auth: { readonly origin: string; readonly token: string }, cloudName: string): Promise<string | null> {
+  return (await callAgentRpc({ origin: auth.origin, token: auth.token, name: cloudName, method: 'getStoredModelSpec', schema: StoredModelSchema })).spec;
 }
 
 interface EffortResult {
@@ -164,38 +166,42 @@ export async function effortCommand(name: string, level: string | undefined): Pr
 
   const shown = result.effort ?? readDefaultTier()?.reasoningEffort ?? 'medium';
 
-  console.log(`${DIM('reasoning effort')} ${shown}${result.effort === null ? ' (the default tier\'s)' : ''}${await runsAsOnItsModel(target, shown)}`);
+  return settle(Effect.map(runsAsOnItsModel(target, shown), (runsAs) => {
+    console.log(`${DIM('reasoning effort')} ${shown}${result.effort === null ? ' (the default tier\'s)' : ''}${runsAs}`);
+  }));
 }
 
 /** What the workspace's model, its own or the default tier's, is sent for `effort`; nothing where the catalog is unread. */
-async function runsAsOnItsModel(target: AgentTarget, effort: ReasoningEffort): Promise<string> {
-  const auth = target.mode === 'cloud' ? requireAuthConfig() : null;
+function runsAsOnItsModel(target: AgentTarget, effort: ReasoningEffort): Effect.Effect<string> {
+  return Effect.gen(function* () {
+    const auth = target.mode === 'cloud' ? requireAuthConfig() : null;
 
-  const pinned = auth === null
-    ? (await readLocalWorkspacePins(target.localName)).model
-    : (await callAgentRpc({ origin: auth.origin, token: auth.token, name: target.cloudName, method: 'getStoredModelSpec', schema: StoredModelSchema })).spec;
+    const pinned = auth === null
+      ? (yield* Effect.promise(() => readLocalWorkspacePins(target.localName))).model
+      : yield* Effect.promise(() => storedCloudModel(auth, target.cloudName));
 
-  const model = pinned ?? readDefaultTier()?.model;
+    const model = pinned ?? readDefaultTier()?.model;
 
-  if (model === undefined) return '';
+    if (model === undefined) return '';
 
-  const catalog = auth === null
-    ? await loadModelCatalog(() => createConfiguredLocalModelResolver().resolver.listModels())
-    : await loadModelCatalog(() => listCloudAvailableModels(auth.origin, auth.token));
+    const catalog = auth === null
+      ? yield* loadModelCatalog(() => createConfiguredLocalModelResolver().resolver.listModels())
+      : yield* loadModelCatalog(() => listCloudAvailableModels(auth.origin, auth.token));
 
-  if ('unreadable' in catalog) return '';
+    if ('unreadable' in catalog) return '';
 
-  return effortRunsAs(effort, catalog.models.find((entry) => entry.spec === specWithoutAccount(model))?.reasoningEfforts);
+    return effortRunsAs(effort, catalog.models.find((entry) => entry.spec === specWithoutAccount(model))?.reasoningEfforts);
+  });
 }
 
 /** Validation is advisory: an unreachable catalog must say why rather than read as an empty menu. */
 type ModelCatalog = { readonly models: readonly AgentModelEntry[] } | { readonly unreadable: string };
 
-function loadModelCatalog(load: () => Promise<ModelMenu | AgentModelMenu>): Promise<ModelCatalog> {
-  return settle(Effect.match(attempt({ doing: 'reading the model catalog', otherwise: 'unavailable' }, load), {
+function loadModelCatalog(load: () => Promise<ModelMenu | AgentModelMenu>): Effect.Effect<ModelCatalog> {
+  return Effect.match(attempt({ doing: 'reading the model catalog', otherwise: 'unavailable' }, load), {
     onSuccess: (payload): ModelCatalog => ({ models: normalizeModelMenu({ payload }).models }),
     onFailure: (failure): ModelCatalog => ({ unreadable: renderCauseChain(failure) }),
-  }));
+  });
 }
 
 function validateModelSelection(
