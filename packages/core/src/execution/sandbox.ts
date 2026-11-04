@@ -310,7 +310,7 @@ export function computerProcessJob(kind: string, input: JsonValue): { readonly p
 }
 
 /** The actor's jobs, and the box's word on when a job's process ends. */
-export interface ComputerProcessJobs extends AdoptsJobs {
+interface ComputerProcessJobs extends AdoptsJobs {
   ended(jobId: string): Promise<ComputerProcessEnd>;
   /** Whether a job's row exists, and still runs: one a lost reply left unmade is `missing`. */
   state(jobId: string): 'missing' | 'running' | 'settled';

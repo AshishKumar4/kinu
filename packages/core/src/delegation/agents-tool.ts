@@ -107,7 +107,7 @@ export interface SubagentRosterEntry {
  */
 export type SubagentDelivery = 'starts_now' | 'queued';
 
-export interface SubagentPhase {
+interface SubagentPhase {
   busy: boolean;
   lastActivityAt: number | null;
   workingOn: string | null;

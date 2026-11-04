@@ -21,7 +21,7 @@ import {
 } from './types';
 
 /** A file whose size alone exceeds the turn's allocation; named, never opened. */
-export interface UnreadSkillFile {
+interface UnreadSkillFile {
   name: string;
   path: string;
   bytes: number;

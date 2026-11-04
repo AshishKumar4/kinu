@@ -29,7 +29,7 @@ export interface ExperienceActionDeps {
 
 const EXPERIENCE_ACTIONS = ['publish', 'search', 'import'] as const;
 
-export type ExperienceAction = (typeof EXPERIENCE_ACTIONS)[number];
+type ExperienceAction = (typeof EXPERIENCE_ACTIONS)[number];
 
 export interface ExperienceActionInput {
   action: ExperienceAction;

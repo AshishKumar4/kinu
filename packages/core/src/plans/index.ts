@@ -21,8 +21,6 @@ export {
   planTitle,
   type PlanDecisionOutcome,
   type PlanEdit,
-  type PlanAnnotationMathTarget,
-  type PlanAnnotationTextPosition,
   type PlanReview,
   type ReviewAnnotation,
   type GeneralNote,

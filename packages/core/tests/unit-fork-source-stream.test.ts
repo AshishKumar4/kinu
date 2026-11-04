@@ -9,7 +9,7 @@ import {
 } from './helpers/fork-conversation';
 import { reassemble, sourceFrames } from './helpers/fork-stream';
 import {
-  FORK_ROW_SECTIONS, type ForkChunksFrame, type ForkFrame, type ForkPageFrame, type ForkRowFrame,
+  FORK_ROW_SECTIONS, type ForkFrame, type ForkRowFrame,
 } from '../src/identity/fork-transfer';
 import { FORK_SECTIONS, perSection, type ForkRows, type ForkRowSection } from '../src/identity/fork-sections';
 import { SessionHistory } from '../src/session/history';
@@ -20,11 +20,11 @@ function isRowFrame(frame: ForkFrame): frame is ForkRowFrame {
   return 'rows' in frame;
 }
 
-function isChunksFrame(frame: ForkFrame): frame is ForkChunksFrame {
+function isChunksFrame(frame: ForkFrame): frame is Extract<ForkFrame, { kind: 'chunks' }> {
   return frame.kind === 'chunks';
 }
 
-function isPageFrame(frame: ForkFrame): frame is ForkPageFrame {
+function isPageFrame(frame: ForkFrame): frame is Extract<ForkFrame, { kind: 'page' }> {
   return frame.kind === 'page';
 }
 

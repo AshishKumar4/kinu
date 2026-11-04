@@ -12,9 +12,7 @@ import {
 
 export type RoleChangeActor = 'user' | 'agent';
 
-export type RoleChangePolicy = 'allow' | 'approval' | 'locked';
-
-export type RoleChangeRefusal = 'locked' | 'unknown-role' | 'invalid-role-id' | 'approval-required';
+type RoleChangeRefusal = 'locked' | 'unknown-role' | 'invalid-role-id' | 'approval-required';
 
 export type RoleChangeOutcome =
   | { readonly kind: 'applied'; readonly from: RoleId; readonly to: RoleId; readonly catalogVersion: number }

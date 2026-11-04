@@ -126,13 +126,13 @@ export type ModelOperationKind = (typeof MODEL_OPERATION_KINDS)[number];
 
 export const MODEL_OPERATION_PHASES = ['start', 'end'] as const;
 
-export type ModelOperationPhase = (typeof MODEL_OPERATION_PHASES)[number];
+type ModelOperationPhase = (typeof MODEL_OPERATION_PHASES)[number];
 
 /** `failed` covers throws and aborts alike. No clock is read: a missing end row means the process
  *  died, never a timeout verdict. */
 export const MODEL_OPERATION_OUTCOMES = ['ok', 'failed'] as const;
 
-export type ModelOperationOutcome = (typeof MODEL_OPERATION_OUTCOMES)[number];
+type ModelOperationOutcome = (typeof MODEL_OPERATION_OUTCOMES)[number];
 
 /**
  * A start with no end is the signature of a destroyed frame

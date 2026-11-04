@@ -24,7 +24,7 @@ import { utf8Bytes } from '../utils/text';
 import { cardWords } from '../read-models/event-summary';
 
 export type {
-  PlanAnnotationMathTarget, PlanAnnotationTextPosition, PlanDecisionOutcome, PlanEdit,
+  PlanDecisionOutcome, PlanEdit,
   DiffAnchor, DiffSide, GeneralNote, NoteReply, PassageNote, PlanReview, ReviewAnnotation, PlanReviewDecision, PlanReviewResult,
   PlanReviewStatus, ReplyToCommentToolDeps, SubmitPlanToolDeps,
 } from '../types/plans';

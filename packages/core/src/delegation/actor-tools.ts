@@ -131,7 +131,7 @@ export {
   PEER_REPLY_TOPIC,
   type AgentsToolDeps, type AgentsSwarmDeps,
   type TeamToolDeps, type SubagentRosterEntry, type SubagentStatus,
-  type SubagentDelivery, type SubagentPhase, type SubagentHandoff, type SubagentDismissal,
+  type SubagentDelivery, type SubagentHandoff, type SubagentDismissal,
   type PeersToolDeps,
   type PeerAskOutcome, type PeerSendOutcome, type PeerReplyOutcome, type PeerSpawnOutcome,
 } from './agents-tool';

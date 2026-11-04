@@ -16,15 +16,9 @@ export type StepCost = Pick<Extract<RunEvent, { type: 'step_finish' }>, 'usage' 
 /** `owner` is the human editing through the UI, not the agent. */
 export const CONTEXT_EDIT_VIA = v.picklist(['file', 'session', 'owner']).options;
 
-export type ContextEditVia = (typeof CONTEXT_EDIT_VIA)[number];
-
 export const CONTEXT_EDIT_STATUSES = v.picklist(['staged', 'activated']).options;
 
-export type ContextEditStatus = (typeof CONTEXT_EDIT_STATUSES)[number];
-
 export const CONTEXT_EDIT_BOUNDARIES = v.picklist(['step', 'turn']).options;
-
-export type ContextEditBoundary = (typeof CONTEXT_EDIT_BOUNDARIES)[number];
 
 /** Enough admission identity to reopen a turn without copying its canonical transcript into events. */
 export interface OpenTurnIdentity {

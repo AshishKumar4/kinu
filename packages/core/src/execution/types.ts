@@ -93,7 +93,7 @@ export const EXECUTOR_CAPABILITIES = [
 
 export type ExecutorCapability = (typeof EXECUTOR_CAPABILITIES)[number];
 
-export type ExecutorKind = 'workspace' | 'computer' | 'device' | 'parent';
+type ExecutorKind = 'workspace' | 'computer' | 'device' | 'parent';
 
 type ExecutorLifecycleStatus =
   | 'not_configured'
