@@ -22,6 +22,9 @@ import { asSecretsCaller, secretsCaller } from './secrets-caller';
 export const NO_TIMER_DEADLINE_MS = 2_147_483_647;
 
 /** One port contract for codemode declarations and direct executor exposure calls. */
+/** A process log read's limits, as every machine's `logs` member takes them. */
+export const LogLimitsSchema = v.optional(v.object({ lines: v.optional(v.number()), bytes: v.optional(v.number()) }), {});
+
 export const ExecutorPortSchema = v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(65_535));
 
 export type ExecutorToolResult = JsonValue | undefined;

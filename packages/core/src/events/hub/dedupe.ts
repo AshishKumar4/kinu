@@ -1,32 +1,16 @@
 /** Per-variant dedupe keys; the unique index on `agent_log.dedupe_key` enforces once-per-key. */
 
 import { sha256Hex, stableStringify } from '../../safety/argument-digest';
-import type { IngressDescriptor, KinuEvent, ReadableKinuEvent, SubagentTaskPayload } from './types';
+import type { IngressDescriptor, ReadableKinuEvent, SubagentTaskPayload } from './types';
 import { decodeJsonValue } from '../../utils/json';
+import { MINUTE_MS } from '../../utils/date';
 
 export function subagentReportDedupeKey(sequenceId: string): string {
   return `subagent_report:${sequenceId}`;
 }
 
 function subagentTaskDedupeKey(payload: SubagentTaskPayload): string | null {
-  if (payload.creation_id !== undefined) return `subagent-birth:${payload.creation_id}`;
-
-  if (payload.idempotency_key !== undefined) return `subagent-signal:${payload.idempotency_key}`;
-
-  return payload.message_id === undefined ? null : subagentMessageDedupeKey(payload.message_id);
-}
-
-/** The key a chat message's assignment is admitted under: one assignment per message. */
-function subagentMessageDedupeKey(messageId: string): string {
-  return `subagent-message:${messageId}`;
-}
-
-export function dedupeKeyFor(event: KinuEvent): string | null {
-  if (event.payload_visibility !== 'full' && event.payload_visibility !== 'redact') {
-    return event.dedupe_key;
-  }
-
-  return dedupeReadableEvent(event);
+  return payload.creation_id === undefined ? null : `subagent-birth:${payload.creation_id}`;
 }
 
 /** Admission-time dedupe runs before visibility replaces the payload. */
@@ -43,7 +27,7 @@ function dedupeReadableEvent(
   switch (event.variant) {
     case 'webhook': {
       const p = event.payload;
-      const bucket = Math.floor(event.received_at / (5 * 60 * 1000));
+      const bucket = Math.floor(event.received_at / (5 * MINUTE_MS));
       const bodyHash = sha256Hex(stableStringify(decodeJsonValue({ value: p.body })), 24);
 
       return `webhook:${p.webhook_id}:${bodyHash}:${bucket}`;
@@ -69,7 +53,7 @@ function dedupeReadableEvent(
       const p = event.payload;
 
       if (p.message_id) return `email:${p.message_id}`;
-      const bucket = Math.floor(event.received_at / (5 * 60 * 1000));
+      const bucket = Math.floor(event.received_at / (5 * MINUTE_MS));
 
       return `email:${sha256Hex(`${p.from}|${p.to}|${p.subject}|${p.body_text}`, 24)}:${bucket}`;
     }

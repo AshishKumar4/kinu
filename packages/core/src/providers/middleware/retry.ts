@@ -25,6 +25,7 @@ import { providerPacer, type ProviderPacer } from '../pacing';
 import { abortableSleep } from '../../utils/abort';
 import type { ModelAttemptInfo, ProviderWaitInfo } from '../types';
 import { attemptKey, recordAttemptFailure, withAttemptIdentity, type AttemptIdentityCapture } from '../attempt-identity';
+import { MINUTE_MS } from '../../utils/date';
 
 /** Full-jitter backoff; unmeasured. */
 const BASE_DELAY_MS = 2_000;
@@ -41,8 +42,6 @@ const MAX_DELAY_MS = 60_000;
  * alignment; a whole minute from the refusal outlasts a fixed window and a sliding one alike.
  */
 const WORKERS_AI_MINUTE_LIMIT = 3021;
-
-const MINUTE_MS = 60_000;
 
 /** OMP's `maxRetryDelayMs` (oh-my-pi ai/src/types.ts:499); a longer Retry-After means the account is spent. */
 export const MAX_RETRY_DELAY_MS = 60_000;

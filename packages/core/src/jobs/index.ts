@@ -20,7 +20,7 @@ export {
   readDeviceRequestChannel,
   RESUME_REDRIVE_OPTION,
   readResumeRedrive,
-  type BackgroundHandle, BackgroundHandleSchema, backgroundedBy,
+  type BackgroundHandle, BackgroundHandleSchema,
   type BackgroundPolicy,
   type DetachOutcome,
   type InvocationSurface, InvocationSurfaceSchema,

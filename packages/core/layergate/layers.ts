@@ -1,4 +1,3 @@
-import { compactToolCall } from '../src/evolution/tool-call-record';
 import { exists, readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // Layer decomposition of the turn pipeline plus each layer's deterministic assertion slice: literal fixtures,
 // injected clock/RNG, no model calls or I/O, so every slice is byte-reproducible.
@@ -1274,44 +1273,6 @@ export const LAYERS: readonly Layer[] = Object.freeze([
   },
 
   {
-    id: 'delegation',
-    owns: 'the process evidence a turn leaves behind: how much work was delegated out versus ground through inline',
-    subjects: ['delegationFeatures', 'renderDelegationFeatures'],
-    probes: [
-      {
-        id: 'delegation/tool-call-counts',
-        asserts: 'hiring / exploration / messaging / eval calls are counted by agents action separately from total steps',
-        observe: (s) => s.delegationFeatures({
-          steps: 7,
-          durationMs: 95_000,
-          toolCalls: [
-            compactToolCall({ name: 'agents', args: { op: 'hire' }, result: null }),
-            compactToolCall({ name: 'agents', args: { op: 'dismiss' }, result: null }),
-            compactToolCall({ name: 'agents', args: { op: 'swarm' }, result: null }),
-            compactToolCall({ name: 'agents', args: { op: 'message' }, result: null }),
-            compactToolCall({ name: 'eval', args: {}, result: null }),
-            compactToolCall({ name: 'shell', args: {}, result: null }),
-          ],
-        }),
-      },
-      {
-        id: 'delegation/no-delegation-is-zero-not-absent',
-        asserts: 'a fully inline turn reports zeros, so "did not delegate" is measurable',
-        observe: (s) => s.delegationFeatures({ steps: 3, durationMs: 4_000, toolCalls: [compactToolCall({ name: 'shell', args: {}, result: null })] }),
-      },
-      {
-        id: 'delegation/render-duration-units',
-        asserts: 'the rendered evidence switches to minutes past a minute, with one decimal',
-        observe: (s) => [4_000, 59_999, 60_000, 630_000].map((wallClockMs) =>
-          s.renderDelegationFeatures({
-            stepCount: 5, teamCalls: 2, thinkCalls: 1, peerCalls: 0, executeCodemodeCalls: 3,
-            loopedCalls: 0, redundantCalls: 0, backtrackCalls: 0, wallClockMs,
-          })),
-      },
-    ],
-  },
-
-  {
     id: 'tool-contract',
     owns: 'the built-in tool contract the model reads: the summary and notes each schema description carries',
     subjects: ['renderToolSchemaDescription'],
@@ -1486,8 +1447,8 @@ export const LAYERS: readonly Layer[] = Object.freeze([
   {
     id: 'craft-fitness',
     owns: 'the in-episode fitness signal for crafted tools: which tools a submitted block actually called, ' +
-      'which of them a failure is attributable to, and what the whole turn therefore reports as crafted-tool use',
-    subjects: ['craftInvocationSites', 'craftFailureBlame', 'craftInvocationError'],
+      'and what the whole turn therefore reports as crafted-tool use',
+    subjects: ['craftInvocationSites'],
     probes: [
       {
         id: 'craft-fitness/call-sites',
@@ -1553,19 +1514,6 @@ export const LAYERS: readonly Layer[] = Object.freeze([
               { toolName: 'eval', code: 'await tools.sum(2); await tools.fmt(3)' },
             ])],
             ['evolution-off', await turn([{ toolName: 'eval', code: 'await tools.sum(1)' }], false)],
-          ];
-        },
-      },
-      {
-        id: 'craft-fitness/blame-by-stamp-only',
-        asserts: 'only the tool the failure NAMES is scored; a block that broke on its own account blames nobody',
-        observe: (s) => {
-          const stamped = s.craftInvocationError('summarize', new Error('boom')).message;
-
-          return [
-            [stamped, s.craftFailureBlame(stamped, ['summarize', 'other'])],
-            ['TypeError: x is not a function', s.craftFailureBlame('TypeError: x is not a function', ['summarize'])],
-            [stamped, s.craftFailureBlame(stamped, ['other'])],
           ];
         },
       },

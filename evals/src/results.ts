@@ -2,7 +2,7 @@
 // renderer read it. Every object is loose: the reporter adds fields freely and only these are relied on.
 import { basename } from 'node:path';
 import * as v from 'valibot';
-import { BACKGROUND_POLICY, BackgroundHandleSchema, backgroundedBy, JsonValueSchema, summarizeSteps, type JsonValue, type RunEvent } from '@kinu.run/core';
+import { BACKGROUND_POLICY, BackgroundHandleSchema, JsonValueSchema, summarizeSteps, type JsonValue, type RunEvent } from '@kinu.run/core';
 import { TURN_OUTCOMES } from './task';
 
 const JsonRecordSchema = v.record(v.string(), JsonValueSchema);
@@ -220,7 +220,7 @@ export function measureWaits(ledgers: readonly ActorLedger[]): TrialWaits {
     // A spawn hands back its job by design; only a shell command or a program waits out a window.
     const handle = v.safeParse(BackgroundHandleSchema, result);
 
-    return handle.success && (call.tool === 'shell' || call.tool === 'eval') ? [{ ...call, by: backgroundedBy(handle.output) }] : [];
+    return handle.success && (call.tool === 'shell' || call.tool === 'eval') ? [{ ...call, by: handle.output.movedBy }] : [];
   });
 
   return {

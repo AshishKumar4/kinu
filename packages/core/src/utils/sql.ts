@@ -1,6 +1,7 @@
 /** SQL primitives any store's DDL or reads use, owned by none of them. */
 
-import type { SqlExecutor } from '../types/primitives';
+import * as v from 'valibot';
+import type { SqlExec, SqlExecutor } from '../types/primitives';
 
 /** Absence as a value: a catch cannot tell a missing table from other SQL errors. */
 export function tableExists(sql: SqlExecutor, table: string): boolean {
@@ -92,4 +93,31 @@ export function statementWrite(statement: string): { readonly verb: 'insert' | '
 /** A vocabulary quoted for a DDL CHECK, so the CHECK derives from the same list as the type. */
 export function sqlCheckList(values: readonly string[]): string {
   return values.map((value) => `'${value}'`).join(',');
+}
+
+const ListedTableSchema = v.object({
+  schema: v.string(), name: v.string(), type: v.picklist(['table', 'view', 'shadow', 'virtual']), wr: v.number(),
+});
+
+/** A table as SQLite's own catalog lists it: an FTS index is `virtual`, the tables it keeps itself are `shadow`. */
+export interface ListedTable {
+  readonly name: string;
+  readonly type: 'table' | 'shadow' | 'virtual';
+  readonly withoutRowid: boolean;
+}
+
+/** The database's own tables (`PRAGMA table_list`), SQLite's and the platform's (`sqlite_`, `_cf_`) aside. */
+export function listedTables(sql: SqlExec): ListedTable[] {
+  return sql.exec('PRAGMA table_list').toArray().map((row) => v.parse(ListedTableSchema, row)).flatMap((row) => (
+    row.schema !== 'main' || row.type === 'view' || row.name.startsWith('sqlite_') || row.name.startsWith('_cf_')
+      ? []
+      : [{ name: row.name, type: row.type, withoutRowid: row.wr === 1 }]));
+}
+
+export function columnNames(sql: SqlExec, table: string): string[] {
+  return sql.exec('SELECT name FROM pragma_table_info(?)', table).toArray().map((row) => v.parse(v.object({ name: v.string() }), row).name);
+}
+
+export function quoteIdent(name: string): string {
+  return `"${name.replace(/"/g, '""')}"`;
 }

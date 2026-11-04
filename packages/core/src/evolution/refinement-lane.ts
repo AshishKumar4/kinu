@@ -996,12 +996,6 @@ function settledStage(landed: number, undone: number): RefinementStage {
   return 'refused';
 }
 
-/**
- * Derive the verdict from the owners (section store, approval store), never
- * from callbacks, so it cannot drift. Null while anything is pending or when
- * the guarded transition finds the row already moved.
- */
-/** A section edit is pending until a cold turn makes it current, or the owner discards it. */
 /** A staged text or skill edit's state, as its owner holds it; null for any other route. */
 async function stagedRouteState(
   deps: RefinementDeps, owners: ChangeOwners, request: RefinementRequest, route: RefinementRoute,

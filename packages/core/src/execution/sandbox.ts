@@ -5,7 +5,7 @@ import * as v from 'valibot';
 import { abortedBeforeStart } from '@kinu.run/agent-utils';
 import { Effect } from 'effect';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus, PortExposureResult, PreviewRouteCheck, SandboxSize, SandboxSizes } from './types';
-import { commandTool, ExecutorPortSchema, type ExecutorTool, type ExecutorToolResult } from './types';
+import { commandTool, ExecutorPortSchema, LogLimitsSchema, type ExecutorTool, type ExecutorToolResult } from './types';
 import { shellCall } from './command-call';
 import { callJob, createShellSession, machineShellCall, machineShellCwd, reportsCwd, shellExecOptions, type MachineShells, type ShellSession } from './shell-session';
 import { namedShellCall } from '../safety/approval-gate';
@@ -93,9 +93,9 @@ export interface SandboxHandle {
   /**
    * The only kind of background process that survives container sleep; `env` is kept with it and set again on each
    * restart. `reveal`: the owner started it, so at each start and restart the box asks the account for the values this
-   * workspace's agents may read, and the process holds them in memory only.
+   * workspace's agents may read, and the process holds them in memory only. Answers `job` where the process runs as
+   * one: an earlier start's, when the same command still runs.
    */
-  /** Answers `job` where the process runs as one: an earlier start's, when the same command still runs. */
   startSupervisedProcess(command: string, opts?: { cwd?: string; env?: Readonly<Record<string, string>>; reveal?: boolean; job?: string }):
     Promise<{ processId: string; job?: string }>;
   stopSupervisedProcess(processId: string): Promise<{ stopped: boolean }>;
@@ -223,8 +223,6 @@ export function isSandboxTransientError(error: Error | string): boolean {
  *  Built per call, as every refusal is: an object shared between calls would carry one caller's edits to the next. */
 const notConfigured = (): Refusal => refusalOf(new KinuError('unavailable', NOT_CONFIGURED));
 
-/** `unsupported`: the container works; no `PREVIEW_HOST_SUFFIX` means no retry can succeed. */
-
 /** A transport failure left after its retries is the box out of reach, so `unavailable`, not `io`.
  *  A recognised cause keeps its own, more precise code. */
 function sandboxFailure(input: { doing: string; cause: unknown }): KinuError {
@@ -293,8 +291,6 @@ export interface SandboxExecutorOptions {
   readonly processJobs?: ComputerProcessJobs;
 }
 
-/** What every member of the computer's surface works over: its handle (none: not configured), its named shells, and
- *  the one way a call through it marks the computer in use. */
 /** A computer's process as its job's: its end, as the box tells it. */
 export interface ComputerProcessEnd {
   /** Absent where the box kept none (the process was lost). */
@@ -320,6 +316,8 @@ export interface ComputerProcessJobs extends AdoptsJobs {
   state(jobId: string): 'missing' | 'running' | 'settled';
 }
 
+/** What every member of the computer's surface works over: its handle (none: not configured), its named shells, and
+ *  the one way a call through it marks the computer in use. */
 interface Computer {
   readonly handle: SandboxHandle | undefined;
   readonly processJobs: ComputerProcessJobs | undefined;
@@ -515,8 +513,6 @@ function stopProcessMember({ handle, touch }: Computer): ExecutorTool {
     },
   };
 }
-
-const LogLimitsSchema = v.optional(v.object({ lines: v.optional(v.number()), bytes: v.optional(v.number()) }), {});
 
 /** `computer.logs`: a supervised job's one log (D95). */
 function logsMember({ handle, touch }: Computer): ExecutorTool {

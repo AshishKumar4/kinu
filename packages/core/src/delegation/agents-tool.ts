@@ -12,7 +12,6 @@ import { AGENTS_OPS, type AgentsOp } from '../operations/agents';
 import { SwarmConfigSchema, SwarmObjectiveSchema } from '../tools/swarm-input';
 import {
   PEER_REPLY_TOPIC,
-  type PeerAskOutcome, type PeerReplyOutcome, type PeerSendOutcome,
   type PeersToolDeps,
 } from '../types/peers';
 import { runSwarm, type SwarmRunDeps } from '../strategy/swarm-run';
@@ -70,10 +69,6 @@ import {
   parseJsonObject,
   type JsonObject, type JsonValue,
 } from '../utils/json';
-import {
-  countedMsgSend,
-  type MsgSendResult,
-} from '../obs/msg-counters';
 import { AGENT_TREE_LIMIT, type AgentTreeView } from './agent-tree';
 
 export {
@@ -214,31 +209,6 @@ const ASSIGN_NOTES = {
   starts_now: 'Assigned. The subagent was idle and starts on it now.',
   queued: 'Queued behind the subagent\'s current or already-admitted work as its own turn.',
 } satisfies Record<SubagentDelivery, string>;
-
-// Counter readers: translate each transport's outcome for the counter. Kept beside the outcome types
-// so a new outcome case fails to compile here.
-
-function peerSendCount(outcome: PeerSendOutcome): MsgSendResult {
-  return outcome.status === 'rejected'
-    ? { outcome: 'rejected' }
-    : { outcome: outcome.status, messageId: outcome.message_id };
-}
-
-/** A send-and-await: `replied`, not `delivered`, because its wait includes the answering turn. */
-function peerAskCount(outcome: PeerAskOutcome): MsgSendResult {
-  return { outcome: outcome.status === 'replied' ? 'replied' : 'rejected' };
-}
-
-function peerReplyCount(outcome: PeerReplyOutcome): MsgSendResult {
-  return { outcome: outcome.ok ? 'delivered' : 'rejected' };
-}
-
-function handoffCount(handoff: SubagentHandoff): MsgSendResult {
-  return {
-    outcome: handoff.delivery === 'queued' ? 'queued' : 'delivered',
-    messageId: handoff.eventId,
-  };
-}
 
 /** What an actor needs to run a search: a model and a workspace. Wired under `swarm` on {@link AgentsToolDeps}. */
 export interface AgentsSwarmDeps {
@@ -909,11 +879,7 @@ async function assignWork(deps: AgentsToolDeps, fields: AssignFields, { mode, to
 
     if (fields.deliverable) Object.assign(assignment, { deliverable: fields.deliverable });
 
-    const handoff = await countedMsgSend(
-      { action: 'assign', transport: 'subagent', addressing: 'agent', target: fields.agent, chars: fields.message.length },
-      () => team.assign(assignment),
-      handoffCount,
-    );
+    const handoff = await team.assign(assignment);
 
     return {
       status: 'working',
@@ -928,11 +894,7 @@ async function assignWork(deps: AgentsToolDeps, fields: AssignFields, { mode, to
 
     if (toolOptions?.abortSignal) Object.assign(request, { signal: toolOptions.abortSignal });
 
-    return await countedMsgSend(
-      { action: 'assign', transport: 'peer', addressing: 'agent', target: fields.agent, chars: fields.message.length },
-      () => peers.ask(request),
-      peerAskCount,
-    );
+    return await peers.ask(request);
   }
 
   return badInput(`unknown agent "${fields.agent}": check the roster with op:"list"`);
@@ -947,21 +909,13 @@ async function messageAgent(deps: AgentsToolDeps, fields: MessageFields, { mode,
   const sent = requestedTopic(fields.topic);
 
   if (team && await isSubagent(agent)) {
-    const handoff = await countedMsgSend(
-      { action: 'message', transport: 'subagent', addressing: 'agent', target: agent, chars: message.length },
-      () => team.message({ name: agent, content: message, mode }),
-      handoffCount,
-    );
+    const handoff = await team.message({ name: agent, content: message, mode });
 
     return { status: handoff.delivery === 'queued' ? 'queued' : 'delivered', agent, ...renderHandoff(handoff) };
   }
 
   if (peers) {
-    return await countedMsgSend(
-      { action: 'message', transport: 'peer', addressing: 'agent', target: agent, chars: message.length },
-      () => peers.send({ agent, topic: sent.topic, message, mode }),
-      peerSendCount,
-    );
+    return await peers.send({ agent, topic: sent.topic, message, mode });
   }
 
   return badInput(`unknown agent "${agent}": check the roster with op:"list"`);
@@ -1069,11 +1023,7 @@ export async function dispatchAgentsCall(
         if (!peers) throw new KinuError('denied', 'answering an event needs the peer transport, which this actor does not have');
         const { eventId, message } = call.fields;
 
-        return await countedMsgSend(
-          { action: 'reply', transport: 'peer', addressing: 'event', target: eventId, chars: message.length },
-          () => peers.reply({ eventId, message }),
-          peerReplyCount,
-        );
+        return await peers.reply({ eventId, message });
       }
 
       case 'list':

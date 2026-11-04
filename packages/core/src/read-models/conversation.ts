@@ -4,6 +4,7 @@ import type { ChatHistoryEntry } from '../types/chat';
 import type { Page, PositionCursor, PositionPageRequest } from '../session/page';
 import { rowText } from '../utils/ui-message';
 import { isSteeredMessage } from './background-event';
+import { fenced } from '../utils/text';
 
 /** One row of a conversation, as the CLI's transcript holds it and a chat's messages read. */
 export interface ConversationRow {
@@ -11,18 +12,6 @@ export interface ConversationRow {
   readonly content: string;
   readonly toolName?: string;
   readonly args?: string;
-}
-
-function fence(text: string): string {
-  const longest = Math.max(2, ...[...text.matchAll(/`+/gu)].map((run) => run[0].length));
-
-  return '`'.repeat(longest + 1);
-}
-
-function fenced(text: string, lang = ''): string {
-  const marker = fence(text);
-
-  return `${marker}${lang}\n${text}\n${marker}`;
 }
 
 export function conversationMarkdown(agentName: string, rows: readonly ConversationRow[]): string {

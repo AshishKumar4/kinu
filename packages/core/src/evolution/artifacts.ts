@@ -13,7 +13,6 @@ import { markStoreChanged } from '@kinu.run/agent-utils';
 import type { ActorHandle } from '../identity/actor-handle';
 import { ARTIFACT_STATUSES } from './artifact-schema';
 import type { SqlExecutor } from '../types/primitives';
-import { nowMs } from '../utils/date';
 import { parseJsonValue } from '../utils/json';
 import { diagnostics, tolerate } from '../obs/index';
 import { changedRows } from '../vfs/diff';
@@ -169,7 +168,7 @@ export function currentArtifacts(sql: SqlExecutor, actor: ActorHandle): readonly
  * The bodies a turn assembles from. A turn whose prompt cache is cold first makes each staged version current, in place
  * of the version it replaces: the one moment an automatic change moves the prompt prefix.
  */
-export function turnArtifacts(sql: SqlExecutor, actor: ActorHandle, cacheCold: boolean, now = nowMs()): readonly CurrentArtifact[] {
+export function turnArtifacts(sql: SqlExecutor, actor: ActorHandle, cacheCold: boolean, now = Date.now()): readonly CurrentArtifact[] {
   if (cacheCold) activateStaged(sql, actor, now);
 
   return currentArtifacts(sql, actor);
@@ -218,14 +217,12 @@ export function artifactVersion(sql: SqlExecutor, actor: ActorHandle, artifactId
   return row === undefined ? null : versionOf(row);
 }
 
-/** Characters an edit changes: what lies between the common prefix and suffix, on the longer side. */
 /**
  * What an edit changes, in characters: what a word-level diff deletes plus what it inserts, each run of word or of
  * whitespace a token aligned by the VFS's own minimal diff ({@link changedRows}). Two small edits far apart count
  * themselves alone, where the span from the first difference to the last counted the unchanged text between them
  * (the OMP pilot's dreams, 2026-10-21: a 296-character change measured 1,421); scattered edits still add up.
  */
-/** The characters an edit changes, as the size gate counts them: the words it removes and the words it adds. */
 function changedChars(before: string, after: string): number {
   const { removed, added } = changedRows(wordsOf(before), wordsOf(after));
 
@@ -329,7 +326,7 @@ export function stageArtifact(sql: SqlExecutor, actor: ActorHandle, input: {
   readonly now?: number;
 }): number {
   actor.assertCurrent();
-  const now = input.now ?? nowMs();
+  const now = input.now ?? Date.now();
 
   const [top] = sql<{ v: number }>`SELECT COALESCE(MAX(version), 0) AS v FROM artifact_versions
     WHERE actor_id = ${actor.actorId} AND artifact_id = ${input.artifactId}`;
@@ -351,7 +348,7 @@ export function stageArtifact(sql: SqlExecutor, actor: ActorHandle, input: {
  * the version it replaced, or to the bundled text.
  */
 export function revertArtifact(sql: SqlExecutor, actor: ActorHandle, artifactId: string, version: number): void {
-  const now = nowMs();
+  const now = Date.now();
   const reverted = artifactVersion(sql, actor, artifactId, version);
 
   if (reverted === null) return;

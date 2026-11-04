@@ -5,6 +5,7 @@
  */
 import * as v from 'valibot';
 import { Effect } from 'effect';
+import { ftsPhrases } from '@kinu.run/agent-utils/memory';
 import { KinuError, settleSync } from '../obs/index';
 import { mailAddressOf, mailLabelNumbered, mailLabelOf, type MailRecipient } from './address';
 import { mailVerdict } from './verdict';
@@ -16,6 +17,7 @@ import type {
   MailSendState, MailTriaged, MailTriageItem, MailTriagePick, MailWake, MailWoke,
 } from './mailbox-api';
 import type { SqlExec } from '../types/primitives';
+import { DAY_MS } from '../utils/date';
 
 /** Trash empties itself 30 days after a thread went in (the owner, 2026-10-19). */
 const TRASH_DAYS = 30;
@@ -26,8 +28,6 @@ const BLOB_GRACE_DAYS = 31;
 
 /** A text part up to this size stays in the row; a longer one goes to R2. */
 const INLINE_TEXT_BYTES = 64 * 1024;
-
-const DAY = 86_400_000;
 
 /** What the store needs of a parsed message; the Mailbox reads it with postal-mime. */
 export interface ParsedMail {
@@ -95,11 +95,6 @@ const AttachmentRow = v.object({ id: v.string(), message_id: v.string(), filenam
 const PartiesJson = v.pipe(v.string(), v.parseJson(), v.array(v.object({ name: v.nullable(v.string()), address: v.string() })));
 
 const rows = <T extends v.GenericSchema>(schema: T, found: { toArray(): unknown[] }): v.InferOutput<T>[] => found.toArray().map((row) => v.parse(schema, row));
-
-/** The search box's words, each quoted, so FTS5 reads none of them as syntax. */
-function ftsQuery(words: string): string {
-  return words.split(/\s+/u).filter(Boolean).map((word) => `"${word.replaceAll('"', '""')}"`).join(' ');
-}
 
 /** A Message-ID without its angle brackets, the form threading compares. */
 const bare = (id: string): string => id.trim().replace(/^<|>$/gu, '');
@@ -601,7 +596,7 @@ export class MailStore {
 
     if (query.query !== undefined && query.query.trim() !== '') {
       where.push('t.id IN (SELECT m.thread_id FROM mail_messages m WHERE m.rowid IN (SELECT rowid FROM mail_fts WHERE mail_fts MATCH ?))');
-      bindings.push(ftsQuery(query.query));
+      bindings.push(ftsPhrases(query.query).join(' ') || '""');
     }
 
     const ids = rows(v.object({ id: v.string(), latest: v.number(), unread: v.number() }), this.deps.sql.exec(
@@ -753,12 +748,12 @@ export class MailStore {
   /** Sends sent from this account in the last day, against its cap (none for operators, 100 otherwise). */
   sentToday(): number {
     return rows(v.object({ n: v.number() }), this.deps.sql.exec(
-      "SELECT COUNT(*) AS n FROM mail_messages WHERE send_state = 'queued' AND at >= ?", this.deps.now() - DAY,
+      "SELECT COUNT(*) AS n FROM mail_messages WHERE send_state = 'queued' AND at >= ?", this.deps.now() - DAY_MS,
     ))[0]?.n ?? 0;
   }
 
-  /** Files a message to send, the person's word already given; the Mailbox then hands it to its outbox. */
-  /** Files a message to send; `outgoing` is the message as filed, which is what the outbox sends. */
+  /** Files a message to send, the person's word already given; `outgoing` is the message as filed, which the Mailbox
+   *  hands to its outbox. */
   async queue(asked: MailOutgoing & { threadId?: string }): Promise<{
     view: MailMessageView; from: string; inReplyTo: string | null; references: string | null; outgoing: MailOutgoing;
   }> {
@@ -802,7 +797,7 @@ export class MailStore {
   /** Empties the Trash of what has been in it 30 days: its rows and its search entries. The bytes no row names any more
    *  are kept {@link BLOB_GRACE_DAYS} days, then deleted unless a row names them again. */
   async purge(): Promise<number> {
-    const cutoff = this.deps.now() - TRASH_DAYS * DAY;
+    const cutoff = this.deps.now() - TRASH_DAYS * DAY_MS;
     const gone = rows(v.object({ id: v.string() }), this.deps.sql.exec('SELECT id FROM mail_threads WHERE trashed_at IS NOT NULL AND trashed_at <= ?', cutoff));
     const keys = new Set<string>();
 
@@ -819,7 +814,7 @@ export class MailStore {
       this.deps.sql.exec('DELETE FROM mail_threads WHERE id = ?', id);
     }
 
-    const due = this.deps.now() + BLOB_GRACE_DAYS * DAY;
+    const due = this.deps.now() + BLOB_GRACE_DAYS * DAY_MS;
 
     for (const unnamed of [...keys].filter((key) => !this.named(key))) {
       this.deps.sql.exec('INSERT INTO mail_blob_graves (key, due_at) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET due_at = MAX(due_at, excluded.due_at)', unnamed, due);
@@ -855,7 +850,7 @@ export class MailStore {
   nextPurgeAt(): number | null {
     const [row] = rows(v.object({ at: v.nullable(v.number()) }), this.deps.sql.exec('SELECT MIN(trashed_at) AS at FROM mail_threads WHERE trashed_at IS NOT NULL'));
     const [grave] = rows(v.object({ at: v.nullable(v.number()) }), this.deps.sql.exec('SELECT MIN(due_at) AS at FROM mail_blob_graves'));
-    const due = [row?.at == null ? null : row.at + TRASH_DAYS * DAY, grave?.at ?? null].filter((at) => at !== null);
+    const due = [row?.at == null ? null : row.at + TRASH_DAYS * DAY_MS, grave?.at ?? null].filter((at) => at !== null);
 
     return due.length === 0 ? null : Math.min(...due);
   }

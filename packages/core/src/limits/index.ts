@@ -13,4 +13,4 @@ export {
 
 export { initAccountLimitTables } from './schema';
 
-export { AccountLimitsStore, dayOf, monthOf, periodEnd, type RunningComputer, type Standing } from './store';
+export { AccountLimitsStore, monthOf, periodEnd, type RunningComputer, type Standing } from './store';

@@ -20,16 +20,10 @@ import type { AgentToolDescriptor } from '../subagents/agent-isolate';
 import type { Served } from '../operations/operation';
 import type { AdvisorModel } from './session-advisor';
 
-/** The file operations that change nothing. */
-const ADVISOR_FILE_OPERATIONS: ReadonlySet<string> = new Set(['read', 'list', 'stat', 'search']);
-
-/** The memory operations that change nothing. */
-const ADVISOR_MEMORY_OPERATIONS: ReadonlySet<string> = new Set(['recall', 'search', 'searchConversations', 'readConversation', 'listConversations']);
-
 const READ_ONLY = 'Read-only: the operations that change nothing.';
 
-function readOnly(served: readonly Served[], allowed: ReadonlySet<string>): Served[] {
-  return served.filter((member) => allowed.has(member.op.name));
+function readOnly(served: readonly Served[]): Served[] {
+  return served.filter((member) => member.op.impact === 'observe');
 }
 
 /** The advisor's read-only tools: `file` and `memory`, each absent where the agent has none. */
@@ -56,10 +50,10 @@ export function advisorReadTools(planes: {
 
   return {
     ...(files !== undefined && {
-      file: nativeTool(`${BUILTIN_TOOL_DESCRIPTIONS.file} ${READ_ONLY}`, readOnly(Object.values(serveFile(() => ({ ...files(), ledger, budget }))), ADVISOR_FILE_OPERATIONS)),
+      file: nativeTool(`${BUILTIN_TOOL_DESCRIPTIONS.file} ${READ_ONLY}`, readOnly(Object.values(serveFile(() => ({ ...files(), ledger, budget }))))),
     }),
     ...(memory !== undefined && {
-      memory: nativeTool(`${BUILTIN_TOOL_DESCRIPTIONS.memory} ${READ_ONLY}`, readOnly(serveMemory(memory), ADVISOR_MEMORY_OPERATIONS)),
+      memory: nativeTool(`${BUILTIN_TOOL_DESCRIPTIONS.memory} ${READ_ONLY}`, readOnly(serveMemory(memory))),
     }),
   };
 }

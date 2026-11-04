@@ -15,7 +15,8 @@ import {
   explainSandboxError, programSurface,
   renderCodemodeDescription, codemodeInputSchema,
   withCraftedToolDeclarations, renderCraftedDefinitions,
-  codemodeFunction, withCodemodeProgram, execContext, readDeviceRequestChannel, shownConsoleValue, programNamespace, servedImpacts, type ProgramMember, type ProgramNamespace,
+  codemodeFunction, withCodemodeProgram, execContext, readCraftRaised, readDeviceRequestChannel, shownConsoleValue, programNamespace, servedImpacts,
+  type CraftRaised, type ProgramMember, type ProgramNamespace,
 } from '@kinu.run/core';
 import { tool, type ToolSet } from 'ai';
 import { runProgramInProcess } from './executor';
@@ -61,8 +62,8 @@ interface ExecuteSuccess {
 export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps): (surface: CodemodeSurface) => ToolSet[string] {
   return (surface) => {
     // `requireBuild` refuses Plan, so a program reaches what Build does: the program's surface, as the cloud's builds it.
-    const reaching = (signal: AbortSignal | undefined) => programSurface({
-      surface, namespaces: deps.namespaces ?? [], reach: deps.reach, mode: 'build', signal, crafted: surface.craftedTools(),
+    const reaching = (signal: AbortSignal | undefined, raised?: CraftRaised) => programSurface({
+      surface, namespaces: deps.namespaces ?? [], reach: deps.reach, mode: 'build', signal, crafted: surface.craftedTools(), raised,
     });
 
     return withCraftedToolDeclarations(tool({
@@ -87,7 +88,7 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
           const toolBindings: Record<string, CodemodeExecute> = {};
           // Read per call so a tool crafted a step ago is callable now; each body is defined in the program below.
           const crafted = surface.craftedTools();
-          const { providers: reached, describe } = reaching(signal);
+          const { providers: reached, describe } = reaching(signal, readCraftRaised({ toolOptions: options }));
 
           for (const [name, entry] of Object.entries(reached.find((p) => p.name === CRAFTED_TOOL_NAMESPACE)?.tools ?? {})) {
             toolBindings[name] = codemodeFunction(CRAFTED_TOOL_NAMESPACE, name, entry.execute);

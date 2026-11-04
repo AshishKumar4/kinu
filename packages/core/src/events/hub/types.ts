@@ -175,8 +175,6 @@ export const SubagentTaskPayloadSchema = v.object({
   inherited_context: v.optional(SubagentInheritedContextSchema),
   kinu_mode: WorkModeSchema,
   creation_id: v.optional(v.string()),
-  message_id: v.optional(v.string()),
-  idempotency_key: v.optional(v.string()),
 });
 
 export type SubagentTaskPayload = v.InferOutput<typeof SubagentTaskPayloadSchema>;

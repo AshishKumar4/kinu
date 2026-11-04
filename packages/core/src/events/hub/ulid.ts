@@ -8,7 +8,8 @@ let lastTs = -1;
 let lastRand: number[] = [];
 
 export function ulid(): string {
-  const ts = Date.now();
+  // A clock that steps back keeps the last instant, so an id never sorts before one minted earlier.
+  const ts = Math.max(Date.now(), lastTs);
   const tsChars: string[] = [];
   let t = ts;
 

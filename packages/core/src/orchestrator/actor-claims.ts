@@ -4,7 +4,6 @@ import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { KinuError } from '../obs/error';
 import { diagnostics, toKinuError } from '../obs/index';
-import { nowMs } from '../utils/date';
 import { RUN_END_REASONS } from './turn-lifecycle';
 import { initSessionContextTables } from '../session/schema';
 import { initSessionTranscriptTables } from '../session/transcript-schema';
@@ -171,7 +170,7 @@ export class ActorClaimStore {
 
       this.carryCuts(input.turnId, epoch, previous?.epoch ?? 0, input.installedBuild ?? null);
       void this.sql`INSERT INTO actor_turn_claims(actor_id,turn_id,run_id,epoch,work_mode,phase,outcome,claimed_at)
-        VALUES(${this.actorId},${input.turnId},${input.runId},${epoch},${input.workMode},'preparing',NULL,${nowMs()})
+        VALUES(${this.actorId},${input.turnId},${input.runId},${epoch},${input.workMode},'preparing',NULL,${Date.now()})
         ON CONFLICT(actor_id,turn_id) DO UPDATE SET run_id=excluded.run_id,epoch=excluded.epoch,work_mode=excluded.work_mode,phase='preparing',
           program_kind=NULL,program_version=NULL,program_digest=NULL,program_build=NULL,outcome=NULL,claimed_at=excluded.claimed_at,
           answered=CASE WHEN run_id=excluded.run_id THEN answered ELSE 0 END,
@@ -285,7 +284,7 @@ export class ActorClaimStore {
 
   /** A step finished: the turn moved, so no cut before it says anything about the next. */
   progressed(claim: ActorTurnClaim): void {
-    void this.sql`UPDATE actor_turn_cuts SET phase='work',phase_at=${nowMs()},work_cuts=0,provider_cuts=0,oom=0,oom_cuts=0
+    void this.sql`UPDATE actor_turn_cuts SET phase='work',phase_at=${Date.now()},work_cuts=0,provider_cuts=0,oom=0,oom_cuts=0
       WHERE actor_id=${this.actorId} AND turn_id=${claim.turnId} AND epoch=${claim.epoch}`;
   }
 
@@ -317,13 +316,13 @@ export class ActorClaimStore {
     const carried = cut === null || cut.epoch !== previousEpoch || cut.build !== build ? { work: 0, provider: 0, outOfMemory: 0 } : cutsThrough(cut);
 
     void this.sql`INSERT INTO actor_turn_cuts(actor_id,turn_id,epoch,build,phase,phase_at,work_cuts,provider_cuts,oom,oom_cuts)
-      VALUES(${this.actorId},${turnId},${epoch},${build},'work',${nowMs()},${carried.work},${carried.provider},0,${carried.outOfMemory})
+      VALUES(${this.actorId},${turnId},${epoch},${build},'work',${Date.now()},${carried.work},${carried.provider},0,${carried.outOfMemory})
       ON CONFLICT(actor_id,turn_id) DO UPDATE SET epoch=excluded.epoch,build=excluded.build,phase=excluded.phase,
         phase_at=excluded.phase_at,work_cuts=excluded.work_cuts,provider_cuts=excluded.provider_cuts,oom=0,oom_cuts=excluded.oom_cuts`;
   }
 
   private markCut(claim: ActorTurnClaim, phase: TurnCut['phase']): void {
-    void this.sql`UPDATE actor_turn_cuts SET phase=${phase},phase_at=${nowMs()}
+    void this.sql`UPDATE actor_turn_cuts SET phase=${phase},phase_at=${Date.now()}
       WHERE actor_id=${this.actorId} AND turn_id=${claim.turnId} AND epoch=${claim.epoch}`;
   }
 

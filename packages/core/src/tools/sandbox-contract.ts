@@ -14,6 +14,7 @@ import { slateReaches } from '../slates/surface';
 import { KinuError, settle, settleSync } from '../obs';
 import { CRAFTED_TOOL_NAMESPACE, type CodemodeProvider, type MemberDeclaration } from '../types/codemode';
 import { parsesAsExpression } from '../craft/source';
+import type { CraftRaised } from '../craft/in-episode';
 import type { CraftedToolSource } from './crafted-executor';
 import { toolDescription } from '../utils/tool-description';
 import { allowedInPlan, defineOperation, serve, statedInput, type Served } from '../operations/operation';
@@ -313,12 +314,19 @@ function programProviders(input: {
  * each crafted tool's failure census under its name (the body the program defines replaces it), and the `describe` the
  * program reads, declaring every namespace it reaches, `tools.*` among them. A backend binds and runs it.
  */
-export function programSurface(input: Parameters<typeof programProviders>[0] & { readonly crafted: readonly CraftedDeclaration[] }) {
-  // A crafted tool's census: what its body threw, thrown again as the host's failure under the tool's own name.
+export function programSurface(input: Parameters<typeof programProviders>[0] & {
+  readonly crafted: readonly CraftedDeclaration[];
+  /** The call's observer of crafted-tool raises (`readCraftRaised`), absent where nobody observes them. */
+  readonly raised?: CraftRaised | undefined;
+}) {
+  // A crafted tool's census: what its body threw, told to the call's observer, and thrown again as the host's failure
+  // under the tool's own name.
   const failures: CodemodeProvider['tools'] = Object.fromEntries(input.crafted.map((entry) => [entry.name, {
     description: entry.description,
     execute: async (...args: unknown[]) => {
       const failure = v.parse(v.object({ message: v.string(), name: v.string(), code: v.nullable(v.string()) }), args[0]);
+
+      input.raised?.(entry.name, failure.message);
 
       return settle(Effect.die(Object.assign(new Error(failure.message), { name: failure.name, code: failure.code })));
     },

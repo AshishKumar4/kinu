@@ -1,88 +1,62 @@
+// Admission dedupe: a redelivered event lands on the row the first delivery wrote; a different one is admitted.
 import { describe, test, expect } from 'bun:test';
-import { dedupeKeyFor } from '../src/events/hub/index';
-import type { KinuEvent } from '../src/events/hub/index';
+import { Database } from 'bun:sqlite';
+import { EventLog, initEventsHubTables, type IngressDescriptor, type WebhookPayload } from '../src/events/hub/index';
+import { makeSqlExec } from './helpers';
+import { createTestActorsOver } from '@kinu.run/test-utils';
 
-function base(): Extract<KinuEvent, { variant: 'webhook' }> {
+function makeLog(): EventLog {
+  const db = new Database(':memory:');
+  const sql = makeSqlExec(db);
+
+  initEventsHubTables(sql);
+
+  return new EventLog(sql, createTestActorsOver(db).main);
+}
+
+function webhook(payload: Partial<WebhookPayload> = {}): IngressDescriptor {
+  const webhook_id = payload.webhook_id ?? 'github-pr';
+
   return {
-    id: 'eid',
-    trace_id: 'tid',
-    caused_by: null,
-    ingress: 'webhook_hmac',
-    variant: 'webhook',
-    trust: 'authenticated',
-    priority: 'normal',
-    payload_visibility: 'redact',
-    received_at: 1700000000000,
-    reply_channel: null,
-    dedupe_key: null,
-    payload: {
-      webhook_id: 'github-pr',
-      http_method: 'POST',
-      http_headers: {},
-      body: { action: 'opened', number: 42 },
-      delivery_id: 'gh-abc-123',
-    },
+    ingress: 'webhook_hmac', variant: 'webhook', auth_outcome: 'verified', webhook_id,
+    payload: { webhook_id, http_method: 'POST', http_headers: {}, body: { action: 'opened', number: 42 }, delivery_id: 'gh-abc-123', ...payload },
   };
 }
 
-describe('dedupeKeyFor — webhook', () => {
-  test('different bodies → different keys', () => {
-    const e1 = base();
-    const e2 = { ...base() };
-    e2.payload.body = { action: 'closed' };
-    expect(dedupeKeyFor(e1)).not.toBe(dedupeKeyFor(e2));
-  });
-  test('different time buckets → different keys', () => {
-    const e1 = base();
-    const e2 = { ...base(), received_at: 1700000000000 + 10 * 60_000 };
-    expect(dedupeKeyFor(e1)).not.toBe(dedupeKeyFor(e2));
-  });
-  test('different webhook_id → different keys even for same body', () => {
-    const e1 = base();
-    const e2 = { ...base() };
-    e2.payload.webhook_id = 'gh-issues';
-    expect(dedupeKeyFor(e1)).not.toBe(dedupeKeyFor(e2));
+describe('webhook admission dedupe', () => {
+  test('a redelivered body inside its window is the first event; another body, window or hook is admitted', () => {
+    const log = makeLog();
+    const at = 1_700_000_000_000;
+    const first = log.publish({ descriptor: webhook(), now: at });
+
+    expect(log.publish({ descriptor: webhook(), now: at + 1_000 })).toEqual({ id: first.id, admitted: false });
+    expect(log.publish({ descriptor: webhook({ body: { action: 'closed' } }), now: at }).admitted).toBe(true);
+    expect(log.publish({ descriptor: webhook(), now: at + 10 * 60_000 }).admitted).toBe(true);
+    expect(log.publish({ descriptor: webhook({ webhook_id: 'gh-issues' }), now: at }).admitted).toBe(true);
   });
 });
 
-describe('dedupeKeyFor — process_done', () => {
-  test('keyed by process_id', () => {
-    const e: KinuEvent = {
-      ...base(),
-      ingress: 'computer_cb',
-      variant: 'process_done',
-      payload: { process_id: 'pid-42', command: 'ls', exit_code: 0, stdout_excerpt: '', stderr_excerpt: '', duration_ms: 0 },
-    };
+describe('process_done admission dedupe', () => {
+  test('one event per process, whatever else its report says', () => {
+    const log = makeLog();
 
-    const key = dedupeKeyFor(e);
-    const sameProcess = dedupeKeyFor({ ...e, payload: { ...e.payload, command: 'pwd' } });
-    const otherProcess = dedupeKeyFor({ ...e, payload: { ...e.payload, process_id: 'pid-43' } });
+    const done = (process_id: string, command: string): IngressDescriptor => ({
+      ingress: 'computer_cb', variant: 'process_done', launching_head_trust: 'owner',
+      payload: { process_id, command, exit_code: 0, stdout_excerpt: '', stderr_excerpt: '', duration_ms: 0 },
+    });
 
-    expect(key).not.toBeNull();
-    expect(sameProcess).toBe(key);
-    expect(otherProcess).not.toBe(key);
+    const first = log.publish({ descriptor: done('pid-42', 'ls'), now: 1 });
+
+    expect(log.publish({ descriptor: done('pid-42', 'pwd'), now: 2 }).id).toBe(first.id);
+    expect(log.publish({ descriptor: done('pid-43', 'ls'), now: 3 }).admitted).toBe(true);
   });
 });
 
-describe('dedupeKeyFor — non-deduped variants', () => {
-  test('chat returns null', () => {
-    const e: KinuEvent = {
-      ...base(),
-      ingress: 'chat_ws',
-      variant: 'chat',
-      payload: { text: 'hello' },
-    };
+describe('undeduped variants', () => {
+  test('a chat sent twice is two events', () => {
+    const log = makeLog();
+    const chat: IngressDescriptor = { ingress: 'chat_ws', variant: 'chat', payload: { text: 'hello' }, operator_user_id: 'u', session_id: 's' };
 
-    expect(dedupeKeyFor(e)).toBeNull();
-  });
-  test('internal returns null', () => {
-    const e: KinuEvent = {
-      ...base(),
-      ingress: 'self_emit',
-      variant: 'internal',
-      payload: { kind: 'reflect', data: {} },
-    };
-
-    expect(dedupeKeyFor(e)).toBeNull();
+    expect(log.publish({ descriptor: chat, now: 1 }).id).not.toBe(log.publish({ descriptor: chat, now: 1 }).id);
   });
 });

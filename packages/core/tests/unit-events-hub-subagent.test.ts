@@ -4,8 +4,8 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   deriveEventTrust, derivePriority, deriveFields,
-  EventLog, initEventsHubTables, buildDrainBatch, dedupeKeyFor,
-  type IngressDescriptor, type KinuEvent,
+  EventLog, initEventsHubTables, buildDrainBatch,
+  type IngressDescriptor,
   type SubagentTaskPayload, type SubagentReportPayload,
 } from '../src/events/hub/index';
 import type { SqlExec } from '../src/index';
@@ -68,31 +68,6 @@ describe('subagent event derivation', () => {
     expect(deriveFields(reportDescriptor)).toEqual({
       trust: 'authenticated', priority: 'background', payload_visibility: 'redact',
     });
-  });
-
-  test('a report is keyed by the sending sequence; an assignment down is not keyed', () => {
-    const base = {
-      id: 'e', trace_id: 'e', caused_by: null, ingress: 'subagent',
-      trust: 'authenticated', priority: 'normal', payload_visibility: 'redact',
-      received_at: 0, reply_channel: null, dedupe_key: null,
-    } satisfies Pick<KinuEvent,
-      'id' | 'trace_id' | 'caused_by' | 'ingress' | 'trust' | 'priority'
-      | 'payload_visibility' | 'received_at' | 'reply_channel' | 'dedupe_key'>;
-
-    const taskEvent: KinuEvent = { ...base, variant: 'subagent_task', payload: taskPayload };
-    const reportEvent: KinuEvent = { ...base, variant: 'subagent_report', payload: reportPayload };
-    // An assignment DOWN is a one-shot facet RPC with no redelivery loop.
-    expect(dedupeKeyFor(taskEvent)).toBeNull();
-    // A report up is replayable durable work; its sequence recognises the replay.
-    expect(dedupeKeyFor(reportEvent)).toBe('subagent_report:settle:msg-77');
-    expect(dedupeKeyFor({
-      ...reportEvent,
-      payload: { ...reportPayload, content: 'a later retry re-worded it' },
-    })).toBe('subagent_report:settle:msg-77');
-    expect(dedupeKeyFor({
-      ...reportEvent,
-      payload: { ...reportPayload, sequence_id: 'settle:msg-78' },
-    })).toBe('subagent_report:settle:msg-78');
   });
 });
 

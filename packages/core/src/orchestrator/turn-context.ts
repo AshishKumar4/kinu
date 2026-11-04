@@ -21,7 +21,6 @@ import { turnInputStart } from '../prompting/volatile-context';
 import type { CountableRequest, InputTokenCount } from '../providers/input-tokens';
 import type { CompactionTrigger, ExtensionHost } from '../extension';
 import { KinuError, diagnostics } from '../obs/index';
-import { ADMISSION_REFUSAL_MARK } from '../turn-failure';
 import { estimateTokens } from '../token-estimate';
 import { messageTokens } from '../prompting/media-tokens';
 
@@ -69,14 +68,12 @@ interface TurnAdmission {
   limits: ModelWindow;
 }
 
-/**
- * Not worded as a provider context-length failure: turn-failure.ts would retry that, and this
- * request was already compacted. Leads with {@link ADMISSION_REFUSAL_MARK}; `unit-turn-admission.test.ts` pins it.
- */
+/** A `budget` refusal, which turn-failure.ts never retries as a provider's context-length failure: this request was
+ *  already compacted. */
 function refuseOversizedRequest(tokens: number, limit: number): KinuError {
   return new KinuError(
-    'bad_input',
-    `${ADMISSION_REFUSAL_MARK}: the assembled request measures ${tokens.toLocaleString('en-US')} input tokens, ` +
+    'budget',
+    `Request refused before submission: the assembled request measures ${tokens.toLocaleString('en-US')} input tokens, ` +
     `above the ${limit.toLocaleString('en-US')}-token allocation this model's window leaves for input after its answer reserve. ` +
     'The history was compacted and re-measured, and still does not fit: nothing was sent to the provider. ' +
     'Start a new conversation, or remove what this one is carrying, to continue.',

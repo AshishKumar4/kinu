@@ -6,8 +6,8 @@ import { Effect } from 'effect';
 import { attempt, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { ACCOUNT_DELETING_KEY } from './account-deletion';
 import {
-  accountClassOf, admitComputerStart, admitPlatformTurn, admitStoredBytes, admitWorkspace, AccountLimitsStore, dayOf,
-  freeTierOf, isLimited, limitReadings, startSize, limitsReport, monthOf, type AccountClass, type AccountLimits, type AccountUse, type Admission,
+  accountClassOf, admitComputerStart, admitPlatformTurn, admitStoredBytes, admitWorkspace, AccountLimitsStore,
+  freeTierOf, isLimited, isoDate, limitReadings, startSize, limitsReport, monthOf, type AccountClass, type AccountLimits, type AccountUse, type Admission,
   type ComputerSize, type Fact, type FreeTier, type LimitId, type LimitReading, type LimitsReport, type StoredClass, type UserCaller,
 } from '@kinu.run/core';
 import { isListedOperator } from '../control-plane/admin-caller';
@@ -40,7 +40,7 @@ const isNoted = (id: LimitId): id is keyof typeof NEAR_NOTE => id in NEAR_NOTE;
 
 /** The period a near limit is mentioned once in: its own for one that resets, else for as long as its number holds. */
 function noticePeriod(limit: LimitReading, now: number): string {
-  if (limit.id === 'model_tokens') return dayOf(now);
+  if (limit.id === 'model_tokens') return isoDate(now);
 
   return limit.id === 'computer_hours' ? monthOf(now) : `at:${String(Math.floor(limit.limit))}`;
 }

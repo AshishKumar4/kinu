@@ -13,7 +13,7 @@ import {
   type CodemodeSurface,
   type JsonValue,
 } from '../src/index';
-import { craftFailureMarker } from '../src/craft/in-episode';
+import { TurnCraftLedger } from '../src/craft/turn-ledger';
 import { tool, jsonSchema } from 'ai';
 import * as v from 'valibot';
 
@@ -44,7 +44,7 @@ function capturedSurface(rt: ActorToolsetDeps['rt']): () => CodemodeSurface {
 }
 
 /** An actor surface over `rt` whose sandbox is `codemode`. */
-function actorTools(rt: ActorToolsetDeps['rt'], deps: Pick<ActorToolsetDeps, 'codemode'>) {
+function actorTools(rt: ActorToolsetDeps['rt'], deps: Pick<ActorToolsetDeps, 'codemode' | 'craft'>) {
   return buildActorTools({ rt, effectClaims: { sql: rt.storage.sql, actor: rt.actor, execution: () => ({ turnId: 'turn-1', runId: 'run-1' }), durable: () => Promise.resolve() }, jobs: actorJobsFor(rt), ...deps, conversations: conversationsFor(rt) }).turn;
 }
 
@@ -111,11 +111,26 @@ describe('crafted-tool execution integration', () => {
     const { result } = v.parse(v.object({ result: v.object({ success: v.literal(false), error: v.string() }) }),
       await toolExecute<{ code: string }, JsonValue>(tools.eval)({ code: 'return await tools.exploder();' }));
 
-    // The model is told WHICH of its own tools broke, and the in-episode
-    // fitness signal reads the same stamp to score that artifact and no other.
-    expect(result.error).toContain(craftFailureMarker('exploder'));
+    // The model is told which of its own tools broke, and what it threw.
+    expect(result.error).toContain('exploder');
     expect(result.error).toContain('inner boom');
-    expect(result.error.split(craftFailureMarker('exploder')).length).toBe(2);
+  });
+
+  test('a crafted tool that raises is marked broken with what it threw, even when the program catches it', async () => {
+    const { rt } = createTestRuntime();
+    rt.craftStore.create({ name: 'exploder', description: 'always throws', code: 'async () => { throw new Error("inner boom"); }' });
+    rt.craftStore.create({ name: 'quiet', description: 'fine', code: 'async () => "ok"' });
+    const turn = new TurnCraftLedger(() => true);
+    const tools = actorTools(rt, { codemode: programCodemode(), craft: turn });
+    const broken = (name: string) => rt.storage.sql<{ broken: string | null }>`SELECT broken FROM crafted_tools WHERE name = ${name}`[0]?.broken;
+
+    await toolExecute<{ code: string }, JsonValue>(tools.eval)({
+      code: 'await tools.quiet(); try { await tools.exploder(); } catch { return "recovered"; }',
+    }, { toolCallId: 'call-1', messages: [], context: undefined });
+
+    expect(broken('exploder')).toContain('inner boom');
+    expect(broken('quiet')).toBeNull();
+    expect(turn.snapshot()).toMatchObject({ raised: 1, broke: ['exploder'], returned: 1 });
   });
 
   test('a tool that RETURNS normally is not stamped', async () => {
@@ -142,7 +157,7 @@ describe('crafted-tool execution integration', () => {
     }));
 
     expect(result.before).toBe(4);
-    expect(result.failed.error).toContain(craftFailureMarker('broken'));
+    expect(result.failed.error).toContain('broken');
     expect(result.after).toBe(6);
   });
 

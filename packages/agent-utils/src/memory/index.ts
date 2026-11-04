@@ -6,6 +6,6 @@ export { chunkMarkdown, hashText } from "./chunker";
 
 export type { Chunk } from "./chunker";
 
-export { searchFts } from "./query";
+export { ftsPhrases, searchFts } from "./query";
 
 export type { MemorySearchResult } from "./query";

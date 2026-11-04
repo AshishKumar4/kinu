@@ -263,10 +263,6 @@ export {
   type CompletedTurn, type CompletedSession, type ToolCallRecord,
 } from './evolution/types';
 
-export {
-  delegationFeatures, renderDelegationFeatures,
-} from './evolution/delegation-features';
-
 export { QualityDaySchema, type QualityDay, type QualityWindow } from './types/quality';
 
 // Turn ratings: the one signal evolution decides by.
@@ -918,7 +914,7 @@ export { ASKED, HeldReads, type Holds } from './utils/held-reads';
 
 export { rasterImage, type RasterImage } from './utils/raster-image';
 
-export { base64ToBytes, bytesToBase64 } from './utils/base64';
+export { base64Bytes, base64ToBytes, bytesToBase64 } from './utils/base64';
 
 export { mediaImage, mediaTokens, UNPRICED_MEDIA_TOKENS } from './prompting/media-tokens';
 
@@ -1085,7 +1081,7 @@ export {
   decodeRecordedTurns, encodeRecordedTurns, recordedTurns, replayScaffold, type RecordedTurn,
 } from './scaffold/replay';
 
-export { type CraftCall } from './craft/in-episode';
+export { readCraftRaised, type CraftCall, type CraftRaised } from './craft/in-episode';
 
 export { TurnCraftLedger } from './craft/turn-ledger';
 
@@ -1503,7 +1499,6 @@ export {
 // Plan review
 export {
   MAX_PLAN_ANNOTATIONS_BYTES,
-  MAX_PLAN_CONTENT_BYTES,
   PlanReviewActions,
   PlanReviewStore,
   PlanReviewSchema,
@@ -1517,7 +1512,6 @@ export {
   planSubmissionReach,
   reviewFeedbackText,
   DiffAnchorSchema,
-  applyPlanEdits,
   formatPlanWithLineNumbers,
   initPlanReviewTable,
   workModeUnderReview,
@@ -1525,7 +1519,6 @@ export {
   approvedTaskPlan,
   planReviewAwaitingDecision,
   planTitle,
-  validatePlanEdits,
   type PlanDecisionOutcome,
   type PlanEdit,
   type PlanAnnotationMathTarget,
@@ -1547,7 +1540,6 @@ export {
 
 export {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
-  dataUrlRawBytes,
   DEV_IDENTITY_ACCOUNT_HEADER,
   DEV_IDENTITY_HEADER,
   EVAL_ACCOUNTS,
@@ -1697,7 +1689,7 @@ export {
   type ScoreInterval,
 } from './utils/stats';
 
-export { isoDate, nowMs } from './utils/date';
+export { isoDate } from './utils/date';
 
 // Branching heads
 export type {
@@ -1746,7 +1738,7 @@ export {
   BackgroundJobRunner, JobNotResumable, BACKGROUND_POLICY, RESUMED_SURFACE, JOB_STAMP_ENV, MAX_CONCURRENT_DETACHED_JOBS, recordServingJobs, type PortHolders, type ServingScope,
   invocationBackgroundPolicy,
   backgroundJobWakeTrigger, BACKGROUND_FIBER_PREFIX,
-  type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, BackgroundHandleSchema, backgroundedBy, type ThresholdDeps,
+  type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, BackgroundHandleSchema, type ThresholdDeps,
   type BackgroundPolicy, type DetachOutcome, type InvocationSurface, InvocationSurfaceSchema, type AdoptsJobs, type JobAdoption,
   type BackgroundJobRunnerDeps, type JobHolder, initJobHoldersTable, processJobHolder, type JobResumer, type JobClaim, type DeviceRequestChannel, type WorkspaceJobPorts,
   WorkspaceJobAuthorities, endedStepLoopJobs, inlineResultInbox, type JobAuthority, type JobAuthorityKind, type JobRetirement, type StepLoopJobSeat,

@@ -8,7 +8,7 @@ import { markStoreChanged } from '@kinu.run/agent-utils';
 
 import type { AgentRuntime } from '../types/agent-runtime';
 import { DEFAULT_CONFIG } from '../config';
-import { nowMs, isoDate } from '../utils/date';
+import { isoDate } from '../utils/date';
 import { scaffoldRefusal } from './safety-patterns';
 import { checkMisevolution, recordMisevolutionVeto } from '../safety/misevolution';
 import { parsePathologyTag } from '../evolution/pathology';
@@ -96,7 +96,7 @@ export async function modifyScaffold(
   void rt.storage.sql`
     INSERT INTO scaffold_versions
       (actor_id, version, written_at, rationale, status, parent_version, pathology)
-    VALUES (${actorId}, ${newVersion}, ${nowMs()}, ${rationale}, 'pending', ${baseVersion},
+    VALUES (${actorId}, ${newVersion}, ${Date.now()}, ${rationale}, 'pending', ${baseVersion},
             ${parsePathologyTag(code)})
   `;
   markStoreChanged(rt.storage.sql);

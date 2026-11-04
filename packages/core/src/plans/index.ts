@@ -1,7 +1,6 @@
 export { MAX_PLAN_ANNOTATIONS_BYTES, admitReviewAnnotations, DiffAnchorSchema } from './annotation-admission';
 
 export {
-  MAX_PLAN_CONTENT_BYTES,
   PlanReviewActions,
   PlanReviewStore,
   PlanReviewSchema,
@@ -9,7 +8,6 @@ export {
   PlanDecisionOutcomeSchema,
   planHandoffShortfall,
   planDecisionRefusal,
-  applyPlanEdits,
   freshNotes,
   planAwaitingReply,
   planSubmissionReach,
@@ -21,7 +19,6 @@ export {
   approvedTaskPlan,
   planReviewAwaitingDecision,
   planTitle,
-  validatePlanEdits,
   type PlanDecisionOutcome,
   type PlanEdit,
   type PlanAnnotationMathTarget,

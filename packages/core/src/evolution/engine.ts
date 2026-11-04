@@ -70,7 +70,6 @@ const GeneralizedToolSchema = v.object({
 
 import type { AgentConfigStore } from '../config/store';
 import { diagnostics, toKinuError, KinuError } from '../obs/index';
-import { nowMs } from '../utils/date';
 
 
 /** Tombstone scope for one turn's two durable rating writes (`turn_ratings` row
@@ -550,7 +549,7 @@ export class EvolutionEngine {
   /** Lifetime cycle, automatic every N windows. */
   /** A recorded turn's offers: each crafted tool its declarations offered, and of those each it called. */
   countCraftOffers(turn: CompletedTurn): void {
-    countCraftOffers(this.rt.storage.sql, { offered: turn.craftedOffered ?? [], chosen: chosenCraftedTools(turn), at: nowMs() });
+    countCraftOffers(this.rt.storage.sql, { offered: turn.craftedOffered ?? [], chosen: chosenCraftedTools(turn), at: Date.now() });
   }
 
   async onLifetimeEvolution(): Promise<void> {

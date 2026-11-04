@@ -2,9 +2,9 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   initEventsHubTables, EventLog, ReplyChannelStore,
-  deriveEventTrust, derivePriority, deriveFields, dedupeKeyFor, renderForLLM,
+  deriveEventTrust, derivePriority, deriveFields, renderForLLM,
   buildDrainBatch,
-  type IngressDescriptor, type EmailPayload, type KinuEvent,
+  type IngressDescriptor, type EmailPayload,
   type ReplyDispatcher,
 } from '../src/events/hub/index';
 import {
@@ -95,29 +95,17 @@ describe('email dedupe', () => {
   });
 
   test('missing Message-ID falls back to a content hash bucket', () => {
-    const base = emailPayload({ message_id: null });
+    const { sql, actor } = makeSql();
+    initEventsHubTables(sql);
+    const log = new EventLog(sql, actor);
 
-    const mk = (received_at: number, body?: string): KinuEvent => {
-      const payload: EmailPayload = { ...base };
+    const publish = (now: number, body_text = 'Is staging green?') =>
+      log.publish({ descriptor: emailDescriptor('owner', { message_id: null, body_text }), now });
 
-      if (body) payload.body_text = body;
-
-      return {
-        id: 'e', trace_id: 't', caused_by: null,
-        ingress: 'email_inbound', variant: 'email',
-        trust: 'authenticated', priority: 'normal', payload_visibility: 'redact',
-        received_at, reply_channel: null, dedupe_key: null,
-        payload,
-      };
-    };
-
-    const k1 = dedupeKeyFor(mk(1000));
-    const k2 = dedupeKeyFor(mk(2000));                    // same 5-min bucket
-    const k3 = dedupeKeyFor(mk(6 * 60 * 1000));           // next bucket
-    const k4 = dedupeKeyFor(mk(1000, 'different body'));
-    expect(k1).toBe(k2);
-    expect(k1).not.toBe(k3);
-    expect(k1).not.toBe(k4);
+    const first = publish(1000);
+    expect(publish(2000).id).toBe(first.id);
+    expect(publish(6 * 60 * 1000).admitted).toBe(true);
+    expect(publish(1000, 'different body').admitted).toBe(true);
   });
 });
 

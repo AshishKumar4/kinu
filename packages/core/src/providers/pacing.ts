@@ -3,6 +3,7 @@
  *  on kinu.run, 2026-09-23). */
 
 import { abortableSleep } from '../utils/abort';
+import { MINUTE_MS } from '../utils/date';
 
 export interface ProviderPacerOptions {
   readonly now?: () => number;
@@ -60,7 +61,7 @@ export class ProviderPacer {
 
   /** Selection is model-scoped; rate waits are lane-wide. Both are owned here and can only extend a deadline. */
   park(attempt: string, retryAfterMs: number | null): void {
-    const duration = retryAfterMs !== null && retryAfterMs > 0 ? retryAfterMs : 5 * 60 * 1000;
+    const duration = retryAfterMs !== null && retryAfterMs > 0 ? retryAfterMs : 5 * MINUTE_MS;
     const untilMs = this.now() + duration;
     const previous = this.cooldowns.get(attempt);
 

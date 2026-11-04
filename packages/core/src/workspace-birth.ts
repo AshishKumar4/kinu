@@ -8,7 +8,6 @@ import { MemoryStore } from '@kinu.run/agent-utils/memory';
 import { adaptMemory } from './memory/vector-sync';
 import { MEMORY_PATH } from './memory/note';
 import { bootstrapScaffold } from './scaffold/bootstrap';
-import { nowMs } from './utils/date';
 import { KinuError } from './obs/index';
 import { initRunEventTables } from './events/recorder';
 import { buildRuntime } from './runtime-builder';
@@ -83,7 +82,7 @@ export async function createWorkspace(
     stampSchemaGenesis(execRaw);
     initWorkspaceActorTable(execRaw);
 
-    return bearWorkspaceIdentity(sql, { name: config.name, createdAt: nowMs() });
+    return bearWorkspaceIdentity(sql, { name: config.name, createdAt: Date.now() });
   });
 
   const titled = config.title?.trim();
