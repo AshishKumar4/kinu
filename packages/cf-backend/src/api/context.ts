@@ -1,3 +1,4 @@
+import * as v from 'valibot';
 import { Cause, Effect } from 'effect';
 import type { Context, Env as HonoEnv, Hono, MiddlewareHandler } from 'hono';
 import { routePath } from 'hono/route';
@@ -111,10 +112,31 @@ export function routeError(cause: Error, c: Context): Response {
   // A call its own client left, cancelled by the request's signal (`enable_request_signal`), failed nothing: no one
   // reads the answer.
   if (error.code === 'cancelled' && c.req.raw.signal.aborted) return new Response(null, { status: 499 });
-  diagnostics.failure('http.request_failed', error, { route: routePath(c) });
+  diagnostics.failure('http.request_failed', error, { route: routePath(c), ...unreadRefusal(error) });
 
   return publicError(cause instanceof KinuError ? cause : new KinuError(error.code, PUBLIC_MESSAGE[error.code]));
 }
+
+/**
+ * The own fields of a refusal another object threw that this route read as no refusal (`authoredRefusal`), which say
+ * why: production's account object refused a fourth workspace with `budget`, read so at 18:46 (413) and as `io` at
+ * 19:12 (500) on one build, 2026-11-02. Debug evidence, kept until that cause is fixed; only our own codes, never text.
+ */
+function unreadRefusal(error: KinuError) {
+  const crossed = error.cause;
+
+  if (error.code !== 'io' || !(crossed instanceof Error) || !crossed.name.startsWith('KinuError')) return {};
+  const read = v.safeParse(CrossedRefusalSchema, crossed);
+  const refusal = read.success ? read.output : {};
+
+  return {
+    crossedName: crossed.name,
+    crossedRemote: String(refusal.remote ?? 'absent'), crossedTag: refusal._tag ?? 'absent', crossedCode: refusal.code ?? 'absent',
+  };
+}
+
+/** What `authoredRefusal` reads off a refusal another object threw. */
+const CrossedRefusalSchema = v.looseObject({ remote: v.optional(v.boolean()), _tag: v.optional(v.string()), code: v.optional(v.string()) });
 
 /** A Durable Object router's `onError`: the caller sees the throw. */
 export function rethrow(error: Error): never {
