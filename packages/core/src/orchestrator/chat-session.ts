@@ -1824,7 +1824,8 @@ export class ChatSession {
       },
       assemble: (round) => this.assembleTurn(item, round),
       project: async ({ lease, assembled, outcome }) => ({ claim: await this.projectTurn(item, event, lease, { round: assembled, execution: outcome }), stop: true }),
-      // Stopped as it opened, or closed by its recovery: it ran nothing, and ends as an interrupted turn does.
+      // Stopped as it opened or as it assembled, or closed by its recovery: it ran nothing, and ends as an interrupted turn
+      // does, owing what one owes (its title among them).
       stopped: async ({ lease, outcome }) => {
         await this.projectTurn(item, event, lease, { round: null, execution: outcome });
       },

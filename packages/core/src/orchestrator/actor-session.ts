@@ -771,6 +771,27 @@ export class ActorSession {
     return { ...result, interrupted: true };
   }
 
+  /**
+   * A turn stopped after its claim was reserved, before it ran (its opening refused by the Stop): it runs nothing, and
+   * ends interrupted on the output it already had, as a turn stopped at its first step does. Its reserved claim is
+   * settled by the commit that ends it.
+   */
+  async interruptPreparation(lease: ActorTurnLease): Promise<ActorExecutionResult> {
+    const active = this.requireTurn(lease);
+
+    if (active.phase !== 'preparing' || active.reserved === null || active.claim !== null) {
+      return settleSync(Effect.fail(new KinuError('denied', 'only a turn stopped between its claim and its run ends unrun')));
+    }
+
+    active.phase = 'settling';
+    const tally = newTurnTally(0);
+
+    tally.failure = new Error(INTERRUPTED_TURN);
+    active.ended = { steps: 0, interrupted: true, failure: tally.failure };
+
+    return await this.turnResult(lease, active, tally, null);
+  }
+
   /** Prepare, claim durably, then consume: `startActorTurn` runs nothing until the first `next()`, so a crash
    *  before the claim leaves a turn that provably did nothing. */
   async execute(lease: ActorTurnLease, input: ActorExecutionInput, emit: (event: ChatEvent) => void | Promise<void>): Promise<ActorExecutionResult> {

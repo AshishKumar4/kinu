@@ -4,13 +4,15 @@
  * its turn's end or the rest lets it go.
  */
 import { expect, test } from 'bun:test';
-import { PLATFORM_LIMITS, profileCatalogDigest, resolveTurnProfile, type HarnessMode, type ProfileCatalog } from '@kinu.run/core';
+import * as v from 'valibot';
+import { actorConnectionTag, PLATFORM_LIMITS, profileCatalogDigest, WORKSPACE_TITLE_SYSTEM_PROMPT, resolveTurnProfile, type HarnessMode, type ProfileCatalog } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import { StepPacer } from '../src/agent-facet/step-pacer';
 import type { TurnBound } from '../src/agent-facet/agent-turn';
-import { gatewayWorkspace, workspaceMainActor } from './helpers/actor-harness';
-import { delayNextToolAnswer, loseNextInterrupt } from './helpers/agent-facets';
-import { chatCompletion, openingOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
+import { actorOver, agentSql, driveUntil, gatewayWorkspace, ownDatabase, workspaceMainActor } from './helpers/actor-harness';
+import { delayNextToolAnswer, holdNextGrant, loseNextInterrupt } from './helpers/agent-facets';
+import { asPane, joinHarnessFibers } from './helpers/agents-sdk';
+import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 
 const BOUND: TurnBound = { turnId: 'turn-1', runId: 'run-1', epoch: 7 };
 
@@ -173,3 +175,62 @@ test("a Stop whose push to the isolate is lost, between a tool's answer and the 
   // Its first step asked; the step after the tool's answer found its grant revoked, asked again, and was refused.
   expect(asked).toBe(1);
 });
+
+// A Stop that lands while a turn's opening waits for its grant ends the turn there: work on a call that answered resets
+// the isolate past ~1 s of CPU (`do.facet.cpu_after_answer`), so it assembles no context, its first step never asks,
+// and it ends as a turn stopped at its first step does: named from its words. Whether or not the Stop's push arrives.
+for (const push of ['arrives', 'is lost'] as const) {
+  test(`a Stop while a new agent's first opening waits for its grant ends the turn unrun and still names it, when its push ${push}`, async () => {
+    const FIRST = 'Map every lighthouse on the north coast.';
+    let asked = false;
+
+    const workspace = gatewayWorkspace(stubAiBinding((run) => {
+      const said = JSON.stringify(requestOf(run).messages);
+
+      if (said.includes(WORKSPACE_TITLE_SYSTEM_PROMPT)) return chatCompletion(run, JSON.stringify({ title: said.includes(FIRST) ? 'Coast lights' : 'Carrying on' }));
+      asked = true;
+
+      return chatCompletion(run, 'Mapped.');
+    }));
+
+    await workspace.agent.setSoul('# Purpose\n\nKeep the coast notes.');
+    const { subagent } = await workspace.agent.createSubagentAgent();
+    const actorId = v.parse(v.string(), subagent.actorId);
+    const { storageKey } = workspace.agent.agentOf(actorId);
+
+    const ended = (): number => agentSql(workspace, actorId)<{ n: number }>`
+      SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${actorId} AND type = 'run_end'`[0]?.n ?? 0;
+
+    const naming = () => ownDatabase(workspace, actorId)
+      .query<{ status: string }, []>(`SELECT status FROM terminal_effects WHERE effect_name = 'auto_title'`).all();
+
+    const grant = holdNextGrant(storageKey);
+
+    await asPane([actorConnectionTag(actorId)], () => workspace.agent.send(FIRST, crypto.randomUUID()));
+    await grant.reached;
+    const asks = workspace.agent.harnessAgentTraceCalls().filter((call) => call === 'paceStep').length;
+
+    if (push === 'is lost') {
+      loseNextInterrupt(storageKey);
+      await expect(asPane([actorConnectionTag(actorId)], () => workspace.agent.cancelCurrentWork())).rejects.toThrow('the Stop was lost on its way to the agent');
+    } else {
+      await asPane([actorConnectionTag(actorId)], () => workspace.agent.cancelCurrentWork());
+    }
+
+    grant.release();
+    await driveUntil(workspace, 'the Stop never ended the turn', () => ended() > 0);
+    await joinHarnessFibers();
+    await workspace.agent.harnessAgentsIdle();
+    await driveUntil(workspace, "the agent's naming never settled", () => naming().length === 0);
+
+    // A context assembled for the turn is admitted under it: none once its turn started.
+    const events = agentSql(workspace, actorId)<{ type: string }>`
+      SELECT type FROM run_events WHERE actor_id = ${actorId} ORDER BY ts, event_index`.map((row) => row.type);
+
+    expect({
+      name: actorOver(workspace.db, actorId).config.getDisplayName(), asked,
+      stepGrants: workspace.agent.harnessAgentTraceCalls().filter((call) => call === 'paceStep').length - asks,
+      assembled: events.slice(events.indexOf('turn_start')).includes('context_admitted'),
+    }).toEqual({ name: 'Coast lights', asked: false, stepGrants: 0, assembled: false });
+  });
+}

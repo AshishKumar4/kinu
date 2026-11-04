@@ -111,6 +111,18 @@ export function loseNextInterrupt(storageKey: string): void {
   lostInterrupts.add(storageKey);
 }
 
+const delayedGrants = new Map<string, { readonly reached: () => void; readonly released: Promise<void> }>();
+
+/** The isolate under `storageKey` asks its workspace for a grant, and the ask reaches the workspace only once released. */
+export function holdNextGrant(storageKey: string): HeldCall {
+  const reached = Promise.withResolvers<void>();
+  const released = Promise.withResolvers<void>();
+
+  delayedGrants.set(storageKey, { reached: reached.resolve, released: released.promise });
+
+  return { reached: reached.promise, release: released.resolve };
+}
+
 const delayedToolAnswers = new Map<string, { readonly reached: () => void; readonly released: Promise<void> }>();
 
 /** The isolate under `storageKey` makes its next tool call, and the workspace's answer, given, waits on its way back
@@ -759,10 +771,17 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
 
           return await host().observe(lines);
         },
-        paceStep: (bound, profile) => {
+        paceStep: async (bound, profile) => {
           counted('paceStep');
+          const delayed = delayedGrants.get(placement.storageKey);
 
-          return host().paceStep(bound, profile);
+          if (delayed !== undefined) {
+            delayedGrants.delete(placement.storageKey);
+            delayed.reached();
+            await delayed.released;
+          }
+
+          return await host().paceStep(bound, profile);
         },
         answerMetadata: async (close, narration) => {
           counted('answerMetadata');

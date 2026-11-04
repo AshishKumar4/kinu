@@ -11,7 +11,7 @@ import type { HostedActor, SeatedActor } from '../state/actor-host';
 import type { WorkMode } from '../types/turn';
 import {
   EVIDENCE_KINDS,
-  HeadStepPartsSchema, type HeadInput, type HeadReport, type HeadId, type HeadStep, type SerializedMessage,
+  HeadStepPartsSchema, unreportedHead, type HeadInput, type HeadReport, type HeadId, type HeadStep, type SerializedMessage,
   type Evidence, type Decision, type ArtifactRef,
 } from './types';
 import type { ToolCallRecord } from '../evolution/types';
@@ -24,7 +24,7 @@ import { encodeModelMessageValues } from '../session/message-codec';
 import { HeadFileChanges } from './file-changes';
 import type { ReportHeadDelta } from './head-stream';
 import * as v from 'valibot';
-import { attempt, diagnostics, hold, renderThrownChain, settle, toKinuError, type KinuError } from '../obs/index';
+import { attempt, classifyErrorCode, diagnostics, hold, renderThrownChain, settle, toKinuError, type KinuError } from '../obs/index';
 import { Cause, Effect, Exit } from 'effect';
 import { BUILTIN_TOOL_NAMES } from '../tools/registry';
 import { assembleActorTurn, withCompactionTrigger, type RunTurnSources, type TurnAssemblySources } from '../orchestrator/turn-assembly';
@@ -499,10 +499,26 @@ export async function runHeadInference(run: HeadRun): Promise<HeadReport> {
 
   const capability = { actorId: session.actorId, turnId: reserved.turnId, runId: reserved.runId, epoch: reserved.epoch };
 
-  // A preparation that failed settles the claim it was reserved under, and fails as it failed.
+  const startedAt = Date.now();
+
+  // A preparation that failed settles the claim it was reserved under, and fails as it failed; one a Stop ended (its
+  // opening refused, `cancelled`) ran nothing, and reports so, as a run stopped at its first step does.
   return await settle(Effect.promise(() => run.prepare(capability)).pipe(
-    Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : Effect.sync(() => { session.settleReserved(reserved, 'error'); }))),
-    Effect.flatMap((prepared) => Effect.promise(() => inferPrepared(prepared.input, prepared.deps, reserved, async (later) => (await run.prepare(later)).deps))),
+    Effect.matchCauseEffect({
+      onFailure: (cause) => {
+        const stopped = classifyErrorCode({ cause: Cause.squash(cause) }) === 'cancelled';
+
+        session.settleReserved(reserved, stopped ? 'aborted' : 'error');
+
+        return stopped
+          ? Effect.succeed(unreportedHead({
+            id: run.key.turnId, status: 'aborted', summary: 'Stopped before it ran.', wallClockMs: Date.now() - startedAt,
+            errorMessage: renderThrownChain({ cause: Cause.squash(cause) }),
+          }))
+          : Effect.failCause(cause);
+      },
+      onSuccess: (prepared) => Effect.promise(() => inferPrepared(prepared.input, prepared.deps, reserved, async (later) => (await run.prepare(later)).deps)),
+    }),
   ));
 }
 
@@ -556,6 +572,8 @@ async function inferPrepared(
   let settled = false;
   /** Classified with the natural path so an abort reads the same between or inside steps. */
   let failure: KinuError | undefined;
+  /** A round a Stop ended before it ran, its opening refused though the Stop's push may not have reached here. */
+  let stoppedUnrun = false;
 
   const onStep = async (step: StepResult<ToolSet>, messages: readonly ModelMessage[]): Promise<void> => {
     if (step.reasoningText?.trim()) lastReasoning = step.reasoningText;
@@ -653,6 +671,10 @@ async function inferPrepared(
 
         return { claim: turnClaimOutcome(turnFailed, outcome.interrupted), stop: failure !== undefined || refusal !== null };
       },
+      stopped: async () => {
+        roundCalls();
+        stoppedUnrun = true;
+      },
       failed: async ({ lease, failure: cause }) => {
         roundCalls();
         failure = toKinuError({ doing: `run agent ${input.id} to a report`, cause, otherwise: 'unavailable' });
@@ -692,7 +714,7 @@ async function inferPrepared(
     return exhaustedMissionReport({ input, capture, refusal, wallClockMs: clock.now() - startedAt, stepCount: recorded });
   }
 
-  const outcome = classifyHeadOutcome(deps, failure);
+  const outcome = classifyHeadOutcome({ isAborted: () => deps.isAborted() || stoppedUnrun, abortReason: deps.abortReason }, failure);
   const { status, stopReason } = outcome;
   const summary = headSummary({ input, capture, outcome, final: { text: lastText, reasoningText: lastReasoning } });
 

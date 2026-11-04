@@ -302,9 +302,10 @@ export class FacetChat {
     });
 
     if (owes !== null) this.namedWake = owes.next;
+    // Kept before the grant is asked: a turn a Stop ends there still ends on what its preparation said of it.
+    database.prepare(bound, prepared);
     // Its context is assembled under a grant, once the preparation opened the turn at the workspace (`StepPacer.opening`).
     await this.deps.pacer.opening(workspace, bound, lease.signal);
-    database.prepare(bound, prepared);
     // A recovered execution assembles on what it froze as it first bound, and resolves nothing (D5).
     const { frozen } = round;
 

@@ -68,17 +68,11 @@ export class StepPacer {
   /**
    * A turn's opening, once the workspace opened it there (it grants only an execution it opened): its context is
    * assembled here, past a second of CPU on a long one, under a grant as its steps are. The held grant serves it whatever
-   * execution asked for it; an agent waking from rest holds none, and asks. A turn cut as it opens is refused at its
-   * first step, as one cut later is: it settles whole, its title and effects owed as any stopped turn's (product flow
-   * titled-chat, a chat stopped in its first turn named from its brief).
+   * execution asked for it; an agent waking from rest holds none, and asks. A Stop refuses it, and the turn ends there,
+   * unrun (`driveExecution`).
    */
-  opening(workspace: Pick<AgentWorkspace, 'paceStep'>, bound: TurnBound, signal: AbortSignal): Promise<void> {
-    if (this.held !== null && this.serves(this.held)) return Promise.resolve();
-
-    return settle(attempt({ doing: `granting turn ${bound.turnId}'s opening`, otherwise: 'unavailable' }, () => this.pace(workspace, bound, signal, null)).pipe(
-      Effect.asVoid,
-      Effect.catch((refusal) => (refusal.code === 'cancelled' || signal.aborted ? Effect.void : Effect.fail(refusal))),
-    ));
+  async opening(workspace: Pick<AgentWorkspace, 'paceStep'>, bound: TurnBound, signal: AbortSignal): Promise<void> {
+    if (this.held === null || !this.serves(this.held)) await this.pace(workspace, bound, signal, null);
   }
 
   /** Whether a held grant still carries work: not revoked, and open less than half the budget. */

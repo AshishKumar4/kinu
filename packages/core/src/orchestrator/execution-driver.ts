@@ -9,7 +9,7 @@ import type { ProfileAuthorityInputs, ResolvedTurnProfile } from '../profiles/re
 import type { JsonObject } from '../utils/json';
 import type { WorkMode } from '../types/turn';
 import { Cause, Effect } from 'effect';
-import { KinuError, settle } from '../obs/index';
+import { classifyErrorCode, KinuError, settle } from '../obs/index';
 import type { ClaimOutcome, PreparingClaim } from './actor-claims';
 import type { ChatEvent } from '../chat';
 import type { ActorExecutionInput, ActorExecutionResult, ActorSession, ActorTurnLease } from './actor-session';
@@ -59,8 +59,8 @@ export interface DrivenExecution<A extends AssembledRound> {
   assemble(round: ClaimedRound): Promise<A>;
   /** The executed round's result, committed: its claim's outcome, which a commit that closed the claim already holds. */
   project(round: ClaimedRound & { readonly assembled: A; readonly outcome: ActorExecutionResult }): Promise<ProjectedRound>;
-  /** A round stopped before its claim: it ran nothing, and ends interrupted on `outcome`. Absent, it ends as a failure
-   *  (`failed`) with the Stop as its cause. */
+  /** A round stopped before it ran, before its claim or as it assembled (its opening refused by the Stop): it ran
+   *  nothing, and ends interrupted on `outcome`. Absent, it ends as a failure (`failed`) with the Stop as its cause. */
   stopped?(round: { readonly index: number; readonly lease: ActorTurnLease; readonly outcome: ActorExecutionResult }): Promise<void>;
   /** A round that failed before its projection answered. Answers its claim's outcome, as `project` does. */
   failed(round: { readonly index: number; readonly lease: ActorTurnLease; readonly failure: unknown }): Promise<ClaimOutcome>;
@@ -110,16 +110,27 @@ function driveRound<A extends AssembledRound>(session: ActorSession, execution: 
     }
 
     const claimed = claimedRound(session, lease, index, reserved);
+    const within = <T>(work: () => Promise<T>): Promise<T> => execution.within?.(work) ?? work();
 
-    const body = async (): Promise<ProjectedRound> => {
-      // Per round: a promotion or a moved profile lands between rounds.
-      const assembled = await execution.assemble(claimed);
+    // Per round: a promotion or a moved profile lands between rounds. A Stop that ends it as it assembles (its opening's
+    // grant refused, `cancelled`, though the Stop's push may not have reached this isolate) ends it unrun: it assembles
+    // nothing past that, and ends as a turn stopped at its first step does.
+    const assembled = yield* Effect.promise(() => within(() => execution.assemble(claimed))).pipe(
+      Effect.catchCause((cause) => (execution.stopped !== undefined && stoppedAt(lease, execution, cause) ? Effect.succeed(null) : Effect.failCause(cause))),
+    );
+
+    if (assembled === null) {
+      yield* Effect.promise(async () => { await execution.stopped?.({ index, lease, outcome: await session.interruptPreparation(lease) }); });
+      close('aborted');
+
+      return true;
+    }
+
+    const projected = yield* Effect.promise(() => within(async () => {
       const outcome = await session.execute(lease, assembled.input, assembled.onEvent);
 
       return await execution.project({ ...claimed, assembled, outcome });
-    };
-
-    const projected = yield* Effect.promise(() => execution.within?.(body) ?? body());
+    }));
 
     close(projected.claim);
 
@@ -139,6 +150,11 @@ function driveRound<A extends AssembledRound>(session: ActorSession, execution: 
     })),
     Effect.ensuring(Effect.sync(() => { session.finishTurn(lease); })),
   );
+}
+
+/** Whether `failure` ended the round as a Stop: its signal, its execution's own stop, or a refusal classed `cancelled`. */
+function stoppedAt(lease: ActorTurnLease, execution: Pick<DrivenExecution<AssembledRound>, 'isAborted'>, failure: Cause.Cause<KinuError>): boolean {
+  return lease.signal.aborted || execution.isAborted?.() === true || classifyErrorCode({ cause: Cause.squash(failure) }) === 'cancelled';
 }
 
 /** The round's claim, adopted from `reserved` or minted, and the bind it makes once as it assembles. */

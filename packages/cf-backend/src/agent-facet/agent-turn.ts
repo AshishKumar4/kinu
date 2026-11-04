@@ -568,10 +568,10 @@ export async function deliveredRun(
     await run.trace?.flush();
     const prepared = await workspace.prepareTurn(bound);
 
-    await pacer.opening(workspace, bound, signal);
-
     run.opened = bound;
+    // Kept before the grant is asked: a run a Stop ends there still ends on what its preparation said of it.
     database.prepare(bound, prepared);
+    await pacer.opening(workspace, bound, signal);
     const live: LiveTurn = { dynamic: prepared.dynamic, harnessMode: 'native', openWork: null };
     const { sources, trigger } = facetTurnSources({ actor, workspace, models, prepared, spend, live, runId, turnId: task.sequenceId, epoch: bound.epoch, pacer, recordsIn: runId });
 
