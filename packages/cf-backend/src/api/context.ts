@@ -118,27 +118,44 @@ export function routeError(cause: Error, c: Context): Response {
 }
 
 /**
- * The own fields of a refusal another object threw that this route read as no refusal (`authoredRefusal`), which say
- * why: production's account object refused a fourth workspace with `budget`, read so at 18:46 (413) and as `io` at
- * 19:12 (500) on one build, 2026-11-02. Debug evidence, kept until that cause is fixed; only our own codes, never text.
+ * The shape of what a route read as no refusal (`authoredRefusal`) and so answered `io`: production's account object
+ * refused a fourth workspace with `budget`, read so at 18:46 (413) and as `io` at 19:12 (500) on one build, 2026-11-02,
+ * the second's cause worded "KinuError[budget]: ...". Every such cause is described, whatever it is: its kind, whether
+ * it is an Error, its name and the own fields a crossing keeps. Debug evidence, kept until that cause is fixed; never
+ * its text.
  */
 function unreadRefusal(error: KinuError) {
   const crossed = error.cause;
 
-  if (error.code !== 'io' || !(crossed instanceof Error) || !crossed.name.startsWith('KinuError')) return {};
+  if (error.code !== 'io' || crossed === undefined) return {};
   const read = v.safeParse(CrossedRefusalSchema, crossed);
   const refusal = read.success ? read.output : {};
 
   return {
-    crossedName: crossed.name,
+    crossedKind: crossed instanceof Error ? 'Error' : typeof crossed, crossedName: refusal.name ?? 'absent',
     crossedRemote: String(refusal.remote ?? 'absent'), crossedTag: refusal._tag ?? 'absent', crossedCode: refusal.code ?? 'absent',
   };
 }
 
 /** What `authoredRefusal` reads off a refusal another object threw. */
-const CrossedRefusalSchema = v.looseObject({ remote: v.optional(v.boolean()), _tag: v.optional(v.string()), code: v.optional(v.string()) });
+const CrossedRefusalSchema = v.looseObject({
+  name: v.optional(v.string()), remote: v.optional(v.boolean()), _tag: v.optional(v.string()), code: v.optional(v.string()),
+});
 
 /** A Durable Object router's `onError`: the caller sees the throw. */
 export function rethrow(error: Error): never {
   return settleSync(Effect.die(error));
+}
+
+/**
+ * A download's response, framed by the size it opened with: a body that breaks off before its end reaches the client as
+ * a broken response, never a short or empty success. Unframed, an interrupted read answered 200 and Bun read its body
+ * as "" (production 914ae51e8, 2026-11-04: "Network connection lost." at the second chunk of a 15-byte file; armada
+ * 20261104201125-6feef09a). Compression would drop the length, so the body goes as it is.
+ */
+export function framedDownload(headers: Headers, body: ReadableStream<Uint8Array>, size: number): Response {
+  headers.set('content-encoding', 'identity');
+  headers.set('cache-control', 'no-store, no-transform');
+
+  return new Response(body.pipeThrough(new FixedLengthStream(size)), { headers });
 }

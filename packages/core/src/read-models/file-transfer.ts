@@ -120,10 +120,13 @@ export function serveUpload<Written, Fields>(request: Request, port: UploadPort<
   ));
 }
 
-/** The file `port` serves, streamed a chunk at a time; a far side that ends before the size it opened with errors the
- *  stream rather than truncating it. */
+/**
+ * The file `port` serves, streamed a chunk at a time; a far side that ends before the size it opened with errors the
+ * stream rather than truncating it. `respond` makes the response of that stream and the size it opened with: the host
+ * frames it by that size, so a stream that errors reaches the client as a broken response (`framedDownload`).
+ */
 export async function serveDownload<Opened extends { readonly size: number }>(
-  port: DownloadPort<Opened>, headers: (opened: Opened) => HeadersInit,
+  port: DownloadPort<Opened>, respond: (body: ReadableStream<Uint8Array>, opened: Opened) => Response,
 ): Promise<Response> {
   const transferId = crypto.randomUUID();
   const opened = await port.start(transferId);
@@ -157,5 +160,5 @@ export async function serveDownload<Opened extends { readonly size: number }>(
     },
   });
 
-  return new Response(stream, { headers: headers(opened) });
+  return respond(stream, opened);
 }

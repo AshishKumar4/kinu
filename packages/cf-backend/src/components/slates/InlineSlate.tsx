@@ -1,6 +1,6 @@
 import { useCallback, useContext, useEffect, useEffectEvent, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode, type Ref, type RefObject } from "react";
 import { Loader } from "@/components/ui/Loader";
-import { ArrowSquareOutIcon, CaretRightIcon, CheckIcon, PushPinIcon } from "@phosphor-icons/react";
+import { CaretRightIcon, CheckIcon, PushPinIcon } from "@phosphor-icons/react";
 import * as v from "valibot";
 import type { SlateCallResult } from "@kinu.run/core";
 import {
@@ -10,14 +10,13 @@ import {
 } from "@kinu.run/core";
 import { useElementSize } from "@/hooks/use-element-size";
 import { useTheme } from "@/hooks/use-theme";
-import { PreviewChrome } from "@/components/PreviewFrame";
+import { PreviewActions, PreviewChrome } from "@/components/PreviewFrame";
 import { ChatPreviews, SlateInlineContext, usePreviewFold } from "./context";
 import { Effect } from "effect";
 import { detach, showing } from "@kinu.run/core/obs";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { WorkspacePartHost } from "@/hooks/use-part-host";
 import { Notice } from "@/components/ui/Notice";
-import { Button } from "@/components/ui/Button";
 import { IconControl } from "@/components/ui/IconControl";
 import { Pressable } from "@/components/ui/Pressable";
 
@@ -143,7 +142,7 @@ function SaveControl({ name, page, save, open }: { name: string; page: string; s
   if (saved !== null) {
     return (
       <IconControl place="inline" data-slate-saved={saved.id} onClick={() => open?.(saved.id)} disabled={open === undefined}
-        aria-label={`Saved as ${saved.title}; open it in the work surface`} title={`Saved as ${saved.title}`} className="p-accent-fg">
+        aria-label={`Saved as ${saved.title}; open it in the inspector`} title={`Saved as ${saved.title}`} className="p-accent-fg">
         <CheckIcon size={11} weight="bold" />
       </IconControl>
     );
@@ -159,9 +158,11 @@ function SaveControl({ name, page, save, open }: { name: string; page: string; s
 
 /** No chrome: the frame sits in the answer, and its fold, save and open controls show over it on hover, or always where
  *  there is no hover. Folded, it is one quiet line naming it and why. */
-export function SlateCard({ id, block, measure, save, children }: {
+export function SlateCard({ id, block, url, measure, save, children }: {
   id: string;
   block?: string;
+  /** Its own address, where it has one: an answer's page has none. */
+  url?: string | undefined;
   measure?: Ref<HTMLSpanElement>;
   /** An answer's page only: a slate with files is the workspace's already. */
   save?: () => Promise<SlateCallResult>;
@@ -170,7 +171,7 @@ export function SlateCard({ id, block, measure, save, children }: {
   const inline = useContext(SlateInlineContext);
   const body = useId();
   const painted = usePainted();
-  const { register, reason, folded, toggle } = usePreviewFold(id, inline?.chat?.shownInPanel === id ? "Shown in the work surface" : null);
+  const { register, reason, folded, toggle } = usePreviewFold(id);
   const openSlate = inline?.openSlate;
   const why = folded ? reason : null;
 
@@ -186,9 +187,7 @@ export function SlateCard({ id, block, measure, save, children }: {
         {why !== null && <span className="t-meta ml-auto shrink-0 pl-2 p-text-3">{why}</span>}
       </Pressable>
       {save !== undefined && <SaveControl name={name} page={id} save={save} open={openSlate} />}
-      {openSlate !== undefined && (
-        <Button variant="ghost" size="sm" icon={<ArrowSquareOutIcon size={14} />} className="shrink-0" onClick={() => openSlate(id)} aria-label={`Open ${name} in the work surface`} title="Open in the work surface" />
-      )}
+      <PreviewActions name={name} url={url} inInspector={openSlate === undefined ? undefined : () => { openSlate(id); }} />
     </>
   );
 
@@ -398,7 +397,7 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
   }
 
   return (
-    <SlateCard id={id} block={block} measure={attach} save={save}>
+    <SlateCard id={id} block={block} url={previewUrl} measure={attach} save={save}>
       {notice}
       {decision}
       {refusal !== null && (

@@ -7,7 +7,8 @@ import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { PREVIEW_SANDBOX, isPreviewUrl, type PinnedPreviewPort } from "@kinu.run/core";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { detach, showing } from "@kinu.run/core/obs";
-import { ArrowSquareOutIcon } from "@phosphor-icons/react";
+import { ArrowSquareOutIcon, SidebarSimpleIcon } from "@phosphor-icons/react";
+import { Button, buttonClass } from "@/components/ui/Button";
 import { Surface } from "@/components/ui/Surface";
 
 /** Whether a computer preview is a public link, and the owner's way to change it. */
@@ -26,12 +27,35 @@ export function useComputerPreviewLink(port: PinnedPreviewPort | undefined, rpc:
   }), [computerPort, rpc]);
 }
 
-export function PreviewChrome({ url, publicLink }: { url: string; publicLink?: PublicLink | undefined }) {
+/**
+ * A preview's ways out, the same on every preview: copy its address, open it in the inspector (where the chat's copy
+ * then folds, `usePreviewFold`), open it in a tab of its own. Each only where it can act: an answer's page has no
+ * address of its own, and the inspector shows a site only through a preview of it.
+ */
+export function PreviewActions({ name, url, inInspector }: { name: string; url?: string | undefined; inInspector?: (() => void) | undefined }) {
+  const ghost = `${buttonClass({ variant: "ghost", size: "sm", iconOnly: true })} shrink-0`;
+
+  return (
+    <>
+      {url !== undefined && <CopyButton value={url} what="the preview URL" className="shrink-0" />}
+      {inInspector !== undefined && (
+        <Button variant="ghost" size="sm" className="shrink-0" onClick={inInspector} data-open-inspector
+          icon={<SidebarSimpleIcon size={14} style={{ transform: "scaleX(-1)" }} />} aria-label={`Open ${name} in the inspector`} title="Open in the inspector" />
+      )}
+      {url !== undefined && (
+        <a href={url} target="_blank" rel="noopener noreferrer" className={ghost} aria-label={`Open ${name} in a new tab`} title="Open in a new tab">
+          <ArrowSquareOutIcon size={14} />
+        </a>
+      )}
+    </>
+  );
+}
+
+export function PreviewChrome({ url, publicLink, inInspector }: { url: string; publicLink?: PublicLink | undefined; inInspector?: (() => void) | undefined }) {
   return (
     <PreviewAddress url={url}>
       {publicLink !== undefined && <PublicLinkSwitch key={url} link={publicLink} />}
-      <CopyButton value={url} what="the preview URL" className="shrink-0" />
-      <a href={url} target="_blank" rel="noopener noreferrer" className="p-text-3 hover:p-text p-1 shrink-0" title="Open in new tab"><ArrowSquareOutIcon size={11} /></a>
+      <PreviewActions name={url} url={url} inInspector={inInspector} />
     </PreviewAddress>
   );
 }
@@ -89,10 +113,12 @@ function PublicLinkSwitch({ link }: { link: PublicLink }) {
   );
 }
 
-export function PreviewFrame({ url, label, publicLink }: {
+export function PreviewFrame({ url, label, publicLink, inInspector }: {
   url: string;
   label?: string;
   publicLink?: PublicLink | undefined;
+  /** In the chat: shows this preview in the inspector, where one of its previews serves the site. */
+  inInspector?: (() => void) | undefined;
 }) {
   // The only gate on framed URLs: they come from raw tool output.
   if (!isPreviewUrl(url)) {
@@ -107,7 +133,7 @@ export function PreviewFrame({ url, label, publicLink }: {
 
   return (
     <div className="h-full flex flex-col">
-      <PreviewChrome url={url} publicLink={publicLink} />
+      <PreviewChrome url={url} publicLink={publicLink} inInspector={inInspector} />
       <Surface look="page" as="iframe" className="flex-1 min-h-0 w-full border-0" src={url} title={label ?? url} sandbox={PREVIEW_SANDBOX} />
     </div>
   );
