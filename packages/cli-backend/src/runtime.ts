@@ -57,7 +57,7 @@ import {
 } from './profile-authority';
 import type { LocalOAuthStore } from './oauth-store';
 import type { FileCheckpoints } from '@kinu.run/core';
-import { detach, diagnostics, KinuError, renderCauseChain, settleLogged, settleSync, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, renderCauseChain, settleSync, toKinuError } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import { adoptLocalActorHandle, localActorDirectory, bindLocalActor, bindLocalActorReference, openLocalRootActor, requireLocalActorWorkspace, type LocalActorConfig, type LocalActorBinding } from '@kinu.run/core';
 import * as v from 'valibot';
@@ -333,20 +333,7 @@ function buildCLIRuntime(
     refusals,
   }), createStructuredDecider(actor, modelLanes));
 
-  const schedule: Schedule = {
-    // Unreferenced so a one-shot `kinu` command still exits with a timer pending.
-    after: async (ms, fn) => {
-      // No caller remains when this runs; a rejection is recorded as a domain failure.
-      const deferred = (): Promise<void> => settleLogged('schedule.deferred_failed', {
-        doing: 'running work this session deferred', otherwise: 'io',
-      }, fn);
-
-      const timer = setTimeout(() => detach(Effect.promise(deferred)), Math.max(0, ms));
-      timer.unref?.();
-    },
-    cron: async () => {},
-    fiber: createSqlFiber(sql, actor),
-  };
+  const schedule: Schedule = { fiber: createSqlFiber(sql, actor) };
 
   const checkpoints = createHostCheckpoints({ agent: agentName, keep: config.checkpointKeep });
   const { cwd, space } = place;

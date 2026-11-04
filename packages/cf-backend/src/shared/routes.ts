@@ -226,7 +226,7 @@ async function publish(request: Request, env: Env, identity: AuthIdentity): Prom
   let users: readonly string[] = share.users;
 
   if (emails.length > 0) {
-    const named = await Promise.all(emails.map(async (email) => ({ userId: await accountIdFor(env, email), email })));
+    const named = emails.map((email) => ({ userId: accountIdFor(env, email), email }));
     const recorded = await owned.shareBlueprintWith(share.id, named);
 
     if (!recorded.ok) return err(409, recorded.error);
@@ -306,7 +306,7 @@ async function shareLive(request: Request, env: Env, identity: AuthIdentity): Pr
   let answered = owning;
 
   if (share.visibility === 'users' && emails.length > 0) {
-    const named = await Promise.all(emails.map(async (email) => ({ userId: await accountIdFor(env, email), email, role: editors.has(email) ? 'edit' as const : 'use' as const })));
+    const named = emails.map((email) => ({ userId: accountIdFor(env, email), email, role: editors.has(email) ? 'edit' as const : 'use' as const }));
     const recorded = await owned.shareLiveWith(share.id, named);
 
     if (!recorded.ok) return err(409, recorded.error);

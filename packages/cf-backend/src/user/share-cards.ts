@@ -53,7 +53,7 @@ export interface ShareCardDeps {
   readonly owner: () => { readonly userId: string; readonly email: string };
   readonly recipient: (userId: string) => ShareCardRecipient;
   /** The account a recipient's address is on this deployment. */
-  readonly accountOf: (email: string) => Promise<string>;
+  readonly accountOf: (email: string) => string;
   /** The deployment's owner authority, as one account writes another's cards. */
   readonly caller: () => Promise<UserCaller>;
   /** A recipient whose account was deleted forgotten by this account, in `workspaces` (`shareRecipient_forget`). */
@@ -84,7 +84,7 @@ export class ShareCardJobs extends LifecycleCapability {
       const card = shareCardOf(share, owner.email);
 
       for (const email of share.users) {
-        const recipient = await this.#deps.accountOf(email);
+        const recipient = this.#deps.accountOf(email);
 
         if (recipient !== owner.userId) wanted.set(JSON.stringify([share.share, recipient]), { share: share.share, recipient, email, card, text: JSON.stringify(card) });
       }

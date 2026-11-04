@@ -121,8 +121,6 @@ export interface FiberCtx {
 
 /** fiber() is callable only from the orchestrator; it throws in sub-agents. */
 export interface Schedule {
-  after(delayMs: number, fn: () => Promise<void>): Promise<void>;
-  cron(expr: string, name: string, fn: () => Promise<void>): Promise<void>;
   fiber<T>(name: string, fn: (ctx: FiberCtx) => Promise<T>): Promise<T>;
 }
 

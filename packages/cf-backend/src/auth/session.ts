@@ -105,7 +105,7 @@ export function requestAccount<Id>(request: Request, env: AuthEnv<Id>): Promise<
     if (read !== 'main') return read;
     const email = yield* devIdentityEmail(request, env);
 
-    return email === null ? 'none' : { id: yield* Effect.promise(() => accountIdFor(env, email)) };
+    return email === null ? 'none' : { id: accountIdFor(env, email) };
   }));
 }
 
@@ -147,7 +147,7 @@ function sessionIdentity<Id>(request: Request, env: AuthEnv<Id>, workspace?: str
     const devEmail = yield* devIdentityEmail(request, env);
 
     if (devEmail !== null) {
-      return { userId: yield* Effect.promise(() => accountIdFor(env, devEmail)), email: devEmail, sub: 'dev', provider: 'dev', authTime: Date.now() } satisfies AuthIdentity;
+      return { userId: accountIdFor(env, devEmail), email: devEmail, sub: 'dev', provider: 'dev', authTime: Date.now() } satisfies AuthIdentity;
     }
 
     if (!env.AUTH_KV) {

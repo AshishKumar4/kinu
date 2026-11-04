@@ -46,7 +46,7 @@ import type {
   ForkPoint,
   LocalSessionControls,
 } from './agent-client';
-
+import type { FileCheckpointSurface, OwnerQuestionSurface, PlanReviewSurface, WaitingApprovalSurface } from '@kinu.run/core';
 
 interface LocalAgentClientOptions extends LocalModelResolverOptions {
   transcript?: CliSessionOptions;

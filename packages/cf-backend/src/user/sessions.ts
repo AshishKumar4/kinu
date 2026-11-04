@@ -328,7 +328,7 @@ export class UserSessions {
 
     if (!/^[a-f0-9]{64}$/.test(authorizationHash)) throw new KinuError('bad_input', 'invalid authorization hash');
     const token = `ptc_${userId}_${nanoid(44)}`;
-    const tokenHash = await sha256Hex(token);
+    const tokenHash = sha256Hex(token);
     const now = Date.now();
     const expiresAt = now + CLI_TOKEN_TTL_MS;
 
@@ -350,7 +350,7 @@ export class UserSessions {
     const userId = parseCliTokenUserId(token);
 
     if (!userId) return { ok: false, error: 'malformed token' };
-    const tokenHash = await sha256Hex(token);
+    const tokenHash = sha256Hex(token);
 
     const row = this.host.sqlx<{ expires_at: number; revoked_at: number | null }>(
       `SELECT expires_at, revoked_at FROM user_cli_tokens WHERE token_hash = ? LIMIT 1`,

@@ -309,7 +309,7 @@ function chosenTier(authority: CheckedAuthority, input: TierChoice) {
     const { envelope } = authority;
 
     if (!isValidRoleId(input.roleId)) {
-      return yield* Effect.die(new Error(`invalid role id ${JSON.stringify(input.roleId)}: must match ${ROLE_ID_RE.source}`));
+      return yield* Effect.fail(new KinuError('bad_input', `invalid role id ${JSON.stringify(input.roleId)}: must match ${ROLE_ID_RE.source}`));
     }
 
     let explicitTier: TierId | undefined;
@@ -318,7 +318,7 @@ function chosenTier(authority: CheckedAuthority, input: TierChoice) {
       const parsedTier = v.safeParse(TierIdSchema, input.explicitTier);
 
       if (!parsedTier.success) {
-        return yield* Effect.die(new Error(`invalid explicit tier: ${JSON.stringify(input.explicitTier)}`));
+        return yield* Effect.fail(new KinuError('bad_input', `invalid explicit tier: ${JSON.stringify(input.explicitTier)}`));
       }
 
       explicitTier = parsedTier.output;
@@ -327,13 +327,13 @@ function chosenTier(authority: CheckedAuthority, input: TierChoice) {
     const role = authority.roles[input.roleId];
 
     if (!role) {
-      return yield* Effect.die(new Error(`unknown role ${JSON.stringify(input.roleId)}: known roles are ${Object.keys(authority.roles).sort().join(', ')}`));
+      return yield* Effect.fail(new KinuError('bad_input', `unknown role ${JSON.stringify(input.roleId)}: known roles are ${Object.keys(authority.roles).sort().join(', ')}`));
     }
 
     const requested: TierId = explicitTier ?? role.tier;
 
     if (!tierIdsOf(envelope.catalog).includes(requested)) {
-      return yield* Effect.die(new Error(`unknown tier ${JSON.stringify(requested)}: known tiers are ${tierIdsOf(envelope.catalog).join(', ')}`));
+      return yield* Effect.fail(new KinuError('bad_input', `unknown tier ${JSON.stringify(requested)}: known tiers are ${tierIdsOf(envelope.catalog).join(', ')}`));
     }
 
     let tierId: TierId = requested;

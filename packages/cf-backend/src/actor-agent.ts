@@ -2718,20 +2718,10 @@ export abstract class ActorAgent extends Agent<Env> {
     actor?: ActorHandle,
     admit?: () => void,
   ): Promise<SlateSurfaceValue> {
-    let profile: ResolvedTurnProfile;
-
-    try {
-      profile = (await this.actorProfile({
-        actor: actor ?? this.actorHandle(), workMode: 'build', availableTools: [], explicitTier: route.tier,
-      })).profile;
-    } catch (cause) {
-      // The resolver reports bad tiers as plain Errors; surface them as bad input.
-      if (cause instanceof Error && /invalid explicit tier|unknown tier/.test(cause.message)) {
-        throw new KinuError('bad_input', cause.message, { cause });
-      }
-
-      throw cause;
-    }
+    // A tier the catalog does not name is refused by the resolver as bad input.
+    const { profile } = await this.actorProfile({
+      actor: actor ?? this.actorHandle(), workMode: 'build', availableTools: [], explicitTier: route.tier,
+    });
 
     // Priced as every call is: its model's rate, warmed when it is not the turn's own.
     await this.modelCatalog.warm([profile.tier.model]);

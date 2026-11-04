@@ -26,12 +26,16 @@ export function serialQueue(): <T>(op: () => Promise<T>) => Promise<T> {
 	};
 }
 
-/** {@link serialQueue} per key: ops under one key run one after another, and a key with nothing queued is forgotten. */
+/**
+ * {@link serialQueue} per key: ops under one key run one after another, an op on an idle key starting at once, and a
+ * key with nothing queued is forgotten.
+ */
 export function keyedSerialQueue(): <T>(key: string, op: () => Promise<T>) => Promise<T> {
 	const tails = new Map<string, Promise<unknown>>();
 
 	return async (key, op) => {
-		const run = (tails.get(key) ?? Promise.resolve()).then(op);
+		const before = tails.get(key);
+		const run = before === undefined ? op() : before.then(op);
 		const settled = Promise.allSettled([run]);
 		tails.set(key, settled);
 

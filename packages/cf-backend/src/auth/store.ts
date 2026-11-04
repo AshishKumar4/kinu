@@ -102,12 +102,12 @@ type OAuthStateRecord = v.InferOutput<typeof OAuthStateSchema>;
 
 /** Truncated sha256 in the shape every userId-carrying format (UserDO name, `ptc_…` token) expects;
  *  the one derivation for dev and real sign-in. */
-async function deriveUserId(email: string): Promise<string> {
-  return (await sha256Hex(email.trim().toLowerCase())).slice(0, 32);
+function deriveUserId(email: string): string {
+  return sha256Hex(email.trim().toLowerCase(), 32);
 }
 
 /** Never the userId an OAuth login of the address gets. */
-async function deriveBuiltinUserId(email: string): Promise<string> {
+function deriveBuiltinUserId(email: string): string {
   return deriveUserId(`builtin:${email.trim().toLowerCase()}`);
 }
 
@@ -115,7 +115,7 @@ async function deriveBuiltinUserId(email: string): Promise<string> {
  * The account an address is here, the one rule every sign-in mints by and every person named by address (a share's
  * recipient) resolves by: a deployment offers built-in sign-in or OAuth, never both (`builtinSignInOn`).
  */
-export async function accountIdFor(env: SignInDeclarationEnv, email: string): Promise<string> {
+export function accountIdFor(env: SignInDeclarationEnv, email: string): string {
   return builtinSignInOn(env) ? deriveBuiltinUserId(email) : deriveUserId(email);
 }
 
@@ -136,7 +136,7 @@ export async function createOAuthState(
     nonce: input.nonce ?? null,
     returnTo: sanitizeReturnTo(input.returnTo, new URL(input.redirectUri).origin),
     redirectUri: input.redirectUri,
-    bindingHash: await sha256Hex(binding),
+    bindingHash: sha256Hex(binding),
     connectFor: input.connectFor ?? null,
     connectRun: input.connectRun ?? null,
     createdAt: now,
@@ -144,7 +144,7 @@ export async function createOAuthState(
   };
 
   // Kept as long as the state is redeemable: a later callback is named by its browser's own cookie (`handoffCookie`).
-  await writeKvJson(kv, `oauth-state:${await sha256Hex(state)}`, record, OAUTH_STATE_TTL_MS);
+  await writeKvJson(kv, `oauth-state:${sha256Hex(state)}`, record, OAUTH_STATE_TTL_MS);
 
   return { state, binding };
 }
@@ -160,14 +160,14 @@ export function consumeOAuthState(
   binding: string | null,
 ): Promise<ConsumedOAuthState> {
   return settle(Effect.gen(function* () {
-    const key = `oauth-state:${yield* Effect.promise(async () => sha256Hex(state))}`;
+    const key = `oauth-state:${sha256Hex(state)}`;
     const record = yield* Effect.promise(async () => readKvJson(kv, key, OAuthStateSchema));
     yield* Effect.promise(async () => kv.delete(key));
 
-    if (!record) return yield* Effect.die(new Error('OAuth state expired, or was already used. Start again.'));
+    if (!record) return yield* Effect.fail(new KinuError('denied', 'OAuth state expired, or was already used. Start again.'));
 
-    if (!binding || !timingSafeEqual(yield* Effect.promise(async () => sha256Hex(binding)), record.bindingHash)) {
-      return yield* Effect.die(new Error('OAuth state was not issued to this browser. Start sign-in again.'));
+    if (!binding || !timingSafeEqual(sha256Hex(binding), record.bindingHash)) {
+      return yield* Effect.fail(new KinuError('denied', 'OAuth state was not issued to this browser. Start sign-in again.'));
     }
 
     const bound = { ...record, returnTo: sanitizeReturnTo(record.returnTo, new URL(record.redirectUri).origin) };
@@ -192,7 +192,7 @@ export function createSession<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile):
     const now = Date.now();
     const identity = yield* resolveIdentity(env, profile, now);
     const token = `ps_${identity.userId}_${randomToken(48)}`;
-    const tokenHash = yield* Effect.promise(async () => sha256Hex(token));
+    const tokenHash = sha256Hex(token);
     const expiresAt = now + SESSION_TTL_MS;
     const caller = yield* Effect.promise(async () => ownerCaller(env));
     const authority = sessionAuthority(env, identity.userId);
@@ -267,7 +267,7 @@ export async function revokeSession<Id>(env: AuthStoreEnv<Id>, token: string): P
   const userId = parseSessionTokenUserId(token);
 
   if (!userId) return;
-  const tokenHash = await sha256Hex(token);
+  const tokenHash = sha256Hex(token);
   const caller = await ownerCaller(env);
   await sessionAuthority(env, userId).revokeBrowserSession(caller, tokenHash);
 }
@@ -281,18 +281,18 @@ function resolveIdentity<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile, now: 
   return Effect.gen(function* () {
     const email = profile.email.trim().toLowerCase();
 
-    if (!email) return yield* Effect.die(new Error('OAuth provider did not return an email address.'));
+    if (!email) return yield* Effect.fail(new KinuError('denied', 'OAuth provider did not return an email address.'));
 
-    if (!profile.providerSub) return yield* Effect.die(new Error('OAuth provider did not return a stable subject.'));
+    if (!profile.providerSub) return yield* Effect.fail(new KinuError('denied', 'OAuth provider did not return a stable subject.'));
 
     const builtin = BUILTIN_METHODS.has(profile.provider);
 
     // Unverified: a built-in account keeps its own namespace.
     if (!profile.emailVerified && !builtin) {
-      return yield* Effect.die(new Error('OAuth provider did not report this email address as verified.'));
+      return yield* Effect.fail(new KinuError('denied', 'OAuth provider did not report this email address as verified.'));
     }
 
-    const userId = yield* Effect.promise(async () => accountIdFor(env, email));
+    const userId = accountIdFor(env, email);
 
     const stored = yield* Effect.promise(async () => sessionAuthority(env, userId)
       .ensureProfile(await ownerCaller(env), email, profile.displayName ?? undefined));

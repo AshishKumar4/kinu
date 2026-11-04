@@ -81,7 +81,7 @@ afterEach(async () => {
 /** The hosted main actor of a workspace whose owner's machine holds {@link NOTES}. */
 async function workspaceWithMachine() {
   const machine = new Map([[NOTES, OWNERS]]);
-  const ownerUserId = await accountIdFor(OAUTH_DEPLOYMENT, 'owner@kinu.example.com');
+  const ownerUserId = accountIdFor(OAUTH_DEPLOYMENT, 'owner@kinu.example.com');
   const user = createTestUserDO({ deviceResponder: daemon(machine), durableObjectId: ownerUserId });
   opened.push(user);
   const { deviceId } = await registerTestDevice(user.userDO, 'ashish@studio');

@@ -131,13 +131,14 @@ import { ActorSession, type ActorTurnLease,
   defaultLoopOrigin,
   type ActorHost, type ActorSeat, type HostedActor, type LoopOrigin, type SeatedActor, type WriteObserver,
   PlanReviewActions, SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, ASK_OWNER_TOOL, workModeUnderReview, authoredTurnMetadata, planHandoffStillOwed,
-  type PlanEdit, type PlanReviewResult,
+  type PlanDecisionOutcome, type PlanEdit, type PlanReviewDecision, type PlanReviewResult,
   ChatSession, CHAT_SESSION_ID, checkpointAvailability, fileCheckpointListing, fileRestorePlan, fileCheckpointRestore,
   type ChatTurnInput, type CompactOutcome, type ComposedRequest, type ContextFill, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
 } from '@kinu.run/core';
 import {
-  attempt, diagnostics, KinuError, renderThrownChain, settle as settleEffect, settleSync, tolerate, toKinuError, detach, logged, type Refusal,
+  attempt, diagnostics, KinuError, renderThrownChain, settle as settleEffect, settleLogged, settleSync, tolerate, toKinuError, detach, logged, type Refusal,
 } from '@kinu.run/core/obs';
+import { WakeSlot } from './wake-slot';
 import { cleanupFacetScratch, soulIn, writeTransaction, type CLIRuntime } from './runtime';
 import { createLocalActorHost } from './actor-host';
 import { createLocalOrchestration, type LocalOrchestration } from './orchestration';
@@ -340,8 +341,13 @@ export class LocalAgentSession {
   private readonly triggerRegistry: TriggerRegistry;
   private _webSearchProvider: WebSearchProvider | null = null;
   private _planActions: PlanReviewActions | null = null;
-  private alarmTimer: ReturnType<typeof setTimeout> | null = null;
-  private scheduledAlarmAt: number | null = null;
+  /** The next trigger's wake; unlike the other slots it holds the process open, as a pending timer is the work. */
+  private readonly alarm = new WakeSlot({
+    unref: false,
+    fire: () => settleLogged('schedule.due_triggers_failed', { doing: 'firing the triggers due on this wake', otherwise: 'io' }, async () => {
+      await this.fireDueTriggers();
+    }),
+  });
   private readonly _headRuntime: HeadRuntime;
   private shellApprovalHandler: ShellApprovalHandler | null = null;
   private readonly oneShot: boolean;
@@ -684,9 +690,10 @@ export class LocalAgentSession {
 
   /** File checkpoints with store reachability, as every client serves them. */
   readonly checkpoints: FileCheckpointSurface = {
-    list: (limit, turnId) => fileCheckpointListing(this.rt.checkpoints ?? null, { limit, turnId }),
-    plan: (dir, id) => fileRestorePlan(this.rt.checkpoints ?? null, dir, id),
-    restore: (dir, id) => fileCheckpointRestore(this.rt.checkpoints ?? null, dir, id),
+    // Async, so a refusal (no engine configured) rejects rather than throws.
+    list: async (limit, turnId) => fileCheckpointListing(this.rt.checkpoints ?? null, { limit, turnId }),
+    plan: async (dir, id) => fileRestorePlan(this.rt.checkpoints ?? null, dir, id),
+    restore: async (dir, id) => fileCheckpointRestore(this.rt.checkpoints ?? null, dir, id),
   };
 
   checkpointStatus(): Promise<CheckpointAvailability> {
@@ -982,13 +989,13 @@ export class LocalAgentSession {
   async fireDueTriggers(now = Date.now()): Promise<{ fired: number; nextAlarmAt: number | null }> {
     if (this.chat.closed) return { fired: 0, nextAlarmAt: null };
 
-    if (this.scheduledAlarmAt !== null && this.scheduledAlarmAt <= now) this.clearLocalAlarm();
+    if (this.alarm.at !== null && this.alarm.at <= now) this.alarm.clear();
     const { fired } = await fireDueTriggers({ registry: this.triggerRegistry, log: this.eventLog }, now);
 
     if (fired > 0) this.actorSession.orchestrator.scheduleDrain();
     this.rearmLocalAlarm();
 
-    return { fired, nextAlarmAt: this.scheduledAlarmAt };
+    return { fired, nextAlarmAt: this.alarm.at };
   }
 
   async jobResult(jobId: string): Promise<BackgroundJob | null> {
@@ -1054,26 +1061,28 @@ export class LocalAgentSession {
     return this.planActions.submit(edits, this.turnDriving);
   }
 
-  /** The owner's half of Plan mode. A verdict is refused before it is made durable with a handoff this process
-   *  cannot run, as is an answer to a question. */
+  /** The owner's half of Plan mode. */
   readonly plans: PlanReviewSurface = {
     active: async () => this.planActions.active(),
     saveAnnotations: async (id, revision, annotations) => this.planActions.saveAnnotations(id, revision, { value: annotations }),
-    decide: async (id, revision, decision, feedback) => {
-      const refusal = this.driverGate?.() ?? null;
-
-      if (refusal) {
-        return {
-          ok: false,
-          error: `${refusal.error}. Decide this plan from the session driving the conversation.`,
-          plan: this.stores.planReviews.get(id, revision),
-        };
-      }
-
-      return this.planActions.decideAndHandOff({ id, revision, decision, feedback }, (turn) => this.enqueueTurn(turn));
-    },
+    decide: async (id, revision, decision, feedback) => this.decidePlanReview(id, revision, decision, feedback),
     dismiss: async (id, revision) => this.planActions.dismiss(id, revision, (prefix) => { this.chat.stopIfRunning(prefix); }),
   };
+
+  /** The driver lease is checked first, so a verdict is never made durable with a handoff this process cannot run. */
+  private async decidePlanReview(id: string, revision: number, decision: PlanReviewDecision, feedback?: string): Promise<PlanDecisionOutcome> {
+    const refusal = this.driverGate?.() ?? null;
+
+    if (refusal) {
+      return {
+        ok: false,
+        error: `${refusal.error}. Decide this plan from the session driving the conversation.`,
+        plan: this.stores.planReviews.get(id, revision),
+      };
+    }
+
+    return this.planActions.decideAndHandOff({ id, revision, decision, feedback }, (turn) => this.enqueueTurn(turn));
+  }
 
   /** The agent's recent questions to the owner: the open ones wait in the stack. An answer becomes the asking call's
    *  result, and the turn that continues from it is owed at once; in this process nothing crosses, so nothing is owed. */
@@ -1307,11 +1316,11 @@ export class LocalAgentSession {
     this.sleepTime.lastClientLeft();
     this.chat.close();
     this.lifetime.abort();
-    this.clearLocalAlarm();
+    this.alarm.clear();
     // Stops a retry timer firing into a session whose stores are closed.
-    this.clearTerminalRetry();
+    this.terminalRetry.clear();
 
-    if (this.sleepTimeTimer) clearTimeout(this.sleepTimeTimer);
+    this.sleepTimeWake.clear();
     const t0 = Date.now();
     await this.actorSession.orchestrator.settleTracked();
     const t1 = Date.now();
@@ -1549,46 +1558,16 @@ export class LocalAgentSession {
   }
 
   private scheduleLocalAlarm(ts: number): void {
-    if (this.chat.closed) return;
-
-    if (this.scheduledAlarmAt !== null && this.scheduledAlarmAt <= ts) return;
-    this.clearLocalAlarm();
-    this.scheduledAlarmAt = ts;
-    const delay = Math.max(0, ts - Date.now());
-    this.alarmTimer = setTimeout(() => detach(Effect.promise(async () => { this.alarmTimer = null;
-    this.scheduledAlarmAt = null;
-    
-    try {
-      await this.fireDueTriggers();
-    } catch (cause) {
-      const failure = toKinuError({
-        doing: 'firing the triggers due on this wake',
-        cause,
-        otherwise: 'io',
-      });
-    
-      diagnostics.failure('schedule.due_triggers_failed', failure);
-    } })), Math.min(delay, 2_147_483_647));
-  }
-
-  private clearLocalAlarm(): void {
-    if (this.alarmTimer) clearTimeout(this.alarmTimer);
-    this.alarmTimer = null;
-    this.scheduledAlarmAt = null;
+    if (!this.chat.closed) this.alarm.arm(ts);
   }
 
   private rearmLocalAlarm(): void {
     if (this.chat.closed) return;
     const next = this.nextScheduledTriggerAt();
 
-    if (next === null) {
-      if (this.scheduledAlarmAt !== null) this.clearLocalAlarm();
+    if (next === null || this.alarm.at !== next) this.alarm.clear();
 
-      return;
-    }
-
-    if (this.scheduledAlarmAt !== null && this.scheduledAlarmAt !== next) this.clearLocalAlarm();
-    this.scheduleLocalAlarm(next);
+    if (next !== null) this.alarm.arm(next);
   }
 
   private nextScheduledTriggerAt(): number | null {
@@ -1982,7 +1961,7 @@ export class LocalAgentSession {
       scheduleRetry: (atMs) => this.scheduleTerminalRetry(atMs),
       // The timer also wakes a deferred job; it goes only when neither ledger owes it.
       settled: () => {
-        if (this.jobRunner.nextResumeAt() === null) this.clearTerminalRetry();
+        if (this.jobRunner.nextResumeAt() === null) this.terminalRetry.clear();
 
         return Promise.resolve();
       },
@@ -1998,44 +1977,22 @@ export class LocalAgentSession {
    * collapsed onto the earliest requested instant. The timer must not hold a finished process open.
    */
   private async scheduleTerminalRetry(atMs: number): Promise<void> {
-    if (this.chat.closed || this.terminalRetryAt <= atMs) return;
-    this.clearTerminalRetry();
-    this.terminalRetryAt = atMs;
-
-    const timer = setTimeout(() => detach(Effect.promise(async () => { this.clearTerminalRetry();
-    
-    // Job sweep first, in its own try: this timer is also a deferred job's wake, and only
-    // `recoverBackgroundJobs` reaches `recoverOrphans` otherwise.
-    try {
-      await this.jobRunner.recoverDueResumes();
-    } catch (cause) {
-      diagnostics.failure('jobs.due_resume_failed', toKinuError({
-        doing: 'resuming a background job whose next attempt came due', cause, otherwise: 'unavailable',
-      }));
-    }
-    
-    try {
-      await this.recoverTerminalTransitions();
-    } catch (cause) {
-      const failure = toKinuError({
-        doing: 'retrying the effects a settled turn still owed', cause, otherwise: 'unavailable',
-      });
-    
-      diagnostics.failure('turn.terminal_retry_failed', failure);
-    } })), Math.max(0, atMs - Date.now()));
-
-    timer.unref();
-    this.terminalRetryTimer = timer;
+    if (!this.chat.closed) this.terminalRetry.arm(atMs);
   }
 
-  private clearTerminalRetry(): void {
-    if (this.terminalRetryTimer) clearTimeout(this.terminalRetryTimer);
-    this.terminalRetryTimer = null;
-    this.terminalRetryAt = Infinity;
-  }
-
-  private terminalRetryTimer: ReturnType<typeof setTimeout> | null = null;
-  private terminalRetryAt = Infinity;
+  /** A deferred job's wake and the replay of effects a settled turn still owes, in that order, each failure logged. */
+  private readonly terminalRetry = new WakeSlot({
+    unref: true,
+    fire: async () => {
+      // The job sweep first: only `recoverBackgroundJobs` reaches `recoverOrphans` otherwise.
+      await settleLogged('jobs.due_resume_failed', {
+        doing: 'resuming a background job whose next attempt came due', otherwise: 'unavailable',
+      }, () => this.jobRunner.recoverDueResumes());
+      await settleLogged('turn.terminal_retry_failed', {
+        doing: 'retrying the effects a settled turn still owed', otherwise: 'unavailable',
+      }, () => this.recoverTerminalTransitions());
+    },
+  });
 
   /** The main actor's sleep-time lane; its idle wake is an unref'd timer, so it never holds the process open. */
   private get sleepTime(): SleepTimeLane {
@@ -2049,19 +2006,16 @@ export class LocalAgentSession {
   }
 
   private scheduleSleepTimeWake(): void {
-    if (this.sleepTimeTimer) clearTimeout(this.sleepTimeTimer);
-    this.sleepTimeTimer = null;
+    this.sleepTimeWake.clear();
     const at = this.sleepTime.nextWakeAt();
 
-    if (at === null || this.chat.closed) return;
-    this.sleepTimeTimer = setTimeout(() => {
-      this.sleepTimeTimer = null;
-      this.tracked(() => this.sleepTime.wake(Date.now()));
-    }, Math.max(0, at - Date.now()));
-    this.sleepTimeTimer.unref();
+    if (at !== null && !this.chat.closed) this.sleepTimeWake.arm(at);
   }
 
-  private sleepTimeTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly sleepTimeWake = new WakeSlot({
+    unref: true,
+    fire: async () => { this.tracked(() => this.sleepTime.wake(Date.now())); },
+  });
 
   /** Test-only deterministic cut point in the terminal sequence; null in production. */
   protected terminalEffectFault: TerminalEffectFault | null = null;

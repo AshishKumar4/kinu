@@ -84,7 +84,7 @@ export class CensusAccountDO extends UserDO {
 
   /** The accounts `emails` are on this deployment, by the rule every sign-in mints by. */
   async accountsOf(emails: readonly string[]): Promise<string[]> {
-    return await Promise.all(emails.map((email) => accountIdFor(this.env, email)));
+    return emails.map((email) => accountIdFor(this.env, email));
   }
 
   /** Its alarm, run now: the jobs due, a card it sends among them. */

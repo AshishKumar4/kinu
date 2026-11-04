@@ -227,8 +227,6 @@ export function createMemorySchedule(db: Database, actor: ActorHandle): Schedule
   initActorStateSchema({ execRaw: makeExecRaw(db), sql: makeSql(db), exec: makeSqlExec(db), transactionSync: write => db.transaction(write)() });
 
   return {
-    after: async (_ms, fn) => { await fn(); },
-    cron: async () => {},
     fiber: async <T>(name: string, fn: (ctx: FiberCtx) => Promise<T>): Promise<T> => {
       const id = crypto.randomUUID();
       db.run('INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES (?, ?, ?, NULL, ?)',

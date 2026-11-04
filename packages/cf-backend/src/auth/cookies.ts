@@ -56,9 +56,7 @@ export function startedHere(request: Request): boolean {
 /** One handoff's cookie: its binding and, for a connect, the run its page began, so a callback the record no longer
  *  names still ends that run. Until its callback clears it, or the browser's session ends: no lifetime of its own. */
 export function handoffCookie(name: string, handoff: { readonly binding: string; readonly run: string | null }): string {
-  const value = handoff.run === null ? handoff.binding : `${handoff.binding}.${handoff.run}`;
-
-  return `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; Secure; SameSite=Lax`;
+  return setCookie(name, handoff.run === null ? handoff.binding : `${handoff.binding}.${handoff.run}`, null);
 }
 
 /** A handoff cookie's binding and run, as `handoffCookie` wrote them; a binding is base64url, so `.` ends it. */
@@ -92,12 +90,14 @@ export function readCookie(request: Request, name: string): string | null {
   return null;
 }
 
-/** `Lax`, not `Strict`: the OAuth callback is a cross-site navigation that
- *  must carry the handoff cookie. A zero lifetime clears the cookie. */
-export function setCookie(name: string, value: string, lifetimeMs: number): string {
-  const maxAge = Math.max(0, Math.floor(lifetimeMs / 1000));
+/** `Lax` by default, not `Strict`: the OAuth callback is a cross-site navigation that must carry the handoff cookie.
+ *  A zero lifetime clears the cookie; a null one lasts until the browser's session ends. */
+export function setCookie(
+  name: string, value: string, lifetimeMs: number | null, scope: { readonly path?: string; readonly sameSite?: 'Lax' | 'Strict' } = {},
+): string {
+  const maxAge = lifetimeMs === null ? '' : `; Max-Age=${String(Math.max(0, Math.floor(lifetimeMs / 1000)))}`;
 
-  return `${name}=${encodeURIComponent(value)}; Path=/; Max-Age=${maxAge}; HttpOnly; Secure; SameSite=Lax`;
+  return `${name}=${encodeURIComponent(value)}; Path=${scope.path ?? '/'}${maxAge}; HttpOnly; Secure; SameSite=${scope.sameSite ?? 'Lax'}`;
 }
 
 /** The cookie a sign-in answers with, whichever way the person signed in: it lives as long as the session. */

@@ -76,7 +76,7 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
     });
     this.store = new MailStore({
       sql: ctx.storage.sql, blobs: this.blobs(), domain: env.EMAIL_DOMAIN ?? '', now: () => Date.now(), id: () => crypto.randomUUID(),
-      parse: parseMail, digest: async (bytes) => sha256Hex(bytes), sendState: (messageId) => this.outbox.stateOf(`${MAIL_SEND_KEY}${messageId}`),
+      parse: parseMail, digest: (bytes) => sha256Hex(bytes), sendState: (messageId) => this.outbox.stateOf(`${MAIL_SEND_KEY}${messageId}`),
     });
     installAnalyticsDiagnostics(env);
   }
