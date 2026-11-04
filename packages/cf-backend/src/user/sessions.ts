@@ -4,7 +4,8 @@ import {
   objectNamed,
   getActiveAccessTokenScopes, listAccessTokens as listAccessTokenRows, mintAccessToken as mintAccessTokenRow, revokeAccessToken as revokeAccessTokenRow, verifyAccessToken as verifyAccessTokenRow, type AccessTokenMint, type AccessTokenRecord, type AccessTokenScope, nanoid, ownerCaller, type UserCaller, validateWorkspaceName, randomToken, sha256Hex, type UserProfile,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, settle, toKinuError } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
 import { refuseSuspended } from './limits';
 import * as v from 'valibot';
 import {
@@ -324,9 +325,9 @@ export class UserSessions {
     await this.host.requireTier(caller, 'auth_tokens.mint');
     refuseSuspended(this.host.suspension());
 
-    if (!/^[a-f0-9]{32}$/.test(userId)) throw new KinuError('bad_input', 'invalid user id');
+    if (!/^[a-f0-9]{32}$/.test(userId)) return settle(Effect.fail(new KinuError('bad_input', 'invalid user id')));
 
-    if (!/^[a-f0-9]{64}$/.test(authorizationHash)) throw new KinuError('bad_input', 'invalid authorization hash');
+    if (!/^[a-f0-9]{64}$/.test(authorizationHash)) return settle(Effect.fail(new KinuError('bad_input', 'invalid authorization hash')));
     const token = `ptc_${userId}_${nanoid(44)}`;
     const tokenHash = sha256Hex(token);
     const now = Date.now();

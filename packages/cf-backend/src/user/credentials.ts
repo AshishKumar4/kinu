@@ -1,4 +1,4 @@
-import { Effect } from 'effect';
+import { Effect, Result } from 'effect';
 import {
   KeptProviderListingSchema, type ProviderListing, safeJsonParse, type Credential, CLAUDE_CRED_KEY, CODEX_CRED_KEY, baseCredentialKey, CLAUDE_OAUTH_CALLBACK_PORT, claudeCodeFrom, claudeSignInRefusal, createClaudeOAuthClient, startClaudeSignIn, subscriptionIssuer, renewableLogin, rotateLogin, usableLogin, type LoginRenewal, type SubscriptionIssuer, decodeCodexAccountId, type JsonValue, type OAuthCredential, parseJsonValue, ownerCaller, type UserCaller, type ResolvedCaller, credentialToHeaders, refusedLogin, type AuthRequest, type AuthResolution, validateCredential, validateCredentialKey, createCredentialCipher, type CredentialCipher, revocationEndpointFor, revokeOAuthGrant, type DisconnectOutcome, isModelInferenceCredentialKey, CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, accountIdFromCloudflareCredential, cloudflareAIGatewayId, cloudflareAccountsFromCredential, cloudflareWorkersAIBaseURL, fetchCloudflareAIGateways, isCloudflareAIGatewayId, isCloudflareCredentialExpiring, isCloudflareCredentialUsable, refreshCloudflareCredential, withCloudflareAccount, type CloudflareAccount, type CloudflareAIGatewaySummary, type CredentialSummary, CLOUDFLARE_WEB_SEARCH_CRED_KEY, grantsWebSearch, storedCredentialKey,
   GOOGLE_OAUTH_CRED_KEY, googleCredentialExpiring, googleGrantOf, refreshGoogleCredential, type GoogleGrant,
@@ -128,7 +128,7 @@ export class UserCredentials {
     validateCredentialKey(key);
 
     if (storedCredentialKey(key) !== key) {
-      throw new KinuError('bad_input', `${key} is derived from your Cloudflare login and cannot be stored directly.`);
+      return settle(Effect.fail(new KinuError('bad_input', `${key} is derived from your Cloudflare login and cannot be stored directly.`)));
     }
 
     const cred = validateCredential({ key, value: credentialJson });
@@ -165,24 +165,30 @@ export class UserCredentials {
       return { unrevoked: revoke ? `Kinu cannot revoke ${key} at its provider; it is disconnected here only.` : null };
     }
 
-    let failures: readonly KinuError[];
+    const revoking = Effect.gen({ self: this }, function* () {
+      const read = yield* Effect.result(attempt({ doing: 'reading the credential to revoke it', otherwise: 'io' }, () => this.readCredential(key)));
 
-    try {
-      const credential = await this.readCredential(key);
-
+      // Dropped whatever the read found: an unopenable row still leaves Kinu, its grant past revoking from here.
       this.dropCredential(key);
 
-      if (credential?.kind !== 'oauth') return { unrevoked: null };
-      failures = await revokeOAuthGrant({ endpoint, credential, fetch: globalThis.fetch });
-    } catch (cause) {
-      // An unopenable row still leaves Kinu; its grant cannot be revoked from here.
-      this.dropCredential(key);
-      failures = [toKinuError({ doing: 'reading the credential to revoke it', cause, otherwise: 'io' })];
-    }
+      if (Result.isFailure(read)) return [read.failure];
 
-    for (const failure of failures) diagnostics.failure('credential.revoke_failed', failure, { credentialKey: key });
+      if (read.success?.kind !== 'oauth') return null;
+      const credential = read.success;
 
-    return { unrevoked: failures.length === 0 ? null : failures.map((failure) => failure.message).join(' · ') };
+      return yield* Effect.catch(
+        attempt({ doing: `revoking ${key} at its provider`, otherwise: 'unavailable' }, () => revokeOAuthGrant({ endpoint, credential, fetch: globalThis.fetch })),
+        (failure) => Effect.succeed([failure]),
+      );
+    });
+
+    return settle(Effect.map(revoking, (failures): DisconnectOutcome => {
+      if (failures === null) return { unrevoked: null };
+
+      for (const failure of failures) diagnostics.failure('credential.revoke_failed', failure, { credentialKey: key });
+
+      return { unrevoked: failures.length === 0 ? null : failures.map((failure) => failure.message).join(' · ') };
+    }));
   }
 
 
@@ -406,10 +412,8 @@ export class UserCredentials {
 
     if (stored === null) return null;
 
-    try { return await (await this.cipher()).open(this.mcpHeadersAad(serverId), stored); }
-    catch (err) {
-      throw toKinuError({ doing: `opening the stored headers of MCP server ${serverId}`, cause: err, otherwise: 'bad_input' });
-    }
+    return settle(attempt({ doing: `opening the stored headers of MCP server ${serverId}`, otherwise: 'bad_input' },
+      async () => (await this.cipher()).open(this.mcpHeadersAad(serverId), stored)));
   }
 
   /** The endpoint is not a secret and is absent from listCredentials(); the provider proxy reads it without the login. */
@@ -553,7 +557,7 @@ export class UserCredentials {
   async selectAIGateway(caller: UserCaller, gatewayId: string | null): Promise<void> {
     await this.host.requireTier(caller, 'ai_gateway.admin');
 
-    if (gatewayId !== null && !isCloudflareAIGatewayId(gatewayId)) throw new KinuError('bad_input', 'Invalid AI Gateway id.');
+    if (gatewayId !== null && !isCloudflareAIGatewayId(gatewayId)) return settle(Effect.fail(new KinuError('bad_input', 'Invalid AI Gateway id.')));
 
     const changed = gatewayId === null
       ? this.host.sqlx(`DELETE FROM user_config WHERE key = ? RETURNING key`, AI_GATEWAY_CONFIG_KEY)
@@ -620,7 +624,7 @@ export class UserCredentials {
     await this.host.requireTier(caller, 'ai_gateway.admin');
     const cred = await this.readCredential(CLOUDFLARE_OAUTH_CRED_KEY);
 
-    if (cred?.kind !== 'oauth') throw new KinuError('bad_input', 'Cloudflare is not connected.');
+    if (cred?.kind !== 'oauth') return settle(Effect.fail(new KinuError('bad_input', 'Cloudflare is not connected.')));
     await this.writeCredential(CLOUDFLARE_OAUTH_CRED_KEY, withCloudflareAccount(cred, accountId));
     const owner = await ownerCaller(this.host.env);
     await this.selectAIGateway(owner, null);

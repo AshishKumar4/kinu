@@ -154,7 +154,7 @@ export class UserWorkspaces {
     validateWorkspaceName(name);
 
     if (resolved.kind === 'workspace' && resolved.workspace !== name) {
-      throw new KinuError('denied', `Workspace "${resolved.workspace}" may only push its own overview.`);
+      return settle(Effect.fail(new KinuError('denied', `Workspace "${resolved.workspace}" may only push its own overview.`)));
     }
 
     const parsed = v.parse(WorkspaceOverviewSchema, overview);
@@ -484,7 +484,7 @@ export class UserWorkspaces {
     await this.host.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
 
-    if (!/^[a-f0-9]{32}$/.test(ownerUserId)) throw new KinuError('bad_input', 'invalid owner user id');
+    if (!/^[a-f0-9]{32}$/.test(ownerUserId)) return settle(Effect.fail(new KinuError('bad_input', 'invalid owner user id')));
 
     if (this.host.sqlx(`UPDATE user_workspaces SET delete_pending = 1 WHERE name = ? RETURNING name`, name).length === 0) return;
     this.releaseAssistant(name);
@@ -517,7 +517,7 @@ export class UserWorkspaces {
     await this.host.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
 
-    if (!/^[a-f0-9]{32}$/.test(ownerUserId)) throw new KinuError('bad_input', 'invalid owner user id');
+    if (!/^[a-f0-9]{32}$/.test(ownerUserId)) return settle(Effect.fail(new KinuError('bad_input', 'invalid owner user id')));
     await this.tearDownWorkspace(name, ownerUserId);
   }
 

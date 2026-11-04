@@ -57,7 +57,7 @@ import {
 } from './profile-authority';
 import type { LocalOAuthStore } from './oauth-store';
 import type { FileCheckpoints } from '@kinu.run/core';
-import { diagnostics, KinuError, renderCauseChain, settleSync, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, renderCauseChain, settle, settleSync, toKinuError } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import { adoptLocalActorHandle, localActorDirectory, bindLocalActor, bindLocalActorReference, openLocalRootActor, requireLocalActorWorkspace, type LocalActorConfig, type LocalActorBinding } from '@kinu.run/core';
 import * as v from 'valibot';
@@ -488,7 +488,7 @@ export function shareLocalWorkspacePlane(actor: CLIRuntime, workspace: CLIRuntim
   requireLocalActorWorkspace(workspace.actor, actor.actor);
 
   if (actor.cwd !== workspace.cwd || actor.space !== workspace.space) {
-    throw new KinuError('bad_input', `a hire works in its workspace's folder ${workspace.cwd}, not ${actor.cwd}`);
+    return settleSync(Effect.fail(new KinuError('bad_input', `a hire works in its workspace's folder ${workspace.cwd}, not ${actor.cwd}`)));
   }
 
   return Object.assign(actor, { checkpoints: workspace.checkpoints });
@@ -583,7 +583,7 @@ export async function buildLocalActorRuntime(
     return await buildCLIHeadRuntime(opts);
   }
 
-  throw new KinuError('denied', `A ${binding.origin} actor's runtime is not built by this workspace's own session.`);
+  return settle(Effect.fail(new KinuError('denied', `A ${binding.origin} actor's runtime is not built by this workspace's own session.`)));
 }
 
 

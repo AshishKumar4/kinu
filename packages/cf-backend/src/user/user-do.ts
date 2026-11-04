@@ -1671,7 +1671,7 @@ export class UserDO extends Agent<Env> {
   async deleteAccount(caller: UserCaller, ownerUserId: string): Promise<{ ok: true; workspaces: number }> {
     await this.requireTier(caller, 'account');
 
-    if (!/^[a-f0-9]{32}$/.test(ownerUserId)) throw new KinuError('bad_input', 'invalid owner user id');
+    if (!/^[a-f0-9]{32}$/.test(ownerUserId)) return settle(Effect.fail(new KinuError('bad_input', 'invalid owner user id')));
     const person = { userId: ownerUserId, email: (this.sqlx<{ email: string }>(`SELECT email FROM user_profile WHERE id = 1`)[0]?.email ?? '').trim().toLowerCase() };
 
     // Every account it sent a card forgets it; its own card jobs are withdrawn first, so none lands after. Every account
