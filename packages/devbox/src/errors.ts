@@ -61,6 +61,12 @@ export function attempt<A>(code: DevboxErrorCode, run: (signal: AbortSignal) => 
   return Effect.tryPromise({ try: run, catch: cause => failure(code, { cause }, doing) });
 }
 
+/** `effect` with what it did not own answered as `attempt` answers a throw: a rejection it awaited (`Effect.promise` keeps
+ *  one as a defect) fails in `code`, in the thrower's words; a DevboxError it failed with, or threw, passes unchanged. */
+export function attempted<A>(code: DevboxErrorCode, effect: Effect.Effect<A, DevboxError>, doing?: string): Effect.Effect<A, DevboxError> {
+  return Effect.catchCause(effect, (cause) => (Cause.hasInterruptsOnly(cause) ? Effect.failCause(cause) : Effect.fail(failure(code, { cause: Cause.squash(cause) }, doing))));
+}
+
 export function attemptSync<A>(code: DevboxErrorCode, run: () => A, doing?: string): Effect.Effect<A, DevboxError> {
   return Effect.try({ try: run, catch: cause => failure(code, { cause }, doing) });
 }

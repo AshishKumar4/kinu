@@ -4,6 +4,7 @@
  * terminal attach holds on it inside the box, telling its pane each new reason (D109). Every other pending is answered
  * at once.
  */
+import { Effect } from 'effect';
 import type { RestoreReadiness } from './restoration';
 
 /** How often a held ask asks again. */
@@ -21,8 +22,9 @@ const BASE_STALL_MS = 180_000;
  */
 const QUIESCE_HOLD_MS = 180_000;
 
-export interface ReadinessHold {
-  readonly ask: () => Promise<RestoreReadiness>;
+export interface ReadinessHold<E> {
+  /** The box's readiness now, or why it could not be read: the hold ends in that failure. */
+  readonly ask: () => Effect.Effect<RestoreReadiness, E>;
   /** Waits `ms` before the next ask; it may end early (a call stopped), and `gone` then says so. */
   readonly wait: (ms: number) => Promise<void>;
   readonly now: () => number;
@@ -33,28 +35,30 @@ export interface ReadinessHold {
 }
 
 /** The first answer that is no held pending, or the box's words once a bound is past. */
-export async function holdReadiness(hold: ReadinessHold): Promise<RestoreReadiness> {
-  let readiness = await hold.ask();
-  let step: string | null | undefined;
-  let movedAt = hold.now();
-  const askedAt = hold.now();
+export function holdReadiness<E>(hold: ReadinessHold<E>): Effect.Effect<RestoreReadiness, E> {
+  return Effect.gen(function* () {
+    let readiness = yield* hold.ask();
+    let step: string | null | undefined;
+    let movedAt = hold.now();
+    const askedAt = hold.now();
 
-  while (readiness.kind === 'pending' && (readiness.building !== undefined || readiness.quiescing === true)) {
-    if (readiness.building === undefined) {
-      if (hold.now() - askedAt >= QUIESCE_HOLD_MS) return { kind: 'pending', reason: `still after ${String(QUIESCE_HOLD_MS / 1000)} s: ${readiness.reason}` };
-    } else if (readiness.building.step !== step) {
-      step = readiness.building.step;
-      movedAt = hold.now();
-    } else if (hold.now() - movedAt >= BASE_STALL_MS) {
-      return { kind: 'pending', reason: `the base snapshot's build made no progress in ${String(BASE_STALL_MS / 1000)} s (at: ${step ?? 'not begun'}); ${readiness.reason}` };
+    while (readiness.kind === 'pending' && (readiness.building !== undefined || readiness.quiescing === true)) {
+      if (readiness.building === undefined) {
+        if (hold.now() - askedAt >= QUIESCE_HOLD_MS) return { kind: 'pending', reason: `still after ${String(QUIESCE_HOLD_MS / 1000)} s: ${readiness.reason}` };
+      } else if (readiness.building.step !== step) {
+        step = readiness.building.step;
+        movedAt = hold.now();
+      } else if (hold.now() - movedAt >= BASE_STALL_MS) {
+        return { kind: 'pending', reason: `the base snapshot's build made no progress in ${String(BASE_STALL_MS / 1000)} s (at: ${step ?? 'not begun'}); ${readiness.reason}` };
+      }
+
+      hold.pending?.(readiness);
+      yield* Effect.promise(() => hold.wait(READINESS_ASK_MS));
+
+      if (hold.gone?.() === true) return readiness;
+      readiness = yield* hold.ask();
     }
 
-    hold.pending?.(readiness);
-    await hold.wait(READINESS_ASK_MS);
-
-    if (hold.gone?.() === true) return readiness;
-    readiness = await hold.ask();
-  }
-
-  return readiness;
+    return readiness;
+  });
 }

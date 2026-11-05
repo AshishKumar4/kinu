@@ -70,7 +70,7 @@ import {
 } from './lifecycle';
 import { createCheckpointLane, createResourceLane, heldUntilDrained, pathScopes, portScope, type ResourceScope } from './operation-lanes';
 import { SupervisedProcesses, type EndTold } from './supervised-processes';
-import { DevboxError, attempt, attemptSync, caught, hold, refuse, rethrow, whenLost, refuseStart, settle, settleSync, startOverrun, startInterrupted, chainAdvanced, type DevboxErrorCode } from './errors';
+import { DevboxError, attempt, attempted, attemptSync, caught, hold, refuse, rethrow, whenLost, refuseStart, settle, settleSync, startOverrun, startInterrupted, chainAdvanced, type DevboxErrorCode } from './errors';
 import { execRecords } from './exec-stream';
 import { BOX_SIZE_ORDER, BoxSizeSchema, DEFAULT_BOX_SIZE, instanceOf, type BoxSize, type ResizeOutcome } from './sizes';
 import type { RestorePhase, RestorePhaseStamps } from './durability/contracts';
@@ -2105,50 +2105,50 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   /** Requests may start a stopped box, then adopt the hook's settled generation (D26). */
   resolveReadiness(): Promise<RestoreReadiness> {
-    return settle(attempt('io', async () => {
-      return await this.#resolveReadiness(this.#teardowns);
-    }));
+    return settle(attempted('io', this.#resolveReadiness(this.#teardowns)));
   }
 
-  async #resolveReadiness(arrived: number): Promise<RestoreReadiness> {
-    if (this.#quiescing !== undefined) return { kind: 'pending', reason: SAVING_AND_STOPPING, quiescing: true };
+  #resolveReadiness(arrived: number): Effect.Effect<RestoreReadiness, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
+      if (this.#quiescing !== undefined) return { kind: 'pending', reason: SAVING_AND_STOPPING, quiescing: true };
 
-    if (arrived !== this.#teardowns) return { kind: 'pending', reason: DESTROYED_AFTER_ARRIVAL };
-    this.#closed = false;
-    const wasRunning = this.ctx.container?.running === true;
-    this.#trace('readiness.enter', { generation: this.#generation, running: wasRunning, phase: this.#restoration.phase });
+      if (arrived !== this.#teardowns) return { kind: 'pending', reason: DESTROYED_AFTER_ARRIVAL };
+      this.#closed = false;
+      const wasRunning = this.ctx.container?.running === true;
+      this.#trace('readiness.enter', { generation: this.#generation, running: wasRunning, phase: this.#restoration.phase });
 
-    if (!wasRunning) await this.#startContainer();
+      if (!wasRunning) yield* Effect.promise(() => this.#startContainer());
 
-    const base = this.#awaitingGolden;
+      const base = this.#awaitingGolden;
 
-    // The step its base is at rides along: the caller holds while the build moves on (D79).
-    if (base !== undefined && this.ctx.container?.running !== true) return base;
-    await this.#adopted();
-    this.#trace('readiness.adopted', { phase: this.#restoration.phase });
+      // The step its base is at rides along: the caller holds while the build moves on (D79).
+      if (base !== undefined && this.ctx.container?.running !== true) return base;
+      yield* Effect.promise(() => this.#adopted());
+      this.#trace('readiness.adopted', { phase: this.#restoration.phase });
 
-    // Native allocation can report running before restoration starts.
-    if (wasRunning && this.#restoration.phase === 'unstarted') await this.#startContainer();
+      // Native allocation can report running before restoration starts.
+      if (wasRunning && this.#restoration.phase === 'unstarted') yield* Effect.promise(() => this.#startContainer());
 
-    if (this.#quiescing !== undefined) return { kind: 'pending', reason: SAVING_AND_STOPPING, quiescing: true };
+      if (this.#quiescing !== undefined) return { kind: 'pending', reason: SAVING_AND_STOPPING, quiescing: true };
 
-    if (arrived !== this.#teardowns) return { kind: 'pending', reason: DESTROYED_AFTER_ARRIVAL };
-    const admission = this.#admission();
+      if (arrived !== this.#teardowns) return { kind: 'pending', reason: DESTROYED_AFTER_ARRIVAL };
+      const admission = this.#admission();
 
-    if (admission !== undefined) return admission;
+      if (admission !== undefined) return admission;
 
-    await this.#armStartup();
-    this.#trace('readiness.armed', { phase: this.#restoration.phase });
+      yield* Effect.promise(() => this.#armStartup());
+      this.#trace('readiness.armed', { phase: this.#restoration.phase });
 
-    if (this.#restoration.phase === 'unattached' && !this.#restoration.retry) {
-      refuse(new DevboxError('refused', terminalRefusal(this.#restoration.reason)));
-    }
+      if (this.#restoration.phase === 'unattached' && !this.#restoration.retry) {
+        return yield* Effect.fail(new DevboxError('refused', terminalRefusal(this.#restoration.reason)));
+      }
 
-    return {
-      kind: 'pending',
-      reason: `this devbox is not ready: ${this.#unready() ?? 'the restoration has not settled'}. `
-        + 'A startup is armed, so ask again.',
-    };
+      return {
+        kind: 'pending',
+        reason: `this devbox is not ready: ${this.#unready() ?? 'the restoration has not settled'}. `
+          + 'A startup is armed, so ask again.',
+      };
+    });
   }
 
   restoreStatus(): Promise<RestoreStatus> {
@@ -2164,24 +2164,24 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   /** Strict {@link resolveReadiness}: `pending` is a refusal, never permission. */
   ensureReady(): Promise<RestoreAdmission> {
-    return settle(attempt('io', async () => {
-      return (await this.#ensureReady(this.#teardowns)).admission;
-    }));
+    return settle(Effect.map(attempted('io', this.#ensureReady(this.#teardowns)), ({ admission }) => admission));
   }
 
-  async #ensureReady(arrived: number): Promise<{ readonly admission: RestoreAdmission; readonly container: Container }> {
-    const readiness = await this.#resolveReadiness(arrived);
-    const container = this.ctx.container;
+  #ensureReady(arrived: number): Effect.Effect<{ readonly admission: RestoreAdmission; readonly container: Container }, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
+      const readiness = yield* this.#resolveReadiness(arrived);
+      const container = this.ctx.container;
 
-    if (readiness.kind === 'pending' || container?.running !== true) {
-      refuse(new DevboxError("io", readiness.kind === 'pending' ? readiness.reason : 'this devbox is not ready: its container stopped after it was admitted'));
-    }
+      if (readiness.kind === 'pending' || container?.running !== true) {
+        return yield* Effect.fail(new DevboxError("io", readiness.kind === 'pending' ? readiness.reason : 'this devbox is not ready: its container stopped after it was admitted'));
+      }
 
-    // Every operation route and only callers pass here (maintenance uses `#rawExec` and
-    // scheduled callbacks), so file, port and process routes stamp the lease too (D18).
-    this.stampInteraction();
+      // Every operation route and only callers pass here (maintenance uses `#rawExec` and
+      // scheduled callbacks), so file, port and process routes stamp the lease too (D18).
+      this.stampInteraction();
 
-    return { admission: readiness, container };
+      return { admission: readiness, container };
+    });
   }
 
   /** Starts a box that has run before, as a person opens its workspace, so its computer is ready by the time they ask;
@@ -2297,7 +2297,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
    */
   #spawn(command: string | readonly string[], { cwd, env }: ExecOptions, running: RunningExec): Effect.Effect<ExecProcess, DevboxError> {
     return Effect.gen({ self: this }, function* () {
-      const { container } = yield* attempt('not-ready', () => this.#ensureReady(this.#teardowns));
+      const { container } = yield* attempted('not-ready', this.#ensureReady(this.#teardowns));
 
       if (running.cancelled) return yield* Effect.fail(new DevboxError('cancelled', 'computer exec cancelled before admission'));
       const argv = typeof command === 'string' ? launched(command) : command;
@@ -2480,7 +2480,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         });
 
         if (!restarted) return yield* new DevboxError('io', `this devbox is not ready: ${this.#unready() ?? 'the restoration has not settled'}`);
-        yield* attempt('not-ready', async () => this.#ensureReady(arrived));
+        yield* attempted('not-ready', this.#ensureReady(arrived));
       }
 
       return yield* attempt('not-ready', async (): Promise<AttachOutcome> => await this.ctx.storage.get<AttachOutcome>(LAST_ATTACH_KEY)
@@ -2789,19 +2789,18 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   /** Native kill acknowledges both termination and absence; a failure keeps the launch record. */
   stopSupervised(processId: string): Promise<{ stopped: boolean }> {
-    return settle(attempt('io', async () => {
-      const arrived = this.#teardowns;
-      await this.#ensureReady(arrived);
-      const result = await this.#supervised().run({ kind: 'stop', processId });
+    return settle(attempted('io', Effect.gen({ self: this }, function* () {
+      yield* this.#ensureReady(this.#teardowns);
+      const result = yield* Effect.promise(() => this.#supervised().run({ kind: 'stop', processId }));
       const ended = result.kind === 'stopped' && result.stopped;
 
       this.stampInteraction();
 
       // A stopped job's session goes with it: the shell under its output, and its tab (D95).
-      if (ended) await this.#endSession(jobSessionId(processId));
+      if (ended) yield* Effect.promise(() => this.#endSession(jobSessionId(processId)));
 
       return { stopped: ended };
-    }));
+    })));
   }
 
   /** What a supervised job wrote most recently. */
@@ -2955,7 +2954,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       const release = yield* attempt('io', () => this.#resources.hold(pathScopes({ path })));
 
       const opened = yield* Effect.result(Effect.gen({ self: this }, function* () {
-        yield* attempt('not-ready', () => this.#ensureReady(arrived));
+        yield* attempted('not-ready', this.#ensureReady(arrived));
         const stream = yield* this.#readFileStream(path);
 
         return heldUntilDrained(stream, release);
@@ -2998,7 +2997,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       const release = yield* attempt('io', () => this.#resources.hold(scopes));
 
       return yield* Effect.gen({ self: this }, function* () {
-        yield* attempt('not-ready', () => this.#ensureReady(arrived));
+        yield* attempted('not-ready', this.#ensureReady(arrived));
 
         return yield* operation;
       }).pipe(Effect.ensuring(Effect.sync(release)));
@@ -3688,7 +3687,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return Effect.succeed(new Response('WebSocket required', { status: 426 }));
 
     return this.#withActiveCaller(Effect.gen({ self: this }, function* () {
-      const { container } = yield* attempt('io', () => this.#ensureReady(this.#teardowns));
+      const { container } = yield* attempted('io', this.#ensureReady(this.#teardowns));
 
       yield* this.#desktopUp(request.signal);
       const server = `http://127.0.0.1:${String(DESKTOP_PORT)}`;
@@ -3842,7 +3841,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
    *  action's own outcome is what the agent hears. */
   #letUp(kind: DesktopAction['kind']): Effect.Effect<void> {
     return Effect.gen({ self: this }, function* () {
-      const { container } = yield* attempt('io', () => this.#ensureReady(this.#teardowns));
+      const { container } = yield* attempted('io', this.#ensureReady(this.#teardowns));
       const letUp = decoded(yield* attempt('io', async () => await (await launch(container, ['python3', '-c', LET_UP_PY, 'devbox-let-up'], {})).output()));
 
       if (letUp.exitCode !== 0) return yield* Effect.fail(new DevboxError('io', `letting up what was down failed: ${letUp.stderr.trim()}`));
@@ -3963,7 +3962,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     const events = await attachWhenReady({
       socket: server, held: () => this.#terminals.has(server),
       ask: () => this.#resolveReadiness(arrived), wait: (ms) => scheduler.wait(ms), now: () => Date.now(),
-      attach: () => this.#withActiveCaller(attempt('io', async () => attachTerminal((await this.#ensureReady(arrived)).container, params, session, server))),
+      attach: () => this.#withActiveCaller(attempted('io', Effect.flatMap(this.#ensureReady(arrived), ({ container }) => Effect.promise(() => attachTerminal(container, params, session, server))))),
     });
 
     if (events === null) this.#terminals.delete(server);
@@ -4024,11 +4023,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return settle(Effect.gen({ self: this }, function* () {
       const session = yield* this.#session(id);
 
-      yield* this.#withActiveCaller(attempt("io", async () => {
-        const { container } = await this.#ensureReady(this.#teardowns);
-
-        return resetTerminal(container, session.id);
-      }));
+      yield* this.#withActiveCaller(attempted("io", Effect.flatMap(this.#ensureReady(this.#teardowns), ({ container }) => Effect.promise(() => resetTerminal(container, session.id)))));
     }));
   }
 
