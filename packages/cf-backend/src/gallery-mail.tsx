@@ -433,7 +433,7 @@ function Message({ mail, box, open, inChat, onToggle }: { mail: Mail; box: Addre
         <p data-mail-woke={mail.woke?.as} className="flex items-center gap-1.5 t-meta p-text-3">
           <AgentFaceIcon size={13} className="shrink-0" />
           {woke}
-          {!inChat && <> · <Link to={chat} className="inline-flex items-center gap-0.5 p-accent-fg hover:underline">Open chat<ArrowUpRightIcon size={11} /></Link></>}
+          {!inChat && <> · <Link to={chat} className="inline-flex items-center gap-0.5 p-link">Open chat<ArrowUpRightIcon size={11} /></Link></>}
         </p>
       )}
       {mail.html !== undefined ? <SealedHtml html={mail.html} /> : <Body text={mail.text} />}

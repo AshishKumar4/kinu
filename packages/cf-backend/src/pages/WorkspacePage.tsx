@@ -464,7 +464,7 @@ function OpenWorkspace({ onGone, workspace: agentId, elsewhere, layout }: {
           <WarningCircleIcon size={12} className="shrink-0" />
           <span className="break-words">{closeWords(state.terminalClose).title}. {closeWords(state.terminalClose).detail}</span>
           <Button variant="ghost" size="sm" onClick={state.retryLoad}>Try again</Button>
-          <Link to="/" className="p-accent-fg hover:underline">Back to your workspaces</Link>
+          <Link to="/" className="p-link">Back to your workspaces</Link>
         </div>
       )}
 

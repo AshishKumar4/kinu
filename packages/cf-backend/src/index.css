@@ -369,6 +369,8 @@ body { background: var(--c-bg); color: var(--c-text); }
 @utility p-text-2 { color: var(--c-text-2); }
 @utility p-text-3 { color: var(--c-text-3); }
 @utility p-accent-fg { color: var(--c-accent-fg); }
+/* Words that go somewhere: the accent, underlined under a pointer. */
+@utility p-link { color: var(--c-accent-fg); &:hover { text-decoration: underline; } }
 @utility p-accent-mark { color: var(--c-accent-mark); }
 @utility p-accent { color: var(--c-accent); }
 @utility p-selected { background: var(--c-selected); }

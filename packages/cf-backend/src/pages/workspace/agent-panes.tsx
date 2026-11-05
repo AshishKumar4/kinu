@@ -54,7 +54,7 @@ export function TerminalCloseBoundary({ close, onRetry }: {
       <p className="t-meta p-text-3 max-w-sm break-words">{closeWords(close).detail}</p>
       <div className="flex items-center gap-3">
         <Button variant="ghost" size="sm" onClick={onRetry}>Try again</Button>
-        <Link to="/" className="t-meta p-accent-fg hover:underline">Back to your workspaces</Link>
+        <Link to="/" className="t-meta p-link">Back to your workspaces</Link>
       </div>
     </div>
   );

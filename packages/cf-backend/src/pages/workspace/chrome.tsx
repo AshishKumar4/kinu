@@ -220,7 +220,7 @@ export function GoneWorkspace() {
     <div className="h-full flex flex-col items-center justify-center gap-2 px-6 text-center" data-workspace-gone>
       <p className="t-body p-text">This workspace no longer exists</p>
       <p className="t-meta p-text-3">It was deleted, here or somewhere else.</p>
-      <Link to="/" className="t-meta mt-1 p-accent-fg hover:underline">Back to your workspaces</Link>
+      <Link to="/" className="t-meta mt-1 p-link">Back to your workspaces</Link>
     </div>
   );
 }

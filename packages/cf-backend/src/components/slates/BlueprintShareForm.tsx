@@ -1,16 +1,17 @@
 /** The blueprint half of the share dialog; a fork calls its forker's own surface. The live half is `LiveShareForm`. */
 import { Effect } from 'effect';
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { Loader } from "@/components/ui/Loader";
 import { Button } from "@/components/ui/Button";
 import * as v from "valibot";
-import { BlueprintInspectionSchema, SlateShareRecordSchema, blueprintPagePath, type BlueprintInspection, type SlateAnswer, type SlateShareRecord } from "@kinu.run/core";
+import { BlueprintInspectionSchema, SlateShareRecordSchema, blueprintPagePath, type SlateAnswer } from "@kinu.run/core";
 import { settleSync, showing, detach } from "@kinu.run/core/obs";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { SecretWarning } from "@/pages/BlueprintPage";
 import { publishBlueprint, revokeShare, type Published } from "@/lib/shared-api";
 import { EmailsField, emailsOf, Failure, Lead, StopButton } from "./ShareParts";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { Notice } from "@/components/ui/Notice";
 import { Group } from "@/components/ui/Group";
 import { Select } from "@/components/ui/Select";
@@ -35,6 +36,44 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
+/** What the copy is made from: the slate's versions (newest chosen unless the owner picks), its shares still standing,
+ *  and the inspection of exactly the bytes that would ship, read again on every choice. */
+function useCopyReads(rpc: WorkspaceRpc, slate: string) {
+  const loadSlate = useCallback(async () => {
+    let page = answered(await rpc("slate", [{ op: "history", id: slate }]), HistorySchema);
+    const ids = page.versions.map((entry) => entry.id);
+
+    for (let after = page.next; after !== null; after = page.next) {
+      page = answered(await rpc("slate", [{ op: "history", id: slate, after }]), HistorySchema);
+      ids.push(...page.versions.map((entry) => entry.id));
+    }
+
+    const rows = answered(await rpc("slate", [{ op: "shares" }]), v.array(SlateShareRecordSchema));
+
+    return { versions: ids, shares: rows.filter((share) => share.slate === slate && share.revokedAt === null) };
+  }, [rpc, slate]);
+
+  const read = useAsyncResource(loadSlate);
+  const versions = lastValue(read.resource)?.versions ?? null;
+  const [chosen, setVersion] = useState<string | null>(null);
+  const version = chosen ?? versions?.at(-1) ?? null;
+  const [include, setInclude] = useState<Set<string> | null>(null);
+  // Revoked here since the read; the rest stand.
+  const [revoked, setRevoked] = useState<ReadonlySet<string>>(new Set());
+  const shares = (lastValue(read.resource)?.shares ?? []).filter((share) => !revoked.has(share.id));
+
+  // Every choice re-inspects: the warnings describe exactly the bytes that would ship.
+  const inspect = useCallback(async () => (version === null ? null : answered(
+    await rpc("slate", [{ op: "inspect", id: slate, version, include: include === null ? undefined : [...include] }]), BlueprintInspectionSchema,
+  )), [rpc, slate, version, include]);
+
+  const inspected = useAsyncResource(inspect);
+  const inspection = lastValue(inspected.resource);
+  const failed = [read.resource, inspected.resource].find((each) => each.status === "error");
+
+  return { versions, version, setVersion, include, setInclude, shares, setRevoked, inspection, readErr: failed?.status === "error" ? failed.message : null };
+}
+
 export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onListingPending }: {
   workspace: string;
   slate: string;
@@ -44,50 +83,13 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
   onBusy: (busy: boolean) => void;
   onListingPending?: () => void;
 }) {
-  const [versions, setVersions] = useState<string[] | null>(null);
-  const [version, setVersion] = useState<string | null>(null);
-  const [include, setInclude] = useState<Set<string> | null>(null);
-  const [inspection, setInspection] = useState<BlueprintInspection | null>(null);
-  const [shares, setShares] = useState<SlateShareRecord[]>([]);
+  const { versions, version, setVersion, include, setInclude, shares, setRevoked, inspection, readErr } = useCopyReads(rpc, slate);
   const [emails, setEmails] = useState("");
   const [busy, setBusyState] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const [stepErr, setErr] = useState<string | null>(null);
+  const err = stepErr ?? readErr;
   const [published, setPublished] = useState<Published | null>(null);
   const setBusy = useCallback((next: boolean) => { setBusyState(next); onBusy(next); }, [onBusy]);
-
-  useEffect(() => {
-    let live = true;
-
-    const versionIds = async (): Promise<string[]> => {
-      let page = answered(await rpc("slate", [{ op: "history", id: slate }]), HistorySchema);
-      const ids = page.versions.map((entry) => entry.id);
-
-      for (let after = page.next; after !== null; after = page.next) {
-        page = answered(await rpc("slate", [{ op: "history", id: slate, after }]), HistorySchema);
-        ids.push(...page.versions.map((entry) => entry.id));
-      }
-
-      return ids;
-    };
-
-    detach(Effect.catchCause(Effect.map(Effect.promise(() => Promise.all([versionIds(), rpc("slate", [{ op: "shares" }])])), ([ids, rows]) => {
-      if (!live) return;
-      setVersions(ids);
-      setVersion(ids.at(-1) ?? null);
-      setShares(answered(rows, v.array(SlateShareRecordSchema)).filter((share) => share.slate === slate && share.revokedAt === null));
-    }), showing((chain) => { if (live) setErr(chain); })));
-
-    return () => { live = false; };
-  }, [rpc, slate]);
-
-  // Every choice re-inspects: the warnings describe exactly the bytes that would ship.
-  useEffect(() => {
-    if (version === null) return;
-    let live = true;
-    detach(Effect.catchCause(Effect.map(Effect.promise(() => rpc("slate", [{ op: "inspect", id: slate, version, include: include === null ? undefined : [...include] }])), (result) => { if (live) setInspection(answered(result, BlueprintInspectionSchema)); }), showing((chain) => { if (live) setErr(chain); })));
-
-    return () => { live = false; };
-  }, [rpc, slate, version, include]);
 
   const topLevel = inspection === null ? [] : [...new Set(inspection.entries.map((entry) => entry.path.split("/")[0] ?? entry.path))];
   const includes = (name: string) => include === null ? true : include.has(name);
@@ -122,10 +124,10 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
     setErr(null);
 
     return yield* Effect.catchCause(Effect.gen(function* () {
-      const revoked = yield* Effect.promise(async () => revokeShare({ workspace, share }));
-      setShares((previous) => previous.filter((row) => row.id !== share));
+      const answer = yield* Effect.promise(async () => revokeShare({ workspace, share }));
+      setRevoked((previous) => new Set([...previous, share]));
 
-      if (revoked.listing === 'pending') onListingPending?.();
+      if (answer.listing === 'pending') onListingPending?.();
     }), showing(setErr));
   })), [workspace, onListingPending]);
 
