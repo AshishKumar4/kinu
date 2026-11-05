@@ -1683,47 +1683,66 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 tests/browser/chat-and-files-ux.test.ts',
-    label: 'UI gate self-tests: chat and files',
+    run: 'bun test --timeout=0 tests/browser/chat-ux.test.ts',
+    label: 'UI gate self-tests: chat',
     tier: 'ci',
-    // Measured 2026-09-18 alone on the 24-thread workstation under the wave's
-    // own wrapper (`bun scripts/gate-cost-measure.ts`), load 0.8 at start:
-    // 155.6s wall, 34.4s CPU, 2356 MiB peak for 89 tests over one vite boot.
-    // Declared with headroom for the load the wave runs it under; the two
-    // figures the wave admits against are scripts/gate-cost.json's, not this.
-    seconds: 175,
-    catches: 'the workspace page as a browser lays it out — the four defects this suite '
-      + 'was built for, each invisible to `tsc`, `oxlint` and every source-reading test '
-      + 'here: the streaming caret sitting on a line of its OWN below the paragraph '
-      + 'instead of riding the last line, a turn that finished its prose and went quiet '
-      + 'between steps drawing no live affordance at all, "go to the parent directory" '
-      + 'landing on the filesystem root because every environment reported its working '
-      + 'directory as the literal `.` and the pane did string arithmetic on it, and the '
-      + 'capability row rendering raw snake_case ids with no reading and no absences. '
-      + 'Around them the whole WorkspacePage boundary: chat send admission, terminal '
-      + 'workspace denial, the file-preview and history/roster request generations, the '
-      + 'one composite file plane, a revoked device whose '
-      + 'command may still run, machine linking on the surface that asked for it, '
+    // Split from the chat-and-files row (262 s) on 2026-11-05 so its parts run side by side.
+    // Measured alone 2026-11-05: 151.73 s wall, 90.0 s CPU, 1973 MiB peak Pss, start load 0.23.
+    seconds: 151.73,
+    catches: 'the workspace chat as a browser lays it out — the defects this suite was built '
+      + 'for, each invisible to `tsc`, `oxlint` and every source-reading test here: the '
+      + 'streaming caret sitting on a line of its OWN below the paragraph instead of riding '
+      + 'the last line, and a turn that finished its prose and went quiet between steps '
+      + 'drawing no live affordance at all. Around them the WorkspacePage boundary: chat send '
+      + 'admission, terminal workspace denial, the history/roster request generations, '
       + 'composer and message continuity, the tool preview redacting through the one '
-      + 'canonical policy, WorkTab drawing a section only when it has something to '
-      + 'show, the owner\'s model tiers with each model\'s own levels, the workbench '
-      + 'type scale, the shell rails collapsing and reopening across a reload, and a '
-      + 'hosted actor\'s cards staying out of the workspace\'s own chat. And the '
-      + 'INSPECTOR COLUMN end to end: the account\'s width, the workspace\'s open or '
+      + 'canonical policy, the live indicator following the root claim, and a hosted actor\'s '
+      + 'cards staying out of the workspace\'s own chat.',
+    blind: 'the gallery render itself, and every frame this suite does not open. It '
+      + 'drives the workspace page through gallery fixtures over a locally built bundle — '
+      + 'never a deployed session or a live model — and nothing compares pixels.',
+    inputs: CLIENT_BUILD,
+  },
+  {
+    run: 'bun test --timeout=0 tests/browser/workspace-shell-ux.test.ts',
+    label: 'UI gate self-tests: workspace shell',
+    tier: 'ci',
+    // Split from the chat-and-files row (262 s) on 2026-11-05 so its parts run side by side.
+    // Measured alone 2026-11-05: 141.91 s wall, 88.7 s CPU, 1971 MiB peak Pss, start load 0.37.
+    seconds: 141.91,
+    catches: 'the shell around the workspace chat as a browser lays it out: WorkTab drawing a '
+      + 'section only when it has something to show, the owner\'s model tiers with each '
+      + 'model\'s own levels, every text field on a touch phone at 16px or more, the shell rails collapsing and '
+      + 'reopening across a reload, the home creation form sending one create per gesture, '
+      + 'and the INSPECTOR COLUMN end to end: the account\'s width, the workspace\'s open or '
       + 'closed choice, a gesture outranking the arriving signal, and an anonymous '
       + 'session\'s column opening on the one signal that it has something to show — '
-      + '`stored === null` read as "nothing keys this layout, so nothing is decided" '
-      + 'kept that column shut for the page\'s life, and a browser is the only place '
-      + 'that shows. And the Environment tab\'s LINE TERMINAL, which no gate read: a '
-      + 'command output arrived as bare LF and every row of an `ls -la` started where '
-      + 'the row above it ended, while a pasted two-line command ran its first line and '
-      + 'dropped the second with no echo and no error. Both are measured by driving the '
-      + 'real pane and reading the rows a browser drew.',
-    blind: 'the gallery render itself, and every frame this suite does not open. It '
-      + 'drives the workspace page and the home creation form through gallery fixtures '
-      + 'over a locally built bundle — never a deployed session, a real OAuth flow or a '
-      + 'live model — and nothing compares pixels. The diagnostics drive costs nothing '
-      + 'measurable: 55.8s before and 55.6s after for this suite, 2026-09-01.',
+      + '`stored === null` read as "nothing keys this layout, so nothing is decided" kept '
+      + 'that column shut for the page\'s life, and a browser is the only place that shows.',
+    blind: 'gallery fixtures over a locally built bundle, never a deployed session, a real '
+      + 'OAuth flow or a live model; nothing compares pixels.',
+    inputs: CLIENT_BUILD,
+  },
+  {
+    run: 'bun test --timeout=0 tests/browser/files-ux.test.ts',
+    label: 'UI gate self-tests: files',
+    tier: 'ci',
+    // Split from the chat-and-files row (262 s) on 2026-11-05 so its parts run side by side.
+    // Measured alone 2026-11-05: 124.72 s wall, 73.2 s CPU, 2211 MiB peak Pss, start load 0.5.
+    seconds: 124.72,
+    catches: 'the workspace\'s files and environments as a browser lays them out: "go to the '
+      + 'parent directory" landing on the filesystem root because every environment '
+      + 'reported its working directory as the literal `.` and the pane did string '
+      + 'arithmetic on it; the one composite file plane, the file-preview request '
+      + 'generations, a large folder, Files at every width, a revoked device whose command '
+      + 'may still run, and machine linking on the surface that asked for it. And the '
+      + 'Environment tab\'s LINE TERMINAL, which no gate read: a command output arrived as '
+      + 'bare LF and every row of an `ls -la` started where the row above it ended, while a '
+      + 'pasted two-line command ran its first line and dropped the second with no echo and '
+      + 'no error. Both are measured by driving the real pane and reading the rows a '
+      + 'browser drew.',
+    blind: 'gallery fixtures over a locally built bundle, never a deployed workspace, a '
+      + 'real device or a live shell; nothing compares pixels.',
     inputs: CLIENT_BUILD,
   },
   {
@@ -1741,7 +1760,8 @@ export const LADDER: readonly Gate[] = [
     inputs: CLIENT_BUILD,
   },
   {
-    run: 'bun test --timeout=0 --isolate --path-ignore-patterns=tests/browser/chat-and-files-ux.test.ts '
+    run: 'bun test --timeout=0 --isolate --path-ignore-patterns=tests/browser/chat-ux.test.ts '
+      + '--path-ignore-patterns=tests/browser/files-ux.test.ts --path-ignore-patterns=tests/browser/workspace-shell-ux.test.ts '
       + '--path-ignore-patterns=tests/browser/account-ux.test.ts --path-ignore-patterns=tests/browser/drive-ux.test.ts '
       + '--path-ignore-patterns=tests/browser/slate-preview-ux.test.ts --path-ignore-patterns=tests/browser/slate-sharing-ux.test.ts '
       + 'tests/browser/*-ux.test.ts tests/browser/computed-style.test.ts',

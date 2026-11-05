@@ -1,6 +1,6 @@
 // A live turn's one indicator is derived from each part's stream state, never part order; nothing
 // animates on a clock: a closed part, or an open one with nothing to draw yet, reports `thinking`. What the page
-// offers for an admitted, stranded or settled claim is proven on the page (tests/browser/chat-and-files-ux.test.ts).
+// offers for an admitted, stranded or settled claim is proven on the page (tests/browser/chat-ux.test.ts).
 import { describe, test, expect } from 'bun:test';
 import type { ReasoningUIPart, TextUIPart, ToolUIPart, UIMessage } from 'ai';
 import { liveTailRow, threadLiveTail, turnLiveness } from '@kinu.run/core';
