@@ -115,6 +115,8 @@ export interface UpdateHubOptions {
   signing?: 'none' | 'foreign';
   /** The download goes on past the archive, with no length said, for as long as the machine reads. */
   endless?: boolean;
+  /** The archive's path answers a redirect to the same bytes elsewhere: where a hostile host sends a download on. */
+  redirected?: boolean;
 }
 
 /** An archive followed by zeros, never ending: what a hostile host serves to fill a machine before any checksum. */
@@ -167,7 +169,11 @@ export function startUpdateHub(opts: UpdateHubOptions): UpdateHub {
 
       if (pathname === '/pc/connect') return self.upgrade(req) ? undefined : new Response('upgrade failed', { status: 400 });
 
-      if (pathname === PLATFORM_ARTIFACT) return new Response(opts.endless === true ? endlessBody(opts.archive) : Buffer.from(opts.archive));
+      if (pathname === PLATFORM_ARTIFACT && opts.redirected === true) return Response.redirect(new URL(`/elsewhere${PLATFORM_ARTIFACT}`, req.url), 302);
+
+      if (pathname === PLATFORM_ARTIFACT || pathname === `/elsewhere${PLATFORM_ARTIFACT}`) {
+        return new Response(opts.endless === true ? endlessBody(opts.archive) : Buffer.from(opts.archive));
+      }
 
       if (pathname === `${PLATFORM_ARTIFACT}.sha256`) return new Response(`${opts.sidecarDisagrees === true ? '0'.repeat(64) : digest}  ${PLATFORM_ARTIFACT.slice('/downloads/'.length)}\n`);
 
