@@ -124,9 +124,16 @@ cliPageRoutes.get('/cli/auth', noHead<CliPagesEnv>((c) => renderBrowserApproval(
 
 cliPageRoutes.post('/cli/auth', (c) => settle(approveFromBrowser(c.req.raw, c.env)));
 
+/** The workspace a `/api/cli/workspaces/<name>/…` request names, which the bearer's check admits in the same call. */
+function namedWorkspace(c: CliContext): string | undefined {
+  const named = /^\/api\/cli\/workspaces\/([^/]+)\//u.exec(c.req.path)?.[1];
+
+  return named === undefined ? undefined : decodeURIComponent(named);
+}
+
 function cliBearer(c: CliContext, next: Next): Effect.Effect<Response | undefined> {
   return Effect.gen(function* () {
-    const cli = yield* authenticateCli(c.req.raw, c.env);
+    const cli = yield* authenticateCli(c.req.raw, c.env, namedWorkspace(c));
 
     if (cli instanceof Response) return cli;
     c.set('cli', cli);
@@ -359,7 +366,7 @@ cliRoutes.all('/api/cli/*', async (c) => err(404, `No such CLI route: ${c.req.me
 async function cliAgent<Id>(
   env: CliRoutesEnv<Id>, cli: CliIdentity, name: string,
 ): Promise<CliAgentTarget | Response> {
-  const result = await claimOwnedWorkspace(env, cli.userId, name);
+  const result = await claimOwnedWorkspace(env, cli.userId, name, cli.admitted);
 
   if (Result.isFailure(result)) return err(result.failure.status, result.failure.error);
 

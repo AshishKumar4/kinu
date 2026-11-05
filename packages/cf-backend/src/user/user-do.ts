@@ -99,6 +99,11 @@ export interface AdmittedBrowserSession extends LiveBrowserSession {
   readonly admission?: WorkspaceAdmission | null;
 }
 
+/** A CLI bearer's verification, with the admission of the workspace its request names when it named one. */
+export interface AdmittedCliToken extends CliTokenVerification {
+  readonly admission?: WorkspaceAdmission | null;
+}
+
 /** When the account was deleted: the one thing its object keeps after, until a sign-in makes it an account again. */
 const ACCOUNT_DELETED_KEY = 'account:deleted-at';
 
@@ -924,8 +929,15 @@ export class UserDO extends Agent<Env> {
     return this.sessions.mintCliToken(caller, userId, authorizationHash, label);
   }
 
-  verifyCliToken(caller: UserCaller, token: string): Promise<CliTokenVerification> {
-    return this.sessions.verifyCliToken(caller, token);
+  /** The bearer, and with it, when the request names a workspace, its admission: one read for both, as a browser's. */
+  async verifyCliToken(caller: UserCaller, token: string, workspace?: string): Promise<AdmittedCliToken> {
+    return await this.admittedFor(caller, await this.sessions.verifyCliToken(caller, token), workspace);
+  }
+
+  private async admittedFor(caller: UserCaller, verified: CliTokenVerification, workspace: string | undefined): Promise<AdmittedCliToken> {
+    if (!verified.ok || workspace === undefined) return verified;
+
+    return { ...verified, admission: await this.workspaces.workspaceAdmission(caller, workspace) };
   }
 
   listCliTokens(caller: UserCaller): ReturnType<UserSessions['listCliTokens']> {
@@ -952,8 +964,8 @@ export class UserDO extends Agent<Env> {
     return this.sessions.mintAccessToken(caller, userId, name, scopes);
   }
 
-  verifyAccessToken(caller: UserCaller, token: string): Promise<CliTokenVerification> {
-    return this.sessions.verifyAccessToken(caller, token);
+  async verifyAccessToken(caller: UserCaller, token: string, workspace?: string): Promise<AdmittedCliToken> {
+    return await this.admittedFor(caller, await this.sessions.verifyAccessToken(caller, token), workspace);
   }
 
   listAccessTokens(caller: UserCaller): Promise<AccessTokenRecord[]> {

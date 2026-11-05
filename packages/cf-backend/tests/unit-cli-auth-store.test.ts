@@ -507,6 +507,20 @@ describe('the CLI session inventory', () => {
     harness.close();
   });
 
+  test('a bearer\'s check answers the admission of the workspace its request names, and only for a good bearer', async () => {
+    const { harness, owner, device } = await account();
+
+    const answers = [
+      await harness.userDO.verifyCliToken(owner, device.token, 'workspace-a'),
+      await harness.userDO.verifyCliToken(owner, device.token, 'not-a-workspace'),
+      await harness.userDO.verifyCliToken(owner, `${device.token.slice(0, -1)}x`, 'workspace-a'),
+    ];
+
+    expect(answers.map((answer) => ({ ok: answer.ok, admitted: answer.admission === undefined ? 'unasked' : answer.admission !== null })))
+      .toEqual([{ ok: true, admitted: true }, { ok: true, admitted: false }, { ok: false, admitted: 'unasked' }]);
+    harness.close();
+  });
+
   test('revoke-all is the answer when no hash can name the orphan', async () => {
     const { harness, owner, env, device, lost } = await account();
 
