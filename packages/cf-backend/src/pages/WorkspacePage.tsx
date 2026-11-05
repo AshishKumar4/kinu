@@ -430,6 +430,8 @@ function OpenWorkspace({ onGone, workspace: agentId, elsewhere, layout }: {
   // The delete dialog goes with the bar, so a chat deleted from its sidebar row while the page connects asks too.
   const bar = (
     <>
+      {/* The chat names its workspace for a reader that moves by headings; a view (Overview, Settings) has its own. */}
+      {view === undefined && <h1 className="sr-only">{shownTitle === "" ? agentId : shownTitle}</h1>}
       <WorkspaceBar workspace={agentId} title={shownTitle} editValue={rosterEntry === undefined ? "" : workspaceTitleDraft(rosterEntry)}
         state={state} agents={agentsPanel.list} shown={shownAgent} view={view} inspector={inspectorControl} actions={chatActions}
         focus={focus} pending={pending} />
