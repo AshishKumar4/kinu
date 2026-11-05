@@ -57,7 +57,7 @@ import { AgentTurns } from "./agent-turns";
 import { AgentWakes } from "./agent-wakes";
 import { PendingDeliveries } from "./pending-deliveries";
 import type { AgentTurnActivity, AgentSnapshot, ChatWindow, RunEventRecorder, StoredRow } from '@kinu.run/core';
-import type { SerializedMessage, WebSearchProvider } from '@kinu.run/core';
+import type { ActorOrigin, AiDeps, SerializedMessage, WebSearchProvider } from '@kinu.run/core';
 import { serveNodeProgramCall, type NodeProgramAnswer } from './node-program';
 import type { EgressPrincipal } from '@kinu.run/core';
 import { MODEL_SETTINGS, type CFRuntime } from './runtime';
@@ -281,7 +281,7 @@ import {
 } from "@kinu.run/core";
 import { accountNamed } from './user/workspace-placement';
 import { ComputerProcessEnds, jobState, inspectSubagentStorage, writeActivityLog, backgroundJobNotice, recordServingJobs, type BackgroundJobRunnerDeps, type Clock, type WorkspaceJobPorts, WorkspaceJobAuthorities, actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, durableStamps, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp, LiveWorkers, type Repair, type RunEventInput, type SubagentInspectionAuthority, type ConversationRecall, PLATFORM_LIMITS, ProgramsInFlight, cardWords, type GitHubDeps, type SendState, type SubagentActivityEvent, codemodeSurface, HeldReads, PAGE_KEEPALIVE, type SqlExec, recoverSubagentLifecycles, type ScaffoldRunOptions, initActorClaimTables, ActorClaimStore, initPendingSendTables, createScaffoldCandidateSurface, createScaffoldHistory, type ScaffoldCandidateBinding, type ScaffoldControl, type RefinementDeps, type TurnContinuity, buildBuiltinTools, buildMcpToolSet, McpToolSurfaceCache, type BrowserSessions, browserSessions, currentDateForPrompt, answerDrawsPages, type DynamicContext, type DynamicApproval, type DynamicContextInput, type MissingCapability, ExtensionHost, type PromptFile, PromptFileSchema, type AgentOrchestrator, actorTerminalEffects, DynamicContextLedger, type BackendHost, EvolutionLanes, drainPendingEvents, standingFileLedger, type DynamicDelegate, builtinStores, type ComposedRequest, type AgentsSwarmDeps, type PromptModelContext, isWorkMode, type HeadJournal, LiveHeadJournal, type HeadStreamFrame, type HeadId, type HeadReport, type HeadRuntime, type HeadGrounding, MissionGovernor, type MissionSeam, type MissionBudgetRefusal, type Usage, signalCardId, TurnReplies, type FactsStore, createAgentStores, type SetModelDeps, collectDynamicContext, dynamicReads, type DynamicReads, subagentDelegatesOf, type SubagentRosterEntry, type SqlExecutor, type JobResumer, type InvocationSurface, InvocationSurfaceSchema, RESUMED_SURFACE, type BackgroundJobStore, type TaskListStore, resumeBackgroundJob, resumableBackgroundJob, computerProcessJob, computerProcessResume, stopComputerProcessJob, harvestBackgroundJob, isWorkspaceProcessJob, stopWorkspaceProcessJob, workspaceProcessJobRuns, cancelCurrentWork, getStoredModelSpec, type ChatHistoryPage, PositionPageRequestSchema, type PositionPageRequest, type MctsSearchStore, isSteerBranchRunId, type ActiveSkillSet, type TurnReads, type PlanDecisionOutcome, type ReviewAnnotation, type PlanReviewDecision, type PlanReviewResult, type OwnerAnswer, type SubagentRuntime, type TemporaryAgentPort, subagentTitle, temporaryPortFor, bootstrapScaffold, applyWorkspaceTitle, suggestWorkspaceTitle, parseModelSpec, specModelInfo, assembleActorTurn, ModelCatalogSession, resolveEffectiveModelSpec, type ModelInfo, type AdmittedInstructionDecision, type InstructionSourceRow, type InstructionSourceView, JsonObjectSchema, changeRoleAsOwner, captureOperationProfile, runOperationProfile, withOperationProfile, providerAccounts, type ProviderAccounts, scopedTurnSurface, toolsNamespace, runWorkModeInvocation, hostedSurfaceActor, resolveModelRoute, completeOnRoute, routedLlm, tierRefusals, type TierRefusals, slateToolReach, callCodemodeMember, requireCodemodeMember, inWorkMode, GITHUB_MCP_PRESET, recognizeGitHubMcp, type SerializableToolDescriptor, OwnerAnswersSchema, REPORT_TOOL, type ActiveRoster, type ProfileCatalogEnvelope, toolsInWorkMode, type TaskPlan, withTaskPlan, providersInWorkMode, providersWithoutOwnerSecrets, withholdingOwnerSecrets, currentWorkMode, requireWorkModePermission, type ResolvedTurnProfile, type ModelCallSpend, type ToolSurfaceNarrowing, type AgentInbox, childContextResolver, recoveryBackoffMs, TerminalTransitions, initTerminalEffectTable, turnRecordingEffects, type TerminalEffectFault, type CodemodeProvider, type SlateRoute, type SlateSurfaceValue, type UserCaller, ensureIdentityTable, initMissionBudgetTable, JOB_STAMP_ENV, sha256Hex, webSearchChainOf } from "@kinu.run/core";
-import { type SlateCallerHop, initSlateUsageTable, slateAiAnswer } from "@kinu.run/core/slates";
+import { type SlateCallerHop, type SlateAiModel, type SlateAiSeams, initSlateUsageTable, programAiAnswer, slateAiAnswer } from "@kinu.run/core/slates";
 import { getCurrentAgent } from "agents";
 import { MessageType } from "agents/chat";
 import { ActorChatRooms, ChatWireTransport } from "./chat-transport";
@@ -306,6 +306,7 @@ import { initWorkspaceGenerationTable } from "@kinu.run/core/workspace";
 import { attributeWorkspace, installAnalyticsDiagnostics, recordToolRow, recordTtftRow, recordTurnRow } from "@kinu.run/core/analytics";
 import { TERMINAL_RETRY_JOB, WakeJobs, type WakePace } from "./wake-jobs";
 import { callUserMcpTool } from "./user-mcp-call";
+import { RunWrites } from './run-events-routes';
 
 const RUN_EVENT_EMIT_FAILED = {
   tool_call_end: 'event.tool_call_end_emit_failed',
@@ -2570,19 +2571,32 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     actor?: ActorHandle,
     admit?: () => void,
   ): Promise<SlateSurfaceValue> {
-    // A tier the catalog does not name is refused by the resolver as bad input.
-    const { profile } = await this.profiles.resolve({
-      actor: actor ?? this.actorHandle(), workMode: 'build', availableTools: [], explicitTier: route.tier,
-    });
-
-    // Priced as every call is: its model's rate, warmed when it is not the turn's own.
-    await this.modelCatalog.warm([profile.tier.model]);
+    const named = await this.aiModel(actor ?? this.actorHandle(), route.tier);
     // A viewer's call is admitted once the model is ready, as it is asked.
     admit?.();
 
-    return slateAiAnswer(route, { spec: profile.tier.model, tier: profile.tier.id }, {
+    return slateAiAnswer(route, named, this.aiSeams());
+  }
+
+  /** The model `actor`'s profile names for `tier`, priced: a tier the catalog does not name is refused as bad input. */
+  private async aiModel(actor: ActorHandle, tier: string | undefined): Promise<SlateAiModel> {
+    const { profile } = await this.profiles.resolve({ actor, workMode: 'build', availableTools: [], explicitTier: tier });
+
+    // Priced as every call is: its model's rate, warmed when it is not the turn's own.
+    await this.modelCatalog.warm([profile.tier.model]);
+
+    return { spec: profile.tier.model, tier: profile.tier.id };
+  }
+
+  private aiSeams(): SlateAiSeams {
+    return {
       resolveModel: (spec) => this.ownedModelServices.resolveModel(spec), report: (report) => { this.accounting.reportModelCall(report); }, operations: this.accounting.operations,
-    });
+    };
+  }
+
+  /** `ai.*` for `actor`'s programs: the slate's call, as the actor's own spend. */
+  private programAi(actor: ActorHandle, origin: ActorOrigin): AiDeps {
+    return { run: async (input) => programAiAnswer(input, await this.aiModel(actor, input.tier), { ...this.aiSeams(), origin }) };
   }
 
   /**
@@ -2773,6 +2787,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       mail: this.mailFor(this.rt.actor.actorId, 'main'),
       google: this.googleFor(this.rt.actor.actorId, 'main'),
       github: this.githubReads(),
+      ai: this.programAi(this.actorHandle(), 'system'),
     };
   }
 
@@ -3184,6 +3199,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
 
     return hostedSurfaceActor(actor, {
       ...reached,
+      ai: this.programAi(actor.handle, actor.record.origin),
       web: { search, files: actor.runtime.storage, browser: { sessions: this.browserSessionsFor(actor.runtime.actor.actorId), prelude: BROWSER_PRELUDE } },
     });
   }
@@ -4484,7 +4500,12 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
         // Its hirer hears it as a delivery of its own, whichever agent hired it.
         return await this.agentDeliveries(parentActorId).signals.send(signal);
       },
-    }, this.deleting.signal, (bound, call) => this.agentTurns.holds(actorId, bound, call), (turnId) => this.agentTurns.cutOff(actorId, turnId));
+    }, this.deleting.signal, {
+      fenced: (bound, call) => this.agentTurns.holds(actorId, bound, call),
+      cutOff: (turnId) => this.agentTurns.cutOff(actorId, turnId),
+      // A stream follows main's runs and this object's own (`getRunEventText`).
+      heard: () => { if (actorId === this.actorHandle().actorId) this._runWrites?.ring(); },
+    });
   }
 
   private agentBound(actorId: string): BoundActor {
@@ -9023,6 +9044,21 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
    *  isolate; any other (a branch head's, the workspace's own lanes) is this object's. */
   async getRunEvents(runId: string, opts?: RunEventQuery): Promise<RunEvent[]> {
     return await this.runRead(runId, opts, (isolate, snapshot) => isolate.runEvents(snapshot, runId, opts ?? null), getRunEvents);
+  }
+
+  private _runWrites: RunWrites | null = null;
+
+  /** Not @callable: serves the run-event stream. The count of run-event writes once it passes `seen`, or after `ms`; made
+   *  at a stream's first ask, so no write rings anything while none follows. */
+  async awaitRunWrites(seen: number, ms: number): Promise<number> {
+    if (this._runWrites === null) {
+      const writes = new RunWrites(REAL_CLOCK);
+
+      this._runWrites = writes;
+      this.eventRecorder.observe(() => { writes.ring(); });
+    }
+
+    return await this._runWrites.after(seen, ms);
   }
 
   /** Not @callable: serves the run-event routes. */

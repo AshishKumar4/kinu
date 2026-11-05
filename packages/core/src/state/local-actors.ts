@@ -7,7 +7,7 @@ import { WorkspaceActorDirectory, type CreateWorkspaceActor, type WorkspaceActor
 import { bindActorHandle, type ActorHandle, type ActorReference } from '../identity/actor-handle';
 import type { SqlExecutor } from '../types/primitives';
 import { KinuError } from '../obs/error';
-import { settleSync } from '../obs/effect';
+import { settle, settleSync } from '../obs/effect';
 
 interface LocalActorScope {
   readonly directory: WorkspaceActorDirectory;
@@ -55,7 +55,7 @@ export function openLocalRootActor(sql: SqlExecutor): ActorHandle {
 /** The directory (single membership authority) and storage (single physical store) `createActorHost` is built from. */
 export function localActorDirectory(root: ActorHandle) {
   return settleSync(Effect.gen(function* () {
-    const scope = scopeFor(root);
+    const scope = yield* scopeFor(root);
 
     if (root.parentActorId !== null) return yield* Effect.fail(new KinuError('denied', 'Only the local root owns the actor directory.'));
 
@@ -63,13 +63,15 @@ export function localActorDirectory(root: ActorHandle) {
   }));
 }
 
-function scopeFor(actor: ActorHandle): LocalActorScope {
-  const scope = actors.get(actor);
+function scopeFor(actor: ActorHandle): Effect.Effect<LocalActorScope, KinuError> {
+  return Effect.suspend(() => {
+    const scope = actors.get(actor);
 
-  if (!scope) throw new KinuError('missing', 'The local actor has no root directory binding.');
-  scope.directory.validate(actor, scope.path);
+    if (!scope) return Effect.fail(new KinuError('missing', 'The local actor has no root directory binding.'));
+    scope.directory.validate(actor, scope.path);
 
-  return scope;
+    return Effect.succeed(scope);
+  });
 }
 
 function bindScoped(scope: LocalActorScope, reference: ActorReference): LocalActorBinding {
@@ -91,42 +93,45 @@ export function adoptLocalActorHandle(
   reference: ActorReference,
   handle: ActorHandle,
 ): void {
-  const scope = scopeFor(parent);
-  const path = scope.directory.storagePath(reference);
-  scope.directory.validate(reference, path);
-  actors.set(handle, { ...scope, path });
+  return settleSync(Effect.map(scopeFor(parent), (scope) => {
+    const path = scope.directory.storagePath(reference);
+    scope.directory.validate(reference, path);
+    actors.set(handle, { ...scope, path });
+  }));
 }
 
-function bindChild(scope: LocalActorScope, reference: ActorReference, name: string): LocalActorBinding {
-  const binding = bindScoped(scope, reference);
+function bindChild(scope: LocalActorScope, reference: ActorReference, name: string): Effect.Effect<LocalActorBinding, KinuError> {
+  return Effect.suspend(() => {
+    const binding = bindScoped(scope, reference);
 
-  if (binding.name !== name) throw new KinuError('denied', 'The actor alias does not match its directory record.');
-
-  return binding;
+    return binding.name === name ? Effect.succeed(binding) : Effect.fail(new KinuError('denied', 'The actor alias does not match its directory record.'));
+  });
 }
 
 /** Read from the directory each time: a cache would let a retired creation keep answering. */
 export function bindLocalActorReference(caller: ActorHandle, reference: ActorReference): LocalActorBinding {
-  return bindScoped(scopeFor(caller), reference);
+  return settleSync(Effect.map(scopeFor(caller), (scope) => bindScoped(scope, reference)));
 }
 
 type LocalActorCreation = Omit<CreateWorkspaceActor, 'parent'>;
 
 export function registerLocalActor(parent: ActorHandle, input: LocalActorCreation): LocalActorBinding {
-  const scope = scopeFor(parent);
-  const entry = scope.directory.apply(parent, scope.path, { action: 'register', creationId: input.creationId, name: input.name, origin: input.origin, lifetime: input.lifetime });
+  return settleSync(Effect.gen(function* () {
+    const scope = yield* scopeFor(parent);
+    const entry = scope.directory.apply(parent, scope.path, { action: 'register', creationId: input.creationId, name: input.name, origin: input.origin, lifetime: input.lifetime });
 
-  return bindChild(scope, entry.reference, input.name);
+    return yield* bindChild(scope, entry.reference, input.name);
+  }));
 }
 
 export function openLocalActor(parent: ActorHandle, name: string): LocalActorBinding {
   return settleSync(Effect.gen(function* () {
-    const scope = scopeFor(parent);
+    const scope = yield* scopeFor(parent);
     const entry = scope.directory.apply(parent, scope.path, { action: 'resolve', name });
 
     if (entry.state !== 'active') return yield* Effect.fail(new KinuError('missing', 'The local actor is retired.'));
 
-    return bindChild(scope, entry.reference, name);
+    return yield* bindChild(scope, entry.reference, name);
   }));
 }
 
@@ -151,8 +156,8 @@ export function bindLocalActor(sql: SqlExecutor, binding: LocalActorBinding): Ac
 /** Rebind a file plane to an actor that this root has already issued. */
 export function requireLocalActorWorkspace(origin: ActorHandle, actor: ActorHandle): void {
   return settleSync(Effect.gen(function* () {
-    const owner = scopeFor(origin);
-    const child = scopeFor(actor);
+    const owner = yield* scopeFor(origin);
+    const child = yield* scopeFor(actor);
 
     if (owner.directory !== child.directory || origin.workspaceId !== actor.workspaceId) return yield* Effect.fail(new KinuError('denied', 'The actor belongs to a different local workspace.'));
   }));
@@ -192,27 +197,28 @@ async function retireLocalCreation(retirement: LocalRetirement): Promise<void> {
   try { await work; } finally { if (pending.get(reference.actorId) === work) pending.delete(reference.actorId); }
 }
 
-export async function retireLocalActor(parent: ActorHandle, name: string, reference: ActorReference, cleanup: (storageKey: string) => Promise<void>): Promise<void> {
-  const scope = scopeFor(parent);
-  await retireLocalCreation({ scope, caller: parent, parentPath: scope.path, name, reference, cleanup });
+export function retireLocalActor(parent: ActorHandle, name: string, reference: ActorReference, cleanup: (storageKey: string) => Promise<void>): Promise<void> {
+  return settle(Effect.flatMap(scopeFor(parent), (scope) => Effect.promise(() => retireLocalCreation({ scope, caller: parent, parentPath: scope.path, name, reference, cleanup }))));
 }
 
 /** `cleanup` is given the retiring actor's storage path and its reference: a key is not an actor's id. */
-export async function recoverLocalActorRetirements(
+export function recoverLocalActorRetirements(
   root: ActorHandle, cleanup: (storagePath: readonly string[], reference: ActorReference) => Promise<void>,
 ): Promise<void> {
-  const scope = scopeFor(root);
+  return settle(Effect.gen(function* () {
+    const scope = yield* scopeFor(root);
 
-  if (root.parentActorId !== null) throw new KinuError('denied', 'Only the local root owns physical retirement recovery.');
+    if (root.parentActorId !== null) return yield* new KinuError('denied', 'Only the local root owns physical retirement recovery.');
 
-  for (const actor of scope.directory.retirements()) {
-    await retireLocalCreation({
-      scope,
-      caller: actor.caller,
-      parentPath: actor.parentPath,
-      name: actor.name,
-      reference: actor.reference,
-      cleanup: (key) => cleanup([...actor.parentPath, key], actor.reference),
-    });
-  }
+    for (const actor of scope.directory.retirements()) {
+      yield* Effect.promise(() => retireLocalCreation({
+        scope,
+        caller: actor.caller,
+        parentPath: actor.parentPath,
+        name: actor.name,
+        reference: actor.reference,
+        cleanup: (key) => cleanup([...actor.parentPath, key], actor.reference),
+      }));
+    }
+  }));
 }

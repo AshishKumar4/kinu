@@ -88,6 +88,8 @@ export interface ModelCallReport {
   readonly spec?: string;
   readonly modelId?: string;
   readonly account?: CallAccount | undefined;
+  /** The operation that made the call where its source alone does not tell it, such as a program's `ai.run`. */
+  readonly via?: string;
 }
 
 /** Aggregate spend; usage fields no call reported stay absent, and `usd` stays absent until some

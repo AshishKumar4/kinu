@@ -180,6 +180,7 @@ function actorWith(account: AccountMemory | undefined): SurfaceActor {
     mail: null,
     google: null,
     github: null,
+    ai: null,
   };
 }
 

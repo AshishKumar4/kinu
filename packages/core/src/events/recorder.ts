@@ -85,7 +85,7 @@ export const RunEventSchema = v.variant('type', [
     harness: v.optional(v.object({ mode: v.picklist(HARNESS_MODES), surface: v.picklist(HARNESS_SURFACES) })) }),
   v.object({ ...BaseFields, type: v.literal('model_call'),
     source: v.picklist(SPEND_SOURCES), usage: v.optional(UsageSchema),
-    usd: v.optional(v.number()),
+    usd: v.optional(v.number()), via: v.optional(v.string()),
     spec: v.optional(v.string()), modelId: v.optional(v.string()), account: v.optional(CallAccountSchema) }),
   v.object({ ...BaseFields, type: v.literal('model_operation'),
     operationId: v.string(), source: v.picklist(SPEND_SOURCES),

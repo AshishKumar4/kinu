@@ -18,7 +18,7 @@ import * as v from 'valibot';
 mockAgentsSdk();
 
 // Dynamic: the route module resolves the Agent SDK at import time, so it loads after the stub is installed.
-const { runEventsRoutes } = await import('../src/run-events-routes');
+const { runEventsRoutes, RunWrites } = await import('../src/run-events-routes');
 
 const SEEDED_EVENTS = 700;
 
@@ -39,6 +39,7 @@ function runEventsWorkspace(message: (i: number) => string = (i) => `event ${i}`
   }
 
   const pages: number[] = [];
+  const writes = new RunWrites(REAL_CLOCK);
 
   const stub: RunEventsTarget = {
     listRuns: () => { throw new Error('OrchestratorAgent.listRuns: not reachable in this test'); },
@@ -48,6 +49,7 @@ function runEventsWorkspace(message: (i: number) => string = (i) => `event ${i}`
 
       return page;
     },
+    awaitRunWrites: async (seen, ms) => await writes.after(seen, ms),
   };
 
   return { agent: stub, recorder, pages };

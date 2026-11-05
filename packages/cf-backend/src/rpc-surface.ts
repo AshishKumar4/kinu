@@ -328,6 +328,7 @@ const ORCHESTRATOR_METHODS = [
   'getEmailIngress',
   'getRunEvents',
   'getRunEventText',
+  'awaitRunWrites',
   'getEvolutionStatus',
   'getToolList',
   'getWorkspaceCapabilityHash',
