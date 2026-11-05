@@ -101,7 +101,7 @@ Both backends register these, in this order.
 
 ## The cloud side
 
-`ActorAgent` (`cf-backend/src/actor-agent.ts`) holds one `ExtensionHost` for
+`OrchestratorAgent` (`cf-backend/src/orchestrator.ts`) holds one `ExtensionHost` for
 the life of the object, with `compaction` registered on it.
 `OrchestratorAgent` is its only subclass. Each turn, the actor hands
 `this.extensions.list()` to `ActorSession.execute`, which composes that turn's
@@ -116,7 +116,7 @@ turn cut by eviction still announces its end. The CLI owes no such row: its
 per-turn host dies with the turn.
 
 Contributed tools pass two filters on cloud. `extensionTools` in
-`ActorAgent.assembleTurn` drops names already in the turn or MCP set.
+`OrchestratorAgent.assembleTurn` drops names already in the turn or MCP set.
 `resolveAgentTurnProfile()` then supplies `profile.allowedTools`, and
 `effectiveActiveTools` and `effectiveTools` keep only allowed names.
 

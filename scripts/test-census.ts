@@ -741,7 +741,7 @@ const SUITE_DIR = new Set(['import.meta.dir', 'import.meta.dirname', '__dirname'
 
 /**
  * The path a path-building expression spells, relative to the suite, when every segment is
- * known: `join(import.meta.dir, '..', 'src', 'actor-agent.ts')`, `join(import.meta.dir, '..')`,
+ * known: `join(import.meta.dir, '..', 'src', 'orchestrator.ts')`, `join(import.meta.dir, '..')`,
  * `new URL('../', import.meta.url)` (bare, through `.pathname`, or handed to `fileURLToPath`), and
  * a join on a variable already known to name a product path. No single segment of
  * `join(import.meta.dir, '..', 'src', 'x.ts')` names a file, so reading them one at a time missed

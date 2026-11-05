@@ -1,6 +1,6 @@
 /**
  * Workerd fixture for delegation: the shipped orchestrator, a hire authored by a fake model wire, verdicts read from storage.
- * The child resolves its model from the role tier (`actor-agent.ts:hostedActorProfile`), not the workspace pin.
+ * The child resolves its model from the role tier (`orchestrator.ts:hostedActorProfile`), not the workspace pin.
  * No clocks: `scripts/test-clocks.ts` locks this file, so every wait is a gate and a missing path hangs. A job's window
  * runs on a hand clock the object is handed and the test advances.
  */
@@ -49,7 +49,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
     super(ctx, env);
     this.probeState = ctx;
 
-    // `ActorAgent`'s constructor already sealed the surface with non-enumerable shadows over these reads;
+    // `OrchestratorAgent`'s constructor already sealed the surface with non-enumerable shadows over these reads;
     // deleting the shadow lets the wider seal below expose the prototype method.
     const reads = ['rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'wakeReturned', 'wakeWhileRunning', 'stopHosted', 'settled', 'archiveSections', 'jobWindowArmed', 'outrunJobWindow', 'openJobGate', 'redeliverJobWake', 'jobWatchState', 'jobRows', 'pendingAlarm', 'watchRelays', 'relayLost', 'runStatuses', 'processTicks'];
 
