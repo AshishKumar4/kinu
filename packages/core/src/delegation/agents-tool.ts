@@ -53,8 +53,9 @@ import { SWARMS_BETA_SETTING } from '../types/profile';
 import type { DelegationChoices } from '../types/dynamic-context';
 import { nanoid } from '../utils/nanoid';
 import {
-  KinuError, refusalOf, renderThrownChain, toKinuError, type ErrorCode, type Refusal, type TurnTrace,
+  KinuError, refusalOf, renderThrownChain, settle, toKinuError, type ErrorCode, type Refusal, type TurnTrace,
 } from '../obs/index';
+import { Cause, Effect, Result } from 'effect';
 import {
   delegationDepthRefusal,
   delegationExhausted,
@@ -441,8 +442,8 @@ export interface AgentsToolCallOptions {
 }
 
 /** Invalid operation inputs fail before delegation; namespace adapters preserve branchable refusals. */
-function badInput(error: string): never {
-  throw new KinuError('bad_input', error);
+function badInput(error: string): KinuError {
+  return new KinuError('bad_input', error);
 }
 
 /** The mission scope for this call (a fresh child label when it declared a cap) and its charging port;
@@ -501,29 +502,27 @@ function resolveDelegatedProfile(
       + `allowed: ${spawns.length > 0 ? spawns.join(', ') : '(none)'}.` };
   }
 
-  try {
-    const resolved = resolveTurnProfile({
-      envelope: ctx.envelope,
-      provider: ctx.provider,
-      roleId: role ?? ctx.roleId,
-      explicitTier: tier,
-      ...ctx.pins,
-      workMode: 'build',
-      availableTools: ctx.availableTools,
-      activeSkills: [],
-    });
+  const resolved = Result.try(() => resolveTurnProfile({
+    envelope: ctx.envelope,
+    provider: ctx.provider,
+    roleId: role ?? ctx.roleId,
+    explicitTier: tier,
+    ...ctx.pins,
+    workMode: 'build',
+    availableTools: ctx.availableTools,
+    activeSkills: [],
+  }));
 
-    return {
-      resolved,
-      sources: {
-        roleSource: role !== undefined ? 'explicit' : 'caller',
-        tierSource: resolved.tier.source,
-        presetSource,
-      },
-    };
-  } catch (err) {
-    return { error: renderThrownChain({ cause: err }) };
-  }
+  if (Result.isFailure(resolved)) return { error: renderThrownChain({ cause: resolved.failure }) };
+
+  return {
+    resolved: resolved.success,
+    sources: {
+      roleSource: role !== undefined ? 'explicit' : 'caller',
+      tierSource: resolved.success.tier.source,
+      presetSource,
+    },
+  };
 }
 
 interface AgentsActionCall<F> {
@@ -534,12 +533,10 @@ interface AgentsActionCall<F> {
 }
 
 /** The exploration substrate for `swarm`; re-checked because the type does not carry the enum gate. */
-function swarmSubstrate(deps: AgentsToolDeps): AgentsSwarmDeps {
+function swarmSubstrate(deps: AgentsToolDeps): Effect.Effect<AgentsSwarmDeps, KinuError> {
   const swarm = deps.swarm;
 
-  if (!swarm) throw new KinuError('unsupported', 'this actor wires no exploration substrate, so `swarm` has nothing to run');
-
-  return swarm;
+  return swarm ? Effect.succeed(swarm) : Effect.fail(new KinuError('unsupported', 'this actor wires no exploration substrate, so `swarm` has nothing to run'));
 }
 
 /** A field the operation checked against `schema` and passed on as sent, read as the search takes it. */
@@ -551,153 +548,166 @@ interface SwarmActionCall extends AgentsActionCall<SwarmFields> {
   budget?: MissionGovernor;
 }
 
-async function runSwarmAction({ deps, fields, mode, toolOptions, budget }: SwarmActionCall): Promise<object> {
-  const swarm = swarmSubstrate(deps);
+/** The search's preset and, for a first attempt, its delegated profile; a re-drive's comes off its stored record. */
+function swarmProfile(
+  { deps, fields, swarm, redrive }: { deps: AgentsToolDeps; fields: SwarmFields & { task: string }; swarm: AgentsSwarmDeps; redrive: boolean },
+): Effect.Effect<{ preset: SwarmPreset; delegated: DelegatedProfile | undefined }, KinuError> {
+  return Effect.gen(function* () {
+    // Precedence for a first attempt only; a re-drive's snapshot comes off the claimed ledger row.
+    let delegated: DelegatedProfile | undefined;
 
-  // A re-drive replays its stored profile snapshot and never consults today's catalog. Read from the
-  // options bag (see `RESUME_REDRIVE_OPTION`): the fields are the durable row.
-  const redrive = readResumeRedrive({ toolOptions });
+    if (!redrive) {
+      const ctx = deps.profile?.();
 
-  if (!redrive && !fields.preset && !deps.profile) {
-    return badInput(`swarm needs \`preset\`: the shape of the search${deps.profile ? '' : ' (no role catalog is wired here to take its default from)'}. ${SWARM_PRESET_DOCTRINE.join(' ')}`);
-  }
+      if (ctx) {
+        const resolution = resolveDelegatedProfile(
+          ctx,
+          fields.role,
+          fields.tier,
+          fields.preset === undefined ? 'role_default' : 'explicit',
+        );
 
-  if (!fields.task) {
-    return badInput('swarm needs `task`: what the search is for, in prose. The measured '
-      + 'quantity goes in `objective`, never here.');
-  }
-
-  // Precedence for a first attempt only; a re-drive's snapshot comes off the claimed ledger row.
-  let delegated: DelegatedProfile | undefined;
-
-  if (!redrive) {
-    const ctx = deps.profile?.();
-
-    if (ctx) {
-      const resolution = resolveDelegatedProfile(
-        ctx,
-        fields.role,
-        fields.tier,
-        fields.preset === undefined ? 'role_default' : 'explicit',
-      );
-
-      if ('error' in resolution) return badInput(resolution.error);
-      delegated = resolution;
-    } else if (fields.role !== undefined || fields.tier !== undefined) {
-      return badInput('role and tier need a profile catalog, which this actor does not have: '
-        + 'call again without them.');
+        if ('error' in resolution) return yield* badInput(resolution.error);
+        delegated = resolution;
+      } else if (fields.role !== undefined || fields.tier !== undefined) {
+        return yield* badInput('role and tier need a profile catalog, which this actor does not have: '
+          + 'call again without them.');
+      }
     }
-  }
 
-  // A re-drive with no preset is not `ideate`: its first attempt may have used the role's default, so
-  // the preset comes off the same stored record as role, tier and model.
-  const started = redrive && fields.preset === undefined
-    ? readStartedSwarmProfile(swarm.rt.storage, swarm.rt.actor, fields.task)
-    : null;
+    // A re-drive with no preset is not `ideate`: its first attempt may have used the role's default, so
+    // the preset comes off the same stored record as role, tier and model.
+    const started = redrive && fields.preset === undefined
+      ? readStartedSwarmProfile(swarm.rt.storage, swarm.rt.actor, fields.task)
+      : null;
 
-  const preset: SwarmPreset = fields.preset
-    ?? delegated?.resolved.defaultPreset
-    ?? started?.profile.defaultPreset
-    ?? 'ideate';
+    const preset: SwarmPreset = fields.preset
+      ?? delegated?.resolved.defaultPreset
+      ?? started?.profile.defaultPreset
+      ?? 'ideate';
 
-  // `tier` and `models` are exclusive routing inputs.
-  if (fields.models !== undefined && fields.tier !== undefined) {
-    return badInput('`models` routes each node to the model its slot is assigned, and `tier` '
-      + `resolves one model for the whole run: you named both (tier "${String(fields.tier)}" and `
-      + `${String(fields.models.length)} model spec(s)), and one of the two routing decisions would `
-      + 'be ignored. Route through `tier` for one model across the search, or through `models` '
-      + 'for per-node routing.');
-  }
+    // `tier` and `models` are exclusive routing inputs.
+    if (fields.models !== undefined && fields.tier !== undefined) {
+      return yield* badInput('`models` routes each node to the model its slot is assigned, and `tier` '
+        + `resolves one model for the whole run: you named both (tier "${String(fields.tier)}" and `
+        + `${String(fields.models.length)} model spec(s)), and one of the two routing decisions would `
+        + 'be ignored. Route through `tier` for one model across the search, or through `models` '
+        + 'for per-node routing.');
+    }
 
-  const call: SwarmInput = {
-    preset,
-    task: fields.task,
-    objective: readWireForm(SwarmObjectiveSchema, fields.objective),
-    key: fields.key,
-    config: readWireForm(SwarmConfigSchema, fields.config),
-    from: fields.from,
-    label: fields.label,
-    branches: fields.branches,
-    depth: fields.depth,
-    name: fields.name,
-    nodes: fields.nodes,
-    models: fields.models,
-  };
+    return { preset, delegated };
+  });
+}
 
-  // Resolution first: *Validity over the resolved configuration* is stated over the resolved tuple.
-  const resolved = resolveSwarm(call);
+function runSwarmAction({ deps, fields, mode, toolOptions, budget }: SwarmActionCall): Effect.Effect<object, KinuError> {
+  return Effect.gen(function* () {
+    const swarm = yield* swarmSubstrate(deps);
 
-  if ('reason' in resolved) throw new KinuError(resolved.reason, resolved.error);
-  const illegal = swarmValidity(resolved);
+    // A re-drive replays its stored profile snapshot and never consults today's catalog. Read from the
+    // options bag (see `RESUME_REDRIVE_OPTION`): the fields are the durable row.
+    const redrive = readResumeRedrive({ toolOptions });
 
-  if (illegal) throw new KinuError(illegal.reason, illegal.error);
+    if (!redrive && !fields.preset && !deps.profile) {
+      return yield* badInput(`swarm needs \`preset\`: the shape of the search${deps.profile ? '' : ' (no role catalog is wired here to take its default from)'}. ${SWARM_PRESET_DOCTRINE.join(' ')}`);
+    }
 
-  const mission = missionScope(budget, fields);
-  let rt: AgentRuntime = swarm.rt;
+    if (!fields.task) {
+      return yield* badInput('swarm needs `task`: what the search is for, in prose. The measured '
+        + 'quantity goes in `objective`, never here.');
+    }
 
-  if (mission) {
-    rt = { ...swarm.rt, llm: mission.governor.govern(swarm.rt.llm, mission.scope.labels) };
-  }
+    const { preset, delegated } = yield* swarmProfile({ deps, fields: { ...fields, task: fields.task }, swarm, redrive });
 
-  // Each backend factory call is a real event, so resolve them once, before the bag.
-  const origin = await swarm.originContext?.();
-  const signal = toolOptions?.abortSignal;
-  const publishHeadStream = swarm.reportNodeDelta?.();
-  const announceHeadActivity = swarm.announceHeadActivity?.();
-  const provisionHome = swarm.provisionNodeHome?.();
-  // Wired only beside the provisioner.
-  const runtimeForWorkspace = swarm.runtimeForNodeWorkspace?.();
+    const call: SwarmInput = {
+      preset,
+      task: fields.task,
+      objective: readWireForm(SwarmObjectiveSchema, fields.objective),
+      key: fields.key,
+      config: readWireForm(SwarmConfigSchema, fields.config),
+      from: fields.from,
+      label: fields.label,
+      branches: fields.branches,
+      depth: fields.depth,
+      name: fields.name,
+      nodes: fields.nodes,
+      models: fields.models,
+    };
 
-  /** One typed literal so every field is checked against `SwarmRunDeps`; an `undefined` field is an absent one. */
-  const runDeps: SwarmRunDeps = {
-    rt,
-    hostNode: swarm.hostNode,
-    model: swarm.model,
-    mode,
-    // Frozen at dispatch so `context:'inherit'` survives a background re-drive.
-    originContext: origin === undefined ? undefined : freezeInheritedContext(origin),
-    // Forwarded, not pre-resolved: only the runner sees a re-drive's claimed profile.
-    resolveModel: swarm.resolveModel,
-    // The runner writes the snapshot to the ledger row before any node expands, so a re-drive keeps it.
-    profile: delegated === undefined
-      ? undefined
-      : { profile: delegated.resolved, sources: delegated.sources },
-    // The search charges its own calls, so an exhausted label stops it mid-run.
-    mission: mission?.scope,
-    signal,
-    // Real time on every node's ledger (D19); a test can inject its own clock.
-    clock: REAL_CLOCK,
-    reportModelCall: swarm.reportModelCall,
-    nodeCodemode: swarm.nodeCodemode,
-    webSearch: swarm.webSearch,
-    publishHeadStream,
-    announceHeadActivity,
-    provisionHome,
-    runtimeForWorkspace,
-    // The *Inherited context* barrier; absent stays absent (the seam's loud failure).
-    compactShared: swarm.compactShared,
-    windowOf: swarm.windowOf,
-    workers: swarm.workers,
-    redrive,
-  };
+    // Resolution first: *Validity over the resolved configuration* is stated over the resolved tuple.
+    const resolved = resolveSwarm(call);
 
-  readSpawnStarted({ toolOptions })?.();
-  const result = await inWorkMode(mode, () => runSwarm(runDeps, resolved));
+    if ('reason' in resolved) return yield* new KinuError(resolved.reason, resolved.error);
+    const illegal = swarmValidity(resolved);
 
-  if ('reason' in result) throw new KinuError(result.reason, result.error);
-  // Record the spawn only: the run's tokens were already debited per call through
-  // `SwarmRunDeps.mission`, so charging `report.tokens` again would bill twice.
-  mission?.governor.debit(0, { labels: mission.scope.labels, spawns: 1 });
-  const output: JsonObject = parseJsonObject(JSON.stringify(result));
+    if (illegal) return yield* new KinuError(illegal.reason, illegal.error);
 
-  if (mission) {
-    const label = mission.scope.labels[0];
-    const snapshot = label !== undefined ? mission.governor.snapshot(label)[0] : undefined;
+    const mission = missionScope(budget, fields);
+    let rt: AgentRuntime = swarm.rt;
 
-    if (snapshot) output.mission_budget = parseJsonObject(JSON.stringify(snapshot));
-  }
+    if (mission) {
+      rt = { ...swarm.rt, llm: mission.governor.govern(swarm.rt.llm, mission.scope.labels) };
+    }
 
-  return output;
+    // Each backend factory call is a real event, so resolve them once, before the bag.
+    const origin = yield* Effect.promise(async () => swarm.originContext?.());
+    const signal = toolOptions?.abortSignal;
+    const publishHeadStream = swarm.reportNodeDelta?.();
+    const announceHeadActivity = swarm.announceHeadActivity?.();
+    const provisionHome = swarm.provisionNodeHome?.();
+    // Wired only beside the provisioner.
+    const runtimeForWorkspace = swarm.runtimeForNodeWorkspace?.();
+
+    /** One typed literal so every field is checked against `SwarmRunDeps`; an `undefined` field is an absent one. */
+    const runDeps: SwarmRunDeps = {
+      rt,
+      hostNode: swarm.hostNode,
+      model: swarm.model,
+      mode,
+      // Frozen at dispatch so `context:'inherit'` survives a background re-drive.
+      originContext: origin === undefined ? undefined : freezeInheritedContext(origin),
+      // Forwarded, not pre-resolved: only the runner sees a re-drive's claimed profile.
+      resolveModel: swarm.resolveModel,
+      // The runner writes the snapshot to the ledger row before any node expands, so a re-drive keeps it.
+      profile: delegated === undefined
+        ? undefined
+        : { profile: delegated.resolved, sources: delegated.sources },
+      // The search charges its own calls, so an exhausted label stops it mid-run.
+      mission: mission?.scope,
+      signal,
+      // Real time on every node's ledger (D19); a test can inject its own clock.
+      clock: REAL_CLOCK,
+      reportModelCall: swarm.reportModelCall,
+      nodeCodemode: swarm.nodeCodemode,
+      webSearch: swarm.webSearch,
+      publishHeadStream,
+      announceHeadActivity,
+      provisionHome,
+      runtimeForWorkspace,
+      // The *Inherited context* barrier; absent stays absent (the seam's loud failure).
+      compactShared: swarm.compactShared,
+      windowOf: swarm.windowOf,
+      workers: swarm.workers,
+      redrive,
+    };
+
+    readSpawnStarted({ toolOptions })?.();
+    const result = yield* Effect.promise(() => inWorkMode(mode, () => runSwarm(runDeps, resolved)));
+
+    if ('reason' in result) return yield* new KinuError(result.reason, result.error);
+    // Record the spawn only: the run's tokens were already debited per call through
+    // `SwarmRunDeps.mission`, so charging `report.tokens` again would bill twice.
+    mission?.governor.debit(0, { labels: mission.scope.labels, spawns: 1 });
+    const output: JsonObject = parseJsonObject(JSON.stringify(result));
+
+    if (mission) {
+      const label = mission.scope.labels[0];
+      const snapshot = label !== undefined ? mission.governor.snapshot(label)[0] : undefined;
+
+      if (snapshot) output.mission_budget = parseJsonObject(JSON.stringify(snapshot));
+    }
+
+    return output;
+  });
 }
 
 /** The roles and tiers this actor's `role` and `tier` take, for its step context: in the schema they would make each
@@ -727,14 +737,14 @@ export function verifierKinds(): string {
 }
 
 /** The peer topic for an assignment or a message, or a refusal when the caller claimed the transport's reserved one. */
-function requestedTopic(requested: string | undefined): { topic: string } {
+function requestedTopic(requested: string | undefined): Effect.Effect<{ topic: string }, KinuError> {
   const trimmed = requested?.trim();
   // A blank topic is no topic: the default is what the transport routes on.
   const topic = trimmed === undefined || trimmed === '' ? 'message' : trimmed;
 
   return topic === PEER_REPLY_TOPIC
-    ? badInput(`topic "${PEER_REPLY_TOPIC}" is reserved for transport reply envelopes`)
-    : { topic };
+    ? Effect.fail(badInput(`topic "${PEER_REPLY_TOPIC}" is reserved for transport reply envelopes`))
+    : Effect.succeed({ topic });
 }
 
 /** The refusal of a `swarm` the account's beta withholds; null when the beta is not what stops it. */
@@ -767,24 +777,26 @@ interface WorkspaceHireCall extends AgentsActionCall<HireWorkspaceFields> {
   spawnDepthRefusal: () => { reason: ErrorCode; error: string } | null;
 }
 
-async function hireWorkspace({ deps, fields, mode, toolOptions, spawnDepthRefusal }: WorkspaceHireCall): Promise<object> {
-  const peers = deps.peers;
-  const workspaceDepth = spawnDepthRefusal();
+function hireWorkspace({ deps, fields, mode, toolOptions, spawnDepthRefusal }: WorkspaceHireCall): Effect.Effect<object, KinuError> {
+  return Effect.gen(function* () {
+    const peers = deps.peers;
+    const workspaceDepth = spawnDepthRefusal();
 
-  if (workspaceDepth) throw new KinuError(workspaceDepth.reason, workspaceDepth.error);
+    if (workspaceDepth) return yield* new KinuError(workspaceDepth.reason, workspaceDepth.error);
 
-  // Classified: a fresh workspace escapes the depth cap, so this refusal must land in `refused`.
-  if (!peers) {
-    throw new KinuError('denied', 'agents.hireWorkspace creates a whole workspace, which only the workspace orchestrator may do: '
-      + 'hire a subagent here instead, or run a search.');
-  }
+    // Classified: a fresh workspace escapes the depth cap, so this refusal must land in `refused`.
+    if (!peers) {
+      return yield* new KinuError('denied', 'agents.hireWorkspace creates a whole workspace, which only the workspace orchestrator may do: '
+        + 'hire a subagent here instead, or run a search.');
+    }
 
-  return await peers.spawnWorkspace({
-    purpose: fields.mission,
-    message: fields.message,
-    mode,
-    ...(fields.agent !== undefined && fields.agent !== '' && { name: fields.agent }),
-    ...(toolOptions?.abortSignal && { signal: toolOptions.abortSignal }),
+    return yield* Effect.promise(() => peers.spawnWorkspace({
+      purpose: fields.mission,
+      message: fields.message,
+      mode,
+      ...(fields.agent !== undefined && fields.agent !== '' && { name: fields.agent }),
+      ...(toolOptions?.abortSignal && { signal: toolOptions.abortSignal }),
+    }));
   });
 }
 
@@ -793,111 +805,122 @@ interface CreateHireCall extends Omit<AgentsActionCall<HireFields>, 'toolOptions
   lifetime: SubagentLifetime;
 }
 
-async function hireCreate({ deps, team, fields, mode, lifetime }: CreateHireCall): Promise<object> {
-  const ctx = deps.profile?.();
+function hireCreate({ deps, team, fields, mode, lifetime }: CreateHireCall): Effect.Effect<object, KinuError> {
+  return Effect.gen(function* () {
+    const ctx = deps.profile?.();
 
-  if (!ctx) {
-    throw new KinuError('denied', 'This actor wires no role catalog. Hire cannot resolve a role without one.');
-  }
-
-  const inheritedContext = fields.context === 'inherit'
-    ? [...freezeInheritedContext(await team.inheritedContext?.()
-      ?? badInput('context:"inherit" requires this actor\'s parent-conversation source'))]
-    : undefined;
-
-  if (lifetime === 'task') {
-    if (fields.tier !== undefined) {
-      return badInput('field "tier" is not available on a lifetime:"task" hire: it runs at its role\'s tier; omit it, or hire `durable` for an override');
+    if (!ctx) {
+      return yield* new KinuError('denied', 'This actor wires no role catalog. Hire cannot resolve a role without one.');
     }
 
-    const temporary = team.temporary;
+    const inherited = fields.context === 'inherit' ? yield* Effect.promise(async () => team.inheritedContext?.()) : undefined;
 
-    if (!temporary) {
-      throw new KinuError('denied', 'lifetime:"task" needs a task-agent substrate, which this actor has none of: '
-        + 'omit `lifetime` for a durable hire, or hand the work to an existing agent with op:"assign" (op:"list" shows the roster).');
+    const source = inherited ?? null;
+
+    if (fields.context === 'inherit' && source === null) {
+      return yield* badInput('context:"inherit" requires this actor\'s parent-conversation source');
     }
 
-    const delegatedTask = resolveDelegatedProfile(ctx, fields.role, undefined);
+    const inheritedContext = source === null ? undefined : [...freezeInheritedContext(source)];
 
-    if ('error' in delegatedTask) return badInput(delegatedTask.error);
+    if (lifetime === 'task') {
+      if (fields.tier !== undefined) {
+        return yield* badInput('field "tier" is not available on a lifetime:"task" hire: it runs at its role\'s tier; omit it, or hire `durable` for an override');
+      }
 
-    return await temporary.start({
-      role: delegatedTask.resolved.role.id,
-      roleLabel: fields.role,
-      task: fields.message,
+      const temporary = team.temporary;
+
+      if (!temporary) {
+        return yield* new KinuError('denied', 'lifetime:"task" needs a task-agent substrate, which this actor has none of: '
+          + 'omit `lifetime` for a durable hire, or hand the work to an existing agent with op:"assign" (op:"list" shows the roster).');
+      }
+
+      const delegatedTask = resolveDelegatedProfile(ctx, fields.role, undefined);
+
+      if ('error' in delegatedTask) return yield* badInput(delegatedTask.error);
+
+      return yield* Effect.promise(() => temporary.start({
+        role: delegatedTask.resolved.role.id,
+        roleLabel: fields.role,
+        task: fields.message,
+        mode,
+        ...(inheritedContext !== undefined && { inheritedContext }),
+        ...(fields.name !== undefined && { name: fields.name }),
+      } satisfies TemporaryRunRequest));
+    }
+
+    const delegated = resolveDelegatedProfile(ctx, fields.role, fields.tier);
+
+    if ('error' in delegated) return yield* badInput(delegated.error);
+    // Only an explicit tier is stored; the child re-derives its role's default.
+    const resolvedTier = fields.tier !== undefined ? delegated.resolved.tier : undefined;
+
+    return yield* Effect.promise(() => team.spawn({
+      role: delegated.resolved.role.id,
+      mission: fields.message,
       mode,
       ...(inheritedContext !== undefined && { inheritedContext }),
-      ...(fields.name !== undefined && { name: fields.name }),
-    } satisfies TemporaryRunRequest);
-  }
-
-  const delegated = resolveDelegatedProfile(ctx, fields.role, fields.tier);
-
-  if ('error' in delegated) return badInput(delegated.error);
-  // Only an explicit tier is stored; the child re-derives its role's default.
-  const resolvedTier = fields.tier !== undefined ? delegated.resolved.tier : undefined;
-
-  return await team.spawn({
-    role: delegated.resolved.role.id,
-    mission: fields.message,
-    mode,
-    ...(inheritedContext !== undefined && { inheritedContext }),
-    ...(resolvedTier !== undefined && { tier: resolvedTier.id }),
-    ...(fields.name !== undefined && fields.name !== '' && { name: fields.name }),
+      ...(resolvedTier !== undefined && { tier: resolvedTier.id }),
+      ...(fields.name !== undefined && fields.name !== '' && { name: fields.name }),
+    }));
   });
 }
 
 interface RosterCall {
   readonly mode: WorkMode;
   readonly toolOptions: AgentsToolCallOptions | undefined;
-  readonly spawnGuard: () => void;
+  readonly spawnGuard: Effect.Effect<void, KinuError>;
   readonly isSubagent: (name: string) => Promise<boolean>;
 }
 
 /** An existing agent's next workstream: a subagent's reports later, a peer's reply is awaited. Spends no depth. */
-async function assignWork(deps: AgentsToolDeps, fields: AssignFields, { mode, toolOptions, isSubagent }: RosterCall): Promise<object> {
-  const { team, peers } = deps;
-  const asked = requestedTopic(fields.topic);
+function assignWork(deps: AgentsToolDeps, fields: AssignFields, { mode, toolOptions, isSubagent }: RosterCall): Effect.Effect<object, KinuError> {
+  return Effect.gen(function* () {
+    const { team, peers } = deps;
+    const asked = yield* requestedTopic(fields.topic);
 
-  if (team && await isSubagent(fields.agent)) {
-    const handoff = await team.assign({ name: fields.agent, task: fields.message, mode, ...(fields.deliverable !== undefined && fields.deliverable !== '' && { deliverable: fields.deliverable }) });
+    if (team && (yield* Effect.promise(() => isSubagent(fields.agent)))) {
+      const handoff = yield* Effect.promise(() => team.assign({ name: fields.agent, task: fields.message, mode, ...(fields.deliverable !== undefined && fields.deliverable !== '' && { deliverable: fields.deliverable }) }));
 
-    return {
-      status: 'working',
-      agent: fields.agent,
-      ...renderHandoff(handoff),
-      note: `${ASSIGN_NOTES[handoff.delivery]} The subagent's report arrives as an event that wakes you, citing ${handoff.eventId}.`,
-    };
-  }
+      return {
+        status: 'working',
+        agent: fields.agent,
+        ...renderHandoff(handoff),
+        note: `${ASSIGN_NOTES[handoff.delivery]} The subagent's report arrives as an event that wakes you, citing ${handoff.eventId}.`,
+      };
+    }
 
-  if (peers) {
-    return await peers.ask({
-      agent: fields.agent, topic: asked.topic, message: fields.message, mode, ...(toolOptions?.abortSignal && { signal: toolOptions.abortSignal }),
-    });
-  }
+    if (peers) {
+      return yield* Effect.promise(() => peers.ask({
+        agent: fields.agent, topic: asked.topic, message: fields.message, mode, ...(toolOptions?.abortSignal && { signal: toolOptions.abortSignal }),
+      }));
+    }
 
-  return badInput(`unknown agent "${fields.agent}": check the roster with op:"list"`);
+    return yield* badInput(`unknown agent "${fields.agent}": check the roster with op:"list"`);
+  });
 }
 
 /** A message to an agent, with no workstream handed over. Waking an agent is a spawn-shaped spend. */
-async function messageAgent(deps: AgentsToolDeps, fields: MessageFields, { mode, spawnGuard, isSubagent }: RosterCall): Promise<object> {
-  const { team, peers } = deps;
-  const { agent, message } = fields;
+function messageAgent(deps: AgentsToolDeps, fields: MessageFields, { mode, spawnGuard, isSubagent }: RosterCall): Effect.Effect<object, KinuError> {
+  return Effect.gen(function* () {
+    const { team, peers } = deps;
+    const { agent, message } = fields;
 
-  spawnGuard();
-  const sent = requestedTopic(fields.topic);
+    yield* spawnGuard;
+    const sent = yield* requestedTopic(fields.topic);
 
-  if (team && await isSubagent(agent)) {
-    const handoff = await team.message({ name: agent, content: message, mode });
+    if (team && (yield* Effect.promise(() => isSubagent(agent)))) {
+      const handoff = yield* Effect.promise(() => team.message({ name: agent, content: message, mode }));
 
-    return { status: handoff.delivery === 'queued' ? 'queued' : 'delivered', agent, ...renderHandoff(handoff) };
-  }
+      return { status: handoff.delivery === 'queued' ? 'queued' : 'delivered', agent, ...renderHandoff(handoff) };
+    }
 
-  if (peers) {
-    return await peers.send({ agent, topic: sent.topic, message, mode });
-  }
+    if (peers) {
+      return yield* Effect.promise(() => peers.send({ agent, topic: sent.topic, message, mode }));
+    }
 
-  return badInput(`unknown agent "${agent}": check the roster with op:"list"`);
+    return yield* badInput(`unknown agent "${agent}": check the roster with op:"list"`);
+  });
 }
 
 /** The caller's subtree and peers, or one agent's status: provenance, not addressing, so `knows` includes archived rows. */
@@ -924,7 +947,7 @@ const SPAWNING: ReadonlySet<AgentsOp> = new Set(['swarm', 'hire', 'assign', 'hir
 
 /** The one delegation dispatch, for the `agents` tool and `agents.*` codemode, over each operation's own fields. Only
  *  `toolOptions.abortSignal` is read. */
-export async function dispatchAgentsCall(
+export function dispatchAgentsCall(
   deps: AgentsToolDeps,
   call: AgentsCall,
   toolOptions?: AgentsToolCallOptions,
@@ -947,74 +970,84 @@ export async function dispatchAgentsCall(
   const spawnDepthRefusal = () =>
     deps.team && delegationExhausted(deps.team.delegation) ? delegationDepthRefusal(deps.team.delegation) : null;
 
-  const spawnDepth = call.op === 'hire' || call.op === 'swarm' ? spawnDepthRefusal() : null;
-
-  if (spawnDepth) throw new KinuError(spawnDepth.reason, spawnDepth.error);
-
-  // An operation this actor does not wire: `unsupported` (obs/error.ts), classified so it counts as refused.
-  const admission = opAdmission(offeredOps, mode, call.op, withheldBeta(deps, call.op));
-
-  if (admission) throw new KinuError(admission.reason, admission.error);
-
   // Spawn seam: check the mission cap before any operation that creates or wakes an agent.
-  const spawnGuard = () => {
+  const spawnGuard = Effect.suspend(() => {
     const refusal = deps.budget?.guard('spawn');
 
-    if (refusal) throw new MissionBudgetExhausted(refusal);
-  };
-
-  if (SPAWNING.has(call.op)) spawnGuard();
+    return refusal ? Effect.fail(new MissionBudgetExhausted(refusal)) : Effect.void;
+  });
 
   const rosterCall: RosterCall = { mode, toolOptions, spawnGuard, isSubagent };
 
-  try {
+  const operation = Effect.gen(function* () {
     switch (call.op) {
       case 'swarm':
-        return await runSwarmAction({ deps, fields: call.fields, mode, toolOptions, budget: deps.budget });
+        return yield* runSwarmAction({ deps, fields: call.fields, mode, toolOptions, budget: deps.budget });
 
       case 'hire': {
         // Plan bars a durable roster change but keeps a `task` hire.
         const lifetime = call.fields.lifetime ?? 'durable';
         const planBar = workModeRefusal(mode, lifetime === 'task', 'agents.hire');
 
-        if (planBar) throw new KinuError(planBar.reason, planBar.error);
+        if (planBar) return yield* new KinuError(planBar.reason, planBar.error);
 
         // Capability absence is `denied`; admission already holds `hire` to a wired team.
-        if (!team) throw new KinuError('denied', 'hiring subagents is not available on this actor');
+        if (!team) return yield* new KinuError('denied', 'hiring subagents is not available on this actor');
 
-        return await hireCreate({ deps, team, fields: call.fields, mode, lifetime });
+        return yield* hireCreate({ deps, team, fields: call.fields, mode, lifetime });
       }
 
       case 'assign':
-        return await assignWork(wired, call.fields, rosterCall);
+        return yield* assignWork(wired, call.fields, rosterCall);
 
       case 'hireWorkspace':
-        return await hireWorkspace({ deps, fields: call.fields, mode, toolOptions, spawnDepthRefusal });
+        return yield* hireWorkspace({ deps, fields: call.fields, mode, toolOptions, spawnDepthRefusal });
 
       case 'message':
-        return await messageAgent(wired, call.fields, rosterCall);
+        return yield* messageAgent(wired, call.fields, rosterCall);
 
       case 'reply': {
-        if (!peers) throw new KinuError('denied', 'answering an event needs the peer transport, which this actor does not have');
+        if (!peers) return yield* new KinuError('denied', 'answering an event needs the peer transport, which this actor does not have');
         const { eventId, message } = call.fields;
 
-        return await peers.reply({ eventId, message });
+        return yield* Effect.promise(() => peers.reply({ eventId, message }));
       }
 
       case 'list':
-        return await roster(wired, call.fields);
+        return yield* Effect.promise(() => roster(wired, call.fields));
 
       case 'dismiss':
-        if (!team) throw new KinuError('denied', 'dismiss applies to subagents, which this actor does not have');
+        if (!team) return yield* new KinuError('denied', 'dismiss applies to subagents, which this actor does not have');
 
-        return await team.dismiss({ name: call.fields.agent, keepHistory: call.fields.keepHistory ?? true });
+        return yield* Effect.promise(() => team.dismiss({ name: call.fields.agent, keepHistory: call.fields.keepHistory ?? true }));
     }
-  } catch (err) {
-    if (err instanceof KinuError) throw err;
+  });
+
+  // A refusal keeps its words; any other failure of the operation is named by it, its whole chain in its message.
+  const named = Effect.catchCause(operation, (failed) => {
+    const err = Cause.squash(failed);
+
+    if (err instanceof KinuError) return Effect.fail(err);
     const failure = toKinuError({ doing: 'agents.' + call.op, cause: err, otherwise: 'io' });
     failure.message = renderThrownChain({ cause: failure });
-    throw failure;
-  }
+
+    return Effect.fail(failure);
+  });
+
+  return settle(Effect.gen(function* () {
+    const spawnDepth = call.op === 'hire' || call.op === 'swarm' ? spawnDepthRefusal() : null;
+
+    if (spawnDepth) return yield* new KinuError(spawnDepth.reason, spawnDepth.error);
+
+    // An operation this actor does not wire: `unsupported` (obs/error.ts), classified so it counts as refused.
+    const admission = opAdmission(offeredOps, mode, call.op, withheldBeta(deps, call.op));
+
+    if (admission) return yield* new KinuError(admission.reason, admission.error);
+
+    if (SPAWNING.has(call.op)) yield* spawnGuard;
+
+    return yield* named;
+  }));
 }
 
 /** How much further a hire may delegate, said on `hire`. */

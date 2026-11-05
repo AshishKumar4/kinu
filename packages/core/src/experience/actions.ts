@@ -12,7 +12,8 @@ import { stageImport } from './imports';
 import { scaffoldSource } from '../scaffold/versions';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { FactsStore } from '../memory/facts';
-import { renderThrownChain } from '../obs/index';
+import { chainOf, settle } from '../obs/index';
+import { Effect, Result } from 'effect';
 
 /** Every method crosses the capability boundary on the implementing backend. */
 export interface ExperienceLibraryClient {
@@ -92,7 +93,7 @@ export async function runExperienceAction(
     readScaffoldVersion: (version: number) => scaffoldSource(deps.rt, version),
   };
 
-  try {
+  const acting = Effect.promise(async () => {
     switch (request.output.action) {
       case 'publish': {
         if (!request.output.kind || !request.output.key) {
@@ -129,7 +130,7 @@ export async function runExperienceAction(
         if (!entry) return { error: `no library entry with id "${request.output.id}"` };
         const staged = stageImport(deps.rt, entry);
 
-        if (!staged.ok) return { error: staged.reason };
+        if (Result.isFailure(staged)) return { error: staged.failure };
 
         return {
           imported: summarize(entry),
@@ -141,7 +142,7 @@ export async function runExperienceAction(
         };
       }
     }
-  } catch (err) {
-    return { error: renderThrownChain({ cause: err }) };
-  }
+  });
+
+  return settle(Effect.catchCause(acting, (failed) => Effect.succeed({ error: chainOf(failed) })));
 }

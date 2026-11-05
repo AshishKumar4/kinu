@@ -7,6 +7,7 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { Result } from 'effect';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import { createMemoryVfs, createScriptedLLM, testActorHandle } from '@kinu.run/test-utils';
@@ -636,12 +637,12 @@ describe('two actors, one database: imported_experience', () => {
 
     const rtA = runtimeFor(w, w.a);
     const rtB = runtimeFor(w, w.b);
-    expect(stageImport(rtA, entry, 1).ok).toBe(true);
+    expect(Result.isSuccess(stageImport(rtA, entry, 1))).toBe(true);
     // Admitted for B too: "already imported" is per actor.
-    expect(stageImport(rtB, entry, 1).ok).toBe(true);
+    expect(Result.isSuccess(stageImport(rtB, entry, 1))).toBe(true);
     expect(w.count('imported_experience')).toBe(2);
     // The same actor is still refused.
-    expect(stageImport(rtA, entry, 1).ok).toBe(false);
+    expect(Result.isSuccess(stageImport(rtA, entry, 1))).toBe(false);
 
     bindPendingImports(w.sql, w.a, 'turn-1');
     expect(listImportedExperience(w.sql, w.a)[0]?.turnIds).toEqual(['turn-1']);

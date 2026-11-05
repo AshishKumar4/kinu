@@ -1,7 +1,7 @@
 // withBackgroundThreshold: races a tool's work against the surface's detach threshold. Inline if it
 // finishes first; otherwise `deps.onThreshold` takes the live promise. A refused detach keeps waiting.
-import { Effect } from 'effect';
-import { settle } from '../obs/effect';
+import { Effect, Exit } from 'effect';
+import { hold, settle } from '../obs/effect';
 import * as v from 'valibot';
 import { tolerate } from '../obs/index';
 import { DeviceRequestOwnership, type DeviceRequestChannel } from './device-ownership';
@@ -71,17 +71,6 @@ export interface ThresholdDeps {
 /** What a call moved to the background because the person wrote while it ran is told. */
 const RELEASED_FOR_PERSON = 'The person wrote while this ran; backgrounded: still running, not cancelled. The settled result will wake you.';
 
-/** Outcome is a value either way, so the race's loser is observed and never an unhandled rejection. */
-function settlement<T>(promise: Promise<T>): Promise<{ value: T } | { error: unknown }> {
-  return (async () => {
-    try {
-      return { value: await promise };
-    } catch (cause) {
-      return { error: cause };
-    }
-  })();
-}
-
 /** `promise` settles inline unless `trigger` fires first, when `onThreshold` detaches or keeps it. */
 function detachOn<T>(input: {
   readonly kind: string;
@@ -94,7 +83,8 @@ function detachOn<T>(input: {
   readonly moved: () => Moved;
 }): Effect.Effect<T | BackgroundHandle> {
   return Effect.gen(function* () {
-    const settled = settlement(input.promise);
+    // An exit either way, so the race's loser is observed and never an unhandled rejection.
+    const settled = hold(Effect.promise(() => input.promise));
     const winner = yield* Effect.promise(() => Promise.race([settled, input.trigger]));
 
     input.release?.();
@@ -109,7 +99,7 @@ function detachOn<T>(input: {
 
     const foreground = winner ?? (yield* Effect.promise(() => settled));
 
-    return 'error' in foreground ? yield* Effect.die(foreground.error) : foreground.value;
+    return Exit.isSuccess(foreground) ? foreground.value : yield* Effect.failCause(foreground.cause);
   });
 }
 
