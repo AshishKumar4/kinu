@@ -4,7 +4,7 @@ import { Effect, Semaphore } from 'effect';
 import * as v from 'valibot';
 import type { AgentConfigStore } from '../config/store';
 import type { ActorHandle } from '../identity/actor-handle';
-import { effectsAlreadyDone, preparedOutput, prepareOutput, recordEffectDone, retirePreparedOutput } from '../identity/effect-tombstones';
+import { effectsAlreadyDone, preparedOutput, prepareOutput, recordEffectDone, retainEffectsDone, retirePreparedOutput } from '../identity/effect-tombstones';
 import { sha256Hex } from '../safety/argument-digest';
 import type { FactsStore } from '../memory/facts';
 import {
@@ -25,7 +25,8 @@ const SETTLED_AT = 'settled';
 
 const CLOSED_AT = 'closed';
 
-/** Each note a pass folded into facts, by its stamp and text: a note is folded once, whenever it lands. */
+/** Each note a pass folded into facts, by its stamp and text: a note is folded once, whenever it lands, and a note
+ *  forgotten or rewritten takes its tombstone with it at the next pass. */
 const NOTE_FOLDED = 'sleep_time_note';
 
 /** The notes one pass folds, oldest first: a workspace with years of them drains over its passes. */
@@ -307,6 +308,8 @@ export class SleepTimeLane {
 
         for (const note of folded) recordEffectDone(this.deps.sql, this.deps.actor, { scope: NOTE_FOLDED, key: note });
 
+        if (kept !== null) retainEffectsDone(this.deps.sql, this.deps.actor, NOTE_FOLDED, kept.live);
+
         for (const [index, proposal] of proposals.entries()) {
           void this.deps.sql`INSERT INTO account_proposal_outbox (delivery, proposal_json)
             VALUES (${`${key}#${String(index)}`}, ${JSON.stringify(proposal)}) ON CONFLICT(delivery) DO NOTHING`;
@@ -370,8 +373,9 @@ export class SleepTimeLane {
     })));
   }
 
-  /** The oldest notes not yet folded, with their keys. A read that fails costs the pass its notes, never its turns. */
-  private keptNotes(): Effect.Effect<{ readonly fresh: readonly MemoryNote[]; readonly keys: readonly string[] } | null> {
+  /** The oldest notes not yet folded, their keys, and every note's key. A read that fails costs the pass its notes,
+   *  never its turns. */
+  private keptNotes(): Effect.Effect<{ readonly fresh: readonly MemoryNote[]; readonly keys: readonly string[]; readonly live: readonly string[] } | null> {
     const read = this.deps.notes;
 
     if (read === undefined) return Effect.succeed(null);
@@ -382,7 +386,7 @@ export class SleepTimeLane {
         const done = effectsAlreadyDone(this.deps.sql, this.deps.actor, NOTE_FOLDED, keyed.map(({ key }) => key));
         const fresh = keyed.filter(({ key }) => !done.has(key)).slice(0, FOLD_CAP);
 
-        return { fresh: fresh.map(({ note }) => note), keys: fresh.map(({ key }) => key) };
+        return { fresh: fresh.map(({ note }) => note), keys: fresh.map(({ key }) => key), live: keyed.map(({ key }) => key) };
       }),
       Effect.catch((failure) => Effect.sync(() => {
         diagnostics.failure('memory.notes_read_failed', failure, { workspace: this.deps.workspace });

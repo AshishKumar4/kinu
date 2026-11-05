@@ -14,7 +14,7 @@ import { createTestFactsStore, createJSONLLM, createScriptedLLM, createTestRunti
 import { KinuError } from '../src/obs';
 import type { SleepTimeTurn } from '../src/memory/sleep-time-compute';
 import { Database } from 'bun:sqlite';
-import { appendMemoryNote, memoryNotes } from '../src/memory/note';
+import { appendMemoryNote, MEMORY_PATH, memoryNotes } from '../src/memory/note';
 import { createMemoryMemory, createWorkspaceBundle } from './helpers';
 
 /** A rejection's shape, as a pass's failure carries it. */
@@ -504,7 +504,7 @@ describe('an idle wake dreams first', () => {
     const db = new Database(':memory:');
     const memory = createMemoryMemory(db, createWorkspaceBundle(db).vfs);
     const seen: string[] = [];
-    const answered = turns(6);
+    const answered = turns(9);
     const window = { read: 3 };
 
     const fold = () => new SleepTimeLane({
@@ -557,6 +557,23 @@ describe('an idle wake dreams first', () => {
 
     expect(facts.recall('database')?.value).toBe('pg-17');
     expect(seen).toEqual(['pg-15', 'pg-17']);
+    close();
+  });
+
+  test('a note forgotten takes its fold with it: the same note written again is folded again', async () => {
+    const { fold, memory, seen, window, close } = folding();
+    const instant = new Date().toISOString();
+
+    await appendMemoryNote(memory, 'The staging database runs pg-15', { date: instant });
+    await fold().runTerminal();
+    await memory.write(MEMORY_PATH, '');
+    window.read = 6;
+    await fold().runTerminal();
+    await appendMemoryNote(memory, 'The staging database runs pg-15', { date: instant });
+    window.read = 9;
+    await fold().runTerminal();
+
+    expect(seen).toEqual(['pg-15', 'pg-15']);
     close();
   });
 
