@@ -1,5 +1,6 @@
 import { Effect } from 'effect';
 import { settleSync } from '../../obs/index';
+import { MINUTE_MS } from '../../utils/date';
 
 /** A past-due retry is clamped to `now`, not dropped, or it stalls until an unrelated wake. */
 export function nextAlarmTime(
@@ -37,8 +38,6 @@ function wallClockOf(zone: string): (instant: number) => { readonly stamp: strin
     return { stamp: `${part.year ?? ''}-${part.month ?? ''}-${part.day ?? ''} ${part.hour ?? ''}:${part.minute ?? ''}`, hour: Number(part.hour), minute: Number(part.minute) };
   };
 }
-
-const MINUTE_MS = 60_000;
 
 /**
  * The first minute after `from` whose wall clock in `timeZone` (UTC when absent) the cron names. Only minute and hour

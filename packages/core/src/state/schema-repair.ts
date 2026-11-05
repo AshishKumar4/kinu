@@ -51,7 +51,7 @@ export interface TableWrites {
 }
 
 /** A table a repair dropped, and its rows before and after: after is what the init seeded, null for a retired table. */
-export interface TouchedTable {
+interface TouchedTable {
   readonly table: string;
   readonly before: number | null;
   readonly after: number | null;

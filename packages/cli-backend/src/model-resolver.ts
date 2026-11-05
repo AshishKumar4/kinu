@@ -49,7 +49,7 @@ import { createOpenCodeProvider } from './opencode-provider';
 import { isOAuthLoginKey, type LocalOAuthStore } from './oauth-store';
 import * as v from 'valibot';
 import { Effect } from 'effect';
-import { KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
+import { KinuError, renderThrownChain, settle, settleSync } from '@kinu.run/core/obs';
 
 const proxiedCredentialsSchema = v.object({
   credentials: v.optional(v.array(v.object({
@@ -151,7 +151,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
   ) : Promise.resolve({ entries: [], failures: new Map<string, string>() });
 
   const cloudProvider = (readMenu: () => Promise<CloudMenu>, provider: { id: CloudProxyProviderId; label: string; unavailableReason: string; defaultModel?: string }): ModelProvider => {
-    if (!cloud) return createSignedOutCloudProvider(provider.id, provider.label);
+    if (!cloud) return new SignedOutCloudProvider(provider.id, provider.label);
 
     return new CloudProxyProvider({ ...provider, cloud, menu: readMenu, fetch: opts.fetch });
   };
@@ -514,20 +514,27 @@ class CloudProxyProvider implements ModelProvider {
   }
 }
 
-/** Signed out: providers stay visible in /model, saying what they lack. */
-function createSignedOutCloudProvider(id: CloudProxyProviderId, label: string): ModelProvider {
-  const reason = "This machine isn't signed in to Kinu, so your Cloudflare account's models aren't reachable.";
+const SIGNED_OUT = "This machine isn't signed in to Kinu, so your Cloudflare account's models aren't reachable.";
 
-  return {
-    id,
-    label,
-    isAvailable: () => false,
-    unavailableReason: () => reason,
-    listModels: async () => [],
-    createModel(): LanguageModel {
-      throw new Error(reason);
-    },
-  };
+/** Signed out: providers stay visible in /model, saying what they lack. */
+class SignedOutCloudProvider implements ModelProvider {
+  constructor(readonly id: CloudProxyProviderId, readonly label: string) {}
+
+  isAvailable(): boolean {
+    return false;
+  }
+
+  unavailableReason(): string {
+    return SIGNED_OUT;
+  }
+
+  listModels(): ModelInfo[] {
+    return [];
+  }
+
+  createModel(): LanguageModel {
+    return settleSync(Effect.fail(new KinuError('unavailable', SIGNED_OUT)));
+  }
 }
 
 /** Per-backend copy: the CLI and cloud lack different things. */

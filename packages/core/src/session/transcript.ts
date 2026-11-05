@@ -5,7 +5,9 @@ import type { ActorHandle } from '../identity/actor-handle';
 import type { PromptFile } from '../types/backend-host';
 import type { SqlExecutor } from '../types/primitives';
 import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
+import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
+import { settle } from '../obs/effect';
 import { encodeModelMessage } from './message-codec';
 import { type SessionMessages, SessionMessageReader, type ActorReadAuthority, type MessagePartReference, type MessageReference, type StoredPart } from './messages';
 import { type SessionPayloads, SessionPayloadReader, payloadReference, type SessionPayload } from './payload';
@@ -18,6 +20,7 @@ import { PLATFORM_LIMITS } from '../platform-limits';
 import { attachmentImage, imagesIn, walkImages, type MediaRef, type MediaUrl, type StoredImage } from './chat-media';
 import { utf8Bytes } from '../utils/text';
 import { nextLoopTurn } from '../types/clock';
+import { boundedInt } from '../utils/bounds';
 
 const outputUtf8 = new TextEncoder();
 
@@ -313,7 +316,7 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
   /** Newest first, tool rows skipped; a cursor names a position, so any stretch is one indexed read. */
   pageIds(request: PositionPageRequest = {}): Page<{ readonly id: string; readonly position: number }, PositionCursor> {
     this.actor.assertCurrent();
-    const limit = Math.max(1, Math.min(200, Math.floor(request.limit ?? 100)));
+    const limit = boundedInt(request.limit, 100, 1, 200);
     const before = request.cursor?.before ?? Number.MAX_SAFE_INTEGER;
 
     const rows = this.sql<{ id: string; position: number }>`SELECT id,position FROM conversation_entries
@@ -335,17 +338,19 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
   }
 
   async page(request: PositionPageRequest = {}): Promise<Page<ConversationProjection, PositionCursor>> {
-    const page = this.pageIds(request);
-    const items: ConversationProjection[] = [];
+    return settle(Effect.gen({ self: this }, function* () {
+      const page = this.pageIds(request);
+      const items: ConversationProjection[] = [];
 
-    for (const row of page.items) {
-      const projected = await this.project(row.id);
+      for (const row of page.items) {
+        const projected = yield* Effect.promise(() => this.project(row.id));
 
-      if (projected === null) throw new KinuError('missing', 'conversation entry disappeared');
-      items.push(projected);
-    }
+        if (projected === null) return yield* Effect.fail(new KinuError('missing', 'conversation entry disappeared'));
+        items.push(projected);
+      }
 
-    return { ...page, items };
+      return { ...page, items };
+    }));
   }
 
 
@@ -485,7 +490,7 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
    */
   async drawnPage(request: DrawnPageRequest): Promise<Page<DrawnEntry, PositionCursor>> {
     this.actor.assertCurrent();
-    const rows = Math.min(Math.max(1, Math.floor(request.limit ?? DRAWN_PAGE_ROWS)), DRAWN_PAGE_ROWS);
+    const rows = boundedInt(request.limit, DRAWN_PAGE_ROWS, 1, DRAWN_PAGE_ROWS);
     // One past the page, so a row left over says there is more.
     const read = this.entriesBefore(request.cursor?.before ?? Number.MAX_SAFE_INTEGER, rows + 1);
     const page = read.slice(0, rows);

@@ -2,7 +2,9 @@
 import { describe, expect, test } from 'bun:test';
 import { createTestActorsOver, createTestSql } from '@kinu.run/test-utils';
 import { admitSubagentTask, AgentDeliveries, assignmentDelivery, DeliveryCoordinator, DeliveryInbox, InProcessDeliveries, initAgentDeliveriesTable, pendingEventsDelivery, subagentTurnContext, wordsRefusal, type Delivery, type DeliveryAnswer } from '../src/index';
-import { initEventsHubTables, EventLog, type IngressDescriptor } from '../src/events/hub/index';
+import { EventLog } from '../src/events/hub/log';
+import { initEventsHubTables } from '../src/events/hub/schema';
+import type { IngressDescriptor } from '../src/events/hub/types';
 import { KinuError } from '../src/obs/index';
 import { makeSqlExec } from './helpers';
 

@@ -10,7 +10,8 @@ import { jsonResultOrVoid, sha256Hex, type JsonObject } from '@kinu.run/core';
 import type {
   NimbusExecResult, NimbusPortInfo, NimbusSandboxHandle, NimbusStartResult, PreviewRouteCheck, WorkspacePreviewUrl,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, toKinuError, type Refusal } from '@kinu.run/core/obs';
+import { diagnostics, hold, KinuError, settle, settleLogged, type Refusal } from '@kinu.run/core/obs';
+import { Effect, Exit } from 'effect';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
@@ -256,25 +257,16 @@ function routeCheck(gates: PreviewGates): PreviewRouteCheck {
     : { reached: false, gate: gates.refused.gate, detail: gates.refused.detail };
 }
 
-/** A throw inside `waitUntil` would otherwise vanish. */
-async function redriveSlate(ensuring: Promise<Refusal | null>, owner: string): Promise<void> {
-  try {
-    const refusal = await ensuring;
-
-    if (refusal !== null) {
-      diagnostics.event('workspace.facet.redrive_refused', { owner, reason: refusal.reason, error: refusal.error });
-    }
-  } catch (cause) {
-    diagnostics.failure('workspace.facet.redrive_failed', toKinuError({
-      doing: 're-driving a slate launch a hibernation interrupted', cause, otherwise: 'io',
-    }), { owner });
-  }
-}
-
 function resolveSlateLaunch<Id>(deps: HostedWorkspaceDeps<Id>, recipe: WorkerRecipe): Promise<null> {
   if (recipe.resident !== undefined || deps.ensureSlate === undefined) return Promise.resolve(null);
+  const owner = recipe.owner;
 
-  deps.ctx.waitUntil(redriveSlate(deps.ensureSlate(recipe.owner), recipe.owner));
+  // A failure inside `waitUntil` would otherwise vanish.
+  deps.ctx.waitUntil(settleLogged('workspace.facet.redrive_failed', { doing: 're-driving a slate launch a hibernation interrupted', otherwise: 'io' }, async () => {
+    const refusal = await deps.ensureSlate?.(owner) ?? null;
+
+    if (refusal !== null) diagnostics.event('workspace.facet.redrive_refused', { owner, reason: refusal.reason, error: refusal.error });
+  }, { owner }));
 
   return Promise.resolve(null);
 }
@@ -315,44 +307,44 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
     cancel: (task) => deps.tasks.cancel(task),
   };
 
+  const composeHost = async (): Promise<HostComposition> => {
+    const session = await bundle.session();
+    const { composeHostedRuntime, sessionProcessEnv } = await hostedRuntimeModule();
+
+    const runtimeBindings: HostedRuntimeBindings<Id> = {
+      OrchestratorAgent: deps.env.OrchestratorAgent,
+      LOADER: fabricLoader(deps.env.LOADER),
+      ASSETS: deps.env.ASSETS,
+      ...catalogDigest,
+    };
+
+    const runtime = await composeHostedRuntime({
+      workspace: session.workspace,
+      ctx: deps.ctx,
+      env: runtimeBindings,
+      ports: portRegistry,
+      lifecycle,
+      resolveWorkerLaunch: (recipe) => resolveSlateLaunch(deps, recipe),
+      // Nimbus keeps no process's environment (ask 62); a relaunch asks for it again. Kinu has no record of a dev
+      // server's or a resident's launch env, so it is kept as Nimbus's own session keeps it: a storage row beside its
+      // record, outside the filesystem. The box's env holds egress placeholders only, never a secret's value.
+      ...sessionProcessEnv(deps.ctx.storage),
+    });
+
+    // Cold-start recovery of the launch journal, as Nimbus's own session pumps once at init.
+    deps.ctx.waitUntil(runtime.onScheduled('resident-launch'));
+
+    return { runtime, facets: runtime.facets(), ports: portRegistry };
+  };
+
   const compose = async (): Promise<HostComposition> => {
-    composing ??= (async (): Promise<HostComposition> => {
-      try {
-        const session = await bundle.session();
-        const { composeHostedRuntime, sessionProcessEnv } = await hostedRuntimeModule();
+    const started = composing ??= composeHost();
+    const outcome = await hold(Effect.promise(() => started));
 
-        const runtimeBindings: HostedRuntimeBindings<Id> = {
-          OrchestratorAgent: deps.env.OrchestratorAgent,
-          LOADER: fabricLoader(deps.env.LOADER),
-          ASSETS: deps.env.ASSETS,
-          ...catalogDigest,
-        };
+    // A cached rejection would poison every later op on one transient failure.
+    if (Exit.isFailure(outcome) && composing === started) composing = undefined;
 
-        const runtime = await composeHostedRuntime({
-          workspace: session.workspace,
-          ctx: deps.ctx,
-          env: runtimeBindings,
-          ports: portRegistry,
-          lifecycle,
-          resolveWorkerLaunch: (recipe) => resolveSlateLaunch(deps, recipe),
-          // Nimbus keeps no process's environment (ask 62); a relaunch asks for it again. Kinu has no record of a dev
-          // server's or a resident's launch env, so it is kept as Nimbus's own session keeps it: a storage row beside its
-          // record, outside the filesystem. The box's env holds egress placeholders only, never a secret's value.
-          ...sessionProcessEnv(deps.ctx.storage),
-        });
-
-        // Cold-start recovery of the launch journal, as Nimbus's own session pumps once at init.
-        deps.ctx.waitUntil(runtime.onScheduled('resident-launch'));
-
-        return { runtime, facets: runtime.facets(), ports: portRegistry };
-      } catch (cause) {
-        // A cached rejection would poison every later op on one transient failure.
-        composing = undefined;
-        throw cause;
-      }
-    })();
-
-    return await composing;
+    return started;
   };
 
   const runtime = async (): Promise<HostedRuntime> => (await compose()).runtime;
@@ -401,9 +393,11 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
     return { routed: true, capability, slate, capture, refused: null };
   };
 
-  const boxFor = (scope: string, domain: ShellDomain): HostedBox => ({
+  const exposing = { runtime, previewUrl: deps.previewUrl, previewGates, exposed: deps.onPortsChanged };
+
+  const boxFor = (scope: string, domain: ShellDomain, expose: HostedBoxExpose): HostedBox => ({
     ...workspaceBox({
-      runtime, ports: portRegistry, ctx: deps.ctx, scope, domain, previewUrl: deps.previewUrl, previewGates, exposed: deps.onPortsChanged,
+      runtime, ports: portRegistry, ctx: deps.ctx, scope, domain, previewUrl: deps.previewUrl, expose,
       mountTable: (mounts, principal) => bundle.mountTable(mounts, principal),
       namespace: (principal) => bundle.namespace(principal),
     }),
@@ -414,8 +408,8 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
     bundle,
     supervisorOp: async (envelope) => (await runtime()).supervisorOp(envelope),
     session: async (scope) => (await runtime()).session(scope),
-    box: (scope) => boxFor(scope, 'agent'),
-    viewerBox: (scope) => boxFor(scope, 'viewer'),
+    box: (scope) => boxFor(scope, 'agent', (port) => settle(exposedPort(exposing, port))),
+    viewerBox: (scope) => boxFor(scope, 'viewer', (port) => settle(exposedPort(exposing, port))),
     // A listing says which job serves a port; it is no authority over the port's exposure. A runtime this isolate never
     // composed runs no process, so it answers nothing without booting the workspace.
     serving: async () => {
@@ -466,7 +460,7 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
         const reserved = await facets.apps.ensureDurableApp({ owner, preferredPort, visibility: 'scoped' });
 
         if (reserved.capability === null) {
-          throw new KinuError('io', `Nimbus reserved workspace port ${reserved.port} for ${owner} without a capability`);
+          return settle(Effect.fail(new KinuError('io', `Nimbus reserved workspace port ${reserved.port} for ${owner} without a capability`)));
         }
 
         return { port: reserved.port, capability: reserved.capability };
@@ -510,19 +504,16 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
       // The runtime's own route: it readies the runtime first, and a visitor's request is a client's to it.
       const routed = await runtime();
 
-      try {
-        const response = await routed.routeCapabilityPort(port, capability, publicRequest, pathname);
+      const routing = Effect.promise(() => routed.routeCapabilityPort(port, capability, publicRequest, pathname));
 
+      return settle(Effect.onError(Effect.map(routing, (response) => {
         // A 101 only opens the socket: the process's close listener releases the invocation.
         if (response.status !== 101) invocation?.release();
 
         if (gates.slate !== null && !gates.capture && isRender(request, response)) deps.pictures?.rendered(gates.slate, port);
 
         return response;
-      } catch (cause) {
-        invocation?.release();
-        throw cause;
-      }
+      }), () => Effect.sync(() => invocation?.release())));
     },
     onScheduled: async (task) => { await (await runtime()).onScheduled(task); },
     destroy: () => bundle.destroy(),
@@ -573,6 +564,35 @@ function namedShellCwd(sql: SqlStorage, id: string): string | null {
 /** Whose named shells a box's are: an agent's (the owner's work), or a share's viewer's. */
 type ShellDomain = 'agent' | 'viewer';
 
+/** `port` exposed with its preview URL and how a visitor's request would route to it. */
+function exposedPort(deps: {
+  runtime: () => Promise<HostedRuntime>;
+  previewUrl(port: number, capability: string): Promise<WorkspacePreviewUrl>;
+  previewGates(port: number, handle: string): Promise<PreviewGates>;
+  /** An exposure changed which ports are exposed; a withdrawal is the registry's own move. */
+  exposed: (() => void) | undefined;
+}, port: number) {
+  return Effect.gen(function* () {
+    const exposed = yield* Effect.promise(async () => (await deps.runtime()).exposeApp({ port }));
+    const capability = exposed.capability;
+
+    if (capability === null) return yield* new KinuError('missing', `No process is listening on workspace port ${port}`);
+    const answer = yield* Effect.promise(() => deps.previewUrl(port, capability));
+
+    if (answer.url === undefined) {
+      return yield* new KinuError('unsupported', `workspace port ${port} is listening and has no preview URL: ${answer.unavailable}`);
+    }
+
+    const gates = yield* Effect.promise(() => deps.previewGates(port, capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH)));
+
+    deps.exposed?.();
+
+    return { port: exposed.port, pid: exposed.pid, capability, url: answer.url, route: routeCheck(gates) };
+  });
+}
+
+type HostedBoxExpose = NonNullable<NonNullable<NimbusSandboxHandle['ports']>['expose']>;
+
 function workspaceBox(deps: {
   runtime: () => Promise<HostedRuntime>;
   ports: PortRegistry;
@@ -580,9 +600,7 @@ function workspaceBox(deps: {
   scope: string;
   domain: ShellDomain;
   previewUrl(port: number, capability: string): Promise<WorkspacePreviewUrl>;
-  previewGates(port: number, handle: string): Promise<PreviewGates>;
-  /** An exposure changed which ports are exposed; a withdrawal is the registry's own move. */
-  exposed: (() => void) | undefined;
+  expose: HostedBoxExpose;
   mountTable: NonNullable<NimbusSandboxHandle['mountTable']>;
   namespace: NonNullable<NimbusSandboxHandle['namespace']>;
 }): NimbusSandboxHandle {
@@ -614,22 +632,7 @@ function workspaceBox(deps: {
       whenEnded: async (pid) => await (await runtime()).workspace.processes.whenEnded(pid),
     },
     ports: {
-      expose: async (port) => {
-        const exposed = await (await runtime()).exposeApp({ port });
-
-        if (exposed.capability === null) throw new Error(`No process is listening on workspace port ${port}`);
-        const answer = await deps.previewUrl(port, exposed.capability);
-
-        if (answer.url === undefined) {
-          throw new KinuError('unsupported', `workspace port ${port} is listening and has no preview URL: ${answer.unavailable}`);
-        }
-
-        const gates = await deps.previewGates(port, exposed.capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH));
-
-        deps.exposed?.();
-
-        return { port: exposed.port, pid: exposed.pid, capability: exposed.capability, url: answer.url, route: routeCheck(gates) };
-      },
+      expose: deps.expose,
       // Retire the capability before dropping the listener, so a crash leaves a dead token, not a live one.
       unexpose: async (port) => {
         await runtime();

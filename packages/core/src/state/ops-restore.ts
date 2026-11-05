@@ -28,7 +28,7 @@ export const RestoreTargetSchema = v.union([
 export type RestoreTarget = v.InferOutput<typeof RestoreTargetSchema>;
 
 /** A SQLite Durable Object's history, as `ctx.storage` holds it. */
-export interface StorageHistory {
+interface StorageHistory {
   getCurrentBookmark(): Promise<string>;
   getBookmarkForTime(timestamp: number | Date): Promise<string>;
   onNextSessionRestoreBookmark(bookmark: string): Promise<string>;

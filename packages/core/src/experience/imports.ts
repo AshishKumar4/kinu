@@ -12,7 +12,6 @@ import { upsertCraftedTool } from '../craft/conflict';
 import { createFactsStore } from '../memory/facts';
 import { effectAlreadyDone, recordEffectDone } from '../identity/effect-tombstones';
 import { nanoid } from '../utils/nanoid';
-import { nowMs } from '../utils/date';
 import * as v from 'valibot';
 import { diagnostics, toKinuError, tolerate } from '../obs/index';
 import { recordLesson } from '../evolution/lessons';
@@ -128,7 +127,7 @@ export type ImportOutcome =
 export function stageImport(
   rt: AgentRuntime,
   entry: ExperienceEntry,
-  now = nowMs(),
+  now = Date.now(),
 ): ImportOutcome {
 
   const verdict = checkMisevolutionForSurface(misevolutionSourceOf(entry.payload), 'import');
@@ -199,7 +198,7 @@ export async function settleImportsForTurn(
   rt: AgentRuntime,
   turnId: string,
   verdict: 'accepted' | 'rejected',
-  now = nowMs(),
+  now = Date.now(),
 ): Promise<ImportSettlement> {
   const riding = listImportedExperience(rt.storage.sql, rt.actor, { status: 'provisional', limit: 200 })
     .filter((row) => row.turnIds.includes(turnId));

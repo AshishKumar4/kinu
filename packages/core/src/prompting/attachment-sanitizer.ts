@@ -8,6 +8,7 @@ import { exists, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 
 import type { AssistantModelMessage, DataContent, FilePart, ImagePart, ModelMessage, TextPart, UserModelMessage } from 'ai';
 import { untagged } from '../utils/file-data';
+import { base64Bytes } from '../utils/base64';
 
 import type { ModelInputModality } from '../providers/types';
 import { servingRoute } from '../providers/serving-route';
@@ -221,10 +222,7 @@ function estimatePayloadBytes(data: DataContent | URL): number | null {
 
   if (data instanceof ArrayBuffer) return data.byteLength;
 
-  if (/^https?:\/\//.test(data)) return null;
-  const comma = data.startsWith('data:') ? data.indexOf(',') : -1;
-
-  return Math.floor(((comma === -1 ? data.length : data.length - comma - 1) * 3) / 4);
+  return /^https?:\/\//.test(data) ? null : base64Bytes(data);
 }
 
 /** An SVG is markup: it goes as text. */

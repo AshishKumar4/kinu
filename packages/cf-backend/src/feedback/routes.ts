@@ -4,7 +4,8 @@
  */
 
 import { Hono } from 'hono';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { chainOf, hold } from '@kinu.run/core/obs';
+import { Effect, Exit } from 'effect';
 import { writeFeedbackMarker, type AnalyticsEnv } from '@kinu.run/core/analytics';
 import { recordFeedback, type FeedbackIngestEnv } from '../control-plane/feedback-ingest';
 import { idempotent } from '@nimbus-sh/fabric/do-calls.js';
@@ -44,18 +45,18 @@ async function attributeWorkspace<Id>(
 ): Promise<WorkspaceAttribution> {
   if (!isWorkspaceName(workspace)) return { kind: 'refused' };
 
-  try {
+  const owned = await hold(Effect.promise(async () => {
     const caller = await ownerCaller(env);
     const userObject = env.UserDO.idFromName(userId);
 
-    const owned = await idempotent('hasWorkspace', () => env.UserDO.get(userObject, { locationHint: UNPLACED }),
+    return idempotent('hasWorkspace', () => env.UserDO.get(userObject, { locationHint: UNPLACED }),
       (stub) => stub.hasWorkspace(caller, workspace), { onRetry: logDoCallRetry });
+  }));
 
-    return owned ? { kind: 'owned', workspace } : { kind: 'refused' };
-  } catch (cause) {
-    // Every failure is our outage, never "not yours", or it would blame the reporter and hide from the rejection rate.
-    return { kind: 'unavailable', error: renderThrownChain({ cause }) };
-  }
+  // Every failure is our outage, never "not yours", or it would blame the reporter and hide from the rejection rate.
+  if (Exit.isFailure(owned)) return { kind: 'unavailable', error: chainOf(owned.cause) };
+
+  return owned.value ? { kind: 'owned', workspace } : { kind: 'refused' };
 }
 
 /** Optional so the submission's own 401 holds wherever it is mounted. */

@@ -521,6 +521,14 @@ export class AgentTurns {
   /** Null when the opening it prepares was overtaken while it read: see {@link offeredFacts}. */
   private async read(turn: OpenTurn): Promise<PreparedAgentTurn | null> {
     const prepared = await prepareHostedTurn(this.deps.seams(), turn.reference, turn.request);
+    // Every turn is the owner's limits' to admit (a suspended account starts none, a platform model's day is bounded),
+    // asked beside the rest of its reading.
+    const [read] = await Promise.all([this.readPrepared(turn, prepared), this.deps.admitModel(prepared.model)]);
+
+    return read;
+  }
+
+  private async readPrepared(turn: OpenTurn, prepared: PreparedHostedTurn): Promise<PreparedAgentTurn | null> {
     const run = turn.request.run?.inference;
     const { actor, input, surface } = prepared;
 
@@ -551,8 +559,6 @@ export class AgentTurns {
     const facts = this.offeredFacts(turn, prepared);
 
     if (facts === null) return null;
-    // Every turn is the owner's limits' to admit: a suspended account starts none, and a platform model's day is bounded.
-    await this.deps.admitModel(prepared.model);
 
     return {
       input,

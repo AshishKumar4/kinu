@@ -11,6 +11,7 @@ import * as v from 'valibot';
 import { DEFAULT_CACHE_RETENTION, type CacheRetention } from '../providers/types';
 import { ANTHROPIC_MAX_BREAKPOINTS } from '../providers/anthropic';
 import { servingRoute } from '../providers/serving-route';
+import { MINUTE_MS } from '../utils/date';
 
 /** The AI SDK's provider-options bag (not re-exported by `ai` itself). */
 type ProviderOptions = NonNullable<ModelMessage['providerOptions']>;
@@ -117,8 +118,6 @@ export function resolvePromptCacheStrategy(
       return { kind: 'none' };
   }
 }
-
-const MINUTE_MS = 60_000;
 
 /** An idle entry's longest documented lifetime, null for none: expiring a live one costs a re-read. */
 function promptCacheLifetimeMs(providerId?: string, modelId?: string, retention: CacheRetention = DEFAULT_CACHE_RETENTION): number | null {

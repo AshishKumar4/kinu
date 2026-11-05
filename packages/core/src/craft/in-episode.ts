@@ -5,8 +5,7 @@ import type { SqlExecutor } from '../types/primitives';
 import { BUILTIN_TOOL_NAMES } from '../tools/registry';
 import { isMcpToolKey } from '../tools/mcp-naming';
 import { clearCraftBroken, markCraftBroken, rankByPreference } from './preference';
-import { renderThrownChain, tolerate } from '../obs/index';
-import { parseJsonValue, type JsonValue } from '../utils/json';
+import * as v from 'valibot';
 import { namespacedCalls, parseCodemodeProgram } from '../safety/evolved-code';
 
 /** Shared by admission and the injection filter so they agree on reserved names. */
@@ -33,38 +32,19 @@ function craftCreatesTool(code: string): boolean {
   return program !== null && namespacedCalls(program, ['workspace']).has('workspace.createTool');
 }
 
-/** Also emitted by core/src/execution/codemode-node-shim.ts `defineCrafted`; keep the format in sync. */
-export function craftFailureMarker(name: string): string {
-  return `[crafted:${name}]`;
-}
+/** Where a program's crafted-tool raises are heard as it runs: the host's census for each crafted tool calls it with
+ *  the tool's name and what its body threw (`programSurface`), whether or not the program caught the throw. */
+export const CRAFT_RAISED_OPTION = 'kinuCraftRaised';
 
-export function craftInvocationError(name: string, cause: Error | string): Error {
-  const message = renderThrownChain({ cause: cause });
+export type CraftRaised = (name: string, message: string) => void;
 
-  return new Error(`${craftFailureMarker(name)} ${message}`, { cause });
-}
+const CraftRaisedOptionsSchema = v.object({ [CRAFT_RAISED_OPTION]: v.optional(v.function()) });
 
-/** Blame only stamped tools; a block failing on its own code blames nobody. */
-export function craftFailureBlame(failure: string, invoked: readonly string[]): string[] {
-  return invoked.filter((name) => failure.includes(craftFailureMarker(name)));
-}
+/** The census an `eval` call's options carry; absent where nobody observes its crafted tools. */
+export function readCraftRaised(input: { toolOptions: unknown }): CraftRaised | undefined {
+  const parsed = v.safeParse(CraftRaisedOptionsSchema, input.toolOptions);
 
-/** Every string a result holds, at any depth. */
-function textsOf(value: JsonValue): string[] {
-  if (typeof value === 'string') return [value];
-
-  if (value === null || typeof value !== 'object') return [];
-
-  return (Array.isArray(value) ? value : Object.values(value)).flatMap((inner) => (inner === undefined ? [] : textsOf(inner)));
-}
-
-/** What `name`'s raise said, after its stamp: read from the result's own strings, which hold the error as it was thrown. */
-function raisedError(failure: string, name: string): string {
-  const marker = craftFailureMarker(name);
-  const parsed = tolerate(() => parseJsonValue(failure), 'malformed-input');
-  const stamped = (parsed === undefined ? [failure] : textsOf(parsed)).find((text) => text.includes(marker)) ?? failure;
-
-  return (stamped.slice(stamped.indexOf(marker) + marker.length).split('\n', 1)[0] ?? '').trim();
+  return parsed.success ? parsed.output[CRAFT_RAISED_OPTION] : undefined;
 }
 
 /** One `eval` call's crafted-tool evidence, as the isolate that ran it observed it ({@link observeCraftCall}). */
@@ -80,12 +60,12 @@ export interface CraftCall {
 }
 
 /**
- * One settled `eval` call, recorded on `ledger`. `before` is the callable set as the call was dispatched, `result` what it
- * closed with (its output, or its error), `failed` whether it threw. Null when it neither created nor called a crafted
- * tool.
+ * One settled `eval` call, recorded on `ledger`. `before` is the callable set as the call was dispatched, `raised` what
+ * each crafted tool's body threw as it ran, `failed` whether the call threw. Null when it neither created nor called a
+ * crafted tool.
  */
 export function observeCraftCall(ledger: CraftLedger, call: {
-  readonly code: string; readonly before: ReadonlySet<string>; readonly result: string; readonly failed: boolean;
+  readonly code: string; readonly before: ReadonlySet<string>; readonly raised: ReadonlyMap<string, string>; readonly failed: boolean;
 }): CraftCall | null {
   const known = ledger.names();
   // The set can also grow from the turn-outcome review (evolution/engine.ts); only attribute asked-for creation.
@@ -93,15 +73,21 @@ export function observeCraftCall(ledger: CraftLedger, call: {
   const invoked = craftInvocationSites(call.code, known);
 
   if (created.length === 0 && invoked.length === 0) return null;
-  // The stamp is the evidence, not the call's own verdict: a failure the program caught and returned still names it.
-  const raised = craftFailureBlame(call.result, invoked);
-  // A tool cannot certify itself in the call that created it.
-  const returned = call.failed ? [] : invoked.filter((name) => call.before.has(name) && !raised.includes(name));
 
-  for (const name of raised) ledger.broke(name, raisedError(call.result, name));
+  const raised = invoked.flatMap((name) => {
+    const error = call.raised.get(name);
+
+    return error === undefined ? [] : [{ name, error }];
+  });
+
+  const raisedNames = raised.map(({ name }) => name);
+  // A tool cannot certify itself in the call that created it.
+  const returned = call.failed ? [] : invoked.filter((name) => call.before.has(name) && !raisedNames.includes(name));
+
+  for (const { name, error } of raised) ledger.broke(name, error);
   ledger.repaired(returned);
 
-  return { created, invoked, raised, returned };
+  return { created, invoked, raised: raisedNames, returned };
 }
 
 export interface CraftLedger {

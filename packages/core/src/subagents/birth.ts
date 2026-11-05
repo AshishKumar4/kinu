@@ -98,7 +98,7 @@ function finishSubagentBirth(
 
     // Held, not run here: a second caller for this creation id joins this one run.
     const work = hold(Effect.gen(function* () {
-      const reference = yield* Effect.promise(() => runtime.spawn({ ...birth.seed, creationId: birth.creationId }));
+      const reference = yield* runtime.spawn({ ...birth.seed, creationId: birth.creationId });
       roster.attachActor(name, birth.creationId, reference);
 
       if (roster.requireExisting(name).deleteRequested) return yield* new KinuError('cancelled', 'The admitted actor birth is cancelled.');
@@ -106,7 +106,7 @@ function finishSubagentBirth(
       const assignment = birth.assignment;
 
       if (assignment) {
-        const handoff = yield* Effect.promise(() => runtime.assign(name, { ...assignment, creationId: birth.creationId }));
+        const handoff = yield* runtime.assign(name, { ...assignment, creationId: birth.creationId });
 
         if (roster.requireExisting(name).birth?.creationId !== birth.creationId) return yield* new KinuError('denied', 'The birth admission no longer owns this assignment.');
         roster.recordAssignmentEvent(name, handoff.eventId);
@@ -142,12 +142,12 @@ export function recoverSubagentLifecycles(roster: SubagentRosterStore, runtime: 
         const birth = entry.birth;
 
         if (!birth) return yield* new KinuError('missing', 'The deletion intent has no actor or admitted creation identity.');
-        reference = yield* Effect.promise(async () => runtime.cancelBirth({ ...birth.seed, creationId: birth.creationId }));
+        reference = yield* runtime.cancelBirth({ ...birth.seed, creationId: birth.creationId });
         roster.attachActor(entry.name, birth.creationId, reference);
       } else {
         const held = reference;
 
-        yield* Effect.promise(async () => runtime.dismiss(entry.name, { keepHistory: false, interrupt: true }, held));
+        yield* runtime.dismiss(entry.name, { keepHistory: false, interrupt: true }, held);
       }
 
       roster.removeActor(entry.name, reference);

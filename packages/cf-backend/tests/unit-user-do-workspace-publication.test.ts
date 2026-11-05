@@ -1,4 +1,5 @@
 // KINU-027: a reserved fork target (`create_pending = 1`) must be absent from every
+import { classifyErrorCode } from '@kinu.run/core/obs';
 // owner-visible surface until `publishWorkspaceReservation`; each surface is asserted
 // on its own line beside a published control, so one missing filter cannot hide.
 import { describe, expect, test } from 'bun:test';
@@ -14,17 +15,15 @@ function rowOf(harness: TestUserDO, name: string): { create_pending: number; las
   ).get(name);
 }
 
-/** A fork rollback branches on the error's name: it survives DO RPC, the class does not. */
-async function refusalOf(publish: Promise<void>): Promise<{ name: string; message: string }> {
+/** The refusal's typed reason, as a caller across DO RPC reads it. */
+async function refusalOf(publish: Promise<void>): Promise<{ code: string | null; message: string }> {
   try {
     await publish;
   } catch (cause) {
-    if (cause instanceof Error) return { name: cause.name, message: cause.message };
-
-    return { name: 'a thrown non-Error', message: String(cause) };
+    return { code: classifyErrorCode({ cause }), message: cause instanceof Error ? cause.message : String(cause) };
   }
 
-  return { name: 'no refusal at all', message: 'the publish resolved' };
+  return { code: null, message: 'the publish resolved' };
 }
 
 /** A known `last_visited`, so a no-op touch is not masked by two writes in the same millisecond. */
@@ -195,7 +194,7 @@ describe('publishWorkspaceReservation refuses anything that is not an open reser
       harness.userDO.publishWorkspaceReservation(owner, 'in-flight', reserved.entry.createdAt + 1, null),
     );
 
-    expect(refusal.name).toBe('WorkspaceReservationNotPendingError');
+    expect(refusal).toMatchObject({ code: 'denied' });
 
     expect(harness.installed.has('in-flight')).toBe(false);
     expect(rowOf(harness, 'in-flight')?.create_pending).toBe(1);
@@ -211,7 +210,7 @@ describe('publishWorkspaceReservation refuses anything that is not an open reser
       harness.userDO.publishWorkspaceReservation(owner, 'never-reserved', 1, null),
     );
 
-    expect(refusal.name).toBe('WorkspaceReservationNotPendingError');
+    expect(refusal).toMatchObject({ code: 'denied' });
 
     expect(rowOf(harness, 'never-reserved')).toBeNull();
     harness.close();
@@ -226,7 +225,7 @@ describe('publishWorkspaceReservation refuses anything that is not an open reser
       harness.userDO.publishWorkspaceReservation(owner, 'ordinary', entry.createdAt, null),
     );
 
-    expect(refusal.name).toBe('WorkspaceReservationNotPendingError');
+    expect(refusal).toMatchObject({ code: 'denied' });
 
     expect(rowOf(harness, 'ordinary')?.create_pending).toBe(0);
     harness.close();

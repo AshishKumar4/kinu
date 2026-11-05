@@ -10,7 +10,7 @@ import { actorAffinity } from './workers-ai';
 import type { ModelAffinity } from './types';
 import type { ModelCallSink } from '../events/model-call';
 
-export type ModelTestFailure = 'signed-out' | 'spent' | 'unknown-model' | 'unreachable' | 'refused';
+type ModelTestFailure = 'signed-out' | 'spent' | 'unknown-model' | 'unreachable' | 'refused';
 
 export type ModelTestResult =
   | { readonly ok: true; readonly firstTokenMs: number; readonly totalMs: number }

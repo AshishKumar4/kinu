@@ -108,10 +108,6 @@ const ForkFrameSchema = v.variant('kind', [
 
 export type ForkFrame = v.InferOutput<typeof ForkFrameSchema>;
 
-export type ForkChunksFrame = Extract<ForkFrame, { kind: 'chunks' }>;
-
-export type ForkPageFrame = Extract<ForkFrame, { kind: 'page' }>;
-
 export type ForkRowFrame = Extract<ForkFrame, { kind: ForkRowSection }>;
 
 // Every section has its frame on the wire.

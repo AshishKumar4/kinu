@@ -48,7 +48,8 @@ import {
   withArchiveManifest,
   type ArchiveIndexStore,
 } from './manifest';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { chainOf, hold, renderThrownChain } from '@kinu.run/core/obs';
+import { Cause, Effect, Exit } from 'effect';
 
 
 export interface CompactionOutcomeEvent {
@@ -138,19 +139,20 @@ function compactionExtension(deps: CompactionExtensionDeps): KinuExtension {
   /** A cancelled turn cancels only its own calls; its abort is no summary failure. */
   const summarizerFor = (signal: AbortSignal | undefined, failure: AbortController | null): Summarizer => ({
     async complete(job) {
-      try {
-        return await deps.summarize(job.prompt, signal);
-      } catch (err) {
-        if (signal?.aborted) throw err;
-        deps.ports.logger.warn('Compaction summary call failed', {
-          rangeStartMessageId: job.rangeStartMessageId,
-          rangeEndMessageId: job.rangeEndMessageId,
-          error: renderThrownChain({ cause: err }),
-        });
-        failure?.abort(err);
+      const asked = (async () => deps.summarize(job.prompt, signal))();
+      const outcome = await hold(Effect.promise(() => asked));
 
-        return null;
-      }
+      // Answered, or cancelled with its turn: the call's own outcome stands.
+      if (Exit.isSuccess(outcome) || signal?.aborted) return asked;
+      const err = Cause.squash(outcome.cause);
+      deps.ports.logger.warn('Compaction summary call failed', {
+        rangeStartMessageId: job.rangeStartMessageId,
+        rangeEndMessageId: job.rangeEndMessageId,
+        error: renderThrownChain({ cause: err }),
+      });
+      failure?.abort(err);
+
+      return null;
     },
   });
 
@@ -239,18 +241,21 @@ function compactionExtension(deps: CompactionExtensionDeps): KinuExtension {
       budgetTokens: Math.max(100, Math.floor(codec.estimateTurns(prefixTurns) * 0.2)),
     });
 
-    let body: string;
+    const asked = (async () => deps.summarize(prompt, ctx.abortSignal))();
+    const summarized = await hold(Effect.promise(() => asked));
 
-    try {
-      body = await deps.summarize(prompt, ctx.abortSignal);
-    } catch (err) {
-      if (ctx.abortSignal?.aborted || ctx.trigger === 'user') throw err;
+    // A cancelled turn, or the owner's own fold, hears the call's failure as it was: `asked` rejected, so this does.
+    if (Exit.isFailure(summarized) && (ctx.abortSignal?.aborted || ctx.trigger === 'user')) return asked.then(() => null);
+
+    if (Exit.isFailure(summarized)) {
       deps.ports.logger.warn('Compaction prefix-summary call failed; keeping deterministic summary', {
-        error: renderThrownChain({ cause: err }),
+        error: chainOf(summarized.cause),
       });
 
       return null;
     }
+
+    const body = summarized.value;
 
     if (!body.trim()) return null;
 

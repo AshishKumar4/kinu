@@ -21,8 +21,8 @@ export type {
   CarrySuppression, Floor, FloorBreach, MeasuredValue, Measurement,
   MeasurementContext, Objective, ObjectiveDirection, ObjectiveIdentity, ObjectiveScale,
   ParetoAxes, ParetoAxis, ParetoEvidence, PublicationState, PublicationSurface,
-  PublicationVerdict, PublishingCarry, Unmeasurable, Verifier, VerifierFault,
-  VerifierKind, VerifierSource, VerifierSpec, WitnessObjective,
+  PublicationVerdict, PublishingCarry, Verifier,
+  VerifierKind, VerifierSpec,
   ScalarObjective, InstancedObjective, VectorObjective, MeasuredObjective,
   ExplorationRecord,
 } from '../types/objective';

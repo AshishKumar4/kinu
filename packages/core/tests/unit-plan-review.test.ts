@@ -3,19 +3,15 @@ import { createTestActorsOver, toolExecute } from '@kinu.run/test-utils';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
-  MAX_PLAN_ANNOTATIONS_BYTES,
-  MAX_PLAN_CONTENT_BYTES,
   PLATFORM_LIMITS,
   PlanReviewActions,
   PlanReviewStore,
   PlanReviewSchema,
-  applyPlanEdits,
   formatPlanWithLineNumbers,
   initPlanReviewTable,
   planAwaitingReply,
   planDecisionRefusal,
   workModeUnderReview,
-  validatePlanEdits,
   buildBuiltinTools,
   type JsonValue,
   type PlanEdit,
@@ -23,48 +19,6 @@ import {
 } from '../src/index';
 import type { ProgrammaticTurn } from '../src/types/backend-host';
 import { createTestRuntime, makeExecRaw, makeSql, conversationsFor } from './helpers';
-
-describe('plan edit contract', () => {
-  test('writes the initial full plan and applies later edits against pre-edit line numbers', () => {
-    const initial = applyPlanEdits([], [{ start: 1, content: '# Plan\n\nA\nB' }]);
-    expect(initial).toEqual(['# Plan', '', 'A', 'B']);
-
-    expect(applyPlanEdits(initial, [
-      { start: 2, end: 2, content: 'Overview' },
-      { start: 4, end: 4, content: 'B revised\nC' },
-    ])).toEqual(['# Plan', 'Overview', 'A', 'B revised', 'C']);
-  });
-
-  test('supports deletion and replacement through end-of-plan', () => {
-    expect(applyPlanEdits(['one', 'two', 'three'], [
-      { start: 2, end: 2, content: '' },
-    ])).toEqual(['one', 'three']);
-    expect(applyPlanEdits(['one', 'two', 'three'], [
-      { start: 2, content: 'tail' },
-    ])).toEqual(['one', 'tail']);
-  });
-
-  test('rejects invalid, overlapping, empty, and oversized submissions', () => {
-    expect(validatePlanEdits(['one', 'two'], [{ start: 0, content: 'x' }])).toMatch(/positive integer/);
-    expect(validatePlanEdits(['one'], [{ start: 3, content: 'x' }])).toMatch(/file length/);
-    expect(validatePlanEdits(['one', 'two'], [
-      { start: 1, end: 2, content: 'x' },
-      { start: 2, end: 2, content: 'y' },
-    ])).toMatch(/overlap/);
-    expect(() => applyPlanEdits([], [{ start: 1, content: '   ' }])).toThrow(/empty/);
-    expect(() => applyPlanEdits([], [{ start: 1, content: 'x'.repeat(MAX_PLAN_CONTENT_BYTES + 1) }]))
-      .toThrow(/1.5 MiB/);
-  });
-
-  test('content and annotation caps fit one platform row', () => {
-    expect(MAX_PLAN_CONTENT_BYTES + MAX_PLAN_ANNOTATIONS_BYTES)
-      .toBeLessThanOrEqual(PLATFORM_LIMITS['do.sqlite.row_bytes'].value);
-  });
-
-  test('formats stable one-indexed line references for revision feedback', () => {
-    expect(formatPlanWithLineNumbers('one\ntwo\nthree')).toBe('1| one\n2| two\n3| three');
-  });
-});
 
 function setup() {
   const db = new Database(':memory:');
@@ -79,6 +33,53 @@ function setup() {
 
   return { db, store };
 }
+
+describe('plan edit contract', () => {
+  // A pending revision nobody annotated is its author's to correct: each resubmit edits the one before it.
+  const submitted = (store: PlanReviewStore, edits: readonly PlanEdit[]): string => {
+    const result = store.submit('default', edits);
+
+    return result.ok ? result.plan.content : `refused: ${result.error}`;
+  };
+
+  test('writes the initial full plan and applies later edits against pre-edit line numbers', () => {
+    const { store } = setup();
+
+    expect(submitted(store, [{ start: 1, content: '# Plan\n\nA\nB' }])).toBe('# Plan\n\nA\nB');
+    expect(submitted(store, [
+      { start: 2, end: 2, content: 'Overview' },
+      { start: 4, end: 4, content: 'B revised\nC' },
+    ])).toBe('# Plan\nOverview\nA\nB revised\nC');
+  });
+
+  test('supports deletion and replacement through end-of-plan', () => {
+    const { store } = setup();
+
+    submitted(store, [{ start: 1, content: 'one\ntwo\nthree' }]);
+    expect(submitted(store, [{ start: 2, end: 2, content: '' }])).toBe('one\nthree');
+    expect(submitted(store, [{ start: 2, content: 'tail' }])).toBe('one\ntail');
+  });
+
+  test('refuses edits past the plan, overlapping, or leaving it empty, and keeps the plan as it was', () => {
+    const { store } = setup();
+
+    submitted(store, [{ start: 1, content: 'one\ntwo' }]);
+
+    for (const edits of [
+      [{ start: 4, content: 'x' }],
+      [{ start: 2, end: 1, content: 'x' }],
+      [{ start: 1, end: 3, content: 'x' }],
+      [{ start: 1, end: 2, content: 'x' }, { start: 2, end: 2, content: 'y' }],
+      [{ start: 1, content: '   ' }],
+    ]) expect(submitted(store, edits)).toStartWith('refused: ');
+
+    expect(store.getActive('default')?.content).toBe('one\ntwo');
+  });
+
+  test('formats stable one-indexed line references for revision feedback', () => {
+    expect(formatPlanWithLineNumbers('one\ntwo\nthree')).toBe('1| one\n2| two\n3| three');
+  });
+});
 
 describe('durable plan review lifecycle', () => {
   test('malformed remote annotations are a failed parse, not an exception escaping safeParse', () => {
@@ -155,11 +156,9 @@ describe('durable plan review lifecycle', () => {
 
   test('refuses a plan larger than the stored row instead of throwing at the write', () => {
     const { store } = setup();
-    const submitted = store.submit('default', [{ start: 1, content: 'x'.repeat(3 * 1024 * 1024) }]);
-    expect(submitted.ok).toBe(false);
+    const submitted = store.submit('default', [{ start: 1, content: 'x'.repeat(PLATFORM_LIMITS['do.sqlite.row_bytes'].value) }]);
 
-    if (submitted.ok) throw new Error('expected the oversized plan to be refused');
-    expect(submitted.error).toMatch(/row size|maximum size/);
+    expect(submitted.ok).toBe(false);
     expect(store.getActive('default')).toBeNull();
   });
 

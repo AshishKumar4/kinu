@@ -90,7 +90,7 @@ describe("admission on an unknown window", () => {
     expect(refused).toBeInstanceOf(Error);
     // The class is pinned in packages/core/tests/unit-turn-admission.test.ts; here, the refusal must be one
     // the client acts on rather than retries.
-    expect(classifyTurnFailure(refused instanceof Error ? refused.message : "")).not.toBe("transient");
+    expect(classifyTurnFailure(refused instanceof Error ? refused : "")).not.toBe("transient");
   });
 });
 

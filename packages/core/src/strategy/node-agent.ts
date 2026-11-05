@@ -155,7 +155,7 @@ export interface HostedNodeSeat<A extends SeatedActor = SeatedActor> {
   readonly receipts: Omit<EffectClaimDeps, 'execution'>;
 }
 
-export interface NodeLoopDeps {
+interface NodeLoopDeps {
   /** The actor this node is: a node's turn writes a durable claim, so it needs an identity and `actor.runtime`. */
   actor: SeatedActor;
   infer: HostedNodeSeat['infer'];
@@ -492,13 +492,11 @@ export function runNodeAgent(
       mergeStrategy: input.settle === 'best' ? 'best_of' : 'synthesize',
       // A node states its loop pointer rather than inheriting the parent's.
       loop: defaultLoopOrigin('swarm'),
+      // The row's copy of ledger and route (`cli-backend/head-runtime.ts` reads these), present only when set, so an
+      // unbudgeted or unrouted run carries no key.
+      ...(deps.mission && { missionLabels: deps.mission.labels }),
+      ...(input.modelSpec !== undefined && { model: input.modelSpec }),
     };
-
-    // The row's copy of ledger and route (`cli-backend/head-runtime.ts` reads these). Assigned only
-    // when present so an unbudgeted/unrouted run carries no key.
-    if (deps.mission) Object.assign(headInput, { missionLabels: deps.mission.labels });
-
-    if (input.modelSpec !== undefined) Object.assign(headInput, { model: input.modelSpec });
 
     deps.journal.insertSpawn(headInput);
 

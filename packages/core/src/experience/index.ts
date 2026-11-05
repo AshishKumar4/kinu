@@ -41,7 +41,6 @@ export {
 
 export {
   runExperienceAction,
-  type ExperienceAction,
   type ExperienceActionDeps,
   type ExperienceActionInput,
   type ExperienceLibraryClient,

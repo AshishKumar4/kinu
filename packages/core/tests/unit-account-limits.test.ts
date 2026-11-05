@@ -4,13 +4,16 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { accountClassOf } from '../src/limits/class';
 import {
-  accountClassOf, AccountLimitsStore, admitComputerStart, admitPlatformTurn, admitStoredBytes, admitWorkspace,
-  freeTierOf, initAccountLimitTables, limitsReport, refusedFor, startSize, type AccountUse, type Admission, type FreeTier,
-} from '../src/limits/index';
+  admitComputerStart, admitPlatformTurn, admitStoredBytes, admitWorkspace, limitsReport, refusedFor, startSize, type AccountUse, type Admission,
+} from '../src/limits/admit';
+import { freeTierOf, type FreeTier } from '../src/limits/policy';
+import { initAccountLimitTables } from '../src/limits/schema';
+import { AccountLimitsStore } from '../src/limits/store';
 import { evalAccountEmail } from '../src/cloud-wire';
 import { makeSqlExec } from './helpers';
-import { ADMISSION_REFUSAL_MARK } from '../src/turn-failure';
+import { classifyTurnFailure } from '../src/turn-failure';
 
 const NOW = Date.UTC(2026, 9, 23, 12);
 
@@ -65,12 +68,12 @@ describe("a free account's limits refuse only something new", () => {
     expect(startSize({ klass: 'invited', tier: OWNER_TIER }, 'large')).toBe('large');
   });
 
-  test("past the day's tokens a platform turn is refused, offering the person's own model; the mark keeps it unretried", () => {
+  test("past the day's tokens a platform turn is refused, offering the person's own model, and never retried", () => {
     expect(admitPlatformTurn(free({ tokensToday: 499_999 }))).toBeNull();
     const refused = admitPlatformTurn(free({ tokensToday: 500_000 }));
 
     expect(refused?.message).toContain('Settings under Models');
-    expect(refused?.message.startsWith(ADMISSION_REFUSAL_MARK)).toBe(true);
+    expect(classifyTurnFailure(new Error('the model call failed', { cause: refused }))).toBe('admission_refused');
   });
 
   test('an operator, an invited and an eval account meet none of them', () => {

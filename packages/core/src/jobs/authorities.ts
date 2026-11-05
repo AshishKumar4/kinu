@@ -3,7 +3,7 @@ import type { JsonValue } from '../utils/json';
 import type { BackgroundJobRunner, JobRetirement } from './runner';
 import type { BackgroundJob, BackgroundJobStore } from './store';
 
-export type JobAuthorityKind = 'root' | 'hire' | 'step-loop';
+type JobAuthorityKind = 'root' | 'hire' | 'step-loop';
 
 export interface JobAuthority {
   readonly kind: JobAuthorityKind;

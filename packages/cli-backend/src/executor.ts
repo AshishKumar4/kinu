@@ -10,7 +10,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeFileSync, unlinkSync, rmSync } from 'node:fs';
 import * as v from 'valibot';
-import { classify, renderThrownChain } from '@kinu.run/core/obs';
+import { chainOf, classify, settle } from '@kinu.run/core/obs';
+import { Effect, Result } from 'effect';
 import { requireBuild, stoppedProgram } from '@kinu.run/core';
 import { ISOLATED_BUN_FLAGS } from '@kinu.run/core';
 
@@ -59,11 +60,11 @@ export function createSandboxedExecutor(): Executor {
       const providerList: ResolvedProvider[] = normalizeProviders(providers);
 
       if (providerList.some(p => Object.keys(p.fns).length > 0)) {
-        return stoppedProgram(() => executeInProcess(code, providerList), opts);
+        return stoppedProgram(() => settle(executeInProcess(code, providerList)), opts);
       }
 
       // Apart on purpose: a verifier check cannot read its receipt, nor a probe the owner's project.
-      return executeInSubprocess(code);
+      return settle(executeInSubprocess(code));
     },
   };
 }
@@ -119,7 +120,7 @@ async function runToCompletion(
   }
 }
 
-async function executeInSubprocess(code: string): Promise<ExecuteResult> {
+function executeInSubprocess(code: string): Effect.Effect<ExecuteResult> {
   const wrapper = `
     await Bun.file(import.meta.path).delete();
     try {
@@ -133,25 +134,23 @@ async function executeInSubprocess(code: string): Promise<ExecuteResult> {
   `;
 
   // The Bun running the CLI, which need not be on PATH; beside its temp script, reading no bunfig or .env.
-  const run = await runToCompletion([process.execPath, ...ISOLATED_BUN_FLAGS, 'run'], wrapper, '.mjs', tmpdir());
+  return Effect.flatMap(Effect.promise(() => runToCompletion([process.execPath, ...ISOLATED_BUN_FLAGS, 'run'], wrapper, '.mjs', tmpdir())), (run) => {
+    if (run.exitCode !== 0) {
+      return Effect.succeed({ result: undefined, error: run.stderr.trim() || `Process exited with code ${run.exitCode}` });
+    }
 
-  if (run.exitCode !== 0) {
-    return { result: undefined, error: run.stderr.trim() || `Process exited with code ${run.exitCode}` };
-  }
+    const lastLine = run.stdout.trim().split('\n').pop() ?? '';
+    const parsed = Result.try(() => v.parse(subprocessResultSchema, JSON.parse(lastLine)));
 
-  const lastLine = run.stdout.trim().split('\n').pop() ?? '';
+    if (Result.isSuccess(parsed)) {
+      return Effect.succeed(parsed.success.ok ? { result: parsed.success.result } : { result: undefined, error: parsed.success.error ?? 'Unknown error' });
+    }
 
-  try {
-    const parsed = v.parse(subprocessResultSchema, JSON.parse(lastLine));
-
-    if (parsed.ok) return { result: parsed.result };
-
-    return { result: undefined, error: parsed.error ?? 'Unknown error' };
-  } catch (error) {
-    if (classify({ cause: error }) !== 'malformed-input') throw error;
-
-    return { result: undefined, error: 'The program exited before it returned a value' };
-  }
+    // A last line that is no answer is a program that ended first; anything else is a fault.
+    return classify({ cause: parsed.failure }) === 'malformed-input'
+      ? Effect.succeed({ result: undefined, error: 'The program exited before it returned a value' })
+      : Effect.die(parsed.failure);
+  });
 }
 
 function normalizeProviders(
@@ -177,18 +176,15 @@ export async function runProgramInProcess(
 }
 
 /** In-process execution: tool-backed code, whose functions cannot cross a process boundary. */
-async function executeInProcess(
+function executeInProcess(
   code: string, providers: ResolvedProvider[],
-): Promise<ExecuteResult> {
-  try {
+): Effect.Effect<ExecuteResult> {
+  const ran = Effect.promise(async (): Promise<ExecuteResult> => {
     // As the cloud's sandbox holds a namespace, and eval here too (`programNamespace`).
     const bindings = Object.fromEntries(providers.map((p) => [p.name, programNamespace(p.name, p.fns)]));
 
     return { result: await runProgramInProcess(code, { names: Object.keys(bindings), values: Object.values(bindings) }) };
-  } catch (error) {
-    return {
-      result: undefined,
-      error: renderThrownChain({ cause: error }),
-    };
-  }
+  });
+
+  return Effect.catchCause(ran, (failed) => Effect.succeed({ result: undefined, error: chainOf(failed) }));
 }

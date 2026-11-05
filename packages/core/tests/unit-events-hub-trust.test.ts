@@ -1,10 +1,6 @@
 import { describe, test, expect } from 'bun:test';
-import {
-  meetTrust,
-  deriveEventTrust, derivePriority, deriveDefaultVisibility, deriveFields,
-  IngressRejectedError,
-  type IngressDescriptor,
-} from '../src/events/hub/index';
+import { meetTrust, deriveEventTrust, derivePriority, deriveDefaultVisibility, deriveFields } from '../src/events/hub/trust';
+import { IngressRejectedError, type IngressDescriptor } from '../src/events/hub/types';
 
 describe('meetTrust', () => {
   test('returns the lower-trust side', () => {

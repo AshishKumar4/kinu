@@ -7,6 +7,7 @@ import type { Impact } from '@agent-core/core/facets';
 import { LiveShareVisibilitySchema } from './live-share-visibility';
 import { ShareModeSchema, ShareStartSchema } from './share-modes';
 import { GalleryCategorySchema } from './gallery-api';
+import { isoDate } from '../utils/date';
 
 
 export const SHARE_KINDS = ['blueprint', 'live'] as const;
@@ -285,7 +286,7 @@ export const SHARE_VIEWER_REQUESTS_PER_MINUTE = 120;
 export const SHARE_SPEND_CAP_USD_PER_DAY = 2;
 
 /** The ledger is cumulative, so the UTC day is part of the label. */
-export function shareSpendLabel(share: string, day = new Date().toISOString().slice(0, 10)): string {
+export function shareSpendLabel(share: string, day = isoDate()): string {
   return `share:${share}:${day}`;
 }
 

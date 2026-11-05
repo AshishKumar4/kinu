@@ -1,5 +1,6 @@
 /** A real hosted actor per head and node over the caller's one workspace database, via the production
  *  directory, `createActorHost` and `seedActorLoop`; a mocked session would pass while writing no claim. */
+import { Effect } from 'effect';
 import { withHostDeliveries } from '@kinu.run/test-utils';
 import type { Database } from 'bun:sqlite';
 import { makeSqlExec, storesFor } from './helpers';
@@ -13,7 +14,8 @@ import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 import { explorationActorKey } from '../src/identity/actor-key';
 import { createActorHost, type ActorHost, type BoundActor } from '../src/state/actor-host';
 import type { AgentTracing } from '../src/obs/agent-tracing';
-import { initEventsHubTables, EventLog } from '../src/events/hub/index';
+import { EventLog } from '../src/events/hub/log';
+import { initEventsHubTables } from '../src/events/hub/schema';
 import { EvolutionEngine } from '../src/evolution/engine';
 import { createScaffoldSurface } from '../src/scaffold/surface';
 import type { ProviderCatalogSnapshot } from '../src/profiles/resolve';
@@ -228,7 +230,7 @@ export function hostedSeatsOver(input: {
     },
     directory,
     installedBuild: 'test-build',
-    runtimeFor,
+    runtimeFor: (bound) => Effect.sync(() => runtimeFor(bound)),
     // BUILTIN: `inherit` would copy the parent's source in as v1 and select the SCAFFOLD arm.
     loopFor: () => ({ origin: { kind: 'builtin' }, parent: null }),
     orchestrationFor,

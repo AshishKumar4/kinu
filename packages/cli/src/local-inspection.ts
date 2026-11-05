@@ -1,5 +1,4 @@
 import { wrapDatabase, sqlStorageOver } from '@kinu.run/core/identity';
-import { existsSync } from 'node:fs';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import {
   asOwnerCommand,
@@ -79,14 +78,16 @@ import {
   MEMORY_PATH,
   agentStatusFacts,
   type MemorySearchResult,
+  bindActorHandle,
 } from '@kinu.run/core';
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
-import { tolerateAsync } from '@kinu.run/core/obs';
+import { KinuError, tolerateAsync } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
 import {
   workspaceHome, schemaGenesisOf, createLocalProfileAuthority, hostToolchainCapabilities, inspectionFiles, openWorkspaceCLI, resolverModelPlane, soulOf, workspaceMemory,
 } from '@kinu.run/cli-backend';
 import * as v from 'valibot';
-import { agentDbPath, resolveLocalAgent } from './config';
+import { existingAgentDbPath, resolveLocalAgent } from './config';
 import { createConfiguredLocalModelResolver, type LocalModelResolverOptions } from './local-model-resolver';
 import { createProfileAuthorityReader } from './profiles';
 
@@ -472,9 +473,7 @@ export async function executeLocalExecutor(name: string, executorId: string, com
 type DbMode = 'read' | 'repair' | 'write';
 
 function openLocalDb(name: string, mode: DbMode): SqliteDb {
-  const dbPath = agentDbPath(name);
-
-  if (!existsSync(dbPath)) throw new Error(`Workspace "${name}" not found. Create it with: kinu create ${name}`);
+  const dbPath = existingAgentDbPath(name);
   const db = mode === 'read' ? new Database(dbPath, { readonly: true }) : new Database(dbPath);
 
   if (mode === 'write') return db;
@@ -599,16 +598,17 @@ export function getLocalActorInfo(name: string, actorId: string): LocalAgentInfo
 
     if (!row) return null;
 
-    const assertCurrent = () => {
-      if (!directory?.retained(actorId)) throw new Error(`actor ${actorId} is no longer retained in this workspace`);
-    };
+    // Bound to the row as read: each config read asks again whether the actor is still retained.
+    const handle = bindActorHandle(wrapDatabase(db).sql, row, () => (directory?.retained(actorId)
+      ? Effect.void
+      : Effect.fail(new KinuError('missing', `actor ${actorId} is no longer retained in this workspace`))));
 
-    const config = createAgentConfigStore(wrapDatabase(db).sql, actorId, assertCurrent);
+    const config = createAgentConfigStore(wrapDatabase(db).sql, actorId, handle.assertCurrent);
 
     return {
       name: row.name,
       purpose: '',
-      scaffoldVersion: getCurrentScaffoldVersion(wrapDatabase(db).sql, { actorId, assertCurrent }) ?? 0,
+      scaffoldVersion: getCurrentScaffoldVersion(wrapDatabase(db).sql, handle) ?? 0,
       searchNodeCount: countOf(db, `SELECT COUNT(*) AS c FROM search_nodes WHERE actor_id = ?`, actorId),
       createdAt: row.createdAt,
       conversationCount: countOf(db,

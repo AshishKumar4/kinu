@@ -12,7 +12,8 @@ import {
   createActorHost, childContextResolver, hostedChildTree, recoverActorTurns,
   type ActorHost, type BoundActor,
 } from '../src/state/actor-host';
-import { initEventsHubTables, EventLog } from '../src/events/hub/index';
+import { EventLog } from '../src/events/hub/log';
+import { initEventsHubTables } from '../src/events/hub/schema';
 import { initCompletedTurnTable } from '../src/evolution/session-window';
 import { EvolutionEngine } from '../src/evolution/engine';
 import { listRecoveryFindings } from '../src/evolution/recovery';
@@ -130,7 +131,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false, op
 
       return { path: actorScaffoldPath(bound.record), vfs: planeFor(bound.record.actorId) };
     },
-    runtimeFor: (bound) => {
+    runtimeFor: (bound) => Effect.sync(() => {
       const plane = planeFor(bound.record.actorId);
 
       return {
@@ -142,7 +143,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false, op
         identity: scaffoldIdentity(bound.record, plane, sql, bound.record.actorId),
         release: () => { released.push(bound.record.name); },
       };
-    },
+    }),
     loopFor: () => ({ origin: { kind: 'builtin' }, parent: null }),
     orchestrationFor,
     // Null: this fixture asserts hosting, not context auditing.

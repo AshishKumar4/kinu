@@ -14,7 +14,10 @@ class FacetBatchTransport implements RpcTransport {
     process: Pick<ResidentSlateProcess, 'request'>,
     invocation: string,
   ) {
-    this.#promise = this.#scheduleBatch((batch: string[]) => settle(Effect.gen(function* () {
+    this.#promise = this.#scheduleBatch((batch: string[]) => settle(Effect.gen({ self: this }, function* () {
+      // Aborted before the batch went: the session's reason is its answer.
+      if (this.#aborted !== undefined) return yield* Effect.die(this.#aborted);
+
       const response = yield* Effect.promise(() => process.request(new Request('https://slate.invalid/__rpc', {
         method: 'POST',
         headers: { 'x-slate-call': invocation, 'content-type': 'text/plain' },
@@ -51,8 +54,6 @@ class FacetBatchTransport implements RpcTransport {
 
   async #scheduleBatch(sendBatch: (batch: string[]) => Promise<string[]>): Promise<void> {
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
-
-    if (this.#aborted !== undefined) throw this.#aborted;
     const batch = this.#batchToSend ?? [];
     this.#batchToSend = null;
     this.#batchToReceive = await sendBatch(batch);

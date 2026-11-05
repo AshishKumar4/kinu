@@ -10,8 +10,7 @@ import { renderThrownChain } from '../obs/index';
 import { settle } from '../obs/effect';
 import { fleetAlertQueries } from '../obs/analytics/query';
 import * as v from 'valibot';
-
-const HOUR_MS = 3_600_000;
+import { HOUR_MS } from '../utils/date';
 
 export const FLEET_PROBE_PREFIX = 'fleet.';
 

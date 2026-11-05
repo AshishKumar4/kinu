@@ -10,9 +10,6 @@ export type {
   ApprovalConsumedRecord,
   ExecutionRecoveryRecord,
   StepCost,
-  ContextEditVia,
-  ContextEditStatus,
-  ContextEditBoundary,
 } from './types';
 
 export {
@@ -69,8 +66,6 @@ export {
   type ModelOperation,
   type ModelOperationEvent,
   type ModelOperationKind,
-  type ModelOperationOutcome,
-  type ModelOperationPhase,
   type ModelOperationSink,
   type SpendSource,
   type AccountSpend,

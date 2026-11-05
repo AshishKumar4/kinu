@@ -42,15 +42,22 @@ describe('the facts store keeps who wrote each value, and every value a key held
 });
 
 describe("mnemopi's lexical recall", () => {
-  test('a query word finds its synonyms, other forms of itself, and an identifier part', () => {
-    const relevance = (query: string, text: string) => lexicalGroupRelevance(expandedTokenGroups(query), text);
+  const relevance = (query: string, text: string) => lexicalGroupRelevance(expandedTokenGroups(query), text);
 
+  test('a query word finds its synonyms, other forms of itself, and an identifier part', () => {
     expect(relevance('db', 'the database is postgres')).toBeGreaterThan(0.6);
     expect(relevance('deploy', 'deploy_target: staging')).toBeGreaterThan(0.6);
     expect(relevance('backup', 'nightly backups run at 02:00')).toBe(0.35);
     // A longer word that only begins with it is not another form of it.
     expect(relevance('test', 'the old testament')).toBe(0);
     expect(relevance('timezone', 'the deploy target is staging')).toBe(0);
+  });
+
+  test('a word in two synonym groups finds the words of both', () => {
+    expect(relevance('port', 'bind the dev server to 8787')).toBeGreaterThan(0.6);
+    expect(relevance('port', 'relocate the bucket to eu')).toBeGreaterThan(0.6);
+    expect(relevance('token', 'the database password rotates monthly')).toBeGreaterThan(0.6);
+    expect(relevance('token', 'the api_key lives in the vault')).toBeGreaterThan(0.6);
   });
 
   test('a key covering the query outranks a value only naming it, and a stated fact a tool-read one', () => {

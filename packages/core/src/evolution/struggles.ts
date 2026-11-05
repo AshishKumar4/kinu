@@ -14,7 +14,6 @@ import type { ShownLesson } from '../types/dynamic-context';
 import { sqlCheckList } from '../utils/sql';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { parseJsonValue } from '../utils/json';
-import { nowMs } from '../utils/date';
 import { jsonObjectOnlyInstruction } from '../providers/structured';
 import { scrubSecrets } from '../safety/secret-patterns';
 
@@ -110,7 +109,7 @@ export function shownLesson(lesson: ToolLesson): ShownLesson {
 export function scoreToolLessons(sql: SqlExecutor, actor: ActorHandle, turn: ReviewedTurn): void {
   const used = new Set(turn.toolCalls.map((call) => call.name));
   const struggled = new Set((turn.struggles ?? []).map((struggle) => struggle.tool));
-  const now = nowMs();
+  const now = Date.now();
 
   for (const shown of turn.shownLessons ?? []) {
     const [row] = sql<ToolLessonRow>`
@@ -182,7 +181,7 @@ export function applyStruggleLesson(sql: SqlExecutor, actor: ActorHandle, input:
   readonly tool: string;
   readonly answer: v.InferOutput<typeof StruggleLessonSchema>;
 }): string {
-  const now = nowMs();
+  const now = Date.now();
   // A lesson is memory a later turn reads: kept scrubbed (`memory/scrub.ts`).
   const text = scrubSecrets(input.answer.text).slice(0, LESSON_MAX_CHARS);
 

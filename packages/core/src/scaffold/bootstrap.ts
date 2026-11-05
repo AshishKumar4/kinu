@@ -16,7 +16,6 @@ import { settle } from '../obs/effect';
 import { initScaffoldTables } from './schemas';
 import { getCurrentScaffoldVersion, scaffoldSource, writeScaffoldVersion } from './versions';
 
-import { nowMs } from '../utils/date';
 
 export const INITIAL_SCAFFOLD_SOURCE = `\
 // scaffold/agent.js: v0 (initial bootstrap)
@@ -42,7 +41,7 @@ function insertV0Row(rt: AgentRuntime): void {
   rt.actor.assertCurrent();
   void rt.storage.sql`
     INSERT OR IGNORE INTO scaffold_versions (actor_id, version, written_at, rationale)
-    VALUES (${rt.actor.actorId}, 0, ${nowMs()}, ${V0_RATIONALE})
+    VALUES (${rt.actor.actorId}, 0, ${Date.now()}, ${V0_RATIONALE})
   `;
   markStoreChanged(rt.storage.sql);
 }
@@ -90,7 +89,7 @@ export function seedActorLoop(
     child.actor.assertCurrent();
     void child.storage.sql`
       INSERT OR IGNORE INTO scaffold_versions (actor_id, version, written_at, rationale, status, parent_version)
-      VALUES (${child.actor.actorId}, ${version}, ${nowMs()},
+      VALUES (${child.actor.actorId}, ${version}, ${Date.now()},
         ${`inherited from actor ${parent.actor.actorId} v${inherited.version}`}, 'current', ${inherited.version})`;
     markStoreChanged(child.storage.sql);
 

@@ -5,7 +5,8 @@
  */
 
 import { Hono, type Context } from "hono";
-import { diagnostics, renderThrownChain, toKinuError, type KinuError } from "@kinu.run/core/obs";
+import { attempt, diagnostics, renderThrownChain, settle, settleLogged, toKinuError, type KinuError } from "@kinu.run/core/obs";
+import { Effect } from "effect";
 import type { OrchestratorAgent } from "./orchestrator";
 
 import { err, json } from "@kinu.run/core";
@@ -155,14 +156,14 @@ function notAnUpgrade({ request, surface }: TerminalCall): Response | null {
 }
 
 /** The shell runs on the owner's machine: the upgrade is handed to the DO holding its outbound socket. */
-async function deviceTerminal(call: TerminalCall): Promise<Response> {
+function deviceTerminal(call: TerminalCall): Effect.Effect<Response> {
   const { request, url } = call;
 
   // Guards only: they keep a device request off the container path, which would beat a foreign lease.
   if (call.verb !== "attach") {
-    if (request.method !== "POST") return err(405, "use POST");
+    if (request.method !== "POST") return Effect.succeed(err(405, "use POST"));
 
-    return json({ body: { ok: true } });
+    return Effect.succeed(json({ body: { ok: true } }));
   }
 
   // The pane names its PC and the workspace's session on it (1014-t); one that names no session opens the first.
@@ -173,7 +174,7 @@ async function deviceTerminal(call: TerminalCall): Promise<Response> {
 
 /** A PC's screen, as its shell: opened through the workspace, the viewer's upgrade then handed to the DO holding the
  *  PC's socket (1014-t). */
-async function deviceDesktop(call: TerminalCall, device: string): Promise<Response> {
+function deviceDesktop(call: TerminalCall, device: string): Effect.Effect<Response> {
   return toDeviceHolder(call, DEVICE_SCREEN_PATH, (agent) => agent.openDeviceScreen(device));
 }
 
@@ -186,63 +187,67 @@ const DEVICE_OPEN_FAILED = { terminal: "terminal.device_open_failed", desktop: "
 
 const DEVICE_REFUSED = { terminal: "terminal.device_refused", desktop: "desktop.device_refused" } as const;
 
-async function toDeviceHolder(
+/** `work`, or its failure reported and answered 503 with its whole chain (AGENTS.md § Errors): never broken at a display boundary. */
+function answered<A>(work: Effect.Effect<A, KinuError>, report: (error: KinuError) => void): Effect.Effect<A | Response> {
+  return Effect.catch(work, (error) => Effect.sync(() => {
+    report(error);
+
+    return err(503, renderThrownChain({ cause: error }));
+  }));
+}
+
+function toDeviceHolder(
   call: TerminalCall,
   path: string,
   open: (agent: TerminalWorkspace) => Promise<{ session: string; user: string } | { error: string }>,
-): Promise<Response> {
+): Effect.Effect<Response> {
   const { request, deps, scope } = call;
   const surface = DEVICE_SURFACE[call.surface];
   const refused = notAnUpgrade(call);
 
-  if (refused !== null) return refused;
+  if (refused !== null) return Effect.succeed(refused);
 
-  let opened: { session: string; user: string } | { error: string };
-
-  try {
+  const reached = attempt({ doing: surface.reaching, otherwise: "unavailable" }, async () => {
     const agent = await readyWorkspace(call, "device");
 
-    if (agent instanceof Response) return agent;
-    opened = await open(agent);
-  } catch (cause) {
-    const error = toKinuError({ doing: surface.reaching, cause, otherwise: "unavailable" });
+    return agent instanceof Response ? agent : await open(agent);
+  });
 
-    diagnostics.failure(DEVICE_OPEN_FAILED[call.surface], error, scope);
+  return Effect.flatMap(answered(reached, (error) => diagnostics.failure(DEVICE_OPEN_FAILED[call.surface], error, scope)), (opened) => {
+    if (opened instanceof Response) return Effect.succeed(opened);
 
-    return err(503, renderThrownChain({ cause: error }));
-  }
+    if ("error" in opened) {
+      // Already a rendered chain from the RPC's other side, so it rides as the cause.
+      diagnostics.failure(DEVICE_REFUSED[call.surface], toKinuError({ doing: surface.doing, cause: opened.error, otherwise: "unavailable" }), scope);
 
-  if ("error" in opened) {
-    // Already a rendered chain from the RPC's other side, so it rides as the cause.
-    diagnostics.failure(DEVICE_REFUSED[call.surface], toKinuError({ doing: surface.doing, cause: opened.error, otherwise: "unavailable" }), scope);
+      return Effect.succeed(err(503, opened.error));
+    }
 
-    return err(503, opened.error);
-  }
+    if (request.signal.aborted) return Effect.succeed(abandonedAttach(call.surface));
+    // A WebSocket cannot cross an RPC boundary, but an upgrade request can. The session is single-use.
+    const socketUrl = new URL(request.url);
+    socketUrl.pathname = path;
+    socketUrl.search = `?session=${encodeURIComponent(opened.session)}`;
 
-  if (request.signal.aborted) return abandonedAttach(call.surface);
-  // A WebSocket cannot cross an RPC boundary, but an upgrade request can. The session is single-use.
-  const socketUrl = new URL(request.url);
-  socketUrl.pathname = path;
-  socketUrl.search = `?session=${encodeURIComponent(opened.session)}`;
-
-  return accountNamed(deps.UserDO, opened.user).fetch(new Request(socketUrl, request));
+    return Effect.promise(() => accountNamed(deps.UserDO, opened.user).fetch(new Request(socketUrl, request)));
+  });
 }
 
 /** The shell is the runtime's, inside the workspace object; keepalive/reset are guards as for a device. */
-async function workspaceTerminal(call: TerminalCall): Promise<Response> {
+function workspaceTerminal(call: TerminalCall): Effect.Effect<Response> {
   const { request, scope } = call;
 
   if (call.verb !== "attach") {
-    if (request.method !== "POST") return err(405, "use POST");
+    if (request.method !== "POST") return Effect.succeed(err(405, "use POST"));
 
-    return json({ body: { ok: true } });
+    return Effect.succeed(json({ body: { ok: true } }));
   }
 
   const refused = notAnUpgrade(call);
 
-  if (refused !== null) return refused;
+  if (refused !== null) return Effect.succeed(refused);
 
-  try {
+  const opened = attempt({ doing: "reaching this workspace to open its shell", otherwise: "unavailable" }, async () => {
     const agent = await readyWorkspace(call, "workspace");
 
     if (agent instanceof Response) return agent;
@@ -253,77 +258,48 @@ async function workspaceTerminal(call: TerminalCall): Promise<Response> {
     socketUrl.pathname = WORKSPACE_TERMINAL_PATH;
 
     return await agent.fetch(new Request(socketUrl, request));
-  } catch (cause) {
-    const error = toKinuError({
-      doing: "reaching this workspace to open its shell",
-      cause,
-      otherwise: "unavailable",
-    });
+  });
 
-    diagnostics.failure("terminal.workspace_open_failed", error, scope);
-
-    return err(503, renderThrownChain({ cause: error }));
-  }
+  return answered(opened, (error) => diagnostics.failure("terminal.workspace_open_failed", error, scope));
 }
 
-/** One sandbox call behind a POST. A failure keeps its whole chain (AGENTS.md § Errors): it is
- *  never broken at a display boundary. */
-async function sandboxCommand(
+/** One sandbox call behind a POST. */
+function sandboxCommand(
   call: TerminalCall,
   run: () => Promise<void>,
   failed: { readonly doing: string; readonly report: (error: KinuError) => void },
-): Promise<Response> {
-  if (call.request.method !== "POST") return err(405, "use POST");
+): Effect.Effect<Response> {
+  if (call.request.method !== "POST") return Effect.succeed(err(405, "use POST"));
 
-  try {
-    await run();
-
-    return json({ body: { ok: true } });
-  } catch (cause) {
-    const error = toKinuError({ doing: failed.doing, cause, otherwise: "unavailable" });
-
-    failed.report(error);
-
-    return err(503, renderThrownChain({ cause: error }));
-  }
+  return answered(Effect.as(attempt({ doing: failed.doing, otherwise: "unavailable" }, run), json({ body: { ok: true } })), failed.report);
 }
 
 /**
  * Same preflight as exec (up, /workspace attached, egress installed), under the attach's diagnostic
  * scope. Not fenced by cancellation: the start is shared and idempotent.
  */
-async function sandboxPreflight(call: TerminalCall): Promise<Response | null> {
+function sandboxPreflight(call: TerminalCall): Effect.Effect<Response | null> {
   const { scope, surface } = call;
 
-  try {
+  const ready = attempt({ doing: `reaching this workspace to prepare a ${surface}`, otherwise: "unavailable" }, async () => {
     const agent = await readyWorkspace(call, surface);
 
-    if (agent instanceof Response) return agent;
-  } catch (cause) {
-    const error = toKinuError({
-      doing: `reaching this workspace to prepare a ${surface}`,
-      cause,
-      otherwise: "unavailable",
-    });
+    return agent instanceof Response ? agent : null;
+  });
 
-    diagnostics.failure(PREFLIGHT_FAILED[surface], error, scope);
-
-    return err(503, renderThrownChain({ cause: error }));
-  }
-
-  return null;
+  return answered(ready, (error) => diagnostics.failure(PREFLIGHT_FAILED[surface], error, scope));
 }
 
 /**
  * Fenced by `request.signal`, not a clock: no single deadline exceeds a cold start yet undercuts an
  * open tab.
  */
-async function sandboxAttach(sandbox: TerminalSandbox, call: TerminalCall, ctx: Pick<ExecutionContext, 'waitUntil'>): Promise<Response> {
+function sandboxAttach(sandbox: TerminalSandbox, call: TerminalCall, ctx: Pick<ExecutionContext, 'waitUntil'>): Effect.Effect<Response> {
   const { request, scope, surface } = call;
 
-  if (request.signal.aborted) return abandonedAttach(surface);
+  if (request.signal.aborted) return Effect.succeed(abandonedAttach(surface));
 
-  try {
+  const attached = attempt({ doing: `attaching a ${surface} to the computer`, otherwise: "unavailable" }, async () => {
     // The box answers the upgrade at once and readies itself under it, stamping its lease as a caller (D109): a wait
     // here held a restoring box's pane at a blank handshake until its restore ended (hearthlit-field, 2026-10-25: 20 s).
     const url = new URL(request.url);
@@ -334,44 +310,25 @@ async function sandboxAttach(sandbox: TerminalSandbox, call: TerminalCall, ctx: 
     const upgrade = sandbox.fetch(new Request(url.toString(), ptyUpgradeRequest(request)));
     const settled = await Promise.race([upgrade, clientGone(request.signal)]);
 
-    if (settled === CLIENT_GONE) {
-      // Release the orphaned upgrade, else the PTY stream stays open until the edge idle reap
-      // (PLATFORM_CATALOG `edge.websocket_idle_reap_ms`). `waitUntil` retains it past the response.
-      ctx.waitUntil((async () => {
-        try {
-          const response = await upgrade;
-          response.webSocket?.accept();
-          response.webSocket?.close(1001, `${surface} client went away`);
-        } catch (cause) {
-          diagnostics.failure(UPGRADE_NOT_RELEASED[surface], toKinuError({
-            doing: `releasing the ${surface} upgrade a departed client left behind`,
-            cause,
-            otherwise: "unavailable",
-          }), scope);
-        }
-      })());
+    if (settled !== CLIENT_GONE) return settled;
+    // Release the orphaned upgrade, else the PTY stream stays open until the edge idle reap
+    // (PLATFORM_CATALOG `edge.websocket_idle_reap_ms`). `waitUntil` retains it past the response.
+    ctx.waitUntil(settleLogged(UPGRADE_NOT_RELEASED[surface], { doing: `releasing the ${surface} upgrade a departed client left behind`, otherwise: "unavailable" }, async () => {
+      const response = await upgrade;
+      response.webSocket?.accept();
+      response.webSocket?.close(1001, `${surface} client went away`);
+    }, scope));
 
-      return abandonedAttach(surface);
-    }
+    return abandonedAttach(surface);
+  });
 
-    return settled;
-  } catch (cause) {
-    const error = toKinuError({
-      doing: `attaching a ${surface} to the computer`,
-      cause,
-      otherwise: "unavailable",
-    });
-
-    diagnostics.failure(ATTACH_FAILED[surface], error, scope);
-
-    return err(503, renderThrownChain({ cause: error }));
-  }
+  return answered(attached, (error) => diagnostics.failure(ATTACH_FAILED[surface], error, scope));
 }
 
-async function sandboxTerminal(call: TerminalCall, ctx: Pick<ExecutionContext, 'waitUntil'>): Promise<Response> {
+function sandboxTerminal(call: TerminalCall, ctx: Pick<ExecutionContext, 'waitUntil'>): Effect.Effect<Response> {
   const sandbox = call.deps.resolveSandbox(call.agentName);
 
-  if (sandbox === null) return err(503, "this deployment has no computer configured");
+  if (sandbox === null) return Effect.succeed(err(503, "this deployment has no computer configured"));
 
   // Proxied frames renew the platform's activity clock but not the durable lease `Devbox` reads
   // before quiescing; without this beat a container can stop under a typing user.
@@ -390,11 +347,11 @@ async function sandboxTerminal(call: TerminalCall, ctx: Pick<ExecutionContext, '
     });
   }
 
-  const refused = notAnUpgrade(call) ?? await sandboxPreflight(call);
+  const upgraded = notAnUpgrade(call);
 
-  if (refused !== null) return refused;
+  if (upgraded !== null) return Effect.succeed(upgraded);
 
-  return sandboxAttach(sandbox, call, ctx);
+  return Effect.flatMap(sandboxPreflight(call), (refused) => (refused === null ? sandboxAttach(sandbox, call, ctx) : Effect.succeed(refused)));
 }
 
 /** One route per verb; the query names the executor. */
@@ -403,12 +360,12 @@ export function terminalRoutes<Bindings extends object, Agent extends TerminalWo
 ): Hono<FamilyEnv<Bindings, WorkspaceVariables<Agent>>> {
   const routes = new Hono<FamilyEnv<Bindings, WorkspaceVariables<Agent>>>();
 
-  const terminal = (verb: TerminalCall['verb']) => async (c: Context<FamilyEnv<Bindings, WorkspaceVariables<Agent>>>): Promise<Response> => {
+  const terminal = (verb: TerminalCall['verb'], c: Context<FamilyEnv<Bindings, WorkspaceVariables<Agent>>>): Effect.Effect<Response> => {
     const { name: agentName, agent: workspace, request } = c.get('workspace');
     const url = new URL(request.url);
     const executor = url.searchParams.get("executor");
 
-    if (!executor) return err(400, "executor query parameter required");
+    if (!executor) return Effect.succeed(err(400, "executor query parameter required"));
 
     // One scope for every failure below, including readiness refusals.
     const scope = { workspace: agentName, executor };
@@ -417,7 +374,7 @@ export function terminalRoutes<Bindings extends object, Agent extends TerminalWo
 
     // Rendered as a labelled mode, not a failure.
     if (lane.mode === "line") {
-      return json({ body: { error: `${executor} has no terminal`, lane: "line" } }, { status: 409 });
+      return Effect.succeed(json({ body: { error: `${executor} has no terminal`, lane: "line" } }, { status: 409 }));
     }
 
     const call: TerminalCall = { request, url, deps: depsFor(c.env), workspace, agentName, executor, verb, scope, surface: "terminal" };
@@ -429,26 +386,26 @@ export function terminalRoutes<Bindings extends object, Agent extends TerminalWo
     return sandboxTerminal(call, c.executionCtx);
   };
 
-  routes.all(`${LITERAL_WORKSPACE}/terminal`, terminal("attach"));
-  routes.all(`${LITERAL_WORKSPACE}/terminal/keepalive`, terminal("keepalive"));
-  routes.all(`${LITERAL_WORKSPACE}/terminal/reset`, terminal("reset"));
+  routes.all(`${LITERAL_WORKSPACE}/terminal`, (c) => settle(terminal("attach", c)));
+  routes.all(`${LITERAL_WORKSPACE}/terminal/keepalive`, (c) => settle(terminal("keepalive", c)));
+  routes.all(`${LITERAL_WORKSPACE}/terminal/reset`, (c) => settle(terminal("reset", c)));
 
   routes.all(`${LITERAL_WORKSPACE}/devices/:device{[^/%]+}/desktop`, async (c) => {
     const { name: agentName, agent: workspace, request } = c.get('workspace');
     const scope = { workspace: agentName, executor: DEVICE_EXECUTOR };
 
-    return deviceDesktop({
+    return settle(deviceDesktop({
       request, url: new URL(request.url), deps: depsFor(c.env), workspace, agentName, executor: DEVICE_EXECUTOR, verb: "attach", scope, surface: "desktop",
-    }, c.req.param('device'));
+    }, c.req.param('device')));
   });
 
   routes.all(`${LITERAL_WORKSPACE}/desktop`, async (c) => {
     const { name: agentName, agent: workspace, request } = c.get('workspace');
     const scope = { workspace: agentName, executor: COMPUTER_EXECUTOR };
 
-    return sandboxTerminal({
+    return settle(sandboxTerminal({
       request, url: new URL(request.url), deps: depsFor(c.env), workspace, agentName, executor: COMPUTER_EXECUTOR, verb: "attach", scope, surface: "desktop",
-    }, c.executionCtx);
+    }, c.executionCtx));
   });
 
   return routes;

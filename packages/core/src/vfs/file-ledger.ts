@@ -9,7 +9,6 @@ import { fnv1a64 } from '../utils/fnv1a';
 import { lineCount, withoutBom } from '../utils/text';
 
 import type { EditedSpan, FileEditOutcomeReason, FileEditSnapshot } from '../types/file-edits';
-import { countSharedWrite, newWriteAuthor } from '../obs/msg-counters';
 
 export type { FileEditOutcomeReason, FileEditSnapshot } from '../types/file-edits';
 
@@ -91,8 +90,6 @@ export class TurnFileLedger {
   private readonly failures = new Map<FileEditOutcomeReason, number>();
   private readonly failedPaths = new Set<string>();
   private readonly recoveredPaths = new Set<string>();
-  /** Not cleared by `reset()`: a per-turn identity would count an agent's own re-edits as collisions. */
-  private readonly author = newWriteAuthor();
 
   /** A new turn: its edit outcomes are counted afresh; what was read still counts. */
   reset(): void {
@@ -172,13 +169,11 @@ export class TurnFileLedger {
     return { state, coveredTo: entry.coveredTo, total: entry.total };
   }
 
-  /** Applied edits are also reported to the shared-write counter under this ledger's author ordinal. */
   recordEdit(path: string, reason: FileEditOutcomeReason | null): void {
     this.attempts++;
 
     if (reason === null) {
       this.applied++;
-      countSharedWrite(this.author, path);
 
       if (this.failedPaths.has(path)) this.recoveredPaths.add(path);
 

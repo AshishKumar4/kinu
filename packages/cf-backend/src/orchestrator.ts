@@ -261,7 +261,7 @@ import {
 } from "@kinu.run/core";
 import type { MctsSearchRunSummary, SubagentInspectionRequest, SubagentInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
 import { Cause, Effect, Exit, Result } from 'effect';
-import { attempt, authoredRefusal, CODE_IS_REFUSAL, diagnostics, flight, hold, joining, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
+import { attempt, attemptInItsWords, authoredRefusal, CODE_IS_REFUSAL, diagnostics, flight, hold, joining, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import { UNPLACED, WorkspacePlacementSchema, type WorkspacePlacement } from "./user/workspace-placement";
 import type { NameOrigin } from "@kinu.run/core";
@@ -2067,7 +2067,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const owner = this.getOwnerUserId();
 
     if ((this.env.EMAIL_DOMAIN ?? '') === '' || owner === null) return Promise.resolve(null);
-    const read = attempt({ doing: 'reading whether the owner holds a mail address', otherwise: 'unavailable' }, async () => (await objectNamed(this.env.MAILBOX, owner).boxes()).length > 0);
+    const read = attempt({ doing: 'reading whether the owner holds a mail address', otherwise: 'unavailable' }, async () => await objectNamed(this.env.MAILBOX, owner).holdsAddress());
 
     return hold(read).then((exit) => {
       if (Exit.isSuccess(exit)) return exit.value;
@@ -2363,10 +2363,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // Each stopped agent's commands, through the sweep its own Stop makes.
     this.detachOwned(Effect.forEach(below, (actor) => this.stopAgentDevices(actor.actorId), { concurrency: 'unbounded', discard: true }));
 
-    this.detachOwned(Effect.promise(() => stopAgentsBelow(actorId, {
+    this.detachOwned(stopAgentsBelow(actorId, {
       directory,
       roster: (hirer) => seams.roster(this.actorHost().bindStores(hirer)),
-      retire: (owner, retirement) => this.actorHost().retire(owner, retirement),
+      retire: (owner, retirement) => attemptInItsWords('io', () => this.actorHost().retire(owner, retirement)),
       // What it was owed and had not taken is cancelled, and the work it carried dismissed.
       cancelOwed: (actor) => {
         for (const cancelled of this.deliveries.cancel(actor.actorId)) {
@@ -2386,7 +2386,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         return false;
       },
-    })));
+    }));
   }
 
   /** A waiting hired agent holds no transcript; its rows reopen it. A running job keeps its runtime to the settle's turn,
@@ -2765,13 +2765,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       vfs: () => this.rt.storage.vfs,
       selfAgentName: () => this.name,
       selfUserId: () => this.requireOwner(),
-      deliver: async (receiverAgentName, msg) => {
+      deliver: (receiverAgentName, msg) => attemptInItsWords('unavailable', async () => {
         const stub = this.env.OrchestratorAgent.get(
           this.env.OrchestratorAgent.idFromName(receiverAgentName),
         );
 
         return await stub.receivePeerMessage(msg);
-      },
+      }),
       isSameOwner: async (senderUserId) => senderUserId === this.getOwnerUserId(),
       scheduleDispatch: (at) => this.wakes.arm(KINU_TIMER_JOB, at),
       onAdmitted: () => { this.armDurableWake(); },

@@ -1,4 +1,3 @@
 [
-  "handler_absorbs/wire packages/core/src/plans/plan-annotation-save.ts#enqueue",
   "logged_default/wire packages/core/src/jobs/runner.ts#failUnsettled"
 ]

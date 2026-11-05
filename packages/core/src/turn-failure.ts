@@ -3,9 +3,10 @@
  * `context_length` arms force-compaction plus one retry; `rate_limit` does not, unless the last per-request prompt exceeded half the window.
  */
 import { APICallError, RetryError } from 'ai';
-import { renderThrownChain } from './obs/index';
+import { carriesCauseCode, renderThrownChain } from './obs/index';
 
-/** `auth` and `admission_refused` (our own pre-submission gate, #20) are never `transient`: a retry can only fail again. */
+/** `auth` and `admission_refused` (a `budget` refusal before submission, ours or the account's, #20) are never
+ *  `transient`: a retry can only fail again. */
 export type TurnFailureClass = 'context_length' | 'rate_limit' | 'auth' | 'admission_refused' | 'transient';
 
 /** Stamped on the single retry turn; a failing retry never enqueues another. */
@@ -37,9 +38,6 @@ const RATE_LIMIT_PATTERNS: readonly RegExp[] = [
   /rate[ _-]?limit/i,
   /quota exceeded/i,
 ];
-
-/** Leads the message `refuseOversizedRequest` (orchestrator/turn-context.ts) raises. */
-export const ADMISSION_REFUSAL_MARK = 'Request refused before submission';
 
 /** A credential refused before any response (an OAuth refresh's `invalid_grant`); a refused request has its 401 or 403. */
 const AUTH_PATTERNS: readonly RegExp[] = [
@@ -107,8 +105,7 @@ function refusalStatus(failure: Error): number | undefined {
 export function classifyTurnFailure(failure: string | Error, signals: TurnFailureSignals = {}): TurnFailureClass {
   const error = failure instanceof Error ? renderThrownChain({ cause: failure }) : failure;
 
-  // First: the refusal text also matches the context-length patterns.
-  if (error.includes(ADMISSION_REFUSAL_MARK)) return 'admission_refused';
+  if (failure instanceof Error && carriesCauseCode({ cause: failure }, 'budget')) return 'admission_refused';
   const status = failure instanceof Error ? refusalStatus(failure) : undefined;
   const tooLong = CONTEXT_LENGTH_PATTERNS.some((re) => re.test(error));
 

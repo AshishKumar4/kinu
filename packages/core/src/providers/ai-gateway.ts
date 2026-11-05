@@ -19,7 +19,7 @@ import { workersAiModelId } from './serving-route';
 const AI_GATEWAY_PROVIDER_ID = 'ai-gateway';
 
 /** How to reach the platform gateway, or why not: the one predicate every availability check uses. */
-export type PlatformGateway =
+type PlatformGateway =
   | { target: GatewayTarget; binding: WorkersAIBinding }
   | { reason: string };
 

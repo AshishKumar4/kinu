@@ -43,9 +43,8 @@ import { argumentDigest } from '../src/safety/argument-digest';
 import { checkMisevolution } from '../src/safety/misevolution';
 import { hybridSearch } from '../src/memory/hybrid-search';
 import { reciprocalRankFusion } from '../src/memory/vector-store';
-import { delegationFeatures, renderDelegationFeatures } from '../src/evolution/delegation-features';
 import {
-  craftFailureBlame, craftInvocationError, craftInvocationSites,
+  craftInvocationSites,
 } from '../src/craft/in-episode';
 import { renderToolSchemaDescription } from '../src/tools/registry';
 import {
@@ -114,12 +113,8 @@ export interface PipelineSubjects {
   readonly hybridSearch: typeof hybridSearch;
   readonly reciprocalRankFusion: typeof reciprocalRankFusion;
 
-  readonly delegationFeatures: typeof delegationFeatures;
-  readonly renderDelegationFeatures: typeof renderDelegationFeatures;
 
   readonly craftInvocationSites: typeof craftInvocationSites;
-  readonly craftFailureBlame: typeof craftFailureBlame;
-  readonly craftInvocationError: typeof craftInvocationError;
 
   readonly renderToolSchemaDescription: typeof renderToolSchemaDescription;
 
@@ -190,12 +185,8 @@ export const SUBJECT_SOURCE = {
   hybridSearch: 'memory/hybrid-search.ts',
   reciprocalRankFusion: 'memory/vector-store.ts',
 
-  delegationFeatures: 'evolution/delegation-features.ts',
-  renderDelegationFeatures: 'evolution/delegation-features.ts',
 
   craftInvocationSites: 'craft/in-episode.ts',
-  craftFailureBlame: 'craft/in-episode.ts',
-  craftInvocationError: 'craft/in-episode.ts',
 
   renderToolSchemaDescription: 'tools/registry.ts',
 
@@ -265,12 +256,8 @@ export function createPipelineSubjects(rt: AgentRuntime): PipelineSubjects {
     hybridSearch,
     reciprocalRankFusion,
 
-    delegationFeatures,
-    renderDelegationFeatures,
 
     craftInvocationSites,
-    craftFailureBlame,
-    craftInvocationError,
 
     renderToolSchemaDescription,
 

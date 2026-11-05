@@ -135,7 +135,7 @@ export type SessionEvent =
   // `runId` names the execution that ended: its recovery continues the run, its Retry starts another.
   /** `epoch`: the admitted claim the turn ran under, which its close names (design v2 §3); null for one never admitted. */
   | { type: 'turn-end'; turn: CompletedTurn; turnId: string; runId: string; epoch: number | null }
-  | { type: 'error'; message: string }
+  | { type: 'error'; message: string; interrupted?: true }
   | { type: 'evolution'; event: string; message: string }
   // Kept apart from `evolution`: an agent with learning off says no evolution while its jobs may still settle.
   | { type: 'background'; event: string; message: string }
@@ -1078,53 +1078,57 @@ export class ChatSession {
     opts: SendOptions | CardSend,
     landing: SendLandingWaiter | null = null,
   ): Promise<void> {
-    this.refuseUnusableId(opts.id);
-    const card = 'metadata' in opts ? opts : undefined;
-    const { text, files } = normalizePromptInput(input);
+    return settleEffect(Effect.gen({ self: this }, function* () {
+      this.refuseUnusableId(opts.id);
+      const card = 'metadata' in opts ? opts : undefined;
+      const { text, files } = normalizePromptInput(input);
 
-    // Empty and unattached is refused at the door.
-    if (text.trim() === '' && (files === undefined || files.length === 0)) {
-      throw new KinuError('bad_input', 'send requires the message text');
-    }
+      // Empty and unattached is refused at the door.
+      if (text.trim() === '' && (files === undefined || files.length === 0)) {
+        return yield* Effect.fail(new KinuError('bad_input', 'send requires the message text'));
+      }
 
-    if (card === undefined && this.turnInFlight()) {
-      const { id } = opts;
-      const steer: UserSteer & { readonly id: string; readonly mode?: WorkMode } = { text, id, ...(opts.mode !== undefined && { mode: opts.mode }) };
+      if (card === undefined && this.turnInFlight()) {
+        const { id } = opts;
 
-      if (files !== undefined && files.length > 0) Object.assign(steer, { files });
+        const steer: UserSteer & { readonly id: string; readonly mode?: WorkMode } = {
+          text, id, ...(opts.mode !== undefined && { mode: opts.mode }), ...(files !== undefined && files.length > 0 && { files }),
+        };
 
-      if (landing !== null) this.landings.set(id, landing);
-      const outcome = await this.actorSession.send(steer);
+        if (landing !== null) this.landings.set(id, landing);
+        const outcome = yield* Effect.promise(() => this.actorSession.send(steer));
 
-      if (outcome === 'mid-turn' || outcome === 'queued') return;
-      this.landings.delete(id);
-      throw new KinuError('unavailable', 'The message could not be handed to the running turn. Send it again.');
-    }
+        if (outcome === 'mid-turn' || outcome === 'queued') return;
+        this.landings.delete(id);
 
-    const mode = opts.mode ?? 'build';
+        return yield* Effect.fail(new KinuError('unavailable', 'The message could not be handed to the running turn. Send it again.'));
+      }
 
-    const metadata: JsonObject = {
-      ...card?.metadata,
-      ...(opts.tier !== undefined && { profile_tier: opts.tier }),
-      ...(opts.mode !== undefined && { kinuMode: opts.mode }),
-    };
+      const mode = opts.mode ?? 'build';
 
-    // The pending_steers insert runs before the pump can begin the turn.
-    const pendingSendId = opts.id;
-    const turnId = opts.id;
+      const metadata: JsonObject = {
+        ...card?.metadata,
+        ...(opts.tier !== undefined && { profile_tier: opts.tier }),
+        ...(opts.mode !== undefined && { kinuMode: opts.mode }),
+      };
 
-    if (landing !== null) this.landings.set(turnId, landing);
-    this.pendingSends.reserve({ id: pendingSendId, turnId: null, mode, text, files, ...(card !== undefined && { metadata: card.metadata }) });
-    this.queue.push(tagged({
-      text, files, metadata, kind: 'user',
-      turnId, pendingSendId,
-      settle: (failure) => {
-        // A failure takes the reservation with it, or the words would be re-delivered after the caller was told no.
-        if (failure) this.pendingSends.retire([pendingSendId]);
-        this.settleLandings([turnId], failure ?? 'turn');
-      },
+      // The pending_steers insert runs before the pump can begin the turn.
+      const pendingSendId = opts.id;
+      const turnId = opts.id;
+
+      if (landing !== null) this.landings.set(turnId, landing);
+      this.pendingSends.reserve({ id: pendingSendId, turnId: null, mode, text, files, ...(card !== undefined && { metadata: card.metadata }) });
+      this.queue.push(tagged({
+        text, files, metadata, kind: 'user',
+        turnId, pendingSendId,
+        settle: (failure) => {
+          // A failure takes the reservation with it, or the words would be re-delivered after the caller was told no.
+          if (failure) this.pendingSends.retire([pendingSendId]);
+          this.settleLandings([turnId], failure ?? 'turn');
+        },
+      }));
+      this.pump();
     }));
-    this.pump();
   }
 
   private settleLandings(ids: readonly string[], fate: SendLanding | KinuError): void {
@@ -2236,7 +2240,7 @@ export class ChatSession {
 
     await close?.(end);
     // A Stop ends the turn in its one name, whatever failed under it: its tabs read that as a Stop, not a failure.
-    this.emit({ type: 'error', message: end.reason === 'aborted' ? INTERRUPTED_TURN : message });
+    this.emit(end.reason === 'aborted' ? { type: 'error', message: INTERRUPTED_TURN, interrupted: true } : { type: 'error', message });
     this.emit({ type: 'turn-end', turn: turn(), turnId: lease.turnId, runId: lease.runId, epoch: this.actorSession.closeEpoch(lease) });
 
     return end.reason;

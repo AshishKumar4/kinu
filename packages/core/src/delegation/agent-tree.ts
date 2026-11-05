@@ -8,6 +8,7 @@
 import type { AgentActivity, PanelAgent } from '../read-models/workspace-agents';
 import type { EventLog } from '../events/hub/log';
 import { timeAgo } from '../utils/format';
+import { boundedInt } from '../utils/bounds';
 
 export const AGENT_TREE_LIMIT = 32;
 
@@ -176,7 +177,7 @@ export function agentTree(input: {
     if (!retiredAgent(peer) || input.retired) listed.push({ ...row(peer), peer: true });
   }
 
-  const limit = Math.min(Math.max(1, Math.floor(input.limit)), AGENT_TREE_MAX);
+  const limit = boundedInt(input.limit, AGENT_TREE_MAX, 1, AGENT_TREE_MAX);
   const tree = listed.slice(0, limit);
   const notShown = listed.length - tree.length;
   const unlisted = input.retired ? 0 : counts.retired;

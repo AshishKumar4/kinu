@@ -7,6 +7,7 @@ import { WorkspaceActorDirectory, type CreateWorkspaceActor, type WorkspaceActor
 import { bindActorHandle, type ActorHandle, type ActorReference } from '../identity/actor-handle';
 import type { SqlExecutor } from '../types/primitives';
 import { KinuError } from '../obs/error';
+import { settleSync } from '../obs/effect';
 
 interface LocalActorScope {
   readonly directory: WorkspaceActorDirectory;
@@ -36,26 +37,30 @@ const bindings = new WeakMap<LocalActorBinding, LocalActorScope>();
 
 /** Open only. Root birth registers the main actor before calling this function. */
 export function openLocalRootActor(sql: SqlExecutor): ActorHandle {
-  const rows = sql<{ id: string; owner_user_id: string }>`SELECT id, owner_user_id FROM workspace_identity`;
-  const identity = rows[0];
+  return settleSync(Effect.gen(function* () {
+    const rows = sql<{ id: string; owner_user_id: string }>`SELECT id, owner_user_id FROM workspace_identity`;
+    const identity = rows[0];
 
-  if (!identity) throw new KinuError('missing', 'The local workspace has no durable identity.');
+    if (!identity) return yield* Effect.fail(new KinuError('missing', 'The local workspace has no durable identity.'));
 
-  if (rows.length !== 1) throw new KinuError('denied', 'The database has more than one workspace identity.');
-  const directory = new WorkspaceActorDirectory(sql, { workspaceId: identity.id, ownerUserId: identity.owner_user_id });
-  const actor = directory.main();
-  actors.set(actor, { directory, path: [] });
+    if (rows.length !== 1) return yield* Effect.fail(new KinuError('denied', 'The database has more than one workspace identity.'));
+    const directory = new WorkspaceActorDirectory(sql, { workspaceId: identity.id, ownerUserId: identity.owner_user_id });
+    const actor = directory.main();
+    actors.set(actor, { directory, path: [] });
 
-  return actor;
+    return actor;
+  }));
 }
 
 /** The directory (single membership authority) and storage (single physical store) `createActorHost` is built from. */
 export function localActorDirectory(root: ActorHandle) {
-  const scope = scopeFor(root);
+  return settleSync(Effect.gen(function* () {
+    const scope = scopeFor(root);
 
-  if (root.parentActorId !== null) throw new KinuError('denied', 'Only the local root owns the actor directory.');
+    if (root.parentActorId !== null) return yield* Effect.fail(new KinuError('denied', 'Only the local root owns the actor directory.'));
 
-  return { directory: scope.directory };
+    return { directory: scope.directory };
+  }));
 }
 
 function scopeFor(actor: ActorHandle): LocalActorScope {
@@ -115,36 +120,42 @@ export function registerLocalActor(parent: ActorHandle, input: LocalActorCreatio
 }
 
 export function openLocalActor(parent: ActorHandle, name: string): LocalActorBinding {
-  const scope = scopeFor(parent);
-  const entry = scope.directory.apply(parent, scope.path, { action: 'resolve', name });
+  return settleSync(Effect.gen(function* () {
+    const scope = scopeFor(parent);
+    const entry = scope.directory.apply(parent, scope.path, { action: 'resolve', name });
 
-  if (entry.state !== 'active') throw new KinuError('missing', 'The local actor is retired.');
+    if (entry.state !== 'active') return yield* Effect.fail(new KinuError('missing', 'The local actor is retired.'));
 
-  return bindChild(scope, entry.reference, name);
+    return bindChild(scope, entry.reference, name);
+  }));
 }
 
 /** Bind a handle to an actor this root issued; the directory row is the binding authority. */
 export function bindLocalActor(sql: SqlExecutor, binding: LocalActorBinding): ActorHandle {
-  const scope = bindings.get(binding);
+  return settleSync(Effect.gen(function* () {
+    const scope = bindings.get(binding);
 
-  if (!scope) throw new KinuError('denied', 'The actor binding was not issued by a local root.');
-  scope.directory.validate(binding.reference, scope.path);
-
-  const actor = bindActorHandle(sql, { ...binding.reference, name: binding.name, storageKey: binding.storageKey }, () => Effect.sync(() => {
+    if (!scope) return yield* Effect.fail(new KinuError('denied', 'The actor binding was not issued by a local root.'));
     scope.directory.validate(binding.reference, scope.path);
+
+    const actor = bindActorHandle(sql, { ...binding.reference, name: binding.name, storageKey: binding.storageKey }, () => Effect.sync(() => {
+      scope.directory.validate(binding.reference, scope.path);
+    }));
+
+    actors.set(actor, scope);
+
+    return actor;
   }));
-
-  actors.set(actor, scope);
-
-  return actor;
 }
 
 /** Rebind a file plane to an actor that this root has already issued. */
 export function requireLocalActorWorkspace(origin: ActorHandle, actor: ActorHandle): void {
-  const owner = scopeFor(origin);
-  const child = scopeFor(actor);
+  return settleSync(Effect.gen(function* () {
+    const owner = scopeFor(origin);
+    const child = scopeFor(actor);
 
-  if (owner.directory !== child.directory || origin.workspaceId !== actor.workspaceId) throw new KinuError('denied', 'The actor belongs to a different local workspace.');
+    if (owner.directory !== child.directory || origin.workspaceId !== actor.workspaceId) return yield* Effect.fail(new KinuError('denied', 'The actor belongs to a different local workspace.'));
+  }));
 }
 
 const retiring = new WeakMap<WorkspaceActorDirectory, Map<string, Promise<void>>>();

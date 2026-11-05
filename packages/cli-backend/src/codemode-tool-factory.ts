@@ -9,13 +9,15 @@ import type {
   CodemodeSurface,
   JsonValue,
 } from '@kinu.run/core';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { chainOf, settle } from '@kinu.run/core/obs';
+import { Cause, Effect } from 'effect';
 import {
   CRAFTED_TOOL_NAMESPACE,
   explainSandboxError, programSurface,
   renderCodemodeDescription, codemodeInputSchema,
   withCraftedToolDeclarations, renderCraftedDefinitions,
-  codemodeFunction, withCodemodeProgram, execContext, readDeviceRequestChannel, shownConsoleValue, programNamespace, servedImpacts, type ProgramMember, type ProgramNamespace,
+  codemodeFunction, withCodemodeProgram, execContext, readCraftRaised, readDeviceRequestChannel, shownConsoleValue, programNamespace, servedImpacts,
+  type CraftRaised, type ProgramMember, type ProgramNamespace,
 } from '@kinu.run/core';
 import { tool, type ToolSet } from 'ai';
 import { runProgramInProcess } from './executor';
@@ -61,8 +63,8 @@ interface ExecuteSuccess {
 export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps): (surface: CodemodeSurface) => ToolSet[string] {
   return (surface) => {
     // `requireBuild` refuses Plan, so a program reaches what Build does: the program's surface, as the cloud's builds it.
-    const reaching = (signal: AbortSignal | undefined) => programSurface({
-      surface, namespaces: deps.namespaces ?? [], reach: deps.reach, mode: 'build', signal, crafted: surface.craftedTools(),
+    const reaching = (signal: AbortSignal | undefined, raised?: CraftRaised) => programSurface({
+      surface, namespaces: deps.namespaces ?? [], reach: deps.reach, mode: 'build', signal, crafted: surface.craftedTools(), raised,
     });
 
     return withCraftedToolDeclarations(tool({
@@ -81,13 +83,13 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
 
         const sandboxConsole = { log: capture, info: capture, warn: capture, error: capture, debug: capture, trace: capture, dir: capture };
 
-        try {
+        const ran = Effect.promise(async (): Promise<ExecuteSuccess> => {
           const signal = options.abortSignal;
           const context = signal ? { signal } : undefined;
           const toolBindings: Record<string, CodemodeExecute> = {};
           // Read per call so a tool crafted a step ago is callable now; each body is defined in the program below.
           const crafted = surface.craftedTools();
-          const { providers: reached, describe } = reaching(signal);
+          const { providers: reached, describe } = reaching(signal, readCraftRaised({ toolOptions: options }));
 
           for (const [name, entry] of Object.entries(reached.find((p) => p.name === CRAFTED_TOOL_NAMESPACE)?.tools ?? {})) {
             toolBindings[name] = codemodeFunction(CRAFTED_TOOL_NAMESPACE, name, entry.execute);
@@ -135,11 +137,14 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
           if (logs.length > 0) payload.logs = logs;
 
           return payload;
-        } catch (error) {
-          // A bare native-tool call throws a plain ReferenceError; rewrite it into a correction.
-          const message = explainSandboxError(renderThrownChain({ cause: error }));
-          throw new Error(logs.length > 0 ? message + '\nConsole output:\n' + logs.join('\n') : message, { cause: error });
-        }
+        });
+
+        // A bare native-tool call throws a plain ReferenceError; rewrite it into a correction.
+        return settle(Effect.catchCause(ran, (failed) => {
+          const message = explainSandboxError(chainOf(failed));
+
+          return Effect.die(new Error(logs.length > 0 ? message + '\nConsole output:\n' + logs.join('\n') : message, { cause: Cause.squash(failed) }));
+        }));
       }, { call: options.toolCallId, signal: options.abortSignal }, execContext({ signal: options.abortSignal, channel: readDeviceRequestChannel({ toolOptions: options }) })),
     }), () => surface.craftedTools().map(({ name, description }) => ({ name, description })));
   };

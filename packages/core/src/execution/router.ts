@@ -60,25 +60,18 @@ export class DefaultExecutionRouter implements ExecutionRouter {
         configured: status.configured,
         active: status.active,
         status: status.status,
+        ...(status.reason !== undefined && { reason: status.reason }),
+        ...(status.label !== undefined && { label: status.label }),
+        ...(status.granted !== undefined && { granted: status.granted }),
+        ...(status.sandbox !== undefined && { sandbox: status.sandbox }),
+        ...(status.sizes !== undefined && { sizes: status.sizes }),
+        ...(status.mounts !== undefined && { mounts: status.mounts }),
+        ...(p.resourceLimits !== undefined && { resourceLimits: p.resourceLimits }),
       };
 
       if (p.unmeasuredCapabilities !== undefined && p.unmeasuredCapabilities.size > 0) {
         info.unmeasuredCapabilities = [...p.unmeasuredCapabilities];
       }
-
-      if (status.reason !== undefined) Object.assign(info, { reason: status.reason });
-
-      if (status.label !== undefined) Object.assign(info, { label: status.label });
-
-      if (status.granted !== undefined) Object.assign(info, { granted: status.granted });
-
-      if (status.sandbox !== undefined) Object.assign(info, { sandbox: status.sandbox });
-
-      if (status.sizes !== undefined) Object.assign(info, { sizes: status.sizes });
-
-      if (status.mounts !== undefined) Object.assign(info, { mounts: status.mounts });
-
-      if (p.resourceLimits !== undefined) Object.assign(info, { resourceLimits: p.resourceLimits });
 
       return info;
     });

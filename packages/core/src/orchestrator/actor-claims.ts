@@ -1,10 +1,10 @@
 import type { ModelMessage } from 'ai';
+import { Effect } from 'effect';
 import type { WorkMode } from '../types/turn';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { KinuError } from '../obs/error';
-import { diagnostics, toKinuError } from '../obs/index';
-import { nowMs } from '../utils/date';
+import { diagnostics, settle, settleSync, toKinuError } from '../obs/index';
 import { RUN_END_REASONS } from './turn-lifecycle';
 import { initSessionContextTables } from '../session/schema';
 import { initSessionTranscriptTables } from '../session/transcript-schema';
@@ -171,7 +171,7 @@ export class ActorClaimStore {
 
       this.carryCuts(input.turnId, epoch, previous?.epoch ?? 0, input.installedBuild ?? null);
       void this.sql`INSERT INTO actor_turn_claims(actor_id,turn_id,run_id,epoch,work_mode,phase,outcome,claimed_at)
-        VALUES(${this.actorId},${input.turnId},${input.runId},${epoch},${input.workMode},'preparing',NULL,${nowMs()})
+        VALUES(${this.actorId},${input.turnId},${input.runId},${epoch},${input.workMode},'preparing',NULL,${Date.now()})
         ON CONFLICT(actor_id,turn_id) DO UPDATE SET run_id=excluded.run_id,epoch=excluded.epoch,work_mode=excluded.work_mode,phase='preparing',
           program_kind=NULL,program_version=NULL,program_digest=NULL,program_build=NULL,outcome=NULL,claimed_at=excluded.claimed_at,
           answered=CASE WHEN run_id=excluded.run_id THEN answered ELSE 0 END,
@@ -195,13 +195,13 @@ export class ActorClaimStore {
       metadata: { program: { ...input.program }, workMode: input.workMode, ...(input.installedBuild !== undefined && { installedBuild: input.installedBuild }) },
     });
 
-    const claim = this.transactionSync(() => {
+    const claim = this.transactionSync(() => settleSync(Effect.gen({ self: this }, function* () {
       const now = this.guard(input.turnId, epoch);
 
-      if (now.epoch !== epoch || !now.open || now.phase !== 'preparing') throw new KinuError('denied', 'claim changed during admission preparation');
+      if (now.epoch !== epoch || !now.open || now.phase !== 'preparing') return yield* Effect.fail(new KinuError('denied', 'claim changed during admission preparation'));
 
       if (now.selected?.contextId !== input.context.contextId || now.selected.revision !== input.context.revision) {
-        throw new KinuError('denied', 'working selection changed during admission preparation');
+        return yield* Effect.fail(new KinuError('denied', 'working selection changed during admission preparation'));
       }
 
       const admitted: ActorTurnClaim = Object.freeze({ actorId: this.actorId, runId: input.runId, turnId: input.turnId, epoch,
@@ -213,7 +213,7 @@ export class ActorClaimStore {
       this.history.requests.record(admission);
 
       return admitted;
-    });
+    })));
 
     // Seal messages left open under a superseded epoch only after this admission holds the turn.
     await this.history.sealAbandoned();
@@ -231,22 +231,22 @@ export class ActorClaimStore {
       epoch: claim.epoch, revision: latest + 1, step: input.index, source, messages: input.messages,
       metadata: { program: { ...claim.program }, workMode: claim.workMode, ...(input.cache !== undefined && { cache: { ...input.cache } }) } });
 
-    const consumed = this.transactionSync(() => {
+    const consumed = this.transactionSync(() => settleSync(Effect.gen({ self: this }, function* () {
       const now = this.guard(claim.turnId, claim.epoch);
 
       assertLiveIn(now, claim);
 
-      if (now.revision !== latest) throw new KinuError('denied', 'another request consumed this claim during preparation');
+      if (now.revision !== latest) return yield* Effect.fail(new KinuError('denied', 'another request consumed this claim during preparation'));
 
       if (now.selected?.contextId !== source.contextId || now.selected.revision !== source.revision) {
-        throw new KinuError('denied', 'working selection changed during request preparation');
+        return yield* Effect.fail(new KinuError('denied', 'working selection changed during request preparation'));
       }
 
       this.history.requests.recordPrepared(prepared);
       this.markCut(claim, 'provider');
 
       return { requestId: prepared.request.id, revision: prepared.request.revision };
-    });
+    })));
 
     this.history.requests.remember(prepared);
 
@@ -285,7 +285,7 @@ export class ActorClaimStore {
 
   /** A step finished: the turn moved, so no cut before it says anything about the next. */
   progressed(claim: ActorTurnClaim): void {
-    void this.sql`UPDATE actor_turn_cuts SET phase='work',phase_at=${nowMs()},work_cuts=0,provider_cuts=0,oom=0,oom_cuts=0
+    void this.sql`UPDATE actor_turn_cuts SET phase='work',phase_at=${Date.now()},work_cuts=0,provider_cuts=0,oom=0,oom_cuts=0
       WHERE actor_id=${this.actorId} AND turn_id=${claim.turnId} AND epoch=${claim.epoch}`;
   }
 
@@ -317,13 +317,13 @@ export class ActorClaimStore {
     const carried = cut === null || cut.epoch !== previousEpoch || cut.build !== build ? { work: 0, provider: 0, outOfMemory: 0 } : cutsThrough(cut);
 
     void this.sql`INSERT INTO actor_turn_cuts(actor_id,turn_id,epoch,build,phase,phase_at,work_cuts,provider_cuts,oom,oom_cuts)
-      VALUES(${this.actorId},${turnId},${epoch},${build},'work',${nowMs()},${carried.work},${carried.provider},0,${carried.outOfMemory})
+      VALUES(${this.actorId},${turnId},${epoch},${build},'work',${Date.now()},${carried.work},${carried.provider},0,${carried.outOfMemory})
       ON CONFLICT(actor_id,turn_id) DO UPDATE SET epoch=excluded.epoch,build=excluded.build,phase=excluded.phase,
         phase_at=excluded.phase_at,work_cuts=excluded.work_cuts,provider_cuts=excluded.provider_cuts,oom=0,oom_cuts=excluded.oom_cuts`;
   }
 
   private markCut(claim: ActorTurnClaim, phase: TurnCut['phase']): void {
-    void this.sql`UPDATE actor_turn_cuts SET phase=${phase},phase_at=${nowMs()}
+    void this.sql`UPDATE actor_turn_cuts SET phase=${phase},phase_at=${Date.now()}
       WHERE actor_id=${this.actorId} AND turn_id=${claim.turnId} AND epoch=${claim.epoch}`;
   }
 
@@ -523,14 +523,16 @@ export type ClaimRecovery =
 
 export async function verifyClaimedProgram(claim: StoredActorClaim, readVersionedSource: (version: number) => Promise<string | null>, digestOf: (source: string) => string,
   context: ContextRevision | null): Promise<ClaimRecovery> {
-  const { program } = claim;
+  return settle(Effect.gen(function* () {
+    const { program } = claim;
 
-  // A claim never bound to its program (still `preparing`) admitted no request either.
-  if (context === null || program === null) throw new KinuError('missing', 'claimed request evidence is missing');
+    // A claim never bound to its program (still `preparing`) admitted no request either.
+    if (context === null || program === null) return yield* Effect.fail(new KinuError('missing', 'claimed request evidence is missing'));
 
-  if (program.kind === 'builtin') return { kind: program.build === null ? 'build_unknown' : 'verified', claim };
-  const source = await readVersionedSource(program.version);
-  const found = source === null ? null : digestOf(source);
+    if (program.kind === 'builtin') return { kind: program.build === null ? 'build_unknown' : 'verified', claim };
+    const source = yield* Effect.promise(() => readVersionedSource(program.version));
+    const found = source === null ? null : digestOf(source);
 
-  return found === null || found !== program.digest ? { kind: 'source_changed', claim, found } : { kind: 'verified', claim };
+    return found === null || found !== program.digest ? { kind: 'source_changed', claim, found } : { kind: 'verified', claim };
+  }));
 }

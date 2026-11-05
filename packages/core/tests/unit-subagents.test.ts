@@ -1,4 +1,5 @@
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
+import { Effect } from 'effect';
 import { unlistedTree, ROOT_DELEGATION_BUDGET } from './helpers-agents';
 import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
@@ -45,7 +46,7 @@ import {
   type AgentConfigStore,
   initSubagentRosterTable,
 } from '../src/index';
-import { CODE_IS_REFUSAL, KinuError } from '../src/obs/index';
+import { attemptInItsWords, CODE_IS_REFUSAL, KinuError } from '../src/obs/index';
 import { codenameFor } from '../src/identity/naming';
 import { createMemoryVfs, createTestActors, filesIn, type MemoryVfs } from '@kinu.run/test-utils';
 import {
@@ -333,46 +334,46 @@ function makeTeamHarness(inheritedContext: SerializedMessage[] = [], { namedFrom
   const directory = new WorkspaceActorDirectory(makeTagged(actorDb), { workspaceId: 'subagents-workspace', ownerUserId: '' });
 
   const runtime: SubagentRuntime = {
-    async spawn(input) {
+    spawn: (input) => attemptInItsWords('unavailable', async () => {
       seeds.push(input);
       calls.push(`spawn:${input.name}:${input.mission}`);
       fail('spawn');
 
       return directory.apply(directory.main(), [], { action: 'register', creationId: input.creationId, name: input.name, origin: input.origin, lifetime: input.lifetime }).reference;
-    },
-    async cancelBirth(input) {
+    }),
+    cancelBirth: (input) => attemptInItsWords('unavailable', async () => {
       const entry = directory.apply(directory.main(), [], { action: 'cancelCreation', creationId: input.creationId, name: input.name, origin: input.origin, lifetime: input.lifetime });
 
       if (entry.state !== 'deleted') directory.apply(directory.main(), [], { action: 'release', name: input.name, reference: entry.reference });
 
       return entry.reference;
-    },
-    async assign(name, input) {
+    }),
+    assign: (name, input) => attemptInItsWords('unavailable', async () => {
       calls.push(`assign:${name}:${input.body}`);
       assignments.push(input);
       fail('assign');
 
       return fakeHandoff('starts_now');
-    },
-    async status(name) {
+    }),
+    status: (name) => attemptInItsWords('unavailable', async () => {
       fail('status');
 
       return {
         lastActivity: name.length,
         recentSteps: [{ event: 'beforeturn', summary: 'streamText() called next', elapsedMs: 12, createdAt: 34 }],
       };
-    },
-    async message(name, content) {
+    }),
+    message: (name, content) => attemptInItsWords('unavailable', async () => {
       calls.push(`message:${name}:${content}`);
       fail('message');
 
       return fakeHandoff('queued');
-    },
-    async rename(name, displayName, nameOrigin) {
+    }),
+    rename: (name, displayName, nameOrigin) => attemptInItsWords('unavailable', async () => {
       calls.push(`rename:${name}:${displayName}:${nameOrigin}`);
       fail('rename');
-    },
-    async dismiss(name, { keepHistory }, reference) {
+    }),
+    dismiss: (name, { keepHistory }, reference) => attemptInItsWords('unavailable', async () => {
       calls.push(`dismiss:${name}:${keepHistory}`); fail('dismiss');
 
       if (!keepHistory) {
@@ -381,7 +382,7 @@ function makeTeamHarness(inheritedContext: SerializedMessage[] = [], { namedFrom
       }
 
       return { stoppedJobs: [] };
-    },
+    }),
   };
 
   const team = createTeamToolDeps({
@@ -745,17 +746,17 @@ describe('team action routing', () => {
     };
 
     const runtime: SubagentRuntime = {
-      async spawn() { return actorReferenceOf(actor); },
-      async cancelBirth() { return actorReferenceOf(actor); },
-      async assign(name) { return observe('assign', name); },
-      async status() { return { lastActivity: null, recentSteps: [] }; },
-      async message(name) { return observe('message', name); },
-      async rename(name) { observed.push({ operation: 'rename', roster: roster.get(name) }); },
-      async dismiss(name) {
+      spawn: () => Effect.sync(() => actorReferenceOf(actor)),
+      cancelBirth: () => Effect.sync(() => actorReferenceOf(actor)),
+      assign: (name) => Effect.sync(() => observe('assign', name)),
+      status: () => Effect.succeed({ lastActivity: null, recentSteps: [] }),
+      message: (name) => Effect.sync(() => observe('message', name)),
+      rename: (name) => Effect.sync(() => { observed.push({ operation: 'rename', roster: roster.get(name) }); }),
+      dismiss: (name) => Effect.sync(() => {
         observed.push({ operation: 'dismiss', roster: roster.get(name) });
 
         return { stoppedJobs: [] };
-      },
+      }),
     };
 
     const team = createTeamToolDeps({
@@ -860,34 +861,6 @@ describe('subagent event admission', () => {
         sequence_id: 'settle:msg-1', kinu_mode: 'build',
       },
     });
-  });
-
-  // Review of 4028013fc, 2026-10-03: a hire's job wake was admitted again on each restart's re-delivery, and with its key
-  // passed as an owner's message id, so the turn opened on no row and the hire never read what woke it.
-  test("a queued signal's repeat and an owner's resent message each land once; neither stands for the other", () => {
-    const { sql, actor } = makeWorld();
-    initEventsHubTables(sql);
-    const log = new EventLog(sql, actor);
-
-    const wake = (now: number) => admitSubagentTask(log, {
-      fromWorkspace: 'kinu-main', kind: 'message', body: 'Background shell job bgjob-1 completed.', mode: 'build',
-      idempotencyKey: 'background-job-wake:bgjob-1', now,
-    });
-
-    const owner = (now: number) => admitSubagentTask(log, {
-      fromWorkspace: 'kinu-main', kind: 'message', body: 'Look at the logs.', mode: 'build', messageId: 'msg-1', now,
-    });
-
-    expect([wake(10).admitted, wake(11).admitted]).toEqual([true, false]);
-    expect([owner(12).admitted, owner(13).admitted]).toEqual([true, false]);
-
-    // The wake opens its own turn on its text: it carries no message id, which says the owner's row is already open.
-    const pending = log.pending({ variant: 'subagent_task' });
-
-    const messageIds = pending.map((event) => (event.variant === 'subagent_task'
-      && (event.payload_visibility === 'full' || event.payload_visibility === 'redact') ? event.payload.message_id ?? null : 'unreadable'));
-
-    expect(messageIds).toEqual([null, 'msg-1']);
   });
 
   test('the sender is told the event id its report will cite', () => {

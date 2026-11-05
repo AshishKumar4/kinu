@@ -1,5 +1,5 @@
 import { Effect } from 'effect';
-import { KinuError, settleSync } from '@kinu.run/core/obs';
+import { KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { renderIssuesUnquoted, type JsonValue, type RoutedLLM } from '@kinu.run/core';
 import type { ToolExecutionOptions } from 'ai';
 import * as v from 'valibot';
@@ -15,27 +15,23 @@ export function createScriptedLLM(responses: string[]): ScriptedLLM {
   let i = 0;
   const prompts: string[] = [];
 
-  function nextResponse(prompt: string): string {
+  const nextResponse = (prompt: string): Effect.Effect<string, KinuError> => Effect.suspend(() => {
     prompts.push(prompt);
     const out = responses[i++];
 
-    if (out === undefined) {
-      throw new Error(
-        `ScriptedLLM out of responses (called ${i} times, only ${responses.length} scripted).`,
-      );
-    }
-
-    return out;
-  }
+    return out === undefined
+      ? Effect.fail(new KinuError('missing', `ScriptedLLM out of responses (called ${i} times, only ${responses.length} scripted).`))
+      : Effect.succeed(out);
+  });
 
   return {
     prompts,
     get callCount() { return i; },
-    async complete(prompt: string): Promise<string> {
-      return nextResponse(prompt);
+    complete(prompt: string): Promise<string> {
+      return settle(nextResponse(prompt));
     },
-    async object(prompt, schema) {
-      return answeredAs(schema, nextResponse(prompt));
+    object(prompt, schema) {
+      return settle(Effect.map(nextResponse(prompt), (text) => answeredAs(schema, text)));
     },
   };
 }

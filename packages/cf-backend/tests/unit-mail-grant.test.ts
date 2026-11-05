@@ -31,7 +31,7 @@ function ownerMailbox() {
   return {
     open: () => { store.open({ userId: 'u-owner', email: 'owner@example.com', username: 'owner', assistant: null }); },
     object: {
-      boxes: () => Promise.resolve(store.boxes()),
+      holdsAddress: () => Promise.resolve(store.holdsAddress()),
       readableBy: (caller: Parameters<MailStore['readableBy']>[0]) => Promise.resolve(store.readableBy(caller)),
       findFor: (caller: Parameters<MailStore['findFor']>[0], query: Parameters<MailStore['findFor']>[1]) => Promise.resolve(store.findFor(caller, query)),
     },

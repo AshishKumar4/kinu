@@ -15,7 +15,7 @@ import { walkedPath, workspacePath } from '../vfs/workspace-path';
 import { sessionRuntimeBins, workspaceCommandNotFound } from '../vfs/workspace-runtimes';
 import { shellQuote } from '../utils/shell';
 import { execIdsOf, principalExecId } from './secrets-caller';
-import { commandTool, type ExecutorCapability, type ExecutorProvider, type ExecutorStatus, type ExecutorTool, type ExecutorToolResult, type PortExposureResult, type PreviewRouteCheck } from './types';
+import { commandTool, LogLimitsSchema, type ExecutorCapability, type ExecutorProvider, type ExecutorStatus, type ExecutorTool, type ExecutorToolResult, type PortExposureResult, type PreviewRouteCheck } from './types';
 import { attempt, detach, hold, KinuError, logged, refusalOf, renderThrownChain, settle, toKinuError, type Refusal } from '../obs/index';
 import { Cause, Effect, Exit } from 'effect';
 import { newJobId, type AdoptsJobs } from '../types/jobs';
@@ -101,14 +101,7 @@ function workspaceNoListenerReason(port: number): string {
     + `once it listens. For an authored Worker slate, use its declared preview operation when available.`;
 }
 
-/** Session RPC failures default to `io`; abort, timeout and memory-wall keep the classifier's precise code. */
-function nimbusFailure(input: { doing: string; cause: unknown }): KinuError {
-  return toKinuError({ ...input, otherwise: 'io' });
-}
-
 const StringSchema = v.string();
-
-const LogLimitsSchema = v.optional(v.object({ lines: v.optional(v.number()), bytes: v.optional(v.number()) }), {});
 
 function stringifyResult(input: { value: unknown }): string {
   const text = v.safeParse(v.string(), input.value);
@@ -176,7 +169,7 @@ export function startJobProcess(
 
   const starting = Effect.tryPromise({
     try: async () => touch(() => control.startProcess(command, { ...(cwd !== undefined && { cwd }), execId: principalExecId(jobId) })),
-    catch: (cause) => nimbusFailure({ doing: `nimbus startProcess \`${command}\``, cause }),
+    catch: (cause) => toKinuError({ doing: `nimbus startProcess \`${command}\``, cause, otherwise: 'io' }),
   });
 
   return settle(Effect.match(starting, { onFailure: refusalOf, onSuccess: ({ pid }): JobProcess => {
@@ -254,7 +247,7 @@ interface EffectMember {
 
 /** `read`'s answer, or the refusal `doing` answers with when it fails, however it fails. */
 function answeredOr<A>(doing: string, read: () => Promise<A>, answer: (value: A) => ExecutorToolResult): Effect.Effect<ExecutorToolResult> {
-  return Effect.match(Effect.tryPromise({ try: read, catch: (cause) => nimbusFailure({ doing, cause }) }), { onFailure: refusalOf, onSuccess: answer });
+  return Effect.match(Effect.tryPromise({ try: read, catch: (cause) => toKinuError({ doing, cause, otherwise: 'io' }) }), { onFailure: refusalOf, onSuccess: answer });
 }
 
 /** `workspace.stopProcess`. */

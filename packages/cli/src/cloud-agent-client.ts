@@ -556,16 +556,11 @@ export class CloudAgentClient implements AgentClient {
     const view: AgentChangelogView = { entries: result.entries, unseenCount: result.unseenCount };
 
     // A silently dropped ack leaves the digest unseen forever; report it through the error channel.
-    try {
-      await this.callRpc('markChangelogSeen', []);
-    } catch (error) {
-      this.emit({
-        type: 'error',
-        message: `Could not mark the changelog as seen: ${renderThrownChain({ cause: error })}`,
-      });
-    }
+    const acked = attempt({ doing: 'marking the changelog as seen', otherwise: 'unavailable' }, () => this.callRpc('markChangelogSeen', []));
 
-    return view;
+    return settle(Effect.as(Effect.catch(acked, (failure) => Effect.sync(() => {
+      this.emit({ type: 'error', message: `Could not mark the changelog as seen: ${renderThrownChain({ cause: failure.cause })}` });
+    })), view));
   }
 
   async revertChangelogEntry(id: string): Promise<ChangelogRevertResult> {

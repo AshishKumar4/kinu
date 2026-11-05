@@ -2,13 +2,16 @@ import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { SqlExecutor } from '../types/primitives';
+import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
+import { settleSync } from '../obs/effect';
 import { sha256Hex } from '../safety/argument-digest';
 import { encodeModelMessage, decodeModelMessageValues, decodeOwnModelMessage, recordCarries } from './message-codec';
 import { JsonObjectSchema, isParsedJsonObject, jsonObjectElements, type JsonObject, type JsonValue } from '../utils/json';
 import { freezeTree } from '../utils/freeze';
 import { nextLoopTurn } from '../types/clock';
 import { spilledDigest, type SessionPayloads, type SessionPayloadReader, type SessionPayload } from './payload';
+import { headEnd } from '../utils/text';
 
 export interface MessageReference { readonly messageId: string }
 
@@ -134,10 +137,7 @@ function* segmented(text: string): Generator<string> {
   let at = 0;
 
   while (at < text.length) {
-    let end = Math.min(text.length, at + STREAM_SEGMENT_CHARS);
-    const last = text.charCodeAt(end - 1);
-
-    if (end < text.length && last >= 0xd800 && last <= 0xdbff) end += 1;
+    const end = headEnd(text, Math.min(text.length, at + STREAM_SEGMENT_CHARS));
     yield text.slice(at, end);
     at = end;
   }
@@ -311,15 +311,17 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
   }
 
   originOf(reference: MessageReference): MessageOrigin {
-    const cached = this.sealed.get(reference.messageId);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const cached = this.sealed.get(reference.messageId);
 
-    if (cached !== undefined) return cached.origin;
-    this.actor.assertCurrent();
-    const row = this.sql<{ origin: MessageOrigin }>`SELECT origin FROM session_messages WHERE actor_id=${this.actor.actorId} AND message_id=${reference.messageId}`[0];
+      if (cached !== undefined) return cached.origin;
+      this.actor.assertCurrent();
+      const row = this.sql<{ origin: MessageOrigin }>`SELECT origin FROM session_messages WHERE actor_id=${this.actor.actorId} AND message_id=${reference.messageId}`[0];
 
-    if (row === undefined) throw new KinuError('missing', 'session message does not exist');
+      if (row === undefined) return yield* Effect.fail(new KinuError('missing', 'session message does not exist'));
 
-    return row.origin;
+      return row.origin;
+    }));
   }
 
   /** Asserts the actor once, after the last await; keeps only the messages this context names. */
@@ -362,13 +364,15 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
 
   /** The stream has committed these native parts; they may include parts its final message omitted. */
   bindSource(message: ModelMessage, reference: MessageReference, native: JsonObject): void {
-    this.actor.assertCurrent();
-    const recorded = decodeOwnModelMessage(native);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      this.actor.assertCurrent();
+      const recorded = decodeOwnModelMessage(native);
 
-    if (!recordCarries(recorded, message)) throw new KinuError('io', 'native output differs from its recorded content');
-    this.cache(reference, recorded, 'output');
-    this.sources.set(message, reference);
-    this.sources.set(recorded, reference);
+      if (!recordCarries(recorded, message)) return yield* Effect.fail(new KinuError('io', 'native output differs from its recorded content'));
+      this.cache(reference, recorded, 'output');
+      this.sources.set(message, reference);
+      this.sources.set(recorded, reference);
+    }));
   }
 
   /** Frozen, so it cannot drift from the committed row it names. */
@@ -454,15 +458,17 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
   }
 
   open(role: 'assistant' | 'tool', id: string, origin: MessageOrigin, stream: StreamedMessage = {}): MessageReference {
-    this.actor.assertCurrent();
+    return settleSync(Effect.gen({ self: this }, function* () {
+      this.actor.assertCurrent();
 
-    const opened = this.sql<{ message_id: string }>`INSERT INTO session_messages(actor_id,message_id,role,native_content_kind,origin,request_id,output_slot,ingress_id,envelope_json)
-      VALUES(${this.actor.actorId},${id},${role},'parts',${origin},${stream.requestId ?? null},${stream.slot ?? null},${null},${JSON.stringify(stream.envelope ?? {})})
-      ON CONFLICT(actor_id,message_id) DO NOTHING RETURNING message_id`;
+      const opened = this.sql<{ message_id: string }>`INSERT INTO session_messages(actor_id,message_id,role,native_content_kind,origin,request_id,output_slot,ingress_id,envelope_json)
+        VALUES(${this.actor.actorId},${id},${role},'parts',${origin},${stream.requestId ?? null},${stream.slot ?? null},${null},${JSON.stringify(stream.envelope ?? {})})
+        ON CONFLICT(actor_id,message_id) DO NOTHING RETURNING message_id`;
 
-    if (opened.length === 0) throw new KinuError('denied', 'message identity is already recorded');
+      if (opened.length === 0) return yield* Effect.fail(new KinuError('denied', 'message identity is already recorded'));
 
-    return { messageId: id };
+      return { messageId: id };
+    }));
   }
 
   async prepareDescriptor(native: JsonObject): Promise<SessionPayload> {
@@ -473,67 +479,75 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
   }
 
   streamOpenPart(messageId: string, part: StreamPartInput): void {
-    this.actor.assertCurrent();
-    const [first = ''] = part.text === undefined ? [] : segmented(part.text);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      this.actor.assertCurrent();
+      const [first = ''] = part.text === undefined ? [] : segmented(part.text);
 
-    const opened = this.sql<{ part_no: number }>`INSERT INTO stream_parts(actor_id,message_id,part_no,segment,stream_order,descriptor_json,descriptor_path,text,ended)
-      SELECT ${this.actor.actorId},${messageId},${part.partNo},0,${part.streamOrder},${part.descriptor.json},${part.descriptor.path},${first},0
-      FROM session_messages WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND sealed_at IS NULL RETURNING part_no`;
+      const opened = this.sql<{ part_no: number }>`INSERT INTO stream_parts(actor_id,message_id,part_no,segment,stream_order,descriptor_json,descriptor_path,text,ended)
+        SELECT ${this.actor.actorId},${messageId},${part.partNo},0,${part.streamOrder},${part.descriptor.json},${part.descriptor.path},${first},0
+        FROM session_messages WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND sealed_at IS NULL RETURNING part_no`;
 
-    if (opened.length === 0) throw new KinuError('denied', 'message is missing or sealed');
+      if (opened.length === 0) return yield* Effect.fail(new KinuError('denied', 'message is missing or sealed'));
 
-    if (part.text !== undefined && part.text.length > first.length) this.streamAppend(messageId, part.partNo, part.text.slice(first.length));
+      if (part.text !== undefined && part.text.length > first.length) this.streamAppend(messageId, part.partNo, part.text.slice(first.length));
+    }));
   }
 
   /** Each window is the part's next segment, so a flush writes its own text once: appending to the last segment
    *  rewrote all of it at every flush, 66,579 bytes for a 2,390-byte answer. With a `fence`, the append checks the
    *  turn's claim in its own statement; without one, the caller has. */
   streamAppend(messageId: string, partNo: number, text: string, fence: ClaimFence | null = null): void {
-    this.actor.assertCurrent();
-    const actorId = this.actor.actorId;
+    return settleSync(Effect.gen({ self: this }, function* () {
+      this.actor.assertCurrent();
+      const actorId = this.actor.actorId;
 
-    for (const piece of segmented(text)) {
-      // Two statements, not one with an optional clause: a store without claims has no claim table to name. The fenced
-      // one names the claim table itself, the one place the session does: one statement per flush, as the production
-      // turn's statement count is measured (complexity.test.ts).
-      const appended = fence === null
-        ? this.sql<{ segment: number }>`INSERT INTO stream_parts(actor_id,message_id,part_no,segment,stream_order,descriptor_json,descriptor_path,text,ended)
-          SELECT actor_id,message_id,part_no,segment + 1,stream_order,NULL,NULL,${piece},0 FROM stream_parts
-          WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo} AND ended=0
-          AND segment=(SELECT MAX(segment) FROM stream_parts WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo}) RETURNING segment`
-        : this.sql<{ segment: number }>`INSERT INTO stream_parts(actor_id,message_id,part_no,segment,stream_order,descriptor_json,descriptor_path,text,ended)
-          SELECT actor_id,message_id,part_no,segment + 1,stream_order,NULL,NULL,${piece},0 FROM stream_parts
-          WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo} AND ended=0
-          AND segment=(SELECT MAX(segment) FROM stream_parts WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo})
-          AND EXISTS (SELECT 1 FROM actor_turn_claims c WHERE c.actor_id=${actorId} AND c.turn_id=${fence.turnId} AND c.epoch=${fence.epoch} AND c.outcome IS NULL)
-          RETURNING segment`;
+      for (const piece of segmented(text)) {
+        // Two statements, not one with an optional clause: a store without claims has no claim table to name. The fenced
+        // one names the claim table itself, the one place the session does: one statement per flush, as the production
+        // turn's statement count is measured (complexity.test.ts).
+        const appended = fence === null
+          ? this.sql<{ segment: number }>`INSERT INTO stream_parts(actor_id,message_id,part_no,segment,stream_order,descriptor_json,descriptor_path,text,ended)
+            SELECT actor_id,message_id,part_no,segment + 1,stream_order,NULL,NULL,${piece},0 FROM stream_parts
+            WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo} AND ended=0
+            AND segment=(SELECT MAX(segment) FROM stream_parts WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo}) RETURNING segment`
+          : this.sql<{ segment: number }>`INSERT INTO stream_parts(actor_id,message_id,part_no,segment,stream_order,descriptor_json,descriptor_path,text,ended)
+            SELECT actor_id,message_id,part_no,segment + 1,stream_order,NULL,NULL,${piece},0 FROM stream_parts
+            WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo} AND ended=0
+            AND segment=(SELECT MAX(segment) FROM stream_parts WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo})
+            AND EXISTS (SELECT 1 FROM actor_turn_claims c WHERE c.actor_id=${actorId} AND c.turn_id=${fence.turnId} AND c.epoch=${fence.epoch} AND c.outcome IS NULL)
+            RETURNING segment`;
 
-      if (appended.length > 0) continue;
-      // A stale claim is refused here, not as a missing part.
-      fence?.assert();
+        if (appended.length > 0) continue;
+        // A stale claim is refused here, not as a missing part.
+        fence?.assert();
 
-      throw new KinuError('denied', 'stream part is missing, sealed or ended');
-    }
+        return yield* Effect.fail(new KinuError('denied', 'stream part is missing, sealed or ended'));
+      }
+    }));
   }
 
   streamMetadata(messageId: string, partNo: number, descriptor: SessionPayload): void {
-    this.actor.assertCurrent();
+    return settleSync(Effect.gen({ self: this }, function* () {
+      this.actor.assertCurrent();
 
-    const written = this.sql<{ segment: number }>`UPDATE stream_parts SET descriptor_json=${descriptor.json},descriptor_path=${descriptor.path}
-      WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND part_no=${partNo} AND segment=0 RETURNING segment`;
+      const written = this.sql<{ segment: number }>`UPDATE stream_parts SET descriptor_json=${descriptor.json},descriptor_path=${descriptor.path}
+        WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND part_no=${partNo} AND segment=0 RETURNING segment`;
 
-    if (written.length === 0) throw new KinuError('denied', 'stream part is missing or sealed');
+      if (written.length === 0) return yield* Effect.fail(new KinuError('denied', 'stream part is missing or sealed'));
+    }));
   }
 
   /** The last segment carries the end, the only one an append extends from: marking every segment rewrote the answer. */
   streamEnd(messageId: string, partNo: number): void {
-    this.actor.assertCurrent();
-    const actorId = this.actor.actorId;
+    return settleSync(Effect.gen({ self: this }, function* () {
+      this.actor.assertCurrent();
+      const actorId = this.actor.actorId;
 
-    const ended = this.sql<{ segment: number }>`UPDATE stream_parts SET ended=1 WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo} AND ended=0
-      AND segment=(SELECT MAX(segment) FROM stream_parts WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo}) RETURNING segment`;
+      const ended = this.sql<{ segment: number }>`UPDATE stream_parts SET ended=1 WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo} AND ended=0
+        AND segment=(SELECT MAX(segment) FROM stream_parts WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo}) RETURNING segment`;
 
-    if (ended.length === 0) throw new KinuError('denied', 'stream part is missing, sealed or ended');
+      if (ended.length === 0) return yield* Effect.fail(new KinuError('denied', 'stream part is missing, sealed or ended'));
+    }));
   }
 
   /** The open message's parts as its stream holds them; null once sealed. */
@@ -542,19 +556,22 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
   }
 
   seal(messageId: string, content: PreparedContent, envelope?: JsonObject): void {
-    this.actor.assertCurrent();
-    const { payload } = content;
-    const envelopeJson = envelope === undefined ? this.row(messageId).envelope_json : JSON.stringify(envelope);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      this.actor.assertCurrent();
+      const { payload } = content;
+      const envelopeJson = envelope === undefined ? this.row(messageId).envelope_json : JSON.stringify(envelope);
 
-    const sealed = this.sql<{ message_id: string }>`UPDATE session_messages SET sealed_at=${Date.now()},content_json=${payload.json},content_path=${payload.path},envelope_json=${envelopeJson}
-      WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND sealed_at IS NULL RETURNING message_id`;
+      const sealed = this.sql<{ message_id: string }>`UPDATE session_messages SET sealed_at=${Date.now()},content_json=${payload.json},content_path=${payload.path},envelope_json=${envelopeJson}
+        WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND sealed_at IS NULL RETURNING message_id`;
 
-    if (sealed.length === 0) {
-      this.row(messageId);
-      throw new KinuError('denied', 'message is already sealed');
-    }
+      if (sealed.length === 0) {
+        this.row(messageId);
 
-    void this.sql`DELETE FROM stream_parts WHERE actor_id=${this.actor.actorId} AND message_id=${messageId}`;
+        return yield* Effect.fail(new KinuError('denied', 'message is already sealed'));
+      }
+
+      void this.sql`DELETE FROM stream_parts WHERE actor_id=${this.actor.actorId} AND message_id=${messageId}`;
+    }));
   }
 
   override async materialize(reference: MessageReference): Promise<ModelMessage> {

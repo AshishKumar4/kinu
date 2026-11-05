@@ -11,7 +11,7 @@ import { Effect } from 'effect';
 import * as v from 'valibot';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { DEVICE_KEY_FILE, deviceReplaceMessage, isolatedBunArgs, signDeviceMessage, type DeviceReplacement } from '@kinu.run/core';
-import { classify, classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle, settleSync, tolerate, toKinuError } from '@kinu.run/core/obs';
+import { attempt, classify, classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle, settleSync, tolerate, toKinuError } from '@kinu.run/core/obs';
 import { describeGpuNodes, redactLiterals, effectiveDeviceMode, HOME_FOLDER_CONSENT, sandboxReasonFix } from '@kinu.run/core';
 import {
   claimMachine, enforceOwnerOnly, ensureSecretDir, machineProcessAlive, readMachinePid, removeMachinePid, runningMachineDaemon, runsMachineDaemon,
@@ -20,7 +20,7 @@ import { AGENT_HOME, ensureAgentHome, loadConfigFile, requireAuthConfig, resolve
 import { joinCloudDevice, listCloudDevices, registerCloudDevice, whoami, type CloudDevice, type CloudDeviceSandbox } from './cloud-api';
 import { buildDaemonFiles, type DaemonFiles } from './daemon-build';
 import { readDaemonLogTail, rotateDaemonLogIfNeeded } from './daemon-log';
-import { issuedDeviceConnected, waitForAnswer, type StoppableWaitOptions } from '@kinu.run/core';
+import { issuedDeviceConnected, untilAnswered, type StoppableWaitOptions } from '@kinu.run/core';
 import { parseDeviceConfig, type DeviceConfig } from '../../pc-agent/src/index.js';
 import { DIM, VERSION } from './display';
 
@@ -130,7 +130,7 @@ export function connectDevice(auth: DeviceAuth, opts: ConnectDeviceOptions = {})
     if (deadLocalConfig && opts.session) yield* stopRunningDaemon();
     const launch = yield* startInstalledDaemon(opts.session === true, runtime);
     // The daemon must show as connected on the server before success is claimed.
-    const connected = yield* waitForDaemon(launch, opts, () => listedConnected(auth, device.deviceId));
+    const connected = yield* waitForDaemon(launch, opts, listedConnected(auth, device.deviceId));
 
     if (connected === undefined) return { kind: 'cancelled', deviceId: device.deviceId, replacedLocalConfig } satisfies ConnectDeviceResult;
     thisDeviceConnected = true;
@@ -176,7 +176,7 @@ export function joinDevice(origin: string, ticket: string, account: string, opts
     const root = deviceRoot(opts.root);
     yield* installDaemonFiles(device, key, root);
     const launch = yield* startInstalledDaemon(false, runtime);
-    const accepted = yield* waitForDaemon(launch, opts, async () => (connectedSinceLinked() ? true : undefined));
+    const accepted = yield* waitForDaemon(launch, opts, Effect.sync(() => (connectedSinceLinked() ? true : undefined)));
 
     if (accepted === undefined) return { kind: 'cancelled', deviceId: device.deviceId, replacedLocalConfig } satisfies JoinDeviceResult;
     thisDeviceConnected = true;
@@ -229,7 +229,7 @@ export function reenrolEarlierDevice(auth: DeviceAuth | null, opts: Pick<Connect
 
     yield* installDaemonFiles(device, key, earlier.root);
     const launch = yield* startInstalledDaemon(false, runtime);
-    const connected = yield* waitForDaemon(launch, opts, () => listedConnected(auth, device.deviceId));
+    const connected = yield* waitForDaemon(launch, opts, listedConnected(auth, device.deviceId));
 
     if (connected === undefined) return { kind: 'cancelled', deviceId: device.deviceId } satisfies ReenrolResult;
     thisDeviceConnected = true;
@@ -724,34 +724,22 @@ function connectedSinceLinked(): boolean {
 }
 
 /** The device's roster row once it reads connected; a transient listing error while the daemon lives is not-yet. */
-async function listedConnected(auth: DeviceAuth, deviceId: string): Promise<CloudDevice | undefined> {
-  // Recorded as a shape, never a sentinel a healthy answer could return.
-  let miss: { readonly transient: string } | undefined;
-  let rows: CloudDevice[] | undefined;
+function listedConnected(auth: DeviceAuth, deviceId: string): Effect.Effect<CloudDevice | undefined> {
+  const listed = Effect.map(listDevicesForConnect(auth, 'checking whether the device daemon connected'), (rows) => issuedDeviceConnected(rows, deviceId));
 
-  try {
-    rows = await listCloudDevices(auth.origin, auth.token);
-  } catch (thrown) {
-    const cause = listingFailure(auth, 'checking whether the device daemon connected', { cause: thrown });
-    const failure = toKinuError({ doing: 'checking whether the device daemon connected', cause, otherwise: 'unavailable' });
+  return Effect.catch(listed, (failure) => Effect.sync(() => {
     diagnostics.failure('device.connect.list_transient', failure);
-    miss = { transient: renderThrownChain({ cause: failure }) };
-  }
-
-  if (miss !== undefined) {
-    diagnostics.event('device.connect.list_transient_not_yet', { detail: miss.transient });
+    diagnostics.event('device.connect.list_transient_not_yet', { detail: renderThrownChain({ cause: failure }) });
 
     return undefined;
-  }
-
-  return rows === undefined ? undefined : issuedDeviceConnected(rows, deviceId);
+  }));
 }
 
 /** Ends only when `connected` answers, the daemon exits, or the user interrupts. No deadline. */
 function waitForDaemon<A>(
   launch: DaemonLaunch,
   opts: Pick<ConnectDeviceOptions, 'onWaiting' | 'signal'>,
-  connected: () => Promise<A | undefined>,
+  connected: Effect.Effect<A | undefined>,
 ): Effect.Effect<A | undefined, KinuError> {
   return Effect.suspend(() => {
     const stop = new AbortController();
@@ -778,7 +766,7 @@ function waitForDaemon<A>(
     if (opts.onWaiting) wait.onWaiting = opts.onWaiting;
 
     const connecting = Effect.gen(function* () {
-      const answered = yield* Effect.promise(() => waitForAnswer(connected, wait));
+      const answered = yield* untilAnswered(connected, wait);
 
       if (answered !== undefined) return answered;
 
@@ -933,10 +921,10 @@ const STOP_POLL_MS = 50;
 function stopInstalledDaemon(pid: number): Effect.Effect<void, KinuError> {
   return Effect.andThen(
     io(`stopping the device daemon (pid ${pid})`, () => tolerate(() => process.kill(pid, 'SIGTERM'), 'esrch')),
-    Effect.tryPromise({
-      try: () => waitForAnswer(async () => (machineProcessAlive(pid) && await runsMachineDaemon(pid, SCRIPT_PATH) ? undefined : true), { intervalMs: STOP_POLL_MS }),
-      catch: (cause) => toKinuError({ doing: `waiting for the device daemon (pid ${pid}) to exit`, cause, otherwise: 'io' }),
-    }),
+    untilAnswered(attempt(
+      { doing: `waiting for the device daemon (pid ${pid}) to exit`, otherwise: 'io' },
+      async () => (machineProcessAlive(pid) && await runsMachineDaemon(pid, SCRIPT_PATH) ? undefined : true),
+    ), { intervalMs: STOP_POLL_MS }),
   );
 }
 

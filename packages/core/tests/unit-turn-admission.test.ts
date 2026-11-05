@@ -231,7 +231,7 @@ describe('exact turn admission', () => {
     }));
 
     expect(failure).toBeInstanceOf(Error);
-    expect(failure).toMatchObject({ code: 'bad_input' });
+    expect(failure).toMatchObject({ code: 'budget' });
     expect(triggers).toEqual(['auto', 'force']);
     expect(counter.seen.length).toBe(2);
   });
@@ -344,7 +344,7 @@ describe('exact turn admission', () => {
     }));
 
     expect(failure).not.toBeNull();
-    expect(failure !== null && 'code' in failure ? failure.code : undefined).toBe('bad_input');
+    expect(failure !== null && 'code' in failure ? failure.code : undefined).toBe('budget');
   });
 
   test('what is counted is the request sent: system, messages with the unapproved instructions, and the tools', async () => {

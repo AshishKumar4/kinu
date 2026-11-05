@@ -28,7 +28,7 @@ import type { ForkAppData } from '../identity/fork-sections';
 
 export {
   APP_MUTATIONS, APP_TABLE_SCOPES,
-  type AppMutation, type AppTableScope, type DbOpRecord,
+  type AppTableScope, type DbOpRecord,
 } from '../types/app-store';
 
 /** SQL addresses a table by this stored name (`db-sql.ts`). */

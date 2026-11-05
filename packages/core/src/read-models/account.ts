@@ -24,8 +24,6 @@ export const ONBOARDING_STEPS = [
   { id: 'showcase', title: 'What Kinu does' },
 ] as const;
 
-export type OnboardingStepId = (typeof ONBOARDING_STEPS)[number]['id'];
-
 /** Shared by the route's 400, the UserDO's refusal, and the field's maxLength. */
 export const DISPLAY_NAME_MAX = 80;
 

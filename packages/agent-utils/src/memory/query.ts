@@ -12,34 +12,29 @@ const STOP_WORDS = new Set([
 	"and", "but", "or", "as", "just", "also", "very", "too", "any", "all",
 ]);
 
-/** Terms an FTS query reduces to (operators and stop words removed). */
+/** A query's words as FTS5 phrases: split on anything but a letter, digit or underscore (any script), each quoted, so
+ *  no word reads as FTS5 syntax. */
+export function ftsPhrases(query: string): string[] {
+	return query.split(/[^\p{L}\p{N}_]+/u).filter(Boolean).map((word) => `"${word}"`);
+}
+
+/** Phrases a recall query reduces to: operators and stop words removed, unless nothing else is left. */
 function ftsQueryTerms(query: string): string[] {
-	const tokens = query
-		.replace(/[^\w\s]/g, " ")
-		.split(/\s+/)
-		.filter((t) => {
-			if (!t) return false;
+	const phrases = ftsPhrases(query);
 
-			if (FTS_OPERATORS.has(t.toUpperCase())) return false;
+	const kept = phrases.filter((phrase) => {
+		const word = phrase.slice(1, -1);
 
-			if (STOP_WORDS.has(t.toLowerCase())) return false;
+		return !FTS_OPERATORS.has(word.toUpperCase()) && !STOP_WORDS.has(word.toLowerCase());
+	});
 
-			return true;
-		});
-
-	if (tokens.length === 0) {
-		return query.replace(/[^\w\s]/g, " ").split(/\s+/).filter(Boolean);
-	}
-
-	return tokens;
+	return kept.length === 0 ? phrases : kept;
 }
 
 function sanitizeFtsQuery(query: string): string {
-	const tokens = ftsQueryTerms(query);
+	const terms = ftsQueryTerms(query);
 
-	if (tokens.length === 0) return '""';
-
-	return tokens.map((t) => `"${t}"`).join(" ");
+	return terms.length === 0 ? '""' : terms.join(" ");
 }
 
 /** Any-term form of a sanitized query, or null when a single token makes it identical. */
