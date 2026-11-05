@@ -5,7 +5,7 @@ import { lazyRoute } from "@/lazy-route";
 import { Button } from "@/components/ui/Button";
 import { Pressable } from "@/components/ui/Pressable";
 
-const FeedbackModal = lazyRoute(async () => ({ default: (await import("./FeedbackModal")).FeedbackModal }));
+const FeedbackModal = lazyRoute(() => import("./FeedbackModal"));
 
 export function FeedbackButton({ compact = false }: { compact?: boolean }) {
   const [open, setOpen] = useState(false);

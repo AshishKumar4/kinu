@@ -1,6 +1,6 @@
 import * as v from 'valibot';
 import { declaredReasoningEffort, type ReasoningEffort } from '../providers/reasoning-effort';
-import type { DecisionModel } from '../providers/decision-model';
+import type { DecisionModel } from '../providers/decision-models';
 import type { NamedSwarmPreset } from './swarm';
 import type { WebSearchRoute } from '../providers/web-search';
 

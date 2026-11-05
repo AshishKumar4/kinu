@@ -6,7 +6,7 @@ import { writeActivityLog } from '../identity/activity-log';
 import { diagnostics } from '../obs/index';
 import { describeProviderError, providerStatusOf } from '../providers/util';
 import type { TierRefusals } from '../types/refusals';
-import { DECISION_REFUSALS } from '../providers/decision-model';
+import { DECISION_REFUSALS } from '../providers/decision-models';
 import type { SqlExecutor } from '../types/primitives';
 
 

@@ -251,10 +251,15 @@ export const DECLARED = byFile([
     mechanisms: ['throw'],
     reason: 'a vendored `SlateStore`: its failures are the vendored package\'s `AgentCoreError` codes, its contract',
   }],
-  ['packages/core/src/providers/model-test.ts', {
-    mechanisms: ['result-literal', 'result-type'],
-    within: ['ModelTestResult', 'ModelTestResultSchema', 'testModel', 'failed'],
+  ['packages/core/src/providers/model-test-result.ts', {
+    mechanisms: ['result-type'],
+    within: ['ModelTestResult', 'ModelTestResultSchema'],
     reason: '`ModelTestResult`, the model picker\'s test verdict over HTTP and the CLI; `ok` is its wire field',
+  }],
+  ['packages/core/src/providers/model-test.ts', {
+    mechanisms: ['result-literal'],
+    within: ['testModel', 'failed'],
+    reason: 'the test answers a `ModelTestResult` (model-test-result.ts), whose `ok` is its wire field',
   }],
   ['packages/core/src/chat.ts', {
     mechanisms: ['throw', 'catch', 'promise-rejection'],

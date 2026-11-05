@@ -12,8 +12,9 @@ import {
   listThumbs, listTurnRatings, qualitySeries, qualityWindow, ratingOf, recordTurnRating, retractThumbs,
 } from '../src/evolution/ratings';
 import {
-  bindingDecisionRun, createDecisionPort, DECISION_REFUSALS, restDecisionRun, type DecisionAnswers, type DecisionPort, type DecisionQuestion,
+  bindingDecisionRun, createDecisionPort, restDecisionRun, type DecisionAnswers, type DecisionPort, type DecisionQuestion,
 } from '../src/providers/decision-model';
+import { DECISION_REFUSALS } from '../src/providers/decision-models';
 import { tierRefusals, unratedReason } from '../src/profiles/tier-refusals';
 import { RefinementListingSchema } from '../src/evolution/refinement-host';
 import { readActivityLog } from '../src/identity/activity-log';

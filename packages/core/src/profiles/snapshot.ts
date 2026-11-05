@@ -2,7 +2,7 @@
 // runs under the profile it started with instead of today's catalog.
 
 import * as v from 'valibot';
-import { DECISION_MODELS } from '../providers/decision-model';
+import { DECISION_MODELS } from '../providers/decision-models';
 
 import { NAMED_SWARM_PRESETS } from '../types/swarm';
 import { REASONING_EFFORTS } from '../providers/effort';
