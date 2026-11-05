@@ -1,7 +1,7 @@
 /** Pure decisions: nothing here touches a container, a bucket or a clock. */
 
 import * as v from 'valibot';
-import { devboxFailure, startOverrun } from './errors';
+import { caught, devboxFailure, startOverrun } from './errors';
 
 import type { StoredValue } from './storage';
 
@@ -113,11 +113,9 @@ export async function runRestoreStep<T>(
 ): Promise<StepOutcome<T>> {
   // A thrown step is returned as `failed`, not rethrown: every caller needs a reason to report
   // and a walk that continues.
-  try {
-    return await raceAllowance(allowanceMs, work, onLate, clock);
-  } catch (cause) {
-    return { kind: 'failed', cause };
-  }
+  const raced = await caught(async () => raceAllowance(allowanceMs, work, onLate, clock));
+
+  return 'value' in raced ? raced.value : { kind: 'failed', cause: raced.cause };
 }
 
 /** The only place a timer bounds container work; `withContainerStartDeadline` and
