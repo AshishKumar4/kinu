@@ -10,7 +10,8 @@ import type { CallAccount } from '../providers/quota';
 import { decodeJsonValue } from '../utils/json';
 import { boundedInt } from '../utils/bounds';
 import { nanoid } from '../utils/nanoid';
-import { renderThrownChain, KinuError } from '../obs/index';
+import { Effect } from 'effect';
+import { renderThrownChain, KinuError, settle } from '../obs/index';
 import { assertScaffoldActive, type ScaffoldRunControl, type ScaffoldToolOutput } from '../scaffold/executor';
 import type {
   ScaffoldHistoryEntry,
@@ -245,7 +246,7 @@ export function createScaffoldCallTool(
     assertScaffoldActive(control);
     const t = tools()[name];
 
-    if (!t?.execute) throw new KinuError('missing', `tool not found: ${name}`);
+    if (!t?.execute) return settle(Effect.fail(new KinuError('missing', `tool not found: ${name}`)));
 
     const options: Parameters<NonNullable<ToolSet[string]['execute']>>[1] = {
       messages: [],

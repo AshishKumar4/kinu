@@ -2,7 +2,6 @@ import { exists, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** The one note-save primitive: appends a dated `### Note` heading to `memory/MEMORY.md`, then indexes it. */
 
 import type { Memory } from '../types/primitives';
-import { isoDate } from '../utils/date';
 
 export const MEMORY_PATH = 'memory/MEMORY.md';
 
@@ -33,7 +32,8 @@ export async function appendMemoryNote(
   content: string,
   options?: { heading?: string; date?: string; by?: string },
 ): Promise<string> {
-  const date = options?.date ?? isoDate();
+  // To the millisecond: the sleep-time pass folds the notes written after the last one it folded.
+  const date = options?.date ?? new Date().toISOString();
   const heading = options?.heading ?? 'Note';
   const stamp = options?.by === undefined ? date : `${date} · ${options.by}`;
   await memory.append(MEMORY_PATH, `\n### ${heading} (${stamp})\n${content}\n`);
@@ -55,6 +55,8 @@ export interface MemoryNote {
   content: string;
   /** Falls back to the whole heading when unstamped. */
   updatedAt: string;
+  /** The stamp as an instant: a day-only stamp is its day's start; absent where the stamp names no date. */
+  writtenAt?: number;
   /** Null when the stamp names no actor. */
   savedBy: string | null;
 }
@@ -71,10 +73,35 @@ export function parseMemoryNotes(content: string): MemoryNote[] {
     if (heading === '' || body === '') continue;
     const [when, savedBy] = HEADING_STAMP.exec(heading)?.[1].split('·').map((part) => part.trim()) ?? [];
 
-    notes.push({ path: MEMORY_PATH, content: body, updatedAt: when ?? heading, savedBy: savedBy ?? null });
+    const writtenAt = when === undefined ? Number.NaN : Date.parse(when);
+
+    notes.push({ path: MEMORY_PATH, content: body, updatedAt: when ?? heading, ...(Number.isFinite(writtenAt) && { writtenAt }), savedBy: savedBy ?? null });
   }
 
   return notes;
+}
+
+/**
+ * When the lines of a note file through `endLine` were written, as the file itself says: the date stamped on the last
+ * note heading at or above it (`appendMemoryNote`), at day precision. Null where no heading above is stamped.
+ */
+export function noteDateAt(lines: readonly string[], endLine: number): number | null {
+  for (let at = Math.min(endLine, lines.length) - 1; at >= 0; at--) {
+    const line = lines[at] ?? '';
+
+    if (!/^#{2,3}\s/u.test(line)) continue;
+    const [when] = HEADING_STAMP.exec(line)?.[1].split('·').map((part) => part.trim()) ?? [];
+    const time = when === undefined ? Number.NaN : Date.parse(when);
+
+    if (Number.isFinite(time)) return time;
+  }
+
+  return null;
+}
+
+/** The notes the agent kept, oldest first, as the sleep-time pass folds them into facts. */
+export async function memoryNotes(memory: Pick<Memory, 'read'>): Promise<MemoryNote[]> {
+  return parseMemoryNotes(await memory.read(MEMORY_PATH) ?? '');
 }
 
 /** Walks the filesystem so the size matches the files the user can open, not the storage encoding. */

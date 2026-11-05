@@ -612,23 +612,11 @@ publication marker, and candidates. A refusal returns `reason`.
 [EXPLORATION.md](./EXPLORATION.md) defines axes, presets, `custom`, nodes, and
 legal calls.
 
-## experience: cross-workspace transfer
+## experience: the owner's library
 
-`experience` is owner-facing; it is not a tool or a namespace. The owner drives
-it through the workspace RPC `experienceAction`, which calls core
-`runExperienceAction` over the owner's UserDO library, gated by the
-`experience.read` and `experience.write` capabilities. The model has no route
-to it.
-
-`publish` needs real uses plus an injection score for crafted tools,
-corroborated lessons, confident facts, or a scaffold the owner promoted here
-that has since served 10 rated turns with no misevolution veto.
-
-`import` runs the misevolution gate, records vetoes, and stages survivors in
-`imported_experience`. Only `EvolutionEngine.reviewTurn` promotes entries on
-a turn rated 4 or more, discards them on one rated 2 or lower, and leaves them
-waiting on an unrated or neutral one. Imported scaffolds enter `modifyScaffold` as pending. Only
-`applyPromotionDecision` writes `scaffoldPath`.
+Nothing publishes to or imports from the owner's experience library any more; the
+account route `/api/user/experience` reads what it holds through `searchExperience`
+(`experience.read`). The model has no route to it.
 
 ## CraftStore lifecycle
 

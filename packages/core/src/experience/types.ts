@@ -22,45 +22,18 @@ export type ExperiencePayload =
   | { kind: 'fact'; key: string; value: JsonValue; confidence: number }
   | { kind: 'scaffold'; version: number; rationale: string; code: string };
 
-/** Its kind is its payload's: `payload.kind` is the one discriminator, and a store's `kind` column is written from it. */
-export interface PublishableCandidate {
-  /** Stable within (source workspace, kind); re-publishing the same key replaces the entry. */
+/** A published entry; its kind is its payload's: `payload.kind` is the one discriminator, and the store's `kind` column
+ *  was written from it. */
+export interface ExperienceEntry {
+  id: string;
+  /** Stable within (source workspace, kind). */
   key: string;
   title: string;
   payload: ExperiencePayload;
-  /** One-line local evidence, so the importer judges the claim and not just the text. */
+  /** One-line local evidence, so a reader judges the claim and not just the text. */
   evidence: string;
-}
-
-export interface ExperienceEntry extends PublishableCandidate {
-  id: string;
   sourceWorkspace: string;
   publishedAt: number;
-}
-
-function payloadText(payload: ExperiencePayload, factSeparator: string): string {
-  switch (payload.kind) {
-    case 'craft':
-      return `${payload.description}\n${payload.code}`;
-    case 'lesson':
-      return payload.text;
-    case 'fact':
-      return `${payload.key}${factSeparator}${JSON.stringify(payload.value)}`;
-    case 'scaffold':
-      return `${payload.rationale}\n${payload.code}`;
-  }
-}
-
-function describePayload(payload: ExperiencePayload, maxChars: number): string {
-  const text = payloadText(payload, ' = ');
-
-  return text.length > maxChars ? `${text.slice(0, maxChars)}...` : text;
-}
-
-/** Materialized into `search_text` so FTS5 ranks over the payload, not just the title. */
-export function experienceSearchText(candidate: PublishableCandidate): string {
-  return [candidate.title, candidate.key, candidate.evidence, describePayload(candidate.payload, 4000)]
-    .join('\n');
 }
 
 const ExperiencePayloadSchema: v.GenericSchema<ExperiencePayload> = v.variant('kind', [

@@ -29,7 +29,8 @@ function boxAnswering(answers: readonly (RestoreReadiness | Error)[], leaveAfter
     box: {
       socket: { send: (data: string) => { sent.push(JSON.parse(data)); }, close: (code: number, reason: string) => { closed.push({ code, reason }); } },
       held: () => asked < leaveAfterAsks,
-      ask: async () => {
+      // The box's own ask: a rejection it awaited is its defect, as `#resolveReadiness` keeps one.
+      ask: () => Effect.promise(async () => {
         const answer = answers[Math.min(asked, answers.length - 1)] ?? ready;
 
         asked += 1;
@@ -37,7 +38,7 @@ function boxAnswering(answers: readonly (RestoreReadiness | Error)[], leaveAfter
         if (answer instanceof Error) throw answer;
 
         return answer;
-      },
+      }),
       wait: async (ms: number) => { now += ms; },
       now: () => now,
       attach: () => Effect.sync(() => {

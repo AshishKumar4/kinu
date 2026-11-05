@@ -117,7 +117,7 @@ function stringifyResult(input: { value: unknown }): string {
  *  use and records its failure. */
 interface NimbusReach {
   readonly box: NimbusSandboxHandle;
-  readonly touch: <T>(fn: () => Promise<T>) => Promise<T>;
+  readonly touch: <T>(fn: () => Promise<T>) => Effect.Effect<T>;
   readonly jobs: NimbusSessionOpts['jobs'];
 }
 
@@ -160,17 +160,14 @@ function processControl(box: NimbusSandboxHandle) {
 export function startJobProcess(
   box: NimbusSandboxHandle,
   request: { readonly command: string; readonly cwd?: string; readonly jobId: string },
-  touch: <T>(fn: () => Promise<T>) => Promise<T> = (fn) => fn(),
+  touch: <T>(fn: () => Promise<T>) => Effect.Effect<T> = (fn) => Effect.promise(fn),
 ): Promise<JobProcess | Refusal> {
   const control = processControl(box);
   const { command, cwd, jobId } = request;
 
   if ('success' in control) return Promise.resolve(control);
 
-  const starting = Effect.tryPromise({
-    try: async () => touch(() => control.startProcess(command, { ...(cwd !== undefined && { cwd }), execId: principalExecId(jobId) })),
-    catch: (cause) => toKinuError({ doing: `nimbus startProcess \`${command}\``, cause, otherwise: 'io' }),
-  });
+  const starting = owned(touch(() => control.startProcess(command, { ...(cwd !== undefined && { cwd }), execId: principalExecId(jobId) })), `nimbus startProcess \`${command}\``);
 
   return settle(Effect.match(starting, { onFailure: refusalOf, onSuccess: ({ pid }): JobProcess => {
     const processId = String(pid);
@@ -178,9 +175,8 @@ export function startJobProcess(
     return {
       processId,
       ended: control.whenEnded(pid).then((exitCode) => ({ processId, exitCode })),
-      stopping: logged('nimbus.process_stop_failed', { doing: `stopping process ${processId}`, otherwise: 'io' }, async () => {
-        await touch(() => control.kill(pid));
-      }, { processId }),
+      stopping: logged('nimbus.process_stop_failed', { doing: `stopping process ${processId}`, otherwise: 'io' },
+        owned(Effect.asVoid(touch(() => control.kill(pid))), `stopping process ${processId}`), { processId }),
     };
   } }));
 }
@@ -245,9 +241,14 @@ interface EffectMember {
   readonly execute: (...args: unknown[]) => Effect.Effect<ExecutorToolResult>;
 }
 
+/** `effect`, failing in `doing`'s words with whatever it did not own: a rejection it awaited, a parse that threw. */
+function owned<A>(effect: Effect.Effect<A>, doing: string): Effect.Effect<A, KinuError> {
+  return Effect.catchCause(effect, (cause) => Effect.fail(toKinuError({ doing, cause: Cause.squash(cause), otherwise: 'io' })));
+}
+
 /** `read`'s answer, or the refusal `doing` answers with when it fails, however it fails. */
-function answeredOr<A>(doing: string, read: () => Promise<A>, answer: (value: A) => ExecutorToolResult): Effect.Effect<ExecutorToolResult> {
-  return Effect.match(Effect.tryPromise({ try: read, catch: (cause) => toKinuError({ doing, cause, otherwise: 'io' }) }), { onFailure: refusalOf, onSuccess: answer });
+function answeredOr<A>(doing: string, read: Effect.Effect<A>, answer: (value: A) => ExecutorToolResult): Effect.Effect<ExecutorToolResult> {
+  return Effect.match(owned(read, doing), { onFailure: refusalOf, onSuccess: answer });
 }
 
 /** `workspace.stopProcess`. */
@@ -264,7 +265,7 @@ function stopProcessMember({ box, touch }: NimbusReach): EffectMember {
 
       if (pid === undefined) return Effect.succeed(refusalOf(new KinuError('bad_input', `nimbus stopProcess: no process id ${stringifyResult({ value: args[0] })}`)));
 
-      return answeredOr(`nimbus stopProcess ${String(pid)}`, async () => v.parse(KilledSchema, await touch(() => kill(pid))), (killed) => ({ stopped: killed.ok }));
+      return answeredOr(`nimbus stopProcess ${String(pid)}`, Effect.map(touch(() => kill(pid)), (killed) => v.parse(KilledSchema, killed)), (killed) => ({ stopped: killed.ok }));
     },
   };
 }
@@ -280,7 +281,7 @@ function listProcessesMember({ box, touch }: NimbusReach): EffectMember {
       if (!processes?.list) return Effect.succeed(handleLacks('process listing'));
       const list = processes.list.bind(processes);
 
-      return answeredOr('nimbus listProcesses', async () => v.parse(v.array(ProcessRowSchema), await touch(() => list())), (rows) => rows
+      return answeredOr('nimbus listProcesses', Effect.map(touch(() => list()), (rows) => v.parse(v.array(ProcessRowSchema), rows)), (rows) => rows
         .filter((row) => row.longRunning).map((row) => ({ processId: String(row.pid), pid: row.pid, status: row.state, command: row.command })));
     },
   };
@@ -304,7 +305,7 @@ function logsMember({ box, touch }: NimbusReach): EffectMember {
           `nimbus logs: takes a process id and its limits as one object, \`{ lines?, bytes? }\`; got ${stringifyResult({ value: args })}`)));
       }
 
-      return answeredOr(`nimbus logs ${String(pid)}`, async () => v.parse(LoggedSchema, await touch(() => readLogs(pid, limits))), (read) => read.text);
+      return answeredOr(`nimbus logs ${String(pid)}`, Effect.map(touch(() => readLogs(pid, limits)), (read) => v.parse(LoggedSchema, read)), (read) => read.text);
     },
   };
 }
@@ -316,19 +317,15 @@ export function nimbusSession(opts: NimbusSessionOpts) {
   let active = false;
   let lastError: string | undefined;
 
-  const touch = async <T>(fn: () => Promise<T>): Promise<T> => {
+  /** A call through the box, which puts the session in use and records how it ended: a failure is its status's reason. */
+  const touch = <T>(fn: () => Promise<T>): Effect.Effect<T> => Effect.suspend(() => {
     active = true;
 
-    try {
-      const result = await fn();
-      lastError = undefined;
-
-      return result;
-    } catch (err) {
-      lastError = renderThrownChain({ cause: err });
-      throw err;
-    }
-  };
+    return Effect.promise(fn).pipe(
+      Effect.tap(() => Effect.sync(() => { lastError = undefined; })),
+      Effect.tapCause((cause) => Effect.sync(() => { lastError = renderThrownChain({ cause: Cause.squash(cause) }); })),
+    );
+  });
 
   const exposeOn = (port: number): Effect.Effect<PortExposureResult> => {
     const ports = box.ports;
@@ -336,7 +333,7 @@ export function nimbusSession(opts: NimbusSessionOpts) {
     if (!ports?.expose) return Effect.succeed({ supported: false, reason: 'Nimbus port exposure is not available' });
     const expose = ports.expose.bind(ports);
 
-    return Effect.catchCause(Effect.map(Effect.promise(async () => touch(() => expose(port))), (result): PortExposureResult => {
+    return Effect.catchCause(Effect.map(touch(() => expose(port)), (result): PortExposureResult => {
       // A blank url is the SDK declining to name one, same as omitting it.
       const url = result.url === undefined || result.url === '' ? ports.url?.(port) : result.url;
 
@@ -377,18 +374,19 @@ export function nimbusSession(opts: NimbusSessionOpts) {
     getStatus: (): ExecutorStatus => (lastError === undefined
       ? { configured: true, available: true, active, status: active ? 'active' : 'idle' }
       : { configured: true, available: true, active, status: 'error', reason: lastError }),
-    connect: async () => { await touch(() => box.ready()); },
+    connect: () => settle(Effect.asVoid(touch(() => box.ready()))),
     disconnect: async () => { active = false; },
     // A workspace preview is addressed by its port alone: a name is said to be unsupported, never dropped.
     exposePort: (port: number, asked?: { readonly name?: string }): Promise<PortExposureResult> => settle(asked?.name === undefined
       ? exposeOn(port)
       : Effect.succeed({ supported: false, reason: `a workspace preview is named by its port; call exposePort(${String(port)}) without a name` })),
-    unexposePort: async (port: number) => {
+    unexposePort: (port: number) => {
       const ports = box.ports;
 
-      if (!ports?.unexpose) return;
+      if (!ports?.unexpose) return Promise.resolve();
       const unexpose = ports.unexpose.bind(ports);
-      await touch(() => unexpose(port));
+
+      return settle(Effect.asVoid(touch(() => unexpose(port))));
     },
     // Exposed ports without a URL are kept, carrying the host's reason as a refusal.
     listExposedPorts: () => {
@@ -397,7 +395,7 @@ export function nimbusSession(opts: NimbusSessionOpts) {
       if (!ports?.list) return Promise.resolve([]);
       const list = ports.list.bind(ports);
 
-      return settle(Effect.flatMap(Effect.promise(async () => touch(() => list())), (exposed) => {
+      return settle(Effect.flatMap(touch(() => list()), (exposed) => {
         const unaddressed = exposed.find((p) => p.url === undefined && p.unavailable !== undefined);
 
         if (unaddressed?.unavailable !== undefined) {

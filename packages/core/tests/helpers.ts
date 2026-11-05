@@ -47,6 +47,7 @@ import { TurnContextBudget } from '../src/context-budget';
 import { serveFile, type FileDeps } from '../src/tools/file-operations';
 import { executorNamespace } from '../src/tools/executor-operations';
 import type { ExecutorProviderSurface } from '../src/execution/types';
+import { readWorkspaceArchivePage } from '../src/identity/archive';
 
 /** A machine namespace over the actor's served file operations, as actorNamespaces binds it in production. */
 export function fileNamespaceFor(rt: AgentRuntime, provider: ExecutorProviderSurface, overrides: Partial<FileDeps> = {}) {
@@ -399,4 +400,18 @@ export function memoryHub() {
   const db = new Database(':memory:');
 
   return { sql: makeSqlExec(db), actor: createTestActorsOver(db).main };
+}
+
+/** A workspace's whole archive, its pages read one after another as an export streams them. */
+export async function writeWorkspaceArchive(sql: SqlExec, opts: Parameters<typeof readWorkspaceArchivePage>[1]): Promise<string[]> {
+  const lines: string[] = [];
+  let cursor = opts.cursor ?? null;
+
+  do {
+    const page = await readWorkspaceArchivePage(sql, { ...opts, cursor });
+    lines.push(...page.lines);
+    cursor = page.next;
+  } while (cursor);
+
+  return lines;
 }

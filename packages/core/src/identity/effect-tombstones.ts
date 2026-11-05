@@ -80,3 +80,10 @@ export function recordEffectDone(sql: SqlExecutor, actor: ActorHandle, effect: E
       VALUES (${actor.actorId}, ${effect.scope}, ${effect.key})
       ON CONFLICT(actor_id, scope, key) DO NOTHING`;
 }
+
+/** Keeps only `live` of a scope's tombstones: an effect whose subject is gone leaves its tombstone with it. */
+export function retainEffectsDone(sql: SqlExecutor, actor: ActorHandle, scope: string, live: readonly string[]): void {
+  actor.assertCurrent();
+  void sql`DELETE FROM effect_tombstones WHERE actor_id = ${actor.actorId} AND scope = ${scope}
+      AND key NOT IN (SELECT value FROM json_each(${JSON.stringify(live)}))`;
+}

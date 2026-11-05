@@ -11,7 +11,7 @@ import { JsonValueSchema } from '../utils/json';
 import { REASONING_EFFORTS, type ReasoningEffort } from '../providers/effort';
 import type { NamedSwarmPreset } from '../types/swarm';
 import { DEFAULT_PROVIDER_RETRIES, ROLE_ID_RE, isValidRoleId } from '../types/profile';
-import { DEFAULT_DECISION_MODEL, type DecisionModel } from '../providers/decision-model';
+import { DEFAULT_DECISION_MODEL, type DecisionModel } from '../providers/decision-models';
 import { TierIdSchema, tierIdsOf,
   BUILTIN_PROFILE_CATALOG, deriveRoleLabel, effectiveRoleCatalog,
   profileCatalogDigest, validateProfileCatalogEnvelope,

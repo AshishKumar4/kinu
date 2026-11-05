@@ -20,6 +20,8 @@ export interface IndexedChunk {
 	startLine: number;
 	endLine: number;
 	text: string;
+	/** When its note was last written, where the reader knows. */
+	writtenAt?: number;
 }
 
 /** Chunks a vector index must upsert and chunk ids it must delete after (re)indexing a file. */
@@ -29,6 +31,9 @@ export interface MemoryIndexDelta {
 }
 
 export type NoteReader = (path: string) => Promise<string | null>;
+
+/** When the lines of the note at `path` through `endLine` were written, read off the lines a hydration already holds. */
+export type NoteDater = (path: string, lines: readonly string[], endLine: number) => Promise<number | undefined>;
 
 /** A note's file identity as it was indexed; one that differs changed under the index. Null: indexed, not yet trusted. */
 export type NoteStamp = string | null;
@@ -188,24 +193,25 @@ export class MemoryStore {
 	}
 
 	/** Pending semantic references are hydrated from the current note and hash, never from a queued body. */
-	async chunksByIds(ids: readonly string[]): Promise<IndexedChunk[]> {
+	async chunksByIds(ids: readonly string[], dated?: NoteDater): Promise<IndexedChunk[]> {
 		if (ids.length === 0) return [];
 
 		const rows = this.sql<ChunkRow>`SELECT id, path, start_line, end_line, hash FROM memory_note_chunks
 			WHERE id IN (SELECT value FROM json_each(${JSON.stringify(ids)})) ORDER BY id`;
 
-		return this.hydrateChunks(rows);
+		return this.hydrateChunks(rows, dated);
 	}
 
-
-	private async hydrateChunks(rows: readonly ChunkRow[]): Promise<IndexedChunk[]> {
-		return (await chunkTexts(rows, (path) => this.readFile(path))).flatMap(({ row, text }) => text === null ? [] : [{
+	private async hydrateChunks(rows: readonly ChunkRow[], dated?: NoteDater): Promise<IndexedChunk[]> {
+		return (await chunkTexts(rows, (path) => this.readFile(path), dated)).flatMap(({ row, text, writtenAt }) => text === null ? [] : [{
 			id: row.id, path: row.path, startLine: row.start_line, endLine: row.end_line, text, hash: row.hash,
+			...(writtenAt !== undefined && { writtenAt }),
 		}]);
 	}
 
-	async search(query: string, limit = 10, reindex: (path: string) => Promise<void> = async (path) => this.reindex(path)): Promise<MemorySearchResult[]> {
-		return searchMemoryChunks({ sql: this.sql, read: (path) => this.readFile(path), reindex }, query, limit);
+	/** `dated`: dates each hit off the lines its hydration read. */
+	async search(query: string, limit = 10, reindex: (path: string) => Promise<void> = async (path) => this.reindex(path), dated?: NoteDater): Promise<MemorySearchResult[]> {
+		return searchMemoryChunks({ sql: this.sql, read: (path) => this.readFile(path), reindex, dated }, query, limit);
 	}
 
 	private async reindex(path: string): Promise<void> {
@@ -216,7 +222,9 @@ export class MemoryStore {
 }
 
 /** Null where the note's lines no longer hash to the row. */
-async function chunkTexts<Row extends ChunkRow>(rows: readonly Row[], read: NoteReader): Promise<Array<{ row: Row; text: string | null }>> {
+async function chunkTexts<Row extends ChunkRow>(
+	rows: readonly Row[], read: NoteReader, dated?: NoteDater,
+): Promise<Array<{ row: Row; text: string | null; writtenAt?: number }>> {
 	const notes = new Map<string, Promise<string[] | null>>();
 
 	const linesOf = (path: string): Promise<string[] | null> => {
@@ -233,8 +241,9 @@ async function chunkTexts<Row extends ChunkRow>(rows: readonly Row[], read: Note
 	return Promise.all(rows.map(async (row) => {
 		const lines = await linesOf(row.path);
 		const text = lines?.slice(row.start_line - 1, row.end_line).join("\n") ?? null;
+		const writtenAt = lines === null || dated === undefined ? undefined : await dated(row.path, lines, row.end_line);
 
-		return { row, text: text !== null && await hashText(text) === row.hash ? text : null };
+		return { row, text: text !== null && await hashText(text) === row.hash ? text : null, ...(writtenAt !== undefined && { writtenAt }) };
 	}));
 }
 
@@ -242,28 +251,30 @@ interface NoteIndex {
 	readonly sql: SqlExecutor;
 	readonly read: NoteReader;
 	readonly reindex?: (path: string) => Promise<void>;
+	readonly dated?: NoteDater;
 }
 
 /** Strict all-term page, then partial matches up to `limit`. */
-async function searchMemoryChunks({ sql, read, reindex }: NoteIndex, query: string, limit = 10): Promise<MemorySearchResult[]> {
+async function searchMemoryChunks({ sql, read, reindex, dated }: NoteIndex, query: string, limit = 10): Promise<MemorySearchResult[]> {
 	if (!query.trim()) return [];
 
 	const ranked = (): FtsRow[] => searchFts(query, limit, (match, capacity) => runFtsQuery(sql, match, capacity), (row) => row.id);
-	let hits = await chunkTexts(ranked(), read);
+	let hits = await chunkTexts(ranked(), read, dated);
 	const stale = [...new Set(hits.filter((hit) => hit.text === null).map((hit) => hit.row.path))];
 
 	if (stale.length > 0 && reindex !== undefined) {
 		for (const path of stale) await reindex(path);
-		hits = await chunkTexts(ranked(), read);
+		hits = await chunkTexts(ranked(), read, dated);
 	}
 
 	// bm25() is more negative for better matches; |rank|/(1+|rank|) keeps the score monotone with relevance.
-	return hits.flatMap(({ row: r, text }) => (text === null ? [] : [{
+	return hits.flatMap(({ row: r, text, writtenAt }) => (text === null ? [] : [{
 		path: r.path,
 		startLine: r.start_line,
 		endLine: r.end_line,
 		snippet: text.length > SNIPPET_MAX_CHARS ? text.slice(0, SNIPPET_MAX_CHARS) + "..." : text,
 		score: Math.abs(r.rank) / (1 + Math.abs(r.rank)),
+		...(writtenAt !== undefined && { writtenAt }),
 	}]));
 }
 

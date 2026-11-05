@@ -61,6 +61,12 @@ export function attempt<A>(code: DevboxErrorCode, run: (signal: AbortSignal) => 
   return Effect.tryPromise({ try: run, catch: cause => failure(code, { cause }, doing) });
 }
 
+/** `effect` with what it did not own answered as `attempt` answers a throw: a rejection it awaited (`Effect.promise` keeps
+ *  one as a defect) fails in `code`, in the thrower's words; a DevboxError it failed with, or threw, passes unchanged. */
+export function attempted<A>(code: DevboxErrorCode, effect: Effect.Effect<A, DevboxError>, doing?: string): Effect.Effect<A, DevboxError> {
+  return Effect.catchCause(effect, (cause) => (Cause.hasInterruptsOnly(cause) ? Effect.failCause(cause) : Effect.fail(failure(code, { cause: Cause.squash(cause) }, doing))));
+}
+
 export function attemptSync<A>(code: DevboxErrorCode, run: () => A, doing?: string): Effect.Effect<A, DevboxError> {
   return Effect.try({ try: run, catch: cause => failure(code, { cause }, doing) });
 }
@@ -124,21 +130,6 @@ export function observe<A>(program: Effect.Effect<A, DevboxError>, observer: { r
     if (Exit.isSuccess(exit)) observer.success(exit.value);
     else if (!Cause.hasInterruptsOnly(exit.cause)) observer.failure(failure('io', { cause: Cause.squash(exit.cause) }));
   } });
-}
-
-/** A start from stopped its host refused (`Devbox.admitStart`): the door that asked fails in the host's words. */
-/** Ends the caller with `failure`, through the failure channel, as a promise-facing method of the box answers it. */
-export function refuse(refusal: DevboxError): never {
-  return settleSync(Effect.fail(refusal));
-}
-
-/** Ends the caller with what an operation threw, unchanged (`caught`), after the caller has answered for it. */
-export function rethrow(thrown: { readonly cause: unknown }): never {
-  return settleSync(Effect.die(thrown.cause));
-}
-
-export function refuseStart(reason: string): never {
-  return settleSync(Effect.fail(new DevboxError('refused', reason)));
 }
 
 export function startOverrun(label: string, budgetMs: number): DevboxError {

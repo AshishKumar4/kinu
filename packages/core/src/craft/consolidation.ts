@@ -5,7 +5,6 @@
 
 import type { AgentRuntime } from '../types/agent-runtime';
 import { craftPreferences, unchosen } from './preference';
-import { isoDate } from '../utils/date';
 import { appendMemoryNote } from '../memory/note';
 
 /** Retires each tool offered often that no turn chose lately, never the whole store, and says so in memory. */
@@ -31,6 +30,6 @@ export async function periodicCraftConsolidation(rt: AgentRuntime): Promise<void
   }
 
   await appendMemoryNote(rt.memory, `Retired ${String(toRetire.length)} tools no turn chose lately: ${toRetire.join(', ')}`, {
-    heading: 'CraftStore consolidation', date: isoDate(),
+    heading: 'CraftStore consolidation',
   });
 }

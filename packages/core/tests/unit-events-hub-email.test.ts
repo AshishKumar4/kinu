@@ -347,3 +347,24 @@ describe('a thread the owner sends a workspace from Mail', () => {
     expect(signal.text).not.toContain('POST /hooks/v2 500');
   });
 });
+
+describe('a stored email keeps no Kinu token secret', () => {
+  // Assembled at runtime so the source scan sees no token. A `pta_`/`ptc_` token is its owner's id, `_`, then its
+  // secret: 44 base36 characters before, 43 base64url since.
+  const id = 'a1'.repeat(16);
+  const base36 = ['pta', id, 'k'.repeat(40) + '9z0q'].join('_');
+  const base64url = ['ptc', id, 'Q-_x'.repeat(10) + 'Zz9'].join('_');
+
+  test('an email carrying both token shapes is stored with neither secret', () => {
+    const { sql, actor } = memoryHub();
+    initEventsHubTables(sql);
+    const log = new EventLog(sql, actor);
+    const body = `Use ${base36} for the CLI and ${base64url} for the agent.`;
+    const { id: stored } = log.publish({ descriptor: emailDescriptor('owner', { body_text: body }), now: 1 });
+    const read = JSON.stringify(log.get(stored));
+
+    expect(read).not.toContain('k'.repeat(40));
+    expect(read).not.toContain('Q-_x'.repeat(10));
+    expect(read).toContain('for the CLI');
+  });
+});

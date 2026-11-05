@@ -15,7 +15,11 @@ export type CraftedSourceAdmission =
 
 /** Whether `source` holds no code, comments and whitespace aside: a retired row's marker (`// retired: …`), not a tool. */
 export function holdsNoCode(source: string): boolean {
-  return source.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '').trim() === '';
+  // The first token is the end of input; a source the tokenizer refuses holds something that is not a comment.
+  return settleSync(Effect.match(Effect.try({ try: () => acorn.tokenizer(source, ECMA).getToken(), catch: () => null }), {
+    onSuccess: (token) => token.type === acorn.tokTypes.eof,
+    onFailure: () => false,
+  }));
 }
 
 /** Whether `source` parses as exactly one JavaScript expression. */

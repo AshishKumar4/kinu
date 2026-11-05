@@ -10,7 +10,8 @@
 import { parseArgs } from 'node:util';
 import { isCorrected, isHighRating, isLowRating, type RatingVerdict } from '../packages/core/src/evolution/ratings';
 import { TRIAGE } from '../packages/core/src/evolution/refinement-lane';
-import { createDecisionPort, DEFAULT_DECISION_MODEL, type DecisionPort } from '../packages/core/src/providers/decision-model';
+import { createDecisionPort, type DecisionPort } from '../packages/core/src/providers/decision-model';
+import { DEFAULT_DECISION_MODEL } from '../packages/core/src/providers/decision-models';
 import { renderThrownChain } from '../packages/core/src/obs/index';
 import { clefRun, inFours, rated, triageWindows, turnsFrom } from './decision-agreement';
 

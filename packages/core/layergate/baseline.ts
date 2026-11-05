@@ -43,7 +43,7 @@ export const LOCKED_BASELINE: Baseline = {
   'file-plane/mount-routes-to-the-owning-machine': 'f243ecf9cec10893',
   'file-plane/no-silent-truncation': '4b0ba472df316051',
   'memory-retrieval/hybrid-degrades-to-lexical': '67bba0906762aef8',
-  'memory-retrieval/hybrid-merges-sources': '71cb2718a4627aa1',
+  'memory-retrieval/hybrid-merges-sources': 'b7c1669d8dcad737',
   'memory-retrieval/rrf-constant': '96e6efb651f04eba',
   'memory-retrieval/rrf-ranking': '73fe0df717556cad',
   'mid-turn-injection/buffer-absorb-and-requeue': '817dae7f189006a1',

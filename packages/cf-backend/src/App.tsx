@@ -3,7 +3,7 @@ import { Suspense, useEffect, type ReactNode } from "react";
 import Layout from "./components/layout";
 import GalleryShell, { VisitorShell } from "./components/gallery/GalleryShell";
 import HomePage, { NewWorkspacePage } from "./pages/HomePage";
-import WorkspacePage from "./pages/WorkspacePage";
+import { WorkspacePage } from "./pages/workspace-route";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { APP_ROUTES, needsOnboarding, pageIsVisitors } from "@kinu.run/core";
 import { AccountProvider, useAccount } from "@/hooks/use-account";

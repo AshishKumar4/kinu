@@ -4,7 +4,7 @@ import type { Memory } from '../types/primitives';
 import { createNoopVectorStore, type VectorStore } from './vector-store';
 import type { FactsStore } from './facts';
 import type { AccountMemory } from './account';
-import { hybridSearch, memorySnippetRehydrator, type HybridHit, type LexicalSearchFn } from './hybrid-search';
+import { hybridSearch, memorySnippetRehydrator, type HybridHit, type LexicalHit, type LexicalSearchFn } from './hybrid-search';
 
 /** What a memory search reaches beyond the workspace's notes: its facts, and the account's facts, and its notes where
  *  it names them. Absent, not. */
@@ -26,7 +26,8 @@ export async function searchMemoryHits(
   const lexical: LexicalSearchFn = async (q, k) => (await memory.search(q, k)).map((r) => ({
     // The vector store's chunk id, so RRF fuses both.
     id: `${r.path}:${r.startLine}-${r.endLine}`, path: r.path, startLine: r.startLine, endLine: r.endLine, score: r.score, snippet: r.snippet,
-  }));
+    writtenAt: r.writtenAt,
+  } satisfies LexicalHit));
 
   const hits = await hybridSearch(query, lexical, index, {
     finalK: opts.limit, rehydrate: memorySnippetRehydrator(memory),

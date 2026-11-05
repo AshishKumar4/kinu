@@ -1,7 +1,8 @@
 // The one builder of provider snapshots, so every backend computes the same `revision`.
 
 import { sha256Hex } from '../safety/argument-digest';
-import type { ModelMenu, ProviderFailure } from '../providers/registry';
+import type { ModelMenu } from '../providers/registry';
+import type { ProviderFailure } from '../providers/provider-failure';
 import * as v from 'valibot';
 import { ReasoningEffortSchema, type ReasoningEffort } from '../providers/reasoning-effort';
 import type { ProviderCatalogSnapshot, ProviderCacheOutcome } from './resolve';

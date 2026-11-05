@@ -186,6 +186,33 @@ function ordinary(): number { const n = settleSync(writeEffect()); return n; }
   });
 });
 
+test('`settle` as a blockConcurrencyWhile callback\'s whole return is a bridge; anywhere else in the callback it is a finding', () => {
+  const source = `
+import { observe, settle, settleSync } from '../obs/index';
+declare const ctx: { blockConcurrencyWhile<T>(work: () => Promise<T>): Promise<T> };
+function startA(): Promise<void> { return ctx.blockConcurrencyWhile(() => settle(hookEffect())); }
+function startB(): Promise<void> { return ctx.blockConcurrencyWhile(async () => { return await settle(hookEffect()); }); }
+function midway(): Promise<void> { return ctx.blockConcurrencyWhile(async () => { await settle(hookEffect()); }); }
+function syncRunner(): Promise<void> { return ctx.blockConcurrencyWhile(async () => settleSync(hookEffect())); }
+function other(): Promise<void> { return ctx.waitUntilDone(() => settle(hookEffect())); }
+function observed(): Promise<void> { return ctx.blockConcurrencyWhile(async () => observe(hookEffect(), watcher)); }
+`;
+
+  expect(bridgeSites(new Map([[FILE, source]]))).toEqual({
+    bridges: [`${FILE}:4`, `${FILE}:5`],
+    flights: [],
+    routes: [],
+    held: [],
+    react: [],
+    findings: [
+      `${FILE}:6: a runner called mid-body; the effect is run once, at the edge, as its return`,
+      `${FILE}:7: a runner returned outside an exported function or public member`,
+      `${FILE}:8: a runner returned outside an exported function or public member`,
+      `${FILE}:9: a runner returned outside an exported function or public member`,
+    ],
+  });
+});
+
 test('a bridge is `return settle(…)` or `return settleSync(…)` from an exported function or public member; elsewhere it is a finding', () => {
   const bridged = `
 import { settle, settleSync as run } from '../obs/index';

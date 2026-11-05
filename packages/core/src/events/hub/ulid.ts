@@ -51,7 +51,8 @@ export function isUlid(value: string): boolean {
 function rollRandom(): number[] {
   const out: number[] = [];
 
-  for (let i = 0; i < 16; i++) out.push(Math.floor(Math.random() * 32));
+  // 256 is a multiple of 32, so each byte's low five bits are an unbiased character.
+  for (const byte of crypto.getRandomValues(new Uint8Array(16))) out.push(byte % 32);
 
   return out;
 }

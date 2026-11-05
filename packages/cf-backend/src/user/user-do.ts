@@ -11,7 +11,7 @@ import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from '../act
 
 import {
   err, isEvalAccountEmail, objectNamed,
-  ownerCaller, callGoogle, GoogleCallSchema, type GoogleAnswer, type GoogleCall, readGitHub, GitHubReadSchema, type GitHubAnswer, type GitHubRead, type GoogleGrant, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type SecretSummary, type SecretInput, type SecretDestination, type GrantedSecrets, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, type RosterPage, type CredentialSummary, type WorkspaceEntry, type UserProfile, DEVICE_FRAMES, DEVICE_SCREEN_PATH, screenFromSocket, readScreenData, statementText,   bookmarkNow, restartedForRestore, restoreArmed, type ArmedRestore, type RestoreTarget,
+  ownerCaller, callGoogle, GoogleCallSchema, type GoogleAnswer, type GoogleCall, readGitHub, GitHubReadSchema, type GitHubAnswer, type GitHubRead, type GoogleGrant, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type JsonValue, type EgressRequestFacts, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type SecretSummary, type SecretInput, type SecretDestination, type GrantedSecrets, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, type RosterPage, type CredentialSummary, type WorkspaceEntry, type UserProfile, DEVICE_FRAMES, DEVICE_SCREEN_PATH, screenFromSocket, readScreenData, statementText,   bookmarkNow, restartedForRestore, restoreArmed, type ArmedRestore, type RestoreTarget,
 } from '@kinu.run/core';
 
 import { diagnostics, KinuError, refusalOf, settle, settleLogged, tolerate, toKinuError } from '@kinu.run/core/obs';
@@ -315,16 +315,8 @@ export class UserDO extends Agent<Env> {
     return this.profile.setDisplayName(caller, displayName);
   }
 
-  publishExperience(caller: UserCaller, candidate: PublishableCandidate): Promise<ExperienceEntry> {
-    return this.profile.publishExperience(caller, candidate);
-  }
-
   searchExperience(caller: UserCaller, options: { query?: string; kind?: ExperienceKind; limit?: number } = {}): Promise<ExperienceEntry[]> {
     return this.profile.searchExperience(caller, options);
-  }
-
-  getExperienceEntry(caller: UserCaller, id: string): Promise<ExperienceEntry | null> {
-    return this.profile.getExperienceEntry(caller, id);
   }
 
   getConfig(caller: UserCaller, key: string): Promise<string | null> {

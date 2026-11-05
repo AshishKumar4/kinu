@@ -218,8 +218,7 @@ export { forkArtifactPath, type ForkConversationPlan } from './identity/fork-pla
 // Workspace archive: one backup format for both backends.
 export {
   WORKSPACE_ARCHIVE_EXTENSION,
-  readAgentArchivePage, readWorkspaceArchivePage, type ArchiveAgentSource, restoreWorkspaceArchive, writeWorkspaceArchive,
-  ArchiveCursorSchema, ARCHIVE_SNAPSHOT_ENDED,
+  readAgentArchivePage, readWorkspaceArchivePage, type ArchiveAgentSource, restoreWorkspaceArchive, ArchiveCursorSchema, ARCHIVE_SNAPSHOT_ENDED,
   type ArchiveCursor, type ArchiveSqlCursor, type ArchiveAgentPage,
   type ArchivePage, type ArchiveStoreSource,
 } from './identity/archive';
@@ -411,13 +410,10 @@ export {
   createExperienceLibrary,
   EXPERIENCE_KINDS,
   initExperienceLibraryTables,
-  initImportedExperienceTable,
-  listImportedExperience,
   type ExperienceEntry,
   type ExperienceKind,
   type ExperienceLibraryStore,
   type ExperienceSearchOptions,
-  type PublishableCandidate,
 } from './experience/index';
 
 // Chat engine
@@ -1232,7 +1228,7 @@ export { recallForTurn, type RecallSources } from './memory/turn-recall';
 // Memory writes
 export { memoryBytes } from './memory/note';
 
-export { appendMemoryNote, MEMORY_PATH, parseMemoryNotes, readMemoryTail } from './memory/note';
+export { appendMemoryNote, MEMORY_PATH, memoryNotes, parseMemoryNotes, readMemoryTail } from './memory/note';
 
 export {
   ConversationSearchStore, ensureIndexTables, invalidateConversationSearchIndex,
@@ -1461,10 +1457,9 @@ export { CODEX_TOKEN_URL, createCodexOAuthClient, decodeCodexAccountId } from '.
 
 export { CODEX_CRED_KEY, createCodexProvider } from './providers/codex';
 
-export {
-  bindingDecisionRun, createDecisionPort, DECISION_MODELS, decisionPortOf, DEFAULT_DECISION_MODEL, restDecisionRun,
-  type DecisionRun,
-} from './providers/decision-model';
+export { bindingDecisionRun, createDecisionPort, decisionPortOf, restDecisionRun, type DecisionRun } from './providers/decision-model';
+
+export { DECISION_MODELS, DEFAULT_DECISION_MODEL } from './providers/decision-models';
 
 export { asFetchFunction, copyHeaders, plainFetch } from './providers/fetch-shim';
 
@@ -1488,9 +1483,9 @@ export {
   createModelRegistry, defaultSpecFor, normalizeModelSpec, specModelInfo, type SpecDefault,
 } from './providers/model-registry';
 
-export {
-  ModelTestResultSchema, modelTestText, providerName, testModel, type ModelTestResult,
-} from './providers/model-test';
+export { testModel } from './providers/model-test';
+
+export { ModelTestResultSchema, modelTestText, providerName, type ModelTestResult } from './providers/model-test-result';
 
 export {
   getModelsDevProvider, listModelsDevProviderModels, listModelsDevProviders, modelsDevCompatBaseURL,
@@ -1528,9 +1523,10 @@ export {
 } from './providers/reasoning-effort';
 
 export {
-  accountDeps, createProviderRegistry, providerAccounts, type ModelMenu, type ProviderAccounts, type ProviderFailure,
-  type ProviderRegistry,
+  accountDeps, createProviderRegistry, providerAccounts, type ModelMenu, type ProviderAccounts, type ProviderRegistry,
 } from './providers/registry';
+
+export { type ProviderFailure } from './providers/provider-failure';
 
 export { relayRefusal } from './providers/relay-policy';
 

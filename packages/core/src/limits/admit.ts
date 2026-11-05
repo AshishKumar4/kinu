@@ -23,11 +23,14 @@ export interface AccountUse {
 /** The way on that needs nothing freed, said the same at every limit. */
 const OWN_KINU = 'or run your own Kinu with no limits at /deploy (Move my data, in Settings under Account, downloads your data to bring along).';
 
-const GB = 1024 ** 3;
+/** A binary gigabyte (GiB), as the limits measure stored bytes; `platform-limits.ts` `GB` is decimal. */
+const GIB = 1024 ** 3;
+
+const MIB = 1024 ** 2;
 
 /** Bytes as a person reads them: `1.4 GB`, `2 GB`, `820 MB`. */
 export function shownBytes(bytes: number): string {
-  return bytes >= GB ? `${String(Number((bytes / GB).toFixed(1)))} GB` : `${String(Math.round(bytes / 1024 ** 2))} MB`;
+  return bytes >= GIB ? `${String(Number((bytes / GIB).toFixed(1)))} GB` : `${String(Math.round(bytes / MIB))} MB`;
 }
 
 /** Hours as a person reads them: `19.5 hours`. */

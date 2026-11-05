@@ -23,6 +23,7 @@ import { abandonTurn, abandonTurnIfOwner, admitTurn, newSendLatch } from "@kinu.
 import { terminalChatError, turnFailure, type ChatTurnError } from "@kinu.run/core";
 import { turnLiveness, SLATE_PUSH_EVENT, slatePushes, TURN_CLAIM_FRAME, type TurnClaimState } from "@kinu.run/core";
 import { useSocketFrames, type SocketFrame } from "./socket-frames";
+import type { ConnectionStatus } from "./use-workspace-rpc";
 import type { SeedEdge } from "./use-chat-thread";
 import {
   createLiveRefreshAdmission, formatWorkspaceError, loadWorkspaceSnapshot, readFailureText, refreshLiveResource,
@@ -40,8 +41,6 @@ export interface ExecutorOutput {
   exit_code: number; created_at: number;
 }
 
-export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
-
 export interface KinuActorAddress {
   workspace: string;
   subagent?: string;
@@ -58,21 +57,6 @@ export type WorkspaceOpening = Awaited<ReturnType<OrchestratorAgent["getWorkspac
 const RETRY_BASE_MS = 1_000;
 
 const RETRY_MAX_MS = 30_000;
-
-export function useWorkspaceRpc(agentId: string) {
-  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connecting");
-
-  const agent = useAgent({
-    agent: ORCHESTRATOR_AGENT_SLUG,
-    name: agentId,
-    protocol: window.location.protocol === "https:" ? "wss" : "ws",
-    onOpen: useCallback(() => setConnectionStatus("connected"), []),
-    onClose: useCallback(() => setConnectionStatus("disconnected"), []),
-    onError: useCallback(() => setConnectionStatus("error"), []),
-  });
-
-  return { rpc: useMemo(() => workspaceRpc(agent.call), [agent]), connectionStatus };
-}
 
 export interface WorkspaceExtension {
   readonly snapshot: (snap: WorkspaceOpening, isSourceCurrent: (source: LiveRefreshSource) => boolean) => Effect.Effect<void>;

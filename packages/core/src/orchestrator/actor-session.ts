@@ -60,6 +60,7 @@ import { turnTags } from '../types/turn-metadata';
 import { OWNER_ANSWER_SIGNAL } from '../types/owner-questions';
 import { ASK_OWNER_TOOL } from '../tools/registry';
 import type { MessageReference, MessagePartReference, PreparedMessage } from '../session/messages';
+import { textOfPart } from '../utils/text';
 
 /** What the owner reads when a run a dead process left is not run on, by why recovery closed it. */
 const RESTORE_REFUSALS: Readonly<Record<Exclude<Extract<InterruptedTurnVerdict, { kind: 'closed' }>['cause'], 'out_of_memory'>, string>> = {
@@ -1240,7 +1241,9 @@ export class ActorSession {
       for (let partIndex = parts.length - 1; partIndex >= 0; partIndex--) {
         const part = parts[partIndex];
 
-        if (part?.value.type === 'text') return { reference: { messageId: reference.messageId, partNo: part.partNo }, text: v.parse(v.string(), part.value.text) };
+        const text = part === undefined ? null : textOfPart(part.value);
+
+        if (part !== undefined && text !== null) return { reference: { messageId: reference.messageId, partNo: part.partNo }, text };
       }
     }
 

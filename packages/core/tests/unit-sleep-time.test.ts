@@ -13,6 +13,9 @@ import {
 import { createTestFactsStore, createJSONLLM, createScriptedLLM, createTestRuntime, present } from '@kinu.run/test-utils';
 import { KinuError } from '../src/obs';
 import type { SleepTimeTurn } from '../src/memory/sleep-time-compute';
+import { Database } from 'bun:sqlite';
+import { appendMemoryNote, MEMORY_PATH, memoryNotes } from '../src/memory/note';
+import { createMemoryMemory, createWorkspaceBundle } from './helpers';
 
 /** A rejection's shape, as a pass's failure carries it. */
 const FailureSchema = v.object({ code: v.string() });
@@ -489,5 +492,113 @@ describe('an idle wake dreams first', () => {
 
     await busy.runTerminal();
     expect(order).toEqual(['facts']);
+  });
+
+  /** A lane over real notes and the given turns, its fast tier keeping as a fact each database version a note shows it. */
+  function folding(transactionSync: <T>(write: () => T) => T = (write) => write()) {
+    const { rt, stores, testSql } = createTestRuntime();
+    initFactsTable(testSql.execRaw);
+    initSleepTimeTables(testSql.execRaw);
+    initEffectTombstoneTable(testSql.execRaw);
+    stores.config.setSleepTimeComputeEnabled(true);
+    const db = new Database(':memory:');
+    const memory = createMemoryMemory(db, createWorkspaceBundle(db).vfs);
+    const seen: string[] = [];
+    const answered = turns(9);
+    const window = { read: 3 };
+
+    const fold = () => new SleepTimeLane({
+      sql: rt.storage.sql, actor: rt.actor, config: stores.config, facts: stores.facts,
+      transcript: () => ({ newestFirst: async (limit) => answered.slice(answered.length - window.read * 2).slice(0, limit) }),
+      llm: () => ({ stream: () => { throw new Error('not streamed'); }, complete: () => { throw new Error('sleep-time asks for a schema'); }, object: async (prompt, schema) => {
+        const shown = [...prompt.matchAll(/staging database runs (pg-\d+)/gu)].map((said) => said[1] ?? '');
+
+        seen.push(...shown);
+
+        return v.parse(schema, { upserts: shown.map((value) => ({ key: 'database', value, confidence: 0.9, rationale: 'a note' })), decay: [] });
+      } }),
+      transactionSync,
+      armWake: () => {},
+      workspace: 'research',
+      notes: () => memoryNotes(memory),
+    });
+
+    return { fold, memory, seen, window, facts: stores.facts, close: () => { db.close(); } };
+  }
+
+  // 1105-memory-gaps (owner, 2026-11-05): the notes the agent keeps are consolidated into durable beliefs.
+  test("the agent's notes are folded into facts, each once, the newest of a subject holding, two of one day alike", async () => {
+    const { fold, memory, seen, window, facts, close } = folding();
+
+    // Both notes on one day, as the memory tool writes them.
+    await appendMemoryNote(memory, 'The staging database runs pg-15');
+    await fold().runTerminal();
+    expect(facts.recall('database')?.value).toBe('pg-15');
+
+    await appendMemoryNote(memory, 'Upgraded: the staging database runs pg-17');
+    window.read = 6;
+    await fold().runTerminal();
+
+    expect(facts.recall('database')?.value).toBe('pg-17');
+    expect(seen).toEqual(['pg-15', 'pg-17']);
+    close();
+  });
+
+  test('a note stamped in the same millisecond as one folded, landing after that pass read, is still folded', async () => {
+    const { fold, memory, seen, window, facts, close } = folding();
+    const instant = new Date().toISOString();
+
+    // Stamped together, appended apart: the second lands after the first pass read the notes.
+    await appendMemoryNote(memory, 'The staging database runs pg-15', { date: instant });
+    await fold().runTerminal();
+    await appendMemoryNote(memory, 'Upgraded: the staging database runs pg-17', { date: instant });
+    window.read = 6;
+    await fold().runTerminal();
+
+    expect(facts.recall('database')?.value).toBe('pg-17');
+    expect(seen).toEqual(['pg-15', 'pg-17']);
+    close();
+  });
+
+  test('a note forgotten takes its fold with it at the next fold: the same note written again is folded again', async () => {
+    const { fold, memory, seen, window, close } = folding();
+    const instant = new Date().toISOString();
+
+    await appendMemoryNote(memory, 'The staging database runs pg-15', { date: instant });
+    await fold().runTerminal();
+    await memory.write(MEMORY_PATH, '');
+    await appendMemoryNote(memory, 'The staging database runs pg-16');
+    window.read = 6;
+    await fold().runTerminal();
+    await appendMemoryNote(memory, 'The staging database runs pg-15', { date: instant });
+    window.read = 9;
+    await fold().runTerminal();
+
+    expect(seen).toEqual(['pg-15', 'pg-16', 'pg-15']);
+    close();
+  });
+
+  test('a pass whose commit failed after its paid answer replays it, notes and all, and folds no note twice', async () => {
+    let commits = 0;
+
+    // The first commit dies, as an isolate evicted between the paid answer and its application.
+    const { fold, memory, seen, window, facts, close } = folding((write) => {
+      commits += 1;
+
+      if (commits === 1) throw new Error('evicted');
+
+      return write();
+    });
+
+    await appendMemoryNote(memory, 'The staging database runs pg-15');
+    await expect(fold().runTerminal()).rejects.toThrow('evicted');
+    await fold().runTerminal();
+    expect(facts.recall('database')?.value).toBe('pg-15');
+
+    window.read = 6;
+    await fold().runTerminal();
+
+    expect(seen).toEqual(['pg-15']);
+    close();
   });
 });

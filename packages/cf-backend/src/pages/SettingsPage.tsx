@@ -13,7 +13,7 @@ import {
 } from "@kinu.run/core";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { executorLabel } from "@kinu.run/core";
-import type { ConnectionStatus } from "@/hooks/use-chat-owner";
+import type { ConnectionStatus } from "@/hooks/use-workspace-rpc";
 import type { AgentStatus, WorkspaceLayout, WorkspaceNotice } from "@kinu.run/core";
 import { WorkspaceAutomations } from "@/components/WorkspaceAutomations";
 import { Card } from "@/components/ui/Card";

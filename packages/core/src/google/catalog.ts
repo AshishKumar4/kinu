@@ -16,8 +16,17 @@ type ApiName = keyof Table;
 
 let imported: Promise<Table> | undefined;
 
+/** The table, imported once; an import that failed is forgotten, so the next call imports again. */
 function pinnedTable(): Effect.Effect<Table> {
-  return Effect.promise(() => (imported ??= importTable()));
+  return Effect.suspend(() => {
+    const importing = imported ?? importTable();
+
+    imported = importing;
+
+    return Effect.onError(Effect.promise(() => importing), () => Effect.sync(() => {
+      if (imported === importing) imported = undefined;
+    }));
+  });
 }
 
 function isApiName(table: Table, name: string): name is ApiName {

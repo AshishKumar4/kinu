@@ -63,7 +63,6 @@ EVOLUTION_EVENTS = frozenset({
     "consolidation",
     "turn_complete",
     "changelog_digest",
-    "experience_import",
     "scaffold_promotion",
     "scaffold_rollback",
 })

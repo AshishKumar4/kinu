@@ -3,7 +3,7 @@
  * sizing before the base64 await lets concurrent additions spend the same capacity.
  */
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
-import { convertFileListToFileUIParts, type FileUIPart } from "ai";
+import type { FileUIPart } from "ai";
 import { base64Bytes } from "@kinu.run/core";
 import { Cause, Effect } from "effect";
 import { detach, diagnostics, renderThrownChain } from "@kinu.run/core/obs";
@@ -14,6 +14,24 @@ interface AttachmentAdmission {
 }
 
 const partName = (part: FileUIPart): string => part.filename ?? "an attachment";
+
+/** Each file as the part a message carries it in, its bytes a data URL: as `ai`'s `convertFileListToFileUIParts`, which
+ *  would load the whole SDK into every page that offers an attachment. */
+function fileParts(files: FileList): Promise<FileUIPart[]> {
+  return Promise.all([...files].map(async (file): Promise<FileUIPart> => {
+    const reading = Promise.withResolvers<string>();
+    const reader = new FileReader();
+
+    // `readAsDataURL` answers a string.
+    reader.onload = () => { reading.resolve(typeof reader.result === "string" ? reader.result : ""); };
+
+    reader.onerror = () => { reading.reject(reader.error); };
+
+    reader.readAsDataURL(file);
+
+    return { type: "file", mediaType: file.type, filename: file.name, url: await reading.promise };
+  }));
+}
 
 /** In offer order, not best-fit: best-fit would reorder the user's message. */
 function admitAttachments(
@@ -129,7 +147,7 @@ export function usePendingAttachments(limitBytes: number): PendingAttachments {
         const transfer = new DataTransfer();
 
         for (const file of convertible) transfer.items.add(file);
-        const parts = yield* Effect.promise(() => convertFileListToFileUIParts(transfer.files));
+        const parts = yield* Effect.promise(() => fileParts(transfer.files));
         yield* Effect.promise(() => before);
 
         if (generation === conversionGeneration.current) dispatch({ kind: "offer", parts, oversized });

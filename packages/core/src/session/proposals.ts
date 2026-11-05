@@ -31,7 +31,7 @@ export interface PendingContextProposal { readonly proposal_id: string; readonly
 /** Sparse authored intent; committed intervals are the only selection history. */
 export class SessionProposals {
   constructor(private readonly sql: SqlExecutor, private readonly actor: ActorHandle, private readonly context: SessionContext,
-    private readonly atomic: <T>(operation: () => T) => T) {}
+    private readonly transactionSync: <T>(operation: () => T) => T) {}
 
   pending(contextId: string): readonly PendingContextProposal[] {
     this.actor.assertCurrent();
@@ -53,11 +53,11 @@ export class SessionProposals {
   }
 
   stage(proposal: ContextProposal): void {
-    this.atomic(() => {
+    this.transactionSync(() => settleSync(Effect.gen({ self: this }, function* () {
       this.actor.assertCurrent();
       const selected = this.context.selected();
 
-      if (selected?.contextId !== proposal.base.contextId) throw new KinuError('denied', 'proposal belongs to another context');
+      if (selected?.contextId !== proposal.base.contextId) return yield* Effect.fail(new KinuError('denied', 'proposal belongs to another context'));
       const original = this.context.entries(proposal.base);
       const current = this.context.entries(selected);
 
@@ -65,11 +65,11 @@ export class SessionProposals {
         const live = current[position];
 
         return live?.entryId !== entry.entryId || live.messageId !== entry.messageId;
-      })) throw new KinuError('denied', 'proposal base was changed rather than extended');
+      })) return yield* Effect.fail(new KinuError('denied', 'proposal base was changed rather than extended'));
       const pending = this.pending(selected.contextId);
       const previous = pending.at(-1)?.proposal_id ?? null;
 
-      if (previous !== (proposal.expectedPending ?? null)) throw new KinuError('denied', 'a pending context edit changed during preparation');
+      if (previous !== (proposal.expectedPending ?? null)) return yield* Effect.fail(new KinuError('denied', 'a pending context edit changed during preparation'));
       const base = new Map(original.map(entry => [entry.entryId, entry]));
       const actorId = this.actor.actorId;
 
@@ -82,7 +82,7 @@ export class SessionProposals {
         void this.sql`INSERT INTO context_proposal_entries(actor_id,proposal_id,entry_id,expected_message_id,message_id,position)
           VALUES(${actorId},${proposal.id},${change.entryId},${change.expected?.messageId ?? null},${change.replacement?.messageId ?? null},${change.replacement?.position ?? null})`;
       }
-    });
+    })));
   }
 
   /** The selected context as the pending proposal `id` would leave it; blocked where the history it was proposed over
@@ -109,10 +109,12 @@ export class SessionProposals {
   }
 
   apply(id: string, assertEpoch: () => Effect.Effect<void, KinuError>, validate: (entries: readonly ContextEntry[]) => StagedContextDeferral | null, turnId: string | null = null): ContextSelection | null {
-    return this.atomic(() => settleSync(Effect.gen({ self: this }, function* () {
+    return this.transactionSync(() => settleSync(Effect.gen({ self: this }, function* () {
       this.actor.assertCurrent();
       yield* assertEpoch();
-      const proposal = this.requirePending(id);
+      const proposal = this.pendingRow(id);
+
+      if (proposal === null) return yield* Effect.fail(new KinuError('denied', 'context proposal is not pending'));
       const selected = this.context.selected();
 
       if (selected === null || selected.contextId !== proposal.context_id) return yield* Effect.fail(new KinuError('denied', 'proposal belongs to another selected context'));
@@ -142,14 +144,6 @@ export class SessionProposals {
     this.actor.assertCurrent();
     void this.sql`UPDATE context_proposals SET status='closed',closed_reason=${reason}
       WHERE actor_id=${this.actor.actorId} AND proposal_id=${id} AND status='pending'`;
-  }
-
-  private requirePending(id: string): ProposalRow {
-    const row = this.pendingRow(id);
-
-    if (row === null) throw new KinuError('denied', 'context proposal is not pending');
-
-    return row;
   }
 
   private pendingRow(id: string): ProposalRow | null {

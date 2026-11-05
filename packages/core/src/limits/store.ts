@@ -56,6 +56,8 @@ const RunningRow = v.object({ workspace: v.string(), size: v.string(), started_a
 
 export type RunningComputer = v.InferOutput<typeof RunningRow>;
 
+const RUNNING_SELECT = 'SELECT workspace, size, started_at, last_tick_at FROM account_computer_running';
+
 const CountRow = v.object({ n: v.nullable(v.number()) });
 
 export class AccountLimitsStore {
@@ -100,7 +102,7 @@ export class AccountLimitsStore {
    * admission reads this (staging 3831d571d: its replies held 0.8-7.5 s behind a no-op DELETE).
    */
   running(now: number): readonly RunningComputer[] {
-    const current = rows(RunningRow, this.sql.exec('SELECT workspace, size, started_at, last_tick_at FROM account_computer_running'));
+    const current = rows(RunningRow, this.sql.exec(RUNNING_SELECT));
     const stale = now - RUNNING_STALE_MS;
 
     if (current.every((row) => row.last_tick_at >= stale)) return current;
@@ -124,7 +126,7 @@ export class AccountLimitsStore {
    * unseen) starts its row and accrues nothing.
    */
   tick(workspace: string, size: string, now: number): void {
-    const [row] = rows(RunningRow, this.sql.exec('SELECT workspace, size, started_at, last_tick_at FROM account_computer_running WHERE workspace = ?', workspace));
+    const row = this.runningRow(workspace);
 
     if (row === undefined) {
       this.started(workspace, size, now);
@@ -132,16 +134,25 @@ export class AccountLimitsStore {
       return;
     }
 
-    this.accrue(workspace, Math.min(Math.max(0, now - row.last_tick_at), TICK_CAP_MS), now);
+    this.accrueSince(workspace, row, now);
     this.sql.exec('UPDATE account_computer_running SET last_tick_at = ?, size = ? WHERE workspace = ?', now, size, workspace);
   }
 
   /** `workspace`'s computer stopped: its last part accrues, and its place is free. */
   stopped(workspace: string, now: number): void {
-    const [row] = rows(RunningRow, this.sql.exec('SELECT workspace, size, started_at, last_tick_at FROM account_computer_running WHERE workspace = ?', workspace));
+    const row = this.runningRow(workspace);
 
-    if (row !== undefined) this.accrue(workspace, Math.min(Math.max(0, now - row.last_tick_at), TICK_CAP_MS), now);
+    if (row !== undefined) this.accrueSince(workspace, row, now);
     this.sql.exec('DELETE FROM account_computer_running WHERE workspace = ?', workspace);
+  }
+
+  private runningRow(workspace: string): RunningComputer | undefined {
+    return rows(RunningRow, this.sql.exec(`${RUNNING_SELECT} WHERE workspace = ?`, workspace))[0];
+  }
+
+  /** The time since `row`'s last tick, up to {@link TICK_CAP_MS}. */
+  private accrueSince(workspace: string, row: RunningComputer, now: number): void {
+    this.accrue(workspace, Math.min(Math.max(0, now - row.last_tick_at), TICK_CAP_MS), now);
   }
 
   private accrue(workspace: string, ms: number, now: number): void {

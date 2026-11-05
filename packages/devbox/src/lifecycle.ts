@@ -1,7 +1,8 @@
 /** Pure decisions: nothing here touches a container, a bucket or a clock. */
 
 import * as v from 'valibot';
-import { caught, devboxFailure, refuse, rethrow, startOverrun } from './errors';
+import { Effect } from 'effect';
+import { caught, devboxFailure, startOverrun, type DevboxError } from './errors';
 
 import type { StoredValue } from './storage';
 
@@ -152,22 +153,24 @@ async function raceAllowance<T>(
 
 /** Throws on overrun: an abandoned attach is mid-mount and unreachable, so a retry collides;
  *  recovery replaces the container. `onOverrun` gets the late outcome, often the only diagnostic. */
-async function withContainerStartDeadline<T>(
+function withContainerStartDeadline<T>(
   label: string,
   budget: StartBudget,
   work: () => Promise<T>,
   onOverrun: (failure: LateStartFailure) => void,
-): Promise<T> {
-  const budgetMs = budget.remainingMs();
-  const raced = await raceAllowance(budgetMs, work, onOverrun, budget.clock);
+): Effect.Effect<T, DevboxError> {
+  return Effect.suspend(() => {
+    const budgetMs = budget.remainingMs();
 
-  if (raced.kind === 'late') refuse(startOverrun(label, budgetMs));
+    return Effect.flatMap(Effect.promise(() => raceAllowance(budgetMs, work, onOverrun, budget.clock)), (raced) => {
+      if (raced.kind === 'late') return Effect.fail(startOverrun(label, budgetMs));
 
-  // A real failure is rethrown unwrapped so the attach's own error reaches the taxonomy
-  // unchanged.
-  if (raced.kind === 'failed') rethrow(raced);
+      // A real failure keeps its own words, unwrapped, so the attach's own error reaches the taxonomy unchanged.
+      if (raced.kind === 'failed') return Effect.die(raced.cause);
 
-  return raced.value;
+      return Effect.succeed(raced.value);
+    });
+  });
 }
 
 /** Handed to the restore walk so its two failure policies (attach throws, post-attach steps
@@ -178,7 +181,7 @@ export interface RestoreSteps {
   run<T>(work: (current: () => boolean) => Promise<T>, onLate: (failure: LateStartFailure) => void): Promise<StepOutcome<T>>;
   /** The attach: the one step whose failure THROWS, because it is the only one
    *  that is mid-mount when it ends. */
-  attach<T>(work: () => Promise<T>, onOverrun: (failure: LateStartFailure) => void): Promise<T>;
+  attach<T>(work: () => Promise<T>, onOverrun: (failure: LateStartFailure) => void): Effect.Effect<T, DevboxError>;
   declare(steps: number): void;
   /** A declared step that will not run, releasing its budget share to the steps after it,
    *  so ports behind an unanswered listener are not charged for its silence. */
@@ -191,8 +194,7 @@ export interface RestoreSteps {
 export function racedRestoreSteps(budget: StartBudget): RestoreSteps {
   return {
     run: async (work, onLate) => await runRestoreStep(budget.nextAllowanceMs(), work, onLate, budget.clock),
-    attach: async (work, onOverrun) =>
-      await withContainerStartDeadline('Devbox.attach', budget, work, onOverrun),
+    attach: (work, onOverrun) => withContainerStartDeadline('Devbox.attach', budget, work, onOverrun),
     declare: (steps) => budget.declare(steps),
     skip: () => void budget.nextAllowanceMs(),
     remainingMs: () => budget.remainingMs(),

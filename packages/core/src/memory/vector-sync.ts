@@ -9,9 +9,9 @@ import { type CheckpointFiles, type Memory } from '../types/primitives';
 import { type VectorStore } from './vector-store';
 
 import { readTailWithVfsOps } from '../vfs/mounts';
-import { MEMORY_DIR } from './note';
+import { MEMORY_DIR, noteDateAt } from './note';
 import { scrubSecrets } from '../safety/secret-patterns';
-import type { MemoryStore, NoteStamp } from "@kinu.run/agent-utils/memory";
+import type { MemoryStore, NoteDater, NoteStamp } from "@kinu.run/agent-utils/memory";
 import { diagnostics, KinuError, settle, toKinuError } from "../obs/index";
 import { writeConditionally, type ObservedFile } from '../vfs/conditional-write';
 import { FileRefusalError } from '../types/file-edits';
@@ -76,8 +76,24 @@ export function adaptMemory(
     }
   };
 
+  /** Dates a hydration's hits: the stamp of each note heading, else its file's last change, stat once a path. */
+  const dater = (): NoteDater => {
+    const changed = new Map<string, Promise<number | undefined>>();
+
+    return async (path, lines, endLine) => {
+      const stamped = noteDateAt(lines, endLine);
+
+      if (stamped !== null) return stamped;
+      const read = changed.get(path) ?? Promise.resolve(files.stat(path, { follow: false })).then((stat) => stat?.mtimeMs);
+
+      changed.set(path, read);
+
+      return await read;
+    };
+  };
+
   const memory: Memory = {
-    chunk: async (id) => (await store.chunksByIds([id]))[0] ?? null,
+    chunk: async (id) => (await store.chunksByIds([id], dater()))[0] ?? null,
     // Memory text is kept scrubbed (`memory/scrub.ts`).
     write: (path, content) => store.writeFile(path, scrubSecrets(content)),
     append: (path, content) => store.appendToFile(path, scrubSecrets(content)),
@@ -105,7 +121,7 @@ export function adaptMemory(
     async search(query, limit) {
       await refresh();
 
-      return store.search(query, limit, async (path) => memory.index(path));
+      return await store.search(query, limit, async (path) => memory.index(path), dater());
     },
     // A note that moved is taken in before it is read, as a search takes it in.
     async read(path) {

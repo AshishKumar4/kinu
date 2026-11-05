@@ -1,8 +1,12 @@
 /** Opens setup as a modal so a half-typed mission on the page behind is not lost. */
-import { useState } from "react";
-import { AccountPanelModal, type AccountPanel } from "@/components/account/AccountPanelModal";
+import { Suspense, useState } from "react";
+import type { AccountPanel } from "@/components/account/AccountPanelModal";
+import { lazyRoute } from "@/lazy-route";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+
+// Built at the first click: the providers, MCP and CLI panels are none of Home's first paint.
+const AccountPanelModal = lazyRoute(async () => ({ default: (await import("@/components/account/AccountPanelModal")).AccountPanelModal }));
 
 export function SetupCard() {
   const [open, setOpen] = useState<AccountPanel | null>(null);
@@ -18,7 +22,7 @@ export function SetupCard() {
         </div>
       </Card>
       {open !== null && (
-        <AccountPanelModal panel={open} onClose={() => setOpen(null)} />
+        <Suspense fallback={null}><AccountPanelModal panel={open} onClose={() => setOpen(null)} /></Suspense>
       )}
     </>
   );
