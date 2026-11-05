@@ -2169,10 +2169,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:mutation-fences',
     label: 'Concurrency fences stay load-bearing',
-    ciExempt: 'proves the tree being deployed, not a push: it materialises a `git worktree add --detach` copy and runs two '
-      + '`bun test` processes per fence inside it. It runs in the deploy\'s source-phase job on armada, whose '
-      + 'checkout carries the whole history.',
-    tier: 'deploy',
+    tier: 'ci',
     // Each fence proved twice (pristine green, mutant red) inside one sparse
     // `git worktree add --detach` copy: 2.5s measured 2026-08-31 on the 24-thread
     // box, dominated by two `bun test` spawns per fence.
@@ -2388,8 +2385,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun test --timeout=0 tests/browser/live-app-provider-wait.test.ts',
     label: 'Live app in a browser: a wait on the provider',
-    ciExempt: LIVE_APP_AT_CI,
-    tier: 'deploy',
+    tier: 'ci',
     // Measured 2026-10-13 on armada by `bun scripts/gate-cost-measure.ts --only=<this row>` at 059486671: 218.8 s wall,
     // when the minute-limited turn waited 60-120 s; it waits one stated minute now, so the measure is an upper bound.
     seconds: 220,
@@ -2424,8 +2420,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun test --timeout=0 tests/browser/live-app-plans.test.ts',
     label: 'Live app in a browser: a long chat and its plans',
-    ciExempt: LIVE_APP_AT_CI,
-    tier: 'deploy',
+    tier: 'ci',
     // Measured 2026-09-26 alone in a quiet window: 167.9 s at load 2.7, its four scenarios 10-104 s each, chat-scroll the long one beside the dev server's boot.
     // One of the four files the live-app rows split into when one file outran its 480 s deadline alone.
     seconds: 168,
@@ -2442,8 +2437,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun test --timeout=0 tests/browser/live-app-own-server.test.ts',
     label: 'Live app in a browser: a slate that serves its own page, in its answer',
-    ciExempt: LIVE_APP_AT_CI,
-    tier: 'deploy',
+    tier: 'ci',
     // Unmeasured: the plans file's walkthrough (about 60 s) and the dev server's boot, the plans row's figures.
     seconds: 120,
     catches: 'the shipped workspace page as it runs, on `vite dev` in cf-backend (workerd with real Durable Objects '
