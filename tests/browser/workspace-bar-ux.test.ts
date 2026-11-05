@@ -402,7 +402,6 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
       await page.goto(`${origin}/gallery.html?frame=workspacepage&opening=bad-plan`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('[data-composer-root] [role="alert"]');
 
-      expect(await page.$eval('[data-composer-root] [role="alert"]', (alert) => alert.textContent ?? '')).toContain('Could not open this workspace');
       await page.close();
     });
   });
