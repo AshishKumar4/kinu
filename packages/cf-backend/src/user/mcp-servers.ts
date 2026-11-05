@@ -223,7 +223,8 @@ const StoredConnectRunSchema = v.object({ run: ConnectRunSchema });
 /** What a server's login does for each request: the access token it presents, and its renewal by a refresh token. */
 interface McpLoginSide {
   readonly token: () => Effect.Effect<string | undefined, KinuError>;
-  readonly renew: () => Effect.Effect<void, KinuError>;
+  /** `presented` is the token the refused request carried: a login renewed since then is not renewed again. */
+  readonly renew: (presented: string | undefined) => Effect.Effect<void, KinuError>;
 }
 
 /**
@@ -234,10 +235,13 @@ interface McpLoginSide {
 class McpBearer implements AuthProvider {
   stopped = false;
 
+  /** The access token last handed to a request. */
+  protected presented: string | undefined;
+
   constructor(protected readonly login: McpLoginSide) {}
 
   token(): Promise<string | undefined> {
-    return settle(this.noted(this.login.token()));
+    return settle(this.noted(Effect.tap(this.login.token(), (token) => Effect.sync(() => { this.presented = token; }))));
   }
 
   protected noted<A>(effect: Effect.Effect<A, KinuError>): Effect.Effect<A, KinuError> {
@@ -248,7 +252,7 @@ class McpBearer implements AuthProvider {
 /** A login with a refresh token: a refusal renews it, and the transport sends the request again, once. */
 class RenewingMcpBearer extends McpBearer {
   onUnauthorized(): Promise<void> {
-    return settle(this.noted(this.login.renew()));
+    return settle(this.noted(this.login.renew(this.presented)));
   }
 }
 
@@ -264,8 +268,10 @@ export class UserMcpServers {
   private readonly clients = new Map<string, Promise<Exit.Exit<McpLive, KinuError>>>();
 
   /** One renewal of a server's login at a time, every request that meets it joining it: a provider that rotates refresh
-   *  tokens revokes a grant whose token is presented twice. */
-  private readonly renewals = flight((server: McpServer) => this.renewal(server), { key: (server) => server.id });
+   *  tokens revokes a grant whose token is presented twice. `expiring` is the access token a request found about to
+   *  expire or was refused with; a renewal that finished since it read that token has already replaced it. */
+  private readonly renewals = flight((input: { readonly server: McpServer; readonly expiring?: string }) => this.renewal(input.server, input.expiring),
+    { key: (input) => input.server.id });
 
   /** MCP tool calls in flight, by the id each caller sent: `userMcp_cancelCall` stops one. */
   private readonly _mcpCalls = new Map<string, McpCallInFlight>();
@@ -373,7 +379,7 @@ export class UserMcpServers {
       const expiresAt = login.expires_at;
 
       if (expiresAt === undefined || expiresAt - Date.now() > RENEW_BEFORE_MS) return login.access_token;
-      const renewed = yield* Effect.result(this.renewals(server));
+      const renewed = yield* Effect.result(this.renewals({ server, expiring: login.access_token }));
 
       if (Result.isSuccess(renewed)) return renewed.success;
 
@@ -383,11 +389,13 @@ export class UserMcpServers {
     });
   }
 
-  private renewal(server: McpServer): Effect.Effect<string, KinuError> {
+  private renewal(server: McpServer, expiring: string | undefined): Effect.Effect<string, KinuError> {
     return Effect.gen({ self: this }, function* () {
       const provider = this.oauthProvider(server);
       const doing = `reading the sign-in of MCP server ${server.name}`;
       const login = keptLogin(yield* attempt({ doing, otherwise: 'io' }, async () => provider.tokens()));
+
+      if (login !== null && expiring !== undefined && login.access_token !== expiring) return login.access_token;
       const refreshToken = login?.refresh_token;
 
       if (login === null || refreshToken === undefined) return yield* this.loginEnded(server, 'its sign-in has no refresh token to renew it by');
@@ -419,7 +427,7 @@ export class UserMcpServers {
     return Effect.gen({ self: this }, function* () {
       if (yield* this.headersHoldCredential(server)) return undefined;
       const login = keptLogin(yield* attempt({ doing: `reading the sign-in of MCP server ${server.name}`, otherwise: 'io' }, async () => this.oauthProvider(server).tokens()));
-      const side: McpLoginSide = { token: () => this.bearerToken(server), renew: () => Effect.asVoid(this.renewals(server)) };
+      const side: McpLoginSide = { token: () => this.bearerToken(server), renew: (presented) => Effect.asVoid(this.renewals({ server, expiring: presented })) };
 
       return login?.refresh_token === undefined ? new McpBearer(side) : new RenewingMcpBearer(side);
     });
