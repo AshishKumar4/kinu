@@ -10,22 +10,9 @@ import {
   ANTHROPIC_CRED_KEY, OPENAI_CRED_KEY, OPENROUTER_CRED_KEY,
   JsonObjectSchema, JsonValueSchema, parseJsonObject,
   type JsonObject, type JsonValue,
-  type ModelCallDeps, type AuthResolution, type CacheRetention,
+  type CacheRetention,
 } from '../src/index';
-import { createMockFetch, type MockFetchHandle } from '@kinu.run/test-utils';
-
-function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch): ModelCallDeps {
-  const store = new Map(Object.entries(creds));
-
-  return {
-    env: {},
-    sessionAffinity: 'kinu-test',
-    workspaceAffinity: 'kinu-test',
-    fetch: fetchFn,
-    async getAuth(key) { return store.get(key) ?? null; },
-    async hasCredential(key) { return store.has(key); },
-  };
-}
+import { createMockFetch, type MockFetchHandle, modelCallDeps } from '@kinu.run/test-utils';
 
 /** Unmarked, as both backends build it: the request's cache plan places the tool breakpoint. */
 function chatTools(): ToolSet {
@@ -144,7 +131,7 @@ describe('Anthropic cache breakpoints on the wire', () => {
       }),
     }]);
 
-    const deps = makeDeps({
+    const deps = modelCallDeps({
       [ANTHROPIC_CRED_KEY]: { headers: { 'x-api-key': 'sk-ant-test', 'anthropic-version': '2023-06-01' } },
     }, mock.fetch);
 
@@ -270,7 +257,7 @@ describe('one TTL per request, in the order Anthropic reads it', () => {
   ] as const)('the %s route at %s retention marks tools, system and tail with one TTL', async (route, retention) => {
     const mock = createMockFetch([{ match: 'api.anthropic.com', respond: () => ({ status: 200, headers: { 'content-type': 'text/event-stream' }, body: ANTHROPIC_TEXT_SSE }) }]);
     const credKey = route === 'claude' ? CLAUDE_CRED_KEY : ANTHROPIC_CRED_KEY;
-    const deps = makeDeps({ [credKey]: { headers: route === 'claude' ? { Authorization: 'Bearer sk-ant-oat01-test' } : { 'x-api-key': 'sk-ant-test' }, credentialKey: credKey } }, mock.fetch);
+    const deps = modelCallDeps({ [credKey]: { headers: route === 'claude' ? { Authorization: 'Bearer sk-ant-oat01-test' } : { 'x-api-key': 'sk-ant-test' }, credentialKey: credKey } }, mock.fetch);
     const provider = route === 'claude' ? createClaudeProvider() : createAnthropicProvider();
 
     await drain({
@@ -291,7 +278,7 @@ describe('one TTL per request, in the order Anthropic reads it', () => {
       { match: 'api.anthropic.com', respond: () => ({ status: 200, headers: { 'content-type': 'text/event-stream' }, body: ANTHROPIC_TEXT_SSE }) },
     ]);
 
-    const deps = makeDeps({
+    const deps = modelCallDeps({
       [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-openai' } },
       [ANTHROPIC_CRED_KEY]: { headers: { 'x-api-key': 'sk-ant-test' } },
     }, mock.fetch);
@@ -326,7 +313,7 @@ describe('OpenAI caches by prefix, with no key on the wire', () => {
       { match: 'api.openai.com', respond: { status: 400, body: {} } },
     ]);
 
-    const deps = makeDeps({ [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test' } } }, mock.fetch);
+    const deps = modelCallDeps({ [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test' } } }, mock.fetch);
     const model = createOpenAIProvider().createModel('gpt-5.5', deps);
     await expect(drain({
       modelSpec: 'test/model',
@@ -344,7 +331,7 @@ describe('OpenAI caches by prefix, with no key on the wire', () => {
       { match: 'api.openai.com', respond: { status: 400, body: {} } },
     ]);
 
-    const deps = makeDeps({ [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test' } } }, mock.fetch);
+    const deps = modelCallDeps({ [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test' } } }, mock.fetch);
     const model = createOpenAIProvider().createModel('gpt-5.5', deps);
     await expect(drain({
       modelSpec: 'test/model',
@@ -359,7 +346,7 @@ describe('OpenAI caches by prefix, with no key on the wire', () => {
       { match: 'api.openai.com', respond: { status: 400, body: {} } },
     ]);
 
-    const deps = makeDeps({ [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test' } } }, mock.fetch);
+    const deps = modelCallDeps({ [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test' } } }, mock.fetch);
     const model = createOpenAIProvider().createModel('gpt-5.5', deps);
     await expect(drain({
       modelSpec: 'test/model',
@@ -378,7 +365,7 @@ describe('OpenRouter cache addressing on the wire', () => {
       { match: 'openrouter.ai', respond: { status: 400, body: {} } },
     ]);
 
-    const deps = makeDeps({ [OPENROUTER_CRED_KEY]: { headers: { Authorization: 'Bearer sk-or' } } }, mock.fetch);
+    const deps = modelCallDeps({ [OPENROUTER_CRED_KEY]: { headers: { Authorization: 'Bearer sk-or' } } }, mock.fetch);
     const model = createOpenRouterProvider().createModel(modelId, deps);
     await expect(drain({
       modelSpec: 'test/model',
@@ -417,7 +404,7 @@ describe('openai-compat + no-op providers', () => {
       { match: 'groq.example', respond: { status: 400, body: {} } },
     ]);
 
-    const deps = makeDeps({
+    const deps = modelCallDeps({
       'openai-compat.default': { headers: { Authorization: 'Bearer k' }, baseURL: 'https://groq.example/v1' },
     }, mock.fetch);
 
@@ -437,7 +424,7 @@ describe('openai-compat + no-op providers', () => {
       { match: 'groq.example', respond: { status: 400, body: {} } },
     ]);
 
-    const deps = makeDeps({
+    const deps = modelCallDeps({
       'openai-compat.default': { headers: { Authorization: 'Bearer k' }, baseURL: 'https://groq.example/v1' },
     }, mock.fetch);
 

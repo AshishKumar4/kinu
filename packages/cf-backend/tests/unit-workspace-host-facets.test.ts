@@ -10,12 +10,11 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import * as v from 'valibot';
-import { git, gitEnv, initRepo, scratchDir, spawnTest } from '@kinu.run/test-utils';
+import { git, gitEnv, initRepo, scratchDir, spawnTest, holdFetch } from '@kinu.run/test-utils';
 import { createHostedWorkspace, type HostedWorkspace, type HostedWorkspaceEnv } from '../src/workspace-host';
 import {
   actorObjectState, durableObjectStorage, durableSqlStorage, durableStorage, HELD_NIMBUS_TASKS, OBJECT_NAMESPACE, SCRIPT_EXPORTS, serveObject,
 } from './helpers/programmatic-host';
-import { asFetchFunction } from '@kinu.run/core';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SupervisorRPC } from '@nimbus-sh/worker/workspace-host';
 import type { SupervisorAnswer } from '@nimbus-sh/core/runtime/vfs-supervisor.js';
@@ -182,17 +181,17 @@ async function uploadPack(request: Request): Promise<Response> {
   });
 }
 
-const originalFetch = globalThis.fetch;
+const network = holdFetch();
 
 beforeEach(() => {
-  globalThis.fetch = asFetchFunction(async (input, init) => {
+  network.stub(async (input, init) => {
     const request = new Request(input, init);
 
-    return new URL(request.url).hostname === 'example.invalid' ? uploadPack(request) : originalFetch(request);
+    return new URL(request.url).hostname === 'example.invalid' ? uploadPack(request) : network.found(request);
   });
 });
 
-afterEach(() => { globalThis.fetch = originalFetch; });
+afterEach(network.restore);
 
 function refusingBindings(): ActorBindings {
   const spawned = (): never => { throw new Error('no facet may spawn'); };

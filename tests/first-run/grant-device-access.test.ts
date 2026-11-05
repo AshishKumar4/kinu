@@ -12,8 +12,8 @@
 // device call names its machine when several are live.
 import { describe, expect, test, afterEach } from 'bun:test';
 import * as v from 'valibot';
-import { asFetchFunction } from '@kinu.run/core';
 import { grantDeviceAccess, type DeviceAccount } from './device-session';
+import { holdFetch } from '@kinu.run/test-utils';
 
 const ACCOUNT: DeviceAccount = {
   origin: 'https://kinu.example.com',
@@ -43,8 +43,8 @@ interface SeenCall {
 }
 
 describe('grantDeviceAccess names its machine', () => {
-  const realFetch = globalThis.fetch;
-  afterEach(() => { globalThis.fetch = realFetch; });
+  const network = holdFetch();
+  afterEach(network.restore);
 
   test('the raise carries the device name, retries fleet warm-up, resolves the card, and re-issues the call', async () => {
     const seen: SeenCall[] = [];
@@ -54,7 +54,7 @@ describe('grantDeviceAccess names its machine', () => {
     const answer = (value: HubAnswer): Response =>
       new Response(JSON.stringify(value), { status: 200 });
 
-    globalThis.fetch = asFetchFunction(async (input, init) => {
+    network.stub(async (input, init) => {
       const body = v.parse(RpcCallSchema, JSON.parse(v.parse(v.string(), init?.body)));
       seen.push({ method: body.method, args: body.args });
 

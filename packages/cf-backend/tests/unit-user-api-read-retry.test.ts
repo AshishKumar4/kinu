@@ -4,20 +4,20 @@
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { asFetchFunction } from '@kinu.run/core';
 import { listDrive, makeFolder } from '../src/lib/drive-api';
 import { getSharedLibrary } from '../src/lib/shared-api';
 import { listAvailableModels, touchWorkspace } from '../src/lib/user-api';
+import { holdFetch } from '@kinu.run/test-utils';
 
-const realFetch = globalThis.fetch;
+const network = holdFetch();
 
-afterEach(() => { globalThis.fetch = realFetch; });
+afterEach(network.restore);
 
 /** The connection drops under the first `drops` requests; later ones answer `answer`. */
 function droppingConnection(drops: number, answer: () => Response): string[] {
   const asked: string[] = [];
 
-  globalThis.fetch = asFetchFunction(async (input, init) => {
+  network.stub(async (input, init) => {
     asked.push(`${init?.method ?? 'GET'} ${v.parse(v.string(), input)}`);
 
     if (asked.length <= drops) throw new TypeError('Failed to fetch');

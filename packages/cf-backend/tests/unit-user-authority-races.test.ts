@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import {
   CODEX_CRED_KEY,
   CODEX_TOKEN_URL,
-  asFetchFunction,
   credentialToHeaders,
 } from '@kinu.run/core';
 import { renderThrownChain, setDiagnosticsSink } from '@kinu.run/core/obs';
@@ -26,7 +25,7 @@ import {
 import { sha256Hex } from '@kinu.run/core';
 import { requestUrl } from '@kinu.run/core';
 import { socketConnection } from './helpers/bindings';
-import { createRecordingLogger } from '@kinu.run/test-utils';
+import { createRecordingLogger, holdFetch } from '@kinu.run/test-utils';
 
 /** The headers a call sent with the login stored under `key` holding `accessToken`, which the upstream then refused. */
 function refusedWith(key: string, accessToken: string): Record<string, string> {
@@ -37,11 +36,11 @@ const USER_ID = '0123456789abcdef0123456789abcdef';
 
 const AUTHORIZATION = 'c'.repeat(64);
 
-const realFetch = globalThis.fetch;
+const network = holdFetch();
 
 beforeEach(() => { setDiagnosticsSink(createRecordingLogger()); });
 
-afterEach(() => { globalThis.fetch = realFetch; });
+afterEach(network.restore);
 
 /** One OAuth token-endpoint body, as the provider returns it. */
 interface CodexTokens {
@@ -178,7 +177,7 @@ describe('a credential the owner moved while a provider was answering', () => {
 
   /** A token endpoint that runs `during` before it answers. */
   function tokenEndpoint(during: () => Promise<void>, body: CodexTokens): void {
-    globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL) => {
+    network.stub(async (input: RequestInfo | URL) => {
       if (requestUrl(input) !== CODEX_TOKEN_URL) throw new Error(`unexpected fetch: ${requestUrl(input)}`);
       await during();
 
@@ -228,7 +227,7 @@ describe('a credential the owner moved while a provider was answering', () => {
     const harness = createTestUserDO({ durableObjectId: USER_ID });
     const owner = await testOwner();
     await connectedCodex(harness);
-    globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL) => {
+    network.stub(async (input: RequestInfo | URL) => {
       if (requestUrl(input) !== CODEX_TOKEN_URL) throw new Error(`unexpected fetch: ${requestUrl(input)}`);
       await harness.userDO.setCredential(owner, CODEX_CRED_KEY, {
         kind: 'oauth', accessToken: 'access-from-owner', refreshToken: 'refresh-from-owner',

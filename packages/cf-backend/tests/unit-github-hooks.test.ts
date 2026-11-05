@@ -2,13 +2,14 @@
 // of the workspace that asks, kept by name, and deleted while the token still holds when the GitHub connection goes.
 // GitHub is faked at api.github.com; the account is real.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { asFetchFunction, webhookRoutePath, type JsonObject, type JsonValue, type UserCaller } from '@kinu.run/core';
+import { webhookRoutePath, type JsonObject, type JsonValue, type UserCaller } from '@kinu.run/core';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
 import { GITHUB_MCP_URL, servedMcp } from './helpers/mcp-server';
+import { holdFetch } from '@kinu.run/test-utils';
 
-const realFetch = globalThis.fetch;
+const network = holdFetch();
 
-afterEach(() => { globalThis.fetch = realFetch; });
+afterEach(network.restore);
 
 const ORIGIN = 'https://kinu.example.com';
 
@@ -18,7 +19,7 @@ const SECRET = 'a'.repeat(64);
 function github(...answers: Response[]): Array<{ method: string; url: string; authorization: string | null; body: JsonValue }> {
   const asked: Array<{ method: string; url: string; authorization: string | null; body: JsonValue }> = [];
 
-  globalThis.fetch = asFetchFunction(async (input, init) => {
+  network.stub(async (input, init) => {
     const request = new Request(input, init);
 
     // Another host is no GitHub's: the connection's MCP client may still be closing its own stream to its server.
@@ -43,7 +44,7 @@ function heldGitHub(method: string, answer: Response, otherwise = () => new Resp
   const reached = new Promise<void>((resolve) => { reach = resolve; });
   let holding = true;
 
-  globalThis.fetch = asFetchFunction(async (input, init) => {
+  network.stub(async (input, init) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
 

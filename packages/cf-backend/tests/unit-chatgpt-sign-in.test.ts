@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import * as v from 'valibot';
-import { accountCredentialKey, asFetchFunction, CHATGPT_CRED_KEY, CHATGPT_PASTE_REDIRECT, type JsonValue, type UserCaller, DEVICE_METHOD } from '@kinu.run/core';
+import { accountCredentialKey, CHATGPT_CRED_KEY, CHATGPT_PASTE_REDIRECT, type JsonValue, type UserCaller, DEVICE_METHOD } from '@kinu.run/core';
 import { serveFamily } from './helpers/api';
 import { createTestUserDO, provisionTestWorkspace, testOwner, TEST_CREDENTIAL_ENCRYPTION_KEY, type TestUserDO } from './helpers/user-do';
 import { bootstrappedProfile, userAccount, workspaceObject } from './helpers/bindings';
@@ -11,6 +11,7 @@ import { acrossRpc } from './helpers/jsrpc-stub';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
 import type { AuthIdentity } from '../src/auth/session';
 import { registerTestDevice } from './helpers/device-key';
+import { holdFetch } from '@kinu.run/test-utils';
 
 const IDENTITY: AuthIdentity = { userId: '0123456789abcdef0123456789abcdef', email: 'owner@example.com', sub: 'sub', provider: 'test', authTime: Date.now() };
 
@@ -22,9 +23,9 @@ const PLAN_SCOPES = 'chatgpt.tokens.use.direct email offline_access openid profi
 
 const ISSUED = 'oaiapp_issued';
 
-const realFetch = globalThis.fetch;
+const network = holdFetch();
 
-afterEach(() => { globalThis.fetch = realFetch; });
+afterEach(network.restore);
 
 const signer = await crypto.subtle.generateKey(
   { name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' }, true, ['sign', 'verify'],
@@ -48,7 +49,7 @@ async function idToken(claims: Record<string, JsonValue>): Promise<string> {
 function openaiAuth(answer: (form: URLSearchParams) => Promise<Response> | Response): URLSearchParams[] {
   const forms: URLSearchParams[] = [];
 
-  globalThis.fetch = asFetchFunction(async (input, init) => {
+  network.stub(async (input, init) => {
     const request = new Request(input, init);
 
     if (request.url === JWKS_URL) return Response.json({ keys: [PUBLIC_JWK] });

@@ -1,5 +1,4 @@
 import { describe, test, expect } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import {
   initEventsHubTables, EventLog, ReplyChannelStore,
   deriveEventTrust, derivePriority, deriveFields, dedupeKeyFor, renderForLLM,
@@ -9,24 +8,12 @@ import {
 } from '../src/events/hub/index';
 import {
   classifyProgrammaticTurn, EmailInbox, EMAIL_INBOUND_RATE_PER_MIN, handedMailSignal, initWebhookRateLimitTables, mailThreadText,
-  spillEventContent, type MailArrival, type SqlExec,
+  spillEventContent, type MailArrival,
 } from '../src/index';
 import { createMemoryVfs, present } from '@kinu.run/test-utils';
-import { makeSqlExec } from './helpers';
-import { createTestActorsOver } from '@kinu.run/test-utils';
-import type { ActorHandle } from '../src/identity/actor-handle';
+import { memoryHub } from './helpers';
 
 /** `EventLog` is actor-scoped, so the fixture binds the one actor through the production directory. */
-interface Hub {
-  readonly sql: SqlExec;
-  readonly actor: ActorHandle;
-}
-
-function makeSql(): Hub {
-  const db = new Database(':memory:');
-
-  return { sql: makeSqlExec(db), actor: createTestActorsOver(db).main };
-}
 
 function emailPayload(overrides: Partial<EmailPayload> = {}): EmailPayload {
   return {
@@ -77,7 +64,7 @@ describe('email trust + priority derivation', () => {
 
 describe('email dedupe', () => {
   test('Message-ID is the idempotency key', () => {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
     const r1 = log.publish({ descriptor: emailDescriptor('owner'), now: 1000 });
@@ -123,7 +110,7 @@ describe('email dedupe', () => {
 
 describe('email rendering for the LLM', () => {
   test('renderForLLM shows sender, subject, body and attachment count', () => {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
 
@@ -143,7 +130,7 @@ describe('email rendering for the LLM', () => {
   });
 
   test('input carries no body: it names the sender and how to read it, as untrusted and not an instruction', () => {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
 
@@ -161,7 +148,7 @@ describe('email rendering for the LLM', () => {
   });
 
   test('a turn mail wakes plans, the owner\'s as well: any effect waits for the owner in the app', () => {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
 
@@ -170,7 +157,7 @@ describe('email rendering for the LLM', () => {
   });
 
   test('an email event drains into the wake batch', () => {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
     log.publish({ descriptor: emailDescriptor('owner'), now: 1000 });
@@ -183,7 +170,7 @@ describe('email rendering for the LLM', () => {
 
 describe('email_thread reply channels', () => {
   test('open → bindEvent → findOpenByEvent → reply dispatches through the email dispatcher', async () => {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     const sent: unknown[] = [];
 
@@ -217,7 +204,7 @@ describe('email_thread reply channels', () => {
   });
 
   test('an expired email_thread channel refuses dispatch', async () => {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     const store = new ReplyChannelStore(sql, actor, {});
 
@@ -235,7 +222,7 @@ describe('the agent inbox', () => {
   const NOW = 1_700_000_000_000;
 
   function inbox(ownerEmail: string | null = 'owner@example.com') {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     initWebhookRateLimitTables(sql);
     const log = new EventLog(sql, actor);

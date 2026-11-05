@@ -6,10 +6,10 @@ import { AccountUsageSchema, type AccessTokenScope, type AccountSpend, type User
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
 import { cliRoutes, type CliRoutesEnv } from '../src/cli/routes';
 import type { AuthIdentity } from '../src/auth/session';
-import { asFetchFunction } from '@kinu.run/core';
 import { bootstrappedProfile, cliAccount, unreachableAssets, unreachableKv, unreachableNamespace, userAccount, workerContext, workspaceObject } from './helpers/bindings';
 import { serveFamily } from './helpers/api';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
+import { holdFetch } from '@kinu.run/test-utils';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 
@@ -73,10 +73,10 @@ describe('the owner\'s usage per account, across workspaces', () => {
     });
 
     const keysRead: string[] = [];
-    const realFetch = globalThis.fetch;
+    const network = holdFetch();
 
     // The documented `GET /api/v1/key` answer; the `team` key is refused.
-    globalThis.fetch = asFetchFunction(async (input, init) => {
+    network.stub(async (input, init) => {
       const authorization = new Headers(init?.headers).get('authorization') ?? '';
       keysRead.push(`${input instanceof Request ? input.url : input.toString()} ${authorization}`);
 
@@ -111,7 +111,7 @@ describe('the owner\'s usage per account, across workspaces', () => {
         'https://openrouter.ai/api/v1/key Bearer openrouter.bearer@team',
       ]);
     } finally {
-      globalThis.fetch = realFetch;
+      network.restore();
     }
   });
 

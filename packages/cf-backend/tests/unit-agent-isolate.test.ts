@@ -1,7 +1,7 @@
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { afterEach, expect, setSystemTime, test } from 'bun:test';
-import { accountCredentialKey, asFetchFunction, requestUrl } from '@kinu.run/core';
-import { OPENCODE_GO_CATALOG } from '@kinu.run/test-utils';
+import { accountCredentialKey, requestUrl } from '@kinu.run/core';
+import { OPENCODE_GO_CATALOG, holdFetch } from '@kinu.run/test-utils';
 import {
   agentSql, catalogTurn, driveUntil, gatewayWorkspace, hostedMainActor, hostedSubagentHarness, makeEnv, orchestratorHarness, runDelegatedTask,
   wakeForDelegatedTask, workspaceMainActor,
@@ -105,9 +105,9 @@ test("an agent's isolate adopted after its reset is built on the program its tur
   expect([...offered(before)].sort()).toEqual([...offered(0)].sort());
 });
 
-const originalFetch = globalThis.fetch;
+const network = holdFetch();
 
-afterEach(() => { globalThis.fetch = originalFetch; });
+afterEach(network.restore);
 
 /**
  * A workspace whose owner holds two Anthropic keys, `sk-main` and the `work` account's `sk-work`, with the work account
@@ -126,7 +126,7 @@ async function workAccountWorkspace(name: string) {
   const workspace = orchestratorHarness(undefined, world, makeEnv(undefined, undefined, world));
   const used: string[] = [];
 
-  globalThis.fetch = asFetchFunction(async (input, init) => {
+  network.stub(async (input, init) => {
     const headers = new Headers(init?.headers);
 
     if (requestUrl(input).includes('anthropic.com')) used.push(headers.get('authorization') ?? headers.get('x-api-key') ?? '');
@@ -179,7 +179,7 @@ test("a hired agent's model call to OpenCode Go names the agent's own conversati
   const workspace = orchestratorHarness(undefined, world, makeEnv(undefined, undefined, world));
   const sessions: (string | null)[] = [];
 
-  globalThis.fetch = asFetchFunction(async (input, init) => {
+  network.stub(async (input, init) => {
     if (requestUrl(input).includes('models.dev')) return Response.json(OPENCODE_GO_CATALOG);
 
     // The hire's own turn: its calls to OpenCode Go carry its brief and offer its tools. A title's offers none; the turn its

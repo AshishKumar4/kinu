@@ -6,10 +6,10 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import type { CliRoutesEnv } from '../src/cli/routes';
 import { providerProxyRoutes } from '../src/user/provider-proxy';
 import { cliAccount, unreachableAssets, unreachableKv, unreachableNamespace } from './helpers/bindings';
-import { asFetchFunction } from '@kinu.run/core';
 import type { AccessTokenScope, UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
 import { requestUrl } from '@kinu.run/core';
+import { holdFetch } from '@kinu.run/test-utils';
 
 
 const providerProxy = serveFamily(providerProxyRoutes);
@@ -45,9 +45,9 @@ const CredentialListSchema = v.object({
   })),
 });
 
-const originalFetch = globalThis.fetch;
+const network = holdFetch();
 
-afterEach(() => { globalThis.fetch = originalFetch; });
+afterEach(network.restore);
 
 interface StoredCredential { key: string; baseURL?: string; headers?: Record<string, string> }
 
@@ -145,7 +145,7 @@ interface Upstream { url: string; method: string; headers: Headers; body: string
 
 function captureUpstream(respond: () => Response): Upstream[] {
   const captured: Upstream[] = [];
-  globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
+  network.stub(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = requestUrl(input);
 
     if (url.startsWith('https://models.dev/')) return Response.json(CATALOG);
