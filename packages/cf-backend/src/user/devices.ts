@@ -40,6 +40,12 @@ const DEVICE_JOIN_SPENT = 'This connect command has expired or was already used.
 
 const DEVICE_NAME_MAX_LENGTH = 80;
 
+/** Machines one account links at a time: room for every machine a person or a small team keeps, and a bound on what
+ *  a stolen session can register. A machine connected again replaces its own row and counts once. */
+const DEVICE_LIMIT = 50;
+
+const DEVICE_LIMIT_REACHED = `This account has ${String(DEVICE_LIMIT)} linked machines. Remove one in Devices, then connect this one.`;
+
 const DEVICE_REMOVED = 'This machine was removed from your account, so it cannot be connected again under its old name. Run `kinu connect` on it.';
 
 function deviceCallFrame(deviceId: string, workspace: string | null, frameSandbox: JsonObject | null, opts: Parameters<UserDevices['deviceRpc']>[3]): NonNullable<Parameters<DeviceTunnel['rpc']>[2]> {
@@ -544,8 +550,11 @@ export class UserDevices {
   private registered(caller: UserCaller, claimed: DeviceJoin | null, enrolment: DeviceEnrolment): Effect.Effect<{ deviceId: string }, KinuError> {
     return Effect.gen({ self: this }, function* () {
       const replaced = yield* Effect.promise(() => this.replacedRegistration(enrolment));
-      const deviceId = claimed?.device_id ?? `dev-${nanoid(10)}`;
       const now = Date.now();
+      const [linked] = this.host.sqlx<{ n: number }>(`SELECT COUNT(*) AS n FROM user_devices WHERE revoked_at IS NULL`);
+
+      if (replaced === null && (linked?.n ?? 0) >= DEVICE_LIMIT) return yield* new KinuError('bad_input', DEVICE_LIMIT_REACHED);
+      const deviceId = claimed?.device_id ?? `dev-${nanoid(10)}`;
       const trimmedLabel = enrolment.label?.trim().slice(0, DEVICE_NAME_MAX_LENGTH) ?? '';
       this.host.sqlx(
         `INSERT INTO user_devices (id, public_key, label, created_at, expires_at) VALUES (?, ?, ?, ?, ?)`,

@@ -64,6 +64,30 @@ const { DAEMON_PREDECESSOR_ENV: PREDECESSOR_ENV } = require('../../core/src/cli/
 /** Where the CLI archive carries the daemon files. */
 const ARCHIVE_DAEMON_DIR = path.join('kinu', 'pc-agent');
 
+/** The most an update archive may be: the CLI's is 9 MB (2026-11-05); a download past this is not one. */
+const ARCHIVE_MAX_BYTES = 128 * 1024 * 1024;
+
+/** A release's `major.minor.patch`, as its version starts; null for a version that names none. */
+function releaseNumbers(version) {
+  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(String(version ?? '').trim());
+
+  return match === null ? null : match.slice(1).map(Number);
+}
+
+/**
+ * Why an update to `next` from `current` is refused, or null: a release older than the one installed, by its
+ * `major.minor.patch`, is a rollback to a signed build that may carry a fixed hole (SECURITY-devices C1). Builds of
+ * one release are not ordered by their versions, so among them the signature is the only check.
+ */
+function rollbackRefusal(current, next) {
+  const [have, want] = [releaseNumbers(current), releaseNumbers(next)];
+
+  if (have === null || want === null) return null;
+  const order = want.map((part, at) => part - have[at]).find((difference) => difference !== 0) ?? 0;
+
+  return order < 0 ? `${next} is older than the installed ${current}` : null;
+}
+
 const UPDATE_FRAME = 'UPDATE';
 
 function readVersionStamp(dir) {
@@ -146,12 +170,25 @@ function releaseSignatureHolds(frame, publicKeyHex = releasePublicKey(process.en
   return verifyRelease(frame, publicKeyHex);
 }
 
+/** The body at `url`, read until `ARCHIVE_MAX_BYTES` and no further, redirects included: a hub or a host it sends the
+ *  download to cannot fill this machine's memory or disk before the checksum is read (SECURITY-devices L2). */
 async function fetchBytes(fetchFn, url) {
   const res = await fetchFn(url, { cache: 'no-store' });
 
   if (!res.ok) throw new Error(`download ${url}: HTTP ${res.status}`);
 
-  return new Uint8Array(await res.arrayBuffer());
+  if (Number(res.headers.get('content-length') ?? 0) > ARCHIVE_MAX_BYTES) throw new Error(`download ${url}: over ${ARCHIVE_MAX_BYTES} bytes`);
+  const chunks = [];
+  let total = 0;
+
+  for await (const chunk of res.body ?? []) {
+    total += chunk.byteLength;
+
+    if (total > ARCHIVE_MAX_BYTES) throw new Error(`download ${url}: over ${ARCHIVE_MAX_BYTES} bytes`);
+    chunks.push(chunk);
+  }
+
+  return new Uint8Array(Buffer.concat(chunks, total));
 }
 
 /**
@@ -275,9 +312,37 @@ function rollBack(layout, landed) {
   syncDirectory(layout.deviceHome);
 }
 
+/** Why the archive's members are not plain files and directories under `kinu/`, or null: a link, a device, an absolute
+ *  path or a `..` would write where landing never looks (SECURITY-devices L2), whatever signed the bytes. */
+async function memberRefusal(archive) {
+  const [names, long] = await Promise.all([
+    runToExit('tar', ['-tzf', archive], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }),
+    runToExit('tar', ['-tvzf', archive], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }),
+  ]);
+
+  if (names.error !== null || long.error !== null) return `listing the archive failed: ${String(names.error === null ? long.stderr : names.stderr).trim()}`;
+  const members = String(names.stdout).split('\n').filter((line) => line !== '');
+  const kinds = String(long.stdout).split('\n').filter((line) => line !== '').map((line) => line[0]);
+
+  if (members.length !== kinds.length) return 'the archive lists its members two ways';
+
+  for (const [at, member] of members.entries()) {
+    if (kinds[at] !== '-' && kinds[at] !== 'd') return `the archive carries ${member}, which is not a file or a directory`;
+
+    if (path.isAbsolute(member) || member.split('/').includes('..') || !(member === 'kinu/' || member.startsWith('kinu/'))) {
+      return `the archive carries ${member}, outside kinu/`;
+    }
+  }
+
+  return null;
+}
+
 async function extractArchive(bytes, into) {
   const archive = path.join(into, 'cli.tar.gz');
   fs.writeFileSync(archive, bytes);
+  const refused = await memberRefusal(archive);
+
+  if (refused !== null) throw new Error(refused);
   const { error, stderr } = await runToExit('tar', ['-xzf', archive, '-C', into], { encoding: 'utf8' });
 
   if (error !== null && !Number.isInteger(error.code)) throw new Error('tar could not run', { cause: error });
@@ -370,7 +435,12 @@ function createUpdater(opts) {
     // The files on disk may already be this build: a successor that died
     // before connecting, and the next UPDATE for the same version. Nothing is
     // downloaded again, and `.prev` — the last build that ran — is kept.
-    if (readVersionStamp(layout.deviceHome) !== frame.version) {
+    const installed = readVersionStamp(layout.deviceHome);
+    const rollback = rollbackRefusal(installed, frame.version);
+
+    if (rollback !== null) throw new Error(`refused the update: ${rollback}`);
+
+    if (installed !== frame.version) {
       const work = fs.mkdtempSync(path.join(layout.deviceHome, 'pc-agent.update-'));
 
       try {

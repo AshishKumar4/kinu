@@ -366,3 +366,29 @@ describe('a machine linked on an earlier protocol', () => {
     expect(await harness.userDO.listDevices(await testOwner())).toMatchObject([{ id: 'dev-earlier', connected: true }]);
   });
 });
+
+// Audit 0916 M4: registration was unbounded. (A removed machine's row already goes at once unless it carries an incident
+// the owner must see, and acknowledging that removes it.)
+describe('an account links a bounded number of machines', () => {
+  test('the fifty-first is refused until one is removed, and a machine connected again replaces its own', async () => {
+    const harness = createTestUserDO({ durableObjectId: ACCOUNT });
+    const owner = await testOwner();
+
+    try {
+      const linked = [];
+
+      for (let n = 0; n < 50; n += 1) linked.push(await registerTestDevice(harness.userDO, `machine ${String(n)}`, owner));
+      await expect(registerTestDevice(harness.userDO, 'one more', owner)).rejects.toThrow('50 linked machines');
+      const [first] = linked;
+
+      await harness.userDO.revokeDevice(owner, present(first, 'a linked machine').deviceId);
+      const admitted = await registerTestDevice(harness.userDO, 'one more', owner);
+
+      expect({ admitted: admitted.deviceId.startsWith('dev-'), linked: harness.sql.exec(`SELECT COUNT(*) AS n FROM user_devices WHERE revoked_at IS NULL`).toArray() })
+        .toEqual({ admitted: true, linked: [{ n: 50 }] });
+    } finally {
+      await harness.joinFibers();
+      harness.close();
+    }
+  });
+});
