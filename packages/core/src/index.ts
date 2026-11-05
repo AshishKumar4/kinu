@@ -1184,7 +1184,7 @@ export {
 export { readScreenData, screenDataFrames } from './execution/device-screen-data';
 
 export {
-  nimbusSessionShell, type NimbusSandboxHandle, type NimbusSandboxFiles, type NimbusStartResult,
+  nimbusSessionShell, nimbusShellSession, type NimbusSandboxHandle, type NimbusSandboxFiles, type NimbusStartResult,
   type NimbusExecResult, type NimbusPortInfo, nimbusSessionFiles,
 } from './execution/nimbus';
 
