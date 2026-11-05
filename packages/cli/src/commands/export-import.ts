@@ -13,7 +13,8 @@ import {
   type ArchiveCursor,
   type ArchivePage,
 } from '@kinu.run/core';
-import { tolerate } from '@kinu.run/core/obs';
+import { settle, tolerate } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
 import { sqlStorageOver } from '@kinu.run/core/identity';
 import {
   moveIntoFolder, publishStoreFiles, requireSchemaGenesis, stageLocalArchive, type StagedLocalArchive,
@@ -73,7 +74,7 @@ export async function exportCommand(name: string, opts: { output?: string }): Pr
   );
 }
 
-export async function importCommand(file: string, opts: { name?: string }): Promise<void> {
+export function importCommand(file: string, opts: { name?: string }): Promise<void> {
   if (!existsSync(file)) {
     printError(`File not found: ${file}`);
     process.exit(1);
@@ -107,10 +108,11 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
 
   discard();
   mkdirSync(staging.space, { recursive: true });
-  let restored: RestoredArchiveCounts;
 
-  try {
+  // A damaged archive or a refused folder fails the restore, which then leaves nothing behind.
+  const restoring = Effect.promise(async (): Promise<RestoredArchiveCounts> => {
     const db = new Database(stagedDb, { create: true });
+    let restored: RestoredArchiveCounts;
 
     try {
       // Published WAL, as `kinu create` publishes it: a database is switched only while it is private.
@@ -135,19 +137,22 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
 
     moveIntoFolder(staging.folder, cwd);
     renameSync(staging.space, agentDir(name));
-  } catch (err) {
-    discard();
-    throw err;
-  }
 
-  console.log(
-    `\n${OK('✓')} Imported workspace ${ACCENT(name)} from ${DIM(file)}`
-    + ` ${DIM(`(${restored.tables} tables, ${restored.rows} records)`)}`,
-  );
+    return restored;
+  });
 
-  const workspaceId = defaultVirtualWorkspaceId(cwd);
-  await placeLocalWorkspace({ name, cwd, workspaceId });
-  console.log(`  ${DIM('workspace:')} ${workspaceId} ${DIM('in')} ${cwd}\n`);
+  return settle(Effect.gen(function* () {
+    const restored = yield* Effect.onError(restoring, () => Effect.sync(discard));
+
+    console.log(
+      `\n${OK('✓')} Imported workspace ${ACCENT(name)} from ${DIM(file)}`
+      + ` ${DIM(`(${restored.tables} tables, ${restored.rows} records)`)}`,
+    );
+
+    const workspaceId = defaultVirtualWorkspaceId(cwd);
+    yield* Effect.promise(() => placeLocalWorkspace({ name, cwd, workspaceId }));
+    console.log(`  ${DIM('workspace:')} ${workspaceId} ${DIM('in')} ${cwd}\n`);
+  }));
 }
 
 async function* cloudArchivePages(name: string): AsyncGenerator<ArchivePage | 'snapshot-ended'> {

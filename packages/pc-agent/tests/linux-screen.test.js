@@ -82,7 +82,8 @@ const realHelpers = [];
 
 afterEach(() => {
   for (const pid of realHelpers.splice(0)) {
-    if (fs.existsSync(`/proc/${String(pid)}`)) process.kill(pid, 'SIGKILL');
+    // One that exits between the look and the kill is already what this wanted.
+    try { process.kill(pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
   }
 });
 

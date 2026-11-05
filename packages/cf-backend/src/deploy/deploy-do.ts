@@ -37,7 +37,7 @@
  * only through a sign-in that proved that user: the sign-in's own object,
  * named by its cookie's digest, holds the grant and the user for an hour.
  */
-import { Effect } from 'effect';
+import { Effect, Result } from 'effect';
 import { DurableObject } from 'cloudflare:workers';
 import {
   ACCESS_TOKEN_KEY, CONNECTOR_SECRETS, DEPLOY_CLIENT_ID_KEY, DEPLOY_SOCKET_PROTOCOL,
@@ -1071,13 +1071,9 @@ export class DeployRunDO extends DurableObject<Env> {
     const body = JSON.stringify(frame);
 
     for (const socket of only === null ? this.ctx.getWebSockets() : [only]) {
-      try {
-        socket.send(body);
-      } catch (cause) {
-        diagnostics.event('deploy.frame_undelivered', {
-          run, frame: frame.type, error: renderThrownChain({ cause }),
-        });
-      }
+      const sent = Result.try(() => { socket.send(body); });
+
+      if (Result.isFailure(sent)) diagnostics.event('deploy.frame_undelivered', { run, frame: frame.type, error: renderThrownChain({ cause: sent.failure }) });
     }
   }
 

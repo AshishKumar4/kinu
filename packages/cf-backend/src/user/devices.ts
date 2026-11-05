@@ -1,4 +1,4 @@
-import { Effect } from 'effect';
+import { Cause, Effect, Exit } from 'effect';
 import {
   objectNamed, DeviceDesktopSchema, DeviceHelloSchema, DeviceUpdateHelloSchema, DEVICE_FRAMES, NO_DESKTOP, type DeviceDesktop,
   DeviceAuthFrameSchema, CONNECT_TICKET_PATTERN, deviceConnectMessage, deviceRefusalMessage, deviceReplaceMessage, verifyDeviceSignature,
@@ -7,7 +7,7 @@ import {
 import {
   type DeviceExecOutput, NO_DEVICE_CONNECTED, watchedOutput, SEVERAL_DEVICES_CONNECTED, relayRefusal, type RelayedProvider, isWorkspaceName, nanoid, type DeviceCheckpointHint, type DeviceConsentRequest, type JsonObject, type JsonValue, CapabilityDeniedError, type UserCaller, type ResolvedCaller, DeviceSocketHub, DeviceRequestLedger, type ClaimedDeviceRequest, type DeviceCancelOutcome, randomToken, sha256Hex, type DeviceChatGptStatus, deviceConsentMoved, deviceConsentOutcome, type DeviceConsentOutcome, DEVICE_UPDATE, base64Url, hmacSha256Hex, cliArtifactPath, deviceUpdateState, readBuildStamp, BuildStampSchema, type BuildStamp, type DeviceUpdateFrame, type DeviceUpdateState, parseDeviceCancelAnswer, nextDeviceRequestId, DEVICE_METHOD, DEVICE_ERRORS, deviceFailure, deviceMethodHas, type DeviceTunnel, DEVICE_TIERS, effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix, sandboxCause, summarizeDeviceAction, type DeviceStatus, type DeviceFileScope, type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
 } from '@kinu.run/core';
-import { attemptInItsWords, diagnostics, joining, KinuError, renderThrownChain, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
+import { attemptInItsWords, chainOf, diagnostics, hold, joining, KinuError, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import type { UserObjectHost } from './user-host';
 import { SingleUseTickets } from './single-use-tickets';
@@ -321,17 +321,17 @@ export class UserDevices {
     for (const { agent_name } of this.host.sqlx<{ agent_name: string }>(
       `SELECT agent_name FROM device_notice_pending`,
     )) {
-      try {
+      const announced = await hold(Effect.promise(async () => {
         const workspace = this.host.env.OrchestratorAgent.get(
           this.host.env.OrchestratorAgent.idFromName(agent_name),
         );
 
         await workspace.announceDeviceAvailable({ id: deviceId, label });
         this.host.sqlx(`DELETE FROM device_notice_pending WHERE agent_name = ?`, agent_name);
-      } catch (cause) {
-        diagnostics.event('device.available_announce_unreachable', {
-          workspace: agent_name, error: renderThrownChain({ cause }),
-        });
+      }));
+
+      if (Exit.isFailure(announced)) {
+        diagnostics.event('device.available_announce_unreachable', { workspace: agent_name, error: chainOf(announced.cause) });
       }
     }
 
@@ -815,7 +815,7 @@ export class UserDevices {
 
   /** The call still fails; the workspace is recorded so the next connect clears this notice. */
   private async announceDevicesUnavailable(workspaceOrAgent: string): Promise<void> {
-    try {
+    const announced = await hold(Effect.promise(async () => {
       const stub = objectNamed(this.host.env.OrchestratorAgent, workspaceOrAgent);
 
       await stub.announceDeviceUnavailable(this.registeredOfflineDevices());
@@ -823,10 +823,10 @@ export class UserDevices {
         `INSERT INTO device_notice_pending (agent_name) VALUES (?) ON CONFLICT (agent_name) DO NOTHING`,
         workspaceOrAgent,
       );
-    } catch (error) {
-      diagnostics.event('device.unavailable_announce_unreachable', {
-        workspace: workspaceOrAgent, error: renderThrownChain({ cause: error }),
-      });
+    }));
+
+    if (Exit.isFailure(announced)) {
+      diagnostics.event('device.unavailable_announce_unreachable', { workspace: workspaceOrAgent, error: chainOf(announced.cause) });
     }
   }
 
@@ -1121,7 +1121,7 @@ export class UserDevices {
         continue;
       }
 
-      try {
+      const cancelled = await hold(Effect.promise(async () => {
         const answer = parseDeviceCancelAnswer(row.requestId, await tunnel.rpc(
           DEVICE_METHOD.cancel, [row.requestId],
         )).cancelled;
@@ -1130,18 +1130,15 @@ export class UserDevices {
         // the claim and reports the request; the returned answer is the one that stands.
         const settled = this._inflight.settleHeld(row.requestId, row.claim, answer);
 
-        if (settled === null) continue;
+        if (settled === null) return;
         outcomes.push({ requestId: row.requestId, outcome: settled });
         await this.cleanUpSettledDeviceRequest(row);
-      } catch (err) {
-        // Kill failed, so the request is still live. Releasing nothing means the terminal authority
-        // took or dropped the row and answers for it.
-        if (!this._inflight.releaseClaim(row.requestId, row.claim)) continue;
-        outcomes.push({
-          requestId: row.requestId,
-          outcome: 'failed',
-          detail: renderThrownChain({ cause: err }),
-        });
+      }));
+
+      // Kill failed, so the request is still live. Releasing nothing means the terminal authority
+      // took or dropped the row and answers for it.
+      if (Exit.isFailure(cancelled) && this._inflight.releaseClaim(row.requestId, row.claim)) {
+        outcomes.push({ requestId: row.requestId, outcome: 'failed', detail: chainOf(cancelled.cause) });
       }
     }
 
@@ -1155,18 +1152,20 @@ export class UserDevices {
   private async cleanUpSettledDeviceRequest(row: ClaimedDeviceRequest): Promise<void> {
     const tunnel = this._devices.tunnel(row.deviceId);
 
-    try {
-      if (!tunnel) throw deviceFailure(DEVICE_ERRORS.disconnected, NO_DEVICE_CONNECTED);
-      await tunnel.rpc(DEVICE_METHOD.execAck, [row.requestId]);
-      this._inflight.deleteHeld(row.requestId, row.claim);
-    } catch (err) {
-      this._inflight.releaseClaim(row.requestId, row.claim);
-      diagnostics.failure('device.cancellation_ack_cleanup_failed', toKinuError({
-        doing: 'releasing the cancelled device command supervisor',
-        cause: err,
-        otherwise: 'unavailable',
-      }), { device: row.deviceId, request: row.requestId });
-    }
+    const released = await hold(tunnel
+      ? Effect.promise(async () => {
+        await tunnel.rpc(DEVICE_METHOD.execAck, [row.requestId]);
+        this._inflight.deleteHeld(row.requestId, row.claim);
+      })
+      : Effect.fail(deviceFailure(DEVICE_ERRORS.disconnected, NO_DEVICE_CONNECTED)));
+
+    if (Exit.isSuccess(released)) return;
+    this._inflight.releaseClaim(row.requestId, row.claim);
+    diagnostics.failure('device.cancellation_ack_cleanup_failed', toKinuError({
+      doing: 'releasing the cancelled device command supervisor',
+      cause: Cause.squash(released.cause),
+      otherwise: 'unavailable',
+    }), { device: row.deviceId, request: row.requestId });
   }
 
   /** Agent home is composed per call from the root the daemon reported, for one workspace segment. */
@@ -1204,7 +1203,7 @@ export class UserDevices {
     const resolved = await this.host.requireTier(caller, 'device.manage');
 
     if (resolved.kind !== 'owner_session') {
-      throw new CapabilityDeniedError('Only the account owner can change a device\'s Sandbox setting.');
+      return settle(Effect.die(new CapabilityDeniedError('Only the account owner can change a device\'s Sandbox setting.')));
     }
 
     if (!v.is(v.picklist(DEVICE_TIERS), tier)) return { ok: false };
@@ -1434,14 +1433,10 @@ export class UserDevices {
     const watchers = this.host.sqlx<{ agent_name: string }>(`SELECT agent_name FROM device_status_watchers`);
 
     await Promise.all(watchers.map(async ({ agent_name }) => {
-      let watching = false;
+      const moved = await hold(Effect.promise(() => objectNamed(this.host.env.OrchestratorAgent, agent_name).devicesMoved()));
 
-      try {
-        const workspace = objectNamed(this.host.env.OrchestratorAgent, agent_name);
-        watching = (await workspace.devicesMoved()).watching;
-      } catch (cause) {
-        diagnostics.event('device.watcher_unreachable', { workspace: agent_name, error: renderThrownChain({ cause }) });
-      }
+      if (Exit.isFailure(moved)) diagnostics.event('device.watcher_unreachable', { workspace: agent_name, error: chainOf(moved.cause) });
+      const watching = Exit.isSuccess(moved) && moved.value.watching;
 
       if (!watching) this.host.sqlx(`DELETE FROM device_status_watchers WHERE agent_name = ?`, agent_name);
     }));
@@ -1554,33 +1549,36 @@ export class UserDevices {
         continue;
       }
 
-      try {
-        if (settled === null) {
-          const answer = parseDeviceCancelAnswer(row.requestId, await tunnel.rpc(
-            DEVICE_METHOD.cancel, [row.requestId],
-          )).cancelled;
+      const stopped = await hold(Effect.promise(async () => {
+        if (settled !== null) return;
 
-          // Durable before the acknowledgement, so a dying activation leaves an answer, not
-          // apparent live work.
-          this._inflight.settleRevoked(row.requestId, answer);
-        }
+        const answer = parseDeviceCancelAnswer(row.requestId, await tunnel.rpc(
+          DEVICE_METHOD.cancel, [row.requestId],
+        )).cancelled;
 
-        try {
-          await tunnel.rpc(DEVICE_METHOD.execAck, [row.requestId]);
-        } catch (err) {
-          // Kill confirmation is already truthful; this is local replay cleanup, recorded separately so a
-          // failed ACK never reads as a possibly running process.
-          diagnostics.failure('device.revocation_ack_cleanup_failed', toKinuError({
-            doing: 'releasing the cancelled device command supervisor on revocation',
-            cause: err,
-            otherwise: 'unavailable',
-          }), { device: deviceId, request: row.requestId });
-        }
-      } catch (err) {
+        // Durable before the acknowledgement, so a dying activation leaves an answer, not
+        // apparent live work.
+        this._inflight.settleRevoked(row.requestId, answer);
+      }));
+
+      if (Exit.isFailure(stopped)) {
         unstoppedCommands += 1;
         diagnostics.failure('device.revocation_cancel_unconfirmed', toKinuError({
           doing: 'confirming device command termination before revocation',
-          cause: err,
+          cause: Cause.squash(stopped.cause),
+          otherwise: 'unavailable',
+        }), { device: deviceId, request: row.requestId });
+        continue;
+      }
+
+      const acked = await hold(Effect.promise(() => tunnel.rpc(DEVICE_METHOD.execAck, [row.requestId])));
+
+      // Kill confirmation is already truthful; this is local replay cleanup, recorded separately so a
+      // failed ACK never reads as a possibly running process.
+      if (Exit.isFailure(acked)) {
+        diagnostics.failure('device.revocation_ack_cleanup_failed', toKinuError({
+          doing: 'releasing the cancelled device command supervisor on revocation',
+          cause: Cause.squash(acked.cause),
           otherwise: 'unavailable',
         }), { device: deviceId, request: row.requestId });
       }

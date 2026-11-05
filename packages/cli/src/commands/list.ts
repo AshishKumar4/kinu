@@ -1,5 +1,6 @@
 import { statSync } from 'node:fs';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { Result } from 'effect';
 import { listCloudAgents } from '../cloud-api';
 import { listLocalAgentNames, reconcileAgentRefs } from '../agent-list';
 import { agentDbPath, loadConfigFile, resolveCloudSession } from '../config';
@@ -46,28 +47,27 @@ export async function listCommand(): Promise<void> {
       };
     }
 
-    try {
-      // getLocalAgentInfo degrades per field, so only an unopenable database reaches the catch.
-      const info = getLocalAgentInfo(name);
+    // getLocalAgentInfo degrades per field, so only an unopenable database fails the read.
+    const read = Result.try({
+      try: () => getLocalAgentInfo(name),
+      catch: (cause) => toKinuError({ doing: 'reading a local workspace', cause, otherwise: 'io' }),
+    });
 
+    if (Result.isSuccess(read)) {
       return {
         name,
         mode: agent.mode,
-        purpose: info.purpose,
-        scaffoldVersion: info.scaffoldVersion,
+        purpose: read.success.purpose,
+        scaffoldVersion: read.success.scaffoldVersion,
         dbSize: databaseSize(name),
       };
-    } catch (caught) {
-      // One unopenable workspace must not hide the rest; the reason travels with the row.
-      const reason = renderThrownChain({ cause: caught });
-      diagnostics.failure(
-        'workspace.read_failed',
-        toKinuError({ doing: 'reading a local workspace', cause: caught, otherwise: 'io' }),
-        { workspace: name },
-      );
-
-      return { name, mode: agent.mode, purpose: `(unreadable: ${reason})`, scaffoldVersion: 0 };
     }
+
+    // One unopenable workspace must not hide the rest; the reason travels with the row.
+    const reason = renderThrownChain({ cause: read.failure.cause });
+    diagnostics.failure('workspace.read_failed', read.failure, { workspace: name });
+
+    return { name, mode: agent.mode, purpose: `(unreadable: ${reason})`, scaffoldVersion: 0 };
   });
 
   printAgentList(agentInfos);

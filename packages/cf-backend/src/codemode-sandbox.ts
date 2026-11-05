@@ -10,7 +10,8 @@ import {
   NO_TIMER_DEADLINE_MS, bindTaskPlan, launched, codemodeFunction, type MemberImpacts, decodeJsonValue, relayedAnswer,
   type CraftedToolSource, type ExecuteResult, type Executor, type ProgramStop, type ResolvedProvider as HostProvider,
 } from '@kinu.run/core';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { chainOf, renderThrownChain, settle } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
 import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE, programPlace, stoppedProgram } from '@kinu.run/core';
 import { WorkerEntrypoint, exports } from 'cloudflare:workers';
 import { codemodeEgress, type CodemodeEgressProps } from './codemode-egress-mint';
@@ -216,7 +217,7 @@ export class KinuSandboxExecutor {
 
     if (place.kind === 'node') return await this.#onNode(code, place.imports, attributeProviders(providerArr, this.#impacts));
 
-    try {
+    const ran = Effect.promise(async () => {
       // The vendor reads only err.message. Carry an explicitly thrown refusal
       // as a result so the shared completion mapper retains its classification.
       const callable = normalizeCode(code);
@@ -228,10 +229,10 @@ export class KinuSandboxExecutor {
       return result.error
         ? { ...result, error: explainSandboxError(result.error) }
         : result;
-    } catch (err) {
-      // createCodeTool turns a non-empty `error` into a tool-output-error the model sees.
-      return { result: undefined, error: renderThrownChain({ cause: err }) };
-    }
+    });
+
+    // createCodeTool turns a non-empty `error` into a tool-output-error the model sees.
+    return settle(Effect.catchCause(ran, (failed) => Effect.succeed<ProgramResult>({ result: undefined, error: chainOf(failed) })));
   }
 
   /** A program that imports from the workspace, run there as Node, as the one who runs it; one offline runs nowhere. */
@@ -255,13 +256,13 @@ export function createRuntimeExecutor(launch: ProgramLaunch): Executor {
     languages: ['javascript'],
     execute(code: string, providers: HostProvider[], opts?: ProgramStop): Promise<ExecuteResult> {
       // The sandbox ends a program at its deadline; a stop answers here at once, as the program may still be running.
-      return stoppedProgram(() => runtimeProgram(launch, code, providers, opts?.deadlineMs), opts);
+      return stoppedProgram(() => settle(runtimeProgram(launch, code, providers, opts?.deadlineMs)), opts);
     },
   };
 }
 
-async function runtimeProgram(launch: ProgramLaunch, code: string, providers: HostProvider[], deadlineMs: number | undefined): Promise<ExecuteResult> {
-  try {
+function runtimeProgram(launch: ProgramLaunch, code: string, providers: HostProvider[], deadlineMs: number | undefined): Effect.Effect<ExecuteResult> {
+  const ran = Effect.promise(async (): Promise<ExecuteResult> => {
     const normalized = Array.isArray(providers)
       ? providers
       : [{ name: 'codemode', fns: providers }];
@@ -283,7 +284,7 @@ async function runtimeProgram(launch: ProgramLaunch, code: string, providers: Ho
     if (res.logs !== undefined) output.logs = res.logs;
 
     return output;
-  } catch (e) {
-    return { result: undefined, error: renderThrownChain({ cause: e }) };
-  }
+  });
+
+  return Effect.catchCause(ran, (failed) => Effect.succeed({ result: undefined, error: chainOf(failed) }));
 }

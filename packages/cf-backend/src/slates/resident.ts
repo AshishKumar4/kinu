@@ -473,20 +473,27 @@ function isMappedSpecifier(specifier: string): specifier is keyof typeof SERVER_
   return specifier in SERVER_MODULE_PATHS;
 }
 
-/** A capture the map cannot answer means the patterns and map drifted apart; never guess a path. */
-function mappedModulePath(specifier: string): string {
-  if (!isMappedSpecifier(specifier)) {
-    throw new KinuError('unsupported', `Slate bundle imports ${specifier}, which the module map does not name`);
-  }
+/** Anchored to statement position so a quoted `kinu:slate` in authored data is never rewritten. A capture the map
+ *  cannot answer means the patterns and map drifted apart; it fails rather than guess a path. */
+function rewriteModuleSpecifiers(source: string): Effect.Effect<string, KinuError> {
+  const unmapped: string[] = [];
 
-  return SERVER_MODULE_PATHS[specifier];
-}
+  const mapped = (specifier: string): string => {
+    if (isMappedSpecifier(specifier)) return SERVER_MODULE_PATHS[specifier];
+    unmapped.push(specifier);
 
-/** Anchored to statement position so a quoted `kinu:slate` in authored data is never rewritten. */
-function rewriteModuleSpecifiers(source: string): string {
-  return source
-    .replace(STATIC_SPECIFIER, (_match, head: string, quote: string, specifier: string) => `${head}${quote}${mappedModulePath(specifier)}${quote}`)
-    .replace(DYNAMIC_SPECIFIER, (_match, quote: string, specifier: string) => `import(${quote}${mappedModulePath(specifier)}${quote})`);
+    return specifier;
+  };
+
+  const rewritten = source
+    .replace(STATIC_SPECIFIER, (_match, head: string, quote: string, specifier: string) => `${head}${quote}${mapped(specifier)}${quote}`)
+    .replace(DYNAMIC_SPECIFIER, (_match, quote: string, specifier: string) => `import(${quote}${mapped(specifier)}${quote})`);
+
+  const [missing] = unmapped;
+
+  return missing === undefined
+    ? Effect.succeed(rewritten)
+    : Effect.fail(new KinuError('unsupported', `Slate bundle imports ${missing}, which the module map does not name`));
 }
 
 /** Where a boot compiles: its bundler, the authored root, and the runtime directory its generated entries go in. */
@@ -597,7 +604,7 @@ function serverModule(build: SlateBuild, project: SlateProject, page: { readonly
 
     if (compiled === undefined) return yield* new KinuError('io', 'Slate compiler did not produce the server module');
 
-    return rewriteModuleSpecifiers(compiled.contents);
+    return yield* rewriteModuleSpecifiers(compiled.contents);
   });
 }
 

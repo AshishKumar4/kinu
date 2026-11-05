@@ -11,7 +11,7 @@ import { Effect } from 'effect';
 import type { CheckpointFiles, FileCheckpoints, FileReach, MountedVfs, PathPlanes, VfsDigestWrite, VfsMount, WriteObserver } from '@kinu.run/core';
 import { agentHome, FOLDER_SUBTREE, MAIN_AGENT, SCRATCH_ROOT, sha256Hex, withMountTable, workspacePath } from '@kinu.run/core';
 import { CompositeVFS } from '@nimbus-sh/core/vfs/composite.js';
-import { syscallError, toVfsError, type VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { isVfsError, syscallError, toVfsError, type VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { settle, tolerate, tolerateAsync } from '@kinu.run/core/obs';
 import { keyedSerialQueue } from '@kinu.run/agent-utils';
 
@@ -30,10 +30,6 @@ function hostDirentType(entry: Dirent): VfsDirentType {
   if (entry.isBlockDevice()) return 'block';
 
   return entry.isCharacterDevice() ? 'character' : 'unknown';
-}
-
-function throwVfsError(input: { error: unknown; syscall: string; path: string }): never {
-  throw toVfsError(input.error, input.syscall, input.path);
 }
 
 type HostFiles = VFS & Required<Pick<VFS, 'readRange' | 'rmdir' | 'rename' | 'readlink'>> & Required<Pick<CheckpointFiles, 'writeFileIfDigest'>>;
@@ -89,36 +85,50 @@ async function replaceNow(path: string, data: Uint8Array, expected: string | nul
   return { ok: true, sha256: sha256Hex(data) };
 }
 
-async function hostIo<T>(syscall: string, path: string, op: () => Promise<T>): Promise<T> {
-  try {
-    return await op();
-  } catch (error) { throwVfsError({ error, syscall, path }); }
+/** `op`, its failure as the VFS's error for `syscall` on `path`; one with no known code stays as it is. */
+function hostIo<T>(syscall: string, path: string, op: () => Promise<T>): Effect.Effect<T, VfsError> {
+  return Effect.catchDefect(Effect.promise(op), (error) => {
+    const mapped = toVfsError(error, syscall, path);
+
+    return isVfsError(mapped) ? Effect.fail(mapped) : Effect.die(mapped);
+  });
 }
 
-function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefined): HostFiles {
-  const snapshot = async (path: string, reason: string): Promise<void> => {
-    if (!checkpoints) return;
+/** Real files at their host paths; each failure is the VFS's error for its syscall, and each change is checkpointed first. */
+class HostMountFiles implements HostFiles {
+  constructor(private readonly root: string, private readonly checkpoints: FileCheckpoints | undefined) {}
+
+  private snapshot(path: string, reason: string): Effect.Effect<void> {
+    const checkpoints = this.checkpoints;
+
+    if (!checkpoints) return Effect.void;
     const workdir = checkpoints.workdirForPath(path);
-    await checkpoints.ensureCheckpoint(withinRoot(root, workdir) ? workdir : root, reason);
-  };
 
-  return {
-    readFile: (path) => hostIo('open', path, () => fs.readFile(path)),
-    async writeFile(path, data) {
-      await snapshot(path, 'file write');
-      await hostIo('open', path, async () => {
-        await fs.mkdir(dirname(path), { recursive: true });
-        await fs.writeFile(path, data);
-      });
-    },
-    async writeFileIfDigest(path, data, expected) {
-      await snapshot(path, 'file write');
+    return Effect.promise(() => checkpoints.ensureCheckpoint(withinRoot(this.root, workdir) ? workdir : this.root, reason));
+  }
 
-      return await hostIo('open', path, () => replaceIfDigest(path, data, expected));
-    },
-    readdir: (path) => hostIo('scandir', path, async () => (await fs.readdir(path, { withFileTypes: true }))
-      .map((entry) => ({ name: entry.name, type: hostDirentType(entry) }))),
-    stat: (path, options) => hostIo(options?.follow === false ? 'lstat' : 'stat', path, async () => {
+  readFile(path: string): Promise<Uint8Array> {
+    return settle(hostIo('open', path, () => fs.readFile(path)));
+  }
+
+  writeFile(path: string, data: Uint8Array): Promise<void> {
+    return settle(Effect.andThen(this.snapshot(path, 'file write'), hostIo('open', path, async () => {
+      await fs.mkdir(dirname(path), { recursive: true });
+      await fs.writeFile(path, data);
+    })));
+  }
+
+  writeFileIfDigest(...[path, data, expected]: Parameters<HostFiles['writeFileIfDigest']>): ReturnType<HostFiles['writeFileIfDigest']> {
+    return settle(Effect.andThen(this.snapshot(path, 'file write'), hostIo('open', path, () => replaceIfDigest(path, data, expected))));
+  }
+
+  readdir(path: string): ReturnType<HostFiles['readdir']> {
+    return settle(hostIo('scandir', path, async () => (await fs.readdir(path, { withFileTypes: true }))
+      .map((entry) => ({ name: entry.name, type: hostDirentType(entry) }))));
+  }
+
+  stat(path: string, options?: Parameters<HostFiles['stat']>[1]): ReturnType<HostFiles['stat']> {
+    return settle(hostIo(options?.follow === false ? 'lstat' : 'stat', path, async () => {
       const stat = await tolerateAsync(() => options?.follow === false ? fs.lstat(path) : fs.stat(path), 'enoent');
 
       if (stat === undefined) return null;
@@ -127,23 +137,31 @@ function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefin
       const special = stat.isFile() || stat.isDirectory() || stat.isSymbolicLink() ? {} : { mode: stat.mode };
 
       return { size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, ino: stat.ino, type: stat.isDirectory() ? 'directory' : type, ...special };
-    }),
-    async unlink(path) {
-      await snapshot(path, 'file delete');
-      await hostIo('unlink', path, () => fs.unlink(path));
-    },
-    async rmdir(path) {
-      await snapshot(path, 'file delete');
-      await hostIo('rmdir', path, () => fs.rmdir(path));
-    },
-    async rename(from, to) {
-      await snapshot(from, 'file move');
-      await snapshot(to, 'file move');
-      await hostIo('rename', from, () => fs.rename(from, to));
-    },
-    readlink: (path) => hostIo('readlink', path, () => fs.readlink(path)),
-    mkdir: (path, opts) => hostIo('mkdir', path, async () => { await fs.mkdir(path, { recursive: opts?.recursive ?? false }); }),
-    readRange: (path, offset, length) => hostIo('read', path, async () => {
+    }));
+  }
+
+  unlink(path: string): Promise<void> {
+    return settle(Effect.andThen(this.snapshot(path, 'file delete'), hostIo('unlink', path, () => fs.unlink(path))));
+  }
+
+  rmdir(path: string): Promise<void> {
+    return settle(Effect.andThen(this.snapshot(path, 'file delete'), hostIo('rmdir', path, () => fs.rmdir(path))));
+  }
+
+  rename(from: string, to: string): Promise<void> {
+    return settle(Effect.andThen(Effect.andThen(this.snapshot(from, 'file move'), this.snapshot(to, 'file move')), hostIo('rename', from, () => fs.rename(from, to))));
+  }
+
+  readlink(path: string): Promise<string> {
+    return settle(hostIo('readlink', path, () => fs.readlink(path)));
+  }
+
+  mkdir(path: string, opts?: Parameters<HostFiles['mkdir']>[1]): Promise<void> {
+    return settle(hostIo('mkdir', path, async () => { await fs.mkdir(path, { recursive: opts?.recursive ?? false }); }));
+  }
+
+  readRange(path: string, offset: number, length: number): Promise<Uint8Array> {
+    return settle(hostIo('read', path, async () => {
       const handle = await fs.open(path, 'r');
 
       try {
@@ -152,8 +170,8 @@ function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefin
 
         return out.subarray(0, bytesRead);
       } finally { await handle.close(); }
-    }),
-  };
+    }));
+  }
 }
 
 /** Real files under `root`, named from `/`. */
@@ -179,12 +197,12 @@ function rootedFiles(root: string, files: HostFiles): HostFiles {
 export function agentHomeFiles(space: string, agent: string): HostFiles {
   const home = join(space, agentHome(agent));
 
-  return rootedFiles(home, createHostMountVFS(home, undefined));
+  return rootedFiles(home, new HostMountFiles(home, undefined));
 }
 
 /** The space named from its root, as `vfs://` names it. */
 export function spaceFiles(space: string): HostFiles {
-  return rootedFiles(space, createHostMountVFS(space, undefined));
+  return rootedFiles(space, new HostMountFiles(space, undefined));
 }
 
 /** `<space>/local` links the folder, as `vfs://local` names it. */
@@ -222,14 +240,14 @@ export function localFilePlane(input: LocalFilePlane): LocalPlane {
   // There before any agent writes it, so every agent sees where shared work goes.
   mkdirSync(join(input.space, SCRATCH_ROOT), { recursive: true });
   // The host's own links are the namespace's to follow, as the kernel's are, so no link reaches past a mount's rule.
-  const namespace = new CompositeVFS(createHostMountVFS(input.folder, input.checkpoints));
+  const namespace = new CompositeVFS(new HostMountFiles(input.folder, input.checkpoints));
   namespace.mount(input.space, spaceFiles(input.space));
 
   for (const dir of READ_ONLY_STATE) {
     const at = join(input.space, agentHome(MAIN_AGENT), dir);
     // A mount point is a directory, and the home above it one the space holds, so a path through it is the space's.
     mkdirSync(at, { recursive: true });
-    namespace.mount(at, rootedFiles(at, createHostMountVFS(at, undefined)), { readOnly: true });
+    namespace.mount(at, rootedFiles(at, new HostMountFiles(at, undefined)), { readOnly: true });
   }
 
   const views = input.views.map((view) => ({ ...view, at: join(input.space, view.name) }));

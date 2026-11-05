@@ -339,7 +339,7 @@ requirements:
       - Kinu.Storage.SqliteFSCorrectness.writes_commute
     tsRefs:
       - packages/core/src/vfs/nimbus-workspace.ts#workspaceFiles
-      - packages/core/src/vfs/nimbus-workspace.ts#workspaceVfs
+      - packages/core/src/vfs/nimbus-workspace.ts#createWorkspace
       - packages/core/tests/vfs-conformance.test.ts#cases
     remainingEvidence:
       - Production normalizes paths before writing, so distinct raw strings can alias and the model hypothesis needs a normalization correspondence

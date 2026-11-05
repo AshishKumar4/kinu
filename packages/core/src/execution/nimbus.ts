@@ -10,13 +10,13 @@ import type { VfsMount, VfsMountRouting, WorkspacePrincipal } from '../vfs/mount
 import { createShellSession, type ShellPlane, type ShellSession } from './shell-session';
 import type { CompositeVFS } from '@nimbus-sh/core/vfs/composite.js';
 import { atVfsPath } from '../vfs/errno';
-import { syscallError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { syscallError, type VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { walkedPath, workspacePath } from '../vfs/workspace-path';
 import { sessionRuntimeBins, workspaceCommandNotFound } from '../vfs/workspace-runtimes';
 import { shellQuote } from '../utils/shell';
 import { execIdsOf, principalExecId } from './secrets-caller';
 import { commandTool, LogLimitsSchema, type ExecutorCapability, type ExecutorProvider, type ExecutorStatus, type ExecutorTool, type PortExposureResult, type PreviewRouteCheck } from './types';
-import { attempt, detach, hold, KinuError, logged, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
+import { attempt, detach, hold, KinuError, logged, refusalOf, renderThrownChain, settle, toKinuError, type Refusal } from '../obs/index';
 import { Cause, Effect, Exit } from 'effect';
 import { newJobId, type AdoptsJobs } from '../types/jobs';
 import { currentWorkMode } from './work-mode';
@@ -393,24 +393,25 @@ export function nimbusSession(opts: NimbusSessionOpts) {
       await touch(() => unexpose(port));
     },
     // Exposed ports without a URL are kept, carrying the host's reason as a refusal.
-    listExposedPorts: async () => {
+    listExposedPorts: () => {
       const ports = box.ports;
 
-      if (!ports?.list) return [];
+      if (!ports?.list) return Promise.resolve([]);
       const list = ports.list.bind(ports);
-      const exposed = await touch(() => list());
-      const unaddressed = exposed.find((p) => p.url === undefined && p.unavailable !== undefined);
 
-      if (unaddressed?.unavailable !== undefined) {
-        throw new KinuError('unsupported',
-          `workspace port ${unaddressed.port} is listening and has no preview URL: ${unaddressed.unavailable}`);
-      }
+      return settle(Effect.flatMap(Effect.promise(async () => touch(() => list())), (exposed) => {
+        const unaddressed = exposed.find((p) => p.url === undefined && p.unavailable !== undefined);
 
-      return exposed.map((p) => ({
-        port: p.port,
-        url: p.url ?? ports.url?.(p.port) ?? '',
-        status: 'unknown' as const,
-      })).filter((p) => p.url);
+        if (unaddressed?.unavailable !== undefined) {
+          return Effect.fail(new KinuError('unsupported', `workspace port ${unaddressed.port} is listening and has no preview URL: ${unaddressed.unavailable}`));
+        }
+
+        return Effect.succeed(exposed.map((p) => ({
+          port: p.port,
+          url: p.url ?? ports.url?.(p.port) ?? '',
+          status: 'unknown' as const,
+        })).filter((p) => p.url));
+      }));
     },
   };
 }
@@ -671,18 +672,19 @@ export function nimbusSessionFiles(
   const at = (path: string): string => walkedPath(path, home);
   const files = cred === undefined ? session : session.as(cred);
 
-  const present = async <T>(path: string, syscall: string, read: (absolute: string) => Promise<T | null>): Promise<T> => {
+  // What the session answered, or ENOENT where it answered nothing.
+  const present = <T>(path: string, syscall: string, read: (absolute: string) => Promise<T | null>): Effect.Effect<T, VfsError> => {
     const absolute = at(path);
-    const answer = await atVfsPath(absolute, syscall, () => read(absolute));
 
-    if (answer === null) throw syscallError('ENOENT', syscall, absolute);
-
-    return answer;
+    return Effect.flatMap(
+      Effect.promise(async () => atVfsPath(absolute, syscall, () => read(absolute))),
+      (answer) => (answer === null ? Effect.fail(syscallError('ENOENT', syscall, absolute)) : Effect.succeed(answer)),
+    );
   };
 
   return {
-    readFile: (path) => present(path, 'open', (absolute) => files.readBytes(absolute)),
-    readRange: (path, offset, length) => present(path, 'read', (absolute) => files.readRange(absolute, offset, length)),
+    readFile: (path) => settle(present(path, 'open', (absolute) => files.readBytes(absolute))),
+    readRange: (path, offset, length) => settle(present(path, 'read', (absolute) => files.readRange(absolute, offset, length))),
     async writeFile(path, data) {
       const absolute = at(path);
 
@@ -699,7 +701,7 @@ export function nimbusSessionFiles(
 
       return (await atVfsPath(absolute, 'scandir', () => files.list(absolute))).map((entry) => ({ name: entry.name, type: direntType(entry.type) }));
     },
-    readlink: (path) => present(path, 'readlink', (absolute) => files.readlink(absolute)),
+    readlink: (path) => settle(present(path, 'readlink', (absolute) => files.readlink(absolute))),
     async stat(path, options) {
       const absolute = at(path);
       const stat = await atVfsPath(absolute, options?.follow === false ? 'lstat' : 'stat', () => (options?.follow === false ? files.lstat(absolute) : files.stat(absolute)));
