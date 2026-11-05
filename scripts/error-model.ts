@@ -44,8 +44,8 @@ interface Declaration {
   readonly reason: string;
   /** Only sites inside these named functions, methods, types or interfaces; absent, the whole file. */
   readonly within?: readonly string[];
-  /** Only a `throw` of this class: `new <thrown>(…)`, or a call to a same-file function whose body is one. */
-  readonly thrown?: string;
+  /** Only a `throw` of a Nimbus VFS error made at the throw ({@link throwsVfsError}). */
+  readonly vfsErrors?: true;
 }
 
 /** The declarations by file; a file may hold several, each for its own mechanisms and names. */
@@ -64,7 +64,7 @@ export const DECLARED = byFile([
   // AGENTS.md: "the file plane alone fails with its VfsError (a POSIX code callers switch on with isVfsError)". A Nimbus
   // `VFS` a mount serves throws it by that package's contract; any other throw in these files is still legacy.
   ...['packages/core/src/vfs/context-plane.ts'].map(file => [file, {
-    mechanisms: ['throw'], thrown: 'VfsError',
+    mechanisms: ['throw'], vfsErrors: true,
     reason: 'a Nimbus VFS implementation\'s errno failure, the file plane\'s declared channel',
   }] as const),
   ...Object.values(FAILURE_SURFACES).map(surface => [surface.adapter, {
@@ -1027,102 +1027,38 @@ function mechanismOf(node: SyntaxNode): Mechanism | undefined {
   return undefined;
 }
 
-/** What a file binds, read once: each import's local name and the class it names, how often each name is bound or
- *  assigned, and its top-level makers (a sync const arrow or function whose whole body is `new <Imported>(…)`). */
-interface Bindings {
-  readonly imported: ReadonlyMap<string, string>;
-  readonly bound: ReadonlyMap<string, number>;
-  readonly makers: ReadonlyMap<string, string>;
+/** Nimbus's VFS errors, by the module that makes them: its class and its syscall-error factory. */
+const VFS_ERROR_MODULE = '@nimbus-sh/core/vfs/vfs-error.js';
+
+const VFS_ERROR_MAKERS: ReadonlySet<string> = new Set(['VfsError', 'syscallError']);
+
+/** The local names a file imports Nimbus's VFS error makers under. */
+function vfsErrorBindings(program: SyntaxNode): ReadonlySet<string> {
+  return new Set(program.children.flatMap(({ raw }) => raw.type !== 'ImportDeclaration' || raw.source.value !== VFS_ERROR_MODULE ? [] : raw.specifiers
+    .flatMap((specifier) => specifier.type === 'ImportSpecifier' && specifier.imported.type === 'Identifier' && VFS_ERROR_MAKERS.has(specifier.imported.name)
+      ? [specifier.local.name]
+      : [])));
 }
 
-const BINDINGS = new WeakMap<SyntaxNode, Bindings>();
-
-function bindingsOf(program: SyntaxNode): Bindings {
-  const known = BINDINGS.get(program);
-
-  if (known !== undefined) return known;
-  const imported = new Map<string, string>();
-  const bound = new Map<string, number>();
-  const bind = (name: string): void => { bound.set(name, (bound.get(name) ?? 0) + 1); };
-
-  const makes = (body: SyntaxNode['raw'] | null | undefined): string | undefined =>
-    body?.type === 'NewExpression' && body.callee.type === 'Identifier' ? body.callee.name : undefined;
-
-  const makers = new Map<string, string>();
-
-  walk(program, ({ raw }) => {
-    if (raw.type === 'ImportSpecifier') {
-      bind(raw.local.name);
-
-      if (raw.imported.type === 'Identifier') imported.set(raw.local.name, raw.imported.name);
-    }
-
-    if (raw.type === 'ImportDefaultSpecifier' || raw.type === 'ImportNamespaceSpecifier') bind(raw.local.name);
-
-    if (raw.type === 'ClassDeclaration' && raw.id !== null) bind(raw.id.name);
-
-    if (raw.type === 'VariableDeclarator' && raw.id.type === 'Identifier') bind(raw.id.name);
-
-    if ((raw.type === 'FunctionDeclaration' || raw.type === 'FunctionExpression') && raw.id !== null && raw.id !== undefined) bind(raw.id.name);
-
-    if (raw.type === 'FunctionDeclaration' || raw.type === 'FunctionExpression' || raw.type === 'ArrowFunctionExpression') {
-      for (const param of raw.params) if (param.type === 'Identifier') bind(param.name);
-    }
-
-    if (raw.type === 'CatchClause' && raw.param?.type === 'Identifier') bind(raw.param.name);
-
-    if (raw.type === 'AssignmentExpression' && raw.left.type === 'Identifier') bind(raw.left.name);
-  });
-
-  for (const { raw } of program.children) {
-    if (raw.type === 'VariableDeclaration' && raw.kind === 'const') {
-      for (const declarator of raw.declarations) {
-        const { id, init } = declarator;
-        const made = init?.type === 'ArrowFunctionExpression' && !init.async && init.body.type !== 'BlockStatement' ? makes(init.body) : undefined;
-
-        if (id.type === 'Identifier' && made !== undefined) makers.set(id.name, made);
-      }
-    }
-
-    if (raw.type === 'FunctionDeclaration' && !raw.async && !raw.generator && raw.id !== null && raw.body?.body.length === 1) {
-      const [only] = raw.body.body;
-      const made = only?.type === 'ReturnStatement' ? makes(only.argument) : undefined;
-
-      if (made !== undefined) makers.set(raw.id.name, made);
-    }
-  }
-
-  const facts = { imported, bound, makers };
-
-  BINDINGS.set(program, facts);
-
-  return facts;
-}
-
-/** Whether a `throw` throws the imported class `name`: `throw new Name(…)`, or `throw make(…)` for a top-level maker
- *  of it. Every name it rests on is bound once in the file, so no parameter, local or reassignment can stand in. */
-function throwsClass(node: SyntaxNode, name: string): boolean {
+/** Whether a `throw` throws a Nimbus VFS error made at the throw: `new VfsError(…)` or `syscallError(…)`, the callee the
+ *  name the file imports it under. */
+function throwsVfsError(node: SyntaxNode): boolean {
   const thrown = node.raw.type === 'ThrowStatement' ? node.raw.argument : null;
+  const callee = thrown?.type === 'NewExpression' || thrown?.type === 'CallExpression' ? thrown.callee : null;
+
+  if (callee?.type !== 'Identifier') return false;
   let program: SyntaxNode = node;
 
   while (program.parent !== undefined) program = program.parent;
-  const { imported, bound, makers } = bindingsOf(program);
-  const once = (local: string): boolean => bound.get(local) === 1;
-  const isClass = (local: string | undefined): boolean => local !== undefined && imported.get(local) === name && once(local);
 
-  if (thrown?.type === 'NewExpression' && thrown.callee.type === 'Identifier') return isClass(thrown.callee.name);
-
-  if (thrown?.type !== 'CallExpression' || thrown.callee.type !== 'Identifier') return false;
-  const maker = thrown.callee.name;
-
-  return once(maker) && isClass(makers.get(maker));
+  return vfsErrorBindings(program).has(callee.name);
 }
 
 function isDeclared(file: string, mechanism: Mechanism, node: SyntaxNode): boolean {
   return (DECLARED.get(file) ?? []).some((declaration) => {
     if (!declaration.mechanisms.includes(mechanism)) return false;
 
-    if (declaration.thrown !== undefined && !throwsClass(node, declaration.thrown)) return false;
+    if (declaration.vfsErrors === true && !throwsVfsError(node)) return false;
 
     if (declaration.within === undefined) return true;
 
@@ -1337,8 +1273,8 @@ if (import.meta.main) {
     console.log(`  stale: ${key} locked at ${String(was)}, now ${String(now)}; \`bun scripts/error-model.ts --lock\` lowers it`);
   }
 
-  for (const [file, { mechanisms, reason, within, thrown }] of [...DECLARED].flatMap(([path, all]) => all.map((one) => [path, one] as const))) {
-    console.log(`  declared: ${file} (${mechanisms.join(', ')}${within === undefined ? '' : ` within ${within.join(', ')}`}${thrown === undefined ? '' : ` of ${thrown}`}): ${reason}`);
+  for (const [file, { mechanisms, reason, within, vfsErrors }] of [...DECLARED].flatMap(([path, all]) => all.map((one) => [path, one] as const))) {
+    console.log(`  declared: ${file} (${mechanisms.join(', ')}${within === undefined ? '' : ` within ${within.join(', ')}`}${vfsErrors === true ? ' of Nimbus VFS errors' : ''}): ${reason}`);
   }
 
   const { bridges, flights, routes, held, react, findings } = bridgeSites(sources);

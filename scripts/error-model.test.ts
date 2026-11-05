@@ -119,29 +119,20 @@ test('the boundary file grows in the mechanisms it declares and in no other', ()
 
 test('a VFS implementation\'s VfsError throw is its declared channel; any other throw there is still counted', () => {
   const plane = 'packages/core/src/vfs/context-plane.ts';
-  const header = 'import { VfsError } from \'@nimbus-sh/core/vfs/vfs-error.js\';\n';
+  const header = 'import { syscallError, VfsError as Nimbus } from \'@nimbus-sh/core/vfs/vfs-error.js\';\n';
 
-  const vfsErrors = header + 'const absent = (path: string): Error => new VfsError(\'ENOENT\', \'gone\', path);\n'
-    + 'function readOnly(path: string): Error { return new VfsError(\'EACCES\', \'no\', path); }\n'
-    + 'export const files = { async stat(p: string) { throw absent(p); }, async unlink(p: string) { throw readOnly(p); }, '
-    + 'async mkdir(p: string) { throw new VfsError(\'EACCES\', \'no\', p); } };\n';
+  const vfsErrors = header + 'export const files = { async stat(p: string) { throw syscallError(\'ENOENT\', \'stat\', p); }, '
+    + 'async mkdir(p: string) { throw new Nimbus(\'EACCES\', \'no\', p); } };\n';
 
   const counted = (body: string) => keysOf(plane, body)[0]?.value ?? 0;
 
   expect(counted(vfsErrors)).toBe(0);
   expect(counted(`${vfsErrors}export function check(x: number) { if (x < 0) throw new KinuError('bad_input', 'x'); throw new Error('y'); }\n`)).toBe(2);
-
-  // Only a sync maker of the imported class, bound once, stands for it.
-  for (const stand of [
-    'const absent = async () => new VfsError(\'ENOENT\', \'gone\'); export function f() { throw absent(); }',
-    'function* absent() { return new VfsError(\'ENOENT\', \'gone\'); } export function f() { throw absent(); }',
-    'let absent = () => new VfsError(\'ENOENT\', \'gone\'); absent = () => new Error(\'x\'); export function f() { throw absent(); }',
-    'const absent = () => new VfsError(\'ENOENT\', \'gone\'); export function f(absent: () => Error) { throw absent(); }',
-    'export function f(VfsError: ErrorConstructor) { throw new VfsError(\'bad\'); }',
-  ]) expect(counted(header + stand)).toBe(1);
-
+  // A maker, or a class of that name not imported from Nimbus, is no VFS error made at the throw.
+  expect(counted(`${header}const absent = (p: string) => new Nimbus('ENOENT', 'gone', p);\nexport function f(p: string) { throw absent(p); }\n`)).toBe(1);
+  expect(counted('class VfsError extends Error {}\nexport function f() { throw new VfsError(\'x\'); }\n')).toBe(1);
   // The same VfsError throws in a file that declares no VFS implementation stay legacy.
-  expect(keysOf('packages/core/src/vfs/other.ts', vfsErrors)).toEqual([{ key: 'packages/core/src/vfs/other.ts#throw', value: 3 }]);
+  expect(keysOf('packages/core/src/vfs/other.ts', vfsErrors)).toEqual([{ key: 'packages/core/src/vfs/other.ts#throw', value: 2 }]);
 });
 
 test.each([
