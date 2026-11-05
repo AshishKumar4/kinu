@@ -848,6 +848,11 @@ function checkpointDirFor(view, requested) {
  * for a large file a range at a time, each answer under the socket's 32 MiB
  * receive ceiling, so the whole file crosses whatever its size.
  */
+/** A range one answer can carry: a longer ask is a heap spike, not a read (audit 0916 M2). */
+function isRange(offset, length) {
+  return Number.isSafeInteger(offset) && offset >= 0 && Number.isSafeInteger(length) && length > 0 && length <= protocol.readRangeMaxBytes;
+}
+
 function readRangeBytes(view, file, offset, length) {
   // Opened where the view judged it, not by its name again: a directory of it swapped for a link since reads nothing
   // outside the root (L111 #2).
@@ -1550,10 +1555,7 @@ function handle(msg, ws, ctx) {
     } else if (method === METHODS.readRange) {
       const offset = params[1], length = params[2];
 
-      // One answer holds what the hub asks of a range at most: a longer ask is a heap spike, not a read (audit 0916 M2).
-      if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0 || length > protocol.readRangeMaxBytes) {
-        return rpc(ws, id, null, `readRange expects a positive safe offset and a length of at most ${protocol.readRangeMaxBytes} bytes`);
-      }
+      if (!isRange(offset, length)) return rpc(ws, id, null, `readRange expects a positive safe offset and a length of at most ${protocol.readRangeMaxBytes} bytes`);
 
       const view = viewFromFrame(msg);
       const bytes = readRangeBytes(view, confinedDeviceViewPath(view, params[0], 'read'), offset, length);

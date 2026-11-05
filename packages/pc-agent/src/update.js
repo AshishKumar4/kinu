@@ -76,13 +76,16 @@ function releaseNumbers(version) {
 
 /**
  * Why an update to `next` from `current` is refused, or null: a release older than the one installed, by its
- * `major.minor.patch`, is a rollback to a signed build that may carry a fixed hole (SECURITY-devices C1). Builds of
- * one release are not ordered by their versions, so among them the signature is the only check.
+ * `major.minor.patch`, is a rollback to a signed build that may carry a fixed hole (SECURITY-devices C1); one that
+ * names no release cannot be ordered and is refused too. Builds of one release are not ordered by their versions
+ * (`<release>+<sha>`), so among them the signature is the only check until a signed build order exists.
  */
 function rollbackRefusal(current, next) {
   const [have, want] = [releaseNumbers(current), releaseNumbers(next)];
 
-  if (have === null || want === null) return null;
+  if (have === null) return null;
+
+  if (want === null) return `${next} names no release to order against the installed ${current}`;
   const order = want.map((part, at) => part - have[at]).find((difference) => difference !== 0) ?? 0;
 
   return order < 0 ? `${next} is older than the installed ${current}` : null;

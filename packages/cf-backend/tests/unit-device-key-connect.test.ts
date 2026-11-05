@@ -12,7 +12,7 @@ import { DEVICE_CONNECT_SECRET, DEVICE_FRAMES } from '@kinu.run/core';
 import { killAndAwaitExit, present, recordedIn } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { createTestUserDO, testOwner, type TestUserDO } from './helpers/user-do';
-import { registerTestDevice, secretHash, testDeviceKey, type TestDeviceKey } from './helpers/device-key';
+import { registerTestDevice, secretHash, signReplace, testDeviceKey, TEST_HUB_ORIGIN, type TestDeviceKey } from './helpers/device-key';
 import { startDeviceBridge, type DeviceBridge } from './helpers/device-bridge';
 
 const DAEMON_PATH = join(import.meta.dir, '../../pc-agent/src/index.js');
@@ -381,7 +381,17 @@ describe('an account links a bounded number of machines', () => {
       await expect(registerTestDevice(harness.userDO, 'one more', owner)).rejects.toThrow('50 linked machines');
       const [first] = linked;
 
-      await harness.userDO.revokeDevice(owner, present(first, 'a linked machine').deviceId);
+      const machine = present(first, 'a linked machine');
+      const next = testDeviceKey();
+      const asked = (key: TestDeviceKey) => ({ publicKey: key.publicKey, origin: TEST_HUB_ORIGIN, label: 'again' });
+
+      // At the cap: a machine connected again replaces its own row; a row a reset dropped is a new link, refused.
+      const replaced = await harness.userDO.registerDevice(owner, {
+        ...asked(next), replaces: { device: machine.deviceId, signature: signReplace(machine.key, { device: machine.deviceId, publicKey: next.publicKey }) },
+      });
+
+      await expect(harness.userDO.registerDevice(owner, { ...asked(testDeviceKey()), reenrol: 'dev-dropped' })).rejects.toThrow('50 linked machines');
+      await harness.userDO.revokeDevice(owner, replaced.deviceId);
       const admitted = await registerTestDevice(harness.userDO, 'one more', owner);
 
       expect({ admitted: admitted.deviceId.startsWith('dev-'), linked: harness.sql.exec(`SELECT COUNT(*) AS n FROM user_devices WHERE revoked_at IS NULL`).toArray() })
