@@ -3,7 +3,7 @@ import { abortAllDurableObjects } from 'cloudflare:test';
 import { expect, it } from 'vitest';
 import * as v from 'valibot';
 import { OwnedLiveShareSchema, ViewerRequestRecordSchema } from '@kinu.run/core';
-import type { SlateShareProbeRpc } from './env';
+import type { SlateShareProbeRpc } from '../env';
 
 type Probe = DurableObjectStub<SlateShareProbeRpc>;
 

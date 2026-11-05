@@ -1042,7 +1042,7 @@ with `nbf:` (no workspace name can hold a `:`), and the Agents SDK starts the
 such as this one.
 
 Measured 2026-09-21 in `/home/mrwhite0racle/Kinu-wt-nimbus-0922` with
-`bunx vitest run tests/workerd/nimbus-git-npm.test.ts` from
+`bunx vitest run tests/workerd/second/nimbus-git-npm.test.ts` from
 `packages/cf-backend`: 3 pass 1 fail with the workspace answering, the failure
 `resolver-fanout failed at layer 0: peer shard
 nbf:npm-resolve-fanout:9d8e18eb2375:3 (1 task) ... 'fanoutExecute' is a host
@@ -1962,7 +1962,7 @@ Failures travel through `attempt` and `attemptSync`; `settle` and
 `settleSync` in `src/errors.ts` are the one runner, on a microtask scheduler.
 `devboxFailure({ cause })` reads a failure back after Worker RPC has dropped
 its class; its tag, code and message survive
-(`cf-backend/tests/workerd/error-compatibility.test.ts`). The Files errno
+(`cf-backend/tests/workerd/second/error-compatibility.test.ts`). The Files errno
 error is the platform's contract, and one function (`fileFault`) puts it in
 the failure's cause. `gate:error-model` reads each package's failure type
 from one table (`FAILURE_SURFACES`: core `KinuError`, devbox `DevboxError`)

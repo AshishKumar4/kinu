@@ -29,7 +29,7 @@ const DEFECT: FirstRunDefect = {
   redDirection: 'Green requires the share op to answer a URL a signed-out fetch serves, the owner to turn it to "my access" through POST /api/shared/live/mode (a share starts on each viewer\'s own access, which reads nothing of the owner\'s), probe() to answer, mutate() to refuse denied with no mark file on the owner side, ctrl() on an agents-namespace slate to refuse denied, and the audit to record the admitted read and the refused mutation. '
     + 'No deployed build carried a hole, and one carrying it fails the deploy\'s own source gates before it reaches staging, '
     + 'so the red direction is proved at the grant itself: '
-    + '`grantAdmits` admitting every member lets the viewer\'s mutate() run in packages/cf-backend/tests/workerd/slate-share.test.ts.',
+    + '`grantAdmits` admitting every member lets the viewer\'s mutate() run in packages/cf-backend/tests/workerd/second/slate-share.test.ts.',
 };
 
 const PLAN = firstRunCasePlan(SUITE, 'cut');

@@ -598,7 +598,7 @@ An object goes when the last row naming its digest goes.
 
 ### Search, measured (2026-10-19)
 
-Measured twice: in workerd by `tests/workerd/mail-search.test.ts`, and at 19:18 UTC on a deployed Durable Object (the scratch Worker of §4, with the same rows and queries). The results were the same, except that only the deployed run tried the 5,320-character query.
+Measured twice: in workerd by `tests/workerd/second/mail-search.test.ts`, and at 19:18 UTC on a deployed Durable Object (the scratch Worker of §4, with the same rows and queries). The results were the same, except that only the deployed run tried the 5,320-character query.
 
 - `mail_fts` is created exactly as declared above, and `contentless_delete` works: a deleted row is no longer found.
 - Long queries of quoted words match: one of 364 characters, and one of 5,320 characters on the deployed object. `LIKE` refuses a pattern past 50 bytes (`PLATFORM_CATALOG['do.sqlite.like_pattern_bytes']`); FTS5 `MATCH` showed no such limit.

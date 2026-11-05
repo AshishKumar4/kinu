@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { FORK_ROW_SECTIONS } from '@kinu.run/core';
 import {
   PROBE_CUT_MESSAGE_ID, PROBE_CUT_RECORDED_AT, PROBE_LEDGER_ROWS, PROBE_SOUL_MISSION, PROBE_SOURCE_NAME,
-} from './fork-probe';
+} from '../fork-probe';
 
 /** A stub held across a reset is broken by it; the id survives. */
 const source = (name: string) => env.FORK_SOURCE.get(env.FORK_SOURCE.idFromName(name));

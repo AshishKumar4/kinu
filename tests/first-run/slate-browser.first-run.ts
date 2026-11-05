@@ -18,7 +18,7 @@ const DEFECT: FirstRunDefect = {
   missedBecause: 'The slate surface exposed openBrowser but refused connectBrowser: the sandbox half of driving a browser was installed only in eval programs, and a slate\'s egress carried no actor, so the gate refused every Chrome session.',
   provedRedAt: null,
   redDirection: 'Green requires title(engine, url) to answer \'Example Domain\' for both chrome and kitesurf. Before this, connectBrowser from a slate answered "runs only inside an eval program"; '
-    + 'packages/cf-backend/tests/workerd/slate-share.test.ts proves the gate admits the caller\'s own session and refuses another\'s.',
+    + 'packages/cf-backend/tests/workerd/second/slate-share.test.ts proves the gate admits the caller\'s own session and refuses another\'s.',
 };
 
 const PLAN = firstRunCasePlan(SUITE, 'browse');

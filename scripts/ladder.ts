@@ -1730,7 +1730,9 @@ export const LADDER: readonly Gate[] = [
     run: 'bun test --timeout=0 --isolate tests/browser/account-ux.test.ts tests/browser/drive-ux.test.ts tests/browser/slate-preview-ux.test.ts tests/browser/slate-sharing-ux.test.ts',
     label: 'UI gate self-tests: account, drive and slates',
     tier: 'ci',
-    // Measured alone 2026-09-27: 144.69 s wall, 51.17 s CPU, 2525 MiB peak Pss, start load 1.98.
+    // Measured alone 2026-09-27: 144.69 s wall, 51.17 s CPU, 2525 MiB peak Pss, start load 1.98. Armada 2026-11-05, 50
+    // green tiers: 264 s median, 430 s at most, so its four files run as two timed shards.
+    ciShards: 2,
     seconds: 144.69,
     catches: 'account setup, provider settings, onboarding and deletion; Drive uploads, folders and files; '
       + 'slate isolation and inline previews; shared libraries, blueprints and share dialogs. '
@@ -1749,8 +1751,9 @@ export const LADDER: readonly Gate[] = [
     // The glob admits new suites; the exclusions keep the other two UI rows disjoint.
     // The unsplit family ran 487 s under load on 2026-09-26 against its 480 s deadline.
     // Armada 2026-10-13/14, 127 green CI runs: 605 s median, 752 s p90, the longest row of the tier in most of them;
-    // its 28 files' timings sum to 700 s, so four timed shards of about 175 s each.
-    ciShards: 4,
+    // its 28 files' timings sum to 700 s, so four timed shards of about 175 s each. Armada 2026-11-05, 50 green tiers:
+    // each of the four took 296-308 s median, the tier's longest rows, so six.
+    ciShards: 6,
     seconds: 131.47,
     catches: 'the UI gates\' own decisions (computed style against the theme tokens, design-system scan), and each '
       + 'browser suite\'s behaviour on the gallery: the plan document\'s layout and rail, the models section\'s accessible '
@@ -1993,6 +1996,18 @@ export const LADDER: readonly Gate[] = [
     inputs: workersPool('packages/cf-backend'),
   },
   {
+    run: 'bun run test:workerd:cf-second',
+    label: 'Durable Object semantics under workerd, the second half',
+    tier: 'ci',
+    // The first row's suites from error-compatibility on, by name, under `tests/workerd/second/`: that row took 292 s
+    // median (374 s at most) over 50 green armada tiers on 2026-11-05, among the tier's longest, and each half pays its
+    // own Miniflare import instead. Measured alone on armada 2026-11-05: 196 s, the first half 163 s.
+    seconds: 196,
+    catches: 'the same defect classes as the first workerd row, on its second half by name.',
+    blind: 'the same as the first workerd row.',
+    inputs: workersPool('packages/cf-backend'),
+  },
+  {
     run: 'bun run test:workerd:cf-wide',
     label: 'Durable Object semantics under workerd, the wide suites',
     tier: 'ci',
@@ -2023,6 +2038,19 @@ export const LADDER: readonly Gate[] = [
       + 'Object across a real wake, a retention sweep, a spend aggregate over 20,000 rows, '
       + 'an EIO on files, a step cap and a stream lifecycle — the long-running half.',
     blind: 'the same as the row above.',
+    inputs: workersPool('packages/cf-backend'),
+  },
+  {
+    run: 'bun run test:workerd:cf-kill',
+    label: 'Durable Object semantics under workerd, the kill suite',
+    tier: 'ci',
+    // n-kill, out of the long suites' row, which took 295 s median (331 s at most) over 50 green armada tiers on
+    // 2026-11-05, among the tier's longest rows; n-kill's own tests were 135 s of it (2026-10-14). Measured alone on
+    // armada 2026-11-05: 182 s, the rest of the long suites 173 s.
+    seconds: 182,
+    catches: 'a Durable Object killed again and again mid-turn under workerd, each kill leaving nothing the next '
+      + 'activation cannot finish.',
+    blind: 'the same as the first workerd row.',
     inputs: workersPool('packages/cf-backend'),
   },
   {
