@@ -1379,7 +1379,7 @@ export { type RatioProblem } from './strategy/exec-ratio';
 
 export { liveHead, LiveWorkers } from './strategy/live-workers';
 
-export { runNodeAgent, type HostedNodeSeat } from './strategy/node-agent';
+export { NODE_BUILTIN_TOOLS, runNodeAgent, type HostedNodeSeat } from './strategy/node-agent';
 
 export {
   facetHomeProvisioner, facetHomeReleaser, nodeWorkspace, type NodeHomeHost, type NodeIdentity, type NodeWorkspace,

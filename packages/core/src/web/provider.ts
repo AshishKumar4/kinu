@@ -35,7 +35,7 @@ export interface WebSearchResponse {
   source: WebSearchProviderId;
 }
 
-export interface WebFetchResult {
+interface WebFetchResult {
   url: string;
   title?: string;
   retrievedAt: string;

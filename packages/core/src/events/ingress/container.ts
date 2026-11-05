@@ -43,7 +43,7 @@ const ContainerEventEnvelopeSchema = v.variant('kind', [
   ProcessDoneEnvelope, FileChangedEnvelope,
 ]);
 
-export type ContainerEventEnvelope = v.InferOutput<typeof ContainerEventEnvelopeSchema>;
+type ContainerEventEnvelope = v.InferOutput<typeof ContainerEventEnvelopeSchema>;
 
 export interface ContainerIngressDeps {
   readonly log: EventLog;

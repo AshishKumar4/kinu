@@ -74,7 +74,7 @@ export type ReplyChannelId = string;
 
 export type ReplyChannelKind = 'peer_back' | 'email_thread';
 
-export interface ReplyChannelRef {
+interface ReplyChannelRef {
   id: ReplyChannelId;
   kind: ReplyChannelKind;
 }
@@ -124,7 +124,7 @@ export const ProcessDonePayloadSchema = v.object({
   stderr_unsaved: v.optional(v.string()),
 });
 
-export type ProcessDonePayload = v.InferOutput<typeof ProcessDonePayloadSchema>;
+type ProcessDonePayload = v.InferOutput<typeof ProcessDonePayloadSchema>;
 
 export const TimerPayloadSchema = v.object({
   trigger_id: v.string(),
@@ -255,7 +255,7 @@ export const ReplyRequestPayloadSchema = v.object({
   awaiting_event_id: v.string(),
 });
 
-export type ReplyRequestPayload = v.InferOutput<typeof ReplyRequestPayloadSchema>;
+type ReplyRequestPayload = v.InferOutput<typeof ReplyRequestPayloadSchema>;
 
 export const McpChatPayloadSchema = v.object({
   client_id: v.string(), method: v.string(), arguments: v.unknown(), request_id: v.string(),
@@ -301,7 +301,7 @@ export type ReadableKinuEvent =
   | (ReadableEventBase & { variant: 'mcp_third_party'; payload: McpThirdPartyPayload });
 
 /** Replaced payloads are typed apart so routing code cannot treat a digest as the event body. */
-export type ProtectedKinuEvent = BaseEvent & {
+type ProtectedKinuEvent = BaseEvent & {
   payload_visibility: 'hash' | 'hmac' | 'opaque_handle';
   payload: JsonValue;
 };
