@@ -11,7 +11,7 @@
  */
 import * as v from 'valibot';
 import type { EvalSubgoal } from '@kinu.run/test-utils';
-import { WEB_SEARCH_PROVIDERS, type AccountSpend, type JsonValue, type RunEvent, type WebSearchProviderId } from '../../packages/core/src/index';
+import { WEB_SEARCH_PROVIDERS, type AccountSpend, type JsonValue, type RunEvent, type WebSearchProviderId, type WorkspaceSpend } from '../../packages/core/src/index';
 import type { KinuPublicSession } from '../../evals/src/session';
 import { SEARCH_ASK as ASK } from './asks';
 
@@ -53,13 +53,33 @@ const NO_ACCOUNT = 'no account';
 /** An account's row as Settings › Usage names it. */
 const payerOf = (row: AccountSpend) => (row.provider === null ? NO_ACCOUNT : `${row.provider}@${row.account ?? ''}`);
 
-/** Ask for one search and read what came of it: answered by `provider`, paid for by `payer`. */
-export async function searchSubgoals(session: KinuPublicSession, expected: { readonly provider: WebSearchProviderId; readonly payer: SearchPayer }): Promise<EvalSubgoal[]> {
-  const subgoals: EvalSubgoal[] = [];
+/** What one search left behind: the run's events, this workspace's spend, and the reply that followed. */
+export interface SearchEvidence {
+  readonly events: readonly RunEvent[];
+  readonly spend: Pick<WorkspaceSpend, 'producers' | 'accounts'>;
+  readonly reply: string;
+}
 
+/** The expectation a search case holds its evidence to: answered by `provider`, paid for by `payer`. */
+export interface SearchExpectation {
+  readonly provider: WebSearchProviderId;
+  readonly payer: SearchPayer;
+}
+
+/** Ask for one search and read what came of it. */
+export async function searchSubgoals(session: KinuPublicSession, expected: SearchExpectation): Promise<EvalSubgoal[]> {
   await session.prompt(ASK);
 
   const events = await session.runEvents();
+  const spend = await session.spend();
+  const reply = (await session.history()).filter((row) => row.role === 'assistant').at(-1)?.text ?? '';
+
+  return searchEvidenceSubgoals({ events, spend, reply }, expected);
+}
+
+/** {@link searchSubgoals}'s reading of a search's evidence, every subgoal off durable state. */
+export function searchEvidenceSubgoals({ events, spend, reply }: SearchEvidence, expected: SearchExpectation): EvalSubgoal[] {
+  const subgoals: EvalSubgoal[] = [];
 
   const searches = events.filter(isToolCallEnd)
     .filter((call) => call.name === 'web' && v.safeParse(SearchArgsSchema, call.args).success);
@@ -98,7 +118,6 @@ export async function searchSubgoals(session: KinuPublicSession, expected: { rea
 
   // This case's workspace is its own: its searches are the only calls on the payer, and the other payer holds none. The
   // model is the scripted one on its own account, never either payer.
-  const spend = await session.spend();
   const filed = spend.producers.find((producer) => producer.source === 'search')?.calls ?? 0;
   const payer = expected.payer === 'account' ? OWN_GATEWAY : NO_ACCOUNT;
   const callsOn = (account: string) => spend.accounts.filter((row) => payerOf(row) === account).reduce((sum, row) => sum + row.calls, 0);
@@ -112,7 +131,6 @@ export async function searchSubgoals(session: KinuPublicSession, expected: { rea
       + `this account's search bills ${payer === NO_ACCOUNT ? `${NO_ACCOUNT} (the deployment's gateway)` : payer}, and only it`,
   });
 
-  const reply = (await session.history()).filter((row) => row.role === 'assistant').at(-1)?.text ?? '';
   const cited = results.filter((url) => reply.includes(url));
 
   subgoals.push({
