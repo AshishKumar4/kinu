@@ -11,8 +11,8 @@ import { manifestDelta, packagePaths, TOOLS_MANIFEST, TOOLS_STAGED, toolsApplyCo
 
 // Production, 2026-10-24 (ledger 1024-h): the owner's box restored its own snapshot under tools 334f3712 where the deploy
 // pinned 0c6dd2b8, and fetched and installed the whole 358 MB tarball inside its 25 s start, 12-24 s on every box after a
-// re-pin, for a change of one 0.7 MB binary. A start fetches the files that changed, by the pin's manifest; a pin that
-// changes a package installs whole, as apt over the whole repository is the only install that leaves base packages be.
+// re-pin, for a change of one 0.7 MB binary. A start fetches the files that changed, by the pin's manifest. A pin that
+// changes a package (D120) is the container tier's `tools` contract's, which runs apt.
 
 const scratch = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}tools-refresh-`));
 
@@ -117,7 +117,7 @@ describe('a start\'s tools refresh', () => {
       exec: async (command: string) => {
         const kinds: readonly (readonly [boolean, string])[] = [
           [command.startsWith('cat /usr/local/lib/devbox/tools-installed'), 'stamp'], [command.includes(`cat ${TOOLS_MANIFEST}`), 'manifest'],
-          [command.includes('filesMs='), 'apply'], [command.includes('extractMs='), 'install'], [command.startsWith('mkdir'), 'mkdir'],
+          [command.includes('extractMs='), 'install'], [command.includes('filesMs='), 'apply'], [command.startsWith('mkdir'), 'mkdir'],
         ];
 
         asked.push(kinds.find(([matched]) => matched)?.[1] ?? command.slice(0, 20));
@@ -126,9 +126,9 @@ describe('a start\'s tools refresh', () => {
 
         if (command.includes(`cat ${TOOLS_MANIFEST}`)) return unfinished ? { stdout: '', exitCode: 3 } : { stdout: manifest, exitCode: 0 };
 
-        if (command.includes('filesMs=')) return { stdout: 'filesMs=40 files=1 removed=0 bytes=712000\n', exitCode: 0 };
-
         if (command.includes('extractMs=')) return { stdout: 'extractMs=2100 installMs=1500 changed=0\n', exitCode: 0 };
+
+        if (command.includes('filesMs=')) return { stdout: 'filesMs=40 files=1 removed=0 bytes=712000\n', exitCode: 0 };
 
         return { stdout: '', exitCode: 0 };
       },
@@ -165,19 +165,17 @@ describe('a start\'s tools refresh', () => {
     });
   });
 
-  test('a box with no manifest, a store with none for the pin, a pin that changes a package, or a full install cut short installs whole and says why', async () => {
+  test('a box with no manifest, a store with none for the pin, or an install cut short installs whole and says why', async () => {
     const unmanifested = box({ stamp: 'pin-1', manifest: '', published: true });
     const unpublished = box({ stamp: 'pin-1', manifest: installed, published: false });
-    const repackaged = box({ stamp: 'pin-1', manifest: installed, published: true, pinned: `${next}\n${line('tini 2', 'usr/local/lib/devbox/debs/tini_0.19.0-2_amd64.deb')}` });
     const unfinished = box({ stamp: 'pin-1', manifest: next, published: true, unfinished: true });
-    const runs = [await unmanifested.run(), await unpublished.run(), await repackaged.run(), await unfinished.run()];
+    const runs = [await unmanifested.run(), await unpublished.run(), await unfinished.run()];
 
-    expect({ runs: runs.map(({ mode, reason, extractMs, installMs }) => ({ mode, reason, extractMs, installMs })), fetched: repackaged.asked.filter((step) => step.startsWith('pipe')) }).toEqual({
+    expect({ runs: runs.map(({ mode, reason, extractMs, installMs }) => ({ mode, reason, extractMs, installMs })), fetched: unfinished.asked.filter((step) => step.startsWith('pipe')) }).toEqual({
       runs: [
         { mode: 'full', reason: 'the box holds no tools manifest', extractMs: 2100, installMs: 1500 },
         { mode: 'full', reason: `the store holds no ${toolsManifestKey('pin-2')}.0`, extractMs: 2100, installMs: 1500 },
-        { mode: 'full', reason: 'the pin changes 1 package files', extractMs: 2100, installMs: 1500 },
-        { mode: 'full', reason: 'the box\'s last full install did not finish', extractMs: 2100, installMs: 1500 },
+        { mode: 'full', reason: 'the box\'s last install did not finish', extractMs: 2100, installMs: 1500 },
       ],
       fetched: ['pipe devbox-tools/pin-2.tgz -> /tmp/devbox-tools.tgz'],
     });
