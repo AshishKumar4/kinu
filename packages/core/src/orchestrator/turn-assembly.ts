@@ -23,7 +23,7 @@ import { ownProfileChoices, resolveTurnProfile, type PinnedProfile, type Profile
 import type { FrozenAuthority } from './turn-facts';
 import type { TierId } from '../types/profile';
 import { reasoningEffortOptions } from '../providers/effort';
-import { KinuError, settleSync } from '../obs/index';
+import { diagnostics, KinuError, settleSync } from '../obs/index';
 import type { CountableRequest, InputTokenCount } from '../providers/input-tokens';
 import { parseModelSpec, type CacheRetention } from '../providers/types';
 import type { ModelCallSink, ModelCallSpend, ModelOperationSink } from '../events/model-call';
@@ -503,16 +503,31 @@ export interface TurnSourcesBundle {
 
 export async function materializeTurnSources(sources: TurnAssemblySources, request: TurnAssemblyRequest): Promise<TurnSourcesBundle> {
   const { models } = sources;
-  const { profileInputs, ancestors, roleSkills, drafted: { tier, workMode }, served, limits } = await draftTurn(sources, request);
+  // Each read's wall time from the start, reported once a turn (#103: what a turn's preparation waits on).
+  const timing: Record<string, number> = {};
+  const began = performance.now();
+
+  const timed = async <T>(read: string, value: T | PromiseLike<T>): Promise<Awaited<T>> => {
+    const answered = await value;
+
+    timing[`${read}Ms`] = performance.now() - began;
+
+    return answered;
+  };
+
+  const { profileInputs, ancestors, roleSkills, drafted: { tier, workMode }, served, limits } = await timed('draft', draftTurn(sources, request));
   const specs = [served, ...tier.fallbacks.map((fallback) => models.normalize(fallback.model))];
-  await models.catalog.warm(specs);
+  await timed('warm', models.catalog.warm(specs));
 
   const [skills, soul, identity, agentsMd, memoryTail, windows] = await Promise.all([
-    sources.skills(request.userText, roleSkills, limits), sources.soul(), sources.identity(), sources.agentsMd(limits), sources.memoryTail(),
-    Promise.all(specs.map(async (spec) => [spec, {
+    timed('skills', sources.skills(request.userText, roleSkills, limits)), timed('soul', sources.soul()), timed('identity', sources.identity()),
+    timed('agentsMd', sources.agentsMd(limits)), timed('memoryTail', sources.memoryTail()),
+    timed('windows', Promise.all(specs.map(async (spec) => [spec, {
       window: await models.catalog.windowFor(spec), media: [...models.catalog.acceptedMedia(spec)], callsTools: models.catalog.callsTools(spec),
-    }] as const)),
+    }] as const))),
   ]);
+
+  diagnostics.event('turn.sources_timing', { ...timing, totalMs: performance.now() - began });
 
   return {
     backend: sources.backend,
