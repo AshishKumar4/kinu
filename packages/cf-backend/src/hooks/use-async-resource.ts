@@ -68,6 +68,16 @@ export function useReloadWhenMoved(moved: number, reload: () => void): void {
   }, [moved, reload]);
 }
 
+/** Reloads as the person comes back to the page (from a hand-off to another site), while `on`. */
+export function useReloadOnFocus(reload: () => void, on = true): void {
+  useEffect(() => {
+    if (!on) return undefined;
+    window.addEventListener("focus", reload);
+
+    return () => window.removeEventListener("focus", reload);
+  }, [on, reload]);
+}
+
 /** `load` and `revalidate` must be stable (useCallback): they are the effect keys. */
 export function useAsyncResource<T>(
   load: () => Promise<T>,
