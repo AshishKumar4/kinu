@@ -103,11 +103,3 @@ export function listLessons(
   return rows.map(toLessonRow);
 }
 
-export function getLesson(sql: SqlExecutor, actor: ActorHandle, id: string): LessonRow | null {
-  actor.assertCurrent();
-
-  const rows = sql<RawLessonRow>`SELECT * FROM lessons
-    WHERE actor_id = ${actor.actorId} AND id = ${id} LIMIT 1`;
-
-  return rows[0] ? toLessonRow(rows[0]) : null;
-}

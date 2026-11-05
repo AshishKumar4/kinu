@@ -124,7 +124,7 @@ export async function joinHarnessKeepAlives(agent: workersModule.DurableObject):
   while (open !== undefined && open.size > 0) await Promise.allSettled(open);
 }
 
-/** A lane's body (`ActorAgent.holdLane`), joined with the fibers, and with `agent`'s own when it names its object. */
+/** A lane's body (`OrchestratorAgent.holdLane`), joined with the fibers, and with `agent`'s own when it names its object. */
 export function trackHarnessLane<Result>(lane: Promise<Result>, agent?: workersModule.DurableObject): Promise<Result> {
   harnessFiberBodies.add(lane);
   const own = agent === undefined ? undefined : harnessFiberBodiesOf.get(agent) ?? new Set<Promise<unknown>>();

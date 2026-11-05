@@ -117,7 +117,6 @@ export const AGENT_RPC_ACCESS = {
   retimeDailySchedule: 'interactive',
   // A CI token that runs tasks must not take the whole database.
   exportWorkspaceArchive: 'interactive',
-  experienceAction: 'interactive',
   forkAgent: 'interactive',
   revertConversation: 'interactive',
   clearConversation: 'interactive',

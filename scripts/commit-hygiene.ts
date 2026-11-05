@@ -247,7 +247,7 @@ export interface Narration {
  *     `the owner asked`, `the owner was right`, `which the owner caught`, `per
  *     the owner's explicit instruction`, `the owner's floor-continuation
  *     question`. Past tense is doing real work here: `the owner asks what the
- *     WORKSPACE cost` (actor-agent.ts:1208) is a product sentence about a user's
+ *     WORKSPACE cost` (orchestrator.ts) is a product sentence about a user's
  *     question, and the present tense is what tells the two apart.
  *   - a session used as a unit of work or time — `shipped this session`, `this
  *     session has been about`, `before this session` — as against a session used

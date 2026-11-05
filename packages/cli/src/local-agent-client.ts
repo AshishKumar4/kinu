@@ -1,4 +1,4 @@
-import { existsSync, statSync } from 'node:fs';
+import { statSync } from 'node:fs';
 import { localFileLinks, type BranchStatusEvent, type FileLinks, type PathPlanes, type SessionEvent } from '@kinu.run/core';
 import type { AgentConfigStore, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementListing, RefinementRequestView, SubagentInspectionRequest, SubagentInspectionResult, WorkspaceSpend, WorkspaceWork, ModelTestResult } from '@kinu.run/core';
 import { getChatHistoryPage, keptMediaName, getToolList, CHAT_SESSION_ID, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, usageReported } from '@kinu.run/core';
@@ -12,7 +12,7 @@ import {
   type LocalAgentHost,
   type LocalAgentSession,
 } from '@kinu.run/cli-backend';
-import { agentDbPath } from './config';
+import { existingAgentDbPath } from './config';
 import { renameLocalAgent } from './agent-create';
 import { inspectLocalSubagent, localJobRunning, readLocalWorkspaceWork } from './local-inspection';
 import { createLocalHost } from './local-host';
@@ -57,12 +57,7 @@ interface LocalAgentClientOptions extends LocalModelResolverOptions {
 
 /** A client over `name` as this machine hosts it (`createLocalHost`): the daemon's composition, its team included. */
 export async function openLocalAgentClient(name: string, opts: LocalAgentClientOptions = {}): Promise<LocalAgentClient> {
-  const dbPath = agentDbPath(name);
-
-  if (!existsSync(dbPath)) {
-    throw new Error(`Workspace "${name}" not found. Create it with: kinu create ${name}`);
-  }
-
+  const dbPath = existingAgentDbPath(name);
   const { transcript, surface, ...root } = opts;
   const host = createLocalHost({ driverKind: 'interactive', surface: surface ?? 'interactive', root: { ...root, name } });
 

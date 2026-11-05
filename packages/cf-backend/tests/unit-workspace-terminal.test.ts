@@ -11,7 +11,7 @@ import type { TerminalSocket, WorkspaceTerminal } from '../src/workspace-host';
 import { socketConnection } from './helpers/bindings';
 
 // After the harness registers the SDK mock: a static import would bind it to the real `agents` Agent.
-const { ActorAgent } = await import('../src/actor-agent');
+const { OrchestratorAgent } = await import('../src/orchestrator');
 
 interface RecordedTerminal {
   readonly terminal: WorkspaceTerminal;
@@ -140,7 +140,7 @@ describe('the actor hands a terminal socket to the runtime shell', () => {
     const { agent } = await activated();
     const pane = connection('pane', [WORKSPACE_TERMINAL_TAG]);
     const chat = connection('chat', []);
-    const base = Object.getPrototypeOf(ActorAgent.prototype);
+    const base = Object.getPrototypeOf(OrchestratorAgent.prototype);
     const fanout = spyOn(base, 'broadcast');
 
     try {

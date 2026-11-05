@@ -22,7 +22,7 @@ import { settle } from '../obs/index';
 import { renderToolResult } from '../utils/evidence-window';
 import type { AgentRuntime } from '../types/agent-runtime';
 
-// Not `ActorToolDeps`: cf-backend's actor-agent.ts already owns that name.
+// Not `ActorToolDeps`: cf-backend's orchestrator.ts already owns that name.
 export interface ActorToolsetDeps extends BuiltinToolDeps {
   /** Deps for `agents`; registered when any group is wired, actions gate per group. */
   agents?: AgentsToolDeps;
