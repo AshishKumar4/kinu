@@ -13,6 +13,7 @@ import {
   orchestratorHarness, reactivateOrchestratorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 import { socketConnection } from './helpers/bindings';
+import { chatRequest } from './helpers/chat-frames';
 
 type Prompt = LanguageModelV4CallOptions['prompt'];
 
@@ -20,15 +21,6 @@ const MINUTE_MS = 60_000;
 
 /** A clock far from a day's end: the block states the date, so a turn either side of midnight states a new one. */
 const NOON = Date.parse('2026-10-07T12:00:00.000Z');
-
-function chatRequest(id: string, text: string): string {
-  return JSON.stringify({
-    type: 'cf_agent_use_chat_request', id,
-    init: { method: 'POST', body: JSON.stringify({
-      messages: [{ id: `input-${id}`, role: 'user', parts: [{ type: 'text', text }] }], trigger: 'submit-message',
-    }) },
-  });
-}
 
 /** One root turn through the chat gate; returns the request its model received. */
 async function turn(agent: HarnessOrchestratorAgent, id: string, text: string): Promise<Prompt> {

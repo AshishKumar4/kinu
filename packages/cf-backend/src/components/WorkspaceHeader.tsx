@@ -67,7 +67,7 @@ export function WorkspaceHeader({ workspace, chats, active, newChat, leading, tr
 
   return (
     <header className="p-bar" data-workspace-bar>
-      {leading && <div className="p-bar-menu">{leading}</div>}
+      {leading && <div className="p-bar-menu" data-bar-menu>{leading}</div>}
       <nav className="p-bar-strip" data-overflow={outline.overflow} aria-label="Chats">
         <ul ref={strip} className="p-bar-tabs">
           {items.map((item, index) => (
@@ -88,7 +88,7 @@ function BarTab({ item, active, afterActive }: { item: BarItem; active: boolean;
   const [editing, setEditing] = useState(false);
 
   return (
-    <li className="p-bar-tab p-halo" data-key={item.key} data-agent-tab={item.tab} data-status={item.activity} data-active={active ? "" : undefined}
+    <li className="p-bar-tab p-halo" data-bar-tab data-key={item.key} data-agent-tab={item.tab} data-status={item.activity} data-active={active ? "" : undefined}
       data-after-active={afterActive ? "" : undefined} data-title={item.title === true ? "" : undefined}>
       {editing && item.rename ? (
         <RenameField value={item.rename.value} hint={item.label} subject={item.title ? "Workspace name" : "Chat name"} save={item.rename.save} done={() => setEditing(false)} />
@@ -99,7 +99,7 @@ function BarTab({ item, active, afterActive }: { item: BarItem; active: boolean;
             {(item.mascot !== undefined || item.title === true) && <span className="p-mascot" />}
             {item.label}
           </span>
-          <Link to={item.to} className="p-bar-link" aria-current={active ? "page" : undefined}
+          <Link to={item.to} className="p-bar-link" data-bar-link aria-current={active ? "page" : undefined}
             title={item.title ? "Workspace overview" : undefined}>
             {item.mascot !== undefined && <ChatMascot seed={item.mascot.seed} colour={item.mascot.colour} activity={item.activity} />}
             {item.title === true && <WorkspaceLogo title={item.label} logo={item.logo} />}
@@ -185,7 +185,7 @@ export function FocusBar({ workspace, agent, line, leading, trailing, tabs }: {
 }) {
   return (
     <header className="p-bar" data-workspace-bar data-layout="focus">
-      {leading && <div className="p-bar-menu">{leading}</div>}
+      {leading && <div className="p-bar-menu" data-bar-menu>{leading}</div>}
       <div className="flex min-w-0 flex-1 items-center gap-3 pl-4">
         <PressableLink to={workspace.to} className="flex w-auto min-w-0 items-center gap-3 py-1 pr-2"
           title={`${agent.label}: what it did and is doing`} data-focus-identity>

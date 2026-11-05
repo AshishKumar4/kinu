@@ -3,7 +3,7 @@ import { tierIdsOf, TIER_IDS, type TierId } from '@kinu.run/core';
 import type { KeyEvent, ScrollBoxRenderable } from '@opentui/core';
 import type { TuiActionId } from './actions';
 import type { TuiHubData, TuiHubRow, TuiHubView } from './hubs';
-import type { ActiveSurface } from './chat-app';
+import type { ActiveSurface } from './chat-surface';
 
 function historyScroll(
   actionId: TuiActionId,

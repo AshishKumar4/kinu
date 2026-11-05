@@ -8,15 +8,7 @@ import { driveUntil, gatewayWorkspace, workspaceMainActor } from './helpers/acto
 import { delayNextCacheWarm } from './helpers/agent-facets';
 import { socketConnection } from './helpers/bindings';
 import { chatCompletion, stubAiBinding } from './helpers/platform-gateway';
-
-function chatRequest(id: string, text: string): string {
-  return JSON.stringify({
-    type: 'cf_agent_use_chat_request', id,
-    init: { method: 'POST', body: JSON.stringify({
-      messages: [{ id: `input-${id}`, role: 'user', parts: [{ type: 'text', text }] }], trigger: 'submit-message',
-    }) },
-  });
-}
+import { chatRequest } from './helpers/chat-frames';
 
 test("a turn ends in its room while its warm's arming is still on the way, and the next turn opens after it", async () => {
   let asked = 0;

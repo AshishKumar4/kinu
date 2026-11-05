@@ -8,14 +8,13 @@ import { aiProxyRoutes } from '../src/user/ai-proxy';
 import { cliAccount, unreachableAssets, unreachableKv, unreachableNamespace, workerContext } from './helpers/bindings';
 import { KinuError } from '@kinu.run/core/obs';
 import {
-  asFetchFunction,
   parseJsonObject,
   type JsonObject,
   type JsonValue,
 } from '@kinu.run/core';
 import type { AccessTokenScope, AuthRequest, AuthResolution, UserCaller, WorkersAIRunOptions } from '@kinu.run/core';
 import * as v from 'valibot';
-import { chatResponse, OK_CHAT_ANSWER } from '@kinu.run/test-utils';
+import { chatResponse, OK_CHAT_ANSWER, holdFetch } from '@kinu.run/test-utils';
 import { requestUrl } from '@kinu.run/core';
 
 
@@ -53,9 +52,9 @@ const ModelListSchema = v.object({
   data: v.array(v.object({ id: v.string(), object: v.string(), owned_by: v.string() })),
 });
 
-const originalFetch = globalThis.fetch;
+const network = holdFetch();
 
-afterEach(() => { globalThis.fetch = originalFetch; });
+afterEach(network.restore);
 
 /** What a streamed turn really gets back from `Ai.run`, not a finished completion. */
 const DIRECT_SSE = [
@@ -175,7 +174,7 @@ interface CapturedUpstream { url: string; headers: Headers; body: JsonObject }
 
 function captureUpstream(respond: (seen: CapturedUpstream) => Response): CapturedUpstream[] {
   const captured: CapturedUpstream[] = [];
-  globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
+  network.stub(async (input: RequestInfo | URL, init?: RequestInit) => {
     const seen: CapturedUpstream = {
       url: requestUrl(input),
       headers: new Headers(init?.headers),
@@ -464,7 +463,7 @@ describe('AI proxy model → upstream selection', () => {
     const signals: Array<AbortSignal | null | undefined> = [];
     let sent = 0;
 
-    globalThis.fetch = asFetchFunction(async (_input, init) => {
+    network.stub(async (_input, init) => {
       sent++;
       signals.push(init?.signal);
 
@@ -573,7 +572,7 @@ describe('AI proxy streaming + refresh + error mapping', () => {
 describe('AI proxy model listing', () => {
   test('GET /models lists the proxy-served wire ids in OpenAI list shape', async () => {
     const { env } = setupEnv({ gatewayId: 'byok-gw', token: `t-${Math.random()}` });
-    globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL) => {
+    network.stub(async (input: RequestInfo | URL) => {
       const url = requestUrl(input);
 
       if (url.startsWith('https://models.dev/')) {

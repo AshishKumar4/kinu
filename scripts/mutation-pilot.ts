@@ -1,25 +1,20 @@
 /**
  * The mutation pilot: a mechanical search for decisions no suite defends.
  *
- * ## Where it sits between the two programs already here
+ * ## Where it sits beside the gate
  *
- * `scripts/mutation-fences.ts` is a GATE over four hand-declared fences. Each
- * one names a defect that already shipped, the exact lines that closed it, and
- * the test that must go red when they are stripped. It proves that four known
- * proofs have not rotted. Its own green output states the hole: "a fence nobody
- * declared" — nothing enumerates the guards a module contains.
+ * `scripts/mutation-fences.ts` is a GATE over hand-declared fences. Each one
+ * names a defect that already shipped, the exact lines that closed it, and the
+ * test that must go red when they are stripped. It proves that known proofs have
+ * not rotted; nothing there enumerates the guards a module contains.
  *
- * `scripts/mutation-sweep.ts` is a hand-authored CATALOGUE of 20 mutations over
- * `packages/core/src/strategy/` and `packages/core/src/delegation/agents-tool.ts`, aimed where
- * an audit had already found four built-and-unwired features. Each entry is a decision
- * someone chose to question, with a sentence saying what it decides.
- *
- * Both need a human to name the line first. This program does not: it GENERATES
- * mutants from the syntax tree over a pinned scope, so the question "which
- * decisions here are undefended" is asked of every decision rather than of the
- * ones somebody thought of. That is the only difference that matters, and it is
- * why a survivor here is a candidate for a new fence rather than a finding about
- * an old one.
+ * This program searches. It GENERATES mutants from the syntax tree over a pinned
+ * scope, so "which decisions here are undefended" is asked of every decision
+ * rather than of the ones somebody thought of, and a survivor is a candidate for
+ * a new fence. With `--catalogue` it judges, the same way, the hand-named
+ * mutations in `mutation-sweep.catalogue.ts` instead: 19 over
+ * `packages/core/src/strategy/` and `delegation/agents-tool.ts`, aimed where an
+ * audit had found built-and-unwired features, each with the decision it names.
  *
  * ## Scope, and why this one
  *
@@ -66,8 +61,7 @@
  *
  * ## Why in place, and why never in the main checkout
  *
- * Inherited from `mutation-sweep.ts` rather than re-decided, because the
- * measurement behind it is recorded there: a sandbox COPY of this tree — which
+ * Measured, not assumed: a sandbox COPY of this tree — which
  * is exactly how Stryker works — resolves `@kinu.run/*` through the donor's
  * `node_modules` to the PRISTINE package, and 60 core suites plus 23 core
  * sources import `@kinu.run/*`, so a mutant would be invisible to two thirds of
@@ -77,7 +71,7 @@
  * dirty target, every mutation is written and taken back within one mutant, and
  * the restore is verified byte for byte before the next one starts.
  *
- * A TIMEOUT IS NOT A KILL, also inherited: the deadline is a multiple of the
+ * A TIMEOUT IS NOT A KILL: the deadline is a multiple of the
  * baseline this run measures, and a mutant that outlives it is reported in its
  * own class for a human to read.
  *
@@ -96,6 +90,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { CATALOGUE } from './mutation-sweep.catalogue';
 import { isProductSource, isRunnableSuite, readMatching, trackedFiles } from './sources';
 import { REPO_ROOT as root } from './repo-root';
 import {
@@ -135,7 +130,7 @@ export function scopeFiles(): Map<string, string> {
  * a mutant evidence about the suite: a mutation `tsc` rejects is caught by the
  * typechecker and says nothing about what the tests assert.
  */
-export type Operator = 'negate-condition' | 'boundary' | 'logic' | 'drop-guard';
+export type Operator = 'negate-condition' | 'boundary' | 'logic' | 'drop-guard' | 'catalogue';
 
 export interface Mutant {
   /** `file:line:operator`, stable across runs so `--only` can name one. */
@@ -286,6 +281,22 @@ export function mutantsIn(file: string, text: string): Mutant[] {
 }
 
 /** The whole pool over the pinned scope, in a stable order. */
+/** The catalogue's hand-named mutations (`mutation-sweep.catalogue.ts`), as mutants the same run judges: each at the
+ *  one place its snippet sits, its symbol the defender search's name. */
+export function catalogueMutants(): Mutant[] {
+  return CATALOGUE.map((entry) => {
+    const text = readFileSync(join(root, entry.file), 'utf8');
+    const start = text.indexOf(entry.find);
+
+    if (start === -1 || text.indexOf(entry.find, start + 1) !== -1) throw new Error(`${entry.id}: its snippet does not sit in ${entry.file} exactly once`);
+
+    return {
+      id: `catalogue:${entry.id}`, file: entry.file, operator: 'catalogue', start, end: start + entry.find.length,
+      before: entry.find, after: entry.replace, line: text.slice(0, start).split('\n').length, enclosing: entry.symbol,
+    } satisfies Mutant;
+  });
+}
+
 export function pool(files: ReadonlyMap<string, string>): Mutant[] {
   return [...files]
     .sort(([a], [b]) => a.localeCompare(b))
@@ -436,6 +447,8 @@ const MISSING_ASSERTION = {
     + 'where one holds and the other does not',
   'drop-guard': 'no suite reaches this guard: assert the refusal it performs, or delete '
     + 'the guard if nothing can reach it',
+  catalogue: 'no suite defends the decision its catalogue entry names: assert it, or delete the code if nothing '
+    + 'reads it',
 } satisfies Record<Operator, string>;
 
 export function render(verdicts: readonly Verdict[], poolSize: number, wallMs: number): string {
@@ -503,7 +516,8 @@ if (import.meta.main) {
   };
 
   const files = scopeFiles();
-  const all = pool(files);
+  // `--catalogue`: the hand-named mutations instead of the generated sample, judged the same way.
+  const all = argv.includes('--catalogue') ? catalogueMutants() : pool(files);
 
   if (all.length === 0) {
     throw new Error(
@@ -518,7 +532,7 @@ if (import.meta.main) {
   const chooseMutants = (): Mutant[] => {
     if (only !== undefined) return all.filter((mutant) => mutant.id === only);
 
-    if (argv.includes('--all')) return all;
+    if (argv.includes('--all') || argv.includes('--catalogue')) return all;
 
     return select(all, budget);
   };
@@ -542,7 +556,9 @@ if (import.meta.main) {
       byOperator.set(mutant.operator, (byOperator.get(mutant.operator) ?? 0) + 1);
     }
 
-    console.log(`${all.length} mutants over ${files.size} files in ${SCOPE.join(', ')}`);
+    console.log(argv.includes('--catalogue')
+      ? `${all.length} catalogue mutations over ${new Set(all.map((mutant) => mutant.file)).size} files`
+      : `${all.length} mutants over ${files.size} files in ${SCOPE.join(', ')}`);
 
     for (const [operator, count] of [...byOperator].sort(([a], [b]) => a.localeCompare(b))) {
       console.log(`  ${operator.padEnd(18)} ${count}`);

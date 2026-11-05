@@ -1,7 +1,6 @@
 /**
- * What `mutation-sweep.ts` and `mutation-pilot.ts` share: the refusals that keep a mutant out of a shared tree, the
- * pristine bytes of every mutated file (put back on an interrupt), the suite runner, and the cheap defender guess.
- * Each program keeps its own way of choosing and writing a mutant.
+ * The mutation pilot's runtime: the refusals that keep a mutant out of a shared tree, the pristine bytes of every
+ * mutated file (put back on an interrupt), the suite runner, and the cheap defender guess.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';

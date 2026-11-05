@@ -1,17 +1,13 @@
 {
-  "measuredAt": "2026-11-04",
-  "files": 3954,
-  "functions": 104440,
+  "measuredAt": "2026-11-05",
+  "files": 3972,
+  "functions": 104536,
   "ceiling": 87,
   "line": 25,
   "inventory": [
     {
       "key": "packages/core/src/strategy/swarm-run.ts#runSwarm",
       "complexity": 87
-    },
-    {
-      "key": "packages/cf-backend/src/gallery.tsx#mount",
-      "complexity": 5
     },
     {
       "key": "packages/devbox/bench/worker.ts#fetch",
@@ -34,16 +30,12 @@
       "complexity": 41
     },
     {
-      "key": "packages/cf-backend/src/components/surfaces/PlanReviewView.tsx#PlanReviewView",
-      "complexity": 38
-    },
-    {
-      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
-      "complexity": 40
-    },
-    {
       "key": "packages/core/src/delegation/agents-tool.ts#runSwarmAction",
       "complexity": 40
+    },
+    {
+      "key": "packages/cf-backend/src/components/surfaces/PlanReviewView.tsx#PlanReviewView",
+      "complexity": 38
     },
     {
       "key": "packages/core/src/strategy/swarm.ts#swarmValidity",
@@ -74,12 +66,12 @@
       "complexity": 34
     },
     {
-      "key": "scripts/wired.ts#findEntrypoints>walk#2",
+      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
       "complexity": 33
     },
     {
-      "key": "packages/cf-backend/src/pages/SwarmExplorer.tsx#ExplorerBody",
-      "complexity": 31
+      "key": "scripts/wired.ts#findEntrypoints>walk#2",
+      "complexity": 33
     },
     {
       "key": "scripts/coverage-lcov.ts#parseLcov",
@@ -98,6 +90,10 @@
       "complexity": 32
     },
     {
+      "key": "packages/cf-backend/src/pages/SwarmExplorer.tsx#ExplorerBody",
+      "complexity": 31
+    },
+    {
       "key": "packages/cf-backend/tests/workerd/http-model-fake.ts#probeControl",
       "complexity": 31
     },
@@ -114,19 +110,15 @@
       "complexity": 31
     },
     {
-      "key": "packages/cf-backend/src/components/surfaces/FileViewer.tsx#FileViewer",
-      "complexity": 29
-    },
-    {
-      "key": "packages/pc-agent/src/index.js#handle",
-      "complexity": 27
-    },
-    {
       "key": "scripts/shell-words.ts#readScript",
       "complexity": 30
     },
     {
       "key": "packages/cf-backend/src/components/surfaces/changes/ChangesPanel.tsx#ChangesPanel",
+      "complexity": 29
+    },
+    {
+      "key": "packages/cf-backend/src/components/surfaces/FileViewer.tsx#FileViewer",
       "complexity": 29
     },
     {
@@ -203,6 +195,10 @@
     },
     {
       "key": "packages/devbox/src/store-gateway.ts#serveStore>gen",
+      "complexity": 27
+    },
+    {
+      "key": "packages/pc-agent/src/index.js#handle",
       "complexity": 27
     },
     {
@@ -350,11 +346,7 @@
       "complexity": 25
     },
     {
-      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene>useCallback#30",
-      "complexity": 25
-    },
-    {
-      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene>useCallback#33",
+      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene>useCallback#31",
       "complexity": 25
     },
     {

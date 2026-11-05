@@ -60,6 +60,16 @@ export function chatCompletionBody(answer: ChatAnswer): string {
   return JSON.stringify({ ...envelope(answer, 'chat.completion'), choices: [{ index: 0, message, finish_reason: finishOf(answer) }], ...usageOf(answer) });
 }
 
+/** Named events as a server-sent stream, as the Responses and Messages APIs write theirs: `event:` then `data:`. */
+export function namedSseBody(events: ReadonlyArray<readonly [string, object]>): string {
+  return `${events.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n`).join('\n')}\n`;
+}
+
+/** Raw events as a server-sent stream: each `data: <event>` and a blank line, for a test that writes its own frames. */
+export function sseBody(events: readonly string[]): string {
+  return events.map((event) => `data: ${event}\n\n`).join('');
+}
+
 /** One streamed frame carrying `delta` alone, unfinished: what a paced answer writes before the rest. */
 export function chatCompletionFrame(answer: ChatEnvelope, delta: ChatDelta): string {
   return `data: ${JSON.stringify({ ...envelope(answer, 'chat.completion.chunk'), choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`;

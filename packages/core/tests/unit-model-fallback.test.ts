@@ -19,18 +19,17 @@ import { PLATFORM_CATALOG } from '../src/platform-catalog';
 import { attemptKey } from '../src/providers/attempt-identity';
 import type { ProviderWaitInfo } from '../src/providers/types';
 import { createRecordingLogger } from '@kinu.run/test-utils';
+import { sseBody } from '@kinu.run/test-utils';
 
 const SSE_HEADERS = { 'content-type': 'text/event-stream' };
 
-const sse = (events: readonly string[]): string => events.map((event) => `data: ${event}\n\n`).join('');
-
-const answer = (text: string): Response => new Response(sse([
+const answer = (text: string): Response => new Response(sseBody([
   JSON.stringify({ choices: [{ delta: { content: text } }] }),
   JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 9, completion_tokens: 2, total_tokens: 11 } }),
   '[DONE]',
 ]), { headers: SSE_HEADERS });
 
-const toolStep = (): Response => new Response(sse([
+const toolStep = (): Response => new Response(sseBody([
   JSON.stringify({ choices: [{ delta: { tool_calls: [
     { index: 0, id: 'tc1', type: 'function', function: { name: 'run', arguments: '{"command":"wc -l"}' } },
   ] } }] }),
@@ -48,12 +47,12 @@ const overloaded = (): Response => Response.json(
 );
 
 /** OpenRouter's upstream failure: HTTP 200, a keep-alive, then the error as the first event. */
-const erringInStream = (): Response => new Response(`: OPENROUTER PROCESSING\n\n${sse([
+const erringInStream = (): Response => new Response(`: OPENROUTER PROCESSING\n\n${sseBody([
   JSON.stringify({ error: { code: 500, message: 'Upstream error from Inception: The server had an error while processing your request.' } }),
 ])}`, { headers: SSE_HEADERS });
 
 /** Part of an answer, then the provider's stream fails. */
-const partThenFail = (text: string): Response => new Response(sse([
+const partThenFail = (text: string): Response => new Response(sseBody([
   JSON.stringify({ choices: [{ delta: { content: text } }] }),
   JSON.stringify({ error: { message: 'upstream overloaded', code: 503 } }),
 ]), { headers: SSE_HEADERS });

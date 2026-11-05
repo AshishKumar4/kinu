@@ -7,6 +7,7 @@ import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import { createChatModel } from '../src/llm';
 import { TurnAccumulator } from '../src/orchestrator/turn-accumulator';
 import { KinuError, renderThrownChain } from '../src/obs/index';
+import { sseBody } from '@kinu.run/test-utils';
 
 const SSE_HEADERS = { 'content-type': 'text/event-stream' };
 
@@ -38,12 +39,8 @@ test('a consumer throwing after a tool result still records the completed native
   ]);
 });
 
-function sse(events: string[]): string {
-  return events.map((event) => `data: ${event}\n\n`).join('');
-}
-
 function toolStep(id: string, command: string): Response {
-  return new Response(sse([
+  return new Response(sseBody([
     JSON.stringify({ choices: [{ delta: { content: `about to ${command}` } }] }),
     JSON.stringify({ choices: [{ delta: { tool_calls: [
       { index: 0, id, type: 'function', function: { name: 'shell', arguments: JSON.stringify({ command }) } },
@@ -54,7 +51,7 @@ function toolStep(id: string, command: string): Response {
 }
 
 function textStep(text: string): Response {
-  return new Response(sse([
+  return new Response(sseBody([
     JSON.stringify({ choices: [{ delta: { content: text } }] }),
     JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 30, completion_tokens: 3, total_tokens: 33 } }),
     '[DONE]',

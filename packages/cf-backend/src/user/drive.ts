@@ -109,14 +109,15 @@ export class UserDrive {
         return yield* new KinuError('bad_input', 'file transfer out of sync: no matching open upload');
       }
 
-      const step = row.upload.chunk(offset, write.chunk, write.final);
+      const { upload } = row;
+      // A settled upload, landed or refused, leaves the open ones.
 
-      if (row.upload.done) driveUploads.delete(transferId);
+      const assembled = yield* Effect.ensuring(upload.chunk(offset, write.chunk, write.final), Effect.sync(() => {
+        if (upload.done) driveUploads.delete(transferId);
+      }));
 
-      if ('error' in step) return yield* new KinuError('bad_input', step.error);
-
-      if (!('assembled' in step)) return { ok: true } satisfies DriveUploadOutcome;
-      const received = yield* Effect.promise(() => receiveDriveUpload(drive, target, step.assembled));
+      if (assembled === null) return { ok: true } satisfies DriveUploadOutcome;
+      const received = yield* Effect.promise(() => receiveDriveUpload(drive, target, assembled));
 
       host.limits.storeChanged('drive');
 

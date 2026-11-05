@@ -1,10 +1,11 @@
 /** Tab-level boundary: contains render throws and reports each caught error once via `client-error/report.ts`. */
 
-import { Component, type ReactNode, type ErrorInfo } from "react";
+import { Component, useEffect, type ReactNode, type ErrorInfo } from "react";
 import { pageDeployedBuildSha, reportRenderFailure, routeTemplateOf } from "@kinu.run/core";
-import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
+import { chainOf, detach, diagnostics } from "@kinu.run/core/obs";
 import { Button } from "@/components/ui/Button";
 import { Surface } from "@/components/ui/Surface";
+import { Effect } from "effect";
 
 interface Props {
   label?: string;
@@ -13,54 +14,59 @@ interface Props {
 
 interface State {
   error: Error | null;
+  /** Where in the tree it was thrown, once React has said. */
+  componentStack: string | null;
 }
 
-interface ReportOperation {
-  promise: Promise<void> | null;
+/** Reports a caught render failure once it is on screen, if `claim` says it is not yet reported: only a reporter defect
+ *  can fail here, and it is recorded rather than raised onto a failed page. */
+function FailureReport({ error, componentStack, claim }: { error: Error; componentStack: string; claim: (error: Error) => boolean }) {
+  useEffect(() => {
+    if (!claim(error)) return;
+    detach(Effect.catchCause(Effect.promise(() => reportRenderFailure(error, componentStack, {
+      release: pageDeployedBuildSha(),
+      route: routeTemplateOf(location.pathname),
+    })), (failed) => Effect.sync(() => {
+      diagnostics.event('client_error.reporter_failed', { reason: chainOf(failed) });
+    })));
+  }, [error, componentStack, claim]);
+
+  return null;
 }
 
 export class ErrorBoundary extends Component<Props, State> {
-  state: State = { error: null };
+  state: State = { error: null, componentStack: null };
 
   /** Already-reported error, by identity: React's retries rethrow the same object.
    *  Per instance, so two failing boundaries report two faults. */
   private reported: Error | null = null;
 
-  private readonly reportOperations = new Map<Error, ReportOperation>();
-
-  static getDerivedStateFromError(error: Error): State {
+  static getDerivedStateFromError(error: Error): Partial<State> {
     return { error };
   }
 
-  componentDidCatch(error: Error, info: ErrorInfo): void {
-    if (this.reported === error) return;
-    this.reported = error;
-    const owner: ReportOperation = { promise: null };
-    this.reportOperations.set(error, owner);
-    owner.promise = (async () => {
-      try {
-        await reportRenderFailure(error, info.componentStack ?? "", {
-          release: pageDeployedBuildSha(),
-          route: routeTemplateOf(location.pathname),
-        });
-      } catch (cause) {
-        // Only a reporter defect can reject here; record it rather than raise onto a failed page.
-        diagnostics.event('client_error.reporter_failed', {
-          reason: renderThrownChain({ cause }),
-        });
-      } finally {
-        if (this.reportOperations.get(error) === owner) this.reportOperations.delete(error);
-      }
-    })();
+  /** The tree's stack, for the report. */
+  componentDidCatch(_error: Error, info: ErrorInfo): void {
+    this.setState({ componentStack: info.componentStack ?? "" });
   }
 
-  reset = () => this.setState({ error: null });
+  /** Whether this error is this boundary's to report: React's retries rethrow the same object, and a report that ran
+   *  twice (StrictMode's second effect) claims it once. */
+  claim = (error: Error): boolean => {
+    if (this.reported === error) return false;
+    this.reported = error;
+
+    return true;
+  };
+
+  reset = () => this.setState({ error: null, componentStack: null });
 
   render() {
     if (!this.state.error) return this.props.children;
 
     return (
       <div className="h-full overflow-y-auto flex items-start justify-center p-6">
+        {this.state.componentStack !== null && <FailureReport error={this.state.error} componentStack={this.state.componentStack} claim={this.claim} />}
         <div className="max-w-2xl w-full text-left space-y-3">
           <div data-failure className="t-item p-text">
             This view crashed{this.props.label ? ` (${this.props.label})` : ''}. Try again, or reload the page.

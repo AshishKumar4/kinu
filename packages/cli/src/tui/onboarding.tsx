@@ -2,7 +2,7 @@ import { Effect } from 'effect';
 import type { TextareaRenderable } from '@opentui/core';
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 
-import { renderThrownChain, settle, showing } from '@kinu.run/core/obs';
+import { detach, renderThrownChain, settle, showing } from '@kinu.run/core/obs';
 
 import type {
   ProviderConnectId,
@@ -219,8 +219,8 @@ export function GuidedOnboarding(props: {
 
   const settled = useCallback(() => setBusy(false), []);
 
-  const failed = useCallback((cause: Error) => {
-    setError(renderThrownChain({ cause }));
+  const failed = useCallback((lost: { readonly cause: unknown }) => {
+    setError(renderThrownChain(lost));
     setBusy(false);
   }, []);
 
@@ -229,7 +229,10 @@ export function GuidedOnboarding(props: {
     if (busy) return;
     setBusy(true);
     setError(null);
-    void operation().then(refresh).then(settled, failed);
+    detach(Effect.match(Effect.tryPromise({ try: async () => { await operation(); await refresh(); }, catch: (cause) => ({ cause }) }), {
+      onSuccess: settled,
+      onFailure: failed,
+    }));
   }, [busy, failed, refresh, settled]);
 
   const { registry } = useTuiTheme();

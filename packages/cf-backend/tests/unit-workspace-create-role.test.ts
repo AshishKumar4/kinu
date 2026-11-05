@@ -4,7 +4,7 @@
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  asFetchFunction, BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest, sandboxIdForWorkspace,
+  BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest, sandboxIdForWorkspace,
   type ProfileCatalog, type ProfileCatalogEnvelope,
 } from '@kinu.run/core';
 import { handleCreateWorkspaceRequest, type CreateWorkspaceEnv } from '../src/user/workspace-access';
@@ -15,7 +15,7 @@ import { placementFor } from '../src/user/workspace-placement';
 import { Hono } from 'hono';
 import type { FamilyEnv } from '../src/api/context';
 import { serveFamily } from './helpers/api';
-import { present } from '@kinu.run/test-utils';
+import { present, holdFetch } from '@kinu.run/test-utils';
 import { userAccount, workspaceObject } from './helpers/bindings';
 import type { NameOrigin, ReasoningEffort, UserCaller } from '@kinu.run/core';
 
@@ -132,9 +132,9 @@ async function postCreate(
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   };
 
-  const originalFetch = globalThis.fetch;
+  const network = holdFetch();
   // No reachable provider: the menu falls back to the native Workers AI default, as production creates do.
-  globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
+  network.stub(async () => new Response('{}', { status: 503 }));
 
   try {
     // Served as the app serves it, so a refusal thrown past the handler is answered by the router.
@@ -155,7 +155,7 @@ async function postCreate(
 
     return { status: response.status, calls, registered, error };
   } finally {
-    globalThis.fetch = originalFetch;
+    network.restore();
   }
 }
 
@@ -205,8 +205,8 @@ describe('a workspace that hires a new workspace', () => {
       async beginGenesisTurn() { return { started: true }; },
     });
 
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
+    const network = holdFetch();
+    network.stub(async () => new Response('{}', { status: 503 }));
 
     try {
       const entry = await createCloudWorkspaceForUser({
@@ -220,7 +220,7 @@ describe('a workspace that hires a new workspace', () => {
 
       expect((await harness.userDO.listActiveWorkspaces(await testOwner())).map((workspace) => workspace.name)).toContain(entry.name);
     } finally {
-      globalThis.fetch = originalFetch;
+      network.restore();
       harness.close();
     }
   });

@@ -14,7 +14,7 @@ import {
   type ModelCallDeps, type ProviderDeps, type AuthResolution,
 } from '../src/index';
 import {
-  createMockFetch, ANTHROPIC_MESSAGE_BODY, CHAT_COMPLETION_BODY, OPENAI_RESPONSES_BODY } from '@kinu.run/test-utils';
+  createMockFetch, ANTHROPIC_MESSAGE_BODY, CHAT_COMPLETION_BODY, OPENAI_RESPONSES_BODY, modelCallDeps } from '@kinu.run/test-utils';
 
 const CodexRequestBodySchema = v.object({
   instructions: v.optional(v.string()),
@@ -28,20 +28,6 @@ const CodexStoredBodySchema = v.object({
   input: v.optional(v.unknown()),
 });
 
-
-function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch): ModelCallDeps {
-  const store = new Map(Object.entries(creds));
-
-  return {
-    env: {},
-    sessionAffinity: 'kinu-test',
-    workspaceAffinity: 'kinu-test',
-    fetch: fetchFn,
-    async getAuth(key) { return store.get(key) ?? null; },
-    async hasCredential(key) { return store.has(key); },
-  };
-}
-
 /** Drive one completion, awaited, so a provider that cannot read the answer back fails here. */
 async function call(model: Parameters<typeof generateText>[0]['model']): Promise<void> {
   const { text } = await generateText({ model, prompt: 'hello', maxOutputTokens: 16 });
@@ -54,7 +40,7 @@ describe('OpenAI provider contract', () => {
       { match: 'api.openai.com', respond: { status: 200, body: OPENAI_RESPONSES_BODY } },
     ]);
 
-    const deps = makeDeps({
+    const deps = modelCallDeps({
       [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test-key' } },
     }, mock.fetch);
 
@@ -73,7 +59,7 @@ describe('OpenAI provider contract', () => {
       { match: 'api.openai.com', respond: { status: 200, body: OPENAI_RESPONSES_BODY } },
     ]);
 
-    const deps = makeDeps({ [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test-key' } } }, mock.fetch);
+    const deps = modelCallDeps({ [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test-key' } } }, mock.fetch);
     await call(createOpenAIProvider().createModel('gpt-5.5', deps));
 
     expect(v.parse(v.looseObject({ store: v.boolean() }), JSON.parse(String(mock.requests[0].body))).store).toBe(false);
@@ -84,7 +70,7 @@ describe('OpenAI provider contract', () => {
       { match: 'api.openai.com', respond: { status: 200, body: OPENAI_RESPONSES_BODY } },
     ]);
 
-    const deps = makeDeps({}, mock.fetch);
+    const deps = modelCallDeps({}, mock.fetch);
     const provider = createOpenAIProvider();
     const model = provider.createModel('gpt-5.5', deps);
     // The 401 is the assertion: an empty completion here would hide an uncredentialed request.
@@ -103,7 +89,7 @@ describe('OpenAI provider contract', () => {
         : Response.json(OPENAI_RESPONSES_BODY);
     });
 
-    const deps = makeDeps({
+    const deps = modelCallDeps({
       [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test-key' } },
     }, fetchImpl);
 
@@ -121,7 +107,7 @@ describe('OpenRouter provider contract', () => {
       { match: 'openrouter.ai', respond: { status: 200, body: CHAT_COMPLETION_BODY } },
     ]);
 
-    const deps = makeDeps({
+    const deps = modelCallDeps({
       [OPENROUTER_CRED_KEY]: { headers: { Authorization: 'Bearer sk-or-test' } },
     }, mock.fetch);
 
@@ -148,7 +134,7 @@ describe('OpenAI-compat provider contract', () => {
       { match: 'api.groq.com', respond: { status: 200, body: CHAT_COMPLETION_BODY } },
     ]);
 
-    const deps = makeDeps({
+    const deps = modelCallDeps({
       'openai-compat.default': {
         headers: { Authorization: 'Bearer gsk_test', 'X-Custom': 'value' },
         baseURL: 'https://api.groq.com/openai/v1',
@@ -174,7 +160,7 @@ describe('Anthropic provider contract', () => {
       { match: 'api.anthropic.com', respond: { status: 200, body: ANTHROPIC_MESSAGE_BODY } },
     ]);
 
-    const deps = makeDeps({
+    const deps = modelCallDeps({
       [ANTHROPIC_CRED_KEY]: {
         headers: { 'x-api-key': 'sk-ant-test', 'anthropic-version': '2023-06-01' },
       },
@@ -198,7 +184,7 @@ describe('Codex provider contract', () => {
       { match: 'chatgpt.com/backend-api/codex', respond: { status: 200, body: OPENAI_RESPONSES_BODY } },
     ]);
 
-    const deps = makeDeps({
+    const deps = modelCallDeps({
       [CODEX_CRED_KEY]: {
         headers: {
           Authorization: 'Bearer codex-token',
@@ -228,7 +214,7 @@ describe('Codex provider contract', () => {
       { match: 'chatgpt.com/backend-api/codex', respond: { status: 200, body: OPENAI_RESPONSES_BODY } },
     ]);
 
-    const deps = makeDeps({
+    const deps = modelCallDeps({
       [CODEX_CRED_KEY]: { headers: { Authorization: 'Bearer codex-token' } },
     }, mock.fetch);
 
@@ -248,7 +234,7 @@ describe('Codex provider contract', () => {
       { match: 'chatgpt.com/backend-api/codex', respond: { status: 200, body: OPENAI_RESPONSES_BODY } },
     ]);
 
-    const deps = makeDeps({
+    const deps = modelCallDeps({
       [CODEX_CRED_KEY]: { headers: { Authorization: 'Bearer codex-token' } },
     }, mock.fetch);
 
@@ -270,7 +256,7 @@ describe('Codex provider contract', () => {
       { match: 'chatgpt.com/backend-api/codex', respond: { status: 200, body: OPENAI_RESPONSES_BODY } },
     ]);
 
-    const deps = makeDeps({ [CODEX_CRED_KEY]: { headers: { Authorization: 'Bearer codex-token' } } }, mock.fetch);
+    const deps = modelCallDeps({ [CODEX_CRED_KEY]: { headers: { Authorization: 'Bearer codex-token' } } }, mock.fetch);
     const model = createCodexProvider().createModel('gpt-5.5', deps);
 
     await generateText({
@@ -340,7 +326,7 @@ describe('Codex provider contract', () => {
   });
 
   test('a 401 that survives the forced refresh names the reconnection remedy', async () => {
-    const deps = makeDeps({
+    const deps = modelCallDeps({
       [CODEX_CRED_KEY]: { headers: { Authorization: 'Bearer codex-dead' } },
     }, asFetchFunction(async () =>
       new Response(JSON.stringify({ detail: 'Unauthorized' }), { status: 401 })));
@@ -355,7 +341,7 @@ describe('Codex provider contract', () => {
       { match: 'chatgpt.com', respond: { status: 200, body: OPENAI_RESPONSES_BODY } },
     ]);
 
-    const deps = makeDeps({}, mock.fetch);
+    const deps = modelCallDeps({}, mock.fetch);
     const provider = createCodexProvider();
     const model = provider.createModel('gpt-5.5', deps);
     await expect(call(model)).rejects.toThrow();

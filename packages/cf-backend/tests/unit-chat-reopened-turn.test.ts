@@ -46,6 +46,7 @@ import { abandonHarnessFibers } from './helpers/agents-sdk';
 import { copyNextOpening, cutPort, delayNextTurnEnd, loseNextOpeningAnswer, type TurnOpeningRequest } from './helpers/agent-facets';
 import { MISSION_LABELS_METADATA_KEY, turnFailure } from '@kinu.run/core';
 import { socketConnection } from './helpers/bindings';
+import { chatRequest } from './helpers/chat-frames';
 
 const FrameSchema = v.looseObject({
   type: v.string(), id: v.optional(v.string()), body: v.optional(v.string()), done: v.optional(v.boolean()),
@@ -61,12 +62,6 @@ const CONNECT = { request: new Request('https://agent/connect') };
 const ASK = 'Count to three, one step a number.';
 
 /** Our clients send their message under the request's own id, so the turn's id is the request's. */
-function chatRequest(id: string): string {
-  return JSON.stringify({
-    type: CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST, id,
-    init: { method: 'POST', body: JSON.stringify({ messages: [{ id, role: 'user', parts: [{ type: 'text', text: ASK }] }], trigger: 'submit-message' }) },
-  });
-}
 
 /** What a model counting one shell step a number does at the step it reaches: `held`, the call it never answers, and
  *  `answer`, its words there instead once set. A workspace's isolates share one model across their resets, so a suite
@@ -180,7 +175,7 @@ async function askedOnSocket(workspace: StartedHarness, id: string): Promise<{ r
   const { socket } = socketOn(workspace.agent, `${id}-socket`, (raw) => { sent.push(v.parse(FrameSchema, JSON.parse(raw))); });
 
   await workspace.agent.onConnect(socket, CONNECT);
-  const answered = Promise.resolve(workspace.agent.onMessage(socket, chatRequest(id))).then(() => 'answered');
+  const answered = Promise.resolve(workspace.agent.onMessage(socket, chatRequest(id, ASK, { messageId: id }))).then(() => 'answered');
   const streamed = sent.until((frames) => counted(frames, 'finish-step') === 2).then(() => 'two steps streamed');
 
   expect(await Promise.race([answered, streamed])).toBe('two steps streamed');
@@ -466,7 +461,7 @@ async function askedAndAnswered(workspace: StartedHarness, id: string): Promise<
   const { socket } = socketOn(workspace.agent, `${id}-socket`, () => {});
 
   await workspace.agent.onConnect(socket, CONNECT);
-  await workspace.agent.onMessage(socket, chatRequest(id));
+  await workspace.agent.onMessage(socket, chatRequest(id, ASK, { messageId: id }));
 }
 
 /** The fence keeps every turn the agent opened: one that ended is no opening's, before or after the workspace resets,
@@ -497,7 +492,7 @@ test('a turn whose isolate died between its preparation and freezing its facts k
   const { socket } = socketOn(workspace.agent, 'req-facts-socket', () => {});
 
   await workspace.agent.onConnect(socket, CONNECT);
-  const answered = Promise.resolve(workspace.agent.onMessage(socket, chatRequest('req-facts')));
+  const answered = Promise.resolve(workspace.agent.onMessage(socket, chatRequest('req-facts', ASK, { messageId: 'req-facts' })));
 
   await preparedThenLost;
   workspaceMainActor(workspace.db).config.setLearning(false);
@@ -673,7 +668,7 @@ async function poisonedOnSocket(workspace: StartedHarness, id: string): Promise<
   const { socket } = socketOn(workspace.agent, `${id}-socket`, () => {});
 
   await workspace.agent.onConnect(socket, CONNECT);
-  const answered = Promise.resolve(workspace.agent.onMessage(socket, chatRequest(id))).then(() => 'answered');
+  const answered = Promise.resolve(workspace.agent.onMessage(socket, chatRequest(id, ASK, { messageId: id }))).then(() => 'answered');
 
   expect(await Promise.race([answered, poisoned.until((all) => all.length > before).then(() => 'inside the step')])).toBe('inside the step');
 }
@@ -955,7 +950,7 @@ test("a turn whose relay to its workspace is cut while a step streams ends once,
   const { socket } = socketOn(workspace.agent, 'req-cut-socket', (raw) => { sent.push(v.parse(FrameSchema, JSON.parse(raw))); });
 
   await workspace.agent.onConnect(socket, CONNECT);
-  const answered = Promise.resolve(workspace.agent.onMessage(socket, chatRequest('req-cut')));
+  const answered = Promise.resolve(workspace.agent.onMessage(socket, chatRequest('req-cut', ASK, { messageId: 'req-cut' })));
 
   await sent.until((frames) => frames.some((frame) => chunkOf(frame)?.delta === 'Half'));
   cutPort(workspace.agent.agentOf(workspaceMainActor(workspace.db).actorId).storageKey);

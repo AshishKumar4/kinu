@@ -1,7 +1,7 @@
 /**
- * The sweep catalogue against the live tree.
+ * The mutation catalogue against the live tree.
  *
- * The sweep runs on request and refuses a snippet that no longer sits exactly once
+ * The pilot judges the catalogue on request (`--catalogue`) and refuses a snippet that no longer sits exactly once
  * in its file, but only when somebody runs it. So a refactor could delete the line an
  * entry mutates and nothing would say so until the next sweep: `effort-judge-rung`
  * pointed at the stage table 9e09c80a9 removed. These checks read the tree and nothing
@@ -10,13 +10,19 @@
 
 import { describe, expect, test } from 'bun:test';
 
-import { locate } from './mutation-sweep';
-import { CATALOGUE } from './mutation-sweep.catalogue';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+import { CATALOGUE, type Mutation } from './mutation-sweep.catalogue';
+import { REPO_ROOT } from './repo-root';
 import { isProductSource, readMatching } from './sources';
+
+/** How often an entry's snippet sits in its file: the pilot mutates only one that sits there once. */
+const locate = (mutation: Mutation) => ({ occurrences: readFileSync(join(REPO_ROOT, mutation.file), 'utf8').split(mutation.find).length - 1 });
 
 describe('every catalogue entry still lands', () => {
   test('every snippet sits in its file exactly once', () => {
-    // Counted the way the sweep counts before it mutates, keyed by entry so a miss names the entry and its count.
+    // Counted the way the pilot counts before it mutates, keyed by entry so a miss names the entry and its count.
     const counts = Object.fromEntries(CATALOGUE.map((mutation) => [mutation.id, locate(mutation).occurrences]));
 
     expect(counts).toEqual(Object.fromEntries(CATALOGUE.map((mutation) => [mutation.id, 1])));

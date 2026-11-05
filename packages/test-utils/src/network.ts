@@ -185,3 +185,22 @@ export function workerdFetch(answer: typeof fetch): typeof fetch {
     return answer(input, init);
   });
 }
+
+/** The process's `fetch` as a test found it, with a way to answer it differently and to put it back: a suite holds one,
+ *  stubs it per test, and restores it after each (`afterEach(network.restore)`), whatever runner it is under. */
+export interface HeldFetch {
+  /** The fetch as it was found, for a stub that passes the rest through. */
+  readonly found: typeof fetch;
+  readonly stub: (answer: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) => void;
+  readonly restore: () => void;
+}
+
+export function holdFetch(): HeldFetch {
+  const found = globalThis.fetch;
+
+  return {
+    found,
+    stub: (answer) => { globalThis.fetch = asFetchFunction(answer); },
+    restore: () => { globalThis.fetch = found; },
+  };
+}

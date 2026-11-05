@@ -4,7 +4,6 @@
 // answer drifts from that schema fails.
 import { afterEach, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { asFetchFunction } from '@kinu.run/core';
 import { Hono } from 'hono';
 import type { FamilyEnv } from '../src/api/context';
 import type { AuthIdentity } from '../src/auth/session';
@@ -14,14 +13,15 @@ import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
 import { serveFamily } from './helpers/api';
 import { workspaceObject } from './helpers/bindings';
 import { createTestUserDO, TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
+import { holdFetch } from '@kinu.run/test-utils';
 
 const OWNER = 'fedcba9876543210fedcba9876543210';
 
 const IDENTITY: AuthIdentity = { userId: OWNER, email: 'new@example.com', sub: 'onboarding', provider: 'test' };
 
-const realFetch = globalThis.fetch;
+const network = holdFetch();
 
-afterEach(() => { globalThis.fetch = realFetch; });
+afterEach(network.restore);
 
 test('a new account names itself in onboarding and reads its profile back', async () => {
   const user = createTestUserDO({ durableObjectId: OWNER });
@@ -37,7 +37,7 @@ test('a new account names itself in onboarding and reads its profile back', asyn
 
   const serve = serveFamily(families, { identity: IDENTITY, ctx: { waitUntil: () => {} } });
 
-  globalThis.fetch = asFetchFunction(async (input, init) => {
+  network.stub(async (input, init) => {
     const answered = await serve(new Request(new URL(v.parse(v.string(), input), 'https://kinu.example.com'), init), env);
 
     return answered ?? new Response(null, { status: 404 });

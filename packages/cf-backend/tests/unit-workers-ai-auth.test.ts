@@ -10,7 +10,7 @@ import * as v from 'valibot';
 import { bindingModel } from './helpers/workers-ai-model';
 import { requestUrl } from '@kinu.run/core';
 
-import { answerChat, chatResponse, OK_CHAT_ANSWER, present } from '@kinu.run/test-utils';
+import { answerChat, chatResponse, OK_CHAT_ANSWER, present, holdFetch } from '@kinu.run/test-utils';
 
 const ACCOUNT_BASE_URL = 'https://api.cloudflare.com/client/v4/accounts/abc123abc123abc1/ai/v1';
 
@@ -27,8 +27,8 @@ test('configured effort reaches the native Workers AI binding through its SDK tr
 
 describe('Workers AI credential refresh', () => {
   test('refresh merges rotated tokens into the stored credential shape', async () => {
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const network = holdFetch();
+    network.stub(async (input: RequestInfo | URL, init?: RequestInit) => {
       expect(requestUrl(input)).toBe('https://dash.cloudflare.com/oauth2/token');
       const body = new URLSearchParams(await new Request(input, init).text());
       expect(body.get('grant_type')).toBe('refresh_token');
@@ -61,7 +61,7 @@ describe('Workers AI credential refresh', () => {
       expect(next.metadata?.accountId).toBe('abc123abc123abc1');
       expect(next.metadata?.scopes).toEqual(['user-details.read', 'ai.write', 'offline_access']);
     } finally {
-      globalThis.fetch = originalFetch;
+      network.restore();
     }
   });
 
@@ -73,8 +73,8 @@ describe('Workers AI credential refresh', () => {
   });
 
   test('a revoked refresh token surfaces as a typed invalid_grant error', async () => {
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = asFetchFunction(async () => new Response(JSON.stringify({
+    const network = holdFetch();
+    network.stub(async () => new Response(JSON.stringify({
       error: 'invalid_grant',
       error_description: 'The provided authorization grant is invalid',
     }), { status: 400, headers: { 'content-type': 'application/json' } }));
@@ -96,7 +96,7 @@ describe('Workers AI credential refresh', () => {
 
       expect(rejected).toBe(true);
     } finally {
-      globalThis.fetch = originalFetch;
+      network.restore();
     }
   });
 

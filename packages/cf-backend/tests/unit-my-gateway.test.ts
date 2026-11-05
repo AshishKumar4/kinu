@@ -15,7 +15,7 @@ import {
 } from '@kinu.run/core';
 import { requestUrl } from '@kinu.run/core';
 
-import { answerChat, OK_CHAT_ANSWER, present } from '@kinu.run/test-utils';
+import { answerChat, OK_CHAT_ANSWER, present, holdFetch } from '@kinu.run/test-utils';
 
 const ACCOUNT_ROOT = 'https://api.cloudflare.com/client/v4/accounts/abc123abc123abc1';
 
@@ -476,13 +476,13 @@ describe('UserDO gateway credential derivation', () => {
 
   /** The Cloudflare management listing answer, for whatever the UserDO asks. */
   function stubGatewayListing(gateways: Array<{ id: string; authentication: boolean }>): () => void {
-    const original = globalThis.fetch;
-    globalThis.fetch = asFetchFunction(async () => new Response(JSON.stringify({
+    const network = holdFetch();
+    network.stub(async () => new Response(JSON.stringify({
       success: true,
       result: gateways.map((gateway) => ({ id: gateway.id, authentication: gateway.authentication })),
     }), { status: 200, headers: { 'content-type': 'application/json' } }));
 
-    return () => { globalThis.fetch = original; };
+    return () => { network.restore(); };
   }
 
   test('the derived cloudflare.ai-gateway view rides the stored cloudflare.oauth credential', async () => {
@@ -572,9 +572,9 @@ describe('UserDO gateway credential derivation', () => {
   });
 
   test('a login whose refresh fails is connected with the failure, never disconnected', async () => {
-    const original = globalThis.fetch;
+    const network = holdFetch();
     // The issuer cannot be asked: every token refresh meets a 503.
-    globalThis.fetch = asFetchFunction(async () => new Response('upstream unavailable', { status: 503 }));
+    network.stub(async () => new Response('upstream unavailable', { status: 503 }));
     const harness = createTestUserDO();
 
     try {
@@ -586,7 +586,7 @@ describe('UserDO gateway credential derivation', () => {
       });
     } finally {
       harness.close();
-      globalThis.fetch = original;
+      network.restore();
     }
   });
 });

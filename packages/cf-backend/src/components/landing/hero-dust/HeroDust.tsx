@@ -79,7 +79,8 @@ function mountHeroDust(host: HTMLElement): () => void {
     canvas = next;
     const context = next.getContext('2d');
 
-    if (context === null) throw new Error('the dust canvas has no 2d context');
+    // A canvas this browser gives no 2d drawing draws no dust; the hero stands without it, as the renderer stays unset.
+    if (context === null) return;
     renderer = createDustRenderer(context, palette);
     next.dataset.renderer = still ? 'static' : 'canvas';
     next.dataset.motes = String(count);

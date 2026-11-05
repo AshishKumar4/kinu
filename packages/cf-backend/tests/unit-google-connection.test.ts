@@ -2,10 +2,11 @@
 // when due, retired when Google refuses it, and revoked with one token on disconnect. Real state store and vault; only
 // Google's endpoints are faked.
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
-import { asFetchFunction, CapabilityDeniedError, GOOGLE_CONNECTION_SCOPES, GOOGLE_OAUTH_CRED_KEY, type JsonValue, type OAuthCredential } from '@kinu.run/core';
+import { CapabilityDeniedError, GOOGLE_CONNECTION_SCOPES, GOOGLE_OAUTH_CRED_KEY, type JsonValue, type OAuthCredential } from '@kinu.run/core';
 import { completeGoogleConnect, GOOGLE_CONNECT_STATE_PREFIX, startGoogleConnect, type GoogleConnectEnv } from '../src/user/google-connect';
 import { makeKv } from './helpers/kv';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
+import { holdFetch } from '@kinu.run/test-utils';
 
 const ORIGIN = 'https://kinu.example.com';
 
@@ -19,9 +20,9 @@ const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 
 const REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
 
-const realFetch = globalThis.fetch;
+const network = holdFetch();
 
-afterEach(() => { globalThis.fetch = realFetch; });
+afterEach(network.restore);
 
 function connectEnv(overrides: Partial<GoogleConnectEnv> = {}): GoogleConnectEnv {
   return { AUTH_KV: makeKv(), CONTROL_PLANE_ADMINS: 'ops@example.com', MCP_GOOGLE_CLIENT_ID: CLIENT_ID, MCP_GOOGLE_CLIENT_SECRET: 'test-google-client-secret', ...overrides };
@@ -40,7 +41,7 @@ function idToken(nonce: string): string {
 function google(answer: (form: URLSearchParams) => Record<string, JsonValue>, status = 200): URLSearchParams[] {
   const forms: URLSearchParams[] = [];
 
-  globalThis.fetch = asFetchFunction(async (input, init) => {
+  network.stub(async (input, init) => {
     const request = new Request(input, init);
     const form = new URLSearchParams(await request.text());
 
