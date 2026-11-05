@@ -10,9 +10,9 @@ import type { HeadRuntime } from './heads/controller';
 import type { HeadJournal } from './heads/journal';
 import { recordBranchTakeSet, type AlternateTakeSet } from './mcts/takes';
 import { nanoid } from './utils/nanoid';
-import { Effect, Result } from 'effect';
+import { Cause, Effect, Exit, Result } from 'effect';
 import * as v from 'valibot';
-import { KinuError, renderThrownChain, settle } from './obs/index';
+import { hold, KinuError, renderThrownChain, settle } from './obs/index';
 import { defaultLoopOrigin } from './scaffold/loop-origin';
 import type { ActorHandle } from './identity/actor-handle';
 import type { WorkMode } from './types/turn';
@@ -120,27 +120,21 @@ export async function startBranchHead(
   const spawned = await runtime.spawnHead(headInput);
   const stop = new AbortController();
 
-  const result = (async (): Promise<HeadReport> => {
-    let report: HeadReport;
-
-    try {
-      report = await spawned.run();
-    } catch (cause) {
-      report = unreportedHead({
-        id: headInput.id,
-        status: stop.signal.aborted ? 'aborted' : 'errored',
-        summary: stop.signal.aborted
-          ? `Branch was aborted: ${renderThrownChain({ cause: stop.signal.reason })}`
-          : 'Branch failed before producing an answer.',
-        wallClockMs: Date.now() - spawnedAt,
-        errorMessage: renderThrownChain({ cause }),
-      });
-    }
+  const result = hold(Effect.promise(async () => spawned.run())).then((exit): HeadReport => {
+    const report = Exit.isSuccess(exit) ? exit.value : unreportedHead({
+      id: headInput.id,
+      status: stop.signal.aborted ? 'aborted' : 'errored',
+      summary: stop.signal.aborted
+        ? `Branch was aborted: ${renderThrownChain({ cause: stop.signal.reason })}`
+        : 'Branch failed before producing an answer.',
+      wallClockMs: Date.now() - spawnedAt,
+      errorMessage: renderThrownChain({ cause: Cause.squash(exit.cause) }),
+    });
 
     journal.recordReport(report);
 
     return report;
-  })();
+  });
 
   return {
     id: rootId,

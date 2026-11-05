@@ -467,14 +467,17 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
 
       const part = message.find(value => value.partNo === ref.partNo);
 
-      if (part === undefined) throw new KinuError('io', 'conversation reference names a part its message does not hold');
+      if (part === undefined) return settle(Effect.fail(new KinuError('io', 'conversation reference names a part its message does not hold')));
 
       if (ref.textRange === undefined) parts.push(part.value);
       else {
         const { start, length } = ref.textRange;
         const text = v.parse(v.string(), part.value.text);
 
-        if (part.value.type !== 'text' || !Number.isSafeInteger(start) || !Number.isSafeInteger(length) || start < 0 || length < 0 || start + length > text.length) throw new KinuError('io', 'conversation text range exceeds its recorded part');
+        if (part.value.type !== 'text' || !Number.isSafeInteger(start) || !Number.isSafeInteger(length) || start < 0 || length < 0 || start + length > text.length) {
+          return settle(Effect.fail(new KinuError('io', 'conversation text range exceeds its recorded part')));
+        }
+
         parts.push({ ...part.value, text: text.slice(start, start + length) });
       }
     }

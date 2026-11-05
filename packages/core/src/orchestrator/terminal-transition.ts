@@ -5,8 +5,8 @@
  */
 import { claimToolEffect, settleToolEffect, type ToolEffectKey } from '../tools/effect-claim';
 import { argumentDigest } from '../safety/argument-digest';
-import { Effect } from 'effect';
-import { attempt, diagnostics, hold, renderThrownChain, toKinuError } from '../obs/index';
+import { Cause, Effect, Exit } from 'effect';
+import { attempt, diagnostics, hold, renderThrownChain, settle, toKinuError } from '../obs/index';
 import type { SqlExecutor } from '../types/primitives';
 import { ASKED, type Holds } from '../utils/held-reads';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -18,7 +18,6 @@ import {
   type TerminalEffectFault,
   type TerminalEffectTable,
   type OwedEffect,
-  type TerminalSequenceRun,
 } from './terminal-effects';
 
 /** Suffixed with the response's message id: a continuation keeps the turn's user-message id. */
@@ -153,45 +152,48 @@ export class TerminalTransitions {
     /** Called once, before any durable write; used only on a first attempt. */
     readonly declare: () => readonly OwedEffect[];
   }): Promise<void> {
-    const { transition, declare } = input;
-    // Built first: a throw here must not leave an open claim with no rows, which recovery reads as finished.
-    const owed = declare();
+    return settle(Effect.gen({ self: this }, function* () {
+      const { transition, declare } = input;
+      // Built first: a throw here must not leave an open claim with no rows, which recovery reads as finished.
+      const owed = declare();
 
-    if (!this.enter(transition)) {
-      diagnostics.event('turn.terminal_transition_in_flight', {
-        turn: transition.turnId, message: transition.messageId,
+      if (!this.enter(transition)) {
+        diagnostics.event('turn.terminal_transition_in_flight', {
+          turn: transition.turnId, message: transition.messageId,
+        });
+
+        return;
+      }
+
+      const disposition = this.record(transition, owed);
+
+      if (disposition === 'done') {
+        this.leave(transition);
+        diagnostics.event('turn.terminal_transition_replayed', {
+          turn: transition.turnId, message: transition.messageId,
+        });
+
+        return;
+      }
+
+      const driven = yield* Effect.exit(Effect.promise(async () => this.ledger.drive(this.sequenceId(transition), this.inFlight)));
+
+      if (Exit.isFailure(driven)) {
+        // Released, then re-armed: a held sequence is skipped by later sweeps, and owed rows need a wake.
+        this.leave(transition);
+        yield* Effect.promise(async () => this.armRecovery(transition, { cause: Cause.squash(driven.cause) }));
+
+        return yield* Effect.failCause(driven.cause);
+      }
+
+      const run = driven.value;
+
+      this.hold(transition, async () => {
+        await run.reported;
+        this.end(transition);
+        await this.closed();
       });
-
-      return;
-    }
-
-    const disposition = this.record(transition, owed);
-
-    if (disposition === 'done') {
-      this.leave(transition);
-      diagnostics.event('turn.terminal_transition_replayed', {
-        turn: transition.turnId, message: transition.messageId,
-      });
-
-      return;
-    }
-
-    let run: TerminalSequenceRun;
-
-    try {
-      run = await this.ledger.drive(this.sequenceId(transition), this.inFlight);
-    } catch (err) {
-      // Released, then re-armed: a held sequence is skipped by later sweeps, and owed rows need a wake.
-      this.leave(transition);
-      await this.armRecovery(transition, { cause: err });
-      throw err;
-    }
-
-    this.hold(transition, async () => {
-      await run.reported;
-      this.end(transition);
-      await this.closed();
-    });
+    }));
   }
 
   /**
@@ -308,16 +310,17 @@ export class TerminalTransitions {
   }
 
   /** Never throws. */
-  async resumeAll(): Promise<void> {
-    for (const transition of this.incomplete()) {
-      if (this.ledger.waitingOnOwner(this.sequenceId(transition))) continue;
+  resumeAll(): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      for (const transition of this.incomplete()) {
+        if (this.ledger.waitingOnOwner(this.sequenceId(transition))) continue;
 
-      // Acquired, not merely checked: startup reconcile and retry wakes interleave, and must not replay one row concurrently.
-      if (!this.enter(transition)) continue;
+        // Acquired, not merely checked: startup reconcile and retry wakes interleave, and must not replay one row concurrently.
+        if (!this.enter(transition)) continue;
+        const resumed = yield* Effect.exit(Effect.promise(async () => this.resume(transition)));
 
-      try {
-        await this.resume(transition);
-      } catch (err) {
+        if (Exit.isSuccess(resumed)) continue;
+        const err = Cause.squash(resumed.cause);
         this.leave(transition);
         diagnostics.failure('turn.terminal_resume_failed', toKinuError({
           doing: 'finishing what an interrupted terminal transition still owed',
@@ -325,9 +328,9 @@ export class TerminalTransitions {
           otherwise: 'unavailable',
         }), { turnId: transition.turnId, messageId: transition.messageId });
         // Re-armed: a close that threw may leave no owed row for the wake to derive from.
-        await this.armRecovery(transition, { cause: err });
+        yield* Effect.promise(async () => this.armRecovery(transition, { cause: err }));
       }
-    }
+    }));
   }
 
   /** Released and re-armed: the rejection may be the ledger's final wake failing. */
@@ -340,33 +343,24 @@ export class TerminalTransitions {
   }
 
   /** When the backend's sanctioned wake refuses, rows stay owed and visible with a named failure. Never reach around the wake. */
-  async armRecovery(
+  armRecovery(
     transition: TerminalTransition,
     failure: { readonly cause: unknown },
   ): Promise<void> {
-    const armed = await this.armWake(this.deps.now() + TERMINAL_EFFECT_RETRY_BASE_MS);
+    return settle(Effect.gen({ self: this }, function* () {
+      const armed = yield* Effect.exit(Effect.promise(async () => this.deps.scheduleRetry(this.deps.now() + TERMINAL_EFFECT_RETRY_BASE_MS)));
 
-    if (armed.armed) return;
-    diagnostics.failure('turn.terminal_recovery_unarmed', toKinuError({
-      doing: 'arming a durable wake for a terminal sequence whose ledger could not start',
-      cause: armed.refusal,
-      otherwise: 'io',
-    }), {
-      turn: transition.turnId,
-      message: transition.messageId,
-      ledgerCause: renderThrownChain(failure),
-    });
-  }
-
-  /** Shared attempt; callers report the refusal differently. */
-  private async armWake(atMs: number): Promise<{ armed: true } | { armed: false; refusal: unknown }> {
-    try {
-      await this.deps.scheduleRetry(atMs);
-
-      return { armed: true };
-    } catch (refusal) {
-      return { armed: false, refusal };
-    }
+      if (Exit.isSuccess(armed)) return;
+      diagnostics.failure('turn.terminal_recovery_unarmed', toKinuError({
+        doing: 'arming a durable wake for a terminal sequence whose ledger could not start',
+        cause: Cause.squash(armed.cause),
+        otherwise: 'io',
+      }), {
+        turn: transition.turnId,
+        message: transition.messageId,
+        ledgerCause: renderThrownChain(failure),
+      });
+    }));
   }
 
   /** The owner did what a parked effect waits on: changed what decides a tier's model or credential, so a refusal only

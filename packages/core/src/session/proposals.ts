@@ -112,7 +112,9 @@ export class SessionProposals {
     return this.transactionSync(() => settleSync(Effect.gen({ self: this }, function* () {
       this.actor.assertCurrent();
       yield* assertEpoch();
-      const proposal = this.requirePending(id);
+      const proposal = this.pendingRow(id);
+
+      if (proposal === null) return yield* Effect.fail(new KinuError('denied', 'context proposal is not pending'));
       const selected = this.context.selected();
 
       if (selected === null || selected.contextId !== proposal.context_id) return yield* Effect.fail(new KinuError('denied', 'proposal belongs to another selected context'));
@@ -142,14 +144,6 @@ export class SessionProposals {
     this.actor.assertCurrent();
     void this.sql`UPDATE context_proposals SET status='closed',closed_reason=${reason}
       WHERE actor_id=${this.actor.actorId} AND proposal_id=${id} AND status='pending'`;
-  }
-
-  private requirePending(id: string): ProposalRow {
-    const row = this.pendingRow(id);
-
-    if (row === null) throw new KinuError('denied', 'context proposal is not pending');
-
-    return row;
   }
 
   private pendingRow(id: string): ProposalRow | null {

@@ -225,7 +225,7 @@ export class ActorClaimStore {
   async consume(claim: ActorTurnClaim, input: { readonly index: number; readonly messages: readonly ModelMessage[]; readonly cache?: PromptCacheRoute | undefined }): Promise<ConsumedContext> {
     const { selected: source, revision: latest } = this.guard(claim.turnId, claim.epoch);
 
-    if (source === null || source.contextId !== claim.workingContextId) throw new KinuError('denied', 'claimed working context is not selected');
+    if (source === null || source.contextId !== claim.workingContextId) return settle(Effect.fail(new KinuError('denied', 'claimed working context is not selected')));
 
     const prepared = await this.history.requests.prepareRendered({ id: crypto.randomUUID(), turnId: claim.turnId, runId: claim.runId,
       epoch: claim.epoch, revision: latest + 1, step: input.index, source, messages: input.messages,
@@ -233,8 +233,9 @@ export class ActorClaimStore {
 
     const consumed = this.transactionSync(() => settleSync(Effect.gen({ self: this }, function* () {
       const now = this.guard(claim.turnId, claim.epoch);
+      const dead = deadIn(now, claim);
 
-      assertLiveIn(now, claim);
+      if (dead !== null) return yield* Effect.fail(dead);
 
       if (now.revision !== latest) return yield* Effect.fail(new KinuError('denied', 'another request consumed this claim during preparation'));
 
@@ -340,7 +341,9 @@ export class ActorClaimStore {
       const settled = this.sql<{ epoch: number }>`UPDATE actor_turn_claims SET outcome=${outcome}
         WHERE actor_id=${this.actorId} AND turn_id=${claim.turnId} AND epoch=${claim.epoch} AND outcome IS NULL RETURNING epoch`;
 
-      if (settled.length === 0) assertLiveIn(this.guard(claim.turnId, claim.epoch), claim);
+      const dead = settled.length === 0 ? deadIn(this.guard(claim.turnId, claim.epoch), claim) : null;
+
+      if (dead !== null) return settleSync(Effect.fail(dead));
     });
 
     return () => { this.changed(); };
@@ -490,12 +493,15 @@ export function claimFences(sql: SqlExecutor, actor: ActorHandle): ClaimFences {
     },
     assertLive: (turnId, epoch) => {
       const claim = claimOf(turnId);
+      const dead = deadIn({ epoch: claim?.epoch ?? null, open: claim?.open === 1 }, { epoch });
 
-      assertLiveIn({ epoch: claim?.epoch ?? null, open: claim?.open === 1 }, { epoch });
+      if (dead !== null) return settleSync(Effect.fail(dead));
     },
     // Settled or not: only the epoch is asked.
     assertOwned: (turnId, epoch) => {
-      assertLiveIn({ epoch: claimOf(turnId)?.epoch ?? null, open: true }, { epoch });
+      const dead = deadIn({ epoch: claimOf(turnId)?.epoch ?? null, open: true }, { epoch });
+
+      if (dead !== null) return settleSync(Effect.fail(dead));
     },
     openClaims: () => {
       actor.assertCurrent();
@@ -511,10 +517,11 @@ export function claimFences(sql: SqlExecutor, actor: ActorHandle): ClaimFences {
   };
 }
 
-function assertLiveIn(guard: Pick<ClaimGuard, 'epoch' | 'open'>, claim: Pick<ActorTurnClaim, 'epoch'>): void {
-  if (guard.epoch !== claim.epoch) throw new KinuError('denied', 'actor turn is owned by another execution epoch');
+/** Why a claim takes no further work under `guard`, or null while it is live. */
+function deadIn(guard: Pick<ClaimGuard, 'epoch' | 'open'>, claim: Pick<ActorTurnClaim, 'epoch'>): KinuError | null {
+  if (guard.epoch !== claim.epoch) return new KinuError('denied', 'actor turn is owned by another execution epoch');
 
-  if (!guard.open) throw new KinuError('denied', 'actor turn is settled and takes no further work');
+  return guard.open ? null : new KinuError('denied', 'actor turn is settled and takes no further work');
 }
 
 export type ClaimRecovery =

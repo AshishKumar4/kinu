@@ -69,7 +69,8 @@ const GeneralizedToolSchema = v.object({
 });
 
 import type { AgentConfigStore } from '../config/store';
-import { diagnostics, toKinuError, KinuError } from '../obs/index';
+import { diagnostics, settle, toKinuError, KinuError } from '../obs/index';
+import { Cause, Effect, Exit } from 'effect';
 
 
 /** Tombstone scope for one turn's two durable rating writes (`turn_ratings` row
@@ -426,38 +427,37 @@ export class EvolutionEngine {
      * turn being opened. A row is retired only once its review ran. Undecodable rows
      * and missions over cap come back in `refused` with their disposition.
      */
-  async runDeferredTurnReviews(): Promise<DeferredReviewDrain> {
-    if (!this.enabled) return { reviewed: 0, refused: [] };
-    this.recoverInterruptedWork();
-    const taken = this.sessionWindow.takeQueuedReviews(MAX_TURN_REVIEWS_PER_OPEN);
-    const refused: RefusedTurnReview[] = [...taken.refused];
-    let reviewed = 0;
+  runDeferredTurnReviews(): Promise<DeferredReviewDrain> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (!this.enabled) return { reviewed: 0, refused: [] };
+      this.recoverInterruptedWork();
+      const taken = this.sessionWindow.takeQueuedReviews(MAX_TURN_REVIEWS_PER_OPEN);
+      const refused: RefusedTurnReview[] = [...taken.refused];
+      let reviewed = 0;
 
-    for (const row of taken.reviews) {
-      try {
-        await this.reviewTurn(row.turn, row.followup);
-      } catch (err) {
-        // A governor refusal is a decision: the row goes back unchanged. Any other throw
-        // also releases it untombstoned.
-        if (err instanceof MissionBudgetExhausted) {
-          refused.push({ id: row.id, reason: 'budget' });
-        } else {
-          diagnostics.failure(
-            'evolution.deferred_review_failed',
-            toKinuError({ doing: 'run a deferred turn review', cause: err, otherwise: 'unavailable' }),
-            { reviewId: row.id },
-          );
+      for (const row of taken.reviews) {
+        const review = yield* Effect.exit(Effect.promise(async () => this.reviewTurn(row.turn, row.followup)));
+
+        if (Exit.isSuccess(review)) {
+          this.sessionWindow.settleReview(row.id);
+          reviewed++;
+          continue;
+        }
+
+        const err = Cause.squash(review.cause);
+
+        // A governor refusal is a decision: the row goes back unchanged. Any other throw also releases it untombstoned.
+        if (err instanceof MissionBudgetExhausted) refused.push({ id: row.id, reason: 'budget' });
+        else {
+          diagnostics.failure('evolution.deferred_review_failed', toKinuError({ doing: 'run a deferred turn review', cause: err, otherwise: 'unavailable' }),
+            { reviewId: row.id });
         }
 
         this.sessionWindow.releaseQueuedReview(row.id);
-        continue;
       }
 
-      this.sessionWindow.settleReview(row.id);
-      reviewed++;
-    }
-
-    return { reviewed, refused };
+      return { reviewed, refused };
+    }));
   }
 
   /**
