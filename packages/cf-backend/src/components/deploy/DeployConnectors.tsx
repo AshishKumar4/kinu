@@ -208,7 +208,7 @@ export function ConnectorsBefore({ account, name, address, busy, onConnectGithub
   const later = "Its address is made by the deploy, so connect it once Kinu is live.";
 
   const composio = () => Effect.gen(function* () {
-    const heard = yield* Effect.promise(async () => setGoogleClient(account, name, null, true));
+    const heard = yield* Effect.promise(async () => setGoogleClient(account, name, null, address));
 
     if ("refusal" in heard) setRefused(heard.refusal.error);
     else setChanged((count) => count + 1);
@@ -232,7 +232,7 @@ export function ConnectorsBefore({ account, name, address, busy, onConnectGithub
       <Connector id="google" brand="google" title="Google" copy="Works through Composio: each person connects Gmail, Drive and Calendar in Kinu's Plugins."
         action={held.origin !== null && !googleOpen && <Button size="sm" variant="secondary" onClick={() => setGoogleOpen(true)}>Use your own app</Button>}>
         {held.origin !== null && googleOpen
-          ? <GoogleClientSteps origin={held.origin} save={async (client) => setGoogleClient(account, name, client, true)}
+          ? <GoogleClientSteps origin={held.origin} save={async (client) => setGoogleClient(account, name, client, address)}
             onSaved={() => { setGoogleOpen(false); setChanged((count) => count + 1); }} onCancel={() => setGoogleOpen(false)} />
           : undefined}
       </Connector>

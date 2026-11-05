@@ -320,6 +320,11 @@ function addressOf(picked: PickedDomain | null): AddressAsk {
     : { kind: "domain", ...(picked.zone === null ? { domain: picked.name } : { zone: picked.zone }), host: picked.host };
 }
 
+/** What a new Kinu's screen starts with: what it held when the tab went to GitHub, else the first account and nothing chosen. */
+function startingChoices(session: DeploySession): { readonly account: string; readonly choices: Choices } {
+  return heldChoices() ?? { account: session.accounts[0]?.id ?? "", choices: NO_CHOICES };
+}
+
 /** The optional connectors before Deploy, once the Kinu has a name; GitHub's leaves the tab, so the choices are kept. */
 function ConnectorsStep({ account, name, choices, busy, onConnectGithub }: {
   account: string; name: string; choices: Choices; busy: boolean; onConnectGithub: ConnectGithubBefore;
@@ -405,15 +410,15 @@ function ReadyFoot({ back, cost, deploying, blocked, onDeploy, onBack }: {
 function ForAccount({ session, actions, onDeploy, onConnectGithub, onBack }: {
   session: DeploySession; actions: ReadyActions; onDeploy: (asked: DeployRunRequest) => void; onConnectGithub: ConnectGithubBefore; onBack: () => void;
 }) {
-  const [returned] = useState(heldChoices);
-  const [account, setAccount] = useState(returned?.account ?? session.accounts[0]?.id ?? "");
+  const [start] = useState(() => startingChoices(session));
+  const [account, setAccount] = useState(start.account);
   // The need a hand-off was opened for: the account is read again every few seconds until it is met.
   const [handedOff, setHandedOff] = useState<string | null>(null);
   // The credits a purchase was opened at: any change to them is the purchase landing.
   const [creditsAt, setCreditsAt] = useState<string | null>(null);
   const checked = useDeployRead(account, async () => readPreflight(account), { onFocus: true, every: handedOff === null ? null : RECHECK_MS });
   const [choosingDomain, setChoosingDomain] = useState(false);
-  const [choices, setChoices] = useState<Choices>(returned?.choices ?? NO_CHOICES);
+  const [choices, setChoices] = useState<Choices>(start.choices);
   const [mailReady, setMailReady] = useState(false);
   const onMail = useCallback((mail: string | null) => setChoices((held) => ({ ...held, mail })), []);
   const handOff = (need: string) => { setHandedOff(need); actions.onHandedOff(need); };

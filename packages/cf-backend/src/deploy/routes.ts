@@ -17,7 +17,7 @@ import { ownRequest } from '../nimbus-route';
 import {
   AddressAskSchema, CLOUDFLARE_DEPLOY_SCOPES, DEPLOY_API, DEPLOY_CALLBACK_PATH, DEPLOY_GITHUB_PATH, DEPLOY_PAGE_PATH, DEPLOY_RUN_ID, DEPLOY_SESSION_STATE,
   DEPLOY_SOCKET_PROTOCOL, DeployDomainsSchema, DeployInputsSchema, GITHUB_APP_NEW, GoogleClientSchema, INSTANCE_NAME, DeployPreflightSchema, DeployRunRequestSchema, DeployRunViewSchema,
-  ConnectorsBeforeSchema, DeploySessionSchema, MailPreviewSchema, RELEASE_MANIFEST_PATH, SIGN_IN_AGAIN_NEED,
+  ConnectorsBeforeSchema, DeploySessionSchema, type DeployRunRequest, MailPreviewSchema, RELEASE_MANIFEST_PATH, SIGN_IN_AGAIN_NEED,
   accountChoices, authorizeUrl, bearerTransport, buildOf, causeWords, convertedGithubApp, deployedKinus, domainsMatching,
   fetchReleaseManifest, githubAppManifest, heard, judgeRefusal, kinuOrigin, mailHostPreview, setConnector, mintDeployRun, parseReleaseManifest, plannedOrigin, plannedRun, preflight, promptedSecrets, runKeyDigest,
   type CloudflareTransport, type CloudflareUser, type CloudflareWords, type DeployChoice, type DeployOptions, type DeployRunView,
@@ -403,7 +403,7 @@ const KinuSchema = { account: CloudflareIdSchema, name: v.pipe(v.string(), v.reg
 /** `before`: the Kinu is not deployed yet, and this is where it will answer; its first run binds what is made. */
 const GithubAskSchema = v.object({ ...KinuSchema, before: v.optional(AddressAskSchema) });
 
-const GoogleAskSchema = v.object({ ...KinuSchema, client: v.nullable(GoogleClientSchema), before: v.optional(v.literal(true)) });
+const GoogleAskSchema = v.object({ ...KinuSchema, client: v.nullable(GoogleClientSchema), before: v.optional(AddressAskSchema) });
 
 /** The mark a GitHub `state` carries for an app made before its Kinu. */
 const BEFORE = 'before';
@@ -427,10 +427,13 @@ function githubManifest(request: Request, env: Env): Effect.Effect<Response, Kin
         ? new KinuError('bad_input', 'This Kinu\'s address is made by its deploy. Add GitHub once it is live.')
         : Effect.succeed(planned))));
 
-    const answer = yield* pageRead(request, env, (transport) => Effect.map(origin(transport), (at) => ({
-      action: `${GITHUB_APP_NEW}?state=${encodeURIComponent(state)}`,
-      manifest: JSON.stringify(githubAppManifest(at, back)),
-    })));
+    const answer = yield* pageRead(request, env, (transport, _user, session) => Effect.gen(function* () {
+      const at = yield* origin(transport);
+
+      if (before !== undefined) yield* Effect.promise(async () => session.makingGithubApp(asked, at));
+
+      return { action: `${GITHUB_APP_NEW}?state=${encodeURIComponent(state)}`, manifest: JSON.stringify(githubAppManifest(at, back)) };
+    }));
 
     if (answer.ok) answer.headers.append('set-cookie', setCookie(DEPLOY_STATE_COOKIE_NAME, sha256Hex(state), STATE_TTL_MS));
     answer.headers.set('cache-control', 'no-store');
@@ -458,7 +461,9 @@ function githubMade(request: Request, env: Env, url: URL): Effect.Effect<Respons
     const app = yield* convertedGithubApp(code);
 
     if (mark === BEFORE) {
-      yield* Effect.promise(async () => held.session.holdConnector({ account, name }, 'github', app));
+      const kept = yield* Effect.promise(async () => held.session.holdGithubApp({ account, name }, app));
+
+      if (!kept) return yield* new KinuError('bad_input', 'This page was not making a GitHub App for that Kinu.');
       diagnostics.event('deploy.github_app_held', { account, name, slug: app.slug });
 
       return toPage({ github: app.slug, kinu: name, before: '1' });
@@ -487,10 +492,15 @@ function googleClient(request: Request, env: Env): Effect.Effect<Response, KinuE
     if (!asked.success) return err(400, asked.issues[0]?.message ?? 'That is not a Google client this page can set.');
     const { account, name, client, before } = asked.output;
 
-    if (before === true) {
-      return yield* pageRead(request, env, (_transport, _user, session) => Effect.as(
-        Effect.promise(async () => session.holdConnector({ account, name }, 'google', client)), { google: client !== null },
-      ));
+    if (before !== undefined) {
+      return yield* pageRead(request, env, (transport, _user, session) => Effect.gen(function* () {
+        const origin = yield* plannedOrigin(transport, account, name, before);
+
+        if (origin === null) return yield* new KinuError('bad_input', 'This Kinu\'s address is made by its deploy. Add Google once it is live.');
+        yield* Effect.promise(async () => session.holdConnector({ account, name }, 'google', client, origin));
+
+        return { google: client !== null };
+      }));
     }
 
     return yield* pageRead(request, env, (transport) => Effect.as(setConnector(transport, { account, name }, 'google', client), { google: client !== null }));
@@ -500,6 +510,17 @@ function googleClient(request: Request, env: Env): Effect.Effect<Response, KinuE
 /** The Kinu not deployed yet a page asks of: its account, its name, and where it will answer (`zone` and `host` for its
  *  own domain, neither for workers.dev). */
 const BeforeAskSchema = v.object({ ...KinuSchema, address: AddressAskSchema });
+
+/** The secrets of the connectors held for the new Kinu `asked` names, made for the address its run gives it as `instance`. */
+function connectorsFor(
+  held: NonNullable<Awaited<ReturnType<typeof signedIn>>>, asked: Extract<DeployRunRequest, { kind: 'new' }>, instance: string,
+): Effect.Effect<Readonly<Record<string, string>>, KinuError> {
+  return Effect.gen(function* () {
+    const origin = yield* plannedOrigin(bearerTransport(held.token), asked.account, instance, asked.address);
+
+    return origin === null ? {} : yield* Effect.promise(async () => held.session.connectorSecrets({ account: asked.account, name: asked.name }, origin));
+  });
+}
 
 /** What this sign-in holds for a Kinu it has not deployed yet, and the address its apps name. */
 function connectorsBefore(request: Request, env: Env, params: URLSearchParams): Effect.Effect<Response, KinuError> {
@@ -515,9 +536,10 @@ function connectorsBefore(request: Request, env: Env, params: URLSearchParams): 
   const { account, name, address } = asked.output;
 
   return pageRead(request, env, (transport, _user, session) => Effect.gen(function* () {
-    const held = yield* Effect.promise(async () => session.heldConnectors({ account, name }));
+    const origin = yield* plannedOrigin(transport, account, name, address);
+    const held = yield* Effect.promise(async () => session.heldConnectors({ account, name }, origin));
 
-    return v.parse(ConnectorsBeforeSchema, { ...held, origin: yield* plannedOrigin(transport, account, name, address) });
+    return v.parse(ConnectorsBeforeSchema, { ...held, origin });
   }));
 }
 
@@ -714,12 +736,11 @@ function beginRun(request: Request, env: Env): Effect.Effect<Response, KinuError
     }));
 
     if ('refused' in planned) return planned.refused;
+    // A new Kinu's first run binds the connectors set up for it before it was made, those made for where it will answer.
+    const secrets = asked.kind === 'new' ? yield* connectorsFor(held, asked, planned.plan.inputs.instanceName) : {};
     const grant = yield* Effect.promise(async () => held.session.surrender());
 
     if (grant === null) return signInFirst();
-    // A new Kinu's first run binds the connectors set up for it, by the name they were set up for, before it was made.
-    const kinu = { account: asked.account, name: asked.name };
-    const secrets = asked.kind === 'new' ? yield* Effect.promise(async () => held.session.connectorSecrets(kinu)) : {};
     const runId = yield* Effect.promise(async () => run.begin(held.user.id, planned.plan, grant, secrets));
 
     if (runId === null) return err(409, 'A run is already going in this account; continue it.');

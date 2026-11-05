@@ -367,7 +367,7 @@ describe('the deploy page', () => {
         waiting: await waiting.$$eval('[data-deploy-connectors-before] button', (buttons) => buttons.map((button) => button.textContent)),
       }).toEqual({
         manifest: 'https://kinu.ada.workers.dev',
-        sent: [{ account: ACCOUNT, name: 'kinu', client: { clientId: '123-abc.apps.googleusercontent.com', clientSecret: 'GOCSPX-secret' }, before: true }],
+        sent: [{ account: ACCOUNT, name: 'kinu', client: { clientId: '123-abc.apps.googleusercontent.com', clientSecret: 'GOCSPX-secret' }, before: { kind: 'workers' } }],
         waiting: [],
       });
     });

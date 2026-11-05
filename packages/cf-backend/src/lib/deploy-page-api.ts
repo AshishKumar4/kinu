@@ -119,9 +119,9 @@ export function makeGithubApp(account: string, name: string, before?: AddressAsk
   });
 }
 
-/** Gives the Kinu `name` the person's own Google client, or with null takes it away, back to Composio. `before`: held
- *  for the Kinu's first run, which binds it. */
-export function setGoogleClient(account: string, name: string, client: OAuthClient | null, before?: true): Promise<DeployHeard<{ readonly google: boolean }>> {
+/** Gives the Kinu `name` the person's own Google client, or with null takes it away, back to Composio. `before`: the
+ *  Kinu is not deployed yet and will answer there; the client is held for its first run, which binds it. */
+export function setGoogleClient(account: string, name: string, client: OAuthClient | null, before?: AddressAsk): Promise<DeployHeard<{ readonly google: boolean }>> {
   return settle(heard(v.object({ google: v.boolean() }), "/google", { method: "POST", json: { account, name, client, before } }));
 }
 

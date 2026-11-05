@@ -468,11 +468,11 @@ function connectorAnswer(route: string, body: string | null): Response {
   }
 
   if (route !== "google") return json({ error: "No such deploy route." }, 404);
-  const asked = v.safeParse(v.object({ client: v.nullable(GoogleClientSchema), before: v.optional(v.literal(true)) }), JSON.parse(body ?? "{}"));
+  const asked = v.safeParse(v.object({ client: v.nullable(GoogleClientSchema), before: v.optional(AddressAskSchema) }), JSON.parse(body ?? "{}"));
 
   if (!asked.success) return json({ error: asked.issues[0]?.message ?? "That is not a Google client." }, 400);
 
-  if (asked.output.before === true) {
+  if (asked.output.before !== undefined) {
     googleBefore = asked.output.client !== null;
 
     return json({ google: googleBefore });

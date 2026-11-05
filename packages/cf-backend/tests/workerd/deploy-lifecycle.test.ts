@@ -627,8 +627,11 @@ describe('the deploy page', () => {
     const state = new URL(form.action).searchParams.get('state') ?? '';
     const bound = asked.setCookie.find((each) => each.startsWith(`${DEPLOY_STATE_COOKIE}=`))?.split(';')[0] ?? '';
     const made = await env.DEPLOY_DOOR_PROBE.hit('GET', `/deploy/github?code=${DEPLOY_FAKE_GITHUB_CODE}&state=${encodeURIComponent(state)}`, { cookie: `${bound}; ${cookie}` });
-    const google = await page(cookie, 'POST', '/api/deploy/google', JSON.stringify({ ...kinu, client: { clientId: '123-abc.apps.googleusercontent.com', clientSecret: 'GOCSPX-secret' }, before: true }));
+    const google = await page(cookie, 'POST', '/api/deploy/google', JSON.stringify({ ...kinu, client: { clientId: '123-abc.apps.googleusercontent.com', clientSecret: 'GOCSPX-secret' }, before: { kind: 'workers' } }));
     const held = JSON.parse((await page(cookie, 'GET', `/api/deploy/connectors?account=${DEPLOY_FAKE_ACCOUNT}&name=kinu`)).body);
+    // Made for workers.dev, they name no other address: on the person's own domain the Kinu would have neither.
+    await env.DEPLOY_FAKE.zone({ id: deployFakeZoneId('northwind.dev'), name: 'northwind.dev' });
+    const moved = JSON.parse((await page(cookie, 'GET', `/api/deploy/connectors?account=${DEPLOY_FAKE_ACCOUNT}&name=kinu&zone=${deployFakeZoneId('northwind.dev')}&host=kinu.northwind.dev`)).body);
     const untouched = (await env.DEPLOY_FAKE.state()).secrets;
     // A domain the run still has to add has no address yet, so no app can name it.
     const early = await page(cookie, 'POST', '/api/deploy/github', JSON.stringify({ ...kinu, before: { kind: 'domain', domain: 'elsewhere.example', host: 'kinu.elsewhere.example' } }));
@@ -639,7 +642,7 @@ describe('the deploy page', () => {
 
     expect({
       manifest: v.parse(v.object({ url: v.string() }), JSON.parse(form.manifest)).url,
-      made: { status: made.status, location: made.location }, google: google.status, held,
+      made: { status: made.status, location: made.location }, google: google.status, held, moved,
       untouched: [untouched.MCP_GITHUB_CLIENT_ID, untouched.MCP_GOOGLE_CLIENT_ID], early: early.status,
       // The version the run uploaded carries them as its own secrets.
       bound: versionSecrets.filter((name) => name.startsWith('MCP_')).sort(),
@@ -647,6 +650,7 @@ describe('the deploy page', () => {
       manifest: `https://${ADDRESS}`,
       made: { status: 302, location: '/deploy?github=kinu-probe&kinu=kinu&before=1' }, google: 200,
       held: { github: 'kinu-probe', google: true, origin: `https://${ADDRESS}` },
+      moved: { github: null, google: false, origin: 'https://kinu.northwind.dev' },
       untouched: [undefined, undefined], early: 400,
       bound: ['MCP_GITHUB_CLIENT_ID', 'MCP_GITHUB_CLIENT_SECRET', 'MCP_GOOGLE_CLIENT_ID', 'MCP_GOOGLE_CLIENT_SECRET'],
     });
