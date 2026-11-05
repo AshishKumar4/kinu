@@ -956,7 +956,7 @@ export const PLATFORM_CATALOG = {
     bounds: 'query',
     evidence: 'proven-by-probe',
     provenance:
-      'packages/cf-backend/tests/workerd/text-search.test.ts:12 under workerd; on staging (kinu-staging 5c522f12d, '
+      'packages/cf-backend/tests/workerd/second/text-search.test.ts:12 under workerd; on staging (kinu-staging 5c522f12d, '
       + '2026-10-19), GET /api/gallery?q=<n bytes> with one listing indexed',
     date: '2026-10-19',
     trigger: 'a LIKE or GLOB whose pattern exceeds 50 bytes, evaluated against at least one row',

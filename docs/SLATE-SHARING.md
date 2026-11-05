@@ -333,7 +333,7 @@ local sharing; the CLI shares through a cloud workspace.
   with every requirement unsatisfied and carries nothing of the owner's (S8).
 - `packages/cf-backend/tests/unit-slate-composition.test.ts`: what only the
   agent does is refused on the surface (S1).
-- `packages/cf-backend/tests/workerd/slate-share.test.ts`, over the real
+- `packages/cf-backend/tests/workerd/second/slate-share.test.ts`, over the real
   SlateHost: S1 problem surfacing, the graph a share is granted across the app
   hop and its cycle, the named-viewer grant and approval cases, Plan and hired
   callers refused, S6 mid-flight revoke, the per-impact risk text.
@@ -346,6 +346,6 @@ local sharing; the CLI shares through a cloud workspace.
   wrong-token handles never resolve an object.
 - `packages/core/tests/unit-slate-members.test.ts`: the impact of every member
   a slate reaches (S4).
-- `packages/cf-backend/tests/workerd/slate-share.test.ts`: the viewer fixture
+- `packages/cf-backend/tests/workerd/second/slate-share.test.ts`: the viewer fixture
   end to end (GET, batch, socket, audit rows, replay refusal) plus share-URL
   survival across `abortAllDurableObjects()`.

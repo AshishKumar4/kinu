@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { expect, it } from 'vitest';
 import type { PartRunAnswer } from '@kinu.run/core/slates';
-import type { SlateShareProbeRpc } from './env';
+import type { SlateShareProbeRpc } from '../env';
 
 type Probe = DurableObjectStub<SlateShareProbeRpc>;
 

@@ -12,7 +12,7 @@ import {
 } from "@/lib/drive-api";
 import { revokeShare } from "@/lib/shared-api";
 import { Menu } from "@/components/ui/Menu";
-import { useWorkspaceRpc } from "@/hooks/use-chat-owner";
+import { useWorkspaceRpc } from "@/hooks/use-workspace-rpc";
 import { Modal } from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ForkDialog } from "@/components/shared/ForkDialog";

@@ -5,7 +5,7 @@
 import * as v from 'valibot';
 import { AccountMemoryProposalSchema } from '../memory/account';
 import { REASONING_EFFORTS } from '../providers/effort';
-import { ProviderFailureSchema } from '../providers/registry';
+import { ProviderFailureSchema } from '../providers/provider-failure';
 import { ModelPricingSchema } from '../providers/types';
 import { WorkspaceOverviewSchema } from './workspace-overview';
 

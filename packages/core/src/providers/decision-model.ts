@@ -19,16 +19,8 @@ import type { TierRefusals } from '../types/refusals';
 import { OWNER_FIXABLE_REFUSALS, providerRefusalCode } from './util';
 import { spentAllowanceRefusal } from './middleware/retry';
 import { Effect } from 'effect';
+import { DECISION_REFUSALS, type DecisionModel } from './decision-models';
 
-export const DEFAULT_DECISION_MODEL = 'workers-ai/@cf/cloudflare/clef';
-
-/** The decision models a catalog may name. */
-export const DECISION_MODELS = [DEFAULT_DECISION_MODEL, 'workers-ai/@cf/cloudflare/clef-flash'] as const;
-
-export type DecisionModel = (typeof DECISION_MODELS)[number];
-
-/** The notice key a refusing decision model is said under, beside the tiers'; a space no tier id can hold. */
-export const DECISION_REFUSALS = 'decision model';
 
 export type DecisionQuestion =
   | { readonly type: 'score'; readonly instructions: string; readonly criteria: string[] }

@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { Database as SqliteDatabase } from 'bun:sqlite';
 import * as v from 'valibot';
 import { describe, expect, test } from 'bun:test';
-import { censusOf, initActivationTable, recordActivation, sha256Hex, type Repair, type TablesAnswer } from '@kinu.run/core';
+import { ACTIVATION_SLOTS, censusOf, initActivationTable, recordActivation, sha256Hex, type Repair, type TablesAnswer } from '@kinu.run/core';
 import { makeSql, makeSqlExec } from '../packages/core/tests/helpers';
 import { censusDiff, censusLines, changedTables, classLossRefusals, confirmation, derivedIn, lossRefusals, planLines, referrersOf, schemaChange, verdictOf, walk, walkLines, type OpsBody, type Reached, type TablesTarget } from './tables-reset';
 
@@ -466,6 +466,20 @@ describe('census-diff', () => {
   });
 
   const activations = (ledger: readonly string[]) => line({ database: W, table: 'workspace_activations', rows: ledger.length, digest: ledger.join(''), ledger });
+
+  // A busy workspace's activation ring is full: the walk's open drops its oldest row and keeps the count, and the
+  // generation it moved is still a first open's write.
+  test('a workspace opened with a full activation ring moves its generation as a first open, and a rewritten ring fails', () => {
+    const ring = (from: number) => Array.from({ length: ACTIVATION_SLOTS }, (_, at) => `${String(from + at)}:r${String(from + at)}`);
+    const generation = (digest: string) => line({ database: W, table: 'kinu_workspace_generation', rows: 1, digest });
+    const before = [activations(ring(1)), generation('g1')].join('\n');
+    const rewritten = ring(2).map((entry, at) => (at === 0 ? '2:other' : entry));
+
+    expect({
+      opened: censusDiff(before, [activations(ring(2)), generation('g2')].join('\n'), NOTHING, true).failed,
+      rewritten: censusDiff(before, [activations(rewritten), generation('g2')].join('\n'), NOTHING, true).failed.length > 0,
+    }).toEqual({ opened: [], rewritten: true });
+  });
 
   test('passes a reset that emptied its plan\'s table, and names the first open\'s writes as such', () => {
     const passed = diffed(AFTER);

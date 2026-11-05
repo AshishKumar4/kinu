@@ -9,8 +9,8 @@ import { env } from 'cloudflare:test';
 import { getAgentByName } from 'agents';
 import { expect, it } from 'vitest';
 import { HOSTED_ACTOR_ID_HEADER, hostedActorSocketPath, ORCHESTRATOR_AGENT_SLUG } from '@kinu.run/core';
-import { JOB_STARTED } from './hire-shapes';
-import { actorWindow } from '../helpers/actor-window';
+import { JOB_STARTED } from '../hire-shapes';
+import { actorWindow } from '../../helpers/actor-window';
 
 /** Its agents' facets lose their live relays at a shell call: the name starts `relay-cut-`. */
 const WORKSPACE = 'relay-cut-hire';

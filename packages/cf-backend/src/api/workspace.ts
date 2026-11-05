@@ -9,7 +9,7 @@ import { rawParam, type ApiVariables, type FamilyEnv } from './context';
 import type { AuthIdentity } from '../auth/session';
 
 /** The workspace object a claim hands back: the `OrchestratorAgent` namespace's stub. Each call it takes is async, so the
- *  SDK starts the object before the first one runs (agents 0.26, `tests/workerd/start-before-rpc.test.ts`). */
+ *  SDK starts the object before the first one runs (agents 0.26, `tests/workerd/second/start-before-rpc.test.ts`). */
 export type ClaimedWorkspace = Env['OrchestratorAgent'] extends DurableObjectNamespace<infer Agent> ? DurableObjectStub<Agent> : never;
 
 interface OwnedWorkspace<Agent> {

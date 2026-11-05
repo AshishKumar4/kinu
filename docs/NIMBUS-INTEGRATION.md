@@ -100,7 +100,7 @@ read-only-open guards in core's `src/vfs/sqlite-vfs.ts` (D21, D22),
 and the `LongRunningWorkerSpawnOptions` re-export from `workspace-host`.
 `packages/cf-backend/tests/workerd/slate-durability.test.ts` ("npm install
 streams a package off the registry") and
-`packages/cf-backend/tests/workerd/nimbus-git-npm.test.ts` hold the registry
+`packages/cf-backend/tests/workerd/second/nimbus-git-npm.test.ts` hold the registry
 behaviour.
 
 The file in `patches/`, `upstream-codemode-normalize.patch`, is not a
@@ -173,7 +173,7 @@ hosted runtime over its own storage and answers from it. A sibling is not a
 Kinu workspace: it has no genesis, no owner and no transcript, because
 Kinu's schema bootstrap runs from `onStart`, which returns at once for a
 sibling (since agents 0.25 the SDK starts an object for its first async RPC,
-`supervisorOp` included). `packages/cf-backend/tests/workerd/nimbus-git-npm.test.ts`
+`supervisorOp` included). `packages/cf-backend/tests/workerd/second/nimbus-git-npm.test.ts`
 holds this: it installs six packages, one wider than the coordinator resolves
 alone. D23-N records the measurement.
 

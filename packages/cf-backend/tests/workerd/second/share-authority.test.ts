@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { expect, it } from 'vitest';
 import * as v from 'valibot';
 import { OwnedLiveShareSchema } from '@kinu.run/core';
-import type { SlateShareProbeRpc } from './env';
+import type { SlateShareProbeRpc } from '../env';
 
 type Probe = DurableObjectStub<SlateShareProbeRpc>;
 

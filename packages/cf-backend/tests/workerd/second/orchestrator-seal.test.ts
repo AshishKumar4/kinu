@@ -8,7 +8,7 @@
 import { env } from 'cloudflare:workers';
 import { describe, expect, test } from 'vitest';
 import * as v from 'valibot';
-import { MUST_STAY_DENIED } from '../helpers/rpc-denied';
+import { MUST_STAY_DENIED } from '../../helpers/rpc-denied';
 
 /** Keeps every other field, so a payload that grew one fails the equality. */
 const FrameSchema = v.looseObject({ type: v.string() });

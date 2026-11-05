@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-10-24",
+  "measuredAt": "2026-11-05",
   "machine": "linux x64, AMD EPYC (8 threads)",
   "method": "each row alone under `setsid /usr/bin/time -v bun scripts/ladder.ts --gate <run> --no-cache`; the row's whole process tree — its session plus every descendant by ppid, so a setsid'd dev server or browser counts — sampled every 0.05s for its first 3s and every 0.25s after — summed proportional set (Pss, /proc/<pid>/smaps_rollup) for memory, tasks in state R for parallel demand, Δ(utime+stime+cutime+cstime) over at least 0.25s for parallelism achieved; CPU seconds from getrusage(RUSAGE_CHILDREN); a post-publish row against the deployment `--deployment=<origin>` named, with KINU_ORIGIN and KINU_EVAL_ORIGIN set to it",
   "rows": {
@@ -497,14 +497,14 @@
     },
     "bun run test:workerd:cf-main": {
       "machine": "linux x64, AMD EPYC (8 threads)",
-      "wallSeconds": 256.02,
-      "cpuSeconds": 323.9,
-      "peakRssMb": 8569.16,
-      "peakRunnable": 9,
-      "peakCpuThreads": 4.64,
-      "meanThreads": 1.27,
-      "samples": 802,
-      "loadAtStart": 0.55,
+      "wallSeconds": 162.66,
+      "cpuSeconds": 214.28,
+      "peakRssMb": 6374.3,
+      "peakRunnable": 7,
+      "peakCpuThreads": 3.82,
+      "meanThreads": 1.32,
+      "samples": 560,
+      "loadAtStart": 0.1,
       "exit": 0
     },
     "bun run test:workerd:cf-complexity": {
@@ -521,14 +521,14 @@
     },
     "bun run test:workerd:cf-long": {
       "machine": "linux x64, AMD EPYC (8 threads)",
-      "wallSeconds": 261.07,
-      "cpuSeconds": 93.88,
-      "peakRssMb": 3120.17,
-      "peakRunnable": 9,
-      "peakCpuThreads": 4.15,
-      "meanThreads": 0.36,
-      "samples": 932,
-      "loadAtStart": 1.06,
+      "wallSeconds": 172.92,
+      "cpuSeconds": 84.05,
+      "peakRssMb": 3884.44,
+      "peakRunnable": 7,
+      "peakCpuThreads": 3.84,
+      "meanThreads": 0.49,
+      "samples": 608,
+      "loadAtStart": 1.24,
       "exit": 0
     },
     "bun run test:workerd:devbox": {
@@ -1180,6 +1180,7 @@
       "exit": 0
     },
     "bun test --timeout=0 tests/browser/live-app-page-data.test.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 144.1,
       "cpuSeconds": 287.04,
       "peakRssMb": 5070.17,
@@ -1188,8 +1189,7 @@
       "meanThreads": 1.99,
       "samples": 489,
       "loadAtStart": 1.2,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 --isolate scripts/jsonc.test.ts scripts/mail-wiring.test.ts scripts/syntax.test.ts scripts/workerd-requirements.test.ts scripts/fault-script.test.ts": {
       "machine": "linux x64, AMD EPYC (8 threads)",
@@ -1202,6 +1202,30 @@
       "samples": 58,
       "loadAtStart": 0,
       "exit": 0
+    },
+    "bun run test:workerd:cf-second": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
+      "wallSeconds": 195.96,
+      "cpuSeconds": 230.35,
+      "peakRssMb": 9374,
+      "peakRunnable": 7,
+      "peakCpuThreads": 3.84,
+      "meanThreads": 1.18,
+      "samples": 625,
+      "loadAtStart": 1.85,
+      "exit": 0
+    },
+    "bun run test:workerd:cf-kill": {
+      "wallSeconds": 182.01,
+      "cpuSeconds": 64.82,
+      "peakRssMb": 3578.19,
+      "peakRunnable": 5,
+      "peakCpuThreads": 3.76,
+      "meanThreads": 0.36,
+      "samples": 650,
+      "loadAtStart": 0.36,
+      "exit": 0,
+      "machine": "linux x64, AMD EPYC (8 threads)"
     }
   }
 }
