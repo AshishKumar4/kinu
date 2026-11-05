@@ -35,6 +35,12 @@ import type { UserDevice } from "@/lib/user-api";
 import { galleryServerPush, seedGalleryChat, serveGalleryRpc } from "@/gallery-agent-stub";
 import { BACKGROUND_JOBS, BRAIN_STATUS, CHANGELOG, EMPTY_TREES, GALLERY_ASK, NOW, NO_HEAD_ACTIVITY, PC_CONSENTED_ROOT, PC_MOUNT, PENDING_ACTIONS, SHELL_GRANTS, WORKSPACE_PAGE_NAME } from "@/gallery-data";
 import { AGENT_TASKS, EVENT_CARD_ROWS, GALLERY_ANSWERS, GalleryComposer, PAGE_ANSWERS, QUALITY_DAYS, QUALITY_WINDOW, REFUSED_THREAD, REVERT_THREAD, SYSTEM_EVENT_ROWS, WORK_ANSWERS, filesPage, galleryAgentPlan, galleryOwedIntents, galleryReadFault, galleryRpc, msg, seedCompositeTree, slateRpc, type MountedFrame, useBuildingJob, workRpc, workspacePageWire } from "@/gallery-shared";
+import { ActivityView } from "@/gallery-activity-log";
+import { CompactPreviewGallery } from "./gallery-preview-tabs";
+import { ComputerPreviewFrame } from "@/gallery-secrets";
+import { SlateFallbackFrame } from "@/gallery-slate-fallback";
+import { assistantHomeFrame, focusWorkspaceFrame } from "./gallery-assistant";
+import { framed, type FrameTable } from "@/gallery-shared";
 
 /** The gallery's answers over the wire, for frames whose own client reads them as a socket would. */
 const stubRpc: SocketCall = wireOf(GALLERY_ANSWERS);
@@ -221,7 +227,7 @@ const ASKED_THREAD: UIMessage[] = [
   }),
 ];
 
-export function seedFrameTranscript(transcript: string | null): void {
+function seedFrameTranscript(transcript: string | null): void {
   seedToolRuns(transcript);
   seedLongTurn(transcript);
 
@@ -269,7 +275,7 @@ const workspacePageRpc = answeringRpc(PAGE_ANSWERS);
 
 const GALLERY_SLATE_ID = "sandbox-probe";
 
-export function SlatePreviewFrame() {
+function SlatePreviewFrame() {
   return (
     <div className="p-bg min-h-screen flex justify-center">
       <div className="w-[720px] min-h-screen border-x p-border p-5">
@@ -279,7 +285,7 @@ export function SlatePreviewFrame() {
   );
 }
 
-export function PlanReviewFrame() {
+function PlanReviewFrame() {
   return (
     <div data-gallery-plan-review className="p-bg p-text h-screen">
       <PlanReviewView plan={galleryAgentPlan} rpc={workspacePageRpc} owedIntents={galleryOwedIntents()} />
@@ -329,7 +335,7 @@ const WORK_MEMORIES: MemoryEntry[] = [
   { path: "memory/MEMORY.md", content: "Prompt lanes assemble in the order the fixture lists them", matchScore: 1, updatedAt: "2026-09-17", savedBy: "courier" },
 ];
 
-export function WorkFrame() {
+function WorkFrame() {
   const params = new URLSearchParams(location.search);
   const streaming = params.get("lane") === "streaming";
   const building = useBuildingJob();
@@ -392,7 +398,7 @@ const approvalsRpc = galleryRpc({
 });
 
 /** Parked commands where they are decided, the attention stack, beside Work's rows that open it. */
-export function ApprovalsFrame() {
+function ApprovalsFrame() {
   const rpc = approvalsRpc;
 
   return (
@@ -419,7 +425,7 @@ const PARKED_ONLY: PendingAction[] = PENDING_ACTIONS.filter((a) => a.kind === "d
 // The gallery's own empty plans and journal: none.
 const settledEmptyRpc = galleryRpc();
 
-export function WorkEmptyFrame() {
+function WorkEmptyFrame() {
   return (
     <div className="p-bg min-h-screen flex justify-center">
       <div className="w-[720px] h-screen border-x p-border">
@@ -675,7 +681,7 @@ function AgentPanel(
   );
 }
 
-export function AgentFrame() {
+function AgentFrame() {
   return (
     <div className="p-bg min-h-screen flex justify-center">
       <div className="w-[740px] border-x p-border min-h-screen space-y-6 p-5">
@@ -730,7 +736,7 @@ const AGENT_TAB_NOTES: MemoryEntry[] = [
 ];
 
 /** The Agent tab at the inspector's width (`frame=agenttab`): an agent that has worked a while, or, with `&state=new`, one that has not. */
-export function AgentTabFrame() {
+function AgentTabFrame() {
   const fresh = new URLSearchParams(location.search).get("state") === "new";
 
   return (
@@ -761,7 +767,7 @@ const SANDBOX_DEVICES: readonly UserDevice[] = [
   galleryDevice("dev-cannot", "old-device", { tier: "sandboxed", capability: "files_only", reason: "no_bwrap", detail: null, gpu: [] }),
 ];
 
-export function DeviceSandboxFrame() {
+function DeviceSandboxFrame() {
   return (
     <div className="p-6 max-w-2xl p-bg p-text"data-device-sandbox-frame>
       <div className="rounded-md border p-border overflow-hidden text-xs">
@@ -815,7 +821,7 @@ function driveColumn(params: URLSearchParams, column: string): string {
   return params.get("narrow") === null ? column : "w-full";
 }
 
-export function driveFrame(frameName: "environment" | "files"): MountedFrame {
+function driveFrame(frameName: "environment" | "files"): MountedFrame {
   const params = new URLSearchParams(location.search);
   const column = frameName === "files" ? "w-[860px]" : "w-[720px]";
 
@@ -836,7 +842,7 @@ export function driveFrame(frameName: "environment" | "files"): MountedFrame {
 }
 
 /** Owns a real root connection for the plan-arrival hint; the surfaces read fixture props. */
-export function previewTabsFrame(): MountedFrame {
+function previewTabsFrame(): MountedFrame {
   serveGalleryRpc(stubRpc);
 
   return { entries: ["/"], node: <PreviewTabsGallery /> };
@@ -862,7 +868,7 @@ function nodeQuery(): string {
 }
 
 /** Home too, so a workspace created on it opens here with what its prompt carried. */
-export async function workspacePageFrame(): Promise<MountedFrame> {
+async function workspacePageFrame(): Promise<MountedFrame> {
   // Not a static import: that would fold the home page's chunk into the gallery's, which the setup modal's test holds apart.
   const { default: HomePage } = await import("@/pages/HomePage");
 
@@ -892,7 +898,7 @@ export async function workspacePageFrame(): Promise<MountedFrame> {
 }
 
 /** `&agent=<name>` opens on that agent's chat. */
-export function workspaceShellFrame(): MountedFrame {
+function workspaceShellFrame(): MountedFrame {
   serveGalleryRpc(workspacePageWire);
   const params = new URLSearchParams(location.search);
   const agent = params.get("agent");
@@ -918,3 +924,38 @@ export function workspaceShellFrame(): MountedFrame {
     ),
   };
 }
+
+/** This module's frames, by `?frame=`: gallery.tsx mounts the one asked for. */
+export const workspaceFrames: FrameTable = {
+  agent: () => framed(<AgentFrame />),
+  slate: () => framed(<SlatePreviewFrame />),
+  workslatefallback: () => framed(<SlateFallbackFrame answers={{ ...GALLERY_ANSWERS, ...WORK_ANSWERS }} />),
+  previewtabs: () => previewTabsFrame(),
+  compactpreview: () => framed(<CompactPreviewGallery />),
+  work: () => framed(<WorkFrame />),
+  planreview: () => framed(<PlanReviewFrame />),
+  workempty: () => framed(<WorkEmptyFrame />),
+  approvals: () => framed(<ApprovalsFrame />),
+  environment: () => driveFrame("environment"),
+  files: () => driveFrame("files"),
+  workspacepage: () => workspacePageFrame(),
+  devicesandbox: () => framed(<DeviceSandboxFrame />),
+  workspaceshell: () => workspaceShellFrame(),
+  agenttab: () => framed(<AgentTabFrame />),
+  "assistant-home": () => assistantHomeFrame(workspacePageWire),
+  computerpreview: () => framed(<ComputerPreviewFrame />),
+  // A workspace's Activity alone, as it ships or (`&activity=log`) as the single log under review.
+  "activity-review": () => framed(<ActivityView workspace={WORKSPACE_PAGE_NAME} title="API Worker" rpc={galleryRpc()} now={null} />),
+  "focus-workspace": () => {
+    seedFrameTranscript(new URLSearchParams(location.search).get("transcript"));
+
+    return focusWorkspaceFrame(workspacePageWire, WORKSPACE_PAGE_NAME);
+  },
+  // The whole app, every page through its own sidebar, with the design bar's live switches (gallery-app.tsx).
+  whole: async () => {
+    const { appFrame } = await import("@/gallery-app");
+
+    return appFrame(workspacePageWire, seedFrameTranscript);
+  },
+  "diff-design": async () => (await import("@/gallery-diff-design")).default(),
+};

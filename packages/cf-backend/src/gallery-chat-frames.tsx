@@ -32,6 +32,7 @@ import * as v from "valibot";
 import { galleryServerPush, serveGalleryRpc } from "@/gallery-agent-stub";
 import { BACKGROUND_JOBS, BRAIN_STATUS, IDLE_TURN, NOW, NO_HEAD_ACTIVITY, WORKSPACE_PAGE_NAME } from "@/gallery-data";
 import { ChatMessages, EVENT_CARD_ROWS, GalleryComposer, GalleryWorkspaceHeader, MCTS_TREES, MESSAGES, MODEL_STUBS, OPENING_SNAPSHOT, PAGE_ANSWERS, QUALITY_DAYS, QUALITY_WINDOW, SYSTEM_EVENT_ROWS, Shell, forkRpc, galleryAgentPlan, galleryRpc, msg, rosterAnswer, rosterAuthorityHold, said, slateRpc, textEntry, type MountedFrame, useBuildingJob, withChat } from "@/gallery-shared";
+import { workspacePageWire, framed, type FrameTable } from "@/gallery-shared";
 
 const LIVE_TURN: TurnLiveness = { kind: "live", turnId: null };
 
@@ -49,7 +50,7 @@ const NO_TURN_END = {
 } as const;
 
 /* The width Column A gets (42% of the shell); full-bleed would flatter truncation. */
-export function ChatFrame() {
+function ChatFrame() {
   return (
     <div className="flex h-screen justify-center p-bg p-text">
       <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
@@ -104,7 +105,7 @@ const STEERED_THREAD: UIMessage[] = [
 ];
 
 /* A mid-turn message (#210) between the work it split, and a `fork_interrupted` notice restored by the history walk (#222) keeping its card. */
-export function ChatSteerFrame() {
+function ChatSteerFrame() {
   const thread = buildTranscript(STEERED_THREAD, [
     { id: "steer-live", text: "actually, cap it at three heads", state: "queued", atStep: null },
   ]);
@@ -166,7 +167,7 @@ const CODE_THREAD: UIMessage[] = [
   }),
 ];
 
-export function ChatCodeFrame() {
+function ChatCodeFrame() {
   return (
     <div className="flex h-screen justify-center p-bg p-text">
       <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
@@ -185,7 +186,7 @@ export function ChatCodeFrame() {
 }
 
 /* The mission is a standing brief, deliberately not sent as an opening message. */
-export function ChatEmptyFrame() {
+function ChatEmptyFrame() {
   return (
     <div className="flex h-screen justify-center p-bg p-text">
       <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
@@ -200,7 +201,7 @@ export function ChatEmptyFrame() {
 }
 
 /* A workspace with history before its transcript arrives: must read "not yet", distinct from ChatEmptyFrame's "nothing here". */
-export function ChatLoadingFrame() {
+function ChatLoadingFrame() {
   return (
     <div className="flex h-screen justify-center p-bg p-text">
       <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
@@ -215,7 +216,7 @@ export function ChatLoadingFrame() {
 }
 
 /* The real composer at reading width: at rest with a draft, mid-turn (Stop / Branch / Steer), and with a status row. */
-export function ComposerFrame() {
+function ComposerFrame() {
   const [value, setValue] = useState("Ship the binding fix behind a preview first.");
   const [mode, setMode] = useState<WorkMode>("build");
   const [model, setModel] = useState("opencode-go/muse-spark-1.3-contributor");
@@ -340,7 +341,7 @@ const STORED_HISTORY: ChatHistoryEntry[] = Array.from(
   }),
 );
 
-export function ChatHistoryFrame() {
+function ChatHistoryFrame() {
   const [live, setLive] = useState<UIMessage[]>(() => MESSAGES.slice(-3));
   const failed = useRef(historyParams.get("fail") === "1");
   const requests = useRef(0);
@@ -432,7 +433,7 @@ export function ChatHistoryFrame() {
 const NO_HISTORY_LIVE: readonly UIMessage[] = [];
 
 /** The first request is held until the browser releases it, then fails once; Retry answers the authoritative empty page. */
-export function HistoryAuthorityFrame() {
+function HistoryAuthorityFrame() {
   const [hold] = useState(() => Promise.withResolvers<void>());
   const failFirst = useRef(true);
   const requests = useRef(0);
@@ -487,7 +488,7 @@ export function HistoryAuthorityFrame() {
 }
 
 /** KINU-060: only the transport response is held; a released old response must not undo the hook's upsert/rename. */
-export function RosterAuthorityFrame() {
+function RosterAuthorityFrame() {
   const roster = useWorkspaceRoster();
 
   const entry: WorkspaceEntry = {
@@ -516,7 +517,7 @@ export function RosterAuthorityFrame() {
 const CONTINUITY_LONG_TOKEN = `https://example.invalid/${"unbroken".repeat(90)}`;
 
 /** The hidden probe reports only action results, never an implementation flag. */
-export function ClientContinuityFrame() {
+function ClientContinuityFrame() {
   const [draft, setDraft] = useState("compose this");
   const [sends, setSends] = useState(0);
   const [files, setFiles] = useState<string[]>([]);
@@ -574,7 +575,7 @@ export function ClientContinuityFrame() {
 }
 
 /** The quality read fails until healed, so its retry is observable. */
-export function QualityRetryFrame() {
+function QualityRetryFrame() {
   const healthy = useRef(false);
 
   useEffect(() => {
@@ -611,7 +612,7 @@ const SLATE_THREAD: UIMessage[] = [
   }),
 ];
 
-export function ChatSlateFrame() {
+function ChatSlateFrame() {
   const thread = buildTranscript(SLATE_THREAD, []);
   const inline = { rpc: slateRpc, openSlate: () => {} };
 
@@ -635,7 +636,7 @@ export function ChatSlateFrame() {
   );
 }
 
-export function JobStreamingFrame() {
+function JobStreamingFrame() {
   const building = useBuildingJob();
 
   return <Shell backgroundJobs={[building, ...BACKGROUND_JOBS]} />;
@@ -809,7 +810,7 @@ const STREAMING_MESSAGES: UIMessage[] = [
 ];
 
 /** Rendered as the last message of an open stream, the only condition that draws a live tail. */
-export function StreamingFrame() {
+function StreamingFrame() {
   return (
     <div className="flex justify-center p-bg p-text min-h-screen">
       <div data-gallery-stream className="@container flex w-full max-w-[640px] flex-col gap-8 border-x p-border px-6 py-6">
@@ -874,7 +875,7 @@ const PROGRAM_MESSAGES: UIMessage[] = [msg({
 })];
 
 /** `?frame=toolcalls`: one call of each tool, opened; `&calls=programs`, three programs and their receipts, folded. */
-export function ToolCallsFrame() {
+function ToolCallsFrame() {
   return new URLSearchParams(location.search).get("calls") === "programs" ? <MessageColumn messages={PROGRAM_MESSAGES} /> : <OpenedToolCalls />;
 }
 
@@ -884,7 +885,7 @@ function OpenedToolCalls() {
   return <MessageColumn messages={TOOLCALL_MESSAGES} />;
 }
 
-export function ToolRunScaleFrame({ secrets = false }: { secrets?: boolean }) {
+function ToolRunScaleFrame({ secrets = false }: { secrets?: boolean }) {
   return (
     <div className="flex min-h-screen justify-center p-bg p-text">
       <div className="@container w-full max-w-[780px] border-x p-border px-6 py-6">
@@ -908,7 +909,7 @@ const PROVENANCE_MESSAGES: UIMessage[] = [
   ...SYSTEM_EVENT_ROWS,
 ];
 
-export function ProvenanceFrame() {
+function ProvenanceFrame() {
   return (
     <div className="flex justify-center p-bg p-text min-h-screen">
       <div className="@container flex w-full max-w-[640px] flex-col gap-6 border-x p-border px-6 py-6">
@@ -921,7 +922,7 @@ export function ProvenanceFrame() {
 }
 
 /** Five transcript states that must not render as one blank pane. */
-export function TranscriptFrame() {
+function TranscriptFrame() {
   return (
     <div className="p-bg p-text min-h-screen p-5 space-y-5">
       {[
@@ -1030,7 +1031,7 @@ const SNAPSHOT_RACE_ANSWERS: WorkspaceAnswers = {
 let qualityLiveRatings = 0;
 
 /** The Quality tab as a rating lands. */
-export function QualityLiveFrame() {
+function QualityLiveFrame() {
   const state = useKinu(WORKSPACE_PAGE_NAME);
 
   const rpc = useMemo(() => answeringRpc({
@@ -1056,8 +1057,36 @@ export function QualityLiveFrame() {
   );
 }
 
-export function snapshotRaceFrame(): MountedFrame {
+function snapshotRaceFrame(): MountedFrame {
   serveGalleryRpc(wireOf(SNAPSHOT_RACE_ANSWERS));
 
   return { entries: ["/"], node: <SnapshotRaceFrame /> };
 }
+
+/** This module's frames, by `?frame=`: gallery.tsx mounts the one asked for. */
+export const chatFrames: FrameTable = {
+  chat: () => framed(<ChatFrame />),
+  chatsteer: () => framed(<ChatSteerFrame />),
+  chatempty: () => framed(<ChatEmptyFrame />),
+  chatloading: () => framed(<ChatLoadingFrame />),
+  composer: () => framed(<ComposerFrame />),
+  chathistory: () => framed(<ChatHistoryFrame />),
+  historyauthority: () => framed(<HistoryAuthorityFrame />),
+  rosterauthority: () => framed(<RosterAuthorityFrame />),
+  clientcontinuity: () => framed(<ClientContinuityFrame />),
+  qualityretry: () => framed(<QualityRetryFrame />),
+  toolcalls: () => framed(<ToolCallsFrame />),
+  toolrun: () => framed(<ToolRunScaleFrame secrets={new URLSearchParams(location.search).get("secrets") === "1"} />),
+  provenance: () => framed(<ProvenanceFrame />),
+  streaming: () => framed(<StreamingFrame />),
+  transcript: () => framed(<TranscriptFrame />),
+  "chat-slate": () => framed(<ChatSlateFrame />),
+  jobstreaming: () => framed(<JobStreamingFrame />),
+  chatcode: () => framed(<ChatCodeFrame />),
+  snapshotrace: () => snapshotRaceFrame(),
+  qualitylive: () => {
+    serveGalleryRpc(workspacePageWire);
+
+    return framed(<QualityLiveFrame />);
+  },
+};

@@ -14,21 +14,26 @@ import type { DeploySnapshot } from "@kinu.run/core/deploy";
 import * as v from "valibot";
 import { serveGalleryRpc } from "@/gallery-agent-stub";
 import { STUB, Shell, routedPage, type MountedFrame, workspacePageWire } from "@/gallery-shared";
+import { CharactersFrame } from "@/gallery-characters";
+import ConnectedPage from "@/pages/ConnectedPage";
+import { DevicesFrame, PluginsFrame, SetupModalFrame, UserMcpFrame, WelcomeFrame, WorkspacesFrame } from "@/gallery-account";
+import { SecretPasteFrame } from "@/gallery-secrets";
+import { framed, type FrameTable } from "@/gallery-shared";
 
 /** `&route=` is the app's own address for the wizard (`/welcome?step=providers`), as a sign-in returns to it. */
-export const WELCOME_ROUTE = new URLSearchParams(location.search).get("route") ?? "/welcome";
+const WELCOME_ROUTE = new URLSearchParams(location.search).get("route") ?? "/welcome";
 
 /** The finish page's own address (`&run=`, `&service=`, `&error=`), as a connect's callback writes it. A visual fixture:
  *  the connects themselves run through the Worker's own callbacks, in the live-app rows. */
-export const CONNECTED_AT = connectedPath(connectEndedOf(new URLSearchParams(location.search)));
+const CONNECTED_AT = connectedPath(connectEndedOf(new URLSearchParams(location.search)));
 
 /* A turn waiting on the provider: the wait is named on the task indicator rather than guessed from silence. */
-export function ProviderWaitFrame() {
+function ProviderWaitFrame() {
   return <Shell providerWait={{ provider: "anthropic", untilMs: Date.now() + 45_000 }} />;
 }
 
 /** The shipped shell as App.tsx composes it; the background's contrast and UX gate are measured here. */
-export async function appShellFrame(): Promise<{ node: React.ReactNode; entries: string[] }> {
+async function appShellFrame(): Promise<{ node: React.ReactNode; entries: string[] }> {
   const { default: HomePage, NewWorkspacePage } = await import("@/pages/HomePage");
 
   return {
@@ -67,7 +72,7 @@ const GALLERY_UPDATE_RUN: DeploySnapshot = {
 };
 
 /** The deploy page alone, its door answered by `gallery-deploy-fixture.ts`: `&deploy=` names the state. */
-export async function deployFrame(): Promise<{ node: React.ReactNode; entries: string[] }> {
+async function deployFrame(): Promise<{ node: React.ReactNode; entries: string[] }> {
   const { default: DeployPage } = await import("@/pages/DeployPage");
   const at = new URLSearchParams(location.search).get("at") ?? "/deploy";
 
@@ -75,7 +80,7 @@ export async function deployFrame(): Promise<{ node: React.ReactNode; entries: s
 }
 
 /** `?state=running` shows a run in flight; otherwise one build behind its channel. */
-export async function updatesFrame(): Promise<{ node: React.ReactNode; entries: string[] }> {
+async function updatesFrame(): Promise<{ node: React.ReactNode; entries: string[] }> {
   const { default: UpdatesPage } = await import("@/pages/UpdatesPage");
   const running = new URLSearchParams(location.search).get("state") === "running";
 
@@ -101,21 +106,21 @@ export async function updatesFrame(): Promise<{ node: React.ReactNode; entries: 
 }
 
 /** Routed: the page builds back-links and breadcrumbs from `agentId`. */
-export async function settingsFrame(): Promise<MountedFrame> {
+async function settingsFrame(): Promise<MountedFrame> {
   serveGalleryRpc(workspacePageWire);
 
   return routedPage("/workspace/api-worker/settings", "/workspace/:agentId/:view", <WorkspacePage />);
 }
 
 /** Routed: tab, account and workspace selection live in the URL. */
-export async function controlFrame(): Promise<MountedFrame> {
+async function controlFrame(): Promise<MountedFrame> {
   const { default: ControlPage } = await import("@/pages/ControlPage");
 
   return routedPage("/control", "/control", <ControlPage />);
 }
 
 /** In the real chrome: the sidebar's route logic decides what renders at "/". */
-export async function homeFrame(): Promise<MountedFrame> {
+async function homeFrame(): Promise<MountedFrame> {
   const { default: HomePage } = await import("@/pages/HomePage");
 
   return {
@@ -138,7 +143,7 @@ function AccountReader() {
 
 /** `&section=devices` goes through the router: the page reads the hash off `useLocation`. `&shell=1` draws it inside
  *  the app's shell, beside another reader of the same account. */
-export function userSettingsStateFrame(): MountedFrame {
+function userSettingsStateFrame(): MountedFrame {
   const query = new URLSearchParams(location.search);
   const section = query.get("section");
 
@@ -149,3 +154,33 @@ export function userSettingsStateFrame(): MountedFrame {
       : <div className="min-h-screen p-bg p-text"><UserSettingsPage /></div>,
   };
 }
+
+/** This module's frames, by `?frame=`: gallery.tsx mounts the one asked for. */
+export const accountFrames: FrameTable = {
+  secretpaste: () => framed(<SecretPasteFrame />),
+  providerwait: () => framed(<ProviderWaitFrame />),
+  // `&panel=providers|mcp|cli` picks the modal's body.
+  setupmodal: () => framed(<SetupModalFrame />),
+  // `&step=0..3` picks the wizard panel.
+  welcome: () => framed(<WelcomeFrame />, [WELCOME_ROUTE]),
+  // Where every connect ends, as a server's callback sends its tab there.
+  connected: () => framed(<ConnectedPage />, [CONNECTED_AT]),
+  // `&view=list` seeds the workspaces page's stored choice.
+  workspaces: () => framed(<WorkspacesFrame />, ["/workspaces"]),
+  plugins: () => framed(<PluginsFrame />, ["/plugins"]),
+  devices: () => framed(<DevicesFrame />, ["/user/settings#devices"]),
+  usermcp: () => framed(<UserMcpFrame />, ["/user/settings/mcp"]),
+  characters: () => framed(<CharactersFrame />),
+  "devices-empty": () => framed(<DevicesFrame />, ["/user/settings#devices"]),
+  deploy: () => deployFrame(),
+  updates: () => updatesFrame(),
+  app: () => appShellFrame(),
+  settings: () => settingsFrame(),
+  control: () => controlFrame(),
+  home: () => homeFrame(),
+  usersettingsstate: () => userSettingsStateFrame(),
+  mail: async () => (await import("@/gallery-mail")).default(),
+  mailpage: async () => (await import("@/gallery-mailpage")).default(),
+  // The free tier's screens (core limits/): `&state=` the account's stage, `&dialog=` a refusal (gallery-limits.tsx).
+  limits: async () => (await import("@/gallery-limits")).default(),
+};

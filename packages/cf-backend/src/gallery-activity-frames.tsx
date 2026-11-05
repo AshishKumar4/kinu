@@ -6,6 +6,9 @@ import { type WorkspaceRpc } from "@/lib/workspace-rpc";
 import type { ContextComposition, ProducerSpend, Usage, WorkspaceSpend } from "@kinu.run/core";
 import { ACTIVITY_ACCOUNTS, NOW } from "@/gallery-data";
 import { galleryRpc } from "@/gallery-shared";
+import { ACTIVITY_SURFACE } from "@kinu.run/core";
+import { CacheBlock, LogBlock } from "@/components/surfaces/ActivitySurface";
+import { Shell, framed, type FrameTable } from "@/gallery-shared";
 
 // Every block is fed so its type roles render at real scale.
 
@@ -106,7 +109,7 @@ const ACTIVITY_CACHE_HIT = {
 };
 
 /** `&cache=unreported`: a provider that sends no cache counters, as the steps summarize it. */
-export const ACTIVITY_CACHE_SHOWN = new URLSearchParams(location.search).get("cache") === "unreported"
+const ACTIVITY_CACHE_SHOWN = new URLSearchParams(location.search).get("cache") === "unreported"
   ? summarizeSteps([{ usage: { input: 100 } }], { windowLimit: 200 }).cacheHit : ACTIVITY_CACHE_HIT;
 
 /** One nested label and one spent: a dollar cap, a token cap, blended pricing, and a `spent` badge. */
@@ -125,7 +128,7 @@ const ACTIVITY_MISSIONS: WorkspaceSpend["missions"] = [
 ];
 
 /** Oldest first, as `readActivityLog` returns. `elapsedMs: 0` (a row cut outside a turn) must read as an em dash, not 0 ms. */
-export const ACTIVITY_LOG: ActivitySnapshot["log"] = [
+const ACTIVITY_LOG: ActivitySnapshot["log"] = [
   { event: "steer_queued", detail: "look at the tests too", elapsedMs: 0, createdAt: NOW - 96e3 },
   { event: "beforeturn", detail: "streamText() called next", elapsedMs: 4, createdAt: NOW - 95e3 },
   {
@@ -150,7 +153,7 @@ export const ACTIVITY_LOG: ActivitySnapshot["log"] = [
 ];
 
 /** Every qualifier live at once (truncated window, silent and partial producers, unpriced calls): the caveat line must stay one line. */
-export const ACTIVITY_SNAPSHOT: ActivitySnapshot = {
+const ACTIVITY_SNAPSHOT: ActivitySnapshot = {
   latest: ACTIVITY_LATEST,
   contextWindow: 200_000,
   fill: { tokens: ACTIVITY_LATEST.usage.input, window: 200_000, source: "provider", at: new Date(ACTIVITY_LATEST.at).toISOString() },
@@ -182,7 +185,7 @@ export const ACTIVITY_SNAPSHOT: ActivitySnapshot = {
 };
 
 /** A provider without neurons and nothing left to qualify. */
-export const ACTIVITY_CLEAN: ActivitySnapshot = {
+const ACTIVITY_CLEAN: ActivitySnapshot = {
   ...ACTIVITY_SNAPSHOT,
   latest: { ...ACTIVITY_LATEST, usage: { input: 148_204, output: 1_842, cacheRead: 131_072, reasoning: 604 } },
   telemetry: { ...ACTIVITY_SNAPSHOT.telemetry, tokens: AGENT_TOKENS },
@@ -203,7 +206,7 @@ export const ACTIVITY_CLEAN: ActivitySnapshot = {
 };
 
 /** No model call at all: `coverage.reported` is null and the panel must say there is no fraction, not 0%. */
-export const ACTIVITY_FRESH: ActivitySnapshot = {
+const ACTIVITY_FRESH: ActivitySnapshot = {
   latest: null,
   contextWindow: null,
   fill: null,
@@ -223,4 +226,13 @@ export const ACTIVITY_FRESH: ActivitySnapshot = {
   log: [],
 };
 
-export const activityRpc = (snapshot: ActivitySnapshot): WorkspaceRpc => galleryRpc({ getActivitySnapshot: () => snapshot });
+const activityRpc = (snapshot: ActivitySnapshot): WorkspaceRpc => galleryRpc({ getActivitySnapshot: () => snapshot });
+
+/** This module's frames, by `?frame=`: gallery.tsx mounts the one asked for. */
+export const activityFrames: FrameTable = {
+  activity: () => framed(<Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_SNAPSHOT)} />),
+  activityclean: () => framed(<Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_CLEAN)} />),
+  activityempty: () => framed(<Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_FRESH)} />),
+  activitycache: () => framed(<div className="p-6 max-w-2xl"><CacheBlock cacheHit={ACTIVITY_CACHE_SHOWN} /></div>),
+  activitylog: () => framed(<div className="p-6 max-w-2xl"><LogBlock log={ACTIVITY_LOG} /></div>),
+};

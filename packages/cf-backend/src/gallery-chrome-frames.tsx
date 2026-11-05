@@ -22,6 +22,7 @@ import { CreateWebhookModal, NewWebhookCard } from "@/components/WorkspaceAutoma
 import { AddServerCard } from "@/components/account/McpServersPanel";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { ChatMessages, GalleryComposer, GalleryWorkspaceHeader, galleryActorId, type MountedFrame } from "@/gallery-shared";
+import { framed, type FrameTable } from "@/gallery-shared";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -102,7 +103,7 @@ const MARKDOWN_SAMPLE = `Here is what the deploy is doing wrong, and the patch.
 The Worker reads \`env.DB\` after the config renamed the binding to \`SESSIONS_DB\`, so every route that opens the database calls \`undefined.prepare\`. Fix is one line in \`db.ts\` plus an index in the migration.
 
 \`\`\`ts
-export function openDb(env: Env): D1Database {
+function openDb(env: Env): D1Database {
   const db = env.SESSIONS_DB ?? env.DB;
   if (db === undefined) throw new MissingBinding(\`no database bound as SESSIONS_DB\`, { worker: "api" });
   return db;
@@ -178,7 +179,7 @@ function CodeRenderingFrame() {
   </div>;
 }
 
-export function GalleryModal() {
+function GalleryModal() {
   return (
     <div className="p-bg min-h-screen">
       <Modal
@@ -338,7 +339,7 @@ function MarksFrame() {
  * The page a feedback screenshot is taken of: `[data-secret-input]` (a password, redacted without annotation), `[data-secret-token]`
  * (marked text), `[data-visible-copy]` (negative control: must not be uniform). `?noise=1`drives the oversized refusal with real bytes.
  */
-export function FeedbackFrame({ noise }: { noise: boolean }) {
+function FeedbackFrame({ noise }: { noise: boolean }) {
   const noiseRef = useRef<HTMLCanvasElement | null>(null);
   useEffect(() => {
     const canvas = noiseRef.current;
@@ -405,7 +406,7 @@ const LEAK_HMAC = "whsec_hmacLEAKSifREDACTIONfails0001";
 
 const LEAK_BEARER = "whsec_bearerLEAKSifREDACTIONfails0002";
 
-export function FeedbackSecretsFrame({ modal }: { modal: boolean }) {
+function FeedbackSecretsFrame({ modal }: { modal: boolean }) {
   return (
     <div className="min-h-screen p-bg p-text">
       <header className="flex items-center justify-between border-b p-border p-sidebar px-4 py-3">
@@ -613,7 +614,7 @@ function LazyRouteScene() {
 }
 
 /** Routed so the report's route and workspace come from a resolved `/workspace/:agentId`. */
-export function feedbackRoutedFrame(): MountedFrame {
+function feedbackRoutedFrame(): MountedFrame {
   return {
     entries: ["/workspace/api-worker"],
     node: (
@@ -627,7 +628,7 @@ export function feedbackRoutedFrame(): MountedFrame {
 }
 
 /** ReplaceStates the address bar: the report reads `location.pathname`, which the MemoryRouter leaves at `/`. */
-export function errorBoundaryFrame(): MountedFrame {
+function errorBoundaryFrame(): MountedFrame {
   history.replaceState(null, "", `/workspace/api-worker${location.search}`);
 
   return {
@@ -662,7 +663,7 @@ function ReloadsFrame() {
 }
 
 /** Frames that take no setting from the query: the design system's own, and the hooks' small stages. */
-export const DESIGN_FRAMES = new Map([
+const DESIGN_FRAMES = new Map([
   ["reloads", <ReloadsFrame />],
   ["palette", <Palette />],
   ["marks", <MarksFrame />],
@@ -672,7 +673,7 @@ export const DESIGN_FRAMES = new Map([
   ["system", <SystemFrame />],
 ]);
 
-export function lazyRouteFrame(): MountedFrame {
+function lazyRouteFrame(): MountedFrame {
   return {
     entries: ["/workspace/api-worker"],
     node: (
@@ -684,3 +685,15 @@ export function lazyRouteFrame(): MountedFrame {
     ),
   };
 }
+
+/** This module's frames, by `?frame=`: gallery.tsx mounts the one asked for. */
+export const chromeFrames: FrameTable = {
+  modal: () => framed(<GalleryModal />),
+  feedback: () => framed(<FeedbackFrame noise={new URLSearchParams(location.search).get("noise") === "1"} />),
+  feedbacksecrets: () => framed(<FeedbackSecretsFrame modal={new URLSearchParams(location.search).get("modal") === "1"} />),
+  feedbackrouted: () => feedbackRoutedFrame(),
+  errorboundary: () => errorBoundaryFrame(),
+  lazyroute: () => lazyRouteFrame(),
+  // The design system's own frames, each a page of its parts.
+  ...Object.fromEntries([...DESIGN_FRAMES].map(([key, node]) => [key, () => framed(node)])),
+};

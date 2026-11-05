@@ -12,10 +12,17 @@ import { answeringRpc, type WorkspaceAnswers } from "@/lib/workspace-rpc";
 import * as v from "valibot";
 import { LIVE_SHARE, NOW } from "@/gallery-data";
 import { STUB, WORK_ANSWERS } from "@/gallery-shared";
+import { APP_ROUTES } from "@kinu.run/core";
+import { DrivePageFrame } from "@/gallery-drive";
+import { ForkReachPanel } from "@/components/slates/ForkReachPanel";
+import { GalleryAppFrame, galleryEntry } from "@/gallery-listings";
+import { PART_PREVIEWS_ENTRY, PartFrameFrame, PartHostFrame, PartPreviewsFrame, PartStatesFrame, SHARED_LIVE_ENTRY, SharedLiveFrame, partFrameEntry } from "@/gallery-parts";
+import { exploreFrame } from "./gallery-explore";
+import { framed, type FrameTable } from "@/gallery-shared";
 
-export const BLUEPRINT_REACHES = ["mcp.github", "workspace", "memory", "slates.digest"];
+const BLUEPRINT_REACHES = ["mcp.github", "workspace", "memory", "slates.digest"];
 
-export const BLUEPRINT_ID = "api-worker~k7Qm2pV9xRt3aB4c~mfrq6zk3p2xw7ha";
+const BLUEPRINT_ID = "api-worker~k7Qm2pV9xRt3aB4c~mfrq6zk3p2xw7ha";
 
 const BLUEPRINT_VIEW: BlueprintView = {
   id: BLUEPRINT_ID,
@@ -112,7 +119,7 @@ function shareAnswers(first: boolean): WorkspaceAnswers {
 }
 
 /** Live mode with capability graph and one public share, or blueprint mode at inspection (`sharedialog-blueprint`). */
-export function ShareDialogFrame({ mode, first = false }: { mode: "live" | "blueprint"; first?: boolean }) {
+function ShareDialogFrame({ mode, first = false }: { mode: "live" | "blueprint"; first?: boolean }) {
   const rpc = useMemo(() => answeringRpc(shareAnswers(first)), [first]);
 
   return (
@@ -123,7 +130,7 @@ export function ShareDialogFrame({ mode, first = false }: { mode: "live" | "blue
 }
 
 /** Routed so `useParams` names the id; `&viewer=signedout` renders the sign-in branch. */
-export function BlueprintFrame() {
+function BlueprintFrame() {
   const signedOut = new URLSearchParams(location.search).get("viewer") === "signedout";
 
   STUB.set(`/api/shared/blueprint/${encodeURIComponent(BLUEPRINT_ID)}`, v.parse(JsonObjectSchema, BLUEPRINT_VIEW));
@@ -135,3 +142,34 @@ export function BlueprintFrame() {
     </Routes>
   );
 }
+
+/** `&path=` opens a Drive frame at that folder. */
+const drivePathAsked = (): string => `${APP_ROUTES.drive}${new URLSearchParams(location.search).get("path") ?? ""}`;
+
+/** This module's frames, by `?frame=`: gallery.tsx mounts the one asked for. */
+export const sharingFrames: FrameTable = {
+  blueprint: () => framed(<BlueprintFrame />, [`/shared/blueprint/${encodeURIComponent(BLUEPRINT_ID)}`]),
+  // `&path=/projects/ops` opens a folder; `shared` is the other tab; `drive-recipient` holds only what others shared.
+  drive: () => framed(<DrivePageFrame />, [drivePathAsked()]),
+  slates: () => framed(<DrivePageFrame />, [APP_ROUTES.slates]),
+  shared: () => framed(<DrivePageFrame />, [APP_ROUTES.shared]),
+  "drive-empty": () => framed(<DrivePageFrame />, [APP_ROUTES.drive]),
+  "drive-wide": () => framed(<DrivePageFrame />, [drivePathAsked()]),
+  "drive-recipient": () => framed(<DrivePageFrame />, [APP_ROUTES.drive]),
+  // `&slate=<slate>`'s own page.
+  "gallery-slate": () => framed(<GalleryAppFrame />, [galleryEntry(new URLSearchParams(location.search))]),
+  // A slate's personal parts, hosted by an app page; and one part's frame, inside the slate's page.
+  "part-host": () => framed(<PartHostFrame />),
+  "part-host-refused": () => framed(<PartHostFrame />),
+  "part-states": () => framed(<PartStatesFrame />),
+  "shared-live": () => framed(<SharedLiveFrame />, [SHARED_LIVE_ENTRY]),
+  "shared-live-signed-out": () => framed(<SharedLiveFrame />, [SHARED_LIVE_ENTRY]),
+  "part-frame": () => framed(<PartFrameFrame />, [partFrameEntry(new URLSearchParams(location.search))]),
+  "part-previews": () => framed(<PartPreviewsFrame />, [PART_PREVIEWS_ENTRY]),
+  sharedialog: () => framed(<ShareDialogFrame mode="live" />),
+  "sharedialog-blueprint": () => framed(<ShareDialogFrame mode="blueprint" />),
+  "sharedialog-first": () => framed(<ShareDialogFrame mode="live" first />),
+  "fork-reach": () => framed(<div className="h-screen w-[720px] p-sidebar p-text"><ForkReachPanel title="Issue triage" reaches={BLUEPRINT_REACHES} onOpen={() => {}} /></div>),
+  explore: () => exploreFrame("explore"),
+  "explore-workspace": () => exploreFrame("explore-workspace"),
+};

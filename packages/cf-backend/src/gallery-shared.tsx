@@ -2571,6 +2571,14 @@ export const EVENT_CARD_ROWS: UIMessage[] = [
  *  default width and one dragged wider. */
 export interface MountedFrame { node: React.ReactNode; entries: string[] }
 
+/** A module's frames, by `?frame=`: each draws its page when gallery.tsx mounts it, at once or once its module loads. */
+export type FrameTable = Readonly<Record<string, () => MountedFrame | Promise<MountedFrame>>>;
+
+/** A frame that is one element, opened at `entries` (the MemoryRouter's place; the root unless a route param is read). */
+export function framed(node: React.ReactNode, entries: string[] = ["/"]): MountedFrame {
+  return { node, entries };
+}
+
 export function routedPage(entry: string, path: string, page: React.ReactNode, height = "h-screen"): MountedFrame {
   return {
     entries: [entry],

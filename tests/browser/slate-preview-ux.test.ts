@@ -762,6 +762,13 @@ async function openFromChat(page: Page, slate: string): Promise<void> {
   await drawn(page);
 }
 
+/** A press on the first match, brought to the middle of the chat first: scrolled only into view, the control at the
+ *  chat's foot sits under the composer that floats over it. */
+async function pressInView(page: Page, selector: string): Promise<void> {
+  await page.$eval(selector, (element) => element.scrollIntoView({ block: 'center' }));
+  await page.click(selector);
+}
+
 describe('inline slate previews in the chat', () => {
   test('opening a slate from the chat brings a hidden inspector up on it; its previews fold behind the later one and while it is shown', async () => {
     await withGallery(async ({ newPage, origin }) => {
@@ -786,11 +793,11 @@ describe('inline slate previews in the chat', () => {
         await drawn(page);
         expect(await inlinePreviews(page)).toEqual([['board', false], ['notes', true], ['board', true]]);
 
-        // The top bar folds and unfolds a preview by hand.
-        await page.click('[data-slate-inline="board"] button[aria-expanded]');
+        // The top bar folds and unfolds a preview by hand, pressed where a reader sees it rather than under the composer.
+        await pressInView(page, '[data-slate-inline="board"] button[aria-expanded]');
         await drawn(page);
         expect(await inlinePreviews(page)).toEqual([['board', true], ['notes', true], ['board', true]]);
-        await page.click('[data-slate-inline="notes"] button[aria-expanded]');
+        await pressInView(page, '[data-slate-inline="notes"] button[aria-expanded]');
         await drawn(page);
         expect(await inlinePreviews(page)).toEqual([['board', true], ['notes', false], ['board', true]]);
       } finally { await page.close(); }
