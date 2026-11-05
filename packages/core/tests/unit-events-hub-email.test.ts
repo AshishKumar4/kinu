@@ -1,12 +1,12 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import {
-  initEventsHubTables, EventLog, ReplyChannelStore,
-  deriveEventTrust, derivePriority, deriveFields, renderForLLM,
-  buildDrainBatch,
-  type IngressDescriptor, type EmailPayload,
-  type ReplyDispatcher,
-} from '../src/events/hub/index';
+import { buildDrainBatch } from '../src/events/hub/drain';
+import { EventLog } from '../src/events/hub/log';
+import { ReplyChannelStore, type ReplyDispatcher } from '../src/events/hub/reply-channel';
+import { initEventsHubTables } from '../src/events/hub/schema';
+import { deriveEventTrust, derivePriority, deriveFields } from '../src/events/hub/trust';
+import type { IngressDescriptor, EmailPayload } from '../src/events/hub/types';
+import { renderForLLM } from '../src/events/hub/visibility';
 import {
   classifyProgrammaticTurn, EmailInbox, EMAIL_INBOUND_RATE_PER_MIN, handedMailSignal, initWebhookRateLimitTables, mailThreadText,
   spillEventContent, type MailArrival, type SqlExec,

@@ -12,7 +12,7 @@ import { parseJsonObject, type JsonObject } from '../../utils/json';
 // Default only: 0 means "block" here, which `normalizeWebhookRateLimitPerMin` rejects.
 import { DEFAULT_RATE_LIMIT_PER_MIN } from '../ingress/rate-limit';
 
-export type ForkPolicy = 'copy' | 'sever' | 'share';
+type ForkPolicy = 'copy' | 'sever' | 'share';
 
 const DEFAULT_FORK_POLICY = {
   webhook_durable:   'sever',

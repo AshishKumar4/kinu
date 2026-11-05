@@ -1,9 +1,8 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import {
-  boundEventQuery, initEventsHubTables, EventLog,
-  type IngressDescriptor,
-} from '../src/events/hub/index';
+import { boundEventQuery, EventLog } from '../src/events/hub/log';
+import { initEventsHubTables } from '../src/events/hub/schema';
+import type { IngressDescriptor } from '../src/events/hub/types';
 import type { SqlExec } from '../src/index';
 
 /** Page policy is read from `boundEventQuery`, not restated, so the suite cannot drift from it. */

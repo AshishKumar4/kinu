@@ -23,8 +23,6 @@ export const PrioritySchema = v.picklist(['urgent', 'normal', 'background']);
 
 export type Priority = v.InferOutput<typeof PrioritySchema>;
 
-export type Phase = 'idle' | 'linear' | 'heads' | 'reactor' | 'merging';
-
 export const PayloadPolicySchema = v.picklist(['full', 'redact', 'hash', 'hmac', 'opaque_handle']);
 
 export type PayloadPolicy = v.InferOutput<typeof PayloadPolicySchema>;
@@ -66,8 +64,6 @@ export type TraceId = string;     // root event id; constant down the causal cha
 
 export type TurnId = string;
 
-export type HeadId = string;
-
 export type TriggerId = string;
 
 export type ReplyChannelId = string;
@@ -95,7 +91,7 @@ const NullableString = v.nullable(v.string());
 
 export const ChatPayloadSchema = v.object({ text: v.string() });
 
-export type ChatPayload = v.InferOutput<typeof ChatPayloadSchema>;
+type ChatPayload = v.InferOutput<typeof ChatPayloadSchema>;
 
 export const WebhookPayloadSchema = v.object({
   webhook_id: v.string(),
@@ -164,7 +160,7 @@ export const FileChangedPayloadSchema = v.object({
   size: v.optional(v.number()),
 });
 
-export type FileChangedPayload = v.InferOutput<typeof FileChangedPayloadSchema>;
+type FileChangedPayload = v.InferOutput<typeof FileChangedPayloadSchema>;
 
 /** `task` starts or replaces an assignment; `message` is injected into the next turn. */
 export const SubagentTaskPayloadSchema = v.object({
@@ -247,7 +243,7 @@ export type EmailPayload = v.InferOutput<typeof EmailPayloadSchema>;
 
 export const InternalPayloadSchema = v.object({ kind: v.string(), data: v.unknown() });
 
-export type InternalPayload = v.InferOutput<typeof InternalPayloadSchema>;
+type InternalPayload = v.InferOutput<typeof InternalPayloadSchema>;
 
 export const ReplyRequestPayloadSchema = v.object({
   question: v.string(),
@@ -261,13 +257,13 @@ export const McpChatPayloadSchema = v.object({
   client_id: v.string(), method: v.string(), arguments: v.unknown(), request_id: v.string(),
 });
 
-export type McpChatPayload = v.InferOutput<typeof McpChatPayloadSchema>;
+type McpChatPayload = v.InferOutput<typeof McpChatPayloadSchema>;
 
 export const McpThirdPartyPayloadSchema = v.object({
   client_id: v.string(), client_label: v.string(), method: v.string(), arguments: v.unknown(), request_id: v.string(),
 });
 
-export type McpThirdPartyPayload = v.InferOutput<typeof McpThirdPartyPayloadSchema>;
+type McpThirdPartyPayload = v.InferOutput<typeof McpThirdPartyPayloadSchema>;
 
 export interface BaseEvent {
   id: EventId;

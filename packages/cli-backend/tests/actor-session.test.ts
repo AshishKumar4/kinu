@@ -9,7 +9,8 @@ import {
 import type {
   AgentRuntime, BroadcastEvent, ChatEvent, ProfileAuthorityInputs, ProgrammaticTurn, WorkMode,
 } from '@kinu.run/core';
-import { initEventsHubTables, EventLog } from '../../core/src/events/hub/index';
+import { EventLog } from '../../core/src/events/hub/log';
+import { initEventsHubTables } from '../../core/src/events/hub/schema';
 import { createTestRuntime, makeSqlExec } from '../../core/tests/helpers';
 import { KinuError } from '@kinu.run/core/obs';
 

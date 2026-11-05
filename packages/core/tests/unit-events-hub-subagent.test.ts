@@ -2,12 +2,11 @@
 // `background`, and only reports may be taken by a reactor.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import {
-  deriveEventTrust, derivePriority, deriveFields,
-  EventLog, initEventsHubTables, buildDrainBatch,
-  type IngressDescriptor,
-  type SubagentTaskPayload, type SubagentReportPayload,
-} from '../src/events/hub/index';
+import { buildDrainBatch } from '../src/events/hub/drain';
+import { EventLog } from '../src/events/hub/log';
+import { initEventsHubTables } from '../src/events/hub/schema';
+import { deriveEventTrust, derivePriority, deriveFields } from '../src/events/hub/trust';
+import type { IngressDescriptor, SubagentTaskPayload, SubagentReportPayload } from '../src/events/hub/types';
 import type { SqlExec } from '../src/index';
 import { makeSqlExec } from './helpers';
 import { createTestActorsOver, present } from '@kinu.run/test-utils';

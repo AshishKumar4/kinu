@@ -3,7 +3,8 @@
 // being counted, and a report the caller has not read left unsaid.
 import { describe, expect, test } from 'bun:test';
 import { agentTree, AGENT_TREE_LIMIT, unreadReports } from '../src/delegation/agent-tree';
-import type { KinuEvent, PendingFilter } from '../src/events/hub/index';
+import type { PendingFilter } from '../src/events/hub/log';
+import type { KinuEvent } from '../src/events/hub/types';
 import { NO_FIGURES } from '../src/read-models/agent-figures';
 import type { AgentActivity, PanelAgent } from '../src/read-models/workspace-agents';
 

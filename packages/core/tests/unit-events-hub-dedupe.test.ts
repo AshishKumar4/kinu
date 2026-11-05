@@ -1,7 +1,9 @@
 // Admission dedupe: a redelivered event lands on the row the first delivery wrote; a different one is admitted.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { EventLog, initEventsHubTables, type IngressDescriptor, type WebhookPayload } from '../src/events/hub/index';
+import { EventLog } from '../src/events/hub/log';
+import { initEventsHubTables } from '../src/events/hub/schema';
+import type { IngressDescriptor, WebhookPayload } from '../src/events/hub/types';
 import { makeSqlExec } from './helpers';
 import { createTestActorsOver } from '@kinu.run/test-utils';
 
