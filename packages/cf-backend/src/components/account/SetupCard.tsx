@@ -10,8 +10,8 @@ export function SetupCard() {
   return (
     <>
       <Card title="Setup">
-        {/* Out by a ghost button's own inset, so each label stands on the card's edge like any other card's text. */}
-        <div className="-mx-2.5 -my-2 flex flex-col items-start">
+        {/* Out by the scale step nearest a ghost button's inset, so each label stands on the card's edge as its text does. */}
+        <div className="-mx-2 -my-2 flex flex-col items-start">
           <Button variant="ghost" size="sm" onClick={() => setOpen('providers')}>Connect providers →</Button>
           <Button variant="ghost" size="sm" onClick={() => setOpen('mcp')}>Add MCP servers →</Button>
           <Button variant="ghost" size="sm" onClick={() => setOpen('cli')}>Install the CLI →</Button>
