@@ -137,11 +137,6 @@ export function refuse(refusal: DevboxError): never {
   return settleSync(Effect.fail(refusal));
 }
 
-/** Ends the caller with what an operation threw, unchanged (`caught`), after the caller has answered for it. */
-export function rethrow(thrown: { readonly cause: unknown }): never {
-  return settleSync(Effect.die(thrown.cause));
-}
-
 export function startOverrun(label: string, budgetMs: number): DevboxError {
   return new DevboxError('start-overrun', `${label} exceeded its ${budgetMs}ms budget and was abandoned; the work it left running inside the container cannot be fenced from here.`);
 }
