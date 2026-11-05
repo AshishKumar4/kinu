@@ -167,9 +167,9 @@ export const FENCES: readonly Fence[] = [
     // A restore over a container its admission did not start ends quietly when that container stops, and only a live
     // owner ends it: a superseded attempt failing on the stopped container would otherwise invalidate the generation
     // of the start that replaced it, and every reader would stop seeing that start.
-    snippet: `      else if (this.#owns(generation)) this.#invalidateGeneration();
+    snippet: `    else if (this.#owns(generation)) this.#invalidateGeneration();
 `,
-    mutation: `      else this.#invalidateGeneration();
+    mutation: `    else this.#invalidateGeneration();
 `,
     owner: {
       suite: 'packages/devbox/tests/checkpoint-adoption.test.ts',
