@@ -335,7 +335,7 @@ describe('the gate fails when an instrument is missing', () => {
   test('an emitter with no call site at its file is caught', () => {
     const invented = {
       emitter: 'recordSomethingNobodyCalls',
-      site: 'packages/cf-backend/src/actor-agent.ts',
+      site: 'packages/cf-backend/src/orchestrator.ts',
     };
 
     const called = sitesOf(invented.site).some((site) => site.callee === invented.emitter);

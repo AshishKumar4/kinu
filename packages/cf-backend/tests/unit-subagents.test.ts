@@ -26,7 +26,7 @@ import { observedOpEnum } from '@kinu.run/test-utils/conformance';
 mockAgentsSdk();
 
 // After the mock: a static import would bind the class to the real `agents` Agent.
-const { ActorAgent } = await import('../src/actor-agent');
+const { OrchestratorAgent } = await import('../src/orchestrator');
 
 describe('subagent wiring', () => {
   /** The temporary rung's CF wiring; behaviour is core's (core/tests/unit-temporary-agents.test.ts). */
@@ -266,7 +266,7 @@ describe('an agent\'s window hears only what it may act on', () => {
     const windows = [socketConnection({ id: 'workspace', tags: [] })];
 
     // The platform's fan-out: every window but the ones named.
-    const fanout = spyOn(Object.getPrototypeOf(ActorAgent.prototype), 'broadcast').mockImplementation((message: string, without?: string[]) => {
+    const fanout = spyOn(Object.getPrototypeOf(OrchestratorAgent.prototype), 'broadcast').mockImplementation((message: string, without?: string[]) => {
       const frame = v.safeParse(v.looseObject({ type: v.string() }), JSON.parse(message));
       const type = frame.success ? frame.output.type : '';
 

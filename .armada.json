@@ -1,5 +1,6 @@
 {
   "name": "kinu",
+  "deployment": "armada-kinu",
   "environment": {
     "base": "cloudflare/debian-trixie",
     "setup": "scripts/armada/setup.sh",

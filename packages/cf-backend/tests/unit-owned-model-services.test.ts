@@ -115,7 +115,7 @@ describe('OwnedModelServices', () => {
     expect(requests.requests.map((request) => request.headers.authorization)).toEqual(['Bearer fresh-auth', 'Bearer fresh-auth']);
   });
 
-  test('required owners fail with ActorAgent\'s established error', () => {
+  test('required owners fail with OrchestratorAgent\'s established error', () => {
     const services = new OwnedModelServices({
       env: fakeEnv(),
       agentName: () => 'actor',
