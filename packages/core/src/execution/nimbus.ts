@@ -15,7 +15,7 @@ import { walkedPath, workspacePath } from '../vfs/workspace-path';
 import { sessionRuntimeBins, workspaceCommandNotFound } from '../vfs/workspace-runtimes';
 import { shellQuote } from '../utils/shell';
 import { execIdsOf, principalExecId } from './secrets-caller';
-import { commandTool, LogLimitsSchema, type ExecutorCapability, type ExecutorProvider, type ExecutorStatus, type ExecutorTool, type PortExposureResult, type PreviewRouteCheck } from './types';
+import { commandTool, LogLimitsSchema, type ExecutorCapability, type ExecutorProvider, type ExecutorStatus, type ExecutorTool, type ExecutorToolResult, type PortExposureResult, type PreviewRouteCheck } from './types';
 import { attempt, detach, hold, KinuError, logged, refusalOf, renderThrownChain, settle, toKinuError, type Refusal } from '../obs/index';
 import { Cause, Effect, Exit } from 'effect';
 import { newJobId, type AdoptsJobs } from '../types/jobs';
@@ -157,32 +157,32 @@ function processControl(box: NimbusSandboxHandle) {
  * `command` started as job `jobId`'s process, carrying the job's id as its exec id as a job's commands do, so a port it
  * serves is its job's. The member's start, and a retry's (`processRetryTool`).
  */
-export async function startJobProcess(
+export function startJobProcess(
   box: NimbusSandboxHandle,
   request: { readonly command: string; readonly cwd?: string; readonly jobId: string },
   touch: <T>(fn: () => Promise<T>) => Promise<T> = (fn) => fn(),
 ): Promise<JobProcess | Refusal> {
   const control = processControl(box);
-
-  if ('success' in control) return control;
   const { command, cwd, jobId } = request;
-  let pid: number;
 
-  try {
-    pid = (await touch(() => control.startProcess(command, { ...(cwd !== undefined && { cwd }), execId: principalExecId(jobId) }))).pid;
-  } catch (err) {
-    return refusalOf(toKinuError({ doing: `nimbus startProcess \`${command}\``, cause: err, otherwise: 'io' }));
-  }
+  if ('success' in control) return Promise.resolve(control);
 
-  const processId = String(pid);
+  const starting = Effect.tryPromise({
+    try: async () => touch(() => control.startProcess(command, { ...(cwd !== undefined && { cwd }), execId: principalExecId(jobId) })),
+    catch: (cause) => toKinuError({ doing: `nimbus startProcess \`${command}\``, cause, otherwise: 'io' }),
+  });
 
-  return {
-    processId,
-    ended: control.whenEnded(pid).then((exitCode) => ({ processId, exitCode })),
-    stopping: logged('nimbus.process_stop_failed', { doing: `stopping process ${processId}`, otherwise: 'io' }, async () => {
-      await touch(() => control.kill(pid));
-    }, { processId }),
-  };
+  return settle(Effect.match(starting, { onFailure: refusalOf, onSuccess: ({ pid }): JobProcess => {
+    const processId = String(pid);
+
+    return {
+      processId,
+      ended: control.whenEnded(pid).then((exitCode) => ({ processId, exitCode })),
+      stopping: logged('nimbus.process_stop_failed', { doing: `stopping process ${processId}`, otherwise: 'io' }, async () => {
+        await touch(() => control.kill(pid));
+      }, { processId }),
+    };
+  } }));
 }
 
 /**
@@ -238,74 +238,73 @@ function startProcessMember({ box, touch, jobs }: NimbusReach): ExecutorTool {
   });
 }
 
+/** A member whose call is an Effect, run once by `nimbusSession`, the exported factory that serves it (its bridge). */
+interface EffectMember {
+  readonly description: string;
+  readonly planAllowed?: boolean;
+  readonly execute: (...args: unknown[]) => Effect.Effect<ExecutorToolResult>;
+}
+
+/** `read`'s answer, or the refusal `doing` answers with when it fails, however it fails. */
+function answeredOr<A>(doing: string, read: () => Promise<A>, answer: (value: A) => ExecutorToolResult): Effect.Effect<ExecutorToolResult> {
+  return Effect.match(Effect.tryPromise({ try: read, catch: (cause) => toKinuError({ doing, cause, otherwise: 'io' }) }), { onFailure: refusalOf, onSuccess: answer });
+}
+
 /** `workspace.stopProcess`. */
-function stopProcessMember({ box, touch }: NimbusReach): ExecutorTool {
+function stopProcessMember({ box, touch }: NimbusReach): EffectMember {
   return {
     description: 'Stop a Nimbus process by the id startProcess answered.',
-    execute: async (...args: unknown[]) => {
+    execute: (...args: unknown[]) => {
       const processes = box.processes;
 
-      if (!processes?.kill) return handleLacks('process control');
+      if (!processes?.kill) return Effect.succeed(handleLacks('process control'));
       // Bound at the guard: TypeScript drops narrowing inside closures, and binding keeps `this`.
       const kill = processes.kill.bind(processes);
       const pid = parseInput(ProcessIdSchema, { value: args[0] });
 
-      if (pid === undefined) return refusalOf(new KinuError('bad_input', `nimbus stopProcess: no process id ${stringifyResult({ value: args[0] })}`));
+      if (pid === undefined) return Effect.succeed(refusalOf(new KinuError('bad_input', `nimbus stopProcess: no process id ${stringifyResult({ value: args[0] })}`)));
 
-      try {
-        return { stopped: v.parse(KilledSchema, await touch(() => kill(pid))).ok };
-      } catch (err) {
-        return refusalOf(toKinuError({ doing: `nimbus stopProcess ${String(pid)}`, cause: err, otherwise: 'io' }));
-      }
+      return answeredOr(`nimbus stopProcess ${String(pid)}`, async () => v.parse(KilledSchema, await touch(() => kill(pid))), (killed) => ({ stopped: killed.ok }));
     },
   };
 }
 
 /** `workspace.listProcesses`: the long-running processes, as every machine lists its own. */
-function listProcessesMember({ box, touch }: NimbusReach): ExecutorTool {
+function listProcessesMember({ box, touch }: NimbusReach): EffectMember {
   return {
     description: 'List the long-running Nimbus processes.',
     planAllowed: true,
-    execute: async () => {
+    execute: () => {
       const processes = box.processes;
 
-      if (!processes?.list) return handleLacks('process listing');
+      if (!processes?.list) return Effect.succeed(handleLacks('process listing'));
       const list = processes.list.bind(processes);
 
-      try {
-        const rows = v.parse(v.array(ProcessRowSchema), await touch(() => list()));
-
-        return rows.filter((row) => row.longRunning).map((row) => ({ processId: String(row.pid), pid: row.pid, status: row.state, command: row.command }));
-      } catch (err) {
-        return refusalOf(toKinuError({ doing: 'nimbus listProcesses', cause: err, otherwise: 'io' }));
-      }
+      return answeredOr('nimbus listProcesses', async () => v.parse(v.array(ProcessRowSchema), await touch(() => list())), (rows) => rows
+        .filter((row) => row.longRunning).map((row) => ({ processId: String(row.pid), pid: row.pid, status: row.state, command: row.command })));
     },
   };
 }
 
 /** `workspace.logs`. */
-function logsMember({ box, touch }: NimbusReach): ExecutorTool {
+function logsMember({ box, touch }: NimbusReach): EffectMember {
   return {
     description: 'Read Nimbus process logs.',
     planAllowed: true,
-    execute: async (...args: unknown[]) => {
+    execute: (...args: unknown[]) => {
       const processes = box.processes;
 
-      if (!processes?.logs) return handleLacks('process logs');
+      if (!processes?.logs) return Effect.succeed(handleLacks('process logs'));
       const readLogs = processes.logs.bind(processes);
       const pid = parseInput(ProcessIdSchema, { value: args[0] });
       const limits = parseInput(LogLimitsSchema, { value: args[1] });
 
       if (pid === undefined || limits === undefined) {
-        return refusalOf(new KinuError('bad_input',
-          `nimbus logs: takes a process id and its limits as one object, \`{ lines?, bytes? }\`; got ${stringifyResult({ value: args })}`));
+        return Effect.succeed(refusalOf(new KinuError('bad_input',
+          `nimbus logs: takes a process id and its limits as one object, \`{ lines?, bytes? }\`; got ${stringifyResult({ value: args })}`)));
       }
 
-      try {
-        return v.parse(LoggedSchema, await touch(() => readLogs(pid, limits))).text;
-      } catch (err) {
-        return refusalOf(toKinuError({ doing: `nimbus logs ${String(pid)}`, cause: err, otherwise: 'io' }));
-      }
+      return answeredOr(`nimbus logs ${String(pid)}`, async () => v.parse(LoggedSchema, await touch(() => readLogs(pid, limits))), (read) => read.text);
     },
   };
 }
@@ -331,36 +330,35 @@ export function nimbusSession(opts: NimbusSessionOpts) {
     }
   };
 
-  const exposeOn = async (port: number): Promise<PortExposureResult> => {
+  const exposeOn = (port: number): Effect.Effect<PortExposureResult> => {
     const ports = box.ports;
 
-    if (!ports?.expose) return { supported: false, reason: 'Nimbus port exposure is not available' };
+    if (!ports?.expose) return Effect.succeed({ supported: false, reason: 'Nimbus port exposure is not available' });
     const expose = ports.expose.bind(ports);
 
-    try {
-      const result = await touch(() => expose(port));
+    return Effect.catchCause(Effect.map(Effect.promise(async () => touch(() => expose(port))), (result): PortExposureResult => {
       // A blank url is the SDK declining to name one, same as omitting it.
       const url = result.url === undefined || result.url === '' ? ports.url?.(port) : result.url;
 
       if (!url) return { supported: false, reason: `nimbus exposePort ${port}: exposed but no preview URL is available` };
 
       return { supported: true, port, url, route: result.route };
-    } catch (err) {
-      if (renderThrownChain({ cause: err }).includes(NO_LISTENER_MARK)) {
-        return { supported: false, reason: workspaceNoListenerReason(port) };
-      }
-
-      throw err;
-    }
+    }), (cause) => (renderThrownChain({ cause: Cause.squash(cause) }).includes(NO_LISTENER_MARK)
+      ? Effect.succeed({ supported: false, reason: workspaceNoListenerReason(port) })
+      : Effect.failCause(cause)));
   };
 
   const nimbus: NimbusReach = { box, touch, jobs: opts.jobs };
 
+  const stopProcess = stopProcessMember(nimbus);
+  const listProcesses = listProcessesMember(nimbus);
+  const logs = logsMember(nimbus);
+
   const tools: ExecutorProvider['tools'] = {
     startProcess: startProcessMember(nimbus),
-    stopProcess: stopProcessMember(nimbus),
-    listProcesses: listProcessesMember(nimbus),
-    logs: logsMember(nimbus),
+    stopProcess: { ...stopProcess, execute: (...args) => settle(stopProcess.execute(...args)) },
+    listProcesses: { ...listProcesses, execute: (...args) => settle(listProcesses.execute(...args)) },
+    logs: { ...logs, execute: (...args) => settle(logs.execute(...args)) },
   };
 
   // JS/TS, shell, coreutils, `node`, `npm`/`npx`, and `git` need no install. `python`/`native_binary` install from the
@@ -382,9 +380,9 @@ export function nimbusSession(opts: NimbusSessionOpts) {
     connect: async () => { await touch(() => box.ready()); },
     disconnect: async () => { active = false; },
     // A workspace preview is addressed by its port alone: a name is said to be unsupported, never dropped.
-    exposePort: async (port: number, asked?: { readonly name?: string }): Promise<PortExposureResult> => (asked?.name === undefined
-      ? await exposeOn(port)
-      : { supported: false, reason: `a workspace preview is named by its port; call exposePort(${String(port)}) without a name` }),
+    exposePort: (port: number, asked?: { readonly name?: string }): Promise<PortExposureResult> => settle(asked?.name === undefined
+      ? exposeOn(port)
+      : Effect.succeed({ supported: false, reason: `a workspace preview is named by its port; call exposePort(${String(port)}) without a name` })),
     unexposePort: async (port: number) => {
       const ports = box.ports;
 
