@@ -7,6 +7,7 @@ import { sqlStorageOver } from '@kinu.run/core/identity';
 import { lookup } from 'node:dns/promises';
 import { realpathSync } from 'node:fs';
 import { ASKED, historyTurnPairs, turnReportSequenceId, isBuiltinSkillFile, openWorkspaceMainActor, providerAccounts, testModel, toolDescription, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
+import { programAiAnswer } from '@kinu.run/core/slates';
 import type { ActorHandle, ChatReport, DeliveryAnswer, InProcessDeliveries, JsonObject, OwedDelivery, ReceiptExecution } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { resolve } from 'node:path';
@@ -73,7 +74,7 @@ import { ActorSession, type ActorTurnLease,
   actorAffinity, bindRoute, routedLlm, type ModelAffinity,
   observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
   createDefaultWebSearchProvider, chainWebSearch, restBrowserRunAccess, REAL_CLOCK, webSearchChainOf, type Clock, type WebSearchProvider,
-  actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, actorPolicy, actorReach, type ActorReach,
+  actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, actorPolicy, actorReach, type ActorReach, type ActorOrigin, type AiDeps,
   type CodemodeProvider,
   agentRoleSwitch, builtinStores, type BuiltinStoreInputs, type ServedStores, type TurnTools,
   REPORT_TOOL, turnLane, turnReach, type ReportDeps, type TurnLane, type TurnReach,
@@ -2311,7 +2312,7 @@ export class LocalAgentSession {
       reportNodeDelta: () => this.publishHeadStream,
       model: () => this.cachedModel ?? this.defaultModel("an agents swarm"),
       reportModelCall: this.modelCallSink,
-      nodeCodemode: (actor) => hostedCodemodeTool(actor, this.getWebSearchProvider()),
+      nodeCodemode: (actor) => hostedCodemodeTool(actor, this.getWebSearchProvider(), this.programAi(actor.record.origin)),
       webSearch: this.getWebSearchProvider(),
       originContext: async () => this.actorSession.history,
       // Only the runner knows which profile snapshot applies (caller's, or frozen on re-drive), so it
@@ -2426,6 +2427,20 @@ export class LocalAgentSession {
     });
   }
 
+  /** `ai.*` for a program of one of this session's actors: the slate's call over this machine's models, as `origin`'s own
+   *  spend, at the tier the call names under this session's profile. */
+  programAi(origin: ActorOrigin): AiDeps {
+    return {
+      run: async (input) => {
+        const { tier } = await this.rt.profiles.resolvePreTurn([], input.tier);
+
+        return programAiAnswer(input, { spec: tier.model, tier: tier.id }, {
+          resolveModel: (spec) => this.resolveModelForSpec(spec), report: this.modelCallSink, operations: this.modelOperations, origin,
+        });
+      },
+    };
+  }
+
   /** A static-model session answers only for its own model; other specs are refused by name. */
   private resolveModelForSpec(spec: string): LanguageModel {
     if (this.modelResolver) return this.modelResolver.resolveModel(spec, this.affinity());
@@ -2506,6 +2521,7 @@ export class LocalAgentSession {
       mail: null,
       google: null,
       github: null,
+      ai: this.programAi(this.seat.record.origin),
     }), SURFACE_POLICY.program, reported);
   }
 
@@ -2535,6 +2551,7 @@ export class LocalAgentSession {
       mail: null,
       google: null,
       github: null,
+      ai: this.programAi('system'),
     };
   }
 
@@ -2554,6 +2571,7 @@ export class LocalAgentSession {
       journal: () => this.headJournal,
       publishHeadStream: this.publishHeadStream,
       hostHead: (input, writes) => this.hostHead(input, writes),
+      programAi: (origin) => this.programAi(origin),
     };
   }
 

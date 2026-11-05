@@ -19,7 +19,7 @@ import {
   isSubagentOrigin, WORKSPACE_ROOT, PLATFORM_LIMITS, ProgramsInFlight, type OwedIntent, type OwedOwnerIntent, cardWords,
   specProvider, WORKERS_AI_PROVIDER_ID, type CompactOutcome,
 } from '@kinu.run/core';
-import type { EnqueueTurnResult, GitHubDeps, GoogleDeps, MailDeps, OwnerWaitsHost, PanelAgent, ProgrammaticTurn, RecordedTurn, SendState, SubagentInspectionRequest, SubagentInspectionResult } from '@kinu.run/core';
+import type { ActorOrigin, AiDeps, EnqueueTurnResult, GitHubDeps, GoogleDeps, MailDeps, OwnerWaitsHost, PanelAgent, ProgrammaticTurn, RecordedTurn, SendState, SubagentInspectionRequest, SubagentInspectionResult } from '@kinu.run/core';
 import type { SubagentActivityEvent } from '@kinu.run/core';
 import type { Fact } from '@kinu.run/core';
 import type { SubagentView } from '@kinu.run/core/protocol';
@@ -174,7 +174,7 @@ import { BROWSER_PRELUDE } from './browser-prelude';
 import { codemodeLauncher, jobContextAnswers, type ProgramLaunch } from "./codemode-sandbox";
 import { createHeadRuntime } from "./head-runtime";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
-import { initSlateUsageTable, slateAiAnswer } from '@kinu.run/core/slates';
+import { initSlateUsageTable, programAiAnswer, slateAiAnswer, type SlateAiModel, type SlateAiSeams } from '@kinu.run/core/slates';
 import { OwnedModelServices, type ProvidersLane } from "./owned-model-services";
 import { AgentStoreBroker } from "./agent-facets";
 import type { AgentFacetCalls } from "./agent-facet/agent-facet";
@@ -2717,19 +2717,30 @@ export abstract class ActorAgent extends Agent<Env> {
     actor?: ActorHandle,
     admit?: () => void,
   ): Promise<SlateSurfaceValue> {
-    // A tier the catalog does not name is refused by the resolver as bad input.
-    const { profile } = await this.actorProfile({
-      actor: actor ?? this.actorHandle(), workMode: 'build', availableTools: [], explicitTier: route.tier,
-    });
-
-    // Priced as every call is: its model's rate, warmed when it is not the turn's own.
-    await this.modelCatalog.warm([profile.tier.model]);
+    const named = await this.aiModel(actor ?? this.actorHandle(), route.tier);
     // A viewer's call is admitted once the model is ready, as it is asked.
     admit?.();
 
-    return slateAiAnswer(route, { spec: profile.tier.model, tier: profile.tier.id }, {
-      resolveModel: (spec) => this.ownedModelServices.resolveModel(spec), report: (report) => { this.reportModelCall(report); }, operations: this.modelOperations,
-    });
+    return slateAiAnswer(route, named, this.aiSeams());
+  }
+
+  /** The model `actor`'s profile names for `tier`, priced: a tier the catalog does not name is refused as bad input. */
+  private async aiModel(actor: ActorHandle, tier: string | undefined): Promise<SlateAiModel> {
+    const { profile } = await this.actorProfile({ actor, workMode: 'build', availableTools: [], explicitTier: tier });
+
+    // Priced as every call is: its model's rate, warmed when it is not the turn's own.
+    await this.modelCatalog.warm([profile.tier.model]);
+
+    return { spec: profile.tier.model, tier: profile.tier.id };
+  }
+
+  private aiSeams(): SlateAiSeams {
+    return { resolveModel: (spec) => this.ownedModelServices.resolveModel(spec), report: (report) => { this.reportModelCall(report); }, operations: this.modelOperations };
+  }
+
+  /** `ai.*` for `actor`'s programs: the slate's call, as the actor's own spend. */
+  protected programAi(actor: ActorHandle, origin: ActorOrigin): AiDeps {
+    return { run: async (input) => programAiAnswer(input, await this.aiModel(actor, input.tier), { ...this.aiSeams(), origin }) };
   }
 
   /**
@@ -2925,6 +2936,7 @@ export abstract class ActorAgent extends Agent<Env> {
       mail: this.mailFor(this.rt.actor.actorId, 'main'),
       google: this.googleFor(this.rt.actor.actorId, 'main'),
       github: this.githubReads(),
+      ai: this.programAi(this.actorHandle(), 'system'),
     };
   }
 
@@ -3415,6 +3427,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     return hostedSurfaceActor(actor, {
       ...reached,
+      ai: this.programAi(actor.handle, actor.record.origin),
       web: { search, files: actor.runtime.storage, browser: { sessions: this.browserSessionsFor(actor.runtime.actor.actorId), prelude: BROWSER_PRELUDE } },
     });
   }

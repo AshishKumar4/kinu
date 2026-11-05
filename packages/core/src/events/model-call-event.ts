@@ -30,6 +30,8 @@ function buildModelCallEvent(report: ModelCallReport, opts: {
 
   if (report.modelId !== undefined) event.modelId = report.modelId;
 
+  if (report.via !== undefined) event.via = report.via;
+
   if (report.account !== undefined) event.account = report.account;
 
   const rate = report.spec !== undefined && report.spec === opts.effectiveSpec

@@ -21,6 +21,7 @@ import { createWebCodemodeProvider } from '../tools/web-operations';
 import { createMailCodemodeProvider, type MailDeps } from '../tools/mail-codemode';
 import { createGoogleCodemodeProvider, type GoogleDeps } from '../tools/google-operations';
 import { createGitHubCodemodeProvider, type GitHubDeps } from '../tools/github-operations';
+import { createAiCodemodeProvider, type AiDeps } from '../tools/ai-operations';
 import { createAgentsCodemodeProvider } from './agents-operations';
 import type { AgentsToolDeps } from './agents-tool';
 
@@ -52,6 +53,8 @@ export interface SurfaceActor {
   readonly google: GoogleDeps | null;
   /** Its `github.*` reads through the account's GitHub connection; null where it has no account. */
   readonly github: GitHubDeps | null;
+  /** Its `ai.*`: a model call the actor's own account answers and pays for; null where no model is reachable. */
+  readonly ai: AiDeps | null;
 }
 
 /** How a caller's namespaces differ from the actor's own programs'. */
@@ -135,6 +138,8 @@ export function actorNamespaces(actor: SurfaceActor, policy: SurfacePolicy, call
     ...(policy.private && actor.mail !== null ? [createMailCodemodeProvider(actor.mail)] : []),
     ...(policy.private && actor.google !== null ? [createGoogleCodemodeProvider(actor.google)] : []),
     ...(policy.private && actor.github !== null ? [createGitHubCodemodeProvider(actor.github)] : []),
+    // A slate asks its own `ai`, which bills its caller's account; the actor's programs ask this one, which bills the actor.
+    ...(policy.private && actor.ai !== null ? [createAiCodemodeProvider(actor.ai)] : []),
     webFor(actor.web, policy),
     // Every machine's `fs` is the actor's own `file` operations, on that machine's root in its plane; a process starts
     // on the machine its cwd is on.
@@ -156,6 +161,7 @@ export function hostedSurfaceActor(
     readonly mail: MailDeps | null;
     readonly google: GoogleDeps | null;
     readonly github: GitHubDeps | null;
+    readonly ai: AiDeps | null;
   },
 ): SurfaceActor {
   const { runtime, stores } = actor;
@@ -171,5 +177,6 @@ export function hostedSurfaceActor(
     mail: inputs.mail,
     google: inputs.google,
     github: inputs.github,
+    ai: inputs.ai,
   };
 }
