@@ -523,6 +523,27 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     return oldest !== undefined && items.length < read.length ? { status: 'more', items: shown, next: { before: oldest } } : { status: 'end', items: shown };
   }
 
+  /** One entry as a page draws it, by id, wherever it sits in the chat; null for an id the chat does not hold, or an
+   *  entry this reader cannot open. */
+  async drawnMessage(id: string, media: MediaUrl): Promise<UIMessage | null> {
+    const entry = this.read(id);
+
+    return entry === null ? null : (await this.drawnEntry(entry, media, new Map())).message;
+  }
+
+  /** The row that asked for the answer `id` names: the nearest one before it that is not an answer; null for none. */
+  openerOf(id: string): ConversationEntry | null {
+    const answer = this.read(id);
+
+    for (let position = (answer?.position ?? 0) - 1; answer !== null && position >= 0; position -= 1) {
+      const before = this.at(position);
+
+      if (before !== null && before.role !== 'assistant') return before;
+    }
+
+    return null;
+  }
+
   /** The image `ref` names, when an entry of this chat carries it. */
   async media(ref: MediaRef): Promise<StoredImage | null> {
     this.actor.assertCurrent();

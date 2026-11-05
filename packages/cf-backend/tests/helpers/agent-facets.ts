@@ -663,7 +663,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           copiedTurnEnds.delete(placement.storageKey);
           copy?.([event, figures, activity, window]);
         },
-        answerAmended: (window) => host().answerAmended(window),
+        answerAmended: (message) => host().answerAmended(message),
         turnReport: async (turn, ended, relay) => {
           const delayed = delayedTurnReport;
 

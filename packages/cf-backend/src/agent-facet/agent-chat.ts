@@ -682,17 +682,21 @@ export class FacetChat {
     const { actor, database, workspace } = this.deps;
 
     await actor.stores.history.transcript(CHAT_SESSION_ID).amendMetadata(messageId, metadata);
-    await workspace.answerAmended(await database.seed());
+    // The one row, drawn as its pages draw it: a tab replaces it wherever it holds it, the newest window or a page
+    // scrolled back to. A window re-sent would hold none of an answer older than it.
+    const amended = await database.drawnMessage(messageId);
+
+    if (amended !== null) await workspace.answerAmended(amended);
   }
 
-  /** An answer as its chat draws it, and the words that asked for it; null once it was rewound. */
+  /** An answer as its chat draws it, and the words that asked for it, read by its id wherever it sits in the chat; null
+   *  once it was rewound. */
   private async drawnAnswer(messageId: string) {
-    const { messages } = await this.deps.database.seed();
-    const at = messages.findIndex((message) => message.id === messageId);
-    const answer = messages[at];
+    const { database } = this.deps;
+    const answer = await database.drawnMessage(messageId);
 
-    if (answer === undefined) return null;
-    const opener = messages.slice(0, at).reverse().find((message) => message.role !== 'assistant');
+    if (answer === null) return null;
+    const opener = await database.drawnOpener(messageId);
     const ask = opener?.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n') ?? '';
 
     return { parts: answer.parts, metadata: answer.metadata, ask };
