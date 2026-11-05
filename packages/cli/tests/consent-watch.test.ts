@@ -222,14 +222,18 @@ describe('watchDeviceConsents', () => {
     expect(notes).toEqual([{ kind: 'stale', message: 'That request is no longer waiting for an answer.' }]);
   });
 
-  test('listPending failures are swallowed and polling continues', async () => {
-    let failures = 2;
+  test('listPending failures after the watch began are said, and polling continues', async () => {
+    let polls = 0;
     const presented: string[] = [];
     const presentedOnce = Promise.withResolvers<void>();
 
     const surface: DeviceConsentSurface = {
       listPending: async () => {
-        if (failures-- > 0) throw new Error('transient');
+        polls += 1;
+
+        if (polls === 1) return [];
+
+        if (polls <= 3) throw new Error('transient');
 
         return [consent('c1')];
       },
@@ -253,6 +257,30 @@ describe('watchDeviceConsents', () => {
 
     expect(presented).toEqual(['c1']);
     expect(notes.map((entry) => entry.kind)).toEqual(['error', 'error']);
+  });
+
+  test('a poll that fails before any listing is left to the turn, which says it once', async () => {
+    let polls = 0;
+    const polledTwice = Promise.withResolvers<void>();
+
+    const surface: DeviceConsentSurface = {
+      listPending: async () => {
+        polls += 1;
+
+        if (polls === 2) polledTwice.resolve();
+
+        throw new Error('Workspace nosuch is not in your registry.');
+      },
+      resolve: async () => ({ ok: true }),
+    };
+
+    const { notes, note } = collectNotes();
+    const watcher = watchDeviceConsents(surface, { present: async () => 'once', note });
+
+    await polledTwice.promise;
+    watcher.stop();
+
+    expect(notes).toEqual([]);
   });
 });
 

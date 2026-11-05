@@ -159,6 +159,16 @@ async function postCreate(
   }
 }
 
+describe('a create of a name the owner already holds', () => {
+  test('answers with that workspace, unchanged, and says nothing was made', async () => {
+    const held = await postCreate({ name: AGENT, purpose: 'p' }, undefined, undefined, async (_caller, name) => ({
+      entry: { name, displayName: name, createdAt: 3, lastVisited: 3 }, status: 'active' as const,
+    }));
+
+    expect({ status: held.status, began: held.calls.includes('genesis') }).toEqual({ status: 200, began: false });
+  });
+});
+
 describe('a name whose teardown is still pending', () => {
   test('a create is refused with the object\'s class and reason, across RPC', async () => {
     const harness = createTestUserDO({ durableObjectId: USER_ID, destroyWorkspaceError: 'the container refused to go' });

@@ -79,7 +79,15 @@ provide_bun() {
   fi
   echo "Installing Bun $KINU_BUN_VERSION..." >&2
   mkdir -p "$KINU_HOME/runtime"
-  curl -fsSL https://bun.sh/install | BUN_INSTALL="$KINU_HOME/runtime" bash -s "bun-v$KINU_BUN_VERSION" >&2
+  # Bun's installer appends BUN_INSTALL and its bin to the user's .zshrc, .bashrc or fish config, and tells them to
+  # run bun: this Bun is Kinu's alone. SHELL=/bin/sh is the case it edits nothing in; its words are said only on a failure,
+  # whose last line, the cause, stays the last thing said.
+  kinu_bun_log="$KINU_HOME/runtime/install.log"
+  if ! curl -fsSL https://bun.sh/install | SHELL=/bin/sh BUN_INSTALL="$KINU_HOME/runtime" bash -s "bun-v$KINU_BUN_VERSION" > "$kinu_bun_log" 2>&1; then
+    cat "$kinu_bun_log" >&2
+    exit 1
+  fi
+  rm -f "$kinu_bun_log"
   kinu_resolve_bun || die "Bun $KINU_BUN_VERSION was installed to $KINU_MANAGED_BUN but did not run."
 }
 `;

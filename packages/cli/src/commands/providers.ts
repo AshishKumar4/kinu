@@ -311,6 +311,10 @@ function disconnectProvider(provider: ProviderName, revoke: boolean): Effect.Eff
 
     if (cloud && credKey) {
       yield* Effect.catchCause(Effect.gen(function* () {
+        // The delete answers alike for a key the account never held: only one it held is said removed.
+        const held = (yield* Effect.promise(async () => listCloudCredentials(cloud.origin, cloud.token))).some((stored) => stored.key === credKey);
+
+        if (!held) return;
         yield* Effect.promise(async () => deleteCloudCredential(cloud.origin, cloud.token, credKey));
         console.log(`${OK('✓')} Removed the ${ACCENT(provider)} credential from your Kinu account.`);
         removed = true;

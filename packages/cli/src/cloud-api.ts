@@ -63,6 +63,8 @@ export type CliAuthPoll = v.InferOutput<typeof CliAuthPollSchema>;
 
 const CloudAgentSchema = v.object({
   name: v.string(), displayName: v.string(), createdAt: v.number(),
+  /** A create's answer for a name the account already held: that workspace, unchanged. */
+  existed: v.optional(v.literal(true)),
 });
 
 /** Complete active list, names only; the wide bounded listing is the web surface's contract. */

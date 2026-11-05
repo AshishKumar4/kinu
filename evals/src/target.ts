@@ -1,5 +1,5 @@
 import * as v from 'valibot';
-import { USER_AI_PROXY_PATH, type RunEvent } from '@kinu.run/core';
+import { REASONING_EFFORTS, USER_AI_PROXY_PATH, type RunEvent } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import { DeploymentAnswer, evalTargetVerdict, evalWorkspaceName, infraBoundary } from '@kinu.run/test-utils';
 import { servedHealth } from '../../scripts/served-health';
@@ -29,6 +29,9 @@ export const ARMS = [
   { id: 'learning-on', apply: (session) => session.setLearning(true) },
   { id: 'learning-off', apply: (session) => session.setLearning(false) },
   { id: 'crafting-off', apply: async (session) => { await session.setLearning(true); await session.setCrafting(false); } },
+  // An effort sweep is one run per level (`KINU_EVAL_ARMS=effort-low,effort-high`): each trial's workspace is set to the
+  // level as `kinu effort` sets it, before its first turn.
+  ...REASONING_EFFORTS.map((effort) => ({ id: `effort-${effort}`, apply: (session: KinuPublicSession) => session.setReasoningEffort(effort) })),
 ] as const satisfies readonly EvalArm[];
 
 /** The deployment and the browser-plane identity, refused before any trial when either is missing. */

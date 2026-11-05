@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { WORKER_VERSION_HEADER } from '@kinu.run/core';
-import { buildChanged, deployedBuild, resolveEvalTarget } from './target';
+import { ARMS, buildChanged, deployedBuild, resolveEvalTarget } from './target';
+import { evalMatrix } from './config';
 
 describe('resolveEvalTarget', () => {
   test.each(['', '   '])('an explicitly blank origin %j is refused before resolving a secret', (origin) => {
@@ -59,5 +60,13 @@ describe('a trial\'s deployment, read at its start and its end', () => {
     } finally {
       await deployment.stop(true);
     }
+  });
+});
+
+describe('an effort sweep', () => {
+  test('is one run per level, each an arm the run accepts', () => {
+    const matrix = evalMatrix({ KINU_EVAL_ARMS: 'effort-low,effort-high' }, ARMS.map((arm) => arm.id));
+
+    expect(matrix.arms).toEqual(['effort-low', 'effort-high']);
   });
 });

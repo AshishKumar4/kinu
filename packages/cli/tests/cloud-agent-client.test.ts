@@ -707,6 +707,26 @@ describe('CloudAgentClient protocol', () => {
     await client.close();
   });
 
+  test('a failed call the workspace classified fails for its reason, with its own words as the result', async () => {
+    const mock = startMockAgentServer();
+    const client = newClient(mock);
+
+    const turn = client.send('run a tool');
+
+    const request = await firstChatRequest(mock);
+    const errorText = JSON.stringify({ reason: 'io', error: 'ls: no such file', execution: { exitCode: 2 } });
+
+    mock.reply(responseChunk(request.id, { type: 'tool-input-available', toolCallId: 't1', toolName: 'shell', input: {} }));
+    mock.reply(responseChunk(request.id, { type: 'tool-output-error', toolCallId: 't1', errorText }));
+    mock.reply(responseChunk(request.id, {}, true));
+
+    const result = await turn;
+    expect(result.landed === 'turn' ? result.toolCalls : undefined).toEqual([{
+      name: 'shell', args: {}, result: 'ls: no such file', outcome: { success: false, reason: 'io', execution: { exitCode: 2 } },
+    }]);
+    await client.close();
+  });
+
   test('a tool error with no text reads as a tool error, not as a pair of quotes', async () => {
     const mock = startMockAgentServer();
     const client = newClient(mock);

@@ -800,14 +800,36 @@ function minutes(ms: number): string {
   return `${(ms / 60_000).toFixed(0)} min`;
 }
 
-function totalsTable(totals: EvalComparison['totals']): string[] {
-  const row = (leg: string, side: EvalSuiteTotals | null) => `| ${leg} | ${usd(side?.costUsd ?? null)} | `
-    + `${side?.wallTimeMs === undefined || side.wallTimeMs === null ? '—' : seconds(side.wallTimeMs)} |`;
+/**
+ * pass^k on one side: of the task cohorts it ran, how many passed every one of their k trials. A pass rate says how often
+ * the agent succeeds; pass^k says how often it can be relied on to (τ-bench's measure), which repeats alone show.
+ */
+export function passEveryTrial(rows: readonly EvalComparisonRow[], side: 'baseline' | 'candidate') {
+  const ran = rows.flatMap((row) => {
+    const cohort = row[side];
+
+    return cohort === null || cohort.trials === 0 ? [] : [cohort];
+  });
+
+  return { tasks: ran.length, everyTrial: ran.filter((cohort) => cohort.passed === cohort.trials).length };
+}
+
+function totalsTable(comparison: Pick<EvalComparison, 'totals' | 'rows'>): string[] {
+  const { totals, rows } = comparison;
+
+  const reliable = (side: 'baseline' | 'candidate') => {
+    const { tasks, everyTrial } = passEveryTrial(rows, side);
+
+    return tasks === 0 ? '—' : `${String(everyTrial)}/${String(tasks)}`;
+  };
+
+  const row = (leg: string, side: EvalSuiteTotals | null, key: 'baseline' | 'candidate') => `| ${leg} | ${usd(side?.costUsd ?? null)} | `
+    + `${side?.wallTimeMs === undefined || side.wallTimeMs === null ? '—' : seconds(side.wallTimeMs)} | ${side === null ? '—' : reliable(key)} |`;
 
   return [
-    'Suite totals (all trials; wall spans the earliest start to the latest finish):', '',
-    '| Leg | Cost (USD) | Wall time |', '| --- | --- | --- |',
-    row('Baseline', totals.baseline), row('Candidate', totals.candidate),
+    'Suite totals (all trials; wall spans the earliest start to the latest finish; pass^k counts the tasks that passed every trial):', '',
+    '| Leg | Cost (USD) | Wall time | pass^k |', '| --- | --- | --- | --- |',
+    row('Baseline', totals.baseline, 'baseline'), row('Candidate', totals.candidate, 'candidate'),
   ];
 }
 
@@ -1124,7 +1146,7 @@ export function renderEvalComparison(comparison: EvalComparison): string {
 
   return [
     ...header,
-    ...totalsTable(comparison.totals), '',
+    ...totalsTable(comparison), '',
     ...SCORE_TABLE,
     ...comparison.rows.map((row) => scoreRow(row, shared)), '',
     ...movedSection(comparison.rows, shared),

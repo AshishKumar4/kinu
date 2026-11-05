@@ -32,8 +32,8 @@ export async function createCommand(name: string | undefined, opts: {
 
   if (mode === 'cloud') {
     await underSpinner('Creating cloud workspace…', 'Create failed', async (spinner) => {
-      await createCliAgent({ ...opts, name: named, purpose, mode, allowInteractiveAuth: true });
-      spinner.stop('Cloud workspace created');
+      const created = await createCliAgent({ ...opts, name: named, purpose, mode, allowInteractiveAuth: true });
+      spinner.stop(created.existed === true ? 'Cloud workspace already exists, unchanged' : 'Cloud workspace created');
       console.log(`\n${OK('✓')} ${ACCENT(named)} ${DIM('cloud workspace')}`);
       console.log(`\n${DIM('Run:')} ${ACCENT(`kinu run ${named}`)} ${DIM('"do something"')}\n`);
     });

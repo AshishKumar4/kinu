@@ -83,9 +83,12 @@ export interface CreateCloudWorkspaceRequest<Id> {
   placement: WorkspacePlacement;
 }
 
+/** The workspace a create answers with; `existed` where the name was already this owner's and nothing was made. */
+export type CreatedWorkspace = WorkspaceEntry & { readonly existed?: true };
+
 export function createCloudWorkspaceForUser<Id>(
   request: CreateCloudWorkspaceRequest<Id>,
-): Promise<WorkspaceEntry> {
+): Promise<CreatedWorkspace> {
   return settle(Effect.gen(function* () {
     const { env, userId, userDO, caller, input, soul, seed, placement } = request;
     const trimmedPurpose = input.purpose?.trim() ?? '';
@@ -131,7 +134,7 @@ export function createCloudWorkspaceForUser<Id>(
 
     // Already this owner's workspace: re-running birth would reseed SOUL.md, reset the baseline,
     // and open a second genesis turn. Return it unchanged so retries and races are idempotent.
-    if (registered.status === 'active') return entry;
+    if (registered.status === 'active') return { ...entry, existed: true } satisfies CreatedWorkspace;
 
     return yield* Effect.catchCause(Effect.gen(function* () {
       const initialization: InitializeOrchestratorInput<Id> = {

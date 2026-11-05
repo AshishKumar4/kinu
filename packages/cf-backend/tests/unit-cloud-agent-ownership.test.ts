@@ -570,8 +570,9 @@ describe('cloud agent ownership safety', () => {
       network.restore();
     }
 
+    // As it stands, and said to be the one that was there: nothing was made.
     expect(first).toEqual({
-      name: 'jarvis', displayName: 'Jarvis as it stands', createdAt: 1, lastVisited: 2,
+      name: 'jarvis', displayName: 'Jarvis as it stands', createdAt: 1, lastVisited: 2, existed: true,
     });
     expect(second).toEqual(first);
     // The register is the whole call: no claim, soul, reset, genesis, or rollback.

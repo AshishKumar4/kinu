@@ -51,7 +51,7 @@ kinu <command> [options]
 | [`kinu model <name> [spec]`](#kinu-model-name-spec) | Show or change a workspace's model |
 | [`kinu effort <name> [level]`](#kinu-effort-name-level) | Show or change a workspace's reasoning effort |
 | [`kinu tools <name>`](#kinu-tools-name) | List the tools a workspace can use |
-| [`kinu triggers <name> [action] [value]`](#kinu-triggers-name-action-value) | List, schedule, cancel or create workspace triggers |
+| [`kinu triggers <name> [action] [value]`](#kinu-triggers-name-action-value) | List a workspace's triggers; add one with every (a cron), at (a time) or webhook (a label); cancel one by its id |
 | [`kinu webhook <name> <label>`](#kinu-webhook-name-label) | Create a webhook trigger for a cloud workspace |
 
 ### Inspect & evolve
@@ -329,7 +329,7 @@ List a workspace's executors, or run a command in one.
 | `--json` | Print raw JSON |
 
 ```bash
-kinu executors jarvis
+kinu executors jarvis computer uname -a
 ```
 
 ### kinu stop <name>
@@ -382,7 +382,7 @@ kinu tools jarvis
 
 ### kinu triggers <name> [action] [value]
 
-List, schedule, cancel or create workspace triggers.
+List a workspace's triggers; add one with every (a cron), at (a time) or webhook (a label); cancel one by its id.
 
 | Option | What it does |
 | --- | --- |
